@@ -1,0 +1,38 @@
+name: lifeos
+
+services:
+  postgres:
+    image: ${LIFE_OS_POSTGRES_IMAGE:-postgres:18.6-alpine}
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DB: ${LIFE_OS_POSTGRES_DB:-postgres}
+      POSTGRES_USER: ${LIFE_OS_POSTGRES_USER:?Set LIFE_OS_POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${LIFE_OS_POSTGRES_PASSWORD:?Set LIFE_OS_POSTGRES_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:${LIFE_OS_POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql
+      - ./infra/postgres/provision-service-databases.sh:/docker-entrypoint-initdb.d/10-provision-service-databases.sh:ro
+      - ./infra/postgres/service-databases.conf:/etc/lifeos/service-databases.conf:ro
+      - ./infra/postgres:/opt/lifeos/postgres:ro
+    networks:
+      - backend
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
+      interval: 2s
+      timeout: 5s
+      retries: 15
+      start_period: 5s
+
+networks:
+  backend:
+    name: lifeos-backend
+    driver: bridge
+
+volumes:
+  postgres-data:
+    name: lifeos-postgres-data
