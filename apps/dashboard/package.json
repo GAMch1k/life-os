@@ -10,7 +10,7 @@
     "format:check": "prettier --check .",
     "lint": "eslint .",
     "test": "node --import tsx --test 'src/**/*.test.ts'",
-    "generate:api": "openapi-typescript ../../templates/go-fiber-service/api/openapi.yaml -o src/lib/api/generated/template.ts",
+    "generate:api": "../../tools/generate-typescript-api",
     "typecheck": "tsc --noEmit",
     "check": "npm run format:check && npm run lint && npm run test && npm run typecheck && npm run build"
   },

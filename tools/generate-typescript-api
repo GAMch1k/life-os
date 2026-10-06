@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+generator="$repo_root/apps/dashboard/node_modules/.bin/openapi-typescript"
+output_dir="$repo_root/apps/dashboard/src/lib/api/generated"
+
+[[ -x "$generator" ]] || {
+  printf 'generate-typescript-api: dashboard dependencies are missing; run npm --prefix apps/dashboard install\n' >&2
+  exit 2
+}
+
+mkdir -p "$output_dir"
+mapfile -t specs < <(find "$repo_root/templates" "$repo_root/services" -path '*/api/openapi.yaml' -type f -print 2>/dev/null | sort)
+
+for spec_path in "${specs[@]}"; do
+  service_dir=$(dirname "$(dirname "$spec_path")")
+  service_name=$(basename "$service_dir")
+  if [[ "$service_dir" == "$repo_root/templates/go-fiber-service" ]]; then
+    service_name=template
+  fi
+  output_path="$output_dir/$service_name.ts"
+  "$generator" "$spec_path" -o "$output_path"
+done
