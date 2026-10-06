@@ -85,7 +85,15 @@ func (h *Handler) GetMonthlySummary(c fiber.Ctx, params generated.GetMonthlySumm
 	if len(accounts) > 0 {
 		currency = accounts[0].Currency
 	}
-	return c.JSON(generated.MonthlySummary{Month: params.Month, TotalBalance: generated.Money{Amount: balance, Currency: currency}, Income: generated.Money{Amount: cashflow.IncomeMinor, Currency: currency}, Spending: generated.Money{Amount: cashflow.SpendingMinor, Currency: currency}, Net: generated.Money{Amount: cashflow.NetMinor, Currency: currency}})
+	spendingRows, err := h.queries.GetMonthlySpendingByCategory(c.Context(), pgtype.Date{Time: month, Valid: true})
+	if err != nil {
+		return internal(err)
+	}
+	spendingByCategory := make([]generated.SpendingByCategory, 0, len(spendingRows))
+	for _, row := range spendingRows {
+		spendingByCategory = append(spendingByCategory, generated.SpendingByCategory{CategoryId: uuid(row.CategoryID), CategoryName: row.CategoryName, Amount: generated.Money{Amount: row.AmountMinor, Currency: currency}})
+	}
+	return c.JSON(generated.MonthlySummary{Month: params.Month, TotalBalance: generated.Money{Amount: balance, Currency: currency}, Income: generated.Money{Amount: cashflow.IncomeMinor, Currency: currency}, Spending: generated.Money{Amount: cashflow.SpendingMinor, Currency: currency}, Net: generated.Money{Amount: cashflow.NetMinor, Currency: currency}, SpendingByCategory: spendingByCategory})
 }
 
 func (h *Handler) ListTransactions(c fiber.Ctx, params generated.ListTransactionsParams) error {
