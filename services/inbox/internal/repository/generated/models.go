@@ -3,3 +3,20 @@
 //   sqlc v1.31.1
 
 package generated
+
+import (
+	"github.com/jackc/pgx/v5/pgtype"
+)
+
+type InboxItem struct {
+	ID                 pgtype.UUID
+	Content            string
+	Source             string
+	SourceMetadata     []byte
+	MediaReferences    []byte
+	State              string
+	ProcessingMetadata []byte
+	ResolvedAt         pgtype.Timestamptz
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+}

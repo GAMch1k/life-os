@@ -6,10 +6,15 @@ package generated
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Querier interface {
-	Ping(ctx context.Context) (int32, error)
+	CreateInboxItem(ctx context.Context, arg CreateInboxItemParams) (InboxItem, error)
+	GetInboxItem(ctx context.Context, id pgtype.UUID) (InboxItem, error)
+	ListInboxItems(ctx context.Context, arg ListInboxItemsParams) ([]InboxItem, error)
+	SetInboxItemState(ctx context.Context, arg SetInboxItemStateParams) (InboxItem, error)
 }
 
 var _ Querier = (*Queries)(nil)
