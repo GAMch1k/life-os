@@ -8,6 +8,9 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
+import { FinanceSummary } from "@/components/finance-summary";
+import { getFinanceSummary } from "@/lib/finance-summary";
+
 const workspaces: ReadonlyArray<{
   id: string;
   title: string;
@@ -45,7 +48,10 @@ const workspaces: ReadonlyArray<{
   },
 ];
 
-export default function Home() {
+export const dynamic = "force-dynamic";
+
+export default async function Home() {
+  const finance = await getFinanceSummary();
   return (
     <div className="mx-auto max-w-6xl space-y-6 sm:space-y-8">
       <section
@@ -90,6 +96,8 @@ export default function Home() {
         </div>
       </section>
 
+      <FinanceSummary state={finance} />
+
       <section aria-labelledby="workspace-heading">
         <div className="mb-4 flex items-end justify-between gap-4">
           <div>
@@ -109,8 +117,9 @@ export default function Home() {
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2">
-          {workspaces.map(
-            ({ description, emptyState, icon: Icon, id, title }) => (
+          {workspaces
+            .filter(({ id }) => id !== "finance")
+            .map(({ description, emptyState, icon: Icon, id, title }) => (
               <article
                 className="bg-card scroll-mt-24 rounded-2xl border p-5 shadow-sm sm:p-6"
                 id={id}
@@ -132,8 +141,7 @@ export default function Home() {
                   {emptyState}
                 </div>
               </article>
-            ),
-          )}
+            ))}
         </div>
       </section>
     </div>
