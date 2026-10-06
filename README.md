@@ -87,6 +87,13 @@ versions are documented in [`pkg/database/README.md`](pkg/database/README.md).
 
 `pkg/httpserver` provides the thin Fiber runtime used by Go services. `httpserver.New` returns an app that embeds the native Fiber app while installing structured `slog` request logging, request/correlation IDs, a safe error envelope, panic recovery, and `/health` and `/ready` endpoints. `Run` handles SIGINT/SIGTERM, drains HTTP traffic, and invokes registered shutdown hooks in reverse order.
 
+## HTTP contracts
+
+Life OS API conventions and reusable transport schemas are documented in
+[`contracts/openapi`](contracts/openapi/README.md). Service OpenAPI documents
+are public transport contracts only; they do not expose or share internal Go
+domain structs.
+
 ## Development commands
 
 Repository-wide commands are introduced alongside the capabilities they operate.
