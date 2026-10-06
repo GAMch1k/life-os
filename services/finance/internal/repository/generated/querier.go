@@ -6,10 +6,20 @@ package generated
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Querier interface {
-	Ping(ctx context.Context) (int32, error)
+	CreateAccount(ctx context.Context, arg CreateAccountParams) (Account, error)
+	CreateFinancialCategory(ctx context.Context, arg CreateFinancialCategoryParams) (FinancialCategory, error)
+	CreateTransaction(ctx context.Context, arg CreateTransactionParams) (Transaction, error)
+	GetMonthlyCashflow(ctx context.Context, monthStart pgtype.Date) (GetMonthlyCashflowRow, error)
+	GetTransactionByImportIdentity(ctx context.Context, arg GetTransactionByImportIdentityParams) (Transaction, error)
+	ListAccountsWithBalance(ctx context.Context) ([]ListAccountsWithBalanceRow, error)
+	ListFinancialCategories(ctx context.Context) ([]FinancialCategory, error)
+	ListTransactions(ctx context.Context, arg ListTransactionsParams) ([]Transaction, error)
+	UpdateFinancialCategory(ctx context.Context, arg UpdateFinancialCategoryParams) (FinancialCategory, error)
 }
 
 var _ Querier = (*Queries)(nil)
