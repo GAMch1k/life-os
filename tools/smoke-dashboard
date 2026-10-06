@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+dashboard_port=${LIFE_OS_DASHBOARD_PORT:-3000}
+dashboard="http://127.0.0.1:${dashboard_port}"
+tasks=http://127.0.0.1:8082
+inbox=http://127.0.0.1:8083
+calendar=http://127.0.0.1:8084
+
+wait_dashboard() {
+  for _ in $(seq 1 45); do
+    if curl --fail --silent --show-error "$dashboard" >/dev/null; then return 0; fi
+    sleep 1
+  done
+  printf 'smoke: dashboard did not become available: %s\n' "$dashboard" >&2
+  return 1
+}
+
+today=$(date -u +%F)
+due_at="${today}T12:00:00Z"
+curl --fail --silent --show-error -H 'content-type: application/json' \
+  -d "{\"title\":\"Dashboard smoke task\",\"dueAt\":\"${due_at}\"}" \
+  "$tasks/v1/tasks" >/dev/null
+curl --fail --silent --show-error -H 'content-type: application/json' \
+  -d '{"content":"Dashboard smoke capture","source":"manual"}' \
+  "$inbox/v1/inbox-items" >/dev/null
+curl --fail --silent --show-error -H 'content-type: application/json' \
+  -d "{\"title\":\"Dashboard smoke event\",\"allDay\":true,\"startDate\":\"${today}\",\"endDate\":\"${today}\"}" \
+  "$calendar/v1/events" >/dev/null
+
+wait_dashboard
+page=$(curl --fail --silent --show-error "$dashboard")
+for text in 'Finance' "Dashboard smoke task" "Dashboard smoke capture" "Dashboard smoke event"; do
+  if ! grep --fixed-strings --quiet "$text" <<<"$page"; then
+    printf 'smoke: dashboard page missing expected text: %s\n' "$text" >&2
+    exit 1
+  fi
+done
+
+curl --fail --silent --show-error --request OPTIONS \
+  -H 'Origin: http://localhost:3000' \
+  -H 'Access-Control-Request-Method: POST' \
+  -H 'Access-Control-Request-Headers: content-type' \
+  --dump-header - --output /dev/null "$inbox/v1/inbox-items" | \
+  tr -d '\r' | grep --ignore-case --quiet '^access-control-allow-origin: \*$'
+printf 'dashboard smoke checks passed\n'

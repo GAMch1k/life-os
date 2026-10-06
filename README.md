@@ -101,6 +101,25 @@ Repository-wide commands are introduced alongside the capabilities they operate.
 non-mutating verification path, and `make dashboard-check` runs only the
 dashboard's formatting, lint, type, test, and production-build checks.
 
+## Complete local Life OS
+
+Start the backend services and dashboard together with:
+
+```sh
+make life-up
+```
+
+Open <http://localhost:3000>. The dashboard reads Finance, Tasks, Inbox, and
+Calendar from the live local services; no public authentication is required for
+this local baseline. Run the browser-facing smoke check with:
+
+```sh
+make life-smoke
+```
+
+If port 3000 is already in use, set `LIFE_OS_DASHBOARD_PORT` for both commands
+(for example, `LIFE_OS_DASHBOARD_PORT=3001 make life-up`).
+
 ## Architectural boundaries
 
 - Go and Fiber are the default backend stack.

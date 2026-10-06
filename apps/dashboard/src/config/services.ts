@@ -27,23 +27,38 @@ export function normalizeServiceUrl(name: string, value: string): string {
   return url.toString().replace(/\/$/, "");
 }
 
+function configuredServiceUrl(
+  publicName: string,
+  serverName: string,
+  fallback: string,
+): string {
+  const value =
+    (typeof window === "undefined" ? process.env[serverName] : undefined) ??
+    process.env[publicName] ??
+    fallback;
+  return normalizeServiceUrl(publicName, value);
+}
+
 export const serviceBaseUrls = Object.freeze({
-  finance: normalizeServiceUrl(
+  finance: configuredServiceUrl(
     "NEXT_PUBLIC_FINANCE_SERVICE_URL",
-    process.env.NEXT_PUBLIC_FINANCE_SERVICE_URL ?? DEFAULT_SERVICE_URLS.finance,
+    "FINANCE_SERVICE_URL",
+    DEFAULT_SERVICE_URLS.finance,
   ),
-  tasks: normalizeServiceUrl(
+  tasks: configuredServiceUrl(
     "NEXT_PUBLIC_TASKS_SERVICE_URL",
-    process.env.NEXT_PUBLIC_TASKS_SERVICE_URL ?? DEFAULT_SERVICE_URLS.tasks,
+    "TASKS_SERVICE_URL",
+    DEFAULT_SERVICE_URLS.tasks,
   ),
-  inbox: normalizeServiceUrl(
+  inbox: configuredServiceUrl(
     "NEXT_PUBLIC_INBOX_SERVICE_URL",
-    process.env.NEXT_PUBLIC_INBOX_SERVICE_URL ?? DEFAULT_SERVICE_URLS.inbox,
+    "INBOX_SERVICE_URL",
+    DEFAULT_SERVICE_URLS.inbox,
   ),
-  calendar: normalizeServiceUrl(
+  calendar: configuredServiceUrl(
     "NEXT_PUBLIC_CALENDAR_SERVICE_URL",
-    process.env.NEXT_PUBLIC_CALENDAR_SERVICE_URL ??
-      DEFAULT_SERVICE_URLS.calendar,
+    "CALENDAR_SERVICE_URL",
+    DEFAULT_SERVICE_URLS.calendar,
   ),
 });
 

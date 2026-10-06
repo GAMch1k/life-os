@@ -17,6 +17,9 @@ npm run dev
 
 Open <http://localhost:3000>.
 
+For the full containerized local stack from the repository root, use
+`make life-up`. It starts PostgreSQL, the core services, and this dashboard.
+
 ## Service endpoints
 
 The browser-facing service URLs are configured at build time. The checked-in
