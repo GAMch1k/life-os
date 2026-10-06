@@ -1,0 +1,67 @@
+openapi: 3.0.3
+info:
+  title: Life OS Finance API
+  version: 1.0.0
+  license: {name: UNLICENSED, url: https://life-os.local/license}
+servers: [{url: http://finance:8080}]
+paths:
+  /v1/accounts:
+    get:
+      summary: List finance accounts
+      operationId: listAccounts
+      security: []
+      responses: {'200': {description: Accounts, content: {application/json: {schema: {$ref: '#/components/schemas/AccountList'}}}}, '400': {description: Invalid request}}
+  /v1/categories:
+    get:
+      summary: List finance categories
+      operationId: listCategories
+      security: []
+      responses: {'200': {description: Categories, content: {application/json: {schema: {$ref: '#/components/schemas/CategoryList'}}}}, '400': {description: Invalid request}}
+  /v1/categories/{categoryId}:
+    patch:
+      summary: Update a finance category
+      operationId: updateCategory
+      security: []
+      parameters: [{name: categoryId, in: path, required: true, schema: {type: string, format: uuid}}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateCategoryRequest'}}}}
+      responses: {'200': {description: Category, content: {application/json: {schema: {$ref: '#/components/schemas/Category'}}}}, '400': {description: Invalid request}, '404': {description: Category not found}}
+  /v1/transactions:
+    get:
+      summary: List and filter transactions
+      operationId: listTransactions
+      security: []
+      parameters: [{name: accountId, in: query, schema: {type: string, format: uuid}}, {name: categoryId, in: query, schema: {type: string, format: uuid}}, {name: from, in: query, schema: {type: string, format: date}}, {name: to, in: query, schema: {type: string, format: date}}, {name: cursor, in: query, schema: {type: string}}, {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}]
+      responses: {'200': {description: Transactions, content: {application/json: {schema: {$ref: '#/components/schemas/TransactionList'}}}}, '400': {description: Invalid request}}
+    post:
+      summary: Record a manual transaction
+      operationId: createManualTransaction
+      security: []
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateManualTransactionRequest'}}}}
+      responses: {'201': {description: Transaction, content: {application/json: {schema: {$ref: '#/components/schemas/Transaction'}}}}, '400': {description: Invalid request}}
+  /v1/summaries/monthly:
+    get:
+      summary: Get a monthly finance summary
+      operationId: getMonthlySummary
+      security: []
+      parameters: [{name: month, in: query, required: true, schema: {type: string}}]
+      responses: {'200': {description: Summary, content: {application/json: {schema: {$ref: '#/components/schemas/MonthlySummary'}}}}, '400': {description: Invalid request}}
+  /v1/imports/csv:
+    post:
+      summary: Submit a CSV import
+      operationId: createCsvImport
+      security: []
+      requestBody: {required: true, content: {text/csv: {schema: {type: string, format: binary}}}}
+      responses: {'202': {description: Accepted, content: {application/json: {schema: {$ref: '#/components/schemas/CsvImport'}}}}, '400': {description: Invalid CSV}}
+components:
+  schemas:
+    Money: {type: object, required: [amount, currency], properties: {amount: {type: integer, format: int64}, currency: {type: string}}}
+    Account: {type: object, required: [id, name, balance], properties: {id: {type: string, format: uuid}, name: {type: string}, balance: {$ref: '#/components/schemas/Money'}}}
+    Category: {type: object, required: [id, name, kind], properties: {id: {type: string, format: uuid}, name: {type: string}, kind: {type: string, enum: [income, expense]}}}
+    Transaction: {type: object, required: [id, accountId, amount, occurredOn], properties: {id: {type: string, format: uuid}, accountId: {type: string, format: uuid}, categoryId: {type: string, format: uuid, nullable: true}, amount: {$ref: '#/components/schemas/Money'}, occurredOn: {type: string, format: date}, note: {type: string}}}
+    AccountList: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/Account'}}}}
+    CategoryList: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/Category'}}}}
+    TransactionList: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/Transaction'}}, nextCursor: {type: string, nullable: true}}}
+    CreateManualTransactionRequest: {type: object, required: [accountId, amount, occurredOn], properties: {accountId: {type: string, format: uuid}, categoryId: {type: string, format: uuid}, amount: {$ref: '#/components/schemas/Money'}, occurredOn: {type: string, format: date}, note: {type: string}}}
+    UpdateCategoryRequest: {type: object, minProperties: 1, properties: {name: {type: string}, kind: {type: string, enum: [income, expense]}}}
+    MonthlySummary: {type: object, required: [month, totalBalance, income, spending, net], properties: {month: {type: string}, totalBalance: {$ref: '#/components/schemas/Money'}, income: {$ref: '#/components/schemas/Money'}, spending: {$ref: '#/components/schemas/Money'}, net: {$ref: '#/components/schemas/Money'}}}
+    CsvImport: {type: object, required: [id, status], properties: {id: {type: string, format: uuid}, status: {type: string, enum: [accepted, processing, completed, failed]}}}
