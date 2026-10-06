@@ -10,10 +10,12 @@ import {
 import { Suspense } from "react";
 
 import { FinanceSummary } from "@/components/finance-summary";
+import { InboxSummary } from "@/components/inbox-summary";
 import { CalendarSummary } from "@/components/calendar-summary";
 import { TasksSummary } from "@/components/tasks-summary";
 import { getCalendarSummary } from "@/lib/calendar-summary";
 import { getFinanceSummary } from "@/lib/finance-summary";
+import { getInboxSummary } from "@/lib/inbox-summary";
 import { getTasksSummary } from "@/lib/tasks-summary";
 
 const workspaces: ReadonlyArray<{
@@ -108,6 +110,9 @@ export default async function Home() {
       <Suspense fallback={<CalendarSummary state={{ kind: "loading" }} />}>
         <CalendarWidget />
       </Suspense>
+      <Suspense fallback={<InboxSummary state={{ kind: "loading" }} />}>
+        <InboxWidget />
+      </Suspense>
 
       <section aria-labelledby="workspace-heading">
         <div className="mb-4 flex items-end justify-between gap-4">
@@ -131,7 +136,10 @@ export default async function Home() {
           {workspaces
             .filter(
               ({ id }) =>
-                id !== "finance" && id !== "tasks" && id !== "calendar",
+                id !== "finance" &&
+                id !== "tasks" &&
+                id !== "calendar" &&
+                id !== "inbox",
             )
             .map(({ description, emptyState, icon: Icon, id, title }) => (
               <article
@@ -170,4 +178,9 @@ async function TasksWidget() {
 async function CalendarWidget() {
   const calendar = await getCalendarSummary();
   return <CalendarSummary state={calendar} />;
+}
+
+async function InboxWidget() {
+  const inbox = await getInboxSummary();
+  return <InboxSummary state={inbox} />;
 }
