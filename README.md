@@ -71,7 +71,17 @@ go work edit -json
 
 `pkg/config` loads typed service configuration from environment variables. Struct fields opt in with `env` tags and may declare `required:"true"` or a `default` value. Configuration structs can implement `Validate() error` for cross-field rules. Loading reports readable field errors and updates the target only after the complete configuration is valid.
 
-Run the current Go checks from the repository root with `go test ./pkg/...` and `go vet ./pkg/...`. The baseline quality ticket will later collect every module and generated-artifact check behind one root command.
+Run the full baseline verification path from the repository root:
+
+```sh
+make check
+```
+
+It runs `sqlc generate` and fails if committed generated code changes, then
+checks Go formatting, vet, tests, and builds for each repository module before
+running the dashboard's format, lint, test, type, and production-build checks.
+Install `go`, `sqlc`, and Node/npm on `PATH` first; the exact database-tool
+versions are documented in [`pkg/database/README.md`](pkg/database/README.md).
 
 ## Shared HTTP runtime
 
@@ -79,15 +89,10 @@ Run the current Go checks from the repository root with `go test ./pkg/...` and 
 
 ## Development commands
 
-Repository-wide commands are introduced alongside the capabilities they operate. The infrastructure commands are available now; later foundation tickets will provide:
-
-- one command to create a service from the canonical template;
-- generation commands for API and database artifacts;
-- one root command to format, lint, test, and build the repository.
-
-Until those tickets land, the repository does not expose placeholder commands that imply unfinished workflows already exist.
-
-The dashboard's current formatting, lint, type, and production-build checks are available from the root with `make dashboard-check`.
+Repository-wide commands are introduced alongside the capabilities they operate.
+`make create-service` creates a canonical backend service, `make check` is the
+non-mutating verification path, and `make dashboard-check` runs only the
+dashboard's formatting, lint, type, test, and production-build checks.
 
 ## Architectural boundaries
 

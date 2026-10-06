@@ -1,4 +1,4 @@
-.PHONY: infra-env infra-up infra-down infra-ps infra-logs infra-reset db-provision db-check-isolation db-migration-new db-generate db-migrate-up db-migrate-down db-test create-service create-service-smoke dashboard-check
+.PHONY: infra-env infra-up infra-down infra-ps infra-logs infra-reset db-provision db-check-isolation db-migration-new db-generate db-migrate-up db-migrate-down db-test create-service create-service-smoke dashboard-check check
 
 infra-env:
 	@test -f .env || cp .env.example .env
@@ -61,3 +61,6 @@ create-service-smoke:
 
 dashboard-check:
 	npm --prefix apps/dashboard run check
+
+check:
+	./tools/check
