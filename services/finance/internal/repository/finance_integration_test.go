@@ -95,7 +95,7 @@ func TestFinanceQueriesPersistMinorUnitsAndImportIdentity(t *testing.T) {
 	}
 	if _, err := queries.CreateTransaction(ctx, generated.CreateTransactionParams{
 		AccountID: account.ID, AmountMinor: -500, Currency: "USD",
-		OccurredOn: pgtype.Date{Time: time.Date(2026, time.October, 5, 0, 0, 0, 0, time.UTC), Valid: true},
+		OccurredOn:   pgtype.Date{Time: time.Date(2026, time.October, 5, 0, 0, 0, 0, time.UTC), Valid: true},
 		ImportSource: &source, ImportExternalID: &externalID, SourceMetadata: []byte(`{}`),
 	}); err == nil {
 		t.Fatal("duplicate import identity was accepted")
