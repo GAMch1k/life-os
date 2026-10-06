@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+service_name=generator-smoke
+service_dir="$repo_root/services/$service_name"
+archive_dir=$(mktemp -d)
+database_name=generator_smoke_db
+database_created=false
+
+cleanup() {
+  if [[ "$database_created" == true ]]; then
+    docker exec lifeos-postgres-1 psql -v ON_ERROR_STOP=1 -U lifeos_admin -d postgres \
+      -c "DROP DATABASE IF EXISTS ${database_name};" || true
+  fi
+  if [[ -d "$service_dir" ]]; then
+    mv "$service_dir" "$archive_dir/$service_name"
+  fi
+}
+trap cleanup EXIT
+
+[[ ! -e "$service_dir" ]] || {
+  printf 'generator smoke target already exists: %s\n' "$service_dir" >&2
+  exit 2
+}
+
+"$repo_root/tools/create-service" "$service_name" --skip-workspace
+
+if rg -n --hidden --glob '!.git' 'template-service|template_user|template_db|go-fiber-service' "$service_dir"; then
+  printf 'generated service contains a template placeholder\n' >&2
+  exit 1
+fi
+
+(
+  cd "$service_dir"
+  sqlc generate -f sqlc.yaml
+  GOWORK=off go vet ./...
+  GOWORK=off go test ./...
+  GOWORK=off go build ./cmd/server
+)
+
+database_url="postgres://lifeos_admin:replace-with-a-local-password@127.0.0.1:5432/${database_name}?sslmode=disable"
+docker exec lifeos-postgres-1 psql -v ON_ERROR_STOP=1 -U lifeos_admin -d postgres -c "CREATE DATABASE ${database_name};"
+database_created=true
+
+(
+  cd "$service_dir"
+  migrate -path db/migrations -database "$database_url" up
+  DATABASE_URL="$database_url" PORT=18082 ./server >"$archive_dir/service.log" 2>&1 &
+  server_pid=$!
+  trap 'kill "$server_pid" 2>/dev/null || true; wait "$server_pid" 2>/dev/null || true' EXIT
+  for _ in $(seq 1 30); do
+    if curl --fail --silent http://127.0.0.1:18082/health >/dev/null && curl --fail --silent http://127.0.0.1:18082/ready >/dev/null; then
+      exit 0
+    fi
+    sleep 1
+  done
+  printf 'generated service did not pass health checks; log follows:\n' >&2
+  sed -n '1,200p' "$archive_dir/service.log" >&2
+  exit 1
+)
+
+printf 'create-service smoke test passed\n'

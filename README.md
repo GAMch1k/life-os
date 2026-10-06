@@ -44,6 +44,23 @@ Each domain service uses an isolated database and login inside the shared Postgr
 
 Backend code uses a multi-module Go workspace. Each service is an independent module so ownership and dependencies stay explicit. Shared infrastructure is a separate module under `pkg/`. Every module is registered in the root `go.work` file when it is created.
 
+Create a service from the canonical template with a lowercase kebab-case name:
+
+```sh
+make create-service SERVICE=habits
+```
+
+The command creates `services/habits`, registers its module in `go.work`, and
+derives `habits_db`, `habits_user`, and
+`LIFE_OS_HABITS_DB_PASSWORD`. Use `tools/create-service --help` to override
+the database, role, or password-variable names. Run the repeatable local/CI
+verification after starting the local infrastructure:
+
+```sh
+make infra-up
+make create-service-smoke
+```
+
 Validate the workspace declaration with:
 
 ```sh

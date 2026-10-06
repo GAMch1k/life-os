@@ -1,4 +1,4 @@
-.PHONY: infra-env infra-up infra-down infra-ps infra-logs infra-reset db-provision db-check-isolation db-migration-new db-generate db-migrate-up db-migrate-down db-test dashboard-check
+.PHONY: infra-env infra-up infra-down infra-ps infra-logs infra-reset db-provision db-check-isolation db-migration-new db-generate db-migrate-up db-migrate-down db-test create-service create-service-smoke dashboard-check
 
 infra-env:
 	@test -f .env || cp .env.example .env
@@ -51,6 +51,13 @@ db-test:
 	@test -n "$(SERVICE)" || (echo "SERVICE is required" >&2; exit 2)
 	@test -f "services/$(SERVICE)/go.mod" || (echo "unknown service or missing go.mod: $(SERVICE)" >&2; exit 2)
 	cd "services/$(SERVICE)" && go test ./...
+
+create-service:
+	@test -n "$(SERVICE)" || (echo "SERVICE is required" >&2; exit 2)
+	./tools/create-service "$(SERVICE)"
+
+create-service-smoke:
+	./tools/test-create-service
 
 dashboard-check:
 	npm --prefix apps/dashboard run check

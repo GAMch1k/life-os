@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: tools/create-service <service-name> [options]
+
+Create a Life OS Go/Fiber service from the canonical template.
+
+Options:
+  --database <name>      PostgreSQL database name (default: <service>_db)
+  --role <name>          PostgreSQL role name (default: <service>_user)
+  --password-env <name>  Environment variable holding the DB password
+                         (default: LIFE_OS_<SERVICE>_DB_PASSWORD)
+  --skip-workspace       Do not register the module in the root go.work file
+  -h, --help             Show this help
+EOF
+}
+
+fail() {
+  printf 'create-service: %s\n' "$*" >&2
+  exit 2
+}
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+template_dir="$repo_root/templates/go-fiber-service"
+
+[[ $# -ge 1 ]] || { usage >&2; exit 2; }
+if [[ "$1" == '-h' || "$1" == '--help' ]]; then
+  usage
+  exit 0
+fi
+
+service_name=$1
+shift
+
+database_name="${service_name//-/_}_db"
+role_name="${service_name//-/_}_user"
+password_env="LIFE_OS_$(tr '[:lower:]-' '[:upper:]_' <<<"$service_name")_DB_PASSWORD"
+register_workspace=true
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --database)
+      [[ $# -ge 2 ]] || fail '--database requires a value'
+      database_name=$2
+      shift 2
+      ;;
+    --role)
+      [[ $# -ge 2 ]] || fail '--role requires a value'
+      role_name=$2
+      shift 2
+      ;;
+    --password-env)
+      [[ $# -ge 2 ]] || fail '--password-env requires a value'
+      password_env=$2
+      shift 2
+      ;;
+    --skip-workspace)
+      register_workspace=false
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *) fail "unknown option: $1" ;;
+  esac
+done
+
+[[ "$service_name" =~ ^[a-z][a-z0-9-]*$ ]] || fail 'service name must be lowercase kebab-case'
+[[ "$database_name" =~ ^[a-z][a-z0-9_]*$ ]] || fail 'database name must be lowercase snake_case'
+[[ "$role_name" =~ ^[a-z][a-z0-9_]*$ ]] || fail 'role name must be lowercase snake_case'
+[[ "$password_env" =~ ^LIFE_OS_[A-Z0-9_]+_DB_PASSWORD$ ]] || fail 'password environment variable must match LIFE_OS_<SERVICE>_DB_PASSWORD'
+[[ -d "$template_dir" ]] || fail "template is missing: $template_dir"
+
+target_dir="$repo_root/services/$service_name"
+[[ ! -e "$target_dir" ]] || fail "refusing to overwrite existing service: $target_dir"
+
+module_path="github.com/GAMch1k/life-os/services/$service_name"
+template_module="github.com/GAMch1k/life-os/templates/go-fiber-service"
+template_service_path="templates/go-fiber-service"
+service_path="services/$service_name"
+database_url="postgres://${role_name}:replace-with-a-local-password@127.0.0.1:5432/${database_name}?sslmode=disable"
+
+mkdir -p "$repo_root/services"
+cp -R "$template_dir" "$target_dir"
+
+while IFS= read -r -d '' file; do
+  sed -i \
+    -e "s|$template_module|$module_path|g" \
+    -e "s|$template_service_path|$service_path|g" \
+    -e "s|template-service|$service_name|g" \
+    -e "s|template_user|$role_name|g" \
+    -e "s|template_db|$database_name|g" \
+    "$file"
+done < <(find "$target_dir" -type f -print0)
+
+sed -i -e "s|DATABASE_URL=.*|DATABASE_URL=$database_url|" "$target_dir/.env.example"
+
+if [[ "$register_workspace" == true ]]; then
+  (
+    cd "$repo_root"
+    go work use "./services/$service_name"
+  )
+fi
+
+printf 'Created %s\n' "$target_dir"
+printf 'Module: %s\nDatabase: %s\nRole: %s\nPassword variable: %s\n' \
+  "$module_path" "$database_name" "$role_name" "$password_env"

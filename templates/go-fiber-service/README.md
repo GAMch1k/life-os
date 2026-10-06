@@ -4,9 +4,9 @@ This is the neutral starting point for Life OS backend services. It provides
 the standard process, HTTP, persistence, migration, and OpenAPI layout without
 introducing a Finance, Tasks, Inbox, Calendar, or other business domain.
 
-`tools/create-service` will turn this template into a named service in a later
-foundation ticket. Do not add business entities, routes, tables, or queries to
-the template itself.
+Run `make create-service SERVICE=<name>` from the repository root to turn this
+template into a named service. Do not add business entities, routes, tables,
+or queries to the template itself.
 
 ## Layout
 
