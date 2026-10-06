@@ -1,0 +1,48 @@
+openapi: 3.0.3
+info:
+  title: Life OS Tasks API
+  version: 1.0.0
+  license: {name: UNLICENSED, url: https://life-os.local/license}
+servers: [{url: http://tasks:8080}]
+paths:
+  /v1/tasks:
+    get:
+      summary: List tasks
+      operationId: listTasks
+      security: []
+      parameters: [{name: completed, in: query, schema: {type: boolean}}, {name: dueBefore, in: query, schema: {type: string, format: date-time}}, {name: cursor, in: query, schema: {type: string}}, {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}]
+      responses: {'200': {description: Tasks, content: {application/json: {schema: {$ref: '#/components/schemas/TaskList'}}}}, '400': {description: Invalid request}}
+    post:
+      summary: Create a task
+      operationId: createTask
+      security: []
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateTaskRequest'}}}}
+      responses: {'201': {description: Task, content: {application/json: {schema: {$ref: '#/components/schemas/Task'}}}}, '400': {description: Invalid request}}
+  /v1/tasks/{taskId}:
+    get:
+      summary: Get a task
+      operationId: getTask
+      security: []
+      parameters: [{name: taskId, in: path, required: true, schema: {type: string, format: uuid}}]
+      responses: {'200': {description: Task, content: {application/json: {schema: {$ref: '#/components/schemas/Task'}}}}, '400': {description: Invalid request}, '404': {description: Task not found}}
+    patch:
+      summary: Update a task
+      operationId: updateTask
+      security: []
+      parameters: [{name: taskId, in: path, required: true, schema: {type: string, format: uuid}}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateTaskRequest'}}}}
+      responses: {'200': {description: Task, content: {application/json: {schema: {$ref: '#/components/schemas/Task'}}}}, '400': {description: Invalid request}, '404': {description: Task not found}}
+  /v1/tasks/{taskId}/complete:
+    post:
+      summary: Complete a task
+      operationId: completeTask
+      security: []
+      parameters: [{name: taskId, in: path, required: true, schema: {type: string, format: uuid}}]
+      responses: {'200': {description: Completed task, content: {application/json: {schema: {$ref: '#/components/schemas/Task'}}}}, '400': {description: Invalid request}, '404': {description: Task not found}}
+components:
+  schemas:
+    Recurrence: {type: object, required: [frequency, interval], properties: {frequency: {type: string, enum: [daily, weekly, monthly]}, interval: {type: integer, minimum: 1}, until: {type: string, format: date-time, nullable: true}}}
+    Task: {type: object, required: [id, title, completed, createdAt, updatedAt], properties: {id: {type: string, format: uuid}, title: {type: string}, notes: {type: string, nullable: true}, dueAt: {type: string, format: date-time, nullable: true}, completed: {type: boolean}, completedAt: {type: string, format: date-time, nullable: true}, recurrence: {$ref: '#/components/schemas/Recurrence'}, createdAt: {type: string, format: date-time}, updatedAt: {type: string, format: date-time}}}
+    CreateTaskRequest: {type: object, required: [title], properties: {title: {type: string}, notes: {type: string}, dueAt: {type: string, format: date-time}, recurrence: {$ref: '#/components/schemas/Recurrence'}}}
+    UpdateTaskRequest: {type: object, minProperties: 1, properties: {title: {type: string}, notes: {type: string, nullable: true}, dueAt: {type: string, format: date-time, nullable: true}, recurrence: {$ref: '#/components/schemas/Recurrence', nullable: true}}}
+    TaskList: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/Task'}}, nextCursor: {type: string, nullable: true}}}
