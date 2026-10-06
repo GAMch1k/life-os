@@ -180,11 +180,19 @@ export interface components {
             net: components["schemas"]["Money"];
             spendingByCategory: components["schemas"]["SpendingByCategory"][];
         };
+        CsvImportError: {
+            row: number;
+            message: string;
+        };
         CsvImport: {
             /** Format: uuid */
             id: string;
             /** @enum {string} */
             status: "accepted" | "processing" | "completed" | "failed";
+            created: number;
+            skipped: number;
+            failed: number;
+            errors: components["schemas"]["CsvImportError"][];
         };
     };
     responses: never;
