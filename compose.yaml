@@ -88,6 +88,22 @@ services:
     networks: [backend]
     restart: unless-stopped
 
+  dashboard:
+    build: {context: ., dockerfile: apps/dashboard/Dockerfile}
+    environment:
+      FINANCE_SERVICE_URL: http://finance:8080
+      TASKS_SERVICE_URL: http://tasks:8080
+      INBOX_SERVICE_URL: http://inbox:8080
+      CALENDAR_SERVICE_URL: http://calendar:8080
+    ports: ["127.0.0.1:${LIFE_OS_DASHBOARD_PORT:-3000}:3000"]
+    depends_on:
+      finance: {condition: service_started}
+      tasks: {condition: service_started}
+      inbox: {condition: service_started}
+      calendar: {condition: service_started}
+    networks: [backend]
+    restart: unless-stopped
+
 networks:
   backend:
     name: lifeos-backend
