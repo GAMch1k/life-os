@@ -1,4 +1,4 @@
-.PHONY: build run test generate migrate-up migrate-down docker-build docker-run check
+.PHONY: build run test generate generate-api migrate-up migrate-down docker-build docker-run check
 
 IMAGE ?= lifeos-service-template:local
 PORT ?= 8080
@@ -14,8 +14,11 @@ run:
 test:
 	go test ./...
 
-generate:
+generate: generate-api
 	sqlc generate -f sqlc.yaml
+
+generate-api:
+	oapi-codegen --generate types,fiber-v3 --package generated -o internal/api/generated/openapi.gen.go api/openapi.yaml
 
 migrate-up:
 	@test -n "$(DATABASE_URL)" || (echo "DATABASE_URL is required" >&2; exit 2)

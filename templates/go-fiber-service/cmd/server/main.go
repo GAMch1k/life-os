@@ -7,6 +7,8 @@ import (
 
 	"github.com/GAMch1k/life-os/pkg/database"
 	"github.com/GAMch1k/life-os/pkg/httpserver"
+	"github.com/GAMch1k/life-os/templates/go-fiber-service/internal/api"
+	"github.com/GAMch1k/life-os/templates/go-fiber-service/internal/api/generated"
 	serviceconfig "github.com/GAMch1k/life-os/templates/go-fiber-service/internal/config"
 )
 
@@ -34,6 +36,7 @@ func run(ctx context.Context) error {
 		httpserver.WithLogger(logger),
 		httpserver.WithReadinessCheck(pool.Ping),
 	)
+	generated.RegisterHandlers(app, api.NewHandler())
 	app.OnShutdown(database.ClosePool(pool))
 
 	return app.Run(fmt.Sprintf(":%d", cfg.Port))
