@@ -2,14 +2,17 @@
 package api
 
 import (
+	"bytes"
 	"fmt"
 	"time"
 
 	"github.com/gofiber/fiber/v3"
+	googleuuid "github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/oapi-codegen/runtime/types"
 
 	"github.com/GAMch1k/life-os/services/finance/internal/api/generated"
+	"github.com/GAMch1k/life-os/services/finance/internal/importer"
 	store "github.com/GAMch1k/life-os/services/finance/internal/repository/generated"
 )
 
@@ -61,7 +64,16 @@ func (h *Handler) UpdateCategory(c fiber.Ctx, categoryID types.UUID) error {
 }
 
 func (h *Handler) CreateCsvImport(c fiber.Ctx) error {
-	return fiber.NewError(fiber.StatusNotImplemented, "CSV import is not implemented yet")
+	result := importer.Import(c.Context(), h.queries, bytes.NewReader(c.Body()))
+	errors := make([]generated.CsvImportError, 0, len(result.Errors))
+	for _, item := range result.Errors {
+		errors = append(errors, generated.CsvImportError{Row: item.Row, Message: item.Message})
+	}
+	status := generated.Completed
+	if result.Failed > 0 && result.Created == 0 {
+		status = generated.Failed
+	}
+	return c.Status(fiber.StatusAccepted).JSON(generated.CsvImport{Id: googleuuid.New(), Status: status, Created: result.Created, Skipped: result.Skipped, Failed: result.Failed, Errors: errors})
 }
 
 func (h *Handler) GetMonthlySummary(c fiber.Ctx, params generated.GetMonthlySummaryParams) error {
