@@ -3,3 +3,39 @@
 //   sqlc v1.31.1
 
 package generated
+
+import (
+	"github.com/jackc/pgx/v5/pgtype"
+)
+
+type Account struct {
+	ID                  pgtype.UUID
+	Name                string
+	Currency            string
+	OpeningBalanceMinor int64
+	CreatedAt           pgtype.Timestamptz
+	UpdatedAt           pgtype.Timestamptz
+}
+
+type FinancialCategory struct {
+	ID        pgtype.UUID
+	Name      string
+	Kind      string
+	CreatedAt pgtype.Timestamptz
+	UpdatedAt pgtype.Timestamptz
+}
+
+type Transaction struct {
+	ID               pgtype.UUID
+	AccountID        pgtype.UUID
+	CategoryID       pgtype.UUID
+	AmountMinor      int64
+	Currency         string
+	OccurredOn       pgtype.Date
+	Note             *string
+	ImportSource     *string
+	ImportExternalID *string
+	SourceMetadata   []byte
+	CreatedAt        pgtype.Timestamptz
+	UpdatedAt        pgtype.Timestamptz
+}
