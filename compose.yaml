@@ -28,6 +28,66 @@ services:
       retries: 15
       start_period: 5s
 
+  finance-migrate:
+    image: migrate/migrate:v4.18.3
+    command: ["-path", "/migrations", "-database", "postgres://finance_user:${LIFE_OS_FINANCE_DB_PASSWORD}@postgres:5432/finance_db?sslmode=disable", "up"]
+    volumes: ["./services/finance/db/migrations:/migrations:ro"]
+    depends_on: {postgres: {condition: service_healthy}}
+    networks: [backend]
+    restart: "no"
+  finance:
+    build: {context: ., dockerfile: services/finance/Dockerfile}
+    environment: {SERVICE_NAME: finance, PORT: 8080, DATABASE_URL: "postgres://finance_user:${LIFE_OS_FINANCE_DB_PASSWORD}@postgres:5432/finance_db?sslmode=disable"}
+    ports: ["127.0.0.1:8081:8080"]
+    depends_on: {finance-migrate: {condition: service_completed_successfully}}
+    networks: [backend]
+    restart: unless-stopped
+
+  tasks-migrate:
+    image: migrate/migrate:v4.18.3
+    command: ["-path", "/migrations", "-database", "postgres://tasks_user:${LIFE_OS_TASKS_DB_PASSWORD}@postgres:5432/tasks_db?sslmode=disable", "up"]
+    volumes: ["./services/tasks/db/migrations:/migrations:ro"]
+    depends_on: {postgres: {condition: service_healthy}}
+    networks: [backend]
+    restart: "no"
+  tasks:
+    build: {context: ., dockerfile: services/tasks/Dockerfile}
+    environment: {SERVICE_NAME: tasks, PORT: 8080, DATABASE_URL: "postgres://tasks_user:${LIFE_OS_TASKS_DB_PASSWORD}@postgres:5432/tasks_db?sslmode=disable"}
+    ports: ["127.0.0.1:8082:8080"]
+    depends_on: {tasks-migrate: {condition: service_completed_successfully}}
+    networks: [backend]
+    restart: unless-stopped
+
+  inbox-migrate:
+    image: migrate/migrate:v4.18.3
+    command: ["-path", "/migrations", "-database", "postgres://inbox_user:${LIFE_OS_INBOX_DB_PASSWORD}@postgres:5432/inbox_db?sslmode=disable", "up"]
+    volumes: ["./services/inbox/db/migrations:/migrations:ro"]
+    depends_on: {postgres: {condition: service_healthy}}
+    networks: [backend]
+    restart: "no"
+  inbox:
+    build: {context: ., dockerfile: services/inbox/Dockerfile}
+    environment: {SERVICE_NAME: inbox, PORT: 8080, DATABASE_URL: "postgres://inbox_user:${LIFE_OS_INBOX_DB_PASSWORD}@postgres:5432/inbox_db?sslmode=disable"}
+    ports: ["127.0.0.1:8083:8080"]
+    depends_on: {inbox-migrate: {condition: service_completed_successfully}}
+    networks: [backend]
+    restart: unless-stopped
+
+  calendar-migrate:
+    image: migrate/migrate:v4.18.3
+    command: ["-path", "/migrations", "-database", "postgres://calendar_user:${LIFE_OS_CALENDAR_DB_PASSWORD}@postgres:5432/calendar_db?sslmode=disable", "up"]
+    volumes: ["./services/calendar/db/migrations:/migrations:ro"]
+    depends_on: {postgres: {condition: service_healthy}}
+    networks: [backend]
+    restart: "no"
+  calendar:
+    build: {context: ., dockerfile: services/calendar/Dockerfile}
+    environment: {SERVICE_NAME: calendar, PORT: 8080, DATABASE_URL: "postgres://calendar_user:${LIFE_OS_CALENDAR_DB_PASSWORD}@postgres:5432/calendar_db?sslmode=disable"}
+    ports: ["127.0.0.1:8084:8080"]
+    depends_on: {calendar-migrate: {condition: service_completed_successfully}}
+    networks: [backend]
+    restart: unless-stopped
+
 networks:
   backend:
     name: lifeos-backend
