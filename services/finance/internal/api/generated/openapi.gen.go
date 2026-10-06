@@ -125,11 +125,19 @@ type Money struct {
 
 // MonthlySummary defines model for MonthlySummary.
 type MonthlySummary struct {
-	Income       Money  `json:"income"`
-	Month        string `json:"month"`
-	Net          Money  `json:"net"`
-	Spending     Money  `json:"spending"`
-	TotalBalance Money  `json:"totalBalance"`
+	Income             Money                `json:"income"`
+	Month              string               `json:"month"`
+	Net                Money                `json:"net"`
+	Spending           Money                `json:"spending"`
+	SpendingByCategory []SpendingByCategory `json:"spendingByCategory"`
+	TotalBalance       Money                `json:"totalBalance"`
+}
+
+// SpendingByCategory defines model for SpendingByCategory.
+type SpendingByCategory struct {
+	Amount       Money              `json:"amount"`
+	CategoryId   openapi_types.UUID `json:"categoryId"`
+	CategoryName string             `json:"categoryName"`
 }
 
 // Transaction defines model for Transaction.
