@@ -78,6 +78,30 @@ func TestInvalidIncomingIDsAreNotReflected(t *testing.T) {
 	}
 }
 
+func TestCORSAllowsDashboardJSONRequests(t *testing.T) {
+	app := New("test")
+	app.Post("/captures", func(c fiber.Ctx) error { return c.SendStatus(fiber.StatusCreated) })
+
+	req := httptest.NewRequest(http.MethodOptions, "/captures", nil)
+	req.Header.Set("Origin", "http://localhost:3000")
+	req.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	req.Header.Set("Access-Control-Request-Headers", "content-type")
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != fiber.StatusNoContent {
+		t.Fatalf("preflight status = %d, want %d", resp.StatusCode, fiber.StatusNoContent)
+	}
+	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Fatalf("allow origin = %q, want wildcard", got)
+	}
+	if got := resp.Header.Get("Access-Control-Allow-Headers"); !strings.Contains(strings.ToLower(got), "content-type") {
+		t.Fatalf("allow headers = %q, want content-type", got)
+	}
+}
+
 func TestCommonErrorEnvelopeHidesInternalErrors(t *testing.T) {
 	t.Parallel()
 

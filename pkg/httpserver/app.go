@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v3"
+	"github.com/gofiber/fiber/v3/middleware/cors"
 )
 
 const (
@@ -121,6 +122,13 @@ func New(service string, options ...Option) *App {
 	app.ready.Store(true)
 
 	fiberApp.Use(requestContext(s.idGenerator))
+	// Services are consumed directly by the local dashboard during development.
+	// They do not use cookie or authorization credentials, so permissive CORS is
+	// safe here and keeps the service boundary visible to the browser.
+	fiberApp.Use(cors.New(cors.Config{
+		AllowOrigins: []string{"*"},
+		AllowHeaders: []string{"Content-Type", RequestIDHeader, CorrelationIDHeader},
+	}))
 	fiberApp.Use(requestLogger(logger))
 	fiberApp.Use(recoverPanic(logger))
 	app.registerHealthRoutes()
