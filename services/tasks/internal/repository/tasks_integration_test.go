@@ -1,0 +1,68 @@
+package repository_test
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	store "github.com/GAMch1k/life-os/services/tasks/internal/repository/generated"
+)
+
+func TestTaskPersistenceLifecycle(t *testing.T) {
+	url := os.Getenv("TASKS_TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("TASKS_TEST_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	schema := fmt.Sprintf("tasks_test_%d", time.Now().UnixNano())
+	config, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.ConnConfig.RuntimeParams["search_path"] = schema
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	if _, err := pool.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DROP SCHEMA "+schema+" CASCADE") })
+	for _, name := range []string{"000002_tasks.up.sql"} {
+		migration, err := os.ReadFile(filepath.Join("..", "..", "db", "migrations", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, string(migration)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	queries := store.New(pool)
+	due := time.Date(2026, time.October, 7, 9, 0, 0, 0, time.UTC)
+	frequency := "weekly"
+	interval := int32(1)
+	created, err := queries.CreateTask(ctx, store.CreateTaskParams{Title: "Pay bill", DueAt: pgtype.Timestamptz{Time: due, Valid: true}, RecurrenceFrequency: &frequency, RecurrenceInterval: &interval})
+	if err != nil {
+		t.Fatal(err)
+	}
+	open, err := queries.ListTasks(ctx, store.ListTasksParams{CompletedFilter: pointer(false), PageLimit: 10})
+	if err != nil || len(open) != 1 || open[0].ID != created.ID {
+		t.Fatalf("open tasks = %#v, err = %v", open, err)
+	}
+	completed, err := queries.CompleteTask(ctx, created.ID)
+	if err != nil || !completed.CompletedAt.Valid {
+		t.Fatalf("completed = %#v, err = %v", completed, err)
+	}
+	closed, err := queries.ListTasks(ctx, store.ListTasksParams{CompletedFilter: pointer(true), PageLimit: 10})
+	if err != nil || len(closed) != 1 || !closed[0].CompletedAt.Valid {
+		t.Fatalf("completed tasks = %#v, err = %v", closed, err)
+	}
+}
+func pointer(value bool) *bool { return &value }

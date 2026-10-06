@@ -3,3 +3,20 @@
 //   sqlc v1.31.1
 
 package generated
+
+import (
+	"github.com/jackc/pgx/v5/pgtype"
+)
+
+type Task struct {
+	ID                  pgtype.UUID
+	Title               string
+	Notes               *string
+	DueAt               pgtype.Timestamptz
+	CompletedAt         pgtype.Timestamptz
+	RecurrenceFrequency *string
+	RecurrenceInterval  *int32
+	RecurrenceUntil     pgtype.Timestamptz
+	CreatedAt           pgtype.Timestamptz
+	UpdatedAt           pgtype.Timestamptz
+}
