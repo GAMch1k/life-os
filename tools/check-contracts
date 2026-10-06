@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$repo_root"
+
+command -v oapi-codegen >/dev/null 2>&1 || {
+  printf 'contract check: oapi-codegen is required; install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.0\n' >&2
+  exit 2
+}
+
+mapfile -t specs < <(find templates services -path '*/api/openapi.yaml' -type f -print 2>/dev/null | sort)
+
+for spec_path in "${specs[@]}"; do
+  printf '\n==> OpenAPI lint: %s\n' "$spec_path"
+  npm --prefix apps/dashboard exec -- redocly lint "$repo_root/$spec_path"
+
+  service_dir=$(dirname "$(dirname "$spec_path")")
+  printf '\n==> Go API generation: %s\n' "$service_dir"
+  (
+    cd "$service_dir"
+    make generate-api
+  )
+  generated_path="$service_dir/internal/api/generated"
+  if ! git diff --exit-code -- "$generated_path"; then
+    printf 'contract check: generated Go API code is stale in %s; run make generate-api there and commit the result\n' "$service_dir" >&2
+    exit 1
+  fi
+done
+
+printf '\n==> TypeScript API generation\n'
+npm --prefix apps/dashboard run generate:api
+if ! git diff --exit-code -- apps/dashboard/src/lib/api/generated; then
+  printf 'contract check: generated TypeScript API code is stale; run npm --prefix apps/dashboard run generate:api and commit the result\n' >&2
+  exit 1
+fi

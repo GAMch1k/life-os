@@ -77,11 +77,11 @@ Run the full baseline verification path from the repository root:
 make check
 ```
 
-It runs `sqlc generate` and fails if committed generated code changes, then
-checks Go formatting, vet, tests, and builds for each repository module before
-running the dashboard's format, lint, test, type, and production-build checks.
-Install `go`, `sqlc`, and Node/npm on `PATH` first; the exact database-tool
-versions are documented in [`pkg/database/README.md`](pkg/database/README.md).
+It validates OpenAPI documents, regenerates Go and TypeScript contracts and
+fails on generated-code drift, then runs `sqlc generate` and performs the Go
+and dashboard checks. Install `go`, `sqlc`, `oapi-codegen`, and Node/npm on
+`PATH` first; the exact database-tool versions are documented in
+[`pkg/database/README.md`](pkg/database/README.md).
 
 ## Shared HTTP runtime
 

@@ -16,6 +16,9 @@ require_command go
 require_command sqlc
 require_command npm
 
+printf '==> Contract checks\n'
+"$repo_root/tools/check-contracts"
+
 mapfile -t modules < <(find pkg templates services -name go.mod -type f -print 2>/dev/null | sort)
 mapfile -t sqlc_configs < <(find templates services -name sqlc.yaml -type f -print 2>/dev/null | sort)
 
