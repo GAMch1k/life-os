@@ -1,0 +1,6 @@
+openapi: 3.1.0
+info:
+  title: Life OS Service Template
+  version: 0.0.0
+paths: {}
+
