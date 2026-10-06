@@ -7,9 +7,12 @@ import {
   Plus,
   type LucideIcon,
 } from "lucide-react";
+import { Suspense } from "react";
 
 import { FinanceSummary } from "@/components/finance-summary";
+import { TasksSummary } from "@/components/tasks-summary";
 import { getFinanceSummary } from "@/lib/finance-summary";
+import { getTasksSummary } from "@/lib/tasks-summary";
 
 const workspaces: ReadonlyArray<{
   id: string;
@@ -97,6 +100,9 @@ export default async function Home() {
       </section>
 
       <FinanceSummary state={finance} />
+      <Suspense fallback={<TasksSummary state={{ kind: "loading" }} />}>
+        <TasksWidget />
+      </Suspense>
 
       <section aria-labelledby="workspace-heading">
         <div className="mb-4 flex items-end justify-between gap-4">
@@ -118,7 +124,7 @@ export default async function Home() {
 
         <div className="grid gap-4 sm:grid-cols-2">
           {workspaces
-            .filter(({ id }) => id !== "finance")
+            .filter(({ id }) => id !== "finance" && id !== "tasks")
             .map(({ description, emptyState, icon: Icon, id, title }) => (
               <article
                 className="bg-card scroll-mt-24 rounded-2xl border p-5 shadow-sm sm:p-6"
@@ -146,4 +152,9 @@ export default async function Home() {
       </section>
     </div>
   );
+}
+
+async function TasksWidget() {
+  const tasks = await getTasksSummary();
+  return <TasksSummary state={tasks} />;
 }

@@ -5,6 +5,7 @@ export type Task = components["schemas"]["Task"];
 
 export type TasksSummaryState =
   | { kind: "ready"; tasks: Task[] }
+  | { kind: "loading" }
   | { kind: "empty" }
   | { kind: "unavailable" };
 
