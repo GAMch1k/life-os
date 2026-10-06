@@ -12,7 +12,7 @@ services/<service>/
 │   └── queries/
 │       └── <resource>.sql
 ├── sqlc.yaml
-└── internal/database/
+└── internal/repository/
     └── generated/                 # committed sqlc output
 ```
 
@@ -25,7 +25,7 @@ hand. Domain tables, migrations, and queries must not be added to `pkg`.
 
 Each service's `sqlc.yaml` points `schema` at `db/migrations`,
 `queries` at `db/queries`, and emits pgx/v5 code to
-`internal/database/generated`. The neutral executable example under
+`internal/repository/generated`. The neutral executable example under
 `testdata/example` is a convention test fixture, not an application schema.
 
 ## Commands

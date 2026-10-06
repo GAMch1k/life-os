@@ -34,5 +34,25 @@ internal/service/                # service use cases
 - The process exposes the shared `/health` and `/ready` endpoints and performs
   graceful shutdown through `pkg/httpserver`.
 
-Runnable local and Docker commands are added alongside the process entrypoint.
+## Commands
 
+From this directory, with `DATABASE_URL` set to this service's database:
+
+```sh
+make generate
+make test
+make migrate-up DATABASE_URL='postgres://...'
+make run DATABASE_URL='postgres://...'
+```
+
+Build the image from the repository root context and run it on the local Life
+OS Docker network:
+
+```sh
+make docker-build
+make docker-run DATABASE_URL='postgres://template_user:password@postgres:5432/template_db?sslmode=disable'
+```
+
+The template's baseline migration is intentionally a no-op. It proves the
+migration workflow without creating a sample business table; generated services
+replace it with their first service-owned migration.
