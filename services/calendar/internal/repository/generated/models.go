@@ -3,3 +3,25 @@
 //   sqlc v1.31.1
 
 package generated
+
+import (
+	"github.com/jackc/pgx/v5/pgtype"
+)
+
+type Event struct {
+	ID                  pgtype.UUID
+	Title               string
+	Description         *string
+	AllDay              bool
+	StartAt             pgtype.Timestamptz
+	EndAt               pgtype.Timestamptz
+	StartDate           pgtype.Date
+	EndDate             pgtype.Date
+	RecurrenceFrequency *string
+	RecurrenceInterval  *int32
+	RecurrenceUntil     pgtype.Timestamptz
+	ExternalProvider    *string
+	ExternalID          *string
+	CreatedAt           pgtype.Timestamptz
+	UpdatedAt           pgtype.Timestamptz
+}

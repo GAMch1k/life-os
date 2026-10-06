@@ -6,10 +6,16 @@ package generated
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Querier interface {
-	Ping(ctx context.Context) (int32, error)
+	CreateEvent(ctx context.Context, arg CreateEventParams) (Event, error)
+	DeleteEvent(ctx context.Context, id pgtype.UUID) (int64, error)
+	GetEvent(ctx context.Context, id pgtype.UUID) (Event, error)
+	ListEvents(ctx context.Context, arg ListEventsParams) ([]Event, error)
+	UpdateEvent(ctx context.Context, arg UpdateEventParams) (Event, error)
 }
 
 var _ Querier = (*Queries)(nil)
