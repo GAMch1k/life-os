@@ -75,6 +75,13 @@ export interface operations {
                     "application/json": components["schemas"]["PingResponse"];
                 };
             };
+            /** @description Invalid request input. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     getEcho: {
@@ -96,6 +103,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["EchoResponse"];
                 };
+            };
+            /** @description Invalid request input. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

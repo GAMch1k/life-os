@@ -4,7 +4,7 @@ info:
   version: 0.0.0
   license:
     name: UNLICENSED
-    identifier: UNLICENSED
+    url: https://life-os.local/license
 servers:
   - url: http://localhost:8080
 paths:
@@ -12,6 +12,7 @@ paths:
     get:
       operationId: getPing
       summary: Contract-generation smoke endpoint
+      security: []
       responses:
         '200':
           description: A simple transport response.
@@ -19,10 +20,13 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PingResponse'
+        '400':
+          description: Invalid request input.
   /v1/echo:
     get:
       operationId: getEcho
       summary: Echo a required query parameter
+      security: []
       parameters:
         - name: message
           in: query
@@ -37,6 +41,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/EchoResponse'
+        '400':
+          description: Invalid request input.
 components:
   schemas:
     PingResponse:
