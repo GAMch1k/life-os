@@ -95,7 +95,7 @@ services:
       TASKS_SERVICE_URL: http://tasks:8080
       INBOX_SERVICE_URL: http://inbox:8080
       CALENDAR_SERVICE_URL: http://calendar:8080
-    ports: ["127.0.0.1:${LIFE_OS_DASHBOARD_PORT:-3000}:3000"]
+    ports: ["${LIFE_OS_DASHBOARD_BIND_ADDRESS:-127.0.0.1}:${LIFE_OS_DASHBOARD_PORT:-3000}:3000"]
     depends_on:
       finance: {condition: service_started}
       tasks: {condition: service_started}
