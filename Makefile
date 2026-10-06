@@ -1,10 +1,16 @@
-.PHONY: infra-env infra-up infra-down infra-ps infra-logs infra-reset db-provision db-check-isolation db-migration-new db-generate db-migrate-up db-migrate-down db-test create-service create-service-smoke dashboard-check check
+.PHONY: infra-env infra-up infra-down infra-ps infra-logs infra-reset core-up core-smoke db-provision db-check-isolation db-migration-new db-generate db-migrate-up db-migrate-down db-test create-service create-service-smoke dashboard-check check
 
 infra-env:
 	@test -f .env || cp .env.example .env
 
 infra-up: infra-env
 	docker compose up --detach --wait
+
+core-up: infra-env
+	docker compose up --detach --build
+
+core-smoke: core-up
+	./tools/smoke-core-services
 
 infra-down:
 	docker compose down --remove-orphans
