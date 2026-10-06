@@ -1,0 +1,48 @@
+openapi: 3.0.3
+info:
+  title: Life OS Calendar API
+  version: 1.0.0
+  license: {name: UNLICENSED, url: https://life-os.local/license}
+servers: [{url: http://calendar:8080}]
+paths:
+  /v1/events:
+    get:
+      summary: List calendar events
+      operationId: listEvents
+      security: []
+      parameters: [{name: from, in: query, required: true, schema: {type: string, format: date-time}}, {name: to, in: query, required: true, schema: {type: string, format: date-time}}, {name: cursor, in: query, schema: {type: string}}, {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}]
+      responses: {'200': {description: Events, content: {application/json: {schema: {$ref: '#/components/schemas/EventList'}}}}, '400': {description: Invalid request}}
+    post:
+      summary: Create a calendar event
+      operationId: createEvent
+      security: []
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateEventRequest'}}}}
+      responses: {'201': {description: Event, content: {application/json: {schema: {$ref: '#/components/schemas/CalendarEvent'}}}}, '400': {description: Invalid request}}
+  /v1/events/{eventId}:
+    get:
+      summary: Get a calendar event
+      operationId: getEvent
+      security: []
+      parameters: [{name: eventId, in: path, required: true, schema: {type: string, format: uuid}}]
+      responses: {'200': {description: Event, content: {application/json: {schema: {$ref: '#/components/schemas/CalendarEvent'}}}}, '400': {description: Invalid request}, '404': {description: Event not found}}
+    patch:
+      summary: Update a calendar event
+      operationId: updateEvent
+      security: []
+      parameters: [{name: eventId, in: path, required: true, schema: {type: string, format: uuid}}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateEventRequest'}}}}
+      responses: {'200': {description: Event, content: {application/json: {schema: {$ref: '#/components/schemas/CalendarEvent'}}}}, '400': {description: Invalid request}, '404': {description: Event not found}}
+    delete:
+      summary: Delete a calendar event
+      operationId: deleteEvent
+      security: []
+      parameters: [{name: eventId, in: path, required: true, schema: {type: string, format: uuid}}]
+      responses: {'204': {description: Event deleted}, '400': {description: Invalid request}, '404': {description: Event not found}}
+components:
+  schemas:
+    Recurrence: {type: object, required: [frequency, interval], properties: {frequency: {type: string, enum: [daily, weekly, monthly, yearly]}, interval: {type: integer, minimum: 1}, until: {type: string, format: date-time, nullable: true}}}
+    ExternalReference: {type: object, required: [provider, externalId], properties: {provider: {type: string}, externalId: {type: string}}}
+    CalendarEvent: {type: object, required: [id, title, allDay, createdAt, updatedAt], properties: {id: {type: string, format: uuid}, title: {type: string}, description: {type: string, nullable: true}, allDay: {type: boolean}, startAt: {type: string, format: date-time, nullable: true}, endAt: {type: string, format: date-time, nullable: true}, startDate: {type: string, format: date, nullable: true}, endDate: {type: string, format: date, nullable: true}, recurrence: {$ref: '#/components/schemas/Recurrence'}, externalReference: {$ref: '#/components/schemas/ExternalReference'}, createdAt: {type: string, format: date-time}, updatedAt: {type: string, format: date-time}}}
+    CreateEventRequest: {type: object, required: [title, allDay], properties: {title: {type: string}, description: {type: string}, allDay: {type: boolean}, startAt: {type: string, format: date-time}, endAt: {type: string, format: date-time}, startDate: {type: string, format: date}, endDate: {type: string, format: date}, recurrence: {$ref: '#/components/schemas/Recurrence'}, externalReference: {$ref: '#/components/schemas/ExternalReference'}}}
+    UpdateEventRequest: {type: object, minProperties: 1, properties: {title: {type: string}, description: {type: string, nullable: true}, allDay: {type: boolean}, startAt: {type: string, format: date-time, nullable: true}, endAt: {type: string, format: date-time, nullable: true}, startDate: {type: string, format: date, nullable: true}, endDate: {type: string, format: date, nullable: true}, recurrence: {$ref: '#/components/schemas/Recurrence', nullable: true}}}
+    EventList: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/CalendarEvent'}}, nextCursor: {type: string, nullable: true}}}
