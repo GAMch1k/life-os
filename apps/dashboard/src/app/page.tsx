@@ -10,7 +10,9 @@ import {
 import { Suspense } from "react";
 
 import { FinanceSummary } from "@/components/finance-summary";
+import { CalendarSummary } from "@/components/calendar-summary";
 import { TasksSummary } from "@/components/tasks-summary";
+import { getCalendarSummary } from "@/lib/calendar-summary";
 import { getFinanceSummary } from "@/lib/finance-summary";
 import { getTasksSummary } from "@/lib/tasks-summary";
 
@@ -103,6 +105,9 @@ export default async function Home() {
       <Suspense fallback={<TasksSummary state={{ kind: "loading" }} />}>
         <TasksWidget />
       </Suspense>
+      <Suspense fallback={<CalendarSummary state={{ kind: "loading" }} />}>
+        <CalendarWidget />
+      </Suspense>
 
       <section aria-labelledby="workspace-heading">
         <div className="mb-4 flex items-end justify-between gap-4">
@@ -124,7 +129,10 @@ export default async function Home() {
 
         <div className="grid gap-4 sm:grid-cols-2">
           {workspaces
-            .filter(({ id }) => id !== "finance" && id !== "tasks")
+            .filter(
+              ({ id }) =>
+                id !== "finance" && id !== "tasks" && id !== "calendar",
+            )
             .map(({ description, emptyState, icon: Icon, id, title }) => (
               <article
                 className="bg-card scroll-mt-24 rounded-2xl border p-5 shadow-sm sm:p-6"
@@ -157,4 +165,9 @@ export default async function Home() {
 async function TasksWidget() {
   const tasks = await getTasksSummary();
   return <TasksSummary state={tasks} />;
+}
+
+async function CalendarWidget() {
+  const calendar = await getCalendarSummary();
+  return <CalendarSummary state={calendar} />;
 }
