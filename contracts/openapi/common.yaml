@@ -1,0 +1,46 @@
+openapi: 3.1.1
+info:
+  title: Life OS shared API components
+  version: 1.0.0
+  license:
+    name: UNLICENSED
+servers:
+  - url: http://localhost
+paths: {}
+components:
+  schemas:
+    ErrorDetail:
+      type: object
+      additionalProperties: false
+      required:
+        - field
+        - message
+      properties:
+        field:
+          type: string
+          description: JSON field or query-parameter name associated with the error.
+        message:
+          type: string
+          description: Safe explanation suitable for display to a client.
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - code
+        - message
+        - requestId
+      properties:
+        code:
+          type: string
+          pattern: '^[a-z][a-z0-9_]*$'
+          example: validation_failed
+        message:
+          type: string
+          example: One or more fields are invalid.
+        requestId:
+          type: string
+          format: uuid
+        details:
+          type: array
+          items:
+            $ref: '#/components/schemas/ErrorDetail'

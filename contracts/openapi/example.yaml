@@ -1,0 +1,70 @@
+openapi: 3.1.1
+info:
+  title: Life OS example API
+  version: 1.0.0
+  license:
+    name: UNLICENSED
+servers:
+  - url: http://localhost
+paths:
+  /v1/example-items:
+    get:
+      operationId: listExampleItems
+      summary: List example items
+      security: []
+      parameters:
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+      responses:
+        '200':
+          description: Page of example items.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExampleItemList'
+        '400':
+          description: Invalid query parameters.
+          content:
+            application/json:
+              schema:
+                $ref: './common.yaml#/components/schemas/ErrorResponse'
+components:
+  schemas:
+    ExampleItem:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        createdAt:
+          type: string
+          format: date-time
+    ExampleItemList:
+      type: object
+      additionalProperties: false
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExampleItem'
+        nextCursor:
+          type:
+            - string
+            - 'null'
