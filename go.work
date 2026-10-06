@@ -3,6 +3,7 @@ go 1.27.1
 use (
 	./pkg
 	./services/finance
+	./services/inbox
 	./services/tasks
 	./templates/go-fiber-service
 )

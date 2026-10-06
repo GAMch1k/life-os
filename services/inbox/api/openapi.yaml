@@ -1,0 +1,46 @@
+openapi: 3.0.3
+info:
+  title: Life OS Inbox API
+  version: 1.0.0
+  license: {name: UNLICENSED, url: https://life-os.local/license}
+servers: [{url: http://inbox:8080}]
+paths:
+  /v1/inbox-items:
+    get:
+      summary: List captured inbox items
+      operationId: listInboxItems
+      security: []
+      parameters: [{name: unresolved, in: query, schema: {type: boolean, default: true}}, {name: state, in: query, schema: {type: string, enum: [raw, processing, resolved, discarded]}}, {name: cursor, in: query, schema: {type: string}}, {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}]
+      responses: {'200': {description: Inbox items, content: {application/json: {schema: {$ref: '#/components/schemas/InboxItemList'}}}}, '400': {description: Invalid request}}
+    post:
+      summary: Capture an inbox item
+      operationId: createInboxItem
+      security: []
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateInboxItemRequest'}}}}
+      responses: {'201': {description: Captured item, content: {application/json: {schema: {$ref: '#/components/schemas/InboxItem'}}}}, '400': {description: Invalid request}}
+  /v1/inbox-items/{itemId}:
+    get:
+      summary: Get an inbox item
+      operationId: getInboxItem
+      security: []
+      parameters: [{name: itemId, in: path, required: true, schema: {type: string, format: uuid}}]
+      responses: {'200': {description: Inbox item, content: {application/json: {schema: {$ref: '#/components/schemas/InboxItem'}}}}, '400': {description: Invalid request}, '404': {description: Inbox item not found}}
+  /v1/inbox-items/{itemId}/resolve:
+    post:
+      summary: Resolve an inbox item
+      operationId: resolveInboxItem
+      security: []
+      parameters: [{name: itemId, in: path, required: true, schema: {type: string, format: uuid}}]
+      responses: {'200': {description: Resolved item, content: {application/json: {schema: {$ref: '#/components/schemas/InboxItem'}}}}, '400': {description: Invalid request}, '404': {description: Inbox item not found}}
+  /v1/inbox-items/{itemId}/discard:
+    post:
+      summary: Discard an inbox item
+      operationId: discardInboxItem
+      security: []
+      parameters: [{name: itemId, in: path, required: true, schema: {type: string, format: uuid}}]
+      responses: {'200': {description: Discarded item, content: {application/json: {schema: {$ref: '#/components/schemas/InboxItem'}}}}, '400': {description: Invalid request}, '404': {description: Inbox item not found}}
+components:
+  schemas:
+    InboxItem: {type: object, required: [id, content, source, state, createdAt, updatedAt], properties: {id: {type: string, format: uuid}, content: {type: string}, source: {type: string, enum: [manual, web, voice, watch, email]}, sourceMetadata: {type: object, additionalProperties: true}, mediaReferences: {type: array, items: {type: string, format: uri}}, state: {type: string, enum: [raw, processing, resolved, discarded]}, resolvedAt: {type: string, format: date-time, nullable: true}, createdAt: {type: string, format: date-time}, updatedAt: {type: string, format: date-time}}}
+    CreateInboxItemRequest: {type: object, required: [content, source], properties: {content: {type: string}, source: {type: string, enum: [manual, web, voice, watch, email]}, sourceMetadata: {type: object, additionalProperties: true}, mediaReferences: {type: array, items: {type: string, format: uri}}}}
+    InboxItemList: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/InboxItem'}}, nextCursor: {type: string, nullable: true}}}
