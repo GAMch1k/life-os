@@ -120,6 +120,9 @@ make life-smoke
 If port 3000 is already in use, set `LIFE_OS_DASHBOARD_PORT` for both commands
 (for example, `LIFE_OS_DASHBOARD_PORT=3001 make life-up`).
 
+To expose only the dashboard through WireGuard, bind it to the server's
+WireGuard address: `LIFE_OS_DASHBOARD_BIND_ADDRESS=10.66.66.1 make life-up`.
+
 ## Architectural boundaries
 
 - Go and Fiber are the default backend stack.
