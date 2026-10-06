@@ -110,12 +110,22 @@ type CreateManualTransactionRequest struct {
 
 // CsvImport defines model for CsvImport.
 type CsvImport struct {
-	Id     openapi_types.UUID `json:"id"`
-	Status CsvImportStatus    `json:"status"`
+	Created int                `json:"created"`
+	Errors  []CsvImportError   `json:"errors"`
+	Failed  int                `json:"failed"`
+	Id      openapi_types.UUID `json:"id"`
+	Skipped int                `json:"skipped"`
+	Status  CsvImportStatus    `json:"status"`
 }
 
 // CsvImportStatus defines model for CsvImport.Status.
 type CsvImportStatus string
+
+// CsvImportError defines model for CsvImportError.
+type CsvImportError struct {
+	Message string `json:"message"`
+	Row     int    `json:"row"`
+}
 
 // Money defines model for Money.
 type Money struct {
