@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$repo_root"
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || {
+    printf 'check: required command not found on PATH: %s\n' "$1" >&2
+    exit 2
+  }
+}
+
+require_command go
+require_command sqlc
+require_command npm
+
+mapfile -t modules < <(find pkg templates services -name go.mod -type f -print 2>/dev/null | sort)
+mapfile -t sqlc_configs < <(find templates services -name sqlc.yaml -type f -print 2>/dev/null | sort)
+
+for config_path in "${sqlc_configs[@]}"; do
+  module_dir=$(dirname "$config_path")
+  printf '\n==> sqlc generate: %s\n' "$module_dir"
+  sqlc generate -f "$config_path"
+  generated_dir="$module_dir/internal/repository/generated"
+  if ! git diff --exit-code -- "$generated_dir"; then
+    printf 'check: generated sqlc code is stale in %s; run sqlc generate -f %s and commit the result\n' "$module_dir" "$config_path" >&2
+    exit 1
+  fi
+done
+
+for module_path in "${modules[@]}"; do
+  module_dir=$(dirname "$module_path")
+  printf '\n==> Go checks: %s\n' "$module_dir"
+  format_diff=$(gofmt -d $(find "$module_dir" -name '*.go' -type f -print))
+  if [[ -n "$format_diff" ]]; then
+    printf '%s\ncheck: Go formatting is stale in %s; run gofmt -w on the files above\n' "$format_diff" "$module_dir" >&2
+    exit 1
+  fi
+  (
+    cd "$module_dir"
+    GOWORK=off go vet ./...
+    GOWORK=off go test ./...
+    if [[ -d cmd/server ]]; then
+      GOWORK=off go build ./cmd/server
+    else
+      GOWORK=off go build ./...
+    fi
+  )
+done
+
+printf '\n==> Dashboard checks\n'
+npm --prefix apps/dashboard run check
+
+printf '\nAll baseline checks passed.\n'
