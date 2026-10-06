@@ -93,6 +93,13 @@ func TestFinanceQueriesPersistMinorUnitsAndImportIdentity(t *testing.T) {
 	if cashflow.IncomeMinor != 0 || cashflow.SpendingMinor != 500 || cashflow.NetMinor != -500 {
 		t.Fatalf("cashflow = %#v, want income=0 spending=500 net=-500", cashflow)
 	}
+	spending, err := queries.GetMonthlySpendingByCategory(ctx, pgtype.Date{Time: time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC), Valid: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(spending) != 1 || spending[0].CategoryID != category.ID || spending[0].AmountMinor != 500 {
+		t.Fatalf("spending by category = %#v, want groceries=500", spending)
+	}
 	if _, err := queries.CreateTransaction(ctx, generated.CreateTransactionParams{
 		AccountID: account.ID, AmountMinor: -500, Currency: "USD",
 		OccurredOn:   pgtype.Date{Time: time.Date(2026, time.October, 5, 0, 0, 0, 0, time.UTC), Valid: true},

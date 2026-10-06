@@ -57,3 +57,14 @@ SELECT COALESCE(SUM(amount_minor) FILTER (WHERE amount_minor > 0), 0)::bigint AS
 FROM transactions
 WHERE occurred_on >= sqlc.arg(month_start)::date
   AND occurred_on < (sqlc.arg(month_start)::date + INTERVAL '1 month');
+
+-- name: GetMonthlySpendingByCategory :many
+SELECT c.id AS category_id, c.name AS category_name,
+       COALESCE(-SUM(t.amount_minor), 0)::bigint AS amount_minor
+FROM transactions AS t
+JOIN financial_categories AS c ON c.id = t.category_id
+WHERE t.amount_minor < 0
+  AND t.occurred_on >= sqlc.arg(month_start)::date
+  AND t.occurred_on < (sqlc.arg(month_start)::date + INTERVAL '1 month')
+GROUP BY c.id, c.name
+ORDER BY amount_minor DESC, c.name;

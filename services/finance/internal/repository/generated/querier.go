@@ -15,6 +15,7 @@ type Querier interface {
 	CreateFinancialCategory(ctx context.Context, arg CreateFinancialCategoryParams) (FinancialCategory, error)
 	CreateTransaction(ctx context.Context, arg CreateTransactionParams) (Transaction, error)
 	GetMonthlyCashflow(ctx context.Context, monthStart pgtype.Date) (GetMonthlyCashflowRow, error)
+	GetMonthlySpendingByCategory(ctx context.Context, monthStart pgtype.Date) ([]GetMonthlySpendingByCategoryRow, error)
 	GetTransactionByImportIdentity(ctx context.Context, arg GetTransactionByImportIdentityParams) (Transaction, error)
 	ListAccountsWithBalance(ctx context.Context) ([]ListAccountsWithBalanceRow, error)
 	ListFinancialCategories(ctx context.Context) ([]FinancialCategory, error)

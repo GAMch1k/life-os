@@ -134,6 +134,44 @@ func (q *Queries) GetMonthlyCashflow(ctx context.Context, monthStart pgtype.Date
 	return i, err
 }
 
+const getMonthlySpendingByCategory = `-- name: GetMonthlySpendingByCategory :many
+SELECT c.id AS category_id, c.name AS category_name,
+       COALESCE(-SUM(t.amount_minor), 0)::bigint AS amount_minor
+FROM transactions AS t
+JOIN financial_categories AS c ON c.id = t.category_id
+WHERE t.amount_minor < 0
+  AND t.occurred_on >= $1::date
+  AND t.occurred_on < ($1::date + INTERVAL '1 month')
+GROUP BY c.id, c.name
+ORDER BY amount_minor DESC, c.name
+`
+
+type GetMonthlySpendingByCategoryRow struct {
+	CategoryID   pgtype.UUID
+	CategoryName string
+	AmountMinor  int64
+}
+
+func (q *Queries) GetMonthlySpendingByCategory(ctx context.Context, monthStart pgtype.Date) ([]GetMonthlySpendingByCategoryRow, error) {
+	rows, err := q.db.Query(ctx, getMonthlySpendingByCategory, monthStart)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GetMonthlySpendingByCategoryRow{}
+	for rows.Next() {
+		var i GetMonthlySpendingByCategoryRow
+		if err := rows.Scan(&i.CategoryID, &i.CategoryName, &i.AmountMinor); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getTransactionByImportIdentity = `-- name: GetTransactionByImportIdentity :one
 SELECT id, account_id, category_id, amount_minor, currency, occurred_on, note, import_source, import_external_id, source_metadata, created_at, updated_at FROM transactions
 WHERE import_source = $1 AND import_external_id = $2

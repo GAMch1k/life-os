@@ -166,12 +166,19 @@ export interface components {
             /** @enum {string} */
             kind?: "income" | "expense";
         };
+        SpendingByCategory: {
+            /** Format: uuid */
+            categoryId: string;
+            categoryName: string;
+            amount: components["schemas"]["Money"];
+        };
         MonthlySummary: {
             month: string;
             totalBalance: components["schemas"]["Money"];
             income: components["schemas"]["Money"];
             spending: components["schemas"]["Money"];
             net: components["schemas"]["Money"];
+            spendingByCategory: components["schemas"]["SpendingByCategory"][];
         };
         CsvImport: {
             /** Format: uuid */

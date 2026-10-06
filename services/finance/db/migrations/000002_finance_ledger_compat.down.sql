@@ -1,0 +1,2 @@
+-- The baseline owns the finance tables for clean installs; do not drop them
+-- during rollback of this compatibility migration.
