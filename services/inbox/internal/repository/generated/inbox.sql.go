@@ -45,6 +45,44 @@ func (q *Queries) CreateInboxItem(ctx context.Context, arg CreateInboxItemParams
 	return i, err
 }
 
+const createProcessingAttempt = `-- name: CreateProcessingAttempt :one
+INSERT INTO inbox_processing_attempts (inbox_item_id, idempotency_key, status, agent_name, model_profile, actions) VALUES ($1,$2,'pending',$3,$4,$5) RETURNING id, inbox_item_id, idempotency_key, status, agent_name, model_profile, actions, error_summary, started_at, completed_at, created_at, updated_at
+`
+
+type CreateProcessingAttemptParams struct {
+	InboxItemID    pgtype.UUID
+	IdempotencyKey string
+	AgentName      string
+	ModelProfile   string
+	Actions        []byte
+}
+
+func (q *Queries) CreateProcessingAttempt(ctx context.Context, arg CreateProcessingAttemptParams) (InboxProcessingAttempt, error) {
+	row := q.db.QueryRow(ctx, createProcessingAttempt,
+		arg.InboxItemID,
+		arg.IdempotencyKey,
+		arg.AgentName,
+		arg.ModelProfile,
+		arg.Actions,
+	)
+	var i InboxProcessingAttempt
+	err := row.Scan(
+		&i.ID,
+		&i.InboxItemID,
+		&i.IdempotencyKey,
+		&i.Status,
+		&i.AgentName,
+		&i.ModelProfile,
+		&i.Actions,
+		&i.ErrorSummary,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getInboxItem = `-- name: GetInboxItem :one
 SELECT id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at FROM inbox_items WHERE id = $1
 `
@@ -111,6 +149,43 @@ func (q *Queries) ListInboxItems(ctx context.Context, arg ListInboxItemsParams) 
 	return items, nil
 }
 
+const listProcessingAttempts = `-- name: ListProcessingAttempts :many
+SELECT id, inbox_item_id, idempotency_key, status, agent_name, model_profile, actions, error_summary, started_at, completed_at, created_at, updated_at FROM inbox_processing_attempts WHERE inbox_item_id = $1 ORDER BY created_at DESC
+`
+
+func (q *Queries) ListProcessingAttempts(ctx context.Context, inboxItemID pgtype.UUID) ([]InboxProcessingAttempt, error) {
+	rows, err := q.db.Query(ctx, listProcessingAttempts, inboxItemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []InboxProcessingAttempt{}
+	for rows.Next() {
+		var i InboxProcessingAttempt
+		if err := rows.Scan(
+			&i.ID,
+			&i.InboxItemID,
+			&i.IdempotencyKey,
+			&i.Status,
+			&i.AgentName,
+			&i.ModelProfile,
+			&i.Actions,
+			&i.ErrorSummary,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const setInboxItemState = `-- name: SetInboxItemState :one
 UPDATE inbox_items SET state = $1, resolved_at = CASE WHEN $1 IN ('resolved', 'discarded') THEN now() ELSE resolved_at END, updated_at = now() WHERE id = $2 RETURNING id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at
 `
@@ -132,6 +207,42 @@ func (q *Queries) SetInboxItemState(ctx context.Context, arg SetInboxItemStatePa
 		&i.State,
 		&i.ProcessingMetadata,
 		&i.ResolvedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateProcessingAttempt = `-- name: UpdateProcessingAttempt :one
+UPDATE inbox_processing_attempts SET status=$2, actions=$3, error_summary=$4, started_at=CASE WHEN $2='processing' THEN now() ELSE started_at END, completed_at=CASE WHEN $2 IN ('processed','failed','retryable') THEN now() ELSE completed_at END, updated_at=now() WHERE id=$1 RETURNING id, inbox_item_id, idempotency_key, status, agent_name, model_profile, actions, error_summary, started_at, completed_at, created_at, updated_at
+`
+
+type UpdateProcessingAttemptParams struct {
+	ID           pgtype.UUID
+	Status       string
+	Actions      []byte
+	ErrorSummary *string
+}
+
+func (q *Queries) UpdateProcessingAttempt(ctx context.Context, arg UpdateProcessingAttemptParams) (InboxProcessingAttempt, error) {
+	row := q.db.QueryRow(ctx, updateProcessingAttempt,
+		arg.ID,
+		arg.Status,
+		arg.Actions,
+		arg.ErrorSummary,
+	)
+	var i InboxProcessingAttempt
+	err := row.Scan(
+		&i.ID,
+		&i.InboxItemID,
+		&i.IdempotencyKey,
+		&i.Status,
+		&i.AgentName,
+		&i.ModelProfile,
+		&i.Actions,
+		&i.ErrorSummary,
+		&i.StartedAt,
+		&i.CompletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)

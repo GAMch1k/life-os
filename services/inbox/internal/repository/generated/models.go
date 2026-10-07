@@ -20,3 +20,18 @@ type InboxItem struct {
 	CreatedAt          pgtype.Timestamptz
 	UpdatedAt          pgtype.Timestamptz
 }
+
+type InboxProcessingAttempt struct {
+	ID             pgtype.UUID
+	InboxItemID    pgtype.UUID
+	IdempotencyKey string
+	Status         string
+	AgentName      string
+	ModelProfile   string
+	Actions        []byte
+	ErrorSummary   *string
+	StartedAt      pgtype.Timestamptz
+	CompletedAt    pgtype.Timestamptz
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
+}
