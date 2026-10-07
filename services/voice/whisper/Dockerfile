@@ -1,7 +1,7 @@
 FROM alpine:3.22 AS whisper-build
 RUN apk add --no-cache build-base cmake git
 RUN git clone --depth 1 https://github.com/ggml-org/whisper.cpp.git /src/whisper.cpp
-RUN cmake -S /src/whisper.cpp -B /src/whisper.cpp/build -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON && cmake --build /src/whisper.cpp/build --target whisper-cli -j2
+RUN cmake -S /src/whisper.cpp -B /src/whisper.cpp/build -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON -DBUILD_SHARED_LIBS=OFF -DGGML_OPENMP=OFF && cmake --build /src/whisper.cpp/build --target whisper-cli -j2
 
 FROM python:3.13-alpine
 RUN apk add --no-cache libstdc++ wget && mkdir /models && chown 65534:65534 /models
