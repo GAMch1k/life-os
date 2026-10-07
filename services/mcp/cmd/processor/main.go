@@ -23,7 +23,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "--content is required")
 		os.Exit(2)
 	}
-	plan, err := (processor.ResponsesClient{APIKey: cfg.APIKey, Model: cfg.Model}).Plan(context.Background(), *content)
+	plan, err := (processor.CodexCLI{Command: cfg.CodexCommand, Model: cfg.Model, WorkDir: "."}).Plan(context.Background(), *content)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

@@ -7,16 +7,16 @@ import (
 
 // Config keeps model selection operational rather than embedded in Inbox logic.
 type Config struct {
-	Model    string
-	APIKey   string
-	InboxURL string
-	MCPURL   string
+	Model        string
+	CodexCommand string
+	InboxURL     string
+	MCPURL       string
 }
 
 func LoadConfig() (Config, error) {
-	c := Config{Model: env("LIFE_OS_CODEX_MODEL", "gpt-5.6-luna"), APIKey: os.Getenv("OPENAI_API_KEY"), InboxURL: env("INBOX_SERVICE_URL", "http://inbox:8080"), MCPURL: env("MCP_SERVICE_URL", "http://mcp:8080/mcp")}
-	if c.APIKey == "" {
-		return c, fmt.Errorf("OPENAI_API_KEY is required for Codex Inbox processing")
+	c := Config{Model: env("LIFE_OS_CODEX_MODEL", "gpt-5.6-terra"), CodexCommand: env("LIFE_OS_CODEX_COMMAND", "codex"), InboxURL: env("INBOX_SERVICE_URL", "http://inbox:8080"), MCPURL: env("MCP_SERVICE_URL", "http://mcp:8080/mcp")}
+	if c.CodexCommand == "" {
+		return c, fmt.Errorf("LIFE_OS_CODEX_COMMAND must not be empty")
 	}
 	return c, nil
 }
