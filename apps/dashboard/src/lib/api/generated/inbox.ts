@@ -139,6 +139,7 @@ export interface components {
                 [key: string]: unknown;
             };
             mediaReferences?: string[];
+            dedupeKey?: string;
         };
         InboxItemList: {
             items: components["schemas"]["InboxItem"][];

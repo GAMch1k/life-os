@@ -19,6 +19,7 @@ type InboxItem struct {
 	ResolvedAt         pgtype.Timestamptz
 	CreatedAt          pgtype.Timestamptz
 	UpdatedAt          pgtype.Timestamptz
+	SourceDedupeKey    *string
 }
 
 type InboxProcessingAttempt struct {

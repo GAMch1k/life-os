@@ -1,5 +1,7 @@
 -- name: CreateInboxItem :one
-INSERT INTO inbox_items (content, source, source_metadata, media_references) VALUES ($1, $2, $3, $4) RETURNING *;
+INSERT INTO inbox_items (content, source, source_metadata, media_references, source_dedupe_key) VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (source_dedupe_key) WHERE source_dedupe_key IS NOT NULL DO UPDATE SET updated_at = inbox_items.updated_at
+RETURNING *;
 -- name: GetInboxItem :one
 SELECT * FROM inbox_items WHERE id = $1;
 -- name: ListInboxItems :many

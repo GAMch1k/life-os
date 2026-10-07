@@ -12,7 +12,9 @@ import (
 )
 
 const createInboxItem = `-- name: CreateInboxItem :one
-INSERT INTO inbox_items (content, source, source_metadata, media_references) VALUES ($1, $2, $3, $4) RETURNING id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at
+INSERT INTO inbox_items (content, source, source_metadata, media_references, source_dedupe_key) VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (source_dedupe_key) WHERE source_dedupe_key IS NOT NULL DO UPDATE SET updated_at = inbox_items.updated_at
+RETURNING id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at, source_dedupe_key
 `
 
 type CreateInboxItemParams struct {
@@ -20,6 +22,7 @@ type CreateInboxItemParams struct {
 	Source          string
 	SourceMetadata  []byte
 	MediaReferences []byte
+	SourceDedupeKey *string
 }
 
 func (q *Queries) CreateInboxItem(ctx context.Context, arg CreateInboxItemParams) (InboxItem, error) {
@@ -28,6 +31,7 @@ func (q *Queries) CreateInboxItem(ctx context.Context, arg CreateInboxItemParams
 		arg.Source,
 		arg.SourceMetadata,
 		arg.MediaReferences,
+		arg.SourceDedupeKey,
 	)
 	var i InboxItem
 	err := row.Scan(
@@ -41,6 +45,7 @@ func (q *Queries) CreateInboxItem(ctx context.Context, arg CreateInboxItemParams
 		&i.ResolvedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SourceDedupeKey,
 	)
 	return i, err
 }
@@ -84,7 +89,7 @@ func (q *Queries) CreateProcessingAttempt(ctx context.Context, arg CreateProcess
 }
 
 const getInboxItem = `-- name: GetInboxItem :one
-SELECT id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at FROM inbox_items WHERE id = $1
+SELECT id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at, source_dedupe_key FROM inbox_items WHERE id = $1
 `
 
 func (q *Queries) GetInboxItem(ctx context.Context, id pgtype.UUID) (InboxItem, error) {
@@ -101,6 +106,7 @@ func (q *Queries) GetInboxItem(ctx context.Context, id pgtype.UUID) (InboxItem, 
 		&i.ResolvedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SourceDedupeKey,
 	)
 	return i, err
 }
@@ -135,7 +141,7 @@ func (q *Queries) GetProcessingAttemptForItem(ctx context.Context, arg GetProces
 }
 
 const listInboxItems = `-- name: ListInboxItems :many
-SELECT id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at FROM inbox_items
+SELECT id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at, source_dedupe_key FROM inbox_items
 WHERE ($1::boolean IS NULL OR (state IN ('raw', 'processing')) = $1::boolean)
   AND ($2::text IS NULL OR state = $2::text)
 ORDER BY created_at DESC LIMIT $3
@@ -167,6 +173,7 @@ func (q *Queries) ListInboxItems(ctx context.Context, arg ListInboxItemsParams) 
 			&i.ResolvedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.SourceDedupeKey,
 		); err != nil {
 			return nil, err
 		}
@@ -216,7 +223,7 @@ func (q *Queries) ListProcessingAttempts(ctx context.Context, inboxItemID pgtype
 }
 
 const setInboxItemState = `-- name: SetInboxItemState :one
-UPDATE inbox_items SET state = $1, resolved_at = CASE WHEN $1 IN ('resolved', 'discarded') THEN now() ELSE resolved_at END, updated_at = now() WHERE id = $2 RETURNING id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at
+UPDATE inbox_items SET state = $1, resolved_at = CASE WHEN $1 IN ('resolved', 'discarded') THEN now() ELSE resolved_at END, updated_at = now() WHERE id = $2 RETURNING id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at, source_dedupe_key
 `
 
 type SetInboxItemStateParams struct {
@@ -238,6 +245,7 @@ func (q *Queries) SetInboxItemState(ctx context.Context, arg SetInboxItemStatePa
 		&i.ResolvedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SourceDedupeKey,
 	)
 	return i, err
 }

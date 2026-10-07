@@ -1,26 +1,89 @@
-// Package api contains the service's HTTP transport adapters.
 package api
 
 import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"path/filepath"
+	"time"
+
 	"github.com/gofiber/fiber/v3"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/oapi-codegen/runtime/types"
 
 	"github.com/GAMch1k/life-os/services/voice/internal/api/generated"
+	store "github.com/GAMch1k/life-os/services/voice/internal/repository/generated"
+	"github.com/GAMch1k/life-os/services/voice/internal/storage"
 )
 
-// Handler implements generated transport interfaces and translates transport
-// data at the boundary. Domain services are deliberately not generated here.
-type Handler struct{}
+type Handler struct {
+	queries   *store.Queries
+	files     storage.Files
+	retention time.Duration
+}
 
 var _ generated.ServerInterface = (*Handler)(nil)
 
-func NewHandler() *Handler { return &Handler{} }
+func NewHandler(queries *store.Queries, files storage.Files, retention time.Duration) *Handler {
+	return &Handler{queries: queries, files: files, retention: retention}
+}
 
-// The Phase 6 design contract is generated now; P6-03 supplies ingestion and
-// worker behavior behind these transport methods.
 func (h *Handler) CreateAudioJob(c fiber.Ctx) error {
-	return fiber.NewError(fiber.StatusNotImplemented, "voice ingestion is not deployed")
+	file, err := c.FormFile("audio")
+	if err != nil || file.Size <= 0 {
+		return fiber.NewError(400, "audio is required")
+	}
+	source := c.FormValue("source", "web")
+	if source != "web" && source != "watch" && source != "manual" {
+		return fiber.NewError(400, "invalid source")
+	}
+	metadata := map[string]any{}
+	if raw := c.FormValue("sourceMetadata"); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &metadata); err != nil {
+			return fiber.NewError(400, "sourceMetadata must be JSON")
+		}
+	}
+	encoded, _ := json.Marshal(metadata)
+	key := fmt.Sprintf("%d-%s", time.Now().UnixNano(), filepath.Base(file.Filename))
+	n, err := h.files.Store(key, file)
+	if err != nil {
+		return internal(err)
+	}
+	expires := time.Now().Add(h.retention)
+	job, err := h.queries.CreateAudioJob(c.Context(), store.CreateAudioJobParams{Source: source, SourceMetadata: encoded, ObjectKey: key, ContentType: file.Header.Get("Content-Type"), ByteSize: n, ExpiresAt: pgtype.Timestamptz{Time: expires, Valid: true}})
+	if err != nil {
+		_ = h.files.Remove(key)
+		return internal(err)
+	}
+	return c.Status(202).JSON(output(job))
 }
-func (h *Handler) GetAudioJob(c fiber.Ctx, _ types.UUID) error {
-	return fiber.NewError(fiber.StatusNotImplemented, "voice ingestion is not deployed")
+func (h *Handler) GetAudioJob(c fiber.Ctx, id types.UUID) error {
+	job, err := h.queries.GetAudioJob(c.Context(), pgUUID(id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fiber.NewError(404, "job not found")
+	}
+	if err != nil {
+		return internal(err)
+	}
+	return c.JSON(output(job))
 }
+func output(job store.AudioJob) generated.AudioJob {
+	return generated.AudioJob{Id: types.UUID(job.ID.Bytes), Status: generated.AudioJobStatus(job.Status), Source: generated.AudioJobSource(job.Source), Transcript: job.Transcript, AttemptCount: int(job.AttemptCount), ErrorSummary: job.ErrorSummary, CreatedAt: job.CreatedAt.Time, UpdatedAt: job.UpdatedAt.Time, CompletedAt: timePtr(job.CompletedAt), ExpiresAt: timePtr(job.ExpiresAt), InboxItemId: uuidPtr(job.InboxItemID)}
+}
+func pgUUID(v types.UUID) pgtype.UUID { return pgtype.UUID{Bytes: [16]byte(v), Valid: true} }
+func timePtr(v pgtype.Timestamptz) *time.Time {
+	if !v.Valid {
+		return nil
+	}
+	x := v.Time
+	return &x
+}
+func uuidPtr(v pgtype.UUID) *types.UUID {
+	if !v.Valid {
+		return nil
+	}
+	x := types.UUID(v.Bytes)
+	return &x
+}
+func internal(err error) error { return fiber.NewError(500, "voice job failed: "+err.Error()) }

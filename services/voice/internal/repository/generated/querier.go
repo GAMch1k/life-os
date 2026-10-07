@@ -6,10 +6,18 @@ package generated
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Querier interface {
-	Ping(ctx context.Context) (int32, error)
+	ClaimAudioJob(ctx context.Context) (AudioJob, error)
+	CompleteAudioJob(ctx context.Context, arg CompleteAudioJobParams) (AudioJob, error)
+	CreateAudioJob(ctx context.Context, arg CreateAudioJobParams) (AudioJob, error)
+	ExpireAudioJob(ctx context.Context, id pgtype.UUID) (AudioJob, error)
+	GetAudioJob(ctx context.Context, id pgtype.UUID) (AudioJob, error)
+	ListExpiredAudioJobs(ctx context.Context, limit int32) ([]AudioJob, error)
+	RetryAudioJob(ctx context.Context, arg RetryAudioJobParams) (AudioJob, error)
 }
 
 var _ Querier = (*Queries)(nil)

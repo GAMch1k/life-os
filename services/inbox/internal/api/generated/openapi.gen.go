@@ -169,6 +169,7 @@ func (e ListInboxItemsParamsState) Valid() bool {
 // CreateInboxItemRequest defines model for CreateInboxItemRequest.
 type CreateInboxItemRequest struct {
 	Content         string                       `json:"content"`
+	DedupeKey       *string                      `json:"dedupeKey,omitempty"`
 	MediaReferences *[]string                    `json:"mediaReferences,omitempty"`
 	Source          CreateInboxItemRequestSource `json:"source"`
 	SourceMetadata  *map[string]interface{}      `json:"sourceMetadata,omitempty"`
