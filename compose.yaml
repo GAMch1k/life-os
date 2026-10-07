@@ -120,6 +120,21 @@ services:
     networks: [backend]
     restart: unless-stopped
 
+  whisper:
+    build: {context: services/voice/whisper, dockerfile: Dockerfile}
+    environment:
+      WHISPER_MODEL_PATH: ${LIFE_OS_WHISPER_MODEL_PATH:-/models/ggml-base.bin}
+      WHISPER_MODEL_URL: ${LIFE_OS_WHISPER_MODEL_URL:-https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin}
+      WHISPER_THREADS: ${LIFE_OS_WHISPER_THREADS:-2}
+      WHISPER_MAX_CONCURRENCY: ${LIFE_OS_WHISPER_MAX_CONCURRENCY:-1}
+      WHISPER_MAX_AUDIO_BYTES: ${LIFE_OS_WHISPER_MAX_AUDIO_BYTES:-26214400}
+    volumes: ["whisper-models:/models"]
+    expose: ["8080"]
+    networks: [backend]
+    restart: unless-stopped
+    cpus: ${LIFE_OS_WHISPER_CPUS:-2.0}
+    mem_limit: ${LIFE_OS_WHISPER_MEMORY:-2g}
+
   gateway:
     image: nginx:1.28-alpine
     volumes: ["./infra/nginx/life-os.conf:/etc/nginx/conf.d/default.conf:ro"]
@@ -142,3 +157,5 @@ networks:
 volumes:
   postgres-data:
     name: lifeos-postgres-data
+  whisper-models:
+    name: lifeos-whisper-models
