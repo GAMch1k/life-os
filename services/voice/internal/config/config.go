@@ -12,12 +12,16 @@ import (
 
 // Config holds process-level configuration for a generated service.
 type Config struct {
-	ServiceName    string `env:"SERVICE_NAME" default:"voice"`
-	Port           int    `env:"PORT" default:"8080"`
-	LogLevel       string `env:"LOG_LEVEL" default:"info"`
-	DatabaseURL    string `env:"DATABASE_URL" required:"true"`
-	StorageDir     string `env:"VOICE_STORAGE_DIR" default:"/var/lib/lifeos/voice"`
-	RetentionHours int    `env:"VOICE_RETENTION_HOURS" default:"168"`
+	ServiceName       string `env:"SERVICE_NAME" default:"voice"`
+	Port              int    `env:"PORT" default:"8080"`
+	LogLevel          string `env:"LOG_LEVEL" default:"info"`
+	DatabaseURL       string `env:"DATABASE_URL" required:"true"`
+	StorageDir        string `env:"VOICE_STORAGE_DIR" default:"/var/lib/lifeos/voice"`
+	RetentionHours    int    `env:"VOICE_RETENTION_HOURS" default:"168"`
+	InboxURL          string `env:"INBOX_SERVICE_URL" default:"http://inbox:8080"`
+	WhisperURL        string `env:"WHISPER_SERVICE_URL" default:"http://whisper:8080"`
+	WorkerPollMillis  int    `env:"VOICE_WORKER_POLL_MILLIS" default:"1000"`
+	WorkerMaxAttempts int    `env:"VOICE_WORKER_MAX_ATTEMPTS" default:"3"`
 }
 
 // Load reads Config from the process environment.
@@ -52,6 +56,9 @@ func (c Config) Validate() error {
 	}
 	if c.StorageDir == "" || c.RetentionHours < 1 {
 		validationErrors = append(validationErrors, fmt.Errorf("VOICE_STORAGE_DIR and positive VOICE_RETENTION_HOURS are required"))
+	}
+	if c.InboxURL == "" || c.WhisperURL == "" || c.WorkerPollMillis < 100 || c.WorkerMaxAttempts < 1 {
+		validationErrors = append(validationErrors, fmt.Errorf("worker URLs, poll period, and max attempts must be valid"))
 	}
 	var level slog.Level
 	if err := level.UnmarshalText([]byte(c.LogLevel)); err != nil {
