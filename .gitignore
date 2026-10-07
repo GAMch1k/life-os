@@ -24,4 +24,4 @@ tmp/
 .vscode/
 .DS_Store
 Thumbs.db
-
+site/
