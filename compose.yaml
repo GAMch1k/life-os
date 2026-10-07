@@ -141,6 +141,46 @@ services:
       retries: 12
       start_period: 2m
 
+  voice-migrate:
+    image: migrate/migrate:v4.18.3
+    command: ["-path", "/migrations", "-database", "postgres://voice_user:${LIFE_OS_VOICE_DB_PASSWORD}@postgres:5432/voice_db?sslmode=disable", "up"]
+    volumes: ["./services/voice/db/migrations:/migrations:ro"]
+    depends_on: {postgres: {condition: service_healthy}}
+    networks: [backend]
+    restart: "no"
+  voice:
+    build: {context: ., dockerfile: services/voice/Dockerfile}
+    environment:
+      SERVICE_NAME: voice
+      PORT: 8080
+      DATABASE_URL: "postgres://voice_user:${LIFE_OS_VOICE_DB_PASSWORD}@postgres:5432/voice_db?sslmode=disable"
+      VOICE_STORAGE_DIR: /var/lib/lifeos/voice
+      VOICE_RETENTION_HOURS: ${LIFE_OS_VOICE_RETENTION_HOURS:-168}
+    volumes: ["voice-audio:/var/lib/lifeos/voice"]
+    expose: ["8080"]
+    depends_on: {voice-migrate: {condition: service_completed_successfully}}
+    networks: [backend]
+    restart: unless-stopped
+  voice-worker:
+    build: {context: ., dockerfile: services/voice/Dockerfile}
+    entrypoint: ["/worker"]
+    environment:
+      SERVICE_NAME: voice-worker
+      DATABASE_URL: "postgres://voice_user:${LIFE_OS_VOICE_DB_PASSWORD}@postgres:5432/voice_db?sslmode=disable"
+      VOICE_STORAGE_DIR: /var/lib/lifeos/voice
+      VOICE_RETENTION_HOURS: ${LIFE_OS_VOICE_RETENTION_HOURS:-168}
+      INBOX_SERVICE_URL: http://inbox:8080
+      WHISPER_SERVICE_URL: http://whisper:8080
+      VOICE_WORKER_POLL_MILLIS: ${LIFE_OS_VOICE_WORKER_POLL_MILLIS:-1000}
+      VOICE_WORKER_MAX_ATTEMPTS: ${LIFE_OS_VOICE_WORKER_MAX_ATTEMPTS:-3}
+    volumes: ["voice-audio:/var/lib/lifeos/voice"]
+    depends_on:
+      voice-migrate: {condition: service_completed_successfully}
+      inbox: {condition: service_started}
+      whisper: {condition: service_healthy}
+    networks: [backend]
+    restart: unless-stopped
+
   gateway:
     image: nginx:1.28-alpine
     volumes: ["./infra/nginx/life-os.conf:/etc/nginx/conf.d/default.conf:ro"]
@@ -152,6 +192,7 @@ services:
       inbox: {condition: service_started}
       calendar: {condition: service_started}
       mcp: {condition: service_started}
+      voice: {condition: service_started}
     networks: [backend]
     restart: unless-stopped
 
@@ -165,3 +206,5 @@ volumes:
     name: lifeos-postgres-data
   whisper-models:
     name: lifeos-whisper-models
+  voice-audio:
+    name: lifeos-voice-audio
