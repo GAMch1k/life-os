@@ -89,8 +89,8 @@ func (r Runner) process(ctx context.Context, item inboxItem) error {
 	}
 	actions := make([]map[string]any, 0, len(parsed.Actions))
 	for _, action := range parsed.Actions {
-		if !allowed(action.Tool) {
-			return r.recover(ctx, item.ID, started.ID, actions, "unsupported tool: "+action.Tool)
+		if !validAction(action) {
+			return r.recover(ctx, item.ID, started.ID, actions, "invalid proposed action: "+action.Tool)
 		}
 		result, err := r.Tools.Call(ctx, action.Tool, action.Arguments)
 		audit := map[string]any{"tool": action.Tool, "arguments": action.Arguments}
@@ -115,6 +115,24 @@ func (r Runner) record(ctx context.Context, itemID, attemptID, status string, ac
 	return err
 }
 func allowed(name string) bool { return name == "task_create" || name == "calendar_create" }
+func validAction(action plannedAction) bool {
+	if !allowed(action.Tool) || action.Arguments == nil {
+		return false
+	}
+	if title, ok := action.Arguments["title"].(string); !ok || strings.TrimSpace(title) == "" {
+		return false
+	}
+	allowedFields := map[string]map[string]bool{
+		"task_create":     {"title": true, "notes": true, "dueAt": true},
+		"calendar_create": {"title": true, "description": true, "allDay": true, "startAt": true, "endAt": true, "startDate": true, "endDate": true},
+	}
+	for field := range action.Arguments {
+		if !allowedFields[action.Tool][field] {
+			return false
+		}
+	}
+	return true
+}
 func idempotencyKey(item inboxItem) string {
 	sum := sha256.Sum256([]byte(item.ID + "\x00" + item.Content))
 	return fmt.Sprintf("codex-%x", sum[:12])
