@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-dashboard_port=$(docker compose port dashboard 3000)
-dashboard="http://${dashboard_port}"
-tasks=http://127.0.0.1:8082
-inbox=http://127.0.0.1:8083
-calendar=http://127.0.0.1:8084
+gateway_port=$(docker compose port gateway 80)
+dashboard="http://${gateway_port}"
+tasks="${dashboard}/api/tasks"
+inbox="${dashboard}/api/inbox"
+calendar="${dashboard}/api/calendar"
 
 wait_dashboard() {
   for _ in $(seq 1 45); do
