@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-dashboard_port=${LIFE_OS_DASHBOARD_PORT:-3000}
-dashboard="http://127.0.0.1:${dashboard_port}"
+dashboard_port=$(docker compose port dashboard 3000)
+dashboard="http://${dashboard_port}"
 tasks=http://127.0.0.1:8082
 inbox=http://127.0.0.1:8083
 calendar=http://127.0.0.1:8084
