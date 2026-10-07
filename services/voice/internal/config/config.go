@@ -12,10 +12,12 @@ import (
 
 // Config holds process-level configuration for a generated service.
 type Config struct {
-	ServiceName string `env:"SERVICE_NAME" default:"voice"`
-	Port        int    `env:"PORT" default:"8080"`
-	LogLevel    string `env:"LOG_LEVEL" default:"info"`
-	DatabaseURL string `env:"DATABASE_URL" required:"true"`
+	ServiceName    string `env:"SERVICE_NAME" default:"voice"`
+	Port           int    `env:"PORT" default:"8080"`
+	LogLevel       string `env:"LOG_LEVEL" default:"info"`
+	DatabaseURL    string `env:"DATABASE_URL" required:"true"`
+	StorageDir     string `env:"VOICE_STORAGE_DIR" default:"/var/lib/lifeos/voice"`
+	RetentionHours int    `env:"VOICE_RETENTION_HOURS" default:"168"`
 }
 
 // Load reads Config from the process environment.
@@ -47,6 +49,9 @@ func (c Config) Validate() error {
 	}
 	if c.Port < 1 || c.Port > 65535 {
 		validationErrors = append(validationErrors, fmt.Errorf("PORT must be between 1 and 65535"))
+	}
+	if c.StorageDir == "" || c.RetentionHours < 1 {
+		validationErrors = append(validationErrors, fmt.Errorf("VOICE_STORAGE_DIR and positive VOICE_RETENTION_HOURS are required"))
 	}
 	var level slog.Level
 	if err := level.UnmarshalText([]byte(c.LogLevel)); err != nil {
