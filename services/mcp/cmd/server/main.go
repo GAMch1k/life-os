@@ -40,6 +40,13 @@ type eventAction struct {
 	StartDate   *string `json:"startDate,omitempty" jsonschema:"ISO date for all-day event"`
 	EndDate     *string `json:"endDate,omitempty" jsonschema:"ISO date for all-day event"`
 }
+type financeAction struct {
+	AccountID  string         `json:"accountId" jsonschema:"Explicit Finance account UUID from trusted source metadata"`
+	CategoryID *string        `json:"categoryId,omitempty"`
+	Amount     map[string]any `json:"amount" jsonschema:"Money object with signed integer amount and currency"`
+	OccurredOn string         `json:"occurredOn" jsonschema:"ISO transaction date"`
+	Note       *string        `json:"note,omitempty"`
+}
 type Output struct {
 	Data json.RawMessage `json:"data"`
 }
@@ -94,6 +101,9 @@ func run(ctx context.Context) error {
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "calendar_create", Description: "Create a Life OS calendar event"}, func(ctx context.Context, _ *mcp.CallToolRequest, in eventAction) (*mcp.CallToolResult, Output, error) {
 		return post(ctx, hc, cfg.CalendarURL, "/v1/events", in)
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "finance_create_manual_transaction", Description: "Record a manual finance transaction only when account, amount, currency, and date are explicit"}, func(ctx context.Context, _ *mcp.CallToolRequest, in financeAction) (*mcp.CallToolResult, Output, error) {
+		return post(ctx, hc, cfg.FinanceURL, "/v1/transactions", in)
 	})
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return s }, nil))
