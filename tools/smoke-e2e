@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+compose=(docker compose -f compose.yaml -f compose.verify.yaml)
+cleanup() { "${compose[@]}" down --volumes --remove-orphans >/dev/null; }
+trap cleanup EXIT
+
+"${compose[@]}" up --detach --no-build
+
+wait_ready() {
+  local url=$1
+  for _ in $(seq 1 30); do curl --fail --silent "$url/ready" >/dev/null && return; sleep 1; done
+  echo "e2e: not ready: $url" >&2; return 1
+}
+
+finance=http://127.0.0.1:18081; tasks=http://127.0.0.1:18082; inbox=http://127.0.0.1:18083; calendar=http://127.0.0.1:18084
+for service in "$finance" "$tasks" "$inbox" "$calendar"; do wait_ready "$service"; done
+
+account_id=$("${compose[@]}" exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d finance_db -Atqc "INSERT INTO accounts (name,currency,opening_balance_minor) VALUES ('"'"'Smoke account'"'"','"'"'USD'"'"',0) RETURNING id"')
+external_id="e2e-$(date +%s)"
+csv="account_id,occurred_on,amount_minor,currency,external_id,note\n${account_id},2026-10-07,-1250,USD,${external_id},Coffee\n"
+printf '%b' "$csv" | curl --fail --silent -H 'content-type: text/csv' --data-binary @- "$finance/v1/imports/csv" | jq -e '.created == 1' >/dev/null
+printf '%b' "$csv" | curl --fail --silent -H 'content-type: text/csv' --data-binary @- "$finance/v1/imports/csv" | jq -e '.skipped == 1' >/dev/null
+
+task=$(curl --fail --silent -H 'content-type: application/json' -d '{"title":"E2E task"}' "$tasks/v1/tasks"); task_id=$(jq -r .id <<<"$task")
+curl --fail --silent -X POST "$tasks/v1/tasks/$task_id/complete" | jq -e '.completed' >/dev/null
+item=$(curl --fail --silent -H 'content-type: application/json' -d '{"content":"E2E inbox","source":"manual"}' "$inbox/v1/inbox-items"); item_id=$(jq -r .id <<<"$item")
+curl --fail --silent -X POST "$inbox/v1/inbox-items/$item_id/resolve" | jq -e '.state == "resolved"' >/dev/null
+event=$(curl --fail --silent -H 'content-type: application/json' -d '{"title":"E2E event","allDay":true,"startDate":"2026-10-07","endDate":"2026-10-07"}' "$calendar/v1/events"); event_id=$(jq -r .id <<<"$event")
+curl --fail --silent -X DELETE "$calendar/v1/events/$event_id" >/dev/null
+echo 'end-to-end core smoke checks passed'
