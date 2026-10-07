@@ -1,0 +1,35 @@
+openapi: 3.0.3
+info: {title: Life OS Voice API, version: 1.0.0, license: {name: UNLICENSED, url: https://life-os.local/license}}
+servers: [{url: http://voice:8080}]
+paths:
+  /v1/audio-jobs:
+    post:
+      summary: Upload audio and enqueue asynchronous transcription
+      operationId: createAudioJob
+      security: []
+      requestBody: {required: true, content: {multipart/form-data: {schema: {type: object, required: [audio], properties: {audio: {type: string, format: binary}, source: {type: string, enum: [web, watch, manual], default: web}, sourceMetadata: {type: string, description: JSON object encoded as a multipart field}}}}}}
+      responses: {'202': {description: Accepted transcription job, content: {application/json: {schema: {$ref: '#/components/schemas/AudioJob'}}}}, '400': {description: Invalid audio}, '413': {description: Audio exceeds configured limit}}
+  /v1/audio-jobs/{jobId}:
+    get:
+      summary: Poll an asynchronous transcription job
+      operationId: getAudioJob
+      security: []
+      parameters: [{name: jobId, in: path, required: true, schema: {type: string, format: uuid}}]
+      responses: {'200': {description: Job status, content: {application/json: {schema: {$ref: '#/components/schemas/AudioJob'}}}}, '404': {description: Job not found}}
+components:
+  schemas:
+    AudioJob:
+      type: object
+      required: [id, status, source, attemptCount, createdAt, updatedAt]
+      properties:
+        id: {type: string, format: uuid}
+        status: {type: string, enum: [queued, processing, succeeded, retryable, failed, expired]}
+        source: {type: string, enum: [web, watch, manual]}
+        transcript: {type: string, nullable: true}
+        inboxItemId: {type: string, format: uuid, nullable: true}
+        errorSummary: {type: string, nullable: true}
+        attemptCount: {type: integer, minimum: 0}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+        completedAt: {type: string, format: date-time, nullable: true}
+        expiresAt: {type: string, format: date-time, nullable: true}

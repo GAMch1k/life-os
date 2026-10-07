@@ -7,5 +7,6 @@ use (
 	./services/inbox
 	./services/mcp
 	./services/tasks
+	./services/voice
 	./templates/go-fiber-service
 )
