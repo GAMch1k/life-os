@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -13,6 +14,7 @@ import (
 // retry policy, and credentials are operational concerns, not domain handlers.
 func main() {
 	content := flag.String("content", "", "raw Inbox content to plan without executing (diagnostic)")
+	dryRun := flag.Bool("dry-run", false, "print proposed Inbox MCP calls without mutations")
 	flag.Parse()
 	cfg, err := processor.LoadConfig()
 	if err != nil {
@@ -29,8 +31,12 @@ func main() {
 		fmt.Println(plan)
 		return
 	}
-	if err := (processor.Runner{Planner: planner, Tools: &processor.MCPClient{URL: cfg.MCPURL}, Model: cfg.Model}).Run(context.Background()); err != nil {
+	proposals, err := (processor.Runner{Planner: planner, Tools: &processor.MCPClient{URL: cfg.MCPURL}, Model: cfg.Model, DryRun: *dryRun}).Run(context.Background())
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
+	}
+	if *dryRun {
+		_ = json.NewEncoder(os.Stdout).Encode(proposals)
 	}
 }

@@ -21,6 +21,7 @@ type Runner struct {
 	Planner planner
 	Tools   toolCaller
 	Model   string
+	DryRun  bool
 }
 type inboxList struct {
 	Items []inboxItem `json:"items"`
@@ -32,80 +33,105 @@ type inboxItem struct {
 	SourceMetadata map[string]any `json:"sourceMetadata"`
 }
 type plan struct {
-	Actions   []plannedAction `json:"actions"`
-	Ambiguous bool            `json:"ambiguous"`
-	Reason    string          `json:"reason"`
+	Actions    []plannedAction `json:"actions"`
+	Ambiguous  bool            `json:"ambiguous"`
+	Confidence float64         `json:"confidence"`
+	Reason     string          `json:"reason"`
 }
 type plannedAction struct {
 	Tool      string         `json:"tool"`
 	Arguments map[string]any `json:"arguments"`
 }
 
-func (r Runner) Run(ctx context.Context) error {
+type Proposal struct {
+	ItemID  string          `json:"itemId"`
+	Actions []plannedAction `json:"actions"`
+	Reason  string          `json:"reason,omitempty"`
+}
+
+func (r Runner) Run(ctx context.Context) ([]Proposal, error) {
 	raw, err := r.Tools.Call(ctx, "inbox_list", map[string]any{"query": "state=raw&limit=50"})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var items inboxList
 	if err := json.Unmarshal(toolData(raw), &items); err != nil {
-		return fmt.Errorf("decode Inbox MCP result: %w", err)
+		return nil, fmt.Errorf("decode Inbox MCP result: %w", err)
 	}
+	proposals := make([]Proposal, 0, len(items.Items))
 	for _, item := range items.Items {
-		if err := r.process(ctx, item); err != nil {
-			return err
+		proposal, err := r.process(ctx, item)
+		if err != nil {
+			return nil, err
 		}
+		proposals = append(proposals, proposal)
 	}
-	return nil
+	return proposals, nil
 }
-func (r Runner) process(ctx context.Context, item inboxItem) error {
+func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
+	if r.DryRun {
+		return r.plan(ctx, item)
+	}
 	key := idempotencyKey(item)
 	attempt, err := r.Tools.Call(ctx, "inbox_start_processing_attempt", map[string]any{"itemId": item.ID, "idempotencyKey": key, "agentName": "codex-inbox-processor", "modelProfile": r.Model})
 	if err != nil {
-		return fmt.Errorf("start attempt for %s: %w", item.ID, err)
+		return Proposal{}, fmt.Errorf("start attempt for %s: %w", item.ID, err)
 	}
 	var started struct {
 		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(toolData(attempt), &started); err != nil || started.ID == "" {
-		return fmt.Errorf("decode attempt for %s: %w", item.ID, err)
+		return Proposal{}, fmt.Errorf("decode attempt for %s: %w", item.ID, err)
 	}
 	if err := r.record(ctx, item.ID, started.ID, "processing", nil, nil); err != nil {
-		return err
+		return Proposal{}, err
 	}
 	prompt, _ := json.Marshal(map[string]any{"content": item.Content, "source": item.Source, "sourceMetadata": item.SourceMetadata})
 	rawPlan, err := r.Planner.Plan(ctx, string(prompt))
 	if err != nil {
-		return r.recover(ctx, item.ID, started.ID, nil, fmt.Sprintf("planning failed: %v", err))
+		return Proposal{}, r.recover(ctx, item.ID, started.ID, nil, fmt.Sprintf("planning failed: %v", err))
 	}
 	parsed, err := decodePlan(rawPlan)
-	if err != nil || parsed.Ambiguous || len(parsed.Actions) == 0 {
+	if err != nil || parsed.Ambiguous || parsed.Confidence < 0.8 || len(parsed.Actions) == 0 {
 		reason := "no executable action"
 		if err != nil {
 			reason = "invalid action plan: " + err.Error()
 		} else if parsed.Reason != "" {
 			reason = parsed.Reason
 		}
-		return r.recover(ctx, item.ID, started.ID, nil, reason)
+		return Proposal{}, r.recover(ctx, item.ID, started.ID, nil, reason)
 	}
 	actions := make([]map[string]any, 0, len(parsed.Actions))
 	for _, action := range parsed.Actions {
 		if !validAction(action) {
-			return r.recover(ctx, item.ID, started.ID, actions, "invalid proposed action: "+action.Tool)
+			return Proposal{}, r.recover(ctx, item.ID, started.ID, actions, "invalid proposed action: "+action.Tool)
 		}
 		result, err := r.Tools.Call(ctx, action.Tool, action.Arguments)
 		audit := map[string]any{"tool": action.Tool, "arguments": action.Arguments}
 		if err != nil {
 			actions = append(actions, audit)
-			return r.recover(ctx, item.ID, started.ID, actions, fmt.Sprintf("%s failed: %v", action.Tool, err))
+			return Proposal{}, r.recover(ctx, item.ID, started.ID, actions, fmt.Sprintf("%s failed: %v", action.Tool, err))
 		}
 		audit["result"] = json.RawMessage(toolData(result))
 		actions = append(actions, audit)
 	}
 	if err := r.record(ctx, item.ID, started.ID, "processed", actions, nil); err != nil {
-		return err
+		return Proposal{}, err
 	}
 	_, err = r.Tools.Call(ctx, "inbox_resolve", map[string]any{"itemId": item.ID})
-	return err
+	return Proposal{}, err
+}
+func (r Runner) plan(ctx context.Context, item inboxItem) (Proposal, error) {
+	prompt, _ := json.Marshal(map[string]any{"content": item.Content, "source": item.Source, "sourceMetadata": item.SourceMetadata})
+	raw, err := r.Planner.Plan(ctx, string(prompt))
+	if err != nil {
+		return Proposal{}, err
+	}
+	parsed, err := decodePlan(raw)
+	if err != nil {
+		return Proposal{}, err
+	}
+	return Proposal{ItemID: item.ID, Actions: parsed.Actions, Reason: parsed.Reason}, nil
 }
 func (r Runner) recover(ctx context.Context, itemID, attemptID string, actions []map[string]any, reason string) error {
 	return r.record(ctx, itemID, attemptID, "retryable", actions, &reason)

@@ -39,7 +39,7 @@ func (f *fakeTools) Call(_ context.Context, name string, args map[string]any) (j
 }
 func TestRunnerExecutesApprovedActionsThenResolves(t *testing.T) {
 	tools := &fakeTools{}
-	err := (Runner{Planner: fakePlanner{output: `{"actions":[{"tool":"task_create","arguments":{"title":"Call insurer"}}],"ambiguous":false}`}, Tools: tools, Model: "gpt-5.6-terra"}).Run(context.Background())
+	_, err := (Runner{Planner: fakePlanner{output: `{"actions":[{"tool":"task_create","arguments":{"title":"Call insurer"}}],"ambiguous":false,"confidence":0.9}`}, Tools: tools, Model: "gpt-5.6-terra"}).Run(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestRunnerExecutesApprovedActionsThenResolves(t *testing.T) {
 }
 func TestRunnerLeavesFailedActionRecoverable(t *testing.T) {
 	tools := &fakeTools{fail: "task_create"}
-	err := (Runner{Planner: fakePlanner{output: `{"actions":[{"tool":"task_create","arguments":{"title":"Call insurer"}}]}`}, Tools: tools, Model: "gpt-5.6-terra"}).Run(context.Background())
+	_, err := (Runner{Planner: fakePlanner{output: `{"actions":[{"tool":"task_create","arguments":{"title":"Call insurer"}}],"confidence":0.9}`}, Tools: tools, Model: "gpt-5.6-terra"}).Run(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,6 +62,19 @@ func TestRunnerLeavesFailedActionRecoverable(t *testing.T) {
 	}
 	if tools.records[1]["status"] != "retryable" {
 		t.Fatalf("status = %#v", tools.records[1]["status"])
+	}
+}
+func TestRunnerDryRunReturnsProposalsWithoutMutations(t *testing.T) {
+	tools := &fakeTools{}
+	proposals, err := (Runner{Planner: fakePlanner{output: `{"actions":[{"tool":"task_create","arguments":{"title":"Call insurer"}}],"confidence":0.9}`}, Tools: tools, Model: "gpt-5.6-terra", DryRun: true}).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(proposals) != 1 || proposals[0].Actions[0].Tool != "task_create" {
+		t.Fatalf("proposals = %#v", proposals)
+	}
+	if !equal(tools.calls, []string{"inbox_list"}) {
+		t.Fatalf("dry-run mutated via %#v", tools.calls)
 	}
 }
 func equal(a, b []string) bool {

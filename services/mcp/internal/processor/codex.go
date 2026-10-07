@@ -23,7 +23,7 @@ func (c CodexCLI) Plan(ctx context.Context, content string) (string, error) {
 	name := file.Name()
 	_ = file.Close()
 	defer os.Remove(name)
-	cmd := c.runner()(ctx, c.command(), "exec", "--ephemeral", "-s", "read-only", "-C", c.WorkDir, "-m", c.Model, "-o", name, "Classify this Inbox item. Return only JSON in this schema: {\"actions\":[{\"tool\":\"task_create|calendar_create\",\"arguments\":{...}}],\"ambiguous\":boolean,\"reason\":string}. task_create arguments may only use title, notes, dueAt (RFC3339). calendar_create arguments may only use title, description, allDay, startAt/endAt (RFC3339) or startDate/endDate (ISO date). Never claim an action succeeded or execute an action. If unclear, set ambiguous true and actions to []. Inbox item: "+content)
+	cmd := c.runner()(ctx, c.command(), "exec", "--ephemeral", "-s", "read-only", "-C", c.WorkDir, "-m", c.Model, "-o", name, "Classify this Inbox item. Return only JSON in this schema: {\"actions\":[{\"tool\":\"task_create|calendar_create\",\"arguments\":{...}}],\"ambiguous\":boolean,\"confidence\":0.0,\"reason\":string}. task_create arguments may only use title, notes, dueAt (RFC3339). calendar_create arguments may only use title, description, allDay, startAt/endAt (RFC3339) or startDate/endDate (ISO date). Never claim an action succeeded or execute an action. If information is materially unclear or confidence is below 0.8, set ambiguous true and actions to []. Never propose finance mutations, calendar update, or calendar deletion. Inbox item: "+content)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("run Codex CLI: %w: %s", err, string(out))
 	}
