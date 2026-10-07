@@ -11,7 +11,7 @@ RUN go build -trimpath -ldflags="-s -w" -o /out/service ./cmd/server
 RUN go build -trimpath -ldflags="-s -w" -o /out/worker ./cmd/worker
 
 FROM alpine:3.22
-RUN addgroup -S lifeos && adduser -S -G lifeos lifeos
+RUN addgroup -S lifeos && adduser -S -G lifeos lifeos && mkdir -p /var/lib/lifeos/voice && chown -R lifeos:lifeos /var/lib/lifeos
 USER lifeos
 COPY --from=build /out/service /service
 COPY --from=build /out/worker /worker

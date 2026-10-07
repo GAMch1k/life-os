@@ -6,6 +6,12 @@ Jobs move through `queued` → `processing` → `succeeded`. Transient worker er
 
 The API exposes source, audit timestamps, transcript, error summary, attempts, and the resulting Inbox ID. Browser capture may poll; it must never wait for transcription synchronously. P6-03 implements upload storage, claiming, retries, and worker execution; P6-02 supplies the private whisper worker. Android and Wear OS capture clients remain separate repositories.
 
+## Job processing and recovery
+
+Audio is stored in the private `voice-audio` volume and a job is committed as `queued` before the upload endpoint returns `202`. The worker claims rows with `FOR UPDATE SKIP LOCKED`, so process restarts leave a recoverable queued/retryable record instead of losing an upload. It calls the private Whisper worker and captures the transcript using a deterministic `voice:<job-id>` Inbox dedupe key. Consequently, a retry after an incomplete handoff returns the original Inbox item instead of creating another capture.
+
+Transient errors record `retryable` plus an error summary and delayed availability; the configured maximum changes that state to `failed`. Expired audio is removed from the private volume and its job moves to `expired`, preserving audit information but removing the transcript/audio content.
+
 ## Whisper worker
 
 `docker compose up whisper` builds and starts a private CPU-only `whisper.cpp` HTTP worker. It downloads the configured model once into the named `whisper-models` volume, accepts a raw audio body at `POST /transcribe`, and returns JSON transcript text. `GET /ready` confirms the selected model is present. The default multilingual `base` model supports Russian, German, and English; set `LIFE_OS_WHISPER_MODEL_PATH` and `LIFE_OS_WHISPER_MODEL_URL` together to use another model.
