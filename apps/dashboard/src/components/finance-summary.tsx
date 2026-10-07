@@ -7,6 +7,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { FinanceImport } from "@/components/finance-import";
 import type { FinanceSummaryState } from "@/lib/finance-summary";
 
 function money(amount: number, currency: string) {
@@ -33,16 +34,7 @@ export function FinanceSummary({ state }: { state: FinanceSummaryState }) {
   }
 
   if (state.kind === "empty") {
-    return (
-      <Card id="finance">
-        <CardHeader>
-          <CardTitle>Finance</CardTitle>
-          <CardDescription>
-            Add an account and transactions to see this month&apos;s cash flow.
-          </CardDescription>
-        </CardHeader>
-      </Card>
-    );
+    return <EmptyFinance />;
   }
 
   const { summary } = state;
@@ -109,6 +101,23 @@ export function FinanceSummary({ state }: { state: FinanceSummaryState }) {
             </ul>
           )}
         </section>
+        <FinanceImport />
+      </CardContent>
+    </Card>
+  );
+}
+
+function EmptyFinance() {
+  return (
+    <Card id="finance">
+      <CardHeader>
+        <CardTitle>Finance</CardTitle>
+        <CardDescription>
+          Import transactions to start seeing this month&apos;s cash flow.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        <FinanceImport />
       </CardContent>
     </Card>
   );
