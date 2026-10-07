@@ -104,6 +104,9 @@ func transcribe(ctx context.Context, c *http.Client, base, path, contentType str
 		return "", err
 	}
 	req.Header.Set("content-type", contentType)
+	if info, err := file.Stat(); err == nil {
+		req.ContentLength = info.Size()
+	}
 	resp, err := c.Do(req)
 	if err != nil {
 		return "", err
