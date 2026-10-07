@@ -5,6 +5,7 @@ use (
 	./services/calendar
 	./services/finance
 	./services/inbox
+	./services/mcp
 	./services/tasks
 	./templates/go-fiber-service
 )
