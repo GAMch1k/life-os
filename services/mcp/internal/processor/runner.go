@@ -168,20 +168,35 @@ func (r Runner) record(ctx context.Context, itemID, attemptID, status string, ac
 	_, err := r.Tools.Call(ctx, "inbox_record_processing_attempt", map[string]any{"itemId": itemID, "attemptId": attemptID, "status": status, "actions": actions, "errorSummary": summary})
 	return err
 }
-func allowed(name string) bool { return name == "task_create" || name == "calendar_create" }
+func allowed(name string) bool {
+	return name == "task_create" || name == "calendar_create" || name == "finance_create_manual_transaction"
+}
 func validAction(action plannedAction) bool {
 	if !allowed(action.Tool) || action.Arguments == nil {
 		return false
 	}
-	if title, ok := action.Arguments["title"].(string); !ok || strings.TrimSpace(title) == "" {
-		return false
+	if action.Tool != "finance_create_manual_transaction" {
+		if title, ok := action.Arguments["title"].(string); !ok || strings.TrimSpace(title) == "" {
+			return false
+		}
 	}
 	allowedFields := map[string]map[string]bool{
-		"task_create":     {"title": true, "notes": true, "dueAt": true},
-		"calendar_create": {"title": true, "description": true, "allDay": true, "startAt": true, "endAt": true, "startDate": true, "endDate": true},
+		"task_create":                       {"title": true, "notes": true, "dueAt": true},
+		"calendar_create":                   {"title": true, "description": true, "allDay": true, "startAt": true, "endAt": true, "startDate": true, "endDate": true},
+		"finance_create_manual_transaction": {"accountId": true, "categoryId": true, "amount": true, "occurredOn": true, "note": true},
 	}
 	for field := range action.Arguments {
 		if !allowedFields[action.Tool][field] {
+			return false
+		}
+	}
+	if action.Tool == "finance_create_manual_transaction" {
+		account, accountOK := action.Arguments["accountId"].(string)
+		amount, amountOK := action.Arguments["amount"].(map[string]any)
+		occurred, occurredOK := action.Arguments["occurredOn"].(string)
+		money, moneyOK := amount["amount"].(float64)
+		currency, currencyOK := amount["currency"].(string)
+		if !accountOK || account == "" || !amountOK || !moneyOK || money == 0 || !currencyOK || currency == "" || !occurredOK || occurred == "" {
 			return false
 		}
 	}
