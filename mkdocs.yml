@@ -1,0 +1,17 @@
+site_name: Life OS Technical Documentation
+site_description: Architecture, operations, and API guide for Life OS.
+repo_url: https://github.com/GAMch1k/life-os
+docs_dir: documentation
+theme:
+  name: readthedocs
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - Architecture: architecture.md
+  - Networking & security: networking.md
+  - Services and APIs: services.md
+  - Finance and CSV import: finance.md
+  - Dashboard: dashboard.md
+  - Data, migrations & code generation: data-and-codegen.md
+  - Development workflow: development.md
+  - Operations & troubleshooting: operations.md
