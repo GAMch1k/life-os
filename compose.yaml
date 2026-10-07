@@ -134,6 +134,12 @@ services:
     restart: unless-stopped
     cpus: ${LIFE_OS_WHISPER_CPUS:-2.0}
     mem_limit: ${LIFE_OS_WHISPER_MEMORY:-2g}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 2m
 
   gateway:
     image: nginx:1.28-alpine
