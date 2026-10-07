@@ -6,11 +6,9 @@ This repository is the single monorepo for the project. The foundation phase est
 
 ## Technical documentation
 
-The human-readable technical guide is maintained with the repository in
-[`documentation/`](documentation/index.md) and is published by the GitHub Pages
-workflow. The repository Wiki is the intended canonical GitHub knowledge base;
-the site provides the same versioned documentation while Wiki access is being
-configured.
+The human-readable technical guide is maintained as ordinary repository Markdown
+under [`docs/`](docs/README.md). It is designed for GitHub browsing and Obsidian;
+there is no GitHub Pages or Wiki dependency.
 
 ## Repository layout
 
