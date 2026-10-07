@@ -105,6 +105,35 @@ func (q *Queries) GetInboxItem(ctx context.Context, id pgtype.UUID) (InboxItem, 
 	return i, err
 }
 
+const getProcessingAttemptForItem = `-- name: GetProcessingAttemptForItem :one
+SELECT id, inbox_item_id, idempotency_key, status, agent_name, model_profile, actions, error_summary, started_at, completed_at, created_at, updated_at FROM inbox_processing_attempts WHERE id = $1 AND inbox_item_id = $2
+`
+
+type GetProcessingAttemptForItemParams struct {
+	ID          pgtype.UUID
+	InboxItemID pgtype.UUID
+}
+
+func (q *Queries) GetProcessingAttemptForItem(ctx context.Context, arg GetProcessingAttemptForItemParams) (InboxProcessingAttempt, error) {
+	row := q.db.QueryRow(ctx, getProcessingAttemptForItem, arg.ID, arg.InboxItemID)
+	var i InboxProcessingAttempt
+	err := row.Scan(
+		&i.ID,
+		&i.InboxItemID,
+		&i.IdempotencyKey,
+		&i.Status,
+		&i.AgentName,
+		&i.ModelProfile,
+		&i.Actions,
+		&i.ErrorSummary,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const listInboxItems = `-- name: ListInboxItems :many
 SELECT id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at FROM inbox_items
 WHERE ($1::boolean IS NULL OR (state IN ('raw', 'processing')) = $1::boolean)
