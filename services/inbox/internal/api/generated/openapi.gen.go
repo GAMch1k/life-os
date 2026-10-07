@@ -153,6 +153,13 @@ type CreateInboxItemRequest struct {
 // CreateInboxItemRequestSource defines model for CreateInboxItemRequest.Source.
 type CreateInboxItemRequestSource string
 
+// CreateProcessingAttemptRequest defines model for CreateProcessingAttemptRequest.
+type CreateProcessingAttemptRequest struct {
+	AgentName      string `json:"agentName"`
+	IdempotencyKey string `json:"idempotencyKey"`
+	ModelProfile   string `json:"modelProfile"`
+}
+
 // InboxItem defines model for InboxItem.
 type InboxItem struct {
 	Content         string                  `json:"content"`
@@ -214,6 +221,9 @@ type ListInboxItemsParamsState string
 // CreateInboxItemJSONRequestBody defines body for CreateInboxItem for application/json ContentType.
 type CreateInboxItemJSONRequestBody = CreateInboxItemRequest
 
+// CreateProcessingAttemptJSONRequestBody defines body for CreateProcessingAttempt for application/json ContentType.
+type CreateProcessingAttemptJSONRequestBody = CreateProcessingAttemptRequest
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
 	// ListInboxItems List captured inbox items
@@ -231,6 +241,9 @@ type ServerInterface interface {
 	// ListProcessingAttempts List traceable AI processing attempts
 	// (GET /v1/inbox-items/{itemId}/processing-attempts)
 	ListProcessingAttempts(c fiber.Ctx, itemId openapi_types.UUID) error
+	// CreateProcessingAttempt Start a traceable processing attempt
+	// (POST /v1/inbox-items/{itemId}/processing-attempts)
+	CreateProcessingAttempt(c fiber.Ctx, itemId openapi_types.UUID) error
 	// ResolveInboxItem Resolve an inbox item
 	// (POST /v1/inbox-items/{itemId}/resolve)
 	ResolveInboxItem(c fiber.Ctx, itemId openapi_types.UUID) error
@@ -408,6 +421,35 @@ func (siw *ServerInterfaceWrapper) ListProcessingAttempts(c fiber.Ctx) error {
 	return handler(c)
 }
 
+// CreateProcessingAttempt operation middleware
+func (siw *ServerInterfaceWrapper) CreateProcessingAttempt(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "itemId" -------------
+	var itemId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "itemId", c.Params("itemId"), &itemId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter itemId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.CreateProcessingAttempt(c, itemId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
 // ResolveInboxItem operation middleware
 func (siw *ServerInterfaceWrapper) ResolveInboxItem(c fiber.Ctx) error {
 
@@ -471,5 +513,7 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	router.Post(options.BaseURL+"/v1/inbox-items/:itemId/discard", wrapper.DiscardInboxItem)
 
 	router.Get(options.BaseURL+"/v1/inbox-items/:itemId/processing-attempts", wrapper.ListProcessingAttempts)
+
+	router.Post(options.BaseURL+"/v1/inbox-items/:itemId/processing-attempts", wrapper.CreateProcessingAttempt)
 
 }

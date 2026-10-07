@@ -79,11 +79,28 @@ func (h *Handler) ListProcessingAttempts(c fiber.Ctx, id types.UUID) error {
 	}
 	items := make([]generated.ProcessingAttempt, 0, len(attempts))
 	for _, attempt := range attempts {
-		var actions []map[string]interface{}
-		_ = json.Unmarshal(attempt.Actions, &actions)
-		items = append(items, generated.ProcessingAttempt{Id: uuid(attempt.ID), IdempotencyKey: &attempt.IdempotencyKey, Status: generated.ProcessingAttemptStatus(attempt.Status), AgentName: attempt.AgentName, ModelProfile: attempt.ModelProfile, Actions: actions, ErrorSummary: attempt.ErrorSummary, StartedAt: nullableTime(attempt.StartedAt), CompletedAt: nullableTime(attempt.CompletedAt), CreatedAt: attempt.CreatedAt.Time})
+		items = append(items, attemptOutput(attempt))
 	}
 	return c.JSON(generated.ProcessingAttemptList{Items: items})
+}
+func (h *Handler) CreateProcessingAttempt(c fiber.Ctx, id types.UUID) error {
+	if _, err := h.queries.GetInboxItem(c.Context(), pgUUID(id)); err != nil {
+		return databaseError(err)
+	}
+	var body generated.CreateProcessingAttemptJSONRequestBody
+	if err := c.Bind().Body(&body); err != nil || body.IdempotencyKey == "" || body.AgentName == "" || body.ModelProfile == "" {
+		return fiber.NewError(400, "invalid processing attempt")
+	}
+	attempt, err := h.queries.CreateProcessingAttempt(c.Context(), store.CreateProcessingAttemptParams{InboxItemID: pgUUID(id), IdempotencyKey: body.IdempotencyKey, AgentName: body.AgentName, ModelProfile: body.ModelProfile, Actions: []byte("[]")})
+	if err != nil {
+		return internal(err)
+	}
+	return c.Status(201).JSON(attemptOutput(attempt))
+}
+func attemptOutput(attempt store.InboxProcessingAttempt) generated.ProcessingAttempt {
+	var actions []map[string]interface{}
+	_ = json.Unmarshal(attempt.Actions, &actions)
+	return generated.ProcessingAttempt{Id: uuid(attempt.ID), IdempotencyKey: &attempt.IdempotencyKey, Status: generated.ProcessingAttemptStatus(attempt.Status), AgentName: attempt.AgentName, ModelProfile: attempt.ModelProfile, Actions: actions, ErrorSummary: attempt.ErrorSummary, StartedAt: nullableTime(attempt.StartedAt), CompletedAt: nullableTime(attempt.CompletedAt), CreatedAt: attempt.CreatedAt.Time}
 }
 func (h *Handler) DiscardInboxItem(c fiber.Ctx, id types.UUID) error {
 	item, err := h.queries.SetInboxItemState(c.Context(), store.SetInboxItemStateParams{ID: pgUUID(id), State: "discarded"})
