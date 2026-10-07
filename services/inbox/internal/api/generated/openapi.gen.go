@@ -91,6 +91,33 @@ func (e InboxItemState) Valid() bool {
 	}
 }
 
+// Defines values for ProcessingAttemptStatus.
+const (
+	ProcessingAttemptStatusFailed     ProcessingAttemptStatus = "failed"
+	ProcessingAttemptStatusPending    ProcessingAttemptStatus = "pending"
+	ProcessingAttemptStatusProcessed  ProcessingAttemptStatus = "processed"
+	ProcessingAttemptStatusProcessing ProcessingAttemptStatus = "processing"
+	ProcessingAttemptStatusRetryable  ProcessingAttemptStatus = "retryable"
+)
+
+// Valid indicates whether the value is a known member of the ProcessingAttemptStatus enum.
+func (e ProcessingAttemptStatus) Valid() bool {
+	switch e {
+	case ProcessingAttemptStatusFailed:
+		return true
+	case ProcessingAttemptStatusPending:
+		return true
+	case ProcessingAttemptStatusProcessed:
+		return true
+	case ProcessingAttemptStatusProcessing:
+		return true
+	case ProcessingAttemptStatusRetryable:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ListInboxItemsParamsState.
 const (
 	ListInboxItemsParamsStateDiscarded  ListInboxItemsParamsState = "discarded"
@@ -151,6 +178,28 @@ type InboxItemList struct {
 	NextCursor *string     `json:"nextCursor,omitempty"`
 }
 
+// ProcessingAttempt defines model for ProcessingAttempt.
+type ProcessingAttempt struct {
+	Actions        []map[string]interface{} `json:"actions"`
+	AgentName      string                   `json:"agentName"`
+	CompletedAt    *time.Time               `json:"completedAt,omitempty"`
+	CreatedAt      time.Time                `json:"createdAt"`
+	ErrorSummary   *string                  `json:"errorSummary,omitempty"`
+	Id             openapi_types.UUID       `json:"id"`
+	IdempotencyKey *string                  `json:"idempotencyKey,omitempty"`
+	ModelProfile   string                   `json:"modelProfile"`
+	StartedAt      *time.Time               `json:"startedAt,omitempty"`
+	Status         ProcessingAttemptStatus  `json:"status"`
+}
+
+// ProcessingAttemptStatus defines model for ProcessingAttempt.Status.
+type ProcessingAttemptStatus string
+
+// ProcessingAttemptList defines model for ProcessingAttemptList.
+type ProcessingAttemptList struct {
+	Items []ProcessingAttempt `json:"items"`
+}
+
 // ListInboxItemsParams defines parameters for ListInboxItems.
 type ListInboxItemsParams struct {
 	Unresolved *bool                      `form:"unresolved,omitempty" json:"unresolved,omitempty"`
@@ -179,6 +228,9 @@ type ServerInterface interface {
 	// DiscardInboxItem Discard an inbox item
 	// (POST /v1/inbox-items/{itemId}/discard)
 	DiscardInboxItem(c fiber.Ctx, itemId openapi_types.UUID) error
+	// ListProcessingAttempts List traceable AI processing attempts
+	// (GET /v1/inbox-items/{itemId}/processing-attempts)
+	ListProcessingAttempts(c fiber.Ctx, itemId openapi_types.UUID) error
 	// ResolveInboxItem Resolve an inbox item
 	// (POST /v1/inbox-items/{itemId}/resolve)
 	ResolveInboxItem(c fiber.Ctx, itemId openapi_types.UUID) error
@@ -327,6 +379,35 @@ func (siw *ServerInterfaceWrapper) DiscardInboxItem(c fiber.Ctx) error {
 	return handler(c)
 }
 
+// ListProcessingAttempts operation middleware
+func (siw *ServerInterfaceWrapper) ListProcessingAttempts(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "itemId" -------------
+	var itemId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "itemId", c.Params("itemId"), &itemId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter itemId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.ListProcessingAttempts(c, itemId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
 // ResolveInboxItem operation middleware
 func (siw *ServerInterfaceWrapper) ResolveInboxItem(c fiber.Ctx) error {
 
@@ -388,5 +469,7 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	router.Post(options.BaseURL+"/v1/inbox-items/:itemId/resolve", wrapper.ResolveInboxItem)
 
 	router.Post(options.BaseURL+"/v1/inbox-items/:itemId/discard", wrapper.DiscardInboxItem)
+
+	router.Get(options.BaseURL+"/v1/inbox-items/:itemId/processing-attempts", wrapper.ListProcessingAttempts)
 
 }

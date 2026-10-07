@@ -69,6 +69,22 @@ func (h *Handler) GetInboxItem(c fiber.Ctx, id types.UUID) error {
 	}
 	return c.JSON(output(item))
 }
+func (h *Handler) ListProcessingAttempts(c fiber.Ctx, id types.UUID) error {
+	if _, err := h.queries.GetInboxItem(c.Context(), pgUUID(id)); err != nil {
+		return databaseError(err)
+	}
+	attempts, err := h.queries.ListProcessingAttempts(c.Context(), pgUUID(id))
+	if err != nil {
+		return internal(err)
+	}
+	items := make([]generated.ProcessingAttempt, 0, len(attempts))
+	for _, attempt := range attempts {
+		var actions []map[string]interface{}
+		_ = json.Unmarshal(attempt.Actions, &actions)
+		items = append(items, generated.ProcessingAttempt{Id: uuid(attempt.ID), IdempotencyKey: &attempt.IdempotencyKey, Status: generated.ProcessingAttemptStatus(attempt.Status), AgentName: attempt.AgentName, ModelProfile: attempt.ModelProfile, Actions: actions, ErrorSummary: attempt.ErrorSummary, StartedAt: nullableTime(attempt.StartedAt), CompletedAt: nullableTime(attempt.CompletedAt), CreatedAt: attempt.CreatedAt.Time})
+	}
+	return c.JSON(generated.ProcessingAttemptList{Items: items})
+}
 func (h *Handler) DiscardInboxItem(c fiber.Ctx, id types.UUID) error {
 	item, err := h.queries.SetInboxItemState(c.Context(), store.SetInboxItemStateParams{ID: pgUUID(id), State: "discarded"})
 	if err != nil {

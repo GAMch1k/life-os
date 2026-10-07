@@ -9,3 +9,5 @@ WHERE (sqlc.narg(unresolved_filter)::boolean IS NULL OR (state IN ('raw', 'proce
 ORDER BY created_at DESC LIMIT sqlc.arg(page_limit);
 -- name: SetInboxItemState :one
 UPDATE inbox_items SET state = $1, resolved_at = CASE WHEN $1 IN ('resolved', 'discarded') THEN now() ELSE resolved_at END, updated_at = now() WHERE id = $2 RETURNING *;
+-- name: ListProcessingAttempts :many
+SELECT * FROM inbox_processing_attempts WHERE inbox_item_id = $1 ORDER BY created_at DESC;
