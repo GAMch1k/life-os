@@ -112,19 +112,19 @@ Start the backend services and dashboard together with:
 make life-up
 ```
 
-Open <http://localhost:3000>. The dashboard reads Finance, Tasks, Inbox, and
-Calendar from the live local services; no public authentication is required for
-this local baseline. Run the browser-facing smoke check with:
+Open <http://localhost:3000>. The Docker Nginx gateway is the sole published
+application port; it routes the dashboard and all `/api/*` requests to private
+containers. Run the browser-facing smoke check with:
 
 ```sh
 make life-smoke
 ```
 
-If port 3000 is already in use, set `LIFE_OS_DASHBOARD_PORT` for both commands
+If port 3000 is already in use, set `LIFE_OS_GATEWAY_PORT` for both commands
 (for example, `LIFE_OS_DASHBOARD_PORT=3001 make life-up`).
 
-To expose only the dashboard through WireGuard, bind it to the server's
-WireGuard address: `LIFE_OS_DASHBOARD_BIND_ADDRESS=10.66.66.1 make life-up`.
+To expose the single gateway through WireGuard, bind it to the server's
+WireGuard address: `LIFE_OS_GATEWAY_BIND_ADDRESS=10.66.66.1 make life-up`.
 
 ## Architectural boundaries
 
