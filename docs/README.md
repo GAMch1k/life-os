@@ -8,6 +8,7 @@ Life OS is a local-first personal operating system. This index is the human-read
 - [Networking and data flows](architecture/networking.md) — ingress and common request paths.
 - [Getting started](development/getting-started.md) — run the stack locally.
 - [Services](services/finance.md) — Finance, [Tasks](services/tasks.md), [Inbox](services/inbox.md), [Calendar](services/calendar.md), [MCP](services/mcp.md), and [Voice/STT](services/voice-stt.md).
+- [MCP tool contract](services/mcp-tool-contract.md) — permitted semantic AI actions and safety boundaries.
 - [API overview](api/overview.md) — gateway addresses, all current endpoints, examples, and errors.
 - [Dashboard](frontend/dashboard.md), [data and code generation](development/data-and-codegen.md), and [operations](operations/deployment.md).
 
