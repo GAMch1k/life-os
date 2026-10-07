@@ -97,6 +97,27 @@ func (h *Handler) CreateProcessingAttempt(c fiber.Ctx, id types.UUID) error {
 	}
 	return c.Status(201).JSON(attemptOutput(attempt))
 }
+func (h *Handler) UpdateProcessingAttempt(c fiber.Ctx, itemID types.UUID, attemptID types.UUID) error {
+	if _, err := h.queries.GetProcessingAttemptForItem(c.Context(), store.GetProcessingAttemptForItemParams{ID: pgUUID(attemptID), InboxItemID: pgUUID(itemID)}); err != nil {
+		return databaseError(err)
+	}
+	var body generated.UpdateProcessingAttemptJSONRequestBody
+	if err := c.Bind().Body(&body); err != nil {
+		return fiber.NewError(400, "invalid processing-attempt update")
+	}
+	if body.Status == "" || body.Actions == nil {
+		return fiber.NewError(400, "status and actions are required")
+	}
+	actions, err := json.Marshal(body.Actions)
+	if err != nil {
+		return fiber.NewError(400, "invalid actions")
+	}
+	attempt, err := h.queries.UpdateProcessingAttempt(c.Context(), store.UpdateProcessingAttemptParams{ID: pgUUID(attemptID), Status: string(body.Status), Actions: actions, ErrorSummary: body.ErrorSummary})
+	if err != nil {
+		return internal(err)
+	}
+	return c.JSON(attemptOutput(attempt))
+}
 func attemptOutput(attempt store.InboxProcessingAttempt) generated.ProcessingAttempt {
 	var actions []map[string]interface{}
 	_ = json.Unmarshal(attempt.Actions, &actions)

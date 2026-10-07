@@ -91,6 +91,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/inbox-items/{itemId}/processing-attempts/{attemptId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Record the outcome of an Inbox processing attempt */
+        patch: operations["updateProcessingAttempt"];
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -153,6 +170,14 @@ export interface components {
             idempotencyKey: string;
             agentName: string;
             modelProfile: string;
+        };
+        UpdateProcessingAttemptRequest: {
+            /** @enum {string} */
+            status: "processing" | "processed" | "failed" | "retryable";
+            actions: {
+                [key: string]: unknown;
+            }[];
+            errorSummary?: string | null;
         };
     };
     responses: never;
@@ -403,6 +428,47 @@ export interface operations {
             };
             /** @description Duplicate idempotency key */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    updateProcessingAttempt: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                itemId: string;
+                attemptId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateProcessingAttemptRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated attempt */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProcessingAttempt"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Inbox item or attempt not found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

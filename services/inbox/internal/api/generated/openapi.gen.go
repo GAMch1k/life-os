@@ -118,6 +118,30 @@ func (e ProcessingAttemptStatus) Valid() bool {
 	}
 }
 
+// Defines values for UpdateProcessingAttemptRequestStatus.
+const (
+	UpdateProcessingAttemptRequestStatusFailed     UpdateProcessingAttemptRequestStatus = "failed"
+	UpdateProcessingAttemptRequestStatusProcessed  UpdateProcessingAttemptRequestStatus = "processed"
+	UpdateProcessingAttemptRequestStatusProcessing UpdateProcessingAttemptRequestStatus = "processing"
+	UpdateProcessingAttemptRequestStatusRetryable  UpdateProcessingAttemptRequestStatus = "retryable"
+)
+
+// Valid indicates whether the value is a known member of the UpdateProcessingAttemptRequestStatus enum.
+func (e UpdateProcessingAttemptRequestStatus) Valid() bool {
+	switch e {
+	case UpdateProcessingAttemptRequestStatusFailed:
+		return true
+	case UpdateProcessingAttemptRequestStatusProcessed:
+		return true
+	case UpdateProcessingAttemptRequestStatusProcessing:
+		return true
+	case UpdateProcessingAttemptRequestStatusRetryable:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ListInboxItemsParamsState.
 const (
 	ListInboxItemsParamsStateDiscarded  ListInboxItemsParamsState = "discarded"
@@ -207,6 +231,16 @@ type ProcessingAttemptList struct {
 	Items []ProcessingAttempt `json:"items"`
 }
 
+// UpdateProcessingAttemptRequest defines model for UpdateProcessingAttemptRequest.
+type UpdateProcessingAttemptRequest struct {
+	Actions      []map[string]interface{}             `json:"actions"`
+	ErrorSummary *string                              `json:"errorSummary,omitempty"`
+	Status       UpdateProcessingAttemptRequestStatus `json:"status"`
+}
+
+// UpdateProcessingAttemptRequestStatus defines model for UpdateProcessingAttemptRequest.Status.
+type UpdateProcessingAttemptRequestStatus string
+
 // ListInboxItemsParams defines parameters for ListInboxItems.
 type ListInboxItemsParams struct {
 	Unresolved *bool                      `form:"unresolved,omitempty" json:"unresolved,omitempty"`
@@ -223,6 +257,9 @@ type CreateInboxItemJSONRequestBody = CreateInboxItemRequest
 
 // CreateProcessingAttemptJSONRequestBody defines body for CreateProcessingAttempt for application/json ContentType.
 type CreateProcessingAttemptJSONRequestBody = CreateProcessingAttemptRequest
+
+// UpdateProcessingAttemptJSONRequestBody defines body for UpdateProcessingAttempt for application/json ContentType.
+type UpdateProcessingAttemptJSONRequestBody = UpdateProcessingAttemptRequest
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
@@ -244,6 +281,9 @@ type ServerInterface interface {
 	// CreateProcessingAttempt Start a traceable processing attempt
 	// (POST /v1/inbox-items/{itemId}/processing-attempts)
 	CreateProcessingAttempt(c fiber.Ctx, itemId openapi_types.UUID) error
+	// UpdateProcessingAttempt Record the outcome of an Inbox processing attempt
+	// (PATCH /v1/inbox-items/{itemId}/processing-attempts/{attemptId})
+	UpdateProcessingAttempt(c fiber.Ctx, itemId openapi_types.UUID, attemptId openapi_types.UUID) error
 	// ResolveInboxItem Resolve an inbox item
 	// (POST /v1/inbox-items/{itemId}/resolve)
 	ResolveInboxItem(c fiber.Ctx, itemId openapi_types.UUID) error
@@ -450,6 +490,43 @@ func (siw *ServerInterfaceWrapper) CreateProcessingAttempt(c fiber.Ctx) error {
 	return handler(c)
 }
 
+// UpdateProcessingAttempt operation middleware
+func (siw *ServerInterfaceWrapper) UpdateProcessingAttempt(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "itemId" -------------
+	var itemId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "itemId", c.Params("itemId"), &itemId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter itemId: %w", err).Error())
+	}
+
+	// ------------- Path parameter "attemptId" -------------
+	var attemptId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "attemptId", c.Params("attemptId"), &attemptId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter attemptId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.UpdateProcessingAttempt(c, itemId, attemptId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
 // ResolveInboxItem operation middleware
 func (siw *ServerInterfaceWrapper) ResolveInboxItem(c fiber.Ctx) error {
 
@@ -515,5 +592,7 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	router.Get(options.BaseURL+"/v1/inbox-items/:itemId/processing-attempts", wrapper.ListProcessingAttempts)
 
 	router.Post(options.BaseURL+"/v1/inbox-items/:itemId/processing-attempts", wrapper.CreateProcessingAttempt)
+
+	router.Patch(options.BaseURL+"/v1/inbox-items/:itemId/processing-attempts/:attemptId", wrapper.UpdateProcessingAttempt)
 
 }
