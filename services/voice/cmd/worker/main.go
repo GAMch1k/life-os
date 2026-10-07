@@ -123,7 +123,7 @@ func transcribe(ctx context.Context, c *http.Client, base, path, contentType str
 }
 func capture(ctx context.Context, c *http.Client, base string, job store.AudioJob, text string) (pgtype.UUID, error) {
 	metadata := map[string]any{"audioJobId": uuidString(job.ID), "contentType": job.ContentType}
-	body, _ := json.Marshal(map[string]any{"content": text, "source": "voice", "sourceMetadata": metadata, "mediaReferences": []string{}})
+	body, _ := json.Marshal(map[string]any{"content": text, "source": "voice", "sourceMetadata": metadata, "mediaReferences": []string{}, "dedupeKey": "voice:" + uuidString(job.ID)})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/inbox-items", bytes.NewReader(body))
 	if err != nil {
 		return pgtype.UUID{}, err

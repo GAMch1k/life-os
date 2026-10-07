@@ -56,7 +56,7 @@ func (h *Handler) CreateInboxItem(c fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(400, "invalid media references")
 	}
-	item, err := h.queries.CreateInboxItem(c.Context(), store.CreateInboxItemParams{Content: body.Content, Source: string(body.Source), SourceMetadata: metadata, MediaReferences: media})
+	item, err := h.queries.CreateInboxItem(c.Context(), store.CreateInboxItemParams{Content: body.Content, Source: string(body.Source), SourceMetadata: metadata, MediaReferences: media, SourceDedupeKey: body.DedupeKey})
 	if err != nil {
 		return internal(err)
 	}
