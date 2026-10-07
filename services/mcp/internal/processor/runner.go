@@ -73,6 +73,13 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 		return r.plan(ctx, item)
 	}
 	key := idempotencyKey(item)
+	completed, err := r.completed(ctx, item.ID, key)
+	if err != nil {
+		return Proposal{}, err
+	}
+	if completed {
+		return Proposal{ItemID: item.ID, Reason: "already processed"}, nil
+	}
 	attempt, err := r.Tools.Call(ctx, "inbox_start_processing_attempt", map[string]any{"itemId": item.ID, "idempotencyKey": key, "agentName": "codex-inbox-processor", "modelProfile": r.Model})
 	if err != nil {
 		return Proposal{}, fmt.Errorf("start attempt for %s: %w", item.ID, err)
@@ -120,6 +127,27 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 	}
 	_, err = r.Tools.Call(ctx, "inbox_resolve", map[string]any{"itemId": item.ID})
 	return Proposal{}, err
+}
+func (r Runner) completed(ctx context.Context, itemID, key string) (bool, error) {
+	raw, err := r.Tools.Call(ctx, "inbox_list_processing_attempts", map[string]any{"itemId": itemID})
+	if err != nil {
+		return false, err
+	}
+	var attempts struct {
+		Items []struct {
+			IdempotencyKey string `json:"idempotencyKey"`
+			Status         string `json:"status"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(toolData(raw), &attempts); err != nil {
+		return false, err
+	}
+	for _, attempt := range attempts.Items {
+		if attempt.IdempotencyKey == key && attempt.Status == "processed" {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 func (r Runner) plan(ctx context.Context, item inboxItem) (Proposal, error) {
 	prompt, _ := json.Marshal(map[string]any{"content": item.Content, "source": item.Source, "sourceMetadata": item.SourceMetadata})
