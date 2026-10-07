@@ -1,0 +1,26 @@
+# Disposable verification overlay. It uses isolated Docker resource names and
+# publishes no host ports, so it can validate a clean migration path without
+# touching a developer's running stack or persistent data.
+name: lifeos-verify
+
+services:
+  postgres:
+    ports: !reset []
+  finance:
+    ports: !reset []
+  tasks:
+    ports: !reset []
+  inbox:
+    ports: !reset []
+  calendar:
+    ports: !reset []
+  dashboard:
+    ports: !reset []
+
+networks:
+  backend:
+    name: lifeos-verify-backend
+
+volumes:
+  postgres-data:
+    name: lifeos-verify-postgres-data

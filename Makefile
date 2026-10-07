@@ -1,4 +1,4 @@
-.PHONY: infra-env infra-up infra-down infra-ps infra-logs infra-reset core-up core-smoke life-up life-smoke db-provision db-check-isolation db-migration-new db-generate db-migrate-up db-migrate-down db-test create-service create-service-smoke dashboard-check check
+.PHONY: infra-env infra-up infra-down infra-ps infra-logs infra-reset core-up core-smoke life-up life-smoke verify-clean-db db-provision db-check-isolation db-migration-new db-generate db-migrate-up db-migrate-down db-test create-service create-service-smoke dashboard-check check
 
 infra-env:
 	@test -f .env || cp .env.example .env
@@ -16,6 +16,11 @@ life-up: core-up
 
 life-smoke: core-smoke
 	./tools/smoke-dashboard
+
+verify-clean-db: infra-env
+	docker compose -f compose.yaml -f compose.verify.yaml up --detach --build --wait
+	docker compose -f compose.yaml -f compose.verify.yaml exec -T postgres /opt/lifeos/postgres/verify-database-isolation.sh
+	docker compose -f compose.yaml -f compose.verify.yaml down --volumes --remove-orphans
 
 infra-down:
 	docker compose down --remove-orphans
