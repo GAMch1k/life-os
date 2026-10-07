@@ -102,6 +102,24 @@ services:
     networks: [backend]
     restart: unless-stopped
 
+  mcp:
+    build: {context: ., dockerfile: services/mcp/Dockerfile}
+    environment:
+      SERVICE_NAME: mcp
+      PORT: 8080
+      FINANCE_SERVICE_URL: http://finance:8080
+      TASKS_SERVICE_URL: http://tasks:8080
+      INBOX_SERVICE_URL: http://inbox:8080
+      CALENDAR_SERVICE_URL: http://calendar:8080
+    expose: ["8080"]
+    depends_on:
+      finance: {condition: service_started}
+      tasks: {condition: service_started}
+      inbox: {condition: service_started}
+      calendar: {condition: service_started}
+    networks: [backend]
+    restart: unless-stopped
+
   gateway:
     image: nginx:1.28-alpine
     volumes: ["./infra/nginx/life-os.conf:/etc/nginx/conf.d/default.conf:ro"]
@@ -112,6 +130,7 @@ services:
       tasks: {condition: service_started}
       inbox: {condition: service_started}
       calendar: {condition: service_started}
+      mcp: {condition: service_started}
     networks: [backend]
     restart: unless-stopped
 
