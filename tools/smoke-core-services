@@ -11,10 +11,12 @@ wait_ready() {
   return 1
 }
 
-finance=http://127.0.0.1:8081
-tasks=http://127.0.0.1:8082
-inbox=http://127.0.0.1:8083
-calendar=http://127.0.0.1:8084
+gateway_port=$(docker compose port gateway 80)
+gateway="http://${gateway_port}"
+finance="${gateway}/api/finance"
+tasks="${gateway}/api/tasks"
+inbox="${gateway}/api/inbox"
+calendar="${gateway}/api/calendar"
 for service in "$finance" "$tasks" "$inbox" "$calendar"; do wait_ready "$service"; done
 
 curl --fail --silent --show-error "$finance/v1/accounts" >/dev/null
