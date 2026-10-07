@@ -1,3 +1,5 @@
+"use client";
+
 import {
   CalendarDays,
   CheckSquare2,
@@ -8,21 +10,23 @@ import {
   Sparkles,
 } from "lucide-react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 const navigation = [
-  { href: "#overview", label: "Overview", icon: LayoutDashboard },
-  { href: "#finance", label: "Finance", icon: Landmark },
-  { href: "#tasks", label: "Tasks", icon: CheckSquare2 },
-  { href: "#inbox", label: "Inbox", icon: Inbox },
-  { href: "#calendar", label: "Calendar", icon: CalendarDays },
+  { href: "/", label: "Overview", icon: LayoutDashboard },
+  { href: "/finance", label: "Finance", icon: Landmark },
+  { href: "/tasks", label: "Tasks", icon: CheckSquare2 },
+  { href: "/inbox", label: "Inbox", icon: Inbox },
+  { href: "/calendar", label: "Calendar", icon: CalendarDays },
 ] as const;
 
 export function AppShell({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
+  const pathname = usePathname();
   return (
     <div className="bg-muted/40 min-h-screen">
       <a
@@ -59,11 +63,11 @@ export function AppShell({
       <div className="mx-auto grid max-w-screen-2xl md:grid-cols-[15rem_minmax(0,1fr)]">
         <aside className="bg-background hidden min-h-[calc(100vh-4rem)] border-r p-4 md:block">
           <nav aria-label="Main navigation" className="space-y-1">
-            {navigation.map(({ href, icon: Icon, label }, index) => (
+            {navigation.map(({ href, icon: Icon, label }) => (
               <Link
                 className={cn(
                   "focus-visible:ring-ring flex h-10 items-center gap-3 rounded-lg px-3 text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none",
-                  index === 0
+                  pathname === href
                     ? "bg-secondary text-secondary-foreground"
                     : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
                 )}
@@ -90,11 +94,11 @@ export function AppShell({
         className="bg-background/95 supports-[backdrop-filter]:bg-background/85 fixed inset-x-0 bottom-0 z-20 border-t px-2 pt-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] backdrop-blur md:hidden"
       >
         <div className="mx-auto grid max-w-lg grid-cols-5">
-          {navigation.map(({ href, icon: Icon, label }, index) => (
+          {navigation.map(({ href, icon: Icon, label }) => (
             <Link
               className={cn(
                 "focus-visible:ring-ring flex min-h-14 flex-col items-center justify-center gap-1 rounded-lg px-1 text-[0.6875rem] font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none",
-                index === 0
+                pathname === href
                   ? "text-foreground"
                   : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
               )}
