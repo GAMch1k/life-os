@@ -23,6 +23,9 @@ func NewHandler(queries *store.Queries) *Handler { return &Handler{queries: quer
 func (h *Handler) ListTasks(c fiber.Ctx, params generated.ListTasksParams) error {
 	limit := 50
 	if params.Limit != nil {
+		if *params.Limit < 1 || *params.Limit > 100 {
+			return fiber.NewError(fiber.StatusBadRequest, "limit must be between 1 and 100")
+		}
 		limit = *params.Limit
 	}
 	items, err := h.queries.ListTasks(c.Context(), store.ListTasksParams{CompletedFilter: params.Completed, DueBefore: timestamp(params.DueBefore), PageLimit: int32(limit)})

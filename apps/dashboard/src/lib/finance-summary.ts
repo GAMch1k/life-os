@@ -9,15 +9,19 @@ export type FinanceSummaryState =
   | { kind: "unavailable" };
 
 async function loadSummary(month: string) {
-  const { data, error } = await financeClient.GET("/v1/summaries/monthly", {
-    params: { query: { month } },
-  });
+  try {
+    const { data, error } = await financeClient.GET("/v1/summaries/monthly", {
+      params: { query: { month } },
+    });
 
-  if (error || !data) {
+    if (error || !data) {
+      return undefined;
+    }
+
+    return data;
+  } catch {
     return undefined;
   }
-
-  return data;
 }
 
 export async function getFinanceSummary(): Promise<FinanceSummaryState> {
