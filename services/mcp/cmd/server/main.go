@@ -14,7 +14,7 @@ import (
 )
 
 type query struct {
-	Query string `json:"query,omitempty" jsonschema:"description=URL query without leading question mark"`
+	Query string `json:"query,omitempty" jsonschema:"URL query without leading question mark"`
 }
 type Output struct {
 	Data json.RawMessage `json:"data"`
