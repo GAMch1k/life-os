@@ -8,19 +8,21 @@ services:
     ports: !reset []
   finance:
     image: lifeos-finance:latest
-    ports: !override ["127.0.0.1:18081:8080"]
+    ports: !reset []
   tasks:
     image: lifeos-tasks:latest
-    ports: !override ["127.0.0.1:18082:8080"]
+    ports: !reset []
   inbox:
     image: lifeos-inbox:latest
-    ports: !override ["127.0.0.1:18083:8080"]
+    ports: !reset []
   calendar:
     image: lifeos-calendar:latest
-    ports: !override ["127.0.0.1:18084:8080"]
+    ports: !reset []
   dashboard:
     image: lifeos-dashboard:latest
-    ports: !override ["127.0.0.1:13001:3000"]
+    ports: !reset []
+  gateway:
+    ports: !override ["127.0.0.1:13001:80"]
 
 networks:
   backend:
