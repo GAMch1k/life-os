@@ -4,6 +4,12 @@ Life OS is a local-first personal operating system. Independent domain services 
 
 This repository is the single monorepo for the project. The foundation phase establishes shared development rails before domain behavior is introduced.
 
+## Technical documentation
+
+The human-readable technical guide is maintained as ordinary repository Markdown
+under [`docs/`](docs/README.md). It is designed for GitHub browsing and Obsidian;
+there is no GitHub Pages or Wiki dependency.
+
 ## Repository layout
 
 | Path | Purpose |
@@ -121,7 +127,7 @@ make life-smoke
 ```
 
 If port 3000 is already in use, set `LIFE_OS_GATEWAY_PORT` for both commands
-(for example, `LIFE_OS_DASHBOARD_PORT=3001 make life-up`).
+(for example, `LIFE_OS_GATEWAY_PORT=3001 make life-up`).
 
 To expose the single gateway through WireGuard, bind it to the server's
 WireGuard address: `LIFE_OS_GATEWAY_BIND_ADDRESS=10.66.66.1 make life-up`.
