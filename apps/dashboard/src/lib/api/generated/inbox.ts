@@ -73,6 +73,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/inbox-items/{itemId}/processing-attempts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List traceable AI processing attempts */
+        get: operations["listProcessingAttempts"];
+        put?: never;
+        /** Start a traceable processing attempt */
+        post: operations["createProcessingAttempt"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -108,6 +126,33 @@ export interface components {
         InboxItemList: {
             items: components["schemas"]["InboxItem"][];
             nextCursor?: string | null;
+        };
+        ProcessingAttempt: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            status: "pending" | "processing" | "processed" | "failed" | "retryable";
+            agentName: string;
+            modelProfile: string;
+            idempotencyKey?: string;
+            actions: {
+                [key: string]: unknown;
+            }[];
+            errorSummary?: string | null;
+            /** Format: date-time */
+            startedAt?: string | null;
+            /** Format: date-time */
+            completedAt?: string | null;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        ProcessingAttemptList: {
+            items: components["schemas"]["ProcessingAttempt"][];
+        };
+        CreateProcessingAttemptRequest: {
+            idempotencyKey: string;
+            agentName: string;
+            modelProfile: string;
         };
     };
     responses: never;
@@ -282,6 +327,82 @@ export interface operations {
             };
             /** @description Inbox item not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listProcessingAttempts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                itemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Attempts */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProcessingAttemptList"];
+                };
+            };
+            /** @description Inbox item not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    createProcessingAttempt: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                itemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateProcessingAttemptRequest"];
+            };
+        };
+        responses: {
+            /** @description Attempt */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProcessingAttempt"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Inbox item not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Duplicate idempotency key */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
