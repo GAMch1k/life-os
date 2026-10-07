@@ -18,7 +18,7 @@ life-smoke: core-smoke
 	./tools/smoke-dashboard
 
 verify-clean-db: infra-env
-	docker compose -f compose.yaml -f compose.verify.yaml up --detach --build --wait
+	docker compose -f compose.yaml -f compose.verify.yaml up --detach --no-build
 	docker compose -f compose.yaml -f compose.verify.yaml exec -T postgres /opt/lifeos/postgres/verify-database-isolation.sh
 	docker compose -f compose.yaml -f compose.verify.yaml down --volumes --remove-orphans
 

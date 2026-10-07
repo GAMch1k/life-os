@@ -7,14 +7,19 @@ services:
   postgres:
     ports: !reset []
   finance:
+    image: lifeos-finance:latest
     ports: !reset []
   tasks:
+    image: lifeos-tasks:latest
     ports: !reset []
   inbox:
+    image: lifeos-inbox:latest
     ports: !reset []
   calendar:
+    image: lifeos-calendar:latest
     ports: !reset []
   dashboard:
+    image: lifeos-dashboard:latest
     ports: !reset []
 
 networks:
