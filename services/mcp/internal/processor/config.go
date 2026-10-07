@@ -14,7 +14,7 @@ type Config struct {
 }
 
 func LoadConfig() (Config, error) {
-	c := Config{Model: env("LIFE_OS_CODEX_MODEL", "gpt-5.6-mini"), APIKey: os.Getenv("OPENAI_API_KEY"), InboxURL: env("INBOX_SERVICE_URL", "http://inbox:8080"), MCPURL: env("MCP_SERVICE_URL", "http://mcp:8080/mcp")}
+	c := Config{Model: env("LIFE_OS_CODEX_MODEL", "gpt-5.6-luna"), APIKey: os.Getenv("OPENAI_API_KEY"), InboxURL: env("INBOX_SERVICE_URL", "http://inbox:8080"), MCPURL: env("MCP_SERVICE_URL", "http://mcp:8080/mcp")}
 	if c.APIKey == "" {
 		return c, fmt.Errorf("OPENAI_API_KEY is required for Codex Inbox processing")
 	}
