@@ -27,7 +27,7 @@ stack.
 | Restart and persistence | Pass | Completed Tasks and discarded Inbox items remained in their expected state after their containers restarted; the dashboard served successfully after recovery. |
 | Database isolation | Pass | `make db-check-isolation` passed for all four service databases. |
 
-## Regressions found
+## Regressions found and resolved
 
 1. `GET /v1/tasks?limit=0` returns `200`, while the OpenAPI contract declares
    `limit` with a minimum of `1`. Reproduce with:
@@ -36,10 +36,13 @@ stack.
    curl -i 'http://127.0.0.1:8082/v1/tasks?limit=0'
    ```
 
+   Resolved in P4-03: the handler now returns 400 for limits outside 1–100.
+
 2. When Finance is stopped, rendering the dashboard root returns `500` instead
    of showing its intended Finance-unavailable state. The service is restored
    immediately after the test. This violates the Phase 3 unavailable-service
-   behavior and is tracked for P4-03.
+   behavior. Resolved in P4-03: Finance summary loading catches an unavailable
+   upstream and renders its existing unavailable state.
 
 ## Verification command notes
 
