@@ -94,6 +94,9 @@ Life OS API conventions and reusable transport schemas are documented in
 are public transport contracts only; they do not expose or share internal Go
 domain structs.
 
+Finance CSV imports are documented in
+[`docs/finance-csv-import.md`](docs/finance-csv-import.md).
+
 ## Development commands
 
 Repository-wide commands are introduced alongside the capabilities they operate.
