@@ -76,6 +76,13 @@ func run(ctx context.Context) error {
 	mcp.AddTool(s, &mcp.Tool{Name: "inbox_start_processing_attempt", Description: "Start an auditable Inbox processing attempt"}, func(ctx context.Context, _ *mcp.CallToolRequest, in inboxAction) (*mcp.CallToolResult, Output, error) {
 		return post(ctx, hc, cfg.InboxURL, "/v1/inbox-items/"+in.ItemID+"/processing-attempts", map[string]string{"idempotencyKey": in.IdempotencyKey, "agentName": in.AgentName, "modelProfile": in.ModelProfile})
 	})
+	mcp.AddTool(s, &mcp.Tool{Name: "inbox_list_processing_attempts", Description: "List auditable processing attempts for an Inbox item"}, func(ctx context.Context, _ *mcp.CallToolRequest, in inboxAction) (*mcp.CallToolResult, Output, error) {
+		body, err := coreclient.Client{BaseURL: cfg.InboxURL, HTTP: hc}.Do(ctx, http.MethodGet, "/v1/inbox-items/"+in.ItemID+"/processing-attempts", nil)
+		if err != nil {
+			return nil, Output{}, err
+		}
+		return nil, Output{Data: body}, nil
+	})
 	mcp.AddTool(s, &mcp.Tool{Name: "inbox_record_processing_attempt", Description: "Record an Inbox processing attempt result"}, func(ctx context.Context, _ *mcp.CallToolRequest, in inboxAction) (*mcp.CallToolResult, Output, error) {
 		return patch(ctx, hc, cfg.InboxURL, "/v1/inbox-items/"+in.ItemID+"/processing-attempts/"+in.AttemptID, map[string]interface{}{"status": in.Status, "actions": in.Actions, "errorSummary": in.ErrorSummary})
 	})
