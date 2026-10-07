@@ -39,7 +39,7 @@ class Handler(BaseHTTPRequestHandler):
                 audio = Path(directory) / "audio.bin"
                 output = Path(directory) / "transcript"
                 audio.write_bytes(data)
-                result = subprocess.run(["whisper-cli", "-m", str(MODEL), "-f", str(audio), "-otxt", "-of", str(output), "-t", THREADS], capture_output=True, text=True, timeout=1800)
+                result = subprocess.run(["whisper-cli", "-m", str(MODEL), "-l", "auto", "-f", str(audio), "-otxt", "-of", str(output), "-t", THREADS], capture_output=True, text=True, timeout=1800)
                 text_file = output.with_suffix(".txt")
                 if result.returncode != 0 or not text_file.exists():
                     self.respond(422, {"error": "whisper transcription failed", "detail": result.stderr[-1000:]}); return
