@@ -9,4 +9,4 @@ Phase 4 establishes the verified baseline before MCP/AI work. The final verifica
 
 The gateway is the only published application listener; domain services and PostgreSQL remain private Docker endpoints. Finance CSV imports, dashboard deep links/routes, generated artifacts, and migrations are covered by the above checks. Repository-native Markdown in `docs/` is the canonical human documentation; GitHub Pages and Wiki are intentionally not dependencies.
 
-Known non-blocking limits: MCP/AI and voice/STT routes are reserved but not implemented; public application authentication, backup/restore automation, external calendar synchronization, Android, and Wear OS are deferred by roadmap scope.
+Known non-blocking limits: public application authentication, backup/restore automation, external calendar synchronization, Android, and Wear OS are deferred by roadmap scope. MCP/AI and voice/STT are implemented in later phases and documented separately.
