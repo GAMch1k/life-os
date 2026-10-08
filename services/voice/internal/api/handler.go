@@ -18,21 +18,29 @@ import (
 )
 
 type Handler struct {
-	queries   *store.Queries
-	files     storage.Files
-	retention time.Duration
+	queries        *store.Queries
+	files          storage.Files
+	retention      time.Duration
+	maxUploadBytes int64
 }
 
 var _ generated.ServerInterface = (*Handler)(nil)
 
-func NewHandler(queries *store.Queries, files storage.Files, retention time.Duration) *Handler {
-	return &Handler{queries: queries, files: files, retention: retention}
+func NewHandler(queries *store.Queries, files storage.Files, retention time.Duration, maxUploadBytes int64) *Handler {
+	return &Handler{queries: queries, files: files, retention: retention, maxUploadBytes: maxUploadBytes}
 }
 
 func (h *Handler) CreateAudioJob(c fiber.Ctx) error {
 	file, err := c.FormFile("audio")
 	if err != nil || file.Size <= 0 {
 		return fiber.NewError(400, "audio is required")
+	}
+	contentType, err := storage.ValidateAudio(file, h.maxUploadBytes)
+	if err != nil {
+		if file.Size > h.maxUploadBytes {
+			return fiber.NewError(413, err.Error())
+		}
+		return fiber.NewError(400, err.Error())
 	}
 	source := c.FormValue("source", "web")
 	if source != "web" && source != "watch" && source != "manual" {
@@ -51,7 +59,7 @@ func (h *Handler) CreateAudioJob(c fiber.Ctx) error {
 		return internal(err)
 	}
 	expires := time.Now().Add(h.retention)
-	job, err := h.queries.CreateAudioJob(c.Context(), store.CreateAudioJobParams{Source: source, SourceMetadata: encoded, ObjectKey: key, ContentType: file.Header.Get("Content-Type"), ByteSize: n, ExpiresAt: pgtype.Timestamptz{Time: expires, Valid: true}})
+	job, err := h.queries.CreateAudioJob(c.Context(), store.CreateAudioJobParams{Source: source, SourceMetadata: encoded, ObjectKey: key, ContentType: contentType, ByteSize: n, ExpiresAt: pgtype.Timestamptz{Time: expires, Valid: true}})
 	if err != nil {
 		_ = h.files.Remove(key)
 		return internal(err)

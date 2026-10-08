@@ -194,6 +194,7 @@ services:
       DATABASE_URL: "postgres://voice_user:${LIFE_OS_VOICE_DB_PASSWORD}@postgres:5432/voice_db?sslmode=disable"
       VOICE_STORAGE_DIR: /var/lib/lifeos/voice
       VOICE_RETENTION_HOURS: ${LIFE_OS_VOICE_RETENTION_HOURS:-168}
+      VOICE_MAX_UPLOAD_BYTES: ${LIFE_OS_VOICE_MAX_UPLOAD_BYTES:-26214400}
     volumes: ["voice-audio:/var/lib/lifeos/voice"]
     expose: ["8080"]
     depends_on: {voice-migrate: {condition: service_completed_successfully}}

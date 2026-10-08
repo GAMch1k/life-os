@@ -4,11 +4,33 @@ import (
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net/http"
 	"os"
 	"path/filepath"
 )
 
 type Files struct{ Root string }
+
+func ValidateAudio(input *multipart.FileHeader, maxBytes int64) (string, error) {
+	if input.Size <= 0 || input.Size > maxBytes {
+		return "", fmt.Errorf("audio exceeds configured upload limit")
+	}
+	source, err := input.Open()
+	if err != nil {
+		return "", err
+	}
+	defer source.Close()
+	buf := make([]byte, 512)
+	n, err := source.Read(buf)
+	if err != nil && err != io.EOF {
+		return "", err
+	}
+	detected := http.DetectContentType(buf[:n])
+	if detected == "audio/wave" || detected == "audio/ogg" || detected == "video/webm" || detected == "audio/webm" {
+		return detected, nil
+	}
+	return "", fmt.Errorf("unsupported audio format")
+}
 
 func (f Files) Store(key string, input *multipart.FileHeader) (int64, error) {
 	if err := os.MkdirAll(f.Root, 0o750); err != nil {
