@@ -14,6 +14,8 @@ Life OS is a local-first personal operating system. This index is the human-read
 
 ## Scope
 
-Implemented: four Go/Fiber domain services, PostgreSQL ownership/migrations, OpenAPI generation, a Next.js dashboard, Finance CSV import, and one Docker Nginx ingress. MCP/AI, voice/STT, Android, Wear OS, public application authentication, queues, and external sync remain deferred. Android and Wear OS belong in separate repositories.
+Implemented: Finance, Tasks, Inbox, Calendar, Voice, and MCP services; PostgreSQL ownership/migrations; generated OpenAPI clients; a Next.js dashboard; Finance CSV import; a single Docker Nginx ingress; local authenticated Codex Inbox processing; and a private multilingual `whisper.cpp` worker. Voice recordings are queued asynchronously, transcribed, captured in Inbox, and can follow the same constrained MCP action path.
+
+Deferred: Android, Wear OS, public application authentication, external synchronization, and a general-purpose message bus. Android and Wear OS belong in separate repositories.
 
 When a ticket changes behavior, API, configuration, networking, persistence, operations, or a user-visible flow, update the relevant page in this directory in the same branch.

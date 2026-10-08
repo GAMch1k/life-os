@@ -1,8 +1,8 @@
 # Life OS
 
-Life OS is a local-first personal operating system. Independent domain services sit behind one dashboard and, later, one AI/MCP interaction layer.
+Life OS is a local-first personal operating system. Independent domain services sit behind one dashboard, a constrained AI/MCP interaction layer, and an asynchronous local voice-transcription path.
 
-This repository is the single monorepo for the project. The foundation phase establishes shared development rails before domain behavior is introduced.
+This repository is the single monorepo for the project. It contains the implemented Finance, Tasks, Inbox, Calendar, Voice, MCP, dashboard, and private Whisper worker components through Phase 6.
 
 ## Technical documentation
 
@@ -31,7 +31,7 @@ Each service owns its API implementation, domain model, persistence code, migrat
 - Docker Engine with Docker Compose v2
 - Node.js 22 or newer once dashboard development begins
 
-Docker and Node.js are not required to inspect this initial repository skeleton. Their runnable workflows arrive in later foundation tickets.
+Docker and Node.js are required to run the complete local stack; Go is required for service development and verification.
 
 ## Local infrastructure
 
@@ -42,7 +42,7 @@ make infra-up
 make infra-ps
 ```
 
-Stop the stack without deleting its persistent data with `make infra-down`. Use `make infra-reset` only when you intentionally want to delete and recreate the local PostgreSQL volume. See [`infra/README.md`](infra/README.md) for direct Compose usage, environment variables, and naming conventions.
+Stop the stack without deleting its persistent data with `make infra-down`. Use `make infra-reset` only when you intentionally want to delete and recreate persistent Compose volumes. See [`docs/development/getting-started.md`](docs/development/getting-started.md) and [`docs/operations/deployment.md`](docs/operations/deployment.md) for Compose usage, configuration, and operations.
 
 Each domain service uses an isolated database and login inside the shared PostgreSQL container. `make db-provision` reconciles the declarative registry in `infra/postgres/service-databases.conf`; credentials remain in the ignored local `.env` file.
 
