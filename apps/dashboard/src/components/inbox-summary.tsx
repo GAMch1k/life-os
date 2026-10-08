@@ -97,8 +97,8 @@ export function InboxSummary({ state }: { state: InboxSummaryState }) {
           />
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-muted-foreground flex items-center gap-1.5 text-xs">
-              <Mic aria-hidden="true" className="size-3.5" /> Voice capture will
-              appear here.
+              <Mic aria-hidden="true" className="size-3.5" /> Completed voice
+              captures appear here.
             </p>
             <Button disabled={isPending} size="sm" type="submit">
               {isPending ? (
