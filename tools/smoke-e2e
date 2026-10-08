@@ -5,7 +5,10 @@ compose=(./tools/verify-compose)
 cleanup() { "${compose[@]}" down --volumes --remove-orphans >/dev/null; }
 trap cleanup EXIT
 
-"${compose[@]}" up --detach --no-build
+# This is a core-service smoke, not an AI workflow test. Keep its manually
+# resolved Inbox fixture away from the automatic processor; the dedicated
+# smoke-processor-runtime script verifies that real trigger-to-outcome chain.
+"${compose[@]}" up --detach --no-build --scale processor=0
 
 wait_ready() {
   local url=$1

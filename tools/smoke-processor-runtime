@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Proves the deployed automatic path against disposable Compose resources. It
+# intentionally does not invoke /processor directly: the only trigger is the
+# same gateway Inbox capture used by Dashboard clients.
+compose=(./tools/verify-compose)
+cleanup() { "${compose[@]}" down --volumes --remove-orphans >/dev/null; }
+trap cleanup EXIT
+
+"${compose[@]}" up --detach --no-build
+
+gateway=http://127.0.0.1:13001
+wait_ready() {
+  local url=$1
+  for _ in $(seq 1 45); do curl --fail --silent "$url/ready" >/dev/null && return; sleep 1; done
+  echo "processor smoke: not ready: $url" >&2
+  return 1
+}
+for service in "$gateway/api/inbox" "$gateway/api/tasks"; do wait_ready "$service"; done
+
+# The title is intentionally unique and explicit, leaving no ambiguity for the
+# constrained planner while keeping all resulting data in the disposable DB.
+title="P7 automatic processor smoke $(date +%s)"
+item=$(curl --fail --silent -H 'content-type: application/json' \
+  -d "{\"content\":\"Create a task titled $title.\",\"source\":\"web\",\"sourceMetadata\":{\"verification\":\"p7-02\"}}" \
+  "$gateway/api/inbox/v1/inbox-items")
+item_id=$(jq -r '.id' <<<"$item")
+
+for _ in $(seq 1 90); do
+  item=$(curl --fail --silent "$gateway/api/inbox/v1/inbox-items/$item_id")
+  inbox_state=$(jq -r '.state' <<<"$item")
+  attempts=$(curl --fail --silent "$gateway/api/inbox/v1/inbox-items/$item_id/processing-attempts")
+  attempt_state=$(jq -r '.items[0].status // "none"' <<<"$attempts")
+  if [[ "$inbox_state" == resolved && "$attempt_state" == processed ]]; then
+    jq -e '.items | length == 1 and .[0].status == "processed" and (.[0].actions | length) == 1 and .[0].actions[0].tool == "task_create"' <<<"$attempts" >/dev/null
+    curl --fail --silent "$gateway/api/tasks/v1/tasks?query=$(jq -rn --arg q "$title" '$q|@uri')" | jq -e --arg title "$title" '.items | any(.title == $title)' >/dev/null
+    echo "automatic Inbox processor smoke passed"
+    exit 0
+  fi
+  sleep 2
+done
+
+echo "processor smoke: item $item_id was not automatically resolved (state=$inbox_state, attempt=$attempt_state)" >&2
+exit 1
