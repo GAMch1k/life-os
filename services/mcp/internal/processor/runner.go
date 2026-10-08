@@ -73,14 +73,14 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 		return r.plan(ctx, item)
 	}
 	key := idempotencyKey(item)
-	completed, err := r.completed(ctx, item.ID, key)
+	completed, attemptKey, err := r.nextAttemptKey(ctx, item.ID, key)
 	if err != nil {
 		return Proposal{}, err
 	}
 	if completed {
 		return Proposal{ItemID: item.ID, Reason: "already processed"}, nil
 	}
-	attempt, err := r.Tools.Call(ctx, "inbox_start_processing_attempt", map[string]any{"itemId": item.ID, "idempotencyKey": key, "agentName": "codex-inbox-processor", "modelProfile": r.Model})
+	attempt, err := r.Tools.Call(ctx, "inbox_start_processing_attempt", map[string]any{"itemId": item.ID, "idempotencyKey": attemptKey, "agentName": "codex-inbox-processor", "modelProfile": r.Model})
 	if err != nil {
 		return Proposal{}, fmt.Errorf("start attempt for %s: %w", item.ID, err)
 	}
@@ -128,10 +128,14 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 	_, err = r.Tools.Call(ctx, "inbox_resolve", map[string]any{"itemId": item.ID})
 	return Proposal{}, err
 }
-func (r Runner) completed(ctx context.Context, itemID, key string) (bool, error) {
+
+// nextAttemptKey preserves every retry as a separate audit row while keeping
+// the deterministic operation key recognizable. A completed operation stops
+// retries; retryable/failed rows receive a new, unique attempt identity.
+func (r Runner) nextAttemptKey(ctx context.Context, itemID, key string) (bool, string, error) {
 	raw, err := r.Tools.Call(ctx, "inbox_list_processing_attempts", map[string]any{"itemId": itemID})
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 	var attempts struct {
 		Items []struct {
@@ -140,14 +144,21 @@ func (r Runner) completed(ctx context.Context, itemID, key string) (bool, error)
 		} `json:"items"`
 	}
 	if err := json.Unmarshal(toolData(raw), &attempts); err != nil {
-		return false, err
+		return false, "", err
 	}
+	count := 0
 	for _, attempt := range attempts.Items {
-		if attempt.IdempotencyKey == key && attempt.Status == "processed" {
-			return true, nil
+		if attempt.IdempotencyKey == key || strings.HasPrefix(attempt.IdempotencyKey, key+".retry.") {
+			count++
+			if attempt.Status == "processed" {
+				return true, "", nil
+			}
 		}
 	}
-	return false, nil
+	if count == 0 {
+		return false, key, nil
+	}
+	return false, fmt.Sprintf("%s.retry.%d", key, count+1), nil
 }
 func (r Runner) plan(ctx context.Context, item inboxItem) (Proposal, error) {
 	prompt, _ := json.Marshal(map[string]any{"content": item.Content, "source": item.Source, "sourceMetadata": item.SourceMetadata})
