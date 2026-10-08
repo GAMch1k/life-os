@@ -87,3 +87,17 @@ func TestRoutingCorpusLeavesAmbiguousAndHostileInputsUnresolved(t *testing.T) {
 		})
 	}
 }
+
+func TestVoiceTranscriptRoutesThroughMCPToTask(t *testing.T) {
+	tools := &corpusTools{item: inboxItem{ID: "voice-job-1", Content: "Call insurer", Source: "voice", SourceMetadata: map[string]any{"audioJobId": "job-1"}}}
+	_, err := (Runner{Planner: corpusPlanner{}, Tools: tools, Model: "gpt-5.6-terra"}).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(tools.calls, "task_create") || !contains(tools.calls, "inbox_resolve") {
+		t.Fatalf("voice transcript did not reach a core action: %#v", tools.calls)
+	}
+	if tools.records[len(tools.records)-1]["status"] != "processed" {
+		t.Fatalf("audit=%#v", tools.records)
+	}
+}
