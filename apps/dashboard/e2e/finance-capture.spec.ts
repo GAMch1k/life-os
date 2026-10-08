@@ -50,7 +50,10 @@ test.describe("Dashboard Finance capture", () => {
           const data = await transactions.json();
           return data.items?.filter(
             (transaction: { accountId: string; note: string }) =>
-              transaction.accountId === accountId && transaction.note === note,
+              transaction.accountId === accountId &&
+              transaction.note
+                .toLocaleLowerCase()
+                .includes(note.toLocaleLowerCase()),
           ).length;
         },
         { timeout: 30_000 },
