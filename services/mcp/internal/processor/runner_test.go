@@ -53,6 +53,10 @@ func TestRunnerExecutesApprovedActionsThenResolves(t *testing.T) {
 	if tools.records[1]["status"] != "processed" {
 		t.Fatalf("status = %#v", tools.records[1]["status"])
 	}
+	initialActions, ok := tools.records[0]["actions"].([]map[string]any)
+	if !ok || len(initialActions) != 0 {
+		t.Fatalf("initial processing audit must send an empty actions array, got %#v", tools.records[0]["actions"])
+	}
 }
 func TestRunnerLeavesFailedActionRecoverable(t *testing.T) {
 	tools := &fakeTools{fail: "task_create"}
