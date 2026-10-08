@@ -16,7 +16,7 @@ test.describe("Dashboard CSV import", () => {
       `${process.env.LIFE_OS_E2E_ACCOUNT_ID},2026-10-08,-125,USD,${externalId},Browser CSV`,
     ].join("\n");
     await page.goto("/");
-    await page.getByRole("button", { name: "Select CSV" }).setInputFiles({
+    await page.locator('input[type="file"]').setInputFiles({
       name: "browser-import.csv",
       mimeType: "text/csv",
       buffer: Buffer.from(csv),
