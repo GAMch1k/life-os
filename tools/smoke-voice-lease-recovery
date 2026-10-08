@@ -49,6 +49,14 @@ done
 "${compose[@]}" stop voice-worker >/dev/null
 docker unpause "$whisper_id" >/dev/null
 paused=false
+for _ in $(seq 1 30); do
+  [[ "$(docker inspect --format '{{.State.Health.Status}}' "$whisper_id")" == healthy ]] && break
+  sleep 1
+done
+[[ "$(docker inspect --format '{{.State.Health.Status}}' "$whisper_id")" == healthy ]] || {
+  echo "voice recovery smoke: Whisper did not recover after unpause" >&2
+  exit 1
+}
 sleep 6
 "${compose[@]}" up --detach --no-build voice-worker >/dev/null
 
