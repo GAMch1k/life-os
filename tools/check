@@ -5,6 +5,20 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_root"
 
+[[ -z "$(git status --porcelain)" ]] || {
+  echo 'check: refusing to run with a dirty working tree' >&2
+  exit 2
+}
+build_dir=$(mktemp -d "${TMPDIR:-/tmp}/lifeos-check.XXXXXX")
+cleanup_build_dir() {
+  local artifact
+  for artifact in "$build_dir"/*; do
+    [[ -e "$artifact" ]] && unlink "$artifact"
+  done
+  rmdir "$build_dir"
+}
+trap cleanup_build_dir EXIT
+
 require_command() {
   command -v "$1" >/dev/null 2>&1 || {
     printf 'check: required command not found on PATH: %s\n' "$1" >&2
@@ -46,7 +60,7 @@ for module_path in "${modules[@]}"; do
     GOWORK=off go vet ./...
     GOWORK=off go test ./...
     if [[ -d cmd/server ]]; then
-      GOWORK=off go build ./cmd/server
+      GOWORK=off go build -o "$build_dir/$(tr '/' '_' <<<"$module_dir")-server" ./cmd/server
     else
       GOWORK=off go build ./...
     fi
@@ -57,3 +71,8 @@ printf '\n==> Dashboard checks\n'
 npm --prefix apps/dashboard run check
 
 printf '\nAll baseline checks passed.\n'
+
+[[ -z "$(git status --porcelain)" ]] || {
+  echo 'check: verification left the working tree dirty' >&2
+  exit 1
+}

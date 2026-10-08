@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$repo_root"
+
+normal_volumes=(lifeos-postgres-data lifeos-whisper-models lifeos-voice-audio)
+for volume in "${normal_volumes[@]}"; do
+  docker volume inspect "$volume" >/dev/null || {
+    printf 'verify-isolation: normal runtime volume is missing: %s\n' "$volume" >&2
+    exit 2
+  }
+done
+
+sentinel=".lifeos-verify-sentinel-$(date +%s)-$$"
+cleanup_sentinels() {
+  for volume in "${normal_volumes[@]}"; do
+    docker run --rm -v "$volume:/volume" alpine:3.22 rm -f "/volume/$sentinel" >/dev/null 2>&1 || true
+  done
+}
+trap cleanup_sentinels EXIT
+
+for volume in "${normal_volumes[@]}"; do
+  docker run --rm -v "$volume:/volume" alpine:3.22 sh -c 'touch "$1"' sh "/volume/$sentinel" >/dev/null
+done
+
+./tools/smoke-e2e
+
+for volume in "${normal_volumes[@]}"; do
+  docker run --rm -v "$volume:/volume" alpine:3.22 test -f "/volume/$sentinel" || {
+    printf 'verify-isolation: normal runtime volume sentinel disappeared: %s\n' "$volume" >&2
+    exit 1
+  }
+done
+
+printf 'verification isolation preserved all normal runtime volume sentinels\n'
