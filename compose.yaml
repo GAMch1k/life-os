@@ -129,7 +129,7 @@ services:
       LIFE_OS_CODEX_MODEL: ${LIFE_OS_CODEX_MODEL:-gpt-5.6-terra}
       LIFE_OS_PROCESSOR_POLL_MILLIS: ${LIFE_OS_PROCESSOR_POLL_MILLIS:-1000}
       LIFE_OS_PROCESSOR_HEALTH_PORT: 8081
-      CODEX_HOME: /var/lib/lifeos/codex
+      CODEX_HOME: /tmp/lifeos-codex
     volumes:
       - type: bind
         source: ${LIFE_OS_CODEX_HOME_HOST_PATH:?Set LIFE_OS_CODEX_HOME_HOST_PATH in .env to your existing local Codex home}
@@ -147,6 +147,7 @@ services:
       finance: {condition: service_started}
     networks: [backend]
     restart: unless-stopped
+    user: "${LIFE_OS_CODEX_RUNTIME_UID:?Set LIFE_OS_CODEX_RUNTIME_UID in .env to the UID which owns the local Codex session}"
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]

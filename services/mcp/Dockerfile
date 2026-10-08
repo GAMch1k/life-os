@@ -21,6 +21,6 @@ RUN npm install --global @openai/codex@0.160.0 \
 COPY --from=build /out/processor /processor
 COPY services/mcp/docker-processor-entrypoint.sh /docker-processor-entrypoint
 RUN chmod 0755 /docker-processor-entrypoint
-ENV CODEX_HOME=/var/lib/lifeos/codex
+ENV CODEX_HOME=/tmp/lifeos-codex
 EXPOSE 8081
 ENTRYPOINT ["/docker-processor-entrypoint"]
