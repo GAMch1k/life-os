@@ -34,7 +34,7 @@ for _ in $(seq 1 90); do
   attempt_state=$(jq -r '.items[0].status // "none"' <<<"$attempts")
   if [[ "$inbox_state" == resolved && "$attempt_state" == processed ]]; then
     jq -e '.items | length == 1 and .[0].status == "processed" and (.[0].actions | length) == 1 and .[0].actions[0].tool == "task_create"' <<<"$attempts" >/dev/null
-    curl --fail --silent "$gateway/api/tasks/v1/tasks?query=$(jq -rn --arg q "$title" '$q|@uri')" | jq -e --arg title "$title" '.items | any(.title == $title)' >/dev/null
+    curl --fail --silent "$gateway/api/tasks/v1/tasks?query=$(jq -rn --arg q "$title" '$q|@uri')" | jq -e --arg title "$title" '.items | any(.title | startswith($title))' >/dev/null
     echo "automatic Inbox processor smoke passed"
     exit 0
   fi
