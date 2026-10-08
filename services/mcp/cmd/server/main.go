@@ -23,7 +23,7 @@ type inboxAction struct {
 	AgentName      string                   `json:"agentName,omitempty"`
 	ModelProfile   string                   `json:"modelProfile,omitempty"`
 	Status         string                   `json:"status,omitempty"`
-	Actions        []map[string]interface{} `json:"actions"`
+	Actions        []map[string]interface{} `json:"actions,omitempty"`
 	ErrorSummary   *string                  `json:"errorSummary,omitempty"`
 }
 type taskAction struct {
