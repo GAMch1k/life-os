@@ -31,3 +31,7 @@ networks:
 volumes:
   postgres-data:
     name: lifeos-verify-postgres-data
+  whisper-models:
+    name: lifeos-verify-whisper-models
+  voice-audio:
+    name: lifeos-verify-voice-audio

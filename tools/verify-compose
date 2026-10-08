@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# The verification stack must never share Docker resources with the deployed
+# Life OS project. Keep the project name explicit even if Compose's `name:`
+# field changes later.
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$repo_root"
+
+compose=(docker compose --project-name lifeos-verify -f compose.yaml -f compose.verify.yaml)
+
+require_isolated_resources() {
+  command -v jq >/dev/null 2>&1 || { echo "verify-compose: jq is required" >&2; exit 2; }
+  local config volume network
+  config=$("${compose[@]}" config --format json)
+  while IFS= read -r volume; do
+    [[ "$volume" == lifeos-verify-* ]] || {
+      printf 'verify-compose: refusing shared verification volume: %s\n' "$volume" >&2
+      exit 2
+    }
+  done < <(jq -r '.volumes // {} | to_entries[] | .value.name // ("lifeos-verify-" + .key)' <<<"$config")
+  while IFS= read -r network; do
+    [[ "$network" == lifeos-verify-* ]] || {
+      printf 'verify-compose: refusing shared verification network: %s\n' "$network" >&2
+      exit 2
+    }
+  done < <(jq -r '.networks // {} | to_entries[] | .value.name // ("lifeos-verify-" + .key)' <<<"$config")
+}
+
+require_isolated_resources
+exec "${compose[@]}" "$@"

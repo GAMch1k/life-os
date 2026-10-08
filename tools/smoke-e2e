@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-compose=(docker compose -f compose.yaml -f compose.verify.yaml)
+compose=(./tools/verify-compose)
 cleanup() { "${compose[@]}" down --volumes --remove-orphans >/dev/null; }
 trap cleanup EXIT
 
