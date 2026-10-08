@@ -11,12 +11,14 @@ import (
 )
 
 type Querier interface {
-	ClaimAudioJob(ctx context.Context) (AudioJob, error)
+	ClaimAudioJob(ctx context.Context, arg ClaimAudioJobParams) (AudioJob, error)
 	CompleteAudioJob(ctx context.Context, arg CompleteAudioJobParams) (AudioJob, error)
 	CreateAudioJob(ctx context.Context, arg CreateAudioJobParams) (AudioJob, error)
 	ExpireAudioJob(ctx context.Context, id pgtype.UUID) (AudioJob, error)
 	GetAudioJob(ctx context.Context, id pgtype.UUID) (AudioJob, error)
 	ListExpiredAudioJobs(ctx context.Context, limit int32) ([]AudioJob, error)
+	ReclaimExpiredAudioJobs(ctx context.Context, arg ReclaimExpiredAudioJobsParams) ([]AudioJob, error)
+	RenewAudioJobLease(ctx context.Context, arg RenewAudioJobLeaseParams) (AudioJob, error)
 	RetryAudioJob(ctx context.Context, arg RetryAudioJobParams) (AudioJob, error)
 }
 

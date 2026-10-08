@@ -27,3 +27,7 @@ LIFE_OS_CODEX_MODEL=gpt-5.6-terra
 ```
 
 The processor bind-mounts that path read-only, runs as the owning UID, and copies only the authentication and optional Codex configuration to a container tmpfs. Do not mount a credential as a writable volume and do not add `auth.json` or API keys to `.env`. After deployment, verify from the processor container itself with `docker compose exec processor codex login status`; it should report the already authenticated ChatGPT session. Its private readiness probe only becomes ready after a successful polling pass through MCP.
+
+## Voice worker recovery
+
+Voice jobs use a persisted lease instead of treating `processing` as permanent ownership. Configure `LIFE_OS_VOICE_WORKER_LEASE_SECONDS`, `LIFE_OS_VOICE_WORKER_RETRY_BACKOFF_SECONDS`, and `LIFE_OS_VOICE_WORKER_MAX_ATTEMPTS` in the ignored `.env` if the defaults are unsuitable. On restart, the normal `voice-worker` automatically reclaims only expired leases; do not edit Voice job rows manually. A job that repeatedly loses its lease or fails will eventually appear as `failed` from `GET /api/voice/v1/audio-jobs/{id}` with its attempt count and error summary.

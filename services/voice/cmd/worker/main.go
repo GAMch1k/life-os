@@ -39,10 +39,15 @@ func run(ctx context.Context) error {
 	queries := store.New(pool)
 	files := storage.Files{Root: cfg.StorageDir}
 	client := &http.Client{Timeout: 31 * time.Minute}
+	workerID, err := os.Hostname()
+	if err != nil {
+		return err
+	}
+	workerID = fmt.Sprintf("%s-%d", workerID, os.Getpid())
 	tick := time.NewTicker(time.Duration(cfg.WorkerPollMillis) * time.Millisecond)
 	defer tick.Stop()
 	for {
-		if err := process(ctx, queries, files, client, cfg); err != nil {
+		if err := process(ctx, queries, files, client, cfg, workerID); err != nil {
 			fmt.Fprintln(os.Stderr, "voice worker:", err)
 		}
 		select {
@@ -52,26 +57,65 @@ func run(ctx context.Context) error {
 		}
 	}
 }
-func process(ctx context.Context, q *store.Queries, files storage.Files, client *http.Client, cfg serviceconfig.Config) error {
+func process(ctx context.Context, q *store.Queries, files storage.Files, client *http.Client, cfg serviceconfig.Config, workerID string) error {
+	if err := reclaim(ctx, q, cfg); err != nil {
+		return err
+	}
 	for _, job := range expired(ctx, q) {
 		_ = files.Remove(job.ObjectKey)
 	}
-	job, err := q.ClaimAudioJob(ctx)
+	job, err := q.ClaimAudioJob(ctx, store.ClaimAudioJobParams{LeaseOwner: &workerID, LeaseSeconds: int32(cfg.WorkerLeaseSeconds)})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	transcript, err := transcribe(ctx, client, cfg.WhisperURL, files.Path(job.ObjectKey), job.ContentType)
+	workCtx, stopLease := maintainLease(ctx, q, job.ID, cfg, workerID)
+	defer stopLease()
+	transcript, err := transcribe(workCtx, client, cfg.WhisperURL, files.Path(job.ObjectKey), job.ContentType)
 	if err != nil {
-		return fail(ctx, q, job, cfg, err)
+		return fail(ctx, q, job, cfg, workerID, err)
 	}
-	inboxID, err := capture(ctx, client, cfg.InboxURL, job, transcript)
+	inboxID, err := capture(workCtx, client, cfg.InboxURL, job, transcript)
 	if err != nil {
-		return fail(ctx, q, job, cfg, err)
+		return fail(ctx, q, job, cfg, workerID, err)
 	}
-	_, err = q.CompleteAudioJob(ctx, store.CompleteAudioJobParams{ID: job.ID, Transcript: &transcript, InboxItemID: inboxID})
+	_, err = q.CompleteAudioJob(ctx, store.CompleteAudioJobParams{ID: job.ID, Transcript: &transcript, InboxItemID: inboxID, LeaseOwner: &workerID})
+	return err
+}
+func maintainLease(ctx context.Context, q *store.Queries, jobID pgtype.UUID, cfg serviceconfig.Config, workerID string) (context.Context, func()) {
+	workCtx, cancel := context.WithCancel(ctx)
+	stop := make(chan struct{})
+	interval := time.Duration(cfg.WorkerLeaseSeconds) * time.Second / 3
+	if interval < time.Second {
+		interval = time.Second
+	}
+	go func() {
+		tick := time.NewTicker(interval)
+		defer tick.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-workCtx.Done():
+				return
+			case <-tick.C:
+				if _, err := q.RenewAudioJobLease(ctx, store.RenewAudioJobLeaseParams{ID: jobID, LeaseOwner: &workerID, LeaseSeconds: int32(cfg.WorkerLeaseSeconds)}); err != nil {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	return workCtx, func() { close(stop); cancel() }
+}
+func reclaim(ctx context.Context, q *store.Queries, cfg serviceconfig.Config) error {
+	message := "worker lease expired before completion"
+	_, err := q.ReclaimExpiredAudioJobs(ctx, store.ReclaimExpiredAudioJobsParams{
+		AttemptCount: int32(cfg.WorkerMaxAttempts), ErrorSummary: &message,
+		AvailableAt: pgtype.Timestamptz{Time: time.Now().Add(time.Duration(cfg.WorkerRetryBackoffSeconds) * time.Second), Valid: true},
+	})
 	return err
 }
 func expired(ctx context.Context, q *store.Queries) []store.AudioJob {
@@ -84,13 +128,14 @@ func expired(ctx context.Context, q *store.Queries) []store.AudioJob {
 	}
 	return jobs
 }
-func fail(ctx context.Context, q *store.Queries, job store.AudioJob, cfg serviceconfig.Config, cause error) error {
+func fail(ctx context.Context, q *store.Queries, job store.AudioJob, cfg serviceconfig.Config, workerID string, cause error) error {
 	status := "retryable"
 	if int(job.AttemptCount) >= cfg.WorkerMaxAttempts {
 		status = "failed"
 	}
 	message := cause.Error()
-	_, err := q.RetryAudioJob(ctx, store.RetryAudioJobParams{ID: job.ID, Status: status, ErrorSummary: &message, AvailableAt: pgtype.Timestamptz{Time: time.Now().Add(time.Duration(job.AttemptCount) * time.Minute), Valid: true}})
+	backoff := time.Duration(cfg.WorkerRetryBackoffSeconds) * time.Second * time.Duration(job.AttemptCount)
+	_, err := q.RetryAudioJob(ctx, store.RetryAudioJobParams{ID: job.ID, Status: status, ErrorSummary: &message, AvailableAt: pgtype.Timestamptz{Time: time.Now().Add(backoff), Valid: true}, LeaseOwner: &workerID})
 	return err
 }
 func transcribe(ctx context.Context, c *http.Client, base, path, contentType string) (string, error) {

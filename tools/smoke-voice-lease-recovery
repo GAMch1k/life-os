@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Proves the real worker crash/restart path using only disposable resources.
+# The normal browser-facing upload API creates the job; no job is inserted by
+# SQL. Whisper is paused so the worker remains in processing long enough to
+# terminate it after a durable claim.
+compose=(./tools/verify-compose)
+audio=$(mktemp "${TMPDIR:-/tmp}/lifeos-voice-recovery.XXXXXX.wav")
+whisper_id=""
+paused=false
+cleanup() {
+  if [[ "$paused" == true && -n "$whisper_id" ]]; then docker unpause "$whisper_id" >/dev/null 2>&1 || true; fi
+  unlink "$audio" 2>/dev/null || true
+  "${compose[@]}" down --volumes --remove-orphans >/dev/null
+}
+trap cleanup EXIT
+
+"${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
+LIFE_OS_VOICE_WORKER_LEASE_SECONDS=5 LIFE_OS_VOICE_WORKER_RETRY_BACKOFF_SECONDS=1 \
+  "${compose[@]}" up --detach --no-build --scale processor=0
+
+gateway=http://127.0.0.1:13001
+for _ in $(seq 1 60); do
+  curl --fail --silent "$gateway/api/voice/ready" >/dev/null && break
+  sleep 1
+done
+curl --fail --silent "$gateway/api/voice/ready" >/dev/null
+
+# A public test fixture is downloaded only into a temporary file; it is not a
+# repository asset or user recording.
+curl --fail --silent --show-error --location \
+  https://github.com/ggerganov/whisper.cpp/raw/master/samples/jfk.wav -o "$audio"
+whisper_id=$("${compose[@]}" ps -q whisper)
+docker pause "$whisper_id" >/dev/null
+paused=true
+
+job=$(curl --fail --silent -F "audio=@$audio;type=audio/wav" -F source=web "$gateway/api/voice/v1/audio-jobs")
+job_id=$(jq -r '.id' <<<"$job")
+for _ in $(seq 1 30); do
+  state=$(curl --fail --silent "$gateway/api/voice/v1/audio-jobs/$job_id" | jq -r '.status')
+  [[ "$state" == processing ]] && break
+  sleep 1
+done
+[[ "$state" == processing ]] || { echo "voice recovery smoke: job was not claimed" >&2; exit 1; }
+
+# This is the crash window: claim persisted, Whisper has not completed, and
+# the worker is killed before it can write a retry or completion outcome.
+"${compose[@]}" stop voice-worker >/dev/null
+docker unpause "$whisper_id" >/dev/null
+paused=false
+for _ in $(seq 1 30); do
+  [[ "$(docker inspect --format '{{.State.Health.Status}}' "$whisper_id")" == healthy ]] && break
+  sleep 1
+done
+[[ "$(docker inspect --format '{{.State.Health.Status}}' "$whisper_id")" == healthy ]] || {
+  echo "voice recovery smoke: Whisper did not recover after unpause" >&2
+  exit 1
+}
+sleep 6
+"${compose[@]}" up --detach --no-build voice-worker >/dev/null
+
+for _ in $(seq 1 120); do
+  job=$(curl --fail --silent "$gateway/api/voice/v1/audio-jobs/$job_id")
+  state=$(jq -r '.status' <<<"$job")
+  if [[ "$state" == succeeded ]]; then break; fi
+  sleep 2
+done
+[[ "$state" == succeeded ]] || { echo "voice recovery smoke: final state=$state" >&2; exit 1; }
+inbox_id=$(jq -r '.inboxItemId' <<<"$job")
+[[ "$inbox_id" != null && -n "$inbox_id" ]] || { echo "voice recovery smoke: no Inbox item" >&2; exit 1; }
+count=$("${compose[@]}" exec -T postgres sh -c "psql -U \"\$POSTGRES_USER\" -d inbox_db -Atqc \"SELECT count(*) FROM inbox_items WHERE source_dedupe_key = 'voice:$job_id'\"")
+[[ "$count" == 1 ]] || { echo "voice recovery smoke: Inbox dedupe count=$count" >&2; exit 1; }
+echo "voice lease crash/restart recovery smoke passed"
