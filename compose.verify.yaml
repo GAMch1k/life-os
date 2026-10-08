@@ -21,6 +21,14 @@ services:
   dashboard:
     image: lifeos-dashboard:latest
     ports: !reset []
+  mcp:
+    image: lifeos-mcp:latest
+  whisper:
+    image: lifeos-whisper:latest
+  voice:
+    image: lifeos-voice:latest
+  voice-worker:
+    image: lifeos-voice-worker:latest
   gateway:
     ports: !override ["127.0.0.1:13001:80"]
 
