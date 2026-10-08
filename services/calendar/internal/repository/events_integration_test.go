@@ -35,12 +35,14 @@ func TestEventPersistenceSupportsTimedAndAllDayEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DROP SCHEMA "+schema+" CASCADE") })
-	migration, err := os.ReadFile(filepath.Join("..", "..", "db", "migrations", "000002_events.up.sql"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = pool.Exec(ctx, string(migration)); err != nil {
-		t.Fatal(err)
+	for _, name := range []string{"000002_events.up.sql", "000003_automation_idempotency.up.sql"} {
+		migration, err := os.ReadFile(filepath.Join("..", "..", "db", "migrations", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = pool.Exec(ctx, string(migration)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	queries := store.New(pool)
 	start := time.Date(2026, time.October, 6, 9, 0, 0, 0, time.UTC)
@@ -64,6 +66,16 @@ func TestEventPersistenceSupportsTimedAndAllDayEvents(t *testing.T) {
 	}
 	if affected, err := queries.DeleteEvent(ctx, allDay.ID); err != nil || affected != 1 {
 		t.Fatalf("delete=%d err=%v", affected, err)
+	}
+	key, hash := "processor-event-1", "payload-a"
+	first, err := queries.CreateEvent(ctx, store.CreateEventParams{Title: "Only once", AllDay: true, StartDate: pgtype.Date{Time: start, Valid: true}, EndDate: pgtype.Date{Time: start, Valid: true}, AutomationIdempotencyKey: &key, AutomationPayloadHash: &hash})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A replay after an Inbox bookkeeping crash must recover the original row.
+	replayed, err := queries.CreateEvent(ctx, store.CreateEventParams{Title: "Only once", AllDay: true, StartDate: pgtype.Date{Time: start, Valid: true}, EndDate: pgtype.Date{Time: start, Valid: true}, AutomationIdempotencyKey: &key, AutomationPayloadHash: &hash})
+	if err != nil || replayed.ID != first.ID {
+		t.Fatalf("replayed event = %#v, err = %v; want %s", replayed, err, first.ID.String())
 	}
 }
 func stringPointer(value string) *string { return &value }

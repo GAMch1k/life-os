@@ -35,7 +35,7 @@ func TestTaskPersistenceLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DROP SCHEMA "+schema+" CASCADE") })
-	for _, name := range []string{"000002_tasks.up.sql"} {
+	for _, name := range []string{"000002_tasks.up.sql", "000003_automation_idempotency.up.sql"} {
 		migration, err := os.ReadFile(filepath.Join("..", "..", "db", "migrations", name))
 		if err != nil {
 			t.Fatal(err)
@@ -63,6 +63,17 @@ func TestTaskPersistenceLifecycle(t *testing.T) {
 	closed, err := queries.ListTasks(ctx, store.ListTasksParams{CompletedFilter: pointer(true), PageLimit: 10})
 	if err != nil || len(closed) != 1 || !closed[0].CompletedAt.Valid {
 		t.Fatalf("completed tasks = %#v, err = %v", closed, err)
+	}
+	key, hash := "processor-task-1", "payload-a"
+	first, err := queries.CreateTask(ctx, store.CreateTaskParams{Title: "Only once", AutomationIdempotencyKey: &key, AutomationPayloadHash: &hash})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// This is the persistence boundary used when a processor crashes after the
+	// owner has committed but before it can record the Inbox outcome.
+	replayed, err := queries.CreateTask(ctx, store.CreateTaskParams{Title: "Only once", AutomationIdempotencyKey: &key, AutomationPayloadHash: &hash})
+	if err != nil || replayed.ID != first.ID {
+		t.Fatalf("replayed task = %#v, err = %v; want %s", replayed, err, first.ID.String())
 	}
 }
 func pointer(value bool) *bool { return &value }
