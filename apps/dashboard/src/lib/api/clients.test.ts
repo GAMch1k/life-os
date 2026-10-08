@@ -6,6 +6,7 @@ import {
   createFinanceClient,
   createInboxClient,
   createTasksClient,
+  createVoiceClient,
 } from "./index";
 
 test("each generated service client accepts an explicit base URL", () => {
@@ -15,4 +16,5 @@ test("each generated service client accepts an explicit base URL", () => {
   assert.ok(createTasksClient(url));
   assert.ok(createInboxClient(url));
   assert.ok(createCalendarClient(url));
+  assert.ok(createVoiceClient(url));
 });
