@@ -4,14 +4,21 @@ import { LoaderCircle, Mic, RotateCcw, Square } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { voiceClient } from "@/lib/api";
+import {
+  isVoiceJobTerminal,
+  type VoiceJob,
+  voiceJobMessage,
+} from "@/lib/voice-job-state";
 
-type CaptureState = "idle" | "recording" | "uploading" | "accepted" | "failed";
+type CaptureState = "idle" | "recording" | "uploading" | "failed";
 
 export function VoiceCapture() {
   const [state, setState] = useState<CaptureState>("idle");
   const [message, setMessage] = useState(
     "Record a thought; it will be transcribed in the background.",
   );
+  const [job, setJob] = useState<VoiceJob>();
   const recorder = useRef<MediaRecorder | undefined>(undefined);
   const chunks = useRef<Blob[]>([]);
   const pendingAudio = useRef<Blob | undefined>(undefined);
@@ -21,6 +28,21 @@ export function VoiceCapture() {
       recorder.current?.stream.getTracks().forEach((track) => track.stop()),
     [],
   );
+
+  useEffect(() => {
+    if (!job || isVoiceJobTerminal(job.status)) return;
+    const timer = window.setInterval(() => {
+      void voiceClient
+        .GET("/v1/audio-jobs/{jobId}", { params: { path: { jobId: job.id } } })
+        .then(({ data }) => {
+          if (!data) return;
+          setJob(data);
+          setMessage(voiceJobMessage(data));
+        })
+        .catch(() => setMessage("Checking transcription status again soon…"));
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [job]);
 
   async function start() {
     if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
@@ -66,15 +88,13 @@ export function VoiceCapture() {
       const body = new FormData();
       body.append("audio", audio, "voice-capture.webm");
       body.append("source", "web");
-      const response = await fetch("/api/voice/v1/audio-jobs", {
-        method: "POST",
-        body,
+      const { data, error } = await voiceClient.POST("/v1/audio-jobs", {
+        body: body as never,
       });
-      if (!response.ok) throw new Error("upload failed");
-      setState("accepted");
-      setMessage(
-        "Voice capture accepted. It will appear in Inbox after transcription.",
-      );
+      if (!data || error) throw new Error("upload failed");
+      setJob(data);
+      setState("idle");
+      setMessage(voiceJobMessage(data));
     } catch {
       setState("failed");
       setMessage("Could not upload this recording. Try sending it again.");
@@ -104,13 +124,16 @@ export function VoiceCapture() {
         <Button disabled size="sm">
           <LoaderCircle className="animate-spin" /> Sending
         </Button>
-      ) : state === "failed" ? (
+      ) : state === "failed" ||
+        (job &&
+          isVoiceJobTerminal(job.status) &&
+          job.status !== "succeeded") ? (
         <Button onClick={retry} size="sm" variant="outline">
           <RotateCcw /> Retry
         </Button>
       ) : (
         <Button onClick={start} size="sm">
-          <Mic /> {state === "accepted" ? "Record again" : "Record"}
+          <Mic /> {job ? "Record again" : "Record"}
         </Button>
       )}
     </div>
