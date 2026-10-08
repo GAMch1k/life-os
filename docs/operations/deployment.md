@@ -4,7 +4,7 @@ Docker Compose runs PostgreSQL, one migration job and one service per domain, Da
 
 If a page fails, test the gateway (`curl http://127.0.0.1:3000/` by default), then `/api/<domain>/ready`, then inspect `docker compose logs <service>` and its migration job. A 502 normally means an unavailable upstream; a bind error means the configured gateway address/port is unavailable. Do not publish individual service ports as a diagnostic shortcut.
 
-Host Nginx owns public TLS/Basic Auth and proxies to the localhost gateway; [`../host-nginx-example.conf`](../host-nginx-example.conf) is an operator-applied example. Automated backup/restore is not implemented: operators must use an external PostgreSQL process and test restores independently until a supported workflow exists.
+Life OS supports loopback gateway behind host Nginx TLS/Basic Auth, or a WireGuard-bound gateway. The deployed WireGuard model trusts every allowed peer to call Dashboard, write APIs, and MCP without an application login; never expose it publicly or claim host-Nginx protection for it. Host Nginx, WireGuard peers, firewall, and DNS remain host-administration tasks and are never changed by repository commands. Gateway baseline limits, headers, proxy timeouts, and forwarded-header sanitisation are versioned here. Dashboard is same-origin; cookie/session auth needs Origin/CSRF protection before it is introduced. Automated backup/restore is not implemented: operators must use an external PostgreSQL process and test restores independently until a supported workflow exists.
 
 ## Safe verification on a deployed host
 
