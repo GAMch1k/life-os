@@ -1,6 +1,6 @@
 # Phase 5 verification
 
-The Inbox processor is tested as a constrained AI-to-MCP pipeline. Its routing corpus covers Russian task capture, German calendar capture, an explicit-account finance transaction, multiple actions, ambiguity, hostile prompt-like text, failed tool execution, and a completed-attempt retry. Tests assert the MCP tool sequence, audit outcome, and resolution behavior without allowing the test model to mutate a real user database.
+The Inbox processor is tested as a constrained AI-to-MCP pipeline. Its routing corpus covers Russian task capture, German calendar capture, an explicit-account finance transaction, multiple actions, ambiguity, hostile prompt-like text, failed tool execution, a completed-attempt retry, and a Voice-originated transcript that reaches a Task through MCP. Tests assert the MCP tool sequence, audit outcome, and resolution behavior without allowing the test model to mutate a real user database.
 
 Run the corpus with:
 
