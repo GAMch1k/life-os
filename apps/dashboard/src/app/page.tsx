@@ -3,7 +3,6 @@ import {
   CheckSquare2,
   Inbox,
   Landmark,
-  Mic,
   Plus,
   type LucideIcon,
 } from "lucide-react";
@@ -13,6 +12,7 @@ import { FinanceSummary } from "@/components/finance-summary";
 import { InboxSummary } from "@/components/inbox-summary";
 import { CalendarSummary } from "@/components/calendar-summary";
 import { TasksSummary } from "@/components/tasks-summary";
+import { VoiceCapture } from "@/components/voice-capture";
 import { getCalendarSummary } from "@/lib/calendar-summary";
 import { getFinanceSummary } from "@/lib/finance-summary";
 import { getInboxSummary } from "@/lib/inbox-summary";
@@ -90,15 +90,7 @@ export default async function Home() {
             </div>
           </div>
           <div className="p-5 sm:p-6">
-            <div className="flex items-center gap-3">
-              <span className="bg-background flex size-10 items-center justify-center rounded-xl border shadow-sm">
-                <Mic aria-hidden="true" className="size-4" />
-              </span>
-              <div>
-                <p className="text-sm font-medium">Voice capture</p>
-                <p className="text-muted-foreground text-xs">Planned control</p>
-              </div>
-            </div>
+            <VoiceCapture />
           </div>
         </div>
       </section>
