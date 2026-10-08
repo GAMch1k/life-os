@@ -16,8 +16,6 @@ may remove only those disposable resources. `make verify-isolation` also
 creates temporary sentinel files in normal PostgreSQL, Voice-audio, and
 Whisper-model volumes, runs the disposable smoke suite, and confirms the
 sentinels remain before cleaning them up.
-# Deployment
-
 ## Codex Inbox processor authentication
 
 Automatic Inbox processing is a normal Compose service and uses the host user's existing authenticated Codex CLI session. Before `docker compose up --build`, configure the ignored `.env` without copying its contents into Git:
