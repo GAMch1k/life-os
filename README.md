@@ -131,6 +131,8 @@ If port 3000 is already in use, set `LIFE_OS_GATEWAY_PORT` for both commands
 
 To expose the single gateway through WireGuard, bind it to the server's
 WireGuard address: `LIFE_OS_GATEWAY_BIND_ADDRESS=10.66.66.1 make life-up`.
+This exposes Dashboard, write APIs, and MCP to every allowed WireGuard peer;
+never bind it to a public/LAN address without an authenticated edge.
 
 ## Architectural boundaries
 
