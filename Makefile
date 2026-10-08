@@ -35,6 +35,7 @@ action-idempotency-smoke: infra-env
 	./tools/smoke-action-idempotency
 
 voice-lease-recovery-smoke: infra-env
+	docker compose build voice voice-worker
 	./tools/smoke-voice-lease-recovery
 
 infra-down:

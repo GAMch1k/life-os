@@ -69,6 +69,6 @@ done
 [[ "$state" == succeeded ]] || { echo "voice recovery smoke: final state=$state" >&2; exit 1; }
 inbox_id=$(jq -r '.inboxItemId' <<<"$job")
 [[ "$inbox_id" != null && -n "$inbox_id" ]] || { echo "voice recovery smoke: no Inbox item" >&2; exit 1; }
-count=$("${compose[@]}" exec -T postgres sh -c "psql -U \"\$POSTGRES_USER\" -d inbox_db -Atqc \"SELECT count(*) FROM inbox_items WHERE dedupe_key = 'voice:$job_id'\"")
+count=$("${compose[@]}" exec -T postgres sh -c "psql -U \"\$POSTGRES_USER\" -d inbox_db -Atqc \"SELECT count(*) FROM inbox_items WHERE source_dedupe_key = 'voice:$job_id'\"")
 [[ "$count" == 1 ]] || { echo "voice recovery smoke: Inbox dedupe count=$count" >&2; exit 1; }
 echo "voice lease crash/restart recovery smoke passed"
