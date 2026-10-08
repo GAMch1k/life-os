@@ -211,6 +211,8 @@ services:
       WHISPER_SERVICE_URL: http://whisper:8080
       VOICE_WORKER_POLL_MILLIS: ${LIFE_OS_VOICE_WORKER_POLL_MILLIS:-1000}
       VOICE_WORKER_MAX_ATTEMPTS: ${LIFE_OS_VOICE_WORKER_MAX_ATTEMPTS:-3}
+      VOICE_WORKER_LEASE_SECONDS: ${LIFE_OS_VOICE_WORKER_LEASE_SECONDS:-120}
+      VOICE_WORKER_RETRY_BACKOFF_SECONDS: ${LIFE_OS_VOICE_WORKER_RETRY_BACKOFF_SECONDS:-60}
     volumes: ["voice-audio:/var/lib/lifeos/voice"]
     depends_on:
       voice-migrate: {condition: service_completed_successfully}

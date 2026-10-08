@@ -2,13 +2,17 @@
 
 Voice ingestion is an asynchronous workflow: `POST /v1/audio-jobs` stores an audio object and returns a `202` job immediately; clients poll `GET /v1/audio-jobs/{jobId}`. A worker claims queued/retryable jobs, invokes self-hosted `whisper.cpp`, persists the transcript, and creates exactly one Inbox item before marking the job `succeeded`.
 
-Jobs move through `queued` → `processing` → `succeeded`. Transient worker errors become `retryable` with a scheduled `availableAt`; exhausted retries become `failed`. Uploads and completed-job audio are retained only until `expiresAt`, after which cleanup marks the job `expired` and removes the object. A unique job-to-Inbox linkage prevents a retry from producing duplicate captures.
+Jobs move through `queued` → `processing` → `succeeded`. Transient worker errors become `retryable` with a scheduled `availableAt`; exhausted retries become the observable terminal `failed` state. Uploads and completed-job audio are retained only until `expiresAt`, after which cleanup marks the job `expired` and removes the object. A unique job-to-Inbox linkage prevents a retry from producing duplicate captures.
 
 The API exposes source, audit timestamps, transcript, error summary, attempts, and the resulting Inbox ID. Browser capture may poll; it must never wait for transcription synchronously. P6-03 implements upload storage, claiming, retries, and worker execution; P6-02 supplies the private whisper worker. Android and Wear OS capture clients remain separate repositories.
 
 ## Job processing and recovery
 
-Audio is stored in the private `voice-audio` volume and a job is committed as `queued` before the upload endpoint returns `202`. The worker claims rows with `FOR UPDATE SKIP LOCKED`, so process restarts leave a recoverable queued/retryable record instead of losing an upload. It calls the private Whisper worker and captures the transcript using a deterministic `voice:<job-id>` Inbox dedupe key. Consequently, a retry after an incomplete handoff returns the original Inbox item instead of creating another capture.
+Audio is stored in the private `voice-audio` volume and a job is committed as `queued` before the upload endpoint returns `202`. The worker claims rows with `FOR UPDATE SKIP LOCKED` and records its worker identity, lease expiry, and heartbeat. It renews the lease while Whisper and Inbox handoff run. On every worker start/poll, expired `processing` leases are reclaimed without a manual database edit: jobs below the configured attempt limit return to `retryable` after backoff, while exhausted jobs become `failed`. A stale worker cannot complete or retry a job after it loses its lease.
+
+`VOICE_WORKER_LEASE_SECONDS` defaults to `120`; `VOICE_WORKER_RETRY_BACKOFF_SECONDS` defaults to `60`; and `VOICE_WORKER_MAX_ATTEMPTS` defaults to `3`. Ordinary retry delay grows linearly by attempt count, while an abandoned lease uses the configured base delay before the next worker can claim it. Cleanup never removes audio for an actively leased `processing` job, even if its retention deadline has elapsed; it can expire it only after the lease is no longer active.
+
+The worker calls the private Whisper service and captures the transcript using a deterministic `voice:<job-id>` Inbox dedupe key. Consequently, a reclaim/retry after an incomplete handoff returns the original Inbox item instead of creating another capture.
 
 Transient errors record `retryable` plus an error summary and delayed availability; the configured maximum changes that state to `failed`. Expired audio is removed from the private volume and its job moves to `expired`, preserving audit information but removing the transcript/audio content.
 

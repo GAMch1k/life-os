@@ -71,16 +71,44 @@ func process(ctx context.Context, q *store.Queries, files storage.Files, client 
 	if err != nil {
 		return err
 	}
-	transcript, err := transcribe(ctx, client, cfg.WhisperURL, files.Path(job.ObjectKey), job.ContentType)
+	workCtx, stopLease := maintainLease(ctx, q, job.ID, cfg, workerID)
+	defer stopLease()
+	transcript, err := transcribe(workCtx, client, cfg.WhisperURL, files.Path(job.ObjectKey), job.ContentType)
 	if err != nil {
 		return fail(ctx, q, job, cfg, workerID, err)
 	}
-	inboxID, err := capture(ctx, client, cfg.InboxURL, job, transcript)
+	inboxID, err := capture(workCtx, client, cfg.InboxURL, job, transcript)
 	if err != nil {
 		return fail(ctx, q, job, cfg, workerID, err)
 	}
 	_, err = q.CompleteAudioJob(ctx, store.CompleteAudioJobParams{ID: job.ID, Transcript: &transcript, InboxItemID: inboxID, LeaseOwner: &workerID})
 	return err
+}
+func maintainLease(ctx context.Context, q *store.Queries, jobID pgtype.UUID, cfg serviceconfig.Config, workerID string) (context.Context, func()) {
+	workCtx, cancel := context.WithCancel(ctx)
+	stop := make(chan struct{})
+	interval := time.Duration(cfg.WorkerLeaseSeconds) * time.Second / 3
+	if interval < time.Second {
+		interval = time.Second
+	}
+	go func() {
+		tick := time.NewTicker(interval)
+		defer tick.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-workCtx.Done():
+				return
+			case <-tick.C:
+				if _, err := q.RenewAudioJobLease(ctx, store.RenewAudioJobLeaseParams{ID: jobID, LeaseOwner: &workerID, LeaseSeconds: int32(cfg.WorkerLeaseSeconds)}); err != nil {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	return workCtx, func() { close(stop); cancel() }
 }
 func reclaim(ctx context.Context, q *store.Queries, cfg serviceconfig.Config) error {
 	message := "worker lease expired before completion"

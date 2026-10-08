@@ -18,6 +18,7 @@ type Querier interface {
 	GetAudioJob(ctx context.Context, id pgtype.UUID) (AudioJob, error)
 	ListExpiredAudioJobs(ctx context.Context, limit int32) ([]AudioJob, error)
 	ReclaimExpiredAudioJobs(ctx context.Context, arg ReclaimExpiredAudioJobsParams) ([]AudioJob, error)
+	RenewAudioJobLease(ctx context.Context, arg RenewAudioJobLeaseParams) (AudioJob, error)
 	RetryAudioJob(ctx context.Context, arg RetryAudioJobParams) (AudioJob, error)
 }
 

@@ -15,6 +15,11 @@ WHERE id=(SELECT id FROM candidate) RETURNING *;
 UPDATE audio_jobs SET status='succeeded', transcript=$2, inbox_item_id=$3, error_summary=NULL, completed_at=now(),
   lease_owner=NULL, lease_expires_at=NULL, last_heartbeat_at=now(), updated_at=now()
 WHERE id=$1 AND status='processing' AND inbox_item_id IS NULL AND lease_owner=$4 AND lease_expires_at > now() RETURNING *;
+-- name: RenewAudioJobLease :one
+UPDATE audio_jobs SET lease_expires_at=now() + (sqlc.arg(lease_seconds)::integer * INTERVAL '1 second'),
+  last_heartbeat_at=now(), updated_at=now()
+WHERE id=sqlc.arg(id) AND status='processing' AND lease_owner=sqlc.arg(lease_owner) AND lease_expires_at > now()
+RETURNING *;
 -- name: RetryAudioJob :one
 UPDATE audio_jobs SET status=$2, error_summary=$3, available_at=$4, lease_owner=NULL, lease_expires_at=NULL, updated_at=now()
 WHERE id=$1 AND status='processing' AND lease_owner=$5 AND lease_expires_at > now() RETURNING *;

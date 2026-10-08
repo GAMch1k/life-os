@@ -315,6 +315,46 @@ func (q *Queries) ReclaimExpiredAudioJobs(ctx context.Context, arg ReclaimExpire
 	return items, nil
 }
 
+const renewAudioJobLease = `-- name: RenewAudioJobLease :one
+UPDATE audio_jobs SET lease_expires_at=now() + ($1::integer * INTERVAL '1 second'),
+  last_heartbeat_at=now(), updated_at=now()
+WHERE id=$2 AND status='processing' AND lease_owner=$3 AND lease_expires_at > now()
+RETURNING id, source, source_metadata, object_key, content_type, byte_size, status, transcript, inbox_item_id, attempt_count, error_summary, available_at, created_at, updated_at, completed_at, expires_at, lease_owner, lease_expires_at, last_heartbeat_at
+`
+
+type RenewAudioJobLeaseParams struct {
+	LeaseSeconds int32
+	ID           pgtype.UUID
+	LeaseOwner   *string
+}
+
+func (q *Queries) RenewAudioJobLease(ctx context.Context, arg RenewAudioJobLeaseParams) (AudioJob, error) {
+	row := q.db.QueryRow(ctx, renewAudioJobLease, arg.LeaseSeconds, arg.ID, arg.LeaseOwner)
+	var i AudioJob
+	err := row.Scan(
+		&i.ID,
+		&i.Source,
+		&i.SourceMetadata,
+		&i.ObjectKey,
+		&i.ContentType,
+		&i.ByteSize,
+		&i.Status,
+		&i.Transcript,
+		&i.InboxItemID,
+		&i.AttemptCount,
+		&i.ErrorSummary,
+		&i.AvailableAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CompletedAt,
+		&i.ExpiresAt,
+		&i.LeaseOwner,
+		&i.LeaseExpiresAt,
+		&i.LastHeartbeatAt,
+	)
+	return i, err
+}
+
 const retryAudioJob = `-- name: RetryAudioJob :one
 UPDATE audio_jobs SET status=$2, error_summary=$3, available_at=$4, lease_owner=NULL, lease_expires_at=NULL, updated_at=now()
 WHERE id=$1 AND status='processing' AND lease_owner=$5 AND lease_expires_at > now() RETURNING id, source, source_metadata, object_key, content_type, byte_size, status, transcript, inbox_item_id, attempt_count, error_summary, available_at, created_at, updated_at, completed_at, expires_at, lease_owner, lease_expires_at, last_heartbeat_at
