@@ -9,19 +9,21 @@ import (
 )
 
 type Event struct {
-	ID                  pgtype.UUID
-	Title               string
-	Description         *string
-	AllDay              bool
-	StartAt             pgtype.Timestamptz
-	EndAt               pgtype.Timestamptz
-	StartDate           pgtype.Date
-	EndDate             pgtype.Date
-	RecurrenceFrequency *string
-	RecurrenceInterval  *int32
-	RecurrenceUntil     pgtype.Timestamptz
-	ExternalProvider    *string
-	ExternalID          *string
-	CreatedAt           pgtype.Timestamptz
-	UpdatedAt           pgtype.Timestamptz
+	ID                       pgtype.UUID
+	Title                    string
+	Description              *string
+	AllDay                   bool
+	StartAt                  pgtype.Timestamptz
+	EndAt                    pgtype.Timestamptz
+	StartDate                pgtype.Date
+	EndDate                  pgtype.Date
+	RecurrenceFrequency      *string
+	RecurrenceInterval       *int32
+	RecurrenceUntil          pgtype.Timestamptz
+	ExternalProvider         *string
+	ExternalID               *string
+	CreatedAt                pgtype.Timestamptz
+	UpdatedAt                pgtype.Timestamptz
+	AutomationIdempotencyKey *string
+	AutomationPayloadHash    *string
 }

@@ -64,22 +64,25 @@ func (q *Queries) CreateFinancialCategory(ctx context.Context, arg CreateFinanci
 const createTransaction = `-- name: CreateTransaction :one
 INSERT INTO transactions (
     account_id, category_id, amount_minor, currency, occurred_on, note,
-    import_source, import_external_id, source_metadata
+    import_source, import_external_id, source_metadata, automation_idempotency_key, automation_payload_hash
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-RETURNING id, account_id, category_id, amount_minor, currency, occurred_on, note, import_source, import_external_id, source_metadata, created_at, updated_at
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+ON CONFLICT (automation_idempotency_key) WHERE automation_idempotency_key IS NOT NULL DO UPDATE SET automation_idempotency_key = EXCLUDED.automation_idempotency_key
+RETURNING id, account_id, category_id, amount_minor, currency, occurred_on, note, import_source, import_external_id, source_metadata, created_at, updated_at, automation_idempotency_key, automation_payload_hash
 `
 
 type CreateTransactionParams struct {
-	AccountID        pgtype.UUID
-	CategoryID       pgtype.UUID
-	AmountMinor      int64
-	Currency         string
-	OccurredOn       pgtype.Date
-	Note             *string
-	ImportSource     *string
-	ImportExternalID *string
-	SourceMetadata   []byte
+	AccountID                pgtype.UUID
+	CategoryID               pgtype.UUID
+	AmountMinor              int64
+	Currency                 string
+	OccurredOn               pgtype.Date
+	Note                     *string
+	ImportSource             *string
+	ImportExternalID         *string
+	SourceMetadata           []byte
+	AutomationIdempotencyKey *string
+	AutomationPayloadHash    *string
 }
 
 func (q *Queries) CreateTransaction(ctx context.Context, arg CreateTransactionParams) (Transaction, error) {
@@ -93,6 +96,8 @@ func (q *Queries) CreateTransaction(ctx context.Context, arg CreateTransactionPa
 		arg.ImportSource,
 		arg.ImportExternalID,
 		arg.SourceMetadata,
+		arg.AutomationIdempotencyKey,
+		arg.AutomationPayloadHash,
 	)
 	var i Transaction
 	err := row.Scan(
@@ -108,6 +113,8 @@ func (q *Queries) CreateTransaction(ctx context.Context, arg CreateTransactionPa
 		&i.SourceMetadata,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AutomationIdempotencyKey,
+		&i.AutomationPayloadHash,
 	)
 	return i, err
 }
@@ -173,7 +180,7 @@ func (q *Queries) GetMonthlySpendingByCategory(ctx context.Context, monthStart p
 }
 
 const getTransactionByImportIdentity = `-- name: GetTransactionByImportIdentity :one
-SELECT id, account_id, category_id, amount_minor, currency, occurred_on, note, import_source, import_external_id, source_metadata, created_at, updated_at FROM transactions
+SELECT id, account_id, category_id, amount_minor, currency, occurred_on, note, import_source, import_external_id, source_metadata, created_at, updated_at, automation_idempotency_key, automation_payload_hash FROM transactions
 WHERE import_source = $1 AND import_external_id = $2
 `
 
@@ -198,6 +205,8 @@ func (q *Queries) GetTransactionByImportIdentity(ctx context.Context, arg GetTra
 		&i.SourceMetadata,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AutomationIdempotencyKey,
+		&i.AutomationPayloadHash,
 	)
 	return i, err
 }
@@ -282,7 +291,7 @@ func (q *Queries) ListFinancialCategories(ctx context.Context) ([]FinancialCateg
 }
 
 const listTransactions = `-- name: ListTransactions :many
-SELECT id, account_id, category_id, amount_minor, currency, occurred_on, note, import_source, import_external_id, source_metadata, created_at, updated_at FROM transactions
+SELECT id, account_id, category_id, amount_minor, currency, occurred_on, note, import_source, import_external_id, source_metadata, created_at, updated_at, automation_idempotency_key, automation_payload_hash FROM transactions
 WHERE ($1::uuid IS NULL OR account_id = $1::uuid)
   AND ($2::uuid IS NULL OR category_id = $2::uuid)
   AND ($3::date IS NULL OR occurred_on >= $3::date)
@@ -327,6 +336,8 @@ func (q *Queries) ListTransactions(ctx context.Context, arg ListTransactionsPara
 			&i.SourceMetadata,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.AutomationIdempotencyKey,
+			&i.AutomationPayloadHash,
 		); err != nil {
 			return nil, err
 		}

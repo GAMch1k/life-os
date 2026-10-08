@@ -40,12 +40,14 @@ func TestFinanceQueriesPersistMinorUnitsAndImportIdentity(t *testing.T) {
 		_, _ = pool.Exec(ctx, "DROP SCHEMA "+schema+" CASCADE")
 	})
 
-	migration, err := os.ReadFile(filepath.Join("..", "..", "db", "migrations", "000001_template_baseline.up.sql"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, string(migration)); err != nil {
-		t.Fatalf("apply migration: %v", err)
+	for _, name := range []string{"000001_template_baseline.up.sql", "000002_finance_ledger_compat.up.sql", "000003_automation_idempotency.up.sql"} {
+		migration, err := os.ReadFile(filepath.Join("..", "..", "db", "migrations", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, string(migration)); err != nil {
+			t.Fatalf("apply migration %s: %v", name, err)
+		}
 	}
 
 	queries := generated.New(pool)
@@ -106,5 +108,16 @@ func TestFinanceQueriesPersistMinorUnitsAndImportIdentity(t *testing.T) {
 		ImportSource: &source, ImportExternalID: &externalID, SourceMetadata: []byte(`{}`),
 	}); err == nil {
 		t.Fatal("duplicate import identity was accepted")
+	}
+	key, hash := "processor-transaction-1", "payload-a"
+	first, err := queries.CreateTransaction(ctx, generated.CreateTransactionParams{AccountID: account.ID, AmountMinor: -125, Currency: "USD", OccurredOn: pgtype.Date{Time: time.Date(2026, time.October, 6, 0, 0, 0, 0, time.UTC), Valid: true}, SourceMetadata: []byte(`{}`), AutomationIdempotencyKey: &key, AutomationPayloadHash: &hash})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Replay the committed owner mutation as a processor would after crashing
+	// before it persisted the successful Inbox attempt.
+	replayed, err := queries.CreateTransaction(ctx, generated.CreateTransactionParams{AccountID: account.ID, AmountMinor: -125, Currency: "USD", OccurredOn: pgtype.Date{Time: time.Date(2026, time.October, 6, 0, 0, 0, 0, time.UTC), Valid: true}, SourceMetadata: []byte(`{}`), AutomationIdempotencyKey: &key, AutomationPayloadHash: &hash})
+	if err != nil || replayed.ID != first.ID {
+		t.Fatalf("replayed transaction = %#v, err = %v; want %s", replayed, err, first.ID.String())
 	}
 }

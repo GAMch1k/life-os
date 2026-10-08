@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Exercises the durable owner boundary used to recover from a processor crash
+# after an owner has committed, but before Inbox attempt bookkeeping succeeds.
+# It deliberately discards each first response and replays the exact request.
+compose=(./tools/verify-compose)
+cleanup() { "${compose[@]}" down --volumes --remove-orphans >/dev/null; }
+trap cleanup EXIT
+
+"${compose[@]}" up --detach --no-build
+gateway=http://127.0.0.1:13001
+
+wait_ready() {
+  local url=$1
+  for _ in $(seq 1 45); do
+    curl --fail --silent "$url/ready" >/dev/null && return
+    sleep 1
+  done
+  echo "idempotency smoke: service not ready: $url" >&2
+  return 1
+}
+for service in "$gateway/api/tasks" "$gateway/api/calendar" "$gateway/api/finance"; do
+  wait_ready "$service"
+done
+
+replay() {
+  local endpoint=$1 key=$2 body=$3
+  local first second first_id second_id
+  first=$(curl --fail --silent -H 'content-type: application/json' -H "Idempotency-Key: $key" -d "$body" "$endpoint")
+  # The processor's successful owner response has been lost at this point.
+  second=$(curl --fail --silent -H 'content-type: application/json' -H "Idempotency-Key: $key" -d "$body" "$endpoint")
+  first_id=$(jq -r '.id' <<<"$first")
+  second_id=$(jq -r '.id' <<<"$second")
+  [[ "$first_id" != null && "$first_id" == "$second_id" ]] || {
+    echo "idempotency smoke: replay produced a different record for $endpoint" >&2
+    return 1
+  }
+}
+
+stamp=$(date +%s)
+replay "$gateway/api/tasks/v1/tasks" "p7-task-$stamp" "{\"title\":\"P7 task crash replay $stamp\"}"
+replay "$gateway/api/calendar/v1/events" "p7-event-$stamp" "{\"title\":\"P7 event crash replay $stamp\",\"allDay\":true,\"startDate\":\"2026-10-08\",\"endDate\":\"2026-10-08\"}"
+
+# Finance has no public account-create endpoint; seed only the disposable
+# database used by verify-compose, then exercise its public transaction API.
+account_id=$("${compose[@]}" exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d finance_db -Atqc "INSERT INTO accounts (name, currency, opening_balance_minor) VALUES ('"'"'P7 idempotency smoke'"'"', '"'"'USD'"'"', 0) RETURNING id"')
+replay "$gateway/api/finance/v1/transactions" "p7-finance-$stamp" "{\"accountId\":\"$account_id\",\"amount\":{\"amount\":-125,\"currency\":\"USD\"},\"occurredOn\":\"2026-10-08\",\"note\":\"P7 finance crash replay\"}"
+
+echo "action idempotency crash-replay smoke passed"

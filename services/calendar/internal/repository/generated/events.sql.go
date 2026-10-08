@@ -12,23 +12,26 @@ import (
 )
 
 const createEvent = `-- name: CreateEvent :one
-INSERT INTO events (title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at
+INSERT INTO events (title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, automation_idempotency_key, automation_payload_hash)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+ON CONFLICT (automation_idempotency_key) WHERE automation_idempotency_key IS NOT NULL DO UPDATE SET automation_idempotency_key = EXCLUDED.automation_idempotency_key RETURNING id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at, automation_idempotency_key, automation_payload_hash
 `
 
 type CreateEventParams struct {
-	Title               string
-	Description         *string
-	AllDay              bool
-	StartAt             pgtype.Timestamptz
-	EndAt               pgtype.Timestamptz
-	StartDate           pgtype.Date
-	EndDate             pgtype.Date
-	RecurrenceFrequency *string
-	RecurrenceInterval  *int32
-	RecurrenceUntil     pgtype.Timestamptz
-	ExternalProvider    *string
-	ExternalID          *string
+	Title                    string
+	Description              *string
+	AllDay                   bool
+	StartAt                  pgtype.Timestamptz
+	EndAt                    pgtype.Timestamptz
+	StartDate                pgtype.Date
+	EndDate                  pgtype.Date
+	RecurrenceFrequency      *string
+	RecurrenceInterval       *int32
+	RecurrenceUntil          pgtype.Timestamptz
+	ExternalProvider         *string
+	ExternalID               *string
+	AutomationIdempotencyKey *string
+	AutomationPayloadHash    *string
 }
 
 func (q *Queries) CreateEvent(ctx context.Context, arg CreateEventParams) (Event, error) {
@@ -45,6 +48,8 @@ func (q *Queries) CreateEvent(ctx context.Context, arg CreateEventParams) (Event
 		arg.RecurrenceUntil,
 		arg.ExternalProvider,
 		arg.ExternalID,
+		arg.AutomationIdempotencyKey,
+		arg.AutomationPayloadHash,
 	)
 	var i Event
 	err := row.Scan(
@@ -63,6 +68,8 @@ func (q *Queries) CreateEvent(ctx context.Context, arg CreateEventParams) (Event
 		&i.ExternalID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AutomationIdempotencyKey,
+		&i.AutomationPayloadHash,
 	)
 	return i, err
 }
@@ -80,7 +87,7 @@ func (q *Queries) DeleteEvent(ctx context.Context, id pgtype.UUID) (int64, error
 }
 
 const getEvent = `-- name: GetEvent :one
-SELECT id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at FROM events WHERE id = $1
+SELECT id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at, automation_idempotency_key, automation_payload_hash FROM events WHERE id = $1
 `
 
 func (q *Queries) GetEvent(ctx context.Context, id pgtype.UUID) (Event, error) {
@@ -102,12 +109,14 @@ func (q *Queries) GetEvent(ctx context.Context, id pgtype.UUID) (Event, error) {
 		&i.ExternalID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AutomationIdempotencyKey,
+		&i.AutomationPayloadHash,
 	)
 	return i, err
 }
 
 const listEvents = `-- name: ListEvents :many
-SELECT id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at FROM events WHERE (all_day AND start_date <= $1::date AND end_date >= $2::date) OR (NOT all_day AND start_at < $3::timestamptz AND end_at > $4::timestamptz) ORDER BY COALESCE(start_at, start_date::timestamptz) LIMIT $5
+SELECT id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at, automation_idempotency_key, automation_payload_hash FROM events WHERE (all_day AND start_date <= $1::date AND end_date >= $2::date) OR (NOT all_day AND start_at < $3::timestamptz AND end_at > $4::timestamptz) ORDER BY COALESCE(start_at, start_date::timestamptz) LIMIT $5
 `
 
 type ListEventsParams struct {
@@ -149,6 +158,8 @@ func (q *Queries) ListEvents(ctx context.Context, arg ListEventsParams) ([]Event
 			&i.ExternalID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.AutomationIdempotencyKey,
+			&i.AutomationPayloadHash,
 		); err != nil {
 			return nil, err
 		}
@@ -161,7 +172,7 @@ func (q *Queries) ListEvents(ctx context.Context, arg ListEventsParams) ([]Event
 }
 
 const updateEvent = `-- name: UpdateEvent :one
-UPDATE events SET title=COALESCE($1,title), description=COALESCE($2,description), all_day=COALESCE($3,all_day), start_at=COALESCE($4,start_at), end_at=COALESCE($5,end_at), start_date=COALESCE($6,start_date), end_date=COALESCE($7,end_date), recurrence_frequency=COALESCE($8,recurrence_frequency), recurrence_interval=COALESCE($9,recurrence_interval), recurrence_until=COALESCE($10,recurrence_until), updated_at=now() WHERE id=$11 RETURNING id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at
+UPDATE events SET title=COALESCE($1,title), description=COALESCE($2,description), all_day=COALESCE($3,all_day), start_at=COALESCE($4,start_at), end_at=COALESCE($5,end_at), start_date=COALESCE($6,start_date), end_date=COALESCE($7,end_date), recurrence_frequency=COALESCE($8,recurrence_frequency), recurrence_interval=COALESCE($9,recurrence_interval), recurrence_until=COALESCE($10,recurrence_until), updated_at=now() WHERE id=$11 RETURNING id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at, automation_idempotency_key, automation_payload_hash
 `
 
 type UpdateEventParams struct {
@@ -209,6 +220,8 @@ func (q *Queries) UpdateEvent(ctx context.Context, arg UpdateEventParams) (Event
 		&i.ExternalID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AutomationIdempotencyKey,
+		&i.AutomationPayloadHash,
 	)
 	return i, err
 }

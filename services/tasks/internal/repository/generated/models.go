@@ -9,14 +9,16 @@ import (
 )
 
 type Task struct {
-	ID                  pgtype.UUID
-	Title               string
-	Notes               *string
-	DueAt               pgtype.Timestamptz
-	CompletedAt         pgtype.Timestamptz
-	RecurrenceFrequency *string
-	RecurrenceInterval  *int32
-	RecurrenceUntil     pgtype.Timestamptz
-	CreatedAt           pgtype.Timestamptz
-	UpdatedAt           pgtype.Timestamptz
+	ID                       pgtype.UUID
+	Title                    string
+	Notes                    *string
+	DueAt                    pgtype.Timestamptz
+	CompletedAt              pgtype.Timestamptz
+	RecurrenceFrequency      *string
+	RecurrenceInterval       *int32
+	RecurrenceUntil          pgtype.Timestamptz
+	CreatedAt                pgtype.Timestamptz
+	UpdatedAt                pgtype.Timestamptz
+	AutomationIdempotencyKey *string
+	AutomationPayloadHash    *string
 }

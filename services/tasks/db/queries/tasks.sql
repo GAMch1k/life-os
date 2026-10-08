@@ -1,6 +1,7 @@
 -- name: CreateTask :one
-INSERT INTO tasks (title, notes, due_at, recurrence_frequency, recurrence_interval, recurrence_until)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO tasks (title, notes, due_at, recurrence_frequency, recurrence_interval, recurrence_until, automation_idempotency_key, automation_payload_hash)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+ON CONFLICT (automation_idempotency_key) WHERE automation_idempotency_key IS NOT NULL DO UPDATE SET automation_idempotency_key = EXCLUDED.automation_idempotency_key
 RETURNING *;
 
 -- name: GetTask :one
