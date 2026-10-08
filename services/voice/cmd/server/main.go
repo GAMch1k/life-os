@@ -39,7 +39,7 @@ func run(ctx context.Context) error {
 		httpserver.WithLogger(logger),
 		httpserver.WithReadinessCheck(pool.Ping),
 	)
-	generated.RegisterHandlers(app, api.NewHandler(repository.New(pool), storage.Files{Root: cfg.StorageDir}, time.Duration(cfg.RetentionHours)*time.Hour))
+	generated.RegisterHandlers(app, api.NewHandler(repository.New(pool), storage.Files{Root: cfg.StorageDir}, time.Duration(cfg.RetentionHours)*time.Hour, cfg.MaxUploadBytes))
 	app.OnShutdown(database.ClosePool(pool))
 
 	return app.Run(fmt.Sprintf(":%d", cfg.Port))

@@ -18,6 +18,7 @@ type Config struct {
 	DatabaseURL               string `env:"DATABASE_URL" required:"true"`
 	StorageDir                string `env:"VOICE_STORAGE_DIR" default:"/var/lib/lifeos/voice"`
 	RetentionHours            int    `env:"VOICE_RETENTION_HOURS" default:"168"`
+	MaxUploadBytes            int64  `env:"VOICE_MAX_UPLOAD_BYTES" default:"26214400"`
 	InboxURL                  string `env:"INBOX_SERVICE_URL" default:"http://inbox:8080"`
 	WhisperURL                string `env:"WHISPER_SERVICE_URL" default:"http://whisper:8080"`
 	WorkerPollMillis          int    `env:"VOICE_WORKER_POLL_MILLIS" default:"1000"`
@@ -56,7 +57,7 @@ func (c Config) Validate() error {
 	if c.Port < 1 || c.Port > 65535 {
 		validationErrors = append(validationErrors, fmt.Errorf("PORT must be between 1 and 65535"))
 	}
-	if c.StorageDir == "" || c.RetentionHours < 1 {
+	if c.StorageDir == "" || c.RetentionHours < 1 || c.MaxUploadBytes < 1 {
 		validationErrors = append(validationErrors, fmt.Errorf("VOICE_STORAGE_DIR and positive VOICE_RETENTION_HOURS are required"))
 	}
 	if c.InboxURL == "" || c.WhisperURL == "" || c.WorkerPollMillis < 100 || c.WorkerMaxAttempts < 1 || c.WorkerLeaseSeconds < 1 || c.WorkerRetryBackoffSeconds < 1 {
