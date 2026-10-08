@@ -51,6 +51,7 @@ export function VoiceCapture() {
       return;
     }
     try {
+      setJob(undefined);
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       chunks.current = [];
       const next = new MediaRecorder(stream);
