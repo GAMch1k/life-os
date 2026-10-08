@@ -36,6 +36,7 @@ export function FinanceImport() {
         {
           body: await file.text(),
           headers: { "content-type": "text/csv" },
+          bodySerializer: (body) => body as string,
         },
       );
       if (requestError || !data) {
