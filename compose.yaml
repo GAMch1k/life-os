@@ -104,7 +104,7 @@ services:
     restart: unless-stopped
 
   mcp:
-    build: {context: ., dockerfile: services/mcp/Dockerfile}
+    build: {context: ., dockerfile: services/mcp/Dockerfile, target: service}
     environment:
       SERVICE_NAME: mcp
       PORT: 8080
@@ -120,6 +120,43 @@ services:
       calendar: {condition: service_started}
     networks: [backend]
     restart: unless-stopped
+
+  processor:
+    build: {context: ., dockerfile: services/mcp/Dockerfile, target: processor}
+    environment:
+      MCP_SERVICE_URL: http://mcp:8080/mcp
+      LIFE_OS_CODEX_WORKDIR: /workspace
+      LIFE_OS_CODEX_MODEL: ${LIFE_OS_CODEX_MODEL:-gpt-5.6-terra}
+      LIFE_OS_PROCESSOR_POLL_MILLIS: ${LIFE_OS_PROCESSOR_POLL_MILLIS:-1000}
+      LIFE_OS_PROCESSOR_HEALTH_PORT: 8081
+      CODEX_HOME: /tmp/lifeos-codex
+    volumes:
+      - type: bind
+        source: ${LIFE_OS_CODEX_HOME_HOST_PATH:?Set LIFE_OS_CODEX_HOME_HOST_PATH in .env to your existing local Codex home}
+        target: /run/lifeos-codex-source
+        read_only: true
+    tmpfs:
+      - /tmp
+      - /var/lib/lifeos/codex
+    expose: ["8081"]
+    depends_on:
+      mcp: {condition: service_started}
+      inbox: {condition: service_started}
+      tasks: {condition: service_started}
+      calendar: {condition: service_started}
+      finance: {condition: service_started}
+    networks: [backend]
+    restart: unless-stopped
+    user: "${LIFE_OS_CODEX_RUNTIME_UID:?Set LIFE_OS_CODEX_RUNTIME_UID in .env to the UID which owns the local Codex session}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8081/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
 
   whisper:
     build: {context: services/voice/whisper, dockerfile: Dockerfile}

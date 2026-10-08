@@ -48,7 +48,7 @@ type financeAction struct {
 	Note       *string        `json:"note,omitempty"`
 }
 type Output struct {
-	Data json.RawMessage `json:"data"`
+	Data map[string]any `json:"data"`
 }
 
 func main() {
@@ -70,7 +70,8 @@ func run(ctx context.Context) error {
 			if e != nil {
 				return nil, Output{}, e
 			}
-			return nil, Output{Data: body}, nil
+			out, e := output(body)
+			return nil, out, e
 		})
 	}
 	add("finance_month_summary", "Get Finance monthly summary", cfg.FinanceURL, "/v1/summaries/monthly?")
@@ -88,7 +89,8 @@ func run(ctx context.Context) error {
 		if err != nil {
 			return nil, Output{}, err
 		}
-		return nil, Output{Data: body}, nil
+		out, err := output(body)
+		return nil, out, err
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "inbox_record_processing_attempt", Description: "Record an Inbox processing attempt result"}, func(ctx context.Context, _ *mcp.CallToolRequest, in inboxAction) (*mcp.CallToolResult, Output, error) {
 		return patch(ctx, hc, cfg.InboxURL, "/v1/inbox-items/"+in.ItemID+"/processing-attempts/"+in.AttemptID, map[string]interface{}{"status": in.Status, "actions": in.Actions, "errorSummary": in.ErrorSummary})
@@ -125,7 +127,8 @@ func post(ctx context.Context, hc *http.Client, baseURL, path string, input inte
 	if err != nil {
 		return nil, Output{}, err
 	}
-	return nil, Output{Data: body}, nil
+	out, err := output(body)
+	return nil, out, err
 }
 
 func patch(ctx context.Context, hc *http.Client, baseURL, path string, input interface{}) (*mcp.CallToolResult, Output, error) {
@@ -137,5 +140,14 @@ func patch(ctx context.Context, hc *http.Client, baseURL, path string, input int
 	if err != nil {
 		return nil, Output{}, err
 	}
-	return nil, Output{Data: body}, nil
+	out, err := output(body)
+	return nil, out, err
+}
+
+func output(body []byte) (Output, error) {
+	var data map[string]any
+	if err := json.Unmarshal(body, &data); err != nil {
+		return Output{}, fmt.Errorf("decode upstream JSON object: %w", err)
+	}
+	return Output{Data: data}, nil
 }

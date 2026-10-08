@@ -165,6 +165,9 @@ func (r Runner) recover(ctx context.Context, itemID, attemptID string, actions [
 	return r.record(ctx, itemID, attemptID, "retryable", actions, &reason)
 }
 func (r Runner) record(ctx context.Context, itemID, attemptID, status string, actions []map[string]any, summary *string) error {
+	if actions == nil {
+		actions = []map[string]any{}
+	}
 	_, err := r.Tools.Call(ctx, "inbox_record_processing_attempt", map[string]any{"itemId": itemID, "attemptId": attemptID, "status": status, "actions": actions, "errorSummary": summary})
 	return err
 }
