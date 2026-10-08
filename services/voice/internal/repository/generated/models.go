@@ -9,20 +9,23 @@ import (
 )
 
 type AudioJob struct {
-	ID             pgtype.UUID
-	Source         string
-	SourceMetadata []byte
-	ObjectKey      string
-	ContentType    string
-	ByteSize       int64
-	Status         string
-	Transcript     *string
-	InboxItemID    pgtype.UUID
-	AttemptCount   int32
-	ErrorSummary   *string
-	AvailableAt    pgtype.Timestamptz
-	CreatedAt      pgtype.Timestamptz
-	UpdatedAt      pgtype.Timestamptz
-	CompletedAt    pgtype.Timestamptz
-	ExpiresAt      pgtype.Timestamptz
+	ID              pgtype.UUID
+	Source          string
+	SourceMetadata  []byte
+	ObjectKey       string
+	ContentType     string
+	ByteSize        int64
+	Status          string
+	Transcript      *string
+	InboxItemID     pgtype.UUID
+	AttemptCount    int32
+	ErrorSummary    *string
+	AvailableAt     pgtype.Timestamptz
+	CreatedAt       pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
+	CompletedAt     pgtype.Timestamptz
+	ExpiresAt       pgtype.Timestamptz
+	LeaseOwner      *string
+	LeaseExpiresAt  pgtype.Timestamptz
+	LastHeartbeatAt pgtype.Timestamptz
 }
