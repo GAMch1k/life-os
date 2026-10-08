@@ -21,6 +21,13 @@ stack is deployed; they never use normal runtime volume names. They still
 create disposable test records, so do not point other tooling at port 13001
 while they run.
 
+`make browser-e2e` and `make processor-codex-actions-smoke` additionally use
+the processor container's read-only bind of the already authenticated local
+Codex session. They execute `codex exec` from that same runtime context; no API
+key or session material is copied into the repository. See
+[Phase 7 runtime verification](../verification/phase-7.md) for the exact
+browser, Codex, retry, and recovery checks.
+
 Create a service with `make create-service SERVICE=<kebab-name>`. To add/change an endpoint: edit that service OpenAPI first, regenerate with `make check`, implement its adapter/use case/repository, add tests, expose a gateway route only when appropriate, and update these docs. Create migrations with `make db-migration-new SERVICE=<name> NAME=<name>`; they are service-owned, ordered, and tested against disposable stacks.
 
 Ticket workflow: branch from primary, make small logical commits, run relevant end-of-ticket verification, update docs/Notion, merge, verify primary clean, then mark Done. See [data and code generation](data-and-codegen.md).
