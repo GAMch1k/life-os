@@ -32,7 +32,7 @@ processor-smoke: infra-env
 	./tools/smoke-processor-runtime
 
 browser-e2e: infra-env
-	LIFE_OS_E2E_URL=http://127.0.0.1:13001 npm --prefix apps/dashboard run test:e2e
+	./tools/browser-e2e
 
 action-idempotency-smoke: infra-env
 	./tools/smoke-action-idempotency
