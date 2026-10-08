@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Opt-in, disposable proof that the deployed processor uses the authenticated
+# local Codex CLI to route explicit Calendar and Finance captures. It does not
+# call the processor directly or inject actions through the MCP service.
+compose=(./tools/verify-compose)
+cleanup() { "${compose[@]}" down --volumes --remove-orphans >/dev/null; }
+trap cleanup EXIT
+
+"${compose[@]}" up --detach --no-build
+gateway=http://127.0.0.1:13001
+for service in inbox calendar finance; do
+  for _ in $(seq 1 60); do
+    curl --fail --silent "$gateway/api/$service/ready" >/dev/null && break
+    sleep 1
+  done
+  curl --fail --silent "$gateway/api/$service/ready" >/dev/null
+done
+
+account_id=$("${compose[@]}" exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d finance_db -Atqc "INSERT INTO accounts (name,currency,opening_balance_minor) VALUES ('"'"'P7 Codex capture account'"'"','"'"'USD'"'"',0) RETURNING id"')
+stamp=$(date +%s)
+calendar_title="P7 Codex calendar $stamp"
+finance_note="P7 Codex finance $stamp"
+
+capture() {
+  local content=$1
+  curl --fail --silent -H 'content-type: application/json' \
+    --data "$(jq -nc --arg content "$content" '{content:$content,source:"web",sourceMetadata:{verification:"p7-09-codex-actions"}}')" \
+    "$gateway/api/inbox/v1/inbox-items" | jq -r '.id'
+}
+
+wait_for_action() {
+  local item_id=$1 tool=$2
+  for _ in $(seq 1 90); do
+    attempts=$(curl --fail --silent "$gateway/api/inbox/v1/inbox-items/$item_id/processing-attempts")
+    if jq -e --arg tool "$tool" '.items | length == 1 and .[0].status == "processed" and (. [0].actions | length) == 1 and .[0].actions[0].tool == $tool' >/dev/null <<<"$attempts"; then
+      return
+    fi
+    sleep 2
+  done
+  echo "Codex action smoke: $tool was not automatically processed for $item_id" >&2
+  return 1
+}
+
+calendar_id=$(capture "Create an all-day calendar event titled $calendar_title on 2026-10-12.")
+wait_for_action "$calendar_id" calendar_create
+curl --fail --silent "$gateway/api/calendar/v1/events?from=2026-10-12T00:00:00Z&to=2026-10-13T00:00:00Z" | jq -e --arg title "$calendar_title" '.items | map(select(.title == $title)) | length == 1' >/dev/null
+
+finance_id=$(capture "Record a finance transaction for account $account_id: spent 123 USD at $finance_note on 2026-10-08.")
+wait_for_action "$finance_id" finance_create_manual_transaction
+curl --fail --silent "$gateway/api/finance/v1/transactions?limit=100" | jq -e --arg note "$finance_note" '.items | map(select(.note == $note)) | length == 1' >/dev/null
+
+echo "authenticated Codex Calendar and Finance capture smoke passed"
