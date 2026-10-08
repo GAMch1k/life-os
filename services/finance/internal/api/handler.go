@@ -3,6 +3,7 @@ package api
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"time"
 
@@ -132,11 +133,24 @@ func (h *Handler) CreateManualTransaction(c fiber.Ctx) error {
 	if body.Amount.Amount == 0 || len(body.Amount.Currency) != 3 {
 		return fiber.NewError(fiber.StatusBadRequest, "amount must be non-zero with a three-letter currency")
 	}
-	item, err := h.queries.CreateTransaction(c.Context(), store.CreateTransactionParams{AccountID: pgUUID(body.AccountId), CategoryID: optionalUUID(body.CategoryId), AmountMinor: body.Amount.Amount, Currency: body.Amount.Currency, OccurredOn: pgtype.Date{Time: body.OccurredOn.Time, Valid: true}, Note: body.Note, SourceMetadata: []byte(`{}`)})
+	key, hash := idempotency(c)
+	item, err := h.queries.CreateTransaction(c.Context(), store.CreateTransactionParams{AccountID: pgUUID(body.AccountId), CategoryID: optionalUUID(body.CategoryId), AmountMinor: body.Amount.Amount, Currency: body.Amount.Currency, OccurredOn: pgtype.Date{Time: body.OccurredOn.Time, Valid: true}, Note: body.Note, SourceMetadata: []byte(`{}`), AutomationIdempotencyKey: key, AutomationPayloadHash: hash})
 	if err != nil {
 		return databaseError(err)
 	}
+	if key != nil && (item.AutomationPayloadHash == nil || *item.AutomationPayloadHash != *hash) {
+		return fiber.NewError(fiber.StatusConflict, "idempotency key was already used with a different payload")
+	}
 	return c.Status(fiber.StatusCreated).JSON(transaction(item))
+}
+func idempotency(c fiber.Ctx) (*string, *string) {
+	key := c.Get("Idempotency-Key")
+	if key == "" {
+		return nil, nil
+	}
+	sum := sha256.Sum256(c.Body())
+	hash := fmt.Sprintf("%x", sum[:])
+	return &key, &hash
 }
 
 func transaction(item store.Transaction) generated.Transaction {

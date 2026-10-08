@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"time"
@@ -46,11 +47,27 @@ func (h *Handler) CreateTask(c fiber.Ctx) error {
 	if body.Title == "" {
 		return fiber.NewError(400, "title is required")
 	}
-	item, err := h.queries.CreateTask(c.Context(), createParams(body))
+	params := createParams(body)
+	key, hash := idempotency(c)
+	params.AutomationIdempotencyKey, params.AutomationPayloadHash = key, hash
+	item, err := h.queries.CreateTask(c.Context(), params)
 	if err != nil {
 		return internal(err)
 	}
+	if key != nil && (item.AutomationPayloadHash == nil || *item.AutomationPayloadHash != *hash) {
+		return fiber.NewError(409, "idempotency key was already used with a different payload")
+	}
 	return c.Status(201).JSON(task(item))
+}
+
+func idempotency(c fiber.Ctx) (*string, *string) {
+	key := c.Get("Idempotency-Key")
+	if key == "" {
+		return nil, nil
+	}
+	sum := sha256.Sum256(c.Body())
+	hash := fmt.Sprintf("%x", sum[:])
+	return &key, &hash
 }
 func (h *Handler) GetTask(c fiber.Ctx, id types.UUID) error {
 	item, err := h.queries.GetTask(c.Context(), pgUUID(id))

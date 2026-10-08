@@ -14,7 +14,7 @@ import (
 const completeTask = `-- name: CompleteTask :one
 UPDATE tasks SET completed_at = COALESCE(completed_at, now()), updated_at = now()
 WHERE id = $1
-RETURNING id, title, notes, due_at, completed_at, recurrence_frequency, recurrence_interval, recurrence_until, created_at, updated_at
+RETURNING id, title, notes, due_at, completed_at, recurrence_frequency, recurrence_interval, recurrence_until, created_at, updated_at, automation_idempotency_key, automation_payload_hash
 `
 
 func (q *Queries) CompleteTask(ctx context.Context, id pgtype.UUID) (Task, error) {
@@ -31,23 +31,28 @@ func (q *Queries) CompleteTask(ctx context.Context, id pgtype.UUID) (Task, error
 		&i.RecurrenceUntil,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AutomationIdempotencyKey,
+		&i.AutomationPayloadHash,
 	)
 	return i, err
 }
 
 const createTask = `-- name: CreateTask :one
-INSERT INTO tasks (title, notes, due_at, recurrence_frequency, recurrence_interval, recurrence_until)
-VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, title, notes, due_at, completed_at, recurrence_frequency, recurrence_interval, recurrence_until, created_at, updated_at
+INSERT INTO tasks (title, notes, due_at, recurrence_frequency, recurrence_interval, recurrence_until, automation_idempotency_key, automation_payload_hash)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+ON CONFLICT (automation_idempotency_key) WHERE automation_idempotency_key IS NOT NULL DO UPDATE SET automation_idempotency_key = EXCLUDED.automation_idempotency_key
+RETURNING id, title, notes, due_at, completed_at, recurrence_frequency, recurrence_interval, recurrence_until, created_at, updated_at, automation_idempotency_key, automation_payload_hash
 `
 
 type CreateTaskParams struct {
-	Title               string
-	Notes               *string
-	DueAt               pgtype.Timestamptz
-	RecurrenceFrequency *string
-	RecurrenceInterval  *int32
-	RecurrenceUntil     pgtype.Timestamptz
+	Title                    string
+	Notes                    *string
+	DueAt                    pgtype.Timestamptz
+	RecurrenceFrequency      *string
+	RecurrenceInterval       *int32
+	RecurrenceUntil          pgtype.Timestamptz
+	AutomationIdempotencyKey *string
+	AutomationPayloadHash    *string
 }
 
 func (q *Queries) CreateTask(ctx context.Context, arg CreateTaskParams) (Task, error) {
@@ -58,6 +63,8 @@ func (q *Queries) CreateTask(ctx context.Context, arg CreateTaskParams) (Task, e
 		arg.RecurrenceFrequency,
 		arg.RecurrenceInterval,
 		arg.RecurrenceUntil,
+		arg.AutomationIdempotencyKey,
+		arg.AutomationPayloadHash,
 	)
 	var i Task
 	err := row.Scan(
@@ -71,12 +78,14 @@ func (q *Queries) CreateTask(ctx context.Context, arg CreateTaskParams) (Task, e
 		&i.RecurrenceUntil,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AutomationIdempotencyKey,
+		&i.AutomationPayloadHash,
 	)
 	return i, err
 }
 
 const getTask = `-- name: GetTask :one
-SELECT id, title, notes, due_at, completed_at, recurrence_frequency, recurrence_interval, recurrence_until, created_at, updated_at FROM tasks WHERE id = $1
+SELECT id, title, notes, due_at, completed_at, recurrence_frequency, recurrence_interval, recurrence_until, created_at, updated_at, automation_idempotency_key, automation_payload_hash FROM tasks WHERE id = $1
 `
 
 func (q *Queries) GetTask(ctx context.Context, id pgtype.UUID) (Task, error) {
@@ -93,12 +102,14 @@ func (q *Queries) GetTask(ctx context.Context, id pgtype.UUID) (Task, error) {
 		&i.RecurrenceUntil,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AutomationIdempotencyKey,
+		&i.AutomationPayloadHash,
 	)
 	return i, err
 }
 
 const listTasks = `-- name: ListTasks :many
-SELECT id, title, notes, due_at, completed_at, recurrence_frequency, recurrence_interval, recurrence_until, created_at, updated_at FROM tasks
+SELECT id, title, notes, due_at, completed_at, recurrence_frequency, recurrence_interval, recurrence_until, created_at, updated_at, automation_idempotency_key, automation_payload_hash FROM tasks
 WHERE ($1::boolean IS NULL OR (completed_at IS NOT NULL) = $1::boolean)
   AND ($2::timestamptz IS NULL OR due_at <= $2::timestamptz)
 ORDER BY completed_at NULLS FIRST, due_at NULLS LAST, created_at DESC
@@ -131,6 +142,8 @@ func (q *Queries) ListTasks(ctx context.Context, arg ListTasksParams) ([]Task, e
 			&i.RecurrenceUntil,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.AutomationIdempotencyKey,
+			&i.AutomationPayloadHash,
 		); err != nil {
 			return nil, err
 		}
@@ -147,7 +160,7 @@ UPDATE tasks
 SET title = COALESCE($1, title), notes = COALESCE($2, notes), due_at = COALESCE($3, due_at),
     recurrence_frequency = COALESCE($4, recurrence_frequency), recurrence_interval = COALESCE($5, recurrence_interval), recurrence_until = COALESCE($6, recurrence_until), updated_at = now()
 WHERE id = $7
-RETURNING id, title, notes, due_at, completed_at, recurrence_frequency, recurrence_interval, recurrence_until, created_at, updated_at
+RETURNING id, title, notes, due_at, completed_at, recurrence_frequency, recurrence_interval, recurrence_until, created_at, updated_at, automation_idempotency_key, automation_payload_hash
 `
 
 type UpdateTaskParams struct {
@@ -182,6 +195,8 @@ func (q *Queries) UpdateTask(ctx context.Context, arg UpdateTaskParams) (Task, e
 		&i.RecurrenceUntil,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.AutomationIdempotencyKey,
+		&i.AutomationPayloadHash,
 	)
 	return i, err
 }

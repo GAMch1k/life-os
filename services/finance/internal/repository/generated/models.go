@@ -26,16 +26,18 @@ type FinancialCategory struct {
 }
 
 type Transaction struct {
-	ID               pgtype.UUID
-	AccountID        pgtype.UUID
-	CategoryID       pgtype.UUID
-	AmountMinor      int64
-	Currency         string
-	OccurredOn       pgtype.Date
-	Note             *string
-	ImportSource     *string
-	ImportExternalID *string
-	SourceMetadata   []byte
-	CreatedAt        pgtype.Timestamptz
-	UpdatedAt        pgtype.Timestamptz
+	ID                       pgtype.UUID
+	AccountID                pgtype.UUID
+	CategoryID               pgtype.UUID
+	AmountMinor              int64
+	Currency                 string
+	OccurredOn               pgtype.Date
+	Note                     *string
+	ImportSource             *string
+	ImportExternalID         *string
+	SourceMetadata           []byte
+	CreatedAt                pgtype.Timestamptz
+	UpdatedAt                pgtype.Timestamptz
+	AutomationIdempotencyKey *string
+	AutomationPayloadHash    *string
 }
