@@ -48,6 +48,13 @@ func TestInboxPersistenceLifecycle(t *testing.T) {
 	if _, err := pool.Exec(ctx, string(attemptMigration)); err != nil {
 		t.Fatal(err)
 	}
+	dedupeMigration, err := os.ReadFile(filepath.Join("..", "..", "db", "migrations", "000004_inbox_dedupe.up.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, string(dedupeMigration)); err != nil {
+		t.Fatal(err)
+	}
 	queries := store.New(pool)
 	created, err := queries.CreateInboxItem(ctx, store.CreateInboxItemParams{Content: "remember milk", Source: "manual", SourceMetadata: []byte(`{"screen":"dashboard"}`), MediaReferences: []byte(`[]`)})
 	if err != nil {
