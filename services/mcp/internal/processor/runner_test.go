@@ -19,6 +19,7 @@ type fakeTools struct {
 	calls   []string
 	fail    string
 	records []map[string]any
+	starts  []map[string]any
 }
 
 func (f *fakeTools) Call(_ context.Context, name string, args map[string]any) (json.RawMessage, error) {
@@ -32,6 +33,7 @@ func (f *fakeTools) Call(_ context.Context, name string, args map[string]any) (j
 	case "inbox_list_processing_attempts":
 		return json.RawMessage(`{"items":[]}`), nil
 	case "inbox_start_processing_attempt":
+		f.starts = append(f.starts, args)
 		return json.RawMessage(`{"id":"attempt-1"}`), nil
 	case "inbox_record_processing_attempt":
 		f.records = append(f.records, args)
@@ -96,9 +98,35 @@ func TestRunnerSkipsPreviouslyProcessedIdempotencyKey(t *testing.T) {
 	}
 }
 
+func TestRunnerCreatesDistinctAttemptAfterRetryableFailure(t *testing.T) {
+	tools := &fakeTools{}
+	key := idempotencyKey(inboxItem{ID: "item-1", Content: "Call insurer"})
+	retrying := retryingTools{fakeTools: tools, key: key}
+	_, err := (Runner{Planner: fakePlanner{output: `{"actions":[{"tool":"task_create","arguments":{"title":"Call insurer"}}],"confidence":0.9}`}, Tools: &retrying, Model: "gpt-5.6-terra"}).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := tools.starts[0]["idempotencyKey"]; got != key+".retry.2" {
+		t.Fatalf("retry attempt key = %#v", got)
+	}
+}
+
 type duplicateTools struct {
 	*fakeTools
 	key string
+}
+
+type retryingTools struct {
+	*fakeTools
+	key string
+}
+
+func (d *retryingTools) Call(ctx context.Context, name string, args map[string]any) (json.RawMessage, error) {
+	if name == "inbox_list_processing_attempts" {
+		d.calls = append(d.calls, name)
+		return json.RawMessage(fmt.Sprintf(`{"items":[{"idempotencyKey":%q,"status":"retryable"}]}`, d.key)), nil
+	}
+	return d.fakeTools.Call(ctx, name, args)
 }
 
 func (d *duplicateTools) Call(ctx context.Context, name string, args map[string]any) (json.RawMessage, error) {

@@ -95,6 +95,11 @@ func (h *Handler) CreateProcessingAttempt(c fiber.Ctx, id types.UUID) error {
 	if err != nil {
 		return internal(err)
 	}
+	// The Inbox item exposes the active lifecycle to clients while each attempt
+	// retains its own immutable identity for retry/audit history.
+	if _, err := h.queries.SetInboxItemState(c.Context(), store.SetInboxItemStateParams{ID: pgUUID(id), State: "processing"}); err != nil {
+		return internal(err)
+	}
 	return c.Status(201).JSON(attemptOutput(attempt))
 }
 func (h *Handler) UpdateProcessingAttempt(c fiber.Ctx, itemID types.UUID, attemptID types.UUID) error {
@@ -115,6 +120,11 @@ func (h *Handler) UpdateProcessingAttempt(c fiber.Ctx, itemID types.UUID, attemp
 	attempt, err := h.queries.UpdateProcessingAttempt(c.Context(), store.UpdateProcessingAttemptParams{ID: pgUUID(attemptID), Status: string(body.Status), Actions: actions, ErrorSummary: body.ErrorSummary})
 	if err != nil {
 		return internal(err)
+	}
+	if body.Status == generated.UpdateProcessingAttemptRequestStatusRetryable || body.Status == generated.UpdateProcessingAttemptRequestStatusFailed {
+		if _, err := h.queries.SetInboxItemState(c.Context(), store.SetInboxItemStateParams{ID: pgUUID(itemID), State: "raw"}); err != nil {
+			return internal(err)
+		}
 	}
 	return c.JSON(attemptOutput(attempt))
 }
