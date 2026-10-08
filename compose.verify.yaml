@@ -23,6 +23,8 @@ services:
     ports: !reset []
   mcp:
     image: lifeos-mcp:latest
+  processor:
+    image: lifeos-processor:latest
   whisper:
     image: lifeos-whisper:latest
   voice:
