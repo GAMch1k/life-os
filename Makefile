@@ -1,4 +1,4 @@
-.PHONY: infra-env infra-up infra-down infra-ps infra-logs infra-reset core-up core-smoke life-up life-smoke verify-clean-db verify-isolation e2e-smoke processor-smoke action-idempotency-smoke voice-lease-recovery-smoke db-provision db-check-isolation db-migration-new db-generate db-migrate-up db-migrate-down db-test create-service create-service-smoke dashboard-check check
+.PHONY: infra-env infra-up infra-down infra-ps infra-logs infra-reset core-up core-smoke life-up life-smoke verify-clean-db verify-isolation e2e-smoke processor-smoke browser-e2e action-idempotency-smoke voice-lease-recovery-smoke db-provision db-check-isolation db-migration-new db-generate db-migrate-up db-migrate-down db-test create-service create-service-smoke dashboard-check check
 
 infra-env:
 	@test -f .env || cp .env.example .env
@@ -30,6 +30,9 @@ e2e-smoke: infra-env
 
 processor-smoke: infra-env
 	./tools/smoke-processor-runtime
+
+browser-e2e: infra-env
+	LIFE_OS_E2E_URL=http://127.0.0.1:13001 npm --prefix apps/dashboard run test:e2e
 
 action-idempotency-smoke: infra-env
 	./tools/smoke-action-idempotency
