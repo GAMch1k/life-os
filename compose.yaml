@@ -93,6 +93,7 @@ services:
       TASKS_SERVICE_URL: http://tasks:8080
       INBOX_SERVICE_URL: http://inbox:8080
       CALENDAR_SERVICE_URL: http://calendar:8080
+      VOICE_SERVICE_URL: http://voice:8080
     expose: ["3000"]
     depends_on:
       finance: {condition: service_started}

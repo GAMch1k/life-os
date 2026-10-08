@@ -3,7 +3,6 @@ import {
   CheckSquare2,
   Inbox,
   Landmark,
-  Mic,
   Plus,
   type LucideIcon,
 } from "lucide-react";
