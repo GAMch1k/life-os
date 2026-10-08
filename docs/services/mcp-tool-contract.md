@@ -1,6 +1,6 @@
 # MCP tool contract
 
-The future MCP service exposes semantic, structured operations only. It calls the owning HTTP API and never SQL, shells, files, or another service's storage. Tool outputs are JSON-shaped entity/list results or the service error envelope; inputs use the corresponding OpenAPI request fields.
+The MCP service exposes semantic, structured operations only. It calls the owning HTTP API and never SQL, shells, files, or another service's storage. Tool outputs are JSON-shaped entity/list results or the service error envelope; inputs use the corresponding OpenAPI request fields.
 
 | Tool | Service API | Safety |
 | --- | --- | --- |
@@ -13,4 +13,4 @@ The future MCP service exposes semantic, structured operations only. It calls th
 
 Example routing: “Remind me to call the insurer tomorrow” becomes `task_create` with title and due time. “Add a dentist appointment next Tuesday” becomes `calendar_create`. “I paid €20 for fuel” must remain an Inbox item unless the user has explicitly asked to record the transaction; then `finance_create_manual_transaction` is allowed with structured Money.
 
-The processor may mark an Inbox item `processing`, but only resolves it after a successful downstream API action. Ambiguous requests remain raw for clarification; retries use the later audit/idempotency mechanism rather than duplicate actions.
+The processor records a processing attempt before actions and resolves an Inbox item only after a successful downstream API action. Ambiguous requests remain recoverable; retries use the audit/idempotency mechanism rather than duplicate actions.
