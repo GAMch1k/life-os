@@ -113,8 +113,13 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 		if !validAction(action) {
 			return Proposal{}, r.recover(ctx, item.ID, started.ID, actions, "invalid proposed action: "+action.Tool)
 		}
-		result, err := r.Tools.Call(ctx, action.Tool, action.Arguments)
-		audit := map[string]any{"tool": action.Tool, "arguments": action.Arguments}
+		arguments := make(map[string]any, len(action.Arguments)+1)
+		for field, value := range action.Arguments {
+			arguments[field] = value
+		}
+		arguments["idempotencyKey"] = actionIdempotencyKey(item, len(actions), action)
+		result, err := r.Tools.Call(ctx, action.Tool, arguments)
+		audit := map[string]any{"tool": action.Tool, "arguments": arguments}
 		if err != nil {
 			actions = append(actions, audit)
 			return Proposal{}, r.recover(ctx, item.ID, started.ID, actions, fmt.Sprintf("%s failed: %v", action.Tool, err))
@@ -219,6 +224,11 @@ func validAction(action plannedAction) bool {
 func idempotencyKey(item inboxItem) string {
 	sum := sha256.Sum256([]byte(item.ID + "\x00" + item.Content))
 	return fmt.Sprintf("codex-%x", sum[:12])
+}
+func actionIdempotencyKey(item inboxItem, index int, action plannedAction) string {
+	raw, _ := json.Marshal(map[string]any{"operation": idempotencyKey(item), "index": index, "tool": action.Tool, "arguments": action.Arguments})
+	sum := sha256.Sum256(raw)
+	return fmt.Sprintf("action-%x", sum[:16])
 }
 func decodePlan(raw string) (plan, error) {
 	clean := strings.TrimSpace(raw)

@@ -27,25 +27,28 @@ type inboxAction struct {
 	ErrorSummary   *string                  `json:"errorSummary,omitempty"`
 }
 type taskAction struct {
-	Title string  `json:"title" jsonschema:"Task title"`
-	Notes *string `json:"notes,omitempty"`
-	DueAt *string `json:"dueAt,omitempty" jsonschema:"RFC3339 due time"`
+	IdempotencyKey string  `json:"idempotencyKey,omitempty"`
+	Title          string  `json:"title" jsonschema:"Task title"`
+	Notes          *string `json:"notes,omitempty"`
+	DueAt          *string `json:"dueAt,omitempty" jsonschema:"RFC3339 due time"`
 }
 type eventAction struct {
-	Title       string  `json:"title" jsonschema:"Event title"`
-	Description *string `json:"description,omitempty"`
-	AllDay      bool    `json:"allDay"`
-	StartAt     *string `json:"startAt,omitempty" jsonschema:"RFC3339 start time"`
-	EndAt       *string `json:"endAt,omitempty" jsonschema:"RFC3339 end time"`
-	StartDate   *string `json:"startDate,omitempty" jsonschema:"ISO date for all-day event"`
-	EndDate     *string `json:"endDate,omitempty" jsonschema:"ISO date for all-day event"`
+	IdempotencyKey string  `json:"idempotencyKey,omitempty"`
+	Title          string  `json:"title" jsonschema:"Event title"`
+	Description    *string `json:"description,omitempty"`
+	AllDay         bool    `json:"allDay"`
+	StartAt        *string `json:"startAt,omitempty" jsonschema:"RFC3339 start time"`
+	EndAt          *string `json:"endAt,omitempty" jsonschema:"RFC3339 end time"`
+	StartDate      *string `json:"startDate,omitempty" jsonschema:"ISO date for all-day event"`
+	EndDate        *string `json:"endDate,omitempty" jsonschema:"ISO date for all-day event"`
 }
 type financeAction struct {
-	AccountID  string         `json:"accountId" jsonschema:"Explicit Finance account UUID from trusted source metadata"`
-	CategoryID *string        `json:"categoryId,omitempty"`
-	Amount     map[string]any `json:"amount" jsonschema:"Money object with signed integer amount and currency"`
-	OccurredOn string         `json:"occurredOn" jsonschema:"ISO transaction date"`
-	Note       *string        `json:"note,omitempty"`
+	IdempotencyKey string         `json:"idempotencyKey,omitempty"`
+	AccountID      string         `json:"accountId" jsonschema:"Explicit Finance account UUID from trusted source metadata"`
+	CategoryID     *string        `json:"categoryId,omitempty"`
+	Amount         map[string]any `json:"amount" jsonschema:"Money object with signed integer amount and currency"`
+	OccurredOn     string         `json:"occurredOn" jsonschema:"ISO transaction date"`
+	Note           *string        `json:"note,omitempty"`
 }
 type Output struct {
 	Data map[string]any `json:"data"`
@@ -99,13 +102,13 @@ func run(ctx context.Context) error {
 		return post(ctx, hc, cfg.InboxURL, "/v1/inbox-items/"+in.ItemID+"/resolve", nil)
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "task_create", Description: "Create a Life OS task"}, func(ctx context.Context, _ *mcp.CallToolRequest, in taskAction) (*mcp.CallToolResult, Output, error) {
-		return post(ctx, hc, cfg.TasksURL, "/v1/tasks", in)
+		return post(ctx, hc, cfg.TasksURL, "/v1/tasks", in, in.IdempotencyKey)
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "calendar_create", Description: "Create a Life OS calendar event"}, func(ctx context.Context, _ *mcp.CallToolRequest, in eventAction) (*mcp.CallToolResult, Output, error) {
-		return post(ctx, hc, cfg.CalendarURL, "/v1/events", in)
+		return post(ctx, hc, cfg.CalendarURL, "/v1/events", in, in.IdempotencyKey)
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "finance_create_manual_transaction", Description: "Record a manual finance transaction only when account, amount, currency, and date are explicit"}, func(ctx context.Context, _ *mcp.CallToolRequest, in financeAction) (*mcp.CallToolResult, Output, error) {
-		return post(ctx, hc, cfg.FinanceURL, "/v1/transactions", in)
+		return post(ctx, hc, cfg.FinanceURL, "/v1/transactions", in, in.IdempotencyKey)
 	})
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return s }, nil))
@@ -114,7 +117,7 @@ func run(ctx context.Context) error {
 	return http.ListenAndServe(fmt.Sprintf(":%d", cfg.Port), mux)
 }
 
-func post(ctx context.Context, hc *http.Client, baseURL, path string, input interface{}) (*mcp.CallToolResult, Output, error) {
+func post(ctx context.Context, hc *http.Client, baseURL, path string, input interface{}, idempotencyKey ...string) (*mcp.CallToolResult, Output, error) {
 	var raw []byte
 	var err error
 	if input != nil {
@@ -123,7 +126,11 @@ func post(ctx context.Context, hc *http.Client, baseURL, path string, input inte
 			return nil, Output{}, err
 		}
 	}
-	body, err := coreclient.Client{BaseURL: baseURL, HTTP: hc}.Do(ctx, http.MethodPost, path, raw)
+	headers := http.Header{}
+	if len(idempotencyKey) > 0 && idempotencyKey[0] != "" {
+		headers.Set("Idempotency-Key", idempotencyKey[0])
+	}
+	body, err := coreclient.Client{BaseURL: baseURL, HTTP: hc}.DoWithHeaders(ctx, http.MethodPost, path, raw, headers)
 	if err != nil {
 		return nil, Output{}, err
 	}
