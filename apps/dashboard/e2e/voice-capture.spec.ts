@@ -1,8 +1,11 @@
 import { expect, test } from "@playwright/test";
+import { readFile } from "node:fs/promises";
 
 const enabled = Boolean(process.env.LIFE_OS_E2E_URL);
 const jfkFixture =
   "https://github.com/ggerganov/whisper.cpp/raw/master/samples/jfk.wav";
+const localFixture = process.env.LIFE_OS_E2E_VOICE_AUDIO_FILE;
+const expectedTaskTitle = process.env.LIFE_OS_E2E_EXPECT_VOICE_TASK_TITLE;
 
 test.describe("Dashboard voice capture", () => {
   test.skip(!enabled, "set LIFE_OS_E2E_URL to run against the isolated stack");
@@ -16,9 +19,9 @@ test.describe("Dashboard voice capture", () => {
     // microphone hardware, but the VoiceCapture component owns the upload and
     // status polling path. The temporary fixture is deliberately not checked
     // into the repository.
-    const fixture = await fetch(jfkFixture);
-    expect(fixture.ok).toBeTruthy();
-    const bytes = Array.from(new Uint8Array(await fixture.arrayBuffer()));
+    const bytes = localFixture
+      ? Array.from(await readFile(localFixture))
+      : await downloadFixture();
 
     await page.addInitScript((audioBytes: number[]) => {
       type FixtureStream = { getTracks: () => Array<{ stop: () => void }> };
@@ -65,13 +68,18 @@ test.describe("Dashboard voice capture", () => {
     const job = (await created.json()) as { id: string };
     expect(job.id).toBeTruthy();
 
+    let finalJob: { status: string; inboxItemId?: string } | undefined;
     await expect
       .poll(
         async () => {
           const status = await request.get(
             `/api/voice/v1/audio-jobs/${job.id}`,
           );
-          const data = await status.json();
+          const data = (await status.json()) as {
+            status: string;
+            inboxItemId?: string;
+          };
+          finalJob = data;
           return data.status;
         },
         { timeout: 180_000 },
@@ -82,5 +90,46 @@ test.describe("Dashboard voice capture", () => {
         timeout: 15_000,
       },
     );
+
+    if (expectedTaskTitle) {
+      expect(finalJob?.inboxItemId).toBeTruthy();
+      const inboxItemId = finalJob?.inboxItemId;
+      if (!inboxItemId)
+        throw new Error("succeeded Voice job has no Inbox item");
+      await expect
+        .poll(
+          async () => {
+            const attempts = await request.get(
+              `/api/inbox/v1/inbox-items/${inboxItemId}/processing-attempts`,
+            );
+            const data = await attempts.json();
+            return data.items?.[0]?.status;
+          },
+          { timeout: 150_000 },
+        )
+        .toBe("processed");
+      await expect
+        .poll(
+          async () => {
+            const tasks = await request.get(
+              `/api/tasks/v1/tasks?query=${encodeURIComponent(expectedTaskTitle)}`,
+            );
+            const data = await tasks.json();
+            return data.items?.some((entry: { title: string }) =>
+              entry.title
+                .toLocaleLowerCase()
+                .includes(expectedTaskTitle.toLocaleLowerCase()),
+            );
+          },
+          { timeout: 30_000 },
+        )
+        .toBeTruthy();
+    }
   });
 });
+
+async function downloadFixture() {
+  const fixture = await fetch(jfkFixture);
+  expect(fixture.ok).toBeTruthy();
+  return Array.from(new Uint8Array(await fixture.arrayBuffer()));
+}
