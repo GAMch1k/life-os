@@ -20,6 +20,7 @@ type InboxItem struct {
 	CreatedAt          pgtype.Timestamptz
 	UpdatedAt          pgtype.Timestamptz
 	SourceDedupeKey    *string
+	CorrelationID      *string
 }
 
 type InboxProcessingAttempt struct {

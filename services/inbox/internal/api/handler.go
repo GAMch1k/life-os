@@ -7,19 +7,26 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v3"
+	googleuuid "github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/oapi-codegen/runtime/types"
 
+	"github.com/GAMch1k/life-os/pkg/activity"
 	"github.com/GAMch1k/life-os/services/inbox/internal/api/generated"
 	store "github.com/GAMch1k/life-os/services/inbox/internal/repository/generated"
 )
 
-type Handler struct{ queries *store.Queries }
+type Handler struct {
+	queries  *store.Queries
+	activity *activity.Emitter
+}
 
 var _ generated.ServerInterface = (*Handler)(nil)
 
-func NewHandler(queries *store.Queries) *Handler { return &Handler{queries: queries} }
+func NewHandler(queries *store.Queries, emitter *activity.Emitter) *Handler {
+	return &Handler{queries: queries, activity: emitter}
+}
 func (h *Handler) ListInboxItems(c fiber.Ctx, params generated.ListInboxItemsParams) error {
 	limit := 50
 	if params.Limit != nil {
@@ -56,10 +63,27 @@ func (h *Handler) CreateInboxItem(c fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(400, "invalid media references")
 	}
-	item, err := h.queries.CreateInboxItem(c.Context(), store.CreateInboxItemParams{Content: body.Content, Source: string(body.Source), SourceMetadata: metadata, MediaReferences: media, SourceDedupeKey: body.DedupeKey})
+	// Only an explicit upstream correlation is stored; otherwise the item
+	// starts its own workflow and its id is the correlation id.
+	trace := activity.TraceFromHeaders(func(key string) string { return c.Get(key) })
+	var correlation *string
+	if trace.CorrelationID != "" {
+		correlation = &trace.CorrelationID
+	}
+	item, err := h.queries.CreateInboxItem(c.Context(), store.CreateInboxItemParams{Content: body.Content, Source: string(body.Source), SourceMetadata: metadata, MediaReferences: media, SourceDedupeKey: body.DedupeKey, CorrelationID: correlation})
 	if err != nil {
 		return internal(err)
 	}
+	id := uuid(item.ID).String()
+	h.record(c, item, activity.Event{
+		ID:          activity.EventID("inbox.item.captured", id),
+		Type:        "inbox.item.captured",
+		Subject:     activity.Subject{Type: "inbox_item", ID: id},
+		CausationID: trace.CausationID,
+		Outcome:     activity.Succeeded,
+		Summary:     fmt.Sprintf("Captured “%s” from %s", activity.Preview(item.Content, 80), item.Source),
+		Data:        map[string]any{"source": item.Source, "content": activity.Preview(item.Content, 280)},
+	})
 	return c.Status(201).JSON(output(item))
 }
 func (h *Handler) GetInboxItem(c fiber.Ctx, id types.UUID) error {
@@ -84,7 +108,8 @@ func (h *Handler) ListProcessingAttempts(c fiber.Ctx, id types.UUID) error {
 	return c.JSON(generated.ProcessingAttemptList{Items: items})
 }
 func (h *Handler) CreateProcessingAttempt(c fiber.Ctx, id types.UUID) error {
-	if _, err := h.queries.GetInboxItem(c.Context(), pgUUID(id)); err != nil {
+	item, err := h.queries.GetInboxItem(c.Context(), pgUUID(id))
+	if err != nil {
 		return databaseError(err)
 	}
 	var body generated.CreateProcessingAttemptJSONRequestBody
@@ -100,6 +125,17 @@ func (h *Handler) CreateProcessingAttempt(c fiber.Ctx, id types.UUID) error {
 	if _, err := h.queries.SetInboxItemState(c.Context(), store.SetInboxItemStateParams{ID: pgUUID(id), State: "processing"}); err != nil {
 		return internal(err)
 	}
+	attemptID := uuid(attempt.ID).String()
+	captured := activity.EventID("inbox.item.captured", id.String())
+	h.record(c, item, activity.Event{
+		ID:          activity.EventID("inbox.processing.started", attemptID),
+		Type:        "inbox.processing.started",
+		Subject:     activity.Subject{Type: "processing_attempt", ID: attemptID},
+		CausationID: &captured,
+		Outcome:     activity.Pending,
+		Summary:     fmt.Sprintf("Processing started by %s", attempt.AgentName),
+		Data:        map[string]any{"inboxItemId": id.String(), "attemptId": attemptID, "agentName": attempt.AgentName, "modelProfile": attempt.ModelProfile},
+	})
 	return c.Status(201).JSON(attemptOutput(attempt))
 }
 func (h *Handler) UpdateProcessingAttempt(c fiber.Ctx, itemID types.UUID, attemptID types.UUID) error {
@@ -126,6 +162,7 @@ func (h *Handler) UpdateProcessingAttempt(c fiber.Ctx, itemID types.UUID, attemp
 			return internal(err)
 		}
 	}
+	h.recordAttemptOutcome(c, itemID, attempt, body)
 	return c.JSON(attemptOutput(attempt))
 }
 func (h *Handler) CreateHumanReview(c fiber.Ctx, itemID types.UUID) error {
@@ -143,7 +180,7 @@ func (h *Handler) CreateHumanReview(c fiber.Ctx, itemID types.UUID) error {
 	if _, err := h.queries.UpdateProcessingAttempt(c.Context(), store.UpdateProcessingAttemptParams{ID: pgUUID(body.AttemptId), Status: "human_review", Actions: actions, ErrorSummary: &body.ErrorSummary}); err != nil {
 		return internal(err)
 	}
-	metadata, err := json.Marshal(map[string]interface{}{"humanReview": map[string]interface{}{"errorSummary": body.ErrorSummary, "proposedAction": body.ProposedAction, "candidates": body.Candidates}})
+	metadata, err := json.Marshal(map[string]interface{}{"humanReview": map[string]interface{}{"attemptId": body.AttemptId.String(), "errorSummary": body.ErrorSummary, "proposedAction": body.ProposedAction, "candidates": body.Candidates}})
 	if err != nil {
 		return fiber.NewError(400, "invalid human review metadata")
 	}
@@ -151,6 +188,19 @@ func (h *Handler) CreateHumanReview(c fiber.Ctx, itemID types.UUID) error {
 	if err != nil {
 		return databaseError(err)
 	}
+	attemptID := body.AttemptId.String()
+	started := activity.EventID("inbox.processing.started", attemptID)
+	tool, _ := body.ProposedAction["tool"].(string)
+	candidates := len(body.Candidates)
+	h.record(c, item, activity.Event{
+		ID:          activity.EventID("inbox.human_review.requested", attemptID),
+		Type:        "inbox.human_review.requested",
+		Subject:     activity.Subject{Type: "inbox_item", ID: itemID.String()},
+		CausationID: &started,
+		Outcome:     activity.Pending,
+		Summary:     fmt.Sprintf("Needs your decision: %s", activity.Preview(body.ErrorSummary, 120)),
+		Data:        map[string]any{"attemptId": attemptID, "reason": body.ErrorSummary, "proposedTool": tool, "candidateCount": candidates},
+	})
 	return c.JSON(output(item))
 }
 func (h *Handler) ResolveHumanReview(c fiber.Ctx, itemID types.UUID) error {
@@ -195,6 +245,19 @@ func (h *Handler) ResolveHumanReview(c fiber.Ctx, itemID types.UUID) error {
 	if err != nil {
 		return databaseError(err)
 	}
+	event := activity.Event{
+		ID:      googleuuid.New(),
+		Type:    "inbox.human_review.resolved",
+		Subject: activity.Subject{Type: "inbox_item", ID: itemID.String()},
+		Outcome: activity.Succeeded,
+		Summary: "Review decision recorded; processing will resume",
+		Data:    map[string]any{"candidateId": body.CandidateId.String(), "approvedTool": approved["tool"]},
+	}
+	if attemptID, ok := review["attemptId"].(string); ok {
+		requested := activity.EventID("inbox.human_review.requested", attemptID)
+		event.CausationID = &requested
+	}
+	h.record(c, queued, event)
 	return c.JSON(output(queued))
 }
 func attemptOutput(attempt store.InboxProcessingAttempt) generated.ProcessingAttempt {
@@ -207,6 +270,13 @@ func (h *Handler) DiscardInboxItem(c fiber.Ctx, id types.UUID) error {
 	if err != nil {
 		return databaseError(err)
 	}
+	h.record(c, item, activity.Event{
+		ID:      activity.EventID("inbox.item.discarded", id.String()),
+		Type:    "inbox.item.discarded",
+		Subject: activity.Subject{Type: "inbox_item", ID: id.String()},
+		Outcome: activity.Succeeded,
+		Summary: fmt.Sprintf("Discarded “%s”", activity.Preview(item.Content, 80)),
+	})
 	return c.JSON(output(item))
 }
 func (h *Handler) ResolveInboxItem(c fiber.Ctx, id types.UUID) error {
@@ -214,7 +284,74 @@ func (h *Handler) ResolveInboxItem(c fiber.Ctx, id types.UUID) error {
 	if err != nil {
 		return databaseError(err)
 	}
+	h.record(c, item, activity.Event{
+		ID:          activity.EventID("inbox.item.resolved", id.String()),
+		Type:        "inbox.item.resolved",
+		Subject:     activity.Subject{Type: "inbox_item", ID: id.String()},
+		CausationID: activity.FromRequest(c).CausationID,
+		Outcome:     activity.Succeeded,
+		Summary:     fmt.Sprintf("Resolved “%s”", activity.Preview(item.Content, 80)),
+	})
 	return c.JSON(output(item))
+}
+
+// record emits an Inbox activity event in the item's workflow. Inbox owns the
+// item's correlation id, so it is used even when the caller sent another one;
+// causation and actor still come from the caller unless the event sets them.
+func (h *Handler) record(c fiber.Ctx, item store.InboxItem, event activity.Event) {
+	trace := activity.FromRequest(c)
+	event.CorrelationID = correlationID(item)
+	if event.CausationID == nil {
+		event.CausationID = trace.CausationID
+	}
+	event.Actor = trace.Actor
+	h.activity.Emit(c.Context(), event)
+}
+
+func (h *Handler) recordAttemptOutcome(c fiber.Ctx, itemID types.UUID, attempt store.InboxProcessingAttempt, body generated.UpdateProcessingAttemptRequest) {
+	var eventType, outcome, summary string
+	reason := ""
+	if body.ErrorSummary != nil {
+		reason = *body.ErrorSummary
+	}
+	switch body.Status {
+	case generated.UpdateProcessingAttemptRequestStatusProcessed:
+		eventType, outcome, summary = "inbox.processing.completed", activity.Succeeded, "Processing completed"
+	case generated.UpdateProcessingAttemptRequestStatusRetryable:
+		eventType, outcome, summary = "inbox.processing.retry_scheduled", activity.Pending, "Processing will be retried: "+activity.Preview(reason, 160)
+	case generated.UpdateProcessingAttemptRequestStatusFailed:
+		eventType, outcome, summary = "inbox.processing.failed", activity.Failed, "Processing failed: "+activity.Preview(reason, 160)
+	default:
+		return // "processing" is already covered by inbox.processing.started
+	}
+	item, err := h.queries.GetInboxItem(c.Context(), pgUUID(itemID))
+	if err != nil {
+		return
+	}
+	attemptID := uuid(attempt.ID).String()
+	started := activity.EventID("inbox.processing.started", attemptID)
+	tools := []string{}
+	for _, action := range body.Actions {
+		if tool, ok := action["tool"].(string); ok {
+			tools = append(tools, tool)
+		}
+	}
+	h.record(c, item, activity.Event{
+		ID:          activity.EventID(eventType, attemptID),
+		Type:        eventType,
+		Subject:     activity.Subject{Type: "processing_attempt", ID: attemptID},
+		CausationID: &started,
+		Outcome:     outcome,
+		Summary:     summary,
+		Data:        map[string]any{"inboxItemId": itemID.String(), "attemptId": attemptID, "tools": tools, "errorSummary": reason},
+	})
+}
+
+func correlationID(item store.InboxItem) string {
+	if item.CorrelationID != nil && *item.CorrelationID != "" {
+		return *item.CorrelationID
+	}
+	return uuid(item.ID).String()
 }
 func output(item store.InboxItem) generated.InboxItem {
 	var metadata map[string]interface{}
@@ -223,7 +360,7 @@ func output(item store.InboxItem) generated.InboxItem {
 	_ = json.Unmarshal(item.SourceMetadata, &metadata)
 	_ = json.Unmarshal(item.ProcessingMetadata, &processingMetadata)
 	_ = json.Unmarshal(item.MediaReferences, &media)
-	return generated.InboxItem{Id: uuid(item.ID), Content: item.Content, Source: generated.InboxItemSource(item.Source), SourceMetadata: &metadata, MediaReferences: &media, State: generated.InboxItemState(item.State), ProcessingMetadata: processingMetadata, ResolvedAt: nullableTime(item.ResolvedAt), CreatedAt: item.CreatedAt.Time, UpdatedAt: item.UpdatedAt.Time}
+	return generated.InboxItem{Id: uuid(item.ID), CorrelationId: correlationID(item), Content: item.Content, Source: generated.InboxItemSource(item.Source), SourceMetadata: &metadata, MediaReferences: &media, State: generated.InboxItemState(item.State), ProcessingMetadata: processingMetadata, ResolvedAt: nullableTime(item.ResolvedAt), CreatedAt: item.CreatedAt.Time, UpdatedAt: item.UpdatedAt.Time}
 }
 func containsCandidate(raw interface{}, candidateID string) bool {
 	candidates, ok := raw.([]interface{})
