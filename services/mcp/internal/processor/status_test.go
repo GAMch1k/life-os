@@ -130,3 +130,31 @@ func TestMonitorFollowsTheRuntime(t *testing.T) {
 		t.Fatalf("runtime = %+v", runtime)
 	}
 }
+
+func TestMonitorSumsTokenUsage(t *testing.T) {
+	m := NewMonitor("gpt-6-luna")
+	m.SetReasoningEffort("low")
+	m.RecordTokens(TokenUsage{Input: 100, CachedInput: 60, Output: 10, Reasoning: 2})
+	m.RecordTokens(TokenUsage{Input: 50, Output: 5})
+	status := m.Snapshot()
+	if status.ReasoningEffort != "low" || status.Runtime.Tokens.Runs != 2 || status.Runtime.Tokens.Input != 150 || status.Runtime.Tokens.Reasoning != 2 || status.Runtime.LastRunTokens.Output != 5 {
+		t.Fatalf("status = %+v", status)
+	}
+}
+
+func TestConfigProfileAndEffortValidation(t *testing.T) {
+	t.Setenv("LIFE_OS_CODEX_MODEL", "gpt-6-luna")
+	t.Setenv("LIFE_OS_CODEX_REASONING_EFFORT", "none")
+	cfg, err := LoadConfig()
+	if err != nil || cfg.Profile() != "gpt-6-luna/none" {
+		t.Fatalf("profile = %q, err = %v", cfg.Profile(), err)
+	}
+	t.Setenv("LIFE_OS_CODEX_REASONING_EFFORT", "")
+	if cfg, _ := LoadConfig(); cfg.Profile() != "gpt-6-luna" {
+		t.Fatalf("profile without effort = %q", cfg.Profile())
+	}
+	t.Setenv("LIFE_OS_CODEX_REASONING_EFFORT", "low; rm -rf /")
+	if _, err := LoadConfig(); err == nil {
+		t.Fatal("an invalid effort was accepted")
+	}
+}

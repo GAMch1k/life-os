@@ -67,6 +67,13 @@ func (rt *attemptRuntime) Spawned() { rt.set(context.Background(), RuntimeRunnin
 // Session implements RunObserver.
 func (rt *attemptRuntime) Session(id string) { rt.set(context.Background(), "", id) }
 
+// Tokens forwards the run's token usage to the processor's status.
+func (rt *attemptRuntime) Tokens(usage TokenUsage) {
+	if rt.runner.OnTokens != nil {
+		rt.runner.OnTokens(usage)
+	}
+}
+
 // finish records the planning run's outcome; the heartbeat continues until
 // close, while actions run.
 func (rt *attemptRuntime) finish(ctx context.Context, state string) { rt.set(ctx, state, "") }

@@ -30,6 +30,8 @@ const planPrompt = "Classify this Inbox item. Return only JSON in this schema: {
 // Codex session id and failure reason are read.
 type CodexCLI struct {
 	Command, Model, WorkDir string
+	// ReasoningEffort, when set, overrides the Codex model_reasoning_effort.
+	ReasoningEffort string
 	// Timeout bounds one planning run (default 5 minutes).
 	Timeout time.Duration
 	// Grace is how long a cancelled or timed-out run may take to exit after
@@ -44,6 +46,14 @@ type CodexCLI struct {
 // ErrRunTimedOut marks a planning run stopped at its deadline.
 var ErrRunTimedOut = errors.New("Codex run timed out")
 
+// TokenUsage is what Codex reports a run consumed (turn.completed usage).
+type TokenUsage struct {
+	Input       int `json:"input"`
+	CachedInput int `json:"cachedInput"`
+	Output      int `json:"output"`
+	Reasoning   int `json:"reasoning"`
+}
+
 // RunObserver receives lifecycle events of one planning run.
 type RunObserver interface {
 	// Spawned is called once the Codex process has started.
@@ -57,6 +67,11 @@ type observerKey struct{}
 // WithRunObserver attaches an observer to the planning runs started with ctx.
 func WithRunObserver(ctx context.Context, observer RunObserver) context.Context {
 	return context.WithValue(ctx, observerKey{}, observer)
+}
+
+// tokenObserver is implemented by observers that record token usage.
+type tokenObserver interface {
+	Tokens(TokenUsage)
 }
 
 func observerFrom(ctx context.Context) RunObserver {
@@ -89,7 +104,11 @@ func (c CodexCLI) Plan(ctx context.Context, content string) (string, error) {
 	}
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := c.command(runCtx, "exec", "--json", "--ephemeral", "--skip-git-repo-check", "-s", "read-only", "-C", c.WorkDir, "-m", c.Model, "-c", "mcp_servers={}", "-o", name, planPrompt+content)
+	args := []string{"exec", "--json", "--ephemeral", "--skip-git-repo-check", "-s", "read-only", "-C", c.WorkDir, "-m", c.Model, "-c", "mcp_servers={}"}
+	if c.ReasoningEffort != "" {
+		args = append(args, "-c", "model_reasoning_effort="+c.ReasoningEffort)
+	}
+	cmd := c.command(runCtx, append(args, "-o", name, planPrompt+content)...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return "", err
@@ -187,6 +206,12 @@ func readRunEvents(stdout io.Reader, observer RunObserver) *runEvents {
 			Error    struct {
 				Message string `json:"message"`
 			} `json:"error"`
+			Usage *struct {
+				Input       int `json:"input_tokens"`
+				CachedInput int `json:"cached_input_tokens"`
+				Output      int `json:"output_tokens"`
+				Reasoning   int `json:"reasoning_output_tokens"`
+			} `json:"usage"`
 		}
 		if json.Unmarshal(line, &event) != nil || event.Type == "" {
 			if events.text.Len() < 64*1024 {
@@ -202,6 +227,10 @@ func readRunEvents(stdout io.Reader, observer RunObserver) *runEvents {
 				if observer != nil {
 					observer.Session(event.ThreadID)
 				}
+			}
+		case "turn.completed":
+			if tokens, ok := observer.(tokenObserver); ok && event.Usage != nil {
+				tokens.Tokens(TokenUsage{Input: event.Usage.Input, CachedInput: event.Usage.CachedInput, Output: event.Usage.Output, Reasoning: event.Usage.Reasoning})
 			}
 		case "turn.failed":
 			events.turnFailure = event.Error.Message

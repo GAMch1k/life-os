@@ -35,7 +35,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Codex CLI %q not found: %v\n", cfg.CodexCommand, err)
 		os.Exit(78)
 	}
-	planner := processor.CodexCLI{Command: binary, Model: cfg.Model, WorkDir: cfg.WorkDir, Timeout: cfg.CodexTimeout, Slots: make(chan struct{}, cfg.MaxConcurrency)}
+	planner := processor.CodexCLI{Command: binary, Model: cfg.Model, ReasoningEffort: cfg.ReasoningEffort, WorkDir: cfg.WorkDir, Timeout: cfg.CodexTimeout, Slots: make(chan struct{}, cfg.MaxConcurrency)}
 	if *usage {
 		report, err := planner.Usage(context.Background())
 		if err != nil {
@@ -54,12 +54,14 @@ func main() {
 		fmt.Println(plan)
 		return
 	}
-	runner := processor.Runner{Planner: planner, Tools: &processor.MCPClient{URL: cfg.MCPURL}, Model: cfg.Model, DryRun: *dryRun}
+	runner := processor.Runner{Planner: planner, Tools: &processor.MCPClient{URL: cfg.MCPURL}, Model: cfg.Profile(), DryRun: *dryRun}
 	if *serve {
 		monitor := processor.NewMonitor(cfg.Model)
 		runner.Owner = instanceID()
 		monitor.ConfigureRuntime(runner.Owner, binary, cfg.CodexTimeout, cfg.MaxConcurrency)
 		runner.OnRuntime = monitor.RecordRuntime
+		runner.OnTokens = monitor.RecordTokens
+		monitor.SetReasoningEffort(cfg.ReasoningEffort)
 		runner.Planner = monitor.Monitored(planner)
 		runner.Retry = processor.RetryPolicy{RecoveryAt: usageRecovery(planner, monitor)}
 		if *dryRun {

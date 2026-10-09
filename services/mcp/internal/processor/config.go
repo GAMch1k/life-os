@@ -3,6 +3,7 @@ package processor
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"time"
 )
@@ -23,6 +24,18 @@ type Config struct {
 	// StaleAfter is the heartbeat age after which an unfinished attempt is
 	// considered abandoned and reconciled.
 	StaleAfter time.Duration
+	// ReasoningEffort is passed to Codex as model_reasoning_effort when set;
+	// empty keeps the Codex configuration's default.
+	ReasoningEffort string
+}
+
+// Profile names the model and reasoning effort, for example
+// "gpt-6-luna/low", as recorded on processing attempts.
+func (c Config) Profile() string {
+	if c.ReasoningEffort == "" {
+		return c.Model
+	}
+	return c.Model + "/" + c.ReasoningEffort
 }
 
 func LoadConfig() (Config, error) {
@@ -44,11 +57,18 @@ func LoadConfig() (Config, error) {
 		return c, fmt.Errorf("LIFE_OS_PROCESSOR_STALE_AFTER_SECONDS must be an integer of at least 90 (three heartbeats)")
 	}
 	c.CodexTimeout, c.MaxConcurrency, c.StaleAfter = time.Duration(timeout)*time.Second, concurrency, time.Duration(stale)*time.Second
+	c.ReasoningEffort = os.Getenv("LIFE_OS_CODEX_REASONING_EFFORT")
+	if !effortPattern.MatchString(c.ReasoningEffort) {
+		return c, fmt.Errorf("LIFE_OS_CODEX_REASONING_EFFORT must be a lowercase effort name such as none, low, or medium")
+	}
 	if c.CodexCommand == "" {
 		return c, fmt.Errorf("LIFE_OS_CODEX_COMMAND must not be empty")
 	}
 	return c, nil
 }
+
+var effortPattern = regexp.MustCompile(`^[a-z]*$`)
+
 func env(k, d string) string {
 	if v := os.Getenv(k); v != "" {
 		return v
