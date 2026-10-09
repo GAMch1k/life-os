@@ -1,6 +1,6 @@
-import { TasksSummary } from "@/components/tasks-summary";
-import { getTasksSummary } from "@/lib/tasks-summary";
+import { TasksWorkspace } from "@/components/tasks-workspace";
+import { getTasksWorkspace } from "@/lib/tasks-workspace";
 export const dynamic = "force-dynamic";
 export default async function TasksPage() {
-  return <TasksSummary state={await getTasksSummary()} />;
+  return <TasksWorkspace state={await getTasksWorkspace()} />;
 }
