@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Activity,
   CalendarDays,
   CheckSquare2,
   CircleUserRound,
@@ -21,6 +22,7 @@ const navigation = [
   { href: "/tasks", label: "Tasks", icon: CheckSquare2 },
   { href: "/inbox", label: "Inbox", icon: Inbox },
   { href: "/calendar", label: "Calendar", icon: CalendarDays },
+  { href: "/activity", label: "Activity", icon: Activity },
 ] as const;
 
 export function AppShell({
@@ -93,7 +95,7 @@ export function AppShell({
         aria-label="Mobile navigation"
         className="bg-background/95 supports-[backdrop-filter]:bg-background/85 fixed inset-x-0 bottom-0 z-20 border-t px-2 pt-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] backdrop-blur md:hidden"
       >
-        <div className="mx-auto grid max-w-lg grid-cols-5">
+        <div className="mx-auto grid max-w-lg grid-cols-6">
           {navigation.map(({ href, icon: Icon, label }) => (
             <Link
               className={cn(
