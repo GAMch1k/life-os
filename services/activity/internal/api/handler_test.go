@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/GAMch1k/life-os/pkg/activity"
 	"github.com/GAMch1k/life-os/services/activity/internal/api/generated"
 	store "github.com/GAMch1k/life-os/services/activity/internal/repository/generated"
 )
@@ -132,5 +133,23 @@ func TestListPagesWithKeysetCursor(t *testing.T) {
 	response, _ = app.Test(httptest.NewRequest("GET", "/v1/activity-events?cursor=not-a-cursor", nil))
 	if response.StatusCode != 400 {
 		t.Fatalf("invalid cursor status = %d", response.StatusCode)
+	}
+}
+
+// The shared emitter hand-writes the event envelope; this keeps it in step with
+// the contract that the Activity service actually validates.
+func TestSharedEmitterEnvelopeMatchesContract(t *testing.T) {
+	causation := activity.EventID("inbox.processing.started", "attempt")
+	raw, err := json.Marshal(activity.Event{ID: activity.EventID("task.created", "t"), Type: "task.created", Source: "tasks", Subject: activity.Subject{Type: "task", ID: "t"}, CorrelationID: "corr", CausationID: &causation, Actor: activity.Agent("mcp"), Outcome: activity.Succeeded, Summary: "Task created", Data: map[string]any{"title": "x"}, OccurredAt: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body generated.ActivityEventCreateRequest
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatal(err)
+	}
+	params, err := recordParams(body)
+	if err != nil || !params.CausationID.Valid || *params.ActorName != "mcp" || params.CorrelationID != "corr" {
+		t.Fatalf("params=%+v err=%v", params, err)
 	}
 }
