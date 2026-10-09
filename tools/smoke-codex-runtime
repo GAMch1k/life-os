@@ -11,8 +11,21 @@
 set -euo pipefail
 
 export LIFE_OS_PROCESSOR_STALE_AFTER_SECONDS=90
+# Runs go through tools/fixtures/codex-limit-simulator, which passes every
+# call to the real Codex CLI except while scenario 4 asks it to start slowly.
+sim=$(mktemp -d)
+chmod 755 "$sim"
+install -m 755 tools/fixtures/codex-limit-simulator "$sim/codex-limit-simulator"
+echo 0 >"$sim/until"
+echo limit >"$sim/mode"
+chmod 644 "$sim/until" "$sim/mode"
+export LIFE_OS_SIM_DIR=$sim LIFE_OS_VERIFY_OVERLAYS=tools/fixtures/codex-simulator.compose.yaml
+simulate() { echo "$1" >"$sim/mode"; echo "$2" >"$sim/until"; }
 compose=(./tools/verify-compose)
-cleanup() { "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true; }
+cleanup() {
+  "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
+  rm -rf "$sim"
+}
 trap cleanup EXIT
 
 "${compose[@]}" up --detach --no-build
@@ -107,44 +120,46 @@ wait_until 180 state_is "$id" resolved
 [ "$(tasks_titled "$title")" = 1 ] || fail "expected one Task after the timeout"
 echo "   processed with the default deadline; one Task"
 
-crash() { # crash <early|late>: SIGKILL the processor during a run
-  local window=$1 title id session=""
-  for try in 1 2 3; do
-    title="P8 runtime crash $window $try $(date +%s)"
-    id=$(capture "Create a task titled $title.")
-    if [ "$window" = early ]; then
-      wait_until 60 runtime_is "$id" running
-    else
-      wait_until 60 has_session "$id"
-    fi
-    "${compose[@]}" kill -s KILL processor >/dev/null 2>&1
-    session=$(latest "$id" | jq -r '.runtimeSessionId // empty')
-    if [ "$(item "$id" | jq -r '.state')" != processing ]; then
-      echo "   try $try: the run finished before the kill; retrying"
-    elif [ "$window" = early ] && [ -n "$session" ]; then
-      echo "   try $try: Codex reported its session before the kill; retrying for the spawn window"
-    else
-      break
-    fi
-    "${compose[@]}" start processor >/dev/null 2>&1
-    wait_until 240 state_is "$id" resolved
-    id=""
-  done
-  [ -n "$id" ] || fail "could not crash the processor in the $window window"
-  echo "   killed with the attempt $(latest "$id" | jq -r '.runtimeState') and session '${session:-none}'"
+recover_after_crash() { # recover_after_crash <item id> <title>
   "${compose[@]}" start processor >/dev/null 2>&1
-  wait_until 300 state_is "$id" resolved
+  wait_until 300 state_is "$1" resolved
   local history
-  history=$(curl --fail --silent "$gateway/api/inbox/v1/inbox-items/$id/processing-attempts")
+  history=$(curl --fail --silent "$gateway/api/inbox/v1/inbox-items/$1/processing-attempts")
   jq -e '[.items[] | select(.status == "retryable" and (.errorSummary | startswith("recovered")))] | length == 1' <<<"$history" >/dev/null ||
     fail "no reconciled attempt: $(jq -c '[.items[] | {status, errorSummary}]' <<<"$history")"
-  [ "$(tasks_titled "$title")" = 1 ] || fail "expected exactly one Task after the crash"
+  [ "$(tasks_titled "$2")" = 1 ] || fail "expected exactly one Task after the crash"
   echo "   reconciled by the next processor and processed; one Task"
 }
-echo "== 4. SIGKILL before Codex reports its session (spawn window)"
-crash early
+
+echo "== 4. SIGKILL after spawn, before Codex reports its session (crash window)"
+# The real CLI reports its session within a fraction of a second, so the
+# wrapper holds the spawned run for 45 s before handing over to it.
+simulate slow-start $(($(date +%s) + 600))
+title="P8 runtime crash window $(date +%s)"
+id=$(capture "Create a task titled $title.")
+wait_until 60 runtime_is "$id" running
+sleep 2
+has_session "$id" && fail "the run reported a session during the slow start"
+"${compose[@]}" kill -s KILL processor >/dev/null 2>&1
+echo "   killed with the attempt $(latest "$id" | jq -r '.runtimeState') and no session"
+simulate limit 0
+recover_after_crash "$id" "$title"
+
 echo "== 5. SIGKILL after Codex reported its session"
-crash late
+crashed=""
+for try in 1 2 3; do
+  title="P8 runtime crash late $try $(date +%s)"
+  id=$(capture "Create a task titled $title.")
+  wait_until 60 has_session "$id"
+  "${compose[@]}" kill -s KILL processor >/dev/null 2>&1
+  if [ "$(item "$id" | jq -r '.state')" = processing ]; then crashed=$id; break; fi
+  echo "   try $try: the run finished before the kill; retrying"
+  "${compose[@]}" start processor >/dev/null 2>&1
+  wait_until 240 state_is "$id" resolved
+done
+[ -n "$crashed" ] || fail "could not crash the processor during a run"
+echo "   killed with the attempt $(latest "$crashed" | jq -r '.runtimeState') and session $(latest "$crashed" | jq -r '.runtimeSessionId')"
+recover_after_crash "$crashed" "$title"
 processor_status | jq -e '.runtime.recovered >= 1' >/dev/null || fail "status does not count the recovery"
 
 echo
