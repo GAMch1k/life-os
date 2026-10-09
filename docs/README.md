@@ -12,6 +12,7 @@ Life OS is a local-first personal operating system. This index is the human-read
 - [MCP tool contract](services/mcp-tool-contract.md) — permitted semantic AI actions and safety boundaries.
 - [API overview](api/overview.md) — gateway addresses, all current endpoints, examples, and errors.
 - [Dashboard](frontend/dashboard.md), [data and code generation](development/data-and-codegen.md), and [operations](operations/deployment.md).
+- [Cloudflare Tunnel and Access](operations/cloudflare.md) — the authenticated public path to the gateway.
 
 ## Scope
 
