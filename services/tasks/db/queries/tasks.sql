@@ -20,12 +20,17 @@ LIMIT sqlc.arg(page_limit);
 
 -- name: UpdateTask :one
 UPDATE tasks
-SET title = COALESCE(sqlc.narg(title), title), notes = COALESCE(sqlc.narg(notes), notes), due_at = COALESCE(sqlc.narg(due_at), due_at),
+SET title = COALESCE(sqlc.narg(title), title), notes = COALESCE(sqlc.narg(notes), notes), due_at = CASE WHEN sqlc.arg(clear_due_at)::boolean THEN NULL ELSE COALESCE(sqlc.narg(due_at), due_at) END,
     recurrence_frequency = COALESCE(sqlc.narg(recurrence_frequency), recurrence_frequency), recurrence_interval = COALESCE(sqlc.narg(recurrence_interval), recurrence_interval), recurrence_until = COALESCE(sqlc.narg(recurrence_until), recurrence_until), updated_at = now()
 WHERE id = sqlc.arg(id)
 RETURNING *;
 
 -- name: CompleteTask :one
 UPDATE tasks SET completed_at = COALESCE(completed_at, now()), updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: ReopenTask :one
+UPDATE tasks SET completed_at = NULL, updated_at = now()
 WHERE id = $1
 RETURNING *;

@@ -75,9 +75,28 @@ func TestTaskPersistenceLifecycle(t *testing.T) {
 	if undated.DueAt.Valid {
 		t.Fatalf("undated task was assigned a due date: %#v", undated.DueAt)
 	}
+	renamed := "Pay electricity bill"
+	notes := "Review the amount before paying"
+	movedDue := due.AddDate(0, 0, 7)
+	updated, err := queries.UpdateTask(ctx, store.UpdateTaskParams{ID: created.ID, Title: &renamed, Notes: &notes, DueAt: pgtype.Timestamptz{Time: movedDue, Valid: true}})
+	if err != nil || updated.Title != renamed || updated.Notes == nil || *updated.Notes != notes || !updated.DueAt.Valid || !updated.DueAt.Time.Equal(movedDue) {
+		t.Fatalf("updated task = %#v, err = %v", updated, err)
+	}
+	cleared, err := queries.UpdateTask(ctx, store.UpdateTaskParams{ID: created.ID, ClearDueAt: true})
+	if err != nil || cleared.DueAt.Valid {
+		t.Fatalf("cleared task = %#v, err = %v", cleared, err)
+	}
 	completed, err := queries.CompleteTask(ctx, created.ID)
 	if err != nil || !completed.CompletedAt.Valid {
 		t.Fatalf("completed = %#v, err = %v", completed, err)
+	}
+	reopened, err := queries.ReopenTask(ctx, created.ID)
+	if err != nil || reopened.CompletedAt.Valid {
+		t.Fatalf("reopened = %#v, err = %v", reopened, err)
+	}
+	completed, err = queries.CompleteTask(ctx, created.ID)
+	if err != nil || !completed.CompletedAt.Valid {
+		t.Fatalf("recompleted = %#v, err = %v", completed, err)
 	}
 	closed, err := queries.ListTasks(ctx, store.ListTasksParams{CompletedFilter: pointer(true), PageLimit: 10})
 	if err != nil || len(closed) != 1 || !closed[0].CompletedAt.Valid {

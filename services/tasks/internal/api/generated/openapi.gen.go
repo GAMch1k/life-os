@@ -73,6 +73,8 @@ type TaskList struct {
 
 // UpdateTaskRequest defines model for UpdateTaskRequest.
 type UpdateTaskRequest struct {
+	// ClearDueAt Clear the due date and return the Task to Unscheduled.
+	ClearDueAt *bool       `json:"clearDueAt,omitempty"`
 	DueAt      *time.Time  `json:"dueAt,omitempty"`
 	Notes      *string     `json:"notes,omitempty"`
 	Recurrence *Recurrence `json:"recurrence,omitempty"`
@@ -113,6 +115,9 @@ type ServerInterface interface {
 	// CompleteTask Complete a task
 	// (POST /v1/tasks/{taskId}/complete)
 	CompleteTask(c fiber.Ctx, taskId openapi_types.UUID) error
+	// ReopenTask Reopen a task
+	// (POST /v1/tasks/{taskId}/reopen)
+	ReopenTask(c fiber.Ctx, taskId openapi_types.UUID) error
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -294,6 +299,35 @@ func (siw *ServerInterfaceWrapper) CompleteTask(c fiber.Ctx) error {
 	return handler(c)
 }
 
+// ReopenTask operation middleware
+func (siw *ServerInterfaceWrapper) ReopenTask(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "taskId" -------------
+	var taskId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "taskId", c.Params("taskId"), &taskId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter taskId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.ReopenTask(c, taskId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
 // FiberServerOptions provides options for the Fiber server.
 type FiberServerOptions struct {
 	BaseURL            string
@@ -326,5 +360,7 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	router.Patch(options.BaseURL+"/v1/tasks/:taskId", wrapper.UpdateTask)
 
 	router.Post(options.BaseURL+"/v1/tasks/:taskId/complete", wrapper.CompleteTask)
+
+	router.Post(options.BaseURL+"/v1/tasks/:taskId/reopen", wrapper.ReopenTask)
 
 }
