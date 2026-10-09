@@ -13,6 +13,36 @@ import (
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
+// Defines values for AttemptRuntimeRequestState.
+const (
+	AttemptRuntimeRequestStateCancelled AttemptRuntimeRequestState = "cancelled"
+	AttemptRuntimeRequestStateCompleted AttemptRuntimeRequestState = "completed"
+	AttemptRuntimeRequestStateFailed    AttemptRuntimeRequestState = "failed"
+	AttemptRuntimeRequestStateRunning   AttemptRuntimeRequestState = "running"
+	AttemptRuntimeRequestStateSpawning  AttemptRuntimeRequestState = "spawning"
+	AttemptRuntimeRequestStateTimedOut  AttemptRuntimeRequestState = "timed_out"
+)
+
+// Valid indicates whether the value is a known member of the AttemptRuntimeRequestState enum.
+func (e AttemptRuntimeRequestState) Valid() bool {
+	switch e {
+	case AttemptRuntimeRequestStateCancelled:
+		return true
+	case AttemptRuntimeRequestStateCompleted:
+		return true
+	case AttemptRuntimeRequestStateFailed:
+		return true
+	case AttemptRuntimeRequestStateRunning:
+		return true
+	case AttemptRuntimeRequestStateSpawning:
+		return true
+	case AttemptRuntimeRequestStateTimedOut:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CreateInboxItemRequestSource.
 const (
 	CreateInboxItemRequestSourceEmail  CreateInboxItemRequestSource = "email"
@@ -91,6 +121,36 @@ func (e InboxItemState) Valid() bool {
 	case InboxItemStateRaw:
 		return true
 	case InboxItemStateResolved:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ProcessingAttemptRuntimeState.
+const (
+	ProcessingAttemptRuntimeStateCancelled ProcessingAttemptRuntimeState = "cancelled"
+	ProcessingAttemptRuntimeStateCompleted ProcessingAttemptRuntimeState = "completed"
+	ProcessingAttemptRuntimeStateFailed    ProcessingAttemptRuntimeState = "failed"
+	ProcessingAttemptRuntimeStateRunning   ProcessingAttemptRuntimeState = "running"
+	ProcessingAttemptRuntimeStateSpawning  ProcessingAttemptRuntimeState = "spawning"
+	ProcessingAttemptRuntimeStateTimedOut  ProcessingAttemptRuntimeState = "timed_out"
+)
+
+// Valid indicates whether the value is a known member of the ProcessingAttemptRuntimeState enum.
+func (e ProcessingAttemptRuntimeState) Valid() bool {
+	switch e {
+	case ProcessingAttemptRuntimeStateCancelled:
+		return true
+	case ProcessingAttemptRuntimeStateCompleted:
+		return true
+	case ProcessingAttemptRuntimeStateFailed:
+		return true
+	case ProcessingAttemptRuntimeStateRunning:
+		return true
+	case ProcessingAttemptRuntimeStateSpawning:
+		return true
+	case ProcessingAttemptRuntimeStateTimedOut:
 		return true
 	default:
 		return false
@@ -184,6 +244,17 @@ func (e ListInboxItemsParamsState) Valid() bool {
 	}
 }
 
+// AttemptRuntimeRequest defines model for AttemptRuntimeRequest.
+type AttemptRuntimeRequest struct {
+	// Owner Processor instance running the attempt
+	Owner     string                     `json:"owner"`
+	SessionId *string                    `json:"sessionId,omitempty"`
+	State     AttemptRuntimeRequestState `json:"state"`
+}
+
+// AttemptRuntimeRequestState defines model for AttemptRuntimeRequest.State.
+type AttemptRuntimeRequestState string
+
 // CreateHumanReviewRequest defines model for CreateHumanReviewRequest.
 type CreateHumanReviewRequest struct {
 	AttemptId      openapi_types.UUID       `json:"attemptId"`
@@ -272,18 +343,28 @@ type InboxItemList struct {
 
 // ProcessingAttempt defines model for ProcessingAttempt.
 type ProcessingAttempt struct {
-	Actions        []map[string]interface{} `json:"actions"`
-	AgentName      string                   `json:"agentName"`
-	CompletedAt    *time.Time               `json:"completedAt,omitempty"`
-	CreatedAt      time.Time                `json:"createdAt"`
-	ErrorSummary   *string                  `json:"errorSummary,omitempty"`
-	Id             openapi_types.UUID       `json:"id"`
-	IdempotencyKey *string                  `json:"idempotencyKey,omitempty"`
-	ModelProfile   string                   `json:"modelProfile"`
-	NextRetryAt    *time.Time               `json:"nextRetryAt,omitempty"`
-	StartedAt      *time.Time               `json:"startedAt,omitempty"`
-	Status         ProcessingAttemptStatus  `json:"status"`
+	Actions            []map[string]interface{} `json:"actions"`
+	AgentName          string                   `json:"agentName"`
+	CompletedAt        *time.Time               `json:"completedAt,omitempty"`
+	CreatedAt          time.Time                `json:"createdAt"`
+	ErrorSummary       *string                  `json:"errorSummary,omitempty"`
+	Id                 openapi_types.UUID       `json:"id"`
+	IdempotencyKey     *string                  `json:"idempotencyKey,omitempty"`
+	InboxItemId        openapi_types.UUID       `json:"inboxItemId"`
+	ModelProfile       string                   `json:"modelProfile"`
+	NextRetryAt        *time.Time               `json:"nextRetryAt,omitempty"`
+	RuntimeHeartbeatAt *time.Time               `json:"runtimeHeartbeatAt,omitempty"`
+	RuntimeOwner       *string                  `json:"runtimeOwner,omitempty"`
+
+	// RuntimeSessionId Agent session id (Codex thread id) when the runtime reports one
+	RuntimeSessionId *string                        `json:"runtimeSessionId,omitempty"`
+	RuntimeState     *ProcessingAttemptRuntimeState `json:"runtimeState,omitempty"`
+	StartedAt        *time.Time                     `json:"startedAt,omitempty"`
+	Status           ProcessingAttemptStatus        `json:"status"`
 }
+
+// ProcessingAttemptRuntimeState defines model for ProcessingAttempt.RuntimeState.
+type ProcessingAttemptRuntimeState string
 
 // ProcessingAttemptStatus defines model for ProcessingAttempt.Status.
 type ProcessingAttemptStatus string
@@ -328,6 +409,11 @@ type ListInboxItemsParams struct {
 // ListInboxItemsParamsState defines parameters for ListInboxItems.
 type ListInboxItemsParamsState string
 
+// ListStaleProcessingAttemptsParams defines parameters for ListStaleProcessingAttempts.
+type ListStaleProcessingAttemptsParams struct {
+	StaleAfterSeconds int `form:"staleAfterSeconds" json:"staleAfterSeconds"`
+}
+
 // CreateInboxItemJSONRequestBody defines body for CreateInboxItem for application/json ContentType.
 type CreateInboxItemJSONRequestBody = CreateInboxItemRequest
 
@@ -342,6 +428,9 @@ type CreateProcessingAttemptJSONRequestBody = CreateProcessingAttemptRequest
 
 // UpdateProcessingAttemptJSONRequestBody defines body for UpdateProcessingAttempt for application/json ContentType.
 type UpdateProcessingAttemptJSONRequestBody = UpdateProcessingAttemptRequest
+
+// RecordAttemptRuntimeJSONRequestBody defines body for RecordAttemptRuntime for application/json ContentType.
+type RecordAttemptRuntimeJSONRequestBody = AttemptRuntimeRequest
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
@@ -375,9 +464,15 @@ type ServerInterface interface {
 	// UpdateProcessingAttempt Record the outcome of an Inbox processing attempt
 	// (PATCH /v1/inbox-items/{itemId}/processing-attempts/{attemptId})
 	UpdateProcessingAttempt(c fiber.Ctx, itemId openapi_types.UUID, attemptId openapi_types.UUID) error
+	// RecordAttemptRuntime Record the runtime state of an unfinished processing attempt
+	// (PUT /v1/inbox-items/{itemId}/processing-attempts/{attemptId}/runtime)
+	RecordAttemptRuntime(c fiber.Ctx, itemId openapi_types.UUID, attemptId openapi_types.UUID) error
 	// ResolveInboxItem Resolve an inbox item
 	// (POST /v1/inbox-items/{itemId}/resolve)
 	ResolveInboxItem(c fiber.Ctx, itemId openapi_types.UUID) error
+	// ListStaleProcessingAttempts List unfinished attempts whose runtime stopped reporting
+	// (GET /v1/stale-processing-attempts)
+	ListStaleProcessingAttempts(c fiber.Ctx, params ListStaleProcessingAttemptsParams) error
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -701,6 +796,43 @@ func (siw *ServerInterfaceWrapper) UpdateProcessingAttempt(c fiber.Ctx) error {
 	return handler(c)
 }
 
+// RecordAttemptRuntime operation middleware
+func (siw *ServerInterfaceWrapper) RecordAttemptRuntime(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "itemId" -------------
+	var itemId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "itemId", c.Params("itemId"), &itemId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter itemId: %w", err).Error())
+	}
+
+	// ------------- Path parameter "attemptId" -------------
+	var attemptId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "attemptId", c.Params("attemptId"), &attemptId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter attemptId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.RecordAttemptRuntime(c, itemId, attemptId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
 // ResolveInboxItem operation middleware
 func (siw *ServerInterfaceWrapper) ResolveInboxItem(c fiber.Ctx) error {
 
@@ -717,6 +849,43 @@ func (siw *ServerInterfaceWrapper) ResolveInboxItem(c fiber.Ctx) error {
 
 	handler := func(c fiber.Ctx) error {
 		return siw.Handler.ResolveInboxItem(c, itemId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// ListStaleProcessingAttempts operation middleware
+func (siw *ServerInterfaceWrapper) ListStaleProcessingAttempts(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListStaleProcessingAttemptsParams
+
+	var query url.Values
+	query, err = url.ParseQuery(string(c.Request().URI().QueryString()))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for query string: %w", err).Error())
+	}
+
+	// ------------- Required query parameter "staleAfterSeconds" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "staleAfterSeconds", query, &params.StaleAfterSeconds, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter staleAfterSeconds: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.ListStaleProcessingAttempts(c, params)
 	}
 
 	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
@@ -774,5 +943,9 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	router.Post(options.BaseURL+"/v1/inbox-items/:itemId/processing-attempts", wrapper.CreateProcessingAttempt)
 
 	router.Patch(options.BaseURL+"/v1/inbox-items/:itemId/processing-attempts/:attemptId", wrapper.UpdateProcessingAttempt)
+
+	router.Put(options.BaseURL+"/v1/inbox-items/:itemId/processing-attempts/:attemptId/runtime", wrapper.RecordAttemptRuntime)
+
+	router.Get(options.BaseURL+"/v1/stale-processing-attempts", wrapper.ListStaleProcessingAttempts)
 
 }

@@ -162,6 +162,46 @@ export interface paths {
         patch: operations["updateProcessingAttempt"];
         trace?: never;
     };
+    "/v1/inbox-items/{itemId}/processing-attempts/{attemptId}/runtime": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Record the runtime state of an unfinished processing attempt
+         * @description Called by the processor before spawning the agent and while it runs; each call refreshes the heartbeat. A finished attempt cannot change its runtime (409).
+         */
+        put: operations["recordAttemptRuntime"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/stale-processing-attempts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List unfinished attempts whose runtime stopped reporting
+         * @description Pending or processing attempts of captures still in raw or processing whose heartbeat (or last update, for attempts without runtime tracking) is older than staleAfterSeconds, oldest first. The processor reconciles them after a crash or restart.
+         */
+        get: operations["listStaleProcessingAttempts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -240,6 +280,15 @@ export interface components {
         ProcessingAttempt: {
             /** Format: uuid */
             id: string;
+            /** Format: uuid */
+            inboxItemId: string;
+            /** @enum {string|null} */
+            runtimeState?: "spawning" | "running" | "completed" | "failed" | "timed_out" | "cancelled" | null;
+            runtimeOwner?: string | null;
+            /** @description Agent session id (Codex thread id) when the runtime reports one */
+            runtimeSessionId?: string | null;
+            /** Format: date-time */
+            runtimeHeartbeatAt?: string | null;
             /** @enum {string} */
             status: "pending" | "processing" | "human_review" | "processed" | "failed" | "retryable";
             agentName: string;
@@ -265,6 +314,13 @@ export interface components {
             idempotencyKey: string;
             agentName: string;
             modelProfile: string;
+        };
+        AttemptRuntimeRequest: {
+            /** @enum {string} */
+            state: "spawning" | "running" | "completed" | "failed" | "timed_out" | "cancelled";
+            /** @description Processor instance running the attempt */
+            owner: string;
+            sessionId?: string;
         };
         UpdateProcessingAttemptRequest: {
             /**
@@ -690,6 +746,83 @@ export interface operations {
             };
             /** @description Inbox item or attempt not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    recordAttemptRuntime: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                itemId: string;
+                attemptId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AttemptRuntimeRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated attempt */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProcessingAttempt"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Attempt not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Attempt already finished */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listStaleProcessingAttempts: {
+        parameters: {
+            query: {
+                staleAfterSeconds: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Stale attempts */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProcessingAttemptList"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

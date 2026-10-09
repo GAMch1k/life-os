@@ -19,6 +19,11 @@ type Querier interface {
 	GetProcessingAttemptForItem(ctx context.Context, arg GetProcessingAttemptForItemParams) (InboxProcessingAttempt, error)
 	ListInboxItems(ctx context.Context, arg ListInboxItemsParams) ([]InboxItem, error)
 	ListProcessingAttempts(ctx context.Context, inboxItemID pgtype.UUID) ([]InboxProcessingAttempt, error)
+	// Unfinished attempts whose runtime stopped reporting (or never did), for
+	// captures that are still waiting for processing. An open attempt of a capture
+	// that has since been resolved, discarded, or sent to review is history.
+	ListStaleProcessingAttempts(ctx context.Context, staleAfterSeconds int32) ([]InboxProcessingAttempt, error)
+	RecordAttemptRuntime(ctx context.Context, arg RecordAttemptRuntimeParams) (InboxProcessingAttempt, error)
 	ResolveInboxItemHumanReview(ctx context.Context, arg ResolveInboxItemHumanReviewParams) (InboxItem, error)
 	ScheduleInboxItemRetry(ctx context.Context, arg ScheduleInboxItemRetryParams) (InboxItem, error)
 	SetInboxItemHumanReview(ctx context.Context, arg SetInboxItemHumanReviewParams) (InboxItem, error)

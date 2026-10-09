@@ -207,6 +207,44 @@ func (h *Handler) UpdateProcessingAttempt(c fiber.Ctx, itemID types.UUID, attemp
 	h.recordAttemptOutcome(c, itemID, attempt, body)
 	return c.JSON(attemptOutput(attempt))
 }
+
+// RecordAttemptRuntime stores the runtime state of an unfinished attempt and
+// refreshes its heartbeat.
+func (h *Handler) RecordAttemptRuntime(c fiber.Ctx, itemID types.UUID, attemptID types.UUID) error {
+	var body generated.RecordAttemptRuntimeJSONRequestBody
+	if err := c.Bind().Body(&body); err != nil || body.State == "" || body.Owner == "" || len(body.Owner) > 200 || (body.SessionId != nil && len(*body.SessionId) > 200) {
+		return fiber.NewError(400, "invalid attempt runtime")
+	}
+	state := string(body.State)
+	attempt, err := h.queries.RecordAttemptRuntime(c.Context(), store.RecordAttemptRuntimeParams{ID: pgUUID(attemptID), InboxItemID: pgUUID(itemID), RuntimeState: &state, RuntimeOwner: &body.Owner, RuntimeSessionID: body.SessionId})
+	if errors.Is(err, pgx.ErrNoRows) {
+		if _, err := h.queries.GetProcessingAttemptForItem(c.Context(), store.GetProcessingAttemptForItemParams{ID: pgUUID(attemptID), InboxItemID: pgUUID(itemID)}); err != nil {
+			return databaseError(err)
+		}
+		return fiber.NewError(409, "processing attempt already finished")
+	}
+	if err != nil {
+		return internal(err)
+	}
+	return c.JSON(attemptOutput(attempt))
+}
+
+// ListStaleProcessingAttempts lists unfinished attempts whose runtime stopped
+// reporting, for reconciliation after a processor crash or restart.
+func (h *Handler) ListStaleProcessingAttempts(c fiber.Ctx, params generated.ListStaleProcessingAttemptsParams) error {
+	if params.StaleAfterSeconds < 30 || params.StaleAfterSeconds > 86400 {
+		return fiber.NewError(400, "staleAfterSeconds must be between 30 and 86400")
+	}
+	attempts, err := h.queries.ListStaleProcessingAttempts(c.Context(), int32(params.StaleAfterSeconds))
+	if err != nil {
+		return internal(err)
+	}
+	items := make([]generated.ProcessingAttempt, 0, len(attempts))
+	for _, attempt := range attempts {
+		items = append(items, attemptOutput(attempt))
+	}
+	return c.JSON(generated.ProcessingAttemptList{Items: items})
+}
 func (h *Handler) CreateHumanReview(c fiber.Ctx, itemID types.UUID) error {
 	var body generated.CreateHumanReviewJSONRequestBody
 	if err := c.Bind().Body(&body); err != nil || body.ErrorSummary == "" || len(body.ProposedAction) == 0 {
@@ -305,7 +343,12 @@ func (h *Handler) ResolveHumanReview(c fiber.Ctx, itemID types.UUID) error {
 func attemptOutput(attempt store.InboxProcessingAttempt) generated.ProcessingAttempt {
 	var actions []map[string]interface{}
 	_ = json.Unmarshal(attempt.Actions, &actions)
-	return generated.ProcessingAttempt{Id: uuid(attempt.ID), IdempotencyKey: &attempt.IdempotencyKey, Status: generated.ProcessingAttemptStatus(attempt.Status), AgentName: attempt.AgentName, ModelProfile: attempt.ModelProfile, Actions: actions, ErrorSummary: attempt.ErrorSummary, NextRetryAt: nullableTime(attempt.NextRetryAt), StartedAt: nullableTime(attempt.StartedAt), CompletedAt: nullableTime(attempt.CompletedAt), CreatedAt: attempt.CreatedAt.Time}
+	var runtimeState *generated.ProcessingAttemptRuntimeState
+	if attempt.RuntimeState != nil {
+		state := generated.ProcessingAttemptRuntimeState(*attempt.RuntimeState)
+		runtimeState = &state
+	}
+	return generated.ProcessingAttempt{Id: uuid(attempt.ID), InboxItemId: uuid(attempt.InboxItemID), RuntimeState: runtimeState, RuntimeOwner: attempt.RuntimeOwner, RuntimeSessionId: attempt.RuntimeSessionID, RuntimeHeartbeatAt: nullableTime(attempt.RuntimeHeartbeatAt), IdempotencyKey: &attempt.IdempotencyKey, Status: generated.ProcessingAttemptStatus(attempt.Status), AgentName: attempt.AgentName, ModelProfile: attempt.ModelProfile, Actions: actions, ErrorSummary: attempt.ErrorSummary, NextRetryAt: nullableTime(attempt.NextRetryAt), StartedAt: nullableTime(attempt.StartedAt), CompletedAt: nullableTime(attempt.CompletedAt), CreatedAt: attempt.CreatedAt.Time}
 }
 func (h *Handler) DiscardInboxItem(c fiber.Ctx, id types.UUID) error {
 	item, err := h.queries.SetInboxItemState(c.Context(), store.SetInboxItemStateParams{ID: pgUUID(id), State: "discarded"})

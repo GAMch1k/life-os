@@ -20,7 +20,7 @@ install -m 755 tools/fixtures/codex-limit-simulator "$sim/codex-limit-simulator"
 echo 0 >"$sim/until"
 echo limit >"$sim/mode"
 chmod 644 "$sim/until" "$sim/mode"
-export LIFE_OS_SIM_DIR=$sim LIFE_OS_VERIFY_OVERLAYS=tools/fixtures/retry-smoke.compose.yaml
+export LIFE_OS_SIM_DIR=$sim LIFE_OS_VERIFY_OVERLAYS=tools/fixtures/codex-simulator.compose.yaml
 compose=(./tools/verify-compose)
 cleanup() {
   "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true

@@ -108,7 +108,7 @@ func TestRunnerExecutesApprovedActionsThenResolves(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"inbox_list", "inbox_list_processing_attempts", "inbox_start_processing_attempt", "inbox_record_processing_attempt", "task_create", "inbox_record_processing_attempt", "inbox_resolve"}
+	want := []string{"inbox_list", "inbox_list_processing_attempts", "inbox_start_processing_attempt", "inbox_record_processing_attempt", "inbox_record_attempt_runtime", "inbox_record_attempt_runtime", "task_create", "inbox_record_processing_attempt", "inbox_resolve"}
 	if !equal(tools.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", tools.calls, want)
 	}

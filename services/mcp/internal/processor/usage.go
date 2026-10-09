@@ -53,7 +53,7 @@ type UsageWindow struct {
 func (c CodexCLI) Usage(ctx context.Context) (Usage, error) {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	cmd := c.runner()(ctx, c.command(), "app-server")
+	cmd := c.command(ctx, "app-server")
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return Usage{}, err
@@ -68,7 +68,7 @@ func (c CodexCLI) Usage(ctx context.Context) (Usage, error) {
 	}
 	defer func() {
 		_ = stdin.Close()
-		_ = cmd.Process.Kill()
+		killGroup(cmd)
 		_ = cmd.Wait()
 	}()
 	usage, err := readUsage(stdout, stdin, time.Now().UTC())

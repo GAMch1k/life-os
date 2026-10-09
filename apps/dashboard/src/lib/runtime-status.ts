@@ -32,6 +32,22 @@ export type ProcessorStatus = {
     lastError?: string;
     consecutiveFailures: number;
   };
+  /** The Codex runtime (see docs/services/mcp.md). */
+  runtime?: {
+    timeoutSeconds: number;
+    current: {
+      itemId: string;
+      state: string;
+      sessionId?: string;
+      since: string;
+    } | null;
+    completed: number;
+    failed: number;
+    timedOut: number;
+    cancelled: number;
+    recovered: number;
+    lastReconcileError?: string;
+  };
   /** Account usage as reported by the Codex CLI (see docs/services/mcp.md). */
   usage?: {
     current: CodexUsage | null;
@@ -67,6 +83,34 @@ function windowLabel(minutes: number | undefined) {
     : minutes % 60 === 0
       ? `${minutes / 60}-hour`
       : `${minutes}-minute`;
+}
+
+/** The run in progress and what happened to runs since the processor started. */
+export function runtimeFacts(runtime: ProcessorStatus["runtime"]) {
+  if (!runtime) return [];
+  const facts = [
+    {
+      label: "Codex run now",
+      value: runtime.current
+        ? `${runtime.current.state} since ${formatTime(runtime.current.since)}`
+        : "none",
+    },
+    {
+      label: "Runs since start",
+      value: `${runtime.completed} completed, ${runtime.failed} failed, ${runtime.timedOut} timed out (limit ${runtime.timeoutSeconds} s), ${runtime.cancelled} cancelled`,
+    },
+    {
+      label: "Recovered after a crash",
+      value: String(runtime.recovered),
+    },
+  ];
+  if (runtime.lastReconcileError) {
+    facts.push({
+      label: "Crash recovery",
+      value: `failing: ${runtime.lastReconcileError}`,
+    });
+  }
+  return facts;
 }
 
 /**
@@ -211,6 +255,7 @@ function processingCheck(processor: ProcessorStatus | null): StatusCheck {
     },
     { label: "Last poll", value: formatTime(poll.lastAt) },
     { label: "Last Codex success", value: formatTime(codex.lastSucceededAt) },
+    ...runtimeFacts(processor.runtime),
     ...usageFacts(processor.usage),
   ];
   if (poll.lastError) {

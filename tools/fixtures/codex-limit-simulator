@@ -1,14 +1,16 @@
 #!/bin/sh
-# Stands in for the Codex CLI in the retry-scheduling smoke only.
+# Stands in for the Codex CLI in the retry-scheduling and runtime smokes only.
 #
-# A real usage limit cannot be triggered on demand, so this wrapper simulates
-# one at the CLI's command-line boundary. While the unix time in
-# $SIM_DIR/until is in the future:
+# A real usage limit or a slow CLI start cannot be triggered on demand, so
+# this wrapper simulates them at the CLI's command-line boundary. While the
+# unix time in $SIM_DIR/until is in the future:
 #   mode "limit": `codex exec` fails with the CLI's usage-limit message and
 #                 `codex app-server` reports the codex bucket as reached,
 #                 resetting at that time;
 #   mode "fail":  `codex exec` fails with a transport error and app-server is
-#                 the real one (no recovery time is known).
+#                 the real one (no recovery time is known);
+#   mode "slow-start": `codex exec` waits 45 s before running the real CLI, so
+#                 a run is spawned but has not reported its session yet.
 # Every other call, and every call after that time, runs the real Codex CLI.
 SIM_DIR=${SIM_DIR:-/opt/lifeos-sim}
 until=$(cat "$SIM_DIR/until" 2>/dev/null || echo 0)
@@ -22,6 +24,10 @@ if [ "$(date +%s)" -lt "$until" ]; then
     exec:fail)
       echo "ERROR: stream disconnected before completion"
       exit 1
+      ;;
+    exec:slow-start)
+      sleep 45
+      exec codex "$@"
       ;;
     app-server:limit)
       limit="{\"limitId\":\"codex\",\"primary\":{\"usedPercent\":100,\"windowDurationMins\":300,\"resetsAt\":$until},\"planType\":\"plus\",\"rateLimitReachedType\":\"rate_limit_reached\"}"

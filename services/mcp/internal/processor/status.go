@@ -20,11 +20,39 @@ const (
 // operational state like /ready, not domain data: it lives in memory and
 // resets on restart.
 type Status struct {
-	Model     string      `json:"model"`
-	StartedAt time.Time   `json:"startedAt"`
-	Poll      PollStatus  `json:"poll"`
-	Codex     CodexStatus `json:"codex"`
-	Usage     UsageStatus `json:"usage"`
+	Model     string             `json:"model"`
+	StartedAt time.Time          `json:"startedAt"`
+	Poll      PollStatus         `json:"poll"`
+	Codex     CodexStatus        `json:"codex"`
+	Usage     UsageStatus        `json:"usage"`
+	Runtime   AgentRuntimeStatus `json:"runtime"`
+}
+
+// AgentRuntimeStatus describes the Codex runtime: its configuration, the run
+// in progress, and what happened to earlier runs since the processor started.
+type AgentRuntimeStatus struct {
+	Instance       string `json:"instance"`
+	Binary         string `json:"binary"`
+	TimeoutSeconds int    `json:"timeoutSeconds"`
+	MaxConcurrency int    `json:"maxConcurrency"`
+	// Current is the attempt being planned or executed right now.
+	Current   *RuntimeRun `json:"current"`
+	Completed int         `json:"completed"`
+	Failed    int         `json:"failed"`
+	TimedOut  int         `json:"timedOut"`
+	Cancelled int         `json:"cancelled"`
+	// Recovered counts abandoned attempts this processor reconciled.
+	Recovered          int        `json:"recovered"`
+	LastReconcileAt    *time.Time `json:"lastReconcileAt"`
+	LastReconcileError string     `json:"lastReconcileError,omitempty"`
+}
+
+type RuntimeRun struct {
+	ItemID    string    `json:"itemId"`
+	AttemptID string    `json:"attemptId"`
+	State     string    `json:"state"`
+	SessionID string    `json:"sessionId,omitempty"`
+	Since     time.Time `json:"since"`
 }
 
 // UsageStatus is the latest account usage read from the Codex CLI. Usage is
@@ -104,6 +132,68 @@ func (m *Monitor) RecordAuth(authenticated bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.status.Codex.Authenticated, m.status.Codex.AuthCheckedAt = &authenticated, m.stamp()
+}
+
+// ConfigureRuntime records the runtime's static configuration.
+func (m *Monitor) ConfigureRuntime(instance, binary string, timeout time.Duration, maxConcurrency int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.status.Runtime.Instance, m.status.Runtime.Binary = instance, binary
+	m.status.Runtime.TimeoutSeconds, m.status.Runtime.MaxConcurrency = int(timeout.Seconds()), maxConcurrency
+}
+
+// RecordRuntime follows an attempt's runtime states.
+func (m *Monitor) RecordRuntime(event RuntimeEvent) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	runtime := &m.status.Runtime
+	current := runtime.Current
+	if current == nil || current.AttemptID != event.AttemptID {
+		current = &RuntimeRun{ItemID: event.ItemID, AttemptID: event.AttemptID, Since: m.now().UTC()}
+	}
+	if current.State == event.State && current.SessionID == event.SessionID && runtime.Current == current {
+		return // a heartbeat
+	}
+	current.State = event.State
+	if event.SessionID != "" {
+		current.SessionID = event.SessionID
+	}
+	runtime.Current = current
+	switch event.State {
+	case RuntimeCompleted:
+		runtime.Completed++
+	case RuntimeFailed:
+		runtime.Failed++
+	case RuntimeTimedOut:
+		runtime.TimedOut++
+	case RuntimeCancelled:
+		runtime.Cancelled++
+	default:
+		return
+	}
+	// The planning run is over; the attempt's actions are quick.
+	runtime.Current = nil
+}
+
+// RecordReconcile records a reconciliation pass.
+func (m *Monitor) RecordReconcile(recovered int, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.status.Runtime.LastReconcileAt = m.stamp()
+	m.status.Runtime.Recovered += recovered
+	m.status.Runtime.LastReconcileError = ""
+	if err != nil {
+		m.status.Runtime.LastReconcileError = err.Error()
+	}
+}
+
+// WatchReconcile reconciles abandoned attempts now and then on every interval.
+func (m *Monitor) WatchReconcile(ctx context.Context, reconcile func(context.Context) (int, error), every time.Duration) {
+	repeat(ctx, every, func(ctx context.Context) {
+		if recovered, err := reconcile(ctx); ctx.Err() == nil {
+			m.RecordReconcile(recovered, err)
+		}
+	})
 }
 
 // RecordUsage records the result of a Codex usage read.

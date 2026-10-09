@@ -1,4 +1,4 @@
-# Overlay for tools/smoke-retry-schedule only: runs the processor's Codex
+# Overlay for the retry and runtime smokes only: runs the processor's Codex
 # calls through tools/fixtures/codex-limit-simulator.
 services:
   processor:
@@ -6,6 +6,6 @@ services:
       LIFE_OS_CODEX_COMMAND: /opt/lifeos-sim/codex-limit-simulator
     volumes:
       - type: bind
-        source: ${LIFE_OS_SIM_DIR:?set by tools/smoke-retry-schedule}
+        source: ${LIFE_OS_SIM_DIR:?set by the smoke}
         target: /opt/lifeos-sim
         read_only: true

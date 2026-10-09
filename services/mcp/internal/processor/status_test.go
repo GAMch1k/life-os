@@ -110,3 +110,23 @@ func TestStatusEndpointServesTheSnapshot(t *testing.T) {
 		t.Fatalf("status = %+v", status)
 	}
 }
+
+func TestMonitorFollowsTheRuntime(t *testing.T) {
+	m := NewMonitor("model")
+	m.ConfigureRuntime("processor-a", "/usr/local/bin/codex", 5*time.Minute, 1)
+	for _, state := range []string{RuntimeSpawning, RuntimeRunning} {
+		m.RecordRuntime(RuntimeEvent{ItemID: "item-1", AttemptID: "attempt-1", State: state})
+	}
+	m.RecordRuntime(RuntimeEvent{ItemID: "item-1", AttemptID: "attempt-1", State: RuntimeRunning, SessionID: "thread-1"})
+	runtime := m.Snapshot().Runtime
+	if runtime.Current == nil || runtime.Current.State != RuntimeRunning || runtime.Current.SessionID != "thread-1" || runtime.TimeoutSeconds != 300 || runtime.Instance != "processor-a" {
+		t.Fatalf("runtime = %+v", runtime)
+	}
+	m.RecordRuntime(RuntimeEvent{ItemID: "item-1", AttemptID: "attempt-1", State: RuntimeTimedOut})
+	m.RecordRuntime(RuntimeEvent{ItemID: "item-2", AttemptID: "attempt-2", State: RuntimeCompleted})
+	m.RecordReconcile(2, nil)
+	runtime = m.Snapshot().Runtime
+	if runtime.Current != nil || runtime.TimedOut != 1 || runtime.Completed != 1 || runtime.Recovered != 2 || runtime.LastReconcileAt == nil {
+		t.Fatalf("runtime = %+v", runtime)
+	}
+}
