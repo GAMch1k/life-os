@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/GAMch1k/life-os/pkg/activity"
 	"github.com/GAMch1k/life-os/pkg/database"
 	"github.com/GAMch1k/life-os/pkg/httpserver"
 	"github.com/GAMch1k/life-os/services/voice/internal/api"
@@ -39,7 +40,7 @@ func run(ctx context.Context) error {
 		httpserver.WithLogger(logger),
 		httpserver.WithReadinessCheck(pool.Ping),
 	)
-	generated.RegisterHandlers(app, api.NewHandler(repository.New(pool), storage.Files{Root: cfg.StorageDir}, time.Duration(cfg.RetentionHours)*time.Hour, cfg.MaxUploadBytes))
+	generated.RegisterHandlers(app, api.NewHandler(repository.New(pool), storage.Files{Root: cfg.StorageDir}, time.Duration(cfg.RetentionHours)*time.Hour, cfg.MaxUploadBytes, activity.NewEmitter(cfg.ActivityURL, "voice", logger)))
 	app.OnShutdown(database.ClosePool(pool))
 
 	return app.Run(fmt.Sprintf(":%d", cfg.Port))

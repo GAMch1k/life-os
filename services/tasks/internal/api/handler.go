@@ -7,19 +7,26 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v3"
+	googleuuid "github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/oapi-codegen/runtime/types"
 
+	"github.com/GAMch1k/life-os/pkg/activity"
 	"github.com/GAMch1k/life-os/services/tasks/internal/api/generated"
 	store "github.com/GAMch1k/life-os/services/tasks/internal/repository/generated"
 )
 
-type Handler struct{ queries *store.Queries }
+type Handler struct {
+	queries  *store.Queries
+	activity *activity.Emitter
+}
 
 var _ generated.ServerInterface = (*Handler)(nil)
 
-func NewHandler(queries *store.Queries) *Handler { return &Handler{queries: queries} }
+func NewHandler(queries *store.Queries, emitter *activity.Emitter) *Handler {
+	return &Handler{queries: queries, activity: emitter}
+}
 
 func (h *Handler) ListTasks(c fiber.Ctx, params generated.ListTasksParams) error {
 	limit := 50
@@ -64,6 +71,8 @@ func (h *Handler) CreateTask(c fiber.Ctx) error {
 	if key != nil && (item.AutomationPayloadHash == nil || *item.AutomationPayloadHash != *hash) {
 		return fiber.NewError(409, "idempotency key was already used with a different payload")
 	}
+	// A deterministic id makes an idempotent replay record nothing new.
+	h.record(c, activity.EventID("task.created", uuid(item.ID).String()), "task.created", item, "created", nil)
 	return c.Status(201).JSON(task(item))
 }
 
@@ -100,6 +109,7 @@ func (h *Handler) UpdateTask(c fiber.Ctx, id types.UUID) error {
 	if err != nil {
 		return databaseError(err)
 	}
+	h.record(c, googleuuid.New(), "task.updated", item, "updated", map[string]any{"changes": changes(body)})
 	return c.JSON(task(item))
 }
 func (h *Handler) CompleteTask(c fiber.Ctx, id types.UUID) error {
@@ -107,6 +117,7 @@ func (h *Handler) CompleteTask(c fiber.Ctx, id types.UUID) error {
 	if err != nil {
 		return databaseError(err)
 	}
+	h.record(c, googleuuid.New(), "task.completed", item, "completed", nil)
 	return c.JSON(task(item))
 }
 func (h *Handler) ReopenTask(c fiber.Ctx, id types.UUID) error {
@@ -114,7 +125,54 @@ func (h *Handler) ReopenTask(c fiber.Ctx, id types.UUID) error {
 	if err != nil {
 		return databaseError(err)
 	}
+	h.record(c, googleuuid.New(), "task.reopened", item, "reopened", nil)
 	return c.JSON(task(item))
+}
+
+// record emits a Task activity event after the mutation has persisted. The
+// request's correlation/causation/actor headers tie it to the workflow that
+// asked for it (for example an Inbox capture processed through MCP).
+func (h *Handler) record(c fiber.Ctx, id googleuuid.UUID, eventType string, item store.Task, verb string, data map[string]any) {
+	trace := activity.FromRequest(c)
+	if data == nil {
+		data = map[string]any{}
+	}
+	data["title"] = item.Title
+	data["completed"] = item.CompletedAt.Valid
+	if item.DueAt.Valid {
+		data["dueAt"] = item.DueAt.Time
+	}
+	h.activity.Emit(c.Context(), activity.Event{
+		ID:            id,
+		Type:          eventType,
+		Subject:       activity.Subject{Type: "task", ID: uuid(item.ID).String()},
+		CorrelationID: trace.CorrelationID,
+		CausationID:   trace.CausationID,
+		Actor:         trace.Actor,
+		Outcome:       activity.Succeeded,
+		Summary:       fmt.Sprintf("Task “%s” %s", activity.Preview(item.Title, 120), verb),
+		Data:          data,
+	})
+}
+
+func changes(body generated.UpdateTaskRequest) []string {
+	result := []string{}
+	if body.Title != nil {
+		result = append(result, "title")
+	}
+	if body.Notes != nil {
+		result = append(result, "notes")
+	}
+	if body.DueAt != nil {
+		result = append(result, "dueAt")
+	}
+	if body.ClearDueAt != nil && *body.ClearDueAt {
+		result = append(result, "clearDueAt")
+	}
+	if body.Recurrence != nil {
+		result = append(result, "recurrence")
+	}
+	return result
 }
 
 func createParams(body generated.CreateTaskRequest) store.CreateTaskParams {

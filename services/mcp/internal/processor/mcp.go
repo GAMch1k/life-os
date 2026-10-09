@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/GAMch1k/life-os/pkg/activity"
 )
 
 // MCPClient speaks the Streamable HTTP MCP protocol. It is deliberately the
@@ -91,6 +93,7 @@ func (c *MCPClient) request(ctx context.Context, message map[string]any) (json.R
 	if c.sessionID != "" {
 		req.Header.Set("Mcp-Session-Id", c.sessionID)
 	}
+	activity.TraceFrom(ctx).Apply(req.Header)
 	resp, err := c.client().Do(req)
 	if err != nil {
 		return nil, nil, err

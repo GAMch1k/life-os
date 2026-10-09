@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/GAMch1k/life-os/pkg/activity"
 	"github.com/GAMch1k/life-os/pkg/database"
 	serviceconfig "github.com/GAMch1k/life-os/services/voice/internal/config"
 	store "github.com/GAMch1k/life-os/services/voice/internal/repository/generated"
@@ -44,10 +45,11 @@ func run(ctx context.Context) error {
 		return err
 	}
 	workerID = fmt.Sprintf("%s-%d", workerID, os.Getpid())
+	emitter := activity.NewEmitter(cfg.ActivityURL, "voice", nil)
 	tick := time.NewTicker(time.Duration(cfg.WorkerPollMillis) * time.Millisecond)
 	defer tick.Stop()
 	for {
-		if err := process(ctx, queries, files, client, cfg, workerID); err != nil {
+		if err := process(ctx, queries, files, client, cfg, workerID, emitter); err != nil {
 			fmt.Fprintln(os.Stderr, "voice worker:", err)
 		}
 		select {
@@ -57,7 +59,7 @@ func run(ctx context.Context) error {
 		}
 	}
 }
-func process(ctx context.Context, q *store.Queries, files storage.Files, client *http.Client, cfg serviceconfig.Config, workerID string) error {
+func process(ctx context.Context, q *store.Queries, files storage.Files, client *http.Client, cfg serviceconfig.Config, workerID string, emitter *activity.Emitter) error {
 	if err := reclaim(ctx, q, cfg); err != nil {
 		return err
 	}
@@ -75,14 +77,31 @@ func process(ctx context.Context, q *store.Queries, files storage.Files, client 
 	defer stopLease()
 	transcript, err := transcribe(workCtx, client, cfg.WhisperURL, files.Path(job.ObjectKey), job.ContentType)
 	if err != nil {
-		return fail(ctx, q, job, cfg, workerID, err)
+		return fail(ctx, q, job, cfg, workerID, err, emitter)
 	}
+	transcribedAt := time.Now().UTC()
 	inboxID, err := capture(workCtx, client, cfg.InboxURL, job, transcript)
 	if err != nil {
-		return fail(ctx, q, job, cfg, workerID, err)
+		return fail(ctx, q, job, cfg, workerID, err, emitter)
 	}
-	_, err = q.CompleteAudioJob(ctx, store.CompleteAudioJobParams{ID: job.ID, Transcript: &transcript, InboxItemID: inboxID, LeaseOwner: &workerID})
-	return err
+	if _, err = q.CompleteAudioJob(ctx, store.CompleteAudioJobParams{ID: job.ID, Transcript: &transcript, InboxItemID: inboxID, LeaseOwner: &workerID}); err != nil {
+		return err
+	}
+	jobID := uuidString(job.ID)
+	accepted := activity.EventID("voice.job.accepted", jobID)
+	emitter.Emit(ctx, activity.Event{
+		ID:            activity.EventID("voice.job.transcribed", jobID),
+		Type:          "voice.job.transcribed",
+		Subject:       activity.Subject{Type: "voice_job", ID: jobID},
+		CorrelationID: jobID,
+		CausationID:   &accepted,
+		Actor:         activity.System("voice-worker"),
+		Outcome:       activity.Succeeded,
+		Summary:       fmt.Sprintf("Transcribed “%s”", activity.Preview(transcript, 80)),
+		Data:          map[string]any{"transcript": activity.Preview(transcript, 280), "inboxItemId": uuidString(inboxID), "attempt": job.AttemptCount},
+		OccurredAt:    transcribedAt,
+	})
+	return nil
 }
 func maintainLease(ctx context.Context, q *store.Queries, jobID pgtype.UUID, cfg serviceconfig.Config, workerID string) (context.Context, func()) {
 	workCtx, cancel := context.WithCancel(ctx)
@@ -128,15 +147,36 @@ func expired(ctx context.Context, q *store.Queries) []store.AudioJob {
 	}
 	return jobs
 }
-func fail(ctx context.Context, q *store.Queries, job store.AudioJob, cfg serviceconfig.Config, workerID string, cause error) error {
+func fail(ctx context.Context, q *store.Queries, job store.AudioJob, cfg serviceconfig.Config, workerID string, cause error, emitter *activity.Emitter) error {
 	status := "retryable"
 	if int(job.AttemptCount) >= cfg.WorkerMaxAttempts {
 		status = "failed"
 	}
 	message := cause.Error()
 	backoff := time.Duration(cfg.WorkerRetryBackoffSeconds) * time.Second * time.Duration(job.AttemptCount)
-	_, err := q.RetryAudioJob(ctx, store.RetryAudioJobParams{ID: job.ID, Status: status, ErrorSummary: &message, AvailableAt: pgtype.Timestamptz{Time: time.Now().Add(backoff), Valid: true}, LeaseOwner: &workerID})
-	return err
+	retryAt := time.Now().Add(backoff)
+	if _, err := q.RetryAudioJob(ctx, store.RetryAudioJobParams{ID: job.ID, Status: status, ErrorSummary: &message, AvailableAt: pgtype.Timestamptz{Time: retryAt, Valid: true}, LeaseOwner: &workerID}); err != nil {
+		return err
+	}
+	jobID := uuidString(job.ID)
+	accepted := activity.EventID("voice.job.accepted", jobID)
+	event := activity.Event{
+		Type:          "voice.job.retry_scheduled",
+		Subject:       activity.Subject{Type: "voice_job", ID: jobID},
+		CorrelationID: jobID,
+		CausationID:   &accepted,
+		Actor:         activity.System("voice-worker"),
+		Outcome:       activity.Pending,
+		Summary:       "Transcription will be retried: " + activity.Preview(message, 160),
+		Data:          map[string]any{"attempt": job.AttemptCount, "error": activity.Preview(message, 500), "retryAt": retryAt.UTC()},
+	}
+	if status == "failed" {
+		event.Type, event.Outcome, event.Summary = "voice.job.failed", activity.Failed, "Transcription failed: "+activity.Preview(message, 160)
+		delete(event.Data, "retryAt")
+	}
+	event.ID = activity.EventID(event.Type, jobID, fmt.Sprint(job.AttemptCount))
+	emitter.Emit(ctx, event)
+	return nil
 }
 func transcribe(ctx context.Context, c *http.Client, base, path, contentType string) (string, error) {
 	file, err := os.Open(path)
@@ -177,6 +217,10 @@ func capture(ctx context.Context, c *http.Client, base string, job store.AudioJo
 		return pgtype.UUID{}, err
 	}
 	req.Header.Set("content-type", "application/json")
+	// The capture belongs to this job's workflow and was caused by its
+	// transcription.
+	transcribed := activity.EventID("voice.job.transcribed", uuidString(job.ID))
+	activity.Trace{CorrelationID: uuidString(job.ID), CausationID: &transcribed, Actor: activity.System("voice-worker")}.Apply(req.Header)
 	resp, err := c.Do(req)
 	if err != nil {
 		return pgtype.UUID{}, err

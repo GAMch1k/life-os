@@ -25,6 +25,8 @@ type Config struct {
 	WorkerMaxAttempts         int    `env:"VOICE_WORKER_MAX_ATTEMPTS" default:"3"`
 	WorkerLeaseSeconds        int    `env:"VOICE_WORKER_LEASE_SECONDS" default:"120"`
 	WorkerRetryBackoffSeconds int    `env:"VOICE_WORKER_RETRY_BACKOFF_SECONDS" default:"60"`
+	// ActivityURL enables activity events; empty disables them.
+	ActivityURL string `env:"ACTIVITY_SERVICE_URL"`
 }
 
 // Load reads Config from the process environment.

@@ -50,7 +50,7 @@ services:
     restart: "no"
   tasks:
     build: {context: ., dockerfile: services/tasks/Dockerfile}
-    environment: {SERVICE_NAME: tasks, PORT: 8080, DATABASE_URL: "postgres://tasks_user:${LIFE_OS_TASKS_DB_PASSWORD}@postgres:5432/tasks_db?sslmode=disable"}
+    environment: {SERVICE_NAME: tasks, PORT: 8080, DATABASE_URL: "postgres://tasks_user:${LIFE_OS_TASKS_DB_PASSWORD}@postgres:5432/tasks_db?sslmode=disable", ACTIVITY_SERVICE_URL: "http://activity:8080"}
     expose: ["8080"]
     depends_on: {tasks-migrate: {condition: service_completed_successfully}}
     networks: [backend]
@@ -65,7 +65,7 @@ services:
     restart: "no"
   inbox:
     build: {context: ., dockerfile: services/inbox/Dockerfile}
-    environment: {SERVICE_NAME: inbox, PORT: 8080, DATABASE_URL: "postgres://inbox_user:${LIFE_OS_INBOX_DB_PASSWORD}@postgres:5432/inbox_db?sslmode=disable"}
+    environment: {SERVICE_NAME: inbox, PORT: 8080, DATABASE_URL: "postgres://inbox_user:${LIFE_OS_INBOX_DB_PASSWORD}@postgres:5432/inbox_db?sslmode=disable", ACTIVITY_SERVICE_URL: "http://activity:8080"}
     expose: ["8080"]
     depends_on: {inbox-migrate: {condition: service_completed_successfully}}
     networks: [backend]
@@ -83,6 +83,21 @@ services:
     environment: {SERVICE_NAME: calendar, PORT: 8080, DATABASE_URL: "postgres://calendar_user:${LIFE_OS_CALENDAR_DB_PASSWORD}@postgres:5432/calendar_db?sslmode=disable"}
     expose: ["8080"]
     depends_on: {calendar-migrate: {condition: service_completed_successfully}}
+    networks: [backend]
+    restart: unless-stopped
+
+  activity-migrate:
+    image: migrate/migrate:v4.18.3
+    command: ["-path", "/migrations", "-database", "postgres://activity_user:${LIFE_OS_ACTIVITY_DB_PASSWORD}@postgres:5432/activity_db?sslmode=disable", "up"]
+    volumes: ["./services/activity/db/migrations:/migrations:ro"]
+    depends_on: {postgres: {condition: service_healthy}}
+    networks: [backend]
+    restart: "no"
+  activity:
+    build: {context: ., dockerfile: services/activity/Dockerfile}
+    environment: {SERVICE_NAME: activity, PORT: 8080, DATABASE_URL: "postgres://activity_user:${LIFE_OS_ACTIVITY_DB_PASSWORD}@postgres:5432/activity_db?sslmode=disable"}
+    expose: ["8080"]
+    depends_on: {activity-migrate: {condition: service_completed_successfully}}
     networks: [backend]
     restart: unless-stopped
 
@@ -112,6 +127,7 @@ services:
       TASKS_SERVICE_URL: http://tasks:8080
       INBOX_SERVICE_URL: http://inbox:8080
       CALENDAR_SERVICE_URL: http://calendar:8080
+      ACTIVITY_SERVICE_URL: http://activity:8080
     expose: ["8080"]
     depends_on:
       finance: {condition: service_started}
@@ -195,6 +211,7 @@ services:
       VOICE_STORAGE_DIR: /var/lib/lifeos/voice
       VOICE_RETENTION_HOURS: ${LIFE_OS_VOICE_RETENTION_HOURS:-168}
       VOICE_MAX_UPLOAD_BYTES: ${LIFE_OS_VOICE_MAX_UPLOAD_BYTES:-26214400}
+      ACTIVITY_SERVICE_URL: http://activity:8080
     volumes: ["voice-audio:/var/lib/lifeos/voice"]
     expose: ["8080"]
     depends_on: {voice-migrate: {condition: service_completed_successfully}}
@@ -210,6 +227,7 @@ services:
       VOICE_RETENTION_HOURS: ${LIFE_OS_VOICE_RETENTION_HOURS:-168}
       INBOX_SERVICE_URL: http://inbox:8080
       WHISPER_SERVICE_URL: http://whisper:8080
+      ACTIVITY_SERVICE_URL: http://activity:8080
       VOICE_WORKER_POLL_MILLIS: ${LIFE_OS_VOICE_WORKER_POLL_MILLIS:-1000}
       VOICE_WORKER_MAX_ATTEMPTS: ${LIFE_OS_VOICE_WORKER_MAX_ATTEMPTS:-3}
       VOICE_WORKER_LEASE_SECONDS: ${LIFE_OS_VOICE_WORKER_LEASE_SECONDS:-120}
@@ -234,6 +252,7 @@ services:
       calendar: {condition: service_started}
       mcp: {condition: service_started}
       voice: {condition: service_started}
+      activity: {condition: service_started}
     networks: [backend]
     restart: unless-stopped
 

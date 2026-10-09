@@ -12,9 +12,9 @@ import (
 )
 
 const createInboxItem = `-- name: CreateInboxItem :one
-INSERT INTO inbox_items (content, source, source_metadata, media_references, source_dedupe_key) VALUES ($1, $2, $3, $4, $5)
+INSERT INTO inbox_items (content, source, source_metadata, media_references, source_dedupe_key, correlation_id) VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT (source_dedupe_key) WHERE source_dedupe_key IS NOT NULL DO UPDATE SET updated_at = inbox_items.updated_at
-RETURNING id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at, source_dedupe_key
+RETURNING id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at, source_dedupe_key, correlation_id
 `
 
 type CreateInboxItemParams struct {
@@ -23,6 +23,7 @@ type CreateInboxItemParams struct {
 	SourceMetadata  []byte
 	MediaReferences []byte
 	SourceDedupeKey *string
+	CorrelationID   *string
 }
 
 func (q *Queries) CreateInboxItem(ctx context.Context, arg CreateInboxItemParams) (InboxItem, error) {
@@ -32,6 +33,7 @@ func (q *Queries) CreateInboxItem(ctx context.Context, arg CreateInboxItemParams
 		arg.SourceMetadata,
 		arg.MediaReferences,
 		arg.SourceDedupeKey,
+		arg.CorrelationID,
 	)
 	var i InboxItem
 	err := row.Scan(
@@ -46,6 +48,7 @@ func (q *Queries) CreateInboxItem(ctx context.Context, arg CreateInboxItemParams
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.SourceDedupeKey,
+		&i.CorrelationID,
 	)
 	return i, err
 }
@@ -89,7 +92,7 @@ func (q *Queries) CreateProcessingAttempt(ctx context.Context, arg CreateProcess
 }
 
 const getInboxItem = `-- name: GetInboxItem :one
-SELECT id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at, source_dedupe_key FROM inbox_items WHERE id = $1
+SELECT id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at, source_dedupe_key, correlation_id FROM inbox_items WHERE id = $1
 `
 
 func (q *Queries) GetInboxItem(ctx context.Context, id pgtype.UUID) (InboxItem, error) {
@@ -107,6 +110,7 @@ func (q *Queries) GetInboxItem(ctx context.Context, id pgtype.UUID) (InboxItem, 
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.SourceDedupeKey,
+		&i.CorrelationID,
 	)
 	return i, err
 }
@@ -141,7 +145,7 @@ func (q *Queries) GetProcessingAttemptForItem(ctx context.Context, arg GetProces
 }
 
 const listInboxItems = `-- name: ListInboxItems :many
-SELECT id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at, source_dedupe_key FROM inbox_items
+SELECT id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at, source_dedupe_key, correlation_id FROM inbox_items
 WHERE ($1::boolean IS NULL OR (state IN ('raw', 'processing', 'human_review')) = $1::boolean)
   AND ($2::text IS NULL OR state = $2::text)
 ORDER BY created_at DESC LIMIT $3
@@ -174,6 +178,7 @@ func (q *Queries) ListInboxItems(ctx context.Context, arg ListInboxItemsParams) 
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.SourceDedupeKey,
+			&i.CorrelationID,
 		); err != nil {
 			return nil, err
 		}
@@ -223,7 +228,7 @@ func (q *Queries) ListProcessingAttempts(ctx context.Context, inboxItemID pgtype
 }
 
 const resolveInboxItemHumanReview = `-- name: ResolveInboxItemHumanReview :one
-UPDATE inbox_items SET state = 'raw', processing_metadata = $1, updated_at = now() WHERE id = $2 AND state = 'human_review' RETURNING id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at, source_dedupe_key
+UPDATE inbox_items SET state = 'raw', processing_metadata = $1, updated_at = now() WHERE id = $2 AND state = 'human_review' RETURNING id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at, source_dedupe_key, correlation_id
 `
 
 type ResolveInboxItemHumanReviewParams struct {
@@ -246,12 +251,13 @@ func (q *Queries) ResolveInboxItemHumanReview(ctx context.Context, arg ResolveIn
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.SourceDedupeKey,
+		&i.CorrelationID,
 	)
 	return i, err
 }
 
 const setInboxItemHumanReview = `-- name: SetInboxItemHumanReview :one
-UPDATE inbox_items SET state = 'human_review', processing_metadata = $1, updated_at = now() WHERE id = $2 RETURNING id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at, source_dedupe_key
+UPDATE inbox_items SET state = 'human_review', processing_metadata = $1, updated_at = now() WHERE id = $2 RETURNING id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at, source_dedupe_key, correlation_id
 `
 
 type SetInboxItemHumanReviewParams struct {
@@ -274,12 +280,13 @@ func (q *Queries) SetInboxItemHumanReview(ctx context.Context, arg SetInboxItemH
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.SourceDedupeKey,
+		&i.CorrelationID,
 	)
 	return i, err
 }
 
 const setInboxItemState = `-- name: SetInboxItemState :one
-UPDATE inbox_items SET state = $1, resolved_at = CASE WHEN $1 IN ('resolved', 'discarded') THEN now() ELSE resolved_at END, updated_at = now() WHERE id = $2 RETURNING id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at, source_dedupe_key
+UPDATE inbox_items SET state = $1, resolved_at = CASE WHEN $1 IN ('resolved', 'discarded') THEN now() ELSE resolved_at END, updated_at = now() WHERE id = $2 RETURNING id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at, source_dedupe_key, correlation_id
 `
 
 type SetInboxItemStateParams struct {
@@ -302,6 +309,7 @@ func (q *Queries) SetInboxItemState(ctx context.Context, arg SetInboxItemStatePa
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.SourceDedupeKey,
+		&i.CorrelationID,
 	)
 	return i, err
 }

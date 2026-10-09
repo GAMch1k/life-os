@@ -11,6 +11,11 @@ flowchart LR
   Gateway --> Inbox --> IDB[(inbox_db)]
   Gateway --> Calendar --> CDB[(calendar_db)]
   Gateway --> Voice --> VDB[(voice_db)]
+  Gateway -. read only .-> Activity --> ADB[(activity_db)]
+  Voice -. record .-> Activity
+  Inbox -. record .-> Activity
+  Tasks -. record .-> Activity
+  MCP -. record .-> Activity
   Voice --> Whisper[private whisper.cpp worker]
   Voice --> Inbox
   MCP --> Finance
@@ -24,3 +29,5 @@ flowchart LR
 The dashboard consumes API contracts rather than databases. OpenAPI is the cross-language transport source of truth; generated DTOs may differ from internal domain types. PostgreSQL is one server for local simplicity, not a shared application database.
 
 MCP uses service APIs to perform semantic actions and records an Inbox audit trail; it must not bypass ownership with database access. Voice/STT asynchronously turns an uploaded recording into an Inbox item, then uses that same MCP path. The Voice worker is intentionally separate from web request handling, so audio transcription does not hold a browser request open.
+
+Activity stores user-facing activity events. Each owning service records its own meaningful operations (capture, processing, MCP actions, Task changes) over HTTP. Correlation, causation, and actor headers travel with each call, so a whole Voice → Inbox → MCP → Task workflow can be reconstructed from one API. See [Activity](../services/activity.md).

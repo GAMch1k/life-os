@@ -18,6 +18,9 @@ services:
   calendar:
     image: lifeos-calendar:latest
     ports: !reset []
+  activity:
+    image: lifeos-activity:latest
+    ports: !reset []
   dashboard:
     image: lifeos-dashboard:latest
     ports: !reset []

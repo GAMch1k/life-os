@@ -207,7 +207,10 @@ type CreateProcessingAttemptRequest struct {
 
 // InboxItem defines model for InboxItem.
 type InboxItem struct {
-	Content            string                  `json:"content"`
+	Content string `json:"content"`
+
+	// CorrelationId Workflow correlation id for activity events: the upstream caller's X-Correlation-ID, or the item id when the capture starts its own workflow.
+	CorrelationId      string                  `json:"correlationId"`
 	CreatedAt          time.Time               `json:"createdAt"`
 	Id                 openapi_types.UUID      `json:"id"`
 	MediaReferences    *[]string               `json:"mediaReferences,omitempty"`

@@ -150,6 +150,8 @@ export interface components {
             /** Format: uuid */
             id: string;
             content: string;
+            /** @description Workflow correlation id for activity events: the upstream caller's X-Correlation-ID, or the item id when the capture starts its own workflow. */
+            correlationId: string;
             /** @enum {string} */
             source: "manual" | "web" | "voice" | "watch" | "email";
             sourceMetadata?: {
