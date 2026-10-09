@@ -23,3 +23,27 @@ INSERT INTO inbox_processing_attempts (inbox_item_id, idempotency_key, status, a
 SELECT * FROM inbox_processing_attempts WHERE id = $1 AND inbox_item_id = $2;
 -- name: UpdateProcessingAttempt :one
 UPDATE inbox_processing_attempts SET status=$2, actions=$3, error_summary=$4, started_at=CASE WHEN $2='processing' THEN now() ELSE started_at END, completed_at=CASE WHEN $2 IN ('human_review','processed','failed','retryable') THEN now() ELSE completed_at END, updated_at=now() WHERE id=$1 RETURNING *;
+
+-- name: GetInboxBacklog :one
+SELECT
+    count(*) FILTER (WHERE i.state IN ('raw', 'processing'))::int AS pending_count,
+    count(*) FILTER (WHERE i.state IN ('raw', 'processing') AND latest.status = 'retryable')::int AS retrying_count,
+    count(*) FILTER (WHERE i.state = 'human_review')::int AS human_review_count,
+    (min(i.created_at) FILTER (WHERE i.state IN ('raw', 'processing')))::timestamptz AS oldest_pending_at
+FROM inbox_items i
+LEFT JOIN LATERAL (
+    SELECT a.status FROM inbox_processing_attempts a
+    WHERE a.inbox_item_id = i.id ORDER BY a.created_at DESC LIMIT 1
+) latest ON true
+WHERE i.state IN ('raw', 'processing', 'human_review');
+
+-- name: GetLatestPendingFailure :one
+SELECT latest.error_summary, latest.updated_at
+FROM inbox_items i
+JOIN LATERAL (
+    SELECT a.status, a.error_summary, a.updated_at FROM inbox_processing_attempts a
+    WHERE a.inbox_item_id = i.id ORDER BY a.created_at DESC LIMIT 1
+) latest ON true
+WHERE i.state IN ('raw', 'processing') AND latest.status IN ('retryable', 'failed')
+ORDER BY latest.updated_at DESC
+LIMIT 1;

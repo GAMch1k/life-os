@@ -47,6 +47,28 @@ func (h *Handler) ListInboxItems(c fiber.Ctx, params generated.ListInboxItemsPar
 	}
 	return c.JSON(generated.InboxItemList{Items: result})
 }
+// GetInboxBacklog reports unfinished work for status surfaces. It reads only
+// durable Inbox state; it never inspects the processor.
+func (h *Handler) GetInboxBacklog(c fiber.Ctx) error {
+	backlog, err := h.queries.GetInboxBacklog(c.Context())
+	if err != nil {
+		return internal(err)
+	}
+	out := generated.InboxBacklog{
+		PendingCount:     int(backlog.PendingCount),
+		RetryingCount:    int(backlog.RetryingCount),
+		HumanReviewCount: int(backlog.HumanReviewCount),
+		OldestPendingAt:  nullableTime(backlog.OldestPendingAt),
+	}
+	failure, err := h.queries.GetLatestPendingFailure(c.Context())
+	switch {
+	case err == nil:
+		out.LastFailureAt, out.LastFailureSummary = nullableTime(failure.UpdatedAt), failure.ErrorSummary
+	case !errors.Is(err, pgx.ErrNoRows):
+		return internal(err)
+	}
+	return c.JSON(out)
+}
 func (h *Handler) CreateInboxItem(c fiber.Ctx) error {
 	var body generated.CreateInboxItemJSONRequestBody
 	if err := c.Bind().Body(&body); err != nil {

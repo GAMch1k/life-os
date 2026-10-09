@@ -205,6 +205,22 @@ type CreateProcessingAttemptRequest struct {
 	ModelProfile   string `json:"modelProfile"`
 }
 
+// InboxBacklog defines model for InboxBacklog.
+type InboxBacklog struct {
+	HumanReviewCount int `json:"humanReviewCount"`
+
+	// LastFailureAt When the most recent failed or retryable attempt of a pending item was recorded
+	LastFailureAt      *time.Time `json:"lastFailureAt,omitempty"`
+	LastFailureSummary *string    `json:"lastFailureSummary,omitempty"`
+	OldestPendingAt    *time.Time `json:"oldestPendingAt,omitempty"`
+
+	// PendingCount Items waiting for or in automatic processing
+	PendingCount int `json:"pendingCount"`
+
+	// RetryingCount Pending items whose latest attempt is retryable
+	RetryingCount int `json:"retryingCount"`
+}
+
 // InboxItem defines model for InboxItem.
 type InboxItem struct {
 	Content string `json:"content"`
@@ -299,6 +315,9 @@ type UpdateProcessingAttemptJSONRequestBody = UpdateProcessingAttemptRequest
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
+	// GetInboxBacklog Summarize unfinished Inbox work for status surfaces
+	// (GET /v1/backlog)
+	GetInboxBacklog(c fiber.Ctx) error
 	// ListInboxItems List captured inbox items
 	// (GET /v1/inbox-items)
 	ListInboxItems(c fiber.Ctx, params ListInboxItemsParams) error
@@ -339,6 +358,24 @@ type ServerInterfaceWrapper struct {
 
 type MiddlewareFunc fiber.Handler
 type HandlerMiddlewareFunc func(c fiber.Ctx, next fiber.Handler) error
+
+// GetInboxBacklog operation middleware
+func (siw *ServerInterfaceWrapper) GetInboxBacklog(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.GetInboxBacklog(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
 
 // ListInboxItems operation middleware
 func (siw *ServerInterfaceWrapper) ListInboxItems(c fiber.Ctx) error {
@@ -678,6 +715,8 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	for _, m := range options.Middlewares {
 		router.Use(fiber.Handler(m))
 	}
+
+	router.Get(options.BaseURL+"/v1/backlog", wrapper.GetInboxBacklog)
 
 	router.Get(options.BaseURL+"/v1/inbox-items", wrapper.ListInboxItems)
 
