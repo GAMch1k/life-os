@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { AlertTriangle, Check } from "lucide-react";
+import { AlertTriangle, Check, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -42,6 +42,22 @@ export function HumanReviewQueue({
       setItems((current) => current.filter((item) => item.id !== itemId));
     });
   }
+  // Discarding keeps the capture in Inbox history but takes it out of review
+  // and processing; it uses the same Inbox operation as anywhere else.
+  function discard(itemId: string) {
+    setError(undefined);
+    startTransition(async () => {
+      const { data, error: requestError } = await inboxClient.POST(
+        "/v1/inbox-items/{itemId}/discard",
+        { params: { path: { itemId } } },
+      );
+      if (requestError || !data) {
+        setError("Could not discard that capture. Please try again.");
+        return;
+      }
+      setItems((current) => current.filter((item) => item.id !== itemId));
+    });
+  }
   if (!items.length) return null;
   return (
     <Card id="human-review">
@@ -58,26 +74,42 @@ export function HumanReviewQueue({
       <CardContent className="space-y-4">
         {items.map((item) => {
           const review = reviewFor(item);
+          const candidates = (review.candidates ?? []).filter(
+            (candidate) => candidate.id,
+          );
           return (
             <section className="rounded-lg border p-4" key={item.id}>
               <p className="font-medium">{item.content}</p>
               <p className="text-muted-foreground mt-1 text-sm">
                 {review.errorSummary ?? "Choose the intended Task."}
               </p>
+              {candidates.length === 0 ? (
+                <p className="text-muted-foreground mt-1 text-sm">
+                  Life OS found nothing it can safely do with this capture.
+                  Discard it, or capture it again with more detail.
+                </p>
+              ) : null}
               <div className="mt-3 flex flex-wrap gap-2">
-                {review.candidates?.map((candidate) =>
-                  candidate.id ? (
-                    <Button
-                      disabled={pending}
-                      key={candidate.id}
-                      onClick={() => choose(item.id, candidate.id!)}
-                      size="sm"
-                      variant="outline"
-                    >
-                      <Check /> {candidate.title ?? candidate.id}
-                    </Button>
-                  ) : null,
-                )}
+                {candidates.map((candidate) => (
+                  <Button
+                    disabled={pending}
+                    key={candidate.id}
+                    onClick={() => choose(item.id, candidate.id!)}
+                    size="sm"
+                    variant="outline"
+                  >
+                    <Check /> {candidate.title ?? candidate.id}
+                  </Button>
+                ))}
+                <Button
+                  aria-label={`Discard capture: ${item.content}`}
+                  disabled={pending}
+                  onClick={() => discard(item.id)}
+                  size="sm"
+                  variant="ghost"
+                >
+                  <Trash2 /> Discard
+                </Button>
               </div>
             </section>
           );
