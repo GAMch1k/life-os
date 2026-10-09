@@ -28,6 +28,10 @@ type inboxAction struct {
 	Actions        []map[string]interface{} `json:"actions,omitempty"`
 	ProposedAction map[string]interface{}   `json:"proposedAction,omitempty"`
 	NextRetryAt    string                   `json:"nextRetryAt,omitempty" jsonschema:"RFC3339 time a retryable item may be retried"`
+	RuntimeState   string                   `json:"runtimeState,omitempty" jsonschema:"spawning, running, completed, failed, timed_out, or cancelled"`
+	RuntimeOwner   string                   `json:"runtimeOwner,omitempty" jsonschema:"Processor instance running the attempt"`
+	SessionID      string                   `json:"sessionId,omitempty" jsonschema:"Agent session id, when known"`
+	StaleAfter     int                      `json:"staleAfterSeconds,omitempty" jsonschema:"Heartbeat age after which an unfinished attempt is abandoned"`
 	RetryReason    string                   `json:"retryReason,omitempty" jsonschema:"Why the retry is scheduled then, e.g. usage_limited or backoff"`
 	Candidates     []map[string]interface{} `json:"candidates,omitempty"`
 	ErrorSummary   *string                  `json:"errorSummary,omitempty"`
@@ -116,6 +120,23 @@ func run(ctx context.Context) error {
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "inbox_record_processing_attempt", Description: "Record an Inbox processing attempt result"}, func(ctx context.Context, req *mcp.CallToolRequest, in inboxAction) (*mcp.CallToolResult, Output, error) {
 		return patch(ctx, hc, traceOf(req), cfg.InboxURL, "/v1/inbox-items/"+in.ItemID+"/processing-attempts/"+in.AttemptID, attemptUpdate(in))
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "inbox_record_attempt_runtime", Description: "Record the agent runtime state of an unfinished Inbox processing attempt (refreshes its heartbeat)"}, func(ctx context.Context, req *mcp.CallToolRequest, in inboxAction) (*mcp.CallToolResult, Output, error) {
+		body := map[string]interface{}{"state": in.RuntimeState, "owner": in.RuntimeOwner}
+		if in.SessionID != "" {
+			body["sessionId"] = in.SessionID
+		}
+		return put(ctx, hc, traceOf(req), cfg.InboxURL, "/v1/inbox-items/"+in.ItemID+"/processing-attempts/"+in.AttemptID+"/runtime", body)
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "inbox_list_stale_attempts", Description: "List unfinished Inbox processing attempts whose runtime stopped reporting"}, func(ctx context.Context, req *mcp.CallToolRequest, in inboxAction) (*mcp.CallToolResult, Output, error) {
+		headers := http.Header{}
+		traceOf(req).Apply(headers)
+		body, err := coreclient.Client{BaseURL: cfg.InboxURL, HTTP: hc}.DoWithHeaders(ctx, http.MethodGet, fmt.Sprintf("/v1/stale-processing-attempts?staleAfterSeconds=%d", in.StaleAfter), nil, headers)
+		if err != nil {
+			return nil, Output{}, err
+		}
+		out, err := output(body)
+		return nil, out, err
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "inbox_set_human_review", Description: "Retain an ambiguous Inbox action for explicit Human Review"}, func(ctx context.Context, req *mcp.CallToolRequest, in inboxAction) (*mcp.CallToolResult, Output, error) {
 		return post(ctx, hc, traceOf(req), cfg.InboxURL, "/v1/inbox-items/"+in.ItemID+"/human-review", map[string]interface{}{"attemptId": in.AttemptID, "proposedAction": in.ProposedAction, "candidates": in.Candidates, "errorSummary": in.ErrorSummary})
@@ -219,13 +240,21 @@ func post(ctx context.Context, hc *http.Client, trace activity.Trace, baseURL, p
 }
 
 func patch(ctx context.Context, hc *http.Client, trace activity.Trace, baseURL, path string, input interface{}) (*mcp.CallToolResult, Output, error) {
+	return write(ctx, hc, trace, http.MethodPatch, baseURL, path, input)
+}
+
+func put(ctx context.Context, hc *http.Client, trace activity.Trace, baseURL, path string, input interface{}) (*mcp.CallToolResult, Output, error) {
+	return write(ctx, hc, trace, http.MethodPut, baseURL, path, input)
+}
+
+func write(ctx context.Context, hc *http.Client, trace activity.Trace, method, baseURL, path string, input interface{}) (*mcp.CallToolResult, Output, error) {
 	raw, err := json.Marshal(input)
 	if err != nil {
 		return nil, Output{}, err
 	}
 	headers := http.Header{}
 	trace.Apply(headers)
-	body, err := coreclient.Client{BaseURL: baseURL, HTTP: hc}.DoWithHeaders(ctx, http.MethodPatch, path, raw, headers)
+	body, err := coreclient.Client{BaseURL: baseURL, HTTP: hc}.DoWithHeaders(ctx, method, path, raw, headers)
 	if err != nil {
 		return nil, Output{}, err
 	}
