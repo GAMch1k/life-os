@@ -147,7 +147,7 @@ test.describe("Runtime status under forced problems", () => {
     page,
   }) => {
     // Remove only the container's tmpfs copy of the credentials; the host
-    // session is mounted read-only and untouched. A restart copies it back.
+    // session is mounted read-only and untouched.
     compose(
       "exec",
       "-T",
@@ -177,7 +177,17 @@ test.describe("Runtime status under forced problems", () => {
       await expectCheck(page, "Inbox backlog", /failed and is being retried/);
       await expectHomeAlert(page, /Codex is not signed in/);
     } finally {
-      compose("restart", "processor");
+      // "Sign in again" by restoring the copy from the read-only mount. A
+      // restart would also work, but it kills the in-flight attempt, which
+      // leaves the capture in processing (tracked for P8-11/P8-12).
+      compose(
+        "exec",
+        "-T",
+        "processor",
+        "sh",
+        "-c",
+        'cp /run/lifeos-codex-source/auth.json "$CODEX_HOME/auth.json"',
+      );
     }
     await expectCheck(
       page,
