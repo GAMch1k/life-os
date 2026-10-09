@@ -31,7 +31,7 @@ trap cleanup EXIT
 "${compose[@]}" up --detach --no-build
 gateway=http://127.0.0.1:13001
 ready() { for _ in $(seq 1 60); do curl --fail --silent "$gateway/api/$1/ready" >/dev/null && return; sleep 1; done; return 1; }
-for service in inbox tasks activity; do ready "$service"; done
+for service in inbox tasks activity; do ready "$service" || { echo "$service is not ready" >&2; exit 1; }; done
 
 simulate() { echo "$1" >"$sim/mode"; echo "$2" >"$sim/until"; }
 capture() {
@@ -78,8 +78,10 @@ backlog=$(curl --fail --silent "$gateway/api/inbox/v1/backlog")
 curl --fail --silent "$gateway/status" | grep -q 'after the Codex usage limit resets' || fail "Status does not show the scheduled retry"
 echo "   scheduled $((next - $(date +%s))) s ahead (reset in $((reset - $(date +%s))) s), reason usage_limited, shown on Status"
 
+# The gateway resolves upstream addresses at startup, so it is restarted too.
 "${compose[@]}" restart processor inbox >/dev/null
-ready inbox
+"${compose[@]}" restart gateway >/dev/null
+ready inbox || fail "Inbox did not come back after the restart"
 echo "   restarted processor and inbox"
 while [ "$(date +%s)" -lt $((reset - 5)) ]; do
   [ "$(attempts "$limited" | jq '.items | length')" = 1 ] || fail "retried before the reset"
