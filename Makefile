@@ -1,4 +1,4 @@
-.PHONY: infra-env infra-up infra-down infra-ps infra-logs infra-reset core-up core-smoke life-up life-smoke verify-clean-db verify-isolation e2e-smoke processor-smoke processor-codex-actions-smoke human-review-smoke activity-trace-smoke browser-e2e action-idempotency-smoke voice-lease-recovery-smoke db-provision db-check-isolation db-migration-new db-generate db-migrate-up db-migrate-down db-test create-service create-service-smoke dashboard-check check
+.PHONY: infra-env infra-up infra-down infra-ps infra-logs infra-reset core-up core-smoke life-up life-smoke verify-clean-db verify-isolation e2e-smoke processor-smoke processor-codex-actions-smoke human-review-smoke activity-trace-smoke runtime-status-smoke browser-e2e action-idempotency-smoke voice-lease-recovery-smoke db-provision db-check-isolation db-migration-new db-generate db-migrate-up db-migrate-down db-test create-service create-service-smoke dashboard-check check
 
 infra-env:
 	@test -f .env || cp .env.example .env
@@ -41,6 +41,11 @@ human-review-smoke: infra-env
 activity-trace-smoke: infra-env
 	docker compose build activity voice voice-worker inbox tasks mcp processor
 	./tools/smoke-activity-trace
+
+# Images are built one at a time to keep peak memory low on small hosts.
+runtime-status-smoke: infra-env
+	for service in dashboard processor mcp inbox voice voice-worker; do docker compose build $$service || exit 1; done
+	./tools/smoke-runtime-status
 
 browser-e2e: infra-env
 	./tools/browser-e2e

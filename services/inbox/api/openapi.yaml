@@ -5,6 +5,13 @@ info:
   license: {name: UNLICENSED, url: https://life-os.local/license}
 servers: [{url: http://inbox:8080}]
 paths:
+  /v1/backlog:
+    get:
+      summary: Summarize unfinished Inbox work for status surfaces
+      description: Counts and timestamps from durable Inbox state only. Pending means raw or processing; retrying means a pending item already has a failed or retryable attempt (the processor starts the next attempt right away, so the latest attempt is usually processing).
+      operationId: getInboxBacklog
+      security: []
+      responses: {'200': {description: Backlog summary, content: {application/json: {schema: {$ref: '#/components/schemas/InboxBacklog'}}}}}
   /v1/inbox-items:
     get:
       summary: List captured inbox items
@@ -81,6 +88,7 @@ components:
   schemas:
     InboxItem: {type: object, required: [id, content, source, state, processingMetadata, correlationId, createdAt, updatedAt], properties: {id: {type: string, format: uuid}, content: {type: string}, correlationId: {type: string, description: 'Workflow correlation id for activity events: the upstream caller''s X-Correlation-ID, or the item id when the capture starts its own workflow.'}, source: {type: string, enum: [manual, web, voice, watch, email]}, sourceMetadata: {type: object, additionalProperties: true}, mediaReferences: {type: array, items: {type: string, format: uri}}, state: {type: string, enum: [raw, processing, human_review, resolved, discarded]}, processingMetadata: {type: object, additionalProperties: true}, resolvedAt: {type: string, format: date-time, nullable: true}, createdAt: {type: string, format: date-time}, updatedAt: {type: string, format: date-time}}}
     CreateInboxItemRequest: {type: object, required: [content, source], properties: {content: {type: string}, source: {type: string, enum: [manual, web, voice, watch, email]}, sourceMetadata: {type: object, additionalProperties: true}, mediaReferences: {type: array, items: {type: string, format: uri}}, dedupeKey: {type: string, maxLength: 255}}}
+    InboxBacklog: {type: object, required: [pendingCount, retryingCount, humanReviewCount], properties: {pendingCount: {type: integer, description: Items waiting for or in automatic processing}, retryingCount: {type: integer, description: Pending items that already failed at least once and are being retried}, humanReviewCount: {type: integer}, oldestPendingAt: {type: string, format: date-time, nullable: true}, lastFailureAt: {type: string, format: date-time, nullable: true, description: When the most recent failed or retryable attempt of a pending item was recorded}, lastFailureSummary: {type: string, nullable: true}}}
     InboxItemList: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/InboxItem'}}, nextCursor: {type: string, nullable: true}}}
     ProcessingAttempt: {type: object, required: [id, status, agentName, modelProfile, actions, createdAt], properties: {id: {type: string, format: uuid}, status: {type: string, enum: [pending, processing, human_review, processed, failed, retryable]}, agentName: {type: string}, modelProfile: {type: string}, idempotencyKey: {type: string}, actions: {type: array, items: {type: object, additionalProperties: true}}, errorSummary: {type: string, nullable: true}, startedAt: {type: string, format: date-time, nullable: true}, completedAt: {type: string, format: date-time, nullable: true}, createdAt: {type: string, format: date-time}}}
     ProcessingAttemptList: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/ProcessingAttempt'}}}}

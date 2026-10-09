@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -43,11 +44,23 @@ func (c *MCPClient) Initialize(ctx context.Context) error {
 	return err
 }
 
+// errSessionExpired means the server no longer knows our session, for example
+// after the MCP service restarted. The request was not processed.
+var errSessionExpired = errors.New("MCP session expired")
+
 func (c *MCPClient) Call(ctx context.Context, name string, args map[string]any) (json.RawMessage, error) {
 	if err := c.Initialize(ctx); err != nil {
 		return nil, err
 	}
-	response, _, err := c.request(ctx, map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": map[string]any{"name": name, "arguments": args}})
+	call := map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": map[string]any{"name": name, "arguments": args}}
+	response, _, err := c.request(ctx, call)
+	if errors.Is(err, errSessionExpired) {
+		// Streamable HTTP: a 404 for a known session means start a new one.
+		if err := c.Initialize(ctx); err != nil {
+			return nil, err
+		}
+		response, _, err = c.request(ctx, call)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("call MCP tool %s: %w", name, err)
 	}
@@ -100,6 +113,10 @@ func (c *MCPClient) request(ctx context.Context, message map[string]any) (json.R
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == http.StatusNotFound && c.sessionID != "" {
+		c.sessionID = ""
+		return nil, resp.Header, fmt.Errorf("%w: %s", errSessionExpired, strings.TrimSpace(string(raw)))
+	}
 	if resp.StatusCode/100 != 2 {
 		return nil, resp.Header, fmt.Errorf("MCP returned %s: %s", resp.Status, string(raw))
 	}

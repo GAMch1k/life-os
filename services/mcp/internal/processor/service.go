@@ -2,6 +2,7 @@ package processor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"sync"
@@ -14,6 +15,8 @@ import (
 type Service struct {
 	Run          func(context.Context) error
 	PollInterval time.Duration
+	// Monitor, when set, is served on /status.
+	Monitor *Monitor
 
 	mu    sync.RWMutex
 	ready bool
@@ -68,6 +71,14 @@ func (s *Service) Handler() http.Handler {
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	})
+	mux.HandleFunc("/status", func(w http.ResponseWriter, _ *http.Request) {
+		if s.Monitor == nil {
+			http.NotFound(w, nil)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(s.Monitor.Snapshot())
 	})
 	mux.HandleFunc("/ready", func(w http.ResponseWriter, _ *http.Request) {
 		s.mu.RLock()

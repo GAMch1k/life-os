@@ -15,3 +15,38 @@ The processor reads raw items through `inbox_list`, asks Codex for a constrained
 Each MCP call from the processor carries the Inbox item's `X-Correlation-ID`, the processing attempt's `inbox.processing.started` event as `X-Causation-ID`, and `X-Life-OS-Actor: agent:codex-inbox-processor`. MCP forwards these headers to the owning service. Every mutation tool records `mcp.action.requested` and then `mcp.action.completed` or `mcp.action.failed`, and the owning service's change names the request event as its cause. A caller that sends no actor header is recorded as `agent:mcp`. See [Activity](activity.md).
 
 For every allowed mutation, the processor derives a stable per-action key from the Inbox operation, action index, tool, and canonical arguments. MCP forwards it to Tasks, Calendar, or Finance as `Idempotency-Key`. Those services persist the key and a payload hash with the created row: repeating the same key and payload returns the original row, while reusing a key with materially different content returns `409`. Manual callers may omit the header and retain the usual create behavior. Idempotency metadata is retained with the owned record for its lifetime; it is not in-memory state.
+
+## Processor status
+
+The processor's private health port (`8081`, not exposed through the gateway) serves `/health`, `/ready`, and `/status`. Like `/health` and `/ready`, `/status` is an operational endpoint outside the OpenAPI contracts. It holds what the running process has observed since it started, in memory, and resets on restart:
+
+```json
+{
+  "model": "gpt-5.6-luna",
+  "startedAt": "…",
+  "poll": {"lastAt": "…", "lastSucceededAt": "…", "lastError": "…"},
+  "codex": {
+    "state": "ready | usage_limited | unauthenticated | failing | unknown",
+    "authenticated": true,
+    "authCheckedAt": "…",
+    "lastSucceededAt": "…",
+    "lastFailedAt": "…",
+    "lastError": "ERROR: You've hit your usage limit… try again at 6:22 PM.",
+    "consecutiveFailures": 3
+  }
+}
+```
+
+- `authenticated` comes from `codex login status`, checked at startup and every five minutes. It reads local credentials only and uses no model quota.
+- `state` is derived as follows:
+  - `unauthenticated` when the login check fails;
+  - otherwise, after a failed planning run, the failure is classified: `usage_limited` (usage or rate limit), `unauthenticated` (401 or not logged in), or `failing` (anything else);
+  - otherwise `ready` after a successful run, or `unknown` when Codex has not run yet.
+- The Dashboard Status page (`/status`) renders this, together with the Inbox and Voice backlogs.
+
+A failed Codex run keeps only the CLI's own `ERROR:` lines, without the transport retry lines (`Reconnecting… n/5`), in its error and in the Inbox attempt's `errorSummary`. The full output echoes the banner and the prompt, including the user's capture. That buried the actual reason, such as a usage limit, behind text that was then truncated.
+
+If the MCP service restarts, it forgets every session. On the resulting `404`, the processor starts a new MCP session and retries the rejected call once, which the Streamable HTTP transport requires. The rejected request was never processed. Previously the processor kept its stale session and failed every poll until it was restarted itself.
+
+Known gap, tracked for P8-12: a processor restart while a Codex run is in flight leaves that capture's attempt, and the capture itself, in `processing`. Only `raw` captures are polled, so it is not picked up again. The Status page flags it as a prolonged backlog after 15 minutes.
+

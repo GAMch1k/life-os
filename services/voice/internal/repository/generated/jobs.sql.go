@@ -177,6 +177,43 @@ func (q *Queries) ExpireAudioJob(ctx context.Context, id pgtype.UUID) (AudioJob,
 	return i, err
 }
 
+const getAudioBacklog = `-- name: GetAudioBacklog :one
+SELECT
+  count(*) FILTER (WHERE status = 'queued')::int AS queued_count,
+  count(*) FILTER (WHERE status = 'processing')::int AS processing_count,
+  count(*) FILTER (WHERE status = 'retryable')::int AS retryable_count,
+  count(*) FILTER (WHERE status = 'processing' AND lease_expires_at < now())::int AS expired_lease_count,
+  count(*) FILTER (WHERE status IN ('queued','retryable') AND available_at < now() - INTERVAL '2 minutes')::int AS overdue_count,
+  (min(created_at))::timestamptz AS oldest_waiting_at,
+  (min(available_at) FILTER (WHERE status = 'retryable'))::timestamptz AS next_retry_at
+FROM audio_jobs WHERE status IN ('queued','processing','retryable')
+`
+
+type GetAudioBacklogRow struct {
+	QueuedCount       int32
+	ProcessingCount   int32
+	RetryableCount    int32
+	ExpiredLeaseCount int32
+	OverdueCount      int32
+	OldestWaitingAt   pgtype.Timestamptz
+	NextRetryAt       pgtype.Timestamptz
+}
+
+func (q *Queries) GetAudioBacklog(ctx context.Context) (GetAudioBacklogRow, error) {
+	row := q.db.QueryRow(ctx, getAudioBacklog)
+	var i GetAudioBacklogRow
+	err := row.Scan(
+		&i.QueuedCount,
+		&i.ProcessingCount,
+		&i.RetryableCount,
+		&i.ExpiredLeaseCount,
+		&i.OverdueCount,
+		&i.OldestWaitingAt,
+		&i.NextRetryAt,
+	)
+	return i, err
+}
+
 const getAudioJob = `-- name: GetAudioJob :one
 SELECT id, source, source_metadata, object_key, content_type, byte_size, status, transcript, inbox_item_id, attempt_count, error_summary, available_at, created_at, updated_at, completed_at, expires_at, lease_owner, lease_expires_at, last_heartbeat_at FROM audio_jobs WHERE id = $1
 `
@@ -205,6 +242,24 @@ func (q *Queries) GetAudioJob(ctx context.Context, id pgtype.UUID) (AudioJob, er
 		&i.LeaseExpiresAt,
 		&i.LastHeartbeatAt,
 	)
+	return i, err
+}
+
+const getLatestAudioFailure = `-- name: GetLatestAudioFailure :one
+SELECT error_summary, updated_at FROM audio_jobs
+WHERE status IN ('retryable','failed') AND error_summary IS NOT NULL
+ORDER BY updated_at DESC LIMIT 1
+`
+
+type GetLatestAudioFailureRow struct {
+	ErrorSummary *string
+	UpdatedAt    pgtype.Timestamptz
+}
+
+func (q *Queries) GetLatestAudioFailure(ctx context.Context) (GetLatestAudioFailureRow, error) {
+	row := q.db.QueryRow(ctx, getLatestAudioFailure)
+	var i GetLatestAudioFailureRow
+	err := row.Scan(&i.ErrorSummary, &i.UpdatedAt)
 	return i, err
 }
 

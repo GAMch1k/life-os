@@ -84,6 +84,27 @@ func (e CreateAudioJobMultipartBodySource) Valid() bool {
 	}
 }
 
+// AudioBacklog defines model for AudioBacklog.
+type AudioBacklog struct {
+	LastFailureAt      *time.Time `json:"lastFailureAt,omitempty"`
+	LastFailureSummary *string    `json:"lastFailureSummary,omitempty"`
+
+	// NextRetryAt Earliest scheduled retry of a retryable job
+	NextRetryAt *time.Time `json:"nextRetryAt,omitempty"`
+
+	// OldestWaitingAt Creation time of the oldest unfinished job
+	OldestWaitingAt *time.Time `json:"oldestWaitingAt,omitempty"`
+	ProcessingCount int        `json:"processingCount"`
+	QueuedCount     int        `json:"queuedCount"`
+
+	// RetryableCount Jobs waiting for an automatic retry
+	RetryableCount int `json:"retryableCount"`
+
+	// WhisperReady Whether the Whisper service answered its readiness probe
+	WhisperReady  bool `json:"whisperReady"`
+	WorkerStalled bool `json:"workerStalled"`
+}
+
 // AudioJob defines model for AudioJob.
 type AudioJob struct {
 	AttemptCount int                 `json:"attemptCount"`
@@ -128,6 +149,9 @@ type ServerInterface interface {
 	// GetAudioJob Poll an asynchronous transcription job
 	// (GET /v1/audio-jobs/{jobId})
 	GetAudioJob(c fiber.Ctx, jobId openapi_types.UUID) error
+	// GetAudioBacklog Summarize unfinished transcription work and worker dependencies
+	// (GET /v1/backlog)
+	GetAudioBacklog(c fiber.Ctx) error
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -186,6 +210,24 @@ func (siw *ServerInterfaceWrapper) GetAudioJob(c fiber.Ctx) error {
 	return handler(c)
 }
 
+// GetAudioBacklog operation middleware
+func (siw *ServerInterfaceWrapper) GetAudioBacklog(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.GetAudioBacklog(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
 // FiberServerOptions provides options for the Fiber server.
 type FiberServerOptions struct {
 	BaseURL            string
@@ -208,6 +250,8 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	for _, m := range options.Middlewares {
 		router.Use(fiber.Handler(m))
 	}
+
+	router.Get(options.BaseURL+"/v1/backlog", wrapper.GetAudioBacklog)
 
 	router.Post(options.BaseURL+"/v1/audio-jobs", wrapper.CreateAudioJob)
 

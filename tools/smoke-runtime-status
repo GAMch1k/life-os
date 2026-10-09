@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Runtime status acceptance on the isolated verification stack.
+#
+# Forces real problems one at a time (Whisper stopped, processor stopped, MCP
+# stopped, Codex signed out inside the processor container, Tasks stopped,
+# Voice worker stopped with a recording waiting) and checks in the browser
+# that the Status page and Home alert explain each one. Every fault goes
+# through tools/verify-compose, which only touches lifeos-verify-* resources.
+#
+# Requirements: the authenticated Codex CLI configured for the processor (the
+# signed-out case removes only the container's tmpfs copy of the credentials).
+set -euo pipefail
+
+compose=(./tools/verify-compose)
+cleanup() { "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true; }
+trap cleanup EXIT
+
+"${compose[@]}" up --detach --no-build
+gateway=http://127.0.0.1:13001
+for service in activity inbox tasks voice; do
+  for _ in $(seq 1 60); do curl --fail --silent "$gateway/api/$service/ready" >/dev/null && break; sleep 1; done
+  curl --fail --silent "$gateway/api/$service/ready" >/dev/null
+done
+# Whisper downloads its model on a fresh volume before it is ready.
+for _ in $(seq 1 180); do
+  [ "$("${compose[@]}" ps whisper --format '{{.Health}}')" = healthy ] && break
+  sleep 2
+done
+
+LIFE_OS_E2E_URL=$gateway LIFE_OS_E2E_FAULTS=1 npm --prefix apps/dashboard run test:e2e -- e2e/runtime-status.spec.ts

@@ -4,6 +4,26 @@
  */
 
 export interface paths {
+    "/v1/backlog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Summarize unfinished Inbox work for status surfaces
+         * @description Counts and timestamps from durable Inbox state only. Pending means raw or processing; retrying means a pending item already has a failed or retryable attempt (the processor starts the next attempt right away, so the latest attempt is usually processing).
+         */
+        get: operations["getInboxBacklog"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/inbox-items": {
         parameters: {
             query?: never;
@@ -180,6 +200,21 @@ export interface components {
             mediaReferences?: string[];
             dedupeKey?: string;
         };
+        InboxBacklog: {
+            /** @description Items waiting for or in automatic processing */
+            pendingCount: number;
+            /** @description Pending items that already failed at least once and are being retried */
+            retryingCount: number;
+            humanReviewCount: number;
+            /** Format: date-time */
+            oldestPendingAt?: string | null;
+            /**
+             * Format: date-time
+             * @description When the most recent failed or retryable attempt of a pending item was recorded
+             */
+            lastFailureAt?: string | null;
+            lastFailureSummary?: string | null;
+        };
         InboxItemList: {
             items: components["schemas"]["InboxItem"][];
             nextCursor?: string | null;
@@ -243,6 +278,26 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    getInboxBacklog: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Backlog summary */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InboxBacklog"];
+                };
+            };
+        };
+    };
     listInboxItems: {
         parameters: {
             query?: {

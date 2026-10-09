@@ -1,6 +1,6 @@
 # Dashboard
 
-The Dashboard is a Next.js App Router/TypeScript application using Tailwind and shadcn/ui. It provides the overview and routed Finance, Tasks, Inbox, Calendar, and Activity pages. It consumes generated TypeScript OpenAPI types under `src/lib/api/generated`, not hand-written transport copies.
+The Dashboard is a Next.js App Router/TypeScript application using Tailwind and shadcn/ui. It provides the overview and routed Finance, Tasks, Inbox, Calendar, Activity, and Status pages. It consumes generated TypeScript OpenAPI types under `src/lib/api/generated`, not hand-written transport copies.
 
 Home (`/`) is attention-first: it answers “what needs my attention now?” and links into the dedicated workspaces for everything else. It is a read-only projection over the owning services' list APIs (`src/lib/home-attention.ts`) and never mutates data or adds business logic. It shows four compact cards:
 
@@ -9,7 +9,7 @@ Home (`/`) is attention-first: it answers “what needs my attention now?” and
 - **Next on your calendar** — the next Calendar event in the coming 30 days, linking to `/calendar`.
 - **Unscheduled tasks** — up to three open Tasks without a date, linking to `/tasks`.
 
-Counts carry a `+` when the service reported more rows than Home fetched. Each card distinguishes an empty source (“Nothing waiting for review.”) from an unreachable one (“Inbox is unavailable right now.”); a stopped service never fails the whole page. Below the cards Home keeps the capture controls (text capture into Inbox and Voice recording). Finance, full Task lists, and the Calendar agenda live only in their workspaces. System/dependency problems and delayed retry work are not shown yet because no service exposes them; they belong to the runtime status and retry tickets.
+Counts carry a `+` when the service reported more rows than Home fetched. Each card distinguishes an empty source (“Nothing waiting for review.”) from an unreachable one (“Inbox is unavailable right now.”); a stopped service never fails the whole page. Below the cards Home keeps the capture controls (text capture into Inbox and Voice recording). Finance, full Task lists, and the Calendar agenda live only in their workspaces. When something needs the user's attention (see `/status` below), Home shows one alert above the cards linking to `/status`; when everything works, it shows nothing.
 
 `/tasks` is the Tasks control workspace. Its List view groups open work into Overdue, Today, Upcoming, and Unscheduled / No date; an undated Task remains visible rather than being assigned a made-up deadline. The compact date navigator controls its date focus, while Schedule is a day/week projection of dated Tasks only. This projection does not turn Tasks into Calendar Events; unscheduled work remains in List. A Task can be edited in place, rescheduled, returned to Unscheduled, completed, and reopened using the Tasks API; all mutations survive reload.
 
@@ -22,6 +22,15 @@ Counts carry a `+` when the service reported more rows than Home fetched. Each c
 - **Diagnostics**: a collapsed section with ids, correlation, causation, actor, timestamps, and the raw event data.
 
 Every entry in these sections opens its own trace, so a chain such as Inbox capture → processing → MCP `task_create` → Task created → Task later completed can be followed click by click. A workflow and a subject history are each read as up to 500 events. If an event's cause was recorded in another workflow, the Event Log links to it instead of guessing. The Event Log never writes; like the gateway, its `/api/activity` proxy allows only GET/HEAD.
+
+`/status` answers "is Life OS working, and if not, what do I do?" It is built only from supported runtime state (`src/lib/runtime-status.ts`), never from UI behaviour. Four checks are shown, each as OK, Needs attention, or Problem, with the runtime's own error text and a suggested action:
+
+- **Automatic processing**: the processor's private `/status` endpoint (see [MCP and AI](../services/mcp.md)). It reports when the processor is not running, when it cannot read Inbox through MCP, when Codex is signed out (from `codex login status` or a 401), when Codex has hit its usage limit (Codex's own "try again at …" text is shown verbatim), and when Codex runs are failing for any other reason.
+- **Inbox backlog**: Inbox `GET /v1/backlog`. Shows captures that failed and are being retried, with the latest error, and flags a capture that has waited more than 15 minutes.
+- **Voice transcription**: Voice `GET /v1/backlog`. Reports Whisper not ready, a stalled Voice worker, and recordings waiting for a retry, with the next scheduled retry time.
+- **Services**: every owning service's `/ready`.
+
+Each probe has a 2.5 s timeout. An unreachable source shows as a problem rather than failing the page. The Dashboard reaches the processor at `PROCESSOR_STATUS_URL` (`http://processor:8081` in Compose) on the private network; the processor is never exposed through the gateway. `make runtime-status-smoke` stops Whisper, the processor, MCP, Tasks, and the Voice worker, and signs Codex out inside the processor container, one at a time on the disposable verification stack. It then checks in the browser that Status and the Home alert explain each problem and that Status recovers.
 
 Browser requests use `/api/finance`, `/api/tasks`, `/api/inbox`, `/api/calendar`, `/api/voice`, and `/api/activity` relative to the current origin. Server-side rendering uses Docker service DNS internally. Loading/error handling is page-scoped so an unavailable service does not require exposing direct service ports.
 

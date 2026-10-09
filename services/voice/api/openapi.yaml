@@ -2,6 +2,13 @@ openapi: 3.0.3
 info: {title: Life OS Voice API, version: 1.0.0, license: {name: UNLICENSED, url: https://life-os.local/license}}
 servers: [{url: http://voice:8080}]
 paths:
+  /v1/backlog:
+    get:
+      summary: Summarize unfinished transcription work and worker dependencies
+      description: Counts and timestamps from durable job state, plus a short readiness probe of the configured Whisper service. workerStalled is true when a processing lease has expired, or when jobs have been due for over two minutes while nothing is processing.
+      operationId: getAudioBacklog
+      security: []
+      responses: {'200': {description: Backlog summary, content: {application/json: {schema: {$ref: '#/components/schemas/AudioBacklog'}}}}}
   /v1/audio-jobs:
     post:
       summary: Upload audio and enqueue asynchronous transcription
@@ -18,6 +25,19 @@ paths:
       responses: {'200': {description: Job status, content: {application/json: {schema: {$ref: '#/components/schemas/AudioJob'}}}}, '404': {description: Job not found}}
 components:
   schemas:
+    AudioBacklog:
+      type: object
+      required: [queuedCount, processingCount, retryableCount, workerStalled, whisperReady]
+      properties:
+        queuedCount: {type: integer}
+        processingCount: {type: integer}
+        retryableCount: {type: integer, description: Jobs waiting for an automatic retry}
+        oldestWaitingAt: {type: string, format: date-time, nullable: true, description: Creation time of the oldest unfinished job}
+        nextRetryAt: {type: string, format: date-time, nullable: true, description: Earliest scheduled retry of a retryable job}
+        workerStalled: {type: boolean}
+        whisperReady: {type: boolean, description: Whether the Whisper service answered its readiness probe}
+        lastFailureAt: {type: string, format: date-time, nullable: true}
+        lastFailureSummary: {type: string, nullable: true}
     AudioJob:
       type: object
       required: [id, status, source, attemptCount, createdAt, updatedAt]

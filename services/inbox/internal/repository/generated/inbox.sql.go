@@ -91,6 +91,39 @@ func (q *Queries) CreateProcessingAttempt(ctx context.Context, arg CreateProcess
 	return i, err
 }
 
+const getInboxBacklog = `-- name: GetInboxBacklog :one
+SELECT
+    count(*) FILTER (WHERE i.state IN ('raw', 'processing'))::int AS pending_count,
+    count(*) FILTER (WHERE i.state IN ('raw', 'processing') AND failed.item_id IS NOT NULL)::int AS retrying_count,
+    count(*) FILTER (WHERE i.state = 'human_review')::int AS human_review_count,
+    (min(i.created_at) FILTER (WHERE i.state IN ('raw', 'processing')))::timestamptz AS oldest_pending_at
+FROM inbox_items i
+LEFT JOIN LATERAL (
+    SELECT a.inbox_item_id AS item_id FROM inbox_processing_attempts a
+    WHERE a.inbox_item_id = i.id AND a.status IN ('retryable', 'failed') LIMIT 1
+) failed ON true
+WHERE i.state IN ('raw', 'processing', 'human_review')
+`
+
+type GetInboxBacklogRow struct {
+	PendingCount     int32
+	RetryingCount    int32
+	HumanReviewCount int32
+	OldestPendingAt  pgtype.Timestamptz
+}
+
+func (q *Queries) GetInboxBacklog(ctx context.Context) (GetInboxBacklogRow, error) {
+	row := q.db.QueryRow(ctx, getInboxBacklog)
+	var i GetInboxBacklogRow
+	err := row.Scan(
+		&i.PendingCount,
+		&i.RetryingCount,
+		&i.HumanReviewCount,
+		&i.OldestPendingAt,
+	)
+	return i, err
+}
+
 const getInboxItem = `-- name: GetInboxItem :one
 SELECT id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at, source_dedupe_key, correlation_id FROM inbox_items WHERE id = $1
 `
@@ -112,6 +145,27 @@ func (q *Queries) GetInboxItem(ctx context.Context, id pgtype.UUID) (InboxItem, 
 		&i.SourceDedupeKey,
 		&i.CorrelationID,
 	)
+	return i, err
+}
+
+const getLatestPendingFailure = `-- name: GetLatestPendingFailure :one
+SELECT a.error_summary, a.updated_at
+FROM inbox_items i
+JOIN inbox_processing_attempts a ON a.inbox_item_id = i.id
+WHERE i.state IN ('raw', 'processing') AND a.status IN ('retryable', 'failed')
+ORDER BY a.updated_at DESC
+LIMIT 1
+`
+
+type GetLatestPendingFailureRow struct {
+	ErrorSummary *string
+	UpdatedAt    pgtype.Timestamptz
+}
+
+func (q *Queries) GetLatestPendingFailure(ctx context.Context) (GetLatestPendingFailureRow, error) {
+	row := q.db.QueryRow(ctx, getLatestPendingFailure)
+	var i GetLatestPendingFailureRow
+	err := row.Scan(&i.ErrorSummary, &i.UpdatedAt)
 	return i, err
 }
 

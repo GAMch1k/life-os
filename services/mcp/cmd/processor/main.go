@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/GAMch1k/life-os/services/mcp/internal/processor"
 )
@@ -36,16 +37,23 @@ func main() {
 	}
 	runner := processor.Runner{Planner: planner, Tools: &processor.MCPClient{URL: cfg.MCPURL}, Model: cfg.Model, DryRun: *dryRun}
 	if *serve {
+		monitor := processor.NewMonitor(cfg.Model)
+		runner.Planner = monitor.Monitored(planner)
 		if *dryRun {
 			fmt.Fprintln(os.Stderr, "--serve and --dry-run cannot be used together")
 			os.Exit(2)
 		}
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
+		// Credentials can expire or be removed while the process runs.
+		go monitor.WatchAuth(ctx, planner.LoggedIn, 5*time.Minute)
 		service := &processor.Service{Run: func(ctx context.Context) error {
 			_, err := runner.Run(ctx)
+			if ctx.Err() == nil {
+				monitor.RecordPoll(err)
+			}
 			return err
-		}, PollInterval: cfg.PollInterval}
+		}, PollInterval: cfg.PollInterval, Monitor: monitor}
 		if err := service.Serve(ctx, ":"+cfg.HealthPort); err != nil && ctx.Err() == nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)

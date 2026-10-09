@@ -110,6 +110,7 @@ services:
       CALENDAR_SERVICE_URL: http://calendar:8080
       VOICE_SERVICE_URL: http://voice:8080
       ACTIVITY_SERVICE_URL: http://activity:8080
+      PROCESSOR_STATUS_URL: http://processor:8081
     expose: ["3000"]
     depends_on:
       finance: {condition: service_started}
