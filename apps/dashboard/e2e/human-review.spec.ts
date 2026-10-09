@@ -51,8 +51,9 @@ test.describe("Human Review queue", () => {
     await page.goto("/inbox");
     await expect(page.getByText("Human Review", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: task.title }).click();
+    // Other specs may leave their own review items; only this one must clear.
     await expect(
-      page.getByText("Human Review", { exact: true }),
+      page.getByRole("button", { name: task.title }),
     ).not.toBeVisible();
     await expect
       .poll(

@@ -15,7 +15,7 @@ test.describe("Dashboard CSV import", () => {
       "account_id,occurred_on,amount_minor,currency,external_id,note",
       `${process.env.LIFE_OS_E2E_ACCOUNT_ID},2026-10-08,-125,USD,${externalId},Browser CSV`,
     ].join("\n");
-    await page.goto("/");
+    await page.goto("/finance");
     await page.locator('input[type="file"]').setInputFiles({
       name: "browser-import.csv",
       mimeType: "text/csv",
