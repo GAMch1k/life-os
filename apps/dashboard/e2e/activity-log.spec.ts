@@ -50,7 +50,7 @@ test.describe("Event Log", () => {
       page.getByRole("heading", { name: "Event Log", level: 1 }),
     ).toBeVisible();
     await page
-      .getByLabel("Event", { exact: true })
+      .getByRole("combobox", { name: "Event", exact: true })
       .selectOption("inbox.item.captured");
     await page.getByRole("button", { name: "Apply" }).click();
     await expect(page).toHaveURL(/type=inbox\.item\.captured/);
