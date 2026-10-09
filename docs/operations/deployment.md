@@ -27,7 +27,8 @@ Automatic Inbox processing is a normal Compose service and uses the host user's 
 ```sh
 LIFE_OS_CODEX_HOME_HOST_PATH=/absolute/path/to/.codex
 LIFE_OS_CODEX_RUNTIME_UID=1000 # output of: id -u
-LIFE_OS_CODEX_MODEL=gpt-5.6-terra
+LIFE_OS_CODEX_MODEL=gpt-5.6-luna
+LIFE_OS_CODEX_REASONING_EFFORT=medium
 ```
 
 The processor bind-mounts that path read-only, runs as the owning UID, and copies only the authentication and optional Codex configuration to a container tmpfs. Do not mount a credential as a writable volume and do not add `auth.json` or API keys to `.env`. After deployment, verify from the processor container itself with `docker compose exec processor codex login status`; it should report the already authenticated ChatGPT session. Its private readiness probe only becomes ready after a successful polling pass through MCP.

@@ -202,3 +202,42 @@ func TestSlotsLimitConcurrentRuns(t *testing.T) {
 		t.Fatalf("free slot: %v", err)
 	}
 }
+
+type tokenRecorder struct {
+	recordingObserver
+	usage []TokenUsage
+}
+
+func (r *tokenRecorder) Tokens(usage TokenUsage) { r.usage = append(r.usage, usage) }
+
+func TestReasoningEffortIsPassedAndTokenUsageReported(t *testing.T) {
+	dir := t.TempDir()
+	argsFile := filepath.Join(dir, "args")
+	codex := fakeCodex(t, `echo "$0" >/dev/null
+printf '{}' > "$out"
+echo '{"type":"turn.completed","usage":{"input_tokens":13000,"cached_input_tokens":11000,"output_tokens":42,"reasoning_output_tokens":7}}'`)
+	// Record the arguments with a wrapper around the fake CLI.
+	wrapper := filepath.Join(dir, "codex-args")
+	if err := os.WriteFile(wrapper, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > "+argsFile+"\nexec "+codex+" \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	observer := &tokenRecorder{}
+	if _, err := (CodexCLI{Command: wrapper, WorkDir: dir, Model: "gpt-6-luna", ReasoningEffort: "low"}).Plan(WithRunObserver(context.Background(), observer), "x"); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(argsFile)
+	if !strings.Contains(strings.ReplaceAll(string(raw), "\n", " "), "-c model_reasoning_effort=low") {
+		t.Fatalf("args lack the reasoning effort: %q", raw)
+	}
+	if len(observer.usage) != 1 || observer.usage[0] != (TokenUsage{Input: 13000, CachedInput: 11000, Output: 42, Reasoning: 7}) {
+		t.Fatalf("usage = %+v", observer.usage)
+	}
+	// Without an effort, the Codex configuration's default applies.
+	if _, err := (CodexCLI{Command: wrapper, WorkDir: dir, Model: "gpt-6-luna"}).Plan(context.Background(), "x"); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ = os.ReadFile(argsFile)
+	if strings.Contains(string(raw), "model_reasoning_effort") {
+		t.Fatalf("an effort was passed without being configured: %q", raw)
+	}
+}

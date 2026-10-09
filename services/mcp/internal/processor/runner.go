@@ -32,6 +32,8 @@ type Runner struct {
 	Owner string
 	// OnRuntime, when set, receives every runtime state the runner records.
 	OnRuntime func(RuntimeEvent)
+	// OnTokens, when set, receives the token usage Codex reports per run.
+	OnTokens func(TokenUsage)
 }
 type inboxList struct {
 	Items []inboxItem `json:"items"`

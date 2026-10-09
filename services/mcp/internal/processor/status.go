@@ -20,12 +20,15 @@ const (
 // operational state like /ready, not domain data: it lives in memory and
 // resets on restart.
 type Status struct {
-	Model     string             `json:"model"`
-	StartedAt time.Time          `json:"startedAt"`
-	Poll      PollStatus         `json:"poll"`
-	Codex     CodexStatus        `json:"codex"`
-	Usage     UsageStatus        `json:"usage"`
-	Runtime   AgentRuntimeStatus `json:"runtime"`
+	Model string `json:"model"`
+	// ReasoningEffort is the configured model_reasoning_effort ("" = Codex
+	// default).
+	ReasoningEffort string             `json:"reasoningEffort,omitempty"`
+	StartedAt       time.Time          `json:"startedAt"`
+	Poll            PollStatus         `json:"poll"`
+	Codex           CodexStatus        `json:"codex"`
+	Usage           UsageStatus        `json:"usage"`
+	Runtime         AgentRuntimeStatus `json:"runtime"`
 }
 
 // AgentRuntimeStatus describes the Codex runtime: its configuration, the run
@@ -42,9 +45,18 @@ type AgentRuntimeStatus struct {
 	TimedOut  int         `json:"timedOut"`
 	Cancelled int         `json:"cancelled"`
 	// Recovered counts abandoned attempts this processor reconciled.
-	Recovered          int        `json:"recovered"`
-	LastReconcileAt    *time.Time `json:"lastReconcileAt"`
-	LastReconcileError string     `json:"lastReconcileError,omitempty"`
+	Recovered int `json:"recovered"`
+	// Tokens sums the usage Codex reported for planning runs since start;
+	// LastRunTokens is the latest run's.
+	Tokens             TokenTotals `json:"tokens"`
+	LastRunTokens      *TokenUsage `json:"lastRunTokens"`
+	LastReconcileAt    *time.Time  `json:"lastReconcileAt"`
+	LastReconcileError string      `json:"lastReconcileError,omitempty"`
+}
+
+type TokenTotals struct {
+	Runs int `json:"runs"`
+	TokenUsage
 }
 
 type RuntimeRun struct {
@@ -173,6 +185,26 @@ func (m *Monitor) RecordRuntime(event RuntimeEvent) {
 	}
 	// The planning run is over; the attempt's actions are quick.
 	runtime.Current = nil
+}
+
+// SetReasoningEffort records the configured reasoning effort.
+func (m *Monitor) SetReasoningEffort(effort string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.status.ReasoningEffort = effort
+}
+
+// RecordTokens adds one planning run's token usage.
+func (m *Monitor) RecordTokens(usage TokenUsage) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	totals := &m.status.Runtime.Tokens
+	totals.Runs++
+	totals.Input += usage.Input
+	totals.CachedInput += usage.CachedInput
+	totals.Output += usage.Output
+	totals.Reasoning += usage.Reasoning
+	m.status.Runtime.LastRunTokens = &usage
 }
 
 // RecordReconcile records a reconciliation pass.
