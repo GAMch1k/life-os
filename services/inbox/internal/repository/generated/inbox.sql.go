@@ -320,14 +320,18 @@ func (q *Queries) ListProcessingAttempts(ctx context.Context, inboxItemID pgtype
 }
 
 const listStaleProcessingAttempts = `-- name: ListStaleProcessingAttempts :many
-SELECT id, inbox_item_id, idempotency_key, status, agent_name, model_profile, actions, error_summary, started_at, completed_at, created_at, updated_at, next_retry_at, runtime_state, runtime_owner, runtime_session_id, runtime_heartbeat_at FROM inbox_processing_attempts
-WHERE status IN ('pending', 'processing')
-  AND COALESCE(runtime_heartbeat_at, updated_at) < now() - make_interval(secs => $1::int)
-ORDER BY created_at
+SELECT a.id, a.inbox_item_id, a.idempotency_key, a.status, a.agent_name, a.model_profile, a.actions, a.error_summary, a.started_at, a.completed_at, a.created_at, a.updated_at, a.next_retry_at, a.runtime_state, a.runtime_owner, a.runtime_session_id, a.runtime_heartbeat_at FROM inbox_processing_attempts a
+JOIN inbox_items i ON i.id = a.inbox_item_id
+WHERE a.status IN ('pending', 'processing')
+  AND i.state IN ('raw', 'processing')
+  AND COALESCE(a.runtime_heartbeat_at, a.updated_at) < now() - make_interval(secs => $1::int)
+ORDER BY a.created_at
 LIMIT 50
 `
 
-// Unfinished attempts whose runtime stopped reporting (or never did).
+// Unfinished attempts whose runtime stopped reporting (or never did), for
+// captures that are still waiting for processing. An open attempt of a capture
+// that has since been resolved, discarded, or sent to review is history.
 func (q *Queries) ListStaleProcessingAttempts(ctx context.Context, staleAfterSeconds int32) ([]InboxProcessingAttempt, error) {
 	rows, err := q.db.Query(ctx, listStaleProcessingAttempts, staleAfterSeconds)
 	if err != nil {

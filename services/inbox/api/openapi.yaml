@@ -96,7 +96,7 @@ paths:
   /v1/stale-processing-attempts:
     get:
       summary: List unfinished attempts whose runtime stopped reporting
-      description: Pending or processing attempts whose heartbeat (or last update, for attempts without runtime tracking) is older than staleAfterSeconds, oldest first. The processor reconciles them after a crash or restart.
+      description: Pending or processing attempts of captures still in raw or processing whose heartbeat (or last update, for attempts without runtime tracking) is older than staleAfterSeconds, oldest first. The processor reconciles them after a crash or restart.
       operationId: listStaleProcessingAttempts
       security: []
       parameters: [{name: staleAfterSeconds, in: query, required: true, schema: {type: integer, minimum: 30, maximum: 86400}}]

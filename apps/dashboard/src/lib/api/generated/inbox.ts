@@ -191,7 +191,7 @@ export interface paths {
         };
         /**
          * List unfinished attempts whose runtime stopped reporting
-         * @description Pending or processing attempts whose heartbeat (or last update, for attempts without runtime tracking) is older than staleAfterSeconds, oldest first. The processor reconciles them after a crash or restart.
+         * @description Pending or processing attempts of captures still in raw or processing whose heartbeat (or last update, for attempts without runtime tracking) is older than staleAfterSeconds, oldest first. The processor reconciles them after a crash or restart.
          */
         get: operations["listStaleProcessingAttempts"];
         put?: never;

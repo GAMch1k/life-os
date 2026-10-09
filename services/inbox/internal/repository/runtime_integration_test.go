@@ -52,6 +52,18 @@ func TestAttemptRuntimeHeartbeatsAndStaleDetection(t *testing.T) {
 	exec("UPDATE inbox_processing_attempts SET status = 'processing', updated_at = now() - interval '3 days' WHERE id = $1", legacy.ID)
 	exec("UPDATE inbox_processing_attempts SET status = 'processed', updated_at = now() - interval '3 days' WHERE id = $1", finished.ID)
 
+	// An open attempt of a capture that was resolved meanwhile is history.
+	resolvedItem, err := queries.CreateInboxItem(ctx, store.CreateInboxItemParams{Content: "already done", Source: "manual", SourceMetadata: []byte(`{}`), MediaReferences: []byte(`[]`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	history, err := queries.CreateProcessingAttempt(ctx, store.CreateProcessingAttemptParams{InboxItemID: resolvedItem.ID, IdempotencyKey: "history", AgentName: "codex-inbox-processor", ModelProfile: "test", Actions: []byte(`[]`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec("UPDATE inbox_processing_attempts SET updated_at = now() - interval '3 days' WHERE id = $1", history.ID)
+	exec("UPDATE inbox_items SET state = 'resolved' WHERE id = $1", resolvedItem.ID)
+
 	stale, err := queries.ListStaleProcessingAttempts(ctx, 120)
 	if err != nil {
 		t.Fatal(err)
