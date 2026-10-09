@@ -100,7 +100,7 @@ curl "$GATEWAY/api/activity/v1/activity-events?correlationId=$JOB_ID&limit=100" 
 curl "$GATEWAY/api/activity/v1/activity-events?subjectType=task&subjectId=$TASK_ID"
 ```
 
-The contract is `services/activity/api/openapi.yaml`. The Dashboard Event Log view is built on this API (P8-08).
+The contract is `services/activity/api/openapi.yaml`. The Dashboard Event Log (`/activity`, see [Dashboard](../frontend/dashboard.md)) is built only on this API: it lists and filters events, then rebuilds a selected entry's trace from its correlation, causation, and subject.
 
 ## Operations
 
