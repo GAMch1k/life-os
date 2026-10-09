@@ -6,6 +6,8 @@ const jfkFixture =
   "https://github.com/ggerganov/whisper.cpp/raw/master/samples/jfk.wav";
 const localFixture = process.env.LIFE_OS_E2E_VOICE_AUDIO_FILE;
 const expectedTaskTitle = process.env.LIFE_OS_E2E_EXPECT_VOICE_TASK_TITLE;
+const expectedCompletedTaskTitle =
+  process.env.LIFE_OS_E2E_EXPECT_VOICE_COMPLETED_TASK_TITLE;
 
 test.describe("Dashboard voice capture", () => {
   test.skip(!enabled, "set LIFE_OS_E2E_URL to run against the isolated stack");
@@ -15,6 +17,14 @@ test.describe("Dashboard voice capture", () => {
     page,
     request,
   }) => {
+    let completedTaskId: string | undefined;
+    if (expectedCompletedTaskTitle) {
+      const response = await request.post("/api/tasks/v1/tasks", {
+        data: { title: expectedCompletedTaskTitle },
+      });
+      expect(response.status()).toBe(201);
+      completedTaskId = (await response.json()).id;
+    }
     // This remains a browser workflow: the MediaRecorder fixture stands in for
     // microphone hardware, but the VoiceCapture component owns the upload and
     // status polling path. The temporary fixture is deliberately not checked
@@ -124,6 +134,19 @@ test.describe("Dashboard voice capture", () => {
           { timeout: 30_000 },
         )
         .toBeTruthy();
+    }
+    if (expectedCompletedTaskTitle && completedTaskId) {
+      await expect
+        .poll(
+          async () => {
+            const response = await request.get(
+              `/api/tasks/v1/tasks/${completedTaskId}`,
+            );
+            return (await response.json()).completed;
+          },
+          { timeout: 150_000 },
+        )
+        .toBe(true);
     }
   });
 });
