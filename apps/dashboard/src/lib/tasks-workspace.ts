@@ -8,7 +8,7 @@ export type TasksWorkspaceState =
 
 export async function getTasksWorkspace(): Promise<TasksWorkspaceState> {
   const { data, error } = await tasksClient.GET("/v1/tasks", {
-    params: { query: { completed: false, limit: 100 } },
+    params: { query: { limit: 100 } },
   });
   if (error || !data) return { kind: "unavailable" };
   if (data.items.length === 0) return { kind: "empty" };

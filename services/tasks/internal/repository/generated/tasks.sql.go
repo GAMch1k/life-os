@@ -165,17 +165,44 @@ func (q *Queries) ListTasks(ctx context.Context, arg ListTasksParams) ([]Task, e
 	return items, nil
 }
 
+const reopenTask = `-- name: ReopenTask :one
+UPDATE tasks SET completed_at = NULL, updated_at = now()
+WHERE id = $1
+RETURNING id, title, notes, due_at, completed_at, recurrence_frequency, recurrence_interval, recurrence_until, created_at, updated_at, automation_idempotency_key, automation_payload_hash
+`
+
+func (q *Queries) ReopenTask(ctx context.Context, id pgtype.UUID) (Task, error) {
+	row := q.db.QueryRow(ctx, reopenTask, id)
+	var i Task
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.Notes,
+		&i.DueAt,
+		&i.CompletedAt,
+		&i.RecurrenceFrequency,
+		&i.RecurrenceInterval,
+		&i.RecurrenceUntil,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.AutomationIdempotencyKey,
+		&i.AutomationPayloadHash,
+	)
+	return i, err
+}
+
 const updateTask = `-- name: UpdateTask :one
 UPDATE tasks
-SET title = COALESCE($1, title), notes = COALESCE($2, notes), due_at = COALESCE($3, due_at),
-    recurrence_frequency = COALESCE($4, recurrence_frequency), recurrence_interval = COALESCE($5, recurrence_interval), recurrence_until = COALESCE($6, recurrence_until), updated_at = now()
-WHERE id = $7
+SET title = COALESCE($1, title), notes = COALESCE($2, notes), due_at = CASE WHEN $3::boolean THEN NULL ELSE COALESCE($4, due_at) END,
+    recurrence_frequency = COALESCE($5, recurrence_frequency), recurrence_interval = COALESCE($6, recurrence_interval), recurrence_until = COALESCE($7, recurrence_until), updated_at = now()
+WHERE id = $8
 RETURNING id, title, notes, due_at, completed_at, recurrence_frequency, recurrence_interval, recurrence_until, created_at, updated_at, automation_idempotency_key, automation_payload_hash
 `
 
 type UpdateTaskParams struct {
 	Title               *string
 	Notes               *string
+	ClearDueAt          bool
 	DueAt               pgtype.Timestamptz
 	RecurrenceFrequency *string
 	RecurrenceInterval  *int32
@@ -187,6 +214,7 @@ func (q *Queries) UpdateTask(ctx context.Context, arg UpdateTaskParams) (Task, e
 	row := q.db.QueryRow(ctx, updateTask,
 		arg.Title,
 		arg.Notes,
+		arg.ClearDueAt,
 		arg.DueAt,
 		arg.RecurrenceFrequency,
 		arg.RecurrenceInterval,

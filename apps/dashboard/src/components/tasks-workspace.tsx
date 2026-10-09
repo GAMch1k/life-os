@@ -7,7 +7,7 @@ import {
   List,
   CalendarRange,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useState, useTransition } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/card";
 import type { Task } from "@/lib/tasks-summary";
 import type { TasksWorkspaceState } from "@/lib/tasks-workspace";
+import { tasksClient } from "@/lib/api/tasks-client";
 import { cn } from "@/lib/utils";
 
 type View = "list" | "schedule";
@@ -54,20 +55,159 @@ function dueLabel(task: Task) {
     : "No date";
 }
 
-function TaskRow({ task }: { task: Task }) {
+function localDateTime(value: string | null | undefined) {
+  if (!value) return "";
+  const date = new Date(value);
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
+    .toISOString()
+    .slice(0, 16);
+}
+
+function TaskRow({
+  task,
+  onChange,
+}: {
+  task: Task;
+  onChange: (task: Task) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [title, setTitle] = useState(task.title);
+  const [notes, setNotes] = useState(task.notes ?? "");
+  const [dueAt, setDueAt] = useState(localDateTime(task.dueAt));
+  const [error, setError] = useState<string>();
+  const [pending, startTransition] = useTransition();
+  const patch = (body: Record<string, unknown>) =>
+    startTransition(async () => {
+      setError(undefined);
+      const { data, error: requestError } = await tasksClient.PATCH(
+        "/v1/tasks/{taskId}",
+        { params: { path: { taskId: task.id } }, body },
+      );
+      if (requestError || !data) return setError("Could not save this Task.");
+      onChange(data);
+      setTitle(data.title);
+      setNotes(data.notes ?? "");
+      setDueAt(localDateTime(data.dueAt));
+      setEditing(false);
+    });
+  const lifecycle = (
+    path: "/v1/tasks/{taskId}/complete" | "/v1/tasks/{taskId}/reopen",
+  ) =>
+    startTransition(async () => {
+      setError(undefined);
+      const { data, error: requestError } = await tasksClient.POST(path, {
+        params: { path: { taskId: task.id } },
+      });
+      if (requestError || !data) return setError("Could not update this Task.");
+      onChange(data);
+    });
   return (
-    <li className="flex items-center justify-between gap-3 border-b py-3 last:border-0">
-      <div className="min-w-0">
-        <p className="font-medium">{task.title}</p>
-        {task.notes ? (
-          <p className="text-muted-foreground mt-0.5 truncate text-sm">
-            {task.notes}
-          </p>
-        ) : null}
-      </div>
-      <time className="text-muted-foreground shrink-0 text-xs">
-        {dueLabel(task)}
-      </time>
+    <li className="border-b py-3 last:border-0">
+      {editing ? (
+        <div className="space-y-2">
+          <input
+            aria-label="Task title"
+            className="border-input bg-background h-9 w-full rounded-md border px-2"
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+          />
+          <textarea
+            aria-label="Task notes"
+            className="border-input bg-background min-h-16 w-full rounded-md border p-2"
+            value={notes}
+            onChange={(event) => setNotes(event.target.value)}
+          />
+          <label className="text-muted-foreground text-xs">
+            Due date{" "}
+            <input
+              aria-label="Due date"
+              className="border-input bg-background ml-2 h-8 rounded-md border px-2 text-sm"
+              type="datetime-local"
+              value={dueAt}
+              onChange={(event) => setDueAt(event.target.value)}
+            />
+          </label>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              disabled={pending || !title.trim()}
+              onClick={() =>
+                patch({
+                  title: title.trim(),
+                  notes,
+                  ...(dueAt ? { dueAt: new Date(dueAt).toISOString() } : {}),
+                })
+              }
+            >
+              Save
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={pending}
+              onClick={() => patch({ clearDueAt: true })}
+            >
+              Clear date
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={pending}
+              onClick={() => setEditing(false)}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p
+              className={cn(
+                "font-medium",
+                task.completed && "text-muted-foreground line-through",
+              )}
+            >
+              {task.title}
+            </p>
+            {task.notes ? (
+              <p className="text-muted-foreground mt-0.5 truncate text-sm">
+                {task.notes}
+              </p>
+            ) : null}
+          </div>
+          <time className="text-muted-foreground shrink-0 text-xs">
+            {dueLabel(task)}
+          </time>
+          <div className="flex shrink-0 gap-1">
+            <Button
+              aria-label={`Edit ${task.title}`}
+              size="sm"
+              variant="ghost"
+              disabled={pending}
+              onClick={() => setEditing(true)}
+            >
+              Edit
+            </Button>
+            <Button
+              aria-label={`${task.completed ? "Reopen" : "Complete"} ${task.title}`}
+              size="sm"
+              variant="outline"
+              disabled={pending}
+              onClick={() =>
+                lifecycle(
+                  task.completed
+                    ? "/v1/tasks/{taskId}/reopen"
+                    : "/v1/tasks/{taskId}/complete",
+                )
+              }
+            >
+              {task.completed ? "Reopen" : "Complete"}
+            </Button>
+          </div>
+        </div>
+      )}
+      {error ? <p className="text-destructive mt-2 text-sm">{error}</p> : null}
     </li>
   );
 }
@@ -76,10 +216,12 @@ function TaskSection({
   title,
   tasks,
   empty,
+  onChange,
 }: {
   title: string;
   tasks: Task[];
   empty?: string;
+  onChange: (task: Task) => void;
 }) {
   return (
     <section aria-label={title}>
@@ -91,7 +233,7 @@ function TaskSection({
         <ul className="rounded-lg border px-3">
           <>
             {tasks.map((task) => (
-              <TaskRow key={task.id} task={task} />
+              <TaskRow key={task.id} task={task} onChange={onChange} />
             ))}
           </>
         </ul>
@@ -110,27 +252,32 @@ export function TasksWorkspace({ state }: { state: TasksWorkspaceState }) {
   const [month, setMonth] = useState(
     () => new Date(selected.getFullYear(), selected.getMonth(), 1),
   );
-  const tasks = useMemo(
-    () => (state.kind === "ready" ? state.tasks : []),
-    [state],
+  const [tasks, setTasks] = useState(() =>
+    state.kind === "ready" ? state.tasks : [],
   );
+  const onChange = (updated: Task) =>
+    setTasks((current) =>
+      current.map((task) => (task.id === updated.id ? updated : task)),
+    );
   const groups = useMemo(() => {
+    const openTasks = tasks.filter((task) => !task.completed);
     const today = startOfDay(new Date());
     const tomorrow = addDays(today, 1);
     return {
-      overdue: tasks.filter(
+      overdue: openTasks.filter(
         (task) => task.dueAt && dateOnly(task.dueAt) < today,
       ),
-      today: tasks.filter(
+      today: openTasks.filter(
         (task) =>
           task.dueAt &&
           dateOnly(task.dueAt) >= today &&
           dateOnly(task.dueAt) < tomorrow,
       ),
-      upcoming: tasks.filter(
+      upcoming: openTasks.filter(
         (task) => task.dueAt && dateOnly(task.dueAt) >= tomorrow,
       ),
-      unscheduled: tasks.filter((task) => !task.dueAt),
+      unscheduled: openTasks.filter((task) => !task.dueAt),
+      completed: tasks.filter((task) => task.completed),
     };
   }, [tasks]);
   const days = useMemo(() => {
@@ -287,21 +434,31 @@ export function TasksWorkspace({ state }: { state: TasksWorkspaceState }) {
                 title="Overdue"
                 tasks={groups.overdue}
                 empty="No overdue tasks."
+                onChange={onChange}
               />
               <TaskSection
                 title="Today"
                 tasks={groups.today}
                 empty="Nothing due today."
+                onChange={onChange}
               />
               <TaskSection
                 title="Upcoming"
                 tasks={groups.upcoming}
                 empty="No upcoming tasks."
+                onChange={onChange}
               />
               <TaskSection
                 title="Unscheduled / No date"
                 tasks={groups.unscheduled}
                 empty="No unscheduled tasks."
+                onChange={onChange}
+              />
+              <TaskSection
+                title="Completed"
+                tasks={groups.completed}
+                empty="No completed tasks."
+                onChange={onChange}
               />
             </div>
           ) : (
@@ -311,7 +468,9 @@ export function TasksWorkspace({ state }: { state: TasksWorkspaceState }) {
                 {week.map((day) => {
                   const scheduled = tasks.filter(
                     (task) =>
-                      task.dueAt && isSameDay(dateOnly(task.dueAt), day),
+                      !task.completed &&
+                      task.dueAt &&
+                      isSameDay(dateOnly(task.dueAt), day),
                   );
                   return (
                     <Card
@@ -333,7 +492,11 @@ export function TasksWorkspace({ state }: { state: TasksWorkspaceState }) {
                         {scheduled.length ? (
                           <ul>
                             {scheduled.map((task) => (
-                              <TaskRow key={task.id} task={task} />
+                              <TaskRow
+                                key={task.id}
+                                task={task}
+                                onChange={onChange}
+                              />
                             ))}
                           </ul>
                         ) : (

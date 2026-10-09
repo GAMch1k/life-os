@@ -85,6 +85,12 @@ func (h *Handler) UpdateTask(c fiber.Ctx, id types.UUID) error {
 	if err := c.Bind().Body(&body); err != nil {
 		return fiber.NewError(400, "invalid task request")
 	}
+	if body.Title != nil && *body.Title == "" {
+		return fiber.NewError(400, "title must not be empty")
+	}
+	if body.ClearDueAt != nil && *body.ClearDueAt && body.DueAt != nil {
+		return fiber.NewError(400, "dueAt and clearDueAt cannot be used together")
+	}
 	params := updateParams(body)
 	params.ID = pgUUID(id)
 	item, err := h.queries.UpdateTask(c.Context(), params)
@@ -100,6 +106,13 @@ func (h *Handler) CompleteTask(c fiber.Ctx, id types.UUID) error {
 	}
 	return c.JSON(task(item))
 }
+func (h *Handler) ReopenTask(c fiber.Ctx, id types.UUID) error {
+	item, err := h.queries.ReopenTask(c.Context(), pgUUID(id))
+	if err != nil {
+		return databaseError(err)
+	}
+	return c.JSON(task(item))
+}
 
 func createParams(body generated.CreateTaskRequest) store.CreateTaskParams {
 	frequency, interval, until := recurrence(body.Recurrence)
@@ -107,7 +120,8 @@ func createParams(body generated.CreateTaskRequest) store.CreateTaskParams {
 }
 func updateParams(body generated.UpdateTaskRequest) store.UpdateTaskParams {
 	frequency, interval, until := recurrence(body.Recurrence)
-	return store.UpdateTaskParams{Title: body.Title, Notes: body.Notes, DueAt: timestamp(body.DueAt), RecurrenceFrequency: frequency, RecurrenceInterval: interval, RecurrenceUntil: until}
+	clearDueAt := body.ClearDueAt != nil && *body.ClearDueAt
+	return store.UpdateTaskParams{Title: body.Title, Notes: body.Notes, DueAt: timestamp(body.DueAt), ClearDueAt: clearDueAt, RecurrenceFrequency: frequency, RecurrenceInterval: interval, RecurrenceUntil: until}
 }
 func recurrence(value *generated.Recurrence) (*string, *int32, pgtype.Timestamptz) {
 	if value == nil {

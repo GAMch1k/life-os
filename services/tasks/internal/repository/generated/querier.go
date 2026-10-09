@@ -15,6 +15,7 @@ type Querier interface {
 	CreateTask(ctx context.Context, arg CreateTaskParams) (Task, error)
 	GetTask(ctx context.Context, id pgtype.UUID) (Task, error)
 	ListTasks(ctx context.Context, arg ListTasksParams) ([]Task, error)
+	ReopenTask(ctx context.Context, id pgtype.UUID) (Task, error)
 	UpdateTask(ctx context.Context, arg UpdateTaskParams) (Task, error)
 }
 
