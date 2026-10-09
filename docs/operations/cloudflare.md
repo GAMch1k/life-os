@@ -27,4 +27,23 @@ The Access application for the hostname must exist before the connector serves t
 
 ## Cloudflare Access
 
-The Access policy, origin hardening, and the operations runbook are added by the following Phase 9 tickets, and documented here as they land.
+Cloudflare Access is the login in front of the hostname. It runs at Cloudflare's edge before the tunnel, so no request reaches the server without passing it.
+
+| Setting | Value |
+| --- | --- |
+| Zero Trust team domain | `damp-surf-d6be.cloudflareaccess.com` |
+| Application | `Life OS`: Self-hosted → Public DNS → `lifeos.gamch1k.com`, session 24 h |
+| Login method | One-time PIN (a code sent by email), with instant authentication |
+| Policy `Owner` | **Allow**, Include → Access group `Life OS users` |
+| Access group `Life OS users` | Include → Emails → the owner's address |
+| Policy `Acceptance test` (temporary) | **Service Auth**, Include → Service Token `life-os-acceptance` |
+
+Access denies by default, so only addresses in `Life OS users` receive a code. To add a person, add their email to the group; to remove one, delete it. Life OS has no user accounts of its own, so everyone admitted shares the same data.
+
+The temporary service token lets automated checks authenticate without a mailbox, using the headers `CF-Access-Client-Id` and `CF-Access-Client-Secret`. Its values live only in `.env` (`LIFE_OS_CF_ACCESS_CLIENT_ID`, `LIFE_OS_CF_ACCESS_CLIENT_SECRET`). The token and its policy are removed after the Phase 9 sign-off.
+
+`tools/check-cloudflare-access` checks the public path from wherever it runs:
+- anonymous requests to every page and API, including writes and requests with a forged `CF_Authorization` cookie or `Cf-Access-Jwt-Assertion` header, must be redirected to the Access login;
+- with the service token, the pages and APIs must reach Life OS.
+
+The detailed setup, debugging, and recovery guide for this deployment is kept in Notion: **Phase 9 — Cloudflare Access → Cloudflare Access & Tunnel — Setup, Debugging, Recovery**.
