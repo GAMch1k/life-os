@@ -26,7 +26,7 @@ Every entry in these sections opens its own trace, so a chain such as Inbox capt
 `/status` answers "is Life OS working, and if not, what do I do?" It is built only from supported runtime state (`src/lib/runtime-status.ts`), never from UI behaviour. Four checks are shown, each as OK, Needs attention, or Problem, with the runtime's own error text and a suggested action:
 
 - **Automatic processing**: the processor's private `/status` endpoint (see [MCP and AI](../services/mcp.md)). It reports when the processor is not running, when it cannot read Inbox through MCP, when Codex is signed out (from `codex login status` or a 401), when Codex has hit its usage limit (Codex's own "try again at …" text is shown verbatim, plus the reset time Codex reports for the exhausted bucket), and when Codex runs are failing for any other reason. It also lists the Codex plan and each usage bucket's used percentage and reset time, exactly as the Codex CLI reports them, or "unavailable".
-- **Inbox backlog**: Inbox `GET /v1/backlog`. Shows captures that failed and are being retried, with the latest error, and flags a capture that has waited more than 15 minutes.
+- **Inbox backlog**: Inbox `GET /v1/backlog`. Shows captures that failed and are being retried, with the latest error and the next scheduled retry and its reason, for example "after the Codex usage limit resets". It reports captures that automatic processing gave up on (`failed`) as a problem, and flags a capture that has waited more than 15 minutes.
 - **Voice transcription**: Voice `GET /v1/backlog`. Reports Whisper not ready, a stalled Voice worker, and recordings waiting for a retry, with the next scheduled retry time.
 - **Services**: every owning service's `/ready`.
 
