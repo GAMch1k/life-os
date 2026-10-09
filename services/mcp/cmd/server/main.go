@@ -32,6 +32,13 @@ type taskAction struct {
 	Notes          *string `json:"notes,omitempty"`
 	DueAt          *string `json:"dueAt,omitempty" jsonschema:"RFC3339 due time"`
 }
+type taskMutation struct {
+	TaskID     string  `json:"taskId" jsonschema:"Existing Task UUID selected after task_search"`
+	Title      *string `json:"title,omitempty"`
+	Notes      *string `json:"notes,omitempty"`
+	DueAt      *string `json:"dueAt,omitempty" jsonschema:"RFC3339 due time"`
+	ClearDueAt *bool   `json:"clearDueAt,omitempty"`
+}
 type eventAction struct {
 	IdempotencyKey string  `json:"idempotencyKey,omitempty"`
 	Title          string  `json:"title" jsonschema:"Event title"`
@@ -80,6 +87,7 @@ func run(ctx context.Context) error {
 	add("finance_month_summary", "Get Finance monthly summary", cfg.FinanceURL, "/v1/summaries/monthly?")
 	add("finance_find_transactions", "Find Finance transactions", cfg.FinanceURL, "/v1/transactions?")
 	add("task_list", "List Tasks", cfg.TasksURL, "/v1/tasks?")
+	add("task_search", "Search Tasks by title or notes before mutating one", cfg.TasksURL, "/v1/tasks?")
 	add("inbox_list", "List Inbox items", cfg.InboxURL, "/v1/inbox-items?")
 	add("calendar_list", "List Calendar events", cfg.CalendarURL, "/v1/events?")
 	// Inbox mutations are exposed as MCP tools so processors never bypass the
@@ -103,6 +111,15 @@ func run(ctx context.Context) error {
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "task_create", Description: "Create a Life OS task"}, func(ctx context.Context, _ *mcp.CallToolRequest, in taskAction) (*mcp.CallToolResult, Output, error) {
 		return post(ctx, hc, cfg.TasksURL, "/v1/tasks", in, in.IdempotencyKey)
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "task_update", Description: "Rename, edit, reschedule, or unschedule one existing Task"}, func(ctx context.Context, _ *mcp.CallToolRequest, in taskMutation) (*mcp.CallToolResult, Output, error) {
+		return patch(ctx, hc, cfg.TasksURL, "/v1/tasks/"+in.TaskID, map[string]any{"title": in.Title, "notes": in.Notes, "dueAt": in.DueAt, "clearDueAt": in.ClearDueAt})
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "task_complete", Description: "Mark one existing Task completed"}, func(ctx context.Context, _ *mcp.CallToolRequest, in taskMutation) (*mcp.CallToolResult, Output, error) {
+		return post(ctx, hc, cfg.TasksURL, "/v1/tasks/"+in.TaskID+"/complete", nil)
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "task_reopen", Description: "Reopen one completed Task"}, func(ctx context.Context, _ *mcp.CallToolRequest, in taskMutation) (*mcp.CallToolResult, Output, error) {
+		return post(ctx, hc, cfg.TasksURL, "/v1/tasks/"+in.TaskID+"/reopen", nil)
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "calendar_create", Description: "Create a Life OS calendar event"}, func(ctx context.Context, _ *mcp.CallToolRequest, in eventAction) (*mcp.CallToolResult, Output, error) {
 		return post(ctx, hc, cfg.CalendarURL, "/v1/events", in, in.IdempotencyKey)
