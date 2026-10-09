@@ -199,7 +199,7 @@ func (h *Handler) CreateHumanReview(c fiber.Ctx, itemID types.UUID) error {
 		CausationID: &started,
 		Outcome:     activity.Pending,
 		Summary:     fmt.Sprintf("Needs your decision: %s", activity.Preview(body.ErrorSummary, 120)),
-		Data:        map[string]any{"attemptId": attemptID, "reason": body.ErrorSummary, "proposedTool": tool, "candidateCount": candidates},
+		Data:        map[string]any{"attemptId": attemptID, "reason": activity.Preview(body.ErrorSummary, 2000), "proposedTool": tool, "candidateCount": candidates},
 	})
 	return c.JSON(output(item))
 }
@@ -343,7 +343,7 @@ func (h *Handler) recordAttemptOutcome(c fiber.Ctx, itemID types.UUID, attempt s
 		CausationID: &started,
 		Outcome:     outcome,
 		Summary:     summary,
-		Data:        map[string]any{"inboxItemId": itemID.String(), "attemptId": attemptID, "tools": tools, "errorSummary": reason},
+		Data:        map[string]any{"inboxItemId": itemID.String(), "attemptId": attemptID, "tools": tools, "errorSummary": activity.Preview(reason, 2000)},
 	})
 }
 
