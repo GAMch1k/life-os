@@ -8,6 +8,9 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_root"
 
 compose=(docker compose --project-name lifeos-verify -f compose.yaml -f compose.verify.yaml)
+# The verification stack never runs optional profiles from .env: a second
+# cloudflared with the real tunnel token would receive production traffic.
+export COMPOSE_PROFILES=
 # A smoke may add overlays (colon-separated paths); the isolation check below
 # still applies to the merged plan.
 if [[ -n "${LIFE_OS_VERIFY_OVERLAYS:-}" ]]; then
@@ -19,6 +22,10 @@ require_isolated_resources() {
   command -v jq >/dev/null 2>&1 || { echo "verify-compose: jq is required" >&2; exit 2; }
   local config volume network
   config=$("${compose[@]}" config --format json)
+  if jq -e '.services | has("cloudflared")' <<<"$config" >/dev/null; then
+    echo "verify-compose: refusing a plan with the cloudflared connector" >&2
+    exit 2
+  fi
   while IFS= read -r volume; do
     [[ "$volume" == lifeos-verify-* ]] || {
       printf 'verify-compose: refusing shared verification volume: %s\n' "$volume" >&2
