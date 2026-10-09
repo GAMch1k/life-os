@@ -22,9 +22,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-phrase="Create a task titled water the plants."
+phrase="Add a task to call the dentist."
 docker run --rm -v "$work:/out" alpine:3.22 sh -c \
-  "apk add --no-cache espeak-ng >/dev/null && espeak-ng -s 140 -w /out/speech.wav '$phrase' && chmod 644 /out/speech.wav"
+  "apk add --no-cache espeak-ng >/dev/null && espeak-ng -v en-us -s 125 -w /out/speech.wav '$phrase' && chmod 644 /out/speech.wav"
 
 "${compose[@]}" up --detach --no-build
 gateway=http://127.0.0.1:13001
