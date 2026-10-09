@@ -94,5 +94,46 @@ Backoff is 30 s, doubling per earlier attempt of the item, capped at one hour, w
 
 A usage limit cannot be triggered on demand, so `tools/fixtures/codex-limit-simulator` simulates one at the Codex CLI boundary for that smoke only.
 
-Known gap, tracked for P8-12: a processor restart while a Codex run is in flight leaves that capture's attempt, and the capture itself, in `processing`. Only `raw` captures are polled, so it is not picked up again. The Status page flags it as a prolonged backlog after 15 minutes.
+## Codex runtime
+
+Codex is the processor's agent runtime. It runs as a managed subprocess of the machine's existing ChatGPT sign-in, with no API key (`internal/processor/codex.go`). Every planning run gets:
+
+- **Binary.** `LIFE_OS_CODEX_COMMAND` is resolved once at startup. A missing CLI stops the processor with exit code 78.
+- **Working directory.** The explicit `LIFE_OS_CODEX_WORKDIR`, in a read-only sandbox (`-s read-only`).
+- **Environment.** Only `PATH`, `HOME`, `USER`, `CODEX_HOME`, locale, `TZ`, `TMPDIR`, and CA settings. API keys, service URLs, and other secrets are never inherited.
+- **MCP servers.** None: `-c mcp_servers={}` ignores servers in the host Codex config.
+- **Process group.** Each run has its own process group, so nothing it starts can outlive it.
+- **Deadline.** `LIFE_OS_CODEX_TIMEOUT_SECONDS` (default 300).
+- **Cancellation.** Graceful: `SIGTERM` to the group, then `SIGKILL` after 5 s. The whole group is killed after every run.
+- **Concurrency.** At most `LIFE_OS_CODEX_MAX_CONCURRENCY` runs at once (default 1).
+- **Structured output.** `--json` events give the Codex session id (`thread.started`) and the failure reason (`turn.failed`). `-o` captures the final plan.
+
+### Lifecycle
+
+The Inbox processing attempt is the durable job record. It exists in Inbox before Codex is spawned, and moves through these runtime states:
+
+`spawning` → `running` (with the Codex session id once reported) → `completed` / `failed` / `timed_out` / `cancelled`.
+
+The processor heartbeats every 30 s until the attempt's outcome is stored. Outcomes are always stored, even during shutdown:
+
+- **Normal stop (`SIGTERM`, for example `docker compose stop` or a redeploy).** The run is cancelled and the capture is handed back as retryable, with reason `cancelled`, due now. The processor has a 30 s stop grace period.
+- **Timeout.** The run is stopped and the capture backs off, like any other Codex failure.
+- **Crash (`SIGKILL`, OOM, host reboot).** The attempt keeps its last runtime state and stops heartbeating. Every 30 s, and at startup, the processor reconciles attempts that another instance owned and whose heartbeat is older than `LIFE_OS_PROCESSOR_STALE_AFTER_SECONDS` (default 120). They become retryable, with reason `recovered`, due now. This also recovers captures orphaned before runtime tracking existed.
+
+**Resume.** `codex exec resume` requires a persisted session. The processor's Codex home is a tmpfs, runs are `--ephemeral`, and a crash loses the session anyway. Planning is a single read-only turn, so the safe fallback is to plan again. The recorded session id stays on the attempt for audit. Re-planning cannot duplicate a domain change: Codex never executes actions, and the processor sends every Task, Calendar, or Finance mutation with a deterministic idempotency key derived from the operation. Each instance gets a unique id (`runtimeOwner`), so reconciliation never takes over a run the current processor still owns.
+
+`/status` reports the runtime under `runtime`:
+- the instance, binary, timeout, and concurrency;
+- the run in progress, with its state, session, and start time;
+- counts of completed, failed, timed-out, cancelled, and recovered runs since start;
+- the last reconciliation error.
+
+`make codex-runtime-smoke` proves the lifecycle with the real Codex CLI on the verification stack:
+- normal execution;
+- the sanitized environment of a live run, read from `/proc`;
+- cancellation when the processor stops mid-run;
+- a 2 s deadline, leaving no Codex process behind;
+- `SIGKILL` crashes, both before and after Codex reports its session, reconciled by the next processor.
+
+Each scenario ends with exactly one Task.
 
