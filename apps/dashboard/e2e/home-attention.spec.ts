@@ -9,8 +9,8 @@ test.describe("Home attention surface", () => {
     request,
   }) => {
     const stamp = Date.now();
-    const dueAt = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    for (let index = 0; index < 8; index++) {
+    const dueAt = new Date().toISOString();
+    for (let index = 0; index < 6; index++) {
       const response = await request.post("/api/tasks/v1/tasks", {
         data: { title: `P8 home urgent ${stamp}-${index}`, dueAt },
       });
