@@ -28,10 +28,11 @@ type inboxList struct {
 	Items []inboxItem `json:"items"`
 }
 type inboxItem struct {
-	ID             string         `json:"id"`
-	Content        string         `json:"content"`
-	Source         string         `json:"source"`
-	SourceMetadata map[string]any `json:"sourceMetadata"`
+	ID                 string         `json:"id"`
+	Content            string         `json:"content"`
+	Source             string         `json:"source"`
+	SourceMetadata     map[string]any `json:"sourceMetadata"`
+	ProcessingMetadata map[string]any `json:"processingMetadata"`
 }
 type plan struct {
 	Actions    []plannedAction `json:"actions"`
@@ -94,12 +95,15 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 	if err := r.record(ctx, item.ID, started.ID, "processing", nil, nil); err != nil {
 		return Proposal{}, err
 	}
-	prompt, _ := json.Marshal(map[string]any{"content": item.Content, "source": item.Source, "sourceMetadata": item.SourceMetadata})
-	rawPlan, err := r.Planner.Plan(ctx, string(prompt))
+	parsed, err := approvedReviewPlan(item)
 	if err != nil {
-		return Proposal{}, r.recover(ctx, item.ID, started.ID, nil, fmt.Sprintf("planning failed: %v", err))
+		prompt, _ := json.Marshal(map[string]any{"content": item.Content, "source": item.Source, "sourceMetadata": item.SourceMetadata})
+		rawPlan, planErr := r.Planner.Plan(ctx, string(prompt))
+		if planErr != nil {
+			return Proposal{}, r.recover(ctx, item.ID, started.ID, nil, fmt.Sprintf("planning failed: %v", planErr))
+		}
+		parsed, err = decodePlan(rawPlan)
 	}
-	parsed, err := decodePlan(rawPlan)
 	if err != nil || parsed.Ambiguous || parsed.Confidence < 0.8 || len(parsed.Actions) == 0 {
 		reason := "no executable action"
 		if err != nil {
@@ -118,7 +122,7 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 		for field, value := range action.Arguments {
 			arguments[field] = value
 		}
-		if action.Tool == "task_update" || action.Tool == "task_complete" || action.Tool == "task_reopen" {
+		if (action.Tool == "task_update" || action.Tool == "task_complete" || action.Tool == "task_reopen") && arguments["taskId"] == nil {
 			query, _ := arguments["taskQuery"].(string)
 			raw, findErr := r.Tools.Call(ctx, "task_search", map[string]any{"query": "query=" + url.QueryEscape(query) + "&limit=10"})
 			if findErr != nil {
@@ -130,7 +134,13 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 				} `json:"items"`
 			}
 			if json.Unmarshal(toolData(raw), &found) != nil || len(found.Items) != 1 || found.Items[0].ID == "" {
-				return Proposal{}, r.recover(ctx, item.ID, started.ID, actions, "ambiguous or missing Task selection")
+				candidates := make([]map[string]any, 0, len(found.Items))
+				for _, candidate := range found.Items {
+					if candidate.ID != "" {
+						candidates = append(candidates, map[string]any{"id": candidate.ID})
+					}
+				}
+				return Proposal{}, r.humanReview(ctx, item.ID, started.ID, action, candidates, "ambiguous or missing Task selection")
 			}
 			arguments["taskId"] = found.Items[0].ID
 			delete(arguments, "taskQuery")
@@ -152,6 +162,21 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 	}
 	_, err = r.Tools.Call(ctx, "inbox_resolve", map[string]any{"itemId": item.ID})
 	return Proposal{}, err
+}
+func approvedReviewPlan(item inboxItem) (plan, error) {
+	raw, ok := item.ProcessingMetadata["approvedAction"].(map[string]any)
+	if !ok {
+		return plan{}, fmt.Errorf("no approved review action")
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return plan{}, err
+	}
+	var action plannedAction
+	if err := json.Unmarshal(encoded, &action); err != nil {
+		return plan{}, err
+	}
+	return plan{Actions: []plannedAction{action}, Confidence: 1}, nil
 }
 
 // nextAttemptKey preserves every retry as a separate audit row while keeping
@@ -200,6 +225,10 @@ func (r Runner) plan(ctx context.Context, item inboxItem) (Proposal, error) {
 func (r Runner) recover(ctx context.Context, itemID, attemptID string, actions []map[string]any, reason string) error {
 	return r.record(ctx, itemID, attemptID, "retryable", actions, &reason)
 }
+func (r Runner) humanReview(ctx context.Context, itemID, attemptID string, action plannedAction, candidates []map[string]any, reason string) error {
+	_, err := r.Tools.Call(ctx, "inbox_set_human_review", map[string]any{"itemId": itemID, "attemptId": attemptID, "proposedAction": action, "candidates": candidates, "errorSummary": reason})
+	return err
+}
 func (r Runner) record(ctx context.Context, itemID, attemptID, status string, actions []map[string]any, summary *string) error {
 	if actions == nil {
 		actions = []map[string]any{}
@@ -215,7 +244,7 @@ func validAction(action plannedAction) bool {
 		return false
 	}
 	if action.Tool == "task_update" || action.Tool == "task_complete" || action.Tool == "task_reopen" {
-		if taskQuery, ok := action.Arguments["taskQuery"].(string); !ok || strings.TrimSpace(taskQuery) == "" {
+		if taskQuery, ok := action.Arguments["taskQuery"].(string); (!ok || strings.TrimSpace(taskQuery) == "") && action.Arguments["taskId"] == nil {
 			return false
 		}
 	} else if action.Tool != "finance_create_manual_transaction" {
@@ -225,9 +254,9 @@ func validAction(action plannedAction) bool {
 	}
 	allowedFields := map[string]map[string]bool{
 		"task_create":                       {"title": true, "notes": true, "dueAt": true},
-		"task_update":                       {"taskQuery": true, "title": true, "notes": true, "dueAt": true, "clearDueAt": true},
-		"task_complete":                     {"taskQuery": true},
-		"task_reopen":                       {"taskQuery": true},
+		"task_update":                       {"taskQuery": true, "taskId": true, "title": true, "notes": true, "dueAt": true, "clearDueAt": true},
+		"task_complete":                     {"taskQuery": true, "taskId": true},
+		"task_reopen":                       {"taskQuery": true, "taskId": true},
 		"calendar_create":                   {"title": true, "description": true, "allDay": true, "startAt": true, "endAt": true, "startDate": true, "endDate": true},
 		"finance_create_manual_transaction": {"accountId": true, "categoryId": true, "amount": true, "occurredOn": true, "note": true},
 	}

@@ -73,6 +73,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/inbox-items/{itemId}/human-review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Move a processing attempt into Human Review */
+        post: operations["createHumanReview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/inbox-items/{itemId}/human-review/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Select a retained Human Review candidate and resume processing */
+        post: operations["resolveHumanReview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/inbox-items/{itemId}/processing-attempts": {
         parameters: {
             query?: never;
@@ -123,7 +157,10 @@ export interface components {
             };
             mediaReferences?: string[];
             /** @enum {string} */
-            state: "raw" | "processing" | "resolved" | "discarded";
+            state: "raw" | "processing" | "human_review" | "resolved" | "discarded";
+            processingMetadata: {
+                [key: string]: unknown;
+            };
             /** Format: date-time */
             resolvedAt?: string | null;
             /** Format: date-time */
@@ -149,7 +186,7 @@ export interface components {
             /** Format: uuid */
             id: string;
             /** @enum {string} */
-            status: "pending" | "processing" | "processed" | "failed" | "retryable";
+            status: "pending" | "processing" | "human_review" | "processed" | "failed" | "retryable";
             agentName: string;
             modelProfile: string;
             idempotencyKey?: string;
@@ -174,11 +211,26 @@ export interface components {
         };
         UpdateProcessingAttemptRequest: {
             /** @enum {string} */
-            status: "processing" | "processed" | "failed" | "retryable";
+            status: "processing" | "human_review" | "processed" | "failed" | "retryable";
             actions: {
                 [key: string]: unknown;
             }[];
             errorSummary?: string | null;
+        };
+        CreateHumanReviewRequest: {
+            /** Format: uuid */
+            attemptId: string;
+            proposedAction: {
+                [key: string]: unknown;
+            };
+            candidates: {
+                [key: string]: unknown;
+            }[];
+            errorSummary: string;
+        };
+        ResolveHumanReviewRequest: {
+            /** Format: uuid */
+            candidateId: string;
         };
     };
     responses: never;
@@ -352,6 +404,86 @@ export interface operations {
                 content?: never;
             };
             /** @description Inbox item not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    createHumanReview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                itemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateHumanReviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Human Review item */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InboxItem"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Inbox item or attempt not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    resolveHumanReview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                itemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResolveHumanReviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Queued Inbox item */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InboxItem"];
+                };
+            };
+            /** @description Invalid review selection */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Human Review item not found */
             404: {
                 headers: {
                     [name: string]: unknown;

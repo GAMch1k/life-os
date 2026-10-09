@@ -24,6 +24,8 @@ type inboxAction struct {
 	ModelProfile   string                   `json:"modelProfile,omitempty"`
 	Status         string                   `json:"status,omitempty"`
 	Actions        []map[string]interface{} `json:"actions,omitempty"`
+	ProposedAction map[string]interface{}   `json:"proposedAction,omitempty"`
+	Candidates     []map[string]interface{} `json:"candidates,omitempty"`
 	ErrorSummary   *string                  `json:"errorSummary,omitempty"`
 }
 type taskAction struct {
@@ -105,6 +107,9 @@ func run(ctx context.Context) error {
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "inbox_record_processing_attempt", Description: "Record an Inbox processing attempt result"}, func(ctx context.Context, _ *mcp.CallToolRequest, in inboxAction) (*mcp.CallToolResult, Output, error) {
 		return patch(ctx, hc, cfg.InboxURL, "/v1/inbox-items/"+in.ItemID+"/processing-attempts/"+in.AttemptID, map[string]interface{}{"status": in.Status, "actions": in.Actions, "errorSummary": in.ErrorSummary})
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "inbox_set_human_review", Description: "Retain an ambiguous Inbox action for explicit Human Review"}, func(ctx context.Context, _ *mcp.CallToolRequest, in inboxAction) (*mcp.CallToolResult, Output, error) {
+		return post(ctx, hc, cfg.InboxURL, "/v1/inbox-items/"+in.ItemID+"/human-review", map[string]interface{}{"attemptId": in.AttemptID, "proposedAction": in.ProposedAction, "candidates": in.Candidates, "errorSummary": in.ErrorSummary})
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "inbox_resolve", Description: "Resolve an Inbox item after successful processing"}, func(ctx context.Context, _ *mcp.CallToolRequest, in inboxAction) (*mcp.CallToolResult, Output, error) {
 		return post(ctx, hc, cfg.InboxURL, "/v1/inbox-items/"+in.ItemID+"/resolve", nil)

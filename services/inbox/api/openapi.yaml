@@ -39,6 +39,22 @@ paths:
       security: []
       parameters: [{name: itemId, in: path, required: true, schema: {type: string, format: uuid}}]
       responses: {'200': {description: Discarded item, content: {application/json: {schema: {$ref: '#/components/schemas/InboxItem'}}}}, '400': {description: Invalid request}, '404': {description: Inbox item not found}}
+  /v1/inbox-items/{itemId}/human-review:
+    post:
+      summary: Move a processing attempt into Human Review
+      operationId: createHumanReview
+      security: []
+      parameters: [{name: itemId, in: path, required: true, schema: {type: string, format: uuid}}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateHumanReviewRequest'}}}}
+      responses: {'200': {description: Human Review item, content: {application/json: {schema: {$ref: '#/components/schemas/InboxItem'}}}}, '400': {description: Invalid request}, '404': {description: Inbox item or attempt not found}}
+  /v1/inbox-items/{itemId}/human-review/resolve:
+    post:
+      summary: Select a retained Human Review candidate and resume processing
+      operationId: resolveHumanReview
+      security: []
+      parameters: [{name: itemId, in: path, required: true, schema: {type: string, format: uuid}}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ResolveHumanReviewRequest'}}}}
+      responses: {'200': {description: Queued Inbox item, content: {application/json: {schema: {$ref: '#/components/schemas/InboxItem'}}}}, '400': {description: Invalid review selection}, '404': {description: Human Review item not found}}
   /v1/inbox-items/{itemId}/processing-attempts:
     get:
       summary: List traceable AI processing attempts
@@ -63,10 +79,12 @@ paths:
       responses: {'200': {description: Updated attempt, content: {application/json: {schema: {$ref: '#/components/schemas/ProcessingAttempt'}}}}, '400': {description: Invalid request}, '404': {description: Inbox item or attempt not found}}
 components:
   schemas:
-    InboxItem: {type: object, required: [id, content, source, state, createdAt, updatedAt], properties: {id: {type: string, format: uuid}, content: {type: string}, source: {type: string, enum: [manual, web, voice, watch, email]}, sourceMetadata: {type: object, additionalProperties: true}, mediaReferences: {type: array, items: {type: string, format: uri}}, state: {type: string, enum: [raw, processing, resolved, discarded]}, resolvedAt: {type: string, format: date-time, nullable: true}, createdAt: {type: string, format: date-time}, updatedAt: {type: string, format: date-time}}}
+    InboxItem: {type: object, required: [id, content, source, state, processingMetadata, createdAt, updatedAt], properties: {id: {type: string, format: uuid}, content: {type: string}, source: {type: string, enum: [manual, web, voice, watch, email]}, sourceMetadata: {type: object, additionalProperties: true}, mediaReferences: {type: array, items: {type: string, format: uri}}, state: {type: string, enum: [raw, processing, human_review, resolved, discarded]}, processingMetadata: {type: object, additionalProperties: true}, resolvedAt: {type: string, format: date-time, nullable: true}, createdAt: {type: string, format: date-time}, updatedAt: {type: string, format: date-time}}}
     CreateInboxItemRequest: {type: object, required: [content, source], properties: {content: {type: string}, source: {type: string, enum: [manual, web, voice, watch, email]}, sourceMetadata: {type: object, additionalProperties: true}, mediaReferences: {type: array, items: {type: string, format: uri}}, dedupeKey: {type: string, maxLength: 255}}}
     InboxItemList: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/InboxItem'}}, nextCursor: {type: string, nullable: true}}}
-    ProcessingAttempt: {type: object, required: [id, status, agentName, modelProfile, actions, createdAt], properties: {id: {type: string, format: uuid}, status: {type: string, enum: [pending, processing, processed, failed, retryable]}, agentName: {type: string}, modelProfile: {type: string}, idempotencyKey: {type: string}, actions: {type: array, items: {type: object, additionalProperties: true}}, errorSummary: {type: string, nullable: true}, startedAt: {type: string, format: date-time, nullable: true}, completedAt: {type: string, format: date-time, nullable: true}, createdAt: {type: string, format: date-time}}}
+    ProcessingAttempt: {type: object, required: [id, status, agentName, modelProfile, actions, createdAt], properties: {id: {type: string, format: uuid}, status: {type: string, enum: [pending, processing, human_review, processed, failed, retryable]}, agentName: {type: string}, modelProfile: {type: string}, idempotencyKey: {type: string}, actions: {type: array, items: {type: object, additionalProperties: true}}, errorSummary: {type: string, nullable: true}, startedAt: {type: string, format: date-time, nullable: true}, completedAt: {type: string, format: date-time, nullable: true}, createdAt: {type: string, format: date-time}}}
     ProcessingAttemptList: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/ProcessingAttempt'}}}}
     CreateProcessingAttemptRequest: {type: object, required: [idempotencyKey, agentName, modelProfile], properties: {idempotencyKey: {type: string}, agentName: {type: string}, modelProfile: {type: string}}}
-    UpdateProcessingAttemptRequest: {type: object, required: [status, actions], properties: {status: {type: string, enum: [processing, processed, failed, retryable]}, actions: {type: array, items: {type: object, additionalProperties: true}}, errorSummary: {type: string, nullable: true}}}
+    UpdateProcessingAttemptRequest: {type: object, required: [status, actions], properties: {status: {type: string, enum: [processing, human_review, processed, failed, retryable]}, actions: {type: array, items: {type: object, additionalProperties: true}}, errorSummary: {type: string, nullable: true}}}
+    CreateHumanReviewRequest: {type: object, required: [attemptId, proposedAction, candidates, errorSummary], properties: {attemptId: {type: string, format: uuid}, proposedAction: {type: object, additionalProperties: true}, candidates: {type: array, items: {type: object, additionalProperties: true}}, errorSummary: {type: string}}}
+    ResolveHumanReviewRequest: {type: object, required: [candidateId], properties: {candidateId: {type: string, format: uuid}}}

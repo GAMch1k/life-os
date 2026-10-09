@@ -38,6 +38,9 @@ func (f *fakeTools) Call(_ context.Context, name string, args map[string]any) (j
 	case "inbox_record_processing_attempt":
 		f.records = append(f.records, args)
 		return json.RawMessage(`{}`), nil
+	case "inbox_set_human_review":
+		f.records = append(f.records, map[string]any{"status": "human_review", "actions": []map[string]any{args["proposedAction"].(plannedAction).Arguments}})
+		return json.RawMessage(`{}`), nil
 	case "task_search":
 		return json.RawMessage(`{"items":[{"id":"task-1","title":"Call insurer"}]}`), nil
 	default:
@@ -67,7 +70,7 @@ func TestRunnerDoesNotMutateAmbiguousTaskSelection(t *testing.T) {
 	if contains(tools.calls, "task_complete") || contains(tools.calls, "inbox_resolve") {
 		t.Fatalf("ambiguous Task was mutated: %#v", tools.calls)
 	}
-	if tools.records[1]["status"] != "retryable" {
+	if tools.records[1]["status"] != "human_review" {
 		t.Fatalf("status = %#v", tools.records[1]["status"])
 	}
 }

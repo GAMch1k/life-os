@@ -69,16 +69,19 @@ func (e InboxItemSource) Valid() bool {
 
 // Defines values for InboxItemState.
 const (
-	InboxItemStateDiscarded  InboxItemState = "discarded"
-	InboxItemStateProcessing InboxItemState = "processing"
-	InboxItemStateRaw        InboxItemState = "raw"
-	InboxItemStateResolved   InboxItemState = "resolved"
+	InboxItemStateDiscarded   InboxItemState = "discarded"
+	InboxItemStateHumanReview InboxItemState = "human_review"
+	InboxItemStateProcessing  InboxItemState = "processing"
+	InboxItemStateRaw         InboxItemState = "raw"
+	InboxItemStateResolved    InboxItemState = "resolved"
 )
 
 // Valid indicates whether the value is a known member of the InboxItemState enum.
 func (e InboxItemState) Valid() bool {
 	switch e {
 	case InboxItemStateDiscarded:
+		return true
+	case InboxItemStateHumanReview:
 		return true
 	case InboxItemStateProcessing:
 		return true
@@ -93,17 +96,20 @@ func (e InboxItemState) Valid() bool {
 
 // Defines values for ProcessingAttemptStatus.
 const (
-	ProcessingAttemptStatusFailed     ProcessingAttemptStatus = "failed"
-	ProcessingAttemptStatusPending    ProcessingAttemptStatus = "pending"
-	ProcessingAttemptStatusProcessed  ProcessingAttemptStatus = "processed"
-	ProcessingAttemptStatusProcessing ProcessingAttemptStatus = "processing"
-	ProcessingAttemptStatusRetryable  ProcessingAttemptStatus = "retryable"
+	ProcessingAttemptStatusFailed      ProcessingAttemptStatus = "failed"
+	ProcessingAttemptStatusHumanReview ProcessingAttemptStatus = "human_review"
+	ProcessingAttemptStatusPending     ProcessingAttemptStatus = "pending"
+	ProcessingAttemptStatusProcessed   ProcessingAttemptStatus = "processed"
+	ProcessingAttemptStatusProcessing  ProcessingAttemptStatus = "processing"
+	ProcessingAttemptStatusRetryable   ProcessingAttemptStatus = "retryable"
 )
 
 // Valid indicates whether the value is a known member of the ProcessingAttemptStatus enum.
 func (e ProcessingAttemptStatus) Valid() bool {
 	switch e {
 	case ProcessingAttemptStatusFailed:
+		return true
+	case ProcessingAttemptStatusHumanReview:
 		return true
 	case ProcessingAttemptStatusPending:
 		return true
@@ -120,16 +126,19 @@ func (e ProcessingAttemptStatus) Valid() bool {
 
 // Defines values for UpdateProcessingAttemptRequestStatus.
 const (
-	UpdateProcessingAttemptRequestStatusFailed     UpdateProcessingAttemptRequestStatus = "failed"
-	UpdateProcessingAttemptRequestStatusProcessed  UpdateProcessingAttemptRequestStatus = "processed"
-	UpdateProcessingAttemptRequestStatusProcessing UpdateProcessingAttemptRequestStatus = "processing"
-	UpdateProcessingAttemptRequestStatusRetryable  UpdateProcessingAttemptRequestStatus = "retryable"
+	UpdateProcessingAttemptRequestStatusFailed      UpdateProcessingAttemptRequestStatus = "failed"
+	UpdateProcessingAttemptRequestStatusHumanReview UpdateProcessingAttemptRequestStatus = "human_review"
+	UpdateProcessingAttemptRequestStatusProcessed   UpdateProcessingAttemptRequestStatus = "processed"
+	UpdateProcessingAttemptRequestStatusProcessing  UpdateProcessingAttemptRequestStatus = "processing"
+	UpdateProcessingAttemptRequestStatusRetryable   UpdateProcessingAttemptRequestStatus = "retryable"
 )
 
 // Valid indicates whether the value is a known member of the UpdateProcessingAttemptRequestStatus enum.
 func (e UpdateProcessingAttemptRequestStatus) Valid() bool {
 	switch e {
 	case UpdateProcessingAttemptRequestStatusFailed:
+		return true
+	case UpdateProcessingAttemptRequestStatusHumanReview:
 		return true
 	case UpdateProcessingAttemptRequestStatusProcessed:
 		return true
@@ -166,6 +175,14 @@ func (e ListInboxItemsParamsState) Valid() bool {
 	}
 }
 
+// CreateHumanReviewRequest defines model for CreateHumanReviewRequest.
+type CreateHumanReviewRequest struct {
+	AttemptId      openapi_types.UUID       `json:"attemptId"`
+	Candidates     []map[string]interface{} `json:"candidates"`
+	ErrorSummary   string                   `json:"errorSummary"`
+	ProposedAction map[string]interface{}   `json:"proposedAction"`
+}
+
 // CreateInboxItemRequest defines model for CreateInboxItemRequest.
 type CreateInboxItemRequest struct {
 	Content         string                       `json:"content"`
@@ -187,15 +204,16 @@ type CreateProcessingAttemptRequest struct {
 
 // InboxItem defines model for InboxItem.
 type InboxItem struct {
-	Content         string                  `json:"content"`
-	CreatedAt       time.Time               `json:"createdAt"`
-	Id              openapi_types.UUID      `json:"id"`
-	MediaReferences *[]string               `json:"mediaReferences,omitempty"`
-	ResolvedAt      *time.Time              `json:"resolvedAt,omitempty"`
-	Source          InboxItemSource         `json:"source"`
-	SourceMetadata  *map[string]interface{} `json:"sourceMetadata,omitempty"`
-	State           InboxItemState          `json:"state"`
-	UpdatedAt       time.Time               `json:"updatedAt"`
+	Content            string                  `json:"content"`
+	CreatedAt          time.Time               `json:"createdAt"`
+	Id                 openapi_types.UUID      `json:"id"`
+	MediaReferences    *[]string               `json:"mediaReferences,omitempty"`
+	ProcessingMetadata map[string]interface{}  `json:"processingMetadata"`
+	ResolvedAt         *time.Time              `json:"resolvedAt,omitempty"`
+	Source             InboxItemSource         `json:"source"`
+	SourceMetadata     *map[string]interface{} `json:"sourceMetadata,omitempty"`
+	State              InboxItemState          `json:"state"`
+	UpdatedAt          time.Time               `json:"updatedAt"`
 }
 
 // InboxItemSource defines model for InboxItem.Source.
@@ -232,6 +250,11 @@ type ProcessingAttemptList struct {
 	Items []ProcessingAttempt `json:"items"`
 }
 
+// ResolveHumanReviewRequest defines model for ResolveHumanReviewRequest.
+type ResolveHumanReviewRequest struct {
+	CandidateId openapi_types.UUID `json:"candidateId"`
+}
+
 // UpdateProcessingAttemptRequest defines model for UpdateProcessingAttemptRequest.
 type UpdateProcessingAttemptRequest struct {
 	Actions      []map[string]interface{}             `json:"actions"`
@@ -256,6 +279,12 @@ type ListInboxItemsParamsState string
 // CreateInboxItemJSONRequestBody defines body for CreateInboxItem for application/json ContentType.
 type CreateInboxItemJSONRequestBody = CreateInboxItemRequest
 
+// CreateHumanReviewJSONRequestBody defines body for CreateHumanReview for application/json ContentType.
+type CreateHumanReviewJSONRequestBody = CreateHumanReviewRequest
+
+// ResolveHumanReviewJSONRequestBody defines body for ResolveHumanReview for application/json ContentType.
+type ResolveHumanReviewJSONRequestBody = ResolveHumanReviewRequest
+
 // CreateProcessingAttemptJSONRequestBody defines body for CreateProcessingAttempt for application/json ContentType.
 type CreateProcessingAttemptJSONRequestBody = CreateProcessingAttemptRequest
 
@@ -276,6 +305,12 @@ type ServerInterface interface {
 	// DiscardInboxItem Discard an inbox item
 	// (POST /v1/inbox-items/{itemId}/discard)
 	DiscardInboxItem(c fiber.Ctx, itemId openapi_types.UUID) error
+	// CreateHumanReview Move a processing attempt into Human Review
+	// (POST /v1/inbox-items/{itemId}/human-review)
+	CreateHumanReview(c fiber.Ctx, itemId openapi_types.UUID) error
+	// ResolveHumanReview Select a retained Human Review candidate and resume processing
+	// (POST /v1/inbox-items/{itemId}/human-review/resolve)
+	ResolveHumanReview(c fiber.Ctx, itemId openapi_types.UUID) error
 	// ListProcessingAttempts List traceable AI processing attempts
 	// (GET /v1/inbox-items/{itemId}/processing-attempts)
 	ListProcessingAttempts(c fiber.Ctx, itemId openapi_types.UUID) error
@@ -420,6 +455,64 @@ func (siw *ServerInterfaceWrapper) DiscardInboxItem(c fiber.Ctx) error {
 
 	handler := func(c fiber.Ctx) error {
 		return siw.Handler.DiscardInboxItem(c, itemId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// CreateHumanReview operation middleware
+func (siw *ServerInterfaceWrapper) CreateHumanReview(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "itemId" -------------
+	var itemId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "itemId", c.Params("itemId"), &itemId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter itemId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.CreateHumanReview(c, itemId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// ResolveHumanReview operation middleware
+func (siw *ServerInterfaceWrapper) ResolveHumanReview(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "itemId" -------------
+	var itemId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "itemId", c.Params("itemId"), &itemId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter itemId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.ResolveHumanReview(c, itemId)
 	}
 
 	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
@@ -589,6 +682,10 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	router.Post(options.BaseURL+"/v1/inbox-items/:itemId/resolve", wrapper.ResolveInboxItem)
 
 	router.Post(options.BaseURL+"/v1/inbox-items/:itemId/discard", wrapper.DiscardInboxItem)
+
+	router.Post(options.BaseURL+"/v1/inbox-items/:itemId/human-review", wrapper.CreateHumanReview)
+
+	router.Post(options.BaseURL+"/v1/inbox-items/:itemId/human-review/resolve", wrapper.ResolveHumanReview)
 
 	router.Get(options.BaseURL+"/v1/inbox-items/:itemId/processing-attempts", wrapper.ListProcessingAttempts)
 

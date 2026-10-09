@@ -17,6 +17,8 @@ type Querier interface {
 	GetProcessingAttemptForItem(ctx context.Context, arg GetProcessingAttemptForItemParams) (InboxProcessingAttempt, error)
 	ListInboxItems(ctx context.Context, arg ListInboxItemsParams) ([]InboxItem, error)
 	ListProcessingAttempts(ctx context.Context, inboxItemID pgtype.UUID) ([]InboxProcessingAttempt, error)
+	ResolveInboxItemHumanReview(ctx context.Context, arg ResolveInboxItemHumanReviewParams) (InboxItem, error)
+	SetInboxItemHumanReview(ctx context.Context, arg SetInboxItemHumanReviewParams) (InboxItem, error)
 	SetInboxItemState(ctx context.Context, arg SetInboxItemStateParams) (InboxItem, error)
 	UpdateProcessingAttempt(ctx context.Context, arg UpdateProcessingAttemptParams) (InboxProcessingAttempt, error)
 }
