@@ -6,6 +6,7 @@ Life OS is a local-first personal operating system. This index is the human-read
 
 - [Architecture overview](architecture/overview.md) — system boundaries and component map.
 - [Networking and data flows](architecture/networking.md) — ingress and common request paths.
+- [Editable entities and UI/agent parity](architecture/editable-entities.md) — how editing is added to a domain so the Dashboard and the agent share one implementation.
 - [Getting started](development/getting-started.md) — run the stack locally.
 - [Services](services/finance.md) — Finance, [Tasks](services/tasks.md), [Inbox](services/inbox.md), [Calendar](services/calendar.md), [MCP](services/mcp.md), [Voice/STT](services/voice-stt.md), and [Activity](services/activity.md) (correlated activity/event trace).
 - [MCP tool contract](services/mcp-tool-contract.md) — permitted semantic AI actions and safety boundaries.
