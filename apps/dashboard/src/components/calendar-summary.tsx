@@ -45,6 +45,10 @@ function timedLabel(event: CalendarEvent) {
   return `${day} · ${time}`;
 }
 
+export function eventTimeLabel(event: CalendarEvent) {
+  return event.allDay ? allDayLabel(event) : timedLabel(event);
+}
+
 function EventList({ events }: { events: CalendarEvent[] }) {
   return (
     <ul className="divide-y rounded-lg border">
@@ -52,7 +56,7 @@ function EventList({ events }: { events: CalendarEvent[] }) {
         <li className="p-3 sm:p-4" key={event.id}>
           <p className="font-medium">{event.title}</p>
           <p className="text-muted-foreground mt-1 text-xs">
-            {event.allDay ? allDayLabel(event) : timedLabel(event)}
+            {eventTimeLabel(event)}
           </p>
         </li>
       ))}
