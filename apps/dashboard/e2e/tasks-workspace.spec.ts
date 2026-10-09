@@ -44,4 +44,52 @@ test.describe("Tasks workspace", () => {
     await page.getByRole("button", { name: "List" }).click();
     await expect(page.getByText(`P8 unscheduled ${stamp}`)).toBeVisible();
   });
+
+  test("edits and reopens an existing Task through the owning service", async ({
+    page,
+    request,
+  }) => {
+    const stamp = Date.now();
+    const original = `P8 lifecycle ${stamp}`;
+    const renamed = `P8 renamed ${stamp}`;
+    const notes = `notes ${stamp}`;
+    const created = await request.post("/api/tasks/v1/tasks", {
+      data: { title: original },
+    });
+    expect(created.status()).toBe(201);
+    const task = await created.json();
+
+    await page.goto("/tasks");
+    await page.getByLabel(`Edit ${original}`).click();
+    await page.getByLabel("Task title").fill(renamed);
+    await page.getByLabel("Task notes").fill(notes);
+    await page.getByLabel("Due date").fill("2026-10-21T09:30");
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByText(renamed)).toBeVisible();
+
+    await page.getByLabel(`Edit ${renamed}`).click();
+    await page.getByRole("button", { name: "Clear date" }).click();
+    await expect(
+      page.getByRole("region", { name: "Unscheduled / No date" }),
+    ).toContainText(renamed);
+
+    await page.getByLabel(`Complete ${renamed}`).click();
+    await expect(page.getByRole("region", { name: "Completed" })).toContainText(
+      renamed,
+    );
+    await page.getByLabel(`Reopen ${renamed}`).click();
+    await expect(
+      page.getByRole("region", { name: "Unscheduled / No date" }),
+    ).toContainText(renamed);
+
+    await page.reload();
+    const persisted = await request.get(`/api/tasks/v1/tasks/${task.id}`);
+    expect(persisted.ok()).toBeTruthy();
+    expect(await persisted.json()).toMatchObject({
+      title: renamed,
+      notes,
+      dueAt: null,
+      completed: false,
+    });
+  });
 });
