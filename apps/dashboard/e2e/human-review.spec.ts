@@ -51,7 +51,9 @@ test.describe("Human Review queue", () => {
     await page.goto("/inbox");
     await expect(page.getByText("Human Review", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: task.title }).click();
-    await expect(page.getByText("Human Review", { exact: true })).not.toBeVisible();
+    await expect(
+      page.getByText("Human Review", { exact: true }),
+    ).not.toBeVisible();
     await expect
       .poll(
         async () =>
