@@ -24,6 +24,14 @@ type Status struct {
 	StartedAt time.Time   `json:"startedAt"`
 	Poll      PollStatus  `json:"poll"`
 	Codex     CodexStatus `json:"codex"`
+	Usage     UsageStatus `json:"usage"`
+}
+
+// UsageStatus is the latest account usage read from the Codex CLI. Usage is
+// the last successful read; Error is set when the latest read failed.
+type UsageStatus struct {
+	Usage *Usage `json:"current"`
+	Error string `json:"error,omitempty"`
 }
 
 type PollStatus struct {
@@ -98,18 +106,42 @@ func (m *Monitor) RecordAuth(authenticated bool) {
 	m.status.Codex.Authenticated, m.status.Codex.AuthCheckedAt = &authenticated, m.stamp()
 }
 
+// RecordUsage records the result of a Codex usage read.
+func (m *Monitor) RecordUsage(usage Usage, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err != nil {
+		m.status.Usage.Error = err.Error()
+		return
+	}
+	m.status.Usage = UsageStatus{Usage: &usage}
+}
+
 // WatchAuth checks authentication now and then on every interval until ctx ends.
 func (m *Monitor) WatchAuth(ctx context.Context, check func(context.Context) bool, every time.Duration) {
+	repeat(ctx, every, func(ctx context.Context) {
+		if ok := check(ctx); ctx.Err() == nil {
+			m.RecordAuth(ok)
+		}
+	})
+}
+
+// WatchUsage reads account usage now and then on every interval until ctx ends.
+func (m *Monitor) WatchUsage(ctx context.Context, read func(context.Context) (Usage, error), every time.Duration) {
+	repeat(ctx, every, func(ctx context.Context) {
+		if usage, err := read(ctx); ctx.Err() == nil || err == nil {
+			m.RecordUsage(usage, err)
+		}
+	})
+}
+
+func repeat(ctx context.Context, every time.Duration, check func(context.Context)) {
 	ticker := time.NewTicker(every)
 	defer ticker.Stop()
 	for {
 		checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		ok := check(checkCtx)
+		check(checkCtx)
 		cancel()
-		if ctx.Err() != nil {
-			return
-		}
-		m.RecordAuth(ok)
 		select {
 		case <-ctx.Done():
 			return

@@ -3,8 +3,10 @@ import test from "node:test";
 
 import {
   formatAge,
+  limitResetsAt,
   statusAlerts,
   toRuntimeStatus,
+  usageFacts,
   type AudioBacklog,
   type InboxBacklog,
   type ProcessorStatus,
@@ -194,4 +196,79 @@ test("ages read naturally", () => {
   assert.equal(formatAge(16 * 60_000), "16 min");
   assert.equal(formatAge(125 * 60_000), "2 h 5 min");
   assert.equal(formatAge(3 * 24 * 60 * 60_000), "3 days");
+});
+
+const usage = {
+  current: {
+    checkedAt: "2026-10-09T19:55:00Z",
+    authMode: "chatgpt",
+    planType: "plus",
+    resetCreditsAvailable: 2,
+    limits: [
+      {
+        id: "codex",
+        windows: [
+          {
+            usedPercent: 100,
+            windowMinutes: 300,
+            resetsAt: "2026-10-09T18:22:00Z",
+          },
+          {
+            usedPercent: 31,
+            windowMinutes: 10080,
+            resetsAt: "2026-10-16T08:22:53Z",
+          },
+        ],
+        reached: "rate_limit_reached",
+      },
+      {
+        id: "base_model_inference",
+        name: "gpt-reserve",
+        model: "gpt-5.6-luna",
+        windows: [
+          {
+            usedPercent: 24,
+            windowMinutes: 10080,
+            resetsAt: "2026-10-12T19:25:52Z",
+          },
+        ],
+      },
+    ],
+  },
+};
+
+test("usage is shown per bucket exactly as Codex reported it", () => {
+  const facts = usageFacts(usage);
+  const value = (label: string) =>
+    facts.find((fact) => fact.label === label)?.value;
+  assert.equal(value("Codex plan"), "plus · ChatGPT sign-in");
+  assert.equal(
+    value("Codex 5-hour usage"),
+    "100% used, resets 9 Oct 2026, 18:22 UTC (limit reached)",
+  );
+  assert.match(value("Codex weekly usage")!, /^31% used, resets 16 Oct 2026/);
+  assert.match(value("gpt-reserve weekly usage")!, /^24% used/);
+  assert.equal(value("Free usage resets available"), "2");
+  assert.deepEqual(usageFacts(undefined), [
+    { label: "Codex usage", value: "not read yet" },
+  ]);
+  assert.deepEqual(usageFacts({ current: null, error: "app-server closed" }), [
+    { label: "Codex usage", value: "unavailable" },
+  ]);
+});
+
+test("a usage limit names Codex's own reset time when it reports one", () => {
+  assert.equal(limitResetsAt(usage), "2026-10-16T08:22:53Z");
+  const limited = check(
+    {
+      ...healthy,
+      processor: {
+        ...processor({ state: "usage_limited", consecutiveFailures: 1 }),
+        usage,
+      },
+    },
+    "processing",
+  );
+  assert.match(limited.action!, /Codex reports 16 Oct 2026, 08:22 UTC/);
+  assert.equal(limitResetsAt({ current: null }), undefined);
 });

@@ -32,7 +32,100 @@ export type ProcessorStatus = {
     lastError?: string;
     consecutiveFailures: number;
   };
+  /** Account usage as reported by the Codex CLI (see docs/services/mcp.md). */
+  usage?: {
+    current: CodexUsage | null;
+    error?: string;
+  };
 };
+
+export type CodexUsage = {
+  checkedAt: string;
+  authMode?: string;
+  planType?: string;
+  resetCreditsAvailable?: number;
+  limits: {
+    id: string;
+    name?: string;
+    model?: string;
+    reached?: string;
+    hasCredits?: boolean;
+    windows: {
+      usedPercent: number;
+      windowMinutes?: number;
+      resetsAt?: string;
+    }[];
+  }[];
+};
+
+function windowLabel(minutes: number | undefined) {
+  if (minutes === 300) return "5-hour";
+  if (minutes === 10080) return "weekly";
+  if (minutes === undefined) return "current";
+  return minutes % 1440 === 0
+    ? `${minutes / 1440}-day`
+    : minutes % 60 === 0
+      ? `${minutes / 60}-hour`
+      : `${minutes}-minute`;
+}
+
+/**
+ * Usage facts exactly as the Codex CLI reported them: one line per metered
+ * bucket and window. Nothing is estimated when the read is unavailable.
+ */
+export function usageFacts(usage: ProcessorStatus["usage"]) {
+  const current = usage?.current;
+  if (!current) {
+    return [
+      {
+        label: "Codex usage",
+        value: usage?.error ? "unavailable" : "not read yet",
+      },
+    ];
+  }
+  const facts = [
+    {
+      label: "Codex plan",
+      value: [
+        current.planType,
+        current.authMode === "chatgpt" ? "ChatGPT sign-in" : current.authMode,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    },
+  ];
+  for (const limit of current.limits) {
+    const name = limit.id === "codex" ? "Codex" : (limit.name ?? limit.id);
+    for (const window of limit.windows) {
+      facts.push({
+        label: `${name} ${windowLabel(window.windowMinutes)} usage`,
+        value: `${Math.round(window.usedPercent)}% used${window.resetsAt ? `, resets ${formatTime(window.resetsAt)}` : ""}${limit.reached ? " (limit reached)" : ""}`,
+      });
+    }
+  }
+  if (current.resetCreditsAvailable) {
+    facts.push({
+      label: "Free usage resets available",
+      value: String(current.resetCreditsAvailable),
+    });
+  }
+  facts.push({
+    label: "Usage read",
+    value: `${formatTime(current.checkedAt)}${usage?.error ? " (latest read failed)" : ""}`,
+  });
+  return facts;
+}
+
+/** The reset time of the exhausted limit, when Codex reports one. */
+export function limitResetsAt(usage: ProcessorStatus["usage"]) {
+  const exhausted = usage?.current?.limits
+    .flatMap((limit) => limit.windows.map((window) => ({ limit, window })))
+    .filter(({ limit, window }) => limit.reached || window.usedPercent >= 100)
+    .map(({ window }) => window.resetsAt)
+    .filter((value): value is string => Boolean(value))
+    .sort();
+  return exhausted?.at(-1);
+}
 
 export type CheckState = "ok" | "warning" | "problem";
 
@@ -118,6 +211,7 @@ function processingCheck(processor: ProcessorStatus | null): StatusCheck {
     },
     { label: "Last poll", value: formatTime(poll.lastAt) },
     { label: "Last Codex success", value: formatTime(codex.lastSucceededAt) },
+    ...usageFacts(processor.usage),
   ];
   if (poll.lastError) {
     return {
@@ -147,8 +241,11 @@ function processingCheck(processor: ProcessorStatus | null): StatusCheck {
         state: "warning",
         summary: "Codex has reached its usage limit.",
         detail: codex.lastError,
-        action:
-          "Captures wait in Inbox and are processed automatically once the limit resets. To resume sooner, add Codex credits or switch LIFE_OS_CODEX_MODEL.",
+        action: `Captures wait in Inbox and are processed automatically once the limit resets${
+          limitResetsAt(processor.usage)
+            ? ` (Codex reports ${formatTime(limitResetsAt(processor.usage))})`
+            : ""
+        }. To resume sooner, add Codex credits or switch LIFE_OS_CODEX_MODEL.`,
         facts: [
           ...facts,
           {

@@ -19,6 +19,7 @@ func main() {
 	content := flag.String("content", "", "raw Inbox content to plan without executing (diagnostic)")
 	dryRun := flag.Bool("dry-run", false, "print proposed Inbox MCP calls without mutations")
 	serve := flag.Bool("serve", false, "run the managed automatic Inbox processor")
+	usage := flag.Bool("usage", false, "print the Codex account usage reported by the Codex CLI (diagnostic)")
 	flag.Parse()
 	cfg, err := processor.LoadConfig()
 	if err != nil {
@@ -26,6 +27,15 @@ func main() {
 		os.Exit(2)
 	}
 	planner := processor.CodexCLI{Command: cfg.CodexCommand, Model: cfg.Model, WorkDir: cfg.WorkDir}
+	if *usage {
+		report, err := planner.Usage(context.Background())
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		_ = json.NewEncoder(os.Stdout).Encode(report)
+		return
+	}
 	if *content != "" {
 		plan, err := planner.Plan(context.Background(), *content)
 		if err != nil {
@@ -47,6 +57,8 @@ func main() {
 		defer stop()
 		// Credentials can expire or be removed while the process runs.
 		go monitor.WatchAuth(ctx, planner.LoggedIn, 5*time.Minute)
+		// Account usage and reset times, as reported by the Codex CLI.
+		go monitor.WatchUsage(ctx, planner.Usage, 5*time.Minute)
 		service := &processor.Service{Run: func(ctx context.Context) error {
 			_, err := runner.Run(ctx)
 			if ctx.Err() == nil {

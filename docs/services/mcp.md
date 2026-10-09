@@ -44,6 +44,30 @@ The processor's private health port (`8081`, not exposed through the gateway) se
   - otherwise `ready` after a successful run, or `unknown` when Codex has not run yet.
 - The Dashboard Status page (`/status`) renders this, together with the Inbox and Voice backlogs.
 
+### Codex usage and reset information
+
+**Data source.** The processor starts `codex app-server` (stdio JSON-RPC) every five minutes and calls two methods of the Codex CLI's own app-server protocol: `account/read` and `account/rateLimits/read`. Their schema is published by `codex app-server generate-json-schema`, and they are the same data the Codex apps use to show usage. The calls use no model quota. The result appears under `usage.current` on `/status`, and `processor --usage` prints it for diagnostics.
+
+**Reported fields:**
+- auth mode, for example `chatgpt` for a subscription sign-in;
+- plan, for example `plus`;
+- one entry per metered bucket. For example, `codex` with a 5-hour and a weekly window, and a separate `gpt-reserve` bucket. Each window has a used percentage, a window length, and a reset time;
+- whether the backend reports a bucket's limit as reached;
+- how many one-off "full reset" credits the account has.
+
+The account email is never stored.
+
+**Reliability and limits:**
+- The percentages and reset times are the backend's own numbers, shown unchanged; Life OS never estimates them.
+- Codex marks the app-server protocol as experimental, so a future CLI version may change it. Today's response shape is pinned in `usage_test.go`, using a real Codex CLI 0.160.0 response.
+- The usage is a snapshot that can be up to five minutes old (`usage.current.checkedAt`).
+- The response does not say which bucket a given model draws from. For example, the `gpt-reserve` bucket lists `gpt-5.6-luna` as its normal model, while `gpt-5.6-luna` may also count against `codex`. The Dashboard therefore lists every bucket rather than guessing which one applies.
+- Reset credits are only counted. Life OS never spends them.
+
+**Fallback.** If a read fails (an older CLI, an unsupported account, or an app-server error), `usage.error` is set and the last good snapshot, if any, is kept with its timestamp. With no snapshot, the Dashboard shows "Codex usage: unavailable" and still relies on the classified `usage_limited` state from failed runs, together with Codex's own "try again at …" text.
+
+The Status page lists these values under Automatic processing. When Codex is usage-limited and a bucket is reported as reached or at 100%, the suggested action names that bucket's reset time.
+
 A failed Codex run keeps only the CLI's own `ERROR:` lines, without the transport retry lines (`Reconnecting… n/5`), in its error and in the Inbox attempt's `errorSummary`. The full output echoes the banner and the prompt, including the user's capture. That buried the actual reason, such as a usage limit, behind text that was then truncated.
 
 If the MCP service restarts, it forgets every session. On the resulting `404`, the processor starts a new MCP session and retries the rejected call once, which the Streamable HTTP transport requires. The rejected request was never processed. Previously the processor kept its stale session and failed every poll until it was restarted itself.

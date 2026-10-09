@@ -82,6 +82,16 @@ test.describe("Runtime status under forced problems", () => {
         { timeout: 1_000 },
       );
     }).toPass({ timeout: 120_000, intervals: [2_000] });
+    // Account usage is read from the Codex CLI inside the processor
+    // container (P8-10).
+    await expectCheck(
+      page,
+      "Automatic processing",
+      /Codex 5-hour usage\d+% used, resets/,
+    );
+    await expect(
+      page.getByRole("region", { name: "Automatic processing" }),
+    ).toContainText("Codex plan");
     await page.goto("/");
     await expect(
       page.getByRole("link", { name: /^System status:/ }),
