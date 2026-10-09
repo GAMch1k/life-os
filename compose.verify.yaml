@@ -40,6 +40,11 @@ services:
 networks:
   backend:
     name: lifeos-verify-backend
+  edge:
+    name: lifeos-verify-edge
+    ipam:
+      config: !override
+        - subnet: 10.255.249.8/29
 
 volumes:
   postgres-data:

@@ -11,8 +11,15 @@ if [ "$published" != gateway ]; then
   echo "check-ingress: only the gateway may publish ports; found: ${published//$'\n'/, }" >&2
   exit 1
 fi
-jq -e '.services.cloudflared | (.ports == null) and (.networks | keys == ["backend"])' <<<"$plan" >/dev/null || {
-  echo "check-ingress: cloudflared must stay on the private backend network without ports" >&2
+jq -e '.services.cloudflared | (.ports == null) and (.networks | keys == ["edge"])' <<<"$plan" >/dev/null || {
+  echo "check-ingress: cloudflared must sit on the edge network only, without ports" >&2
   exit 1
 }
-echo "ingress ok: gateway publishes $(jq -r '.services.gateway.ports | map("\(.host_ip // "0.0.0.0"):\(.published)") | join(", ")' <<<"$plan"); cloudflared publishes nothing"
+# The edge network joins the connector and the gateway, nothing else, so a
+# tunnel route can never reach a service directly.
+edge_members=$(jq -r '[.services | to_entries[] | select(.value.networks | has("edge")) | .key] | sort | join(",")' <<<"$plan")
+if [ "$edge_members" != "cloudflared,gateway" ]; then
+  echo "check-ingress: the edge network must contain only cloudflared and gateway; found: $edge_members" >&2
+  exit 1
+fi
+echo "ingress ok: gateway publishes $(jq -r '.services.gateway.ports | map("\(.host_ip // "0.0.0.0"):\(.published)") | join(", ")' <<<"$plan"); cloudflared publishes nothing and shares only the edge network with the gateway"
