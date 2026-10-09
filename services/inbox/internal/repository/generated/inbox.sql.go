@@ -14,7 +14,7 @@ import (
 const createInboxItem = `-- name: CreateInboxItem :one
 INSERT INTO inbox_items (content, source, source_metadata, media_references, source_dedupe_key, correlation_id) VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT (source_dedupe_key) WHERE source_dedupe_key IS NOT NULL DO UPDATE SET updated_at = inbox_items.updated_at
-RETURNING id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at, source_dedupe_key, correlation_id
+RETURNING id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at, source_dedupe_key, correlation_id, next_retry_at, retry_reason
 `
 
 type CreateInboxItemParams struct {
@@ -49,12 +49,14 @@ func (q *Queries) CreateInboxItem(ctx context.Context, arg CreateInboxItemParams
 		&i.UpdatedAt,
 		&i.SourceDedupeKey,
 		&i.CorrelationID,
+		&i.NextRetryAt,
+		&i.RetryReason,
 	)
 	return i, err
 }
 
 const createProcessingAttempt = `-- name: CreateProcessingAttempt :one
-INSERT INTO inbox_processing_attempts (inbox_item_id, idempotency_key, status, agent_name, model_profile, actions) VALUES ($1,$2,'pending',$3,$4,$5) RETURNING id, inbox_item_id, idempotency_key, status, agent_name, model_profile, actions, error_summary, started_at, completed_at, created_at, updated_at
+INSERT INTO inbox_processing_attempts (inbox_item_id, idempotency_key, status, agent_name, model_profile, actions) VALUES ($1,$2,'pending',$3,$4,$5) RETURNING id, inbox_item_id, idempotency_key, status, agent_name, model_profile, actions, error_summary, started_at, completed_at, created_at, updated_at, next_retry_at
 `
 
 type CreateProcessingAttemptParams struct {
@@ -87,6 +89,7 @@ func (q *Queries) CreateProcessingAttempt(ctx context.Context, arg CreateProcess
 		&i.CompletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.NextRetryAt,
 	)
 	return i, err
 }
@@ -96,13 +99,16 @@ SELECT
     count(*) FILTER (WHERE i.state IN ('raw', 'processing'))::int AS pending_count,
     count(*) FILTER (WHERE i.state IN ('raw', 'processing') AND failed.item_id IS NOT NULL)::int AS retrying_count,
     count(*) FILTER (WHERE i.state = 'human_review')::int AS human_review_count,
-    (min(i.created_at) FILTER (WHERE i.state IN ('raw', 'processing')))::timestamptz AS oldest_pending_at
+    (min(i.created_at) FILTER (WHERE i.state IN ('raw', 'processing')))::timestamptz AS oldest_pending_at,
+    count(*) FILTER (WHERE i.state = 'failed')::int AS failed_count,
+    (min(i.next_retry_at) FILTER (WHERE i.state = 'raw' AND i.next_retry_at > now()))::timestamptz AS next_retry_at,
+    COALESCE((array_agg(i.retry_reason ORDER BY i.next_retry_at) FILTER (WHERE i.state = 'raw' AND i.next_retry_at > now()))[1], '')::text AS next_retry_reason
 FROM inbox_items i
 LEFT JOIN LATERAL (
     SELECT a.inbox_item_id AS item_id FROM inbox_processing_attempts a
     WHERE a.inbox_item_id = i.id AND a.status IN ('retryable', 'failed') LIMIT 1
 ) failed ON true
-WHERE i.state IN ('raw', 'processing', 'human_review')
+WHERE i.state IN ('raw', 'processing', 'human_review', 'failed')
 `
 
 type GetInboxBacklogRow struct {
@@ -110,6 +116,9 @@ type GetInboxBacklogRow struct {
 	RetryingCount    int32
 	HumanReviewCount int32
 	OldestPendingAt  pgtype.Timestamptz
+	FailedCount      int32
+	NextRetryAt      pgtype.Timestamptz
+	NextRetryReason  string
 }
 
 func (q *Queries) GetInboxBacklog(ctx context.Context) (GetInboxBacklogRow, error) {
@@ -120,12 +129,15 @@ func (q *Queries) GetInboxBacklog(ctx context.Context) (GetInboxBacklogRow, erro
 		&i.RetryingCount,
 		&i.HumanReviewCount,
 		&i.OldestPendingAt,
+		&i.FailedCount,
+		&i.NextRetryAt,
+		&i.NextRetryReason,
 	)
 	return i, err
 }
 
 const getInboxItem = `-- name: GetInboxItem :one
-SELECT id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at, source_dedupe_key, correlation_id FROM inbox_items WHERE id = $1
+SELECT id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at, source_dedupe_key, correlation_id, next_retry_at, retry_reason FROM inbox_items WHERE id = $1
 `
 
 func (q *Queries) GetInboxItem(ctx context.Context, id pgtype.UUID) (InboxItem, error) {
@@ -144,6 +156,8 @@ func (q *Queries) GetInboxItem(ctx context.Context, id pgtype.UUID) (InboxItem, 
 		&i.UpdatedAt,
 		&i.SourceDedupeKey,
 		&i.CorrelationID,
+		&i.NextRetryAt,
+		&i.RetryReason,
 	)
 	return i, err
 }
@@ -152,7 +166,7 @@ const getLatestPendingFailure = `-- name: GetLatestPendingFailure :one
 SELECT a.error_summary, a.updated_at
 FROM inbox_items i
 JOIN inbox_processing_attempts a ON a.inbox_item_id = i.id
-WHERE i.state IN ('raw', 'processing') AND a.status IN ('retryable', 'failed')
+WHERE i.state IN ('raw', 'processing', 'failed') AND a.status IN ('retryable', 'failed')
 ORDER BY a.updated_at DESC
 LIMIT 1
 `
@@ -170,7 +184,7 @@ func (q *Queries) GetLatestPendingFailure(ctx context.Context) (GetLatestPending
 }
 
 const getProcessingAttemptForItem = `-- name: GetProcessingAttemptForItem :one
-SELECT id, inbox_item_id, idempotency_key, status, agent_name, model_profile, actions, error_summary, started_at, completed_at, created_at, updated_at FROM inbox_processing_attempts WHERE id = $1 AND inbox_item_id = $2
+SELECT id, inbox_item_id, idempotency_key, status, agent_name, model_profile, actions, error_summary, started_at, completed_at, created_at, updated_at, next_retry_at FROM inbox_processing_attempts WHERE id = $1 AND inbox_item_id = $2
 `
 
 type GetProcessingAttemptForItemParams struct {
@@ -194,25 +208,34 @@ func (q *Queries) GetProcessingAttemptForItem(ctx context.Context, arg GetProces
 		&i.CompletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.NextRetryAt,
 	)
 	return i, err
 }
 
 const listInboxItems = `-- name: ListInboxItems :many
-SELECT id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at, source_dedupe_key, correlation_id FROM inbox_items
-WHERE ($1::boolean IS NULL OR (state IN ('raw', 'processing', 'human_review')) = $1::boolean)
+SELECT id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at, source_dedupe_key, correlation_id, next_retry_at, retry_reason FROM inbox_items
+WHERE ($1::boolean IS NULL OR (state IN ('raw', 'processing', 'human_review', 'failed')) = $1::boolean)
   AND ($2::text IS NULL OR state = $2::text)
-ORDER BY created_at DESC LIMIT $3
+  -- due: only items without a scheduled retry, or whose retry time has come.
+  AND ($3::boolean IS NOT TRUE OR next_retry_at IS NULL OR next_retry_at <= now())
+ORDER BY created_at DESC LIMIT $4
 `
 
 type ListInboxItemsParams struct {
 	UnresolvedFilter *bool
 	StateFilter      *string
+	DueFilter        *bool
 	PageLimit        int32
 }
 
 func (q *Queries) ListInboxItems(ctx context.Context, arg ListInboxItemsParams) ([]InboxItem, error) {
-	rows, err := q.db.Query(ctx, listInboxItems, arg.UnresolvedFilter, arg.StateFilter, arg.PageLimit)
+	rows, err := q.db.Query(ctx, listInboxItems,
+		arg.UnresolvedFilter,
+		arg.StateFilter,
+		arg.DueFilter,
+		arg.PageLimit,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -233,6 +256,8 @@ func (q *Queries) ListInboxItems(ctx context.Context, arg ListInboxItemsParams) 
 			&i.UpdatedAt,
 			&i.SourceDedupeKey,
 			&i.CorrelationID,
+			&i.NextRetryAt,
+			&i.RetryReason,
 		); err != nil {
 			return nil, err
 		}
@@ -245,7 +270,7 @@ func (q *Queries) ListInboxItems(ctx context.Context, arg ListInboxItemsParams) 
 }
 
 const listProcessingAttempts = `-- name: ListProcessingAttempts :many
-SELECT id, inbox_item_id, idempotency_key, status, agent_name, model_profile, actions, error_summary, started_at, completed_at, created_at, updated_at FROM inbox_processing_attempts WHERE inbox_item_id = $1 ORDER BY created_at DESC
+SELECT id, inbox_item_id, idempotency_key, status, agent_name, model_profile, actions, error_summary, started_at, completed_at, created_at, updated_at, next_retry_at FROM inbox_processing_attempts WHERE inbox_item_id = $1 ORDER BY created_at DESC
 `
 
 func (q *Queries) ListProcessingAttempts(ctx context.Context, inboxItemID pgtype.UUID) ([]InboxProcessingAttempt, error) {
@@ -270,6 +295,7 @@ func (q *Queries) ListProcessingAttempts(ctx context.Context, inboxItemID pgtype
 			&i.CompletedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.NextRetryAt,
 		); err != nil {
 			return nil, err
 		}
@@ -282,7 +308,7 @@ func (q *Queries) ListProcessingAttempts(ctx context.Context, inboxItemID pgtype
 }
 
 const resolveInboxItemHumanReview = `-- name: ResolveInboxItemHumanReview :one
-UPDATE inbox_items SET state = 'raw', processing_metadata = $1, updated_at = now() WHERE id = $2 AND state = 'human_review' RETURNING id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at, source_dedupe_key, correlation_id
+UPDATE inbox_items SET state = 'raw', processing_metadata = $1, updated_at = now() WHERE id = $2 AND state = 'human_review' RETURNING id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at, source_dedupe_key, correlation_id, next_retry_at, retry_reason
 `
 
 type ResolveInboxItemHumanReviewParams struct {
@@ -306,12 +332,46 @@ func (q *Queries) ResolveInboxItemHumanReview(ctx context.Context, arg ResolveIn
 		&i.UpdatedAt,
 		&i.SourceDedupeKey,
 		&i.CorrelationID,
+		&i.NextRetryAt,
+		&i.RetryReason,
+	)
+	return i, err
+}
+
+const scheduleInboxItemRetry = `-- name: ScheduleInboxItemRetry :one
+UPDATE inbox_items SET state = 'raw', next_retry_at = $1, retry_reason = $2, updated_at = now() WHERE id = $3 RETURNING id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at, source_dedupe_key, correlation_id, next_retry_at, retry_reason
+`
+
+type ScheduleInboxItemRetryParams struct {
+	NextRetryAt pgtype.Timestamptz
+	RetryReason *string
+	ID          pgtype.UUID
+}
+
+func (q *Queries) ScheduleInboxItemRetry(ctx context.Context, arg ScheduleInboxItemRetryParams) (InboxItem, error) {
+	row := q.db.QueryRow(ctx, scheduleInboxItemRetry, arg.NextRetryAt, arg.RetryReason, arg.ID)
+	var i InboxItem
+	err := row.Scan(
+		&i.ID,
+		&i.Content,
+		&i.Source,
+		&i.SourceMetadata,
+		&i.MediaReferences,
+		&i.State,
+		&i.ProcessingMetadata,
+		&i.ResolvedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SourceDedupeKey,
+		&i.CorrelationID,
+		&i.NextRetryAt,
+		&i.RetryReason,
 	)
 	return i, err
 }
 
 const setInboxItemHumanReview = `-- name: SetInboxItemHumanReview :one
-UPDATE inbox_items SET state = 'human_review', processing_metadata = $1, updated_at = now() WHERE id = $2 RETURNING id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at, source_dedupe_key, correlation_id
+UPDATE inbox_items SET state = 'human_review', processing_metadata = $1, next_retry_at = NULL, retry_reason = NULL, updated_at = now() WHERE id = $2 RETURNING id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at, source_dedupe_key, correlation_id, next_retry_at, retry_reason
 `
 
 type SetInboxItemHumanReviewParams struct {
@@ -335,12 +395,14 @@ func (q *Queries) SetInboxItemHumanReview(ctx context.Context, arg SetInboxItemH
 		&i.UpdatedAt,
 		&i.SourceDedupeKey,
 		&i.CorrelationID,
+		&i.NextRetryAt,
+		&i.RetryReason,
 	)
 	return i, err
 }
 
 const setInboxItemState = `-- name: SetInboxItemState :one
-UPDATE inbox_items SET state = $1, resolved_at = CASE WHEN $1 IN ('resolved', 'discarded') THEN now() ELSE resolved_at END, updated_at = now() WHERE id = $2 RETURNING id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at, source_dedupe_key, correlation_id
+UPDATE inbox_items SET state = $1, resolved_at = CASE WHEN $1 IN ('resolved', 'discarded') THEN now() ELSE resolved_at END, next_retry_at = NULL, retry_reason = NULL, updated_at = now() WHERE id = $2 RETURNING id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at, source_dedupe_key, correlation_id, next_retry_at, retry_reason
 `
 
 type SetInboxItemStateParams struct {
@@ -348,6 +410,7 @@ type SetInboxItemStateParams struct {
 	ID    pgtype.UUID
 }
 
+// Any state change other than a scheduled retry clears the retry schedule.
 func (q *Queries) SetInboxItemState(ctx context.Context, arg SetInboxItemStateParams) (InboxItem, error) {
 	row := q.db.QueryRow(ctx, setInboxItemState, arg.State, arg.ID)
 	var i InboxItem
@@ -364,27 +427,35 @@ func (q *Queries) SetInboxItemState(ctx context.Context, arg SetInboxItemStatePa
 		&i.UpdatedAt,
 		&i.SourceDedupeKey,
 		&i.CorrelationID,
+		&i.NextRetryAt,
+		&i.RetryReason,
 	)
 	return i, err
 }
 
 const updateProcessingAttempt = `-- name: UpdateProcessingAttempt :one
-UPDATE inbox_processing_attempts SET status=$2, actions=$3, error_summary=$4, started_at=CASE WHEN $2='processing' THEN now() ELSE started_at END, completed_at=CASE WHEN $2 IN ('human_review','processed','failed','retryable') THEN now() ELSE completed_at END, updated_at=now() WHERE id=$1 RETURNING id, inbox_item_id, idempotency_key, status, agent_name, model_profile, actions, error_summary, started_at, completed_at, created_at, updated_at
+UPDATE inbox_processing_attempts SET status=$1, actions=$2, error_summary=$3, next_retry_at=$4,
+  started_at=CASE WHEN $1='processing' THEN now() ELSE started_at END,
+  completed_at=CASE WHEN $1 IN ('human_review','processed','failed','retryable') THEN now() ELSE completed_at END,
+  updated_at=now()
+WHERE id=$5 RETURNING id, inbox_item_id, idempotency_key, status, agent_name, model_profile, actions, error_summary, started_at, completed_at, created_at, updated_at, next_retry_at
 `
 
 type UpdateProcessingAttemptParams struct {
-	ID           pgtype.UUID
 	Status       string
 	Actions      []byte
 	ErrorSummary *string
+	NextRetryAt  pgtype.Timestamptz
+	ID           pgtype.UUID
 }
 
 func (q *Queries) UpdateProcessingAttempt(ctx context.Context, arg UpdateProcessingAttemptParams) (InboxProcessingAttempt, error) {
 	row := q.db.QueryRow(ctx, updateProcessingAttempt,
-		arg.ID,
 		arg.Status,
 		arg.Actions,
 		arg.ErrorSummary,
+		arg.NextRetryAt,
+		arg.ID,
 	)
 	var i InboxProcessingAttempt
 	err := row.Scan(
@@ -400,6 +471,7 @@ func (q *Queries) UpdateProcessingAttempt(ctx context.Context, arg UpdateProcess
 		&i.CompletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.NextRetryAt,
 	)
 	return i, err
 }

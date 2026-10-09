@@ -37,7 +37,7 @@ func (h *Handler) ListInboxItems(c fiber.Ctx, params generated.ListInboxItemsPar
 		value := string(*params.State)
 		state = &value
 	}
-	items, err := h.queries.ListInboxItems(c.Context(), store.ListInboxItemsParams{UnresolvedFilter: params.Unresolved, StateFilter: state, PageLimit: int32(limit)})
+	items, err := h.queries.ListInboxItems(c.Context(), store.ListInboxItemsParams{UnresolvedFilter: params.Unresolved, StateFilter: state, DueFilter: params.Due, PageLimit: int32(limit)})
 	if err != nil {
 		return internal(err)
 	}
@@ -60,6 +60,11 @@ func (h *Handler) GetInboxBacklog(c fiber.Ctx) error {
 		RetryingCount:    int(backlog.RetryingCount),
 		HumanReviewCount: int(backlog.HumanReviewCount),
 		OldestPendingAt:  nullableTime(backlog.OldestPendingAt),
+		FailedCount:      ptr(int(backlog.FailedCount)),
+		NextRetryAt:      nullableTime(backlog.NextRetryAt),
+	}
+	if backlog.NextRetryReason != "" {
+		out.NextRetryReason = &backlog.NextRetryReason
 	}
 	failure, err := h.queries.GetLatestPendingFailure(c.Context())
 	switch {
@@ -172,16 +177,30 @@ func (h *Handler) UpdateProcessingAttempt(c fiber.Ctx, itemID types.UUID, attemp
 	if body.Status == "" || body.Actions == nil {
 		return fiber.NewError(400, "status and actions are required")
 	}
+	if (body.NextRetryAt != nil || body.RetryReason != nil) && body.Status != generated.UpdateProcessingAttemptRequestStatusRetryable {
+		return fiber.NewError(400, "nextRetryAt and retryReason are only valid for a retryable attempt")
+	}
+	var nextRetryAt pgtype.Timestamptz
+	if body.NextRetryAt != nil {
+		nextRetryAt = pgtype.Timestamptz{Time: *body.NextRetryAt, Valid: true}
+	}
 	actions, err := json.Marshal(body.Actions)
 	if err != nil {
 		return fiber.NewError(400, "invalid actions")
 	}
-	attempt, err := h.queries.UpdateProcessingAttempt(c.Context(), store.UpdateProcessingAttemptParams{ID: pgUUID(attemptID), Status: string(body.Status), Actions: actions, ErrorSummary: body.ErrorSummary})
+	attempt, err := h.queries.UpdateProcessingAttempt(c.Context(), store.UpdateProcessingAttemptParams{ID: pgUUID(attemptID), Status: string(body.Status), Actions: actions, ErrorSummary: body.ErrorSummary, NextRetryAt: nextRetryAt})
 	if err != nil {
 		return internal(err)
 	}
-	if body.Status == generated.UpdateProcessingAttemptRequestStatusRetryable || body.Status == generated.UpdateProcessingAttemptRequestStatusFailed {
-		if _, err := h.queries.SetInboxItemState(c.Context(), store.SetInboxItemStateParams{ID: pgUUID(itemID), State: "raw"}); err != nil {
+	switch body.Status {
+	case generated.UpdateProcessingAttemptRequestStatusRetryable:
+		// Back to raw, eligible for the processor once nextRetryAt has passed.
+		if _, err := h.queries.ScheduleInboxItemRetry(c.Context(), store.ScheduleInboxItemRetryParams{ID: pgUUID(itemID), NextRetryAt: nextRetryAt, RetryReason: body.RetryReason}); err != nil {
+			return internal(err)
+		}
+	case generated.UpdateProcessingAttemptRequestStatusFailed:
+		// Automatic recovery is unlikely: keep it visible but stop retrying.
+		if _, err := h.queries.SetInboxItemState(c.Context(), store.SetInboxItemStateParams{ID: pgUUID(itemID), State: "failed"}); err != nil {
 			return internal(err)
 		}
 	}
@@ -286,7 +305,7 @@ func (h *Handler) ResolveHumanReview(c fiber.Ctx, itemID types.UUID) error {
 func attemptOutput(attempt store.InboxProcessingAttempt) generated.ProcessingAttempt {
 	var actions []map[string]interface{}
 	_ = json.Unmarshal(attempt.Actions, &actions)
-	return generated.ProcessingAttempt{Id: uuid(attempt.ID), IdempotencyKey: &attempt.IdempotencyKey, Status: generated.ProcessingAttemptStatus(attempt.Status), AgentName: attempt.AgentName, ModelProfile: attempt.ModelProfile, Actions: actions, ErrorSummary: attempt.ErrorSummary, StartedAt: nullableTime(attempt.StartedAt), CompletedAt: nullableTime(attempt.CompletedAt), CreatedAt: attempt.CreatedAt.Time}
+	return generated.ProcessingAttempt{Id: uuid(attempt.ID), IdempotencyKey: &attempt.IdempotencyKey, Status: generated.ProcessingAttemptStatus(attempt.Status), AgentName: attempt.AgentName, ModelProfile: attempt.ModelProfile, Actions: actions, ErrorSummary: attempt.ErrorSummary, NextRetryAt: nullableTime(attempt.NextRetryAt), StartedAt: nullableTime(attempt.StartedAt), CompletedAt: nullableTime(attempt.CompletedAt), CreatedAt: attempt.CreatedAt.Time}
 }
 func (h *Handler) DiscardInboxItem(c fiber.Ctx, id types.UUID) error {
 	item, err := h.queries.SetInboxItemState(c.Context(), store.SetInboxItemStateParams{ID: pgUUID(id), State: "discarded"})
@@ -366,8 +385,19 @@ func (h *Handler) recordAttemptOutcome(c fiber.Ctx, itemID types.UUID, attempt s
 		CausationID: &started,
 		Outcome:     outcome,
 		Summary:     summary,
-		Data:        map[string]any{"inboxItemId": itemID.String(), "attemptId": attemptID, "tools": tools, "errorSummary": activity.Preview(reason, 2000)},
+		Data:        retryData(map[string]any{"inboxItemId": itemID.String(), "attemptId": attemptID, "tools": tools, "errorSummary": activity.Preview(reason, 2000)}, body),
 	})
+}
+
+// retryData adds the retry schedule to a retry_scheduled event.
+func retryData(data map[string]any, body generated.UpdateProcessingAttemptRequest) map[string]any {
+	if body.NextRetryAt != nil {
+		data["nextRetryAt"] = body.NextRetryAt.UTC()
+	}
+	if body.RetryReason != nil {
+		data["retryReason"] = *body.RetryReason
+	}
+	return data
 }
 
 func correlationID(item store.InboxItem) string {
@@ -383,7 +413,7 @@ func output(item store.InboxItem) generated.InboxItem {
 	_ = json.Unmarshal(item.SourceMetadata, &metadata)
 	_ = json.Unmarshal(item.ProcessingMetadata, &processingMetadata)
 	_ = json.Unmarshal(item.MediaReferences, &media)
-	return generated.InboxItem{Id: uuid(item.ID), CorrelationId: correlationID(item), Content: item.Content, Source: generated.InboxItemSource(item.Source), SourceMetadata: &metadata, MediaReferences: &media, State: generated.InboxItemState(item.State), ProcessingMetadata: processingMetadata, ResolvedAt: nullableTime(item.ResolvedAt), CreatedAt: item.CreatedAt.Time, UpdatedAt: item.UpdatedAt.Time}
+	return generated.InboxItem{Id: uuid(item.ID), CorrelationId: correlationID(item), Content: item.Content, Source: generated.InboxItemSource(item.Source), SourceMetadata: &metadata, MediaReferences: &media, State: generated.InboxItemState(item.State), ProcessingMetadata: processingMetadata, NextRetryAt: nullableTime(item.NextRetryAt), RetryReason: item.RetryReason, ResolvedAt: nullableTime(item.ResolvedAt), CreatedAt: item.CreatedAt.Time, UpdatedAt: item.UpdatedAt.Time}
 }
 func containsCandidate(raw interface{}, candidateID string) bool {
 	candidates, ok := raw.([]interface{})
@@ -416,6 +446,7 @@ func approvedAction(proposed map[string]interface{}, candidateID string) (map[st
 	approved["arguments"] = arguments
 	return approved, nil
 }
+func ptr[T any](value T) *T               { return &value }
 func uuid(value pgtype.UUID) types.UUID   { return types.UUID(value.Bytes) }
 func pgUUID(value types.UUID) pgtype.UUID { return pgtype.UUID{Bytes: [16]byte(value), Valid: true} }
 func nullableTime(value pgtype.Timestamptz) *time.Time {

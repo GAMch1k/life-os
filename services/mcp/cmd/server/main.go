@@ -27,6 +27,8 @@ type inboxAction struct {
 	Status         string                   `json:"status,omitempty"`
 	Actions        []map[string]interface{} `json:"actions,omitempty"`
 	ProposedAction map[string]interface{}   `json:"proposedAction,omitempty"`
+	NextRetryAt    string                   `json:"nextRetryAt,omitempty" jsonschema:"RFC3339 time a retryable item may be retried"`
+	RetryReason    string                   `json:"retryReason,omitempty" jsonschema:"Why the retry is scheduled then, e.g. usage_limited or backoff"`
 	Candidates     []map[string]interface{} `json:"candidates,omitempty"`
 	ErrorSummary   *string                  `json:"errorSummary,omitempty"`
 }
@@ -113,7 +115,7 @@ func run(ctx context.Context) error {
 		return nil, out, err
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "inbox_record_processing_attempt", Description: "Record an Inbox processing attempt result"}, func(ctx context.Context, req *mcp.CallToolRequest, in inboxAction) (*mcp.CallToolResult, Output, error) {
-		return patch(ctx, hc, traceOf(req), cfg.InboxURL, "/v1/inbox-items/"+in.ItemID+"/processing-attempts/"+in.AttemptID, map[string]interface{}{"status": in.Status, "actions": in.Actions, "errorSummary": in.ErrorSummary})
+		return patch(ctx, hc, traceOf(req), cfg.InboxURL, "/v1/inbox-items/"+in.ItemID+"/processing-attempts/"+in.AttemptID, attemptUpdate(in))
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "inbox_set_human_review", Description: "Retain an ambiguous Inbox action for explicit Human Review"}, func(ctx context.Context, req *mcp.CallToolRequest, in inboxAction) (*mcp.CallToolResult, Output, error) {
 		return post(ctx, hc, traceOf(req), cfg.InboxURL, "/v1/inbox-items/"+in.ItemID+"/human-review", map[string]interface{}{"attemptId": in.AttemptID, "proposedAction": in.ProposedAction, "candidates": in.Candidates, "errorSummary": in.ErrorSummary})
@@ -237,4 +239,17 @@ func output(body []byte) (Output, error) {
 		return Output{}, fmt.Errorf("decode upstream JSON object: %w", err)
 	}
 	return Output{Data: data}, nil
+}
+
+// attemptUpdate forwards a processing outcome, including its retry schedule
+// when the attempt is retryable.
+func attemptUpdate(in inboxAction) map[string]interface{} {
+	body := map[string]interface{}{"status": in.Status, "actions": in.Actions, "errorSummary": in.ErrorSummary}
+	if in.NextRetryAt != "" {
+		body["nextRetryAt"] = in.NextRetryAt
+	}
+	if in.RetryReason != "" {
+		body["retryReason"] = in.RetryReason
+	}
+	return body
 }

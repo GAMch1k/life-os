@@ -272,3 +272,41 @@ test("a usage limit names Codex's own reset time when it reports one", () => {
   assert.match(limited.action!, /Codex reports 16 Oct 2026, 08:22 UTC/);
   assert.equal(limitResetsAt({ current: null }), undefined);
 });
+
+test("scheduled retries show when and why; given-up captures need attention", () => {
+  const retrying = check(
+    {
+      ...healthy,
+      inbox: inbox({
+        pendingCount: 1,
+        retryingCount: 1,
+        nextRetryAt: "2026-10-09T23:00:30Z",
+        nextRetryReason: "usage_limited",
+      }),
+    },
+    "inbox",
+  );
+  assert.equal(retrying.state, "warning");
+  assert.match(retrying.action!, /at the scheduled time/);
+  assert.ok(
+    retrying.facts.some(
+      (fact) =>
+        fact.label === "Next retry" &&
+        fact.value ===
+          "9 Oct 2026, 23:00 UTC (after the Codex usage limit resets)",
+    ),
+  );
+  const failed = check(
+    {
+      ...healthy,
+      inbox: inbox({
+        failedCount: 2,
+        lastFailureSummary: "gave up after 5 attempts: invalid action plan",
+      }),
+    },
+    "inbox",
+  );
+  assert.equal(failed.state, "problem");
+  assert.match(failed.summary, /2 captures need your attention/);
+  assert.match(failed.detail!, /gave up after 5 attempts/);
+});

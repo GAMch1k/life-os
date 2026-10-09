@@ -70,6 +70,7 @@ func (e InboxItemSource) Valid() bool {
 // Defines values for InboxItemState.
 const (
 	InboxItemStateDiscarded   InboxItemState = "discarded"
+	InboxItemStateFailed      InboxItemState = "failed"
 	InboxItemStateHumanReview InboxItemState = "human_review"
 	InboxItemStateProcessing  InboxItemState = "processing"
 	InboxItemStateRaw         InboxItemState = "raw"
@@ -80,6 +81,8 @@ const (
 func (e InboxItemState) Valid() bool {
 	switch e {
 	case InboxItemStateDiscarded:
+		return true
+	case InboxItemStateFailed:
 		return true
 	case InboxItemStateHumanReview:
 		return true
@@ -154,6 +157,7 @@ func (e UpdateProcessingAttemptRequestStatus) Valid() bool {
 // Defines values for ListInboxItemsParamsState.
 const (
 	ListInboxItemsParamsStateDiscarded   ListInboxItemsParamsState = "discarded"
+	ListInboxItemsParamsStateFailed      ListInboxItemsParamsState = "failed"
 	ListInboxItemsParamsStateHumanReview ListInboxItemsParamsState = "human_review"
 	ListInboxItemsParamsStateProcessing  ListInboxItemsParamsState = "processing"
 	ListInboxItemsParamsStateRaw         ListInboxItemsParamsState = "raw"
@@ -164,6 +168,8 @@ const (
 func (e ListInboxItemsParamsState) Valid() bool {
 	switch e {
 	case ListInboxItemsParamsStateDiscarded:
+		return true
+	case ListInboxItemsParamsStateFailed:
 		return true
 	case ListInboxItemsParamsStateHumanReview:
 		return true
@@ -207,12 +213,18 @@ type CreateProcessingAttemptRequest struct {
 
 // InboxBacklog defines model for InboxBacklog.
 type InboxBacklog struct {
-	HumanReviewCount int `json:"humanReviewCount"`
+	// FailedCount Items that automatic processing gave up on (operator attention)
+	FailedCount      *int `json:"failedCount,omitempty"`
+	HumanReviewCount int  `json:"humanReviewCount"`
 
 	// LastFailureAt When the most recent failed or retryable attempt of a pending item was recorded
 	LastFailureAt      *time.Time `json:"lastFailureAt,omitempty"`
 	LastFailureSummary *string    `json:"lastFailureSummary,omitempty"`
-	OldestPendingAt    *time.Time `json:"oldestPendingAt,omitempty"`
+
+	// NextRetryAt Earliest scheduled retry
+	NextRetryAt     *time.Time `json:"nextRetryAt,omitempty"`
+	NextRetryReason *string    `json:"nextRetryReason,omitempty"`
+	OldestPendingAt *time.Time `json:"oldestPendingAt,omitempty"`
 
 	// PendingCount Items waiting for or in automatic processing
 	PendingCount int `json:"pendingCount"`
@@ -226,22 +238,30 @@ type InboxItem struct {
 	Content string `json:"content"`
 
 	// CorrelationId Workflow correlation id for activity events: the upstream caller's X-Correlation-ID, or the item id when the capture starts its own workflow.
-	CorrelationId      string                  `json:"correlationId"`
-	CreatedAt          time.Time               `json:"createdAt"`
-	Id                 openapi_types.UUID      `json:"id"`
-	MediaReferences    *[]string               `json:"mediaReferences,omitempty"`
-	ProcessingMetadata map[string]interface{}  `json:"processingMetadata"`
-	ResolvedAt         *time.Time              `json:"resolvedAt,omitempty"`
-	Source             InboxItemSource         `json:"source"`
-	SourceMetadata     *map[string]interface{} `json:"sourceMetadata,omitempty"`
-	State              InboxItemState          `json:"state"`
-	UpdatedAt          time.Time               `json:"updatedAt"`
+	CorrelationId   string             `json:"correlationId"`
+	CreatedAt       time.Time          `json:"createdAt"`
+	Id              openapi_types.UUID `json:"id"`
+	MediaReferences *[]string          `json:"mediaReferences,omitempty"`
+
+	// NextRetryAt When a raw item that failed may be retried.
+	NextRetryAt        *time.Time             `json:"nextRetryAt,omitempty"`
+	ProcessingMetadata map[string]interface{} `json:"processingMetadata"`
+	ResolvedAt         *time.Time             `json:"resolvedAt,omitempty"`
+
+	// RetryReason Why the retry is scheduled at that time, for example usage_limited or backoff.
+	RetryReason    *string                 `json:"retryReason,omitempty"`
+	Source         InboxItemSource         `json:"source"`
+	SourceMetadata *map[string]interface{} `json:"sourceMetadata,omitempty"`
+
+	// State failed: automatic processing gave up; needs operator attention.
+	State     InboxItemState `json:"state"`
+	UpdatedAt time.Time      `json:"updatedAt"`
 }
 
 // InboxItemSource defines model for InboxItem.Source.
 type InboxItemSource string
 
-// InboxItemState defines model for InboxItem.State.
+// InboxItemState failed: automatic processing gave up; needs operator attention.
 type InboxItemState string
 
 // InboxItemList defines model for InboxItemList.
@@ -260,6 +280,7 @@ type ProcessingAttempt struct {
 	Id             openapi_types.UUID       `json:"id"`
 	IdempotencyKey *string                  `json:"idempotencyKey,omitempty"`
 	ModelProfile   string                   `json:"modelProfile"`
+	NextRetryAt    *time.Time               `json:"nextRetryAt,omitempty"`
 	StartedAt      *time.Time               `json:"startedAt,omitempty"`
 	Status         ProcessingAttemptStatus  `json:"status"`
 }
@@ -279,20 +300,29 @@ type ResolveHumanReviewRequest struct {
 
 // UpdateProcessingAttemptRequest defines model for UpdateProcessingAttemptRequest.
 type UpdateProcessingAttemptRequest struct {
-	Actions      []map[string]interface{}             `json:"actions"`
-	ErrorSummary *string                              `json:"errorSummary,omitempty"`
-	Status       UpdateProcessingAttemptRequestStatus `json:"status"`
+	Actions      []map[string]interface{} `json:"actions"`
+	ErrorSummary *string                  `json:"errorSummary,omitempty"`
+
+	// NextRetryAt Only with status retryable.
+	NextRetryAt *time.Time `json:"nextRetryAt,omitempty"`
+	RetryReason *string    `json:"retryReason,omitempty"`
+
+	// Status retryable returns the item to raw, eligible at nextRetryAt (immediately when absent); failed takes it out of automatic processing.
+	Status UpdateProcessingAttemptRequestStatus `json:"status"`
 }
 
-// UpdateProcessingAttemptRequestStatus defines model for UpdateProcessingAttemptRequest.Status.
+// UpdateProcessingAttemptRequestStatus retryable returns the item to raw, eligible at nextRetryAt (immediately when absent); failed takes it out of automatic processing.
 type UpdateProcessingAttemptRequestStatus string
 
 // ListInboxItemsParams defines parameters for ListInboxItems.
 type ListInboxItemsParams struct {
 	Unresolved *bool                      `form:"unresolved,omitempty" json:"unresolved,omitempty"`
 	State      *ListInboxItemsParamsState `form:"state,omitempty" json:"state,omitempty"`
-	Cursor     *string                    `form:"cursor,omitempty" json:"cursor,omitempty"`
-	Limit      *int                       `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Due Only items without a scheduled retry or whose nextRetryAt has passed (the processor's eligible work).
+	Due    *bool   `form:"due,omitempty" json:"due,omitempty"`
+	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
 // ListInboxItemsParamsState defines parameters for ListInboxItems.
@@ -404,6 +434,13 @@ func (siw *ServerInterfaceWrapper) ListInboxItems(c fiber.Ctx) error {
 	err = runtime.BindQueryParameterWithOptions("form", true, false, "state", query, &params.State, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
 	if err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter state: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "due" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "due", query, &params.Due, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter due: %w", err).Error())
 	}
 
 	// ------------- Optional query parameter "cursor" -------------

@@ -178,11 +178,21 @@ export interface components {
                 [key: string]: unknown;
             };
             mediaReferences?: string[];
-            /** @enum {string} */
-            state: "raw" | "processing" | "human_review" | "resolved" | "discarded";
+            /**
+             * @description failed: automatic processing gave up; needs operator attention.
+             * @enum {string}
+             */
+            state: "raw" | "processing" | "human_review" | "failed" | "resolved" | "discarded";
             processingMetadata: {
                 [key: string]: unknown;
             };
+            /**
+             * Format: date-time
+             * @description When a raw item that failed may be retried.
+             */
+            nextRetryAt?: string | null;
+            /** @description Why the retry is scheduled at that time, for example usage_limited or backoff. */
+            retryReason?: string | null;
             /** Format: date-time */
             resolvedAt?: string | null;
             /** Format: date-time */
@@ -214,6 +224,14 @@ export interface components {
              */
             lastFailureAt?: string | null;
             lastFailureSummary?: string | null;
+            /** @description Items that automatic processing gave up on (operator attention) */
+            failedCount?: number;
+            /**
+             * Format: date-time
+             * @description Earliest scheduled retry
+             */
+            nextRetryAt?: string | null;
+            nextRetryReason?: string | null;
         };
         InboxItemList: {
             items: components["schemas"]["InboxItem"][];
@@ -232,6 +250,8 @@ export interface components {
             }[];
             errorSummary?: string | null;
             /** Format: date-time */
+            nextRetryAt?: string | null;
+            /** Format: date-time */
             startedAt?: string | null;
             /** Format: date-time */
             completedAt?: string | null;
@@ -247,12 +267,21 @@ export interface components {
             modelProfile: string;
         };
         UpdateProcessingAttemptRequest: {
-            /** @enum {string} */
+            /**
+             * @description retryable returns the item to raw, eligible at nextRetryAt (immediately when absent); failed takes it out of automatic processing.
+             * @enum {string}
+             */
             status: "processing" | "human_review" | "processed" | "failed" | "retryable";
             actions: {
                 [key: string]: unknown;
             }[];
             errorSummary?: string | null;
+            /**
+             * Format: date-time
+             * @description Only with status retryable.
+             */
+            nextRetryAt?: string | null;
+            retryReason?: string | null;
         };
         CreateHumanReviewRequest: {
             /** Format: uuid */
@@ -302,7 +331,9 @@ export interface operations {
         parameters: {
             query?: {
                 unresolved?: boolean;
-                state?: "raw" | "processing" | "human_review" | "resolved" | "discarded";
+                state?: "raw" | "processing" | "human_review" | "failed" | "resolved" | "discarded";
+                /** @description Only items without a scheduled retry or whose nextRetryAt has passed (the processor's eligible work). */
+                due?: boolean;
                 cursor?: string;
                 limit?: number;
             };

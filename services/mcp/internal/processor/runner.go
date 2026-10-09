@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/GAMch1k/life-os/pkg/activity"
 )
@@ -25,6 +26,8 @@ type Runner struct {
 	Tools   toolCaller
 	Model   string
 	DryRun  bool
+	// Retry schedules technical retries; ambiguity goes to Human Review.
+	Retry RetryPolicy
 }
 type inboxList struct {
 	Items []inboxItem `json:"items"`
@@ -55,7 +58,8 @@ type Proposal struct {
 }
 
 func (r Runner) Run(ctx context.Context) ([]Proposal, error) {
-	raw, err := r.Tools.Call(ctx, "inbox_list", map[string]any{"query": "state=raw&limit=50"})
+	// Only raw items with no scheduled retry, or whose retry time has come.
+	raw, err := r.Tools.Call(ctx, "inbox_list", map[string]any{"query": "state=raw&due=true&limit=50"})
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +82,7 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 		return r.plan(ctx, item)
 	}
 	key := idempotencyKey(item)
-	completed, attemptKey, err := r.nextAttemptKey(ctx, item.ID, key)
+	completed, attemptKey, previous, err := r.nextAttemptKey(ctx, item.ID, key)
 	if err != nil {
 		return Proposal{}, err
 	}
@@ -114,7 +118,7 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 		prompt, _ := json.Marshal(map[string]any{"content": item.Content, "source": item.Source, "sourceMetadata": item.SourceMetadata})
 		rawPlan, planErr := r.Planner.Plan(ctx, string(prompt))
 		if planErr != nil {
-			return Proposal{}, r.recover(ctx, item.ID, started.ID, nil, fmt.Sprintf("planning failed: %v", planErr))
+			return Proposal{}, r.retryLater(ctx, item.ID, started.ID, nil, fmt.Sprintf("planning failed: %v", planErr), failureCodex, previous)
 		}
 		parsed, err = decodePlan(rawPlan)
 	}
@@ -124,19 +128,22 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 			return Proposal{}, r.humanReview(ctx, item.ID, started.ID, parsed.Actions[0], candidates, "ambiguous or low-confidence Task selection")
 		}
 	}
-	if err != nil || parsed.Ambiguous || parsed.Confidence < 0.8 || len(parsed.Actions) == 0 {
+	if err != nil {
+		return Proposal{}, r.retryLater(ctx, item.ID, started.ID, nil, "invalid action plan: "+err.Error(), failureModelOutput, previous)
+	}
+	if parsed.Ambiguous || parsed.Confidence < 0.8 || len(parsed.Actions) == 0 {
+		// Codex understood the capture but found nothing it can safely do.
+		// That is a decision for the user, never a technical retry.
 		reason := "no executable action"
-		if err != nil {
-			reason = "invalid action plan: " + err.Error()
-		} else if parsed.Reason != "" {
+		if parsed.Reason != "" {
 			reason = parsed.Reason
 		}
-		return Proposal{}, r.recover(ctx, item.ID, started.ID, nil, reason)
+		return Proposal{}, r.humanReview(ctx, item.ID, started.ID, plannedAction{Tool: "none", Arguments: map[string]any{}}, []map[string]any{}, reason)
 	}
 	actions := make([]map[string]any, 0, len(parsed.Actions))
 	for _, action := range parsed.Actions {
 		if !validAction(action) {
-			return Proposal{}, r.recover(ctx, item.ID, started.ID, actions, "invalid proposed action: "+action.Tool)
+			return Proposal{}, r.retryLater(ctx, item.ID, started.ID, actions, "invalid proposed action: "+action.Tool, failureModelOutput, previous)
 		}
 		arguments := make(map[string]any, len(action.Arguments)+1)
 		for field, value := range action.Arguments {
@@ -146,7 +153,7 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 			query, _ := arguments["taskQuery"].(string)
 			raw, findErr := r.Tools.Call(ctx, "task_search", map[string]any{"query": "query=" + url.QueryEscape(query) + "&limit=10"})
 			if findErr != nil {
-				return Proposal{}, r.recover(ctx, item.ID, started.ID, actions, "task search failed: "+findErr.Error())
+				return Proposal{}, r.retryLater(ctx, item.ID, started.ID, actions, "task search failed: "+findErr.Error(), failureDependency, previous)
 			}
 			var found struct {
 				Items []map[string]any `json:"items"`
@@ -170,7 +177,7 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 		audit := map[string]any{"tool": action.Tool, "arguments": arguments}
 		if err != nil {
 			actions = append(actions, audit)
-			return Proposal{}, r.recover(ctx, item.ID, started.ID, actions, fmt.Sprintf("%s failed: %v", action.Tool, err))
+			return Proposal{}, r.retryLater(ctx, item.ID, started.ID, actions, fmt.Sprintf("%s failed: %v", action.Tool, err), classifyActionError(err), previous)
 		}
 		audit["result"] = json.RawMessage(toolData(result))
 		actions = append(actions, audit)
@@ -224,10 +231,12 @@ func approvedReviewPlan(item inboxItem) (plan, error) {
 // nextAttemptKey preserves every retry as a separate audit row while keeping
 // the deterministic operation key recognizable. A completed operation stops
 // retries; retryable/failed rows receive a new, unique attempt identity.
-func (r Runner) nextAttemptKey(ctx context.Context, itemID, key string) (bool, string, error) {
+// nextAttemptKey returns whether the item was already processed, the key for
+// its next attempt, and how many attempts it had before.
+func (r Runner) nextAttemptKey(ctx context.Context, itemID, key string) (bool, string, int, error) {
 	raw, err := r.Tools.Call(ctx, "inbox_list_processing_attempts", map[string]any{"itemId": itemID})
 	if err != nil {
-		return false, "", err
+		return false, "", 0, err
 	}
 	var attempts struct {
 		Items []struct {
@@ -236,21 +245,21 @@ func (r Runner) nextAttemptKey(ctx context.Context, itemID, key string) (bool, s
 		} `json:"items"`
 	}
 	if err := json.Unmarshal(toolData(raw), &attempts); err != nil {
-		return false, "", err
+		return false, "", 0, err
 	}
 	count := 0
 	for _, attempt := range attempts.Items {
 		if attempt.IdempotencyKey == key || strings.HasPrefix(attempt.IdempotencyKey, key+".retry.") {
 			count++
 			if attempt.Status == "processed" {
-				return true, "", nil
+				return true, "", count, nil
 			}
 		}
 	}
 	if count == 0 {
-		return false, key, nil
+		return false, key, 0, nil
 	}
-	return false, fmt.Sprintf("%s.retry.%d", key, count+1), nil
+	return false, fmt.Sprintf("%s.retry.%d", key, count+1), count, nil
 }
 func (r Runner) plan(ctx context.Context, item inboxItem) (Proposal, error) {
 	prompt, _ := json.Marshal(map[string]any{"content": item.Content, "source": item.Source, "sourceMetadata": item.SourceMetadata})
@@ -264,8 +273,21 @@ func (r Runner) plan(ctx context.Context, item inboxItem) (Proposal, error) {
 	}
 	return Proposal{ItemID: item.ID, Actions: parsed.Actions, Reason: parsed.Reason}, nil
 }
-func (r Runner) recover(ctx context.Context, itemID, attemptID string, actions []map[string]any, reason string) error {
-	return r.record(ctx, itemID, attemptID, "retryable", actions, &reason)
+
+// retryLater records a technical failure. It schedules the next attempt, or
+// marks the item failed (operator attention) once unusable model output has
+// used up its attempts.
+func (r Runner) retryLater(ctx context.Context, itemID, attemptID string, actions []map[string]any, reason string, kind failureKind, previous int) error {
+	if kind == failureModelOutput && previous+1 >= maxModelOutputAttempts {
+		reason = fmt.Sprintf("gave up after %d attempts: %s", previous+1, reason)
+		return r.record(ctx, itemID, attemptID, "failed", actions, &reason)
+	}
+	at, why := r.Retry.next(ctx, kind, previous, reason)
+	if actions == nil {
+		actions = []map[string]any{}
+	}
+	_, err := r.Tools.Call(ctx, "inbox_record_processing_attempt", map[string]any{"itemId": itemID, "attemptId": attemptID, "status": "retryable", "actions": actions, "errorSummary": reason, "nextRetryAt": at.UTC().Format(time.RFC3339Nano), "retryReason": why})
+	return err
 }
 func (r Runner) humanReview(ctx context.Context, itemID, attemptID string, action plannedAction, candidates []map[string]any, reason string) error {
 	_, err := r.Tools.Call(ctx, "inbox_set_human_review", map[string]any{"itemId": itemID, "attemptId": attemptID, "proposedAction": action, "candidates": candidates, "errorSummary": reason})

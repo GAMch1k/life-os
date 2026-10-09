@@ -10,7 +10,7 @@ The deployed worker image contains `codex` but contains no authentication. Set `
 
 `make processor-smoke` is the acceptance smoke for the actual deployed chain: gateway/Dashboard-style capture → persisted Inbox item → automatic processor polling → authenticated local Codex CLI → MCP `task_create` → Tasks persistence → processed audit record → Inbox resolution. It uses only the isolated `lifeos-verify-*` resources and never manually invokes the processor.
 
-The processor reads raw items through `inbox_list`, asks Codex for a constrained JSON plan, accepts only high-confidence task/event creation actions and strictly validated manual finance transactions, records each attempt through MCP, and resolves an item only after every action succeeds. A finance action requires an explicit account ID, signed amount, currency, and date; calendar updates/deletions are never allowed. Ambiguous, malformed, unsupported, low-confidence, and failed plans are retained in the Inbox with a `retryable` audit result. A retryable operation receives a distinct persisted attempt key while retaining its deterministic base operation key, so prior attempt history remains visible and the Inbox uniqueness constraint cannot block a subsequent retry. A processed base operation is skipped. `go run ./cmd/processor --dry-run` returns proposed MCP actions without creating attempts, mutating core services, or resolving Inbox items. `go run ./cmd/processor --content '...'` is a separate non-mutating diagnostic that prints only Codex's proposed JSON plan.
+The processor reads raw items through `inbox_list`, asks Codex for a constrained JSON plan, accepts only high-confidence task/event creation actions and strictly validated manual finance transactions, records each attempt through MCP, and resolves an item only after every action succeeds. A finance action requires an explicit account ID, signed amount, currency, and date; calendar updates/deletions are never allowed. Ambiguous, low-confidence, and nothing-to-do plans go to Human Review and are never retried automatically. Technical failures are retried on a durable schedule (see [Retry scheduling](#retry-scheduling)). A retryable operation receives a distinct persisted attempt key while retaining its deterministic base operation key, so prior attempt history remains visible and the Inbox uniqueness constraint cannot block a subsequent retry. A processed base operation is skipped. `go run ./cmd/processor --dry-run` returns proposed MCP actions without creating attempts, mutating core services, or resolving Inbox items. `go run ./cmd/processor --content '...'` is a separate non-mutating diagnostic that prints only Codex's proposed JSON plan.
 
 Each MCP call from the processor carries the Inbox item's `X-Correlation-ID`, the processing attempt's `inbox.processing.started` event as `X-Causation-ID`, and `X-Life-OS-Actor: agent:codex-inbox-processor`. MCP forwards these headers to the owning service. Every mutation tool records `mcp.action.requested` and then `mcp.action.completed` or `mcp.action.failed`, and the owning service's change names the request event as its cause. A caller that sends no actor header is recorded as `agent:mcp`. See [Activity](activity.md).
 
@@ -71,6 +71,28 @@ The Status page lists these values under Automatic processing. When Codex is usa
 A failed Codex run keeps only the CLI's own `ERROR:` lines, without the transport retry lines (`Reconnecting… n/5`), in its error and in the Inbox attempt's `errorSummary`. The full output echoes the banner and the prompt, including the user's capture. That buried the actual reason, such as a usage limit, behind text that was then truncated.
 
 If the MCP service restarts, it forgets every session. On the resulting `404`, the processor starts a new MCP session and retries the rejected call once, which the Streamable HTTP transport requires. The rejected request was never processed. Previously the processor kept its stale session and failed every poll until it was restarted itself.
+
+## Retry scheduling
+
+The processor polls only due work (`inbox_list` with `state=raw&due=true`). It classifies each failure and asks Inbox to persist when the item may be retried (`nextRetryAt`, `retryReason`):
+
+| Failure | Example | Next attempt |
+| --- | --- | --- |
+| Codex usage limit | `ERROR: You've hit your usage limit…` | At the reset time the Codex CLI reports for the exhausted bucket (`account/rateLimits/read`, read fresh and cached for a minute), plus up to a minute of jitter. Reason `usage_limited`. Without a reported reset, it backs off. |
+| Other Codex failure | sign-in, transport, CLI error | Backoff. |
+| Dependency unavailable | MCP or an owning service unreachable | Backoff. |
+| Unusable model output | invalid JSON, a disallowed tool, an action the owning service rejects | Backoff. After 5 attempts the item becomes `failed` (operator attention). |
+| Ambiguous, low confidence, or nothing to do | a quotation, an unclear request | Human Review. Never a technical retry. |
+
+Backoff is 30 s, doubling per earlier attempt of the item, capped at one hour, with ±20% jitter. Reason `backoff`. A retry adds an audit attempt; it never repeats a processed operation. Retry-After headers and explicit recovery intervals are not exposed by the current dependencies, so the only explicit recovery time used today is the Codex usage reset. A nothing-to-do capture appears in the Human Review queue with Codex's reason and no candidates. Letting the user dismiss such an item from that queue is a separate follow-up; until then it stays there without being retried.
+
+`make retry-schedule-smoke` proves the following on the verification stack, with real Inbox, MCP, processor, Codex, and Tasks:
+- ambiguity goes to Human Review;
+- no retry happens before a reported reset, even across a processor and Inbox restart;
+- the work completes after the reset;
+- backoff runs 30 s, then 60 s.
+
+A usage limit cannot be triggered on demand, so `tools/fixtures/codex-limit-simulator` simulates one at the Codex CLI boundary for that smoke only.
 
 Known gap, tracked for P8-12: a processor restart while a Codex run is in flight leaves that capture's attempt, and the capture itself, in `processing`. Only `raw` captures are polled, so it is not picked up again. The Status page flags it as a prolonged backlog after 15 minutes.
 
