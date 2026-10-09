@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+# Durable retry scheduling acceptance on the isolated verification stack.
+#
+# Real Inbox, MCP, processor, Codex CLI, and Tasks. A usage limit cannot be
+# triggered on demand, so tools/fixtures/codex-limit-simulator simulates one
+# at the Codex CLI boundary while a deadline is in the future; afterwards (and
+# for everything it does not simulate) the real Codex CLI runs.
+#
+# Proves:
+#  1. ambiguity never enters technical retry (real Codex, Human Review);
+#  2. an explicit reset time prevents retries before that time;
+#  3. a restart of the processor and Inbox preserves the schedule;
+#  4. eligible work retries after the time and completes (real Codex → Task);
+#  5. without recovery metadata, retries use bounded exponential backoff.
+set -euo pipefail
+
+sim=$(mktemp -d)
+chmod 755 "$sim"
+install -m 755 tools/fixtures/codex-limit-simulator "$sim/codex-limit-simulator"
+echo 0 >"$sim/until"
+echo limit >"$sim/mode"
+chmod 644 "$sim/until" "$sim/mode"
+export LIFE_OS_SIM_DIR=$sim LIFE_OS_VERIFY_OVERLAYS=tools/fixtures/retry-smoke.compose.yaml
+compose=(./tools/verify-compose)
+cleanup() {
+  "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
+  rm -rf "$sim"
+}
+trap cleanup EXIT
+
+"${compose[@]}" up --detach --no-build
+gateway=http://127.0.0.1:13001
+ready() { for _ in $(seq 1 60); do curl --fail --silent "$gateway/api/$1/ready" >/dev/null && return; sleep 1; done; return 1; }
+for service in inbox tasks activity; do ready "$service"; done
+
+simulate() { echo "$1" >"$sim/mode"; echo "$2" >"$sim/until"; }
+capture() {
+  curl --fail --silent -H 'content-type: application/json' \
+    --data "$(jq -n --arg content "$1" '{content: $content, source: "web"}')" \
+    "$gateway/api/inbox/v1/inbox-items" | jq -r '.id'
+}
+item() { curl --fail --silent "$gateway/api/inbox/v1/inbox-items/$1"; }
+attempts() { curl --fail --silent "$gateway/api/inbox/v1/inbox-items/$1/processing-attempts"; }
+epoch() { date -u -d "$1" +%s; }
+wait_until() { # wait_until <timeout seconds> <command...>
+  local deadline=$(($(date +%s) + $1))
+  shift
+  until "$@"; do
+    [ "$(date +%s)" -lt "$deadline" ] || { echo "timed out waiting for: $*" >&2; return 1; }
+    sleep 2
+  done
+}
+state_is() { [ "$(item "$1" | jq -r '.state')" = "$2" ]; }
+scheduled() { [ "$(item "$1" | jq -r '.nextRetryAt // empty')" != "" ]; }
+fail() { echo "FAIL: $*" >&2; exit 1; }
+
+echo "== 1. ambiguity goes to Human Review, never technical retry (real Codex)"
+quote=$(capture "And so my fellow Americans ask not what your country can do for you, ask what you can do for your country.")
+wait_until 180 state_is "$quote" human_review
+sleep 45
+[ "$(attempts "$quote" | jq '.items | length')" = 1 ] || fail "the quote was retried"
+[ "$(attempts "$quote" | jq '[.items[] | select(.status == "retryable")] | length')" = 0 ] || fail "the quote entered technical retry"
+state_is "$quote" human_review || fail "the quote left Human Review"
+echo "   human_review after 1 attempt; no retries after 45 s"
+
+echo "== 2-4. usage limit: no retry before the reported reset, survives restart, completes after"
+reset=$(($(date +%s) + 150))
+simulate limit "$reset"
+title="P8 retry after reset $(date +%s)"
+limited=$(capture "Create a task titled $title.")
+wait_until 120 scheduled "$limited"
+details=$(item "$limited")
+next=$(epoch "$(jq -r '.nextRetryAt' <<<"$details")")
+[ "$(jq -r '.retryReason' <<<"$details")" = usage_limited ] || fail "retry reason: $(jq -c '{retryReason}' <<<"$details")"
+[ "$next" -ge "$reset" ] && [ "$next" -le $((reset + 60)) ] || fail "nextRetryAt $next is not just after the reset $reset"
+backlog=$(curl --fail --silent "$gateway/api/inbox/v1/backlog")
+[ "$(jq -r '.nextRetryReason' <<<"$backlog")" = usage_limited ] || fail "backlog: $backlog"
+curl --fail --silent "$gateway/status" | grep -q 'after the Codex usage limit resets' || fail "Status does not show the scheduled retry"
+echo "   scheduled $((next - $(date +%s))) s ahead (reset in $((reset - $(date +%s))) s), reason usage_limited, shown on Status"
+
+"${compose[@]}" restart processor inbox >/dev/null
+ready inbox
+echo "   restarted processor and inbox"
+while [ "$(date +%s)" -lt $((reset - 5)) ]; do
+  [ "$(attempts "$limited" | jq '.items | length')" = 1 ] || fail "retried before the reset"
+  details=$(item "$limited")
+  [ "$(epoch "$(jq -r '.nextRetryAt' <<<"$details")")" = "$next" ] || fail "schedule changed after restart: $(jq -c '{state, nextRetryAt}' <<<"$details")"
+  sleep 5
+done
+echo "   still 1 attempt and the same schedule 5 s before the reset"
+wait_until $((next - $(date +%s) + 150)) state_is "$limited" resolved
+history=$(attempts "$limited")
+[ "$(jq '.items | length' <<<"$history")" = 2 ] || fail "expected exactly one retry: $(jq -c '[.items[] | {status, startedAt}]' <<<"$history")"
+retried=$(epoch "$(jq -r '.items[0].startedAt' <<<"$history")")
+[ "$retried" -ge "$next" ] || fail "the retry started at $retried, before $next"
+curl --fail --silent "$gateway/api/tasks/v1/tasks?query=$(jq -rn --arg q "$title" '$q|@uri')" | jq -e --arg t "$title" '.items | any(.title | startswith($t))' >/dev/null || fail "no Task created"
+echo "   retried $((retried - next)) s after the scheduled time, processed by real Codex, Task created"
+
+echo "== 5. no recovery metadata: bounded exponential backoff"
+simulate fail $(($(date +%s) + 100))
+title="P8 retry backoff $(date +%s)"
+backoff=$(capture "Create a task titled $title.")
+wait_until 420 state_is "$backoff" resolved
+history=$(attempts "$backoff" | jq '.items | reverse')
+jq -r '.[] | "   \(.status)\tstarted \(.startedAt)\tnext \(.nextRetryAt // "-")"' <<<"$history"
+count=$(jq 'length' <<<"$history")
+[ "$count" -ge 3 ] || fail "expected at least two backoff retries, got $count attempts"
+delay() { # delay <index>: scheduled delay after attempt <index> failed
+  echo $(($(epoch "$(jq -r ".[$1].nextRetryAt" <<<"$history")") - $(epoch "$(jq -r ".[$1].completedAt" <<<"$history")")))
+}
+first=$(delay 0)
+second=$(delay 1)
+[ "$first" -ge 23 ] && [ "$first" -le 37 ] || fail "first backoff $first s is not 30 s ±20%"
+[ "$second" -ge 47 ] && [ "$second" -le 73 ] || fail "second backoff $second s is not 60 s ±20%"
+echo "   backoff ${first}s then ${second}s, then processed by real Codex"
+
+echo
+echo "retry scheduling smoke passed"

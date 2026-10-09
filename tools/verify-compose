@@ -8,6 +8,12 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_root"
 
 compose=(docker compose --project-name lifeos-verify -f compose.yaml -f compose.verify.yaml)
+# A smoke may add overlays (colon-separated paths); the isolation check below
+# still applies to the merged plan.
+if [[ -n "${LIFE_OS_VERIFY_OVERLAYS:-}" ]]; then
+  IFS=: read -r -a overlays <<<"$LIFE_OS_VERIFY_OVERLAYS"
+  for overlay in "${overlays[@]}"; do compose+=(-f "$overlay"); done
+fi
 
 require_isolated_resources() {
   command -v jq >/dev/null 2>&1 || { echo "verify-compose: jq is required" >&2; exit 2; }
