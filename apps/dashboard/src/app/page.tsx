@@ -9,7 +9,9 @@ export const dynamic = "force-dynamic";
 export default async function Home() {
   const [attention, inbox] = await Promise.all([
     getHomeAttention(),
-    getInboxSummary(),
+    // The capture card degrades to its own unavailable state when Inbox is
+    // unreachable instead of failing the whole page.
+    getInboxSummary().catch(() => ({ kind: "unavailable" }) as const),
   ]);
   return (
     <div className="space-y-8">

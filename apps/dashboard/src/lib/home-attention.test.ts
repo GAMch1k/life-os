@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { toHomeAttention } from "./home-attention";
+import { toHomeAttention, unavailableOnFailure } from "./home-attention";
 
 const now = new Date("2026-10-09T15:00:00Z");
 const task = (id: string, dueAt?: string) => ({
@@ -61,4 +61,17 @@ test("Home distinguishes an empty service from an unavailable one", () => {
   assert.equal(unavailable.humanReview, null);
   assert.equal(unavailable.urgent, null);
   assert.equal(unavailable.unscheduled, null);
+});
+
+test("Home treats an unreachable service as unavailable", async () => {
+  const result = await unavailableOnFailure<never>(
+    Promise.reject(new TypeError("fetch failed")),
+  );
+  assert.equal(
+    toHomeAttention(
+      { review: result, urgent: result, open: result, events: result },
+      now,
+    ).nextEvent,
+    null,
+  );
 });

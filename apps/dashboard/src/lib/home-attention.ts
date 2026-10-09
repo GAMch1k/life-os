@@ -83,37 +83,50 @@ export function toHomeAttention(
   };
 }
 
+/** A service that cannot be reached at all reads the same as an HTTP error. */
+export function unavailableOnFailure<T>(request: Promise<ListResult<T>>) {
+  return request.catch((): ListResult<T> => ({}));
+}
+
 export async function getHomeAttention(): Promise<HomeAttention> {
   const now = new Date();
   const eventWindowEnd = new Date(now);
   eventWindowEnd.setUTCDate(eventWindowEnd.getUTCDate() + 30);
   const [review, urgent, open, events] = await Promise.all([
-    inboxClient.GET("/v1/inbox-items", {
-      params: { query: { state: "human_review", limit: 10 } },
-    }),
+    unavailableOnFailure(
+      inboxClient.GET("/v1/inbox-items", {
+        params: { query: { state: "human_review", limit: 10 } },
+      }),
+    ),
     // Tasks are ordered by due date, so overdue work comes first.
-    tasksClient.GET("/v1/tasks", {
-      params: {
-        query: {
-          completed: false,
-          dueBefore: endOfUtcDay(now).toISOString(),
-          includeUndated: false,
-          limit: HOME_LIST_LIMIT,
+    unavailableOnFailure(
+      tasksClient.GET("/v1/tasks", {
+        params: {
+          query: {
+            completed: false,
+            dueBefore: endOfUtcDay(now).toISOString(),
+            includeUndated: false,
+            limit: HOME_LIST_LIMIT,
+          },
         },
-      },
-    }),
-    tasksClient.GET("/v1/tasks", {
-      params: { query: { completed: false, limit: HOME_LIST_LIMIT } },
-    }),
-    calendarClient.GET("/v1/events", {
-      params: {
-        query: {
-          from: now.toISOString(),
-          to: eventWindowEnd.toISOString(),
-          limit: 1,
+      }),
+    ),
+    unavailableOnFailure(
+      tasksClient.GET("/v1/tasks", {
+        params: { query: { completed: false, limit: HOME_LIST_LIMIT } },
+      }),
+    ),
+    unavailableOnFailure(
+      calendarClient.GET("/v1/events", {
+        params: {
+          query: {
+            from: now.toISOString(),
+            to: eventWindowEnd.toISOString(),
+            limit: 1,
+          },
         },
-      },
-    }),
+      }),
+    ),
   ]);
   return toHomeAttention({ review, urgent, open, events }, now);
 }
