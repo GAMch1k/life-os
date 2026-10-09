@@ -104,6 +104,12 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 		}
 		parsed, err = decodePlan(rawPlan)
 	}
+	if err == nil && (parsed.Ambiguous || parsed.Confidence < 0.8) && len(parsed.Actions) == 1 && isTaskMutation(parsed.Actions[0]) && validAction(parsed.Actions[0]) {
+		query, _ := parsed.Actions[0].Arguments["taskQuery"].(string)
+		if candidates, searchErr := r.taskCandidates(ctx, query); searchErr == nil {
+			return Proposal{}, r.humanReview(ctx, item.ID, started.ID, parsed.Actions[0], candidates, "ambiguous or low-confidence Task selection")
+		}
+	}
 	if err != nil || parsed.Ambiguous || parsed.Confidence < 0.8 || len(parsed.Actions) == 0 {
 		reason := "no executable action"
 		if err != nil {
@@ -160,6 +166,28 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 	}
 	_, err = r.Tools.Call(ctx, "inbox_resolve", map[string]any{"itemId": item.ID})
 	return Proposal{}, err
+}
+func isTaskMutation(action plannedAction) bool {
+	return action.Tool == "task_update" || action.Tool == "task_complete" || action.Tool == "task_reopen"
+}
+func (r Runner) taskCandidates(ctx context.Context, query string) ([]map[string]any, error) {
+	raw, err := r.Tools.Call(ctx, "task_search", map[string]any{"query": "query=" + url.QueryEscape(query) + "&limit=10"})
+	if err != nil {
+		return nil, err
+	}
+	var found struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal(toolData(raw), &found); err != nil {
+		return nil, err
+	}
+	candidates := make([]map[string]any, 0, len(found.Items))
+	for _, candidate := range found.Items {
+		if id, ok := candidate["id"].(string); ok && id != "" {
+			candidates = append(candidates, candidate)
+		}
+	}
+	return candidates, nil
 }
 func approvedReviewPlan(item inboxItem) (plan, error) {
 	raw, ok := item.ProcessingMetadata["approvedAction"].(map[string]any)
