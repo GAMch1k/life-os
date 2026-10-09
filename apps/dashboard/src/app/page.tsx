@@ -85,7 +85,9 @@ export default async function Home() {
               </span>
               <div>
                 <p className="text-sm font-medium">Quick capture</p>
-                <p className="text-muted-foreground text-xs">Planned control</p>
+                <p className="text-muted-foreground text-xs">
+                  Add a thought below for automatic processing
+                </p>
               </div>
             </div>
           </div>

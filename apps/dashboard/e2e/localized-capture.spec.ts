@@ -1,0 +1,69 @@
+import { expect, test } from "@playwright/test";
+
+const enabled = Boolean(
+  process.env.LIFE_OS_E2E_URL && process.env.LIFE_OS_E2E_LIVE_LOCALIZED,
+);
+
+test.describe("Dashboard localized text capture", () => {
+  test.skip(
+    !enabled,
+    "set LIFE_OS_E2E_URL and LIFE_OS_E2E_LIVE_LOCALIZED for deployed acceptance",
+  );
+  test.setTimeout(240_000);
+
+  for (const [locale, instruction] of [
+    ["Russian", (title: string) => `Создай задачу с названием ${title}.`],
+    [
+      "German",
+      (title: string) => `Erstelle eine Aufgabe mit dem Titel ${title}.`,
+    ],
+  ] as const) {
+    test(`${locale} capture reaches a persisted Task through the automatic pipeline`, async ({
+      page,
+      request,
+    }) => {
+      const title = `P7 ${locale} acceptance ${Date.now()}`;
+      const content = instruction(title);
+      await page.goto("/");
+      await page.locator("#inbox-capture").fill(content);
+      await page.getByRole("button", { name: "Capture" }).click();
+
+      const inbox = await request.get(
+        "/api/inbox/v1/inbox-items?query=state=raw&limit=100",
+      );
+      expect(inbox.ok()).toBeTruthy();
+      const item = (await inbox.json()).items.find(
+        (entry: { content: string }) => entry.content === content,
+      );
+      expect(item).toBeTruthy();
+
+      await expect
+        .poll(
+          async () => {
+            const attempts = await request.get(
+              `/api/inbox/v1/inbox-items/${item.id}/processing-attempts`,
+            );
+            const data = await attempts.json();
+            return data.items?.[0]?.status;
+          },
+          { timeout: 150_000 },
+        )
+        .toBe("processed");
+
+      await expect
+        .poll(
+          async () => {
+            const tasks = await request.get(
+              `/api/tasks/v1/tasks?query=${encodeURIComponent(title)}`,
+            );
+            const data = await tasks.json();
+            return data.items?.some((entry: { title: string }) =>
+              entry.title.includes(title),
+            );
+          },
+          { timeout: 30_000 },
+        )
+        .toBeTruthy();
+    });
+  }
+});

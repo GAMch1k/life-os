@@ -28,6 +28,13 @@ key or session material is copied into the repository. See
 [Phase 7 runtime verification](../verification/phase-7.md) for the exact
 browser, Codex, retry, and recovery checks.
 
+The `apps/dashboard/e2e/calendar-capture.spec.ts` and
+`finance-capture.spec.ts` files are separate, deliberately opt-in tests for an
+actual deployed gateway. The calendar test requires
+`LIFE_OS_E2E_LIVE_CALENDAR=1`; the finance test additionally requires an
+explicit `LIFE_OS_E2E_LIVE_FINANCE_ACCOUNT_ID` for a dedicated test account.
+They create real records and should not be pointed at personal production data.
+
 Create a service with `make create-service SERVICE=<kebab-name>`. To add/change an endpoint: edit that service OpenAPI first, regenerate with `make check`, implement its adapter/use case/repository, add tests, expose a gateway route only when appropriate, and update these docs. Create migrations with `make db-migration-new SERVICE=<name> NAME=<name>`; they are service-owned, ordered, and tested against disposable stacks.
 
 Ticket workflow: branch from primary, make small logical commits, run relevant end-of-ticket verification, update docs/Notion, merge, verify primary clean, then mark Done. See [data and code generation](data-and-codegen.md).
