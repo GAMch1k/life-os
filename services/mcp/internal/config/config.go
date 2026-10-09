@@ -12,6 +12,8 @@ type Config struct {
 	TasksURL    string `env:"TASKS_SERVICE_URL" default:"http://tasks:8080"`
 	InboxURL    string `env:"INBOX_SERVICE_URL" default:"http://inbox:8080"`
 	CalendarURL string `env:"CALENDAR_SERVICE_URL" default:"http://calendar:8080"`
+	// ActivityURL enables activity events; empty disables them.
+	ActivityURL string `env:"ACTIVITY_SERVICE_URL"`
 }
 
 func Load() (Config, error) {

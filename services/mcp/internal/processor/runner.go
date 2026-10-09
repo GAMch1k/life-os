@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+
+	"github.com/GAMch1k/life-os/pkg/activity"
 )
 
 type planner interface {
@@ -29,6 +31,7 @@ type inboxList struct {
 }
 type inboxItem struct {
 	ID                 string         `json:"id"`
+	CorrelationID      string         `json:"correlationId"`
 	Content            string         `json:"content"`
 	Source             string         `json:"source"`
 	SourceMetadata     map[string]any `json:"sourceMetadata"`
@@ -82,6 +85,14 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 	if completed {
 		return Proposal{ItemID: item.ID, Reason: "already processed"}, nil
 	}
+	// Every MCP call for this item carries its workflow correlation and the
+	// processor's identity, so Inbox, MCP, and owning services record their
+	// activity in the same trace.
+	trace := activity.Trace{CorrelationID: item.CorrelationID, Actor: activity.Agent("codex-inbox-processor")}
+	if trace.CorrelationID == "" {
+		trace.CorrelationID = item.ID
+	}
+	ctx = activity.WithTrace(ctx, trace)
 	attempt, err := r.Tools.Call(ctx, "inbox_start_processing_attempt", map[string]any{"itemId": item.ID, "idempotencyKey": attemptKey, "agentName": "codex-inbox-processor", "modelProfile": r.Model})
 	if err != nil {
 		return Proposal{}, fmt.Errorf("start attempt for %s: %w", item.ID, err)
@@ -92,6 +103,9 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 	if err := json.Unmarshal(toolData(attempt), &started); err != nil || started.ID == "" {
 		return Proposal{}, fmt.Errorf("decode attempt for %s: %w", item.ID, err)
 	}
+	startedEvent := activity.EventID("inbox.processing.started", started.ID)
+	trace.CausationID = &startedEvent
+	ctx = activity.WithTrace(ctx, trace)
 	if err := r.record(ctx, item.ID, started.ID, "processing", nil, nil); err != nil {
 		return Proposal{}, err
 	}
@@ -164,7 +178,9 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 	if err := r.record(ctx, item.ID, started.ID, "processed", actions, nil); err != nil {
 		return Proposal{}, err
 	}
-	_, err = r.Tools.Call(ctx, "inbox_resolve", map[string]any{"itemId": item.ID})
+	completedEvent := activity.EventID("inbox.processing.completed", started.ID)
+	trace.CausationID = &completedEvent
+	_, err = r.Tools.Call(activity.WithTrace(ctx, trace), "inbox_resolve", map[string]any{"itemId": item.ID})
 	return Proposal{}, err
 }
 func isTaskMutation(action plannedAction) bool {
