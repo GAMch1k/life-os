@@ -28,6 +28,9 @@ endpoints returned 200. Playwright then proved these observed chains:
 - Browser MediaRecorder fixture → Voice upload/job polling → real Whisper
   transcript → exactly one Inbox item → automatic Codex/MCP task creation →
   persisted Task and resolved Inbox.
+- Russian and German Dashboard text captures each reached a processed Inbox
+  audit and persisted Task; the English path is covered by the text and Voice
+  checks above.
 
 The Calendar and Finance deployed checks are intentionally opt-in E2E specs:
 `LIFE_OS_E2E_LIVE_CALENDAR=1` enables the former and
