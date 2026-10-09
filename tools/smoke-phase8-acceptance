@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Phase 8 sign-off on the isolated verification stack: the ten acceptance
+# chains in apps/dashboard/e2e/phase8-acceptance.spec.ts, through the normal
+# user triggers with the real whisper.cpp and authenticated Codex CLI.
+#
+# Prepares a spoken fixture ("I already bought the chicken.", espeak-ng in a
+# throwaway Alpine container) and routes the processor's Codex calls through
+# tools/fixtures/codex-limit-simulator, which passes everything to the real
+# CLI except while chain 8 forces a provider usage limit (a real one cannot be
+# triggered on demand).
+set -euo pipefail
+
+work=$(mktemp -d)
+chmod 755 "$work"
+install -m 755 tools/fixtures/codex-limit-simulator "$work/codex-limit-simulator"
+echo 0 >"$work/until"
+echo limit >"$work/mode"
+chmod 666 "$work/until" "$work/mode"
+docker run --rm -v "$work:/out" alpine:3.22 sh -c \
+  "apk add --no-cache espeak-ng >/dev/null && espeak-ng -v en-us -s 125 -w /out/chicken.wav 'I already bought the chicken.' && chmod 644 /out/chicken.wav"
+
+export LIFE_OS_SIM_DIR=$work LIFE_OS_VERIFY_OVERLAYS=tools/fixtures/codex-simulator.compose.yaml
+export LIFE_OS_PROCESSOR_STALE_AFTER_SECONDS=90
+compose=(./tools/verify-compose)
+cleanup() {
+  "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
+  rm -rf "$work"
+}
+trap cleanup EXIT
+
+"${compose[@]}" up --detach --no-build
+gateway=http://127.0.0.1:13001
+for service in activity inbox tasks voice; do
+  for _ in $(seq 1 60); do curl --fail --silent "$gateway/api/$service/ready" >/dev/null && break; sleep 1; done
+  curl --fail --silent "$gateway/api/$service/ready" >/dev/null || { echo "$service is not ready" >&2; exit 1; }
+done
+for _ in $(seq 1 180); do
+  [ "$("${compose[@]}" ps whisper --format '{{.Health}}')" = healthy ] && break
+  sleep 2
+done
+
+LIFE_OS_E2E_URL=$gateway LIFE_OS_E2E_PHASE8=1 LIFE_OS_E2E_PHASE8_VOICE="$work/chicken.wav" \
+  npm --prefix apps/dashboard run test:e2e -- e2e/phase8-acceptance.spec.ts
