@@ -153,16 +153,19 @@ func (e UpdateProcessingAttemptRequestStatus) Valid() bool {
 
 // Defines values for ListInboxItemsParamsState.
 const (
-	ListInboxItemsParamsStateDiscarded  ListInboxItemsParamsState = "discarded"
-	ListInboxItemsParamsStateProcessing ListInboxItemsParamsState = "processing"
-	ListInboxItemsParamsStateRaw        ListInboxItemsParamsState = "raw"
-	ListInboxItemsParamsStateResolved   ListInboxItemsParamsState = "resolved"
+	ListInboxItemsParamsStateDiscarded   ListInboxItemsParamsState = "discarded"
+	ListInboxItemsParamsStateHumanReview ListInboxItemsParamsState = "human_review"
+	ListInboxItemsParamsStateProcessing  ListInboxItemsParamsState = "processing"
+	ListInboxItemsParamsStateRaw         ListInboxItemsParamsState = "raw"
+	ListInboxItemsParamsStateResolved    ListInboxItemsParamsState = "resolved"
 )
 
 // Valid indicates whether the value is a known member of the ListInboxItemsParamsState enum.
 func (e ListInboxItemsParamsState) Valid() bool {
 	switch e {
 	case ListInboxItemsParamsStateDiscarded:
+		return true
+	case ListInboxItemsParamsStateHumanReview:
 		return true
 	case ListInboxItemsParamsStateProcessing:
 		return true
