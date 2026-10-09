@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   formatAge,
   limitResetsAt,
+  runtimeFacts,
   statusAlerts,
   toRuntimeStatus,
   usageFacts,
@@ -309,4 +310,30 @@ test("scheduled retries show when and why; given-up captures need attention", ()
   assert.equal(failed.state, "problem");
   assert.match(failed.summary, /2 captures need your attention/);
   assert.match(failed.detail!, /gave up after 5 attempts/);
+});
+
+test("the Codex runtime shows the run in progress and past outcomes", () => {
+  const facts = runtimeFacts({
+    timeoutSeconds: 300,
+    current: {
+      itemId: "item-1",
+      state: "running",
+      sessionId: "thread-1",
+      since: "2026-10-09T20:00:00Z",
+    },
+    completed: 4,
+    failed: 1,
+    timedOut: 1,
+    cancelled: 2,
+    recovered: 3,
+  });
+  const value = (label: string) =>
+    facts.find((fact) => fact.label === label)?.value;
+  assert.equal(value("Codex run now"), "running since 9 Oct 2026, 20:00 UTC");
+  assert.equal(
+    value("Runs since start"),
+    "4 completed, 1 failed, 1 timed out (limit 300 s), 2 cancelled",
+  );
+  assert.equal(value("Recovered after a crash"), "3");
+  assert.deepEqual(runtimeFacts(undefined), []);
 });
