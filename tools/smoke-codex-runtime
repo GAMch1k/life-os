@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+# Codex runtime lifecycle acceptance on the isolated verification stack, with
+# the real authenticated Codex CLI (no simulator).
+#
+# Proves: normal execution records the runtime and the Codex session; a live
+# run has a sanitized environment; stopping the processor mid-run cancels the
+# run and hands the capture back (no orphaned attempt or process); a run that
+# exceeds its deadline is stopped with no leftover processes; a SIGKILL crash
+# before and after Codex reports its session is reconciled by the next
+# processor; and every capture ends with exactly one Task.
+set -euo pipefail
+
+export LIFE_OS_PROCESSOR_STALE_AFTER_SECONDS=90
+compose=(./tools/verify-compose)
+cleanup() { "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true; }
+trap cleanup EXIT
+
+"${compose[@]}" up --detach --no-build
+gateway=http://127.0.0.1:13001
+ready() { for _ in $(seq 1 90); do curl --fail --silent "$gateway/api/$1/ready" >/dev/null && return; sleep 1; done; echo "$1 is not ready" >&2; return 1; }
+for service in inbox tasks; do ready "$service"; done
+
+fail() { echo "FAIL: $*" >&2; exit 1; }
+capture() {
+  curl --fail --silent -H 'content-type: application/json' \
+    --data "$(jq -n --arg content "$1" '{content: $content, source: "web"}')" \
+    "$gateway/api/inbox/v1/inbox-items" | jq -r '.id'
+}
+item() { curl --fail --silent "$gateway/api/inbox/v1/inbox-items/$1"; }
+latest() { curl --fail --silent "$gateway/api/inbox/v1/inbox-items/$1/processing-attempts" | jq '.items[0] // {}'; }
+state_is() { [ "$(item "$1" | jq -r '.state')" = "$2" ]; }
+runtime_is() { [ "$(latest "$1" | jq -r '.runtimeState // empty')" = "$2" ]; }
+has_session() { [ "$(latest "$1" | jq -r '.runtimeSessionId // empty')" != "" ]; }
+tasks_titled() {
+  curl --fail --silent "$gateway/api/tasks/v1/tasks?query=$(jq -rn --arg q "$1" '$q|@uri')&limit=100" |
+    jq --arg t "$1" '[.items[] | select(.title | startswith($t))] | length'
+}
+wait_until() { # wait_until <seconds> <command...>
+  local deadline=$(($(date +%s) + $1))
+  shift
+  until "$@"; do
+    [ "$(date +%s)" -lt "$deadline" ] || { echo "timed out waiting for: $*" >&2; return 1; }
+    sleep 0.2
+  done
+}
+codex_runs() { "${compose[@]}" exec -T processor ps -o pid,args | grep -c '[c]odex exec' || true; }
+processor_status() { "${compose[@]}" exec -T processor wget -q -O - http://127.0.0.1:8081/status; }
+processor_up() { processor_status >/dev/null 2>&1; }
+restart_processor() { # restart_processor [ENV=value...]: recreate with settings
+  env "$@" "${compose[@]}" up --detach --no-deps --no-build --force-recreate processor >/dev/null 2>&1
+  wait_until 60 processor_up
+}
+
+echo "== 1. normal execution"
+title="P8 runtime normal $(date +%s)"
+id=$(capture "Create a task titled $title.")
+wait_until 180 state_is "$id" resolved
+attempt=$(latest "$id")
+jq -e '.runtimeState == "completed" and (.runtimeSessionId | length > 0) and (.runtimeOwner | length > 0)' <<<"$attempt" >/dev/null ||
+  fail "attempt runtime: $(jq -c '{runtimeState, runtimeSessionId, runtimeOwner}' <<<"$attempt")"
+[ "$(tasks_titled "$title")" = 1 ] || fail "expected one Task"
+echo "   completed; Codex session $(jq -r '.runtimeSessionId' <<<"$attempt") recorded; one Task"
+
+echo "== 2. a live run has a sanitized environment; stopping the processor cancels it"
+cancelled=""
+for try in 1 2 3; do
+  title="P8 runtime cancel $try $(date +%s)"
+  id=$(capture "Create a task titled $title.")
+  wait_until 60 runtime_is "$id" running
+  if [ "$try" = 1 ]; then
+    env_dump=$("${compose[@]}" exec -T processor sh -c 'for p in $(ps -o pid,args | grep "[c]odex exec" | awk "{print \$1}"); do tr "\0" "\n" < /proc/$p/environ; done' || true)
+    [ -n "$env_dump" ] || fail "no live Codex run to inspect"
+    grep -q '^CODEX_HOME=' <<<"$env_dump" || fail "CODEX_HOME missing from the run's environment"
+    ! grep -E '^(LIFE_OS_|MCP_SERVICE_URL|INBOX_SERVICE_URL|OPENAI_API_KEY)' <<<"$env_dump" >/dev/null || fail "the run inherited: $(grep -E '^(LIFE_OS_|MCP_|INBOX_|OPENAI)' <<<"$env_dump" | cut -d= -f1 | tr '\n' ' ')"
+    echo "   live run environment: $(cut -d= -f1 <<<"$env_dump" | sort | tr '\n' ' ')"
+  fi
+  "${compose[@]}" stop processor >/dev/null 2>&1
+  if runtime_is "$id" cancelled; then cancelled=$id; break; fi
+  echo "   try $try: the run finished before the stop; retrying"
+  "${compose[@]}" start processor >/dev/null 2>&1
+  wait_until 180 state_is "$id" resolved
+done
+[ -n "$cancelled" ] || fail "could not stop the processor during a run"
+attempt=$(latest "$cancelled")
+details=$(item "$cancelled")
+jq -e '.status == "retryable" and (.errorSummary | startswith("cancelled"))' <<<"$attempt" >/dev/null || fail "cancelled attempt: $(jq -c '{status, errorSummary}' <<<"$attempt")"
+[ "$(jq -r '.state + "/" + .retryReason' <<<"$details")" = raw/cancelled ] || fail "item after cancel: $(jq -c '{state, retryReason}' <<<"$details")"
+echo "   attempt cancelled and handed back (raw, reason cancelled), no open attempt left"
+"${compose[@]}" start processor >/dev/null 2>&1
+wait_until 180 state_is "$cancelled" resolved
+[ "$(tasks_titled "$title")" = 1 ] || fail "expected one Task after the cancelled run"
+echo "   processed after restart; one Task"
+
+echo "== 3. a run past its deadline is stopped with no leftover process"
+restart_processor LIFE_OS_CODEX_TIMEOUT_SECONDS=2
+title="P8 runtime timeout $(date +%s)"
+id=$(capture "Create a task titled $title.")
+wait_until 60 runtime_is "$id" timed_out
+details=$(item "$id")
+[ "$(jq -r '.retryReason' <<<"$details")" = backoff ] || fail "timeout retry: $(jq -c '{state, retryReason}' <<<"$details")"
+sleep 1
+[ "$(codex_runs)" = 0 ] || fail "a Codex process outlived the timed-out run"
+processor_status | jq -e '.runtime.timedOut >= 1 and .runtime.timeoutSeconds == 2' >/dev/null || fail "status does not report the timeout"
+echo "   timed out after 2 s, retry scheduled with backoff, no Codex process left"
+restart_processor
+wait_until 180 state_is "$id" resolved
+[ "$(tasks_titled "$title")" = 1 ] || fail "expected one Task after the timeout"
+echo "   processed with the default deadline; one Task"
+
+crash() { # crash <early|late>: SIGKILL the processor during a run
+  local window=$1 title id session=""
+  for try in 1 2 3; do
+    title="P8 runtime crash $window $try $(date +%s)"
+    id=$(capture "Create a task titled $title.")
+    if [ "$window" = early ]; then
+      wait_until 60 runtime_is "$id" running
+    else
+      wait_until 60 has_session "$id"
+    fi
+    "${compose[@]}" kill -s KILL processor >/dev/null 2>&1
+    session=$(latest "$id" | jq -r '.runtimeSessionId // empty')
+    if [ "$(item "$id" | jq -r '.state')" != processing ]; then
+      echo "   try $try: the run finished before the kill; retrying"
+    elif [ "$window" = early ] && [ -n "$session" ]; then
+      echo "   try $try: Codex reported its session before the kill; retrying for the spawn window"
+    else
+      break
+    fi
+    "${compose[@]}" start processor >/dev/null 2>&1
+    wait_until 240 state_is "$id" resolved
+    id=""
+  done
+  [ -n "$id" ] || fail "could not crash the processor in the $window window"
+  echo "   killed with the attempt $(latest "$id" | jq -r '.runtimeState') and session '${session:-none}'"
+  "${compose[@]}" start processor >/dev/null 2>&1
+  wait_until 300 state_is "$id" resolved
+  local history
+  history=$(curl --fail --silent "$gateway/api/inbox/v1/inbox-items/$id/processing-attempts")
+  jq -e '[.items[] | select(.status == "retryable" and (.errorSummary | startswith("recovered")))] | length == 1' <<<"$history" >/dev/null ||
+    fail "no reconciled attempt: $(jq -c '[.items[] | {status, errorSummary}]' <<<"$history")"
+  [ "$(tasks_titled "$title")" = 1 ] || fail "expected exactly one Task after the crash"
+  echo "   reconciled by the next processor and processed; one Task"
+}
+echo "== 4. SIGKILL before Codex reports its session (spawn window)"
+crash early
+echo "== 5. SIGKILL after Codex reported its session"
+crash late
+processor_status | jq -e '.runtime.recovered >= 1' >/dev/null || fail "status does not count the recovery"
+
+echo
+echo "codex runtime smoke passed"
