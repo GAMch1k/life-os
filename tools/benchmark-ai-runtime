@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Benchmark Codex runtime profiles on the real Inbox/Voice processing path.
 #
-#   tools/benchmark-ai-runtime gpt-6-luna/none gpt-6-luna/low gpt-5.6-terra/medium
+#   tools/benchmark-ai-runtime gpt-6-luna/none gpt-6-luna/low gpt-5.6-luna/medium
 #
 # For each profile (model/effort) a fresh disposable verification stack runs
 # with that profile, seeds Tasks, submits the same captures (EN/RU/DE text

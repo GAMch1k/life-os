@@ -96,6 +96,8 @@ A usage limit cannot be triggered on demand, so `tools/fixtures/codex-limit-simu
 
 ## Codex runtime
 
+The routine planning profile is `gpt-5.6-luna` with reasoning effort `medium` (`LIFE_OS_CODEX_MODEL`, `LIFE_OS_CODEX_REASONING_EFFORT`), chosen by the [AI runtime benchmark](../verification/ai-runtime-benchmark.md). The effort is passed to Codex as `-c model_reasoning_effort=…`; empty keeps the Codex configuration's default. Attempts record the profile as `model/effort`, and `/status` reports the effort and the token usage Codex reports per run.
+
 Codex is the processor's agent runtime. It runs as a managed subprocess of the machine's existing ChatGPT sign-in, with no API key (`internal/processor/codex.go`). Every planning run gets:
 
 - **Binary.** `LIFE_OS_CODEX_COMMAND` is resolved once at startup. A missing CLI stops the processor with exit code 78.
