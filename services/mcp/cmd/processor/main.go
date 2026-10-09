@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -49,6 +50,7 @@ func main() {
 	if *serve {
 		monitor := processor.NewMonitor(cfg.Model)
 		runner.Planner = monitor.Monitored(planner)
+		runner.Retry = processor.RetryPolicy{RecoveryAt: usageRecovery(planner, monitor)}
 		if *dryRun {
 			fmt.Fprintln(os.Stderr, "--serve and --dry-run cannot be used together")
 			os.Exit(2)
@@ -79,5 +81,29 @@ func main() {
 	}
 	if *dryRun {
 		_ = json.NewEncoder(os.Stdout).Encode(proposals)
+	}
+}
+
+// usageRecovery reads when the exhausted Codex usage limit resets, straight
+// from the Codex CLI. A result is reused for a minute so a batch of failing
+// items does not start an app-server each.
+func usageRecovery(planner processor.CodexCLI, monitor *processor.Monitor) func(context.Context) (time.Time, bool) {
+	var mu sync.Mutex
+	var checked time.Time
+	var at time.Time
+	var ok bool
+	return func(ctx context.Context) (time.Time, bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		if time.Since(checked) > time.Minute {
+			usage, err := planner.Usage(ctx)
+			monitor.RecordUsage(usage, err)
+			checked = time.Now()
+			at, ok = time.Time{}, false
+			if err == nil {
+				at, ok = usage.UsageRecovery()
+			}
+		}
+		return at, ok
 	}
 }

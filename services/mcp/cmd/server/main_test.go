@@ -87,3 +87,14 @@ func TestUnnamedMCPCallerIsAnAgent(t *testing.T) {
 		t.Fatalf("trace = %+v", trace)
 	}
 }
+
+func TestAttemptUpdateForwardsTheRetrySchedule(t *testing.T) {
+	plain := attemptUpdate(inboxAction{Status: "processed"})
+	if _, ok := plain["nextRetryAt"]; ok {
+		t.Fatalf("plain update = %#v", plain)
+	}
+	retry := attemptUpdate(inboxAction{Status: "retryable", NextRetryAt: "2026-10-09T23:00:00Z", RetryReason: "usage_limited"})
+	if retry["nextRetryAt"] != "2026-10-09T23:00:00Z" || retry["retryReason"] != "usage_limited" {
+		t.Fatalf("retry update = %#v", retry)
+	}
+}
