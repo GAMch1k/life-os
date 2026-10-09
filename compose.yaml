@@ -261,7 +261,8 @@ services:
       mcp: {condition: service_started}
       voice: {condition: service_started}
       activity: {condition: service_started}
-    networks: [backend]
+    # edge: the only network the Cloudflare connector shares with Life OS.
+    networks: [backend, edge]
     restart: unless-stopped
 
   # Opt-in Cloudflare Tunnel (COMPOSE_PROFILES=cloudflare). An outbound-only
@@ -277,7 +278,8 @@ services:
       TUNNEL_TOKEN: ${LIFE_OS_CLOUDFLARE_TUNNEL_TOKEN:-}
     depends_on:
       gateway: {condition: service_started}
-    networks: [backend]
+    # Only the gateway is reachable from here; services stay on backend.
+    networks: [edge]
     restart: unless-stopped
     read_only: true
     tmpfs: [/tmp]
@@ -294,6 +296,15 @@ networks:
   backend:
     name: lifeos-backend
     driver: bridge
+  # The Cloudflare connector and the gateway only. The fixed subnet lets the
+  # gateway trust Cloudflare's client-address header from this network alone
+  # (infra/nginx/life-os.conf).
+  edge:
+    name: lifeos-edge
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.255.249.0/29
 
 volumes:
   postgres-data:

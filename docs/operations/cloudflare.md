@@ -12,7 +12,7 @@ flowchart LR
 
 ## The tunnel (deployment path)
 
-- **Connector.** The `cloudflared` service in `compose.yaml` runs `cloudflare/cloudflared:2026.10.0`. It is on the private `backend` network only, publishes no port, runs as a non-root user with a read-only filesystem and no capabilities, and does not auto-update (bump the pinned image deliberately). Its health check is `cloudflared tunnel ready` against its local metrics endpoint (`127.0.0.1:20241`, inside the container only).
+- **Connector.** The `cloudflared` service in `compose.yaml` runs `cloudflare/cloudflared:2026.10.0`. It is on the dedicated `edge` network only (see [Origin trust](#origin-trust-and-access-paths)), publishes no port, runs as a non-root user with a read-only filesystem and no capabilities, and does not auto-update (bump the pinned image deliberately). Its health check is `cloudflared tunnel ready` against its local metrics endpoint (`127.0.0.1:20241`, inside the container only).
 - **Opt-in.** The service belongs to the `cloudflare` Compose profile, so a stack without a tunnel token never starts it. To run it with the normal stack, set `COMPOSE_PROFILES=cloudflare` in `.env`, as the deployment does. It then starts with `make life-up` and every `docker compose up`. To start it once, use `docker compose --profile cloudflare up -d cloudflared`.
 - **Never in the verification stack.** `tools/verify-compose` clears `COMPOSE_PROFILES` and refuses any plan that contains `cloudflared`. The disposable stack reads the same `.env`, and a second connector holding the real tunnel token would receive production traffic.
 - **Token.** The tunnel is managed remotely in the Cloudflare Zero Trust dashboard, and the connector authenticates with the tunnel token in `LIFE_OS_CLOUDFLARE_TUNNEL_TOKEN` in the ignored `.env`. The token is a credential: anyone holding it can run a connector for this tunnel. Never commit it or paste it into tickets or chat.
@@ -24,6 +24,23 @@ The WireGuard-bound gateway port (`LIFE_OS_GATEWAY_BIND_ADDRESS`) is unchanged a
 ## Security ordering
 
 The Access application for the hostname must exist before the connector serves traffic. A tunnel route without a running connector returns a Cloudflare error, never Life OS. So the connector is started only after anonymous requests to the hostname are confirmed to be redirected to the Cloudflare login. See [Cloudflare Access](#cloudflare-access) below.
+
+## Origin trust and access paths
+
+The public path is designed so that Cloudflare Access cannot be bypassed:
+
+- **The connector reaches only the gateway.** `cloudflared` sits on the `edge` network (`10.255.249.0/29`), which it shares with the gateway and nothing else. A tunnel route pointing anywhere but `gateway:80`, for example `tasks:8080`, cannot reach a service; from that network every service, Postgres, MCP, and the Dashboard are unreachable. `tools/check-ingress` enforces the membership.
+- **No public origin.** The gateway publishes only on the WireGuard address (`10.66.66.1:3001`, IPv4). The server's public IP refuses that port. The pre-existing host Nginx (`:80`/`:443`, other applications) has no route to Life OS, and `lifeos.gamch1k.com` resolves to Cloudflare, not to this server.
+- **Cloudflare headers are trusted from the edge network only.** For requests from `10.255.249.0/29`, the gateway takes the visitor's address from `CF-Connecting-IP`; rate limits and logs then see the real client. It also reports `https` as `X-Forwarded-Proto`. From WireGuard or anywhere else, the header is ignored, so a spoofed value has no effect. The gateway never forwards `CF-Connecting-IP`, `Cf-Access-Jwt-Assertion`, or `Cf-Access-Authenticated-User-Email` to services: none of them authenticates with Cloudflare, so nothing can trust a forged copy.
+- **Protect with Access** (recommended). When it is enabled on the tunnel route, the connector also validates the Access token (the application's AUD) before forwarding. A route to this tunnel without Access is then rejected, even one added by mistake.
+
+Intended paths:
+
+| Path | Address | Authentication |
+| --- | --- | --- |
+| Public | `https://lifeos.gamch1k.com` → Access → Tunnel → `gateway:80` | Cloudflare Access (email PIN, group `Life OS users`) |
+| Private fallback | `http://10.66.66.1:3001` from WireGuard peers | WireGuard peer trust; no Life OS login (unchanged model) |
+| Maintenance | On the host: `docker compose …`, or `curl http://10.66.66.1:3001` (the host is on the WireGuard network) | Host access |
 
 ## Cloudflare Access
 
