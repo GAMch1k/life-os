@@ -1,9 +1,11 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"path/filepath"
 	"time"
 
@@ -24,12 +26,60 @@ type Handler struct {
 	retention      time.Duration
 	maxUploadBytes int64
 	activity       *activity.Emitter
+	// whisperReady probes the transcription dependency for status surfaces.
+	whisperReady func(context.Context) bool
 }
 
 var _ generated.ServerInterface = (*Handler)(nil)
 
-func NewHandler(queries *store.Queries, files storage.Files, retention time.Duration, maxUploadBytes int64, emitter *activity.Emitter) *Handler {
-	return &Handler{queries: queries, files: files, retention: retention, maxUploadBytes: maxUploadBytes, activity: emitter}
+func NewHandler(queries *store.Queries, files storage.Files, retention time.Duration, maxUploadBytes int64, emitter *activity.Emitter, whisperURL string) *Handler {
+	return &Handler{queries: queries, files: files, retention: retention, maxUploadBytes: maxUploadBytes, activity: emitter, whisperReady: readinessProbe(whisperURL)}
+}
+
+// readinessProbe reports whether a dependency answers its /ready endpoint
+// within a short timeout.
+func readinessProbe(baseURL string) func(context.Context) bool {
+	client := &http.Client{Timeout: 2 * time.Second}
+	return func(ctx context.Context) bool {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/ready", nil)
+		if err != nil {
+			return false
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			return false
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode/100 == 2
+	}
+}
+
+// GetAudioBacklog reports unfinished transcription work from durable job state
+// and whether the Whisper dependency is ready.
+func (h *Handler) GetAudioBacklog(c fiber.Ctx) error {
+	backlog, err := h.queries.GetAudioBacklog(c.Context())
+	if err != nil {
+		return internal(err)
+	}
+	out := generated.AudioBacklog{
+		QueuedCount:     int(backlog.QueuedCount),
+		ProcessingCount: int(backlog.ProcessingCount),
+		RetryableCount:  int(backlog.RetryableCount),
+		OldestWaitingAt: timePtr(backlog.OldestWaitingAt),
+		NextRetryAt:     timePtr(backlog.NextRetryAt),
+		// A worker that holds an expired lease, or leaves due work untouched
+		// while nothing is processing, is not making progress.
+		WorkerStalled: backlog.ExpiredLeaseCount > 0 || (backlog.OverdueCount > 0 && backlog.ProcessingCount == 0),
+		WhisperReady:  h.whisperReady(c.Context()),
+	}
+	failure, err := h.queries.GetLatestAudioFailure(c.Context())
+	switch {
+	case err == nil:
+		out.LastFailureAt, out.LastFailureSummary = timePtr(failure.UpdatedAt), failure.ErrorSummary
+	case !errors.Is(err, pgx.ErrNoRows):
+		return internal(err)
+	}
+	return c.JSON(out)
 }
 
 func (h *Handler) CreateAudioJob(c fiber.Ctx) error {

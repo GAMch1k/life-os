@@ -42,3 +42,17 @@ WHERE expires_at <= now() AND status <> 'expired'
 ORDER BY expires_at LIMIT $1;
 -- name: ExpireAudioJob :one
 UPDATE audio_jobs SET status='expired', transcript=NULL, updated_at=now() WHERE id=$1 RETURNING *;
+-- name: GetAudioBacklog :one
+SELECT
+  count(*) FILTER (WHERE status = 'queued')::int AS queued_count,
+  count(*) FILTER (WHERE status = 'processing')::int AS processing_count,
+  count(*) FILTER (WHERE status = 'retryable')::int AS retryable_count,
+  count(*) FILTER (WHERE status = 'processing' AND lease_expires_at < now())::int AS expired_lease_count,
+  count(*) FILTER (WHERE status IN ('queued','retryable') AND available_at < now() - INTERVAL '2 minutes')::int AS overdue_count,
+  (min(created_at))::timestamptz AS oldest_waiting_at,
+  (min(available_at) FILTER (WHERE status = 'retryable'))::timestamptz AS next_retry_at
+FROM audio_jobs WHERE status IN ('queued','processing','retryable');
+-- name: GetLatestAudioFailure :one
+SELECT error_summary, updated_at FROM audio_jobs
+WHERE status IN ('retryable','failed') AND error_summary IS NOT NULL
+ORDER BY updated_at DESC LIMIT 1;
