@@ -6,6 +6,10 @@ If a page fails, test the gateway (`curl http://127.0.0.1:3000/` by default), th
 
 Life OS supports loopback gateway behind host Nginx TLS/Basic Auth, or a WireGuard-bound gateway. The deployed WireGuard model trusts every allowed peer to call Dashboard, write APIs, and MCP without an application login; never expose it publicly or claim host-Nginx protection for it. Host Nginx, WireGuard peers, firewall, and DNS remain host-administration tasks and are never changed by repository commands. Gateway baseline limits, headers, proxy timeouts, and forwarded-header sanitisation are versioned here. Dashboard is same-origin; cookie/session auth needs Origin/CSRF protection before it is introduced. Automated backup/restore is not implemented: operators must use an external PostgreSQL process and test restores independently until a supported workflow exists.
 
+## Adding the Activity service to an existing deployment
+
+`activity_db` is provisioned automatically only on a fresh PostgreSQL volume. On an existing host, add `LIFE_OS_ACTIVITY_DB_PASSWORD` to `.env` and run `make db-provision` once (idempotent). Then start the stack so `activity-migrate` and `activity` come up before the gateway. Until Activity is reachable, services keep working and only skip recording events.
+
 ## Safe verification on a deployed host
 
 Do not use raw `docker compose down --volumes` with the normal deployment to

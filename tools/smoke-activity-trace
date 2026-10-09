@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# Activity trace acceptance on the isolated verification stack.
+#
+# A spoken request travels the normal runtime path:
+#   Voice upload → whisper.cpp → Inbox → automatic processor → Codex CLI → MCP
+#   → Tasks
+# and the resulting Task is later completed by the user through the Tasks API.
+# The smoke then reconstructs that workflow from the Activity API alone:
+# correlation (one workflow), causation (what caused what), and subject (later
+# changes to the same Task in a different workflow).
+#
+# Requirements: the authenticated Codex CLI configured for the processor (see
+# docs/services/mcp.md), and Docker access to build a speech fixture with
+# espeak-ng in a throwaway Alpine container.
+set -euo pipefail
+
+compose=(./tools/verify-compose)
+work=$(mktemp -d)
+cleanup() {
+  "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
+  rm -rf "$work"
+}
+trap cleanup EXIT
+
+phrase="Create a task titled water the plants."
+docker run --rm -v "$work:/out" alpine:3.22 sh -c \
+  "apk add --no-cache espeak-ng >/dev/null && espeak-ng -s 140 -w /out/speech.wav '$phrase' && chmod 644 /out/speech.wav"
+
+"${compose[@]}" up --detach --no-build
+gateway=http://127.0.0.1:13001
+for service in activity voice inbox tasks; do
+  for _ in $(seq 1 60); do curl --fail --silent "$gateway/api/$service/ready" >/dev/null && break; sleep 1; done
+  curl --fail --silent "$gateway/api/$service/ready" >/dev/null
+done
+
+# Recording is internal to the private network; the gateway is read-only.
+status=$(curl --silent --output /dev/null --write-out '%{http_code}' -H 'content-type: application/json' --data '{}' "$gateway/api/activity/v1/activity-events")
+[ "$status" = 403 ] || { echo "gateway accepted an activity write: $status" >&2; exit 1; }
+
+job=$(curl --fail --silent -F "audio=@$work/speech.wav;type=audio/wav" -F source=web "$gateway/api/voice/v1/audio-jobs" | jq -r '.id')
+echo "voice job: $job"
+for _ in $(seq 1 120); do
+  voice=$(curl --fail --silent "$gateway/api/voice/v1/audio-jobs/$job")
+  [ "$(jq -r '.status' <<<"$voice")" = succeeded ] && break
+  sleep 2
+done
+jq -e '.status == "succeeded"' <<<"$voice" >/dev/null
+item=$(jq -r '.inboxItemId' <<<"$voice")
+echo "transcript: $(jq -r '.transcript' <<<"$voice")"
+for _ in $(seq 1 150); do
+  state=$(curl --fail --silent "$gateway/api/inbox/v1/inbox-items/$item" | jq -r '.state')
+  [ "$state" = resolved ] && break
+  sleep 2
+done
+[ "$state" = resolved ] || { echo "Inbox item $item ended in $state" >&2; curl --silent "$gateway/api/activity/v1/activity-events?correlationId=$job&limit=100" | jq -r '.items | reverse[] | "\(.type)\t\(.summary)"' >&2; exit 1; }
+
+trace=$(curl --fail --silent "$gateway/api/activity/v1/activity-events?correlationId=$job&limit=100" | jq '.items | reverse')
+id_of() { jq -r --arg type "$1" 'map(select(.type == $type)) | first | .id // empty' <<<"$trace"; }
+caused_by() { # caused_by <type> <causing type>
+  local event cause
+  event=$(jq -c --arg type "$1" 'map(select(.type == $type)) | first' <<<"$trace")
+  cause=$(id_of "$2")
+  [ -n "$cause" ] && jq -e --arg cause "$cause" '.causationId == $cause' <<<"$event" >/dev/null || {
+    echo "$1 is not caused by $2" >&2
+    exit 1
+  }
+}
+caused_by voice.job.transcribed voice.job.accepted
+caused_by inbox.item.captured voice.job.transcribed
+caused_by inbox.processing.started inbox.item.captured
+caused_by mcp.action.requested inbox.processing.started
+caused_by task.created mcp.action.requested
+caused_by mcp.action.completed mcp.action.requested
+caused_by inbox.processing.completed inbox.processing.started
+caused_by inbox.item.resolved inbox.processing.completed
+jq -e 'map(select(.type == "mcp.action.requested")) | first | .data.tool == "task_create" and .actor == {kind: "agent", name: "codex-inbox-processor"}' <<<"$trace" >/dev/null
+task=$(jq -r 'map(select(.type == "task.created")) | first | .subject.id' <<<"$trace")
+curl --fail --silent "$gateway/api/tasks/v1/tasks/$task" | jq -e '.completed == false' >/dev/null
+
+# Later, the user completes the Task (the same Tasks operation the Dashboard
+# uses). That is a new workflow linked to the first through its subject.
+curl --fail --silent -X POST "$gateway/api/tasks/v1/tasks/$task/complete" >/dev/null
+history=$(curl --fail --silent "$gateway/api/activity/v1/activity-events?subjectType=task&subjectId=$task&limit=100" | jq '.items | reverse')
+jq -e --arg job "$job" '
+  map(.type) == ["task.created", "task.completed"]
+  and .[0].correlationId == $job
+  and .[1].correlationId != $job
+  and .[1].actor.kind == "user"
+  and .[1].outcome == "succeeded"' <<<"$history" >/dev/null
+
+echo
+jq -r '.[] | "\(.occurredAt)\t\(.source)\t\(.type)\t\(.actor.kind)\(if .actor.name then ":" + .actor.name else "" end)\t\(.summary)"' <<<"$trace" | column -t -s $'\t'
+jq -r '.[1] | "\(.occurredAt)\t\(.source)\t\(.type)\t\(.actor.kind)\t\(.summary)  [later, separate workflow]"' <<<"$history" | column -t -s $'\t'
+echo
+echo "activity trace smoke passed: voice job $job → task $task"

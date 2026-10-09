@@ -9,6 +9,7 @@ Internal service paths begin `/v1`; external/browser paths prepend the gateway b
 | Inbox (`/api/inbox`) | `GET/POST /v1/inbox-items`, `GET /v1/inbox-items/{id}`, `POST /resolve`, `POST /discard` |
 | Calendar (`/api/calendar`) | `GET/POST /v1/events`, `GET/PATCH/DELETE /v1/events/{id}` |
 | Voice (`/api/voice`) | `POST /v1/audio-jobs` (multipart audio, returns 202), `GET /v1/audio-jobs/{id}` |
+| Activity (`/api/activity`, read-only) | `GET /v1/activity-events` (filters: `correlationId`, `subjectType`/`subjectId`, `type`, `source`, `outcome`, `from`/`to`), `GET /v1/activity-events/{id}`; recording is internal only — see [Activity](../services/activity.md) |
 | MCP (`/api/mcp`) | Streamable HTTP endpoint at `/mcp`; health and readiness probes |
 
 Examples:
