@@ -26,17 +26,21 @@ type InboxItem struct {
 }
 
 type InboxProcessingAttempt struct {
-	ID             pgtype.UUID
-	InboxItemID    pgtype.UUID
-	IdempotencyKey string
-	Status         string
-	AgentName      string
-	ModelProfile   string
-	Actions        []byte
-	ErrorSummary   *string
-	StartedAt      pgtype.Timestamptz
-	CompletedAt    pgtype.Timestamptz
-	CreatedAt      pgtype.Timestamptz
-	UpdatedAt      pgtype.Timestamptz
-	NextRetryAt    pgtype.Timestamptz
+	ID                 pgtype.UUID
+	InboxItemID        pgtype.UUID
+	IdempotencyKey     string
+	Status             string
+	AgentName          string
+	ModelProfile       string
+	Actions            []byte
+	ErrorSummary       *string
+	StartedAt          pgtype.Timestamptz
+	CompletedAt        pgtype.Timestamptz
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+	NextRetryAt        pgtype.Timestamptz
+	RuntimeState       *string
+	RuntimeOwner       *string
+	RuntimeSessionID   *string
+	RuntimeHeartbeatAt pgtype.Timestamptz
 }

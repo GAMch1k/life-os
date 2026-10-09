@@ -56,3 +56,19 @@ JOIN inbox_processing_attempts a ON a.inbox_item_id = i.id
 WHERE i.state IN ('raw', 'processing', 'failed') AND a.status IN ('retryable', 'failed')
 ORDER BY a.updated_at DESC
 LIMIT 1;
+
+-- name: RecordAttemptRuntime :one
+UPDATE inbox_processing_attempts
+SET runtime_state = sqlc.arg(runtime_state), runtime_owner = sqlc.arg(runtime_owner),
+    runtime_session_id = COALESCE(sqlc.narg(runtime_session_id), runtime_session_id),
+    runtime_heartbeat_at = now(), updated_at = now()
+WHERE id = sqlc.arg(id) AND inbox_item_id = sqlc.arg(inbox_item_id) AND status IN ('pending', 'processing')
+RETURNING *;
+
+-- name: ListStaleProcessingAttempts :many
+-- Unfinished attempts whose runtime stopped reporting (or never did).
+SELECT * FROM inbox_processing_attempts
+WHERE status IN ('pending', 'processing')
+  AND COALESCE(runtime_heartbeat_at, updated_at) < now() - make_interval(secs => sqlc.arg(stale_after_seconds)::int)
+ORDER BY created_at
+LIMIT 50;

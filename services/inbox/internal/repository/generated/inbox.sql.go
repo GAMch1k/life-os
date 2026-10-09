@@ -56,7 +56,7 @@ func (q *Queries) CreateInboxItem(ctx context.Context, arg CreateInboxItemParams
 }
 
 const createProcessingAttempt = `-- name: CreateProcessingAttempt :one
-INSERT INTO inbox_processing_attempts (inbox_item_id, idempotency_key, status, agent_name, model_profile, actions) VALUES ($1,$2,'pending',$3,$4,$5) RETURNING id, inbox_item_id, idempotency_key, status, agent_name, model_profile, actions, error_summary, started_at, completed_at, created_at, updated_at, next_retry_at
+INSERT INTO inbox_processing_attempts (inbox_item_id, idempotency_key, status, agent_name, model_profile, actions) VALUES ($1,$2,'pending',$3,$4,$5) RETURNING id, inbox_item_id, idempotency_key, status, agent_name, model_profile, actions, error_summary, started_at, completed_at, created_at, updated_at, next_retry_at, runtime_state, runtime_owner, runtime_session_id, runtime_heartbeat_at
 `
 
 type CreateProcessingAttemptParams struct {
@@ -90,6 +90,10 @@ func (q *Queries) CreateProcessingAttempt(ctx context.Context, arg CreateProcess
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.NextRetryAt,
+		&i.RuntimeState,
+		&i.RuntimeOwner,
+		&i.RuntimeSessionID,
+		&i.RuntimeHeartbeatAt,
 	)
 	return i, err
 }
@@ -184,7 +188,7 @@ func (q *Queries) GetLatestPendingFailure(ctx context.Context) (GetLatestPending
 }
 
 const getProcessingAttemptForItem = `-- name: GetProcessingAttemptForItem :one
-SELECT id, inbox_item_id, idempotency_key, status, agent_name, model_profile, actions, error_summary, started_at, completed_at, created_at, updated_at, next_retry_at FROM inbox_processing_attempts WHERE id = $1 AND inbox_item_id = $2
+SELECT id, inbox_item_id, idempotency_key, status, agent_name, model_profile, actions, error_summary, started_at, completed_at, created_at, updated_at, next_retry_at, runtime_state, runtime_owner, runtime_session_id, runtime_heartbeat_at FROM inbox_processing_attempts WHERE id = $1 AND inbox_item_id = $2
 `
 
 type GetProcessingAttemptForItemParams struct {
@@ -209,6 +213,10 @@ func (q *Queries) GetProcessingAttemptForItem(ctx context.Context, arg GetProces
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.NextRetryAt,
+		&i.RuntimeState,
+		&i.RuntimeOwner,
+		&i.RuntimeSessionID,
+		&i.RuntimeHeartbeatAt,
 	)
 	return i, err
 }
@@ -270,7 +278,7 @@ func (q *Queries) ListInboxItems(ctx context.Context, arg ListInboxItemsParams) 
 }
 
 const listProcessingAttempts = `-- name: ListProcessingAttempts :many
-SELECT id, inbox_item_id, idempotency_key, status, agent_name, model_profile, actions, error_summary, started_at, completed_at, created_at, updated_at, next_retry_at FROM inbox_processing_attempts WHERE inbox_item_id = $1 ORDER BY created_at DESC
+SELECT id, inbox_item_id, idempotency_key, status, agent_name, model_profile, actions, error_summary, started_at, completed_at, created_at, updated_at, next_retry_at, runtime_state, runtime_owner, runtime_session_id, runtime_heartbeat_at FROM inbox_processing_attempts WHERE inbox_item_id = $1 ORDER BY created_at DESC
 `
 
 func (q *Queries) ListProcessingAttempts(ctx context.Context, inboxItemID pgtype.UUID) ([]InboxProcessingAttempt, error) {
@@ -296,6 +304,10 @@ func (q *Queries) ListProcessingAttempts(ctx context.Context, inboxItemID pgtype
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.NextRetryAt,
+			&i.RuntimeState,
+			&i.RuntimeOwner,
+			&i.RuntimeSessionID,
+			&i.RuntimeHeartbeatAt,
 		); err != nil {
 			return nil, err
 		}
@@ -305,6 +317,101 @@ func (q *Queries) ListProcessingAttempts(ctx context.Context, inboxItemID pgtype
 		return nil, err
 	}
 	return items, nil
+}
+
+const listStaleProcessingAttempts = `-- name: ListStaleProcessingAttempts :many
+SELECT id, inbox_item_id, idempotency_key, status, agent_name, model_profile, actions, error_summary, started_at, completed_at, created_at, updated_at, next_retry_at, runtime_state, runtime_owner, runtime_session_id, runtime_heartbeat_at FROM inbox_processing_attempts
+WHERE status IN ('pending', 'processing')
+  AND COALESCE(runtime_heartbeat_at, updated_at) < now() - make_interval(secs => $1::int)
+ORDER BY created_at
+LIMIT 50
+`
+
+// Unfinished attempts whose runtime stopped reporting (or never did).
+func (q *Queries) ListStaleProcessingAttempts(ctx context.Context, staleAfterSeconds int32) ([]InboxProcessingAttempt, error) {
+	rows, err := q.db.Query(ctx, listStaleProcessingAttempts, staleAfterSeconds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []InboxProcessingAttempt{}
+	for rows.Next() {
+		var i InboxProcessingAttempt
+		if err := rows.Scan(
+			&i.ID,
+			&i.InboxItemID,
+			&i.IdempotencyKey,
+			&i.Status,
+			&i.AgentName,
+			&i.ModelProfile,
+			&i.Actions,
+			&i.ErrorSummary,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.NextRetryAt,
+			&i.RuntimeState,
+			&i.RuntimeOwner,
+			&i.RuntimeSessionID,
+			&i.RuntimeHeartbeatAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const recordAttemptRuntime = `-- name: RecordAttemptRuntime :one
+UPDATE inbox_processing_attempts
+SET runtime_state = $1, runtime_owner = $2,
+    runtime_session_id = COALESCE($3, runtime_session_id),
+    runtime_heartbeat_at = now(), updated_at = now()
+WHERE id = $4 AND inbox_item_id = $5 AND status IN ('pending', 'processing')
+RETURNING id, inbox_item_id, idempotency_key, status, agent_name, model_profile, actions, error_summary, started_at, completed_at, created_at, updated_at, next_retry_at, runtime_state, runtime_owner, runtime_session_id, runtime_heartbeat_at
+`
+
+type RecordAttemptRuntimeParams struct {
+	RuntimeState     *string
+	RuntimeOwner     *string
+	RuntimeSessionID *string
+	ID               pgtype.UUID
+	InboxItemID      pgtype.UUID
+}
+
+func (q *Queries) RecordAttemptRuntime(ctx context.Context, arg RecordAttemptRuntimeParams) (InboxProcessingAttempt, error) {
+	row := q.db.QueryRow(ctx, recordAttemptRuntime,
+		arg.RuntimeState,
+		arg.RuntimeOwner,
+		arg.RuntimeSessionID,
+		arg.ID,
+		arg.InboxItemID,
+	)
+	var i InboxProcessingAttempt
+	err := row.Scan(
+		&i.ID,
+		&i.InboxItemID,
+		&i.IdempotencyKey,
+		&i.Status,
+		&i.AgentName,
+		&i.ModelProfile,
+		&i.Actions,
+		&i.ErrorSummary,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.NextRetryAt,
+		&i.RuntimeState,
+		&i.RuntimeOwner,
+		&i.RuntimeSessionID,
+		&i.RuntimeHeartbeatAt,
+	)
+	return i, err
 }
 
 const resolveInboxItemHumanReview = `-- name: ResolveInboxItemHumanReview :one
@@ -438,7 +545,7 @@ UPDATE inbox_processing_attempts SET status=$1, actions=$2, error_summary=$3, ne
   started_at=CASE WHEN $1='processing' THEN now() ELSE started_at END,
   completed_at=CASE WHEN $1 IN ('human_review','processed','failed','retryable') THEN now() ELSE completed_at END,
   updated_at=now()
-WHERE id=$5 RETURNING id, inbox_item_id, idempotency_key, status, agent_name, model_profile, actions, error_summary, started_at, completed_at, created_at, updated_at, next_retry_at
+WHERE id=$5 RETURNING id, inbox_item_id, idempotency_key, status, agent_name, model_profile, actions, error_summary, started_at, completed_at, created_at, updated_at, next_retry_at, runtime_state, runtime_owner, runtime_session_id, runtime_heartbeat_at
 `
 
 type UpdateProcessingAttemptParams struct {
@@ -472,6 +579,10 @@ func (q *Queries) UpdateProcessingAttempt(ctx context.Context, arg UpdateProcess
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.NextRetryAt,
+		&i.RuntimeState,
+		&i.RuntimeOwner,
+		&i.RuntimeSessionID,
+		&i.RuntimeHeartbeatAt,
 	)
 	return i, err
 }

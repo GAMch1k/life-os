@@ -2,60 +2,14 @@ package repository_test
 
 import (
 	"context"
-	"fmt"
-	"os"
-	"path/filepath"
 	"testing"
-	"time"
-
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	store "github.com/GAMch1k/life-os/services/inbox/internal/repository/generated"
 )
 
 func TestInboxPersistenceLifecycle(t *testing.T) {
-	url := os.Getenv("INBOX_TEST_DATABASE_URL")
-	if url == "" {
-		t.Skip("INBOX_TEST_DATABASE_URL is not set")
-	}
+	queries, _ := migratedQueries(t)
 	ctx := context.Background()
-	schema := fmt.Sprintf("inbox_test_%d", time.Now().UnixNano())
-	config, err := pgxpool.ParseConfig(url)
-	if err != nil {
-		t.Fatal(err)
-	}
-	config.ConnConfig.RuntimeParams["search_path"] = schema
-	pool, err := pgxpool.NewWithConfig(ctx, config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(pool.Close)
-	if _, err := pool.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DROP SCHEMA "+schema+" CASCADE") })
-	migration, err := os.ReadFile(filepath.Join("..", "..", "db", "migrations", "000002_inbox_items.up.sql"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, string(migration)); err != nil {
-		t.Fatal(err)
-	}
-	attemptMigration, err := os.ReadFile(filepath.Join("..", "..", "db", "migrations", "000003_processing_attempts.up.sql"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, string(attemptMigration)); err != nil {
-		t.Fatal(err)
-	}
-	dedupeMigration, err := os.ReadFile(filepath.Join("..", "..", "db", "migrations", "000004_inbox_dedupe.up.sql"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, string(dedupeMigration)); err != nil {
-		t.Fatal(err)
-	}
-	queries := store.New(pool)
 	created, err := queries.CreateInboxItem(ctx, store.CreateInboxItemParams{Content: "remember milk", Source: "manual", SourceMetadata: []byte(`{"screen":"dashboard"}`), MediaReferences: []byte(`[]`)})
 	if err != nil {
 		t.Fatal(err)
