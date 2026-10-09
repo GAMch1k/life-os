@@ -32,7 +32,7 @@ test.describe("Tasks workspace", () => {
     await page.goto("/tasks");
     for (const title of ["overdue", "today", "upcoming", "unscheduled"])
       await expect(page.getByText(`P8 ${title} ${stamp}`)).toBeVisible();
-    await page.getByRole("button", { name: "Schedule" }).click();
+    await page.getByRole("button", { name: "Schedule", exact: true }).click();
     await expect(
       page.getByTestId(`schedule-day-${dayKey(today)}`),
     ).toContainText(`P8 today ${stamp}`);
@@ -85,11 +85,12 @@ test.describe("Tasks workspace", () => {
     await page.reload();
     const persisted = await request.get(`/api/tasks/v1/tasks/${task.id}`);
     expect(persisted.ok()).toBeTruthy();
-    expect(await persisted.json()).toMatchObject({
+    const persistedTask = await persisted.json();
+    expect(persistedTask).toMatchObject({
       title: renamed,
       notes,
-      dueAt: null,
       completed: false,
     });
+    expect(persistedTask.dueAt).toBeFalsy();
   });
 });

@@ -2,7 +2,7 @@
 
 The Dashboard is a Next.js App Router/TypeScript application using Tailwind and shadcn/ui. It provides the overview and routed Finance, Tasks, Inbox, and Calendar pages. It consumes generated TypeScript OpenAPI types under `src/lib/api/generated`, not hand-written transport copies.
 
-`/tasks` is the Tasks control workspace. Its List view groups open work into Overdue, Today, Upcoming, and Unscheduled / No date; an undated Task remains visible rather than being assigned a made-up deadline. The compact date navigator controls its date focus, while Schedule is a day/week projection of dated Tasks only. This projection does not turn Tasks into Calendar Events; unscheduled work remains in List.
+`/tasks` is the Tasks control workspace. Its List view groups open work into Overdue, Today, Upcoming, and Unscheduled / No date; an undated Task remains visible rather than being assigned a made-up deadline. The compact date navigator controls its date focus, while Schedule is a day/week projection of dated Tasks only. This projection does not turn Tasks into Calendar Events; unscheduled work remains in List. A Task can be edited in place, rescheduled, returned to Unscheduled, completed, and reopened using the Tasks API; all mutations survive reload.
 
 Browser requests use `/api/finance`, `/api/tasks`, `/api/inbox`, `/api/calendar`, and `/api/voice` relative to the current origin. Server-side rendering uses Docker service DNS internally. Loading/error handling is page-scoped so an unavailable service does not require exposing direct service ports.
 
