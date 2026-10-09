@@ -47,6 +47,7 @@ func (h *Handler) ListInboxItems(c fiber.Ctx, params generated.ListInboxItemsPar
 	}
 	return c.JSON(generated.InboxItemList{Items: result})
 }
+
 // GetInboxBacklog reports unfinished work for status surfaces. It reads only
 // durable Inbox state; it never inspects the processor.
 func (h *Handler) GetInboxBacklog(c fiber.Ctx) error {
