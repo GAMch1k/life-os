@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/oapi-codegen/runtime/types"
 
+	"github.com/GAMch1k/life-os/pkg/activity"
 	"github.com/GAMch1k/life-os/services/voice/internal/api/generated"
 	store "github.com/GAMch1k/life-os/services/voice/internal/repository/generated"
 	"github.com/GAMch1k/life-os/services/voice/internal/storage"
@@ -22,12 +23,13 @@ type Handler struct {
 	files          storage.Files
 	retention      time.Duration
 	maxUploadBytes int64
+	activity       *activity.Emitter
 }
 
 var _ generated.ServerInterface = (*Handler)(nil)
 
-func NewHandler(queries *store.Queries, files storage.Files, retention time.Duration, maxUploadBytes int64) *Handler {
-	return &Handler{queries: queries, files: files, retention: retention, maxUploadBytes: maxUploadBytes}
+func NewHandler(queries *store.Queries, files storage.Files, retention time.Duration, maxUploadBytes int64, emitter *activity.Emitter) *Handler {
+	return &Handler{queries: queries, files: files, retention: retention, maxUploadBytes: maxUploadBytes, activity: emitter}
 }
 
 func (h *Handler) CreateAudioJob(c fiber.Ctx) error {
@@ -64,6 +66,19 @@ func (h *Handler) CreateAudioJob(c fiber.Ctx) error {
 		_ = h.files.Remove(key)
 		return internal(err)
 	}
+	// A Voice job starts its own workflow: its id is the correlation id that
+	// the worker hands on to Inbox.
+	id := types.UUID(job.ID.Bytes).String()
+	h.activity.Emit(c.Context(), activity.Event{
+		ID:            activity.EventID("voice.job.accepted", id),
+		Type:          "voice.job.accepted",
+		Subject:       activity.Subject{Type: "voice_job", ID: id},
+		CorrelationID: id,
+		Actor:         activity.FromRequest(c).Actor,
+		Outcome:       activity.Pending,
+		Summary:       "Voice recording accepted for transcription",
+		Data:          map[string]any{"source": source, "contentType": contentType, "byteSize": n},
+	})
 	return c.Status(202).JSON(output(job))
 }
 func (h *Handler) GetAudioJob(c fiber.Ctx, id types.UUID) error {
