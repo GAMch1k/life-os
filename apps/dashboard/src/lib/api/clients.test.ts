@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  createActivityClient,
   createCalendarClient,
   createFinanceClient,
   createInboxClient,
@@ -17,4 +18,5 @@ test("each generated service client accepts an explicit base URL", () => {
   assert.ok(createInboxClient(url));
   assert.ok(createCalendarClient(url));
   assert.ok(createVoiceClient(url));
+  assert.ok(createActivityClient(url));
 });
