@@ -13,7 +13,7 @@ export interface paths {
         };
         /**
          * Summarize unfinished Inbox work for status surfaces
-         * @description Counts and timestamps from durable Inbox state only. Pending means raw or processing; retrying means the latest processing attempt for a pending item is retryable.
+         * @description Counts and timestamps from durable Inbox state only. Pending means raw or processing; retrying means a pending item already has a failed or retryable attempt (the processor starts the next attempt right away, so the latest attempt is usually processing).
          */
         get: operations["getInboxBacklog"];
         put?: never;
@@ -203,7 +203,7 @@ export interface components {
         InboxBacklog: {
             /** @description Items waiting for or in automatic processing */
             pendingCount: number;
-            /** @description Pending items whose latest attempt is retryable */
+            /** @description Pending items that already failed at least once and are being retried */
             retryingCount: number;
             humanReviewCount: number;
             /** Format: date-time */

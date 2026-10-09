@@ -217,7 +217,7 @@ type InboxBacklog struct {
 	// PendingCount Items waiting for or in automatic processing
 	PendingCount int `json:"pendingCount"`
 
-	// RetryingCount Pending items whose latest attempt is retryable
+	// RetryingCount Pending items that already failed at least once and are being retried
 	RetryingCount int `json:"retryingCount"`
 }
 

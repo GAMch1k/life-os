@@ -89,11 +89,12 @@ func TestInboxBacklogSummarizesPendingWorkAndLatestFailure(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// Only the latest attempt counts: an older failure followed by a newer
-	// retryable attempt is retrying, and a resolved item's failures are history.
-	attempt(retrying, "a1", "failed", "older failure")
+	// A pending item that already failed is retrying even while its next
+	// attempt runs; a resolved item's failures are history.
+	attempt(retrying, "a1", "retryable", "older failure")
 	time.Sleep(5 * time.Millisecond)
 	attempt(retrying, "a2", "retryable", "ERROR: You've hit your usage limit.")
+	attempt(retrying, "a3", "processing", "")
 	attempt(done, "d1", "retryable", "resolved item failure")
 	attempt(oldest, "o1", "processed", "")
 

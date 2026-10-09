@@ -202,7 +202,7 @@ function inboxCheck(inbox: InboxBacklog | null, now: Date): StatusCheck {
     : 0;
   const facts = [
     { label: "Waiting for processing", value: String(inbox.pendingCount) },
-    { label: "Waiting to be retried", value: String(inbox.retryingCount) },
+    { label: "Failed, being retried", value: String(inbox.retryingCount) },
     { label: "In Human Review", value: String(inbox.humanReviewCount) },
     {
       label: "Oldest waiting",
@@ -213,10 +213,10 @@ function inboxCheck(inbox: InboxBacklog | null, now: Date): StatusCheck {
     return {
       ...base,
       state: "warning",
-      summary: `${inbox.retryingCount} capture${inbox.retryingCount === 1 ? " is" : "s are"} waiting to be retried.`,
+      summary: `${inbox.retryingCount} capture${inbox.retryingCount === 1 ? " has" : "s have"} failed and ${inbox.retryingCount === 1 ? "is" : "are"} being retried.`,
       detail: inbox.lastFailureSummary ?? undefined,
       action:
-        "The processor retries them on its next poll. The error above is the latest failure.",
+        "The processor keeps retrying them on each poll. The error above is the latest failure.",
       facts: [
         ...facts,
         { label: "Latest failure", value: formatTime(inbox.lastFailureAt) },

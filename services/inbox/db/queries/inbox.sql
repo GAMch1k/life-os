@@ -27,23 +27,20 @@ UPDATE inbox_processing_attempts SET status=$2, actions=$3, error_summary=$4, st
 -- name: GetInboxBacklog :one
 SELECT
     count(*) FILTER (WHERE i.state IN ('raw', 'processing'))::int AS pending_count,
-    count(*) FILTER (WHERE i.state IN ('raw', 'processing') AND latest.status = 'retryable')::int AS retrying_count,
+    count(*) FILTER (WHERE i.state IN ('raw', 'processing') AND failed.item_id IS NOT NULL)::int AS retrying_count,
     count(*) FILTER (WHERE i.state = 'human_review')::int AS human_review_count,
     (min(i.created_at) FILTER (WHERE i.state IN ('raw', 'processing')))::timestamptz AS oldest_pending_at
 FROM inbox_items i
 LEFT JOIN LATERAL (
-    SELECT a.status FROM inbox_processing_attempts a
-    WHERE a.inbox_item_id = i.id ORDER BY a.created_at DESC LIMIT 1
-) latest ON true
+    SELECT a.inbox_item_id AS item_id FROM inbox_processing_attempts a
+    WHERE a.inbox_item_id = i.id AND a.status IN ('retryable', 'failed') LIMIT 1
+) failed ON true
 WHERE i.state IN ('raw', 'processing', 'human_review');
 
 -- name: GetLatestPendingFailure :one
-SELECT latest.error_summary, latest.updated_at
+SELECT a.error_summary, a.updated_at
 FROM inbox_items i
-JOIN LATERAL (
-    SELECT a.status, a.error_summary, a.updated_at FROM inbox_processing_attempts a
-    WHERE a.inbox_item_id = i.id ORDER BY a.created_at DESC LIMIT 1
-) latest ON true
-WHERE i.state IN ('raw', 'processing') AND latest.status IN ('retryable', 'failed')
-ORDER BY latest.updated_at DESC
+JOIN inbox_processing_attempts a ON a.inbox_item_id = i.id
+WHERE i.state IN ('raw', 'processing') AND a.status IN ('retryable', 'failed')
+ORDER BY a.updated_at DESC
 LIMIT 1;

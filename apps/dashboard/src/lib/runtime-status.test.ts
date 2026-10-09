@@ -89,7 +89,7 @@ test("a Codex usage limit is a warning that keeps Codex's own reset text", () =>
   assert.match(processing.action!, /resets/);
   const backlog = check(signals, "inbox");
   assert.equal(backlog.state, "warning");
-  assert.match(backlog.summary, /1 capture is waiting to be retried/);
+  assert.match(backlog.summary, /1 capture has failed and is being retried/);
   const alerts = statusAlerts(toRuntimeStatus(signals, now));
   assert.deepEqual(
     alerts.map((alert) => alert.id),

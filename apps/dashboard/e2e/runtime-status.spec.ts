@@ -174,7 +174,7 @@ test.describe("Runtime status under forced problems", () => {
       });
       await expect(processing).toContainText("codex login");
       await expect(processing).toContainText("401 Unauthorized");
-      await expectCheck(page, "Inbox backlog", /waiting to be retried/);
+      await expectCheck(page, "Inbox backlog", /failed and is being retried/);
       await expectHomeAlert(page, /Codex is not signed in/);
     } finally {
       compose("restart", "processor");
