@@ -1,0 +1,112 @@
+openapi: 3.0.3
+info:
+  title: Life OS Activity API
+  version: 1.0.0
+  description: >-
+    Durable, user-facing activity events emitted by owning services at their
+    operation boundaries. Events carry a correlation identifier for the whole
+    workflow (for example Voice → Inbox → processing → MCP → Task) and an
+    optional causation identifier naming the event that directly caused them.
+    This is product/audit data, not a log sink.
+  license: {name: UNLICENSED, url: https://life-os.local/license}
+servers: [{url: http://activity:8080}]
+paths:
+  /v1/activity-events:
+    get:
+      summary: List activity events
+      description: >-
+        Events are ordered newest first by occurredAt, then id. `cursor` is the
+        opaque nextCursor of the previous page.
+      operationId: listActivityEvents
+      security: []
+      parameters:
+        - {name: correlationId, in: query, description: Return one workflow., schema: {type: string, minLength: 1, maxLength: 128}}
+        - {name: subjectType, in: query, description: Entity type such as task or inbox_item., schema: {type: string, minLength: 1, maxLength: 64}}
+        - {name: subjectId, in: query, description: Entity identifier; usually combined with subjectType., schema: {type: string, minLength: 1, maxLength: 128}}
+        - {name: type, in: query, description: Exact event type such as task.completed., schema: {type: string, minLength: 1, maxLength: 128}}
+        - {name: source, in: query, description: Emitting service., schema: {type: string, minLength: 1, maxLength: 64}}
+        - {name: outcome, in: query, schema: {$ref: '#/components/schemas/ActivityOutcome'}}
+        - {name: from, in: query, description: Inclusive lower bound on occurredAt., schema: {type: string, format: date-time}}
+        - {name: to, in: query, description: Exclusive upper bound on occurredAt., schema: {type: string, format: date-time}}
+        - {name: cursor, in: query, schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}
+      responses:
+        '200': {description: Activity events, content: {application/json: {schema: {$ref: '#/components/schemas/ActivityEventList'}}}}
+        '400': {description: Invalid request}
+    post:
+      summary: Record an activity event
+      description: >-
+        Internal endpoint for owning services. Recording is idempotent by event
+        id: re-sending an already recorded id returns the stored event with 200.
+        The gateway does not expose this method.
+      operationId: recordActivityEvent
+      security: []
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ActivityEventCreateRequest'}}}}
+      responses:
+        '200': {description: Event was already recorded, content: {application/json: {schema: {$ref: '#/components/schemas/ActivityEvent'}}}}
+        '201': {description: Event recorded, content: {application/json: {schema: {$ref: '#/components/schemas/ActivityEvent'}}}}
+        '400': {description: Invalid request}
+  /v1/activity-events/{eventId}:
+    get:
+      summary: Get an activity event
+      operationId: getActivityEvent
+      security: []
+      parameters: [{name: eventId, in: path, required: true, schema: {type: string, format: uuid}}]
+      responses:
+        '200': {description: Activity event, content: {application/json: {schema: {$ref: '#/components/schemas/ActivityEvent'}}}}
+        '404': {description: Event not found}
+components:
+  schemas:
+    ActivityOutcome:
+      type: string
+      description: succeeded = the operation happened; pending = work was accepted or scheduled; failed = the operation did not happen.
+      enum: [succeeded, pending, failed]
+    ActivityActor:
+      type: object
+      required: [kind]
+      properties:
+        kind: {type: string, enum: [user, agent, system]}
+        name: {type: string, maxLength: 128, description: 'Optional actor name, for example codex-inbox-processor or voice-worker.'}
+    ActivitySubject:
+      type: object
+      required: [type, id]
+      properties:
+        type: {type: string, minLength: 1, maxLength: 64, description: 'Entity type such as voice_job, inbox_item, processing_attempt, mcp_action, or task.'}
+        id: {type: string, minLength: 1, maxLength: 128}
+    ActivityEventCreateRequest:
+      type: object
+      required: [id, type, source, subject, correlationId, actor, outcome, summary, occurredAt]
+      properties:
+        id: {type: string, format: uuid, description: Emitter-chosen identifier; deterministic ids make re-emission idempotent.}
+        type: {type: string, pattern: '^[a-z][a-z_]*(\.[a-z][a-z_]*)+$', maxLength: 128, description: 'Dotted event type, for example task.completed.'}
+        source: {type: string, minLength: 1, maxLength: 64, description: Emitting service.}
+        subject: {$ref: '#/components/schemas/ActivitySubject'}
+        correlationId: {type: string, minLength: 1, maxLength: 128}
+        causationId: {type: string, format: uuid, description: Event that directly caused this one.}
+        actor: {$ref: '#/components/schemas/ActivityActor'}
+        outcome: {$ref: '#/components/schemas/ActivityOutcome'}
+        summary: {type: string, minLength: 1, maxLength: 500, description: Short human-readable sentence.}
+        data: {type: object, additionalProperties: true, description: Small structured details for diagnostics.}
+        occurredAt: {type: string, format: date-time}
+    ActivityEvent:
+      type: object
+      required: [id, type, source, subject, correlationId, actor, outcome, summary, data, occurredAt, recordedAt]
+      properties:
+        id: {type: string, format: uuid}
+        type: {type: string}
+        source: {type: string}
+        subject: {$ref: '#/components/schemas/ActivitySubject'}
+        correlationId: {type: string}
+        causationId: {type: string, format: uuid, nullable: true}
+        actor: {$ref: '#/components/schemas/ActivityActor'}
+        outcome: {$ref: '#/components/schemas/ActivityOutcome'}
+        summary: {type: string}
+        data: {type: object, additionalProperties: true}
+        occurredAt: {type: string, format: date-time}
+        recordedAt: {type: string, format: date-time}
+    ActivityEventList:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/ActivityEvent'}}
+        nextCursor: {type: string, nullable: true}

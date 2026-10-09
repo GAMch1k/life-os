@@ -86,6 +86,21 @@ services:
     networks: [backend]
     restart: unless-stopped
 
+  activity-migrate:
+    image: migrate/migrate:v4.18.3
+    command: ["-path", "/migrations", "-database", "postgres://activity_user:${LIFE_OS_ACTIVITY_DB_PASSWORD}@postgres:5432/activity_db?sslmode=disable", "up"]
+    volumes: ["./services/activity/db/migrations:/migrations:ro"]
+    depends_on: {postgres: {condition: service_healthy}}
+    networks: [backend]
+    restart: "no"
+  activity:
+    build: {context: ., dockerfile: services/activity/Dockerfile}
+    environment: {SERVICE_NAME: activity, PORT: 8080, DATABASE_URL: "postgres://activity_user:${LIFE_OS_ACTIVITY_DB_PASSWORD}@postgres:5432/activity_db?sslmode=disable"}
+    expose: ["8080"]
+    depends_on: {activity-migrate: {condition: service_completed_successfully}}
+    networks: [backend]
+    restart: unless-stopped
+
   dashboard:
     build: {context: ., dockerfile: apps/dashboard/Dockerfile}
     environment:
@@ -234,6 +249,7 @@ services:
       calendar: {condition: service_started}
       mcp: {condition: service_started}
       voice: {condition: service_started}
+      activity: {condition: service_started}
     networks: [backend]
     restart: unless-stopped
 
