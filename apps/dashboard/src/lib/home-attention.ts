@@ -1,32 +1,109 @@
 import { calendarClient } from "@/lib/api/calendar-client";
 import { inboxClient } from "@/lib/api/inbox-client";
 import { tasksClient } from "@/lib/api/tasks-client";
-import type { components as Calendar } from "@/lib/api/generated/calendar";
-import type { components as Inbox } from "@/lib/api/generated/inbox";
-import type { components as Tasks } from "@/lib/api/generated/tasks";
+import type { CalendarEvent } from "@/lib/calendar-summary";
+import type { InboxItem } from "@/lib/inbox-summary";
+import type { Task } from "@/lib/tasks-summary";
 
-export type HomeAttention = {
-  humanReview: Inbox["schemas"]["InboxItem"][] | null;
-  overdue: Tasks["schemas"]["Task"][] | null;
-  today: Tasks["schemas"]["Task"][] | null;
-  unscheduled: Tasks["schemas"]["Task"][] | null;
-  nextEvent: Calendar["schemas"]["CalendarEvent"] | null | undefined;
+// Home is a read-only projection over the owning services' list APIs. It only
+// decides what to surface; every change happens in the dedicated workspaces.
+
+type ListResult<T> = {
+  data?: { items: T[]; nextCursor?: string | null };
 };
 
-export async function getHomeAttention(): Promise<HomeAttention> {
-  const now = new Date(),
-    start = new Date(now);
+/** A capped slice of a list, with `more` set when the service had more rows. */
+export type AttentionList<T> = { items: T[]; more: boolean };
+
+export type HomeAttention = {
+  humanReview: AttentionList<InboxItem> | null;
+  urgent: { overdue: Task[]; today: Task[]; more: boolean } | null;
+  unscheduled: AttentionList<Task> | null;
+  nextEvent: { kind: "event"; event: CalendarEvent } | { kind: "none" } | null;
+};
+
+export const HOME_LIST_LIMIT = 100;
+export const UNSCHEDULED_PREVIEW = 3;
+
+export function startOfUtcDay(now: Date) {
+  const start = new Date(now);
   start.setUTCHours(0, 0, 0, 0);
-  const tomorrow = new Date(start);
-  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+  return start;
+}
+
+export function endOfUtcDay(now: Date) {
+  const end = new Date(now);
+  end.setUTCHours(23, 59, 59, 999);
+  return end;
+}
+
+/** `null` in the result means the owning service could not be read. */
+export function toHomeAttention(
+  results: {
+    review: ListResult<InboxItem>;
+    urgent: ListResult<Task>;
+    open: ListResult<Task>;
+    events: ListResult<CalendarEvent>;
+  },
+  now: Date,
+): HomeAttention {
+  const { review, urgent, open, events } = results;
+  const start = startOfUtcDay(now);
+  const isOverdue = (task: Task) =>
+    task.dueAt !== undefined &&
+    task.dueAt !== null &&
+    new Date(task.dueAt) < start;
+  const unscheduled = open.data?.items.filter((task) => !task.dueAt);
+  const nextEvent = events.data?.items[0];
+
+  return {
+    humanReview: review.data
+      ? { items: review.data.items, more: Boolean(review.data.nextCursor) }
+      : null,
+    urgent: urgent.data
+      ? {
+          overdue: urgent.data.items.filter(isOverdue),
+          today: urgent.data.items.filter((task) => !isOverdue(task)),
+          more: Boolean(urgent.data.nextCursor),
+        }
+      : null,
+    unscheduled: unscheduled
+      ? {
+          items: unscheduled.slice(0, UNSCHEDULED_PREVIEW),
+          more:
+            unscheduled.length > UNSCHEDULED_PREVIEW ||
+            Boolean(open.data?.nextCursor),
+        }
+      : null,
+    nextEvent: events.data
+      ? nextEvent
+        ? { kind: "event", event: nextEvent }
+        : { kind: "none" }
+      : null,
+  };
+}
+
+export async function getHomeAttention(): Promise<HomeAttention> {
+  const now = new Date();
   const eventWindowEnd = new Date(now);
   eventWindowEnd.setUTCDate(eventWindowEnd.getUTCDate() + 30);
-  const [tasks, review, events] = await Promise.all([
-    tasksClient.GET("/v1/tasks", {
-      params: { query: { completed: false, limit: 100 } },
-    }),
+  const [review, urgent, open, events] = await Promise.all([
     inboxClient.GET("/v1/inbox-items", {
       params: { query: { state: "human_review", limit: 10 } },
+    }),
+    // Tasks are ordered by due date, so overdue work comes first.
+    tasksClient.GET("/v1/tasks", {
+      params: {
+        query: {
+          completed: false,
+          dueBefore: endOfUtcDay(now).toISOString(),
+          includeUndated: false,
+          limit: HOME_LIST_LIMIT,
+        },
+      },
+    }),
+    tasksClient.GET("/v1/tasks", {
+      params: { query: { completed: false, limit: HOME_LIST_LIMIT } },
     }),
     calendarClient.GET("/v1/events", {
       params: {
@@ -38,24 +115,5 @@ export async function getHomeAttention(): Promise<HomeAttention> {
       },
     }),
   ]);
-  const open = tasks.data?.items,
-    due = (item: Tasks["schemas"]["Task"]) =>
-      item.dueAt ? new Date(item.dueAt) : undefined;
-  return {
-    humanReview: review.data?.items ?? null,
-    overdue: open
-      ? open.filter((item) => {
-          const value = due(item);
-          return value !== undefined && value < start;
-        })
-      : null,
-    today: open
-      ? open.filter((item) => {
-          const value = due(item);
-          return value !== undefined && value >= start && value < tomorrow;
-        })
-      : null,
-    unscheduled: open ? open.filter((item) => !item.dueAt).slice(0, 3) : null,
-    nextEvent: events.data?.items[0],
-  };
+  return toHomeAttention({ review, urgent, open, events }, now);
 }
