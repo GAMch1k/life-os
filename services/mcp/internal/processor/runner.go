@@ -135,7 +135,9 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 			arguments["taskId"] = found.Items[0].ID
 			delete(arguments, "taskQuery")
 		}
-		arguments["idempotencyKey"] = actionIdempotencyKey(item, len(actions), action)
+		if action.Tool == "task_create" || action.Tool == "calendar_create" || action.Tool == "finance_create_manual_transaction" {
+			arguments["idempotencyKey"] = actionIdempotencyKey(item, len(actions), action)
+		}
 		result, err := r.Tools.Call(ctx, action.Tool, arguments)
 		audit := map[string]any{"tool": action.Tool, "arguments": arguments}
 		if err != nil {

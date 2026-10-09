@@ -62,6 +62,18 @@ func (c *MCPClient) Call(ctx context.Context, name string, args map[string]any) 
 	if len(envelope.Error) > 0 && string(envelope.Error) != "null" {
 		return nil, fmt.Errorf("MCP tool %s error: %s", name, envelope.Error)
 	}
+	var toolResult struct {
+		IsError bool `json:"isError"`
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(envelope.Result, &toolResult); err == nil && toolResult.IsError {
+		if len(toolResult.Content) > 0 {
+			return nil, fmt.Errorf("MCP tool %s rejected: %s", name, toolResult.Content[0].Text)
+		}
+		return nil, fmt.Errorf("MCP tool %s rejected", name)
+	}
 	return envelope.Result, nil
 }
 
