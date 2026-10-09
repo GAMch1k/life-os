@@ -23,6 +23,12 @@ func TestCodexFailureKeepsTheCLIErrorNotThePromptEcho(t *testing.T) {
 	if got != "ERROR: You’ve hit your usage limit. Upgrade to Pro or try again at 6:22 PM." {
 		t.Fatalf("codexFailure = %q", got)
 	}
+	unauthenticated := []byte("ERROR: Reconnecting... 1/5\nERROR: Reconnecting... 2/5\nERROR: unexpected status 401 Unauthorized: Missing bearer or basic authentication in header\n")
+	if got := codexFailure(unauthenticated); got != "ERROR: unexpected status 401 Unauthorized: Missing bearer or basic authentication in header" {
+		t.Fatalf("codexFailure = %q", got)
+	} else if classifyCodexError(got) != CodexUnauthenticated {
+		t.Fatalf("401 classified as %s", classifyCodexError(got))
+	}
 	long := []byte(strings.Repeat("x", 600) + "tail")
 	if got := codexFailure(long); !strings.HasSuffix(got, "tail") || len([]rune(got)) != 501 {
 		t.Fatalf("fallback kept %q", got)

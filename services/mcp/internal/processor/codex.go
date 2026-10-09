@@ -43,7 +43,8 @@ func codexFailure(out []byte) string {
 	seen := map[string]bool{}
 	for _, line := range strings.Split(string(out), "\n") {
 		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "ERROR:") && !seen[line] {
+		// "Reconnecting... n/5" lines are transport retries, not the reason.
+		if strings.HasPrefix(line, "ERROR:") && !strings.HasPrefix(line, "ERROR: Reconnecting") && !seen[line] {
 			seen[line] = true
 			errs = append(errs, line)
 		}
