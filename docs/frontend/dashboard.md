@@ -1,6 +1,6 @@
 # Dashboard
 
-The Dashboard is a Next.js App Router/TypeScript application using Tailwind and shadcn/ui. It provides the overview and routed Finance, Tasks, Inbox, and Calendar pages. It consumes generated TypeScript OpenAPI types under `src/lib/api/generated`, not hand-written transport copies.
+The Dashboard is a Next.js App Router/TypeScript application using Tailwind and shadcn/ui. It provides the overview and routed Finance, Tasks, Inbox, Calendar, and Activity pages. It consumes generated TypeScript OpenAPI types under `src/lib/api/generated`, not hand-written transport copies.
 
 Home (`/`) is attention-first: it answers “what needs my attention now?” and links into the dedicated workspaces for everything else. It is a read-only projection over the owning services' list APIs (`src/lib/home-attention.ts`) and never mutates data or adds business logic. It shows four compact cards:
 
@@ -13,6 +13,16 @@ Counts carry a `+` when the service reported more rows than Home fetched. Each c
 
 `/tasks` is the Tasks control workspace. Its List view groups open work into Overdue, Today, Upcoming, and Unscheduled / No date; an undated Task remains visible rather than being assigned a made-up deadline. The compact date navigator controls its date focus, while Schedule is a day/week projection of dated Tasks only. This projection does not turn Tasks into Calendar Events; unscheduled work remains in List. A Task can be edited in place, rescheduled, returned to Unscheduled, completed, and reopened using the Tasks API; all mutations survive reload.
 
-Browser requests use `/api/finance`, `/api/tasks`, `/api/inbox`, `/api/calendar`, and `/api/voice` relative to the current origin. Server-side rendering uses Docker service DNS internally. Loading/error handling is page-scoped so an unavailable service does not require exposing direct service ports.
+`/activity` is the Event Log, a read-only view over the Activity API (`src/lib/activity-log.ts`; see [Activity](../services/activity.md)). It lists events newest first with human-readable labels, outcome, time (UTC), domain, and actor. Filters are plain URL parameters set from a form, so any filtered view can be bookmarked or shared: domain (`source`), entity (`subjectType`), event type, status (`outcome`), and a UTC date range (`fromDate`/`toDate`, both inclusive). "Older events" pages with the API's cursor. Opening an entry (`?event=<id>`) loads its whole workflow (same `correlationId`) and its subject's history, then shows:
+
+- **What led here**: the causation chain back to the start of the workflow.
+- **What it led to**: everything caused by it, directly or indirectly.
+- **Same <entity> in other workflows**: for example, the user completing a Task that the agent created earlier.
+- **Whole workflow**: the causation tree, with the selected entry highlighted.
+- **Diagnostics**: a collapsed section with ids, correlation, causation, actor, timestamps, and the raw event data.
+
+Every entry in these sections opens its own trace, so a chain such as Inbox capture → processing → MCP `task_create` → Task created → Task later completed can be followed click by click. A workflow and a subject history are each read as up to 500 events. If an event's cause was recorded in another workflow, the Event Log links to it instead of guessing. The Event Log never writes; like the gateway, its `/api/activity` proxy allows only GET/HEAD.
+
+Browser requests use `/api/finance`, `/api/tasks`, `/api/inbox`, `/api/calendar`, `/api/voice`, and `/api/activity` relative to the current origin. Server-side rendering uses Docker service DNS internally. Loading/error handling is page-scoped so an unavailable service does not require exposing direct service ports.
 
 The Home Voice capture control uses the browser `MediaRecorder` API. Stopping a recording uploads it to the asynchronous Voice job API and keeps the returned job ID in component state; it never waits for Whisper. “Accepted” means the audio has been durably queued, not that it was transcribed. The generated Voice client polls the persisted job and shows queued, processing, automatic-retry, succeeded, failed, or expired status; polling stops on terminal states and component cleanup clears the timer. Failed/expired uploads offer a re-record or re-send flow. A successful job means transcription completed and has been handed to Inbox; the Inbox widget remains the place to see later AI processing. Run `make dashboard-check` for format/lint/test/type/build and `make life-smoke` for browser-facing behavior.
