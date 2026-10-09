@@ -283,6 +283,12 @@ function processingCheck(processor: ProcessorStatus | null): StatusCheck {
   }
 }
 
+function retryReasonLabel(reason: string) {
+  if (reason === "usage_limited") return "after the Codex usage limit resets";
+  if (reason === "backoff") return "backoff";
+  return reason;
+}
+
 function inboxCheck(inbox: InboxBacklog | null, now: Date): StatusCheck {
   const base = { id: "inbox" as const, title: "Inbox backlog" };
   if (!inbox) {
@@ -305,7 +311,25 @@ function inboxCheck(inbox: InboxBacklog | null, now: Date): StatusCheck {
       label: "Oldest waiting",
       value: inbox.oldestPendingAt ? `${formatAge(age)} ago` : "none",
     },
+    {
+      label: "Next retry",
+      value: inbox.nextRetryAt
+        ? `${formatTime(inbox.nextRetryAt)}${inbox.nextRetryReason ? ` (${retryReasonLabel(inbox.nextRetryReason)})` : ""}`
+        : "none scheduled",
+    },
   ];
+  const failed = inbox.failedCount ?? 0;
+  if (failed > 0) {
+    return {
+      ...base,
+      state: "problem",
+      summary: `${failed} capture${failed === 1 ? " needs" : "s need"} your attention: automatic processing gave up.`,
+      detail: inbox.lastFailureSummary ?? undefined,
+      action:
+        "They stay in Inbox and are no longer retried automatically. Rephrase and capture them again if they still matter.",
+      facts: [...facts, { label: "Gave up", value: String(failed) }],
+    };
+  }
   if (inbox.retryingCount > 0) {
     return {
       ...base,
@@ -313,7 +337,7 @@ function inboxCheck(inbox: InboxBacklog | null, now: Date): StatusCheck {
       summary: `${inbox.retryingCount} capture${inbox.retryingCount === 1 ? " has" : "s have"} failed and ${inbox.retryingCount === 1 ? "is" : "are"} being retried.`,
       detail: inbox.lastFailureSummary ?? undefined,
       action:
-        "The processor keeps retrying them on each poll. The error above is the latest failure.",
+        "The processor retries them automatically at the scheduled time. The error above is the latest failure.",
       facts: [
         ...facts,
         { label: "Latest failure", value: formatTime(inbox.lastFailureAt) },
