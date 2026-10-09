@@ -10,7 +10,7 @@ paths:
       summary: List tasks
       operationId: listTasks
       security: []
-      parameters: [{name: completed, in: query, schema: {type: boolean}}, {name: dueBefore, in: query, schema: {type: string, format: date-time}}, {name: cursor, in: query, schema: {type: string}}, {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}]
+      parameters: [{name: completed, in: query, schema: {type: boolean}}, {name: dueBefore, in: query, schema: {type: string, format: date-time}}, {name: includeUndated, in: query, description: Include unscheduled tasks when using dueBefore. Defaults to true so open tasks are not hidden solely because they have no due date., schema: {type: boolean, default: true}}, {name: cursor, in: query, schema: {type: string}}, {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}]
       responses: {'200': {description: Tasks, content: {application/json: {schema: {$ref: '#/components/schemas/TaskList'}}}}, '400': {description: Invalid request}}
     post:
       summary: Create a task

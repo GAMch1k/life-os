@@ -52,9 +52,28 @@ func TestTaskPersistenceLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	undated, err := queries.CreateTask(ctx, store.CreateTaskParams{Title: "Buy chicken for dinner"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	open, err := queries.ListTasks(ctx, store.ListTasksParams{CompletedFilter: pointer(false), PageLimit: 10})
-	if err != nil || len(open) != 1 || open[0].ID != created.ID {
+	if err != nil || len(open) != 2 || !containsTask(open, created.ID) || !containsTask(open, undated.ID) {
 		t.Fatalf("open tasks = %#v, err = %v", open, err)
+	}
+	// Date-bounded views include unscheduled tasks by default: an absent due date
+	// must not make an otherwise open task disappear. Consumers that need a strict
+	// date-only view can opt out with IncludeUndated.
+	dueBefore := pgtype.Timestamptz{Time: due.Add(24 * time.Hour), Valid: true}
+	visible, err := queries.ListTasks(ctx, store.ListTasksParams{CompletedFilter: pointer(false), DueBefore: dueBefore, IncludeUndated: true, PageLimit: 10})
+	if err != nil || len(visible) != 2 || !containsTask(visible, created.ID) || !containsTask(visible, undated.ID) {
+		t.Fatalf("date-bounded tasks including undated = %#v, err = %v", visible, err)
+	}
+	strict, err := queries.ListTasks(ctx, store.ListTasksParams{CompletedFilter: pointer(false), DueBefore: dueBefore, IncludeUndated: false, PageLimit: 10})
+	if err != nil || len(strict) != 1 || strict[0].ID != created.ID {
+		t.Fatalf("strict date-bounded tasks = %#v, err = %v", strict, err)
+	}
+	if undated.DueAt.Valid {
+		t.Fatalf("undated task was assigned a due date: %#v", undated.DueAt)
 	}
 	completed, err := queries.CompleteTask(ctx, created.ID)
 	if err != nil || !completed.CompletedAt.Valid {
@@ -77,3 +96,12 @@ func TestTaskPersistenceLifecycle(t *testing.T) {
 	}
 }
 func pointer(value bool) *bool { return &value }
+
+func containsTask(tasks []store.Task, id pgtype.UUID) bool {
+	for _, task := range tasks {
+		if task.ID == id {
+			return true
+		}
+	}
+	return false
+}

@@ -10,7 +10,11 @@ SELECT * FROM tasks WHERE id = $1;
 -- name: ListTasks :many
 SELECT * FROM tasks
 WHERE (sqlc.narg(completed_filter)::boolean IS NULL OR (completed_at IS NOT NULL) = sqlc.narg(completed_filter)::boolean)
-  AND (sqlc.narg(due_before)::timestamptz IS NULL OR due_at <= sqlc.narg(due_before)::timestamptz)
+  AND (
+    sqlc.narg(due_before)::timestamptz IS NULL
+    OR due_at <= sqlc.narg(due_before)::timestamptz
+    OR (sqlc.arg(include_undated)::boolean AND due_at IS NULL)
+  )
 ORDER BY completed_at NULLS FIRST, due_at NULLS LAST, created_at DESC
 LIMIT sqlc.arg(page_limit);
 

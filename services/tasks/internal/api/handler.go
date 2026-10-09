@@ -29,7 +29,11 @@ func (h *Handler) ListTasks(c fiber.Ctx, params generated.ListTasksParams) error
 		}
 		limit = *params.Limit
 	}
-	items, err := h.queries.ListTasks(c.Context(), store.ListTasksParams{CompletedFilter: params.Completed, DueBefore: timestamp(params.DueBefore), PageLimit: int32(limit)})
+	includeUndated := true
+	if params.IncludeUndated != nil {
+		includeUndated = *params.IncludeUndated
+	}
+	items, err := h.queries.ListTasks(c.Context(), store.ListTasksParams{CompletedFilter: params.Completed, DueBefore: timestamp(params.DueBefore), IncludeUndated: includeUndated, PageLimit: int32(limit)})
 	if err != nil {
 		return internal(err)
 	}

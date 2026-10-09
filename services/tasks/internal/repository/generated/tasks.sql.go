@@ -111,19 +111,29 @@ func (q *Queries) GetTask(ctx context.Context, id pgtype.UUID) (Task, error) {
 const listTasks = `-- name: ListTasks :many
 SELECT id, title, notes, due_at, completed_at, recurrence_frequency, recurrence_interval, recurrence_until, created_at, updated_at, automation_idempotency_key, automation_payload_hash FROM tasks
 WHERE ($1::boolean IS NULL OR (completed_at IS NOT NULL) = $1::boolean)
-  AND ($2::timestamptz IS NULL OR due_at <= $2::timestamptz)
+  AND (
+    $2::timestamptz IS NULL
+    OR due_at <= $2::timestamptz
+    OR ($3::boolean AND due_at IS NULL)
+  )
 ORDER BY completed_at NULLS FIRST, due_at NULLS LAST, created_at DESC
-LIMIT $3
+LIMIT $4
 `
 
 type ListTasksParams struct {
 	CompletedFilter *bool
 	DueBefore       pgtype.Timestamptz
+	IncludeUndated  bool
 	PageLimit       int32
 }
 
 func (q *Queries) ListTasks(ctx context.Context, arg ListTasksParams) ([]Task, error) {
-	rows, err := q.db.Query(ctx, listTasks, arg.CompletedFilter, arg.DueBefore, arg.PageLimit)
+	rows, err := q.db.Query(ctx, listTasks,
+		arg.CompletedFilter,
+		arg.DueBefore,
+		arg.IncludeUndated,
+		arg.PageLimit,
+	)
 	if err != nil {
 		return nil, err
 	}
