@@ -18,7 +18,10 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
+
+	"github.com/GAMch1k/life-os/pkg/httpserver"
 )
 
 const (
@@ -108,6 +111,16 @@ func TraceFromHeaders(get func(string) string) Trace {
 	trace := Trace{CorrelationID: sanitize(get(CorrelationIDHeader)), Actor: ParseActor(get(ActorHeader))}
 	if id, err := uuid.Parse(sanitize(get(CausationIDHeader))); err == nil {
 		trace.CausationID = &id
+	}
+	return trace
+}
+
+// FromRequest reads the Trace of a request served by the shared HTTP runtime,
+// whose middleware has already validated or assigned the correlation id.
+func FromRequest(c fiber.Ctx) Trace {
+	trace := TraceFromHeaders(func(key string) string { return c.Get(key) })
+	if id := httpserver.CorrelationID(c); id != "" {
+		trace.CorrelationID = id
 	}
 	return trace
 }
