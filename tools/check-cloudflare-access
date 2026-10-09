@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Checks the public Life OS path through Cloudflare Access, from wherever it
+# runs (it only uses the public hostname):
+#  - anonymous requests to pages and APIs are redirected to the Access login;
+#  - with the Access service token (LIFE_OS_CF_ACCESS_CLIENT_ID/SECRET in
+#    .env), the same pages and APIs reach Life OS through the tunnel.
+# Usage: tools/check-cloudflare-access [hostname]   (default lifeos.gamch1k.com)
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+host=${1:-${LIFE_OS_PUBLIC_HOSTNAME:-lifeos.gamch1k.com}}
+team=${LIFE_OS_CF_ACCESS_TEAM_DOMAIN:-damp-surf-d6be.cloudflareaccess.com}
+paths=(/ /tasks /inbox /calendar /activity /status /api/tasks/v1/tasks /api/inbox/v1/inbox-items /api/activity/v1/activity-events /api/mcp/)
+failed=0
+
+echo "anonymous (expect 302 to https://$team):"
+for path in "${paths[@]}"; do
+  read -r code location < <(curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' --max-time 20 "https://$host$path")
+  if [ "$code" = 302 ] && [[ "$location" == "https://$team/"* ]]; then
+    printf '  ok    %-36s %s\n' "$path" "$code"
+  else
+    printf '  FAIL  %-36s %s %s\n' "$path" "$code" "$location"
+    failed=1
+  fi
+done
+
+# Writes too, including a forged Access cookie and JWT header.
+for forged in "" "forged"; do
+  args=(-H 'content-type: application/json' --data '{"content":"check-cloudflare-access: must never be captured","source":"web"}')
+  [ -n "$forged" ] && args+=(-H "Cf-Access-Jwt-Assertion: $forged" -H "Cookie: CF_Authorization=$forged")
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "${args[@]}" "https://$host/api/inbox/v1/inbox-items")
+  label="POST /api/inbox/v1/inbox-items${forged:+ (forged JWT)}"
+  if [ "$code" = 302 ]; then printf '  ok    %-36s %s\n' "$label" "$code"; else printf '  FAIL  %-36s %s\n' "$label" "$code"; failed=1; fi
+done
+
+id=$(grep '^LIFE_OS_CF_ACCESS_CLIENT_ID=' .env 2>/dev/null | tail -1 | cut -d= -f2- || true)
+secret=$(grep '^LIFE_OS_CF_ACCESS_CLIENT_SECRET=' .env 2>/dev/null | tail -1 | cut -d= -f2- || true)
+if [ -z "$id" ] || [ -z "$secret" ]; then
+  echo "service token not configured in .env; skipping the authorized checks"
+  exit "$failed"
+fi
+echo "with the Access service token (expect 200 from Life OS):"
+for path in / /tasks /inbox /calendar /activity /status /api/tasks/ready /api/inbox/ready /api/voice/ready /api/tasks/v1/tasks?limit=1; do
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 -H "CF-Access-Client-Id: $id" -H "CF-Access-Client-Secret: $secret" "https://$host$path")
+  if [ "$code" = 200 ]; then printf '  ok    %-36s %s\n' "$path" "$code"; else printf '  FAIL  %-36s %s\n' "$path" "$code"; failed=1; fi
+done
+exit "$failed"
