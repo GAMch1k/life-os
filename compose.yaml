@@ -264,6 +264,32 @@ services:
     networks: [backend]
     restart: unless-stopped
 
+  # Opt-in Cloudflare Tunnel (COMPOSE_PROFILES=cloudflare). An outbound-only
+  # connector on the private network that hands Cloudflare traffic to the
+  # gateway; it publishes no port. The public hostname and its route
+  # (http://gateway:80) live in the Cloudflare tunnel configuration, and the
+  # token comes only from the ignored .env. See docs/operations/cloudflare.md.
+  cloudflared:
+    image: ${LIFE_OS_CLOUDFLARED_IMAGE:-cloudflare/cloudflared:2026.10.0}
+    profiles: [cloudflare]
+    command: ["tunnel", "--metrics", "127.0.0.1:20241", "--management-diagnostics=false", "run"]
+    environment:
+      TUNNEL_TOKEN: ${LIFE_OS_CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on:
+      gateway: {condition: service_started}
+    networks: [backend]
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: ["CMD", "cloudflared", "tunnel", "--metrics", "127.0.0.1:20241", "ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
 networks:
   backend:
     name: lifeos-backend
