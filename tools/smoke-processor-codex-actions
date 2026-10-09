@@ -81,6 +81,14 @@ update_id=$(capture "Rename the task titled $update_title to $updated_title.")
 wait_for_action "$update_id" task_update
 curl --fail --silent "$gateway/api/tasks/v1/tasks/$update_task_id" | jq -e --arg title "$updated_title" '.title == $title and .completed == false' >/dev/null
 
+reschedule_id=$(capture "Set the due date for the task titled $updated_title to October 14, 2026.")
+wait_for_action "$reschedule_id" task_update
+curl --fail --silent "$gateway/api/tasks/v1/tasks/$update_task_id" | jq -e '.dueAt | startswith("2026-10-14")' >/dev/null
+
+clear_date_id=$(capture "Clear the due date for the task titled $updated_title.")
+wait_for_action "$clear_date_id" task_update
+curl --fail --silent "$gateway/api/tasks/v1/tasks/$update_task_id" | jq -e '.dueAt == null' >/dev/null
+
 ambiguous_title="P8 Codex ambiguous $stamp"
 ambiguous_task_a=$(curl --fail --silent -H 'content-type: application/json' --data "$(jq -nc --arg title "$ambiguous_title" '{title:$title}')" "$gateway/api/tasks/v1/tasks" | jq -r '.id')
 ambiguous_task_b=$(curl --fail --silent -H 'content-type: application/json' --data "$(jq -nc --arg title "$ambiguous_title" '{title:$title}')" "$gateway/api/tasks/v1/tasks" | jq -r '.id')
