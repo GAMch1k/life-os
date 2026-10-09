@@ -75,6 +75,11 @@ func TestTaskPersistenceLifecycle(t *testing.T) {
 	if undated.DueAt.Valid {
 		t.Fatalf("undated task was assigned a due date: %#v", undated.DueAt)
 	}
+	search := "chicken"
+	found, err := queries.ListTasks(ctx, store.ListTasksParams{SearchQuery: &search, PageLimit: 10})
+	if err != nil || len(found) != 1 || found[0].ID != undated.ID {
+		t.Fatalf("task search = %#v, err = %v", found, err)
+	}
 	renamed := "Pay electricity bill"
 	notes := "Review the amount before paying"
 	movedDue := due.AddDate(0, 0, 7)

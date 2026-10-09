@@ -38,9 +38,48 @@ func (f *fakeTools) Call(_ context.Context, name string, args map[string]any) (j
 	case "inbox_record_processing_attempt":
 		f.records = append(f.records, args)
 		return json.RawMessage(`{}`), nil
+	case "task_search":
+		return json.RawMessage(`{"items":[{"id":"task-1","title":"Call insurer"}]}`), nil
 	default:
 		return json.RawMessage(`{}`), nil
 	}
+}
+func TestRunnerResolvesExactlyOneTaskBeforeMutation(t *testing.T) {
+	tools := &fakeTools{}
+	_, err := (Runner{Planner: fakePlanner{output: `{"actions":[{"tool":"task_complete","arguments":{"taskQuery":"Call insurer"}}],"confidence":0.9}`}, Tools: tools, Model: "gpt-5.6-terra"}).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(tools.calls, "task_search") || !contains(tools.calls, "task_complete") {
+		t.Fatalf("calls = %#v", tools.calls)
+	}
+	if got := tools.records[1]["actions"].([]map[string]any)[0]["arguments"].(map[string]any)["taskId"]; got != "task-1" {
+		t.Fatalf("resolved task ID = %#v", got)
+	}
+}
+
+func TestRunnerDoesNotMutateAmbiguousTaskSelection(t *testing.T) {
+	tools := ambiguousTaskTools{fakeTools: &fakeTools{}}
+	_, err := (Runner{Planner: fakePlanner{output: `{"actions":[{"tool":"task_complete","arguments":{"taskQuery":"Call insurer"}}],"confidence":0.9}`}, Tools: &tools, Model: "gpt-5.6-terra"}).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contains(tools.calls, "task_complete") || contains(tools.calls, "inbox_resolve") {
+		t.Fatalf("ambiguous Task was mutated: %#v", tools.calls)
+	}
+	if tools.records[1]["status"] != "retryable" {
+		t.Fatalf("status = %#v", tools.records[1]["status"])
+	}
+}
+
+type ambiguousTaskTools struct{ *fakeTools }
+
+func (t *ambiguousTaskTools) Call(ctx context.Context, name string, args map[string]any) (json.RawMessage, error) {
+	if name == "task_search" {
+		t.calls = append(t.calls, name)
+		return json.RawMessage(`{"items":[{"id":"task-1"},{"id":"task-2"}]}`), nil
+	}
+	return t.fakeTools.Call(ctx, name, args)
 }
 func TestRunnerExecutesApprovedActionsThenResolves(t *testing.T) {
 	tools := &fakeTools{}

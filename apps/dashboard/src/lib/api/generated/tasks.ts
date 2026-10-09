@@ -137,6 +137,8 @@ export interface operations {
                 dueBefore?: string;
                 /** @description Include unscheduled tasks when using dueBefore. Defaults to true so open tasks are not hidden solely because they have no due date. */
                 includeUndated?: boolean;
+                /** @description Case-insensitive title or notes search for entity resolution. */
+                query?: string;
                 cursor?: string;
                 limit?: number;
             };

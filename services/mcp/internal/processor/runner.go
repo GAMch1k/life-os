@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 )
 
@@ -117,7 +118,26 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 		for field, value := range action.Arguments {
 			arguments[field] = value
 		}
-		arguments["idempotencyKey"] = actionIdempotencyKey(item, len(actions), action)
+		if action.Tool == "task_update" || action.Tool == "task_complete" || action.Tool == "task_reopen" {
+			query, _ := arguments["taskQuery"].(string)
+			raw, findErr := r.Tools.Call(ctx, "task_search", map[string]any{"query": "query=" + url.QueryEscape(query) + "&limit=10"})
+			if findErr != nil {
+				return Proposal{}, r.recover(ctx, item.ID, started.ID, actions, "task search failed: "+findErr.Error())
+			}
+			var found struct {
+				Items []struct {
+					ID string `json:"id"`
+				} `json:"items"`
+			}
+			if json.Unmarshal(toolData(raw), &found) != nil || len(found.Items) != 1 || found.Items[0].ID == "" {
+				return Proposal{}, r.recover(ctx, item.ID, started.ID, actions, "ambiguous or missing Task selection")
+			}
+			arguments["taskId"] = found.Items[0].ID
+			delete(arguments, "taskQuery")
+		}
+		if action.Tool == "task_create" || action.Tool == "calendar_create" || action.Tool == "finance_create_manual_transaction" {
+			arguments["idempotencyKey"] = actionIdempotencyKey(item, len(actions), action)
+		}
 		result, err := r.Tools.Call(ctx, action.Tool, arguments)
 		audit := map[string]any{"tool": action.Tool, "arguments": arguments}
 		if err != nil {
@@ -188,19 +208,26 @@ func (r Runner) record(ctx context.Context, itemID, attemptID, status string, ac
 	return err
 }
 func allowed(name string) bool {
-	return name == "task_create" || name == "calendar_create" || name == "finance_create_manual_transaction"
+	return name == "task_create" || name == "task_update" || name == "task_complete" || name == "task_reopen" || name == "calendar_create" || name == "finance_create_manual_transaction"
 }
 func validAction(action plannedAction) bool {
 	if !allowed(action.Tool) || action.Arguments == nil {
 		return false
 	}
-	if action.Tool != "finance_create_manual_transaction" {
+	if action.Tool == "task_update" || action.Tool == "task_complete" || action.Tool == "task_reopen" {
+		if taskQuery, ok := action.Arguments["taskQuery"].(string); !ok || strings.TrimSpace(taskQuery) == "" {
+			return false
+		}
+	} else if action.Tool != "finance_create_manual_transaction" {
 		if title, ok := action.Arguments["title"].(string); !ok || strings.TrimSpace(title) == "" {
 			return false
 		}
 	}
 	allowedFields := map[string]map[string]bool{
 		"task_create":                       {"title": true, "notes": true, "dueAt": true},
+		"task_update":                       {"taskQuery": true, "title": true, "notes": true, "dueAt": true, "clearDueAt": true},
+		"task_complete":                     {"taskQuery": true},
+		"task_reopen":                       {"taskQuery": true},
 		"calendar_create":                   {"title": true, "description": true, "allDay": true, "startAt": true, "endAt": true, "startDate": true, "endDate": true},
 		"finance_create_manual_transaction": {"accountId": true, "categoryId": true, "amount": true, "occurredOn": true, "note": true},
 	}

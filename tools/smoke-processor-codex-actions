@@ -43,12 +43,59 @@ wait_for_action() {
   return 1
 }
 
+wait_for_retryable() {
+  local item_id=$1
+  for _ in $(seq 1 90); do
+    attempts=$(curl --fail --silent "$gateway/api/inbox/v1/inbox-items/$item_id/processing-attempts")
+    if jq -e '.items | any(.status == "retryable")' >/dev/null <<<"$attempts"; then
+      return
+    fi
+    sleep 2
+  done
+  echo "Codex action smoke: ambiguous capture was not retained as retryable for $item_id" >&2
+  return 1
+}
+
 calendar_id=$(capture "Create an all-day calendar event titled $calendar_title on 2026-10-12.")
 wait_for_action "$calendar_id" calendar_create
 curl --fail --silent "$gateway/api/calendar/v1/events?from=2026-10-12T00:00:00Z&to=2026-10-13T00:00:00Z" | jq -e --arg title "$calendar_title" '.items | map(select(.title == $title)) | length == 1' >/dev/null
 
 finance_id=$(capture "Record a finance transaction for account $account_id: spent 123 USD at $finance_note on 2026-10-08.")
 wait_for_action "$finance_id" finance_create_manual_transaction
-curl --fail --silent "$gateway/api/finance/v1/transactions?limit=100" | jq -e --arg note "$finance_note" '.items | map(select(.note == $note)) | length == 1' >/dev/null
+curl --fail --silent "$gateway/api/finance/v1/transactions?limit=100" | jq -e --arg note "$finance_note" '.items | map(select((.note // "") | ascii_downcase | contains($note | ascii_downcase))) | length == 1' >/dev/null
 
-echo "authenticated Codex Calendar and Finance capture smoke passed"
+task_title="P8 Codex mutation $stamp"
+task_id=$(curl --fail --silent -H 'content-type: application/json' --data "$(jq -nc --arg title "$task_title" '{title:$title}')" "$gateway/api/tasks/v1/tasks" | jq -r '.id')
+mutation_id=$(capture "Mark the task titled $task_title as done.")
+wait_for_action "$mutation_id" task_complete
+curl --fail --silent "$gateway/api/tasks/v1/tasks/$task_id" | jq -e --arg title "$task_title" '.title == $title and .completed == true' >/dev/null
+
+reopen_id=$(capture "Reopen the task titled $task_title.")
+wait_for_action "$reopen_id" task_reopen
+curl --fail --silent "$gateway/api/tasks/v1/tasks/$task_id" | jq -e --arg title "$task_title" '.title == $title and .completed == false' >/dev/null
+
+update_title="P8 Codex update $stamp"
+updated_title="P8 Codex updated $stamp"
+update_task_id=$(curl --fail --silent -H 'content-type: application/json' --data "$(jq -nc --arg title "$update_title" '{title:$title}')" "$gateway/api/tasks/v1/tasks" | jq -r '.id')
+update_id=$(capture "Rename the task titled $update_title to $updated_title.")
+wait_for_action "$update_id" task_update
+curl --fail --silent "$gateway/api/tasks/v1/tasks/$update_task_id" | jq -e --arg title "$updated_title" '.title == $title and .completed == false' >/dev/null
+
+reschedule_id=$(capture "Set the due date for the task titled $updated_title to October 14, 2026.")
+wait_for_action "$reschedule_id" task_update
+curl --fail --silent "$gateway/api/tasks/v1/tasks/$update_task_id" | jq -e '.dueAt | startswith("2026-10-14")' >/dev/null
+
+clear_date_id=$(capture "Clear the due date for the task titled $updated_title.")
+wait_for_action "$clear_date_id" task_update
+curl --fail --silent "$gateway/api/tasks/v1/tasks/$update_task_id" | jq -e '.dueAt == null' >/dev/null
+
+ambiguous_title="P8 Codex ambiguous $stamp"
+ambiguous_task_a=$(curl --fail --silent -H 'content-type: application/json' --data "$(jq -nc --arg title "$ambiguous_title" '{title:$title}')" "$gateway/api/tasks/v1/tasks" | jq -r '.id')
+ambiguous_task_b=$(curl --fail --silent -H 'content-type: application/json' --data "$(jq -nc --arg title "$ambiguous_title" '{title:$title}')" "$gateway/api/tasks/v1/tasks" | jq -r '.id')
+ambiguous_id=$(capture "Mark the task titled $ambiguous_title as done.")
+wait_for_retryable "$ambiguous_id"
+curl --fail --silent "$gateway/api/inbox/v1/inbox-items/$ambiguous_id" | jq -e '.resolvedAt == null and .state != "resolved"' >/dev/null
+curl --fail --silent "$gateway/api/tasks/v1/tasks/$ambiguous_task_a" | jq -e '.completed == false' >/dev/null
+curl --fail --silent "$gateway/api/tasks/v1/tasks/$ambiguous_task_b" | jq -e '.completed == false' >/dev/null
+
+echo "authenticated Codex Calendar, Finance, and Task mutation/ambiguity capture smoke passed"

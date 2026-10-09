@@ -10,6 +10,7 @@ SELECT * FROM tasks WHERE id = $1;
 -- name: ListTasks :many
 SELECT * FROM tasks
 WHERE (sqlc.narg(completed_filter)::boolean IS NULL OR (completed_at IS NOT NULL) = sqlc.narg(completed_filter)::boolean)
+  AND (sqlc.narg(search_query)::text IS NULL OR title ILIKE '%' || sqlc.narg(search_query)::text || '%' OR notes ILIKE '%' || sqlc.narg(search_query)::text || '%')
   AND (
     sqlc.narg(due_before)::timestamptz IS NULL
     OR due_at <= sqlc.narg(due_before)::timestamptz
