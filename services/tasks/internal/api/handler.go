@@ -29,11 +29,14 @@ func (h *Handler) ListTasks(c fiber.Ctx, params generated.ListTasksParams) error
 		}
 		limit = *params.Limit
 	}
+	if params.Query != nil && (*params.Query == "" || len(*params.Query) > 200) {
+		return fiber.NewError(fiber.StatusBadRequest, "query must be between 1 and 200 characters")
+	}
 	includeUndated := true
 	if params.IncludeUndated != nil {
 		includeUndated = *params.IncludeUndated
 	}
-	items, err := h.queries.ListTasks(c.Context(), store.ListTasksParams{CompletedFilter: params.Completed, DueBefore: timestamp(params.DueBefore), IncludeUndated: includeUndated, PageLimit: int32(limit)})
+	items, err := h.queries.ListTasks(c.Context(), store.ListTasksParams{CompletedFilter: params.Completed, SearchQuery: params.Query, DueBefore: timestamp(params.DueBefore), IncludeUndated: includeUndated, PageLimit: int32(limit)})
 	if err != nil {
 		return internal(err)
 	}
