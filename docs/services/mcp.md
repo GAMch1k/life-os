@@ -135,5 +135,5 @@ The processor heartbeats every 30 s until the attempt's outcome is stored. Outco
 - a 2 s deadline, leaving no Codex process behind;
 - `SIGKILL` crashes, both before and after Codex reports its session, reconciled by the next processor.
 
-Each scenario ends with exactly one Task.
+Each scenario ends with exactly one Task. The real CLI reports its session within a fraction of a second, so the spawned-but-no-session window is held open by the smoke-only wrapper `tools/fixtures/codex-limit-simulator` (mode `slow-start`). It waits 45 s, then runs the real CLI.
 
