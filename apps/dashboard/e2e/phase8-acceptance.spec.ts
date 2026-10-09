@@ -102,15 +102,26 @@ async function captureOnHome(
   return item(request, id);
 }
 
+/** Waits for an Inbox item to settle and explains a different outcome. */
 async function waitForState(
   request: APIRequestContext,
   id: string,
   state: string,
   timeout = 180_000,
 ) {
+  const settled = new Set([state, "resolved", "human_review", "failed"]);
   await expect
-    .poll(async () => (await item(request, id)).state, { timeout })
-    .toBe(state);
+    .poll(async () => settled.has((await item(request, id)).state), {
+      timeout,
+    })
+    .toBe(true);
+  const final = (await (
+    await request.get(`/api/inbox/v1/inbox-items/${id}`)
+  ).json()) as InboxItem & { processingMetadata?: unknown };
+  expect(
+    final.state,
+    `Inbox item ${id} "${final.content}" ended as ${final.state}: ${JSON.stringify(final.processingMetadata)}`,
+  ).toBe(state);
 }
 
 async function subjectHistory(request: APIRequestContext, taskId: string) {
