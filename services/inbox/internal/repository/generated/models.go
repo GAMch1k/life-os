@@ -21,6 +21,8 @@ type InboxItem struct {
 	UpdatedAt          pgtype.Timestamptz
 	SourceDedupeKey    *string
 	CorrelationID      *string
+	NextRetryAt        pgtype.Timestamptz
+	RetryReason        *string
 }
 
 type InboxProcessingAttempt struct {
@@ -36,4 +38,5 @@ type InboxProcessingAttempt struct {
 	CompletedAt    pgtype.Timestamptz
 	CreatedAt      pgtype.Timestamptz
 	UpdatedAt      pgtype.Timestamptz
+	NextRetryAt    pgtype.Timestamptz
 }
