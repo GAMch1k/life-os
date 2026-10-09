@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+compose=(./tools/verify-compose)
+cleanup() { "${compose[@]}" down --volumes --remove-orphans >/dev/null; }
+trap cleanup EXIT
+"${compose[@]}" up --detach --no-build
+gateway=http://127.0.0.1:13001
+for service in inbox tasks; do
+  for _ in $(seq 1 60); do curl --fail --silent "$gateway/api/$service/ready" >/dev/null && break; sleep 1; done
+  curl --fail --silent "$gateway/api/$service/ready" >/dev/null
+done
+stamp=$(date +%s)
+title="P8 Human Review $stamp"
+first=$(curl --fail --silent -H 'content-type: application/json' --data "$(jq -nc --arg title "$title" '{title:$title}')" "$gateway/api/tasks/v1/tasks" | jq -r '.id')
+second=$(curl --fail --silent -H 'content-type: application/json' --data "$(jq -nc --arg title "$title" '{title:$title}')" "$gateway/api/tasks/v1/tasks" | jq -r '.id')
+item=$(curl --fail --silent -H 'content-type: application/json' --data "$(jq -nc --arg content "Mark the task titled $title as done." '{content:$content,source:"web"}')" "$gateway/api/inbox/v1/inbox-items" | jq -r '.id')
+for _ in $(seq 1 90); do
+  state=$(curl --fail --silent "$gateway/api/inbox/v1/inbox-items/$item" | jq -r '.state')
+  [ "$state" = human_review ] && break
+  sleep 2
+done
+[ "$state" = human_review ]
+review=$(curl --fail --silent "$gateway/api/inbox/v1/inbox-items/$item")
+candidate=$(jq -r '.processingMetadata.humanReview.candidates[0].id' <<<"$review")
+jq -e --arg first "$first" --arg second "$second" '(.processingMetadata.humanReview.candidates | map(.id) | sort) == ([$first, $second] | sort)' <<<"$review" >/dev/null
+curl --fail --silent "$gateway/api/tasks/v1/tasks/$first" | jq -e '.completed == false' >/dev/null
+curl --fail --silent "$gateway/api/tasks/v1/tasks/$second" | jq -e '.completed == false' >/dev/null
+curl --fail --silent -H 'content-type: application/json' --data "$(jq -nc --arg candidateId "$candidate" '{candidateId:$candidateId}')" "$gateway/api/inbox/v1/inbox-items/$item/human-review/resolve" >/dev/null
+for _ in $(seq 1 90); do
+  task=$(curl --fail --silent "$gateway/api/tasks/v1/tasks/$candidate")
+  item_state=$(curl --fail --silent "$gateway/api/inbox/v1/inbox-items/$item" | jq -r '.state')
+  if jq -e '.completed == true' >/dev/null <<<"$task" && [ "$item_state" = resolved ]; then break; fi
+  sleep 2
+done
+jq -e '.completed == true' <<<"$task" >/dev/null
+[ "$item_state" = resolved ]
+echo "automatic Human Review selection smoke passed"
