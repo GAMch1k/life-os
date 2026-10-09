@@ -75,6 +75,13 @@ func TestRunnerDoesNotMutateAmbiguousTaskSelection(t *testing.T) {
 	}
 }
 
+func TestApprovedReviewPlanUsesSelectedTaskWithoutPlanningAgain(t *testing.T) {
+	parsed, err := approvedReviewPlan(inboxItem{ProcessingMetadata: map[string]any{"approvedAction": map[string]any{"tool": "task_complete", "arguments": map[string]any{"taskId": "task-2"}}}})
+	if err != nil || len(parsed.Actions) != 1 || parsed.Actions[0].Arguments["taskId"] != "task-2" || parsed.Confidence != 1 {
+		t.Fatalf("approved review plan = %#v, err = %v", parsed, err)
+	}
+}
+
 type ambiguousTaskTools struct{ *fakeTools }
 
 func (t *ambiguousTaskTools) Call(ctx context.Context, name string, args map[string]any) (json.RawMessage, error) {

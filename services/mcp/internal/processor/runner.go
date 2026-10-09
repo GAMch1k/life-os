@@ -129,20 +129,18 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 				return Proposal{}, r.recover(ctx, item.ID, started.ID, actions, "task search failed: "+findErr.Error())
 			}
 			var found struct {
-				Items []struct {
-					ID string `json:"id"`
-				} `json:"items"`
+				Items []map[string]any `json:"items"`
 			}
-			if json.Unmarshal(toolData(raw), &found) != nil || len(found.Items) != 1 || found.Items[0].ID == "" {
+			if json.Unmarshal(toolData(raw), &found) != nil || len(found.Items) != 1 || found.Items[0]["id"] == nil {
 				candidates := make([]map[string]any, 0, len(found.Items))
 				for _, candidate := range found.Items {
-					if candidate.ID != "" {
-						candidates = append(candidates, map[string]any{"id": candidate.ID})
+					if id, ok := candidate["id"].(string); ok && id != "" {
+						candidates = append(candidates, candidate)
 					}
 				}
 				return Proposal{}, r.humanReview(ctx, item.ID, started.ID, action, candidates, "ambiguous or missing Task selection")
 			}
-			arguments["taskId"] = found.Items[0].ID
+			arguments["taskId"] = found.Items[0]["id"]
 			delete(arguments, "taskQuery")
 		}
 		if action.Tool == "task_create" || action.Tool == "calendar_create" || action.Tool == "finance_create_manual_transaction" {
