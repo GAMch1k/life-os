@@ -75,6 +75,17 @@ func TestRunnerDoesNotMutateAmbiguousTaskSelection(t *testing.T) {
 	}
 }
 
+func TestRunnerRoutesLowConfidenceTaskMutationToHumanReview(t *testing.T) {
+	tools := &fakeTools{}
+	_, err := (Runner{Planner: fakePlanner{output: `{"actions":[{"tool":"task_complete","arguments":{"taskQuery":"Call insurer"}}],"confidence":0.5,"reason":"uncertain"}`}, Tools: tools, Model: "test"}).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contains(tools.calls, "task_complete") || !contains(tools.calls, "inbox_set_human_review") {
+		t.Fatalf("calls = %#v", tools.calls)
+	}
+}
+
 func TestApprovedReviewPlanUsesSelectedTaskWithoutPlanningAgain(t *testing.T) {
 	parsed, err := approvedReviewPlan(inboxItem{ProcessingMetadata: map[string]any{"approvedAction": map[string]any{"tool": "task_complete", "arguments": map[string]any{"taskId": "task-2"}}}})
 	if err != nil || len(parsed.Actions) != 1 || parsed.Actions[0].Arguments["taskId"] != "task-2" || parsed.Confidence != 1 {
