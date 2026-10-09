@@ -4,7 +4,7 @@ The Dashboard is a Next.js App Router/TypeScript application using Tailwind and 
 
 Home (`/`) is attention-first: it answers “what needs my attention now?” and links into the dedicated workspaces for everything else. It is a read-only projection over the owning services' list APIs (`src/lib/home-attention.ts`) and never mutates data or adds business logic. It shows four compact cards:
 
-- **Human Review** — how many captures wait in `human_review`, with up to two previews, linking to `/inbox`.
+- **Human Review** — how many captures wait in `human_review`, with up to two previews, linking to `/inbox`. In `/inbox`, each review offers its candidate Tasks and a Discard action. A capture with no candidates, where Codex found nothing to do, can only be discarded or captured again.
 - **Urgent tasks** — open Tasks that are overdue or due today (UTC day boundaries, via the Tasks `dueBefore` filter with `includeUndated=false`), overdue first, previewing five, linking to `/tasks`.
 - **Next on your calendar** — the next Calendar event in the coming 30 days, linking to `/calendar`.
 - **Unscheduled tasks** — up to three open Tasks without a date, linking to `/tasks`.

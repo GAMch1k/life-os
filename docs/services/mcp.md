@@ -84,7 +84,7 @@ The processor polls only due work (`inbox_list` with `state=raw&due=true`). It c
 | Unusable model output | invalid JSON, a disallowed tool, an action the owning service rejects | Backoff. After 5 attempts the item becomes `failed` (operator attention). |
 | Ambiguous, low confidence, or nothing to do | a quotation, an unclear request | Human Review. Never a technical retry. |
 
-Backoff is 30 s, doubling per earlier attempt of the item, capped at one hour, with ±20% jitter. Reason `backoff`. A retry adds an audit attempt; it never repeats a processed operation. Retry-After headers and explicit recovery intervals are not exposed by the current dependencies, so the only explicit recovery time used today is the Codex usage reset. A nothing-to-do capture appears in the Human Review queue with Codex's reason and no candidates. Letting the user dismiss such an item from that queue is a separate follow-up; until then it stays there without being retried.
+Backoff is 30 s, doubling per earlier attempt of the item, capped at one hour, with ±20% jitter. Reason `backoff`. A retry adds an audit attempt; it never repeats a processed operation. Retry-After headers and explicit recovery intervals are not exposed by the current dependencies, so the only explicit recovery time used today is the Codex usage reset. A nothing-to-do capture appears in the Human Review queue with Codex's reason and no candidates; the user can discard it there, or capture it again with more detail.
 
 `make retry-schedule-smoke` proves the following on the verification stack, with real Inbox, MCP, processor, Codex, and Tasks:
 - ambiguity goes to Human Review;

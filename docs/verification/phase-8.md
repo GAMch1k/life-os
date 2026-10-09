@@ -37,8 +37,11 @@ Two situations cannot be produced on demand with the real provider: a usage limi
 
 Both fixes were checked against real Codex. A quotation, a bare noun phrase, a vague request, and a destructive instruction still produce no action.
 
+## Follow-up completed
+
+- **P8-15.** A Human Review item without candidates, where Codex found nothing to do, can be discarded from the queue. `e2e/human-review-dismiss.spec.ts` proves this with a real capture.
+
 ## Known limitations accepted for Phase 8
 
-- A Human Review item without candidates (Codex found nothing to do) cannot yet be dismissed from the queue. That is ticket P8-15.
 - Codex sessions are not resumed after a crash. Planning is a single read-only turn and is re-run; domain actions are idempotent. See [MCP and AI](../services/mcp.md#codex-runtime).
 - The Docker gateway resolves upstream addresses at startup, so it is recreated after services are recreated on deploy.
