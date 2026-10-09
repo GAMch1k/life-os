@@ -15,7 +15,7 @@ Life OS is a local-first personal operating system. This index is the human-read
 
 ## Scope
 
-Implemented: Finance, Tasks, Inbox, Calendar, Voice, and MCP services; PostgreSQL ownership/migrations; generated OpenAPI clients; a Next.js dashboard; Finance CSV import; a single Docker Nginx ingress; local authenticated Codex Inbox processing; and a private multilingual `whisper.cpp` worker. Voice recordings are queued asynchronously, transcribed, captured in Inbox, and can follow the same constrained MCP action path.
+Implemented: Finance, Tasks, Inbox, Calendar, Voice, and MCP services; PostgreSQL ownership/migrations; generated OpenAPI clients; a Next.js dashboard; Finance CSV import; a single Docker Nginx ingress; local authenticated Codex Inbox processing; and a private multilingual `whisper.cpp` worker. Voice recordings are queued asynchronously, transcribed, captured in Inbox, and can follow the same constrained MCP action path. Phase 8 added an attention-first Home, a Tasks workspace where undated Tasks stay visible, Task editing from both the Dashboard and the agent, Human Review for ambiguous changes, the Activity service and Event Log, a Status page with Codex usage, durable retry scheduling, and a hardened Codex runtime. See [Phase 8 verification](verification/phase-8.md).
 
 Deferred: Android, Wear OS, public application authentication, external synchronization, and a general-purpose message bus. Android and Wear OS belong in separate repositories.
 
