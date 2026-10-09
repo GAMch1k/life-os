@@ -83,8 +83,11 @@ type UpdateTaskRequest struct {
 type ListTasksParams struct {
 	Completed *bool      `form:"completed,omitempty" json:"completed,omitempty"`
 	DueBefore *time.Time `form:"dueBefore,omitempty" json:"dueBefore,omitempty"`
-	Cursor    *string    `form:"cursor,omitempty" json:"cursor,omitempty"`
-	Limit     *int       `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// IncludeUndated Include unscheduled tasks when using dueBefore. Defaults to true so open tasks are not hidden solely because they have no due date.
+	IncludeUndated *bool   `form:"includeUndated,omitempty" json:"includeUndated,omitempty"`
+	Cursor         *string `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit          *int    `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
 // CreateTaskJSONRequestBody defines body for CreateTask for application/json ContentType.
@@ -148,6 +151,13 @@ func (siw *ServerInterfaceWrapper) ListTasks(c fiber.Ctx) error {
 	err = runtime.BindQueryParameterWithOptions("form", true, false, "dueBefore", query, &params.DueBefore, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
 	if err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter dueBefore: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "includeUndated" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "includeUndated", query, &params.IncludeUndated, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter includeUndated: %w", err).Error())
 	}
 
 	// ------------- Optional query parameter "cursor" -------------

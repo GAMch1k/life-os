@@ -116,6 +116,8 @@ export interface operations {
             query?: {
                 completed?: boolean;
                 dueBefore?: string;
+                /** @description Include unscheduled tasks when using dueBefore. Defaults to true so open tasks are not hidden solely because they have no due date. */
+                includeUndated?: boolean;
                 cursor?: string;
                 limit?: number;
             };
