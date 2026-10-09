@@ -245,7 +245,7 @@ export interface operations {
         parameters: {
             query?: {
                 unresolved?: boolean;
-                state?: "raw" | "processing" | "resolved" | "discarded";
+                state?: "raw" | "processing" | "human_review" | "resolved" | "discarded";
                 cursor?: string;
                 limit?: number;
             };

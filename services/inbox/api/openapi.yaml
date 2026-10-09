@@ -10,7 +10,7 @@ paths:
       summary: List captured inbox items
       operationId: listInboxItems
       security: []
-      parameters: [{name: unresolved, in: query, schema: {type: boolean, default: true}}, {name: state, in: query, schema: {type: string, enum: [raw, processing, resolved, discarded]}}, {name: cursor, in: query, schema: {type: string}}, {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}]
+      parameters: [{name: unresolved, in: query, schema: {type: boolean, default: true}}, {name: state, in: query, schema: {type: string, enum: [raw, processing, human_review, resolved, discarded]}}, {name: cursor, in: query, schema: {type: string}}, {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}]
       responses: {'200': {description: Inbox items, content: {application/json: {schema: {$ref: '#/components/schemas/InboxItemList'}}}}, '400': {description: Invalid request}}
     post:
       summary: Capture an inbox item
