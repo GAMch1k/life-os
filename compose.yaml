@@ -147,6 +147,9 @@ services:
       LIFE_OS_CODEX_MODEL: ${LIFE_OS_CODEX_MODEL:-gpt-5.6-terra}
       LIFE_OS_PROCESSOR_POLL_MILLIS: ${LIFE_OS_PROCESSOR_POLL_MILLIS:-1000}
       LIFE_OS_PROCESSOR_HEALTH_PORT: 8081
+      LIFE_OS_CODEX_TIMEOUT_SECONDS: ${LIFE_OS_CODEX_TIMEOUT_SECONDS:-300}
+      LIFE_OS_CODEX_MAX_CONCURRENCY: ${LIFE_OS_CODEX_MAX_CONCURRENCY:-1}
+      LIFE_OS_PROCESSOR_STALE_AFTER_SECONDS: ${LIFE_OS_PROCESSOR_STALE_AFTER_SECONDS:-120}
       CODEX_HOME: /tmp/lifeos-codex
     volumes:
       - type: bind
@@ -166,6 +169,8 @@ services:
     networks: [backend]
     restart: unless-stopped
     user: "${LIFE_OS_CODEX_RUNTIME_UID:?Set LIFE_OS_CODEX_RUNTIME_UID in .env to the UID which owns the local Codex session}"
+    # Room to stop a Codex run gracefully and record the attempt's outcome.
+    stop_grace_period: 30s
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]

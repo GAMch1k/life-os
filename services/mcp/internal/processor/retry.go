@@ -26,6 +26,10 @@ const (
 const (
 	reasonUsageLimited = "usage_limited"
 	reasonBackoff      = "backoff"
+	// reasonCancelled: the processor shut down during the attempt.
+	reasonCancelled = "cancelled"
+	// reasonRecovered: a later processor reconciled an abandoned attempt.
+	reasonRecovered = "recovered"
 )
 
 // maxModelOutputAttempts is how many attempts an item gets when Codex keeps

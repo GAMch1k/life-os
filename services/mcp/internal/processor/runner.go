@@ -28,6 +28,10 @@ type Runner struct {
 	DryRun  bool
 	// Retry schedules technical retries; ambiguity goes to Human Review.
 	Retry RetryPolicy
+	// Owner identifies this processor instance on attempt runtime records.
+	Owner string
+	// OnRuntime, when set, receives every runtime state the runner records.
+	OnRuntime func(RuntimeEvent)
 }
 type inboxList struct {
 	Items []inboxItem `json:"items"`
@@ -115,9 +119,19 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 	}
 	parsed, err := approvedReviewPlan(item)
 	if err != nil {
+		// The attempt is durable before Codex is spawned; its runtime record
+		// heartbeats until the outcome is stored.
+		runtime := r.trackRuntime(ctx, item.ID, started.ID, RuntimeSpawning)
+		defer runtime.close()
 		prompt, _ := json.Marshal(map[string]any{"content": item.Content, "source": item.Source, "sourceMetadata": item.SourceMetadata})
-		rawPlan, planErr := r.Planner.Plan(ctx, string(prompt))
+		rawPlan, planErr := r.Planner.Plan(WithRunObserver(ctx, runtime), string(prompt))
+		runtime.finish(ctx, runtimeOutcome(ctx, planErr))
 		if planErr != nil {
+			if ctx.Err() != nil {
+				// Shutting down: hand the capture back instead of leaving the
+				// attempt open.
+				return Proposal{}, r.schedule(ctx, item.ID, started.ID, nil, fmt.Sprintf("cancelled: %v", planErr), time.Now(), reasonCancelled)
+			}
 			return Proposal{}, r.retryLater(ctx, item.ID, started.ID, nil, fmt.Sprintf("planning failed: %v", planErr), failureCodex, previous)
 		}
 		parsed, err = decodePlan(rawPlan)
@@ -283,10 +297,18 @@ func (r Runner) retryLater(ctx context.Context, itemID, attemptID string, action
 		return r.record(ctx, itemID, attemptID, "failed", actions, &reason)
 	}
 	at, why := r.Retry.next(ctx, kind, previous, reason)
+	return r.schedule(ctx, itemID, attemptID, actions, reason, at, why)
+}
+
+// schedule records a retryable outcome with the time the capture may be
+// retried. Like every outcome, it is stored even while shutting down.
+func (r Runner) schedule(ctx context.Context, itemID, attemptID string, actions []map[string]any, reason string, at time.Time, why string) error {
 	if actions == nil {
 		actions = []map[string]any{}
 	}
-	_, err := r.Tools.Call(ctx, "inbox_record_processing_attempt", map[string]any{"itemId": itemID, "attemptId": attemptID, "status": "retryable", "actions": actions, "errorSummary": reason, "nextRetryAt": at.UTC().Format(time.RFC3339Nano), "retryReason": why})
+	recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	_, err := r.Tools.Call(recordCtx, "inbox_record_processing_attempt", map[string]any{"itemId": itemID, "attemptId": attemptID, "status": "retryable", "actions": actions, "errorSummary": reason, "nextRetryAt": at.UTC().Format(time.RFC3339Nano), "retryReason": why})
 	return err
 }
 func (r Runner) humanReview(ctx context.Context, itemID, attemptID string, action plannedAction, candidates []map[string]any, reason string) error {
@@ -297,7 +319,9 @@ func (r Runner) record(ctx context.Context, itemID, attemptID, status string, ac
 	if actions == nil {
 		actions = []map[string]any{}
 	}
-	_, err := r.Tools.Call(ctx, "inbox_record_processing_attempt", map[string]any{"itemId": itemID, "attemptId": attemptID, "status": status, "actions": actions, "errorSummary": summary})
+	recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	_, err := r.Tools.Call(recordCtx, "inbox_record_processing_attempt", map[string]any{"itemId": itemID, "attemptId": attemptID, "status": status, "actions": actions, "errorSummary": summary})
 	return err
 }
 func allowed(name string) bool {

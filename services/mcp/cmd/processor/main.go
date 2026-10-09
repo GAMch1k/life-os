@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"sync"
 	"syscall"
@@ -27,7 +28,14 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
-	planner := processor.CodexCLI{Command: cfg.CodexCommand, Model: cfg.Model, WorkDir: cfg.WorkDir}
+	// Resolve the configured Codex binary once, so every run uses the same
+	// executable and a missing CLI fails loudly at startup.
+	binary, err := exec.LookPath(cfg.CodexCommand)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Codex CLI %q not found: %v\n", cfg.CodexCommand, err)
+		os.Exit(78)
+	}
+	planner := processor.CodexCLI{Command: binary, Model: cfg.Model, WorkDir: cfg.WorkDir, Timeout: cfg.CodexTimeout, Slots: make(chan struct{}, cfg.MaxConcurrency)}
 	if *usage {
 		report, err := planner.Usage(context.Background())
 		if err != nil {
@@ -49,6 +57,9 @@ func main() {
 	runner := processor.Runner{Planner: planner, Tools: &processor.MCPClient{URL: cfg.MCPURL}, Model: cfg.Model, DryRun: *dryRun}
 	if *serve {
 		monitor := processor.NewMonitor(cfg.Model)
+		runner.Owner = instanceID()
+		monitor.ConfigureRuntime(runner.Owner, binary, cfg.CodexTimeout, cfg.MaxConcurrency)
+		runner.OnRuntime = monitor.RecordRuntime
 		runner.Planner = monitor.Monitored(planner)
 		runner.Retry = processor.RetryPolicy{RecoveryAt: usageRecovery(planner, monitor)}
 		if *dryRun {
@@ -59,6 +70,10 @@ func main() {
 		defer stop()
 		// Credentials can expire or be removed while the process runs.
 		go monitor.WatchAuth(ctx, planner.LoggedIn, 5*time.Minute)
+		// Return attempts abandoned by a processor that died to the queue.
+		go monitor.WatchReconcile(ctx, func(ctx context.Context) (int, error) {
+			return runner.Reconcile(ctx, cfg.StaleAfter)
+		}, 30*time.Second)
 		// Account usage and reset times, as reported by the Codex CLI.
 		go monitor.WatchUsage(ctx, planner.Usage, 5*time.Minute)
 		service := &processor.Service{Run: func(ctx context.Context) error {
@@ -106,4 +121,12 @@ func usageRecovery(planner processor.CodexCLI, monitor *processor.Monitor) func(
 		}
 		return at, ok
 	}
+}
+
+// instanceID names this processor run on attempt runtime records. It changes
+// on every start, so a restarted processor reconciles its predecessor's
+// abandoned attempts.
+func instanceID() string {
+	host, _ := os.Hostname()
+	return fmt.Sprintf("%s-%d", host, time.Now().UnixNano())
 }
