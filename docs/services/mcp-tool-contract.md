@@ -6,7 +6,7 @@ The MCP service exposes semantic, structured operations only. It calls the ownin
 | --- | --- | --- |
 | `inbox_list`, `inbox_get` | list/get inbox items | read-only |
 | `inbox_resolve`, `inbox_discard` | resolve/discard item | state-changing; record audit reason |
-| `task_create`, `task_list`, `task_get`, `task_update`, `task_complete` | Tasks endpoints | creates/changes work; completion is explicit |
+| `task_create`, `task_list`, `task_search`, `task_update`, `task_complete`, `task_reopen` | Tasks endpoints | creates/changes work through the same Task operations as the Dashboard; completion and reopening are explicit; an existing Task is changed only when `task_search` finds exactly one match (see [editable entities](../architecture/editable-entities.md)) |
 | `calendar_create`, `calendar_list`, `calendar_get`, `calendar_update`, `calendar_delete` | Calendar endpoints | delete is destructive; require explicit intent |
 | `finance_month_summary`, `finance_find_transactions` | Finance reads | read-only |
 | `finance_create_manual_transaction` | Finance transaction create | high-impact; require explicit amount/account/currency/date confirmation |
