@@ -18,6 +18,15 @@ The worker calls the private Whisper service and captures the transcript using a
 
 Transient errors record `retryable` plus an error summary and delayed availability; the configured maximum changes that state to `failed`. Expired audio is removed from the private volume and its job moves to `expired`, preserving audit information but removing the transcript/audio content.
 
+## Backlog and health
+
+`GET /v1/backlog` summarizes unfinished transcription work for status surfaces:
+- queued, transcribing, and retryable job counts;
+- the oldest unfinished job and the earliest scheduled retry (`nextRetryAt`);
+- the latest failure text;
+- `workerStalled`: true when a processing lease has expired, or when due jobs have waited over two minutes while nothing is processing;
+- `whisperReady`: whether Whisper answered its `/ready` probe within two seconds. The Voice API uses `WHISPER_SERVICE_URL` (default `http://whisper:8080`).
+
 ## Whisper worker
 
 `docker compose up whisper` builds and starts a private CPU-only `whisper.cpp` HTTP worker. It downloads the configured model once into the named `whisper-models` volume, accepts a raw audio body at `POST /transcribe`, and returns JSON transcript text. `GET /ready` confirms the selected model is present. The default multilingual `base` model supports Russian, German, and English; set `LIFE_OS_WHISPER_MODEL_PATH` and `LIFE_OS_WHISPER_MODEL_URL` together to use another model.
