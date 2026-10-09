@@ -142,7 +142,7 @@ func (q *Queries) GetProcessingAttemptForItem(ctx context.Context, arg GetProces
 
 const listInboxItems = `-- name: ListInboxItems :many
 SELECT id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at, source_dedupe_key FROM inbox_items
-WHERE ($1::boolean IS NULL OR (state IN ('raw', 'processing')) = $1::boolean)
+WHERE ($1::boolean IS NULL OR (state IN ('raw', 'processing', 'human_review')) = $1::boolean)
   AND ($2::text IS NULL OR state = $2::text)
 ORDER BY created_at DESC LIMIT $3
 `
@@ -222,6 +222,62 @@ func (q *Queries) ListProcessingAttempts(ctx context.Context, inboxItemID pgtype
 	return items, nil
 }
 
+const resolveInboxItemHumanReview = `-- name: ResolveInboxItemHumanReview :one
+UPDATE inbox_items SET state = 'raw', processing_metadata = $1, updated_at = now() WHERE id = $2 AND state = 'human_review' RETURNING id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at, source_dedupe_key
+`
+
+type ResolveInboxItemHumanReviewParams struct {
+	ProcessingMetadata []byte
+	ID                 pgtype.UUID
+}
+
+func (q *Queries) ResolveInboxItemHumanReview(ctx context.Context, arg ResolveInboxItemHumanReviewParams) (InboxItem, error) {
+	row := q.db.QueryRow(ctx, resolveInboxItemHumanReview, arg.ProcessingMetadata, arg.ID)
+	var i InboxItem
+	err := row.Scan(
+		&i.ID,
+		&i.Content,
+		&i.Source,
+		&i.SourceMetadata,
+		&i.MediaReferences,
+		&i.State,
+		&i.ProcessingMetadata,
+		&i.ResolvedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SourceDedupeKey,
+	)
+	return i, err
+}
+
+const setInboxItemHumanReview = `-- name: SetInboxItemHumanReview :one
+UPDATE inbox_items SET state = 'human_review', processing_metadata = $1, updated_at = now() WHERE id = $2 RETURNING id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at, source_dedupe_key
+`
+
+type SetInboxItemHumanReviewParams struct {
+	ProcessingMetadata []byte
+	ID                 pgtype.UUID
+}
+
+func (q *Queries) SetInboxItemHumanReview(ctx context.Context, arg SetInboxItemHumanReviewParams) (InboxItem, error) {
+	row := q.db.QueryRow(ctx, setInboxItemHumanReview, arg.ProcessingMetadata, arg.ID)
+	var i InboxItem
+	err := row.Scan(
+		&i.ID,
+		&i.Content,
+		&i.Source,
+		&i.SourceMetadata,
+		&i.MediaReferences,
+		&i.State,
+		&i.ProcessingMetadata,
+		&i.ResolvedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SourceDedupeKey,
+	)
+	return i, err
+}
+
 const setInboxItemState = `-- name: SetInboxItemState :one
 UPDATE inbox_items SET state = $1, resolved_at = CASE WHEN $1 IN ('resolved', 'discarded') THEN now() ELSE resolved_at END, updated_at = now() WHERE id = $2 RETURNING id, content, source, source_metadata, media_references, state, processing_metadata, resolved_at, created_at, updated_at, source_dedupe_key
 `
@@ -251,7 +307,7 @@ func (q *Queries) SetInboxItemState(ctx context.Context, arg SetInboxItemStatePa
 }
 
 const updateProcessingAttempt = `-- name: UpdateProcessingAttempt :one
-UPDATE inbox_processing_attempts SET status=$2, actions=$3, error_summary=$4, started_at=CASE WHEN $2='processing' THEN now() ELSE started_at END, completed_at=CASE WHEN $2 IN ('processed','failed','retryable') THEN now() ELSE completed_at END, updated_at=now() WHERE id=$1 RETURNING id, inbox_item_id, idempotency_key, status, agent_name, model_profile, actions, error_summary, started_at, completed_at, created_at, updated_at
+UPDATE inbox_processing_attempts SET status=$2, actions=$3, error_summary=$4, started_at=CASE WHEN $2='processing' THEN now() ELSE started_at END, completed_at=CASE WHEN $2 IN ('human_review','processed','failed','retryable') THEN now() ELSE completed_at END, updated_at=now() WHERE id=$1 RETURNING id, inbox_item_id, idempotency_key, status, agent_name, model_profile, actions, error_summary, started_at, completed_at, created_at, updated_at
 `
 
 type UpdateProcessingAttemptParams struct {

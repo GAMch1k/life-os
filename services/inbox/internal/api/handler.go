@@ -128,6 +128,75 @@ func (h *Handler) UpdateProcessingAttempt(c fiber.Ctx, itemID types.UUID, attemp
 	}
 	return c.JSON(attemptOutput(attempt))
 }
+func (h *Handler) CreateHumanReview(c fiber.Ctx, itemID types.UUID) error {
+	var body generated.CreateHumanReviewJSONRequestBody
+	if err := c.Bind().Body(&body); err != nil || body.ErrorSummary == "" || len(body.ProposedAction) == 0 {
+		return fiber.NewError(400, "invalid human review request")
+	}
+	if _, err := h.queries.GetProcessingAttemptForItem(c.Context(), store.GetProcessingAttemptForItemParams{ID: pgUUID(body.AttemptId), InboxItemID: pgUUID(itemID)}); err != nil {
+		return databaseError(err)
+	}
+	actions, err := json.Marshal([]map[string]interface{}{body.ProposedAction})
+	if err != nil {
+		return fiber.NewError(400, "invalid proposed action")
+	}
+	if _, err := h.queries.UpdateProcessingAttempt(c.Context(), store.UpdateProcessingAttemptParams{ID: pgUUID(body.AttemptId), Status: "human_review", Actions: actions, ErrorSummary: &body.ErrorSummary}); err != nil {
+		return internal(err)
+	}
+	metadata, err := json.Marshal(map[string]interface{}{"humanReview": map[string]interface{}{"errorSummary": body.ErrorSummary, "proposedAction": body.ProposedAction, "candidates": body.Candidates}})
+	if err != nil {
+		return fiber.NewError(400, "invalid human review metadata")
+	}
+	item, err := h.queries.SetInboxItemHumanReview(c.Context(), store.SetInboxItemHumanReviewParams{ID: pgUUID(itemID), ProcessingMetadata: metadata})
+	if err != nil {
+		return databaseError(err)
+	}
+	return c.JSON(output(item))
+}
+func (h *Handler) ResolveHumanReview(c fiber.Ctx, itemID types.UUID) error {
+	var body generated.ResolveHumanReviewJSONRequestBody
+	if err := c.Bind().Body(&body); err != nil {
+		return fiber.NewError(400, "invalid human review selection")
+	}
+	item, err := h.queries.GetInboxItem(c.Context(), pgUUID(itemID))
+	if err != nil {
+		return databaseError(err)
+	}
+	if item.State != "human_review" {
+		return fiber.NewError(400, "inbox item is not awaiting human review")
+	}
+	var metadata map[string]interface{}
+	if err := json.Unmarshal(item.ProcessingMetadata, &metadata); err != nil {
+		return internal(err)
+	}
+	review, ok := metadata["humanReview"].(map[string]interface{})
+	if !ok {
+		return fiber.NewError(400, "human review details are missing")
+	}
+	if !containsCandidate(review["candidates"], body.CandidateId.String()) {
+		return fiber.NewError(400, "selected candidate is not part of this review")
+	}
+	proposed, ok := review["proposedAction"].(map[string]interface{})
+	if !ok {
+		return fiber.NewError(400, "proposed action is missing")
+	}
+	approved, err := approvedAction(proposed, body.CandidateId.String())
+	if err != nil {
+		return fiber.NewError(400, "invalid proposed action")
+	}
+	review["resolution"] = map[string]interface{}{"candidateId": body.CandidateId.String()}
+	metadata["humanReview"] = review
+	metadata["approvedAction"] = approved
+	encoded, err := json.Marshal(metadata)
+	if err != nil {
+		return internal(err)
+	}
+	queued, err := h.queries.ResolveInboxItemHumanReview(c.Context(), store.ResolveInboxItemHumanReviewParams{ID: pgUUID(itemID), ProcessingMetadata: encoded})
+	if err != nil {
+		return databaseError(err)
+	}
+	return c.JSON(output(queued))
+}
 func attemptOutput(attempt store.InboxProcessingAttempt) generated.ProcessingAttempt {
 	var actions []map[string]interface{}
 	_ = json.Unmarshal(attempt.Actions, &actions)
@@ -149,10 +218,43 @@ func (h *Handler) ResolveInboxItem(c fiber.Ctx, id types.UUID) error {
 }
 func output(item store.InboxItem) generated.InboxItem {
 	var metadata map[string]interface{}
+	var processingMetadata map[string]interface{}
 	var media []string
 	_ = json.Unmarshal(item.SourceMetadata, &metadata)
+	_ = json.Unmarshal(item.ProcessingMetadata, &processingMetadata)
 	_ = json.Unmarshal(item.MediaReferences, &media)
-	return generated.InboxItem{Id: uuid(item.ID), Content: item.Content, Source: generated.InboxItemSource(item.Source), SourceMetadata: &metadata, MediaReferences: &media, State: generated.InboxItemState(item.State), ResolvedAt: nullableTime(item.ResolvedAt), CreatedAt: item.CreatedAt.Time, UpdatedAt: item.UpdatedAt.Time}
+	return generated.InboxItem{Id: uuid(item.ID), Content: item.Content, Source: generated.InboxItemSource(item.Source), SourceMetadata: &metadata, MediaReferences: &media, State: generated.InboxItemState(item.State), ProcessingMetadata: processingMetadata, ResolvedAt: nullableTime(item.ResolvedAt), CreatedAt: item.CreatedAt.Time, UpdatedAt: item.UpdatedAt.Time}
+}
+func containsCandidate(raw interface{}, candidateID string) bool {
+	candidates, ok := raw.([]interface{})
+	if !ok {
+		return false
+	}
+	for _, rawCandidate := range candidates {
+		candidate, ok := rawCandidate.(map[string]interface{})
+		if ok && candidate["id"] == candidateID {
+			return true
+		}
+	}
+	return false
+}
+func approvedAction(proposed map[string]interface{}, candidateID string) (map[string]interface{}, error) {
+	raw, err := json.Marshal(proposed)
+	if err != nil {
+		return nil, err
+	}
+	var approved map[string]interface{}
+	if err := json.Unmarshal(raw, &approved); err != nil {
+		return nil, err
+	}
+	arguments, ok := approved["arguments"].(map[string]interface{})
+	if !ok || approved["tool"] == nil {
+		return nil, errors.New("missing action arguments")
+	}
+	delete(arguments, "taskQuery")
+	arguments["taskId"] = candidateID
+	approved["arguments"] = arguments
+	return approved, nil
 }
 func uuid(value pgtype.UUID) types.UUID   { return types.UUID(value.Bytes) }
 func pgUUID(value types.UUID) pgtype.UUID { return pgtype.UUID{Bytes: [16]byte(value), Valid: true} }
