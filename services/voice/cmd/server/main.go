@@ -6,6 +6,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/gofiber/fiber/v3"
+
 	"github.com/GAMch1k/life-os/pkg/activity"
 	"github.com/GAMch1k/life-os/pkg/database"
 	"github.com/GAMch1k/life-os/pkg/httpserver"
@@ -37,6 +39,7 @@ func run(ctx context.Context) error {
 	app := httpserver.New(
 		cfg.ServiceName,
 		httpserver.WithLogger(logger),
+		httpserver.WithFiberConfig(fiber.Config{BodyLimit: cfg.RequestBodyLimit()}),
 		httpserver.WithReadinessCheck(pool.Ping),
 	)
 	api.Register(app, api.NewHandler(repository.New(pool), storage.Files{Root: cfg.StorageDir}, time.Duration(cfg.RetentionHours)*time.Hour, cfg.MaxUploadBytes, activity.NewEmitter(cfg.ActivityURL, "voice", logger), cfg.WhisperURL))
