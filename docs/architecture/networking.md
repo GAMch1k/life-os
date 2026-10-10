@@ -10,6 +10,8 @@ flowchart TB
  Gateway --> Private[Private Docker network]
  Private --> Dashboard
  Private --> APIs[Finance / Tasks / Inbox / Calendar / Voice / Notifications]
+ Private --> Feeds[calendar-feeds]
+ Feeds -- "outbound HTTPS" --> ICS[ICS feeds]
  Private --> MCP
  Voice --> Whisper[private whisper.cpp]
  Tunnel -- "ntfy.gamch1k.com (no Access, notify-edge)" --> Ntfy["ntfy (notify-edge + notify-internal)"]
@@ -31,7 +33,7 @@ Docker networks:
 
 So there are two public entry points, both through the Cloudflare Tunnel: `lifeos.gamch1k.com` behind Cloudflare Access to the gateway, and `ntfy.gamch1k.com` without Access straight to ntfy, which is protected by its own deny-all accounts. ntfy is on those two networks only, no Life OS service is on `notify-edge`, and the connector is not on `notify-internal`, so the route without Access cannot reach the gateway or any service, Notifications included ([ntfy](../operations/ntfy.md#security-model)). `tools/check-ingress` asserts the published ports and the memberships of all three.
 
-Routes are `/` to Dashboard, `/api/{finance,tasks,inbox,calendar,voice,notifications}/` to corresponding private services, `/api/activity/` read-only to Activity, and `/api/mcp/` to the Streamable HTTP MCP endpoint. The Whisper worker and the [monitor](../services/monitor.md) have no gateway route and no host port; the monitor reads the Dashboard's `/api/status` and posts to Notifications on the private network. Browser code always uses gateway-relative paths.
+Routes are `/` to Dashboard, `/api/{finance,tasks,inbox,calendar,voice,notifications}/` to corresponding private services, `/api/activity/` read-only to Activity, `/api/integrations/<name>/` to integration services (`/api/integrations/calendar-feeds/` to [calendar-feeds](../services/calendar-feeds.md)), and `/api/mcp/` to the Streamable HTTP MCP endpoint. calendar-feeds downloads feeds over outbound HTTPS from the backend network, refusing private and loopback addresses, and publishes nothing. The Whisper worker and the [monitor](../services/monitor.md) have no gateway route and no host port; the monitor reads the Dashboard's `/api/status` and posts to Notifications on the private network. Browser code always uses gateway-relative paths.
 
 The gateway has a 26 MiB body ceiling, connection/request rate limits, explicit proxy timeouts, a longer MCP streaming timeout, and basic browser security headers. It discards caller-supplied forwarded headers and derives them from the immediate peer. It also guards Activity attribution: public traffic may only say it is the owner (`X-Life-OS-Actor: user`) or a development tool (`dev:<name>`, 1–64 letters, digits, `.`, `_`, `-`); `agent:` and `system:` claims are dropped, so such a write fails the services' actor gate (`400 actor_required`), and `X-Correlation-ID` and `X-Causation-ID` are cleared. Internal callers that legitimately send those headers (processor and MCP, Voice worker) use the private network, never the gateway. See [Activity](../services/activity.md#the-actor-gate). It emits no permissive CORS policy; Dashboard is same-origin. There is no cookie/session auth today, so CSRF tokens are not meaningful; add Origin/CSRF checks before introducing cookie authentication. MCP is gateway-routed only for the selected trusted ingress and is not a public browser API.
 
