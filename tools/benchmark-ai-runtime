@@ -4,14 +4,19 @@
 #   tools/benchmark-ai-runtime gpt-6-luna/none gpt-6-luna/low gpt-5.6-luna/medium
 #
 # For each profile (model/effort) a fresh disposable verification stack runs
-# with that profile, seeds Tasks, submits the same captures (EN/RU/DE text,
-# including completions of Tasks titled in another of those languages,
-# through the Inbox API the Dashboard uses, plus one recorded voice note
-# through Voice and whisper.cpp), lets the automatic processor plan them with
-# the authenticated Codex CLI and act through MCP, and then checks the
-# persisted results. Results go to $LIFE_OS_BENCHMARK_DIR (default: a new
-# temporary directory) as one TSV per profile and a summary.
+# with that profile, seeds Tasks and Calendar events, submits the same
+# captures (EN/RU/DE text, including completions of Tasks titled in another
+# of those languages and changes to existing events, through the Inbox API
+# the Dashboard uses, plus one recorded voice note through Voice and
+# whisper.cpp), lets the automatic processor plan them with the
+# authenticated Codex CLI and act through MCP, and then checks the persisted
+# results. The owner's timezone is Europe/Berlin. Results go to
+# $LIFE_OS_BENCHMARK_DIR (default: a new temporary directory) as one TSV per
+# profile and a summary.
 set -euo pipefail
+
+zone=Europe/Berlin
+export LIFE_OS_TIMEZONE=$zone
 
 [ "$#" -gt 0 ] || { echo "usage: $0 model/effort [model/effort ...]" >&2; exit 2; }
 out=${LIFE_OS_BENCHMARK_DIR:-$(mktemp -d)}
@@ -40,6 +45,19 @@ tasks_matching() { # tasks_matching <substring>: number of Tasks whose title con
   api "$gateway/api/tasks/v1/tasks?query=$(jq -rn --arg q "$1" '$q|@uri')&limit=100" | jq '.items | length'
 }
 state() { item "$1" 2>/dev/null | jq -r '.state' 2>/dev/null || echo missing; }
+event() { api "$gateway/api/calendar/v1/events/$1"; }
+# seed_event <title> <days from today> <start HH:MM> <end HH:MM>, in Berlin.
+seed_event() {
+  local day start end
+  day=$(TZ=$zone date -d "+$2 days" +%F)
+  start=$(TZ=$zone date -d "$day $3" +%Y-%m-%dT%H:%M:%S%:z)
+  end=$(TZ=$zone date -d "$day $4" +%Y-%m-%dT%H:%M:%S%:z)
+  post_json /api/calendar/v1/events "$(jq -n --arg title "$1" --arg start "$start" --arg end "$end" '{title: $title, allDay: false, startAt: $start, endAt: $end}')" | jq -r '.id'
+}
+# at_local <RFC3339> <YYYY-MM-DD> <HH:MM>: whether the instant is that Berlin time.
+at_local() { [ -n "$1" ] && [ "$(date -d "$1" +%s)" = "$(TZ=$zone date -d "$2 $3" +%s)" ]; }
+captured_day() { TZ=$zone date -d "$(item "$1" | jq -r '.createdAt')" +%F; }
+review_ids() { item "$1" | jq -c '[.processingMetadata.humanReview.candidates[]?.id] | sort'; }
 
 run_profile() {
   local profile=$1 model=${1%%/*} effort=""
@@ -69,6 +87,14 @@ run_profile() {
   batteries=$(seed "Купить батарейки")
   plants=$(seed "Water the plants")
   fenster=$(seed "Fenster putzen")
+  # Existing Calendar events the captures refer to.
+  local physio team anna haircut team_before anna_before
+  physio=$(seed_event "Physiotherapy" 3 14:00 15:00)
+  team=$(seed_event "Team meeting" 2 10:00 11:00)
+  anna=$(seed_event "Meeting with Anna" 4 16:00 16:30)
+  haircut=$(seed_event "Haircut" 5 12:00 12:30)
+  team_before=$(event "$team" | jq -c '{startAt, endAt, status}')
+  anna_before=$(event "$anna" | jq -c '{startAt, endAt, status}')
 
   declare -A ids
   ids[en_create]=$(capture "Create a task to renew the passport.")
@@ -85,6 +111,9 @@ run_profile() {
   ids[xl_en_ru]=$(capture "I already bought the batteries.")
   ids[xl_de_en]=$(capture "Ich habe die Pflanzen schon gegossen.")
   ids[xl_ru_de]=$(capture "Я уже помыл окна.")
+  ids[cal_reschedule]=$(capture "Move my physiotherapy appointment to tomorrow at 9:00.")
+  ids[cal_ambiguous]=$(capture "Move my meeting to Friday at 15:00.")
+  ids[cal_cancel]=$(capture "Cancel my haircut appointment.")
   local job
   job=$(api -F "audio=@$work/chicken.wav;type=audio/wav" -F source=web "$gateway/api/voice/v1/audio-jobs" | jq -r '.id')
   for _ in $(seq 1 120); do
@@ -146,12 +175,28 @@ run_profile() {
   completed_once xl_en_ru "$batteries" батарей
   completed_once xl_de_en "$plants" plants
   completed_once xl_ru_de "$fenster" Fenster
+  # cal_reschedule: "tomorrow at 9" in Berlin from the capture; the hour is kept.
+  s=$(state "${ids[cal_reschedule]}")
+  local moved day
+  moved=$(event "$physio")
+  day=$(date -u -d "$(captured_day "${ids[cal_reschedule]}") + 1 day" +%F)
+  check cal_reschedule "$([ "$s" = resolved ] && at_local "$(jq -r '.startAt' <<<"$moved")" "$day" 09:00 && at_local "$(jq -r '.endAt' <<<"$moved")" "$day" 10:00 && [ "$(api "$gateway/api/calendar/v1/events/search?q=physio" | jq '.items | length')" = 1 ] && echo 1 || echo 0)" "state=$s startAt=$(jq -r '.startAt' <<<"$moved") want=${day}T09:00 $zone"
+  # cal_ambiguous: two meetings, Human Review with both, neither changed.
+  s=$(state "${ids[cal_ambiguous]}")
+  check cal_ambiguous "$([ "$s" = human_review ] && [ "$(review_ids "${ids[cal_ambiguous]}")" = "$(jq -nc --arg a "$team" --arg b "$anna" '[$a, $b] | sort')" ] && [ "$(event "$team" | jq -c '{startAt, endAt, status}')" = "$team_before" ] && [ "$(event "$anna" | jq -c '{startAt, endAt, status}')" = "$anna_before" ] && echo 1 || echo 0)" "state=$s candidates=$(review_ids "${ids[cal_ambiguous]}")"
+  # cal_cancel: an AI-proposed cancellation waits for the owner, nothing is cancelled.
+  s=$(state "${ids[cal_cancel]}")
+  check cal_cancel "$([ "$s" = human_review ] && [ "$(review_ids "${ids[cal_cancel]}")" = "[\"$haircut\"]" ] && [ "$(event "$haircut" | jq -r .status)" = active ] && echo 1 || echo 0)" "state=$s candidates=$(review_ids "${ids[cal_cancel]}") haircut=$(event "$haircut" | jq -r .status)"
   s=$(state "${ids[voice_complete]}")
   check voice_complete "$([ "$s" = resolved ] && [ "$(task "$chicken" | jq -r .completed)" = true ] && [ "$(tasks_matching chicken)" = 1 ] && echo 1 || echo 0)" "state=$s transcript=\"$(item "${ids[voice_complete]}" | jq -r .content)\" completed=$(task "$chicken" | jq -r .completed)"
   # No fallback or invented entities: ten seeds plus three creates.
   local total
   total=$(api "$gateway/api/tasks/v1/tasks?limit=100" | jq '.items | length')
   check no_extra_tasks "$([ "$total" = 13 ] && echo 1 || echo 0)" "tasks=$total (expected 13): $(api "$gateway/api/tasks/v1/tasks?limit=100" | jq -c '[.items[].title]')"
+  # Four seeded events plus the one created, none cancelled.
+  local all
+  all=$(api "$gateway/api/calendar/v1/events?from=2026-01-01T00:00:00Z&to=$(date -u -d '+60 days' +%Y-%m-%dT%H:%M:%SZ)&includeCancelled=true&limit=100")
+  check no_extra_events "$([ "$(jq '.items | length' <<<"$all")" = 5 ] && [ "$(jq '[.items[] | select(.status != "active")] | length' <<<"$all")" = 0 ] && echo 1 || echo 0)" "events=$(jq -c '[.items[] | {title, status}]' <<<"$all") (expected 5 active)"
 
   # Codex's own usage and the processing time of each planning run.
   local status runtime
