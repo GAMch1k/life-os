@@ -183,7 +183,10 @@ The service that owns a state change sends its notification, so every path into 
 | Tasks | `tasks.evening` | `medium` | Daily at `TASKS_EVENING_TIME` (19:00): one message with the date-only Tasks due tomorrow; not sent when empty. | `/tasks` | `tasks:evening:<local date>` |
 | Tasks | `summary.morning` | `low` (`medium` when merged with the morning list and naming its Tasks) | Daily at `TASKS_SUMMARY_TIME` (08:00): today's events (from Calendar), Tasks, and overdue Tasks; not sent when there is nothing. At the morning-list time it replaces the morning list. | `/` | `summary:morning:<local date>` |
 
-For all of Tasks' messages, one due while Tasks was down is sent within `TASKS_NOTIFY_GRACE_MINUTES` (2 h) and recorded in Activity as missed after that; a failed send is retried at the next run. See [Inbox](inbox.md#notifications), [Monitor](monitor.md), [Calendar](calendar.md#reminder-delivery), and [Tasks](tasks.md#notifications) for the payloads and failure handling.
+| [Finance](finance.md#monthly-budgets) | `finance.budget` | `low` | A category of the current month's budget reaches 80%, and again 100% or over, of its planned amount (booked and pending spending), once per category and month. | `/finance?tab=budget` | `finance.budget:<YYYY-MM>:<categoryId>:80` or `:100` |
+| Finance | `finance.budget.summary` | `low` | The 1st at 09:00 owner-local, for the previous month when it had a budget: "October: spent X of Y, saved Z"; sent up to a week late after an outage. | `/finance?tab=budget&month=<YYYY-MM>` | `finance.budget:<YYYY-MM>:summary` |
+
+For all of Tasks' messages, one due while Tasks was down is sent within `TASKS_NOTIFY_GRACE_MINUTES` (2 h) and recorded in Activity as missed after that; a failed send is retried at the next run. Finance claims each budget notification in its database before sending and gives the claim back when a send fails for now, so it is retried at the next check (every 5 minutes) and never repeated after a restart. See [Inbox](inbox.md#notifications), [Monitor](monitor.md), [Calendar](calendar.md#reminder-delivery), [Tasks](tasks.md#notifications), and [Finance](finance.md#monthly-budgets) for the payloads and failure handling.
 
 ## Operations
 
