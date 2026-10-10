@@ -40,7 +40,7 @@ weekday=Friday
 [ "$(TZ=$zone date +%A)" != Friday ] || weekday=Monday
 
 capture() {
-  curl --fail --silent -H 'content-type: application/json' \
+  curl --fail --silent -H 'content-type: application/json' -H 'X-Life-OS-Actor: dev:smoke-relative-dates' \
     --data "$(jq -nc --arg content "$1" '{content:$content,source:"web",sourceMetadata:{verification:"bug-12-relative-dates"}}')" \
     "$gateway/api/inbox/v1/inbox-items"
 }
