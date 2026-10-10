@@ -1,0 +1,227 @@
+openapi: 3.0.3
+info:
+  title: Life OS Notifications API
+  version: 1.0.0
+  description: >-
+    The one path by which Life OS lets its owner know about something. A
+    service that needs to tell the owner something posts a notification here;
+    Notifications stores it (the Dashboard lists every notification), keeps
+    its read state, and delivers it through the channels configured on this
+    server. Producers never talk to a channel themselves. Producers in Go use
+    `pkg/notify`.
+
+
+    Importance: `high` means something is broken or needs action now (a
+    service went down); `medium` is worth knowing soon (Inbox needs Human
+    Review, a Calendar event reminder); `low` is informational (for example
+    Finance or Food messages). There are no quiet hours. Every importance is
+    delivered right away; a channel decides how loudly (low arrives silently).
+
+
+    Channels are configured on the server (`NOTIFICATIONS_CHANNELS`), never
+    through this API. When a notification is created, one delivery per enabled
+    channel is queued and retried with exponential backoff until it is sent,
+    fails permanently, or is older than the maximum delivery age. With no
+    channel configured, notifications are stored and listed only, and their
+    `deliveries` are empty.
+
+
+    Every write (POST) must say who makes it in the X-Life-OS-Actor header:
+    `user` (the owner), `agent:<name>` (the Life OS AI), `system:<name>` (a
+    Life OS component, for example `system:calendar`), or `dev:<name>` (a
+    development tool or agent working on Life OS, such as Claude Code). Names
+    are 1-64 letters, digits, '.', '_', or '-'. A write without a valid actor
+    is rejected with 400 and error code `actor_required`. Reads do not need the
+    header. The public gateway passes only `user` and `dev:<name>`.
+
+
+    Errors use the shared envelope `{"error": {"code", "message"},
+    "request_id"}`: `bad_request` (400, invalid input), `actor_required` (400),
+    `not_found` (404), and `internal_error` (500).
+  license: {name: UNLICENSED, url: https://life-os.local/license}
+servers: [{url: http://notifications:8080}]
+paths:
+  /v1/notifications:
+    get:
+      summary: List notifications
+      description: >-
+        Newest first: ordered by createdAt (when Notifications received the
+        notification), then id. When more notifications match than `limit`,
+        `nextCursor` is set: pass it back as `cursor`, with the same filters,
+        for the next page. A response without `nextCursor` is the last page.
+      operationId: listNotifications
+      security: []
+      parameters:
+        - {name: importance, in: query, description: Only notifications of this importance., schema: {$ref: '#/components/schemas/NotificationImportance'}}
+        - name: category
+          in: query
+          description: >-
+            A category or a category prefix: `calendar` matches `calendar` and
+            every `calendar.*` category (such as `calendar.reminder`);
+            `calendar.reminder` matches only that category and its
+            subcategories.
+          schema: {type: string, minLength: 1, maxLength: 100, pattern: '^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$'}
+        - {name: source, in: query, description: 'Only notifications from this source, such as calendar or dashboard.', schema: {type: string, minLength: 1, maxLength: 64, pattern: '^[a-z0-9][a-z0-9._-]*$'}}
+        - {name: unread, in: query, description: true lists only unread notifications; false only read ones., schema: {type: boolean}}
+        - {name: cursor, in: query, description: The previous page's nextCursor. Opaque; only valid with the filters it was returned for., schema: {type: string, minLength: 1, maxLength: 200}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}
+      responses:
+        '200': {description: Notifications, content: {application/json: {schema: {$ref: '#/components/schemas/NotificationList'}}}}
+        '400': {description: 'Invalid request, such as a malformed cursor or filter (bad_request)', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    post:
+      summary: Send a notification
+      description: >-
+        Stores the notification and queues one delivery per channel enabled on
+        the server. `dedupeKey` makes sending idempotent: a repeat with a key
+        that was already used returns the original notification unchanged with
+        200 (the first notification wins; the repeat's fields are ignored and
+        nothing is delivered again). Namespace keys with the category, for
+        example `calendar.reminder:<eventId>:<startAt>:<minutes>`. `source`
+        defaults to the actor's name: `system:calendar` becomes `calendar`,
+        `agent:<name>` becomes `<name>`, `user` becomes `dashboard`, and any
+        development tool (`dev:<name>`) becomes `dev`.
+      operationId: createNotification
+      security: []
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateNotificationRequest'}}}}
+      responses:
+        '200': {description: 'The dedupeKey was already used: the original notification, unchanged', content: {application/json: {schema: {$ref: '#/components/schemas/Notification'}}}}
+        '201': {description: Notification stored and its deliveries queued, content: {application/json: {schema: {$ref: '#/components/schemas/Notification'}}}}
+        '400': {description: 'Invalid notification (bad_request), or no valid X-Life-OS-Actor (actor_required)', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  /v1/notifications/unread-count:
+    get:
+      summary: Count unread notifications
+      description: A cheap read for a navigation badge.
+      operationId: getUnreadCount
+      security: []
+      responses:
+        '200': {description: Unread counts, content: {application/json: {schema: {$ref: '#/components/schemas/UnreadCount'}}}}
+        '400': {description: Invalid request, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  /v1/notifications/read-all:
+    post:
+      summary: Mark all notifications read
+      description: >-
+        Marks every unread notification read, or with `before` only those
+        created at or before that instant (so a notification that arrives
+        while the owner looks at the list stays unread). The body is optional.
+      operationId: markAllNotificationsRead
+      security: []
+      requestBody: {required: false, content: {application/json: {schema: {$ref: '#/components/schemas/MarkAllReadRequest'}}}}
+      responses:
+        '200': {description: Notifications marked read, content: {application/json: {schema: {$ref: '#/components/schemas/MarkAllReadResult'}}}}
+        '400': {description: 'Invalid request (bad_request), or no valid X-Life-OS-Actor (actor_required)', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  /v1/notifications/{notificationId}:
+    get:
+      summary: Get a notification
+      description: The notification with the state of each of its deliveries.
+      operationId: getNotification
+      security: []
+      parameters: [{name: notificationId, in: path, required: true, schema: {type: string, format: uuid}}]
+      responses:
+        '200': {description: Notification, content: {application/json: {schema: {$ref: '#/components/schemas/Notification'}}}}
+        '400': {description: Invalid notification id, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '404': {description: Notification not found (not_found), content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  /v1/notifications/{notificationId}/read:
+    post:
+      summary: Mark a notification read
+      description: Idempotent; a notification that is already read keeps its readAt.
+      operationId: markNotificationRead
+      security: []
+      parameters: [{name: notificationId, in: path, required: true, schema: {type: string, format: uuid}}]
+      responses:
+        '200': {description: 'The notification, now read', content: {application/json: {schema: {$ref: '#/components/schemas/Notification'}}}}
+        '400': {description: 'Invalid notification id, or no valid X-Life-OS-Actor (actor_required)', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '404': {description: Notification not found (not_found), content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+components:
+  schemas:
+    NotificationImportance:
+      type: string
+      description: >-
+        high = something is broken or needs action now (a service went down);
+        medium = worth knowing soon (Human Review, a Calendar reminder); low =
+        informational, delivered silently.
+      enum: [low, medium, high]
+    DeliveryStatus:
+      type: string
+      description: >-
+        pending = queued and not tried yet, or being sent now; retrying = an
+        attempt failed and another is scheduled at nextAttemptAt; sent = the
+        channel accepted it; failed = a permanent error, or no success within
+        the maximum delivery age; skipped = deliberately not sent, for example
+        because the channel is no longer configured.
+      enum: [pending, sent, retrying, failed, skipped]
+    Delivery:
+      type: object
+      description: The delivery of one notification through one channel.
+      required: [channel, status, attempts, lastError, nextAttemptAt, sentAt]
+      properties:
+        channel: {type: string, description: 'Channel name, such as ntfy.'}
+        status: {$ref: '#/components/schemas/DeliveryStatus'}
+        attempts: {type: integer, minimum: 0, description: Attempts started so far.}
+        lastError: {type: string, nullable: true, description: The most recent failed attempt's error.}
+        nextAttemptAt: {type: string, format: date-time, nullable: true, description: When the next attempt is due (pending and retrying only).}
+        sentAt: {type: string, format: date-time, nullable: true}
+    Notification:
+      type: object
+      required: [id, title, body, importance, category, source, link, dedupeKey, occurredAt, createdAt, readAt, deliveries]
+      properties:
+        id: {type: string, format: uuid}
+        title: {type: string}
+        body: {type: string, description: Plain text; empty when the title says everything.}
+        importance: {$ref: '#/components/schemas/NotificationImportance'}
+        category: {type: string, description: 'Dotted lowercase kind, such as calendar.reminder.'}
+        source: {type: string, description: 'The producing service or client, such as calendar or dashboard.'}
+        link: {type: string, nullable: true, description: 'A Life OS path to open, such as /calendar?date=2026-10-10.'}
+        dedupeKey: {type: string}
+        occurredAt: {type: string, format: date-time, description: When the notified thing happened (defaults to createdAt).}
+        createdAt: {type: string, format: date-time, description: When Notifications received it.}
+        readAt: {type: string, format: date-time, nullable: true, description: When the owner marked it read; null while unread.}
+        deliveries: {type: array, items: {$ref: '#/components/schemas/Delivery'}}
+    CreateNotificationRequest:
+      type: object
+      required: [title, importance, category, dedupeKey]
+      properties:
+        title: {type: string, minLength: 1, maxLength: 200, description: 'One line, without control characters; surrounding spaces are trimmed.'}
+        body: {type: string, maxLength: 2000, description: 'Plain text (no HTML or Markdown); line breaks and tabs are kept.'}
+        importance: {$ref: '#/components/schemas/NotificationImportance'}
+        category:
+          type: string
+          minLength: 3
+          maxLength: 100
+          pattern: '^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$'
+          description: 'Dotted lowercase kind with at least two parts, such as calendar.reminder, inbox.human_review, status.service_down, or test.manual.'
+        source: {type: string, minLength: 1, maxLength: 64, pattern: '^[a-z0-9][a-z0-9._-]*$', description: The producing service. Defaults to the actor's name (see createNotification).}
+        link: {type: string, minLength: 1, maxLength: 500, pattern: '^/([^/\\]|$)', description: 'A Life OS path starting with a single /, such as /inbox or /calendar?date=2026-10-10. Absolute and protocol-relative URLs are rejected.'}
+        dedupeKey: {type: string, minLength: 1, maxLength: 200, description: 'Idempotency key, unique across all notifications; without control characters or surrounding spaces.'}
+        occurredAt: {type: string, format: date-time, description: When the notified thing happened. Defaults to now.}
+    NotificationList:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/Notification'}}
+        nextCursor: {type: string, nullable: true, description: Set when more notifications match; pass it as cursor for the next page.}
+    UnreadCount:
+      type: object
+      required: [count, highCount]
+      properties:
+        count: {type: integer, minimum: 0, description: Unread notifications.}
+        highCount: {type: integer, minimum: 0, description: Unread notifications of high importance.}
+    MarkAllReadRequest:
+      type: object
+      properties:
+        before: {type: string, format: date-time, description: Only notifications created at or before this instant.}
+    MarkAllReadResult:
+      type: object
+      required: [marked]
+      properties:
+        marked: {type: integer, minimum: 0, description: Notifications that were unread and are now read.}
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: {type: string, description: 'Machine-readable code, such as bad_request, actor_required, or not_found.'}
+            message: {type: string}
+        request_id: {type: string}

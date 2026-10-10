@@ -6,6 +6,7 @@ import {
   createCalendarClient,
   createFinanceClient,
   createInboxClient,
+  createNotificationsClient,
   createTasksClient,
   createVoiceClient,
 } from "./index";
@@ -20,6 +21,7 @@ test("each generated service client accepts an explicit base URL", () => {
   assert.ok(createCalendarClient(url));
   assert.ok(createVoiceClient(url));
   assert.ok(createActivityClient(url));
+  assert.ok(createNotificationsClient(url));
 });
 
 test("service clients act for the owner on every request", async () => {
@@ -44,10 +46,14 @@ test("service clients act for the owner on every request", async () => {
       bodySerializer: () => new FormData(),
     });
     await createActivityClient(url).GET("/v1/activity-events");
+    await createNotificationsClient(url).POST(
+      "/v1/notifications/{notificationId}/read",
+      { params: { path: { notificationId: "n" } } },
+    );
   } finally {
     globalThis.fetch = original;
   }
-  assert.deepEqual(actors, Array(6).fill("user"));
+  assert.deepEqual(actors, Array(7).fill("user"));
 });
 
 test("only owner and development-tool actors count as public", () => {

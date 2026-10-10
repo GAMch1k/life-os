@@ -10,6 +10,10 @@ Life OS supports loopback gateway behind host Nginx TLS/Basic Auth, or a WireGua
 
 `activity_db` is provisioned automatically only on a fresh PostgreSQL volume. On an existing host, add `LIFE_OS_ACTIVITY_DB_PASSWORD` to `.env` and run `make db-provision` once (idempotent). Then start the stack so `activity-migrate` and `activity` come up before the gateway. Until Activity is reachable, services keep working and only skip recording events.
 
+## Adding the Notifications service to an existing deployment
+
+`notifications_db` is provisioned automatically only on a fresh PostgreSQL volume. On an existing host, add `LIFE_OS_NOTIFICATIONS_DB_PASSWORD` to `.env`, then recreate the PostgreSQL container (`docker compose up --detach postgres`) so it sees the new variable and the updated `infra/postgres/service-databases.conf`, and run `make db-provision` once (idempotent). Then start the stack so `notifications-migrate` and `notifications` come up before the gateway, which routes `/api/notifications/` and waits for the service. No channel is configured by default (`LIFE_OS_NOTIFICATIONS_CHANNELS` empty): notifications are stored and listed only. See [Notifications](../services/notifications.md).
+
 ## Safe verification on a deployed host
 
 Do not use raw `docker compose down --volumes` with the normal deployment to

@@ -101,6 +101,24 @@ services:
     networks: [backend]
     restart: unless-stopped
 
+  notifications-migrate:
+    image: migrate/migrate:v4.18.3
+    command: ["-path", "/migrations", "-database", "postgres://notifications_user:${LIFE_OS_NOTIFICATIONS_DB_PASSWORD}@postgres:5432/notifications_db?sslmode=disable", "up"]
+    volumes: ["./services/notifications/db/migrations:/migrations:ro"]
+    depends_on: {postgres: {condition: service_healthy}}
+    networks: [backend]
+    restart: "no"
+  # The one path for notifications to the owner. Channels are configured here
+  # (LIFE_OS_NOTIFICATIONS_CHANNELS); none by default, so notifications are
+  # stored and listed in the Dashboard only.
+  notifications:
+    build: {context: ., dockerfile: services/notifications/Dockerfile}
+    environment: {SERVICE_NAME: notifications, PORT: 8080, DATABASE_URL: "postgres://notifications_user:${LIFE_OS_NOTIFICATIONS_DB_PASSWORD}@postgres:5432/notifications_db?sslmode=disable", ACTIVITY_SERVICE_URL: "http://activity:8080", NOTIFICATIONS_CHANNELS: "${LIFE_OS_NOTIFICATIONS_CHANNELS:-}"}
+    expose: ["8080"]
+    depends_on: {notifications-migrate: {condition: service_completed_successfully}}
+    networks: [backend]
+    restart: unless-stopped
+
   dashboard:
     build: {context: ., dockerfile: apps/dashboard/Dockerfile}
     environment:
@@ -110,6 +128,7 @@ services:
       CALENDAR_SERVICE_URL: http://calendar:8080
       VOICE_SERVICE_URL: http://voice:8080
       ACTIVITY_SERVICE_URL: http://activity:8080
+      NOTIFICATIONS_SERVICE_URL: http://notifications:8080
       PROCESSOR_STATUS_URL: http://processor:8081
       LIFE_OS_TIMEZONE: ${LIFE_OS_TIMEZONE:-UTC}
     expose: ["3000"]
@@ -264,6 +283,7 @@ services:
       mcp: {condition: service_started}
       voice: {condition: service_started}
       activity: {condition: service_started}
+      notifications: {condition: service_started}
     # edge: the only network the Cloudflare connector shares with Life OS.
     networks: [backend, edge]
     restart: unless-stopped

@@ -13,6 +13,7 @@ import {
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import { NotificationBell } from "@/components/notification-bell";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { cn } from "@/lib/utils";
 
@@ -32,9 +33,14 @@ function isCurrent(pathname: string, href: string) {
     : pathname === href || pathname.startsWith(`${href}/`);
 }
 
+/**
+ * The shell around every page. `timeZone` is the zone the page renders in,
+ * for the notification times in the bell's popover.
+ */
 export function AppShell({
   children,
-}: Readonly<{ children: React.ReactNode }>) {
+  timeZone,
+}: Readonly<{ children: React.ReactNode; timeZone: string }>) {
   const pathname = usePathname();
   return (
     <div className="bg-canvas min-h-dvh">
@@ -55,7 +61,12 @@ export function AppShell({
             </span>
             Life OS
           </Link>
-          <ThemeToggle />
+          {/* The bell is the way to notifications on every page and screen
+              size, so the navigation stays seven items. */}
+          <div className="flex items-center gap-1.5">
+            <NotificationBell timeZone={timeZone} />
+            <ThemeToggle />
+          </div>
         </div>
       </header>
 
