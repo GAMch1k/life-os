@@ -24,6 +24,21 @@ services:
   notifications:
     image: lifeos-notifications:latest
     ports: !reset []
+  # Never the owner's bank: no Enable Banking credentials, an empty key, and
+  # an API address that resolves nowhere (tools/verify-compose refuses a
+  # plan with any of them set). Browser tests stub the bank in the page.
+  banking:
+    image: lifeos-banking:latest
+    ports: !reset []
+    environment:
+      LIFE_OS_ENABLE_BANKING_APP_ID: ""
+      LIFE_OS_BANKING_TOKEN_KEY: ""
+      ENABLE_BANKING_API_URL: "http://enablebanking.invalid"
+    volumes: !override
+      - type: bind
+        source: /dev/null
+        target: /run/secrets/enablebanking.pem
+        read_only: true
   dashboard:
     image: lifeos-dashboard:latest
     ports: !reset []
