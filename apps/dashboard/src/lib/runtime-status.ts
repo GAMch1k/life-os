@@ -1,6 +1,8 @@
 import { normalizeServiceUrl, serviceBaseUrls } from "@/config/services";
 import { calendarClient } from "@/lib/api/calendar-client";
+import { calendarFeedsClient } from "@/lib/api/calendar-feeds-client";
 import type { components as CalendarComponents } from "@/lib/api/generated/calendar";
+import type { components as CalendarFeedsComponents } from "@/lib/api/generated/calendar-feeds";
 import { inboxClient } from "@/lib/api/inbox-client";
 import type { components as InboxComponents } from "@/lib/api/generated/inbox";
 import type { components as NotificationsComponents } from "@/lib/api/generated/notifications";
@@ -18,8 +20,9 @@ import { configuredTimeZone, userTimeZone } from "@/lib/user-time-zone";
 // The Status page turns supported runtime state into actionable checks:
 // - the processor's private /status endpoint (what the running process saw),
 // - the Inbox and Voice backlog APIs (durable queue state),
-// - the Calendar sources API (each subscribed feed's refresh state), its
-//   Google connection, and the sync state of the Google calendars,
+// - the calendar-feeds integration (each subscribed feed's refresh state,
+//   with its name and enabled from Calendar's sources), Calendar's Google
+//   connection, and the sync state of the Google calendars,
 // - the Notifications channels API (each delivery channel's recent outcomes),
 // - each owning service's /ready endpoint.
 // Nothing here is inferred from UI behaviour.
@@ -27,6 +30,12 @@ import { configuredTimeZone, userTimeZone } from "@/lib/user-time-zone";
 export type InboxBacklog = InboxComponents["schemas"]["InboxBacklog"];
 export type AudioBacklog = VoiceComponents["schemas"]["AudioBacklog"];
 export type CalendarSource = CalendarComponents["schemas"]["CalendarSource"];
+export type CalendarFeed = CalendarFeedsComponents["schemas"]["Feed"];
+/** What Status shows of a feed: its refresh state, name, and switch. */
+export type FeedHealth = Pick<
+  CalendarFeed,
+  "id" | "name" | "enabled" | "refresh"
+>;
 export type NotificationChannel = NotificationsComponents["schemas"]["Channel"];
 
 /** Mirrors `Status` in services/mcp/internal/processor/status.go. */
@@ -238,8 +247,14 @@ export type RuntimeSignals = {
   inbox: InboxBacklog | null;
   voice: AudioBacklog | null;
   /**
-   * Calendar sources; null when Calendar could not be read, absent when not
-   * checked (the check is left out).
+   * The feeds of the calendar-feeds integration; null when it could not be
+   * read, absent when not checked (the check is left out).
+   */
+  calendarFeeds?: CalendarFeed[] | null;
+  /**
+   * Calendar's sources, for each feed's current name and enabled (the
+   * owner's, in Calendar); null or absent when not read (the feeds' own
+   * copies are shown).
    */
   calendarSources?: CalendarSource[] | null;
   /** The Google Calendar connection; null or absent when not read. */
@@ -612,7 +627,7 @@ function voiceCheck(
 export const SOURCE_FAILURE_ALERT = 3;
 
 /** What a feed's last refresh changed, such as "3 added, 1 cancelled". */
-function refreshCounts(counts: CalendarSource["refresh"]["lastCounts"]) {
+function refreshCounts(counts: FeedHealth["refresh"]["lastCounts"]) {
   if (!counts) return "no changes";
   const parts = (
     [
@@ -627,7 +642,7 @@ function refreshCounts(counts: CalendarSource["refresh"]["lastCounts"]) {
   return parts.length ? parts.join(", ") : "no changes";
 }
 
-function lastRefreshLabel(source: CalendarSource, timeZone: string) {
+function lastRefreshLabel(source: FeedHealth, timeZone: string) {
   const { refresh } = source;
   const at = refresh.lastAttemptAt
     ? ` (${formatTime(refresh.lastAttemptAt, timeZone)})`
@@ -645,10 +660,7 @@ function lastRefreshLabel(source: CalendarSource, timeZone: string) {
 }
 
 /** One feed's refresh health. Its URL is never shown: it can be personal. */
-export function sourcePart(
-  source: CalendarSource,
-  timeZone: string,
-): StatusPart {
+export function sourcePart(source: FeedHealth, timeZone: string): StatusPart {
   const { refresh } = source;
   const failures = refresh.consecutiveFailures;
   const failing = source.enabled && refresh.lastOutcome === "failed";
@@ -700,21 +712,43 @@ export function sourcePart(
   };
 }
 
+/**
+ * Each feed with the name and enabled its Calendar source has now (the
+ * owner changes them in Calendar); a feed whose source is not listed keeps
+ * its own copies.
+ */
+export function feedHealth(
+  feeds: CalendarFeed[],
+  sources: CalendarSource[] | null | undefined,
+): FeedHealth[] {
+  return feeds.map((feed) => {
+    const source = sources?.find((entry) => entry.id === feed.sourceId);
+    return {
+      id: feed.id,
+      name: source?.name ?? feed.name,
+      enabled: source?.enabled ?? feed.enabled,
+      refresh: feed.refresh,
+    };
+  });
+}
+
 function calendarCheck(
-  sources: CalendarSource[] | null,
+  feeds: CalendarFeed[] | null,
+  calendarSources: CalendarSource[] | null | undefined,
   timeZone: string,
 ): StatusCheck {
   const base = { id: "calendar" as const, title: "Calendar sources" };
-  if (sources === null) {
+  if (feeds === null) {
     return {
       ...base,
       state: "problem",
       summary: "Calendar sources are unavailable.",
       action:
-        "Subscribed feeds are not refreshed until Calendar is back. Their events stay as they are.",
+        "Subscribed feeds are not refreshed until the calendar-feeds service is back. Their events stay as they are.",
       facts: [],
     };
   }
+  const sources = feedHealth(feeds, calendarSources);
   if (sources.length === 0) {
     return {
       ...base,
@@ -751,13 +785,13 @@ function calendarCheck(
       parts,
     };
   }
-  const feeds = `${sources.length} calendar feed${sources.length === 1 ? "" : "s"}`;
+  const count = `${sources.length} calendar feed${sources.length === 1 ? "" : "s"}`;
   return {
     ...base,
     state: "ok",
     summary: retrying.length
       ? `${retrying.map((source) => source.name).join(", ")}: the last refresh failed and is retried automatically.`
-      : `${feeds} refreshing normally.`,
+      : `${count} refreshing normally.`,
     facts: [],
     parts,
   };
@@ -1074,11 +1108,15 @@ export function toRuntimeStatus(
     processingCheck(signals.processor, timeZone, configured),
     inboxCheck(signals.inbox, now, timeZone),
     voiceCheck(signals.voice, now, timeZone),
-    ...(signals.calendarSources === undefined
+    ...(signals.calendarFeeds === undefined
       ? []
       : [
           withGoogle(
-            calendarCheck(signals.calendarSources, timeZone),
+            calendarCheck(
+              signals.calendarFeeds,
+              signals.calendarSources,
+              timeZone,
+            ),
             signals.googleConnection,
             timeZone,
             signals.googleCalendars,
@@ -1155,6 +1193,7 @@ const SERVICE_NAMES: Record<keyof typeof serviceBaseUrls, string> = {
   voice: "Voice",
   activity: "Activity",
   notifications: "Notifications",
+  calendarFeeds: "Calendar feeds",
 };
 
 export async function getRuntimeStatus(): Promise<RuntimeStatus> {
@@ -1167,6 +1206,7 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
     processor,
     inbox,
     voice,
+    calendarFeeds,
     calendarSources,
     googleConnection,
     googleCalendars,
@@ -1180,6 +1220,10 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
     voiceClient
       .GET("/v1/backlog", timeout)
       .then(({ data }) => data ?? null)
+      .catch(() => null),
+    calendarFeedsClient
+      .GET("/v1/feeds", timeout)
+      .then(({ data }) => data?.items ?? null)
       .catch(() => null),
     calendarClient
       .GET("/v1/sources", timeout)
@@ -1208,6 +1252,7 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
       processor,
       inbox,
       voice,
+      calendarFeeds,
       calendarSources,
       googleConnection,
       notificationChannels: await notificationChannels,
