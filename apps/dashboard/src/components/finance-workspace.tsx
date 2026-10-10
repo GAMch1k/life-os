@@ -1,13 +1,18 @@
 "use client";
 
 import { Plus } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 
 import {
   AccountDialog,
   type AccountDialogState,
   FinanceAccounts,
 } from "@/components/finance-accounts";
+import { FinanceBudget } from "@/components/finance-budget";
+import {
+  BudgetEditor,
+  type BudgetEditorState,
+} from "@/components/finance-budget-editor";
 import { FinanceCategories } from "@/components/finance-categories";
 import { FinanceImport } from "@/components/finance-import";
 import { FinanceSummary } from "@/components/finance-summary";
@@ -27,6 +32,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { financeClient } from "@/lib/api/finance-client";
+import { type FinanceTab, budgetHref } from "@/lib/finance-budget";
 import { monthRange } from "@/lib/finance-summary";
 import {
   type FinanceWorkspaceState,
@@ -37,13 +44,13 @@ import {
   UNCATEGORIZED,
   accountCurrencies,
   fetchAccounts,
+  fetchBudget,
   fetchRules,
   fetchSummary,
   fetchTransactions,
+  financeErrorMessage,
   upsert,
 } from "@/lib/finance-workspace";
-
-type Tab = "transactions" | "summary" | "categories";
 
 /** Waits this long after the last keystroke before searching. */
 const SEARCH_DELAY_MS = 250;
@@ -65,21 +72,29 @@ function failedList(error: string): TransactionList {
 
 /**
  * The Finance workspace: accounts with their balances, then tabs for every
- * transaction (search, filters, add, edit), the monthly summary, and
- * categories with their rules. The server renders the first view; every
- * change after that is read back from Finance in the browser, so balances,
- * lists, and the summary stay in step.
+ * transaction (search, filters, add, edit), the monthly summary, the
+ * monthly budget, and categories with their rules. The server renders the
+ * first view; every change after that is read back from Finance in the
+ * browser, so balances, lists, the summary, and the budget stay in step.
+ * The tab and the budget's month are kept in the URL
+ * (`/finance?tab=budget&month=2026-10`), so notifications can link there.
  */
 export function FinanceWorkspace({
   state,
   month,
   today,
+  initialTab = "transactions",
+  budgetMonth = month,
 }: {
   state: FinanceWorkspaceState;
   /** The owner's current month (YYYY-MM). */
   month: string;
   /** The owner's today (YYYY-MM-DD), decided once by the server render. */
   today: string;
+  /** The tab the URL named. */
+  initialTab?: FinanceTab;
+  /** The budget's month the URL named (YYYY-MM). */
+  budgetMonth?: string;
 }) {
   if (state.kind === "unavailable")
     return (
@@ -96,19 +111,31 @@ export function FinanceWorkspace({
         </Card>
       </div>
     );
-  return <ReadyWorkspace initial={state} month={month} today={today} />;
+  return (
+    <ReadyWorkspace
+      budgetMonth={budgetMonth}
+      initial={state}
+      initialTab={initialTab}
+      month={month}
+      today={today}
+    />
+  );
 }
 
 function ReadyWorkspace({
   initial,
+  initialTab,
+  budgetMonth: firstBudgetMonth,
   month: thisMonth,
   today,
 }: {
   initial: Extract<FinanceWorkspaceState, { kind: "ready" }>;
+  initialTab: FinanceTab;
+  budgetMonth: string;
   month: string;
   today: string;
 }) {
-  const [tab, setTab] = useState<Tab>("transactions");
+  const [tab, setTab] = useState<FinanceTab>(initialTab);
   const [accounts, setAccounts] = useState(initial.accounts);
   const [categories, setCategories] = useState(initial.categories.data ?? []);
   const [rules, setRules] = useState(initial.rules.data ?? []);
@@ -122,6 +149,11 @@ function ReadyWorkspace({
   const [currency, setCurrency] = useState("");
   const [summary, setSummary] = useState(initial.summary);
   const [summaryLoading, setSummaryLoading] = useState(false);
+  const [budgetMonth, setBudgetMonth] = useState(firstBudgetMonth);
+  const [budget, setBudget] = useState(initial.budget);
+  const [budgetLoading, setBudgetLoading] = useState(false);
+  const [budgetEditor, setBudgetEditor] = useState<BudgetEditorState>(null);
+  const [budgetPending, startBudgetChange] = useTransition();
   const [transactionDialog, setTransactionDialog] =
     useState<TransactionDialogState>(null);
   const [accountDialog, setAccountDialog] = useState<AccountDialogState>(null);
@@ -130,6 +162,7 @@ function ReadyWorkspace({
   const request = useRef<AbortController | null>(null);
   const searchTimer = useRef<number | undefined>(undefined);
   const summaryTicket = useRef(0);
+  const budgetTicket = useRef(0);
 
   useEffect(
     () => () => {
@@ -217,6 +250,55 @@ function ReadyWorkspace({
     });
   };
 
+  const loadBudget = (month: string) => {
+    const ticket = ++budgetTicket.current;
+    setBudgetLoading(true);
+    void fetchBudget(month).then((result) => {
+      if (ticket !== budgetTicket.current) return;
+      setBudget(result);
+      setBudgetLoading(false);
+    });
+  };
+
+  /** Keeps the tab and the budget's month in the URL. */
+  const showInURL = (next: FinanceTab, month: string) => {
+    const href =
+      next === "budget"
+        ? budgetHref(month === thisMonth ? undefined : month)
+        : next === "transactions"
+          ? "/finance"
+          : `/finance?tab=${next}`;
+    window.history.replaceState(null, "", href);
+  };
+
+  const changeTab = (next: FinanceTab) => {
+    setTab(next);
+    showInURL(next, budgetMonth);
+  };
+
+  const changeBudgetMonth = (month: string) => {
+    setBudgetMonth(month);
+    loadBudget(month);
+    showInURL("budget", month);
+  };
+
+  const resetBudget = (month: string) =>
+    startBudgetChange(async () => {
+      const { error, response } = await financeClient
+        .DELETE("/v1/budgets/{month}", { params: { path: { month } } })
+        .catch(() => ({ error: undefined, response: undefined }));
+      if (!response?.ok) {
+        setBudget({
+          error: financeErrorMessage(
+            error,
+            "Could not return to the regular plan.",
+          ),
+        });
+        return;
+      }
+      loadBudget(month);
+    });
+
   const refreshAccounts = () =>
     void fetchAccounts().then((result) => {
       if (result.error === undefined) setAccounts(result.data);
@@ -229,6 +311,7 @@ function ReadyWorkspace({
   const transactionsChanged = (reload: boolean) => {
     refreshAccounts();
     loadSummary(summaryMonth, currency);
+    loadBudget(budgetMonth);
     if (reload) loadTransactions(filters);
   };
 
@@ -248,7 +331,7 @@ function ReadyWorkspace({
 
   const showAccount = (accountId: string) => {
     changeFilters({ accountId });
-    setTab("transactions");
+    changeTab("transactions");
   };
 
   // The summary's numbers are booked transactions of the month, so its
@@ -260,7 +343,17 @@ function ReadyWorkspace({
       categoryId: categoryId ?? UNCATEGORIZED,
       status: "booked",
     });
-    setTab("transactions");
+    changeTab("transactions");
+  };
+
+  // The budget counts booked and pending money, so its category opens both.
+  const showBudgetCategory = (categoryId: string | null) => {
+    changeFilters({
+      ...NO_FILTERS,
+      ...monthRange(budgetMonth),
+      categoryId: categoryId ?? UNCATEGORIZED,
+    });
+    changeTab("transactions");
   };
 
   const reloadRules = () =>
@@ -304,12 +397,13 @@ function ReadyWorkspace({
 
       <Tabs
         className="gap-3"
-        onValueChange={(value) => setTab(value as Tab)}
+        onValueChange={(value) => changeTab(value as FinanceTab)}
         value={tab}
       >
         <TabsList className="max-w-full overflow-x-auto">
           <TabsTrigger value="transactions">Transactions</TabsTrigger>
           <TabsTrigger value="summary">Summary</TabsTrigger>
+          <TabsTrigger value="budget">Budget</TabsTrigger>
           <TabsTrigger value="categories">Categories &amp; rules</TabsTrigger>
         </TabsList>
         <TabsContent value="transactions">
@@ -347,6 +441,20 @@ function ReadyWorkspace({
             thisMonth={thisMonth}
           />
         </TabsContent>
+        <TabsContent value="budget">
+          <FinanceBudget
+            budget={budget}
+            loading={budgetLoading}
+            month={budgetMonth}
+            onEdit={(data) => setBudgetEditor({ budget: data })}
+            onMonthChange={changeBudgetMonth}
+            onReset={resetBudget}
+            onShowCategory={showBudgetCategory}
+            pending={budgetPending}
+            thisMonth={thisMonth}
+            today={today}
+          />
+        </TabsContent>
         <TabsContent value="categories">
           <FinanceCategories
             categories={categories}
@@ -354,6 +462,7 @@ function ReadyWorkspace({
             onCategorySaved={(category) => {
               setCategories((current) => upsert(current, category));
               loadSummary(summaryMonth, currency);
+              loadBudget(budgetMonth);
             }}
             onRuleDeleted={(rule) =>
               setRules((current) =>
@@ -387,6 +496,17 @@ function ReadyWorkspace({
         }}
         state={transactionDialog}
         today={today}
+      />
+      <BudgetEditor
+        categories={categories}
+        onClose={() => setBudgetEditor(null)}
+        onSaved={(saved) => {
+          // The answer is the month's budget with the new plan.
+          budgetTicket.current++;
+          setBudget({ data: saved });
+          setBudgetLoading(false);
+        }}
+        state={budgetEditor}
       />
       <AccountDialog
         accounts={accounts}

@@ -78,6 +78,7 @@ test("summaryRows shows each category's larger side against the largest", () => 
         name: "Groceries",
         kind: "expense",
         color: "#22c55e",
+        systemKey: null,
         archived: false,
         archivedAt: null,
         createdAt: "2026-10-01T00:00:00Z",

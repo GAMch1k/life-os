@@ -155,7 +155,8 @@ export function idempotencyKey() {
 export type Loaded<T> =
   { data: T; error?: undefined } | { data?: undefined; error: string };
 
-async function load<T>(
+/** A request's data, or the error's plain words (`fallback` without any). */
+export async function load<T>(
   call: () => Promise<{ data?: T; error?: unknown }>,
   fallback: string,
 ): Promise<Loaded<T>> {
@@ -243,6 +244,17 @@ export function fetchSummary(month: string, currency?: string) {
   );
 }
 
+/** A month's budget (see finance-budget.ts). */
+export function fetchBudget(month: string) {
+  return load(
+    () =>
+      financeClient.GET("/v1/budgets/{month}", {
+        params: { path: { month } },
+      }),
+    "The budget could not be loaded.",
+  );
+}
+
 export type FinanceWorkspaceState =
   | {
       kind: "ready";
@@ -251,24 +263,29 @@ export type FinanceWorkspaceState =
       rules: Loaded<CategoryRule[]>;
       transactions: Loaded<TransactionPage>;
       summary: Loaded<MonthlySummary>;
+      budget: Loaded<Schemas["BudgetMonth"]>;
     }
   | { kind: "unavailable"; error: string };
 
 /**
  * Everything the workspace shows first: accounts, categories and rules, the
- * latest transactions, and this month's summary. Without accounts Finance is
- * unavailable; any other part that fails says so in its own place.
+ * latest transactions, this month's summary, and the budget of
+ * `budgetMonth` (this month unless the URL names another). Without accounts
+ * Finance is unavailable; any other part that fails says so in its own
+ * place.
  */
 export async function getFinanceWorkspace(
   month: string,
+  budgetMonth: string = month,
 ): Promise<FinanceWorkspaceState> {
-  const [accounts, categories, rules, transactions, summary] =
+  const [accounts, categories, rules, transactions, summary, budget] =
     await Promise.all([
       fetchAccounts(),
       fetchCategories(),
       fetchRules(),
       fetchTransactions(NO_FILTERS),
       fetchSummary(month),
+      fetchBudget(budgetMonth),
     ]);
   if (accounts.error !== undefined) {
     return { kind: "unavailable", error: accounts.error };
@@ -280,6 +297,7 @@ export async function getFinanceWorkspace(
     rules,
     transactions,
     summary,
+    budget,
   };
 }
 
