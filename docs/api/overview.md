@@ -13,6 +13,7 @@ Every write (`POST`, `PUT`, `PATCH`, `DELETE`) to Finance, Tasks, Inbox, Calenda
 | Voice (`/api/voice`) | `POST /v1/audio-jobs` (multipart audio, returns 202), `GET /v1/audio-jobs/{id}` |
 | Activity (`/api/activity`, read-only) | `GET /v1/activity-events` (filters: `correlationId`, `subjectType`/`subjectId`, `type`, `source`, `outcome`, `from`/`to`), `GET /v1/activity-events/{id}`; recording is internal only — see [Activity](../services/activity.md) |
 | Notifications (`/api/notifications`) | `GET/POST /v1/notifications` (filters: `importance`, `category` prefix, `source`, `unread`; `dedupeKey` makes sending idempotent), `GET /v1/notifications/{id}`, `POST /v1/notifications/{id}/read`, `POST /v1/notifications/read-all`, `GET /v1/notifications/unread-count`; see [Notifications](../services/notifications.md) |
+| Dashboard (`/api/status`) | `GET /api/status`: the Status page's checks as JSON, never cached; the [monitor](../services/monitor.md) polls it |
 | MCP (`/api/mcp`) | Streamable HTTP endpoint at `/mcp`; health and readiness probes |
 
 Examples, run as a development tool (`dev:curl`; never send `user` from a tool):
