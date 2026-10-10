@@ -22,5 +22,20 @@ export const metadata: Metadata = {
 export default async function BankCallbackPage({
   searchParams,
 }: PageProps<"/finance/bank/callback">) {
-  return <BankCallback step={callbackStep(await searchParams)} />;
+  const query = await searchParams;
+  const step = callbackStep(query);
+  if (query.error) {
+    // The server log keeps why a consent failed (never the code or state),
+    // so a failure the owner saw on the phone can be looked into later.
+    console.warn(
+      JSON.stringify({
+        msg: "bank consent not completed",
+        error: String(query.error).slice(0, 64),
+        description: query.error_description
+          ? String(query.error_description).slice(0, 300)
+          : null,
+      }),
+    );
+  }
+  return <BankCallback step={step} />;
 }
