@@ -11,6 +11,9 @@ compose=(docker compose --project-name lifeos-verify -f compose.yaml -f compose.
 # The verification stack never runs optional profiles from .env: a second
 # cloudflared with the real tunnel token would receive production traffic.
 export COMPOSE_PROFILES=
+# Nor does it import the owner's personal feeds from .env: the ZAW preset would
+# fetch their real waste calendar and mix it into test data.
+export LIFE_OS_ZAW_ICS_URL=
 # A smoke may add overlays (colon-separated paths); the isolation check below
 # still applies to the merged plan.
 if [[ -n "${LIFE_OS_VERIFY_OVERLAYS:-}" ]]; then
