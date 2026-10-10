@@ -64,7 +64,7 @@ A low-confidence or ambiguous plan with one Calendar change also goes to Human R
 - "Add dentist at Dr. Weber, Friday 15:00 for an hour" creates one event, 15:00–16:00 Berlin on the next Friday (Monday when run on a Friday), with location Dr. Weber;
 - "Move the dentist appointment to next Monday at 9" updates that event (by id) to 09:00 Berlin on the coming Monday (or the one after), still one hour, same title and location, and creates nothing;
 - "Cancel the dentist appointment" goes to Human Review with that event as the only candidate, and it stays active; approving it through the Inbox API cancels exactly that event, which stays readable with `cancelledAt`;
-- with an event titled "Zahnarzt", the English "Move my dentist appointment to the day after tomorrow at 11:30" moves it to 11:30–12:30 Berlin two days after capture;
+- with a 90-minute event titled "Zahnarzt", the English "Move my dentist appointment to the day after tomorrow at 11:30" moves it to 11:30–13:00 Berlin two days after capture;
 - with "Team meeting" and "Meeting with Anna", "Move my meeting to Thursday at 14:00" goes to Human Review with both as candidates, and neither changes;
 - no other event is created.
 

@@ -89,7 +89,7 @@ run_profile() {
   fenster=$(seed "Fenster putzen")
   # Existing Calendar events the captures refer to.
   local physio team anna haircut team_before anna_before
-  physio=$(seed_event "Physiotherapy" 3 14:00 15:00)
+  physio=$(seed_event "Physiotherapy" 3 14:00 15:30)
   team=$(seed_event "Team meeting" 2 10:00 11:00)
   anna=$(seed_event "Meeting with Anna" 4 16:00 16:30)
   haircut=$(seed_event "Haircut" 5 12:00 12:30)
@@ -175,12 +175,12 @@ run_profile() {
   completed_once xl_en_ru "$batteries" батарей
   completed_once xl_de_en "$plants" plants
   completed_once xl_ru_de "$fenster" Fenster
-  # cal_reschedule: "tomorrow at 9" in Berlin from the capture; the hour is kept.
+  # cal_reschedule: "tomorrow at 9" in Berlin from the capture; its 90 minutes are kept.
   s=$(state "${ids[cal_reschedule]}")
   local moved day
   moved=$(event "$physio")
   day=$(date -u -d "$(captured_day "${ids[cal_reschedule]}") + 1 day" +%F)
-  check cal_reschedule "$([ "$s" = resolved ] && at_local "$(jq -r '.startAt' <<<"$moved")" "$day" 09:00 && at_local "$(jq -r '.endAt' <<<"$moved")" "$day" 10:00 && [ "$(api "$gateway/api/calendar/v1/events/search?q=physio" | jq '.items | length')" = 1 ] && echo 1 || echo 0)" "state=$s startAt=$(jq -r '.startAt' <<<"$moved") want=${day}T09:00 $zone"
+  check cal_reschedule "$([ "$s" = resolved ] && at_local "$(jq -r '.startAt' <<<"$moved")" "$day" 09:00 && at_local "$(jq -r '.endAt' <<<"$moved")" "$day" 10:30 && [ "$(api "$gateway/api/calendar/v1/events/search?q=physio" | jq '.items | length')" = 1 ] && echo 1 || echo 0)" "state=$s startAt=$(jq -r '.startAt' <<<"$moved") endAt=$(jq -r '.endAt' <<<"$moved") want=${day}T09:00-10:30 $zone"
   # cal_ambiguous: two meetings, Human Review with both, neither changed.
   s=$(state "${ids[cal_ambiguous]}")
   check cal_ambiguous "$([ "$s" = human_review ] && [ "$(review_ids "${ids[cal_ambiguous]}")" = "$(jq -nc --arg a "$team" --arg b "$anna" '[$a, $b] | sort')" ] && [ "$(event "$team" | jq -c '{startAt, endAt, status}')" = "$team_before" ] && [ "$(event "$anna" | jq -c '{startAt, endAt, status}')" = "$anna_before" ] && echo 1 || echo 0)" "state=$s candidates=$(review_ids "${ids[cal_ambiguous]}")"

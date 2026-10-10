@@ -430,7 +430,7 @@ func TestPlanPromptAllowsCalendarChangesThroughSearchTermsAndReview(t *testing.T
 		"calendar_create|calendar_update|calendar_cancel|",
 		"location (where it takes place",
 		`eventQuery "dentist", eventQueryAlternatives ["Zahnarzt", "стоматолог", "зубн"]`,
-		"changes one only when exactly one matches; the owner approves every cancellation",
+		"changes one only when exactly one matches, otherwise it asks the owner, so you do not need to know the existing events; the owner approves every cancellation",
 		"calendar_cancel may only use eventQuery, eventQueryAlternatives.",
 		"the processor otherwise keeps the event's length",
 		"Never create an event as a fallback for an uncertain existing event.",

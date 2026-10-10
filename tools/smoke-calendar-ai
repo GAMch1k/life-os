@@ -11,8 +11,9 @@
 #   3. "Cancel the dentist appointment" goes to Human Review with that event
 #      as the only candidate and cancels nothing; approving it through the
 #      Inbox API then cancels exactly that event (kept as history);
-#   4. an English capture moves the one event titled "Zahnarzt" to the day
-#      after tomorrow at 11:30 Berlin (cross-language search terms);
+#   4. an English capture moves the one event titled "Zahnarzt" (90 minutes)
+#      to the day after tomorrow at 11:30 Berlin, keeping its 90 minutes
+#      (cross-language search terms);
 #   5. "Move my meeting to Thursday at 14:00" with two meetings goes to Human
 #      Review with both as candidates, and neither changes;
 #   and no other event is created. Relative dates are judged in Berlin from
@@ -153,14 +154,14 @@ echo "ok: 3b. approval cancelled exactly that event (kept as history)"
 
 # 4. Cross-language: the only dentist event left is titled in German.
 zahnarzt_day=$(day_after "$(TZ=$zone date +%F)" 4)
-zahnarzt=$(seed "Zahnarzt" "$zahnarzt_day" 10:00 11:00)
+zahnarzt=$(seed "Zahnarzt" "$zahnarzt_day" 10:00 11:30)
 german_item=$(capture "Move my dentist appointment to the day after tomorrow at 11:30.")
 action=$(processed_action "cross-language reschedule" "$(jq -r '.id' <<<"$german_item")" calendar_update)
 [ "$(jq -r '.arguments.eventId' <<<"$action")" = "$zahnarzt" ] || fail "cross-language: updated $(jq -c '.arguments' <<<"$action"), want Zahnarzt $zahnarzt"
 moved=$(event "$zahnarzt")
 day=$(captured_day "$german_item")
 expect_instant "cross-language: Zahnarzt startAt (captured $day)" "$(jq -r '.startAt' <<<"$moved")" "$(day_after "$day" 2) 11:30"
-expect_instant "cross-language: Zahnarzt endAt keeps the hour" "$(jq -r '.endAt' <<<"$moved")" "$(day_after "$day" 2) 12:30"
+expect_instant "cross-language: Zahnarzt endAt keeps its 90 minutes" "$(jq -r '.endAt' <<<"$moved")" "$(day_after "$day" 2) 13:00"
 echo "ok: 4. an English capture moved 'Zahnarzt' (searched $(jq -c '[.items[] | select(.status == "processed")][0].actions[0].arguments | del(.eventId)' <<<"$(attempts "$(jq -r '.id' <<<"$german_item")")"))"
 
 # 5. Two meetings: Human Review with both, neither changed.

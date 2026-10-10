@@ -25,7 +25,7 @@ Routine Inbox and Voice planning runs through the authenticated Codex CLI. X-01 
 | EN → RU complete ("I already bought the batteries.", Task "Купить батарейки") | Resolved; that Task is completed; no new Task |
 | DE → EN complete ("Ich habe die Pflanzen schon gegossen.", Task "Water the plants") | Resolved; that Task is completed; no new Task |
 | RU → DE complete ("Я уже помыл окна.", Task "Fenster putzen") | Resolved; that Task is completed; no new Task |
-| Calendar reschedule ("Move my physiotherapy appointment to tomorrow at 9:00.", event "Physiotherapy" 14:00–15:00 in three days) | Resolved; the event is 09:00–10:00 Berlin on the day after capture (its hour kept); still one physiotherapy event |
+| Calendar reschedule ("Move my physiotherapy appointment to tomorrow at 9:00.", event "Physiotherapy" 14:00–15:30 in three days) | Resolved; the event is 09:00–10:30 Berlin on the day after capture (its 90 minutes kept); still one physiotherapy event |
 | Calendar ambiguous ("Move my meeting to Friday at 15:00.", events "Team meeting" and "Meeting with Anna") | Human Review with exactly those two candidates; neither changes |
 | Calendar cancel ("Cancel my haircut appointment.", event "Haircut") | Human Review with that event as the only candidate; it stays active |
 | No extra entities | Exactly 10 seeded + 3 created Tasks exist |
