@@ -134,7 +134,7 @@ type Options struct {
 	// for the handoff); the rest are applied after it, then Before runs
 	// with both schemas, and then Calendar starts.
 	UpTo    string
-	Prepare func(calendarPool *pgxpool.Pool)
+	Prepare func(h *Harness)
 	Before  func(h *Harness)
 }
 
@@ -154,7 +154,7 @@ func NewWith(t *testing.T, options Options, calendars ...fakegoogle.Calendar) *H
 	var schema string
 	h.CalendarPool, schema = CalendarSchema(t, databaseURL, options.UpTo)
 	if options.Prepare != nil {
-		options.Prepare(h.CalendarPool)
+		options.Prepare(h)
 	}
 	if options.UpTo != "" {
 		ApplyCalendarMigrations(t, h.CalendarPool, options.UpTo)

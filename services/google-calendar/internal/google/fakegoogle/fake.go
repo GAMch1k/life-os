@@ -522,6 +522,13 @@ func (s *Server) Writes() []Write {
 	return append([]Write(nil), s.writes...)
 }
 
+// ResetWrites forgets the writes received so far.
+func (s *Server) ResetWrites() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.writes = nil
+}
+
 // Event returns a calendar's stored event (a deleted one is cancelled).
 func (s *Server) Event(calendarID, id string) (google.Event, bool) {
 	s.mu.Lock()

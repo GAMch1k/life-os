@@ -101,11 +101,12 @@ func Run(ctx context.Context, legacy, target *pgxpool.Pool) (Counts, error) {
 		},
 		{
 			// Each calendar with its source in Calendar (handed over by
-			// 000015), due for a sync now; its lease does not carry over.
+			// 000015), due when it was (at once after the downtime); its
+			// lease does not carry over.
 			name: "google_calendars",
 			read: `SELECT calendar.id, calendar.connection_id, calendar.google_calendar_id, calendar.summary, calendar.color, calendar.access_role,
 			              calendar.is_primary, calendar.sync_enabled, calendar.created_at, calendar.updated_at, calendar.time_zone, calendar.sync_token,
-			              calendar.sync_window_start, CASE WHEN calendar.sync_enabled THEN now() END AS next_sync_at, calendar.last_sync_attempt_at, calendar.last_synced_at,
+			              calendar.sync_window_start, CASE WHEN calendar.sync_enabled THEN COALESCE(calendar.next_sync_at, now()) END AS next_sync_at, calendar.last_sync_attempt_at, calendar.last_synced_at,
 			              calendar.last_sync_error, calendar.sync_failures, calendar.last_sync_counts, calendar.derived_at, source.id AS source_id
 			       FROM google_calendars AS calendar
 			       LEFT JOIN calendar_sources AS source ON source.google_calendar_id = calendar.id AND source.integration = 'google-calendar'`,
