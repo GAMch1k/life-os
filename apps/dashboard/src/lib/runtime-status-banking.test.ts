@@ -136,14 +136,32 @@ test("a healthy connection is ok with its facts", () => {
   assert.equal(part.facts[0].value, "Das Junge Konto (DE89…3000)");
 });
 
-test("an expiring, expired, or refused consent is a warning with an action", () => {
+test("a consent ending soon is shown but stays ok, so the monitor sends nothing", () => {
   const expiring = bankCheck(
     list([connection({ consentValidUntil: "2026-10-15T10:00:00Z" })]),
   );
-  assert.equal(expiring.state, "warning");
-  assert.match(expiring.summary, /^Deutsche Bank access ends on 15 Oct 2026/);
-  assert.equal(expiring.action, BANK_RECONNECT);
+  assert.equal(expiring.state, "ok");
+  assert.equal(
+    expiring.summary,
+    "Deutsche Bank access ends on 15 Oct 2026, 12:00 CEST.",
+  );
+  assert.equal(expiring.action, undefined);
+  assert.equal(expiring.parts![0].state, "ok");
+  assert.equal(
+    statusAlerts(
+      toRuntimeStatus(
+        signals(
+          list([connection({ consentValidUntil: "2026-10-10T12:00:00Z" })]),
+        ),
+        now,
+        timeZone,
+      ),
+    ).some((check) => check.id === "banking"),
+    false,
+  );
+});
 
+test("an expired or refused consent is a warning with an action", () => {
   const expired = bankCheck(
     list([
       connection({

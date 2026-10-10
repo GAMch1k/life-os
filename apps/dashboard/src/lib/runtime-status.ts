@@ -1125,10 +1125,14 @@ export function bankPart(
       detail,
     };
   }
+  // A consent ending within 7 days is shown but stays OK: banking's own
+  // 7-day and 1-day reminders tell the owner, so the monitor (which
+  // notifies on warnings) does not tell them twice. Once it has ended, the
+  // connection is expired, above.
   if (expiringSoon(connection, now) && connection.consentValidUntil) {
     return {
       ...base,
-      state: "warning",
+      state: "ok",
       summary: `${name} access ends on ${formatTime(connection.consentValidUntil, timeZone)}.`,
     };
   }
@@ -1201,9 +1205,7 @@ function bankingCheck(
     const [first] = trouble;
     const connection = live[parts.indexOf(first)];
     const reconnect =
-      connection.status === "expired" ||
-      connection.status === "error" ||
-      connection.consecutiveFailures < BANK_FAILURE_ALERT;
+      connection.status === "expired" || connection.status === "error";
     return {
       ...base,
       state: worst(trouble.map((part) => part.state)),
@@ -1218,9 +1220,11 @@ function bankingCheck(
     ...base,
     state: "ok",
     summary:
-      parts.length === 1
-        ? `${parts[0].title}: ${parts[0].summary}`
-        : `${parts.length} banks connected.`,
+      parts.length !== 1
+        ? `${parts.length} banks connected.`
+        : parts[0].summary.startsWith(parts[0].title)
+          ? parts[0].summary
+          : `${parts[0].title}: ${parts[0].summary}`,
     facts: [],
     parts,
   };
