@@ -22,7 +22,7 @@ SET name = $1, url = $2,
     next_refresh_at = COALESCE($9::timestamptz, next_refresh_at),
     updated_at = now()
 WHERE id = $10
-RETURNING id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config
+RETURNING id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, default_priority
 `
 
 type ApplySourcePresetParams struct {
@@ -78,6 +78,7 @@ func (q *Queries) ApplySourcePreset(ctx context.Context, arg ApplySourcePresetPa
 		&i.UpdatedAt,
 		&i.Preset,
 		&i.PresetConfig,
+		&i.DefaultPriority,
 	)
 	return i, err
 }
@@ -88,7 +89,7 @@ SET refreshing_until = $1::timestamptz, last_attempt_at = $2::timestamptz
 WHERE id = $3
   AND enabled
   AND (refreshing_until IS NULL OR refreshing_until <= $2::timestamptz)
-RETURNING id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config
+RETURNING id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, default_priority
 `
 
 type ClaimSourceRefreshParams struct {
@@ -125,6 +126,7 @@ func (q *Queries) ClaimSourceRefresh(ctx context.Context, arg ClaimSourceRefresh
 		&i.UpdatedAt,
 		&i.Preset,
 		&i.PresetConfig,
+		&i.DefaultPriority,
 	)
 	return i, err
 }
@@ -133,7 +135,7 @@ const createPresetSource = `-- name: CreatePresetSource :one
 INSERT INTO calendar_sources (kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, preset, preset_config)
 VALUES ($1, $2, $3, true, $4::text[], $5::text[],
         $6, $7, $8::text, $9)
-RETURNING id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config
+RETURNING id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, default_priority
 `
 
 type CreatePresetSourceParams struct {
@@ -184,14 +186,16 @@ func (q *Queries) CreatePresetSource(ctx context.Context, arg CreatePresetSource
 		&i.UpdatedAt,
 		&i.Preset,
 		&i.PresetConfig,
+		&i.DefaultPriority,
 	)
 	return i, err
 }
 
 const createSource = `-- name: CreateSource :one
-INSERT INTO calendar_sources (kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config
+INSERT INTO calendar_sources (kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, default_priority)
+VALUES ($1, $2, $3, $4, $5, $6,
+        $7, $8, COALESCE($9::text, 'medium'))
+RETURNING id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, default_priority
 `
 
 type CreateSourceParams struct {
@@ -203,8 +207,10 @@ type CreateSourceParams struct {
 	FilterExclude    []string
 	DefaultReminders []byte
 	NextRefreshAt    pgtype.Timestamptz
+	DefaultPriority  *string
 }
 
+// A null default_priority is medium.
 func (q *Queries) CreateSource(ctx context.Context, arg CreateSourceParams) (CalendarSource, error) {
 	row := q.db.QueryRow(ctx, createSource,
 		arg.Kind,
@@ -215,6 +221,7 @@ func (q *Queries) CreateSource(ctx context.Context, arg CreateSourceParams) (Cal
 		arg.FilterExclude,
 		arg.DefaultReminders,
 		arg.NextRefreshAt,
+		arg.DefaultPriority,
 	)
 	var i CalendarSource
 	err := row.Scan(
@@ -240,6 +247,7 @@ func (q *Queries) CreateSource(ctx context.Context, arg CreateSourceParams) (Cal
 		&i.UpdatedAt,
 		&i.Preset,
 		&i.PresetConfig,
+		&i.DefaultPriority,
 	)
 	return i, err
 }
@@ -264,7 +272,7 @@ SET refreshing_until = NULL,
     last_success_at = $4, consecutive_failures = $5,
     etag = $6, last_modified = $7, next_refresh_at = $8
 WHERE id = $9
-RETURNING id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config
+RETURNING id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, default_priority
 `
 
 type FinishSourceRefreshParams struct {
@@ -317,13 +325,14 @@ func (q *Queries) FinishSourceRefresh(ctx context.Context, arg FinishSourceRefre
 		&i.UpdatedAt,
 		&i.Preset,
 		&i.PresetConfig,
+		&i.DefaultPriority,
 	)
 	return i, err
 }
 
 const getPresetSource = `-- name: GetPresetSource :one
 
-SELECT id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config FROM calendar_sources WHERE preset = $1::text
+SELECT id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, default_priority FROM calendar_sources WHERE preset = $1::text
 `
 
 // Preset sources are configured from Calendar's environment at startup
@@ -354,12 +363,13 @@ func (q *Queries) GetPresetSource(ctx context.Context, preset string) (CalendarS
 		&i.UpdatedAt,
 		&i.Preset,
 		&i.PresetConfig,
+		&i.DefaultPriority,
 	)
 	return i, err
 }
 
 const getSource = `-- name: GetSource :one
-SELECT id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config FROM calendar_sources WHERE id = $1
+SELECT id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, default_priority FROM calendar_sources WHERE id = $1
 `
 
 func (q *Queries) GetSource(ctx context.Context, id pgtype.UUID) (CalendarSource, error) {
@@ -388,6 +398,7 @@ func (q *Queries) GetSource(ctx context.Context, id pgtype.UUID) (CalendarSource
 		&i.UpdatedAt,
 		&i.Preset,
 		&i.PresetConfig,
+		&i.DefaultPriority,
 	)
 	return i, err
 }
@@ -468,7 +479,7 @@ func (q *Queries) ListDueSources(ctx context.Context, now pgtype.Timestamptz) ([
 
 const listSourceEvents = `-- name: ListSourceEvents :many
 
-SELECT id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at, automation_idempotency_key, automation_payload_hash, location, time_zone, status, cancelled_at, source_kind, source_id, external_uid, removed_from_source_at, reminders, use_default_reminders, recurrence_by_weekday, recurrence_count FROM events WHERE source_id = $1 ORDER BY id FOR UPDATE
+SELECT id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at, automation_idempotency_key, automation_payload_hash, location, time_zone, status, cancelled_at, source_kind, source_id, external_uid, removed_from_source_at, reminders, use_default_reminders, recurrence_by_weekday, recurrence_count, priority FROM events WHERE source_id = $1 ORDER BY id FOR UPDATE
 `
 
 // Imported events are written only by Calendar's source adapter, inside the
@@ -512,6 +523,7 @@ func (q *Queries) ListSourceEvents(ctx context.Context, sourceID pgtype.UUID) ([
 			&i.UseDefaultReminders,
 			&i.RecurrenceByWeekday,
 			&i.RecurrenceCount,
+			&i.Priority,
 		); err != nil {
 			return nil, err
 		}
@@ -524,16 +536,18 @@ func (q *Queries) ListSourceEvents(ctx context.Context, sourceID pgtype.UUID) ([
 }
 
 const listSourceSummaries = `-- name: ListSourceSummaries :many
-SELECT id, name, default_reminders FROM calendar_sources ORDER BY id
+SELECT id, name, default_reminders, default_priority FROM calendar_sources ORDER BY id
 `
 
 type ListSourceSummariesRow struct {
 	ID               pgtype.UUID
 	Name             string
 	DefaultReminders []byte
+	DefaultPriority  string
 }
 
-// What an imported event shows of its source: its name and default reminders.
+// What an imported event shows of its source: its name, default reminders,
+// and default priority.
 func (q *Queries) ListSourceSummaries(ctx context.Context) ([]ListSourceSummariesRow, error) {
 	rows, err := q.db.Query(ctx, listSourceSummaries)
 	if err != nil {
@@ -543,7 +557,12 @@ func (q *Queries) ListSourceSummaries(ctx context.Context) ([]ListSourceSummarie
 	items := []ListSourceSummariesRow{}
 	for rows.Next() {
 		var i ListSourceSummariesRow
-		if err := rows.Scan(&i.ID, &i.Name, &i.DefaultReminders); err != nil {
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.DefaultReminders,
+			&i.DefaultPriority,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -555,7 +574,7 @@ func (q *Queries) ListSourceSummaries(ctx context.Context) ([]ListSourceSummarie
 }
 
 const listSources = `-- name: ListSources :many
-SELECT id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config FROM calendar_sources ORDER BY created_at, id
+SELECT id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, default_priority FROM calendar_sources ORDER BY created_at, id
 `
 
 func (q *Queries) ListSources(ctx context.Context) ([]CalendarSource, error) {
@@ -590,6 +609,7 @@ func (q *Queries) ListSources(ctx context.Context) ([]CalendarSource, error) {
 			&i.UpdatedAt,
 			&i.Preset,
 			&i.PresetConfig,
+			&i.DefaultPriority,
 		); err != nil {
 			return nil, err
 		}
@@ -602,7 +622,7 @@ func (q *Queries) ListSources(ctx context.Context) ([]CalendarSource, error) {
 }
 
 const lockAdoptableSource = `-- name: LockAdoptableSource :one
-SELECT id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config FROM calendar_sources
+SELECT id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, default_priority FROM calendar_sources
 WHERE preset IS NULL AND kind = 'ics' AND url = $1
 ORDER BY created_at, id
 LIMIT 1
@@ -637,6 +657,7 @@ func (q *Queries) LockAdoptableSource(ctx context.Context, url string) (Calendar
 		&i.UpdatedAt,
 		&i.Preset,
 		&i.PresetConfig,
+		&i.DefaultPriority,
 	)
 	return i, err
 }
@@ -652,7 +673,7 @@ func (q *Queries) LockPreset(ctx context.Context, preset string) error {
 }
 
 const lockPresetSource = `-- name: LockPresetSource :one
-SELECT id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config FROM calendar_sources WHERE preset = $1::text FOR UPDATE
+SELECT id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, default_priority FROM calendar_sources WHERE preset = $1::text FOR UPDATE
 `
 
 func (q *Queries) LockPresetSource(ctx context.Context, preset string) (CalendarSource, error) {
@@ -681,12 +702,13 @@ func (q *Queries) LockPresetSource(ctx context.Context, preset string) (Calendar
 		&i.UpdatedAt,
 		&i.Preset,
 		&i.PresetConfig,
+		&i.DefaultPriority,
 	)
 	return i, err
 }
 
 const lockSource = `-- name: LockSource :one
-SELECT id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config FROM calendar_sources WHERE id = $1 FOR UPDATE
+SELECT id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, default_priority FROM calendar_sources WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) LockSource(ctx context.Context, id pgtype.UUID) (CalendarSource, error) {
@@ -715,6 +737,7 @@ func (q *Queries) LockSource(ctx context.Context, id pgtype.UUID) (CalendarSourc
 		&i.UpdatedAt,
 		&i.Preset,
 		&i.PresetConfig,
+		&i.DefaultPriority,
 	)
 	return i, err
 }
@@ -775,7 +798,8 @@ type UpdateImportedEventParams struct {
 }
 
 // Rewrites an imported event from its source (also restoring one the source
-// had removed). The owner's reminders and the source identity stay.
+// had removed). The owner's reminders and priority and the source identity
+// stay.
 func (q *Queries) UpdateImportedEvent(ctx context.Context, arg UpdateImportedEventParams) error {
 	_, err := q.db.Exec(ctx, updateImportedEvent,
 		arg.Title,
@@ -799,13 +823,13 @@ const updateSource = `-- name: UpdateSource :one
 UPDATE calendar_sources
 SET name = $1, url = $2, enabled = $3,
     filter_include = $4::text[], filter_exclude = $5::text[],
-    default_reminders = $6,
-    etag = CASE WHEN $7::boolean THEN NULL ELSE etag END,
-    last_modified = CASE WHEN $7::boolean THEN NULL ELSE last_modified END,
-    next_refresh_at = COALESCE($8::timestamptz, next_refresh_at),
+    default_reminders = $6, default_priority = COALESCE($7::text, default_priority),
+    etag = CASE WHEN $8::boolean THEN NULL ELSE etag END,
+    last_modified = CASE WHEN $8::boolean THEN NULL ELSE last_modified END,
+    next_refresh_at = COALESCE($9::timestamptz, next_refresh_at),
     updated_at = now()
-WHERE id = $9 AND updated_at = $10
-RETURNING id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config
+WHERE id = $10 AND updated_at = $11
+RETURNING id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, default_priority
 `
 
 type UpdateSourceParams struct {
@@ -815,6 +839,7 @@ type UpdateSourceParams struct {
 	FilterInclude     []string
 	FilterExclude     []string
 	DefaultReminders  []byte
+	DefaultPriority   *string
 	ResetValidators   bool
 	NextRefreshAt     pgtype.Timestamptz
 	ID                pgtype.UUID
@@ -824,7 +849,7 @@ type UpdateSourceParams struct {
 // Writes the whole merged configuration, guarded by the updated_at it was
 // read with. reset_validators drops the conditional-request validators (a
 // changed URL or filter needs a full download); next_refresh_at, when given,
-// reschedules the source.
+// reschedules the source; a null default_priority keeps the source's.
 func (q *Queries) UpdateSource(ctx context.Context, arg UpdateSourceParams) (CalendarSource, error) {
 	row := q.db.QueryRow(ctx, updateSource,
 		arg.Name,
@@ -833,6 +858,7 @@ func (q *Queries) UpdateSource(ctx context.Context, arg UpdateSourceParams) (Cal
 		arg.FilterInclude,
 		arg.FilterExclude,
 		arg.DefaultReminders,
+		arg.DefaultPriority,
 		arg.ResetValidators,
 		arg.NextRefreshAt,
 		arg.ID,
@@ -862,6 +888,7 @@ func (q *Queries) UpdateSource(ctx context.Context, arg UpdateSourceParams) (Cal
 		&i.UpdatedAt,
 		&i.Preset,
 		&i.PresetConfig,
+		&i.DefaultPriority,
 	)
 	return i, err
 }

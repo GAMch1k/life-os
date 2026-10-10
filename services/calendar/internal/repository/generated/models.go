@@ -38,6 +38,7 @@ type CalendarSource struct {
 	UpdatedAt           pgtype.Timestamptz
 	Preset              *string
 	PresetConfig        []byte
+	DefaultPriority     string
 }
 
 type Event struct {
@@ -70,6 +71,7 @@ type Event struct {
 	UseDefaultReminders      bool
 	RecurrenceByWeekday      []string
 	RecurrenceCount          *int32
+	Priority                 *string
 }
 
 type EventException struct {

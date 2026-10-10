@@ -1,6 +1,8 @@
 -- name: CreateSource :one
-INSERT INTO calendar_sources (kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+-- A null default_priority is medium.
+INSERT INTO calendar_sources (kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, default_priority)
+VALUES (sqlc.arg(kind), sqlc.arg(name), sqlc.arg(url), sqlc.arg(enabled), sqlc.arg(filter_include), sqlc.arg(filter_exclude),
+        sqlc.narg(default_reminders), sqlc.arg(next_refresh_at), COALESCE(sqlc.narg(default_priority)::text, 'medium'))
 RETURNING *;
 
 -- name: GetSource :one
@@ -13,11 +15,11 @@ SELECT * FROM calendar_sources ORDER BY created_at, id;
 -- Writes the whole merged configuration, guarded by the updated_at it was
 -- read with. reset_validators drops the conditional-request validators (a
 -- changed URL or filter needs a full download); next_refresh_at, when given,
--- reschedules the source.
+-- reschedules the source; a null default_priority keeps the source's.
 UPDATE calendar_sources
 SET name = sqlc.arg(name), url = sqlc.arg(url), enabled = sqlc.arg(enabled),
     filter_include = sqlc.arg(filter_include)::text[], filter_exclude = sqlc.arg(filter_exclude)::text[],
-    default_reminders = sqlc.narg(default_reminders),
+    default_reminders = sqlc.narg(default_reminders), default_priority = COALESCE(sqlc.narg(default_priority)::text, default_priority),
     etag = CASE WHEN sqlc.arg(reset_validators)::boolean THEN NULL ELSE etag END,
     last_modified = CASE WHEN sqlc.arg(reset_validators)::boolean THEN NULL ELSE last_modified END,
     next_refresh_at = COALESCE(sqlc.narg(next_refresh_at)::timestamptz, next_refresh_at),
@@ -66,8 +68,9 @@ WHERE id = sqlc.arg(id)
 RETURNING *;
 
 -- name: ListSourceSummaries :many
--- What an imported event shows of its source: its name and default reminders.
-SELECT id, name, default_reminders FROM calendar_sources ORDER BY id;
+-- What an imported event shows of its source: its name, default reminders,
+-- and default priority.
+SELECT id, name, default_reminders, default_priority FROM calendar_sources ORDER BY id;
 
 -- Preset sources are configured from Calendar's environment at startup
 -- (EnsurePreset), inside one transaction holding LockPreset.
@@ -128,7 +131,8 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14);
 
 -- name: UpdateImportedEvent :exec
 -- Rewrites an imported event from its source (also restoring one the source
--- had removed). The owner's reminders and the source identity stay.
+-- had removed). The owner's reminders and priority and the source identity
+-- stay.
 UPDATE events
 SET title = sqlc.arg(title), description = sqlc.narg(description), location = sqlc.narg(location),
     all_day = sqlc.arg(all_day), start_at = sqlc.narg(start_at), end_at = sqlc.narg(end_at),
