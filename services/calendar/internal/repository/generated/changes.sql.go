@@ -43,8 +43,30 @@ func (q *Queries) HasEventChangesAfter(ctx context.Context, after int64) (bool, 
 	return column_1, err
 }
 
+const hasUnhandledChanges = `-- name: HasUnhandledChanges :one
+SELECT EXISTS (
+    SELECT 1 FROM calendar_event_changes
+    WHERE seq > $1::bigint AND source_id = $2 AND actor <> $3::text
+)::boolean
+`
+
+type HasUnhandledChangesParams struct {
+	After    int64
+	SourceID pgtype.UUID
+	Actor    string
+}
+
+// Whether the feed has changes after the given entry to the source's
+// events made by anyone but actor (the integration syncing it).
+func (q *Queries) HasUnhandledChanges(ctx context.Context, arg HasUnhandledChangesParams) (bool, error) {
+	row := q.db.QueryRow(ctx, hasUnhandledChanges, arg.After, arg.SourceID, arg.Actor)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const listEventChanges = `-- name: ListEventChanges :many
-SELECT seq, event_id, actor, changed_at FROM calendar_event_changes
+SELECT seq, event_id, source_id, external_uid, actor, changed_at FROM calendar_event_changes
 WHERE seq > $1::bigint
 ORDER BY seq
 LIMIT $2
@@ -56,10 +78,12 @@ type ListEventChangesParams struct {
 }
 
 type ListEventChangesRow struct {
-	Seq       int64
-	EventID   pgtype.UUID
-	Actor     string
-	ChangedAt pgtype.Timestamptz
+	Seq         int64
+	EventID     pgtype.UUID
+	SourceID    pgtype.UUID
+	ExternalUid *string
+	Actor       string
+	ChangedAt   pgtype.Timestamptz
 }
 
 // The entries after the given one, oldest first.
@@ -75,6 +99,8 @@ func (q *Queries) ListEventChanges(ctx context.Context, arg ListEventChangesPara
 		if err := rows.Scan(
 			&i.Seq,
 			&i.EventID,
+			&i.SourceID,
+			&i.ExternalUid,
 			&i.Actor,
 			&i.ChangedAt,
 		); err != nil {

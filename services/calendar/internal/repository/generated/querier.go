@@ -73,8 +73,9 @@ type Querier interface {
 	DeleteGoogleSource(ctx context.Context, id pgtype.UUID) error
 	// Also deletes the source's events (ON DELETE CASCADE).
 	DeleteIntegrationSource(ctx context.Context, id pgtype.UUID) (int64, error)
-	// Deletes a feed and its imported events (ON DELETE CASCADE). A Google
-	// calendar's source goes when its calendar stops syncing.
+	// Deletes a feed or an integration's source and its imported events (ON
+	// DELETE CASCADE). A Google calendar's source goes when its calendar stops
+	// syncing.
 	DeleteSource(ctx context.Context, id pgtype.UUID) (int64, error)
 	// Forgets the export of a deleted event that never reached Google.
 	DeleteUnexportedGoogleExport(ctx context.Context, eventID pgtype.UUID) (int64, error)
@@ -132,12 +133,16 @@ type Querier interface {
 	// failure.
 	GoogleExportSummary(ctx context.Context, connectionID pgtype.UUID) (GoogleExportSummaryRow, error)
 	HasEventChangesAfter(ctx context.Context, after int64) (bool, error)
+	// Whether the feed has changes after the given entry to the source's
+	// events made by anyone but actor (the integration syncing it).
+	HasUnhandledChanges(ctx context.Context, arg HasUnhandledChangesParams) (bool, error)
 	// A source's new event. A series (Google) has its rule; reminders and
 	// use_default_reminders are the source's (an ICS feed gives the column
 	// defaults: none of its own, following the source's defaults), and
 	// source_reminders records them (null for a feed). priority is the event's
 	// own priority as its source gives it (Google, through a Life OS extended
-	// property); null follows the source's default.
+	// property); null follows the source's default. read_only_reason is why an
+	// integration's event cannot be changed although its source accepts changes.
 	InsertImportedEvent(ctx context.Context, arg InsertImportedEventParams) (pgtype.UUID, error)
 	// Records Google's current version of an exported event (after its change
 	// in Google was applied in Life OS, or a conflict kept Google's version):
@@ -164,6 +169,10 @@ type Querier interface {
 	// exactly the ORDER BY.
 	ListEvents(ctx context.Context, arg ListEventsParams) ([]ListEventsRow, error)
 	ListEventsByID(ctx context.Context, ids []pgtype.UUID) ([]Event, error)
+	// The events the change feed follows, after after_id, by id: the snapshot
+	// that starts it. Life OS events, and the events of sources integrations
+	// sync that accept changes (only integration's when given).
+	ListFollowedEvents(ctx context.Context, arg ListFollowedEventsParams) ([]ListFollowedEventsRow, error)
 	// The connection's calendars: the primary first, then by name.
 	ListGoogleCalendars(ctx context.Context, connectionID pgtype.UUID) ([]GoogleCalendar, error)
 	// The calendars Google no longer lists (DeleteGoogleCalendarsNotListed
@@ -189,12 +198,9 @@ type Querier interface {
 	ListGoogleSources(ctx context.Context, arg ListGoogleSourcesParams) ([]ListGoogleSourcesRow, error)
 	// Which of the given dedupe keys were already handled.
 	ListHandledReminders(ctx context.Context, keys []string) ([]string, error)
-	ListIntegrationSources(ctx context.Context, integration *string) ([]CalendarSource, error)
+	ListIntegrationSources(ctx context.Context, integration string) ([]CalendarSource, error)
 	// The exported events linked to a Life OS calendar, by Google event id.
 	ListLinkedGoogleExports(ctx context.Context, googleCalendarID *string) ([]GoogleExport, error)
-	// Events created in Life OS (source kind manual) after after_id, by id: the
-	// full listing that starts the change feed.
-	ListOwnEvents(ctx context.Context, arg ListOwnEventsParams) ([]Event, error)
 	// The sources Calendar configures itself (ZAW).
 	ListPresetSourceIDs(ctx context.Context) ([]pgtype.UUID, error)
 	// Recurring events that may have an occurrence overlapping
@@ -214,10 +220,14 @@ type Querier interface {
 	// Imported events are written only by Calendar's source adapter, inside the
 	// refresh transaction that holds LockSource.
 	ListSourceEvents(ctx context.Context, sourceID pgtype.UUID) ([]Event, error)
+	// The integration identity of the given sources, for the change feed.
+	ListSourceIdentities(ctx context.Context, ids []pgtype.UUID) ([]ListSourceIdentitiesRow, error)
 	// What an imported event shows of its source: its name, default reminders,
-	// and default priority.
+	// default priority, integration, provider label, and whether it accepts
+	// changes.
 	ListSourceSummaries(ctx context.Context) ([]ListSourceSummariesRow, error)
-	// The feeds (ICS sources). Google calendars are sources too, managed through
+	// The feeds (ICS sources) and the sources integrations sync (external).
+	// Google calendars Calendar syncs itself are sources too, managed through
 	// the Google connection (google_calendars), and are not listed here.
 	ListSources(ctx context.Context) ([]CalendarSource, error)
 	// A recurring event's stored changed or cancelled instances.
@@ -261,6 +271,10 @@ type Querier interface {
 	RecordGoogleTokenRefresh(ctx context.Context, arg RecordGoogleTokenRefreshParams) (GoogleConnection, error)
 	// Records one reminder's outcome; 0 rows when it was already recorded.
 	RecordReminder(ctx context.Context, arg RecordReminderParams) (int64, error)
+	// Gives a source's event the external uid the source now knows it by (an
+	// event created in Life OS for the source, such as a split's new series,
+	// once the integration has created it there), unless that uid is taken.
+	RekeyImportedEvent(ctx context.Context, arg RekeyImportedEventParams) (int64, error)
 	// Gives the lease up after a sync that could not record an outcome; due_at,
 	// when given, reschedules it.
 	ReleaseGoogleCalendarSync(ctx context.Context, arg ReleaseGoogleCalendarSyncParams) error

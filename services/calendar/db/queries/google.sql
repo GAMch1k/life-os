@@ -159,7 +159,7 @@ SELECT * FROM calendar_sources WHERE google_calendar_id = $1;
 -- google-calendar integration under the calendar's Google id (see the
 -- integration API), read-only unless the account may edit the calendar.
 INSERT INTO calendar_sources (kind, name, url, enabled, default_reminders, google_calendar_id, integration, external_id, provider, read_only)
-SELECT 'google', sqlc.arg(name), sqlc.arg(url), true, sqlc.narg(default_reminders), google_calendars.id,
+SELECT 'google', sqlc.arg(name)::text, sqlc.arg(url)::text, true, sqlc.narg(default_reminders), google_calendars.id,
        'google-calendar', google_calendars.google_calendar_id, 'Google', google_calendars.access_role NOT IN ('owner', 'writer')
 FROM google_calendars
 WHERE google_calendars.id = sqlc.arg(google_calendar_id)

@@ -152,7 +152,7 @@ func (r *Refresher) release(id pgtype.UUID) error {
 // the source row, reconciles the events and writes the outcome.
 func (r *Refresher) complete(ctx context.Context, source store.CalendarSource, now time.Time) (store.CalendarSource, outcome, error) {
 	var feed ics.Feed
-	result, err := r.fetcher.Fetch(ctx, source.Url, deref(source.Etag), deref(source.LastModified))
+	result, err := r.fetcher.Fetch(ctx, deref(source.Url), deref(source.Etag), deref(source.LastModified))
 	if err == nil && !result.NotModified {
 		feed, err = ics.Parse(result.Body, ics.Options{Owner: r.owner, Now: now})
 		feed.Items = presetItems(source.Preset, feed.Items)
@@ -178,7 +178,7 @@ func (r *Refresher) complete(ctx context.Context, source store.CalendarSource, n
 	if err != nil {
 		return store.CalendarSource{}, found, err
 	}
-	if current.Url != source.Url || !slices.Equal(current.FilterInclude, source.FilterInclude) || !slices.Equal(current.FilterExclude, source.FilterExclude) {
+	if deref(current.Url) != deref(source.Url) || !slices.Equal(current.FilterInclude, source.FilterInclude) || !slices.Equal(current.FilterExclude, source.FilterExclude) {
 		_, err := queries.FinishSourceRefresh(ctx, store.FinishSourceRefreshParams{
 			ID: current.ID, LastOutcome: current.LastOutcome, LastError: current.LastError, LastCounts: current.LastCounts,
 			LastSuccessAt: current.LastSuccessAt, ConsecutiveFailures: current.ConsecutiveFailures,
@@ -244,6 +244,12 @@ func Reconcile(ctx context.Context, queries *store.Queries, source store.Calenda
 	if err != nil {
 		return Counts{}, err
 	}
+	return reconcileStored(ctx, queries, source, existing, items, rules, now)
+}
+
+// reconcileStored reconciles existing, stored events of source (held by the
+// transaction of queries), with items.
+func reconcileStored(ctx context.Context, queries *store.Queries, source store.CalendarSource, existing []store.Event, items []Item, rules Rules, now time.Time) (Counts, error) {
 	var series []pgtype.UUID
 	for _, event := range existing {
 		if event.RecurrenceFrequency != nil {

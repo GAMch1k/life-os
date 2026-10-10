@@ -16,7 +16,7 @@ WHERE id;
 
 -- name: ListEventChanges :many
 -- The entries after the given one, oldest first.
-SELECT seq, event_id, actor, changed_at FROM calendar_event_changes
+SELECT seq, event_id, source_id, external_uid, actor, changed_at FROM calendar_event_changes
 WHERE seq > sqlc.arg(after)::bigint
 ORDER BY seq
 LIMIT sqlc.arg(page_limit);
@@ -37,3 +37,11 @@ SET pruned_through = GREATEST(pruned_through, COALESCE((SELECT max(seq) FROM pru
     pruned_at = sqlc.arg(now)::timestamptz
 WHERE id
 RETURNING pruned_through, (SELECT count(*) FROM pruned)::integer AS pruned;
+
+-- name: HasUnhandledChanges :one
+-- Whether the feed has changes after the given entry to the source's
+-- events made by anyone but actor (the integration syncing it).
+SELECT EXISTS (
+    SELECT 1 FROM calendar_event_changes
+    WHERE seq > sqlc.arg(after)::bigint AND source_id = sqlc.arg(source_id) AND actor <> sqlc.arg(actor)::text
+)::boolean;

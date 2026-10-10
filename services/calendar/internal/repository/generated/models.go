@@ -17,6 +17,8 @@ type CalendarChangeFeed struct {
 type CalendarEventChange struct {
 	Seq           int64
 	EventID       pgtype.UUID
+	SourceID      pgtype.UUID
+	ExternalUid   *string
 	Actor         string
 	TransactionID int64
 	ChangedAt     pgtype.Timestamptz
@@ -53,7 +55,7 @@ type CalendarSource struct {
 	ID                  pgtype.UUID
 	Kind                string
 	Name                string
-	Url                 string
+	Url                 *string
 	Enabled             bool
 	FilterInclude       []string
 	FilterExclude       []string
@@ -114,6 +116,7 @@ type Event struct {
 	RecurrenceCount          *int32
 	SourceReminders          []byte
 	Priority                 *string
+	ReadOnlyReason           *string
 }
 
 type EventException struct {

@@ -159,11 +159,11 @@ func (q *Queries) ListPresetSourceIDs(ctx context.Context) ([]pgtype.UUID, error
 }
 
 const listReminderEvents = `-- name: ListReminderEvents :many
-SELECT id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at, automation_idempotency_key, automation_payload_hash, location, time_zone, status, cancelled_at, source_kind, source_id, external_uid, removed_from_source_at, reminders, use_default_reminders, recurrence_by_weekday, recurrence_count, source_reminders, priority FROM events
+SELECT id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at, automation_idempotency_key, automation_payload_hash, location, time_zone, status, cancelled_at, source_kind, source_id, external_uid, removed_from_source_at, reminders, use_default_reminders, recurrence_by_weekday, recurrence_count, source_reminders, priority, read_only_reason FROM events
 WHERE recurrence_frequency IS NULL AND status = 'active' AND NOT all_day
   AND start_at >= $1::timestamptz AND start_at < $2::timestamptz
 UNION ALL
-SELECT id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at, automation_idempotency_key, automation_payload_hash, location, time_zone, status, cancelled_at, source_kind, source_id, external_uid, removed_from_source_at, reminders, use_default_reminders, recurrence_by_weekday, recurrence_count, source_reminders, priority FROM events
+SELECT id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at, automation_idempotency_key, automation_payload_hash, location, time_zone, status, cancelled_at, source_kind, source_id, external_uid, removed_from_source_at, reminders, use_default_reminders, recurrence_by_weekday, recurrence_count, source_reminders, priority, read_only_reason FROM events
 WHERE recurrence_frequency IS NULL AND status = 'active' AND all_day
   AND start_date >= $3::date AND start_date <= $4::date
 `
@@ -227,6 +227,7 @@ func (q *Queries) ListReminderEvents(ctx context.Context, arg ListReminderEvents
 			&i.RecurrenceCount,
 			&i.SourceReminders,
 			&i.Priority,
+			&i.ReadOnlyReason,
 		); err != nil {
 			return nil, err
 		}

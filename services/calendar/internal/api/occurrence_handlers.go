@@ -112,7 +112,7 @@ func (h *Handler) UpdateEventOccurrence(c fiber.Ctx, id types.UUID, rid string) 
 		before, after eventFields
 		stamp         time.Time
 	)
-	err = h.inTx(c.Context(), func(queries *store.Queries) error {
+	err = h.inTx(c, func(queries *store.Queries) error {
 		var found located
 		e, found, err = h.lockOccurrence(c.Context(), queries, id, rid)
 		if err != nil {
@@ -181,7 +181,11 @@ func (h *Handler) googleSeries(c fiber.Ctx, id types.UUID) (store.Event, bool, e
 	if err != nil {
 		return store.Event{}, false, databaseError(err)
 	}
-	return row, row.SourceKind == string(generated.EventSourceKindGoogle), nil
+	inGoogle, err := h.syncedByGoogle(c.Context(), row)
+	if err != nil {
+		return store.Event{}, false, internal(err)
+	}
+	return row, inGoogle, nil
 }
 
 // untilBefore is the until that ends a series with the occurrence previous:
@@ -275,7 +279,7 @@ func (h *Handler) SplitEventSeries(c fiber.Ctx, id types.UUID, rid string) error
 		first                    bool
 		before, ended, newSeries store.Event
 	)
-	err = h.inTx(c.Context(), func(queries *store.Queries) error {
+	err = h.inTx(c, func(queries *store.Queries) error {
 		e, found, err := h.lockOccurrence(c.Context(), queries, id, rid)
 		if err != nil {
 			return err
@@ -395,7 +399,7 @@ func (h *Handler) TruncateEventSeries(c fiber.Ctx, id types.UUID, rid string) er
 		deleted       bool
 		before, ended store.Event
 	)
-	err := h.inTx(c.Context(), func(queries *store.Queries) error {
+	err := h.inTx(c, func(queries *store.Queries) error {
 		e, found, err := h.lockOccurrence(c.Context(), queries, id, rid)
 		if err != nil {
 			return err

@@ -161,7 +161,7 @@ func (q *Queries) CreateGoogleOAuthState(ctx context.Context, arg CreateGoogleOA
 
 const createGoogleSource = `-- name: CreateGoogleSource :one
 INSERT INTO calendar_sources (kind, name, url, enabled, default_reminders, google_calendar_id, integration, external_id, provider, read_only)
-SELECT 'google', $1, $2, true, $3, google_calendars.id,
+SELECT 'google', $1::text, $2::text, true, $3, google_calendars.id,
        'google-calendar', google_calendars.google_calendar_id, 'Google', google_calendars.access_role NOT IN ('owner', 'writer')
 FROM google_calendars
 WHERE google_calendars.id = $4

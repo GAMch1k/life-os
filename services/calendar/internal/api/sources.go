@@ -119,6 +119,20 @@ func sameReminder(a, b generated.Reminder) bool {
 	return a.Kind == b.Kind && sameInt(a.MinutesBefore, b.MinutesBefore) && sameInt(a.DaysBefore, b.DaysBefore) && sameString(a.LocalTime, b.LocalTime)
 }
 
+// managedByIntegration refuses what only the integration that syncs a feed
+// does: changing its URL or filter, or refreshing it.
+func managedByIntegration(name string) error {
+	return httpserver.NewError(fiber.StatusConflict, "managed_by_integration",
+		fmt.Sprintf("“%s” is synced by an integration, which keeps its URL and filter and refreshes it; its name, default reminders, default priority, and enabled can be changed here", name))
+}
+
+// listedSource reports whether row is served under /v1/sources: a feed or
+// a source an integration syncs, not a Google calendar Calendar syncs
+// itself (managed under /v1/google/calendars).
+func listedSource(row store.CalendarSource) bool {
+	return row.Kind == string(generated.CalendarSourceKindIcs) || row.Kind == string(generated.CalendarSourceKindExternal)
+}
+
 func sourceNotFound() error {
 	return httpserver.NewError(fiber.StatusNotFound, "not_found", "source not found")
 }
@@ -141,7 +155,7 @@ func (h *Handler) ListSources(c fiber.Ctx) error {
 
 func (h *Handler) GetSource(c fiber.Ctx, id types.UUID) error {
 	row, err := h.queries.GetSource(c.Context(), pgUUID(id))
-	if errors.Is(err, pgx.ErrNoRows) || err == nil && row.Kind != string(generated.CalendarSourceKindIcs) {
+	if errors.Is(err, pgx.ErrNoRows) || err == nil && !listedSource(row) {
 		// A synced Google calendar is managed under /v1/google/calendars.
 		return sourceNotFound()
 	}
@@ -167,6 +181,9 @@ type sourceConfig struct {
 	Include, Exclude []string
 	DefaultReminders *[]generated.Reminder
 	DefaultPriority  generated.EventPriority
+	// Integration: an integration syncs the feed and keeps its URL and
+	// filter (see integration.go); they are not checked here.
+	Integration bool
 }
 
 // validate checks the configuration and normalizes it (trimmed name and
@@ -179,11 +196,13 @@ func (h *Handler) validate(config *sourceConfig) error {
 	if len(config.URL) > maxSourceURL {
 		return fmt.Errorf("url must be at most %d characters", maxSourceURL)
 	}
-	normalized, err := h.fetcher.NormalizeURL(config.URL)
-	if err != nil {
-		return err
+	if !config.Integration {
+		normalized, err := h.fetcher.NormalizeURL(config.URL)
+		if err != nil {
+			return err
+		}
+		config.URL = normalized
 	}
-	config.URL = normalized
 	for label, terms := range map[string]*[]string{"filter.include": &config.Include, "filter.exclude": &config.Exclude} {
 		if len(*terms) > maxFilterTerms {
 			return fmt.Errorf("%s takes at most %d terms", label, maxFilterTerms)
@@ -273,7 +292,7 @@ func (h *Handler) UpdateSource(c fiber.Ctx, id types.UUID) error {
 	}
 	for range updateAttempts {
 		current, err := h.queries.GetSource(c.Context(), pgUUID(id))
-		if errors.Is(err, pgx.ErrNoRows) || err == nil && current.Kind != string(generated.CalendarSourceKindIcs) {
+		if errors.Is(err, pgx.ErrNoRows) || err == nil && !listedSource(current) {
 			return sourceNotFound()
 		}
 		if err != nil {
@@ -284,8 +303,8 @@ func (h *Handler) UpdateSource(c fiber.Ctx, id types.UUID) error {
 			return internal(err)
 		}
 		next := sourceConfig{
-			Name: current.Name, URL: current.Url, Enabled: current.Enabled, Include: current.FilterInclude, Exclude: current.FilterExclude,
-			DefaultReminders: reminders, DefaultPriority: generated.EventPriority(current.DefaultPriority),
+			Name: current.Name, URL: deref(current.Url), Enabled: current.Enabled, Include: current.FilterInclude, Exclude: current.FilterExclude,
+			DefaultReminders: reminders, DefaultPriority: generated.EventPriority(current.DefaultPriority), Integration: !current.InProcess,
 		}
 		if present["name"] {
 			next.Name = *body.Name
@@ -314,13 +333,20 @@ func (h *Handler) UpdateSource(c fiber.Ctx, id types.UUID) error {
 		}
 		// A new URL or filter needs a full download and reconcile; so does a
 		// source that is switched back on. Either is due right away.
-		reconfigured := next.URL != current.Url || !equalTerms(next.Include, current.FilterInclude) || !equalTerms(next.Exclude, current.FilterExclude)
+		reconfigured := next.URL != deref(current.Url) || !equalTerms(next.Include, current.FilterInclude) || !equalTerms(next.Exclude, current.FilterExclude)
+		if next.Integration && reconfigured {
+			return managedByIntegration(current.Name)
+		}
+		url := current.Url // an integration's source keeps none
+		if !next.Integration {
+			url = &next.URL
+		}
 		params := store.UpdateSourceParams{
-			ID: current.ID, ExpectedUpdatedAt: current.UpdatedAt, Name: next.Name, Url: next.URL, Enabled: next.Enabled,
+			ID: current.ID, ExpectedUpdatedAt: current.UpdatedAt, Name: next.Name, Url: url, Enabled: next.Enabled,
 			FilterInclude: next.Include, FilterExclude: next.Exclude, DefaultReminders: encoded, DefaultPriority: priorityColumn(&next.DefaultPriority),
 			ResetValidators: reconfigured,
 		}
-		due := next.Enabled && (reconfigured || !current.Enabled)
+		due := next.Enabled && (reconfigured || !current.Enabled) && !next.Integration
 		if due {
 			now := h.now().UTC()
 			params.NextRefreshAt = timestamp(&now)
@@ -354,11 +380,14 @@ func (h *Handler) DeleteSource(c fiber.Ctx, id types.UUID) error {
 // RefreshSource runs a refresh now and returns the source with its outcome.
 func (h *Handler) RefreshSource(c fiber.Ctx, id types.UUID) error {
 	current, err := h.queries.GetSource(c.Context(), pgUUID(id))
-	if errors.Is(err, pgx.ErrNoRows) || err == nil && current.Kind != string(generated.CalendarSourceKindIcs) {
+	if errors.Is(err, pgx.ErrNoRows) || err == nil && !listedSource(current) {
 		return sourceNotFound() // a synced Google calendar syncs through /v1/google/calendars
 	}
 	if err != nil {
 		return internal(err)
+	}
+	if !current.InProcess {
+		return managedByIntegration(current.Name)
 	}
 	if h.refresher == nil {
 		return internal(errors.New("source refresh is not configured"))
@@ -406,7 +435,8 @@ func (h *Handler) source(row store.CalendarSource) (generated.CalendarSource, er
 		}
 	}
 	return generated.CalendarSource{
-		Id: uuid(row.ID), Kind: generated.CalendarSourceKind(row.Kind), Name: row.Name, Url: row.Url, Enabled: row.Enabled, Preset: row.Preset,
+		Id: uuid(row.ID), Kind: generated.CalendarSourceKind(row.Kind), Name: row.Name, Url: deref(row.Url), Enabled: row.Enabled, Preset: row.Preset,
+		Integration: row.Integration, ExternalId: row.ExternalID, Provider: row.Provider, ReadOnly: &row.ReadOnly,
 		Filter:           generated.SourceFilter{Include: orEmpty(row.FilterInclude), Exclude: orEmpty(row.FilterExclude)},
 		DefaultReminders: reminders, DefaultPriority: generated.EventPriority(row.DefaultPriority), Refresh: refresh,
 		CreatedAt: row.CreatedAt.Time.UTC(), UpdatedAt: row.UpdatedAt.Time.UTC(),

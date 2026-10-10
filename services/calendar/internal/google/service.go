@@ -557,13 +557,19 @@ func (s *Service) Sources(ctx context.Context) (map[[16]byte]pgtype.UUID, error)
 	return out, nil
 }
 
+// inTx runs work in one transaction. Changes it makes to Life OS events
+// (a copy changed or deleted in Google) are the sync's in the change feed.
 func (s *Service) inTx(ctx context.Context, work func(*store.Queries) error) error {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
-	if err := work(s.queries.WithTx(tx)); err != nil {
+	q := s.queries.WithTx(tx)
+	if err := q.SetChangeActor(ctx, syncActorValue); err != nil {
+		return err
+	}
+	if err := work(q); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

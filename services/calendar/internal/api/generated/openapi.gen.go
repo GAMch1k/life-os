@@ -15,12 +15,15 @@ import (
 
 // Defines values for CalendarSourceKind.
 const (
-	CalendarSourceKindIcs CalendarSourceKind = "ics"
+	CalendarSourceKindExternal CalendarSourceKind = "external"
+	CalendarSourceKindIcs      CalendarSourceKind = "ics"
 )
 
 // Valid indicates whether the value is a known member of the CalendarSourceKind enum.
 func (e CalendarSourceKind) Valid() bool {
 	switch e {
+	case CalendarSourceKindExternal:
+		return true
 	case CalendarSourceKindIcs:
 		return true
 	default:
@@ -90,14 +93,17 @@ func (e EventPriority) Valid() bool {
 
 // Defines values for EventSourceKind.
 const (
-	EventSourceKindGoogle EventSourceKind = "google"
-	EventSourceKindIcs    EventSourceKind = "ics"
-	EventSourceKindManual EventSourceKind = "manual"
+	EventSourceKindExternal EventSourceKind = "external"
+	EventSourceKindGoogle   EventSourceKind = "google"
+	EventSourceKindIcs      EventSourceKind = "ics"
+	EventSourceKindManual   EventSourceKind = "manual"
 )
 
 // Valid indicates whether the value is a known member of the EventSourceKind enum.
 func (e EventSourceKind) Valid() bool {
 	switch e {
+	case EventSourceKindExternal:
+		return true
 	case EventSourceKindGoogle:
 		return true
 	case EventSourceKindIcs:
@@ -193,24 +199,6 @@ func (e GoogleConnectionStatus) Valid() bool {
 	case Expired:
 		return true
 	case NotConnected:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for IntegrationSourceKind.
-const (
-	IntegrationSourceKindGoogle IntegrationSourceKind = "google"
-	IntegrationSourceKindIcs    IntegrationSourceKind = "ics"
-)
-
-// Valid indicates whether the value is a known member of the IntegrationSourceKind enum.
-func (e IntegrationSourceKind) Valid() bool {
-	switch e {
-	case IntegrationSourceKindGoogle:
-		return true
-	case IntegrationSourceKindIcs:
 		return true
 	default:
 		return false
@@ -373,6 +361,24 @@ func (e Weekday) Valid() bool {
 	}
 }
 
+// Defines values for ListChangesParamsScope.
+const (
+	All ListChangesParamsScope = "all"
+	Own ListChangesParamsScope = "own"
+)
+
+// Valid indicates whether the value is a known member of the ListChangesParamsScope enum.
+func (e ListChangesParamsScope) Valid() bool {
+	switch e {
+	case All:
+		return true
+	case Own:
+		return true
+	default:
+		return false
+	}
+}
+
 // CalendarEvent defines model for CalendarEvent.
 type CalendarEvent struct {
 	AllDay bool `json:"allDay"`
@@ -472,11 +478,17 @@ type CalendarSource struct {
 	// Enabled Disabled sources are not refreshed; their events stay as they are.
 	Enabled bool `json:"enabled"`
 
+	// ExternalId The source's id in its integration.
+	ExternalId *string `json:"externalId,omitempty"`
+
 	// Filter Which feed events to import. A term matches an event when it equals one of the event's CATEGORIES or occurs in its SUMMARY (both case-insensitive). With `include` terms, only events matching one of them are imported; then events matching an `exclude` term are dropped. Empty lists import everything.
 	Filter SourceFilter       `json:"filter"`
 	Id     openapi_types.UUID `json:"id"`
 
-	// Kind `ics`: an ICS/iCal feed downloaded from a URL.
+	// Integration The integration the source belongs to, such as calendar-feeds.
+	Integration *string `json:"integration,omitempty"`
+
+	// Kind `ics`: an ICS/iCal feed Calendar downloads from a URL. `external`: a source an integration syncs (see `/v1/integrations`), which keeps its own URL, filter, and refresh state.
 	Kind CalendarSourceKind `json:"kind"`
 
 	// Name The label shown with the source's events, such as "ZAW".
@@ -485,17 +497,23 @@ type CalendarSource struct {
 	// Preset Set (such as `zaw`) for a source Calendar configures from its own environment at startup; null for sources added through the API. A preset source can be edited like any other, but while its environment setting is present a deleted one is added again at the next start.
 	Preset *string `json:"preset,omitempty"`
 
+	// Provider The label of the source's provider, such as ZAW or ICS.
+	Provider *string `json:"provider,omitempty"`
+
+	// ReadOnly Whether the source accepts changes to its events.
+	ReadOnly *bool `json:"readOnly,omitempty"`
+
 	// Refresh The source's refresh schedule and last outcome (`lastOutcome` and `lastCounts` are absent before the first refresh). Read-only.
 	Refresh SourceRefreshState `json:"refresh"`
 
 	// UpdatedAt When the configuration last changed.
 	UpdatedAt time.Time `json:"updatedAt"`
 
-	// Url The feed URL.
+	// Url The feed URL; empty for a source an integration syncs.
 	Url string `json:"url"`
 }
 
-// CalendarSourceKind `ics`: an ICS/iCal feed downloaded from a URL.
+// CalendarSourceKind `ics`: an ICS/iCal feed Calendar downloads from a URL. `external`: a source an integration syncs (see `/v1/integrations`), which keeps its own URL, filter, and refresh state.
 type CalendarSourceKind string
 
 // ChangeFeedEntry defines model for ChangeFeedEntry.
@@ -521,23 +539,37 @@ type ChangeFeedEntry struct {
 
 	// Sequence The feed position of the latest change; null in a snapshot.
 	Sequence *int64 `json:"sequence,omitempty"`
+
+	// Source An integration's event: its source identity (also for a tombstone); null for a Life OS event.
+	Source *ChangeFeedSource `json:"source,omitempty"`
 }
 
 // ChangeFeedPage defines model for ChangeFeedPage.
 type ChangeFeedPage struct {
-	// HasMore More entries of this phase are waiting now. On a snapshot page, false means the snapshot is complete: every Life OS event it did not list no longer exists, and nextCursor continues with changes.
+	// HasMore More entries of this phase are waiting now. On a snapshot page, false means the snapshot is complete: every followed event it did not list no longer exists, and nextCursor continues with changes.
 	HasMore bool              `json:"hasMore"`
 	Items   []ChangeFeedEntry `json:"items"`
 
 	// NextCursor Pass it back as cursor for what follows; always set.
 	NextCursor string `json:"nextCursor"`
 
-	// Phase Whether the items are a snapshot (every Life OS event as it is now) or changes since the cursor.
+	// Phase Whether the items are a snapshot (every followed event as it is now) or changes since the cursor.
 	Phase ChangeFeedPagePhase `json:"phase"`
 }
 
-// ChangeFeedPagePhase Whether the items are a snapshot (every Life OS event as it is now) or changes since the cursor.
+// ChangeFeedPagePhase Whether the items are a snapshot (every followed event as it is now) or changes since the cursor.
 type ChangeFeedPagePhase string
+
+// ChangeFeedSource Where an integration's event belongs, so the integration knows where to write it.
+type ChangeFeedSource struct {
+	// ExternalId The source's id in the integration.
+	ExternalId string `json:"externalId"`
+
+	// ExternalUid The event's uid in the source (`lifeos:<id>` for an event Calendar created there, such as the new series of a split, until the integration gives it its own uid).
+	ExternalUid string             `json:"externalUid"`
+	Integration string             `json:"integration"`
+	SourceId    openapi_types.UUID `json:"sourceId"`
+}
 
 // CreateEventRequest A timed event needs startAt and endAt (endAt after startAt); an all-day event needs startDate and endDate (endDate not before startDate) and takes no timeZone.
 type CreateEventRequest struct {
@@ -580,7 +612,7 @@ type CreateSourceRequest struct {
 	// Filter Which feed events to import. A term matches an event when it equals one of the event's CATEGORIES or occurs in its SUMMARY (both case-insensitive). With `include` terms, only events matching one of them are imported; then events matching an `exclude` term are dropped. Empty lists import everything.
 	Filter *SourceFilter `json:"filter,omitempty"`
 
-	// Kind `ics`: an ICS/iCal feed downloaded from a URL.
+	// Kind `ics`: an ICS/iCal feed Calendar downloads from a URL. `external`: a source an integration syncs (see `/v1/integrations`), which keeps its own URL, filter, and refresh state.
 	Kind *CalendarSourceKind `json:"kind,omitempty"`
 	Name string              `json:"name"`
 
@@ -635,17 +667,26 @@ type EventSource struct {
 	// ExternalUid The event's identity in its source; null for manual events. For an ICS event, its UID; one occurrence of a recurring ICS event is imported as its own event, `<UID>#<RECURRENCE-ID>`, where the RECURRENCE-ID is its original start (20261017T040000Z, or 20261017 for an all-day event). For a Google event, its Google event id; one occurrence of a recurring Google event imported as its own event is `<id>_<original start>` as Google names its instances (`<id>_20261017T040000Z`, or `<id>_20261017` for an all-day event).
 	ExternalUid *string `json:"externalUid,omitempty"`
 
-	// Kind `manual`: created in Life OS (the Dashboard, MCP, or a capture). `ics`: imported from an ICS/iCal feed. `google`: synchronized from Google Calendar.
+	// Integration The integration the source belongs to, such as google-calendar; null for manual events. Set by Calendar in responses.
+	Integration *string `json:"integration,omitempty"`
+
+	// Kind `manual`: created in Life OS (the Dashboard, MCP, or a capture). `external`: brought in by an integration (see `/v1/integrations`; `source.provider` and `source.name` say from where). `ics` and `google`: imported by Calendar itself from an ICS/iCal feed or Google Calendar, until those sources are handed over to their integrations.
 	Kind EventSourceKind `json:"kind"`
 
 	// Name The name of that source, such as "ZAW", as it is now (renaming the source renames it here); null for manual events. Set by Calendar in responses.
 	Name *string `json:"name,omitempty"`
 
+	// Provider The label of the source's provider, such as Google or ZAW, for "<provider> · <name>"; null for manual events. Set by Calendar in responses.
+	Provider *string `json:"provider,omitempty"`
+
+	// ReadOnly Whether the source accepts changes to its events (see `editable` for this event); null for manual events. Set by Calendar in responses.
+	ReadOnly *bool `json:"readOnly,omitempty"`
+
 	// SourceId The Calendar source (feed or connected calendar) the event was imported from; null for manual events.
 	SourceId *openapi_types.UUID `json:"sourceId,omitempty"`
 }
 
-// EventSourceKind `manual`: created in Life OS (the Dashboard, MCP, or a capture). `ics`: imported from an ICS/iCal feed. `google`: synchronized from Google Calendar.
+// EventSourceKind `manual`: created in Life OS (the Dashboard, MCP, or a capture). `external`: brought in by an integration (see `/v1/integrations`; `source.provider` and `source.name` say from where). `ics` and `google`: imported by Calendar itself from an ICS/iCal feed or Google Calendar, until those sources are handed over to their integrations.
 type EventSourceKind string
 
 // EventStatus `cancelled` events are kept as history but left out of listings and search unless asked for. An occurrence of a recurring event is cancelled when its series is or when it is skipped on its own.
@@ -813,25 +854,16 @@ type IntegrationSource struct {
 	InProcess   bool   `json:"inProcess"`
 	Integration string `json:"integration"`
 
-	// Kind How the events API and the Dashboard show the source's events (`source.kind`): `ics` for a subscribed feed, `google` for a Google calendar.
-	Kind IntegrationSourceKind `json:"kind"`
-
 	// Name The name shown with its events (the owner may have changed it).
 	Name string `json:"name"`
 
 	// Provider The label shown for the source, such as Google, ZAW, or ICS.
 	Provider string `json:"provider"`
 
-	// ReadOnly Whether the source accepts changes to its events. Calendar does not route event changes to integrations yet: the events of every source an integration syncs are read-only except for their reminders and priority.
+	// ReadOnly Whether the source accepts changes to its events. Those of a source that does are editable in Life OS like Life OS events (unless read-only on their own, see SourceEvent `readOnlyReason`), and each change comes through the change feed for the integration to write to the provider; a read-only source's events allow only their reminders and priority.
 	ReadOnly  bool      `json:"readOnly"`
 	UpdatedAt time.Time `json:"updatedAt"`
-
-	// Url A reference link for the source (empty when none); Calendar never fetches it.
-	Url string `json:"url"`
 }
-
-// IntegrationSourceKind How the events API and the Dashboard show the source's events (`source.kind`): `ics` for a subscribed feed, `google` for a Google calendar.
-type IntegrationSourceKind string
 
 // IntegrationSourceList defines model for IntegrationSourceList.
 type IntegrationSourceList struct {
@@ -905,9 +937,6 @@ type RegisterIntegrationSourceRequest struct {
 	// DefaultReminders The source's own default reminders (null: none). Leave out when the source has none to say.
 	DefaultReminders *[]Reminder `json:"defaultReminders,omitempty"`
 
-	// Kind How the events API and the Dashboard show the source's events (`source.kind`): `ics` for a subscribed feed, `google` for a Google calendar.
-	Kind IntegrationSourceKind `json:"kind"`
-
 	// Name The source's name in the integration, such as the Google calendar's name.
 	Name string `json:"name"`
 
@@ -916,9 +945,6 @@ type RegisterIntegrationSourceRequest struct {
 
 	// ReadOnly Whether the source accepts changes to its events.
 	ReadOnly bool `json:"readOnly"`
-
-	// Url A reference link (never fetched by Calendar); null or left out for none.
-	Url *string `json:"url,omitempty"`
 }
 
 // Reminder Calendar sends a notification for each effective reminder when it is due. `relative`: `minutesBefore` the event starts (an all-day event starts at midnight of its first day, owner-local). `localTime`: at `localTime` (HH:MM on the owner's wall clock) on the day `daysBefore` days before the event's start date in the owner's timezone, resolved when the reminder is due so daylight saving changes are respected. Example: a pickup on 17 November with `{"kind": "localTime", "daysBefore": 1, "localTime": "19:00"}` reminds on 16 November at 19:00.
@@ -988,9 +1014,15 @@ type SourceEvent struct {
 	ExternalUid string  `json:"externalUid"`
 	Location    *string `json:"location,omitempty"`
 
+	// PreviousExternalUid The uid the event had in Calendar until now, to give it the uid the source knows it by: an event Calendar created in the source (the new series of a split, `lifeos:<id>`) once the integration has created it at the provider. Ignored when Calendar has no event with it, or already has one with externalUid.
+	PreviousExternalUid *string `json:"previousExternalUid,omitempty"`
+
 	// Priority An event's own priority as its source gives it; `default`: none of its own, so it follows the source's `defaultPriority`.
-	Priority   *SourceEventPriority `json:"priority,omitempty"`
-	Recurrence *Recurrence          `json:"recurrence,omitempty"`
+	Priority *SourceEventPriority `json:"priority,omitempty"`
+
+	// ReadOnlyReason Set when the event cannot be changed in Life OS although its source accepts changes (such as one occurrence of a rule Calendar cannot hold): why, as shown to the owner. Its reminders and priority stay changeable.
+	ReadOnlyReason *string     `json:"readOnlyReason,omitempty"`
+	Recurrence     *Recurrence `json:"recurrence,omitempty"`
 
 	// Reminders The reminders the source gives an event, like Google Calendar's notifications.
 	Reminders *SourceEventReminders `json:"reminders,omitempty"`
@@ -1100,6 +1132,9 @@ type SyncIntegrationSourceRequest struct {
 
 	// EmptyGuard snapshot only: a snapshot without items is refused (409 empty_snapshot, nothing changes) while the source still has upcoming active events, such as when a feed comes back empty by mistake.
 	EmptyGuard *bool `json:"emptyGuard,omitempty"`
+
+	// FeedCursor The change-feed cursor (phase changes) the integration has handled: the sync is refused (409 unhandled_changes) while the feed has changes to this source's events after it made by anyone else. Leave out for a read-only source.
+	FeedCursor *string `json:"feedCursor,omitempty"`
 
 	// Items Every event of the source (snapshot), or the new and changed ones (delta).
 	Items []SourceEvent                    `json:"items"`
@@ -1248,7 +1283,7 @@ type RecurrenceId = string
 // SourceId defines model for SourceId.
 type SourceId = openapi_types.UUID
 
-// SourceKind `manual`: created in Life OS (the Dashboard, MCP, or a capture). `ics`: imported from an ICS/iCal feed. `google`: synchronized from Google Calendar.
+// SourceKind `manual`: created in Life OS (the Dashboard, MCP, or a capture). `external`: brought in by an integration (see `/v1/integrations`; `source.provider` and `source.name` say from where). `ics` and `google`: imported by Calendar itself from an ICS/iCal feed or Google Calendar, until those sources are handed over to their integrations.
 type SourceKind = EventSourceKind
 
 // TimeZone defines model for TimeZone.
@@ -1268,13 +1303,13 @@ type ListEventsParams struct {
 	// IncludeCancelled Also return cancelled events (including those removed by their source).
 	IncludeCancelled *IncludeCancelled `form:"includeCancelled,omitempty" json:"includeCancelled,omitempty"`
 
-	// SourceKind Only events from this kind of source; `manual` lists the events created in Life OS.
+	// SourceKind Only events from this kind of source; `manual` lists the events created in Life OS, `external` those an integration brought in.
 	SourceKind *SourceKind `form:"sourceKind,omitempty" json:"sourceKind,omitempty"`
 
 	// SourceId Only events imported from this source.
 	SourceId *SourceId `form:"sourceId,omitempty" json:"sourceId,omitempty"`
 
-	// Editable Only events that can be changed through this API (`editable`): Life OS events, and Google events of calendars the account may edit that are single events or series Calendar holds; not feed events, read-only Google calendars, or occurrences expanded from a Google rule. The AI looks for the events to change this way.
+	// Editable Only events that can be changed through this API (`editable`): Life OS events, Google events of calendars the account may edit that are single events or series Calendar holds, and events of integrations' sources that accept changes (unless read-only on their own); not feed events, read-only Google calendars, or occurrences expanded from a Google rule. The AI looks for the events to change this way.
 	Editable *Editable `form:"editable,omitempty" json:"editable,omitempty"`
 
 	// Cursor The previous page's nextCursor. Opaque; only valid with the parameters it was returned for.
@@ -1299,13 +1334,13 @@ type SearchEventsParams struct {
 	// IncludeCancelled Also return cancelled events (including those removed by their source).
 	IncludeCancelled *IncludeCancelled `form:"includeCancelled,omitempty" json:"includeCancelled,omitempty"`
 
-	// SourceKind Only events from this kind of source; `manual` lists the events created in Life OS.
+	// SourceKind Only events from this kind of source; `manual` lists the events created in Life OS, `external` those an integration brought in.
 	SourceKind *SourceKind `form:"sourceKind,omitempty" json:"sourceKind,omitempty"`
 
 	// SourceId Only events imported from this source.
 	SourceId *SourceId `form:"sourceId,omitempty" json:"sourceId,omitempty"`
 
-	// Editable Only events that can be changed through this API (`editable`): Life OS events, and Google events of calendars the account may edit that are single events or series Calendar holds; not feed events, read-only Google calendars, or occurrences expanded from a Google rule. The AI looks for the events to change this way.
+	// Editable Only events that can be changed through this API (`editable`): Life OS events, Google events of calendars the account may edit that are single events or series Calendar holds, and events of integrations' sources that accept changes (unless read-only on their own); not feed events, read-only Google calendars, or occurrences expanded from a Google rule. The AI looks for the events to change this way.
 	Editable *Editable `form:"editable,omitempty" json:"editable,omitempty"`
 
 	// Cursor The previous page's nextCursor. Opaque; only valid with the parameters it was returned for.
@@ -1326,7 +1361,13 @@ type ListChangesParams struct {
 
 	// Limit At most this many changes (snapshot: events) per page.
 	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Scope `own`: Life OS events and the events of the reading integration's own sources (`system:<name>` only; its default). `all`: also those of every other integration (the default for `dev:<name>`).
+	Scope *ListChangesParamsScope `form:"scope,omitempty" json:"scope,omitempty"`
 }
+
+// ListChangesParamsScope defines parameters for ListChanges.
+type ListChangesParamsScope string
 
 // CreateEventJSONRequestBody defines body for CreateEvent for application/json ContentType.
 type CreateEventJSONRequestBody = CreateEventRequest
@@ -1423,7 +1464,7 @@ type ServerInterface interface {
 	// AuthorizeGoogle Start a Google authorization
 	// (POST /v1/google/connection/authorize)
 	AuthorizeGoogle(c fiber.Ctx) error
-	// ListChanges Follow the changes of events created in Life OS
+	// ListChanges Follow the changes of events made in Life OS
 	// (GET /v1/integrations/changes)
 	ListChanges(c fiber.Ctx, params ListChangesParams) error
 	// ListIntegrationSources List an integration's sources
@@ -2152,6 +2193,13 @@ func (siw *ServerInterfaceWrapper) ListChanges(c fiber.Ctx) error {
 	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", query, &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
 	if err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter limit: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "scope" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "scope", query, &params.Scope, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter scope: %w", err).Error())
 	}
 
 	handler := func(c fiber.Ctx) error {

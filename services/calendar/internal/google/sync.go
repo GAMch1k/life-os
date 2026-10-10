@@ -46,6 +46,10 @@ const (
 // SyncActor is the system actor Google syncs are attributed to.
 var SyncActor = activity.System("google-calendar")
 
+// syncActorValue is SyncActor as an X-Life-OS-Actor value, the actor of
+// the sync's changes to Life OS events in the change feed.
+const syncActorValue = "system:google-calendar"
+
 // Activity event types of synced calendars, shared with feeds (subject
 // calendar_source).
 const (
@@ -368,6 +372,9 @@ func (s *Syncer) store(ctx context.Context, claimed store.GoogleCalendar, found 
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	q := s.service.queries.WithTx(tx)
+	if err := q.SetChangeActor(ctx, syncActorValue); err != nil {
+		return store.GoogleCalendar{}, nil, err
+	}
 	current, err := q.LockGoogleCalendar(ctx, claimed.ID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.GoogleCalendar{}, nil, ErrCalendarNotFound

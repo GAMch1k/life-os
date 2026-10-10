@@ -4,7 +4,7 @@
 WITH new AS (SELECT gen_random_uuid() AS id)
 INSERT INTO calendar_sources (id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, default_priority,
                               integration, external_id, provider)
-VALUES ((SELECT id FROM new), sqlc.arg(kind), sqlc.arg(name), sqlc.arg(url), sqlc.arg(enabled), sqlc.arg(filter_include), sqlc.arg(filter_exclude),
+VALUES ((SELECT id FROM new), sqlc.arg(kind), sqlc.arg(name), sqlc.arg(url)::text, sqlc.arg(enabled), sqlc.arg(filter_include), sqlc.arg(filter_exclude),
         sqlc.narg(default_reminders), sqlc.arg(next_refresh_at), COALESCE(sqlc.narg(default_priority)::text, 'medium'),
         'calendar-feeds', (SELECT id FROM new)::text, 'ICS')
 RETURNING *;
@@ -13,9 +13,10 @@ RETURNING *;
 SELECT * FROM calendar_sources WHERE id = $1;
 
 -- name: ListSources :many
--- The feeds (ICS sources). Google calendars are sources too, managed through
+-- The feeds (ICS sources) and the sources integrations sync (external).
+-- Google calendars Calendar syncs itself are sources too, managed through
 -- the Google connection (google_calendars), and are not listed here.
-SELECT * FROM calendar_sources WHERE kind = 'ics' ORDER BY created_at, id;
+SELECT * FROM calendar_sources WHERE kind IN ('ics', 'external') ORDER BY created_at, id;
 
 -- name: UpdateSource :one
 -- Writes the whole merged configuration, guarded by the updated_at it was
@@ -23,7 +24,7 @@ SELECT * FROM calendar_sources WHERE kind = 'ics' ORDER BY created_at, id;
 -- changed URL or filter needs a full download); next_refresh_at, when given,
 -- reschedules the source; a null default_priority keeps the source's.
 UPDATE calendar_sources
-SET name = sqlc.arg(name), url = sqlc.arg(url), enabled = sqlc.arg(enabled),
+SET name = sqlc.arg(name), url = sqlc.narg(url), enabled = sqlc.arg(enabled),
     filter_include = sqlc.arg(filter_include)::text[], filter_exclude = sqlc.arg(filter_exclude)::text[],
     default_reminders = sqlc.narg(default_reminders), default_priority = COALESCE(sqlc.narg(default_priority)::text, default_priority),
     etag = CASE WHEN sqlc.arg(reset_validators)::boolean THEN NULL ELSE etag END,
@@ -34,9 +35,10 @@ WHERE id = sqlc.arg(id) AND updated_at = sqlc.arg(expected_updated_at)
 RETURNING *;
 
 -- name: DeleteSource :execrows
--- Deletes a feed and its imported events (ON DELETE CASCADE). A Google
--- calendar's source goes when its calendar stops syncing.
-DELETE FROM calendar_sources WHERE id = $1 AND kind = 'ics';
+-- Deletes a feed or an integration's source and its imported events (ON
+-- DELETE CASCADE). A Google calendar's source goes when its calendar stops
+-- syncing.
+DELETE FROM calendar_sources WHERE id = $1 AND kind IN ('ics', 'external');
 
 -- name: ListDueSources :many
 -- Enabled feeds whose next refresh is due and that nobody is refreshing
@@ -81,8 +83,9 @@ RETURNING *;
 
 -- name: ListSourceSummaries :many
 -- What an imported event shows of its source: its name, default reminders,
--- and default priority.
-SELECT id, name, default_reminders, default_priority FROM calendar_sources ORDER BY id;
+-- default priority, integration, provider label, and whether it accepts
+-- changes.
+SELECT id, name, default_reminders, default_priority, integration, provider, read_only FROM calendar_sources ORDER BY id;
 
 -- Preset sources are configured from Calendar's environment at startup
 -- (EnsurePreset), inside one transaction holding LockPreset.
@@ -101,7 +104,7 @@ SELECT * FROM calendar_sources WHERE preset = sqlc.arg(preset)::text FOR UPDATE;
 -- A source added through the API for the preset's feed URL: the preset takes
 -- it over rather than adding a second source for the same feed.
 SELECT * FROM calendar_sources
-WHERE preset IS NULL AND kind = 'ics' AND in_process AND url = sqlc.arg(url)
+WHERE preset IS NULL AND kind = 'ics' AND in_process AND url = sqlc.arg(url)::text
 ORDER BY created_at, id
 LIMIT 1
 FOR UPDATE;
@@ -110,7 +113,7 @@ FOR UPDATE;
 WITH new AS (SELECT gen_random_uuid() AS id)
 INSERT INTO calendar_sources (id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, preset, preset_config,
                               integration, external_id, provider)
-VALUES ((SELECT id FROM new), sqlc.arg(kind), sqlc.arg(name), sqlc.arg(url), true, sqlc.arg(filter_include)::text[], sqlc.arg(filter_exclude)::text[],
+VALUES ((SELECT id FROM new), sqlc.arg(kind), sqlc.arg(name), sqlc.arg(url)::text, true, sqlc.arg(filter_include)::text[], sqlc.arg(filter_exclude)::text[],
         sqlc.narg(default_reminders), sqlc.arg(next_refresh_at), sqlc.arg(preset)::text, sqlc.arg(preset_config),
         'calendar-feeds', (SELECT id FROM new)::text, CASE WHEN sqlc.arg(preset)::text = 'zaw' THEN 'ZAW' ELSE 'ICS' END)
 RETURNING *;
@@ -120,7 +123,7 @@ RETURNING *;
 -- reset_validators and next_refresh_at work as in UpdateSource; enabled and
 -- the refresh state stay.
 UPDATE calendar_sources
-SET name = sqlc.arg(name), url = sqlc.arg(url),
+SET name = sqlc.arg(name), url = sqlc.arg(url)::text,
     filter_include = sqlc.arg(filter_include)::text[], filter_exclude = sqlc.arg(filter_exclude)::text[],
     default_reminders = sqlc.narg(default_reminders),
     preset = sqlc.arg(preset)::text, preset_config = sqlc.arg(preset_config),
@@ -144,12 +147,13 @@ SELECT * FROM events WHERE source_id = $1 ORDER BY id FOR UPDATE;
 -- defaults: none of its own, following the source's defaults), and
 -- source_reminders records them (null for a feed). priority is the event's
 -- own priority as its source gives it (Google, through a Life OS extended
--- property); null follows the source's default.
+-- property); null follows the source's default. read_only_reason is why an
+-- integration's event cannot be changed although its source accepts changes.
 INSERT INTO events (
     title, description, location, all_day, start_at, end_at, start_date, end_date, time_zone,
     recurrence_frequency, recurrence_interval, recurrence_until, recurrence_by_weekday, recurrence_count,
     reminders, use_default_reminders, source_reminders,
-    status, cancelled_at, source_kind, source_id, external_uid, priority
+    status, cancelled_at, source_kind, source_id, external_uid, priority, read_only_reason
 )
 VALUES (
     sqlc.arg(title), sqlc.narg(description), sqlc.narg(location), sqlc.arg(all_day), sqlc.narg(start_at), sqlc.narg(end_at),
@@ -157,7 +161,8 @@ VALUES (
     sqlc.narg(recurrence_frequency), sqlc.narg(recurrence_interval), sqlc.narg(recurrence_until),
     sqlc.narg(recurrence_by_weekday)::text[], sqlc.narg(recurrence_count),
     sqlc.arg(reminders), sqlc.arg(use_default_reminders), sqlc.narg(source_reminders),
-    sqlc.arg(status), sqlc.narg(cancelled_at), sqlc.arg(source_kind), sqlc.arg(source_id), sqlc.arg(external_uid), sqlc.narg(priority)
+    sqlc.arg(status), sqlc.narg(cancelled_at), sqlc.arg(source_kind), sqlc.arg(source_id), sqlc.arg(external_uid), sqlc.narg(priority),
+    sqlc.narg(read_only_reason)
 )
 RETURNING id;
 
@@ -179,6 +184,7 @@ SET title = sqlc.arg(title), description = sqlc.narg(description), location = sq
     use_default_reminders = COALESCE(sqlc.narg(use_default_reminders), use_default_reminders),
     source_reminders = COALESCE(sqlc.narg(source_reminders), source_reminders),
     priority = CASE WHEN sqlc.arg(set_priority)::boolean THEN sqlc.narg(priority) ELSE priority END,
+    read_only_reason = sqlc.narg(read_only_reason),
     status = sqlc.arg(status), cancelled_at = sqlc.narg(cancelled_at), removed_from_source_at = NULL,
     updated_at = now()
 WHERE id = sqlc.arg(id) AND source_id = sqlc.arg(source_id);

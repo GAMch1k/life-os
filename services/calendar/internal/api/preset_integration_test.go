@@ -147,7 +147,7 @@ func TestZAWPresetSource(t *testing.T) {
 	*c.clock = fixedNow.Add(time.Hour)
 	movedURL := feed.URL + "/api.php?m=zaw&r=ical&area_id=2"
 	moved := restarted.ensure(sources.ZAWPreset(movedURL))
-	if moved.Action != sources.EnsureUpdated || !moved.Due || moved.Source.Url != movedURL || !moved.Source.NextRefreshAt.Time.Equal(*c.clock) ||
+	if moved.Action != sources.EnsureUpdated || !moved.Due || deref(moved.Source.Url) != movedURL || !moved.Source.NextRefreshAt.Time.Equal(*c.clock) ||
 		moved.Source.Etag != nil || moved.Source.Name != "Müllabfuhr" || moved.Source.ID != created.Source.ID {
 		t.Fatalf("moved = %+v", moved)
 	}

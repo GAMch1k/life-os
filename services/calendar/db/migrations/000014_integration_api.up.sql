@@ -1,22 +1,23 @@
 -- Calendar integration API (P11-06). Integrations are separate services
 -- (google-calendar, calendar-feeds) that give Calendar the events of their
 -- sources, and follow the events created in Life OS, only through
--- Calendar's public API. Expand only: every legacy column and table stays
--- (P11-09 drops them), and Calendar's in-process Google and ICS adapters
--- keep working as before.
+-- Calendar's public API; Calendar names no provider. Expand only: every
+-- legacy column and table stays (P11-09 drops them), and Calendar's
+-- in-process Google and ICS adapters keep working as before.
 
--- Provider-neutral source identity. A source belongs to one integration
--- and is known there by external_id (unique per integration): a Google
--- calendar's Google id, or for a feed the source's own id. provider is the
--- label shown for it (Google, ZAW, ICS); read_only says whether the source
--- accepts changes to its events.
+-- Provider-neutral sources. A source belongs to one integration and is
+-- known there by external_id (unique per integration): a Google calendar's
+-- Google id, or for a feed the source's own id. provider is the label shown
+-- for it (Google, ZAW, ICS); read_only says whether the source accepts
+-- changes to its events.
 --
 -- in_process is true while Calendar's own adapter still syncs the source
 -- (the ICS refresher or the Google syncer: every source from before the
--- integration services); a source an integration registers through the API
--- is false, and only those can be synced through it. The release that
--- switches an adapter off (P11-07, P11-08) sets it to false for the sources
--- the integration takes over.
+-- integration services, of kind ics or google). A source an integration
+-- registers through the API is of kind external, not in process, and only
+-- those can be synced through it. The release that switches an adapter off
+-- (P11-07, P11-08) hands its sources over: in_process false, kind external
+-- (for the sources and their events), in one migration.
 --
 -- integration_config is what the integration last set of the owner's
 -- settings ({"name", "defaultReminders", "defaultPriority"}): registering
@@ -61,23 +62,43 @@ SET integration_config = jsonb_build_object(
 
 CREATE UNIQUE INDEX calendar_sources_integration_key ON calendar_sources (integration, external_id);
 
--- A source an integration syncs has no Google calendar row (google_calendar_id
--- stays the in-process syncer's) and may have no URL (it is only a
--- reference link for it).
+-- A source an integration syncs is of kind external and keeps no URL (a feed
+-- URL is the integration's configuration); a handed-over Google source may
+-- keep its legacy google_calendar_id until P11-09.
+ALTER TABLE calendar_sources ALTER COLUMN url DROP NOT NULL;
 ALTER TABLE calendar_sources
+    DROP CONSTRAINT calendar_sources_kind_check,
     DROP CONSTRAINT calendar_sources_google_calendar_check,
-    DROP CONSTRAINT calendar_sources_url_check,
-    ADD CONSTRAINT calendar_sources_google_calendar_check CHECK (google_calendar_id IS NULL OR kind = 'google'),
-    ADD CONSTRAINT calendar_sources_in_process_google_check CHECK (NOT in_process OR kind <> 'google' OR google_calendar_id IS NOT NULL),
-    ADD CONSTRAINT calendar_sources_url_check CHECK (url <> '' OR NOT in_process);
+    ADD CONSTRAINT calendar_sources_kind_check CHECK (kind IN ('ics', 'google', 'external')),
+    ADD CONSTRAINT calendar_sources_external_check CHECK ((kind = 'external') = (NOT in_process)),
+    ADD CONSTRAINT calendar_sources_google_calendar_check CHECK (google_calendar_id IS NULL OR kind <> 'ics'),
+    ADD CONSTRAINT calendar_sources_in_process_google_check CHECK (NOT in_process OR (kind = 'google') = (google_calendar_id IS NOT NULL)),
+    ADD CONSTRAINT calendar_sources_in_process_url_check CHECK (NOT in_process OR url IS NOT NULL);
 
--- The change feed of events created in Life OS (source_kind manual): one
--- entry per change, written by the triggers below in the transaction of the
--- change itself, so no path (the API, the in-process Google reverse sync, a
--- future one) can change such an event without an entry. actor is who made
--- the change (the X-Life-OS-Actor of the request; the writing transaction
--- sets calendar.actor, else system:calendar). The feed reads the events'
--- current state; an event that no longer exists is a tombstone.
+-- Events brought in by an integration are of kind external. One the source
+-- accepts changes to can still be read-only on its own (such as one
+-- occurrence of a rule Calendar cannot hold): read_only_reason says why.
+ALTER TABLE events
+    DROP CONSTRAINT events_source_kind_check,
+    ADD CONSTRAINT events_source_kind_check CHECK (source_kind IN ('manual', 'ics', 'google', 'external')),
+    ADD COLUMN read_only_reason TEXT,
+    ADD CONSTRAINT events_read_only_reason_check CHECK (
+        read_only_reason IS NULL OR (source_kind = 'external' AND btrim(read_only_reason) <> '')
+    );
+
+-- The change feed of the events changed in Life OS that an integration may
+-- write elsewhere: those created in Life OS (source_kind manual) and those
+-- of a source an integration syncs that accepts changes (external, not
+-- read-only). One entry per change, written by the triggers below in the
+-- transaction of the change itself, so no path (the API, the in-process
+-- Google reverse sync, an integration's sync, a future one) changes such an
+-- event without an entry. actor is who made the change (the
+-- X-Life-OS-Actor of the request: the writing transaction sets
+-- calendar.actor, else system:calendar). source_id and external_uid are the
+-- event's source identity, for its tombstone. The feed reads the events'
+-- current state; an event that no longer exists is a tombstone. Deleting a
+-- source deletes its events without entries: that never reaches the
+-- provider.
 --
 -- Entries are numbered in commit order: the triggers are deferred to the
 -- commit and append holding one advisory lock until the transaction ends,
@@ -93,6 +114,8 @@ ALTER TABLE calendar_sources
 CREATE TABLE calendar_event_changes (
     seq BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     event_id UUID NOT NULL,
+    source_id UUID,
+    external_uid TEXT,
     actor TEXT NOT NULL CHECK (actor <> ''),
     transaction_id BIGINT NOT NULL DEFAULT pg_current_xact_id()::text::bigint,
     changed_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
@@ -111,7 +134,17 @@ CREATE TABLE calendar_change_feed (
 
 INSERT INTO calendar_change_feed DEFAULT VALUES;
 
-CREATE FUNCTION calendar_record_event_change(changed UUID) RETURNS void
+-- Whether the feed follows an event of this kind and source: a Life OS
+-- event, or one of a source an integration syncs that accepts changes (and
+-- still exists).
+CREATE FUNCTION calendar_event_followed(kind TEXT, source UUID) RETURNS boolean
+LANGUAGE sql STABLE AS $$
+    SELECT kind = 'manual' OR (kind = 'external' AND EXISTS (
+        SELECT 1 FROM calendar_sources WHERE id = source AND NOT in_process AND NOT read_only
+    ))
+$$;
+
+CREATE FUNCTION calendar_record_event_change(changed UUID, source UUID, uid TEXT) RETURNS void
 LANGUAGE plpgsql AS $$
 BEGIN
     PERFORM pg_advisory_xact_lock(hashtext('calendar_event_changes'));
@@ -119,8 +152,8 @@ BEGIN
         SELECT 1 FROM calendar_event_changes
         WHERE event_id = changed AND transaction_id = pg_current_xact_id()::text::bigint
     ) THEN
-        INSERT INTO calendar_event_changes (event_id, actor)
-        VALUES (changed, COALESCE(NULLIF(current_setting('calendar.actor', true), ''), 'system:calendar'));
+        INSERT INTO calendar_event_changes (event_id, source_id, external_uid, actor)
+        VALUES (changed, source, uid, COALESCE(NULLIF(current_setting('calendar.actor', true), ''), 'system:calendar'));
     END IF;
 END
 $$;
@@ -130,12 +163,12 @@ CREATE FUNCTION calendar_events_changed() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
     IF TG_OP = 'DELETE' THEN
-        IF OLD.source_kind = 'manual' THEN
-            PERFORM calendar_record_event_change(OLD.id);
+        IF calendar_event_followed(OLD.source_kind, OLD.source_id) THEN
+            PERFORM calendar_record_event_change(OLD.id, OLD.source_id, OLD.external_uid);
         END IF;
-    ELSIF NEW.source_kind = 'manual'
-        AND (TG_OP = 'INSERT' OR (to_jsonb(NEW) - 'updated_at') IS DISTINCT FROM (to_jsonb(OLD) - 'updated_at')) THEN
-        PERFORM calendar_record_event_change(NEW.id);
+    ELSIF (TG_OP = 'INSERT' OR (to_jsonb(NEW) - 'updated_at') IS DISTINCT FROM (to_jsonb(OLD) - 'updated_at'))
+        AND calendar_event_followed(NEW.source_kind, NEW.source_id) THEN
+        PERFORM calendar_record_event_change(NEW.id, NEW.source_id, NEW.external_uid);
     END IF;
     RETURN NULL;
 END
@@ -146,16 +179,23 @@ $$;
 -- commit, so exceptions removed with their deleted series add nothing.
 CREATE FUNCTION calendar_event_exceptions_changed() RETURNS trigger
 LANGUAGE plpgsql AS $$
+DECLARE
+    series events%ROWTYPE;
 BEGIN
     IF TG_OP = 'UPDATE' AND (to_jsonb(NEW) - 'updated_at') IS NOT DISTINCT FROM (to_jsonb(OLD) - 'updated_at') THEN
         RETURN NULL;
     END IF;
-    IF TG_OP <> 'INSERT' AND EXISTS (SELECT 1 FROM events WHERE id = OLD.event_id AND source_kind = 'manual') THEN
-        PERFORM calendar_record_event_change(OLD.event_id);
+    IF TG_OP <> 'INSERT' THEN
+        SELECT * INTO series FROM events WHERE id = OLD.event_id;
+        IF FOUND AND calendar_event_followed(series.source_kind, series.source_id) THEN
+            PERFORM calendar_record_event_change(series.id, series.source_id, series.external_uid);
+        END IF;
     END IF;
-    IF TG_OP <> 'DELETE' AND (TG_OP = 'INSERT' OR NEW.event_id <> OLD.event_id)
-        AND EXISTS (SELECT 1 FROM events WHERE id = NEW.event_id AND source_kind = 'manual') THEN
-        PERFORM calendar_record_event_change(NEW.event_id);
+    IF TG_OP = 'INSERT' OR (TG_OP = 'UPDATE' AND NEW.event_id <> OLD.event_id) THEN
+        SELECT * INTO series FROM events WHERE id = NEW.event_id;
+        IF FOUND AND calendar_event_followed(series.source_kind, series.source_id) THEN
+            PERFORM calendar_record_event_change(series.id, series.source_id, series.external_uid);
+        END IF;
     END IF;
     RETURN NULL;
 END

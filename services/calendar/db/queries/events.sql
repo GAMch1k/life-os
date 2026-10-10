@@ -40,6 +40,10 @@ WHERE events.recurrence_frequency IS NULL
   AND (sqlc.narg(source_kind)::text IS NULL OR events.source_kind = sqlc.narg(source_kind)::text)
   AND (sqlc.narg(source_id)::uuid IS NULL OR events.source_id = sqlc.narg(source_id)::uuid)
   AND (NOT sqlc.arg(editable_only)::boolean OR events.source_kind = 'manual' OR (
+    events.source_kind = 'external' AND events.read_only_reason IS NULL AND EXISTS (
+      SELECT 1 FROM calendar_sources AS writable_source WHERE writable_source.id = events.source_id AND NOT writable_source.read_only
+    )
+  ) OR (
     events.source_kind = 'google' AND EXISTS (
       SELECT 1 FROM calendar_sources AS editable_source
       JOIN google_calendars AS editable_calendar ON editable_calendar.id = editable_source.google_calendar_id
@@ -86,6 +90,10 @@ WHERE events.recurrence_frequency IS NOT NULL
   AND (sqlc.narg(source_kind)::text IS NULL OR events.source_kind = sqlc.narg(source_kind)::text)
   AND (sqlc.narg(source_id)::uuid IS NULL OR events.source_id = sqlc.narg(source_id)::uuid)
   AND (NOT sqlc.arg(editable_only)::boolean OR events.source_kind = 'manual' OR (
+    events.source_kind = 'external' AND events.read_only_reason IS NULL AND EXISTS (
+      SELECT 1 FROM calendar_sources AS writable_source WHERE writable_source.id = events.source_id AND NOT writable_source.read_only
+    )
+  ) OR (
     events.source_kind = 'google' AND EXISTS (
       SELECT 1 FROM calendar_sources AS editable_source
       JOIN google_calendars AS editable_calendar ON editable_calendar.id = editable_source.google_calendar_id
@@ -136,6 +144,10 @@ WHERE events.recurrence_frequency IS NULL
   AND (sqlc.narg(source_kind)::text IS NULL OR events.source_kind = sqlc.narg(source_kind)::text)
   AND (sqlc.narg(source_id)::uuid IS NULL OR events.source_id = sqlc.narg(source_id)::uuid)
   AND (NOT sqlc.arg(editable_only)::boolean OR events.source_kind = 'manual' OR (
+    events.source_kind = 'external' AND events.read_only_reason IS NULL AND EXISTS (
+      SELECT 1 FROM calendar_sources AS writable_source WHERE writable_source.id = events.source_id AND NOT writable_source.read_only
+    )
+  ) OR (
     events.source_kind = 'google' AND EXISTS (
       SELECT 1 FROM calendar_sources AS editable_source
       JOIN google_calendars AS editable_calendar ON editable_calendar.id = editable_source.google_calendar_id
@@ -183,6 +195,10 @@ WHERE events.recurrence_frequency IS NOT NULL
   AND (sqlc.narg(source_kind)::text IS NULL OR events.source_kind = sqlc.narg(source_kind)::text)
   AND (sqlc.narg(source_id)::uuid IS NULL OR events.source_id = sqlc.narg(source_id)::uuid)
   AND (NOT sqlc.arg(editable_only)::boolean OR events.source_kind = 'manual' OR (
+    events.source_kind = 'external' AND events.read_only_reason IS NULL AND EXISTS (
+      SELECT 1 FROM calendar_sources AS writable_source WHERE writable_source.id = events.source_id AND NOT writable_source.read_only
+    )
+  ) OR (
     events.source_kind = 'google' AND EXISTS (
       SELECT 1 FROM calendar_sources AS editable_source
       JOIN google_calendars AS editable_calendar ON editable_calendar.id = editable_source.google_calendar_id
@@ -216,11 +232,16 @@ DELETE FROM events WHERE id = $1;
 -- name: ListEventsByID :many
 SELECT * FROM events WHERE id = ANY(sqlc.arg(ids)::uuid[]);
 
--- name: ListOwnEvents :many
--- Events created in Life OS (source kind manual) after after_id, by id: the
--- full listing that starts the change feed.
-SELECT * FROM events
-WHERE source_kind = 'manual'
-  AND (sqlc.narg(after_id)::uuid IS NULL OR id > sqlc.narg(after_id)::uuid)
-ORDER BY id
+-- name: ListFollowedEvents :many
+-- The events the change feed follows, after after_id, by id: the snapshot
+-- that starts it. Life OS events, and the events of sources integrations
+-- sync that accept changes (only integration's when given).
+SELECT sqlc.embed(events) FROM events
+LEFT JOIN calendar_sources ON calendar_sources.id = events.source_id
+WHERE (events.source_kind = 'manual' OR (
+    events.source_kind = 'external' AND NOT calendar_sources.in_process AND NOT calendar_sources.read_only
+    AND (sqlc.narg(integration)::text IS NULL OR calendar_sources.integration = sqlc.narg(integration)::text)
+  ))
+  AND (sqlc.narg(after_id)::uuid IS NULL OR events.id > sqlc.narg(after_id)::uuid)
+ORDER BY events.id
 LIMIT sqlc.arg(page_limit);

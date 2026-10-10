@@ -14,26 +14,24 @@ import (
 const createIntegrationSource = `-- name: CreateIntegrationSource :one
 
 INSERT INTO calendar_sources (
-    kind, name, url, enabled, default_reminders, default_priority,
+    kind, name, enabled, default_reminders, default_priority,
     integration, external_id, provider, read_only, in_process, integration_config
 )
 VALUES (
-    $1, $2, $3, true, $4, $5,
-    $6, $7, $8, $9, false, $10
+    'external', $1, true, $2, $3,
+    $4::text, $5::text, $6::text, $7, false, $8
 )
 ON CONFLICT (integration, external_id) DO NOTHING
 RETURNING id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id, default_priority, integration, external_id, provider, read_only, in_process, integration_config
 `
 
 type CreateIntegrationSourceParams struct {
-	Kind              string
 	Name              string
-	Url               string
 	DefaultReminders  []byte
 	DefaultPriority   string
-	Integration       *string
-	ExternalID        *string
-	Provider          *string
+	Integration       string
+	ExternalID        string
+	Provider          string
 	ReadOnly          bool
 	IntegrationConfig []byte
 }
@@ -45,9 +43,7 @@ type CreateIntegrationSourceParams struct {
 // already registered: the caller then locks and updates it.
 func (q *Queries) CreateIntegrationSource(ctx context.Context, arg CreateIntegrationSourceParams) (CalendarSource, error) {
 	row := q.db.QueryRow(ctx, createIntegrationSource,
-		arg.Kind,
 		arg.Name,
-		arg.Url,
 		arg.DefaultReminders,
 		arg.DefaultPriority,
 		arg.Integration,
@@ -107,12 +103,12 @@ func (q *Queries) DeleteIntegrationSource(ctx context.Context, id pgtype.UUID) (
 
 const getIntegrationSource = `-- name: GetIntegrationSource :one
 SELECT id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id, default_priority, integration, external_id, provider, read_only, in_process, integration_config FROM calendar_sources
-WHERE integration = $1 AND external_id = $2
+WHERE integration = $1::text AND external_id = $2::text
 `
 
 type GetIntegrationSourceParams struct {
-	Integration *string
-	ExternalID  *string
+	Integration string
+	ExternalID  string
 }
 
 func (q *Queries) GetIntegrationSource(ctx context.Context, arg GetIntegrationSourceParams) (CalendarSource, error) {
@@ -154,10 +150,10 @@ func (q *Queries) GetIntegrationSource(ctx context.Context, arg GetIntegrationSo
 }
 
 const listIntegrationSources = `-- name: ListIntegrationSources :many
-SELECT id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id, default_priority, integration, external_id, provider, read_only, in_process, integration_config FROM calendar_sources WHERE integration = $1 ORDER BY created_at, id
+SELECT id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id, default_priority, integration, external_id, provider, read_only, in_process, integration_config FROM calendar_sources WHERE integration = $1::text ORDER BY created_at, id
 `
 
-func (q *Queries) ListIntegrationSources(ctx context.Context, integration *string) ([]CalendarSource, error) {
+func (q *Queries) ListIntegrationSources(ctx context.Context, integration string) ([]CalendarSource, error) {
 	rows, err := q.db.Query(ctx, listIntegrationSources, integration)
 	if err != nil {
 		return nil, err
@@ -208,15 +204,52 @@ func (q *Queries) ListIntegrationSources(ctx context.Context, integration *strin
 	return items, nil
 }
 
+const listSourceIdentities = `-- name: ListSourceIdentities :many
+SELECT id, integration, external_id, read_only FROM calendar_sources WHERE id = ANY($1::uuid[])
+`
+
+type ListSourceIdentitiesRow struct {
+	ID          pgtype.UUID
+	Integration *string
+	ExternalID  *string
+	ReadOnly    bool
+}
+
+// The integration identity of the given sources, for the change feed.
+func (q *Queries) ListSourceIdentities(ctx context.Context, ids []pgtype.UUID) ([]ListSourceIdentitiesRow, error) {
+	rows, err := q.db.Query(ctx, listSourceIdentities, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSourceIdentitiesRow{}
+	for rows.Next() {
+		var i ListSourceIdentitiesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Integration,
+			&i.ExternalID,
+			&i.ReadOnly,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockIntegrationSource = `-- name: LockIntegrationSource :one
 SELECT id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id, default_priority, integration, external_id, provider, read_only, in_process, integration_config FROM calendar_sources
-WHERE integration = $1 AND external_id = $2
+WHERE integration = $1::text AND external_id = $2::text
 FOR UPDATE
 `
 
 type LockIntegrationSourceParams struct {
-	Integration *string
-	ExternalID  *string
+	Integration string
+	ExternalID  string
 }
 
 func (q *Queries) LockIntegrationSource(ctx context.Context, arg LockIntegrationSourceParams) (CalendarSource, error) {
@@ -257,19 +290,44 @@ func (q *Queries) LockIntegrationSource(ctx context.Context, arg LockIntegration
 	return i, err
 }
 
+const rekeyImportedEvent = `-- name: RekeyImportedEvent :execrows
+UPDATE events
+SET external_uid = $1::text, updated_at = now()
+WHERE events.source_id = $2::uuid AND events.external_uid = $3::text
+  AND NOT EXISTS (
+    SELECT 1 FROM events AS taken WHERE taken.source_id = $2::uuid AND taken.external_uid = $1::text
+  )
+`
+
+type RekeyImportedEventParams struct {
+	ExternalUid string
+	SourceID    pgtype.UUID
+	PreviousUid string
+}
+
+// Gives a source's event the external uid the source now knows it by (an
+// event created in Life OS for the source, such as a split's new series,
+// once the integration has created it there), unless that uid is taken.
+func (q *Queries) RekeyImportedEvent(ctx context.Context, arg RekeyImportedEventParams) (int64, error) {
+	result, err := q.db.Exec(ctx, rekeyImportedEvent, arg.ExternalUid, arg.SourceID, arg.PreviousUid)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const updateIntegrationSource = `-- name: UpdateIntegrationSource :one
 UPDATE calendar_sources
-SET name = $1, url = $2, provider = $3, read_only = $4,
-    default_reminders = $5, default_priority = $6,
-    integration_config = $7, updated_at = now()
-WHERE id = $8
+SET name = $1, provider = $2::text, read_only = $3,
+    default_reminders = $4, default_priority = $5,
+    integration_config = $6, updated_at = now()
+WHERE id = $7
 RETURNING id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id, default_priority, integration, external_id, provider, read_only, in_process, integration_config
 `
 
 type UpdateIntegrationSourceParams struct {
 	Name              string
-	Url               string
-	Provider          *string
+	Provider          string
 	ReadOnly          bool
 	DefaultReminders  []byte
 	DefaultPriority   string
@@ -282,7 +340,6 @@ type UpdateIntegrationSourceParams struct {
 func (q *Queries) UpdateIntegrationSource(ctx context.Context, arg UpdateIntegrationSourceParams) (CalendarSource, error) {
 	row := q.db.QueryRow(ctx, updateIntegrationSource,
 		arg.Name,
-		arg.Url,
 		arg.Provider,
 		arg.ReadOnly,
 		arg.DefaultReminders,

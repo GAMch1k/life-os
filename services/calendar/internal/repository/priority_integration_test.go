@@ -10,7 +10,6 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
-	store "github.com/GAMch1k/life-os/services/calendar/internal/repository/generated"
 	"github.com/GAMch1k/life-os/services/calendar/internal/testdb"
 )
 
@@ -44,13 +43,12 @@ func TestPriorityMigration(t *testing.T) {
 	}
 	testdb.Apply(t, pool, migration)
 
-	queries := store.New(pool)
-	gym, err := queries.GetEvent(ctx, series)
-	if err != nil || gym.Priority != nil || gym.Title != "Gym" {
-		t.Fatalf("migrated event = %+v, %v", gym, err)
+	// Rows are read with SQL: the generated queries know the later columns.
+	var title string
+	var priority *string
+	if err := pool.QueryRow(ctx, `SELECT title, priority FROM events WHERE id = $1`, series).Scan(&title, &priority); err != nil || priority != nil || title != "Gym" {
+		t.Fatalf("migrated event = %q %v, %v", title, priority, err)
 	}
-	// Sources are read with SQL: the generated queries know the later
-	// columns of calendar_sources.
 	var zaw, other string
 	if err := pool.QueryRow(ctx, `SELECT default_priority FROM calendar_sources WHERE id = $1`, sourceID).Scan(&zaw); err != nil || zaw != "medium" {
 		t.Fatalf("migrated source priority = %q, %v", zaw, err)
@@ -124,7 +122,7 @@ func TestPriorityMigration(t *testing.T) {
 		t.Fatalf("down: events = %d, %v", events, err)
 	}
 	testdb.Apply(t, pool, migration)
-	if gym, err := queries.GetEvent(ctx, series); err != nil || gym.Priority != nil {
-		t.Fatalf("down and up again: %+v, %v", gym, err)
+	if err := pool.QueryRow(ctx, `SELECT priority FROM events WHERE id = $1`, series).Scan(&priority); err != nil || priority != nil {
+		t.Fatalf("down and up again: %v, %v", priority, err)
 	}
 }
