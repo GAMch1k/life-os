@@ -87,7 +87,7 @@ type EventsPage struct {
 }
 
 // eventsPageSize is how many events Calendar asks for per page.
-const eventsPageSize = 250
+const eventsPageSize = 100
 
 // Events reads one page of a calendar's events, recurring events as their
 // master (singleEvents=false) and deleted ones included (showDeleted=true),
@@ -107,7 +107,7 @@ func (c *Client) Events(ctx context.Context, accessToken, calendarID string, que
 		values.Set("pageToken", query.PageToken)
 	}
 	var page EventsPage
-	err := c.getJSON(ctx, c.endpoints.CalendarAPI+"/calendars/"+url.PathEscape(calendarID)+"/events?"+values.Encode(), accessToken, &page)
+	err := c.getJSONLimited(ctx, c.endpoints.CalendarAPI+"/calendars/"+url.PathEscape(calendarID)+"/events?"+values.Encode(), accessToken, &page, maxEventsResponseBytes)
 	return page, err
 }
 

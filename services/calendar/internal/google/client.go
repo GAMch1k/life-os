@@ -112,8 +112,13 @@ func IsInvalidGrant(err error) bool {
 	return errors.As(err, &oauth) && oauth.Code == "invalid_grant"
 }
 
-// maxResponseBytes bounds what Calendar reads of one Google response.
-const maxResponseBytes = 4 << 20
+// maxResponseBytes bounds what Calendar reads of one Google response;
+// maxEventsResponseBytes one page of events, whose descriptions (meeting
+// invitations) can be long.
+const (
+	maxResponseBytes       = 4 << 20
+	maxEventsResponseBytes = 16 << 20
+)
 
 // Client implements API over net/http.
 type Client struct {
@@ -276,6 +281,10 @@ func (c *Client) CalendarList(ctx context.Context, accessToken string) ([]Calend
 }
 
 func (c *Client) getJSON(ctx context.Context, target, accessToken string, out any) error {
+	return c.getJSONLimited(ctx, target, accessToken, out, maxResponseBytes)
+}
+
+func (c *Client) getJSONLimited(ctx context.Context, target, accessToken string, out any, limit int64) error {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return err
@@ -287,7 +296,7 @@ func (c *Client) getJSON(ctx context.Context, target, accessToken string, out an
 		return &UnavailableError{Err: transportError(err)}
 	}
 	defer response.Body.Close()
-	reader := io.LimitReader(response.Body, maxResponseBytes)
+	reader := io.LimitReader(response.Body, limit)
 	if response.StatusCode >= 500 {
 		return &UnavailableError{Err: fmt.Errorf("Calendar API returned HTTP %d", response.StatusCode)}
 	}

@@ -34,11 +34,13 @@ const (
 	// this often, so occurrences expanded up to ExpansionHorizon ahead
 	// follow the calendar's time window as days pass.
 	rederiveAfter = 12 * time.Hour
-	// maxEventPages bounds one listing (250 events a page).
-	maxEventPages = 100
+	// maxEventPages bounds one listing (100 events a page).
+	maxEventPages = 250
 	// syncLease bounds a sync (the listing plus the transaction); a crashed
-	// sync's lease expires after it.
-	syncLease = 10 * time.Minute
+	// sync's lease expires after it. A sync that outlives its lease still
+	// cannot write over a newer one: its transaction checks that the sync
+	// token is still the one it started from.
+	syncLease = 5 * time.Minute
 )
 
 // SyncActor is the system actor Google syncs are attributed to.
