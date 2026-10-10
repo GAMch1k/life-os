@@ -4,7 +4,8 @@
 #   tools/benchmark-ai-runtime gpt-6-luna/none gpt-6-luna/low gpt-5.6-luna/medium
 #
 # For each profile (model/effort) a fresh disposable verification stack runs
-# with that profile, seeds Tasks, submits the same captures (EN/RU/DE text
+# with that profile, seeds Tasks, submits the same captures (EN/RU/DE text,
+# including completions of Tasks titled in another of those languages,
 # through the Inbox API the Dashboard uses, plus one recorded voice note
 # through Voice and whisper.cpp), lets the automatic processor plan them with
 # the authenticated Codex CLI and act through MCP, and then checks the
@@ -56,7 +57,7 @@ run_profile() {
   done
 
   # Seeds: existing Tasks the captures refer to.
-  local trash electrician anna_report anna_invoice mama zahnarzt chicken
+  local trash electrician anna_report anna_invoice mama zahnarzt chicken batteries plants fenster
   trash=$(seed "Take out the trash")
   electrician=$(seed "Call the electrician")
   anna_report=$(seed "Call Anna about the report")
@@ -64,6 +65,10 @@ run_profile() {
   mama=$(seed "Позвонить маме")
   zahnarzt=$(seed "Zahnarzt anrufen")
   chicken=$(seed "Buy chicken for dinner")
+  # Titled in another language than the capture that completes them.
+  batteries=$(seed "Купить батарейки")
+  plants=$(seed "Water the plants")
+  fenster=$(seed "Fenster putzen")
 
   declare -A ids
   ids[en_create]=$(capture "Create a task to renew the passport.")
@@ -77,6 +82,9 @@ run_profile() {
   ids[de_create]=$(capture "Erstelle eine Aufgabe: Steuererklärung abgeben.")
   ids[de_reschedule]=$(capture "Verschiebe den Zahnarzt-Anruf auf den 22.10.2026.")
   ids[calendar_create]=$(capture "Add a calendar event: dentist appointment on 2026-10-25 from 10:00 to 11:00.")
+  ids[xl_en_ru]=$(capture "I already bought the batteries.")
+  ids[xl_de_en]=$(capture "Ich habe die Pflanzen schon gegossen.")
+  ids[xl_ru_de]=$(capture "Я уже помыл окна.")
   local job
   job=$(api -F "audio=@$work/chicken.wav;type=audio/wav" -F source=web "$gateway/api/voice/v1/audio-jobs" | jq -r '.id')
   for _ in $(seq 1 120); do
@@ -129,12 +137,21 @@ run_profile() {
   local events
   events=$(api "$gateway/api/calendar/v1/events?from=2026-10-24T00:00:00Z&to=2026-10-27T00:00:00Z&limit=100" | jq '[.items[] | select(.title | test("dentist"; "i"))] | length')
   check calendar_create "$([ "$s" = resolved ] && [ "$events" = 1 ] && echo 1 || echo 0)" "state=$s dentist_events=$events"
+  # completed_once <scenario> <task id> <title substring>: resolved, that
+  # Task completed, and no second Task with its name.
+  completed_once() {
+    s=$(state "${ids[$1]}")
+    check "$1" "$([ "$s" = resolved ] && [ "$(task "$2" | jq -r .completed)" = true ] && [ "$(tasks_matching "$3")" = 1 ] && echo 1 || echo 0)" "state=$s completed=$(task "$2" | jq -r .completed)"
+  }
+  completed_once xl_en_ru "$batteries" батарей
+  completed_once xl_de_en "$plants" plants
+  completed_once xl_ru_de "$fenster" Fenster
   s=$(state "${ids[voice_complete]}")
   check voice_complete "$([ "$s" = resolved ] && [ "$(task "$chicken" | jq -r .completed)" = true ] && [ "$(tasks_matching chicken)" = 1 ] && echo 1 || echo 0)" "state=$s transcript=\"$(item "${ids[voice_complete]}" | jq -r .content)\" completed=$(task "$chicken" | jq -r .completed)"
-  # No fallback or invented entities: seven seeds plus three creates.
+  # No fallback or invented entities: ten seeds plus three creates.
   local total
   total=$(api "$gateway/api/tasks/v1/tasks?limit=100" | jq '.items | length')
-  check no_extra_tasks "$([ "$total" = 10 ] && echo 1 || echo 0)" "tasks=$total (expected 10): $(api "$gateway/api/tasks/v1/tasks?limit=100" | jq -c '[.items[].title]')"
+  check no_extra_tasks "$([ "$total" = 13 ] && echo 1 || echo 0)" "tasks=$total (expected 13): $(api "$gateway/api/tasks/v1/tasks?limit=100" | jq -c '[.items[].title]')"
 
   # Codex's own usage and the processing time of each planning run.
   local status runtime

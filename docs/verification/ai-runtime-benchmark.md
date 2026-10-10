@@ -22,13 +22,16 @@ Routine Inbox and Voice planning runs through the authenticated Codex CLI. X-01 
 | DE reschedule ("Verschiebe den Zahnarzt-Anruf auf den 22.10.2026.") | The existing Task is due 2026-10-22; no new Task |
 | Calendar create ("Add a calendar event: dentist appointment on 2026-10-25 from 10:00 to 11:00.") | Exactly one event |
 | Voice complete (spoken "I already bought the chicken.") | The existing Task is completed |
-| No extra entities | Exactly 7 seeded + 3 created Tasks exist |
+| EN → RU complete ("I already bought the batteries.", Task "Купить батарейки") | Resolved; that Task is completed; no new Task |
+| DE → EN complete ("Ich habe die Pflanzen schon gegossen.", Task "Water the plants") | Resolved; that Task is completed; no new Task |
+| RU → DE complete ("Я уже помыл окна.", Task "Fenster putzen") | Resolved; that Task is completed; no new Task |
+| No extra entities | Exactly 10 seeded + 3 created Tasks exist |
 
 The reschedule cases turned out to separate the profiles. They were also repeated three times each directly against the planner (`processor -content`), to see how often a profile gets them right.
 
 ## Results (2026-10-09, Codex CLI 0.160.0, ChatGPT Plus)
 
-Full real-runtime runs. Token figures are totals for the run, as reported by Codex (`turn.completed`).
+Full real-runtime runs. They predate the three cross-language completions (POL-08, see [cross-language Task matching](../services/mcp.md)), so they count 13 checks; a run now has 16. Token figures are totals for the run, as reported by Codex (`turn.completed`).
 
 | Profile | Checks passed | Failed checks | Attempts | Output tokens | Reasoning tokens |
 | --- | --- | --- | --- | --- | --- |
