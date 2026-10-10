@@ -17,6 +17,7 @@ import (
 	"github.com/GAMch1k/life-os/pkg/httpserver"
 	"github.com/GAMch1k/life-os/services/calendar/internal/api/generated"
 	"github.com/GAMch1k/life-os/services/calendar/internal/config"
+	"github.com/GAMch1k/life-os/services/calendar/internal/google"
 	"github.com/GAMch1k/life-os/services/calendar/internal/ics"
 	store "github.com/GAMch1k/life-os/services/calendar/internal/repository/generated"
 	"github.com/GAMch1k/life-os/services/calendar/internal/sources"
@@ -49,6 +50,9 @@ type Handler struct {
 	wake      func()
 	// activity records event changes (see WithActivity); nil records none.
 	activity *activity.Emitter
+	// google is the Google Calendar connection (see WithGoogle); nil reads
+	// as not configured.
+	google *google.Service
 }
 
 var _ generated.ServerInterface = (*Handler)(nil)

@@ -5,13 +5,18 @@ import { inboxClient } from "@/lib/api/inbox-client";
 import type { components as InboxComponents } from "@/lib/api/generated/inbox";
 import type { components as VoiceComponents } from "@/lib/api/generated/voice";
 import { voiceClient } from "@/lib/api/voice-client";
+import {
+  type GoogleConnection,
+  missingPermissions,
+} from "@/lib/google-calendar";
 import { DEFAULT_TIME_ZONE, dateTimeFormat } from "@/lib/time-zone";
 import { configuredTimeZone, userTimeZone } from "@/lib/user-time-zone";
 
 // The Status page turns supported runtime state into actionable checks:
 // - the processor's private /status endpoint (what the running process saw),
 // - the Inbox and Voice backlog APIs (durable queue state),
-// - the Calendar sources API (each subscribed feed's refresh state),
+// - the Calendar sources API (each subscribed feed's refresh state) and its
+//   Google connection,
 // - each owning service's /ready endpoint.
 // Nothing here is inferred from UI behaviour.
 
@@ -225,6 +230,8 @@ export type RuntimeSignals = {
    * checked (the check is left out).
    */
   calendarSources?: CalendarSource[] | null;
+  /** The Google Calendar connection; null or absent when not read. */
+  googleConnection?: GoogleConnection | null;
   services: { name: string; ready: boolean }[];
 };
 
@@ -732,6 +739,90 @@ function calendarCheck(
   };
 }
 
+/** What to do when the Google connection stops working. */
+export const GOOGLE_RECONNECT = "Reconnect Google in Calendar.";
+
+/**
+ * The Google Calendar connection as a part of the Calendar check. Nothing
+ * to show while Google is neither set up nor connected.
+ */
+export function googlePart(
+  connection: GoogleConnection,
+  timeZone: string,
+): StatusPart | undefined {
+  const base = { id: "google", title: "Google Calendar" };
+  const account = connection.accountEmail ?? "your Google account";
+  const facts: StatusFact[] = connection.accountEmail
+    ? [
+        { label: "Account", value: connection.accountEmail },
+        {
+          label: "Connected",
+          value: formatTime(connection.connectedAt, timeZone),
+        },
+      ]
+    : [];
+  if (!connection.configured) {
+    if (connection.status === "not_connected") return undefined;
+    return {
+      ...base,
+      state: "warning",
+      summary: `${account} is connected, but this server no longer has its Google settings.`,
+      facts,
+    };
+  }
+  switch (connection.status) {
+    case "not_connected":
+      return {
+        ...base,
+        state: "ok",
+        summary: "Not connected. Connect Google in Calendar to sync it.",
+        facts,
+      };
+    case "expired":
+      return {
+        ...base,
+        state: "warning",
+        summary: `Google access for ${account} expired or was revoked.`,
+        detail: connection.lastError ?? undefined,
+        facts,
+      };
+    case "error":
+      return {
+        ...base,
+        state: "warning",
+        summary: `Google refused the connection for ${account}.`,
+        detail: connection.lastError ?? undefined,
+        facts,
+      };
+  }
+  const missing = missingPermissions(connection);
+  if (missing.length) {
+    facts.push({ label: "Not granted", value: missing.join("; ") });
+  }
+  return { ...base, state: "ok", summary: `Connected as ${account}.`, facts };
+}
+
+/** Adds the Google part to the Calendar check; trouble with it needs action. */
+function withGoogle(
+  check: StatusCheck,
+  connection: GoogleConnection | null | undefined,
+  timeZone: string,
+): StatusCheck {
+  const part = connection ? googlePart(connection, timeZone) : undefined;
+  if (!part) return check;
+  const parts = [...(check.parts ?? []), part];
+  if (part.state === "ok" || check.state !== "ok") return { ...check, parts };
+  return {
+    ...check,
+    state: part.state,
+    summary: part.summary,
+    action: connection?.configured
+      ? GOOGLE_RECONNECT
+      : "Add the LIFE_OS_GOOGLE_* settings to the server's .env again, or disconnect Google in Calendar.",
+    parts,
+  };
+}
+
 function servicesCheck(services: RuntimeSignals["services"]): StatusCheck {
   const down = services.filter((service) => !service.ready);
   return {
@@ -763,7 +854,13 @@ export function toRuntimeStatus(
     voiceCheck(signals.voice, now, timeZone),
     ...(signals.calendarSources === undefined
       ? []
-      : [calendarCheck(signals.calendarSources, timeZone)]),
+      : [
+          withGoogle(
+            calendarCheck(signals.calendarSources, timeZone),
+            signals.googleConnection,
+            timeZone,
+          ),
+        ]),
     servicesCheck(signals.services),
   ];
   return {
@@ -826,7 +923,7 @@ const SERVICE_NAMES: Record<keyof typeof serviceBaseUrls, string> = {
 
 export async function getRuntimeStatus(): Promise<RuntimeStatus> {
   const timeout = { signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) };
-  const [processor, inbox, voice, calendarSources, services] =
+  const [processor, inbox, voice, calendarSources, googleConnection, services] =
     await Promise.all([
       getJson<ProcessorStatus>(`${processorStatusUrl}/status`),
       inboxClient
@@ -841,6 +938,10 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
         .GET("/v1/sources", timeout)
         .then(({ data }) => data?.items ?? null)
         .catch(() => null),
+      calendarClient
+        .GET("/v1/google/connection", timeout)
+        .then(({ data }) => data ?? null)
+        .catch(() => null),
       Promise.all(
         (Object.keys(SERVICE_NAMES) as (keyof typeof serviceBaseUrls)[]).map(
           async (key) => ({
@@ -851,7 +952,7 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
       ),
     ]);
   return toRuntimeStatus(
-    { processor, inbox, voice, calendarSources, services },
+    { processor, inbox, voice, calendarSources, googleConnection, services },
     new Date(),
     await userTimeZone(),
     configuredTimeZone(),
