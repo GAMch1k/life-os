@@ -48,6 +48,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/connections/consent-failure": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record a consent the bank did not complete
+         * @description The Dashboard's `/finance/bank/callback` posts it when the bank or provider returned an `error` instead of a `code`. Banking keeps the failure durably (when, the error, its description cleaned and cut to 300 characters, and the bank of the authorization the state belonged to), uses the state up, and records `banking.consent.failed` in Activity. An unknown or expired state is accepted and recorded as such. The state is never stored or logged; no code is accepted. The newest failure is listed as `lastConsentFailure` until a connection succeeds.
+         */
+        post: operations["recordBankConsentFailure"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/connections/{connectionId}/sync": {
         parameters: {
             query?: never;
@@ -180,6 +200,27 @@ export interface components {
             unattendedPerDay: number;
             manualSyncMinutes: number;
         };
+        BankConsentFailure: {
+            /** Format: date-time */
+            at: string;
+            /**
+             * @description The provider's error code.
+             * @example server_error
+             */
+            error: string;
+            /** @description The provider's description, at most 300 characters. */
+            description: string | null;
+            /** @description The bank of the authorization; null when the state was unknown. */
+            institution: string | null;
+            /** @description Whether the state belonged to a pending authorization (not unknown or expired). */
+            stateMatched: boolean;
+        };
+        BankConsentFailureRequest: {
+            /** @description The state the bank returned; may be missing. */
+            state?: string;
+            error: string;
+            errorDescription?: string;
+        };
         BankConnectionList: {
             /** @description Whether Enable Banking is set up on this server. */
             configured: boolean;
@@ -188,6 +229,8 @@ export interface components {
             schedule: components["schemas"]["BankSchedule"];
             items: components["schemas"]["BankConnection"][];
             nextCursor: string | null;
+            /** @description The newest consent the bank did not complete since a connection last succeeded; null when none. */
+            lastConsentFailure: components["schemas"]["BankConsentFailure"] | null;
         };
         BankAuthorizationRequest: {
             /** @default Deutsche Bank */
@@ -354,6 +397,37 @@ export interface operations {
             };
             /** @description `banking_not_configured`. */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    recordBankConsentFailure: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BankConsentFailureRequest"];
+            };
+        };
+        responses: {
+            /** @description Recorded. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `bad_request` or `actor_required`. */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

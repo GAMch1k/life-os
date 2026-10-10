@@ -62,6 +62,7 @@ const list = (
   },
   items,
   nextCursor: null,
+  lastConsentFailure: null,
   ...overrides,
 });
 

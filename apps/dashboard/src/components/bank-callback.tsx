@@ -23,7 +23,9 @@ export const BANKING_UNAVAILABLE =
  * Completes a bank connection: posts the code and state the bank returned to
  * the banking integration (through /api/integrations/banking, as the owner),
  * which connects and runs the first sync, then returns to Finance. The code
- * is used once and dropped from the address bar right away.
+ * is used once and dropped from the address bar right away. When the bank
+ * returned an error instead, the page reports it to banking (the state, the
+ * error, and its description), which keeps it for the Finance page.
  */
 export function BankCallback({ step }: { step: CallbackStep }) {
   const router = useRouter();
@@ -36,7 +38,15 @@ export function BankCallback({ step }: { step: CallbackStep }) {
 
   useEffect(() => {
     window.history.replaceState(window.history.state, "", BANK_CALLBACK_PATH);
-    if (initial.kind !== "exchange" || started.current) return;
+    if (started.current) return;
+    if (initial.kind === "error") {
+      if (!initial.report) return;
+      started.current = true;
+      bankingClient
+        .POST("/v1/connections/consent-failure", { body: initial.report })
+        .catch(() => undefined);
+      return;
+    }
     started.current = true;
     bankingClient
       .POST("/v1/connections", {

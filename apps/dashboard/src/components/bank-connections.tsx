@@ -27,6 +27,7 @@ import {
   type BankConnectionList,
   bankState,
   type BankState,
+  consentFailureText,
   consentText,
   DEFAULT_BANK,
   liveConnection,
@@ -428,6 +429,16 @@ export function BankConnections({
                 >
                   Disconnect
                 </Button>
+              ) : null}
+              {list.lastConsentFailure &&
+              (state === "not_connected" || needsReconnect(state)) ? (
+                <p
+                  className="text-muted-foreground w-full text-xs break-words"
+                  data-testid="bank-consent-failure"
+                  role="note"
+                >
+                  {consentFailureText(list.lastConsentFailure, timeZone)}
+                </p>
               ) : null}
               {syncNow &&
               !syncNow.allowed &&
