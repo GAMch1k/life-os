@@ -25,14 +25,10 @@ const STATE_LABEL: Record<CheckState, string> = {
 
 function StateIcon({ state }: { state: CheckState }) {
   if (state === "ok")
-    return (
-      <CheckCircle2 aria-hidden="true" className="size-5 text-emerald-600" />
-    );
+    return <CheckCircle2 aria-hidden="true" className="text-success size-5" />;
   if (state === "warning")
-    return (
-      <AlertTriangle aria-hidden="true" className="size-5 text-amber-600" />
-    );
-  return <XCircle aria-hidden="true" className="size-5 text-red-600" />;
+    return <AlertTriangle aria-hidden="true" className="text-warning size-5" />;
+  return <XCircle aria-hidden="true" className="text-destructive size-5" />;
 }
 
 function CheckCard({ check }: { check: StatusCheck }) {
@@ -91,12 +87,10 @@ export function RuntimeStatusView({ status }: { status: RuntimeStatus }) {
       <p
         className={cn(
           "flex items-center gap-2 rounded-xl border p-4 font-medium",
-          status.overall === "ok" &&
-            "border-emerald-200 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/40",
-          status.overall === "warning" &&
-            "border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/40",
+          status.overall === "ok" && "border-success/30 bg-success-subtle",
+          status.overall === "warning" && "border-warning/30 bg-warning-subtle",
           status.overall === "problem" &&
-            "border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/40",
+            "border-destructive/30 bg-destructive-subtle",
         )}
         role="status"
       >
@@ -124,8 +118,8 @@ export function StatusAlert({ status }: { status: RuntimeStatus }) {
       className={cn(
         "mx-auto flex max-w-5xl items-center gap-3 rounded-xl border p-4 transition-colors",
         first.state === "problem"
-          ? "border-red-200 bg-red-50 hover:bg-red-100 dark:border-red-900 dark:bg-red-950/40 dark:hover:bg-red-950/60"
-          : "border-amber-200 bg-amber-50 hover:bg-amber-100 dark:border-amber-900 dark:bg-amber-950/40 dark:hover:bg-amber-950/60",
+          ? "border-destructive/30 bg-destructive-subtle hover:bg-destructive/15"
+          : "border-warning/30 bg-warning-subtle hover:bg-warning/15",
       )}
       href="/status"
     >

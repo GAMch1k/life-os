@@ -35,9 +35,9 @@ const fieldClass =
   "border-input bg-background focus-visible:ring-ring/50 h-9 w-full rounded-lg border px-2.5 text-sm focus-visible:ring-3 focus-visible:outline-none";
 
 const OUTCOME_STYLES: Record<string, string> = {
-  succeeded: "bg-emerald-50 text-emerald-700 ring-emerald-600/20",
-  pending: "bg-amber-50 text-amber-800 ring-amber-600/20",
-  failed: "bg-red-50 text-red-700 ring-red-600/20",
+  succeeded: "bg-success-subtle text-success ring-success/30",
+  pending: "bg-warning-subtle text-warning ring-warning/30",
+  failed: "bg-destructive-subtle text-destructive ring-destructive/30",
 };
 
 function OutcomeBadge({ outcome }: { outcome: string }) {
