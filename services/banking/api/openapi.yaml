@@ -1,63 +1,291 @@
 openapi: 3.0.3
 info:
-  title: Life OS Service Template
-  version: 0.0.0
-  license:
-    name: UNLICENSED
-    url: https://life-os.local/license
-servers:
-  - url: http://localhost:8080
+  title: Life OS Banking API
+  version: 1.0.0
+  description: >-
+    The bank integration. Banking connects the owner's bank accounts through
+    Enable Banking, a licensed PSD2 provider, with read-only account
+    information consent (never payments); keeps the consent, the provider
+    session, and the sync schedule; and pushes accounts and transactions into
+    Finance through Finance's bank import endpoint. It never reads Finance's
+    database, and Finance never calls a bank.
+
+
+    A connection is `pending` (consented, first sync not done yet),
+    `connected`, `expired` (the consent ran out or was revoked at the bank:
+    reconnect), `error` (the bank needs the owner to act: reconnect), or
+    `disconnected` (removed by the owner; kept as history). Reconnecting a
+    live connection keeps its id, so Finance keeps the same accounts.
+
+
+    Scheduled syncs run at `BANKING_SYNC_TIMES` (owner-local) and count
+    against the four reads a day a bank allows without the owner present.
+    A sync the owner starts from the Dashboard (`syncBankConnection`) is
+    marked as owner-present with the owner's address and browser (taken from
+    the gateway's `X-Real-IP` and the request's `User-Agent`) and does not
+    count; it is limited to one every few minutes.
+
+
+    The provider session id, the application key, its tokens, and full
+    account numbers (IBANs) never appear in responses, logs, or activity
+    events; accounts carry a masked IBAN only.
+
+
+    Every write (POST, DELETE) must say who makes it in the X-Life-OS-Actor
+    header: `user` (the owner), `agent:<name>`, `system:<name>`, or
+    `dev:<name>`. A write without a valid actor is rejected with 400 and
+    error code `actor_required`. Reads do not need the header.
+
+
+    Errors use the shared envelope `{"error": {"code", "message"},
+    "request_id"}`.
+  license: {name: UNLICENSED, url: https://life-os.local/license}
+servers: [{url: http://banking:8080}]
 paths:
-  /v1/ping:
+  /v1/connections:
     get:
-      operationId: getPing
-      summary: Contract-generation smoke endpoint
+      summary: List bank connections
+      description: >-
+        Every connection, live ones first, with whether banking is configured
+        on this server and the sync schedule.
+      operationId: listBankConnections
       security: []
       responses:
         '200':
-          description: A simple transport response.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/PingResponse'
-        '400':
-          description: Invalid request input.
-  /v1/echo:
-    get:
-      operationId: getEcho
-      summary: Echo a required query parameter
+          description: The connections.
+          content: {application/json: {schema: {$ref: '#/components/schemas/BankConnectionList'}}}
+    post:
+      summary: Complete a bank connection
+      description: >-
+        The callback exchange: the Dashboard's `/finance/bank/callback` posts
+        the `code` and `state` the bank returned. The state must come from
+        `authorizeBankConnection` in the last 10 minutes and is used once.
+        Creates the connection, or renews the bank's live connection (a
+        reconnect keeps its id and its Finance accounts), and runs the first
+        sync at once (90 days back). A first sync that fails leaves the
+        connection `pending` with `lastError`; it is retried automatically.
+      operationId: connectBankConnection
       security: []
-      parameters:
-        - name: message
-          in: query
-          required: true
-          schema:
-            type: string
-            minLength: 1
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/BankConnectRequest'}}}
       responses:
         '200':
-          description: Echoed request value.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/EchoResponse'
+          description: The connection after its first sync.
+          content: {application/json: {schema: {$ref: '#/components/schemas/BankConnection'}}}
         '400':
-          description: Invalid request input.
+          description: >-
+            `bad_request`, `actor_required`, `invalid_state` (expired or
+            already used: start again), or `bank_code_rejected`.
+          content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
+        '422':
+          description: '`no_accounts`: the consent covers no account.'
+          content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
+        '502':
+          description: '`bank_unavailable`: the provider could not complete the connection.'
+          content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
+        '503':
+          description: '`banking_not_configured`.'
+          content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
+  /v1/connections/authorize:
+    post:
+      summary: Start connecting a bank
+      description: >-
+        Asks the provider for a read-only consent (balances and transactions,
+        valid as long as the bank allows, at most 180 days) and returns the
+        bank's page where the owner gives it. The bank then returns the owner
+        to the redirect URI (`/finance/bank/callback`) with `code` and
+        `state`. Used for a first connection and for a reconnect alike.
+      operationId: authorizeBankConnection
+      security: []
+      requestBody:
+        required: false
+        content: {application/json: {schema: {$ref: '#/components/schemas/BankAuthorizationRequest'}}}
+      responses:
+        '200':
+          description: The bank's consent page.
+          content: {application/json: {schema: {$ref: '#/components/schemas/BankAuthorization'}}}
+        '400':
+          description: '`bad_request` or `actor_required`.'
+          content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
+        '422':
+          description: '`unknown_bank`: the provider does not offer this bank for personal accounts.'
+          content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
+        '502':
+          description: '`bank_unavailable`.'
+          content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
+        '503':
+          description: '`banking_not_configured`.'
+          content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
+  /v1/connections/{connectionId}/sync:
+    post:
+      summary: Sync a connection now
+      description: >-
+        Reads the bank now and pushes the result to Finance. From the
+        Dashboard (actor `user`, with the owner's address and browser) the
+        read is owner-present and does not count against the daily limit;
+        from anyone else it counts like a scheduled sync. At most one every
+        10 minutes (`BANKING_MANUAL_SYNC_MINUTES`).
+      operationId: syncBankConnection
+      security: []
+      parameters: [{$ref: '#/components/parameters/ConnectionId'}]
+      responses:
+        '200':
+          description: The connection after the sync.
+          content: {application/json: {schema: {$ref: '#/components/schemas/BankConnection'}}}
+        '400':
+          description: '`actor_required`.'
+          content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
+        '404':
+          description: '`not_found`.'
+          content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
+        '409':
+          description: >-
+            `sync_in_progress`, or `connection_inactive` (expired, in error,
+            or disconnected: reconnect first).
+          content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
+        '429':
+          description: >-
+            `sync_throttled` (synced moments ago; `Retry-After` says when it
+            may sync again) or `daily_limit` (no reads without the owner left
+            today).
+          headers:
+            Retry-After: {description: Seconds until the next sync is allowed., schema: {type: integer}}
+          content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
+        '502':
+          description: >-
+            `bank_unavailable` (the bank or provider failed; retried
+            automatically), `bank_expired` (the consent ended: reconnect),
+            `bank_refused`, `finance_unavailable` (the sync is kept and sent
+            again shortly), or `finance_refused`.
+          content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
+        '503':
+          description: '`banking_not_configured`.'
+          content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
+  /v1/connections/{connectionId}:
+    delete:
+      summary: Disconnect a bank
+      description: >-
+        Ends the session at the provider (which closes the bank consent where
+        it can), stops syncing, and asks Finance to archive the connection's
+        accounts, keeping their transactions. When Finance is unavailable the
+        archive is retried automatically. Idempotent.
+      operationId: disconnectBankConnection
+      security: []
+      parameters: [{$ref: '#/components/parameters/ConnectionId'}]
+      responses:
+        '204': {description: Disconnected.}
+        '400':
+          description: '`actor_required`.'
+          content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
+        '404':
+          description: '`not_found`.'
+          content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
 components:
+  parameters:
+    ConnectionId: {name: connectionId, in: path, required: true, schema: {type: string, format: uuid}}
   schemas:
-    PingResponse:
+    ErrorResponse:
       type: object
-      additionalProperties: false
-      required:
-        - message
+      required: [error, request_id]
       properties:
-        message:
-          type: string
-    EchoResponse:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: {type: string}
+            message: {type: string}
+        request_id: {type: string}
+    BankConnectionStatus:
+      type: string
+      enum: [pending, connected, expired, error, disconnected]
+    BankAccount:
       type: object
-      additionalProperties: false
-      required:
-        - message
+      required: [id, name, currency, kind]
       properties:
-        message:
-          type: string
+        id: {type: string, description: 'The stable account id Finance knows the account by (a hash, never the IBAN).'}
+        name: {type: string}
+        product: {type: string}
+        currency: {type: string, example: EUR}
+        kind: {type: string, enum: [bank, card, savings]}
+        ibanMasked: {type: string, example: DE89…3000}
+    BankSyncCounts:
+      type: object
+      required: [accounts, transactions, fetched, ignored]
+      properties:
+        accounts:
+          type: object
+          required: [created, updated]
+          properties:
+            created: {type: integer}
+            updated: {type: integer}
+        transactions:
+          type: object
+          required: [created, updated, unchanged, removedPending, skipped]
+          properties:
+            created: {type: integer}
+            updated: {type: integer}
+            unchanged: {type: integer}
+            removedPending: {type: integer}
+            skipped: {type: integer}
+        fetched: {type: integer, description: Transactions read from the bank.}
+        ignored: {type: integer, description: 'Transactions not sent to Finance: cancelled, rejected, or scheduled ones, or ones in another currency than their account.'}
+    BankConnection:
+      type: object
+      required: [id, provider, institution, country, status, consentValidUntil, accounts, lastSyncAt, lastSuccessAt, nextSyncAt, consecutiveFailures, lastError, lastCounts, unattendedReadsToday, manualSyncAvailableAt, waitingForFinance, connectedAt, disconnectedAt, createdAt, updatedAt]
+      properties:
+        id: {type: string, format: uuid}
+        provider: {type: string, example: enablebanking}
+        institution: {type: string, example: Deutsche Bank}
+        country: {type: string, example: DE}
+        status: {$ref: '#/components/schemas/BankConnectionStatus'}
+        consentValidUntil: {type: string, format: date-time, nullable: true}
+        accounts: {type: array, items: {$ref: '#/components/schemas/BankAccount'}}
+        lastSyncAt: {type: string, format: date-time, nullable: true, description: The last sync attempt.}
+        lastSuccessAt: {type: string, format: date-time, nullable: true}
+        nextSyncAt: {type: string, format: date-time, nullable: true}
+        consecutiveFailures: {type: integer}
+        lastError: {type: string, nullable: true}
+        lastCounts:
+          allOf: [{$ref: '#/components/schemas/BankSyncCounts'}]
+          nullable: true
+        unattendedReadsToday: {type: integer, description: Reads without the owner made today (owner-local).}
+        manualSyncAvailableAt: {type: string, format: date-time, nullable: true, description: 'When "Sync now" is allowed again; null when it is now.'}
+        waitingForFinance: {type: boolean, description: A sync read from the bank waits for Finance and is sent again automatically.}
+        connectedAt: {type: string, format: date-time, nullable: true}
+        disconnectedAt: {type: string, format: date-time, nullable: true}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    BankSchedule:
+      type: object
+      required: [times, timeZone, unattendedPerDay, manualSyncMinutes]
+      properties:
+        times: {type: array, items: {type: string, example: '06:00'}}
+        timeZone: {type: string, example: Europe/Berlin}
+        unattendedPerDay: {type: integer}
+        manualSyncMinutes: {type: integer}
+    BankConnectionList:
+      type: object
+      required: [configured, setupProblem, schedule, items, nextCursor]
+      properties:
+        configured: {type: boolean, description: Whether Enable Banking is set up on this server.}
+        setupProblem: {type: string, nullable: true, description: 'What is missing or wrong in the setup (setting names only, never values).'}
+        schedule: {$ref: '#/components/schemas/BankSchedule'}
+        items: {type: array, items: {$ref: '#/components/schemas/BankConnection'}}
+        nextCursor: {type: string, nullable: true}
+    BankAuthorizationRequest:
+      type: object
+      properties:
+        institution: {type: string, minLength: 1, maxLength: 200, default: Deutsche Bank}
+        country: {type: string, pattern: '^[A-Z]{2}$', default: DE}
+    BankAuthorization:
+      type: object
+      required: [url]
+      properties:
+        url: {type: string, description: The bank's consent page.}
+    BankConnectRequest:
+      type: object
+      required: [code, state]
+      properties:
+        code: {type: string, minLength: 1, maxLength: 2048}
+        state: {type: string, minLength: 1, maxLength: 256}
