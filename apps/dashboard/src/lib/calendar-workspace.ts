@@ -79,13 +79,20 @@ export function isCancelled(event: CalendarEvent) {
   return event.status === "cancelled";
 }
 
+/** The name Calendar gives an imported event's source, such as "ZAW". */
+function sourceName(event: CalendarEvent) {
+  return event.source.kind === "manual"
+    ? undefined
+    : event.source.name?.trim() || undefined;
+}
+
 /** Where an imported event comes from; undefined for Life OS events. */
 export function sourceLabel(event: CalendarEvent) {
   switch (event.source.kind) {
     case "ics":
-      return "ICS feed";
+      return sourceName(event) ?? "ICS feed";
     case "google":
-      return "Google Calendar";
+      return sourceName(event) ?? "Google Calendar";
     default:
       return undefined;
   }
@@ -95,9 +102,9 @@ export function sourceLabel(event: CalendarEvent) {
 export function readOnlyReason(event: CalendarEvent) {
   const from =
     event.source.kind === "ics"
-      ? "an ICS feed"
+      ? (sourceName(event) ?? "an ICS feed")
       : event.source.kind === "google"
-        ? "Google Calendar"
+        ? (sourceName(event) ?? "Google Calendar")
         : undefined;
   return from
     ? `Imported from ${from}, so it can only be changed there. Its reminders can still be adjusted here.`

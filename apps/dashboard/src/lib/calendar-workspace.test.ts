@@ -490,6 +490,17 @@ test("imported events name their source and why they are read-only", () => {
   };
   assert.equal(sourceLabel(ics), "ICS feed");
   assert.match(readOnlyReason(ics) ?? "", /^Imported from an ICS feed/);
+  // Calendar names the source, such as the ZAW waste-collection feed.
+  const zaw = { ...timed, source: { ...ics.source, name: "ZAW" } };
+  assert.equal(sourceLabel(zaw), "ZAW");
+  assert.match(
+    readOnlyReason(zaw) ?? "",
+    /^Imported from ZAW, so it can only be changed there\. Its reminders/,
+  );
+  assert.equal(
+    sourceLabel({ ...timed, source: { ...ics.source, name: " " } }),
+    "ICS feed",
+  );
   assert.equal(
     sourceLabel({ ...timed, source: { kind: "google" } }),
     "Google Calendar",
