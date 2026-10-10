@@ -15,5 +15,5 @@ trap cleanup EXIT
 # rather than whichever dashboard image was built by a prior ticket.
 docker compose build dashboard
 "${compose[@]}" up --detach --no-build
-account_id=$("${compose[@]}" exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d finance_db -Atqc "INSERT INTO accounts (name,currency,opening_balance_minor) VALUES ('"'"'Browser E2E account'"'"','"'"'USD'"'"',0) RETURNING id"')
-LIFE_OS_E2E_URL=http://127.0.0.1:13001 LIFE_OS_E2E_ACCOUNT_ID="$account_id" npm --prefix apps/dashboard run test:e2e
+# The Finance specs create their own accounts through the API.
+LIFE_OS_E2E_URL=http://127.0.0.1:13001 npm --prefix apps/dashboard run test:e2e
