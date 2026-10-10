@@ -1,0 +1,336 @@
+openapi: 3.0.3
+info:
+  title: Life OS Google Calendar Integration API
+  version: 1.0.0
+  description: >-
+    The Google Calendar integration. It connects the owner's one Google
+    account (OAuth with PKCE; the refresh token is stored encrypted with
+    LIFE_OS_GOOGLE_TOKEN_KEY and never leaves this service), keeps the
+    account's calendar list with the owner's choice of the calendars to
+    sync, and syncs them both ways with Calendar through Calendar's public
+    integration API only (`/v1/integrations/...` as `system:google-calendar`):
+    each calendar chosen to sync is a Calendar source of kind `external`
+    (provider Google), its events are sent to Calendar in deltas, and the
+    owner's edits of events of calendars the account may edit come back
+    through Calendar's change feed and are written to Google. Events created
+    in Life OS are exported to a "Life OS" calendar this service creates in
+    the owner's Google account; changes made to them in Google are applied
+    back through Calendar's events API. Calendar names no provider, and
+    this service never reads Calendar's database.
+
+
+    Every write (POST, PATCH, DELETE) must say who makes it in the
+    X-Life-OS-Actor header: `user` (the owner), `agent:<name>`,
+    `system:<name>`, or `dev:<name>`. A write without a valid actor is
+    rejected with 400 and error code `actor_required`. Reads do not need the
+    header. Tokens and the client secret never appear in responses, logs,
+    or activity events.
+
+
+    Errors use the shared envelope `{"error": {"code", "message"},
+    "request_id"}`.
+  license: {name: UNLICENSED, url: https://life-os.local/license}
+servers: [{url: http://google-calendar:8080}]
+paths:
+  /v1/connection:
+    get:
+      summary: Get the Google Calendar connection
+      description: >-
+        Whether Google is configured on this server and the state of the
+        owner's one Google connection, with how exporting Life OS events and
+        following Calendar's changes go. Never returns tokens or the client
+        secret. `expired` means Google refused the stored authorization
+        (expired or revoked) and the owner must reconnect; `error` means
+        another refusal, described in `lastError`.
+      operationId: getGoogleConnection
+      security: []
+      responses:
+        '200': {description: Connection, content: {application/json: {schema: {$ref: '#/components/schemas/GoogleConnection'}}}}
+        '400': {description: Invalid request}
+    post:
+      summary: Complete a Google authorization
+      description: >-
+        Takes the `code` and `state` Google returned to the Dashboard's
+        callback route (/calendar/google/callback). The state must come from
+        `authorize` within 10 minutes and is used once. The service exchanges
+        the code (with its PKCE verifier), stores the refresh token
+        encrypted, identifies the account from its primary calendar, and
+        stores its calendar list (a new primary calendar starts with sync
+        on). Connecting another account replaces the connection and its
+        calendar choices (their sources and events leave Calendar).
+      operationId: connectGoogle
+      security: []
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/GoogleConnectRequest'}}}}
+      responses:
+        '200': {description: The new connection, content: {application/json: {schema: {$ref: '#/components/schemas/GoogleConnection'}}}}
+        '400': {description: 'Invalid request, no valid X-Life-OS-Actor (actor_required), a state that is unknown, expired, or used (invalid_state), or a code Google refused (google_code_rejected)'}
+        '403': {description: The owner did not grant reading the calendar list (google_scope_missing)}
+        '502': {description: 'Google refused or failed the request (google_rejected, google_unavailable)'}
+        '503': {description: Google is not configured on this server (google_not_configured)}
+    delete:
+      summary: Disconnect Google Calendar
+      description: >-
+        Revokes the authorization at Google (best effort: a failure is
+        recorded in Activity and the connection is removed anyway), deletes
+        the connection and its calendar choices, and removes the synced
+        calendars' sources from Calendar with their events (they stay in
+        Google): right away, or as soon as Calendar answers. Succeeds also
+        without a connection.
+      operationId: disconnectGoogle
+      security: []
+      responses:
+        '204': {description: Disconnected}
+        '400': {description: 'No valid X-Life-OS-Actor (actor_required)'}
+    patch:
+      summary: Change the Google connection's settings
+      description: >-
+        `exportEnabled` switches exporting events created in Life OS to the
+        Life OS calendar on or off. Switched on, every upcoming Life OS event
+        (and every later change) is exported; switched off, nothing more is
+        written there (what it holds stays in Google).
+      operationId: updateGoogleConnection
+      security: []
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateGoogleConnectionRequest'}}}}
+      responses:
+        '200': {description: The connection, content: {application/json: {schema: {$ref: '#/components/schemas/GoogleConnection'}}}}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}
+        '409': {description: Not connected (google_not_connected)}
+  /v1/connection/authorize:
+    post:
+      summary: Start a Google authorization
+      description: >-
+        Returns Google's consent page URL for the Dashboard to open. It asks
+        for offline access with forced consent (so Google issues a refresh
+        token), carries a single-use `state` valid for 10 minutes, and a PKCE
+        (S256) challenge. Google returns the owner to the configured redirect
+        URI (LIFE_OS_GOOGLE_REDIRECT_URI, the Dashboard's
+        /calendar/google/callback).
+      operationId: authorizeGoogle
+      security: []
+      responses:
+        '200': {description: Consent page, content: {application/json: {schema: {$ref: '#/components/schemas/GoogleAuthorization'}}}}
+        '400': {description: 'No valid X-Life-OS-Actor (actor_required)'}
+        '503': {description: Google is not configured on this server (google_not_configured)}
+  /v1/calendars:
+    get:
+      summary: List the connected account's Google calendars
+      description: The calendar list as last read from Google, primary first, then by name, with the owner's sync choice and each calendar's sync state. Empty without a connection.
+      operationId: listGoogleCalendars
+      security: []
+      responses:
+        '200': {description: Calendars, content: {application/json: {schema: {$ref: '#/components/schemas/GoogleCalendarList'}}}}
+        '400': {description: Invalid request}
+  /v1/calendars/refresh:
+    post:
+      summary: Read the calendar list from Google again
+      description: >-
+        New calendars are added (sync off, except a new primary calendar),
+        known ones keep the owner's choice, and calendars Google no longer
+        lists are dropped (their sources and events leave Calendar).
+        Refreshes the access token when needed; a refresh token Google
+        refuses marks the connection `expired`.
+      operationId: refreshGoogleCalendars
+      security: []
+      responses:
+        '200': {description: Calendars, content: {application/json: {schema: {$ref: '#/components/schemas/GoogleCalendarList'}}}}
+        '400': {description: 'No valid X-Life-OS-Actor (actor_required)'}
+        '409': {description: 'Not connected (google_not_connected), or the authorization expired or was revoked (google_expired)'}
+        '502': {description: 'Google refused or failed the request (google_rejected, google_unavailable)'}
+        '503': {description: Google is not configured on this server (google_not_configured)}
+  /v1/calendars/{calendarId}:
+    patch:
+      summary: Choose whether a Google calendar syncs
+      description: >-
+        Switched on, the calendar becomes a Calendar source at its first
+        sync, right away (its events listed in full), and then syncs every
+        few minutes. Switched off, its source and every event synced from it
+        leave Life OS (they stay in Google; right away, or as soon as
+        Calendar answers), and Activity records `calendar.source.removed`;
+        switching it on again lists its events in full again.
+      operationId: updateGoogleCalendar
+      security: []
+      parameters: [{name: calendarId, in: path, required: true, description: 'The calendar''s id in this service (not its Google id).', schema: {type: string, format: uuid}}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateGoogleCalendarRequest'}}}}
+      responses:
+        '200': {description: Calendar, content: {application/json: {schema: {$ref: '#/components/schemas/GoogleCalendar'}}}}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}
+        '404': {description: Calendar not found}
+  /v1/calendars/{calendarId}/sync:
+    post:
+      summary: Sync a Google calendar now
+      description: >-
+        Reads the changes since the last sync from Google (with `full=true`,
+        every event again, as after an expired sync token) and sends them to
+        Calendar, then returns the calendar with its sync state. The request
+        succeeds whether or not the sync does: read `sync.state` and
+        `sync.lastError`. A failed sync keeps the events from the last good
+        one and is retried with backoff.
+      operationId: syncGoogleCalendar
+      security: []
+      parameters:
+        - {name: calendarId, in: path, required: true, description: 'The calendar''s id in this service (not its Google id).', schema: {type: string, format: uuid}}
+        - {name: full, in: query, description: 'List every event again instead of the changes since the last sync.', schema: {type: boolean, default: false}}
+      responses:
+        '200': {description: The calendar after the sync, content: {application/json: {schema: {$ref: '#/components/schemas/GoogleCalendar'}}}}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}
+        '404': {description: Calendar not found}
+        '409': {description: 'The calendar does not sync (google_sync_disabled), it is syncing right now or waits for edits made in Life OS to reach Google first (sync_in_progress), its sync changed meanwhile (conflict), or Google is not connected (google_not_connected) or its authorization expired (google_expired)'}
+        '503': {description: Google is not configured on this server (google_not_configured)}
+  /v1/exports:
+    get:
+      summary: Where Life OS events are in Google
+      description: >-
+        For each Life OS event asked for (Calendar's event ids, such as the
+        event the Dashboard shows), whether it is exported to the Life OS
+        calendar in Google and how its export stands. Events that are not
+        in Google (never exported, export off before they were exported, a
+        copy deleted in Google, or not a Life OS event) are left out.
+      operationId: listEventExports
+      security: []
+      parameters:
+        - {name: eventId, in: query, required: true, description: 'Calendar event ids; repeat the parameter for several (at most 200).', style: form, explode: true, schema: {type: array, minItems: 1, maxItems: 200, items: {type: string, format: uuid}}}
+      responses:
+        '200': {description: The exported events among those asked for, content: {application/json: {schema: {$ref: '#/components/schemas/EventExportList'}}}}
+        '400': {description: 'Invalid request, such as no eventId or more than 200'}
+components:
+  schemas:
+    GoogleConnectionStatus:
+      type: string
+      enum: [not_connected, connected, expired, error]
+      description: '`not_connected`: no Google account is connected. `connected`: usable. `expired`: Google refused the stored authorization (it expired or was revoked); reconnect. `error`: another refusal, such as a changed client secret; see `lastError`.'
+    GoogleConnection:
+      type: object
+      required: [configured, status, scopes, missingScopes, exportEnabled, export]
+      properties:
+        configured: {type: boolean, description: 'Whether this server has the Google client credentials and token key (LIFE_OS_GOOGLE_CLIENT_ID, LIFE_OS_GOOGLE_CLIENT_SECRET, LIFE_OS_GOOGLE_TOKEN_KEY). Without them nothing can be connected.'}
+        status: {$ref: '#/components/schemas/GoogleConnectionStatus'}
+        accountEmail: {type: string, nullable: true, description: The connected Google account (its primary calendar's id).}
+        scopes: {type: array, items: {type: string}, description: The scopes Google granted.}
+        missingScopes: {type: array, items: {type: string}, description: 'Scopes Life OS asks for that Google did not grant (the owner may untick some on the consent page); empty when everything was granted or nothing is connected.'}
+        connectedAt: {type: string, format: date-time, nullable: true, description: When the account was last connected.}
+        lastError: {type: string, nullable: true, description: 'Why the connection is expired or in error; null while connected.'}
+        exportEnabled: {type: boolean, description: 'Whether events created in Life OS are exported to the Life OS calendar (the owner''s "Export events created in Life OS"; on by default).'}
+        lifeOsCalendar: {$ref: '#/components/schemas/LifeOsCalendar'}
+        export: {$ref: '#/components/schemas/GoogleExportState'}
+        changes: {$ref: '#/components/schemas/ChangeFeedState'}
+    LifeOsCalendar:
+      type: object
+      nullable: true
+      description: 'The "Life OS" calendar this service created in the owner''s Google account for the events created in Life OS; null until it exists. Created when Google is connected with export on; if the owner deletes it in Google, it is created again at the next export, as `note` says.'
+      required: [googleCalendarId, summary]
+      properties:
+        googleCalendarId: {type: string}
+        calendarId: {type: string, format: uuid, nullable: true, description: 'Its id in the calendar list (/v1/calendars), where it syncs like the others.'}
+        summary: {type: string}
+        createdAt: {type: string, format: date-time, nullable: true}
+        note: {type: string, nullable: true, description: 'What happened to it last, such as that it was deleted in Google and created again; null when nothing needs saying.'}
+    GoogleExportState:
+      type: object
+      description: How exporting Life OS events goes.
+      required: [pending, failed]
+      properties:
+        pending: {type: integer, description: Life OS events whose latest change waits to be exported.}
+        failed: {type: integer, description: 'Life OS events whose last export failed; retried automatically with growing pauses.'}
+        lastError: {type: string, nullable: true, description: The latest export failure.}
+        lastExportedAt: {type: string, format: date-time, nullable: true}
+    ChangeFeedState:
+      type: object
+      nullable: true
+      description: >-
+        How following Calendar's change feed goes: it brings the Life OS
+        events to export and the owner's edits of Google events, which are
+        written to Google a few seconds later. Null without a connection.
+      required: [pendingEdits, failedEdits]
+      properties:
+        lastReadAt: {type: string, format: date-time, nullable: true, description: When the feed was last read successfully.}
+        lastError: {type: string, nullable: true, description: 'Why the last read failed (such as Calendar unreachable); current when lastErrorAt is after lastReadAt.'}
+        lastErrorAt: {type: string, format: date-time, nullable: true}
+        pendingEdits: {type: integer, description: Edits of Google events made in Life OS that wait to be written to Google.}
+        failedEdits: {type: integer, description: 'Such edits whose last attempt failed; retried automatically with growing pauses.'}
+        lastEditError: {type: string, nullable: true, description: The latest failure writing an edit to Google.}
+    UpdateGoogleConnectionRequest:
+      type: object
+      required: [exportEnabled]
+      properties:
+        exportEnabled: {type: boolean}
+    GoogleAuthorization:
+      type: object
+      required: [url]
+      properties:
+        url: {type: string, description: Google's consent page; open it in the browser.}
+    GoogleConnectRequest:
+      type: object
+      required: [code, state]
+      properties:
+        code: {type: string, minLength: 1, maxLength: 2048, description: The authorization code Google returned.}
+        state: {type: string, minLength: 1, maxLength: 256, description: The state Google returned with it.}
+    GoogleCalendar:
+      type: object
+      required: [id, googleCalendarId, summary, accessRole, primary, syncEnabled, lifeOs, sync, createdAt, updatedAt]
+      properties:
+        id: {type: string, format: uuid}
+        googleCalendarId: {type: string, description: 'The calendar''s id at Google (the account''s address for the primary calendar).'}
+        summary: {type: string, description: 'The calendar''s name as the owner sees it in Google Calendar.'}
+        color: {type: string, nullable: true, description: 'Its background color in Google Calendar, such as #9fe1e7.'}
+        accessRole: {type: string, enum: [owner, writer, reader, freeBusyReader], description: 'The account''s access to the calendar.'}
+        primary: {type: boolean, description: 'The account''s primary calendar.'}
+        syncEnabled: {type: boolean, description: 'Whether the calendar syncs into Life OS.'}
+        lifeOs: {type: boolean, description: 'This is the Life OS calendar, where events created in Life OS are exported.'}
+        sync: {$ref: '#/components/schemas/GoogleCalendarSync'}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    GoogleCalendarSync:
+      type: object
+      description: >-
+        The calendar's sync state. Read-only. Its events are Calendar's
+        source `sourceId` (`source.kind` `external`, `source.provider`
+        Google, `source.name` the calendar's name).
+      required: [state, consecutiveFailures, syncing]
+      properties:
+        state:
+          type: string
+          enum: ['off', pending, synced, failing]
+          description: '`off`: not chosen to sync. `pending`: chosen, waiting for its first sync. `synced`: the last sync succeeded. `failing`: the last sync failed (see `lastError`); it is retried automatically and the events from the last good sync are kept.'
+        sourceId: {type: string, format: uuid, nullable: true, description: 'The Calendar source its events carry as `source.sourceId`; null while it does not sync (or before it was registered with Calendar).'}
+        lastAttemptAt: {type: string, format: date-time, nullable: true}
+        lastSyncedAt: {type: string, format: date-time, nullable: true, description: When it was last synced successfully.}
+        nextSyncAt: {type: string, format: date-time, nullable: true, description: 'When it is synced next (every few minutes, later after failures).'}
+        lastError: {type: string, nullable: true, description: Why the last sync failed; null after a success.}
+        consecutiveFailures: {type: integer, description: Failed syncs since the last success; drives the retry backoff.}
+        lastCounts: {$ref: '#/components/schemas/SyncCounts'}
+        syncing: {type: boolean, description: A sync is running now.}
+    SyncCounts:
+      type: object
+      description: What the last sync that changed something did.
+      required: [feedEvents, imported, inserted, updated, removed, restored, unchanged]
+      properties:
+        feedEvents: {type: integer, description: Events (and changed occurrences) Google holds for the calendar.}
+        imported: {type: integer, description: Events the calendar gives Calendar.}
+        inserted: {type: integer}
+        updated: {type: integer}
+        removed: {type: integer, description: 'Events no longer in Google: cancelled in Life OS and marked removedFromSourceAt.'}
+        restored: {type: integer, description: Events back in Google after having been removed.}
+        unchanged: {type: integer}
+        skipped: {type: integer, description: Google events that could not be read (such as a missing start) and were left out.}
+    GoogleCalendarList: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/GoogleCalendar'}}}}
+    UpdateGoogleCalendarRequest:
+      type: object
+      required: [syncEnabled]
+      properties:
+        syncEnabled: {type: boolean}
+    EventExport:
+      type: object
+      description: >-
+        Where a Life OS event is in Google: its copy in the Life OS calendar.
+        `pending` while its latest change waits to be exported, `synced` once
+        Google has it, `failed` when the last attempt failed (`error`;
+        retried automatically).
+      required: [eventId, calendarName, lifeOs, state]
+      properties:
+        eventId: {type: string, format: uuid, description: The event's id in Calendar.}
+        calendarId: {type: string, format: uuid, nullable: true, description: 'The Life OS calendar''s id in the calendar list (/v1/calendars); null before it is listed.'}
+        calendarName: {type: string, description: 'The Google calendar''s name, such as "Life OS".'}
+        lifeOs: {type: boolean, description: The event is a Life OS event exported to the Life OS calendar.}
+        state: {type: string, enum: [synced, pending, failed]}
+        error: {type: string, nullable: true, description: Why the last export failed; null otherwise.}
+    EventExportList: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/EventExport'}}}}

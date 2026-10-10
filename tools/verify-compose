@@ -15,8 +15,10 @@ export COMPOSE_PROFILES=
 # preset would fetch their real waste calendar and mix it into test data
 # (compose.verify.yaml also blanks it, and the plan is refused with one).
 export LIFE_OS_ZAW_ICS_URL=
-# Nor the owner's Google OAuth client: the verification stack never talks to
-# Google (its browser tests stub the Google endpoints).
+# Nor the owner's Google OAuth client or token key: the verification stack
+# never talks to Google (the google-calendar integration gets them blank,
+# compose.verify.yaml points its Google endpoints nowhere, and browser tests
+# stub the integration's endpoints).
 export LIFE_OS_GOOGLE_CLIENT_ID= LIFE_OS_GOOGLE_CLIENT_SECRET= LIFE_OS_GOOGLE_TOKEN_KEY=
 # Nor the owner's ntfy accounts, token, topic, or channel list: a test
 # notification must never reach the owner's phone. ntfy itself stays off (its
@@ -49,6 +51,10 @@ require_isolated_resources() {
   fi
   if jq -e '((.services.banking.environment.LIFE_OS_ENABLE_BANKING_APP_ID // "") != "") or ((.services.banking.environment.LIFE_OS_BANKING_TOKEN_KEY // "") != "") or ([.services.banking.volumes[]? | select(.source != "/dev/null")] | length > 0)' <<<"$config" >/dev/null; then
     echo "verify-compose: refusing a plan with Enable Banking credentials or a bank key: it could reach the owner's bank" >&2
+    exit 2
+  fi
+  if jq -e '[.services[]?.environment // {} | (.LIFE_OS_GOOGLE_CLIENT_ID // ""), (.LIFE_OS_GOOGLE_CLIENT_SECRET // ""), (.LIFE_OS_GOOGLE_TOKEN_KEY // "")] | any(. != "")' <<<"$config" >/dev/null; then
+    echo "verify-compose: refusing a plan with Google OAuth settings: it could reach the owner's Google account" >&2
     exit 2
   fi
   if jq -e '((.services["calendar-feeds"].environment.LIFE_OS_ZAW_ICS_URL // "") != "")' <<<"$config" >/dev/null; then

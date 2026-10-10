@@ -6,6 +6,10 @@ export {
   createCalendarFeedsClient,
 } from "./calendar-feeds-client";
 export { financeClient, createFinanceClient } from "./finance-client";
+export {
+  googleCalendarClient,
+  createGoogleCalendarClient,
+} from "./google-calendar-client";
 export { inboxClient, createInboxClient } from "./inbox-client";
 export {
   notificationsClient,

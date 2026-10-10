@@ -88,7 +88,7 @@ func (h *Handler) resolveSources(ctx context.Context, items []generated.Calendar
 			item.Priority = priority
 		}
 	}
-	return h.resolveGoogle(ctx, items)
+	return h.resolveEditable(ctx, items)
 }
 
 // effectiveReminders is every reminder that applies: the defaults when they
@@ -128,8 +128,9 @@ func managedByIntegration(name string) error {
 }
 
 // listedSource reports whether row is served under /v1/sources: a feed or
-// a source an integration syncs, not a Google calendar Calendar syncs
-// itself (managed under /v1/google/calendars).
+// a source an integration syncs, not a legacy Google source of Calendar's
+// former in-process sync (kind google; migration 000016 hands them over to
+// the google-calendar integration).
 func listedSource(row store.CalendarSource) bool {
 	return row.Kind == string(generated.CalendarSourceKindIcs) || row.Kind == string(generated.CalendarSourceKindExternal)
 }
@@ -157,7 +158,7 @@ func (h *Handler) ListSources(c fiber.Ctx) error {
 func (h *Handler) GetSource(c fiber.Ctx, id types.UUID) error {
 	row, err := h.queries.GetSource(c.Context(), pgUUID(id))
 	if errors.Is(err, pgx.ErrNoRows) || err == nil && !listedSource(row) {
-		// A synced Google calendar is managed under /v1/google/calendars.
+		// A legacy in-process Google source is not served.
 		return sourceNotFound()
 	}
 	if err != nil {

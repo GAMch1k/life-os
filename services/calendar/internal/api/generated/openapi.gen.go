@@ -49,27 +49,6 @@ func (e ChangeFeedPagePhase) Valid() bool {
 	}
 }
 
-// Defines values for EventGoogleLinkState.
-const (
-	EventGoogleLinkStateFailed  EventGoogleLinkState = "failed"
-	EventGoogleLinkStatePending EventGoogleLinkState = "pending"
-	EventGoogleLinkStateSynced  EventGoogleLinkState = "synced"
-)
-
-// Valid indicates whether the value is a known member of the EventGoogleLinkState enum.
-func (e EventGoogleLinkState) Valid() bool {
-	switch e {
-	case EventGoogleLinkStateFailed:
-		return true
-	case EventGoogleLinkStatePending:
-		return true
-	case EventGoogleLinkStateSynced:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for EventPriority.
 const (
 	High   EventPriority = "high"
@@ -127,78 +106,6 @@ func (e EventStatus) Valid() bool {
 	case Active:
 		return true
 	case Cancelled:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for GoogleCalendarAccessRole.
-const (
-	FreeBusyReader GoogleCalendarAccessRole = "freeBusyReader"
-	Owner          GoogleCalendarAccessRole = "owner"
-	Reader         GoogleCalendarAccessRole = "reader"
-	Writer         GoogleCalendarAccessRole = "writer"
-)
-
-// Valid indicates whether the value is a known member of the GoogleCalendarAccessRole enum.
-func (e GoogleCalendarAccessRole) Valid() bool {
-	switch e {
-	case FreeBusyReader:
-		return true
-	case Owner:
-		return true
-	case Reader:
-		return true
-	case Writer:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for GoogleCalendarSyncState.
-const (
-	GoogleCalendarSyncStateFailing GoogleCalendarSyncState = "failing"
-	GoogleCalendarSyncStateOff     GoogleCalendarSyncState = "off"
-	GoogleCalendarSyncStatePending GoogleCalendarSyncState = "pending"
-	GoogleCalendarSyncStateSynced  GoogleCalendarSyncState = "synced"
-)
-
-// Valid indicates whether the value is a known member of the GoogleCalendarSyncState enum.
-func (e GoogleCalendarSyncState) Valid() bool {
-	switch e {
-	case GoogleCalendarSyncStateFailing:
-		return true
-	case GoogleCalendarSyncStateOff:
-		return true
-	case GoogleCalendarSyncStatePending:
-		return true
-	case GoogleCalendarSyncStateSynced:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for GoogleConnectionStatus.
-const (
-	Connected    GoogleConnectionStatus = "connected"
-	Error        GoogleConnectionStatus = "error"
-	Expired      GoogleConnectionStatus = "expired"
-	NotConnected GoogleConnectionStatus = "not_connected"
-)
-
-// Valid indicates whether the value is a known member of the GoogleConnectionStatus enum.
-func (e GoogleConnectionStatus) Valid() bool {
-	switch e {
-	case Connected:
-		return true
-	case Error:
-		return true
-	case Expired:
-		return true
-	case NotConnected:
 		return true
 	default:
 		return false
@@ -273,19 +180,19 @@ func (e SourceEventPriority) Valid() bool {
 
 // Defines values for SourceRefreshOutcome.
 const (
-	SourceRefreshOutcomeFailed      SourceRefreshOutcome = "failed"
-	SourceRefreshOutcomeImported    SourceRefreshOutcome = "imported"
-	SourceRefreshOutcomeNotModified SourceRefreshOutcome = "not_modified"
+	Failed      SourceRefreshOutcome = "failed"
+	Imported    SourceRefreshOutcome = "imported"
+	NotModified SourceRefreshOutcome = "not_modified"
 )
 
 // Valid indicates whether the value is a known member of the SourceRefreshOutcome enum.
 func (e SourceRefreshOutcome) Valid() bool {
 	switch e {
-	case SourceRefreshOutcomeFailed:
+	case Failed:
 		return true
-	case SourceRefreshOutcomeImported:
+	case Imported:
 		return true
-	case SourceRefreshOutcomeNotModified:
+	case NotModified:
 		return true
 	default:
 		return false
@@ -396,7 +303,7 @@ type CalendarEvent struct {
 	// Description Free-form notes or details.
 	Description *string `json:"description,omitempty"`
 
-	// Editable Whether the event can be changed through this API beyond its reminders: Life OS events and Google events of calendars the account may edit; not feed events, events of Google calendars the account can only read, or occurrences of a Google rule Calendar cannot hold.
+	// Editable Whether the event can be changed through this API beyond its reminders and priority: Life OS events, and events of integrations' sources that accept changes (such as Google calendars the account may edit) unless read-only on their own (`readOnlyReason`); not feed events, events of sources that do not accept changes, or occurrences of a rule Calendar cannot hold.
 	Editable bool `json:"editable"`
 
 	// EffectiveReminders Every reminder that applies: `defaultReminders` when `useDefaultReminders` is true, then the event's own `reminders`, each reminder once. A notifier triggers each of them. Read-only.
@@ -411,11 +318,8 @@ type CalendarEvent struct {
 	// ExternalReference Legacy provider reference, kept for compatibility. New code uses `source`.
 	// Deprecated: this property has been marked as deprecated upstream, but no `x-deprecated-reason` was set
 	ExternalReference *ExternalReference `json:"externalReference,omitempty"`
-
-	// Google Where the event is in Google Calendar and how its sync stands; null for an event that is not in Google (a feed event, or a Life OS event while Google is not connected or export is off). A Google event is always `synced` (its changes are written to Google first). A Life OS event is `pending` while its latest change waits to be exported to the Life OS calendar, `synced` once Google has it, and `failed` when the last attempt failed (`error`; retried automatically).
-	Google   *EventGoogleLink   `json:"google,omitempty"`
-	Id       openapi_types.UUID `json:"id"`
-	Location *string            `json:"location,omitempty"`
+	Id                openapi_types.UUID `json:"id"`
+	Location          *string            `json:"location,omitempty"`
 
 	// Occurrence Set on an item that is one occurrence of a recurring event, as listing, search, and the occurrence endpoints return them. The item's `id` and fields are the recurring event's (update or delete it to change every occurrence), with this occurrence's start and end, and with this occurrence's own changes applied (see `modified`).
 	Occurrence *EventOccurrence `json:"occurrence,omitempty"`
@@ -602,25 +506,6 @@ type CreateEventRequest struct {
 	UseDefaultReminders *bool `json:"useDefaultReminders,omitempty"`
 }
 
-// EventGoogleLink Where the event is in Google Calendar and how its sync stands; null for an event that is not in Google (a feed event, or a Life OS event while Google is not connected or export is off). A Google event is always `synced` (its changes are written to Google first). A Life OS event is `pending` while its latest change waits to be exported to the Life OS calendar, `synced` once Google has it, and `failed` when the last attempt failed (`error`; retried automatically).
-type EventGoogleLink struct {
-	// CalendarId The Google calendar's id in Calendar (see /v1/google/calendars); null before the Life OS calendar exists.
-	CalendarId *openapi_types.UUID `json:"calendarId,omitempty"`
-
-	// CalendarName The Google calendar's name, such as "Owner" or "Life OS".
-	CalendarName string `json:"calendarName"`
-
-	// Error Why the last export failed; null otherwise.
-	Error *string `json:"error,omitempty"`
-
-	// LifeOs The event is a Life OS event exported to the Life OS calendar.
-	LifeOs bool                 `json:"lifeOs"`
-	State  EventGoogleLinkState `json:"state"`
-}
-
-// EventGoogleLinkState defines model for EventGoogleLink.State.
-type EventGoogleLinkState string
-
 // EventList defines model for EventList.
 type EventList struct {
 	Items []CalendarEvent `json:"items"`
@@ -652,7 +537,7 @@ type EventSource struct {
 	// Integration The integration the source belongs to, such as google-calendar; null for manual events. Set by Calendar in responses.
 	Integration *string `json:"integration,omitempty"`
 
-	// Kind `manual`: created in Life OS (the Dashboard, MCP, or a capture). `external`: brought in by an integration (see `/v1/integrations`; `source.provider` and `source.name` say from where). `ics` and `google`: imported by Calendar itself from an ICS/iCal feed or Google Calendar, until those sources are handed over to their integrations.
+	// Kind `manual`: created in Life OS (the Dashboard, MCP, or a capture). `external`: brought in by an integration (see `/v1/integrations`; `source.provider` and `source.name` say from where). `ics`: imported by Calendar itself from an ICS/iCal feed, until those sources are handed over to their integration. `google`: legacy, no longer used (Google Calendar is the google-calendar integration, `external`).
 	Kind EventSourceKind `json:"kind"`
 
 	// Name The name of that source, such as "ZAW", as it is now (renaming the source renames it here); null for manual events. Set by Calendar in responses.
@@ -668,7 +553,7 @@ type EventSource struct {
 	SourceId *openapi_types.UUID `json:"sourceId,omitempty"`
 }
 
-// EventSourceKind `manual`: created in Life OS (the Dashboard, MCP, or a capture). `external`: brought in by an integration (see `/v1/integrations`; `source.provider` and `source.name` say from where). `ics` and `google`: imported by Calendar itself from an ICS/iCal feed or Google Calendar, until those sources are handed over to their integrations.
+// EventSourceKind `manual`: created in Life OS (the Dashboard, MCP, or a capture). `external`: brought in by an integration (see `/v1/integrations`; `source.provider` and `source.name` say from where). `ics`: imported by Calendar itself from an ICS/iCal feed, until those sources are handed over to their integration. `google`: legacy, no longer used (Google Calendar is the google-calendar integration, `external`).
 type EventSourceKind string
 
 // EventStatus `cancelled` events are kept as history but left out of listings and search unless asked for. An occurrence of a recurring event is cancelled when its series is or when it is skipped on its own.
@@ -680,139 +565,6 @@ type EventStatus string
 type ExternalReference struct {
 	ExternalId string `json:"externalId"`
 	Provider   string `json:"provider"`
-}
-
-// GoogleAuthorization defines model for GoogleAuthorization.
-type GoogleAuthorization struct {
-	// Url Google's consent page; open it in the browser.
-	Url string `json:"url"`
-}
-
-// GoogleCalendar defines model for GoogleCalendar.
-type GoogleCalendar struct {
-	// AccessRole The account's access to the calendar.
-	AccessRole GoogleCalendarAccessRole `json:"accessRole"`
-
-	// Color Its background color in Google Calendar, such as #9fe1e7.
-	Color     *string   `json:"color,omitempty"`
-	CreatedAt time.Time `json:"createdAt"`
-
-	// GoogleCalendarId The calendar's id at Google (the account's address for the primary calendar).
-	GoogleCalendarId string             `json:"googleCalendarId"`
-	Id               openapi_types.UUID `json:"id"`
-
-	// LifeOs This is the Life OS calendar, where events created in Life OS are exported.
-	LifeOs bool `json:"lifeOs"`
-
-	// Primary The account's primary calendar.
-	Primary bool `json:"primary"`
-
-	// Summary The calendar's name as the owner sees it in Google Calendar.
-	Summary string `json:"summary"`
-
-	// Sync The calendar's sync state. Read-only. Its events are imported as source `sourceId` (`source.kind` `google`, `source.name` the calendar's name).
-	Sync GoogleCalendarSync `json:"sync"`
-
-	// SyncEnabled Whether the calendar syncs into Life OS.
-	SyncEnabled bool      `json:"syncEnabled"`
-	UpdatedAt   time.Time `json:"updatedAt"`
-}
-
-// GoogleCalendarAccessRole The account's access to the calendar.
-type GoogleCalendarAccessRole string
-
-// GoogleCalendarList defines model for GoogleCalendarList.
-type GoogleCalendarList struct {
-	Items []GoogleCalendar `json:"items"`
-}
-
-// GoogleCalendarSync The calendar's sync state. Read-only. Its events are imported as source `sourceId` (`source.kind` `google`, `source.name` the calendar's name).
-type GoogleCalendarSync struct {
-	// ConsecutiveFailures Failed syncs since the last success; drives the retry backoff.
-	ConsecutiveFailures int        `json:"consecutiveFailures"`
-	LastAttemptAt       *time.Time `json:"lastAttemptAt,omitempty"`
-
-	// LastCounts What the last reconciling refresh did.
-	LastCounts *SourceRefreshCounts `json:"lastCounts,omitempty"`
-
-	// LastError Why the last sync failed; null after a success.
-	LastError *string `json:"lastError,omitempty"`
-
-	// LastSyncedAt When it was last synced successfully.
-	LastSyncedAt *time.Time `json:"lastSyncedAt,omitempty"`
-
-	// NextSyncAt When it is synced next (every few minutes, later after failures).
-	NextSyncAt *time.Time `json:"nextSyncAt,omitempty"`
-
-	// SourceId The Calendar source its events carry as `source.sourceId`; null while it does not sync (or before its first sync).
-	SourceId *openapi_types.UUID `json:"sourceId,omitempty"`
-
-	// State `off`: not chosen to sync. `pending`: chosen, waiting for its first sync. `synced`: the last sync succeeded. `failing`: the last sync failed (see `lastError`); it is retried automatically and the events from the last good sync are kept.
-	State GoogleCalendarSyncState `json:"state"`
-
-	// Syncing A sync is running now.
-	Syncing bool `json:"syncing"`
-}
-
-// GoogleCalendarSyncState `off`: not chosen to sync. `pending`: chosen, waiting for its first sync. `synced`: the last sync succeeded. `failing`: the last sync failed (see `lastError`); it is retried automatically and the events from the last good sync are kept.
-type GoogleCalendarSyncState string
-
-// GoogleConnectRequest defines model for GoogleConnectRequest.
-type GoogleConnectRequest struct {
-	// Code The authorization code Google returned.
-	Code string `json:"code"`
-
-	// State The state Google returned with it.
-	State string `json:"state"`
-}
-
-// GoogleConnection defines model for GoogleConnection.
-type GoogleConnection struct {
-	// AccountEmail The connected Google account (its primary calendar's id).
-	AccountEmail *string `json:"accountEmail,omitempty"`
-
-	// Configured Whether this server has the Google client credentials and token key (LIFE_OS_GOOGLE_CLIENT_ID, LIFE_OS_GOOGLE_CLIENT_SECRET, LIFE_OS_GOOGLE_TOKEN_KEY). Without them nothing can be connected.
-	Configured bool `json:"configured"`
-
-	// ConnectedAt When the account was last connected.
-	ConnectedAt *time.Time `json:"connectedAt,omitempty"`
-
-	// Export How exporting Life OS events goes.
-	Export GoogleExportState `json:"export"`
-
-	// ExportEnabled Whether events created in Life OS are exported to the Life OS calendar (the owner's "Export events created in Life OS"; on by default).
-	ExportEnabled bool `json:"exportEnabled"`
-
-	// LastError Why the connection is expired or in error; null while connected.
-	LastError *string `json:"lastError,omitempty"`
-
-	// LifeOsCalendar The "Life OS" calendar Calendar created in the owner's Google account for the events created in Life OS; null until it exists. Created when Google is connected with export on; if the owner deletes it in Google, Calendar creates it again at the next export and says so in `note`.
-	LifeOsCalendar *LifeOsCalendar `json:"lifeOsCalendar,omitempty"`
-
-	// MissingScopes Scopes Life OS asks for that Google did not grant (the owner may untick some on the consent page); empty when everything was granted or nothing is connected.
-	MissingScopes []string `json:"missingScopes"`
-
-	// Scopes The scopes Google granted.
-	Scopes []string `json:"scopes"`
-
-	// Status `not_connected`: no Google account is connected. `connected`: usable. `expired`: Google refused the stored authorization (it expired or was revoked); reconnect. `error`: another refusal, such as a changed client secret; see `lastError`.
-	Status GoogleConnectionStatus `json:"status"`
-}
-
-// GoogleConnectionStatus `not_connected`: no Google account is connected. `connected`: usable. `expired`: Google refused the stored authorization (it expired or was revoked); reconnect. `error`: another refusal, such as a changed client secret; see `lastError`.
-type GoogleConnectionStatus string
-
-// GoogleExportState How exporting Life OS events goes.
-type GoogleExportState struct {
-	// Failed Life OS events whose last export failed; retried automatically with growing pauses.
-	Failed int `json:"failed"`
-
-	// LastError The latest export failure.
-	LastError      *string    `json:"lastError,omitempty"`
-	LastExportedAt *time.Time `json:"lastExportedAt,omitempty"`
-
-	// Pending Life OS events whose latest change waits to be exported.
-	Pending int `json:"pending"`
 }
 
 // IntegrationSource defines model for IntegrationSource.
@@ -850,18 +602,6 @@ type IntegrationSource struct {
 // IntegrationSourceList defines model for IntegrationSourceList.
 type IntegrationSourceList struct {
 	Items []IntegrationSource `json:"items"`
-}
-
-// LifeOsCalendar The "Life OS" calendar Calendar created in the owner's Google account for the events created in Life OS; null until it exists. Created when Google is connected with export on; if the owner deletes it in Google, Calendar creates it again at the next export and says so in `note`.
-type LifeOsCalendar struct {
-	// CalendarId Its id in Calendar's calendar list (/v1/google/calendars), where it syncs like the others.
-	CalendarId       *openapi_types.UUID `json:"calendarId,omitempty"`
-	CreatedAt        *time.Time          `json:"createdAt,omitempty"`
-	GoogleCalendarId string              `json:"googleCalendarId"`
-
-	// Note What happened to it last, such as that it was deleted in Google and created again; null when nothing needs saying.
-	Note    *string `json:"note,omitempty"`
-	Summary string  `json:"summary"`
 }
 
 // OccurrenceChanges The fields one occurrence of a series overrides, as Calendar stores them; absent fields follow the series. `description` or `location` null clears it for the occurrence. A moved occurrence gives both ends: `startAt` and `endAt` for a timed series, `startDate` and `endDate` (inclusive) for an all-day one.
@@ -1183,16 +923,6 @@ type UpdateEventRequest struct {
 	UseDefaultReminders *bool `json:"useDefaultReminders,omitempty"`
 }
 
-// UpdateGoogleCalendarRequest defines model for UpdateGoogleCalendarRequest.
-type UpdateGoogleCalendarRequest struct {
-	SyncEnabled bool `json:"syncEnabled"`
-}
-
-// UpdateGoogleConnectionRequest defines model for UpdateGoogleConnectionRequest.
-type UpdateGoogleConnectionRequest struct {
-	ExportEnabled bool `json:"exportEnabled"`
-}
-
 // UpdateOccurrenceRequest One occurrence's own changes. The start and end keep the series' kind (`startAt`/`endAt` for a timed series, `startDate`/`endDate` for an all-day one). `reminders: null` gives the occurrence no own reminders and turns its defaults on unless the body sets `useDefaultReminders`.
 type UpdateOccurrenceRequest struct {
 	// AllDay Must be the series' allDay: an occurrence cannot switch between timed and all-day.
@@ -1267,7 +997,7 @@ type RecurrenceId = string
 // SourceId defines model for SourceId.
 type SourceId = openapi_types.UUID
 
-// SourceKind `manual`: created in Life OS (the Dashboard, MCP, or a capture). `external`: brought in by an integration (see `/v1/integrations`; `source.provider` and `source.name` say from where). `ics` and `google`: imported by Calendar itself from an ICS/iCal feed or Google Calendar, until those sources are handed over to their integrations.
+// SourceKind `manual`: created in Life OS (the Dashboard, MCP, or a capture). `external`: brought in by an integration (see `/v1/integrations`; `source.provider` and `source.name` say from where). `ics`: imported by Calendar itself from an ICS/iCal feed, until those sources are handed over to their integration. `google`: legacy, no longer used (Google Calendar is the google-calendar integration, `external`).
 type SourceKind = EventSourceKind
 
 // TimeZone defines model for TimeZone.
@@ -1293,7 +1023,7 @@ type ListEventsParams struct {
 	// SourceId Only events imported from this source.
 	SourceId *SourceId `form:"sourceId,omitempty" json:"sourceId,omitempty"`
 
-	// Editable Only events that can be changed through this API (`editable`): Life OS events, Google events of calendars the account may edit that are single events or series Calendar holds, and events of integrations' sources that accept changes (unless read-only on their own); not feed events, read-only Google calendars, or occurrences expanded from a Google rule. The AI looks for the events to change this way.
+	// Editable Only events that can be changed through this API (`editable`): Life OS events and events of integrations' sources that accept changes (unless read-only on their own, such as one occurrence of a rule Calendar cannot hold); not feed events or the events of sources that do not accept changes. The AI looks for the events to change this way.
 	Editable *Editable `form:"editable,omitempty" json:"editable,omitempty"`
 
 	// Cursor The previous page's nextCursor. Opaque; only valid with the parameters it was returned for.
@@ -1324,18 +1054,12 @@ type SearchEventsParams struct {
 	// SourceId Only events imported from this source.
 	SourceId *SourceId `form:"sourceId,omitempty" json:"sourceId,omitempty"`
 
-	// Editable Only events that can be changed through this API (`editable`): Life OS events, Google events of calendars the account may edit that are single events or series Calendar holds, and events of integrations' sources that accept changes (unless read-only on their own); not feed events, read-only Google calendars, or occurrences expanded from a Google rule. The AI looks for the events to change this way.
+	// Editable Only events that can be changed through this API (`editable`): Life OS events and events of integrations' sources that accept changes (unless read-only on their own, such as one occurrence of a rule Calendar cannot hold); not feed events or the events of sources that do not accept changes. The AI looks for the events to change this way.
 	Editable *Editable `form:"editable,omitempty" json:"editable,omitempty"`
 
 	// Cursor The previous page's nextCursor. Opaque; only valid with the parameters it was returned for.
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
 	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
-}
-
-// SyncGoogleCalendarParams defines parameters for SyncGoogleCalendar.
-type SyncGoogleCalendarParams struct {
-	// Full List every event again instead of the changes since the last sync.
-	Full *bool `form:"full,omitempty" json:"full,omitempty"`
 }
 
 // ListChangesParams defines parameters for ListChanges.
@@ -1364,15 +1088,6 @@ type UpdateEventOccurrenceJSONRequestBody = UpdateOccurrenceRequest
 
 // SplitEventSeriesJSONRequestBody defines body for SplitEventSeries for application/json ContentType.
 type SplitEventSeriesJSONRequestBody = UpdateEventRequest
-
-// UpdateGoogleCalendarJSONRequestBody defines body for UpdateGoogleCalendar for application/json ContentType.
-type UpdateGoogleCalendarJSONRequestBody = UpdateGoogleCalendarRequest
-
-// UpdateGoogleConnectionJSONRequestBody defines body for UpdateGoogleConnection for application/json ContentType.
-type UpdateGoogleConnectionJSONRequestBody = UpdateGoogleConnectionRequest
-
-// ConnectGoogleJSONRequestBody defines body for ConnectGoogle for application/json ContentType.
-type ConnectGoogleJSONRequestBody = GoogleConnectRequest
 
 // RegisterIntegrationSourceJSONRequestBody defines body for RegisterIntegrationSource for application/json ContentType.
 type RegisterIntegrationSourceJSONRequestBody = RegisterIntegrationSourceRequest
@@ -1418,33 +1133,6 @@ type ServerInterface interface {
 	// TruncateEventSeries Delete this and following occurrences
 	// (POST /v1/events/{eventId}/occurrences/{recurrenceId}/truncate)
 	TruncateEventSeries(c fiber.Ctx, eventId EventId, recurrenceId RecurrenceId) error
-	// ListGoogleCalendars List the connected account's Google calendars
-	// (GET /v1/google/calendars)
-	ListGoogleCalendars(c fiber.Ctx) error
-	// RefreshGoogleCalendars Read the calendar list from Google again
-	// (POST /v1/google/calendars/refresh)
-	RefreshGoogleCalendars(c fiber.Ctx) error
-	// UpdateGoogleCalendar Choose whether a Google calendar syncs
-	// (PATCH /v1/google/calendars/{calendarId})
-	UpdateGoogleCalendar(c fiber.Ctx, calendarId openapi_types.UUID) error
-	// SyncGoogleCalendar Sync a Google calendar now
-	// (POST /v1/google/calendars/{calendarId}/sync)
-	SyncGoogleCalendar(c fiber.Ctx, calendarId openapi_types.UUID, params SyncGoogleCalendarParams) error
-	// DisconnectGoogle Disconnect Google Calendar
-	// (DELETE /v1/google/connection)
-	DisconnectGoogle(c fiber.Ctx) error
-	// GetGoogleConnection Get the Google Calendar connection
-	// (GET /v1/google/connection)
-	GetGoogleConnection(c fiber.Ctx) error
-	// UpdateGoogleConnection Change the Google connection's settings
-	// (PATCH /v1/google/connection)
-	UpdateGoogleConnection(c fiber.Ctx) error
-	// ConnectGoogle Complete a Google authorization
-	// (POST /v1/google/connection)
-	ConnectGoogle(c fiber.Ctx) error
-	// AuthorizeGoogle Start a Google authorization
-	// (POST /v1/google/connection/authorize)
-	AuthorizeGoogle(c fiber.Ctx) error
 	// ListChanges Follow the changes of events made in Life OS
 	// (GET /v1/integrations/changes)
 	ListChanges(c fiber.Ctx, params ListChangesParams) error
@@ -1941,206 +1629,6 @@ func (siw *ServerInterfaceWrapper) TruncateEventSeries(c fiber.Ctx) error {
 	return handler(c)
 }
 
-// ListGoogleCalendars operation middleware
-func (siw *ServerInterfaceWrapper) ListGoogleCalendars(c fiber.Ctx) error {
-
-	handler := func(c fiber.Ctx) error {
-		return siw.Handler.ListGoogleCalendars(c)
-	}
-
-	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
-		m := siw.HandlerMiddlewares[i]
-		next := handler
-		handler = func(c fiber.Ctx) error {
-			return m(c, next)
-		}
-	}
-
-	return handler(c)
-}
-
-// RefreshGoogleCalendars operation middleware
-func (siw *ServerInterfaceWrapper) RefreshGoogleCalendars(c fiber.Ctx) error {
-
-	handler := func(c fiber.Ctx) error {
-		return siw.Handler.RefreshGoogleCalendars(c)
-	}
-
-	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
-		m := siw.HandlerMiddlewares[i]
-		next := handler
-		handler = func(c fiber.Ctx) error {
-			return m(c, next)
-		}
-	}
-
-	return handler(c)
-}
-
-// UpdateGoogleCalendar operation middleware
-func (siw *ServerInterfaceWrapper) UpdateGoogleCalendar(c fiber.Ctx) error {
-
-	var err error
-	_ = err
-
-	// ------------- Path parameter "calendarId" -------------
-	var calendarId openapi_types.UUID
-
-	err = runtime.BindStyledParameterWithOptions("simple", "calendarId", c.Params("calendarId"), &calendarId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
-	if err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter calendarId: %w", err).Error())
-	}
-
-	handler := func(c fiber.Ctx) error {
-		return siw.Handler.UpdateGoogleCalendar(c, calendarId)
-	}
-
-	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
-		m := siw.HandlerMiddlewares[i]
-		next := handler
-		handler = func(c fiber.Ctx) error {
-			return m(c, next)
-		}
-	}
-
-	return handler(c)
-}
-
-// SyncGoogleCalendar operation middleware
-func (siw *ServerInterfaceWrapper) SyncGoogleCalendar(c fiber.Ctx) error {
-
-	var err error
-	_ = err
-
-	// ------------- Path parameter "calendarId" -------------
-	var calendarId openapi_types.UUID
-
-	err = runtime.BindStyledParameterWithOptions("simple", "calendarId", c.Params("calendarId"), &calendarId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
-	if err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter calendarId: %w", err).Error())
-	}
-
-	// Parameter object where we will unmarshal all parameters from the context
-	var params SyncGoogleCalendarParams
-
-	var query url.Values
-	query, err = url.ParseQuery(string(c.Request().URI().QueryString()))
-	if err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for query string: %w", err).Error())
-	}
-
-	// ------------- Optional query parameter "full" -------------
-
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "full", query, &params.Full, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
-	if err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter full: %w", err).Error())
-	}
-
-	handler := func(c fiber.Ctx) error {
-		return siw.Handler.SyncGoogleCalendar(c, calendarId, params)
-	}
-
-	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
-		m := siw.HandlerMiddlewares[i]
-		next := handler
-		handler = func(c fiber.Ctx) error {
-			return m(c, next)
-		}
-	}
-
-	return handler(c)
-}
-
-// DisconnectGoogle operation middleware
-func (siw *ServerInterfaceWrapper) DisconnectGoogle(c fiber.Ctx) error {
-
-	handler := func(c fiber.Ctx) error {
-		return siw.Handler.DisconnectGoogle(c)
-	}
-
-	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
-		m := siw.HandlerMiddlewares[i]
-		next := handler
-		handler = func(c fiber.Ctx) error {
-			return m(c, next)
-		}
-	}
-
-	return handler(c)
-}
-
-// GetGoogleConnection operation middleware
-func (siw *ServerInterfaceWrapper) GetGoogleConnection(c fiber.Ctx) error {
-
-	handler := func(c fiber.Ctx) error {
-		return siw.Handler.GetGoogleConnection(c)
-	}
-
-	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
-		m := siw.HandlerMiddlewares[i]
-		next := handler
-		handler = func(c fiber.Ctx) error {
-			return m(c, next)
-		}
-	}
-
-	return handler(c)
-}
-
-// UpdateGoogleConnection operation middleware
-func (siw *ServerInterfaceWrapper) UpdateGoogleConnection(c fiber.Ctx) error {
-
-	handler := func(c fiber.Ctx) error {
-		return siw.Handler.UpdateGoogleConnection(c)
-	}
-
-	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
-		m := siw.HandlerMiddlewares[i]
-		next := handler
-		handler = func(c fiber.Ctx) error {
-			return m(c, next)
-		}
-	}
-
-	return handler(c)
-}
-
-// ConnectGoogle operation middleware
-func (siw *ServerInterfaceWrapper) ConnectGoogle(c fiber.Ctx) error {
-
-	handler := func(c fiber.Ctx) error {
-		return siw.Handler.ConnectGoogle(c)
-	}
-
-	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
-		m := siw.HandlerMiddlewares[i]
-		next := handler
-		handler = func(c fiber.Ctx) error {
-			return m(c, next)
-		}
-	}
-
-	return handler(c)
-}
-
-// AuthorizeGoogle operation middleware
-func (siw *ServerInterfaceWrapper) AuthorizeGoogle(c fiber.Ctx) error {
-
-	handler := func(c fiber.Ctx) error {
-		return siw.Handler.AuthorizeGoogle(c)
-	}
-
-	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
-		m := siw.HandlerMiddlewares[i]
-		next := handler
-		handler = func(c fiber.Ctx) error {
-			return m(c, next)
-		}
-	}
-
-	return handler(c)
-}
-
 // ListChanges operation middleware
 func (siw *ServerInterfaceWrapper) ListChanges(c fiber.Ctx) error {
 
@@ -2584,24 +2072,6 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	router.Patch(options.BaseURL+"/v1/settings", wrapper.UpdateSettings)
 
 	router.Get(options.BaseURL+"/v1/reminders/status", wrapper.GetReminderStatus)
-
-	router.Delete(options.BaseURL+"/v1/google/connection", wrapper.DisconnectGoogle)
-
-	router.Get(options.BaseURL+"/v1/google/connection", wrapper.GetGoogleConnection)
-
-	router.Patch(options.BaseURL+"/v1/google/connection", wrapper.UpdateGoogleConnection)
-
-	router.Post(options.BaseURL+"/v1/google/connection", wrapper.ConnectGoogle)
-
-	router.Post(options.BaseURL+"/v1/google/connection/authorize", wrapper.AuthorizeGoogle)
-
-	router.Get(options.BaseURL+"/v1/google/calendars", wrapper.ListGoogleCalendars)
-
-	router.Post(options.BaseURL+"/v1/google/calendars/refresh", wrapper.RefreshGoogleCalendars)
-
-	router.Patch(options.BaseURL+"/v1/google/calendars/:calendarId", wrapper.UpdateGoogleCalendar)
-
-	router.Post(options.BaseURL+"/v1/google/calendars/:calendarId/sync", wrapper.SyncGoogleCalendar)
 
 	router.Get(options.BaseURL+"/v1/integrations/:integration/sources", wrapper.ListIntegrationSources)
 

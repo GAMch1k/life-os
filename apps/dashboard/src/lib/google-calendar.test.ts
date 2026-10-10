@@ -4,7 +4,9 @@ import test from "node:test";
 import {
   calendarDetail,
   callbackStep,
+  changesUnreadable,
   connectFailure,
+  editsDetail,
   exportDetail,
   type GoogleCalendar,
   type GoogleConnection,
@@ -176,7 +178,7 @@ test("connection failures say what to do next", () => {
   );
   assert.equal(
     connectFailure(503, { error: { code: "service_unavailable" } }).message,
-    "Calendar is unavailable right now. Try again.",
+    "Google Calendar is unavailable right now. Try again.",
   );
   assert.equal(
     connectFailure(400, undefined).message,
@@ -331,4 +333,55 @@ test("the export line says how exporting Life OS events goes", () => {
       failing: false,
     },
   );
+});
+
+test("edits on their way to Google are described", () => {
+  assert.equal(editsDetail(connection()), undefined);
+  const changes = {
+    pendingEdits: 0,
+    failedEdits: 0,
+    lastReadAt: "2026-10-10T10:00:00Z",
+  };
+  assert.equal(editsDetail(connection({ changes })), undefined);
+  assert.deepEqual(
+    editsDetail(connection({ changes: { ...changes, pendingEdits: 1 } })),
+    { text: "1 edit made here is on the way to Google…", failing: false },
+  );
+  assert.deepEqual(
+    editsDetail(
+      connection({
+        changes: {
+          ...changes,
+          pendingEdits: 2,
+          failedEdits: 2,
+          lastEditError: "Google is unavailable: HTTP 503",
+        },
+      }),
+    ),
+    {
+      text: "2 edits made here could not be written to Google yet: Google is unavailable: HTTP 503. Retrying automatically.",
+      failing: true,
+    },
+  );
+  // An old failure, read successfully since, is not current.
+  const stale = connection({
+    changes: {
+      ...changes,
+      lastError: "Calendar could not be reached",
+      lastErrorAt: "2026-10-10T09:00:00Z",
+    },
+  });
+  assert.equal(changesUnreadable(stale), false);
+  const current = connection({
+    changes: {
+      ...changes,
+      lastError: "Calendar could not be reached",
+      lastErrorAt: "2026-10-10T10:01:00Z",
+    },
+  });
+  assert.equal(changesUnreadable(current), true);
+  assert.deepEqual(editsDetail(current), {
+    text: "Life OS events and edits made here do not reach Google right now: Calendar could not be reached",
+    failing: true,
+  });
 });

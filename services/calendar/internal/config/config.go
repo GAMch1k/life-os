@@ -10,7 +10,6 @@ import (
 
 	sharedconfig "github.com/GAMch1k/life-os/pkg/config"
 	"github.com/GAMch1k/life-os/pkg/database"
-	"github.com/GAMch1k/life-os/services/calendar/internal/google"
 )
 
 // Config holds process-level configuration for a generated service.
@@ -23,20 +22,9 @@ type Config struct {
 	// as Europe/Berlin): the default in which all-day dates are compared
 	// with instants when a read does not name a timeZone.
 	TimeZone string `env:"LIFE_OS_TIMEZONE" default:"UTC"`
-	// ActivityURL enables activity events (event changes, Google sync
-	// outcomes); empty disables them.
+	// ActivityURL enables activity events (event changes); empty disables
+	// them.
 	ActivityURL string `env:"ACTIVITY_SERVICE_URL"`
-	// Google Calendar connection: the OAuth Web client (from the owner's
-	// Google Cloud project), the base64 32-byte key that encrypts refresh
-	// tokens at rest, and the Dashboard route Google returns to. Google is
-	// not configured until the first three are set. Secrets: never log them.
-	GoogleClientID     string `env:"LIFE_OS_GOOGLE_CLIENT_ID"`
-	GoogleClientSecret string `env:"LIFE_OS_GOOGLE_CLIENT_SECRET"`
-	GoogleTokenKey     string `env:"LIFE_OS_GOOGLE_TOKEN_KEY"`
-	GoogleRedirectURI  string `env:"LIFE_OS_GOOGLE_REDIRECT_URI" default:"https://lifeos.gamch1k.com/calendar/google/callback"`
-	// GoogleSyncSeconds is how often each Google calendar chosen to sync is
-	// synced (changes since the last sync, with Google's sync token).
-	GoogleSyncSeconds int `env:"CALENDAR_GOOGLE_SYNC_SECONDS" default:"120"`
 	// Reminder delivery: the Notifications service reminders are sent to
 	// (empty turns delivery off), how often due reminders are looked for,
 	// and how late one may still be sent after Calendar was down (older
@@ -83,9 +71,6 @@ func (c Config) Validate() error {
 	var level slog.Level
 	if err := level.UnmarshalText([]byte(c.LogLevel)); err != nil {
 		validationErrors = append(validationErrors, fmt.Errorf("LOG_LEVEL must be a slog level: %w", err))
-	}
-	if c.GoogleSyncSeconds < 30 || c.GoogleSyncSeconds > 86400 {
-		validationErrors = append(validationErrors, fmt.Errorf("CALENDAR_GOOGLE_SYNC_SECONDS must be between 30 and 86400"))
 	}
 	if c.ReminderIntervalSeconds < 5 || c.ReminderIntervalSeconds > 300 {
 		validationErrors = append(validationErrors, fmt.Errorf("CALENDAR_REMINDER_INTERVAL_SECONDS must be between 5 and 300"))
@@ -137,11 +122,4 @@ func ValidTimeZone(name string) bool {
 	}
 	_, err := time.LoadLocation(name)
 	return err == nil
-}
-
-// Google returns the Google Calendar configuration. A partial or invalid one
-// is returned as an error to log and leaves Google unconfigured, so a typo
-// does not stop the service.
-func (c Config) Google() (google.Config, error) {
-	return google.NewConfig(c.GoogleClientID, c.GoogleClientSecret, c.GoogleTokenKey, c.GoogleRedirectURI)
 }

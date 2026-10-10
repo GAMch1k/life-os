@@ -43,14 +43,6 @@ WHERE events.recurrence_frequency IS NULL
     events.source_kind = 'external' AND events.read_only_reason IS NULL AND EXISTS (
       SELECT 1 FROM calendar_sources AS writable_source WHERE writable_source.id = events.source_id AND NOT writable_source.read_only
     )
-  ) OR (
-    events.source_kind = 'google' AND EXISTS (
-      SELECT 1 FROM calendar_sources AS editable_source
-      JOIN google_calendars AS editable_calendar ON editable_calendar.id = editable_source.google_calendar_id
-      JOIN google_events AS editable_event ON editable_event.calendar_id = editable_calendar.id
-      WHERE editable_source.id = events.source_id AND editable_calendar.access_role IN ('owner', 'writer')
-        AND editable_event.event_id = events.external_uid AND editable_event.recurring_event_id IS NULL
-    )
   ))
   AND (
     sqlc.narg(after_id)::uuid IS NULL
@@ -92,14 +84,6 @@ WHERE events.recurrence_frequency IS NOT NULL
   AND (NOT sqlc.arg(editable_only)::boolean OR events.source_kind = 'manual' OR (
     events.source_kind = 'external' AND events.read_only_reason IS NULL AND EXISTS (
       SELECT 1 FROM calendar_sources AS writable_source WHERE writable_source.id = events.source_id AND NOT writable_source.read_only
-    )
-  ) OR (
-    events.source_kind = 'google' AND EXISTS (
-      SELECT 1 FROM calendar_sources AS editable_source
-      JOIN google_calendars AS editable_calendar ON editable_calendar.id = editable_source.google_calendar_id
-      JOIN google_events AS editable_event ON editable_event.calendar_id = editable_calendar.id
-      WHERE editable_source.id = events.source_id AND editable_calendar.access_role IN ('owner', 'writer')
-        AND editable_event.event_id = events.external_uid AND editable_event.recurring_event_id IS NULL
     )
   ))
 ORDER BY events.id;
@@ -147,14 +131,6 @@ WHERE events.recurrence_frequency IS NULL
     events.source_kind = 'external' AND events.read_only_reason IS NULL AND EXISTS (
       SELECT 1 FROM calendar_sources AS writable_source WHERE writable_source.id = events.source_id AND NOT writable_source.read_only
     )
-  ) OR (
-    events.source_kind = 'google' AND EXISTS (
-      SELECT 1 FROM calendar_sources AS editable_source
-      JOIN google_calendars AS editable_calendar ON editable_calendar.id = editable_source.google_calendar_id
-      JOIN google_events AS editable_event ON editable_event.calendar_id = editable_calendar.id
-      WHERE editable_source.id = events.source_id AND editable_calendar.access_role IN ('owner', 'writer')
-        AND editable_event.event_id = events.external_uid AND editable_event.recurring_event_id IS NULL
-    )
   ))
   AND (
     sqlc.narg(after_id)::uuid IS NULL
@@ -197,14 +173,6 @@ WHERE events.recurrence_frequency IS NOT NULL
   AND (NOT sqlc.arg(editable_only)::boolean OR events.source_kind = 'manual' OR (
     events.source_kind = 'external' AND events.read_only_reason IS NULL AND EXISTS (
       SELECT 1 FROM calendar_sources AS writable_source WHERE writable_source.id = events.source_id AND NOT writable_source.read_only
-    )
-  ) OR (
-    events.source_kind = 'google' AND EXISTS (
-      SELECT 1 FROM calendar_sources AS editable_source
-      JOIN google_calendars AS editable_calendar ON editable_calendar.id = editable_source.google_calendar_id
-      JOIN google_events AS editable_event ON editable_event.calendar_id = editable_calendar.id
-      WHERE editable_source.id = events.source_id AND editable_calendar.access_role IN ('owner', 'writer')
-        AND editable_event.event_id = events.external_uid AND editable_event.recurring_event_id IS NULL
     )
   ))
 ORDER BY events.id;

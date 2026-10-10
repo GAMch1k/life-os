@@ -596,3 +596,33 @@ func TestIntegrationSyncValidation(t *testing.T) {
 		t.Fatalf("a refused batch wrote events: %v", titles(items))
 	}
 }
+
+// titles are the events' titles with their start (date or time in UTC).
+func titles(items []generated.CalendarEvent) []string {
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		when := ""
+		if item.AllDay {
+			when = item.StartDate.Format(time.DateOnly) + ".." + item.EndDate.Format(time.DateOnly)
+		} else {
+			when = item.StartAt.UTC().Format("01-02T15:04")
+		}
+		mark := ""
+		if item.Status == generated.Cancelled {
+			mark = " (cancelled)"
+		}
+		out = append(out, item.Title+" "+when+mark)
+	}
+	return out
+}
+
+// remindersOf lists the relative reminders' minutes, such as "10,60".
+func remindersOf(list []generated.Reminder) string {
+	var out []string
+	for _, reminder := range list {
+		if reminder.MinutesBefore != nil {
+			out = append(out, strconv.Itoa(*reminder.MinutesBefore))
+		}
+	}
+	return strings.Join(out, ",")
+}

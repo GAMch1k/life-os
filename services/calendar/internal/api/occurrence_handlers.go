@@ -106,11 +106,6 @@ func (h *Handler) UpdateEventOccurrence(c fiber.Ctx, id types.UUID, rid string) 
 	if patch.present["timeZone"] {
 		return badRequest("timeZone belongs to the series: change all events, or this and following")
 	}
-	if row, isGoogle, err := h.googleSeries(c, id); err != nil {
-		return err
-	} else if isGoogle {
-		return h.updateGoogleOccurrence(c, row, rid, patch)
-	}
 	var (
 		e             expansion
 		o             seriesOccurrence
@@ -176,34 +171,7 @@ func (h *Handler) UpdateEventOccurrence(c fiber.Ctx, id types.UUID, rid string) 
 		return err
 	}
 	h.recordOccurrence(c, e.row, o.key, before, after, stamp)
-	h.queueExport(c, e.row, e.row.ID)
 	return h.respondItem(c, fiber.StatusOK, e.item(o))
-}
-
-// queueExport queues exporting the Life OS event id to Google after a
-// change of series; an integration's events reach their provider through
-// the change feed instead.
-func (h *Handler) queueExport(c fiber.Ctx, series store.Event, id pgtype.UUID) {
-	if series.SourceKind == string(generated.EventSourceKindManual) {
-		h.google.QueueExport(c.Context(), id)
-	}
-}
-
-// googleSeries reads the event a change of an occurrence names and reports
-// whether it is a synced Google event (changed through Google).
-func (h *Handler) googleSeries(c fiber.Ctx, id types.UUID) (store.Event, bool, error) {
-	if h.google == nil {
-		return store.Event{}, false, nil
-	}
-	row, err := h.queries.GetEvent(c.Context(), pgUUID(id))
-	if err != nil {
-		return store.Event{}, false, databaseError(err)
-	}
-	inGoogle, err := h.syncedByGoogle(c.Context(), row)
-	if err != nil {
-		return store.Event{}, false, internal(err)
-	}
-	return row, inGoogle, nil
 }
 
 // untilBefore is the until that ends a series with the occurrence previous:
@@ -284,15 +252,6 @@ func (h *Handler) SplitEventSeries(c fiber.Ctx, id types.UUID, rid string) error
 	if err != nil {
 		return badRequest(err.Error())
 	}
-	if row, isGoogle, err := h.googleSeries(c, id); err != nil {
-		return err
-	} else if isGoogle {
-		target, err := h.google.Target(c.Context(), row)
-		if err != nil {
-			return googleWriteError(err)
-		}
-		return h.splitGoogleSeries(c, row, target, rid, patch)
-	}
 	var (
 		first                    bool
 		before, ended, newSeries store.Event
@@ -344,14 +303,12 @@ func (h *Handler) SplitEventSeries(c fiber.Ctx, id types.UUID, rid string) error
 	if err != nil {
 		return err
 	}
-	h.queueExport(c, before, ended.ID)
 	if first {
 		if eventType, changes := classifyUpdate(before, ended); eventType != "" {
 			h.recordEvent(c, eventType, ended, &before, changes)
 		}
 		return h.respond(c, fiber.StatusOK, ended)
 	}
-	h.queueExport(c, before, newSeries.ID)
 	h.recordEvent(c, eventUpdated, ended, &before, []string{"recurrence"})
 	h.emitEvent(c, eventCreated, newSeries, nil, nil, map[string]any{"splitFrom": uuid(before.ID).String()})
 	return h.respond(c, fiber.StatusCreated, newSeries)
@@ -415,15 +372,6 @@ func (h *Handler) handOverExceptions(ctx context.Context, queries *store.Queries
 // ends before the occurrence, and the exceptions from it on go. On the
 // first occurrence the series is deleted.
 func (h *Handler) TruncateEventSeries(c fiber.Ctx, id types.UUID, rid string) error {
-	if row, isGoogle, err := h.googleSeries(c, id); err != nil {
-		return err
-	} else if isGoogle {
-		target, err := h.google.Target(c.Context(), row)
-		if err != nil {
-			return googleWriteError(err)
-		}
-		return h.truncateGoogleSeries(c, row, target, rid)
-	}
 	var (
 		deleted       bool
 		before, ended store.Event
@@ -460,12 +408,8 @@ func (h *Handler) TruncateEventSeries(c fiber.Ctx, id types.UUID, rid string) er
 	}
 	if deleted {
 		h.recordEvent(c, eventDeleted, before, nil, nil)
-		if before.SourceKind == string(generated.EventSourceKindManual) {
-			h.google.QueueDeletion(c.Context(), before.ID)
-		}
 	} else {
 		h.recordEvent(c, eventUpdated, ended, &before, []string{"recurrence"})
-		h.queueExport(c, before, ended.ID)
 	}
 	return c.SendStatus(fiber.StatusNoContent)
 }

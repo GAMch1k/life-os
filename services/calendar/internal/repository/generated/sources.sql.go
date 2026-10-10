@@ -16,8 +16,7 @@ DELETE FROM calendar_sources WHERE id = $1 AND kind IN ('ics', 'external')
 `
 
 // Deletes a feed or an integration's source and its imported events (ON
-// DELETE CASCADE). A Google calendar's source goes when its calendar stops
-// syncing.
+// DELETE CASCADE).
 func (q *Queries) DeleteSource(ctx context.Context, id pgtype.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteSource, id)
 	if err != nil {
@@ -264,8 +263,9 @@ SELECT id, kind, name, url, enabled, filter_include, filter_exclude, default_rem
 `
 
 // The feeds (ICS sources) and the sources integrations sync (external).
-// Google calendars Calendar syncs itself are sources too, managed through
-// the Google connection (google_calendars), and are not listed here.
+// Legacy sources of Calendar's former in-process Google sync (kind google,
+// handed over to the google-calendar integration by migration 000016) are
+// not listed.
 func (q *Queries) ListSources(ctx context.Context) ([]CalendarSource, error) {
 	rows, err := q.db.Query(ctx, listSources)
 	if err != nil {

@@ -260,3 +260,54 @@ test("exporting Life OS events shows in the Google part", () => {
     },
   ]);
 });
+
+test("edits on their way to Google show in the Google part", () => {
+  const changes = {
+    lastReadAt: "2026-10-10T11:59:00Z",
+    pendingEdits: 0,
+    failedEdits: 0,
+  };
+  const upToDate = googlePart(google({ changes }), "Europe/Berlin");
+  assert.equal(upToDate?.summary, "Connected as owner@example.com.");
+  assert.deepEqual(upToDate?.facts.at(-1), {
+    label: "Edits to Google",
+    value: "up to date",
+  });
+  const waiting = googlePart(
+    google({ changes: { ...changes, pendingEdits: 2 } }),
+    "Europe/Berlin",
+  );
+  assert.deepEqual(waiting?.facts.at(-1), {
+    label: "Edits to Google",
+    value: "2 on the way",
+  });
+  const failing = googlePart(
+    google({
+      changes: {
+        ...changes,
+        pendingEdits: 1,
+        failedEdits: 1,
+        lastEditError: "Google is unavailable: HTTP 503",
+      },
+    }),
+    "Europe/Berlin",
+  );
+  assert.equal(failing?.state, "ok");
+  assert.equal(
+    failing?.summary,
+    "Connected as owner@example.com. 1 edit made in Life OS could not be written to Google yet; retried automatically.",
+  );
+  assert.equal(failing?.detail, "Google is unavailable: HTTP 503");
+  const unread = googlePart(
+    google({
+      changes: {
+        ...changes,
+        lastError: "Calendar could not be reached",
+        lastErrorAt: "2026-10-10T12:00:00Z",
+      },
+    }),
+    "Europe/Berlin",
+  );
+  assert.match(unread?.summary ?? "", /Calendar's changes could not be read/);
+  assert.equal(unread?.detail, "Calendar could not be reached");
+});

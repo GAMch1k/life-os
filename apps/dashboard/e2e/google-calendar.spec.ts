@@ -1,9 +1,10 @@
 import { expect, type Page, type Route, test } from "./fixtures";
 
-// The Google Calendar connection (P11-01). The verification stack never
-// talks to Google and has no Google client (tools/verify-compose blanks
-// LIFE_OS_GOOGLE_*), so the first test checks the real "not set up" answer
-// and the others stub the browser's Calendar API calls for Google with
+// The Google Calendar connection (P11-01), served by the google-calendar
+// integration since P11-07. The verification stack never talks to Google
+// and has no Google client (tools/verify-compose blanks LIFE_OS_GOOGLE_*), so
+// the first test checks the real "not set up" answer and the others stub the
+// browser's calls to the integration (/api/integrations/google-calendar) with
 // page.route: "Google" sends the browser straight back to the callback with
 // a code, as it does after consent. The Status page's Google part is read on
 // the server and is covered by unit tests (runtime-status-google.test.ts).
@@ -92,108 +93,115 @@ async function stubGoogle(page: Page, baseURL: string) {
       body: JSON.stringify(body),
     });
 
-  await page.route("**/api/calendar/v1/google/**", async (route) => {
-    const request = route.request();
-    const path = new URL(request.url()).pathname.replace("/api/calendar", "");
-    const method = request.method();
-    if (method !== "GET") {
-      state.actors.add(request.headers()["x-life-os-actor"] ?? "");
-    }
-    if (method === "GET" && path === "/v1/google/connection") {
-      return json(route, connection());
-    }
-    if (method === "GET" && path === "/v1/google/calendars") {
-      return json(route, {
-        items: state.status === "not_connected" ? [] : state.calendars,
-      });
-    }
-    if (method === "POST" && path === "/v1/google/connection/authorize") {
-      // Google's consent page, answered at once.
-      return json(route, {
-        url: `${baseURL}/calendar/google/callback?state=fake-state&code=4%2F0fake-code&scope=${encodeURIComponent(SCOPES.join(" "))}`,
-      });
-    }
-    if (method === "POST" && path === "/v1/google/connection") {
-      const body = request.postDataJSON() as { code: string; state: string };
-      state.connectBodies.push(body);
-      if (body.state !== "fake-state") {
+  // The Google Calendar integration, as the browser reaches it.
+  await page.route(
+    "**/api/integrations/google-calendar/v1/**",
+    async (route) => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname.replace(
+        "/api/integrations/google-calendar",
+        "",
+      );
+      const method = request.method();
+      if (method !== "GET") {
+        state.actors.add(request.headers()["x-life-os-actor"] ?? "");
+      }
+      if (method === "GET" && path === "/v1/connection") {
+        return json(route, connection());
+      }
+      if (method === "GET" && path === "/v1/calendars") {
+        return json(route, {
+          items: state.status === "not_connected" ? [] : state.calendars,
+        });
+      }
+      if (method === "POST" && path === "/v1/connection/authorize") {
+        // Google's consent page, answered at once.
+        return json(route, {
+          url: `${baseURL}/calendar/google/callback?state=fake-state&code=4%2F0fake-code&scope=${encodeURIComponent(SCOPES.join(" "))}`,
+        });
+      }
+      if (method === "POST" && path === "/v1/connection") {
+        const body = request.postDataJSON() as { code: string; state: string };
+        state.connectBodies.push(body);
+        if (body.state !== "fake-state") {
+          return json(
+            route,
+            {
+              error: {
+                code: "invalid_state",
+                message: "this Google sign-in expired or was already used",
+              },
+            },
+            400,
+          );
+        }
+        state.status = "connected";
+        state.calendars = [
+          calendar("c1", "Owner", {
+            googleCalendarId: OWNER,
+            accessRole: "owner",
+            primary: true,
+            syncEnabled: true,
+            sync: {
+              state: "synced",
+              consecutiveFailures: 0,
+              syncing: false,
+              lastSyncedAt: "2026-10-10T10:05:00Z",
+              lastCounts: {
+                feedEvents: 3,
+                imported: 3,
+                inserted: 3,
+                updated: 0,
+                removed: 0,
+                restored: 0,
+                unchanged: 0,
+              },
+            },
+          }),
+          calendar("c2", "Family"),
+          calendar("c3", "Holidays in Germany", {
+            accessRole: "reader",
+            color: null,
+          }),
+        ];
+        return json(route, connection());
+      }
+      if (method === "PATCH" && path.startsWith("/v1/calendars/")) {
+        const id = path.split("/").at(-1);
+        const body = request.postDataJSON() as { syncEnabled: boolean };
+        state.patches.push({ id, ...body });
+        state.calendars = state.calendars.map((item) =>
+          item.id === id
+            ? {
+                ...item,
+                syncEnabled: body.syncEnabled,
+                sync: body.syncEnabled
+                  ? { state: "pending", consecutiveFailures: 0, syncing: false }
+                  : OFF,
+              }
+            : item,
+        );
         return json(
           route,
-          {
-            error: {
-              code: "invalid_state",
-              message: "this Google sign-in expired or was already used",
-            },
-          },
-          400,
+          state.calendars.find((item) => item.id === id),
         );
       }
-      state.status = "connected";
-      state.calendars = [
-        calendar("c1", "Owner", {
-          googleCalendarId: OWNER,
-          accessRole: "owner",
-          primary: true,
-          syncEnabled: true,
-          sync: {
-            state: "synced",
-            consecutiveFailures: 0,
-            syncing: false,
-            lastSyncedAt: "2026-10-10T10:05:00Z",
-            lastCounts: {
-              feedEvents: 3,
-              imported: 3,
-              inserted: 3,
-              updated: 0,
-              removed: 0,
-              restored: 0,
-              unchanged: 0,
-            },
-          },
-        }),
-        calendar("c2", "Family"),
-        calendar("c3", "Holidays in Germany", {
-          accessRole: "reader",
-          color: null,
-        }),
-      ];
-      return json(route, connection());
-    }
-    if (method === "PATCH" && path.startsWith("/v1/google/calendars/")) {
-      const id = path.split("/").at(-1);
-      const body = request.postDataJSON() as { syncEnabled: boolean };
-      state.patches.push({ id, ...body });
-      state.calendars = state.calendars.map((item) =>
-        item.id === id
-          ? {
-              ...item,
-              syncEnabled: body.syncEnabled,
-              sync: body.syncEnabled
-                ? { state: "pending", consecutiveFailures: 0, syncing: false }
-                : OFF,
-            }
-          : item,
-      );
-      return json(
-        route,
-        state.calendars.find((item) => item.id === id),
-      );
-    }
-    if (method === "POST" && path === "/v1/google/calendars/refresh") {
-      state.calendars = [
-        ...state.calendars,
-        calendar("c4", "Work", { accessRole: "reader" }),
-      ];
-      return json(route, { items: state.calendars });
-    }
-    if (method === "DELETE" && path === "/v1/google/connection") {
-      state.disconnected++;
-      state.status = "not_connected";
-      state.calendars = [];
-      return route.fulfill({ status: 204 });
-    }
-    return route.fallback();
-  });
+      if (method === "POST" && path === "/v1/calendars/refresh") {
+        state.calendars = [
+          ...state.calendars,
+          calendar("c4", "Work", { accessRole: "reader" }),
+        ];
+        return json(route, { items: state.calendars });
+      }
+      if (method === "DELETE" && path === "/v1/connection") {
+        state.disconnected++;
+        state.status = "not_connected";
+        state.calendars = [];
+        return route.fulfill({ status: 204 });
+      }
+      return route.fallback();
+    },
+  );
   return state;
 }
 

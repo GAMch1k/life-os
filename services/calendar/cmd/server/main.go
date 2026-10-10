@@ -20,7 +20,6 @@ import (
 	"github.com/GAMch1k/life-os/services/calendar/internal/api"
 	"github.com/GAMch1k/life-os/services/calendar/internal/changefeed"
 	serviceconfig "github.com/GAMch1k/life-os/services/calendar/internal/config"
-	"github.com/GAMch1k/life-os/services/calendar/internal/google"
 	"github.com/GAMch1k/life-os/services/calendar/internal/reminders"
 )
 
@@ -61,16 +60,7 @@ func run(ctx context.Context) error {
 	// ICS feeds are refreshed by the calendar-feeds integration service
 	// through the integration API; Calendar downloads nothing itself.
 	emitter := activity.NewEmitter(cfg.ActivityURL, "calendar", logger)
-	googleConfig, err := cfg.Google()
-	switch {
-	case err != nil:
-		logger.Warn(err.Error())
-	case !googleConfig.Configured():
-		logger.Info("Google Calendar is not configured (LIFE_OS_GOOGLE_CLIENT_ID, LIFE_OS_GOOGLE_CLIENT_SECRET, LIFE_OS_GOOGLE_TOKEN_KEY)")
-	}
-	googleService := google.NewService(googleConfig, pool, google.GoogleEndpoints, emitter, logger)
-	syncer := google.NewSyncer(googleService, owner, time.Duration(cfg.GoogleSyncSeconds)*time.Second, logger)
-	handler := api.NewHandler(pool, ownerTimeZone).WithActivity(emitter).WithGoogle(googleService)
+	handler := api.NewHandler(pool, ownerTimeZone).WithActivity(emitter)
 	// Reminder delivery reads the events and occurrences as the API lists
 	// them and sends every effective reminder through Notifications.
 	dispatcher := reminders.New(pool, handler, notify.New(cfg.NotificationsURL, "calendar"), emitter, reminders.Config{
@@ -81,12 +71,13 @@ func run(ctx context.Context) error {
 	api.Register(app, handler.WithReminders(dispatcher))
 	app.OnShutdown(database.ClosePool(pool))
 
-	// The Google syncer, reminder delivery, and the change feed pruning stop
-	// (finishing a sync or run under way) before the pool closes: shutdown
-	// hooks run in reverse order.
+	// Reminder delivery and the change feed pruning stop (finishing a run
+	// under way) before the pool closes: shutdown hooks run in reverse
+	// order. Google Calendar and ICS feeds are integration services
+	// (services/google-calendar, services/calendar-feeds) that reach
+	// Calendar through its integration API.
 	runCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	background(app, "Google Calendar sync", syncer.Run)
 	background(app, "calendar reminder delivery", dispatcher.Run)
 	pruner := changefeed.NewPruner(pool, time.Duration(cfg.ChangeRetentionDays)*24*time.Hour, logger)
 	background(app, "calendar change feed pruning", pruner.Run)

@@ -1,8 +1,8 @@
 # Google Calendar setup
 
-Life OS connects to the owner's one Google account through an OAuth client in the owner's own Google Cloud project. The client credentials and the token key live only in the server's ignored `.env`; Calendar stores the refresh token encrypted in its database. How the connection works is described in [Calendar: Google Calendar connection](../services/calendar.md#google-calendar-connection).
+Life OS connects to the owner's one Google account through an OAuth client in the owner's own Google Cloud project. The client credentials and the token key live only in the server's ignored `.env`; the **google-calendar** integration service stores the refresh token encrypted in its own database (`google_calendar_db`). How it works is described in [Google Calendar integration](../services/google-calendar.md). Until P11-07 Calendar did this itself; upgrading from that release needs the one-time [handoff](#handoff-from-calendar-p11-07).
 
-Once connected, the calendars you tick sync both ways: their events come into Life OS every two minutes, and editing them in Life OS changes them in Google. Events you create in Life OS go to a dedicated "Life OS" calendar that Life OS creates in your Google account (see [Calendar: Google Calendar sync](../services/calendar.md#google-calendar-sync) and [two-way sync](../services/calendar.md#google-calendar-two-way-sync)).
+Once connected, the calendars you tick sync both ways: their events come into Life OS every two minutes, and editing them in Life OS changes them in Google a few seconds later. Events you create in Life OS go to a dedicated "Life OS" calendar that Life OS creates in your Google account.
 
 ## 1. Google Cloud project and API
 
@@ -45,7 +45,7 @@ LIFE_OS_GOOGLE_TOKEN_KEY=<output of: openssl rand -base64 32>
 # LIFE_OS_GOOGLE_REDIRECT_URI=https://lifeos.gamch1k.com/calendar/google/callback
 ```
 
-Generate the token key once with `openssl rand -base64 32` and keep it: it decrypts the stored refresh token, so a new key means reconnecting Google. Then apply the settings with `docker compose up -d calendar` (a normal redeploy also does). Calendar logs at start whether Google is configured, naming any missing or invalid setting but never its value (`docker compose logs calendar | grep -i google`).
+Generate the token key once with `openssl rand -base64 32` and keep it: it decrypts the stored refresh token, so a new key means reconnecting Google. Then apply the settings with `docker compose up -d google-calendar` (a normal redeploy also does). The service logs at start whether Google is configured, naming any missing or invalid setting but never its value (`docker compose logs google-calendar | grep -i google`).
 
 ## 5. Connect
 
@@ -60,8 +60,8 @@ Check: the Status page's **Calendar sources** card has a "Google Calendar" part,
 What you see once a calendar is ticked:
 
 - **Within moments** the calendar's first sync runs: its events from a year back and every future event appear in Life OS. The dialog shows under each ticked calendar "Waiting for its first sync…", then "Synced 10 Oct, 12:05 CEST · 143 events" (reopen the dialog to see it change), and the Event Log shows "Source refreshed: <calendar> — 143 added" by "Google Calendar sync".
-- **In Calendar** the events carry the calendar's name (a "Google · Owner" badge) and say "In Google: Owner · Synced both ways". Events of calendars you may edit can be edited, moved, and deleted here: the change is written to Google first, and the event then shows what Google saved. Changes made in Google show here within two minutes. Calendars you can only read (holidays, shared read-only calendars) stay read-only here with the reason; only their reminders and priority can be changed, in Life OS alone. A recurring Google event repeats like one created in Life OS (with its skipped and changed occurrences) and takes the same "This event / This and following / All events" choices; a rule Life OS cannot hold, such as "every second Tuesday", shows as separate read-only events for the next 400 days. Work location markers (Home, Office) are not imported.
-- **Changed on both sides at once:** if an event changed in Google since Life OS last read it, Life OS does not overwrite it: the save fails with "Changed in Google meanwhile; showing the latest version", the event shows Google's version, and the Event Log records "Changed in Google meanwhile". Make your change again if you still want it.
+- **In Calendar** the events carry the calendar's name (a "Google · Owner" badge) and say "In Google: Owner · Synced both ways". Events of calendars you may edit can be edited, moved, and deleted here: the change is saved in Life OS at once and written to Google within seconds (only what you changed). Changes made in Google show here within two minutes. Calendars you can only read (holidays, shared read-only calendars) stay read-only here with the reason; only their reminders and priority can be changed, in Life OS alone. A recurring Google event repeats like one created in Life OS (with its skipped and changed occurrences) and takes the same "This event / This and following / All events" choices; a rule Life OS cannot hold, such as "every second Tuesday", shows as separate read-only events for the next 400 days. Work location markers (Home, Office) are not imported.
+- **Changed on both sides at once:** if an event changed in Google since Life OS last read it, Life OS does not overwrite it: your edit is not written, the event shows Google's version again within moments, and the Event Log records "Changed in Google meanwhile". Make your change again if you still want it.
 - **Afterwards** every two minutes Life OS asks Google only for what changed. Syncs that change nothing leave no trace; one that changes something adds one Event Log entry ("Source refreshed: Family — 2 added, 1 changed"). Deleted events are cancelled in Life OS and kept as history.
 - **Unticking** a calendar removes its events from Life OS (they stay in Google; Event Log: "Source removed: Family — 42 events removed"). Ticking it again imports them again. **Disconnect** removes the events of every synced calendar.
 - **Status** (Calendar sources card, Google Calendar part) lists what syncs, the last sync, and the export ("up to date in “Life OS”", "3 waiting", "2 failing, retried automatically"); a calendar that fails three syncs in a row turns the card to Needs attention with Google's error.
@@ -82,43 +82,68 @@ After deploying P11-03, with Google connected:
 
 1. Open Calendar → Google Calendar: the "Life OS calendar" section shows the toggle on and, within a few minutes, "Up to date in “Life OS”"; the calendar list shows "Life OS · Created by Life OS · Owner", ticked. On your phone a "Life OS" calendar appears with your upcoming Life OS events.
 2. Create an event in Life OS for tomorrow: its details say "In Google: Life OS · Exported" within moments, and it appears on your phone.
-3. Move that copy on your phone by an hour: within two minutes it moves in Life OS (Event Log: "Event rescheduled … by Google Calendar sync").
+3. Move that copy on your phone by an hour: within two minutes it moves in Life OS (Event Log: "Event rescheduled …" by Google Calendar sync).
 4. Open an event of your own Google calendar in Life OS: no read-only note, "In Google: <calendar> · Synced both ways". Rename it: the phone shows the new name.
-5. Rename the same event on your phone, then (before the next sync) rename it in Life OS: Life OS answers "Changed in Google meanwhile; showing the latest version" and shows the phone's name; the Event Log shows "Changed in Google meanwhile".
+5. Rename the same event on your phone, then (before the next sync) rename it in Life OS: within moments Life OS shows the phone's name again and the Event Log shows "Changed in Google meanwhile".
 6. Open a holiday (a calendar you can only read, if ticked): it stays read-only with the reason; only reminders and priority can be edited.
 7. Skip one occurrence of a repeating Google event ("This event"): it disappears from that day on your phone.
 
 **Resync.** Not normally needed: Life OS lists a calendar in full by itself when Google asks for it (an expired sync token). To force a full listing of one calendar and keep your own reminder changes, run on the server:
 
 ```sh
-docker compose exec calendar wget -qO- http://localhost:8080/v1/google/calendars   # find the calendar's "id"
-docker compose exec calendar wget -qO- --post-data= --header='X-Life-OS-Actor: user' 'http://localhost:8080/v1/google/calendars/<id>/sync?full=true'
+docker compose exec google-calendar wget -qO- http://localhost:8080/v1/calendars   # find the calendar's "id"
+docker compose exec google-calendar wget -qO- --post-data= --header='X-Life-OS-Actor: user' 'http://localhost:8080/v1/calendars/<id>/sync?full=true'
 ```
 
 The answer's `sync` says how it went. Unticking and ticking the calendar in the dialog also imports everything again, but drops your own reminder changes on its events and records the removal and the re-import in the Event Log.
 
-The sync interval is `LIFE_OS_CALENDAR_GOOGLE_SYNC_SECONDS` in `.env` (default 120, at least 30), applied with `docker compose up -d calendar`.
+The sync interval is `LIFE_OS_CALENDAR_GOOGLE_SYNC_SECONDS` in `.env` (default 120, at least 30); how often edits made in Life OS are picked up is `LIFE_OS_GOOGLE_CALENDAR_FEED_SECONDS` (default 15). Apply with `docker compose up -d google-calendar`.
 
 ## Troubleshooting
 
 | Symptom | Cause and fix |
 | --- | --- |
-| Dialog: "not set up on this server" | One of the three settings is missing or the key is not 32 bytes of base64. Read `docker compose logs calendar`, fix `.env`, `docker compose up -d calendar`. |
+| Dialog: "not set up on this server" | One of the three settings is missing or the key is not 32 bytes of base64. Read `docker compose logs google-calendar`, fix `.env`, `docker compose up -d google-calendar`. |
 | Google: `Error 400: redirect_uri_mismatch` | The client's redirect URI differs from `LIFE_OS_GOOGLE_REDIRECT_URI` (scheme, host, path, trailing slash). Make them identical. |
 | Callback: "This sign-in expired or was already used" | More than 10 minutes on Google's page, a reload of the callback, or a second tab. Start again with Connect Google. |
 | Status and dialog: "expired or was revoked" | Google refused the refresh token: Life OS was removed at [myaccount.google.com/connections](https://myaccount.google.com/connections), the app was left in Testing (7 days), or the token went unused for 6 months. **Reconnect Google** in the dialog; calendar choices are kept. |
-| Status: "Google refused the connection" with `invalid_client` | The client secret changed or the client was deleted. Put the current secret in `.env`, restart Calendar, reconnect if needed. |
+| Status: "Google refused the connection" with `invalid_client` | The client secret changed or the client was deleted. Put the current secret in `.env`, restart google-calendar, reconnect if needed. |
 | "cannot be decrypted with LIFE_OS_GOOGLE_TOKEN_KEY" | The key changed. Restore the old key, or reconnect Google with the new one. |
-| Refresh list: "Google could not be reached" | Calendar has no outbound https or Google is down. The connection is unchanged; try later. |
+| Refresh list: "Google could not be reached" | google-calendar has no outbound https or Google is down. The connection is unchanged; try later. |
+| Dialog or Status: "Calendar's changes could not be read" / "Sync failed: Calendar could not be reached" | The integration cannot reach Calendar. Nothing is lost: Life OS events and edits wait and go to Google once Calendar answers; check `docker compose ps calendar`. |
+| Dialog: "N edits made here could not be written to Google yet" | Google or the network failed; the edits are kept and retried automatically, and the calendar does not sync from Google until they are written. |
+| Sync failed: "Calendar still syncs this calendar itself; run the Google Calendar handoff" | Calendar's migration 000016 has not run (the handover). Run the deploy steps in [Handoff from Calendar](#handoff-from-calendar-p11-07). |
 | Dialog: "Sync failed: Google is unavailable …" | Google or the network failed. Nothing to do: the events from the last good sync stay, and the calendar is retried after 2, 4, 8 … up to 60 minutes. Status warns after three failures in a row. |
 | Dialog: "Sync failed: Google no longer has this calendar …" | The calendar was deleted or unshared in Google. **Refresh list**: a calendar Google no longer lists is dropped with its events. |
 | A Google event is missing in Life OS | Is its calendar ticked? Events that ended more than a year before the calendar's first sync, and work location markers, are not imported. A sync failure shows in the dialog and on Status. |
 | Life OS refuses to change or delete a Google event | The event's details say why: a calendar you can only read, or one occurrence of a rule Life OS cannot hold ("every second Tuesday"); change it in Google. Reminders and priority can be changed. An AI change of such an event waits in Human Review. |
-| Save fails: "Changed in Google meanwhile; showing the latest version" | Someone (or your phone) changed the event in Google since Life OS read it. The event now shows Google's version; make your change again. |
-| Save fails: "Google could not be reached" or "Google access expired" | Nothing was changed, in Google or in Life OS. Try again later, or reconnect Google. Life OS events are not affected: their changes wait in the export and go out later. |
+| Your edit of a Google event came undone, Event Log "Changed in Google meanwhile" | Someone (or your phone) changed the event in Google before your edit reached it. The event shows Google's version; make your change again. |
+| An edit of a Google event has not reached Google | It waits while Google cannot be reached or the access expired (the Google dialog says so); it goes out on its own afterwards, or after reconnecting. |
 | Event details: "Export failed: …" | Google or the network failed; the change is kept and retried automatically. Status shows the count. A lasting "Life OS could not create its calendar in Google: …" usually means the "manage the calendars Life OS creates" permission was unticked: reconnect Google and allow it. |
 | A Life OS event is missing on the phone | Is the export on (Google dialog, Life OS calendar)? Is the "Life OS" calendar shown on the phone? Past events are not exported. |
 
-**Rotating the token key:** Disconnect in the dialog, change `LIFE_OS_GOOGLE_TOKEN_KEY`, `docker compose up -d calendar`, Connect again.
+**Rotating the token key:** Disconnect in the dialog, change `LIFE_OS_GOOGLE_TOKEN_KEY`, `docker compose up -d google-calendar`, Connect again.
 
 **Removing Google:** Disconnect in the dialog (Life OS revokes its access at Google and deletes the stored token and choices), then remove the `LIFE_OS_GOOGLE_*` lines if you like. Disconnecting after the settings are gone only forgets the connection; remove Life OS at [myaccount.google.com/connections](https://myaccount.google.com/connections) as well.
+
+## Handoff from Calendar (P11-07)
+
+Until P11-07 Calendar kept the Google connection in `calendar_db`. The release that brings the google-calendar service moves it over once, so **you do not reconnect Google**, no event is duplicated in Life OS or created again in Google, and your own reminders and priorities stay. Calendar keeps its legacy `google_*` tables, unread, until P11-09.
+
+Prerequisites: `.env` has `LIFE_OS_GOOGLE_CALENDAR_DB_PASSWORD` (new) and still the same `LIFE_OS_GOOGLE_CLIENT_ID`, `LIFE_OS_GOOGLE_CLIENT_SECRET`, and **the same `LIFE_OS_GOOGLE_TOKEN_KEY`** (the handed-over token is sealed with it). Then, in this order:
+
+1. **Stop Calendar**, so nothing changes while the connection moves: `docker compose stop calendar` (the gateway answers Calendar requests with an error meanwhile).
+2. **Back up** `calendar_db` (see [deployment](deployment.md)).
+3. **Provision and migrate:** recreate PostgreSQL if needed and `make db-provision` once (it adds `google_calendar_db`), then `docker compose up --no-deps calendar-migrate google-calendar-migrate` (Calendar's 000016 hands its Google sources over to the integration: kind `external`, out of process; the integration gets its tables).
+4. **Hand off:**
+
+   ```sh
+   docker compose build google-calendar-handoff
+   docker compose --profile handoff run --rm google-calendar-handoff
+   ```
+
+   The `google-calendar-handoff` service is the integration's image running `handoff` with `DATABASE_URL` (google_calendar_db) and `HANDOFF_CALENDAR_DATABASE_URL` (calendar_db, as `calendar_user`) from `.env`; it waits for `google-calendar-migrate` and does not start Calendar. (By hand: `docker compose run --rm --no-deps -e HANDOFF_CALENDAR_DATABASE_URL=postgres://calendar_user:…@postgres:5432/calendar_db?sslmode=disable google-calendar handoff`.) It reads `calendar_db` in a read-only transaction and prints counts only, for example `connections 1 found, 1 copied`, `calendars`, `google events`, `exports`, `event uids`, and `sources … linked here`; never a token. Running it again copies nothing twice. It refuses to run before 000016 or when `google_calendar_db` already holds another connection.
+5. **Start** Calendar, the integration, and the rest: `docker compose up --detach --build calendar google-calendar dashboard gateway`.
+6. **Verify:** the Google dialog says "Connected as …" with the same calendars ticked; within two minutes each shows "Synced …" (Event Log: "Source refreshed: Owner …", by Google Calendar sync); Status shows the Google part healthy and "Google Calendar" ready; an event of your calendar keeps its reminders; creating a Life OS event puts it in the "Life OS" calendar on your phone within seconds; nothing was duplicated on the phone. `docker compose logs google-calendar` shows no "not configured" line.
+
+If the handoff fails: Calendar is stopped and unchanged apart from 000016; fix the cause (the message says which) and run it again. To go back, start the previous release's Calendar after `migrate down 1` on calendar_db (000016's down gives the sources back to the in-process sync).

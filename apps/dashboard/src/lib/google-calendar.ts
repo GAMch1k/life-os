@@ -1,15 +1,21 @@
-import type { components } from "@/lib/api/generated/calendar";
+import type { components } from "@/lib/api/generated/google-calendar";
 import { dateTimeFormat } from "@/lib/time-zone";
 
-// The Google Calendar connection as the Dashboard shows it: Calendar owns the
-// OAuth flow, the tokens, and the two-way sync; the Dashboard opens Google's
-// consent page, carries the answer back from /calendar/google/callback,
-// edits which calendars sync and whether Life OS events are exported to the
-// Life OS calendar, and shows how both are going. Tokens never reach the
-// browser.
+// The Google Calendar connection as the Dashboard shows it: the
+// google-calendar integration service owns the OAuth flow, the tokens, and
+// the two-way sync with Calendar; the Dashboard opens Google's consent page,
+// carries the answer back from /calendar/google/callback (the redirect URI
+// registered at Google, unchanged) to the integration, edits which
+// calendars sync and whether Life OS events are exported to the Life OS
+// calendar, and shows how both are going. Tokens never reach the browser.
 
 export type GoogleConnection = components["schemas"]["GoogleConnection"];
 export type GoogleCalendar = components["schemas"]["GoogleCalendar"];
+export type EventExport = components["schemas"]["EventExport"];
+
+/** What the Google dialog says when the integration cannot be reached. */
+export const GOOGLE_UNAVAILABLE =
+  "Google Calendar is unavailable right now. Try again.";
 
 /** The callback route Google returns to (LIFE_OS_GOOGLE_REDIRECT_URI). */
 export const GOOGLE_CALLBACK_PATH = "/calendar/google/callback";
@@ -75,7 +81,7 @@ export function syncSummary(calendars: GoogleCalendar[]) {
 
 /** What the dialog says about syncing chosen calendars. */
 export const SYNC_NOTE =
-  "Chosen calendars sync both ways every few minutes: editing their events here changes them in Google (calendars you can only read stay read-only here, except reminders and priority). Unticking one removes its events from Life OS (they stay in Google).";
+  "Chosen calendars sync both ways every few minutes: editing their events here changes them in Google within seconds (calendars you can only read stay read-only here, except reminders and priority; if an event changed in Google meanwhile, Google's version is kept). Unticking one removes its events from Life OS (they stay in Google).";
 
 /** What the dialog says about exporting Life OS events. */
 export const EXPORT_NOTE =
@@ -125,6 +131,53 @@ export function exportDetail(
     ? ` · last export ${syncTime(lastExportedAt, timeZone)}`
     : "";
   return { text: `Up to date in “${calendar.summary}”${last}`, failing: false };
+}
+
+/**
+ * How writing your edits of Google events to Google goes, for the line
+ * under the connection, such as "1 edit made here is waiting to reach
+ * Google…"; undefined when nothing waits. failing marks edits whose last
+ * attempt failed (retried automatically), or Calendar's changes that could
+ * not be read.
+ */
+export function editsDetail(
+  connection: GoogleConnection,
+): { text: string; failing: boolean } | undefined {
+  const changes = connection.changes;
+  if (!changes) return undefined;
+  if (changesUnreadable(connection)) {
+    return {
+      text: `Life OS events and edits made here do not reach Google right now: ${changes.lastError}`,
+      failing: true,
+    };
+  }
+  if (changes.failedEdits > 0) {
+    return {
+      text: `${changes.failedEdits} edit${changes.failedEdits === 1 ? "" : "s"} made here could not be written to Google yet${changes.lastEditError ? `: ${changes.lastEditError}` : ""}. Retrying automatically.`,
+      failing: true,
+    };
+  }
+  if (changes.pendingEdits > 0) {
+    return {
+      text: `${changes.pendingEdits} edit${changes.pendingEdits === 1 ? "" : "s"} made here ${changes.pendingEdits === 1 ? "is" : "are"} on the way to Google…`,
+      failing: false,
+    };
+  }
+  return undefined;
+}
+
+/**
+ * Whether the integration's last read of Calendar's changes failed after
+ * its last good one (such as Calendar unreachable).
+ */
+export function changesUnreadable(connection: GoogleConnection) {
+  const changes = connection.changes;
+  if (!changes?.lastError || !changes.lastErrorAt) return false;
+  return (
+    !changes.lastReadAt ||
+    new Date(changes.lastErrorAt).getTime() >
+      new Date(changes.lastReadAt).getTime()
+  );
 }
 
 const SYNC_TIME: Intl.DateTimeFormatOptions = {
@@ -229,7 +282,10 @@ export function callbackStep(query: {
   return { kind: "exchange", code, state };
 }
 
-/** Why Calendar refused to complete the connection, in plain words. */
+/**
+ * Why the Google Calendar integration refused to complete the connection,
+ * in plain words.
+ */
 export function connectFailure(
   status: number,
   body: unknown,
@@ -276,7 +332,7 @@ export function connectFailure(
   }
   if (status === 503 || status >= 500) {
     return {
-      message: detail ?? "Calendar is unavailable right now. Try again.",
+      message: detail ?? GOOGLE_UNAVAILABLE,
       retry: true,
     };
   }

@@ -1,0 +1,9 @@
+DROP TABLE google_source_removals;
+DROP TABLE google_pushes;
+DROP TABLE google_exports;
+DROP TABLE google_rekeys;
+DROP TABLE google_sent_events;
+DROP TABLE google_events;
+DROP TABLE google_oauth_states;
+DROP TABLE google_calendars;
+DROP TABLE google_connections;

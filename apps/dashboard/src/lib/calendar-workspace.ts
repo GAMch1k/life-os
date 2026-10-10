@@ -2,6 +2,7 @@ import type { EventInput } from "@fullcalendar/core";
 
 import { calendarClient } from "@/lib/api/calendar-client";
 import type { components } from "@/lib/api/generated/calendar";
+import type { EventExport } from "@/lib/google-calendar";
 import {
   NO_REPEAT,
   readRepeat,
@@ -188,34 +189,46 @@ export function sourceBadge(event: CalendarEvent) {
 }
 
 /**
- * Where the event is in Google and how its sync stands, for its details:
- * "In Google: Life OS" with "Exported", "Waiting to be exported", or the
- * export's failure ("In Google: Owner", "Synced both ways" for a Google
- * event); undefined when it is not in Google.
+ * Where the event is in Google and how its sync stands, for its details.
+ * A Life OS event exported to the Life OS calendar (exported, from the
+ * Google Calendar integration's /v1/exports): "In Google: Life OS" with
+ * "Exported", "Waiting to be exported", or the export's failure. An event of
+ * a Google calendar the integration syncs: "In Google: Owner", "Synced both
+ * ways" (or "Synced from Google" when it is read-only here). Undefined when
+ * the event is not in Google.
  */
 export function googleSyncLabel(
   event: CalendarEvent,
+  exported?: EventExport,
 ): { place: string; state: string; failing: boolean } | undefined {
-  const link = event.google;
-  if (!link) return undefined;
-  const place = `In Google: ${link.calendarName}`;
-  switch (link.state) {
+  if (
+    event.source.kind === "external" &&
+    event.source.integration === GOOGLE_INTEGRATION
+  ) {
+    return {
+      place: `In Google: ${sourceName(event) ?? sourceProvider(event) ?? "Google Calendar"}`,
+      state: event.editable ? "Synced both ways" : "Synced from Google",
+      failing: false,
+    };
+  }
+  if (event.source.kind !== "manual" || !exported) return undefined;
+  const place = `In Google: ${exported.calendarName}`;
+  switch (exported.state) {
     case "pending":
       return { place, state: "Waiting to be exported", failing: false };
     case "failed":
       return {
         place,
-        state: `Export failed${link.error ? `: ${link.error}` : ""}. Retrying automatically.`,
+        state: `Export failed${exported.error ? `: ${exported.error}` : ""}. Retrying automatically.`,
         failing: true,
       };
     default:
-      return {
-        place,
-        state: link.lifeOs ? "Exported" : "Synced both ways",
-        failing: false,
-      };
+      return { place, state: "Exported", failing: false };
   }
 }
+
+/** The integration that syncs Google calendars (source.integration). */
+export const GOOGLE_INTEGRATION = "google-calendar";
 
 /** The code of a Calendar error response, such as "google_conflict". */
 export function apiErrorCode(error: unknown): string | undefined {

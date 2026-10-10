@@ -17,7 +17,6 @@ import (
 	"github.com/GAMch1k/life-os/pkg/httpserver"
 	"github.com/GAMch1k/life-os/services/calendar/internal/api/generated"
 	"github.com/GAMch1k/life-os/services/calendar/internal/config"
-	"github.com/GAMch1k/life-os/services/calendar/internal/google"
 	store "github.com/GAMch1k/life-os/services/calendar/internal/repository/generated"
 )
 
@@ -43,9 +42,6 @@ type Handler struct {
 	now           func() time.Time
 	// activity records event changes (see WithActivity); nil records none.
 	activity *activity.Emitter
-	// google is the Google Calendar connection (see WithGoogle); nil reads
-	// as not configured.
-	google *google.Service
 	// reminders reports reminder delivery's health (see WithReminders).
 	reminders ReminderStatus
 }
@@ -272,7 +268,6 @@ func (h *Handler) CreateEvent(c fiber.Ctx) error {
 		return httpserver.NewError(fiber.StatusConflict, "conflict", "idempotency key was already used with a different payload")
 	}
 	h.recordEvent(c, eventCreated, item, nil, nil)
-	h.google.QueueExport(c.Context(), item.ID)
 	return h.respond(c, fiber.StatusCreated, item)
 }
 
@@ -309,32 +304,13 @@ func (h *Handler) respond(c fiber.Ctx, status int, item store.Event) error {
 
 // UpdateEvent merges the body into the stored event, validates the result,
 // and writes it (All events for a recurring event), holding the event so
-// its occurrence exceptions change with it. A synced Google event is
-// written to Google first (see updateGoogleEvent); a Life OS event's
-// change is queued for export.
+// its occurrence exceptions change with it. Integrations follow the change
+// through the change feed (a Life OS event's export, an edit of an
+// integration's event written to its provider).
 func (h *Handler) UpdateEvent(c fiber.Ctx, id types.UUID) error {
 	patch, err := decodePatch(c.Body())
 	if err != nil {
 		return badRequest(err.Error())
-	}
-	if h.google != nil {
-		current, err := h.queries.GetEvent(c.Context(), pgUUID(id))
-		if err != nil {
-			return databaseError(err)
-		}
-		inGoogle, err := h.syncedByGoogle(c.Context(), current)
-		if err != nil {
-			return internal(err)
-		}
-		if inGoogle {
-			target, write, err := h.googleTarget(c.Context(), current, &patch)
-			if err != nil {
-				return err
-			}
-			if write {
-				return h.updateGoogleEvent(c, current, target, patch, fiber.StatusOK)
-			}
-		}
 	}
 	var current, item store.Event
 	err = h.inTx(c, func(queries *store.Queries) error {
@@ -351,9 +327,6 @@ func (h *Handler) UpdateEvent(c fiber.Ctx, id types.UUID) error {
 	// An update that changes nothing records nothing.
 	if eventType, changes := classifyUpdate(current, item); eventType != "" {
 		h.recordEvent(c, eventType, item, &current, changes)
-		if item.SourceKind == string(generated.EventSourceKindManual) {
-			h.google.QueueExport(c.Context(), item.ID)
-		}
 	}
 	return h.respond(c, fiber.StatusOK, item)
 }
@@ -412,25 +385,14 @@ func priorityDefault(ctx context.Context, queries *store.Queries, row store.Even
 	return generated.EventPriority(source.DefaultPriority), nil
 }
 
-// DeleteEvent deletes a Life OS event (and queues deleting its copy in
-// Google) or an editable synced Google event (in Google first). A feed
-// event's source owns it (and cancels it when it leaves the feed), so it
-// cannot be deleted here.
+// DeleteEvent deletes a Life OS event, or an event of an integration's
+// source that accepts changes (the integration deletes it at its provider
+// through the change feed). A feed event's source owns it (and cancels it
+// when it leaves the feed), so it cannot be deleted here.
 func (h *Handler) DeleteEvent(c fiber.Ctx, id types.UUID) error {
 	current, err := h.queries.GetEvent(c.Context(), pgUUID(id))
 	if err != nil {
 		return databaseError(err)
-	}
-	inGoogle, err := h.syncedByGoogle(c.Context(), current)
-	if err != nil {
-		return internal(err)
-	}
-	if inGoogle {
-		target, _, err := h.googleTarget(c.Context(), current, nil)
-		if err != nil {
-			return err
-		}
-		return h.deleteGoogleEvent(c, current, target)
 	}
 	changeable, err := changeableHere(c.Context(), h.queries, current)
 	if err != nil {
@@ -453,9 +415,6 @@ func (h *Handler) DeleteEvent(c fiber.Ctx, id types.UUID) error {
 		return err
 	}
 	h.recordEvent(c, eventDeleted, current, nil, nil)
-	if current.SourceKind == string(generated.EventSourceKindManual) {
-		h.google.QueueDeletion(c.Context(), current.ID)
-	}
 	return c.SendStatus(fiber.StatusNoContent)
 }
 

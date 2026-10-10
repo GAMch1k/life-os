@@ -2,7 +2,7 @@
 
 Life OS is a local-first personal operating system. Independent domain services sit behind one dashboard, a constrained AI/MCP interaction layer, and an asynchronous local voice-transcription path.
 
-This repository is the single monorepo for the project. It contains the implemented Finance, Tasks, Inbox, Calendar, Voice, MCP, dashboard, and private Whisper worker components through Phase 6, and integration services such as Banking, which syncs the owner's bank accounts into Finance through a licensed PSD2 provider (read-only).
+This repository is the single monorepo for the project. It contains the implemented Finance, Tasks, Inbox, Calendar, Voice, MCP, dashboard, and private Whisper worker components through Phase 6, and integration services such as Banking, which syncs the owner's bank accounts into Finance through a licensed PSD2 provider (read-only), calendar-feeds (ICS feeds into Calendar), and google-calendar (the owner's Google calendars, synced both ways with Calendar).
 
 ## Technical documentation
 

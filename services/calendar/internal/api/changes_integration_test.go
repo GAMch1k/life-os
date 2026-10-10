@@ -2,21 +2,16 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/url"
 	"strings"
 	"testing"
 	"time"
 
-	googleuuid "github.com/google/uuid"
 	"github.com/oapi-codegen/runtime/types"
 
-	"github.com/GAMch1k/life-os/pkg/activity"
 	"github.com/GAMch1k/life-os/services/calendar/internal/api/generated"
 	"github.com/GAMch1k/life-os/services/calendar/internal/changefeed"
-	"github.com/GAMch1k/life-os/services/calendar/internal/google"
-	store "github.com/GAMch1k/life-os/services/calendar/internal/repository/generated"
 )
 
 // feed reads one page of the change feed as actor after cursor ("" starts
@@ -331,45 +326,4 @@ func stringOf(value any) *string {
 		return nil
 	}
 	return &text
-}
-
-// The in-process Google sync applies changes made to the copies of Life OS
-// events in Google: those changes are the sync's in the feed.
-func TestChangeFeedRecordsTheGoogleReverseSync(t *testing.T) {
-	c := newSyncingClient(t)
-	c.syncDue()
-	// The sources the in-process syncer adds have their identity too.
-	source, err := c.queries.GetIntegrationSource(context.Background(), store.GetIntegrationSourceParams{Integration: "google-calendar", ExternalID: ownerCalendar.ID})
-	if err != nil || !source.InProcess || deref(source.Provider) != "Google" || source.ReadOnly || source.Kind != "google" {
-		t.Fatalf("synced calendar's source = %+v, %v", source, err)
-	}
-	haircut := c.createEvent(map[string]any{"title": "Haircut", "allDay": false, "startAt": "2026-10-18T11:00:00+02:00", "endAt": "2026-10-18T12:00:00+02:00"})
-	c.exportDue()
-	read := func(cursor string) changeFeedPage {
-		query := ""
-		if cursor != "" {
-			query = "?cursor=" + url.QueryEscape(cursor)
-		}
-		status, raw := c.do(http.MethodGet, "/v1/integrations/changes"+query, nil, activity.ActorHeader, "dev:test")
-		var page changeFeedPage
-		if status != http.StatusOK || json.Unmarshal(raw, &page) != nil {
-			t.Fatalf("feed: %d %s", status, raw)
-		}
-		return page
-	}
-	snapshot := read("")
-	if len(snapshot.Items) != 1 || snapshot.HasMore {
-		t.Fatalf("snapshot = %+v", snapshot)
-	}
-	lifeOS := c.lifeOSCalendar()
-	c.fake.ChangeEvent(lifeOS, google.ExportID(googleuuid.UUID(haircut.Id)), func(event *google.Event) {
-		event.Start, event.End = gtimed("2026-10-19T11:00:00+02:00"), gtimed("2026-10-19T12:00:00+02:00")
-	})
-	c.clock.Advance(2 * time.Minute)
-	c.syncDue()
-	changes := read(snapshot.NextCursor)
-	if len(changes.Items) != 1 || changes.Items[0].EventID != haircut.Id || strings.Join(changes.Items[0].Actors, ",") != "system:google-calendar" ||
-		!changes.Items[0].Event.StartAt.Equal(time.Date(2026, 10, 19, 9, 0, 0, 0, time.UTC)) {
-		t.Fatalf("reverse sync entry = %+v", changes.Items)
-	}
 }

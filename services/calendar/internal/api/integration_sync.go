@@ -14,7 +14,6 @@ import (
 
 	"github.com/GAMch1k/life-os/pkg/httpserver"
 	"github.com/GAMch1k/life-os/services/calendar/internal/api/generated"
-	"github.com/GAMch1k/life-os/services/calendar/internal/ics"
 	"github.com/GAMch1k/life-os/services/calendar/internal/recurrence"
 	store "github.com/GAMch1k/life-os/services/calendar/internal/repository/generated"
 	"github.com/GAMch1k/life-os/services/calendar/internal/sources"
@@ -258,7 +257,7 @@ func decodeSourceEvent(index int, raw json.RawMessage, owner *time.Location) (so
 		return sources.Item{}, "", fail(err.Error())
 	}
 	item := sources.Item{
-		Item: ics.Item{
+		Event: sources.Event{
 			ExternalUID: uid, Title: fields.Title, Description: description, Location: location, AllDay: fields.AllDay,
 			TimeZone: fields.TimeZone, Cancelled: status == generated.Cancelled,
 		},
