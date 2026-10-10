@@ -1,3 +1,7 @@
+// Package ics is a copy of the iCalendar parsing of Calendar's feed adapter
+// (services/calendar/internal/ics, as of P11-07): the Google mapping uses it
+// to expand recurring events whose rule Calendar's model cannot hold into
+// their occurrences, and to read RRULEs.
 package ics
 
 import (

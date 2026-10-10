@@ -186,3 +186,19 @@ CREATE TABLE google_pushes (
 );
 
 CREATE INDEX google_pushes_calendar_idx ON google_pushes (calendar_id);
+
+-- Sources to remove from Calendar (with their events): a calendar switched
+-- off, unlisted by Google, or of a connection that was disconnected or
+-- replaced. Kept until Calendar confirms, so the owner's choice never
+-- waits for Calendar to be reachable; registering the source again
+-- removes it first. name, events, and reason describe it for Activity.
+CREATE TABLE google_source_removals (
+    external_id TEXT PRIMARY KEY CHECK (external_id <> ''),
+    name TEXT NOT NULL,
+    events INTEGER NOT NULL DEFAULT 0 CHECK (events >= 0),
+    reason TEXT NOT NULL CHECK (reason IN ('sync_disabled', 'disconnected', 'calendar_unlisted', 'account_replaced')),
+    requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    last_error TEXT,
+    next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

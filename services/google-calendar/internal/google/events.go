@@ -162,8 +162,8 @@ func hasStatus(err error, status int) bool {
 	return errors.As(err, &apiErr) && apiErr.Status == status
 }
 
-// isUnauthorized reports whether Google refused the access token (401).
-func isUnauthorized(err error) bool {
+// IsUnauthorized reports whether Google refused the access token (401).
+func IsUnauthorized(err error) bool {
 	var apiErr *APIError
 	return errors.As(err, &apiErr) && apiErr.Status == http.StatusUnauthorized
 }

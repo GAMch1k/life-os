@@ -17,12 +17,13 @@ import (
 	"github.com/GAMch1k/life-os/services/google-calendar/internal/sources"
 )
 
-// Exporting events created in Life OS (P11-03). Each change of a Life OS
-// event is stored locally first and queued in google_exports; the export
-// worker writes it to the Life OS calendar in Google, retrying with backoff
-// while Google is unreachable, and records Google's etag so the inbound
-// sync of that calendar recognizes its own writes. ICS events are never
-// exported, and Google events live in their own calendars.
+// Exporting events created in Life OS (P11-03). Calendar's change feed
+// brings every change of a Life OS event (see feed.go), which is queued in
+// google_exports with the event as the feed gave it; the export worker
+// writes it to the Life OS calendar in Google, retrying with backoff while
+// Google is unreachable, and records Google's etag so the inbound sync of
+// that calendar recognizes its own writes. Feed events are never exported,
+// and Google events live in their own calendars.
 
 // LifeOSCalendarName is the name of the calendar Life OS creates.
 const LifeOSCalendarName = "Life OS"
@@ -44,47 +45,10 @@ const (
 	EventExportFailed    = "calendar.google.export_failed"
 )
 
-// QueueExport queues the export of a Life OS event's latest state after it
-// was created or changed in Life OS. Nothing is queued while Google is not
-// connected or export is off. A failure is logged: the event is stored.
-func (s *Service) QueueExport(ctx context.Context, eventID pgtype.UUID) {
-	if !s.Configured() {
-		return
-	}
-	connection, found, err := s.Connection(ctx)
-	if err != nil || !found || !connection.ExportEnabled {
-		if err != nil {
-			s.logger.Warn("export of a Life OS event not queued", "event", googleuuid.UUID(eventID.Bytes), "error", err)
-		}
-		return
-	}
-	if err := s.queries.EnqueueGoogleExport(ctx, store.EnqueueGoogleExportParams{EventID: eventID, ConnectionID: connection.ID, Now: timestamptz(s.now())}); err != nil {
-		s.logger.Warn("export of a Life OS event not queued", "event", googleuuid.UUID(eventID.Bytes), "error", err)
-		return
-	}
-	s.syncer.Wake()
-}
-
-// QueueDeletion queues deleting the copy of a Life OS event deleted in Life
-// OS; an event never exported is only forgotten.
-func (s *Service) QueueDeletion(ctx context.Context, eventID pgtype.UUID) {
-	if !s.Configured() {
-		return
-	}
-	forgotten, err := s.queries.DeleteUnexportedGoogleExport(ctx, eventID)
-	if err == nil && forgotten == 0 {
-		err = s.queries.MarkGoogleExportDeleted(ctx, store.MarkGoogleExportDeletedParams{EventID: eventID, Now: timestamptz(s.now())})
-	}
-	if err != nil {
-		s.logger.Warn("deletion of an exported event not queued", "event", googleuuid.UUID(eventID.Bytes), "error", err)
-		return
-	}
-	s.syncer.Wake()
-}
-
 // SetExportEnabled switches exporting Life OS events on or off. Switched
-// on, every upcoming Life OS event is queued; switched off, nothing more is
-// written to the Life OS calendar (what is there stays).
+// on, Calendar's change feed is read again from a snapshot, which queues
+// every upcoming Life OS event (and every later change); switched off,
+// nothing more is written to the Life OS calendar (what is there stays).
 func (s *Service) SetExportEnabled(ctx context.Context, enabled bool) (store.GoogleConnection, error) {
 	connection, found, err := s.Connection(ctx)
 	if err != nil {
@@ -93,38 +57,26 @@ func (s *Service) SetExportEnabled(ctx context.Context, enabled bool) (store.Goo
 	if !found {
 		return store.GoogleConnection{}, ErrNotConnected
 	}
-	row, err := s.queries.SetGoogleExportEnabled(ctx, store.SetGoogleExportEnabledParams{ExportEnabled: enabled, ID: connection.ID})
+	var row store.GoogleConnection
+	err = s.inTx(ctx, func(q *store.Queries) error {
+		if row, err = q.SetGoogleExportEnabled(ctx, store.SetGoogleExportEnabledParams{ExportEnabled: enabled, ID: connection.ID}); err != nil {
+			return err
+		}
+		if !enabled || connection.ExportEnabled {
+			return nil
+		}
+		if err := q.MarkGoogleExportsDue(ctx, store.MarkGoogleExportsDueParams{ConnectionID: connection.ID, Now: timestamptz(s.now())}); err != nil {
+			return err
+		}
+		return q.RestartFeed(ctx, connection.ID)
+	})
 	if err != nil {
 		return store.GoogleConnection{}, err
 	}
 	if enabled && !connection.ExportEnabled {
-		s.queueUpcoming(ctx, row)
+		s.syncer.Wake()
 	}
 	return row, nil
-}
-
-// queueUpcoming queues every upcoming Life OS event and makes waiting
-// exports due (after connecting, or switching export on).
-func (s *Service) queueUpcoming(ctx context.Context, connection store.GoogleConnection) {
-	if !connection.ExportEnabled {
-		return
-	}
-	now := timestamptz(s.now())
-	queued, err := s.queries.EnqueueUpcomingGoogleExports(ctx, store.EnqueueUpcomingGoogleExportsParams{ConnectionID: connection.ID, Now: now})
-	if err != nil {
-		s.logger.Warn("upcoming Life OS events not queued for export", "error", err)
-		return
-	}
-	if err := s.queries.MarkGoogleExportBackfilled(ctx, store.MarkGoogleExportBackfilledParams{ID: connection.ID, Now: now}); err != nil {
-		s.logger.Warn("export backfill not recorded", "error", err)
-	}
-	if queued > 0 {
-		s.logger.Info("upcoming Life OS events queued for export to Google", "events", queued)
-	}
-	if err := s.queries.MarkGoogleExportsDue(ctx, store.MarkGoogleExportsDueParams{ConnectionID: connection.ID, Now: now}); err != nil {
-		s.logger.Warn("waiting exports not made due", "error", err)
-	}
-	s.syncer.Wake()
 }
 
 // ExportSummary is how exporting goes, for the connection's status.
@@ -164,12 +116,6 @@ func (s *Syncer) ExportDue(ctx context.Context) {
 			s.logger.Warn("Life OS calendar not created in Google", "error", err)
 		}
 		return
-	}
-	if !connection.ExportBackfilledAt.Valid {
-		// Once (such as after the release that brought exporting, for a
-		// connection made before it): the Life OS events still ahead,
-		// series included, go to Google, not only those created later.
-		s.service.queueUpcoming(ctx, connection)
 	}
 	for range maxExportsPerRun {
 		if ctx.Err() != nil {
@@ -285,13 +231,12 @@ func (s *Syncer) recreateLifeOSCalendar(ctx context.Context, gone string) error 
 	}
 	now := s.now()
 	note := fmt.Sprintf("The Life OS calendar was deleted in Google; Life OS created it again on %s and exports your events to it again.", now.In(s.owner).Format("2 Jan 2006, 15:04 MST"))
-	var removed []removedSource
 	err = s.service.inTx(ctx, func(q *store.Queries) error {
 		if _, err := q.SetLifeOSCalendar(ctx, store.SetLifeOSCalendarParams{LifeosCalendarID: &entry.ID, CreatedAt: timestamptz(now), Note: &note, ID: connection.ID}); err != nil {
 			return err
 		}
 		if old, err := q.GetGoogleCalendarByGoogleID(ctx, store.GetGoogleCalendarByGoogleIDParams{ConnectionID: connection.ID, GoogleCalendarID: gone}); err == nil {
-			if removed, err = linkedSources(ctx, q, connection.ID, []pgtype.UUID{old.ID}); err != nil {
+			if err := queueRemovals(ctx, q, connection.ID, []pgtype.UUID{old.ID}, removedUnlisted, now); err != nil {
 				return err
 			}
 			if err := q.DeleteGoogleCalendar(ctx, old.ID); err != nil {
@@ -308,7 +253,7 @@ func (s *Syncer) recreateLifeOSCalendar(ctx context.Context, gone string) error 
 	if err != nil {
 		return err
 	}
-	s.service.recordSourcesRemoved(ctx, removed, removedUnlisted)
+	s.service.RemoveSources(ctx)
 	s.service.recordCalendarCreated(ctx, connection, entry, note, now)
 	s.Wake()
 	return nil
@@ -335,21 +280,27 @@ func (s *Syncer) export(ctx context.Context, claimed store.GoogleExport) error {
 	if err != nil {
 		return err
 	}
-	event, err := s.service.queries.GetEvent(ctx, claimed.EventID)
-	missing := errors.Is(err, pgx.ErrNoRows)
-	if err != nil && !missing {
-		return err
-	}
-	if missing || claimed.Deleted || event.SourceKind != "manual" || event.Status != "active" {
-		return s.removeCopy(ctx, claimed, missing || claimed.Deleted || event.SourceKind != "manual")
-	}
-	exported := claimed.GoogleEventID != nil && claimed.GoogleCalendarID != nil && *claimed.GoogleCalendarID == calendarID
-	fields, err := s.service.lifeOSFields(ctx, event)
+	event, known, err := decodePayload(claimed.Payload)
 	if err != nil {
 		return err
 	}
-	body := ExportBody(googleuuid.UUID(event.ID.Bytes), fields.Fields, fields.effective, s.owner, fields.exdates)
-	copyID := ExportID(googleuuid.UUID(event.ID.Bytes))
+	if !claimed.Deleted && !known {
+		// Not read from Calendar's change feed yet (an export handed over
+		// from Calendar): it is queued again with the event.
+		return s.park(ctx, claimed, false)
+	}
+	manual := known && event.Event.Source.Kind == "manual"
+	if claimed.Deleted || !manual || event.Event.Status != "active" {
+		return s.removeCopy(ctx, claimed, claimed.Deleted || !manual)
+	}
+	exported := claimed.GoogleEventID != nil && claimed.GoogleCalendarID != nil && *claimed.GoogleCalendarID == calendarID
+	fields, err := lifeOSFieldsOf(event)
+	if err != nil {
+		return err
+	}
+	id := googleuuid.UUID(claimed.EventID.Bytes)
+	body := ExportBody(id, fields.Fields, fields.effective, s.owner, fields.exdates)
+	copyID := ExportID(id)
 	var written Event
 	if exported {
 		written, err = s.service.patchEvent(ctx, calendarID, *claimed.GoogleEventID, deref(claimed.Etag), body)
@@ -484,7 +435,7 @@ func (s *Syncer) failExport(ctx context.Context, claimed store.GoogleExport, cau
 // exportConflict handles a copy changed in Google since the last export:
 // Google's version is kept and applied to the Life OS event (or, deleted in
 // Google, the event is cancelled), and the conflict recorded.
-func (s *Syncer) exportConflict(ctx context.Context, claimed store.GoogleExport, event store.Event, calendarID, copyID string) error {
+func (s *Syncer) exportConflict(ctx context.Context, claimed store.GoogleExport, event payload, calendarID, copyID string) error {
 	current, err := s.service.getEvent(ctx, calendarID, copyID)
 	if err != nil && !IsGone(err) {
 		return err
@@ -498,7 +449,7 @@ func (s *Syncer) exportConflict(ctx context.Context, claimed store.GoogleExport,
 		if err := s.service.inTx(ctx, func(q *store.Queries) error { return s.copyDeleted(ctx, q, claimed, now) }); err != nil {
 			return err
 		}
-		s.service.recordConflict(ctx, event, LifeOSCalendarName, conflictExport, now)
+		s.service.recordConflict(ctx, event.Event, LifeOSCalendarName, conflictExport, now)
 		return nil
 	}
 	if err := s.rememberCopies(ctx, connection, calendarID, []Event{current}); err != nil {
@@ -508,29 +459,24 @@ func (s *Syncer) exportConflict(ctx context.Context, claimed store.GoogleExport,
 	if err != nil {
 		return err
 	}
-	var after store.Event
-	var changed bool
-	err = s.service.inTx(ctx, func(q *store.Queries) error {
-		latest, err := q.GetEvent(ctx, event.ID)
-		if err != nil {
-			return err
-		}
-		if after, changed, err = applyCopy(ctx, q, latest, item, s.owner); err != nil {
-			return err
-		}
-		return q.LinkGoogleExport(ctx, store.LinkGoogleExportParams{EventID: claimed.EventID, Etag: optional(current.ETag), GoogleUpdated: googleTime(current.Updated), Settle: true})
-	})
+	after, err := s.applyCopy(ctx, event, item)
 	if err != nil {
+		return err
+	}
+	encoded, err := encodePayload(after.Event, after.Exceptions)
+	if err != nil {
+		return err
+	}
+	if err := s.service.queries.LinkGoogleExport(ctx, store.LinkGoogleExportParams{
+		EventID: claimed.EventID, Etag: optional(current.ETag), GoogleUpdated: googleTime(current.Updated), Payload: encoded, Settle: true,
+	}); err != nil {
 		return err
 	}
 	// The lease goes with the settled export.
 	if err := s.service.queries.ParkGoogleExport(ctx, store.ParkGoogleExportParams{EventID: claimed.EventID}); err != nil {
 		return err
 	}
-	if changed {
-		s.service.recordCopyChange(ctx, event, after, now)
-	}
-	s.service.recordConflict(ctx, after, LifeOSCalendarName, conflictExport, now)
+	s.service.recordConflict(ctx, after.Event, LifeOSCalendarName, conflictExport, now)
 	return nil
 }
 
@@ -595,14 +541,14 @@ func (s *Syncer) rememberCopies(ctx context.Context, connection store.GoogleConn
 // instances of its copy (copyID), and puts back the instances of
 // occurrences that no longer have changes (previous). It returns the
 // instances Google answered and the recurrence ids now exported.
-func (s *Syncer) exportOccurrences(ctx context.Context, calendarID, copyID string, event store.Event, fields lifeOSFields, previous []string) ([]Event, []string, error) {
+func (s *Syncer) exportOccurrences(ctx context.Context, calendarID, copyID string, event payload, fields lifeOSFields, previous []string) ([]Event, []string, error) {
 	keys := []string{}
 	var written []Event
-	if event.RecurrenceFrequency == nil {
+	if event.Event.Recurrence == nil {
 		return nil, keys, nil
 	}
 	write := func(key string, body map[string]any) error {
-		instance, err := s.service.instanceOf(ctx, calendarID, copyID, key, event.AllDay)
+		instance, err := s.service.instanceOf(ctx, calendarID, copyID, key, event.Event.AllDay)
 		if IsGone(err) {
 			return nil // the series no longer has it
 		}
@@ -677,30 +623,23 @@ func (f lifeOSFields) natural(key string) (Fields, bool) {
 	return out, true
 }
 
-// lifeOSFields reads a Life OS event for export, with the owner's default
-// reminders and its occurrence exceptions.
-func (s *Service) lifeOSFields(ctx context.Context, event store.Event) (lifeOSFields, error) {
-	fields := eventFields(event)
-	defaults, err := s.ownerDefaults(ctx, event.AllDay)
-	if err != nil {
-		return lifeOSFields{}, err
-	}
+// lifeOSFieldsOf is a Life OS event (as the feed gave it) ready to export,
+// with its default reminders and its occurrence exceptions.
+func lifeOSFieldsOf(event payload) (lifeOSFields, error) {
+	fields := eventFields(event.Event)
+	defaults := toReminders(event.Event.DefaultReminders)
 	out := lifeOSFields{Fields: fields, effective: effective(fields, defaults), occurrences: map[string]occurrenceFields{}}
-	if event.AllDay {
-		out.days = int(event.EndDate.Time.Sub(event.StartDate.Time).Hours() / 24)
+	if fields.AllDay {
+		out.days = int(fields.EndDate.Sub(fields.StartDate).Hours() / 24)
 	} else {
-		out.duration = event.EndAt.Time.Sub(event.StartAt.Time)
+		out.duration = fields.EndAt.Sub(fields.StartAt)
 	}
-	if event.RecurrenceFrequency == nil {
+	if fields.Recurrence == nil {
 		return out, nil
 	}
-	rows, err := s.queries.ListEventExceptions(ctx, []pgtype.UUID{event.ID})
-	if err != nil {
-		return lifeOSFields{}, err
-	}
-	for _, row := range rows {
-		if row.CancelledAt.Valid {
-			if line, ok := ExDate(row.RecurrenceID, event.AllDay); ok {
+	for _, row := range event.Exceptions {
+		if row.Cancelled {
+			if line, ok := ExDate(row.RecurrenceID, fields.AllDay); ok {
 				out.exdates = append(out.exdates, line)
 				out.skipped = append(out.skipped, row.RecurrenceID)
 			}
@@ -720,27 +659,6 @@ func (s *Service) lifeOSFields(ctx context.Context, event store.Event) (lifeOSFi
 	return out, nil
 }
 
-// ownerDefaults are the owner's default reminders for timed or all-day
-// Life OS events.
-func (s *Service) ownerDefaults(ctx context.Context, allDay bool) ([]sources.Reminder, error) {
-	settings, err := s.queries.GetSettings(ctx)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	raw := settings.TimedDefaultReminders
-	if allDay {
-		raw = settings.AllDayDefaultReminders
-	}
-	var list []sources.Reminder
-	if err := json.Unmarshal(raw, &list); err != nil {
-		return nil, fmt.Errorf("decode default reminders: %w", err)
-	}
-	return list, nil
-}
-
 // effective are the reminders that apply: the defaults when used, then the
 // event's own.
 func effective(f Fields, defaults []sources.Reminder) []sources.Reminder {
@@ -749,32 +667,6 @@ func effective(f Fields, defaults []sources.Reminder) []sources.Reminder {
 		out = append(out, defaults...)
 	}
 	return append(out, f.Reminders...)
-}
-
-// eventFields is a stored event as Fields.
-func eventFields(event store.Event) Fields {
-	fields := Fields{
-		Title: event.Title, Description: event.Description, Location: event.Location, AllDay: event.AllDay,
-		TimeZone: event.TimeZone, UseDefaultReminders: event.UseDefaultReminders, Priority: event.Priority,
-	}
-	if event.AllDay {
-		fields.StartDate, fields.EndDate = event.StartDate.Time, event.EndDate.Time
-	} else {
-		fields.StartAt, fields.EndAt = event.StartAt.Time, event.EndAt.Time
-	}
-	_ = json.Unmarshal(event.Reminders, &fields.Reminders)
-	if event.RecurrenceFrequency != nil && event.RecurrenceInterval != nil {
-		rule := &sources.Recurrence{Frequency: *event.RecurrenceFrequency, Interval: int(*event.RecurrenceInterval), ByWeekday: event.RecurrenceByWeekday}
-		if event.RecurrenceCount != nil {
-			rule.Count = int(*event.RecurrenceCount)
-		}
-		if event.RecurrenceUntil.Valid {
-			until := event.RecurrenceUntil.Time
-			rule.Until = &until
-		}
-		fields.Recurrence = rule
-	}
-	return fields
 }
 
 // storedOccurrence are one occurrence's stored changes (the API's form,
@@ -787,6 +679,9 @@ type storedOccurrence struct {
 // location clears it.
 func decodeChanges(raw []byte) (storedOccurrence, error) {
 	var present map[string]json.RawMessage
+	if len(raw) == 0 {
+		return storedOccurrence{}, nil
+	}
 	if err := json.Unmarshal(raw, &present); err != nil {
 		return storedOccurrence{}, fmt.Errorf("decode occurrence changes: %w", err)
 	}
@@ -925,9 +820,9 @@ func (s *Service) recordExportFailed(ctx context.Context, export store.GoogleExp
 	id := googleuuid.UUID(export.EventID.Bytes).String()
 	title := "a Life OS event"
 	data := map[string]any{"error": message, "attempts": export.Attempts}
-	if event, err := s.queries.GetEvent(ctx, export.EventID); err == nil {
-		title = "“" + activity.Preview(event.Title, 120) + "”"
-		_, data = eventRef(event)
+	if event, known, err := decodePayload(export.Payload); err == nil && known {
+		title = "“" + activity.Preview(event.Event.Title, 120) + "”"
+		_, data = eventRef(event.Event)
 		data["error"], data["attempts"] = message, export.Attempts
 	}
 	s.activity.Emit(ctx, activity.Event{

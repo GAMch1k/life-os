@@ -24,7 +24,7 @@ export interface paths {
         post: operations["connectGoogle"];
         /**
          * Disconnect Google Calendar
-         * @description Revokes the authorization at Google (best effort: a failure is recorded in Activity and the connection is removed anyway), removes the synced calendars' sources from Calendar (with their events; they stay in Google), and deletes the connection and its calendar choices. Succeeds also without a connection.
+         * @description Revokes the authorization at Google (best effort: a failure is recorded in Activity and the connection is removed anyway), deletes the connection and its calendar choices, and removes the synced calendars' sources from Calendar with their events (they stay in Google): right away, or as soon as Calendar answers. Succeeds also without a connection.
          */
         delete: operations["disconnectGoogle"];
         options?: never;
@@ -111,7 +111,7 @@ export interface paths {
         head?: never;
         /**
          * Choose whether a Google calendar syncs
-         * @description Switched on, the calendar becomes a Calendar source at its first sync, right away (its events listed in full), and then syncs every few minutes. Switched off, its source and every event synced from it leave Life OS (they stay in Google), and Activity records `calendar.source.removed`; switching it on again lists its events in full again.
+         * @description Switched on, the calendar becomes a Calendar source at its first sync, right away (its events listed in full), and then syncs every few minutes. Switched off, its source and every event synced from it leave Life OS (they stay in Google; right away, or as soon as Calendar answers), and Activity records `calendar.source.removed`; switching it on again lists its events in full again.
          */
         patch: operations["updateGoogleCalendar"];
         trace?: never;
@@ -420,7 +420,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Google refused or failed the request (google_rejected, google_unavailable), or Calendar could not be reached to remove the replaced account's calendars (calendar_unavailable) */
+            /** @description Google refused or failed the request (google_rejected, google_unavailable) */
             502: {
                 headers: {
                     [name: string]: unknown;
@@ -454,13 +454,6 @@ export interface operations {
             };
             /** @description No valid X-Life-OS-Actor (actor_required) */
             400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Calendar could not be reached to remove the synced calendars (calendar_unavailable); nothing was disconnected */
-            502: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -599,7 +592,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Google refused or failed the request (google_rejected, google_unavailable), or Calendar could not be reached (calendar_unavailable) */
+            /** @description Google refused or failed the request (google_rejected, google_unavailable) */
             502: {
                 headers: {
                     [name: string]: unknown;
@@ -654,13 +647,6 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Calendar could not be reached to remove the calendar's source (calendar_unavailable); nothing changed */
-            502: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
         };
     };
     syncGoogleCalendar: {
@@ -701,7 +687,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The calendar does not sync (google_sync_disabled), it is syncing right now (sync_in_progress), its sync changed meanwhile (conflict), or Google is not connected (google_not_connected) or its authorization expired (google_expired) */
+            /** @description The calendar does not sync (google_sync_disabled), it is syncing right now or waits for edits made in Life OS to reach Google first (sync_in_progress), its sync changed meanwhile (conflict), or Google is not connected (google_not_connected) or its authorization expired (google_expired) */
             409: {
                 headers: {
                     [name: string]: unknown;

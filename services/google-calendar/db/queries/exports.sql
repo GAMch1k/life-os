@@ -1,5 +1,6 @@
--- Google Calendar two-way sync (P11-03): the Life OS calendar, the export
--- outbox of Life OS events, and what writes to synced Google events need.
+-- Two-way sync: the Life OS calendar, the export of Life OS events, the
+-- owner's edits of Google events waiting to be written to Google, and the
+-- position in Calendar's change feed that brings both.
 
 -- name: SetGoogleExportEnabled :one
 UPDATE google_connections
@@ -8,53 +9,62 @@ WHERE id = sqlc.arg(id)
 RETURNING *;
 
 -- name: SetLifeOSCalendar :one
--- Records the Life OS calendar Calendar created in Google (and why, in
--- note, when it replaced one the owner deleted).
+-- Records the Life OS calendar created in Google (and why, in note, when it
+-- replaced one the owner deleted).
 UPDATE google_connections
 SET lifeos_calendar_id = sqlc.arg(lifeos_calendar_id), lifeos_calendar_created_at = sqlc.arg(created_at)::timestamptz,
     lifeos_calendar_note = sqlc.narg(note), updated_at = now()
 WHERE id = sqlc.arg(id)
 RETURNING *;
 
--- name: LockGoogleConnection :one
-SELECT * FROM google_connections WHERE id = $1 FOR UPDATE;
-
--- name: EnqueueGoogleExport :exec
--- Queues the export of a Life OS event's latest state, due now.
-INSERT INTO google_exports (event_id, connection_id, requested_at, next_attempt_at)
-VALUES (sqlc.arg(event_id), sqlc.arg(connection_id), sqlc.arg(now)::timestamptz, sqlc.arg(now)::timestamptz)
-ON CONFLICT (event_id) DO UPDATE
-SET requested_at = EXCLUDED.requested_at, next_attempt_at = EXCLUDED.next_attempt_at, deleted = false,
-    connection_id = EXCLUDED.connection_id,
-    state = CASE WHEN google_exports.state = 'failed' THEN 'failed' ELSE 'pending' END, updated_at = now();
-
--- name: EnqueueUpcomingGoogleExports :execrows
--- Queues every active Life OS event that is not over at now and has no
--- export yet (an export already queued, done, or removed stays as it is,
--- so queuing again changes nothing): a single event that ends after now, a
--- series without an end or ending after now. A series ending after a count
--- of occurrences is taken as lasting count times its interval at most.
--- Past events stay in Life OS.
-INSERT INTO google_exports (event_id, connection_id, requested_at, next_attempt_at)
-SELECT events.id, sqlc.arg(connection_id), sqlc.arg(now)::timestamptz, sqlc.arg(now)::timestamptz
-FROM events
-CROSS JOIN LATERAL (
-    SELECT CASE WHEN events.all_day THEN (events.end_date + 1)::timestamp AT TIME ZONE 'UTC' + interval '14 hours' ELSE events.end_at END AS ends_at,
-           CASE events.recurrence_frequency WHEN 'daily' THEN interval '1 day' WHEN 'weekly' THEN interval '1 week'
-                WHEN 'monthly' THEN interval '1 month' ELSE interval '1 year' END AS unit
-) AS span
-WHERE events.source_kind = 'manual'
-  AND events.status = 'active'
-  AND CASE
-        WHEN events.recurrence_frequency IS NULL THEN span.ends_at > sqlc.arg(now)::timestamptz
-        WHEN events.recurrence_count IS NOT NULL THEN
-          span.ends_at + span.unit * (events.recurrence_count * COALESCE(events.recurrence_interval, 1)) > sqlc.arg(now)::timestamptz
-        ELSE events.recurrence_until IS NULL OR events.recurrence_until + (span.ends_at - COALESCE(events.start_at, events.start_date::timestamp AT TIME ZONE 'UTC')) + interval '1 day' > sqlc.arg(now)::timestamptz
-      END
-ON CONFLICT (event_id) DO NOTHING;
+-- name: SetLifeOSCalendarNote :exec
+-- Says why the Life OS calendar could not be created (null: nothing to say).
+UPDATE google_connections SET lifeos_calendar_note = sqlc.narg(note), updated_at = now() WHERE id = sqlc.arg(id);
 
 -- name: MarkGoogleExportBackfilled :exec
 UPDATE google_connections SET export_backfilled_at = sqlc.arg(now)::timestamptz, updated_at = now() WHERE id = sqlc.arg(id);
+
+-- The change feed's position.
+
+-- name: SetFeedPosition :exec
+-- The feed was read up to cursor (Calendar's nextCursor); snapshot_started_at
+-- is set while a snapshot is being read, null outside one.
+UPDATE google_connections
+SET feed_cursor = sqlc.narg(cursor), feed_snapshot_started_at = sqlc.narg(snapshot_started_at)::timestamptz,
+    feed_read_at = sqlc.arg(now)::timestamptz, feed_error = NULL
+WHERE id = sqlc.arg(id);
+
+-- name: RestartFeed :exec
+-- Reads the feed again from a snapshot (its cursor expired, or the Life OS
+-- events to export are to be looked at again as a whole).
+UPDATE google_connections SET feed_cursor = NULL, feed_snapshot_started_at = NULL WHERE id = sqlc.arg(id);
+
+-- name: SetFeedError :exec
+UPDATE google_connections SET feed_error = sqlc.arg(error), feed_error_at = sqlc.arg(now)::timestamptz WHERE id = sqlc.arg(id);
+
+-- Exports of Life OS events.
+
+-- name: GetGoogleExport :one
+SELECT * FROM google_exports WHERE event_id = $1;
+
+-- name: QueueGoogleExport :exec
+-- Queues the export of a Life OS event's latest state (payload), due now.
+INSERT INTO google_exports (event_id, connection_id, requested_at, next_attempt_at, payload, payload_at)
+VALUES (sqlc.arg(event_id), sqlc.arg(connection_id), sqlc.arg(now)::timestamptz, sqlc.arg(now)::timestamptz, sqlc.arg(payload), sqlc.arg(now)::timestamptz)
+ON CONFLICT (event_id) DO UPDATE
+SET requested_at = EXCLUDED.requested_at, next_attempt_at = EXCLUDED.next_attempt_at, deleted = false,
+    connection_id = EXCLUDED.connection_id, payload = EXCLUDED.payload, payload_at = EXCLUDED.payload_at,
+    state = CASE WHEN google_exports.state = 'failed' THEN 'failed' ELSE 'pending' END, updated_at = now();
+
+-- name: SetGoogleExportPayload :execrows
+-- Records the event as the feed gives it without queuing an export (a
+-- snapshot of an event already exported, or export off). A waiting export
+-- that had no payload yet becomes due.
+UPDATE google_exports
+SET payload = sqlc.arg(payload), payload_at = sqlc.arg(now)::timestamptz, deleted = false,
+    next_attempt_at = CASE WHEN state <> 'synced' AND next_attempt_at IS NULL THEN sqlc.arg(now)::timestamptz ELSE next_attempt_at END,
+    updated_at = now()
+WHERE event_id = sqlc.arg(event_id);
 
 -- name: DeleteUnexportedGoogleExport :execrows
 -- Forgets the export of a deleted event that never reached Google.
@@ -63,12 +73,16 @@ DELETE FROM google_exports WHERE event_id = $1 AND google_event_id IS NULL;
 -- name: MarkGoogleExportDeleted :exec
 -- The event was deleted in Life OS: its copy in Google is deleted next.
 UPDATE google_exports
-SET deleted = true, requested_at = sqlc.arg(now)::timestamptz, next_attempt_at = sqlc.arg(now)::timestamptz,
+SET deleted = true, payload = NULL, requested_at = sqlc.arg(now)::timestamptz, next_attempt_at = sqlc.arg(now)::timestamptz,
     state = CASE WHEN state = 'failed' THEN 'failed' ELSE 'pending' END, updated_at = now()
 WHERE event_id = sqlc.arg(event_id);
 
--- name: GetGoogleExport :one
-SELECT * FROM google_exports WHERE event_id = $1;
+-- name: ListUnseenGoogleExports :many
+-- The exports a complete snapshot of the feed did not list (it started at
+-- started_at): their events no longer exist.
+SELECT * FROM google_exports
+WHERE connection_id = sqlc.arg(connection_id) AND NOT deleted
+  AND (payload_at IS NULL OR payload_at < sqlc.arg(started_at)::timestamptz);
 
 -- name: ClaimDueGoogleExport :one
 -- Takes the lease of the export due first; a lease left by a crashed
@@ -108,7 +122,8 @@ RETURNING *;
 
 -- name: ParkGoogleExport :exec
 -- Gives the lease up without an attempt (export switched off, Google not
--- usable); next_attempt_at, when given, retries then.
+-- usable, or the event not known yet); next_attempt_at, when given,
+-- retries then.
 UPDATE google_exports
 SET exporting_until = NULL, next_attempt_at = sqlc.narg(next_attempt_at)::timestamptz, updated_at = now()
 WHERE event_id = sqlc.arg(event_id);
@@ -119,9 +134,11 @@ DELETE FROM google_exports WHERE event_id = $1;
 -- name: LinkGoogleExport :exec
 -- Records Google's current version of an exported event (after its change
 -- in Google was applied in Life OS, or a conflict kept Google's version):
--- synced, unless a later change is queued.
+-- synced, unless a later change is queued. payload, when given, is the
+-- event as Calendar now has it.
 UPDATE google_exports
 SET etag = sqlc.narg(etag), google_updated = sqlc.narg(google_updated),
+    payload = COALESCE(sqlc.narg(payload), payload),
     state = CASE WHEN next_attempt_at IS NULL OR sqlc.arg(settle)::boolean THEN 'synced' ELSE state END,
     next_attempt_at = CASE WHEN sqlc.arg(settle)::boolean THEN NULL ELSE next_attempt_at END,
     last_error = CASE WHEN sqlc.arg(settle)::boolean THEN NULL ELSE last_error END,
@@ -175,59 +192,13 @@ SELECT count(*) FILTER (WHERE state = 'pending')::integer AS pending,
 FROM google_exports
 WHERE google_exports.connection_id = sqlc.arg(connection_id);
 
--- name: GetGoogleCalendarBySource :one
--- The Google calendar a synced event's source belongs to.
-SELECT google_calendars.* FROM google_calendars
-JOIN calendar_sources ON calendar_sources.google_calendar_id = google_calendars.id
-WHERE calendar_sources.id = $1;
-
 -- name: GetGoogleCalendarByGoogleID :one
 SELECT * FROM google_calendars
 WHERE connection_id = sqlc.arg(connection_id) AND google_calendar_id = sqlc.arg(google_calendar_id);
 
--- name: GetStoredGoogleEvent :one
-SELECT * FROM google_events WHERE calendar_id = sqlc.arg(calendar_id) AND event_id = sqlc.arg(event_id);
-
--- name: ListStoredGoogleInstances :many
--- A recurring event's stored changed or cancelled instances.
-SELECT * FROM google_events
-WHERE calendar_id = sqlc.arg(calendar_id) AND recurring_event_id = sqlc.arg(recurring_event_id)
-ORDER BY event_id;
-
--- name: ListGoogleEventETags :many
--- The etags of stored Google events, to recognize Calendar's own writes in
--- a listing.
-SELECT event_id, COALESCE(data ->> 'etag', '')::text AS etag
-FROM google_events
-WHERE calendar_id = sqlc.arg(calendar_id) AND event_id = ANY (sqlc.arg(event_ids)::text[]);
-
--- name: ListGoogleEventLinks :many
--- What the API shows of synced events: per source, its Google calendar
--- (name, access role, whether it is the Life OS calendar) and which of the
--- given external uids are a stored single event or a recurring event's
--- master (editable through Google), as opposed to an occurrence expanded
--- from a rule Calendar cannot hold or a lone instance.
-SELECT calendar_sources.id AS source_id, google_calendars.id AS calendar_id, google_calendars.summary,
-       google_calendars.access_role, COALESCE(google_calendars.google_calendar_id = google_connections.lifeos_calendar_id, false)::boolean AS lifeos,
-       COALESCE((SELECT array_agg(google_events.event_id ORDER BY google_events.event_id) FROM google_events
-                 WHERE google_events.calendar_id = google_calendars.id AND google_events.recurring_event_id IS NULL
-                   AND google_events.event_id = ANY (sqlc.arg(external_uids)::text[])), '{}')::text[] AS masters
-FROM calendar_sources
-JOIN google_calendars ON google_calendars.id = calendar_sources.google_calendar_id
-JOIN google_connections ON google_connections.id = google_calendars.connection_id
-WHERE calendar_sources.id = ANY (sqlc.arg(source_ids)::uuid[]);
-
--- name: GetEventBySourceUID :one
-SELECT * FROM events WHERE source_id = sqlc.arg(source_id) AND external_uid = sqlc.arg(external_uid);
-
--- name: DeleteGoogleInstances :exec
--- Forgets stored instances by id (not their series).
-DELETE FROM google_events
-WHERE calendar_id = sqlc.arg(calendar_id) AND event_id = ANY (sqlc.arg(event_ids)::text[]);
-
 -- name: DeleteGoogleCalendar :exec
--- Drops one calendar row (with its source and events): the Life OS
--- calendar deleted in Google.
+-- Drops one calendar row (with its stored events): the Life OS calendar
+-- deleted in Google.
 DELETE FROM google_calendars WHERE id = $1;
 
 -- name: FindLifeOSCalendarCandidate :one
@@ -239,6 +210,65 @@ WHERE connection_id = sqlc.arg(connection_id) AND summary = sqlc.arg(summary) AN
 ORDER BY created_at, id
 LIMIT 1;
 
--- name: SetLifeOSCalendarNote :exec
--- Says why the Life OS calendar could not be created (null: nothing to say).
-UPDATE google_connections SET lifeos_calendar_note = sqlc.narg(note), updated_at = now() WHERE id = sqlc.arg(id);
+-- The owner's edits of Google events waiting to be written to Google.
+
+-- name: QueuePush :exec
+-- Queues writing an event's latest state (payload; null with deleted) to
+-- Google, due now.
+INSERT INTO google_pushes (event_id, calendar_id, external_uid, payload, deleted, requested_at, next_attempt_at)
+VALUES (sqlc.arg(event_id), sqlc.arg(calendar_id), sqlc.arg(external_uid), sqlc.narg(payload), sqlc.arg(deleted), sqlc.arg(now)::timestamptz, sqlc.arg(now)::timestamptz)
+ON CONFLICT (event_id) DO UPDATE
+SET calendar_id = EXCLUDED.calendar_id, external_uid = EXCLUDED.external_uid, payload = EXCLUDED.payload, deleted = EXCLUDED.deleted,
+    requested_at = EXCLUDED.requested_at, next_attempt_at = LEAST(google_pushes.next_attempt_at, EXCLUDED.next_attempt_at), updated_at = now();
+
+-- name: ClaimDuePush :one
+UPDATE google_pushes
+SET pushing_until = sqlc.arg(lease_until)::timestamptz
+WHERE event_id = (
+    SELECT due.event_id FROM google_pushes AS due
+    WHERE due.next_attempt_at <= sqlc.arg(now)::timestamptz
+      AND (due.pushing_until IS NULL OR due.pushing_until <= sqlc.arg(now)::timestamptz)
+    ORDER BY due.next_attempt_at, due.event_id
+    LIMIT 1
+    FOR UPDATE SKIP LOCKED
+)
+RETURNING *;
+
+-- name: FinishPush :exec
+-- The edit was written (or given up): forgotten, unless a later one was
+-- queued while it ran.
+DELETE FROM google_pushes WHERE event_id = sqlc.arg(event_id) AND requested_at = sqlc.arg(claimed_requested_at)::timestamptz;
+
+-- name: ReleasePush :exec
+UPDATE google_pushes SET pushing_until = NULL WHERE event_id = $1;
+
+-- name: FailPush :one
+UPDATE google_pushes
+SET pushing_until = NULL, attempts = attempts + 1, last_error = sqlc.arg(last_error),
+    next_attempt_at = sqlc.arg(next_attempt_at)::timestamptz, updated_at = now()
+WHERE event_id = sqlc.arg(event_id)
+RETURNING *;
+
+-- name: CountCalendarPushes :one
+-- Edits of the calendar's events still to write to Google.
+SELECT count(*)::integer FROM google_pushes WHERE calendar_id = $1;
+
+-- name: MarkPushesDue :exec
+-- Makes every waiting edit due now (after reconnecting).
+UPDATE google_pushes SET next_attempt_at = sqlc.arg(now)::timestamptz
+WHERE calendar_id IN (SELECT id FROM google_calendars WHERE connection_id = sqlc.arg(connection_id));
+
+-- name: DeleteCalendarPushes :exec
+DELETE FROM google_pushes WHERE calendar_id = $1;
+
+-- name: PushSummary :one
+-- How writing edits to Google goes, for the connection's status.
+SELECT count(*)::integer AS pending,
+       count(*) FILTER (WHERE attempts > 0)::integer AS failed,
+       (SELECT last_error FROM google_pushes AS latest
+        JOIN google_calendars AS latest_calendar ON latest_calendar.id = latest.calendar_id
+        WHERE latest_calendar.connection_id = sqlc.arg(connection_id) AND latest.last_error IS NOT NULL
+        ORDER BY latest.updated_at DESC LIMIT 1) AS last_error
+FROM google_pushes
+JOIN google_calendars ON google_calendars.id = google_pushes.calendar_id
+WHERE google_calendars.connection_id = sqlc.arg(connection_id);

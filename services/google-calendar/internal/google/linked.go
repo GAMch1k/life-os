@@ -2,12 +2,9 @@ package google
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
 	"slices"
-	"strings"
 	"time"
 
 	googleuuid "github.com/google/uuid"
@@ -15,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/GAMch1k/life-os/pkg/activity"
+	"github.com/GAMch1k/life-os/services/google-calendar/internal/calendar"
 	store "github.com/GAMch1k/life-os/services/google-calendar/internal/repository/generated"
 	"github.com/GAMch1k/life-os/services/google-calendar/internal/sources"
 )
@@ -22,13 +20,14 @@ import (
 // The Life OS calendar holds the copies of exported Life OS events. They
 // are not imported as Google events: the Life OS event is the owner's, and
 // a change made to its copy in Google (moved on the phone, renamed,
-// deleted) is applied to it, so Google holds the latest version of every
+// deleted) is applied to it through Calendar's events API, as
+// system:google-calendar, so Google holds the latest version of every
 // event in a Google calendar. Events created in Google in the Life OS
 // calendar are imported like any synced calendar's.
 
 // isLifeOSCalendar reports whether calendar is the connection's Life OS
 // calendar.
-func (s *Syncer) isLifeOSCalendar(ctx context.Context, q *store.Queries, calendar store.GoogleCalendar) (bool, error) {
+func (s *Syncer) isLifeOSCalendar(ctx context.Context, q *store.Queries, calendarRow store.GoogleCalendar) (bool, error) {
 	connection, err := q.GetGoogleConnection(ctx)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
@@ -36,7 +35,7 @@ func (s *Syncer) isLifeOSCalendar(ctx context.Context, q *store.Queries, calenda
 	if err != nil {
 		return false, err
 	}
-	return connection.ID == calendar.ConnectionID && connection.LifeosCalendarID != nil && *connection.LifeosCalendarID == calendar.GoogleCalendarID, nil
+	return connection.ID == calendarRow.ConnectionID && connection.LifeosCalendarID != nil && *connection.LifeosCalendarID == calendarRow.GoogleCalendarID, nil
 }
 
 // splitCopies separates the copies of exported Life OS events (and their
@@ -61,9 +60,9 @@ func splitCopies(events []Event) (others, copies []Event) {
 // followCopies applies to each exported Life OS event the changes the
 // listing reports for its copy (the copy itself or one of its instances
 // changed in Google), and cancels those whose copy it reports deleted. A
-// copy that only carries Calendar's own last write changes nothing, so a
-// Life OS change still waiting to be exported is not undone.
-func (s *Syncer) followCopies(ctx context.Context, q *store.Queries, calendar store.GoogleCalendar, m mapper, copies []Event, listed *listingChanges, now time.Time) error {
+// copy that only carries this service's own last write changes nothing, so
+// a Life OS change still waiting to be exported is not undone.
+func (s *Syncer) followCopies(ctx context.Context, q *store.Queries, calendarRow store.GoogleCalendar, m mapper, copies []Event, listed *listingChanges, now time.Time) error {
 	masters := map[string]Event{}
 	instanceChanged := map[string]bool{}
 	for _, event := range copies {
@@ -95,7 +94,7 @@ func (s *Syncer) followCopies(ctx context.Context, q *store.Queries, calendar st
 			return err
 		}
 	}
-	linked, err := q.ListLinkedGoogleExports(ctx, &calendar.GoogleCalendarID)
+	linked, err := q.ListLinkedGoogleExports(ctx, &calendarRow.GoogleCalendarID)
 	if err != nil {
 		return err
 	}
@@ -116,35 +115,51 @@ func (s *Syncer) followCopies(ctx context.Context, q *store.Queries, calendar st
 	return nil
 }
 
+// exportedEvent is the Life OS event an export copies, as the change feed
+// last gave it, or as Calendar has it now; found is false when Calendar no
+// longer has it.
+func (s *Syncer) exportedEvent(ctx context.Context, export store.GoogleExport) (payload, bool, error) {
+	event, known, err := decodePayload(export.Payload)
+	if err != nil || known {
+		return event, known, err
+	}
+	current, err := s.service.calendar.GetEvent(ctx, googleuuid.UUID(export.EventID.Bytes).String())
+	if calendar.IsNotFound(err) {
+		return payload{}, false, nil
+	}
+	if err != nil {
+		return payload{}, false, err
+	}
+	return payload{Event: current}, true, nil
+}
+
 // followCopy applies item, the copy's current state in Google, to the
 // exported event. A Life OS change still waiting to be exported conflicts:
 // Google's version is kept and the conflict recorded.
 func (s *Syncer) followCopy(ctx context.Context, q *store.Queries, export store.GoogleExport, master Event, item sources.Item, now time.Time) error {
-	event, err := q.GetEvent(ctx, export.EventID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil
-	}
+	event, found, err := s.exportedEvent(ctx, export)
 	if err != nil {
 		return err
 	}
-	if event.SourceKind != "manual" {
+	if !found || event.Event.Source.Kind != "manual" {
 		return nil
 	}
 	conflict := export.State != "synced"
-	after, changed, err := applyCopy(ctx, q, event, item, s.owner)
+	after, err := s.applyCopy(ctx, event, item)
+	if err != nil {
+		return err
+	}
+	encoded, err := encodePayload(after.Event, after.Exceptions)
 	if err != nil {
 		return err
 	}
 	if err := q.LinkGoogleExport(ctx, store.LinkGoogleExportParams{
-		EventID: export.EventID, Etag: optional(master.ETag), GoogleUpdated: googleTime(master.Updated), Settle: conflict,
+		EventID: export.EventID, Etag: optional(master.ETag), GoogleUpdated: googleTime(master.Updated), Payload: encoded, Settle: conflict,
 	}); err != nil {
 		return err
 	}
-	if changed {
-		s.service.recordCopyChange(ctx, event, after, now)
-	}
 	if conflict {
-		s.service.recordConflict(ctx, after, "Life OS calendar", conflictExport, now)
+		s.service.recordConflict(ctx, after.Event, "Life OS calendar", conflictExport, now)
 	}
 	return nil
 }
@@ -156,112 +171,153 @@ func (s *Syncer) copyDeleted(ctx context.Context, q *store.Queries, export store
 	if err := q.UnlinkGoogleExport(ctx, export.EventID); err != nil {
 		return err
 	}
-	event, err := q.GetEvent(ctx, export.EventID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil
-	}
-	if err != nil || event.SourceKind != "manual" || event.Status != "active" {
+	event, found, err := s.exportedEvent(ctx, export)
+	if err != nil || !found || event.Event.Source.Kind != "manual" || event.Event.Status != "active" {
 		return err
 	}
-	params := updateParams(event)
-	params.Status, params.CancelledAt = "cancelled", timestamptz(now)
-	after, err := q.UpdateEvent(ctx, params)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil // changed meanwhile: the change is exported and recreates the copy
+	updated, err := s.service.calendar.UpdateEvent(ctx, event.Event.ID, map[string]any{"status": "cancelled"})
+	if calendar.IsNotFound(err) {
+		return nil // deleted in Life OS meanwhile
 	}
 	if err != nil {
 		return err
 	}
-	s.service.recordCopyDeleted(ctx, after, now)
-	return nil
-}
-
-// updateParams rewrites event as it is (the caller changes fields).
-func updateParams(event store.Event) store.UpdateEventParams {
-	return store.UpdateEventParams{
-		Title: event.Title, Description: event.Description, Location: event.Location, AllDay: event.AllDay,
-		StartAt: event.StartAt, EndAt: event.EndAt, StartDate: event.StartDate, EndDate: event.EndDate, TimeZone: event.TimeZone,
-		RecurrenceFrequency: event.RecurrenceFrequency, RecurrenceInterval: event.RecurrenceInterval, RecurrenceUntil: event.RecurrenceUntil,
-		RecurrenceByWeekday: event.RecurrenceByWeekday, RecurrenceCount: event.RecurrenceCount,
-		Reminders: event.Reminders, UseDefaultReminders: event.UseDefaultReminders, Priority: event.Priority,
-		Status: event.Status, CancelledAt: event.CancelledAt, RemovedFromSourceAt: event.RemovedFromSourceAt,
-		ID: event.ID, ExpectedUpdatedAt: event.UpdatedAt,
+	encoded, err := encodePayload(updated, event.Exceptions)
+	if err != nil {
+		return err
 	}
+	_, err = q.SetGoogleExportPayload(ctx, store.SetGoogleExportPayloadParams{Payload: encoded, Now: timestamptz(now), EventID: export.EventID})
+	return err
 }
 
 // applyCopy writes item (an exported event's copy as Google has it) over
-// event: title, notes, place, times, time zone, and rule, and the
-// occurrence changes and skips. Reminders stay Life OS's (Google holds them
-// only as minutes, so the copy carries a simplified form of them). changed
-// is false when Google's version says nothing new.
-func applyCopy(ctx context.Context, q *store.Queries, event store.Event, item sources.Item, owner *time.Location) (store.Event, bool, error) {
-	params := updateParams(event)
-	params.Title, params.Description, params.Location, params.AllDay = item.Title, item.Description, item.Location, item.AllDay
-	if item.Priority != nil {
-		// A Life OS event without a priority of its own is medium.
-		params.Priority = nil
-		if value := *item.Priority; value == "low" || value == "high" {
-			params.Priority = &value
+// the Life OS event through Calendar's events API: title, notes, place,
+// times, time zone, rule, and priority, then the occurrences' changes and
+// skips. Reminders stay Life OS's (Google holds them only as minutes, so
+// the copy carries a simplified form of them). It returns the event as
+// Calendar then has it (its exceptions as far as known).
+func (s *Syncer) applyCopy(ctx context.Context, event payload, item sources.Item) (payload, error) {
+	current := event.Event
+	body := copyPatch(current, item, s.owner)
+	if len(body) > 0 {
+		updated, err := s.service.calendar.UpdateEvent(ctx, current.ID, body)
+		if calendar.IsNotFound(err) {
+			return event, nil // deleted in Life OS meanwhile: its tombstone deletes the copy
 		}
+		if err != nil {
+			return event, fmt.Errorf("apply Google's version of “%s”: %w", current.Title, err)
+		}
+		event.Event = updated
+	}
+	if item.Recurrence == nil {
+		return event, nil
+	}
+	stored, err := exceptionsByKey(event.Exceptions)
+	if err != nil {
+		return event, err
+	}
+	for _, write := range copyOccurrences(stored, item) {
+		err := s.service.calendar.UpdateOccurrence(ctx, current.ID, write.key, write.body)
+		if calendar.IsNotFound(err) || calendar.HasCode(err, 400, "") {
+			s.logger.Warn("occurrence changed in Google not applied in Life OS", "event", current.ID, "occurrence", write.key, "error", err)
+			continue
+		}
+		if err != nil {
+			return event, err
+		}
+	}
+	return event, nil
+}
+
+// copyPatch is the change that makes the Life OS event current say what
+// Google's item says; empty when Google's version says nothing new.
+func copyPatch(current calendar.Event, item sources.Item, owner *time.Location) map[string]any {
+	body := map[string]any{}
+	if item.Title != current.Title {
+		body["title"] = item.Title
+	}
+	if textValue(item.Description) != textValue(current.Description) {
+		body["description"] = item.Description
+	}
+	if textValue(item.Location) != textValue(current.Location) {
+		body["location"] = item.Location
+	}
+	zone := item.TimeZone
+	if current.TimeZone == nil && zone != nil && owner != nil && *zone == owner.String() {
+		zone = nil // the owner's zone, as Life OS had it
 	}
 	if item.AllDay {
-		params.StartAt, params.EndAt, params.TimeZone = pgtype.Timestamptz{}, pgtype.Timestamptz{}, nil
-		params.StartDate, params.EndDate = pgtype.Date{Time: item.StartDate, Valid: true}, pgtype.Date{Time: item.EndDate, Valid: true}
+		first, last := item.StartDate.Format(time.DateOnly), item.EndDate.Format(time.DateOnly)
+		if !current.AllDay || deref(current.StartDate) != first || deref(current.EndDate) != last {
+			body["allDay"], body["startDate"], body["endDate"] = true, first, last
+		}
 	} else {
-		params.StartDate, params.EndDate = pgtype.Date{}, pgtype.Date{}
-		params.StartAt, params.EndAt = timestamptz(item.StartAt), timestamptz(item.EndAt)
-		params.TimeZone = item.TimeZone
-		if event.TimeZone == nil && item.TimeZone != nil && owner != nil && *item.TimeZone == owner.String() {
-			params.TimeZone = nil // the owner's zone, as Life OS had it
+		start, end := item.StartAt.UTC().Truncate(time.Second), item.EndAt.UTC().Truncate(time.Second)
+		if current.AllDay || current.StartAt == nil || current.EndAt == nil || !current.StartAt.Truncate(time.Second).Equal(start) ||
+			!current.EndAt.Truncate(time.Second).Equal(end) || deref(current.TimeZone) != deref(zone) {
+			body["allDay"], body["startAt"], body["endAt"] = false, start.Format(time.RFC3339), end.Format(time.RFC3339)
+			body["timeZone"] = zone
 		}
 	}
-	params.RecurrenceFrequency, params.RecurrenceInterval, params.RecurrenceUntil, params.RecurrenceByWeekday, params.RecurrenceCount = nil, nil, pgtype.Timestamptz{}, nil, nil
-	if rule := item.Recurrence; rule != nil {
-		frequency, interval := rule.Frequency, int32(rule.Interval)
-		params.RecurrenceFrequency, params.RecurrenceInterval = &frequency, &interval
-		params.RecurrenceByWeekday = rule.ByWeekday
-		if rule.Count > 0 {
-			count := int32(rule.Count)
-			params.RecurrenceCount = &count
-		}
-		if rule.Until != nil {
-			until := *rule.Until
-			if item.AllDay && event.RecurrenceUntil.Valid && sameOwnerDate(event.RecurrenceUntil.Time, until, owner) {
-				until = event.RecurrenceUntil.Time // the same last day
+	if !sameRule(current.Recurrence, item.Recurrence, item.AllDay, owner) {
+		if item.Recurrence == nil {
+			body["recurrence"] = nil
+		} else {
+			rule := map[string]any{"frequency": item.Recurrence.Frequency, "interval": max(item.Recurrence.Interval, 1)}
+			if len(item.Recurrence.ByWeekday) > 0 {
+				rule["byWeekday"] = item.Recurrence.ByWeekday
 			}
-			params.RecurrenceUntil = timestamptz(until)
+			if item.Recurrence.Count > 0 {
+				rule["count"] = item.Recurrence.Count
+			}
+			if until := item.Recurrence.Until; until != nil {
+				value := until.UTC()
+				if item.AllDay && current.Recurrence != nil && current.Recurrence.Until != nil && sameOwnerDate(*current.Recurrence.Until, value, owner) {
+					value = current.Recurrence.Until.UTC() // the same last day
+				}
+				rule["until"] = value.Format(time.RFC3339)
+			}
+			body["recurrence"] = rule
 		}
 	}
-	stored, err := q.ListEventExceptions(ctx, []pgtype.UUID{event.ID})
-	if err != nil {
-		return store.Event{}, false, err
-	}
-	writes, drops, err := copyExceptions(stored, item.Exceptions)
-	if err != nil {
-		return store.Event{}, false, err
-	}
-	if sameEventRow(event, params) && len(writes) == 0 && len(drops) == 0 {
-		return event, false, nil
-	}
-	after, err := q.UpdateEvent(ctx, params)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return event, false, nil // changed in Life OS meanwhile: that change is exported next
-	}
-	if err != nil {
-		return store.Event{}, false, err
-	}
-	if len(drops) > 0 {
-		if _, err := q.DeleteEventExceptions(ctx, store.DeleteEventExceptionsParams{EventID: event.ID, RecurrenceIds: drops}); err != nil {
-			return store.Event{}, false, err
+	if item.Priority != nil {
+		// A Life OS event without a priority of its own is medium (its
+		// default).
+		wanted := current.DefaultPriority
+		if value := *item.Priority; value == "low" || value == "high" {
+			wanted = value
+		}
+		if wanted != "" && wanted != current.Priority {
+			body["priority"] = wanted
 		}
 	}
-	for _, key := range sortedKeys(writes) {
-		write := writes[key]
-		if _, err := q.UpsertEventException(ctx, store.UpsertEventExceptionParams{EventID: event.ID, RecurrenceID: key, Changes: write.changes, CancelledAt: write.cancelledAt}); err != nil {
-			return store.Event{}, false, err
-		}
+	return body
+}
+
+// sameRule reports whether Calendar's rule is the item's (an all-day
+// series' until compared as the owner's date).
+func sameRule(current *calendar.Recurrence, rule *sources.Recurrence, allDay bool, owner *time.Location) bool {
+	if current == nil || rule == nil {
+		return current == nil && rule == nil
 	}
-	return after, true, nil
+	count := 0
+	if current.Count != nil {
+		count = *current.Count
+	}
+	if current.Frequency != rule.Frequency || max(current.Interval, 1) != max(rule.Interval, 1) || count != rule.Count ||
+		!slices.Equal(current.ByWeekday, rule.ByWeekday) && !(len(current.ByWeekday) <= 1 && len(rule.ByWeekday) <= 1) {
+		return false
+	}
+	if (current.Until == nil) != (rule.Until == nil) {
+		return false
+	}
+	if current.Until == nil {
+		return true
+	}
+	if allDay {
+		return sameOwnerDate(*current.Until, *rule.Until, owner)
+	}
+	return current.Until.Truncate(time.Second).Equal(rule.Until.Truncate(time.Second))
 }
 
 func sameOwnerDate(a, b time.Time, owner *time.Location) bool {
@@ -271,113 +327,121 @@ func sameOwnerDate(a, b time.Time, owner *time.Location) bool {
 	return a.In(owner).Format(time.DateOnly) == b.In(owner).Format(time.DateOnly)
 }
 
-// sameEventRow reports whether params would leave event as it is.
-func sameEventRow(event store.Event, params store.UpdateEventParams) bool {
-	sameText := func(a, b *string) bool { return (a == nil) == (b == nil) && (a == nil || *a == *b) }
-	sameCount := func(a, b *int32) bool { return (a == nil) == (b == nil) && (a == nil || *a == *b) }
-	sameInstant := func(a, b pgtype.Timestamptz) bool {
-		return a.Valid == b.Valid && (!a.Valid || a.Time.Truncate(time.Second).Equal(b.Time.Truncate(time.Second)))
-	}
-	sameDate := func(a, b pgtype.Date) bool {
-		return a.Valid == b.Valid && (!a.Valid || a.Time.Format(time.DateOnly) == b.Time.Format(time.DateOnly))
-	}
-	return event.Title == params.Title && sameText(event.Description, params.Description) && sameText(event.Location, params.Location) &&
-		event.AllDay == params.AllDay && sameInstant(event.StartAt, params.StartAt) && sameInstant(event.EndAt, params.EndAt) &&
-		sameDate(event.StartDate, params.StartDate) && sameDate(event.EndDate, params.EndDate) && sameText(event.TimeZone, params.TimeZone) &&
-		sameText(event.RecurrenceFrequency, params.RecurrenceFrequency) && sameCount(event.RecurrenceInterval, params.RecurrenceInterval) &&
-		sameInstant(event.RecurrenceUntil, params.RecurrenceUntil) && slices.Equal(event.RecurrenceByWeekday, params.RecurrenceByWeekday) &&
-		sameCount(event.RecurrenceCount, params.RecurrenceCount) && sameText(event.Priority, params.Priority)
+// occurrenceWrite is one occurrence change to make in Calendar.
+type occurrenceWrite struct {
+	key  string
+	body map[string]any
 }
 
-// exceptionWrite is one occurrence exception to store.
-type exceptionWrite struct {
-	changes     []byte
-	cancelledAt pgtype.Timestamptz
-}
-
-// copyExceptions are the occurrence exceptions that make the stored ones
-// say what Google's do: Google's changes and skips, with the reminders of
-// each occurrence kept as they are in Life OS.
-func copyExceptions(stored []store.EventException, wanted map[string]sources.Exception) (map[string]exceptionWrite, []string, error) {
-	have := map[string]map[string]json.RawMessage{}
-	rows := map[string]store.EventException{}
-	for _, row := range stored {
-		var fields map[string]json.RawMessage
-		if err := json.Unmarshal(row.Changes, &fields); err != nil {
-			return nil, nil, fmt.Errorf("decode occurrence changes: %w", err)
-		}
-		have[row.RecurrenceID], rows[row.RecurrenceID] = fields, row
-	}
-	writes := map[string]exceptionWrite{}
-	var drops []string
+// copyOccurrences are the occurrence changes that make the stored
+// exceptions say what Google's do: Google's changes and skips (a change
+// Google no longer has goes back to the series' value), with the reminders
+// of each occurrence kept as they are in Life OS.
+func copyOccurrences(stored map[string]sources.Exception, item sources.Item) []occurrenceWrite {
 	keys := map[string]bool{}
-	for key := range wanted {
+	for key := range stored {
 		keys[key] = true
 	}
-	for key := range have {
+	for key := range item.Exceptions {
 		keys[key] = true
 	}
-	for key := range keys {
-		next := map[string]json.RawMessage{}
-		if exception, ok := wanted[key]; ok {
-			encoded, err := exception.Changes.JSON()
-			if err != nil {
-				return nil, nil, err
-			}
-			if err := json.Unmarshal(encoded, &next); err != nil {
-				return nil, nil, err
-			}
-		}
-		delete(next, "reminders")
-		delete(next, "useDefaultReminders")
-		for _, name := range []string{"reminders", "useDefaultReminders"} {
-			if value, ok := have[key][name]; ok {
-				next[name] = value
-			}
-		}
-		cancelled := wanted[key].Cancelled
-		row, found := rows[key]
-		if len(next) == 0 && !cancelled {
-			if found {
-				drops = append(drops, key)
-			}
+	var writes []occurrenceWrite
+	for _, key := range sortedKeys(keys) {
+		have, want := stored[key], item.Exceptions[key]
+		body := map[string]any{}
+		switch {
+		case want.Cancelled && !have.Cancelled:
+			writes = append(writes, occurrenceWrite{key: key, body: map[string]any{"status": "cancelled"}})
 			continue
-		}
-		if found && row.CancelledAt.Valid == cancelled && reflect.DeepEqual(normalize(have[key]), normalize(next)) {
+		case want.Cancelled:
 			continue
+		case have.Cancelled:
+			body["status"] = "active"
 		}
-		encoded, err := json.Marshal(next)
-		if err != nil {
-			return nil, nil, err
+		occurrenceFieldsPatch(body, key, have.Changes, want.Changes, item)
+		if len(body) > 0 {
+			writes = append(writes, occurrenceWrite{key: key, body: body})
 		}
-		write := exceptionWrite{changes: encoded}
-		if cancelled {
-			write.cancelledAt = row.CancelledAt
-			if !write.cancelledAt.Valid {
-				write.cancelledAt = timestamptz(time.Now())
-			}
-		}
-		writes[key] = write
 	}
-	slices.Sort(drops)
-	return writes, drops, nil
+	return writes
 }
 
-// normalize decodes raw JSON values so equal values compare equal however
-// they were written (instants in any offset are compared as instants).
-func normalize(fields map[string]json.RawMessage) map[string]any {
-	out := map[string]any{}
-	for name, raw := range fields {
-		var value any
-		_ = json.Unmarshal(raw, &value)
-		if text, ok := value.(string); ok && (name == "startAt" || name == "endAt") {
-			if instant, err := time.Parse(time.RFC3339Nano, text); err == nil {
-				value = instant.UTC().Format(time.RFC3339)
+// occurrenceFieldsPatch adds to body what makes an occurrence's own changes
+// (have) say Google's (want): a field Google changes takes Google's value,
+// and one only Life OS changes goes back to the series' (item's) value.
+func occurrenceFieldsPatch(body map[string]any, key string, have, want sources.Changes, item sources.Item) {
+	if !sameText(have.Title, want.Title) {
+		if want.Title != nil {
+			body["title"] = *want.Title
+		} else {
+			body["title"] = item.Title
+		}
+	}
+	if !sameChangeText(have.Description, want.Description) {
+		if want.Description != nil {
+			body["description"] = want.Description.Value
+		} else {
+			body["description"] = item.Description
+		}
+	}
+	if !sameChangeText(have.Location, want.Location) {
+		if want.Location != nil {
+			body["location"] = want.Location.Value
+		} else {
+			body["location"] = item.Location
+		}
+	}
+	if item.AllDay {
+		if !sameDay(have.StartDate, want.StartDate) || !sameDay(have.EndDate, want.EndDate) {
+			first, err := time.Parse(time.DateOnly, key)
+			if err == nil {
+				last := first.Add(item.EndDate.Sub(item.StartDate))
+				if want.StartDate != nil && want.EndDate != nil {
+					first, last = *want.StartDate, *want.EndDate
+				}
+				body["startDate"], body["endDate"] = first.Format(time.DateOnly), last.Format(time.DateOnly)
 			}
 		}
-		out[name] = value
+	} else if !sameInstant(have.StartAt, want.StartAt) || !sameInstant(have.EndAt, want.EndAt) {
+		start, err := time.Parse(time.RFC3339, key)
+		if err == nil {
+			end := start.Add(item.EndAt.Sub(item.StartAt))
+			if want.StartAt != nil && want.EndAt != nil {
+				start, end = *want.StartAt, *want.EndAt
+			}
+			body["startAt"], body["endAt"] = start.UTC().Format(time.RFC3339), end.UTC().Format(time.RFC3339)
+		}
 	}
-	return out
+	if !sameText(have.Priority, want.Priority) && (want.Priority != nil || have.Priority != nil) {
+		if want.Priority != nil {
+			body["priority"] = *want.Priority
+		} else if item.Priority != nil && (*item.Priority == "low" || *item.Priority == "high") {
+			body["priority"] = *item.Priority
+		} else {
+			body["priority"] = "medium"
+		}
+	}
+}
+
+func sameChangeText(a, b *sources.Text) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return textValue(a.Value) == textValue(b.Value)
+}
+
+func sameDay(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.Format(time.DateOnly) == b.Format(time.DateOnly)
+}
+
+func sameInstant(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.Truncate(time.Second).Equal(b.Truncate(time.Second))
 }
 
 func sortedKeys[V any](values map[string]V) []string {
@@ -389,8 +453,6 @@ func sortedKeys[V any](values map[string]V) []string {
 	return keys
 }
 
-func pgID(id googleuuid.UUID) pgtype.UUID { return pgtype.UUID{Bytes: id, Valid: true} }
-
 // googleTime reads Google's updated time.
 func googleTime(value string) pgtype.Timestamptz {
 	instant, err := time.Parse(time.RFC3339Nano, value)
@@ -400,8 +462,8 @@ func googleTime(value string) pgtype.Timestamptz {
 	return timestamptz(instant)
 }
 
-// Activity of exported events changed or deleted in Google, attributed to
-// SyncActor, and of conflicts.
+// Activity of conflicts, attributed to SyncActor (an export) or the
+// requester.
 
 // EventConflict is a change Life OS could not write because the event had
 // changed in Google meanwhile: Google's version was kept.
@@ -413,34 +475,33 @@ const (
 	conflictExport = "export"
 )
 
-func eventRef(event store.Event) (activity.Subject, map[string]any) {
-	id := googleuuid.UUID(event.ID.Bytes).String()
-	data := map[string]any{"title": activity.Preview(event.Title, 200), "allDay": event.AllDay, "status": event.Status, "sourceKind": event.SourceKind}
-	if event.AllDay && event.StartDate.Valid {
-		data["startDate"] = event.StartDate.Time.Format(time.DateOnly)
-	} else if event.StartAt.Valid {
-		data["startAt"] = event.StartAt.Time.UTC().Format(time.RFC3339)
+func eventRef(event calendar.Event) (activity.Subject, map[string]any) {
+	data := map[string]any{"title": activity.Preview(event.Title, 200), "allDay": event.AllDay, "status": event.Status, "sourceKind": event.Source.Kind}
+	if event.AllDay && event.StartDate != nil {
+		data["startDate"] = *event.StartDate
+	} else if event.StartAt != nil {
+		data["startAt"] = event.StartAt.UTC().Format(time.RFC3339)
 	}
-	if event.SourceID.Valid {
-		data["sourceId"] = googleuuid.UUID(event.SourceID.Bytes).String()
+	if event.Source.SourceID != nil {
+		data["sourceId"] = *event.Source.SourceID
 	}
-	return activity.Subject{Type: "calendar_event", ID: id}, data
+	return activity.Subject{Type: "calendar_event", ID: event.ID}, data
 }
 
 // recordConflict records that a change to event could not be written to
 // calendar (by name) because it changed there meanwhile; Google's version
 // was kept.
-func (s *Service) recordConflict(ctx context.Context, event store.Event, calendar, kind string, now time.Time) {
+func (s *Service) recordConflict(ctx context.Context, event calendar.Event, calendarName, kind string, now time.Time) {
 	subject, data := eventRef(event)
-	data["calendar"], data["kind"] = calendar, kind
+	data["calendar"], data["kind"] = calendarName, kind
 	trace := activity.TraceFrom(ctx)
 	actor := trace.Actor
 	if kind == conflictExport || actor.IsZero() {
 		actor = SyncActor
 	}
-	summary := fmt.Sprintf("“%s” changed in Google (%s) meanwhile: Life OS kept Google's version", activity.Preview(event.Title, 120), calendar)
+	summary := fmt.Sprintf("“%s” changed in Google (%s) meanwhile: Life OS kept Google's version", activity.Preview(event.Title, 120), calendarName)
 	if kind == conflictExport {
-		summary = fmt.Sprintf("“%s” changed in Google (%s) before Life OS's change reached it: Google's version was kept", activity.Preview(event.Title, 120), calendar)
+		summary = fmt.Sprintf("“%s” changed in Google (%s) before Life OS's change reached it: Google's version was kept", activity.Preview(event.Title, 120), calendarName)
 	}
 	s.activity.Emit(ctx, activity.Event{
 		ID:            activity.EventID(EventConflict, subject.ID, now.UTC().Format(time.RFC3339Nano)),
@@ -456,62 +517,4 @@ func (s *Service) recordConflict(ctx context.Context, event store.Event, calenda
 	})
 }
 
-// recordCopyChange records an exported event changed in Google.
-func (s *Service) recordCopyChange(ctx context.Context, before, after store.Event, now time.Time) {
-	subject, data := eventRef(after)
-	var changes []string
-	moved := before.AllDay != after.AllDay || before.StartAt != after.StartAt || before.EndAt != after.EndAt ||
-		before.StartDate != after.StartDate || before.EndDate != after.EndDate
-	if before.Title != after.Title {
-		changes = append(changes, "title")
-		data["previousTitle"] = activity.Preview(before.Title, 200)
-	}
-	if !sameText(before.Description, after.Description) {
-		changes = append(changes, "description")
-	}
-	if !sameText(before.Location, after.Location) {
-		changes = append(changes, "location")
-	}
-	if moved {
-		changes = append(changes, "time")
-	}
-	if !sameText(before.RecurrenceFrequency, after.RecurrenceFrequency) || before.RecurrenceUntil != after.RecurrenceUntil ||
-		!slices.Equal(before.RecurrenceByWeekday, after.RecurrenceByWeekday) {
-		changes = append(changes, "repetition")
-	}
-	eventType := "calendar.event.updated"
-	if moved {
-		eventType = "calendar.event.rescheduled"
-	}
-	data["changes"], data["changedIn"] = changes, "google"
-	summary := fmt.Sprintf("Event “%s” changed in Google Calendar (Life OS calendar)", activity.Preview(after.Title, 120))
-	if len(changes) > 0 {
-		summary += ": " + strings.Join(changes, ", ")
-	}
-	s.emitSynced(ctx, eventType, subject, summary, data, after.UpdatedAt.Time, now)
-}
-
-// recordCopyDeleted records an exported event cancelled because its copy
-// was deleted in Google.
-func (s *Service) recordCopyDeleted(ctx context.Context, event store.Event, now time.Time) {
-	subject, data := eventRef(event)
-	data["changedIn"] = "google"
-	summary := fmt.Sprintf("Event “%s” was deleted in Google Calendar (Life OS calendar): cancelled in Life OS", activity.Preview(event.Title, 120))
-	s.emitSynced(ctx, "calendar.event.cancelled", subject, summary, data, event.UpdatedAt.Time, now)
-}
-
-func (s *Service) emitSynced(ctx context.Context, eventType string, subject activity.Subject, summary string, data map[string]any, version, now time.Time) {
-	trace := activity.TraceFrom(ctx)
-	s.activity.Emit(ctx, activity.Event{
-		ID:            activity.EventID(eventType, subject.ID, version.UTC().Format(time.RFC3339Nano)),
-		Type:          eventType,
-		Subject:       subject,
-		CorrelationID: trace.CorrelationID,
-		CausationID:   trace.CausationID,
-		Actor:         SyncActor,
-		Outcome:       activity.Succeeded,
-		Summary:       activity.Preview(summary, 500),
-		Data:          data,
-		OccurredAt:    now,
-	})
-}
+func pgID(id googleuuid.UUID) pgtype.UUID { return pgtype.UUID{Bytes: id, Valid: true} }

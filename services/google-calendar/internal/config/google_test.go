@@ -4,13 +4,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/GAMch1k/life-os/services/calendar/internal/google"
+	"github.com/GAMch1k/life-os/services/google-calendar/internal/google"
 )
 
 func TestGoogleSettings(t *testing.T) {
 	t.Parallel()
 
-	base := map[string]string{"DATABASE_URL": "postgres://calendar_user:secret@localhost/calendar_db"}
+	base := map[string]string{"DATABASE_URL": "postgres://google_calendar_user:secret@localhost/google_calendar_db"}
 	cfg, err := LoadFrom(mapLookup(base))
 	if err != nil {
 		t.Fatal(err)

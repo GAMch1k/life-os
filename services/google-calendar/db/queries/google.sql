@@ -1,3 +1,7 @@
+-- The Google connection, its calendar list, and the inbound sync
+-- (internal/google). Calendar is reached only through its API; these are
+-- this service's own tables.
+
 -- name: GetGoogleConnection :one
 SELECT * FROM google_connections WHERE singleton;
 
@@ -34,7 +38,8 @@ WHERE id = sqlc.arg(id)
 RETURNING *;
 
 -- name: DeleteGoogleConnection :execrows
--- Also deletes its calendar list (ON DELETE CASCADE).
+-- Also deletes its calendar list, exports, and waiting edits (ON DELETE
+-- CASCADE).
 DELETE FROM google_connections WHERE id = $1;
 
 -- name: ListGoogleCalendars :many
@@ -49,8 +54,8 @@ SELECT * FROM google_calendars WHERE id = $1;
 -- name: UpsertGoogleCalendar :exec
 -- Records a calendar as Google lists it. A new one starts with
 -- initial_sync_enabled (and is then due for its first sync now); a known
--- one keeps the owner's choice, and its
--- updated_at moves only when Google's details changed.
+-- one keeps the owner's choice, and its updated_at moves only when Google's
+-- details changed.
 INSERT INTO google_calendars (connection_id, google_calendar_id, summary, color, access_role, is_primary, sync_enabled, next_sync_at)
 VALUES (sqlc.arg(connection_id), sqlc.arg(google_calendar_id), sqlc.arg(summary), sqlc.narg(color), sqlc.arg(access_role), sqlc.arg(is_primary),
         sqlc.arg(initial_sync_enabled), CASE WHEN sqlc.arg(initial_sync_enabled)::boolean THEN now() END)
@@ -59,6 +64,12 @@ SET summary = EXCLUDED.summary, color = EXCLUDED.color, access_role = EXCLUDED.a
     is_primary = EXCLUDED.is_primary, updated_at = now()
 WHERE (google_calendars.summary, google_calendars.color, google_calendars.access_role, google_calendars.is_primary)
     IS DISTINCT FROM (EXCLUDED.summary, EXCLUDED.color, EXCLUDED.access_role, EXCLUDED.is_primary);
+
+-- name: ListGoogleCalendarsNotListed :many
+-- The calendars Google no longer lists (DeleteGoogleCalendarsNotListed
+-- drops them).
+SELECT * FROM google_calendars
+WHERE connection_id = sqlc.arg(connection_id) AND NOT (google_calendar_id = ANY (sqlc.arg(listed)::text[]));
 
 -- name: DeleteGoogleCalendarsNotListed :execrows
 -- Drops the calendars Google no longer lists.
@@ -70,8 +81,9 @@ SELECT * FROM google_calendars WHERE id = $1 FOR UPDATE;
 
 -- name: SetGoogleCalendarSync :one
 -- Records the owner's choice. A change starts over: switched on, the
--- calendar is due for a full sync now; switched off, its sync state is
--- cleared (the caller deletes its source, events, and stored Google events).
+-- calendar is due for a full sync now; switched off, its sync state and
+-- its Calendar source are cleared (the caller removes the source and
+-- forgets the stored Google events).
 UPDATE google_calendars
 SET sync_enabled = sqlc.arg(sync_enabled),
     sync_token = CASE WHEN sync_enabled = sqlc.arg(sync_enabled) THEN sync_token END,
@@ -84,13 +96,24 @@ SET sync_enabled = sqlc.arg(sync_enabled),
     last_synced_at = CASE WHEN sync_enabled = sqlc.arg(sync_enabled) THEN last_synced_at END,
     last_sync_attempt_at = CASE WHEN sync_enabled = sqlc.arg(sync_enabled) THEN last_sync_attempt_at END,
     derived_at = CASE WHEN sync_enabled = sqlc.arg(sync_enabled) THEN derived_at END,
+    source_id = CASE WHEN sync_enabled = sqlc.arg(sync_enabled) OR sqlc.arg(sync_enabled)::boolean THEN source_id END,
+    registration = CASE WHEN sync_enabled = sqlc.arg(sync_enabled) OR sqlc.arg(sync_enabled)::boolean THEN registration END,
     updated_at = CASE WHEN sync_enabled = sqlc.arg(sync_enabled) THEN updated_at ELSE now() END
 WHERE id = sqlc.arg(id)
 RETURNING *;
 
--- Syncing (internal/google/sync.go). A sync takes the calendar's lease, reads
--- Google, then writes the stored Google events, the derived Calendar events,
--- and its outcome in one transaction holding the calendar row.
+-- name: SetGoogleCalendarSource :one
+-- Records the calendar's source in Calendar and what it was registered
+-- with.
+UPDATE google_calendars
+SET source_id = sqlc.arg(source_id), registration = sqlc.arg(registration)
+WHERE id = sqlc.arg(id)
+RETURNING *;
+
+-- Syncing (internal/google/sync.go). A sync takes the calendar's lease,
+-- reads Google, then writes the stored Google events, sends Calendar what
+-- changed, and records its outcome in one transaction holding the calendar
+-- row.
 
 -- name: ListDueGoogleCalendars :many
 -- The connection's calendars chosen to sync whose next sync is due and that
@@ -145,64 +168,16 @@ SET sync_token = NULL, next_sync_at = sqlc.arg(now)::timestamptz
 WHERE id = sqlc.arg(id) AND sync_enabled
 RETURNING *;
 
+-- name: MarkGoogleCalendarDue :exec
+-- Makes one calendar due now (Google's answer to a write is to reach
+-- Calendar soon).
+UPDATE google_calendars SET next_sync_at = sqlc.arg(now)::timestamptz
+WHERE id = sqlc.arg(id) AND sync_enabled AND (next_sync_at IS NULL OR next_sync_at > sqlc.arg(now)::timestamptz);
+
 -- name: MarkGoogleCalendarsDue :exec
 -- Makes the connection's synced calendars due now (after a reconnect).
 UPDATE google_calendars SET next_sync_at = sqlc.arg(now)::timestamptz
 WHERE connection_id = sqlc.arg(connection_id) AND sync_enabled;
-
--- name: GetGoogleSource :one
-SELECT * FROM calendar_sources WHERE google_calendar_id = $1;
-
--- name: CreateGoogleSource :one
--- A synced calendar's source. Its url is the calendar's events endpoint at
--- Google, for reference; it is never fetched as a feed. It belongs to the
--- google-calendar integration under the calendar's Google id (see the
--- integration API), read-only unless the account may edit the calendar.
-INSERT INTO calendar_sources (kind, name, url, enabled, default_reminders, google_calendar_id, integration, external_id, provider, read_only)
-SELECT 'google', sqlc.arg(name)::text, sqlc.arg(url)::text, true, sqlc.narg(default_reminders), google_calendars.id,
-       'google-calendar', google_calendars.google_calendar_id, 'Google', google_calendars.access_role NOT IN ('owner', 'writer')
-FROM google_calendars
-WHERE google_calendars.id = sqlc.arg(google_calendar_id)
-RETURNING *;
-
--- name: UpdateGoogleSource :one
--- Follows the Google calendar's name and default reminders.
-UPDATE calendar_sources
-SET name = sqlc.arg(name), default_reminders = sqlc.narg(default_reminders), updated_at = now()
-WHERE id = sqlc.arg(id)
-RETURNING *;
-
--- name: DeleteGoogleSource :exec
--- Also deletes the source's events (ON DELETE CASCADE).
-DELETE FROM calendar_sources WHERE id = $1 AND kind = 'google';
-
--- name: ListGoogleSources :many
--- The sources of a connection's calendars with how many events each holds,
--- for recording what disconnecting or unlisting removes. calendar_ids, when
--- not null, narrows them to those calendars.
-SELECT calendar_sources.id, calendar_sources.name, google_calendars.id AS calendar_id,
-       (SELECT count(*) FROM events WHERE events.source_id = calendar_sources.id)::integer AS events
-FROM calendar_sources
-JOIN google_calendars ON google_calendars.id = calendar_sources.google_calendar_id
-WHERE google_calendars.connection_id = sqlc.arg(connection_id)
-  AND (sqlc.narg(calendar_ids)::uuid[] IS NULL OR google_calendars.id = ANY (sqlc.narg(calendar_ids)::uuid[]))
-ORDER BY calendar_sources.name, calendar_sources.id;
-
--- name: ListGoogleSourceIDs :many
--- The source of each synced calendar of the connection.
-SELECT calendar_sources.id, calendar_sources.google_calendar_id
-FROM calendar_sources
-JOIN google_calendars ON google_calendars.id = calendar_sources.google_calendar_id
-WHERE google_calendars.connection_id = $1;
-
--- name: ListGoogleCalendarsNotListed :many
--- The calendars Google no longer lists (DeleteGoogleCalendarsNotListed
--- drops them).
-SELECT id FROM google_calendars
-WHERE connection_id = sqlc.arg(connection_id) AND NOT (google_calendar_id = ANY (sqlc.arg(listed)::text[]));
-
--- name: CountSourceEvents :one
-SELECT count(*)::integer FROM events WHERE source_id = $1;
 
 -- name: ListGoogleEvents :many
 SELECT * FROM google_events WHERE calendar_id = $1 ORDER BY event_id;
@@ -218,7 +193,7 @@ DELETE FROM google_events WHERE calendar_id = $1;
 -- Stores Google events as sent: items is a JSON array of {"id",
 -- "recurringEventId", "data"}, data being the event's JSON. A version older
 -- than the stored one (by Google's updated time, when both have one) does
--- not replace it: a listing read before one of Calendar's own writes
+-- not replace it: a listing read before one of this service's own writes
 -- cannot undo it.
 INSERT INTO google_events (calendar_id, event_id, recurring_event_id, data)
 SELECT sqlc.arg(calendar_id), item.id, NULLIF(item."recurringEventId", ''), item.data
@@ -237,6 +212,27 @@ DELETE FROM google_events
 WHERE calendar_id = sqlc.arg(calendar_id)
   AND (event_id = ANY (sqlc.arg(event_ids)::text[]) OR recurring_event_id = ANY (sqlc.arg(event_ids)::text[]));
 
+-- name: DeleteGoogleInstances :exec
+-- Forgets stored instances by id (not their series).
+DELETE FROM google_events
+WHERE calendar_id = sqlc.arg(calendar_id) AND event_id = ANY (sqlc.arg(event_ids)::text[]);
+
+-- name: GetStoredGoogleEvent :one
+SELECT * FROM google_events WHERE calendar_id = sqlc.arg(calendar_id) AND event_id = sqlc.arg(event_id);
+
+-- name: ListStoredGoogleInstances :many
+-- A recurring event's stored changed or cancelled instances.
+SELECT * FROM google_events
+WHERE calendar_id = sqlc.arg(calendar_id) AND recurring_event_id = sqlc.arg(recurring_event_id)
+ORDER BY event_id;
+
+-- name: ListGoogleEventETags :many
+-- The etags of stored Google events, to recognize this service's own
+-- writes in a listing.
+SELECT event_id, COALESCE(data ->> 'etag', '')::text AS etag
+FROM google_events
+WHERE calendar_id = sqlc.arg(calendar_id) AND event_id = ANY (sqlc.arg(event_ids)::text[]);
+
 -- name: CreateGoogleOAuthState :exec
 INSERT INTO google_oauth_states (state_hash, code_verifier, expires_at)
 VALUES ($1, $2, $3);
@@ -248,3 +244,72 @@ RETURNING code_verifier, expires_at;
 
 -- name: DeleteExpiredGoogleOAuthStates :exec
 DELETE FROM google_oauth_states WHERE expires_at <= sqlc.arg(now)::timestamptz;
+
+-- What Calendar was last told of each event of a calendar.
+
+-- name: ListSentEvents :many
+SELECT * FROM google_sent_events WHERE calendar_id = $1 ORDER BY external_uid;
+
+-- name: CountSentEvents :one
+SELECT count(*)::integer FROM google_sent_events WHERE calendar_id = $1;
+
+-- name: UpsertSentEvents :exec
+-- Records what Calendar now holds: items is a JSON array of {"uid",
+-- "item"}.
+INSERT INTO google_sent_events (calendar_id, external_uid, item)
+SELECT sqlc.arg(calendar_id), sent.uid, sent.item
+FROM jsonb_to_recordset(sqlc.arg(items)::jsonb) AS sent(uid text, item jsonb)
+ON CONFLICT (calendar_id, external_uid) DO UPDATE SET item = EXCLUDED.item;
+
+-- name: DeleteSentEvents :exec
+DELETE FROM google_sent_events
+WHERE calendar_id = sqlc.arg(calendar_id) AND external_uid = ANY (sqlc.arg(uids)::text[]);
+
+-- name: ForgetSentEvent :exec
+-- Calendar's version of an event is not Google's (such as after Google
+-- refused an edit made in Life OS): the next sync sends it again.
+UPDATE google_sent_events SET item = NULL
+WHERE calendar_id = sqlc.arg(calendar_id) AND external_uid = sqlc.arg(external_uid);
+
+-- name: ClearSentEvents :exec
+DELETE FROM google_sent_events WHERE calendar_id = $1;
+
+-- Series Calendar created in a source that this service created in Google.
+
+-- name: AddRekey :exec
+INSERT INTO google_rekeys (calendar_id, google_event_id, previous_uid)
+VALUES ($1, $2, $3)
+ON CONFLICT (calendar_id, google_event_id) DO UPDATE SET previous_uid = EXCLUDED.previous_uid;
+
+-- name: ListRekeys :many
+SELECT * FROM google_rekeys WHERE calendar_id = $1 ORDER BY google_event_id;
+
+-- name: GetRekeyByPreviousUID :one
+SELECT * FROM google_rekeys WHERE calendar_id = sqlc.arg(calendar_id) AND previous_uid = sqlc.arg(previous_uid);
+
+-- name: DeleteRekeys :exec
+DELETE FROM google_rekeys
+WHERE calendar_id = sqlc.arg(calendar_id) AND google_event_id = ANY (sqlc.arg(google_event_ids)::text[]);
+
+-- Sources to remove from Calendar.
+
+-- name: QueueSourceRemoval :exec
+INSERT INTO google_source_removals (external_id, name, events, reason, requested_at, next_attempt_at)
+VALUES (sqlc.arg(external_id), sqlc.arg(name), sqlc.arg(events), sqlc.arg(reason), sqlc.arg(now)::timestamptz, sqlc.arg(now)::timestamptz)
+ON CONFLICT (external_id) DO UPDATE
+SET name = EXCLUDED.name, events = GREATEST(google_source_removals.events, EXCLUDED.events), reason = EXCLUDED.reason,
+    next_attempt_at = EXCLUDED.next_attempt_at;
+
+-- name: GetSourceRemoval :one
+SELECT * FROM google_source_removals WHERE external_id = $1;
+
+-- name: ListDueSourceRemovals :many
+SELECT * FROM google_source_removals WHERE next_attempt_at <= sqlc.arg(now)::timestamptz ORDER BY requested_at, external_id;
+
+-- name: DeleteSourceRemoval :exec
+DELETE FROM google_source_removals WHERE external_id = $1;
+
+-- name: FailSourceRemoval :exec
+UPDATE google_source_removals
+SET attempts = attempts + 1, last_error = sqlc.arg(last_error), next_attempt_at = sqlc.arg(next_attempt_at)::timestamptz
+WHERE external_id = sqlc.arg(external_id);

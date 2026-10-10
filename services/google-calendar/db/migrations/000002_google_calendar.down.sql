@@ -1,3 +1,4 @@
+DROP TABLE google_source_removals;
 DROP TABLE google_pushes;
 DROP TABLE google_exports;
 DROP TABLE google_rekeys;

@@ -6,10 +6,210 @@ package generated
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Querier interface {
-	Ping(ctx context.Context) (int32, error)
+	// Series Calendar created in a source that this service created in Google.
+	AddRekey(ctx context.Context, arg AddRekeyParams) error
+	// Takes the lease of the export due first; a lease left by a crashed
+	// attempt expires.
+	ClaimDueGoogleExport(ctx context.Context, arg ClaimDueGoogleExportParams) (GoogleExport, error)
+	ClaimDuePush(ctx context.Context, arg ClaimDuePushParams) (GooglePush, error)
+	// Takes the calendar's sync lease: one sync per calendar at a time, across
+	// processes too. A lease left by a crashed sync expires and is taken over.
+	ClaimGoogleCalendarSync(ctx context.Context, arg ClaimGoogleCalendarSyncParams) (GoogleCalendar, error)
+	ClearSentEvents(ctx context.Context, calendarID pgtype.UUID) error
+	// A state is used once: reading it deletes it.
+	ConsumeGoogleOAuthState(ctx context.Context, stateHash []byte) (ConsumeGoogleOAuthStateRow, error)
+	// Edits of the calendar's events still to write to Google.
+	CountCalendarPushes(ctx context.Context, calendarID pgtype.UUID) (int32, error)
+	CountGoogleEvents(ctx context.Context, calendarID pgtype.UUID) (int32, error)
+	CountSentEvents(ctx context.Context, calendarID pgtype.UUID) (int32, error)
+	// The one connection (a second insert violates the singleton key).
+	CreateGoogleConnection(ctx context.Context, arg CreateGoogleConnectionParams) (GoogleConnection, error)
+	CreateGoogleOAuthState(ctx context.Context, arg CreateGoogleOAuthStateParams) error
+	DeleteCalendarPushes(ctx context.Context, calendarID pgtype.UUID) error
+	DeleteExpiredGoogleOAuthStates(ctx context.Context, now pgtype.Timestamptz) error
+	// Drops one calendar row (with its stored events): the Life OS calendar
+	// deleted in Google.
+	DeleteGoogleCalendar(ctx context.Context, id pgtype.UUID) error
+	// Drops the calendars Google no longer lists.
+	DeleteGoogleCalendarsNotListed(ctx context.Context, arg DeleteGoogleCalendarsNotListedParams) (int64, error)
+	// Also deletes its calendar list, exports, and waiting edits (ON DELETE
+	// CASCADE).
+	DeleteGoogleConnection(ctx context.Context, id pgtype.UUID) (int64, error)
+	// Forgets every stored Google event of the calendar.
+	DeleteGoogleEvents(ctx context.Context, calendarID pgtype.UUID) error
+	// Forgets Google events, and the occurrences of the recurring ones among them.
+	DeleteGoogleEventsByID(ctx context.Context, arg DeleteGoogleEventsByIDParams) error
+	DeleteGoogleExport(ctx context.Context, eventID pgtype.UUID) error
+	// Forgets stored instances by id (not their series).
+	DeleteGoogleInstances(ctx context.Context, arg DeleteGoogleInstancesParams) error
+	DeleteRekeys(ctx context.Context, arg DeleteRekeysParams) error
+	DeleteSentEvents(ctx context.Context, arg DeleteSentEventsParams) error
+	DeleteSourceRemoval(ctx context.Context, externalID string) error
+	// Forgets the export of a deleted event that never reached Google.
+	DeleteUnexportedGoogleExport(ctx context.Context, eventID pgtype.UUID) (int64, error)
+	// Records a failed sync (the stored events stay) and releases the lease;
+	// a calendar switched off meanwhile has nothing to record (no row).
+	FailGoogleCalendarSync(ctx context.Context, arg FailGoogleCalendarSyncParams) (GoogleCalendar, error)
+	// Records a failed attempt; it is retried at next_attempt_at.
+	FailGoogleExport(ctx context.Context, arg FailGoogleExportParams) (GoogleExport, error)
+	FailPush(ctx context.Context, arg FailPushParams) (GooglePush, error)
+	FailSourceRemoval(ctx context.Context, arg FailSourceRemovalParams) error
+	// A calendar the account owns named like the Life OS calendar, adopted
+	// instead of creating another one (after Google was disconnected and
+	// connected again).
+	FindLifeOSCalendarCandidate(ctx context.Context, arg FindLifeOSCalendarCandidateParams) (GoogleCalendar, error)
+	// Records a successful sync and releases the lease.
+	FinishGoogleCalendarSync(ctx context.Context, arg FinishGoogleCalendarSyncParams) (GoogleCalendar, error)
+	// Records a successful export. A change queued while it ran (requested_at
+	// moved) keeps the export pending and due now.
+	FinishGoogleExport(ctx context.Context, arg FinishGoogleExportParams) (GoogleExport, error)
+	// The edit was written (or given up): forgotten, unless a later one was
+	// queued while it ran.
+	FinishPush(ctx context.Context, arg FinishPushParams) error
+	// Calendar's version of an event is not Google's (such as after Google
+	// refused an edit made in Life OS): the next sync sends it again.
+	ForgetSentEvent(ctx context.Context, arg ForgetSentEventParams) error
+	GetGoogleCalendar(ctx context.Context, id pgtype.UUID) (GoogleCalendar, error)
+	GetGoogleCalendarByGoogleID(ctx context.Context, arg GetGoogleCalendarByGoogleIDParams) (GoogleCalendar, error)
+	// The Google connection, its calendar list, and the inbound sync
+	// (internal/google). Calendar is reached only through its API; these are
+	// this service's own tables.
+	GetGoogleConnection(ctx context.Context) (GoogleConnection, error)
+	// Exports of Life OS events.
+	GetGoogleExport(ctx context.Context, eventID pgtype.UUID) (GoogleExport, error)
+	GetRekeyByPreviousUID(ctx context.Context, arg GetRekeyByPreviousUIDParams) (GoogleRekey, error)
+	GetSourceRemoval(ctx context.Context, externalID string) (GoogleSourceRemoval, error)
+	GetStoredGoogleEvent(ctx context.Context, arg GetStoredGoogleEventParams) (GoogleEvent, error)
+	// How the export is going: waiting and failing exports, and the latest
+	// failure.
+	GoogleExportSummary(ctx context.Context, connectionID pgtype.UUID) (GoogleExportSummaryRow, error)
+	// Records Google's current version of an exported event (after its change
+	// in Google was applied in Life OS, or a conflict kept Google's version):
+	// synced, unless a later change is queued. payload, when given, is the
+	// event as Calendar now has it.
+	LinkGoogleExport(ctx context.Context, arg LinkGoogleExportParams) error
+	// Syncing (internal/google/sync.go). A sync takes the calendar's lease,
+	// reads Google, then writes the stored Google events, sends Calendar what
+	// changed, and records its outcome in one transaction holding the calendar
+	// row.
+	// The connection's calendars chosen to sync whose next sync is due and that
+	// nobody is syncing.
+	ListDueGoogleCalendars(ctx context.Context, arg ListDueGoogleCalendarsParams) ([]pgtype.UUID, error)
+	ListDueSourceRemovals(ctx context.Context, now pgtype.Timestamptz) ([]GoogleSourceRemoval, error)
+	// The connection's calendars: the primary first, then by name.
+	ListGoogleCalendars(ctx context.Context, connectionID pgtype.UUID) ([]GoogleCalendar, error)
+	// The calendars Google no longer lists (DeleteGoogleCalendarsNotListed
+	// drops them).
+	ListGoogleCalendarsNotListed(ctx context.Context, arg ListGoogleCalendarsNotListedParams) ([]GoogleCalendar, error)
+	// The etags of stored Google events, to recognize this service's own
+	// writes in a listing.
+	ListGoogleEventETags(ctx context.Context, arg ListGoogleEventETagsParams) ([]ListGoogleEventETagsRow, error)
+	ListGoogleEvents(ctx context.Context, calendarID pgtype.UUID) ([]GoogleEvent, error)
+	// The exports of the given events, for showing their sync state.
+	ListGoogleExports(ctx context.Context, eventIds []pgtype.UUID) ([]GoogleExport, error)
+	// The exported events linked to a Life OS calendar, by Google event id.
+	ListLinkedGoogleExports(ctx context.Context, googleCalendarID *string) ([]GoogleExport, error)
+	ListRekeys(ctx context.Context, calendarID pgtype.UUID) ([]GoogleRekey, error)
+	// What Calendar was last told of each event of a calendar.
+	ListSentEvents(ctx context.Context, calendarID pgtype.UUID) ([]GoogleSentEvent, error)
+	// A recurring event's stored changed or cancelled instances.
+	ListStoredGoogleInstances(ctx context.Context, arg ListStoredGoogleInstancesParams) ([]GoogleEvent, error)
+	// The exports a complete snapshot of the feed did not list (it started at
+	// started_at): their events no longer exist.
+	ListUnseenGoogleExports(ctx context.Context, arg ListUnseenGoogleExportsParams) ([]GoogleExport, error)
+	LockGoogleCalendar(ctx context.Context, id pgtype.UUID) (GoogleCalendar, error)
+	// Makes one calendar due now (Google's answer to a write is to reach
+	// Calendar soon).
+	MarkGoogleCalendarDue(ctx context.Context, arg MarkGoogleCalendarDueParams) error
+	// Makes the connection's synced calendars due now (after a reconnect).
+	MarkGoogleCalendarsDue(ctx context.Context, arg MarkGoogleCalendarsDueParams) error
+	MarkGoogleExportBackfilled(ctx context.Context, arg MarkGoogleExportBackfilledParams) error
+	// The event was deleted in Life OS: its copy in Google is deleted next.
+	MarkGoogleExportDeleted(ctx context.Context, arg MarkGoogleExportDeletedParams) error
+	// Makes every waiting export due now (after reconnecting or switching
+	// export on).
+	MarkGoogleExportsDue(ctx context.Context, arg MarkGoogleExportsDueParams) error
+	// Makes every waiting edit due now (after reconnecting).
+	MarkPushesDue(ctx context.Context, arg MarkPushesDueParams) error
+	// Gives the lease up without an attempt (export switched off, Google not
+	// usable, or the event not known yet); next_attempt_at, when given,
+	// retries then.
+	ParkGoogleExport(ctx context.Context, arg ParkGoogleExportParams) error
+	// How writing edits to Google goes, for the connection's status.
+	PushSummary(ctx context.Context, connectionID pgtype.UUID) (PushSummaryRow, error)
+	// Queues the export of a Life OS event's latest state (payload), due now.
+	QueueGoogleExport(ctx context.Context, arg QueueGoogleExportParams) error
+	// The owner's edits of Google events waiting to be written to Google.
+	// Queues writing an event's latest state (payload; null with deleted) to
+	// Google, due now.
+	QueuePush(ctx context.Context, arg QueuePushParams) error
+	// Sources to remove from Calendar.
+	QueueSourceRemoval(ctx context.Context, arg QueueSourceRemovalParams) error
+	// A new authorization of the same account: new token and scopes, usable again.
+	ReconnectGoogleConnection(ctx context.Context, arg ReconnectGoogleConnectionParams) (GoogleConnection, error)
+	// A refresh succeeded: the connection is usable. Google may rotate the
+	// refresh token; a NULL ciphertext keeps the stored one.
+	RecordGoogleTokenRefresh(ctx context.Context, arg RecordGoogleTokenRefreshParams) (GoogleConnection, error)
+	// Gives the lease up after a sync that could not record an outcome; due_at,
+	// when given, reschedules it.
+	ReleaseGoogleCalendarSync(ctx context.Context, arg ReleaseGoogleCalendarSyncParams) error
+	ReleasePush(ctx context.Context, eventID pgtype.UUID) error
+	// The Life OS calendar was created anew: every exported event is written
+	// to it again, and deletions have nothing left to delete.
+	ResetGoogleExports(ctx context.Context, arg ResetGoogleExportsParams) error
+	// Reads the feed again from a snapshot (its cursor expired, or the Life OS
+	// events to export are to be looked at again as a whole).
+	RestartFeed(ctx context.Context, id pgtype.UUID) error
+	// Forgets the sync token so the next sync lists every event again, due now.
+	ResyncGoogleCalendar(ctx context.Context, arg ResyncGoogleCalendarParams) (GoogleCalendar, error)
+	SetFeedError(ctx context.Context, arg SetFeedErrorParams) error
+	// The change feed's position.
+	// The feed was read up to cursor (Calendar's nextCursor); snapshot_started_at
+	// is set while a snapshot is being read, null outside one.
+	SetFeedPosition(ctx context.Context, arg SetFeedPositionParams) error
+	// Records the calendar's source in Calendar and what it was registered
+	// with.
+	SetGoogleCalendarSource(ctx context.Context, arg SetGoogleCalendarSourceParams) (GoogleCalendar, error)
+	// Records the owner's choice. A change starts over: switched on, the
+	// calendar is due for a full sync now; switched off, its sync state and
+	// its Calendar source are cleared (the caller removes the source and
+	// forgets the stored Google events).
+	SetGoogleCalendarSync(ctx context.Context, arg SetGoogleCalendarSyncParams) (GoogleCalendar, error)
+	SetGoogleConnectionStatus(ctx context.Context, arg SetGoogleConnectionStatusParams) (GoogleConnection, error)
+	// Two-way sync: the Life OS calendar, the export of Life OS events, the
+	// owner's edits of Google events waiting to be written to Google, and the
+	// position in Calendar's change feed that brings both.
+	SetGoogleExportEnabled(ctx context.Context, arg SetGoogleExportEnabledParams) (GoogleConnection, error)
+	// Records the event as the feed gives it without queuing an export (a
+	// snapshot of an event already exported, or export off). A waiting export
+	// that had no payload yet becomes due.
+	SetGoogleExportPayload(ctx context.Context, arg SetGoogleExportPayloadParams) (int64, error)
+	// Records the Life OS calendar created in Google (and why, in note, when it
+	// replaced one the owner deleted).
+	SetLifeOSCalendar(ctx context.Context, arg SetLifeOSCalendarParams) (GoogleConnection, error)
+	// Says why the Life OS calendar could not be created (null: nothing to say).
+	SetLifeOSCalendarNote(ctx context.Context, arg SetLifeOSCalendarNoteParams) error
+	// The copy in Google is gone (deleted there): the event is no longer linked.
+	UnlinkGoogleExport(ctx context.Context, eventID pgtype.UUID) error
+	// Records a calendar as Google lists it. A new one starts with
+	// initial_sync_enabled (and is then due for its first sync now); a known
+	// one keeps the owner's choice, and its updated_at moves only when Google's
+	// details changed.
+	UpsertGoogleCalendar(ctx context.Context, arg UpsertGoogleCalendarParams) error
+	// Stores Google events as sent: items is a JSON array of {"id",
+	// "recurringEventId", "data"}, data being the event's JSON. A version older
+	// than the stored one (by Google's updated time, when both have one) does
+	// not replace it: a listing read before one of this service's own writes
+	// cannot undo it.
+	UpsertGoogleEvents(ctx context.Context, arg UpsertGoogleEventsParams) error
+	// Records what Calendar now holds: items is a JSON array of {"uid",
+	// "item"}.
+	UpsertSentEvents(ctx context.Context, arg UpsertSentEventsParams) error
 }
 
 var _ Querier = (*Queries)(nil)
