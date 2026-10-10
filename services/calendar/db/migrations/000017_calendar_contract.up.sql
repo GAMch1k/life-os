@@ -58,9 +58,11 @@ ALTER TABLE events
 -- owner's own address (the ZAW waste pickups at home): reminder
 -- notifications leave them out. The integration says so when it registers
 -- the source; until now Calendar knew it from the preset (ZAW), so the
--- preset's source keeps it.
+-- preset's source keeps it, as does a ZAW feed calendar-feeds registered
+-- itself (labelled ZAW, without the legacy preset).
 ALTER TABLE calendar_sources ADD COLUMN private_location BOOLEAN NOT NULL DEFAULT false;
-UPDATE calendar_sources SET private_location = true WHERE preset IS NOT NULL;
+UPDATE calendar_sources SET private_location = true
+WHERE preset IS NOT NULL OR (integration = 'calendar-feeds' AND provider = 'ZAW');
 
 -- The sources: the constraints of the in-process era first, then their
 -- columns (with their own checks and indexes: calendar_sources_due_idx,

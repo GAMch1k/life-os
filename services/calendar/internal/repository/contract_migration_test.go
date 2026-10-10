@@ -26,6 +26,7 @@ import (
 type liveShaped struct {
 	pool                                  *pgxpool.Pool
 	owner, family, zaw, club, registered  string // source ids
+	zawRegistered                         string // a ZAW feed calendar-feeds registered itself
 	standup, trip, papier, haircut, party string // event ids
 }
 
@@ -80,6 +81,8 @@ func seedLiveShaped(t *testing.T) liveShaped {
 	}
 	s.registered = scalar(`INSERT INTO calendar_sources (kind, name, integration, external_id, provider, read_only, in_process, integration_config)
 		VALUES ('external', 'Work', 'google-calendar', 'work@example.com', 'Google', false, false, '{"name":"Work"}') RETURNING id::text`)
+	s.zawRegistered = scalar(`INSERT INTO calendar_sources (kind, name, integration, external_id, provider, in_process)
+		VALUES ('external', 'Müll Ober-Ramstadt', 'calendar-feeds', gen_random_uuid()::text, 'ZAW', false) RETURNING id::text`)
 	s.party = scalar(`INSERT INTO events (title, all_day, start_at, end_at, source_kind, source_id, external_uid, read_only_reason)
 		VALUES ('Party', false, '2026-10-24T18:00:00Z', '2026-10-24T22:00:00Z', 'external', $1, 'party_20261024', 'One occurrence of a rule Calendar cannot hold.') RETURNING id::text`, s.registered)
 	return s
@@ -158,10 +161,14 @@ func TestCalendarContractMigration(t *testing.T) {
 	if after := s.scalar(t, journal); after != beforeJournal {
 		t.Fatalf("the contract wrote change feed entries: %s, was %s", after, beforeJournal)
 	}
-	// The ZAW preset's events keep their street out of reminders: its
-	// source's locations are private now.
-	if private := s.scalar(t, `SELECT COALESCE(string_agg(id::text, ','), '') FROM calendar_sources WHERE private_location`); private != s.zaw {
-		t.Fatalf("private-location sources = %q, want the ZAW feed %s", private, s.zaw)
+	// The ZAW feeds' events keep their street out of reminders: their
+	// sources' locations are private now.
+	wantPrivate := []string{s.zaw, s.zawRegistered}
+	if wantPrivate[0] > wantPrivate[1] {
+		wantPrivate[0], wantPrivate[1] = wantPrivate[1], wantPrivate[0]
+	}
+	if private := s.scalar(t, `SELECT COALESCE(string_agg(id::text, ',' ORDER BY id), '') FROM calendar_sources WHERE private_location`); private != strings.Join(wantPrivate, ",") {
+		t.Fatalf("private-location sources = %q, want the ZAW feeds %v", private, wantPrivate)
 	}
 
 	// The change feed follows a Life OS event and the events of a source
@@ -206,7 +213,7 @@ func TestCalendarContractMigration(t *testing.T) {
 	if got := s.scalar(t, `SELECT string_agg(DISTINCT concat_ws(' ', kind, in_process, url IS NULL, google_calendar_id IS NULL, preset IS NULL, consecutive_failures), ',') FROM calendar_sources`); got != "external f t t t 0" {
 		t.Fatalf("sources after down: %s", got)
 	}
-	if got := s.scalar(t, `SELECT (SELECT count(*) FROM calendar_sources)::text || '/' || (SELECT count(*) FROM google_connections)::text`); got != "6/0" {
+	if got := s.scalar(t, `SELECT (SELECT count(*) FROM calendar_sources)::text || '/' || (SELECT count(*) FROM google_connections)::text`); got != "7/0" {
 		t.Fatalf("after down: sources/connections = %s", got)
 	}
 	// The in-process era's rules hold again: a new source defaults to in
@@ -235,7 +242,7 @@ func TestCalendarContractMigration(t *testing.T) {
 	if left := s.legacyLeft(t); left != "0 tables, 0 columns" {
 		t.Fatalf("after up again: %s left", left)
 	}
-	if got := s.scalar(t, `SELECT count(*)::text FROM calendar_sources`); got != "6" {
+	if got := s.scalar(t, `SELECT count(*)::text FROM calendar_sources`); got != "7" {
 		t.Fatalf("sources after up again = %s", got)
 	}
 }
