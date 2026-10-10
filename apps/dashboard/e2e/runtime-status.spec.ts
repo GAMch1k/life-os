@@ -392,6 +392,7 @@ test.describe("Status card layout", () => {
     "Voice transcription",
     "Calendar sources",
     "Notifications",
+    "Bank connection",
     "Services",
   ];
 
