@@ -76,6 +76,27 @@ func (e ApplyScope) Valid() bool {
 	}
 }
 
+// Defines values for BankAccountInputKind.
+const (
+	BankAccountInputKindBank    BankAccountInputKind = "bank"
+	BankAccountInputKindCard    BankAccountInputKind = "card"
+	BankAccountInputKindSavings BankAccountInputKind = "savings"
+)
+
+// Valid indicates whether the value is a known member of the BankAccountInputKind enum.
+func (e BankAccountInputKind) Valid() bool {
+	switch e {
+	case BankAccountInputKindBank:
+		return true
+	case BankAccountInputKindCard:
+		return true
+	case BankAccountInputKindSavings:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CategoryKind.
 const (
 	CategoryKindExpense  CategoryKind = "expense"
@@ -250,11 +271,15 @@ func (e TransactionStatus) Valid() bool {
 	}
 }
 
-// Account `balance` is the opening balance plus every booked transaction; `pending` is the sum of the pending transactions, which are not in the balance. `transactionCount` counts both.
+// Account `balance` is the opening balance plus every booked transaction; for a bank account that reported one, it is the bank's booked balance as of `balanceAsOf` instead, and `available` is the bank's available balance. `pending` is the sum of the pending transactions, which are not in a computed balance. `transactionCount` counts both.
 type Account struct {
 	Archived   bool       `json:"archived"`
 	ArchivedAt *time.Time `json:"archivedAt"`
+	Available  *Money     `json:"available"`
 	Balance    Money      `json:"balance"`
+
+	// BalanceAsOf The date of the bank-reported balance; null for a computed balance.
+	BalanceAsOf *openapi_types.Date `json:"balanceAsOf"`
 
 	// BuiltIn True for the built-in Cash account.
 	BuiltIn          bool               `json:"builtIn"`
@@ -286,8 +311,20 @@ type AccountSource struct {
 	// ExternalId The account's id at the bank.
 	ExternalId *string `json:"externalId"`
 
+	// IbanMasked The masked IBAN, such as DE23…2300.
+	IbanMasked *string `json:"ibanMasked"`
+
+	// Institution The bank, such as Deutsche Bank.
+	Institution *string `json:"institution"`
+
 	// Kind `manual`: kept in Life OS. `bank`: connected to a bank (planned).
 	Kind AccountSourceKind `json:"kind"`
+
+	// Provider The open-banking provider, such as enablebanking.
+	Provider *string `json:"provider"`
+
+	// SyncedAt When the last bank sync reached the account.
+	SyncedAt *time.Time `json:"syncedAt"`
 }
 
 // AccountSourceKind `manual`: kept in Life OS. `bank`: connected to a bank (planned).
@@ -310,6 +347,102 @@ type ApplyCategoryRulesResult struct {
 
 // ApplyScope defines model for ApplyScope.
 type ApplyScope string
+
+// BankAccountId defines model for BankAccountId.
+type BankAccountId struct {
+	ExternalId string `json:"externalId"`
+
+	// Id The Finance account id.
+	Id openapi_types.UUID `json:"id"`
+}
+
+// BankAccountInput defines model for BankAccountInput.
+type BankAccountInput struct {
+	AvailableBalance *BankBalance `json:"availableBalance,omitempty"`
+	BookedBalance    *BankBalance `json:"bookedBalance,omitempty"`
+	Currency         string       `json:"currency"`
+
+	// ExternalId Stable per connection.
+	ExternalId string `json:"externalId"`
+
+	// IbanMasked Such as DE23…2300; never the full IBAN.
+	IbanMasked *string              `json:"ibanMasked,omitempty"`
+	Kind       BankAccountInputKind `json:"kind"`
+	Name       string               `json:"name"`
+}
+
+// BankAccountInputKind defines model for BankAccountInput.Kind.
+type BankAccountInputKind string
+
+// BankBalance defines model for BankBalance.
+type BankBalance struct {
+	// Amount Minor units.
+	Amount   int64  `json:"amount"`
+	Currency string `json:"currency"`
+
+	// Date The day the bank reported it for.
+	Date openapi_types.Date `json:"date"`
+}
+
+// BankImportRequest defines model for BankImportRequest.
+type BankImportRequest struct {
+	Accounts []BankAccountInput `json:"accounts"`
+
+	// ConnectionId The connection's id in the banking service.
+	ConnectionId openapi_types.UUID `json:"connectionId"`
+
+	// Institution Example: Deutsche Bank
+	Institution string `json:"institution"`
+
+	// Provider Example: enablebanking
+	Provider     string                 `json:"provider"`
+	Transactions []BankTransactionInput `json:"transactions"`
+
+	// Window The booking dates this sync covers (inclusive).
+	Window BankImportWindow `json:"window"`
+}
+
+// BankImportResult `accountIds` maps every account of the sync to its Finance id. `transactions.removedPending` counts pending transactions removed because a booked one replaced them or the sync no longer has them; `skipped` counts zero-amount transactions.
+type BankImportResult struct {
+	AccountIds []BankAccountId `json:"accountIds"`
+	Accounts   struct {
+		Created int `json:"created"`
+		Updated int `json:"updated"`
+	} `json:"accounts"`
+	Transactions struct {
+		Created        int `json:"created"`
+		RemovedPending int `json:"removedPending"`
+		Skipped        int `json:"skipped"`
+		Unchanged      int `json:"unchanged"`
+		Updated        int `json:"updated"`
+	} `json:"transactions"`
+}
+
+// BankImportWindow The booking dates this sync covers (inclusive).
+type BankImportWindow struct {
+	From openapi_types.Date `json:"from"`
+	To   openapi_types.Date `json:"to"`
+}
+
+// BankTransactionInput defines model for BankTransactionInput.
+type BankTransactionInput struct {
+	AccountExternalId string             `json:"accountExternalId"`
+	Amount            Money              `json:"amount"`
+	BankReference     *string            `json:"bankReference,omitempty"`
+	BookingDate       openapi_types.Date `json:"bookingDate"`
+	Counterparty      *string            `json:"counterparty,omitempty"`
+
+	// Description The remittance text.
+	Description *string `json:"description,omitempty"`
+
+	// ExternalId The bank's stable transaction id.
+	ExternalId           string  `json:"externalId"`
+	MerchantCategoryCode *string `json:"merchantCategoryCode,omitempty"`
+
+	// Status `booked`: settled, counted in the balance. `pending`: not yet settled.
+	Status    TransactionStatus   `json:"status"`
+	ValueDate *openapi_types.Date `json:"valueDate,omitempty"`
+}
 
 // Category defines model for Category.
 type Category struct {
@@ -484,8 +617,11 @@ type SpendingByCategory struct {
 
 // Transaction `categorizedBy` is `manual` when the category was chosen by hand (by the owner, the AI, or the import file; possibly none), `rule` when a category rule chose it (`categoryRuleId` names the rule), and null while nobody chose. `readOnly` is true for imported transactions: only `categoryId` and `notes` change, and they cannot be deleted.
 type Transaction struct {
-	AccountId      openapi_types.UUID        `json:"accountId"`
-	Amount         Money                     `json:"amount"`
+	AccountId openapi_types.UUID `json:"accountId"`
+	Amount    Money              `json:"amount"`
+
+	// BankReference The bank's own reference.
+	BankReference  *string                   `json:"bankReference"`
 	BookingDate    openapi_types.Date        `json:"bookingDate"`
 	CategorizedBy  *TransactionCategorizedBy `json:"categorizedBy"`
 	CategoryId     *openapi_types.UUID       `json:"categoryId"`
@@ -498,6 +634,9 @@ type Transaction struct {
 	// Description What it was for (a bank's purpose text).
 	Description *string            `json:"description"`
 	Id          openapi_types.UUID `json:"id"`
+
+	// MerchantCategoryCode The card merchant category code (ISO 18245) a bank reported.
+	MerchantCategoryCode *string `json:"merchantCategoryCode"`
 
 	// Notes The owner's own notes.
 	Notes    *string           `json:"notes"`
@@ -671,6 +810,9 @@ type UpdateCategoryRuleJSONRequestBody = UpdateCategoryRuleRequest
 // UpdateCategoryJSONRequestBody defines body for UpdateCategory for application/json ContentType.
 type UpdateCategoryJSONRequestBody = UpdateCategoryRequest
 
+// ImportBankSyncJSONRequestBody defines body for ImportBankSync for application/json ContentType.
+type ImportBankSyncJSONRequestBody = BankImportRequest
+
 // CreateManualTransactionJSONRequestBody defines body for CreateManualTransaction for application/json ContentType.
 type CreateManualTransactionJSONRequestBody = CreateManualTransactionRequest
 
@@ -715,6 +857,12 @@ type ServerInterface interface {
 	// UpdateCategory Update or archive a finance category
 	// (PATCH /v1/categories/{categoryId})
 	UpdateCategory(c fiber.Ctx, categoryId CategoryId) error
+	// ImportBankSync Import one bank sync
+	// (POST /v1/imports/bank)
+	ImportBankSync(c fiber.Ctx) error
+	// RemoveBankConnection Remove a bank connection
+	// (DELETE /v1/imports/bank/{connectionId})
+	RemoveBankConnection(c fiber.Ctx, connectionId openapi_types.UUID) error
 	// CreateCsvImport Import transactions from a CSV file
 	// (POST /v1/imports/csv)
 	CreateCsvImport(c fiber.Ctx, params CreateCsvImportParams) error
@@ -1043,6 +1191,53 @@ func (siw *ServerInterfaceWrapper) UpdateCategory(c fiber.Ctx) error {
 
 	handler := func(c fiber.Ctx) error {
 		return siw.Handler.UpdateCategory(c, categoryId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// ImportBankSync operation middleware
+func (siw *ServerInterfaceWrapper) ImportBankSync(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.ImportBankSync(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// RemoveBankConnection operation middleware
+func (siw *ServerInterfaceWrapper) RemoveBankConnection(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "connectionId" -------------
+	var connectionId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "connectionId", c.Params("connectionId"), &connectionId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter connectionId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.RemoveBankConnection(c, connectionId)
 	}
 
 	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
@@ -1423,5 +1618,9 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	router.Get(options.BaseURL+"/v1/summaries/monthly", wrapper.GetMonthlySummary)
 
 	router.Post(options.BaseURL+"/v1/imports/csv", wrapper.CreateCsvImport)
+
+	router.Post(options.BaseURL+"/v1/imports/bank", wrapper.ImportBankSync)
+
+	router.Delete(options.BaseURL+"/v1/imports/bank/:connectionId", wrapper.RemoveBankConnection)
 
 }

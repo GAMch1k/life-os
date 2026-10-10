@@ -254,6 +254,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/imports/bank": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import one bank sync
+         * @description Called by the banking integration service (actor `system:banking`) after it synced a bank connection; Finance never calls a bank. The whole sync is applied in one database transaction.
+         *
+         *     Accounts are upserted by (`connectionId`, `externalId`) as bank accounts (`source.kind` `bank`). A new account takes the bank's name (with the institution, or the masked IBAN, added when another account already has the name), kind, and currency; later syncs update the bank-reported balances, masked IBAN, provider, and institution but keep the owner's name, kind, and archive state. An account's currency never changes (400 `currency_mismatch`).
+         *
+         *     Transactions are upserted by (`connectionId`, `externalId`) as `bank` transactions: read-only except category and notes, which re-syncs never change. A re-sync updates the bank's fields (status, dates, amount, counterparty, description, merchant category code, bank reference); when the counterparty or description of a transaction whose category was not chosen by hand changes, the rules choose again. New transactions without a category get one from the rules. A new booked transaction that replaces a pending one (same account and amount, the same counterparty ignoring case, booking dates at most 3 days apart, the pending one absent from this sync) removes the pending one and takes over its notes and a category chosen by hand. Pending transactions of the connection's accounts booked inside `window` that are absent from the sync are removed; booked transactions are never deleted. Transactions with a zero amount are skipped.
+         *
+         *     Errors: a transaction naming an account that is neither in the sync nor already imported for the connection is 400 `unknown_account`; an amount or balance in another currency than its account is 400 `currency_mismatch`; duplicate external ids, an empty name, an unknown kind or status, or `window.from` after `window.to` are 400 `invalid_request`. Nothing is stored when the request fails.
+         */
+        post: operations["importBankSync"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/imports/bank/{connectionId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a bank connection
+         * @description Archives every account of the connection; all their transactions stay as history. Idempotent: an unknown or already removed connection also answers 204.
+         */
+        delete: operations["removeBankConnection"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -292,8 +338,19 @@ export interface components {
             connectionId: string | null;
             /** @description The account's id at the bank. */
             externalId: string | null;
+            /** @description The open-banking provider, such as enablebanking. */
+            provider: string | null;
+            /** @description The bank, such as Deutsche Bank. */
+            institution: string | null;
+            /** @description The masked IBAN, such as DE23…2300. */
+            ibanMasked: string | null;
+            /**
+             * Format: date-time
+             * @description When the last bank sync reached the account.
+             */
+            syncedAt: string | null;
         };
-        /** @description `balance` is the opening balance plus every booked transaction; `pending` is the sum of the pending transactions, which are not in the balance. `transactionCount` counts both. */
+        /** @description `balance` is the opening balance plus every booked transaction; for a bank account that reported one, it is the bank's booked balance as of `balanceAsOf` instead, and `available` is the bank's available balance. `pending` is the sum of the pending transactions, which are not in a computed balance. `transactionCount` counts both. */
         Account: {
             /** Format: uuid */
             id: string;
@@ -302,6 +359,12 @@ export interface components {
             currency: string;
             openingBalance: components["schemas"]["Money"];
             balance: components["schemas"]["Money"];
+            /**
+             * Format: date
+             * @description The date of the bank-reported balance; null for a computed balance.
+             */
+            balanceAsOf: string | null;
+            available: components["schemas"]["Money"] | null;
             pending: components["schemas"]["Money"];
             transactionCount: number;
             /** @description True for the built-in Cash account. */
@@ -377,6 +440,10 @@ export interface components {
             categorizedBy: "manual" | "rule" | null;
             /** Format: uuid */
             categoryRuleId: string | null;
+            /** @description The card merchant category code (ISO 18245) a bank reported. */
+            merchantCategoryCode: string | null;
+            /** @description The bank's own reference. */
+            bankReference: string | null;
             source: components["schemas"]["TransactionSource"];
             readOnly: boolean;
             /** Format: date-time */
@@ -558,6 +625,91 @@ export interface components {
             failed: number;
             categorized: number;
             errors: components["schemas"]["CsvImportError"][];
+        };
+        BankBalance: {
+            /**
+             * Format: int64
+             * @description Minor units.
+             */
+            amount: number;
+            currency: string;
+            /**
+             * Format: date
+             * @description The day the bank reported it for.
+             */
+            date: string;
+        };
+        BankAccountInput: {
+            /** @description Stable per connection. */
+            externalId: string;
+            name: string;
+            /** @enum {string} */
+            kind: "bank" | "card" | "savings";
+            currency: string;
+            /** @description Such as DE23…2300; never the full IBAN. */
+            ibanMasked?: string;
+            bookedBalance?: components["schemas"]["BankBalance"];
+            availableBalance?: components["schemas"]["BankBalance"];
+        };
+        BankTransactionInput: {
+            accountExternalId: string;
+            /** @description The bank's stable transaction id. */
+            externalId: string;
+            status: components["schemas"]["TransactionStatus"];
+            /** Format: date */
+            bookingDate: string;
+            /** Format: date */
+            valueDate?: string;
+            amount: components["schemas"]["Money"];
+            counterparty?: string;
+            /** @description The remittance text. */
+            description?: string;
+            merchantCategoryCode?: string;
+            bankReference?: string;
+        };
+        /** @description The booking dates this sync covers (inclusive). */
+        BankImportWindow: {
+            /** Format: date */
+            from: string;
+            /** Format: date */
+            to: string;
+        };
+        BankImportRequest: {
+            /**
+             * Format: uuid
+             * @description The connection's id in the banking service.
+             */
+            connectionId: string;
+            /** @example enablebanking */
+            provider: string;
+            /** @example Deutsche Bank */
+            institution: string;
+            window: components["schemas"]["BankImportWindow"];
+            accounts: components["schemas"]["BankAccountInput"][];
+            transactions: components["schemas"]["BankTransactionInput"][];
+        };
+        BankAccountId: {
+            externalId: string;
+            /**
+             * Format: uuid
+             * @description The Finance account id.
+             */
+            id: string;
+        };
+        /** @description `accountIds` maps every account of the sync to its Finance id. `transactions.removedPending` counts pending transactions removed because a booked one replaced them or the sync no longer has them; `skipped` counts zero-amount transactions. */
+        BankImportResult: {
+            accountIds: components["schemas"]["BankAccountId"][];
+            accounts: {
+                created: number;
+                updated: number;
+            };
+            transactions: {
+                created: number;
+                updated: number;
+                unchanged: number;
+                removedPending: number;
+                skipped: number;
+            };
         };
     };
     responses: never;
@@ -1362,6 +1514,68 @@ export interface operations {
             };
             /** @description The account is archived (`account_archived`) */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    importBankSync: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BankImportRequest"];
+            };
+        };
+        responses: {
+            /** @description Import result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BankImportResult"];
+                };
+            };
+            /** @description `invalid_request`, `unknown_account`, or `currency_mismatch`, or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    removeBankConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                connectionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid request, or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

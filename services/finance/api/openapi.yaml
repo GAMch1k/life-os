@@ -30,6 +30,14 @@ info:
     starts, and a manual transaction without an `accountId` goes there.
 
 
+    Bank accounts (`source.kind` `bank`) and their transactions come only
+    from the banking integration service, which pushes each sync through
+    `POST /v1/imports/bank`; Finance never calls a bank. A bank account
+    shows the balance the bank reported (`balanceAsOf`, plus `available`),
+    takes no manual transactions or CSV imports, and keeps its currency
+    (409 `managed_by_source`).
+
+
     Categories are chosen by hand or by rules: a rule matches text in a
     transaction's counterparty or description and gives it a category. Rules
     apply automatically to new manual and imported transactions that come
@@ -345,6 +353,66 @@ paths:
         '200': {description: Import result, content: {application/json: {schema: {$ref: '#/components/schemas/CsvImport'}}}}
         '400': {description: 'Unreadable CSV or missing columns (`invalid_csv`), no account (`account_required`), an unknown account (`unknown_account`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
         '409': {description: The account is archived (`account_archived`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/imports/bank:
+    post:
+      summary: Import one bank sync
+      description: >-
+        Called by the banking integration service (actor `system:banking`)
+        after it synced a bank connection; Finance never calls a bank. The
+        whole sync is applied in one database transaction.
+
+
+        Accounts are upserted by (`connectionId`, `externalId`) as bank
+        accounts (`source.kind` `bank`). A new account takes the bank's
+        name (with the institution, or the masked IBAN, added when another
+        account already has the name), kind, and currency; later syncs
+        update the bank-reported balances, masked IBAN, provider, and
+        institution but keep the owner's name, kind, and archive state. An
+        account's currency never changes (400 `currency_mismatch`).
+
+
+        Transactions are upserted by (`connectionId`, `externalId`) as
+        `bank` transactions: read-only except category and notes, which
+        re-syncs never change. A re-sync updates the bank's fields (status,
+        dates, amount, counterparty, description, merchant category code,
+        bank reference); when the counterparty or description of a
+        transaction whose category was not chosen by hand changes, the
+        rules choose again. New transactions without a category get one
+        from the rules. A new booked transaction that replaces a pending
+        one (same account and amount, the same counterparty ignoring case,
+        booking dates at most 3 days apart, the pending one absent from this
+        sync) removes the pending one and takes over its notes and a
+        category chosen by hand. Pending transactions of the connection's
+        accounts booked inside `window` that are absent from the sync are
+        removed; booked transactions are never deleted. Transactions with a
+        zero amount are skipped.
+
+
+        Errors: a transaction naming an account that is neither in the sync
+        nor already imported for the connection is 400 `unknown_account`;
+        an amount or balance in another currency than its account is 400
+        `currency_mismatch`; duplicate external ids, an empty name, an
+        unknown kind or status, or `window.from` after `window.to` are 400
+        `invalid_request`. Nothing is stored when the request fails.
+      operationId: importBankSync
+      security: []
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/BankImportRequest'}}}}
+      responses:
+        '200': {description: Import result, content: {application/json: {schema: {$ref: '#/components/schemas/BankImportResult'}}}}
+        '400': {description: '`invalid_request`, `unknown_account`, or `currency_mismatch`, or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/imports/bank/{connectionId}:
+    delete:
+      summary: Remove a bank connection
+      description: >-
+        Archives every account of the connection; all their transactions
+        stay as history. Idempotent: an unknown or already removed
+        connection also answers 204.
+      operationId: removeBankConnection
+      security: []
+      parameters: [{name: connectionId, in: path, required: true, schema: {type: string, format: uuid}}]
+      responses:
+        '204': {description: Removed}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
 components:
   parameters:
     AccountId: {name: accountId, in: path, required: true, schema: {type: string, format: uuid}}
@@ -378,18 +446,24 @@ components:
       enum: [manual, bank]
     AccountSource:
       type: object
-      required: [kind, connectionId, externalId]
+      required: [kind, connectionId, externalId, provider, institution, ibanMasked, syncedAt]
       properties:
         kind: {$ref: '#/components/schemas/AccountSourceKind'}
         connectionId: {type: string, format: uuid, nullable: true, description: The bank connection of a bank account.}
         externalId: {type: string, nullable: true, description: The account's id at the bank.}
+        provider: {type: string, nullable: true, description: 'The open-banking provider, such as enablebanking.'}
+        institution: {type: string, nullable: true, description: 'The bank, such as Deutsche Bank.'}
+        ibanMasked: {type: string, nullable: true, description: 'The masked IBAN, such as DE23…2300.'}
+        syncedAt: {type: string, format: date-time, nullable: true, description: When the last bank sync reached the account.}
     Account:
       type: object
       description: >-
-        `balance` is the opening balance plus every booked transaction;
-        `pending` is the sum of the pending transactions, which are not in
-        the balance. `transactionCount` counts both.
-      required: [id, name, kind, currency, openingBalance, balance, pending, transactionCount, builtIn, archived, archivedAt, source, createdAt, updatedAt]
+        `balance` is the opening balance plus every booked transaction; for
+        a bank account that reported one, it is the bank's booked balance
+        as of `balanceAsOf` instead, and `available` is the bank's available
+        balance. `pending` is the sum of the pending transactions, which are
+        not in a computed balance. `transactionCount` counts both.
+      required: [id, name, kind, currency, openingBalance, balance, balanceAsOf, available, pending, transactionCount, builtIn, archived, archivedAt, source, createdAt, updatedAt]
       properties:
         id: {type: string, format: uuid}
         name: {type: string}
@@ -397,6 +471,8 @@ components:
         currency: {type: string, pattern: '^[A-Z]{3}$'}
         openingBalance: {$ref: '#/components/schemas/Money'}
         balance: {$ref: '#/components/schemas/Money'}
+        balanceAsOf: {type: string, format: date, nullable: true, description: The date of the bank-reported balance; null for a computed balance.}
+        available: {type: object, allOf: [{$ref: '#/components/schemas/Money'}], nullable: true}
         pending: {$ref: '#/components/schemas/Money'}
         transactionCount: {type: integer}
         builtIn: {type: boolean, description: True for the built-in Cash account.}
@@ -454,7 +530,7 @@ components:
         while nobody chose. `readOnly` is true for imported
         transactions: only `categoryId` and `notes` change, and they cannot
         be deleted.
-      required: [id, accountId, amount, bookingDate, valueDate, status, counterparty, description, notes, categoryId, categorizedBy, categoryRuleId, source, readOnly, createdAt, updatedAt]
+      required: [id, accountId, amount, bookingDate, valueDate, status, counterparty, description, notes, categoryId, categorizedBy, categoryRuleId, merchantCategoryCode, bankReference, source, readOnly, createdAt, updatedAt]
       properties:
         id: {type: string, format: uuid}
         accountId: {type: string, format: uuid}
@@ -468,6 +544,8 @@ components:
         categoryId: {type: string, format: uuid, nullable: true}
         categorizedBy: {type: string, enum: [manual, rule], nullable: true}
         categoryRuleId: {type: string, format: uuid, nullable: true}
+        merchantCategoryCode: {type: string, nullable: true, description: The card merchant category code (ISO 18245) a bank reported.}
+        bankReference: {type: string, nullable: true, description: The bank's own reference.}
         source: {$ref: '#/components/schemas/TransactionSource'}
         readOnly: {type: boolean}
         createdAt: {type: string, format: date-time}
@@ -677,3 +755,83 @@ components:
         failed: {type: integer}
         categorized: {type: integer}
         errors: {type: array, items: {$ref: '#/components/schemas/CsvImportError'}}
+    BankBalance:
+      type: object
+      required: [amount, currency, date]
+      properties:
+        amount: {type: integer, format: int64, description: Minor units.}
+        currency: {type: string, pattern: '^[A-Z]{3}$'}
+        date: {type: string, format: date, description: The day the bank reported it for.}
+    BankAccountInput:
+      type: object
+      required: [externalId, name, kind, currency]
+      properties:
+        externalId: {type: string, minLength: 1, maxLength: 200, description: Stable per connection.}
+        name: {type: string, minLength: 1, maxLength: 100}
+        kind: {type: string, enum: [bank, card, savings]}
+        currency: {type: string, pattern: '^[A-Z]{3}$'}
+        ibanMasked: {type: string, maxLength: 64, description: 'Such as DE23…2300; never the full IBAN.'}
+        bookedBalance: {$ref: '#/components/schemas/BankBalance'}
+        availableBalance: {$ref: '#/components/schemas/BankBalance'}
+    BankTransactionInput:
+      type: object
+      required: [accountExternalId, externalId, status, bookingDate, amount]
+      properties:
+        accountExternalId: {type: string, minLength: 1, maxLength: 200}
+        externalId: {type: string, minLength: 1, maxLength: 200, description: The bank's stable transaction id.}
+        status: {$ref: '#/components/schemas/TransactionStatus'}
+        bookingDate: {type: string, format: date}
+        valueDate: {type: string, format: date}
+        amount: {$ref: '#/components/schemas/Money'}
+        counterparty: {type: string, maxLength: 200}
+        description: {type: string, maxLength: 1000, description: The remittance text.}
+        merchantCategoryCode: {type: string, maxLength: 8}
+        bankReference: {type: string, maxLength: 200}
+    BankImportWindow:
+      type: object
+      required: [from, to]
+      description: The booking dates this sync covers (inclusive).
+      properties:
+        from: {type: string, format: date}
+        to: {type: string, format: date}
+    BankImportRequest:
+      type: object
+      required: [connectionId, provider, institution, window, accounts, transactions]
+      properties:
+        connectionId: {type: string, format: uuid, description: The connection's id in the banking service.}
+        provider: {type: string, minLength: 1, maxLength: 64, example: enablebanking}
+        institution: {type: string, minLength: 1, maxLength: 200, example: Deutsche Bank}
+        window: {$ref: '#/components/schemas/BankImportWindow'}
+        accounts: {type: array, items: {$ref: '#/components/schemas/BankAccountInput'}}
+        transactions: {type: array, items: {$ref: '#/components/schemas/BankTransactionInput'}}
+    BankAccountId:
+      type: object
+      required: [externalId, id]
+      properties:
+        externalId: {type: string}
+        id: {type: string, format: uuid, description: The Finance account id.}
+    BankImportResult:
+      type: object
+      description: >-
+        `accountIds` maps every account of the sync to its Finance id.
+        `transactions.removedPending` counts pending transactions removed
+        because a booked one replaced them or the sync no longer has them;
+        `skipped` counts zero-amount transactions.
+      required: [accountIds, accounts, transactions]
+      properties:
+        accountIds: {type: array, items: {$ref: '#/components/schemas/BankAccountId'}}
+        accounts:
+          type: object
+          required: [created, updated]
+          properties:
+            created: {type: integer}
+            updated: {type: integer}
+        transactions:
+          type: object
+          required: [created, updated, unchanged, removedPending, skipped]
+          properties:
+            created: {type: integer}
+            updated: {type: integer}
+            unchanged: {type: integer}
+            removedPending: {type: integer}
+            skipped: {type: integer}
