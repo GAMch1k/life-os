@@ -200,7 +200,11 @@ test("the next event is the first active one that has not started yet", () => {
     calendarEvent("weekly", {
       ...timedEvent("weekly", "2026-10-09T16:00:00Z"),
       recurrence: { frequency: "weekly", interval: 1 },
-      occurrence: { seriesId: "weekly", recurrenceId: "2026-10-09T16:00:00Z" },
+      occurrence: {
+        seriesId: "weekly",
+        recurrenceId: "2026-10-09T16:00:00Z",
+        modified: false,
+      },
     }),
     timedEvent("later", "2026-10-09T18:00:00Z"),
   ];
