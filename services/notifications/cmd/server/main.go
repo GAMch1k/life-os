@@ -4,12 +4,17 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/GAMch1k/life-os/pkg/activity"
 	"github.com/GAMch1k/life-os/pkg/database"
 	"github.com/GAMch1k/life-os/pkg/httpserver"
 	"github.com/GAMch1k/life-os/services/notifications/internal/api"
 	serviceconfig "github.com/GAMch1k/life-os/services/notifications/internal/config"
+	"github.com/GAMch1k/life-os/services/notifications/internal/delivery"
+	repository "github.com/GAMch1k/life-os/services/notifications/internal/repository/generated"
 )
 
 func main() {
@@ -26,6 +31,15 @@ func run(ctx context.Context) error {
 	}
 
 	logger := httpserver.NewJSONLogger(os.Stdout, cfg.ParsedLogLevel())
+	channels, err := delivery.Build(cfg.ChannelNames(), logger)
+	if err != nil {
+		return err
+	}
+	if len(channels) == 0 {
+		logger.Info("no notification channels configured (NOTIFICATIONS_CHANNELS): notifications are stored and listed only")
+	} else {
+		logger.Info("notification channels configured", "channels", delivery.Names(channels))
+	}
 	pool, err := database.Open(ctx, cfg.DatabaseConfig())
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
@@ -37,9 +51,38 @@ func run(ctx context.Context) error {
 		httpserver.WithReadinessCheck(pool.Ping),
 	)
 	emitter := activity.NewEmitter(cfg.ActivityURL, "notifications", logger)
-	// Delivery channels come with the delivery worker.
-	api.Register(app, api.NewHandler(pool, nil).WithActivity(emitter))
+	worker := delivery.NewWorker(repository.New(pool), channels, delivery.Options{
+		Policy: delivery.Policy{
+			BaseDelay: serviceconfig.Seconds(cfg.RetryBaseSeconds),
+			MaxDelay:  serviceconfig.Seconds(cfg.RetryMaxSeconds),
+			MaxAge:    serviceconfig.Seconds(cfg.MaxAgeSeconds),
+		},
+		Poll:        time.Duration(cfg.WorkerPollMillis) * time.Millisecond,
+		Lease:       serviceconfig.Seconds(cfg.LeaseSeconds),
+		SendTimeout: serviceconfig.Seconds(cfg.SendTimeoutSeconds),
+	}, emitter, logger)
+	api.Register(app, api.NewHandler(pool, delivery.Names(channels)).WithWake(worker.Wake).WithActivity(emitter))
 	app.OnShutdown(database.ClosePool(pool))
 
-	return app.Run(fmt.Sprintf(":%d", cfg.Port))
+	// The worker stops (finishing a delivery under way) before the pool
+	// closes: shutdown hooks run in reverse order.
+	runCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	workerCtx, stopWorker := context.WithCancel(context.Background())
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		worker.Run(workerCtx)
+	}()
+	app.OnShutdown(func(shutdown context.Context) error {
+		stopWorker()
+		select {
+		case <-stopped:
+			return nil
+		case <-shutdown.Done():
+			return fmt.Errorf("notification delivery worker did not stop: %w", shutdown.Err())
+		}
+	})
+
+	return app.RunContext(runCtx, fmt.Sprintf(":%d", cfg.Port))
 }
