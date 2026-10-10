@@ -1,6 +1,7 @@
 import { normalizeServiceUrl, serviceBaseUrls } from "@/config/services";
 import { bankingClient } from "@/lib/api/banking-client";
 import { calendarClient } from "@/lib/api/calendar-client";
+import { GOOGLE_INTEGRATION } from "@/lib/calendar-workspace";
 import type { components as CalendarComponents } from "@/lib/api/generated/calendar";
 import { googleCalendarClient } from "@/lib/api/google-calendar-client";
 import { inboxClient } from "@/lib/api/inbox-client";
@@ -1409,9 +1410,16 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
       .GET("/v1/backlog", timeout)
       .then(({ data }) => data ?? null)
       .catch(() => null),
+    // Feeds; the Google calendars the integration syncs are sources too,
+    // reported by the Google part.
     calendarClient
       .GET("/v1/sources", timeout)
-      .then(({ data }) => data?.items ?? null)
+      .then(
+        ({ data }) =>
+          data?.items.filter(
+            (source) => source.integration !== GOOGLE_INTEGRATION,
+          ) ?? null,
+      )
       .catch(() => null),
     googleCalendarClient
       .GET("/v1/connection", timeout)
