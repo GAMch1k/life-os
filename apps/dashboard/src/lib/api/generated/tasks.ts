@@ -77,6 +77,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/notifications/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the Task notifications health
+         * @description Whether Tasks sends its notifications (it needs the Notifications service), when they are due on the owner's wall clock, how far they have been handled, and the last run, success, and error. Tasks sends a reminder before each open timed Task is due, a morning list of the date-only Tasks due that day and every overdue Task, an evening list of the date-only Tasks due the next day, and a daily morning summary with today's Tasks, events (from Calendar), and overdue Tasks. One due while Tasks was down is sent late within the grace window and otherwise recorded in Activity as missed.
+         */
+        get: operations["getNotificationStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -124,6 +144,52 @@ export interface components {
             items: components["schemas"]["Task"][];
             /** @description Set when more Tasks match; pass it as cursor for the next page. */
             nextCursor?: string | null;
+        };
+        TaskNotificationStatus: {
+            /** @description Whether Tasks sends notifications: false when NOTIFICATIONS_SERVICE_URL is not set. */
+            enabled: boolean;
+            /** @description Whether the morning summary reads the day's events from Calendar (CALENDAR_SERVICE_URL). */
+            calendarConfigured: boolean;
+            /** @description How often due notifications are looked for. */
+            intervalSeconds: number;
+            /** @description How late a notification may still be sent after Tasks was down; older ones are recorded as missed. */
+            graceMinutes: number;
+            /** @description The owner's timezone the times below are in (LIFE_OS_TIMEZONE). */
+            timeZone: string;
+            /** @description When the daily morning summary is due, HH:MM. */
+            summaryTime: string;
+            /** @description When the morning list of date-only and overdue Tasks is due, HH:MM. */
+            morningTime: string;
+            /** @description When the evening list of tomorrow's date-only Tasks is due, HH:MM. */
+            eveningTime: string;
+            /** @description How long before a timed Task is due its reminder is sent. */
+            timedLeadMinutes: number;
+            /** @description The summary and the morning list are due at the same time and sent as one message (the summary). */
+            mergedMorning: boolean;
+            /**
+             * Format: date-time
+             * @description Every notification due up to this instant has been sent, recorded as missed or empty, or refused by Notifications; null before the first run.
+             */
+            handledThrough: string | null;
+            /**
+             * Format: date-time
+             * @description When a run last started.
+             */
+            lastRunAt: string | null;
+            /**
+             * Format: date-time
+             * @description When a run last finished without an error.
+             */
+            lastSuccessAt: string | null;
+            /** @description The last run error, kept until the next one: current when lastErrorAt is after lastSuccessAt. */
+            lastError: string | null;
+            /** Format: date-time */
+            lastErrorAt: string | null;
+            /**
+             * Format: date-time
+             * @description When a run last sent a notification.
+             */
+            lastSentAt: string | null;
         };
     };
     responses: never;
@@ -345,6 +411,33 @@ export interface operations {
             };
             /** @description Task not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getNotificationStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Task notifications health */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskNotificationStatus"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
