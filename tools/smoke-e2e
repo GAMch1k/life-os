@@ -22,7 +22,11 @@ wait_ready() {
 
 gateway=http://127.0.0.1:13001
 finance="$gateway/api/finance"; tasks="$gateway/api/tasks"; inbox="$gateway/api/inbox"; calendar="$gateway/api/calendar"
-for service in "$finance" "$tasks" "$inbox" "$calendar"; do wait_ready "$service"; done
+feeds="$gateway/api/integrations/calendar-feeds"
+for service in "$finance" "$tasks" "$inbox" "$calendar" "$feeds"; do wait_ready "$service"; done
+# The calendar-feeds integration is routed under /api/integrations/ and,
+# without the owner's ZAW feed on this stack, starts with no feeds.
+curl --fail --silent "$feeds/v1/feeds" | jq -e '.items == []' >/dev/null
 
 # The gateway answers only its listed hosts (infra/nginx/life-os.conf); any
 # other Host, such as the ntfy hostname, gets no response (444). ntfy is never
