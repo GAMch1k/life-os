@@ -7,6 +7,7 @@ import {
   toHomeAttention,
   unavailableOnFailure,
 } from "./home-attention";
+import type { InboxItem } from "./inbox-summary";
 
 const now = new Date("2026-10-09T15:00:00Z");
 const task = (id: string, dueAt?: string) => ({
@@ -17,6 +18,8 @@ const task = (id: string, dueAt?: string) => ({
   updatedAt: "2026-10-01T00:00:00Z",
   ...(dueAt ? { dueAt } : {}),
 });
+/** Only the id matters to Home's review preview logic. */
+const reviewItem = (id: string) => ({ id }) as unknown as InboxItem;
 const list = <T>(items: T[], nextCursor?: string) => ({
   data: { items, nextCursor },
 });
@@ -56,14 +59,14 @@ test("Home counts carry a + only when the service has more rows", () => {
     {
       // The Inbox list does not page: a full page means there may be more.
       review: list(
-        Array.from({ length: REVIEW_LIMIT }, (_, index) => ({
-          id: `review-${index}`,
-        })),
+        Array.from({ length: REVIEW_LIMIT }, (_, index) =>
+          reviewItem(`review-${index}`),
+        ),
       ),
       urgent: list([task("today", due)], "next-urgent"),
       open: list([task("a")], "next-undated"),
       events: list([]),
-    } as Parameters<typeof toHomeAttention>[0],
+    },
     now,
   );
   assert.equal(capped.humanReview?.more, true);
@@ -72,11 +75,11 @@ test("Home counts carry a + only when the service has more rows", () => {
 
   const complete = toHomeAttention(
     {
-      review: list([{ id: "review" }]),
+      review: list([reviewItem("review")]),
       urgent: list([task("today", due)]),
       open: list([task("a"), task("b")]),
       events: list([]),
-    } as Parameters<typeof toHomeAttention>[0],
+    },
     now,
   );
   assert.equal(complete.humanReview?.more, false);
