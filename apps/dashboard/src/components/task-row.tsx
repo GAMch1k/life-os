@@ -2,16 +2,14 @@
 
 import { useState, useTransition } from "react";
 
+import { DatePicker, TimeInput } from "@/components/date-picker";
 import { Button } from "@/components/ui/button";
+import { FieldLegend, FieldSet } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { tasksClient } from "@/lib/api/tasks-client";
 import type { Task } from "@/lib/tasks-summary";
-import {
-  dueLabel,
-  fromDateTimeInput,
-  toDateTimeInput,
-} from "@/lib/tasks-workspace";
+import { dueLabel, fromDueFields, toDueFields } from "@/lib/tasks-workspace";
 import { cn } from "@/lib/utils";
 
 type RowProps = {
@@ -45,7 +43,7 @@ function TaskRow({
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(task.title);
   const [notes, setNotes] = useState(task.notes ?? "");
-  const [dueAt, setDueAt] = useState(toDateTimeInput(task.dueAt, timeZone));
+  const [due, setDue] = useState(() => toDueFields(task.dueAt, timeZone));
   const [error, setError] = useState<string>();
   const [pending, startTransition] = useTransition();
   const patch = (body: Record<string, unknown>) =>
@@ -59,7 +57,7 @@ function TaskRow({
       onChange(data);
       setTitle(data.title);
       setNotes(data.notes ?? "");
-      setDueAt(toDateTimeInput(data.dueAt, timeZone));
+      setDue(toDueFields(data.dueAt, timeZone));
       setEditing(false);
     });
   const lifecycle = (
@@ -73,7 +71,8 @@ function TaskRow({
       if (requestError || !data) return setError("Could not update this Task.");
       onChange(data);
     });
-  const due = dueLabel(task.dueAt, today, timeZone);
+  const dueAt = fromDueFields(due.date, due.time, timeZone);
+  const shownDue = dueLabel(task.dueAt, today, timeZone);
   return (
     <li className="border-b py-2.5 last:border-0">
       {editing ? (
@@ -88,16 +87,37 @@ function TaskRow({
             value={notes}
             onChange={(event) => setNotes(event.target.value)}
           />
-          <label className="text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
-            Due date
-            <Input
-              aria-label="Due date"
-              className="w-auto"
-              type="datetime-local"
-              value={dueAt}
-              onChange={(event) => setDueAt(event.target.value)}
-            />
-          </label>
+          {/* No time is due when the day starts; no date leaves it as it is
+              (Clear date removes it). */}
+          <FieldSet className="gap-1">
+            <FieldLegend
+              className="text-muted-foreground mb-1 text-xs font-normal"
+              variant="label"
+            >
+              Due date
+            </FieldLegend>
+            <div className="flex flex-wrap gap-2">
+              <DatePicker
+                className="w-44"
+                label="Due date"
+                onChange={(date) => setDue((current) => ({ ...current, date }))}
+                today={today}
+                value={due.date}
+              />
+              <TimeInput
+                aria-label="Due time"
+                className="w-28"
+                disabled={!due.date}
+                onChange={(event) =>
+                  setDue((current) => ({
+                    ...current,
+                    time: event.target.value,
+                  }))
+                }
+                value={due.time}
+              />
+            </div>
+          </FieldSet>
           <div className="flex flex-wrap gap-2">
             <Button
               size="sm"
@@ -106,9 +126,7 @@ function TaskRow({
                 patch({
                   title: title.trim(),
                   notes,
-                  ...(dueAt
-                    ? { dueAt: fromDateTimeInput(dueAt, timeZone) }
-                    : {}),
+                  ...(dueAt ? { dueAt } : {}),
                 })
               }
             >
@@ -156,14 +174,14 @@ function TaskRow({
               data-slot="task-due"
               dateTime={task.dueAt}
             >
-              {due}
+              {shownDue}
             </time>
           ) : (
             <span
               className="text-muted-foreground truncate text-xs"
               data-slot="task-due"
             >
-              {due}
+              {shownDue}
             </span>
           )}
           <div className="flex justify-end gap-1">

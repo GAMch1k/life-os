@@ -10,11 +10,13 @@ import {
   dueDay,
   dueLabel,
   fromDateTimeInput,
+  fromDueFields,
   groupTasks,
   isDateOnly,
   recentCompletedSince,
   splitCompleted,
   toDateTimeInput,
+  toDueFields,
   weekOf,
 } from "./tasks-workspace";
 
@@ -202,6 +204,33 @@ test("the edit form reads and writes the owner's wall time", () => {
     toDateTimeInput(fromDateTimeInput("2027-03-28T23:30", BERLIN), BERLIN),
     "2027-03-28T23:30",
   );
+});
+
+test("the edit form's date picker and time field read and write the owner's wall time", () => {
+  assert.deepEqual(toDueFields("2026-10-21T07:30:00Z", BERLIN), {
+    date: "2026-10-21",
+    time: "09:30",
+  });
+  assert.deepEqual(toDueFields(null, BERLIN), { date: "", time: "" });
+  // What the datetime-local field sent, the two fields send too.
+  assert.equal(
+    fromDueFields("2026-10-21", "09:30", BERLIN),
+    fromDateTimeInput("2026-10-21T09:30", BERLIN),
+  );
+  assert.equal(
+    fromDueFields("2026-10-25", "10:00", BERLIN),
+    "2026-10-25T09:00:00.000Z",
+  );
+  // A date alone is due when the owner's day starts, and reads as date-only.
+  const midnight = fromDueFields("2026-10-21", "", BERLIN);
+  assert.equal(midnight, "2026-10-20T22:00:00.000Z");
+  assert.equal(isDateOnly(midnight!, BERLIN), true);
+  assert.deepEqual(toDueFields(midnight, BERLIN), {
+    date: "2026-10-21",
+    time: "00:00",
+  });
+  // No date, no due instant, whatever the time says.
+  assert.equal(fromDueFields("", "09:30", BERLIN), undefined);
 });
 
 /** A fake Tasks list of `total` Tasks served `size` at a time. */

@@ -1,10 +1,10 @@
 "use client";
 
-import { Toggle } from "@base-ui/react/toggle";
-import { ToggleGroup } from "@base-ui/react/toggle-group";
 import { Monitor, Moon, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useSyncExternalStore } from "react";
+
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
 const THEMES = [
   { value: "light", label: "Light theme", icon: Sun },
@@ -32,25 +32,28 @@ export function ThemeToggle() {
   const hydrated = useHydrated();
 
   return (
+    // A segmented control: the chosen theme raised on a muted track.
     <ToggleGroup
       aria-label="Theme"
-      className="bg-muted flex items-center gap-0.5 rounded-lg p-0.5"
-      onValueChange={(value) => {
+      className="bg-muted p-0.5"
+      onValueChange={(value: string[]) => {
         // Pressing the active theme again would clear the group; keep it.
         if (value[0]) setTheme(value[0]);
       }}
+      size="sm"
+      spacing={0.5}
       value={hydrated && theme ? [theme] : []}
     >
       {THEMES.map(({ icon: Icon, label, value }) => (
-        <Toggle
+        <ToggleGroupItem
           aria-label={label}
-          className="text-muted-foreground hover:text-foreground focus-visible:ring-ring data-pressed:bg-background data-pressed:text-foreground flex size-7 items-center justify-center rounded-md transition-colors outline-none focus-visible:ring-2 data-pressed:shadow-sm"
+          className="text-muted-foreground aria-pressed:bg-background aria-pressed:text-foreground px-0 aria-pressed:shadow-sm"
           key={value}
           title={label}
           value={value}
         >
-          <Icon aria-hidden="true" className="size-4" />
-        </Toggle>
+          <Icon aria-hidden="true" />
+        </ToggleGroupItem>
       ))}
     </ToggleGroup>
   );

@@ -14,3 +14,7 @@ Development tools and agents (Claude Code and its subagents, scripts, test runne
 - Never send `user` from a development tool: that is the owner's own actor, used by the Dashboard. `agent:` and `system:` are internal and the gateway drops them.
 - `tools/` scripts send `dev:<script name>`; Playwright specs that write through the `request` fixture import `test` from `apps/dashboard/e2e/fixtures.ts`, which sends `dev:e2e`, while the browser keeps the Dashboard's `user`.
 - Acceptance, smoke, and benchmark runs belong on the disposable `lifeos-verify` stack (`tools/verify-compose`), not on live data. Touch live data only when a task requires it, and then only with a `dev:` actor.
+
+## Dashboard UI components
+
+The Dashboard uses [shadcn/ui](https://ui.shadcn.com/docs/components) (Base UI flavour) and reuses what it offers instead of building controls by hand. Check the component list first and add components only with the CLI, from `apps/dashboard`: `npx shadcn add <name>`, then format with Prettier. Never write or edit files in `apps/dashboard/src/components/ui/` by hand, and never copy shadcn code elsewhere; put Life OS styling and behaviour in wrapper components (such as `src/components/date-picker.tsx`). `npx shadcn add <name> --diff` shows whether a file still matches the CLI. See [Dashboard](docs/frontend/dashboard.md).

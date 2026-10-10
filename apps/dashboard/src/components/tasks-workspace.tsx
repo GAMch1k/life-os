@@ -20,6 +20,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { usePersistentToggle } from "@/lib/persistent-toggle";
 import type { Task } from "@/lib/tasks-summary";
 import {
@@ -361,30 +362,27 @@ export function TasksWorkspace({
     >
       <header className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-xl font-semibold tracking-tight">Tasks</h1>
-        <div
+        <ToggleGroup
           aria-label="View"
-          className="bg-background flex rounded-lg border p-0.5"
-          role="group"
+          size="sm"
+          spacing={0}
+          variant="outline"
+          value={[view]}
+          onValueChange={(chosen) => {
+            // Pressing the current view again would leave none pressed.
+            if (chosen[0] === "list" || chosen[0] === "schedule")
+              setView(chosen[0]);
+          }}
         >
-          <Button
-            aria-pressed={view === "list"}
-            variant={view === "list" ? "secondary" : "ghost"}
-            size="sm"
-            onClick={() => setView("list")}
-          >
+          <ToggleGroupItem value="list">
             <List />
             List
-          </Button>
-          <Button
-            aria-pressed={view === "schedule"}
-            variant={view === "schedule" ? "secondary" : "ghost"}
-            size="sm"
-            onClick={() => setView("schedule")}
-          >
+          </ToggleGroupItem>
+          <ToggleGroupItem value="schedule">
             <CalendarRange />
             Schedule
-          </Button>
-        </div>
+          </ToggleGroupItem>
+        </ToggleGroup>
       </header>
 
       {capped ? (

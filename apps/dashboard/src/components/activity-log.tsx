@@ -8,6 +8,12 @@ import {
   Wrench,
 } from "lucide-react";
 
+import { CopyButton } from "@/components/copy-button";
+import { DatePicker } from "@/components/date-picker";
+import { ExpandableText } from "@/components/expandable-text";
+import { SelectedEventPane } from "@/components/selected-event-pane";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -15,9 +21,11 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { CopyButton } from "@/components/copy-button";
-import { ExpandableText } from "@/components/expandable-text";
-import { SelectedEventPane } from "@/components/selected-event-pane";
+import { Field, FieldLabel } from "@/components/ui/field";
+import {
+  NativeSelect,
+  NativeSelectOption,
+} from "@/components/ui/native-select";
 import {
   activityHref,
   actorLabel,
@@ -44,9 +52,6 @@ import {
 } from "@/lib/activity-log";
 import { cn } from "@/lib/utils";
 
-const fieldClass =
-  "border-input bg-background focus-visible:ring-ring/50 h-9 w-full rounded-lg border px-2.5 text-sm focus-visible:ring-3 focus-visible:outline-none";
-
 const OUTCOME_STYLES: Record<string, string> = {
   succeeded: "bg-success-subtle text-success ring-success/30",
   pending: "bg-warning-subtle text-warning ring-warning/30",
@@ -55,14 +60,14 @@ const OUTCOME_STYLES: Record<string, string> = {
 
 function OutcomeBadge({ outcome }: { outcome: string }) {
   return (
-    <span
+    <Badge
       className={cn(
-        "inline-flex shrink-0 items-center rounded-md px-1.5 py-0.5 text-xs font-medium capitalize ring-1 ring-inset",
+        "capitalize ring-1 ring-inset",
         OUTCOME_STYLES[outcome] ?? "bg-muted text-muted-foreground",
       )}
     >
       {outcome}
-    </span>
+    </Badge>
   );
 }
 
@@ -74,13 +79,14 @@ function ActorName({ actor }: { actor: ActivityEvent["actor"] }) {
   const label = actorLabel(actor);
   if (!isDevActor(actor)) return label;
   return (
-    <span
-      className="text-muted-foreground inline-flex max-w-full items-center gap-1 rounded-md border px-1 font-medium wrap-anywhere"
+    <Badge
+      className="text-muted-foreground h-auto max-w-full wrap-anywhere whitespace-normal"
       title="A development tool or agent working on Life OS, not you or the Life OS AI"
+      variant="outline"
     >
-      <Wrench aria-hidden="true" className="size-3" />
+      <Wrench aria-hidden="true" />
       {label}
-    </span>
+    </Badge>
   );
 }
 
@@ -165,101 +171,104 @@ function Filters({ filters }: { filters: ActivityFilters }) {
       {filters.subjectId && (
         <input name="subjectId" type="hidden" value={filters.subjectId} />
       )}
-      <label className="min-w-0 space-y-1 text-sm">
-        <span className="font-medium">Domain</span>
-        <select
-          className={fieldClass}
+      <Field className="min-w-0 gap-1">
+        <FieldLabel htmlFor="activity-source">Domain</FieldLabel>
+        <NativeSelect
+          className="w-full"
           defaultValue={filters.source ?? ""}
+          id="activity-source"
           name="source"
         >
-          <option value="">All domains</option>
+          <NativeSelectOption value="">All domains</NativeSelectOption>
           {SOURCES.map((source) => (
-            <option
+            <NativeSelectOption
               key={source.value}
               title={source.description}
               value={source.value}
             >
               {source.label}
-            </option>
+            </NativeSelectOption>
           ))}
-        </select>
-      </label>
-      <label className="min-w-0 space-y-1 text-sm">
-        <span className="font-medium">Entity</span>
-        <select
-          className={fieldClass}
+        </NativeSelect>
+      </Field>
+      <Field className="min-w-0 gap-1">
+        <FieldLabel htmlFor="activity-subject-type">Entity</FieldLabel>
+        <NativeSelect
+          className="w-full"
           defaultValue={filters.subjectType ?? ""}
+          id="activity-subject-type"
           name="subjectType"
         >
-          <option value="">All entities</option>
+          <NativeSelectOption value="">All entities</NativeSelectOption>
           {SUBJECT_TYPES.map((subject) => (
-            <option key={subject.value} value={subject.value}>
+            <NativeSelectOption key={subject.value} value={subject.value}>
               {subject.label}
-            </option>
+            </NativeSelectOption>
           ))}
-        </select>
-      </label>
-      <label className="min-w-0 space-y-1 text-sm">
-        <span className="font-medium">Event</span>
-        <select
-          className={fieldClass}
+        </NativeSelect>
+      </Field>
+      <Field className="min-w-0 gap-1">
+        <FieldLabel htmlFor="activity-type">Event</FieldLabel>
+        <NativeSelect
+          className="w-full"
           defaultValue={filters.type ?? ""}
+          id="activity-type"
           name="type"
         >
-          <option value="">All events</option>
+          <NativeSelectOption value="">All events</NativeSelectOption>
           {EVENT_TYPES.map((type) => (
-            <option key={type} value={type}>
+            <NativeSelectOption key={type} value={type}>
               {eventLabel({ type, data: {} })}
-            </option>
+            </NativeSelectOption>
           ))}
           {filters.type && !EVENT_TYPES.includes(filters.type) && (
-            <option value={filters.type}>{filters.type}</option>
+            <NativeSelectOption value={filters.type}>
+              {filters.type}
+            </NativeSelectOption>
           )}
-        </select>
-      </label>
-      <label className="min-w-0 space-y-1 text-sm">
-        <span className="font-medium">Status</span>
-        <select
-          className={fieldClass}
+        </NativeSelect>
+      </Field>
+      <Field className="min-w-0 gap-1">
+        <FieldLabel htmlFor="activity-outcome">Status</FieldLabel>
+        <NativeSelect
+          className="w-full"
           defaultValue={filters.outcome ?? ""}
+          id="activity-outcome"
           name="outcome"
         >
-          <option value="">Any status</option>
+          <NativeSelectOption value="">Any status</NativeSelectOption>
           {OUTCOMES.map((outcome) => (
-            <option key={outcome} value={outcome}>
+            <NativeSelectOption key={outcome} value={outcome}>
               {outcome.charAt(0).toUpperCase() + outcome.slice(1)}
-            </option>
+            </NativeSelectOption>
           ))}
-        </select>
-      </label>
-      <label className="min-w-0 space-y-1 text-sm">
-        <span className="font-medium">From</span>
-        <input
-          className={fieldClass}
-          defaultValue={filters.fromDate}
+        </NativeSelect>
+      </Field>
+      <Field className="min-w-0 gap-1">
+        <FieldLabel htmlFor="activity-from">From</FieldLabel>
+        <DatePicker
+          defaultValue={filters.fromDate ?? ""}
+          id="activity-from"
+          label="From"
           name="fromDate"
-          type="date"
+          placeholder="Any day"
         />
-      </label>
-      <label className="min-w-0 space-y-1 text-sm">
-        <span className="font-medium">To</span>
-        <input
-          className={fieldClass}
-          defaultValue={filters.toDate}
+      </Field>
+      <Field className="min-w-0 gap-1">
+        <FieldLabel htmlFor="activity-to">To</FieldLabel>
+        <DatePicker
+          defaultValue={filters.toDate ?? ""}
+          id="activity-to"
+          label="To"
           name="toDate"
-          type="date"
+          placeholder="Any day"
         />
-      </label>
+      </Field>
       <div className="col-span-2 flex items-end gap-2 sm:col-span-3 lg:col-span-1">
-        <button
-          className="bg-primary text-primary-foreground hover:bg-primary/80 h-9 rounded-lg px-3 text-sm font-medium"
-          type="submit"
-        >
-          Apply
-        </button>
+        <Button type="submit">Apply</Button>
         {hasFilters(filters) && (
           <Link
-            className="text-muted-foreground hover:text-foreground h-9 px-1 text-sm leading-9 underline-offset-4 hover:underline"
+            className="text-muted-foreground hover:text-foreground h-8 px-1 text-sm leading-8 underline-offset-4 hover:underline"
             href="/activity"
           >
             Clear

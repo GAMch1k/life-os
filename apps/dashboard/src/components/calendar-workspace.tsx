@@ -40,6 +40,9 @@ import {
 } from "@/components/calendar-scope-dialog";
 import { CalendarSearch } from "@/components/calendar-search";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { calendarClient } from "@/lib/api/calendar-client";
 import {
   apiErrorMessage,
@@ -492,33 +495,34 @@ export function CalendarWorkspace({
             <Globe aria-hidden="true" className="size-3.5" />
             {zone}
           </span>
-          <label className="text-muted-foreground flex items-center gap-1.5 text-xs">
-            <input
+          <Label className="text-muted-foreground gap-1.5 text-xs font-normal">
+            <Checkbox
               checked={showCancelled}
-              className="accent-primary size-3.5"
-              onChange={(change) => toggleCancelled(change.target.checked)}
-              type="checkbox"
+              onCheckedChange={toggleCancelled}
             />
             Show cancelled
-          </label>
-          <div
+          </Label>
+          <ToggleGroup
             aria-label="View"
-            className="bg-background flex rounded-lg border p-0.5"
-            role="group"
+            disabled={!view}
+            onValueChange={(chosen) => {
+              // Pressing the current view again would leave none pressed.
+              const next = CALENDAR_VIEWS.find(
+                (option) => option === chosen[0],
+              );
+              if (next) api()?.changeView(FULLCALENDAR_VIEW[next]);
+            }}
+            size="sm"
+            spacing={0}
+            value={view ? [view] : []}
+            variant="outline"
           >
             {CALENDAR_VIEWS.map((option) => (
-              <Button
-                aria-pressed={view === option}
-                disabled={!view}
-                key={option}
-                onClick={() => api()?.changeView(FULLCALENDAR_VIEW[option])}
-                size="sm"
-                variant={view === option ? "secondary" : "ghost"}
-              >
+              <ToggleGroupItem key={option} value={option}>
                 {VIEW_LABEL[option]}
-              </Button>
+              </ToggleGroupItem>
             ))}
-          </div>
+          </ToggleGroup>
         </div>
       </div>
 
