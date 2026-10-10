@@ -20,12 +20,16 @@ import (
 type Handler struct {
 	queries  *store.Queries
 	activity *activity.Emitter
+	notifier *Notifier
 }
 
 var _ generated.ServerInterface = (*Handler)(nil)
 
-func NewHandler(queries *store.Queries, emitter *activity.Emitter) *Handler {
-	return &Handler{queries: queries, activity: emitter}
+// NewHandler serves the Inbox API. emitter records activity events and
+// notifier tells the owner about Human Review and failed captures; either may
+// be nil.
+func NewHandler(queries *store.Queries, emitter *activity.Emitter, notifier *Notifier) *Handler {
+	return &Handler{queries: queries, activity: emitter, notifier: notifier}
 }
 func (h *Handler) ListInboxItems(c fiber.Ctx, params generated.ListInboxItemsParams) error {
 	limit := 50
@@ -192,6 +196,7 @@ func (h *Handler) UpdateProcessingAttempt(c fiber.Ctx, itemID types.UUID, attemp
 	if err != nil {
 		return internal(err)
 	}
+	var failed *store.InboxItem
 	switch body.Status {
 	case generated.UpdateProcessingAttemptRequestStatusRetryable:
 		// Back to raw, eligible for the processor once nextRetryAt has passed.
@@ -200,11 +205,22 @@ func (h *Handler) UpdateProcessingAttempt(c fiber.Ctx, itemID types.UUID, attemp
 		}
 	case generated.UpdateProcessingAttemptRequestStatusFailed:
 		// Automatic recovery is unlikely: keep it visible but stop retrying.
-		if _, err := h.queries.SetInboxItemState(c.Context(), store.SetInboxItemStateParams{ID: pgUUID(itemID), State: "failed"}); err != nil {
+		item, err := h.queries.SetInboxItemState(c.Context(), store.SetInboxItemStateParams{ID: pgUUID(itemID), State: "failed"})
+		if err != nil {
 			return internal(err)
 		}
+		failed = &item
 	}
 	h.recordAttemptOutcome(c, itemID, attempt, body)
+	if failed != nil {
+		// Failed for good, so the owner hears about it; a retry is not.
+		reason := ""
+		if body.ErrorSummary != nil {
+			reason = *body.ErrorSummary
+		}
+		id := attemptID.String()
+		h.notifier.send(*failed, activity.EventID("inbox.processing.failed", id), failedNotification(*failed, id, reason))
+	}
 	return c.JSON(attemptOutput(attempt))
 }
 
@@ -281,6 +297,7 @@ func (h *Handler) CreateHumanReview(c fiber.Ctx, itemID types.UUID) error {
 		Summary:     fmt.Sprintf("Needs your decision: %s", activity.Preview(body.ErrorSummary, 120)),
 		Data:        map[string]any{"attemptId": attemptID, "reason": activity.Preview(body.ErrorSummary, 2000), "proposedTool": tool, "candidateCount": candidates},
 	})
+	h.notifier.send(item, activity.EventID("inbox.human_review.requested", attemptID), humanReviewNotification(item, attemptID, body.ErrorSummary))
 	return c.JSON(output(item))
 }
 func (h *Handler) ResolveHumanReview(c fiber.Ctx, itemID types.UUID) error {

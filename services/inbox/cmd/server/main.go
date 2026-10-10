@@ -8,6 +8,7 @@ import (
 	"github.com/GAMch1k/life-os/pkg/activity"
 	"github.com/GAMch1k/life-os/pkg/database"
 	"github.com/GAMch1k/life-os/pkg/httpserver"
+	"github.com/GAMch1k/life-os/pkg/notify"
 	"github.com/GAMch1k/life-os/services/inbox/internal/api"
 	serviceconfig "github.com/GAMch1k/life-os/services/inbox/internal/config"
 	repository "github.com/GAMch1k/life-os/services/inbox/internal/repository/generated"
@@ -37,8 +38,13 @@ func run(ctx context.Context) error {
 		httpserver.WithLogger(logger),
 		httpserver.WithReadinessCheck(pool.Ping),
 	)
-	api.Register(app, api.NewHandler(repository.New(pool), activity.NewEmitter(cfg.ActivityURL, "inbox", logger)))
+	emitter := activity.NewEmitter(cfg.ActivityURL, "inbox", logger)
+	notifier := api.NewNotifier(notify.New(cfg.NotificationsURL, "inbox"), emitter, logger)
+	api.Register(app, api.NewHandler(repository.New(pool), emitter, notifier))
 	app.OnShutdown(database.ClosePool(pool))
+	// Notifications still being sent finish (each within its timeout) before
+	// the process exits.
+	app.OnShutdown(notifier.Wait)
 
 	return app.Run(fmt.Sprintf(":%d", cfg.Port))
 }

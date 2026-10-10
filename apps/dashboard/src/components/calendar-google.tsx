@@ -2,7 +2,7 @@
 
 import { AlertTriangle, CalendarSync, CheckCircle2 } from "lucide-react";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 
 import {
   Dialog,
@@ -29,17 +29,22 @@ import {
   googleState,
   missingPermissions,
   replaceCalendar,
+  SYNC_NOTE,
+  syncDetail,
   syncSummary,
   withoutGoogleParam,
 } from "@/lib/google-calendar";
+import { cn } from "@/lib/utils";
 
 /**
  * The Calendar toolbar's "Google Calendar" button and dialog: connect the
- * owner's Google account, choose which of its calendars will sync, refresh
- * the list, or disconnect. Back from Google's consent page
- * (`/calendar?google=connected`), the dialog opens by itself.
+ * owner's Google account, choose which of its calendars sync (and see how
+ * their sync is going), refresh the list, or disconnect. Back from Google's
+ * consent page (`/calendar?google=connected`), the dialog opens by itself.
+ * Sync times are shown in timeZone (the Calendar's: the browser's, else
+ * the owner's).
  */
-export function GoogleCalendarControl() {
+export function GoogleCalendarControl({ timeZone }: { timeZone: string }) {
   const justConnected =
     useSearchParams().get(GOOGLE_PARAM) === GOOGLE_CONNECTED;
   const [open, setOpen] = useState(justConnected);
@@ -68,7 +73,7 @@ export function GoogleCalendarControl() {
       </Button>
       <Dialog onOpenChange={change} open={open}>
         <DialogContent className="sm:max-w-lg">
-          <GooglePanel justConnected={connected} />
+          <GooglePanel justConnected={connected} timeZone={timeZone} />
         </DialogContent>
       </Dialog>
     </>
@@ -88,7 +93,13 @@ async function loadGoogle(): Promise<Loaded> {
   return { connection: connection.data, calendars: calendars.data.items };
 }
 
-function GooglePanel({ justConnected }: { justConnected: boolean }) {
+function GooglePanel({
+  justConnected,
+  timeZone,
+}: {
+  justConnected: boolean;
+  timeZone: string;
+}) {
   const [loaded, setLoaded] = useState<Loaded>();
   const [failed, setFailed] = useState(false);
   const [error, setError] = useState<string>();
@@ -133,6 +144,19 @@ function GooglePanel({ justConnected }: { justConnected: boolean }) {
     } catch {
       setError(UNAVAILABLE);
     }
+  };
+
+  // A calendar switched on syncs within moments: read the list again once
+  // shortly after, to show its first sync.
+  const followUp = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(followUp.current), []);
+  const showFirstSync = () => {
+    clearTimeout(followUp.current);
+    followUp.current = setTimeout(() => {
+      loadGoogle()
+        .then(setLoaded)
+        .catch(() => undefined);
+    }, 5000);
   };
 
   // Google's consent page; it returns to /calendar/google/callback.
@@ -215,8 +239,10 @@ function GooglePanel({ justConnected }: { justConnected: boolean }) {
           body: { syncEnabled },
         },
       );
-      if (data) update(data);
-      else {
+      if (data) {
+        update(data);
+        if (syncEnabled) showFirstSync();
+      } else {
         update(calendar);
         setError(`Could not save the choice for “${calendar.summary}”.`);
       }
@@ -329,6 +355,7 @@ function GooglePanel({ justConnected }: { justConnected: boolean }) {
           disabled={pending}
           onChoose={choose}
           saving={saving}
+          timeZone={timeZone}
         />
       ) : null}
 
@@ -402,11 +429,13 @@ function CalendarChoices({
   disabled,
   onChoose,
   saving,
+  timeZone,
 }: {
   calendars: GoogleCalendar[];
   disabled: boolean;
   onChoose: (calendar: GoogleCalendar, syncEnabled: boolean) => void;
   saving?: string;
+  timeZone: string;
 }) {
   return (
     <FieldSet className="min-w-0 gap-2">
@@ -414,44 +443,59 @@ function CalendarChoices({
         Calendars to sync
       </FieldLegend>
       <p className="text-muted-foreground text-xs">
-        {syncSummary(calendars)} Syncing starts in a later release; your choices
-        are kept until then.
+        {syncSummary(calendars)} {SYNC_NOTE}
       </p>
       {calendars.length ? (
         <ul
           className="divide-y rounded-lg border"
           data-testid="google-calendar-list"
         >
-          {calendars.map((calendar) => (
-            <li key={calendar.id}>
-              <Label className="cursor-pointer gap-3 px-3 py-2 leading-normal font-normal">
-                <Checkbox
-                  checked={calendar.syncEnabled}
-                  disabled={disabled || saving === calendar.id}
-                  onCheckedChange={(syncEnabled) =>
-                    onChoose(calendar, syncEnabled)
-                  }
-                />
-                <span
-                  aria-hidden="true"
-                  className="bg-muted size-3 shrink-0 rounded-full border"
-                  style={
-                    calendar.color
-                      ? { backgroundColor: calendar.color }
-                      : undefined
-                  }
-                />
-                <span className="grid min-w-0">
-                  <span className="truncate font-medium">
-                    {calendar.summary}
+          {calendars.map((calendar) => {
+            const sync = syncDetail(calendar, timeZone);
+            return (
+              <li key={calendar.id}>
+                <Label className="cursor-pointer gap-3 px-3 py-2 leading-normal font-normal">
+                  <Checkbox
+                    checked={calendar.syncEnabled}
+                    disabled={disabled || saving === calendar.id}
+                    onCheckedChange={(syncEnabled) =>
+                      onChoose(calendar, syncEnabled)
+                    }
+                  />
+                  <span
+                    aria-hidden="true"
+                    className="bg-muted size-3 shrink-0 rounded-full border"
+                    style={
+                      calendar.color
+                        ? { backgroundColor: calendar.color }
+                        : undefined
+                    }
+                  />
+                  <span className="grid min-w-0">
+                    <span className="truncate font-medium">
+                      {calendar.summary}
+                    </span>
+                    <span className="text-muted-foreground text-xs">
+                      {calendarDetail(calendar)}
+                    </span>
+                    {sync ? (
+                      <span
+                        className={cn(
+                          "text-xs break-words",
+                          sync.failing
+                            ? "text-destructive"
+                            : "text-muted-foreground",
+                        )}
+                        data-testid="google-calendar-sync"
+                      >
+                        {sync.text}
+                      </span>
+                    ) : null}
                   </span>
-                  <span className="text-muted-foreground text-xs">
-                    {calendarDetail(calendar)}
-                  </span>
-                </span>
-              </Label>
-            </li>
-          ))}
+                </Label>
+              </li>
+            );
+          })}
         </ul>
       ) : null}
     </FieldSet>

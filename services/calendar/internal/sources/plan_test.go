@@ -217,3 +217,116 @@ func TestSourceActor(t *testing.T) {
 		}
 	}
 }
+
+// seriesItem is a weekly Google series with one skipped occurrence.
+func seriesItem() Item {
+	item := Item{Item: timedItem("standup", "Standup", "2026-10-12T07:00:00Z"), Recurrence: &Recurrence{Frequency: "weekly", Interval: 1, ByWeekday: []string{"MO", "WE"}}}
+	item.Reminders = &Reminders{UseDefault: true, Reminders: []Reminder{}}
+	item.Exceptions = map[string]Exception{"2026-10-14T07:00:00Z": {Cancelled: true}}
+	return item
+}
+
+// storedSeries is what a sync wrote for item: the event and its exceptions.
+func storedSeries(item Item) (store.Event, []store.EventException) {
+	event := stored(item.Item)
+	event.SourceKind = "google"
+	frequency, interval := item.Recurrence.Frequency, int32(item.Recurrence.Interval)
+	event.RecurrenceFrequency, event.RecurrenceInterval, event.RecurrenceByWeekday = &frequency, &interval, item.Recurrence.ByWeekday
+	own, whole, _ := item.Reminders.encode()
+	event.Reminders, event.UseDefaultReminders, event.SourceReminders = own, item.Reminders.UseDefault, whole
+	var exceptions []store.EventException
+	for key, exception := range item.Exceptions {
+		changes, _ := exception.Changes.JSON()
+		row := store.EventException{EventID: event.ID, RecurrenceID: key, Changes: changes}
+		if exception.Cancelled {
+			row.CancelledAt = at(now.Add(-time.Hour))
+		}
+		exceptions = append(exceptions, row)
+	}
+	return event, exceptions
+}
+
+func TestReconcileSeriesExceptionsAndSourceReminders(t *testing.T) {
+	item := seriesItem()
+	event, exceptions := storedSeries(item)
+	grouped := map[[16]byte][]store.EventException{event.ID.Bytes: exceptions}
+	rules := SyncRules(now.AddDate(-1, 0, 0), berlin)
+
+	if same := reconcileItems([]store.Event{event}, grouped, []Item{item}, rules); summary(same) != "" || same.counts.Unchanged != 1 {
+		t.Fatalf("identical series: %s", summary(same))
+	}
+	// A new skip and a changed occurrence are written; a skip that went is
+	// dropped; the skip that stays keeps its moment.
+	changed := seriesItem()
+	title := "Standup (planning)"
+	changed.Exceptions = map[string]Exception{"2026-10-19T07:00:00Z": {Changes: Changes{Title: &title}}, "2026-10-21T07:00:00Z": {Cancelled: true}}
+	p := reconcileItems([]store.Event{event}, grouped, []Item{changed}, rules)
+	if summary(p) != "update standup" || len(p.updates[0].exceptions) != 2 || strings.Join(p.updates[0].dropExceptions, ",") != "2026-10-14T07:00:00Z" {
+		t.Fatalf("exceptions: %s %+v", summary(p), p.updates)
+	}
+	kept := seriesItem()
+	kept.Exceptions["2026-10-21T07:00:00Z"] = Exception{Cancelled: true}
+	p = reconcileItems([]store.Event{event}, grouped, []Item{kept}, rules)
+	if len(p.updates) != 1 || len(p.updates[0].exceptions) != 1 || p.updates[0].exceptions["2026-10-21T07:00:00Z"].cancelledAt.Valid {
+		t.Fatalf("a new skip: %+v", p.updates)
+	}
+	// A changed rule is an update; so is a series becoming a single event.
+	every2 := seriesItem()
+	every2.Recurrence = &Recurrence{Frequency: "weekly", Interval: 2, ByWeekday: []string{"MO", "WE"}}
+	if p := reconcileItems([]store.Event{event}, grouped, []Item{every2}, rules); summary(p) != "update standup" {
+		t.Fatalf("rule change: %s", summary(p))
+	}
+	single := seriesItem()
+	single.Recurrence, single.Exceptions = nil, nil
+	if p := reconcileItems([]store.Event{event}, grouped, []Item{single}, rules); summary(p) != "update standup" || len(p.updates[0].dropExceptions) != 1 {
+		t.Fatalf("no longer recurring: %s", summary(p))
+	}
+
+	// Google changes the reminders: the event follows while the owner has
+	// not changed its own, and keeps the owner's once they have.
+	reminded := seriesItem()
+	reminded.Reminders = &Reminders{UseDefault: false, Reminders: []Reminder{Relative(15)}}
+	p = reconcileItems([]store.Event{event}, grouped, []Item{reminded}, rules)
+	if summary(p) != "update standup" || !p.updates[0].ownReminders {
+		t.Fatalf("source reminders: %s %+v", summary(p), p.updates)
+	}
+	overridden := event
+	overridden.Reminders, overridden.UseDefaultReminders = []byte(`[{"kind":"relative","minutesBefore":120}]`), true
+	p = reconcileItems([]store.Event{overridden}, grouped, []Item{reminded}, rules)
+	if summary(p) != "update standup" || p.updates[0].ownReminders {
+		t.Fatalf("owner's reminders: %s %+v", summary(p), p.updates)
+	}
+	// The owner's own reminders alone change nothing.
+	if p := reconcileItems([]store.Event{overridden}, grouped, []Item{item}, rules); summary(p) != "" {
+		t.Fatalf("owner's reminders only: %s", summary(p))
+	}
+}
+
+func TestSyncRulesRemoveWhatTheWindowCovers(t *testing.T) {
+	windowStart := now.AddDate(-1, 0, 0)
+	rules := SyncRules(windowStart, berlin)
+	recent := stored(timedItem("recent", "Party", "2026-05-02T17:00:00Z"))
+	ancient := stored(timedItem("ancient", "Old party", "2025-05-02T17:00:00Z"))
+	series, _ := storedSeries(seriesItem())
+	series.StartAt, series.EndAt = at(time.Date(2020, 1, 6, 8, 0, 0, 0, time.UTC)), at(time.Date(2020, 1, 6, 8, 15, 0, 0, time.UTC))
+	endedUntil := series
+	endedUntil.ID = pgtype.UUID{Bytes: googleuuid.New(), Valid: true}
+	endedUntil.ExternalUid = ptr("ended")
+	endedUntil.RecurrenceUntil = at(time.Date(2021, 1, 1, 0, 0, 0, 0, time.UTC))
+	endedCount := series
+	endedCount.ID = pgtype.UUID{Bytes: googleuuid.New(), Valid: true}
+	endedCount.ExternalUid = ptr("counted")
+	endedCount.RecurrenceCount = ptr(int32(5))
+	// Missing from the listing: removed when the window covers them, past
+	// or not (a series running on is removed too); history from before the
+	// window stays.
+	p := reconcileItems([]store.Event{recent, ancient, series, endedUntil, endedCount}, nil, nil, rules)
+	if p.counts.Removed != 2 || p.removals[0] != recent.ID || p.removals[1] != series.ID {
+		t.Fatalf("removals: %+v", p.counts)
+	}
+	// Past events are rewritten when the source changes them.
+	renamed := timedItem("recent", "Spring party", "2026-05-02T17:00:00Z")
+	if p := reconcileItems([]store.Event{recent}, nil, []Item{{Item: renamed}}, rules); summary(p) != "update recent" {
+		t.Fatalf("past rename: %s", summary(p))
+	}
+}

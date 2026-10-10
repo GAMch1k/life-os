@@ -31,7 +31,15 @@ func run(ctx context.Context) error {
 	}
 
 	logger := httpserver.NewJSONLogger(os.Stdout, cfg.ParsedLogLevel())
-	channels, err := delivery.Build(cfg.ChannelNames(), logger)
+	channels, err := delivery.Build(cfg.ChannelNames(), delivery.Settings{
+		Logger: logger,
+		Ntfy: delivery.NtfyConfig{
+			URL:         cfg.NtfyURL,
+			Topic:       cfg.NtfyTopic,
+			Token:       cfg.NtfyToken,
+			LinkBaseURL: cfg.LinkBaseURL,
+		},
+	})
 	if err != nil {
 		return err
 	}

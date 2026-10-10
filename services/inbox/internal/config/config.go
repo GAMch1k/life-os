@@ -18,6 +18,9 @@ type Config struct {
 	DatabaseURL string `env:"DATABASE_URL" required:"true"`
 	// ActivityURL enables activity events; empty disables them.
 	ActivityURL string `env:"ACTIVITY_SERVICE_URL"`
+	// NotificationsURL enables notifications to the owner (Human Review,
+	// failed captures); empty disables them.
+	NotificationsURL string `env:"NOTIFICATIONS_SERVICE_URL"`
 }
 
 // Load reads Config from the process environment.

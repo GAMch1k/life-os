@@ -487,7 +487,7 @@ export function CalendarWorkspace({
             <Bell />
             Reminder defaults
           </Button>
-          <GoogleCalendarControl />
+          <GoogleCalendarControl timeZone={zone} />
           <span
             className="text-muted-foreground hidden items-center gap-1 text-xs lg:flex"
             title="Times are shown in this time zone"

@@ -108,10 +108,62 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/channels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List delivery channels and their health
+         * @description One entry per channel configured on this server (`NOTIFICATIONS_CHANNELS`), in the configured order, with what its deliveries show: the latest success, the latest failure (a failed delivery or one waiting for a retry) and its error, failures in the last 24 hours, and deliveries waiting now. `state` sums it up. An empty list means no channel is configured: notifications are stored and listed only. The Dashboard Status page shows this.
+         */
+        get: operations["listChannels"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * @description ok = the latest outcome was a success; failing = the latest outcome was a failure (a delivery failed, or waits for a retry, after the latest success); idle = nothing has been delivered or failed yet.
+         * @enum {string}
+         */
+        ChannelState: "ok" | "failing" | "idle";
+        /** @description One configured delivery channel and the health its deliveries show. */
+        Channel: {
+            /** @description Channel name, such as ntfy. */
+            name: string;
+            state: components["schemas"]["ChannelState"];
+            /**
+             * Format: date-time
+             * @description When a delivery through it was last sent.
+             */
+            lastSuccessAt: string | null;
+            /**
+             * Format: date-time
+             * @description When a delivery through it last failed or was scheduled for a retry.
+             */
+            lastFailureAt: string | null;
+            /** @description The error of that latest failure. */
+            lastError: string | null;
+            /** @description Deliveries that failed, or wait for a retry, last changed in the past 24 hours. */
+            recentFailures: number;
+            /** @description Deliveries waiting for another attempt now. */
+            retrying: number;
+            /** @description Deliveries queued for a first attempt now. */
+            pending: number;
+        };
+        ChannelList: {
+            items: components["schemas"]["Channel"][];
+        };
         /**
          * @description high = something is broken or needs action now (a service went down); medium = worth knowing soon (Human Review, a Calendar reminder); low = informational, delivered silently.
          * @enum {string}
@@ -445,6 +497,35 @@ export interface operations {
             };
             /** @description Notification not found (not_found) */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listChannels: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Configured channels */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelList"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

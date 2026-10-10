@@ -49,6 +49,9 @@ type Config struct {
 	GoogleClientSecret string `env:"LIFE_OS_GOOGLE_CLIENT_SECRET"`
 	GoogleTokenKey     string `env:"LIFE_OS_GOOGLE_TOKEN_KEY"`
 	GoogleRedirectURI  string `env:"LIFE_OS_GOOGLE_REDIRECT_URI" default:"https://lifeos.gamch1k.com/calendar/google/callback"`
+	// GoogleSyncSeconds is how often each Google calendar chosen to sync is
+	// synced (changes since the last sync, with Google's sync token).
+	GoogleSyncSeconds int `env:"CALENDAR_GOOGLE_SYNC_SECONDS" default:"120"`
 	// Reminder delivery: the Notifications service reminders are sent to
 	// (empty turns delivery off), how often due reminders are looked for,
 	// and how late one may still be sent after Calendar was down (older
@@ -100,6 +103,9 @@ func (c Config) Validate() error {
 	}
 	if c.ICSTimeoutSeconds < 1 || c.ICSTimeoutSeconds > 300 {
 		validationErrors = append(validationErrors, fmt.Errorf("CALENDAR_ICS_TIMEOUT_SECONDS must be between 1 and 300"))
+	}
+	if c.GoogleSyncSeconds < 30 || c.GoogleSyncSeconds > 86400 {
+		validationErrors = append(validationErrors, fmt.Errorf("CALENDAR_GOOGLE_SYNC_SECONDS must be between 30 and 86400"))
 	}
 	if c.ReminderIntervalSeconds < 5 || c.ReminderIntervalSeconds > 300 {
 		validationErrors = append(validationErrors, fmt.Errorf("CALENDAR_REMINDER_INTERVAL_SECONDS must be between 5 and 300"))

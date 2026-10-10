@@ -81,6 +81,7 @@ func run(ctx context.Context) error {
 		logger.Info("Google Calendar is not configured (LIFE_OS_GOOGLE_CLIENT_ID, LIFE_OS_GOOGLE_CLIENT_SECRET, LIFE_OS_GOOGLE_TOKEN_KEY)")
 	}
 	googleService := google.NewService(googleConfig, pool, google.GoogleEndpoints, emitter, logger)
+	syncer := google.NewSyncer(googleService, owner, time.Duration(cfg.GoogleSyncSeconds)*time.Second, logger)
 	handler := api.NewHandler(pool, ownerTimeZone).WithSources(refresher, scheduler.Wake).WithActivity(emitter).WithGoogle(googleService)
 	// Reminder delivery reads the events and occurrences as the API lists
 	// them and sends every effective reminder through Notifications.
@@ -92,12 +93,13 @@ func run(ctx context.Context) error {
 	api.Register(app, handler.WithReminders(dispatcher))
 	app.OnShutdown(database.ClosePool(pool))
 
-	// The source scheduler and reminder delivery stop (finishing a refresh
-	// or run under way) before the pool closes: shutdown hooks run in
-	// reverse order.
+	// The source scheduler, the Google syncer, and reminder delivery stop
+	// (finishing a refresh, sync, or run under way) before the pool closes:
+	// shutdown hooks run in reverse order.
 	runCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	background(app, "calendar source scheduler", scheduler.Run)
+	background(app, "Google Calendar sync", syncer.Run)
 	background(app, "calendar reminder delivery", dispatcher.Run)
 
 	return app.RunContext(runCtx, fmt.Sprintf(":%d", cfg.Port))

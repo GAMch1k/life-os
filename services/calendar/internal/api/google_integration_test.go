@@ -60,6 +60,9 @@ type googleClient struct {
 	clock    *testClock
 	recorder *activityRecorder
 	emitter  *activity.Emitter
+	// service and syncer are the running Google connection and sync.
+	service *google.Service
+	syncer  *google.Syncer
 	// bodies are every response, checked for leaked secrets.
 	bodies *[]string
 }
@@ -89,7 +92,10 @@ func (c *googleClient) restart(config google.Config) {
 	queries := store.New(c.pool)
 	handler := NewHandler(c.pool, "Europe/Berlin")
 	handler.now = func() time.Time { return fixedNow }
-	service := google.NewService(config, c.pool, c.fake.Endpoints(), c.emitter, slog.New(slog.NewTextHandler(io.Discard, nil))).WithClock(c.clock.Now)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	service := google.NewService(config, c.pool, c.fake.Endpoints(), c.emitter, logger).WithClock(c.clock.Now)
+	berlin, _ := time.LoadLocation("Europe/Berlin")
+	c.service, c.syncer = service, google.NewSyncer(service, berlin, 2*time.Minute, logger).WithClock(c.clock.Now)
 	handler.WithActivity(c.emitter).WithGoogle(service)
 	c.apiClient = apiClient{t: c.t, app: newTestApp(handler), handler: handler, queries: queries}
 }
