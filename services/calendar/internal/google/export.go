@@ -205,6 +205,14 @@ func (s *Syncer) ensureLifeOSCalendar(ctx context.Context, connection store.Goog
 	}
 	entry, err := s.createLifeOSCalendar(ctx)
 	if err != nil {
+		var apiErr *APIError
+		if errors.As(err, &apiErr) {
+			// Such as a missing permission: shown with the connection.
+			note := "Life OS could not create its calendar in Google: " + err.Error()
+			if noteErr := s.service.queries.SetLifeOSCalendarNote(ctx, store.SetLifeOSCalendarNoteParams{Note: &note, ID: connection.ID}); noteErr != nil {
+				s.logger.Warn("Life OS calendar failure not recorded", "error", noteErr)
+			}
+		}
 		return "", err
 	}
 	err = s.service.inTx(ctx, func(q *store.Queries) error {

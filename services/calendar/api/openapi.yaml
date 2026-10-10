@@ -103,6 +103,7 @@ paths:
         - $ref: '#/components/parameters/IncludeCancelled'
         - $ref: '#/components/parameters/SourceKind'
         - $ref: '#/components/parameters/SourceId'
+        - $ref: '#/components/parameters/Editable'
         - $ref: '#/components/parameters/Cursor'
         - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}
       responses:
@@ -155,6 +156,7 @@ paths:
         - $ref: '#/components/parameters/IncludeCancelled'
         - $ref: '#/components/parameters/SourceKind'
         - $ref: '#/components/parameters/SourceId'
+        - $ref: '#/components/parameters/Editable'
         - $ref: '#/components/parameters/Cursor'
         - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 20}}
       responses:
@@ -595,6 +597,7 @@ components:
     IncludeCancelled: {name: includeCancelled, in: query, description: Also return cancelled events (including those removed by their source)., schema: {type: boolean, default: false}}
     SourceKind: {name: sourceKind, in: query, description: Only events from this kind of source., schema: {$ref: '#/components/schemas/EventSourceKind'}}
     SourceId: {name: sourceId, in: query, description: Only events imported from this source., schema: {type: string, format: uuid}}
+    Editable: {name: editable, in: query, description: 'Only events that can be changed through this API (`editable`): Life OS events, and Google events of calendars the account may edit that are single events or series Calendar holds; not feed events, read-only Google calendars, or occurrences expanded from a Google rule. The AI looks for the events to change this way.', schema: {type: boolean, default: false}}
     EventId: {name: eventId, in: path, required: true, schema: {type: string, format: uuid}}
     RecurrenceId: {name: recurrenceId, in: path, required: true, description: 'The occurrence''s `occurrence.recurrenceId` from a listing (URL-encoded): an RFC 3339 instant for a timed series (2026-10-12T16:00:00Z), a date for an all-day one (2026-10-24).', schema: {type: string, minLength: 1, maxLength: 64}}
     Cursor: {name: cursor, in: query, description: The previous page's nextCursor. Opaque; only valid with the parameters it was returned for., schema: {type: string}}

@@ -242,6 +242,8 @@ func (h *Handler) updateGoogleEvent(c fiber.Ctx, current store.Event, target goo
 	}
 	ctx := h.traced(c)
 	switch {
+	case target.Deleted && merged.Status != generated.Active:
+		return httpserver.NewError(fiber.StatusConflict, "google_deleted", "This event was deleted in Google; restore it (status active) before changing it")
 	case merged.Status == generated.Cancelled && current.Status != string(generated.Cancelled):
 		err = h.google.DeleteEvent(ctx, target)
 	default:
@@ -505,6 +507,10 @@ func (h *Handler) googleConnectionView(ctx context.Context, row store.GoogleConn
 		return view, err
 	}
 	view.Export = generated.GoogleExportState{Pending: int(summary.Pending), Failed: int(summary.Failed), LastError: summary.LastError, LastExportedAt: nullableTime(summary.LastExportedAt)}
+	if row.LifeosCalendarID == nil && row.LifeosCalendarNote != nil && row.ExportEnabled {
+		// The Life OS calendar could not be created: nothing is exported.
+		view.Export.LastError = row.LifeosCalendarNote
+	}
 	if row.LifeosCalendarID != nil {
 		calendar := generated.LifeOsCalendar{GoogleCalendarId: *row.LifeosCalendarID, Summary: google.LifeOSCalendarName, CreatedAt: nullableTime(row.LifeosCalendarCreatedAt), Note: row.LifeosCalendarNote}
 		listed, found, err := h.google.LifeOSCalendar(ctx, row)

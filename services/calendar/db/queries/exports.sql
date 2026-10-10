@@ -226,3 +226,7 @@ SELECT * FROM google_calendars
 WHERE connection_id = sqlc.arg(connection_id) AND summary = sqlc.arg(summary) AND access_role = 'owner' AND NOT is_primary
 ORDER BY created_at, id
 LIMIT 1;
+
+-- name: SetLifeOSCalendarNote :exec
+-- Says why the Life OS calendar could not be created (null: nothing to say).
+UPDATE google_connections SET lifeos_calendar_note = sqlc.narg(note), updated_at = now() WHERE id = sqlc.arg(id);

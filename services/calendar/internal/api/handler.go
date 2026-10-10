@@ -109,10 +109,11 @@ func (h *Handler) ListEvents(c fiber.Ctx, params generated.ListEventsParams) err
 		return err
 	}
 	includeCancelled := params.IncludeCancelled != nil && *params.IncludeCancelled
+	editable := params.Editable != nil && *params.Editable
 	// One row beyond the page tells whether another page exists.
 	query := store.ListEventsParams{
 		TimeZone: timeZone, RangeStart: timestamp(&params.From), RangeEnd: timestamp(&params.To),
-		IncludeCancelled: includeCancelled, SourceKind: sourceKind, SourceID: sourceIDFilter(params.SourceId), PageLimit: int32(limit + 1),
+		IncludeCancelled: includeCancelled, SourceKind: sourceKind, SourceID: sourceIDFilter(params.SourceId), EditableOnly: editable, PageLimit: int32(limit + 1),
 	}
 	var after *listPosition
 	if params.Cursor != nil {
@@ -129,7 +130,7 @@ func (h *Handler) ListEvents(c fiber.Ctx, params generated.ListEventsParams) err
 	}
 	recurring, err := h.queries.ListRecurringEvents(c.Context(), store.ListRecurringEventsParams{
 		TimeZone: timeZone, RangeStart: query.RangeStart, RangeEnd: query.RangeEnd,
-		IncludeCancelled: includeCancelled, SourceKind: sourceKind, SourceID: query.SourceID,
+		IncludeCancelled: includeCancelled, SourceKind: sourceKind, SourceID: query.SourceID, EditableOnly: editable,
 	})
 	if err != nil {
 		return internal(err)
@@ -195,10 +196,11 @@ func (h *Handler) SearchEvents(c fiber.Ctx, params generated.SearchEventsParams)
 		return err
 	}
 	includeCancelled := params.IncludeCancelled != nil && *params.IncludeCancelled
+	editable := params.Editable != nil && *params.Editable
 	anchor := h.now().UTC()
 	query := store.SearchEventsParams{
 		TimeZone: timeZone, Patterns: patterns, RangeStart: timestamp(params.From), RangeEnd: timestamp(params.To),
-		IncludeCancelled: includeCancelled, SourceKind: sourceKind, SourceID: sourceIDFilter(params.SourceId), PageLimit: int32(limit + 1),
+		IncludeCancelled: includeCancelled, SourceKind: sourceKind, SourceID: sourceIDFilter(params.SourceId), EditableOnly: editable, PageLimit: int32(limit + 1),
 	}
 	var after *searchPosition
 	if params.Cursor != nil {
@@ -217,7 +219,7 @@ func (h *Handler) SearchEvents(c fiber.Ctx, params generated.SearchEventsParams)
 	}
 	recurring, err := h.queries.SearchRecurringEvents(c.Context(), store.SearchRecurringEventsParams{
 		Patterns: patterns, RangeEnd: query.RangeEnd, TimeZone: timeZone,
-		IncludeCancelled: includeCancelled, SourceKind: sourceKind, SourceID: query.SourceID,
+		IncludeCancelled: includeCancelled, SourceKind: sourceKind, SourceID: query.SourceID, EditableOnly: editable,
 	})
 	if err != nil {
 		return internal(err)

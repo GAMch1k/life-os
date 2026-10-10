@@ -191,12 +191,21 @@ WHERE events.recurrence_frequency IS NULL
   AND ($4::boolean OR events.status = 'active')
   AND ($5::text IS NULL OR events.source_kind = $5::text)
   AND ($6::uuid IS NULL OR events.source_id = $6::uuid)
+  AND (NOT $7::boolean OR events.source_kind = 'manual' OR (
+    events.source_kind = 'google' AND EXISTS (
+      SELECT 1 FROM calendar_sources AS editable_source
+      JOIN google_calendars AS editable_calendar ON editable_calendar.id = editable_source.google_calendar_id
+      JOIN google_events AS editable_event ON editable_event.calendar_id = editable_calendar.id
+      WHERE editable_source.id = events.source_id AND editable_calendar.access_role IN ('owner', 'writer')
+        AND editable_event.event_id = events.external_uid AND editable_event.recurring_event_id IS NULL
+    )
+  ))
   AND (
-    $7::uuid IS NULL
-    OR (span.starts_at, events.id) > ($8::timestamptz, $7::uuid)
+    $8::uuid IS NULL
+    OR (span.starts_at, events.id) > ($9::timestamptz, $8::uuid)
   )
 ORDER BY span.starts_at, events.id
-LIMIT $9
+LIMIT $10
 `
 
 type ListEventsParams struct {
@@ -206,6 +215,7 @@ type ListEventsParams struct {
 	IncludeCancelled bool
 	SourceKind       *string
 	SourceID         pgtype.UUID
+	EditableOnly     bool
 	AfterID          pgtype.UUID
 	AfterStartsAt    pgtype.Timestamptz
 	PageLimit        int32
@@ -230,6 +240,7 @@ func (q *Queries) ListEvents(ctx context.Context, arg ListEventsParams) ([]ListE
 		arg.IncludeCancelled,
 		arg.SourceKind,
 		arg.SourceID,
+		arg.EditableOnly,
 		arg.AfterID,
 		arg.AfterStartsAt,
 		arg.PageLimit,
@@ -309,6 +320,15 @@ WHERE events.recurrence_frequency IS NOT NULL
   AND ($4::boolean OR events.status = 'active')
   AND ($5::text IS NULL OR events.source_kind = $5::text)
   AND ($6::uuid IS NULL OR events.source_id = $6::uuid)
+  AND (NOT $7::boolean OR events.source_kind = 'manual' OR (
+    events.source_kind = 'google' AND EXISTS (
+      SELECT 1 FROM calendar_sources AS editable_source
+      JOIN google_calendars AS editable_calendar ON editable_calendar.id = editable_source.google_calendar_id
+      JOIN google_events AS editable_event ON editable_event.calendar_id = editable_calendar.id
+      WHERE editable_source.id = events.source_id AND editable_calendar.access_role IN ('owner', 'writer')
+        AND editable_event.event_id = events.external_uid AND editable_event.recurring_event_id IS NULL
+    )
+  ))
 ORDER BY events.id
 `
 
@@ -319,6 +339,7 @@ type ListRecurringEventsParams struct {
 	IncludeCancelled bool
 	SourceKind       *string
 	SourceID         pgtype.UUID
+	EditableOnly     bool
 }
 
 type ListRecurringEventsRow struct {
@@ -339,6 +360,7 @@ func (q *Queries) ListRecurringEvents(ctx context.Context, arg ListRecurringEven
 		arg.IncludeCancelled,
 		arg.SourceKind,
 		arg.SourceID,
+		arg.EditableOnly,
 	)
 	if err != nil {
 		return nil, err
@@ -467,13 +489,22 @@ WHERE events.recurrence_frequency IS NULL
   AND ($6::boolean OR events.status = 'active')
   AND ($7::text IS NULL OR events.source_kind = $7::text)
   AND ($8::uuid IS NULL OR events.source_id = $8::uuid)
+  AND (NOT $9::boolean OR events.source_kind = 'manual' OR (
+    events.source_kind = 'google' AND EXISTS (
+      SELECT 1 FROM calendar_sources AS editable_source
+      JOIN google_calendars AS editable_calendar ON editable_calendar.id = editable_source.google_calendar_id
+      JOIN google_events AS editable_event ON editable_event.calendar_id = editable_calendar.id
+      WHERE editable_source.id = events.source_id AND editable_calendar.access_role IN ('owner', 'writer')
+        AND editable_event.event_id = events.external_uid AND editable_event.recurring_event_id IS NULL
+    )
+  ))
   AND (
-    $9::uuid IS NULL
+    $10::uuid IS NULL
     OR (-ranked.relevance, ordering.bucket, ordering.sort_key, events.id)
-       > (-$10::integer, $11::integer, $12::bigint, $9::uuid)
+       > (-$11::integer, $12::integer, $13::bigint, $10::uuid)
   )
 ORDER BY ranked.relevance DESC, ordering.bucket, ordering.sort_key, events.id
-LIMIT $13
+LIMIT $14
 `
 
 type SearchEventsParams struct {
@@ -485,6 +516,7 @@ type SearchEventsParams struct {
 	IncludeCancelled bool
 	SourceKind       *string
 	SourceID         pgtype.UUID
+	EditableOnly     bool
 	AfterID          pgtype.UUID
 	AfterRelevance   *int32
 	AfterBucket      *int32
@@ -516,6 +548,7 @@ func (q *Queries) SearchEvents(ctx context.Context, arg SearchEventsParams) ([]S
 		arg.IncludeCancelled,
 		arg.SourceKind,
 		arg.SourceID,
+		arg.EditableOnly,
 		arg.AfterID,
 		arg.AfterRelevance,
 		arg.AfterBucket,
@@ -601,6 +634,15 @@ WHERE events.recurrence_frequency IS NOT NULL
   AND ($4::boolean OR events.status = 'active')
   AND ($5::text IS NULL OR events.source_kind = $5::text)
   AND ($6::uuid IS NULL OR events.source_id = $6::uuid)
+  AND (NOT $7::boolean OR events.source_kind = 'manual' OR (
+    events.source_kind = 'google' AND EXISTS (
+      SELECT 1 FROM calendar_sources AS editable_source
+      JOIN google_calendars AS editable_calendar ON editable_calendar.id = editable_source.google_calendar_id
+      JOIN google_events AS editable_event ON editable_event.calendar_id = editable_calendar.id
+      WHERE editable_source.id = events.source_id AND editable_calendar.access_role IN ('owner', 'writer')
+        AND editable_event.event_id = events.external_uid AND editable_event.recurring_event_id IS NULL
+    )
+  ))
 ORDER BY events.id
 `
 
@@ -611,6 +653,7 @@ type SearchRecurringEventsParams struct {
 	IncludeCancelled bool
 	SourceKind       *string
 	SourceID         pgtype.UUID
+	EditableOnly     bool
 }
 
 type SearchRecurringEventsRow struct {
@@ -630,6 +673,7 @@ func (q *Queries) SearchRecurringEvents(ctx context.Context, arg SearchRecurring
 		arg.IncludeCancelled,
 		arg.SourceKind,
 		arg.SourceID,
+		arg.EditableOnly,
 	)
 	if err != nil {
 		return nil, err

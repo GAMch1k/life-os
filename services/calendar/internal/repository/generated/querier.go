@@ -263,6 +263,8 @@ type Querier interface {
 	// Records the Life OS calendar Calendar created in Google (and why, in
 	// note, when it replaced one the owner deleted).
 	SetLifeOSCalendar(ctx context.Context, arg SetLifeOSCalendarParams) (GoogleConnection, error)
+	// Says why the Life OS calendar could not be created (null: nothing to say).
+	SetLifeOSCalendarNote(ctx context.Context, arg SetLifeOSCalendarNoteParams) error
 	// The copy in Google is gone (deleted there): the event is no longer linked.
 	UnlinkGoogleExport(ctx context.Context, eventID pgtype.UUID) error
 	// Writes the whole merged event. The expected_updated_at guard makes the

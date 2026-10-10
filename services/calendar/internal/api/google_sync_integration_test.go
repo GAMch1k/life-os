@@ -229,6 +229,15 @@ func TestGoogleSyncImportsEventsAndFollowsChanges(t *testing.T) {
 		t.Fatalf("club = %+v", club)
 	}
 	c.failure(http.MethodPatch, "/v1/events/"+club.Id.String(), map[string]any{"title": "Lesekreis"}, http.StatusConflict, "google_read_only")
+	var editable generated.EventList
+	c.call(http.MethodGet, "/v1/events/search?q=club&editable=true", nil, http.StatusOK, &editable)
+	if len(editable.Items) != 0 {
+		t.Fatalf("editable club = %q", titles(editable.Items))
+	}
+	c.call(http.MethodGet, "/v1/events/search?q=standup&editable=true", nil, http.StatusOK, &editable)
+	if len(editable.Items) != 1 || editable.Items[0].Id != standup.Id {
+		t.Fatalf("editable standup = %q", titles(editable.Items))
+	}
 	c.failure(http.MethodDelete, "/v1/events/"+club.Id.String(), nil, http.StatusConflict, "google_read_only")
 	if writes := c.fake.Writes(); len(writes) != 0 {
 		t.Fatalf("writes to Google = %+v", writes)

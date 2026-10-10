@@ -947,6 +947,21 @@ func (q *Queries) SetLifeOSCalendar(ctx context.Context, arg SetLifeOSCalendarPa
 	return i, err
 }
 
+const setLifeOSCalendarNote = `-- name: SetLifeOSCalendarNote :exec
+UPDATE google_connections SET lifeos_calendar_note = $1, updated_at = now() WHERE id = $2
+`
+
+type SetLifeOSCalendarNoteParams struct {
+	Note *string
+	ID   pgtype.UUID
+}
+
+// Says why the Life OS calendar could not be created (null: nothing to say).
+func (q *Queries) SetLifeOSCalendarNote(ctx context.Context, arg SetLifeOSCalendarNoteParams) error {
+	_, err := q.db.Exec(ctx, setLifeOSCalendarNote, arg.Note, arg.ID)
+	return err
+}
+
 const unlinkGoogleExport = `-- name: UnlinkGoogleExport :exec
 UPDATE google_exports
 SET google_calendar_id = NULL, google_event_id = NULL, etag = NULL, google_updated = NULL, exported_exceptions = '{}',

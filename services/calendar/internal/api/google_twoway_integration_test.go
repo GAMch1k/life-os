@@ -253,6 +253,16 @@ func TestGoogleTwoWayKeepsReadOnlyCalendarsReadOnly(t *testing.T) {
 		t.Fatalf("after Google's change: %+v", current)
 	}
 
+	// Listing and search for the events the AI may change leave read-only
+	// ones out.
+	var found generated.EventList
+	c.call(http.MethodGet, "/v1/events/search?q=christmas&editable=true", nil, http.StatusOK, &found)
+	if len(found.Items) != 0 {
+		t.Fatalf("editable search = %q", titles(found.Items))
+	}
+	c.call(http.MethodGet, "/v1/events?from=2026-10-01T00:00:00Z&to=2027-01-01T00:00:00Z&editable=true", nil, http.StatusOK, &found)
+	equal(t, "editable events", titles(found.Items), []string{"Family dinner 10-18T17:00"})
+
 	// Google refuses a calendar that became read-only before Life OS read
 	// the list again: nothing changes, and the answer says why.
 	family := c.syncedEvent("Family dinner")

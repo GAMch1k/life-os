@@ -890,6 +890,9 @@ type Weekday string
 // Cursor defines model for Cursor.
 type Cursor = string
 
+// Editable defines model for Editable.
+type Editable = bool
+
 // EventId defines model for EventId.
 type EventId = openapi_types.UUID
 
@@ -928,6 +931,9 @@ type ListEventsParams struct {
 	// SourceId Only events imported from this source.
 	SourceId *SourceId `form:"sourceId,omitempty" json:"sourceId,omitempty"`
 
+	// Editable Only events that can be changed through this API (`editable`): Life OS events, and Google events of calendars the account may edit that are single events or series Calendar holds; not feed events, read-only Google calendars, or occurrences expanded from a Google rule. The AI looks for the events to change this way.
+	Editable *Editable `form:"editable,omitempty" json:"editable,omitempty"`
+
 	// Cursor The previous page's nextCursor. Opaque; only valid with the parameters it was returned for.
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
 	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
@@ -955,6 +961,9 @@ type SearchEventsParams struct {
 
 	// SourceId Only events imported from this source.
 	SourceId *SourceId `form:"sourceId,omitempty" json:"sourceId,omitempty"`
+
+	// Editable Only events that can be changed through this API (`editable`): Life OS events, and Google events of calendars the account may edit that are single events or series Calendar holds; not feed events, read-only Google calendars, or occurrences expanded from a Google rule. The AI looks for the events to change this way.
+	Editable *Editable `form:"editable,omitempty" json:"editable,omitempty"`
 
 	// Cursor The previous page's nextCursor. Opaque; only valid with the parameters it was returned for.
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
@@ -1151,6 +1160,13 @@ func (siw *ServerInterfaceWrapper) ListEvents(c fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter sourceId: %w", err).Error())
 	}
 
+	// ------------- Optional query parameter "editable" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "editable", query, &params.Editable, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter editable: %w", err).Error())
+	}
+
 	// ------------- Optional query parameter "cursor" -------------
 
 	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", query, &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
@@ -1260,6 +1276,13 @@ func (siw *ServerInterfaceWrapper) SearchEvents(c fiber.Ctx) error {
 	err = runtime.BindQueryParameterWithOptions("form", true, false, "sourceId", query, &params.SourceId, runtime.BindQueryParameterOptions{Type: "string", Format: "uuid"})
 	if err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter sourceId: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "editable" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "editable", query, &params.Editable, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter editable: %w", err).Error())
 	}
 
 	// ------------- Optional query parameter "cursor" -------------
