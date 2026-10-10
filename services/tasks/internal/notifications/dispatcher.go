@@ -241,18 +241,10 @@ func (d *Dispatcher) handle(ctx context.Context, now, from time.Time, result *Re
 			continue
 		}
 		hold := item.At.Add(-time.Microsecond)
-		if now.Sub(item.At) > d.grace {
-			recorded, err := d.record(ctx, item, "missed", now)
-			if err != nil {
-				return hold, sent, errors.Join(append(errs, err)...)
-			}
-			if recorded {
-				d.recordMissed(ctx, item, now)
-				result.Missed++
-			}
-			continue
-		}
+		missed := now.Sub(item.At) > d.grace
 		late := now.Sub(item.At) > d.lateAfter
+		// A daily message with nothing to list is not sent, and not missed
+		// either: the owner lost nothing.
 		message, ok, err := d.message(ctx, item, now, late, result)
 		if err != nil {
 			return hold, sent, errors.Join(append(errs, err)...)
@@ -262,6 +254,17 @@ func (d *Dispatcher) handle(ctx context.Context, now, from time.Time, result *Re
 				return hold, sent, errors.Join(append(errs, err)...)
 			}
 			result.Empty++
+			continue
+		}
+		if missed {
+			recorded, err := d.record(ctx, item, "missed", now)
+			if err != nil {
+				return hold, sent, errors.Join(append(errs, err)...)
+			}
+			if recorded {
+				d.recordMissed(ctx, item, now)
+				result.Missed++
+			}
 			continue
 		}
 		err = d.notifier.Send(ctx, message)
@@ -296,7 +299,7 @@ func (d *Dispatcher) handle(ctx context.Context, now, from time.Time, result *Re
 
 // message builds the notification for item, reading the Tasks (and for the
 // summary, the events) as they are now; false when a daily message has
-// nothing to list.
+// nothing to list. late phrases a timed reminder from now.
 func (d *Dispatcher) message(ctx context.Context, item Due, now time.Time, late bool, result *Result) (notify.Notification, bool, error) {
 	if item.Kind == KindDue {
 		return dueMessage(item, now, late, d.owner), true, nil
