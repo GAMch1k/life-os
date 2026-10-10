@@ -18,7 +18,11 @@ export const AGENT_CHANGES_DESCRIPTION =
 
 /** What the "calendar" domain records. */
 export const CALENDAR_DESCRIPTION =
-  "Calendar events created, changed, cancelled, or deleted (by you, the AI, or a tool), each refresh of a subscribed calendar feed, and the Google Calendar connection.";
+  "Calendar events created, changed, cancelled, or deleted (by you, the AI, a tool, or an integration such as Google Calendar), and each refresh of a subscribed calendar feed.";
+
+/** What the "google-calendar" integration records. */
+export const GOOGLE_CALENDAR_DESCRIPTION =
+  "The Google Calendar connection: connecting, disconnecting, expired access, each sync of a Google calendar that changed something, failed syncs, calendars removed from Life OS, the Life OS calendar created in Google, failed exports, and changes kept because Google's version was newer.";
 
 export const BANKING_DESCRIPTION =
   "The bank connection: connecting, disconnecting, each sync into Finance that changed something (counts only, never transaction details), failed syncs, and the consent's expiry.";
@@ -42,6 +46,11 @@ export const SOURCES: readonly {
     value: "banking",
     label: "Bank connection",
     description: BANKING_DESCRIPTION,
+  },
+  {
+    value: "google-calendar",
+    label: "Google Calendar",
+    description: GOOGLE_CALENDAR_DESCRIPTION,
   },
 ];
 

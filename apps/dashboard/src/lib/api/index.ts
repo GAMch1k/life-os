@@ -2,6 +2,10 @@ export { activityClient, createActivityClient } from "./activity-client";
 export { bankingClient, createBankingClient } from "./banking-client";
 export { calendarClient, createCalendarClient } from "./calendar-client";
 export { financeClient, createFinanceClient } from "./finance-client";
+export {
+  googleCalendarClient,
+  createGoogleCalendarClient,
+} from "./google-calendar-client";
 export { inboxClient, createInboxClient } from "./inbox-client";
 export {
   notificationsClient,

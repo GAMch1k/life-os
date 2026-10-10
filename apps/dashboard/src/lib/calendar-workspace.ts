@@ -2,6 +2,7 @@ import type { EventInput } from "@fullcalendar/core";
 
 import { calendarClient } from "@/lib/api/calendar-client";
 import type { components } from "@/lib/api/generated/calendar";
+import type { EventExport } from "@/lib/google-calendar";
 import {
   NO_REPEAT,
   readRepeat,
@@ -125,9 +126,22 @@ function sourceName(event: CalendarEvent) {
     : event.source.name?.trim() || undefined;
 }
 
+/**
+ * The provider label of an integration's source, such as "ZAW", "ICS", or
+ * "Google"; undefined for other events.
+ */
+function sourceProvider(event: CalendarEvent) {
+  return event.source.kind === "external"
+    ? event.source.provider?.trim() || undefined
+    : undefined;
+}
+
 /** Where an imported event comes from; undefined for Life OS events. */
 export function sourceLabel(event: CalendarEvent) {
   switch (event.source.kind) {
+    case "external":
+      // An integration's source: its name, else its provider's label.
+      return sourceName(event) ?? sourceProvider(event);
     case "ics":
       return sourceName(event) ?? "ICS feed";
     case "google":
@@ -145,53 +159,76 @@ export function readOnlyReason(event: CalendarEvent) {
   if (event.editable) return undefined;
   if (event.readOnlyReason) return event.readOnlyReason;
   const from =
-    event.source.kind === "ics"
-      ? (sourceName(event) ?? "an ICS feed")
-      : (sourceName(event) ?? "Google Calendar");
+    event.source.kind === "external"
+      ? (sourceLabel(event) ?? "another calendar")
+      : event.source.kind === "ics"
+        ? (sourceName(event) ?? "an ICS feed")
+        : (sourceName(event) ?? "Google Calendar");
   return `Imported from ${from}, so it can only be changed there. Its reminders and priority can still be adjusted here.`;
 }
 
 /**
- * The source badge of an event that is not a Life OS one: "Google · Owner"
- * for a Google event, "Imported · ZAW" for a feed's.
+ * The source badge of an event that is not a Life OS one: "<provider> ·
+ * <name>" for an integration's ("ZAW · Müllabfuhr", or just "ZAW" while
+ * the name is the provider's), "Google · Owner" for a Google event,
+ * "Imported · ZAW" for a feed Calendar imported itself.
  */
 export function sourceBadge(event: CalendarEvent) {
   const source = sourceLabel(event);
   if (!source) return undefined;
+  if (event.source.kind === "external") {
+    const provider = sourceProvider(event);
+    const name = sourceName(event);
+    return provider && name && name !== provider
+      ? `${provider} · ${name}`
+      : (provider ?? source);
+  }
   return event.source.kind === "google"
     ? `Google · ${source}`
     : `Imported · ${source}`;
 }
 
 /**
- * Where the event is in Google and how its sync stands, for its details:
- * "In Google: Life OS" with "Exported", "Waiting to be exported", or the
- * export's failure ("In Google: Owner", "Synced both ways" for a Google
- * event); undefined when it is not in Google.
+ * Where the event is in Google and how its sync stands, for its details.
+ * A Life OS event exported to the Life OS calendar (exported, from the
+ * Google Calendar integration's /v1/exports): "In Google: Life OS" with
+ * "Exported", "Waiting to be exported", or the export's failure. An event of
+ * a Google calendar the integration syncs: "In Google: Owner", "Synced both
+ * ways" (or "Synced from Google" when it is read-only here). Undefined when
+ * the event is not in Google.
  */
 export function googleSyncLabel(
   event: CalendarEvent,
+  exported?: EventExport,
 ): { place: string; state: string; failing: boolean } | undefined {
-  const link = event.google;
-  if (!link) return undefined;
-  const place = `In Google: ${link.calendarName}`;
-  switch (link.state) {
+  if (
+    event.source.kind === "external" &&
+    event.source.integration === GOOGLE_INTEGRATION
+  ) {
+    return {
+      place: `In Google: ${sourceName(event) ?? sourceProvider(event) ?? "Google Calendar"}`,
+      state: event.editable ? "Synced both ways" : "Synced from Google",
+      failing: false,
+    };
+  }
+  if (event.source.kind !== "manual" || !exported) return undefined;
+  const place = `In Google: ${exported.calendarName}`;
+  switch (exported.state) {
     case "pending":
       return { place, state: "Waiting to be exported", failing: false };
     case "failed":
       return {
         place,
-        state: `Export failed${link.error ? `: ${link.error}` : ""}. Retrying automatically.`,
+        state: `Export failed${exported.error ? `: ${exported.error}` : ""}. Retrying automatically.`,
         failing: true,
       };
     default:
-      return {
-        place,
-        state: link.lifeOs ? "Exported" : "Synced both ways",
-        failing: false,
-      };
+      return { place, state: "Exported", failing: false };
   }
 }
+
+/** The integration that syncs Google calendars (source.integration). */
+export const GOOGLE_INTEGRATION = "google-calendar";
 
 /** The code of a Calendar error response, such as "google_conflict". */
 export function apiErrorCode(error: unknown): string | undefined {

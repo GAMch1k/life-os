@@ -6,6 +6,7 @@ import {
   createBankingClient,
   createCalendarClient,
   createFinanceClient,
+  createGoogleCalendarClient,
   createInboxClient,
   createNotificationsClient,
   createTasksClient,
@@ -24,6 +25,7 @@ test("each generated service client accepts an explicit base URL", () => {
   assert.ok(createActivityClient(url));
   assert.ok(createNotificationsClient(url));
   assert.ok(createBankingClient(url));
+  assert.ok(createGoogleCalendarClient(url));
 });
 
 test("service clients act for the owner on every request", async () => {
@@ -55,10 +57,13 @@ test("service clients act for the owner on every request", async () => {
     await createBankingClient(url).POST("/v1/connections/{connectionId}/sync", {
       params: { path: { connectionId: "c" } },
     });
+    await createGoogleCalendarClient(url).PATCH("/v1/connection", {
+      body: { exportEnabled: true },
+    });
   } finally {
     globalThis.fetch = original;
   }
-  assert.deepEqual(actors, Array(8).fill("user"));
+  assert.deepEqual(actors, Array(9).fill("user"));
 });
 
 test("only owner and development-tool actors count as public", () => {

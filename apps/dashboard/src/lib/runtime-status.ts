@@ -2,6 +2,7 @@ import { normalizeServiceUrl, serviceBaseUrls } from "@/config/services";
 import { bankingClient } from "@/lib/api/banking-client";
 import { calendarClient } from "@/lib/api/calendar-client";
 import type { components as CalendarComponents } from "@/lib/api/generated/calendar";
+import { googleCalendarClient } from "@/lib/api/google-calendar-client";
 import { inboxClient } from "@/lib/api/inbox-client";
 import type { components as InboxComponents } from "@/lib/api/generated/inbox";
 import type { components as NotificationsComponents } from "@/lib/api/generated/notifications";
@@ -9,6 +10,7 @@ import { notificationsClient } from "@/lib/api/notifications-client";
 import type { components as VoiceComponents } from "@/lib/api/generated/voice";
 import { voiceClient } from "@/lib/api/voice-client";
 import {
+  changesUnreadable,
   type GoogleCalendar,
   type GoogleConnection,
   missingPermissions,
@@ -25,8 +27,9 @@ import { configuredTimeZone, userTimeZone } from "@/lib/user-time-zone";
 // The Status page turns supported runtime state into actionable checks:
 // - the processor's private /status endpoint (what the running process saw),
 // - the Inbox and Voice backlog APIs (durable queue state),
-// - the Calendar sources API (each subscribed feed's refresh state), its
-//   Google connection, and the sync state of the Google calendars,
+// - the Calendar sources API (each subscribed feed's refresh state),
+// - the Google Calendar integration's connection (with its exports and the
+//   edits on their way to Google) and the sync state of its calendars,
 // - the Notifications channels API (each delivery channel's recent outcomes),
 // - the banking integration's connections (consent and sync state),
 // - each owning service's /ready endpoint.
@@ -915,6 +918,37 @@ export function googlePart(
       facts,
     };
   }
+  // Life OS events and edits of Google events come from Calendar's change
+  // feed; edits are written to Google a few seconds after they are made.
+  const changes = connection.changes;
+  if (changes) {
+    facts.push({
+      label: "Edits to Google",
+      value: changes.failedEdits
+        ? `${changes.failedEdits} failing, retried automatically`
+        : changes.pendingEdits
+          ? `${changes.pendingEdits} on the way`
+          : "up to date",
+    });
+  }
+  if (changesUnreadable(connection)) {
+    return {
+      ...base,
+      state: "ok",
+      summary: `Connected as ${account}. Calendar's changes could not be read, so Life OS events and edits made here wait to reach Google; retried automatically.`,
+      detail: changes?.lastError ?? undefined,
+      facts,
+    };
+  }
+  if (changes?.failedEdits) {
+    return {
+      ...base,
+      state: "ok",
+      summary: `Connected as ${account}. ${changes.failedEdits} edit${changes.failedEdits === 1 ? "" : "s"} made in Life OS could not be written to Google yet; retried automatically.`,
+      detail: changes.lastEditError ?? undefined,
+      facts,
+    };
+  }
   if (connection.exportEnabled && exports?.failed) {
     return {
       ...base,
@@ -945,7 +979,7 @@ function withGoogle(
     state: part.state,
     summary: part.summary,
     action: !connection?.configured
-      ? "Add the LIFE_OS_GOOGLE_* settings to the server's .env again, or disconnect Google in Calendar."
+      ? "Add the LIFE_OS_GOOGLE_* settings to the server's .env again (google-calendar), or disconnect Google in Calendar."
       : connection.status === "connected"
         ? GOOGLE_SYNC_RETRY
         : GOOGLE_RECONNECT,
@@ -1344,6 +1378,7 @@ const SERVICE_NAMES: Record<keyof typeof serviceBaseUrls, string> = {
   activity: "Activity",
   notifications: "Notifications",
   banking: "Banking",
+  googleCalendar: "Google Calendar",
 };
 
 export async function getRuntimeStatus(): Promise<RuntimeStatus> {
@@ -1378,12 +1413,12 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
       .GET("/v1/sources", timeout)
       .then(({ data }) => data?.items ?? null)
       .catch(() => null),
-    calendarClient
-      .GET("/v1/google/connection", timeout)
+    googleCalendarClient
+      .GET("/v1/connection", timeout)
       .then(({ data }) => data ?? null)
       .catch(() => null),
-    calendarClient
-      .GET("/v1/google/calendars", timeout)
+    googleCalendarClient
+      .GET("/v1/calendars", timeout)
       .then(({ data }) => data?.items ?? null)
       .catch(() => null),
     Promise.all([

@@ -12,20 +12,21 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/app-dialog";
-import { UNAVAILABLE } from "@/components/calendar-event-dialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { FieldLegend, FieldSet } from "@/components/ui/field";
 import { Label } from "@/components/ui/label";
-import { calendarClient } from "@/lib/api/calendar-client";
+import { googleCalendarClient } from "@/lib/api/google-calendar-client";
 import {
   calendarDetail,
   connectFailure,
+  editsDetail,
   EXPORT_NOTE,
   exportDetail,
   GOOGLE_CONNECTED,
   GOOGLE_PARAM,
   GOOGLE_SETTINGS,
+  GOOGLE_UNAVAILABLE,
   type GoogleCalendar,
   type GoogleConnection,
   googleState,
@@ -87,8 +88,8 @@ type Loaded = { connection: GoogleConnection; calendars: GoogleCalendar[] };
 
 async function loadGoogle(): Promise<Loaded> {
   const [connection, calendars] = await Promise.all([
-    calendarClient.GET("/v1/google/connection"),
-    calendarClient.GET("/v1/google/calendars"),
+    googleCalendarClient.GET("/v1/connection"),
+    googleCalendarClient.GET("/v1/calendars"),
   ]);
   if (!connection.data || !calendars.data) {
     throw new Error("Google connection unavailable");
@@ -145,7 +146,7 @@ function GooglePanel({
     try {
       setLoaded(await loadGoogle());
     } catch {
-      setError(UNAVAILABLE);
+      setError(GOOGLE_UNAVAILABLE);
     }
   };
 
@@ -167,8 +168,8 @@ function GooglePanel({
     startTransition(async () => {
       setError(undefined);
       try {
-        const { data, error, response } = await calendarClient.POST(
-          "/v1/google/connection/authorize",
+        const { data, error, response } = await googleCalendarClient.POST(
+          "/v1/connection/authorize",
         );
         if (!data) {
           setError(connectFailure(response.status, error).message);
@@ -177,7 +178,7 @@ function GooglePanel({
         setOpening(true);
         window.location.assign(data.url);
       } catch {
-        setError(UNAVAILABLE);
+        setError(GOOGLE_UNAVAILABLE);
       }
     });
 
@@ -186,8 +187,8 @@ function GooglePanel({
       setError(undefined);
       setNotice(undefined);
       try {
-        const { data, error, response } = await calendarClient.POST(
-          "/v1/google/calendars/refresh",
+        const { data, error, response } = await googleCalendarClient.POST(
+          "/v1/calendars/refresh",
         );
         if (!data) {
           setError(connectFailure(response.status, error).message);
@@ -200,7 +201,7 @@ function GooglePanel({
         );
         setNotice("The calendar list is up to date.");
       } catch {
-        setError(UNAVAILABLE);
+        setError(GOOGLE_UNAVAILABLE);
       }
     });
 
@@ -209,9 +210,8 @@ function GooglePanel({
       setError(undefined);
       setNotice(undefined);
       try {
-        const { response } = await calendarClient.DELETE(
-          "/v1/google/connection",
-        );
+        const { response } =
+          await googleCalendarClient.DELETE("/v1/connection");
         if (!response.ok) {
           setError("Google Calendar could not be disconnected. Try again.");
           return;
@@ -220,7 +220,7 @@ function GooglePanel({
         await reload();
         setNotice("Google Calendar is disconnected.");
       } catch {
-        setError(UNAVAILABLE);
+        setError(GOOGLE_UNAVAILABLE);
       }
     });
 
@@ -235,8 +235,8 @@ function GooglePanel({
       );
     update({ ...calendar, syncEnabled });
     try {
-      const { data } = await calendarClient.PATCH(
-        "/v1/google/calendars/{calendarId}",
+      const { data } = await googleCalendarClient.PATCH(
+        "/v1/calendars/{calendarId}",
         {
           params: { path: { calendarId: calendar.id } },
           body: { syncEnabled },
@@ -251,7 +251,7 @@ function GooglePanel({
       }
     } catch {
       update(calendar);
-      setError(UNAVAILABLE);
+      setError(GOOGLE_UNAVAILABLE);
     } finally {
       setSaving(undefined);
     }
@@ -263,7 +263,7 @@ function GooglePanel({
     startTransition(async () => {
       setError(undefined);
       try {
-        const { data } = await calendarClient.PATCH("/v1/google/connection", {
+        const { data } = await googleCalendarClient.PATCH("/v1/connection", {
           body: { exportEnabled },
         });
         if (!data) {
@@ -275,7 +275,7 @@ function GooglePanel({
         );
         if (exportEnabled) showFirstSync();
       } catch {
-        setError(UNAVAILABLE);
+        setError(GOOGLE_UNAVAILABLE);
       }
     });
 
@@ -309,7 +309,7 @@ function GooglePanel({
 
       {failed ? (
         <p className="text-destructive text-sm" role="alert">
-          {UNAVAILABLE}
+          {GOOGLE_UNAVAILABLE}
         </p>
       ) : !loaded || !connection ? (
         <p className="text-muted-foreground text-sm">
@@ -320,7 +320,7 @@ function GooglePanel({
           <p>
             Google Calendar is not set up on this server yet. Its{" "}
             <code>.env</code> needs {GOOGLE_SETTINGS.join(", ")} from your
-            Google Cloud project; then restart Calendar. The steps are in
+            Google Cloud project; then restart google-calendar. The steps are in
             docs/operations/google-calendar.md.
           </p>
           {linked ? (
@@ -360,6 +360,10 @@ function GooglePanel({
           Connected as <span className="font-medium">{account}</span>.
         </p>
       )}
+
+      {loaded && linked && connection ? (
+        <EditsState connection={connection} />
+      ) : null}
 
       {loaded && state === "connected" && connection ? (
         missingPermissions(connection).length ? (
@@ -455,6 +459,24 @@ function GooglePanel({
         </DialogFooter>
       ) : null}
     </div>
+  );
+}
+
+/** How edits of Google events made here are reaching Google, if any wait. */
+function EditsState({ connection }: { connection: GoogleConnection }) {
+  const edits = editsDetail(connection);
+  if (!edits) return null;
+  return (
+    <p
+      className={cn(
+        "text-xs break-words",
+        edits.failing ? "text-destructive" : "text-muted-foreground",
+      )}
+      data-testid="google-edits-state"
+      role={edits.failing ? "alert" : "status"}
+    >
+      {edits.text}
+    </p>
   );
 }
 

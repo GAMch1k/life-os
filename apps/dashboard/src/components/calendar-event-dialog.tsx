@@ -55,6 +55,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { calendarClient } from "@/lib/api/calendar-client";
+import { googleCalendarClient } from "@/lib/api/google-calendar-client";
 import {
   customDays,
   customFrom,
@@ -118,6 +119,7 @@ import {
   updateRequest,
   type WriteResult,
 } from "@/lib/calendar-workspace";
+import type { EventExport } from "@/lib/google-calendar";
 import { cn } from "@/lib/utils";
 
 /** What the event dialog shows; null when it is closed. */
@@ -273,7 +275,8 @@ function EventDetails({
   const readOnly = !isEditable(event);
   const cancelled = isCancelled(event);
   const source = sourceBadge(event);
-  const google = googleSyncLabel(event);
+  const exported = useEventExport(event);
+  const google = googleSyncLabel(event, exported);
   const priority = priorityBadge(event);
   const lines = reminderLines(event);
   // One occurrence of a recurring event (a Life OS or Google series), as
@@ -498,7 +501,7 @@ function EventDetails({
             </Button>
             {/* Above the buttons on a phone, beside them on wider screens. */}
             <p className="text-sm sm:order-first sm:mr-auto sm:self-center">
-              {event.google
+              {google
                 ? "Delete this event permanently, also in Google Calendar?"
                 : "Delete this event permanently?"}
             </p>
@@ -1407,4 +1410,31 @@ export function ReminderList({
       <FieldError id={errorId}>{error}</FieldError>
     </div>
   );
+}
+
+/**
+ * Where a Life OS event is in Google, from the Google Calendar integration
+ * (its export to the Life OS calendar); undefined while unknown, for other
+ * events, or when the integration cannot be read.
+ */
+function useEventExport(event: CalendarEvent): EventExport | undefined {
+  const [found, setFound] = useState<{ key: string; value?: EventExport }>();
+  const key = `${event.id}:${event.updatedAt}`;
+  const manual = event.source.kind === "manual";
+  useEffect(() => {
+    if (!manual) return;
+    let current = true;
+    googleCalendarClient
+      .GET("/v1/exports", { params: { query: { eventId: [event.id] } } })
+      .then(({ data }) => {
+        if (current) setFound({ key, value: data?.items[0] });
+      })
+      .catch(() => {
+        if (current) setFound({ key });
+      });
+    return () => {
+      current = false;
+    };
+  }, [event.id, key, manual]);
+  return manual && found?.key === key ? found.value : undefined;
 }

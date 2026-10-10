@@ -5,22 +5,24 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
-import { UNAVAILABLE } from "@/components/calendar-event-dialog";
 import { buttonVariants } from "@/components/ui/button";
-import { calendarClient } from "@/lib/api/calendar-client";
+import { googleCalendarClient } from "@/lib/api/google-calendar-client";
 import {
   type CallbackStep,
   connectFailure,
   GOOGLE_CALLBACK_PATH,
   GOOGLE_CONNECTED,
   GOOGLE_PARAM,
+  GOOGLE_UNAVAILABLE,
 } from "@/lib/google-calendar";
 
 /**
  * Completes a Google connection: posts the code and state Google returned to
- * Calendar (through the Dashboard's /api/calendar proxy, as the owner), then
- * returns to the Calendar, where the Google dialog opens. The code is used
- * once and dropped from the address bar right away.
+ * the google-calendar integration (through /api/integrations/google-calendar,
+ * as the owner), then returns to the Calendar, where the Google dialog
+ * opens. The code is used once and dropped from the address bar right away.
+ * This route is the redirect URI registered at Google; it did not change
+ * when the integration left Calendar.
  */
 export function GoogleCallback({ step }: { step: CallbackStep }) {
   const router = useRouter();
@@ -35,8 +37,8 @@ export function GoogleCallback({ step }: { step: CallbackStep }) {
     window.history.replaceState(window.history.state, "", GOOGLE_CALLBACK_PATH);
     if (initial.kind !== "exchange" || started.current) return;
     started.current = true;
-    calendarClient
-      .POST("/v1/google/connection", {
+    googleCalendarClient
+      .POST("/v1/connection", {
         body: { code: initial.code, state: initial.state },
       })
       .then(({ data, error, response }) => {
@@ -46,7 +48,7 @@ export function GoogleCallback({ step }: { step: CallbackStep }) {
           setFailure(connectFailure(response.status, error).message);
         }
       })
-      .catch(() => setFailure(UNAVAILABLE));
+      .catch(() => setFailure(GOOGLE_UNAVAILABLE));
   }, [initial, router]);
 
   return (

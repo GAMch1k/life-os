@@ -857,24 +857,61 @@ test("imported events name their source and why they are read-only", () => {
   assert.equal(sourceBadge(timed), undefined);
 });
 
+test("an integration's events are labelled by its provider and name", () => {
+  const zaw = {
+    ...timed,
+    source: {
+      kind: "external" as const,
+      sourceId: "s",
+      externalUid: "u",
+      integration: "calendar-feeds",
+      provider: "ZAW",
+      name: "ZAW",
+      readOnly: true,
+    },
+    editable: false,
+  };
+  assert.equal(sourceLabel(zaw), "ZAW");
+  // The name is the provider's: the badge names it once.
+  assert.equal(sourceBadge(zaw), "ZAW");
+  assert.equal(
+    readOnlyReason(zaw),
+    "Imported from ZAW, so it can only be changed there. Its reminders and priority can still be adjusted here.",
+  );
+  // Renamed by the owner: "<provider> · <name>".
+  const renamed = { ...zaw, source: { ...zaw.source, name: "Müllabfuhr" } };
+  assert.equal(sourceLabel(renamed), "Müllabfuhr");
+  assert.equal(sourceBadge(renamed), "ZAW · Müllabfuhr");
+  assert.match(readOnlyReason(renamed) ?? "", /^Imported from Müllabfuhr, /);
+  // Without a name, the provider names it.
+  const unnamed = { ...zaw, source: { ...zaw.source, name: null } };
+  assert.equal(sourceLabel(unnamed), "ZAW");
+  assert.equal(sourceBadge(unnamed), "ZAW");
+  // Calendar's own reason wins.
+  assert.equal(
+    readOnlyReason({ ...zaw, readOnlyReason: "One occurrence of a rule." }),
+    "One occurrence of a rule.",
+  );
+  // An editable event of an integration has no reason.
+  assert.equal(readOnlyReason({ ...zaw, editable: true }), undefined);
+});
+
 test("Google events are editable unless Calendar says why not", () => {
   const google = {
     ...timed,
     source: {
-      kind: "google" as const,
+      kind: "external" as const,
       sourceId: "g",
       externalUid: "dentist",
+      integration: "google-calendar",
+      provider: "Google",
       name: "Owner",
-    },
-    google: {
-      calendarId: "c",
-      calendarName: "Owner",
-      lifeOs: false,
-      state: "synced" as const,
+      readOnly: false,
     },
   };
   assert.equal(isEditable(google), true);
   assert.equal(readOnlyReason(google), undefined);
+  assert.equal(sourceLabel(google), "Owner");
   assert.equal(sourceBadge(google), "Google · Owner");
   assert.deepEqual(googleSyncLabel(google), {
     place: "In Google: Owner",
@@ -884,6 +921,7 @@ test("Google events are editable unless Calendar says why not", () => {
   const holiday = {
     ...google,
     editable: false,
+    source: { ...google.source, name: "Holidays", readOnly: true },
     readOnlyReason: "“Holidays” is a Google calendar you can only read.",
   };
   assert.equal(isEditable(holiday), false);
@@ -891,31 +929,42 @@ test("Google events are editable unless Calendar says why not", () => {
     readOnlyReason(holiday),
     "“Holidays” is a Google calendar you can only read.",
   );
+  assert.deepEqual(googleSyncLabel(holiday), {
+    place: "In Google: Holidays",
+    state: "Synced from Google",
+    failing: false,
+  });
+  // The legacy kind keeps its labels until P11-09.
+  const legacy = {
+    ...timed,
+    source: { kind: "google" as const, name: "Owner" },
+  };
+  assert.equal(sourceBadge(legacy), "Google · Owner");
+  assert.equal(googleSyncLabel(legacy), undefined);
 });
 
 test("a Life OS event says how its export to Google stands", () => {
-  const link = { calendarId: "c", calendarName: "Life OS", lifeOs: true };
+  const link = {
+    eventId: timed.id,
+    calendarId: "c",
+    calendarName: "Life OS",
+    lifeOs: true,
+  };
   assert.equal(googleSyncLabel(timed), undefined);
-  assert.deepEqual(
-    googleSyncLabel({ ...timed, google: { ...link, state: "synced" } }),
-    {
-      place: "In Google: Life OS",
-      state: "Exported",
-      failing: false,
-    },
-  );
+  assert.deepEqual(googleSyncLabel(timed, { ...link, state: "synced" }), {
+    place: "In Google: Life OS",
+    state: "Exported",
+    failing: false,
+  });
   assert.equal(
-    googleSyncLabel({ ...timed, google: { ...link, state: "pending" } })?.state,
+    googleSyncLabel(timed, { ...link, state: "pending" })?.state,
     "Waiting to be exported",
   );
   assert.deepEqual(
-    googleSyncLabel({
-      ...timed,
-      google: {
-        ...link,
-        state: "failed",
-        error: "Google is unavailable: HTTP 503",
-      },
+    googleSyncLabel(timed, {
+      ...link,
+      state: "failed",
+      error: "Google is unavailable: HTTP 503",
     }),
     {
       place: "In Google: Life OS",
@@ -924,6 +973,9 @@ test("a Life OS event says how its export to Google stands", () => {
       failing: true,
     },
   );
+  // Only a Life OS event is exported.
+  const feed = { ...timed, source: { kind: "ics" as const, name: "ZAW" } };
+  assert.equal(googleSyncLabel(feed, { ...link, state: "synced" }), undefined);
 });
 
 test("a change refused because the event changed in Google is recognized", () => {

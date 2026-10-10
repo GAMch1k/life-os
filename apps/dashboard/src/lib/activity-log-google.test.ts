@@ -6,6 +6,7 @@ import {
   calendarHref,
   eventLabel,
   sourceDescription,
+  sourceLabel,
   subjectLabel,
 } from "./activity-log";
 
@@ -98,5 +99,17 @@ test("two-way sync events are labelled with the event or the account", () => {
       "Europe/Berlin",
     ),
     "/calendar?date=2026-10-12",
+  );
+});
+
+test("the Google Calendar integration is its own source", () => {
+  assert.equal(sourceLabel("google-calendar"), "Google Calendar");
+  assert.match(
+    sourceDescription("google-calendar") ?? "",
+    /Google Calendar connection/,
+  );
+  assert.equal(
+    actorLabel({ kind: "system", name: "google-calendar" }),
+    "Google Calendar sync",
   );
 });

@@ -266,6 +266,21 @@ test("an imported next event carries its source's name", () => {
   );
   // Without the source list (Calendar sources unreadable), the kind names it.
   assert.equal(eventSourceName(imported, undefined), "ICS feed");
+  // An integration's event carries its source's name, else its provider.
+  const external = {
+    kind: "external" as const,
+    sourceId: "source-zaw",
+    externalUid: "uid-1",
+    provider: "ZAW",
+  };
+  assert.equal(
+    eventSourceName({ ...imported, source: { ...external, name: "Müll" } }, []),
+    "Müll",
+  );
+  assert.equal(
+    eventSourceName({ ...imported, source: { ...external, name: null } }, []),
+    "ZAW",
+  );
   // Times link to the owner's day: 22:30 UTC is the next day in Berlin.
   const late = timedEvent("late", "2026-10-12T22:30:00Z");
   assert.equal(
