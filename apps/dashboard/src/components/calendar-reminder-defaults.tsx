@@ -2,6 +2,7 @@
 
 import {
   type FormEvent,
+  type ReactNode,
   useEffect,
   useId,
   useState,
@@ -23,19 +24,31 @@ import {
   UNAVAILABLE,
 } from "@/components/calendar-event-dialog";
 import { Button } from "@/components/ui/button";
-import { FieldLegend, FieldSet } from "@/components/ui/field";
+import {
+  Field,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from "@/components/ui/field";
+import {
+  NativeSelect,
+  NativeSelectOption,
+} from "@/components/ui/native-select";
 import { calendarClient } from "@/lib/api/calendar-client";
 import {
   apiErrorMessage,
   type CalendarSource,
   fetchReminderDefaults,
+  PRIORITIES,
+  type Priority,
+  PRIORITY_LABEL,
   readReminders,
   type Reminder,
   type ReminderDefaults,
   type ReminderDraft,
-  sameReminders,
   sentence,
   settingsRequest,
+  sourceDefaultsRequest,
   toReminderDraft,
 } from "@/lib/calendar-workspace";
 
@@ -46,6 +59,8 @@ type Drafts = {
   allDay: ReminderDraft[];
   /** Each source's list, by source id. */
   sources: Record<string, ReminderDraft[]>;
+  /** Each source's default priority, by source id. */
+  priorities: Record<string, Priority>;
 };
 
 /** Errors by section ("timed", "allDay", or a source id), or the form's. */
@@ -56,7 +71,9 @@ type Errors = Record<string, string>;
  * create in Life OS (one list for timed and one for all-day events, from
  * Calendar settings) and each imported calendar's, such as ZAW's evening
  * before. Every event that uses its default reminders gets them as well as
- * its own. The lists are read each time the dialog opens.
+ * its own. Each imported calendar also has a default priority, which its
+ * events have unless the owner gives one another. The lists are read each
+ * time the dialog opens.
  */
 export function ReminderDefaultsDialog({
   onOpenChange,
@@ -86,6 +103,9 @@ function draftsOf({ owner, sources }: Saved): Drafts {
         source.id,
         (source.defaultReminders ?? []).map(toReminderDraft),
       ]),
+    ),
+    priorities: Object.fromEntries(
+      sources.map((source) => [source.id, source.defaultPriority]),
     ),
   };
 }
@@ -173,10 +193,16 @@ function DefaultsForm({
         }
         for (const source of current.sources) {
           const next = read[source.id];
-          if (!next || sameReminders(source.defaultReminders, next)) continue;
+          const body =
+            next &&
+            sourceDefaultsRequest(source, {
+              reminders: next,
+              priority: drafts.priorities[source.id] ?? source.defaultPriority,
+            });
+          if (!body) continue;
           const result = await calendarClient.PATCH("/v1/sources/{sourceId}", {
             params: { path: { sourceId: source.id } },
-            body: { defaultReminders: next },
+            body,
           });
           if (!result.data) {
             return setErrors({
@@ -205,7 +231,8 @@ function DefaultsForm({
         <DialogTitle>Reminder defaults</DialogTitle>
         <DialogDescription>
           Every event that uses default reminders gets these as well as its own.
-          A change applies to all of them.
+          A change applies to all of them. An imported calendar&apos;s events
+          also have its default priority unless you give one another.
         </DialogDescription>
       </DialogHeader>
 
@@ -255,7 +282,36 @@ function DefaultsForm({
               }
               reminders={drafts.sources[source.id] ?? []}
               title={source.name}
-            />
+            >
+              <Field className="gap-1.5">
+                <FieldLabel
+                  className="text-xs"
+                  htmlFor={`${id}-source-${index}-priority`}
+                >
+                  Default priority
+                </FieldLabel>
+                <NativeSelect
+                  className="w-full"
+                  id={`${id}-source-${index}-priority`}
+                  onChange={(change) =>
+                    setDrafts({
+                      ...drafts,
+                      priorities: {
+                        ...drafts.priorities,
+                        [source.id]: change.target.value as Priority,
+                      },
+                    })
+                  }
+                  value={drafts.priorities[source.id] ?? source.defaultPriority}
+                >
+                  {PRIORITIES.map((option) => (
+                    <NativeSelectOption key={option} value={option}>
+                      {PRIORITY_LABEL[option]}
+                    </NativeSelectOption>
+                  ))}
+                </NativeSelect>
+              </Field>
+            </DefaultsSection>
           ))}
         </>
       )}
@@ -284,6 +340,7 @@ function DefaultsForm({
 }
 
 function DefaultsSection({
+  children,
   error,
   errorId,
   fresh,
@@ -293,6 +350,8 @@ function DefaultsSection({
   reminders,
   title,
 }: {
+  /** More of the section's defaults, after its reminders. */
+  children?: ReactNode;
   error?: string;
   errorId: string;
   fresh: ReminderDraft;
@@ -317,6 +376,7 @@ function DefaultsSection({
         onChange={onChange}
         reminders={reminders}
       />
+      {children}
     </FieldSet>
   );
 }

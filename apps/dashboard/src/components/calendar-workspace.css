@@ -130,6 +130,18 @@
   --fc-event-text-color: var(--info);
 }
 
+/*
+ * High-priority events: a bold "!" before the title, in the event's own
+ * colour. Screen readers announce it as "High priority" where CSS
+ * alternative text is supported; the event's details name it everywhere.
+ */
+.lifeos-calendar .lifeos-event-high .fc-event-title::before,
+.lifeos-calendar .lifeos-event-high .fc-list-event-title a::before {
+  content: "! ";
+  content: "! " / "High priority: ";
+  font-weight: 700;
+}
+
 /* Cancelled events (shown only with "Show cancelled"). */
 .lifeos-calendar .lifeos-event-cancelled {
   --fc-event-bg-color: var(--muted);

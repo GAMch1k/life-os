@@ -20,6 +20,8 @@ const event = (
   useDefaultReminders: true,
   defaultReminders: [],
   effectiveReminders: [],
+  priority: "medium",
+  defaultPriority: "medium",
   createdAt: "2026-10-01T00:00:00Z",
   updatedAt: "2026-10-01T00:00:00Z",
   ...fields,

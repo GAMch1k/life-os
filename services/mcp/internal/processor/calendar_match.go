@@ -22,15 +22,15 @@ const eventSearchLimit = 10
 
 // calendarChangeFields are what calendar_update may change; clear names the
 // optional ones to remove.
-var calendarChangeFields = []string{"title", "description", "location", "allDay", "startAt", "endAt", "startDate", "endDate", "timeZone", "reminders", "useDefaultReminders", "clear"}
+var calendarChangeFields = []string{"title", "description", "location", "allDay", "startAt", "endAt", "startDate", "endDate", "timeZone", "reminders", "useDefaultReminders", "priority", "clear"}
 
 // clearableEventFields are the optional event fields an update may remove.
 var clearableEventFields = map[string]bool{"description": true, "location": true, "timeZone": true, "reminders": true}
 
 // validCalendarChange checks the fields of a calendar_update beyond their
 // names: something must change, clear names only optional fields,
-// reminders are objects, and useDefaultReminders is a boolean. Calendar
-// validates the values themselves.
+// reminders are objects, useDefaultReminders is a boolean, and priority is
+// low, medium, or high. Calendar validates the values themselves.
 func validCalendarChange(arguments map[string]any) bool {
 	changes := 0
 	for _, field := range calendarChangeFields {
@@ -58,7 +58,17 @@ func validCalendarChange(arguments map[string]any) bool {
 			}
 		}
 	}
-	return validReminders(arguments["reminders"]) && validUseDefault(arguments)
+	return validReminders(arguments["reminders"]) && validUseDefault(arguments) && validPriority(arguments)
+}
+
+// validPriority accepts a missing priority or low, medium, or high.
+func validPriority(arguments map[string]any) bool {
+	value, present := arguments["priority"]
+	if !present {
+		return true
+	}
+	priority, _ := value.(string)
+	return priority == "low" || priority == "medium" || priority == "high"
 }
 
 // validUseDefault accepts a missing useDefaultReminders or a boolean.

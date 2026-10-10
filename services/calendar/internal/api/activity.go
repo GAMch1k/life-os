@@ -82,6 +82,7 @@ func changedFields(before, after store.Event) []string {
 		!sameInt(before.RecurrenceInterval, after.RecurrenceInterval) || !sameInstant(before.RecurrenceUntil, after.RecurrenceUntil) ||
 		!slices.Equal(before.RecurrenceByWeekday, after.RecurrenceByWeekday) || !sameInt(before.RecurrenceCount, after.RecurrenceCount))
 	add("reminders", !bytes.Equal(before.Reminders, after.Reminders) || before.UseDefaultReminders != after.UseDefaultReminders)
+	add("priority", !sameString(before.Priority, after.Priority))
 	add("status", before.Status != after.Status)
 	return changes
 }
@@ -193,7 +194,7 @@ func addTimes(data map[string]any, item store.Event) {
 // changeLabels name changed fields in summaries.
 var changeLabels = map[string]string{
 	"title": "title", "description": "description", "location": "location", "timeZone": "time zone",
-	"recurrence": "repetition", "reminders": "reminders",
+	"recurrence": "repetition", "reminders": "reminders", "priority": "priority",
 }
 
 // eventSummary is the change as a sentence, with times in zone (the owner's).
@@ -269,6 +270,10 @@ func occurrenceRow(series store.Event, fields eventFields) store.Event {
 		row.Reminders = reminders
 	}
 	row.UseDefaultReminders = fields.UseDefaultReminders
+	// The occurrence's priority as it applies (a series' own priority is
+	// stored only when it is not the default), so changes compare as seen.
+	priority := string(priorityOr(fields.Priority, defaultPriority))
+	row.Priority = &priority
 	row.Status, row.CancelledAt = string(fields.Status), timestamp(fields.CancelledAt)
 	row.RecurrenceFrequency, row.RecurrenceInterval, row.RecurrenceUntil = nil, nil, pgtype.Timestamptz{}
 	row.RecurrenceByWeekday, row.RecurrenceCount = nil, nil

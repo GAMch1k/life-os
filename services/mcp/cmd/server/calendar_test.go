@@ -121,6 +121,15 @@ func TestCalendarCreateForwardsLocationRemindersAndTimeZone(t *testing.T) {
 	if reminders, ok := (*requests)[2].Body["reminders"].([]any); !ok || len(reminders) != 0 || (*requests)[2].Body["useDefaultReminders"] != false {
 		t.Fatalf("no reminders at all became %s", (*requests)[2].RawBody)
 	}
+	if _, present := (*requests)[1].Body["priority"]; present {
+		t.Fatalf("omitted priority was sent: %s", (*requests)[1].RawBody)
+	}
+
+	// An important event is high priority.
+	callTool(t, session, "calendar_create", map[string]any{"title": "Visa", "allDay": true, "startDate": "2026-10-16", "endDate": "2026-10-16", "priority": "high"})
+	if (*requests)[3].Body["priority"] != "high" {
+		t.Fatalf("priority became %s", (*requests)[3].RawBody)
+	}
 }
 
 func TestCalendarUpdatePatchesOnlyTheGivenFieldsAndClears(t *testing.T) {
@@ -142,6 +151,10 @@ func TestCalendarUpdatePatchesOnlyTheGivenFieldsAndClears(t *testing.T) {
 	callTool(t, session, "calendar_update", map[string]any{"eventId": eventID, "useDefaultReminders": false})
 	if got := (*requests)[1]; !reflect.DeepEqual(got.Body, map[string]any{"useDefaultReminders": false}) {
 		t.Fatalf("defaults off PATCH body = %s", got.RawBody)
+	}
+	callTool(t, session, "calendar_update", map[string]any{"eventId": eventID, "priority": "low"})
+	if got := (*requests)[2]; !reflect.DeepEqual(got.Body, map[string]any{"priority": "low"}) {
+		t.Fatalf("priority PATCH body = %s", got.RawBody)
 	}
 }
 

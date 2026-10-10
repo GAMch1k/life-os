@@ -20,6 +20,10 @@ import (
 // maxReminders bounds an event's own reminders and each default list.
 const maxReminders = 10
 
+// defaultPriority is the priority of a Life OS event without one of its own,
+// and of a source's events unless the source sets another.
+const defaultPriority = generated.Medium
+
 // eventFields is an event's editable state. Create builds it from the request
 // and update merges the request into the stored state; either way the whole
 // result is validated before it is written, so a timed event never keeps an
@@ -36,6 +40,9 @@ type eventFields struct {
 	Recurrence          *generated.Recurrence
 	Reminders           []generated.Reminder // the event's own, never nil
 	UseDefaultReminders bool                 // the defaults apply as well
+	// Priority is the event's own priority; nil follows its default (see
+	// withPriorityDefault).
+	Priority            *generated.EventPriority
 	Status              generated.EventStatus
 	CancelledAt         *time.Time
 	RemovedFromSourceAt *time.Time
@@ -46,7 +53,7 @@ func fieldsFromCreate(body generated.CreateEventRequest) eventFields {
 		Title: body.Title, Description: body.Description, Location: body.Location, AllDay: body.AllDay,
 		StartAt: body.StartAt, EndAt: body.EndAt, StartDate: body.StartDate, EndDate: body.EndDate,
 		TimeZone: body.TimeZone, Recurrence: body.Recurrence, Reminders: remindersOrNone(body.Reminders),
-		UseDefaultReminders: body.UseDefaultReminders == nil || *body.UseDefaultReminders, Status: generated.Active,
+		UseDefaultReminders: body.UseDefaultReminders == nil || *body.UseDefaultReminders, Priority: body.Priority, Status: generated.Active,
 	}
 }
 
@@ -68,8 +75,8 @@ func fieldsFromStore(value store.Event) (eventFields, error) {
 		StartAt: nullableTime(value.StartAt), EndAt: nullableTime(value.EndAt),
 		StartDate: nullableDate(value.StartDate), EndDate: nullableDate(value.EndDate),
 		TimeZone: value.TimeZone, Recurrence: recurrenceOutput(value), Reminders: remindersOrNone(reminders),
-		UseDefaultReminders: value.UseDefaultReminders,
-		Status:              generated.EventStatus(value.Status), CancelledAt: nullableTime(value.CancelledAt),
+		UseDefaultReminders: value.UseDefaultReminders, Priority: priorityFromStore(value.Priority),
+		Status: generated.EventStatus(value.Status), CancelledAt: nullableTime(value.CancelledAt),
 		RemovedFromSourceAt: nullableTime(value.RemovedFromSourceAt),
 	}, nil
 }
@@ -99,10 +106,47 @@ func (f eventFields) validate(owner *time.Location) error {
 	if err := validateReminders(f.Reminders, "an event takes at most %d reminders of its own"); err != nil {
 		return err
 	}
+	if f.Priority != nil && !f.Priority.Valid() {
+		return errors.New("priority must be low, medium, or high")
+	}
 	if !f.Status.Valid() {
 		return errors.New("status must be active or cancelled")
 	}
 	return nil
+}
+
+// withPriorityDefault is f with its own priority dropped when it is the
+// event's default (fallback): an event keeps a priority of its own only
+// while it differs, so it follows later changes of its default.
+func (f eventFields) withPriorityDefault(fallback generated.EventPriority) eventFields {
+	if f.Priority != nil && *f.Priority == fallback {
+		f.Priority = nil
+	}
+	return f
+}
+
+// priorityOr is value, else fallback.
+func priorityOr(value *generated.EventPriority, fallback generated.EventPriority) generated.EventPriority {
+	if value == nil {
+		return fallback
+	}
+	return *value
+}
+
+func priorityFromStore(value *string) *generated.EventPriority {
+	if value == nil {
+		return nil
+	}
+	priority := generated.EventPriority(*value)
+	return &priority
+}
+
+func priorityColumn(value *generated.EventPriority) *string {
+	if value == nil {
+		return nil
+	}
+	priority := string(*value)
+	return &priority
 }
 
 // maxRecurrenceCount bounds a rule that ends after a number of occurrences.
@@ -221,7 +265,7 @@ func (f eventFields) createParams() (store.CreateEventParams, error) {
 		TimeZone: f.TimeZone, RecurrenceFrequency: rule.frequency, RecurrenceInterval: rule.interval, RecurrenceUntil: rule.until,
 		RecurrenceByWeekday: rule.byWeekday, RecurrenceCount: rule.count,
 		Reminders: reminders, UseDefaultReminders: f.UseDefaultReminders, Status: string(f.Status), CancelledAt: timestamp(f.CancelledAt),
-		SourceKind: string(generated.EventSourceKindManual), RemovedFromSourceAt: timestamp(f.RemovedFromSourceAt),
+		SourceKind: string(generated.EventSourceKindManual), RemovedFromSourceAt: timestamp(f.RemovedFromSourceAt), Priority: priorityColumn(f.Priority),
 	}, nil
 }
 
@@ -237,11 +281,14 @@ func (f eventFields) updateParams(id pgtype.UUID, expectedUpdatedAt pgtype.Times
 		TimeZone: f.TimeZone, RecurrenceFrequency: rule.frequency, RecurrenceInterval: rule.interval, RecurrenceUntil: rule.until,
 		RecurrenceByWeekday: rule.byWeekday, RecurrenceCount: rule.count,
 		Reminders: reminders, UseDefaultReminders: f.UseDefaultReminders, Status: string(f.Status), CancelledAt: timestamp(f.CancelledAt),
-		RemovedFromSourceAt: timestamp(f.RemovedFromSourceAt), ID: id, ExpectedUpdatedAt: expectedUpdatedAt,
+		RemovedFromSourceAt: timestamp(f.RemovedFromSourceAt), Priority: priorityColumn(f.Priority), ID: id, ExpectedUpdatedAt: expectedUpdatedAt,
 	}, nil
 }
 
-// event renders a stored event. Instants are returned in UTC.
+// event renders a stored event. Instants are returned in UTC. Its source
+// name, default and effective reminders, and default priority are left to
+// resolveSources, and so is its priority when it has none of its own (empty
+// until then).
 func event(value store.Event) (generated.CalendarEvent, error) {
 	fields, err := fieldsFromStore(value)
 	if err != nil {
@@ -261,7 +308,7 @@ func event(value store.Event) (generated.CalendarEvent, error) {
 		AllDay: fields.AllDay, StartAt: fields.StartAt, EndAt: fields.EndAt, StartDate: fields.StartDate, EndDate: fields.EndDate,
 		TimeZone: fields.TimeZone, Recurrence: fields.Recurrence, Reminders: fields.Reminders,
 		UseDefaultReminders: fields.UseDefaultReminders, DefaultReminders: []generated.Reminder{}, EffectiveReminders: []generated.Reminder{},
-		Status: fields.Status, CancelledAt: fields.CancelledAt, RemovedFromSourceAt: fields.RemovedFromSourceAt,
+		Priority: priorityOr(fields.Priority, ""), Status: fields.Status, CancelledAt: fields.CancelledAt, RemovedFromSourceAt: fields.RemovedFromSourceAt,
 		Source: source, ExternalReference: external,
 		CreatedAt: value.CreatedAt.Time.UTC(), UpdatedAt: value.UpdatedAt.Time.UTC(),
 	}, nil

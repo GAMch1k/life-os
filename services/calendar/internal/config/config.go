@@ -52,6 +52,13 @@ type Config struct {
 	// GoogleSyncSeconds is how often each Google calendar chosen to sync is
 	// synced (changes since the last sync, with Google's sync token).
 	GoogleSyncSeconds int `env:"CALENDAR_GOOGLE_SYNC_SECONDS" default:"120"`
+	// Reminder delivery: the Notifications service reminders are sent to
+	// (empty turns delivery off), how often due reminders are looked for,
+	// and how late one may still be sent after Calendar was down (older
+	// ones are recorded as missed).
+	NotificationsURL        string `env:"NOTIFICATIONS_SERVICE_URL"`
+	ReminderIntervalSeconds int    `env:"CALENDAR_REMINDER_INTERVAL_SECONDS" default:"30"`
+	ReminderGraceMinutes    int    `env:"CALENDAR_REMINDER_GRACE_MINUTES" default:"120"`
 }
 
 // Load reads Config from the process environment.
@@ -99,6 +106,12 @@ func (c Config) Validate() error {
 	}
 	if c.GoogleSyncSeconds < 30 || c.GoogleSyncSeconds > 86400 {
 		validationErrors = append(validationErrors, fmt.Errorf("CALENDAR_GOOGLE_SYNC_SECONDS must be between 30 and 86400"))
+	}
+	if c.ReminderIntervalSeconds < 5 || c.ReminderIntervalSeconds > 300 {
+		validationErrors = append(validationErrors, fmt.Errorf("CALENDAR_REMINDER_INTERVAL_SECONDS must be between 5 and 300"))
+	}
+	if c.ReminderGraceMinutes < 10 || c.ReminderGraceMinutes > 1440 {
+		validationErrors = append(validationErrors, fmt.Errorf("CALENDAR_REMINDER_GRACE_MINUTES must be between 10 and 1440"))
 	}
 	return errors.Join(validationErrors...)
 }

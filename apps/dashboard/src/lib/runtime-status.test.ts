@@ -435,6 +435,7 @@ const feed = (
   enabled: true,
   filter: { include: [], exclude: [] },
   defaultReminders: null,
+  defaultPriority: "medium",
   refresh: {
     consecutiveFailures: 0,
     refreshing: false,

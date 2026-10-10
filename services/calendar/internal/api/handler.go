@@ -53,6 +53,8 @@ type Handler struct {
 	// google is the Google Calendar connection (see WithGoogle); nil reads
 	// as not configured.
 	google *google.Service
+	// reminders reports reminder delivery's health (see WithReminders).
+	reminders ReminderStatus
 }
 
 var _ generated.ServerInterface = (*Handler)(nil)
@@ -265,7 +267,7 @@ func (h *Handler) CreateEvent(c fiber.Ctx) error {
 	if err := fields.validate(h.ownerLocation); err != nil {
 		return badRequest(err.Error())
 	}
-	params, err := fields.createParams()
+	params, err := fields.withPriorityDefault(defaultPriority).createParams()
 	if err != nil {
 		return internal(err)
 	}
@@ -346,7 +348,7 @@ func (h *Handler) UpdateEvent(c fiber.Ctx, id types.UUID) error {
 // updateLocked applies patch to current, an event held by the transaction
 // of queries, and removes the exceptions of occurrences the change ends.
 func (h *Handler) updateLocked(ctx context.Context, queries *store.Queries, current store.Event, patch eventPatch) (store.Event, error) {
-	if current.SourceKind != string(generated.EventSourceKindManual) && !patch.onlyReminders() {
+	if current.SourceKind != string(generated.EventSourceKindManual) && !patch.importedEditable() {
 		return store.Event{}, managedBySource()
 	}
 	fields, err := fieldsFromStore(current)
@@ -356,6 +358,13 @@ func (h *Handler) updateLocked(ctx context.Context, queries *store.Queries, curr
 	merged, err := patch.apply(fields, h.now(), h.ownerLocation)
 	if err != nil {
 		return store.Event{}, badRequest(err.Error())
+	}
+	if patch.present["priority"] {
+		fallback, err := priorityDefault(ctx, queries, current)
+		if err != nil {
+			return store.Event{}, internal(err)
+		}
+		merged = merged.withPriorityDefault(fallback)
 	}
 	params, err := merged.updateParams(current.ID, current.UpdatedAt)
 	if err != nil {
@@ -369,6 +378,19 @@ func (h *Handler) updateLocked(ctx context.Context, queries *store.Queries, curr
 		return store.Event{}, internal(err)
 	}
 	return item, nil
+}
+
+// priorityDefault is the priority of row without one of its own: its
+// source's default for an imported event, else defaultPriority.
+func priorityDefault(ctx context.Context, queries *store.Queries, row store.Event) (generated.EventPriority, error) {
+	if !row.SourceID.Valid {
+		return defaultPriority, nil
+	}
+	source, err := queries.GetSource(ctx, row.SourceID)
+	if err != nil {
+		return "", err
+	}
+	return generated.EventPriority(source.DefaultPriority), nil
 }
 
 // DeleteEvent deletes a manual event. An imported event's source owns it
@@ -459,7 +481,7 @@ func notFound() error {
 
 func managedBySource() error {
 	return httpserver.NewError(fiber.StatusConflict, "managed_by_source",
-		"this event is imported from a calendar source and is read-only except for its reminders; its source updates, cancels, and restores it")
+		"this event is imported from a calendar source and is read-only except for its reminders and priority; its source updates, cancels, and restores it")
 }
 
 func internal(err error) error {

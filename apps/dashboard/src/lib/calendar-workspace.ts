@@ -31,6 +31,8 @@ export type CalendarEvent = components["schemas"]["CalendarEvent"];
 export type Reminder = components["schemas"]["Reminder"];
 export type ReminderDefaults = components["schemas"]["ReminderDefaults"];
 export type CalendarSource = components["schemas"]["CalendarSource"];
+/** How important an event is: the importance of its reminder notifications. */
+export type Priority = components["schemas"]["EventPriority"];
 type CreateEventRequest = components["schemas"]["CreateEventRequest"];
 type UpdateEventRequest = components["schemas"]["UpdateEventRequest"];
 /**
@@ -46,6 +48,7 @@ export type EventUpdate = Omit<UpdateEventRequest, "recurrence"> & {
 export const updateBody = (body: EventUpdate) => body as UpdateEventRequest;
 type UpdateOccurrenceRequest = components["schemas"]["UpdateOccurrenceRequest"];
 type UpdateSettingsRequest = components["schemas"]["UpdateSettingsRequest"];
+type UpdateSourceRequest = components["schemas"]["UpdateSourceRequest"];
 
 export const CALENDAR_VIEWS = ["month", "week", "day", "list"] as const;
 export type CalendarView = (typeof CALENDAR_VIEWS)[number];
@@ -133,7 +136,38 @@ export function readOnlyReason(event: CalendarEvent) {
         ? (sourceName(event) ?? "Google Calendar")
         : undefined;
   return from
-    ? `Imported from ${from}, so it can only be changed there. Its reminders can still be adjusted here.`
+    ? `Imported from ${from}, so it can only be changed there. Its reminders and priority can still be adjusted here.`
+    : undefined;
+}
+
+// Priority ----------------------------------------------------------------------
+
+export const PRIORITIES: Priority[] = ["low", "medium", "high"];
+
+export const PRIORITY_LABEL: Record<Priority, string> = {
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+};
+
+/**
+ * The badge an event's details show for its priority: high and low are
+ * named, medium (the usual) is not.
+ */
+export function priorityBadge(event: Pick<CalendarEvent, "priority">) {
+  return event.priority === "medium"
+    ? undefined
+    : `${PRIORITY_LABEL[event.priority]} priority`;
+}
+
+/**
+ * What the form says about an imported event's priority: its source's
+ * default, which it follows unless it gets another.
+ */
+export function defaultPriorityNote(event: CalendarEvent) {
+  const source = sourceLabel(event);
+  return source
+    ? `${source} events are ${PRIORITY_LABEL[event.defaultPriority].toLowerCase()} priority unless you choose another.`
     : undefined;
 }
 
@@ -164,6 +198,8 @@ export function toEventInput(event: CalendarEvent): EventInput | undefined {
       "lifeos-event",
       ...(imported ? ["lifeos-event-imported"] : []),
       ...(cancelled ? ["lifeos-event-cancelled"] : []),
+      // A small mark before the title (see calendar-workspace.css).
+      ...(event.priority === "high" ? ["lifeos-event-high"] : []),
     ],
     extendedProps: { event },
   };
@@ -496,6 +532,8 @@ export type EventDraft = {
   useDefaultReminders: boolean;
   /** The event's own reminders. */
   reminders: ReminderDraft[];
+  /** How important it is (its own, else its default). */
+  priority: Priority;
   /** How it repeats (Repeat), following the start date. */
   repeat: RepeatDraft;
 };
@@ -585,6 +623,7 @@ export function draftFromEvent(
     notes: event.description ?? "",
     useDefaultReminders: event.useDefaultReminders,
     reminders: event.reminders.map(toReminderDraft),
+    priority: event.priority,
   };
   if (event.allDay) {
     const startDate = event.startDate ?? "";
@@ -632,6 +671,7 @@ export function newDraft(
     timeZone: "",
     useDefaultReminders: true,
     reminders: [],
+    priority: "medium" as const,
     repeat: NO_REPEAT,
   };
   if (range?.allDay) {
@@ -714,6 +754,7 @@ export type EventFields = {
   /** The event's own reminders, added to the defaults when they are used. */
   reminders: Reminder[];
   useDefaultReminders: boolean;
+  priority: Priority;
   /** How it repeats; null: it does not. */
   recurrence: Recurrence | null;
 } & EventSchedule;
@@ -752,6 +793,7 @@ export function readDraft(
     location: draft.location.trim() || null,
     reminders: "reminders" in reminders ? reminders.reminders : [],
     useDefaultReminders: draft.useDefaultReminders,
+    priority: draft.priority,
     recurrence: "recurrence" in repeat ? repeat.recurrence : null,
   };
 
@@ -792,8 +834,8 @@ export function readDraft(
 }
 
 /**
- * The create body: empty optional fields, no own reminders, and no repeat
- * left out.
+ * The create body: empty optional fields, no own reminders, medium priority
+ * (Calendar's default), and no repeat left out.
  */
 export function createRequest(fields: EventFields): CreateEventRequest {
   const body: CreateEventRequest = {
@@ -803,6 +845,7 @@ export function createRequest(fields: EventFields): CreateEventRequest {
     ...(fields.location ? { location: fields.location } : {}),
     ...(fields.reminders.length ? { reminders: fields.reminders } : {}),
     useDefaultReminders: fields.useDefaultReminders,
+    ...(fields.priority !== "medium" ? { priority: fields.priority } : {}),
     ...(fields.recurrence ? { recurrence: fields.recurrence } : {}),
   };
   if (fields.allDay) {
@@ -836,9 +879,37 @@ export function reminderChanges(
 }
 
 /**
+ * The priority of a PATCH: only when it differs from the event's. Calendar
+ * treats the event's default (`defaultPriority`) as none of its own, so the
+ * event follows its default again.
+ */
+export function priorityChange(
+  fields: Pick<EventFields, "priority">,
+  event: CalendarEvent,
+): Pick<UpdateOccurrenceRequest, "priority"> {
+  return fields.priority === event.priority
+    ? {}
+    : { priority: fields.priority };
+}
+
+/**
+ * The PATCH body of an imported event, which can change only its reminders
+ * and priority: what changed of them; empty when nothing did.
+ */
+export function reminderAndPriorityChanges(
+  fields: Pick<EventFields, "reminders" | "useDefaultReminders" | "priority">,
+  event: CalendarEvent,
+) {
+  return {
+    ...reminderChanges(fields, event),
+    ...priorityChange(fields, event),
+  };
+}
+
+/**
  * The PATCH body of an event that is not an occurrence: every field the
- * form edits, null where it was cleared, the reminder fields that changed,
- * and the repeat when it does or did repeat. Switching between timed and
+ * form edits, null where it was cleared, the reminder fields and priority
+ * that changed, and the repeat when it does or did repeat. Switching between timed and
  * all-day sends the new kind's start and end; the API clears the other
  * kind's fields.
  */
@@ -850,7 +921,7 @@ export function updateRequest(
     title: fields.title,
     description: fields.description,
     location: fields.location,
-    ...reminderChanges(fields, event),
+    ...reminderAndPriorityChanges(fields, event),
     ...(fields.recurrence || event.recurrence
       ? { recurrence: fields.recurrence }
       : {}),
@@ -892,7 +963,10 @@ export function deleteScopes(occurrence: CalendarEvent): Scope[] {
 
 const text = (value: string | null | undefined) => value?.trim() || null;
 
-/** The title, notes, location, and reminders that differ from the event. */
+/**
+ * The title, notes, location, reminders, and priority that differ from the
+ * event.
+ */
 function contentChanges(fields: EventFields, event: CalendarEvent) {
   return {
     ...(text(fields.title) === text(event.title)
@@ -904,7 +978,7 @@ function contentChanges(fields: EventFields, event: CalendarEvent) {
     ...(text(fields.location) === text(event.location)
       ? {}
       : { location: fields.location }),
-    ...reminderChanges(fields, event),
+    ...reminderAndPriorityChanges(fields, event),
   } satisfies UpdateOccurrenceRequest;
 }
 
@@ -972,6 +1046,7 @@ export function movedFields(
     location: occurrence.location ?? null,
     reminders: occurrence.reminders,
     useDefaultReminders: occurrence.useDefaultReminders,
+    priority: occurrence.priority,
     recurrence: occurrence.recurrence ?? null,
   };
   const times = rescheduleRequest(change, occurrence);
@@ -1256,6 +1331,25 @@ export function settingsRequest(
   return Object.keys(changed).length
     ? { defaultReminders: changed }
     : undefined;
+}
+
+/**
+ * The source PATCH body for Reminder defaults: the default reminders and
+ * default priority that changed; undefined when neither did.
+ */
+export function sourceDefaultsRequest(
+  source: CalendarSource,
+  next: { reminders: Reminder[]; priority: Priority },
+): UpdateSourceRequest | undefined {
+  const changed: UpdateSourceRequest = {
+    ...(sameReminders(source.defaultReminders, next.reminders)
+      ? {}
+      : { defaultReminders: next.reminders }),
+    ...(source.defaultPriority === next.priority
+      ? {}
+      : { defaultPriority: next.priority }),
+  };
+  return Object.keys(changed).length ? changed : undefined;
 }
 
 /**

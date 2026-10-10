@@ -18,10 +18,12 @@ import (
 	"github.com/GAMch1k/life-os/pkg/activity"
 	"github.com/GAMch1k/life-os/pkg/database"
 	"github.com/GAMch1k/life-os/pkg/httpserver"
+	"github.com/GAMch1k/life-os/pkg/notify"
 	"github.com/GAMch1k/life-os/services/calendar/internal/api"
 	serviceconfig "github.com/GAMch1k/life-os/services/calendar/internal/config"
 	"github.com/GAMch1k/life-os/services/calendar/internal/google"
 	"github.com/GAMch1k/life-os/services/calendar/internal/ics"
+	"github.com/GAMch1k/life-os/services/calendar/internal/reminders"
 	"github.com/GAMch1k/life-os/services/calendar/internal/sources"
 )
 
@@ -80,16 +82,25 @@ func run(ctx context.Context) error {
 	}
 	googleService := google.NewService(googleConfig, pool, google.GoogleEndpoints, emitter, logger)
 	syncer := google.NewSyncer(googleService, owner, time.Duration(cfg.GoogleSyncSeconds)*time.Second, logger)
-	api.Register(app, api.NewHandler(pool, ownerTimeZone).WithSources(refresher, scheduler.Wake).WithActivity(emitter).WithGoogle(googleService))
+	handler := api.NewHandler(pool, ownerTimeZone).WithSources(refresher, scheduler.Wake).WithActivity(emitter).WithGoogle(googleService)
+	// Reminder delivery reads the events and occurrences as the API lists
+	// them and sends every effective reminder through Notifications.
+	dispatcher := reminders.New(pool, handler, notify.New(cfg.NotificationsURL, "calendar"), emitter, reminders.Config{
+		Interval: time.Duration(cfg.ReminderIntervalSeconds) * time.Second,
+		Grace:    time.Duration(cfg.ReminderGraceMinutes) * time.Minute,
+		Owner:    owner,
+	}, logger)
+	api.Register(app, handler.WithReminders(dispatcher))
 	app.OnShutdown(database.ClosePool(pool))
 
-	// The source scheduler and the Google syncer stop (finishing a refresh
-	// or sync under way) before the pool closes: shutdown hooks run in
-	// reverse order.
+	// The source scheduler, the Google syncer, and reminder delivery stop
+	// (finishing a refresh, sync, or run under way) before the pool closes:
+	// shutdown hooks run in reverse order.
 	runCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	background(app, "calendar source scheduler", scheduler.Run)
 	background(app, "Google Calendar sync", syncer.Run)
+	background(app, "calendar reminder delivery", dispatcher.Run)
 
 	return app.RunContext(runCtx, fmt.Sprintf(":%d", cfg.Port))
 }

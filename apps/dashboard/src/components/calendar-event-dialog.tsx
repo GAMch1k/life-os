@@ -73,6 +73,7 @@ import {
   apiErrorMessage,
   type CalendarEvent,
   createRequest,
+  defaultPriorityNote,
   defaultRemindersNote,
   deleteOccurrence,
   draftFromEvent,
@@ -92,9 +93,13 @@ import {
   moveStart,
   occurrenceEdit,
   occurrenceKey,
+  PRIORITIES,
+  type Priority,
+  PRIORITY_LABEL,
+  priorityBadge,
   readDraft,
   readOnlyReason,
-  reminderChanges,
+  reminderAndPriorityChanges,
   type ReminderDefaults,
   type ReminderDraft,
   reminderLines,
@@ -240,6 +245,7 @@ function EventDetails({
   const imported = isImported(event);
   const cancelled = isCancelled(event);
   const source = sourceLabel(event);
+  const priority = priorityBadge(event);
   const lines = reminderLines(event);
   // One occurrence of a recurring event, as listing and search return them.
   const occurrence = event.occurrence && !imported ? event.occurrence : null;
@@ -315,9 +321,22 @@ function EventDetails({
         >
           {event.title}
         </DialogTitle>
-        {cancelled || source || repeats ? (
+        {cancelled || source || repeats || priority ? (
           <div className="flex flex-wrap items-center gap-1.5">
             {cancelled ? <Badge variant="destructive">Cancelled</Badge> : null}
+            {priority ? (
+              <Badge
+                className={
+                  event.priority === "high"
+                    ? "border-warning/30 bg-warning-subtle text-warning"
+                    : "text-muted-foreground"
+                }
+                data-testid="event-priority"
+                variant="outline"
+              >
+                {priority}
+              </Badge>
+            ) : null}
             {source ? (
               <Badge
                 className="border-info/30 bg-info-subtle text-info"
@@ -455,7 +474,7 @@ function EventDetails({
                 onClick={() => edit(true)}
                 variant="outline"
               >
-                Edit reminders
+                Edit reminders and priority
               </Button>
             ) : null}
             <Button
@@ -512,7 +531,7 @@ function EventForm({
   onCancel: () => void;
   onSaved: (event: CalendarEvent) => void;
   onSeriesChanged: () => void;
-  /** Imported events: only their reminders can change. */
+  /** Imported events: only their reminders and priority can change. */
   remindersOnly?: boolean;
 }) {
   const [draft, setDraft] = useState(initial);
@@ -596,11 +615,11 @@ function EventForm({
       });
       return;
     }
-    // An imported event sends only its reminder changes; with none there is
-    // nothing to save (Calendar refuses an empty PATCH).
+    // An imported event sends only its reminder and priority changes; with
+    // none there is nothing to save (Calendar refuses an empty PATCH).
     const body = event
       ? remindersOnly
-        ? reminderChanges(read.fields, event)
+        ? reminderAndPriorityChanges(read.fields, event)
         : updateRequest(read.fields, event)
       : undefined;
     if (event && body && Object.keys(body).length === 0) return onCancel();
@@ -648,7 +667,7 @@ function EventForm({
           {!event
             ? "New event"
             : remindersOnly
-              ? "Edit reminders"
+              ? "Edit reminders and priority"
               : "Edit event"}
         </DialogTitle>
         {remindersOnly && event ? (
@@ -813,6 +832,15 @@ function EventForm({
         </>
       )}
 
+      <PriorityField
+        id={`${id}-priority`}
+        note={
+          event && isImported(event) ? defaultPriorityNote(event) : undefined
+        }
+        onChange={(priority) => update({ priority })}
+        priority={draft.priority}
+      />
+
       <FieldSet className="min-w-0 gap-3">
         <FieldLegend className="mb-2" variant="label">
           Reminders
@@ -888,6 +916,45 @@ function EventForm({
         question={asking?.question ?? null}
       />
     </form>
+  );
+}
+
+/**
+ * Priority: how important the event is, which is how important its reminder
+ * notifications are. `note` says what an imported event's source sets.
+ */
+function PriorityField({
+  id,
+  note,
+  onChange,
+  priority,
+}: {
+  id: string;
+  note?: string;
+  onChange: (priority: Priority) => void;
+  priority: Priority;
+}) {
+  const noteId = `${id}-note`;
+  return (
+    <Field>
+      <FieldLabel htmlFor={id}>Priority</FieldLabel>
+      <NativeSelect
+        aria-describedby={noteId}
+        className="w-full"
+        id={id}
+        onChange={(change) => onChange(change.target.value as Priority)}
+        value={priority}
+      >
+        {PRIORITIES.map((option) => (
+          <NativeSelectOption key={option} value={option}>
+            {PRIORITY_LABEL[option]}
+          </NativeSelectOption>
+        ))}
+      </NativeSelect>
+      <FieldDescription className="text-xs" id={noteId}>
+        {note ?? "How important its reminders are."}
+      </FieldDescription>
+    </Field>
   );
 }
 
