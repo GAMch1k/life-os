@@ -31,6 +31,8 @@ export type HomeAttention = {
 
 export const HOME_LIST_LIMIT = 100;
 export const UNSCHEDULED_PREVIEW = 3;
+/** Human Review previews fetched; the true count comes from the backlog. */
+export const REVIEW_LIMIT = 10;
 
 /**
  * The owner's current day: its first instant and its last millisecond, in
@@ -66,8 +68,14 @@ export function toHomeAttention(
   const nextEvent = events.data?.items[0];
 
   return {
+    // The Inbox list does not page, so a full page is the only sign of more.
     humanReview: review.data
-      ? { items: review.data.items, more: Boolean(review.data.nextCursor) }
+      ? {
+          items: review.data.items,
+          more:
+            Boolean(review.data.nextCursor) ||
+            review.data.items.length >= REVIEW_LIMIT,
+        }
       : null,
     urgent: urgent.data
       ? {
@@ -105,7 +113,7 @@ export async function getHomeAttention(): Promise<HomeAttention> {
   const [review, urgent, open, events] = await Promise.all([
     unavailableOnFailure(
       inboxClient.GET("/v1/inbox-items", {
-        params: { query: { state: "human_review", limit: 10 } },
+        params: { query: { state: "human_review", limit: REVIEW_LIMIT } },
       }),
     ),
     // Tasks are ordered by due date, so overdue work comes first.
@@ -121,9 +129,12 @@ export async function getHomeAttention(): Promise<HomeAttention> {
         },
       }),
     ),
+    // Only undated Tasks, so any number of dated ones cannot crowd them out.
     unavailableOnFailure(
       tasksClient.GET("/v1/tasks", {
-        params: { query: { completed: false, limit: HOME_LIST_LIMIT } },
+        params: {
+          query: { completed: false, undated: true, limit: HOME_LIST_LIMIT },
+        },
       }),
     ),
     unavailableOnFailure(

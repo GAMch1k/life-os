@@ -11,9 +11,9 @@ Home (`/`) is capture-first: opening it lets the owner type or dictate immediate
 - **Human Review** — how many captures wait in `human_review` (the backlog's true count), with up to two previews, linking to `/inbox`.
 - **Urgent tasks** — open Tasks that are overdue or due today (day boundaries in the owner's timezone, via the Tasks `dueBefore` filter with `includeUndated=false`), overdue first, previewing five, linking to `/tasks`.
 - **Next on your calendar** — the next Calendar event in the coming 30 days, linking to `/calendar`.
-- **Unscheduled tasks** — up to three open Tasks without a date, linking to `/tasks`.
+- **Unscheduled tasks** — up to three open Tasks without a date, linking to `/tasks`. Home asks Tasks for undated Tasks only (`undated=true`), so any number of dated Tasks cannot crowd them out.
 
-Counts carry a `+` when the service reported more rows than Home fetched. Each card distinguishes an empty source (“Nothing waiting for review.”) from an unreachable one (“Inbox is unavailable right now.”); a stopped service never fails the whole page. Finance, full Task lists, and the Calendar agenda live only in their workspaces.
+Counts carry a `+` when there are more rows than Home shows: the Tasks list returns `nextCursor` when more Tasks match than Home fetched (100), and Unscheduled also when it has more than its three previews. The Inbox list does not page, so a full page of Human Review previews (10) counts as more; that only shows when the backlog's true count is unavailable. Each card distinguishes an empty source (“Nothing waiting for review.”) from an unreachable one (“Inbox is unavailable right now.”); a stopped service never fails the whole page. Finance, full Task lists, and the Calendar agenda live only in their workspaces.
 
 `/inbox` shows every unfinished capture exactly once, in the section for its state (`src/lib/inbox-summary.ts`). The header counts come from `GET /v1/backlog` and link to their sections; the same capture card sits below it.
 
