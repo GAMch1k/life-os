@@ -1,37 +1,35 @@
+import { CaptureCard } from "@/components/capture-card";
 import { HomeAttentionSurface } from "@/components/home-attention";
-import { InboxSummary } from "@/components/inbox-summary";
 import { StatusAlert } from "@/components/runtime-status";
-import { VoiceCapture } from "@/components/voice-capture";
 import { getHomeAttention } from "@/lib/home-attention";
-import { getInboxSummary } from "@/lib/inbox-summary";
+import { getInboxBacklog } from "@/lib/inbox-summary";
 import { getRuntimeStatus } from "@/lib/runtime-status";
+import { userTimeZone } from "@/lib/time-zone";
 
 export const dynamic = "force-dynamic";
 
+// Capture first: the composer (text and voice) is the first thing on the
+// page on every screen size. Runtime problems and summaries follow it.
 export default async function Home() {
-  const [attention, inbox, status] = await Promise.all([
+  const [attention, backlog, status] = await Promise.all([
     getHomeAttention(),
-    // The capture card degrades to its own unavailable state when Inbox is
-    // unreachable instead of failing the whole page.
-    getInboxSummary().catch(() => ({ kind: "unavailable" }) as const),
+    getInboxBacklog(),
     getRuntimeStatus(),
   ]);
   return (
-    <div className="space-y-8">
+    <div className="mx-auto max-w-5xl space-y-3">
+      <h1 className="sr-only">Overview</h1>
+      <CaptureCard
+        backlog={backlog}
+        focusOnDesktop
+        renderedAt={new Date().toISOString()}
+        timeZone={userTimeZone()}
+      />
       <StatusAlert status={status} />
-      <HomeAttentionSurface attention={attention} />
-      <section
-        aria-labelledby="capture-heading"
-        className="mx-auto max-w-5xl space-y-4"
-      >
-        <h2 className="text-lg font-semibold" id="capture-heading">
-          Capture
-        </h2>
-        <div className="grid gap-4 md:grid-cols-2">
-          <InboxSummary state={inbox} />
-          <VoiceCapture />
-        </div>
-      </section>
+      <HomeAttentionSurface
+        attention={attention}
+        humanReviewCount={backlog?.humanReviewCount}
+      />
     </div>
   );
 }
