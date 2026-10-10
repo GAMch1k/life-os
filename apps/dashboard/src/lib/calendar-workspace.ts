@@ -18,8 +18,11 @@ import {
 
 export type CalendarEvent = components["schemas"]["CalendarEvent"];
 export type Reminder = components["schemas"]["Reminder"];
+export type ReminderDefaults = components["schemas"]["ReminderDefaults"];
+export type CalendarSource = components["schemas"]["CalendarSource"];
 type CreateEventRequest = components["schemas"]["CreateEventRequest"];
 type UpdateEventRequest = components["schemas"]["UpdateEventRequest"];
+type UpdateSettingsRequest = components["schemas"]["UpdateSettingsRequest"];
 
 export const CALENDAR_VIEWS = ["month", "week", "day", "list"] as const;
 export type CalendarView = (typeof CALENDAR_VIEWS)[number];
@@ -266,11 +269,91 @@ export function reminderLabel(reminder: Reminder) {
   return `${plural(minutes, "minute")} before`;
 }
 
-/** The reminders as lines; null follows the defaults, [] means none. */
-export function remindersSummary(reminders: Reminder[] | null | undefined) {
-  if (reminders == null) return ["Default reminders"];
-  if (reminders.length === 0) return ["No reminders"];
-  return reminders.map(reminderLabel);
+/** Whether two reminders are the same one, as Calendar compares them. */
+export function sameReminder(a: Reminder, b: Reminder) {
+  if (a.kind !== b.kind) return false;
+  return a.kind === "localTime"
+    ? (a.daysBefore ?? 0) === (b.daysBefore ?? 0) &&
+        (a.localTime ?? "") === (b.localTime ?? "")
+    : (a.minutesBefore ?? 0) === (b.minutesBefore ?? 0);
+}
+
+/** Whether two reminder lists are the same; null is an empty list. */
+export function sameReminders(
+  a: Reminder[] | null | undefined,
+  b: Reminder[] | null | undefined,
+) {
+  const left = a ?? [];
+  const right = b ?? [];
+  return (
+    left.length === right.length &&
+    left.every((reminder, index) => sameReminder(reminder, right[index]))
+  );
+}
+
+/**
+ * Every reminder that applies to the event, one line each, in Calendar's
+ * order (defaults first, then the event's own). A reminder that comes from
+ * the defaults says where from: "ZAW default" for an event imported from
+ * ZAW, else "default" (the owner's, from Reminder defaults).
+ */
+export function reminderLines(
+  event: CalendarEvent,
+): { label: string; origin?: string }[] {
+  const source = sourceLabel(event);
+  const origin = source ? `${source} default` : "default";
+  return event.effectiveReminders.map((reminder) =>
+    event.useDefaultReminders &&
+    event.defaultReminders.some((fallback) => sameReminder(fallback, reminder))
+      ? { label: reminderLabel(reminder), origin }
+      : { label: reminderLabel(reminder) },
+  );
+}
+
+/**
+ * The defaults "Use default reminders" stands for in the event form, or
+ * whether the owner's are still loading or unavailable.
+ */
+export type FormDefaults = Reminder[] | "loading" | "unavailable";
+
+/**
+ * The default reminders the event form offers: an imported event's
+ * source's, else the owner's for timed or all-day events, following the
+ * form's All day box. Until the owner's settings arrive, an existing event
+ * shows its own defaults while its kind is unchanged.
+ */
+export function formDefaults(
+  event: CalendarEvent | undefined,
+  allDay: boolean,
+  owner: ReminderDefaults | "loading" | "unavailable",
+): FormDefaults {
+  if (event && isImported(event)) return event.defaultReminders;
+  if (typeof owner === "object") return allDay ? owner.allDay : owner.timed;
+  return event && event.allDay === allDay ? event.defaultReminders : owner;
+}
+
+/**
+ * The note under "Use default reminders": the defaults that would apply and
+ * where they come from, such as "1 day before at 19:00 (ZAW)", or where to
+ * set some when there are none.
+ */
+export function defaultRemindersNote(
+  defaults: FormDefaults,
+  { allDay, source }: { allDay: boolean; source?: string },
+) {
+  const kind = allDay ? "all-day events" : "timed events";
+  if (defaults === "loading") return "Loading your default reminders…";
+  if (defaults === "unavailable") {
+    return "Your default reminders could not be loaded.";
+  }
+  if (defaults.length === 0) {
+    return source
+      ? `${source} has no default reminders yet; set them in Reminder defaults.`
+      : `No default reminders for ${kind} yet; set them in Reminder defaults.`;
+  }
+  const list = defaults.map(reminderLabel).join(", ");
+  if (source) return `${list} (${source})`;
+  return `${list} (your ${defaults.length === 1 ? "default" : "defaults"} for ${kind})`;
 }
 
 export function recurrenceLabel(
@@ -345,8 +428,6 @@ export type ReminderDraft =
   | { kind: "relative"; amount: string; unit: ReminderUnit }
   | { kind: "localTime"; daysBefore: string; time: string };
 
-export type ReminderMode = "default" | "none" | "custom";
-
 /** The event form's values, as the inputs hold them. */
 export type EventDraft = {
   title: string;
@@ -360,7 +441,9 @@ export type EventDraft = {
   timeZone: string;
   location: string;
   notes: string;
-  reminderMode: ReminderMode;
+  /** Whether the event's default reminders apply as well as its own. */
+  useDefaultReminders: boolean;
+  /** The event's own reminders. */
   reminders: ReminderDraft[];
 };
 
@@ -414,6 +497,19 @@ export function fromReminderDraft(draft: ReminderDraft): Reminder | undefined {
     : undefined;
 }
 
+/** Reads reminder rows; the first incomplete one is named. */
+export function readReminders(
+  drafts: ReminderDraft[],
+): { reminders: Reminder[] } | { error: string } {
+  const read = drafts.map(fromReminderDraft);
+  const missing = read.findIndex((reminder) => !reminder);
+  return missing >= 0
+    ? {
+        error: `Complete reminder ${missing + 1}: a whole number and, for a day reminder, a time.`,
+      }
+    : { reminders: read as Reminder[] };
+}
+
 function splitInput(value: string) {
   const [date = "", time = ""] = value.split("T");
   return { date, time: time.slice(0, 5) };
@@ -422,19 +518,6 @@ function splitInput(value: string) {
 /** The zone a timed event's times are edited in: its own, else the owner's. */
 export function editingZone(timeZone: string, ownerZone: string) {
   return timeZone && isValidTimeZone(timeZone) ? timeZone : ownerZone;
-}
-
-function reminderFields(reminders: Reminder[] | null | undefined) {
-  if (reminders == null) {
-    return { reminderMode: "default" as const, reminders: [] };
-  }
-  if (reminders.length === 0) {
-    return { reminderMode: "none" as const, reminders: [] };
-  }
-  return {
-    reminderMode: "custom" as const,
-    reminders: reminders.map(toReminderDraft),
-  };
 }
 
 /** The form's values for an existing event. */
@@ -446,7 +529,8 @@ export function draftFromEvent(
     title: event.title,
     location: event.location ?? "",
     notes: event.description ?? "",
-    ...reminderFields(event.reminders),
+    useDefaultReminders: event.useDefaultReminders,
+    reminders: event.reminders.map(toReminderDraft),
   };
   if (event.allDay) {
     const startDate = event.startDate ?? "";
@@ -490,7 +574,7 @@ export function newDraft(
     location: "",
     notes: "",
     timeZone: "",
-    reminderMode: "default" as const,
+    useDefaultReminders: true,
     reminders: [],
   };
   if (range?.allDay) {
@@ -565,7 +649,9 @@ export type EventFields = {
   title: string;
   description: string | null;
   location: string | null;
-  reminders: Reminder[] | null;
+  /** The event's own reminders, added to the defaults when they are used. */
+  reminders: Reminder[];
+  useDefaultReminders: boolean;
 } & (
   | { allDay: true; startDate: string; endDate: string }
   | { allDay: false; startAt: string; endAt: string; timeZone: string | null }
@@ -587,23 +673,15 @@ export function readDraft(
   const title = draft.title.trim();
   if (!title) errors.title = "Add a title.";
 
-  let reminders: Reminder[] | null = null;
-  if (draft.reminderMode === "none") reminders = [];
-  if (draft.reminderMode === "custom" && draft.reminders.length) {
-    const read = draft.reminders.map(fromReminderDraft);
-    const missing = read.findIndex((reminder) => !reminder);
-    if (missing >= 0) {
-      errors.reminders = `Complete reminder ${missing + 1}: a whole number and, for a day reminder, a time.`;
-    } else {
-      reminders = read as Reminder[];
-    }
-  }
+  const reminders = readReminders(draft.reminders);
+  if ("error" in reminders) errors.reminders = reminders.error;
 
   const common = {
     title,
     description: draft.notes.trim() || null,
     location: draft.location.trim() || null,
-    reminders,
+    reminders: "reminders" in reminders ? reminders.reminders : [],
+    useDefaultReminders: draft.useDefaultReminders,
   };
 
   if (draft.allDay) {
@@ -642,14 +720,15 @@ export function readDraft(
   };
 }
 
-/** The create body: empty optional fields and default reminders left out. */
+/** The create body: empty optional fields, and no own reminders, left out. */
 export function createRequest(fields: EventFields): CreateEventRequest {
   const body: CreateEventRequest = {
     title: fields.title,
     allDay: fields.allDay,
     ...(fields.description ? { description: fields.description } : {}),
     ...(fields.location ? { location: fields.location } : {}),
-    ...(fields.reminders ? { reminders: fields.reminders } : {}),
+    ...(fields.reminders.length ? { reminders: fields.reminders } : {}),
+    useDefaultReminders: fields.useDefaultReminders,
   };
   if (fields.allDay) {
     return { ...body, startDate: fields.startDate, endDate: fields.endDate };
@@ -663,16 +742,39 @@ export function createRequest(fields: EventFields): CreateEventRequest {
 }
 
 /**
- * The PATCH body: every field the form edits, null where it was cleared.
- * Switching between timed and all-day sends the new kind's start and end;
- * the API clears the other kind's fields.
+ * The reminder fields of a PATCH: only those that differ from the event, so
+ * an unchanged form leaves them alone. An emptied list sends [] (no own
+ * reminders), which keeps `useDefaultReminders` as it is.
  */
-export function updateRequest(fields: EventFields): UpdateEventRequest {
+export function reminderChanges(
+  fields: Pick<EventFields, "reminders" | "useDefaultReminders">,
+  event: CalendarEvent,
+): UpdateEventRequest {
+  return {
+    ...(sameReminders(fields.reminders, event.reminders)
+      ? {}
+      : { reminders: fields.reminders }),
+    ...(fields.useDefaultReminders === event.useDefaultReminders
+      ? {}
+      : { useDefaultReminders: fields.useDefaultReminders }),
+  };
+}
+
+/**
+ * The PATCH body: every field the form edits, null where it was cleared,
+ * and the reminder fields that changed. Switching between timed and all-day
+ * sends the new kind's start and end; the API clears the other kind's
+ * fields.
+ */
+export function updateRequest(
+  fields: EventFields,
+  event: CalendarEvent,
+): UpdateEventRequest {
   const body: UpdateEventRequest = {
     title: fields.title,
     description: fields.description,
     location: fields.location,
-    reminders: fields.reminders,
+    ...reminderChanges(fields, event),
     allDay: fields.allDay,
   };
   if (fields.allDay) {
@@ -721,9 +823,60 @@ export function fieldErrorsFromApi(message: string): FieldErrors {
   return { form: sentence(message) };
 }
 
-function sentence(message: string) {
+/** An API message as a sentence: capitalised, with a full stop. */
+export function sentence(message: string) {
   const text = message.charAt(0).toUpperCase() + message.slice(1);
   return /[.!?]$/.test(text) ? text : `${text}.`;
+}
+
+// Reminder defaults -------------------------------------------------------------
+
+/**
+ * The settings PATCH body for the owner's default lists that changed;
+ * undefined when neither did.
+ */
+export function settingsRequest(
+  saved: ReminderDefaults,
+  next: ReminderDefaults,
+): UpdateSettingsRequest | undefined {
+  const changed = {
+    ...(sameReminders(saved.timed, next.timed) ? {} : { timed: next.timed }),
+    ...(sameReminders(saved.allDay, next.allDay)
+      ? {}
+      : { allDay: next.allDay }),
+  };
+  return Object.keys(changed).length
+    ? { defaultReminders: changed }
+    : undefined;
+}
+
+/**
+ * The owner's default reminders, for the event form. Throws when Calendar
+ * answers with an error or can't be reached.
+ */
+export async function fetchOwnerDefaults() {
+  const { data, error } = await calendarClient.GET("/v1/settings");
+  if (error || !data) throw new Error("Calendar is unavailable");
+  return data.defaultReminders;
+}
+
+/**
+ * Everything Reminder defaults edits: the owner's lists and every source
+ * with its own. Throws when Calendar answers with an error or can't be
+ * reached.
+ */
+export async function fetchReminderDefaults() {
+  const [settings, sources] = await Promise.all([
+    calendarClient.GET("/v1/settings"),
+    calendarClient.GET("/v1/sources"),
+  ]);
+  if (!settings.data || !sources.data) {
+    throw new Error("Calendar is unavailable");
+  }
+  return {
+    owner: settings.data.defaultReminders,
+    sources: sources.data.items,
+  };
 }
 
 // Calendar API reads ------------------------------------------------------------
