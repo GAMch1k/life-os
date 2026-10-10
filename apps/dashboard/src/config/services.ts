@@ -6,6 +6,7 @@ const DEFAULT_SERVICE_URLS = {
   voice: "http://localhost:8085",
   activity: "http://localhost:8086",
   notifications: "http://localhost:8087",
+  banking: "http://localhost:8089",
 } as const;
 
 export function normalizeServiceUrl(name: string, value: string): string {
@@ -77,6 +78,11 @@ export const serviceBaseUrls = Object.freeze({
     "NEXT_PUBLIC_NOTIFICATIONS_SERVICE_URL",
     "NOTIFICATIONS_SERVICE_URL",
     DEFAULT_SERVICE_URLS.notifications,
+  ),
+  banking: configuredServiceUrl(
+    "NEXT_PUBLIC_BANKING_SERVICE_URL",
+    "BANKING_SERVICE_URL",
+    DEFAULT_SERVICE_URLS.banking,
   ),
 });
 
