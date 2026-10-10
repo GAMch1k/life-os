@@ -40,8 +40,10 @@ type CodexCLI struct {
 	Grace time.Duration
 	// Slots limits concurrent planning runs; nil means unlimited.
 	Slots chan struct{}
-	// TimeZone is the owner's timezone. Relative dates in captures are
-	// resolved in it, and every Codex run gets it as TZ. Nil means UTC.
+	// TimeZone is the owner's configured timezone. Relative dates in a
+	// capture are resolved in the capture's own timezone when it has one
+	// (WithCaptureTimeZone), else in this one, and every Codex run gets the
+	// zone it uses as TZ. Nil means UTC.
 	TimeZone *time.Location
 	// Now is the clock for the planning prompt; tests replace it.
 	Now func() time.Time
@@ -99,6 +101,25 @@ func WithCapturedAt(ctx context.Context, at time.Time) context.Context {
 func capturedAtFrom(ctx context.Context) time.Time {
 	at, _ := ctx.Value(capturedAtKey{}).(time.Time)
 	return at
+}
+
+type captureTimeZoneKey struct{}
+
+// WithCaptureTimeZone tells planning runs started with ctx the timezone the
+// item was captured in, such as the capturing browser's (an IANA name). An
+// empty or unknown name leaves the configured timezone in place.
+func WithCaptureTimeZone(ctx context.Context, name string) context.Context {
+	return context.WithValue(ctx, captureTimeZoneKey{}, name)
+}
+
+// location is the timezone one planning run resolves dates in: the
+// capture's own when it is a valid IANA name, else the configured one.
+func (c CodexCLI) location(ctx context.Context) *time.Location {
+	name, _ := ctx.Value(captureTimeZoneKey{}).(string)
+	if location, ok := loadTimeZone(name); ok {
+		return location
+	}
+	return c.TimeZone
 }
 
 // delayedCapture is how long after its capture an item is planned before
@@ -174,6 +195,8 @@ func (c CodexCLI) Plan(ctx context.Context, content string) (string, error) {
 	if c.ReasoningEffort != "" {
 		args = append(args, "-c", "model_reasoning_effort="+c.ReasoningEffort)
 	}
+	// This run's prompt and its TZ use the capture's own zone when known.
+	c.TimeZone = c.location(ctx)
 	prompt := planPrompt + timeContext(c.now(), capturedAtFrom(ctx), c.TimeZone) + "Inbox item: " + content
 	cmd := c.command(runCtx, append(args, "-o", name, prompt)...)
 	stdout, err := cmd.StdoutPipe()

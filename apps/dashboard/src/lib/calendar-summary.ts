@@ -5,8 +5,8 @@ import {
   dayKey,
   DEFAULT_TIME_ZONE,
   startOfDay,
-  userTimeZone,
 } from "@/lib/time-zone";
+import { userTimeZone } from "@/lib/user-time-zone";
 
 export type CalendarEvent = components["schemas"]["CalendarEvent"];
 
@@ -38,7 +38,7 @@ export function agendaWindow(now: Date, timeZone: string) {
 
 export async function getCalendarSummary(): Promise<CalendarSummaryState> {
   const now = new Date();
-  const timeZone = userTimeZone();
+  const timeZone = await userTimeZone();
   const { from, to } = agendaWindow(now, timeZone);
   // A refused connection throws rather than returning an error response.
   const { data, error } = await calendarClient

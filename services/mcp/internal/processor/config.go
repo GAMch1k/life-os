@@ -85,12 +85,23 @@ func OwnerTimeZone(name string) (*time.Location, error) {
 	if name == "" {
 		return time.UTC, nil
 	}
-	// "Local" would silently mean the container's own zone.
-	location, err := time.LoadLocation(name)
-	if err != nil || name == "Local" {
+	location, ok := loadTimeZone(name)
+	if !ok {
 		return time.UTC, fmt.Errorf("LIFE_OS_TIMEZONE %q is not an IANA timezone name such as Europe/Berlin", name)
 	}
 	return location, nil
+}
+
+// loadTimeZone resolves an IANA timezone name such as Europe/Berlin. The
+// empty name and "Local" (which would silently mean the container's own
+// zone) are not timezones here.
+func loadTimeZone(name string) (*time.Location, bool) {
+	name = strings.TrimSpace(name)
+	if name == "" || name == "Local" {
+		return nil, false
+	}
+	location, err := time.LoadLocation(name)
+	return location, err == nil
 }
 
 var effortPattern = regexp.MustCompile(`^[a-z]*$`)

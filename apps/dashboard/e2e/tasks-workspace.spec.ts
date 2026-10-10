@@ -21,11 +21,18 @@ async function createTask(
   return response.json();
 }
 
-/** Opens /tasks and reads the owner's today and timezone the server used. */
+/**
+ * Opens /tasks and reads today and the timezone the server used, once the
+ * page has settled in the browser's timezone (a first visit renders in
+ * LIFE_OS_TIMEZONE and refreshes once).
+ */
 async function openTasks(page: Page) {
   await page.goto("/tasks");
   const workspace = page.getByTestId("tasks-workspace");
-  await expect(workspace).toBeVisible();
+  await expect(workspace).toHaveAttribute(
+    "data-time-zone",
+    await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone),
+  );
   return {
     today: (await workspace.getAttribute("data-today"))!,
     timeZone: (await workspace.getAttribute("data-time-zone"))!,
@@ -79,7 +86,8 @@ const region = (page: Page, name: string) =>
 
 test.describe("Tasks workspace", () => {
   test.skip(!enabled, "set LIFE_OS_E2E_URL to run against the isolated stack");
-  // A browser far from the owner's timezone must not move any Task's day.
+  // Days and times follow the browser's timezone, here far from the
+  // Dashboard's LIFE_OS_TIMEZONE.
   test.use({ timezoneId: "America/New_York" });
 
   test("groups open Tasks by the owner's day and follows the focused date", async ({
@@ -152,7 +160,7 @@ test.describe("Tasks workspace", () => {
     await page.getByLabel("Due date", { exact: true }).fill("2026-10-21T09:30");
     await page.getByRole("button", { name: "Save" }).click();
     await expect(page.getByText(renamed)).toBeVisible();
-    // The due date is the owner's wall time, not the browser's.
+    // The due date is wall time in the page's (the browser's) timezone.
     const saved = await (
       await request.get(`/api/tasks/v1/tasks/${task.id}`)
     ).json();

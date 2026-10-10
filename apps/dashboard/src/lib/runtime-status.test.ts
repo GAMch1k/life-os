@@ -383,18 +383,40 @@ test("times are shown in the owner's timezone with its abbreviation", () => {
     fact("inbox", "Next retry"),
     "10 Oct 2026, 01:00 CEST (backoff)",
   );
-  assert.equal(fact("processing", "Timezone"), "Europe/Berlin");
+  assert.equal(
+    fact("processing", "Planning timezone"),
+    "capture's browser timezone, else Europe/Berlin",
+  );
   assert.equal(fact("processing", "Last poll"), "9 Oct 2026, 20:00 CEST");
 });
 
-test("a processor in another timezone than the Dashboard is pointed out", () => {
+test("the planning timezone is not compared with the viewer's browser zone", () => {
+  // The page is shown in the browser's zone; the processor's configured zone
+  // is only the fallback for captures without one, so this is no mismatch.
   const status = toRuntimeStatus(
-    { ...healthy, processor: { ...processor(), timeZone: "UTC" } },
+    { ...healthy, processor: { ...processor(), timeZone: "Europe/Berlin" } },
     now,
+    "America/New_York",
     "Europe/Berlin",
   );
   assert.equal(
-    status.checks[0].facts.find((fact) => fact.label === "Timezone")?.value,
-    "UTC (Dashboard uses Europe/Berlin)",
+    status.checks[0].facts.find((fact) => fact.label === "Planning timezone")
+      ?.value,
+    "capture's browser timezone, else Europe/Berlin",
+  );
+  assert.equal(status.checks[0].state, "ok");
+});
+
+test("a processor configured with another timezone than the Dashboard is pointed out", () => {
+  const status = toRuntimeStatus(
+    { ...healthy, processor: { ...processor(), timeZone: "UTC" } },
+    now,
+    "America/New_York",
+    "Europe/Berlin",
+  );
+  assert.equal(
+    status.checks[0].facts.find((fact) => fact.label === "Planning timezone")
+      ?.value,
+    "capture's browser timezone, else UTC (the Dashboard's LIFE_OS_TIMEZONE is Europe/Berlin)",
   );
 });

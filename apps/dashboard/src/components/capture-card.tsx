@@ -25,6 +25,7 @@ import {
   isPendingState,
   retryReasonLabel,
 } from "@/lib/inbox-summary";
+import { captureMetadata } from "@/lib/time-zone";
 import { cn } from "@/lib/utils";
 
 /** Captures from this visit that stay listed under the composer. */
@@ -157,8 +158,13 @@ export function CaptureCard({
     // Clear right away like a chat composer; anything typed meanwhile stays.
     setContent("");
     try {
+      // The browser's timezone is what "tomorrow at 10" means to the owner.
       const { data, error } = await inboxClient.POST("/v1/inbox-items", {
-        body: { content: text, source: "manual" },
+        body: {
+          content: text,
+          source: "manual",
+          sourceMetadata: captureMetadata(),
+        },
       });
       if (error || !data) throw new Error("capture failed");
       setNow(new Date());
