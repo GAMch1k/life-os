@@ -1,4 +1,9 @@
-import { type APIRequestContext, expect, test } from "@playwright/test";
+import {
+  type APIRequestContext,
+  expect,
+  type Page,
+  test,
+} from "@playwright/test";
 
 const enabled = Boolean(process.env.LIFE_OS_E2E_URL);
 
@@ -15,8 +20,9 @@ async function createTask(
 }
 
 async function createHumanReview(request: APIRequestContext, stamp: number) {
+  const content = `Home review ${stamp}`;
   const item = await request.post("/api/inbox/v1/inbox-items", {
-    data: { content: `Home review ${stamp}`, source: "manual" },
+    data: { content, source: "manual" },
   });
   expect(item.status()).toBe(201);
   const inbox = await item.json();
@@ -48,6 +54,16 @@ async function createHumanReview(request: APIRequestContext, stamp: number) {
     },
   );
   expect(review.ok()).toBeTruthy();
+  return { id: inbox.id as string, content };
+}
+
+/** How far the page scrolls sideways; 0 means nothing overflows. */
+function horizontalOverflow(page: Page) {
+  return page.evaluate(
+    () =>
+      document.documentElement.scrollWidth -
+      document.documentElement.clientWidth,
+  );
 }
 
 test.describe("Home attention surface", () => {
@@ -74,7 +90,7 @@ test.describe("Home attention surface", () => {
     for (let index = 0; index < 5; index++) {
       await createTask(request, `Home undated ${stamp}-${index}`);
     }
-    await createHumanReview(request, stamp);
+    const reviewItem = await createHumanReview(request, stamp);
     const eventStart = new Date(Date.now() + 10 * 60_000);
     const event = await request.post("/api/calendar/v1/events", {
       data: {
@@ -87,9 +103,7 @@ test.describe("Home attention surface", () => {
     expect(event.status()).toBe(201);
 
     await page.goto("/");
-    await expect(
-      page.getByRole("heading", { name: "What needs your attention?" }),
-    ).toBeVisible();
+    await expect(page.locator("#inbox-capture")).toBeVisible();
 
     // Other specs share this stack, so assert caps and ordering rather than
     // exactly which rows are shown.
@@ -122,5 +136,80 @@ test.describe("Home attention surface", () => {
     await page.goBack();
     await calendar.getByRole("link", { name: "Open Calendar" }).click();
     await expect(page).toHaveURL(/\/calendar$/);
+    await request.post(`/api/inbox/v1/inbox-items/${reviewItem.id}/discard`);
+  });
+
+  test("capture comes first and fits desktop and phone screens", async ({
+    page,
+  }) => {
+    for (const viewport of [
+      { width: 1280, height: 800 },
+      { width: 390, height: 844 },
+      { width: 360, height: 740 },
+    ]) {
+      await page.setViewportSize(viewport);
+      await page.goto("/");
+      // Type or dictate right away: composer, Capture and Record are all on
+      // screen without scrolling.
+      for (const control of [
+        page.locator("#inbox-capture"),
+        page.getByRole("button", { name: "Capture" }),
+        page.getByRole("button", { name: "Record" }),
+      ]) {
+        await expect(control).toBeInViewport({ ratio: 1 });
+      }
+      const capture = await page.locator("#capture").boundingBox();
+      const review = await page.locator("#attention-review").boundingBox();
+      expect(capture!.y).toBeLessThan(review!.y);
+      expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+
+      await page.goto("/inbox");
+      await expect(page.locator("#inbox-capture")).toBeInViewport();
+      expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+    }
+  });
+
+  test("a Human Review capture is counted once and never as pending", async ({
+    page,
+    request,
+  }) => {
+    const { id, content } = await createHumanReview(request, Date.now());
+    try {
+      await page.goto("/inbox");
+      // Listed exactly once on /inbox, in Human Review (not Pending/Failed).
+      await expect(
+        page.locator("#human-review").getByText(content, { exact: true }),
+      ).toHaveCount(1);
+      await expect(page.getByText(content, { exact: true })).toHaveCount(1);
+
+      // Home counts it once, in Human Review, with Inbox's true count; the
+      // capture card counts only automatic work (raw or processing).
+      await expect(async () => {
+        const backlog = await (
+          await request.get("/api/inbox/v1/backlog")
+        ).json();
+        await page.goto("/");
+        await expect(page.locator("#attention-review")).toContainText(
+          new RegExp(
+            `(^|\\D)${backlog.humanReviewCount} captures? waiting for your decision`,
+          ),
+          { timeout: 2_000 },
+        );
+        const capture = page.locator("#capture");
+        if (backlog.pendingCount > 0) {
+          await expect(capture).toContainText(
+            new RegExp(`(^|\\D)${backlog.pendingCount} pending`),
+            { timeout: 2_000 },
+          );
+        } else {
+          await expect(capture).not.toContainText("pending", {
+            timeout: 2_000,
+          });
+        }
+      }).toPass({ timeout: 30_000 });
+      await expect(page.locator("#capture")).not.toContainText(content);
+    } finally {
+      await request.post(`/api/inbox/v1/inbox-items/${id}/discard`);
+    }
   });
 });
