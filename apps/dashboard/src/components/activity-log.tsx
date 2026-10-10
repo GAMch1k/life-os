@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/card";
 import { CopyButton } from "@/components/copy-button";
 import { ExpandableText } from "@/components/expandable-text";
+import { SelectedEventPane } from "@/components/selected-event-pane";
 import {
   activityHref,
   actorLabel,
@@ -87,7 +88,7 @@ export function ActivityLogView({ log }: { log: ActivityLog }) {
           selectedId={selectedId}
           timeZone={timeZone}
         />
-        <section aria-label="Selected event" className="lg:sticky lg:top-20">
+        <SelectedEventPane selectedId={selectedId}>
           {selection === null ? (
             <Card>
               <CardContent className="text-muted-foreground py-10 text-center text-sm">
@@ -113,7 +114,7 @@ export function ActivityLogView({ log }: { log: ActivityLog }) {
               trace={selection.trace}
             />
           )}
-        </section>
+        </SelectedEventPane>
       </div>
     </div>
   );
