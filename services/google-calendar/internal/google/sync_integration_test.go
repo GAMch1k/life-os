@@ -50,11 +50,11 @@ func TestSyncImportsEventsIntoCalendarAndFollowsChanges(t *testing.T) {
 	}
 	// The source as Calendar's integration API has it.
 	var source struct {
-		ID, Provider, Name  string
-		ReadOnly, InProcess bool
+		ID, Provider, Name        string
+		ReadOnly, PrivateLocation bool
 	}
 	status, raw := h.Calendar.Do(http.MethodGet, "/v1/integrations/google-calendar/sources/owner%40example.com", nil, "dev:test")
-	if status != http.StatusOK || jsonInto(raw, &source) != nil || source.ID != *owner.Sync.SourceID || source.Provider != "Google" || source.Name != "Owner" || source.ReadOnly || source.InProcess {
+	if status != http.StatusOK || jsonInto(raw, &source) != nil || source.ID != *owner.Sync.SourceID || source.Provider != "Google" || source.Name != "Owner" || source.ReadOnly || source.PrivateLocation {
 		t.Fatalf("source = %d %s", status, raw)
 	}
 	dentist := october[1]

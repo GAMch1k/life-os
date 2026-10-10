@@ -51,9 +51,6 @@ type Config struct {
 	GoogleTokenURL    string `env:"GOOGLE_TOKEN_URL" default:"https://oauth2.googleapis.com/token"`
 	GoogleRevokeURL   string `env:"GOOGLE_REVOKE_URL" default:"https://oauth2.googleapis.com/revoke"`
 	GoogleCalendarAPI string `env:"GOOGLE_CALENDAR_API_URL" default:"https://www.googleapis.com/calendar/v3"`
-	// HandoffCalendarDatabaseURL is Calendar's database, read once (read
-	// only) by `google-calendar handoff`; never set for the service.
-	HandoffCalendarDatabaseURL string `env:"HANDOFF_CALENDAR_DATABASE_URL"`
 }
 
 // Load reads Config from the process environment.
