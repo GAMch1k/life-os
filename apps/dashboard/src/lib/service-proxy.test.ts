@@ -39,3 +39,26 @@ test("the service proxy passes on only owner and development-tool actors", async
   assert.equal(await forwardedActor("system:voice-worker"), null);
   assert.equal(await forwardedActor(), null);
 });
+
+test("the service proxy passes on an Idempotency-Key", async () => {
+  const original = globalThis.fetch;
+  let seen: string | null = null;
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    seen = new Headers(init?.headers).get("idempotency-key");
+    return Response.json({});
+  }) as typeof fetch;
+  try {
+    await proxyServiceRequest(
+      new NextRequest("http://dashboard.test/api/finance/v1/transactions", {
+        method: "POST",
+        headers: { "Idempotency-Key": "dashboard-abc" },
+        body: "{}",
+      }),
+      { params: Promise.resolve({ path: ["v1", "transactions"] }) },
+      "http://finance.test",
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
+  assert.equal(seen, "dashboard-abc");
+});
