@@ -24,6 +24,15 @@ gateway=http://127.0.0.1:13001
 finance="$gateway/api/finance"; tasks="$gateway/api/tasks"; inbox="$gateway/api/inbox"; calendar="$gateway/api/calendar"
 for service in "$finance" "$tasks" "$inbox" "$calendar"; do wait_ready "$service"; done
 
+# Host separation (docs/operations/ntfy.md): the ntfy hostname reaches only
+# ntfy, which this stack does not run (502), never a Life OS route; no other
+# Host reaches ntfy.
+code=$(curl --silent --output /dev/null --write-out '%{http_code}' -H 'Host: ntfy.gamch1k.com' "$tasks/ready")
+[ "$code" = 502 ] || { echo "e2e: Host ntfy.gamch1k.com must not reach Life OS (got $code for /api/tasks/ready)" >&2; exit 1; }
+if curl --silent "$gateway/v1/health" | grep -q '"healthy"'; then
+  echo "e2e: the Life OS host must not reach ntfy" >&2; exit 1
+fi
+
 account_id=$("${compose[@]}" exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d finance_db -Atqc "INSERT INTO accounts (name,currency,opening_balance_minor) VALUES ('"'"'Smoke account'"'"','"'"'USD'"'"',0) RETURNING id"')
 external_id="e2e-$(date +%s)"
 csv="account_id,occurred_on,amount_minor,currency,external_id,note\n${account_id},2026-10-07,-1250,USD,${external_id},Coffee\n"

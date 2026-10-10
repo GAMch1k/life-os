@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# Asserts the gateway's host separation in infra/nginx/life-os.conf (or the
+# file given), without Docker:
+#  - the Life OS server is the default server (server_name _), so every Host
+#    but the ntfy hostname reaches Life OS;
+#  - the ntfy hostname has its own server that only proxies to ntfy, with a
+#    single location and no other upstream, file, or redirect;
+#  - no other server mentions ntfy, and there is no third server.
+# The ntfy hostname has no Cloudflare Access, so a Life OS route reachable
+# under it would be public. See docs/operations/ntfy.md.
+# Usage: tools/check-gateway-hosts [nginx-config]
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+config=${1:-infra/nginx/life-os.conf}
+ntfy_host=${LIFE_OS_NTFY_HOSTNAME:-ntfy.gamch1k.com}
+failed=0
+fail() { echo "check-gateway-hosts: $*" >&2; failed=1; }
+
+# One line per directive inside a top-level server: "<server number>
+# <directive and arguments>" (a block's opening line, such as "location /",
+# counts as one). Comments and quoted strings are removed first, so braces in
+# regexes such as {1,64} do not count as blocks.
+directives=$(awk -v q="'" '
+  {
+    line = $0
+    sub(/#.*/, "", line)
+    gsub(/"[^"]*"/, "\"\"", line)
+    gsub(q "[^" q "]*" q, "\"\"", line)
+    n = length(line)
+    for (i = 1; i <= n; i++) {
+      c = substr(line, i, 1)
+      if (c != "{" && c != ";" && c != "}") { current = current c; continue }
+      d = current
+      gsub(/^[ \t]+|[ \t]+$/, "", d)
+      gsub(/[ \t]+/, " ", d)
+      current = ""
+      if (c == "{" && depth == 0 && d == "server") { server++; inside = 1 }
+      else if (inside && d != "") print server, d
+      if (c == "{") depth++
+      if (c == "}" && --depth == 0) inside = 0
+    }
+    current = current " "
+  }
+' "$config")
+
+servers=$(awk '{print $1}' <<<"$directives" | sort -u)
+[ "$(wc -l <<<"$servers")" -eq 2 ] || fail "expected exactly two servers (Life OS and ntfy); found $(wc -l <<<"$servers")"
+
+default_server=$(awk '$2 == "listen" && / default_server( |$)/ {print $1}' <<<"$directives" | sort -u)
+ntfy_server=$(awk -v host="$ntfy_host" '$2 == "server_name" { for (i = 3; i <= NF; i++) if ($i == host) print $1 }' <<<"$directives" | sort -u)
+[ "$(wc -l <<<"$default_server")" -eq 1 ] && [ -n "$default_server" ] || fail "exactly one server must be listen ... default_server"
+[ "$(wc -l <<<"$ntfy_server")" -eq 1 ] && [ -n "$ntfy_server" ] || fail "exactly one server must serve $ntfy_host"
+[ "$default_server" != "$ntfy_server" ] || fail "the ntfy server must not be the default server"
+
+of() { awk -v n="$1" '$1 == n { $1 = ""; sub(/^ /, ""); print }' <<<"$directives"; }
+
+if [ -n "$default_server" ]; then
+  lifeos=$(of "$default_server")
+  [ "$(grep '^server_name ' <<<"$lifeos")" = "server_name _" ] || fail "the default server must be server_name _ (every other Host)"
+  if grep -qi 'ntfy' <<<"$lifeos"; then fail "the Life OS server must not refer to ntfy: $(grep -i ntfy <<<"$lifeos" | head -1)"; fi
+fi
+
+if [ -n "$ntfy_server" ]; then
+  ntfy=$(of "$ntfy_server")
+  [ "$(grep '^server_name ' <<<"$ntfy")" = "server_name $ntfy_host" ] || fail "the ntfy server must name only $ntfy_host"
+  [ "$(grep '^location ' <<<"$ntfy")" = "location /" ] || fail "the ntfy server must have exactly one location, /"
+  [ "$(grep '^set \$ntfy_upstream ' <<<"$ntfy")" = 'set $ntfy_upstream http://ntfy:80' ] || fail 'the ntfy server must set $ntfy_upstream to http://ntfy:80'
+  passes=$(grep -E '^[a-z_]+_pass ' <<<"$ntfy" || true)
+  [ "$passes" = 'proxy_pass $ntfy_upstream' ] || fail "the ntfy server may only proxy_pass \$ntfy_upstream; found: ${passes//$'\n'/; }"
+  forbidden=$(grep -E '^(include|return|rewrite|root|alias|try_files|error_page|if|internal|mirror|auth_request|ssi|sub_filter) ' <<<"$ntfy" || true)
+  [ -z "$forbidden" ] || fail "the ntfy server must only proxy to ntfy; found: ${forbidden//$'\n'/; }"
+fi
+
+for server in $servers; do
+  [ "$server" = "$default_server" ] || [ "$server" = "$ntfy_server" ] && continue
+  fail "server $server is neither the Life OS default server nor the ntfy server"
+done
+
+if [ "$failed" -ne 0 ]; then exit 1; fi
+echo "gateway hosts ok: $ntfy_host reaches only ntfy (http://ntfy:80); every other Host reaches Life OS (default_server)"
