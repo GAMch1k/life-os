@@ -534,6 +534,7 @@ func TestPlanPromptAllowsCalendarChangesThroughSearchTermsAndReview(t *testing.T
 		"Never create an event as a fallback for an uncertain existing event.",
 		`and priority (only when the item says how important it is: "high" for important or urgent, such as "wichtig" or "важно", "low" for not important or low priority; otherwise leave it out)`,
 		"useDefaultReminders, priority, and clear",
+		"A request to be reminded of, or to add a reminder to, an event that already exists (even when the item restates the event) is calendar_update with eventQuery and reminders, not calendar_create.",
 	} {
 		if !strings.Contains(planPrompt, want) {
 			t.Errorf("planPrompt lacks %q", want)
