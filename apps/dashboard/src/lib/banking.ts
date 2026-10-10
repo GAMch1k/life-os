@@ -211,14 +211,21 @@ export function callbackStep(query: {
   code?: QueryValue;
   state?: QueryValue;
   error?: QueryValue;
+  error_description?: QueryValue;
 }): CallbackStep {
   const error = first(query.error);
   if (error) {
+    // The provider's own words, when it gives them, say what went wrong.
+    const description = first(query.error_description)
+      ?.replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 300);
+    const message =
+      BANK_ERRORS[error] ??
+      `The bank did not complete the consent (${error.slice(0, 64)}).`;
     return {
       kind: "error",
-      message:
-        BANK_ERRORS[error] ??
-        `The bank did not complete the consent (${error.slice(0, 64)}).`,
+      message: description ? `${message} ${description}` : message,
     };
   }
   const code = first(query.code);

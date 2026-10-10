@@ -310,6 +310,11 @@ func (s *Server) startAuth(w http.ResponseWriter, body map[string]any) {
 	case err != nil || validUntil.After(s.Now().Add(time.Duration(s.MaxConsent)*time.Second)):
 		writeError(w, http.StatusBadRequest, "WRONG_REQUEST_PARAMETERS", "valid_until is too far in the future")
 		return
+	case access["balances"] != nil || access["transactions"] != nil || access["accounts"] != nil:
+		// Like Deutsche Bank: a consent naming what to access, without
+		// accounts, fails (the real bank redirects with server_error).
+		writeError(w, http.StatusBadRequest, "WRONG_REQUEST_PARAMETERS", "Detailed consent is not supported")
+		return
 	case body["psu_type"] != "personal" || body["redirect_url"] == "":
 		writeError(w, http.StatusBadRequest, "WRONG_REQUEST_PARAMETERS", "Wrong request parameters provided")
 		return
@@ -345,7 +350,7 @@ func (s *Server) createSession(w http.ResponseWriter, body map[string]any) {
 	writeJSON(w, map[string]any{
 		"session_id": sess.id, "accounts": accounts, "psu_type": "personal",
 		"aspsp":  map[string]any{"name": s.ASPSPName, "country": s.Country},
-		"access": map[string]any{"valid_until": validUntil.Format(time.RFC3339), "balances": true, "transactions": true},
+		"access": map[string]any{"valid_until": validUntil.Format(time.RFC3339)},
 	})
 }
 

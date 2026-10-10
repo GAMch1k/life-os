@@ -49,6 +49,9 @@ type Config struct {
 	// InitialDays is how far back the first sync reads; OverlapDays how far
 	// before the last booked date a later sync starts.
 	InitialDays int `env:"BANKING_INITIAL_DAYS" default:"90"`
+	// ConsentDays caps the consent asked for (1-180; the bank's maximum
+	// still applies).
+	ConsentDays int `env:"BANKING_CONSENT_DAYS" default:"180"`
 	OverlapDays int `env:"BANKING_OVERLAP_DAYS" default:"7"`
 	// TickSeconds is how often the scheduler checks the connections.
 	TickSeconds int `env:"BANKING_TICK_SECONDS" default:"60"`
@@ -102,6 +105,9 @@ func (c Config) Validate() error {
 	if c.ManualSyncMinutes < 1 || c.ManualSyncMinutes > 1440 {
 		validationErrors = append(validationErrors, fmt.Errorf("BANKING_MANUAL_SYNC_MINUTES must be between 1 and 1440"))
 	}
+	if c.ConsentDays < 1 || c.ConsentDays > 180 {
+		validationErrors = append(validationErrors, fmt.Errorf("BANKING_CONSENT_DAYS must be between 1 and 180"))
+	}
 	if c.InitialDays < 1 || c.InitialDays > 730 {
 		validationErrors = append(validationErrors, fmt.Errorf("BANKING_INITIAL_DAYS must be between 1 and 730"))
 	}
@@ -135,6 +141,7 @@ func (c Config) Options() banking.Options {
 		MaxUnattended:  c.MaxUnattended,
 		ManualInterval: time.Duration(c.ManualSyncMinutes) * time.Minute,
 		InitialDays:    c.InitialDays,
+		ConsentDays:    c.ConsentDays,
 		OverlapDays:    overlap,
 	}
 }

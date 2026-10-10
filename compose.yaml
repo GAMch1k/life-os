@@ -151,6 +151,7 @@ services:
       LIFE_OS_BANKING_TOKEN_KEY: "${LIFE_OS_BANKING_TOKEN_KEY:-}"
       LIFE_OS_BANKING_REDIRECT_URI: "${LIFE_OS_BANKING_REDIRECT_URI:-https://lifeos.gamch1k.com/finance/bank/callback}"
       BANKING_SYNC_TIMES: "${LIFE_OS_BANKING_SYNC_TIMES:-06:00,12:00,18:00,23:00}"
+      BANKING_CONSENT_DAYS: "${LIFE_OS_BANKING_CONSENT_DAYS:-180}"
     volumes:
       - type: bind
         source: "${LIFE_OS_ENABLE_BANKING_KEY_FILE:-/dev/null}"

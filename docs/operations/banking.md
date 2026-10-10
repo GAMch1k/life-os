@@ -22,7 +22,7 @@ Never commit the key or the token key, and never paste them into tickets or logs
    LIFE_OS_BANKING_RUNTIME_UID=<id -u of the key file's owner>
    ```
 
-   The banking container runs as `LIFE_OS_BANKING_RUNTIME_UID` (default 1000) so it can read the `0600` key, which Compose bind-mounts read-only at `/run/secrets/enablebanking.pem`. Keep the token key: it encrypts the stored bank session, and a new one means reconnecting. Optional: `LIFE_OS_BANKING_REDIRECT_URI` (must match the application's redirect URL exactly) and `LIFE_OS_BANKING_SYNC_TIMES` (default `06:00,12:00,18:00,23:00`, owner-local, at most four).
+   The banking container runs as `LIFE_OS_BANKING_RUNTIME_UID` (default 1000) so it can read the `0600` key, which Compose bind-mounts read-only at `/run/secrets/enablebanking.pem`. Keep the token key: it encrypts the stored bank session, and a new one means reconnecting. Optional: `LIFE_OS_BANKING_REDIRECT_URI` (must match the application's redirect URL exactly) `LIFE_OS_BANKING_SYNC_TIMES` (default `06:00,12:00,18:00,23:00`, owner-local, at most four), and `LIFE_OS_BANKING_CONSENT_DAYS` (default 180, at most the bank's maximum; lower it if the bank refuses a long consent).
 2. Provision the database on an existing PostgreSQL volume (a fresh one does it by itself): recreate the PostgreSQL container so it sees the new password and the updated `infra/postgres/service-databases.conf`, then run the idempotent provisioning.
 
    ```sh

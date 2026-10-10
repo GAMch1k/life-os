@@ -108,6 +108,9 @@ type Options struct {
 	// later sync starts.
 	InitialDays int
 	OverlapDays int
+	// ConsentDays caps how long a consent is asked for (the bank's own
+	// maximum still applies); 0 asks for the bank's maximum.
+	ConsentDays int
 	// RequestTimeout bounds a sync made while the owner waits; SyncTimeout a
 	// scheduled one.
 	RequestTimeout time.Duration
@@ -254,7 +257,11 @@ func (s *Service) Authorize(ctx context.Context, institution, country string) (s
 	}
 	// As long as the bank allows (at most 180 days), less a margin so the
 	// provider never sees a date beyond its maximum.
-	validUntil := now.Add(aspsp.MaxConsent() - 10*time.Minute)
+	consent := aspsp.MaxConsent()
+	if days := time.Duration(s.opts.ConsentDays) * 24 * time.Hour; days > 0 && days < consent {
+		consent = days
+	}
+	validUntil := now.Add(consent - 10*time.Minute)
 	url, err := s.bank.StartAuth(ctx, enablebanking.AuthRequest{
 		ValidUntil: validUntil, ASPSPName: aspsp.Name, Country: country, State: state, RedirectURL: s.settings.RedirectURI,
 	})

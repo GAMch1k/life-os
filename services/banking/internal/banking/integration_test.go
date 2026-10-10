@@ -38,12 +38,13 @@ func TestConnectChecksTheStateAndRunsTheFirstSync(t *testing.T) {
 	ctx := context.Background()
 	state := h.Authorize()
 
-	// The consent asked for: read-only, as long as the bank allows (180
-	// days, less a margin), back to the Dashboard's callback.
+	// The consent asked for: the bank's plain (read-only) account
+	// information consent, as long as the bank allows (180 days, less a
+	// margin), back to the Dashboard's callback.
 	auth := h.Bank.AuthRequest(state)
 	access := auth["access"].(map[string]any)
 	validUntil, _ := time.Parse(time.RFC3339, access["valid_until"].(string))
-	if access["balances"] != true || access["transactions"] != true || auth["psu_type"] != "personal" ||
+	if len(access) != 1 || auth["psu_type"] != "personal" ||
 		auth["redirect_url"] != "https://lifeos.example/finance/bank/callback" ||
 		validUntil.After(testsupport.Start.Add(180*24*time.Hour)) || validUntil.Before(testsupport.Start.Add(179*24*time.Hour)) {
 		t.Fatalf("auth request = %+v", auth)
