@@ -148,14 +148,9 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 		}
 		parsed, err = decodePlan(rawPlan)
 	}
-	if err == nil && (parsed.Ambiguous || parsed.Confidence < 0.8) && len(parsed.Actions) == 1 && isTaskMutation(parsed.Actions[0]) && validAction(parsed.Actions[0]) {
-		if candidates, searchErr := r.findTasks(ctx, parsed.Actions[0]); searchErr == nil {
-			return Proposal{}, r.humanReview(ctx, item.ID, started.ID, parsed.Actions[0], reviewCandidates(candidates), "ambiguous or low-confidence Task selection")
-		}
-	}
-	if err == nil && (parsed.Ambiguous || parsed.Confidence < 0.8) && len(parsed.Actions) == 1 && isCalendarMutation(parsed.Actions[0]) && validAction(parsed.Actions[0]) {
-		if events, searchErr := r.findEvents(ctx, item, parsed.Actions[0]); searchErr == nil {
-			return Proposal{}, r.humanReview(ctx, item.ID, started.ID, parsed.Actions[0], eventCandidates(events, r.location(item)), "ambiguous or low-confidence Calendar event selection")
+	if err == nil && (parsed.Ambiguous || parsed.Confidence < 0.8) && len(parsed.Actions) == 1 && (isTaskMutation(parsed.Actions[0]) || isCalendarMutation(parsed.Actions[0])) && validAction(parsed.Actions[0]) {
+		if res, searchErr := r.resolve(ctx, item, parsed.Actions[0]); searchErr == nil {
+			return Proposal{}, r.humanReview(ctx, item.ID, started.ID, res.action, r.reviewCandidatesFor(item, res.action, res.found), lowConfidenceReason(res.action))
 		}
 	}
 	if err != nil {
@@ -175,20 +170,29 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 		if !validAction(action) {
 			return Proposal{}, r.retryLater(ctx, item.ID, started.ID, actions, "invalid proposed action: "+action.Tool, failureModelOutput, previous)
 		}
+		// target is the one existing Task or event a search found.
+		var target map[string]any
+		if (isTaskMutation(action) && action.Arguments["taskId"] == nil) || (isCalendarMutation(action) && approvedEvent == "") {
+			res, findErr := r.resolve(ctx, item, action)
+			if findErr != nil {
+				reason, kind := failedSearch(findErr)
+				return Proposal{}, r.retryLater(ctx, item.ID, started.ID, actions, reason, kind, previous)
+			}
+			// Every cancellation the AI proposes waits for the owner, even
+			// when exactly one event matches; it runs once approved.
+			if res.action.Tool == "calendar_cancel" || len(res.found) != 1 {
+				return Proposal{}, r.humanReview(ctx, item.ID, started.ID, res.action, r.reviewCandidatesFor(item, res.action, res.found), reviewReason(res))
+			}
+			// The equivalent action, when only the other domain matched.
+			action, target = res.action, res.found[0]
+		}
 		arguments := make(map[string]any, len(action.Arguments)+1)
 		for field, value := range action.Arguments {
 			arguments[field] = value
 		}
 		if isTaskMutation(action) {
-			if arguments["taskId"] == nil {
-				candidates, findErr := r.findTasks(ctx, action)
-				if findErr != nil {
-					return Proposal{}, r.retryLater(ctx, item.ID, started.ID, actions, "task search failed: "+findErr.Error(), failureDependency, previous)
-				}
-				if len(candidates) != 1 {
-					return Proposal{}, r.humanReview(ctx, item.ID, started.ID, action, reviewCandidates(candidates), "ambiguous or missing Task selection")
-				}
-				arguments["taskId"] = candidates[0]["id"]
+			if target != nil {
+				arguments["taskId"] = target["id"]
 			}
 			// The search terms only identify the Task (a Human Review approval
 			// may still carry the alternatives); the Tasks operation takes its id.
@@ -196,20 +200,9 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 			delete(arguments, "taskQueryAlternatives")
 		}
 		if isCalendarMutation(action) {
-			eventID := approvedEvent
-			var event map[string]any
-			if eventID == "" {
-				events, findErr := r.findEvents(ctx, item, action)
-				if findErr != nil {
-					return Proposal{}, r.retryLater(ctx, item.ID, started.ID, actions, "calendar search failed: "+findErr.Error(), classifyActionError(findErr), previous)
-				}
-				// Every cancellation the AI proposes waits for the owner, even
-				// when exactly one event matches; it runs once approved.
-				if action.Tool == "calendar_cancel" || len(events) != 1 {
-					return Proposal{}, r.humanReview(ctx, item.ID, started.ID, action, eventCandidates(events, r.location(item)), calendarReviewReason(action.Tool, len(events)))
-				}
-				eventID, _ = events[0]["id"].(string)
-				event = events[0]
+			eventID, event := approvedEvent, target
+			if target != nil {
+				eventID, _ = target["id"].(string)
 			}
 			arguments = calendarArguments(action.Tool, arguments, eventID)
 			if action.Tool == "calendar_update" && missingEnd(arguments) {

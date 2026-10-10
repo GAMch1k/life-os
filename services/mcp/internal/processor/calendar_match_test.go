@@ -24,10 +24,13 @@ type calendarTools struct {
 	failSearch bool
 	// failTool makes a Calendar mutation fail with that error.
 	failTool map[string]error
-	searches []url.Values
-	gets     []string
-	review   map[string]any
-	inputs   map[string]map[string]any
+	// taskMatches maps a task_search term to the ids of open Tasks it finds.
+	taskMatches  map[string][]string
+	taskSearches []url.Values
+	searches     []url.Values
+	gets         []string
+	review       map[string]any
+	inputs       map[string]map[string]any
 }
 
 func (c *calendarTools) Call(ctx context.Context, name string, args map[string]any) (json.RawMessage, error) {
@@ -46,6 +49,16 @@ func (c *calendarTools) Call(ctx context.Context, name string, args map[string]a
 		items := []map[string]any{}
 		for _, id := range c.matches[query.Get("q")] {
 			items = append(items, c.events[id])
+		}
+		raw, _ := json.Marshal(map[string]any{"items": items})
+		return raw, nil
+	case "task_search":
+		c.calls = append(c.calls, name)
+		query, _ := url.ParseQuery(args["query"].(string))
+		c.taskSearches = append(c.taskSearches, query)
+		items := []map[string]any{}
+		for _, id := range c.taskMatches[query.Get("query")] {
+			items = append(items, map[string]any{"id": id, "title": "Task " + id})
 		}
 		raw, _ := json.Marshal(map[string]any{"items": items})
 		return raw, nil
@@ -186,7 +199,7 @@ func TestCalendarUpdateWithNoMatchGoesToHumanReviewAndCreatesNothing(t *testing.
 	if contains(tools.calls, "calendar_update") || contains(tools.calls, "calendar_create") || contains(tools.calls, "inbox_resolve") {
 		t.Fatalf("calls = %#v", tools.calls)
 	}
-	if tools.review == nil || len(tools.candidates()) != 0 || tools.review["errorSummary"] != "No upcoming Calendar event matches, so nothing was changed" {
+	if tools.review == nil || len(tools.candidates()) != 0 || tools.review["errorSummary"] != "No upcoming Calendar event or open Task matches, so nothing was changed" {
 		t.Fatalf("review = %#v", tools.review)
 	}
 }
