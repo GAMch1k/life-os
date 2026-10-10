@@ -124,10 +124,11 @@ func New(service string, options ...Option) *App {
 	fiberApp.Use(requestContext(s.idGenerator))
 	// Services are consumed directly by the local dashboard during development.
 	// They do not use cookie or authorization credentials, so permissive CORS is
-	// safe here and keeps the service boundary visible to the browser.
+	// safe here and keeps the service boundary visible to the browser. Browser
+	// writes say who makes them in X-Life-OS-Actor (pkg/activity).
 	fiberApp.Use(cors.New(cors.Config{
 		AllowOrigins: []string{"*"},
-		AllowHeaders: []string{"Content-Type", RequestIDHeader, CorrelationIDHeader},
+		AllowHeaders: []string{"Content-Type", RequestIDHeader, CorrelationIDHeader, "X-Life-OS-Actor"},
 	}))
 	fiberApp.Use(requestLogger(logger))
 	fiberApp.Use(recoverPanic(logger))

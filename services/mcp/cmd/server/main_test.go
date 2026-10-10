@@ -86,6 +86,15 @@ func TestUnnamedMCPCallerIsAnAgent(t *testing.T) {
 	if trace.Actor != activity.Agent("mcp") || trace.CorrelationID == "" {
 		t.Fatalf("trace = %+v", trace)
 	}
+	// MCP is itself the agent: a caller claiming to be the user is still the
+	// agent, while a development tool keeps its own actor.
+	for claim, want := range map[string]activity.Actor{"user": activity.Agent("mcp"), "nobody": activity.Agent("mcp"), "dev:claude-code": activity.Dev("claude-code")} {
+		header := http.Header{}
+		header.Set(activity.ActorHeader, claim)
+		if got := traceOf(&mcp.CallToolRequest{Extra: &mcp.RequestExtra{Header: header}}).Actor; got != want {
+			t.Errorf("caller %q recorded as %+v, want %+v", claim, got, want)
+		}
+	}
 }
 
 func TestAttemptUpdateForwardsTheRetrySchedule(t *testing.T) {
