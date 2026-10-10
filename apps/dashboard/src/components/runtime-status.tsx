@@ -41,7 +41,7 @@ function CheckCard({ check }: { check: StatusCheck }) {
       <CardHeader>
         <div className="flex items-start justify-between gap-3">
           <CardTitle id={`check-${check.id}`}>{check.title}</CardTitle>
-          <span className="flex items-center gap-1.5 text-sm font-medium">
+          <span className="flex shrink-0 items-center gap-1.5 text-sm font-medium">
             <StateIcon state={check.state} />
             {STATE_LABEL[check.state]}
           </span>
@@ -61,8 +61,8 @@ function CheckCard({ check }: { check: StatusCheck }) {
           <dl className="text-muted-foreground grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 text-sm">
             {check.facts.map((fact) => (
               <div className="contents" key={fact.label}>
-                <dt>{fact.label}</dt>
-                <dd className="text-foreground">{fact.value}</dd>
+                <dt className="break-words">{fact.label}</dt>
+                <dd className="text-foreground break-words">{fact.value}</dd>
               </div>
             ))}
           </dl>
@@ -75,15 +75,11 @@ function CheckCard({ check }: { check: StatusCheck }) {
 export function RuntimeStatusView({ status }: { status: RuntimeStatus }) {
   const alerts = statusAlerts(status);
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
-      <section>
-        <p className="text-muted-foreground text-sm font-medium">Status</p>
-        <h1 className="mt-1 text-3xl font-semibold tracking-tight">
-          Is Life OS working?
-        </h1>
-        <p className="text-muted-foreground mt-2 max-w-2xl">
-          Processing, backlogs, and dependencies as reported by the running
-          services. Checked {formatTime(status.checkedAt)} ·{" "}
+    <div className="mx-auto max-w-5xl space-y-5">
+      <header className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <h1 className="text-xl font-semibold tracking-tight">Status</h1>
+        <p className="text-muted-foreground text-sm">
+          Checked {formatTime(status.checkedAt, status.timeZone)} ·{" "}
           <Link
             className="text-primary underline-offset-4 hover:underline"
             href="/status"
@@ -91,13 +87,16 @@ export function RuntimeStatusView({ status }: { status: RuntimeStatus }) {
             Refresh
           </Link>
         </p>
-      </section>
+      </header>
       <p
         className={cn(
           "flex items-center gap-2 rounded-xl border p-4 font-medium",
-          status.overall === "ok" && "border-emerald-200 bg-emerald-50",
-          status.overall === "warning" && "border-amber-200 bg-amber-50",
-          status.overall === "problem" && "border-red-200 bg-red-50",
+          status.overall === "ok" &&
+            "border-emerald-200 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/40",
+          status.overall === "warning" &&
+            "border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/40",
+          status.overall === "problem" &&
+            "border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/40",
         )}
         role="status"
       >
@@ -125,8 +124,8 @@ export function StatusAlert({ status }: { status: RuntimeStatus }) {
       className={cn(
         "mx-auto flex max-w-5xl items-center gap-3 rounded-xl border p-4 transition-colors",
         first.state === "problem"
-          ? "border-red-200 bg-red-50 hover:bg-red-100"
-          : "border-amber-200 bg-amber-50 hover:bg-amber-100",
+          ? "border-red-200 bg-red-50 hover:bg-red-100 dark:border-red-900 dark:bg-red-950/40 dark:hover:bg-red-950/60"
+          : "border-amber-200 bg-amber-50 hover:bg-amber-100 dark:border-amber-900 dark:bg-amber-950/40 dark:hover:bg-amber-950/60",
       )}
       href="/status"
     >

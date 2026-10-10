@@ -337,3 +337,64 @@ test("the Codex runtime shows the run in progress and past outcomes", () => {
   assert.equal(value("Recovered after a crash"), "3");
   assert.deepEqual(runtimeFacts(undefined), []);
 });
+
+test("times are shown in the owner's timezone with its abbreviation", () => {
+  const facts = runtimeFacts(
+    {
+      timeoutSeconds: 300,
+      current: {
+        itemId: "item-1",
+        state: "running",
+        since: "2026-10-09T20:00:00Z",
+      },
+      completed: 0,
+      failed: 0,
+      timedOut: 0,
+      cancelled: 0,
+      recovered: 0,
+    },
+    "Europe/Berlin",
+  );
+  assert.equal(
+    facts.find((fact) => fact.label === "Codex run now")?.value,
+    "running since 9 Oct 2026, 22:00 CEST",
+  );
+  const status = toRuntimeStatus(
+    {
+      ...healthy,
+      processor: { ...processor(), timeZone: "Europe/Berlin" },
+      inbox: inbox({
+        pendingCount: 1,
+        retryingCount: 1,
+        nextRetryAt: "2026-10-09T23:00:30Z",
+        nextRetryReason: "backoff",
+      }),
+    },
+    now,
+    "Europe/Berlin",
+  );
+  assert.equal(status.timeZone, "Europe/Berlin");
+  const fact = (id: string, label: string) =>
+    status.checks
+      .find((entry) => entry.id === id)
+      ?.facts.find((entry) => entry.label === label)?.value;
+  // 23:00 UTC is already the next day in Berlin.
+  assert.equal(
+    fact("inbox", "Next retry"),
+    "10 Oct 2026, 01:00 CEST (backoff)",
+  );
+  assert.equal(fact("processing", "Timezone"), "Europe/Berlin");
+  assert.equal(fact("processing", "Last poll"), "9 Oct 2026, 20:00 CEST");
+});
+
+test("a processor in another timezone than the Dashboard is pointed out", () => {
+  const status = toRuntimeStatus(
+    { ...healthy, processor: { ...processor(), timeZone: "UTC" } },
+    now,
+    "Europe/Berlin",
+  );
+  assert.equal(
+    status.checks[0].facts.find((fact) => fact.label === "Timezone")?.value,
+    "UTC (Dashboard uses Europe/Berlin)",
+  );
+});

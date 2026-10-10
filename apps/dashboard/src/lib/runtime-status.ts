@@ -3,6 +3,11 @@ import { inboxClient } from "@/lib/api/inbox-client";
 import type { components as InboxComponents } from "@/lib/api/generated/inbox";
 import type { components as VoiceComponents } from "@/lib/api/generated/voice";
 import { voiceClient } from "@/lib/api/voice-client";
+import {
+  DEFAULT_TIME_ZONE,
+  dateTimeFormat,
+  userTimeZone,
+} from "@/lib/time-zone";
 
 // The Status page turns supported runtime state into actionable checks:
 // - the processor's private /status endpoint (what the running process saw),
@@ -16,6 +21,8 @@ export type AudioBacklog = VoiceComponents["schemas"]["AudioBacklog"];
 /** Mirrors `Status` in services/mcp/internal/processor/status.go. */
 export type ProcessorStatus = {
   model: string;
+  /** The owner's timezone the planner resolves relative dates in. */
+  timeZone?: string;
   startedAt: string;
   poll: {
     lastAt: string | null;
@@ -86,13 +93,16 @@ function windowLabel(minutes: number | undefined) {
 }
 
 /** The run in progress and what happened to runs since the processor started. */
-export function runtimeFacts(runtime: ProcessorStatus["runtime"]) {
+export function runtimeFacts(
+  runtime: ProcessorStatus["runtime"],
+  timeZone: string = DEFAULT_TIME_ZONE,
+) {
   if (!runtime) return [];
   const facts = [
     {
       label: "Codex run now",
       value: runtime.current
-        ? `${runtime.current.state} since ${formatTime(runtime.current.since)}`
+        ? `${runtime.current.state} since ${formatTime(runtime.current.since, timeZone)}`
         : "none",
     },
     {
@@ -117,7 +127,10 @@ export function runtimeFacts(runtime: ProcessorStatus["runtime"]) {
  * Usage facts exactly as the Codex CLI reported them: one line per metered
  * bucket and window. Nothing is estimated when the read is unavailable.
  */
-export function usageFacts(usage: ProcessorStatus["usage"]) {
+export function usageFacts(
+  usage: ProcessorStatus["usage"],
+  timeZone: string = DEFAULT_TIME_ZONE,
+) {
   const current = usage?.current;
   if (!current) {
     return [
@@ -143,7 +156,7 @@ export function usageFacts(usage: ProcessorStatus["usage"]) {
     for (const window of limit.windows) {
       facts.push({
         label: `${name} ${windowLabel(window.windowMinutes)} usage`,
-        value: `${Math.round(window.usedPercent)}% used${window.resetsAt ? `, resets ${formatTime(window.resetsAt)}` : ""}${limit.reached ? " (limit reached)" : ""}`,
+        value: `${Math.round(window.usedPercent)}% used${window.resetsAt ? `, resets ${formatTime(window.resetsAt, timeZone)}` : ""}${limit.reached ? " (limit reached)" : ""}`,
       });
     }
   }
@@ -155,7 +168,7 @@ export function usageFacts(usage: ProcessorStatus["usage"]) {
   }
   facts.push({
     label: "Usage read",
-    value: `${formatTime(current.checkedAt)}${usage?.error ? " (latest read failed)" : ""}`,
+    value: `${formatTime(current.checkedAt, timeZone)}${usage?.error ? " (latest read failed)" : ""}`,
   });
   return facts;
 }
@@ -194,6 +207,8 @@ export type RuntimeSignals = {
 
 export type RuntimeStatus = {
   checkedAt: string;
+  /** The owner's timezone every time on the page is shown in. */
+  timeZone: string;
   overall: CheckState;
   checks: StatusCheck[];
 };
@@ -210,14 +225,23 @@ export function formatAge(ms: number) {
   return `${Math.floor(hours / 24)} days`;
 }
 
-const timeFormat = new Intl.DateTimeFormat("en-GB", {
-  dateStyle: "medium",
-  timeStyle: "short",
-  timeZone: "UTC",
-});
+const TIME_OPTIONS: Intl.DateTimeFormatOptions = {
+  day: "numeric",
+  month: "short",
+  year: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  timeZoneName: "short",
+};
 
-export function formatTime(value: string | null | undefined) {
-  return value ? `${timeFormat.format(new Date(value))} UTC` : "never";
+/** For example "9 Oct 2026, 20:22 CEST" in the owner's timezone. */
+export function formatTime(
+  value: string | null | undefined,
+  timeZone: string = DEFAULT_TIME_ZONE,
+) {
+  return value
+    ? dateTimeFormat(timeZone, TIME_OPTIONS).format(new Date(value))
+    : "never";
 }
 
 const SEVERITY: Record<CheckState, number> = { ok: 0, warning: 1, problem: 2 };
@@ -229,7 +253,10 @@ function worst(states: CheckState[]): CheckState {
   );
 }
 
-function processingCheck(processor: ProcessorStatus | null): StatusCheck {
+function processingCheck(
+  processor: ProcessorStatus | null,
+  timeZone: string,
+): StatusCheck {
   const base = { id: "processing" as const, title: "Automatic processing" };
   if (!processor) {
     return {
@@ -244,6 +271,17 @@ function processingCheck(processor: ProcessorStatus | null): StatusCheck {
   const { codex, poll } = processor;
   const facts = [
     { label: "Model", value: processor.model },
+    ...(processor.timeZone
+      ? [
+          {
+            label: "Timezone",
+            value:
+              processor.timeZone === timeZone
+                ? processor.timeZone
+                : `${processor.timeZone} (Dashboard uses ${timeZone})`,
+          },
+        ]
+      : []),
     {
       label: "Codex sign-in",
       value:
@@ -253,10 +291,13 @@ function processingCheck(processor: ProcessorStatus | null): StatusCheck {
             ? "signed in"
             : "signed out",
     },
-    { label: "Last poll", value: formatTime(poll.lastAt) },
-    { label: "Last Codex success", value: formatTime(codex.lastSucceededAt) },
-    ...runtimeFacts(processor.runtime),
-    ...usageFacts(processor.usage),
+    { label: "Last poll", value: formatTime(poll.lastAt, timeZone) },
+    {
+      label: "Last Codex success",
+      value: formatTime(codex.lastSucceededAt, timeZone),
+    },
+    ...runtimeFacts(processor.runtime, timeZone),
+    ...usageFacts(processor.usage, timeZone),
   ];
   if (poll.lastError) {
     return {
@@ -288,7 +329,7 @@ function processingCheck(processor: ProcessorStatus | null): StatusCheck {
         detail: codex.lastError,
         action: `Captures wait in Inbox and are processed automatically once the limit resets${
           limitResetsAt(processor.usage)
-            ? ` (Codex reports ${formatTime(limitResetsAt(processor.usage))})`
+            ? ` (Codex reports ${formatTime(limitResetsAt(processor.usage), timeZone)})`
             : ""
         }. To resume sooner, add Codex credits or switch LIFE_OS_CODEX_MODEL.`,
         facts: [
@@ -334,7 +375,11 @@ function retryReasonLabel(reason: string) {
   return reason;
 }
 
-function inboxCheck(inbox: InboxBacklog | null, now: Date): StatusCheck {
+function inboxCheck(
+  inbox: InboxBacklog | null,
+  now: Date,
+  timeZone: string,
+): StatusCheck {
   const base = { id: "inbox" as const, title: "Inbox backlog" };
   if (!inbox) {
     return {
@@ -359,7 +404,7 @@ function inboxCheck(inbox: InboxBacklog | null, now: Date): StatusCheck {
     {
       label: "Next retry",
       value: inbox.nextRetryAt
-        ? `${formatTime(inbox.nextRetryAt)}${inbox.nextRetryReason ? ` (${retryReasonLabel(inbox.nextRetryReason)})` : ""}`
+        ? `${formatTime(inbox.nextRetryAt, timeZone)}${inbox.nextRetryReason ? ` (${retryReasonLabel(inbox.nextRetryReason)})` : ""}`
         : "none scheduled",
     },
   ];
@@ -385,7 +430,10 @@ function inboxCheck(inbox: InboxBacklog | null, now: Date): StatusCheck {
         "The processor retries them automatically at the scheduled time. The error above is the latest failure.",
       facts: [
         ...facts,
-        { label: "Latest failure", value: formatTime(inbox.lastFailureAt) },
+        {
+          label: "Latest failure",
+          value: formatTime(inbox.lastFailureAt, timeZone),
+        },
       ],
     };
   }
@@ -410,7 +458,11 @@ function inboxCheck(inbox: InboxBacklog | null, now: Date): StatusCheck {
   };
 }
 
-function voiceCheck(voice: AudioBacklog | null, now: Date): StatusCheck {
+function voiceCheck(
+  voice: AudioBacklog | null,
+  now: Date,
+  timeZone: string,
+): StatusCheck {
   const base = { id: "voice" as const, title: "Voice transcription" };
   if (!voice) {
     return {
@@ -433,7 +485,9 @@ function voiceCheck(voice: AudioBacklog | null, now: Date): StatusCheck {
     { label: "Waiting to be retried", value: String(voice.retryableCount) },
     {
       label: "Next retry",
-      value: voice.nextRetryAt ? formatTime(voice.nextRetryAt) : "none",
+      value: voice.nextRetryAt
+        ? formatTime(voice.nextRetryAt, timeZone)
+        : "none",
     },
   ];
   if (!voice.whisperReady) {
@@ -507,15 +561,17 @@ function servicesCheck(services: RuntimeSignals["services"]): StatusCheck {
 export function toRuntimeStatus(
   signals: RuntimeSignals,
   now: Date,
+  timeZone: string = DEFAULT_TIME_ZONE,
 ): RuntimeStatus {
   const checks = [
-    processingCheck(signals.processor),
-    inboxCheck(signals.inbox, now),
-    voiceCheck(signals.voice, now),
+    processingCheck(signals.processor, timeZone),
+    inboxCheck(signals.inbox, now, timeZone),
+    voiceCheck(signals.voice, now, timeZone),
     servicesCheck(signals.services),
   ];
   return {
     checkedAt: now.toISOString(),
+    timeZone,
     overall: worst(checks.map((check) => check.state)),
     checks,
   };
@@ -591,5 +647,9 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
       ),
     ),
   ]);
-  return toRuntimeStatus({ processor, inbox, voice, services }, new Date());
+  return toRuntimeStatus(
+    { processor, inbox, voice, services },
+    new Date(),
+    userTimeZone(),
+  );
 }

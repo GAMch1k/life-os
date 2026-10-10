@@ -11,6 +11,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	// The owner's timezone must resolve even in an image without zoneinfo.
+	_ "time/tzdata"
 
 	"github.com/GAMch1k/life-os/services/mcp/internal/processor"
 )
@@ -28,6 +30,9 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
+	for _, warning := range cfg.Warnings {
+		fmt.Fprintln(os.Stderr, warning)
+	}
 	// Resolve the configured Codex binary once, so every run uses the same
 	// executable and a missing CLI fails loudly at startup.
 	binary, err := exec.LookPath(cfg.CodexCommand)
@@ -35,7 +40,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Codex CLI %q not found: %v\n", cfg.CodexCommand, err)
 		os.Exit(78)
 	}
-	planner := processor.CodexCLI{Command: binary, Model: cfg.Model, ReasoningEffort: cfg.ReasoningEffort, WorkDir: cfg.WorkDir, Timeout: cfg.CodexTimeout, Slots: make(chan struct{}, cfg.MaxConcurrency)}
+	planner := processor.CodexCLI{Command: binary, Model: cfg.Model, ReasoningEffort: cfg.ReasoningEffort, WorkDir: cfg.WorkDir, Timeout: cfg.CodexTimeout, Slots: make(chan struct{}, cfg.MaxConcurrency), TimeZone: cfg.TimeZone}
 	if *usage {
 		report, err := planner.Usage(context.Background())
 		if err != nil {
@@ -62,6 +67,7 @@ func main() {
 		runner.OnRuntime = monitor.RecordRuntime
 		runner.OnTokens = monitor.RecordTokens
 		monitor.SetReasoningEffort(cfg.ReasoningEffort)
+		monitor.SetTimeZone(cfg.TimeZone.String())
 		runner.Planner = monitor.Monitored(planner)
 		runner.Retry = processor.RetryPolicy{RecoveryAt: usageRecovery(planner, monitor)}
 		if *dryRun {

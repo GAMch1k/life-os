@@ -29,6 +29,7 @@ LIFE_OS_CODEX_HOME_HOST_PATH=/absolute/path/to/.codex
 LIFE_OS_CODEX_RUNTIME_UID=1000 # output of: id -u
 LIFE_OS_CODEX_MODEL=gpt-5.6-luna
 LIFE_OS_CODEX_REASONING_EFFORT=medium
+LIFE_OS_TIMEZONE=Europe/Berlin # your IANA timezone; default UTC
 ```
 
 The processor bind-mounts that path read-only, runs as the owning UID, and copies only the authentication and optional Codex configuration to a container tmpfs. Do not mount a credential as a writable volume and do not add `auth.json` or API keys to `.env`. After deployment, verify from the processor container itself with `docker compose exec processor codex login status`; it should report the already authenticated ChatGPT session. Its private readiness probe only becomes ready after a successful polling pass through MCP.
@@ -39,6 +40,15 @@ Optional `.env` settings for the processor:
 - `LIFE_OS_CODEX_TIMEOUT_SECONDS` (default 300): the deadline of one planning run.
 - `LIFE_OS_CODEX_MAX_CONCURRENCY` (default 1): concurrent Codex runs.
 - `LIFE_OS_PROCESSOR_STALE_AFTER_SECONDS` (default 120, at least 90): when an attempt left by a crashed processor is reconciled.
+
+## Owner timezone
+
+`LIFE_OS_TIMEZONE` is the owner's IANA timezone (default `UTC`). Set it before the processor and Dashboard start; changing it needs a restart of both (`docker compose up -d processor dashboard`). An unknown name falls back to UTC; the processor logs it at startup and its zone is listed under Automatic processing on `/status`.
+
+- **Processor.** Captures such as "tomorrow at 10" or "on Friday at 15:00" are resolved in this timezone, from the moment the capture was made, and stored as the correct instants. See [MCP and AI](../services/mcp.md#dates-and-the-owners-timezone).
+- **Dashboard.** "Today" (Home's overdue and due-today Tasks, the Calendar's Today and Upcoming) uses this timezone's days, and Status and Calendar show times in it, whatever the server's or the browser's own timezone.
+
+Changing the timezone does not rewrite stored data: Tasks and events keep their instants and are shown in the new zone.
 
 A redeploy or `docker compose stop processor` cancels a run in progress and hands the capture back, so the capture is not lost. See [MCP and AI](../services/mcp.md#codex-runtime).
 
