@@ -182,14 +182,16 @@ func run(ctx context.Context) error {
 }
 
 // traceOf reads the workflow trace an MCP client sent with its HTTP request.
-// Whoever calls MCP is an agent, so an unnamed caller is recorded as "mcp".
+// Whoever calls MCP is an agent, so an unnamed caller (or one claiming to be
+// the user) is recorded as "mcp". The trace always carries an actor, so the
+// owning services' actor gate accepts MCP's calls.
 func traceOf(req *mcp.CallToolRequest) activity.Trace {
 	get := func(string) string { return "" }
 	if req != nil && req.Extra != nil && req.Extra.Header != nil {
 		get = req.Extra.Header.Get
 	}
 	trace := activity.TraceFromHeaders(get)
-	if trace.Actor.Kind == "user" {
+	if trace.Actor.IsZero() || trace.Actor.Kind == "user" {
 		trace.Actor = activity.Agent("mcp")
 	}
 	if trace.CorrelationID == "" {

@@ -111,30 +111,60 @@ func (q *Queries) GetTask(ctx context.Context, id pgtype.UUID) (Task, error) {
 const listTasks = `-- name: ListTasks :many
 SELECT id, title, notes, due_at, completed_at, recurrence_frequency, recurrence_interval, recurrence_until, created_at, updated_at, automation_idempotency_key, automation_payload_hash FROM tasks
 WHERE ($1::boolean IS NULL OR (completed_at IS NOT NULL) = $1::boolean)
-  AND ($2::text IS NULL OR title ILIKE '%' || $2::text || '%' OR notes ILIKE '%' || $2::text || '%')
+  AND ($2::boolean IS NULL OR (due_at IS NULL) = $2::boolean)
+  AND ($3::text IS NULL OR title ILIKE '%' || $3::text || '%' OR notes ILIKE '%' || $3::text || '%')
   AND (
-    $3::timestamptz IS NULL
-    OR due_at <= $3::timestamptz
-    OR ($4::boolean AND due_at IS NULL)
+    $4::timestamptz IS NULL
+    OR due_at <= $4::timestamptz
+    OR ($5::boolean AND due_at IS NULL)
   )
-ORDER BY completed_at NULLS FIRST, due_at NULLS LAST, created_at DESC
-LIMIT $5
+  AND (
+    $6::uuid IS NULL
+    OR COALESCE(completed_at, 'infinity'::timestamptz) < COALESCE($7::timestamptz, 'infinity'::timestamptz)
+    OR (
+      COALESCE(completed_at, 'infinity'::timestamptz) = COALESCE($7::timestamptz, 'infinity'::timestamptz)
+      AND (
+        COALESCE(due_at, 'infinity'::timestamptz) > COALESCE($8::timestamptz, 'infinity'::timestamptz)
+        OR (
+          COALESCE(due_at, 'infinity'::timestamptz) = COALESCE($8::timestamptz, 'infinity'::timestamptz)
+          AND (created_at, id) < ($9::timestamptz, $6::uuid)
+        )
+      )
+    )
+  )
+ORDER BY completed_at DESC NULLS FIRST, due_at ASC NULLS LAST, created_at DESC, id DESC
+LIMIT $10
 `
 
 type ListTasksParams struct {
-	CompletedFilter *bool
-	SearchQuery     *string
-	DueBefore       pgtype.Timestamptz
-	IncludeUndated  bool
-	PageLimit       int32
+	CompletedFilter  *bool
+	UndatedFilter    *bool
+	SearchQuery      *string
+	DueBefore        pgtype.Timestamptz
+	IncludeUndated   bool
+	AfterID          pgtype.UUID
+	AfterCompletedAt pgtype.Timestamptz
+	AfterDueAt       pgtype.Timestamptz
+	AfterCreatedAt   pgtype.Timestamptz
+	PageLimit        int32
 }
 
+// Open Tasks first (soonest due, undated last), then completed Tasks, most
+// recently completed first. The after_* arguments are the previous page's last
+// row: a keyset cursor over exactly the ORDER BY, where a missing timestamp
+// sorts as 'infinity' (NULLS FIRST under DESC, NULLS LAST under ASC) and id
+// breaks ties, so paging never skips or repeats a Task.
 func (q *Queries) ListTasks(ctx context.Context, arg ListTasksParams) ([]Task, error) {
 	rows, err := q.db.Query(ctx, listTasks,
 		arg.CompletedFilter,
+		arg.UndatedFilter,
 		arg.SearchQuery,
 		arg.DueBefore,
 		arg.IncludeUndated,
+		arg.AfterID,
+		arg.AfterCompletedAt,
+		arg.AfterDueAt,
+		arg.AfterCreatedAt,
 		arg.PageLimit,
 	)
 	if err != nil {

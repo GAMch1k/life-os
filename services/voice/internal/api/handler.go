@@ -15,6 +15,7 @@ import (
 	"github.com/oapi-codegen/runtime/types"
 
 	"github.com/GAMch1k/life-os/pkg/activity"
+	"github.com/GAMch1k/life-os/pkg/httpserver"
 	"github.com/GAMch1k/life-os/services/voice/internal/api/generated"
 	store "github.com/GAMch1k/life-os/services/voice/internal/repository/generated"
 	"github.com/GAMch1k/life-os/services/voice/internal/storage"
@@ -88,10 +89,12 @@ func (h *Handler) CreateAudioJob(c fiber.Ctx) error {
 		return fiber.NewError(400, "audio is required")
 	}
 	contentType, err := storage.ValidateAudio(file, h.maxUploadBytes)
-	if err != nil {
-		if file.Size > h.maxUploadBytes {
-			return fiber.NewError(413, err.Error())
-		}
+	switch {
+	case errors.Is(err, storage.ErrAudioTooLarge):
+		return httpserver.NewError(413, "audio_too_large", fmt.Sprintf("Audio exceeds the %d-byte upload limit", h.maxUploadBytes))
+	case errors.Is(err, storage.ErrUnsupportedAudio):
+		return httpserver.NewError(400, "unsupported_audio", "Audio must be a WAV, WebM, Ogg, or MP4 recording")
+	case err != nil:
 		return fiber.NewError(400, err.Error())
 	}
 	source := c.FormValue("source", "web")

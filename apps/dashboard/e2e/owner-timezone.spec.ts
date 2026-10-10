@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "./fixtures";
 
 const enabled = Boolean(process.env.LIFE_OS_E2E_URL);
 
@@ -6,10 +6,16 @@ const format =
   (timeZone: string, options: Intl.DateTimeFormatOptions) => (date: Date) =>
     new Intl.DateTimeFormat("en-GB", { ...options, timeZone }).format(date);
 
+const browserTimeZone = (page: Page) =>
+  page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
+
+const hydrationProblem =
+  /hydrat|did not match|Minified React error #4(18|19|21|23|25)/i;
+
 test.describe("Owner timezone", () => {
   test.skip(!enabled, "set LIFE_OS_E2E_URL to run against the isolated stack");
 
-  test("Calendar shows event times and today in the owner's timezone", async ({
+  test("Calendar shows event times and today in the browser's timezone", async ({
     page,
     request,
   }) => {
@@ -31,10 +37,13 @@ test.describe("Owner timezone", () => {
     await expect(
       page.getByRole("heading", { level: 1, name: "Calendar" }),
     ).toBeVisible();
-    // The Dashboard's LIFE_OS_TIMEZONE, which the page renders times in.
-    const timeZone =
-      (await page.locator("#calendar").getAttribute("data-time-zone")) ?? "";
-    expect(timeZone).not.toBe("");
+    // A first visit renders in LIFE_OS_TIMEZONE and then refreshes once in
+    // the browser's zone, which every time on the page is shown in.
+    const timeZone = await browserTimeZone(page);
+    await expect(page.locator("#calendar")).toHaveAttribute(
+      "data-time-zone",
+      timeZone,
+    );
 
     const day = format(timeZone, {
       weekday: "short",
@@ -54,6 +63,44 @@ test.describe("Owner timezone", () => {
     await expect(
       section.getByRole("listitem").filter({ hasText: title }),
     ).toContainText(label);
+  });
+
+  test.describe("in a New York browser", () => {
+    test.use({ timezoneId: "America/New_York" });
+
+    test("pages re-render in the browser's timezone without hydration errors", async ({
+      context,
+      page,
+    }) => {
+      const problems: string[] = [];
+      page.on("pageerror", (error) => problems.push(error.message));
+      page.on("console", (message) => {
+        if (message.type() === "error" && hydrationProblem.test(message.text()))
+          problems.push(message.text());
+      });
+      await context.clearCookies();
+      await page.goto("/tasks");
+      const workspace = page.getByTestId("tasks-workspace");
+      await expect(workspace).toHaveAttribute(
+        "data-time-zone",
+        "America/New_York",
+      );
+      const stored = (await context.cookies()).find(
+        (cookie) => cookie.name === "lifeos-tz",
+      );
+      expect(decodeURIComponent(stored?.value ?? "")).toBe("America/New_York");
+      // Later visits render in the browser's zone straight away.
+      for (const path of ["/", "/inbox", "/calendar", "/activity", "/status"]) {
+        await page.goto(path);
+        await page.waitForLoadState("networkidle");
+      }
+      await page.goto("/tasks");
+      await expect(workspace).toHaveAttribute(
+        "data-time-zone",
+        "America/New_York",
+      );
+      expect(problems).toEqual([]);
+    });
   });
 
   test("Calendar and Status fit a 360px screen", async ({ page }) => {

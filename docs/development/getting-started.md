@@ -11,6 +11,8 @@ make check
 
 `make life-up` builds/starts all containers. `make infra-down` preserves data; `make infra-reset` removes persistent Compose volumes and is destructive. Use `docker compose ps` and `docker compose logs <service>` for diagnosis.
 
+`make life-smoke` writes a few small records to the running stack; like every `tools/` script, it sends `X-Life-OS-Actor: dev:<script>`, so the Event Log shows them as a developer tool, never as the owner. Any write a development tool or agent makes against live data must do the same; see [Development tools and live data](../../CONTRIBUTING.md#development-tools-and-live-data).
+
 `make verify-clean-db` and `make e2e-smoke` use the explicitly guarded
 `lifeos-verify` project. Its PostgreSQL, Voice-audio, Whisper-model, network,
 and container resources are separate from the running `lifeos` project and are
@@ -37,6 +39,6 @@ actual deployed gateway. The calendar test requires
 explicit `LIFE_OS_E2E_LIVE_FINANCE_ACCOUNT_ID` for a dedicated test account.
 They create real records and should not be pointed at personal production data.
 
-Create a service with `make create-service SERVICE=<kebab-name>`. To add/change an endpoint: edit that service OpenAPI first, regenerate with `make check`, implement its adapter/use case/repository, add tests, expose a gateway route only when appropriate, and update these docs. Create migrations with `make db-migration-new SERVICE=<name> NAME=<name>`; they are service-owned, ordered, and tested against disposable stacks.
+Create a service with `make create-service SERVICE=<kebab-name>`. A service whose writes are user-facing mounts its API behind `activity.RequireActor` (see `services/tasks/internal/api/routes.go`), so every write must name its actor. To add/change an endpoint: edit that service OpenAPI first, regenerate with `make check`, implement its adapter/use case/repository, add tests, expose a gateway route only when appropriate, and update these docs. Create migrations with `make db-migration-new SERVICE=<name> NAME=<name>`; they are service-owned, ordered, and tested against disposable stacks.
 
 Ticket workflow: branch from primary, make small logical commits, run relevant end-of-ticket verification, update docs/Notion, merge, verify primary clean, then mark Done. See [data and code generation](data-and-codegen.md).

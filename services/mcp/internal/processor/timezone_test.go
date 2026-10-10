@@ -141,10 +141,74 @@ printf '{}' > "$out"`)
 	}
 }
 
-type capturePlanner struct{ capturedAt []time.Time }
+func TestPlanningUsesTheCapturesTimeZoneElseTheConfiguredOne(t *testing.T) {
+	newYork, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	configured := CodexCLI{TimeZone: berlin(t)}
+	for _, tc := range []struct {
+		name string
+		ctx  context.Context
+		want *time.Location
+	}{
+		{"the capturing browser's zone wins", WithCaptureTimeZone(context.Background(), "America/New_York"), newYork},
+		{"an unknown zone falls back", WithCaptureTimeZone(context.Background(), "Mars/Olympus_Mons"), configured.TimeZone},
+		{"Local is not a zone", WithCaptureTimeZone(context.Background(), "Local"), configured.TimeZone},
+		{"an empty zone falls back", WithCaptureTimeZone(context.Background(), ""), configured.TimeZone},
+		{"no zone falls back", context.Background(), configured.TimeZone},
+	} {
+		if got := configured.location(tc.ctx); got.String() != tc.want.String() {
+			t.Errorf("%s: location = %s, want %s", tc.name, got, tc.want)
+		}
+	}
+	// Without a configured zone either, timeContext and TZ fall back to UTC.
+	if got := (CodexCLI{}).location(context.Background()); got != nil {
+		t.Errorf("unconfigured location = %s, want nil (UTC)", got)
+	}
+}
+
+func TestPlanPromptAndCodexEnvironmentUseTheCapturesTimeZone(t *testing.T) {
+	dir := t.TempDir()
+	promptFile, envFile := filepath.Join(dir, "prompt"), filepath.Join(dir, "env")
+	codex := fakeCodex(t, `env > `+envFile+`
+printf '{}' > "$out"`)
+	wrapper := filepath.Join(dir, "codex-prompt")
+	script := "#!/bin/sh\nfor last in \"$@\"; do :; done\nprintf '%s' \"$last\" > " + promptFile + "\nexec " + codex + " \"$@\"\n"
+	if err := os.WriteFile(wrapper, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	captured := time.Date(2026, 10, 9, 23, 41, 0, 0, time.UTC)
+	cli := CodexCLI{Command: wrapper, WorkDir: dir, TimeZone: berlin(t), Now: func() time.Time { return captured.Add(time.Minute) }}
+	ctx := WithCaptureTimeZone(WithCapturedAt(context.Background(), captured), "America/New_York")
+	if _, err := cli.Plan(ctx, `{"content":"Remind me to call mom tomorrow at 10."}`); err != nil {
+		t.Fatal(err)
+	}
+	prompt, _ := os.ReadFile(promptFile)
+	// 23:41 UTC on Friday is still Friday evening in New York.
+	for _, want := range []string{
+		"The owner's timezone is America/New_York. The item was captured on Friday 2026-10-09 19:41 (-04:00) there;",
+		"tomorrow at 10:00 is 2026-10-10T10:00:00-04:00",
+	} {
+		if !strings.Contains(string(prompt), want) {
+			t.Errorf("prompt lacks %q:\n%s", want, prompt)
+		}
+	}
+	env, _ := os.ReadFile(envFile)
+	if !strings.Contains(string(env), "TZ=America/New_York\n") {
+		t.Fatalf("Codex env lacks the capture's TZ:\n%s", env)
+	}
+}
+
+type capturePlanner struct {
+	capturedAt []time.Time
+	timeZones  []string
+}
 
 func (p *capturePlanner) Plan(ctx context.Context, _ string) (string, error) {
 	p.capturedAt = append(p.capturedAt, capturedAtFrom(ctx))
+	zone, _ := ctx.Value(captureTimeZoneKey{}).(string)
+	p.timeZones = append(p.timeZones, zone)
 	return `{"actions":[],"ambiguous":true,"confidence":0.1,"reason":"unclear"}`, nil
 }
 
@@ -157,6 +221,20 @@ func TestRunnerPlansWithTheItemsCaptureTime(t *testing.T) {
 	}
 	if len(planner.capturedAt) != 1 || !planner.capturedAt[0].Equal(captured) {
 		t.Fatalf("planned with capture times %v, want %s", planner.capturedAt, captured)
+	}
+	if planner.timeZones[0] != "" {
+		t.Fatalf("a capture without metadata planned with zone %q", planner.timeZones[0])
+	}
+}
+
+func TestRunnerPlansInTheCapturingBrowsersTimeZone(t *testing.T) {
+	tools := &corpusTools{item: inboxItem{ID: "item-1", Content: "call mom tomorrow at 10", Source: "manual", SourceMetadata: map[string]any{"timeZone": "America/New_York"}, CreatedAt: time.Now()}}
+	planner := &capturePlanner{}
+	if _, err := (Runner{Planner: planner, Tools: tools, Model: "gpt-5.6-luna"}).Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(planner.timeZones) != 1 || planner.timeZones[0] != "America/New_York" {
+		t.Fatalf("planned with zones %v, want America/New_York", planner.timeZones)
 	}
 }
 

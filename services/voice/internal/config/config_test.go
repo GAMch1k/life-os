@@ -52,3 +52,18 @@ func mapLookup(values map[string]string) func(string) (string, bool) {
 		return value, ok
 	}
 }
+
+func TestRequestBodyLimitLeavesRoomForMultipartFraming(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := LoadFrom(mapLookup(map[string]string{
+		"DATABASE_URL": "postgres://voice_user:secret@localhost/voice_db",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 25 MiB of audio plus 1 MiB of framing: the gateway's 26m body limit.
+	if cfg.MaxUploadBytes != 25<<20 || cfg.RequestBodyLimit() != 26<<20 {
+		t.Fatalf("MaxUploadBytes %d, RequestBodyLimit %d", cfg.MaxUploadBytes, cfg.RequestBodyLimit())
+	}
+}

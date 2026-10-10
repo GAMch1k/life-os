@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 
 const enabled = Boolean(process.env.LIFE_OS_E2E_URL);
 
@@ -100,6 +100,136 @@ test.describe("Event Log", () => {
     ).toBeVisible();
     await selected.getByText("Diagnostics").click();
     await expect(selected.getByText(`task/${task!.id}`)).toBeVisible();
+  });
+
+  test("expands a shortened summary, copies diagnostics, and scrolls the entry on its own", async ({
+    context,
+    page,
+    request,
+  }) => {
+    // A Human Review request whose reason is far longer than its summary
+    // keeps: Inbox cuts the summary to 120 characters and keeps the full
+    // reason in the event's data.
+    const stamp = Date.now();
+    const reason = `Two Tasks match P8 log ${stamp}. ${"The processor could not tell which one was meant, so it asks before changing anything. ".repeat(8)}End of reason ${stamp}.`;
+    const item = await request.post("/api/inbox/v1/inbox-items", {
+      data: { content: `Complete P8 log ${stamp}`, source: "manual" },
+    });
+    expect(item.status()).toBe(201);
+    const inbox = await item.json();
+    try {
+      const attempt = await request.post(
+        `/api/inbox/v1/inbox-items/${inbox.id}/processing-attempts`,
+        {
+          data: {
+            idempotencyKey: `log-${stamp}`,
+            agentName: "e2e",
+            modelProfile: "e2e",
+          },
+        },
+      );
+      expect(attempt.status()).toBe(201);
+      const review = await request.post(
+        `/api/inbox/v1/inbox-items/${inbox.id}/human-review`,
+        {
+          data: {
+            attemptId: (await attempt.json()).id,
+            proposedAction: {
+              tool: "task_complete",
+              arguments: { taskQuery: `P8 log ${stamp}` },
+            },
+            candidates: [],
+            errorSummary: reason,
+          },
+        },
+      );
+      expect(review.ok()).toBeTruthy();
+      let eventId: string | undefined;
+      await expect
+        .poll(async () => {
+          const events = await request.get(
+            `/api/activity/v1/activity-events?subjectType=inbox_item&subjectId=${inbox.id}&type=inbox.human_review.requested`,
+          );
+          eventId = (await events.json()).items?.[0]?.id;
+          return Boolean(eventId);
+        })
+        .toBeTruthy();
+
+      await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+      await page.setViewportSize({ width: 1280, height: 700 });
+      await page.goto(`/activity?event=${eventId}`);
+      const selected = page.getByRole("region", { name: "Selected event" });
+      await expect(
+        selected.getByText("Human Review requested").first(),
+      ).toBeVisible();
+
+      // The summary is shortened by default and expands to the whole reason.
+      const more = selected.getByRole("button", { name: "Show more" });
+      await expect(more).toHaveAttribute("aria-expanded", "false");
+      const summary = page.locator(
+        `[id="${await more.getAttribute("aria-controls")}"]`,
+      );
+      await expect(summary).toContainText(`Two Tasks match P8 log ${stamp}.`);
+      await expect(summary).not.toContainText(`End of reason ${stamp}.`);
+      await more.click();
+      const less = selected.getByRole("button", { name: "Show less" });
+      await expect(less).toHaveAttribute("aria-expanded", "true");
+      await expect(summary).toHaveText(`Needs your decision: ${reason}`);
+      await less.click();
+      await expect(more).toHaveAttribute("aria-expanded", "false");
+      await expect(summary).not.toContainText(`End of reason ${stamp}.`);
+      await more.click();
+
+      // On a laptop screen the tall entry scrolls by itself and stays fully
+      // in view below the 48px header, wherever the page is scrolled.
+      await selected.getByText("Diagnostics", { exact: true }).click();
+      const pane = () =>
+        selected.evaluate((element) => {
+          const box = element.getBoundingClientRect();
+          return {
+            overflowY: getComputedStyle(element).overflowY,
+            scrollable: element.scrollHeight > element.clientHeight,
+            top: Math.round(box.top),
+            bottom: Math.round(box.bottom),
+          };
+        });
+      for (const end of ["bottom", "top"]) {
+        await page.evaluate(
+          (y) => window.scrollTo(0, y),
+          end === "top" ? 0 : 1_000_000,
+        );
+        await expect
+          .poll(pane)
+          .toMatchObject({ overflowY: "auto", scrollable: true });
+        await expect.poll(async () => (await pane()).top).toBeGreaterThan(48);
+        await expect
+          .poll(async () => (await pane()).bottom)
+          .toBeLessThanOrEqual(700);
+      }
+      // Scrolling over it moves only the entry, not the page or the list.
+      await selected.evaluate((element) => element.scrollTo(0, 0));
+      await selected
+        .getByRole("heading", { name: "What led here", exact: true })
+        .hover();
+      const paneScroll = await selected.evaluate(
+        (element) => element.scrollTop,
+      );
+      const pageScroll = await page.evaluate(() => window.scrollY);
+      await page.mouse.wheel(0, 3000);
+      await expect
+        .poll(() => selected.evaluate((element) => element.scrollTop))
+        .toBeGreaterThan(paneScroll);
+      expect(await page.evaluate(() => window.scrollY)).toBe(pageScroll);
+
+      // Diagnostics copies exactly the event data it shows.
+      await selected.getByRole("button", { name: "Copy diagnostics" }).click();
+      await expect(selected.getByRole("status")).toHaveText("Copied");
+      const copied = await page.evaluate(() => navigator.clipboard.readText());
+      expect(copied).toBe(await selected.locator("pre").textContent());
+      expect(JSON.parse(copied).reason).toBe(reason);
+    } finally {
+      await request.post(`/api/inbox/v1/inbox-items/${inbox.id}/discard`);
+    }
   });
 
   test("explains an empty agent domain and fits a phone screen", async ({

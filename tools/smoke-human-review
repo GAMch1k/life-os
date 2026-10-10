@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Writes are attributed to this script as a development tool, never to the
+# owner (CONTRIBUTING.md, "Development tools and live data").
+actor=(-H 'X-Life-OS-Actor: dev:smoke-human-review')
+
 compose=(./tools/verify-compose)
 cleanup() { "${compose[@]}" down --volumes --remove-orphans >/dev/null; }
 trap cleanup EXIT
@@ -12,9 +16,9 @@ for service in inbox tasks; do
 done
 stamp=$(date +%s)
 title="P8 Human Review $stamp"
-first=$(curl --fail --silent -H 'content-type: application/json' --data "$(jq -nc --arg title "$title" '{title:$title}')" "$gateway/api/tasks/v1/tasks" | jq -r '.id')
-second=$(curl --fail --silent -H 'content-type: application/json' --data "$(jq -nc --arg title "$title" '{title:$title}')" "$gateway/api/tasks/v1/tasks" | jq -r '.id')
-item=$(curl --fail --silent -H 'content-type: application/json' --data "$(jq -nc --arg content "Mark the task titled $title as done." '{content:$content,source:"web"}')" "$gateway/api/inbox/v1/inbox-items" | jq -r '.id')
+first=$(curl "${actor[@]}" --fail --silent -H 'content-type: application/json' --data "$(jq -nc --arg title "$title" '{title:$title}')" "$gateway/api/tasks/v1/tasks" | jq -r '.id')
+second=$(curl "${actor[@]}" --fail --silent -H 'content-type: application/json' --data "$(jq -nc --arg title "$title" '{title:$title}')" "$gateway/api/tasks/v1/tasks" | jq -r '.id')
+item=$(curl "${actor[@]}" --fail --silent -H 'content-type: application/json' --data "$(jq -nc --arg content "Mark the task titled $title as done." '{content:$content,source:"web"}')" "$gateway/api/inbox/v1/inbox-items" | jq -r '.id')
 for _ in $(seq 1 90); do
   state=$(curl --fail --silent "$gateway/api/inbox/v1/inbox-items/$item" | jq -r '.state')
   [ "$state" = human_review ] && break
@@ -26,7 +30,7 @@ candidate=$(jq -r '.processingMetadata.humanReview.candidates[0].id' <<<"$review
 jq -e --arg first "$first" --arg second "$second" '(.processingMetadata.humanReview.candidates | map(.id) | sort) == ([$first, $second] | sort)' <<<"$review" >/dev/null
 curl --fail --silent "$gateway/api/tasks/v1/tasks/$first" | jq -e '.completed == false' >/dev/null
 curl --fail --silent "$gateway/api/tasks/v1/tasks/$second" | jq -e '.completed == false' >/dev/null
-curl --fail --silent -H 'content-type: application/json' --data "$(jq -nc --arg candidateId "$candidate" '{candidateId:$candidateId}')" "$gateway/api/inbox/v1/inbox-items/$item/human-review/resolve" >/dev/null
+curl "${actor[@]}" --fail --silent -H 'content-type: application/json' --data "$(jq -nc --arg candidateId "$candidate" '{candidateId:$candidateId}')" "$gateway/api/inbox/v1/inbox-items/$item/human-review/resolve" >/dev/null
 for _ in $(seq 1 90); do
   task=$(curl --fail --silent "$gateway/api/tasks/v1/tasks/$candidate")
   item_state=$(curl --fail --silent "$gateway/api/inbox/v1/inbox-items/$item" | jq -r '.state')

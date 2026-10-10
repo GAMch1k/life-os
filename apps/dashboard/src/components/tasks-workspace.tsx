@@ -1,6 +1,12 @@
 "use client";
 
-import { CalendarDays, CalendarRange, ChevronDown, List } from "lucide-react";
+import {
+  CalendarDays,
+  CalendarRange,
+  ChevronDown,
+  ChevronRight,
+  List,
+} from "lucide-react";
 import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 import { enGB } from "react-day-picker/locale/en-GB";
@@ -14,14 +20,20 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { usePersistentToggle } from "@/lib/persistent-toggle";
 import type { Task } from "@/lib/tasks-summary";
 import {
+  OPEN_TASKS_CAP,
+  RECENT_COMPLETED_DAYS,
   type TasksWorkspaceState,
   dayLabel,
   daysWithTasks,
   dueDay,
+  fetchTaskPage,
   groupTasks,
+  recentCompletedSince,
   relativeDayLabel,
+  splitCompleted,
   weekOf,
 } from "@/lib/tasks-workspace";
 import { dayKey, startOfDay } from "@/lib/time-zone";
@@ -29,21 +41,58 @@ import { cn } from "@/lib/utils";
 
 type View = "list" | "schedule";
 
+/** Undated Tasks listed before "Show all". */
+const UNDATED_PREVIEW = 5;
+/** Older completed Tasks revealed per "Show older". */
+const OLDER_STEP = 20;
+/** localStorage keys for the sections' expanded state. */
+const UNDATED_EXPANDED = "lifeos.tasks.undated.expanded";
+const COMPLETED_EXPANDED = "lifeos.tasks.completed.expanded";
+const EMPTY =
+  "text-muted-foreground rounded-lg border border-dashed px-3 py-2 text-sm";
+
 // A day with open Tasks gets a small dot under its number.
 const HAS_TASKS =
   "after:pointer-events-none after:absolute after:bottom-0.5 after:left-1/2 after:z-20 after:size-1 after:-translate-x-1/2 after:rounded-full after:bg-primary data-[outside=true]:after:bg-muted-foreground data-[selected=true]:after:bg-primary-foreground";
 
-type SectionProps = {
-  title: string;
-  tasks: Task[];
-  empty: string;
+type RowProps = {
   today: string;
   timeZone: string;
   onChange: (task: Task) => void;
+};
+
+type SectionProps = RowProps & {
+  title: string;
+  tasks: Task[];
+  empty: string;
   action?: ReactNode;
   alert?: boolean;
   testId?: string;
 };
+
+function SectionHeading({
+  title,
+  count,
+  alert,
+  action,
+}: {
+  title: string;
+  count: ReactNode;
+  alert?: boolean;
+  action?: ReactNode;
+}) {
+  return (
+    <div className="mb-1.5 flex min-h-6 items-center gap-2">
+      <h2 className={cn("text-sm font-semibold", alert && "text-destructive")}>
+        {title}
+      </h2>
+      <span className="text-muted-foreground text-xs tabular-nums">
+        {count}
+      </span>
+      {action ? <div className="ml-auto">{action}</div> : null}
+    </div>
+  );
+}
 
 function TaskSection({
   title,
@@ -56,27 +105,169 @@ function TaskSection({
 }: SectionProps) {
   return (
     <section aria-label={title} data-testid={testId}>
-      <div className="mb-1.5 flex min-h-6 items-center gap-2">
-        <h2
-          className={cn(
-            "text-sm font-semibold",
-            alert && tasks.length > 0 && "text-destructive",
-          )}
-        >
-          {title}
-        </h2>
-        <span className="text-muted-foreground text-xs tabular-nums">
-          {tasks.length}
-        </span>
-        {action ? <div className="ml-auto">{action}</div> : null}
-      </div>
+      <SectionHeading
+        title={title}
+        count={tasks.length}
+        alert={alert && tasks.length > 0}
+        action={action}
+      />
       {tasks.length ? (
         <TaskList tasks={tasks} {...row} />
       ) : (
-        <p className="text-muted-foreground rounded-lg border border-dashed px-3 py-2 text-sm">
-          {empty}
-        </p>
+        <p className={EMPTY}>{empty}</p>
       )}
+    </section>
+  );
+}
+
+/**
+ * Undated open Tasks, newest first. The section is always shown with the
+ * full count; it lists the newest few until the owner asks for all of them.
+ */
+function UndatedSection({
+  tasks,
+  capped,
+  ...row
+}: RowProps & { tasks: Task[]; capped: boolean }) {
+  const [expanded, setExpanded] = usePersistentToggle(UNDATED_EXPANDED);
+  const title = "Unscheduled / No date";
+  const collapsible = tasks.length > UNDATED_PREVIEW;
+  const shown =
+    expanded || !collapsible ? tasks : tasks.slice(0, UNDATED_PREVIEW);
+  return (
+    <section aria-label={title} data-testid="tasks-undated">
+      <SectionHeading
+        title={title}
+        count={`${tasks.length}${capped ? "+" : ""}`}
+      />
+      {tasks.length ? (
+        <div className="space-y-1.5">
+          <div id="tasks-undated-list">
+            <TaskList tasks={shown} {...row} />
+          </div>
+          {collapsible ? (
+            <Button
+              aria-controls="tasks-undated-list"
+              aria-expanded={expanded}
+              className="aria-expanded:bg-transparent"
+              size="xs"
+              variant="ghost"
+              onClick={() => setExpanded(!expanded)}
+            >
+              {expanded ? "Show fewer" : `Show all ${tasks.length}`}
+            </Button>
+          ) : null}
+        </div>
+      ) : (
+        <p className={EMPTY}>No unscheduled Tasks.</p>
+      )}
+    </section>
+  );
+}
+
+/**
+ * Completed Tasks, collapsed by default. The heading counts those completed
+ * in the last seven days (owner's days); expanded, it lists them and offers
+ * older ones a page at a time, loading more from the Tasks API when the
+ * loaded ones run out. Nothing is ever removed from Tasks.
+ */
+function CompletedSection({
+  recent,
+  older,
+  more,
+  unavailable,
+  onShowOlder,
+  ...row
+}: RowProps & {
+  recent: Task[];
+  older: Task[];
+  /** Older completed Tasks exist beyond those loaded. */
+  more: boolean;
+  unavailable: boolean;
+  /** Loads the next page of older completed Tasks; false when it failed. */
+  onShowOlder: () => Promise<boolean>;
+}) {
+  const [expanded, setExpanded] = usePersistentToggle(COMPLETED_EXPANDED);
+  const [olderShown, setOlderShown] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const title = "Completed";
+  const showOlder = async () => {
+    const wanted = olderShown + OLDER_STEP;
+    if (older.length < wanted && more) {
+      setLoading(true);
+      setFailed(false);
+      const loaded = await onShowOlder();
+      setLoading(false);
+      if (!loaded) return setFailed(true);
+    }
+    setOlderShown(wanted);
+  };
+  // When every loaded completed Task is recent and the API has more, loading
+  // stopped at the cap, so the recent count is a lower bound.
+  const count = unavailable
+    ? "unavailable"
+    : `${recent.length}${more && older.length === 0 ? "+" : ""} this week`;
+  return (
+    <section aria-label={title} data-testid="tasks-completed">
+      <h2 className="mb-1.5">
+        <Button
+          aria-controls="tasks-completed-list"
+          aria-expanded={expanded}
+          className="-ml-2 gap-2 font-semibold aria-expanded:bg-transparent"
+          size="sm"
+          variant="ghost"
+          onClick={() => setExpanded(!expanded)}
+        >
+          <ChevronRight
+            aria-hidden="true"
+            className={cn("transition-transform", expanded && "rotate-90")}
+          />
+          {title}
+          <span className="text-muted-foreground text-xs font-normal tabular-nums">
+            {count}
+          </span>
+        </Button>
+      </h2>
+      <div className="space-y-1.5" hidden={!expanded} id="tasks-completed-list">
+        {!expanded ? null : unavailable ? (
+          <p className={EMPTY}>Completed Tasks are unavailable right now.</p>
+        ) : (
+          <>
+            <p className="text-muted-foreground text-xs">
+              Completed in the last {RECENT_COMPLETED_DAYS} days
+            </p>
+            {recent.length ? (
+              <TaskList tasks={recent} {...row} />
+            ) : (
+              <p className={EMPTY}>
+                Nothing completed in the last {RECENT_COMPLETED_DAYS} days.
+              </p>
+            )}
+            {olderShown > 0 && older.length ? (
+              <>
+                <p className="text-muted-foreground pt-1 text-xs">Older</p>
+                <TaskList tasks={older.slice(0, olderShown)} {...row} />
+              </>
+            ) : null}
+            {older.length > olderShown || more ? (
+              <Button
+                disabled={loading}
+                size="xs"
+                variant="ghost"
+                onClick={showOlder}
+              >
+                {loading ? "Loading…" : "Show older"}
+              </Button>
+            ) : null}
+            {failed ? (
+              <p className="text-destructive text-sm">
+                Could not load older completed Tasks.
+              </p>
+            ) : null}
+          </>
+        )}
+      </div>
     </section>
   );
 }
@@ -97,15 +288,37 @@ export function TasksWorkspace({
   const [month, setMonth] = useState(today);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [tasks, setTasks] = useState(() =>
-    state.kind === "ready" ? state.tasks : [],
+    state.kind === "ready"
+      ? [...state.open, ...(state.completed?.items ?? [])]
+      : [],
+  );
+  // Continues the completed list with older Tasks than those loaded.
+  const [completedCursor, setCompletedCursor] = useState(() =>
+    state.kind === "ready" ? (state.completed?.nextCursor ?? null) : null,
   );
   const onChange = (updated: Task) =>
     setTasks((current) =>
       current.map((task) => (task.id === updated.id ? updated : task)),
     );
+  const loadOlderCompleted = async () => {
+    if (!completedCursor) return true;
+    const page = await fetchTaskPage(true, completedCursor);
+    if (!page) return false;
+    setTasks((current) => {
+      const known = new Set(current.map((task) => task.id));
+      return [...current, ...page.items.filter((task) => !known.has(task.id))];
+    });
+    setCompletedCursor(page.nextCursor);
+    return true;
+  };
   const groups = useMemo(
     () => groupTasks(tasks, { today, selected, timeZone }),
     [tasks, today, selected, timeZone],
+  );
+  const completed = useMemo(
+    () =>
+      splitCompleted(groups.completed, recentCompletedSince(today, timeZone)),
+    [groups.completed, today, timeZone],
   );
   const taskDays = useMemo(
     () => daysWithTasks(tasks, timeZone),
@@ -133,13 +346,9 @@ export function TasksWorkspace({
       </div>
     );
 
+  const capped = state.openCapped;
   const unscheduled = (
-    <TaskSection
-      title="Unscheduled / No date"
-      tasks={groups.unscheduled}
-      empty="No unscheduled Tasks."
-      {...row}
-    />
+    <UndatedSection tasks={groups.unscheduled} capped={capped} {...row} />
   );
   const selectedLabel = relativeDayLabel(selected, today);
 
@@ -177,6 +386,13 @@ export function TasksWorkspace({
           </Button>
         </div>
       </header>
+
+      {capped ? (
+        <p className={EMPTY} role="note">
+          Only the first {OPEN_TASKS_CAP} open Tasks, soonest due first, are
+          shown. Later and undated Tasks beyond them are not listed here.
+        </p>
+      ) : null}
 
       <div className="grid gap-4 lg:grid-cols-[auto_minmax(0,1fr)] lg:items-start lg:gap-6">
         <div className="space-y-2">
@@ -262,10 +478,12 @@ export function TasksWorkspace({
                 {...row}
               />
               {unscheduled}
-              <TaskSection
-                title="Completed"
-                tasks={groups.completed}
-                empty="No completed Tasks."
+              <CompletedSection
+                recent={completed.recent}
+                older={completed.older}
+                more={completedCursor !== null}
+                unavailable={!state.completed}
+                onShowOlder={loadOlderCompleted}
                 {...row}
               />
             </div>

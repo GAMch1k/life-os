@@ -2,6 +2,15 @@ openapi: 3.0.3
 info:
   title: Life OS Calendar API
   version: 1.0.0
+  description: >-
+    Every write (POST, PUT, PATCH, DELETE) must say who makes it in the
+    X-Life-OS-Actor header: `user` (the owner), `agent:<name>` (the Life OS
+    AI), `system:<name>` (a Life OS component), or `dev:<name>` (a development
+    tool or agent working on Life OS, such as Claude Code). Names are 1-64
+    letters, digits, '.', '_', or '-'. A write without a valid actor is
+    rejected with 400 and error code `actor_required`; nothing is attributed to
+    the owner by default. Reads do not need the header. The public gateway
+    passes only `user` and `dev:<name>`.
   license: {name: UNLICENSED, url: https://life-os.local/license}
 servers: [{url: http://calendar:8080}]
 paths:
@@ -17,7 +26,7 @@ paths:
       operationId: createEvent
       security: []
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateEventRequest'}}}}
-      responses: {'201': {description: Event, content: {application/json: {schema: {$ref: '#/components/schemas/CalendarEvent'}}}}, '400': {description: Invalid request}}
+      responses: {'201': {description: Event, content: {application/json: {schema: {$ref: '#/components/schemas/CalendarEvent'}}}}, '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}}
   /v1/events/{eventId}:
     get:
       summary: Get a calendar event
@@ -31,13 +40,13 @@ paths:
       security: []
       parameters: [{name: eventId, in: path, required: true, schema: {type: string, format: uuid}}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateEventRequest'}}}}
-      responses: {'200': {description: Event, content: {application/json: {schema: {$ref: '#/components/schemas/CalendarEvent'}}}}, '400': {description: Invalid request}, '404': {description: Event not found}}
+      responses: {'200': {description: Event, content: {application/json: {schema: {$ref: '#/components/schemas/CalendarEvent'}}}}, '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}, '404': {description: Event not found}}
     delete:
       summary: Delete a calendar event
       operationId: deleteEvent
       security: []
       parameters: [{name: eventId, in: path, required: true, schema: {type: string, format: uuid}}]
-      responses: {'204': {description: Event deleted}, '400': {description: Invalid request}, '404': {description: Event not found}}
+      responses: {'204': {description: Event deleted}, '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}, '404': {description: Event not found}}
 components:
   schemas:
     Recurrence: {type: object, required: [frequency, interval], properties: {frequency: {type: string, enum: [daily, weekly, monthly, yearly]}, interval: {type: integer, minimum: 1}, until: {type: string, format: date-time, nullable: true}}}

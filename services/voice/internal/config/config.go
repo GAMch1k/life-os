@@ -79,6 +79,19 @@ func (c Config) ParsedLogLevel() slog.Level {
 	return level
 }
 
+// multipartAllowance is the room an upload request needs above
+// MaxUploadBytes for multipart framing and the small form fields. With the
+// default 25 MiB audio limit it matches the gateway's 26m body limit.
+const multipartAllowance = 1 << 20
+
+// RequestBodyLimit is the HTTP request body limit of the Voice API. Without
+// it Fiber's 4 MiB default would refuse valid recordings long before
+// MaxUploadBytes; within this limit the upload handler answers 413 itself
+// for audio over MaxUploadBytes.
+func (c Config) RequestBodyLimit() int {
+	return int(c.MaxUploadBytes) + multipartAllowance
+}
+
 // DatabaseConfig adapts service configuration to the shared pool helper.
 func (c Config) DatabaseConfig() database.Config {
 	return database.Config{

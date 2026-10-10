@@ -1,9 +1,4 @@
-import {
-  type APIRequestContext,
-  expect,
-  type Page,
-  test,
-} from "@playwright/test";
+import { type APIRequestContext, expect, type Page, test } from "./fixtures";
 
 // Polish — Life OS 1 sign-off across every Dashboard page: no horizontal
 // overflow at phone or desktop width, no hydration errors for a Berlin,

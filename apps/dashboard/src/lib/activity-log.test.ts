@@ -8,6 +8,8 @@ import {
   emptyState,
   eventLabel,
   eventTime,
+  fullSummary,
+  isDevActor,
   listQuery,
   parseFilters,
   selectedEventId,
@@ -170,6 +172,61 @@ test("event times render in the owner's timezone, not UTC", () => {
   );
 });
 
+/** pkg/activity's Preview: collapse whitespace, then shorten with "…". */
+function preview(text: string, limit: number) {
+  const runes = Array.from(text.split(/\s+/).filter(Boolean).join(" "));
+  return runes.length > limit
+    ? `${runes.slice(0, limit - 1).join("")}…`
+    : runes.join("");
+}
+
+test("a shortened summary expands to the longer text kept in the data", () => {
+  const error =
+    'planning failed: run Codex CLI: exit status 1: WARNING: proceeding, even though we could not create PATH aliases: Refusing to create helper binaries under temporary dir "/tmp"\nReading additional input from stdin...  OpenAI Codex v0.160.0';
+  assert.equal(
+    fullSummary({
+      summary: `Processing will be retried: ${preview(error, 160)}`,
+      data: { attemptId: "a-1", tools: [], errorSummary: error },
+    }),
+    `Processing will be retried: ${error}`,
+  );
+
+  // The shortened part can sit inside the summary, not only at its end.
+  const content =
+    "Remember to renew the passport before the trip in November and book the appointment at the consulate";
+  assert.equal(
+    fullSummary({
+      summary: `Captured “${preview(content, 80)}” from voice`,
+      data: { source: "voice", content: preview(content, 280) },
+    }),
+    `Captured “${content}” from voice`,
+  );
+});
+
+test("a summary without more text in its data does not expand", () => {
+  assert.equal(
+    fullSummary({ summary: "Processing completed", data: {} }),
+    undefined,
+  );
+  // The data has no longer copy of the shortened error.
+  assert.equal(
+    fullSummary({
+      summary: `task_create failed: ${preview("x".repeat(300), 160)}`,
+      data: { tool: "task_create" },
+    }),
+    undefined,
+  );
+  // An ellipsis the user typed is not a shortening.
+  const typed = "Wait… call the dentist about the appointment tomorrow";
+  assert.equal(
+    fullSummary({
+      summary: `Captured “${typed}” from manual`,
+      data: { source: "manual", content: typed },
+    }),
+    undefined,
+  );
+});
+
 test("links keep the active filters and apply overrides", () => {
   const filters = { source: "inbox", cursor: "abc" };
   assert.equal(
@@ -228,6 +285,17 @@ test("processor work reads as the Inbox processor", () => {
   );
   assert.equal(actorLabel({ kind: "agent", name: "mcp" }), "Agent via MCP");
   assert.equal(actorLabel({ kind: "user" }), "You");
+});
+
+test("development tools are named apart from the owner and the agent", () => {
+  assert.equal(
+    actorLabel({ kind: "dev", name: "claude-code" }),
+    "Developer tool (claude-code)",
+  );
+  assert.equal(actorLabel({ kind: "dev" }), "Developer tool");
+  assert.equal(isDevActor({ kind: "dev", name: "claude-code" }), true);
+  assert.equal(isDevActor({ kind: "user" }), false);
+  assert.equal(isDevActor({ kind: "agent", name: "mcp" }), false);
 });
 
 test("agent actions name their tool", () => {

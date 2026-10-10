@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Writes are attributed to this script as a development tool, never to the
+# owner (CONTRIBUTING.md, "Development tools and live data").
+actor=(-H 'X-Life-OS-Actor: dev:smoke-processor-runtime')
+
 # Proves the deployed automatic path against disposable Compose resources. It
 # intentionally does not invoke /processor directly: the only trigger is the
 # same gateway Inbox capture used by Dashboard clients.
@@ -22,7 +26,7 @@ for service in "$gateway/api/inbox" "$gateway/api/tasks"; do wait_ready "$servic
 # The title is intentionally unique and explicit, leaving no ambiguity for the
 # constrained planner while keeping all resulting data in the disposable DB.
 title="P7 automatic processor smoke $(date +%s)"
-item=$(curl --fail --silent -H 'content-type: application/json' \
+item=$(curl "${actor[@]}" --fail --silent -H 'content-type: application/json' \
   -d "{\"content\":\"Create a task titled $title.\",\"source\":\"web\",\"sourceMetadata\":{\"verification\":\"p7-02\"}}" \
   "$gateway/api/inbox/v1/inbox-items")
 item_id=$(jq -r '.id' <<<"$item")

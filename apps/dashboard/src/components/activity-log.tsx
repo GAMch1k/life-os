@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowDown, ArrowUp, History, Workflow } from "lucide-react";
+import { ArrowDown, ArrowUp, History, Workflow, Wrench } from "lucide-react";
 
 import {
   Card,
@@ -8,6 +8,9 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { CopyButton } from "@/components/copy-button";
+import { ExpandableText } from "@/components/expandable-text";
+import { SelectedEventPane } from "@/components/selected-event-pane";
 import {
   activityHref,
   actorLabel,
@@ -15,7 +18,9 @@ import {
   EVENT_TYPES,
   eventLabel,
   eventTime,
+  fullSummary,
   hasFilters,
+  isDevActor,
   OUTCOMES,
   SOURCES,
   sourceDescription,
@@ -53,6 +58,24 @@ function OutcomeBadge({ outcome }: { outcome: string }) {
   );
 }
 
+/**
+ * Who made the change. Development tools get an outline badge so their writes
+ * are never read as the owner's or the Life OS AI's.
+ */
+function ActorName({ actor }: { actor: ActivityEvent["actor"] }) {
+  const label = actorLabel(actor);
+  if (!isDevActor(actor)) return label;
+  return (
+    <span
+      className="text-muted-foreground inline-flex max-w-full items-center gap-1 rounded-md border px-1 font-medium wrap-anywhere"
+      title="A development tool or agent working on Life OS, not you or the Life OS AI"
+    >
+      <Wrench aria-hidden="true" className="size-3" />
+      {label}
+    </span>
+  );
+}
+
 function EventMeta({
   event,
   timeZone,
@@ -66,7 +89,7 @@ function EventMeta({
         {eventTime(event.occurredAt, timeZone)}
       </time>
       {" · "}
-      {sourceLabel(event.source)} · {actorLabel(event.actor)}
+      {sourceLabel(event.source)} · <ActorName actor={event.actor} />
     </p>
   );
 }
@@ -84,7 +107,7 @@ export function ActivityLogView({ log }: { log: ActivityLog }) {
           selectedId={selectedId}
           timeZone={timeZone}
         />
-        <section aria-label="Selected event" className="lg:sticky lg:top-20">
+        <SelectedEventPane selectedId={selectedId}>
           {selection === null ? (
             <Card>
               <CardContent className="text-muted-foreground py-10 text-center text-sm">
@@ -110,7 +133,7 @@ export function ActivityLogView({ log }: { log: ActivityLog }) {
               trace={selection.trace}
             />
           )}
-        </section>
+        </SelectedEventPane>
       </div>
     </div>
   );
@@ -485,8 +508,12 @@ function TraceView({
           </CardTitle>
           <OutcomeBadge outcome={selected.outcome} />
         </div>
-        <CardDescription className="wrap-anywhere">
-          {selected.summary}
+        <CardDescription>
+          <ExpandableText
+            fullText={fullSummary(selected)}
+            key={selected.id}
+            text={selected.summary}
+          />
         </CardDescription>
         <EventMeta event={selected} timeZone={timeZone} />
       </CardHeader>
@@ -552,7 +579,7 @@ function TraceView({
                     <span className="text-muted-foreground">
                       {" "}
                       — {eventTime(event.occurredAt, timeZone)} by{" "}
-                      {actorLabel(event.actor)}
+                      <ActorName actor={event.actor} />
                     </span>
                   </Link>
                 </li>
@@ -606,7 +633,14 @@ function TraceView({
               </div>
             ))}
           </dl>
-          <pre className="bg-muted mt-3 max-h-64 overflow-auto rounded-md p-2 text-xs">
+          <div className="mt-3 flex items-center justify-between gap-2">
+            <span className="text-muted-foreground text-xs">Event data</span>
+            <CopyButton label="Copy diagnostics" targetId="diagnostics-data" />
+          </div>
+          <pre
+            className="bg-muted mt-1 max-h-64 overflow-auto rounded-md p-2 text-xs"
+            id="diagnostics-data"
+          >
             {JSON.stringify(selected.data, null, 2)}
           </pre>
         </details>

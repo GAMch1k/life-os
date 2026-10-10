@@ -11,7 +11,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List tasks */
+        /**
+         * List tasks
+         * @description Open Tasks come first, soonest due first, with undated ones after the dated ones (newest first); then completed Tasks, most recently completed first. When more Tasks match than `limit`, `nextCursor` is set: pass it back as `cursor`, with the same filters, for the next page. A response without `nextCursor` is the last page.
+         */
         get: operations["listTasks"];
         put?: never;
         /** Create a task */
@@ -119,6 +122,7 @@ export interface components {
         };
         TaskList: {
             items: components["schemas"]["Task"][];
+            /** @description Set when more Tasks match; pass it as cursor for the next page. */
             nextCursor?: string | null;
         };
     };
@@ -137,8 +141,11 @@ export interface operations {
                 dueBefore?: string;
                 /** @description Include unscheduled tasks when using dueBefore. Defaults to true so open tasks are not hidden solely because they have no due date. */
                 includeUndated?: boolean;
+                /** @description true lists only Tasks without a due date, false only Tasks with one. Applies together with the other filters. */
+                undated?: boolean;
                 /** @description Case-insensitive title or notes search for entity resolution. */
                 query?: string;
+                /** @description The previous page's nextCursor. Opaque; only valid with the filters it was returned for. */
                 cursor?: string;
                 limit?: number;
             };
@@ -157,7 +164,7 @@ export interface operations {
                     "application/json": components["schemas"]["TaskList"];
                 };
             };
-            /** @description Invalid request */
+            /** @description Invalid request, such as a malformed cursor */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -188,7 +195,7 @@ export interface operations {
                     "application/json": components["schemas"]["Task"];
                 };
             };
-            /** @description Invalid request */
+            /** @description Invalid request, or no valid X-Life-OS-Actor (actor_required) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -257,7 +264,7 @@ export interface operations {
                     "application/json": components["schemas"]["Task"];
                 };
             };
-            /** @description Invalid request */
+            /** @description Invalid request, or no valid X-Life-OS-Actor (actor_required) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -293,7 +300,7 @@ export interface operations {
                     "application/json": components["schemas"]["Task"];
                 };
             };
-            /** @description Invalid request */
+            /** @description Invalid request, or no valid X-Life-OS-Actor (actor_required) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -328,6 +335,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Task"];
                 };
+            };
+            /** @description No valid X-Life-OS-Actor (actor_required) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Task not found */
             404: {

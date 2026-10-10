@@ -24,7 +24,8 @@ type Status struct {
 	// ReasoningEffort is the configured model_reasoning_effort ("" = Codex
 	// default).
 	ReasoningEffort string `json:"reasoningEffort,omitempty"`
-	// TimeZone is the owner's timezone relative dates are resolved in.
+	// TimeZone is the configured timezone relative dates are resolved in
+	// when a capture does not name its own (sourceMetadata.timeZone).
 	TimeZone  string             `json:"timeZone,omitempty"`
 	StartedAt time.Time          `json:"startedAt"`
 	Poll      PollStatus         `json:"poll"`
@@ -196,7 +197,8 @@ func (m *Monitor) SetReasoningEffort(effort string) {
 	m.status.ReasoningEffort = effort
 }
 
-// SetTimeZone records the owner's timezone the planner uses.
+// SetTimeZone records the planner's configured timezone, which captures
+// without their own timezone are planned in.
 func (m *Monitor) SetTimeZone(name string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

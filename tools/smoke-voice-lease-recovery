@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Writes are attributed to this script as a development tool, never to the
+# owner (CONTRIBUTING.md, "Development tools and live data").
+actor=(-H 'X-Life-OS-Actor: dev:smoke-voice-lease-recovery')
+
 # Proves the real worker crash/restart path using only disposable resources.
 # The normal browser-facing upload API creates the job; no job is inserted by
 # SQL. Whisper is paused so the worker remains in processing long enough to
@@ -35,7 +39,7 @@ whisper_id=$("${compose[@]}" ps -q whisper)
 docker pause "$whisper_id" >/dev/null
 paused=true
 
-job=$(curl --fail --silent -F "audio=@$audio;type=audio/wav" -F source=web "$gateway/api/voice/v1/audio-jobs")
+job=$(curl "${actor[@]}" --fail --silent -F "audio=@$audio;type=audio/wav" -F source=web "$gateway/api/voice/v1/audio-jobs")
 job_id=$(jq -r '.id' <<<"$job")
 for _ in $(seq 1 30); do
   state=$(curl --fail --silent "$gateway/api/voice/v1/audio-jobs/$job_id" | jq -r '.status')

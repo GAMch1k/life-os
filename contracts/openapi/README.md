@@ -54,6 +54,18 @@ Use conventional status codes: `400` malformed input, `404` missing resource,
 unexpected server failure. Authentication and authorization statuses are added
 only when that boundary is introduced.
 
+## Attribution
+
+Every write (`POST`, `PUT`, `PATCH`, `DELETE`) to a service that records
+user-facing activity must say who makes it in the `X-Life-OS-Actor` header:
+`user` (the owner), `agent:<name>` (the Life OS AI), `system:<name>` (a Life OS
+component), or `dev:<name>` (a development tool or agent). The shared runtime
+rejects a write without a valid actor with `400` and code `actor_required`
+(`pkg/activity.RequireActor`). The header is documented once in each contract's
+`info.description` and in the write operations' `400` response rather than as
+an operation parameter, so generated handler signatures do not change. Reads do
+not need it.
+
 ## Contract ownership
 
 Each service owns its OpenAPI file under `services/<service>/api/openapi.yaml`.

@@ -2,22 +2,37 @@ openapi: 3.0.3
 info:
   title: Life OS Tasks API
   version: 1.0.0
+  description: >-
+    Every write (POST, PUT, PATCH, DELETE) must say who makes it in the
+    X-Life-OS-Actor header: `user` (the owner), `agent:<name>` (the Life OS
+    AI), `system:<name>` (a Life OS component), or `dev:<name>` (a development
+    tool or agent working on Life OS, such as Claude Code). Names are 1-64
+    letters, digits, '.', '_', or '-'. A write without a valid actor is
+    rejected with 400 and error code `actor_required`; nothing is attributed to
+    the owner by default. Reads do not need the header. The public gateway
+    passes only `user` and `dev:<name>`.
   license: {name: UNLICENSED, url: https://life-os.local/license}
 servers: [{url: http://tasks:8080}]
 paths:
   /v1/tasks:
     get:
       summary: List tasks
+      description: >-
+        Open Tasks come first, soonest due first, with undated ones after the
+        dated ones (newest first); then completed Tasks, most recently
+        completed first. When more Tasks match than `limit`, `nextCursor` is
+        set: pass it back as `cursor`, with the same filters, for the next
+        page. A response without `nextCursor` is the last page.
       operationId: listTasks
       security: []
-      parameters: [{name: completed, in: query, schema: {type: boolean}}, {name: dueBefore, in: query, schema: {type: string, format: date-time}}, {name: includeUndated, in: query, description: Include unscheduled tasks when using dueBefore. Defaults to true so open tasks are not hidden solely because they have no due date., schema: {type: boolean, default: true}}, {name: query, in: query, description: Case-insensitive title or notes search for entity resolution., schema: {type: string, minLength: 1, maxLength: 200}}, {name: cursor, in: query, schema: {type: string}}, {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}]
-      responses: {'200': {description: Tasks, content: {application/json: {schema: {$ref: '#/components/schemas/TaskList'}}}}, '400': {description: Invalid request}}
+      parameters: [{name: completed, in: query, schema: {type: boolean}}, {name: dueBefore, in: query, schema: {type: string, format: date-time}}, {name: includeUndated, in: query, description: Include unscheduled tasks when using dueBefore. Defaults to true so open tasks are not hidden solely because they have no due date., schema: {type: boolean, default: true}}, {name: undated, in: query, description: 'true lists only Tasks without a due date, false only Tasks with one. Applies together with the other filters.', schema: {type: boolean}}, {name: query, in: query, description: Case-insensitive title or notes search for entity resolution., schema: {type: string, minLength: 1, maxLength: 200}}, {name: cursor, in: query, description: The previous page's nextCursor. Opaque; only valid with the filters it was returned for., schema: {type: string}}, {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}]
+      responses: {'200': {description: Tasks, content: {application/json: {schema: {$ref: '#/components/schemas/TaskList'}}}}, '400': {description: 'Invalid request, such as a malformed cursor'}}
     post:
       summary: Create a task
       operationId: createTask
       security: []
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateTaskRequest'}}}}
-      responses: {'201': {description: Task, content: {application/json: {schema: {$ref: '#/components/schemas/Task'}}}}, '400': {description: Invalid request}}
+      responses: {'201': {description: Task, content: {application/json: {schema: {$ref: '#/components/schemas/Task'}}}}, '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}}
   /v1/tasks/{taskId}:
     get:
       summary: Get a task
@@ -31,25 +46,25 @@ paths:
       security: []
       parameters: [{name: taskId, in: path, required: true, schema: {type: string, format: uuid}}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateTaskRequest'}}}}
-      responses: {'200': {description: Task, content: {application/json: {schema: {$ref: '#/components/schemas/Task'}}}}, '400': {description: Invalid request}, '404': {description: Task not found}}
+      responses: {'200': {description: Task, content: {application/json: {schema: {$ref: '#/components/schemas/Task'}}}}, '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}, '404': {description: Task not found}}
   /v1/tasks/{taskId}/complete:
     post:
       summary: Complete a task
       operationId: completeTask
       security: []
       parameters: [{name: taskId, in: path, required: true, schema: {type: string, format: uuid}}]
-      responses: {'200': {description: Completed task, content: {application/json: {schema: {$ref: '#/components/schemas/Task'}}}}, '400': {description: Invalid request}, '404': {description: Task not found}}
+      responses: {'200': {description: Completed task, content: {application/json: {schema: {$ref: '#/components/schemas/Task'}}}}, '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}, '404': {description: Task not found}}
   /v1/tasks/{taskId}/reopen:
     post:
       summary: Reopen a task
       operationId: reopenTask
       security: []
       parameters: [{name: taskId, in: path, required: true, schema: {type: string, format: uuid}}]
-      responses: {'200': {description: Reopened task, content: {application/json: {schema: {$ref: '#/components/schemas/Task'}}}}, '404': {description: Task not found}}
+      responses: {'200': {description: Reopened task, content: {application/json: {schema: {$ref: '#/components/schemas/Task'}}}}, '400': {description: 'No valid X-Life-OS-Actor (actor_required)'}, '404': {description: Task not found}}
 components:
   schemas:
     Recurrence: {type: object, required: [frequency, interval], properties: {frequency: {type: string, enum: [daily, weekly, monthly]}, interval: {type: integer, minimum: 1}, until: {type: string, format: date-time, nullable: true}}}
     Task: {type: object, required: [id, title, completed, createdAt, updatedAt], properties: {id: {type: string, format: uuid}, title: {type: string}, notes: {type: string, nullable: true}, dueAt: {type: string, format: date-time, nullable: true}, completed: {type: boolean}, completedAt: {type: string, format: date-time, nullable: true}, recurrence: {$ref: '#/components/schemas/Recurrence'}, createdAt: {type: string, format: date-time}, updatedAt: {type: string, format: date-time}}}
     CreateTaskRequest: {type: object, required: [title], properties: {title: {type: string}, notes: {type: string}, dueAt: {type: string, format: date-time}, recurrence: {$ref: '#/components/schemas/Recurrence'}}}
     UpdateTaskRequest: {type: object, minProperties: 1, properties: {title: {type: string}, notes: {type: string, nullable: true}, dueAt: {type: string, format: date-time}, clearDueAt: {type: boolean, description: Clear the due date and return the Task to Unscheduled.}, recurrence: {$ref: '#/components/schemas/Recurrence', nullable: true}}}
-    TaskList: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/Task'}}, nextCursor: {type: string, nullable: true}}}
+    TaskList: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/Task'}}, nextCursor: {type: string, nullable: true, description: Set when more Tasks match; pass it as cursor for the next page.}}}

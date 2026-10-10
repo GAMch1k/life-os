@@ -1,6 +1,6 @@
 import { ActivityLogView } from "@/components/activity-log";
 import { getActivityLog, type SearchParams } from "@/lib/activity-log";
-import { userTimeZone } from "@/lib/time-zone";
+import { userTimeZone } from "@/lib/user-time-zone";
 
 export const dynamic = "force-dynamic";
 
@@ -11,7 +11,7 @@ export default async function ActivityPage({
 }) {
   return (
     <ActivityLogView
-      log={await getActivityLog(await searchParams, userTimeZone())}
+      log={await getActivityLog(await searchParams, await userTimeZone())}
     />
   );
 }

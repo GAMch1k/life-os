@@ -4,7 +4,8 @@
 # A spoken request travels the normal runtime path:
 #   Voice upload → whisper.cpp → Inbox → automatic processor → Codex CLI → MCP
 #   → Tasks
-# and the resulting Task is later completed by the user through the Tasks API.
+# and the resulting Task is later completed through the Tasks API (by this
+# script, recorded as the development tool dev:smoke-activity-trace).
 # The smoke then reconstructs that workflow from the Activity API alone:
 # correlation (one workflow), causation (what caused what), and subject (later
 # changes to the same Task in a different workflow).
@@ -13,6 +14,10 @@
 # docs/services/mcp.md), and Docker access to build a speech fixture with
 # espeak-ng in a throwaway Alpine container.
 set -euo pipefail
+
+# Writes are attributed to this script as a development tool, never to the
+# owner (CONTRIBUTING.md, "Development tools and live data").
+actor=(-H 'X-Life-OS-Actor: dev:smoke-activity-trace')
 
 compose=(./tools/verify-compose)
 work=$(mktemp -d)
@@ -37,7 +42,7 @@ done
 status=$(curl --silent --output /dev/null --write-out '%{http_code}' -H 'content-type: application/json' --data '{}' "$gateway/api/activity/v1/activity-events")
 [ "$status" = 403 ] || { echo "gateway accepted an activity write: $status" >&2; exit 1; }
 
-job=$(curl --fail --silent -F "audio=@$work/speech.wav;type=audio/wav" -F source=web "$gateway/api/voice/v1/audio-jobs" | jq -r '.id')
+job=$(curl "${actor[@]}" --fail --silent -F "audio=@$work/speech.wav;type=audio/wav" -F source=web "$gateway/api/voice/v1/audio-jobs" | jq -r '.id')
 echo "voice job: $job"
 for _ in $(seq 1 120); do
   voice=$(curl --fail --silent "$gateway/api/voice/v1/audio-jobs/$job")
@@ -77,15 +82,16 @@ jq -e 'map(select(.type == "mcp.action.requested")) | first | .data.tool == "tas
 task=$(jq -r 'map(select(.type == "task.created")) | first | .subject.id' <<<"$trace")
 curl --fail --silent "$gateway/api/tasks/v1/tasks/$task" | jq -e '.completed == false' >/dev/null
 
-# Later, the user completes the Task (the same Tasks operation the Dashboard
-# uses). That is a new workflow linked to the first through its subject.
-curl --fail --silent -X POST "$gateway/api/tasks/v1/tasks/$task/complete" >/dev/null
+# Later, the Task is completed through the same Tasks operation the Dashboard
+# uses, attributed to this script rather than the owner. That is a new
+# workflow linked to the first through its subject.
+curl "${actor[@]}" --fail --silent -X POST "$gateway/api/tasks/v1/tasks/$task/complete" >/dev/null
 history=$(curl --fail --silent "$gateway/api/activity/v1/activity-events?subjectType=task&subjectId=$task&limit=100" | jq '.items | reverse')
 jq -e --arg job "$job" '
   map(.type) == ["task.created", "task.completed"]
   and .[0].correlationId == $job
   and .[1].correlationId != $job
-  and .[1].actor.kind == "user"
+  and .[1].actor == {kind: "dev", name: "smoke-activity-trace"}
   and .[1].outcome == "succeeded"' <<<"$history" >/dev/null
 
 echo

@@ -2,7 +2,7 @@ import type {
   CalendarEvent,
   CalendarSummaryState,
 } from "@/lib/calendar-summary";
-import { dateTimeFormat, dayKey, userTimeZone } from "@/lib/time-zone";
+import { dateTimeFormat, dayKey } from "@/lib/time-zone";
 
 const DAY = { weekday: "short", day: "numeric", month: "short" } as const;
 const TIME = { hour: "2-digit", minute: "2-digit" } as const;
@@ -31,11 +31,8 @@ function timedLabel(event: CalendarEvent, timeZone: string) {
     : label;
 }
 
-/** When an event happens, in the owner's timezone (server components only). */
-export function eventTimeLabel(
-  event: CalendarEvent,
-  timeZone: string = userTimeZone(),
-) {
+/** When an event happens, in the Dashboard's timezone. */
+export function eventTimeLabel(event: CalendarEvent, timeZone: string) {
   return event.allDay ? allDayLabel(event) : timedLabel(event, timeZone);
 }
 
