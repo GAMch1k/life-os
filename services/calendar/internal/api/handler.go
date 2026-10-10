@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/oapi-codegen/runtime/types"
 
+	"github.com/GAMch1k/life-os/pkg/activity"
 	"github.com/GAMch1k/life-os/pkg/httpserver"
 	"github.com/GAMch1k/life-os/services/calendar/internal/api/generated"
 	"github.com/GAMch1k/life-os/services/calendar/internal/config"
@@ -41,6 +42,8 @@ type Handler struct {
 	refresher *sources.Refresher
 	fetcher   *ics.Fetcher
 	wake      func()
+	// activity records event changes (see WithActivity); nil records none.
+	activity *activity.Emitter
 }
 
 var _ generated.ServerInterface = (*Handler)(nil)
@@ -253,6 +256,7 @@ func (h *Handler) CreateEvent(c fiber.Ctx) error {
 	if key != nil && (item.AutomationPayloadHash == nil || *item.AutomationPayloadHash != *hash) {
 		return httpserver.NewError(fiber.StatusConflict, "conflict", "idempotency key was already used with a different payload")
 	}
+	h.recordEvent(c, eventCreated, item, nil, nil)
 	return h.respond(c, fiber.StatusCreated, item)
 }
 
@@ -321,6 +325,10 @@ func (h *Handler) UpdateEvent(c fiber.Ctx, id types.UUID) error {
 		if err != nil {
 			return internal(err)
 		}
+		// An update that changes nothing records nothing.
+		if eventType, changes := classifyUpdate(current, item); eventType != "" {
+			h.recordEvent(c, eventType, item, &current, changes)
+		}
 		return h.respond(c, fiber.StatusOK, item)
 	}
 	return httpserver.NewError(fiber.StatusConflict, "conflict", "the event kept changing; retry the update")
@@ -343,6 +351,7 @@ func (h *Handler) DeleteEvent(c fiber.Ctx, id types.UUID) error {
 	if affected == 0 {
 		return notFound()
 	}
+	h.recordEvent(c, eventDeleted, current, nil, nil)
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
