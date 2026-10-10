@@ -8,6 +8,7 @@ import {
   emptyState,
   eventLabel,
   eventTime,
+  isDevActor,
   listQuery,
   parseFilters,
   selectedEventId,
@@ -228,6 +229,17 @@ test("processor work reads as the Inbox processor", () => {
   );
   assert.equal(actorLabel({ kind: "agent", name: "mcp" }), "Agent via MCP");
   assert.equal(actorLabel({ kind: "user" }), "You");
+});
+
+test("development tools are named apart from the owner and the agent", () => {
+  assert.equal(
+    actorLabel({ kind: "dev", name: "claude-code" }),
+    "Developer tool (claude-code)",
+  );
+  assert.equal(actorLabel({ kind: "dev" }), "Developer tool");
+  assert.equal(isDevActor({ kind: "dev", name: "claude-code" }), true);
+  assert.equal(isDevActor({ kind: "user" }), false);
+  assert.equal(isDevActor({ kind: "agent", name: "mcp" }), false);
 });
 
 test("agent actions name their tool", () => {

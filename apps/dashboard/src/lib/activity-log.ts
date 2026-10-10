@@ -99,8 +99,22 @@ const ACTOR_NAMES: Record<string, string> = {
   "voice-worker": "Voice worker",
 };
 
-export function actorLabel(actor: ActivityEvent["actor"]) {
+export type ActivityActor = ActivityEvent["actor"];
+
+/**
+ * A development tool or agent working on Life OS, such as Claude Code. It is
+ * neither the owner nor the Life OS AI, and the Event Log keeps it visibly
+ * apart from both.
+ */
+export function isDevActor(actor: ActivityActor) {
+  return actor.kind === "dev";
+}
+
+export function actorLabel(actor: ActivityActor) {
   if (actor.kind === "user") return "You";
+  if (isDevActor(actor)) {
+    return actor.name ? `Developer tool (${actor.name})` : "Developer tool";
+  }
   const name = actor.name ? (ACTOR_NAMES[actor.name] ?? actor.name) : undefined;
   return name ?? humanize(actor.kind);
 }
