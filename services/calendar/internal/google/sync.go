@@ -440,8 +440,11 @@ func (s *Syncer) store(ctx context.Context, claimed store.GoogleCalendar, found 
 	}
 	var counts *sources.Counts
 	if changed || !current.DerivedAt.Valid || now.Sub(current.DerivedAt.Time) >= rederiveAfter {
-		gone := deletedInListing{ids: forget, full: found.full, startedAt: now}
-		result, err := s.derive(ctx, q, current, source, windowStart, zoneName, now, &gone)
+		listed := listingChanges{changed: map[string]bool{}, gone: forget, full: found.full, startedAt: now}
+		for _, item := range keep {
+			listed.changed[item.ID] = true
+		}
+		result, err := s.derive(ctx, q, current, source, windowStart, zoneName, now, &listed)
 		if err != nil {
 			return store.GoogleCalendar{}, nil, err
 		}
@@ -458,11 +461,13 @@ func (s *Syncer) store(ctx context.Context, claimed store.GoogleCalendar, found 
 	return updated, counts, tx.Commit(ctx)
 }
 
-// deletedInListing is what a listing says was deleted: the events it
-// reported cancelled (ids) or, for a full listing (full), every event it
-// did not list that existed before it started (startedAt).
-type deletedInListing struct {
-	ids       []string
+// listingChanges is what a listing reported: the events changed in Google
+// (changed: not Calendar's own writes coming back), and the deleted ones,
+// those reported cancelled (gone) or, for a full listing (full), every
+// event it did not list that existed before it started (startedAt).
+type listingChanges struct {
+	changed   map[string]bool
+	gone      []string
 	full      bool
 	startedAt time.Time
 }
@@ -470,9 +475,9 @@ type deletedInListing struct {
 // derive derives the calendar's events from every stored Google event and
 // reconciles them with the source's events. In the Life OS calendar, the
 // copies of exported Life OS events are not imported: a change made to one
-// in Google is applied to its Life OS event instead (see linked.go); gone
-// says which copies a listing found deleted (nil outside a sync).
-func (s *Syncer) derive(ctx context.Context, q *store.Queries, current store.GoogleCalendar, source store.CalendarSource, windowStart pgtype.Timestamptz, zoneName string, now time.Time, gone *deletedInListing) (sources.Counts, error) {
+// in Google is applied to its Life OS event instead (see linked.go), as far
+// as listed says (nil outside a sync: nothing is applied).
+func (s *Syncer) derive(ctx context.Context, q *store.Queries, current store.GoogleCalendar, source store.CalendarSource, windowStart pgtype.Timestamptz, zoneName string, now time.Time, listed *listingChanges) (sources.Counts, error) {
 	rows, err := q.ListGoogleEvents(ctx, current.ID)
 	if err != nil {
 		return sources.Counts{}, err
@@ -512,8 +517,8 @@ func (s *Syncer) derive(ctx context.Context, q *store.Queries, current store.Goo
 		return sources.Counts{}, err
 	}
 	result.FeedEvents, result.Skipped = len(events), skipped
-	if lifeOS {
-		if err := s.followCopies(ctx, q, current, m, copies, gone, now); err != nil {
+	if lifeOS && listed != nil {
+		if err := s.followCopies(ctx, q, current, m, copies, listed, now); err != nil {
 			return sources.Counts{}, err
 		}
 	}

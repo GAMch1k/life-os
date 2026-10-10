@@ -58,13 +58,19 @@ func splitCopies(events []Event) (others, copies []Event) {
 	return others, copies
 }
 
-// followCopies applies to each exported Life OS event the changes made to
-// its copy in Google, and cancels those whose copy gone says was deleted.
-func (s *Syncer) followCopies(ctx context.Context, q *store.Queries, calendar store.GoogleCalendar, m mapper, copies []Event, gone *deletedInListing, now time.Time) error {
+// followCopies applies to each exported Life OS event the changes the
+// listing reports for its copy (the copy itself or one of its instances
+// changed in Google), and cancels those whose copy it reports deleted. A
+// copy that only carries Calendar's own last write changes nothing, so a
+// Life OS change still waiting to be exported is not undone.
+func (s *Syncer) followCopies(ctx context.Context, q *store.Queries, calendar store.GoogleCalendar, m mapper, copies []Event, listed *listingChanges, now time.Time) error {
 	masters := map[string]Event{}
+	instanceChanged := map[string]bool{}
 	for _, event := range copies {
 		if event.RecurringEventID == "" {
 			masters[event.ID] = event
+		} else if listed.changed[event.ID] && !listed.full {
+			instanceChanged[event.RecurringEventID] = true
 		}
 	}
 	items, _ := m.derive(copies)
@@ -81,15 +87,13 @@ func (s *Syncer) followCopies(ctx context.Context, q *store.Queries, calendar st
 		if err != nil {
 			return err
 		}
-		if export.Deleted || export.Etag != nil && *export.Etag == master.ETag {
-			continue // being deleted, or Calendar's own write
+		masterChanged := (export.Etag == nil || *export.Etag != master.ETag) && (listed.full || listed.changed[master.ID])
+		if export.Deleted || !masterChanged && !instanceChanged[master.ID] {
+			continue // being deleted, or nothing new from Google
 		}
 		if err := s.followCopy(ctx, q, export, master, item, now); err != nil {
 			return err
 		}
-	}
-	if gone == nil {
-		return nil
 	}
 	linked, err := q.ListLinkedGoogleExports(ctx, &calendar.GoogleCalendarID)
 	if err != nil {
@@ -99,9 +103,9 @@ func (s *Syncer) followCopies(ctx context.Context, q *store.Queries, calendar st
 		if export.Deleted || export.GoogleEventID == nil {
 			continue
 		}
-		_, listed := masters[*export.GoogleEventID]
-		deleted := slices.Contains(gone.ids, *export.GoogleEventID) ||
-			gone.full && !listed && export.ExportedAt.Valid && export.ExportedAt.Time.Before(gone.startedAt)
+		_, listedCopy := masters[*export.GoogleEventID]
+		deleted := slices.Contains(listed.gone, *export.GoogleEventID) ||
+			listed.full && !listedCopy && export.ExportedAt.Valid && export.ExportedAt.Time.Before(listed.startedAt)
 		if !deleted {
 			continue
 		}

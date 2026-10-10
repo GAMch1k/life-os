@@ -211,9 +211,7 @@ func (s *Syncer) ensureLifeOSCalendar(ctx context.Context, connection store.Goog
 		if _, err := q.SetLifeOSCalendar(ctx, store.SetLifeOSCalendarParams{LifeosCalendarID: &entry.ID, CreatedAt: timestamptz(now), ID: connection.ID}); err != nil {
 			return err
 		}
-		return q.UpsertGoogleCalendar(ctx, store.UpsertGoogleCalendarParams{
-			ConnectionID: connection.ID, GoogleCalendarID: entry.ID, Summary: entry.Summary, AccessRole: "owner", InitialSyncEnabled: true,
-		})
+		return addLifeOSCalendar(ctx, q, connection, entry, now)
 	})
 	if err != nil {
 		return "", err
@@ -221,6 +219,22 @@ func (s *Syncer) ensureLifeOSCalendar(ctx context.Context, connection store.Goog
 	s.service.recordCalendarCreated(ctx, connection, entry, "", now)
 	s.Wake()
 	return entry.ID, nil
+}
+
+// addLifeOSCalendar lists a newly created Life OS calendar with sync on,
+// due for its first sync now.
+func addLifeOSCalendar(ctx context.Context, q *store.Queries, connection store.GoogleConnection, entry CalendarEntry, now time.Time) error {
+	if err := q.UpsertGoogleCalendar(ctx, store.UpsertGoogleCalendarParams{
+		ConnectionID: connection.ID, GoogleCalendarID: entry.ID, Summary: entry.Summary, AccessRole: "owner", InitialSyncEnabled: true,
+	}); err != nil {
+		return err
+	}
+	row, err := q.GetGoogleCalendarByGoogleID(ctx, store.GetGoogleCalendarByGoogleIDParams{ConnectionID: connection.ID, GoogleCalendarID: entry.ID})
+	if err != nil {
+		return err
+	}
+	_, err = q.ResyncGoogleCalendar(ctx, store.ResyncGoogleCalendarParams{ID: row.ID, Now: timestamptz(now)})
+	return err
 }
 
 func (s *Syncer) createLifeOSCalendar(ctx context.Context) (CalendarEntry, error) {
@@ -264,9 +278,7 @@ func (s *Syncer) recreateLifeOSCalendar(ctx context.Context, gone string) error 
 		} else if !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
-		if err := q.UpsertGoogleCalendar(ctx, store.UpsertGoogleCalendarParams{
-			ConnectionID: connection.ID, GoogleCalendarID: entry.ID, Summary: entry.Summary, AccessRole: "owner", InitialSyncEnabled: true,
-		}); err != nil {
+		if err := addLifeOSCalendar(ctx, q, connection, entry, now); err != nil {
 			return err
 		}
 		return q.ResetGoogleExports(ctx, store.ResetGoogleExportsParams{ConnectionID: connection.ID, Now: timestamptz(now)})
@@ -442,7 +454,7 @@ func (s *Syncer) failExport(ctx context.Context, claimed store.GoogleExport, cau
 		return
 	}
 	s.logger.Warn("Life OS event not exported to Google", "event", googleuuid.UUID(claimed.EventID.Bytes), "error", message, "attempts", updated.Attempts)
-	if claimed.Attempts == 0 || deref(claimed.LastError) != message {
+	if !errors.Is(cause, errCalendarGone) && (claimed.Attempts == 0 || deref(claimed.LastError) != message) {
 		s.service.recordExportFailed(ctx, updated, message, now)
 	}
 }
