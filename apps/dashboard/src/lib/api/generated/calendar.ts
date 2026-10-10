@@ -71,7 +71,7 @@ export interface paths {
         head?: never;
         /**
          * Update a calendar event
-         * @description Changes only the fields present in the body; a field set to null is cleared. Changing `allDay` switches the event between timed and all-day: the other kind's fields (`startAt`, `endAt`, `timeZone` or `startDate`, `endDate`) are cleared and the new kind's start and end must be given. The result is validated as a whole, as on create. `status: cancelled` keeps the event as history and drops it from listings; `status: active` restores it. An event imported from a source (`source.kind` other than `manual`) is read-only except for `reminders` and `useDefaultReminders`: naming any other field returns 409 `managed_by_source`. For a recurring event this is **All events**: every occurrence changes. Occurrences keep their own changes, except that a change of the start, the kind (`allDay`), `timeZone`, or the `recurrence` rule removes the changes and skips of occurrences that no longer exist (an occurrence exists while the series still has an occurrence with the same original start, its `recurrenceId`).
+         * @description Changes only the fields present in the body; a field set to null is cleared. Changing `allDay` switches the event between timed and all-day: the other kind's fields (`startAt`, `endAt`, `timeZone` or `startDate`, `endDate`) are cleared and the new kind's start and end must be given. The result is validated as a whole, as on create. `status: cancelled` keeps the event as history and drops it from listings; `status: active` restores it. An event imported from a source (`source.kind` other than `manual`) is read-only except for `reminders`, `useDefaultReminders`, and `priority`: naming any other field returns 409 `managed_by_source`. For a recurring event this is **All events**: every occurrence changes. Occurrences keep their own changes, except that a change of the start, the kind (`allDay`), `timeZone`, or the `recurrence` rule removes the changes and skips of occurrences that no longer exist (an occurrence exists while the series still has an occurrence with the same original start, its `recurrenceId`).
          */
         patch: operations["updateEvent"];
         trace?: never;
@@ -374,7 +374,7 @@ export interface components {
             seriesId: string;
             /** @description The occurrence's original start, unique within its series and kept when the occurrence is moved: an RFC 3339 instant in UTC for timed events, a date (YYYY-MM-DD) for all-day events. */
             recurrenceId: string;
-            /** @description This occurrence has its own changes (This event): title, description, location, start and end, or reminders differ from the series'. A skipped occurrence shows `status: cancelled` instead. */
+            /** @description This occurrence has its own changes (This event): title, description, location, start and end, reminders, or priority differ from the series'. A skipped occurrence shows `status: cancelled` instead. */
             modified: boolean;
         };
         /**
@@ -408,6 +408,11 @@ export interface components {
          * @enum {string}
          */
         EventStatus: "active" | "cancelled";
+        /**
+         * @description How important an event is; the importance of its reminder notifications.
+         * @enum {string}
+         */
+        EventPriority: "low" | "medium" | "high";
         /** @description Reminder intent only; Calendar stores it and does not deliver notifications. `relative`: `minutesBefore` the event starts (an all-day event starts at midnight of its first day, owner-local). `localTime`: at `localTime` (HH:MM on the owner's wall clock) on the day `daysBefore` days before the event's start date in the owner's timezone, resolved when the reminder is due so daylight saving changes are respected. Example: a pickup on 17 November with `{"kind": "localTime", "daysBefore": 1, "localTime": "19:00"}` reminds on 16 November at 19:00. */
         Reminder: {
             /** @enum {string} */
@@ -458,6 +463,10 @@ export interface components {
             defaultReminders: components["schemas"]["Reminder"][];
             /** @description Every reminder that applies: `defaultReminders` when `useDefaultReminders` is true, then the event's own `reminders`, each reminder once. A notifier triggers each of them. Read-only. */
             effectiveReminders: components["schemas"]["Reminder"][];
+            /** @description The event's priority, the importance of its reminder notifications: its own (for an occurrence, its own or else the series'), else `defaultPriority`. */
+            priority: components["schemas"]["EventPriority"];
+            /** @description The priority of the event without one of its own: its source's `defaultPriority` for an imported event, else `medium`. Read-only. */
+            defaultPriority: components["schemas"]["EventPriority"];
             occurrence?: components["schemas"]["EventOccurrence"];
             status: components["schemas"]["EventStatus"];
             /**
@@ -501,6 +510,8 @@ export interface components {
              * @default true
              */
             useDefaultReminders: boolean;
+            /** @description Leave out for the default (medium). */
+            priority?: components["schemas"]["EventPriority"];
             externalReference?: components["schemas"]["ExternalReference"];
         };
         UpdateEventRequest: {
@@ -523,6 +534,8 @@ export interface components {
             reminders?: components["schemas"]["Reminder"][] | null;
             /** @description Turns the default reminders on or off; the event's own reminders stay. */
             useDefaultReminders?: boolean;
+            /** @description The event's priority; its `defaultPriority` makes it follow its default again. Also allowed on an imported event. */
+            priority?: components["schemas"]["EventPriority"];
             status?: components["schemas"]["EventStatus"];
         };
         /** @description One occurrence's own changes. The start and end keep the series' kind (`startAt`/`endAt` for a timed series, `startDate`/`endDate` for an all-day one). `reminders: null` gives the occurrence no own reminders and turns its defaults on unless the body sets `useDefaultReminders`. */
@@ -542,6 +555,8 @@ export interface components {
             endDate?: string;
             reminders?: components["schemas"]["Reminder"][] | null;
             useDefaultReminders?: boolean;
+            /** @description This occurrence's priority; the series' priority makes it follow the series again. */
+            priority?: components["schemas"]["EventPriority"];
             status?: components["schemas"]["EventStatus"];
         };
         EventList: {
@@ -619,6 +634,8 @@ export interface components {
             filter: components["schemas"]["SourceFilter"];
             /** @description Default reminders for this source's events: every event that uses its defaults gets them, together with its own (for example the evening before a waste pickup, `{"kind":"localTime","daysBefore":1,"localTime":"19:00"}`). Null means none. */
             defaultReminders: components["schemas"]["Reminder"][] | null;
+            /** @description The priority of this source's events that have none of their own; medium unless set. */
+            defaultPriority: components["schemas"]["EventPriority"];
             refresh: components["schemas"]["SourceRefreshState"];
             /** Format: date-time */
             createdAt: string;
@@ -637,6 +654,8 @@ export interface components {
             enabled: boolean;
             filter?: components["schemas"]["SourceFilter"];
             defaultReminders?: components["schemas"]["Reminder"][] | null;
+            /** @description Leave out for medium. */
+            defaultPriority?: components["schemas"]["EventPriority"];
         };
         UpdateSourceRequest: {
             name?: string;
@@ -645,6 +664,8 @@ export interface components {
             filter?: components["schemas"]["SourceFilter"];
             /** @description Replaces the default reminders; null removes them. */
             defaultReminders?: components["schemas"]["Reminder"][] | null;
+            /** @description Replaces the default priority; the source's events without one of their own follow it. */
+            defaultPriority?: components["schemas"]["EventPriority"];
         };
         SourceList: {
             items: components["schemas"]["CalendarSource"][];
@@ -997,7 +1018,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The event kept changing concurrently (retry the update), or it is imported and the update names more than its reminders (managed_by_source) */
+            /** @description The event kept changing concurrently (retry the update), or it is imported and the update names more than its reminders and priority (managed_by_source) */
             409: {
                 headers: {
                     [name: string]: unknown;

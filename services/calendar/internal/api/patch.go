@@ -14,11 +14,16 @@ import (
 var updatableFields = map[string]bool{
 	"title": true, "description": true, "location": true, "allDay": true,
 	"startAt": true, "endAt": true, "startDate": true, "endDate": true, "timeZone": true,
-	"recurrence": true, "reminders": true, "useDefaultReminders": true, "status": true,
+	"recurrence": true, "reminders": true, "useDefaultReminders": true, "priority": true, "status": true,
 }
 
 // requiredValueFields cannot be cleared: null is not a value for them.
-var requiredValueFields = []string{"title", "allDay", "useDefaultReminders", "status"}
+var requiredValueFields = []string{"title", "allDay", "useDefaultReminders", "priority", "status"}
+
+// importedEditableFields are what the owner may change on an imported
+// event: its reminders (its own and whether the defaults apply) and its
+// priority.
+var importedEditableFields = map[string]bool{"reminders": true, "useDefaultReminders": true, "priority": true}
 
 // eventPatch is a decoded PATCH body. A generated pointer field cannot tell an
 // absent property from an explicit null, so present records which properties
@@ -54,12 +59,11 @@ func decodePatch(raw []byte) (eventPatch, error) {
 	return patch, nil
 }
 
-// onlyReminders reports whether the patch changes nothing but the
-// reminders (its own and whether the defaults apply), the one thing the
-// owner may change on an imported event.
-func (p eventPatch) onlyReminders() bool {
+// importedEditable reports whether the patch changes only what the owner
+// may change on an imported event (importedEditableFields).
+func (p eventPatch) importedEditable() bool {
 	for name := range p.present {
-		if name != "reminders" && name != "useDefaultReminders" {
+		if !importedEditableFields[name] {
 			return false
 		}
 	}
@@ -116,6 +120,9 @@ func (p eventPatch) apply(current eventFields, now time.Time, owner *time.Locati
 	}
 	if p.present["useDefaultReminders"] {
 		next.UseDefaultReminders = *body.UseDefaultReminders
+	}
+	if p.present["priority"] {
+		next.Priority = body.Priority
 	}
 	if p.present["status"] {
 		switch *body.Status {

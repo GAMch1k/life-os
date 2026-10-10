@@ -35,11 +35,13 @@ type occurrenceChanges struct {
 	StartDate, EndDate  *types.Date
 	Reminders           *[]generated.Reminder
 	UseDefaultReminders *bool
+	Priority            *generated.EventPriority
 }
 
 // empty reports whether the occurrence follows its series entirely.
 func (c occurrenceChanges) empty() bool {
-	return c.Title == nil && !c.Description.set && !c.Location.set && !c.moves() && c.Reminders == nil && c.UseDefaultReminders == nil
+	return c.Title == nil && !c.Description.set && !c.Location.set && !c.moves() && c.Reminders == nil && c.UseDefaultReminders == nil &&
+		c.Priority == nil
 }
 
 // moves reports whether the occurrence has its own start and end.
@@ -59,6 +61,7 @@ type storedChanges struct {
 	EndDate             *string           `json:"endDate,omitempty"`
 	Reminders           *[]storedReminder `json:"reminders,omitempty"`
 	UseDefaultReminders *bool             `json:"useDefaultReminders,omitempty"`
+	Priority            *string           `json:"priority,omitempty"`
 }
 
 func (c occurrenceChanges) encode() ([]byte, error) {
@@ -98,6 +101,7 @@ func (c occurrenceChanges) encode() ([]byte, error) {
 		stored.Reminders = &reminders
 	}
 	stored.UseDefaultReminders = c.UseDefaultReminders
+	stored.Priority = priorityColumn(c.Priority)
 	return json.Marshal(stored)
 }
 
@@ -111,7 +115,10 @@ func decodeChanges(raw []byte) (occurrenceChanges, error) {
 	if err := json.Unmarshal(raw, &present); err != nil {
 		return occurrenceChanges{}, fmt.Errorf("decode occurrence changes: %w", err)
 	}
-	changes := occurrenceChanges{Title: stored.Title, StartAt: stored.StartAt, EndAt: stored.EndAt, UseDefaultReminders: stored.UseDefaultReminders}
+	changes := occurrenceChanges{
+		Title: stored.Title, StartAt: stored.StartAt, EndAt: stored.EndAt, UseDefaultReminders: stored.UseDefaultReminders,
+		Priority: priorityFromStore(stored.Priority),
+	}
 	text := func(name string) (optionalText, error) {
 		value, ok := present[name]
 		if !ok {
@@ -177,6 +184,9 @@ func (c occurrenceChanges) applyTo(fields eventFields) eventFields {
 	if c.UseDefaultReminders != nil {
 		fields.UseDefaultReminders = *c.UseDefaultReminders
 	}
+	if c.Priority != nil {
+		fields.Priority = c.Priority
+	}
 	return fields
 }
 
@@ -210,6 +220,11 @@ func diffOccurrence(natural, next eventFields) occurrenceChanges {
 		use := next.UseDefaultReminders
 		changes.UseDefaultReminders = &use
 	}
+	// Only Life OS events recur, so a series without a priority of its own
+	// has the Life OS default.
+	if priority := priorityOr(next.Priority, defaultPriority); priority != priorityOr(natural.Priority, defaultPriority) {
+		changes.Priority = &priority
+	}
 	return changes
 }
 
@@ -235,6 +250,9 @@ func (c occurrenceChanges) without(present map[string]bool) occurrenceChanges {
 	}
 	if present["reminders"] || present["useDefaultReminders"] {
 		c.UseDefaultReminders = nil
+	}
+	if present["priority"] {
+		c.Priority = nil
 	}
 	return c
 }

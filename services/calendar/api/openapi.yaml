@@ -23,8 +23,8 @@ info:
 
     Calendar sources are external feeds (ICS/iCal) whose events Calendar
     imports and refreshes on its own schedule. Imported events are read-only
-    through this API except for their reminders; only their source changes,
-    cancels, or restores them.
+    through this API except for their reminders and priority; only their
+    source changes, cancels, or restores them.
 
 
     Reminders work like Google Calendar's notifications. Every event can
@@ -35,6 +35,17 @@ info:
     defaults from Calendar settings, one list for timed and one for all-day
     events. Calendar stores reminder intent only and delivers no
     notifications.
+
+
+    Every event has a `priority`, `low`, `medium`, or `high`: how important
+    it is, and so the importance of its reminder notifications. An event
+    without a priority of its own has its `defaultPriority`: its source's
+    `defaultPriority` for an imported event, `medium` for an event created in
+    Life OS. Setting an event's priority to its default makes it follow the
+    default again, so an imported event follows later changes of its
+    source's default unless the owner gave it another priority (refreshes
+    keep that). An occurrence of a recurring event can have its own priority
+    (This event).
 
 
     Recurring events work like Google Calendar's. A recurring event (a
@@ -160,8 +171,8 @@ paths:
         `status: cancelled` keeps the event as history and drops it from
         listings; `status: active` restores it. An event imported from a
         source (`source.kind` other than `manual`) is read-only except for
-        `reminders` and `useDefaultReminders`: naming any other field returns
-        409 `managed_by_source`. For a recurring event this is **All events**:
+        `reminders`, `useDefaultReminders`, and `priority`: naming any other
+        field returns 409 `managed_by_source`. For a recurring event this is **All events**:
         every occurrence changes. Occurrences keep their own changes, except
         that a change of the start, the kind (`allDay`), `timeZone`, or the
         `recurrence` rule removes the changes and skips of occurrences that no
@@ -175,7 +186,7 @@ paths:
         '200': {description: Event, content: {application/json: {schema: {$ref: '#/components/schemas/CalendarEvent'}}}}
         '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}
         '404': {description: Event not found}
-        '409': {description: 'The event kept changing concurrently (retry the update), or it is imported and the update names more than its reminders (managed_by_source)'}
+        '409': {description: 'The event kept changing concurrently (retry the update), or it is imported and the update names more than its reminders and priority (managed_by_source)'}
     delete:
       summary: Delete a calendar event
       description: 'Removes the event permanently; for a recurring event every occurrence and its own changes (**All events**). Set `status: cancelled` instead to keep it as history. Imported events cannot be deleted (409 `managed_by_source`): their source removes them.'
@@ -542,7 +553,7 @@ components:
       properties:
         seriesId: {type: string, format: uuid, description: The recurring event this is an occurrence of (the same as the item's id).}
         recurrenceId: {type: string, description: 'The occurrence''s original start, unique within its series and kept when the occurrence is moved: an RFC 3339 instant in UTC for timed events, a date (YYYY-MM-DD) for all-day events.'}
-        modified: {type: boolean, description: 'This occurrence has its own changes (This event): title, description, location, start and end, or reminders differ from the series''. A skipped occurrence shows `status: cancelled` instead.'}
+        modified: {type: boolean, description: 'This occurrence has its own changes (This event): title, description, location, start and end, reminders, or priority differ from the series''. A skipped occurrence shows `status: cancelled` instead.'}
     ExternalReference:
       type: object
       deprecated: true
@@ -566,6 +577,10 @@ components:
       type: string
       enum: [active, cancelled]
       description: '`cancelled` events are kept as history but left out of listings and search unless asked for. An occurrence of a recurring event is cancelled when its series is or when it is skipped on its own.'
+    EventPriority:
+      type: string
+      enum: [low, medium, high]
+      description: 'How important an event is; the importance of its reminder notifications.'
     Reminder:
       type: object
       description: >-
@@ -586,7 +601,7 @@ components:
         localTime: {type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$', description: Required for localTime (and only there); 24-hour HH:MM.}
     CalendarEvent:
       type: object
-      required: [id, title, allDay, reminders, useDefaultReminders, defaultReminders, effectiveReminders, status, source, createdAt, updatedAt]
+      required: [id, title, allDay, reminders, useDefaultReminders, defaultReminders, effectiveReminders, priority, defaultPriority, status, source, createdAt, updatedAt]
       properties:
         id: {type: string, format: uuid}
         title: {type: string}
@@ -603,6 +618,8 @@ components:
         useDefaultReminders: {type: boolean, description: Whether the event's default reminders apply as well as its own.}
         defaultReminders: {type: array, items: {$ref: '#/components/schemas/Reminder'}, description: 'The default reminders for this event, whether or not it uses them: its source''s `defaultReminders` for an imported event, else the owner''s defaults for timed or all-day events (Calendar settings). Read-only.'}
         effectiveReminders: {type: array, items: {$ref: '#/components/schemas/Reminder'}, description: 'Every reminder that applies: `defaultReminders` when `useDefaultReminders` is true, then the event''s own `reminders`, each reminder once. A notifier triggers each of them. Read-only.'}
+        priority: {allOf: [{$ref: '#/components/schemas/EventPriority'}], description: 'The event''s priority, the importance of its reminder notifications: its own (for an occurrence, its own or else the series''), else `defaultPriority`.'}
+        defaultPriority: {allOf: [{$ref: '#/components/schemas/EventPriority'}], description: 'The priority of the event without one of its own: its source''s `defaultPriority` for an imported event, else `medium`. Read-only.'}
         occurrence: {$ref: '#/components/schemas/EventOccurrence'}
         status: {$ref: '#/components/schemas/EventStatus'}
         cancelledAt: {type: string, format: date-time, nullable: true, description: When the event was cancelled; set exactly when status is cancelled.}
@@ -628,6 +645,7 @@ components:
         recurrence: {$ref: '#/components/schemas/Recurrence'}
         reminders: {type: array, maxItems: 10, items: {$ref: '#/components/schemas/Reminder'}, description: 'The event''s own reminders, added to its defaults; leave out for none.'}
         useDefaultReminders: {type: boolean, default: true, description: 'Whether the default reminders apply as well; false (with no `reminders`) means no reminders at all.'}
+        priority: {allOf: [{$ref: '#/components/schemas/EventPriority'}], description: Leave out for the default (medium).}
         externalReference: {$ref: '#/components/schemas/ExternalReference'}
     UpdateEventRequest:
       type: object
@@ -645,6 +663,7 @@ components:
         recurrence: {type: object, allOf: [{$ref: '#/components/schemas/Recurrence'}], nullable: true, description: 'Replaces the rule. Null stops the event repeating (on a split: the new series does not repeat).'}
         reminders: {type: array, nullable: true, maxItems: 10, items: {$ref: '#/components/schemas/Reminder'}, description: 'Replaces the event''s own reminders. Null returns the event to its defaults alone: no own reminders, and `useDefaultReminders` true unless the body sets it.'}
         useDefaultReminders: {type: boolean, description: Turns the default reminders on or off; the event's own reminders stay.}
+        priority: {allOf: [{$ref: '#/components/schemas/EventPriority'}], description: 'The event''s priority; its `defaultPriority` makes it follow its default again. Also allowed on an imported event.'}
         status: {$ref: '#/components/schemas/EventStatus'}
     UpdateOccurrenceRequest:
       type: object
@@ -665,6 +684,7 @@ components:
         endDate: {type: string, format: date}
         reminders: {type: array, nullable: true, maxItems: 10, items: {$ref: '#/components/schemas/Reminder'}}
         useDefaultReminders: {type: boolean}
+        priority: {allOf: [{$ref: '#/components/schemas/EventPriority'}], description: 'This occurrence''s priority; the series'' priority makes it follow the series again.'}
         status: {$ref: '#/components/schemas/EventStatus'}
     EventList: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/CalendarEvent'}}, nextCursor: {type: string, nullable: true, description: Set when more events match; pass it as cursor for the next page.}}}
     CalendarSourceKind:
@@ -717,7 +737,7 @@ components:
         refreshing: {type: boolean, description: A refresh is running now.}
     CalendarSource:
       type: object
-      required: [id, kind, name, url, enabled, filter, defaultReminders, refresh, createdAt, updatedAt]
+      required: [id, kind, name, url, enabled, filter, defaultReminders, defaultPriority, refresh, createdAt, updatedAt]
       properties:
         id: {type: string, format: uuid}
         kind: {$ref: '#/components/schemas/CalendarSourceKind'}
@@ -727,6 +747,7 @@ components:
         preset: {type: string, nullable: true, description: 'Set (such as `zaw`) for a source Calendar configures from its own environment at startup; null for sources added through the API. A preset source can be edited like any other, but while its environment setting is present a deleted one is added again at the next start.'}
         filter: {$ref: '#/components/schemas/SourceFilter'}
         defaultReminders: {type: array, nullable: true, items: {$ref: '#/components/schemas/Reminder'}, description: 'Default reminders for this source''s events: every event that uses its defaults gets them, together with its own (for example the evening before a waste pickup, `{"kind":"localTime","daysBefore":1,"localTime":"19:00"}`). Null means none.'}
+        defaultPriority: {allOf: [{$ref: '#/components/schemas/EventPriority'}], description: 'The priority of this source''s events that have none of their own; medium unless set.'}
         refresh: {$ref: '#/components/schemas/SourceRefreshState'}
         createdAt: {type: string, format: date-time}
         updatedAt: {type: string, format: date-time, description: When the configuration last changed.}
@@ -740,6 +761,7 @@ components:
         enabled: {type: boolean, default: true}
         filter: {$ref: '#/components/schemas/SourceFilter'}
         defaultReminders: {type: array, nullable: true, maxItems: 10, items: {$ref: '#/components/schemas/Reminder'}}
+        defaultPriority: {allOf: [{$ref: '#/components/schemas/EventPriority'}], description: Leave out for medium.}
     UpdateSourceRequest:
       type: object
       minProperties: 1
@@ -749,6 +771,7 @@ components:
         enabled: {type: boolean}
         filter: {$ref: '#/components/schemas/SourceFilter'}
         defaultReminders: {type: array, nullable: true, maxItems: 10, items: {$ref: '#/components/schemas/Reminder'}, description: Replaces the default reminders; null removes them.}
+        defaultPriority: {allOf: [{$ref: '#/components/schemas/EventPriority'}], description: 'Replaces the default priority; the source''s events without one of their own follow it.'}
     SourceList: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/CalendarSource'}}}}
     ReminderDefaults:
       type: object
