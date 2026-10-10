@@ -40,8 +40,9 @@ type apiClient struct {
 
 func newAPIClient(t *testing.T) apiClient {
 	t.Helper()
-	queries := store.New(testdb.Open(t, ""))
-	handler := NewHandler(queries, "Europe/Berlin")
+	pool := testdb.Open(t, "")
+	queries := store.New(pool)
+	handler := NewHandler(pool, "Europe/Berlin")
 	handler.now = func() time.Time { return fixedNow }
 	return apiClient{t: t, app: newTestApp(handler), handler: handler, queries: queries}
 }

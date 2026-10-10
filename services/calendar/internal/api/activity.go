@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -78,7 +79,8 @@ func changedFields(before, after store.Event) []string {
 	add("endDate", !sameDate(before.EndDate, after.EndDate))
 	add("timeZone", !sameString(before.TimeZone, after.TimeZone))
 	add("recurrence", !sameString(before.RecurrenceFrequency, after.RecurrenceFrequency) ||
-		!sameInt(before.RecurrenceInterval, after.RecurrenceInterval) || !sameInstant(before.RecurrenceUntil, after.RecurrenceUntil))
+		!sameInt(before.RecurrenceInterval, after.RecurrenceInterval) || !sameInstant(before.RecurrenceUntil, after.RecurrenceUntil) ||
+		!slices.Equal(before.RecurrenceByWeekday, after.RecurrenceByWeekday) || !sameInt(before.RecurrenceCount, after.RecurrenceCount))
 	add("reminders", !bytes.Equal(before.Reminders, after.Reminders) || before.UseDefaultReminders != after.UseDefaultReminders)
 	add("status", before.Status != after.Status)
 	return changes
@@ -104,18 +106,28 @@ func sameDate(a, b pgtype.Date) bool {
 // previous is the stored state before an update (nil for a creation or a
 // deletion) and changes the fields the update changed.
 func (h *Handler) recordEvent(c fiber.Ctx, eventType string, item store.Event, previous *store.Event, changes []string) {
+	// Deterministic ids: an idempotent create replay or a re-sent event
+	// records nothing new. An update is identified by the state it wrote.
+	var version []string
+	if previous != nil {
+		version = append(version, item.UpdatedAt.Time.UTC().Format(time.RFC3339Nano))
+	}
+	h.emitEvent(c, eventType, item, previous, changes, nil, version...)
+}
+
+// emitEvent records one event change: extra adds to its data, and version
+// tells repeated changes of the same event apart in its deterministic id.
+func (h *Handler) emitEvent(c fiber.Ctx, eventType string, item store.Event, previous *store.Event, changes []string, extra map[string]any, version ...string) {
 	if h.activity == nil {
 		return
 	}
 	trace := activity.FromRequest(c)
 	id := uuid(item.ID).String()
-	// Deterministic ids: an idempotent create replay or a re-sent event
-	// records nothing new. An update is identified by the state it wrote.
-	eventID := activity.EventID(eventType, id)
-	if previous != nil {
-		eventID = activity.EventID(eventType, id, item.UpdatedAt.Time.UTC().Format(time.RFC3339Nano))
-	}
+	eventID := activity.EventID(eventType, append([]string{id}, version...)...)
 	data := eventData(item)
+	for key, value := range extra {
+		data[key] = value
+	}
 	if previous != nil {
 		data["changes"] = changes
 		if previous.Title != item.Title {
@@ -243,4 +255,38 @@ func repeats(frequency string, interval *int32) string {
 		return "repeating " + frequency
 	}
 	return fmt.Sprintf("repeating every %d %ss", *interval, units[frequency])
+}
+
+// occurrenceRow is one occurrence as a stored event, for Activity: the
+// series' row with the occurrence's fields, its own status, and no rule (an
+// occurrence does not repeat), so its summary names the occurrence's time.
+func occurrenceRow(series store.Event, fields eventFields) store.Event {
+	row := series
+	row.Title, row.Description, row.Location = fields.Title, fields.Description, fields.Location
+	row.StartAt, row.EndAt = timestamp(fields.StartAt), timestamp(fields.EndAt)
+	row.StartDate, row.EndDate = datePointer(fields.StartDate), datePointer(fields.EndDate)
+	if reminders, err := encodeReminders(&fields.Reminders); err == nil {
+		row.Reminders = reminders
+	}
+	row.UseDefaultReminders = fields.UseDefaultReminders
+	row.Status, row.CancelledAt = string(fields.Status), timestamp(fields.CancelledAt)
+	row.RecurrenceFrequency, row.RecurrenceInterval, row.RecurrenceUntil = nil, nil, pgtype.Timestamptz{}
+	row.RecurrenceByWeekday, row.RecurrenceCount = nil, nil
+	return row
+}
+
+// recordOccurrence records a change of one occurrence (This event): its
+// skip, restoration, move, or edit, with its recurrence id and its times.
+// stamp tells repeated changes of the occurrence apart.
+func (h *Handler) recordOccurrence(c fiber.Ctx, series store.Event, key string, before, after eventFields, stamp time.Time) {
+	previous, current := occurrenceRow(series, before), occurrenceRow(series, after)
+	eventType, changes := classifyUpdate(previous, current)
+	if eventType == "" {
+		return
+	}
+	extra := map[string]any{"recurrenceId": key}
+	if series.RecurrenceFrequency != nil {
+		extra["recurrence"] = *series.RecurrenceFrequency
+	}
+	h.emitEvent(c, eventType, current, &previous, changes, extra, key, stamp.UTC().Format(time.RFC3339Nano))
 }

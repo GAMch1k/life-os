@@ -72,7 +72,7 @@ func TestEventValidation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			fields := tc.base()
 			tc.change(&fields)
-			err := fields.validate()
+			err := fields.validate(time.UTC)
 			if tc.want == "" && err != nil {
 				t.Fatalf("validate() = %v, want valid", err)
 			}
@@ -183,7 +183,7 @@ func TestPatchChangesOnlyNamedFieldsAndNullClears(t *testing.T) {
 	current.UseDefaultReminders = false
 	current.Recurrence = &generated.Recurrence{Frequency: generated.Yearly, Interval: 1}
 
-	next, err := mustPatch(t, `{"title":"Dentist (moved)","description":null,"recurrence":null,"reminders":[]}`).apply(current, time.Now())
+	next, err := mustPatch(t, `{"title":"Dentist (moved)","description":null,"recurrence":null,"reminders":[]}`).apply(current, time.Now(), time.UTC)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,11 +197,11 @@ func TestPatchChangesOnlyNamedFieldsAndNullClears(t *testing.T) {
 		t.Errorf("unnamed fields changed: %+v", next)
 	}
 
-	next, err = mustPatch(t, `{"reminders":null}`).apply(current, time.Now())
+	next, err = mustPatch(t, `{"reminders":null}`).apply(current, time.Now(), time.UTC)
 	if err != nil || next.Reminders == nil || len(next.Reminders) != 0 || !next.UseDefaultReminders {
 		t.Errorf("reminders:null = %v (defaults %v), %v; want back to the defaults alone", next.Reminders, next.UseDefaultReminders, err)
 	}
-	next, err = mustPatch(t, `{"reminders":null,"useDefaultReminders":false}`).apply(current, time.Now())
+	next, err = mustPatch(t, `{"reminders":null,"useDefaultReminders":false}`).apply(current, time.Now(), time.UTC)
 	if err != nil || len(next.Reminders) != 0 || next.UseDefaultReminders {
 		t.Errorf("reminders:null with the defaults off = %v (defaults %v), %v; want no reminders at all", next.Reminders, next.UseDefaultReminders, err)
 	}
@@ -212,11 +212,11 @@ func TestPatchTurnsDefaultRemindersOnAndOffAndKeepsOwn(t *testing.T) {
 	current.Reminders = []generated.Reminder{{Kind: generated.Relative, MinutesBefore: ptr(180)}}
 	current.UseDefaultReminders = true
 
-	next, err := mustPatch(t, `{"useDefaultReminders":false}`).apply(current, time.Now())
+	next, err := mustPatch(t, `{"useDefaultReminders":false}`).apply(current, time.Now(), time.UTC)
 	if err != nil || next.UseDefaultReminders || len(next.Reminders) != 1 {
 		t.Fatalf("defaults off = %+v, %v; want own reminders kept", next, err)
 	}
-	next, err = mustPatch(t, `{"useDefaultReminders":true,"reminders":[{"kind":"relative","minutesBefore":30},{"kind":"relative","minutesBefore":1440}]}`).apply(next, time.Now())
+	next, err = mustPatch(t, `{"useDefaultReminders":true,"reminders":[{"kind":"relative","minutesBefore":30},{"kind":"relative","minutesBefore":1440}]}`).apply(next, time.Now(), time.UTC)
 	if err != nil || !next.UseDefaultReminders || len(next.Reminders) != 2 {
 		t.Fatalf("defaults on with two own = %+v, %v", next, err)
 	}
@@ -263,7 +263,7 @@ func TestEffectiveRemindersAddOwnToDefaultsOnce(t *testing.T) {
 func TestPatchSwitchesBetweenTimedAndAllDay(t *testing.T) {
 	current := timedFields()
 	current.TimeZone = ptr("Europe/Berlin")
-	next, err := mustPatch(t, `{"allDay":true,"startDate":"2026-11-17","endDate":"2026-11-17"}`).apply(current, time.Now())
+	next, err := mustPatch(t, `{"allDay":true,"startDate":"2026-11-17","endDate":"2026-11-17"}`).apply(current, time.Now(), time.UTC)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,10 +271,10 @@ func TestPatchSwitchesBetweenTimedAndAllDay(t *testing.T) {
 		t.Fatalf("to all-day: %+v", next)
 	}
 	// Without the new kind's dates the switch is incomplete.
-	if _, err := mustPatch(t, `{"allDay":true}`).apply(current, time.Now()); err == nil {
+	if _, err := mustPatch(t, `{"allDay":true}`).apply(current, time.Now(), time.UTC); err == nil {
 		t.Fatal("switch to all-day without dates was accepted")
 	}
-	back, err := mustPatch(t, `{"allDay":false,"startAt":"2026-11-17T09:00:00Z","endAt":"2026-11-17T10:00:00Z"}`).apply(next, time.Now())
+	back, err := mustPatch(t, `{"allDay":false,"startAt":"2026-11-17T09:00:00Z","endAt":"2026-11-17T10:00:00Z"}`).apply(next, time.Now(), time.UTC)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,18 +282,18 @@ func TestPatchSwitchesBetweenTimedAndAllDay(t *testing.T) {
 		t.Fatalf("back to timed: %+v", back)
 	}
 	// Without a switch, the other kind's fields are refused, not dropped.
-	if _, err := mustPatch(t, `{"startDate":"2026-11-18"}`).apply(current, time.Now()); err == nil {
+	if _, err := mustPatch(t, `{"startDate":"2026-11-18"}`).apply(current, time.Now(), time.UTC); err == nil {
 		t.Fatal("a date on a timed event was accepted")
 	}
 	// Moving the start past the end is refused: the result is validated.
-	if _, err := mustPatch(t, `{"startAt":"2026-11-18T09:00:00Z"}`).apply(current, time.Now()); err == nil {
+	if _, err := mustPatch(t, `{"startAt":"2026-11-18T09:00:00Z"}`).apply(current, time.Now(), time.UTC); err == nil {
 		t.Fatal("start after end was accepted")
 	}
 }
 
 func TestPatchCancelsAndRestores(t *testing.T) {
 	now := time.Date(2026, time.October, 10, 12, 0, 0, 0, time.FixedZone("CEST", 2*3600))
-	cancelled, err := mustPatch(t, `{"status":"cancelled"}`).apply(timedFields(), now)
+	cancelled, err := mustPatch(t, `{"status":"cancelled"}`).apply(timedFields(), now, time.UTC)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,20 +301,20 @@ func TestPatchCancelsAndRestores(t *testing.T) {
 		t.Fatalf("cancelled: %+v", cancelled)
 	}
 	// Cancelling again keeps the original moment.
-	again, err := mustPatch(t, `{"status":"cancelled"}`).apply(cancelled, now.Add(time.Hour))
+	again, err := mustPatch(t, `{"status":"cancelled"}`).apply(cancelled, now.Add(time.Hour), time.UTC)
 	if err != nil || !again.CancelledAt.Equal(now) {
 		t.Fatalf("re-cancelled at %v, %v; want %v", again.CancelledAt, err, now)
 	}
 	removed := cancelled
 	removed.RemovedFromSourceAt = ptr(now)
-	restored, err := mustPatch(t, `{"status":"active"}`).apply(removed, now)
+	restored, err := mustPatch(t, `{"status":"active"}`).apply(removed, now, time.UTC)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if restored.Status != generated.Active || restored.CancelledAt != nil || restored.RemovedFromSourceAt != nil {
 		t.Fatalf("restored: %+v", restored)
 	}
-	if _, err := mustPatch(t, `{"status":"archived"}`).apply(timedFields(), now); err == nil {
+	if _, err := mustPatch(t, `{"status":"archived"}`).apply(timedFields(), now, time.UTC); err == nil {
 		t.Fatal("unknown status accepted")
 	}
 }

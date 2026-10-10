@@ -420,7 +420,7 @@ components:
         be at least 1`, `recurrence byWeekday is only for weekly recurrence`,
         `recurrence byWeekday days must be MO, TU, WE, TH, FR, SA, or SU`,
         `recurrence byWeekday must include the weekday the event starts on
-        (<Weekday>)`, `recurrence count must be between 1 and 1000`,
+        (Saturday)` (naming that weekday), `recurrence count must be between 1 and 1000`,
         `recurrence takes until or count, not both`, `recurrence until must
         not be before the event starts`.
       required: [frequency, interval]

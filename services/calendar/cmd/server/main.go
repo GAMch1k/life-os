@@ -21,7 +21,6 @@ import (
 	"github.com/GAMch1k/life-os/services/calendar/internal/api"
 	serviceconfig "github.com/GAMch1k/life-os/services/calendar/internal/config"
 	"github.com/GAMch1k/life-os/services/calendar/internal/ics"
-	repository "github.com/GAMch1k/life-os/services/calendar/internal/repository/generated"
 	"github.com/GAMch1k/life-os/services/calendar/internal/sources"
 )
 
@@ -71,7 +70,7 @@ func run(ctx context.Context) error {
 	// Before the scheduler starts, so a new or reconfigured ZAW source is
 	// refreshed right away.
 	ensureZAW(ctx, refresher, cfg.ZAWICSURL, logger)
-	api.Register(app, api.NewHandler(repository.New(pool), ownerTimeZone).WithSources(refresher, scheduler.Wake).WithActivity(emitter))
+	api.Register(app, api.NewHandler(pool, ownerTimeZone).WithSources(refresher, scheduler.Wake).WithActivity(emitter))
 	app.OnShutdown(database.ClosePool(pool))
 
 	// The scheduler stops (finishing a refresh under way) before the pool
