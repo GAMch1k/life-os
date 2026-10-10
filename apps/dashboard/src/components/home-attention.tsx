@@ -183,7 +183,7 @@ function AttentionCard({
               >
                 <span className="truncate">{item.label}</span>
                 {item.hint ? (
-                  <span className="text-muted-foreground shrink-0 text-xs">
+                  <span className="text-muted-foreground max-w-[50%] shrink-0 truncate text-xs">
                     {item.hint}
                   </span>
                 ) : null}
