@@ -87,7 +87,7 @@ test.describe("Theme", () => {
     await expect(page).toHaveURL(/\/finance$/);
     await expectTheme(page, "dark");
 
-    await page.goto("/tasks");
+    await page.goto("/status");
     await expectTheme(page, "dark");
 
     await expectSelected(page, "Dark theme");
@@ -96,7 +96,7 @@ test.describe("Theme", () => {
     await page.reload();
     await expectTheme(page, "light");
     await expectSelected(page, "Light theme");
-    await page.goto("/status");
+    await page.goto("/");
     await expectTheme(page, "light");
   });
 
