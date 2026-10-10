@@ -11,16 +11,47 @@ import (
 )
 
 type Querier interface {
+	// An account the owner already called Cash becomes the built-in one.
+	AdoptAccountAsBuiltIn(ctx context.Context, arg AdoptAccountAsBuiltInParams) (Account, error)
+	CountAccountTransactions(ctx context.Context, accountID pgtype.UUID) (int64, error)
 	CreateAccount(ctx context.Context, arg CreateAccountParams) (Account, error)
+	CreateBuiltInAccount(ctx context.Context, arg CreateBuiltInAccountParams) (Account, error)
+	CreateCategoryRule(ctx context.Context, arg CreateCategoryRuleParams) (CategoryRule, error)
 	CreateFinancialCategory(ctx context.Context, arg CreateFinancialCategoryParams) (FinancialCategory, error)
+	// No row comes back when the account already has this import identity.
+	CreateImportedTransaction(ctx context.Context, arg CreateImportedTransactionParams) (Transaction, error)
 	CreateTransaction(ctx context.Context, arg CreateTransactionParams) (Transaction, error)
-	GetMonthlyCashflow(ctx context.Context, monthStart pgtype.Date) (GetMonthlyCashflowRow, error)
-	GetMonthlySpendingByCategory(ctx context.Context, monthStart pgtype.Date) ([]GetMonthlySpendingByCategoryRow, error)
-	GetTransactionByImportIdentity(ctx context.Context, arg GetTransactionByImportIdentityParams) (Transaction, error)
-	ListAccountsWithBalance(ctx context.Context) ([]ListAccountsWithBalanceRow, error)
-	ListFinancialCategories(ctx context.Context) ([]FinancialCategory, error)
+	DeleteCategoryRule(ctx context.Context, id pgtype.UUID) (CategoryRule, error)
+	DeleteTransaction(ctx context.Context, id pgtype.UUID) error
+	GetAccount(ctx context.Context, id pgtype.UUID) (Account, error)
+	GetBuiltInAccount(ctx context.Context, systemKey string) (Account, error)
+	GetCategoryRule(ctx context.Context, id pgtype.UUID) (CategoryRule, error)
+	GetFinancialCategory(ctx context.Context, id pgtype.UUID) (FinancialCategory, error)
+	// Booked transactions of the month in one currency, leaving out transfers.
+	GetMonthlyCashflow(ctx context.Context, arg GetMonthlyCashflowParams) (GetMonthlyCashflowRow, error)
+	GetMonthlyCategoryTotals(ctx context.Context, arg GetMonthlyCategoryTotalsParams) ([]GetMonthlyCategoryTotalsRow, error)
+	GetTransaction(ctx context.Context, id pgtype.UUID) (Transaction, error)
+	GetTransactionForUpdate(ctx context.Context, id pgtype.UUID) (Transaction, error)
+	ListAccountsWithBalance(ctx context.Context, arg ListAccountsWithBalanceParams) ([]ListAccountsWithBalanceRow, error)
+	// The rules that may categorize: those of categories that are not archived,
+	// in the order they are tried.
+	ListActiveCategoryRules(ctx context.Context) ([]CategoryRule, error)
+	ListCategoryRules(ctx context.Context) ([]CategoryRule, error)
+	ListFinancialCategories(ctx context.Context, includeArchived bool) ([]FinancialCategory, error)
+	// Transactions whose category was not chosen by hand: those without a
+	// category, plus those a rule categorized when all_categorized is set.
+	ListRuleCandidates(ctx context.Context, allCategorized bool) ([]ListRuleCandidatesRow, error)
+	// Latest booking date first, then latest created; the after_* position is
+	// the last row of the previous page. Every search word must occur in the
+	// counterparty, description, or notes (the words arrive LIKE-escaped).
 	ListTransactions(ctx context.Context, arg ListTransactionsParams) ([]Transaction, error)
+	LockBuiltInAccounts(ctx context.Context) error
+	// Gives each transaction the category its rule chose (null: none).
+	SetRuleCategories(ctx context.Context, arg SetRuleCategoriesParams) error
+	UpdateAccount(ctx context.Context, arg UpdateAccountParams) (Account, error)
+	UpdateCategoryRule(ctx context.Context, arg UpdateCategoryRuleParams) (CategoryRule, error)
 	UpdateFinancialCategory(ctx context.Context, arg UpdateFinancialCategoryParams) (FinancialCategory, error)
+	UpdateTransaction(ctx context.Context, arg UpdateTransactionParams) (Transaction, error)
 }
 
 var _ Querier = (*Queries)(nil)

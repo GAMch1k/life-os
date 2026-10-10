@@ -15,14 +15,33 @@ type Account struct {
 	OpeningBalanceMinor int64
 	CreatedAt           pgtype.Timestamptz
 	UpdatedAt           pgtype.Timestamptz
+	Kind                string
+	SystemKey           *string
+	ArchivedAt          pgtype.Timestamptz
+	SourceKind          string
+	ConnectionID        pgtype.UUID
+	ExternalID          *string
+}
+
+type CategoryRule struct {
+	ID            pgtype.UUID
+	CategoryID    pgtype.UUID
+	MatchField    string
+	MatchOperator string
+	MatchText     string
+	Priority      int32
+	CreatedAt     pgtype.Timestamptz
+	UpdatedAt     pgtype.Timestamptz
 }
 
 type FinancialCategory struct {
-	ID        pgtype.UUID
-	Name      string
-	Kind      string
-	CreatedAt pgtype.Timestamptz
-	UpdatedAt pgtype.Timestamptz
+	ID         pgtype.UUID
+	Name       string
+	Kind       string
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
+	Color      *string
+	ArchivedAt pgtype.Timestamptz
 }
 
 type Transaction struct {
@@ -40,4 +59,11 @@ type Transaction struct {
 	UpdatedAt                pgtype.Timestamptz
 	AutomationIdempotencyKey *string
 	AutomationPayloadHash    *string
+	Counterparty             *string
+	Description              *string
+	Status                   string
+	ValueDate                pgtype.Date
+	ConnectionID             pgtype.UUID
+	CategorizedBy            *string
+	CategoryRuleID           pgtype.UUID
 }
