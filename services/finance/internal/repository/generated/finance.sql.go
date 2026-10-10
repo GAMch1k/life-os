@@ -286,7 +286,7 @@ const createCategoryRule = `-- name: CreateCategoryRule :one
 INSERT INTO category_rules (category_id, match_field, match_operator, match_text, priority)
 VALUES (
     $1, $2, $3, $4,
-    COALESCE($5::integer, (SELECT COALESCE(MAX(priority), 0) + 10 FROM category_rules))
+    COALESCE($5::integer, (SELECT COALESCE(MAX(priority), 0) + 10 FROM category_rules WHERE priority < 100000))
 )
 RETURNING id, category_id, match_field, match_operator, match_text, priority, created_at, updated_at
 `
@@ -324,7 +324,7 @@ func (q *Queries) CreateCategoryRule(ctx context.Context, arg CreateCategoryRule
 const createFinancialCategory = `-- name: CreateFinancialCategory :one
 INSERT INTO financial_categories (name, kind, color)
 VALUES ($1, $2, $3)
-RETURNING id, name, kind, created_at, updated_at, color, archived_at
+RETURNING id, name, kind, created_at, updated_at, color, archived_at, system_key
 `
 
 type CreateFinancialCategoryParams struct {
@@ -344,6 +344,7 @@ func (q *Queries) CreateFinancialCategory(ctx context.Context, arg CreateFinanci
 		&i.UpdatedAt,
 		&i.Color,
 		&i.ArchivedAt,
+		&i.SystemKey,
 	)
 	return i, err
 }
@@ -727,7 +728,7 @@ func (q *Queries) GetCategoryRule(ctx context.Context, id pgtype.UUID) (Category
 }
 
 const getFinancialCategory = `-- name: GetFinancialCategory :one
-SELECT id, name, kind, created_at, updated_at, color, archived_at FROM financial_categories WHERE id = $1
+SELECT id, name, kind, created_at, updated_at, color, archived_at, system_key FROM financial_categories WHERE id = $1
 `
 
 func (q *Queries) GetFinancialCategory(ctx context.Context, id pgtype.UUID) (FinancialCategory, error) {
@@ -741,6 +742,7 @@ func (q *Queries) GetFinancialCategory(ctx context.Context, id pgtype.UUID) (Fin
 		&i.UpdatedAt,
 		&i.Color,
 		&i.ArchivedAt,
+		&i.SystemKey,
 	)
 	return i, err
 }
@@ -1169,7 +1171,7 @@ func (q *Queries) ListConnectionAccounts(ctx context.Context, connectionID pgtyp
 }
 
 const listFinancialCategories = `-- name: ListFinancialCategories :many
-SELECT id, name, kind, created_at, updated_at, color, archived_at FROM financial_categories
+SELECT id, name, kind, created_at, updated_at, color, archived_at, system_key FROM financial_categories
 WHERE ($1::boolean OR archived_at IS NULL)
 ORDER BY kind, lower(name), id
 `
@@ -1191,6 +1193,7 @@ func (q *Queries) ListFinancialCategories(ctx context.Context, includeArchived b
 			&i.UpdatedAt,
 			&i.Color,
 			&i.ArchivedAt,
+			&i.SystemKey,
 		); err != nil {
 			return nil, err
 		}
@@ -1203,7 +1206,7 @@ func (q *Queries) ListFinancialCategories(ctx context.Context, includeArchived b
 }
 
 const listRuleCandidates = `-- name: ListRuleCandidates :many
-SELECT id, counterparty, description, category_id, categorized_by, category_rule_id
+SELECT id, counterparty, description, merchant_category_code, category_id, categorized_by, category_rule_id
 FROM transactions
 WHERE categorized_by IS DISTINCT FROM 'manual'
   AND ($1::boolean OR category_id IS NULL)
@@ -1212,16 +1215,18 @@ FOR UPDATE
 `
 
 type ListRuleCandidatesRow struct {
-	ID             pgtype.UUID
-	Counterparty   *string
-	Description    *string
-	CategoryID     pgtype.UUID
-	CategorizedBy  *string
-	CategoryRuleID pgtype.UUID
+	ID                   pgtype.UUID
+	Counterparty         *string
+	Description          *string
+	MerchantCategoryCode *string
+	CategoryID           pgtype.UUID
+	CategorizedBy        *string
+	CategoryRuleID       pgtype.UUID
 }
 
 // Transactions whose category was not chosen by hand: those without a
-// category, plus those a rule categorized when all_categorized is set.
+// category, plus those a rule or a merchant category code categorized when
+// all_categorized is set.
 func (q *Queries) ListRuleCandidates(ctx context.Context, allCategorized bool) ([]ListRuleCandidatesRow, error) {
 	rows, err := q.db.Query(ctx, listRuleCandidates, allCategorized)
 	if err != nil {
@@ -1235,6 +1240,7 @@ func (q *Queries) ListRuleCandidates(ctx context.Context, allCategorized bool) (
 			&i.ID,
 			&i.Counterparty,
 			&i.Description,
+			&i.MerchantCategoryCode,
 			&i.CategoryID,
 			&i.CategorizedBy,
 			&i.CategoryRuleID,
@@ -1377,23 +1383,31 @@ const setRuleCategories = `-- name: SetRuleCategories :exec
 UPDATE transactions AS t
 SET category_id = u.category_id,
     category_rule_id = u.rule_id,
-    categorized_by = CASE WHEN u.category_id IS NULL THEN NULL ELSE 'rule' END,
+    categorized_by = CASE WHEN u.category_id IS NULL THEN NULL ELSE NULLIF(u.categorized_by, '') END,
     updated_at = now()
 FROM (SELECT unnest($1::uuid[]) AS id,
              unnest($2::uuid[]) AS category_id,
-             unnest($3::uuid[]) AS rule_id) AS u
+             unnest($3::uuid[]) AS rule_id,
+             unnest($4::text[]) AS categorized_by) AS u
 WHERE t.id = u.id
 `
 
 type SetRuleCategoriesParams struct {
-	Ids         []pgtype.UUID
-	CategoryIds []pgtype.UUID
-	RuleIds     []pgtype.UUID
+	Ids           []pgtype.UUID
+	CategoryIds   []pgtype.UUID
+	RuleIds       []pgtype.UUID
+	CategorizedBy []string
 }
 
-// Gives each transaction the category its rule chose (null: none).
+// Gives each transaction the category its rule or merchant category code
+// chose (null: none); categorized_by is 'rule', 'mcc', or ” for none.
 func (q *Queries) SetRuleCategories(ctx context.Context, arg SetRuleCategoriesParams) error {
-	_, err := q.db.Exec(ctx, setRuleCategories, arg.Ids, arg.CategoryIds, arg.RuleIds)
+	_, err := q.db.Exec(ctx, setRuleCategories,
+		arg.Ids,
+		arg.CategoryIds,
+		arg.RuleIds,
+		arg.CategorizedBy,
+	)
 	return err
 }
 
@@ -1661,7 +1675,7 @@ SET name = COALESCE($1, name),
     END,
     updated_at = now()
 WHERE id = $6
-RETURNING id, name, kind, created_at, updated_at, color, archived_at
+RETURNING id, name, kind, created_at, updated_at, color, archived_at, system_key
 `
 
 type UpdateFinancialCategoryParams struct {
@@ -1691,6 +1705,7 @@ func (q *Queries) UpdateFinancialCategory(ctx context.Context, arg UpdateFinanci
 		&i.UpdatedAt,
 		&i.Color,
 		&i.ArchivedAt,
+		&i.SystemKey,
 	)
 	return i, err
 }

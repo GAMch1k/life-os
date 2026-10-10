@@ -222,3 +222,37 @@ func TestEveryMigrationRollsBackAndForwardWithData(t *testing.T) {
 		t.Fatalf("after migrating forward again: status %q, %v", status, err)
 	}
 }
+
+func TestBudgetMigrationRollsBackAndForwardKeepingCategories(t *testing.T) {
+	pool := testdb.Open(t, "")
+	ctx := context.Background()
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := pool.Exec(ctx, sql, args...); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	exec(`INSERT INTO accounts (name, currency) VALUES ('Giro', 'EUR')`)
+	exec(`INSERT INTO financial_categories (name, kind, system_key) VALUES ('Groceries', 'expense', 'groceries')`)
+	exec(`INSERT INTO transactions (account_id, category_id, amount_minor, currency, occurred_on, categorized_by, merchant_category_code)
+	      SELECT a.id, c.id, -500, 'EUR', '2026-10-02', 'mcc', '5411' FROM accounts a, financial_categories c`)
+	exec(`INSERT INTO budget_plans (month, scope, currency, expected_income_minor) VALUES ('2026-10-01', 'regular', 'EUR', 300000)`)
+	exec(`INSERT INTO budget_plan_lines (plan_id, category_id, amount_minor) SELECT p.id, c.id, 30000 FROM budget_plans p, financial_categories c`)
+	exec(`INSERT INTO budget_notifications (dedupe_key, month) VALUES ('finance.budget:2026-10:summary', '2026-10-01')`)
+	// A plan month is a month's first day; a system key is unique.
+	if _, err := pool.Exec(ctx, `INSERT INTO budget_plans (month, scope, currency) VALUES ('2026-10-02', 'month', 'EUR')`); err == nil {
+		t.Fatal("a plan for the 2nd of a month was accepted")
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO financial_categories (name, kind, system_key) VALUES ('Food', 'expense', 'groceries')`); err == nil {
+		t.Fatal("a second groceries category was accepted")
+	}
+
+	testdb.Apply(t, pool, testdb.Migration(t, "000006", "down"))
+	var categorizedBy, category string
+	if err := pool.QueryRow(ctx, `SELECT t.categorized_by, c.name FROM transactions t JOIN financial_categories c ON c.id = t.category_id`).Scan(&categorizedBy, &category); err != nil ||
+		categorizedBy != "rule" || category != "Groceries" {
+		t.Fatalf("after rollback: %q %q %v", categorizedBy, category, err)
+	}
+	testdb.Apply(t, pool, testdb.Migration(t, "000006", "up"))
+	exec(`UPDATE transactions SET categorized_by = 'mcc'`)
+}

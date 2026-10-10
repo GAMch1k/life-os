@@ -110,7 +110,7 @@ SELECT * FROM category_rules WHERE id = $1;
 INSERT INTO category_rules (category_id, match_field, match_operator, match_text, priority)
 VALUES (
     sqlc.arg(category_id), sqlc.arg(match_field), sqlc.arg(match_operator), sqlc.arg(match_text),
-    COALESCE(sqlc.narg(priority)::integer, (SELECT COALESCE(MAX(priority), 0) + 10 FROM category_rules))
+    COALESCE(sqlc.narg(priority)::integer, (SELECT COALESCE(MAX(priority), 0) + 10 FROM category_rules WHERE priority < 100000))
 )
 RETURNING *;
 
@@ -216,8 +216,9 @@ DELETE FROM transactions WHERE id = $1;
 
 -- name: ListRuleCandidates :many
 -- Transactions whose category was not chosen by hand: those without a
--- category, plus those a rule categorized when all_categorized is set.
-SELECT id, counterparty, description, category_id, categorized_by, category_rule_id
+-- category, plus those a rule or a merchant category code categorized when
+-- all_categorized is set.
+SELECT id, counterparty, description, merchant_category_code, category_id, categorized_by, category_rule_id
 FROM transactions
 WHERE categorized_by IS DISTINCT FROM 'manual'
   AND (sqlc.arg(all_categorized)::boolean OR category_id IS NULL)
@@ -225,15 +226,17 @@ ORDER BY id
 FOR UPDATE;
 
 -- name: SetRuleCategories :exec
--- Gives each transaction the category its rule chose (null: none).
+-- Gives each transaction the category its rule or merchant category code
+-- chose (null: none); categorized_by is 'rule', 'mcc', or '' for none.
 UPDATE transactions AS t
 SET category_id = u.category_id,
     category_rule_id = u.rule_id,
-    categorized_by = CASE WHEN u.category_id IS NULL THEN NULL ELSE 'rule' END,
+    categorized_by = CASE WHEN u.category_id IS NULL THEN NULL ELSE NULLIF(u.categorized_by, '') END,
     updated_at = now()
 FROM (SELECT unnest(sqlc.arg(ids)::uuid[]) AS id,
              unnest(sqlc.arg(category_ids)::uuid[]) AS category_id,
-             unnest(sqlc.arg(rule_ids)::uuid[]) AS rule_id) AS u
+             unnest(sqlc.arg(rule_ids)::uuid[]) AS rule_id,
+             unnest(sqlc.arg(categorized_by)::text[]) AS categorized_by) AS u
 WHERE t.id = u.id;
 
 -- name: GetMonthlyCashflow :one

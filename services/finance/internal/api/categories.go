@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"regexp"
@@ -33,6 +34,24 @@ func ruleView(item store.CategoryRule) generated.CategoryRule {
 	return generated.CategoryRule{Id: uuid(item.ID), CategoryId: uuid(item.CategoryID), Priority: int(item.Priority),
 		Match:     generated.RuleMatch{Field: generated.RuleField(item.MatchField), Operator: generated.RuleOperator(item.MatchOperator), Text: item.MatchText},
 		CreatedAt: item.CreatedAt.Time.UTC(), UpdatedAt: item.UpdatedAt.Time.UTC()}
+}
+
+// categorizer is the rules in the order they are tried, with the active
+// default categories for the merchant category code fallback.
+func categorizer(ctx context.Context, q *store.Queries) (rules.Categorizer, error) {
+	active, err := q.ListActiveCategoryRules(ctx)
+	if err != nil {
+		return rules.Categorizer{}, err
+	}
+	defaults, err := q.ListDefaultCategories(ctx)
+	if err != nil {
+		return rules.Categorizer{}, err
+	}
+	result := rules.Categorizer{Rules: ruleSet(active), Defaults: make(map[string][16]byte, len(defaults))}
+	for _, category := range defaults {
+		result.Defaults[*category.SystemKey] = category.ID.Bytes
+	}
+	return result, nil
 }
 
 func categoryName(raw string) (string, error) {
@@ -317,20 +336,19 @@ func (h *Handler) ApplyCategoryRules(c fiber.Ctx) error {
 	ctx := c.Context()
 	var counts ruleCounts
 	err := h.inTx(ctx, func(q *store.Queries) error {
-		active, err := q.ListActiveCategoryRules(ctx)
+		chooser, err := categorizer(ctx, q)
 		if err != nil {
 			return err
 		}
-		set := ruleSet(active)
 		candidates, err := q.ListRuleCandidates(ctx, scope == "all")
 		if err != nil {
 			return err
 		}
-		update := store.SetRuleCategoriesParams{Ids: []pgtype.UUID{}, CategoryIds: []pgtype.UUID{}, RuleIds: []pgtype.UUID{}}
+		update := store.SetRuleCategoriesParams{Ids: []pgtype.UUID{}, CategoryIds: []pgtype.UUID{}, RuleIds: []pgtype.UUID{}, CategorizedBy: []string{}}
 		for _, candidate := range candidates {
 			counts.Examined++
 			current := store.Transaction{CategoryID: candidate.CategoryID, CategoryRuleID: candidate.CategoryRuleID, CategorizedBy: candidate.CategorizedBy}
-			assignment, outcome := rules.Reapply(set, assignmentOf(current), textOf(candidate.Counterparty, candidate.Description))
+			assignment, outcome := chooser.Reapply(assignmentOf(current), textWithCode(candidate.Counterparty, candidate.Description, candidate.MerchantCategoryCode))
 			switch outcome {
 			case rules.Categorized:
 				counts.Categorized++
@@ -349,6 +367,7 @@ func (h *Handler) ApplyCategoryRules(c fiber.Ctx) error {
 			update.Ids = append(update.Ids, candidate.ID)
 			update.CategoryIds = append(update.CategoryIds, next.CategoryID)
 			update.RuleIds = append(update.RuleIds, next.CategoryRuleID)
+			update.CategorizedBy = append(update.CategorizedBy, assignment.CategorizedBy)
 		}
 		if len(update.Ids) == 0 {
 			return nil
