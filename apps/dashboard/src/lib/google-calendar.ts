@@ -2,9 +2,10 @@ import type { components } from "@/lib/api/generated/calendar";
 import { dateTimeFormat } from "@/lib/time-zone";
 
 // The Google Calendar connection as the Dashboard shows it: Calendar owns the
-// OAuth flow, the tokens, and the sync; the Dashboard opens Google's consent
-// page, carries the answer back from /calendar/google/callback, edits which
-// calendars sync, and shows how their sync is going. Tokens never reach the
+// OAuth flow, the tokens, and the two-way sync; the Dashboard opens Google's
+// consent page, carries the answer back from /calendar/google/callback,
+// edits which calendars sync and whether Life OS events are exported to the
+// Life OS calendar, and shows how both are going. Tokens never reach the
 // browser.
 
 export type GoogleConnection = components["schemas"]["GoogleConnection"];
@@ -54,9 +55,13 @@ const ROLE_LABEL: Record<GoogleCalendar["accessRole"], string> = {
   freeBusyReader: "Free/busy only",
 };
 
-/** How the calendar is described under its name, such as "Primary · Owner". */
+/**
+ * How the calendar is described under its name, such as "Primary · Owner"
+ * or "Created by Life OS · Owner" for the Life OS calendar.
+ */
 export function calendarDetail(calendar: GoogleCalendar) {
   const role = ROLE_LABEL[calendar.accessRole] ?? calendar.accessRole;
+  if (calendar.lifeOs) return `Created by Life OS · ${role}`;
   return calendar.primary ? `Primary · ${role}` : role;
 }
 
@@ -70,7 +75,57 @@ export function syncSummary(calendars: GoogleCalendar[]) {
 
 /** What the dialog says about syncing chosen calendars. */
 export const SYNC_NOTE =
-  "Chosen calendars sync every few minutes; their events are read-only here, except reminders. Unticking one removes its events from Life OS (they stay in Google).";
+  "Chosen calendars sync both ways every few minutes: editing their events here changes them in Google (calendars you can only read stay read-only here, except reminders and priority). Unticking one removes its events from Life OS (they stay in Google).";
+
+/** What the dialog says about exporting Life OS events. */
+export const EXPORT_NOTE =
+  "Events you create in Life OS are copied to a “Life OS” calendar in your Google account, with its own color on your phone; changes made there come back to Life OS. Hide or remove that calendar in Google Calendar at any time. Feed events (such as ZAW) are not exported.";
+
+/**
+ * How exporting Life OS events goes, for the line under the toggle, such as
+ * "Up to date in “Life OS” · last export 10 Oct, 12:05 CEST"; failing marks
+ * exports that keep failing (retried automatically).
+ */
+export function exportDetail(
+  connection: GoogleConnection,
+  timeZone: string,
+): { text: string; failing: boolean } {
+  if (!connection.exportEnabled) {
+    return {
+      text: "Off: events created in Life OS stay in Life OS.",
+      failing: false,
+    };
+  }
+  const { pending, failed, lastError, lastExportedAt } = connection.export ?? {
+    pending: 0,
+    failed: 0,
+  };
+  const calendar = connection.lifeOsCalendar;
+  if (failed > 0) {
+    return {
+      text: `${failed} event${failed === 1 ? "" : "s"} could not be exported${lastError ? `: ${lastError}` : ""}. Retrying automatically.`,
+      failing: true,
+    };
+  }
+  if (!calendar) {
+    return lastError
+      ? { text: lastError, failing: true }
+      : {
+          text: "Life OS creates its “Life OS” calendar in your Google account within a few minutes.",
+          failing: false,
+        };
+  }
+  if (pending > 0) {
+    return {
+      text: `${pending} event${pending === 1 ? "" : "s"} waiting to be exported to “${calendar.summary}”…`,
+      failing: false,
+    };
+  }
+  const last = lastExportedAt
+    ? ` · last export ${syncTime(lastExportedAt, timeZone)}`
+    : "";
+  return { text: `Up to date in “${calendar.summary}”${last}`, failing: false };
+}
 
 const SYNC_TIME: Intl.DateTimeFormatOptions = {
   day: "numeric",

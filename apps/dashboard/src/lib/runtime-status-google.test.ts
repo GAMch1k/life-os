@@ -34,6 +34,8 @@ const google = (
   missingScopes: [],
   connectedAt: "2026-10-10T08:00:00Z",
   lastError: null,
+  exportEnabled: true,
+  export: { pending: 0, failed: 0 },
   ...overrides,
 });
 
@@ -53,6 +55,7 @@ test("a connected Google account is a healthy part of the Calendar check", () =>
   assert.deepEqual(part?.facts, [
     { label: "Account", value: "owner@example.com" },
     { label: "Connected", value: "10 Oct 2026, 10:00 CEST" },
+    { label: "Export", value: "up to date in “Life OS”" },
   ]);
 });
 
@@ -64,10 +67,13 @@ test("missing permissions show as a fact", () => {
     "Europe/Berlin",
   );
   assert.equal(part?.state, "ok");
-  assert.deepEqual(part?.facts.at(-1), {
-    label: "Not granted",
-    value: "manage the calendars Life OS creates",
-  });
+  assert.deepEqual(
+    part?.facts.find((fact) => fact.label === "Not granted"),
+    {
+      label: "Not granted",
+      value: "manage the calendars Life OS creates",
+    },
+  );
 });
 
 test("not connected is neutral; not set up shows nothing", () => {
@@ -132,6 +138,7 @@ const synced = (
   accessRole: "owner",
   primary: false,
   syncEnabled,
+  lifeOs: false,
   sync: {
     state: syncEnabled ? "synced" : "off",
     consecutiveFailures: 0,
@@ -154,20 +161,25 @@ test("the Google part shows what syncs and when it last did", () => {
   assert.deepEqual(part?.facts.slice(2), [
     { label: "Syncing", value: "Owner, Family" },
     { label: "Last sync", value: "10 Oct 2026, 13:58 CEST" },
+    { label: "Export", value: "up to date in “Life OS”" },
   ]);
   const none = googlePart(google(), "Europe/Berlin", [
     synced("Holidays", {}, false),
   ]);
   assert.deepEqual(none?.facts.slice(2), [
     { label: "Syncing", value: "no calendar chosen" },
+    { label: "Export", value: "up to date in “Life OS”" },
   ]);
   const first = googlePart(google(), "Europe/Berlin", [
     synced("Owner", { state: "pending", lastSyncedAt: null }),
   ]);
-  assert.deepEqual(first?.facts.at(-1), {
-    label: "Last sync",
-    value: "not yet",
-  });
+  assert.deepEqual(
+    first?.facts.find((fact) => fact.label === "Last sync"),
+    {
+      label: "Last sync",
+      value: "not yet",
+    },
+  );
 });
 
 test("a failed sync is retried quietly; one that keeps failing needs attention", () => {
@@ -206,4 +218,45 @@ test("a failed sync is retried quietly; one that keeps failing needs attention",
   assert.equal(check.action, GOOGLE_SYNC_RETRY);
   assert.equal(check.parts?.[0].detail, lastError);
   assert.ok(statusAlerts(status).some((alert) => alert.id === "calendar"));
+});
+
+test("exporting Life OS events shows in the Google part", () => {
+  const fact = (connection: GoogleConnection) =>
+    googlePart(connection, "Europe/Berlin")?.facts.find(
+      (entry) => entry.label === "Export",
+    )?.value;
+  assert.equal(fact(google({ exportEnabled: false })), "off");
+  assert.equal(
+    fact(google({ export: { pending: 3, failed: 0 } })),
+    "3 waiting for “Life OS”",
+  );
+  const failing = googlePart(
+    google({
+      export: {
+        pending: 0,
+        failed: 2,
+        lastError: "Google is unavailable: HTTP 503",
+      },
+      lifeOsCalendar: {
+        googleCalendarId: "lifeos@group.calendar.google.com",
+        summary: "Life OS",
+        note: "The Life OS calendar was deleted in Google; Life OS created it again.",
+      },
+    }),
+    "Europe/Berlin",
+  );
+  assert.equal(failing?.state, "ok");
+  assert.equal(
+    failing?.summary,
+    "Connected as owner@example.com. 2 events created in Life OS could not be exported to Google yet; retried automatically.",
+  );
+  assert.equal(failing?.detail, "Google is unavailable: HTTP 503");
+  assert.deepEqual(failing?.facts.slice(-2), [
+    { label: "Export", value: "2 failing, retried automatically" },
+    {
+      label: "Life OS calendar",
+      value:
+        "The Life OS calendar was deleted in Google; Life OS created it again.",
+    },
+  ]);
 });

@@ -852,6 +852,27 @@ export function googlePart(
       value: last ? formatTime(last, timeZone) : "not yet",
     });
   }
+  // Events created in Life OS, exported to the Life OS calendar.
+  const exports = connection.export;
+  if (exports) {
+    const name = connection.lifeOsCalendar?.summary ?? "Life OS";
+    facts.push({
+      label: "Export",
+      value: !connection.exportEnabled
+        ? "off"
+        : exports.failed
+          ? `${exports.failed} failing, retried automatically`
+          : exports.pending
+            ? `${exports.pending} waiting for “${name}”`
+            : `up to date in “${name}”`,
+    });
+  }
+  if (connection.lifeOsCalendar?.note) {
+    facts.push({
+      label: "Life OS calendar",
+      value: connection.lifeOsCalendar.note,
+    });
+  }
   const failing = synced.filter(
     (calendar) => calendar.sync.state === "failing",
   );
@@ -877,6 +898,15 @@ export function googlePart(
       state: "ok",
       summary: `Connected as ${account}. The last sync of ${failing.map((calendar) => calendar.summary).join(", ")} failed; it is retried automatically.`,
       detail: failing[0].sync.lastError ?? undefined,
+      facts,
+    };
+  }
+  if (connection.exportEnabled && exports?.failed) {
+    return {
+      ...base,
+      state: "ok",
+      summary: `Connected as ${account}. ${exports.failed} event${exports.failed === 1 ? "" : "s"} created in Life OS could not be exported to Google yet; retried automatically.`,
+      detail: exports.lastError ?? undefined,
       facts,
     };
   }

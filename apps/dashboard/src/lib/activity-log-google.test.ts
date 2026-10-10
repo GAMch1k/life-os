@@ -65,3 +65,38 @@ test("Google calendar syncs are labelled like feed refreshes, with their own act
     "Google Calendar sync",
   );
 });
+
+test("two-way sync events are labelled with the event or the account", () => {
+  assert.equal(
+    eventLabel({
+      type: "calendar.google.conflict",
+      data: { title: "Dentist", calendar: "Owner" },
+    }),
+    "Changed in Google meanwhile: Dentist",
+  );
+  assert.equal(
+    eventLabel({
+      type: "calendar.google.export_failed",
+      data: { title: "Walk", error: "HTTP 503" },
+    }),
+    "Export to Google failed: Walk",
+  );
+  assert.equal(
+    eventLabel({
+      type: "calendar.google.calendar_created",
+      data: { accountEmail: "owner@example.com" },
+    }),
+    "Life OS calendar created in Google: owner@example.com",
+  );
+  assert.equal(
+    calendarHref(
+      {
+        type: "calendar.google.conflict",
+        subject: { type: "calendar_event", id: "e" },
+        data: { startAt: "2026-10-12T07:30:00Z" },
+      },
+      "Europe/Berlin",
+    ),
+    "/calendar?date=2026-10-12",
+  );
+});

@@ -5,6 +5,7 @@ import {
   calendarDetail,
   callbackStep,
   connectFailure,
+  exportDetail,
   type GoogleCalendar,
   type GoogleConnection,
   googleState,
@@ -29,6 +30,8 @@ const connection = (
   missingScopes: [],
   connectedAt: "2026-10-10T10:00:00Z",
   lastError: null,
+  exportEnabled: true,
+  export: { pending: 0, failed: 0 },
   ...overrides,
 });
 
@@ -43,6 +46,7 @@ const calendar = (
   accessRole: "writer",
   primary: false,
   syncEnabled: false,
+  lifeOs: false,
   sync: { state: "off", consecutiveFailures: 0, syncing: false },
   createdAt: "2026-10-10T10:00:00Z",
   updatedAt: "2026-10-10T10:00:00Z",
@@ -244,6 +248,87 @@ test("a chosen calendar says how its sync is going", () => {
     {
       text: "Sync failed: Google is unavailable: Calendar API returned HTTP 503. Retrying automatically. Last synced 10 Oct, 12:05 CEST.",
       failing: true,
+    },
+  );
+});
+
+test("the Life OS calendar is named as Life OS's", () => {
+  assert.equal(
+    calendarDetail(calendar("Life OS", { accessRole: "owner", lifeOs: true })),
+    "Created by Life OS · Owner",
+  );
+});
+
+test("the export line says how exporting Life OS events goes", () => {
+  const lifeOsCalendar = {
+    googleCalendarId: "lifeos@group.calendar.google.com",
+    summary: "Life OS",
+    calendarId: "c",
+  };
+  assert.deepEqual(
+    exportDetail(connection({ exportEnabled: false }), "Europe/Berlin"),
+    { text: "Off: events created in Life OS stay in Life OS.", failing: false },
+  );
+  assert.match(
+    exportDetail(connection(), "Europe/Berlin").text,
+    /creates its “Life OS” calendar/,
+  );
+  assert.deepEqual(
+    exportDetail(
+      connection({
+        export: {
+          pending: 0,
+          failed: 0,
+          lastError:
+            "Life OS could not create its calendar in Google: HTTP 403",
+        },
+      }),
+      "Europe/Berlin",
+    ),
+    {
+      text: "Life OS could not create its calendar in Google: HTTP 403",
+      failing: true,
+    },
+  );
+  assert.deepEqual(
+    exportDetail(
+      connection({ lifeOsCalendar, export: { pending: 2, failed: 0 } }),
+      "Europe/Berlin",
+    ),
+    { text: "2 events waiting to be exported to “Life OS”…", failing: false },
+  );
+  assert.deepEqual(
+    exportDetail(
+      connection({
+        lifeOsCalendar,
+        export: {
+          pending: 0,
+          failed: 1,
+          lastError: "Google is unavailable: HTTP 503",
+        },
+      }),
+      "Europe/Berlin",
+    ),
+    {
+      text: "1 event could not be exported: Google is unavailable: HTTP 503. Retrying automatically.",
+      failing: true,
+    },
+  );
+  assert.deepEqual(
+    exportDetail(
+      connection({
+        lifeOsCalendar,
+        export: {
+          pending: 0,
+          failed: 0,
+          lastExportedAt: "2026-10-10T10:05:00Z",
+        },
+      }),
+      "Europe/Berlin",
+    ),
+    {
+      text: "Up to date in “Life OS” · last export 10 Oct, 12:05 CEST",
+      failing: false,
     },
   );
 });

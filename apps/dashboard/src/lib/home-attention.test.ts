@@ -172,6 +172,7 @@ const calendarEvent = (
   effectiveReminders: [],
   priority: "medium",
   defaultPriority: "medium",
+  editable: true,
   createdAt: "2026-10-01T00:00:00Z",
   updatedAt: "2026-10-01T00:00:00Z",
   ...fields,

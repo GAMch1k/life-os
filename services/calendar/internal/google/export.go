@@ -924,8 +924,11 @@ func (s *Service) recordCalendarCreated(ctx context.Context, connection store.Go
 func (s *Service) recordExportFailed(ctx context.Context, export store.GoogleExport, message string, now time.Time) {
 	id := googleuuid.UUID(export.EventID.Bytes).String()
 	title := "a Life OS event"
+	data := map[string]any{"error": message, "attempts": export.Attempts}
 	if event, err := s.queries.GetEvent(ctx, export.EventID); err == nil {
 		title = "“" + activity.Preview(event.Title, 120) + "”"
+		_, data = eventRef(event)
+		data["error"], data["attempts"] = message, export.Attempts
 	}
 	s.activity.Emit(ctx, activity.Event{
 		ID:         activity.EventID(EventExportFailed, id, now.UTC().Format(time.RFC3339Nano)),
@@ -934,7 +937,7 @@ func (s *Service) recordExportFailed(ctx context.Context, export store.GoogleExp
 		Actor:      SyncActor,
 		Outcome:    activity.Failed,
 		Summary:    activity.Preview(fmt.Sprintf("Exporting %s to Google failed: %s. Retrying automatically.", title, message), 500),
-		Data:       map[string]any{"error": message, "attempts": export.Attempts},
+		Data:       data,
 		OccurredAt: now,
 	})
 }
