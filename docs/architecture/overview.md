@@ -39,6 +39,8 @@ MCP uses service APIs to perform semantic actions and records an Inbox audit tra
 
 Activity stores user-facing activity events. Each owning service records its own meaningful operations (capture, processing, MCP actions, Task changes) over HTTP. Correlation, causation, and actor headers travel with each call, so a whole Voice → Inbox → MCP → Task workflow can be reconstructed from one API. See [Activity](../services/activity.md).
 
+Integrations are separate, replaceable services that connect a provider to a domain service. They give it data, or take data from it, only through that service's public API, and the domain service names no provider. Calendar's integration API is the first: `google-calendar` and `calendar-feeds` register their sources, sync each source's events in snapshots or deltas, and follow a change feed of the events changed in Life OS. See [Calendar integration API](../services/calendar-integration-api.md).
+
 Notifications is the one path by which any service lets the owner know about something. Producers post a notification over HTTP (`pkg/notify`); Notifications stores it for the Dashboard and delivers it through the channels configured on its server, so no producer talks to ntfy or a phone app itself. See [Notifications](../services/notifications.md).
 
 Banking is an integration service: it owns everything bank-side (the Enable Banking adapter, the read-only consent and its sealed session, the sync schedule within the banks' four-reads-a-day limit, consent reminders) and hands accounts and transactions to Finance only through Finance's bank import API, so Finance never calls a bank and Banking never touches Finance's data. Integrations are routed under `/api/integrations/<name>/`. See [Banking](../services/banking.md).

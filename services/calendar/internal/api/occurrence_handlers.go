@@ -132,7 +132,11 @@ func (h *Handler) UpdateEventOccurrence(c fiber.Ctx, id types.UUID, rid string) 
 		if after, err = patch.apply(before, h.now(), h.ownerLocation); err != nil {
 			return badRequest(err.Error())
 		}
-		changes := diffOccurrence(natural, after)
+		fallback, err := priorityDefault(c.Context(), queries, e.row)
+		if err != nil {
+			return internal(err)
+		}
+		changes := diffOccurrence(natural, after, fallback)
 		var cancelledAt *time.Time
 		if after.Status == generated.Cancelled {
 			cancelledAt = after.CancelledAt

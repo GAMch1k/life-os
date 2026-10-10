@@ -363,10 +363,6 @@ func decodeSourceException(rid string, cancelled bool, raw json.RawMessage, allD
 			return "", sources.Exception{}, errors.New("changes must be an object")
 		}
 	}
-	changes, err := decodeChanges(mustJSON(present))
-	if err != nil {
-		return "", sources.Exception{}, errors.New("changes: " + strings.TrimPrefix(err.Error(), "decode occurrence changes: "))
-	}
 	_, hasStartAt := present["startAt"]
 	_, hasEndAt := present["endAt"]
 	_, hasStartDate := present["startDate"]
@@ -378,6 +374,12 @@ func decodeSourceException(rid string, cancelled bool, raw json.RawMessage, allD
 		return "", sources.Exception{}, errors.New("an occurrence of a timed series moves with startAt and endAt")
 	case hasStartAt != hasEndAt || hasStartDate != hasEndDate:
 		return "", sources.Exception{}, errors.New("a moved occurrence gives both its start and its end")
+	}
+	changes, err := decodeChanges(mustJSON(present))
+	if err != nil {
+		return "", sources.Exception{}, errors.New("changes: " + strings.TrimPrefix(err.Error(), "decode occurrence changes: "))
+	}
+	switch {
 	case changes.StartAt != nil && !changes.EndAt.After(*changes.StartAt):
 		return "", sources.Exception{}, errors.New("endAt must be after startAt")
 	case changes.StartDate != nil && changes.EndDate.Time.Before(changes.StartDate.Time):
