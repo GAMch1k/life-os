@@ -6,4 +6,6 @@ Create/list tasks, patch editable fields, then use the explicit completion and r
 
 Every successful create, update, complete, and reopen records a `task.*` activity event carrying the caller's correlation, causation, and actor (user, or the agent behind MCP). An idempotent create replay records nothing new. See [Activity](activity.md).
 
+`GET /v1/tasks` lists open Tasks first, soonest due first with undated ones after the dated ones (newest first), then completed Tasks, most recently completed first. It returns at most `limit` (1–100, default 50) Tasks; when more match, the response carries `nextCursor`, which the client passes back as `cursor` with the same filters for the next page. The cursor is the last row's position in that order (completion time, due date, creation time, id), so Tasks added or changed between requests do not shift the unchanged ones into a skipped or repeated position; a malformed cursor is a 400. Filters combine: `completed`, `dueBefore` with `includeUndated`, `undated=true` (only Tasks without a due date) or `undated=false` (only Tasks with one), and `query`.
+
 `GET /v1/tasks?query=…` performs a case-insensitive title-or-notes search. MCP uses that API query only to resolve an existing Task for a mutation; it performs the mutation only when exactly one Task matches.

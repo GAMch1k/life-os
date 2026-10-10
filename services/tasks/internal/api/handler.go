@@ -2,8 +2,10 @@ package api
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v3"
@@ -43,15 +45,78 @@ func (h *Handler) ListTasks(c fiber.Ctx, params generated.ListTasksParams) error
 	if params.IncludeUndated != nil {
 		includeUndated = *params.IncludeUndated
 	}
-	items, err := h.queries.ListTasks(c.Context(), store.ListTasksParams{CompletedFilter: params.Completed, SearchQuery: params.Query, DueBefore: timestamp(params.DueBefore), IncludeUndated: includeUndated, PageLimit: int32(limit)})
+	// One row beyond the page tells whether another page exists.
+	query := store.ListTasksParams{CompletedFilter: params.Completed, UndatedFilter: params.Undated, SearchQuery: params.Query, DueBefore: timestamp(params.DueBefore), IncludeUndated: includeUndated, PageLimit: int32(limit + 1)}
+	if params.Cursor != nil {
+		after, err := decodeCursor(*params.Cursor)
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid cursor")
+		}
+		query.AfterCompletedAt, query.AfterDueAt, query.AfterCreatedAt, query.AfterID = after.CompletedAt, after.DueAt, after.CreatedAt, after.ID
+	}
+	items, err := h.queries.ListTasks(c.Context(), query)
 	if err != nil {
 		return internal(err)
 	}
-	result := make([]generated.Task, 0, len(items))
-	for _, item := range items {
-		result = append(result, task(item))
+	result := generated.TaskList{Items: make([]generated.Task, 0, min(len(items), limit))}
+	for index, item := range items {
+		if index == limit {
+			cursor := encodeCursor(items[index-1])
+			result.NextCursor = &cursor
+			break
+		}
+		result.Items = append(result.Items, task(item))
 	}
-	return c.JSON(generated.TaskList{Items: result})
+	return c.JSON(result)
+}
+
+// cursorPosition is a Task's place in the list order: the keyset the query's
+// after_* arguments compare against. Absent timestamps stay absent.
+type cursorPosition struct {
+	CompletedAt, DueAt, CreatedAt pgtype.Timestamptz
+	ID                            pgtype.UUID
+}
+
+// encodeCursor writes the last row's position as
+// base64url("completedAt|dueAt|createdAt|id"), with an empty field for a
+// missing timestamp.
+func encodeCursor(item store.Task) string {
+	field := func(value pgtype.Timestamptz) string {
+		if !value.Valid {
+			return ""
+		}
+		return value.Time.UTC().Format(time.RFC3339Nano)
+	}
+	raw := strings.Join([]string{field(item.CompletedAt), field(item.DueAt), field(item.CreatedAt), uuid(item.ID).String()}, "|")
+	return base64.RawURLEncoding.EncodeToString([]byte(raw))
+}
+
+func decodeCursor(cursor string) (cursorPosition, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		return cursorPosition{}, err
+	}
+	fields := strings.Split(string(raw), "|")
+	if len(fields) != 4 || fields[2] == "" {
+		return cursorPosition{}, errors.New("malformed cursor")
+	}
+	var position cursorPosition
+	for index, target := range []*pgtype.Timestamptz{&position.CompletedAt, &position.DueAt, &position.CreatedAt} {
+		if fields[index] == "" {
+			continue
+		}
+		parsed, err := time.Parse(time.RFC3339Nano, fields[index])
+		if err != nil {
+			return cursorPosition{}, err
+		}
+		*target = pgtype.Timestamptz{Time: parsed, Valid: true}
+	}
+	id, err := googleuuid.Parse(fields[3])
+	if err != nil {
+		return cursorPosition{}, err
+	}
+	position.ID = pgtype.UUID{Bytes: id, Valid: true}
+	return position, nil
 }
 func (h *Handler) CreateTask(c fiber.Ctx) error {
 	var body generated.CreateTaskJSONRequestBody

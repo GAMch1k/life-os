@@ -14,6 +14,11 @@ type Querier interface {
 	CompleteTask(ctx context.Context, id pgtype.UUID) (Task, error)
 	CreateTask(ctx context.Context, arg CreateTaskParams) (Task, error)
 	GetTask(ctx context.Context, id pgtype.UUID) (Task, error)
+	// Open Tasks first (soonest due, undated last), then completed Tasks, most
+	// recently completed first. The after_* arguments are the previous page's last
+	// row: a keyset cursor over exactly the ORDER BY, where a missing timestamp
+	// sorts as 'infinity' (NULLS FIRST under DESC, NULLS LAST under ASC) and id
+	// breaks ties, so paging never skips or repeats a Task.
 	ListTasks(ctx context.Context, arg ListTasksParams) ([]Task, error)
 	ReopenTask(ctx context.Context, id pgtype.UUID) (Task, error)
 	UpdateTask(ctx context.Context, arg UpdateTaskParams) (Task, error)
