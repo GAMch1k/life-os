@@ -323,6 +323,7 @@ func (s *Service) push(ctx context.Context, conn store.BankConnection, read read
 		trace := activity.TraceFrom(ctx)
 		data := counts.data()
 		data["trigger"] = string(trigger)
+		data["institution"] = conn.Institution
 		data["window"] = map[string]string{"from": read.Import.Window.From, "to": read.Import.Window.To}
 		if conn.ConsecutiveFailures > 0 {
 			data["afterFailures"] = conn.ConsecutiveFailures
