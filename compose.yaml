@@ -110,10 +110,11 @@ services:
     restart: "no"
   # The one path for notifications to the owner. Channels are configured here
   # (LIFE_OS_NOTIFICATIONS_CHANNELS); none by default, so notifications are
-  # stored and listed in the Dashboard only.
+  # stored and listed in the Dashboard only. "ntfy" publishes to the ntfy
+  # service below with the publisher token (docs/operations/ntfy.md).
   notifications:
     build: {context: ., dockerfile: services/notifications/Dockerfile}
-    environment: {SERVICE_NAME: notifications, PORT: 8080, DATABASE_URL: "postgres://notifications_user:${LIFE_OS_NOTIFICATIONS_DB_PASSWORD}@postgres:5432/notifications_db?sslmode=disable", ACTIVITY_SERVICE_URL: "http://activity:8080", NOTIFICATIONS_CHANNELS: "${LIFE_OS_NOTIFICATIONS_CHANNELS:-}"}
+    environment: {SERVICE_NAME: notifications, PORT: 8080, DATABASE_URL: "postgres://notifications_user:${LIFE_OS_NOTIFICATIONS_DB_PASSWORD}@postgres:5432/notifications_db?sslmode=disable", ACTIVITY_SERVICE_URL: "http://activity:8080", NOTIFICATIONS_CHANNELS: "${LIFE_OS_NOTIFICATIONS_CHANNELS:-}", NOTIFICATIONS_NTFY_URL: "http://ntfy:80", NOTIFICATIONS_NTFY_TOPIC: "${LIFE_OS_NTFY_TOPIC:-lifeos}", NOTIFICATIONS_NTFY_TOKEN: "${LIFE_OS_NTFY_PUBLISHER_TOKEN:-}", NOTIFICATIONS_LINK_BASE_URL: "${LIFE_OS_PUBLIC_URL:-https://lifeos.gamch1k.com}"}
     expose: ["8080"]
     depends_on: {notifications-migrate: {condition: service_completed_successfully}}
     networks: [backend]
@@ -284,9 +285,46 @@ services:
       voice: {condition: service_started}
       activity: {condition: service_started}
       notifications: {condition: service_started}
+    # Not on ntfy: it is optional, and the gateway looks it up per request.
     # edge: the only network the Cloudflare connector shares with Life OS.
     networks: [backend, edge]
     restart: unless-stopped
+
+  # Opt-in ntfy server (COMPOSE_PROFILES=ntfy): push notifications to the
+  # owner's phone (docs/operations/ntfy.md). The Notifications service
+  # publishes to it on the private network; the gateway serves it, and only
+  # it, on the ntfy hostname, whose Cloudflare route has no Access (the ntfy
+  # app cannot log in through it). ntfy's own deny-all accounts protect it:
+  # ntfy provisions the publisher (write-only on the topic, by token) and the
+  # phone (read-only, by password) at every start from the ignored .env.
+  # Bcrypt hashes and the token never appear in the repository.
+  ntfy:
+    image: ${LIFE_OS_NTFY_IMAGE:-binwiederhier/ntfy:v2.29.0}
+    profiles: [ntfy]
+    command: ["serve"]
+    environment:
+      NTFY_AUTH_USERS: "lifeos-publisher:${LIFE_OS_NTFY_PUBLISHER_PASSWORD_HASH:-}:user,lifeos-phone:${LIFE_OS_NTFY_PHONE_PASSWORD_HASH:-}:user"
+      NTFY_AUTH_ACCESS: "lifeos-publisher:${LIFE_OS_NTFY_TOPIC:-lifeos}:write-only,lifeos-phone:${LIFE_OS_NTFY_TOPIC:-lifeos}:read-only"
+      NTFY_AUTH_TOKENS: "lifeos-publisher:${LIFE_OS_NTFY_PUBLISHER_TOKEN:-}:notifications-service"
+    volumes:
+      - ./infra/ntfy/server.yml:/etc/ntfy/server.yml:ro
+      - ntfy-data:/var/lib/ntfy
+    expose: ["80"]
+    networks: [backend]
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:80/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   # Opt-in Cloudflare Tunnel (COMPOSE_PROFILES=cloudflare). An outbound-only
   # connector on the private network that hands Cloudflare traffic to the
@@ -336,3 +374,5 @@ volumes:
     name: lifeos-whisper-models
   voice-audio:
     name: lifeos-voice-audio
+  ntfy-data:
+    name: lifeos-ntfy-data

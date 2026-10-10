@@ -1,0 +1,45 @@
+# ntfy server for Life OS: push notifications to the owner's phone
+# (docs/operations/ntfy.md). Mounted read-only at /etc/ntfy/server.yml by the
+# ntfy service in compose.yaml.
+#
+# Nothing secret lives here. The two users (the Notifications service's
+# publisher and the owner's phone), their topic rights, and the publisher's
+# token are provisioned by ntfy itself at every start from the ignored .env,
+# through NTFY_AUTH_USERS, NTFY_AUTH_ACCESS, and NTFY_AUTH_TOKENS (compose.yaml).
+# ntfy deletes provisioned users, rights, and tokens that leave that list.
+
+# The public URL the phone uses (Cloudflare Tunnel → gateway → here).
+base-url: "https://ntfy.gamch1k.com"
+listen-http: ":80"
+
+# The gateway sets X-Forwarded-For to the real client address (Cloudflare's
+# CF-Connecting-IP), so rate limits apply per visitor, not to the gateway.
+behind-proxy: true
+proxy-forwarded-header: "X-Forwarded-For"
+
+# Messages are kept 12 hours, so the phone catches up after being offline.
+cache-file: "/var/lib/ntfy/cache.db"
+cache-duration: "12h"
+
+# Private server: nobody can read or write anything without an account, and
+# accounts exist only through the provisioning above.
+auth-file: "/var/lib/ntfy/user.db"
+auth-default-access: "deny-all"
+enable-signup: false
+enable-login: false
+enable-reservations: false
+
+# The Android app is the only client: no web app. Attachments are off (no
+# attachment-cache-dir), and nothing is forwarded to ntfy.sh or Firebase (no
+# upstream-base-url, no firebase-key-file; those exist for iOS and custom
+# Android builds).
+web-root: "disable"
+
+# Rate limits per visitor. Life OS sends a few notifications a day; the phone
+# holds one subscription.
+visitor-request-limit-burst: 60
+visitor-request-limit-replenish: "5s"
+visitor-subscription-limit: 10
+visitor-message-daily-limit: 500
+
+log-level: "info"

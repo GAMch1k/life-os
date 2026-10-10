@@ -56,3 +56,5 @@ volumes:
     name: lifeos-verify-whisper-models
   voice-audio:
     name: lifeos-verify-voice-audio
+  ntfy-data:
+    name: lifeos-verify-ntfy-data

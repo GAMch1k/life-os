@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Asserts the Life OS ingress model for the full Compose plan, including the
-# opt-in Cloudflare connector: only the gateway publishes a host port, and the
-# cloudflared connector publishes none (it only dials out to Cloudflare).
+# opt-in Cloudflare connector and ntfy: only the gateway publishes a host
+# port, the cloudflared connector publishes none (it only dials out to
+# Cloudflare), and ntfy is reachable only on the private network (the gateway
+# serves it on its own hostname; tools/check-gateway-hosts checks that).
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-plan=$(docker compose --profile cloudflare config --format json)
+plan=$(docker compose --profile cloudflare --profile ntfy config --format json)
 published=$(jq -r '.services | to_entries[] | select(.value.ports != null and (.value.ports | length) > 0) | .key' <<<"$plan")
 if [ "$published" != gateway ]; then
   echo "check-ingress: only the gateway may publish ports; found: ${published//$'\n'/, }" >&2
@@ -15,6 +17,10 @@ jq -e '.services.cloudflared | (.ports == null) and (.networks | keys == ["edge"
   echo "check-ingress: cloudflared must sit on the edge network only, without ports" >&2
   exit 1
 }
+jq -e '.services.ntfy | (.ports == null) and (.networks | keys == ["backend"])' <<<"$plan" >/dev/null || {
+  echo "check-ingress: ntfy must sit on the backend network only, without ports" >&2
+  exit 1
+}
 # The edge network joins the connector and the gateway, nothing else, so a
 # tunnel route can never reach a service directly.
 edge_members=$(jq -r '[.services | to_entries[] | select(.value.networks | has("edge")) | .key] | sort | join(",")' <<<"$plan")
@@ -22,4 +28,5 @@ if [ "$edge_members" != "cloudflared,gateway" ]; then
   echo "check-ingress: the edge network must contain only cloudflared and gateway; found: $edge_members" >&2
   exit 1
 fi
-echo "ingress ok: gateway publishes $(jq -r '.services.gateway.ports | map("\(.host_ip // "0.0.0.0"):\(.published)") | join(", ")' <<<"$plan"); cloudflared publishes nothing and shares only the edge network with the gateway"
+echo "ingress ok: gateway publishes $(jq -r '.services.gateway.ports | map("\(.host_ip // "0.0.0.0"):\(.published)") | join(", ")' <<<"$plan"); cloudflared publishes nothing and shares only the edge network with the gateway; ntfy is on the backend network only"
+./tools/check-gateway-hosts
