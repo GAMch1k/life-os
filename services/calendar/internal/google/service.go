@@ -188,12 +188,12 @@ func (s *Service) Connect(ctx context.Context, code, state string) (store.Google
 	}
 	started := s.now()
 	token, err := s.api.Exchange(ctx, code, pending.CodeVerifier)
+	if IsInvalidGrant(err) {
+		// The code expired, was used, or is not this client's.
+		return store.GoogleConnection{}, fmt.Errorf("%w: %w", ErrCodeRejected, err)
+	}
 	if err != nil {
-		var oauth *OAuthError
-		if errors.As(err, &oauth) {
-			return store.GoogleConnection{}, fmt.Errorf("%w: %w", ErrCodeRejected, err)
-		}
-		return store.GoogleConnection{}, err
+		return store.GoogleConnection{}, err // such as invalid_client: the setup is wrong
 	}
 	scopes := token.Scopes
 	if len(scopes) == 0 {

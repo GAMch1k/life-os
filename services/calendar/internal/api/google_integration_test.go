@@ -427,6 +427,18 @@ func TestGoogleConnectRefusals(t *testing.T) {
 	c.fake.Unlock()
 	c.failure(http.MethodPost, "/v1/google/connection", c.consent(), http.StatusBadGateway, "google_rejected")
 
+	// A wrong client secret is the setup's fault, not the code's.
+	wrong := googleConfig()
+	wrong.ClientSecret = "not-the-secret"
+	c.restart(wrong)
+	c.fake.Lock()
+	c.fake.OmitRefreshToken = false
+	c.fake.Unlock()
+	if message := c.failure(http.MethodPost, "/v1/google/connection", c.consent(), http.StatusBadGateway, "google_rejected"); !strings.Contains(message, "invalid_client") {
+		t.Fatalf("wrong secret: %q", message)
+	}
+	c.restart(googleConfig())
+
 	// Google is down.
 	c.fake.Lock()
 	c.fake.OmitRefreshToken, c.fake.TokenStatus = false, http.StatusInternalServerError
