@@ -39,6 +39,35 @@ func TestTraceRoundTripsThroughHeaders(t *testing.T) {
 	}
 }
 
+func TestParseActorKinds(t *testing.T) {
+	for value, want := range map[string]Actor{
+		"":                            User(),
+		"agent:codex-inbox-processor": Agent("codex-inbox-processor"),
+		"system:voice-worker":         System("voice-worker"),
+		"dev:claude-code":             Dev("claude-code"),
+		" dev:claude-code ":           Dev("claude-code"),
+		"Dev:claude-code":             User(),
+		"dev:claude code":             User(),
+		"developer:claude-code":       User(),
+		"user:someone":                User(),
+	} {
+		if got := ParseActor(value); got != want {
+			t.Errorf("ParseActor(%q) = %+v, want %+v", value, got, want)
+		}
+	}
+}
+
+func TestDevActorRoundTripsThroughHeaders(t *testing.T) {
+	header := http.Header{}
+	Trace{Actor: Dev("claude-code")}.Apply(header)
+	if got := header.Get(ActorHeader); got != "dev:claude-code" {
+		t.Fatalf("header = %q", got)
+	}
+	if got := TraceFromHeaders(header.Get).Actor; got != Dev("claude-code") {
+		t.Fatalf("actor = %+v", got)
+	}
+}
+
 func TestEmitterRetriesAndFillsDefaults(t *testing.T) {
 	var calls atomic.Int32
 	var received Event

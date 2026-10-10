@@ -31,8 +31,10 @@ const (
 	// CausationIDHeader carries the id of the activity event that directly
 	// caused the request.
 	CausationIDHeader = "X-Causation-ID"
-	// ActorHeader identifies a non-user caller as "agent:<name>" or
-	// "system:<name>". Requests without it were made by the user.
+	// ActorHeader identifies a non-user caller as "agent:<name>" (the Life OS
+	// AI), "system:<name>" (a Life OS component), or "dev:<name>" (a
+	// development tool or agent working on Life OS, such as Claude Code).
+	// Requests without it were made by the user.
 	ActorHeader = "X-Life-OS-Actor"
 )
 
@@ -52,6 +54,12 @@ func User() Actor              { return Actor{Kind: "user"} }
 func Agent(name string) Actor  { return Actor{Kind: "agent", Name: name} }
 func System(name string) Actor { return Actor{Kind: "system", Name: name} }
 func (a Actor) IsZero() bool   { return a.Kind == "" }
+
+// Dev is a development tool or agent working on Life OS, for example
+// Dev("claude-code"). It is neither the owner nor the Life OS AI, so its
+// writes to live data stay distinguishable from both.
+func Dev(name string) Actor { return Actor{Kind: "dev", Name: name} }
+
 func (a Actor) headerValue() string {
 	if a.Kind == "" || a.Kind == "user" {
 		return ""
@@ -62,7 +70,7 @@ func (a Actor) headerValue() string {
 // ParseActor reads an ActorHeader value. Unknown or empty values mean the user.
 func ParseActor(value string) Actor {
 	kind, name, _ := strings.Cut(sanitize(value), ":")
-	if kind == "agent" || kind == "system" {
+	if kind == "agent" || kind == "system" || kind == "dev" {
 		return Actor{Kind: kind, Name: name}
 	}
 	return User()
