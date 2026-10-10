@@ -1260,6 +1260,13 @@ export interface operations {
                     "application/json": components["schemas"]["CalendarSettings"];
                 };
             };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     updateSettings: {
