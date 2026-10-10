@@ -259,7 +259,6 @@ paths:
       responses:
         '200': {description: Settings, content: {application/json: {schema: {$ref: '#/components/schemas/CalendarSettings'}}}}
         '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}
-        '409': {description: The settings kept changing concurrently; retry the update}
 components:
   parameters:
     TimeZone: {name: timeZone, in: query, description: 'IANA timezone (for example Europe/Berlin) in which all-day dates are compared with instants. Defaults to the owner''s timezone configured for Calendar.', schema: {type: string, minLength: 1, maxLength: 64}}

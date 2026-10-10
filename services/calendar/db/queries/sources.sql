@@ -128,7 +128,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14);
 
 -- name: UpdateImportedEvent :exec
 -- Rewrites an imported event from its source (also restoring one the source
--- had removed). The owner's reminder override and the source identity stay.
+-- had removed). The owner's reminders and the source identity stay.
 UPDATE events
 SET title = sqlc.arg(title), description = sqlc.narg(description), location = sqlc.narg(location),
     all_day = sqlc.arg(all_day), start_at = sqlc.narg(start_at), end_at = sqlc.narg(end_at),

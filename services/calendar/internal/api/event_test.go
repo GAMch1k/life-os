@@ -65,7 +65,7 @@ func TestEventValidation(t *testing.T) {
 			for index := range reminders {
 				reminders[index] = generated.Reminder{Kind: generated.Relative, MinutesBefore: ptr(index)}
 			}
-			f.Reminders = &reminders
+			f.Reminders = reminders
 		}, timedFields, "at most 10 reminders"},
 	}
 	for _, tc := range cases {
@@ -179,7 +179,8 @@ func mustPatch(t *testing.T, body string) eventPatch {
 func TestPatchChangesOnlyNamedFieldsAndNullClears(t *testing.T) {
 	current := timedFields()
 	current.Description, current.Location, current.TimeZone = ptr("Bring card"), ptr("Main St 1"), ptr("Europe/Berlin")
-	current.Reminders = &[]generated.Reminder{{Kind: generated.Relative, MinutesBefore: ptr(30)}}
+	current.Reminders = []generated.Reminder{{Kind: generated.Relative, MinutesBefore: ptr(30)}}
+	current.UseDefaultReminders = false
 	current.Recurrence = &generated.Recurrence{Frequency: generated.Yearly, Interval: 1}
 
 	next, err := mustPatch(t, `{"title":"Dentist (moved)","description":null,"recurrence":null,"reminders":[]}`).apply(current, time.Now())
@@ -189,16 +190,73 @@ func TestPatchChangesOnlyNamedFieldsAndNullClears(t *testing.T) {
 	if next.Title != "Dentist (moved)" || next.Description != nil || next.Recurrence != nil {
 		t.Errorf("named fields not applied: %+v", next)
 	}
-	if next.Reminders == nil || len(*next.Reminders) != 0 {
-		t.Errorf("reminders = %v, want an explicit empty list", next.Reminders)
+	if next.Reminders == nil || len(next.Reminders) != 0 || next.UseDefaultReminders {
+		t.Errorf("reminders = %v (defaults %v), want none of its own and the defaults still off", next.Reminders, next.UseDefaultReminders)
 	}
 	if next.Location == nil || *next.Location != "Main St 1" || next.TimeZone == nil || !next.StartAt.Equal(*current.StartAt) {
 		t.Errorf("unnamed fields changed: %+v", next)
 	}
 
 	next, err = mustPatch(t, `{"reminders":null}`).apply(current, time.Now())
-	if err != nil || next.Reminders != nil {
-		t.Errorf("reminders:null = %v, %v; want back to the defaults (nil)", next.Reminders, err)
+	if err != nil || next.Reminders == nil || len(next.Reminders) != 0 || !next.UseDefaultReminders {
+		t.Errorf("reminders:null = %v (defaults %v), %v; want back to the defaults alone", next.Reminders, next.UseDefaultReminders, err)
+	}
+	next, err = mustPatch(t, `{"reminders":null,"useDefaultReminders":false}`).apply(current, time.Now())
+	if err != nil || len(next.Reminders) != 0 || next.UseDefaultReminders {
+		t.Errorf("reminders:null with the defaults off = %v (defaults %v), %v; want no reminders at all", next.Reminders, next.UseDefaultReminders, err)
+	}
+}
+
+func TestPatchTurnsDefaultRemindersOnAndOffAndKeepsOwn(t *testing.T) {
+	current := timedFields()
+	current.Reminders = []generated.Reminder{{Kind: generated.Relative, MinutesBefore: ptr(180)}}
+	current.UseDefaultReminders = true
+
+	next, err := mustPatch(t, `{"useDefaultReminders":false}`).apply(current, time.Now())
+	if err != nil || next.UseDefaultReminders || len(next.Reminders) != 1 {
+		t.Fatalf("defaults off = %+v, %v; want own reminders kept", next, err)
+	}
+	next, err = mustPatch(t, `{"useDefaultReminders":true,"reminders":[{"kind":"relative","minutesBefore":30},{"kind":"relative","minutesBefore":1440}]}`).apply(next, time.Now())
+	if err != nil || !next.UseDefaultReminders || len(next.Reminders) != 2 {
+		t.Fatalf("defaults on with two own = %+v, %v", next, err)
+	}
+	if _, err := decodePatch([]byte(`{"useDefaultReminders":null}`)); err == nil || !strings.Contains(err.Error(), "useDefaultReminders cannot be null") {
+		t.Errorf("useDefaultReminders:null = %v, want refused", err)
+	}
+	for body, want := range map[string]bool{
+		`{"reminders":[]}`:                                               true,
+		`{"useDefaultReminders":false}`:                                  true,
+		`{"reminders":null,"useDefaultReminders":true}`:                  true,
+		`{"reminders":[],"title":"Moved"}`:                               false,
+		`{"useDefaultReminders":false,"startAt":"2026-11-17T09:00:00Z"}`: false,
+	} {
+		if got := mustPatch(t, body).onlyReminders(); got != want {
+			t.Errorf("onlyReminders(%s) = %v, want %v", body, got, want)
+		}
+	}
+}
+
+func TestEffectiveRemindersAddOwnToDefaultsOnce(t *testing.T) {
+	dayBefore := generated.Reminder{Kind: generated.LocalTime, DaysBefore: ptr(1), LocalTime: ptr("19:00")}
+	threeHours := generated.Reminder{Kind: generated.Relative, MinutesBefore: ptr(180)}
+	halfHour := generated.Reminder{Kind: generated.Relative, MinutesBefore: ptr(30)}
+	defaults := []generated.Reminder{dayBefore, halfHour}
+
+	got := effectiveReminders(true, defaults, []generated.Reminder{threeHours, {Kind: generated.Relative, MinutesBefore: ptr(30)}})
+	want := []generated.Reminder{dayBefore, halfHour, threeHours}
+	if len(got) != len(want) {
+		t.Fatalf("effective = %d reminders, want %d (the repeated 30 minutes once): %+v", len(got), len(want), got)
+	}
+	for index := range want {
+		if !sameReminder(got[index], want[index]) {
+			t.Errorf("effective[%d] = %+v, want %+v", index, got[index], want[index])
+		}
+	}
+	if got := effectiveReminders(false, defaults, []generated.Reminder{threeHours}); len(got) != 1 || !sameReminder(got[0], threeHours) {
+		t.Errorf("defaults off = %+v, want only the event's own", got)
+	}
+	if got := effectiveReminders(false, defaults, []generated.Reminder{}); got == nil || len(got) != 0 {
+		t.Errorf("nothing = %+v, want an empty list", got)
 	}
 }
 

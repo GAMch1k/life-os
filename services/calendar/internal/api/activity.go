@@ -79,7 +79,7 @@ func changedFields(before, after store.Event) []string {
 	add("timeZone", !sameString(before.TimeZone, after.TimeZone))
 	add("recurrence", !sameString(before.RecurrenceFrequency, after.RecurrenceFrequency) ||
 		!sameInt(before.RecurrenceInterval, after.RecurrenceInterval) || !sameInstant(before.RecurrenceUntil, after.RecurrenceUntil))
-	add("reminders", !bytes.Equal(before.Reminders, after.Reminders))
+	add("reminders", !bytes.Equal(before.Reminders, after.Reminders) || before.UseDefaultReminders != after.UseDefaultReminders)
 	add("status", before.Status != after.Status)
 	return changes
 }

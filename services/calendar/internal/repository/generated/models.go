@@ -8,6 +8,13 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type CalendarSetting struct {
+	ID                     bool
+	TimedDefaultReminders  []byte
+	AllDayDefaultReminders []byte
+	UpdatedAt              pgtype.Timestamptz
+}
+
 type CalendarSource struct {
 	ID                  pgtype.UUID
 	Kind                string
@@ -60,4 +67,5 @@ type Event struct {
 	ExternalUid              *string
 	RemovedFromSourceAt      pgtype.Timestamptz
 	Reminders                []byte
+	UseDefaultReminders      bool
 }

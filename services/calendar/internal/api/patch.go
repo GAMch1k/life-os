@@ -14,11 +14,11 @@ import (
 var updatableFields = map[string]bool{
 	"title": true, "description": true, "location": true, "allDay": true,
 	"startAt": true, "endAt": true, "startDate": true, "endDate": true, "timeZone": true,
-	"recurrence": true, "reminders": true, "status": true,
+	"recurrence": true, "reminders": true, "useDefaultReminders": true, "status": true,
 }
 
 // requiredValueFields cannot be cleared: null is not a value for them.
-var requiredValueFields = []string{"title", "allDay", "status"}
+var requiredValueFields = []string{"title", "allDay", "useDefaultReminders", "status"}
 
 // eventPatch is a decoded PATCH body. A generated pointer field cannot tell an
 // absent property from an explicit null, so present records which properties
@@ -54,10 +54,16 @@ func decodePatch(raw []byte) (eventPatch, error) {
 	return patch, nil
 }
 
-// onlyReminders reports whether the patch changes nothing but reminders,
-// the one thing the owner may change on an imported event.
+// onlyReminders reports whether the patch changes nothing but the
+// reminders (its own and whether the defaults apply), the one thing the
+// owner may change on an imported event.
 func (p eventPatch) onlyReminders() bool {
-	return len(p.present) == 1 && p.present["reminders"]
+	for name := range p.present {
+		if name != "reminders" && name != "useDefaultReminders" {
+			return false
+		}
+	}
+	return true
 }
 
 // apply merges the patch into current and validates the result. now stamps
@@ -102,7 +108,14 @@ func (p eventPatch) apply(current eventFields, now time.Time) (eventFields, erro
 		next.Recurrence = body.Recurrence
 	}
 	if p.present["reminders"] {
-		next.Reminders = body.Reminders
+		// null returns the event to its defaults alone.
+		next.Reminders = remindersOrNone(body.Reminders)
+		if body.Reminders == nil {
+			next.UseDefaultReminders = true
+		}
+	}
+	if p.present["useDefaultReminders"] {
+		next.UseDefaultReminders = *body.UseDefaultReminders
 	}
 	if p.present["status"] {
 		switch *body.Status {

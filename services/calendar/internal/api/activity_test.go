@@ -16,7 +16,7 @@ func storedTimed(title, start string, minutes int) store.Event {
 		panic(err)
 	}
 	return store.Event{
-		Title: title, Status: "active", SourceKind: "manual",
+		Title: title, Status: "active", SourceKind: "manual", Reminders: []byte(`[]`), UseDefaultReminders: true,
 		StartAt: pgtype.Timestamptz{Time: begin, Valid: true},
 		EndAt:   pgtype.Timestamptz{Time: begin.Add(time.Duration(minutes) * time.Minute), Valid: true},
 	}
@@ -42,8 +42,9 @@ func TestClassifyUpdate(t *testing.T) {
 		{"renamed", func(e *store.Event) { e.Title = "Dentist (Dr. Weber)" }, eventUpdated, "title"},
 		{"location and reminders", func(e *store.Event) {
 			e.Location = &location
-			e.Reminders = []byte(`[]`)
+			e.Reminders = []byte(`[{"kind":"relative","minutesBefore":180}]`)
 		}, eventUpdated, "location reminders"},
+		{"default reminders off", func(e *store.Event) { e.UseDefaultReminders = false }, eventUpdated, "reminders"},
 		{"repeats", func(e *store.Event) { e.RecurrenceFrequency = &frequency }, eventUpdated, "recurrence"},
 		{"moved", func(e *store.Event) {
 			e.StartAt.Time = e.StartAt.Time.Add(24 * time.Hour)
