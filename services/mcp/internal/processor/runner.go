@@ -267,6 +267,12 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 				keepTimeOfDay(arguments, event, r.location(item))
 				keepDuration(arguments, event)
 			}
+			// New reminders add to the event's own (a restated event's are
+			// merged already).
+			if action.Tool == "calendar_update" && restated == nil && !addReminders(arguments, event) {
+				actions = append(actions, map[string]any{"tool": "none", "plannedTool": action.Tool, "plannedArguments": action.Arguments, "eventId": eventID, "reason": unchangedRemindersReason})
+				continue
+			}
 		}
 		if action.Tool == "calendar_create" {
 			completeCreate(arguments)

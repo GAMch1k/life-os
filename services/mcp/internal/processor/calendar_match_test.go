@@ -406,6 +406,7 @@ func TestValidActionChecksCalendarChanges(t *testing.T) {
 		{"blank title", "calendar_update", map[string]any{"eventQuery": "dentist", "title": ""}, false},
 		{"clear title", "calendar_update", map[string]any{"eventQuery": "dentist", "clear": []any{"title"}}, false},
 		{"set and clear", "calendar_update", map[string]any{"eventQuery": "dentist", "location": "x", "clear": []any{"location"}}, false},
+		{"replace reminders", "calendar_update", map[string]any{"eventQuery": "dentist", "reminders": []any{map[string]any{"kind": "relative", "minutesBefore": 30.0}}, "clear": []any{"reminders"}}, true},
 		{"status", "calendar_update", map[string]any{"eventQuery": "dentist", "status": "cancelled"}, false},
 		{"bad alternatives", "calendar_update", map[string]any{"eventQuery": "dentist", "eventQueryAlternatives": "Zahnarzt", "title": "x"}, false},
 		{"bad reminders", "calendar_update", map[string]any{"eventQuery": "dentist", "reminders": "30 minutes"}, false},
@@ -534,6 +535,7 @@ func TestPlanPromptAllowsCalendarChangesThroughSearchTermsAndReview(t *testing.T
 		"Never create an event as a fallback for an uncertain existing event.",
 		`and priority (only when the item says how important it is: "high" for important or urgent, such as "wichtig" or "важно", "low" for not important or low priority; otherwise leave it out)`,
 		"useDefaultReminders, priority, and clear",
+		"reminders (added to the event's own; to replace them, also name reminders in clear)",
 		"A request to be reminded of, or to add a reminder to, an event that already exists (even when the item restates the event) is calendar_update with eventQuery and reminders, not calendar_create.",
 	} {
 		if !strings.Contains(planPrompt, want) {

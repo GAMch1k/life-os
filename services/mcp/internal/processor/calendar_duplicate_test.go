@@ -382,3 +382,74 @@ func TestTitleSearchFindsEveryVariantWithinCalendarsLimits(t *testing.T) {
 		t.Errorf("titleSearch is %d characters", len(got))
 	}
 }
+
+// dentistWithReminder is the one dentist event, with a reminder of its own
+// a day before.
+func dentistWithReminder() map[string]any {
+	event := timedEvent("event-dentist", "Dentist", "2026-10-16T13:00:00Z", "2026-10-16T14:00:00Z")
+	event["reminders"] = []any{map[string]any{"kind": "relative", "minutesBefore": 1440.0}}
+	return event
+}
+
+func TestAnAIUpdateAddsRemindersToTheEventsOwn(t *testing.T) {
+	// "Remind me 2 hours before the dentist" keeps the day-before reminder.
+	tools := newCalendarTools("Remind me 2 hours before the dentist", dentistWithReminder())
+	tools.matches["dentist"] = []string{"event-dentist"}
+	runCalendarPlan(t, tools, `{"actions":[{"tool":"calendar_update","arguments":{"eventQuery":"dentist","reminders":[{"kind":"relative","minutesBefore":120}]}}],"confidence":0.95}`)
+	want := map[string]any{"eventId": "event-dentist", "reminders": []any{map[string]any{"kind": "relative", "minutesBefore": 1440.0}, map[string]any{"kind": "relative", "minutesBefore": 120.0}}}
+	if got := tools.inputs["calendar_update"]; !reflect.DeepEqual(got, want) || !contains(tools.calls, "inbox_resolve") {
+		t.Fatalf("calendar_update input = %#v, want %#v; calls = %#v", got, want, tools.calls)
+	}
+
+	// The same for an update the owner approved in Human Review: the chosen
+	// event is read for its reminders.
+	tools = newCalendarTools("Remind me 2 hours before my appointment", dentistWithReminder())
+	approvedItem(tools, map[string]any{"tool": "calendar_update", "arguments": map[string]any{"eventQuery": "appointment", "reminders": []any{map[string]any{"kind": "relative", "minutesBefore": 120}}, "taskId": "event-dentist"}})
+	runner := Runner{Planner: fakePlanner{err: errors.New("not planned")}, Tools: tools, Model: "test", TimeZone: berlin(t)}
+	if _, err := runner.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := tools.inputs["calendar_update"]; !reflect.DeepEqual(got, want) || !reflect.DeepEqual(tools.gets, []string{"event-dentist"}) {
+		t.Fatalf("calendar_update input = %#v, want %#v; gets = %v", got, want, tools.gets)
+	}
+}
+
+func TestAnAIUpdateWithRemindersTheEventHasChangesNothing(t *testing.T) {
+	tools := newCalendarTools("Remind me a day before the dentist", dentistWithReminder())
+	tools.matches["dentist"] = []string{"event-dentist"}
+	runCalendarPlan(t, tools, `{"actions":[{"tool":"calendar_update","arguments":{"eventQuery":"dentist","reminders":[{"kind":"relative","minutesBefore":1440}]}}],"confidence":0.95}`)
+	if contains(tools.calls, "calendar_update") || tools.review != nil || !contains(tools.calls, "inbox_resolve") {
+		t.Fatalf("calls = %#v, review = %#v", tools.calls, tools.review)
+	}
+	if audit := lastAudit(t, tools); audit["tool"] != "none" || audit["plannedTool"] != "calendar_update" || audit["eventId"] != "event-dentist" || audit["reason"] != unchangedRemindersReason {
+		t.Fatalf("audit = %#v", audit)
+	}
+
+	// With another change, only that change is sent.
+	tools = newCalendarTools("The dentist is important, remind me a day before", dentistWithReminder())
+	tools.matches["dentist"] = []string{"event-dentist"}
+	runCalendarPlan(t, tools, `{"actions":[{"tool":"calendar_update","arguments":{"eventQuery":"dentist","reminders":[{"kind":"relative","minutesBefore":1440}],"priority":"high"}}],"confidence":0.95}`)
+	if got, want := tools.inputs["calendar_update"], map[string]any{"eventId": "event-dentist", "priority": "high"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("calendar_update input = %#v, want %#v", got, want)
+	}
+}
+
+func TestAnAIUpdateThatClearsRemindersReplacesThem(t *testing.T) {
+	for _, tc := range []struct {
+		name, clear string
+		want        map[string]any
+	}{
+		{"replace", `["reminders"]`, map[string]any{"eventId": "event-dentist", "reminders": []any{map[string]any{"kind": "relative", "minutesBefore": 120.0}}}},
+		{"replace and remove the place", `["reminders","location"]`, map[string]any{"eventId": "event-dentist", "reminders": []any{map[string]any{"kind": "relative", "minutesBefore": 120.0}}, "clear": []any{"location"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// "Only remind me 2 hours before the dentist"
+			tools := newCalendarTools("Only remind me 2 hours before the dentist", dentistWithReminder())
+			tools.matches["dentist"] = []string{"event-dentist"}
+			runCalendarPlan(t, tools, `{"actions":[{"tool":"calendar_update","arguments":{"eventQuery":"dentist","reminders":[{"kind":"relative","minutesBefore":120}],"clear":`+tc.clear+`}}],"confidence":0.95}`)
+			if got := tools.inputs["calendar_update"]; !reflect.DeepEqual(got, tc.want) || !contains(tools.calls, "inbox_resolve") {
+				t.Fatalf("calendar_update input = %#v, want %#v; calls = %#v", got, tc.want, tools.calls)
+			}
+		})
+	}
+}

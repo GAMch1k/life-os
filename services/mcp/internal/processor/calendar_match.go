@@ -28,9 +28,11 @@ var calendarChangeFields = []string{"title", "description", "location", "allDay"
 var clearableEventFields = map[string]bool{"description": true, "location": true, "timeZone": true, "reminders": true}
 
 // validCalendarChange checks the fields of a calendar_update beyond their
-// names: something must change, clear names only optional fields,
-// reminders are objects, useDefaultReminders is a boolean, and priority is
-// low, medium, or high. Calendar validates the values themselves.
+// names: something must change, clear names only optional fields that are
+// not also set (reminders may be both: the new ones replace the event's
+// own, see addReminders), reminders are objects, useDefaultReminders is a
+// boolean, and priority is low, medium, or high. Calendar validates the
+// values themselves.
 func validCalendarChange(arguments map[string]any) bool {
 	changes := 0
 	for _, field := range calendarChangeFields {
@@ -53,7 +55,7 @@ func validCalendarChange(arguments map[string]any) bool {
 		}
 		for _, field := range fields {
 			name, ok := field.(string)
-			if value, alsoSet := arguments[name]; !ok || !clearableEventFields[name] || (alsoSet && value != nil) {
+			if value, alsoSet := arguments[name]; !ok || !clearableEventFields[name] || (alsoSet && value != nil && name != "reminders") {
 				return false
 			}
 		}
@@ -352,6 +354,51 @@ func calendarArguments(tool string, planned map[string]any, eventID string) map[
 		arguments["clear"] = fields
 	}
 	return arguments
+}
+
+// unchangedRemindersReason is recorded when a planned calendar_update only
+// adds reminders the event already has.
+const unchangedRemindersReason = "The event already has these reminders, so nothing changed"
+
+// addReminders makes the reminders of a planned calendar_update (the
+// Calendar arguments for event) add to the event's own: "remind me 2 hours
+// before" keeps the reminders it has, each reminder once (mergeReminders,
+// as for a restated event). Only a plan that also names reminders in clear
+// replaces them, because the item asked to remove or replace them; Calendar
+// then gets just the new ones. It reports whether anything is left to
+// change.
+func addReminders(arguments, event map[string]any) bool {
+	added, ok := arguments["reminders"].([]any)
+	if !ok {
+		return true
+	}
+	clear, _ := arguments["clear"].([]any)
+	others := []any{}
+	for _, field := range clear {
+		if field != "reminders" {
+			others = append(others, field)
+		}
+	}
+	if len(others) < len(clear) {
+		if len(others) == 0 {
+			delete(arguments, "clear")
+		} else {
+			arguments["clear"] = others
+		}
+		return true
+	}
+	own, _ := event["reminders"].([]any)
+	if merged, grew := mergeReminders(own, added); grew {
+		arguments["reminders"] = merged
+		return true
+	}
+	delete(arguments, "reminders")
+	for field := range arguments {
+		if field != "eventId" {
+			return true
+		}
+	}
+	return false
 }
 
 // missingEnd reports whether an update moves an event's start without
