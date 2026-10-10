@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/GAMch1k/life-os/pkg/notify"
 	store "github.com/GAMch1k/life-os/services/finance/internal/repository/generated"
@@ -40,6 +41,7 @@ func (f *fakeNotifier) take() []notify.Notification {
 
 type world struct {
 	t        *testing.T
+	pool     *pgxpool.Pool
 	q        *store.Queries
 	giro     store.Account
 	notifier *fakeNotifier
@@ -59,7 +61,7 @@ func newWorld(t *testing.T) *world {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := &world{t: t, q: q, giro: giro, notifier: &fakeNotifier{enabled: true}}
+	w := &world{t: t, pool: pool, q: q, giro: giro, notifier: &fakeNotifier{enabled: true}}
 	w.watcher = New(pool, w.notifier, Config{Owner: berlin, Currency: "EUR"}, slog.New(slog.NewTextHandler(io.Discard, nil))).
 		WithClock(func() time.Time { return w.now })
 	return w
@@ -90,6 +92,14 @@ func (w *world) pay(account store.Account, amount int64, day, status, counterpar
 		w.t.Fatal(err)
 	}
 	return item
+}
+
+// categorize gives a transaction a category (none for the zero category).
+func (w *world) categorize(item store.Transaction, category store.FinancialCategory) {
+	w.t.Helper()
+	if _, err := w.pool.Exec(w.t.Context(), `UPDATE transactions SET category_id = $1, categorized_by = 'manual' WHERE id = $2`, category.ID, item.ID); err != nil {
+		w.t.Fatal(err)
+	}
 }
 
 // run checks at an owner-local time ("2026-10-10 09:00").
@@ -282,9 +292,9 @@ func TestRenewalRemindersComeLeadDaysAheadOnce(t *testing.T) {
 
 func TestLargeDebitsNotifyOnceForRecentMoneyOut(t *testing.T) {
 	w := newWorld(t)
-	w.pay(w.giro, -30000, "2026-10-01", "booked", "Old Laptop Shop", "")     // more than 3 days ago
-	w.pay(w.giro, -25000, "2026-10-07", "booked", "MediaMarkt", "")          // exactly the threshold, 3 days ago
-	w.pay(w.giro, -48000, "2026-10-10", "pending", "", "Werkstatt Rechnung") // pending counts
+	w.pay(w.giro, -30000, "2026-10-01", "booked", "Old Laptop Shop", "")          // more than 3 days ago
+	mediaMarkt := w.pay(w.giro, -25000, "2026-10-07", "booked", "MediaMarkt", "") // exactly the threshold, 3 days ago
+	w.pay(w.giro, -48000, "2026-10-10", "pending", "", "Werkstatt Rechnung")      // pending counts
 	w.pay(w.giro, -24999, "2026-10-10", "booked", "Just Below", "")
 	w.pay(w.giro, 90000, "2026-10-10", "booked", "Refund", "")
 	usd, err := w.q.CreateAccount(t.Context(), store.CreateAccountParams{Name: "Dollar", Currency: "USD", Kind: "bank", OpeningBalanceMinor: 900000})
@@ -292,6 +302,15 @@ func TestLargeDebitsNotifyOnceForRecentMoneyOut(t *testing.T) {
 		t.Fatal(err)
 	}
 	w.pay(usd, -90000, "2026-10-10", "booked", "Other Currency", "")
+	// Money moved between own accounts is not a debit to warn about, also
+	// when it is categorized as a transfer before the check.
+	savings, err := w.q.CreateFinancialCategory(t.Context(), store.CreateFinancialCategoryParams{Name: "Savings", Kind: "transfer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.categorize(w.pay(w.giro, -50000, "2026-10-10", "booked", "Tagesgeld", "Sparen"), savings)
+	later := w.pay(w.giro, -70000, "2026-10-10", "booked", "Me", "Umbuchung")
+	w.categorize(later, savings)
 	result, sent := w.run("2026-10-10 12:00")
 	if result.Sent != 2 || titles(sent) != "Large debit: €250.00 at MediaMarkt | Large debit: €480.00 for “Werkstatt Rechnung”" {
 		t.Fatalf("large debits: %+v %s", result, titles(sent))
@@ -302,6 +321,16 @@ func TestLargeDebitsNotifyOnceForRecentMoneyOut(t *testing.T) {
 	}
 	if _, sent := w.run("2026-10-10 12:05"); len(sent) != 0 {
 		t.Fatalf("repeated: %s", titles(sent))
+	}
+	// Once sent, it stays sent: a transfer category afterwards, or taking
+	// it away again, sends nothing new.
+	w.categorize(mediaMarkt, savings)
+	if _, sent := w.run("2026-10-10 12:06"); len(sent) != 0 {
+		t.Fatalf("after categorizing a sent one: %s", titles(sent))
+	}
+	w.categorize(mediaMarkt, store.FinancialCategory{})
+	if _, sent := w.run("2026-10-10 12:07"); len(sent) != 0 {
+		t.Fatalf("after uncategorizing a sent one: %s", titles(sent))
 	}
 	// A higher threshold, or the alert off, sends nothing new.
 	w.settings(func(p *store.SaveFinanceSettingsParams) { p.LargeDebitMinor = 100000 })
@@ -326,78 +355,87 @@ func TestLargeDebitsNotifyOnceForRecentMoneyOut(t *testing.T) {
 	}
 }
 
+// bankAccount creates an account of a bank connection, with a reported
+// booked balance unless balance is nil.
+func (w *world) bankAccount(name, kind, currency, external string, balance *int64) store.Account {
+	w.t.Helper()
+	provider, institution := "enablebanking", "Deutsche Bank"
+	params := store.CreateBankAccountParams{Name: name, Kind: kind, Currency: currency, ConnectionID: pgtype.UUID{Bytes: [16]byte{9}, Valid: true},
+		ExternalID: external, Provider: &provider, Institution: &institution}
+	if balance != nil {
+		params.BookedBalanceMinor, params.BookedBalanceDate = balance, date("2026-10-10")
+	}
+	account, err := w.q.CreateBankAccount(w.t.Context(), params)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	return account
+}
+
+// sync reports a new booked balance for a bank account, as a bank sync does.
+func (w *world) sync(account store.Account, balance int64, day string) {
+	w.t.Helper()
+	if _, err := w.q.UpdateBankAccount(w.t.Context(), store.UpdateBankAccountParams{ID: account.ID, Provider: account.Provider,
+		Institution: account.Institution, BookedBalanceMinor: &balance, BookedBalanceDate: date(day)}); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
 func TestLowBalanceNotifiesEachEpisodeOnce(t *testing.T) {
 	w := newWorld(t)
 	q := w.q
-	cash, err := q.CreateAccount(t.Context(), store.CreateAccountParams{Name: "Wallet", Currency: "EUR", Kind: "cash", OpeningBalanceMinor: 12000})
+	girokonto := w.bankAccount("Girokonto", "bank", "EUR", "acc-1", pointerTo(int64(12000)))
+	// Never watched: the Cash account and other manual accounts (also of
+	// kind bank, like the world's Giro), a bank card without a reported
+	// balance, an archived bank account, and other currencies.
+	wallet, err := q.CreateAccount(t.Context(), store.CreateAccountParams{Name: "Cash", Currency: "EUR", Kind: "cash"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.pay(cash, 1, "2026-10-09", "booked", "Found a cent", "")
-	// Cards, savings, archived accounts, other currencies, and an unused
-	// account (no transactions, no bank balance) are not checked.
-	for _, params := range []store.CreateAccountParams{
-		{Name: "Card", Currency: "EUR", Kind: "card"}, {Name: "Tagesgeld", Currency: "EUR", Kind: "savings"}, {Name: "Spare", Currency: "EUR", Kind: "cash"},
-	} {
-		account, err := q.CreateAccount(t.Context(), params)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if params.Name != "Spare" {
-			w.pay(account, -100, "2026-10-09", "booked", "Something", "")
-		}
-	}
-	usd, err := q.CreateAccount(t.Context(), store.CreateAccountParams{Name: "USD", Currency: "USD", Kind: "bank"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	w.pay(usd, -100, "2026-10-09", "booked", "Something", "")
-	old, err := q.CreateAccount(t.Context(), store.CreateAccountParams{Name: "Old", Currency: "EUR", Kind: "bank"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	w.pay(wallet, -4000, "2026-10-09", "booked", "Bäckerei", "")
+	w.pay(w.giro, -499000, "2026-10-01", "booked", "Moved out", "") // too old for a large-debit alert
+	card := w.bankAccount("Karte", "card", "EUR", "acc-2", nil)
+	w.pay(card, -100, "2026-10-09", "booked", "Shell", "")
+	old := w.bankAccount("Old", "bank", "EUR", "acc-3", pointerTo(int64(10)))
 	if _, err := q.UpdateAccount(t.Context(), store.UpdateAccountParams{ID: old.ID, Archived: pointerTo(true)}); err != nil {
 		t.Fatal(err)
 	}
+	w.bankAccount("Dollar", "bank", "USD", "acc-4", pointerTo(int64(10)))
 	if _, sent := w.run("2026-10-10 09:00"); len(sent) != 0 {
 		t.Fatalf("all fine: %s", titles(sent))
 	}
-	w.pay(cash, -4000, "2026-10-10", "booked", "Bäckerei", "")
+
+	w.sync(girokonto, 8001, "2026-10-10")
 	result, sent := w.run("2026-10-10 10:00")
-	if result.Sent != 1 || len(sent) != 1 || sent[0].Title != "Low balance: Wallet at €80.01" || sent[0].Body != "Below your €100.00 alert." ||
+	if result.Sent != 1 || len(sent) != 1 || sent[0].Title != "Low balance: Girokonto at €80.01" ||
+		sent[0].Body != "Below your €100.00 alert. Balance reported by the bank on Sat, 10 Oct 2026." ||
 		sent[0].Importance != notify.Medium || sent[0].Category != "finance.low_balance" || sent[0].Link != "/finance" ||
-		sent[0].DedupeKey != "finance.low_balance:"+uuidText(cash.ID.Bytes)+":1" {
+		sent[0].DedupeKey != "finance.low_balance:"+uuidText(girokonto.ID.Bytes)+":1" {
 		t.Fatalf("low: %+v %+v", result, sent)
 	}
-	w.pay(cash, -1000, "2026-10-10", "booked", "Kiosk", "")
+	w.sync(girokonto, 7001, "2026-10-10")
 	if result, sent := w.run("2026-10-10 11:00"); len(sent) != 0 || result.Handled != 1 {
 		t.Fatalf("still low: %+v %s", result, titles(sent))
 	}
 	// Back above re-arms it; the next fall is a new episode.
-	w.pay(cash, 5000, "2026-10-11", "booked", "ATM", "")
+	w.sync(girokonto, 12001, "2026-10-11")
 	if _, sent := w.run("2026-10-11 09:00"); len(sent) != 0 {
 		t.Fatalf("back above: %s", titles(sent))
 	}
-	w.pay(cash, -3000, "2026-10-12", "booked", "Markt", "")
-	if _, sent := w.run("2026-10-12 09:00"); len(sent) != 1 || !strings.HasSuffix(sent[0].DedupeKey, ":2") || sent[0].Title != "Low balance: Wallet at €90.01" {
+	w.sync(girokonto, 9001, "2026-10-12")
+	if _, sent := w.run("2026-10-12 09:00"); len(sent) != 1 || !strings.HasSuffix(sent[0].DedupeKey, ":2") || sent[0].Title != "Low balance: Girokonto at €90.01" {
 		t.Fatalf("second episode: %+v", sent)
 	}
-	// A bank account shows the bank's balance; a fall while the alert is
-	// off is notified once it is switched on.
+	// A savings account with a bank balance is watched; a fall while the
+	// alert is off is notified once it is switched on.
 	w.settings(func(p *store.SaveFinanceSettingsParams) { p.LowBalanceEnabled = false })
-	provider, institution := "enablebanking", "Deutsche Bank"
-	if _, err := q.CreateBankAccount(t.Context(), store.CreateBankAccountParams{Name: "Girokonto", Kind: "bank", Currency: "EUR",
-		ConnectionID: pgtype.UUID{Bytes: [16]byte{9}, Valid: true}, ExternalID: "acc-1", Provider: &provider, Institution: &institution,
-		BookedBalanceMinor: pointerTo(int64(5000)), BookedBalanceDate: date("2026-10-12")}); err != nil {
-		t.Fatal(err)
-	}
+	w.bankAccount("Tagesgeld", "savings", "EUR", "acc-5", pointerTo(int64(5000)))
 	if _, sent := w.run("2026-10-12 10:00"); len(sent) != 0 {
 		t.Fatalf("switched off: %s", titles(sent))
 	}
 	w.settings(func(p *store.SaveFinanceSettingsParams) {})
-	if _, sent := w.run("2026-10-12 10:05"); len(sent) != 1 || sent[0].Title != "Low balance: Girokonto at €50.00" ||
-		sent[0].Body != "Below your €100.00 alert. Balance reported by the bank on Mon, 12 Oct 2026." {
-		t.Fatalf("bank balance: %+v", sent)
+	if _, sent := w.run("2026-10-12 10:05"); len(sent) != 1 || sent[0].Title != "Low balance: Tagesgeld at €50.00" {
+		t.Fatalf("savings: %+v", sent)
 	}
 }
 

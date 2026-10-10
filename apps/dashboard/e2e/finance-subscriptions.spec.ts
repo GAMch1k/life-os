@@ -4,7 +4,8 @@ import { type APIRequestContext, expect, type Page, test } from "./fixtures";
 // detects is confirmed, edited, and ignored on the Subscriptions tab; a
 // transaction is marked "This is a subscription" in its dialog; the Alerts
 // dialog saves its thresholds; and Home shows a renewal within the lead
-// days and a low balance. Names carry a timestamp so runs never collide;
+// days but never a manual account as low (low balance is for bank accounts
+// only, which a spec cannot create; the Go tests cover it). Names carry a timestamp so runs never collide;
 // everything the spec creates is removed or archived afterwards, and the
 // alert settings are put back.
 
@@ -264,7 +265,7 @@ test.describe("Finance subscriptions and alerts", () => {
     }
   });
 
-  test("saves the alert settings and shows renewals and low balances on Home", async ({
+  test("saves the alert settings and shows renewals on Home, never a manual account as low", async ({
     page,
     request,
   }) => {
@@ -303,26 +304,16 @@ test.describe("Finance subscriptions and alerts", () => {
       expect(saved.largeDebit.threshold.amount).toBe(30000);
       expect(saved.renewals.leadDays).toBe(3);
 
-      // A wallet below €100 and a subscription renewing in two days.
-      const wallet = await createAccount(
-        request,
-        `E2E Wallet ${stamp}`,
-        "cash",
-        5000,
-      );
+      // A subscription renewing in two days, paid from a manual account
+      // below €100: Cash and manual accounts are never low (only bank
+      // accounts from the bank connection, which a spec cannot create).
+      const walletName = `E2E Wallet ${stamp}`;
+      const wallet = await createAccount(request, walletName, "bank", 5000);
       cleanup.push(() =>
         request.patch(`${api}/accounts/${wallet.id}`, {
           data: { archived: true },
         }),
       );
-      const spent = await pay(
-        request,
-        wallet.id,
-        -500,
-        ownerToday(),
-        `E2E Kiosk ${stamp}`,
-      );
-      cleanup.push(() => request.delete(`${api}/transactions/${spent.id}`));
       const name = `E2E Renewal ${stamp}`;
       const paid = await pay(
         request,
@@ -346,16 +337,16 @@ test.describe("Finance subscriptions and alerts", () => {
       await expect(renewals).toContainText("Renewing soon");
       await expect(renewals).toContainText(name);
       await expect(renewals).toContainText("in 2 days");
-      const low = page.locator("#attention-low-balance");
-      await expect(low).toContainText("Low balance");
-      await expect(low).toContainText(`E2E Wallet ${stamp}`);
-      await low.getByRole("link", { name: /Open Finance/ }).click();
+      await expect(
+        page.locator("#attention-low-balance").getByText(walletName),
+      ).toHaveCount(0);
+      await page.goto("/finance");
       await expect(
         page
           .getByTestId("finance-account")
-          .filter({ hasText: `E2E Wallet ${stamp}` })
+          .filter({ hasText: walletName })
           .getByText("Low balance"),
-      ).toBeVisible();
+      ).toHaveCount(0);
     } finally {
       for (const step of cleanup.reverse()) await step();
     }

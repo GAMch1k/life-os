@@ -360,9 +360,18 @@ export function homeRenewals(
   };
 }
 
-/** Accounts whose balance is below the low-balance alert's threshold. */
+/**
+ * Bank accounts whose balance is below the low-balance alert's threshold.
+ * Finance never marks Cash or other manual accounts; Home double-checks.
+ */
 export function lowBalanceAccounts(accounts: Account[]) {
-  return accounts.filter((account) => account.lowBalance && !account.archived);
+  return accounts.filter(
+    (account) =>
+      account.lowBalance &&
+      !account.archived &&
+      !account.builtIn &&
+      account.source.kind === "bank",
+  );
 }
 
 /** The Subscriptions tab, for links. */

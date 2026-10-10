@@ -95,12 +95,15 @@ type Querier interface {
 	ListExcludedCurrencies(ctx context.Context, arg ListExcludedCurrenciesParams) ([]ListExcludedCurrenciesRow, error)
 	ListFinancialCategories(ctx context.Context, includeArchived bool) ([]FinancialCategory, error)
 	// Money out of at least a threshold in one currency, booked or pending,
-	// booked on or after a day, that has not been notified.
+	// booked on or after a day, that has not been notified. Money moved
+	// between own accounts (a transfer category) is not a debit to warn about.
 	ListLargeDebits(ctx context.Context, arg ListLargeDebitsParams) ([]ListLargeDebitsRow, error)
-	// Active bank and cash accounts in one currency with the balance they
-	// show (the bank's booked balance when it reported one) and their
-	// low-balance state. An account without transactions or a bank-reported
-	// balance (an unused Cash account) has no balance to watch.
+	// Active bank accounts (from a bank connection) in one currency with the
+	// balance they show and their low-balance state: kind bank, with the bank's
+	// booked balance or, before the bank reported one, the computed balance of
+	// its transactions; and card or savings accounts that have a bank-reported
+	// balance. The built-in Cash account and other manual accounts are never
+	// watched.
 	ListLowBalanceAccounts(ctx context.Context, currency string) ([]ListLowBalanceAccountsRow, error)
 	// Booked money out since a day, for detecting recurring payments; money
 	// moved between own accounts (transfer categories) is not a payment.

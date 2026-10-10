@@ -263,10 +263,11 @@ func RenewalKey(subscriptionID [16]byte, expected time.Time) string {
 	return RenewalCategory + ":" + uuidText(subscriptionID) + ":" + expected.Format(time.DateOnly)
 }
 
-// lowBalances keeps each account's low-balance state (also while the alert
-// is off) and notifies the episode it is in while its balance is below the
-// threshold: an account that falls below starts a new episode, and one
-// back at or above the threshold is re-armed.
+// lowBalances keeps each bank account's low-balance state (also while the
+// alert is off) and notifies the episode it is in while its balance is
+// below the threshold: an account that falls below starts a new episode,
+// and one back at or above the threshold is re-armed. Cash and other manual
+// accounts are never watched.
 func (w *Watcher) lowBalances(ctx context.Context, q *store.Queries, result *Result, settings Settings, now time.Time) error {
 	rows, err := q.ListLowBalanceAccounts(ctx, w.currency)
 	if err != nil {

@@ -263,14 +263,17 @@ func (h *Handler) lowBalanceRule(ctx context.Context, q *store.Queries) (lowBala
 	return lowBalance{enabled: settings.LowBalanceEnabled, threshold: settings.LowBalanceMinor, currency: h.defaultCurrency}, nil
 }
 
-// below reports whether an account is low by the alert's rule: an active
-// bank or cash account in the default currency whose balance (the bank's,
-// when it reported one) is below the threshold, while the alert is on. An
-// account without transactions or a bank-reported balance is not watched.
+// below reports whether an account is low by the alert's rule (see
+// ListLowBalanceAccounts): an active account from a bank connection in the
+// default currency, of kind bank (with the bank's balance, or transactions
+// before the bank reported one), or card or savings with a bank-reported
+// balance, whose balance is below the threshold, while the alert is on.
+// The built-in Cash account and other manual accounts never are.
 func (rule lowBalance) below(row store.ListAccountsWithBalanceRow) bool {
-	known := row.TransactionCount > 0 || (row.SourceKind == "bank" && row.BookedBalanceDate.Valid)
-	return rule.enabled && known && (row.Kind == "bank" || row.Kind == "cash") && !row.ArchivedAt.Valid && row.Currency == rule.currency &&
-		row.BalanceMinor < rule.threshold
+	reported := row.BookedBalanceDate.Valid
+	watched := row.SourceKind == "bank" &&
+		((row.Kind == "bank" && (reported || row.TransactionCount > 0)) || ((row.Kind == "card" || row.Kind == "savings") && reported))
+	return rule.enabled && watched && !row.ArchivedAt.Valid && row.Currency == rule.currency && row.BalanceMinor < rule.threshold
 }
 
 func accountView(row store.ListAccountsWithBalanceRow, rule lowBalance) generated.Account {

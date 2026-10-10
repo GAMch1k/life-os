@@ -221,20 +221,25 @@ func TestAlertSettingsAreReadAndSaved(t *testing.T) {
 
 func TestAccountsSayWhenTheirBalanceIsLow(t *testing.T) {
 	c := newAPIClient(t)
-	wallet := c.account("Wallet", "cash", "EUR", 5000)
-	card := c.account("Card", "card", "EUR", 0)
 	lowOf := func(id string) bool {
 		return expect[generated.Account](c, http.MethodGet, "/v1/accounts/"+id, nil, http.StatusOK).LowBalance
 	}
-	// Without transactions there is no balance to watch: the built-in Cash
-	// account at zero is not low.
-	if lowOf(wallet.Id.String()) || lowOf(c.cash().Id.String()) {
-		t.Fatal("unused accounts are low")
-	}
+	// Cash and other manual accounts are never low, whatever their balance:
+	// the owner logs cash spending without the withdrawals.
+	wallet := c.account("Wallet", "bank", "EUR", 0)
 	c.spend(map[string]any{"accountId": wallet.Id, "amount": eur(-100)})
-	c.spend(map[string]any{"accountId": card.Id, "amount": eur(-100)})
-	if !lowOf(wallet.Id.String()) || lowOf(card.Id.String()) {
-		t.Fatal("the wallet should be low and the card never")
+	c.spend(map[string]any{"amount": eur(-2500)})
+	if lowOf(wallet.Id.String()) || lowOf(c.cash().Id.String()) {
+		t.Fatal("manual accounts are low")
+	}
+	// A bank account with the bank's balance below the threshold is; a bank
+	// card without a reported balance is not.
+	result := c.syncBank(bankSync([]map[string]any{giroInput(5000, 5000), cardInput}, []map[string]any{
+		bankTx("acc-2", "t1", "booked", "2026-10-09", -6000, "Shell"),
+	}))
+	giro, card := result.AccountIds[0].Id.String(), result.AccountIds[1].Id.String()
+	if !lowOf(giro) || lowOf(card) {
+		t.Fatal("the bank account should be low and the card not")
 	}
 	expect[generated.FinanceSettings](c, http.MethodPut, "/v1/settings", map[string]any{
 		"largeDebit": map[string]any{"enabled": true, "thresholdMinor": 25000},

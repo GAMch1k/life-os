@@ -26,8 +26,9 @@ is the sum of the pending ones, which are not in the balance;
 `transactionCount` counts both. A bank account that reported a booked balance
 shows the bank's balance instead, as of `balanceAsOf`, with the bank's
 `available` balance next to it (see [Bank syncs](#bank-syncs)). `lowBalance`
-is true while the low-balance alert is on and the account is below its
-threshold (see [Alerts](#alerts)).
+is true while the low-balance alert is on and the account is a watched bank
+account below its threshold; Cash and other manual accounts never are (see
+[Alerts](#alerts)).
 
 `GET /v1/accounts` lists the active accounts, the built-in Cash account first,
 then by name (`includeArchived=true` adds archived ones); `POST /v1/accounts`
@@ -407,16 +408,21 @@ settings (every field required; amounts are minor units of
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `largeDebit` | on, €250 | Money out of at least `thresholdMinor` (at least 1) |
-| `lowBalance` | on, €100 | A bank or cash account below `thresholdMinor` (0 or more) |
+| `largeDebit` | on, €250 | Money out of at least `thresholdMinor` (at least 1), not in a transfer category |
+| `lowBalance` | on, €100 | A bank account below `thresholdMinor` (0 or more) |
 | `renewals` | on, 3 days | A reminder `leadDays` (0–30; 0 is on the day) before a confirmed subscription's next payment |
 
 Only accounts and transactions in the default currency are checked. The
-low-balance alert watches active (not archived) accounts of kind `bank` or
-`cash` with a known balance: the bank's reported booked balance for a bank
-account, else the opening balance plus booked transactions; an account
-without transactions or a bank balance (an unused Cash account) is not
-watched.
+low-balance alert watches bank accounts only: active (not archived)
+accounts from a bank connection of kind `bank` (with the bank's reported
+booked balance, or the computed balance of their transactions before the
+bank reported one), and of kind `card` or `savings` once they have a
+bank-reported balance. The built-in Cash account and other manual accounts
+are never watched: cash spending is logged without the withdrawals, so Cash
+goes negative by design. The large-debit alert leaves out money in a
+`transfer`-kind category (Savings, Transfers, or any other transfer
+category): moving money between the owner's own accounts is not a debit to
+warn about.
 
 **Notifications.** A background loop (every 5 minutes, at startup, and
 right after a change) sends them through Notifications (`pkg/notify`):
@@ -424,8 +430,8 @@ right after a change) sends them through Notifications (`pkg/notify`):
 | When | Category | Importance | Title, for example | Link | Dedupe key |
 | --- | --- | --- | --- | --- | --- |
 | Lead days before a confirmed subscription's next payment, until that day | `finance.subscription` | low | "Netflix renews in 3 days: €13.99" ("tomorrow", "today") | `/finance?tab=subscriptions` | `finance.subscription:<id>:<YYYY-MM-DD>` |
-| A money-out transaction of at least the threshold, booked or pending, booked on one of the last three days or later | `finance.large_debit` | medium | "Large debit: €480.00 at MediaMarkt" | `/finance` | `finance.large_debit:<transactionId>` |
-| A watched account falls below the threshold | `finance.low_balance` | medium | "Low balance: Girokonto at €84.20" | `/finance` | `finance.low_balance:<accountId>:<episode>` |
+| A money-out transaction of at least the threshold, booked or pending, booked on one of the last three days or later, not in a transfer category | `finance.large_debit` | medium | "Large debit: €480.00 at MediaMarkt" | `/finance` | `finance.large_debit:<transactionId>` |
+| A watched bank account falls below the threshold | `finance.low_balance` | medium | "Low balance: Girokonto at €84.20" | `/finance` | `finance.low_balance:<accountId>:<episode>` |
 
 A renewal reminder's body says the date, the account, and, for another
 cadence than monthly, the monthly cost ("Expected on Tue, 13 Oct 2026 from
@@ -433,7 +439,10 @@ Girokonto. Renews yearly, €7.83 a month."). A large debit is notified once
 per transaction; only transactions booked in the last three days count, so
 a first 90-day bank import does not notify old ones, and a booked bank
 transaction that replaces a pending one keeps the pending one's claim (the
-same debit is not notified twice). A low balance is notified once per
+same debit is not notified twice). The category is looked at when the
+alert is due: a transaction given a transfer category before that is left
+out, and one already notified stays notified whatever its category
+becomes. A low balance is notified once per
 episode: an account that falls below starts a new episode, and one back at
 or above the threshold is re-armed. Episodes are tracked while the alert is
 off too; switching it on while an account is low notifies that episode. A

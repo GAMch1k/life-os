@@ -121,22 +121,27 @@ ON CONFLICT (dedupe_key) DO NOTHING;
 
 -- name: ListLargeDebits :many
 -- Money out of at least a threshold in one currency, booked or pending,
--- booked on or after a day, that has not been notified.
+-- booked on or after a day, that has not been notified. Money moved
+-- between own accounts (a transfer category) is not a debit to warn about.
 SELECT t.id, t.account_id, t.amount_minor, t.currency, t.occurred_on, t.status, t.counterparty, t.description,
        a.name AS account_name
 FROM transactions AS t
 JOIN accounts AS a ON a.id = t.account_id
+LEFT JOIN financial_categories AS c ON c.id = t.category_id
 WHERE t.currency = sqlc.arg(currency)
+  AND c.kind IS DISTINCT FROM 'transfer'
   AND t.amount_minor <= -sqlc.arg(threshold_minor)::bigint
   AND t.occurred_on >= sqlc.arg(since)::date
   AND NOT EXISTS (SELECT 1 FROM alert_notifications AS n WHERE n.dedupe_key = 'finance.large_debit:' || t.id::text)
 ORDER BY t.occurred_on, t.created_at, t.id;
 
 -- name: ListLowBalanceAccounts :many
--- Active bank and cash accounts in one currency with the balance they
--- show (the bank's booked balance when it reported one) and their
--- low-balance state. An account without transactions or a bank-reported
--- balance (an unused Cash account) has no balance to watch.
+-- Active bank accounts (from a bank connection) in one currency with the
+-- balance they show and their low-balance state: kind bank, with the bank's
+-- booked balance or, before the bank reported one, the computed balance of
+-- its transactions; and card or savings accounts that have a bank-reported
+-- balance. The built-in Cash account and other manual accounts are never
+-- watched.
 SELECT a.id, a.name, a.source_kind, a.booked_balance_date,
        (CASE WHEN a.source_kind = 'bank' AND a.booked_balance_minor IS NOT NULL THEN a.booked_balance_minor
              ELSE a.opening_balance_minor + COALESCE((SELECT SUM(t.amount_minor) FROM transactions AS t
@@ -145,10 +150,10 @@ SELECT a.id, a.name, a.source_kind, a.booked_balance_date,
 FROM accounts AS a
 LEFT JOIN low_balance_states AS s ON s.account_id = a.id
 WHERE a.archived_at IS NULL
-  AND a.kind IN ('bank', 'cash')
+  AND a.source_kind = 'bank'
   AND a.currency = sqlc.arg(currency)
-  AND ((a.source_kind = 'bank' AND a.booked_balance_minor IS NOT NULL)
-       OR EXISTS (SELECT 1 FROM transactions AS t WHERE t.account_id = a.id))
+  AND ((a.kind = 'bank' AND (a.booked_balance_minor IS NOT NULL OR EXISTS (SELECT 1 FROM transactions AS t WHERE t.account_id = a.id)))
+       OR (a.kind IN ('card', 'savings') AND a.booked_balance_minor IS NOT NULL))
 ORDER BY lower(a.name), a.id;
 
 -- name: SetLowBalanceState :exec

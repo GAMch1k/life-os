@@ -316,9 +316,38 @@ test("Home lists upcoming renewals soonest first and low accounts", () => {
     ],
   );
   assert.equal(renewals.more, true);
+  const bank = { kind: "bank" };
+  const manual = { kind: "manual" };
   const accounts = [
-    { id: "low", lowBalance: true, archived: false },
-    { id: "fine", lowBalance: false, archived: false },
+    {
+      id: "low",
+      lowBalance: true,
+      archived: false,
+      builtIn: false,
+      source: bank,
+    },
+    {
+      id: "fine",
+      lowBalance: false,
+      archived: false,
+      builtIn: false,
+      source: bank,
+    },
+    // Never Cash or a manual account, even if marked.
+    {
+      id: "cash",
+      lowBalance: true,
+      archived: false,
+      builtIn: true,
+      source: manual,
+    },
+    {
+      id: "manual",
+      lowBalance: true,
+      archived: false,
+      builtIn: false,
+      source: manual,
+    },
   ] as Account[];
   assert.deepEqual(
     lowBalanceAccounts(accounts).map((account) => account.id),

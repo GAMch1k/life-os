@@ -209,8 +209,8 @@ function AlertsForm({
             {currency}
           </div>
           <FieldDescription className="text-xs">
-            A notification when a bank or cash account falls below this amount,
-            and again after it went back above.
+            A notification when a bank account falls below this amount, and
+            again after it went back above.
           </FieldDescription>
           <FieldError id={`${id}-lowBalance-error`}>
             {errors.lowBalance}

@@ -373,8 +373,15 @@ test("Home shows low accounts and renewals within the lead days", () => {
     open: list([]),
     events: list([]),
   };
-  const account = (id: string, lowBalance: boolean) =>
-    ({ id, name: id, lowBalance, archived: false }) as unknown as Account;
+  const account = (id: string, lowBalance: boolean, kind = "bank") =>
+    ({
+      id,
+      name: id,
+      lowBalance,
+      archived: false,
+      builtIn: kind !== "bank",
+      source: { kind },
+    }) as unknown as Account;
   const renewal = (id: string, nextDate: string) =>
     ({
       id,
@@ -387,7 +394,10 @@ test("Home shows low accounts and renewals within the lead days", () => {
   const attention = toHomeAttention(
     {
       ...base,
-      accounts: list([account("Girokonto", true), account("Cash", false)]),
+      accounts: list([
+        account("Girokonto", true),
+        account("Cash", true, "manual"),
+      ]),
       subscriptions: {
         data: {
           items: [

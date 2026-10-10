@@ -490,7 +490,7 @@ func (e TransactionStatus) Valid() bool {
 	}
 }
 
-// Account `balance` is the opening balance plus every booked transaction; for a bank account that reported one, it is the bank's booked balance as of `balanceAsOf` instead, and `available` is the bank's available balance. `pending` is the sum of the pending transactions, which are not in a computed balance. `transactionCount` counts both. `lowBalance` is true while the low-balance alert is on and the balance of this bank or cash account (active, in the default currency) is below its threshold.
+// Account `balance` is the opening balance plus every booked transaction; for a bank account that reported one, it is the bank's booked balance as of `balanceAsOf` instead, and `available` is the bank's available balance. `pending` is the sum of the pending transactions, which are not in a computed balance. `transactionCount` counts both. `lowBalance` is true while the low-balance alert is on and this account is watched and below its threshold: an active account from a bank connection, in the default currency, of kind bank, or card or savings with a bank-reported balance. The built-in Cash account and other manual accounts are never low.
 type Account struct {
 	Archived   bool       `json:"archived"`
 	ArchivedAt *time.Time `json:"archivedAt"`
@@ -944,7 +944,7 @@ type ExcludedCurrency struct {
 	TransactionCount int    `json:"transactionCount"`
 }
 
-// FinanceSettings `largeDebit`: a medium notification for each money-out transaction of at least the threshold (booked or pending, booked in the last three days). `lowBalance`: a medium notification when a bank or cash account's balance falls below the threshold, again after it went back above. `renewals`: a low notification `leadDays` before a confirmed subscription's next payment. Thresholds are in `currency`, the default currency; accounts and transactions in other currencies are not checked.
+// FinanceSettings `largeDebit`: a medium notification for each money-out transaction of at least the threshold (booked or pending, booked in the last three days; money moved in a transfer category is left out). `lowBalance`: a medium notification when a bank account's balance (from a bank connection: kind bank, or card or savings with a bank-reported balance; never Cash or other manual accounts) falls below the threshold, again after it went back above. `renewals`: a low notification `leadDays` before a confirmed subscription's next payment. Thresholds are in `currency`, the default currency; accounts and transactions in other currencies are not checked.
 type FinanceSettings struct {
 	Currency   string       `json:"currency"`
 	LargeDebit AmountAlert  `json:"largeDebit"`

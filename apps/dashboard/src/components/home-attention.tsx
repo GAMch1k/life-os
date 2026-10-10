@@ -193,7 +193,7 @@ export function HomeAttentionSurface({
           linkLabel="Open Finance"
           icon={<Wallet aria-hidden="true" className="text-warning size-4" />}
           title="Low balance"
-          detail={`${lowBalance.length} ${lowBalance.length === 1 ? "account is" : "accounts are"} below your low-balance alert`}
+          detail={`${lowBalance.length} ${lowBalance.length === 1 ? "bank account is" : "bank accounts are"} below your low-balance alert`}
           items={lowBalance.map((account) => ({
             id: account.id,
             label: account.name,
