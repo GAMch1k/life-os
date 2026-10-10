@@ -16,7 +16,7 @@ import interactionPlugin from "@fullcalendar/interaction";
 import listPlugin from "@fullcalendar/list";
 import FullCalendar from "@fullcalendar/react";
 import timeGridPlugin from "@fullcalendar/timegrid";
-import { ChevronLeft, ChevronRight, Globe, Plus } from "lucide-react";
+import { Bell, ChevronLeft, ChevronRight, Globe, Plus } from "lucide-react";
 import {
   memo,
   type RefObject,
@@ -31,6 +31,7 @@ import {
   CalendarEventDialog,
   type EventDialogState,
 } from "@/components/calendar-event-dialog";
+import { ReminderDefaultsDialog } from "@/components/calendar-reminder-defaults";
 import { CalendarSearch } from "@/components/calendar-search";
 import { Button } from "@/components/ui/button";
 import { calendarClient } from "@/lib/api/calendar-client";
@@ -165,12 +166,12 @@ const FullCalendarView = memo(function FullCalendarView({
 
 /**
  * The Calendar workspace: month, week, day, and a 30-day list (FullCalendar
- * Standard) over the Calendar API, with search, event details, and create,
- * edit, and delete dialogs. Times are shown in the browser's timezone
- * (FullCalendar's "local"); `timeZone` is the zone the server rendered in,
- * used until the page has hydrated. The view and date in focus are kept in
- * the URL (`?view=week&date=2026-10-14`) once the owner moves, so a reload
- * returns to them.
+ * Standard) over the Calendar API, with search, event details, create,
+ * edit, and delete dialogs, and Reminder defaults. Times are shown in the
+ * browser's timezone (FullCalendar's "local"); `timeZone` is the zone the
+ * server rendered in, used until the page has hydrated. The view and date
+ * in focus are kept in the URL (`?view=week&date=2026-10-14`) once the
+ * owner moves, so a reload returns to them.
  */
 export function CalendarWorkspace({
   initialDate,
@@ -206,6 +207,7 @@ export function CalendarWorkspace({
   const [notice, setNotice] = useState<string>();
   const [showCancelled, setShowCancelled] = useState(false);
   const [dialog, setDialog] = useState<EventDialogState>(null);
+  const [defaultsOpen, setDefaultsOpen] = useState(false);
 
   useEffect(() => {
     zoneRef.current = zone;
@@ -329,6 +331,12 @@ export function CalendarWorkspace({
     api()?.refetchEvents();
   };
 
+  // Events that use their defaults now remind differently.
+  const onDefaultsSaved = () => {
+    setDefaultsOpen(false);
+    api()?.refetchEvents();
+  };
+
   const createNow = () =>
     setDialog({ mode: "create", draft: newDraft(zone, new Date()) });
 
@@ -399,6 +407,14 @@ export function CalendarWorkspace({
           </h2>
         </div>
         <div className="ml-auto flex flex-wrap items-center gap-x-3 gap-y-2">
+          <Button
+            onClick={() => setDefaultsOpen(true)}
+            size="sm"
+            variant="outline"
+          >
+            <Bell />
+            Reminder defaults
+          </Button>
           <span
             className="text-muted-foreground hidden items-center gap-1 text-xs lg:flex"
             title="Times are shown in this time zone"
@@ -491,6 +507,11 @@ export function CalendarWorkspace({
         state={dialog}
         timeZone={zone}
         today={today}
+      />
+      <ReminderDefaultsDialog
+        onOpenChange={setDefaultsOpen}
+        onSaved={onDefaultsSaved}
+        open={defaultsOpen}
       />
     </div>
   );
