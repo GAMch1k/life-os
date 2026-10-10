@@ -1,0 +1,2 @@
+# Feeds keep their CRLF line endings, as served (RFC 5545).
+*.ics -text

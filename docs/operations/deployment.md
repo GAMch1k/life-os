@@ -59,7 +59,7 @@ Optional `.env` settings for the processor:
 
 ## Owner timezone
 
-The owner's timezone is the browser's own timezone when it is known, else `LIFE_OS_TIMEZONE` (an IANA name, default `UTC`), else UTC. Set `LIFE_OS_TIMEZONE` to where the owner usually is, before the processor, Calendar, and Dashboard start; changing it needs a restart of them (`docker compose up -d processor calendar tasks dashboard`). An unknown name falls back to UTC; the processor and Calendar log it at startup and the processor's zone is listed under Automatic processing on `/status`.
+The owner's timezone is the browser's own timezone when it is known, else `LIFE_OS_TIMEZONE` (an IANA name, default `UTC`), else UTC. Set `LIFE_OS_TIMEZONE` to where the owner usually is, before the processor, Calendar, calendar-feeds, and Dashboard start; changing it needs a restart of them (`docker compose up -d processor calendar calendar-feeds tasks dashboard`). An unknown name falls back to UTC; the processor and Calendar log it at startup and the processor's zone is listed under Automatic processing on `/status`.
 
 - **Dashboard.** Every "today", date, and time is shown in the browser's timezone, which the browser reports in the `lifeos-tz` cookie; until it has (the very first page load) and for clients without it, in `LIFE_OS_TIMEZONE`. See [Dashboard](../frontend/dashboard.md).
 - **Calendar.** All-day events are dates; reads that compare them with instants use the `timeZone` the client passes (the Dashboard passes the zone it shows), else `LIFE_OS_TIMEZONE`. See [Calendar](../services/calendar.md).
@@ -72,11 +72,12 @@ A redeploy or `docker compose stop processor` cancels a run in progress and hand
 
 ## Calendar sources
 
-Calendar refreshes subscribed ICS feeds itself (see [Calendar](../services/calendar.md#sources-ics-feeds)); no extra service is involved. Migration `000005_calendar_sources` adds the source registry and `000006_source_presets` the preset columns on the next `calendar-migrate` run. Optional `.env` settings:
-- `LIFE_OS_CALENDAR_SOURCE_REFRESH_AT` (default `04:30`): the daily refresh time, HH:MM in `LIFE_OS_TIMEZONE`.
-- `LIFE_OS_ZAW_ICS_URL` (default empty): the owner's personal ZAW waste-collection feed (the MyMüll iCal export, `https://service.mymuell.de/api.php?m=zaw&r=ical&city_id=<city>&area_id=<area>&…`). When set, Calendar keeps one "ZAW" source for it, created or updated at its start and imported right away; change it with `docker compose up -d calendar`. See [ZAW waste collection](../services/calendar.md#zaw-waste-collection).
+The [calendar-feeds](../services/calendar-feeds.md) service refreshes the subscribed ICS feeds and syncs their events into Calendar through its integration API (P11-08); Calendar downloads no feed. `calendar_feeds_db` is provisioned like `notifications_db`: add `LIFE_OS_CALENDAR_FEEDS_DB_PASSWORD` to `.env`, recreate the PostgreSQL container (`docker compose up --detach postgres`), and run `make db-provision` once. Then start `calendar-feeds-migrate` and `calendar-feeds` before the gateway, which routes `/api/integrations/calendar-feeds/` and waits for the service. The release that introduces it hands the existing feeds over once, in a fixed order: see [Calendar feeds handoff](calendar-feeds-handoff.md). Optional `.env` settings:
 
-Calendar needs outbound https from the `backend` network to reach feeds, and refuses feeds on private or loopback addresses. A refresh outcome (and the last error) is on the source (`GET /api/calendar/v1/sources`) and in the Event Log; a failing feed keeps its last good events and is retried with backoff. Keep personal feed URLs (they can carry a street) in the ignored `.env` or in the source registry, never in the repository.
+- `LIFE_OS_CALENDAR_SOURCE_REFRESH_AT` (default `04:30`): the daily refresh time, HH:MM in `LIFE_OS_TIMEZONE` (calendar-feeds' `CALENDAR_FEEDS_REFRESH_AT`).
+- `LIFE_OS_ZAW_ICS_URL` (default empty): the owner's personal ZAW waste-collection feed (the MyMüll iCal export, `https://service.mymuell.de/api.php?m=zaw&r=ical&city_id=<city>&area_id=<area>&…`). When set, calendar-feeds keeps one "ZAW" feed for it, created or updated at its start and imported right away; change it with `docker compose up -d calendar-feeds`. See [ZAW waste collection](../services/calendar-feeds.md#zaw-waste-collection). The verification stack never receives it.
+
+calendar-feeds needs outbound https from the `backend` network to reach feeds, and refuses feeds on private or loopback addresses. A refresh outcome (and the last error) is on the feed (`GET /api/integrations/calendar-feeds/v1/feeds`), on Status, and in the Event Log (domain "Calendar feeds"); a failing feed keeps its last good events and is retried with backoff. Keep personal feed URLs (they can carry a street) in the ignored `.env` or in calendar-feeds, never in the repository.
 
 ## Google Calendar
 

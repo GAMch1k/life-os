@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 
 	"github.com/oapi-codegen/runtime/types"
@@ -141,59 +140,58 @@ func TestRecurringEventPriority(t *testing.T) {
 }
 
 // A source's default priority applies to its events without one of their
-// own; the owner's priority on an imported event survives refreshes and
-// later changes of the default.
+// own; the owner's priority on an imported event survives syncs and later
+// changes of the default. The source is a feed of calendar-feeds, synced as
+// it does (snapshots with window upcomingOnly, no priorities of its own).
 func TestSourcePriority(t *testing.T) {
-	c := newSourcesClient(t, nil, nil)
-	fx := loadFixture(t)
-	server := &feedServer{body: fx.feed(nil)}
-	feed := httptest.NewServer(server)
-	defer feed.Close()
-
-	plain := c.source(http.MethodPost, "/v1/sources", map[string]any{"name": "Other", "url": feed.URL + "/other.ics", "enabled": false}, http.StatusCreated)
+	c := newIntegrationClient(t)
+	const feed = "6a7b8c9d-0e1f-4a2b-8c3d-4e5f6a7b8c9d"
+	plain := c.register(feedsActor, "calendar-feeds", "other-feed", map[string]any{"name": "Other", "provider": "ICS", "readOnly": true}, http.StatusCreated)
 	if plain.DefaultPriority != generated.Medium {
 		t.Fatalf("source without a default priority = %s", plain.DefaultPriority)
 	}
-	created := c.source(http.MethodPost, "/v1/sources", map[string]any{
-		"name": "ZAW", "url": feed.URL + "/abholtermine.ics", "filter": zawFilter, "defaultPriority": "high",
-	}, http.StatusCreated)
+	created := c.register(feedsActor, "calendar-feeds", feed, map[string]any{"name": "ZAW", "provider": "ZAW", "readOnly": true, "defaultPriority": "high"}, http.StatusCreated)
 	if created.DefaultPriority != generated.High {
 		t.Fatalf("created = %s", created.DefaultPriority)
 	}
-	id := created.Id
-	c.refresh(id)
-	events := c.events(id, false)
+	pickup := func(uid, day string) map[string]any {
+		return map[string]any{"externalUid": uid, "title": "Bioabfall", "allDay": false, "startAt": day + "T04:00:00Z", "endAt": day + "T05:00:00Z", "timeZone": "Europe/Berlin"}
+	}
+	snapshot := func(items ...map[string]any) generated.SyncIntegrationSourceResult {
+		return c.sync(feedsActor, "calendar-feeds", feed, map[string]any{"mode": "snapshot", "items": items, "window": map[string]any{"upcomingOnly": true}})
+	}
+	snapshot(pickup("bio-1@mymuell", "2026-10-15"), pickup("bio-2@mymuell", "2026-10-29"))
+	id := created.Id.String()
+	events := c.events("sourceId", id)
 	for _, item := range events {
-		if item.Priority != generated.High || item.DefaultPriority != generated.High {
+		if item.Priority != generated.High || item.DefaultPriority != generated.High || item.Source.Kind != generated.EventSourceKindExternal {
 			t.Fatalf("imported %s = %s/%s", item.Title, item.Priority, item.DefaultPriority)
 		}
 	}
 
-	// The owner makes one pickup low; it stays low through a refresh that
+	// The owner makes one pickup low; it stays low through a sync that
 	// moves it.
 	paper := events[0]
 	paperURL := "/v1/events/" + paper.Id.String()
 	if low := c.event(http.MethodPatch, paperURL, `{"priority":"low"}`, http.StatusOK); low.Priority != generated.Low || low.DefaultPriority != generated.High {
 		t.Fatalf("own priority = %s/%s", low.Priority, low.DefaultPriority)
 	}
-	server.set(func(f *feedServer) {
-		f.body = fx.feed(nil, "DTSTART;TZID=Europe/Berlin:20261015T060000", "DTSTART;TZID=Europe/Berlin:20261016T060000",
-			"DTEND;TZID=Europe/Berlin:20261015T070000", "DTEND;TZID=Europe/Berlin:20261016T070000")
-	})
-	if got := counts(t, c.refresh(id)); got.Updated != 1 {
-		t.Fatalf("refresh counts = %+v", got)
+	if got := snapshot(pickup("bio-1@mymuell", "2026-10-16"), pickup("bio-2@mymuell", "2026-10-29")); got.Updated != 1 {
+		t.Fatalf("sync counts = %+v", got)
 	}
 	moved := c.event(http.MethodGet, paperURL, nil, http.StatusOK)
 	if moved.StartAt.Format("2006-01-02") != "2026-10-16" || moved.Priority != generated.Low {
-		t.Fatalf("after the refresh = %s %s", moved.StartAt, moved.Priority)
+		t.Fatalf("after the sync = %s %s", moved.StartAt, moved.Priority)
 	}
 
-	// The source's default becomes medium: the other pickups follow it, the
+	// The source's default becomes medium: the other pickup follows it, the
 	// low one keeps its own.
-	if updated := c.source(http.MethodPatch, "/v1/sources/"+id.String(), `{"defaultPriority":"medium"}`, http.StatusOK); updated.DefaultPriority != generated.Medium {
+	var updated generated.CalendarSource
+	c.expect("user", http.MethodPatch, "/v1/sources/"+id, `{"defaultPriority":"medium"}`, http.StatusOK, &updated)
+	if updated.DefaultPriority != generated.Medium {
 		t.Fatalf("updated = %s", updated.DefaultPriority)
 	}
-	for _, item := range c.events(id, false) {
+	for _, item := range c.events("sourceId", id) {
 		want := generated.Medium
 		if item.Id == paper.Id {
 			want = generated.Low
@@ -204,7 +202,7 @@ func TestSourcePriority(t *testing.T) {
 	}
 	// Set to the source's default, the pickup follows the default again.
 	c.event(http.MethodPatch, paperURL, `{"priority":"medium"}`, http.StatusOK)
-	c.source(http.MethodPatch, "/v1/sources/"+id.String(), `{"defaultPriority":"high"}`, http.StatusOK)
+	c.expect("user", http.MethodPatch, "/v1/sources/"+id, `{"defaultPriority":"high"}`, http.StatusOK, nil)
 	if again := c.event(http.MethodGet, paperURL, nil, http.StatusOK); again.Priority != generated.High {
 		t.Fatalf("following the default again = %s", again.Priority)
 	}
@@ -217,7 +215,7 @@ func TestSourcePriority(t *testing.T) {
 		`{"defaultPriority":"urgent"}`: "defaultPriority must be low, medium, or high",
 		`{"defaultPriority":null}`:     "defaultPriority cannot be null",
 	} {
-		if _, message := c.failure(http.MethodPatch, "/v1/sources/"+id.String(), body, http.StatusBadRequest); message != want {
+		if message := c.refused("user", http.MethodPatch, "/v1/sources/"+id, body, http.StatusBadRequest, "bad_request"); message != want {
 			t.Errorf("PATCH %s: %q, want %q", body, message, want)
 		}
 	}

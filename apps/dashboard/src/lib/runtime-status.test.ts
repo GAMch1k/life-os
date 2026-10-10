@@ -10,6 +10,7 @@ import {
   toRuntimeStatus,
   usageFacts,
   type AudioBacklog,
+  type CalendarFeed,
   type CalendarSource,
   type InboxBacklog,
   type ProcessorStatus,
@@ -425,17 +426,15 @@ test("a processor configured with another timezone than the Dashboard is pointed
 
 const feed = (
   name: string,
-  refresh: Partial<CalendarSource["refresh"]> = {},
-  overrides: Partial<CalendarSource> = {},
-): CalendarSource => ({
-  id: `source-${name}`,
-  kind: "ics",
+  refresh: Partial<CalendarFeed["refresh"]> = {},
+  overrides: Partial<CalendarFeed> = {},
+): CalendarFeed => ({
+  id: `feed-${name}`,
+  sourceId: `source-${name}`,
   name,
   url: `https://feeds.example.org/${name}/private-street.ics`,
   enabled: true,
   filter: { include: [], exclude: [] },
-  defaultReminders: null,
-  defaultPriority: "medium",
   refresh: {
     consecutiveFailures: 0,
     refreshing: false,
@@ -458,9 +457,12 @@ const feed = (
   updatedAt: minutesAgo(600),
   ...overrides,
 });
-const calendarCheck = (sources: CalendarSource[] | null) => {
+const calendarCheck = (
+  feeds: CalendarFeed[] | null,
+  calendarSources?: CalendarSource[] | null,
+) => {
   const status = toRuntimeStatus(
-    { ...healthy, calendarSources: sources },
+    { ...healthy, calendarFeeds: feeds, calendarSources },
     now,
     "Europe/Berlin",
   );
@@ -498,6 +500,46 @@ test("calendar feeds show their last refresh, success, and next run", () => {
     toRuntimeStatus(healthy, now).checks.some((c) => c.id === "calendar"),
     false,
   );
+});
+
+test("a feed shows the name and switch its Calendar source has now", () => {
+  const source = (
+    id: string,
+    name: string,
+    enabled: boolean,
+  ): CalendarSource => ({
+    id,
+    kind: "external",
+    name,
+    url: "",
+    enabled,
+    filter: { include: [], exclude: [] },
+    defaultReminders: null,
+    defaultPriority: "medium",
+    refresh: { consecutiveFailures: 0, refreshing: false },
+    createdAt: minutesAgo(600),
+    updatedAt: minutesAgo(600),
+  });
+  const failing = feed("ZAW", {
+    lastOutcome: "failed",
+    consecutiveFailures: SOURCE_FAILURE_ALERT,
+  });
+  // Renamed and switched off in Calendar since calendar-feeds last heard.
+  const { check } = calendarCheck(
+    [failing, feed("School")],
+    [source("source-ZAW", "Müllabfuhr", false)],
+  );
+  assert.equal(check.state, "ok");
+  assert.deepEqual(
+    check.parts!.map((part) => [part.title, part.state]),
+    [
+      ["Müllabfuhr", "ok"],
+      ["School", "ok"],
+    ],
+  );
+  assert.match(check.parts![0].summary, /^Disabled/);
+  // Calendar unreadable: the feeds' own copies.
+  assert.equal(calendarCheck([failing], null).check.state, "warning");
 });
 
 test("a failed feed refresh shows on Status; Home hears only of repeated failures", () => {

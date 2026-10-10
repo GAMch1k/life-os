@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	store "github.com/GAMch1k/life-os/services/calendar/internal/repository/generated"
 	"github.com/GAMch1k/life-os/services/calendar/internal/testdb"
@@ -22,15 +23,16 @@ func at(value time.Time) pgtype.Timestamptz { return pgtype.Timestamptz{Time: va
 func on(value time.Time) pgtype.Date        { return pgtype.Date{Time: value, Valid: true} }
 func text(value string) *string             { return &value }
 
-func source(t *testing.T, queries *store.Queries, name string) pgtype.UUID {
+// source adds a feed as Calendar refreshed it itself before the handover to
+// calendar-feeds (kind ics, in process).
+func source(t *testing.T, pool *pgxpool.Pool, name string) pgtype.UUID {
 	t.Helper()
-	created, err := queries.CreateSource(context.Background(), store.CreateSourceParams{
-		Kind: "ics", Name: name, Url: "https://calendar.example.org/" + name + ".ics", Enabled: true, FilterInclude: []string{}, FilterExclude: []string{},
-	})
-	if err != nil {
+	var id pgtype.UUID
+	if err := pool.QueryRow(context.Background(), `INSERT INTO calendar_sources (kind, name, url) VALUES ('ics', $1, $2) RETURNING id`,
+		name, "https://calendar.example.org/"+name+".ics").Scan(&id); err != nil {
 		t.Fatal(err)
 	}
-	return created.ID
+	return id
 }
 
 func manualAllDay(title string, first, last time.Time) store.CreateEventParams {
@@ -239,9 +241,10 @@ func sameJSON(t *testing.T, raw []byte, want string) bool {
 // API, such as the future ICS importer.
 func TestEventConstraints(t *testing.T) {
 	ctx := context.Background()
-	queries := store.New(testdb.Open(t, ""))
+	pool := testdb.Open(t, "")
+	queries := store.New(pool)
 	pickup := time.Date(2026, time.November, 17, 5, 0, 0, 0, time.UTC)
-	feed, secondFeed := source(t, queries, "zaw"), source(t, queries, "second")
+	feed, secondFeed := source(t, pool, "zaw"), source(t, pool, "second")
 	imported := func(uid string) store.CreateEventParams {
 		params := manualTimed("Papier", pickup, pickup.Add(30*time.Minute))
 		params.SourceKind, params.SourceID, params.ExternalUid = "ics", feed, text(uid)

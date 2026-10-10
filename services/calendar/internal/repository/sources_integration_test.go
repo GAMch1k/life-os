@@ -9,7 +9,6 @@ import (
 	"time"
 
 	googleuuid "github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -49,12 +48,12 @@ func TestSourcesMigrationKeepsExistingEvents(t *testing.T) {
 }
 
 // Imported events must belong to a registered source; deleting the source
-// deletes them. The refresh lease admits one refresh at a time and is taken
-// over once it expires.
-func TestSourceRegistryConstraintsAndLease(t *testing.T) {
+// deletes them. (A feed's refresh lease is calendar-feeds' since P11-08.)
+func TestSourceRegistryConstraints(t *testing.T) {
 	ctx := context.Background()
-	queries := store.New(testdb.Open(t, ""))
-	feed := source(t, queries, "zaw")
+	pool := testdb.Open(t, "")
+	queries := store.New(pool)
+	feed := source(t, pool, "zaw")
 	pickup := time.Date(2026, time.November, 17, 5, 0, 0, 0, time.UTC)
 	imported := func(source pgtype.UUID, uid string) store.CreateEventParams {
 		params := manualTimed("Papier", pickup, pickup.Add(time.Hour))
@@ -71,28 +70,6 @@ func TestSourceRegistryConstraintsAndLease(t *testing.T) {
 	manual, err := queries.CreateEvent(ctx, manualTimed("Manual", pickup, pickup.Add(time.Hour)))
 	if err != nil {
 		t.Fatal(err)
-	}
-
-	now := time.Date(2026, time.October, 10, 10, 0, 0, 0, time.UTC)
-	claim := func(at time.Time) error {
-		_, err := queries.ClaimSourceRefresh(ctx, store.ClaimSourceRefreshParams{ID: feed, Now: pgtype.Timestamptz{Time: at, Valid: true}, LeaseUntil: pgtype.Timestamptz{Time: at.Add(3 * time.Minute), Valid: true}})
-		return err
-	}
-	if err := claim(now); err != nil {
-		t.Fatalf("first claim: %v", err)
-	}
-	if err := claim(now.Add(time.Minute)); !errors.Is(err, pgx.ErrNoRows) {
-		t.Fatalf("second claim while leased: %v", err)
-	}
-	// A crashed refresh's lease expires and is taken over.
-	if err := claim(now.Add(4 * time.Minute)); err != nil {
-		t.Fatalf("claim after expiry: %v", err)
-	}
-	if err := queries.ReleaseSourceRefresh(ctx, feed); err != nil {
-		t.Fatal(err)
-	}
-	if err := claim(now.Add(5 * time.Minute)); err != nil {
-		t.Fatalf("claim after release: %v", err)
 	}
 
 	if affected, err := queries.DeleteSource(ctx, feed); err != nil || affected != 1 {

@@ -17,6 +17,10 @@ flowchart LR
   Banking -- "Enable Banking (PSD2, read-only)" --> Bank[Bank]
   Banking -- "POST /v1/imports/bank" --> Finance
   Banking -- notify --> Notifications
+  Gateway -- "/api/integrations/calendar-feeds" --> Feeds[calendar-feeds] --> FFDB[(calendar_feeds_db)]
+  Feeds -- "outbound HTTPS" --> ICS[ICS feeds, ZAW]
+  Feeds -- "/v1/integrations/calendar-feeds" --> Calendar
+  Feeds -. record .-> Activity
   Monitor -- "GET /api/status" --> Dashboard
   Monitor -- notify --> Notifications
   Voice -. record .-> Activity
@@ -39,7 +43,7 @@ MCP uses service APIs to perform semantic actions and records an Inbox audit tra
 
 Activity stores user-facing activity events. Each owning service records its own meaningful operations (capture, processing, MCP actions, Task changes) over HTTP. Correlation, causation, and actor headers travel with each call, so a whole Voice → Inbox → MCP → Task workflow can be reconstructed from one API. See [Activity](../services/activity.md).
 
-Integrations are separate, replaceable services that connect a provider to a domain service. They give it data, or take data from it, only through that service's public API, and the domain service names no provider. Calendar's integration API is the first: `google-calendar` and `calendar-feeds` register their sources, sync each source's events in snapshots or deltas, and follow a change feed of the events changed in Life OS. See [Calendar integration API](../services/calendar-integration-api.md).
+Integrations are separate, replaceable services that connect a provider to a domain service. They give it data, or take data from it, only through that service's public API, and the domain service names no provider. Calendar's integration API is the first: `google-calendar` and `calendar-feeds` register their sources, sync each source's events in snapshots or deltas, and follow a change feed of the events changed in Life OS. See [Calendar integration API](../services/calendar-integration-api.md). [calendar-feeds](../services/calendar-feeds.md) (P11-08) owns the ICS feeds and the ZAW preset in its own `calendar_feeds_db`, downloads them, and syncs them into Calendar, which downloads no feed itself. Integrations are routed under `/api/integrations/<name>/`.
 
 Notifications is the one path by which any service lets the owner know about something. Producers post a notification over HTTP (`pkg/notify`); Notifications stores it for the Dashboard and delivers it through the channels configured on its server, so no producer talks to ntfy or a phone app itself. See [Notifications](../services/notifications.md).
 

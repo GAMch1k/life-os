@@ -373,7 +373,13 @@ test("a source refresh reads as what it changed", () => {
 
 test("the Calendar domain, its entities, and feed actors are named", () => {
   assert.equal(sourceLabel("calendar"), "Calendar");
-  assert.match(sourceDescription("calendar") ?? "", /subscribed calendar feed/);
+  assert.match(sourceDescription("calendar") ?? "", /Google Calendar/);
+  // Feed refreshes come from the calendar-feeds integration.
+  assert.equal(sourceLabel("calendar-feeds"), "Calendar feeds");
+  assert.match(
+    sourceDescription("calendar-feeds") ?? "",
+    /subscribed calendar feed/,
+  );
   assert.equal(
     actorLabel({ kind: "system", name: "ics-zaw" }),
     "Calendar feed (zaw)",

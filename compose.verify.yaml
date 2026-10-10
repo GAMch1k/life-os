@@ -18,6 +18,13 @@ services:
   calendar:
     image: lifeos-calendar:latest
     ports: !reset []
+  # Never the owner's ZAW feed (tools/verify-compose blanks it and refuses a
+  # plan that sets it): it would mix their real waste calendar into tests.
+  calendar-feeds:
+    image: lifeos-calendar-feeds:latest
+    ports: !reset []
+    environment:
+      LIFE_OS_ZAW_ICS_URL: ""
   activity:
     image: lifeos-activity:latest
     ports: !reset []

@@ -857,6 +857,45 @@ test("imported events name their source and why they are read-only", () => {
   assert.equal(sourceBadge(timed), undefined);
 });
 
+test("an integration's events are labelled by its provider and name", () => {
+  const zaw = {
+    ...timed,
+    source: {
+      kind: "external" as const,
+      sourceId: "s",
+      externalUid: "u",
+      integration: "calendar-feeds",
+      provider: "ZAW",
+      name: "ZAW",
+      readOnly: true,
+    },
+    editable: false,
+  };
+  assert.equal(sourceLabel(zaw), "ZAW");
+  // The name is the provider's: the badge names it once.
+  assert.equal(sourceBadge(zaw), "ZAW");
+  assert.equal(
+    readOnlyReason(zaw),
+    "Imported from ZAW, so it can only be changed there. Its reminders and priority can still be adjusted here.",
+  );
+  // Renamed by the owner: "<provider> · <name>".
+  const renamed = { ...zaw, source: { ...zaw.source, name: "Müllabfuhr" } };
+  assert.equal(sourceLabel(renamed), "Müllabfuhr");
+  assert.equal(sourceBadge(renamed), "ZAW · Müllabfuhr");
+  assert.match(readOnlyReason(renamed) ?? "", /^Imported from Müllabfuhr, /);
+  // Without a name, the provider names it.
+  const unnamed = { ...zaw, source: { ...zaw.source, name: null } };
+  assert.equal(sourceLabel(unnamed), "ZAW");
+  assert.equal(sourceBadge(unnamed), "ZAW");
+  // Calendar's own reason wins.
+  assert.equal(
+    readOnlyReason({ ...zaw, readOnlyReason: "One occurrence of a rule." }),
+    "One occurrence of a rule.",
+  );
+  // An editable event of an integration has no reason.
+  assert.equal(readOnlyReason({ ...zaw, editable: true }), undefined);
+});
+
 test("Google events are editable unless Calendar says why not", () => {
   const google = {
     ...timed,

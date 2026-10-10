@@ -1,7 +1,7 @@
-// Package ics is Calendar's ICS/iCal source adapter: it downloads a feed
-// safely, parses it, and normalizes its events into the items Calendar
-// imports. It knows nothing about storage; the sources package reconciles
-// the items with the stored events.
+// Package ics is the calendar-feeds ICS/iCal adapter: it downloads a feed
+// safely, parses it, and normalizes its events into the items synced to
+// Calendar. It knows nothing about storage or Calendar; the feeds package
+// filters the items and syncs them.
 package ics
 
 import (
@@ -139,7 +139,7 @@ func (f *Fetcher) checkURL(u *url.URL) error {
 func (f *Fetcher) checkDial(_, address string, _ syscall.RawConn) error {
 	parsed, err := netip.ParseAddrPort(address)
 	if err != nil || !f.allowDial(parsed) {
-		return failure("the feed host resolves to a private, loopback, or link-local address, which Calendar does not fetch")
+		return failure("the feed host resolves to a private, loopback, or link-local address, which Life OS does not fetch")
 	}
 	return nil
 }
@@ -161,7 +161,7 @@ var nonPublic = []netip.Prefix{
 	netip.MustParsePrefix("2002::/16"), // 6to4 can embed internal IPv4
 }
 
-// PublicAddress reports whether Calendar may connect to addr: a globally
+// PublicAddress reports whether a feed may be downloaded from addr: a globally
 // routable unicast address, not loopback, private, link-local (169.254/16,
 // where cloud metadata lives, and fe80::/10), unique-local, multicast, or
 // another special-purpose range.
