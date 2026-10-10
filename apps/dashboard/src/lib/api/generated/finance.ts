@@ -241,7 +241,11 @@ export interface paths {
         put?: never;
         /**
          * Import transactions from a CSV file
-         * @description Imports the rows of a UTF-8 CSV file into the account `accountId` (picked in the Dashboard). The rows become `csv` transactions: booked, and read-only except category and notes. Columns are matched by header name, case-insensitively, in any order (see the Finance CSV import documentation). Re-importing is idempotent: a row whose `external_id` (or, without one, whose content) the account already has counts as a duplicate. Rows without a category get one from the rules. Valid rows are imported even when others fail; each failed row is reported with its row number and reason. Files in the older format, with an `account_id` column on every row, are still accepted without `accountId`.
+         * @description Imports the rows of a UTF-8 CSV file (a byte-order mark is ignored; comma or semicolon separated, detected from the header) into the account `accountId` (picked in the Dashboard). The rows become `csv` transactions: booked, and read-only except category and notes. Columns are matched by header name, case-insensitively, in any order; unknown columns are ignored.
+         *
+         *     Columns: `date` (required; YYYY-MM-DD or DD.MM.YYYY; `booking_date` and `occurred_on` are accepted names), `amount` (signed decimal in major units, at most two decimals, `.` or `,` as the decimal mark: `-12.50`, `-12,50`, `1.234,56`) or `amount_minor` (signed integer in minor units; one of the two is required), `currency` (optional; must be the account's, which it defaults to), `value_date` (optional), `counterparty`, `description`, `notes` (`note` is accepted), `category` (a category name, case-insensitive; an unknown or archived name leaves the choice to the rules) or `category_id`, and `external_id` (optional).
+         *
+         *     Re-importing is idempotent: a row whose `external_id` the account already has, or, without one, whose content (date, amount, currency, counterparty, description, and its position among identical rows of the file) it already has, counts as a duplicate. Rows without a category get one from the rules. Valid rows are imported even when others fail; each failed row is reported with its row number and reason. Files in the older format (`account_id,occurred_on,amount_minor,currency,external_id,category_id,note`) are still accepted without `accountId`: each row goes to its `account_id`.
          */
         post: operations["createCsvImport"];
         delete?: never;
