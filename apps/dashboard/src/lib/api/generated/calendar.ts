@@ -233,6 +233,26 @@ export interface paths {
         patch: operations["updateSettings"];
         trace?: never;
     };
+    "/v1/reminders/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the reminder delivery health
+         * @description Whether Calendar sends reminders (it needs the Notifications service), how far it has handled them, and its last run, success, and error, for the Status page. Every effective reminder of every active event and occurrence is sent when due; one due while Calendar was down is sent late within the grace window and otherwise recorded in Activity as missed.
+         */
+        get: operations["getReminderStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/google/connection": {
         parameters: {
             query?: never;
@@ -408,7 +428,7 @@ export interface components {
          * @enum {string}
          */
         EventStatus: "active" | "cancelled";
-        /** @description Reminder intent only; Calendar stores it and does not deliver notifications. `relative`: `minutesBefore` the event starts (an all-day event starts at midnight of its first day, owner-local). `localTime`: at `localTime` (HH:MM on the owner's wall clock) on the day `daysBefore` days before the event's start date in the owner's timezone, resolved when the reminder is due so daylight saving changes are respected. Example: a pickup on 17 November with `{"kind": "localTime", "daysBefore": 1, "localTime": "19:00"}` reminds on 16 November at 19:00. */
+        /** @description Calendar sends a notification for each effective reminder when it is due. `relative`: `minutesBefore` the event starts (an all-day event starts at midnight of its first day, owner-local). `localTime`: at `localTime` (HH:MM on the owner's wall clock) on the day `daysBefore` days before the event's start date in the owner's timezone, resolved when the reminder is due so daylight saving changes are respected. Example: a pickup on 17 November with `{"kind": "localTime", "daysBefore": 1, "localTime": "19:00"}` reminds on 16 November at 19:00. */
         Reminder: {
             /** @enum {string} */
             kind: "relative" | "localTime";
@@ -670,6 +690,38 @@ export interface components {
                 timed?: components["schemas"]["Reminder"][];
                 allDay?: components["schemas"]["Reminder"][];
             };
+        };
+        ReminderDeliveryStatus: {
+            /** @description Whether Calendar sends reminders: false when NOTIFICATIONS_SERVICE_URL is not set. */
+            enabled: boolean;
+            /** @description How often due reminders are looked for. */
+            intervalSeconds: number;
+            /** @description How late a reminder may still be sent (marked "(late)") after Calendar was down; older ones are recorded as missed. */
+            graceMinutes: number;
+            /**
+             * Format: date-time
+             * @description Every reminder due up to this instant has been sent, recorded as missed, or refused by Notifications; null before the first run.
+             */
+            handledThrough: string | null;
+            /**
+             * Format: date-time
+             * @description When a run last started.
+             */
+            lastRunAt: string | null;
+            /**
+             * Format: date-time
+             * @description When a run last finished without an error.
+             */
+            lastSuccessAt: string | null;
+            /** @description The last run error, kept until the next one: current when lastErrorAt is after lastSuccessAt. */
+            lastError: string | null;
+            /** Format: date-time */
+            lastErrorAt: string | null;
+            /**
+             * Format: date-time
+             * @description When a run last sent a reminder.
+             */
+            lastSentAt: string | null;
         };
         /**
          * @description `not_connected`: no Google account is connected. `connected`: usable. `expired`: Google refused the stored authorization (it expired or was revoked); reconnect. `error`: another refusal, such as a changed client secret; see `lastError`.
@@ -1462,6 +1514,33 @@ export interface operations {
                 };
             };
             /** @description Invalid request, or no valid X-Life-OS-Actor (actor_required) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getReminderStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Reminder delivery health */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReminderDeliveryStatus"];
+                };
+            };
+            /** @description Invalid request */
             400: {
                 headers: {
                     [name: string]: unknown;

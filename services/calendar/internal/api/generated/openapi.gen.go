@@ -502,7 +502,7 @@ type Recurrence struct {
 // RecurrenceFrequency defines model for Recurrence.Frequency.
 type RecurrenceFrequency string
 
-// Reminder Reminder intent only; Calendar stores it and does not deliver notifications. `relative`: `minutesBefore` the event starts (an all-day event starts at midnight of its first day, owner-local). `localTime`: at `localTime` (HH:MM on the owner's wall clock) on the day `daysBefore` days before the event's start date in the owner's timezone, resolved when the reminder is due so daylight saving changes are respected. Example: a pickup on 17 November with `{"kind": "localTime", "daysBefore": 1, "localTime": "19:00"}` reminds on 16 November at 19:00.
+// Reminder Calendar sends a notification for each effective reminder when it is due. `relative`: `minutesBefore` the event starts (an all-day event starts at midnight of its first day, owner-local). `localTime`: at `localTime` (HH:MM on the owner's wall clock) on the day `daysBefore` days before the event's start date in the owner's timezone, resolved when the reminder is due so daylight saving changes are respected. Example: a pickup on 17 November with `{"kind": "localTime", "daysBefore": 1, "localTime": "19:00"}` reminds on 16 November at 19:00.
 type Reminder struct {
 	// DaysBefore Required for localTime (and only there); 0 is the event's own day.
 	DaysBefore *int         `json:"daysBefore,omitempty"`
@@ -525,6 +525,34 @@ type ReminderDefaults struct {
 
 	// Timed For timed events, such as `{"kind":"relative","minutesBefore":30}`.
 	Timed []Reminder `json:"timed"`
+}
+
+// ReminderDeliveryStatus defines model for ReminderDeliveryStatus.
+type ReminderDeliveryStatus struct {
+	// Enabled Whether Calendar sends reminders: false when NOTIFICATIONS_SERVICE_URL is not set.
+	Enabled bool `json:"enabled"`
+
+	// GraceMinutes How late a reminder may still be sent (marked "(late)") after Calendar was down; older ones are recorded as missed.
+	GraceMinutes int `json:"graceMinutes"`
+
+	// HandledThrough Every reminder due up to this instant has been sent, recorded as missed, or refused by Notifications; null before the first run.
+	HandledThrough *time.Time `json:"handledThrough"`
+
+	// IntervalSeconds How often due reminders are looked for.
+	IntervalSeconds int `json:"intervalSeconds"`
+
+	// LastError The last run error, kept until the next one: current when lastErrorAt is after lastSuccessAt.
+	LastError   *string    `json:"lastError"`
+	LastErrorAt *time.Time `json:"lastErrorAt"`
+
+	// LastRunAt When a run last started.
+	LastRunAt *time.Time `json:"lastRunAt"`
+
+	// LastSentAt When a run last sent a reminder.
+	LastSentAt *time.Time `json:"lastSentAt"`
+
+	// LastSuccessAt When a run last finished without an error.
+	LastSuccessAt *time.Time `json:"lastSuccessAt"`
 }
 
 // SourceFilter Which feed events to import. A term matches an event when it equals one of the event's CATEGORIES or occurs in its SUMMARY (both case-insensitive). With `include` terms, only events matching one of them are imported; then events matching an `exclude` term are dropped. Empty lists import everything.
@@ -817,6 +845,9 @@ type ServerInterface interface {
 	// AuthorizeGoogle Start a Google authorization
 	// (POST /v1/google/connection/authorize)
 	AuthorizeGoogle(c fiber.Ctx) error
+	// GetReminderStatus Get the reminder delivery health
+	// (GET /v1/reminders/status)
+	GetReminderStatus(c fiber.Ctx) error
 	// GetSettings Get the Calendar settings
 	// (GET /v1/settings)
 	GetSettings(c fiber.Ctx) error
@@ -1421,6 +1452,24 @@ func (siw *ServerInterfaceWrapper) AuthorizeGoogle(c fiber.Ctx) error {
 	return handler(c)
 }
 
+// GetReminderStatus operation middleware
+func (siw *ServerInterfaceWrapper) GetReminderStatus(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.GetReminderStatus(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
 // GetSettings operation middleware
 func (siw *ServerInterfaceWrapper) GetSettings(c fiber.Ctx) error {
 
@@ -1667,6 +1716,8 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	router.Get(options.BaseURL+"/v1/settings", wrapper.GetSettings)
 
 	router.Patch(options.BaseURL+"/v1/settings", wrapper.UpdateSettings)
+
+	router.Get(options.BaseURL+"/v1/reminders/status", wrapper.GetReminderStatus)
 
 	router.Delete(options.BaseURL+"/v1/google/connection", wrapper.DisconnectGoogle)
 

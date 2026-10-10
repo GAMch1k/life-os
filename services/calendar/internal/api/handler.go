@@ -53,6 +53,8 @@ type Handler struct {
 	// google is the Google Calendar connection (see WithGoogle); nil reads
 	// as not configured.
 	google *google.Service
+	// reminders reports reminder delivery's health (see WithReminders).
+	reminders ReminderStatus
 }
 
 var _ generated.ServerInterface = (*Handler)(nil)

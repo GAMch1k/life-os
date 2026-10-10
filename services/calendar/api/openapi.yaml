@@ -33,8 +33,8 @@ info:
     every reminder that applies. An imported event's defaults are its
     source's `defaultReminders`; an event created in Life OS uses the owner's
     defaults from Calendar settings, one list for timed and one for all-day
-    events. Calendar stores reminder intent only and delivers no
-    notifications.
+    events. Calendar sends every effective reminder to the Notifications
+    service when it is due (health: `GET /v1/reminders/status`).
 
 
     Recurring events work like Google Calendar's. A recurring event (a
@@ -388,6 +388,22 @@ paths:
       responses:
         '200': {description: Settings, content: {application/json: {schema: {$ref: '#/components/schemas/CalendarSettings'}}}}
         '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}
+  # Reminder delivery (P12-04).
+  /v1/reminders/status:
+    get:
+      summary: Get the reminder delivery health
+      description: >-
+        Whether Calendar sends reminders (it needs the Notifications service),
+        how far it has handled them, and its last run, success, and error, for
+        the Status page. Every effective reminder of every active event and
+        occurrence is sent when due; one due while Calendar was down is sent
+        late within the grace window and otherwise recorded in Activity as
+        missed.
+      operationId: getReminderStatus
+      security: []
+      responses:
+        '200': {description: Reminder delivery health, content: {application/json: {schema: {$ref: '#/components/schemas/ReminderDeliveryStatus'}}}}
+        '400': {description: Invalid request}
   # Google Calendar connection (P11-01).
   /v1/google/connection:
     get:
@@ -569,8 +585,8 @@ components:
     Reminder:
       type: object
       description: >-
-        Reminder intent only; Calendar stores it and does not deliver
-        notifications. `relative`: `minutesBefore` the event starts (an
+        Calendar sends a notification for each effective reminder when it
+        is due. `relative`: `minutesBefore` the event starts (an
         all-day event starts at midnight of its first day, owner-local).
         `localTime`: at `localTime` (HH:MM on the owner's wall clock) on the
         day `daysBefore` days before the event's start date in the owner's
@@ -774,6 +790,20 @@ components:
           properties:
             timed: {type: array, maxItems: 10, items: {$ref: '#/components/schemas/Reminder'}}
             allDay: {type: array, maxItems: 10, items: {$ref: '#/components/schemas/Reminder'}}
+    # Reminder delivery (P12-04).
+    ReminderDeliveryStatus:
+      type: object
+      required: [enabled, intervalSeconds, graceMinutes, handledThrough, lastRunAt, lastSuccessAt, lastError, lastErrorAt, lastSentAt]
+      properties:
+        enabled: {type: boolean, description: 'Whether Calendar sends reminders: false when NOTIFICATIONS_SERVICE_URL is not set.'}
+        intervalSeconds: {type: integer, description: How often due reminders are looked for.}
+        graceMinutes: {type: integer, description: 'How late a reminder may still be sent (marked "(late)") after Calendar was down; older ones are recorded as missed.'}
+        handledThrough: {type: string, format: date-time, nullable: true, description: 'Every reminder due up to this instant has been sent, recorded as missed, or refused by Notifications; null before the first run.'}
+        lastRunAt: {type: string, format: date-time, nullable: true, description: When a run last started.}
+        lastSuccessAt: {type: string, format: date-time, nullable: true, description: When a run last finished without an error.}
+        lastError: {type: string, nullable: true, description: 'The last run error, kept until the next one: current when lastErrorAt is after lastSuccessAt.'}
+        lastErrorAt: {type: string, format: date-time, nullable: true}
+        lastSentAt: {type: string, format: date-time, nullable: true, description: When a run last sent a reminder.}
     # Google Calendar connection (P11-01).
     GoogleConnectionStatus:
       type: string
