@@ -6,7 +6,7 @@ import { Check, Trash2, TriangleAlert } from "lucide-react";
 import { InboxSection, SectionUnavailable } from "@/components/inbox-summary";
 import { Button } from "@/components/ui/button";
 import { inboxClient } from "@/lib/api/inbox-client";
-import type { HumanReviewItem } from "@/lib/human-review";
+import { type HumanReviewItem, reviewTotal } from "@/lib/human-review";
 import { formatInboxTime, shownOfTotal } from "@/lib/inbox-summary";
 
 type Candidate = { id?: string; title?: string; notes?: string };
@@ -26,11 +26,15 @@ export function HumanReviewQueue({
   total?: number;
 }) {
   const [items, setItems] = useState(initialItems);
-  const [total, setTotal] = useState(
-    initialItems
-      ? Math.max(initialTotal ?? 0, initialItems.length)
-      : initialTotal,
-  );
+  const [total, setTotal] = useState(reviewTotal(initialItems, initialTotal));
+  // A router.refresh(), after a capture on this page settled, renders the
+  // page again with the current queue; it replaces what this one holds.
+  const [loaded, setLoaded] = useState(initialItems);
+  if (loaded !== initialItems) {
+    setLoaded(initialItems);
+    setItems(initialItems);
+    setTotal(reviewTotal(initialItems, initialTotal));
+  }
   const [error, setError] = useState<string>();
   const [pending, startTransition] = useTransition();
   const now = new Date(renderedAt);

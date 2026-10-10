@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Inbox, LoaderCircle, Send } from "lucide-react";
 import {
   type FormEvent,
@@ -23,6 +24,7 @@ import {
   type InboxItem,
   inboxItemStatus,
   isPendingState,
+  leftProcessing,
   retryReasonLabel,
 } from "@/lib/inbox-summary";
 import { captureMetadata } from "@/lib/time-zone";
@@ -63,6 +65,7 @@ export function CaptureCard({
   renderedAt: string;
   timeZone: string;
 }) {
+  const router = useRouter();
   const [content, setContent] = useState("");
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState<{
@@ -139,9 +142,15 @@ export function CaptureCard({
       ) {
         void refreshBacklog();
       }
+      // A capture that settled changes what this page loaded on the server:
+      // Home's Human Review card and Task summaries, the /inbox sections. Load
+      // them again in place, keeping this card's state (BUG-29).
+      if (watched.some(({ item }) => leftProcessing(item, byId.get(item.id)))) {
+        router.refresh();
+      }
     }, POLL_MS);
     return () => window.clearTimeout(timer);
-  }, [captures, refreshBacklog]);
+  }, [captures, refreshBacklog, router]);
 
   async function submit(fromKeyboard: boolean) {
     if (submitting.current) return;

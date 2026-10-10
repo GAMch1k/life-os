@@ -8,6 +8,7 @@ import {
   inboxStatusLabel,
   isPendingState,
   latestErrorSummary,
+  leftProcessing,
   mergePending,
   recentlyProcessed,
   shownOfTotal,
@@ -81,6 +82,32 @@ test("a raw capture with a future retry shows when and why it retries", () => {
   assert.deepEqual(
     inboxItemStatus(item("b", "raw", { retryReason: "backoff" }), now),
     { kind: "retrying" },
+  );
+});
+
+test("a followed capture leaves processing once it settles, not before", () => {
+  // Settling into any final or review state makes the page's data stale.
+  for (const state of [
+    "human_review",
+    "failed",
+    "resolved",
+    "discarded",
+  ] as const) {
+    assert.equal(leftProcessing(item("a", "raw"), item("a", state)), true);
+    assert.equal(
+      leftProcessing(item("a", "processing"), item("a", state)),
+      true,
+    );
+  }
+  // Still pending, not read this time, or already settled before.
+  assert.equal(
+    leftProcessing(item("a", "raw"), item("a", "processing")),
+    false,
+  );
+  assert.equal(leftProcessing(item("a", "processing"), undefined), false);
+  assert.equal(
+    leftProcessing(item("a", "human_review"), item("a", "discarded")),
+    false,
   );
 });
 

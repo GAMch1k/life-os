@@ -45,6 +45,22 @@ export function isPendingState(state: InboxItem["state"]) {
   return state === "raw" || state === "processing";
 }
 
+/**
+ * Whether a followed capture has just left automatic processing: it now
+ * waits in Human Review, was processed, failed, or was discarded. What the
+ * page loaded about Inbox (and what processing changed) is stale from then on.
+ */
+export function leftProcessing(
+  before: Pick<InboxItem, "state">,
+  after: Pick<InboxItem, "state"> | undefined,
+) {
+  return (
+    after !== undefined &&
+    isPendingState(before.state) &&
+    !isPendingState(after.state)
+  );
+}
+
 /** Where a capture is right now, from its durable Inbox state. */
 export function inboxItemStatus(
   item: StatusFields,
