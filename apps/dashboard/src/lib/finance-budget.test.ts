@@ -101,6 +101,7 @@ function category(
 test("the URL picks a tab and a month, and nothing else", () => {
   assert.equal(parseTab("budget"), "budget");
   assert.equal(parseTab("categories"), "categories");
+  assert.equal(parseTab("subscriptions"), "subscriptions");
   assert.equal(parseTab("Budget"), undefined);
   assert.equal(parseTab(["budget"]), undefined);
   assert.equal(parseMonth("2026-10"), "2026-10");

@@ -1,6 +1,6 @@
 "use client";
 
-import { Plus } from "lucide-react";
+import { Bell, Plus } from "lucide-react";
 import { useEffect, useRef, useState, useTransition } from "react";
 
 import {
@@ -9,6 +9,7 @@ import {
   FinanceAccounts,
 } from "@/components/finance-accounts";
 import { BankConnections } from "@/components/bank-connections";
+import { AlertsDialog } from "@/components/finance-alerts-dialog";
 import { FinanceBudget } from "@/components/finance-budget";
 import {
   BudgetEditor,
@@ -16,6 +17,8 @@ import {
 } from "@/components/finance-budget-editor";
 import { FinanceCategories } from "@/components/finance-categories";
 import { FinanceImport } from "@/components/finance-import";
+import { SubscriptionDialog } from "@/components/finance-subscription-dialog";
+import { FinanceSubscriptions } from "@/components/finance-subscriptions";
 import { FinanceSummary } from "@/components/finance-summary";
 import {
   TransactionDialog,
@@ -35,6 +38,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { financeClient } from "@/lib/api/finance-client";
 import { type FinanceTab, budgetHref } from "@/lib/finance-budget";
+import type { Subscription } from "@/lib/finance-subscriptions";
 import { monthRange } from "@/lib/finance-summary";
 import {
   type FinanceWorkspaceState,
@@ -47,6 +51,7 @@ import {
   fetchAccounts,
   fetchBudget,
   fetchRules,
+  fetchSubscriptions,
   fetchSummary,
   fetchTransactions,
   financeErrorMessage,
@@ -78,7 +83,9 @@ function failedList(error: string): TransactionList {
  * first view; every change after that is read back from Finance in the
  * browser, so balances, lists, the summary, and the budget stay in step.
  * The tab and the budget's month are kept in the URL
- * (`/finance?tab=budget&month=2026-10`), so notifications can link there.
+ * (`/finance?tab=budget&month=2026-10`, `/finance?tab=subscriptions`), so
+ * notifications can link there. The header's Alerts button opens the alert
+ * settings.
  */
 export function FinanceWorkspace({
   state,
@@ -163,6 +170,14 @@ function ReadyWorkspace({
   const [budgetEditor, setBudgetEditor] = useState<BudgetEditorState>(null);
   const [budgetPending, startBudgetChange] = useTransition();
   const [budgetActionError, setBudgetActionError] = useState<string>();
+  const [subscriptions, setSubscriptions] = useState(initial.subscriptions);
+  const [subscriptionsLoading, setSubscriptionsLoading] = useState(false);
+  const [subscriptionPending, startSubscriptionChange] = useTransition();
+  const [subscriptionError, setSubscriptionError] = useState<string>();
+  const [editingSubscription, setEditingSubscription] =
+    useState<Subscription | null>(null);
+  const [settings, setSettings] = useState(initial.settings);
+  const [alertsOpen, setAlertsOpen] = useState(false);
   const [transactionDialog, setTransactionDialog] =
     useState<TransactionDialogState>(null);
   const [accountDialog, setAccountDialog] = useState<AccountDialogState>(null);
@@ -172,6 +187,7 @@ function ReadyWorkspace({
   const searchTimer = useRef<number | undefined>(undefined);
   const summaryTicket = useRef(0);
   const budgetTicket = useRef(0);
+  const subscriptionsTicket = useRef(0);
 
   useEffect(
     () => () => {
@@ -269,6 +285,59 @@ function ReadyWorkspace({
     });
   };
 
+  const loadSubscriptions = () => {
+    const ticket = ++subscriptionsTicket.current;
+    setSubscriptionsLoading(true);
+    void fetchSubscriptions().then((result) => {
+      if (ticket !== subscriptionsTicket.current) return;
+      // A failed refresh keeps the list in view.
+      setSubscriptions((current) =>
+        result.error !== undefined && current.data !== undefined
+          ? current
+          : result,
+      );
+      setSubscriptionsLoading(false);
+    });
+  };
+
+  /** Confirms or ignores a subscription, then reads the list (and total) back. */
+  const changeSubscription = (
+    subscription: Subscription,
+    action: "confirm" | "ignore",
+  ) =>
+    startSubscriptionChange(async () => {
+      setSubscriptionError(undefined);
+      const params = { path: { subscriptionId: subscription.id } };
+      let result: { data?: Subscription; error?: unknown } = {};
+      try {
+        result =
+          action === "confirm"
+            ? await financeClient.POST(
+                "/v1/subscriptions/{subscriptionId}/confirm",
+                { params },
+              )
+            : await financeClient.POST(
+                "/v1/subscriptions/{subscriptionId}/ignore",
+                { params },
+              );
+      } catch {
+        result = {};
+      }
+      const { data, error } = result;
+      if (!data) {
+        setSubscriptionError(
+          financeErrorMessage(
+            error,
+            action === "confirm"
+              ? `Could not confirm ${subscription.name}.`
+              : `Could not ignore ${subscription.name}.`,
+          ),
+        );
+        return;
+      }
+      loadSubscriptions();
+    });
+
   /** Keeps the tab and the budget's month in the URL. */
   const showInURL = (next: FinanceTab, month: string) => {
     const href =
@@ -283,6 +352,8 @@ function ReadyWorkspace({
   const changeTab = (next: FinanceTab) => {
     setTab(next);
     showInURL(next, budgetMonth);
+    // Detection runs in the background after changes: read it fresh.
+    if (next === "subscriptions") loadSubscriptions();
   };
 
   const changeBudgetMonth = (month: string) => {
@@ -320,6 +391,7 @@ function ReadyWorkspace({
     refreshAccounts();
     loadSummary(summaryMonth, currency);
     loadBudget(budgetMonth);
+    loadSubscriptions();
     if (reload) loadTransactions(filters);
   };
 
@@ -378,6 +450,10 @@ function ReadyWorkspace({
       <header className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-xl font-semibold tracking-tight">Finance</h1>
         <div className="flex flex-wrap gap-2">
+          <Button onClick={() => setAlertsOpen(true)} variant="outline">
+            <Bell aria-hidden="true" />
+            Alerts
+          </Button>
           <FinanceImport
             accounts={accounts}
             onImported={() => transactionsChanged(true)}
@@ -417,6 +493,7 @@ function ReadyWorkspace({
           <TabsTrigger value="transactions">Transactions</TabsTrigger>
           <TabsTrigger value="summary">Summary</TabsTrigger>
           <TabsTrigger value="budget">Budget</TabsTrigger>
+          <TabsTrigger value="subscriptions">Subscriptions</TabsTrigger>
           <TabsTrigger value="categories">Categories &amp; rules</TabsTrigger>
         </TabsList>
         <TabsContent value="transactions">
@@ -469,6 +546,23 @@ function ReadyWorkspace({
             today={today}
           />
         </TabsContent>
+        <TabsContent value="subscriptions">
+          <FinanceSubscriptions
+            actionError={subscriptionError}
+            categories={categories}
+            list={subscriptions}
+            loading={subscriptionsLoading}
+            onConfirm={(subscription) =>
+              changeSubscription(subscription, "confirm")
+            }
+            onEdit={setEditingSubscription}
+            onIgnore={(subscription) =>
+              changeSubscription(subscription, "ignore")
+            }
+            pending={subscriptionPending}
+            today={today}
+          />
+        </TabsContent>
         <TabsContent value="categories">
           <FinanceCategories
             categories={categories}
@@ -508,8 +602,28 @@ function ReadyWorkspace({
           replaceInList(transaction);
           transactionsChanged(false);
         }}
+        onSubscriptionSaved={() => loadSubscriptions()}
         state={transactionDialog}
+        subscriptions={subscriptions.data?.items ?? []}
         today={today}
+      />
+      <SubscriptionDialog
+        categories={categories}
+        onClose={() => setEditingSubscription(null)}
+        onDeleted={() => loadSubscriptions()}
+        onSaved={() => loadSubscriptions()}
+        subscription={editingSubscription}
+      />
+      <AlertsDialog
+        onClose={() => setAlertsOpen(false)}
+        onSaved={(saved) => {
+          setSettings({ data: saved });
+          // Low balances and the renewals' lead days follow the settings.
+          refreshAccounts();
+          loadSubscriptions();
+        }}
+        open={alertsOpen}
+        settings={settings}
       />
       <BudgetEditor
         categories={categories}

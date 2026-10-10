@@ -150,6 +150,9 @@ function AccountCard({
           ) : account.source.kind === "bank" ? (
             <Badge variant="secondary">Bank</Badge>
           ) : null}
+          {account.lowBalance ? (
+            <Badge variant="destructive">Low balance</Badge>
+          ) : null}
         </span>
         <span className="text-muted-foreground block truncate text-xs">
           {account.builtIn
