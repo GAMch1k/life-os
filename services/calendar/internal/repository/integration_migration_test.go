@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	store "github.com/GAMch1k/life-os/services/calendar/internal/repository/generated"
 	"github.com/GAMch1k/life-os/services/calendar/internal/testdb"
 )
 
@@ -102,10 +101,9 @@ func TestIntegrationAPIMigration(t *testing.T) {
 		scalar(`SELECT pruned_through::text FROM calendar_change_feed`) != "0" {
 		t.Fatalf("events or the feed changed: %s", after)
 	}
-	queries := store.New(pool)
-	found, err := queries.GetIntegrationSource(ctx, store.GetIntegrationSourceParams{Integration: "google-calendar", ExternalID: "owner@example.com"})
-	if err != nil || found.Name != "Owner" || !found.InProcess || found.Url == nil {
-		t.Fatalf("owner source = %+v, %v", found, err)
+	// Raw SQL: the generated queries expect the later migrations' columns.
+	if found := scalar(`SELECT concat_ws(' ', name, in_process, url IS NOT NULL) FROM calendar_sources WHERE integration = 'google-calendar' AND external_id = 'owner@example.com'`); found != "Owner t t" {
+		t.Fatalf("owner source = %s", found)
 	}
 
 	for name, statement := range map[string]string{

@@ -125,8 +125,8 @@ paths:
       summary: Create a calendar event
       description: >-
         Creates an active event whose source is `manual`. Imported events
-        are written by Calendar's feed adapter or by integrations through
-        `/v1/integrations`, not through this endpoint. An `Idempotency-Key` header makes the request
+        are written by integrations through `/v1/integrations`, not through
+        this endpoint. An `Idempotency-Key` header makes the request
         safe to retry: an identical repeat returns the original event, and
         reusing the key with a different body returns 409.
       operationId: createEvent
@@ -194,11 +194,10 @@ paths:
         `startDate`, `endDate`) are cleared and the new kind's start and end
         must be given. The result is validated as a whole, as on create.
         `status: cancelled` keeps the event as history and drops it from
-        listings; `status: active` restores it. An event imported from a
-        feed (`source.kind` `ics`), or an integration's event that is not
-        `editable` (its source does not accept changes, or it is read-only on
-        its own, such as one occurrence of a rule Calendar cannot hold), is
-        read-only except for `reminders`, `useDefaultReminders`, and
+        listings; `status: active` restores it. An integration's event that
+        is not `editable` (its source does not accept changes, such as a
+        feed, or it is read-only on its own, such as one occurrence of a rule
+        Calendar cannot hold) is read-only except for `reminders`, `useDefaultReminders`, and
         `priority`: naming any other field returns 409 `managed_by_source`
         (with the reason). An editable integration event is changed here and
         its integration writes the change to its provider through the change
@@ -338,7 +337,7 @@ paths:
   /v1/sources:
     get:
       summary: List calendar sources
-      description: 'Every source an integration syncs (`kind` `external`: the ICS feeds of calendar-feeds, such as ZAW, and the Google calendars of google-calendar) and any feed Calendar still refreshed itself before the handover (`ics`), oldest first. The owner changes a source''s name, default reminders, default priority, and enabled here; its integration keeps its URL, filter, and refresh state (feeds: the calendar-feeds service, `/api/integrations/calendar-feeds/v1/feeds`; Google calendars: the google-calendar service), so those are not shown for an integration''s source. Feeds are added there, not here.'
+      description: 'Every source, oldest first: each is one an integration syncs (`kind` `external`), such as the ICS feeds of calendar-feeds (ZAW among them) and the Google calendars of google-calendar. The owner changes a source''s name, default reminders, default priority, and enabled here; the rest of its configuration and its sync state (such as a feed''s URL, filter, and refresh state) are its integration''s (feeds: the calendar-feeds service, `/api/integrations/calendar-feeds/v1/feeds`; Google calendars: the google-calendar service), where sources are also added.'
       operationId: listSources
       security: []
       responses:
@@ -361,9 +360,8 @@ paths:
         `defaultReminders` (`null` removes them), and `defaultPriority`.
         Disabling a source stops its integration's syncs and keeps its
         events; enabling it lets the integration sync it again (calendar-feeds
-        refreshes it within a minute). The URL and filter of a feed belong
-        to its integration: naming `url` or `filter` here returns 409
-        `managed_by_integration`.
+        refreshes it within a minute). The rest of a source's configuration,
+        such as a feed's URL and filter, is changed in its integration.
       operationId: updateSource
       security: []
       parameters: [{name: sourceId, in: path, required: true, schema: {type: string, format: uuid}}]
@@ -372,7 +370,7 @@ paths:
         '200': {description: Source, content: {application/json: {schema: {$ref: '#/components/schemas/CalendarSource'}}}}
         '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}
         '404': {description: Source not found}
-        '409': {description: 'The source kept changing concurrently; retry the update (conflict). The update names url or filter, which belong to the integration that syncs the source (managed_by_integration).'}
+        '409': {description: 'The source kept changing concurrently; retry the update (conflict).'}
     delete:
       summary: Delete a calendar source
       description: 'Removes the source and every event imported from it. Set `enabled: false` instead to stop syncing and keep its events. A feed is unsubscribed through calendar-feeds (which deletes its source here); a source deleted here takes its feed with it there.'
@@ -425,8 +423,7 @@ paths:
     get:
       summary: List an integration's sources
       description: >-
-        Every source registered for the integration, oldest first, including
-        those Calendar's in-process adapter still syncs (`inProcess`). Only
+        Every source registered for the integration, oldest first. Only
         the integration itself (actor `system:<integration>`) or a dev tool
         (`dev:<name>`) may call it; any other actor, or none, gets 403
         `forbidden`.
@@ -456,7 +453,8 @@ paths:
       description: >-
         Idempotent by (integration, externalId): the first call adds the
         source (201, enabled), later ones update it (200). `provider`
-        and `readOnly` always take the request's values. `name`,
+        and `readOnly` always take the request's values, `privateLocation`
+        when given. `name`,
         `defaultReminders`, and `defaultPriority` are also the owner's
         settings (renamed in the Dashboard, for example): each changes only
         when the integration sends a value other than the one it last sent,
@@ -464,11 +462,7 @@ paths:
         owner's rename stays until the source itself is renamed. Leaving
         `defaultReminders` or `defaultPriority` out says nothing about them.
         `enabled` is the owner's alone. The source's events have
-        `source.kind` `external`. A source Calendar's in-process adapter
-        still syncs (`inProcess`, the sources from before the integration
-        services) cannot be registered, synced, or deleted here (409
-        `source_in_process`) until the release that switches that adapter
-        off hands it over.
+        `source.kind` `external`.
       operationId: registerIntegrationSource
       security: []
       parameters:
@@ -480,7 +474,6 @@ paths:
         '201': {description: 'The source, added', content: {application/json: {schema: {$ref: '#/components/schemas/IntegrationSource'}}}}
         '400': {description: 'Invalid request (invalid_source, the message says what to fix), or no valid X-Life-OS-Actor (actor_required)'}
         '403': {description: 'The actor is not system:<integration> or dev:<name> (forbidden)'}
-        '409': {description: 'Calendar''s in-process adapter still syncs the source (source_in_process)'}
     delete:
       summary: Delete an integration's source
       description: Removes the source and every event imported from it.
@@ -494,7 +487,6 @@ paths:
         '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}
         '403': {description: 'The actor is not system:<integration> or dev:<name> (forbidden)'}
         '404': {description: The integration has no source with this external id}
-        '409': {description: Calendar's in-process adapter still syncs the source (source_in_process)}
   /v1/integrations/{integration}/sources/{externalId}/sync:
     post:
       summary: Sync the events of an integration's source
@@ -527,7 +519,7 @@ paths:
         '400': {description: 'Invalid batch: invalid_sync_request, invalid_item, invalid_exception, or duplicate_uid, with a message naming the item and what to fix; or no valid X-Life-OS-Actor (actor_required)'}
         '403': {description: 'The actor is not system:<integration> or dev:<name> (forbidden)'}
         '404': {description: The integration has no source with this external id}
-        '409': {description: 'The source is disabled (source_disabled), Calendar''s in-process adapter still syncs it (source_in_process), an empty snapshot with emptyGuard would remove upcoming events (empty_snapshot), or the change feed holds edits after feedCursor that the integration has not handled (unhandled_changes)'}
+        '409': {description: 'The source is disabled (source_disabled), an empty snapshot with emptyGuard would remove upcoming events (empty_snapshot), or the change feed holds edits after feedCursor that the integration has not handled (unhandled_changes)'}
   /v1/integrations/changes:
     get:
       summary: Follow the changes of events made in Life OS
@@ -636,20 +628,20 @@ components:
       properties: {provider: {type: string}, externalId: {type: string}}
     EventSourceKind:
       type: string
-      enum: [manual, ics, google, external]
-      description: '`manual`: created in Life OS (the Dashboard, MCP, or a capture). `external`: brought in by an integration (see `/v1/integrations`; `source.provider` and `source.name` say from where). `ics`: imported by Calendar itself from an ICS/iCal feed, until those sources are handed over to their integration. `google`: legacy, no longer used (Google Calendar is the google-calendar integration, `external`).'
+      enum: [manual, external]
+      description: '`manual`: created in Life OS (the Dashboard, MCP, or a capture). `external`: brought in by an integration (see `/v1/integrations`; `source.provider` and `source.name` say from where, such as ZAW or Google).'
     EventSource:
       type: object
       description: Where the event comes from. Set when the event is created; updates never change it.
       required: [kind]
       properties:
         kind: {$ref: '#/components/schemas/EventSourceKind'}
-        sourceId: {type: string, format: uuid, nullable: true, description: 'The Calendar source (feed or connected calendar) the event was imported from; null for manual events.'}
+        sourceId: {type: string, format: uuid, nullable: true, description: 'The Calendar source (such as a feed or a Google calendar) the event was imported from; null for manual events.'}
         name: {type: string, nullable: true, description: 'The name of that source, such as "ZAW", as it is now (renaming the source renames it here); null for manual events. Set by Calendar in responses.'}
         integration: {type: string, nullable: true, description: 'The integration the source belongs to, such as google-calendar; null for manual events. Set by Calendar in responses.'}
         provider: {type: string, nullable: true, description: 'The label of the source''s provider, such as Google or ZAW, for "<provider> · <name>"; null for manual events. Set by Calendar in responses.'}
         readOnly: {type: boolean, nullable: true, description: 'Whether the source accepts changes to its events (see `editable` for this event); null for manual events. Set by Calendar in responses.'}
-        externalUid: {type: string, nullable: true, description: 'The event''s identity in its source; null for manual events. For an ICS event, its UID; one occurrence of a recurring ICS event is imported as its own event, `<UID>#<RECURRENCE-ID>`, where the RECURRENCE-ID is its original start (20261017T040000Z, or 20261017 for an all-day event). For a Google event, its Google event id; one occurrence of a recurring Google event imported as its own event is `<id>_<original start>` as Google names its instances (`<id>_20261017T040000Z`, or `<id>_20261017` for an all-day event).'}
+        externalUid: {type: string, nullable: true, description: 'The event''s identity in its source, as its integration names it; null for manual events. For example, calendar-feeds uses an ICS event''s UID (`<UID>#<RECURRENCE-ID>` for one occurrence imported as its own event), and google-calendar a Google event id (`<id>_<original start>` for one instance imported as its own event).'}
     EventStatus:
       type: string
       enum: [active, cancelled]
@@ -700,7 +692,7 @@ components:
         occurrence: {$ref: '#/components/schemas/EventOccurrence'}
         status: {$ref: '#/components/schemas/EventStatus'}
         cancelledAt: {type: string, format: date-time, nullable: true, description: When the event was cancelled; set exactly when status is cancelled.}
-        removedFromSourceAt: {type: string, format: date-time, nullable: true, description: 'When an imported event disappeared from its source (or its source''s filter came to exclude it), which also cancels it; null for manual events and while the event is in its source.'}
+        removedFromSourceAt: {type: string, format: date-time, nullable: true, description: 'When an imported event disappeared from its source (such as a feed''s filter coming to exclude it), which also cancels it; null for manual events and while the event is in its source.'}
         source: {$ref: '#/components/schemas/EventSource'}
         editable: {type: boolean, description: 'Whether the event can be changed through this API beyond its reminders and priority: Life OS events, and events of integrations'' sources that accept changes (such as Google calendars the account may edit) unless read-only on their own (`readOnlyReason`); not feed events, events of sources that do not accept changes, or occurrences of a rule Calendar cannot hold.'}
         readOnlyReason: {type: string, nullable: true, description: 'Why the event is not editable, for the owner; null when it is.'}
@@ -768,81 +760,31 @@ components:
     EventList: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/CalendarEvent'}}, nextCursor: {type: string, nullable: true, description: Set when more events match; pass it as cursor for the next page.}}}
     CalendarSourceKind:
       type: string
-      enum: [ics, external]
-      description: '`external`: a source an integration syncs (see `/v1/integrations`), which keeps its own URL, filter, and refresh state, such as a feed of calendar-feeds. `ics`: a feed Calendar downloaded itself before the handover to calendar-feeds (P11-08); none remain after its migration, and P11-09 drops the kind.'
-    SourceFilter:
-      type: object
-      description: >-
-        Which feed events to import. A term matches an event when it equals
-        one of the event's CATEGORIES or occurs in its SUMMARY (both
-        case-insensitive). With `include` terms, only events matching one of
-        them are imported; then events matching an `exclude` term are
-        dropped. Empty lists import everything. Empty for a source an
-        integration syncs: a feed's filter is calendar-feeds'.
-      required: [include, exclude]
-      properties:
-        include: {type: array, maxItems: 50, items: {type: string, minLength: 1, maxLength: 100}}
-        exclude: {type: array, maxItems: 50, items: {type: string, minLength: 1, maxLength: 100}}
-    SourceRefreshOutcome:
-      type: string
-      enum: [imported, not_modified, failed]
-      description: '`imported`: the feed was downloaded and its events reconciled. `not_modified`: the server confirmed the feed is unchanged (ETag/Last-Modified). `failed`: the refresh failed; the events from the last good refresh are kept.'
-    SourceRefreshCounts:
-      type: object
-      description: What the last reconciling refresh did.
-      required: [feedEvents, imported, inserted, updated, removed, restored, unchanged]
-      properties:
-        feedEvents: {type: integer, description: Events (occurrences) in the feed.}
-        imported: {type: integer, description: Feed events kept by the filter.}
-        inserted: {type: integer}
-        updated: {type: integer}
-        removed: {type: integer, description: 'Future events no longer in the feed (or now filtered out): cancelled and marked removedFromSourceAt.'}
-        restored: {type: integer, description: Events back in the feed after having been removed.}
-        unchanged: {type: integer}
-        skipped: {type: integer, description: Feed events that could not be read (such as a missing start) and were left out.}
-    SourceRefreshState:
-      type: object
-      description: 'The refresh schedule and last outcome of a feed Calendar refreshed itself (`lastOutcome` and `lastCounts` are absent before the first refresh). Read-only. Empty (no outcome, no failures) for a source an integration syncs: its integration keeps that state (a feed''s is calendar-feeds'' `refresh`).'
-      required: [consecutiveFailures, refreshing]
-      properties:
-        nextRefreshAt: {type: string, format: date-time, nullable: true, description: 'When the source is refreshed next (daily at the quiet hour, sooner after a failure).'}
-        lastAttemptAt: {type: string, format: date-time, nullable: true}
-        lastSuccessAt: {type: string, format: date-time, nullable: true}
-        lastOutcome: {$ref: '#/components/schemas/SourceRefreshOutcome'}
-        lastError: {type: string, nullable: true, description: Why the last refresh failed; null after a success.}
-        consecutiveFailures: {type: integer, description: Failed refreshes since the last success; drives the retry backoff.}
-        lastCounts: {$ref: '#/components/schemas/SourceRefreshCounts'}
-        etag: {type: string, nullable: true, description: 'The feed''s ETag from the last download, sent back as If-None-Match.'}
-        lastModified: {type: string, nullable: true, description: 'The feed''s Last-Modified from the last download, sent back as If-Modified-Since.'}
-        refreshing: {type: boolean, description: A refresh is running now.}
+      enum: [external]
+      description: '`external`: a source an integration syncs (see `/v1/integrations`), which keeps the rest of its configuration and its sync state, such as a feed of calendar-feeds or a Google calendar of google-calendar.'
     CalendarSource:
       type: object
-      required: [id, kind, name, url, enabled, filter, defaultReminders, defaultPriority, refresh, createdAt, updatedAt]
+      required: [id, kind, name, enabled, integration, externalId, provider, readOnly, privateLocation, defaultReminders, defaultPriority, createdAt, updatedAt]
       properties:
         id: {type: string, format: uuid}
         kind: {$ref: '#/components/schemas/CalendarSourceKind'}
         name: {type: string, description: 'The label shown with the source''s events, such as "ZAW".'}
-        url: {type: string, description: 'The feed URL of a feed Calendar refreshed itself (before the handover); empty for a source an integration syncs (its integration keeps the URL).'}
         enabled: {type: boolean, description: 'The owner''s switch: a disabled source is not synced (its integration''s syncs are refused); its events stay as they are.'}
-        integration: {type: string, nullable: true, description: 'The integration the source belongs to, such as calendar-feeds.'}
-        externalId: {type: string, nullable: true, description: The source's id in its integration.}
-        provider: {type: string, nullable: true, description: 'The label of the source''s provider, such as ZAW or ICS.'}
+        integration: {type: string, description: 'The integration the source belongs to, such as calendar-feeds.'}
+        externalId: {type: string, description: The source's id in its integration.}
+        provider: {type: string, description: 'The label of the source''s provider, such as ZAW, ICS, or Google.'}
         readOnly: {type: boolean, description: Whether the source accepts changes to its events.}
-        preset: {type: string, nullable: true, description: 'Set (such as `zaw`) for a feed Calendar refreshed itself and configured from its environment, before the handover; null for a source an integration syncs (calendar-feeds keeps its preset).'}
-        filter: {$ref: '#/components/schemas/SourceFilter'}
+        privateLocation: {type: boolean, description: 'Whether the locations of the source''s events are private, such as the owner''s own address (the ZAW waste pickups): reminder notifications leave them out. Set by its integration.'}
         defaultReminders: {type: array, nullable: true, items: {$ref: '#/components/schemas/Reminder'}, description: 'Default reminders for this source''s events: every event that uses its defaults gets them, together with its own (for example the evening before a waste pickup, `{"kind":"localTime","daysBefore":1,"localTime":"19:00"}`). Null means none.'}
         defaultPriority: {allOf: [{$ref: '#/components/schemas/EventPriority'}], description: 'The priority of this source''s events that have none of their own; medium unless set.'}
-        refresh: {$ref: '#/components/schemas/SourceRefreshState'}
         createdAt: {type: string, format: date-time}
         updatedAt: {type: string, format: date-time, description: When the configuration last changed.}
     UpdateSourceRequest:
       type: object
       minProperties: 1
       properties:
-        name: {type: string, minLength: 1, maxLength: 100}
-        url: {type: string, minLength: 1, maxLength: 2048, description: 'Not changeable here: a feed''s URL and filter belong to its integration (409 managed_by_integration).'}
+        name: {type: string, minLength: 1, maxLength: 500, description: 'As long as an integration may name the source.'}
         enabled: {type: boolean}
-        filter: {$ref: '#/components/schemas/SourceFilter'}
         defaultReminders: {type: array, nullable: true, maxItems: 10, items: {$ref: '#/components/schemas/Reminder'}, description: Replaces the default reminders; null removes them.}
         defaultPriority: {allOf: [{$ref: '#/components/schemas/EventPriority'}], description: 'Replaces the default priority; the source''s events without one of their own follow it.'}
     SourceList: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/CalendarSource'}}}}
@@ -887,7 +829,7 @@ components:
     # Integration API (P11-06).
     IntegrationSource:
       type: object
-      required: [id, integration, externalId, provider, name, enabled, readOnly, inProcess, defaultReminders, defaultPriority, createdAt, updatedAt]
+      required: [id, integration, externalId, provider, name, enabled, readOnly, privateLocation, defaultReminders, defaultPriority, createdAt, updatedAt]
       properties:
         id: {type: string, format: uuid, description: 'The source''s id in Calendar: its events carry it as `source.sourceId`.'}
         integration: {type: string}
@@ -896,7 +838,7 @@ components:
         name: {type: string, description: 'The name shown with its events (the owner may have changed it).'}
         enabled: {type: boolean, description: The owner's switch; a disabled source refuses syncs and keeps its events.}
         readOnly: {type: boolean, description: 'Whether the source accepts changes to its events. Those of a source that does are editable in Life OS like Life OS events (unless read-only on their own, see SourceEvent `readOnlyReason`), and each change comes through the change feed for the integration to write to the provider; a read-only source''s events allow only their reminders and priority.'}
-        inProcess: {type: boolean, description: 'Calendar''s in-process adapter still syncs the source (a source from before the integration services); it cannot be synced through this API until it is handed over.'}
+        privateLocation: {type: boolean, description: 'Whether the locations of the source''s events are private (reminder notifications leave them out).'}
         defaultReminders: {type: array, nullable: true, items: {$ref: '#/components/schemas/Reminder'}, description: Default reminders of the source's events; null means none.}
         defaultPriority: {$ref: '#/components/schemas/EventPriority'}
         createdAt: {type: string, format: date-time}
@@ -909,6 +851,7 @@ components:
         name: {type: string, minLength: 1, maxLength: 500, description: 'The source''s name in the integration, such as the Google calendar''s name.'}
         provider: {type: string, minLength: 1, maxLength: 50, description: 'The label shown for the source, such as Google or ZAW.'}
         readOnly: {type: boolean, description: Whether the source accepts changes to its events.}
+        privateLocation: {type: boolean, description: 'Whether the locations of the source''s events are private, such as the owner''s own address (a waste-collection feed for the owner''s street): reminder notifications leave them out. Leave out to keep the source''s (new sources: false).'}
         defaultReminders: {type: array, nullable: true, maxItems: 10, items: {$ref: '#/components/schemas/Reminder'}, description: 'The source''s own default reminders (null: none). Leave out when the source has none to say.'}
         defaultPriority: {allOf: [{$ref: '#/components/schemas/EventPriority'}], description: Leave out when the source has none to say (new sources get medium).}
     SourceEventReminders:

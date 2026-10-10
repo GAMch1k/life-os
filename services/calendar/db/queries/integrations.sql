@@ -7,11 +7,12 @@
 -- already registered: the caller then locks and updates it.
 INSERT INTO calendar_sources (
     kind, name, enabled, default_reminders, default_priority,
-    integration, external_id, provider, read_only, in_process, integration_config
+    integration, external_id, provider, read_only, private_location, integration_config
 )
 VALUES (
     'external', sqlc.arg(name), true, sqlc.narg(default_reminders), sqlc.arg(default_priority),
-    sqlc.arg(integration)::text, sqlc.arg(external_id)::text, sqlc.arg(provider)::text, sqlc.arg(read_only), false, sqlc.arg(integration_config)
+    sqlc.arg(integration)::text, sqlc.arg(external_id)::text, sqlc.arg(provider)::text, sqlc.arg(read_only),
+    sqlc.arg(private_location), sqlc.arg(integration_config)
 )
 ON CONFLICT (integration, external_id) DO NOTHING
 RETURNING *;
@@ -33,6 +34,7 @@ SELECT * FROM calendar_sources WHERE integration = sqlc.arg(integration)::text O
 -- caller under LockIntegrationSource).
 UPDATE calendar_sources
 SET name = sqlc.arg(name), provider = sqlc.arg(provider)::text, read_only = sqlc.arg(read_only),
+    private_location = sqlc.arg(private_location),
     default_reminders = sqlc.narg(default_reminders), default_priority = sqlc.arg(default_priority),
     integration_config = sqlc.arg(integration_config), updated_at = now()
 WHERE id = sqlc.arg(id)

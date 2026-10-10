@@ -94,10 +94,9 @@ func deref(value *string) string {
 
 // changeableHere reports whether row can be changed through this API
 // beyond its reminders and priority: a Life OS event, or the event of a
-// source an integration syncs that accepts changes (and is not read-only
-// on its own), whose change the integration then writes to the provider
-// through the change feed. Google events Calendar syncs itself are changed
-// in Google first (see google_events.go).
+// source that accepts changes (and is not read-only on its own), whose
+// change the integration then writes to the provider through the change
+// feed.
 func changeableHere(ctx context.Context, queries *store.Queries, row store.Event) (bool, error) {
 	switch {
 	case row.SourceKind == string(generated.EventSourceKindManual):
@@ -112,7 +111,7 @@ func changeableHere(ctx context.Context, queries *store.Queries, row store.Event
 	if err != nil {
 		return false, err
 	}
-	return !source.InProcess && !source.ReadOnly, nil
+	return !source.ReadOnly, nil
 }
 
 // readOnlyHere refuses a change to an imported event that allows only its
@@ -128,11 +127,6 @@ func integrationSourceNotFound() error {
 	return httpserver.NewError(fiber.StatusNotFound, "not_found", "the integration has no source with this externalId")
 }
 
-func sourceInProcess() error {
-	return httpserver.NewError(fiber.StatusConflict, "source_in_process",
-		"Calendar's own adapter still syncs this source; it is handed over to its integration by the release that switches that adapter off")
-}
-
 // integrationSource renders a source for its integration.
 func integrationSource(row store.CalendarSource) (generated.IntegrationSource, error) {
 	reminders, err := decodeReminders(row.DefaultReminders)
@@ -140,8 +134,8 @@ func integrationSource(row store.CalendarSource) (generated.IntegrationSource, e
 		return generated.IntegrationSource{}, err
 	}
 	return generated.IntegrationSource{
-		Id: uuid(row.ID), Integration: deref(row.Integration), ExternalId: deref(row.ExternalID), Provider: deref(row.Provider),
-		Name: row.Name, Enabled: row.Enabled, ReadOnly: row.ReadOnly, InProcess: row.InProcess,
+		Id: uuid(row.ID), Integration: row.Integration, ExternalId: row.ExternalID, Provider: row.Provider,
+		Name: row.Name, Enabled: row.Enabled, ReadOnly: row.ReadOnly, PrivateLocation: row.PrivateLocation,
 		DefaultReminders: reminders, DefaultPriority: generated.EventPriority(row.DefaultPriority),
 		CreatedAt: row.CreatedAt.Time.UTC(), UpdatedAt: row.UpdatedAt.Time.UTC(),
 	}, nil
@@ -206,9 +200,6 @@ func (h *Handler) DeleteIntegrationSource(c fiber.Ctx, integration, externalID s
 		if err != nil {
 			return internal(err)
 		}
-		if row.InProcess {
-			return sourceInProcess()
-		}
 		if _, err := queries.DeleteIntegrationSource(c.Context(), row.ID); err != nil {
 			return internal(err)
 		}
@@ -223,13 +214,14 @@ func (h *Handler) DeleteIntegrationSource(c fiber.Ctx, integration, externalID s
 // registration is a decoded RegisterIntegrationSourceRequest. The owner's
 // settings an integration also sets (name, default reminders, default
 // priority) are kept as JSON, the form integration_config records them in;
-// a nil one says nothing.
+// a nil one says nothing, as a nil privateLocation does.
 type registration struct {
-	name      string
-	provider  string
-	readOnly  bool
-	reminders []byte // JSON: null for none
-	priority  []byte // JSON string
+	name            string
+	provider        string
+	readOnly        bool
+	privateLocation *bool
+	reminders       []byte // JSON: null for none
+	priority        []byte // JSON string
 }
 
 func invalidSource(message string) error {
@@ -245,6 +237,7 @@ func decodeRegistration(raw []byte) (registration, error) {
 		Name             *string                  `json:"name"`
 		Provider         *string                  `json:"provider"`
 		ReadOnly         *bool                    `json:"readOnly"`
+		PrivateLocation  *bool                    `json:"privateLocation"`
 		DefaultReminders *[]generated.Reminder    `json:"defaultReminders"`
 		DefaultPriority  *generated.EventPriority `json:"defaultPriority"`
 	}
@@ -270,6 +263,12 @@ func decodeRegistration(raw []byte) (registration, error) {
 		return registration{}, invalidSource("readOnly is required")
 	}
 	out.readOnly = *body.ReadOnly
+	if _, ok := present["privateLocation"]; ok {
+		if body.PrivateLocation == nil {
+			return registration{}, invalidSource("privateLocation cannot be null (leave it out to keep the source's)")
+		}
+		out.privateLocation = body.PrivateLocation
+	}
 	if _, ok := present["defaultReminders"]; ok {
 		if body.DefaultReminders != nil {
 			if err := validateReminders(*body.DefaultReminders, "a source takes at most %d default reminders"); err != nil {
@@ -315,8 +314,9 @@ func sourceConfigNow(row store.CalendarSource) map[string]json.RawMessage {
 
 // RegisterIntegrationSource adds an integration's source or updates it
 // (idempotent by integration and externalId). Each owner setting changes
-// only when the integration sends another value than it last did, as a
-// preset's configuration does (see sources.EnsurePreset).
+// only when the integration sends another value than it last did
+// (integration_config records what it last sent), so the owner's own edits
+// stay.
 func (h *Handler) RegisterIntegrationSource(c fiber.Ctx, integration, externalID string) error {
 	if err := authorizeIntegration(c, integration); err != nil {
 		return err
@@ -352,7 +352,8 @@ func (h *Handler) RegisterIntegrationSource(c fiber.Ctx, integration, externalID
 		}
 		row, err = queries.CreateIntegrationSource(c.Context(), store.CreateIntegrationSourceParams{
 			Name: reg.name, DefaultReminders: nullJSON(reg.reminders), DefaultPriority: priority,
-			Integration: integration, ExternalID: externalID, Provider: reg.provider, ReadOnly: reg.readOnly, IntegrationConfig: config,
+			Integration: integration, ExternalID: externalID, Provider: reg.provider, ReadOnly: reg.readOnly,
+			PrivateLocation: reg.privateLocation != nil && *reg.privateLocation, IntegrationConfig: config,
 		})
 		if err == nil {
 			created = true
@@ -365,16 +366,16 @@ func (h *Handler) RegisterIntegrationSource(c fiber.Ctx, integration, externalID
 		if err != nil {
 			return internal(err)
 		}
-		if current.InProcess {
-			return sourceInProcess()
-		}
 		last := map[string]json.RawMessage{}
 		if current.IntegrationConfig == nil || json.Unmarshal(current.IntegrationConfig, &last) != nil {
 			last = sourceConfigNow(current)
 		}
 		params := store.UpdateIntegrationSourceParams{
-			ID: current.ID, Name: current.Name, Provider: reg.provider, ReadOnly: reg.readOnly,
+			ID: current.ID, Name: current.Name, Provider: reg.provider, ReadOnly: reg.readOnly, PrivateLocation: current.PrivateLocation,
 			DefaultReminders: current.DefaultReminders, DefaultPriority: current.DefaultPriority,
+		}
+		if reg.privateLocation != nil {
+			params.PrivateLocation = *reg.privateLocation
 		}
 		for key, value := range sent {
 			if previous, ok := last[key]; ok && sameJSON(previous, value) {
@@ -393,7 +394,8 @@ func (h *Handler) RegisterIntegrationSource(c fiber.Ctx, integration, externalID
 		if params.IntegrationConfig, err = json.Marshal(last); err != nil {
 			return internal(err)
 		}
-		if params.Name == current.Name && deref(current.Provider) == params.Provider && current.ReadOnly == params.ReadOnly &&
+		if params.Name == current.Name && current.Provider == params.Provider && current.ReadOnly == params.ReadOnly &&
+			current.PrivateLocation == params.PrivateLocation &&
 			sameJSON(current.DefaultReminders, params.DefaultReminders) && current.DefaultPriority == params.DefaultPriority &&
 			sameJSON(current.IntegrationConfig, params.IntegrationConfig) {
 			row = current

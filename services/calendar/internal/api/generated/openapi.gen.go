@@ -16,15 +16,12 @@ import (
 // Defines values for CalendarSourceKind.
 const (
 	CalendarSourceKindExternal CalendarSourceKind = "external"
-	CalendarSourceKindIcs      CalendarSourceKind = "ics"
 )
 
 // Valid indicates whether the value is a known member of the CalendarSourceKind enum.
 func (e CalendarSourceKind) Valid() bool {
 	switch e {
 	case CalendarSourceKindExternal:
-		return true
-	case CalendarSourceKindIcs:
 		return true
 	default:
 		return false
@@ -73,8 +70,6 @@ func (e EventPriority) Valid() bool {
 // Defines values for EventSourceKind.
 const (
 	EventSourceKindExternal EventSourceKind = "external"
-	EventSourceKindGoogle   EventSourceKind = "google"
-	EventSourceKindIcs      EventSourceKind = "ics"
 	EventSourceKindManual   EventSourceKind = "manual"
 )
 
@@ -82,10 +77,6 @@ const (
 func (e EventSourceKind) Valid() bool {
 	switch e {
 	case EventSourceKindExternal:
-		return true
-	case EventSourceKindGoogle:
-		return true
-	case EventSourceKindIcs:
 		return true
 	case EventSourceKindManual:
 		return true
@@ -172,27 +163,6 @@ func (e SourceEventPriority) Valid() bool {
 	case SourcePriorityLow:
 		return true
 	case SourcePriorityMedium:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SourceRefreshOutcome.
-const (
-	Failed      SourceRefreshOutcome = "failed"
-	Imported    SourceRefreshOutcome = "imported"
-	NotModified SourceRefreshOutcome = "not_modified"
-)
-
-// Valid indicates whether the value is a known member of the SourceRefreshOutcome enum.
-func (e SourceRefreshOutcome) Valid() bool {
-	switch e {
-	case Failed:
-		return true
-	case Imported:
-		return true
-	case NotModified:
 		return true
 	default:
 		return false
@@ -336,7 +306,7 @@ type CalendarEvent struct {
 	// Reminders The event's own reminders, added to its defaults when `useDefaultReminders` is true.
 	Reminders []Reminder `json:"reminders"`
 
-	// RemovedFromSourceAt When an imported event disappeared from its source (or its source's filter came to exclude it), which also cancels it; null for manual events and while the event is in its source.
+	// RemovedFromSourceAt When an imported event disappeared from its source (such as a feed's filter coming to exclude it), which also cancels it; null for manual events and while the event is in its source.
 	RemovedFromSourceAt *time.Time `json:"removedFromSourceAt,omitempty"`
 
 	// Source Where the event comes from. Set when the event is created; updates never change it.
@@ -383,41 +353,32 @@ type CalendarSource struct {
 	Enabled bool `json:"enabled"`
 
 	// ExternalId The source's id in its integration.
-	ExternalId *string `json:"externalId,omitempty"`
-
-	// Filter Which feed events to import. A term matches an event when it equals one of the event's CATEGORIES or occurs in its SUMMARY (both case-insensitive). With `include` terms, only events matching one of them are imported; then events matching an `exclude` term are dropped. Empty lists import everything. Empty for a source an integration syncs: a feed's filter is calendar-feeds'.
-	Filter SourceFilter       `json:"filter"`
-	Id     openapi_types.UUID `json:"id"`
+	ExternalId string             `json:"externalId"`
+	Id         openapi_types.UUID `json:"id"`
 
 	// Integration The integration the source belongs to, such as calendar-feeds.
-	Integration *string `json:"integration,omitempty"`
+	Integration string `json:"integration"`
 
-	// Kind `external`: a source an integration syncs (see `/v1/integrations`), which keeps its own URL, filter, and refresh state, such as a feed of calendar-feeds. `ics`: a feed Calendar downloaded itself before the handover to calendar-feeds (P11-08); none remain after its migration, and P11-09 drops the kind.
+	// Kind `external`: a source an integration syncs (see `/v1/integrations`), which keeps the rest of its configuration and its sync state, such as a feed of calendar-feeds or a Google calendar of google-calendar.
 	Kind CalendarSourceKind `json:"kind"`
 
 	// Name The label shown with the source's events, such as "ZAW".
 	Name string `json:"name"`
 
-	// Preset Set (such as `zaw`) for a feed Calendar refreshed itself and configured from its environment, before the handover; null for a source an integration syncs (calendar-feeds keeps its preset).
-	Preset *string `json:"preset,omitempty"`
+	// PrivateLocation Whether the locations of the source's events are private, such as the owner's own address (the ZAW waste pickups): reminder notifications leave them out. Set by its integration.
+	PrivateLocation bool `json:"privateLocation"`
 
-	// Provider The label of the source's provider, such as ZAW or ICS.
-	Provider *string `json:"provider,omitempty"`
+	// Provider The label of the source's provider, such as ZAW, ICS, or Google.
+	Provider string `json:"provider"`
 
 	// ReadOnly Whether the source accepts changes to its events.
-	ReadOnly *bool `json:"readOnly,omitempty"`
-
-	// Refresh The refresh schedule and last outcome of a feed Calendar refreshed itself (`lastOutcome` and `lastCounts` are absent before the first refresh). Read-only. Empty (no outcome, no failures) for a source an integration syncs: its integration keeps that state (a feed's is calendar-feeds' `refresh`).
-	Refresh SourceRefreshState `json:"refresh"`
+	ReadOnly bool `json:"readOnly"`
 
 	// UpdatedAt When the configuration last changed.
 	UpdatedAt time.Time `json:"updatedAt"`
-
-	// Url The feed URL of a feed Calendar refreshed itself (before the handover); empty for a source an integration syncs (its integration keeps the URL).
-	Url string `json:"url"`
 }
 
-// CalendarSourceKind `external`: a source an integration syncs (see `/v1/integrations`), which keeps its own URL, filter, and refresh state, such as a feed of calendar-feeds. `ics`: a feed Calendar downloaded itself before the handover to calendar-feeds (P11-08); none remain after its migration, and P11-09 drops the kind.
+// CalendarSourceKind `external`: a source an integration syncs (see `/v1/integrations`), which keeps the rest of its configuration and its sync state, such as a feed of calendar-feeds or a Google calendar of google-calendar.
 type CalendarSourceKind string
 
 // ChangeFeedEntry defines model for ChangeFeedEntry.
@@ -531,13 +492,13 @@ type EventPriority string
 
 // EventSource Where the event comes from. Set when the event is created; updates never change it.
 type EventSource struct {
-	// ExternalUid The event's identity in its source; null for manual events. For an ICS event, its UID; one occurrence of a recurring ICS event is imported as its own event, `<UID>#<RECURRENCE-ID>`, where the RECURRENCE-ID is its original start (20261017T040000Z, or 20261017 for an all-day event). For a Google event, its Google event id; one occurrence of a recurring Google event imported as its own event is `<id>_<original start>` as Google names its instances (`<id>_20261017T040000Z`, or `<id>_20261017` for an all-day event).
+	// ExternalUid The event's identity in its source, as its integration names it; null for manual events. For example, calendar-feeds uses an ICS event's UID (`<UID>#<RECURRENCE-ID>` for one occurrence imported as its own event), and google-calendar a Google event id (`<id>_<original start>` for one instance imported as its own event).
 	ExternalUid *string `json:"externalUid,omitempty"`
 
 	// Integration The integration the source belongs to, such as google-calendar; null for manual events. Set by Calendar in responses.
 	Integration *string `json:"integration,omitempty"`
 
-	// Kind `manual`: created in Life OS (the Dashboard, MCP, or a capture). `external`: brought in by an integration (see `/v1/integrations`; `source.provider` and `source.name` say from where). `ics`: imported by Calendar itself from an ICS/iCal feed, until those sources are handed over to their integration. `google`: legacy, no longer used (Google Calendar is the google-calendar integration, `external`).
+	// Kind `manual`: created in Life OS (the Dashboard, MCP, or a capture). `external`: brought in by an integration (see `/v1/integrations`; `source.provider` and `source.name` say from where, such as ZAW or Google).
 	Kind EventSourceKind `json:"kind"`
 
 	// Name The name of that source, such as "ZAW", as it is now (renaming the source renames it here); null for manual events. Set by Calendar in responses.
@@ -549,11 +510,11 @@ type EventSource struct {
 	// ReadOnly Whether the source accepts changes to its events (see `editable` for this event); null for manual events. Set by Calendar in responses.
 	ReadOnly *bool `json:"readOnly,omitempty"`
 
-	// SourceId The Calendar source (feed or connected calendar) the event was imported from; null for manual events.
+	// SourceId The Calendar source (such as a feed or a Google calendar) the event was imported from; null for manual events.
 	SourceId *openapi_types.UUID `json:"sourceId,omitempty"`
 }
 
-// EventSourceKind `manual`: created in Life OS (the Dashboard, MCP, or a capture). `external`: brought in by an integration (see `/v1/integrations`; `source.provider` and `source.name` say from where). `ics`: imported by Calendar itself from an ICS/iCal feed, until those sources are handed over to their integration. `google`: legacy, no longer used (Google Calendar is the google-calendar integration, `external`).
+// EventSourceKind `manual`: created in Life OS (the Dashboard, MCP, or a capture). `external`: brought in by an integration (see `/v1/integrations`; `source.provider` and `source.name` say from where, such as ZAW or Google).
 type EventSourceKind string
 
 // EventStatus `cancelled` events are kept as history but left out of listings and search unless asked for. An occurrence of a recurring event is cancelled when its series is or when it is skipped on its own.
@@ -582,14 +543,14 @@ type IntegrationSource struct {
 	ExternalId string `json:"externalId"`
 
 	// Id The source's id in Calendar: its events carry it as `source.sourceId`.
-	Id openapi_types.UUID `json:"id"`
-
-	// InProcess Calendar's in-process adapter still syncs the source (a source from before the integration services); it cannot be synced through this API until it is handed over.
-	InProcess   bool   `json:"inProcess"`
-	Integration string `json:"integration"`
+	Id          openapi_types.UUID `json:"id"`
+	Integration string             `json:"integration"`
 
 	// Name The name shown with its events (the owner may have changed it).
 	Name string `json:"name"`
+
+	// PrivateLocation Whether the locations of the source's events are private (reminder notifications leave them out).
+	PrivateLocation bool `json:"privateLocation"`
 
 	// Provider The label shown for the source, such as Google, ZAW, or ICS.
 	Provider string `json:"provider"`
@@ -661,6 +622,9 @@ type RegisterIntegrationSourceRequest struct {
 
 	// Name The source's name in the integration, such as the Google calendar's name.
 	Name string `json:"name"`
+
+	// PrivateLocation Whether the locations of the source's events are private, such as the owner's own address (a waste-collection feed for the owner's street): reminder notifications leave them out. Leave out to keep the source's (new sources: false).
+	PrivateLocation *bool `json:"privateLocation,omitempty"`
 
 	// Provider The label shown for the source, such as Google or ZAW.
 	Provider string `json:"provider"`
@@ -783,68 +747,9 @@ type SourceEventReminders struct {
 	UseDefault bool `json:"useDefault"`
 }
 
-// SourceFilter Which feed events to import. A term matches an event when it equals one of the event's CATEGORIES or occurs in its SUMMARY (both case-insensitive). With `include` terms, only events matching one of them are imported; then events matching an `exclude` term are dropped. Empty lists import everything. Empty for a source an integration syncs: a feed's filter is calendar-feeds'.
-type SourceFilter struct {
-	Exclude []string `json:"exclude"`
-	Include []string `json:"include"`
-}
-
 // SourceList defines model for SourceList.
 type SourceList struct {
 	Items []CalendarSource `json:"items"`
-}
-
-// SourceRefreshCounts What the last reconciling refresh did.
-type SourceRefreshCounts struct {
-	// FeedEvents Events (occurrences) in the feed.
-	FeedEvents int `json:"feedEvents"`
-
-	// Imported Feed events kept by the filter.
-	Imported int `json:"imported"`
-	Inserted int `json:"inserted"`
-
-	// Removed Future events no longer in the feed (or now filtered out): cancelled and marked removedFromSourceAt.
-	Removed int `json:"removed"`
-
-	// Restored Events back in the feed after having been removed.
-	Restored int `json:"restored"`
-
-	// Skipped Feed events that could not be read (such as a missing start) and were left out.
-	Skipped   *int `json:"skipped,omitempty"`
-	Unchanged int  `json:"unchanged"`
-	Updated   int  `json:"updated"`
-}
-
-// SourceRefreshOutcome `imported`: the feed was downloaded and its events reconciled. `not_modified`: the server confirmed the feed is unchanged (ETag/Last-Modified). `failed`: the refresh failed; the events from the last good refresh are kept.
-type SourceRefreshOutcome string
-
-// SourceRefreshState The refresh schedule and last outcome of a feed Calendar refreshed itself (`lastOutcome` and `lastCounts` are absent before the first refresh). Read-only. Empty (no outcome, no failures) for a source an integration syncs: its integration keeps that state (a feed's is calendar-feeds' `refresh`).
-type SourceRefreshState struct {
-	// ConsecutiveFailures Failed refreshes since the last success; drives the retry backoff.
-	ConsecutiveFailures int `json:"consecutiveFailures"`
-
-	// Etag The feed's ETag from the last download, sent back as If-None-Match.
-	Etag          *string    `json:"etag,omitempty"`
-	LastAttemptAt *time.Time `json:"lastAttemptAt,omitempty"`
-
-	// LastCounts What the last reconciling refresh did.
-	LastCounts *SourceRefreshCounts `json:"lastCounts,omitempty"`
-
-	// LastError Why the last refresh failed; null after a success.
-	LastError *string `json:"lastError,omitempty"`
-
-	// LastModified The feed's Last-Modified from the last download, sent back as If-Modified-Since.
-	LastModified *string `json:"lastModified,omitempty"`
-
-	// LastOutcome `imported`: the feed was downloaded and its events reconciled. `not_modified`: the server confirmed the feed is unchanged (ETag/Last-Modified). `failed`: the refresh failed; the events from the last good refresh are kept.
-	LastOutcome   *SourceRefreshOutcome `json:"lastOutcome,omitempty"`
-	LastSuccessAt *time.Time            `json:"lastSuccessAt,omitempty"`
-
-	// NextRefreshAt When the source is refreshed next (daily at the quiet hour, sooner after a failure).
-	NextRefreshAt *time.Time `json:"nextRefreshAt,omitempty"`
-
-	// Refreshing A refresh is running now.
-	Refreshing bool `json:"refreshing"`
 }
 
 // SyncIntegrationSourceRequest defines model for SyncIntegrationSourceRequest.
@@ -962,12 +867,8 @@ type UpdateSourceRequest struct {
 	DefaultReminders *[]Reminder `json:"defaultReminders,omitempty"`
 	Enabled          *bool       `json:"enabled,omitempty"`
 
-	// Filter Which feed events to import. A term matches an event when it equals one of the event's CATEGORIES or occurs in its SUMMARY (both case-insensitive). With `include` terms, only events matching one of them are imported; then events matching an `exclude` term are dropped. Empty lists import everything. Empty for a source an integration syncs: a feed's filter is calendar-feeds'.
-	Filter *SourceFilter `json:"filter,omitempty"`
-	Name   *string       `json:"name,omitempty"`
-
-	// Url Not changeable here: a feed's URL and filter belong to its integration (409 managed_by_integration).
-	Url *string `json:"url,omitempty"`
+	// Name As long as an integration may name the source.
+	Name *string `json:"name,omitempty"`
 }
 
 // Weekday A day of the week, as in iCalendar (MO is Monday).
@@ -997,7 +898,7 @@ type RecurrenceId = string
 // SourceId defines model for SourceId.
 type SourceId = openapi_types.UUID
 
-// SourceKind `manual`: created in Life OS (the Dashboard, MCP, or a capture). `external`: brought in by an integration (see `/v1/integrations`; `source.provider` and `source.name` say from where). `ics`: imported by Calendar itself from an ICS/iCal feed, until those sources are handed over to their integration. `google`: legacy, no longer used (Google Calendar is the google-calendar integration, `external`).
+// SourceKind `manual`: created in Life OS (the Dashboard, MCP, or a capture). `external`: brought in by an integration (see `/v1/integrations`; `source.provider` and `source.name` say from where, such as ZAW or Google).
 type SourceKind = EventSourceKind
 
 // TimeZone defines model for TimeZone.

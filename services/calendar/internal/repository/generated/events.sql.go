@@ -356,7 +356,7 @@ const listFollowedEvents = `-- name: ListFollowedEvents :many
 SELECT events.id, events.title, events.description, events.all_day, events.start_at, events.end_at, events.start_date, events.end_date, events.recurrence_frequency, events.recurrence_interval, events.recurrence_until, events.external_provider, events.external_id, events.created_at, events.updated_at, events.automation_idempotency_key, events.automation_payload_hash, events.location, events.time_zone, events.status, events.cancelled_at, events.source_kind, events.source_id, events.external_uid, events.removed_from_source_at, events.reminders, events.use_default_reminders, events.recurrence_by_weekday, events.recurrence_count, events.source_reminders, events.priority, events.read_only_reason FROM events
 LEFT JOIN calendar_sources ON calendar_sources.id = events.source_id
 WHERE (events.source_kind = 'manual' OR (
-    events.source_kind = 'external' AND NOT calendar_sources.in_process AND NOT calendar_sources.read_only
+    events.source_kind = 'external' AND NOT calendar_sources.read_only
     AND ($1::text IS NULL OR calendar_sources.integration = $1::text)
   ))
   AND ($2::uuid IS NULL OR events.id > $2::uuid)

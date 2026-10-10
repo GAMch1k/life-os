@@ -150,16 +150,16 @@ func TestRemindersStoredFormRoundTrips(t *testing.T) {
 
 func TestPatchDecoding(t *testing.T) {
 	for body, want := range map[string]string{
-		`not json`:                   "invalid event request",
-		`[]`:                         "invalid event request",
-		`null`:                       "invalid event request",
-		`{}`:                         "names no event field",
-		`{"source":{"kind":"ics"}}`:  "names no event field",
-		`{"title":null}`:             "title cannot be null",
-		`{"allDay":null}`:            "allDay cannot be null",
-		`{"status":null}`:            "status cannot be null",
-		`{"startAt":"tomorrow"}`:     "invalid event request",
-		`{"reminders":{"kind":"x"}}`: "invalid event request",
+		`not json`:                       "invalid event request",
+		`[]`:                             "invalid event request",
+		`null`:                           "invalid event request",
+		`{}`:                             "names no event field",
+		`{"source":{"kind":"external"}}`: "names no event field",
+		`{"title":null}`:                 "title cannot be null",
+		`{"allDay":null}`:                "allDay cannot be null",
+		`{"status":null}`:                "status cannot be null",
+		`{"startAt":"tomorrow"}`:         "invalid event request",
+		`{"reminders":{"kind":"x"}}`:     "invalid event request",
 	} {
 		if _, err := decodePatch([]byte(body)); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: %v, want %q", body, err, want)

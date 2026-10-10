@@ -32,7 +32,7 @@ func stored(item Event) store.Event {
 	uid := item.ExternalUID
 	event := store.Event{
 		ID: pgtype.UUID{Bytes: googleuuid.New(), Valid: true}, Title: item.Title, Description: item.Description, Location: item.Location,
-		AllDay: item.AllDay, TimeZone: item.TimeZone, Status: "active", SourceKind: "ics", ExternalUid: &uid,
+		AllDay: item.AllDay, TimeZone: item.TimeZone, Status: "active", SourceKind: "external", ExternalUid: &uid,
 	}
 	if item.AllDay {
 		event.StartDate, event.EndDate = pgtype.Date{Time: item.StartDate, Valid: true}, pgtype.Date{Time: item.EndDate, Valid: true}

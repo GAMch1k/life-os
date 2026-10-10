@@ -12,11 +12,10 @@ import (
 )
 
 const deleteSource = `-- name: DeleteSource :execrows
-DELETE FROM calendar_sources WHERE id = $1 AND kind IN ('ics', 'external')
+DELETE FROM calendar_sources WHERE id = $1
 `
 
-// Deletes a feed or an integration's source and its imported events (ON
-// DELETE CASCADE).
+// Deletes a source and its imported events (ON DELETE CASCADE).
 func (q *Queries) DeleteSource(ctx context.Context, id pgtype.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteSource, id)
 	if err != nil {
@@ -26,7 +25,7 @@ func (q *Queries) DeleteSource(ctx context.Context, id pgtype.UUID) (int64, erro
 }
 
 const getSource = `-- name: GetSource :one
-SELECT id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id, default_priority, integration, external_id, provider, read_only, in_process, integration_config FROM calendar_sources WHERE id = $1
+SELECT id, kind, name, enabled, default_reminders, created_at, updated_at, default_priority, integration, external_id, provider, read_only, integration_config, private_location FROM calendar_sources WHERE id = $1
 `
 
 func (q *Queries) GetSource(ctx context.Context, id pgtype.UUID) (CalendarSource, error) {
@@ -36,33 +35,17 @@ func (q *Queries) GetSource(ctx context.Context, id pgtype.UUID) (CalendarSource
 		&i.ID,
 		&i.Kind,
 		&i.Name,
-		&i.Url,
 		&i.Enabled,
-		&i.FilterInclude,
-		&i.FilterExclude,
 		&i.DefaultReminders,
-		&i.NextRefreshAt,
-		&i.RefreshingUntil,
-		&i.LastAttemptAt,
-		&i.LastSuccessAt,
-		&i.LastOutcome,
-		&i.LastError,
-		&i.LastCounts,
-		&i.ConsecutiveFailures,
-		&i.Etag,
-		&i.LastModified,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.Preset,
-		&i.PresetConfig,
-		&i.GoogleCalendarID,
 		&i.DefaultPriority,
 		&i.Integration,
 		&i.ExternalID,
 		&i.Provider,
 		&i.ReadOnly,
-		&i.InProcess,
 		&i.IntegrationConfig,
+		&i.PrivateLocation,
 	)
 	return i, err
 }
@@ -113,13 +96,13 @@ type InsertImportedEventParams struct {
 	ReadOnlyReason      *string
 }
 
-// A source's new event. A series (Google) has its rule; reminders and
-// use_default_reminders are the source's (an ICS feed gives the column
-// defaults: none of its own, following the source's defaults), and
-// source_reminders records them (null for a feed). priority is the event's
-// own priority as its source gives it (Google, through a Life OS extended
-// property); null follows the source's default. read_only_reason is why an
-// integration's event cannot be changed although its source accepts changes.
+// A source's new event. A series has its rule; reminders and
+// use_default_reminders are the source's (a source that gives none gets the
+// column defaults: none of its own, following the source's defaults), and
+// source_reminders records them (null when the source gives none). priority
+// is the event's own priority as its source gives it; null follows the
+// source's default. read_only_reason is why an integration's event cannot be
+// changed although its source accepts changes.
 func (q *Queries) InsertImportedEvent(ctx context.Context, arg InsertImportedEventParams) (pgtype.UUID, error) {
 	row := q.db.QueryRow(ctx, insertImportedEvent,
 		arg.Title,
@@ -157,9 +140,8 @@ const listSourceEvents = `-- name: ListSourceEvents :many
 SELECT id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at, automation_idempotency_key, automation_payload_hash, location, time_zone, status, cancelled_at, source_kind, source_id, external_uid, removed_from_source_at, reminders, use_default_reminders, recurrence_by_weekday, recurrence_count, source_reminders, priority, read_only_reason FROM events WHERE source_id = $1 ORDER BY id FOR UPDATE
 `
 
-// Imported events are written only by the reconciliation (an integration's
-// sync, or Calendar's in-process Google adapter), inside the transaction
-// that holds the source row.
+// Imported events are written only by the reconciliation of an
+// integration's sync, inside the transaction that holds the source row.
 func (q *Queries) ListSourceEvents(ctx context.Context, sourceID pgtype.UUID) ([]Event, error) {
 	rows, err := q.db.Query(ctx, listSourceEvents, sourceID)
 	if err != nil {
@@ -222,8 +204,8 @@ type ListSourceSummariesRow struct {
 	Name             string
 	DefaultReminders []byte
 	DefaultPriority  string
-	Integration      *string
-	Provider         *string
+	Integration      string
+	Provider         string
 	ReadOnly         bool
 }
 
@@ -259,13 +241,10 @@ func (q *Queries) ListSourceSummaries(ctx context.Context) ([]ListSourceSummarie
 }
 
 const listSources = `-- name: ListSources :many
-SELECT id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id, default_priority, integration, external_id, provider, read_only, in_process, integration_config FROM calendar_sources WHERE kind IN ('ics', 'external') ORDER BY created_at, id
+SELECT id, kind, name, enabled, default_reminders, created_at, updated_at, default_priority, integration, external_id, provider, read_only, integration_config, private_location FROM calendar_sources ORDER BY created_at, id
 `
 
-// The feeds (ICS sources) and the sources integrations sync (external).
-// Legacy sources of Calendar's former in-process Google sync (kind google,
-// handed over to the google-calendar integration by migration 000016) are
-// not listed.
+// Every source: each is one an integration syncs.
 func (q *Queries) ListSources(ctx context.Context) ([]CalendarSource, error) {
 	rows, err := q.db.Query(ctx, listSources)
 	if err != nil {
@@ -279,33 +258,17 @@ func (q *Queries) ListSources(ctx context.Context) ([]CalendarSource, error) {
 			&i.ID,
 			&i.Kind,
 			&i.Name,
-			&i.Url,
 			&i.Enabled,
-			&i.FilterInclude,
-			&i.FilterExclude,
 			&i.DefaultReminders,
-			&i.NextRefreshAt,
-			&i.RefreshingUntil,
-			&i.LastAttemptAt,
-			&i.LastSuccessAt,
-			&i.LastOutcome,
-			&i.LastError,
-			&i.LastCounts,
-			&i.ConsecutiveFailures,
-			&i.Etag,
-			&i.LastModified,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.Preset,
-			&i.PresetConfig,
-			&i.GoogleCalendarID,
 			&i.DefaultPriority,
 			&i.Integration,
 			&i.ExternalID,
 			&i.Provider,
 			&i.ReadOnly,
-			&i.InProcess,
 			&i.IntegrationConfig,
+			&i.PrivateLocation,
 		); err != nil {
 			return nil, err
 		}
@@ -382,11 +345,12 @@ type UpdateImportedEventParams struct {
 }
 
 // Rewrites an imported event from its source (also restoring one the source
-// had removed). The source identity and the owner's priority stay. reminders, use_default_reminders,
-// and source_reminders change only when given: a feed never gives them (the
-// owner's reminders stay), a Google sync gives the source's new reminders
-// unless the owner changed the event's own. priority changes only with
-// set_priority: a Google event that carries Life OS's priority property.
+// had removed). The source identity and the owner's priority stay.
+// reminders, use_default_reminders, and source_reminders change only when
+// given: a source that gives none (a feed) leaves the owner's, one that does
+// gives its new reminders unless the owner changed the event's own.
+// priority changes only with set_priority: an event whose source gives its
+// priority.
 func (q *Queries) UpdateImportedEvent(ctx context.Context, arg UpdateImportedEventParams) error {
 	_, err := q.db.Exec(ctx, updateImportedEvent,
 		arg.Title,
@@ -423,7 +387,7 @@ SET name = $1, enabled = $2,
     default_reminders = $3, default_priority = COALESCE($4::text, default_priority),
     updated_at = now()
 WHERE id = $5 AND updated_at = $6
-RETURNING id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id, default_priority, integration, external_id, provider, read_only, in_process, integration_config
+RETURNING id, kind, name, enabled, default_reminders, created_at, updated_at, default_priority, integration, external_id, provider, read_only, integration_config, private_location
 `
 
 type UpdateSourceParams struct {
@@ -437,8 +401,8 @@ type UpdateSourceParams struct {
 
 // Writes the owner's settings of a source (name, enabled, default
 // reminders, default priority), guarded by the updated_at they were read
-// with; a null default_priority keeps the source's. A feed's URL and filter
-// belong to the calendar-feeds integration.
+// with; a null default_priority keeps the source's. The rest of a source's
+// configuration (such as a feed's URL and filter) is its integration's.
 func (q *Queries) UpdateSource(ctx context.Context, arg UpdateSourceParams) (CalendarSource, error) {
 	row := q.db.QueryRow(ctx, updateSource,
 		arg.Name,
@@ -453,33 +417,17 @@ func (q *Queries) UpdateSource(ctx context.Context, arg UpdateSourceParams) (Cal
 		&i.ID,
 		&i.Kind,
 		&i.Name,
-		&i.Url,
 		&i.Enabled,
-		&i.FilterInclude,
-		&i.FilterExclude,
 		&i.DefaultReminders,
-		&i.NextRefreshAt,
-		&i.RefreshingUntil,
-		&i.LastAttemptAt,
-		&i.LastSuccessAt,
-		&i.LastOutcome,
-		&i.LastError,
-		&i.LastCounts,
-		&i.ConsecutiveFailures,
-		&i.Etag,
-		&i.LastModified,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.Preset,
-		&i.PresetConfig,
-		&i.GoogleCalendarID,
 		&i.DefaultPriority,
 		&i.Integration,
 		&i.ExternalID,
 		&i.Provider,
 		&i.ReadOnly,
-		&i.InProcess,
 		&i.IntegrationConfig,
+		&i.PrivateLocation,
 	)
 	return i, err
 }

@@ -13,9 +13,10 @@ SELECT * FROM events
 WHERE recurrence_frequency IS NULL AND status = 'active' AND all_day
   AND start_date >= sqlc.arg(first_date)::date AND start_date <= sqlc.arg(last_date)::date;
 
--- name: ListPresetSourceIDs :many
--- The sources Calendar configures itself (ZAW).
-SELECT id FROM calendar_sources WHERE preset IS NOT NULL;
+-- name: ListPrivateLocationSourceIDs :many
+-- The sources whose event locations are private (such as the owner's own
+-- address): reminders leave them out.
+SELECT id FROM calendar_sources WHERE private_location;
 
 -- name: ClaimReminderRun :one
 -- Takes the dispatcher's lease until lease_until, creating the state row on

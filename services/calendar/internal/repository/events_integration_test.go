@@ -23,13 +23,12 @@ func at(value time.Time) pgtype.Timestamptz { return pgtype.Timestamptz{Time: va
 func on(value time.Time) pgtype.Date        { return pgtype.Date{Time: value, Valid: true} }
 func text(value string) *string             { return &value }
 
-// source adds a feed as Calendar refreshed it itself before the handover to
-// calendar-feeds (kind ics, in process).
+// source adds a feed calendar-feeds syncs (kind external).
 func source(t *testing.T, pool *pgxpool.Pool, name string) pgtype.UUID {
 	t.Helper()
 	var id pgtype.UUID
-	if err := pool.QueryRow(context.Background(), `INSERT INTO calendar_sources (kind, name, url) VALUES ('ics', $1, $2) RETURNING id`,
-		name, "https://calendar.example.org/"+name+".ics").Scan(&id); err != nil {
+	if err := pool.QueryRow(context.Background(), `INSERT INTO calendar_sources (kind, name, integration, external_id, provider) VALUES ('external', $1, 'calendar-feeds', $1, 'ICS') RETURNING id`,
+		name).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
 	return id
@@ -238,7 +237,7 @@ func sameJSON(t *testing.T, raw []byte, want string) bool {
 }
 
 // The schema keeps the lifecycle invariants even for writers that bypass the
-// API, such as the future ICS importer.
+// API.
 func TestEventConstraints(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.Open(t, "")
@@ -247,7 +246,7 @@ func TestEventConstraints(t *testing.T) {
 	feed, secondFeed := source(t, pool, "zaw"), source(t, pool, "second")
 	imported := func(uid string) store.CreateEventParams {
 		params := manualTimed("Papier", pickup, pickup.Add(30*time.Minute))
-		params.SourceKind, params.SourceID, params.ExternalUid = "ics", feed, text(uid)
+		params.SourceKind, params.SourceID, params.ExternalUid = "external", feed, text(uid)
 		return params
 	}
 	if _, err := queries.CreateEvent(ctx, imported("zaw-1")); err != nil {
@@ -278,6 +277,8 @@ func TestEventConstraints(t *testing.T) {
 		"manual with a source": {"events_source_identity_check", with(timed(), func(p *store.CreateEventParams) { p.SourceID = feed })},
 		"imported without UID": {"events_source_identity_check", with(imported("x"), func(p *store.CreateEventParams) { p.ExternalUid = nil })},
 		"unknown source kind":  {"events_source_kind_check", with(imported("y"), func(p *store.CreateEventParams) { p.SourceKind = "outlook" })},
+		"legacy kind ics":      {"events_source_kind_check", with(imported("i"), func(p *store.CreateEventParams) { p.SourceKind = "ics" })},
+		"legacy kind google":   {"events_source_kind_check", with(imported("g"), func(p *store.CreateEventParams) { p.SourceKind = "google" })},
 		"manual removed": {"events_removed_from_source_check", with(timed(), func(p *store.CreateEventParams) {
 			p.Status, p.CancelledAt, p.RemovedFromSourceAt = "cancelled", at(pickup), at(pickup)
 		})},

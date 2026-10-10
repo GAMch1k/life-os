@@ -10,8 +10,7 @@ import (
 )
 
 // Event is the part of an item every source gives: one event with its
-// identity in the source. (It was the feed parser's item; the parser left
-// Calendar with the feeds, P11-08, and the Google mapping with P11-07.)
+// identity in the source, as its integration sends it.
 type Event struct {
 	// ExternalUID is the event's identity in its source.
 	ExternalUID string
@@ -56,8 +55,8 @@ type Item struct {
 	Reminders *Reminders
 	// Priority is the event's own priority as the source gives it: low,
 	// medium, high, or "" for none (the source's default). nil leaves the
-	// event's priority to the owner (a feed, or a Google event without Life
-	// OS's priority property).
+	// event's priority to the owner (a source that gives none, such as a
+	// feed).
 	Priority *string
 	// ReadOnlyReason, set by an integration for an event of a source that
 	// accepts changes, makes it read-only in Life OS and says why (such as

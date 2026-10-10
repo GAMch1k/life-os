@@ -87,7 +87,7 @@ func TestZAWPickupReminder(t *testing.T) {
 	// default; the location (the owner's street) is left out.
 	pickup := timed("Papier", "2026-10-14T04:00:00Z", 15, localTime(1, "19:00"))
 	pickup.Location = ptr("Roßdorf, Darmstädter Str.")
-	pickup.Source = generated.EventSource{Kind: generated.EventSourceKindIcs, Name: ptr("ZAW")}
+	pickup.Source = generated.EventSource{Kind: generated.EventSourceKindExternal, Name: ptr("ZAW")}
 	due := dueOf(t, pickup)
 	got := notification(due, due.At, false, false, berlin)
 	if got.Title != "Papier" || got.Body != "Tomorrow at 06:00" || !got.OccurredAt.Equal(instant("2026-10-13T17:00:00Z")) {

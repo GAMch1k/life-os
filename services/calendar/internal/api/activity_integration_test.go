@@ -167,7 +167,7 @@ func TestImportedEventChangesAreRecordedOnlyWhenAllowed(t *testing.T) {
 	}
 	updated := expectRecorded(t, recorder, &seen, eventUpdated)[0]
 	changes, _ := updated.Data["changes"].([]any)
-	if updated.Actor != activity.User() || len(changes) != 1 || changes[0] != "reminders" || updated.Data["sourceKind"] != "ics" ||
+	if updated.Actor != activity.User() || len(changes) != 1 || changes[0] != "reminders" || updated.Data["sourceKind"] != "external" ||
 		updated.Data["sourceId"] != source.String() {
 		t.Fatalf("updated = %+v", updated)
 	}

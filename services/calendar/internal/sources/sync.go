@@ -9,8 +9,7 @@ import (
 )
 
 // Reconciling the batches integrations send through the integration API
-// (P11-06) with the same rules as Calendar's in-process adapters: a
-// snapshot is reconciled like a refresh (Reconcile), a delta only for the
+// (P11-06): a snapshot for every event of the source, a delta only for the
 // events it names.
 
 // ErrEmptySnapshot: a snapshot without items, guarded against removing the
@@ -26,8 +25,8 @@ func AuthoritativeRules() Rules {
 	}
 }
 
-// ReconcileSnapshot makes a source's stored events match items, as
-// Reconcile, inside the caller's transaction (which holds the source row).
+// ReconcileSnapshot makes a source's stored events match items, inside the
+// caller's transaction (which holds the source row).
 // With guardEmpty, no items while the source has an active event still to
 // come (at now, in the owner's timezone) is ErrEmptySnapshot and changes
 // nothing, as a feed's refresh treats an empty feed.
@@ -43,7 +42,7 @@ func ReconcileSnapshot(ctx context.Context, queries *store.Queries, source store
 }
 
 // ReconcileDelta applies a delta: items are inserted, updated, or restored
-// as in Reconcile, and the stored events whose external uid is in deleted
+// as in a snapshot, and the stored events whose external uid is in deleted
 // are removed (cancelled and marked removed, unless rules keep them); every
 // other stored event stays as it is. Inside the caller's transaction, which
 // holds the source row.

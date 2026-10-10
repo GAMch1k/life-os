@@ -57,7 +57,7 @@ func TestSourceRegistryConstraints(t *testing.T) {
 	pickup := time.Date(2026, time.November, 17, 5, 0, 0, 0, time.UTC)
 	imported := func(source pgtype.UUID, uid string) store.CreateEventParams {
 		params := manualTimed("Papier", pickup, pickup.Add(time.Hour))
-		params.SourceKind, params.SourceID, params.ExternalUid = "ics", source, text(uid)
+		params.SourceKind, params.SourceID, params.ExternalUid = "external", source, text(uid)
 		return params
 	}
 	if _, err := queries.CreateEvent(ctx, imported(feed, "a")); err != nil {

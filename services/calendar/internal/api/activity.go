@@ -14,8 +14,8 @@ import (
 	store "github.com/GAMch1k/life-os/services/calendar/internal/repository/generated"
 )
 
-// Activity event types for changes to events made through the API. Source
-// refreshes record their own summary events (see sources.Refresher).
+// Activity event types for changes to events made through the API. An
+// integration's syncs record their own summary events, in the integration.
 const (
 	eventCreated     = "calendar.event.created"
 	eventUpdated     = "calendar.event.updated"
