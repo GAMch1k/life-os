@@ -43,7 +43,7 @@ The processor's private health port (`8081`, not exposed through the gateway) se
   - `unauthenticated` when the login check fails;
   - otherwise, after a failed planning run, the failure is classified: `usage_limited` (usage or rate limit), `unauthenticated` (401 or not logged in), or `failing` (anything else);
   - otherwise `ready` after a successful run, or `unknown` when Codex has not run yet.
-- `timeZone` is the owner's timezone the planner resolves dates in (see [Dates and the owner's timezone](#dates-and-the-owners-timezone)).
+- `timeZone` is the processor's configured timezone (`LIFE_OS_TIMEZONE`), which captures without their own browser timezone are planned in (see [Dates and the owner's timezone](#dates-and-the-owners-timezone)).
 - The Dashboard Status page (`/status`) renders this, together with the Inbox and Voice backlogs.
 
 ### Codex usage and reset information
@@ -76,14 +76,16 @@ If the MCP service restarts, it forgets every session. On the resulting `404`, t
 
 ## Dates and the owner's timezone
 
-`LIFE_OS_TIMEZONE` (an IANA name such as `Europe/Berlin`; default `UTC`) is the owner's timezone. Compose passes it to the processor and also sets the processor's `TZ` to it. The processor validates it with `time.LoadLocation` at startup; an unknown name is logged and falls back to UTC (as in the Dashboard) rather than stopping capture processing. The processor binary embeds `time/tzdata` and the image installs `tzdata`, so the zone resolves both for the processor and for the Codex CLI.
+Each capture is planned in the owner's timezone at the moment of capture: the capturing browser's timezone when the capture names one, else `LIFE_OS_TIMEZONE`, else UTC. The Dashboard's text and voice captures send the browser's IANA zone as `sourceMetadata.timeZone` (the Voice worker carries the upload's `sourceMetadata` over to the Inbox item). The processor uses it when `time.LoadLocation` accepts it (and it is not `Local`); an unknown or missing zone falls back to the configured one, so captures from the Watch, scripts, or MCP clients without metadata keep working as before.
 
-Every planning prompt states the zone and the local date, time, and weekday, lists the coming seven days with their weekdays and UTC offsets (which covers a daylight-saving change), and gives a worked example ("tomorrow at 10:00 is 2026-10-11T10:00:00+02:00"). Codex is told to:
+`LIFE_OS_TIMEZONE` (an IANA name such as `Europe/Berlin`; default `UTC`) is the configured fallback. Compose passes it to the processor and also sets the processor's `TZ` to it. The processor validates it with `time.LoadLocation` at startup; an unknown name is logged and falls back to UTC (as in the Dashboard) rather than stopping capture processing. The processor binary embeds `time/tzdata` and the image installs `tzdata`, so any zone resolves both for the processor and for the Codex CLI.
+
+Every planning prompt states the capture's zone and the local date, time, and weekday, lists the coming seven days with their weekdays and UTC offsets (which covers a daylight-saving change), and gives a worked example ("tomorrow at 10:00 is 2026-10-11T10:00:00+02:00"). Codex is told to:
 - resolve "today", "tomorrow", "tonight", "this/next week", and bare clock times in the owner's timezone;
 - read a weekday ("on Friday") as its next occurrence that is not already past;
 - write `dueAt`, `startAt`, and `endAt` as RFC3339 with the owner's UTC offset on that date, and `startDate`, `endDate`, and `occurredOn` as the owner's local date.
 
-Relative dates mean what they meant when the owner captured the item, so the reference is the Inbox item's `createdAt`, not the moment Codex runs. A capture taken at 23:59 and planned just after midnight, or retried hours later after a usage limit, keeps its "tomorrow". When planning is more than ten minutes late, the prompt also states the current time. Every Codex run (planning, `login status`, usage reads) gets `TZ` set to the zone, so Codex's own environment context agrees with the prompt. The owning services store instants, so an offset time and its UTC equivalent are the same value. `--content` diagnostics have no capture time and use the current time.
+Relative dates mean what they meant when the owner captured the item, so the reference is the Inbox item's `createdAt`, not the moment Codex runs. A capture taken at 23:59 and planned just after midnight, or retried hours later after a usage limit, keeps its "tomorrow". When planning is more than ten minutes late, the prompt also states the current time. Every Codex run gets `TZ` set to the zone it uses (a planning run the capture's zone; `login status` and usage reads the configured one), so Codex's own environment context agrees with the prompt. The owning services store instants, so an offset time and its UTC equivalent are the same value. `--content` diagnostics have no capture time and use the current time.
 
 `make relative-dates-smoke` proves this with the real Codex CLI on the verification stack, with `LIFE_OS_TIMEZONE=Europe/Berlin`:
 - the processor reports the zone on `/status`, and its container resolves it (tzdata);
@@ -123,7 +125,7 @@ Codex is the processor's agent runtime. It runs as a managed subprocess of the m
 
 - **Binary.** `LIFE_OS_CODEX_COMMAND` is resolved once at startup. A missing CLI stops the processor with exit code 78.
 - **Working directory.** The explicit `LIFE_OS_CODEX_WORKDIR`, in a read-only sandbox (`-s read-only`).
-- **Environment.** Only `PATH`, `HOME`, `USER`, `CODEX_HOME`, locale, `TZ` (always the owner's timezone), `TMPDIR`, and CA settings. API keys, service URLs, and other secrets are never inherited.
+- **Environment.** Only `PATH`, `HOME`, `USER`, `CODEX_HOME`, locale, `TZ` (the capture's timezone when it names one, else the configured one), `TMPDIR`, and CA settings. API keys, service URLs, and other secrets are never inherited.
 - **MCP servers.** None: `-c mcp_servers={}` ignores servers in the host Codex config.
 - **Process group.** Each run has its own process group, so nothing it starts can outlive it.
 - **Deadline.** `LIFE_OS_CODEX_TIMEOUT_SECONDS` (default 300).
