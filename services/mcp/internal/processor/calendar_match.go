@@ -110,12 +110,14 @@ func (r Runner) location(item inboxItem) *time.Location {
 	return time.UTC
 }
 
-// findEvents returns the distinct active events any of a mutation's search
-// terms matches, in the order found. The search covers events that have not
-// ended before the day the item was captured (in the owner's timezone), so
-// last year's appointment of the same name never makes a capture ambiguous;
-// cancelled events are left out by Calendar. The caller acts only on exactly
-// one.
+// findEvents returns the distinct active manual events any of a mutation's
+// search terms matches, in the order found. The search covers events that
+// have not ended before the day the item was captured (in the owner's
+// timezone), so last year's appointment of the same name never makes a
+// capture ambiguous; cancelled events are left out by Calendar. Imported
+// (ICS, Google) events are managed by their source, which alone changes or
+// cancels them, so they are never candidates. The caller acts only on
+// exactly one.
 func (r Runner) findEvents(ctx context.Context, item inboxItem, action plannedAction) ([]map[string]any, error) {
 	location := r.location(item)
 	reference := item.CreatedAt
@@ -127,7 +129,7 @@ func (r Runner) findEvents(ctx context.Context, item inboxItem, action plannedAc
 	found := []map[string]any{}
 	seen := map[string]bool{}
 	for _, term := range searchTerms(action.Arguments, "eventQuery", "eventQueryAlternatives") {
-		query := url.Values{"q": {term}, "from": {from.UTC().Format(time.RFC3339)}, "timeZone": {location.String()}, "limit": {fmt.Sprint(eventSearchLimit)}}
+		query := url.Values{"q": {term}, "from": {from.UTC().Format(time.RFC3339)}, "timeZone": {location.String()}, "sourceKind": {"manual"}, "limit": {fmt.Sprint(eventSearchLimit)}}
 		raw, err := r.Tools.Call(ctx, "calendar_search", map[string]any{"query": query.Encode()})
 		if err != nil {
 			return nil, err
@@ -320,6 +322,16 @@ func eventWhen(event map[string]any, location *time.Location) string {
 		return start.Format(day+" 15:04") + "–" + end.Format("15:04")
 	}
 	return start.Format(day+" 15:04") + " – " + end.Format(day+" 15:04")
+}
+
+// managedBySourceReason is the Human Review reason when Calendar refuses a
+// change because the event belongs to an imported source.
+const managedBySourceReason = "This event is managed by its source and can't be changed by capture"
+
+// managedBySource reports whether Calendar refused a change because the
+// event is imported (409, code managed_by_source). Retrying cannot help.
+func managedBySource(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "managed_by_source")
 }
 
 // calendarReviewReason tells the owner, in the Human Review queue, what the

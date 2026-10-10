@@ -22,10 +22,12 @@ type calendarTools struct {
 	matches map[string][]string
 	// failSearch makes every calendar_search fail.
 	failSearch bool
-	searches   []url.Values
-	gets       []string
-	review     map[string]any
-	inputs     map[string]map[string]any
+	// failTool makes a Calendar mutation fail with that error.
+	failTool map[string]error
+	searches []url.Values
+	gets     []string
+	review   map[string]any
+	inputs   map[string]map[string]any
 }
 
 func (c *calendarTools) Call(ctx context.Context, name string, args map[string]any) (json.RawMessage, error) {
@@ -60,6 +62,10 @@ func (c *calendarTools) Call(ctx context.Context, name string, args map[string]a
 			c.inputs = map[string]map[string]any{}
 		}
 		c.inputs[name] = args
+		if err := c.failTool[name]; err != nil {
+			c.calls = append(c.calls, name)
+			return nil, err
+		}
 	}
 	return c.fakeTools.Call(ctx, name, args)
 }
@@ -119,9 +125,10 @@ func TestCalendarUpdateFindsTheOneEventAcrossLanguagesAndKeepsItsLength(t *testi
 	if got, want := tools.terms(), []string{"dentist", "Zahnarzt", "стоматолог"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("searched %q, want %q", got, want)
 	}
-	// From the start of the capture's day in Berlin, in Berlin, active only.
+	// From the start of the capture's day in Berlin, in Berlin, active manual
+	// events only: imported ones are managed by their source.
 	for _, search := range tools.searches {
-		if search.Get("from") != "2026-10-09T22:00:00Z" || search.Get("timeZone") != "Europe/Berlin" || search.Get("limit") != "10" || search.Has("includeCancelled") {
+		if search.Get("from") != "2026-10-09T22:00:00Z" || search.Get("timeZone") != "Europe/Berlin" || search.Get("limit") != "10" || search.Has("includeCancelled") || search.Get("sourceKind") != "manual" {
 			t.Fatalf("search %v", search)
 		}
 	}
@@ -195,6 +202,12 @@ func TestCalendarCancelAlwaysWaitsForTheOwnersApproval(t *testing.T) {
 	}
 	if tools.review == nil || !reflect.DeepEqual(tools.candidateIDs(), []string{"event-1"}) {
 		t.Fatalf("review = %#v", tools.review)
+	}
+	// Imported events are cancelled only by their source.
+	for _, search := range tools.searches {
+		if search.Get("sourceKind") != "manual" {
+			t.Fatalf("cancel searched %v", search)
+		}
 	}
 	if summary := tools.review["errorSummary"].(string); !strings.Contains(summary, "needs your approval") {
 		t.Fatalf("errorSummary = %q", summary)
@@ -441,5 +454,55 @@ func TestPlanPromptAllowsCalendarChangesThroughSearchTermsAndReview(t *testing.T
 	}
 	if strings.Contains(planPrompt, "Never propose calendar update") || strings.Contains(planPrompt, "calendar_delete") {
 		t.Error("planPrompt still forbids calendar changes or offers permanent deletion")
+	}
+}
+
+// managedBySourceError is how a Calendar 409 managed_by_source reaches the
+// processor through MCP.
+var managedBySourceError = errors.New(`MCP tool calendar_update rejected: service returned 409: {"error":"this event is managed by its source","code":"managed_by_source"}`)
+
+func TestAChangeCalendarRefusesForAnImportedEventGoesToHumanReviewNotRetry(t *testing.T) {
+	tools := newCalendarTools("Move the dentist appointment to Monday at 9", timedEvent("event-de", "Zahnarzt", "2026-10-16T13:00:00Z", "2026-10-16T14:00:00Z"))
+	tools.matches["Zahnarzt"] = []string{"event-de"}
+	tools.failTool = map[string]error{"calendar_update": managedBySourceError}
+	runCalendarPlan(t, tools, reschedulePlan)
+
+	if tools.review == nil || tools.review["errorSummary"] != "This event is managed by its source and can't be changed by capture" || len(tools.candidates()) != 0 {
+		t.Fatalf("review = %#v", tools.review)
+	}
+	if contains(tools.calls, "inbox_resolve") {
+		t.Fatalf("calls = %#v", tools.calls)
+	}
+	for _, record := range tools.records {
+		if record["status"] == "retryable" || record["status"] == "failed" {
+			t.Fatalf("a source-managed event entered technical retry: %#v", tools.records)
+		}
+	}
+}
+
+func TestAnApprovedCancelCalendarRefusesGoesToHumanReviewNotRetry(t *testing.T) {
+	tools := newCalendarTools("Cancel the waste pickup")
+	approvedItem(tools, map[string]any{"tool": "calendar_cancel", "arguments": map[string]any{"eventQuery": "pickup", "taskId": "event-ics"}})
+	tools.failTool = map[string]error{"calendar_cancel": errors.New(`MCP tool calendar_cancel rejected: service returned 409: {"code":"managed_by_source"}`)}
+	runner := Runner{Planner: fakePlanner{err: errors.New("not planned")}, Tools: tools, Model: "test", TimeZone: berlin(t)}
+	if _, err := runner.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if tools.review == nil || tools.review["errorSummary"] != managedBySourceReason || contains(tools.calls, "inbox_resolve") {
+		t.Fatalf("calls = %#v, review = %#v", tools.calls, tools.review)
+	}
+}
+
+func TestOtherCalendarConflictsAreStillRetried(t *testing.T) {
+	// A concurrent change (409 without managed_by_source) may succeed later.
+	tools := newCalendarTools("Move the dentist appointment to Monday at 9", timedEvent("event-1", "Dentist", "2026-10-16T13:00:00Z", "2026-10-16T14:00:00Z"))
+	tools.matches["dentist"] = []string{"event-1"}
+	tools.failTool = map[string]error{"calendar_update": errors.New(`MCP tool calendar_update rejected: service returned 409: {"error":"the event kept changing; retry"}`)}
+	runCalendarPlan(t, tools, reschedulePlan)
+	if tools.review != nil {
+		t.Fatalf("review = %#v", tools.review)
+	}
+	if last := tools.records[len(tools.records)-1]; last["status"] != "retryable" {
+		t.Fatalf("audit = %#v", tools.records)
 	}
 }

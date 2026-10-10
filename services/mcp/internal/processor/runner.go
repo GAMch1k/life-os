@@ -227,6 +227,10 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 		}
 		result, err := r.Tools.Call(ctx, action.Tool, arguments)
 		audit := map[string]any{"tool": action.Tool, "arguments": arguments}
+		if err != nil && isCalendarMutation(action) && managedBySource(err) {
+			// An imported event: a decision for the owner, never a retry.
+			return Proposal{}, r.humanReview(ctx, item.ID, started.ID, action, []map[string]any{}, managedBySourceReason)
+		}
 		if err != nil {
 			actions = append(actions, audit)
 			return Proposal{}, r.retryLater(ctx, item.ID, started.ID, actions, fmt.Sprintf("%s failed: %v", action.Tool, err), classifyActionError(err), previous)
