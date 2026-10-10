@@ -258,15 +258,15 @@ test.describe("Google Calendar connection", () => {
   }) => {
     await stubGoogle(page, baseURL!);
     await page.goto("/calendar/google/callback?error=access_denied&state=x");
-    await expect(page.getByRole("alert")).toContainText(
-      "You did not allow Life OS to use your Google Calendar",
-    );
+    await expect(
+      page.locator("#main-content").getByRole("alert"),
+    ).toContainText("You did not allow Life OS to use your Google Calendar");
     await expect(page).toHaveURL(/\/calendar\/google\/callback$/);
 
     await page.goto("/calendar/google/callback?code=4%2F0old&state=used");
-    await expect(page.getByRole("alert")).toContainText(
-      "This sign-in expired or was already used",
-    );
+    await expect(
+      page.locator("#main-content").getByRole("alert"),
+    ).toContainText("This sign-in expired or was already used");
     await expect(page).toHaveURL(/\/calendar\/google\/callback$/);
     await page.getByRole("link", { name: "Back to Calendar" }).click();
     await page.waitForURL(/\/calendar$/);
