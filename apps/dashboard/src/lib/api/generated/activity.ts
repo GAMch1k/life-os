@@ -55,9 +55,12 @@ export interface components {
          */
         ActivityOutcome: "succeeded" | "pending" | "failed";
         ActivityActor: {
-            /** @enum {string} */
-            kind: "user" | "agent" | "system";
-            /** @description Optional actor name, for example codex-inbox-processor or voice-worker. */
+            /**
+             * @description user = the owner; agent = the Life OS AI (for example the Inbox processor or MCP); system = a Life OS component such as the Voice worker; dev = a development tool or agent working on Life OS, such as Claude Code.
+             * @enum {string}
+             */
+            kind: "user" | "agent" | "system" | "dev";
+            /** @description Optional actor name, for example codex-inbox-processor, voice-worker, or claude-code. */
             name?: string;
         };
         ActivitySubject: {

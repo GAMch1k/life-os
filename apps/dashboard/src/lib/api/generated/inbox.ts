@@ -439,7 +439,7 @@ export interface operations {
                     "application/json": components["schemas"]["InboxItem"];
                 };
             };
-            /** @description Invalid request */
+            /** @description Invalid request, or no valid X-Life-OS-Actor (actor_required) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -504,7 +504,7 @@ export interface operations {
                     "application/json": components["schemas"]["InboxItem"];
                 };
             };
-            /** @description Invalid request */
+            /** @description Invalid request, or no valid X-Life-OS-Actor (actor_required) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -540,7 +540,7 @@ export interface operations {
                     "application/json": components["schemas"]["InboxItem"];
                 };
             };
-            /** @description Invalid request */
+            /** @description Invalid request, or no valid X-Life-OS-Actor (actor_required) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -580,7 +580,7 @@ export interface operations {
                     "application/json": components["schemas"]["InboxItem"];
                 };
             };
-            /** @description Invalid request */
+            /** @description Invalid request, or no valid X-Life-OS-Actor (actor_required) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -620,7 +620,7 @@ export interface operations {
                     "application/json": components["schemas"]["InboxItem"];
                 };
             };
-            /** @description Invalid review selection */
+            /** @description Invalid review selection, or no valid X-Life-OS-Actor (actor_required) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -689,7 +689,7 @@ export interface operations {
                     "application/json": components["schemas"]["ProcessingAttempt"];
                 };
             };
-            /** @description Invalid request */
+            /** @description Invalid request, or no valid X-Life-OS-Actor (actor_required) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -737,7 +737,7 @@ export interface operations {
                     "application/json": components["schemas"]["ProcessingAttempt"];
                 };
             };
-            /** @description Invalid request */
+            /** @description Invalid request, or no valid X-Life-OS-Actor (actor_required) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -778,7 +778,7 @@ export interface operations {
                     "application/json": components["schemas"]["ProcessingAttempt"];
                 };
             };
-            /** @description Invalid request */
+            /** @description Invalid request, or no valid X-Life-OS-Actor (actor_required) */
             400: {
                 headers: {
                     [name: string]: unknown;

@@ -153,3 +153,30 @@ func TestSharedEmitterEnvelopeMatchesContract(t *testing.T) {
 		t.Fatalf("params=%+v err=%v", params, err)
 	}
 }
+
+// Every actor the shared package can produce, including development tools,
+// must be recordable and read back unchanged.
+func TestRecordAcceptsEverySharedActorKind(t *testing.T) {
+	for _, actor := range []activity.Actor{activity.User(), activity.Agent("codex-inbox-processor"), activity.System("voice-worker"), activity.Dev("claude-code")} {
+		raw, err := json.Marshal(activity.Event{ID: activity.EventID("inbox.item.discarded", actor.Kind), Type: "inbox.item.discarded", Source: "inbox", Subject: activity.Subject{Type: "inbox_item", ID: "i"}, CorrelationID: "corr", Actor: actor, Outcome: activity.Succeeded, Summary: "Inbox item discarded", OccurredAt: time.Now()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		app := newApp(&fakeStore{events: map[[16]byte]store.ActivityEvent{}})
+		status, body := post(t, app, string(raw))
+		if status != 201 {
+			t.Fatalf("%+v: %d %s", actor, status, body)
+		}
+		var event generated.ActivityEvent
+		if err := json.Unmarshal([]byte(body), &event); err != nil {
+			t.Fatal(err)
+		}
+		name := ""
+		if event.Actor.Name != nil {
+			name = *event.Actor.Name
+		}
+		if string(event.Actor.Kind) != actor.Kind || name != actor.Name {
+			t.Fatalf("recorded actor %+v, want %+v", event.Actor, actor)
+		}
+	}
+}

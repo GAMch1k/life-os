@@ -2,6 +2,8 @@
 
 Internal service paths begin `/v1`; external/browser paths prepend the gateway base. Every service provides `GET /health` and `GET /ready`. Successful JSON is the entity/list schema in its OpenAPI file; malformed bodies, invalid UUID/date/query values, and invalid state return 400; an absent entity returns 404; unexpected failures return a safe 5xx error envelope.
 
+Every write (`POST`, `PUT`, `PATCH`, `DELETE`) to Finance, Tasks, Inbox, Calendar, or Voice must say who makes it in the `X-Life-OS-Actor` header: `user` (the owner; the Dashboard sends it), `agent:<name>` (the Life OS AI), `system:<name>` (a Life OS component), or `dev:<name>` (a development tool or agent, for example `dev:claude-code`). Names are 1–64 letters, digits, `.`, `_`, or `-`. A write without a valid actor returns 400 with error code `actor_required`; nothing is recorded as the owner by default. Reads need no actor. Through the gateway only `user` and `dev:<name>` are accepted; `agent:`/`system:` claims are dropped. See [Activity](../services/activity.md#actors).
+
 | Owner (gateway base) | API |
 | --- | --- |
 | Finance (`/api/finance`) | `GET /v1/accounts`, `GET /v1/categories`, `PATCH /v1/categories/{id}`, `GET/POST /v1/transactions`, `GET /v1/summaries/monthly?month=YYYY-MM`, `POST /v1/imports/csv` |
@@ -12,14 +14,14 @@ Internal service paths begin `/v1`; external/browser paths prepend the gateway b
 | Activity (`/api/activity`, read-only) | `GET /v1/activity-events` (filters: `correlationId`, `subjectType`/`subjectId`, `type`, `source`, `outcome`, `from`/`to`), `GET /v1/activity-events/{id}`; recording is internal only — see [Activity](../services/activity.md) |
 | MCP (`/api/mcp`) | Streamable HTTP endpoint at `/mcp`; health and readiness probes |
 
-Examples:
+Examples, run as a development tool (`dev:curl`; never send `user` from a tool):
 
 ```sh
-curl -X POST http://127.0.0.1:3000/api/tasks/v1/tasks \
+curl -X POST http://127.0.0.1:3000/api/tasks/v1/tasks -H 'X-Life-OS-Actor: dev:curl' \
   -H 'content-type: application/json' -d '{"title":"Pay invoice"}'
-curl -X POST http://127.0.0.1:3000/api/inbox/v1/inbox-items \
+curl -X POST http://127.0.0.1:3000/api/inbox/v1/inbox-items -H 'X-Life-OS-Actor: dev:curl' \
   -H 'content-type: application/json' -d '{"content":"Call insurer","source":"manual"}'
-curl -X POST http://127.0.0.1:3000/api/calendar/v1/events \
+curl -X POST http://127.0.0.1:3000/api/calendar/v1/events -H 'X-Life-OS-Actor: dev:curl' \
   -H 'content-type: application/json' -d '{"title":"Holiday","allDay":true,"startDate":"2026-12-24","endDate":"2026-12-24"}'
 ```
 

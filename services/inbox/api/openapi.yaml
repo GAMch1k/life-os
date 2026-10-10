@@ -2,6 +2,15 @@ openapi: 3.0.3
 info:
   title: Life OS Inbox API
   version: 1.0.0
+  description: >-
+    Every write (POST, PUT, PATCH, DELETE) must say who makes it in the
+    X-Life-OS-Actor header: `user` (the owner), `agent:<name>` (the Life OS
+    AI), `system:<name>` (a Life OS component), or `dev:<name>` (a development
+    tool or agent working on Life OS, such as Claude Code). Names are 1-64
+    letters, digits, '.', '_', or '-'. A write without a valid actor is
+    rejected with 400 and error code `actor_required`; nothing is attributed to
+    the owner by default. Reads do not need the header. The public gateway
+    passes only `user` and `dev:<name>`.
   license: {name: UNLICENSED, url: https://life-os.local/license}
 servers: [{url: http://inbox:8080}]
 paths:
@@ -24,7 +33,7 @@ paths:
       operationId: createInboxItem
       security: []
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateInboxItemRequest'}}}}
-      responses: {'201': {description: Captured item, content: {application/json: {schema: {$ref: '#/components/schemas/InboxItem'}}}}, '400': {description: Invalid request}}
+      responses: {'201': {description: Captured item, content: {application/json: {schema: {$ref: '#/components/schemas/InboxItem'}}}}, '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}}
   /v1/inbox-items/{itemId}:
     get:
       summary: Get an inbox item
@@ -38,14 +47,14 @@ paths:
       operationId: resolveInboxItem
       security: []
       parameters: [{name: itemId, in: path, required: true, schema: {type: string, format: uuid}}]
-      responses: {'200': {description: Resolved item, content: {application/json: {schema: {$ref: '#/components/schemas/InboxItem'}}}}, '400': {description: Invalid request}, '404': {description: Inbox item not found}}
+      responses: {'200': {description: Resolved item, content: {application/json: {schema: {$ref: '#/components/schemas/InboxItem'}}}}, '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}, '404': {description: Inbox item not found}}
   /v1/inbox-items/{itemId}/discard:
     post:
       summary: Discard an inbox item
       operationId: discardInboxItem
       security: []
       parameters: [{name: itemId, in: path, required: true, schema: {type: string, format: uuid}}]
-      responses: {'200': {description: Discarded item, content: {application/json: {schema: {$ref: '#/components/schemas/InboxItem'}}}}, '400': {description: Invalid request}, '404': {description: Inbox item not found}}
+      responses: {'200': {description: Discarded item, content: {application/json: {schema: {$ref: '#/components/schemas/InboxItem'}}}}, '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}, '404': {description: Inbox item not found}}
   /v1/inbox-items/{itemId}/human-review:
     post:
       summary: Move a processing attempt into Human Review
@@ -53,7 +62,7 @@ paths:
       security: []
       parameters: [{name: itemId, in: path, required: true, schema: {type: string, format: uuid}}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateHumanReviewRequest'}}}}
-      responses: {'200': {description: Human Review item, content: {application/json: {schema: {$ref: '#/components/schemas/InboxItem'}}}}, '400': {description: Invalid request}, '404': {description: Inbox item or attempt not found}}
+      responses: {'200': {description: Human Review item, content: {application/json: {schema: {$ref: '#/components/schemas/InboxItem'}}}}, '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}, '404': {description: Inbox item or attempt not found}}
   /v1/inbox-items/{itemId}/human-review/resolve:
     post:
       summary: Select a retained Human Review candidate and resume processing
@@ -61,7 +70,7 @@ paths:
       security: []
       parameters: [{name: itemId, in: path, required: true, schema: {type: string, format: uuid}}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ResolveHumanReviewRequest'}}}}
-      responses: {'200': {description: Queued Inbox item, content: {application/json: {schema: {$ref: '#/components/schemas/InboxItem'}}}}, '400': {description: Invalid review selection}, '404': {description: Human Review item not found}}
+      responses: {'200': {description: Queued Inbox item, content: {application/json: {schema: {$ref: '#/components/schemas/InboxItem'}}}}, '400': {description: 'Invalid review selection, or no valid X-Life-OS-Actor (actor_required)'}, '404': {description: Human Review item not found}}
   /v1/inbox-items/{itemId}/processing-attempts:
     get:
       summary: List traceable AI processing attempts
@@ -75,7 +84,7 @@ paths:
       security: []
       parameters: [{name: itemId, in: path, required: true, schema: {type: string, format: uuid}}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateProcessingAttemptRequest'}}}}
-      responses: {'201': {description: Attempt, content: {application/json: {schema: {$ref: '#/components/schemas/ProcessingAttempt'}}}}, '400': {description: Invalid request}, '404': {description: Inbox item not found}, '409': {description: Duplicate idempotency key}}
+      responses: {'201': {description: Attempt, content: {application/json: {schema: {$ref: '#/components/schemas/ProcessingAttempt'}}}}, '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}, '404': {description: Inbox item not found}, '409': {description: Duplicate idempotency key}}
   /v1/inbox-items/{itemId}/processing-attempts/{attemptId}:
     patch:
       summary: Record the outcome of an Inbox processing attempt
@@ -83,7 +92,7 @@ paths:
       security: []
       parameters: [{name: itemId, in: path, required: true, schema: {type: string, format: uuid}}, {name: attemptId, in: path, required: true, schema: {type: string, format: uuid}}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateProcessingAttemptRequest'}}}}
-      responses: {'200': {description: Updated attempt, content: {application/json: {schema: {$ref: '#/components/schemas/ProcessingAttempt'}}}}, '400': {description: Invalid request}, '404': {description: Inbox item or attempt not found}}
+      responses: {'200': {description: Updated attempt, content: {application/json: {schema: {$ref: '#/components/schemas/ProcessingAttempt'}}}}, '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}, '404': {description: Inbox item or attempt not found}}
   /v1/inbox-items/{itemId}/processing-attempts/{attemptId}/runtime:
     put:
       summary: Record the runtime state of an unfinished processing attempt
@@ -92,7 +101,7 @@ paths:
       security: []
       parameters: [{name: itemId, in: path, required: true, schema: {type: string, format: uuid}}, {name: attemptId, in: path, required: true, schema: {type: string, format: uuid}}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AttemptRuntimeRequest'}}}}
-      responses: {'200': {description: Updated attempt, content: {application/json: {schema: {$ref: '#/components/schemas/ProcessingAttempt'}}}}, '400': {description: Invalid request}, '404': {description: Attempt not found}, '409': {description: Attempt already finished}}
+      responses: {'200': {description: Updated attempt, content: {application/json: {schema: {$ref: '#/components/schemas/ProcessingAttempt'}}}}, '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}, '404': {description: Attempt not found}, '409': {description: Attempt already finished}}
   /v1/stale-processing-attempts:
     get:
       summary: List unfinished attempts whose runtime stopped reporting

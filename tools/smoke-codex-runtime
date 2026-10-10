@@ -10,6 +10,10 @@
 # processor; and every capture ends with exactly one Task.
 set -euo pipefail
 
+# Writes are attributed to this script as a development tool, never to the
+# owner (CONTRIBUTING.md, "Development tools and live data").
+actor=(-H 'X-Life-OS-Actor: dev:smoke-codex-runtime')
+
 export LIFE_OS_PROCESSOR_STALE_AFTER_SECONDS=90
 # Runs go through tools/fixtures/codex-limit-simulator, which passes every
 # call to the real Codex CLI except while scenario 4 asks it to start slowly.
@@ -35,7 +39,7 @@ for service in inbox tasks; do ready "$service"; done
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 capture() {
-  curl --fail --silent -H 'content-type: application/json' \
+  curl "${actor[@]}" --fail --silent -H 'content-type: application/json' \
     --data "$(jq -n --arg content "$1" '{content: $content, source: "web"}')" \
     "$gateway/api/inbox/v1/inbox-items" | jq -r '.id'
 }

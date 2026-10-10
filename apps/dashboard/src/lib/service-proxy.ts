@@ -1,5 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server";
 
+import { ACTOR_HEADER, PUBLIC_ACTOR } from "@/lib/api/actor";
+
 type RouteContext = { params: Promise<{ path: string[] }> };
 
 const FORWARDED_REQUEST_HEADERS = ["accept", "content-type"] as const;
@@ -20,6 +22,11 @@ export async function proxyServiceRequest(
     if (value) {
       headers.set(name, value);
     }
+  }
+  // Like the gateway, pass on only owner and development-tool actors.
+  const actor = request.headers.get(ACTOR_HEADER)?.trim();
+  if (actor && PUBLIC_ACTOR.test(actor)) {
+    headers.set(ACTOR_HEADER, actor);
   }
 
   const init: RequestInit = {

@@ -2,12 +2,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-import {
-  expect,
-  test,
-  type APIRequestContext,
-  type Page,
-} from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "./fixtures";
 
 // Phase 8 sign-off: ten acceptance chains against the integrated product on
 // the disposable verification stack, through the normal user triggers

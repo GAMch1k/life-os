@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Writes are attributed to this script as a development tool, never to the
+# owner (CONTRIBUTING.md, "Development tools and live data").
+actor=(-H 'X-Life-OS-Actor: dev:smoke-dashboard')
+
 gateway_port=$(docker compose port gateway 80)
 dashboard="http://${gateway_port}"
 tasks="${dashboard}/api/tasks"
@@ -18,13 +22,13 @@ wait_dashboard() {
 
 today=$(date -u +%F)
 due_at="${today}T12:00:00Z"
-curl --fail --silent --show-error -H 'content-type: application/json' \
+curl "${actor[@]}" --fail --silent --show-error -H 'content-type: application/json' \
   -d "{\"title\":\"Dashboard smoke task\",\"dueAt\":\"${due_at}\"}" \
   "$tasks/v1/tasks" >/dev/null
-curl --fail --silent --show-error -H 'content-type: application/json' \
+curl "${actor[@]}" --fail --silent --show-error -H 'content-type: application/json' \
   -d '{"content":"Dashboard smoke capture","source":"manual"}' \
   "$inbox/v1/inbox-items" >/dev/null
-curl --fail --silent --show-error -H 'content-type: application/json' \
+curl "${actor[@]}" --fail --silent --show-error -H 'content-type: application/json' \
   -d "{\"title\":\"Dashboard smoke event\",\"allDay\":true,\"startDate\":\"${today}\",\"endDate\":\"${today}\"}" \
   "$calendar/v1/events" >/dev/null
 

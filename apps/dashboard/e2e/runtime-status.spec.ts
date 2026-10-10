@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "./fixtures";
 
 // Forces real dependency and worker problems on the disposable verification
 // stack and checks that the Dashboard explains each one. Faults are injected

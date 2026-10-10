@@ -281,7 +281,7 @@ export interface operations {
                     "application/json": components["schemas"]["Category"];
                 };
             };
-            /** @description Invalid request */
+            /** @description Invalid request, or no valid X-Life-OS-Actor (actor_required) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -353,7 +353,7 @@ export interface operations {
                     "application/json": components["schemas"]["Transaction"];
                 };
             };
-            /** @description Invalid request */
+            /** @description Invalid request, or no valid X-Life-OS-Actor (actor_required) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -413,7 +413,7 @@ export interface operations {
                     "application/json": components["schemas"]["CsvImport"];
                 };
             };
-            /** @description Invalid CSV */
+            /** @description Invalid CSV, or no valid X-Life-OS-Actor (actor_required) */
             400: {
                 headers: {
                     [name: string]: unknown;

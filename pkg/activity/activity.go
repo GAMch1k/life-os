@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -31,9 +32,14 @@ const (
 	// CausationIDHeader carries the id of the activity event that directly
 	// caused the request.
 	CausationIDHeader = "X-Causation-ID"
-	// ActorHeader identifies a non-user caller as "agent:<name>" or
-	// "system:<name>". Requests without it were made by the user.
+	// ActorHeader says who makes a request: "user" (the owner),
+	// "agent:<name>" (the Life OS AI), "system:<name>" (a Life OS component),
+	// or "dev:<name>" (a development tool or agent working on Life OS, such as
+	// Claude Code). Writes without a valid value are rejected (RequireActor),
+	// so nothing is attributed to the owner by default.
 	ActorHeader = "X-Life-OS-Actor"
+	// ActorRequiredCode is the error code of a write rejected by RequireActor.
+	ActorRequiredCode = "actor_required"
 )
 
 // Outcomes recorded on events.
@@ -52,20 +58,64 @@ func User() Actor              { return Actor{Kind: "user"} }
 func Agent(name string) Actor  { return Actor{Kind: "agent", Name: name} }
 func System(name string) Actor { return Actor{Kind: "system", Name: name} }
 func (a Actor) IsZero() bool   { return a.Kind == "" }
+
+// Dev is a development tool or agent working on Life OS, for example
+// Dev("claude-code"). It is neither the owner nor the Life OS AI, so its
+// writes to live data stay distinguishable from both.
+func Dev(name string) Actor { return Actor{Kind: "dev", Name: name} }
+
+// headerValue is the ActorHeader value for a, or "" for the zero Actor. The
+// user is sent explicitly, so a forwarded user trace still passes
+// RequireActor.
 func (a Actor) headerValue() string {
-	if a.Kind == "" || a.Kind == "user" {
+	switch a.Kind {
+	case "":
 		return ""
+	case "user":
+		return "user"
 	}
 	return a.Kind + ":" + a.Name
 }
 
-// ParseActor reads an ActorHeader value. Unknown or empty values mean the user.
-func ParseActor(value string) Actor {
-	kind, name, _ := strings.Cut(sanitize(value), ":")
-	if kind == "agent" || kind == "system" {
-		return Actor{Kind: kind, Name: name}
+// actorName is what may follow "agent:", "system:", or "dev:". The gateway
+// applies the same rule to the dev claims it lets through.
+var actorName = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+
+// ParseActor reads an ActorHeader value: "user", or "agent:", "system:", or
+// "dev:" followed by a name of 1-64 letters, digits, '.', '_', or '-'. ok is
+// false for anything else, including an empty value; it never falls back to
+// the user.
+func ParseActor(value string) (actor Actor, ok bool) {
+	value = strings.TrimSpace(value)
+	if value == "user" {
+		return User(), true
 	}
-	return User()
+	kind, name, _ := strings.Cut(value, ":")
+	if (kind == "agent" || kind == "system" || kind == "dev") && actorName.MatchString(name) {
+		return Actor{Kind: kind, Name: name}, true
+	}
+	return Actor{}, false
+}
+
+// RequireActor is middleware that rejects writes (any method but GET, HEAD,
+// and OPTIONS) without a valid ActorHeader with 400 actor_required, so no
+// change is silently attributed to the owner. Reads stay open, as do the
+// runtime's /health and /ready.
+func RequireActor() fiber.Handler {
+	return func(c fiber.Ctx) error {
+		switch c.Method() {
+		case fiber.MethodGet, fiber.MethodHead, fiber.MethodOptions:
+			return c.Next()
+		}
+		if path := c.Path(); path == httpserver.HealthPath || path == httpserver.ReadyPath {
+			return c.Next()
+		}
+		if _, ok := ParseActor(c.Get(ActorHeader)); !ok {
+			return httpserver.NewError(fiber.StatusBadRequest, ActorRequiredCode,
+				"Writes must say who makes them: send the "+ActorHeader+" header as user, agent:<name>, system:<name>, or dev:<name>.")
+		}
+		return c.Next()
+	}
 }
 
 type Subject struct {
@@ -106,9 +156,11 @@ type Trace struct {
 }
 
 // TraceFromHeaders reads Trace from request headers via get, for example a
-// Fiber context's Get method or http.Header.Get.
+// Fiber context's Get method or http.Header.Get. A missing or invalid actor
+// leaves Trace.Actor zero; writes never get that far (RequireActor).
 func TraceFromHeaders(get func(string) string) Trace {
-	trace := Trace{CorrelationID: sanitize(get(CorrelationIDHeader)), Actor: ParseActor(get(ActorHeader))}
+	actor, _ := ParseActor(get(ActorHeader))
+	trace := Trace{CorrelationID: sanitize(get(CorrelationIDHeader)), Actor: actor}
 	if id, err := uuid.Parse(sanitize(get(CausationIDHeader))); err == nil {
 		trace.CausationID = &id
 	}
@@ -181,7 +233,9 @@ func (e *Emitter) Emit(ctx context.Context, event Event) {
 		event.Source = e.Source
 	}
 	if event.Actor.IsZero() {
-		event.Actor = User()
+		// Never the owner by default: an event without an actor was made by
+		// the emitting service itself.
+		event.Actor = System(event.Source)
 	}
 	if event.OccurredAt.IsZero() {
 		event.OccurredAt = time.Now().UTC()

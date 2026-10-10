@@ -2,6 +2,15 @@ openapi: 3.0.3
 info:
   title: Life OS Finance API
   version: 1.0.0
+  description: >-
+    Every write (POST, PUT, PATCH, DELETE) must say who makes it in the
+    X-Life-OS-Actor header: `user` (the owner), `agent:<name>` (the Life OS
+    AI), `system:<name>` (a Life OS component), or `dev:<name>` (a development
+    tool or agent working on Life OS, such as Claude Code). Names are 1-64
+    letters, digits, '.', '_', or '-'. A write without a valid actor is
+    rejected with 400 and error code `actor_required`; nothing is attributed to
+    the owner by default. Reads do not need the header. The public gateway
+    passes only `user` and `dev:<name>`.
   license: {name: UNLICENSED, url: https://life-os.local/license}
 servers: [{url: http://finance:8080}]
 paths:
@@ -24,7 +33,7 @@ paths:
       security: []
       parameters: [{name: categoryId, in: path, required: true, schema: {type: string, format: uuid}}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateCategoryRequest'}}}}
-      responses: {'200': {description: Category, content: {application/json: {schema: {$ref: '#/components/schemas/Category'}}}}, '400': {description: Invalid request}, '404': {description: Category not found}}
+      responses: {'200': {description: Category, content: {application/json: {schema: {$ref: '#/components/schemas/Category'}}}}, '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}, '404': {description: Category not found}}
   /v1/transactions:
     get:
       summary: List and filter transactions
@@ -37,7 +46,7 @@ paths:
       operationId: createManualTransaction
       security: []
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateManualTransactionRequest'}}}}
-      responses: {'201': {description: Transaction, content: {application/json: {schema: {$ref: '#/components/schemas/Transaction'}}}}, '400': {description: Invalid request}}
+      responses: {'201': {description: Transaction, content: {application/json: {schema: {$ref: '#/components/schemas/Transaction'}}}}, '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}}
   /v1/summaries/monthly:
     get:
       summary: Get a monthly finance summary
@@ -51,7 +60,7 @@ paths:
       operationId: createCsvImport
       security: []
       requestBody: {required: true, content: {text/csv: {schema: {type: string, format: binary}}}}
-      responses: {'202': {description: Accepted, content: {application/json: {schema: {$ref: '#/components/schemas/CsvImport'}}}}, '400': {description: Invalid CSV}}
+      responses: {'202': {description: Accepted, content: {application/json: {schema: {$ref: '#/components/schemas/CsvImport'}}}}, '400': {description: 'Invalid CSV, or no valid X-Life-OS-Actor (actor_required)'}}
 components:
   schemas:
     Money: {type: object, required: [amount, currency], properties: {amount: {type: integer, format: int64}, currency: {type: string}}}

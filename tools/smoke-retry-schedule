@@ -14,6 +14,10 @@
 #  5. without recovery metadata, retries use bounded exponential backoff.
 set -euo pipefail
 
+# Writes are attributed to this script as a development tool, never to the
+# owner (CONTRIBUTING.md, "Development tools and live data").
+actor=(-H 'X-Life-OS-Actor: dev:smoke-retry-schedule')
+
 sim=$(mktemp -d)
 chmod 755 "$sim"
 install -m 755 tools/fixtures/codex-limit-simulator "$sim/codex-limit-simulator"
@@ -35,7 +39,7 @@ for service in inbox tasks activity; do ready "$service" || { echo "$service is 
 
 simulate() { echo "$1" >"$sim/mode"; echo "$2" >"$sim/until"; }
 capture() {
-  curl --fail --silent -H 'content-type: application/json' \
+  curl "${actor[@]}" --fail --silent -H 'content-type: application/json' \
     --data "$(jq -n --arg content "$1" '{content: $content, source: "web"}')" \
     "$gateway/api/inbox/v1/inbox-items" | jq -r '.id'
 }

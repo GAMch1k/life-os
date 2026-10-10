@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Writes are attributed to this script as a development tool, never to the
+# owner (CONTRIBUTING.md, "Development tools and live data").
+actor=(-H 'X-Life-OS-Actor: dev:smoke-core-services')
+
 wait_ready() {
   local url=$1
   for _ in $(seq 1 30); do
@@ -20,7 +24,7 @@ calendar="${gateway}/api/calendar"
 for service in "$finance" "$tasks" "$inbox" "$calendar"; do wait_ready "$service"; done
 
 curl --fail --silent --show-error "$finance/v1/accounts" >/dev/null
-curl --fail --silent --show-error -H 'content-type: application/json' -d '{"title":"Smoke task"}' "$tasks/v1/tasks" >/dev/null
-curl --fail --silent --show-error -H 'content-type: application/json' -d '{"content":"Smoke capture","source":"manual"}' "$inbox/v1/inbox-items" >/dev/null
-curl --fail --silent --show-error -H 'content-type: application/json' -d '{"title":"Smoke event","allDay":true,"startDate":"2026-01-01","endDate":"2026-01-01"}' "$calendar/v1/events" >/dev/null
+curl "${actor[@]}" --fail --silent --show-error -H 'content-type: application/json' -d '{"title":"Smoke task"}' "$tasks/v1/tasks" >/dev/null
+curl "${actor[@]}" --fail --silent --show-error -H 'content-type: application/json' -d '{"content":"Smoke capture","source":"manual"}' "$inbox/v1/inbox-items" >/dev/null
+curl "${actor[@]}" --fail --silent --show-error -H 'content-type: application/json' -d '{"title":"Smoke event","allDay":true,"startDate":"2026-01-01","endDate":"2026-01-01"}' "$calendar/v1/events" >/dev/null
 printf 'core service smoke checks passed\n'
