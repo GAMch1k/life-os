@@ -250,15 +250,15 @@ function TransactionForm({
       ? [accountsById.get(transaction.accountId) as Account]
       : [],
   );
+  // A rule chose the category shown (until the owner picks another).
+  const ruleChosen =
+    transaction?.categorizedBy === "rule" &&
+    draft.categoryId === transaction.categoryId;
   const categoryField = (
     <Field>
       <FieldLabel htmlFor={`${id}-category`}>Category</FieldLabel>
       <NativeSelect
-        aria-describedby={
-          transaction?.categorizedBy === "rule"
-            ? `${id}-category-note`
-            : undefined
-        }
+        aria-describedby={ruleChosen ? `${id}-category-note` : undefined}
         className="w-full"
         id={`${id}-category`}
         onChange={(event) => update({ categoryId: event.target.value })}
@@ -278,8 +278,7 @@ function TransactionForm({
           </NativeSelectOptGroup>
         ))}
       </NativeSelect>
-      {transaction?.categorizedBy === "rule" &&
-      draft.categoryId === transaction.categoryId ? (
+      {ruleChosen ? (
         <FieldDescription className="text-xs" id={`${id}-category-note`}>
           Chosen by a rule. Picking one here keeps the rules away from it.
         </FieldDescription>
