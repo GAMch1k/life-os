@@ -131,7 +131,19 @@ err := notifier.Send(ctx, notify.Notification{
 })
 ```
 
-`Send` posts as `system:<service>` with a 5 s timeout (`Client.Timeout`), refuses a notification without a dedupe key, title, valid importance, or category (`notify.ErrInvalid`), retries network errors and 5xx twice (safe thanks to the dedupe key), and returns a `*notify.StatusError` for a rejection. It forwards the correlation and causation of an `activity.Trace` in the context. With an empty `NOTIFICATIONS_SERVICE_URL` it sends nothing and returns nil, so a service runs unchanged where Notifications is not configured. No producer uses it yet.
+`Send` posts as `system:<service>` with a 5 s timeout (`Client.Timeout`), refuses a notification without a dedupe key, title, valid importance, or category (`notify.ErrInvalid`), retries network errors and 5xx twice (safe thanks to the dedupe key), and returns a `*notify.StatusError` for a rejection. It forwards the correlation and causation of an `activity.Trace` in the context. With an empty `NOTIFICATIONS_SERVICE_URL` it sends nothing and returns nil, so a service runs unchanged where Notifications is not configured.
+
+### Producers
+
+The service that owns a state change sends its notification, so every path into that state is covered once. Compose gives each producer `NOTIFICATIONS_SERVICE_URL: http://notifications:8080`; it does not depend on Notifications starting first, because sends are best effort.
+
+| Producer | Category | Importance | When | Link | Dedupe key |
+| --- | --- | --- | --- | --- | --- |
+| Inbox | `inbox.human_review` | `medium` | A capture moves to Human Review, once per review round. | `/inbox#human-review` | `inbox.human_review:<itemId>:<attemptId>` |
+| Inbox | `inbox.failed` | `medium` | Automatic processing gave up on a capture (attempt `failed`). Not for retries or successes. | `/inbox#failed` | `inbox.failed:<itemId>:<attemptId>` |
+| Calendar | `calendar.reminder` | `medium` (the event's priority once events have one) | An effective reminder of an active event or occurrence is due: every one of them, exactly once. One due while Calendar was down is sent within `CALENDAR_REMINDER_GRACE_MINUTES` (2 h) with "(late)", and recorded in Activity as missed after that. A failed send is retried at the next run. | `/calendar?date=<start date>` | `calendar:reminder:<eventId>:<recurrenceId or single>:<start>:<reminder>` |
+
+See [Inbox](inbox.md#notifications) and [Calendar](calendar.md#reminder-delivery) for the payloads and failure handling.
 
 ## Operations
 

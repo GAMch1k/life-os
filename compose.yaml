@@ -80,7 +80,7 @@ services:
     restart: "no"
   calendar:
     build: {context: ., dockerfile: services/calendar/Dockerfile}
-    environment: {SERVICE_NAME: calendar, PORT: 8080, DATABASE_URL: "postgres://calendar_user:${LIFE_OS_CALENDAR_DB_PASSWORD}@postgres:5432/calendar_db?sslmode=disable", LIFE_OS_TIMEZONE: "${LIFE_OS_TIMEZONE:-UTC}", ACTIVITY_SERVICE_URL: "http://activity:8080", CALENDAR_SOURCE_REFRESH_AT: "${LIFE_OS_CALENDAR_SOURCE_REFRESH_AT:-04:30}", CALENDAR_ZAW_ICS_URL: "${LIFE_OS_ZAW_ICS_URL:-}", LIFE_OS_GOOGLE_CLIENT_ID: "${LIFE_OS_GOOGLE_CLIENT_ID:-}", LIFE_OS_GOOGLE_CLIENT_SECRET: "${LIFE_OS_GOOGLE_CLIENT_SECRET:-}", LIFE_OS_GOOGLE_TOKEN_KEY: "${LIFE_OS_GOOGLE_TOKEN_KEY:-}", LIFE_OS_GOOGLE_REDIRECT_URI: "${LIFE_OS_GOOGLE_REDIRECT_URI:-https://lifeos.gamch1k.com/calendar/google/callback}"}
+    environment: {SERVICE_NAME: calendar, PORT: 8080, DATABASE_URL: "postgres://calendar_user:${LIFE_OS_CALENDAR_DB_PASSWORD}@postgres:5432/calendar_db?sslmode=disable", LIFE_OS_TIMEZONE: "${LIFE_OS_TIMEZONE:-UTC}", ACTIVITY_SERVICE_URL: "http://activity:8080", CALENDAR_SOURCE_REFRESH_AT: "${LIFE_OS_CALENDAR_SOURCE_REFRESH_AT:-04:30}", CALENDAR_ZAW_ICS_URL: "${LIFE_OS_ZAW_ICS_URL:-}", LIFE_OS_GOOGLE_CLIENT_ID: "${LIFE_OS_GOOGLE_CLIENT_ID:-}", LIFE_OS_GOOGLE_CLIENT_SECRET: "${LIFE_OS_GOOGLE_CLIENT_SECRET:-}", LIFE_OS_GOOGLE_TOKEN_KEY: "${LIFE_OS_GOOGLE_TOKEN_KEY:-}", LIFE_OS_GOOGLE_REDIRECT_URI: "${LIFE_OS_GOOGLE_REDIRECT_URI:-https://lifeos.gamch1k.com/calendar/google/callback}", NOTIFICATIONS_SERVICE_URL: "http://notifications:8080"}
     expose: ["8080"]
     depends_on: {calendar-migrate: {condition: service_completed_successfully}}
     networks: [backend]
