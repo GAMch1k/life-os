@@ -35,7 +35,7 @@ services:
     restart: "no"
   finance:
     build: {context: ., dockerfile: services/finance/Dockerfile}
-    environment: {SERVICE_NAME: finance, PORT: 8080, DATABASE_URL: "postgres://finance_user:${LIFE_OS_FINANCE_DB_PASSWORD}@postgres:5432/finance_db?sslmode=disable"}
+    environment: {SERVICE_NAME: finance, PORT: 8080, DATABASE_URL: "postgres://finance_user:${LIFE_OS_FINANCE_DB_PASSWORD}@postgres:5432/finance_db?sslmode=disable", ACTIVITY_SERVICE_URL: "http://activity:8080", LIFE_OS_TIMEZONE: "${LIFE_OS_TIMEZONE:-UTC}", FINANCE_DEFAULT_CURRENCY: "${LIFE_OS_FINANCE_CURRENCY:-EUR}"}
     expose: ["8080"]
     depends_on: {finance-migrate: {condition: service_completed_successfully}}
     networks: [backend]
