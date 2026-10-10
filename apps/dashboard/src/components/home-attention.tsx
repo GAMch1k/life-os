@@ -3,18 +3,22 @@ import {
   ArrowRight,
   CalendarDays,
   CheckSquare2,
+  CircleAlert,
   ListTodo,
   TriangleAlert,
 } from "lucide-react";
 
 import { eventTimeLabel } from "@/components/calendar-summary";
+import { Amount } from "@/components/finance-amount";
+import { HomeBudgetCard } from "@/components/home-budget";
 import { Card, CardContent } from "@/components/ui/card";
+import { budgetHref, monthName } from "@/lib/finance-budget";
 import type { HomeAttention } from "@/lib/home-attention";
 
 const URGENT_PREVIEW = 5;
 const REVIEW_PREVIEW = 2;
 
-type AttentionItem = { id: string; label: string; hint?: string };
+type AttentionItem = { id: string; label: string; hint?: React.ReactNode };
 
 function plural(count: number, more: boolean, noun: string) {
   return `${count}${more ? "+" : ""} ${noun}${count === 1 && !more ? "" : "s"}`;
@@ -23,18 +27,22 @@ function plural(count: number, more: boolean, noun: string) {
 /**
  * Home's summaries under the capture card. `humanReviewCount` is the true
  * count from the Inbox backlog; the review list itself is only a preview.
- * `timeZone` is the zone the page renders times in.
+ * `timeZone` is the zone the page renders times in, and `today` the owner's
+ * day there (YYYY-MM-DD).
  */
 export function HomeAttentionSurface({
   attention,
   humanReviewCount,
   timeZone,
+  today,
 }: {
   attention: HomeAttention;
   humanReviewCount?: number;
   timeZone: string;
+  today: string;
 }) {
-  const { humanReview, nextEvent, unscheduled, urgent } = attention;
+  const { budget, humanReview, nextEvent, unscheduled, urgent } = attention;
+  const overBudget = budget?.kind === "plan" ? budget.over : [];
   const urgentItems: AttentionItem[] = urgent
     ? [
         ...urgent.overdue.map((task) => ({
@@ -137,6 +145,37 @@ export function HomeAttentionSurface({
           label: task.title,
         }))}
       />
+      {budget?.kind === "plan" && overBudget.length ? (
+        <AttentionCard
+          id="attention-budget"
+          href={budgetHref()}
+          linkLabel="Open budget"
+          icon={
+            <CircleAlert
+              aria-hidden="true"
+              className="text-destructive size-4"
+            />
+          }
+          title="Over budget"
+          detail={`${overBudget.length} ${overBudget.length === 1 ? "category" : "categories"} over budget in ${monthName(budget.month)}`}
+          items={overBudget.map((line) => ({
+            id: line.categoryId,
+            label: line.categoryName,
+            hint: (
+              <>
+                <Amount
+                  money={{
+                    ...line.remaining,
+                    amount: -line.remaining.amount,
+                  }}
+                />{" "}
+                over
+              </>
+            ),
+          }))}
+        />
+      ) : null}
+      <HomeBudgetCard budget={budget} today={today} />
     </div>
   );
 }
