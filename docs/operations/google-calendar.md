@@ -2,7 +2,7 @@
 
 Life OS connects to the owner's one Google account through an OAuth client in the owner's own Google Cloud project. The client credentials and the token key live only in the server's ignored `.env`; Calendar stores the refresh token encrypted in its database. How the connection works is described in [Calendar: Google Calendar connection](../services/calendar.md#google-calendar-connection).
 
-This release connects the account and records which calendars will sync; events start syncing in a later release (P11-02).
+Once connected, the calendars you tick sync into Life OS every two minutes, one way: from Google into Life OS (see [Calendar: Google Calendar sync](../services/calendar.md#google-calendar-sync)). Changing those events from Life OS, and a dedicated "Life OS" calendar in Google for events created in Life OS, come later (P11-03).
 
 ## 1. Google Cloud project and API
 
@@ -55,6 +55,27 @@ Generate the token key once with `openssl rand -base64 32` and keep it: it decry
 
 Check: the Status page's **Calendar sources** card has a "Google Calendar" part, "Connected as …", and the Event Log shows "Google Calendar connected".
 
+## 6. Sync
+
+What you see once a calendar is ticked:
+
+- **Within moments** the calendar's first sync runs: its events from a year back and every future event appear in Life OS. The dialog shows under each ticked calendar "Waiting for its first sync…", then "Synced 10 Oct, 12:05 CEST · 143 events" (reopen the dialog to see it change), and the Event Log shows "Source refreshed: <calendar> — 143 added" by "Google Calendar sync".
+- **In Calendar** the events carry the calendar's name (like "ZAW" for the waste feed) and are read-only: change them in Google and Life OS follows within two minutes. Only their reminders can be changed here, and your own reminder changes stay even when Google changes the event. A recurring Google event repeats like one created in Life OS (with its skipped and changed occurrences); a rule Life OS cannot hold, such as "every second Tuesday", shows as separate events for the next 400 days. Work location markers (Home, Office) are not imported.
+- **Afterwards** every two minutes Life OS asks Google only for what changed. Syncs that change nothing leave no trace; one that changes something adds one Event Log entry ("Source refreshed: Family — 2 added, 1 changed"). Deleted events are cancelled in Life OS and kept as history.
+- **Unticking** a calendar removes its events from Life OS (they stay in Google; Event Log: "Source removed: Family — 42 events removed"). Ticking it again imports them again. **Disconnect** removes the events of every synced calendar.
+- **Status** (Calendar sources card, Google Calendar part) lists what syncs and the last sync; a calendar that fails three syncs in a row turns the card to Needs attention with Google's error.
+
+**Resync.** Not normally needed: Life OS lists a calendar in full by itself when Google asks for it (an expired sync token). To force a full listing of one calendar and keep your own reminder changes, run on the server:
+
+```sh
+docker compose exec calendar wget -qO- http://localhost:8080/v1/google/calendars   # find the calendar's "id"
+docker compose exec calendar wget -qO- --post-data= --header='X-Life-OS-Actor: user' 'http://localhost:8080/v1/google/calendars/<id>/sync?full=true'
+```
+
+The answer's `sync` says how it went. Unticking and ticking the calendar in the dialog also imports everything again, but drops your own reminder changes on its events and records the removal and the re-import in the Event Log.
+
+The sync interval is `LIFE_OS_CALENDAR_GOOGLE_SYNC_SECONDS` in `.env` (default 120, at least 30), applied with `docker compose up -d calendar`.
+
 ## Troubleshooting
 
 | Symptom | Cause and fix |
@@ -66,6 +87,10 @@ Check: the Status page's **Calendar sources** card has a "Google Calendar" part,
 | Status: "Google refused the connection" with `invalid_client` | The client secret changed or the client was deleted. Put the current secret in `.env`, restart Calendar, reconnect if needed. |
 | "cannot be decrypted with LIFE_OS_GOOGLE_TOKEN_KEY" | The key changed. Restore the old key, or reconnect Google with the new one. |
 | Refresh list: "Google could not be reached" | Calendar has no outbound https or Google is down. The connection is unchanged; try later. |
+| Dialog: "Sync failed: Google is unavailable …" | Google or the network failed. Nothing to do: the events from the last good sync stay, and the calendar is retried after 2, 4, 8 … up to 60 minutes. Status warns after three failures in a row. |
+| Dialog: "Sync failed: Google no longer has this calendar …" | The calendar was deleted or unshared in Google. **Refresh list**: a calendar Google no longer lists is dropped with its events. |
+| A Google event is missing in Life OS | Is its calendar ticked? Events that ended more than a year before the calendar's first sync, and work location markers, are not imported. A sync failure shows in the dialog and on Status. |
+| Life OS refuses to change or delete a Google event | Expected: synced events are changed in Google until two-way sync (P11-03). Reminders can be changed. An AI change of such an event waits in Human Review. |
 
 **Rotating the token key:** Disconnect in the dialog, change `LIFE_OS_GOOGLE_TOKEN_KEY`, `docker compose up -d calendar`, Connect again.
 
