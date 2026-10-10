@@ -14,10 +14,18 @@ import (
 
 func TestWritesRequireAnActor(t *testing.T) {
 	app := httpserver.New("finance", httpserver.WithLogger(httpserver.NewJSONLogger(io.Discard, nil)))
-	Register(app, NewHandler(nil))
-	write := func(actor string) (int, string) {
+	Register(app, NewHandler(nil, Options{}))
+	const id = "7f8d2b1e-1c1a-4b7e-9a51-2f0c6d1e9a10"
+	writes := []struct{ method, target string }{
+		{http.MethodPost, "/v1/accounts"}, {http.MethodPatch, "/v1/accounts/" + id},
+		{http.MethodPost, "/v1/transactions"}, {http.MethodPatch, "/v1/transactions/" + id}, {http.MethodDelete, "/v1/transactions/" + id},
+		{http.MethodPost, "/v1/categories"}, {http.MethodPatch, "/v1/categories/" + id},
+		{http.MethodPost, "/v1/categories/rules"}, {http.MethodPatch, "/v1/categories/rules/" + id}, {http.MethodDelete, "/v1/categories/rules/" + id},
+		{http.MethodPost, "/v1/categories/rules/apply"}, {http.MethodPost, "/v1/imports/csv"},
+	}
+	write := func(method, target, actor string) (int, string) {
 		t.Helper()
-		req := httptest.NewRequest(http.MethodPost, "/v1/transactions", strings.NewReader(`{`))
+		req := httptest.NewRequest(method, target, strings.NewReader(`{`))
 		req.Header.Set("content-type", "application/json")
 		if actor != "" {
 			req.Header.Set(activity.ActorHeader, actor)
@@ -32,14 +40,16 @@ func TestWritesRequireAnActor(t *testing.T) {
 		_ = json.NewDecoder(resp.Body).Decode(&body)
 		return resp.StatusCode, body.Error.Code
 	}
-	for _, actor := range []string{"", "agent:", "owner"} {
-		if status, code := write(actor); status != http.StatusBadRequest || code != activity.ActorRequiredCode {
-			t.Errorf("actor %q: %d %q, want 400 %s", actor, status, code, activity.ActorRequiredCode)
+	for _, route := range writes {
+		for _, actor := range []string{"", "agent:", "owner"} {
+			if status, code := write(route.method, route.target, actor); status != http.StatusBadRequest || code != activity.ActorRequiredCode {
+				t.Errorf("%s %s as %q: %d %q, want 400 %s", route.method, route.target, actor, status, code, activity.ActorRequiredCode)
+			}
 		}
 	}
 	// With an actor the request reaches the handler, which rejects the
 	// incomplete body on its own terms.
-	if status, code := write("dev:test"); status != http.StatusBadRequest || code == activity.ActorRequiredCode {
+	if status, code := write(http.MethodPost, "/v1/transactions", "dev:test"); status != http.StatusBadRequest || code == activity.ActorRequiredCode {
 		t.Errorf("declared actor: %d %q, want the handler's own 400", status, code)
 	}
 }

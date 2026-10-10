@@ -4,12 +4,16 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
+	// The alpine runtime image has no zoneinfo; embed it so the owner's
+	// timezone resolves.
+	_ "time/tzdata"
 
+	"github.com/GAMch1k/life-os/pkg/activity"
 	"github.com/GAMch1k/life-os/pkg/database"
 	"github.com/GAMch1k/life-os/pkg/httpserver"
 	"github.com/GAMch1k/life-os/services/finance/internal/api"
 	serviceconfig "github.com/GAMch1k/life-os/services/finance/internal/config"
-	repository "github.com/GAMch1k/life-os/services/finance/internal/repository/generated"
 )
 
 func main() {
@@ -26,17 +30,37 @@ func run(ctx context.Context) error {
 	}
 
 	logger := httpserver.NewJSONLogger(os.Stdout, cfg.ParsedLogLevel())
+	owner, err := cfg.OwnerLocation()
+	if err != nil {
+		logger.Warn("owner timezone", "error", err)
+	}
 	pool, err := database.Open(ctx, cfg.DatabaseConfig())
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
+
+	handler := api.NewHandler(pool, api.Options{
+		Location:        owner,
+		DefaultCurrency: cfg.DefaultCurrency,
+		Activity:        activity.NewEmitter(cfg.ActivityURL, "finance", logger),
+	})
+	// The built-in Cash account exists before the first request: a manual
+	// transaction without an account goes there.
+	ensureCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	cash, err := handler.EnsureCashAccount(ensureCtx)
+	cancel()
+	if err != nil {
+		pool.Close()
+		return fmt.Errorf("ensure the Cash account: %w", err)
+	}
+	logger.Info("built-in Cash account ready", "accountId", cash.ID.String(), "currency", cash.Currency)
 
 	app := httpserver.New(
 		cfg.ServiceName,
 		httpserver.WithLogger(logger),
 		httpserver.WithReadinessCheck(pool.Ping),
 	)
-	api.Register(app, api.NewHandler(repository.New(pool)))
+	api.Register(app, handler)
 	app.OnShutdown(database.ClosePool(pool))
 
 	return app.Run(fmt.Sprintf(":%d", cfg.Port))
