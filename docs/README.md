@@ -13,6 +13,7 @@ Life OS is a local-first personal operating system. This index is the human-read
 - [API overview](api/overview.md) — gateway addresses, all current endpoints, examples, and errors.
 - [Dashboard](frontend/dashboard.md), [data and code generation](development/data-and-codegen.md), and [operations](operations/deployment.md).
 - [Cloudflare Tunnel and Access](operations/cloudflare.md) — the authenticated public path to the gateway. Sign-off: [Phase 9 verification](verification/phase-9.md).
+- [ntfy](operations/ntfy.md) — the self-hosted ntfy server that pushes notifications to the owner's phone, on its own network and tunnel route.
 
 ## Scope
 

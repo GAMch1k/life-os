@@ -5,7 +5,7 @@ Notifications is the one path by which Life OS lets its owner know about somethi
 ## The one-path rule
 
 - Producers never talk to a channel (ntfy, a phone app, email) themselves. They post to `POST /v1/notifications`, from Go through `pkg/notify`.
-- A channel is a server-side concern. Swapping the first channel (a self-hosted ntfy, P12-02) for Life OS's own Android app later changes nothing for producers.
+- A channel is a server-side concern. Swapping the first channel (a self-hosted ntfy that reaches the owner's Android phone) for Life OS's own Android app later changes nothing for producers.
 - Every notification is stored and listed, whether or not any channel delivers it. The Dashboard notification list (P12-03) reads this API.
 - Notifications never reads another service's database, and no service reads `notifications_db`.
 
@@ -15,7 +15,7 @@ flowchart LR
   Inbox -- "pkg/notify" --> N
   Monitor -- "pkg/notify" --> N
   Dashboard -- "GET /api/notifications" --> Gateway --> N
-  N -- worker --> Channels["Channels (none yet; ntfy in P12-02)"]
+  N -- "worker (ntfy channel)" --> Ntfy["ntfy (self-hosted)"] -- "ntfy Android app" --> Phone["Owner's phone"]
   N -. record .-> Activity
 ```
 
@@ -43,7 +43,7 @@ flowchart LR
 | `medium` | Worth knowing soon. | Inbox needs Human Review; a Calendar event reminder. |
 | `low` | Informational. | Future Finance and Food messages. |
 
-There are no quiet hours. Every notification is delivered right away; how loudly it arrives is a channel's decision (a `low` one arrives silently). The unread count reports high-importance notifications separately for a navigation badge.
+There are no quiet hours. Every notification is delivered right away; how loudly it arrives is a channel's decision (a `low` one arrives silently; see [ntfy](#ntfy) for the priorities). The unread count reports high-importance notifications separately for a navigation badge.
 
 ### Source from the actor
 
@@ -79,13 +79,44 @@ When a notification is created, one `pending` delivery is queued for each channe
 
 ### Channels
 
-A channel implements `Name()` and `Send(ctx, notification) error` (`services/notifications/internal/delivery`). An error is retryable unless wrapped with `delivery.Permanent`; `delivery.Skip` ends the delivery as skipped. Channels are configured on the server only, in `NOTIFICATIONS_CHANNELS` (compose: `LIFE_OS_NOTIFICATIONS_CHANNELS`), comma-separated. An unknown name stops the service at startup.
+A channel implements `Name()` and `Send(ctx, notification) error` (`services/notifications/internal/delivery`). An error is retryable unless wrapped with `delivery.Permanent`; `delivery.Skip` ends the delivery as skipped. Channels are configured on the server only, in `NOTIFICATIONS_CHANNELS` (compose: `LIFE_OS_NOTIFICATIONS_CHANNELS`), comma-separated. An unknown name, or a channel missing its settings, stops the service at startup.
 
-- Configured today: **none**. Notifications are stored and listed in the Dashboard, and their `deliveries` are empty.
+- Empty (the default): notifications are stored and listed in the Dashboard, and their `deliveries` are empty.
+- `ntfy` pushes each notification to the owner's Android phone through the self-hosted ntfy server (below). The deployment uses `LIFE_OS_NOTIFICATIONS_CHANNELS=ntfy`.
 - `log` writes each delivery's metadata (never the body) to the service log. It is for development and verification of the delivery path.
-- `ntfy` (a self-hosted ntfy server) comes in P12-02. Life OS's own Android app replaces it later.
+
+Life OS's own Android app later becomes another channel next to or instead of ntfy.
 
 A delivery belongs to the channels enabled when its notification was created. Enabling a channel later does not deliver older notifications; removing one skips its pending deliveries.
+
+### ntfy
+
+The `ntfy` channel publishes to one private topic on the ntfy server in the Life OS stack ([setup and operations](../operations/ntfy.md)), over the `notify-edge` network (which only the Cloudflare connector, ntfy, and this service share) with ntfy's JSON publish API: `POST http://ntfy:80/` with `Authorization: Bearer <publisher token>` and
+
+| ntfy field | From the notification |
+| --- | --- |
+| `topic` | `NOTIFICATIONS_NTFY_TOPIC` (default `lifeos`) |
+| `title` | `title` |
+| `message` | `body`, or the title when the body is empty; cut at 3500 bytes (on a character boundary, with "…"), because ntfy turns a longer message into an attachment, which this server refuses |
+| `priority` | `importance`: `low` → 2 (silent, no sound or vibration), `medium` → 3 (default), `high` → 5 (max; the owner may let it through Do Not Disturb) |
+| `tags` | the category's domain as an emoji: `calendar` → 📅 `calendar`, `inbox` → 📥 `inbox_tray`, `status` → ⚠️ `warning`, `test` → 🧪 `test_tube`, `tasks` → ☑️ `ballot_box_with_check`, `finance` → 💰 `moneybag`; none for other domains |
+| `click` | `NOTIFICATIONS_LINK_BASE_URL` + `link`, for example `https://lifeos.gamch1k.com/calendar?date=2026-10-10`; without a link, `/notifications`. Tapping the notification opens that page (through Cloudflare Access) |
+
+Markdown stays off: bodies are plain text. Outcomes: 2xx is sent. ntfy refusing the request (400, 401, 403, 404, 413, a redirect, any other 4xx) is permanent: the configuration or the message is wrong, and the delivery fails at once with ntfy's error, for example `ntfy refused the notification: 401 unauthorized (ntfy code 40101)`. 408, 429, 5xx, and an unreachable ntfy (stopped, restarting, or its profile off) are retried with the usual backoff. The token is never logged or put in an error.
+
+Settings (compose sets them): `NOTIFICATIONS_NTFY_URL` (`http://ntfy:80`), `NOTIFICATIONS_NTFY_TOPIC` (`LIFE_OS_NTFY_TOPIC`), `NOTIFICATIONS_NTFY_TOKEN` (`LIFE_OS_NTFY_PUBLISHER_TOKEN`, a secret), and `NOTIFICATIONS_LINK_BASE_URL` (`LIFE_OS_PUBLIC_URL`, default `https://lifeos.gamch1k.com`).
+
+To send yourself a test notification (it arrives silently, with 🧪):
+
+```sh
+curl -X POST "$GATEWAY/api/notifications/v1/notifications" -H 'X-Life-OS-Actor: dev:curl' \
+  -H 'content-type: application/json' \
+  -d '{"title":"Test notification","body":"From Life OS","importance":"low","category":"test.manual","link":"/notifications","dedupeKey":"test.manual:'"$(date +%s)"'"}'
+```
+
+### Channel health
+
+`GET /v1/channels` lists each configured channel, in the configured order, with what its deliveries show: `lastSuccessAt` (the latest sent delivery), `lastFailureAt` and `lastError` (the latest delivery that failed or is waiting for a retry), `recentFailures` (deliveries that failed or wait for a retry, last changed in the past 24 hours), `retrying` and `pending` now, and a `state`: `ok` when the latest outcome was a success, `failing` when it was a failure, `idle` before the first outcome. Nothing is probed, so a broken channel shows only once a delivery has tried it, and stays failing until one succeeds (send a test notification after a fix). An empty list means no channel is configured. The Dashboard Status page shows it as the Notifications check.
 
 ## Activity
 
@@ -107,6 +138,7 @@ A notification keeps the sender's correlation id, so its delivery events join th
 - `POST /v1/notifications/{id}/read`: mark read; idempotent, an already read notification keeps its `readAt`.
 - `POST /v1/notifications/read-all`: mark every unread notification read, or with an optional body `{"before": "<RFC 3339>"}` only those created at or before that instant (so one that arrives while the owner looks at the list stays unread). Returns `{"marked": n}`.
 - `GET /v1/notifications/unread-count`: `{"count": n, "highCount": m}`, cheap enough for a navigation badge.
+- `GET /v1/channels`: the configured delivery channels and their health ([above](#channel-health)).
 
 Errors use the shared envelope `{"error": {"code", "message"}, "request_id"}`. Through the gateway only `user` and `dev:<name>` actors pass, as for every service.
 
@@ -136,10 +168,11 @@ err := notifier.Send(ctx, notify.Notification{
 ## Operations
 
 - Database: `notifications_db` / `notifications_user`, password `LIFE_OS_NOTIFICATIONS_DB_PASSWORD` in `.env`. Fresh volumes are provisioned automatically; for an existing deployment see [Operations](../operations/deployment.md#adding-the-notifications-service-to-an-existing-deployment).
-- Configuration (compose sets the first three): `DATABASE_URL`, `ACTIVITY_SERVICE_URL`, `NOTIFICATIONS_CHANNELS` (from `LIFE_OS_NOTIFICATIONS_CHANNELS`, empty by default), and the delivery settings above with their defaults.
-- The Dashboard reaches the service through `NOTIFICATIONS_SERVICE_URL` (server rendering) and `/api/notifications` (browser); the Status page lists it under Services.
+- Configuration (compose sets these): `DATABASE_URL`, `ACTIVITY_SERVICE_URL`, `NOTIFICATIONS_CHANNELS` (from `LIFE_OS_NOTIFICATIONS_CHANNELS`, empty by default), and the [ntfy settings](#ntfy); the delivery settings above keep their defaults.
+- The ntfy server is an opt-in container in the same stack (Compose profile `ntfy`); see [ntfy](../operations/ntfy.md) for the owner's setup, token rotation, and troubleshooting. The verification stack never receives the owner's channels or ntfy settings (`tools/verify-compose`).
+- The Dashboard reaches the service through `NOTIFICATIONS_SERVICE_URL` (server rendering) and `/api/notifications` (browser); the Status page lists it under Services and shows channel health as the Notifications check.
 - Retention: notifications are kept indefinitely for now.
-- Tests: unit tests (validation, actor to source, cursor, backoff, maximum age, error classes, configuration) and integration tests against the Postgres named by `NOTIFICATIONS_TEST_DATABASE_URL` (each test creates and drops its own schema; skipped when unset): sending, concurrent dedupe, filters and paging, read state, the unread count, migrations down and up, and the worker's sent, retry, permanent, maximum-age, skipped, expired-lease, and concurrent-worker paths. `pkg/notify` is tested against an in-process server.
+- Tests: unit tests (validation, actor to source, cursor, backoff, maximum age, error classes, configuration, the channel state, and the ntfy channel against a fake ntfy server: JSON request and token, priorities, tags, click links, truncation, refusals and retries, deadline) and integration tests against the Postgres named by `NOTIFICATIONS_TEST_DATABASE_URL` (each test creates and drops its own schema; skipped when unset): sending, concurrent dedupe, filters and paging, read state, the unread count, migrations down and up, and the worker's sent, retry, permanent, maximum-age, skipped, expired-lease, and concurrent-worker paths, and channel health. `pkg/notify` is tested against an in-process server.
 
 ```sh
 cd services/notifications
