@@ -130,6 +130,39 @@ func (e SourceRefreshOutcome) Valid() bool {
 	}
 }
 
+// Defines values for Weekday.
+const (
+	FR Weekday = "FR"
+	MO Weekday = "MO"
+	SA Weekday = "SA"
+	SU Weekday = "SU"
+	TH Weekday = "TH"
+	TU Weekday = "TU"
+	WE Weekday = "WE"
+)
+
+// Valid indicates whether the value is a known member of the Weekday enum.
+func (e Weekday) Valid() bool {
+	switch e {
+	case FR:
+		return true
+	case MO:
+		return true
+	case SA:
+		return true
+	case SU:
+		return true
+	case TH:
+		return true
+	case TU:
+		return true
+	case WE:
+		return true
+	default:
+		return false
+	}
+}
+
 // CalendarEvent defines model for CalendarEvent.
 type CalendarEvent struct {
 	AllDay bool `json:"allDay"`
@@ -159,10 +192,10 @@ type CalendarEvent struct {
 	Id                openapi_types.UUID `json:"id"`
 	Location          *string            `json:"location,omitempty"`
 
-	// Occurrence Set on an item that is one occurrence of a recurring event, as listing and search return them. The item's `id` and fields are the recurring event's (update or delete it to change every occurrence), except its start and end, which are this occurrence's.
+	// Occurrence Set on an item that is one occurrence of a recurring event, as listing, search, and the occurrence endpoints return them. The item's `id` and fields are the recurring event's (update or delete it to change every occurrence), with this occurrence's start and end, and with this occurrence's own changes applied (see `modified`).
 	Occurrence *EventOccurrence `json:"occurrence,omitempty"`
 
-	// Recurrence Repeats the event every `interval` days, weeks, months, or years from its start, as an iCalendar (RFC 5545) rule: a timed event keeps its wall-clock time in its `timeZone` (else the owner's timezone) across daylight saving changes, and a monthly event on the 31st skips months without one. `until` is the latest start of an occurrence (inclusive).
+	// Recurrence Repeats the event every `interval` days, weeks, months, or years from its start, as an iCalendar (RFC 5545) rule. A timed event keeps its wall-clock time in its `timeZone` (else the owner's timezone) across daylight saving changes. Weekly repeats on the start's weekday, or on each of `byWeekday` (which must include the start's weekday in the event's timezone; all-day: its startDate's). Monthly repeats on the start's day of the month and skips months without it (the 31st); yearly on the start's date: an all-day event on 17 September repeats annually on September 17, such as a birthday (29 February only in leap years). The series ends at `until`, the latest start of an occurrence (inclusive; an all-day series compares its dates with until's date in the owner's timezone; not before the event's start), or after `count` occurrences, or never; not both. Errors (400): `recurrence frequency must be daily, weekly, monthly, or yearly`, `recurrence interval must be at least 1`, `recurrence byWeekday is only for weekly recurrence`, `recurrence byWeekday days must be MO, TU, WE, TH, FR, SA, or SU`, `recurrence byWeekday must include the weekday the event starts on (<Weekday>)`, `recurrence count must be between 1 and 1000`, `recurrence takes until or count, not both`, `recurrence until must not be before the event starts`.
 	Recurrence *Recurrence `json:"recurrence,omitempty"`
 
 	// Reminders The event's own reminders, added to its defaults when `useDefaultReminders` is true.
@@ -180,7 +213,7 @@ type CalendarEvent struct {
 	// StartDate First day of an all-day event.
 	StartDate *openapi_types.Date `json:"startDate,omitempty"`
 
-	// Status `cancelled` events are kept as history but left out of listings and search unless asked for.
+	// Status `cancelled` events are kept as history but left out of listings and search unless asked for. An occurrence of a recurring event is cancelled when its series is or when it is skipped on its own.
 	Status EventStatus `json:"status"`
 
 	// TimeZone IANA timezone a timed event was scheduled in (for example an ICS TZID); a display hint. Null for all-day events and when unknown.
@@ -249,7 +282,7 @@ type CreateEventRequest struct {
 	ExternalReference *ExternalReference `json:"externalReference,omitempty"`
 	Location          *string            `json:"location,omitempty"`
 
-	// Recurrence Repeats the event every `interval` days, weeks, months, or years from its start, as an iCalendar (RFC 5545) rule: a timed event keeps its wall-clock time in its `timeZone` (else the owner's timezone) across daylight saving changes, and a monthly event on the 31st skips months without one. `until` is the latest start of an occurrence (inclusive).
+	// Recurrence Repeats the event every `interval` days, weeks, months, or years from its start, as an iCalendar (RFC 5545) rule. A timed event keeps its wall-clock time in its `timeZone` (else the owner's timezone) across daylight saving changes. Weekly repeats on the start's weekday, or on each of `byWeekday` (which must include the start's weekday in the event's timezone; all-day: its startDate's). Monthly repeats on the start's day of the month and skips months without it (the 31st); yearly on the start's date: an all-day event on 17 September repeats annually on September 17, such as a birthday (29 February only in leap years). The series ends at `until`, the latest start of an occurrence (inclusive; an all-day series compares its dates with until's date in the owner's timezone; not before the event's start), or after `count` occurrences, or never; not both. Errors (400): `recurrence frequency must be daily, weekly, monthly, or yearly`, `recurrence interval must be at least 1`, `recurrence byWeekday is only for weekly recurrence`, `recurrence byWeekday days must be MO, TU, WE, TH, FR, SA, or SU`, `recurrence byWeekday must include the weekday the event starts on (<Weekday>)`, `recurrence count must be between 1 and 1000`, `recurrence takes until or count, not both`, `recurrence until must not be before the event starts`.
 	Recurrence *Recurrence `json:"recurrence,omitempty"`
 
 	// Reminders The event's own reminders, added to its defaults; leave out for none.
@@ -289,9 +322,12 @@ type EventList struct {
 	NextCursor *string `json:"nextCursor,omitempty"`
 }
 
-// EventOccurrence Set on an item that is one occurrence of a recurring event, as listing and search return them. The item's `id` and fields are the recurring event's (update or delete it to change every occurrence), except its start and end, which are this occurrence's.
+// EventOccurrence Set on an item that is one occurrence of a recurring event, as listing, search, and the occurrence endpoints return them. The item's `id` and fields are the recurring event's (update or delete it to change every occurrence), with this occurrence's start and end, and with this occurrence's own changes applied (see `modified`).
 type EventOccurrence struct {
-	// RecurrenceId The occurrence's start, unique within its series: an RFC 3339 instant in UTC for timed events, a date (YYYY-MM-DD) for all-day events.
+	// Modified This occurrence has its own changes (This event): title, description, location, start and end, or reminders differ from the series'. A skipped occurrence shows `status: cancelled` instead.
+	Modified bool `json:"modified"`
+
+	// RecurrenceId The occurrence's original start, unique within its series and kept when the occurrence is moved: an RFC 3339 instant in UTC for timed events, a date (YYYY-MM-DD) for all-day events.
 	RecurrenceId string `json:"recurrenceId"`
 
 	// SeriesId The recurring event this is an occurrence of (the same as the item's id).
@@ -316,7 +352,7 @@ type EventSource struct {
 // EventSourceKind `manual`: created in Life OS (the Dashboard, MCP, or a capture). `ics`: imported from an ICS/iCal feed. `google`: synchronized from Google Calendar.
 type EventSourceKind string
 
-// EventStatus `cancelled` events are kept as history but left out of listings and search unless asked for.
+// EventStatus `cancelled` events are kept as history but left out of listings and search unless asked for. An occurrence of a recurring event is cancelled when its series is or when it is skipped on its own.
 type EventStatus string
 
 // ExternalReference Legacy provider reference, kept for compatibility. New code uses `source`.
@@ -327,11 +363,18 @@ type ExternalReference struct {
 	Provider   string `json:"provider"`
 }
 
-// Recurrence Repeats the event every `interval` days, weeks, months, or years from its start, as an iCalendar (RFC 5545) rule: a timed event keeps its wall-clock time in its `timeZone` (else the owner's timezone) across daylight saving changes, and a monthly event on the 31st skips months without one. `until` is the latest start of an occurrence (inclusive).
+// Recurrence Repeats the event every `interval` days, weeks, months, or years from its start, as an iCalendar (RFC 5545) rule. A timed event keeps its wall-clock time in its `timeZone` (else the owner's timezone) across daylight saving changes. Weekly repeats on the start's weekday, or on each of `byWeekday` (which must include the start's weekday in the event's timezone; all-day: its startDate's). Monthly repeats on the start's day of the month and skips months without it (the 31st); yearly on the start's date: an all-day event on 17 September repeats annually on September 17, such as a birthday (29 February only in leap years). The series ends at `until`, the latest start of an occurrence (inclusive; an all-day series compares its dates with until's date in the owner's timezone; not before the event's start), or after `count` occurrences, or never; not both. Errors (400): `recurrence frequency must be daily, weekly, monthly, or yearly`, `recurrence interval must be at least 1`, `recurrence byWeekday is only for weekly recurrence`, `recurrence byWeekday days must be MO, TU, WE, TH, FR, SA, or SU`, `recurrence byWeekday must include the weekday the event starts on (<Weekday>)`, `recurrence count must be between 1 and 1000`, `recurrence takes until or count, not both`, `recurrence until must not be before the event starts`.
 type Recurrence struct {
+	// ByWeekday Weekly only: the days of the week it repeats on, including the start's weekday. Returned in week order (MO first), each day once; absent means the start's weekday.
+	ByWeekday *[]Weekday `json:"byWeekday,omitempty"`
+
+	// Count Ends after this many occurrences ("ends after N times"). Not with until.
+	Count     *int                `json:"count,omitempty"`
 	Frequency RecurrenceFrequency `json:"frequency"`
 	Interval  int                 `json:"interval"`
-	Until     *time.Time          `json:"until,omitempty"`
+
+	// Until The latest start of an occurrence (inclusive). Not with count.
+	Until *time.Time `json:"until,omitempty"`
 }
 
 // RecurrenceFrequency defines model for Recurrence.Frequency.
@@ -434,7 +477,7 @@ type UpdateEventRequest struct {
 	EndDate     *openapi_types.Date `json:"endDate,omitempty"`
 	Location    *string             `json:"location,omitempty"`
 
-	// Recurrence Repeats the event every `interval` days, weeks, months, or years from its start, as an iCalendar (RFC 5545) rule: a timed event keeps its wall-clock time in its `timeZone` (else the owner's timezone) across daylight saving changes, and a monthly event on the 31st skips months without one. `until` is the latest start of an occurrence (inclusive).
+	// Recurrence Repeats the event every `interval` days, weeks, months, or years from its start, as an iCalendar (RFC 5545) rule. A timed event keeps its wall-clock time in its `timeZone` (else the owner's timezone) across daylight saving changes. Weekly repeats on the start's weekday, or on each of `byWeekday` (which must include the start's weekday in the event's timezone; all-day: its startDate's). Monthly repeats on the start's day of the month and skips months without it (the 31st); yearly on the start's date: an all-day event on 17 September repeats annually on September 17, such as a birthday (29 February only in leap years). The series ends at `until`, the latest start of an occurrence (inclusive; an all-day series compares its dates with until's date in the owner's timezone; not before the event's start), or after `count` occurrences, or never; not both. Errors (400): `recurrence frequency must be daily, weekly, monthly, or yearly`, `recurrence interval must be at least 1`, `recurrence byWeekday is only for weekly recurrence`, `recurrence byWeekday days must be MO, TU, WE, TH, FR, SA, or SU`, `recurrence byWeekday must include the weekday the event starts on (<Weekday>)`, `recurrence count must be between 1 and 1000`, `recurrence takes until or count, not both`, `recurrence until must not be before the event starts`.
 	Recurrence *Recurrence `json:"recurrence,omitempty"`
 
 	// Reminders Replaces the event's own reminders. Null returns the event to its defaults alone: no own reminders, and `useDefaultReminders` true unless the body sets it.
@@ -442,13 +485,31 @@ type UpdateEventRequest struct {
 	StartAt   *time.Time          `json:"startAt,omitempty"`
 	StartDate *openapi_types.Date `json:"startDate,omitempty"`
 
-	// Status `cancelled` events are kept as history but left out of listings and search unless asked for.
+	// Status `cancelled` events are kept as history but left out of listings and search unless asked for. An occurrence of a recurring event is cancelled when its series is or when it is skipped on its own.
 	Status   *EventStatus `json:"status,omitempty"`
 	TimeZone *string      `json:"timeZone,omitempty"`
 	Title    *string      `json:"title,omitempty"`
 
 	// UseDefaultReminders Turns the default reminders on or off; the event's own reminders stay.
 	UseDefaultReminders *bool `json:"useDefaultReminders,omitempty"`
+}
+
+// UpdateOccurrenceRequest One occurrence's own changes. The start and end keep the series' kind (`startAt`/`endAt` for a timed series, `startDate`/`endDate` for an all-day one). `reminders: null` gives the occurrence no own reminders and turns its defaults on unless the body sets `useDefaultReminders`.
+type UpdateOccurrenceRequest struct {
+	// AllDay Must be the series' allDay: an occurrence cannot switch between timed and all-day.
+	AllDay      *bool               `json:"allDay,omitempty"`
+	Description *string             `json:"description,omitempty"`
+	EndAt       *time.Time          `json:"endAt,omitempty"`
+	EndDate     *openapi_types.Date `json:"endDate,omitempty"`
+	Location    *string             `json:"location,omitempty"`
+	Reminders   *[]Reminder         `json:"reminders,omitempty"`
+	StartAt     *time.Time          `json:"startAt,omitempty"`
+	StartDate   *openapi_types.Date `json:"startDate,omitempty"`
+
+	// Status `cancelled` events are kept as history but left out of listings and search unless asked for. An occurrence of a recurring event is cancelled when its series is or when it is skipped on its own.
+	Status              *EventStatus `json:"status,omitempty"`
+	Title               *string      `json:"title,omitempty"`
+	UseDefaultReminders *bool        `json:"useDefaultReminders,omitempty"`
 }
 
 // UpdateSettingsRequest defines model for UpdateSettingsRequest.
@@ -472,11 +533,20 @@ type UpdateSourceRequest struct {
 	Url    *string       `json:"url,omitempty"`
 }
 
+// Weekday A day of the week, as in iCalendar (MO is Monday).
+type Weekday string
+
 // Cursor defines model for Cursor.
 type Cursor = string
 
+// EventId defines model for EventId.
+type EventId = openapi_types.UUID
+
 // IncludeCancelled defines model for IncludeCancelled.
 type IncludeCancelled = bool
+
+// RecurrenceId defines model for RecurrenceId.
+type RecurrenceId = string
 
 // SourceId defines model for SourceId.
 type SourceId = openapi_types.UUID
@@ -546,6 +616,12 @@ type CreateEventJSONRequestBody = CreateEventRequest
 // UpdateEventJSONRequestBody defines body for UpdateEvent for application/json ContentType.
 type UpdateEventJSONRequestBody = UpdateEventRequest
 
+// UpdateEventOccurrenceJSONRequestBody defines body for UpdateEventOccurrence for application/json ContentType.
+type UpdateEventOccurrenceJSONRequestBody = UpdateOccurrenceRequest
+
+// SplitEventSeriesJSONRequestBody defines body for SplitEventSeries for application/json ContentType.
+type SplitEventSeriesJSONRequestBody = UpdateEventRequest
+
 // UpdateSettingsJSONRequestBody defines body for UpdateSettings for application/json ContentType.
 type UpdateSettingsJSONRequestBody = UpdateSettingsRequest
 
@@ -575,6 +651,18 @@ type ServerInterface interface {
 	// UpdateEvent Update a calendar event
 	// (PATCH /v1/events/{eventId})
 	UpdateEvent(c fiber.Ctx, eventId openapi_types.UUID) error
+	// GetEventOccurrence Get one occurrence of a recurring event
+	// (GET /v1/events/{eventId}/occurrences/{recurrenceId})
+	GetEventOccurrence(c fiber.Ctx, eventId EventId, recurrenceId RecurrenceId) error
+	// UpdateEventOccurrence Change one occurrence of a recurring event (This event)
+	// (PATCH /v1/events/{eventId}/occurrences/{recurrenceId})
+	UpdateEventOccurrence(c fiber.Ctx, eventId EventId, recurrenceId RecurrenceId) error
+	// SplitEventSeries Change this and following occurrences
+	// (POST /v1/events/{eventId}/occurrences/{recurrenceId}/split)
+	SplitEventSeries(c fiber.Ctx, eventId EventId, recurrenceId RecurrenceId) error
+	// TruncateEventSeries Delete this and following occurrences
+	// (POST /v1/events/{eventId}/occurrences/{recurrenceId}/truncate)
+	TruncateEventSeries(c fiber.Ctx, eventId EventId, recurrenceId RecurrenceId) error
 	// GetSettings Get the Calendar settings
 	// (GET /v1/settings)
 	GetSettings(c fiber.Ctx) error
@@ -894,6 +982,154 @@ func (siw *ServerInterfaceWrapper) UpdateEvent(c fiber.Ctx) error {
 	return handler(c)
 }
 
+// GetEventOccurrence operation middleware
+func (siw *ServerInterfaceWrapper) GetEventOccurrence(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "eventId" -------------
+	var eventId EventId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "eventId", c.Params("eventId"), &eventId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter eventId: %w", err).Error())
+	}
+
+	// ------------- Path parameter "recurrenceId" -------------
+	var recurrenceId RecurrenceId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "recurrenceId", c.Params("recurrenceId"), &recurrenceId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter recurrenceId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.GetEventOccurrence(c, eventId, recurrenceId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// UpdateEventOccurrence operation middleware
+func (siw *ServerInterfaceWrapper) UpdateEventOccurrence(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "eventId" -------------
+	var eventId EventId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "eventId", c.Params("eventId"), &eventId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter eventId: %w", err).Error())
+	}
+
+	// ------------- Path parameter "recurrenceId" -------------
+	var recurrenceId RecurrenceId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "recurrenceId", c.Params("recurrenceId"), &recurrenceId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter recurrenceId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.UpdateEventOccurrence(c, eventId, recurrenceId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// SplitEventSeries operation middleware
+func (siw *ServerInterfaceWrapper) SplitEventSeries(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "eventId" -------------
+	var eventId EventId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "eventId", c.Params("eventId"), &eventId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter eventId: %w", err).Error())
+	}
+
+	// ------------- Path parameter "recurrenceId" -------------
+	var recurrenceId RecurrenceId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "recurrenceId", c.Params("recurrenceId"), &recurrenceId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter recurrenceId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.SplitEventSeries(c, eventId, recurrenceId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// TruncateEventSeries operation middleware
+func (siw *ServerInterfaceWrapper) TruncateEventSeries(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "eventId" -------------
+	var eventId EventId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "eventId", c.Params("eventId"), &eventId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter eventId: %w", err).Error())
+	}
+
+	// ------------- Path parameter "recurrenceId" -------------
+	var recurrenceId RecurrenceId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "recurrenceId", c.Params("recurrenceId"), &recurrenceId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter recurrenceId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.TruncateEventSeries(c, eventId, recurrenceId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
 // GetSettings operation middleware
 func (siw *ServerInterfaceWrapper) GetSettings(c fiber.Ctx) error {
 
@@ -1116,6 +1352,14 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	router.Get(options.BaseURL+"/v1/events/:eventId", wrapper.GetEvent)
 
 	router.Patch(options.BaseURL+"/v1/events/:eventId", wrapper.UpdateEvent)
+
+	router.Get(options.BaseURL+"/v1/events/:eventId/occurrences/:recurrenceId", wrapper.GetEventOccurrence)
+
+	router.Patch(options.BaseURL+"/v1/events/:eventId/occurrences/:recurrenceId", wrapper.UpdateEventOccurrence)
+
+	router.Post(options.BaseURL+"/v1/events/:eventId/occurrences/:recurrenceId/split", wrapper.SplitEventSeries)
+
+	router.Post(options.BaseURL+"/v1/events/:eventId/occurrences/:recurrenceId/truncate", wrapper.TruncateEventSeries)
 
 	router.Get(options.BaseURL+"/v1/sources", wrapper.ListSources)
 

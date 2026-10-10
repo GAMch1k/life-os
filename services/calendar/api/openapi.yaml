@@ -35,6 +35,19 @@ info:
     defaults from Calendar settings, one list for timed and one for all-day
     events. Calendar stores reminder intent only and delivers no
     notifications.
+
+
+    Recurring events work like Google Calendar's. A recurring event (a
+    series) is stored once with its `recurrence` rule and listed as its
+    occurrences, each identified by `occurrence.recurrenceId` (its original
+    start). Changes have three scopes: **This event**
+    (`PATCH /v1/events/{eventId}/occurrences/{recurrenceId}`: one
+    occurrence's own changes, or `status: cancelled` to skip it), **This and
+    following** (`POST .../split` to change, `POST .../truncate` to delete:
+    the series ends before that occurrence), and **All events**
+    (`PATCH`/`DELETE /v1/events/{eventId}`). Only events created in Life OS
+    (`source.kind` `manual`) recur this way; an imported feed's recurring
+    events are stored one event per occurrence.
   license: {name: UNLICENSED, url: https://life-os.local/license}
 servers: [{url: http://calendar:8080}]
 paths:
@@ -52,8 +65,13 @@ paths:
         without `nextCursor` is the last page. A recurring event is expanded:
         each occurrence that overlaps the range is listed in its place in the
         order, with the recurring event's `id` and fields but its own start
-        and end, and `occurrence` set. Non-recurring events are returned as
-        stored.
+        and end, and `occurrence` set. An occurrence's own changes (This
+        event) apply: a moved occurrence is listed at its new time (also when
+        it moved into the range from outside it, and not when it moved out),
+        an edited one with its own fields, both with `occurrence.modified`
+        true; a skipped (cancelled) occurrence is left out unless
+        `includeCancelled` is true, then listed with `status: cancelled` and
+        `cancelledAt`. Non-recurring events are returned as stored.
       operationId: listEvents
       security: []
       parameters:
@@ -100,7 +118,11 @@ paths:
         is returned as occurrences (with `occurrence` set, as in listing):
         every occurrence in the range when both `from` and `to` are given,
         otherwise one, its next occurrence not over yet, or its last one if
-        it has ended.
+        it has ended. Occurrences carry their own changes as in listing; a
+        skipped occurrence is passed over (the next one represents the series)
+        unless `includeCancelled` is true. Words are matched against the
+        series' title, location, and description, not against one
+        occurrence's own changes to them.
       operationId: searchEvents
       security: []
       parameters:
@@ -139,7 +161,12 @@ paths:
         listings; `status: active` restores it. An event imported from a
         source (`source.kind` other than `manual`) is read-only except for
         `reminders` and `useDefaultReminders`: naming any other field returns
-        409 `managed_by_source`.
+        409 `managed_by_source`. For a recurring event this is **All events**:
+        every occurrence changes. Occurrences keep their own changes, except
+        that a change of the start, the kind (`allDay`), `timeZone`, or the
+        `recurrence` rule removes the changes and skips of occurrences that no
+        longer exist (an occurrence exists while the series still has an
+        occurrence with the same original start, its `recurrenceId`).
       operationId: updateEvent
       security: []
       parameters: [{name: eventId, in: path, required: true, schema: {type: string, format: uuid}}]
@@ -151,7 +178,7 @@ paths:
         '409': {description: 'The event kept changing concurrently (retry the update), or it is imported and the update names more than its reminders (managed_by_source)'}
     delete:
       summary: Delete a calendar event
-      description: 'Removes the event permanently. Set `status: cancelled` instead to keep it as history. Imported events cannot be deleted (409 `managed_by_source`): their source removes them.'
+      description: 'Removes the event permanently; for a recurring event every occurrence and its own changes (**All events**). Set `status: cancelled` instead to keep it as history. Imported events cannot be deleted (409 `managed_by_source`): their source removes them.'
       operationId: deleteEvent
       security: []
       parameters: [{name: eventId, in: path, required: true, schema: {type: string, format: uuid}}]
@@ -160,6 +187,106 @@ paths:
         '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}
         '404': {description: Event not found}
         '409': {description: The event is imported from a source (managed_by_source)}
+  /v1/events/{eventId}/occurrences/{recurrenceId}:
+    get:
+      summary: Get one occurrence of a recurring event
+      description: >-
+        The occurrence as listing returns it, with its own changes applied
+        and `occurrence` set, whatever its status (a skipped occurrence has
+        `status: cancelled`). 404 when the event does not repeat (`this event
+        does not repeat`) or `recurrenceId` is not one of its occurrences
+        (`occurrence not found`).
+      operationId: getEventOccurrence
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/EventId'
+        - $ref: '#/components/parameters/RecurrenceId'
+      responses:
+        '200': {description: Occurrence, content: {application/json: {schema: {$ref: '#/components/schemas/CalendarEvent'}}}}
+        '400': {description: Invalid request}
+        '404': {description: 'Event not found (`event not found`), it does not repeat (`this event does not repeat`), or no such occurrence (`occurrence not found`)'}
+    patch:
+      summary: Change one occurrence of a recurring event (This event)
+      description: >-
+        **This event**: changes only this occurrence; the series and its
+        other occurrences stay. Only the fields present change, as for
+        updating an event; `description` or `location` set to null is cleared
+        for this occurrence only. A new start and end keep the series' kind:
+        `startAt`/`endAt` for a timed series, `startDate`/`endDate` for an
+        all-day one; `allDay` other than the series' returns 400 (`an
+        occurrence cannot switch between timed and all-day; change all events
+        instead`), and so do `recurrence` (`recurrence belongs to the series:
+        change all events, or this and following`) and `timeZone` (`timeZone
+        belongs to the series: change all events, or this and following`).
+        Other errors are those of updating an event, such as `endAt must be
+        after startAt`. `status: cancelled` skips the occurrence (kept as history, left
+        out of listings); `status: active` brings it back. A field set back to
+        the series' value stops being this occurrence's own change. Returns
+        the occurrence. An imported event returns 409 `managed_by_source`.
+      operationId: updateEventOccurrence
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/EventId'
+        - $ref: '#/components/parameters/RecurrenceId'
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateOccurrenceRequest'}}}}
+      responses:
+        '200': {description: The occurrence, content: {application/json: {schema: {$ref: '#/components/schemas/CalendarEvent'}}}}
+        '400': {description: 'Invalid request (the message says what to fix), or no valid X-Life-OS-Actor (actor_required)'}
+        '404': {description: 'Event not found, it does not repeat, or no such occurrence'}
+        '409': {description: 'The event is imported (managed_by_source)'}
+  /v1/events/{eventId}/occurrences/{recurrenceId}/split:
+    post:
+      summary: Change this and following occurrences
+      description: >-
+        **This and following**: the series ends with the occurrence before
+        this one (its `recurrence` gets `until` at that occurrence's start and
+        loses `count`), and a new series (a new event id) starts at this
+        occurrence with the body's changes, applied as for updating an event.
+        Without a `recurrence` in the body the new series repeats like the old
+        one; a `count` rule is shared out: the old series keeps the
+        occurrences before, the new one the remaining count. Times in the
+        body are the new series' start and end; leave them out to start it at
+        this occurrence's original time. Occurrence changes and skips from
+        this occurrence on move to the new series when their occurrence still
+        exists there (the same original start: no change of time, kind, time
+        zone, or rule), otherwise they are dropped; the fields the body sets
+        replace this occurrence's own changes to them. Returns the new series
+        (201). On the series' first occurrence nothing is split: the body
+        changes the series itself, as `PATCH /v1/events/{eventId}`, and the
+        series is returned (200). An imported event returns 409
+        `managed_by_source`.
+      operationId: splitEventSeries
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/EventId'
+        - $ref: '#/components/parameters/RecurrenceId'
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateEventRequest'}}}}
+      responses:
+        '200': {description: 'The occurrence is the first one: the series, changed', content: {application/json: {schema: {$ref: '#/components/schemas/CalendarEvent'}}}}
+        '201': {description: The new series, content: {application/json: {schema: {$ref: '#/components/schemas/CalendarEvent'}}}}
+        '400': {description: 'Invalid request (the message says what to fix), or no valid X-Life-OS-Actor (actor_required)'}
+        '404': {description: 'Event not found, it does not repeat, or no such occurrence'}
+        '409': {description: 'The event is imported (managed_by_source), or it kept changing concurrently (retry)'}
+  /v1/events/{eventId}/occurrences/{recurrenceId}/truncate:
+    post:
+      summary: Delete this and following occurrences
+      description: >-
+        **This and following**, deleted: the series ends with the occurrence
+        before this one (its `recurrence` gets `until` at that occurrence's
+        start and loses `count`), and the changes and skips of this and later
+        occurrences are removed. On the series' first occurrence the whole
+        series is deleted, as `DELETE /v1/events/{eventId}`. An imported event
+        returns 409 `managed_by_source`.
+      operationId: truncateEventSeries
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/EventId'
+        - $ref: '#/components/parameters/RecurrenceId'
+      responses:
+        '204': {description: 'The series ends before this occurrence, or is deleted'}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}
+        '404': {description: 'Event not found, it does not repeat, or no such occurrence'}
+        '409': {description: 'The event is imported (managed_by_source)'}
   /v1/sources:
     get:
       summary: List calendar sources
@@ -265,29 +392,57 @@ components:
     IncludeCancelled: {name: includeCancelled, in: query, description: Also return cancelled events (including those removed by their source)., schema: {type: boolean, default: false}}
     SourceKind: {name: sourceKind, in: query, description: Only events from this kind of source., schema: {$ref: '#/components/schemas/EventSourceKind'}}
     SourceId: {name: sourceId, in: query, description: Only events imported from this source., schema: {type: string, format: uuid}}
+    EventId: {name: eventId, in: path, required: true, schema: {type: string, format: uuid}}
+    RecurrenceId: {name: recurrenceId, in: path, required: true, description: 'The occurrence''s `occurrence.recurrenceId` from a listing (URL-encoded): an RFC 3339 instant for a timed series (2026-10-12T16:00:00Z), a date for an all-day one (2026-10-24).', schema: {type: string, minLength: 1, maxLength: 64}}
     Cursor: {name: cursor, in: query, description: The previous page's nextCursor. Opaque; only valid with the parameters it was returned for., schema: {type: string}}
   schemas:
+    Weekday:
+      type: string
+      enum: [MO, TU, WE, TH, FR, SA, SU]
+      description: A day of the week, as in iCalendar (MO is Monday).
     Recurrence:
       type: object
       description: >-
         Repeats the event every `interval` days, weeks, months, or years from
-        its start, as an iCalendar (RFC 5545) rule: a timed event keeps its
+        its start, as an iCalendar (RFC 5545) rule. A timed event keeps its
         wall-clock time in its `timeZone` (else the owner's timezone) across
-        daylight saving changes, and a monthly event on the 31st skips months
-        without one. `until` is the latest start of an occurrence (inclusive).
+        daylight saving changes. Weekly repeats on the start's weekday, or on
+        each of `byWeekday` (which must include the start's weekday in the
+        event's timezone; all-day: its startDate's). Monthly repeats on the
+        start's day of the month and skips months without it (the 31st);
+        yearly on the start's date: an all-day event on 17 September repeats
+        annually on September 17, such as a birthday (29 February only in leap
+        years). The series ends at `until`, the latest start of an occurrence
+        (inclusive; an all-day series compares its dates with until's date in
+        the owner's timezone; not before the event's start), or after `count`
+        occurrences, or never; not both. Errors (400): `recurrence frequency
+        must be daily, weekly, monthly, or yearly`, `recurrence interval must
+        be at least 1`, `recurrence byWeekday is only for weekly recurrence`,
+        `recurrence byWeekday days must be MO, TU, WE, TH, FR, SA, or SU`,
+        `recurrence byWeekday must include the weekday the event starts on
+        (<Weekday>)`, `recurrence count must be between 1 and 1000`,
+        `recurrence takes until or count, not both`, `recurrence until must
+        not be before the event starts`.
       required: [frequency, interval]
-      properties: {frequency: {type: string, enum: [daily, weekly, monthly, yearly]}, interval: {type: integer, minimum: 1}, until: {type: string, format: date-time, nullable: true}}
+      properties:
+        frequency: {type: string, enum: [daily, weekly, monthly, yearly]}
+        interval: {type: integer, minimum: 1}
+        until: {type: string, format: date-time, nullable: true, description: 'The latest start of an occurrence (inclusive). Not with count.'}
+        count: {type: integer, minimum: 1, maximum: 1000, nullable: true, description: 'Ends after this many occurrences ("ends after N times"). Not with until.'}
+        byWeekday: {type: array, nullable: true, minItems: 1, maxItems: 7, items: {$ref: '#/components/schemas/Weekday'}, description: 'Weekly only: the days of the week it repeats on, including the start''s weekday. Returned in week order (MO first), each day once; absent means the start''s weekday.'}
     EventOccurrence:
       type: object
       description: >-
-        Set on an item that is one occurrence of a recurring event, as listing
-        and search return them. The item's `id` and fields are the recurring
-        event's (update or delete it to change every occurrence), except its
-        start and end, which are this occurrence's.
-      required: [seriesId, recurrenceId]
+        Set on an item that is one occurrence of a recurring event, as listing,
+        search, and the occurrence endpoints return them. The item's `id` and
+        fields are the recurring event's (update or delete it to change every
+        occurrence), with this occurrence's start and end, and with this
+        occurrence's own changes applied (see `modified`).
+      required: [seriesId, recurrenceId, modified]
       properties:
         seriesId: {type: string, format: uuid, description: The recurring event this is an occurrence of (the same as the item's id).}
-        recurrenceId: {type: string, description: 'The occurrence''s start, unique within its series: an RFC 3339 instant in UTC for timed events, a date (YYYY-MM-DD) for all-day events.'}
+        recurrenceId: {type: string, description: 'The occurrence''s original start, unique within its series and kept when the occurrence is moved: an RFC 3339 instant in UTC for timed events, a date (YYYY-MM-DD) for all-day events.'}
+        modified: {type: boolean, description: 'This occurrence has its own changes (This event): title, description, location, start and end, or reminders differ from the series''. A skipped occurrence shows `status: cancelled` instead.'}
     ExternalReference:
       type: object
       deprecated: true
@@ -310,7 +465,7 @@ components:
     EventStatus:
       type: string
       enum: [active, cancelled]
-      description: '`cancelled` events are kept as history but left out of listings and search unless asked for.'
+      description: '`cancelled` events are kept as history but left out of listings and search unless asked for. An occurrence of a recurring event is cancelled when its series is or when it is skipped on its own.'
     Reminder:
       type: object
       description: >-
@@ -390,6 +545,26 @@ components:
         recurrence: {$ref: '#/components/schemas/Recurrence', nullable: true}
         reminders: {type: array, nullable: true, maxItems: 10, items: {$ref: '#/components/schemas/Reminder'}, description: 'Replaces the event''s own reminders. Null returns the event to its defaults alone: no own reminders, and `useDefaultReminders` true unless the body sets it.'}
         useDefaultReminders: {type: boolean, description: Turns the default reminders on or off; the event's own reminders stay.}
+        status: {$ref: '#/components/schemas/EventStatus'}
+    UpdateOccurrenceRequest:
+      type: object
+      minProperties: 1
+      description: >-
+        One occurrence's own changes. The start and end keep the series' kind
+        (`startAt`/`endAt` for a timed series, `startDate`/`endDate` for an
+        all-day one). `reminders: null` gives the occurrence no own reminders
+        and turns its defaults on unless the body sets `useDefaultReminders`.
+      properties:
+        title: {type: string, minLength: 1}
+        description: {type: string, nullable: true}
+        location: {type: string, nullable: true}
+        allDay: {type: boolean, description: 'Must be the series'' allDay: an occurrence cannot switch between timed and all-day.'}
+        startAt: {type: string, format: date-time}
+        endAt: {type: string, format: date-time}
+        startDate: {type: string, format: date}
+        endDate: {type: string, format: date}
+        reminders: {type: array, nullable: true, maxItems: 10, items: {$ref: '#/components/schemas/Reminder'}}
+        useDefaultReminders: {type: boolean}
         status: {$ref: '#/components/schemas/EventStatus'}
     EventList: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/CalendarEvent'}}, nextCursor: {type: string, nullable: true, description: Set when more events match; pass it as cursor for the next page.}}}
     CalendarSourceKind:
