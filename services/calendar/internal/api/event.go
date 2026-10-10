@@ -125,13 +125,13 @@ func (f eventFields) createParams() (store.CreateEventParams, error) {
 	if err != nil {
 		return store.CreateEventParams{}, err
 	}
-	frequency, interval, until := recurrence(f.Recurrence)
+	frequency, interval, until := recurrenceColumns(f.Recurrence)
 	return store.CreateEventParams{
 		Title: f.Title, Description: f.Description, Location: f.Location, AllDay: f.AllDay,
 		StartAt: timestamp(f.StartAt), EndAt: timestamp(f.EndAt), StartDate: datePointer(f.StartDate), EndDate: datePointer(f.EndDate),
 		TimeZone: f.TimeZone, RecurrenceFrequency: frequency, RecurrenceInterval: interval, RecurrenceUntil: until,
 		Reminders: reminders, Status: string(f.Status), CancelledAt: timestamp(f.CancelledAt),
-		SourceKind: string(generated.Manual), RemovedFromSourceAt: timestamp(f.RemovedFromSourceAt),
+		SourceKind: string(generated.EventSourceKindManual), RemovedFromSourceAt: timestamp(f.RemovedFromSourceAt),
 	}, nil
 }
 
@@ -140,7 +140,7 @@ func (f eventFields) updateParams(id pgtype.UUID, expectedUpdatedAt pgtype.Times
 	if err != nil {
 		return store.UpdateEventParams{}, err
 	}
-	frequency, interval, until := recurrence(f.Recurrence)
+	frequency, interval, until := recurrenceColumns(f.Recurrence)
 	return store.UpdateEventParams{
 		Title: f.Title, Description: f.Description, Location: f.Location, AllDay: f.AllDay,
 		StartAt: timestamp(f.StartAt), EndAt: timestamp(f.EndAt), StartDate: datePointer(f.StartDate), EndDate: datePointer(f.EndDate),
@@ -244,7 +244,7 @@ func decodeReminders(raw []byte) (*[]generated.Reminder, error) {
 	return &reminders, nil
 }
 
-func recurrence(value *generated.Recurrence) (*string, *int32, pgtype.Timestamptz) {
+func recurrenceColumns(value *generated.Recurrence) (*string, *int32, pgtype.Timestamptz) {
 	if value == nil {
 		return nil, nil, pgtype.Timestamptz{}
 	}

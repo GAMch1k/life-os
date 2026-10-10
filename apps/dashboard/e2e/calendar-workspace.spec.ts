@@ -429,6 +429,33 @@ test.describe("Calendar workspace", () => {
     );
   });
 
+  test("shows every occurrence of a weekly event in the month", async ({
+    page,
+    request,
+  }) => {
+    const day = addDays(today(), 1);
+    const title = `Workspace weekly ${stamp}`;
+    const created = await request.post("/api/calendar/v1/events", {
+      data: {
+        title,
+        allDay: false,
+        startAt: await berlinInstant(page, day, "08:00"),
+        endAt: await berlinInstant(page, day, "08:30"),
+        recurrence: { frequency: "weekly", interval: 1 },
+      },
+    });
+    expect(created.status()).toBe(201);
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+
+    // The list API expands the series server-side: one item per week.
+    await open(page, "list", day);
+    await expect(eventIn(page, title)).toHaveCount(5, { timeout: 15_000 });
+    await eventIn(page, title).nth(2).click();
+    await expect(page.getByRole("dialog")).toContainText(title);
+    expect(errors).toEqual([]);
+  });
+
   test("fits a 360px phone, opens in the list, and reads well in dark", async ({
     page,
   }) => {

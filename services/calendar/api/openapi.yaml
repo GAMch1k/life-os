@@ -19,6 +19,12 @@ info:
     the owner's timezone. Reads that compare all-day events with instants take
     a `timeZone` (an IANA name such as Europe/Berlin) and default to the
     owner's timezone configured for Calendar (LIFE_OS_TIMEZONE, else UTC).
+
+
+    Calendar sources are external feeds (ICS/iCal) whose events Calendar
+    imports and refreshes on its own schedule. Imported events are read-only
+    through this API except for their reminders; only their source changes,
+    cancels, or restores them.
   license: {name: UNLICENSED, url: https://life-os.local/license}
 servers: [{url: http://calendar:8080}]
 paths:
@@ -33,8 +39,11 @@ paths:
         Cancelled events are left out unless `includeCancelled` is true. When
         more events match than `limit`, `nextCursor` is set: pass it back as
         `cursor`, with the same parameters, for the next page. A response
-        without `nextCursor` is the last page. Recurring events are returned
-        once, as stored; occurrences are not expanded.
+        without `nextCursor` is the last page. A recurring event is expanded:
+        each occurrence that overlaps the range is listed in its place in the
+        order, with the recurring event's `id` and fields but its own start
+        and end, and `occurrence` set. Non-recurring events are returned as
+        stored.
       operationId: listEvents
       security: []
       parameters:
@@ -77,7 +86,11 @@ paths:
         first, soonest first, then past events, most recent first. Cancelled
         events are left out unless `includeCancelled` is true. Paging works as
         for listing; the cursor also keeps the moment that splits upcoming
-        from past, so later pages stay consistent.
+        from past, so later pages stay consistent. A matching recurring event
+        is returned as occurrences (with `occurrence` set, as in listing):
+        every occurrence in the range when both `from` and `to` are given,
+        otherwise one, its next occurrence not over yet, or its last one if
+        it has ended.
       operationId: searchEvents
       security: []
       parameters:
@@ -113,7 +126,9 @@ paths:
         `startDate`, `endDate`) are cleared and the new kind's start and end
         must be given. The result is validated as a whole, as on create.
         `status: cancelled` keeps the event as history and drops it from
-        listings; `status: active` restores it.
+        listings; `status: active` restores it. An event imported from a
+        source (`source.kind` other than `manual`) is read-only except for
+        `reminders`: naming any other field returns 409 `managed_by_source`.
       operationId: updateEvent
       security: []
       parameters: [{name: eventId, in: path, required: true, schema: {type: string, format: uuid}}]
@@ -122,10 +137,10 @@ paths:
         '200': {description: Event, content: {application/json: {schema: {$ref: '#/components/schemas/CalendarEvent'}}}}
         '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}
         '404': {description: Event not found}
-        '409': {description: The event kept changing concurrently; retry the update}
+        '409': {description: 'The event kept changing concurrently (retry the update), or it is imported and the update names more than reminders (managed_by_source)'}
     delete:
       summary: Delete a calendar event
-      description: 'Removes the event permanently. Set `status: cancelled` instead to keep it as history.'
+      description: 'Removes the event permanently. Set `status: cancelled` instead to keep it as history. Imported events cannot be deleted (409 `managed_by_source`): their source removes them.'
       operationId: deleteEvent
       security: []
       parameters: [{name: eventId, in: path, required: true, schema: {type: string, format: uuid}}]
@@ -133,6 +148,86 @@ paths:
         '204': {description: Event deleted}
         '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}
         '404': {description: Event not found}
+        '409': {description: The event is imported from a source (managed_by_source)}
+  /v1/sources:
+    get:
+      summary: List calendar sources
+      description: Every source, oldest first, with its configuration and refresh state.
+      operationId: listSources
+      security: []
+      responses:
+        '200': {description: Sources, content: {application/json: {schema: {$ref: '#/components/schemas/SourceList'}}}}
+        '400': {description: Invalid request}
+    post:
+      summary: Add a calendar source
+      description: >-
+        Subscribes to an ICS/iCal feed. The URL must be https and reach a
+        public address (Calendar refuses private, loopback, and link-local
+        addresses, also after redirects). An enabled source is imported
+        shortly after it is added and then refreshed daily at the configured
+        quiet hour in the owner's timezone.
+      operationId: createSource
+      security: []
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateSourceRequest'}}}}
+      responses:
+        '201': {description: Source, content: {application/json: {schema: {$ref: '#/components/schemas/CalendarSource'}}}}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}
+  /v1/sources/{sourceId}:
+    get:
+      summary: Get a calendar source
+      operationId: getSource
+      security: []
+      parameters: [{name: sourceId, in: path, required: true, schema: {type: string, format: uuid}}]
+      responses:
+        '200': {description: Source, content: {application/json: {schema: {$ref: '#/components/schemas/CalendarSource'}}}}
+        '400': {description: Invalid request}
+        '404': {description: Source not found}
+    patch:
+      summary: Update a calendar source
+      description: >-
+        Changes only the fields present in the body; `defaultReminders: null`
+        removes the default reminders. A changed `url` or `filter` makes the
+        next refresh download the feed in full and schedules it right away;
+        events that the new filter excludes are reconciled like events that
+        left the feed. Enabling a source schedules a refresh right away;
+        disabling it stops its refreshes and keeps its events.
+      operationId: updateSource
+      security: []
+      parameters: [{name: sourceId, in: path, required: true, schema: {type: string, format: uuid}}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateSourceRequest'}}}}
+      responses:
+        '200': {description: Source, content: {application/json: {schema: {$ref: '#/components/schemas/CalendarSource'}}}}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}
+        '404': {description: Source not found}
+        '409': {description: The source kept changing concurrently; retry the update}
+    delete:
+      summary: Delete a calendar source
+      description: 'Removes the source and every event imported from it. Set `enabled: false` instead to stop refreshing and keep its events.'
+      operationId: deleteSource
+      security: []
+      parameters: [{name: sourceId, in: path, required: true, schema: {type: string, format: uuid}}]
+      responses:
+        '204': {description: Source and its events deleted}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}
+        '404': {description: Source not found}
+  /v1/sources/{sourceId}/refresh:
+    post:
+      summary: Refresh a calendar source now
+      description: >-
+        Downloads the feed and reconciles its events right away (the
+        Dashboard's "Refresh now"), then returns the source. The request
+        succeeds whether or not the refresh does: read `refresh.lastOutcome`
+        and `refresh.lastError`. A failed refresh keeps the events from the
+        last good one and is retried with backoff. A refresh of the source
+        already running elsewhere returns 409 `refresh_in_progress`.
+      operationId: refreshSource
+      security: []
+      parameters: [{name: sourceId, in: path, required: true, schema: {type: string, format: uuid}}]
+      responses:
+        '200': {description: The source after the refresh, content: {application/json: {schema: {$ref: '#/components/schemas/CalendarSource'}}}}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}
+        '404': {description: Source not found}
+        '409': {description: 'The source is disabled (source_disabled), a refresh is already running (refresh_in_progress), or the source changed during the refresh (conflict)'}
 components:
   parameters:
     TimeZone: {name: timeZone, in: query, description: 'IANA timezone (for example Europe/Berlin) in which all-day dates are compared with instants. Defaults to the owner''s timezone configured for Calendar.', schema: {type: string, minLength: 1, maxLength: 64}}
@@ -141,7 +236,27 @@ components:
     SourceId: {name: sourceId, in: query, description: Only events imported from this source., schema: {type: string, format: uuid}}
     Cursor: {name: cursor, in: query, description: The previous page's nextCursor. Opaque; only valid with the parameters it was returned for., schema: {type: string}}
   schemas:
-    Recurrence: {type: object, required: [frequency, interval], properties: {frequency: {type: string, enum: [daily, weekly, monthly, yearly]}, interval: {type: integer, minimum: 1}, until: {type: string, format: date-time, nullable: true}}}
+    Recurrence:
+      type: object
+      description: >-
+        Repeats the event every `interval` days, weeks, months, or years from
+        its start, as an iCalendar (RFC 5545) rule: a timed event keeps its
+        wall-clock time in its `timeZone` (else the owner's timezone) across
+        daylight saving changes, and a monthly event on the 31st skips months
+        without one. `until` is the latest start of an occurrence (inclusive).
+      required: [frequency, interval]
+      properties: {frequency: {type: string, enum: [daily, weekly, monthly, yearly]}, interval: {type: integer, minimum: 1}, until: {type: string, format: date-time, nullable: true}}
+    EventOccurrence:
+      type: object
+      description: >-
+        Set on an item that is one occurrence of a recurring event, as listing
+        and search return them. The item's `id` and fields are the recurring
+        event's (update or delete it to change every occurrence), except its
+        start and end, which are this occurrence's.
+      required: [seriesId, recurrenceId]
+      properties:
+        seriesId: {type: string, format: uuid, description: The recurring event this is an occurrence of (the same as the item's id).}
+        recurrenceId: {type: string, description: 'The occurrence''s start, unique within its series: an RFC 3339 instant in UTC for timed events, a date (YYYY-MM-DD) for all-day events.'}
     ExternalReference:
       type: object
       deprecated: true
@@ -159,7 +274,7 @@ components:
       properties:
         kind: {$ref: '#/components/schemas/EventSourceKind'}
         sourceId: {type: string, format: uuid, nullable: true, description: 'The Calendar source (feed or connected calendar) the event was imported from; null for manual events.'}
-        externalUid: {type: string, nullable: true, description: 'The event''s identity in its source, such as an ICS UID; null for manual events.'}
+        externalUid: {type: string, nullable: true, description: 'The event''s identity in its source; null for manual events. For an ICS event, its UID; one occurrence of a recurring ICS event is imported as its own event, `<UID>#<RECURRENCE-ID>`, where the RECURRENCE-ID is its original start (20261017T040000Z, or 20261017 for an all-day event).'}
     EventStatus:
       type: string
       enum: [active, cancelled]
@@ -198,9 +313,11 @@ components:
         timeZone: {type: string, nullable: true, description: 'IANA timezone a timed event was scheduled in (for example an ICS TZID); a display hint. Null for all-day events and when unknown.'}
         recurrence: {$ref: '#/components/schemas/Recurrence'}
         reminders: {type: array, nullable: true, items: {$ref: '#/components/schemas/Reminder'}, description: 'Reminder intent. Null means the event follows its source''s (or the owner''s) defaults; an empty list means explicitly none.'}
+        effectiveReminders: {type: array, items: {$ref: '#/components/schemas/Reminder'}, description: 'The reminders that apply: `reminders` when set, else the default reminders of the event''s source, else none. Read-only.'}
+        occurrence: {$ref: '#/components/schemas/EventOccurrence'}
         status: {$ref: '#/components/schemas/EventStatus'}
         cancelledAt: {type: string, format: date-time, nullable: true, description: When the event was cancelled; set exactly when status is cancelled.}
-        removedFromSourceAt: {type: string, format: date-time, nullable: true, description: 'When an imported event disappeared from its source, which also cancels it; null for manual events.'}
+        removedFromSourceAt: {type: string, format: date-time, nullable: true, description: 'When an imported event disappeared from its source (or its source''s filter came to exclude it), which also cancels it; null for manual events and while the event is in its source.'}
         source: {$ref: '#/components/schemas/EventSource'}
         externalReference: {$ref: '#/components/schemas/ExternalReference'}
         createdAt: {type: string, format: date-time}
@@ -239,3 +356,85 @@ components:
         reminders: {type: array, nullable: true, maxItems: 10, items: {$ref: '#/components/schemas/Reminder'}, description: Replaces the reminders; null returns the event to the defaults.}
         status: {$ref: '#/components/schemas/EventStatus'}
     EventList: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/CalendarEvent'}}, nextCursor: {type: string, nullable: true, description: Set when more events match; pass it as cursor for the next page.}}}
+    CalendarSourceKind:
+      type: string
+      enum: [ics]
+      description: '`ics`: an ICS/iCal feed downloaded from a URL.'
+    SourceFilter:
+      type: object
+      description: >-
+        Which feed events to import. A term matches an event when it equals
+        one of the event's CATEGORIES or occurs in its SUMMARY (both
+        case-insensitive). With `include` terms, only events matching one of
+        them are imported; then events matching an `exclude` term are
+        dropped. Empty lists import everything.
+      required: [include, exclude]
+      properties:
+        include: {type: array, maxItems: 50, items: {type: string, minLength: 1, maxLength: 100}}
+        exclude: {type: array, maxItems: 50, items: {type: string, minLength: 1, maxLength: 100}}
+    SourceRefreshOutcome:
+      type: string
+      enum: [imported, not_modified, failed]
+      description: '`imported`: the feed was downloaded and its events reconciled. `not_modified`: the server confirmed the feed is unchanged (ETag/Last-Modified). `failed`: the refresh failed; the events from the last good refresh are kept.'
+    SourceRefreshCounts:
+      type: object
+      description: What the last reconciling refresh did.
+      required: [feedEvents, imported, inserted, updated, removed, restored, unchanged]
+      properties:
+        feedEvents: {type: integer, description: Events (occurrences) in the feed.}
+        imported: {type: integer, description: Feed events kept by the filter.}
+        inserted: {type: integer}
+        updated: {type: integer}
+        removed: {type: integer, description: 'Future events no longer in the feed (or now filtered out): cancelled and marked removedFromSourceAt.'}
+        restored: {type: integer, description: Events back in the feed after having been removed.}
+        unchanged: {type: integer}
+        skipped: {type: integer, description: Feed events that could not be read (such as a missing start) and were left out.}
+    SourceRefreshState:
+      type: object
+      description: The source's refresh schedule and last outcome (`lastOutcome` and `lastCounts` are absent before the first refresh). Read-only.
+      required: [consecutiveFailures, refreshing]
+      properties:
+        nextRefreshAt: {type: string, format: date-time, nullable: true, description: 'When the source is refreshed next (daily at the quiet hour, sooner after a failure).'}
+        lastAttemptAt: {type: string, format: date-time, nullable: true}
+        lastSuccessAt: {type: string, format: date-time, nullable: true}
+        lastOutcome: {$ref: '#/components/schemas/SourceRefreshOutcome'}
+        lastError: {type: string, nullable: true, description: Why the last refresh failed; null after a success.}
+        consecutiveFailures: {type: integer, description: Failed refreshes since the last success; drives the retry backoff.}
+        lastCounts: {$ref: '#/components/schemas/SourceRefreshCounts'}
+        etag: {type: string, nullable: true, description: 'The feed''s ETag from the last download, sent back as If-None-Match.'}
+        lastModified: {type: string, nullable: true, description: 'The feed''s Last-Modified from the last download, sent back as If-Modified-Since.'}
+        refreshing: {type: boolean, description: A refresh is running now.}
+    CalendarSource:
+      type: object
+      required: [id, kind, name, url, enabled, filter, defaultReminders, refresh, createdAt, updatedAt]
+      properties:
+        id: {type: string, format: uuid}
+        kind: {$ref: '#/components/schemas/CalendarSourceKind'}
+        name: {type: string, description: 'The label shown with the source''s events, such as "ZAW".'}
+        url: {type: string, description: The feed URL.}
+        enabled: {type: boolean, description: Disabled sources are not refreshed; their events stay as they are.}
+        filter: {$ref: '#/components/schemas/SourceFilter'}
+        defaultReminders: {type: array, nullable: true, items: {$ref: '#/components/schemas/Reminder'}, description: 'Reminder intent for this source''s events whose own reminders are null (for example the evening before a waste pickup, `{"kind":"localTime","daysBefore":1,"localTime":"19:00"}`). Null means none.'}
+        refresh: {$ref: '#/components/schemas/SourceRefreshState'}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time, description: When the configuration last changed.}
+    CreateSourceRequest:
+      type: object
+      required: [name, url]
+      properties:
+        kind: {$ref: '#/components/schemas/CalendarSourceKind'}
+        name: {type: string, minLength: 1, maxLength: 100}
+        url: {type: string, minLength: 1, maxLength: 2048, description: 'An https URL of an ICS/iCal feed (webcal:// is accepted and means https).'}
+        enabled: {type: boolean, default: true}
+        filter: {$ref: '#/components/schemas/SourceFilter'}
+        defaultReminders: {type: array, nullable: true, maxItems: 10, items: {$ref: '#/components/schemas/Reminder'}}
+    UpdateSourceRequest:
+      type: object
+      minProperties: 1
+      properties:
+        name: {type: string, minLength: 1, maxLength: 100}
+        url: {type: string, minLength: 1, maxLength: 2048}
+        enabled: {type: boolean}
+        filter: {$ref: '#/components/schemas/SourceFilter'}
+        defaultReminders: {type: array, nullable: true, maxItems: 10, items: {$ref: '#/components/schemas/Reminder'}, description: Replaces the default reminders; null removes them.}
+    SourceList: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/CalendarSource'}}}}

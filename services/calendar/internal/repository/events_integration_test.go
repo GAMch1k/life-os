@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	googleuuid "github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -20,6 +19,17 @@ import (
 func at(value time.Time) pgtype.Timestamptz { return pgtype.Timestamptz{Time: value, Valid: true} }
 func on(value time.Time) pgtype.Date        { return pgtype.Date{Time: value, Valid: true} }
 func text(value string) *string             { return &value }
+
+func source(t *testing.T, queries *store.Queries, name string) pgtype.UUID {
+	t.Helper()
+	created, err := queries.CreateSource(context.Background(), store.CreateSourceParams{
+		Kind: "ics", Name: name, Url: "https://calendar.example.org/" + name + ".ics", Enabled: true, FilterInclude: []string{}, FilterExclude: []string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return created.ID
+}
 
 func manualAllDay(title string, first, last time.Time) store.CreateEventParams {
 	return store.CreateEventParams{Title: title, AllDay: true, StartDate: on(first), EndDate: on(last), Status: "active", SourceKind: "manual"}
@@ -49,9 +59,15 @@ func TestEventPersistenceSupportsTimedAndAllDayEvents(t *testing.T) {
 	if allDay.Status != "active" || allDay.SourceKind != "manual" || allDay.Reminders != nil {
 		t.Fatalf("defaults: %+v", allDay)
 	}
+	// Listing returns the non-recurring event; the recurring one comes from
+	// its own query, for the API to expand into occurrences.
 	items, err := queries.ListEvents(ctx, store.ListEventsParams{TimeZone: "UTC", RangeStart: at(start), RangeEnd: at(end), PageLimit: 10})
-	if err != nil || len(items) != 2 || items[0].Event.ID != allDay.ID || items[1].Event.ID != timed.ID {
+	if err != nil || len(items) != 1 || items[0].Event.ID != timed.ID {
 		t.Fatalf("events=%#v err=%v", items, err)
+	}
+	recurring, err := queries.ListRecurringEvents(ctx, store.ListRecurringEventsParams{TimeZone: "UTC", RangeStart: at(start.AddDate(1, 0, 0)), RangeEnd: at(end.AddDate(1, 0, 0))})
+	if err != nil || len(recurring) != 1 || recurring[0].Event.ID != allDay.ID {
+		t.Fatalf("recurring=%#v err=%v", recurring, err)
 	}
 
 	// The update writes the merged row, guarded by the updated_at it read.
@@ -96,10 +112,14 @@ func TestLifecycleMigrationKeepsExistingEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	migrations := testdb.Migrations(t)
-	lifecycle := migrations[len(migrations)-1]
-	if filepath.Base(lifecycle) != "000004_event_lifecycle.up.sql" {
-		t.Fatalf("latest migration is %s", lifecycle)
+	var lifecycle string
+	for _, path := range testdb.Migrations(t) {
+		if filepath.Base(path) == "000004_event_lifecycle.up.sql" {
+			lifecycle = path
+		}
+	}
+	if lifecycle == "" {
+		t.Fatal("000004_event_lifecycle.up.sql not found")
 	}
 	testdb.Apply(t, pool, lifecycle)
 	queries := store.New(pool)
@@ -126,7 +146,7 @@ func TestEventConstraints(t *testing.T) {
 	ctx := context.Background()
 	queries := store.New(testdb.Open(t, ""))
 	pickup := time.Date(2026, time.November, 17, 5, 0, 0, 0, time.UTC)
-	feed := pgtype.UUID{Bytes: googleuuid.New(), Valid: true}
+	feed, secondFeed := source(t, queries, "zaw"), source(t, queries, "second")
 	imported := func(uid string) store.CreateEventParams {
 		params := manualTimed("Papier", pickup, pickup.Add(30*time.Minute))
 		params.SourceKind, params.SourceID, params.ExternalUid = "ics", feed, text(uid)
@@ -136,7 +156,7 @@ func TestEventConstraints(t *testing.T) {
 		t.Fatalf("imported event: %v", err)
 	}
 	other := imported("zaw-1")
-	other.SourceID = pgtype.UUID{Bytes: googleuuid.New(), Valid: true}
+	other.SourceID = secondFeed
 	if _, err := queries.CreateEvent(ctx, other); err != nil {
 		t.Fatalf("the same UID from another source: %v", err)
 	}

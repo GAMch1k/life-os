@@ -105,6 +105,16 @@ export function readOnlyReason(event: CalendarEvent) {
 }
 
 /**
+ * A key unique per listed item: occurrences of a recurring event share the
+ * event's id, so they are told apart by their recurrence id.
+ */
+export function occurrenceKey(event: CalendarEvent) {
+  return event.occurrence
+    ? `${event.id}:${event.occurrence.recurrenceId}`
+    : event.id;
+}
+
+/**
  * The event as FullCalendar input. An all-day event's last day is inclusive
  * in the API and its end exclusive in FullCalendar, so the end moves one day
  * later. Imported, cancelled, and recurring events can't be dragged.
@@ -113,7 +123,7 @@ export function toEventInput(event: CalendarEvent): EventInput | undefined {
   const imported = isImported(event);
   const cancelled = isCancelled(event);
   const common: EventInput = {
-    id: event.id,
+    id: occurrenceKey(event),
     title: event.title,
     editable: !imported && !cancelled && !event.recurrence,
     classNames: [

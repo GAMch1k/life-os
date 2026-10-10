@@ -72,8 +72,9 @@ The public gateway passes only `user` and `dev:<name>`: a claim to be the Life O
 | `inbox.item.resolved` / `.discarded` | inbox | `inbox_item` | Final Inbox state. |
 | `mcp.action.requested` / `.completed` / `.failed` | mcp | `mcp_action` | Every mutation tool call (Tasks, Calendar, Finance). Read and search tools are not recorded. The Dashboard shows this domain as "Agent changes". |
 | `task.created` / `.updated` / `.completed` / `.reopened` | tasks | `task` | Every Task mutation, from the Dashboard or an agent. |
+| `calendar.source.refreshed` / `.refresh_failed` | calendar | `calendar_source` | One per refresh of a subscribed feed (scheduled or "Refresh now"), by the source as `system:ics-<name>` (for example `system:ics-zaw`); `data` holds the counts (new, changed, removed, restored) or the error, and `requestedBy` for a manual refresh. Never the feed URL. |
 
-Other domains (Calendar, Finance) do not record their own events yet. Their agent-driven changes still appear as `mcp.action.*` events.
+Calendar records only its source refreshes; Calendar event edits and Finance changes are not recorded by their services yet. Their agent-driven changes still appear as `mcp.action.*` events.
 
 ## Correlation, causation, and subject
 

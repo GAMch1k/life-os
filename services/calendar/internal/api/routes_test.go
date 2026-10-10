@@ -44,10 +44,15 @@ func newTestApp(handler *Handler) *httpserver.App {
 func TestWritesRequireAnActor(t *testing.T) {
 	app := newTestApp(NewHandler(nil, ""))
 	const event = "/v1/events/7f8d2b1e-1c1a-4b7e-9a51-2f0c6d1e9a10"
+	const source = "/v1/sources/7f8d2b1e-1c1a-4b7e-9a51-2f0c6d1e9a10"
 	for _, write := range []struct{ method, target, body string }{
 		{http.MethodPost, "/v1/events", `{`},
 		{http.MethodPatch, event, `{`},
 		{http.MethodDelete, event, ""},
+		{http.MethodPost, "/v1/sources", `{`},
+		{http.MethodPatch, source, `{`},
+		{http.MethodDelete, source, ""},
+		{http.MethodPost, source + "/refresh", ""},
 	} {
 		for _, actor := range []string{"", "agent:", "owner"} {
 			if status, code, _ := send(t, app, write.method, write.target, write.body, actor); status != http.StatusBadRequest || code != activity.ActorRequiredCode {
@@ -88,6 +93,16 @@ func TestInvalidRequestsAreRefusedWithAReason(t *testing.T) {
 		{http.MethodPost, "/v1/events", `{"title":"Pickup","allDay":false,"startAt":"2026-11-17T06:00:00+01:00","endAt":"2026-11-17T06:30:00+01:00","reminders":[{"kind":"localTime","daysBefore":1}]}`, "localTime reminder"},
 		{http.MethodPatch, "/v1/events/7f8d2b1e-1c1a-4b7e-9a51-2f0c6d1e9a10", `{"title":null}`, "title cannot be null"},
 		{http.MethodPatch, "/v1/events/7f8d2b1e-1c1a-4b7e-9a51-2f0c6d1e9a10", `{"id":"x"}`, "names no event field"},
+		{http.MethodPost, "/v1/sources", `{"name":"ZAW","url":"http://example.org/feed.ics"}`, "https"},
+		{http.MethodPost, "/v1/sources", `{"name":"ZAW","url":"https://169.254.169.254/latest"}`, "private, loopback, or link-local"},
+		{http.MethodPost, "/v1/sources", `{"name":"ZAW","url":"https://localhost/feed.ics"}`, "private, loopback, or link-local"},
+		{http.MethodPost, "/v1/sources", `{"name":"ZAW","url":"feed.ics"}`, "https"},
+		{http.MethodPost, "/v1/sources", `{"name":"  ","url":"https://example.org/feed.ics"}`, "name must be"},
+		{http.MethodPost, "/v1/sources", `{"name":"ZAW","url":"https://example.org/feed.ics","kind":"google"}`, "kind must be ics"},
+		{http.MethodPost, "/v1/sources", `{"name":"ZAW","url":"https://example.org/feed.ics","filter":{"include":["` + strings.Repeat("x", 101) + `"],"exclude":[]}}`, "terms must be"},
+		{http.MethodPost, "/v1/sources", `{"name":"ZAW","url":"https://example.org/feed.ics","defaultReminders":[{"kind":"relative"}]}`, "relative reminder"},
+		{http.MethodPatch, "/v1/sources/7f8d2b1e-1c1a-4b7e-9a51-2f0c6d1e9a10", `{"enabled":null}`, "enabled cannot be null"},
+		{http.MethodPatch, "/v1/sources/7f8d2b1e-1c1a-4b7e-9a51-2f0c6d1e9a10", `{"etag":"x"}`, "names no source field"},
 	} {
 		status, code, message := send(t, app, tc.method, tc.target, tc.body, "dev:test")
 		if status != http.StatusBadRequest || code != "bad_request" || !strings.Contains(message, tc.want) {
