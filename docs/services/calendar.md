@@ -83,6 +83,40 @@ Unset, Calendar leaves an existing ZAW source as it is (and logs that); to remov
 
 **Removed pickups** (a date ZAW moves or drops) are cancelled by the source and kept as history, like any feed's. The events are read-only in the Calendar UI, labelled "ZAW"; only their reminders can be changed (add your own, or turn the ZAW default off for one pickup).
 
+## Google Calendar connection
+
+Calendar connects to the owner's one Google account (P11-01). This release builds the connection, the token lifecycle, and the choice of calendars to sync; importing events (P11-02, polling with sync tokens) and writing Life OS events to a dedicated "Life OS" Google calendar (P11-03) come later, so nothing syncs yet. Owner setup (Google Cloud project, consent screen, OAuth client, `.env`) is in [Google Calendar setup](../operations/google-calendar.md).
+
+**Flow.** The Dashboard's Calendar page asks Calendar to start an authorization (`POST /v1/google/connection/authorize`) and opens the returned consent URL. Google returns the owner to the Dashboard route `/calendar/google/callback` (the OAuth redirect URI), which posts the `code` and `state` to Calendar (`POST /v1/google/connection`) through the Dashboard's `/api/calendar` proxy as `user`. Calendar checks the state, exchanges the code at Google's token endpoint, identifies the account from its calendar list (the primary calendar's id is the account's address, so no profile scope is needed), stores the encrypted refresh token and the calendar list, and the Dashboard returns to `/calendar?google=connected`. Connecting another account replaces the connection and its calendar choices; reconnecting the same account keeps them.
+
+**Scopes.** `calendar.calendarlist.readonly` (which calendars exist), `calendar.events` (read and write events), and `calendar.app.created` (the calendars Life OS creates), with `access_type=offline` and `prompt=consent` so Google issues a refresh token every time. Google lets the owner untick permissions: without `calendarlist.readonly` the connection is refused (403 `google_scope_missing`) and the grant revoked; other missing scopes are stored and reported as `missingScopes`.
+
+**Security.**
+
+- *State and PKCE.* Each authorization has a fresh 256-bit `state` and an S256 PKCE verifier. Calendar stores only the state's SHA-256 with the verifier (`google_oauth_states`), valid for 10 minutes and deleted when used, so a state works once; expired ones are swept at the next authorization. A forged, replayed, or late state is refused (400 `invalid_state`) before any call to Google. The code is useless without the client secret and the verifier, both of which only Calendar holds.
+- *Encryption at rest.* The refresh token is encrypted with AES-256-GCM under `LIFE_OS_GOOGLE_TOKEN_KEY` (32 bytes, base64), with a random nonce per encryption stored beside it and a fixed additional-data label; a changed key or an altered ciphertext fails to decrypt (status `error`: reconnect). Access tokens are kept in memory only (their expiry is stored for reference); after a restart the first use refreshes one.
+- *No secrets out.* Tokens and the client secret never appear in responses, logs, errors, or Activity; errors keep Google's error code and description only. The callback URL's one-time code is dropped from the browser's address bar at once, the page sends no referrer, and the gateway does not log the callback request.
+
+**Token lifecycle.** An access token is refreshed on demand when it has less than 5 minutes left (`RefreshMargin`), one refresh at a time; a rotated refresh token is re-encrypted and stored. A calendar-list call answered 401 refreshes once and retries. When Google refuses the refresh token (`invalid_grant`: it expired, or the owner removed Life OS in their Google Account) the connection becomes `expired` with a `lastError` ending "reconnect Google in Calendar", records `calendar.google.expired` once, and stops asking Google until the owner reconnects. Another refusal (such as `invalid_client` after a changed client secret) sets `error`; an outage (unreachable, 5xx) changes nothing and answers 502 `google_unavailable`. A later successful refresh returns the connection to `connected`. Nothing checks the connection in the background yet (P11-02's polling will), so an expiry shows once something uses the token, such as Refresh list.
+
+**Calendars.** The list is stored as Google last listed it (hidden and deleted entries left out), primary first, then by name. A newly listed primary calendar starts with `syncEnabled` true, every other calendar false; a refresh keeps the owner's choices, updates names, colors, and access roles, and drops calendars Google no longer lists.
+
+**Not configured.** Without all of `LIFE_OS_GOOGLE_CLIENT_ID`, `LIFE_OS_GOOGLE_CLIENT_SECRET`, and a valid `LIFE_OS_GOOGLE_TOKEN_KEY`, Calendar starts normally and logs why; `GET /v1/google/connection` says `configured: false`, and authorize, connect, and refresh answer 503 `google_not_configured`. A connection stored earlier can still be disconnected (it is then only forgotten: without the key the token cannot be decrypted to revoke it).
+
+| Request | Behavior |
+| --- | --- |
+| `GET /v1/google/connection` | `{configured, status: not_connected\|connected\|expired\|error, accountEmail, scopes, missingScopes, connectedAt, lastError}`. |
+| `POST /v1/google/connection/authorize` | `{url}`: Google's consent page with a new single-use state and PKCE challenge (a reconnect adds `login_hint`). 503 when not configured. |
+| `POST /v1/google/connection` | `{code, state}` → the connection (200). 400 `invalid_state` or `google_code_rejected`, 403 `google_scope_missing`, 502 `google_rejected`/`google_unavailable`, 503 `google_not_configured`. |
+| `DELETE /v1/google/connection` | Revokes the refresh token at Google (best effort; a failure is noted in the Activity summary) and deletes the connection with its calendars (204, also without a connection). |
+| `GET /v1/google/calendars` | `{items}`: the stored list with `id` (Calendar's), `googleCalendarId`, `summary`, `color`, `accessRole`, `primary`, `syncEnabled`. Empty without a connection. |
+| `POST /v1/google/calendars/refresh` | Reads the list from Google again and returns it. 409 `google_not_connected` or `google_expired`, 502, 503. |
+| `PATCH /v1/google/calendars/{id}` | `{syncEnabled}` → the calendar; 404 for an unknown id. |
+
+Activity records `calendar.google.connected` (summary "Google Calendar connected: owner@example.com (3 calendars)", attributed to the request's actor), `calendar.google.disconnected` (with `revokedAtGoogle`), and `calendar.google.expired` (attributed to `system:calendar`, outcome failed), all with subject `google_connection`; their `data` holds the account address and, for a connection, the granted and missing scopes.
+
+The integration tests (`internal/api/google_integration_test.go`) run the whole flow against an in-process fake Google (`internal/google/fakegoogle`), never the real one: state reuse and expiry, PKCE, refresh margin, restarts, `invalid_grant`, rotation, a changed key, and checks that no response, Activity event, or stored column holds a token or the secret.
+
 ## Activity
 
 When `ACTIVITY_SERVICE_URL` is set, every event change made through the API records exactly one Activity event once it is stored, with subject `calendar_event` and the event's id. It is attributed to the request's `X-Life-OS-Actor` (`user` for the owner in the Dashboard, `agent:<name>` for the AI through MCP, `dev:<name>` for development tools) and carries the request's `X-Correlation-ID` and `X-Causation-ID`, so a change the agent makes appears in its capture's workflow in the Event Log, after the MCP action that caused it.
@@ -132,6 +166,9 @@ Every write needs `X-Life-OS-Actor` (see [API overview](../api/overview.md)). In
 | `CALENDAR_ICS_TIMEOUT_SECONDS` | `30` | Time limit of one download. |
 | `CALENDAR_ICS_ALLOW_PRIVATE_URLS` | `false` | Development only: allow http and private/loopback feed addresses. |
 | `CALENDAR_ZAW_ICS_URL` | empty | The owner's MyMüll iCal feed for the ZAW source (compose passes `LIFE_OS_ZAW_ICS_URL`); empty configures none. See [ZAW waste collection](#zaw-waste-collection). |
+| `LIFE_OS_GOOGLE_CLIENT_ID`, `LIFE_OS_GOOGLE_CLIENT_SECRET` | empty | The owner's Google OAuth Web client. Secret: never logged or returned. See [Google Calendar connection](#google-calendar-connection). |
+| `LIFE_OS_GOOGLE_TOKEN_KEY` | empty | 32-byte key, base64 (`openssl rand -base64 32`), that encrypts the stored refresh token. A new key means reconnecting. |
+| `LIFE_OS_GOOGLE_REDIRECT_URI` | `https://lifeos.gamch1k.com/calendar/google/callback` | The redirect URI registered on the OAuth client: the Dashboard's callback route (https; http only for localhost). |
 
 ## Tests
 
