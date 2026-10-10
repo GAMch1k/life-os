@@ -65,6 +65,7 @@ export const SUBJECT_TYPES = [
   { value: "google_connection", label: "Google connection" },
   { value: "notification", label: "Notification" },
   { value: "bank_connection", label: "Bank connection" },
+  { value: "bank_consent", label: "Bank consent" },
 ] as const;
 
 const EVENT_LABELS: Record<string, string> = {
@@ -112,6 +113,7 @@ const EVENT_LABELS: Record<string, string> = {
   "banking.sync.failed": "Bank sync failed",
   "banking.consent.expiring": "Bank access expiring",
   "banking.consent.expired": "Bank access expired",
+  "banking.consent.failed": "Bank consent failed",
 };
 
 export const EVENT_TYPES = Object.keys(EVENT_LABELS);
@@ -213,6 +215,11 @@ export function eventLabel(event: Pick<ActivityEvent, "type" | "data">) {
   }
   // A bank event by its bank; a sync by what it changed (counts only).
   const institution = text(event.data?.institution);
+  // A consent the bank did not complete, by the bank's error code.
+  const bankError = text(event.data?.error);
+  if (event.type === "banking.consent.failed" && bankError) {
+    return `${label}: ${bankError.slice(0, 64)}`;
+  }
   if (event.type === "banking.sync.completed" && institution) {
     return `${label}: ${institution} — ${bankSyncChanges(event.data)}`;
   }
