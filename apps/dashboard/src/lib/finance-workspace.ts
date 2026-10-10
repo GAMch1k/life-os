@@ -152,7 +152,8 @@ export function idempotencyKey() {
 // ---- Loading ----------------------------------------------------------------
 
 /** A request's data, or the message saying why there is none. */
-export type Loaded<T> = { data: T; error?: undefined } | { error: string };
+export type Loaded<T> =
+  { data: T; error?: undefined } | { data?: undefined; error: string };
 
 async function load<T>(
   call: () => Promise<{ data?: T; error?: unknown }>,
