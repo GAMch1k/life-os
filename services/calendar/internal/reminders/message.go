@@ -20,11 +20,11 @@ const (
 )
 
 // reminderImportance is how urgently the owner hears about a reminder for
-// item: medium for every Calendar event until events carry a priority
-// (P12-05); then the event's effective priority decides, through
-// priorityImportance.
+// item: its effective priority (its own, an occurrence's or its series',
+// else its default: its source's for an imported event, medium for a Life
+// OS one), as resolved for listing.
 func reminderImportance(item generated.CalendarEvent) notify.Importance {
-	return notify.Medium
+	return priorityImportance(string(item.Priority))
 }
 
 // priorityImportance maps an event priority to a notification importance:

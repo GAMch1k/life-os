@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -446,6 +447,54 @@ func TestGoogleSyncedEventsRemindToo(t *testing.T) {
 	// The series keeps its wall clock after the change to winter time.
 	h.runAt("2026-10-27T07:50:10Z")
 	h.expectSent("Team call: In 10 minutes · 09:00–09:30")
+}
+
+func TestImportanceFollowsTheEventsPriority(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	importance := func(fresh []map[string]any) []string {
+		out := make([]string, 0, len(fresh))
+		for _, body := range fresh {
+			out = append(out, body["title"].(string)+"="+body["importance"].(string))
+		}
+		return out
+	}
+	begin := instant("2026-10-12T08:00:00Z")
+	// Life OS events: their own priority, else medium.
+	h.event(http.MethodPost, "/v1/events", map[string]any{
+		"title": "Surgery", "allDay": false, "startAt": begin, "endAt": begin.Add(time.Hour), "priority": "high",
+		"reminders": []any{rel(30)}, "useDefaultReminders": false,
+	}, http.StatusCreated)
+	h.create("Coffee", "2026-10-12T08:00:00Z", 30, rel(30))
+	// An imported event follows its source's default priority, unless the
+	// owner set one on it.
+	var source googleuuid.UUID
+	if err := h.pool.QueryRow(ctx, `INSERT INTO calendar_sources (kind, name, url, default_reminders, default_priority, preset)
+		VALUES ('ics', 'ZAW', 'https://feeds.example.test/zaw.ics', '[{"kind":"relative","minutesBefore":30}]', 'low', 'zaw') RETURNING id`).Scan(&source); err != nil {
+		t.Fatal(err)
+	}
+	imported := `INSERT INTO events (title, all_day, start_at, end_at, source_kind, source_id, external_uid, priority) VALUES ($1, false, $2, $3, 'ics', $4, $5, $6)`
+	h.exec(imported, "Papier", begin, begin.Add(15*time.Minute), source, "zaw-1", nil)
+	h.exec(imported, "Restmüll", begin, begin.Add(15*time.Minute), source, "zaw-2", "high")
+	// An occurrence with its own priority; the others follow the series.
+	series := h.event(http.MethodPost, "/v1/events", map[string]any{
+		"title": "Gym", "allDay": false, "startAt": "2026-10-13T05:00:00Z", "endAt": "2026-10-13T06:00:00Z", "priority": "low",
+		"recurrence": map[string]any{"frequency": "daily", "interval": 1, "count": 2}, "reminders": []any{rel(30)}, "useDefaultReminders": false,
+	}, http.StatusCreated)
+	h.event(http.MethodPatch, "/v1/events/"+series.Id.String()+"/occurrences/2026-10-14T05:00:00Z", map[string]any{"priority": "high"}, http.StatusOK)
+
+	h.runAt("2026-10-10T10:00:00Z")
+	h.runAt("2026-10-12T07:30:10Z")
+	got := importance(h.sent())
+	sort.Strings(got)
+	if strings.Join(got, " ") != "Coffee=medium Papier=low Restmüll=high Surgery=high" {
+		t.Fatalf("importance = %v", got)
+	}
+	h.runAt("2026-10-13T04:30:10Z")
+	h.runAt("2026-10-14T04:30:10Z")
+	if got := importance(h.sent()); strings.Join(got, " ") != "Gym=low Gym=high" {
+		t.Fatalf("occurrence importance = %v", got)
+	}
 }
 
 func TestRemindersDueWhileDownAreSentLateOrRecordedAsMissed(t *testing.T) {

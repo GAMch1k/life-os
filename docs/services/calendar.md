@@ -198,7 +198,7 @@ Calendar sends every effective reminder of every active event and occurrence to 
 | --- | --- |
 | `title` | The event's (or occurrence's) title. |
 | `body` | When the event starts, seen from the reminder time, in the owner's timezone with a 24-hour clock, then its location: "In 30 minutes · 15:00–16:00 · Dr. Weber", "In 3 hours · 15:00–16:00", "Tomorrow at 15:00 · Dr. Weber", "Thu 15 Oct at 09:00"; all-day "Tomorrow, all day", "Today until Sun 18 Oct". Events of the ZAW source leave the location (the owner's street) out: "Papier" with "Tomorrow at 06:00". |
-| `importance` | `medium` (the event's priority decides once events have one). |
+| `importance` | The event's effective `priority`, `low`, `medium`, or `high` (its own, for an occurrence its own or else the series', else its `defaultPriority`: its source's for an imported event, `medium` for a Life OS one). |
 | `category` | `calendar.reminder` |
 | `link` | `/calendar?date=<the start's owner-local date>` |
 | `occurredAt` | The reminder time. |
@@ -208,7 +208,7 @@ Calendar sends every effective reminder of every active event and occurrence to 
 
 `GET /v1/reminders/status` reports the delivery's health for the Status page: `enabled`, `intervalSeconds`, `graceMinutes`, `handledThrough` (the cursor), `lastRunAt`, `lastSuccessAt`, `lastError` with `lastErrorAt` (current while later than `lastSuccessAt`), and `lastSentAt`.
 
-`internal/reminders` holds unit tests (due times of relative and localTime reminders across both daylight saving changes, skipped and repeated wall times, all-day events, the window, dedupe keys, bodies and late phrasing, importance) and integration tests against `CALENDAR_TEST_DATABASE_URL` with an in-process Notifications that deduplicates like the real one: every effective reminder sent once, recurring occurrences with skipped and moved exceptions, all-day and imported (ZAW and another feed) defaults, late and missed reminders after downtime, a lost cursor, failing and refusing Notifications, moves, cancellations, deletions, added reminders, the lease and two processes at once, and migration 000012 down and up.
+`internal/reminders` holds unit tests (due times of relative and localTime reminders across both daylight saving changes, skipped and repeated wall times, all-day events, the window, dedupe keys, bodies and late phrasing, importance) and integration tests against `CALENDAR_TEST_DATABASE_URL` with an in-process Notifications that deduplicates like the real one: every effective reminder sent once, recurring occurrences with skipped and moved exceptions, all-day and imported (ZAW and another feed) defaults, Google-synced events (the calendar's defaults plus the event's own, a series with an occurrence cancelled in Google), importance from the effective priority (own, a source's default, an occurrence's own), late and missed reminders after downtime, a lost cursor, failing and refusing Notifications, moves, cancellations, deletions, added reminders, the lease and two processes at once, and migration 000012 down and up.
 
 ## Activity
 

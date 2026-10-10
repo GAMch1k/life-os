@@ -130,8 +130,12 @@ func TestNotificationTextIsCleanedAndBounded(t *testing.T) {
 }
 
 func TestImportance(t *testing.T) {
-	if got := reminderImportance(timed("Dentist", "2026-10-11T13:00:00Z", 60)); got != notify.Medium {
-		t.Fatalf("reminderImportance = %s, want medium", got)
+	item := timed("Dentist", "2026-10-11T13:00:00Z", 60)
+	for priority, want := range map[generated.EventPriority]notify.Importance{generated.High: notify.High, generated.Medium: notify.Medium, generated.Low: notify.Low, "": notify.Medium} {
+		item.Priority = priority
+		if got := reminderImportance(item); got != want {
+			t.Errorf("reminderImportance(priority %q) = %s, want %s", priority, got, want)
+		}
 	}
 	for priority, want := range map[string]notify.Importance{"high": notify.High, "HIGH": notify.High, "medium": notify.Medium, "low": notify.Low, "": notify.Medium, "urgent": notify.Medium} {
 		if got := priorityImportance(priority); got != want {
