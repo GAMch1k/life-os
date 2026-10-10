@@ -1,4 +1,4 @@
-.PHONY: infra-env infra-up infra-down infra-ps infra-logs infra-reset core-up core-smoke life-up life-smoke verify-clean-db verify-isolation e2e-smoke processor-smoke processor-codex-actions-smoke human-review-smoke activity-trace-smoke runtime-status-smoke retry-schedule-smoke codex-runtime-smoke relative-dates-smoke phase8-acceptance browser-e2e action-idempotency-smoke voice-lease-recovery-smoke db-provision db-check-isolation db-migration-new db-generate db-migrate-up db-migrate-down db-test create-service create-service-smoke dashboard-check check
+.PHONY: infra-env infra-up infra-down infra-ps infra-logs infra-reset core-up core-smoke life-up life-smoke verify-clean-db verify-isolation e2e-smoke processor-smoke processor-codex-actions-smoke human-review-smoke activity-trace-smoke runtime-status-smoke retry-schedule-smoke codex-runtime-smoke relative-dates-smoke cross-language-smoke phase8-acceptance browser-e2e action-idempotency-smoke voice-lease-recovery-smoke db-provision db-check-isolation db-migration-new db-generate db-migrate-up db-migrate-down db-test create-service create-service-smoke dashboard-check check
 
 infra-env:
 	@test -f .env || cp .env.example .env
@@ -59,6 +59,12 @@ codex-runtime-smoke: infra-env
 relative-dates-smoke: infra-env
 	for service in mcp processor; do docker compose build $$service || exit 1; done
 	./tools/smoke-relative-dates
+
+# Real Codex and whisper.cpp: "I already bought the chicken" completes a Task
+# titled in Russian or German; two fitting Tasks still go to Human Review.
+cross-language-smoke: infra-env
+	for service in mcp processor; do docker compose build $$service || exit 1; done
+	./tools/smoke-cross-language
 
 phase8-acceptance: infra-env
 	for service in activity voice voice-worker inbox tasks mcp processor dashboard; do docker compose build $$service || exit 1; done

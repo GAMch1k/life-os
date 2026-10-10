@@ -2,7 +2,24 @@
 
 The Go MCP service is available behind `/api/mcp/mcp` using streamable HTTP, with `/api/mcp/health` and `/api/mcp/ready` probes. Its typed read tools call Finance monthly summary/transactions, Tasks list/search, Inbox list, and Calendar list through the services' HTTP APIs. It also provides narrowly scoped mutation tools used by Inbox processing: `task_create`, `task_update`, `task_complete`, `task_reopen`, `calendar_create`, `inbox_start_processing_attempt`, `inbox_record_processing_attempt`, and `inbox_resolve`. It never owns or queries Finance, Tasks, Inbox, or Calendar tables directly; upstream failures become understandable MCP tool errors.
 
-Codex is told that a `taskQuery` is matched as a case-insensitive substring of Task titles and notes, so it proposes the shortest distinctive word from the title ("chicken", "Anna"). A statement that something was done, such as "I already bought the chicken", is a `task_complete` for the Task it refers to. Codex does not need to know the existing Tasks, because identity is resolved here. For an existing Task mutation, the processor sends the model's identifying `taskQuery` to `task_search` and proceeds only when the Tasks API returns exactly one result. Zero or multiple results leave the Inbox attempt recoverable without creating or mutating a Task. The resolved UUID is passed only to the owning Tasks API operation.
+Codex is told that a `taskQuery` is matched as a case-insensitive substring of Task titles and notes, so it proposes the shortest distinctive word from the title ("chicken", "Anna"). A statement that something was done, such as "I already bought the chicken", is a `task_complete` for the Task it refers to. Codex does not need to know the existing Tasks, because identity is resolved here.
+
+The owner writes Tasks in English, Russian, and German, so a Task's title may be in another language or word form than the capture: "I already bought the chicken" has to find "Купить курицу на ужин". Codex therefore adds `taskQueryAlternatives`, up to six more terms for the same thing: translations into the other two languages and distinctive word stems that also match inflected forms (`"chicken"` plus `["куриц", "Hähnchen", "Huhn"]`). It omits them when the capture quotes the exact title.
+
+For an existing Task mutation, the processor sends each term to `task_search` and unions the matching Tasks by id. It searches open Tasks for `task_complete` and `task_update`, and completed Tasks for `task_reopen`, so a finished Task with the same name never makes a capture ambiguous. It proceeds only when the union is exactly one Task:
+- no Task: Human Review with no candidates;
+- several Tasks, for example "Buy chicken wings" and "Купить курицу для супа": Human Review listing them (at most ten), and nothing changes;
+- a plan with only a `taskQuery` is searched with that term alone, as before.
+
+There is no fuzzy scoring: a Task is a candidate only if one of the terms literally occurs in its title or notes. Alternatives shorter than three characters are ignored, and duplicates (case-insensitive) are searched once. The resolved UUID is passed only to the owning Tasks API operation; the search terms never reach it. That includes a Human Review approval, which still carries the alternatives.
+
+`make cross-language-smoke` proves this with the real Codex CLI and whisper.cpp on the verification stack:
+- EN "I already bought the chicken." completes "Купить курицу на ужин";
+- DE "Ich habe die Milch schon gekauft." completes "Buy milk";
+- RU "Я уже вынес мусор." completes "Take out the trash", while unrelated Tasks in each language stay open;
+- the spoken English sentence completes "Hähnchen fürs Abendessen kaufen" through Voice, although the completed Russian chicken Task still matches the words;
+- with "Купить курицу для супа" and "Buy chicken wings" both open, the same sentence goes to Human Review with exactly those two candidates, and neither changes;
+- no Task is created.
 
 The non-interactive processor uses the existing local Codex CLI/ChatGPT login, not an API key. Compose starts it as the `processor` service during normal Life OS startup; it polls the raw Inbox at `LIFE_OS_PROCESSOR_POLL_MILLIS` (default one second), starts once immediately after boot, and exposes private `/health` and `/ready` on port 8081. `SIGTERM` stops polling and shuts that server down gracefully. The one-shot command remains a diagnostic only.
 
