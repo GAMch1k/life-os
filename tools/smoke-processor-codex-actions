@@ -14,6 +14,9 @@ trap cleanup EXIT
 
 "${compose[@]}" up --detach --no-build
 gateway=http://127.0.0.1:13001
+# The owner's timezone as the stack runs it: date-only captures resolve in it.
+zone=${LIFE_OS_TIMEZONE:-$(grep -m1 '^LIFE_OS_TIMEZONE=' .env 2>/dev/null | cut -d= -f2- || true)}
+zone=${zone:-UTC}
 for service in inbox calendar finance; do
   for _ in $(seq 1 60); do
     curl --fail --silent "$gateway/api/$service/ready" >/dev/null && break
@@ -47,16 +50,16 @@ wait_for_action() {
   return 1
 }
 
-wait_for_retryable() {
+wait_for_human_review() {
   local item_id=$1
   for _ in $(seq 1 90); do
-    attempts=$(curl --fail --silent "$gateway/api/inbox/v1/inbox-items/$item_id/processing-attempts")
-    if jq -e '.items | any(.status == "retryable")' >/dev/null <<<"$attempts"; then
+    item=$(curl --fail --silent "$gateway/api/inbox/v1/inbox-items/$item_id")
+    if jq -e '.state == "human_review"' >/dev/null <<<"$item"; then
       return
     fi
     sleep 2
   done
-  echo "Codex action smoke: ambiguous capture was not retained as retryable for $item_id" >&2
+  echo "Codex action smoke: ambiguous capture did not reach Human Review for $item_id" >&2
   return 1
 }
 
@@ -87,7 +90,12 @@ curl --fail --silent "$gateway/api/tasks/v1/tasks/$update_task_id" | jq -e --arg
 
 reschedule_id=$(capture "Set the due date for the task titled $updated_title to October 14, 2026.")
 wait_for_action "$reschedule_id" task_update
-curl --fail --silent "$gateway/api/tasks/v1/tasks/$update_task_id" | jq -e '.dueAt | startswith("2026-10-14")' >/dev/null
+# "2026-10-14" is the owner's local date (LIFE_OS_TIMEZONE); compare in that zone.
+due=$(curl --fail --silent "$gateway/api/tasks/v1/tasks/$update_task_id" | jq -r '.dueAt')
+[ "$(TZ="$zone" date -d "$due" +%F)" = 2026-10-14 ] || {
+  echo "Codex action smoke: rescheduled dueAt $due is not 2026-10-14 in the owner's timezone" >&2
+  exit 1
+}
 
 clear_date_id=$(capture "Clear the due date for the task titled $updated_title.")
 wait_for_action "$clear_date_id" task_update
@@ -97,8 +105,11 @@ ambiguous_title="P8 Codex ambiguous $stamp"
 ambiguous_task_a=$(curl "${actor[@]}" --fail --silent -H 'content-type: application/json' --data "$(jq -nc --arg title "$ambiguous_title" '{title:$title}')" "$gateway/api/tasks/v1/tasks" | jq -r '.id')
 ambiguous_task_b=$(curl "${actor[@]}" --fail --silent -H 'content-type: application/json' --data "$(jq -nc --arg title "$ambiguous_title" '{title:$title}')" "$gateway/api/tasks/v1/tasks" | jq -r '.id')
 ambiguous_id=$(capture "Mark the task titled $ambiguous_title as done.")
-wait_for_retryable "$ambiguous_id"
-curl --fail --silent "$gateway/api/inbox/v1/inbox-items/$ambiguous_id" | jq -e '.resolvedAt == null and .state != "resolved"' >/dev/null
+wait_for_human_review "$ambiguous_id"
+# Ambiguity waits for the user with both Tasks as candidates (Phase 8).
+curl --fail --silent "$gateway/api/inbox/v1/inbox-items/$ambiguous_id" |
+  jq -e --arg a "$ambiguous_task_a" --arg b "$ambiguous_task_b" \
+    '.resolvedAt == null and ([.processingMetadata.humanReview.candidates[].id] | contains([$a, $b]))' >/dev/null
 curl --fail --silent "$gateway/api/tasks/v1/tasks/$ambiguous_task_a" | jq -e '.completed == false' >/dev/null
 curl --fail --silent "$gateway/api/tasks/v1/tasks/$ambiguous_task_b" | jq -e '.completed == false' >/dev/null
 
