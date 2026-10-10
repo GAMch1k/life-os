@@ -35,8 +35,8 @@ done
 account_id=$("${compose[@]}" exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d finance_db -Atqc "INSERT INTO accounts (name,currency,opening_balance_minor) VALUES ('"'"'Smoke account'"'"','"'"'USD'"'"',0) RETURNING id"')
 external_id="e2e-$(date +%s)"
 csv="account_id,occurred_on,amount_minor,currency,external_id,note\n${account_id},2026-10-07,-1250,USD,${external_id},Coffee\n"
-printf '%b' "$csv" | curl "${actor[@]}" --fail --silent -H 'content-type: text/csv' --data-binary @- "$finance/v1/imports/csv" | jq -e '.created == 1' >/dev/null
-printf '%b' "$csv" | curl "${actor[@]}" --fail --silent -H 'content-type: text/csv' --data-binary @- "$finance/v1/imports/csv" | jq -e '.skipped == 1' >/dev/null
+printf '%b' "$csv" | curl "${actor[@]}" --fail --silent -H 'content-type: text/csv' --data-binary @- "$finance/v1/imports/csv" | jq -e '.imported == 1' >/dev/null
+printf '%b' "$csv" | curl "${actor[@]}" --fail --silent -H 'content-type: text/csv' --data-binary @- "$finance/v1/imports/csv" | jq -e '.duplicates == 1' >/dev/null
 
 task=$(curl "${actor[@]}" --fail --silent -H 'content-type: application/json' -d '{"title":"E2E task"}' "$tasks/v1/tasks"); task_id=$(jq -r .id <<<"$task")
 curl "${actor[@]}" --fail --silent -X POST "$tasks/v1/tasks/$task_id/complete" | jq -e '.completed' >/dev/null
