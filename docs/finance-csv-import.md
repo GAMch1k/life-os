@@ -4,6 +4,10 @@ The Finance dashboard imports a UTF-8 CSV file through `POST /v1/imports/csv`.
 The endpoint persists valid rows immediately and returns the created, skipped,
 failed, and row-error counts used by the dashboard.
 
+On `/finance`, **Import CSV** opens the file chooser. The file must end in
+`.csv` and be at most 4 MB, the Finance service's request body limit; split a
+larger export into several files.
+
 ## Required columns
 
 | Column | Meaning |
