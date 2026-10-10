@@ -7,7 +7,14 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/GAMch1k/life-os/pkg/activity"
 )
+
+// processorActor is who the processor's calls are attributed to in Activity.
+// MCP records a caller without an actor as its unnamed agent "mcp", so every
+// processor call must carry it, including recovery and runtime records.
+var processorActor = activity.Agent("codex-inbox-processor")
 
 // Runtime states recorded on an Inbox processing attempt.
 const (
@@ -32,6 +39,9 @@ type RuntimeEvent struct {
 type attemptRuntime struct {
 	runner            Runner
 	itemID, attemptID string
+	// trace is the attempt's workflow trace, kept for records made outside
+	// the processing call (the Codex runtime reports spawn and session).
+	trace activity.Trace
 
 	mu      sync.Mutex
 	state   string
@@ -44,7 +54,7 @@ type attemptRuntime struct {
 const heartbeatInterval = 30 * time.Second
 
 func (r Runner) trackRuntime(ctx context.Context, itemID, attemptID, state string) *attemptRuntime {
-	rt := &attemptRuntime{runner: r, itemID: itemID, attemptID: attemptID, state: state, stop: make(chan struct{})}
+	rt := &attemptRuntime{runner: r, itemID: itemID, attemptID: attemptID, trace: activity.TraceFrom(ctx), state: state, stop: make(chan struct{})}
 	rt.record(ctx)
 	go func() {
 		ticker := time.NewTicker(heartbeatInterval)
@@ -62,10 +72,14 @@ func (r Runner) trackRuntime(ctx context.Context, itemID, attemptID, state strin
 }
 
 // Spawned implements RunObserver.
-func (rt *attemptRuntime) Spawned() { rt.set(context.Background(), RuntimeRunning, "") }
+func (rt *attemptRuntime) Spawned() { rt.set(rt.traced(), RuntimeRunning, "") }
 
 // Session implements RunObserver.
-func (rt *attemptRuntime) Session(id string) { rt.set(context.Background(), "", id) }
+func (rt *attemptRuntime) Session(id string) { rt.set(rt.traced(), "", id) }
+
+func (rt *attemptRuntime) traced() context.Context {
+	return activity.WithTrace(context.Background(), rt.trace)
+}
 
 // Tokens forwards the run's token usage to the processor's status.
 func (rt *attemptRuntime) Tokens(usage TokenUsage) {
@@ -138,6 +152,9 @@ func runtimeOutcome(ctx context.Context, err error) string {
 // idempotency key, so running the capture again cannot duplicate a mutation.
 // It returns how many attempts were recovered.
 func (r Runner) Reconcile(ctx context.Context, staleAfter time.Duration) (int, error) {
+	// Recovery is the processor's own work, so Inbox attributes the retry it
+	// schedules to the processor rather than to an unnamed MCP agent.
+	ctx = activity.WithTrace(ctx, activity.Trace{Actor: processorActor})
 	raw, err := r.Tools.Call(ctx, "inbox_list_stale_attempts", map[string]any{"staleAfterSeconds": int(staleAfter.Seconds())})
 	if err != nil {
 		return 0, err
@@ -170,6 +187,10 @@ func (r Runner) Reconcile(ctx context.Context, staleAfter time.Duration) (int, e
 		if attempt.SessionID != nil {
 			reason += "; Codex session " + *attempt.SessionID + " is not resumed because planning is read-only and is re-run"
 		}
+		// Inbox records the outcome in the capture's own workflow (it owns the
+		// correlation), caused by the abandoned attempt's start.
+		started := activity.EventID("inbox.processing.started", attempt.ID)
+		ctx := activity.WithTrace(ctx, activity.Trace{CausationID: &started, Actor: processorActor})
 		if attempt.Status == "pending" {
 			// Inbox only finishes attempts that started processing.
 			if err := r.record(ctx, attempt.InboxItemID, attempt.ID, "processing", nil, nil); err != nil {

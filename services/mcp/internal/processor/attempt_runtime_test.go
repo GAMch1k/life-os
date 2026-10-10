@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/GAMch1k/life-os/pkg/activity"
 )
 
 // runtimeTools records the runtime and outcome calls for one item.
@@ -17,6 +19,8 @@ type runtimeTools struct {
 	outcomes []map[string]any
 	stale    string
 	ctxErrs  []error
+	// traces holds the workflow trace each runtime or outcome call carried.
+	traces []activity.Trace
 }
 
 func (r *runtimeTools) Call(ctx context.Context, name string, args map[string]any) (json.RawMessage, error) {
@@ -31,7 +35,9 @@ func (r *runtimeTools) Call(ctx context.Context, name string, args map[string]an
 		return json.RawMessage(`{"id":"attempt-1"}`), nil
 	case "inbox_record_attempt_runtime":
 		r.runtime = append(r.runtime, args)
+		r.traces = append(r.traces, activity.TraceFrom(ctx))
 	case "inbox_record_processing_attempt":
+		r.traces = append(r.traces, activity.TraceFrom(ctx))
 		r.ctxErrs = append(r.ctxErrs, ctx.Err())
 		if args["status"] != "processing" {
 			r.outcomes = append(r.outcomes, args)
@@ -153,5 +159,45 @@ func TestReconcileReturnsAbandonedAttemptsToTheQueue(t *testing.T) {
 	}
 	if summary := tools.outcomes[1]["errorSummary"].(string); !strings.Contains(summary, "runtime untracked") {
 		t.Fatalf("summary = %q", summary)
+	}
+}
+
+// Recovery is recorded by Inbox as "Processing retry scheduled"; it must read
+// as the Inbox processor's work, in the abandoned attempt's chain, not as an
+// unnamed agent calling MCP.
+func TestReconcileAttributesRecoveryToTheProcessor(t *testing.T) {
+	tools := &runtimeTools{stale: `{"items":[{"id":"attempt-pending","inboxItemId":"item-2","status":"pending"}]}`}
+	if _, err := (Runner{Tools: tools, Owner: "processor-b"}).Reconcile(context.Background(), 2*time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	started := activity.EventID("inbox.processing.started", "attempt-pending")
+	// The "processing" transition and the retryable outcome.
+	if len(tools.traces) != 2 {
+		t.Fatalf("traces = %+v", tools.traces)
+	}
+	for _, trace := range tools.traces {
+		if trace.Actor != activity.Agent("codex-inbox-processor") {
+			t.Fatalf("recovery actor = %+v", trace.Actor)
+		}
+		if trace.CausationID == nil || *trace.CausationID != started {
+			t.Fatalf("recovery causation = %v, want %s", trace.CausationID, started)
+		}
+	}
+}
+
+// The Codex runtime reports spawn and session outside the processing call;
+// those records still belong to the processor and the capture's workflow.
+func TestRuntimeRecordsCarryTheProcessorTrace(t *testing.T) {
+	tools := &runtimeTools{}
+	if _, err := (Runner{Planner: observingPlanner{output: createPlan}, Tools: tools}).Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(tools.traces) == 0 {
+		t.Fatal("no runtime or outcome calls recorded")
+	}
+	for _, trace := range tools.traces {
+		if trace.Actor != activity.Agent("codex-inbox-processor") || trace.CorrelationID != "item-1" {
+			t.Fatalf("trace = %+v", trace)
+		}
 	}
 }
