@@ -362,7 +362,10 @@ test.describe("Finance workspace", () => {
       await expect(importer.getByRole("status")).toHaveText(
         "Imported 1, 0 duplicates skipped, 0 failed. 1 got a category from the rules.",
       );
-      await importer.getByRole("button", { name: "Close" }).click();
+      await importer
+        .locator("[data-slot=dialog-footer]")
+        .getByRole("button", { name: "Close" })
+        .click();
 
       // Both are listed; the imported one is read-only but takes notes.
       await page.getByRole("tab", { name: "Transactions" }).click();

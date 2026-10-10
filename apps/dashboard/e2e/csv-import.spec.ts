@@ -99,13 +99,19 @@ test.describe("Dashboard CSV import", () => {
       });
 
       // The same file again: the row is already there.
-      await dialog.getByRole("button", { name: "Close" }).click();
+      await dialog
+        .locator("[data-slot=dialog-footer]")
+        .getByRole("button", { name: "Close" })
+        .click();
       const again = await importCsv(page, account, csv);
       await expect(again.getByRole("status")).toHaveText(
         "Imported 0, 1 duplicate skipped, 0 failed.",
       );
       expect(await accountTransactions(request, account)).toHaveLength(1);
-      await again.getByRole("button", { name: "Close" }).click();
+      await again
+        .locator("[data-slot=dialog-footer]")
+        .getByRole("button", { name: "Close" })
+        .click();
 
       // The account's card shows the new balance.
       await expect(
