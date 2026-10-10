@@ -1,0 +1,63 @@
+openapi: 3.0.3
+info:
+  title: Life OS Service Template
+  version: 0.0.0
+  license:
+    name: UNLICENSED
+    url: https://life-os.local/license
+servers:
+  - url: http://localhost:8080
+paths:
+  /v1/ping:
+    get:
+      operationId: getPing
+      summary: Contract-generation smoke endpoint
+      security: []
+      responses:
+        '200':
+          description: A simple transport response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PingResponse'
+        '400':
+          description: Invalid request input.
+  /v1/echo:
+    get:
+      operationId: getEcho
+      summary: Echo a required query parameter
+      security: []
+      parameters:
+        - name: message
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        '200':
+          description: Echoed request value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EchoResponse'
+        '400':
+          description: Invalid request input.
+components:
+  schemas:
+    PingResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - message
+      properties:
+        message:
+          type: string
+    EchoResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - message
+      properties:
+        message:
+          type: string
