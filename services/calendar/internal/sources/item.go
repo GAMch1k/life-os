@@ -25,6 +25,25 @@ type Item struct {
 	// Reminders are the source's reminders for the event. nil leaves the
 	// event's reminders to the owner (a feed carries none).
 	Reminders *Reminders
+	// Priority is the event's own priority as the source gives it: low,
+	// medium, high, or "" for none (the source's default). nil leaves the
+	// event's priority to the owner (a feed, or a Google event without Life
+	// OS's priority property).
+	Priority *string
+}
+
+// ownPriority is the priority to store for item: none when the source
+// gives none or its default (defaultPriority).
+func ownPriority(item Item, defaultPriority string) *string {
+	if item.Priority == nil || *item.Priority == "" || *item.Priority == defaultPriority {
+		return nil
+	}
+	switch *item.Priority {
+	case "low", "medium", "high":
+		value := *item.Priority
+		return &value
+	}
+	return nil
 }
 
 // FeedItems wraps feed events as items.
@@ -140,12 +159,14 @@ type Changes struct {
 	StartDate, EndDate  *time.Time
 	Reminders           *[]Reminder
 	UseDefaultReminders *bool
+	// Priority is the occurrence's own priority (low, medium, high).
+	Priority *string
 }
 
 // Empty reports whether the occurrence follows its series entirely.
 func (c Changes) Empty() bool {
 	return c.Title == nil && c.Description == nil && c.Location == nil && c.StartAt == nil && c.StartDate == nil &&
-		c.Reminders == nil && c.UseDefaultReminders == nil
+		c.Reminders == nil && c.UseDefaultReminders == nil && c.Priority == nil
 }
 
 // JSON is the stored form: only the overridden fields, description or
@@ -176,6 +197,9 @@ func (c Changes) JSON() ([]byte, error) {
 	}
 	if c.UseDefaultReminders != nil {
 		out["useDefaultReminders"] = *c.UseDefaultReminders
+	}
+	if c.Priority != nil {
+		out["priority"] = *c.Priority
 	}
 	return json.Marshal(out)
 }

@@ -116,7 +116,9 @@ type Querier interface {
 	// A source's new event. A series (Google) has its rule; reminders and
 	// use_default_reminders are the source's (an ICS feed gives the column
 	// defaults: none of its own, following the source's defaults), and
-	// source_reminders records them (null for a feed).
+	// source_reminders records them (null for a feed). priority is the event's
+	// own priority as its source gives it (Google, through a Life OS extended
+	// property); null follows the source's default.
 	InsertImportedEvent(ctx context.Context, arg InsertImportedEventParams) (pgtype.UUID, error)
 	// Records Google's current version of an exported event (after its change
 	// in Google was applied in Life OS, or a conflict kept Google's version):
@@ -273,7 +275,8 @@ type Querier interface {
 	// had removed). The source identity and the owner's priority stay. reminders, use_default_reminders,
 	// and source_reminders change only when given: a feed never gives them (the
 	// owner's reminders stay), a Google sync gives the source's new reminders
-	// unless the owner changed the event's own.
+	// unless the owner changed the event's own. priority changes only with
+	// set_priority: a Google event that carries Life OS's priority property.
 	UpdateImportedEvent(ctx context.Context, arg UpdateImportedEventParams) error
 	// Replaces the lists given (a NULL list stays), creating the row on the
 	// first change.

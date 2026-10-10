@@ -721,7 +721,7 @@ func effective(f Fields, defaults []sources.Reminder) []sources.Reminder {
 func eventFields(event store.Event) Fields {
 	fields := Fields{
 		Title: event.Title, Description: event.Description, Location: event.Location, AllDay: event.AllDay,
-		TimeZone: event.TimeZone, UseDefaultReminders: event.UseDefaultReminders,
+		TimeZone: event.TimeZone, UseDefaultReminders: event.UseDefaultReminders, Priority: event.Priority,
 	}
 	if event.AllDay {
 		fields.StartDate, fields.EndDate = event.StartDate.Time, event.EndDate.Time
@@ -831,6 +831,13 @@ func decodeChanges(raw []byte) (storedOccurrence, error) {
 		}
 		out.UseDefaultReminders = &use
 	}
+	if value, ok := present["priority"]; ok {
+		var priority string
+		if err := json.Unmarshal(value, &priority); err != nil {
+			return storedOccurrence{}, err
+		}
+		out.Priority = &priority
+	}
 	return out, nil
 }
 
@@ -856,6 +863,9 @@ func (c storedOccurrence) applyTo(f Fields) Fields {
 	}
 	if c.UseDefaultReminders != nil {
 		f.UseDefaultReminders = *c.UseDefaultReminders
+	}
+	if c.Priority != nil {
+		f.Priority = c.Priority
 	}
 	return f
 }

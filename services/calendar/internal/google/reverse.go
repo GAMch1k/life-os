@@ -309,6 +309,7 @@ func instanceBody(f Fields, effective []sources.Reminder, owner *time.Location) 
 	return map[string]any{
 		"summary": f.Title, "description": textValue(f.Description), "location": textValue(f.Location),
 		"start": start, "end": end, "reminders": exportReminders(effective, f.AllDay), "status": "confirmed",
+		"extendedProperties": map[string]any{"private": map[string]any{propertyPriority: textValue(f.Priority)}},
 	}
 }
 

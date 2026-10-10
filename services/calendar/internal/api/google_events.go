@@ -175,7 +175,7 @@ func (h *Handler) resolveExports(ctx context.Context, items []generated.Calendar
 func googleFields(f eventFields) google.Fields {
 	out := google.Fields{
 		Title: f.Title, Description: f.Description, Location: f.Location, AllDay: f.AllDay, TimeZone: f.TimeZone,
-		UseDefaultReminders: f.UseDefaultReminders, Reminders: sourceReminders(f.Reminders),
+		UseDefaultReminders: f.UseDefaultReminders, Reminders: sourceReminders(f.Reminders), Priority: priorityColumn(f.Priority),
 	}
 	if f.AllDay {
 		if f.StartDate != nil && f.EndDate != nil {
@@ -230,6 +230,15 @@ func (h *Handler) updateGoogleEvent(c fiber.Ctx, current store.Event, target goo
 	merged, err := patch.apply(fields, h.now(), h.ownerLocation)
 	if err != nil {
 		return badRequest(err.Error())
+	}
+	if patch.present["priority"] {
+		// Google keeps the priority in a Life OS extended property; the
+		// source's default is written as none.
+		fallback, err := priorityDefault(c.Context(), h.queries, current)
+		if err != nil {
+			return internal(err)
+		}
+		merged = merged.withPriorityDefault(fallback)
 	}
 	ctx := h.traced(c)
 	switch {

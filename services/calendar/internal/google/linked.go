@@ -193,6 +193,13 @@ func updateParams(event store.Event) store.UpdateEventParams {
 func applyCopy(ctx context.Context, q *store.Queries, event store.Event, item sources.Item, owner *time.Location) (store.Event, bool, error) {
 	params := updateParams(event)
 	params.Title, params.Description, params.Location, params.AllDay = item.Title, item.Description, item.Location, item.AllDay
+	if item.Priority != nil {
+		// A Life OS event without a priority of its own is medium.
+		params.Priority = nil
+		if value := *item.Priority; value == "low" || value == "high" {
+			params.Priority = &value
+		}
+	}
 	if item.AllDay {
 		params.StartAt, params.EndAt, params.TimeZone = pgtype.Timestamptz{}, pgtype.Timestamptz{}, nil
 		params.StartDate, params.EndDate = pgtype.Date{Time: item.StartDate, Valid: true}, pgtype.Date{Time: item.EndDate, Valid: true}
@@ -275,7 +282,7 @@ func sameEventRow(event store.Event, params store.UpdateEventParams) bool {
 		sameDate(event.StartDate, params.StartDate) && sameDate(event.EndDate, params.EndDate) && sameText(event.TimeZone, params.TimeZone) &&
 		sameText(event.RecurrenceFrequency, params.RecurrenceFrequency) && sameCount(event.RecurrenceInterval, params.RecurrenceInterval) &&
 		sameInstant(event.RecurrenceUntil, params.RecurrenceUntil) && slices.Equal(event.RecurrenceByWeekday, params.RecurrenceByWeekday) &&
-		sameCount(event.RecurrenceCount, params.RecurrenceCount)
+		sameCount(event.RecurrenceCount, params.RecurrenceCount) && sameText(event.Priority, params.Priority)
 }
 
 // exceptionWrite is one occurrence exception to store.
