@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/GAMch1k/life-os/pkg/activity"
 	"github.com/GAMch1k/life-os/pkg/httpserver"
 	"github.com/GAMch1k/life-os/services/notifications/internal/api/generated"
@@ -37,6 +39,7 @@ func (r *recordedEvents) all() []map[string]any {
 
 type apiClient struct {
 	t        *testing.T
+	pool     *pgxpool.Pool
 	app      *httpserver.App
 	handler  *Handler
 	activity *recordedEvents
@@ -60,7 +63,7 @@ func newAPIClient(t *testing.T, channels ...string) apiClient {
 	handler := NewHandler(pool, channels).
 		WithWake(func() { *woken++ }).
 		WithActivity(activity.NewEmitter(activityServer.URL, "notifications", nil))
-	return apiClient{t: t, app: newTestApp(handler), handler: handler, activity: recorded, woken: woken}
+	return apiClient{t: t, pool: pool, app: newTestApp(handler), handler: handler, activity: recorded, woken: woken}
 }
 
 func (c apiClient) do(method, target string, body any, headers ...string) (int, []byte) {

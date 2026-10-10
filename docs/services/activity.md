@@ -70,6 +70,7 @@ The public gateway passes only `user` and `dev:<name>`: a claim to be the Life O
 | `inbox.processing.completed` / `.retry_scheduled` / `.failed` | inbox | `processing_attempt` | Attempt outcome recorded by the processor. |
 | `inbox.human_review.requested` / `.resolved` | inbox | `inbox_item` | Ambiguous work waiting for, then given, a user decision. |
 | `inbox.item.resolved` / `.discarded` | inbox | `inbox_item` | Final Inbox state. |
+| `inbox.notification.failed` | inbox | `inbox_item` | The owner could not be notified about a Human Review or a failed capture (Notifications unreachable or refusing), by `system:inbox`, caused by the Inbox event it was about; `data` holds `category`, `dedupeKey`, and `error`. See [Inbox](inbox.md#notifications). |
 | `mcp.action.requested` / `.completed` / `.failed` | mcp | `mcp_action` | Every mutation tool call (Tasks, Calendar, Finance). Read and search tools are not recorded. The Dashboard shows this domain as "Agent changes". |
 | `task.created` / `.updated` / `.completed` / `.reopened` | tasks | `task` | Every Task mutation, from the Dashboard or an agent. |
 | `calendar.event.created` / `.updated` / `.rescheduled` / `.cancelled` / `.restored` / `.deleted` | calendar | `calendar_event` | One per event change through the Calendar API, from the Dashboard (`user`), an agent, or a tool, with the request's correlation and causation; an update that changes nothing records nothing. `data` holds the title, times, status, source, and for updates the changed fields. See [Calendar](calendar.md#activity). |

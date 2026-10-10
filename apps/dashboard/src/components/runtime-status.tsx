@@ -1,5 +1,11 @@
 import Link from "next/link";
-import { AlertTriangle, ArrowRight, CheckCircle2, XCircle } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowRight,
+  CheckCircle2,
+  CircleMinus,
+  XCircle,
+} from "lucide-react";
 
 import { MasonryGrid } from "@/components/masonry-grid";
 import {
@@ -22,6 +28,7 @@ import { cn } from "@/lib/utils";
 
 const STATE_LABEL: Record<CheckState, string> = {
   ok: "OK",
+  neutral: "Not set up",
   warning: "Needs attention",
   problem: "Problem",
 };
@@ -38,6 +45,13 @@ function StateIcon({
       <CheckCircle2
         aria-hidden="true"
         className={cn("text-success", className)}
+      />
+    );
+  if (state === "neutral")
+    return (
+      <CircleMinus
+        aria-hidden="true"
+        className={cn("text-muted-foreground", className)}
       />
     );
   if (state === "warning")

@@ -21,10 +21,11 @@ info:
     owner's timezone configured for Calendar (LIFE_OS_TIMEZONE, else UTC).
 
 
-    Calendar sources are external feeds (ICS/iCal) whose events Calendar
-    imports and refreshes on its own schedule. Imported events are read-only
-    through this API except for their reminders; only their source changes,
-    cancels, or restores them.
+    Calendar sources are external feeds (ICS/iCal) and the owner's Google
+    calendars chosen to sync, whose events Calendar imports and keeps up to
+    date on its own schedule. Imported events are read-only through this API
+    except for their reminders; only their source changes, cancels, or
+    restores them.
 
 
     Reminders work like Google Calendar's notifications. Every event can
@@ -46,8 +47,10 @@ info:
     following** (`POST .../split` to change, `POST .../truncate` to delete:
     the series ends before that occurrence), and **All events**
     (`PATCH`/`DELETE /v1/events/{eventId}`). Only events created in Life OS
-    (`source.kind` `manual`) recur this way; an imported feed's recurring
-    events are stored one event per occurrence.
+    (`source.kind` `manual`) recur this way; a recurring Google event whose
+    rule fits this model is synchronized as such a series (read-only), and an
+    imported feed's recurring events, like Google rules outside the model,
+    are stored one event per occurrence.
   license: {name: UNLICENSED, url: https://life-os.local/license}
 servers: [{url: http://calendar:8080}]
 paths:
@@ -291,7 +294,7 @@ paths:
   /v1/sources:
     get:
       summary: List calendar sources
-      description: Every source, oldest first, with its configuration and refresh state.
+      description: Every feed (ICS source), oldest first, with its configuration and refresh state. Synced Google calendars are sources too, managed and listed under `/v1/google/calendars`; their ids answer 404 here.
       operationId: listSources
       security: []
       responses:
@@ -477,7 +480,12 @@ paths:
   /v1/google/calendars/{calendarId}:
     patch:
       summary: Choose whether a Google calendar syncs
-      description: Records the owner's choice; syncing itself starts in a later release.
+      description: >-
+        Switched on, the calendar is synced right away (its events listed in
+        full) and then every few minutes. Switched off, every event synced
+        from it is removed from Life OS (they stay in Google), its source
+        goes, and Activity records `calendar.source.removed`; switching it on
+        again lists its events in full again.
       operationId: updateGoogleCalendar
       security: []
       parameters: [{name: calendarId, in: path, required: true, description: 'The calendar''s id in Calendar (not its Google id).', schema: {type: string, format: uuid}}]
@@ -486,6 +494,27 @@ paths:
         '200': {description: Calendar, content: {application/json: {schema: {$ref: '#/components/schemas/GoogleCalendar'}}}}
         '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}
         '404': {description: Calendar not found}
+  /v1/google/calendars/{calendarId}/sync:
+    post:
+      summary: Sync a Google calendar now
+      description: >-
+        Reads the changes since the last sync from Google (with `full=true`,
+        every event again, as after an expired sync token) and reconciles the
+        calendar's events, then returns the calendar with its sync state. The
+        request succeeds whether or not the sync does: read `sync.state` and
+        `sync.lastError`. A failed sync keeps the events from the last good
+        one and is retried with backoff.
+      operationId: syncGoogleCalendar
+      security: []
+      parameters:
+        - {name: calendarId, in: path, required: true, description: 'The calendar''s id in Calendar (not its Google id).', schema: {type: string, format: uuid}}
+        - {name: full, in: query, description: 'List every event again instead of the changes since the last sync.', schema: {type: boolean, default: false}}
+      responses:
+        '200': {description: The calendar after the sync, content: {application/json: {schema: {$ref: '#/components/schemas/GoogleCalendar'}}}}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}
+        '404': {description: Calendar not found}
+        '409': {description: 'The calendar does not sync (google_sync_disabled), it is syncing right now (sync_in_progress), its sync changed meanwhile (conflict), or Google is not connected (google_not_connected) or its authorization expired (google_expired)'}
+        '503': {description: Google is not configured on this server (google_not_configured)}
 components:
   parameters:
     TimeZone: {name: timeZone, in: query, description: 'IANA timezone (for example Europe/Berlin) in which all-day dates are compared with instants. Defaults to the owner''s timezone configured for Calendar.', schema: {type: string, minLength: 1, maxLength: 64}}
@@ -561,7 +590,7 @@ components:
         kind: {$ref: '#/components/schemas/EventSourceKind'}
         sourceId: {type: string, format: uuid, nullable: true, description: 'The Calendar source (feed or connected calendar) the event was imported from; null for manual events.'}
         name: {type: string, nullable: true, description: 'The name of that source, such as "ZAW", as it is now (renaming the source renames it here); null for manual events. Set by Calendar in responses.'}
-        externalUid: {type: string, nullable: true, description: 'The event''s identity in its source; null for manual events. For an ICS event, its UID; one occurrence of a recurring ICS event is imported as its own event, `<UID>#<RECURRENCE-ID>`, where the RECURRENCE-ID is its original start (20261017T040000Z, or 20261017 for an all-day event).'}
+        externalUid: {type: string, nullable: true, description: 'The event''s identity in its source; null for manual events. For an ICS event, its UID; one occurrence of a recurring ICS event is imported as its own event, `<UID>#<RECURRENCE-ID>`, where the RECURRENCE-ID is its original start (20261017T040000Z, or 20261017 for an all-day event). For a Google event, its Google event id; one occurrence of a recurring Google event imported as its own event is `<id>_<original start>` as Google names its instances (`<id>_20261017T040000Z`, or `<id>_20261017` for an all-day event).'}
     EventStatus:
       type: string
       enum: [active, cancelled]
@@ -803,7 +832,7 @@ components:
         state: {type: string, minLength: 1, maxLength: 256, description: The state Google returned with it.}
     GoogleCalendar:
       type: object
-      required: [id, googleCalendarId, summary, accessRole, primary, syncEnabled, createdAt, updatedAt]
+      required: [id, googleCalendarId, summary, accessRole, primary, syncEnabled, sync, createdAt, updatedAt]
       properties:
         id: {type: string, format: uuid}
         googleCalendarId: {type: string, description: 'The calendar''s id at Google (the account''s address for the primary calendar).'}
@@ -811,9 +840,30 @@ components:
         color: {type: string, nullable: true, description: 'Its background color in Google Calendar, such as #9fe1e7.'}
         accessRole: {type: string, enum: [owner, writer, reader, freeBusyReader], description: 'The account''s access to the calendar.'}
         primary: {type: boolean, description: 'The account''s primary calendar.'}
-        syncEnabled: {type: boolean, description: 'Whether the calendar will sync into Life OS (syncing starts in a later release).'}
+        syncEnabled: {type: boolean, description: 'Whether the calendar syncs into Life OS.'}
+        sync: {$ref: '#/components/schemas/GoogleCalendarSync'}
         createdAt: {type: string, format: date-time}
         updatedAt: {type: string, format: date-time}
+    GoogleCalendarSync:
+      type: object
+      description: >-
+        The calendar's sync state. Read-only. Its events are imported as
+        source `sourceId` (`source.kind` `google`, `source.name` the
+        calendar's name).
+      required: [state, consecutiveFailures, syncing]
+      properties:
+        state:
+          type: string
+          enum: ['off', pending, synced, failing]
+          description: '`off`: not chosen to sync. `pending`: chosen, waiting for its first sync. `synced`: the last sync succeeded. `failing`: the last sync failed (see `lastError`); it is retried automatically and the events from the last good sync are kept.'
+        sourceId: {type: string, format: uuid, nullable: true, description: 'The Calendar source its events carry as `source.sourceId`; null while it does not sync (or before its first sync).'}
+        lastAttemptAt: {type: string, format: date-time, nullable: true}
+        lastSyncedAt: {type: string, format: date-time, nullable: true, description: When it was last synced successfully.}
+        nextSyncAt: {type: string, format: date-time, nullable: true, description: 'When it is synced next (every few minutes, later after failures).'}
+        lastError: {type: string, nullable: true, description: Why the last sync failed; null after a success.}
+        consecutiveFailures: {type: integer, description: Failed syncs since the last success; drives the retry backoff.}
+        lastCounts: {$ref: '#/components/schemas/SourceRefreshCounts'}
+        syncing: {type: boolean, description: A sync is running now.}
     GoogleCalendarList: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/GoogleCalendar'}}}}
     UpdateGoogleCalendarRequest:
       type: object

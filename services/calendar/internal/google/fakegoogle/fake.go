@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/GAMch1k/life-os/services/calendar/internal/google"
 )
@@ -62,12 +64,41 @@ type Server struct {
 	Revoked     []string
 	PageSize    int
 	LastRefresh string
+
+	// Events are each calendar's events (see PutEvent); EventsStatus, when
+	// set, fails events.list with this HTTP status; EventsPageSize is the
+	// page size of events.list (default 250).
+	events         map[string]*eventLog
+	EventsStatus   int
+	EventsPageSize int
+	// EventRequests are the events.list queries received, by calendar.
+	EventRequests map[string][]url.Values
+}
+
+// eventLog is one calendar's events with a change sequence: a sync token
+// "sync-N" asks for the events changed after change N.
+type eventLog struct {
+	timeZone string
+	defaults []google.Reminder
+	seq      int
+	// minSeq: tokens before it have expired (410).
+	minSeq int
+	order  []string
+	events map[string]*loggedEvent
+}
+
+type loggedEvent struct {
+	event   google.Event
+	changed int
 }
 
 // New starts a fake Google serving calendars; it stops with the test.
 func New(t *testing.T, calendars ...Calendar) *Server {
 	t.Helper()
-	server := &Server{Calendars: calendars, codes: map[string]string{}, refresh: map[string]bool{}, access: map[string]bool{}, PageSize: 2}
+	server := &Server{
+		Calendars: calendars, codes: map[string]string{}, refresh: map[string]bool{}, access: map[string]bool{}, PageSize: 2,
+		events: map[string]*eventLog{}, EventRequests: map[string][]url.Values{},
+	}
 	server.Server = httptest.NewServer(http.HandlerFunc(server.serve))
 	t.Cleanup(server.Close)
 	return server
@@ -152,6 +183,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	case r.Method == http.MethodGet && r.URL.Path == "/calendar/v3/users/me/calendarList":
 		s.calendarList(w, r)
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/calendar/v3/calendars/") && strings.HasSuffix(r.URL.Path, "/events"):
+		calendarID, err := url.PathUnescape(strings.TrimSuffix(strings.TrimPrefix(r.URL.EscapedPath(), "/calendar/v3/calendars/"), "/events"))
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		s.listEvents(w, r, calendarID)
 	default:
 		http.NotFound(w, r)
 	}
@@ -274,4 +312,162 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(body)
+}
+
+func (s *Server) log(calendarID string) *eventLog {
+	log := s.events[calendarID]
+	if log == nil {
+		log = &eventLog{timeZone: "Europe/Berlin", events: map[string]*loggedEvent{}}
+		s.events[calendarID] = log
+	}
+	return log
+}
+
+// SetCalendarDetails sets the time zone and default reminders events.list
+// reports for a calendar.
+func (s *Server) SetCalendarDetails(calendarID, timeZone string, defaults ...google.Reminder) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	log := s.log(calendarID)
+	log.timeZone, log.defaults = timeZone, defaults
+}
+
+// PutEvent adds or replaces (by id) an event of a calendar, as a change.
+func (s *Server) PutEvent(calendarID string, events ...google.Event) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	log := s.log(calendarID)
+	for _, event := range events {
+		if event.Status == "" {
+			event.Status = "confirmed"
+		}
+		log.seq++
+		if _, known := log.events[event.ID]; !known {
+			log.order = append(log.order, event.ID)
+		}
+		log.events[event.ID] = &loggedEvent{event: event, changed: log.seq}
+	}
+}
+
+// DeleteEvent deletes an event as Google does: it stays listed (with
+// showDeleted) as cancelled, with only its identity.
+func (s *Server) DeleteEvent(calendarID string, ids ...string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	log := s.log(calendarID)
+	for _, id := range ids {
+		stored, known := log.events[id]
+		if !known {
+			continue
+		}
+		log.seq++
+		gone := google.Event{ID: id, Status: "cancelled", RecurringEventID: stored.event.RecurringEventID, OriginalStartTime: stored.event.OriginalStartTime}
+		log.events[id] = &loggedEvent{event: gone, changed: log.seq}
+	}
+}
+
+// ForgetEvent drops an event without a trace, as Google eventually does
+// with deleted events: a full listing no longer has it.
+func (s *Server) ForgetEvent(calendarID string, ids ...string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	log := s.log(calendarID)
+	for _, id := range ids {
+		delete(log.events, id)
+	}
+}
+
+// ExpireSyncTokens makes Google refuse every sync token issued so far (410).
+func (s *Server) ExpireSyncTokens(calendarID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	log := s.log(calendarID)
+	log.minSeq = log.seq + 1
+}
+
+// Requests returns the events.list queries received for a calendar.
+func (s *Server) Requests(calendarID string) []url.Values {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]url.Values(nil), s.EventRequests[calendarID]...)
+}
+
+func (s *Server) listEvents(w http.ResponseWriter, r *http.Request, calendarID string) {
+	query := r.URL.Query()
+	s.EventRequests[calendarID] = append(s.EventRequests[calendarID], query)
+	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if !s.access[token] {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": map[string]any{"code": 401, "message": "Request had invalid authentication credentials."}})
+		return
+	}
+	if s.EventsStatus != 0 {
+		writeJSON(w, s.EventsStatus, map[string]any{"error": map[string]any{"code": s.EventsStatus, "message": "Backend Error"}})
+		return
+	}
+	known := false
+	for _, calendar := range s.Calendars {
+		known = known || calendar.ID == calendarID
+	}
+	if !known {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": map[string]any{"code": 404, "message": "Not Found"}})
+		return
+	}
+	if query.Get("singleEvents") != "false" || query.Get("showDeleted") != "true" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{"code": 400, "message": "expected singleEvents=false and showDeleted=true"}})
+		return
+	}
+	log := s.log(calendarID)
+	after := -1
+	if syncToken := query.Get("syncToken"); syncToken != "" {
+		if query.Has("timeMin") {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{"code": 400, "message": "syncToken and timeMin together"}})
+			return
+		}
+		if _, err := fmt.Sscanf(syncToken, "sync-%d", &after); err != nil || after < log.minSeq {
+			writeJSON(w, http.StatusGone, map[string]any{"error": map[string]any{"code": 410, "message": "Sync token is no longer valid, a full sync is required."}})
+			return
+		}
+	}
+	var timeMin time.Time
+	if raw := query.Get("timeMin"); raw != "" {
+		timeMin, _ = time.Parse(time.RFC3339, raw)
+	}
+	var matching []google.Event
+	for _, id := range log.order {
+		stored, ok := log.events[id]
+		if !ok || stored.changed <= after {
+			continue
+		}
+		event := stored.event
+		if after < 0 && event.End != nil && event.End.DateTime != "" && len(event.Recurrence) == 0 && !timeMin.IsZero() {
+			if end, err := time.Parse(time.RFC3339, event.End.DateTime); err == nil && !end.After(timeMin) {
+				continue
+			}
+		}
+		matching = append(matching, event)
+	}
+	size := s.EventsPageSize
+	if size <= 0 {
+		size = 250
+	}
+	start := 0
+	if pageToken := query.Get("pageToken"); pageToken != "" {
+		_, _ = fmt.Sscanf(pageToken, "events-%d", &start)
+	}
+	end := min(start+size, len(matching))
+	if start > end {
+		start = end
+	}
+	page := map[string]any{"kind": "calendar#events", "summary": calendarID, "timeZone": log.timeZone, "items": matching[start:end]}
+	if log.defaults != nil {
+		page["defaultReminders"] = log.defaults
+	} else {
+		page["defaultReminders"] = []google.Reminder{}
+	}
+	if end < len(matching) {
+		page["nextPageToken"] = fmt.Sprintf("events-%d", end)
+	} else {
+		page["nextSyncToken"] = fmt.Sprintf("sync-%d", log.seq)
+	}
+	writeJSON(w, http.StatusOK, page)
 }
