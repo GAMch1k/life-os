@@ -8,9 +8,13 @@ export type TasksWorkspaceState =
   | { kind: "unavailable" };
 
 export async function getTasksWorkspace(): Promise<TasksWorkspaceState> {
-  const { data, error } = await tasksClient.GET("/v1/tasks", {
-    params: { query: { limit: 100 } },
-  });
+  // A refused connection throws rather than returning an error response; the
+  // page shows its unavailable state either way instead of crashing.
+  const { data, error } = await tasksClient
+    .GET("/v1/tasks", {
+      params: { query: { limit: 100 } },
+    })
+    .catch(() => ({ data: undefined, error: true }));
   if (error || !data) return { kind: "unavailable" };
   if (data.items.length === 0) return { kind: "empty" };
   return { kind: "ready", tasks: data.items };

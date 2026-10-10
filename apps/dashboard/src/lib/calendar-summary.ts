@@ -40,11 +40,14 @@ export async function getCalendarSummary(): Promise<CalendarSummaryState> {
   const now = new Date();
   const timeZone = userTimeZone();
   const { from, to } = agendaWindow(now, timeZone);
-  const { data, error } = await calendarClient.GET("/v1/events", {
-    params: {
-      query: { from: from.toISOString(), to: to.toISOString(), limit: 30 },
-    },
-  });
+  // A refused connection throws rather than returning an error response.
+  const { data, error } = await calendarClient
+    .GET("/v1/events", {
+      params: {
+        query: { from: from.toISOString(), to: to.toISOString(), limit: 30 },
+      },
+    })
+    .catch(() => ({ data: undefined, error: true }));
 
   if (error || !data) {
     return { kind: "unavailable" };
