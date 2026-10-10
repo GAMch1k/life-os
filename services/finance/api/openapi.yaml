@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Life OS Finance API
-  version: 1.0.0
+  version: 1.1.0
   description: >-
     Every write (POST, PUT, PATCH, DELETE) must say who makes it in the
     X-Life-OS-Actor header: `user` (the owner), `agent:<name>` (the Life OS
@@ -11,68 +11,650 @@ info:
     rejected with 400 and error code `actor_required`; nothing is attributed to
     the owner by default. Reads do not need the header. The public gateway
     passes only `user` and `dev:<name>`.
+
+
+    Money is an integer amount in the currency's minor units (cents) with a
+    three-letter ISO currency; a negative transaction amount is money out, a
+    positive one money in. An account's `balance` is its opening balance plus
+    its booked transactions; pending transactions are shown separately
+    (`pending`) and are not in the balance or the monthly summary. A
+    transaction's `bookingDate` is the owner-local date it counts on.
+
+
+    Every transaction has a `source`: `manual` (entered in Life OS by the
+    owner or the AI), `csv` (a CSV import), or `bank` (a bank connection,
+    planned). Imported transactions (`csv`, `bank`) are read-only: only their
+    `categoryId` and `notes` change, and they cannot be deleted (409
+    `managed_by_source`). Finance keeps a built-in Cash account
+    (`builtIn: true`) for cash spending; the service creates it when it
+    starts, and a manual transaction without an `accountId` goes there.
+
+
+    Categories are chosen by hand or by rules: a rule matches text in a
+    transaction's counterparty or description and gives it a category. Rules
+    apply automatically to new manual and imported transactions that come
+    without a category, and `POST /v1/categories/rules/apply` re-applies them.
+    A category chosen by hand is never changed by a rule.
+
+
+    Errors use the shared envelope `{"error": {"code", "message"},
+    "request_id"}`; the codes are listed with each operation.
   license: {name: UNLICENSED, url: https://life-os.local/license}
 servers: [{url: http://finance:8080}]
 paths:
   /v1/accounts:
     get:
       summary: List finance accounts
+      description: >-
+        Accounts with their current balance: the built-in Cash account first,
+        then by name. Archived accounts are left out unless `includeArchived`
+        is true.
       operationId: listAccounts
       security: []
-      responses: {'200': {description: Accounts, content: {application/json: {schema: {$ref: '#/components/schemas/AccountList'}}}}, '400': {description: Invalid request}}
-  /v1/categories:
+      parameters:
+        - {name: includeArchived, in: query, schema: {type: boolean, default: false}}
+      responses:
+        '200': {description: Accounts, content: {application/json: {schema: {$ref: '#/components/schemas/AccountList'}}}}
+        '400': {description: Invalid request, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    post:
+      summary: Create a finance account
+      description: >-
+        Creates an account kept in Life OS (`source.kind` `manual`). Names
+        are unique (409 `account_name_taken`).
+      operationId: createAccount
+      security: []
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateAccountRequest'}}}}
+      responses:
+        '201': {description: Account, content: {application/json: {schema: {$ref: '#/components/schemas/Account'}}}}
+        '400': {description: 'Invalid request (`invalid_request`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: Another account has this name (`account_name_taken`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/accounts/{accountId}:
     get:
-      summary: List finance categories
-      operationId: listCategories
+      summary: Get a finance account
+      description: Returns the account, archived or not.
+      operationId: getAccount
       security: []
-      responses: {'200': {description: Categories, content: {application/json: {schema: {$ref: '#/components/schemas/CategoryList'}}}}, '400': {description: Invalid request}}
-  /v1/categories/{categoryId}:
+      parameters: [{$ref: '#/components/parameters/AccountId'}]
+      responses:
+        '200': {description: Account, content: {application/json: {schema: {$ref: '#/components/schemas/Account'}}}}
+        '400': {description: Invalid request, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: Account not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
     patch:
-      summary: Update a finance category
-      operationId: updateCategory
+      summary: Update or archive a finance account
+      description: >-
+        Changes only the fields present. `archived: true` archives the
+        account: it leaves the account list and takes no new transactions,
+        but keeps its history; `archived: false` restores it. The currency
+        changes only while the account has no transactions (409
+        `account_has_transactions`). The built-in Cash account can be renamed
+        and given another opening balance, but not archived or given another
+        kind (409 `built_in_account`).
+      operationId: updateAccount
       security: []
-      parameters: [{name: categoryId, in: path, required: true, schema: {type: string, format: uuid}}]
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateCategoryRequest'}}}}
-      responses: {'200': {description: Category, content: {application/json: {schema: {$ref: '#/components/schemas/Category'}}}}, '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}, '404': {description: Category not found}}
+      parameters: [{$ref: '#/components/parameters/AccountId'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateAccountRequest'}}}}
+      responses:
+        '200': {description: Account, content: {application/json: {schema: {$ref: '#/components/schemas/Account'}}}}
+        '400': {description: 'Invalid request (`invalid_request`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: Account not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`account_name_taken`, `account_has_transactions`, or `built_in_account`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
   /v1/transactions:
     get:
-      summary: List and filter transactions
+      summary: List, search, and filter transactions
+      description: >-
+        Transactions of every account (or of one, with `accountId`), latest
+        `bookingDate` first, then latest created first. Filters combine. `q`
+        matches every word (case-insensitive substring) in the counterparty,
+        description, or notes. When more transactions match than `limit`,
+        `nextCursor` is set: pass it back as `cursor`, with the same filters,
+        for the next page. A response without `nextCursor` is the last page.
       operationId: listTransactions
       security: []
-      parameters: [{name: accountId, in: query, schema: {type: string, format: uuid}}, {name: categoryId, in: query, schema: {type: string, format: uuid}}, {name: from, in: query, schema: {type: string, format: date}}, {name: to, in: query, schema: {type: string, format: date}}, {name: cursor, in: query, schema: {type: string}}, {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}]
-      responses: {'200': {description: Transactions, content: {application/json: {schema: {$ref: '#/components/schemas/TransactionList'}}}}, '400': {description: Invalid request}}
+      parameters:
+        - {name: q, in: query, description: 'Words to find in the counterparty, description, or notes; every word must match.', schema: {type: string, minLength: 1, maxLength: 200}}
+        - {name: accountId, in: query, schema: {type: string, format: uuid}}
+        - {name: categoryId, in: query, description: 'A category id, or `uncategorized` for transactions without a category.', schema: {type: string}}
+        - {name: from, in: query, description: Earliest bookingDate (inclusive)., schema: {type: string, format: date}}
+        - {name: to, in: query, description: Latest bookingDate (inclusive)., schema: {type: string, format: date}}
+        - {name: direction, in: query, description: '`in` for money in (positive amounts), `out` for money out (negative).', schema: {$ref: '#/components/schemas/TransactionDirection'}}
+        - {name: amountMin, in: query, description: 'Smallest absolute amount in minor units (1250 matches -12.50 and 12.50).', schema: {type: integer, format: int64, minimum: 0}}
+        - {name: amountMax, in: query, description: Largest absolute amount in minor units., schema: {type: integer, format: int64, minimum: 0}}
+        - {name: status, in: query, schema: {$ref: '#/components/schemas/TransactionStatus'}}
+        - {name: source, in: query, schema: {$ref: '#/components/schemas/TransactionSourceKind'}}
+        - {name: cursor, in: query, description: The previous page's nextCursor. Opaque; only valid with the filters it was returned for., schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}
+      responses:
+        '200': {description: Transactions, content: {application/json: {schema: {$ref: '#/components/schemas/TransactionList'}}}}
+        '400': {description: 'Invalid request (`invalid_request`, such as an unknown categoryId value or amountMin above amountMax), or a malformed cursor (`invalid_cursor`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
     post:
       summary: Record a manual transaction
+      description: >-
+        Records a manual transaction (`source.kind` `manual`). Without
+        `accountId` it goes to the built-in Cash account; without
+        `bookingDate` it is dated today in the owner's timezone. The amount's
+        currency must be the account's (400 `currency_mismatch`). Without
+        `categoryId` the category rules choose one (or none). An
+        `Idempotency-Key` header makes the request safe to retry: an identical
+        repeat returns the original transaction, and reusing the key with a
+        different body returns 409 `idempotency_conflict`.
       operationId: createManualTransaction
       security: []
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateManualTransactionRequest'}}}}
-      responses: {'201': {description: Transaction, content: {application/json: {schema: {$ref: '#/components/schemas/Transaction'}}}}, '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}}
+      responses:
+        '201': {description: Transaction, content: {application/json: {schema: {$ref: '#/components/schemas/Transaction'}}}}
+        '400': {description: 'Invalid request (`invalid_request`, `unknown_account`, `unknown_category`, `currency_mismatch`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`account_archived`, `category_archived`, or `idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/transactions/{transactionId}:
+    get:
+      summary: Get a transaction
+      operationId: getTransaction
+      security: []
+      parameters: [{$ref: '#/components/parameters/TransactionId'}]
+      responses:
+        '200': {description: Transaction, content: {application/json: {schema: {$ref: '#/components/schemas/Transaction'}}}}
+        '400': {description: Invalid request, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: Transaction not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    patch:
+      summary: Update a transaction
+      description: >-
+        Changes only the fields present; `null` clears a nullable field. A
+        manual transaction takes every field; an imported one (`readOnly`)
+        only `categoryId` and `notes`, and naming any other field returns 409
+        `managed_by_source`. Setting `categoryId`, or clearing it with null,
+        is a choice by hand that rules leave alone from then on. When the
+        counterparty or description of a transaction whose category was not
+        chosen by hand changes, the rules choose again.
+      operationId: updateTransaction
+      security: []
+      parameters: [{$ref: '#/components/parameters/TransactionId'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateTransactionRequest'}}}}
+      responses:
+        '200': {description: Transaction, content: {application/json: {schema: {$ref: '#/components/schemas/Transaction'}}}}
+        '400': {description: 'Invalid request (`invalid_request`, `unknown_account`, `unknown_category`, `currency_mismatch`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: Transaction not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`managed_by_source`, `account_archived`, or `category_archived`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    delete:
+      summary: Delete a manual transaction
+      description: Deletes a manual transaction permanently. Imported transactions cannot be deleted (409 `managed_by_source`).
+      operationId: deleteTransaction
+      security: []
+      parameters: [{$ref: '#/components/parameters/TransactionId'}]
+      responses:
+        '204': {description: Deleted}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: Transaction not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: The transaction is imported (`managed_by_source`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/categories:
+    get:
+      summary: List finance categories
+      description: Categories by kind, then name. Archived categories are left out unless `includeArchived` is true.
+      operationId: listCategories
+      security: []
+      parameters:
+        - {name: includeArchived, in: query, schema: {type: boolean, default: false}}
+      responses:
+        '200': {description: Categories, content: {application/json: {schema: {$ref: '#/components/schemas/CategoryList'}}}}
+        '400': {description: Invalid request, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    post:
+      summary: Create a finance category
+      description: A name is unique per kind (409 `category_exists`).
+      operationId: createCategory
+      security: []
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateCategoryRequest'}}}}
+      responses:
+        '201': {description: Category, content: {application/json: {schema: {$ref: '#/components/schemas/Category'}}}}
+        '400': {description: 'Invalid request (`invalid_request`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: A category of this kind has this name (`category_exists`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/categories/{categoryId}:
+    patch:
+      summary: Update or archive a finance category
+      description: >-
+        Changes only the fields present; `color: null` removes the color.
+        `archived: true` archives the category: transactions keep it, but it
+        cannot be given to transactions or rules any more (409
+        `category_archived`) and its rules are skipped; `archived: false`
+        restores it.
+      operationId: updateCategory
+      security: []
+      parameters: [{$ref: '#/components/parameters/CategoryId'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateCategoryRequest'}}}}
+      responses:
+        '200': {description: Category, content: {application/json: {schema: {$ref: '#/components/schemas/Category'}}}}
+        '400': {description: 'Invalid request (`invalid_request`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: Category not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: A category of this kind has this name (`category_exists`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/categories/rules:
+    get:
+      summary: List category rules
+      description: Rules in the order they are tried (priority, lowest first; then oldest first).
+      operationId: listCategoryRules
+      security: []
+      responses:
+        '200': {description: Rules, content: {application/json: {schema: {$ref: '#/components/schemas/CategoryRuleList'}}}}
+        '400': {description: Invalid request, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    post:
+      summary: Create a category rule
+      description: >-
+        Without `priority` the rule is tried after every existing rule. It
+        applies to transactions created from now on; apply it to existing
+        ones with `POST /v1/categories/rules/apply`.
+      operationId: createCategoryRule
+      security: []
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateCategoryRuleRequest'}}}}
+      responses:
+        '201': {description: Rule, content: {application/json: {schema: {$ref: '#/components/schemas/CategoryRule'}}}}
+        '400': {description: 'Invalid request (`invalid_request`, `unknown_category`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: The category is archived (`category_archived`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/categories/rules/{ruleId}:
+    patch:
+      summary: Update a category rule
+      operationId: updateCategoryRule
+      security: []
+      parameters: [{$ref: '#/components/parameters/RuleId'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateCategoryRuleRequest'}}}}
+      responses:
+        '200': {description: Rule, content: {application/json: {schema: {$ref: '#/components/schemas/CategoryRule'}}}}
+        '400': {description: 'Invalid request (`invalid_request`, `unknown_category`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: Rule not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: The category is archived (`category_archived`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    delete:
+      summary: Delete a category rule
+      description: Transactions it categorized keep their category until the rules are applied again with scope `all`.
+      operationId: deleteCategoryRule
+      security: []
+      parameters: [{$ref: '#/components/parameters/RuleId'}]
+      responses:
+        '204': {description: Deleted}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: Rule not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/categories/rules/apply:
+    post:
+      summary: Apply the category rules to existing transactions
+      description: >-
+        `uncategorized` (the default) gives a category to transactions that
+        have none and whose category was not chosen by hand. `all` also
+        re-evaluates every transaction a rule categorized: it may get another
+        category, or none when no rule matches any more. Categories chosen by
+        hand are never changed. Returns the counts.
+      operationId: applyCategoryRules
+      security: []
+      requestBody: {required: false, content: {application/json: {schema: {$ref: '#/components/schemas/ApplyCategoryRulesRequest'}}}}
+      responses:
+        '200': {description: Counts, content: {application/json: {schema: {$ref: '#/components/schemas/ApplyCategoryRulesResult'}}}}
+        '400': {description: 'Invalid request (`invalid_request`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
   /v1/summaries/monthly:
     get:
       summary: Get a monthly finance summary
+      description: >-
+        Booked transactions of the month in one currency (`currency`, by
+        default the built-in Cash account's): income, spending, and net.
+        Transactions in a `transfer` category (money moved between own
+        accounts) are left out of income, spending, and net, but listed in
+        `byCategory`. `totalBalance` is the current balance of the accounts
+        in that currency, archived ones included. With `accountId` only that
+        account counts.
       operationId: getMonthlySummary
       security: []
-      parameters: [{name: month, in: query, required: true, schema: {type: string}}]
-      responses: {'200': {description: Summary, content: {application/json: {schema: {$ref: '#/components/schemas/MonthlySummary'}}}}, '400': {description: Invalid request}}
+      parameters:
+        - {name: month, in: query, required: true, description: YYYY-MM., schema: {type: string, pattern: '^\d{4}-\d{2}$'}}
+        - {name: currency, in: query, schema: {type: string, pattern: '^[A-Z]{3}$'}}
+        - {name: accountId, in: query, schema: {type: string, format: uuid}}
+      responses:
+        '200': {description: Summary, content: {application/json: {schema: {$ref: '#/components/schemas/MonthlySummary'}}}}
+        '400': {description: Invalid request (`invalid_request`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
   /v1/imports/csv:
     post:
-      summary: Submit a CSV import
+      summary: Import transactions from a CSV file
+      description: >-
+        Imports the rows of a UTF-8 CSV file into the account `accountId`
+        (picked in the Dashboard). The rows become `csv` transactions:
+        booked, and read-only except category and notes. Columns are matched
+        by header name, case-insensitively, in any order (see the Finance CSV
+        import documentation). Re-importing is idempotent: a row whose
+        `external_id` (or, without one, whose content) the account already
+        has counts as a duplicate. Rows without a category get one from the
+        rules. Valid rows are imported even when others fail; each failed row
+        is reported with its row number and reason. Files in the older
+        format, with an `account_id` column on every row, are still accepted
+        without `accountId`.
       operationId: createCsvImport
       security: []
+      parameters:
+        - {name: accountId, in: query, description: The account to import into. Required unless the file has an account_id column., schema: {type: string, format: uuid}}
       requestBody: {required: true, content: {text/csv: {schema: {type: string, format: binary}}}}
-      responses: {'202': {description: Accepted, content: {application/json: {schema: {$ref: '#/components/schemas/CsvImport'}}}}, '400': {description: 'Invalid CSV, or no valid X-Life-OS-Actor (actor_required)'}}
+      responses:
+        '200': {description: Import result, content: {application/json: {schema: {$ref: '#/components/schemas/CsvImport'}}}}
+        '400': {description: 'Unreadable CSV or missing columns (`invalid_csv`), no account (`account_required`), an unknown account (`unknown_account`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: The account is archived (`account_archived`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
 components:
+  parameters:
+    AccountId: {name: accountId, in: path, required: true, schema: {type: string, format: uuid}}
+    TransactionId: {name: transactionId, in: path, required: true, schema: {type: string, format: uuid}}
+    CategoryId: {name: categoryId, in: path, required: true, schema: {type: string, format: uuid}}
+    RuleId: {name: ruleId, in: path, required: true, schema: {type: string, format: uuid}}
   schemas:
-    Money: {type: object, required: [amount, currency], properties: {amount: {type: integer, format: int64}, currency: {type: string}}}
-    Account: {type: object, required: [id, name, balance], properties: {id: {type: string, format: uuid}, name: {type: string}, balance: {$ref: '#/components/schemas/Money'}}}
-    Category: {type: object, required: [id, name, kind], properties: {id: {type: string, format: uuid}, name: {type: string}, kind: {type: string, enum: [income, expense]}}}
-    Transaction: {type: object, required: [id, accountId, amount, occurredOn], properties: {id: {type: string, format: uuid}, accountId: {type: string, format: uuid}, categoryId: {type: string, format: uuid, nullable: true}, amount: {$ref: '#/components/schemas/Money'}, occurredOn: {type: string, format: date}, note: {type: string}}}
-    AccountList: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/Account'}}}}
-    CategoryList: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/Category'}}}}
-    TransactionList: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/Transaction'}}, nextCursor: {type: string, nullable: true}}}
-    CreateManualTransactionRequest: {type: object, required: [accountId, amount, occurredOn], properties: {accountId: {type: string, format: uuid}, categoryId: {type: string, format: uuid}, amount: {$ref: '#/components/schemas/Money'}, occurredOn: {type: string, format: date}, note: {type: string}}}
-    UpdateCategoryRequest: {type: object, minProperties: 1, properties: {name: {type: string}, kind: {type: string, enum: [income, expense]}}}
-    SpendingByCategory: {type: object, required: [categoryId, categoryName, amount], properties: {categoryId: {type: string, format: uuid}, categoryName: {type: string}, amount: {$ref: '#/components/schemas/Money'}}}
-    MonthlySummary: {type: object, required: [month, totalBalance, income, spending, net, spendingByCategory], properties: {month: {type: string}, totalBalance: {$ref: '#/components/schemas/Money'}, income: {$ref: '#/components/schemas/Money'}, spending: {$ref: '#/components/schemas/Money'}, net: {$ref: '#/components/schemas/Money'}, spendingByCategory: {type: array, items: {$ref: '#/components/schemas/SpendingByCategory'}}}}
-    CsvImportError: {type: object, required: [row, message], properties: {row: {type: integer, minimum: 1}, message: {type: string}}}
-    CsvImport: {type: object, required: [id, status, created, skipped, failed, errors], properties: {id: {type: string, format: uuid}, status: {type: string, enum: [accepted, processing, completed, failed]}, created: {type: integer}, skipped: {type: integer}, failed: {type: integer}, errors: {type: array, items: {$ref: '#/components/schemas/CsvImportError'}}}}
+    ErrorResponse:
+      type: object
+      required: [error, request_id]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: {type: string, description: 'Machine-readable code, such as managed_by_source.'}
+            message: {type: string, description: A sentence for people.}
+        request_id: {type: string}
+    Money:
+      type: object
+      required: [amount, currency]
+      properties:
+        amount: {type: integer, format: int64, description: Minor units (cents); negative is money out.}
+        currency: {type: string, pattern: '^[A-Z]{3}$', example: EUR}
+    AccountKind:
+      type: string
+      enum: [bank, cash, card, savings, other]
+    AccountSourceKind:
+      type: string
+      description: '`manual`: kept in Life OS. `bank`: connected to a bank (planned).'
+      enum: [manual, bank]
+    AccountSource:
+      type: object
+      required: [kind, connectionId, externalId]
+      properties:
+        kind: {$ref: '#/components/schemas/AccountSourceKind'}
+        connectionId: {type: string, format: uuid, nullable: true, description: The bank connection of a bank account.}
+        externalId: {type: string, nullable: true, description: The account's id at the bank.}
+    Account:
+      type: object
+      description: >-
+        `balance` is the opening balance plus every booked transaction;
+        `pending` is the sum of the pending transactions, which are not in
+        the balance. `transactionCount` counts both.
+      required: [id, name, kind, currency, openingBalance, balance, pending, transactionCount, builtIn, archived, archivedAt, source, createdAt, updatedAt]
+      properties:
+        id: {type: string, format: uuid}
+        name: {type: string}
+        kind: {$ref: '#/components/schemas/AccountKind'}
+        currency: {type: string, pattern: '^[A-Z]{3}$'}
+        openingBalance: {$ref: '#/components/schemas/Money'}
+        balance: {$ref: '#/components/schemas/Money'}
+        pending: {$ref: '#/components/schemas/Money'}
+        transactionCount: {type: integer}
+        builtIn: {type: boolean, description: True for the built-in Cash account.}
+        archived: {type: boolean}
+        archivedAt: {type: string, format: date-time, nullable: true}
+        source: {$ref: '#/components/schemas/AccountSource'}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    AccountList:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/Account'}}
+    CreateAccountRequest:
+      type: object
+      description: '`kind` defaults to other; `openingBalanceMinor` (minor units of the currency) to 0.'
+      required: [name, currency]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 100}
+        kind: {$ref: '#/components/schemas/AccountKind'}
+        currency: {type: string, pattern: '^[A-Z]{3}$'}
+        openingBalanceMinor: {type: integer, format: int64}
+    UpdateAccountRequest:
+      type: object
+      minProperties: 1
+      properties:
+        name: {type: string, minLength: 1, maxLength: 100}
+        kind: {$ref: '#/components/schemas/AccountKind'}
+        currency: {type: string, pattern: '^[A-Z]{3}$'}
+        openingBalanceMinor: {type: integer, format: int64}
+        archived: {type: boolean}
+    TransactionStatus:
+      type: string
+      description: '`booked`: settled, counted in the balance. `pending`: not yet settled.'
+      enum: [booked, pending]
+    TransactionSourceKind:
+      type: string
+      enum: [manual, csv, bank]
+    TransactionDirection:
+      type: string
+      enum: [in, out]
+    TransactionSource:
+      type: object
+      required: [kind, connectionId, externalId]
+      properties:
+        kind: {$ref: '#/components/schemas/TransactionSourceKind'}
+        connectionId: {type: string, format: uuid, nullable: true, description: The bank connection of a bank transaction.}
+        externalId: {type: string, nullable: true, description: 'Identity at the source: the CSV external_id (or a content hash), or the bank transaction id.'}
+    Transaction:
+      type: object
+      description: >-
+        `categorizedBy` is `manual` when the category was chosen by hand (by
+        the owner, the AI, or the import file; possibly none), `rule` when a
+        category rule chose it (`categoryRuleId` names the rule), and null
+        while nobody chose. `readOnly` is true for imported
+        transactions: only `categoryId` and `notes` change, and they cannot
+        be deleted.
+      required: [id, accountId, amount, bookingDate, valueDate, status, counterparty, description, notes, categoryId, categorizedBy, categoryRuleId, source, readOnly, createdAt, updatedAt]
+      properties:
+        id: {type: string, format: uuid}
+        accountId: {type: string, format: uuid}
+        amount: {$ref: '#/components/schemas/Money'}
+        bookingDate: {type: string, format: date}
+        valueDate: {type: string, format: date, nullable: true}
+        status: {$ref: '#/components/schemas/TransactionStatus'}
+        counterparty: {type: string, nullable: true, description: 'Who was paid, or who paid, such as REWE.'}
+        description: {type: string, nullable: true, description: What it was for (a bank's purpose text).}
+        notes: {type: string, nullable: true, description: The owner's own notes.}
+        categoryId: {type: string, format: uuid, nullable: true}
+        categorizedBy: {type: string, enum: [manual, rule], nullable: true}
+        categoryRuleId: {type: string, format: uuid, nullable: true}
+        source: {$ref: '#/components/schemas/TransactionSource'}
+        readOnly: {type: boolean}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    TransactionList:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/Transaction'}}
+        nextCursor: {type: string, nullable: true, description: Set when more transactions match; pass it as cursor for the next page.}
+    CreateManualTransactionRequest:
+      type: object
+      description: >-
+        `accountId` defaults to the built-in Cash account, `bookingDate` to
+        today in the owner's timezone, `status` to booked. Without
+        `categoryId` the category rules choose.
+      required: [amount]
+      properties:
+        accountId: {type: string, format: uuid}
+        amount: {$ref: '#/components/schemas/Money'}
+        bookingDate: {type: string, format: date}
+        valueDate: {type: string, format: date}
+        status: {$ref: '#/components/schemas/TransactionStatus'}
+        counterparty: {type: string, maxLength: 200}
+        description: {type: string, maxLength: 1000}
+        notes: {type: string, maxLength: 2000}
+        categoryId: {type: string, format: uuid}
+    UpdateTransactionRequest:
+      type: object
+      minProperties: 1
+      description: Imported transactions take only categoryId and notes.
+      properties:
+        accountId: {type: string, format: uuid}
+        amount: {$ref: '#/components/schemas/Money'}
+        bookingDate: {type: string, format: date}
+        valueDate: {type: string, format: date, nullable: true}
+        status: {$ref: '#/components/schemas/TransactionStatus'}
+        counterparty: {type: string, maxLength: 200, nullable: true}
+        description: {type: string, maxLength: 1000, nullable: true}
+        notes: {type: string, maxLength: 2000, nullable: true}
+        categoryId: {type: string, format: uuid, nullable: true}
+    CategoryKind:
+      type: string
+      description: '`transfer` is money moved between own accounts; it is neither income nor spending.'
+      enum: [expense, income, transfer]
+    Category:
+      type: object
+      required: [id, name, kind, color, archived, archivedAt, createdAt, updatedAt]
+      properties:
+        id: {type: string, format: uuid}
+        name: {type: string}
+        kind: {$ref: '#/components/schemas/CategoryKind'}
+        color: {type: string, nullable: true, pattern: '^#[0-9a-fA-F]{6}$'}
+        archived: {type: boolean}
+        archivedAt: {type: string, format: date-time, nullable: true}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    CategoryList:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/Category'}}
+    CreateCategoryRequest:
+      type: object
+      required: [name, kind]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 100}
+        kind: {$ref: '#/components/schemas/CategoryKind'}
+        color: {type: string, pattern: '^#[0-9a-fA-F]{6}$'}
+    UpdateCategoryRequest:
+      type: object
+      minProperties: 1
+      properties:
+        name: {type: string, minLength: 1, maxLength: 100}
+        kind: {$ref: '#/components/schemas/CategoryKind'}
+        color: {type: string, nullable: true, pattern: '^#[0-9a-fA-F]{6}$'}
+        archived: {type: boolean}
+    RuleField:
+      type: string
+      description: '`any` matches the counterparty or the description.'
+      enum: [counterparty, description, any]
+    RuleOperator:
+      type: string
+      enum: [contains, equals]
+    RuleMatch:
+      type: object
+      required: [field, operator, text]
+      description: 'Case-insensitive; surrounding spaces are ignored. Example: counterparty contains "REWE".'
+      properties:
+        field: {$ref: '#/components/schemas/RuleField'}
+        operator: {$ref: '#/components/schemas/RuleOperator'}
+        text: {type: string, minLength: 1, maxLength: 200}
+    CategoryRule:
+      type: object
+      description: Rules are tried lowest `priority` first (then oldest first); the first match wins.
+      required: [id, categoryId, match, priority, createdAt, updatedAt]
+      properties:
+        id: {type: string, format: uuid}
+        categoryId: {type: string, format: uuid}
+        match: {$ref: '#/components/schemas/RuleMatch'}
+        priority: {type: integer}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    CategoryRuleList:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/CategoryRule'}}
+    CreateCategoryRuleRequest:
+      type: object
+      description: Without `priority` the rule comes after every existing rule.
+      required: [categoryId, match]
+      properties:
+        categoryId: {type: string, format: uuid}
+        match: {$ref: '#/components/schemas/RuleMatch'}
+        priority: {type: integer}
+    UpdateCategoryRuleRequest:
+      type: object
+      minProperties: 1
+      properties:
+        categoryId: {type: string, format: uuid}
+        match: {$ref: '#/components/schemas/RuleMatch'}
+        priority: {type: integer}
+    ApplyScope:
+      type: string
+      enum: [uncategorized, all]
+    ApplyCategoryRulesRequest:
+      type: object
+      description: '`scope` defaults to uncategorized.'
+      properties:
+        scope: {$ref: '#/components/schemas/ApplyScope'}
+    ApplyCategoryRulesResult:
+      type: object
+      description: >-
+        `examined`: transactions the rules were tried on. `categorized`: had
+        no category and got one. `recategorized`: a rule's category was
+        replaced by another rule's. `cleared`: a rule's category was removed
+        because no rule matches any more (scope all). `unchanged`: the rest.
+      required: [scope, examined, categorized, recategorized, cleared, unchanged]
+      properties:
+        scope: {$ref: '#/components/schemas/ApplyScope'}
+        examined: {type: integer}
+        categorized: {type: integer}
+        recategorized: {type: integer}
+        cleared: {type: integer}
+        unchanged: {type: integer}
+    SpendingByCategory:
+      type: object
+      required: [categoryId, categoryName, amount]
+      properties:
+        categoryId: {type: string, format: uuid}
+        categoryName: {type: string}
+        amount: {$ref: '#/components/schemas/Money'}
+    CategoryTotal:
+      type: object
+      description: >-
+        One category's month: `income` (money in) and `spending` (money out)
+        are positive, `net` is income minus spending. `categoryId`,
+        `categoryName`, and `categoryKind` are null for uncategorized
+        transactions.
+      required: [categoryId, categoryName, categoryKind, income, spending, net, transactionCount]
+      properties:
+        categoryId: {type: string, format: uuid, nullable: true}
+        categoryName: {type: string, nullable: true}
+        categoryKind: {type: string, enum: [expense, income, transfer], nullable: true}
+        income: {$ref: '#/components/schemas/Money'}
+        spending: {$ref: '#/components/schemas/Money'}
+        net: {$ref: '#/components/schemas/Money'}
+        transactionCount: {type: integer}
+    MonthlySummary:
+      type: object
+      description: >-
+        `spendingByCategory` is the spending per category (not transfers or
+        uncategorized), largest first. `byCategory` has every category with
+        transactions in the month, uncategorized included, largest spending
+        first: the basis for budgets.
+      required: [month, currency, totalBalance, income, spending, net, spendingByCategory, byCategory]
+      properties:
+        month: {type: string}
+        currency: {type: string}
+        totalBalance: {$ref: '#/components/schemas/Money'}
+        income: {$ref: '#/components/schemas/Money'}
+        spending: {$ref: '#/components/schemas/Money'}
+        net: {$ref: '#/components/schemas/Money'}
+        spendingByCategory: {type: array, items: {$ref: '#/components/schemas/SpendingByCategory'}}
+        byCategory: {type: array, items: {$ref: '#/components/schemas/CategoryTotal'}}
+    CsvImportError:
+      type: object
+      required: [row, message]
+      properties:
+        row: {type: integer, minimum: 1, description: The CSV line (the header is row 1).}
+        message: {type: string}
+    CsvImport:
+      type: object
+      description: >-
+        `imported`: new transactions. `duplicates`: rows the account already
+        had. `categorized`: imported rows that got their category from a
+        rule. `status` is failed when nothing was imported and some rows
+        failed. `accountId` is null for an older-format file.
+      required: [id, accountId, status, imported, duplicates, failed, categorized, errors]
+      properties:
+        id: {type: string, format: uuid}
+        accountId: {type: string, format: uuid, nullable: true}
+        status: {type: string, enum: [completed, failed]}
+        imported: {type: integer}
+        duplicates: {type: integer}
+        failed: {type: integer}
+        categorized: {type: integer}
+        errors: {type: array, items: {$ref: '#/components/schemas/CsvImportError'}}
