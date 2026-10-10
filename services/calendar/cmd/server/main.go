@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	// The alpine runtime image has no zoneinfo; embed it so the owner's and
+	// requests' IANA timezones resolve.
+	_ "time/tzdata"
 
 	"github.com/GAMch1k/life-os/pkg/database"
 	"github.com/GAMch1k/life-os/pkg/httpserver"
@@ -26,6 +29,10 @@ func run(ctx context.Context) error {
 	}
 
 	logger := httpserver.NewJSONLogger(os.Stdout, cfg.ParsedLogLevel())
+	ownerTimeZone, err := cfg.OwnerTimeZone()
+	if err != nil {
+		logger.Warn(err.Error())
+	}
 	pool, err := database.Open(ctx, cfg.DatabaseConfig())
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
@@ -36,7 +43,7 @@ func run(ctx context.Context) error {
 		httpserver.WithLogger(logger),
 		httpserver.WithReadinessCheck(pool.Ping),
 	)
-	api.Register(app, api.NewHandler(repository.New(pool)))
+	api.Register(app, api.NewHandler(repository.New(pool), ownerTimeZone))
 	app.OnShutdown(database.ClosePool(pool))
 
 	return app.Run(fmt.Sprintf(":%d", cfg.Port))

@@ -11,11 +11,37 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List calendar events */
+        /**
+         * List calendar events in a time range
+         * @description Events that overlap `[from, to)`, soonest start first (an all-day event starts at midnight of its first day in `timeZone`; ties by id). A timed event overlaps when it starts before `to` and ends after `from`; an all-day event when its days, taken in `timeZone`, do. Cancelled events are left out unless `includeCancelled` is true. When more events match than `limit`, `nextCursor` is set: pass it back as `cursor`, with the same parameters, for the next page. A response without `nextCursor` is the last page. Recurring events are returned once, as stored; occurrences are not expanded.
+         */
         get: operations["listEvents"];
         put?: never;
-        /** Create a calendar event */
+        /**
+         * Create a calendar event
+         * @description Creates an active event whose source is `manual`. Imported events (`ics`, `google`) are written by Calendar's own source adapters, not through this endpoint. An `Idempotency-Key` header makes the request safe to retry: an identical repeat returns the original event, and reusing the key with a different body returns 409.
+         */
         post: operations["createEvent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/events/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search calendar events
+         * @description Finds events whose title, description (notes), or location contain every word of `q` (case-insensitive substring match), across all dates unless `from`/`to` narrow the range (the same overlap rule as listing; either bound may be left open). The most relevant come first: a word found in the title weighs 3, in the location 2, in the description 1. Among equally relevant events, those not over yet come first, soonest first, then past events, most recent first. Cancelled events are left out unless `includeCancelled` is true. Paging works as for listing; the cursor also keeps the moment that splits upcoming from past, so later pages stay consistent.
+         */
+        get: operations["searchEvents"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -29,15 +55,24 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get a calendar event */
+        /**
+         * Get a calendar event
+         * @description Returns the event whatever its status, so cancelled events stay reachable as history.
+         */
         get: operations["getEvent"];
         put?: never;
         post?: never;
-        /** Delete a calendar event */
+        /**
+         * Delete a calendar event
+         * @description Removes the event permanently. Set `status: cancelled` instead to keep it as history.
+         */
         delete: operations["deleteEvent"];
         options?: never;
         head?: never;
-        /** Update a calendar event */
+        /**
+         * Update a calendar event
+         * @description Changes only the fields present in the body; a field set to null is cleared. Changing `allDay` switches the event between timed and all-day: the other kind's fields (`startAt`, `endAt`, `timeZone` or `startDate`, `endDate`) are cleared and the new kind's start and end must be given. The result is validated as a whole, as on create. `status: cancelled` keeps the event as history and drops it from listings; `status: active` restores it.
+         */
         patch: operations["updateEvent"];
         trace?: never;
     };
@@ -52,34 +87,102 @@ export interface components {
             /** Format: date-time */
             until?: string | null;
         };
+        /**
+         * @deprecated
+         * @description Legacy provider reference, kept for compatibility. New code uses `source`.
+         */
         ExternalReference: {
             provider: string;
             externalId: string;
+        };
+        /**
+         * @description `manual`: created in Life OS (the Dashboard, MCP, or a capture). `ics`: imported from an ICS/iCal feed. `google`: synchronized from Google Calendar.
+         * @enum {string}
+         */
+        EventSourceKind: "manual" | "ics" | "google";
+        /** @description Where the event comes from. Set when the event is created; updates never change it. */
+        EventSource: {
+            kind: components["schemas"]["EventSourceKind"];
+            /**
+             * Format: uuid
+             * @description The Calendar source (feed or connected calendar) the event was imported from; null for manual events.
+             */
+            sourceId?: string | null;
+            /** @description The event's identity in its source, such as an ICS UID; null for manual events. */
+            externalUid?: string | null;
+        };
+        /**
+         * @description `cancelled` events are kept as history but left out of listings and search unless asked for.
+         * @enum {string}
+         */
+        EventStatus: "active" | "cancelled";
+        /** @description Reminder intent only; Calendar stores it and does not deliver notifications. `relative`: `minutesBefore` the event starts (an all-day event starts at midnight of its first day, owner-local). `localTime`: at `localTime` (HH:MM on the owner's wall clock) on the day `daysBefore` days before the event's start date in the owner's timezone, resolved when the reminder is due so daylight saving changes are respected. Example: a pickup on 17 November with `{"kind": "localTime", "daysBefore": 1, "localTime": "19:00"}` reminds on 16 November at 19:00. */
+        Reminder: {
+            /** @enum {string} */
+            kind: "relative" | "localTime";
+            /** @description Required for relative (and only there); at most 28 days. */
+            minutesBefore?: number;
+            /** @description Required for localTime (and only there); 0 is the event's own day. */
+            daysBefore?: number;
+            /** @description Required for localTime (and only there); 24-hour HH:MM. */
+            localTime?: string;
         };
         CalendarEvent: {
             /** Format: uuid */
             id: string;
             title: string;
+            /** @description Free-form notes or details. */
             description?: string | null;
+            location?: string | null;
             allDay: boolean;
-            /** Format: date-time */
+            /**
+             * Format: date-time
+             * @description Start instant (UTC) of a timed event.
+             */
             startAt?: string | null;
-            /** Format: date-time */
+            /**
+             * Format: date-time
+             * @description End instant (UTC) of a timed event, exclusive.
+             */
             endAt?: string | null;
-            /** Format: date */
+            /**
+             * Format: date
+             * @description First day of an all-day event.
+             */
             startDate?: string | null;
-            /** Format: date */
+            /**
+             * Format: date
+             * @description Last day (inclusive) of an all-day event.
+             */
             endDate?: string | null;
+            /** @description IANA timezone a timed event was scheduled in (for example an ICS TZID); a display hint. Null for all-day events and when unknown. */
+            timeZone?: string | null;
             recurrence?: components["schemas"]["Recurrence"];
+            /** @description Reminder intent. Null means the event follows its source's (or the owner's) defaults; an empty list means explicitly none. */
+            reminders?: components["schemas"]["Reminder"][] | null;
+            status: components["schemas"]["EventStatus"];
+            /**
+             * Format: date-time
+             * @description When the event was cancelled; set exactly when status is cancelled.
+             */
+            cancelledAt?: string | null;
+            /**
+             * Format: date-time
+             * @description When an imported event disappeared from its source, which also cancels it; null for manual events.
+             */
+            removedFromSourceAt?: string | null;
+            source: components["schemas"]["EventSource"];
             externalReference?: components["schemas"]["ExternalReference"];
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
             updatedAt: string;
         };
+        /** @description A timed event needs startAt and endAt (endAt after startAt); an all-day event needs startDate and endDate (endDate not before startDate) and takes no timeZone. */
         CreateEventRequest: {
             title: string;
             description?: string;
+            location?: string;
             allDay: boolean;
             /** Format: date-time */
             startAt?: string;
@@ -89,12 +192,17 @@ export interface components {
             startDate?: string;
             /** Format: date */
             endDate?: string;
+            /** @description IANA timezone of a timed event. */
+            timeZone?: string;
             recurrence?: components["schemas"]["Recurrence"];
+            /** @description Leave out to follow the defaults. */
+            reminders?: components["schemas"]["Reminder"][];
             externalReference?: components["schemas"]["ExternalReference"];
         };
         UpdateEventRequest: {
             title?: string;
             description?: string | null;
+            location?: string | null;
             allDay?: boolean;
             /** Format: date-time */
             startAt?: string | null;
@@ -104,15 +212,31 @@ export interface components {
             startDate?: string | null;
             /** Format: date */
             endDate?: string | null;
+            timeZone?: string | null;
             recurrence?: components["schemas"]["Recurrence"];
+            /** @description Replaces the reminders; null returns the event to the defaults. */
+            reminders?: components["schemas"]["Reminder"][] | null;
+            status?: components["schemas"]["EventStatus"];
         };
         EventList: {
             items: components["schemas"]["CalendarEvent"][];
+            /** @description Set when more events match; pass it as cursor for the next page. */
             nextCursor?: string | null;
         };
     };
     responses: never;
-    parameters: never;
+    parameters: {
+        /** @description IANA timezone (for example Europe/Berlin) in which all-day dates are compared with instants. Defaults to the owner's timezone configured for Calendar. */
+        TimeZone: string;
+        /** @description Also return cancelled events (including those removed by their source). */
+        IncludeCancelled: boolean;
+        /** @description Only events from this kind of source. */
+        SourceKind: components["schemas"]["EventSourceKind"];
+        /** @description Only events imported from this source. */
+        SourceId: string;
+        /** @description The previous page's nextCursor. Opaque; only valid with the parameters it was returned for. */
+        Cursor: string;
+    };
     requestBodies: never;
     headers: never;
     pathItems: never;
@@ -122,9 +246,20 @@ export interface operations {
     listEvents: {
         parameters: {
             query: {
+                /** @description Start of the range (inclusive). */
                 from: string;
+                /** @description End of the range (exclusive); must be after from. */
                 to: string;
-                cursor?: string;
+                /** @description IANA timezone (for example Europe/Berlin) in which all-day dates are compared with instants. Defaults to the owner's timezone configured for Calendar. */
+                timeZone?: components["parameters"]["TimeZone"];
+                /** @description Also return cancelled events (including those removed by their source). */
+                includeCancelled?: components["parameters"]["IncludeCancelled"];
+                /** @description Only events from this kind of source. */
+                sourceKind?: components["parameters"]["SourceKind"];
+                /** @description Only events imported from this source. */
+                sourceId?: components["parameters"]["SourceId"];
+                /** @description The previous page's nextCursor. Opaque; only valid with the parameters it was returned for. */
+                cursor?: components["parameters"]["Cursor"];
                 limit?: number;
             };
             header?: never;
@@ -142,7 +277,7 @@ export interface operations {
                     "application/json": components["schemas"]["EventList"];
                 };
             };
-            /** @description Invalid request */
+            /** @description Invalid request, such as a range whose to is not after from, an unknown timeZone, or a malformed cursor */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -174,6 +309,58 @@ export interface operations {
                 };
             };
             /** @description Invalid request, or no valid X-Life-OS-Actor (actor_required) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The Idempotency-Key was already used with a different body */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    searchEvents: {
+        parameters: {
+            query: {
+                /** @description Words to find, separated by spaces; at most 10 words. */
+                q: string;
+                /** @description Only events that end after this instant. */
+                from?: string;
+                /** @description Only events that start before this instant. */
+                to?: string;
+                /** @description IANA timezone (for example Europe/Berlin) in which all-day dates are compared with instants. Defaults to the owner's timezone configured for Calendar. */
+                timeZone?: components["parameters"]["TimeZone"];
+                /** @description Also return cancelled events (including those removed by their source). */
+                includeCancelled?: components["parameters"]["IncludeCancelled"];
+                /** @description Only events from this kind of source. */
+                sourceKind?: components["parameters"]["SourceKind"];
+                /** @description Only events imported from this source. */
+                sourceId?: components["parameters"]["SourceId"];
+                /** @description The previous page's nextCursor. Opaque; only valid with the parameters it was returned for. */
+                cursor?: components["parameters"]["Cursor"];
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Matching events */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventList"];
+                };
+            };
+            /** @description Invalid request, such as an empty q, an unknown timeZone, or a malformed cursor */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -285,6 +472,13 @@ export interface operations {
             };
             /** @description Event not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The event kept changing concurrently; retry the update */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

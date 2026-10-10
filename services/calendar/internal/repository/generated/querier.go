@@ -11,10 +11,25 @@ import (
 )
 
 type Querier interface {
+	// A replay with the same automation idempotency key returns the original row.
 	CreateEvent(ctx context.Context, arg CreateEventParams) (Event, error)
 	DeleteEvent(ctx context.Context, id pgtype.UUID) (int64, error)
 	GetEvent(ctx context.Context, id pgtype.UUID) (Event, error)
-	ListEvents(ctx context.Context, arg ListEventsParams) ([]Event, error)
+	// Events overlapping [range_start, range_end). An all-day event spans from
+	// midnight of its first day to midnight after its last day in time_zone, so
+	// its dates are matched as the owner's days. The after_* arguments are the
+	// previous page's last row: a keyset cursor over exactly the ORDER BY.
+	ListEvents(ctx context.Context, arg ListEventsParams) ([]ListEventsRow, error)
+	// Events whose title, description, or location contain every pattern (ILIKE
+	// patterns, already escaped). Relevance weighs a pattern found in the title
+	// 3, in the location 2, in the description 1. Then events not over at the
+	// anchor instant come first (bucket 0, soonest start first), then past events
+	// (bucket 1, most recent start first): sort_key is the start in microseconds,
+	// negated for past events, so one ascending keyset covers both directions.
+	SearchEvents(ctx context.Context, arg SearchEventsParams) ([]SearchEventsRow, error)
+	// Writes the whole merged event. The expected_updated_at guard makes the
+	// read-merge-write optimistic: a concurrent change makes it match nothing.
+	// Source identity is never updated.
 	UpdateEvent(ctx context.Context, arg UpdateEventParams) (Event, error)
 }
 

@@ -13,6 +13,45 @@ import (
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
+// Defines values for EventSourceKind.
+const (
+	Google EventSourceKind = "google"
+	Ics    EventSourceKind = "ics"
+	Manual EventSourceKind = "manual"
+)
+
+// Valid indicates whether the value is a known member of the EventSourceKind enum.
+func (e EventSourceKind) Valid() bool {
+	switch e {
+	case Google:
+		return true
+	case Ics:
+		return true
+	case Manual:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EventStatus.
+const (
+	Active    EventStatus = "active"
+	Cancelled EventStatus = "cancelled"
+)
+
+// Valid indicates whether the value is a known member of the EventStatus enum.
+func (e EventStatus) Valid() bool {
+	switch e {
+	case Active:
+		return true
+	case Cancelled:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RecurrenceFrequency.
 const (
 	Daily   RecurrenceFrequency = "daily"
@@ -37,42 +76,124 @@ func (e RecurrenceFrequency) Valid() bool {
 	}
 }
 
-// CalendarEvent defines model for CalendarEvent.
-type CalendarEvent struct {
-	AllDay            bool                `json:"allDay"`
-	CreatedAt         time.Time           `json:"createdAt"`
-	Description       *string             `json:"description,omitempty"`
-	EndAt             *time.Time          `json:"endAt,omitempty"`
-	EndDate           *openapi_types.Date `json:"endDate,omitempty"`
-	ExternalReference *ExternalReference  `json:"externalReference,omitempty"`
-	Id                openapi_types.UUID  `json:"id"`
-	Recurrence        *Recurrence         `json:"recurrence,omitempty"`
-	StartAt           *time.Time          `json:"startAt,omitempty"`
-	StartDate         *openapi_types.Date `json:"startDate,omitempty"`
-	Title             string              `json:"title"`
-	UpdatedAt         time.Time           `json:"updatedAt"`
+// Defines values for ReminderKind.
+const (
+	LocalTime ReminderKind = "localTime"
+	Relative  ReminderKind = "relative"
+)
+
+// Valid indicates whether the value is a known member of the ReminderKind enum.
+func (e ReminderKind) Valid() bool {
+	switch e {
+	case LocalTime:
+		return true
+	case Relative:
+		return true
+	default:
+		return false
+	}
 }
 
-// CreateEventRequest defines model for CreateEventRequest.
+// CalendarEvent defines model for CalendarEvent.
+type CalendarEvent struct {
+	AllDay bool `json:"allDay"`
+
+	// CancelledAt When the event was cancelled; set exactly when status is cancelled.
+	CancelledAt *time.Time `json:"cancelledAt,omitempty"`
+	CreatedAt   time.Time  `json:"createdAt"`
+
+	// Description Free-form notes or details.
+	Description *string `json:"description,omitempty"`
+
+	// EndAt End instant (UTC) of a timed event, exclusive.
+	EndAt *time.Time `json:"endAt,omitempty"`
+
+	// EndDate Last day (inclusive) of an all-day event.
+	EndDate *openapi_types.Date `json:"endDate,omitempty"`
+
+	// ExternalReference Legacy provider reference, kept for compatibility. New code uses `source`.
+	// Deprecated: this property has been marked as deprecated upstream, but no `x-deprecated-reason` was set
+	ExternalReference *ExternalReference `json:"externalReference,omitempty"`
+	Id                openapi_types.UUID `json:"id"`
+	Location          *string            `json:"location,omitempty"`
+	Recurrence        *Recurrence        `json:"recurrence,omitempty"`
+
+	// Reminders Reminder intent. Null means the event follows its source's (or the owner's) defaults; an empty list means explicitly none.
+	Reminders *[]Reminder `json:"reminders,omitempty"`
+
+	// RemovedFromSourceAt When an imported event disappeared from its source, which also cancels it; null for manual events.
+	RemovedFromSourceAt *time.Time `json:"removedFromSourceAt,omitempty"`
+
+	// Source Where the event comes from. Set when the event is created; updates never change it.
+	Source EventSource `json:"source"`
+
+	// StartAt Start instant (UTC) of a timed event.
+	StartAt *time.Time `json:"startAt,omitempty"`
+
+	// StartDate First day of an all-day event.
+	StartDate *openapi_types.Date `json:"startDate,omitempty"`
+
+	// Status `cancelled` events are kept as history but left out of listings and search unless asked for.
+	Status EventStatus `json:"status"`
+
+	// TimeZone IANA timezone a timed event was scheduled in (for example an ICS TZID); a display hint. Null for all-day events and when unknown.
+	TimeZone  *string   `json:"timeZone,omitempty"`
+	Title     string    `json:"title"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// CreateEventRequest A timed event needs startAt and endAt (endAt after startAt); an all-day event needs startDate and endDate (endDate not before startDate) and takes no timeZone.
 type CreateEventRequest struct {
-	AllDay            bool                `json:"allDay"`
-	Description       *string             `json:"description,omitempty"`
-	EndAt             *time.Time          `json:"endAt,omitempty"`
-	EndDate           *openapi_types.Date `json:"endDate,omitempty"`
-	ExternalReference *ExternalReference  `json:"externalReference,omitempty"`
-	Recurrence        *Recurrence         `json:"recurrence,omitempty"`
-	StartAt           *time.Time          `json:"startAt,omitempty"`
-	StartDate         *openapi_types.Date `json:"startDate,omitempty"`
-	Title             string              `json:"title"`
+	AllDay      bool                `json:"allDay"`
+	Description *string             `json:"description,omitempty"`
+	EndAt       *time.Time          `json:"endAt,omitempty"`
+	EndDate     *openapi_types.Date `json:"endDate,omitempty"`
+
+	// ExternalReference Legacy provider reference, kept for compatibility. New code uses `source`.
+	// Deprecated: this property has been marked as deprecated upstream, but no `x-deprecated-reason` was set
+	ExternalReference *ExternalReference `json:"externalReference,omitempty"`
+	Location          *string            `json:"location,omitempty"`
+	Recurrence        *Recurrence        `json:"recurrence,omitempty"`
+
+	// Reminders Leave out to follow the defaults.
+	Reminders *[]Reminder         `json:"reminders,omitempty"`
+	StartAt   *time.Time          `json:"startAt,omitempty"`
+	StartDate *openapi_types.Date `json:"startDate,omitempty"`
+
+	// TimeZone IANA timezone of a timed event.
+	TimeZone *string `json:"timeZone,omitempty"`
+	Title    string  `json:"title"`
 }
 
 // EventList defines model for EventList.
 type EventList struct {
-	Items      []CalendarEvent `json:"items"`
-	NextCursor *string         `json:"nextCursor,omitempty"`
+	Items []CalendarEvent `json:"items"`
+
+	// NextCursor Set when more events match; pass it as cursor for the next page.
+	NextCursor *string `json:"nextCursor,omitempty"`
 }
 
-// ExternalReference defines model for ExternalReference.
+// EventSource Where the event comes from. Set when the event is created; updates never change it.
+type EventSource struct {
+	// ExternalUid The event's identity in its source, such as an ICS UID; null for manual events.
+	ExternalUid *string `json:"externalUid,omitempty"`
+
+	// Kind `manual`: created in Life OS (the Dashboard, MCP, or a capture). `ics`: imported from an ICS/iCal feed. `google`: synchronized from Google Calendar.
+	Kind EventSourceKind `json:"kind"`
+
+	// SourceId The Calendar source (feed or connected calendar) the event was imported from; null for manual events.
+	SourceId *openapi_types.UUID `json:"sourceId,omitempty"`
+}
+
+// EventSourceKind `manual`: created in Life OS (the Dashboard, MCP, or a capture). `ics`: imported from an ICS/iCal feed. `google`: synchronized from Google Calendar.
+type EventSourceKind string
+
+// EventStatus `cancelled` events are kept as history but left out of listings and search unless asked for.
+type EventStatus string
+
+// ExternalReference Legacy provider reference, kept for compatibility. New code uses `source`.
+//
+// Deprecated: this type has been marked as deprecated upstream, but no `x-deprecated-reason` was set
 type ExternalReference struct {
 	ExternalId string `json:"externalId"`
 	Provider   string `json:"provider"`
@@ -88,24 +209,108 @@ type Recurrence struct {
 // RecurrenceFrequency defines model for Recurrence.Frequency.
 type RecurrenceFrequency string
 
+// Reminder Reminder intent only; Calendar stores it and does not deliver notifications. `relative`: `minutesBefore` the event starts (an all-day event starts at midnight of its first day, owner-local). `localTime`: at `localTime` (HH:MM on the owner's wall clock) on the day `daysBefore` days before the event's start date in the owner's timezone, resolved when the reminder is due so daylight saving changes are respected. Example: a pickup on 17 November with `{"kind": "localTime", "daysBefore": 1, "localTime": "19:00"}` reminds on 16 November at 19:00.
+type Reminder struct {
+	// DaysBefore Required for localTime (and only there); 0 is the event's own day.
+	DaysBefore *int         `json:"daysBefore,omitempty"`
+	Kind       ReminderKind `json:"kind"`
+
+	// LocalTime Required for localTime (and only there); 24-hour HH:MM.
+	LocalTime *string `json:"localTime,omitempty"`
+
+	// MinutesBefore Required for relative (and only there); at most 28 days.
+	MinutesBefore *int `json:"minutesBefore,omitempty"`
+}
+
+// ReminderKind defines model for Reminder.Kind.
+type ReminderKind string
+
 // UpdateEventRequest defines model for UpdateEventRequest.
 type UpdateEventRequest struct {
 	AllDay      *bool               `json:"allDay,omitempty"`
 	Description *string             `json:"description,omitempty"`
 	EndAt       *time.Time          `json:"endAt,omitempty"`
 	EndDate     *openapi_types.Date `json:"endDate,omitempty"`
+	Location    *string             `json:"location,omitempty"`
 	Recurrence  *Recurrence         `json:"recurrence,omitempty"`
-	StartAt     *time.Time          `json:"startAt,omitempty"`
-	StartDate   *openapi_types.Date `json:"startDate,omitempty"`
-	Title       *string             `json:"title,omitempty"`
+
+	// Reminders Replaces the reminders; null returns the event to the defaults.
+	Reminders *[]Reminder         `json:"reminders,omitempty"`
+	StartAt   *time.Time          `json:"startAt,omitempty"`
+	StartDate *openapi_types.Date `json:"startDate,omitempty"`
+
+	// Status `cancelled` events are kept as history but left out of listings and search unless asked for.
+	Status   *EventStatus `json:"status,omitempty"`
+	TimeZone *string      `json:"timeZone,omitempty"`
+	Title    *string      `json:"title,omitempty"`
 }
+
+// Cursor defines model for Cursor.
+type Cursor = string
+
+// IncludeCancelled defines model for IncludeCancelled.
+type IncludeCancelled = bool
+
+// SourceId defines model for SourceId.
+type SourceId = openapi_types.UUID
+
+// SourceKind `manual`: created in Life OS (the Dashboard, MCP, or a capture). `ics`: imported from an ICS/iCal feed. `google`: synchronized from Google Calendar.
+type SourceKind = EventSourceKind
+
+// TimeZone defines model for TimeZone.
+type TimeZone = string
 
 // ListEventsParams defines parameters for ListEvents.
 type ListEventsParams struct {
-	From   time.Time `form:"from" json:"from"`
-	To     time.Time `form:"to" json:"to"`
-	Cursor *string   `form:"cursor,omitempty" json:"cursor,omitempty"`
-	Limit  *int      `form:"limit,omitempty" json:"limit,omitempty"`
+	// From Start of the range (inclusive).
+	From time.Time `form:"from" json:"from"`
+
+	// To End of the range (exclusive); must be after from.
+	To time.Time `form:"to" json:"to"`
+
+	// TimeZone IANA timezone (for example Europe/Berlin) in which all-day dates are compared with instants. Defaults to the owner's timezone configured for Calendar.
+	TimeZone *TimeZone `form:"timeZone,omitempty" json:"timeZone,omitempty"`
+
+	// IncludeCancelled Also return cancelled events (including those removed by their source).
+	IncludeCancelled *IncludeCancelled `form:"includeCancelled,omitempty" json:"includeCancelled,omitempty"`
+
+	// SourceKind Only events from this kind of source.
+	SourceKind *SourceKind `form:"sourceKind,omitempty" json:"sourceKind,omitempty"`
+
+	// SourceId Only events imported from this source.
+	SourceId *SourceId `form:"sourceId,omitempty" json:"sourceId,omitempty"`
+
+	// Cursor The previous page's nextCursor. Opaque; only valid with the parameters it was returned for.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// SearchEventsParams defines parameters for SearchEvents.
+type SearchEventsParams struct {
+	// Q Words to find, separated by spaces; at most 10 words.
+	Q string `form:"q" json:"q"`
+
+	// From Only events that end after this instant.
+	From *time.Time `form:"from,omitempty" json:"from,omitempty"`
+
+	// To Only events that start before this instant.
+	To *time.Time `form:"to,omitempty" json:"to,omitempty"`
+
+	// TimeZone IANA timezone (for example Europe/Berlin) in which all-day dates are compared with instants. Defaults to the owner's timezone configured for Calendar.
+	TimeZone *TimeZone `form:"timeZone,omitempty" json:"timeZone,omitempty"`
+
+	// IncludeCancelled Also return cancelled events (including those removed by their source).
+	IncludeCancelled *IncludeCancelled `form:"includeCancelled,omitempty" json:"includeCancelled,omitempty"`
+
+	// SourceKind Only events from this kind of source.
+	SourceKind *SourceKind `form:"sourceKind,omitempty" json:"sourceKind,omitempty"`
+
+	// SourceId Only events imported from this source.
+	SourceId *SourceId `form:"sourceId,omitempty" json:"sourceId,omitempty"`
+
+	// Cursor The previous page's nextCursor. Opaque; only valid with the parameters it was returned for.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
 // CreateEventJSONRequestBody defines body for CreateEvent for application/json ContentType.
@@ -116,12 +321,15 @@ type UpdateEventJSONRequestBody = UpdateEventRequest
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
-	// ListEvents List calendar events
+	// ListEvents List calendar events in a time range
 	// (GET /v1/events)
 	ListEvents(c fiber.Ctx, params ListEventsParams) error
 	// CreateEvent Create a calendar event
 	// (POST /v1/events)
 	CreateEvent(c fiber.Ctx) error
+	// SearchEvents Search calendar events
+	// (GET /v1/events/search)
+	SearchEvents(c fiber.Ctx, params SearchEventsParams) error
 	// DeleteEvent Delete a calendar event
 	// (DELETE /v1/events/{eventId})
 	DeleteEvent(c fiber.Ctx, eventId openapi_types.UUID) error
@@ -171,6 +379,34 @@ func (siw *ServerInterfaceWrapper) ListEvents(c fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter to: %w", err).Error())
 	}
 
+	// ------------- Optional query parameter "timeZone" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "timeZone", query, &params.TimeZone, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter timeZone: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "includeCancelled" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "includeCancelled", query, &params.IncludeCancelled, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter includeCancelled: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "sourceKind" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "sourceKind", query, &params.SourceKind, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter sourceKind: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "sourceId" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "sourceId", query, &params.SourceId, runtime.BindQueryParameterOptions{Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter sourceId: %w", err).Error())
+	}
+
 	// ------------- Optional query parameter "cursor" -------------
 
 	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", query, &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
@@ -205,6 +441,99 @@ func (siw *ServerInterfaceWrapper) CreateEvent(c fiber.Ctx) error {
 
 	handler := func(c fiber.Ctx) error {
 		return siw.Handler.CreateEvent(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// SearchEvents operation middleware
+func (siw *ServerInterfaceWrapper) SearchEvents(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params SearchEventsParams
+
+	var query url.Values
+	query, err = url.ParseQuery(string(c.Request().URI().QueryString()))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for query string: %w", err).Error())
+	}
+
+	// ------------- Required query parameter "q" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "q", query, &params.Q, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter q: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "from" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "from", query, &params.From, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter from: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "to" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "to", query, &params.To, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter to: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "timeZone" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "timeZone", query, &params.TimeZone, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter timeZone: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "includeCancelled" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "includeCancelled", query, &params.IncludeCancelled, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter includeCancelled: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "sourceKind" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "sourceKind", query, &params.SourceKind, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter sourceKind: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "sourceId" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "sourceId", query, &params.SourceId, runtime.BindQueryParameterOptions{Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter sourceId: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", query, &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter cursor: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", query, &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter limit: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.SearchEvents(c, params)
 	}
 
 	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
@@ -331,6 +660,8 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	router.Get(options.BaseURL+"/v1/events", wrapper.ListEvents)
 
 	router.Post(options.BaseURL+"/v1/events", wrapper.CreateEvent)
+
+	router.Get(options.BaseURL+"/v1/events/search", wrapper.SearchEvents)
 
 	router.Delete(options.BaseURL+"/v1/events/:eventId", wrapper.DeleteEvent)
 

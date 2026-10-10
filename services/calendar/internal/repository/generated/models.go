@@ -26,4 +26,13 @@ type Event struct {
 	UpdatedAt                pgtype.Timestamptz
 	AutomationIdempotencyKey *string
 	AutomationPayloadHash    *string
+	Location                 *string
+	TimeZone                 *string
+	Status                   string
+	CancelledAt              pgtype.Timestamptz
+	SourceKind               string
+	SourceID                 pgtype.UUID
+	ExternalUid              *string
+	RemovedFromSourceAt      pgtype.Timestamptz
+	Reminders                []byte
 }

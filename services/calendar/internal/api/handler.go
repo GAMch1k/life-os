@@ -11,39 +11,163 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/oapi-codegen/runtime/types"
 
+	"github.com/GAMch1k/life-os/pkg/httpserver"
 	"github.com/GAMch1k/life-os/services/calendar/internal/api/generated"
+	"github.com/GAMch1k/life-os/services/calendar/internal/config"
 	store "github.com/GAMch1k/life-os/services/calendar/internal/repository/generated"
 )
 
-type Handler struct{ queries *store.Queries }
+const (
+	defaultListLimit   = 50
+	defaultSearchLimit = 20
+	maxPageLimit       = 100
+	// updateAttempts bounds how often an update re-reads an event that
+	// changed between its read and its write.
+	updateAttempts = 3
+)
+
+type Handler struct {
+	queries *store.Queries
+	// ownerTimeZone is the IANA timezone reads compare all-day dates in
+	// when the request names none.
+	ownerTimeZone string
+	now           func() time.Time
+}
 
 var _ generated.ServerInterface = (*Handler)(nil)
 
-func NewHandler(queries *store.Queries) *Handler { return &Handler{queries: queries} }
-func (h *Handler) ListEvents(c fiber.Ctx, params generated.ListEventsParams) error {
-	limit := 50
-	if params.Limit != nil {
-		limit = *params.Limit
+// NewHandler serves the Calendar API from queries. ownerTimeZone is the
+// owner's validated IANA timezone (see config.OwnerTimeZone); empty means UTC.
+func NewHandler(queries *store.Queries, ownerTimeZone string) *Handler {
+	if ownerTimeZone == "" {
+		ownerTimeZone = "UTC"
 	}
-	items, err := h.queries.ListEvents(c.Context(), store.ListEventsParams{FromDate: date(params.From), ToDate: date(params.To), FromTime: timestamp(&params.From), ToTime: timestamp(&params.To), PageLimit: int32(limit)})
+	return &Handler{queries: queries, ownerTimeZone: ownerTimeZone, now: time.Now}
+}
+
+func (h *Handler) ListEvents(c fiber.Ctx, params generated.ListEventsParams) error {
+	limit, err := pageLimit(params.Limit, defaultListLimit)
+	if err != nil {
+		return err
+	}
+	timeZone, err := h.timeZone(params.TimeZone)
+	if err != nil {
+		return err
+	}
+	if !params.To.After(params.From) {
+		return badRequest("to must be after from")
+	}
+	sourceKind, err := sourceKindFilter(params.SourceKind)
+	if err != nil {
+		return err
+	}
+	// One row beyond the page tells whether another page exists.
+	query := store.ListEventsParams{
+		TimeZone: timeZone, RangeStart: timestamp(&params.From), RangeEnd: timestamp(&params.To),
+		IncludeCancelled: params.IncludeCancelled != nil && *params.IncludeCancelled,
+		SourceKind:       sourceKind, SourceID: sourceIDFilter(params.SourceId), PageLimit: int32(limit + 1),
+	}
+	if params.Cursor != nil {
+		after, err := decodeListCursor(*params.Cursor)
+		if err != nil {
+			return badRequest("invalid cursor")
+		}
+		query.AfterStartsAt, query.AfterID = timestamp(&after.StartsAt), pgID(after.ID)
+	}
+	rows, err := h.queries.ListEvents(c.Context(), query)
 	if err != nil {
 		return internal(err)
 	}
-	result := make([]generated.CalendarEvent, 0, len(items))
-	for _, item := range items {
-		result = append(result, event(item))
+	result := generated.EventList{Items: make([]generated.CalendarEvent, 0, min(len(rows), limit))}
+	for index, row := range rows {
+		if index == limit {
+			last := rows[index-1]
+			cursor := encodeListCursor(listPosition{StartsAt: last.StartsAt.Time, ID: last.Event.ID.Bytes})
+			result.NextCursor = &cursor
+			break
+		}
+		item, err := event(row.Event)
+		if err != nil {
+			return internal(err)
+		}
+		result.Items = append(result.Items, item)
 	}
-	return c.JSON(generated.EventList{Items: result})
+	return c.JSON(result)
 }
+
+func (h *Handler) SearchEvents(c fiber.Ctx, params generated.SearchEventsParams) error {
+	patterns, err := searchPatterns(params.Q)
+	if err != nil {
+		return badRequest(err.Error())
+	}
+	limit, err := pageLimit(params.Limit, defaultSearchLimit)
+	if err != nil {
+		return err
+	}
+	timeZone, err := h.timeZone(params.TimeZone)
+	if err != nil {
+		return err
+	}
+	if params.From != nil && params.To != nil && !params.To.After(*params.From) {
+		return badRequest("to must be after from")
+	}
+	sourceKind, err := sourceKindFilter(params.SourceKind)
+	if err != nil {
+		return err
+	}
+	anchor := h.now().UTC()
+	query := store.SearchEventsParams{
+		TimeZone: timeZone, Patterns: patterns, RangeStart: timestamp(params.From), RangeEnd: timestamp(params.To),
+		IncludeCancelled: params.IncludeCancelled != nil && *params.IncludeCancelled,
+		SourceKind:       sourceKind, SourceID: sourceIDFilter(params.SourceId), PageLimit: int32(limit + 1),
+	}
+	if params.Cursor != nil {
+		after, err := decodeSearchCursor(*params.Cursor)
+		if err != nil {
+			return badRequest("invalid cursor")
+		}
+		// Later pages split upcoming from past where the first page did.
+		anchor = after.Anchor
+		query.AfterRelevance, query.AfterBucket, query.AfterSortKey, query.AfterID = &after.Relevance, &after.Bucket, &after.SortKey, pgID(after.ID)
+	}
+	query.Anchor = timestamp(&anchor)
+	rows, err := h.queries.SearchEvents(c.Context(), query)
+	if err != nil {
+		return internal(err)
+	}
+	result := generated.EventList{Items: make([]generated.CalendarEvent, 0, min(len(rows), limit))}
+	for index, row := range rows {
+		if index == limit {
+			last := rows[index-1]
+			cursor := encodeSearchCursor(searchPosition{Anchor: anchor, Relevance: last.Relevance, Bucket: last.Bucket, SortKey: last.SortKey, ID: last.Event.ID.Bytes})
+			result.NextCursor = &cursor
+			break
+		}
+		item, err := event(row.Event)
+		if err != nil {
+			return internal(err)
+		}
+		result.Items = append(result.Items, item)
+	}
+	return c.JSON(result)
+}
+
 func (h *Handler) CreateEvent(c fiber.Ctx) error {
 	var body generated.CreateEventJSONRequestBody
 	if err := c.Bind().Body(&body); err != nil {
-		return fiber.NewError(400, "invalid event request")
+		return badRequest("invalid event request")
 	}
-	if err := validateTimes(body.AllDay, body.StartAt, body.EndAt, body.StartDate, body.EndDate); err != nil {
-		return fiber.NewError(400, err.Error())
+	fields := fieldsFromCreate(body)
+	if err := fields.validate(); err != nil {
+		return badRequest(err.Error())
 	}
-	params := createParams(body)
+	params, err := fields.createParams()
+	if err != nil {
+		return internal(err)
+	}
+	if body.ExternalReference != nil {
+		params.ExternalProvider, params.ExternalID = &body.ExternalReference.Provider, &body.ExternalReference.ExternalId
+	}
 	key, hash := idempotency(c)
 	params.AutomationIdempotencyKey, params.AutomationPayloadHash = key, hash
 	item, err := h.queries.CreateEvent(c.Context(), params)
@@ -51,9 +175,13 @@ func (h *Handler) CreateEvent(c fiber.Ctx) error {
 		return internal(err)
 	}
 	if key != nil && (item.AutomationPayloadHash == nil || *item.AutomationPayloadHash != *hash) {
-		return fiber.NewError(409, "idempotency key was already used with a different payload")
+		return httpserver.NewError(fiber.StatusConflict, "conflict", "idempotency key was already used with a different payload")
 	}
-	return c.Status(201).JSON(event(item))
+	output, err := event(item)
+	if err != nil {
+		return internal(err)
+	}
+	return c.Status(fiber.StatusCreated).JSON(output)
 }
 
 func idempotency(c fiber.Ctx) (*string, *string) {
@@ -65,123 +193,125 @@ func idempotency(c fiber.Ctx) (*string, *string) {
 	hash := fmt.Sprintf("%x", sum[:])
 	return &key, &hash
 }
+
 func (h *Handler) GetEvent(c fiber.Ctx, id types.UUID) error {
 	item, err := h.queries.GetEvent(c.Context(), pgUUID(id))
 	if err != nil {
 		return databaseError(err)
 	}
-	return c.JSON(event(item))
-}
-func (h *Handler) UpdateEvent(c fiber.Ctx, id types.UUID) error {
-	var body generated.UpdateEventJSONRequestBody
-	if err := c.Bind().Body(&body); err != nil {
-		return fiber.NewError(400, "invalid event request")
-	}
-	params := updateParams(body)
-	params.ID = pgUUID(id)
-	item, err := h.queries.UpdateEvent(c.Context(), params)
+	output, err := event(item)
 	if err != nil {
-		return databaseError(err)
+		return internal(err)
 	}
-	return c.JSON(event(item))
+	return c.JSON(output)
 }
+
+// UpdateEvent merges the body into the stored event, validates the result,
+// and writes it only if the event has not changed since it was read.
+func (h *Handler) UpdateEvent(c fiber.Ctx, id types.UUID) error {
+	patch, err := decodePatch(c.Body())
+	if err != nil {
+		return badRequest(err.Error())
+	}
+	for range updateAttempts {
+		current, err := h.queries.GetEvent(c.Context(), pgUUID(id))
+		if err != nil {
+			return databaseError(err)
+		}
+		fields, err := fieldsFromStore(current)
+		if err != nil {
+			return internal(err)
+		}
+		merged, err := patch.apply(fields, h.now())
+		if err != nil {
+			return badRequest(err.Error())
+		}
+		params, err := merged.updateParams(current.ID, current.UpdatedAt)
+		if err != nil {
+			return internal(err)
+		}
+		item, err := h.queries.UpdateEvent(c.Context(), params)
+		if errors.Is(err, pgx.ErrNoRows) {
+			continue // changed or deleted meanwhile: read it again
+		}
+		if err != nil {
+			return internal(err)
+		}
+		output, err := event(item)
+		if err != nil {
+			return internal(err)
+		}
+		return c.JSON(output)
+	}
+	return httpserver.NewError(fiber.StatusConflict, "conflict", "the event kept changing; retry the update")
+}
+
 func (h *Handler) DeleteEvent(c fiber.Ctx, id types.UUID) error {
 	affected, err := h.queries.DeleteEvent(c.Context(), pgUUID(id))
 	if err != nil {
 		return internal(err)
 	}
 	if affected == 0 {
-		return fiber.NewError(404, "event not found")
+		return notFound()
 	}
-	return c.SendStatus(204)
+	return c.SendStatus(fiber.StatusNoContent)
 }
-func createParams(body generated.CreateEventRequest) store.CreateEventParams {
-	frequency, interval, until := recurrence(body.Recurrence)
-	var provider, externalID *string
-	if body.ExternalReference != nil {
-		provider = &body.ExternalReference.Provider
-		externalID = &body.ExternalReference.ExternalId
+
+// timeZone is the request's IANA timezone, else the owner's.
+func (h *Handler) timeZone(requested *string) (string, error) {
+	if requested == nil {
+		return h.ownerTimeZone, nil
 	}
-	return store.CreateEventParams{Title: body.Title, Description: body.Description, AllDay: body.AllDay, StartAt: timestamp(body.StartAt), EndAt: timestamp(body.EndAt), StartDate: datePointer(body.StartDate), EndDate: datePointer(body.EndDate), RecurrenceFrequency: frequency, RecurrenceInterval: interval, RecurrenceUntil: until, ExternalProvider: provider, ExternalID: externalID}
+	if !config.ValidTimeZone(*requested) {
+		return "", badRequest("timeZone must be an IANA timezone such as Europe/Berlin")
+	}
+	return *requested, nil
 }
-func updateParams(body generated.UpdateEventRequest) store.UpdateEventParams {
-	frequency, interval, until := recurrence(body.Recurrence)
-	return store.UpdateEventParams{Title: body.Title, Description: body.Description, AllDay: body.AllDay, StartAt: timestamp(body.StartAt), EndAt: timestamp(body.EndAt), StartDate: datePointer(body.StartDate), EndDate: datePointer(body.EndDate), RecurrenceFrequency: frequency, RecurrenceInterval: interval, RecurrenceUntil: until}
+
+func pageLimit(requested *int, fallback int) (int, error) {
+	if requested == nil {
+		return fallback, nil
+	}
+	if *requested < 1 || *requested > maxPageLimit {
+		return 0, badRequest("limit must be between 1 and 100")
+	}
+	return *requested, nil
 }
-func recurrence(value *generated.Recurrence) (*string, *int32, pgtype.Timestamptz) {
-	if value == nil {
-		return nil, nil, pgtype.Timestamptz{}
+
+func sourceKindFilter(kind *generated.EventSourceKind) (*string, error) {
+	if kind == nil {
+		return nil, nil
 	}
-	frequency := string(value.Frequency)
-	interval := int32(value.Interval)
-	return &frequency, &interval, timestamp(value.Until)
+	if !kind.Valid() {
+		return nil, badRequest("sourceKind must be manual, ics, or google")
+	}
+	value := string(*kind)
+	return &value, nil
 }
-func event(value store.Event) generated.CalendarEvent {
-	var external *generated.ExternalReference
-	if value.ExternalProvider != nil {
-		external = &generated.ExternalReference{Provider: *value.ExternalProvider, ExternalId: *value.ExternalID}
+
+func sourceIDFilter(id *types.UUID) pgtype.UUID {
+	if id == nil {
+		return pgtype.UUID{}
 	}
-	return generated.CalendarEvent{Id: uuid(value.ID), Title: value.Title, Description: value.Description, AllDay: value.AllDay, StartAt: nullableTime(value.StartAt), EndAt: nullableTime(value.EndAt), StartDate: nullableDate(value.StartDate), EndDate: nullableDate(value.EndDate), Recurrence: recurrenceOutput(value), ExternalReference: external, CreatedAt: value.CreatedAt.Time, UpdatedAt: value.UpdatedAt.Time}
+	return pgUUID(*id)
 }
-func recurrenceOutput(value store.Event) *generated.Recurrence {
-	if value.RecurrenceFrequency == nil {
-		return nil
-	}
-	return &generated.Recurrence{Frequency: generated.RecurrenceFrequency(*value.RecurrenceFrequency), Interval: int(*value.RecurrenceInterval), Until: nullableTime(value.RecurrenceUntil)}
+
+// badRequest is a 400 whose message tells the caller what to fix.
+func badRequest(message string) error {
+	return httpserver.NewError(fiber.StatusBadRequest, "bad_request", message)
 }
-func validateTimes(allDay bool, start, end *time.Time, startDate, endDate *types.Date) error {
-	if allDay {
-		if startDate == nil || endDate == nil || start != nil || end != nil {
-			return errors.New("all-day events require startDate and endDate only")
-		}
-		if endDate.Time.Before(startDate.Time) {
-			return errors.New("endDate must not precede startDate")
-		}
-		return nil
-	}
-	if start == nil || end == nil || startDate != nil || endDate != nil {
-		return errors.New("timed events require startAt and endAt only")
-	}
-	if !end.After(*start) {
-		return errors.New("endAt must be after startAt")
-	}
-	return nil
+
+func notFound() error {
+	return httpserver.NewError(fiber.StatusNotFound, "not_found", "event not found")
 }
-func uuid(value pgtype.UUID) types.UUID   { return types.UUID(value.Bytes) }
-func pgUUID(value types.UUID) pgtype.UUID { return pgtype.UUID{Bytes: [16]byte(value), Valid: true} }
-func timestamp(value *time.Time) pgtype.Timestamptz {
-	if value == nil {
-		return pgtype.Timestamptz{}
-	}
-	return pgtype.Timestamptz{Time: *value, Valid: true}
-}
-func date(value time.Time) pgtype.Date { return pgtype.Date{Time: value, Valid: true} }
-func datePointer(value *types.Date) pgtype.Date {
-	if value == nil {
-		return pgtype.Date{}
-	}
-	return pgtype.Date{Time: value.Time, Valid: true}
-}
-func nullableTime(value pgtype.Timestamptz) *time.Time {
-	if !value.Valid {
-		return nil
-	}
-	out := value.Time
-	return &out
-}
-func nullableDate(value pgtype.Date) *types.Date {
-	if !value.Valid {
-		return nil
-	}
-	out := types.Date{Time: value.Time}
-	return &out
-}
+
 func internal(err error) error {
-	return fiber.NewError(500, fmt.Sprintf("calendar query failed: %v", err))
+	return httpserver.WrapError(err, fiber.StatusInternalServerError, "internal_error", "calendar query failed")
 }
+
 func databaseError(err error) error {
 	if errors.Is(err, pgx.ErrNoRows) {
-		return fiber.NewError(404, "event not found")
+		return notFound()
 	}
 	return internal(err)
 }
