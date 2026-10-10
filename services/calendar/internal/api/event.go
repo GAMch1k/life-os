@@ -309,7 +309,7 @@ func event(value store.Event) (generated.CalendarEvent, error) {
 		TimeZone: fields.TimeZone, Recurrence: fields.Recurrence, Reminders: fields.Reminders,
 		UseDefaultReminders: fields.UseDefaultReminders, DefaultReminders: []generated.Reminder{}, EffectiveReminders: []generated.Reminder{},
 		Priority: priorityOr(fields.Priority, ""), Status: fields.Status, CancelledAt: fields.CancelledAt, RemovedFromSourceAt: fields.RemovedFromSourceAt,
-		Source: source, ExternalReference: external,
+		Source: source, ExternalReference: external, ReadOnlyReason: value.ReadOnlyReason,
 		CreatedAt: value.CreatedAt.Time.UTC(), UpdatedAt: value.UpdatedAt.Time.UTC(),
 	}, nil
 }

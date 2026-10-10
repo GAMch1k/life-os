@@ -37,9 +37,11 @@ const (
 // them.
 func (h *Handler) resolveSources(ctx context.Context, items []generated.CalendarEvent) error {
 	type summary struct {
-		name      string
-		reminders []generated.Reminder
-		priority  generated.EventPriority
+		name                  string
+		reminders             []generated.Reminder
+		priority              generated.EventPriority
+		integration, provider *string
+		readOnly              bool
 	}
 	var summaries map[types.UUID]summary
 	var owner *ownerDefaults
@@ -72,12 +74,15 @@ func (h *Handler) resolveSources(ctx context.Context, items []generated.Calendar
 					if err != nil {
 						return err
 					}
-					summaries[uuid(row.ID)] = summary{name: row.Name, reminders: remindersOrNone(reminders), priority: generated.EventPriority(row.DefaultPriority)}
+					summaries[uuid(row.ID)] = summary{
+						name: row.Name, reminders: remindersOrNone(reminders), priority: generated.EventPriority(row.DefaultPriority),
+						integration: row.Integration, provider: row.Provider, readOnly: row.ReadOnly,
+					}
 				}
 			}
 			if found, ok := summaries[*item.Source.SourceId]; ok {
-				name := found.name
-				item.Source.Name = &name
+				name, readOnly := found.name, found.readOnly
+				item.Source.Name, item.Source.Integration, item.Source.Provider, item.Source.ReadOnly = &name, found.integration, found.provider, &readOnly
 				defaults, priority = found.reminders, found.priority
 			}
 		}
