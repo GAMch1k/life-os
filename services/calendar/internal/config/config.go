@@ -10,6 +10,7 @@ import (
 
 	sharedconfig "github.com/GAMch1k/life-os/pkg/config"
 	"github.com/GAMch1k/life-os/pkg/database"
+	"github.com/GAMch1k/life-os/services/calendar/internal/google"
 )
 
 // Config holds process-level configuration for a generated service.
@@ -40,6 +41,14 @@ type Config struct {
 	// startup; empty leaves any existing one alone. It names a street:
 	// never log it.
 	ZAWICSURL string `env:"CALENDAR_ZAW_ICS_URL"`
+	// Google Calendar connection: the OAuth Web client (from the owner's
+	// Google Cloud project), the base64 32-byte key that encrypts refresh
+	// tokens at rest, and the Dashboard route Google returns to. Google is
+	// not configured until the first three are set. Secrets: never log them.
+	GoogleClientID     string `env:"LIFE_OS_GOOGLE_CLIENT_ID"`
+	GoogleClientSecret string `env:"LIFE_OS_GOOGLE_CLIENT_SECRET"`
+	GoogleTokenKey     string `env:"LIFE_OS_GOOGLE_TOKEN_KEY"`
+	GoogleRedirectURI  string `env:"LIFE_OS_GOOGLE_REDIRECT_URI" default:"https://lifeos.gamch1k.com/calendar/google/callback"`
 }
 
 // Load reads Config from the process environment.
@@ -126,4 +135,11 @@ func ValidTimeZone(name string) bool {
 	}
 	_, err := time.LoadLocation(name)
 	return err == nil
+}
+
+// Google returns the Google Calendar configuration. A partial or invalid one
+// is returned as an error to log and leaves Google unconfigured, so a typo
+// does not stop the service.
+func (c Config) Google() (google.Config, error) {
+	return google.NewConfig(c.GoogleClientID, c.GoogleClientSecret, c.GoogleTokenKey, c.GoogleRedirectURI)
 }

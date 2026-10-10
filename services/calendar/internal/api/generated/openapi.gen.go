@@ -67,6 +67,54 @@ func (e EventStatus) Valid() bool {
 	}
 }
 
+// Defines values for GoogleCalendarAccessRole.
+const (
+	FreeBusyReader GoogleCalendarAccessRole = "freeBusyReader"
+	Owner          GoogleCalendarAccessRole = "owner"
+	Reader         GoogleCalendarAccessRole = "reader"
+	Writer         GoogleCalendarAccessRole = "writer"
+)
+
+// Valid indicates whether the value is a known member of the GoogleCalendarAccessRole enum.
+func (e GoogleCalendarAccessRole) Valid() bool {
+	switch e {
+	case FreeBusyReader:
+		return true
+	case Owner:
+		return true
+	case Reader:
+		return true
+	case Writer:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GoogleConnectionStatus.
+const (
+	Connected    GoogleConnectionStatus = "connected"
+	Error        GoogleConnectionStatus = "error"
+	Expired      GoogleConnectionStatus = "expired"
+	NotConnected GoogleConnectionStatus = "not_connected"
+)
+
+// Valid indicates whether the value is a known member of the GoogleConnectionStatus enum.
+func (e GoogleConnectionStatus) Valid() bool {
+	switch e {
+	case Connected:
+		return true
+	case Error:
+		return true
+	case Expired:
+		return true
+	case NotConnected:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RecurrenceFrequency.
 const (
 	Daily   RecurrenceFrequency = "daily"
@@ -363,6 +411,80 @@ type ExternalReference struct {
 	Provider   string `json:"provider"`
 }
 
+// GoogleAuthorization defines model for GoogleAuthorization.
+type GoogleAuthorization struct {
+	// Url Google's consent page; open it in the browser.
+	Url string `json:"url"`
+}
+
+// GoogleCalendar defines model for GoogleCalendar.
+type GoogleCalendar struct {
+	// AccessRole The account's access to the calendar.
+	AccessRole GoogleCalendarAccessRole `json:"accessRole"`
+
+	// Color Its background color in Google Calendar, such as #9fe1e7.
+	Color     *string   `json:"color,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
+
+	// GoogleCalendarId The calendar's id at Google (the account's address for the primary calendar).
+	GoogleCalendarId string             `json:"googleCalendarId"`
+	Id               openapi_types.UUID `json:"id"`
+
+	// Primary The account's primary calendar.
+	Primary bool `json:"primary"`
+
+	// Summary The calendar's name as the owner sees it in Google Calendar.
+	Summary string `json:"summary"`
+
+	// SyncEnabled Whether the calendar will sync into Life OS (syncing starts in a later release).
+	SyncEnabled bool      `json:"syncEnabled"`
+	UpdatedAt   time.Time `json:"updatedAt"`
+}
+
+// GoogleCalendarAccessRole The account's access to the calendar.
+type GoogleCalendarAccessRole string
+
+// GoogleCalendarList defines model for GoogleCalendarList.
+type GoogleCalendarList struct {
+	Items []GoogleCalendar `json:"items"`
+}
+
+// GoogleConnectRequest defines model for GoogleConnectRequest.
+type GoogleConnectRequest struct {
+	// Code The authorization code Google returned.
+	Code string `json:"code"`
+
+	// State The state Google returned with it.
+	State string `json:"state"`
+}
+
+// GoogleConnection defines model for GoogleConnection.
+type GoogleConnection struct {
+	// AccountEmail The connected Google account (its primary calendar's id).
+	AccountEmail *string `json:"accountEmail,omitempty"`
+
+	// Configured Whether this server has the Google client credentials and token key (LIFE_OS_GOOGLE_CLIENT_ID, LIFE_OS_GOOGLE_CLIENT_SECRET, LIFE_OS_GOOGLE_TOKEN_KEY). Without them nothing can be connected.
+	Configured bool `json:"configured"`
+
+	// ConnectedAt When the account was last connected.
+	ConnectedAt *time.Time `json:"connectedAt,omitempty"`
+
+	// LastError Why the connection is expired or in error; null while connected.
+	LastError *string `json:"lastError,omitempty"`
+
+	// MissingScopes Scopes Life OS asks for that Google did not grant (the owner may untick some on the consent page); empty when everything was granted or nothing is connected.
+	MissingScopes []string `json:"missingScopes"`
+
+	// Scopes The scopes Google granted.
+	Scopes []string `json:"scopes"`
+
+	// Status `not_connected`: no Google account is connected. `connected`: usable. `expired`: Google refused the stored authorization (it expired or was revoked); reconnect. `error`: another refusal, such as a changed client secret; see `lastError`.
+	Status GoogleConnectionStatus `json:"status"`
+}
+
+// GoogleConnectionStatus `not_connected`: no Google account is connected. `connected`: usable. `expired`: Google refused the stored authorization (it expired or was revoked); reconnect. `error`: another refusal, such as a changed client secret; see `lastError`.
+type GoogleConnectionStatus string
+
 // Recurrence Repeats the event every `interval` days, weeks, months, or years from its start, as an iCalendar (RFC 5545) rule. A timed event keeps its wall-clock time in its `timeZone` (else the owner's timezone) across daylight saving changes. Weekly repeats on the start's weekday, or on each of `byWeekday` (which must include the start's weekday in the event's timezone; all-day: its startDate's). Monthly repeats on the start's day of the month and skips months without it (the 31st); yearly on the start's date: an all-day event on 17 September repeats annually on September 17, such as a birthday (29 February only in leap years). The series ends at `until`, the latest start of an occurrence (inclusive; an all-day series compares its dates with until's date in the owner's timezone; not before the event's start), or after `count` occurrences, or never; not both. Errors (400): `recurrence frequency must be daily, weekly, monthly, or yearly`, `recurrence interval must be at least 1`, `recurrence byWeekday is only for weekly recurrence`, `recurrence byWeekday days must be MO, TU, WE, TH, FR, SA, or SU`, `recurrence byWeekday must include the weekday the event starts on (Saturday)` (naming that weekday), `recurrence count must be between 1 and 1000`, `recurrence takes until or count, not both`, `recurrence until must not be before the event starts`.
 type Recurrence struct {
 	// ByWeekday Weekly only: the days of the week it repeats on, including the start's weekday. Returned in week order (MO first), each day once; absent means the start's weekday.
@@ -494,6 +616,11 @@ type UpdateEventRequest struct {
 	UseDefaultReminders *bool `json:"useDefaultReminders,omitempty"`
 }
 
+// UpdateGoogleCalendarRequest defines model for UpdateGoogleCalendarRequest.
+type UpdateGoogleCalendarRequest struct {
+	SyncEnabled bool `json:"syncEnabled"`
+}
+
 // UpdateOccurrenceRequest One occurrence's own changes. The start and end keep the series' kind (`startAt`/`endAt` for a timed series, `startDate`/`endDate` for an all-day one). `reminders: null` gives the occurrence no own reminders and turns its defaults on unless the body sets `useDefaultReminders`.
 type UpdateOccurrenceRequest struct {
 	// AllDay Must be the series' allDay: an occurrence cannot switch between timed and all-day.
@@ -622,6 +749,12 @@ type UpdateEventOccurrenceJSONRequestBody = UpdateOccurrenceRequest
 // SplitEventSeriesJSONRequestBody defines body for SplitEventSeries for application/json ContentType.
 type SplitEventSeriesJSONRequestBody = UpdateEventRequest
 
+// UpdateGoogleCalendarJSONRequestBody defines body for UpdateGoogleCalendar for application/json ContentType.
+type UpdateGoogleCalendarJSONRequestBody = UpdateGoogleCalendarRequest
+
+// ConnectGoogleJSONRequestBody defines body for ConnectGoogle for application/json ContentType.
+type ConnectGoogleJSONRequestBody = GoogleConnectRequest
+
 // UpdateSettingsJSONRequestBody defines body for UpdateSettings for application/json ContentType.
 type UpdateSettingsJSONRequestBody = UpdateSettingsRequest
 
@@ -663,6 +796,27 @@ type ServerInterface interface {
 	// TruncateEventSeries Delete this and following occurrences
 	// (POST /v1/events/{eventId}/occurrences/{recurrenceId}/truncate)
 	TruncateEventSeries(c fiber.Ctx, eventId EventId, recurrenceId RecurrenceId) error
+	// ListGoogleCalendars List the connected account's Google calendars
+	// (GET /v1/google/calendars)
+	ListGoogleCalendars(c fiber.Ctx) error
+	// RefreshGoogleCalendars Read the calendar list from Google again
+	// (POST /v1/google/calendars/refresh)
+	RefreshGoogleCalendars(c fiber.Ctx) error
+	// UpdateGoogleCalendar Choose whether a Google calendar syncs
+	// (PATCH /v1/google/calendars/{calendarId})
+	UpdateGoogleCalendar(c fiber.Ctx, calendarId openapi_types.UUID) error
+	// DisconnectGoogle Disconnect Google Calendar
+	// (DELETE /v1/google/connection)
+	DisconnectGoogle(c fiber.Ctx) error
+	// GetGoogleConnection Get the Google Calendar connection
+	// (GET /v1/google/connection)
+	GetGoogleConnection(c fiber.Ctx) error
+	// ConnectGoogle Complete a Google authorization
+	// (POST /v1/google/connection)
+	ConnectGoogle(c fiber.Ctx) error
+	// AuthorizeGoogle Start a Google authorization
+	// (POST /v1/google/connection/authorize)
+	AuthorizeGoogle(c fiber.Ctx) error
 	// GetSettings Get the Calendar settings
 	// (GET /v1/settings)
 	GetSettings(c fiber.Ctx) error
@@ -1130,6 +1284,143 @@ func (siw *ServerInterfaceWrapper) TruncateEventSeries(c fiber.Ctx) error {
 	return handler(c)
 }
 
+// ListGoogleCalendars operation middleware
+func (siw *ServerInterfaceWrapper) ListGoogleCalendars(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.ListGoogleCalendars(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// RefreshGoogleCalendars operation middleware
+func (siw *ServerInterfaceWrapper) RefreshGoogleCalendars(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.RefreshGoogleCalendars(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// UpdateGoogleCalendar operation middleware
+func (siw *ServerInterfaceWrapper) UpdateGoogleCalendar(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "calendarId" -------------
+	var calendarId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "calendarId", c.Params("calendarId"), &calendarId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter calendarId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.UpdateGoogleCalendar(c, calendarId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// DisconnectGoogle operation middleware
+func (siw *ServerInterfaceWrapper) DisconnectGoogle(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.DisconnectGoogle(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// GetGoogleConnection operation middleware
+func (siw *ServerInterfaceWrapper) GetGoogleConnection(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.GetGoogleConnection(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// ConnectGoogle operation middleware
+func (siw *ServerInterfaceWrapper) ConnectGoogle(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.ConnectGoogle(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// AuthorizeGoogle operation middleware
+func (siw *ServerInterfaceWrapper) AuthorizeGoogle(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.AuthorizeGoogle(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
 // GetSettings operation middleware
 func (siw *ServerInterfaceWrapper) GetSettings(c fiber.Ctx) error {
 
@@ -1376,5 +1667,19 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	router.Get(options.BaseURL+"/v1/settings", wrapper.GetSettings)
 
 	router.Patch(options.BaseURL+"/v1/settings", wrapper.UpdateSettings)
+
+	router.Delete(options.BaseURL+"/v1/google/connection", wrapper.DisconnectGoogle)
+
+	router.Get(options.BaseURL+"/v1/google/connection", wrapper.GetGoogleConnection)
+
+	router.Post(options.BaseURL+"/v1/google/connection", wrapper.ConnectGoogle)
+
+	router.Post(options.BaseURL+"/v1/google/connection/authorize", wrapper.AuthorizeGoogle)
+
+	router.Get(options.BaseURL+"/v1/google/calendars", wrapper.ListGoogleCalendars)
+
+	router.Post(options.BaseURL+"/v1/google/calendars/refresh", wrapper.RefreshGoogleCalendars)
+
+	router.Patch(options.BaseURL+"/v1/google/calendars/:calendarId", wrapper.UpdateGoogleCalendar)
 
 }

@@ -61,6 +61,10 @@ Calendar refreshes subscribed ICS feeds itself (see [Calendar](../services/calen
 
 Calendar needs outbound https from the `backend` network to reach feeds, and refuses feeds on private or loopback addresses. A refresh outcome (and the last error) is on the source (`GET /api/calendar/v1/sources`) and in the Event Log; a failing feed keeps its last good events and is retried with backoff. Keep personal feed URLs (they can carry a street) in the ignored `.env` or in the source registry, never in the repository.
 
+## Google Calendar
+
+Optional. Migration `000009_google_connection` adds the connection tables on the next `calendar-migrate` run; without `LIFE_OS_GOOGLE_CLIENT_ID`, `LIFE_OS_GOOGLE_CLIENT_SECRET`, and `LIFE_OS_GOOGLE_TOKEN_KEY` in `.env`, Calendar runs as before and the Calendar page says Google is not set up. The owner's one-time setup (Google Cloud project, consent screen in production, Web client with the redirect URI `https://lifeos.gamch1k.com/calendar/google/callback`, the `.env` lines, `openssl rand -base64 32` for the key) is in [Google Calendar setup](google-calendar.md). The verification stack never receives these settings (`tools/verify-compose` blanks them). Back up the token key with the other secrets: without it the stored refresh token cannot be decrypted and Google must be reconnected.
+
 ## Voice worker recovery
 
 Voice jobs use a persisted lease instead of treating `processing` as permanent ownership. Configure `LIFE_OS_VOICE_WORKER_LEASE_SECONDS`, `LIFE_OS_VOICE_WORKER_RETRY_BACKOFF_SECONDS`, and `LIFE_OS_VOICE_WORKER_MAX_ATTEMPTS` in the ignored `.env` if the defaults are unsuitable. On restart, the normal `voice-worker` automatically reclaims only expired leases; do not edit Voice job rows manually. A job that repeatedly loses its lease or fails will eventually appear as `failed` from `GET /api/voice/v1/audio-jobs/{id}` with its attempt count and error summary.
