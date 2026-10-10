@@ -27,6 +27,12 @@ services:
   dashboard:
     image: lifeos-dashboard:latest
     ports: !reset []
+  # Evaluates the status but notifies nothing, so the browser suite's
+  # notification counts stay its own.
+  monitor:
+    image: lifeos-monitor:latest
+    environment:
+      NOTIFICATIONS_SERVICE_URL: ""
   mcp:
     image: lifeos-mcp:latest
   processor:

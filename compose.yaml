@@ -130,6 +130,7 @@ services:
       ACTIVITY_SERVICE_URL: http://activity:8080
       NOTIFICATIONS_SERVICE_URL: http://notifications:8080
       PROCESSOR_STATUS_URL: http://processor:8081
+      MONITOR_SERVICE_URL: http://monitor:8080
       LIFE_OS_TIMEZONE: ${LIFE_OS_TIMEZONE:-UTC}
     expose: ["3000"]
     depends_on:
@@ -137,6 +138,19 @@ services:
       tasks: {condition: service_started}
       inbox: {condition: service_started}
       calendar: {condition: service_started}
+    networks: [backend]
+    restart: unless-stopped
+
+  # Reads the Dashboard's runtime status (/api/status) every minute and
+  # notifies the owner through Notifications when a check breaks or recovers
+  # (docs/services/monitor.md). No database and no gateway route.
+  monitor:
+    build: {context: ., dockerfile: services/monitor/Dockerfile}
+    environment: {SERVICE_NAME: monitor, PORT: 8080, MONITOR_STATUS_URL: "http://dashboard:3000/api/status", NOTIFICATIONS_SERVICE_URL: "http://notifications:8080", MONITOR_INTERVAL_SECONDS: "${LIFE_OS_MONITOR_INTERVAL_SECONDS:-60}", MONITOR_CONFIRMATIONS: "${LIFE_OS_MONITOR_CONFIRMATIONS:-2}"}
+    expose: ["8080"]
+    depends_on:
+      dashboard: {condition: service_started}
+      notifications: {condition: service_started}
     networks: [backend]
     restart: unless-stopped
 
