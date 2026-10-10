@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Writes are attributed to this script as a development tool, never to the
+# owner (CONTRIBUTING.md, "Development tools and live data").
+actor=(-H 'X-Life-OS-Actor: dev:smoke-action-idempotency')
+
 # Exercises the durable owner boundary used to recover from a processor crash
 # after an owner has committed, but before Inbox attempt bookkeeping succeeds.
 # It deliberately discards each first response and replays the exact request.
@@ -27,9 +31,9 @@ done
 replay() {
   local endpoint=$1 key=$2 body=$3
   local first second first_id second_id
-  first=$(curl --fail --silent -H 'content-type: application/json' -H "Idempotency-Key: $key" -d "$body" "$endpoint")
+  first=$(curl "${actor[@]}" --fail --silent -H 'content-type: application/json' -H "Idempotency-Key: $key" -d "$body" "$endpoint")
   # The processor's successful owner response has been lost at this point.
-  second=$(curl --fail --silent -H 'content-type: application/json' -H "Idempotency-Key: $key" -d "$body" "$endpoint")
+  second=$(curl "${actor[@]}" --fail --silent -H 'content-type: application/json' -H "Idempotency-Key: $key" -d "$body" "$endpoint")
   first_id=$(jq -r '.id' <<<"$first")
   second_id=$(jq -r '.id' <<<"$second")
   [[ "$first_id" != null && "$first_id" == "$second_id" ]] || {

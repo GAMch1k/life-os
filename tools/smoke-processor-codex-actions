@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Writes are attributed to this script as a development tool, never to the
+# owner (CONTRIBUTING.md, "Development tools and live data").
+actor=(-H 'X-Life-OS-Actor: dev:smoke-processor-codex-actions')
+
 # Opt-in, disposable proof that the deployed processor uses the authenticated
 # local Codex CLI to route explicit Calendar and Finance captures. It does not
 # call the processor directly or inject actions through the MCP service.
@@ -25,7 +29,7 @@ finance_note="P7 Codex finance $stamp"
 
 capture() {
   local content=$1
-  curl --fail --silent -H 'content-type: application/json' \
+  curl "${actor[@]}" --fail --silent -H 'content-type: application/json' \
     --data "$(jq -nc --arg content "$content" '{content:$content,source:"web",sourceMetadata:{verification:"p7-09-codex-actions"}}')" \
     "$gateway/api/inbox/v1/inbox-items" | jq -r '.id'
 }
@@ -65,7 +69,7 @@ wait_for_action "$finance_id" finance_create_manual_transaction
 curl --fail --silent "$gateway/api/finance/v1/transactions?limit=100" | jq -e --arg note "$finance_note" '.items | map(select((.note // "") | ascii_downcase | contains($note | ascii_downcase))) | length == 1' >/dev/null
 
 task_title="P8 Codex mutation $stamp"
-task_id=$(curl --fail --silent -H 'content-type: application/json' --data "$(jq -nc --arg title "$task_title" '{title:$title}')" "$gateway/api/tasks/v1/tasks" | jq -r '.id')
+task_id=$(curl "${actor[@]}" --fail --silent -H 'content-type: application/json' --data "$(jq -nc --arg title "$task_title" '{title:$title}')" "$gateway/api/tasks/v1/tasks" | jq -r '.id')
 mutation_id=$(capture "Mark the task titled $task_title as done.")
 wait_for_action "$mutation_id" task_complete
 curl --fail --silent "$gateway/api/tasks/v1/tasks/$task_id" | jq -e --arg title "$task_title" '.title == $title and .completed == true' >/dev/null
@@ -76,7 +80,7 @@ curl --fail --silent "$gateway/api/tasks/v1/tasks/$task_id" | jq -e --arg title 
 
 update_title="P8 Codex update $stamp"
 updated_title="P8 Codex updated $stamp"
-update_task_id=$(curl --fail --silent -H 'content-type: application/json' --data "$(jq -nc --arg title "$update_title" '{title:$title}')" "$gateway/api/tasks/v1/tasks" | jq -r '.id')
+update_task_id=$(curl "${actor[@]}" --fail --silent -H 'content-type: application/json' --data "$(jq -nc --arg title "$update_title" '{title:$title}')" "$gateway/api/tasks/v1/tasks" | jq -r '.id')
 update_id=$(capture "Rename the task titled $update_title to $updated_title.")
 wait_for_action "$update_id" task_update
 curl --fail --silent "$gateway/api/tasks/v1/tasks/$update_task_id" | jq -e --arg title "$updated_title" '.title == $title and .completed == false' >/dev/null
@@ -90,8 +94,8 @@ wait_for_action "$clear_date_id" task_update
 curl --fail --silent "$gateway/api/tasks/v1/tasks/$update_task_id" | jq -e '.dueAt == null' >/dev/null
 
 ambiguous_title="P8 Codex ambiguous $stamp"
-ambiguous_task_a=$(curl --fail --silent -H 'content-type: application/json' --data "$(jq -nc --arg title "$ambiguous_title" '{title:$title}')" "$gateway/api/tasks/v1/tasks" | jq -r '.id')
-ambiguous_task_b=$(curl --fail --silent -H 'content-type: application/json' --data "$(jq -nc --arg title "$ambiguous_title" '{title:$title}')" "$gateway/api/tasks/v1/tasks" | jq -r '.id')
+ambiguous_task_a=$(curl "${actor[@]}" --fail --silent -H 'content-type: application/json' --data "$(jq -nc --arg title "$ambiguous_title" '{title:$title}')" "$gateway/api/tasks/v1/tasks" | jq -r '.id')
+ambiguous_task_b=$(curl "${actor[@]}" --fail --silent -H 'content-type: application/json' --data "$(jq -nc --arg title "$ambiguous_title" '{title:$title}')" "$gateway/api/tasks/v1/tasks" | jq -r '.id')
 ambiguous_id=$(capture "Mark the task titled $ambiguous_title as done.")
 wait_for_retryable "$ambiguous_id"
 curl --fail --silent "$gateway/api/inbox/v1/inbox-items/$ambiguous_id" | jq -e '.resolvedAt == null and .state != "resolved"' >/dev/null

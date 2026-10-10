@@ -27,7 +27,9 @@ trap cleanup EXIT
 docker run --rm -v "$work:/out" alpine:3.22 sh -c \
   "apk add --no-cache espeak-ng >/dev/null && espeak-ng -v en-us -s 125 -w /out/chicken.wav 'I already bought the chicken.' && chmod 644 /out/chicken.wav"
 
-api() { curl --fail --silent "$@"; }
+# Requests are attributed to this script as a development tool, never to the
+# owner (CONTRIBUTING.md, "Development tools and live data").
+api() { curl --fail --silent -H 'X-Life-OS-Actor: dev:benchmark-ai-runtime' "$@"; }
 post_json() { api -H 'content-type: application/json' --data "$2" "$gateway$1"; }
 seed() { post_json /api/tasks/v1/tasks "$(jq -n --arg title "$1" '{title: $title}')" | jq -r '.id'; }
 capture() { post_json /api/inbox/v1/inbox-items "$(jq -n --arg content "$1" '{content: $content, source: "web"}')" | jq -r '.id'; }
