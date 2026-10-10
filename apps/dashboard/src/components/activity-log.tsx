@@ -8,6 +8,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { CopyButton } from "@/components/copy-button";
 import { ExpandableText } from "@/components/expandable-text";
 import {
   activityHref,
@@ -612,7 +613,14 @@ function TraceView({
               </div>
             ))}
           </dl>
-          <pre className="bg-muted mt-3 max-h-64 overflow-auto rounded-md p-2 text-xs">
+          <div className="mt-3 flex items-center justify-between gap-2">
+            <span className="text-muted-foreground text-xs">Event data</span>
+            <CopyButton label="Copy diagnostics" targetId="diagnostics-data" />
+          </div>
+          <pre
+            className="bg-muted mt-1 max-h-64 overflow-auto rounded-md p-2 text-xs"
+            id="diagnostics-data"
+          >
             {JSON.stringify(selected.data, null, 2)}
           </pre>
         </details>
