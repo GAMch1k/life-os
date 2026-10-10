@@ -174,6 +174,45 @@ func TestCalendarCancelKeepsTheEventAsHistory(t *testing.T) {
 	}
 }
 
+func TestCalendarCancelSkipsOneOccurrenceOfARecurringEvent(t *testing.T) {
+	session, requests := calendarSession(t, http.StatusOK, `{"id":"`+eventID+`","status":"cancelled"}`)
+	if result := callTool(t, session, "calendar_cancel", map[string]any{"eventId": eventID, "recurrenceId": "2026-10-10T05:00:00Z"}); result.IsError {
+		t.Fatalf("cancel failed: %s", resultText(result))
+	}
+	got := (*requests)[0]
+	if got.Method != http.MethodPatch || got.Path != "/v1/events/"+eventID+"/occurrences/2026-10-10T05:00:00Z" || !reflect.DeepEqual(got.Body, map[string]any{"status": "cancelled"}) {
+		t.Fatalf("Calendar saw %+v", got)
+	}
+	callTool(t, session, "calendar_cancel", map[string]any{"eventId": eventID, "recurrenceId": "2026-10-24"})
+	if got := (*requests)[1]; got.Path != "/v1/events/"+eventID+"/occurrences/2026-10-24" {
+		t.Fatalf("all-day occurrence: Calendar saw %+v", got)
+	}
+	for _, rid := range []string{"../../sources", "today", "2026-10-10T05:00:00Z/../x"} {
+		if result := callTool(t, session, "calendar_cancel", map[string]any{"eventId": eventID, "recurrenceId": rid}); !result.IsError {
+			t.Errorf("recurrenceId %q was accepted", rid)
+		}
+	}
+	if len(*requests) != 2 {
+		t.Fatalf("Calendar was called for an invalid recurrenceId: %+v", *requests)
+	}
+}
+
+// Recurring events are created and changed only in the Calendar: the
+// tools take no recurrence.
+func TestCalendarToolsTakeNoRecurrence(t *testing.T) {
+	session, requests := calendarSession(t, http.StatusOK, `{}`)
+	weekly := map[string]any{"frequency": "weekly", "interval": 1}
+	if result := callTool(t, session, "calendar_create", map[string]any{"title": "Gym", "allDay": true, "startDate": "2026-10-10", "endDate": "2026-10-10", "recurrence": weekly}); !result.IsError {
+		t.Error("calendar_create accepted a recurrence")
+	}
+	if result := callTool(t, session, "calendar_update", map[string]any{"eventId": eventID, "recurrence": weekly}); !result.IsError {
+		t.Error("calendar_update accepted a recurrence")
+	}
+	if len(*requests) != 0 {
+		t.Fatalf("Calendar was called: %+v", *requests)
+	}
+}
+
 func TestCalendarDeleteRemovesTheEvent(t *testing.T) {
 	session, requests := calendarSession(t, http.StatusNoContent, ``)
 	result := callTool(t, session, "calendar_delete", map[string]any{"eventId": strings.ToUpper(eventID)})

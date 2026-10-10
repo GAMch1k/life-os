@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
+	"time"
 
 	"github.com/GAMch1k/life-os/pkg/activity"
 	"github.com/GAMch1k/life-os/services/mcp/internal/coreclient"
@@ -59,6 +61,13 @@ type eventRef struct {
 	EventID string `json:"eventId" jsonschema:"Calendar event UUID"`
 }
 
+// eventCancellation cancels one event, or one occurrence of a recurring
+// event. Recurring events are otherwise changed only in the Calendar.
+type eventCancellation struct {
+	EventID      string `json:"eventId" jsonschema:"Calendar event UUID (for a recurring event, its series id)"`
+	RecurrenceID string `json:"recurrenceId,omitempty" jsonschema:"For a recurring event: the occurrence.recurrenceId of the one occurrence to cancel (skip); the series and its other occurrences stay"`
+}
+
 // clearable are the optional event fields calendar_update may remove.
 var clearable = map[string]bool{"description": true, "location": true, "timeZone": true, "reminders": true}
 
@@ -100,11 +109,16 @@ func addCalendarTools(s *mcp.Server, hc *http.Client, baseURL string, emitter *a
 			return patch(ctx, hc, trace, baseURL, path, body)
 		})
 	})
-	mcp.AddTool(s, &mcp.Tool{Name: "calendar_cancel", Description: "Cancel one existing Calendar event; it stays readable as history and can be restored"}, func(ctx context.Context, req *mcp.CallToolRequest, in eventRef) (*mcp.CallToolResult, Output, error) {
+	mcp.AddTool(s, &mcp.Tool{Name: "calendar_cancel", Description: "Cancel one existing Calendar event, or with recurrenceId only that occurrence of a recurring event; it stays readable as history and can be restored"}, func(ctx context.Context, req *mcp.CallToolRequest, in eventCancellation) (*mcp.CallToolResult, Output, error) {
 		return audited(ctx, emitter, req, "calendar_cancel", in, func(trace activity.Trace) (*mcp.CallToolResult, Output, error) {
 			path, err := eventPath(in.EventID)
 			if err != nil {
 				return nil, Output{}, err
+			}
+			if in.RecurrenceID != "" {
+				if path, err = occurrencePath(path, in.RecurrenceID); err != nil {
+					return nil, Output{}, err
+				}
 			}
 			return patch(ctx, hc, trace, baseURL, path, map[string]any{"status": "cancelled"})
 		})
@@ -134,6 +148,19 @@ func eventPath(id string) (string, error) {
 		return "", fmt.Errorf("eventId must be a Calendar event UUID")
 	}
 	return "/v1/events/" + parsed.String(), nil
+}
+
+// occurrencePath is the Calendar path of one occurrence of the event at
+// eventPath. The recurrence id must be one (an RFC 3339 instant or a date),
+// so a caller cannot reach another path.
+func occurrencePath(eventPath, recurrenceID string) (string, error) {
+	recurrenceID = strings.TrimSpace(recurrenceID)
+	_, instantErr := time.Parse(time.RFC3339, recurrenceID)
+	_, dateErr := time.Parse(time.DateOnly, recurrenceID)
+	if instantErr != nil && dateErr != nil {
+		return "", fmt.Errorf("recurrenceId must be an occurrence's recurrenceId: an RFC 3339 instant or a date")
+	}
+	return eventPath + "/occurrences/" + url.PathEscape(recurrenceID), nil
 }
 
 // eventUpdateBody is the Calendar PATCH body: the given fields, plus null
