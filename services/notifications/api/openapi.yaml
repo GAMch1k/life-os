@@ -131,8 +131,49 @@ paths:
         '200': {description: 'The notification, now read', content: {application/json: {schema: {$ref: '#/components/schemas/Notification'}}}}
         '400': {description: 'Invalid notification id, or no valid X-Life-OS-Actor (actor_required)', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
         '404': {description: Notification not found (not_found), content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  /v1/channels:
+    get:
+      summary: List delivery channels and their health
+      description: >-
+        One entry per channel configured on this server
+        (`NOTIFICATIONS_CHANNELS`), in the configured order, with what its
+        deliveries show: the latest success, the latest failure (a failed
+        delivery or one waiting for a retry) and its error, failures in the
+        last 24 hours, and deliveries waiting now. `state` sums it up. An
+        empty list means no channel is configured: notifications are stored
+        and listed only. The Dashboard Status page shows this.
+      operationId: listChannels
+      security: []
+      responses:
+        '200': {description: Configured channels, content: {application/json: {schema: {$ref: '#/components/schemas/ChannelList'}}}}
+        '400': {description: Invalid request, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
 components:
   schemas:
+    ChannelState:
+      type: string
+      description: >-
+        ok = the latest outcome was a success; failing = the latest outcome
+        was a failure (a delivery failed, or waits for a retry, after the
+        latest success); idle = nothing has been delivered or failed yet.
+      enum: [ok, failing, idle]
+    Channel:
+      type: object
+      description: One configured delivery channel and the health its deliveries show.
+      required: [name, state, lastSuccessAt, lastFailureAt, lastError, recentFailures, retrying, pending]
+      properties:
+        name: {type: string, description: 'Channel name, such as ntfy.'}
+        state: {$ref: '#/components/schemas/ChannelState'}
+        lastSuccessAt: {type: string, format: date-time, nullable: true, description: When a delivery through it was last sent.}
+        lastFailureAt: {type: string, format: date-time, nullable: true, description: When a delivery through it last failed or was scheduled for a retry.}
+        lastError: {type: string, nullable: true, description: The error of that latest failure.}
+        recentFailures: {type: integer, minimum: 0, description: 'Deliveries that failed, or wait for a retry, last changed in the past 24 hours.'}
+        retrying: {type: integer, minimum: 0, description: Deliveries waiting for another attempt now.}
+        pending: {type: integer, minimum: 0, description: Deliveries queued for a first attempt now.}
+    ChannelList:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/Channel'}}
     NotificationImportance:
       type: string
       description: >-

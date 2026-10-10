@@ -11,6 +11,11 @@ import (
 )
 
 type Querier interface {
+	// What each channel's deliveries show: its latest success; its latest
+	// failure (a failed delivery, or one waiting for a retry) and that error;
+	// how many failed or wait for a retry, last changed since the given instant;
+	// and how many wait for a retry or a first attempt now.
+	ChannelHealth(ctx context.Context, arg ChannelHealthParams) ([]ChannelHealthRow, error)
 	// Takes the most overdue delivery that no live lease holds. An expired lease
 	// (a worker that stopped mid-send) is claimable again; the attempt it started
 	// still counts.

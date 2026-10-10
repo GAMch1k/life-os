@@ -13,6 +13,27 @@ import (
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
+// Defines values for ChannelState.
+const (
+	Failing ChannelState = "failing"
+	Idle    ChannelState = "idle"
+	Ok      ChannelState = "ok"
+)
+
+// Valid indicates whether the value is a known member of the ChannelState enum.
+func (e ChannelState) Valid() bool {
+	switch e {
+	case Failing:
+		return true
+	case Idle:
+		return true
+	case Ok:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DeliveryStatus.
 const (
 	Failed   DeliveryStatus = "failed"
@@ -60,6 +81,41 @@ func (e NotificationImportance) Valid() bool {
 		return false
 	}
 }
+
+// Channel One configured delivery channel and the health its deliveries show.
+type Channel struct {
+	// LastError The error of that latest failure.
+	LastError *string `json:"lastError"`
+
+	// LastFailureAt When a delivery through it last failed or was scheduled for a retry.
+	LastFailureAt *time.Time `json:"lastFailureAt"`
+
+	// LastSuccessAt When a delivery through it was last sent.
+	LastSuccessAt *time.Time `json:"lastSuccessAt"`
+
+	// Name Channel name, such as ntfy.
+	Name string `json:"name"`
+
+	// Pending Deliveries queued for a first attempt now.
+	Pending int `json:"pending"`
+
+	// RecentFailures Deliveries that failed, or wait for a retry, last changed in the past 24 hours.
+	RecentFailures int `json:"recentFailures"`
+
+	// Retrying Deliveries waiting for another attempt now.
+	Retrying int `json:"retrying"`
+
+	// State ok = the latest outcome was a success; failing = the latest outcome was a failure (a delivery failed, or waits for a retry, after the latest success); idle = nothing has been delivered or failed yet.
+	State ChannelState `json:"state"`
+}
+
+// ChannelList defines model for ChannelList.
+type ChannelList struct {
+	Items []Channel `json:"items"`
+}
+
+// ChannelState ok = the latest outcome was a success; failing = the latest outcome was a failure (a delivery failed, or waits for a retry, after the latest success); idle = nothing has been delivered or failed yet.
+type ChannelState string
 
 // CreateNotificationRequest defines model for CreateNotificationRequest.
 type CreateNotificationRequest struct {
@@ -210,6 +266,9 @@ type MarkAllNotificationsReadJSONRequestBody = MarkAllReadRequest
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
+	// ListChannels List delivery channels and their health
+	// (GET /v1/channels)
+	ListChannels(c fiber.Ctx) error
 	// ListNotifications List notifications
 	// (GET /v1/notifications)
 	ListNotifications(c fiber.Ctx, params ListNotificationsParams) error
@@ -238,6 +297,24 @@ type ServerInterfaceWrapper struct {
 
 type MiddlewareFunc fiber.Handler
 type HandlerMiddlewareFunc func(c fiber.Ctx, next fiber.Handler) error
+
+// ListChannels operation middleware
+func (siw *ServerInterfaceWrapper) ListChannels(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.ListChannels(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
 
 // ListNotifications operation middleware
 func (siw *ServerInterfaceWrapper) ListNotifications(c fiber.Ctx) error {
@@ -457,5 +534,7 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	router.Get(options.BaseURL+"/v1/notifications/:notificationId", wrapper.GetNotification)
 
 	router.Post(options.BaseURL+"/v1/notifications/:notificationId/read", wrapper.MarkNotificationRead)
+
+	router.Get(options.BaseURL+"/v1/channels", wrapper.ListChannels)
 
 }

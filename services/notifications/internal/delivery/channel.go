@@ -1,11 +1,11 @@
 // Package delivery sends stored notifications through pluggable channels.
 //
-// A Channel delivers one notification to one destination (P12-02 adds a
-// self-hosted ntfy; Life OS's own Android app replaces it later). The Worker
-// claims due deliveries from the database with a lease, calls the channel,
-// and records the outcome: sent, retried with exponential backoff, or ended
-// (failed or skipped). Producers never see channels; they post notifications
-// to the API.
+// A Channel delivers one notification to one destination: the self-hosted
+// ntfy server that reaches the owner's phone, or the service log. Life OS's
+// own Android app later becomes another channel. The Worker claims due
+// deliveries from the database with a lease, calls the channel, and records
+// the outcome: sent, retried with exponential backoff, or ended (failed or
+// skipped). Producers never see channels; they post notifications to the API.
 package delivery
 
 import (
@@ -96,15 +96,23 @@ func (c LogChannel) Send(ctx context.Context, n Notification) error {
 	return nil
 }
 
-// constructors builds each known channel. P12-02 adds ntfy here.
-var constructors = map[string]func(*slog.Logger) (Channel, error){
-	"log": func(logger *slog.Logger) (Channel, error) { return LogChannel{Logger: logger}, nil },
+// Settings is what the channel constructors may use: the service logger and
+// each channel's own configuration. A channel only reads its own part.
+type Settings struct {
+	Logger *slog.Logger
+	Ntfy   NtfyConfig
+}
+
+// constructors builds each known channel.
+var constructors = map[string]func(Settings) (Channel, error){
+	"log":  func(settings Settings) (Channel, error) { return LogChannel{Logger: settings.Logger}, nil },
+	"ntfy": func(settings Settings) (Channel, error) { return NewNtfy(settings.Ntfy) },
 }
 
 // Build returns the channels named in NOTIFICATIONS_CHANNELS, in order. An
-// unknown name is an error, so a typo stops the service instead of silently
-// delivering nothing.
-func Build(names []string, logger *slog.Logger) ([]Channel, error) {
+// unknown name, or a channel missing its configuration, is an error, so a
+// typo stops the service instead of silently delivering nothing.
+func Build(names []string, settings Settings) ([]Channel, error) {
 	channels := make([]Channel, 0, len(names))
 	for _, name := range names {
 		build, ok := constructors[name]
@@ -116,7 +124,7 @@ func Build(names []string, logger *slog.Logger) ([]Channel, error) {
 			sort.Strings(known)
 			return nil, fmt.Errorf("unknown notification channel %q (known: %v)", name, known)
 		}
-		channel, err := build(logger)
+		channel, err := build(settings)
 		if err != nil {
 			return nil, fmt.Errorf("configure notification channel %q: %w", name, err)
 		}

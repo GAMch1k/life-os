@@ -21,10 +21,22 @@ type Config struct {
 	// ActivityURL enables activity events (notification created, delivered,
 	// delivery failed); empty disables them.
 	ActivityURL string `env:"ACTIVITY_SERVICE_URL"`
-	// Channels names the delivery channels, comma-separated, for example
-	// "log". Empty (the default) means none: notifications are stored and
-	// listed only. Unknown names stop the service at startup.
+	// Channels names the delivery channels, comma-separated: "ntfy" (the
+	// owner's phone) and "log" (the service log, for development). Empty
+	// (the default) means none: notifications are stored and listed only.
+	// Unknown names stop the service at startup.
 	Channels string `env:"NOTIFICATIONS_CHANNELS"`
+	// The ntfy channel (docs/operations/ntfy.md): the ntfy server on the
+	// private network, the one private topic, and the publisher's access
+	// token (write-only on the topic; a secret, never logged). Required when
+	// NOTIFICATIONS_CHANNELS names ntfy.
+	NtfyURL   string `env:"NOTIFICATIONS_NTFY_URL"`
+	NtfyTopic string `env:"NOTIFICATIONS_NTFY_TOPIC" default:"lifeos"`
+	NtfyToken string `env:"NOTIFICATIONS_NTFY_TOKEN"`
+	// LinkBaseURL is Life OS's public URL, such as
+	// https://lifeos.gamch1k.com: tapping a notification on the phone opens
+	// its link there.
+	LinkBaseURL string `env:"NOTIFICATIONS_LINK_BASE_URL"`
 	// WorkerPollMillis is how often the delivery worker looks for due
 	// deliveries. A new notification also wakes it at once.
 	WorkerPollMillis int `env:"NOTIFICATIONS_WORKER_POLL_MILLIS" default:"1000"`

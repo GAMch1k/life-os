@@ -3,6 +3,8 @@ import { calendarClient } from "@/lib/api/calendar-client";
 import type { components as CalendarComponents } from "@/lib/api/generated/calendar";
 import { inboxClient } from "@/lib/api/inbox-client";
 import type { components as InboxComponents } from "@/lib/api/generated/inbox";
+import type { components as NotificationsComponents } from "@/lib/api/generated/notifications";
+import { notificationsClient } from "@/lib/api/notifications-client";
 import type { components as VoiceComponents } from "@/lib/api/generated/voice";
 import { voiceClient } from "@/lib/api/voice-client";
 import {
@@ -17,12 +19,14 @@ import { configuredTimeZone, userTimeZone } from "@/lib/user-time-zone";
 // - the Inbox and Voice backlog APIs (durable queue state),
 // - the Calendar sources API (each subscribed feed's refresh state) and its
 //   Google connection,
+// - the Notifications channels API (each delivery channel's recent outcomes),
 // - each owning service's /ready endpoint.
 // Nothing here is inferred from UI behaviour.
 
 export type InboxBacklog = InboxComponents["schemas"]["InboxBacklog"];
 export type AudioBacklog = VoiceComponents["schemas"]["AudioBacklog"];
 export type CalendarSource = CalendarComponents["schemas"]["CalendarSource"];
+export type NotificationChannel = NotificationsComponents["schemas"]["Channel"];
 
 /** Mirrors `Status` in services/mcp/internal/processor/status.go. */
 export type ProcessorStatus = {
@@ -193,7 +197,8 @@ export function limitResetsAt(usage: ProcessorStatus["usage"]) {
   return exhausted?.at(-1);
 }
 
-export type CheckState = "ok" | "warning" | "problem";
+/** neutral: not set up, which is fine and needs nothing. */
+export type CheckState = "ok" | "neutral" | "warning" | "problem";
 
 export type StatusFact = { label: string; value: string };
 
@@ -209,7 +214,13 @@ export type StatusPart = {
 };
 
 export type StatusCheck = {
-  id: "processing" | "inbox" | "voice" | "calendar" | "services";
+  id:
+    | "processing"
+    | "inbox"
+    | "voice"
+    | "calendar"
+    | "notifications"
+    | "services";
   title: string;
   state: CheckState;
   summary: string;
@@ -232,6 +243,11 @@ export type RuntimeSignals = {
   calendarSources?: CalendarSource[] | null;
   /** The Google Calendar connection; null or absent when not read. */
   googleConnection?: GoogleConnection | null;
+  /**
+   * Notification delivery channels; null when Notifications could not be
+   * read, absent when not checked (the check is left out).
+   */
+  notificationChannels?: NotificationChannel[] | null;
   services: { name: string; ready: boolean }[];
 };
 
@@ -274,7 +290,12 @@ export function formatTime(
     : "never";
 }
 
-const SEVERITY: Record<CheckState, number> = { ok: 0, warning: 1, problem: 2 };
+const SEVERITY: Record<CheckState, number> = {
+  ok: 0,
+  neutral: 0,
+  warning: 1,
+  problem: 2,
+};
 
 function worst(states: CheckState[]): CheckState {
   return states.reduce<CheckState>(
@@ -823,6 +844,112 @@ function withGoogle(
   };
 }
 
+const CHANNEL_TITLES: Record<string, string> = {
+  ntfy: "ntfy (phone)",
+  log: "Service log",
+};
+
+/** What to do when deliveries fail. */
+export const NOTIFICATIONS_FAILING_ACTION =
+  "Notifications stay listed in Life OS, and failed deliveries are retried for up to 24 hours. For ntfy, check the ntfy service and its token (docs/operations/ntfy.md).";
+
+/** One delivery channel's health, from the outcomes of its deliveries. */
+export function channelPart(
+  channel: NotificationChannel,
+  timeZone: string,
+): StatusPart {
+  const facts: StatusFact[] = [
+    {
+      label: "Last delivered",
+      value: formatTime(channel.lastSuccessAt, timeZone),
+    },
+    {
+      label: "Last failure",
+      value: formatTime(channel.lastFailureAt, timeZone),
+    },
+    {
+      label: "Failed in the last 24 h",
+      value: String(channel.recentFailures),
+    },
+  ];
+  if (channel.retrying > 0) {
+    facts.push({
+      label: "Waiting for a retry",
+      value: String(channel.retrying),
+    });
+  }
+  const base = {
+    id: channel.name,
+    title: CHANNEL_TITLES[channel.name] ?? channel.name,
+    facts,
+  };
+  switch (channel.state) {
+    case "failing":
+      return {
+        ...base,
+        state: "warning",
+        summary:
+          channel.retrying > 0
+            ? "Deliveries are failing; they are retried automatically."
+            : "The latest delivery failed.",
+        detail: channel.lastError ?? undefined,
+      };
+    case "idle":
+      return { ...base, state: "ok", summary: "Set up; nothing sent yet." };
+    default:
+      return { ...base, state: "ok", summary: "Delivering normally." };
+  }
+}
+
+function notificationsCheck(
+  channels: NotificationChannel[] | null,
+  timeZone: string,
+): StatusCheck {
+  const base = { id: "notifications" as const, title: "Notifications" };
+  if (channels === null) {
+    return {
+      ...base,
+      state: "warning",
+      summary: "Notification delivery is unavailable.",
+      action: "Nothing can notify you until the notifications service is back.",
+      facts: [],
+    };
+  }
+  if (channels.length === 0) {
+    return {
+      ...base,
+      state: "neutral",
+      summary:
+        "No delivery channel is set up: notifications are listed in Life OS only.",
+      action:
+        "To get them on your phone, set up ntfy (docs/operations/ntfy.md).",
+      facts: [],
+    };
+  }
+  const parts = channels.map((channel) => channelPart(channel, timeZone));
+  const failing = parts.filter((part) => part.state !== "ok");
+  if (failing.length) {
+    return {
+      ...base,
+      state: "warning",
+      summary:
+        failing.length === 1
+          ? `Notifications are not reaching ${failing[0].title}.`
+          : `Notifications are not reaching ${failing.map((part) => part.title).join(", ")}.`,
+      action: NOTIFICATIONS_FAILING_ACTION,
+      facts: [],
+      parts,
+    };
+  }
+  return {
+    ...base,
+    state: "ok",
+    summary: `Delivering to ${parts.map((part) => part.title).join(", ")}.`,
+    facts: [],
+    parts,
+  };
+}
+
 function servicesCheck(services: RuntimeSignals["services"]): StatusCheck {
   const down = services.filter((service) => !service.ready);
   return {
@@ -861,6 +988,9 @@ export function toRuntimeStatus(
             timeZone,
           ),
         ]),
+    ...(signals.notificationChannels === undefined
+      ? []
+      : [notificationsCheck(signals.notificationChannels, timeZone)]),
     servicesCheck(signals.services),
   ];
   return {
@@ -874,7 +1004,7 @@ export function toRuntimeStatus(
 /** Checks that need the user's attention, most severe first. */
 export function statusAlerts(status: RuntimeStatus) {
   return status.checks
-    .filter((check) => check.state !== "ok")
+    .filter((check) => SEVERITY[check.state] > 0)
     .sort((a, b) => SEVERITY[b.state] - SEVERITY[a.state]);
 }
 
@@ -923,6 +1053,10 @@ const SERVICE_NAMES: Record<keyof typeof serviceBaseUrls, string> = {
 
 export async function getRuntimeStatus(): Promise<RuntimeStatus> {
   const timeout = { signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) };
+  const notificationChannels = notificationsClient
+    .GET("/v1/channels", timeout)
+    .then(({ data }) => data?.items ?? null)
+    .catch(() => null);
   const [processor, inbox, voice, calendarSources, googleConnection, services] =
     await Promise.all([
       getJson<ProcessorStatus>(`${processorStatusUrl}/status`),
@@ -952,7 +1086,15 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
       ),
     ]);
   return toRuntimeStatus(
-    { processor, inbox, voice, calendarSources, googleConnection, services },
+    {
+      processor,
+      inbox,
+      voice,
+      calendarSources,
+      googleConnection,
+      notificationChannels: await notificationChannels,
+      services,
+    },
     new Date(),
     await userTimeZone(),
     configuredTimeZone(),
