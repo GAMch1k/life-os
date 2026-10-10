@@ -38,6 +38,27 @@ type Event struct {
 	OriginalStartTime *EventTime `json:"originalStartTime,omitempty"`
 	Reminders         *Reminders `json:"reminders,omitempty"`
 	Updated           string     `json:"updated,omitempty"`
+	// ETag is the event's version: writes send it back (If-Match), and a
+	// listing that returns an event with the etag Calendar stored is its
+	// own write coming back.
+	ETag string `json:"etag,omitempty"`
+	// ExtendedProperties carry what Google has no field for: Life OS keeps
+	// an exported event's id and every event's priority in Private.
+	ExtendedProperties *ExtendedProperties `json:"extendedProperties,omitempty"`
+}
+
+// ExtendedProperties are an event's extra key-value pairs; Private ones are
+// visible only through this calendar.
+type ExtendedProperties struct {
+	Private map[string]string `json:"private,omitempty"`
+}
+
+// private is one of the event's private extended properties.
+func (e Event) private(key string) string {
+	if e.ExtendedProperties == nil {
+		return ""
+	}
+	return e.ExtendedProperties.Private[key]
 }
 
 // Cancelled reports whether the event was deleted (or, for an instance,
@@ -116,6 +137,29 @@ func (c *Client) Events(ctx context.Context, accessToken, calendarID string, que
 func IsSyncTokenGone(err error) bool {
 	var apiErr *APIError
 	return errors.As(err, &apiErr) && apiErr.Status == http.StatusGone
+}
+
+// IsConflict reports whether Google refused a write because the event
+// changed since the etag sent (412 Precondition Failed).
+func IsConflict(err error) bool { return hasStatus(err, http.StatusPreconditionFailed) }
+
+// IsGone reports whether the event (or its calendar) no longer exists at
+// Google: 404, or 410 for an event already deleted.
+func IsGone(err error) bool {
+	return hasStatus(err, http.StatusNotFound) || hasStatus(err, http.StatusGone)
+}
+
+// IsForbidden reports whether Google refused a write the account may not
+// make, such as on a calendar it can only read (403).
+func IsForbidden(err error) bool { return hasStatus(err, http.StatusForbidden) }
+
+// IsDuplicate reports whether an insert named an id the calendar already
+// has (409), such as an exported event deleted there earlier.
+func IsDuplicate(err error) bool { return hasStatus(err, http.StatusConflict) }
+
+func hasStatus(err error, status int) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.Status == status
 }
 
 // isUnauthorized reports whether Google refused the access token (401).

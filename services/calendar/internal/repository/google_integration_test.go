@@ -149,3 +149,73 @@ func TestGoogleSyncMigration(t *testing.T) {
 		t.Fatalf("calendars due after up: %d", n)
 	}
 }
+
+func TestGoogleTwoWayMigration(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Open(t, "")
+	count := func(query string, args ...any) int {
+		t.Helper()
+		var n int
+		if err := pool.QueryRow(ctx, query, args...).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	var connection, event string
+	if err := pool.QueryRow(ctx, `INSERT INTO google_connections (account_email, refresh_token_ciphertext, refresh_token_nonce) VALUES ('owner@example.com', '\x01', '\x02') RETURNING id`).Scan(&connection); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `INSERT INTO events (title, all_day, start_date, end_date) VALUES ('Mine', true, '2026-10-12', '2026-10-12') RETURNING id`).Scan(&event); err != nil {
+		t.Fatal(err)
+	}
+	// Exporting is on by default; a link names both the calendar and the
+	// event, and one copy belongs to one Life OS event.
+	if n := count(`SELECT count(*) FROM google_connections WHERE export_enabled AND lifeos_calendar_id IS NULL`); n != 1 {
+		t.Fatalf("connections with export on: %d", n)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO google_exports (event_id, connection_id, google_calendar_id, google_event_id) VALUES ($1, $2, 'lifeos@group.calendar.google.com', 'lifeos1')`, event, connection); err != nil {
+		t.Fatal(err)
+	}
+	for name, statement := range map[string]string{
+		"a link without its calendar": `INSERT INTO google_exports (event_id, connection_id, google_event_id) VALUES (gen_random_uuid(), '` + connection + `', 'x')`,
+		"a second link to one copy":   `INSERT INTO google_exports (event_id, connection_id, google_calendar_id, google_event_id) VALUES (gen_random_uuid(), '` + connection + `', 'lifeos@group.calendar.google.com', 'lifeos1')`,
+		"an unknown state":            `INSERT INTO google_exports (event_id, connection_id, state) VALUES (gen_random_uuid(), '` + connection + `', 'lost')`,
+	} {
+		if _, err := pool.Exec(ctx, statement); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+	// The outbox outlives a deleted event (its deletion is still to be
+	// exported) and goes with the connection.
+	if _, err := pool.Exec(ctx, `DELETE FROM events WHERE id = $1`, event); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(`SELECT count(*) FROM google_exports`); n != 1 {
+		t.Fatalf("exports after deleting the event: %d", n)
+	}
+
+	var migration string
+	for _, path := range testdb.Migrations(t) {
+		if filepath.Base(path) == "000013_google_two_way.up.sql" {
+			migration = path
+		}
+	}
+	if migration == "" {
+		t.Fatal("000013_google_two_way.up.sql not found")
+	}
+	testdb.Apply(t, pool, strings.Replace(migration, ".up.sql", ".down.sql", 1))
+	if n := count(`SELECT count(*) FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'google_exports'`) +
+		count(`SELECT count(*) FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'google_connections' AND column_name IN ('export_enabled', 'export_backfilled_at', 'lifeos_calendar_id', 'lifeos_calendar_created_at', 'lifeos_calendar_note')`); n != 0 {
+		t.Fatalf("after down: %d leftovers", n)
+	}
+	if n := count(`SELECT count(*) FROM google_connections`); n != 1 {
+		t.Fatalf("connections after down: %d", n)
+	}
+	testdb.Apply(t, pool, migration)
+	if n := count(`SELECT count(*) FROM google_connections WHERE export_enabled`); n != 1 {
+		t.Fatalf("connections with export on after up: %d", n)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM google_connections`); err != nil {
+		t.Fatal(err)
+	}
+}

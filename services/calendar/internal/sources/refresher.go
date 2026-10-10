@@ -260,6 +260,7 @@ func Reconcile(ctx context.Context, queries *store.Queries, source store.Calenda
 			exceptions[row.EventID.Bytes] = append(exceptions[row.EventID.Bytes], row)
 		}
 	}
+	rules.defaultPriority = source.DefaultPriority
 	changes := reconcileItems(existing, exceptions, items, rules)
 	if err := apply(ctx, queries, source, changes, now); err != nil {
 		return Counts{}, err
@@ -279,6 +280,7 @@ func apply(ctx context.Context, queries *store.Queries, source store.CalendarSou
 			RecurrenceByWeekday: fields.rule.byWeekday, RecurrenceCount: fields.rule.count,
 			Reminders: []byte("[]"), UseDefaultReminders: true,
 			Status: fields.status, CancelledAt: fields.cancelledAt, SourceKind: source.Kind, SourceID: source.ID, ExternalUid: &uid,
+			Priority: ownPriority(item, source.DefaultPriority),
 		}
 		if item.Reminders != nil {
 			own, whole, err := item.Reminders.encode()
@@ -307,6 +309,7 @@ func apply(ctx context.Context, queries *store.Queries, source store.CalendarSou
 			TimeZone: change.item.TimeZone, Status: fields.status, CancelledAt: fields.cancelledAt,
 			RecurrenceFrequency: fields.rule.frequency, RecurrenceInterval: fields.rule.interval, RecurrenceUntil: fields.rule.until,
 			RecurrenceByWeekday: fields.rule.byWeekday, RecurrenceCount: fields.rule.count,
+			SetPriority: change.item.Priority != nil, Priority: ownPriority(change.item, source.DefaultPriority),
 		}
 		if change.item.Reminders != nil {
 			own, whole, err := change.item.Reminders.encode()

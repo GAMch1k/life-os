@@ -61,7 +61,7 @@ func TestARescheduleOfAnEventPlannedAsATaskUpdatesTheEvent(t *testing.T) {
 		t.Fatalf("task searches = %v, calendar searches = %v", tools.taskSearches, tools.searches)
 	}
 	for _, search := range tools.searches {
-		if search.Get("sourceKind") != "manual" {
+		if search.Get("editable") != "true" || search.Has("sourceKind") {
 			t.Fatalf("calendar search %v", search)
 		}
 	}

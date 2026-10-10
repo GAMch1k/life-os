@@ -88,7 +88,7 @@ func (h *Handler) resolveSources(ctx context.Context, items []generated.Calendar
 			item.Priority = priority
 		}
 	}
-	return nil
+	return h.resolveGoogle(ctx, items)
 }
 
 // effectiveReminders is every reminder that applies: the defaults when they

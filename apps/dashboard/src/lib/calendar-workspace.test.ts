@@ -3,9 +3,11 @@ import test from "node:test";
 
 import { NO_REPEAT } from "./calendar-recurrence";
 import {
+  apiErrorCode,
   apiErrorMessage,
   type CalendarEvent,
   type CalendarSource,
+  changedInGoogle,
   createRequest,
   defaultPriorityNote,
   defaultRemindersNote,
@@ -19,6 +21,8 @@ import {
   fieldErrorsFromApi,
   formDefaults,
   fromReminderDraft,
+  googleSyncLabel,
+  isEditable,
   movedFields,
   movedSeries,
   moveStart,
@@ -40,6 +44,7 @@ import {
   sameReminders,
   seriesRequest,
   settingsRequest,
+  sourceBadge,
   sourceDefaultsRequest,
   sourceLabel,
   splitRequest,
@@ -64,6 +69,7 @@ const event = (
   effectiveReminders: [],
   priority: "medium",
   defaultPriority: "medium",
+  editable: true,
   createdAt: "2026-10-01T00:00:00Z",
   updatedAt: "2026-10-01T00:00:00Z",
   ...fields,
@@ -131,7 +137,7 @@ test("all-day events end one day later in FullCalendar, which is exclusive", () 
   assert.equal(single?.end, "2026-10-17");
 });
 
-test("timed events keep their instants; only Life OS events can be dragged", () => {
+test("timed events keep their instants; only editable events can be dragged", () => {
   const input = toEventInput(timed);
   assert.equal(input?.start, "2026-10-16T13:00:00Z");
   assert.equal(input?.end, "2026-10-16T14:00:00Z");
@@ -142,6 +148,7 @@ test("timed events keep their instants; only Life OS events can be dragged", () 
   const imported = toEventInput({
     ...timed,
     source: { kind: "ics", sourceId: "s", externalUid: "u" },
+    editable: false,
   });
   assert.equal(imported?.editable, false);
   assert.deepEqual(imported?.classNames, [
@@ -160,6 +167,19 @@ test("timed events keep their instants; only Life OS events can be dragged", () 
   });
   assert.equal(recurring?.editable, true);
   assert.equal(toEventInput({ ...timed, startAt: null }), undefined);
+  // A Google event of a calendar the owner may edit can be dragged (the
+  // move is written to Google); one of a calendar they can only read not.
+  const google = {
+    kind: "google" as const,
+    sourceId: "g",
+    externalUid: "dentist",
+    name: "Owner",
+  };
+  assert.equal(toEventInput({ ...timed, source: google })?.editable, true);
+  assert.equal(
+    toEventInput({ ...timed, source: google, editable: false })?.editable,
+    false,
+  );
 });
 
 test("a dragged all-day event is stored with an inclusive last day", () => {
@@ -812,11 +832,12 @@ test("imported events name their source and why they are read-only", () => {
   const ics = {
     ...timed,
     source: { kind: "ics" as const, sourceId: "s", externalUid: "u" },
+    editable: false,
   };
   assert.equal(sourceLabel(ics), "ICS feed");
   assert.match(readOnlyReason(ics) ?? "", /^Imported from an ICS feed/);
   // Calendar names the source, such as the ZAW waste-collection feed.
-  const zaw = { ...timed, source: { ...ics.source, name: "ZAW" } };
+  const zaw = { ...ics, source: { ...ics.source, name: "ZAW" } };
   assert.equal(sourceLabel(zaw), "ZAW");
   assert.match(
     readOnlyReason(zaw) ?? "",
@@ -832,6 +853,87 @@ test("imported events name their source and why they are read-only", () => {
   );
   assert.equal(sourceLabel(timed), undefined);
   assert.equal(readOnlyReason(timed), undefined);
+  assert.equal(sourceBadge(zaw), "Imported · ZAW");
+  assert.equal(sourceBadge(timed), undefined);
+});
+
+test("Google events are editable unless Calendar says why not", () => {
+  const google = {
+    ...timed,
+    source: {
+      kind: "google" as const,
+      sourceId: "g",
+      externalUid: "dentist",
+      name: "Owner",
+    },
+    google: {
+      calendarId: "c",
+      calendarName: "Owner",
+      lifeOs: false,
+      state: "synced" as const,
+    },
+  };
+  assert.equal(isEditable(google), true);
+  assert.equal(readOnlyReason(google), undefined);
+  assert.equal(sourceBadge(google), "Google · Owner");
+  assert.deepEqual(googleSyncLabel(google), {
+    place: "In Google: Owner",
+    state: "Synced both ways",
+    failing: false,
+  });
+  const holiday = {
+    ...google,
+    editable: false,
+    readOnlyReason: "“Holidays” is a Google calendar you can only read.",
+  };
+  assert.equal(isEditable(holiday), false);
+  assert.equal(
+    readOnlyReason(holiday),
+    "“Holidays” is a Google calendar you can only read.",
+  );
+});
+
+test("a Life OS event says how its export to Google stands", () => {
+  const link = { calendarId: "c", calendarName: "Life OS", lifeOs: true };
+  assert.equal(googleSyncLabel(timed), undefined);
+  assert.deepEqual(
+    googleSyncLabel({ ...timed, google: { ...link, state: "synced" } }),
+    {
+      place: "In Google: Life OS",
+      state: "Exported",
+      failing: false,
+    },
+  );
+  assert.equal(
+    googleSyncLabel({ ...timed, google: { ...link, state: "pending" } })?.state,
+    "Waiting to be exported",
+  );
+  assert.deepEqual(
+    googleSyncLabel({
+      ...timed,
+      google: {
+        ...link,
+        state: "failed",
+        error: "Google is unavailable: HTTP 503",
+      },
+    }),
+    {
+      place: "In Google: Life OS",
+      state:
+        "Export failed: Google is unavailable: HTTP 503. Retrying automatically.",
+      failing: true,
+    },
+  );
+});
+
+test("a change refused because the event changed in Google is recognized", () => {
+  const refusal = (code: string) => ({ error: { code, message: "m" } });
+  assert.equal(apiErrorCode(refusal("google_conflict")), "google_conflict");
+  assert.equal(changedInGoogle(refusal("google_conflict")), true);
+  assert.equal(changedInGoogle(refusal("google_deleted")), true);
+  assert.equal(changedInGoogle(refusal("google_read_only")), false);
+  assert.equal(changedInGoogle(undefined), false);
+  assert.equal(apiErrorCode("text"), undefined);
 });
 
 test("occurrences of a recurring event get distinct keys", () => {
