@@ -307,6 +307,111 @@ func (e RuleOperator) Valid() bool {
 	}
 }
 
+// Defines values for SubscriptionConfidence.
+const (
+	High SubscriptionConfidence = "high"
+	Low  SubscriptionConfidence = "low"
+)
+
+// Valid indicates whether the value is a known member of the SubscriptionConfidence enum.
+func (e SubscriptionConfidence) Valid() bool {
+	switch e {
+	case High:
+		return true
+	case Low:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SubscriptionSource.
+const (
+	SubscriptionSourceDetected SubscriptionSource = "detected"
+	SubscriptionSourceManual   SubscriptionSource = "manual"
+)
+
+// Valid indicates whether the value is a known member of the SubscriptionSource enum.
+func (e SubscriptionSource) Valid() bool {
+	switch e {
+	case SubscriptionSourceDetected:
+		return true
+	case SubscriptionSourceManual:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SubscriptionCadence.
+const (
+	Monthly   SubscriptionCadence = "monthly"
+	Quarterly SubscriptionCadence = "quarterly"
+	Weekly    SubscriptionCadence = "weekly"
+	Yearly    SubscriptionCadence = "yearly"
+)
+
+// Valid indicates whether the value is a known member of the SubscriptionCadence enum.
+func (e SubscriptionCadence) Valid() bool {
+	switch e {
+	case Monthly:
+		return true
+	case Quarterly:
+		return true
+	case Weekly:
+		return true
+	case Yearly:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SubscriptionRenewal.
+const (
+	Missed    SubscriptionRenewal = "missed"
+	Overdue   SubscriptionRenewal = "overdue"
+	Scheduled SubscriptionRenewal = "scheduled"
+	Upcoming  SubscriptionRenewal = "upcoming"
+)
+
+// Valid indicates whether the value is a known member of the SubscriptionRenewal enum.
+func (e SubscriptionRenewal) Valid() bool {
+	switch e {
+	case Missed:
+		return true
+	case Overdue:
+		return true
+	case Scheduled:
+		return true
+	case Upcoming:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SubscriptionState.
+const (
+	Confirmed SubscriptionState = "confirmed"
+	Ignored   SubscriptionState = "ignored"
+	Suggested SubscriptionState = "suggested"
+)
+
+// Valid indicates whether the value is a known member of the SubscriptionState enum.
+func (e SubscriptionState) Valid() bool {
+	switch e {
+	case Confirmed:
+		return true
+	case Ignored:
+		return true
+	case Suggested:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TransactionCategorizedBy.
 const (
 	TransactionCategorizedByManual TransactionCategorizedBy = "manual"
@@ -385,7 +490,7 @@ func (e TransactionStatus) Valid() bool {
 	}
 }
 
-// Account `balance` is the opening balance plus every booked transaction; for a bank account that reported one, it is the bank's booked balance as of `balanceAsOf` instead, and `available` is the bank's available balance. `pending` is the sum of the pending transactions, which are not in a computed balance. `transactionCount` counts both.
+// Account `balance` is the opening balance plus every booked transaction; for a bank account that reported one, it is the bank's booked balance as of `balanceAsOf` instead, and `available` is the bank's available balance. `pending` is the sum of the pending transactions, which are not in a computed balance. `transactionCount` counts both. `lowBalance` is true while the low-balance alert is on and this account is watched and below its threshold: an active account from a bank connection, in the default currency, of kind bank, or card or savings with a bank-reported balance. The built-in Cash account and other manual accounts are never low.
 type Account struct {
 	Archived   bool       `json:"archived"`
 	ArchivedAt *time.Time `json:"archivedAt"`
@@ -396,17 +501,20 @@ type Account struct {
 	BalanceAsOf *openapi_types.Date `json:"balanceAsOf"`
 
 	// BuiltIn True for the built-in Cash account.
-	BuiltIn          bool               `json:"builtIn"`
-	CreatedAt        time.Time          `json:"createdAt"`
-	Currency         string             `json:"currency"`
-	Id               openapi_types.UUID `json:"id"`
-	Kind             AccountKind        `json:"kind"`
-	Name             string             `json:"name"`
-	OpeningBalance   Money              `json:"openingBalance"`
-	Pending          Money              `json:"pending"`
-	Source           AccountSource      `json:"source"`
-	TransactionCount int                `json:"transactionCount"`
-	UpdatedAt        time.Time          `json:"updatedAt"`
+	BuiltIn   bool               `json:"builtIn"`
+	CreatedAt time.Time          `json:"createdAt"`
+	Currency  string             `json:"currency"`
+	Id        openapi_types.UUID `json:"id"`
+	Kind      AccountKind        `json:"kind"`
+
+	// LowBalance The balance is below the low-balance alert's threshold.
+	LowBalance       bool          `json:"lowBalance"`
+	Name             string        `json:"name"`
+	OpeningBalance   Money         `json:"openingBalance"`
+	Pending          Money         `json:"pending"`
+	Source           AccountSource `json:"source"`
+	TransactionCount int           `json:"transactionCount"`
+	UpdatedAt        time.Time     `json:"updatedAt"`
 }
 
 // AccountKind defines model for AccountKind.
@@ -443,6 +551,20 @@ type AccountSource struct {
 
 // AccountSourceKind `manual`: kept in Life OS. `bank`: connected to a bank (planned).
 type AccountSourceKind string
+
+// AmountAlert defines model for AmountAlert.
+type AmountAlert struct {
+	Enabled   bool  `json:"enabled"`
+	Threshold Money `json:"threshold"`
+}
+
+// AmountAlertInput defines model for AmountAlertInput.
+type AmountAlertInput struct {
+	Enabled bool `json:"enabled"`
+
+	// ThresholdMinor Minor units of the default currency; at least 1 for large debits.
+	ThresholdMinor int64 `json:"thresholdMinor"`
+}
 
 // ApplyCategoryRulesRequest `scope` defaults to uncategorized.
 type ApplyCategoryRulesRequest struct {
@@ -773,6 +895,14 @@ type CreateManualTransactionRequest struct {
 	ValueDate *openapi_types.Date `json:"valueDate,omitempty"`
 }
 
+// CreateSubscriptionRequest `cadence` defaults to monthly; `name` to the counterparty; `categoryId` to the transaction's category.
+type CreateSubscriptionRequest struct {
+	Cadence       *SubscriptionCadence `json:"cadence,omitempty"`
+	CategoryId    *openapi_types.UUID  `json:"categoryId,omitempty"`
+	Name          *string              `json:"name,omitempty"`
+	TransactionId openapi_types.UUID   `json:"transactionId"`
+}
+
 // CsvImport `imported`: new transactions. `duplicates`: rows the account already had. `categorized`: imported rows that got their category from a rule. `status` is failed when nothing was imported and some rows failed. `accountId` is null for an older-format file.
 type CsvImport struct {
 	AccountId   *openapi_types.UUID `json:"accountId"`
@@ -814,6 +944,15 @@ type ExcludedCurrency struct {
 	TransactionCount int    `json:"transactionCount"`
 }
 
+// FinanceSettings `largeDebit`: a medium notification for each money-out transaction of at least the threshold (booked or pending, booked in the last three days; money moved in a transfer category is left out). `lowBalance`: a medium notification when a bank account's balance (from a bank connection: kind bank, or card or savings with a bank-reported balance; never Cash or other manual accounts) falls below the threshold, again after it went back above. `renewals`: a low notification `leadDays` before a confirmed subscription's next payment. Thresholds are in `currency`, the default currency; accounts and transactions in other currencies are not checked.
+type FinanceSettings struct {
+	Currency   string       `json:"currency"`
+	LargeDebit AmountAlert  `json:"largeDebit"`
+	LowBalance AmountAlert  `json:"lowBalance"`
+	Renewals   RenewalAlert `json:"renewals"`
+	UpdatedAt  time.Time    `json:"updatedAt"`
+}
+
 // Money defines model for Money.
 type Money struct {
 	// Amount Minor units (cents); negative is money out.
@@ -833,6 +972,20 @@ type MonthlySummary struct {
 	Spending           Money                `json:"spending"`
 	SpendingByCategory []SpendingByCategory `json:"spendingByCategory"`
 	TotalBalance       Money                `json:"totalBalance"`
+}
+
+// RenewalAlert defines model for RenewalAlert.
+type RenewalAlert struct {
+	Enabled bool `json:"enabled"`
+
+	// LeadDays How many days before a confirmed subscription's next payment the reminder comes (0 is on the day).
+	LeadDays int `json:"leadDays"`
+}
+
+// RenewalAlertInput defines model for RenewalAlertInput.
+type RenewalAlertInput struct {
+	Enabled  bool `json:"enabled"`
+	LeadDays int  `json:"leadDays"`
 }
 
 // RuleField `any` matches the counterparty or the description.
@@ -864,6 +1017,60 @@ type SpendingByCategory struct {
 	Amount       Money              `json:"amount"`
 	CategoryId   openapi_types.UUID `json:"categoryId"`
 	CategoryName string             `json:"categoryName"`
+}
+
+// Subscription A recurring payment. `amount` is the typical payment (the median of the last three, positive) unless the owner set one; `monthlyAmount` is its monthly equivalent (weekly times 52/12, quarterly a third, yearly a twelfth). `lastDate` is the latest matching payment and `nextDate` the date the next one is expected (the last plus the cadence). `renewal` is null unless the subscription is confirmed. `confidence` is low for a yearly payment seen only twice. `transactionIds` are the matching payments, latest first. `source` is `detected` or `manual` (marked from a transaction).
+type Subscription struct {
+	// AccountId The account of the latest payment.
+	AccountId     *openapi_types.UUID    `json:"accountId"`
+	Amount        Money                  `json:"amount"`
+	Cadence       SubscriptionCadence    `json:"cadence"`
+	CategoryId    *openapi_types.UUID    `json:"categoryId"`
+	Confidence    SubscriptionConfidence `json:"confidence"`
+	CreatedAt     time.Time              `json:"createdAt"`
+	Id            openapi_types.UUID     `json:"id"`
+	LastDate      *openapi_types.Date    `json:"lastDate"`
+	MonthlyAmount Money                  `json:"monthlyAmount"`
+	Name          string                 `json:"name"`
+	NextDate      *openapi_types.Date    `json:"nextDate"`
+	Renewal       *SubscriptionRenewal   `json:"renewal"`
+	Source        SubscriptionSource     `json:"source"`
+
+	// State `suggested`: detected, waiting for the owner. `confirmed`: the owner's. `ignored`: never suggested again for this counterparty and cadence.
+	State          SubscriptionState    `json:"state"`
+	TransactionIds []openapi_types.UUID `json:"transactionIds"`
+	UpdatedAt      time.Time            `json:"updatedAt"`
+}
+
+// SubscriptionConfidence defines model for Subscription.Confidence.
+type SubscriptionConfidence string
+
+// SubscriptionSource defines model for Subscription.Source.
+type SubscriptionSource string
+
+// SubscriptionCadence defines model for SubscriptionCadence.
+type SubscriptionCadence string
+
+// SubscriptionList defines model for SubscriptionList.
+type SubscriptionList struct {
+	Items []Subscription `json:"items"`
+
+	// Totals `monthly` is the monthly equivalent of the confirmed subscriptions in `currency` (the default currency), `confirmed` how many there are; `excluded` counts confirmed subscriptions in other currencies, which are left out.
+	Totals SubscriptionTotals `json:"totals"`
+}
+
+// SubscriptionRenewal Where a confirmed subscription's next payment stands, in the owner's days: `upcoming` within the renewal reminders' lead days (today included), `overdue` up to a week after the expected date without a payment, `missed` more than a week late (shown, never alerted), `scheduled` otherwise.
+type SubscriptionRenewal string
+
+// SubscriptionState `suggested`: detected, waiting for the owner. `confirmed`: the owner's. `ignored`: never suggested again for this counterparty and cadence.
+type SubscriptionState string
+
+// SubscriptionTotals `monthly` is the monthly equivalent of the confirmed subscriptions in `currency` (the default currency), `confirmed` how many there are; `excluded` counts confirmed subscriptions in other currencies, which are left out.
+type SubscriptionTotals struct {
+	Confirmed int    `json:"confirmed"`
+	Currency  string `json:"currency"`
+	Excluded  int    `json:"excluded"`
+	Monthly   Money  `json:"monthly"`
 }
 
 // Transaction `categorizedBy` is `manual` when the category was chosen by hand (by the owner, the AI, or the import file; possibly none), `rule` when a category rule chose it (`categoryRuleId` names the rule), `mcc` when no rule matched and the card's merchant category code gave a default category, and null while nobody chose. `readOnly` is true for imported transactions: only `categoryId` and `notes` change, and they cannot be deleted.
@@ -958,6 +1165,22 @@ type UpdateCategoryRuleRequest struct {
 	Priority *int       `json:"priority,omitempty"`
 }
 
+// UpdateFinanceSettingsRequest defines model for UpdateFinanceSettingsRequest.
+type UpdateFinanceSettingsRequest struct {
+	LargeDebit AmountAlertInput  `json:"largeDebit"`
+	LowBalance AmountAlertInput  `json:"lowBalance"`
+	Renewals   RenewalAlertInput `json:"renewals"`
+}
+
+// UpdateSubscriptionRequest defines model for UpdateSubscriptionRequest.
+type UpdateSubscriptionRequest struct {
+	// AmountMinor The typical payment in minor units (positive).
+	AmountMinor *int64               `json:"amountMinor,omitempty"`
+	Cadence     *SubscriptionCadence `json:"cadence,omitempty"`
+	CategoryId  *openapi_types.UUID  `json:"categoryId,omitempty"`
+	Name        *string              `json:"name,omitempty"`
+}
+
 // UpdateTransactionRequest Imported transactions take only categoryId and notes.
 type UpdateTransactionRequest struct {
 	AccountId    *openapi_types.UUID `json:"accountId,omitempty"`
@@ -985,6 +1208,9 @@ type Month = string
 // RuleId defines model for RuleId.
 type RuleId = openapi_types.UUID
 
+// SubscriptionId defines model for SubscriptionId.
+type SubscriptionId = openapi_types.UUID
+
 // TransactionId defines model for TransactionId.
 type TransactionId = openapi_types.UUID
 
@@ -1002,6 +1228,11 @@ type ListCategoriesParams struct {
 type CreateCsvImportParams struct {
 	// AccountId The account to import into. Required unless the file has an account_id column.
 	AccountId *openapi_types.UUID `form:"accountId,omitempty" json:"accountId,omitempty"`
+}
+
+// ListSubscriptionsParams defines parameters for ListSubscriptions.
+type ListSubscriptionsParams struct {
+	State *SubscriptionState `form:"state,omitempty" json:"state,omitempty"`
 }
 
 // GetMonthlySummaryParams defines parameters for GetMonthlySummary.
@@ -1070,6 +1301,15 @@ type UpdateCategoryJSONRequestBody = UpdateCategoryRequest
 // ImportBankSyncJSONRequestBody defines body for ImportBankSync for application/json ContentType.
 type ImportBankSyncJSONRequestBody = BankImportRequest
 
+// UpdateFinanceSettingsJSONRequestBody defines body for UpdateFinanceSettings for application/json ContentType.
+type UpdateFinanceSettingsJSONRequestBody = UpdateFinanceSettingsRequest
+
+// CreateSubscriptionFromTransactionJSONRequestBody defines body for CreateSubscriptionFromTransaction for application/json ContentType.
+type CreateSubscriptionFromTransactionJSONRequestBody = CreateSubscriptionRequest
+
+// UpdateSubscriptionJSONRequestBody defines body for UpdateSubscription for application/json ContentType.
+type UpdateSubscriptionJSONRequestBody = UpdateSubscriptionRequest
+
 // CreateManualTransactionJSONRequestBody defines body for CreateManualTransaction for application/json ContentType.
 type CreateManualTransactionJSONRequestBody = CreateManualTransactionRequest
 
@@ -1135,6 +1375,30 @@ type ServerInterface interface {
 	// CreateCsvImport Import transactions from a CSV file
 	// (POST /v1/imports/csv)
 	CreateCsvImport(c fiber.Ctx, params CreateCsvImportParams) error
+	// GetFinanceSettings Get the alert settings
+	// (GET /v1/settings)
+	GetFinanceSettings(c fiber.Ctx) error
+	// UpdateFinanceSettings Save the alert settings
+	// (PUT /v1/settings)
+	UpdateFinanceSettings(c fiber.Ctx) error
+	// ListSubscriptions List subscriptions
+	// (GET /v1/subscriptions)
+	ListSubscriptions(c fiber.Ctx, params ListSubscriptionsParams) error
+	// CreateSubscriptionFromTransaction Mark a transaction as a subscription
+	// (POST /v1/subscriptions)
+	CreateSubscriptionFromTransaction(c fiber.Ctx) error
+	// DeleteSubscription Delete a subscription
+	// (DELETE /v1/subscriptions/{subscriptionId})
+	DeleteSubscription(c fiber.Ctx, subscriptionId SubscriptionId) error
+	// UpdateSubscription Update a subscription
+	// (PATCH /v1/subscriptions/{subscriptionId})
+	UpdateSubscription(c fiber.Ctx, subscriptionId SubscriptionId) error
+	// ConfirmSubscription Confirm a subscription
+	// (POST /v1/subscriptions/{subscriptionId}/confirm)
+	ConfirmSubscription(c fiber.Ctx, subscriptionId SubscriptionId) error
+	// IgnoreSubscription Ignore a subscription
+	// (POST /v1/subscriptions/{subscriptionId}/ignore)
+	IgnoreSubscription(c fiber.Ctx, subscriptionId SubscriptionId) error
 	// GetMonthlySummary Get a monthly finance summary
 	// (GET /v1/summaries/monthly)
 	GetMonthlySummary(c fiber.Ctx, params GetMonthlySummaryParams) error
@@ -1673,6 +1937,213 @@ func (siw *ServerInterfaceWrapper) CreateCsvImport(c fiber.Ctx) error {
 	return handler(c)
 }
 
+// GetFinanceSettings operation middleware
+func (siw *ServerInterfaceWrapper) GetFinanceSettings(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.GetFinanceSettings(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// UpdateFinanceSettings operation middleware
+func (siw *ServerInterfaceWrapper) UpdateFinanceSettings(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.UpdateFinanceSettings(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// ListSubscriptions operation middleware
+func (siw *ServerInterfaceWrapper) ListSubscriptions(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListSubscriptionsParams
+
+	var query url.Values
+	query, err = url.ParseQuery(string(c.Request().URI().QueryString()))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for query string: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "state" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "state", query, &params.State, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter state: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.ListSubscriptions(c, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// CreateSubscriptionFromTransaction operation middleware
+func (siw *ServerInterfaceWrapper) CreateSubscriptionFromTransaction(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.CreateSubscriptionFromTransaction(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// DeleteSubscription operation middleware
+func (siw *ServerInterfaceWrapper) DeleteSubscription(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "subscriptionId" -------------
+	var subscriptionId SubscriptionId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "subscriptionId", c.Params("subscriptionId"), &subscriptionId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter subscriptionId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.DeleteSubscription(c, subscriptionId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// UpdateSubscription operation middleware
+func (siw *ServerInterfaceWrapper) UpdateSubscription(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "subscriptionId" -------------
+	var subscriptionId SubscriptionId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "subscriptionId", c.Params("subscriptionId"), &subscriptionId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter subscriptionId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.UpdateSubscription(c, subscriptionId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// ConfirmSubscription operation middleware
+func (siw *ServerInterfaceWrapper) ConfirmSubscription(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "subscriptionId" -------------
+	var subscriptionId SubscriptionId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "subscriptionId", c.Params("subscriptionId"), &subscriptionId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter subscriptionId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.ConfirmSubscription(c, subscriptionId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// IgnoreSubscription operation middleware
+func (siw *ServerInterfaceWrapper) IgnoreSubscription(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "subscriptionId" -------------
+	var subscriptionId SubscriptionId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "subscriptionId", c.Params("subscriptionId"), &subscriptionId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter subscriptionId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.IgnoreSubscription(c, subscriptionId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
 // GetMonthlySummary operation middleware
 func (siw *ServerInterfaceWrapper) GetMonthlySummary(c fiber.Ctx) error {
 
@@ -2009,6 +2480,22 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	router.Put(options.BaseURL+"/v1/budgets/:month", wrapper.SaveBudgetPlan)
 
 	router.Get(options.BaseURL+"/v1/budgets/:month/suggestions", wrapper.GetBudgetSuggestions)
+
+	router.Get(options.BaseURL+"/v1/subscriptions", wrapper.ListSubscriptions)
+
+	router.Post(options.BaseURL+"/v1/subscriptions", wrapper.CreateSubscriptionFromTransaction)
+
+	router.Delete(options.BaseURL+"/v1/subscriptions/:subscriptionId", wrapper.DeleteSubscription)
+
+	router.Patch(options.BaseURL+"/v1/subscriptions/:subscriptionId", wrapper.UpdateSubscription)
+
+	router.Post(options.BaseURL+"/v1/subscriptions/:subscriptionId/confirm", wrapper.ConfirmSubscription)
+
+	router.Post(options.BaseURL+"/v1/subscriptions/:subscriptionId/ignore", wrapper.IgnoreSubscription)
+
+	router.Get(options.BaseURL+"/v1/settings", wrapper.GetFinanceSettings)
+
+	router.Put(options.BaseURL+"/v1/settings", wrapper.UpdateFinanceSettings)
 
 	router.Post(options.BaseURL+"/v1/imports/csv", wrapper.CreateCsvImport)
 

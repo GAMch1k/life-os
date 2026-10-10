@@ -31,6 +31,11 @@ type Account struct {
 	SyncedAt              pgtype.Timestamptz
 }
 
+type AlertNotification struct {
+	DedupeKey string
+	ClaimedAt pgtype.Timestamptz
+}
+
 type BudgetNotification struct {
 	DedupeKey string
 	Month     pgtype.Date
@@ -70,6 +75,17 @@ type FinanceSeed struct {
 	AppliedAt pgtype.Timestamptz
 }
 
+type FinanceSetting struct {
+	ID                bool
+	LargeDebitEnabled bool
+	LargeDebitMinor   int64
+	LowBalanceEnabled bool
+	LowBalanceMinor   int64
+	RenewalsEnabled   bool
+	RenewalLeadDays   int32
+	UpdatedAt         pgtype.Timestamptz
+}
+
 type FinancialCategory struct {
 	ID         pgtype.UUID
 	Name       string
@@ -79,6 +95,40 @@ type FinancialCategory struct {
 	Color      *string
 	ArchivedAt pgtype.Timestamptz
 	SystemKey  *string
+}
+
+type LowBalanceState struct {
+	AccountID pgtype.UUID
+	Below     bool
+	Episode   int32
+	ChangedAt pgtype.Timestamptz
+}
+
+type Subscription struct {
+	ID             pgtype.UUID
+	MerchantKey    string
+	MatchCadence   string
+	State          string
+	Source         string
+	Name           string
+	NameEdited     bool
+	Cadence        string
+	AmountMinor    int64
+	AmountEdited   bool
+	Currency       string
+	CategoryID     pgtype.UUID
+	CategoryEdited bool
+	AccountID      pgtype.UUID
+	Confidence     string
+	LastDate       pgtype.Date
+	NextDate       pgtype.Date
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
+}
+
+type SubscriptionTransaction struct {
+	SubscriptionID pgtype.UUID
+	TransactionID  pgtype.UUID
 }
 
 type Transaction struct {

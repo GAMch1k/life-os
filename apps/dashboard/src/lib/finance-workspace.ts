@@ -255,6 +255,22 @@ export function fetchBudget(month: string) {
   );
 }
 
+/** Every subscription, with the monthly total of the confirmed ones (see finance-subscriptions.ts). */
+export function fetchSubscriptions() {
+  return load(
+    () => financeClient.GET("/v1/subscriptions"),
+    "Subscriptions could not be loaded.",
+  );
+}
+
+/** The alert settings (see finance-subscriptions.ts). */
+export function fetchSettings() {
+  return load(
+    () => financeClient.GET("/v1/settings"),
+    "The alert settings could not be loaded.",
+  );
+}
+
 export type FinanceWorkspaceState =
   | {
       kind: "ready";
@@ -264,29 +280,41 @@ export type FinanceWorkspaceState =
       transactions: Loaded<TransactionPage>;
       summary: Loaded<MonthlySummary>;
       budget: Loaded<Schemas["BudgetMonth"]>;
+      subscriptions: Loaded<Schemas["SubscriptionList"]>;
+      settings: Loaded<Schemas["FinanceSettings"]>;
     }
   | { kind: "unavailable"; error: string };
 
 /**
  * Everything the workspace shows first: accounts, categories and rules, the
- * latest transactions, this month's summary, and the budget of
- * `budgetMonth` (this month unless the URL names another). Without accounts
- * Finance is unavailable; any other part that fails says so in its own
- * place.
+ * latest transactions, this month's summary, the budget of `budgetMonth`
+ * (this month unless the URL names another), the subscriptions, and the
+ * alert settings. Without accounts Finance is unavailable; any other part
+ * that fails says so in its own place.
  */
 export async function getFinanceWorkspace(
   month: string,
   budgetMonth: string = month,
 ): Promise<FinanceWorkspaceState> {
-  const [accounts, categories, rules, transactions, summary, budget] =
-    await Promise.all([
-      fetchAccounts(),
-      fetchCategories(),
-      fetchRules(),
-      fetchTransactions(NO_FILTERS),
-      fetchSummary(month),
-      fetchBudget(budgetMonth),
-    ]);
+  const [
+    accounts,
+    categories,
+    rules,
+    transactions,
+    summary,
+    budget,
+    subscriptions,
+    settings,
+  ] = await Promise.all([
+    fetchAccounts(),
+    fetchCategories(),
+    fetchRules(),
+    fetchTransactions(NO_FILTERS),
+    fetchSummary(month),
+    fetchBudget(budgetMonth),
+    fetchSubscriptions(),
+    fetchSettings(),
+  ]);
   if (accounts.error !== undefined) {
     return { kind: "unavailable", error: accounts.error };
   }
@@ -298,6 +326,8 @@ export async function getFinanceWorkspace(
     transactions,
     summary,
     budget,
+    subscriptions,
+    settings,
   };
 }
 

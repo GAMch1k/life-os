@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/oapi-codegen/runtime/types"
 
+	"github.com/GAMch1k/life-os/services/finance/internal/alerts"
 	"github.com/GAMch1k/life-os/services/finance/internal/api/generated"
 	financemoney "github.com/GAMch1k/life-os/services/finance/internal/money"
 	store "github.com/GAMch1k/life-os/services/finance/internal/repository/generated"
@@ -75,9 +76,13 @@ func (h *Handler) ListAccounts(c fiber.Ctx, params generated.ListAccountsParams)
 	if err != nil {
 		return internal(err)
 	}
+	rule, err := h.lowBalanceRule(c.Context(), h.queries)
+	if err != nil {
+		return internal(err)
+	}
 	result := generated.AccountList{Items: make([]generated.Account, 0, len(rows))}
 	for _, row := range rows {
-		result.Items = append(result.Items, accountView(row))
+		result.Items = append(result.Items, accountView(row, rule))
 	}
 	return c.JSON(result)
 }
@@ -122,6 +127,7 @@ func (h *Handler) CreateAccount(c fiber.Ctx) error {
 		return internal(err)
 	}
 	h.recordAccount(c.Context(), c, accountCreated, created, nil)
+	h.moneyChanged()
 	view, err := h.accountWithBalance(c.Context(), h.queries, created.ID)
 	if err != nil {
 		return passThrough(err)
@@ -209,6 +215,7 @@ func (h *Handler) UpdateAccount(c fiber.Ctx, accountID types.UUID) error {
 	}
 	if eventType, changes := classifyAccountUpdate(before, after); eventType != "" {
 		h.recordAccount(c.Context(), c, eventType, after, changes)
+		h.moneyChanged()
 	}
 	view, err := h.accountWithBalance(c.Context(), h.queries, after.ID)
 	if err != nil {
@@ -234,14 +241,46 @@ func (h *Handler) accountWithBalance(ctx context.Context, q *store.Queries, id p
 	if len(rows) == 0 {
 		return generated.Account{}, notFound("Account")
 	}
-	return accountView(rows[0]), nil
+	rule, err := h.lowBalanceRule(ctx, q)
+	if err != nil {
+		return generated.Account{}, err
+	}
+	return accountView(rows[0], rule), nil
 }
 
-func accountView(row store.ListAccountsWithBalanceRow) generated.Account {
+// lowBalance is the low-balance alert as accounts show it.
+type lowBalance struct {
+	enabled   bool
+	threshold int64
+	currency  string
+}
+
+func (h *Handler) lowBalanceRule(ctx context.Context, q *store.Queries) (lowBalance, error) {
+	settings, err := alerts.LoadSettings(ctx, q)
+	if err != nil {
+		return lowBalance{}, err
+	}
+	return lowBalance{enabled: settings.LowBalanceEnabled, threshold: settings.LowBalanceMinor, currency: h.defaultCurrency}, nil
+}
+
+// below reports whether an account is low by the alert's rule (see
+// ListLowBalanceAccounts): an active account from a bank connection in the
+// default currency, of kind bank (with the bank's balance, or transactions
+// before the bank reported one), or card or savings with a bank-reported
+// balance, whose balance is below the threshold, while the alert is on.
+// The built-in Cash account and other manual accounts never are.
+func (rule lowBalance) below(row store.ListAccountsWithBalanceRow) bool {
+	reported := row.BookedBalanceDate.Valid
+	watched := row.SourceKind == "bank" &&
+		((row.Kind == "bank" && (reported || row.TransactionCount > 0)) || ((row.Kind == "card" || row.Kind == "savings") && reported))
+	return rule.enabled && watched && !row.ArchivedAt.Valid && row.Currency == rule.currency && row.BalanceMinor < rule.threshold
+}
+
+func accountView(row store.ListAccountsWithBalanceRow, rule lowBalance) generated.Account {
 	view := generated.Account{
 		Id: uuid(row.ID), Name: row.Name, Kind: generated.AccountKind(row.Kind), Currency: row.Currency,
 		OpeningBalance: money(row.OpeningBalanceMinor, row.Currency), Balance: money(row.BalanceMinor, row.Currency),
-		Pending: money(row.PendingMinor, row.Currency), TransactionCount: int(row.TransactionCount),
+		Pending: money(row.PendingMinor, row.Currency), TransactionCount: int(row.TransactionCount), LowBalance: rule.below(row),
 		BuiltIn: row.SystemKey != nil, Archived: row.ArchivedAt.Valid, ArchivedAt: nullableTime(row.ArchivedAt),
 		Source: generated.AccountSource{Kind: generated.AccountSourceKind(row.SourceKind), ConnectionId: nullableUUID(row.ConnectionID), ExternalId: row.ExternalID,
 			Provider: row.Provider, Institution: row.Institution, IbanMasked: row.IbanMasked, SyncedAt: nullableTime(row.SyncedAt)},

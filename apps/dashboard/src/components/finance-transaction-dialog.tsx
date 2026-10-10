@@ -19,6 +19,7 @@ import {
 } from "@/components/app-dialog";
 import { DatePicker } from "@/components/date-picker";
 import { Amount } from "@/components/finance-amount";
+import { SubscriptionAction } from "@/components/finance-subscription-action";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -37,6 +38,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { financeClient } from "@/lib/api/finance-client";
+import type { Subscription } from "@/lib/finance-subscriptions";
 import {
   type Account,
   type Category,
@@ -70,12 +72,17 @@ type Shared = {
   categories: Category[];
   /** The owner's today (YYYY-MM-DD), a new transaction's date. */
   today: string;
+  /** The subscriptions, so a transaction can say which it belongs to. */
+  subscriptions: Subscription[];
+  /** "This is a subscription" made or confirmed one. */
+  onSubscriptionSaved: (subscription: Subscription) => void;
 };
 
 /**
  * Adds a manual transaction, or opens one. A manual transaction changes in
  * full and can be deleted; an imported one (CSV now, a bank later) shows its
- * details read-only and changes only its category and notes.
+ * details read-only and changes only its category and notes. Money out
+ * that is opened offers "This is a subscription".
  */
 export function TransactionDialog({
   state,
@@ -138,6 +145,8 @@ function TransactionForm({
   accounts,
   categories,
   today,
+  subscriptions,
+  onSubscriptionSaved,
   onCancel,
   onCreated,
   onSaved,
@@ -447,6 +456,14 @@ function TransactionForm({
 
       {categoryField}
       {notesField}
+
+      {transaction && transaction.amount.amount < 0 ? (
+        <SubscriptionAction
+          onSaved={onSubscriptionSaved}
+          subscriptions={subscriptions}
+          transaction={transaction}
+        />
+      ) : null}
 
       {errors.form ? (
         <p className="text-destructive text-sm" role="alert">

@@ -9,7 +9,14 @@ import {
   type HomeBudget,
   homeBudget,
 } from "@/lib/finance-budget";
+import {
+  type HomeRenewal,
+  type SubscriptionList,
+  homeRenewals,
+  lowBalanceAccounts,
+} from "@/lib/finance-subscriptions";
 import { currentMonth } from "@/lib/finance-summary";
+import type { Account } from "@/lib/finance-workspace";
 import type { InboxItem } from "@/lib/inbox-summary";
 import type { Task } from "@/lib/tasks-summary";
 import {
@@ -49,6 +56,13 @@ export type HomeAttention = {
   nextEvent: NextEvent | { kind: "none" } | null;
   /** This month's budget; null when Finance could not be read. */
   budget: HomeBudget | null;
+  /** Accounts below the low-balance alert; null when Finance could not be read. */
+  lowBalance: Account[] | null;
+  /**
+   * Confirmed subscriptions renewing within the renewal reminders' lead
+   * days, soonest first; null when Finance could not be read.
+   */
+  renewals: { items: HomeRenewal[]; more: boolean } | null;
 };
 
 export const HOME_LIST_LIMIT = 100;
@@ -142,11 +156,24 @@ export function toHomeAttention(
     sources?: ListResult<CalendarSource>;
     /** This month's budget from Finance. */
     budget?: { data?: BudgetMonth };
+    /** Finance's accounts, which say when their balance is low. */
+    accounts?: ListResult<Account>;
+    /** Finance's confirmed subscriptions. */
+    subscriptions?: { data?: SubscriptionList };
   },
   now: Date,
   timeZone: string = DEFAULT_TIME_ZONE,
 ): HomeAttention {
-  const { review, urgent, open, events, sources, budget } = results;
+  const {
+    review,
+    urgent,
+    open,
+    events,
+    sources,
+    budget,
+    accounts,
+    subscriptions,
+  } = results;
   const { start } = ownerToday(now, timeZone);
   const isOverdue = (task: Task) =>
     task.dueAt !== undefined &&
@@ -193,6 +220,10 @@ export function toHomeAttention(
         : { kind: "none" }
       : null,
     budget: budget?.data ? homeBudget(budget.data) : null,
+    lowBalance: accounts?.data ? lowBalanceAccounts(accounts.data.items) : null,
+    renewals: subscriptions?.data
+      ? homeRenewals(subscriptions.data, dayKey(now, timeZone))
+      : null,
   };
 }
 
@@ -239,41 +270,47 @@ async function upcomingEvents(
 export async function getHomeAttention(): Promise<HomeAttention> {
   const now = new Date();
   const timeZone = await userTimeZone();
-  const [review, urgent, open, events, budget] = await Promise.all([
-    unavailableOnFailure(
-      inboxClient.GET("/v1/inbox-items", {
-        params: { query: { state: "human_review", limit: REVIEW_LIMIT } },
-      }),
-    ),
-    // Tasks are ordered by due date, so overdue work comes first.
-    unavailableOnFailure(
-      tasksClient.GET("/v1/tasks", {
-        params: {
-          query: {
-            completed: false,
-            dueBefore: ownerToday(now, timeZone).end.toISOString(),
-            includeUndated: false,
-            limit: HOME_LIST_LIMIT,
+  const [review, urgent, open, events, budget, accounts, subscriptions] =
+    await Promise.all([
+      unavailableOnFailure(
+        inboxClient.GET("/v1/inbox-items", {
+          params: { query: { state: "human_review", limit: REVIEW_LIMIT } },
+        }),
+      ),
+      // Tasks are ordered by due date, so overdue work comes first.
+      unavailableOnFailure(
+        tasksClient.GET("/v1/tasks", {
+          params: {
+            query: {
+              completed: false,
+              dueBefore: ownerToday(now, timeZone).end.toISOString(),
+              includeUndated: false,
+              limit: HOME_LIST_LIMIT,
+            },
           },
-        },
-      }),
-    ),
-    // Only undated Tasks, so any number of dated ones cannot crowd them out.
-    unavailableOnFailure(
-      tasksClient.GET("/v1/tasks", {
-        params: {
-          query: { completed: false, undated: true, limit: HOME_LIST_LIMIT },
-        },
-      }),
-    ),
-    unavailableOnFailure(upcomingEvents(now, timeZone)),
-    // The month's budget in the owner's timezone; Finance down is null.
-    financeClient
-      .GET("/v1/budgets/{month}", {
-        params: { path: { month: currentMonth(now, timeZone) } },
-      })
-      .catch(() => ({ data: undefined })),
-  ]);
+        }),
+      ),
+      // Only undated Tasks, so any number of dated ones cannot crowd them out.
+      unavailableOnFailure(
+        tasksClient.GET("/v1/tasks", {
+          params: {
+            query: { completed: false, undated: true, limit: HOME_LIST_LIMIT },
+          },
+        }),
+      ),
+      unavailableOnFailure(upcomingEvents(now, timeZone)),
+      // The month's budget in the owner's timezone; Finance down is null.
+      financeClient
+        .GET("/v1/budgets/{month}", {
+          params: { path: { month: currentMonth(now, timeZone) } },
+        })
+        .catch(() => ({ data: undefined })),
+      // Low balances and upcoming renewals; Finance down is null.
+      unavailableOnFailure(financeClient.GET("/v1/accounts")),
+      financeClient
+        .GET("/v1/subscriptions", { params: { query: { state: "confirmed" } } })
+        .catch(() => ({ data: undefined })),
+    ]);
   // An imported event is labelled with its source's name, which an
   // integration's event carries itself.
   const next = events.data
@@ -284,7 +321,7 @@ export async function getHomeAttention(): Promise<HomeAttention> {
       ? await unavailableOnFailure(calendarClient.GET("/v1/sources"))
       : undefined;
   return toHomeAttention(
-    { review, urgent, open, events, sources, budget },
+    { review, urgent, open, events, sources, budget, accounts, subscriptions },
     now,
     timeZone,
   );

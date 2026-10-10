@@ -18,7 +18,11 @@ type Querier interface {
 	// the default one; only its system key is set.
 	AdoptCategory(ctx context.Context, arg AdoptCategoryParams) (FinancialCategory, error)
 	ArchiveConnectionAccounts(ctx context.Context, connectionID pgtype.UUID) ([]Account, error)
+	// A booked transaction that replaced a pending one keeps the pending one's
+	// claim, so the same debit is not notified twice.
+	CarryOverAlertClaim(ctx context.Context, arg CarryOverAlertClaimParams) error
 	CategoryNameTaken(ctx context.Context, name string) (bool, error)
+	ClaimAlertNotification(ctx context.Context, dedupeKey string) (int64, error)
 	ClaimBudgetNotification(ctx context.Context, arg ClaimBudgetNotificationParams) (int64, error)
 	CountAccountTransactions(ctx context.Context, accountID pgtype.UUID) (int64, error)
 	CreateAccount(ctx context.Context, arg CreateAccountParams) (Account, error)
@@ -39,6 +43,7 @@ type Querier interface {
 	// Pending bank transactions of the connection booked inside the sync window
 	// that the sync no longer has.
 	DeleteStalePending(ctx context.Context, arg DeleteStalePendingParams) (int64, error)
+	DeleteSubscription(ctx context.Context, id pgtype.UUID) (Subscription, error)
 	DeleteTransaction(ctx context.Context, id pgtype.UUID) error
 	// The pending bank transaction a new booked one replaces: same account and
 	// amount, the same counterparty ignoring case and spacing, booked at most
@@ -58,19 +63,25 @@ type Querier interface {
 	// The plan of a month: its own plan, else the latest regular plan that
 	// started in or before it.
 	GetEffectiveBudgetPlan(ctx context.Context, month pgtype.Date) (BudgetPlan, error)
+	GetFinanceSettings(ctx context.Context) (FinanceSetting, error)
 	GetFinancialCategory(ctx context.Context, id pgtype.UUID) (FinancialCategory, error)
 	// Booked transactions of the month in one currency, leaving out transfers.
 	GetMonthlyCashflow(ctx context.Context, arg GetMonthlyCashflowParams) (GetMonthlyCashflowRow, error)
 	GetMonthlyCategoryTotals(ctx context.Context, arg GetMonthlyCategoryTotalsParams) ([]GetMonthlyCategoryTotalsRow, error)
+	GetSubscription(ctx context.Context, id pgtype.UUID) (Subscription, error)
+	GetSubscriptionByIdentity(ctx context.Context, arg GetSubscriptionByIdentityParams) (Subscription, error)
+	GetSubscriptionForUpdate(ctx context.Context, id pgtype.UUID) (Subscription, error)
 	GetTransaction(ctx context.Context, id pgtype.UUID) (Transaction, error)
 	GetTransactionForUpdate(ctx context.Context, id pgtype.UUID) (Transaction, error)
 	InsertBudgetPlanLines(ctx context.Context, arg InsertBudgetPlanLinesParams) error
+	InsertSubscription(ctx context.Context, arg InsertSubscriptionParams) (Subscription, error)
 	// A bank account that reported a booked balance shows it; every other
 	// account shows its opening balance plus its booked transactions.
 	ListAccountsWithBalance(ctx context.Context, arg ListAccountsWithBalanceParams) ([]ListAccountsWithBalanceRow, error)
 	// The rules that may categorize: those of categories that are not archived,
 	// in the order they are tried.
 	ListActiveCategoryRules(ctx context.Context) ([]CategoryRule, error)
+	ListAlertNotifications(ctx context.Context, prefix string) ([]string, error)
 	ListBankTransactions(ctx context.Context, arg ListBankTransactionsParams) ([]Transaction, error)
 	ListBudgetNotifications(ctx context.Context, month pgtype.Date) ([]string, error)
 	ListBudgetPlanLines(ctx context.Context, planID pgtype.UUID) ([]BudgetPlanLine, error)
@@ -78,13 +89,33 @@ type Querier interface {
 	ListConnectionAccounts(ctx context.Context, connectionID pgtype.UUID) ([]Account, error)
 	// The active default categories, for the merchant category code fallback.
 	ListDefaultCategories(ctx context.Context) ([]FinancialCategory, error)
+	// Confirmed subscriptions whose next payment is expected between two days.
+	ListDueRenewals(ctx context.Context, arg ListDueRenewalsParams) ([]ListDueRenewalsRow, error)
 	// The month's transactions in other currencies than the budget's.
 	ListExcludedCurrencies(ctx context.Context, arg ListExcludedCurrenciesParams) ([]ListExcludedCurrenciesRow, error)
 	ListFinancialCategories(ctx context.Context, includeArchived bool) ([]FinancialCategory, error)
+	// Money out of at least a threshold in one currency, booked or pending,
+	// booked on or after a day, that has not been notified. Money moved
+	// between own accounts (a transfer category) is not a debit to warn about.
+	ListLargeDebits(ctx context.Context, arg ListLargeDebitsParams) ([]ListLargeDebitsRow, error)
+	// Active bank accounts (from a bank connection) in one currency with the
+	// balance they show and their low-balance state: kind bank, with the bank's
+	// booked balance or, before the bank reported one, the computed balance of
+	// its transactions; and card or savings accounts that have a bank-reported
+	// balance. The built-in Cash account and other manual accounts are never
+	// watched.
+	ListLowBalanceAccounts(ctx context.Context, currency string) ([]ListLowBalanceAccountsRow, error)
+	// Booked money out since a day, for detecting recurring payments; money
+	// moved between own accounts (transfer categories) is not a payment.
+	ListRecurringCandidates(ctx context.Context, since pgtype.Date) ([]ListRecurringCandidatesRow, error)
 	// Transactions whose category was not chosen by hand: those without a
 	// category, plus those a rule or a merchant category code categorized when
 	// all_categorized is set.
 	ListRuleCandidates(ctx context.Context, allCategorized bool) ([]ListRuleCandidatesRow, error)
+	// The transactions each subscription matched, latest first.
+	ListSubscriptionLinks(ctx context.Context, subscriptionID pgtype.UUID) ([]SubscriptionTransaction, error)
+	// Suggested first, then confirmed, then ignored; by name within a state.
+	ListSubscriptions(ctx context.Context, state *string) ([]Subscription, error)
 	// Latest booking date first, then latest created; the after_* position is
 	// the last row of the previous page. Every search word must occur in the
 	// counterparty, description, or notes (the words arrive LIKE-escaped).
@@ -95,9 +126,16 @@ type Querier interface {
 	LockBudgetPlans(ctx context.Context) error
 	LockBuiltInAccounts(ctx context.Context) error
 	LockSeeds(ctx context.Context) error
+	// One detection run or subscription change at a time.
+	LockSubscriptions(ctx context.Context) error
 	MarkSeedApplied(ctx context.Context, name string) error
+	ReleaseAlertNotification(ctx context.Context, dedupeKey string) error
 	ReleaseBudgetNotification(ctx context.Context, dedupeKey string) error
+	// Makes ids the subscription's matched transactions.
+	ReplaceSubscriptionLinks(ctx context.Context, arg ReplaceSubscriptionLinksParams) error
+	SaveFinanceSettings(ctx context.Context, arg SaveFinanceSettingsParams) (FinanceSetting, error)
 	SeedApplied(ctx context.Context, name string) (bool, error)
+	SetLowBalanceState(ctx context.Context, arg SetLowBalanceStateParams) error
 	// Gives each transaction the category its rule or merchant category code
 	// chose (null: none); categorized_by is 'rule', 'mcc', or '' for none.
 	SetRuleCategories(ctx context.Context, arg SetRuleCategoriesParams) error
@@ -108,6 +146,7 @@ type Querier interface {
 	UpdateBankTransaction(ctx context.Context, arg UpdateBankTransactionParams) (Transaction, error)
 	UpdateCategoryRule(ctx context.Context, arg UpdateCategoryRuleParams) (CategoryRule, error)
 	UpdateFinancialCategory(ctx context.Context, arg UpdateFinancialCategoryParams) (FinancialCategory, error)
+	UpdateSubscription(ctx context.Context, arg UpdateSubscriptionParams) (Subscription, error)
 	UpdateTransaction(ctx context.Context, arg UpdateTransactionParams) (Transaction, error)
 	UpsertBudgetPlan(ctx context.Context, arg UpsertBudgetPlanParams) (BudgetPlan, error)
 }

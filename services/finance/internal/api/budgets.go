@@ -38,11 +38,14 @@ func (h *Handler) EnsureBudgetDefaults(ctx context.Context) (budget.SeedResult, 
 	return result, nil
 }
 
-// budgetChanged asks the budget alerts for a check soon.
+// budgetChanged asks the budget alerts for a check soon, and the money
+// alerts too: every money change reaches both (a plan change only matters
+// to the budget, and an extra check is harmless).
 func (h *Handler) budgetChanged() {
 	if h.onBudgetChange != nil {
 		h.onBudgetChange()
 	}
+	h.moneyChanged()
 }
 
 func parseBudgetMonth(month generated.Month) (time.Time, error) {

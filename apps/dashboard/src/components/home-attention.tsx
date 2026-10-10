@@ -5,7 +5,9 @@ import {
   CheckSquare2,
   CircleAlert,
   ListTodo,
+  Repeat,
   TriangleAlert,
+  Wallet,
 } from "lucide-react";
 
 import { eventTimeLabel } from "@/components/calendar-summary";
@@ -13,6 +15,7 @@ import { Amount } from "@/components/finance-amount";
 import { HomeBudgetCard } from "@/components/home-budget";
 import { Card, CardContent } from "@/components/ui/card";
 import { budgetHref, monthName } from "@/lib/finance-budget";
+import { SUBSCRIPTIONS_HREF, inDays } from "@/lib/finance-subscriptions";
 import type { HomeAttention } from "@/lib/home-attention";
 
 const URGENT_PREVIEW = 5;
@@ -41,7 +44,15 @@ export function HomeAttentionSurface({
   timeZone: string;
   today: string;
 }) {
-  const { budget, humanReview, nextEvent, unscheduled, urgent } = attention;
+  const {
+    budget,
+    humanReview,
+    lowBalance,
+    nextEvent,
+    renewals,
+    unscheduled,
+    urgent,
+  } = attention;
   const overBudget = budget?.kind === "plan" ? budget.over : [];
   const urgentItems: AttentionItem[] = urgent
     ? [
@@ -170,6 +181,40 @@ export function HomeAttentionSurface({
                   }}
                 />{" "}
                 over
+              </>
+            ),
+          }))}
+        />
+      ) : null}
+      {lowBalance?.length ? (
+        <AttentionCard
+          id="attention-low-balance"
+          href="/finance"
+          linkLabel="Open Finance"
+          icon={<Wallet aria-hidden="true" className="text-warning size-4" />}
+          title="Low balance"
+          detail={`${lowBalance.length} ${lowBalance.length === 1 ? "bank account is" : "bank accounts are"} below your low-balance alert`}
+          items={lowBalance.map((account) => ({
+            id: account.id,
+            label: account.name,
+            hint: <Amount money={account.balance} />,
+          }))}
+        />
+      ) : null}
+      {renewals?.items.length ? (
+        <AttentionCard
+          id="attention-renewals"
+          href={SUBSCRIPTIONS_HREF}
+          linkLabel="Open subscriptions"
+          icon={<Repeat aria-hidden="true" className="size-4" />}
+          title="Renewing soon"
+          detail={`${plural(renewals.items.length, renewals.more, "subscription")} renewing in the next days`}
+          items={renewals.items.map((renewal) => ({
+            id: renewal.id,
+            label: renewal.name,
+            hint: (
+              <>
+                <Amount money={renewal.amount} /> · {inDays(renewal.days)}
               </>
             ),
           }))}

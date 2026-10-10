@@ -29,6 +29,7 @@ export const FINANCE_TABS = [
   "transactions",
   "summary",
   "budget",
+  "subscriptions",
   "categories",
 ] as const;
 export type FinanceTab = (typeof FINANCE_TABS)[number];

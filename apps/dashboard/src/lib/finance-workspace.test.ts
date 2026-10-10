@@ -54,6 +54,7 @@ function account(overrides: Partial<Account> = {}): Account {
     available: null,
     pending: { amount: 0, currency: "EUR" },
     transactionCount: 0,
+    lowBalance: false,
     builtIn: true,
     archived: false,
     archivedAt: null,

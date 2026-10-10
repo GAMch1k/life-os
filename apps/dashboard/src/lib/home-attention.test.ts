@@ -13,6 +13,8 @@ import {
   type CalendarSource,
 } from "./home-attention";
 import type { CalendarEvent } from "./calendar-summary";
+import type { Subscription } from "./finance-subscriptions";
+import type { Account } from "./finance-workspace";
 import type { InboxItem } from "./inbox-summary";
 
 const now = new Date("2026-10-09T15:00:00Z");
@@ -362,4 +364,71 @@ test("Home shows the month's budget, or says Finance is unavailable", () => {
     toHomeAttention({ ...empty, events: list([]) }, now).budget,
     null,
   );
+});
+
+test("Home shows low accounts and renewals within the lead days", () => {
+  const base = {
+    review: list([]),
+    urgent: list([]),
+    open: list([]),
+    events: list([]),
+  };
+  const account = (id: string, lowBalance: boolean, kind = "bank") =>
+    ({
+      id,
+      name: id,
+      lowBalance,
+      archived: false,
+      builtIn: kind !== "bank",
+      source: { kind },
+    }) as unknown as Account;
+  const renewal = (id: string, nextDate: string) =>
+    ({
+      id,
+      name: id,
+      state: "confirmed",
+      renewal: "upcoming",
+      nextDate,
+      amount: { amount: 1399, currency: "EUR" },
+    }) as unknown as Subscription;
+  const attention = toHomeAttention(
+    {
+      ...base,
+      accounts: list([
+        account("Girokonto", true),
+        account("Cash", true, "manual"),
+      ]),
+      subscriptions: {
+        data: {
+          items: [
+            renewal("Spotify", "2026-10-12"),
+            renewal("Netflix", "2026-10-10"),
+          ],
+          totals: {
+            currency: "EUR",
+            monthly: { amount: 2798, currency: "EUR" },
+            confirmed: 2,
+            excluded: 0,
+          },
+        },
+      },
+    },
+    now,
+    "Europe/Berlin",
+  );
+  assert.deepEqual(
+    attention.lowBalance?.map((item) => item.id),
+    ["Girokonto"],
+  );
+  assert.deepEqual(
+    attention.renewals?.items.map((item) => [item.name, item.days]),
+    [
+      ["Netflix", 1],
+      ["Spotify", 3],
+    ],
+  );
+  // Finance down (or not asked): nothing to show, not zero.
+  const unavailable = toHomeAttention(base, now);
+  assert.equal(unavailable.lowBalance, null);
+  assert.equal(unavailable.renewals, null);
 });
