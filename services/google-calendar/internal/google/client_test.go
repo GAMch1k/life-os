@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/GAMch1k/life-os/services/calendar/internal/google"
-	"github.com/GAMch1k/life-os/services/calendar/internal/google/fakegoogle"
+	"github.com/GAMch1k/life-os/services/google-calendar/internal/google"
+	"github.com/GAMch1k/life-os/services/google-calendar/internal/google/fakegoogle"
 )
 
 func fakeClient(t *testing.T, calendars ...fakegoogle.Calendar) (*google.Client, *fakegoogle.Server) {

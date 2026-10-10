@@ -401,32 +401,25 @@ func TestAllDayAndImportedEventsUseTheirDefaults(t *testing.T) {
 	h.expectSent("Holiday: Today until Sun 18 Oct")
 }
 
-func TestGoogleSyncedEventsRemindToo(t *testing.T) {
+func TestIntegrationEventsRemindToo(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
-	// A synced Google calendar is a source of kind google; its default
-	// reminders are the calendar's (10 minutes here).
-	var connection, calendar, source googleuuid.UUID
-	if err := h.pool.QueryRow(ctx, `INSERT INTO google_connections (account_email, refresh_token_ciphertext, refresh_token_nonce)
-		VALUES ('owner@example.com', '\x00', '\x00') RETURNING id`).Scan(&connection); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.pool.QueryRow(ctx, `INSERT INTO google_calendars (connection_id, google_calendar_id, summary, access_role, is_primary, sync_enabled)
-		VALUES ($1, 'owner@example.com', 'Personal', 'owner', true, true) RETURNING id`, connection).Scan(&calendar); err != nil {
-		t.Fatal(err)
-	}
-	if err := h.pool.QueryRow(ctx, `INSERT INTO calendar_sources (kind, name, url, default_reminders, google_calendar_id)
-		VALUES ('google', 'Personal', 'https://www.googleapis.com/calendar/v3/calendars/owner@example.com', '[{"kind":"relative","minutesBefore":10}]', $1) RETURNING id`, calendar).Scan(&source); err != nil {
+	// A Google calendar the google-calendar integration syncs is a source
+	// of kind external; its default reminders are the calendar's (10
+	// minutes here).
+	var source googleuuid.UUID
+	if err := h.pool.QueryRow(ctx, `INSERT INTO calendar_sources (kind, name, default_reminders, integration, external_id, provider, read_only, in_process)
+		VALUES ('external', 'Personal', '[{"kind":"relative","minutesBefore":10}]', 'google-calendar', 'owner@example.com', 'Google', false, false) RETURNING id`).Scan(&source); err != nil {
 		t.Fatal(err)
 	}
 	// Following the defaults plus its own Google override of an hour.
 	h.exec(`INSERT INTO events (title, location, all_day, start_at, end_at, source_kind, source_id, external_uid, reminders, use_default_reminders)
-		VALUES ('Dentist', 'Dr. Weber', false, $1, $2, 'google', $3, 'g-1', '[{"kind":"relative","minutesBefore":60}]', true)`,
+		VALUES ('Dentist', 'Dr. Weber', false, $1, $2, 'external', $3, 'g-1', '[{"kind":"relative","minutesBefore":60}]', true)`,
 		instant("2026-10-12T08:00:00Z"), instant("2026-10-12T09:00:00Z"), source)
 	// A weekly Google series whose second occurrence was cancelled in Google.
 	var series googleuuid.UUID
 	if err := h.pool.QueryRow(ctx, `INSERT INTO events (title, all_day, start_at, end_at, source_kind, source_id, external_uid, recurrence_frequency, recurrence_interval, recurrence_count)
-		VALUES ('Team call', false, $1, $2, 'google', $3, 'g-2', 'weekly', 1, 3) RETURNING id`,
+		VALUES ('Team call', false, $1, $2, 'external', $3, 'g-2', 'weekly', 1, 3) RETURNING id`,
 		instant("2026-10-13T07:00:00Z"), instant("2026-10-13T07:30:00Z"), source).Scan(&series); err != nil {
 		t.Fatal(err)
 	}

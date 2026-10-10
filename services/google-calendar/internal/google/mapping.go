@@ -13,9 +13,9 @@ import (
 
 	"github.com/teambition/rrule-go"
 
-	"github.com/GAMch1k/life-os/services/calendar/internal/ics"
-	"github.com/GAMch1k/life-os/services/calendar/internal/recurrence"
-	"github.com/GAMch1k/life-os/services/calendar/internal/sources"
+	"github.com/GAMch1k/life-os/services/google-calendar/internal/ics"
+	"github.com/GAMch1k/life-os/services/google-calendar/internal/recurrence"
+	"github.com/GAMch1k/life-os/services/google-calendar/internal/sources"
 )
 
 // Mapping limits, as for feeds.
@@ -114,6 +114,7 @@ func (m mapper) derive(events []Event) ([]sources.Item, int) {
 				skipped++
 				continue
 			}
+			item.Expanded = true // a lone changed instance: changed in Google only
 			add([]sources.Item{item})
 		}
 	}
@@ -424,7 +425,8 @@ func (m mapper) fit(master Event, base sources.Item, when span, instances []Even
 		}
 		if !occurs[key] {
 			// Not an occurrence of the series as Calendar repeats it: keep
-			// it as an event of its own.
+			// it as an event of its own (changed in Google only).
+			own.Expanded = true
 			standalone = append(standalone, own)
 			continue
 		}
@@ -684,13 +686,14 @@ func (m mapper) expand(master Event, base sources.Item, when span, instances []E
 				continue
 			}
 			if own, err := m.item(instance, uid); err == nil {
+				own.Expanded = true
 				items = append(items, own)
 				continue
 			}
 			unread++ // the occurrence keeps the series' values
 		}
 		item := base
-		item.ExternalUID = uid
+		item.ExternalUID, item.Expanded = uid, true
 		if when.allDay {
 			item.StartDate, item.EndDate = occurrence.StartDate, occurrence.EndDate
 		} else {
@@ -706,6 +709,7 @@ func (m mapper) expand(master Event, base sources.Item, when span, instances []E
 			continue
 		}
 		if own, err := m.item(instance, master.ID+"_"+key); err == nil {
+			own.Expanded = true
 			items = append(items, own)
 		} else {
 			unread++

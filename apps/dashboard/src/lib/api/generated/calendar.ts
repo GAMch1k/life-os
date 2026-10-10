@@ -19,7 +19,7 @@ export interface paths {
         put?: never;
         /**
          * Create a calendar event
-         * @description Creates an active event whose source is `manual`. Imported events (`ics`, `google`) are written by Calendar's own source adapters, not through this endpoint. An `Idempotency-Key` header makes the request safe to retry: an identical repeat returns the original event, and reusing the key with a different body returns 409.
+         * @description Creates an active event whose source is `manual`. Imported events are written by Calendar's feed adapter or by integrations through `/v1/integrations`, not through this endpoint. An `Idempotency-Key` header makes the request safe to retry: an identical repeat returns the original event, and reusing the key with a different body returns 409.
          */
         post: operations["createEvent"];
         delete?: never;
@@ -64,14 +64,14 @@ export interface paths {
         post?: never;
         /**
          * Delete a calendar event
-         * @description Removes the event permanently; for a recurring event every occurrence and its own changes (**All events**). Set `status: cancelled` instead to keep it as history. Feed events and read-only Google events cannot be deleted (409 `managed_by_source`, `google_read_only`). An editable Google event is deleted in Google first. A Life OS event exported to Google is deleted from the Life OS calendar afterwards.
+         * @description Removes the event permanently; for a recurring event every occurrence and its own changes (**All events**). Set `status: cancelled` instead to keep it as history. Feed events and read-only integration events cannot be deleted (409 `managed_by_source`). Integrations follow the deletion through the change feed (deleting the event at the provider, or a Life OS event's copy).
          */
         delete: operations["deleteEvent"];
         options?: never;
         head?: never;
         /**
          * Update a calendar event
-         * @description Changes only the fields present in the body; a field set to null is cleared. Changing `allDay` switches the event between timed and all-day: the other kind's fields (`startAt`, `endAt`, `timeZone` or `startDate`, `endDate`) are cleared and the new kind's start and end must be given. The result is validated as a whole, as on create. `status: cancelled` keeps the event as history and drops it from listings; `status: active` restores it. An event imported from a feed (`source.kind` `ics`), or a Google event that is not `editable` (a calendar the account can only read, or one occurrence of a rule Calendar cannot hold), is read-only except for `reminders`, `useDefaultReminders`, and `priority`: naming any other field returns 409 `managed_by_source` (feeds) or `google_read_only` (Google, with the reason). An editable Google event is changed in Google first (with its etag); cancelling one deletes it in Google (Life OS keeps it as cancelled history), and its reminders become Google's notifications (at most 5, minutes before the start; a reminder at a time of day only on an all-day event, at least a day before: else 400). When the event changed in Google meanwhile nothing is written and the answer is 409 `google_conflict` ("Changed in Google meanwhile; showing the latest version"); Google unreachable is 502 `google_unavailable`, an expired connection 409 `google_expired`, and nothing changes in Life OS. A Life OS event is changed here and its change exported to the Life OS calendar afterwards. For a recurring event this is **All events**: every occurrence changes. Occurrences keep their own changes, except that a change of the start, the kind (`allDay`), `timeZone`, or the `recurrence` rule removes the changes and skips of occurrences that no longer exist (an occurrence exists while the series still has an occurrence with the same original start, its `recurrenceId`).
+         * @description Changes only the fields present in the body; a field set to null is cleared. Changing `allDay` switches the event between timed and all-day: the other kind's fields (`startAt`, `endAt`, `timeZone` or `startDate`, `endDate`) are cleared and the new kind's start and end must be given. The result is validated as a whole, as on create. `status: cancelled` keeps the event as history and drops it from listings; `status: active` restores it. An event imported from a feed (`source.kind` `ics`), or an integration's event that is not `editable` (its source does not accept changes, or it is read-only on its own, such as one occurrence of a rule Calendar cannot hold), is read-only except for `reminders`, `useDefaultReminders`, and `priority`: naming any other field returns 409 `managed_by_source` (with the reason). An editable integration event is changed here and its integration writes the change to its provider through the change feed. For a recurring event this is **All events**: every occurrence changes. Occurrences keep their own changes, except that a change of the start, the kind (`allDay`), `timeZone`, or the `recurrence` rule removes the changes and skips of occurrences that no longer exist (an occurrence exists while the series still has an occurrence with the same original start, its `recurrenceId`).
          */
         patch: operations["updateEvent"];
         trace?: never;
@@ -95,7 +95,7 @@ export interface paths {
         head?: never;
         /**
          * Change one occurrence of a recurring event (This event)
-         * @description **This event**: changes only this occurrence; the series and its other occurrences stay. Only the fields present change, as for updating an event; `description` or `location` set to null is cleared for this occurrence only. A new start and end keep the series' kind: `startAt`/`endAt` for a timed series, `startDate`/`endDate` for an all-day one; `allDay` other than the series' returns 400 (`an occurrence cannot switch between timed and all-day; change all events instead`), and so do `recurrence` (`recurrence belongs to the series: change all events, or this and following`) and `timeZone` (`timeZone belongs to the series: change all events, or this and following`). Other errors are those of updating an event, such as `endAt must be after startAt`. `status: cancelled` skips the occurrence (kept as history, left out of listings); `status: active` brings it back. A field set back to the series' value stops being this occurrence's own change. Returns the occurrence. A feed event returns 409 `managed_by_source`; for a Google series the change is written to Google's instance of the occurrence (skipping cancels the instance), with the errors of updating a Google event.
+         * @description **This event**: changes only this occurrence; the series and its other occurrences stay. Only the fields present change, as for updating an event; `description` or `location` set to null is cleared for this occurrence only. A new start and end keep the series' kind: `startAt`/`endAt` for a timed series, `startDate`/`endDate` for an all-day one; `allDay` other than the series' returns 400 (`an occurrence cannot switch between timed and all-day; change all events instead`), and so do `recurrence` (`recurrence belongs to the series: change all events, or this and following`) and `timeZone` (`timeZone belongs to the series: change all events, or this and following`). Other errors are those of updating an event, such as `endAt must be after startAt`. `status: cancelled` skips the occurrence (kept as history, left out of listings); `status: active` brings it back. A field set back to the series' value stops being this occurrence's own change. Returns the occurrence. A read-only imported event returns 409 `managed_by_source`; an editable integration series is changed here and its integration writes the change to the provider's occurrence through the change feed.
          */
         patch: operations["updateEventOccurrence"];
         trace?: never;
@@ -111,7 +111,7 @@ export interface paths {
         put?: never;
         /**
          * Change this and following occurrences
-         * @description **This and following**: the series ends with the occurrence before this one (its `recurrence` gets `until` at that occurrence's start and loses `count`), and a new series (a new event id) starts at this occurrence with the body's changes, applied as for updating an event. Without a `recurrence` in the body the new series repeats like the old one (`recurrence: null` makes it a single event); a `count` rule is shared out: the old series keeps the occurrences before, the new one the remaining count. Times in the body are the new series' start and end; leave them out to start it at this occurrence's original time. Occurrence changes and skips from this occurrence on move to the new series when their occurrence still exists there (the same original start: no change of time, kind, time zone, or rule), otherwise they are dropped; the fields the body sets replace this occurrence's own changes to them. Returns the new series (201). On the series' first occurrence nothing is split: the body changes the series itself, as `PATCH /v1/events/{eventId}`, and the series is returned (200). A feed event returns 409 `managed_by_source`. For a Google series the new series is created in Google, its skips and occurrence changes carried over, and then the old series is ended with an UNTIL (if that fails the new one is deleted again).
+         * @description **This and following**: the series ends with the occurrence before this one (its `recurrence` gets `until` at that occurrence's start and loses `count`), and a new series (a new event id) starts at this occurrence with the body's changes, applied as for updating an event. Without a `recurrence` in the body the new series repeats like the old one (`recurrence: null` makes it a single event); a `count` rule is shared out: the old series keeps the occurrences before, the new one the remaining count. Times in the body are the new series' start and end; leave them out to start it at this occurrence's original time. Occurrence changes and skips from this occurrence on move to the new series when their occurrence still exists there (the same original start: no change of time, kind, time zone, or rule), otherwise they are dropped; the fields the body sets replace this occurrence's own changes to them. Returns the new series (201). On the series' first occurrence nothing is split: the body changes the series itself, as `PATCH /v1/events/{eventId}`, and the series is returned (200). A read-only imported event returns 409 `managed_by_source`. For an editable integration series the new series belongs to the same source under the external uid `lifeos:<id>` until the integration has created it at the provider and re-keys it (`previousExternalUid`).
          */
         post: operations["splitEventSeries"];
         delete?: never;
@@ -131,7 +131,7 @@ export interface paths {
         put?: never;
         /**
          * Delete this and following occurrences
-         * @description **This and following**, deleted: the series ends with the occurrence before this one (its `recurrence` gets `until` at that occurrence's start and loses `count`), and the changes and skips of this and later occurrences are removed. On the series' first occurrence the whole series is deleted, as `DELETE /v1/events/{eventId}`. A feed event returns 409 `managed_by_source`; a Google series is ended (or deleted) in Google first.
+         * @description **This and following**, deleted: the series ends with the occurrence before this one (its `recurrence` gets `until` at that occurrence's start and loses `count`), and the changes and skips of this and later occurrences are removed. On the series' first occurrence the whole series is deleted, as `DELETE /v1/events/{eventId}`. A read-only imported event returns 409 `managed_by_source`.
          */
         post: operations["truncateEventSeries"];
         delete?: never;
@@ -149,7 +149,7 @@ export interface paths {
         };
         /**
          * List calendar sources
-         * @description Every feed (ICS source) and every source an integration syncs (`kind` `external`), oldest first, with its configuration and refresh state. The owner changes a source's name, default reminders, default priority, and enabled here (for an integration's source too; its integration keeps its URL, filter, and refresh). Google calendars Calendar syncs itself are sources too, managed and listed under `/v1/google/calendars`; their ids answer 404 here.
+         * @description Every feed (ICS source) and every source an integration syncs (`kind` `external`), oldest first, with its configuration and refresh state. The owner changes a source's name, default reminders, default priority, and enabled here (for an integration's source too; its integration keeps its URL, filter, and refresh).
          */
         get: operations["listSources"];
         put?: never;
@@ -247,138 +247,6 @@ export interface paths {
         get: operations["getReminderStatus"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/google/connection": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get the Google Calendar connection
-         * @description Whether Google is configured on this server and the state of the owner's one Google connection. Never returns tokens or the client secret. `expired` means Google refused the stored authorization (expired or revoked) and the owner must reconnect; `error` means another refusal, described in `lastError`.
-         */
-        get: operations["getGoogleConnection"];
-        put?: never;
-        /**
-         * Complete a Google authorization
-         * @description Takes the `code` and `state` Google returned to the Dashboard's callback route. The state must come from `authorize` within 10 minutes and is used once. Calendar exchanges the code (with its PKCE verifier), stores the refresh token encrypted, identifies the account from its primary calendar, and stores its calendar list (a new primary calendar starts with sync on). Connecting another account replaces the connection and its calendar choices.
-         */
-        post: operations["connectGoogle"];
-        /**
-         * Disconnect Google Calendar
-         * @description Revokes the authorization at Google (best effort: a failure is recorded in Activity and the connection is removed anyway) and deletes the connection and its calendar choices. Succeeds also without a connection.
-         */
-        delete: operations["disconnectGoogle"];
-        options?: never;
-        head?: never;
-        /**
-         * Change the Google connection's settings
-         * @description `exportEnabled` switches exporting events created in Life OS to the Life OS calendar on or off. Switched on, every upcoming Life OS event (and every later change) is exported; switched off, nothing more is written there (what it holds stays in Google).
-         */
-        patch: operations["updateGoogleConnection"];
-        trace?: never;
-    };
-    "/v1/google/connection/authorize": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Start a Google authorization
-         * @description Returns Google's consent page URL for the Dashboard to open. It asks for offline access with forced consent (so Google issues a refresh token), carries a single-use `state` valid for 10 minutes, and a PKCE (S256) challenge. Google returns the owner to the configured redirect URI (the Dashboard's /calendar/google/callback).
-         */
-        post: operations["authorizeGoogle"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/google/calendars": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List the connected account's Google calendars
-         * @description The calendar list as last read from Google, primary first, then by name, with the owner's sync choice. Empty without a connection.
-         */
-        get: operations["listGoogleCalendars"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/google/calendars/refresh": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Read the calendar list from Google again
-         * @description New calendars are added (sync off, except a new primary calendar), known ones keep the owner's choice, and calendars Google no longer lists are dropped. Refreshes the access token when needed; a refresh token Google refuses marks the connection `expired`.
-         */
-        post: operations["refreshGoogleCalendars"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/google/calendars/{calendarId}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /**
-         * Choose whether a Google calendar syncs
-         * @description Switched on, the calendar is synced right away (its events listed in full) and then every few minutes. Switched off, every event synced from it is removed from Life OS (they stay in Google), its source goes, and Activity records `calendar.source.removed`; switching it on again lists its events in full again.
-         */
-        patch: operations["updateGoogleCalendar"];
-        trace?: never;
-    };
-    "/v1/google/calendars/{calendarId}/sync": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Sync a Google calendar now
-         * @description Reads the changes since the last sync from Google (with `full=true`, every event again, as after an expired sync token) and reconciles the calendar's events, then returns the calendar with its sync state. The request succeeds whether or not the sync does: read `sync.state` and `sync.lastError`. A failed sync keeps the events from the last good one and is retried with backoff.
-         */
-        post: operations["syncGoogleCalendar"];
         delete?: never;
         options?: never;
         head?: never;
@@ -515,7 +383,7 @@ export interface components {
             externalId: string;
         };
         /**
-         * @description `manual`: created in Life OS (the Dashboard, MCP, or a capture). `external`: brought in by an integration (see `/v1/integrations`; `source.provider` and `source.name` say from where). `ics` and `google`: imported by Calendar itself from an ICS/iCal feed or Google Calendar, until those sources are handed over to their integrations.
+         * @description `manual`: created in Life OS (the Dashboard, MCP, or a capture). `external`: brought in by an integration (see `/v1/integrations`; `source.provider` and `source.name` say from where). `ics`: imported by Calendar itself from an ICS/iCal feed, until those sources are handed over to their integration. `google`: legacy, no longer used (Google Calendar is the google-calendar integration, `external`).
          * @enum {string}
          */
         EventSourceKind: "manual" | "ics" | "google" | "external";
@@ -615,33 +483,16 @@ export interface components {
              */
             removedFromSourceAt?: string | null;
             source: components["schemas"]["EventSource"];
-            /** @description Whether the event can be changed through this API beyond its reminders: Life OS events and Google events of calendars the account may edit; not feed events, events of Google calendars the account can only read, or occurrences of a Google rule Calendar cannot hold. */
+            /** @description Whether the event can be changed through this API beyond its reminders and priority: Life OS events, and events of integrations' sources that accept changes (such as Google calendars the account may edit) unless read-only on their own (`readOnlyReason`); not feed events, events of sources that do not accept changes, or occurrences of a rule Calendar cannot hold. */
             editable: boolean;
             /** @description Why the event is not editable, for the owner; null when it is. */
             readOnlyReason?: string | null;
-            google?: components["schemas"]["EventGoogleLink"];
             externalReference?: components["schemas"]["ExternalReference"];
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
             updatedAt: string;
         };
-        /** @description Where the event is in Google Calendar and how its sync stands; null for an event that is not in Google (a feed event, or a Life OS event while Google is not connected or export is off). A Google event is always `synced` (its changes are written to Google first). A Life OS event is `pending` while its latest change waits to be exported to the Life OS calendar, `synced` once Google has it, and `failed` when the last attempt failed (`error`; retried automatically). */
-        EventGoogleLink: {
-            /**
-             * Format: uuid
-             * @description The Google calendar's id in Calendar (see /v1/google/calendars); null before the Life OS calendar exists.
-             */
-            calendarId?: string | null;
-            /** @description The Google calendar's name, such as "Owner" or "Life OS". */
-            calendarName: string;
-            /** @description The event is a Life OS event exported to the Life OS calendar. */
-            lifeOs: boolean;
-            /** @enum {string} */
-            state: "synced" | "pending" | "failed";
-            /** @description Why the last export failed; null otherwise. */
-            error?: string | null;
-        } | null;
         /** @description A timed event needs startAt and endAt (endAt after startAt); an all-day event needs startDate and endDate (endDate not before startDate) and takes no timeZone. */
         CreateEventRequest: {
             title: string;
@@ -888,135 +739,6 @@ export interface components {
              */
             lastSentAt: string | null;
         };
-        /**
-         * @description `not_connected`: no Google account is connected. `connected`: usable. `expired`: Google refused the stored authorization (it expired or was revoked); reconnect. `error`: another refusal, such as a changed client secret; see `lastError`.
-         * @enum {string}
-         */
-        GoogleConnectionStatus: "not_connected" | "connected" | "expired" | "error";
-        GoogleConnection: {
-            /** @description Whether this server has the Google client credentials and token key (LIFE_OS_GOOGLE_CLIENT_ID, LIFE_OS_GOOGLE_CLIENT_SECRET, LIFE_OS_GOOGLE_TOKEN_KEY). Without them nothing can be connected. */
-            configured: boolean;
-            status: components["schemas"]["GoogleConnectionStatus"];
-            /** @description The connected Google account (its primary calendar's id). */
-            accountEmail?: string | null;
-            /** @description The scopes Google granted. */
-            scopes: string[];
-            /** @description Scopes Life OS asks for that Google did not grant (the owner may untick some on the consent page); empty when everything was granted or nothing is connected. */
-            missingScopes: string[];
-            /**
-             * Format: date-time
-             * @description When the account was last connected.
-             */
-            connectedAt?: string | null;
-            /** @description Why the connection is expired or in error; null while connected. */
-            lastError?: string | null;
-            /** @description Whether events created in Life OS are exported to the Life OS calendar (the owner's "Export events created in Life OS"; on by default). */
-            exportEnabled: boolean;
-            lifeOsCalendar?: components["schemas"]["LifeOsCalendar"];
-            export: components["schemas"]["GoogleExportState"];
-        };
-        /** @description The "Life OS" calendar Calendar created in the owner's Google account for the events created in Life OS; null until it exists. Created when Google is connected with export on; if the owner deletes it in Google, Calendar creates it again at the next export and says so in `note`. */
-        LifeOsCalendar: {
-            googleCalendarId: string;
-            /**
-             * Format: uuid
-             * @description Its id in Calendar's calendar list (/v1/google/calendars), where it syncs like the others.
-             */
-            calendarId?: string | null;
-            summary: string;
-            /** Format: date-time */
-            createdAt?: string | null;
-            /** @description What happened to it last, such as that it was deleted in Google and created again; null when nothing needs saying. */
-            note?: string | null;
-        } | null;
-        /** @description How exporting Life OS events goes. */
-        GoogleExportState: {
-            /** @description Life OS events whose latest change waits to be exported. */
-            pending: number;
-            /** @description Life OS events whose last export failed; retried automatically with growing pauses. */
-            failed: number;
-            /** @description The latest export failure. */
-            lastError?: string | null;
-            /** Format: date-time */
-            lastExportedAt?: string | null;
-        };
-        UpdateGoogleConnectionRequest: {
-            exportEnabled: boolean;
-        };
-        GoogleAuthorization: {
-            /** @description Google's consent page; open it in the browser. */
-            url: string;
-        };
-        GoogleConnectRequest: {
-            /** @description The authorization code Google returned. */
-            code: string;
-            /** @description The state Google returned with it. */
-            state: string;
-        };
-        GoogleCalendar: {
-            /** Format: uuid */
-            id: string;
-            /** @description The calendar's id at Google (the account's address for the primary calendar). */
-            googleCalendarId: string;
-            /** @description The calendar's name as the owner sees it in Google Calendar. */
-            summary: string;
-            /** @description Its background color in Google Calendar, such as #9fe1e7. */
-            color?: string | null;
-            /**
-             * @description The account's access to the calendar.
-             * @enum {string}
-             */
-            accessRole: "owner" | "writer" | "reader" | "freeBusyReader";
-            /** @description The account's primary calendar. */
-            primary: boolean;
-            /** @description Whether the calendar syncs into Life OS. */
-            syncEnabled: boolean;
-            /** @description This is the Life OS calendar, where events created in Life OS are exported. */
-            lifeOs: boolean;
-            sync: components["schemas"]["GoogleCalendarSync"];
-            /** Format: date-time */
-            createdAt: string;
-            /** Format: date-time */
-            updatedAt: string;
-        };
-        /** @description The calendar's sync state. Read-only. Its events are imported as source `sourceId` (`source.kind` `google`, `source.name` the calendar's name). */
-        GoogleCalendarSync: {
-            /**
-             * @description `off`: not chosen to sync. `pending`: chosen, waiting for its first sync. `synced`: the last sync succeeded. `failing`: the last sync failed (see `lastError`); it is retried automatically and the events from the last good sync are kept.
-             * @enum {string}
-             */
-            state: "off" | "pending" | "synced" | "failing";
-            /**
-             * Format: uuid
-             * @description The Calendar source its events carry as `source.sourceId`; null while it does not sync (or before its first sync).
-             */
-            sourceId?: string | null;
-            /** Format: date-time */
-            lastAttemptAt?: string | null;
-            /**
-             * Format: date-time
-             * @description When it was last synced successfully.
-             */
-            lastSyncedAt?: string | null;
-            /**
-             * Format: date-time
-             * @description When it is synced next (every few minutes, later after failures).
-             */
-            nextSyncAt?: string | null;
-            /** @description Why the last sync failed; null after a success. */
-            lastError?: string | null;
-            /** @description Failed syncs since the last success; drives the retry backoff. */
-            consecutiveFailures: number;
-            lastCounts?: components["schemas"]["SourceRefreshCounts"];
-            /** @description A sync is running now. */
-            syncing: boolean;
-        };
-        GoogleCalendarList: {
-            items: components["schemas"]["GoogleCalendar"][];
-        };
-        UpdateGoogleCalendarRequest: {
-            syncEnabled: boolean;
-        };
         IntegrationSource: {
             /**
              * Format: uuid
@@ -1235,7 +957,7 @@ export interface components {
         SourceKind: components["schemas"]["EventSourceKind"];
         /** @description Only events imported from this source. */
         SourceId: string;
-        /** @description Only events that can be changed through this API (`editable`): Life OS events, Google events of calendars the account may edit that are single events or series Calendar holds, and events of integrations' sources that accept changes (unless read-only on their own); not feed events, read-only Google calendars, or occurrences expanded from a Google rule. The AI looks for the events to change this way. */
+        /** @description Only events that can be changed through this API (`editable`): Life OS events and events of integrations' sources that accept changes (unless read-only on their own, such as one occurrence of a rule Calendar cannot hold); not feed events or the events of sources that do not accept changes. The AI looks for the events to change this way. */
         Editable: boolean;
         EventId: string;
         /** @description The occurrence's `occurrence.recurrenceId` from a listing (URL-encoded): an RFC 3339 instant for a timed series (2026-10-12T16:00:00Z), a date for an all-day one (2026-10-24). */
@@ -1268,7 +990,7 @@ export interface operations {
                 sourceKind?: components["parameters"]["SourceKind"];
                 /** @description Only events imported from this source. */
                 sourceId?: components["parameters"]["SourceId"];
-                /** @description Only events that can be changed through this API (`editable`): Life OS events, Google events of calendars the account may edit that are single events or series Calendar holds, and events of integrations' sources that accept changes (unless read-only on their own); not feed events, read-only Google calendars, or occurrences expanded from a Google rule. The AI looks for the events to change this way. */
+                /** @description Only events that can be changed through this API (`editable`): Life OS events and events of integrations' sources that accept changes (unless read-only on their own, such as one occurrence of a rule Calendar cannot hold); not feed events or the events of sources that do not accept changes. The AI looks for the events to change this way. */
                 editable?: components["parameters"]["Editable"];
                 /** @description The previous page's nextCursor. Opaque; only valid with the parameters it was returned for. */
                 cursor?: components["parameters"]["Cursor"];
@@ -1353,7 +1075,7 @@ export interface operations {
                 sourceKind?: components["parameters"]["SourceKind"];
                 /** @description Only events imported from this source. */
                 sourceId?: components["parameters"]["SourceId"];
-                /** @description Only events that can be changed through this API (`editable`): Life OS events, Google events of calendars the account may edit that are single events or series Calendar holds, and events of integrations' sources that accept changes (unless read-only on their own); not feed events, read-only Google calendars, or occurrences expanded from a Google rule. The AI looks for the events to change this way. */
+                /** @description Only events that can be changed through this API (`editable`): Life OS events and events of integrations' sources that accept changes (unless read-only on their own, such as one occurrence of a rule Calendar cannot hold); not feed events or the events of sources that do not accept changes. The AI looks for the events to change this way. */
                 editable?: components["parameters"]["Editable"];
                 /** @description The previous page's nextCursor. Opaque; only valid with the parameters it was returned for. */
                 cursor?: components["parameters"]["Cursor"];
@@ -1451,15 +1173,8 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The event is imported from a feed (managed_by_source) or read-only in Google (google_read_only), it changed in Google meanwhile (google_conflict), or the Google connection expired (google_expired) */
+            /** @description The event is imported and read-only here (managed_by_source) */
             409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Google could not be reached or refused the change (google_unavailable, google_rejected) */
-            502: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1505,15 +1220,8 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The event kept changing concurrently (retry the update), it is imported and the update names more than its reminders and priority (managed_by_source, google_read_only), it changed in Google meanwhile (google_conflict) or was deleted there (google_deleted), or the Google connection expired (google_expired) */
+            /** @description The event kept changing concurrently (retry the update), or it is imported and the update names more than its reminders and priority (managed_by_source) */
             409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Google could not be reached or refused the change (google_unavailable, google_rejected); nothing changed */
-            502: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1599,15 +1307,8 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The event is imported from a feed (managed_by_source) or read-only in Google (google_read_only), or it changed in Google meanwhile (google_conflict) */
+            /** @description The event is imported and read-only here (managed_by_source) */
             409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Google could not be reached or refused the change (google_unavailable, google_rejected) */
-            502: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1664,15 +1365,8 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The event is imported from a feed (managed_by_source) or read-only in Google (google_read_only), it changed in Google meanwhile (google_conflict), or it kept changing concurrently (retry) */
+            /** @description The event is imported and read-only here (managed_by_source), or it kept changing concurrently (retry) */
             409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Google could not be reached or refused the change (google_unavailable, google_rejected) */
-            502: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1714,15 +1408,8 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The event is imported from a feed (managed_by_source) or read-only in Google (google_read_only), or it changed in Google meanwhile (google_conflict) */
+            /** @description The event is imported and read-only here (managed_by_source) */
             409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Google could not be reached or refused the change (google_unavailable, google_rejected) */
-            502: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2026,352 +1713,6 @@ export interface operations {
             };
             /** @description Invalid request */
             400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    getGoogleConnection: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Connection */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GoogleConnection"];
-                };
-            };
-            /** @description Invalid request */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    connectGoogle: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["GoogleConnectRequest"];
-            };
-        };
-        responses: {
-            /** @description The new connection */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GoogleConnection"];
-                };
-            };
-            /** @description Invalid request, no valid X-Life-OS-Actor (actor_required), a state that is unknown, expired, or used (invalid_state), or a code Google refused (google_code_rejected) */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The owner did not grant reading the calendar list (google_scope_missing) */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Google refused or failed the request (google_rejected, google_unavailable) */
-            502: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Google is not configured on this server (google_not_configured) */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    disconnectGoogle: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Disconnected */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No valid X-Life-OS-Actor (actor_required) */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    updateGoogleConnection: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["UpdateGoogleConnectionRequest"];
-            };
-        };
-        responses: {
-            /** @description The connection */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GoogleConnection"];
-                };
-            };
-            /** @description Invalid request, or no valid X-Life-OS-Actor (actor_required) */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Not connected (google_not_connected) */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    authorizeGoogle: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Consent page */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GoogleAuthorization"];
-                };
-            };
-            /** @description No valid X-Life-OS-Actor (actor_required) */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Google is not configured on this server (google_not_configured) */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    listGoogleCalendars: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Calendars */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GoogleCalendarList"];
-                };
-            };
-            /** @description Invalid request */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    refreshGoogleCalendars: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Calendars */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GoogleCalendarList"];
-                };
-            };
-            /** @description No valid X-Life-OS-Actor (actor_required) */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Not connected (google_not_connected), or the authorization expired or was revoked (google_expired) */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Google refused or failed the request (google_rejected, google_unavailable) */
-            502: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Google is not configured on this server (google_not_configured) */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    updateGoogleCalendar: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description The calendar's id in Calendar (not its Google id). */
-                calendarId: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["UpdateGoogleCalendarRequest"];
-            };
-        };
-        responses: {
-            /** @description Calendar */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GoogleCalendar"];
-                };
-            };
-            /** @description Invalid request, or no valid X-Life-OS-Actor (actor_required) */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Calendar not found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-        };
-    };
-    syncGoogleCalendar: {
-        parameters: {
-            query?: {
-                /** @description List every event again instead of the changes since the last sync. */
-                full?: boolean;
-            };
-            header?: never;
-            path: {
-                /** @description The calendar's id in Calendar (not its Google id). */
-                calendarId: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description The calendar after the sync */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GoogleCalendar"];
-                };
-            };
-            /** @description Invalid request, or no valid X-Life-OS-Actor (actor_required) */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Calendar not found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The calendar does not sync (google_sync_disabled), it is syncing right now (sync_in_progress), its sync changed meanwhile (conflict), or Google is not connected (google_not_connected) or its authorization expired (google_expired) */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Google is not configured on this server (google_not_configured) */
-            503: {
                 headers: {
                     [name: string]: unknown;
                 };

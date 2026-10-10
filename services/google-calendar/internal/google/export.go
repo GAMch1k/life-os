@@ -13,8 +13,8 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/GAMch1k/life-os/pkg/activity"
-	store "github.com/GAMch1k/life-os/services/calendar/internal/repository/generated"
-	"github.com/GAMch1k/life-os/services/calendar/internal/sources"
+	store "github.com/GAMch1k/life-os/services/google-calendar/internal/repository/generated"
+	"github.com/GAMch1k/life-os/services/google-calendar/internal/sources"
 )
 
 // Exporting events created in Life OS (P11-03). Each change of a Life OS

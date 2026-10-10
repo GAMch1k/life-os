@@ -14,8 +14,9 @@ SELECT * FROM calendar_sources WHERE id = $1;
 
 -- name: ListSources :many
 -- The feeds (ICS sources) and the sources integrations sync (external).
--- Google calendars Calendar syncs itself are sources too, managed through
--- the Google connection (google_calendars), and are not listed here.
+-- Legacy sources of Calendar's former in-process Google sync (kind google,
+-- handed over to the google-calendar integration by migration 000015) are
+-- not listed.
 SELECT * FROM calendar_sources WHERE kind IN ('ics', 'external') ORDER BY created_at, id;
 
 -- name: UpdateSource :one
@@ -36,8 +37,7 @@ RETURNING *;
 
 -- name: DeleteSource :execrows
 -- Deletes a feed or an integration's source and its imported events (ON
--- DELETE CASCADE). A Google calendar's source goes when its calendar stops
--- syncing.
+-- DELETE CASCADE).
 DELETE FROM calendar_sources WHERE id = $1 AND kind IN ('ics', 'external');
 
 -- name: ListDueSources :many

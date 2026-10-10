@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/GAMch1k/life-os/services/calendar/internal/sources"
+	"github.com/GAMch1k/life-os/services/google-calendar/internal/sources"
 )
 
 var (

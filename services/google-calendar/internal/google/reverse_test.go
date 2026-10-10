@@ -10,7 +10,7 @@ import (
 
 	googleuuid "github.com/google/uuid"
 
-	"github.com/GAMch1k/life-os/services/calendar/internal/sources"
+	"github.com/GAMch1k/life-os/services/google-calendar/internal/sources"
 )
 
 func ptr[T any](value T) *T { return &value }

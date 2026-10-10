@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
-	store "github.com/GAMch1k/life-os/services/calendar/internal/repository/generated"
+	store "github.com/GAMch1k/life-os/services/google-calendar/internal/repository/generated"
 )
 
 // Two-way sync of the calendars chosen to sync (P11-03). Google holds the

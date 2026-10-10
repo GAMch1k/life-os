@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/GAMch1k/life-os/services/calendar/internal/google"
+	"github.com/GAMch1k/life-os/services/google-calendar/internal/google"
 )
 
 // Client credentials the fake accepts.

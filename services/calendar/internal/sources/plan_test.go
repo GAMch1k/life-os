@@ -218,7 +218,7 @@ func TestSourceActor(t *testing.T) {
 	}
 }
 
-// seriesItem is a weekly Google series with one skipped occurrence.
+// seriesItem is a weekly series (such as Google's) with one skipped occurrence.
 func seriesItem() Item {
 	item := Item{Item: timedItem("standup", "Standup", "2026-10-12T07:00:00Z"), Recurrence: &Recurrence{Frequency: "weekly", Interval: 1, ByWeekday: []string{"MO", "WE"}}}
 	item.Reminders = &Reminders{UseDefault: true, Reminders: []Reminder{}}
@@ -229,7 +229,7 @@ func seriesItem() Item {
 // storedSeries is what a sync wrote for item: the event and its exceptions.
 func storedSeries(item Item) (store.Event, []store.EventException) {
 	event := stored(item.Item)
-	event.SourceKind = "google"
+	event.SourceKind = "external"
 	frequency, interval := item.Recurrence.Frequency, int32(item.Recurrence.Interval)
 	event.RecurrenceFrequency, event.RecurrenceInterval, event.RecurrenceByWeekday = &frequency, &interval, item.Recurrence.ByWeekday
 	own, whole, _ := item.Reminders.encode()

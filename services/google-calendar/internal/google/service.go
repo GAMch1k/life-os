@@ -15,7 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/GAMch1k/life-os/pkg/activity"
-	store "github.com/GAMch1k/life-os/services/calendar/internal/repository/generated"
+	store "github.com/GAMch1k/life-os/services/google-calendar/internal/repository/generated"
 )
 
 // Connection statuses. not_connected has no row.

@@ -8,7 +8,7 @@ import (
 
 	googleuuid "github.com/google/uuid"
 
-	"github.com/GAMch1k/life-os/services/calendar/internal/sources"
+	"github.com/GAMch1k/life-os/services/google-calendar/internal/sources"
 )
 
 // The reverse of mapping.go: an event as Life OS holds it, written to

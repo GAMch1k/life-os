@@ -16,8 +16,8 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"github.com/GAMch1k/life-os/pkg/activity"
-	store "github.com/GAMch1k/life-os/services/calendar/internal/repository/generated"
-	"github.com/GAMch1k/life-os/services/calendar/internal/sources"
+	store "github.com/GAMch1k/life-os/services/google-calendar/internal/repository/generated"
+	"github.com/GAMch1k/life-os/services/google-calendar/internal/sources"
 )
 
 // Sync timing.
