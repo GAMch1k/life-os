@@ -1,4 +1,10 @@
-import { expect, test, type APIRequestContext, type Page } from "./fixtures";
+import {
+  expect,
+  test,
+  type APIRequestContext,
+  type Locator,
+  type Page,
+} from "./fixtures";
 
 const enabled = Boolean(process.env.LIFE_OS_E2E_URL);
 
@@ -79,6 +85,54 @@ async function pickDay(page: Page, today: string, day: string) {
 const region = (page: Page, name: string) =>
   page.getByRole("region", { name, exact: true });
 
+const UNDATED = "Unscheduled / No date";
+const undatedToggle = (page: Page) =>
+  page.locator('[aria-controls="tasks-undated-list"]');
+const completedToggle = (page: Page) =>
+  page.locator('[aria-controls="tasks-completed-list"]');
+
+/** Expands a section toggle, retrying a click made before hydration. */
+async function expand(toggle: Locator) {
+  await expect(async () => {
+    if ((await toggle.getAttribute("aria-expanded")) !== "true")
+      await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true", {
+      timeout: 1_000,
+    });
+  }).toPass();
+}
+
+/**
+ * No date lists the newest five undated Tasks until expanded, and other specs
+ * add undated Tasks to the shared stack, so list them all before looking for
+ * one. Without more than five there is nothing to expand.
+ */
+async function showAllUndated(page: Page) {
+  if (await undatedToggle(page).count()) await expand(undatedToggle(page));
+}
+
+/** Creates Tasks a few at a time in parallel. */
+async function createTasks(
+  request: APIRequestContext,
+  tasks: { title: string; dueAt?: string }[],
+) {
+  const created: Task[] = [];
+  for (let start = 0; start < tasks.length; start += 20)
+    created.push(
+      ...(await Promise.all(
+        tasks
+          .slice(start, start + 20)
+          .map(({ title, dueAt }) => createTask(request, title, dueAt)),
+      )),
+    );
+  return created;
+}
+
+async function completeTask(request: APIRequestContext, id: string) {
+  const response = await request.post(`/api/tasks/v1/tasks/${id}/complete`);
+  expect(response.ok()).toBeTruthy();
+}
+
 test.describe("Tasks workspace", () => {
   test.skip(!enabled, "set LIFE_OS_E2E_URL to run against the isolated stack");
   // Days and times follow the browser's timezone, here far from the
@@ -104,12 +158,11 @@ test.describe("Tasks workspace", () => {
     await createTask(request, titles.unscheduled);
 
     await page.reload();
+    await showAllUndated(page);
     await expect(region(page, "Overdue")).toContainText(titles.overdue);
     await expect(region(page, "Today")).toContainText(titles.today);
     await expect(region(page, "Upcoming")).toContainText(titles.upcoming);
-    await expect(region(page, "Unscheduled / No date")).toContainText(
-      titles.unscheduled,
-    );
+    await expect(region(page, UNDATED)).toContainText(titles.unscheduled);
 
     // Schedule projects the focused day's Monday-to-Sunday week, and undated
     // work stays listed beside it.
@@ -117,9 +170,7 @@ test.describe("Tasks workspace", () => {
     await expect(page.getByTestId(`schedule-day-${today}`)).toContainText(
       titles.today,
     );
-    await expect(region(page, "Unscheduled / No date")).toContainText(
-      titles.unscheduled,
-    );
+    await expect(region(page, UNDATED)).toContainText(titles.unscheduled);
     await pickDay(page, today, upcomingDay);
     await expect(page.getByTestId(`schedule-day-${upcomingDay}`)).toContainText(
       titles.upcoming,
@@ -130,9 +181,7 @@ test.describe("Tasks workspace", () => {
     const focused = page.getByTestId("tasks-selected-day");
     await expect(focused).toContainText(titles.upcoming);
     await expect(region(page, "Upcoming")).not.toContainText(titles.upcoming);
-    await expect(region(page, "Unscheduled / No date")).toContainText(
-      titles.unscheduled,
-    );
+    await expect(region(page, UNDATED)).toContainText(titles.unscheduled);
     await page.getByRole("button", { name: "Back to today" }).click();
     await expect(focused).toContainText(titles.today);
     await expect(region(page, "Upcoming")).toContainText(titles.upcoming);
@@ -149,6 +198,7 @@ test.describe("Tasks workspace", () => {
     const task = await createTask(request, original);
 
     const { timeZone } = await openTasks(page);
+    await showAllUndated(page);
     await page.getByLabel(`Edit ${original}`).click();
     await page.getByLabel("Task title", { exact: true }).fill(renamed);
     await page.getByLabel("Task notes", { exact: true }).fill(notes);
@@ -163,12 +213,15 @@ test.describe("Tasks workspace", () => {
 
     await page.getByLabel(`Edit ${renamed}`).click();
     await page.getByRole("button", { name: "Clear date" }).click();
-    await expect(region(page, "Unscheduled / No date")).toContainText(renamed);
+    await expect(region(page, UNDATED)).toContainText(renamed);
 
+    // Completed is collapsed by default; a Task completed here joins it.
     await page.getByLabel(`Complete ${renamed}`).click();
+    await expect(region(page, UNDATED)).not.toContainText(renamed);
+    await expand(completedToggle(page));
     await expect(region(page, "Completed")).toContainText(renamed);
     await page.getByLabel(`Reopen ${renamed}`).click();
-    await expect(region(page, "Unscheduled / No date")).toContainText(renamed);
+    await expect(region(page, UNDATED)).toContainText(renamed);
 
     await page.reload();
     const persisted = await request.get(`/api/tasks/v1/tasks/${task.id}`);
@@ -180,6 +233,116 @@ test.describe("Tasks workspace", () => {
       completed: false,
     });
     expect(persistedTask.dueAt).toBeFalsy();
+  });
+});
+
+test.describe("Tasks workspace sections", () => {
+  test.skip(!enabled, "set LIFE_OS_E2E_URL to run against the isolated stack");
+
+  test("No date counts every undated Task, lists the newest five, and remembers Show all", async ({
+    page,
+    request,
+  }) => {
+    const stamp = Date.now();
+    await createTasks(
+      request,
+      Array.from({ length: 7 }, (_, index) => ({
+        title: `Undated ${stamp} ${index}`,
+      })),
+    );
+
+    await openTasks(page);
+    const section = region(page, UNDATED);
+    const rows = page.locator("#tasks-undated-list li");
+    const toggle = undatedToggle(page);
+    // Other specs share the stack, so read the total rather than assume it.
+    const total = Number(
+      await section.locator("h2 + span").first().textContent(),
+    );
+    expect(total).toBeGreaterThanOrEqual(7);
+    await expect(rows).toHaveCount(5);
+    await expect(toggle).toHaveText(`Show all ${total}`);
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+    await expand(toggle);
+    await expect(rows).toHaveCount(total);
+    await expect(toggle).toHaveText("Show fewer");
+    for (let index = 0; index < 7; index++)
+      await expect(section).toContainText(`Undated ${stamp} ${index}`);
+
+    // The choice survives a reload, applied once the page has hydrated.
+    await page.reload();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await expect(section).toContainText(`Undated ${stamp} 0`);
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(rows).toHaveCount(5);
+    await page.reload();
+    await expect(page.getByTestId("tasks-workspace")).toBeVisible();
+    await expect(rows).toHaveCount(5);
+  });
+
+  test("a Task completed now is listed under Completed once expanded, and the section stays open", async ({
+    page,
+    request,
+  }) => {
+    const stamp = Date.now();
+    const title = `Done this week ${stamp}`;
+    const task = await createTask(request, title);
+    await completeTask(request, task.id);
+
+    await openTasks(page);
+    const section = region(page, "Completed");
+    const toggle = completedToggle(page);
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(toggle).toContainText(/Completed\s*\d+\+? this week/);
+    await expect(section).not.toContainText(title);
+
+    await expand(toggle);
+    await expect(section).toContainText("Completed in the last 7 days");
+    await expect(section).toContainText(title);
+
+    await page.reload();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await expect(section).toContainText(title);
+  });
+
+  test("an undated Task stays listed behind more than 100 dated ones", async ({
+    page,
+    request,
+  }) => {
+    const stamp = Date.now();
+    const { today } = await openTasks(page);
+    // Well after every other spec's dates, so they land at the end of
+    // Upcoming and Home's urgent card never sees them.
+    const due = noon(shift(today, 90));
+    const dated = await createTasks(
+      request,
+      Array.from({ length: 101 }, (_, index) => ({
+        title: `Bulk dated ${stamp} ${index}`,
+        dueAt: due,
+      })),
+    );
+    const undated = `Behind the bulk ${stamp}`;
+    await createTask(request, undated);
+
+    try {
+      await page.reload();
+      await showAllUndated(page);
+      await expect(region(page, UNDATED)).toContainText(undated);
+      // Every dated one is listed too: the page read past the first 100.
+      await expect(
+        region(page, "Upcoming").getByText(`Bulk dated ${stamp} `),
+      ).toHaveCount(101);
+    } finally {
+      // Keep the shared stack's open lists small for the other specs.
+      for (let start = 0; start < dated.length; start += 20)
+        await Promise.all(
+          dated
+            .slice(start, start + 20)
+            .map((task) => completeTask(request, task.id)),
+        );
+    }
   });
 });
 
@@ -219,6 +382,7 @@ test.describe("Tasks workspace in a German browser in Berlin", () => {
     ).toBeVisible();
     await page.getByRole("button", { name: "List", exact: true }).click();
     await expect(region(page, "Upcoming")).toContainText(short);
+    await showAllUndated(page);
     expect(hydrationErrors()).toEqual([]);
 
     // The date picker is a calendar grid whose weeks start on Monday (its
@@ -253,7 +417,7 @@ test.describe("Tasks workspace in a German browser in Berlin", () => {
     const focused = page.getByTestId("tasks-selected-day");
     await expect(focused).toContainText(short);
     await expect(focused).toContainText(long);
-    await expect(region(page, "Unscheduled / No date")).toContainText(undated);
+    await expect(region(page, UNDATED)).toContainText(undated);
 
     // Phones reflow instead of scrolling sideways, with the date picker
     // collapsed and expanded.

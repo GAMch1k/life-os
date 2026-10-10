@@ -3,6 +3,8 @@ import test from "node:test";
 
 import type { Task } from "./tasks-summary";
 import {
+  type TaskPage,
+  collectTasks,
   dayLabel,
   daysWithTasks,
   dueDay,
@@ -10,6 +12,8 @@ import {
   fromDateTimeInput,
   groupTasks,
   isDateOnly,
+  recentCompletedSince,
+  splitCompleted,
   toDateTimeInput,
   weekOf,
 } from "./tasks-workspace";
@@ -198,4 +202,107 @@ test("the edit form reads and writes the owner's wall time", () => {
     toDateTimeInput(fromDateTimeInput("2027-03-28T23:30", BERLIN), BERLIN),
     "2027-03-28T23:30",
   );
+});
+
+/** A fake Tasks list of `total` Tasks served `size` at a time. */
+function pagedList(total: number, size: number, failOn?: number) {
+  const tasks = Array.from({ length: total }, (_, index) => task(`t${index}`));
+  const requests: (string | undefined)[] = [];
+  const fetchPage = async (cursor?: string): Promise<TaskPage | undefined> => {
+    requests.push(cursor);
+    const start = cursor ? Number(cursor) : 0;
+    if (requests.length === failOn) return undefined;
+    const end = Math.min(start + size, total);
+    return {
+      items: tasks.slice(start, end),
+      nextCursor: end < total ? String(end) : null,
+    };
+  };
+  return { fetchPage, requests };
+}
+
+test("loading follows the cursor until the list ends", async () => {
+  const { fetchPage, requests } = pagedList(250, 100);
+  const result = await collectTasks(fetchPage, { cap: 1000 });
+  assert.equal(result?.items.length, 250);
+  assert.equal(result?.items[249].id, "t249");
+  assert.equal(result?.nextCursor, null);
+  assert.deepEqual(requests, [undefined, "100", "200"]);
+});
+
+test("loading stops at the cap and says the list goes on", async () => {
+  const { fetchPage, requests } = pagedList(1500, 100);
+  const result = await collectTasks(fetchPage, { cap: 1000 });
+  assert.equal(result?.items.length, 1000);
+  assert.equal(result?.nextCursor, "1000");
+  assert.equal(requests.length, 10);
+  // Exactly the cap with nothing after it is the whole list.
+  const exact = await collectTasks(pagedList(1000, 100).fetchPage, {
+    cap: 1000,
+  });
+  assert.equal(exact?.nextCursor, null);
+});
+
+test("loading stops once the loaded Tasks are enough", async () => {
+  const { fetchPage, requests } = pagedList(500, 100);
+  const result = await collectTasks(fetchPage, {
+    cap: 1000,
+    enough: (items) => items.length >= 150,
+  });
+  assert.equal(result?.items.length, 200);
+  assert.equal(result?.nextCursor, "200");
+  assert.equal(requests.length, 2);
+});
+
+test("a failed page fails the whole load instead of passing for all of it", async () => {
+  const { fetchPage } = pagedList(300, 100, 2);
+  assert.equal(await collectTasks(fetchPage, { cap: 1000 }), undefined);
+});
+
+test("undated Tasks list newest first and completed ones most recent first", () => {
+  const created = (id: string, createdAt: string): Task => ({
+    ...task(id),
+    createdAt,
+  });
+  const done = (id: string, completedAt?: string): Task => ({
+    ...task(id, undefined, true),
+    ...(completedAt ? { completedAt } : {}),
+  });
+  const groups = groupTasks(
+    [
+      created("old", "2026-09-01T00:00:00Z"),
+      done("monday", "2026-10-05T09:00:00Z"),
+      created("new", "2026-10-09T00:00:00Z"),
+      done("unknown"),
+      done("friday", "2026-10-09T09:00:00Z"),
+      created("middle", "2026-10-01T00:00:00Z"),
+    ],
+    { today: "2026-10-10", selected: "2026-10-10", timeZone: BERLIN },
+  );
+  assert.deepEqual(ids(groups.unscheduled), ["new", "middle", "old"]);
+  assert.deepEqual(ids(groups.completed), ["friday", "monday", "unknown"]);
+});
+
+test("recently completed means the owner's last seven days", () => {
+  // Today and the six days before, from the owner's midnight.
+  const since = recentCompletedSince("2026-10-10", BERLIN);
+  assert.equal(since.toISOString(), "2026-10-03T22:00:00.000Z");
+  assert.equal(
+    recentCompletedSince("2026-10-10", "America/New_York").toISOString(),
+    "2026-10-04T04:00:00.000Z",
+  );
+  const done = (id: string, completedAt: string): Task => ({
+    ...task(id, undefined, true),
+    completedAt,
+  });
+  const { recent, older } = splitCompleted(
+    [
+      done("today", "2026-10-10T08:00:00Z"),
+      done("first-day", "2026-10-03T22:00:00Z"),
+      done("just-before", "2026-10-03T21:59:59Z"),
+    ],
+    since,
+  );
+  assert.deepEqual(ids(recent), ["today", "first-day"]);
+  assert.deepEqual(ids(older), ["just-before"]);
 });
