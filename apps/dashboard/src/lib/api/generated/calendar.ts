@@ -111,7 +111,7 @@ export interface paths {
         put?: never;
         /**
          * Change this and following occurrences
-         * @description **This and following**: the series ends with the occurrence before this one (its `recurrence` gets `until` at that occurrence's start and loses `count`), and a new series (a new event id) starts at this occurrence with the body's changes, applied as for updating an event. Without a `recurrence` in the body the new series repeats like the old one; a `count` rule is shared out: the old series keeps the occurrences before, the new one the remaining count. Times in the body are the new series' start and end; leave them out to start it at this occurrence's original time. Occurrence changes and skips from this occurrence on move to the new series when their occurrence still exists there (the same original start: no change of time, kind, time zone, or rule), otherwise they are dropped; the fields the body sets replace this occurrence's own changes to them. Returns the new series (201). On the series' first occurrence nothing is split: the body changes the series itself, as `PATCH /v1/events/{eventId}`, and the series is returned (200). An imported event returns 409 `managed_by_source`.
+         * @description **This and following**: the series ends with the occurrence before this one (its `recurrence` gets `until` at that occurrence's start and loses `count`), and a new series (a new event id) starts at this occurrence with the body's changes, applied as for updating an event. Without a `recurrence` in the body the new series repeats like the old one (`recurrence: null` makes it a single event); a `count` rule is shared out: the old series keeps the occurrences before, the new one the remaining count. Times in the body are the new series' start and end; leave them out to start it at this occurrence's original time. Occurrence changes and skips from this occurrence on move to the new series when their occurrence still exists there (the same original start: no change of time, kind, time zone, or rule), otherwise they are dropped; the fields the body sets replace this occurrence's own changes to them. Returns the new series (201). On the series' first occurrence nothing is split: the body changes the series itself, as `PATCH /v1/events/{eventId}`, and the series is returned (200). An imported event returns 409 `managed_by_source`.
          */
         post: operations["splitEventSeries"];
         delete?: never;
@@ -409,7 +409,8 @@ export interface components {
             /** Format: date */
             endDate?: string | null;
             timeZone?: string | null;
-            recurrence?: components["schemas"]["Recurrence"];
+            /** @description Replaces the rule. Null stops the event repeating (on a split: the new series does not repeat). */
+            recurrence?: components["schemas"]["Recurrence"] | null;
             /** @description Replaces the event's own reminders. Null returns the event to its defaults alone: no own reminders, and `useDefaultReminders` true unless the body sets it. */
             reminders?: components["schemas"]["Reminder"][] | null;
             /** @description Turns the default reminders on or off; the event's own reminders stay. */

@@ -243,7 +243,8 @@ paths:
         loses `count`), and a new series (a new event id) starts at this
         occurrence with the body's changes, applied as for updating an event.
         Without a `recurrence` in the body the new series repeats like the old
-        one; a `count` rule is shared out: the old series keeps the
+        one (`recurrence: null` makes it a single event); a `count` rule is
+        shared out: the old series keeps the
         occurrences before, the new one the remaining count. Times in the
         body are the new series' start and end; leave them out to start it at
         this occurrence's original time. Occurrence changes and skips from
@@ -542,7 +543,7 @@ components:
         startDate: {type: string, format: date, nullable: true}
         endDate: {type: string, format: date, nullable: true}
         timeZone: {type: string, nullable: true}
-        recurrence: {$ref: '#/components/schemas/Recurrence', nullable: true}
+        recurrence: {allOf: [{$ref: '#/components/schemas/Recurrence'}], nullable: true, description: 'Replaces the rule. Null stops the event repeating (on a split: the new series does not repeat).'}
         reminders: {type: array, nullable: true, maxItems: 10, items: {$ref: '#/components/schemas/Reminder'}, description: 'Replaces the event''s own reminders. Null returns the event to its defaults alone: no own reminders, and `useDefaultReminders` true unless the body sets it.'}
         useDefaultReminders: {type: boolean, description: Turns the default reminders on or off; the event's own reminders stay.}
         status: {$ref: '#/components/schemas/EventStatus'}

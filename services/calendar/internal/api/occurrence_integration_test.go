@@ -419,3 +419,55 @@ func TestOccurrenceChangesAreRecordedInActivity(t *testing.T) {
 	}
 	expectRecorded(t, recorder, &seen, eventDeleted)
 }
+
+// The Dashboard's proxy decodes path segments, so recurrence ids arrive
+// with literal colons (or an offset's "+"); encoded ones work as well.
+func TestOccurrencePathsTakeLiteralRecurrenceIDs(t *testing.T) {
+	c := newAPIClient(t)
+	gym := gymSeries(c, nil)
+	base := "/v1/events/" + gym.Id.String() + "/occurrences/"
+	if got := c.event(http.MethodGet, base+"2026-10-17T05:00:00Z", nil, http.StatusOK); got.Occurrence.RecurrenceId != "2026-10-17T05:00:00Z" {
+		t.Fatalf("literal colons: %+v", got.Occurrence)
+	}
+	if got := c.event(http.MethodGet, base+"2026-10-17T05%3A00%3A00Z", nil, http.StatusOK); got.Occurrence.RecurrenceId != "2026-10-17T05:00:00Z" {
+		t.Fatalf("encoded colons: %+v", got.Occurrence)
+	}
+	if got := c.event(http.MethodPatch, base+"2026-10-24T07:00:00+02:00", `{"status":"cancelled"}`, http.StatusOK); got.Status != generated.Cancelled || got.Occurrence.RecurrenceId != "2026-10-24T05:00:00Z" {
+		t.Fatalf("an offset id: %+v", got)
+	}
+	swim := c.event(http.MethodPost, base+"2026-10-31T06:00:00Z/split", `{"title":"Swim"}`, http.StatusCreated)
+	if status, raw := c.do(http.MethodPost, "/v1/events/"+swim.Id.String()+"/occurrences/2026-11-14T06:00:00Z/truncate", nil); status != http.StatusNoContent {
+		t.Fatalf("truncate with literal colons: %d %s", status, raw)
+	}
+	equal(t, "exceptions", c.exceptionKeys(gym.Id), []string{"2026-10-24T05:00:00Z"})
+	equal(t, "swim", occurrenceStarts(c.list("/v1/events?"+q("from", "2026-10-25T00:00:00Z", "to", "2027-01-01T00:00:00Z")).Items), []string{
+		"Swim 2026-10-31T06:00:00Z *", "Swim 2026-11-07T06:00:00Z *",
+	})
+}
+
+// recurrence: null stops a series repeating (All events), or makes the new
+// series of a split a single event.
+func TestNullRecurrenceStopsRepeating(t *testing.T) {
+	c := newAPIClient(t)
+	gym := gymSeries(c, nil)
+	c.event(http.MethodPatch, occurrencePath(gym.Id, "2026-10-10T05:00:00Z", ""), `{"status":"cancelled"}`, http.StatusOK)
+	// This and following becomes one last, single event on 17 October.
+	last := c.event(http.MethodPost, occurrencePath(gym.Id, "2026-10-17T05:00:00Z", "/split"), `{"recurrence":null,"title":"Last gym"}`, http.StatusCreated)
+	if last.Recurrence != nil || last.StartAt.Format(time.RFC3339) != "2026-10-17T05:00:00Z" {
+		t.Fatalf("split into a single event = %+v", last)
+	}
+	window := "/v1/events?" + q("from", "2026-10-01T00:00:00Z", "to", "2027-01-01T00:00:00Z", "includeCancelled", "true")
+	equal(t, "split", occurrenceLabels(c.list(window).Items), []string{
+		"Gym 2026-10-03T05:00:00Z 2026-10-03T05:00:00Z", "Gym 2026-10-10T05:00:00Z 2026-10-10T05:00:00Z cancelled", "Last gym 2026-10-17T05:00:00Z",
+	})
+	// All events: the series stops repeating and its skips go with it.
+	stopped := c.event(http.MethodPatch, "/v1/events/"+gym.Id.String(), `{"recurrence":null}`, http.StatusOK)
+	if stopped.Recurrence != nil {
+		t.Fatalf("stopped = %+v", stopped.Recurrence)
+	}
+	equal(t, "stopped", occurrenceLabels(c.list(window).Items), []string{"Gym 2026-10-03T05:00:00Z", "Last gym 2026-10-17T05:00:00Z"})
+	equal(t, "exceptions", c.exceptionKeys(gym.Id), []string{})
+	if _, message := c.failure(http.MethodGet, occurrencePath(gym.Id, "2026-10-03T05:00:00Z", ""), nil, http.StatusNotFound); message != "this event does not repeat" {
+		t.Fatalf("an occurrence of a stopped series: %q", message)
+	}
+}
