@@ -289,6 +289,9 @@ func matches(event store.Event, item Item, defaultPriority string) bool {
 	if item.Priority != nil && !sameText(event.Priority, ownPriority(item, defaultPriority)) {
 		return false
 	}
+	if !sameText(event.ReadOnlyReason, item.ReadOnlyReason) {
+		return false
+	}
 	if item.AllDay {
 		return sameDay(event.StartDate, item.StartDate) && sameDay(event.EndDate, item.EndDate)
 	}

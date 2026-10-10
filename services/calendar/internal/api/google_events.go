@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/gofiber/fiber/v3"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/oapi-codegen/runtime/types"
 
@@ -43,6 +44,24 @@ func googleWriteError(err error) error {
 	return googleError(err)
 }
 
+// syncedByGoogle reports whether row is an event of a Google calendar that
+// Calendar's in-process syncer keeps, changed in Google first. The events
+// of a source an integration syncs (see integration.go) are read-only here
+// except for their reminders and priority, whatever their kind.
+func (h *Handler) syncedByGoogle(ctx context.Context, row store.Event) (bool, error) {
+	if h.google == nil || row.SourceKind != string(generated.EventSourceKindGoogle) || !row.SourceID.Valid {
+		return false, nil
+	}
+	source, err := h.queries.GetSource(ctx, row.SourceID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return source.InProcess && source.GoogleCalendarID.Valid, nil
+}
+
 // readOnlyFeed is why a feed event is read-only.
 func readOnlyFeed(name *string) string {
 	from := "an ICS feed"
@@ -69,6 +88,15 @@ func (h *Handler) resolveGoogle(ctx context.Context, items []generated.CalendarE
 			if item.Source.SourceId != nil && item.Source.ExternalUid != nil {
 				sourceIDs = append(sourceIDs, pgUUID(*item.Source.SourceId))
 				uids = append(uids, *item.Source.ExternalUid)
+			}
+		case generated.EventSourceKindExternal:
+			// Editable when its source accepts changes and it is not
+			// read-only on its own (readOnlyReason, set by event).
+			writable := item.Source.ReadOnly != nil && !*item.Source.ReadOnly
+			item.Editable = writable && item.ReadOnlyReason == nil
+			if !item.Editable && item.ReadOnlyReason == nil {
+				reason := readOnlyFeed(item.Source.Name)
+				item.ReadOnlyReason = &reason
 			}
 		default:
 			reason := readOnlyFeed(item.Source.Name)
@@ -101,10 +129,15 @@ func (h *Handler) resolveGoogle(ctx context.Context, items []generated.CalendarE
 		}
 		link, ok := links[[16]byte(*item.Source.SourceId)]
 		if !ok {
+			// A source an integration syncs: read-only here.
+			reason := readOnlyFeed(item.Source.Name)
+			item.Editable, item.ReadOnlyReason = false, &reason
 			continue
 		}
 		calendarID := uuid(link.CalendarID)
 		item.Google = &generated.EventGoogleLink{CalendarId: &calendarID, CalendarName: link.Summary, State: generated.EventGoogleLinkStateSynced}
+		readOnly := !google.Writable(link.AccessRole)
+		item.Source.ReadOnly = &readOnly
 		uid := *item.Source.ExternalUid
 		master := slices.Contains(link.Masters, uid)
 		restorable := item.RemovedFromSourceAt != nil && !strings.Contains(uid, "_")

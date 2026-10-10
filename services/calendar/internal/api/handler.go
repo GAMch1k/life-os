@@ -278,9 +278,16 @@ func (h *Handler) CreateEvent(c fiber.Ctx) error {
 	}
 	key, hash := idempotency(c)
 	params.AutomationIdempotencyKey, params.AutomationPayloadHash = key, hash
-	item, err := h.queries.CreateEvent(c.Context(), params)
+	var item store.Event
+	err = h.inTx(c, func(queries *store.Queries) error {
+		item, err = queries.CreateEvent(c.Context(), params)
+		if err != nil {
+			return internal(err)
+		}
+		return nil
+	})
 	if err != nil {
-		return internal(err)
+		return err
 	}
 	if key != nil && (item.AutomationPayloadHash == nil || *item.AutomationPayloadHash != *hash) {
 		return httpserver.NewError(fiber.StatusConflict, "conflict", "idempotency key was already used with a different payload")
@@ -336,7 +343,11 @@ func (h *Handler) UpdateEvent(c fiber.Ctx, id types.UUID) error {
 		if err != nil {
 			return databaseError(err)
 		}
-		if current.SourceKind == string(generated.EventSourceKindGoogle) {
+		inGoogle, err := h.syncedByGoogle(c.Context(), current)
+		if err != nil {
+			return internal(err)
+		}
+		if inGoogle {
 			target, write, err := h.googleTarget(c.Context(), current, &patch)
 			if err != nil {
 				return err
@@ -347,7 +358,7 @@ func (h *Handler) UpdateEvent(c fiber.Ctx, id types.UUID) error {
 		}
 	}
 	var current, item store.Event
-	err = h.inTx(c.Context(), func(queries *store.Queries) error {
+	err = h.inTx(c, func(queries *store.Queries) error {
 		current, err = queries.LockEvent(c.Context(), pgUUID(id))
 		if err != nil {
 			return databaseError(err)
@@ -372,7 +383,13 @@ func (h *Handler) UpdateEvent(c fiber.Ctx, id types.UUID) error {
 // of queries, and removes the exceptions of occurrences the change ends.
 func (h *Handler) updateLocked(ctx context.Context, queries *store.Queries, current store.Event, patch eventPatch) (store.Event, error) {
 	if current.SourceKind != string(generated.EventSourceKindManual) && !patch.importedEditable() {
-		return store.Event{}, managedBySource()
+		changeable, err := changeableHere(ctx, queries, current)
+		if err != nil {
+			return store.Event{}, internal(err)
+		}
+		if !changeable {
+			return store.Event{}, readOnlyHere(current)
+		}
 	}
 	fields, err := fieldsFromStore(current)
 	if err != nil {
@@ -425,37 +442,59 @@ func (h *Handler) DeleteEvent(c fiber.Ctx, id types.UUID) error {
 	if err != nil {
 		return databaseError(err)
 	}
-	if current.SourceKind == string(generated.EventSourceKindGoogle) && h.google != nil {
+	inGoogle, err := h.syncedByGoogle(c.Context(), current)
+	if err != nil {
+		return internal(err)
+	}
+	if inGoogle {
 		target, _, err := h.googleTarget(c.Context(), current, nil)
 		if err != nil {
 			return err
 		}
 		return h.deleteGoogleEvent(c, current, target)
 	}
-	if current.SourceKind != string(generated.EventSourceKindManual) {
-		return managedBySource()
-	}
-	affected, err := h.queries.DeleteEvent(c.Context(), pgUUID(id))
+	changeable, err := changeableHere(c.Context(), h.queries, current)
 	if err != nil {
 		return internal(err)
 	}
-	if affected == 0 {
-		return notFound()
+	if !changeable {
+		return readOnlyHere(current)
+	}
+	err = h.inTx(c, func(queries *store.Queries) error {
+		affected, err := queries.DeleteEvent(c.Context(), pgUUID(id))
+		if err != nil {
+			return internal(err)
+		}
+		if affected == 0 {
+			return notFound()
+		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 	h.recordEvent(c, eventDeleted, current, nil, nil)
-	h.google.QueueDeletion(c.Context(), current.ID)
+	if current.SourceKind == string(generated.EventSourceKindManual) {
+		h.google.QueueDeletion(c.Context(), current.ID)
+	}
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
 // inTx runs fn on queries bound to one transaction, committed when fn
-// returns no error and rolled back otherwise.
-func (h *Handler) inTx(ctx context.Context, fn func(*store.Queries) error) error {
+// returns no error and rolled back otherwise. The request's actor is who
+// makes its changes in the change feed (see SetChangeActor).
+func (h *Handler) inTx(c fiber.Ctx, fn func(*store.Queries) error) error {
+	ctx := c.Context()
 	tx, err := h.pool.Begin(ctx)
 	if err != nil {
 		return internal(err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if err := fn(h.queries.WithTx(tx)); err != nil {
+	queries := h.queries.WithTx(tx)
+	if err := queries.SetChangeActor(ctx, requestActor(c)); err != nil {
+		return internal(err)
+	}
+	if err := fn(queries); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -490,7 +529,7 @@ func sourceKindFilter(kind *generated.EventSourceKind) (*string, error) {
 		return nil, nil
 	}
 	if !kind.Valid() {
-		return nil, badRequest("sourceKind must be manual, ics, or google")
+		return nil, badRequest("sourceKind must be manual, ics, google, or external")
 	}
 	value := string(*kind)
 	return &value, nil

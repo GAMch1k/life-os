@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v3"
+	googleuuid "github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/oapi-codegen/runtime/types"
 
@@ -35,8 +36,12 @@ func (h *Handler) lockOccurrence(ctx context.Context, queries *store.Queries, id
 	if err != nil {
 		return expansion{}, located{}, databaseError(err)
 	}
-	if row.SourceKind != string(generated.EventSourceKindManual) {
-		return expansion{}, located{}, managedBySource()
+	changeable, err := changeableHere(ctx, queries, row)
+	if err != nil {
+		return expansion{}, located{}, internal(err)
+	}
+	if !changeable {
+		return expansion{}, located{}, readOnlyHere(row)
 	}
 	if row.RecurrenceFrequency == nil {
 		return expansion{}, located{}, doesNotRepeat()
@@ -112,7 +117,7 @@ func (h *Handler) UpdateEventOccurrence(c fiber.Ctx, id types.UUID, rid string) 
 		before, after eventFields
 		stamp         time.Time
 	)
-	err = h.inTx(c.Context(), func(queries *store.Queries) error {
+	err = h.inTx(c, func(queries *store.Queries) error {
 		var found located
 		e, found, err = h.lockOccurrence(c.Context(), queries, id, rid)
 		if err != nil {
@@ -132,7 +137,11 @@ func (h *Handler) UpdateEventOccurrence(c fiber.Ctx, id types.UUID, rid string) 
 		if after, err = patch.apply(before, h.now(), h.ownerLocation); err != nil {
 			return badRequest(err.Error())
 		}
-		changes := diffOccurrence(natural, after)
+		fallback, err := priorityDefault(c.Context(), queries, e.row)
+		if err != nil {
+			return internal(err)
+		}
+		changes := diffOccurrence(natural, after, fallback)
 		var cancelledAt *time.Time
 		if after.Status == generated.Cancelled {
 			cancelledAt = after.CancelledAt
@@ -167,8 +176,17 @@ func (h *Handler) UpdateEventOccurrence(c fiber.Ctx, id types.UUID, rid string) 
 		return err
 	}
 	h.recordOccurrence(c, e.row, o.key, before, after, stamp)
-	h.google.QueueExport(c.Context(), e.row.ID)
+	h.queueExport(c, e.row, e.row.ID)
 	return h.respondItem(c, fiber.StatusOK, e.item(o))
+}
+
+// queueExport queues exporting the Life OS event id to Google after a
+// change of series; an integration's events reach their provider through
+// the change feed instead.
+func (h *Handler) queueExport(c fiber.Ctx, series store.Event, id pgtype.UUID) {
+	if series.SourceKind == string(generated.EventSourceKindManual) {
+		h.google.QueueExport(c.Context(), id)
+	}
 }
 
 // googleSeries reads the event a change of an occurrence names and reports
@@ -181,7 +199,11 @@ func (h *Handler) googleSeries(c fiber.Ctx, id types.UUID) (store.Event, bool, e
 	if err != nil {
 		return store.Event{}, false, databaseError(err)
 	}
-	return row, row.SourceKind == string(generated.EventSourceKindGoogle), nil
+	inGoogle, err := h.syncedByGoogle(c.Context(), row)
+	if err != nil {
+		return store.Event{}, false, internal(err)
+	}
+	return row, inGoogle, nil
 }
 
 // untilBefore is the until that ends a series with the occurrence previous:
@@ -275,7 +297,7 @@ func (h *Handler) SplitEventSeries(c fiber.Ctx, id types.UUID, rid string) error
 		first                    bool
 		before, ended, newSeries store.Event
 	)
-	err = h.inTx(c.Context(), func(queries *store.Queries) error {
+	err = h.inTx(c, func(queries *store.Queries) error {
 		e, found, err := h.lockOccurrence(c.Context(), queries, id, rid)
 		if err != nil {
 			return err
@@ -296,9 +318,20 @@ func (h *Handler) SplitEventSeries(c fiber.Ctx, id types.UUID, rid string) error
 		if err != nil {
 			return badRequest(err.Error())
 		}
-		params, err := next.withPriorityDefault(defaultPriority).createParams()
+		fallback, err := priorityDefault(c.Context(), queries, e.row)
 		if err != nil {
 			return internal(err)
+		}
+		params, err := next.withPriorityDefault(fallback).createParams()
+		if err != nil {
+			return internal(err)
+		}
+		if e.row.SourceKind != string(generated.EventSourceKindManual) {
+			// The new series belongs to the old one's source, under a
+			// placeholder uid until the integration has created it there
+			// and gives it its own (previousExternalUid).
+			uid := lifeOSUIDPrefix + googleuuid.NewString()
+			params.SourceKind, params.SourceID, params.ExternalUid = e.row.SourceKind, e.row.SourceID, &uid
 		}
 		if newSeries, err = queries.CreateEvent(c.Context(), params); err != nil {
 			return internal(err)
@@ -311,14 +344,14 @@ func (h *Handler) SplitEventSeries(c fiber.Ctx, id types.UUID, rid string) error
 	if err != nil {
 		return err
 	}
-	h.google.QueueExport(c.Context(), ended.ID)
+	h.queueExport(c, before, ended.ID)
 	if first {
 		if eventType, changes := classifyUpdate(before, ended); eventType != "" {
 			h.recordEvent(c, eventType, ended, &before, changes)
 		}
 		return h.respond(c, fiber.StatusOK, ended)
 	}
-	h.google.QueueExport(c.Context(), newSeries.ID)
+	h.queueExport(c, before, newSeries.ID)
 	h.recordEvent(c, eventUpdated, ended, &before, []string{"recurrence"})
 	h.emitEvent(c, eventCreated, newSeries, nil, nil, map[string]any{"splitFrom": uuid(before.ID).String()})
 	return h.respond(c, fiber.StatusCreated, newSeries)
@@ -395,7 +428,7 @@ func (h *Handler) TruncateEventSeries(c fiber.Ctx, id types.UUID, rid string) er
 		deleted       bool
 		before, ended store.Event
 	)
-	err := h.inTx(c.Context(), func(queries *store.Queries) error {
+	err := h.inTx(c, func(queries *store.Queries) error {
 		e, found, err := h.lockOccurrence(c.Context(), queries, id, rid)
 		if err != nil {
 			return err
@@ -427,10 +460,12 @@ func (h *Handler) TruncateEventSeries(c fiber.Ctx, id types.UUID, rid string) er
 	}
 	if deleted {
 		h.recordEvent(c, eventDeleted, before, nil, nil)
-		h.google.QueueDeletion(c.Context(), before.ID)
+		if before.SourceKind == string(generated.EventSourceKindManual) {
+			h.google.QueueDeletion(c.Context(), before.ID)
+		}
 	} else {
 		h.recordEvent(c, eventUpdated, ended, &before, []string{"recurrence"})
-		h.google.QueueExport(c.Context(), ended.ID)
+		h.queueExport(c, before, ended.ID)
 	}
 	return c.SendStatus(fiber.StatusNoContent)
 }

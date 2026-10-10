@@ -13,16 +13,17 @@ import (
 
 const applySourcePreset = `-- name: ApplySourcePreset :one
 UPDATE calendar_sources
-SET name = $1, url = $2,
+SET name = $1, url = $2::text,
     filter_include = $3::text[], filter_exclude = $4::text[],
     default_reminders = $5,
     preset = $6::text, preset_config = $7,
+    provider = CASE WHEN $6::text = 'zaw' THEN 'ZAW' ELSE provider END,
     etag = CASE WHEN $8::boolean THEN NULL ELSE etag END,
     last_modified = CASE WHEN $8::boolean THEN NULL ELSE last_modified END,
     next_refresh_at = COALESCE($9::timestamptz, next_refresh_at),
     updated_at = now()
 WHERE id = $10
-RETURNING id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id, default_priority
+RETURNING id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id, default_priority, integration, external_id, provider, read_only, in_process, integration_config
 `
 
 type ApplySourcePresetParams struct {
@@ -80,6 +81,12 @@ func (q *Queries) ApplySourcePreset(ctx context.Context, arg ApplySourcePresetPa
 		&i.PresetConfig,
 		&i.GoogleCalendarID,
 		&i.DefaultPriority,
+		&i.Integration,
+		&i.ExternalID,
+		&i.Provider,
+		&i.ReadOnly,
+		&i.InProcess,
+		&i.IntegrationConfig,
 	)
 	return i, err
 }
@@ -90,8 +97,9 @@ SET refreshing_until = $1::timestamptz, last_attempt_at = $2::timestamptz
 WHERE id = $3
   AND enabled
   AND kind = 'ics'
+  AND in_process
   AND (refreshing_until IS NULL OR refreshing_until <= $2::timestamptz)
-RETURNING id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id, default_priority
+RETURNING id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id, default_priority, integration, external_id, provider, read_only, in_process, integration_config
 `
 
 type ClaimSourceRefreshParams struct {
@@ -130,15 +138,24 @@ func (q *Queries) ClaimSourceRefresh(ctx context.Context, arg ClaimSourceRefresh
 		&i.PresetConfig,
 		&i.GoogleCalendarID,
 		&i.DefaultPriority,
+		&i.Integration,
+		&i.ExternalID,
+		&i.Provider,
+		&i.ReadOnly,
+		&i.InProcess,
+		&i.IntegrationConfig,
 	)
 	return i, err
 }
 
 const createPresetSource = `-- name: CreatePresetSource :one
-INSERT INTO calendar_sources (kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, preset, preset_config)
-VALUES ($1, $2, $3, true, $4::text[], $5::text[],
-        $6, $7, $8::text, $9)
-RETURNING id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id, default_priority
+WITH new AS (SELECT gen_random_uuid() AS id)
+INSERT INTO calendar_sources (id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, preset, preset_config,
+                              integration, external_id, provider)
+VALUES ((SELECT id FROM new), $1, $2, $3::text, true, $4::text[], $5::text[],
+        $6, $7, $8::text, $9,
+        'calendar-feeds', (SELECT id FROM new)::text, CASE WHEN $8::text = 'zaw' THEN 'ZAW' ELSE 'ICS' END)
+RETURNING id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id, default_priority, integration, external_id, provider, read_only, in_process, integration_config
 `
 
 type CreatePresetSourceParams struct {
@@ -191,15 +208,24 @@ func (q *Queries) CreatePresetSource(ctx context.Context, arg CreatePresetSource
 		&i.PresetConfig,
 		&i.GoogleCalendarID,
 		&i.DefaultPriority,
+		&i.Integration,
+		&i.ExternalID,
+		&i.Provider,
+		&i.ReadOnly,
+		&i.InProcess,
+		&i.IntegrationConfig,
 	)
 	return i, err
 }
 
 const createSource = `-- name: CreateSource :one
-INSERT INTO calendar_sources (kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, default_priority)
-VALUES ($1, $2, $3, $4, $5, $6,
-        $7, $8, COALESCE($9::text, 'medium'))
-RETURNING id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id, default_priority
+WITH new AS (SELECT gen_random_uuid() AS id)
+INSERT INTO calendar_sources (id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, default_priority,
+                              integration, external_id, provider)
+VALUES ((SELECT id FROM new), $1, $2, $3::text, $4, $5, $6,
+        $7, $8, COALESCE($9::text, 'medium'),
+        'calendar-feeds', (SELECT id FROM new)::text, 'ICS')
+RETURNING id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id, default_priority, integration, external_id, provider, read_only, in_process, integration_config
 `
 
 type CreateSourceParams struct {
@@ -214,7 +240,8 @@ type CreateSourceParams struct {
 	DefaultPriority  *string
 }
 
-// A null default_priority is medium.
+// A null default_priority is medium. A feed belongs to the calendar-feeds
+// integration under its own id (see the integration API).
 func (q *Queries) CreateSource(ctx context.Context, arg CreateSourceParams) (CalendarSource, error) {
 	row := q.db.QueryRow(ctx, createSource,
 		arg.Kind,
@@ -253,16 +280,23 @@ func (q *Queries) CreateSource(ctx context.Context, arg CreateSourceParams) (Cal
 		&i.PresetConfig,
 		&i.GoogleCalendarID,
 		&i.DefaultPriority,
+		&i.Integration,
+		&i.ExternalID,
+		&i.Provider,
+		&i.ReadOnly,
+		&i.InProcess,
+		&i.IntegrationConfig,
 	)
 	return i, err
 }
 
 const deleteSource = `-- name: DeleteSource :execrows
-DELETE FROM calendar_sources WHERE id = $1 AND kind = 'ics'
+DELETE FROM calendar_sources WHERE id = $1 AND kind IN ('ics', 'external')
 `
 
-// Deletes a feed and its imported events (ON DELETE CASCADE). A Google
-// calendar's source goes when its calendar stops syncing.
+// Deletes a feed or an integration's source and its imported events (ON
+// DELETE CASCADE). A Google calendar's source goes when its calendar stops
+// syncing.
 func (q *Queries) DeleteSource(ctx context.Context, id pgtype.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteSource, id)
 	if err != nil {
@@ -278,7 +312,7 @@ SET refreshing_until = NULL,
     last_success_at = $4, consecutive_failures = $5,
     etag = $6, last_modified = $7, next_refresh_at = $8
 WHERE id = $9
-RETURNING id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id, default_priority
+RETURNING id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id, default_priority, integration, external_id, provider, read_only, in_process, integration_config
 `
 
 type FinishSourceRefreshParams struct {
@@ -333,13 +367,19 @@ func (q *Queries) FinishSourceRefresh(ctx context.Context, arg FinishSourceRefre
 		&i.PresetConfig,
 		&i.GoogleCalendarID,
 		&i.DefaultPriority,
+		&i.Integration,
+		&i.ExternalID,
+		&i.Provider,
+		&i.ReadOnly,
+		&i.InProcess,
+		&i.IntegrationConfig,
 	)
 	return i, err
 }
 
 const getPresetSource = `-- name: GetPresetSource :one
 
-SELECT id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id, default_priority FROM calendar_sources WHERE preset = $1::text
+SELECT id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id, default_priority, integration, external_id, provider, read_only, in_process, integration_config FROM calendar_sources WHERE preset = $1::text
 `
 
 // Preset sources are configured from Calendar's environment at startup
@@ -372,12 +412,18 @@ func (q *Queries) GetPresetSource(ctx context.Context, preset string) (CalendarS
 		&i.PresetConfig,
 		&i.GoogleCalendarID,
 		&i.DefaultPriority,
+		&i.Integration,
+		&i.ExternalID,
+		&i.Provider,
+		&i.ReadOnly,
+		&i.InProcess,
+		&i.IntegrationConfig,
 	)
 	return i, err
 }
 
 const getSource = `-- name: GetSource :one
-SELECT id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id, default_priority FROM calendar_sources WHERE id = $1
+SELECT id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id, default_priority, integration, external_id, provider, read_only, in_process, integration_config FROM calendar_sources WHERE id = $1
 `
 
 func (q *Queries) GetSource(ctx context.Context, id pgtype.UUID) (CalendarSource, error) {
@@ -408,6 +454,12 @@ func (q *Queries) GetSource(ctx context.Context, id pgtype.UUID) (CalendarSource
 		&i.PresetConfig,
 		&i.GoogleCalendarID,
 		&i.DefaultPriority,
+		&i.Integration,
+		&i.ExternalID,
+		&i.Provider,
+		&i.ReadOnly,
+		&i.InProcess,
+		&i.IntegrationConfig,
 	)
 	return i, err
 }
@@ -417,7 +469,7 @@ INSERT INTO events (
     title, description, location, all_day, start_at, end_at, start_date, end_date, time_zone,
     recurrence_frequency, recurrence_interval, recurrence_until, recurrence_by_weekday, recurrence_count,
     reminders, use_default_reminders, source_reminders,
-    status, cancelled_at, source_kind, source_id, external_uid, priority
+    status, cancelled_at, source_kind, source_id, external_uid, priority, read_only_reason
 )
 VALUES (
     $1, $2, $3, $4, $5, $6,
@@ -425,7 +477,8 @@ VALUES (
     $10, $11, $12,
     $13::text[], $14,
     $15, $16, $17,
-    $18, $19, $20, $21, $22, $23
+    $18, $19, $20, $21, $22, $23,
+    $24
 )
 RETURNING id
 `
@@ -454,6 +507,7 @@ type InsertImportedEventParams struct {
 	SourceID            pgtype.UUID
 	ExternalUid         *string
 	Priority            *string
+	ReadOnlyReason      *string
 }
 
 // A source's new event. A series (Google) has its rule; reminders and
@@ -461,7 +515,8 @@ type InsertImportedEventParams struct {
 // defaults: none of its own, following the source's defaults), and
 // source_reminders records them (null for a feed). priority is the event's
 // own priority as its source gives it (Google, through a Life OS extended
-// property); null follows the source's default.
+// property); null follows the source's default. read_only_reason is why an
+// integration's event cannot be changed although its source accepts changes.
 func (q *Queries) InsertImportedEvent(ctx context.Context, arg InsertImportedEventParams) (pgtype.UUID, error) {
 	row := q.db.QueryRow(ctx, insertImportedEvent,
 		arg.Title,
@@ -487,6 +542,7 @@ func (q *Queries) InsertImportedEvent(ctx context.Context, arg InsertImportedEve
 		arg.SourceID,
 		arg.ExternalUid,
 		arg.Priority,
+		arg.ReadOnlyReason,
 	)
 	var id pgtype.UUID
 	err := row.Scan(&id)
@@ -497,12 +553,14 @@ const listDueSources = `-- name: ListDueSources :many
 SELECT id FROM calendar_sources
 WHERE enabled
   AND kind = 'ics'
+  AND in_process
   AND next_refresh_at <= $1::timestamptz
   AND (refreshing_until IS NULL OR refreshing_until <= $1::timestamptz)
 ORDER BY next_refresh_at, id
 `
 
-// Enabled feeds whose next refresh is due and that nobody is refreshing.
+// Enabled feeds whose next refresh is due and that nobody is refreshing
+// (only those Calendar refreshes itself, not an integration's).
 func (q *Queries) ListDueSources(ctx context.Context, now pgtype.Timestamptz) ([]pgtype.UUID, error) {
 	rows, err := q.db.Query(ctx, listDueSources, now)
 	if err != nil {
@@ -525,7 +583,7 @@ func (q *Queries) ListDueSources(ctx context.Context, now pgtype.Timestamptz) ([
 
 const listSourceEvents = `-- name: ListSourceEvents :many
 
-SELECT id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at, automation_idempotency_key, automation_payload_hash, location, time_zone, status, cancelled_at, source_kind, source_id, external_uid, removed_from_source_at, reminders, use_default_reminders, recurrence_by_weekday, recurrence_count, source_reminders, priority FROM events WHERE source_id = $1 ORDER BY id FOR UPDATE
+SELECT id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at, automation_idempotency_key, automation_payload_hash, location, time_zone, status, cancelled_at, source_kind, source_id, external_uid, removed_from_source_at, reminders, use_default_reminders, recurrence_by_weekday, recurrence_count, source_reminders, priority, read_only_reason FROM events WHERE source_id = $1 ORDER BY id FOR UPDATE
 `
 
 // Imported events are written only by Calendar's source adapter, inside the
@@ -571,6 +629,7 @@ func (q *Queries) ListSourceEvents(ctx context.Context, sourceID pgtype.UUID) ([
 			&i.RecurrenceCount,
 			&i.SourceReminders,
 			&i.Priority,
+			&i.ReadOnlyReason,
 		); err != nil {
 			return nil, err
 		}
@@ -583,7 +642,7 @@ func (q *Queries) ListSourceEvents(ctx context.Context, sourceID pgtype.UUID) ([
 }
 
 const listSourceSummaries = `-- name: ListSourceSummaries :many
-SELECT id, name, default_reminders, default_priority FROM calendar_sources ORDER BY id
+SELECT id, name, default_reminders, default_priority, integration, provider, read_only FROM calendar_sources ORDER BY id
 `
 
 type ListSourceSummariesRow struct {
@@ -591,10 +650,14 @@ type ListSourceSummariesRow struct {
 	Name             string
 	DefaultReminders []byte
 	DefaultPriority  string
+	Integration      *string
+	Provider         *string
+	ReadOnly         bool
 }
 
 // What an imported event shows of its source: its name, default reminders,
-// and default priority.
+// default priority, integration, provider label, and whether it accepts
+// changes.
 func (q *Queries) ListSourceSummaries(ctx context.Context) ([]ListSourceSummariesRow, error) {
 	rows, err := q.db.Query(ctx, listSourceSummaries)
 	if err != nil {
@@ -609,6 +672,9 @@ func (q *Queries) ListSourceSummaries(ctx context.Context) ([]ListSourceSummarie
 			&i.Name,
 			&i.DefaultReminders,
 			&i.DefaultPriority,
+			&i.Integration,
+			&i.Provider,
+			&i.ReadOnly,
 		); err != nil {
 			return nil, err
 		}
@@ -621,10 +687,11 @@ func (q *Queries) ListSourceSummaries(ctx context.Context) ([]ListSourceSummarie
 }
 
 const listSources = `-- name: ListSources :many
-SELECT id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id, default_priority FROM calendar_sources WHERE kind = 'ics' ORDER BY created_at, id
+SELECT id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id, default_priority, integration, external_id, provider, read_only, in_process, integration_config FROM calendar_sources WHERE kind IN ('ics', 'external') ORDER BY created_at, id
 `
 
-// The feeds (ICS sources). Google calendars are sources too, managed through
+// The feeds (ICS sources) and the sources integrations sync (external).
+// Google calendars Calendar syncs itself are sources too, managed through
 // the Google connection (google_calendars), and are not listed here.
 func (q *Queries) ListSources(ctx context.Context) ([]CalendarSource, error) {
 	rows, err := q.db.Query(ctx, listSources)
@@ -660,6 +727,12 @@ func (q *Queries) ListSources(ctx context.Context) ([]CalendarSource, error) {
 			&i.PresetConfig,
 			&i.GoogleCalendarID,
 			&i.DefaultPriority,
+			&i.Integration,
+			&i.ExternalID,
+			&i.Provider,
+			&i.ReadOnly,
+			&i.InProcess,
+			&i.IntegrationConfig,
 		); err != nil {
 			return nil, err
 		}
@@ -672,8 +745,8 @@ func (q *Queries) ListSources(ctx context.Context) ([]CalendarSource, error) {
 }
 
 const lockAdoptableSource = `-- name: LockAdoptableSource :one
-SELECT id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id, default_priority FROM calendar_sources
-WHERE preset IS NULL AND kind = 'ics' AND url = $1
+SELECT id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id, default_priority, integration, external_id, provider, read_only, in_process, integration_config FROM calendar_sources
+WHERE preset IS NULL AND kind = 'ics' AND in_process AND url = $1::text
 ORDER BY created_at, id
 LIMIT 1
 FOR UPDATE
@@ -709,6 +782,12 @@ func (q *Queries) LockAdoptableSource(ctx context.Context, url string) (Calendar
 		&i.PresetConfig,
 		&i.GoogleCalendarID,
 		&i.DefaultPriority,
+		&i.Integration,
+		&i.ExternalID,
+		&i.Provider,
+		&i.ReadOnly,
+		&i.InProcess,
+		&i.IntegrationConfig,
 	)
 	return i, err
 }
@@ -724,7 +803,7 @@ func (q *Queries) LockPreset(ctx context.Context, preset string) error {
 }
 
 const lockPresetSource = `-- name: LockPresetSource :one
-SELECT id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id, default_priority FROM calendar_sources WHERE preset = $1::text FOR UPDATE
+SELECT id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id, default_priority, integration, external_id, provider, read_only, in_process, integration_config FROM calendar_sources WHERE preset = $1::text FOR UPDATE
 `
 
 func (q *Queries) LockPresetSource(ctx context.Context, preset string) (CalendarSource, error) {
@@ -755,12 +834,18 @@ func (q *Queries) LockPresetSource(ctx context.Context, preset string) (Calendar
 		&i.PresetConfig,
 		&i.GoogleCalendarID,
 		&i.DefaultPriority,
+		&i.Integration,
+		&i.ExternalID,
+		&i.Provider,
+		&i.ReadOnly,
+		&i.InProcess,
+		&i.IntegrationConfig,
 	)
 	return i, err
 }
 
 const lockSource = `-- name: LockSource :one
-SELECT id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id, default_priority FROM calendar_sources WHERE id = $1 FOR UPDATE
+SELECT id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id, default_priority, integration, external_id, provider, read_only, in_process, integration_config FROM calendar_sources WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) LockSource(ctx context.Context, id pgtype.UUID) (CalendarSource, error) {
@@ -791,6 +876,12 @@ func (q *Queries) LockSource(ctx context.Context, id pgtype.UUID) (CalendarSourc
 		&i.PresetConfig,
 		&i.GoogleCalendarID,
 		&i.DefaultPriority,
+		&i.Integration,
+		&i.ExternalID,
+		&i.Provider,
+		&i.ReadOnly,
+		&i.InProcess,
+		&i.IntegrationConfig,
 	)
 	return i, err
 }
@@ -836,9 +927,10 @@ SET title = $1, description = $2, location = $3,
     use_default_reminders = COALESCE($16, use_default_reminders),
     source_reminders = COALESCE($17, source_reminders),
     priority = CASE WHEN $18::boolean THEN $19 ELSE priority END,
-    status = $20, cancelled_at = $21, removed_from_source_at = NULL,
+    read_only_reason = $20,
+    status = $21, cancelled_at = $22, removed_from_source_at = NULL,
     updated_at = now()
-WHERE id = $22 AND source_id = $23
+WHERE id = $23 AND source_id = $24
 `
 
 type UpdateImportedEventParams struct {
@@ -861,6 +953,7 @@ type UpdateImportedEventParams struct {
 	SourceReminders     []byte
 	SetPriority         bool
 	Priority            *string
+	ReadOnlyReason      *string
 	Status              string
 	CancelledAt         pgtype.Timestamptz
 	ID                  pgtype.UUID
@@ -894,6 +987,7 @@ func (q *Queries) UpdateImportedEvent(ctx context.Context, arg UpdateImportedEve
 		arg.SourceReminders,
 		arg.SetPriority,
 		arg.Priority,
+		arg.ReadOnlyReason,
 		arg.Status,
 		arg.CancelledAt,
 		arg.ID,
@@ -912,12 +1006,12 @@ SET name = $1, url = $2, enabled = $3,
     next_refresh_at = COALESCE($9::timestamptz, next_refresh_at),
     updated_at = now()
 WHERE id = $10 AND updated_at = $11
-RETURNING id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id, default_priority
+RETURNING id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id, default_priority, integration, external_id, provider, read_only, in_process, integration_config
 `
 
 type UpdateSourceParams struct {
 	Name              string
-	Url               string
+	Url               *string
 	Enabled           bool
 	FilterInclude     []string
 	FilterExclude     []string
@@ -973,6 +1067,12 @@ func (q *Queries) UpdateSource(ctx context.Context, arg UpdateSourceParams) (Cal
 		&i.PresetConfig,
 		&i.GoogleCalendarID,
 		&i.DefaultPriority,
+		&i.Integration,
+		&i.ExternalID,
+		&i.Provider,
+		&i.ReadOnly,
+		&i.InProcess,
+		&i.IntegrationConfig,
 	)
 	return i, err
 }

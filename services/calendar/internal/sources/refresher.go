@@ -152,7 +152,7 @@ func (r *Refresher) release(id pgtype.UUID) error {
 // the source row, reconciles the events and writes the outcome.
 func (r *Refresher) complete(ctx context.Context, source store.CalendarSource, now time.Time) (store.CalendarSource, outcome, error) {
 	var feed ics.Feed
-	result, err := r.fetcher.Fetch(ctx, source.Url, deref(source.Etag), deref(source.LastModified))
+	result, err := r.fetcher.Fetch(ctx, deref(source.Url), deref(source.Etag), deref(source.LastModified))
 	if err == nil && !result.NotModified {
 		feed, err = ics.Parse(result.Body, ics.Options{Owner: r.owner, Now: now})
 		feed.Items = presetItems(source.Preset, feed.Items)
@@ -178,7 +178,7 @@ func (r *Refresher) complete(ctx context.Context, source store.CalendarSource, n
 	if err != nil {
 		return store.CalendarSource{}, found, err
 	}
-	if current.Url != source.Url || !slices.Equal(current.FilterInclude, source.FilterInclude) || !slices.Equal(current.FilterExclude, source.FilterExclude) {
+	if deref(current.Url) != deref(source.Url) || !slices.Equal(current.FilterInclude, source.FilterInclude) || !slices.Equal(current.FilterExclude, source.FilterExclude) {
 		_, err := queries.FinishSourceRefresh(ctx, store.FinishSourceRefreshParams{
 			ID: current.ID, LastOutcome: current.LastOutcome, LastError: current.LastError, LastCounts: current.LastCounts,
 			LastSuccessAt: current.LastSuccessAt, ConsecutiveFailures: current.ConsecutiveFailures,
@@ -244,6 +244,12 @@ func Reconcile(ctx context.Context, queries *store.Queries, source store.Calenda
 	if err != nil {
 		return Counts{}, err
 	}
+	return reconcileStored(ctx, queries, source, existing, items, rules, now)
+}
+
+// reconcileStored reconciles existing, stored events of source (held by the
+// transaction of queries), with items.
+func reconcileStored(ctx context.Context, queries *store.Queries, source store.CalendarSource, existing []store.Event, items []Item, rules Rules, now time.Time) (Counts, error) {
 	var series []pgtype.UUID
 	for _, event := range existing {
 		if event.RecurrenceFrequency != nil {
@@ -280,7 +286,7 @@ func apply(ctx context.Context, queries *store.Queries, source store.CalendarSou
 			RecurrenceByWeekday: fields.rule.byWeekday, RecurrenceCount: fields.rule.count,
 			Reminders: []byte("[]"), UseDefaultReminders: true,
 			Status: fields.status, CancelledAt: fields.cancelledAt, SourceKind: source.Kind, SourceID: source.ID, ExternalUid: &uid,
-			Priority: ownPriority(item, source.DefaultPriority),
+			Priority: ownPriority(item, source.DefaultPriority), ReadOnlyReason: item.ReadOnlyReason,
 		}
 		if item.Reminders != nil {
 			own, whole, err := item.Reminders.encode()
@@ -310,6 +316,7 @@ func apply(ctx context.Context, queries *store.Queries, source store.CalendarSou
 			RecurrenceFrequency: fields.rule.frequency, RecurrenceInterval: fields.rule.interval, RecurrenceUntil: fields.rule.until,
 			RecurrenceByWeekday: fields.rule.byWeekday, RecurrenceCount: fields.rule.count,
 			SetPriority: change.item.Priority != nil, Priority: ownPriority(change.item, source.DefaultPriority),
+			ReadOnlyReason: change.item.ReadOnlyReason,
 		}
 		if change.item.Reminders != nil {
 			own, whole, err := change.item.Reminders.encode()

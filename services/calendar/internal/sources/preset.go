@@ -165,7 +165,7 @@ func (r *Refresher) EnsurePreset(ctx context.Context, preset Preset) (EnsureResu
 
 	// Each setting the preset changed since it was last applied (every
 	// setting when there is no record) replaces the source's.
-	next := PresetConfig{Name: current.Name, URL: current.Url, Include: orEmpty(current.FilterInclude), Exclude: orEmpty(current.FilterExclude), DefaultReminders: current.DefaultReminders}
+	next := PresetConfig{Name: current.Name, URL: deref(current.Url), Include: orEmpty(current.FilterInclude), Exclude: orEmpty(current.FilterExclude), DefaultReminders: current.DefaultReminders}
 	if last == nil || last.Name != config.Name {
 		next.Name = config.Name
 	}
@@ -178,7 +178,7 @@ func (r *Refresher) EnsurePreset(ctx context.Context, preset Preset) (EnsureResu
 	if last == nil || !sameJSON(last.DefaultReminders, config.DefaultReminders) {
 		next.DefaultReminders = reminders
 	}
-	reconfigured := next.URL != current.Url || !slices.Equal(next.Include, current.FilterInclude) || !slices.Equal(next.Exclude, current.FilterExclude)
+	reconfigured := next.URL != deref(current.Url) || !slices.Equal(next.Include, current.FilterInclude) || !slices.Equal(next.Exclude, current.FilterExclude)
 	changed := action == EnsureAdopted || reconfigured || next.Name != current.Name ||
 		!sameJSON(next.DefaultReminders, current.DefaultReminders) || !sameJSON(current.PresetConfig, applied)
 	if !changed {

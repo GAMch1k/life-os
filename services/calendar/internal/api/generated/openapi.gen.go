@@ -15,13 +15,34 @@ import (
 
 // Defines values for CalendarSourceKind.
 const (
-	CalendarSourceKindIcs CalendarSourceKind = "ics"
+	CalendarSourceKindExternal CalendarSourceKind = "external"
+	CalendarSourceKindIcs      CalendarSourceKind = "ics"
 )
 
 // Valid indicates whether the value is a known member of the CalendarSourceKind enum.
 func (e CalendarSourceKind) Valid() bool {
 	switch e {
+	case CalendarSourceKindExternal:
+		return true
 	case CalendarSourceKindIcs:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChangeFeedPagePhase.
+const (
+	ChangeFeedPagePhaseChanges  ChangeFeedPagePhase = "changes"
+	ChangeFeedPagePhaseSnapshot ChangeFeedPagePhase = "snapshot"
+)
+
+// Valid indicates whether the value is a known member of the ChangeFeedPagePhase enum.
+func (e ChangeFeedPagePhase) Valid() bool {
+	switch e {
+	case ChangeFeedPagePhaseChanges:
+		return true
+	case ChangeFeedPagePhaseSnapshot:
 		return true
 	default:
 		return false
@@ -72,14 +93,17 @@ func (e EventPriority) Valid() bool {
 
 // Defines values for EventSourceKind.
 const (
-	EventSourceKindGoogle EventSourceKind = "google"
-	EventSourceKindIcs    EventSourceKind = "ics"
-	EventSourceKindManual EventSourceKind = "manual"
+	EventSourceKindExternal EventSourceKind = "external"
+	EventSourceKindGoogle   EventSourceKind = "google"
+	EventSourceKindIcs      EventSourceKind = "ics"
+	EventSourceKindManual   EventSourceKind = "manual"
 )
 
 // Valid indicates whether the value is a known member of the EventSourceKind enum.
 func (e EventSourceKind) Valid() bool {
 	switch e {
+	case EventSourceKindExternal:
+		return true
 	case EventSourceKindGoogle:
 		return true
 	case EventSourceKindIcs:
@@ -223,6 +247,30 @@ func (e ReminderKind) Valid() bool {
 	}
 }
 
+// Defines values for SourceEventPriority.
+const (
+	SourcePriorityDefault SourceEventPriority = "default"
+	SourcePriorityHigh    SourceEventPriority = "high"
+	SourcePriorityLow     SourceEventPriority = "low"
+	SourcePriorityMedium  SourceEventPriority = "medium"
+)
+
+// Valid indicates whether the value is a known member of the SourceEventPriority enum.
+func (e SourceEventPriority) Valid() bool {
+	switch e {
+	case SourcePriorityDefault:
+		return true
+	case SourcePriorityHigh:
+		return true
+	case SourcePriorityLow:
+		return true
+	case SourcePriorityMedium:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SourceRefreshOutcome.
 const (
 	SourceRefreshOutcomeFailed      SourceRefreshOutcome = "failed"
@@ -238,6 +286,42 @@ func (e SourceRefreshOutcome) Valid() bool {
 	case SourceRefreshOutcomeImported:
 		return true
 	case SourceRefreshOutcomeNotModified:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SyncIntegrationSourceRequestMode.
+const (
+	SyncIntegrationSourceRequestModeDelta    SyncIntegrationSourceRequestMode = "delta"
+	SyncIntegrationSourceRequestModeSnapshot SyncIntegrationSourceRequestMode = "snapshot"
+)
+
+// Valid indicates whether the value is a known member of the SyncIntegrationSourceRequestMode enum.
+func (e SyncIntegrationSourceRequestMode) Valid() bool {
+	switch e {
+	case SyncIntegrationSourceRequestModeDelta:
+		return true
+	case SyncIntegrationSourceRequestModeSnapshot:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SyncIntegrationSourceResultMode.
+const (
+	SyncIntegrationSourceResultModeDelta    SyncIntegrationSourceResultMode = "delta"
+	SyncIntegrationSourceResultModeSnapshot SyncIntegrationSourceResultMode = "snapshot"
+)
+
+// Valid indicates whether the value is a known member of the SyncIntegrationSourceResultMode enum.
+func (e SyncIntegrationSourceResultMode) Valid() bool {
+	switch e {
+	case SyncIntegrationSourceResultModeDelta:
+		return true
+	case SyncIntegrationSourceResultModeSnapshot:
 		return true
 	default:
 		return false
@@ -271,6 +355,24 @@ func (e Weekday) Valid() bool {
 	case TU:
 		return true
 	case WE:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListChangesParamsScope.
+const (
+	All ListChangesParamsScope = "all"
+	Own ListChangesParamsScope = "own"
+)
+
+// Valid indicates whether the value is a known member of the ListChangesParamsScope enum.
+func (e ListChangesParamsScope) Valid() bool {
+	switch e {
+	case All:
+		return true
+	case Own:
 		return true
 	default:
 		return false
@@ -376,11 +478,17 @@ type CalendarSource struct {
 	// Enabled Disabled sources are not refreshed; their events stay as they are.
 	Enabled bool `json:"enabled"`
 
+	// ExternalId The source's id in its integration.
+	ExternalId *string `json:"externalId,omitempty"`
+
 	// Filter Which feed events to import. A term matches an event when it equals one of the event's CATEGORIES or occurs in its SUMMARY (both case-insensitive). With `include` terms, only events matching one of them are imported; then events matching an `exclude` term are dropped. Empty lists import everything.
 	Filter SourceFilter       `json:"filter"`
 	Id     openapi_types.UUID `json:"id"`
 
-	// Kind `ics`: an ICS/iCal feed downloaded from a URL.
+	// Integration The integration the source belongs to, such as calendar-feeds.
+	Integration *string `json:"integration,omitempty"`
+
+	// Kind `ics`: an ICS/iCal feed Calendar downloads from a URL. `external`: a source an integration syncs (see `/v1/integrations`), which keeps its own URL, filter, and refresh state.
 	Kind CalendarSourceKind `json:"kind"`
 
 	// Name The label shown with the source's events, such as "ZAW".
@@ -389,18 +497,79 @@ type CalendarSource struct {
 	// Preset Set (such as `zaw`) for a source Calendar configures from its own environment at startup; null for sources added through the API. A preset source can be edited like any other, but while its environment setting is present a deleted one is added again at the next start.
 	Preset *string `json:"preset,omitempty"`
 
+	// Provider The label of the source's provider, such as ZAW or ICS.
+	Provider *string `json:"provider,omitempty"`
+
+	// ReadOnly Whether the source accepts changes to its events.
+	ReadOnly *bool `json:"readOnly,omitempty"`
+
 	// Refresh The source's refresh schedule and last outcome (`lastOutcome` and `lastCounts` are absent before the first refresh). Read-only.
 	Refresh SourceRefreshState `json:"refresh"`
 
 	// UpdatedAt When the configuration last changed.
 	UpdatedAt time.Time `json:"updatedAt"`
 
-	// Url The feed URL.
+	// Url The feed URL; empty for a source an integration syncs.
 	Url string `json:"url"`
 }
 
-// CalendarSourceKind `ics`: an ICS/iCal feed downloaded from a URL.
+// CalendarSourceKind `ics`: an ICS/iCal feed Calendar downloads from a URL. `external`: a source an integration syncs (see `/v1/integrations`), which keeps its own URL, filter, and refresh state.
 type CalendarSourceKind string
+
+// ChangeFeedEntry defines model for ChangeFeedEntry.
+type ChangeFeedEntry struct {
+	// Actor Who made the latest change, as in X-Life-OS-Actor (user, agent:<name>, system:<name>, dev:<name>); null in a snapshot.
+	Actor *string `json:"actor,omitempty"`
+
+	// Actors Everyone who made the changes this entry stands for, each once; empty in a snapshot. An integration skips an entry as its own write only when it is the only actor.
+	Actors []string `json:"actors"`
+
+	// ChangedAt When the latest change was made (in a snapshot: the event's updatedAt).
+	ChangedAt time.Time `json:"changedAt"`
+
+	// Deleted The event no longer exists (a tombstone): `event` is null.
+	Deleted bool `json:"deleted"`
+
+	// Event The event as it is now (as GET /v1/events/{eventId} returns it); null when deleted.
+	Event   *CalendarEvent     `json:"event,omitempty"`
+	EventId openapi_types.UUID `json:"eventId"`
+
+	// Exceptions A series' occurrence changes and skips as they are now; empty otherwise.
+	Exceptions []OccurrenceException `json:"exceptions"`
+
+	// Sequence The feed position of the latest change; null in a snapshot.
+	Sequence *int64 `json:"sequence,omitempty"`
+
+	// Source An integration's event: its source identity (also for a tombstone); null for a Life OS event.
+	Source *ChangeFeedSource `json:"source,omitempty"`
+}
+
+// ChangeFeedPage defines model for ChangeFeedPage.
+type ChangeFeedPage struct {
+	// HasMore More entries of this phase are waiting now. On a snapshot page, false means the snapshot is complete: every followed event it did not list no longer exists, and nextCursor continues with changes.
+	HasMore bool              `json:"hasMore"`
+	Items   []ChangeFeedEntry `json:"items"`
+
+	// NextCursor Pass it back as cursor for what follows; always set.
+	NextCursor string `json:"nextCursor"`
+
+	// Phase Whether the items are a snapshot (every followed event as it is now) or changes since the cursor.
+	Phase ChangeFeedPagePhase `json:"phase"`
+}
+
+// ChangeFeedPagePhase Whether the items are a snapshot (every followed event as it is now) or changes since the cursor.
+type ChangeFeedPagePhase string
+
+// ChangeFeedSource Where an integration's event belongs, so the integration knows where to write it.
+type ChangeFeedSource struct {
+	// ExternalId The source's id in the integration.
+	ExternalId string `json:"externalId"`
+
+	// ExternalUid The event's uid in the source (`lifeos:<id>` for an event Calendar created there, such as the new series of a split, until the integration gives it its own uid).
+	ExternalUid string             `json:"externalUid"`
+	Integration string             `json:"integration"`
+	SourceId    openapi_types.UUID `json:"sourceId"`
+}
 
 // CreateEventRequest A timed event needs startAt and endAt (endAt after startAt); an all-day event needs startDate and endDate (endDate not before startDate) and takes no timeZone.
 type CreateEventRequest struct {
@@ -443,7 +612,7 @@ type CreateSourceRequest struct {
 	// Filter Which feed events to import. A term matches an event when it equals one of the event's CATEGORIES or occurs in its SUMMARY (both case-insensitive). With `include` terms, only events matching one of them are imported; then events matching an `exclude` term are dropped. Empty lists import everything.
 	Filter *SourceFilter `json:"filter,omitempty"`
 
-	// Kind `ics`: an ICS/iCal feed downloaded from a URL.
+	// Kind `ics`: an ICS/iCal feed Calendar downloads from a URL. `external`: a source an integration syncs (see `/v1/integrations`), which keeps its own URL, filter, and refresh state.
 	Kind *CalendarSourceKind `json:"kind,omitempty"`
 	Name string              `json:"name"`
 
@@ -498,17 +667,26 @@ type EventSource struct {
 	// ExternalUid The event's identity in its source; null for manual events. For an ICS event, its UID; one occurrence of a recurring ICS event is imported as its own event, `<UID>#<RECURRENCE-ID>`, where the RECURRENCE-ID is its original start (20261017T040000Z, or 20261017 for an all-day event). For a Google event, its Google event id; one occurrence of a recurring Google event imported as its own event is `<id>_<original start>` as Google names its instances (`<id>_20261017T040000Z`, or `<id>_20261017` for an all-day event).
 	ExternalUid *string `json:"externalUid,omitempty"`
 
-	// Kind `manual`: created in Life OS (the Dashboard, MCP, or a capture). `ics`: imported from an ICS/iCal feed. `google`: synchronized from Google Calendar.
+	// Integration The integration the source belongs to, such as google-calendar; null for manual events. Set by Calendar in responses.
+	Integration *string `json:"integration,omitempty"`
+
+	// Kind `manual`: created in Life OS (the Dashboard, MCP, or a capture). `external`: brought in by an integration (see `/v1/integrations`; `source.provider` and `source.name` say from where). `ics` and `google`: imported by Calendar itself from an ICS/iCal feed or Google Calendar, until those sources are handed over to their integrations.
 	Kind EventSourceKind `json:"kind"`
 
 	// Name The name of that source, such as "ZAW", as it is now (renaming the source renames it here); null for manual events. Set by Calendar in responses.
 	Name *string `json:"name,omitempty"`
 
+	// Provider The label of the source's provider, such as Google or ZAW, for "<provider> · <name>"; null for manual events. Set by Calendar in responses.
+	Provider *string `json:"provider,omitempty"`
+
+	// ReadOnly Whether the source accepts changes to its events (see `editable` for this event); null for manual events. Set by Calendar in responses.
+	ReadOnly *bool `json:"readOnly,omitempty"`
+
 	// SourceId The Calendar source (feed or connected calendar) the event was imported from; null for manual events.
 	SourceId *openapi_types.UUID `json:"sourceId,omitempty"`
 }
 
-// EventSourceKind `manual`: created in Life OS (the Dashboard, MCP, or a capture). `ics`: imported from an ICS/iCal feed. `google`: synchronized from Google Calendar.
+// EventSourceKind `manual`: created in Life OS (the Dashboard, MCP, or a capture). `external`: brought in by an integration (see `/v1/integrations`; `source.provider` and `source.name` say from where). `ics` and `google`: imported by Calendar itself from an ICS/iCal feed or Google Calendar, until those sources are handed over to their integrations.
 type EventSourceKind string
 
 // EventStatus `cancelled` events are kept as history but left out of listings and search unless asked for. An occurrence of a recurring event is cancelled when its series is or when it is skipped on its own.
@@ -655,6 +833,43 @@ type GoogleExportState struct {
 	Pending int `json:"pending"`
 }
 
+// IntegrationSource defines model for IntegrationSource.
+type IntegrationSource struct {
+	CreatedAt time.Time `json:"createdAt"`
+
+	// DefaultPriority How important an event is; the importance of its reminder notifications.
+	DefaultPriority EventPriority `json:"defaultPriority"`
+
+	// DefaultReminders Default reminders of the source's events; null means none.
+	DefaultReminders *[]Reminder `json:"defaultReminders"`
+
+	// Enabled The owner's switch; a disabled source refuses syncs and keeps its events.
+	Enabled    bool   `json:"enabled"`
+	ExternalId string `json:"externalId"`
+
+	// Id The source's id in Calendar: its events carry it as `source.sourceId`.
+	Id openapi_types.UUID `json:"id"`
+
+	// InProcess Calendar's in-process adapter still syncs the source (a source from before the integration services); it cannot be synced through this API until it is handed over.
+	InProcess   bool   `json:"inProcess"`
+	Integration string `json:"integration"`
+
+	// Name The name shown with its events (the owner may have changed it).
+	Name string `json:"name"`
+
+	// Provider The label shown for the source, such as Google, ZAW, or ICS.
+	Provider string `json:"provider"`
+
+	// ReadOnly Whether the source accepts changes to its events. Those of a source that does are editable in Life OS like Life OS events (unless read-only on their own, see SourceEvent `readOnlyReason`), and each change comes through the change feed for the integration to write to the provider; a read-only source's events allow only their reminders and priority.
+	ReadOnly  bool      `json:"readOnly"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// IntegrationSourceList defines model for IntegrationSourceList.
+type IntegrationSourceList struct {
+	Items []IntegrationSource `json:"items"`
+}
+
 // LifeOsCalendar The "Life OS" calendar Calendar created in the owner's Google account for the events created in Life OS; null until it exists. Created when Google is connected with export on; if the owner deletes it in Google, Calendar creates it again at the next export and says so in `note`.
 type LifeOsCalendar struct {
 	// CalendarId Its id in Calendar's calendar list (/v1/google/calendars), where it syncs like the others.
@@ -665,6 +880,36 @@ type LifeOsCalendar struct {
 	// Note What happened to it last, such as that it was deleted in Google and created again; null when nothing needs saying.
 	Note    *string `json:"note,omitempty"`
 	Summary string  `json:"summary"`
+}
+
+// OccurrenceChanges The fields one occurrence of a series overrides, as Calendar stores them; absent fields follow the series. `description` or `location` null clears it for the occurrence. A moved occurrence gives both ends: `startAt` and `endAt` for a timed series, `startDate` and `endDate` (inclusive) for an all-day one.
+type OccurrenceChanges struct {
+	Description *string             `json:"description,omitempty"`
+	EndAt       *time.Time          `json:"endAt,omitempty"`
+	EndDate     *openapi_types.Date `json:"endDate,omitempty"`
+	Location    *string             `json:"location,omitempty"`
+
+	// Priority How important an event is; the importance of its reminder notifications.
+	Priority            *EventPriority      `json:"priority,omitempty"`
+	Reminders           *[]Reminder         `json:"reminders,omitempty"`
+	StartAt             *time.Time          `json:"startAt,omitempty"`
+	StartDate           *openapi_types.Date `json:"startDate,omitempty"`
+	Title               *string             `json:"title,omitempty"`
+	UseDefaultReminders *bool               `json:"useDefaultReminders,omitempty"`
+}
+
+// OccurrenceException One occurrence of a series with its own changes or skipped (This event).
+type OccurrenceException struct {
+	// Cancelled The occurrence is skipped.
+	Cancelled   bool       `json:"cancelled"`
+	CancelledAt *time.Time `json:"cancelledAt,omitempty"`
+
+	// Changes The fields one occurrence of a series overrides, as Calendar stores them; absent fields follow the series. `description` or `location` null clears it for the occurrence. A moved occurrence gives both ends: `startAt` and `endAt` for a timed series, `startDate` and `endDate` (inclusive) for an all-day one.
+	Changes OccurrenceChanges `json:"changes"`
+
+	// RecurrenceId The occurrence's original start (see `occurrence.recurrenceId`).
+	RecurrenceId string    `json:"recurrenceId"`
+	UpdatedAt    time.Time `json:"updatedAt"`
 }
 
 // Recurrence Repeats the event every `interval` days, weeks, months, or years from its start, as an iCalendar (RFC 5545) rule. A timed event keeps its wall-clock time in its `timeZone` (else the owner's timezone) across daylight saving changes. Weekly repeats on the start's weekday, or on each of `byWeekday` (which must include the start's weekday in the event's timezone; all-day: its startDate's). Monthly repeats on the start's day of the month and skips months without it (the 31st); yearly on the start's date: an all-day event on 17 September repeats annually on September 17, such as a birthday (29 February only in leap years). The series ends at `until`, the latest start of an occurrence (inclusive; an all-day series compares its dates with until's date in the owner's timezone; not before the event's start), or after `count` occurrences, or never; not both. Errors (400): `recurrence frequency must be daily, weekly, monthly, or yearly`, `recurrence interval must be at least 1`, `recurrence byWeekday is only for weekly recurrence`, `recurrence byWeekday days must be MO, TU, WE, TH, FR, SA, or SU`, `recurrence byWeekday must include the weekday the event starts on (Saturday)` (naming that weekday), `recurrence count must be between 1 and 1000`, `recurrence takes until or count, not both`, `recurrence until must not be before the event starts`.
@@ -683,6 +928,24 @@ type Recurrence struct {
 
 // RecurrenceFrequency defines model for Recurrence.Frequency.
 type RecurrenceFrequency string
+
+// RegisterIntegrationSourceRequest defines model for RegisterIntegrationSourceRequest.
+type RegisterIntegrationSourceRequest struct {
+	// DefaultPriority Leave out when the source has none to say (new sources get medium).
+	DefaultPriority *EventPriority `json:"defaultPriority,omitempty"`
+
+	// DefaultReminders The source's own default reminders (null: none). Leave out when the source has none to say.
+	DefaultReminders *[]Reminder `json:"defaultReminders,omitempty"`
+
+	// Name The source's name in the integration, such as the Google calendar's name.
+	Name string `json:"name"`
+
+	// Provider The label shown for the source, such as Google or ZAW.
+	Provider string `json:"provider"`
+
+	// ReadOnly Whether the source accepts changes to its events.
+	ReadOnly bool `json:"readOnly"`
+}
 
 // Reminder Calendar sends a notification for each effective reminder when it is due. `relative`: `minutesBefore` the event starts (an all-day event starts at midnight of its first day, owner-local). `localTime`: at `localTime` (HH:MM on the owner's wall clock) on the day `daysBefore` days before the event's start date in the owner's timezone, resolved when the reminder is due so daylight saving changes are respected. Example: a pickup on 17 November with `{"kind": "localTime", "daysBefore": 1, "localTime": "19:00"}` reminds on 16 November at 19:00.
 type Reminder struct {
@@ -735,6 +998,67 @@ type ReminderDeliveryStatus struct {
 
 	// LastSuccessAt When a run last finished without an error.
 	LastSuccessAt *time.Time `json:"lastSuccessAt"`
+}
+
+// SourceEvent One event of a source as the integration has it. A timed event needs `startAt` and `endAt` (after it); an all-day event `startDate` and `endDate` (inclusive, not before it) and no `timeZone`. A series has its `recurrence` (Calendar's model; a rule outside it is sent as one event per occurrence) and its occurrences' own changes and skips in `exceptions`. Validated like events created in Life OS.
+type SourceEvent struct {
+	AllDay      bool                `json:"allDay"`
+	Description *string             `json:"description,omitempty"`
+	EndAt       *time.Time          `json:"endAt,omitempty"`
+	EndDate     *openapi_types.Date `json:"endDate,omitempty"`
+
+	// Exceptions A series' changed or skipped occurrences.
+	Exceptions *[]SourceEventException `json:"exceptions,omitempty"`
+
+	// ExternalUid The event's identity in the source, unique within it, such as a Google event id or an ICS UID.
+	ExternalUid string  `json:"externalUid"`
+	Location    *string `json:"location,omitempty"`
+
+	// PreviousExternalUid The uid the event had in Calendar until now, to give it the uid the source knows it by: an event Calendar created in the source (the new series of a split, `lifeos:<id>`) once the integration has created it at the provider. Ignored when Calendar has no event with it, or already has one with externalUid.
+	PreviousExternalUid *string `json:"previousExternalUid,omitempty"`
+
+	// Priority An event's own priority as its source gives it; `default`: none of its own, so it follows the source's `defaultPriority`.
+	Priority *SourceEventPriority `json:"priority,omitempty"`
+
+	// ReadOnlyReason Set when the event cannot be changed in Life OS although its source accepts changes (such as one occurrence of a rule Calendar cannot hold): why, as shown to the owner. Its reminders and priority stay changeable.
+	ReadOnlyReason *string     `json:"readOnlyReason,omitempty"`
+	Recurrence     *Recurrence `json:"recurrence,omitempty"`
+
+	// Reminders The reminders the source gives an event, like Google Calendar's notifications.
+	Reminders *SourceEventReminders `json:"reminders,omitempty"`
+	StartAt   *time.Time            `json:"startAt,omitempty"`
+	StartDate *openapi_types.Date   `json:"startDate,omitempty"`
+
+	// Status `cancelled`: the source cancelled the event (kept as cancelled history). Default active.
+	Status *EventStatus `json:"status,omitempty"`
+
+	// TimeZone The IANA timezone a timed event is scheduled in.
+	TimeZone *string `json:"timeZone,omitempty"`
+	Title    string  `json:"title"`
+}
+
+// SourceEventException One occurrence of a series changed or skipped (Google's changed or cancelled instances, EXDATEs). It must skip the occurrence or change something.
+type SourceEventException struct {
+	// Cancelled The occurrence is skipped.
+	Cancelled *bool `json:"cancelled,omitempty"`
+
+	// Changes The fields one occurrence of a series overrides, as Calendar stores them; absent fields follow the series. `description` or `location` null clears it for the occurrence. A moved occurrence gives both ends: `startAt` and `endAt` for a timed series, `startDate` and `endDate` (inclusive) for an all-day one.
+	Changes *OccurrenceChanges `json:"changes,omitempty"`
+
+	// RecurrenceId The occurrence's original start: an RFC 3339 instant in UTC for a timed series (2026-10-12T16:00:00Z), a date for an all-day one (2026-10-24).
+	RecurrenceId string `json:"recurrenceId"`
+}
+
+// SourceEventPriority An event's own priority as its source gives it; `default`: none of its own, so it follows the source's `defaultPriority`.
+type SourceEventPriority string
+
+// SourceEventReminders The reminders the source gives an event, like Google Calendar's notifications.
+type SourceEventReminders struct {
+	// Reminders The event's own reminders.
+	Reminders []Reminder `json:"reminders"`
+
+	// UseDefault The event follows the source's default reminders.
+	UseDefault bool `json:"useDefault"`
 }
 
 // SourceFilter Which feed events to import. A term matches an event when it equals one of the event's CATEGORIES or occurs in its SUMMARY (both case-insensitive). With `include` terms, only events matching one of them are imported; then events matching an `exclude` term are dropped. Empty lists import everything.
@@ -799,6 +1123,54 @@ type SourceRefreshState struct {
 
 	// Refreshing A refresh is running now.
 	Refreshing bool `json:"refreshing"`
+}
+
+// SyncIntegrationSourceRequest defines model for SyncIntegrationSourceRequest.
+type SyncIntegrationSourceRequest struct {
+	// Deleted delta only: the external uids of events the source no longer has. Unknown ones are ignored.
+	Deleted *[]string `json:"deleted,omitempty"`
+
+	// EmptyGuard snapshot only: a snapshot without items is refused (409 empty_snapshot, nothing changes) while the source still has upcoming active events, such as when a feed comes back empty by mistake.
+	EmptyGuard *bool `json:"emptyGuard,omitempty"`
+
+	// FeedCursor The change-feed cursor (phase changes) the integration has handled: the sync is refused (409 unhandled_changes) while the feed has changes to this source's events after it made by anyone else. Leave out for a read-only source.
+	FeedCursor *string `json:"feedCursor,omitempty"`
+
+	// Items Every event of the source (snapshot), or the new and changed ones (delta).
+	Items []SourceEvent                    `json:"items"`
+	Mode  SyncIntegrationSourceRequestMode `json:"mode"`
+
+	// Window Which stored events the batch speaks for; at most one of the two. `start`: the source lists its events from this instant on (Google's time window): a stored event that ended before it is history the source no longer lists and stays as it is. `upcomingOnly`: the source lists only events still to come (many ICS feeds): a stored event that started before now is neither removed nor rewritten, unless the batch moves it into the future.
+	Window *SyncWindow `json:"window,omitempty"`
+}
+
+// SyncIntegrationSourceRequestMode defines model for SyncIntegrationSourceRequest.Mode.
+type SyncIntegrationSourceRequestMode string
+
+// SyncIntegrationSourceResult defines model for SyncIntegrationSourceResult.
+type SyncIntegrationSourceResult struct {
+	Inserted int                             `json:"inserted"`
+	Mode     SyncIntegrationSourceResultMode `json:"mode"`
+
+	// Received Items in the batch.
+	Received int `json:"received"`
+
+	// Removed Events cancelled and marked removedFromSourceAt: left out of a snapshot, or deleted in a delta.
+	Removed int `json:"removed"`
+
+	// Restored Removed events back in the source.
+	Restored  int `json:"restored"`
+	Unchanged int `json:"unchanged"`
+	Updated   int `json:"updated"`
+}
+
+// SyncIntegrationSourceResultMode defines model for SyncIntegrationSourceResult.Mode.
+type SyncIntegrationSourceResultMode string
+
+// SyncWindow Which stored events the batch speaks for; at most one of the two. `start`: the source lists its events from this instant on (Google's time window): a stored event that ended before it is history the source no longer lists and stays as it is. `upcomingOnly`: the source lists only events still to come (many ICS feeds): a stored event that started before now is neither removed nor rewritten, unless the batch moves it into the future.
+type SyncWindow struct {
+	Start        *time.Time `json:"start,omitempty"`
+	UpcomingOnly *bool      `json:"upcomingOnly,omitempty"`
 }
 
 // UpdateEventRequest defines model for UpdateEventRequest.
@@ -896,8 +1268,14 @@ type Editable = bool
 // EventId defines model for EventId.
 type EventId = openapi_types.UUID
 
+// ExternalSourceId defines model for ExternalSourceId.
+type ExternalSourceId = string
+
 // IncludeCancelled defines model for IncludeCancelled.
 type IncludeCancelled = bool
+
+// Integration defines model for Integration.
+type Integration = string
 
 // RecurrenceId defines model for RecurrenceId.
 type RecurrenceId = string
@@ -905,7 +1283,7 @@ type RecurrenceId = string
 // SourceId defines model for SourceId.
 type SourceId = openapi_types.UUID
 
-// SourceKind `manual`: created in Life OS (the Dashboard, MCP, or a capture). `ics`: imported from an ICS/iCal feed. `google`: synchronized from Google Calendar.
+// SourceKind `manual`: created in Life OS (the Dashboard, MCP, or a capture). `external`: brought in by an integration (see `/v1/integrations`; `source.provider` and `source.name` say from where). `ics` and `google`: imported by Calendar itself from an ICS/iCal feed or Google Calendar, until those sources are handed over to their integrations.
 type SourceKind = EventSourceKind
 
 // TimeZone defines model for TimeZone.
@@ -925,13 +1303,13 @@ type ListEventsParams struct {
 	// IncludeCancelled Also return cancelled events (including those removed by their source).
 	IncludeCancelled *IncludeCancelled `form:"includeCancelled,omitempty" json:"includeCancelled,omitempty"`
 
-	// SourceKind Only events from this kind of source.
+	// SourceKind Only events from this kind of source; `manual` lists the events created in Life OS, `external` those an integration brought in.
 	SourceKind *SourceKind `form:"sourceKind,omitempty" json:"sourceKind,omitempty"`
 
 	// SourceId Only events imported from this source.
 	SourceId *SourceId `form:"sourceId,omitempty" json:"sourceId,omitempty"`
 
-	// Editable Only events that can be changed through this API (`editable`): Life OS events, and Google events of calendars the account may edit that are single events or series Calendar holds; not feed events, read-only Google calendars, or occurrences expanded from a Google rule. The AI looks for the events to change this way.
+	// Editable Only events that can be changed through this API (`editable`): Life OS events, Google events of calendars the account may edit that are single events or series Calendar holds, and events of integrations' sources that accept changes (unless read-only on their own); not feed events, read-only Google calendars, or occurrences expanded from a Google rule. The AI looks for the events to change this way.
 	Editable *Editable `form:"editable,omitempty" json:"editable,omitempty"`
 
 	// Cursor The previous page's nextCursor. Opaque; only valid with the parameters it was returned for.
@@ -956,13 +1334,13 @@ type SearchEventsParams struct {
 	// IncludeCancelled Also return cancelled events (including those removed by their source).
 	IncludeCancelled *IncludeCancelled `form:"includeCancelled,omitempty" json:"includeCancelled,omitempty"`
 
-	// SourceKind Only events from this kind of source.
+	// SourceKind Only events from this kind of source; `manual` lists the events created in Life OS, `external` those an integration brought in.
 	SourceKind *SourceKind `form:"sourceKind,omitempty" json:"sourceKind,omitempty"`
 
 	// SourceId Only events imported from this source.
 	SourceId *SourceId `form:"sourceId,omitempty" json:"sourceId,omitempty"`
 
-	// Editable Only events that can be changed through this API (`editable`): Life OS events, and Google events of calendars the account may edit that are single events or series Calendar holds; not feed events, read-only Google calendars, or occurrences expanded from a Google rule. The AI looks for the events to change this way.
+	// Editable Only events that can be changed through this API (`editable`): Life OS events, Google events of calendars the account may edit that are single events or series Calendar holds, and events of integrations' sources that accept changes (unless read-only on their own); not feed events, read-only Google calendars, or occurrences expanded from a Google rule. The AI looks for the events to change this way.
 	Editable *Editable `form:"editable,omitempty" json:"editable,omitempty"`
 
 	// Cursor The previous page's nextCursor. Opaque; only valid with the parameters it was returned for.
@@ -975,6 +1353,21 @@ type SyncGoogleCalendarParams struct {
 	// Full List every event again instead of the changes since the last sync.
 	Full *bool `form:"full,omitempty" json:"full,omitempty"`
 }
+
+// ListChangesParams defines parameters for ListChanges.
+type ListChangesParams struct {
+	// Cursor The previous page's nextCursor; leave out to start with a snapshot.
+	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
+
+	// Limit At most this many changes (snapshot: events) per page.
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Scope `own`: Life OS events and the events of the reading integration's own sources (`system:<name>` only; its default). `all`: also those of every other integration (the default for `dev:<name>`).
+	Scope *ListChangesParamsScope `form:"scope,omitempty" json:"scope,omitempty"`
+}
+
+// ListChangesParamsScope defines parameters for ListChanges.
+type ListChangesParamsScope string
 
 // CreateEventJSONRequestBody defines body for CreateEvent for application/json ContentType.
 type CreateEventJSONRequestBody = CreateEventRequest
@@ -996,6 +1389,12 @@ type UpdateGoogleConnectionJSONRequestBody = UpdateGoogleConnectionRequest
 
 // ConnectGoogleJSONRequestBody defines body for ConnectGoogle for application/json ContentType.
 type ConnectGoogleJSONRequestBody = GoogleConnectRequest
+
+// RegisterIntegrationSourceJSONRequestBody defines body for RegisterIntegrationSource for application/json ContentType.
+type RegisterIntegrationSourceJSONRequestBody = RegisterIntegrationSourceRequest
+
+// SyncIntegrationSourceJSONRequestBody defines body for SyncIntegrationSource for application/json ContentType.
+type SyncIntegrationSourceJSONRequestBody = SyncIntegrationSourceRequest
 
 // UpdateSettingsJSONRequestBody defines body for UpdateSettings for application/json ContentType.
 type UpdateSettingsJSONRequestBody = UpdateSettingsRequest
@@ -1065,6 +1464,24 @@ type ServerInterface interface {
 	// AuthorizeGoogle Start a Google authorization
 	// (POST /v1/google/connection/authorize)
 	AuthorizeGoogle(c fiber.Ctx) error
+	// ListChanges Follow the changes of events made in Life OS
+	// (GET /v1/integrations/changes)
+	ListChanges(c fiber.Ctx, params ListChangesParams) error
+	// ListIntegrationSources List an integration's sources
+	// (GET /v1/integrations/{integration}/sources)
+	ListIntegrationSources(c fiber.Ctx, integration Integration) error
+	// DeleteIntegrationSource Delete an integration's source
+	// (DELETE /v1/integrations/{integration}/sources/{externalId})
+	DeleteIntegrationSource(c fiber.Ctx, integration Integration, externalId ExternalSourceId) error
+	// GetIntegrationSource Get one of an integration's sources
+	// (GET /v1/integrations/{integration}/sources/{externalId})
+	GetIntegrationSource(c fiber.Ctx, integration Integration, externalId ExternalSourceId) error
+	// RegisterIntegrationSource Register or update an integration's source
+	// (PUT /v1/integrations/{integration}/sources/{externalId})
+	RegisterIntegrationSource(c fiber.Ctx, integration Integration, externalId ExternalSourceId) error
+	// SyncIntegrationSource Sync the events of an integration's source
+	// (POST /v1/integrations/{integration}/sources/{externalId}/sync)
+	SyncIntegrationSource(c fiber.Ctx, integration Integration, externalId ExternalSourceId) error
 	// GetReminderStatus Get the reminder delivery health
 	// (GET /v1/reminders/status)
 	GetReminderStatus(c fiber.Ctx) error
@@ -1749,6 +2166,234 @@ func (siw *ServerInterfaceWrapper) AuthorizeGoogle(c fiber.Ctx) error {
 	return handler(c)
 }
 
+// ListChanges operation middleware
+func (siw *ServerInterfaceWrapper) ListChanges(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListChangesParams
+
+	var query url.Values
+	query, err = url.ParseQuery(string(c.Request().URI().QueryString()))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for query string: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", query, &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter cursor: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", query, &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter limit: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "scope" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "scope", query, &params.Scope, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter scope: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.ListChanges(c, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// ListIntegrationSources operation middleware
+func (siw *ServerInterfaceWrapper) ListIntegrationSources(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "integration" -------------
+	var integration Integration
+
+	err = runtime.BindStyledParameterWithOptions("simple", "integration", c.Params("integration"), &integration, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter integration: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.ListIntegrationSources(c, integration)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// DeleteIntegrationSource operation middleware
+func (siw *ServerInterfaceWrapper) DeleteIntegrationSource(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "integration" -------------
+	var integration Integration
+
+	err = runtime.BindStyledParameterWithOptions("simple", "integration", c.Params("integration"), &integration, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter integration: %w", err).Error())
+	}
+
+	// ------------- Path parameter "externalId" -------------
+	var externalId ExternalSourceId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "externalId", c.Params("externalId"), &externalId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter externalId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.DeleteIntegrationSource(c, integration, externalId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// GetIntegrationSource operation middleware
+func (siw *ServerInterfaceWrapper) GetIntegrationSource(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "integration" -------------
+	var integration Integration
+
+	err = runtime.BindStyledParameterWithOptions("simple", "integration", c.Params("integration"), &integration, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter integration: %w", err).Error())
+	}
+
+	// ------------- Path parameter "externalId" -------------
+	var externalId ExternalSourceId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "externalId", c.Params("externalId"), &externalId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter externalId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.GetIntegrationSource(c, integration, externalId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// RegisterIntegrationSource operation middleware
+func (siw *ServerInterfaceWrapper) RegisterIntegrationSource(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "integration" -------------
+	var integration Integration
+
+	err = runtime.BindStyledParameterWithOptions("simple", "integration", c.Params("integration"), &integration, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter integration: %w", err).Error())
+	}
+
+	// ------------- Path parameter "externalId" -------------
+	var externalId ExternalSourceId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "externalId", c.Params("externalId"), &externalId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter externalId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.RegisterIntegrationSource(c, integration, externalId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// SyncIntegrationSource operation middleware
+func (siw *ServerInterfaceWrapper) SyncIntegrationSource(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "integration" -------------
+	var integration Integration
+
+	err = runtime.BindStyledParameterWithOptions("simple", "integration", c.Params("integration"), &integration, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter integration: %w", err).Error())
+	}
+
+	// ------------- Path parameter "externalId" -------------
+	var externalId ExternalSourceId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "externalId", c.Params("externalId"), &externalId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter externalId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.SyncIntegrationSource(c, integration, externalId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
 // GetReminderStatus operation middleware
 func (siw *ServerInterfaceWrapper) GetReminderStatus(c fiber.Ctx) error {
 
@@ -2033,5 +2678,17 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	router.Patch(options.BaseURL+"/v1/google/calendars/:calendarId", wrapper.UpdateGoogleCalendar)
 
 	router.Post(options.BaseURL+"/v1/google/calendars/:calendarId/sync", wrapper.SyncGoogleCalendar)
+
+	router.Get(options.BaseURL+"/v1/integrations/:integration/sources", wrapper.ListIntegrationSources)
+
+	router.Delete(options.BaseURL+"/v1/integrations/:integration/sources/:externalId", wrapper.DeleteIntegrationSource)
+
+	router.Get(options.BaseURL+"/v1/integrations/:integration/sources/:externalId", wrapper.GetIntegrationSource)
+
+	router.Put(options.BaseURL+"/v1/integrations/:integration/sources/:externalId", wrapper.RegisterIntegrationSource)
+
+	router.Post(options.BaseURL+"/v1/integrations/:integration/sources/:externalId/sync", wrapper.SyncIntegrationSource)
+
+	router.Get(options.BaseURL+"/v1/integrations/changes", wrapper.ListChanges)
 
 }

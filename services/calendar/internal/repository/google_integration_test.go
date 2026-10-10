@@ -61,7 +61,10 @@ func TestGoogleConnectionMigration(t *testing.T) {
 // removes the synced events and keeps feeds and Life OS events.
 func TestGoogleSyncMigration(t *testing.T) {
 	ctx := context.Background()
-	pool := testdb.Open(t, "")
+	// Up to the last migration before the change feed (000014), whose
+	// deferred triggers on events keep a down migration that changes events
+	// from altering the table in the same transaction.
+	pool := testdb.Open(t, "000013")
 	var connection, calendar, other string
 	if err := pool.QueryRow(ctx, `INSERT INTO google_connections (account_email, refresh_token_ciphertext, refresh_token_nonce) VALUES ('owner@example.com', '\x01', '\x02') RETURNING id`).Scan(&connection); err != nil {
 		t.Fatal(err)
