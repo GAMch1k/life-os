@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { voiceClient } from "@/lib/api";
 import { captureMetadata } from "@/lib/time-zone";
+import { cn } from "@/lib/utils";
 import {
   isVoiceJobTerminal,
   pickRecordingType,
@@ -18,7 +19,23 @@ import {
 
 type CaptureState = "idle" | "recording" | "uploading" | "failed";
 
-export function VoiceCapture() {
+/**
+ * The Record control. A recording is uploaded to Voice, which transcribes it
+ * and creates the Inbox item. `metadata` is added to the upload's
+ * `sourceMetadata` (with the browser's timezone), which Voice passes on to
+ * that item; `onUploaded` hears when Voice accepted the recording. Leaving
+ * mid-recording sends what was recorded, unless `dropOnLeave` (a Human
+ * Review edit, where leaving means Cancel).
+ */
+export function VoiceCapture({
+  dropOnLeave = false,
+  metadata,
+  onUploaded,
+}: {
+  dropOnLeave?: boolean;
+  metadata?: Record<string, unknown>;
+  onUploaded?: (job: VoiceJob) => void;
+}) {
   const [state, setState] = useState<CaptureState>("idle");
   const [message, setMessage] = useState(
     "Record a thought; it will be transcribed in the background.",
@@ -27,12 +44,23 @@ export function VoiceCapture() {
   const recorder = useRef<MediaRecorder | undefined>(undefined);
   const chunks = useRef<Blob[]>([]);
   const pendingAudio = useRef<Blob | undefined>(undefined);
+  const mounted = useRef(false);
+  const drop = useRef(dropOnLeave);
+  useEffect(() => {
+    drop.current = dropOnLeave;
+  }, [dropOnLeave]);
 
-  useEffect(
-    () => () =>
-      recorder.current?.stream.getTracks().forEach((track) => track.stop()),
-    [],
-  );
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      // Ending the tracks stops the recorder, which uploads what it has, so
+      // a thought recorded on Home is not lost by opening another page. A
+      // cancelled Human Review edit drops it instead.
+      if (drop.current && recorder.current) recorder.current.onstop = null;
+      recorder.current?.stream.getTracks().forEach((track) => track.stop());
+    };
+  }, []);
 
   useEffect(() => {
     if (!job || isVoiceJobTerminal(job.status)) return;
@@ -106,10 +134,11 @@ export function VoiceCapture() {
     }
     setState("uploading");
     let status: number | undefined;
+    let uploaded: VoiceJob | undefined;
     try {
       const body = new FormData();
       body.append("audio", audio, recordingFileName(audio.type));
-      body.append("sourceMetadata", JSON.stringify(captureMetadata()));
+      body.append("sourceMetadata", JSON.stringify(captureMetadata(metadata)));
       body.append("source", "web");
       const { data, error, response } = await voiceClient.POST(
         "/v1/audio-jobs",
@@ -120,12 +149,15 @@ export function VoiceCapture() {
       setJob(data);
       setState("idle");
       setMessage(voiceJobMessage(data));
+      uploaded = data;
     } catch {
       const failure = voiceUploadError(status, audio.size);
       if (!failure.retryable) pendingAudio.current = undefined;
       setState("failed");
       setMessage(failure.message);
     }
+    // Not after the control is gone, such as an edit cancelled meanwhile.
+    if (uploaded && mounted.current) onUploaded?.(uploaded);
   }
   function retry() {
     if (pendingAudio.current) void upload();
@@ -135,6 +167,7 @@ export function VoiceCapture() {
   // Presentation: an inline control for the capture card's action row. The
   // status line stays empty until there is something to report; on phones it
   // wraps below the button.
+  const quiet = state === "idle" && !job;
   return (
     <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
       {state === "recording" ? (
@@ -157,11 +190,16 @@ export function VoiceCapture() {
           <Mic /> Record
         </Button>
       )}
+      {/* Always rendered, so screen readers hear its first message; while
+          empty it is sr-only, so on phones it adds no line under the button. */}
       <p
         aria-live="polite"
-        className="text-muted-foreground min-w-0 basis-full text-xs sm:flex-1 sm:basis-0"
+        className={cn(
+          "text-muted-foreground min-w-0 basis-full text-xs sm:flex-1 sm:basis-0",
+          quiet && "sr-only",
+        )}
       >
-        {state === "idle" && !job ? null : message}
+        {quiet ? null : message}
       </p>
     </div>
   );

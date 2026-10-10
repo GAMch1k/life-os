@@ -1,39 +1,30 @@
 "use client";
 
 import Link from "next/link";
-import { Inbox, LoaderCircle, Send } from "lucide-react";
-import {
-  type FormEvent,
-  type KeyboardEvent,
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-} from "react";
+import { useRouter } from "next/navigation";
+import { Inbox } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 
+import { CaptureComposer } from "@/components/capture-composer";
 import { InboxStateBadge } from "@/components/inbox-summary";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Textarea } from "@/components/ui/textarea";
-import { VoiceCapture } from "@/components/voice-capture";
 import { inboxClient } from "@/lib/api/inbox-client";
+import { onCapture } from "@/lib/capture-session";
 import {
   formatInboxTime,
   type InboxBacklog,
   type InboxItem,
   inboxItemStatus,
   isPendingState,
+  leftProcessing,
   retryReasonLabel,
 } from "@/lib/inbox-summary";
-import { captureMetadata } from "@/lib/time-zone";
-import { cn } from "@/lib/utils";
 
 /** Captures from this visit that stay listed under the composer. */
 const SESSION_CAPTURES = 3;
 const POLL_MS = 3_000;
 /** Stop following a capture that is still pending after this long. */
 const FOLLOW_MS = 15 * 60_000;
-const CONFIRMATION_MS = 2_500;
 
 type SessionCapture = { item: InboxItem; since: number };
 
@@ -47,10 +38,9 @@ function following({ item, since }: SessionCapture, now: number) {
 }
 
 /**
- * The one capture surface: a chat-like composer for text, the Voice recorder
- * beside the Capture button, and the outcome of what was just captured.
- * Enter captures, Shift+Enter starts a new line. Pass `backlog` to show the
- * pending/failed Inbox counts under it (Home).
+ * The one capture surface: the composer (text, and the Voice recorder beside
+ * the Capture button) and the outcome of what was just captured on this page.
+ * Pass `backlog` to show the pending/failed Inbox counts under it (Home).
  */
 export function CaptureCard({
   backlog: initialBacklog,
@@ -63,35 +53,11 @@ export function CaptureCard({
   renderedAt: string;
   timeZone: string;
 }) {
-  const [content, setContent] = useState("");
-  const [sending, setSending] = useState(false);
-  const [notice, setNotice] = useState<{
-    kind: "ok" | "error";
-    text: string;
-  }>();
+  const router = useRouter();
   const [captures, setCaptures] = useState<SessionCapture[]>([]);
   const [backlog, setBacklog] = useState(initialBacklog);
   const [now, setNow] = useState(() => new Date(renderedAt));
-  const field = useRef<HTMLTextAreaElement>(null);
-  // Guards against a second submit before React re-renders with `sending`.
-  const submitting = useRef(false);
   const showBacklog = initialBacklog !== undefined;
-
-  useEffect(() => {
-    // Desktop opens ready to type; phones keep the keyboard closed until tapped.
-    if (focusOnDesktop && window.matchMedia("(pointer: fine)").matches) {
-      field.current?.focus({ preventScroll: true });
-    }
-  }, [focusOnDesktop]);
-
-  useEffect(() => {
-    if (notice?.kind !== "ok") return;
-    const timer = window.setTimeout(
-      () => setNotice(undefined),
-      CONFIRMATION_MS,
-    );
-    return () => window.clearTimeout(timer);
-  }, [notice]);
 
   const refreshBacklog = useCallback(async () => {
     if (!showBacklog) return;
@@ -102,6 +68,20 @@ export function CaptureCard({
       // Keep the last known counts; the next change refreshes them again.
     }
   }, [showBacklog]);
+
+  // Every text capture made on this page is listed and followed here: this
+  // composer's, and a Human Review edit's.
+  useEffect(
+    () =>
+      onCapture((item) => {
+        setNow(new Date());
+        setCaptures((current) =>
+          [{ item, since: Date.now() }, ...current].slice(0, SESSION_CAPTURES),
+        );
+        void refreshBacklog();
+      }),
+    [refreshBacklog],
+  );
 
   useEffect(() => {
     const watched = captures.filter((capture) =>
@@ -139,128 +119,25 @@ export function CaptureCard({
       ) {
         void refreshBacklog();
       }
+      // A capture that settled changes what this page loaded on the server:
+      // Home's Human Review card and Task summaries, the /inbox sections. Load
+      // them again in place, keeping this card's state (BUG-29).
+      if (watched.some(({ item }) => leftProcessing(item, byId.get(item.id)))) {
+        router.refresh();
+      }
     }, POLL_MS);
     return () => window.clearTimeout(timer);
-  }, [captures, refreshBacklog]);
-
-  async function submit(fromKeyboard: boolean) {
-    if (submitting.current) return;
-    const text = content.trim();
-    if (!text) {
-      if (!fromKeyboard) {
-        setNotice({ kind: "error", text: "Write something to capture first." });
-      }
-      return;
-    }
-    submitting.current = true;
-    setSending(true);
-    setNotice(undefined);
-    // Clear right away like a chat composer; anything typed meanwhile stays.
-    setContent("");
-    try {
-      // The browser's timezone is what "tomorrow at 10" means to the owner.
-      const { data, error } = await inboxClient.POST("/v1/inbox-items", {
-        body: {
-          content: text,
-          source: "manual",
-          sourceMetadata: captureMetadata(),
-        },
-      });
-      if (error || !data) throw new Error("capture failed");
-      setNow(new Date());
-      setCaptures((current) =>
-        [{ item: data, since: Date.now() }, ...current].slice(
-          0,
-          SESSION_CAPTURES,
-        ),
-      );
-      setNotice({ kind: "ok", text: "Captured." });
-      void refreshBacklog();
-    } catch {
-      setContent((current) => (current ? `${text}\n${current}` : text));
-      setNotice({
-        kind: "error",
-        text: "Could not save that capture. Please try again.",
-      });
-    } finally {
-      submitting.current = false;
-      setSending(false);
-      // Keep typing after a capture, also after clicking Capture (the button
-      // was disabled meanwhile, which may have dropped focus to the body).
-      const active = document.activeElement;
-      if (
-        !active ||
-        active === document.body ||
-        active === field.current ||
-        (active instanceof HTMLButtonElement && active.type === "submit")
-      ) {
-        field.current?.focus({ preventScroll: true });
-      }
-    }
-  }
-
-  function onSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    void submit(false);
-  }
-
-  function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key !== "Enter" || event.shiftKey || event.altKey) return;
-    // Enter also confirms IME composition (for example Japanese input).
-    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
-    event.preventDefault();
-    if (!event.repeat) void submit(true);
-  }
+  }, [captures, refreshBacklog, router]);
 
   return (
     <Card aria-label="Capture" id="capture" role="region" size="sm">
       <CardContent className="space-y-2">
-        <form className="space-y-2" onSubmit={onSubmit}>
-          <label className="sr-only" htmlFor="inbox-capture">
-            Capture a thought
-          </label>
-          <Textarea
-            aria-describedby="inbox-capture-hint"
-            className="max-h-64 min-h-16 resize-none sm:min-h-20"
-            enterKeyHint="send"
-            id="inbox-capture"
-            onChange={(event) => setContent(event.target.value)}
-            onKeyDown={onKeyDown}
-            placeholder="Capture a thought…"
-            ref={field}
-            value={content}
-          />
-          <div className="flex items-start gap-2">
-            <VoiceCapture />
-            <span
-              className="text-muted-foreground hidden shrink-0 self-center text-xs lg:inline"
-              id="inbox-capture-hint"
-            >
-              Enter to capture · Shift+Enter for a new line
-            </span>
-            <Button disabled={sending} size="lg" type="submit">
-              {sending ? (
-                <LoaderCircle aria-hidden="true" className="animate-spin" />
-              ) : (
-                <Send aria-hidden="true" />
-              )}
-              Capture
-            </Button>
-          </div>
-          <p
-            aria-live="polite"
-            className={cn(
-              "text-xs",
-              notice?.kind === "error"
-                ? "text-destructive"
-                : "text-muted-foreground",
-              !notice && "sr-only",
-            )}
-            role="status"
-          >
-            {notice?.text}
-          </p>
-        </form>
+        <CaptureComposer
+          focus={focusOnDesktop ? "desktop" : undefined}
+          id="inbox-capture"
+          label="Capture a thought"
+          placeholder="Capture a thought…"
+        />
         {captures.length ? (
           <ul aria-label="Just captured" className="divide-y border-t">
             {captures.map(({ item }) => {

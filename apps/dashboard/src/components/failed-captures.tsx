@@ -29,6 +29,14 @@ export function FailedCaptures({
 }) {
   const [items, setItems] = useState(initialItems);
   const [total, setTotal] = useState(initialTotal ?? initialItems?.length);
+  // A router.refresh(), after a capture on this page settled, brings the
+  // current list; it replaces what this section holds.
+  const [loaded, setLoaded] = useState(initialItems);
+  if (loaded !== initialItems) {
+    setLoaded(initialItems);
+    setItems(initialItems);
+    setTotal(initialTotal ?? initialItems?.length);
+  }
   const [error, setError] = useState<string>();
   const [pending, startTransition] = useTransition();
   const now = new Date(renderedAt);
