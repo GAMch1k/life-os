@@ -1,19 +1,29 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { NO_REPEAT } from "./calendar-recurrence";
 import {
   apiErrorMessage,
   type CalendarEvent,
   createRequest,
   defaultRemindersNote,
+  deleteScopes,
   draftFromEvent,
+  editScopes,
   type EventDraft,
+  type EventFields,
+  eventRecurrenceLabel,
   eventWhenLabel,
   fieldErrorsFromApi,
   formDefaults,
   fromReminderDraft,
+  movedFields,
+  movedSeries,
   moveStart,
   newDraft,
+  occurrenceEdit,
+  occurrenceKey,
+  occurrenceRequest,
   parseDay,
   parseView,
   readDraft,
@@ -24,14 +34,15 @@ import {
   reminderLines,
   rescheduleRequest,
   sameReminders,
+  seriesRequest,
   settingsRequest,
   sourceLabel,
+  splitRequest,
   splitSearchResults,
   toEventInput,
   toReminderDraft,
   updateRequest,
   viewOf,
-  occurrenceKey,
 } from "./calendar-workspace";
 
 const event = (
@@ -74,6 +85,7 @@ const draft = (fields: Partial<EventDraft>): EventDraft => ({
   notes: "",
   useDefaultReminders: true,
   reminders: [],
+  repeat: NO_REPEAT,
   ...fields,
 });
 
@@ -133,11 +145,12 @@ test("timed events keep their instants; only Life OS events can be dragged", () 
   assert.ok(
     (cancelled?.classNames as string[]).includes("lifeos-event-cancelled"),
   );
+  // An occurrence can be dragged: the owner then picks which ones move.
   const recurring = toEventInput({
     ...timed,
     recurrence: { frequency: "weekly", interval: 1 },
   });
-  assert.equal(recurring?.editable, false);
+  assert.equal(recurring?.editable, true);
   assert.equal(toEventInput({ ...timed, startAt: null }), undefined);
 });
 
@@ -173,15 +186,16 @@ test("a timed event dropped without an end keeps its length, else an hour", () =
       endAt: "2026-10-20T09:00:00.000Z",
     },
   );
+  const endAt = (original: CalendarEvent) => {
+    const times = rescheduleRequest(
+      { allDay: false, start, end: null },
+      original,
+    );
+    return times.allDay ? undefined : times.endAt;
+  };
   const long = { ...timed, endAt: "2026-10-16T16:00:00Z" };
-  assert.equal(
-    rescheduleRequest({ allDay: false, start, end: null }, long).endAt,
-    "2026-10-20T11:00:00.000Z",
-  );
-  assert.equal(
-    rescheduleRequest({ allDay: false, start, end: null }, trip).endAt,
-    "2026-10-20T09:00:00.000Z",
-  );
+  assert.equal(endAt(long), "2026-10-20T11:00:00.000Z");
+  assert.equal(endAt(trip), "2026-10-20T09:00:00.000Z");
 });
 
 test("event times read in the owner's zone, with the year when it differs", () => {
@@ -471,6 +485,7 @@ test("the form is read in the zone its times are in", () => {
     location: "Praxis",
     reminders: [],
     useDefaultReminders: true,
+    recurrence: null,
     allDay: false,
     startAt: "2026-10-16T13:00:00.000Z",
     endAt: "2026-10-16T14:00:00.000Z",
@@ -727,8 +742,379 @@ test("occurrences of a recurring event get distinct keys", () => {
   assert.equal(
     occurrenceKey({
       ...base,
-      occurrence: { seriesId: "e1", recurrenceId: "20261017T070000Z" },
+      occurrence: {
+        seriesId: "e1",
+        recurrenceId: "20261017T070000Z",
+        modified: false,
+      },
     }),
     "e1:20261017T070000Z",
+  );
+});
+
+// Recurring events ------------------------------------------------------------
+
+const BERLIN = "Europe/Berlin";
+
+// Gym on Mondays and Wednesdays, 18:00–19:00 in Berlin, from Mon 5 Oct 2026
+// (summer time), as Calendar stores the series.
+const gym = event("gym", {
+  allDay: false,
+  title: "Gym",
+  startAt: "2026-10-05T16:00:00Z",
+  endAt: "2026-10-05T17:00:00Z",
+  recurrence: { frequency: "weekly", interval: 1, byWeekday: ["MO", "WE"] },
+});
+// Its occurrence on Wed 4 Nov, after the clocks went back (CET).
+const gymNov: CalendarEvent = {
+  ...gym,
+  startAt: "2026-11-04T17:00:00Z",
+  endAt: "2026-11-04T18:00:00Z",
+  occurrence: {
+    seriesId: "gym",
+    recurrenceId: "2026-11-04T17:00:00Z",
+    modified: false,
+  },
+};
+// A birthday, every 17 September, and its occurrence in 2027.
+const birthday = event("birthday", {
+  allDay: true,
+  title: "Anna's birthday",
+  startDate: "2026-09-17",
+  endDate: "2026-09-17",
+  recurrence: { frequency: "yearly", interval: 1 },
+});
+const birthday2027: CalendarEvent = {
+  ...birthday,
+  startDate: "2027-09-17",
+  endDate: "2027-09-17",
+  occurrence: {
+    seriesId: "birthday",
+    recurrenceId: "2027-09-17",
+    modified: false,
+  },
+};
+
+/** The form's fields for an occurrence, after `edit` changes the draft. */
+function edited(
+  occurrence: CalendarEvent,
+  edit: Partial<EventDraft> = {},
+): EventFields {
+  const read = readDraft(
+    { ...draftFromEvent(occurrence, BERLIN), ...edit },
+    BERLIN,
+  );
+  assert.ok("fields" in read);
+  return read.fields;
+}
+
+const options = { repeatChanged: false, ownerZone: BERLIN };
+
+test("an occurrence says how its series repeats, from its original start", () => {
+  assert.equal(
+    eventRecurrenceLabel(gymNov, BERLIN),
+    "Weekly on Monday and Wednesday",
+  );
+  // Moved to Tuesday on its own, it still belongs to a Monday series.
+  const weekly = {
+    ...gymNov,
+    recurrence: { frequency: "weekly" as const, interval: 1 },
+    startAt: "2026-11-03T17:00:00Z",
+    endAt: "2026-11-03T18:00:00Z",
+    occurrence: {
+      seriesId: "gym",
+      recurrenceId: "2026-11-02T17:00:00Z",
+      modified: true,
+    },
+  };
+  assert.equal(eventRecurrenceLabel(weekly, BERLIN), "Weekly on Monday");
+  assert.equal(
+    eventRecurrenceLabel(birthday2027, BERLIN),
+    "Annually on September 17",
+  );
+  // The stored series reads from its own start.
+  assert.equal(
+    eventRecurrenceLabel(birthday, BERLIN),
+    "Annually on September 17",
+  );
+  assert.equal(eventRecurrenceLabel(timed, BERLIN), undefined);
+});
+
+test("the form fills Repeat from the series and reads it back", () => {
+  const form = draftFromEvent(gymNov, BERLIN);
+  assert.equal(form.startDate, "2026-11-04");
+  assert.equal(form.repeat.preset, "custom");
+  // Wednesday is the start's day; Monday is chosen besides.
+  assert.deepEqual(form.repeat.days, ["MO"]);
+  assert.deepEqual(edited(gymNov).recurrence, {
+    frequency: "weekly",
+    interval: 1,
+    byWeekday: ["MO", "WE"],
+  });
+  assert.equal(draftFromEvent(birthday2027, BERLIN).repeat.preset, "yearly");
+  assert.equal(draftFromEvent(timed, BERLIN).repeat.preset, "none");
+  assert.equal(newDraft(BERLIN, new Date()).repeat.preset, "none");
+});
+
+test("a new event is created with its repeat", () => {
+  const read = readDraft(
+    draft({
+      title: "Anna's birthday",
+      allDay: true,
+      startDate: "2026-09-17",
+      endDate: "2026-09-17",
+      repeat: { ...NO_REPEAT, preset: "yearly" },
+    }),
+    BERLIN,
+  );
+  assert.ok("fields" in read);
+  assert.deepEqual(createRequest(read.fields), {
+    title: "Anna's birthday",
+    allDay: true,
+    useDefaultReminders: true,
+    recurrence: { frequency: "yearly", interval: 1 },
+    startDate: "2026-09-17",
+    endDate: "2026-09-17",
+  });
+  // Every 2 weeks until the end of 31 December in the event's zone.
+  const custom = readDraft(
+    draft({
+      repeat: {
+        ...NO_REPEAT,
+        preset: "custom",
+        frequency: "weekly",
+        interval: "2",
+        ends: "on",
+        until: "2026-12-31",
+      },
+    }),
+    BERLIN,
+  );
+  assert.ok("fields" in custom);
+  assert.deepEqual(custom.fields.recurrence, {
+    frequency: "weekly",
+    interval: 2,
+    until: "2026-12-31T22:59:59Z",
+  });
+  const invalid = readDraft(
+    draft({ repeat: { ...NO_REPEAT, preset: "custom", interval: "0" } }),
+    BERLIN,
+  );
+  assert.ok("errors" in invalid && invalid.errors.repeat);
+  // A one-off event that starts repeating says so; one that doesn't, doesn't.
+  const weekly = readDraft(
+    draft({ repeat: { ...NO_REPEAT, preset: "weekly" } }),
+    BERLIN,
+  );
+  assert.ok("fields" in weekly);
+  assert.deepEqual(updateRequest(weekly.fields, timed).recurrence, {
+    frequency: "weekly",
+    interval: 1,
+  });
+});
+
+test("This event sends only what changed in the occurrence", () => {
+  assert.deepEqual(occurrenceEdit(edited(gymNov), gymNov, false), {
+    changed: false,
+    seriesOnly: false,
+  });
+  assert.deepEqual(
+    occurrenceRequest(edited(gymNov, { title: "Gym (late)" }), gymNov),
+    { title: "Gym (late)" },
+  );
+  assert.deepEqual(
+    occurrenceRequest(
+      edited(gymNov, { startTime: "19:00", endTime: "20:00" }),
+      gymNov,
+    ),
+    { startAt: "2026-11-04T18:00:00.000Z", endAt: "2026-11-04T19:00:00.000Z" },
+  );
+  assert.deepEqual(
+    occurrenceRequest(
+      edited(gymNov, {
+        location: "Gym West",
+        reminders: [{ kind: "relative", amount: "1", unit: "hours" }],
+      }),
+      gymNov,
+    ),
+    {
+      location: "Gym West",
+      reminders: [{ kind: "relative", minutesBefore: 60 }],
+    },
+  );
+  assert.deepEqual(
+    occurrenceRequest(
+      edited(birthday2027, { startDate: "2027-09-18", endDate: "2027-09-18" }),
+      birthday2027,
+    ),
+    { startDate: "2027-09-18", endDate: "2027-09-18" },
+  );
+});
+
+test("Repeat, All day, and time zone changes aren't offered for This event", () => {
+  const all = ["this", "following", "all"];
+  assert.deepEqual(
+    editScopes(
+      occurrenceEdit(edited(gymNov, { title: "Swim" }), gymNov, false),
+    ),
+    all,
+  );
+  const repeat = occurrenceEdit(edited(gymNov), gymNov, true);
+  assert.deepEqual(repeat, { changed: true, seriesOnly: true });
+  assert.deepEqual(editScopes(repeat), ["following", "all"]);
+  assert.equal(
+    occurrenceEdit(edited(gymNov, { allDay: true }), gymNov, false).seriesOnly,
+    true,
+  );
+  assert.equal(
+    occurrenceEdit(edited(gymNov, { timeZone: "Europe/London" }), gymNov, false)
+      .seriesOnly,
+    true,
+  );
+  // A drag into the all-day row changes the kind too.
+  const toAllDay = movedFields(
+    { allDay: true, start: new Date(2026, 10, 4), end: new Date(2026, 10, 5) },
+    gymNov,
+  );
+  assert.equal(occurrenceEdit(toAllDay, gymNov, false).seriesOnly, true);
+  // Deleting: a skipped occurrence can't be skipped again.
+  assert.deepEqual(deleteScopes(gymNov), all);
+  assert.deepEqual(deleteScopes({ ...gymNov, status: "cancelled" }), [
+    "following",
+    "all",
+  ]);
+});
+
+test("This and following starts the new series at the new time", () => {
+  assert.deepEqual(
+    splitRequest(
+      edited(gymNov, { startTime: "19:00", endTime: "20:00" }),
+      gymNov,
+      options,
+    ),
+    { startAt: "2026-11-04T18:00:00.000Z", endAt: "2026-11-04T19:00:00.000Z" },
+  );
+  assert.deepEqual(
+    splitRequest(edited(gymNov, { title: "Swim" }), gymNov, options),
+    { title: "Swim" },
+  );
+  // A day later: its weekly days move with it.
+  assert.deepEqual(
+    splitRequest(
+      edited(gymNov, { startDate: "2026-11-05", endDate: "2026-11-05" }),
+      gymNov,
+      options,
+    ),
+    {
+      startAt: "2026-11-05T17:00:00.000Z",
+      endAt: "2026-11-05T18:00:00.000Z",
+      recurrence: { frequency: "weekly", interval: 1, byWeekday: ["TU", "TH"] },
+    },
+  );
+  // A new repeat is sent as the form has it, also "Does not repeat".
+  assert.deepEqual(
+    splitRequest(
+      edited(gymNov, { repeat: { ...NO_REPEAT, preset: "weekly" } }),
+      gymNov,
+      { ...options, repeatChanged: true },
+    ),
+    { recurrence: { frequency: "weekly", interval: 1 } },
+  );
+  assert.deepEqual(
+    splitRequest(edited(gymNov, { repeat: NO_REPEAT }), gymNov, {
+      ...options,
+      repeatChanged: true,
+    }),
+    { recurrence: null },
+  );
+});
+
+test("All events moves every occurrence by the dragged one's offset", () => {
+  // Wed 4 Nov 18:00 dragged to Thu 5 Nov 19:00 (CET): the series, which
+  // starts Mon 5 Oct 18:00 (CEST), starts Tue 6 Oct 19:00 on Tuesdays and
+  // Thursdays.
+  const dragged = movedFields(
+    {
+      allDay: false,
+      start: new Date("2026-11-05T18:00:00Z"),
+      end: new Date("2026-11-05T19:00:00Z"),
+    },
+    gymNov,
+  );
+  assert.deepEqual(seriesRequest(dragged, gymNov, gym, options), {
+    startAt: "2026-10-06T17:00:00.000Z",
+    endAt: "2026-10-06T18:00:00.000Z",
+    recurrence: { frequency: "weekly", interval: 1, byWeekday: ["TU", "TH"] },
+  });
+  // An hour later the same day keeps the days; the wall clock, not the
+  // instant, moves across the change to winter time.
+  const later = movedFields(
+    {
+      allDay: false,
+      start: new Date("2026-11-04T18:00:00Z"),
+      end: new Date("2026-11-04T19:00:00Z"),
+    },
+    gymNov,
+  );
+  assert.deepEqual(seriesRequest(later, gymNov, gym, options), {
+    startAt: "2026-10-05T17:00:00.000Z",
+    endAt: "2026-10-05T18:00:00.000Z",
+  });
+  // Resized: every occurrence gets the new length.
+  const longer = movedFields(
+    {
+      allDay: false,
+      start: new Date("2026-11-04T17:00:00Z"),
+      end: new Date("2026-11-04T18:30:00Z"),
+    },
+    gymNov,
+  );
+  assert.equal(
+    seriesRequest(longer, gymNov, gym, options).endAt,
+    "2026-10-05T17:30:00.000Z",
+  );
+  // A form edit of the title only leaves the times alone.
+  assert.deepEqual(
+    seriesRequest(edited(gymNov, { title: "Swim" }), gymNov, gym, options),
+    { title: "Swim" },
+  );
+  // An all-day series moves by days.
+  const nextDay = movedFields(
+    { allDay: true, start: new Date(2027, 8, 18), end: new Date(2027, 8, 19) },
+    birthday2027,
+  );
+  assert.deepEqual(movedSeries(nextDay, birthday2027, birthday, BERLIN), {
+    schedule: { allDay: true, startDate: "2026-09-18", endDate: "2026-09-18" },
+    days: 1,
+  });
+  assert.deepEqual(seriesRequest(nextDay, birthday2027, birthday, options), {
+    startDate: "2026-09-18",
+    endDate: "2026-09-18",
+  });
+});
+
+test("the API's repeat messages land at Repeat", () => {
+  assert.deepEqual(
+    fieldErrorsFromApi(
+      "recurrence byWeekday must include the weekday the event starts on (SA)",
+    ),
+    { repeat: "The repeat days must include Saturday, the day it starts." },
+  );
+  assert.deepEqual(
+    fieldErrorsFromApi("recurrence until must not be before the event starts"),
+    { repeat: "The repeat can't end before the event starts." },
+  );
+  assert.deepEqual(
+    fieldErrorsFromApi("recurrence count must be between 1 and 1000"),
+    { repeat: "Recurrence count must be between 1 and 1000." },
+  );
+  assert.deepEqual(
+    fieldErrorsFromApi(
+      "timeZone belongs to the series: change all events, or this and following",
+    ),
+    {
+      timeZone:
+        "TimeZone belongs to the series: change all events, or this and following.",
+    },
   );
 });

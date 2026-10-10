@@ -2,6 +2,17 @@ import type { EventInput } from "@fullcalendar/core";
 
 import { calendarClient } from "@/lib/api/calendar-client";
 import type { components } from "@/lib/api/generated/calendar";
+import {
+  NO_REPEAT,
+  readRepeat,
+  type Recurrence,
+  recurrenceLabel,
+  type RepeatDraft,
+  repeatDraftFrom,
+  shiftWeekdays,
+  type Weekday,
+  WEEKDAY_NAME,
+} from "@/lib/calendar-recurrence";
 import { fromDateTimeInput, toDateTimeInput } from "@/lib/tasks-workspace";
 import {
   addDays,
@@ -22,6 +33,18 @@ export type ReminderDefaults = components["schemas"]["ReminderDefaults"];
 export type CalendarSource = components["schemas"]["CalendarSource"];
 type CreateEventRequest = components["schemas"]["CreateEventRequest"];
 type UpdateEventRequest = components["schemas"]["UpdateEventRequest"];
+/**
+ * An update body as Calendar takes it: `recurrence: null` stops an event
+ * repeating. The generated type misses that (OpenAPI 3.0 ignores `nullable`
+ * beside a `$ref`), so `updateBody` hands it to the client.
+ */
+export type EventUpdate = Omit<UpdateEventRequest, "recurrence"> & {
+  recurrence?: Recurrence | null;
+};
+
+/** An `EventUpdate` as the client's PATCH and split bodies are typed. */
+export const updateBody = (body: EventUpdate) => body as UpdateEventRequest;
+type UpdateOccurrenceRequest = components["schemas"]["UpdateOccurrenceRequest"];
 type UpdateSettingsRequest = components["schemas"]["UpdateSettingsRequest"];
 
 export const CALENDAR_VIEWS = ["month", "week", "day", "list"] as const;
@@ -127,7 +150,8 @@ export function occurrenceKey(event: CalendarEvent) {
 /**
  * The event as FullCalendar input. An all-day event's last day is inclusive
  * in the API and its end exclusive in FullCalendar, so the end moves one day
- * later. Imported, cancelled, and recurring events can't be dragged.
+ * later. Imported and cancelled events can't be dragged; dragging an
+ * occurrence of a recurring event asks which occurrences move.
  */
 export function toEventInput(event: CalendarEvent): EventInput | undefined {
   const imported = isImported(event);
@@ -135,7 +159,7 @@ export function toEventInput(event: CalendarEvent): EventInput | undefined {
   const common: EventInput = {
     id: occurrenceKey(event),
     title: event.title,
-    editable: !imported && !cancelled && !event.recurrence,
+    editable: !imported && !cancelled,
     classNames: [
       "lifeos-event",
       ...(imported ? ["lifeos-event-imported"] : []),
@@ -163,15 +187,23 @@ export function toEventInput(event: CalendarEvent): EventInput | undefined {
 
 const HOUR = 3_600_000;
 
+/** A start and end of either kind, as the API takes them. */
+export type EventTimes =
+  | { allDay: true; startDate: string; endDate: string }
+  | { allDay: false; startAt: string; endAt: string };
+
+/** An event dragged or resized in FullCalendar: where it was dropped. */
+export type EventMove = { allDay: boolean; start: Date; end: Date | null };
+
 /**
  * The PATCH body for an event dragged or resized in FullCalendar. All-day
  * ends come back exclusive and are stored inclusive; a timed event dropped
  * from the all-day row has no end yet and keeps its length, or gets an hour.
  */
 export function rescheduleRequest(
-  change: { allDay: boolean; start: Date; end: Date | null },
+  change: EventMove,
   original: CalendarEvent,
-): UpdateEventRequest {
+): EventTimes {
   if (change.allDay) {
     const startDate = localDay(change.start);
     const last = change.end ? addDays(localDay(change.end), -1) : startDate;
@@ -356,23 +388,42 @@ export function defaultRemindersNote(
   return `${list} (your ${defaults.length === 1 ? "default" : "defaults"} for ${kind})`;
 }
 
-export function recurrenceLabel(
-  recurrence: NonNullable<CalendarEvent["recurrence"]>,
-  timeZone: string,
+/**
+ * The zone a recurring event repeats in: a timed event's own, else the
+ * owner's; all-day events compare their dates in the owner's.
+ */
+export function seriesZone(
+  event: { allDay: boolean; timeZone?: string | null },
+  ownerZone: string,
 ) {
-  const units = {
-    daily: "day",
-    weekly: "week",
-    monthly: "month",
-    yearly: "year",
-  };
-  const every =
-    recurrence.interval > 1
-      ? `Repeats every ${plural(recurrence.interval, units[recurrence.frequency])}`
-      : `Repeats ${recurrence.frequency}`;
-  return recurrence.until
-    ? `${every} until ${dateTimeFormat(timeZone, { day: "numeric", month: "short", year: "numeric" }).format(new Date(recurrence.until))}`
-    : every;
+  return event.allDay
+    ? ownerZone
+    : editingZone(event.timeZone ?? "", ownerZone);
+}
+
+const isInstant = (value: string | null | undefined): value is string =>
+  Boolean(value) && !Number.isNaN(Date.parse(value as string));
+
+/**
+ * How a recurring event repeats, in plain words, such as "Weekly on Monday
+ * and Wednesday" (see `recurrenceLabel`). It is read from the occurrence's
+ * original start (`recurrenceId`), which falls on the series' weekday, day
+ * of the month, and date even when this occurrence was moved.
+ */
+export function eventRecurrenceLabel(event: CalendarEvent, ownerZone: string) {
+  if (!event.recurrence) return undefined;
+  const zone = seriesZone(event, ownerZone);
+  const original = event.occurrence?.recurrenceId;
+  if (event.allDay) {
+    const startDate = parseDay(original) ?? event.startDate;
+    return startDate
+      ? recurrenceLabel(event.recurrence, startDate, zone)
+      : undefined;
+  }
+  const start = [original, event.startAt].find(isInstant);
+  return start
+    ? recurrenceLabel(event.recurrence, dayKey(start, zone), zone)
+    : undefined;
 }
 
 /** The owner's day an event starts on, where the calendar should go. */
@@ -445,9 +496,12 @@ export type EventDraft = {
   useDefaultReminders: boolean;
   /** The event's own reminders. */
   reminders: ReminderDraft[];
+  /** How it repeats (Repeat), following the start date. */
+  repeat: RepeatDraft;
 };
 
-export type EventField = "title" | "start" | "end" | "timeZone" | "reminders";
+export type EventField =
+  "title" | "start" | "end" | "timeZone" | "repeat" | "reminders";
 export type FieldErrors = Partial<Record<EventField | "form", string>>;
 
 const UNIT_MINUTES: Record<ReminderUnit, number> = {
@@ -542,6 +596,7 @@ export function draftFromEvent(
       endDate: event.endDate ?? startDate,
       endTime: "10:00",
       timeZone: "",
+      repeat: repeatDraftFrom(event.recurrence, startDate, ownerZone),
     };
   }
   const timeZone = event.timeZone ?? "";
@@ -556,6 +611,7 @@ export function draftFromEvent(
     endDate: end.date || start.date,
     endTime: end.time,
     timeZone,
+    repeat: repeatDraftFrom(event.recurrence, start.date, zone),
   };
 }
 
@@ -576,6 +632,7 @@ export function newDraft(
     timeZone: "",
     useDefaultReminders: true,
     reminders: [],
+    repeat: NO_REPEAT,
   };
   if (range?.allDay) {
     const startDate = localDay(range.start);
@@ -644,6 +701,11 @@ export function moveStart(
   return { ...moved, endDate: end.slice(0, 10), endTime: end.slice(11, 16) };
 }
 
+/** When an event happens, with the zone a timed event is scheduled in. */
+export type EventSchedule =
+  | { allDay: true; startDate: string; endDate: string }
+  | { allDay: false; startAt: string; endAt: string; timeZone: string | null };
+
 /** An event's fields read from the form; null clears an optional one. */
 export type EventFields = {
   title: string;
@@ -652,18 +714,18 @@ export type EventFields = {
   /** The event's own reminders, added to the defaults when they are used. */
   reminders: Reminder[];
   useDefaultReminders: boolean;
-} & (
-  | { allDay: true; startDate: string; endDate: string }
-  | { allDay: false; startAt: string; endAt: string; timeZone: string | null }
-);
+  /** How it repeats; null: it does not. */
+  recurrence: Recurrence | null;
+} & EventSchedule;
 
 const TIME_INPUT = /^\d{2}:\d{2}$/;
 
 /**
  * Reads the form. Only what the form itself can tell is checked here (a
- * title, the dates and times filled in, complete reminders); the Calendar
- * API validates the rest, such as an end before the start, and its message
- * is shown at the field it concerns (see `fieldErrorsFromApi`).
+ * title, the dates and times filled in, complete reminders, a complete
+ * custom repeat); the Calendar API validates the rest, such as an end
+ * before the start, and its message is shown at the field it concerns (see
+ * `fieldErrorsFromApi`).
  */
 export function readDraft(
   draft: EventDraft,
@@ -676,12 +738,21 @@ export function readDraft(
   const reminders = readReminders(draft.reminders);
   if ("error" in reminders) errors.reminders = reminders.error;
 
+  // A series ending on a day ends at its close in the zone it repeats in.
+  const repeat = readRepeat(
+    draft.repeat,
+    draft.startDate,
+    seriesZone(draft, ownerZone),
+  );
+  if ("error" in repeat) errors.repeat = repeat.error;
+
   const common = {
     title,
     description: draft.notes.trim() || null,
     location: draft.location.trim() || null,
     reminders: "reminders" in reminders ? reminders.reminders : [],
     useDefaultReminders: draft.useDefaultReminders,
+    recurrence: "recurrence" in repeat ? repeat.recurrence : null,
   };
 
   if (draft.allDay) {
@@ -720,7 +791,10 @@ export function readDraft(
   };
 }
 
-/** The create body: empty optional fields, and no own reminders, left out. */
+/**
+ * The create body: empty optional fields, no own reminders, and no repeat
+ * left out.
+ */
 export function createRequest(fields: EventFields): CreateEventRequest {
   const body: CreateEventRequest = {
     title: fields.title,
@@ -729,6 +803,7 @@ export function createRequest(fields: EventFields): CreateEventRequest {
     ...(fields.location ? { location: fields.location } : {}),
     ...(fields.reminders.length ? { reminders: fields.reminders } : {}),
     useDefaultReminders: fields.useDefaultReminders,
+    ...(fields.recurrence ? { recurrence: fields.recurrence } : {}),
   };
   if (fields.allDay) {
     return { ...body, startDate: fields.startDate, endDate: fields.endDate };
@@ -749,7 +824,7 @@ export function createRequest(fields: EventFields): CreateEventRequest {
 export function reminderChanges(
   fields: Pick<EventFields, "reminders" | "useDefaultReminders">,
   event: CalendarEvent,
-): UpdateEventRequest {
+): Pick<UpdateOccurrenceRequest, "reminders" | "useDefaultReminders"> {
   return {
     ...(sameReminders(fields.reminders, event.reminders)
       ? {}
@@ -761,20 +836,24 @@ export function reminderChanges(
 }
 
 /**
- * The PATCH body: every field the form edits, null where it was cleared,
- * and the reminder fields that changed. Switching between timed and all-day
- * sends the new kind's start and end; the API clears the other kind's
- * fields.
+ * The PATCH body of an event that is not an occurrence: every field the
+ * form edits, null where it was cleared, the reminder fields that changed,
+ * and the repeat when it does or did repeat. Switching between timed and
+ * all-day sends the new kind's start and end; the API clears the other
+ * kind's fields.
  */
 export function updateRequest(
   fields: EventFields,
   event: CalendarEvent,
-): UpdateEventRequest {
-  const body: UpdateEventRequest = {
+): EventUpdate {
+  const body: EventUpdate = {
     title: fields.title,
     description: fields.description,
     location: fields.location,
     ...reminderChanges(fields, event),
+    ...(fields.recurrence || event.recurrence
+      ? { recurrence: fields.recurrence }
+      : {}),
     allDay: fields.allDay,
   };
   if (fields.allDay) {
@@ -785,6 +864,314 @@ export function updateRequest(
     startAt: fields.startAt,
     endAt: fields.endAt,
     timeZone: fields.timeZone,
+  };
+}
+
+// Recurring events: which occurrences a change applies to ---------------------
+
+/**
+ * The scopes of a change to an occurrence of a recurring event, as in Google
+ * Calendar: only this occurrence (PATCH it), this and the following ones
+ * (split the series there, or truncate it to delete), or every occurrence
+ * (PATCH or DELETE the series).
+ */
+export type Scope = "this" | "following" | "all";
+
+export const SCOPE_LABEL: Record<Scope, string> = {
+  this: "This event",
+  following: "This and following events",
+  all: "All events",
+};
+
+export const ALL_SCOPES: Scope[] = ["this", "following", "all"];
+
+/** The scopes a delete offers: a skipped occurrence is already deleted alone. */
+export function deleteScopes(occurrence: CalendarEvent): Scope[] {
+  return isCancelled(occurrence) ? ["following", "all"] : ALL_SCOPES;
+}
+
+const text = (value: string | null | undefined) => value?.trim() || null;
+
+/** The title, notes, location, and reminders that differ from the event. */
+function contentChanges(fields: EventFields, event: CalendarEvent) {
+  return {
+    ...(text(fields.title) === text(event.title)
+      ? {}
+      : { title: fields.title }),
+    ...(text(fields.description) === text(event.description)
+      ? {}
+      : { description: fields.description }),
+    ...(text(fields.location) === text(event.location)
+      ? {}
+      : { location: fields.location }),
+    ...reminderChanges(fields, event),
+  } satisfies UpdateOccurrenceRequest;
+}
+
+const sameInstant = (
+  a: string | null | undefined,
+  b: string | null | undefined,
+) => isInstant(a) && isInstant(b) && Date.parse(a) === Date.parse(b);
+
+/** Whether the start, end, kind, or time zone differ from the event's. */
+function scheduleChanged(fields: EventSchedule, event: CalendarEvent) {
+  if (fields.allDay !== event.allDay) return true;
+  if (fields.allDay) {
+    return (
+      fields.startDate !== event.startDate ||
+      fields.endDate !== (event.endDate ?? event.startDate)
+    );
+  }
+  return (
+    !sameInstant(fields.startAt, event.startAt) ||
+    !sameInstant(fields.endAt, event.endAt) ||
+    fields.timeZone !== (event.timeZone ?? null)
+  );
+}
+
+/**
+ * What an edit of an occurrence changes, compared with the occurrence the
+ * form was filled from. `seriesOnly`: it changes what belongs to the series
+ * (how it repeats, all day, the time zone), which can't change for one
+ * occurrence, so This event is not offered.
+ */
+export function occurrenceEdit(
+  fields: EventFields,
+  occurrence: CalendarEvent,
+  repeatChanged: boolean,
+) {
+  const seriesOnly =
+    repeatChanged ||
+    fields.allDay !== occurrence.allDay ||
+    (!fields.allDay && fields.timeZone !== (occurrence.timeZone ?? null));
+  return {
+    changed:
+      repeatChanged ||
+      scheduleChanged(fields, occurrence) ||
+      Object.keys(contentChanges(fields, occurrence)).length > 0,
+    seriesOnly,
+  };
+}
+
+/** The scopes an edit or a drag offers. */
+export function editScopes(edit: { seriesOnly: boolean }): Scope[] {
+  return edit.seriesOnly ? ["following", "all"] : ALL_SCOPES;
+}
+
+/**
+ * An occurrence dragged or resized: its own fields at the new time, to save
+ * like an edit in the form.
+ */
+export function movedFields(
+  change: EventMove,
+  occurrence: CalendarEvent,
+): EventFields {
+  const common = {
+    title: occurrence.title,
+    description: occurrence.description ?? null,
+    location: occurrence.location ?? null,
+    reminders: occurrence.reminders,
+    useDefaultReminders: occurrence.useDefaultReminders,
+    recurrence: occurrence.recurrence ?? null,
+  };
+  const times = rescheduleRequest(change, occurrence);
+  return times.allDay
+    ? { ...common, ...times }
+    : { ...common, ...times, timeZone: occurrence.timeZone ?? null };
+}
+
+/**
+ * This event: the PATCH body for the occurrence, only what changed. Its
+ * start and end keep the series' kind (`occurrenceEdit` tells when they
+ * don't).
+ */
+export function occurrenceRequest(
+  fields: EventFields,
+  occurrence: CalendarEvent,
+): UpdateOccurrenceRequest {
+  const body: UpdateOccurrenceRequest = contentChanges(fields, occurrence);
+  if (!scheduleChanged(fields, occurrence)) return body;
+  return fields.allDay
+    ? { ...body, startDate: fields.startDate, endDate: fields.endDate }
+    : { ...body, startAt: fields.startAt, endAt: fields.endAt };
+}
+
+/** A new start and end: the kind and zone are named only when they change. */
+function scheduleBody(
+  schedule: EventSchedule,
+  before: CalendarEvent,
+): EventUpdate {
+  const kind =
+    schedule.allDay !== before.allDay ? { allDay: schedule.allDay } : {};
+  if (schedule.allDay) {
+    return {
+      ...kind,
+      startDate: schedule.startDate,
+      endDate: schedule.endDate,
+    };
+  }
+  return {
+    ...kind,
+    startAt: schedule.startAt,
+    endAt: schedule.endAt,
+    ...(schedule.timeZone !== (before.timeZone ?? null)
+      ? { timeZone: schedule.timeZone }
+      : {}),
+  };
+}
+
+/** When an event starts on `timeZone`'s wall clock, "YYYY-MM-DDTHH:MM". */
+function wallStart(
+  event: {
+    allDay: boolean;
+    startDate?: string | null;
+    startAt?: string | null;
+  },
+  timeZone: string,
+) {
+  if (event.allDay) {
+    return event.startDate ? `${event.startDate}T00:00` : undefined;
+  }
+  return isInstant(event.startAt)
+    ? toDateTimeInput(event.startAt, timeZone)
+    : undefined;
+}
+
+const wallTime = (wall: string) => Date.parse(`${wall}:00Z`);
+const daysBetween = (from: string, to: string) =>
+  Math.round(
+    (Date.parse(`${to.slice(0, 10)}T00:00:00Z`) -
+      Date.parse(`${from.slice(0, 10)}T00:00:00Z`)) /
+      86_400_000,
+  );
+
+/**
+ * The series' rule once its occurrences move `days` days: weekly days move
+ * with them (Monday and Wednesday, a day later, are Tuesday and Thursday).
+ * Other rules follow the start by themselves; undefined when nothing moves.
+ */
+function movedRule(rule: Recurrence | null | undefined, days: number) {
+  if (!rule?.byWeekday || days % 7 === 0) return undefined;
+  return { ...rule, byWeekday: shiftWeekdays(rule.byWeekday, days) };
+}
+
+/** The rule to send: the form's when Repeat changed, else a moved one. */
+function ruleChange(
+  fields: EventFields,
+  rule: Recurrence | null | undefined,
+  days: number,
+  repeatChanged: boolean,
+): EventUpdate {
+  if (repeatChanged) return { recurrence: fields.recurrence };
+  const moved = movedRule(rule, days);
+  return moved ? { recurrence: moved } : {};
+}
+
+type ScopeOptions = {
+  /** Repeat changed in the form: its rule is sent as it is. */
+  repeatChanged: boolean;
+  /** The owner's zone, which all-day series and zoneless times are in. */
+  ownerZone: string;
+};
+
+/**
+ * This and following: the POST …/split body. The changes as for This event;
+ * a new time is the new series' start. Unless Repeat changed, the new series
+ * repeats like the old one (Calendar's default), its weekly days moving with
+ * a move to another day.
+ */
+export function splitRequest(
+  fields: EventFields,
+  occurrence: CalendarEvent,
+  { repeatChanged, ownerZone }: ScopeOptions,
+): EventUpdate {
+  let days = 0;
+  let times: EventUpdate = {};
+  if (scheduleChanged(fields, occurrence)) {
+    times = scheduleBody(fields, occurrence);
+    const from = wallStart(occurrence, seriesZone(occurrence, ownerZone));
+    const to = wallStart(fields, seriesZone(fields, ownerZone));
+    if (from && to) days = daysBetween(from, to);
+  }
+  return {
+    ...contentChanges(fields, occurrence),
+    ...times,
+    ...ruleChange(fields, occurrence.recurrence, days, repeatChanged),
+  };
+}
+
+/**
+ * The series' new start and end when one of its occurrences moves to
+ * `fields`' times: every occurrence moves by the same offset on the series'
+ * wall clock, so a drag from Monday 18:00 to Tuesday 19:00 starts the series
+ * a day and an hour later, across daylight saving changes. `days` is how
+ * many days its start moved.
+ */
+export function movedSeries(
+  fields: EventFields,
+  occurrence: CalendarEvent,
+  series: CalendarEvent,
+  ownerZone: string,
+): { schedule: EventSchedule; days: number } | undefined {
+  const zone = seriesZone(series, ownerZone);
+  const toZone = seriesZone(fields, ownerZone);
+  const from = wallStart(occurrence, zone);
+  const to = wallStart(fields, toZone);
+  const start = wallStart(series, zone);
+  if (!from || !to || !start) return undefined;
+  const moved = new Date(wallTime(start) + wallTime(to) - wallTime(from))
+    .toISOString()
+    .slice(0, 16);
+  const days = daysBetween(start, moved);
+  if (fields.allDay) {
+    const startDate = moved.slice(0, 10);
+    const length = daysBetween(fields.startDate, fields.endDate);
+    return {
+      schedule: {
+        allDay: true,
+        startDate,
+        endDate: addDays(startDate, Math.max(0, length)),
+      },
+      days,
+    };
+  }
+  const startAt = fromDateTimeInput(moved, toZone);
+  const length = Date.parse(fields.endAt) - Date.parse(fields.startAt);
+  return {
+    schedule: {
+      allDay: false,
+      startAt,
+      endAt: new Date(Date.parse(startAt) + length).toISOString(),
+      timeZone: fields.timeZone,
+    },
+    days,
+  };
+}
+
+/**
+ * All events: the PATCH body for the series (as stored, `series`). The
+ * changes as for This event; a new time moves every occurrence by this
+ * occurrence's offset (see `movedSeries`), weekly days included.
+ */
+export function seriesRequest(
+  fields: EventFields,
+  occurrence: CalendarEvent,
+  series: CalendarEvent,
+  { repeatChanged, ownerZone }: ScopeOptions,
+): EventUpdate {
+  let days = 0;
+  let times: EventUpdate = {};
+  if (scheduleChanged(fields, occurrence)) {
+    const moved = movedSeries(fields, occurrence, series, ownerZone);
+    if (moved) {
+      times = scheduleBody(moved.schedule, series);
+      days = moved.days;
+    }
+  }
+  return {
+    ...contentChanges(fields, occurrence),
+    ...times,
+    ...ruleChange(fields, series.recurrence, days, repeatChanged),
   };
 }
 
@@ -799,7 +1186,23 @@ export function apiErrorMessage(error: unknown): string | undefined {
     : undefined;
 }
 
-const API_ERRORS: [RegExp, EventField, string?][] = [
+const API_ERRORS: [
+  RegExp,
+  EventField,
+  (string | ((match: RegExpMatchArray) => string))?,
+][] = [
+  [
+    /byWeekday must include the weekday the event starts on \((\w{2})\)/i,
+    "repeat",
+    (match) =>
+      `The repeat days must include ${WEEKDAY_NAME[match[1] as Weekday] ?? match[1]}, the day it starts.`,
+  ],
+  [
+    /until must not be before the event starts/i,
+    "repeat",
+    "The repeat can't end before the event starts.",
+  ],
+  [/^recurrence/i, "repeat"],
   [/endAt must be after startAt/i, "end", "The end must be after the start."],
   [
     /endDate must not precede startDate/i,
@@ -818,7 +1221,12 @@ const API_ERRORS: [RegExp, EventField, string?][] = [
  */
 export function fieldErrorsFromApi(message: string): FieldErrors {
   for (const [pattern, field, text] of API_ERRORS) {
-    if (pattern.test(message)) return { [field]: text ?? sentence(message) };
+    const match = message.match(pattern);
+    if (!match) continue;
+    return {
+      [field]:
+        typeof text === "function" ? text(match) : (text ?? sentence(message)),
+    };
   }
   return { form: sentence(message) };
 }
@@ -953,4 +1361,111 @@ export async function searchEvents(
   });
   if (error || !data) throw new Error("Search is unavailable");
   return { items: data.items, more: Boolean(data.nextCursor) };
+}
+
+// Calendar API writes: occurrences of recurring events ----------------------------
+
+/** What Calendar answered: the event it returned, or its error. */
+export type WriteResult = {
+  data?: CalendarEvent;
+  error?: unknown;
+  status: number;
+};
+
+const occurrencePath = (occurrence: CalendarEvent) => ({
+  eventId: occurrence.id,
+  // openapi-fetch URL-encodes it (an instant has colons).
+  recurrenceId: occurrence.occurrence?.recurrenceId ?? "",
+});
+
+/**
+ * Saves a change of an occurrence (`fields`, from the form or a drag) to
+ * `scope`: This event PATCHes the occurrence, This and following splits the
+ * series there (on its first occurrence Calendar changes the series), and
+ * All events reads the series to PATCH it. Throws when Calendar can't be
+ * reached.
+ */
+export async function saveOccurrence(
+  scope: Scope,
+  fields: EventFields,
+  occurrence: CalendarEvent,
+  options: ScopeOptions,
+): Promise<WriteResult> {
+  const path = occurrencePath(occurrence);
+  if (scope === "this") {
+    const { data, error, response } = await calendarClient.PATCH(
+      "/v1/events/{eventId}/occurrences/{recurrenceId}",
+      { params: { path }, body: occurrenceRequest(fields, occurrence) },
+    );
+    return { data, error, status: response.status };
+  }
+  if (scope === "following") {
+    const { data, error, response } = await calendarClient.POST(
+      "/v1/events/{eventId}/occurrences/{recurrenceId}/split",
+      {
+        params: { path },
+        body: updateBody(splitRequest(fields, occurrence, options)),
+      },
+    );
+    return { data, error, status: response.status };
+  }
+  const eventId = { eventId: occurrence.id };
+  const series = await calendarClient.GET("/v1/events/{eventId}", {
+    params: { path: eventId },
+  });
+  if (!series.data) {
+    return { error: series.error, status: series.response.status };
+  }
+  const { data, error, response } = await calendarClient.PATCH(
+    "/v1/events/{eventId}",
+    {
+      params: { path: eventId },
+      body: updateBody(seriesRequest(fields, occurrence, series.data, options)),
+    },
+  );
+  return { data, error, status: response.status };
+}
+
+/**
+ * Deletes an occurrence to `scope`: This event skips it (`status:
+ * cancelled`, kept as history and restorable), This and following ends the
+ * series before it, All events deletes the series. Throws when Calendar
+ * can't be reached.
+ */
+export async function deleteOccurrence(
+  scope: Scope,
+  occurrence: CalendarEvent,
+): Promise<WriteResult> {
+  const path = occurrencePath(occurrence);
+  if (scope === "this") {
+    const { data, error, response } = await calendarClient.PATCH(
+      "/v1/events/{eventId}/occurrences/{recurrenceId}",
+      { params: { path }, body: { status: "cancelled" } },
+    );
+    return { data, error, status: response.status };
+  }
+  const { error, response } =
+    scope === "following"
+      ? await calendarClient.POST(
+          "/v1/events/{eventId}/occurrences/{recurrenceId}/truncate",
+          { params: { path } },
+        )
+      : await calendarClient.DELETE("/v1/events/{eventId}", {
+          params: { path: { eventId: occurrence.id } },
+        });
+  return { error, status: response.status };
+}
+
+/** Restores a skipped occurrence (`status: active`). */
+export async function restoreOccurrence(
+  occurrence: CalendarEvent,
+): Promise<WriteResult> {
+  const { data, error, response } = await calendarClient.PATCH(
+    "/v1/events/{eventId}/occurrences/{recurrenceId}",
+    {
+      params: { path: occurrencePath(occurrence) },
+      body: { status: "active" },
+    },
+  );
+  return { data, error, status: response.status };
 }
