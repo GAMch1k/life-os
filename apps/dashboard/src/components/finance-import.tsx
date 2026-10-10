@@ -7,14 +7,9 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { financeClient } from "@/lib/api/finance-client";
 import type { components } from "@/lib/api/generated/finance";
+import { CSV_COLUMNS, csvFileProblem } from "@/lib/finance-csv";
 
 type CsvImport = components["schemas"]["CsvImport"];
-
-export const CSV_COLUMNS =
-  "account_id, occurred_on, amount_minor, currency, external_id; optional category_id, note";
-
-/** The Finance service accepts request bodies up to 4 MiB. */
-const MAX_CSV_BYTES = 4 * 1024 * 1024;
 
 /**
  * The CSV import button and its feedback. It renders inside a wrapping flex
@@ -32,16 +27,10 @@ export function FinanceImport() {
     event.target.value = "";
     if (!file) return;
     setResult(undefined);
-    if (!file.name.toLowerCase().endsWith(".csv")) {
-      setError("Choose a .csv file.");
-      return;
-    }
-    if (file.size > MAX_CSV_BYTES) {
-      setError("This CSV is over 4 MB. Split it into smaller files.");
-      return;
-    }
+    const problem = csvFileProblem(file);
+    setError(problem);
+    if (problem) return;
 
-    setError(undefined);
     startTransition(async () => {
       const { data, error: requestError } = await financeClient.POST(
         "/v1/imports/csv",

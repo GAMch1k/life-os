@@ -1,5 +1,6 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { CSV_COLUMNS, FinanceImport } from "@/components/finance-import";
+import { FinanceImport } from "@/components/finance-import";
+import { CSV_COLUMNS } from "@/lib/finance-csv";
 import { type FinanceSummaryState, monthLabel } from "@/lib/finance-summary";
 import { cn } from "@/lib/utils";
 
