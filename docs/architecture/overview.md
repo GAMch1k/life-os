@@ -13,6 +13,8 @@ flowchart LR
   Gateway --> Voice --> VDB[(voice_db)]
   Gateway -. read only .-> Activity --> ADB[(activity_db)]
   Gateway --> Notifications --> NDB[(notifications_db)]
+  Monitor -- "GET /api/status" --> Dashboard
+  Monitor -- notify --> Notifications
   Voice -. record .-> Activity
   Inbox -. record .-> Activity
   Tasks -. record .-> Activity
@@ -34,3 +36,5 @@ MCP uses service APIs to perform semantic actions and records an Inbox audit tra
 Activity stores user-facing activity events. Each owning service records its own meaningful operations (capture, processing, MCP actions, Task changes) over HTTP. Correlation, causation, and actor headers travel with each call, so a whole Voice → Inbox → MCP → Task workflow can be reconstructed from one API. See [Activity](../services/activity.md).
 
 Notifications is the one path by which any service lets the owner know about something. Producers post a notification over HTTP (`pkg/notify`); Notifications stores it for the Dashboard and delivers it through the channels configured on its server, so no producer talks to ntfy or a phone app itself. See [Notifications](../services/notifications.md).
+
+The monitor is a small internal service without a database or a gateway route. Once a minute it reads the Dashboard's runtime status (`GET /api/status`, the checks the Status page renders) and notifies the owner through Notifications when a check breaks or recovers. The rules that make something a problem therefore exist once, in the Dashboard. See [Monitor](../services/monitor.md).

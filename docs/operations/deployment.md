@@ -14,6 +14,10 @@ Life OS supports loopback gateway behind host Nginx TLS/Basic Auth, or a WireGua
 
 `notifications_db` is provisioned automatically only on a fresh PostgreSQL volume. On an existing host, add `LIFE_OS_NOTIFICATIONS_DB_PASSWORD` to `.env`, then recreate the PostgreSQL container (`docker compose up --detach postgres`) so it sees the new variable and the updated `infra/postgres/service-databases.conf`, and run `make db-provision` once (idempotent). Then start the stack so `notifications-migrate` and `notifications` come up before the gateway, which routes `/api/notifications/` and waits for the service. No channel is configured by default (`LIFE_OS_NOTIFICATIONS_CHANNELS` empty): notifications are stored and listed only. See [Notifications](../services/notifications.md).
 
+## Adding the monitor to an existing deployment
+
+The [monitor](../services/monitor.md) needs no database, secret, or `.env` change (`LIFE_OS_MONITOR_INTERVAL_SECONDS` and `LIFE_OS_MONITOR_CONFIRMATIONS` are optional). Rebuild and start it with the Dashboard, which gains `/api/status` and probes the monitor's readiness: `docker compose up --detach --build dashboard monitor`. Status then lists Monitor under Services. A first deployment has no notification history, so a check that is already a problem is notified after the confirmations (two minutes at the defaults).
+
 ## Safe verification on a deployed host
 
 Do not use raw `docker compose down --volumes` with the normal deployment to
