@@ -254,7 +254,7 @@ test("an imported next event carries its source's name", () => {
     allDay: true,
     startDate: "2026-10-12",
     endDate: "2026-10-12",
-    source: { kind: "ics", sourceId: "source-zaw", externalUid: "uid-1" },
+    source: { kind: "external", sourceId: "source-zaw", externalUid: "uid-1" },
   });
   const zaw = { id: "source-zaw", name: "ZAW" } as CalendarSource;
   const attention = toHomeAttention(
@@ -266,8 +266,9 @@ test("an imported next event carries its source's name", () => {
     attention.nextEvent?.kind === "event" && attention.nextEvent.sourceName,
     "ZAW",
   );
-  // Without the source list (Calendar sources unreadable), the kind names it.
-  assert.equal(eventSourceName(imported, undefined), "ICS feed");
+  // Without a name or the source list (Calendar sources unreadable), nothing
+  // names it.
+  assert.equal(eventSourceName(imported, undefined), undefined);
   // An integration's event carries its source's name, else its provider.
   const external = {
     kind: "external" as const,

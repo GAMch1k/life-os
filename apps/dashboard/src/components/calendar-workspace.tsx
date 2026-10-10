@@ -49,7 +49,6 @@ import {
   CALENDAR_VIEWS,
   type CalendarEvent,
   type CalendarView,
-  changedInGoogle,
   type EventFields,
   eventStartDay,
   fetchEventsInRange,
@@ -327,8 +326,6 @@ export function CalendarWorkspace({
         setNotice(
           `Could not move “${original.title}”: ${apiErrorMessage(error) ?? "Calendar refused the change"}.`,
         );
-        // Changed in Google meanwhile: show Google's version.
-        if (changedInGoogle(error)) api()?.refetchEvents();
         return;
       }
       event.setExtendedProp("event", data);
@@ -353,7 +350,6 @@ export function CalendarWorkspace({
         setNotice(
           `Could not move “${occurrence.title}”: ${apiErrorMessage(error) ?? "Calendar refused the change"}.`,
         );
-        if (changedInGoogle(error)) api()?.refetchEvents();
         return;
       }
       setNotice(undefined);
@@ -581,7 +577,6 @@ export function CalendarWorkspace({
       <CalendarEventDialog
         onDeleted={onDeleted}
         onSaved={onSaved}
-        onRefresh={() => api()?.refetchEvents()}
         onSeriesChanged={onSeriesChanged}
         onStateChange={setDialog}
         state={dialog}

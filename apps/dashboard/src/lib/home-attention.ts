@@ -124,15 +124,16 @@ export function eventSourceName(
   sources: CalendarSource[] | undefined,
 ) {
   if (event.source.kind === "manual") return undefined;
-  if (event.source.kind === "external") {
-    // An integration's source: its name, else its provider's label.
-    return (
-      event.source.name?.trim() || event.source.provider?.trim() || undefined
-    );
-  }
+  // An integration's source: its name as Calendar has it now, else its
+  // provider's label.
   const source = sources?.find((entry) => entry.id === event.source.sourceId);
-  if (source) return source.name;
-  return event.source.kind === "google" ? "Google Calendar" : "ICS feed";
+  return (
+    event.source.name?.trim() ||
+    source?.name ||
+    event.source.provider?.trim() ||
+    source?.provider ||
+    undefined
+  );
 }
 
 /** The Calendar at the owner's day an event starts on. */

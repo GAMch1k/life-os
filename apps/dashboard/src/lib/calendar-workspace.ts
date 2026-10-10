@@ -107,9 +107,10 @@ export function isImported(event: CalendarEvent) {
 
 /**
  * Whether the event can be changed here beyond its reminders and priority:
- * Life OS events and Google events of calendars you may edit (changed in
- * Google first). Feed events, Google calendars you can only read, and
- * occurrences of Google rules Calendar cannot hold are read-only.
+ * Life OS events and the events of integrations' sources that accept
+ * changes (such as Google calendars you may edit; the integration writes
+ * the change to its provider). Feed events, Google calendars you can only
+ * read, and occurrences of rules Calendar cannot hold are read-only.
  */
 export function isEditable(event: CalendarEvent) {
   return event.editable;
@@ -136,19 +137,14 @@ function sourceProvider(event: CalendarEvent) {
     : undefined;
 }
 
-/** Where an imported event comes from; undefined for Life OS events. */
+/**
+ * Where an imported event comes from (an integration's source: its name,
+ * else its provider's label); undefined for Life OS events.
+ */
 export function sourceLabel(event: CalendarEvent) {
-  switch (event.source.kind) {
-    case "external":
-      // An integration's source: its name, else its provider's label.
-      return sourceName(event) ?? sourceProvider(event);
-    case "ics":
-      return sourceName(event) ?? "ICS feed";
-    case "google":
-      return sourceName(event) ?? "Google Calendar";
-    default:
-      return undefined;
-  }
+  return event.source.kind === "external"
+    ? (sourceName(event) ?? sourceProvider(event))
+    : undefined;
 }
 
 /**
@@ -158,34 +154,23 @@ export function sourceLabel(event: CalendarEvent) {
 export function readOnlyReason(event: CalendarEvent) {
   if (event.editable) return undefined;
   if (event.readOnlyReason) return event.readOnlyReason;
-  const from =
-    event.source.kind === "external"
-      ? (sourceLabel(event) ?? "another calendar")
-      : event.source.kind === "ics"
-        ? (sourceName(event) ?? "an ICS feed")
-        : (sourceName(event) ?? "Google Calendar");
+  const from = sourceLabel(event) ?? "another calendar";
   return `Imported from ${from}, so it can only be changed there. Its reminders and priority can still be adjusted here.`;
 }
 
 /**
- * The source badge of an event that is not a Life OS one: "<provider> ·
- * <name>" for an integration's ("ZAW · Müllabfuhr", or just "ZAW" while
- * the name is the provider's), "Google · Owner" for a Google event,
- * "Imported · ZAW" for a feed Calendar imported itself.
+ * The source badge of an integration's event: "<provider> · <name>" ("ZAW ·
+ * Müllabfuhr", "Google · Owner", or just "ZAW" while the name is the
+ * provider's); undefined for a Life OS event.
  */
 export function sourceBadge(event: CalendarEvent) {
   const source = sourceLabel(event);
   if (!source) return undefined;
-  if (event.source.kind === "external") {
-    const provider = sourceProvider(event);
-    const name = sourceName(event);
-    return provider && name && name !== provider
-      ? `${provider} · ${name}`
-      : (provider ?? source);
-  }
-  return event.source.kind === "google"
-    ? `Google · ${source}`
-    : `Imported · ${source}`;
+  const provider = sourceProvider(event);
+  const name = sourceName(event);
+  return provider && name && name !== provider
+    ? `${provider} · ${name}`
+    : (provider ?? source);
 }
 
 /**
@@ -229,25 +214,6 @@ export function googleSyncLabel(
 
 /** The integration that syncs Google calendars (source.integration). */
 export const GOOGLE_INTEGRATION = "google-calendar";
-
-/** The code of a Calendar error response, such as "google_conflict". */
-export function apiErrorCode(error: unknown): string | undefined {
-  if (typeof error !== "object" || error === null || !("error" in error)) {
-    return undefined;
-  }
-  const body = (error as { error?: { code?: unknown } }).error;
-  return typeof body?.code === "string" ? body.code : undefined;
-}
-
-/**
- * Whether Calendar refused a change because the event changed or was
- * deleted in Google meanwhile: it then shows Google's version, so the page
- * reads the event again.
- */
-export function changedInGoogle(error: unknown) {
-  const code = apiErrorCode(error);
-  return code === "google_conflict" || code === "google_deleted";
-}
 
 // Priority ----------------------------------------------------------------------
 
@@ -1671,23 +1637,4 @@ export async function restoreOccurrence(
     },
   );
   return { data, error, status: response.status };
-}
-
-/**
- * The event (or the occurrence) as Calendar has it now, such as after a
- * change refused because it changed in Google meanwhile; undefined when it
- * no longer exists.
- */
-export async function latestEvent(
-  event: CalendarEvent,
-): Promise<CalendarEvent | undefined> {
-  const { data } = event.occurrence
-    ? await calendarClient.GET(
-        "/v1/events/{eventId}/occurrences/{recurrenceId}",
-        { params: { path: occurrencePath(event) } },
-      )
-    : await calendarClient.GET("/v1/events/{eventId}", {
-        params: { path: { eventId: event.id } },
-      });
-  return data;
 }
