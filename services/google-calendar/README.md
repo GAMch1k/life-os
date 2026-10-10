@@ -40,5 +40,5 @@ from `services/calendar`) on a private schema of it and skip when it is unset.
 The handoff (once, with Calendar stopped and migrated):
 
 ```sh
-docker compose run --rm --no-deps -e HANDOFF_CALENDAR_DATABASE_URL='postgres://calendar_user:...@postgres:5432/calendar_db?sslmode=disable' google-calendar handoff
+docker compose --profile handoff run --rm google-calendar-handoff
 ```

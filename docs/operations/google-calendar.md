@@ -138,13 +138,11 @@ Prerequisites: `.env` has `LIFE_OS_GOOGLE_CALENDAR_DB_PASSWORD` (new) and still 
 4. **Hand off:**
 
    ```sh
-   docker compose build google-calendar
-   docker compose run --rm --no-deps \
-     -e HANDOFF_CALENDAR_DATABASE_URL="postgres://calendar_user:${LIFE_OS_CALENDAR_DB_PASSWORD}@postgres:5432/calendar_db?sslmode=disable" \
-     google-calendar handoff
+   docker compose build google-calendar-handoff
+   docker compose --profile handoff run --rm google-calendar-handoff
    ```
 
-   (with `LIFE_OS_CALENDAR_DB_PASSWORD` from `.env` in your shell, or written out). It reads `calendar_db` in a read-only transaction and prints counts only, for example `connections 1 found, 1 copied`, `calendars`, `google events`, `exports`, `event uids`, and `sources … linked here`; never a token. Running it again copies nothing twice. It refuses to run before 000016 or when `google_calendar_db` already holds another connection.
+   The `google-calendar-handoff` service is the integration's image running `handoff` with `DATABASE_URL` (google_calendar_db) and `HANDOFF_CALENDAR_DATABASE_URL` (calendar_db, as `calendar_user`) from `.env`; it waits for `google-calendar-migrate` and does not start Calendar. (By hand: `docker compose run --rm --no-deps -e HANDOFF_CALENDAR_DATABASE_URL=postgres://calendar_user:…@postgres:5432/calendar_db?sslmode=disable google-calendar handoff`.) It reads `calendar_db` in a read-only transaction and prints counts only, for example `connections 1 found, 1 copied`, `calendars`, `google events`, `exports`, `event uids`, and `sources … linked here`; never a token. Running it again copies nothing twice. It refuses to run before 000016 or when `google_calendar_db` already holds another connection.
 5. **Start** Calendar, the integration, and the rest: `docker compose up --detach --build calendar google-calendar dashboard gateway`.
 6. **Verify:** the Google dialog says "Connected as …" with the same calendars ticked; within two minutes each shows "Synced …" (Event Log: "Source refreshed: Owner …", by Google Calendar sync); Status shows the Google part healthy and "Google Calendar" ready; an event of your calendar keeps its reminders; creating a Life OS event puts it in the "Life OS" calendar on your phone within seconds; nothing was duplicated on the phone. `docker compose logs google-calendar` shows no "not configured" line.
 
