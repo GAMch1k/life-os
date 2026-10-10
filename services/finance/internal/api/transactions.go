@@ -302,6 +302,7 @@ func (h *Handler) CreateManualTransaction(c fiber.Ctx) error {
 	}
 	// A deterministic event id makes an idempotent replay record nothing new.
 	h.recordTransaction(c, transactionCreated, item, nil)
+	h.budgetChanged()
 	return c.Status(fiber.StatusCreated).JSON(transactionView(item))
 }
 
@@ -457,6 +458,7 @@ func (h *Handler) UpdateTransaction(c fiber.Ctx, transactionID types.UUID) error
 	}
 	if len(changes) > 0 {
 		h.recordTransaction(c, transactionUpdated, after, changes)
+		h.budgetChanged()
 	}
 	return c.JSON(transactionView(after))
 }
@@ -482,6 +484,7 @@ func (h *Handler) DeleteTransaction(c fiber.Ctx, transactionID types.UUID) error
 		return passThrough(err)
 	}
 	h.recordTransaction(c, transactionDeleted, deleted, nil)
+	h.budgetChanged()
 	return c.SendStatus(fiber.StatusNoContent)
 }
 

@@ -75,5 +75,8 @@ func (h *Handler) CreateCsvImport(c fiber.Ctx, params generated.CreateCsvImportP
 		response.Errors = append(response.Errors, generated.CsvImportError{Row: item.Row, Message: item.Message})
 	}
 	h.recordImport(c, id, result.Account, failed, result.Imported, result.Duplicates, result.Failed, result.Categorized)
+	if result.Imported > 0 {
+		h.budgetChanged()
+	}
 	return c.JSON(response)
 }

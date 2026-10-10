@@ -26,8 +26,12 @@ var (
 const categoryUnique = "financial_categories_name_kind_key"
 
 func categoryView(item store.FinancialCategory) generated.Category {
-	return generated.Category{Id: uuid(item.ID), Name: item.Name, Kind: generated.CategoryKind(item.Kind), Color: item.Color,
+	view := generated.Category{Id: uuid(item.ID), Name: item.Name, Kind: generated.CategoryKind(item.Kind), Color: item.Color,
 		Archived: item.ArchivedAt.Valid, ArchivedAt: nullableTime(item.ArchivedAt), CreatedAt: item.CreatedAt.Time.UTC(), UpdatedAt: item.UpdatedAt.Time.UTC()}
+	if item.SystemKey != nil {
+		view.SystemKey = pointer(generated.CategorySystemKey(*item.SystemKey))
+	}
+	return view
 }
 
 func ruleView(item store.CategoryRule) generated.CategoryRule {
@@ -183,6 +187,9 @@ func (h *Handler) UpdateCategory(c fiber.Ctx, categoryID types.UUID) error {
 		h.recordCategory(c, categoryRestored, after, changes)
 	default:
 		h.recordCategory(c, categoryUpdated, after, changes)
+	}
+	if len(changes) > 0 {
+		h.budgetChanged()
 	}
 	return c.JSON(categoryView(after))
 }
@@ -378,6 +385,9 @@ func (h *Handler) ApplyCategoryRules(c fiber.Ctx) error {
 		return internal(err)
 	}
 	h.recordRulesApplied(c, scope, counts)
+	if counts.Categorized+counts.Recategorized+counts.Cleared > 0 {
+		h.budgetChanged()
+	}
 	return c.JSON(generated.ApplyCategoryRulesResult{Scope: generated.ApplyScope(scope), Examined: counts.Examined, Categorized: counts.Categorized,
 		Recategorized: counts.Recategorized, Cleared: counts.Cleared, Unchanged: counts.Unchanged})
 }

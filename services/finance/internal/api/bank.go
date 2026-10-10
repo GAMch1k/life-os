@@ -291,6 +291,7 @@ func (h *Handler) ImportBankSync(c fiber.Ctx) error {
 		return passThrough(err)
 	}
 	h.recordBankImport(c, body, counts)
+	h.budgetChanged()
 	result := generated.BankImportResult{AccountIds: accountIDs}
 	result.Accounts.Created, result.Accounts.Updated = counts.AccountsCreated, counts.AccountsUpdated
 	result.Transactions.Created, result.Transactions.Updated, result.Transactions.Unchanged = counts.Created, counts.Updated, counts.Unchanged

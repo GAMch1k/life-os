@@ -13,6 +13,7 @@ import (
 	"github.com/GAMch1k/life-os/pkg/database"
 	"github.com/GAMch1k/life-os/pkg/httpserver"
 	"github.com/GAMch1k/life-os/services/finance/internal/api"
+	"github.com/GAMch1k/life-os/services/finance/internal/budget"
 	serviceconfig "github.com/GAMch1k/life-os/services/finance/internal/config"
 )
 
@@ -45,13 +46,21 @@ func run(ctx context.Context) error {
 		Activity:        activity.NewEmitter(cfg.ActivityURL, "finance", logger),
 	})
 	// The built-in Cash account exists before the first request: a manual
-	// transaction without an account goes there.
+	// transaction without an account goes there. The default categories
+	// and merchant rules are added once.
 	ensureCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	cash, err := handler.EnsureCashAccount(ensureCtx)
+	if err == nil {
+		var seeded budget.SeedResult
+		if seeded, err = handler.EnsureBudgetDefaults(ensureCtx); err == nil && seeded.Applied {
+			logger.Info("default budget categories and merchant rules added", "categoriesCreated", seeded.CategoriesCreated,
+				"categoriesAdopted", seeded.CategoriesAdopted, "categoriesSkipped", seeded.CategoriesSkipped, "rulesCreated", seeded.RulesCreated)
+		}
+	}
 	cancel()
 	if err != nil {
 		pool.Close()
-		return fmt.Errorf("ensure the Cash account: %w", err)
+		return fmt.Errorf("ensure the Cash account and budget defaults: %w", err)
 	}
 	logger.Info("built-in Cash account ready", "accountId", cash.ID.String(), "currency", cash.Currency)
 
