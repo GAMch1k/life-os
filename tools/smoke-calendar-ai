@@ -1,0 +1,183 @@
+#!/usr/bin/env bash
+# Calendar through the AI path (P10-03) on the isolated verification stack,
+# with the real authenticated Codex CLI and LIFE_OS_TIMEZONE=Europe/Berlin.
+#
+# Proves, through Inbox -> processor -> Codex -> MCP -> Calendar API:
+#   1. "Add dentist at Dr. Weber, Friday 15:00 for an hour" creates one timed
+#      event with a location, 15:00-16:00 Berlin on the next Friday;
+#   2. "Move the dentist appointment to next Monday at 9" moves that event
+#      (calendar_update on its id) to Monday 09:00 Berlin, keeping its hour
+#      and location, and creates nothing;
+#   3. "Cancel the dentist appointment" goes to Human Review with that event
+#      as the only candidate and cancels nothing; approving it through the
+#      Inbox API then cancels exactly that event (kept as history);
+#   4. an English capture moves the one event titled "Zahnarzt" to the day
+#      after tomorrow at 11:30 Berlin (cross-language search terms);
+#   5. "Move my meeting to Thursday at 14:00" with two meetings goes to Human
+#      Review with both as candidates, and neither changes;
+#   and no other event is created. Relative dates are judged in Berlin from
+#   each Inbox item's own createdAt.
+set -euo pipefail
+
+zone=Europe/Berlin
+export LIFE_OS_TIMEZONE=$zone
+compose=(./tools/verify-compose)
+gateway=http://127.0.0.1:13001
+cleanup() { "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true; }
+trap cleanup EXIT
+fail() { echo "FAIL: $*" >&2; exit 1; }
+
+"${compose[@]}" up --detach --no-build
+ready() { for _ in $(seq 1 90); do curl --fail --silent "$gateway/api/$1/ready" >/dev/null && return; sleep 1; done; fail "$1 is not ready"; }
+for service in inbox calendar mcp; do ready "$service"; done
+
+# Writes are attributed to this script as a development tool, never to the
+# owner (CONTRIBUTING.md, "Development tools and live data").
+api() { curl --fail --silent --show-error -H 'X-Life-OS-Actor: dev:smoke-calendar-ai' "$@"; }
+post_json() { api -H 'content-type: application/json' --data "$2" "$gateway$1"; }
+capture() {
+  post_json /api/inbox/v1/inbox-items "$(jq -nc --arg content "$1" '{content:$content,source:"web",sourceMetadata:{verification:"p10-03-calendar-ai"}}')"
+}
+item() { api "$gateway/api/inbox/v1/inbox-items/$1"; }
+attempts() { api "$gateway/api/inbox/v1/inbox-items/$1/processing-attempts"; }
+event() { api "$gateway/api/calendar/v1/events/$1"; }
+# local_at <YYYY-MM-DD> <HH:MM>: that Berlin wall-clock time as RFC3339.
+local_at() { TZ=$zone date -d "$1 $2" +%Y-%m-%dT%H:%M:%S%:z; }
+seed() { # seed <title> <day> <start HH:MM> <end HH:MM>
+  post_json /api/calendar/v1/events "$(jq -nc --arg title "$1" --arg start "$(local_at "$2" "$3")" --arg end "$(local_at "$2" "$4")" '{title:$title,allDay:false,startAt:$start,endAt:$end}')" | jq -r '.id'
+}
+local_time() { TZ=$zone date -d "$1" '+%a %F %R %Z'; }
+captured_day() { TZ=$zone date -d "$(jq -r '.createdAt' <<<"$1")" +%F; }
+day_after() { date -u -d "$1 + $2 days" +%F; }
+# days_until <weekday> <day>: days from <day> to that weekday's next
+# occurrence that is not <day> itself.
+days_until() { local ahead=$(( ($(date -d "$1" +%u) - $(date -d "$2" +%u) + 7) % 7 )); echo $(( ahead == 0 ? 7 : ahead )); }
+
+# settle <item id>: the item's state once the processor has decided it.
+settle() {
+  local state=
+  for _ in $(seq 1 180); do
+    state=$(item "$1" | jq -r '.state')
+    case "$state" in resolved | human_review | failed) break ;; esac
+    sleep 2
+  done
+  echo "$state"
+}
+
+# processed_action <scenario> <item id> <tool>: the item was resolved by
+# exactly one action of that tool; prints its audit record (arguments and
+# the Calendar result).
+processed_action() {
+  local state history
+  state=$(settle "$2")
+  history=$(attempts "$2")
+  [ "$state" = resolved ] ||
+    fail "$1: item is '$state', want resolved. Review: $(item "$2" | jq -c '.processingMetadata.humanReview // {}') Attempts: $(jq -c '[.items[] | {status, errorSummary, actions}]' <<<"$history")"
+  jq -ce --arg tool "$3" 'first(.items[] | select(.status == "processed")) | .actions | select(length == 1 and .[0].tool == $tool) | .[0]' <<<"$history" ||
+    fail "$1: not resolved by one $3: $(jq -c '[.items[] | {status, actions}]' <<<"$history")"
+}
+
+# expect_instant <what> <actual RFC3339> <expected Berlin "YYYY-MM-DD HH:MM">...
+# passes when the actual instant is any of the expected ones.
+expect_instant() {
+  local what=$1 actual=$2 seconds expected
+  shift 2
+  seconds=$(date -d "$actual" +%s) || fail "$what: '$actual' is not a time"
+  for expected in "$@"; do
+    if [ "$seconds" = "$(TZ=$zone date -d "$expected" +%s)" ]; then
+      echo "ok: $what = $actual ($(local_time "$actual"))"
+      return
+    fi
+  done
+  fail "$what is $actual ($(local_time "$actual")), want $(printf '%s or ' "$@" | sed 's/ or $//') $zone"
+}
+active_matches() { api "$gateway/api/calendar/v1/events/search?q=$(jq -rn --arg q "$1" '$q|@uri')&limit=100" | jq '.items | length'; }
+
+# Keep each capture and the local day it is judged by apart from midnight.
+while (( 10#$(TZ=$zone date +%H%M) >= 2350 )); do sleep 20; done
+# "Friday" said on a Friday is ambiguous (today or next week).
+weekday=Friday
+[ "$(TZ=$zone date +%A)" != Friday ] || weekday=Monday
+
+# 5 (seeded first, decided independently): two meetings.
+today=$(TZ=$zone date +%F)
+team=$(seed "Team meeting" "$(day_after "$today" 2)" 10:00 11:00)
+anna=$(seed "Meeting with Anna" "$(day_after "$today" 3)" 14:00 14:30)
+team_before=$(event "$team" | jq -c '{startAt, endAt, status}')
+anna_before=$(event "$anna" | jq -c '{startAt, endAt, status}')
+meeting_item=$(capture "Move my meeting to Thursday at 14:00." | jq -r '.id')
+
+# 1. Create with a location, relative weekday in Berlin.
+create_item=$(capture "Add dentist at Dr. Weber, $weekday 15:00 for an hour.")
+action=$(processed_action "create" "$(jq -r '.id' <<<"$create_item")" calendar_create)
+dentist=$(jq -r '.result.id' <<<"$action")
+created=$(event "$dentist")
+day=$(captured_day "$create_item")
+friday=$(day_after "$day" "$(days_until "$weekday" "$day")")
+jq -e '.allDay == false and .status == "active"' >/dev/null <<<"$created" || fail "create: not an active timed event: $created"
+jq -e '(.location // "") | test("Weber"; "i")' >/dev/null <<<"$created" || fail "create: location is $(jq -c '.location' <<<"$created") (title $(jq -c '.title' <<<"$created")), want Dr. Weber"
+expect_instant "create: startAt for '$weekday 15:00' (captured $day)" "$(jq -r '.startAt' <<<"$created")" "$friday 15:00"
+expect_instant "create: endAt" "$(jq -r '.endAt' <<<"$created")" "$friday 16:00"
+echo "ok: 1. created $(jq -c '{title, location}' <<<"$created")"
+
+# 2. Reschedule that event by natural language.
+move_item=$(capture "Move the dentist appointment to next Monday at 9.")
+action=$(processed_action "reschedule" "$(jq -r '.id' <<<"$move_item")" calendar_update)
+[ "$(jq -r '.arguments.eventId' <<<"$action")" = "$dentist" ] || fail "reschedule: updated $(jq -c '.arguments' <<<"$action"), want event $dentist"
+moved=$(event "$dentist")
+day=$(captured_day "$move_item")
+monday=$(day_after "$day" "$(days_until Monday "$day")")
+# "Next Monday" is the coming Monday, or for some readers the one after.
+expect_instant "reschedule: startAt for 'next Monday at 9' (captured $day)" "$(jq -r '.startAt' <<<"$moved")" "$monday 09:00" "$(day_after "$monday" 7) 09:00"
+expect_instant "reschedule: endAt keeps the hour" "$(jq -r '.endAt' <<<"$moved")" "$(TZ=$zone date -d "@$(($(date -d "$(jq -r '.startAt' <<<"$moved")" +%s) + 3600))" '+%F %R')"
+jq -e --argjson before "$created" '.title == $before.title and .location == $before.location and .status == "active"' >/dev/null <<<"$moved" ||
+  fail "reschedule: title, location, or status changed: $(jq -c '{title, location, status}' <<<"$moved")"
+[ "$(active_matches dentist)" = 1 ] || fail "reschedule: $(active_matches dentist) active dentist events, want 1"
+echo "ok: 2. moved the dentist event, nothing created"
+
+# 3. Cancellation waits for the owner, then runs once approved.
+cancel_item=$(capture "Cancel the dentist appointment." | jq -r '.id')
+state=$(settle "$cancel_item")
+review=$(item "$cancel_item")
+[ "$state" = human_review ] || fail "cancel: item is '$state', want human_review: $(jq -c '.processingMetadata' <<<"$review") $(attempts "$cancel_item" | jq -c '[.items[] | {status, actions}]')"
+jq -e --arg id "$dentist" '.processingMetadata.humanReview | (.candidates | map(.id)) == [$id] and .proposedAction.tool == "calendar_cancel"' >/dev/null <<<"$review" ||
+  fail "cancel: review is $(jq -c '.processingMetadata.humanReview | {proposedAction, candidates: [.candidates[] | {id, title}]}' <<<"$review"), want calendar_cancel of $dentist only"
+[ "$(event "$dentist" | jq -r '.status')" = active ] || fail "cancel: the event was cancelled before approval"
+echo "ok: 3a. 'Cancel the dentist appointment' waits in Human Review: $(jq -c '.processingMetadata.humanReview | {errorSummary, candidates: [.candidates[].title]}' <<<"$review")"
+post_json "/api/inbox/v1/inbox-items/$cancel_item/human-review/resolve" "$(jq -nc --arg id "$dentist" '{candidateId:$id}')" >/dev/null
+action=$(processed_action "approved cancel" "$cancel_item" calendar_cancel)
+[ "$(jq -r '.arguments.eventId' <<<"$action")" = "$dentist" ] || fail "approved cancel: cancelled $(jq -c '.arguments' <<<"$action"), want $dentist"
+jq -e '.status == "cancelled" and .cancelledAt != null' >/dev/null <<<"$(event "$dentist")" || fail "approved cancel: event is $(event "$dentist" | jq -c '{status, cancelledAt}')"
+[ "$(active_matches dentist)" = 0 ] || fail "approved cancel: the dentist event is still found"
+echo "ok: 3b. approval cancelled exactly that event (kept as history)"
+
+# 4. Cross-language: the only dentist event left is titled in German.
+zahnarzt_day=$(day_after "$(TZ=$zone date +%F)" 4)
+zahnarzt=$(seed "Zahnarzt" "$zahnarzt_day" 10:00 11:00)
+german_item=$(capture "Move my dentist appointment to the day after tomorrow at 11:30.")
+action=$(processed_action "cross-language reschedule" "$(jq -r '.id' <<<"$german_item")" calendar_update)
+[ "$(jq -r '.arguments.eventId' <<<"$action")" = "$zahnarzt" ] || fail "cross-language: updated $(jq -c '.arguments' <<<"$action"), want Zahnarzt $zahnarzt"
+moved=$(event "$zahnarzt")
+day=$(captured_day "$german_item")
+expect_instant "cross-language: Zahnarzt startAt (captured $day)" "$(jq -r '.startAt' <<<"$moved")" "$(day_after "$day" 2) 11:30"
+expect_instant "cross-language: Zahnarzt endAt keeps the hour" "$(jq -r '.endAt' <<<"$moved")" "$(day_after "$day" 2) 12:30"
+echo "ok: 4. an English capture moved 'Zahnarzt' (searched $(jq -c '[.items[] | select(.status == "processed")][0].actions[0].arguments | del(.eventId)' <<<"$(attempts "$(jq -r '.id' <<<"$german_item")")"))"
+
+# 5. Two meetings: Human Review with both, neither changed.
+state=$(settle "$meeting_item")
+review=$(item "$meeting_item")
+[ "$state" = human_review ] || fail "two meetings: item is '$state', want human_review: $(attempts "$meeting_item" | jq -c '[.items[] | {status, actions}]')"
+jq -e --arg a "$team" --arg b "$anna" '(.processingMetadata.humanReview.candidates | map(.id) | sort) == ([$a, $b] | sort)' >/dev/null <<<"$review" ||
+  fail "two meetings: candidates are $(jq -c '[.processingMetadata.humanReview.candidates[]? | {id, title}]' <<<"$review"), want both meetings"
+[ "$(event "$team" | jq -c '{startAt, endAt, status}')" = "$team_before" ] || fail "two meetings: Team meeting changed"
+[ "$(event "$anna" | jq -c '{startAt, endAt, status}')" = "$anna_before" ] || fail "two meetings: Meeting with Anna changed"
+echo "ok: 5. 'Move my meeting' with two meetings waits in Human Review: $(jq -c '[.processingMetadata.humanReview.candidates[].title]' <<<"$review")"
+
+# No other event: the created dentist (now cancelled) and the three seeds.
+from=$(date -u -d '-2 days' +%Y-%m-%dT%H:%M:%SZ)
+to=$(date -u -d '+40 days' +%Y-%m-%dT%H:%M:%SZ)
+all=$(api "$gateway/api/calendar/v1/events?from=$from&to=$to&includeCancelled=true&limit=100")
+[ "$(jq '.items | length' <<<"$all")" = 4 ] || fail "$(jq '.items | length' <<<"$all") events exist, want 4: $(jq -c '[.items[] | {title, status}]' <<<"$all")"
+echo "ok: no other event was created"
+
+echo "calendar AI smoke passed"
