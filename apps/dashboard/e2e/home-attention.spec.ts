@@ -1,4 +1,4 @@
-import { type APIRequestContext, expect, test } from "@playwright/test";
+import { type APIRequestContext, expect, test } from "./fixtures";
 
 const enabled = Boolean(process.env.LIFE_OS_E2E_URL);
 
