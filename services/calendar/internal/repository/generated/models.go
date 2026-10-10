@@ -8,6 +8,26 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type CalendarReminderDispatch struct {
+	ID            bool
+	LastRunAt     pgtype.Timestamptz
+	LeaseOwner    *string
+	LeaseUntil    pgtype.Timestamptz
+	LastAttemptAt pgtype.Timestamptz
+	LastSuccessAt pgtype.Timestamptz
+	LastError     *string
+	LastErrorAt   pgtype.Timestamptz
+	LastSentAt    pgtype.Timestamptz
+	UpdatedAt     pgtype.Timestamptz
+}
+
+type CalendarReminderLog struct {
+	DedupeKey  string
+	DueAt      pgtype.Timestamptz
+	Outcome    string
+	RecordedAt pgtype.Timestamptz
+}
+
 type CalendarSetting struct {
 	ID                     bool
 	TimedDefaultReminders  []byte

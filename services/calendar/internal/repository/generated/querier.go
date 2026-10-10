@@ -15,6 +15,10 @@ type Querier interface {
 	// reset_validators and next_refresh_at work as in UpdateSource; enabled and
 	// the refresh state stay.
 	ApplySourcePreset(ctx context.Context, arg ApplySourcePresetParams) (CalendarSource, error)
+	// Takes the dispatcher's lease until lease_until, creating the state row on
+	// the first run. Returns no row while another process holds an unexpired
+	// lease.
+	ClaimReminderRun(ctx context.Context, arg ClaimReminderRunParams) (CalendarReminderDispatch, error)
 	// Takes the source's refresh lease: one refresh per source at a time, across
 	// processes too. A lease left by a crashed refresh expires and is taken over.
 	ClaimSourceRefresh(ctx context.Context, arg ClaimSourceRefreshParams) (CalendarSource, error)
@@ -36,6 +40,9 @@ type Querier interface {
 	DeleteGoogleConnection(ctx context.Context, id pgtype.UUID) (int64, error)
 	// Also deletes the source's imported events (ON DELETE CASCADE).
 	DeleteSource(ctx context.Context, id pgtype.UUID) (int64, error)
+	// Moves the cursor and releases the lease, if owner still holds it. A run
+	// with an error keeps its message; one without records its success.
+	FinishReminderRun(ctx context.Context, arg FinishReminderRunParams) (int64, error)
 	// Records a refresh outcome (the whole new state, computed by the caller
 	// under LockSource) and releases the lease.
 	FinishSourceRefresh(ctx context.Context, arg FinishSourceRefreshParams) (CalendarSource, error)
@@ -46,6 +53,7 @@ type Querier interface {
 	// Preset sources are configured from Calendar's environment at startup
 	// (EnsurePreset), inside one transaction holding LockPreset.
 	GetPresetSource(ctx context.Context, preset string) (CalendarSource, error)
+	GetReminderDispatch(ctx context.Context) (CalendarReminderDispatch, error)
 	GetSettings(ctx context.Context) (CalendarSetting, error)
 	GetSource(ctx context.Context, id pgtype.UUID) (CalendarSource, error)
 	InsertImportedEvent(ctx context.Context, arg InsertImportedEventParams) error
@@ -62,6 +70,10 @@ type Querier interface {
 	ListEvents(ctx context.Context, arg ListEventsParams) ([]ListEventsRow, error)
 	// The connection's calendars: the primary first, then by name.
 	ListGoogleCalendars(ctx context.Context, connectionID pgtype.UUID) ([]GoogleCalendar, error)
+	// Which of the given dedupe keys were already handled.
+	ListHandledReminders(ctx context.Context, keys []string) ([]string, error)
+	// The sources Calendar configures itself (ZAW).
+	ListPresetSourceIDs(ctx context.Context) ([]pgtype.UUID, error)
 	// Recurring events that may have an occurrence overlapping
 	// [range_start, range_end): they start before range_end, and their last
 	// possible occurrence (starting at recurrence_until, a day later for an
@@ -69,6 +81,13 @@ type Querier interface {
 	// range_start; or one of their occurrences was moved, possibly into the
 	// range. The caller expands them; a personal calendar holds few of them.
 	ListRecurringEvents(ctx context.Context, arg ListRecurringEventsParams) ([]ListRecurringEventsRow, error)
+	// Active non-recurring events that start in [range_start, range_end) for
+	// reminder delivery: timed ones by their start instant, all-day ones by
+	// their first date between first_date and last_date (the owner's days
+	// around the range; the caller narrows them to the instants). Recurring
+	// events come from ListRecurringEvents. Each arm uses its kind's start
+	// index.
+	ListReminderEvents(ctx context.Context, arg ListReminderEventsParams) ([]Event, error)
 	// Imported events are written only by Calendar's source adapter, inside the
 	// refresh transaction that holds LockSource.
 	ListSourceEvents(ctx context.Context, sourceID pgtype.UUID) ([]Event, error)
@@ -89,11 +108,14 @@ type Querier interface {
 	MarkImportedEventRemoved(ctx context.Context, arg MarkImportedEventRemovedParams) error
 	// Hands occurrence exceptions to another series (a split's new series).
 	MoveEventExceptions(ctx context.Context, arg MoveEventExceptionsParams) (int64, error)
+	PruneReminderLog(ctx context.Context, before pgtype.Timestamptz) (int64, error)
 	// A new authorization of the same account: new token and scopes, usable again.
 	ReconnectGoogleConnection(ctx context.Context, arg ReconnectGoogleConnectionParams) (GoogleConnection, error)
 	// A refresh succeeded: the connection is usable. Google may rotate the
 	// refresh token; a NULL ciphertext keeps the stored one.
 	RecordGoogleTokenRefresh(ctx context.Context, arg RecordGoogleTokenRefreshParams) (GoogleConnection, error)
+	// Records one reminder's outcome; 0 rows when it was already recorded.
+	RecordReminder(ctx context.Context, arg RecordReminderParams) (int64, error)
 	// Gives the lease up after a refresh that could not record an outcome.
 	ReleaseSourceRefresh(ctx context.Context, id pgtype.UUID) error
 	// Non-recurring events whose title, description, or location contain every
