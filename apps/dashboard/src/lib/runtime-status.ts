@@ -1,4 +1,6 @@
 import { normalizeServiceUrl, serviceBaseUrls } from "@/config/services";
+import { calendarClient } from "@/lib/api/calendar-client";
+import type { components as CalendarComponents } from "@/lib/api/generated/calendar";
 import { inboxClient } from "@/lib/api/inbox-client";
 import type { components as InboxComponents } from "@/lib/api/generated/inbox";
 import type { components as VoiceComponents } from "@/lib/api/generated/voice";
@@ -9,11 +11,13 @@ import { configuredTimeZone, userTimeZone } from "@/lib/user-time-zone";
 // The Status page turns supported runtime state into actionable checks:
 // - the processor's private /status endpoint (what the running process saw),
 // - the Inbox and Voice backlog APIs (durable queue state),
+// - the Calendar sources API (each subscribed feed's refresh state),
 // - each owning service's /ready endpoint.
 // Nothing here is inferred from UI behaviour.
 
 export type InboxBacklog = InboxComponents["schemas"]["InboxBacklog"];
 export type AudioBacklog = VoiceComponents["schemas"]["AudioBacklog"];
+export type CalendarSource = CalendarComponents["schemas"]["CalendarSource"];
 
 /** Mirrors `Status` in services/mcp/internal/processor/status.go. */
 export type ProcessorStatus = {
@@ -186,8 +190,21 @@ export function limitResetsAt(usage: ProcessorStatus["usage"]) {
 
 export type CheckState = "ok" | "warning" | "problem";
 
+export type StatusFact = { label: string; value: string };
+
+/** One part of a check with its own state, such as one calendar feed. */
+export type StatusPart = {
+  id: string;
+  title: string;
+  state: CheckState;
+  summary: string;
+  /** Raw error text from the owning runtime, shown verbatim. */
+  detail?: string;
+  facts: StatusFact[];
+};
+
 export type StatusCheck = {
-  id: "processing" | "inbox" | "voice" | "services";
+  id: "processing" | "inbox" | "voice" | "calendar" | "services";
   title: string;
   state: CheckState;
   summary: string;
@@ -195,13 +212,19 @@ export type StatusCheck = {
   detail?: string;
   /** What the user can do about it. */
   action?: string;
-  facts: { label: string; value: string }[];
+  facts: StatusFact[];
+  parts?: StatusPart[];
 };
 
 export type RuntimeSignals = {
   processor: ProcessorStatus | null;
   inbox: InboxBacklog | null;
   voice: AudioBacklog | null;
+  /**
+   * Calendar sources; null when Calendar could not be read, absent when not
+   * checked (the check is left out).
+   */
+  calendarSources?: CalendarSource[] | null;
   services: { name: string; ready: boolean }[];
 };
 
@@ -550,6 +573,165 @@ function voiceCheck(
   };
 }
 
+/**
+ * A feed that fails this many refreshes in a row needs attention: Status
+ * always shows a failed refresh, Home only from here on. Fewer failures are
+ * retried automatically and usually pass.
+ */
+export const SOURCE_FAILURE_ALERT = 3;
+
+/** What a feed's last refresh changed, such as "3 added, 1 cancelled". */
+function refreshCounts(counts: CalendarSource["refresh"]["lastCounts"]) {
+  if (!counts) return "no changes";
+  const parts = (
+    [
+      [counts.inserted, "added"],
+      [counts.updated, "changed"],
+      [counts.removed, "cancelled"],
+      [counts.restored, "restored"],
+    ] as const
+  )
+    .filter(([count]) => count > 0)
+    .map(([count, verb]) => `${count} ${verb}`);
+  return parts.length ? parts.join(", ") : "no changes";
+}
+
+function lastRefreshLabel(source: CalendarSource, timeZone: string) {
+  const { refresh } = source;
+  const at = refresh.lastAttemptAt
+    ? ` (${formatTime(refresh.lastAttemptAt, timeZone)})`
+    : "";
+  switch (refresh.lastOutcome) {
+    case "imported":
+      return `imported, ${refreshCounts(refresh.lastCounts)}${at}`;
+    case "not_modified":
+      return `feed unchanged${at}`;
+    case "failed":
+      return `failed${at}`;
+    default:
+      return "not refreshed yet";
+  }
+}
+
+/** One feed's refresh health. Its URL is never shown: it can be personal. */
+export function sourcePart(
+  source: CalendarSource,
+  timeZone: string,
+): StatusPart {
+  const { refresh } = source;
+  const failures = refresh.consecutiveFailures;
+  const failing = source.enabled && refresh.lastOutcome === "failed";
+  const facts: StatusFact[] = [
+    { label: "Last refresh", value: lastRefreshLabel(source, timeZone) },
+    {
+      label: "Last success",
+      value: formatTime(refresh.lastSuccessAt, timeZone),
+    },
+  ];
+  if (failures > 0) {
+    facts.push({ label: "Failed in a row", value: String(failures) });
+  }
+  facts.push({
+    label: "Next refresh",
+    value: !source.enabled
+      ? "none (disabled)"
+      : refresh.refreshing
+        ? "running now"
+        : refresh.nextRefreshAt
+          ? formatTime(refresh.nextRefreshAt, timeZone)
+          : "not scheduled",
+  });
+  const base = { id: source.id, title: source.name, facts };
+  if (!source.enabled) {
+    return {
+      ...base,
+      state: "ok",
+      summary: "Disabled: not refreshed; its events stay as they are.",
+    };
+  }
+  if (failing) {
+    return {
+      ...base,
+      state: "warning",
+      summary:
+        failures >= SOURCE_FAILURE_ALERT
+          ? `Keeps failing: ${failures} refreshes in a row. Its events from the last good refresh are kept.`
+          : "The last refresh failed; it is retried automatically. Its events from the last good refresh are kept.",
+      detail: refresh.lastError ?? undefined,
+    };
+  }
+  return {
+    ...base,
+    state: "ok",
+    summary: refresh.lastOutcome
+      ? "Refreshing normally."
+      : "Waiting for its first refresh.",
+  };
+}
+
+function calendarCheck(
+  sources: CalendarSource[] | null,
+  timeZone: string,
+): StatusCheck {
+  const base = { id: "calendar" as const, title: "Calendar sources" };
+  if (sources === null) {
+    return {
+      ...base,
+      state: "problem",
+      summary: "Calendar sources are unavailable.",
+      action:
+        "Subscribed feeds are not refreshed until Calendar is back. Their events stay as they are.",
+      facts: [],
+    };
+  }
+  if (sources.length === 0) {
+    return {
+      ...base,
+      state: "ok",
+      summary: "No calendar feeds are subscribed.",
+      facts: [],
+    };
+  }
+  const parts = sources.map((source) => sourcePart(source, timeZone));
+  const failing = sources.filter(
+    (source) =>
+      source.enabled &&
+      source.refresh.lastOutcome === "failed" &&
+      source.refresh.consecutiveFailures >= SOURCE_FAILURE_ALERT,
+  );
+  const retrying = sources.filter(
+    (source) =>
+      source.enabled &&
+      source.refresh.lastOutcome === "failed" &&
+      source.refresh.consecutiveFailures < SOURCE_FAILURE_ALERT,
+  );
+  if (failing.length) {
+    const [first] = failing;
+    return {
+      ...base,
+      state: "warning",
+      summary:
+        failing.length === 1
+          ? `The calendar feed ${first.name} has failed ${first.refresh.consecutiveFailures} refreshes in a row.`
+          : `${failing.length} calendar feeds keep failing to refresh.`,
+      action:
+        "Their events from the last good refresh are kept, and they are retried automatically with growing pauses. If this persists, check that the feed still exists.",
+      facts: [],
+      parts,
+    };
+  }
+  const feeds = `${sources.length} calendar feed${sources.length === 1 ? "" : "s"}`;
+  return {
+    ...base,
+    state: "ok",
+    summary: retrying.length
+      ? `${retrying.map((source) => source.name).join(", ")}: the last refresh failed and is retried automatically.`
+      : `${feeds} refreshing normally.`,
+    facts: [],
+    parts,
+  };
+}
+
 function servicesCheck(services: RuntimeSignals["services"]): StatusCheck {
   const down = services.filter((service) => !service.ready);
   return {
@@ -579,6 +761,9 @@ export function toRuntimeStatus(
     processingCheck(signals.processor, timeZone, configured),
     inboxCheck(signals.inbox, now, timeZone),
     voiceCheck(signals.voice, now, timeZone),
+    ...(signals.calendarSources === undefined
+      ? []
+      : [calendarCheck(signals.calendarSources, timeZone)]),
     servicesCheck(signals.services),
   ];
   return {
@@ -640,27 +825,32 @@ const SERVICE_NAMES: Record<keyof typeof serviceBaseUrls, string> = {
 
 export async function getRuntimeStatus(): Promise<RuntimeStatus> {
   const timeout = { signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) };
-  const [processor, inbox, voice, services] = await Promise.all([
-    getJson<ProcessorStatus>(`${processorStatusUrl}/status`),
-    inboxClient
-      .GET("/v1/backlog", timeout)
-      .then(({ data }) => data ?? null)
-      .catch(() => null),
-    voiceClient
-      .GET("/v1/backlog", timeout)
-      .then(({ data }) => data ?? null)
-      .catch(() => null),
-    Promise.all(
-      (Object.keys(SERVICE_NAMES) as (keyof typeof serviceBaseUrls)[]).map(
-        async (key) => ({
-          name: SERVICE_NAMES[key],
-          ready: await ready(serviceBaseUrls[key]),
-        }),
+  const [processor, inbox, voice, calendarSources, services] =
+    await Promise.all([
+      getJson<ProcessorStatus>(`${processorStatusUrl}/status`),
+      inboxClient
+        .GET("/v1/backlog", timeout)
+        .then(({ data }) => data ?? null)
+        .catch(() => null),
+      voiceClient
+        .GET("/v1/backlog", timeout)
+        .then(({ data }) => data ?? null)
+        .catch(() => null),
+      calendarClient
+        .GET("/v1/sources", timeout)
+        .then(({ data }) => data?.items ?? null)
+        .catch(() => null),
+      Promise.all(
+        (Object.keys(SERVICE_NAMES) as (keyof typeof serviceBaseUrls)[]).map(
+          async (key) => ({
+            name: SERVICE_NAMES[key],
+            ready: await ready(serviceBaseUrls[key]),
+          }),
+        ),
       ),
-    ),
-  ]);
+    ]);
   return toRuntimeStatus(
-    { processor, inbox, voice, services },
+    { processor, inbox, voice, calendarSources, services },
     new Date(),
     await userTimeZone(),
     configuredTimeZone(),

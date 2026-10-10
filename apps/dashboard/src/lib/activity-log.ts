@@ -1,6 +1,6 @@
 import { activityClient } from "@/lib/api/activity-client";
 import type { components } from "@/lib/api/generated/activity";
-import { addDays, DATE_LOCALE, startOfDay } from "@/lib/time-zone";
+import { addDays, DATE_LOCALE, dayKey, startOfDay } from "@/lib/time-zone";
 
 // The Event Log is a read-only view over the Activity API. Everything here is
 // presentation: filters map to API query parameters, and a selected event's
@@ -16,6 +16,10 @@ export const OUTCOMES: ActivityOutcome[] = ["succeeded", "pending", "failed"];
 export const AGENT_CHANGES_DESCRIPTION =
   "Changes the AI made through MCP, such as creating or completing Tasks. Its decisions, such as Human Review requests, appear under Inbox.";
 
+/** What the "calendar" domain records. */
+export const CALENDAR_DESCRIPTION =
+  "Calendar events created, changed, cancelled, or deleted (by you, the AI, or a tool) and each refresh of a subscribed calendar feed.";
+
 export const SOURCES: readonly {
   value: string;
   label: string;
@@ -29,6 +33,7 @@ export const SOURCES: readonly {
     description: AGENT_CHANGES_DESCRIPTION,
   },
   { value: "tasks", label: "Tasks" },
+  { value: "calendar", label: "Calendar", description: CALENDAR_DESCRIPTION },
 ];
 
 export const SUBJECT_TYPES = [
@@ -37,6 +42,8 @@ export const SUBJECT_TYPES = [
   { value: "processing_attempt", label: "Processing attempt" },
   { value: "mcp_action", label: "Agent action" },
   { value: "task", label: "Task" },
+  { value: "calendar_event", label: "Calendar event" },
+  { value: "calendar_source", label: "Calendar source" },
 ] as const;
 
 const EVENT_LABELS: Record<string, string> = {
@@ -60,6 +67,14 @@ const EVENT_LABELS: Record<string, string> = {
   "task.updated": "Task updated",
   "task.completed": "Task completed",
   "task.reopened": "Task reopened",
+  "calendar.event.created": "Event created",
+  "calendar.event.updated": "Event updated",
+  "calendar.event.rescheduled": "Event rescheduled",
+  "calendar.event.cancelled": "Event cancelled",
+  "calendar.event.restored": "Event restored",
+  "calendar.event.deleted": "Event deleted",
+  "calendar.source.refreshed": "Source refreshed",
+  "calendar.source.refresh_failed": "Source refresh failed",
 };
 
 export const EVENT_TYPES = Object.keys(EVENT_LABELS);
@@ -69,12 +84,87 @@ function humanize(value: string) {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
+function text(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+/** What a feed refresh changed, as recorded in its `counts`. */
+type RefreshCounts = {
+  inserted?: number;
+  updated?: number;
+  removed?: number;
+  restored?: number;
+};
+
+/**
+ * What a source refresh did, such as "3 added, 1 cancelled", "no changes",
+ * or "unchanged" when the feed itself had not changed. Removed events are
+ * cancelled by their source, so they read as cancelled.
+ */
+export function refreshChanges(data: ActivityEvent["data"] | undefined) {
+  if (data?.outcome === "not_modified") return "unchanged";
+  const counts = (data?.counts ?? {}) as RefreshCounts;
+  const parts = (
+    [
+      ["inserted", "added"],
+      ["updated", "changed"],
+      ["removed", "cancelled"],
+      ["restored", "restored"],
+    ] as const
+  )
+    .map(([key, verb]) => {
+      const count = counts[key];
+      return typeof count === "number" && count > 0
+        ? `${count} ${verb}`
+        : undefined;
+    })
+    .filter(Boolean);
+  return parts.length ? parts.join(", ") : "no changes";
+}
+
 export function eventLabel(event: Pick<ActivityEvent, "type" | "data">) {
   const label = EVENT_LABELS[event.type] ?? humanize(event.type);
-  const tool = event.data?.tool;
-  return event.type.startsWith("mcp.action.") && typeof tool === "string"
-    ? `${label}: ${tool}`
-    : label;
+  const tool = text(event.data?.tool);
+  if (event.type.startsWith("mcp.action.") && tool) return `${label}: ${tool}`;
+  const title = text(event.data?.title);
+  if (event.type.startsWith("calendar.event.") && title) {
+    return `${label}: ${title}`;
+  }
+  const source = text(event.data?.sourceName);
+  if (event.type === "calendar.source.refreshed" && source) {
+    return `${label}: ${source} — ${refreshChanges(event.data)}`;
+  }
+  if (event.type === "calendar.source.refresh_failed" && source) {
+    return `${label}: ${source}`;
+  }
+  return label;
+}
+
+/**
+ * Where a Calendar entry's subject is in the Calendar: an event's first day
+ * (in `timeZone`), or the Calendar itself for a source refresh. Undefined for
+ * other entries and for a deleted event, which is no longer there.
+ */
+export function calendarHref(
+  event: Pick<ActivityEvent, "type" | "subject" | "data">,
+  timeZone: string,
+) {
+  if (event.subject.type === "calendar_source") return "/calendar";
+  if (
+    event.subject.type !== "calendar_event" ||
+    event.type === "calendar.event.deleted"
+  ) {
+    return undefined;
+  }
+  const startDate = text(event.data?.startDate);
+  const startAt = text(event.data?.startAt);
+  let day: string | undefined;
+  if (startDate && /^\d{4}-\d{2}-\d{2}$/.test(startDate)) {
+    day = startDate;
+  } else if (startAt && !Number.isNaN(Date.parse(startAt))) {
+    day = dayKey(startAt, timeZone);
+  }
+  return day ? `/calendar?date=${day}` : "/calendar";
 }
 
 export function subjectLabel(type: string) {
@@ -114,6 +204,13 @@ export function actorLabel(actor: ActivityActor) {
   if (actor.kind === "user") return "You";
   if (isDevActor(actor)) {
     return actor.name ? `Developer tool (${actor.name})` : "Developer tool";
+  }
+  // A subscribed calendar feed, as system:ics-<its name> (see Calendar).
+  if (actor.kind === "system" && actor.name?.startsWith("ics-")) {
+    const feed = actor.name.slice(4);
+    return feed && feed !== "source"
+      ? `Calendar feed (${feed})`
+      : "Calendar feed";
   }
   const name = actor.name ? (ACTOR_NAMES[actor.name] ?? actor.name) : undefined;
   return name ?? humanize(actor.kind);

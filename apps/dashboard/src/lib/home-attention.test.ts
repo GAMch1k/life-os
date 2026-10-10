@@ -3,10 +3,16 @@ import test from "node:test";
 
 import {
   REVIEW_LIMIT,
+  calendarDayHref,
+  eventSourceName,
+  eventStart,
+  nextUpcomingEvent,
   ownerToday,
   toHomeAttention,
   unavailableOnFailure,
+  type CalendarSource,
 } from "./home-attention";
+import type { CalendarEvent } from "./calendar-summary";
 import type { InboxItem } from "./inbox-summary";
 
 const now = new Date("2026-10-09T15:00:00Z");
@@ -149,4 +155,110 @@ test("Home's today is the owner's day, not the UTC day", () => {
   // The same instant in UTC is still Friday, so nothing is overdue yet.
   const utc = toHomeAttention(results, nearMidnight, "UTC");
   assert.deepEqual(utc.urgent?.overdue, []);
+});
+
+const calendarEvent = (
+  id: string,
+  fields: Partial<CalendarEvent> = {},
+): CalendarEvent => ({
+  id,
+  title: `Event ${id}`,
+  allDay: false,
+  status: "active",
+  source: { kind: "manual" },
+  createdAt: "2026-10-01T00:00:00Z",
+  updatedAt: "2026-10-01T00:00:00Z",
+  ...fields,
+});
+const timedEvent = (id: string, startAt: string, minutes = 60) =>
+  calendarEvent(id, {
+    startAt,
+    endAt: new Date(Date.parse(startAt) + minutes * 60_000).toISOString(),
+  });
+const empty = { review: list([]), urgent: list([]), open: list([]) };
+
+test("the next event is the first active one that has not started yet", () => {
+  // 17:00 in Berlin on Friday 9 October.
+  const items = [
+    // Today's all-day event and a meeting under way have already started.
+    calendarEvent("today-all-day", {
+      allDay: true,
+      startDate: "2026-10-09",
+      endDate: "2026-10-09",
+    }),
+    timedEvent("under-way", "2026-10-09T14:30:00Z"),
+    // A cancelled event is not on the calendar any more.
+    calendarEvent("cancelled", {
+      ...timedEvent("cancelled", "2026-10-09T15:30:00Z"),
+      status: "cancelled",
+    }),
+    // An occurrence of a recurring event comes next.
+    calendarEvent("weekly", {
+      ...timedEvent("weekly", "2026-10-09T16:00:00Z"),
+      recurrence: { frequency: "weekly", interval: 1 },
+      occurrence: { seriesId: "weekly", recurrenceId: "2026-10-09T16:00:00Z" },
+    }),
+    timedEvent("later", "2026-10-09T18:00:00Z"),
+  ];
+  const attention = toHomeAttention(
+    { ...empty, events: list(items) },
+    now,
+    "Europe/Berlin",
+  );
+  assert.equal(attention.nextEvent?.kind, "event");
+  if (attention.nextEvent?.kind !== "event") return;
+  assert.equal(attention.nextEvent.event.id, "weekly");
+  assert.equal(attention.nextEvent.href, "/calendar?date=2026-10-09");
+  assert.equal(attention.nextEvent.sourceName, undefined);
+
+  // Only events under way or cancelled: nothing is next.
+  assert.deepEqual(
+    toHomeAttention(
+      { ...empty, events: list(items.slice(0, 3)) },
+      now,
+      "Europe/Berlin",
+    ).nextEvent,
+    { kind: "none" },
+  );
+});
+
+test("an all-day event starts at the owner's midnight", () => {
+  const tomorrow = calendarEvent("pickup", {
+    allDay: true,
+    startDate: "2026-10-10",
+    endDate: "2026-10-10",
+  });
+  // 23:30 UTC on Friday is already Saturday 01:30 in Berlin: under way.
+  const late = new Date("2026-10-09T23:30:00Z");
+  assert.equal(nextUpcomingEvent([tomorrow], late, "Europe/Berlin"), undefined);
+  assert.equal(nextUpcomingEvent([tomorrow], late, "UTC")?.id, "pickup");
+  assert.equal(eventStart(tomorrow, "UTC"), Date.parse("2026-10-10T00:00:00Z"));
+  assert.equal(calendarDayHref(tomorrow, "UTC"), "/calendar?date=2026-10-10");
+});
+
+test("an imported next event carries its source's name", () => {
+  const imported = calendarEvent("restmuell", {
+    allDay: true,
+    startDate: "2026-10-12",
+    endDate: "2026-10-12",
+    source: { kind: "ics", sourceId: "source-zaw", externalUid: "uid-1" },
+  });
+  const zaw = { id: "source-zaw", name: "ZAW" } as CalendarSource;
+  const attention = toHomeAttention(
+    { ...empty, events: list([imported]), sources: list([zaw]) },
+    now,
+    "Europe/Berlin",
+  );
+  assert.equal(
+    attention.nextEvent?.kind === "event" && attention.nextEvent.sourceName,
+    "ZAW",
+  );
+  // Without the source list (Calendar sources unreadable), the kind names it.
+  assert.equal(eventSourceName(imported, undefined), "ICS feed");
+  // Times link to the owner's day: 22:30 UTC is the next day in Berlin.
+  const late = timedEvent("late", "2026-10-12T22:30:00Z");
+  assert.equal(
+    calendarDayHref(late, "Europe/Berlin"),
+    "/calendar?date=2026-10-13",
+  );
 });

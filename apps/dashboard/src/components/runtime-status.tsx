@@ -14,6 +14,8 @@ import {
   type CheckState,
   type RuntimeStatus,
   type StatusCheck,
+  type StatusFact,
+  type StatusPart,
 } from "@/lib/runtime-status";
 import { cn } from "@/lib/utils";
 
@@ -23,12 +25,69 @@ const STATE_LABEL: Record<CheckState, string> = {
   problem: "Problem",
 };
 
-function StateIcon({ state }: { state: CheckState }) {
+function StateIcon({
+  className = "size-5",
+  state,
+}: {
+  className?: string;
+  state: CheckState;
+}) {
   if (state === "ok")
-    return <CheckCircle2 aria-hidden="true" className="text-success size-5" />;
+    return (
+      <CheckCircle2
+        aria-hidden="true"
+        className={cn("text-success", className)}
+      />
+    );
   if (state === "warning")
-    return <AlertTriangle aria-hidden="true" className="text-warning size-5" />;
-  return <XCircle aria-hidden="true" className="text-destructive size-5" />;
+    return (
+      <AlertTriangle
+        aria-hidden="true"
+        className={cn("text-warning", className)}
+      />
+    );
+  return (
+    <XCircle aria-hidden="true" className={cn("text-destructive", className)} />
+  );
+}
+
+function Facts({ facts }: { facts: StatusFact[] }) {
+  return (
+    <dl className="text-muted-foreground grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 text-sm">
+      {facts.map((fact) => (
+        <div className="contents" key={fact.label}>
+          <dt className="break-words">{fact.label}</dt>
+          <dd className="text-foreground break-words">{fact.value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function ErrorDetail({ text }: { text: string }) {
+  return (
+    <pre className="bg-muted overflow-x-auto rounded-md p-2 text-xs whitespace-pre-wrap">
+      {text}
+    </pre>
+  );
+}
+
+/** One part of a check, such as one calendar feed, with its own state. */
+function Part({ part }: { part: StatusPart }) {
+  return (
+    <li className="space-y-2 py-3 first:pt-0 last:pb-0">
+      <div className="flex items-start justify-between gap-3">
+        <h3 className="min-w-0 font-medium break-words">{part.title}</h3>
+        <span className="flex shrink-0 items-center gap-1 text-xs font-medium">
+          <StateIcon className="size-4" state={part.state} />
+          {STATE_LABEL[part.state]}
+        </span>
+      </div>
+      <p className="text-sm">{part.summary}</p>
+      {part.detail && <ErrorDetail text={part.detail} />}
+      <Facts facts={part.facts} />
+    </li>
+  );
 }
 
 function CheckCard({ check }: { check: StatusCheck }) {
@@ -47,21 +106,15 @@ function CheckCard({ check }: { check: StatusCheck }) {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
-        {check.detail && (
-          <pre className="bg-muted overflow-x-auto rounded-md p-2 text-xs whitespace-pre-wrap">
-            {check.detail}
-          </pre>
-        )}
+        {check.detail && <ErrorDetail text={check.detail} />}
         {check.action && <p className="text-sm">{check.action}</p>}
-        {check.facts.length > 0 && (
-          <dl className="text-muted-foreground grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 text-sm">
-            {check.facts.map((fact) => (
-              <div className="contents" key={fact.label}>
-                <dt className="break-words">{fact.label}</dt>
-                <dd className="text-foreground break-words">{fact.value}</dd>
-              </div>
+        {check.facts.length > 0 && <Facts facts={check.facts} />}
+        {check.parts && check.parts.length > 0 && (
+          <ul aria-label={check.title} className="divide-y border-t pt-3">
+            {check.parts.map((part) => (
+              <Part key={part.id} part={part} />
             ))}
-          </dl>
+          </ul>
         )}
       </CardContent>
     </Card>

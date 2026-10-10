@@ -65,12 +65,13 @@ func run(ctx context.Context) error {
 		httpserver.WithReadinessCheck(pool.Ping),
 	)
 	fetcher := ics.NewFetcher(cfg.ICSMaxBytes, time.Duration(cfg.ICSTimeoutSeconds)*time.Second, cfg.ICSAllowPrivateURLs)
-	refresher := sources.NewRefresher(pool, fetcher, schedule, activity.NewEmitter(cfg.ActivityURL, "calendar", logger), logger)
+	emitter := activity.NewEmitter(cfg.ActivityURL, "calendar", logger)
+	refresher := sources.NewRefresher(pool, fetcher, schedule, emitter, logger)
 	scheduler := sources.NewScheduler(refresher, time.Minute, logger)
 	// Before the scheduler starts, so a new or reconfigured ZAW source is
 	// refreshed right away.
 	ensureZAW(ctx, refresher, cfg.ZAWICSURL, logger)
-	api.Register(app, api.NewHandler(repository.New(pool), ownerTimeZone).WithSources(refresher, scheduler.Wake))
+	api.Register(app, api.NewHandler(repository.New(pool), ownerTimeZone).WithSources(refresher, scheduler.Wake).WithActivity(emitter))
 	app.OnShutdown(database.ClosePool(pool))
 
 	// The scheduler stops (finishing a refresh under way) before the pool

@@ -5,6 +5,8 @@ import {
   activityHref,
   actorLabel,
   buildTrace,
+  calendarHref,
+  EVENT_TYPES,
   emptyState,
   eventLabel,
   eventTime,
@@ -12,6 +14,7 @@ import {
   isDevActor,
   listQuery,
   parseFilters,
+  refreshChanges,
   selectedEventId,
   sourceDescription,
   sourceLabel,
@@ -306,5 +309,132 @@ test("agent actions name their tool", () => {
   assert.equal(
     eventLabel({ type: "calendar.event.moved", data: {} }),
     "Calendar event moved",
+  );
+});
+
+test("calendar event changes read with the event's title", () => {
+  for (const [type, label] of [
+    ["calendar.event.created", "Event created: Dentist"],
+    ["calendar.event.updated", "Event updated: Dentist"],
+    ["calendar.event.rescheduled", "Event rescheduled: Dentist"],
+    ["calendar.event.cancelled", "Event cancelled: Dentist"],
+    ["calendar.event.restored", "Event restored: Dentist"],
+    ["calendar.event.deleted", "Event deleted: Dentist"],
+  ]) {
+    assert.equal(eventLabel({ type, data: { title: "Dentist" } }), label);
+    // The Event filter lists the plain label.
+    assert.ok(EVENT_TYPES.includes(type));
+    assert.equal(eventLabel({ type, data: {} }), label.split(":")[0]);
+  }
+});
+
+test("a source refresh reads as what it changed", () => {
+  const refreshed = (data: Record<string, unknown>) =>
+    eventLabel({
+      type: "calendar.source.refreshed",
+      data: { sourceName: "ZAW", ...data },
+    });
+  assert.equal(
+    refreshed({
+      outcome: "imported",
+      counts: { inserted: 3, updated: 0, removed: 1, restored: 0 },
+    }),
+    "Source refreshed: ZAW — 3 added, 1 cancelled",
+  );
+  assert.equal(
+    refreshed({
+      outcome: "imported",
+      counts: { inserted: 0, updated: 2, removed: 0, restored: 1 },
+    }),
+    "Source refreshed: ZAW — 2 changed, 1 restored",
+  );
+  assert.equal(
+    refreshed({ outcome: "imported", counts: { inserted: 0, unchanged: 21 } }),
+    "Source refreshed: ZAW — no changes",
+  );
+  assert.equal(
+    refreshed({ outcome: "not_modified" }),
+    "Source refreshed: ZAW — unchanged",
+  );
+  assert.equal(refreshChanges(undefined), "no changes");
+  assert.equal(
+    eventLabel({
+      type: "calendar.source.refresh_failed",
+      data: { sourceName: "ZAW", error: "the feed answered HTTP 500" },
+    }),
+    "Source refresh failed: ZAW",
+  );
+  assert.equal(
+    eventLabel({ type: "calendar.source.refreshed", data: {} }),
+    "Source refreshed",
+  );
+});
+
+test("the Calendar domain, its entities, and feed actors are named", () => {
+  assert.equal(sourceLabel("calendar"), "Calendar");
+  assert.match(sourceDescription("calendar") ?? "", /subscribed calendar feed/);
+  assert.equal(
+    actorLabel({ kind: "system", name: "ics-zaw" }),
+    "Calendar feed (zaw)",
+  );
+  assert.equal(
+    actorLabel({ kind: "system", name: "ics-source" }),
+    "Calendar feed",
+  );
+  assert.equal(
+    actorLabel({ kind: "dev", name: "e2e" }),
+    "Developer tool (e2e)",
+  );
+  assert.equal(actorLabel({ kind: "user" }), "You");
+});
+
+test("calendar entries link to the event's day in the owner's timezone", () => {
+  const entry = (
+    type: string,
+    data: Record<string, unknown>,
+    subjectType = "calendar_event",
+  ) => ({ type, data, subject: { type: subjectType, id: "event-1" } });
+  // 23:30 UTC on 16 Oct is already 17 Oct in Berlin.
+  const late = entry("calendar.event.created", {
+    startAt: "2026-10-16T23:30:00Z",
+  });
+  assert.equal(
+    calendarHref(late, "Europe/Berlin"),
+    "/calendar?date=2026-10-17",
+  );
+  assert.equal(calendarHref(late, "UTC"), "/calendar?date=2026-10-16");
+  // All-day dates are the owner's days already.
+  assert.equal(
+    calendarHref(
+      entry("calendar.event.rescheduled", {
+        allDay: true,
+        startDate: "2026-10-20",
+      }),
+      "America/New_York",
+    ),
+    "/calendar?date=2026-10-20",
+  );
+  assert.equal(
+    calendarHref(entry("calendar.event.updated", {}), "UTC"),
+    "/calendar",
+  );
+  // A deleted event is no longer in the Calendar.
+  assert.equal(
+    calendarHref(
+      entry("calendar.event.deleted", { startAt: "2026-10-16T09:00:00Z" }),
+      "UTC",
+    ),
+    undefined,
+  );
+  assert.equal(
+    calendarHref(
+      entry("calendar.source.refreshed", {}, "calendar_source"),
+      "UTC",
+    ),
+    "/calendar",
+  );
+  assert.equal(
+    calendarHref(entry("task.created", {}, "task"), "UTC"),
+    undefined,
   );
 });
