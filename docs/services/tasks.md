@@ -38,7 +38,7 @@ Tasks tells the owner about their Tasks through [Notifications](notifications.md
 
 `tasks.notification.missed` has actor `system:tasks`, outcome `failed`, `occurredAt` the time the message was due, and an id derived from the dedupe key (recorded once). A timed reminder's subject is the `task`, with `data.title` and `data.taskDueAt`, and a summary such as "Reminder for task “Take pills” due Sat 10 Oct 2026, 07:45 CEST was missed: Tasks was not running"; a daily message's subject is `task_notification` with the dedupe key as id and `data.day`, for example "Morning summary due Sat 10 Oct 2026, 08:00 CEST was missed: Tasks was not running". `data` also holds `kind` (`due`, `morning`, `evening`, `summary`), `dueAt`, and `dedupeKey`.
 
-`GET /v1/notifications/status` reports the delivery's health: `enabled`, `calendarConfigured`, `intervalSeconds`, `graceMinutes`, the schedule (`timeZone`, `summaryTime`, `morningTime`, `eveningTime`, `timedLeadMinutes`, `mergedMorning`), `handledThrough` (the cursor), `lastRunAt`, `lastSuccessAt`, `lastError` with `lastErrorAt` (current while later than `lastSuccessAt`), and `lastSentAt`. The Dashboard Status page does not show it yet.
+`GET /v1/notifications/status` reports the delivery's health: `enabled`, `calendarConfigured`, `intervalSeconds`, `graceMinutes`, the schedule (`timeZone`, `summaryTime`, `morningTime`, `eveningTime`, `timedLeadMinutes`, `mergedMorning`), `handledThrough` (the cursor), `lastRunAt`, `lastSuccessAt`, `lastError` with `lastErrorAt` (current while later than `lastSuccessAt`), and `lastSentAt`. The Dashboard Status page shows it as the Task reminders part of the Notifications check (see [Dashboard](../frontend/dashboard.md)).
 
 | Variable | Default | Meaning |
 | --- | --- | --- |

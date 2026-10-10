@@ -224,6 +224,11 @@ test.describe("Runtime status under forced problems", () => {
     compose("stop", "tasks");
     try {
       await expectCheck(page, "Services", "Tasks is not ready.");
+      // Its reminder health cannot be read either; Services already names
+      // Tasks, so Notifications leaves Task reminders out.
+      await expect(
+        page.getByRole("region", { name: "Notifications" }),
+      ).not.toContainText("Task reminders");
       await expectHomeAlert(page, /Tasks is not ready/);
     } finally {
       compose("start", "tasks");
@@ -397,6 +402,46 @@ test.describe("Calendar feed health on Status", () => {
     } finally {
       await deleteFeed(request, source.id);
     }
+  });
+});
+
+test.describe("Reminder delivery on Status", () => {
+  test.skip(
+    !process.env.LIFE_OS_E2E_URL,
+    "set LIFE_OS_E2E_URL to run against the isolated stack",
+  );
+
+  /** A check's part, by its title. */
+  function part(page: Page, check: string, title: string) {
+    return page
+      .getByRole("region", { name: check })
+      .getByRole("listitem")
+      .filter({
+        has: page.getByRole("heading", { level: 3, name: title, exact: true }),
+      });
+  }
+
+  test("Calendar's and Tasks' reminder senders show their last check", async ({
+    page,
+  }) => {
+    // Both services get NOTIFICATIONS_SERVICE_URL on the verification stack
+    // and check for due reminders every 30 s.
+    await page.goto("/status");
+    const events = part(page, "Calendar sources", "Event reminders");
+    const tasks = part(page, "Notifications", "Task reminders");
+    for (const sender of [events, tasks]) {
+      await expect(sender).toContainText("OK");
+      await expect(sender).toContainText(
+        /Sending normally\.|Running; nothing sent yet\./,
+      );
+      await expect(sender).toContainText(/Last check\d+ \w+ \d{4}, \d\d:\d\d/);
+      await expect(sender).toContainText("Last sent");
+      await expect(sender).toContainText("Check interval30 s");
+    }
+    await expect(tasks).toContainText(
+      /Schedulesummary .*, evening list \d\d:\d\d \(/,
+    );
+    await expect(tasks).toContainText("Timed Tasksreminded");
   });
 });
 

@@ -8,7 +8,9 @@ import { googleCalendarClient } from "@/lib/api/google-calendar-client";
 import { inboxClient } from "@/lib/api/inbox-client";
 import type { components as InboxComponents } from "@/lib/api/generated/inbox";
 import type { components as NotificationsComponents } from "@/lib/api/generated/notifications";
+import type { components as TasksComponents } from "@/lib/api/generated/tasks";
 import { notificationsClient } from "@/lib/api/notifications-client";
+import { tasksClient } from "@/lib/api/tasks-client";
 import type { components as VoiceComponents } from "@/lib/api/generated/voice";
 import { voiceClient } from "@/lib/api/voice-client";
 import {
@@ -34,6 +36,8 @@ import { configuredTimeZone, userTimeZone } from "@/lib/user-time-zone";
 // - the Google Calendar integration's connection (with its exports and the
 //   edits on their way to Google) and the sync state of its calendars,
 // - the Notifications channels API (each delivery channel's recent outcomes),
+// - the reminder delivery health Calendar and Tasks report (their senders'
+//   last checks for due reminders),
 // - the banking integration's connections (consent and sync state),
 // - each owning service's /ready endpoint.
 // Nothing here is inferred from UI behaviour.
@@ -48,6 +52,12 @@ export type FeedHealth = Pick<
   "id" | "name" | "enabled" | "refresh"
 >;
 export type NotificationChannel = NotificationsComponents["schemas"]["Channel"];
+/** Calendar's reminder delivery health (`GET /v1/reminders/status`). */
+export type ReminderDelivery =
+  CalendarComponents["schemas"]["ReminderDeliveryStatus"];
+/** Tasks' notification delivery health (`GET /v1/notifications/status`). */
+export type TaskNotifications =
+  TasksComponents["schemas"]["TaskNotificationStatus"];
 
 /** Mirrors `Status` in services/mcp/internal/processor/status.go. */
 export type ProcessorStatus = {
@@ -278,6 +288,18 @@ export type RuntimeSignals = {
   notificationChannels?: NotificationChannel[] | null;
   /** The Google calendars with their sync state; null or absent when not read. */
   googleCalendars?: GoogleCalendar[] | null;
+  /**
+   * Calendar's reminder delivery, an Event reminders part of the Calendar
+   * check; null or absent when not read (the part is left out: Calendar's
+   * own unavailability shows under Services).
+   */
+  eventReminders?: ReminderDelivery | null;
+  /**
+   * Tasks' reminders and daily lists, a Task reminders part of the
+   * Notifications check; null or absent when not read (the part is left
+   * out: Tasks' own unavailability shows under Services).
+   */
+  taskReminders?: TaskNotifications | null;
   /**
    * The bank connections; null when banking could not be read, absent when
    * not checked (the check is left out).
@@ -995,6 +1017,24 @@ export function googlePart(
   return { ...base, state: "ok", summary: `Connected as ${account}.`, facts };
 }
 
+/**
+ * Adds a part to a check. A part in worse shape than the check (a warning
+ * in an OK or Not set up check) gives the check its state and summary, with
+ * `action`; otherwise the check's own stay.
+ */
+function withPart(
+  check: StatusCheck,
+  part: StatusPart | undefined,
+  action: string,
+): StatusCheck {
+  if (!part) return check;
+  const parts = [...(check.parts ?? []), part];
+  if (SEVERITY[part.state] <= SEVERITY[check.state]) {
+    return { ...check, parts };
+  }
+  return { ...check, state: part.state, summary: part.summary, action, parts };
+}
+
 /** Adds the Google part to the Calendar check; trouble with it needs action. */
 function withGoogle(
   check: StatusCheck,
@@ -1002,23 +1042,16 @@ function withGoogle(
   timeZone: string,
   calendars?: GoogleCalendar[] | null,
 ): StatusCheck {
-  const part = connection
-    ? googlePart(connection, timeZone, calendars)
-    : undefined;
-  if (!part) return check;
-  const parts = [...(check.parts ?? []), part];
-  if (part.state === "ok" || check.state !== "ok") return { ...check, parts };
-  return {
-    ...check,
-    state: part.state,
-    summary: part.summary,
-    action: !connection?.configured
+  if (!connection) return check;
+  return withPart(
+    check,
+    googlePart(connection, timeZone, calendars),
+    !connection.configured
       ? "Add the LIFE_OS_GOOGLE_* settings to the server's .env again (google-calendar), or disconnect Google in Calendar."
       : connection.status === "connected"
         ? GOOGLE_SYNC_RETRY
         : GOOGLE_RECONNECT,
-    parts,
-  };
+  );
 }
 
 const CHANNEL_TITLES: Record<string, string> = {
@@ -1125,6 +1158,214 @@ function notificationsCheck(
     facts: [],
     parts,
   };
+}
+
+/** What reminder senders report alike: Calendar's and Tasks'. */
+type SenderHealth = Pick<
+  ReminderDelivery,
+  | "enabled"
+  | "intervalSeconds"
+  | "graceMinutes"
+  | "lastRunAt"
+  | "lastSuccessAt"
+  | "lastError"
+  | "lastErrorAt"
+  | "lastSentAt"
+>;
+
+/**
+ * A sender checks for due reminders every `intervalSeconds`. Once its last
+ * check or its last successful one is older than three intervals and a
+ * minute, it has stopped or keeps failing.
+ */
+export function senderStaleAfterMs(intervalSeconds: number) {
+  return (3 * intervalSeconds + 60) * 1000;
+}
+
+/** For example "2 hours" or "90 minutes". */
+function minutesLabel(minutes: number) {
+  if (minutes >= 60 && minutes % 60 === 0) {
+    const hours = minutes / 60;
+    return `${hours} hour${hours === 1 ? "" : "s"}`;
+  }
+  return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+}
+
+/** What to do while a sender's reminders are not going out. */
+export function senderAction(
+  service: "calendar" | "tasks",
+  what: string,
+  graceMinutes: number,
+) {
+  return `Check the ${service} service logs (docker compose logs ${service}). ${what} due meanwhile are sent when it catches up, up to ${minutesLabel(graceMinutes)} late; older ones are recorded in Activity as missed.`;
+}
+
+/**
+ * One reminder sender's health, from its last check for due reminders:
+ * Not set up while it is off, a warning while its last check or success
+ * is stale or its last check failed.
+ */
+function senderPart(
+  sender: { id: string; title: string; off: string },
+  health: SenderHealth,
+  now: Date,
+  timeZone: string,
+  extra: StatusFact[] = [],
+): StatusPart {
+  const base = { id: sender.id, title: sender.title };
+  if (!health.enabled) {
+    return { ...base, state: "neutral", summary: sender.off, facts: [] };
+  }
+  const facts: StatusFact[] = [
+    { label: "Last check", value: formatTime(health.lastRunAt, timeZone) },
+    { label: "Last sent", value: formatTime(health.lastSentAt, timeZone) },
+    { label: "Check interval", value: `${health.intervalSeconds} s` },
+    ...extra,
+  ];
+  const limit = senderStaleAfterMs(health.intervalSeconds);
+  const stale = (value: string | null) =>
+    !value || now.getTime() - Date.parse(value) > limit;
+  // The last error is kept until the next one: it is current while it is
+  // later than the last success.
+  const failing = Boolean(
+    health.lastError &&
+    (!health.lastSuccessAt ||
+      (health.lastErrorAt &&
+        Date.parse(health.lastErrorAt) > Date.parse(health.lastSuccessAt))),
+  );
+  const warning = (summary: string): StatusPart => ({
+    ...base,
+    state: "warning",
+    summary,
+    detail: failing ? (health.lastError ?? undefined) : undefined,
+    facts: [
+      ...facts,
+      {
+        label: "Last success",
+        value: formatTime(health.lastSuccessAt, timeZone),
+      },
+    ],
+  });
+  if (stale(health.lastRunAt)) {
+    return warning(
+      `${sender.title} are not being sent: ${
+        health.lastRunAt
+          ? `the last check ran at ${formatTime(health.lastRunAt, timeZone)}`
+          : "no check has run yet"
+      }.`,
+    );
+  }
+  if (failing) {
+    return warning(`${sender.title} may be late: the last check failed.`);
+  }
+  if (stale(health.lastSuccessAt)) {
+    return warning(
+      `${sender.title} are not being sent: ${
+        health.lastSuccessAt
+          ? `the last successful check ran at ${formatTime(health.lastSuccessAt, timeZone)}`
+          : "no check has succeeded yet"
+      }.`,
+    );
+  }
+  return {
+    ...base,
+    state: "ok",
+    summary: health.lastSentAt
+      ? "Sending normally."
+      : "Running; nothing sent yet.",
+    facts,
+  };
+}
+
+/** Calendar's reminder delivery, a part of the Calendar check. */
+export function eventRemindersPart(
+  delivery: ReminderDelivery,
+  now: Date,
+  timeZone: string,
+): StatusPart {
+  return senderPart(
+    {
+      id: "event-reminders",
+      title: "Event reminders",
+      off: "Calendar sends no reminders: its NOTIFICATIONS_SERVICE_URL is not set.",
+    },
+    delivery,
+    now,
+    timeZone,
+  );
+}
+
+/** When Tasks' daily notifications are due, on the owner's wall clock. */
+function taskSchedule(status: TaskNotifications) {
+  const morning = status.mergedMorning
+    ? `summary with the morning list ${status.summaryTime}`
+    : `summary ${status.summaryTime}, morning list ${status.morningTime}`;
+  return `${morning}, evening list ${status.eveningTime} (${status.timeZone})`;
+}
+
+/**
+ * Tasks' reminders before timed Tasks and its daily lists and summary, a
+ * part of the Notifications check.
+ */
+export function taskRemindersPart(
+  status: TaskNotifications,
+  now: Date,
+  timeZone: string,
+): StatusPart {
+  const extra: StatusFact[] = [
+    { label: "Schedule", value: taskSchedule(status) },
+    {
+      label: "Timed Tasks",
+      value: `reminded ${status.timedLeadMinutes} min before they are due`,
+    },
+  ];
+  if (!status.calendarConfigured) {
+    extra.push({
+      label: "Events in the summary",
+      value: "none: CALENDAR_SERVICE_URL is not set",
+    });
+  }
+  return senderPart(
+    {
+      id: "task-reminders",
+      title: "Task reminders",
+      off: "Tasks sends no reminders or daily lists: its NOTIFICATIONS_SERVICE_URL is not set.",
+    },
+    status,
+    now,
+    timeZone,
+    extra,
+  );
+}
+
+/** Adds Calendar's reminder delivery to the Calendar check. */
+function withEventReminders(
+  check: StatusCheck,
+  delivery: ReminderDelivery | null | undefined,
+  now: Date,
+  timeZone: string,
+): StatusCheck {
+  if (!delivery) return check;
+  return withPart(
+    check,
+    eventRemindersPart(delivery, now, timeZone),
+    senderAction("calendar", "Reminders", delivery.graceMinutes),
+  );
+}
+
+/** Adds Tasks' notification delivery to the Notifications check. */
+function withTaskReminders(
+  check: StatusCheck,
+  status: TaskNotifications | null | undefined,
+  now: Date,
+  timeZone: string,
+): StatusCheck {
+  if (!status) return check;
+  return withPart(
+    check,
+    taskRemindersPart(status, now, timeZone),
+    senderAction("tasks", "Reminders and daily lists", status.graceMinutes),
+  );
 }
 
 /** What to do when the bank connection needs the owner. */
@@ -1330,20 +1571,32 @@ export function toRuntimeStatus(
     ...(signals.calendarFeeds === undefined
       ? []
       : [
-          withGoogle(
-            calendarCheck(
-              signals.calendarFeeds,
-              signals.calendarSources,
+          withEventReminders(
+            withGoogle(
+              calendarCheck(
+                signals.calendarFeeds,
+                signals.calendarSources,
+                timeZone,
+              ),
+              signals.googleConnection,
               timeZone,
+              signals.googleCalendars,
             ),
-            signals.googleConnection,
+            signals.eventReminders,
+            now,
             timeZone,
-            signals.googleCalendars,
           ),
         ]),
     ...(signals.notificationChannels === undefined
       ? []
-      : [notificationsCheck(signals.notificationChannels, timeZone)]),
+      : [
+          withTaskReminders(
+            notificationsCheck(signals.notificationChannels, timeZone),
+            signals.taskReminders,
+            now,
+            timeZone,
+          ),
+        ]),
     ...(signals.bankConnections === undefined
       ? []
       : [bankingCheck(signals.bankConnections, now, timeZone)]),
@@ -1430,6 +1683,14 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
     .GET("/v1/connections", timeout)
     .then(({ data }) => data ?? null)
     .catch(() => null);
+  const eventReminders = calendarClient
+    .GET("/v1/reminders/status", timeout)
+    .then(({ data }) => data ?? null)
+    .catch(() => null);
+  const taskReminders = tasksClient
+    .GET("/v1/notifications/status", timeout)
+    .then(({ data }) => data ?? null)
+    .catch(() => null);
   const [
     processor,
     inbox,
@@ -1485,6 +1746,8 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
       googleConnection,
       notificationChannels: await notificationChannels,
       googleCalendars,
+      eventReminders: await eventReminders,
+      taskReminders: await taskReminders,
       bankConnections: await bankConnections,
       services,
     },
