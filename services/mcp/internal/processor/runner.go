@@ -216,6 +216,9 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 				keepDuration(arguments, event)
 			}
 		}
+		if action.Tool == "calendar_create" {
+			completeCreate(arguments)
+		}
 		if action.Tool == "task_create" || action.Tool == "calendar_create" || action.Tool == "finance_create_manual_transaction" {
 			arguments["idempotencyKey"] = actionIdempotencyKey(item, len(actions), action)
 		}

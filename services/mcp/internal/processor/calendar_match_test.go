@@ -428,6 +428,34 @@ func TestKeepDurationCompletesAReschedule(t *testing.T) {
 	}
 }
 
+func TestCompleteCreateGivesANewEventItsDefaultLength(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		arguments map[string]any
+		want      map[string]any
+	}{
+		{"timed lasts an hour", map[string]any{"startAt": "2026-10-11T11:00:00+02:00"}, map[string]any{"startAt": "2026-10-11T11:00:00+02:00", "endAt": "2026-10-11T12:00:00+02:00"}},
+		{"in UTC", map[string]any{"startAt": "2026-10-25T00:30:00Z"}, map[string]any{"startAt": "2026-10-25T00:30:00Z", "endAt": "2026-10-25T01:30:00Z"}},
+		{"all-day is one day", map[string]any{"allDay": true, "startDate": "2026-10-12"}, map[string]any{"allDay": true, "startDate": "2026-10-12", "endDate": "2026-10-12"}},
+		{"an explicit end is kept", map[string]any{"startAt": "2026-10-11T11:00:00+02:00", "endAt": "2026-10-11T11:30:00+02:00"}, map[string]any{"startAt": "2026-10-11T11:00:00+02:00", "endAt": "2026-10-11T11:30:00+02:00"}},
+		{"an unreadable start is left to Calendar", map[string]any{"startAt": "Sunday at 11"}, map[string]any{"startAt": "Sunday at 11"}},
+	} {
+		completeCreate(tc.arguments)
+		if !reflect.DeepEqual(tc.arguments, tc.want) {
+			t.Errorf("%s: %#v, want %#v", tc.name, tc.arguments, tc.want)
+		}
+	}
+}
+
+func TestACalendarCreateWithoutAnEndLastsAnHour(t *testing.T) {
+	tools := newCalendarTools("Add a haircut on Sunday at 11:00, remind me a day before and 3 hours before.")
+	runCalendarPlan(t, tools, `{"actions":[{"tool":"calendar_create","arguments":{"title":"Haircut","allDay":false,"startAt":"2026-10-11T11:00:00+02:00","reminders":[{"kind":"relative","minutesBefore":1440},{"kind":"relative","minutesBefore":180}]}}],"confidence":0.95}`)
+	input := tools.inputs["calendar_create"]
+	if input == nil || input["endAt"] != "2026-10-11T12:00:00+02:00" || !contains(tools.calls, "inbox_resolve") {
+		t.Fatalf("calls = %#v, input = %#v", tools.calls, input)
+	}
+}
+
 func TestCalendarArgumentsSendOnlyTheEventAndTheChange(t *testing.T) {
 	planned := map[string]any{"eventQuery": "dentist", "eventQueryAlternatives": []any{"Zahnarzt"}, "taskId": "x", "location": nil, "description": "Bring the card", "clear": []any{"reminders"}, "startAt": nil}
 	want := map[string]any{"eventId": "event-1", "description": "Bring the card", "clear": []any{"location", "reminders"}}

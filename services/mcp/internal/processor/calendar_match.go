@@ -228,6 +228,24 @@ func missingEnd(arguments map[string]any) bool {
 	return (startAt && !endAt) || (startDate && !endDate)
 }
 
+// completeCreate gives a new event without an end its default length, as
+// Google Calendar does: a timed event lasts an hour and an all-day event is
+// its one day ("Add a haircut on Sunday at 11:00" names no duration).
+func completeCreate(arguments map[string]any) {
+	if !missingEnd(arguments) {
+		return
+	}
+	if start, ok := arguments["startDate"].(string); ok {
+		arguments["endDate"] = start
+		return
+	}
+	start, err := time.Parse(time.RFC3339, text(arguments["startAt"]))
+	if err != nil {
+		return // Calendar's validation explains it
+	}
+	arguments["endAt"] = start.Add(time.Hour).Format(time.RFC3339)
+}
+
 // keepDuration completes a reschedule that gives only the new start: "move
 // the dentist to Monday at 9" keeps the appointment's length, and an all-day
 // event keeps its number of days. Turning an event into an all-day one with
