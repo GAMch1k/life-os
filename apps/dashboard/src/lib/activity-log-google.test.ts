@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  actorLabel,
   calendarHref,
   eventLabel,
   sourceDescription,
@@ -33,4 +34,34 @@ test("Google connection events are labelled with the account", () => {
     "/calendar",
   );
   assert.match(sourceDescription("calendar") ?? "", /Google Calendar/);
+});
+
+test("Google calendar syncs are labelled like feed refreshes, with their own actor", () => {
+  assert.equal(
+    eventLabel({
+      type: "calendar.source.refreshed",
+      data: {
+        sourceName: "Family",
+        sourceKind: "google",
+        outcome: "imported",
+        counts: { inserted: 2, updated: 1, removed: 0, restored: 0 },
+      },
+    }),
+    "Source refreshed: Family — 2 added, 1 changed",
+  );
+  assert.equal(
+    eventLabel({
+      type: "calendar.source.removed",
+      data: { sourceName: "Family", removedEvents: 12 },
+    }),
+    "Source removed: Family — 12 events removed",
+  );
+  assert.equal(
+    eventLabel({ type: "calendar.source.removed", data: {} }),
+    "Source removed",
+  );
+  assert.equal(
+    actorLabel({ kind: "system", name: "google-calendar" }),
+    "Google Calendar sync",
+  );
 });

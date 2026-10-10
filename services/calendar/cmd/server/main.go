@@ -79,30 +79,38 @@ func run(ctx context.Context) error {
 		logger.Info("Google Calendar is not configured (LIFE_OS_GOOGLE_CLIENT_ID, LIFE_OS_GOOGLE_CLIENT_SECRET, LIFE_OS_GOOGLE_TOKEN_KEY)")
 	}
 	googleService := google.NewService(googleConfig, pool, google.GoogleEndpoints, emitter, logger)
+	syncer := google.NewSyncer(googleService, owner, time.Duration(cfg.GoogleSyncSeconds)*time.Second, logger)
 	api.Register(app, api.NewHandler(pool, ownerTimeZone).WithSources(refresher, scheduler.Wake).WithActivity(emitter).WithGoogle(googleService))
 	app.OnShutdown(database.ClosePool(pool))
 
-	// The scheduler stops (finishing a refresh under way) before the pool
-	// closes: shutdown hooks run in reverse order.
+	// The source scheduler and the Google syncer stop (finishing a refresh
+	// or sync under way) before the pool closes: shutdown hooks run in
+	// reverse order.
 	runCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	schedulerCtx, stopScheduler := context.WithCancel(context.Background())
+	background(app, "calendar source scheduler", scheduler.Run)
+	background(app, "Google Calendar sync", syncer.Run)
+
+	return app.RunContext(runCtx, fmt.Sprintf(":%d", cfg.Port))
+}
+
+// background runs work until the app shuts down, and waits for it then.
+func background(app *httpserver.App, name string, work func(context.Context)) {
+	workCtx, stopWork := context.WithCancel(context.Background())
 	stopped := make(chan struct{})
 	go func() {
 		defer close(stopped)
-		scheduler.Run(schedulerCtx)
+		work(workCtx)
 	}()
 	app.OnShutdown(func(shutdown context.Context) error {
-		stopScheduler()
+		stopWork()
 		select {
 		case <-stopped:
 			return nil
 		case <-shutdown.Done():
-			return fmt.Errorf("calendar source scheduler did not stop: %w", shutdown.Err())
+			return fmt.Errorf("%s did not stop: %w", name, shutdown.Err())
 		}
 	})
-
-	return app.RunContext(runCtx, fmt.Sprintf(":%d", cfg.Port))
 }
 
 // ensureZAW keeps the ZAW waste-collection source configured from

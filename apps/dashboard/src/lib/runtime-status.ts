@@ -8,6 +8,7 @@ import { notificationsClient } from "@/lib/api/notifications-client";
 import type { components as VoiceComponents } from "@/lib/api/generated/voice";
 import { voiceClient } from "@/lib/api/voice-client";
 import {
+  type GoogleCalendar,
   type GoogleConnection,
   missingPermissions,
 } from "@/lib/google-calendar";
@@ -17,8 +18,8 @@ import { configuredTimeZone, userTimeZone } from "@/lib/user-time-zone";
 // The Status page turns supported runtime state into actionable checks:
 // - the processor's private /status endpoint (what the running process saw),
 // - the Inbox and Voice backlog APIs (durable queue state),
-// - the Calendar sources API (each subscribed feed's refresh state) and its
-//   Google connection,
+// - the Calendar sources API (each subscribed feed's refresh state), its
+//   Google connection, and the sync state of the Google calendars,
 // - the Notifications channels API (each delivery channel's recent outcomes),
 // - each owning service's /ready endpoint.
 // Nothing here is inferred from UI behaviour.
@@ -248,6 +249,8 @@ export type RuntimeSignals = {
    * read, absent when not checked (the check is left out).
    */
   notificationChannels?: NotificationChannel[] | null;
+  /** The Google calendars with their sync state; null or absent when not read. */
+  googleCalendars?: GoogleCalendar[] | null;
   services: { name: string; ready: boolean }[];
 };
 
@@ -763,13 +766,22 @@ function calendarCheck(
 /** What to do when the Google connection stops working. */
 export const GOOGLE_RECONNECT = "Reconnect Google in Calendar.";
 
+/** What to do when a synced Google calendar keeps failing to sync. */
+export const GOOGLE_SYNC_RETRY =
+  "Its events from the last good sync are kept, and the sync is retried automatically with growing pauses. If this persists, open Calendar → Google Calendar to check the calendar is still listed, or reconnect Google.";
+
+/** Failed syncs in a row after which a synced calendar needs attention. */
+export const GOOGLE_SYNC_ALERT = 3;
+
 /**
- * The Google Calendar connection as a part of the Calendar check. Nothing
- * to show while Google is neither set up nor connected.
+ * The Google Calendar connection as a part of the Calendar check, with the
+ * sync of the calendars chosen to sync (when read). Nothing to show while
+ * Google is neither set up nor connected.
  */
 export function googlePart(
   connection: GoogleConnection,
   timeZone: string,
+  calendars?: GoogleCalendar[] | null,
 ): StatusPart | undefined {
   const base = { id: "google", title: "Google Calendar" };
   const account = connection.accountEmail ?? "your Google account";
@@ -820,6 +832,54 @@ export function googlePart(
   if (missing.length) {
     facts.push({ label: "Not granted", value: missing.join("; ") });
   }
+  const synced = (calendars ?? []).filter((calendar) => calendar.syncEnabled);
+  if (calendars) {
+    facts.push({
+      label: "Syncing",
+      value: synced.length
+        ? synced.map((calendar) => calendar.summary).join(", ")
+        : "no calendar chosen",
+    });
+  }
+  if (synced.length) {
+    const last = synced
+      .map((calendar) => calendar.sync.lastSyncedAt)
+      .filter((value): value is string => Boolean(value))
+      .sort()
+      .at(-1);
+    facts.push({
+      label: "Last sync",
+      value: last ? formatTime(last, timeZone) : "not yet",
+    });
+  }
+  const failing = synced.filter(
+    (calendar) => calendar.sync.state === "failing",
+  );
+  const stuck = failing.filter(
+    (calendar) => calendar.sync.consecutiveFailures >= GOOGLE_SYNC_ALERT,
+  );
+  if (stuck.length) {
+    const [first] = stuck;
+    return {
+      ...base,
+      state: "warning",
+      summary:
+        stuck.length === 1
+          ? `Syncing ${first.summary} keeps failing: ${first.sync.consecutiveFailures} attempts in a row.`
+          : `${stuck.length} Google calendars keep failing to sync.`,
+      detail: first.sync.lastError ?? undefined,
+      facts,
+    };
+  }
+  if (failing.length) {
+    return {
+      ...base,
+      state: "ok",
+      summary: `Connected as ${account}. The last sync of ${failing.map((calendar) => calendar.summary).join(", ")} failed; it is retried automatically.`,
+      detail: failing[0].sync.lastError ?? undefined,
+      facts,
+    };
+  }
   return { ...base, state: "ok", summary: `Connected as ${account}.`, facts };
 }
 
@@ -828,8 +888,11 @@ function withGoogle(
   check: StatusCheck,
   connection: GoogleConnection | null | undefined,
   timeZone: string,
+  calendars?: GoogleCalendar[] | null,
 ): StatusCheck {
-  const part = connection ? googlePart(connection, timeZone) : undefined;
+  const part = connection
+    ? googlePart(connection, timeZone, calendars)
+    : undefined;
   if (!part) return check;
   const parts = [...(check.parts ?? []), part];
   if (part.state === "ok" || check.state !== "ok") return { ...check, parts };
@@ -837,9 +900,11 @@ function withGoogle(
     ...check,
     state: part.state,
     summary: part.summary,
-    action: connection?.configured
-      ? GOOGLE_RECONNECT
-      : "Add the LIFE_OS_GOOGLE_* settings to the server's .env again, or disconnect Google in Calendar.",
+    action: !connection?.configured
+      ? "Add the LIFE_OS_GOOGLE_* settings to the server's .env again, or disconnect Google in Calendar."
+      : connection.status === "connected"
+        ? GOOGLE_SYNC_RETRY
+        : GOOGLE_RECONNECT,
     parts,
   };
 }
@@ -986,6 +1051,7 @@ export function toRuntimeStatus(
             calendarCheck(signals.calendarSources, timeZone),
             signals.googleConnection,
             timeZone,
+            signals.googleCalendars,
           ),
         ]),
     ...(signals.notificationChannels === undefined
@@ -1057,34 +1123,45 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
     .GET("/v1/channels", timeout)
     .then(({ data }) => data?.items ?? null)
     .catch(() => null);
-  const [processor, inbox, voice, calendarSources, googleConnection, services] =
-    await Promise.all([
-      getJson<ProcessorStatus>(`${processorStatusUrl}/status`),
-      inboxClient
-        .GET("/v1/backlog", timeout)
-        .then(({ data }) => data ?? null)
-        .catch(() => null),
-      voiceClient
-        .GET("/v1/backlog", timeout)
-        .then(({ data }) => data ?? null)
-        .catch(() => null),
-      calendarClient
-        .GET("/v1/sources", timeout)
-        .then(({ data }) => data?.items ?? null)
-        .catch(() => null),
-      calendarClient
-        .GET("/v1/google/connection", timeout)
-        .then(({ data }) => data ?? null)
-        .catch(() => null),
-      Promise.all(
-        (Object.keys(SERVICE_NAMES) as (keyof typeof serviceBaseUrls)[]).map(
-          async (key) => ({
-            name: SERVICE_NAMES[key],
-            ready: await ready(serviceBaseUrls[key]),
-          }),
-        ),
+  const [
+    processor,
+    inbox,
+    voice,
+    calendarSources,
+    googleConnection,
+    googleCalendars,
+    services,
+  ] = await Promise.all([
+    getJson<ProcessorStatus>(`${processorStatusUrl}/status`),
+    inboxClient
+      .GET("/v1/backlog", timeout)
+      .then(({ data }) => data ?? null)
+      .catch(() => null),
+    voiceClient
+      .GET("/v1/backlog", timeout)
+      .then(({ data }) => data ?? null)
+      .catch(() => null),
+    calendarClient
+      .GET("/v1/sources", timeout)
+      .then(({ data }) => data?.items ?? null)
+      .catch(() => null),
+    calendarClient
+      .GET("/v1/google/connection", timeout)
+      .then(({ data }) => data ?? null)
+      .catch(() => null),
+    calendarClient
+      .GET("/v1/google/calendars", timeout)
+      .then(({ data }) => data?.items ?? null)
+      .catch(() => null),
+    Promise.all(
+      (Object.keys(SERVICE_NAMES) as (keyof typeof serviceBaseUrls)[]).map(
+        async (key) => ({
+          name: SERVICE_NAMES[key],
+          ready: await ready(serviceBaseUrls[key]),
+        }),
       ),
-    ]);
+    ),
+  ]);
   return toRuntimeStatus(
     {
       processor,
@@ -1093,6 +1170,7 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
       calendarSources,
       googleConnection,
       notificationChannels: await notificationChannels,
+      googleCalendars,
       services,
     },
     new Date(),

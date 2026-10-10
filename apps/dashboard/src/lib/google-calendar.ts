@@ -1,9 +1,11 @@
 import type { components } from "@/lib/api/generated/calendar";
+import { dateTimeFormat } from "@/lib/time-zone";
 
 // The Google Calendar connection as the Dashboard shows it: Calendar owns the
-// OAuth flow and the tokens; the Dashboard opens Google's consent page,
-// carries the answer back from /calendar/google/callback, and edits which
-// calendars will sync. Tokens never reach the browser.
+// OAuth flow, the tokens, and the sync; the Dashboard opens Google's consent
+// page, carries the answer back from /calendar/google/callback, edits which
+// calendars sync, and shows how their sync is going. Tokens never reach the
+// browser.
 
 export type GoogleConnection = components["schemas"]["GoogleConnection"];
 export type GoogleCalendar = components["schemas"]["GoogleCalendar"];
@@ -64,6 +66,56 @@ export function syncSummary(calendars: GoogleCalendar[]) {
   if (calendars.length === 0) return "Google lists no calendars.";
   if (chosen === 0) return "No calendar is chosen to sync.";
   return `${chosen} of ${calendars.length} calendar${calendars.length === 1 ? "" : "s"} chosen to sync.`;
+}
+
+/** What the dialog says about syncing chosen calendars. */
+export const SYNC_NOTE =
+  "Chosen calendars sync every few minutes; their events are read-only here, except reminders. Unticking one removes its events from Life OS (they stay in Google).";
+
+const SYNC_TIME: Intl.DateTimeFormatOptions = {
+  day: "numeric",
+  month: "short",
+  hour: "2-digit",
+  minute: "2-digit",
+  timeZoneName: "short",
+};
+
+/** A sync time such as "10 Oct, 12:05 CEST". */
+export function syncTime(value: string, timeZone: string) {
+  return dateTimeFormat(timeZone, SYNC_TIME).format(new Date(value));
+}
+
+/**
+ * How a chosen calendar's sync is going, for the line under its name, such
+ * as "Synced 10 Oct, 12:05 CEST · 42 events"; undefined while it does not
+ * sync. `failing` marks a failed last sync (retried automatically, its
+ * events from the last good sync kept).
+ */
+export function syncDetail(
+  calendar: GoogleCalendar,
+  timeZone: string,
+): { text: string; failing: boolean } | undefined {
+  const sync = calendar.sync;
+  if (!calendar.syncEnabled || sync.state === "off") return undefined;
+  if (sync.state === "failing") {
+    const last = sync.lastSyncedAt
+      ? ` Last synced ${syncTime(sync.lastSyncedAt, timeZone)}.`
+      : "";
+    return {
+      text: `Sync failed: ${sync.lastError ?? "unknown error"}. Retrying automatically.${last}`,
+      failing: true,
+    };
+  }
+  if (sync.state === "pending" || !sync.lastSyncedAt) {
+    return { text: "Waiting for its first sync…", failing: false };
+  }
+  const events = sync.lastCounts?.imported;
+  const count =
+    events === undefined ? "" : ` · ${events} event${events === 1 ? "" : "s"}`;
+  return {
+    text: `Synced ${syncTime(sync.lastSyncedAt, timeZone)}${count}`,
+    failing: false,
+  };
 }
 
 /** Replaces one calendar in a list (after its sync choice was saved). */

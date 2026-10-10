@@ -90,6 +90,11 @@ type Service struct {
 
 	mu     sync.Mutex
 	cached accessToken
+
+	// calendarAPI is Google's Calendar API address; syncer, when set
+	// (NewSyncer), syncs the calendars chosen to sync.
+	calendarAPI string
+	syncer      *Syncer
 }
 
 // NewService connects as config through endpoints, storing in db. A nil
@@ -99,7 +104,7 @@ func NewService(config Config, db Database, endpoints Endpoints, emitter *activi
 		logger = slog.Default()
 	}
 	service := &Service{
-		config: config, api: NewClient(config, endpoints, nil), authURL: endpoints.AuthURL,
+		config: config, api: NewClient(config, endpoints, nil), authURL: endpoints.AuthURL, calendarAPI: endpoints.CalendarAPI,
 		db: db, queries: store.New(db), activity: emitter, logger: logger, now: time.Now,
 	}
 	if config.Configured() {
@@ -223,6 +228,7 @@ func (s *Service) Connect(ctx context.Context, code, state string) (store.Google
 
 	s.mu.Lock()
 	var row store.GoogleConnection
+	var replaced, unlisted []removedSource
 	err = s.inTx(ctx, func(q *store.Queries) error {
 		existing, err := q.GetGoogleConnection(ctx)
 		found := err == nil
@@ -230,7 +236,11 @@ func (s *Service) Connect(ctx context.Context, code, state string) (store.Google
 			return err
 		}
 		if found && !strings.EqualFold(existing.AccountEmail, email) {
-			// Another account: its calendar choices do not carry over.
+			// Another account: its calendar choices (and the events synced
+			// from its calendars) do not carry over.
+			if replaced, err = linkedSources(ctx, q, existing.ID, nil); err != nil {
+				return err
+			}
 			if _, err := q.DeleteGoogleConnection(ctx, existing.ID); err != nil {
 				return err
 			}
@@ -250,7 +260,11 @@ func (s *Service) Connect(ctx context.Context, code, state string) (store.Google
 		if err != nil {
 			return err
 		}
-		return syncCalendars(ctx, q, row.ID, entries)
+		if unlisted, err = syncCalendars(ctx, q, row.ID, entries); err != nil {
+			return err
+		}
+		// A reconnect resumes syncing right away.
+		return q.MarkGoogleCalendarsDue(ctx, store.MarkGoogleCalendarsDueParams{ConnectionID: row.ID, Now: timestamptz(s.now())})
 	})
 	if err == nil {
 		s.cached = accessToken{connection: row.ID, value: token.AccessToken, expiresAt: expiresAt}
@@ -260,6 +274,9 @@ func (s *Service) Connect(ctx context.Context, code, state string) (store.Google
 		return store.GoogleConnection{}, err
 	}
 	s.recordConnected(ctx, row, len(entries))
+	s.recordSourcesRemoved(ctx, replaced, removedReplaced)
+	s.recordSourcesRemoved(ctx, unlisted, removedUnlisted)
+	s.syncer.Wake()
 	return row, nil
 }
 
@@ -268,20 +285,27 @@ func (s *Service) Connect(ctx context.Context, code, state string) (store.Google
 // Without a configuration the token cannot be decrypted, so it is only
 // forgotten; the owner removes Life OS in their Google Account.
 func (s *Service) Disconnect(ctx context.Context) (bool, error) {
-	row, revoked, found, err := s.disconnect(ctx)
+	row, revoked, removed, found, err := s.disconnect(ctx)
 	if err != nil || !found {
 		return false, err
 	}
 	s.recordDisconnected(ctx, row, revoked)
+	s.recordSourcesRemoved(ctx, removed, removedDisconnected)
 	return true, nil
 }
 
-func (s *Service) disconnect(ctx context.Context) (row store.GoogleConnection, revoked, found bool, err error) {
+// disconnect deletes the connection; its calendars, their sources, and the
+// events synced from them go with it (ON DELETE CASCADE). removed are those
+// sources, as they were.
+func (s *Service) disconnect(ctx context.Context) (row store.GoogleConnection, revoked bool, removed []removedSource, found bool, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	row, found, err = s.Connection(ctx)
 	if err != nil || !found {
-		return row, false, false, err
+		return row, false, nil, false, err
+	}
+	if removed, err = linkedSources(ctx, s.queries, row.ID, nil); err != nil {
+		return row, false, nil, false, err
 	}
 	if s.Configured() {
 		refresh, openErr := s.sealer.Open(row.RefreshTokenCiphertext, row.RefreshTokenNonce)
@@ -292,10 +316,10 @@ func (s *Service) disconnect(ctx context.Context) (row store.GoogleConnection, r
 		}
 	}
 	if _, err = s.queries.DeleteGoogleConnection(ctx, row.ID); err != nil {
-		return row, false, false, err
+		return row, false, nil, false, err
 	}
 	s.cached = accessToken{}
-	return row, revoked, true, nil
+	return row, revoked, removed, true, nil
 }
 
 // revoke asks Google to withdraw the authorization of token and reports
@@ -405,7 +429,14 @@ func (s *Service) RefreshCalendars(ctx context.Context) ([]store.GoogleCalendar,
 	if err != nil {
 		return nil, err
 	}
+	if primaryID(entries) == "" {
+		// Every account has a primary calendar: a list without one is a
+		// fault at Google, and applying it would drop every calendar and
+		// the events synced from them.
+		return nil, ErrNoPrimary
+	}
 	var calendars []store.GoogleCalendar
+	var unlisted []removedSource
 	err = s.inTx(ctx, func(q *store.Queries) error {
 		row, err := q.GetGoogleConnection(ctx)
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -414,12 +445,15 @@ func (s *Service) RefreshCalendars(ctx context.Context) ([]store.GoogleCalendar,
 		if err != nil {
 			return err
 		}
-		if err := syncCalendars(ctx, q, row.ID, entries); err != nil {
+		if unlisted, err = syncCalendars(ctx, q, row.ID, entries); err != nil {
 			return err
 		}
 		calendars, err = q.ListGoogleCalendars(ctx, row.ID)
 		return err
 	})
+	if err == nil {
+		s.recordSourcesRemoved(ctx, unlisted, removedUnlisted)
+	}
 	return calendars, err
 }
 
@@ -432,8 +466,7 @@ func (s *Service) calendarList(ctx context.Context) ([]CalendarEntry, error) {
 			return nil, err
 		}
 		entries, err := s.api.CalendarList(ctx, token)
-		var apiErr *APIError
-		if attempt == 0 && errors.As(err, &apiErr) && apiErr.Status == 401 {
+		if attempt == 0 && isUnauthorized(err) {
 			s.forget()
 			continue
 		}
@@ -441,13 +474,85 @@ func (s *Service) calendarList(ctx context.Context) ([]CalendarEntry, error) {
 	}
 }
 
-// SetCalendarSync records whether a calendar will sync.
+// SetCalendarSync records whether a calendar syncs. Switching it on makes
+// it due for a full sync now. Switching it off removes what was synced from
+// it: its source and the source's events (they stay in Google), and the
+// stored Google events, recorded in Activity.
 func (s *Service) SetCalendarSync(ctx context.Context, id googleuuid.UUID, enabled bool) (store.GoogleCalendar, error) {
-	row, err := s.queries.SetGoogleCalendarSync(ctx, store.SetGoogleCalendarSyncParams{SyncEnabled: enabled, ID: pgtype.UUID{Bytes: id, Valid: true}})
-	if errors.Is(err, pgx.ErrNoRows) {
-		return store.GoogleCalendar{}, ErrCalendarNotFound
+	var row store.GoogleCalendar
+	var removed []removedSource
+	switched := false
+	err := s.inTx(ctx, func(q *store.Queries) error {
+		current, err := q.LockGoogleCalendar(ctx, pgtype.UUID{Bytes: id, Valid: true})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrCalendarNotFound
+		}
+		if err != nil {
+			return err
+		}
+		switched = current.SyncEnabled != enabled
+		if row, err = q.SetGoogleCalendarSync(ctx, store.SetGoogleCalendarSyncParams{SyncEnabled: enabled, ID: current.ID, Now: timestamptz(s.now())}); err != nil {
+			return err
+		}
+		if enabled || !switched {
+			return nil
+		}
+		if removed, err = linkedSources(ctx, q, current.ConnectionID, []pgtype.UUID{current.ID}); err != nil {
+			return err
+		}
+		for _, source := range removed {
+			if err := q.DeleteGoogleSource(ctx, source.id); err != nil {
+				return err
+			}
+		}
+		return q.DeleteGoogleEvents(ctx, current.ID)
+	})
+	if err != nil {
+		return store.GoogleCalendar{}, err
 	}
-	return row, err
+	s.recordSourcesRemoved(ctx, removed, removedSyncOff)
+	if enabled && switched {
+		s.syncer.Wake()
+	}
+	return row, nil
+}
+
+// SyncCalendar syncs a calendar now (full: every event listed again) and
+// returns it with its sync state.
+func (s *Service) SyncCalendar(ctx context.Context, id googleuuid.UUID, full bool) (store.GoogleCalendar, error) {
+	if !s.Configured() {
+		return store.GoogleCalendar{}, ErrNotConfigured
+	}
+	if s.syncer == nil {
+		return store.GoogleCalendar{}, errors.New("Google Calendar sync is not running")
+	}
+	connection, found, err := s.Connection(ctx)
+	switch {
+	case err != nil:
+		return store.GoogleCalendar{}, err
+	case !found:
+		return store.GoogleCalendar{}, ErrNotConnected
+	case connection.Status == StatusExpired:
+		return store.GoogleCalendar{}, ErrExpired
+	}
+	return s.syncer.Sync(ctx, id, SyncTrigger{Manual: true, Full: full, Trace: activity.TraceFrom(ctx)})
+}
+
+// Sources are the ids of the synced calendars' sources, by calendar.
+func (s *Service) Sources(ctx context.Context) (map[[16]byte]pgtype.UUID, error) {
+	out := map[[16]byte]pgtype.UUID{}
+	row, found, err := s.Connection(ctx)
+	if err != nil || !found {
+		return out, err
+	}
+	rows, err := s.queries.ListGoogleSourceIDs(ctx, row.ID)
+	if err != nil {
+		return nil, err
+	}
+	for _, source := range rows {
+		out[source.GoogleCalendarID.Bytes] = source.ID
+	}
+	return out, nil
 }
 
 func (s *Service) inTx(ctx context.Context, work func(*store.Queries) error) error {
@@ -462,8 +567,10 @@ func (s *Service) inTx(ctx context.Context, work func(*store.Queries) error) err
 	return tx.Commit(ctx)
 }
 
-// syncCalendars makes the stored list match Google's.
-func syncCalendars(ctx context.Context, q *store.Queries, connection pgtype.UUID, entries []CalendarEntry) error {
+// syncCalendars makes the stored list match Google's. Calendars Google no
+// longer lists are dropped with their sources and events; removed are those
+// sources, as they were.
+func syncCalendars(ctx context.Context, q *store.Queries, connection pgtype.UUID, entries []CalendarEntry) ([]removedSource, error) {
 	listed := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		var color *string
@@ -474,12 +581,42 @@ func syncCalendars(ctx context.Context, q *store.Queries, connection pgtype.UUID
 			ConnectionID: connection, GoogleCalendarID: entry.ID, Summary: entry.Summary, Color: color,
 			AccessRole: accessRole(entry.AccessRole), IsPrimary: entry.Primary, InitialSyncEnabled: entry.Primary,
 		}); err != nil {
-			return err
+			return nil, err
 		}
 		listed = append(listed, entry.ID)
 	}
-	_, err := q.DeleteGoogleCalendarsNotListed(ctx, store.DeleteGoogleCalendarsNotListedParams{ConnectionID: connection, Listed: listed})
-	return err
+	gone, err := q.ListGoogleCalendarsNotListed(ctx, store.ListGoogleCalendarsNotListedParams{ConnectionID: connection, Listed: listed})
+	if err != nil || len(gone) == 0 {
+		return nil, err
+	}
+	removed, err := linkedSources(ctx, q, connection, gone)
+	if err != nil {
+		return nil, err
+	}
+	_, err = q.DeleteGoogleCalendarsNotListed(ctx, store.DeleteGoogleCalendarsNotListedParams{ConnectionID: connection, Listed: listed})
+	return removed, err
+}
+
+// removedSource is a synced calendar's source that went away, with the
+// number of events it held.
+type removedSource struct {
+	id     pgtype.UUID
+	name   string
+	events int
+}
+
+// linkedSources are the sources of the connection's synced calendars
+// (narrowed to calendars, when given).
+func linkedSources(ctx context.Context, q *store.Queries, connection pgtype.UUID, calendars []pgtype.UUID) ([]removedSource, error) {
+	rows, err := q.ListGoogleSources(ctx, store.ListGoogleSourcesParams{ConnectionID: connection, CalendarIds: calendars})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]removedSource, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, removedSource{id: row.ID, name: row.Name, events: int(row.Events)})
+	}
+	return out, nil
 }
 
 // accessRole is Google's role, or reader for one Calendar does not know.
@@ -557,4 +694,44 @@ func (s *Service) recordExpired(ctx context.Context, row store.GoogleConnection,
 		Summary:       activity.Preview(fmt.Sprintf("Google Calendar access for %s expired or was revoked; reconnect Google in Calendar", row.AccountEmail), 500),
 		Data:          map[string]any{"accountEmail": row.AccountEmail, "error": message},
 	})
+}
+
+// Why a synced calendar's source was removed.
+const (
+	removedSyncOff      = "sync_disabled"
+	removedDisconnected = "disconnected"
+	removedUnlisted     = "calendar_unlisted"
+	removedReplaced     = "account_replaced"
+)
+
+// recordSourcesRemoved records, per source, that a synced calendar's events
+// left Life OS (calendar.source.removed, attributed to the request's actor).
+func (s *Service) recordSourcesRemoved(ctx context.Context, removed []removedSource, reason string) {
+	trace := activity.TraceFrom(ctx)
+	for _, source := range removed {
+		id := googleuuid.UUID(source.id.Bytes).String()
+		events := fmt.Sprintf("%d %s", source.events, plural(source.events, "event", "events"))
+		var summary string
+		switch reason {
+		case removedSyncOff:
+			summary = fmt.Sprintf("%s no longer syncs from Google: %s removed from Life OS", source.name, events)
+		case removedDisconnected:
+			summary = fmt.Sprintf("Google Calendar disconnected: %s's %s removed from Life OS", source.name, events)
+		case removedUnlisted:
+			summary = fmt.Sprintf("Google no longer lists %s: its %s removed from Life OS", source.name, events)
+		default:
+			summary = fmt.Sprintf("Another Google account was connected: %s's %s removed from Life OS", source.name, events)
+		}
+		s.activity.Emit(ctx, activity.Event{
+			ID:            activity.EventID(EventSourceRemoved, id),
+			Type:          EventSourceRemoved,
+			Subject:       activity.Subject{Type: "calendar_source", ID: id},
+			CorrelationID: trace.CorrelationID,
+			CausationID:   trace.CausationID,
+			Actor:         trace.Actor,
+			Outcome:       activity.Succeeded,
+			Summary:       activity.Preview(summary, 500),
+			Data:          map[string]any{"sourceId": id, "sourceName": source.name, "sourceKind": "google", "reason": reason, "removedEvents": source.events},
+		})
+	}
 }

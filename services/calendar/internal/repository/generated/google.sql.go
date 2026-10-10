@@ -11,6 +11,52 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const claimGoogleCalendarSync = `-- name: ClaimGoogleCalendarSync :one
+UPDATE google_calendars
+SET syncing_until = $1::timestamptz, last_sync_attempt_at = $2::timestamptz
+WHERE id = $3
+  AND sync_enabled
+  AND (syncing_until IS NULL OR syncing_until <= $2::timestamptz)
+RETURNING id, connection_id, google_calendar_id, summary, color, access_role, is_primary, sync_enabled, created_at, updated_at, time_zone, sync_token, sync_window_start, next_sync_at, syncing_until, last_sync_attempt_at, last_synced_at, last_sync_error, sync_failures, last_sync_counts, derived_at
+`
+
+type ClaimGoogleCalendarSyncParams struct {
+	LeaseUntil pgtype.Timestamptz
+	Now        pgtype.Timestamptz
+	ID         pgtype.UUID
+}
+
+// Takes the calendar's sync lease: one sync per calendar at a time, across
+// processes too. A lease left by a crashed sync expires and is taken over.
+func (q *Queries) ClaimGoogleCalendarSync(ctx context.Context, arg ClaimGoogleCalendarSyncParams) (GoogleCalendar, error) {
+	row := q.db.QueryRow(ctx, claimGoogleCalendarSync, arg.LeaseUntil, arg.Now, arg.ID)
+	var i GoogleCalendar
+	err := row.Scan(
+		&i.ID,
+		&i.ConnectionID,
+		&i.GoogleCalendarID,
+		&i.Summary,
+		&i.Color,
+		&i.AccessRole,
+		&i.IsPrimary,
+		&i.SyncEnabled,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TimeZone,
+		&i.SyncToken,
+		&i.SyncWindowStart,
+		&i.NextSyncAt,
+		&i.SyncingUntil,
+		&i.LastSyncAttemptAt,
+		&i.LastSyncedAt,
+		&i.LastSyncError,
+		&i.SyncFailures,
+		&i.LastSyncCounts,
+		&i.DerivedAt,
+	)
+	return i, err
+}
+
 const consumeGoogleOAuthState = `-- name: ConsumeGoogleOAuthState :one
 DELETE FROM google_oauth_states WHERE state_hash = $1
 RETURNING code_verifier, expires_at
@@ -27,6 +73,28 @@ func (q *Queries) ConsumeGoogleOAuthState(ctx context.Context, stateHash []byte)
 	var i ConsumeGoogleOAuthStateRow
 	err := row.Scan(&i.CodeVerifier, &i.ExpiresAt)
 	return i, err
+}
+
+const countGoogleEvents = `-- name: CountGoogleEvents :one
+SELECT count(*)::integer FROM google_events WHERE calendar_id = $1
+`
+
+func (q *Queries) CountGoogleEvents(ctx context.Context, calendarID pgtype.UUID) (int32, error) {
+	row := q.db.QueryRow(ctx, countGoogleEvents, calendarID)
+	var column_1 int32
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const countSourceEvents = `-- name: CountSourceEvents :one
+SELECT count(*)::integer FROM events WHERE source_id = $1
+`
+
+func (q *Queries) CountSourceEvents(ctx context.Context, sourceID pgtype.UUID) (int32, error) {
+	row := q.db.QueryRow(ctx, countSourceEvents, sourceID)
+	var column_1 int32
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const createGoogleConnection = `-- name: CreateGoogleConnection :one
@@ -86,6 +154,57 @@ func (q *Queries) CreateGoogleOAuthState(ctx context.Context, arg CreateGoogleOA
 	return err
 }
 
+const createGoogleSource = `-- name: CreateGoogleSource :one
+INSERT INTO calendar_sources (kind, name, url, enabled, default_reminders, google_calendar_id)
+VALUES ('google', $1, $2, true, $3, $4)
+RETURNING id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id
+`
+
+type CreateGoogleSourceParams struct {
+	Name             string
+	Url              string
+	DefaultReminders []byte
+	GoogleCalendarID pgtype.UUID
+}
+
+// A synced calendar's source. Its url is the calendar's events endpoint at
+// Google, for reference; it is never fetched as a feed.
+func (q *Queries) CreateGoogleSource(ctx context.Context, arg CreateGoogleSourceParams) (CalendarSource, error) {
+	row := q.db.QueryRow(ctx, createGoogleSource,
+		arg.Name,
+		arg.Url,
+		arg.DefaultReminders,
+		arg.GoogleCalendarID,
+	)
+	var i CalendarSource
+	err := row.Scan(
+		&i.ID,
+		&i.Kind,
+		&i.Name,
+		&i.Url,
+		&i.Enabled,
+		&i.FilterInclude,
+		&i.FilterExclude,
+		&i.DefaultReminders,
+		&i.NextRefreshAt,
+		&i.RefreshingUntil,
+		&i.LastAttemptAt,
+		&i.LastSuccessAt,
+		&i.LastOutcome,
+		&i.LastError,
+		&i.LastCounts,
+		&i.ConsecutiveFailures,
+		&i.Etag,
+		&i.LastModified,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Preset,
+		&i.PresetConfig,
+		&i.GoogleCalendarID,
+	)
+	return i, err
+}
+
 const deleteExpiredGoogleOAuthStates = `-- name: DeleteExpiredGoogleOAuthStates :exec
 DELETE FROM google_oauth_states WHERE expires_at <= $1::timestamptz
 `
@@ -127,8 +246,150 @@ func (q *Queries) DeleteGoogleConnection(ctx context.Context, id pgtype.UUID) (i
 	return result.RowsAffected(), nil
 }
 
+const deleteGoogleEvents = `-- name: DeleteGoogleEvents :exec
+DELETE FROM google_events WHERE calendar_id = $1
+`
+
+// Forgets every stored Google event of the calendar.
+func (q *Queries) DeleteGoogleEvents(ctx context.Context, calendarID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteGoogleEvents, calendarID)
+	return err
+}
+
+const deleteGoogleEventsByID = `-- name: DeleteGoogleEventsByID :exec
+DELETE FROM google_events
+WHERE calendar_id = $1
+  AND (event_id = ANY ($2::text[]) OR recurring_event_id = ANY ($2::text[]))
+`
+
+type DeleteGoogleEventsByIDParams struct {
+	CalendarID pgtype.UUID
+	EventIds   []string
+}
+
+// Forgets Google events, and the occurrences of the recurring ones among them.
+func (q *Queries) DeleteGoogleEventsByID(ctx context.Context, arg DeleteGoogleEventsByIDParams) error {
+	_, err := q.db.Exec(ctx, deleteGoogleEventsByID, arg.CalendarID, arg.EventIds)
+	return err
+}
+
+const deleteGoogleSource = `-- name: DeleteGoogleSource :exec
+DELETE FROM calendar_sources WHERE id = $1 AND kind = 'google'
+`
+
+// Also deletes the source's events (ON DELETE CASCADE).
+func (q *Queries) DeleteGoogleSource(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteGoogleSource, id)
+	return err
+}
+
+const failGoogleCalendarSync = `-- name: FailGoogleCalendarSync :one
+UPDATE google_calendars
+SET syncing_until = NULL, last_sync_error = $1, sync_failures = sync_failures + 1,
+    next_sync_at = $2
+WHERE id = $3 AND sync_enabled
+RETURNING id, connection_id, google_calendar_id, summary, color, access_role, is_primary, sync_enabled, created_at, updated_at, time_zone, sync_token, sync_window_start, next_sync_at, syncing_until, last_sync_attempt_at, last_synced_at, last_sync_error, sync_failures, last_sync_counts, derived_at
+`
+
+type FailGoogleCalendarSyncParams struct {
+	LastSyncError *string
+	NextSyncAt    pgtype.Timestamptz
+	ID            pgtype.UUID
+}
+
+// Records a failed sync (the stored events stay) and releases the lease;
+// a calendar switched off meanwhile has nothing to record (no row).
+func (q *Queries) FailGoogleCalendarSync(ctx context.Context, arg FailGoogleCalendarSyncParams) (GoogleCalendar, error) {
+	row := q.db.QueryRow(ctx, failGoogleCalendarSync, arg.LastSyncError, arg.NextSyncAt, arg.ID)
+	var i GoogleCalendar
+	err := row.Scan(
+		&i.ID,
+		&i.ConnectionID,
+		&i.GoogleCalendarID,
+		&i.Summary,
+		&i.Color,
+		&i.AccessRole,
+		&i.IsPrimary,
+		&i.SyncEnabled,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TimeZone,
+		&i.SyncToken,
+		&i.SyncWindowStart,
+		&i.NextSyncAt,
+		&i.SyncingUntil,
+		&i.LastSyncAttemptAt,
+		&i.LastSyncedAt,
+		&i.LastSyncError,
+		&i.SyncFailures,
+		&i.LastSyncCounts,
+		&i.DerivedAt,
+	)
+	return i, err
+}
+
+const finishGoogleCalendarSync = `-- name: FinishGoogleCalendarSync :one
+UPDATE google_calendars
+SET syncing_until = NULL, sync_token = $1, sync_window_start = $2,
+    time_zone = $3, next_sync_at = $4, last_synced_at = $5::timestamptz,
+    last_sync_error = NULL, sync_failures = 0, last_sync_counts = COALESCE($6, last_sync_counts),
+    derived_at = COALESCE($7::timestamptz, derived_at)
+WHERE id = $8
+RETURNING id, connection_id, google_calendar_id, summary, color, access_role, is_primary, sync_enabled, created_at, updated_at, time_zone, sync_token, sync_window_start, next_sync_at, syncing_until, last_sync_attempt_at, last_synced_at, last_sync_error, sync_failures, last_sync_counts, derived_at
+`
+
+type FinishGoogleCalendarSyncParams struct {
+	SyncToken       *string
+	SyncWindowStart pgtype.Timestamptz
+	TimeZone        *string
+	NextSyncAt      pgtype.Timestamptz
+	Now             pgtype.Timestamptz
+	LastSyncCounts  []byte
+	DerivedAt       pgtype.Timestamptz
+	ID              pgtype.UUID
+}
+
+// Records a successful sync and releases the lease.
+func (q *Queries) FinishGoogleCalendarSync(ctx context.Context, arg FinishGoogleCalendarSyncParams) (GoogleCalendar, error) {
+	row := q.db.QueryRow(ctx, finishGoogleCalendarSync,
+		arg.SyncToken,
+		arg.SyncWindowStart,
+		arg.TimeZone,
+		arg.NextSyncAt,
+		arg.Now,
+		arg.LastSyncCounts,
+		arg.DerivedAt,
+		arg.ID,
+	)
+	var i GoogleCalendar
+	err := row.Scan(
+		&i.ID,
+		&i.ConnectionID,
+		&i.GoogleCalendarID,
+		&i.Summary,
+		&i.Color,
+		&i.AccessRole,
+		&i.IsPrimary,
+		&i.SyncEnabled,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TimeZone,
+		&i.SyncToken,
+		&i.SyncWindowStart,
+		&i.NextSyncAt,
+		&i.SyncingUntil,
+		&i.LastSyncAttemptAt,
+		&i.LastSyncedAt,
+		&i.LastSyncError,
+		&i.SyncFailures,
+		&i.LastSyncCounts,
+		&i.DerivedAt,
+	)
+	return i, err
+}
+
 const getGoogleCalendar = `-- name: GetGoogleCalendar :one
-SELECT id, connection_id, google_calendar_id, summary, color, access_role, is_primary, sync_enabled, created_at, updated_at FROM google_calendars WHERE id = $1
+SELECT id, connection_id, google_calendar_id, summary, color, access_role, is_primary, sync_enabled, created_at, updated_at, time_zone, sync_token, sync_window_start, next_sync_at, syncing_until, last_sync_attempt_at, last_synced_at, last_sync_error, sync_failures, last_sync_counts, derived_at FROM google_calendars WHERE id = $1
 `
 
 func (q *Queries) GetGoogleCalendar(ctx context.Context, id pgtype.UUID) (GoogleCalendar, error) {
@@ -145,6 +406,17 @@ func (q *Queries) GetGoogleCalendar(ctx context.Context, id pgtype.UUID) (Google
 		&i.SyncEnabled,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TimeZone,
+		&i.SyncToken,
+		&i.SyncWindowStart,
+		&i.NextSyncAt,
+		&i.SyncingUntil,
+		&i.LastSyncAttemptAt,
+		&i.LastSyncedAt,
+		&i.LastSyncError,
+		&i.SyncFailures,
+		&i.LastSyncCounts,
+		&i.DerivedAt,
 	)
 	return i, err
 }
@@ -173,8 +445,83 @@ func (q *Queries) GetGoogleConnection(ctx context.Context) (GoogleConnection, er
 	return i, err
 }
 
+const getGoogleSource = `-- name: GetGoogleSource :one
+SELECT id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id FROM calendar_sources WHERE google_calendar_id = $1
+`
+
+func (q *Queries) GetGoogleSource(ctx context.Context, googleCalendarID pgtype.UUID) (CalendarSource, error) {
+	row := q.db.QueryRow(ctx, getGoogleSource, googleCalendarID)
+	var i CalendarSource
+	err := row.Scan(
+		&i.ID,
+		&i.Kind,
+		&i.Name,
+		&i.Url,
+		&i.Enabled,
+		&i.FilterInclude,
+		&i.FilterExclude,
+		&i.DefaultReminders,
+		&i.NextRefreshAt,
+		&i.RefreshingUntil,
+		&i.LastAttemptAt,
+		&i.LastSuccessAt,
+		&i.LastOutcome,
+		&i.LastError,
+		&i.LastCounts,
+		&i.ConsecutiveFailures,
+		&i.Etag,
+		&i.LastModified,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Preset,
+		&i.PresetConfig,
+		&i.GoogleCalendarID,
+	)
+	return i, err
+}
+
+const listDueGoogleCalendars = `-- name: ListDueGoogleCalendars :many
+
+SELECT id FROM google_calendars
+WHERE connection_id = $1
+  AND sync_enabled
+  AND next_sync_at <= $2::timestamptz
+  AND (syncing_until IS NULL OR syncing_until <= $2::timestamptz)
+ORDER BY next_sync_at, id
+`
+
+type ListDueGoogleCalendarsParams struct {
+	ConnectionID pgtype.UUID
+	Now          pgtype.Timestamptz
+}
+
+// Syncing (internal/google/sync.go). A sync takes the calendar's lease, reads
+// Google, then writes the stored Google events, the derived Calendar events,
+// and its outcome in one transaction holding the calendar row.
+// The connection's calendars chosen to sync whose next sync is due and that
+// nobody is syncing.
+func (q *Queries) ListDueGoogleCalendars(ctx context.Context, arg ListDueGoogleCalendarsParams) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listDueGoogleCalendars, arg.ConnectionID, arg.Now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listGoogleCalendars = `-- name: ListGoogleCalendars :many
-SELECT id, connection_id, google_calendar_id, summary, color, access_role, is_primary, sync_enabled, created_at, updated_at FROM google_calendars
+SELECT id, connection_id, google_calendar_id, summary, color, access_role, is_primary, sync_enabled, created_at, updated_at, time_zone, sync_token, sync_window_start, next_sync_at, syncing_until, last_sync_attempt_at, last_synced_at, last_sync_error, sync_failures, last_sync_counts, derived_at FROM google_calendars
 WHERE connection_id = $1
 ORDER BY is_primary DESC, lower(summary), google_calendar_id
 `
@@ -200,6 +547,17 @@ func (q *Queries) ListGoogleCalendars(ctx context.Context, connectionID pgtype.U
 			&i.SyncEnabled,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.TimeZone,
+			&i.SyncToken,
+			&i.SyncWindowStart,
+			&i.NextSyncAt,
+			&i.SyncingUntil,
+			&i.LastSyncAttemptAt,
+			&i.LastSyncedAt,
+			&i.LastSyncError,
+			&i.SyncFailures,
+			&i.LastSyncCounts,
+			&i.DerivedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -209,6 +567,200 @@ func (q *Queries) ListGoogleCalendars(ctx context.Context, connectionID pgtype.U
 		return nil, err
 	}
 	return items, nil
+}
+
+const listGoogleCalendarsNotListed = `-- name: ListGoogleCalendarsNotListed :many
+SELECT id FROM google_calendars
+WHERE connection_id = $1 AND NOT (google_calendar_id = ANY ($2::text[]))
+`
+
+type ListGoogleCalendarsNotListedParams struct {
+	ConnectionID pgtype.UUID
+	Listed       []string
+}
+
+// The calendars Google no longer lists (DeleteGoogleCalendarsNotListed
+// drops them).
+func (q *Queries) ListGoogleCalendarsNotListed(ctx context.Context, arg ListGoogleCalendarsNotListedParams) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listGoogleCalendarsNotListed, arg.ConnectionID, arg.Listed)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listGoogleEvents = `-- name: ListGoogleEvents :many
+SELECT calendar_id, event_id, recurring_event_id, data, updated_at FROM google_events WHERE calendar_id = $1 ORDER BY event_id
+`
+
+func (q *Queries) ListGoogleEvents(ctx context.Context, calendarID pgtype.UUID) ([]GoogleEvent, error) {
+	rows, err := q.db.Query(ctx, listGoogleEvents, calendarID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GoogleEvent{}
+	for rows.Next() {
+		var i GoogleEvent
+		if err := rows.Scan(
+			&i.CalendarID,
+			&i.EventID,
+			&i.RecurringEventID,
+			&i.Data,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listGoogleSourceIDs = `-- name: ListGoogleSourceIDs :many
+SELECT calendar_sources.id, calendar_sources.google_calendar_id
+FROM calendar_sources
+JOIN google_calendars ON google_calendars.id = calendar_sources.google_calendar_id
+WHERE google_calendars.connection_id = $1
+`
+
+type ListGoogleSourceIDsRow struct {
+	ID               pgtype.UUID
+	GoogleCalendarID pgtype.UUID
+}
+
+// The source of each synced calendar of the connection.
+func (q *Queries) ListGoogleSourceIDs(ctx context.Context, connectionID pgtype.UUID) ([]ListGoogleSourceIDsRow, error) {
+	rows, err := q.db.Query(ctx, listGoogleSourceIDs, connectionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListGoogleSourceIDsRow{}
+	for rows.Next() {
+		var i ListGoogleSourceIDsRow
+		if err := rows.Scan(&i.ID, &i.GoogleCalendarID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listGoogleSources = `-- name: ListGoogleSources :many
+SELECT calendar_sources.id, calendar_sources.name, google_calendars.id AS calendar_id,
+       (SELECT count(*) FROM events WHERE events.source_id = calendar_sources.id)::integer AS events
+FROM calendar_sources
+JOIN google_calendars ON google_calendars.id = calendar_sources.google_calendar_id
+WHERE google_calendars.connection_id = $1
+  AND ($2::uuid[] IS NULL OR google_calendars.id = ANY ($2::uuid[]))
+ORDER BY calendar_sources.name, calendar_sources.id
+`
+
+type ListGoogleSourcesParams struct {
+	ConnectionID pgtype.UUID
+	CalendarIds  []pgtype.UUID
+}
+
+type ListGoogleSourcesRow struct {
+	ID         pgtype.UUID
+	Name       string
+	CalendarID pgtype.UUID
+	Events     int32
+}
+
+// The sources of a connection's calendars with how many events each holds,
+// for recording what disconnecting or unlisting removes. calendar_ids, when
+// not null, narrows them to those calendars.
+func (q *Queries) ListGoogleSources(ctx context.Context, arg ListGoogleSourcesParams) ([]ListGoogleSourcesRow, error) {
+	rows, err := q.db.Query(ctx, listGoogleSources, arg.ConnectionID, arg.CalendarIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListGoogleSourcesRow{}
+	for rows.Next() {
+		var i ListGoogleSourcesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.CalendarID,
+			&i.Events,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockGoogleCalendar = `-- name: LockGoogleCalendar :one
+SELECT id, connection_id, google_calendar_id, summary, color, access_role, is_primary, sync_enabled, created_at, updated_at, time_zone, sync_token, sync_window_start, next_sync_at, syncing_until, last_sync_attempt_at, last_synced_at, last_sync_error, sync_failures, last_sync_counts, derived_at FROM google_calendars WHERE id = $1 FOR UPDATE
+`
+
+func (q *Queries) LockGoogleCalendar(ctx context.Context, id pgtype.UUID) (GoogleCalendar, error) {
+	row := q.db.QueryRow(ctx, lockGoogleCalendar, id)
+	var i GoogleCalendar
+	err := row.Scan(
+		&i.ID,
+		&i.ConnectionID,
+		&i.GoogleCalendarID,
+		&i.Summary,
+		&i.Color,
+		&i.AccessRole,
+		&i.IsPrimary,
+		&i.SyncEnabled,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TimeZone,
+		&i.SyncToken,
+		&i.SyncWindowStart,
+		&i.NextSyncAt,
+		&i.SyncingUntil,
+		&i.LastSyncAttemptAt,
+		&i.LastSyncedAt,
+		&i.LastSyncError,
+		&i.SyncFailures,
+		&i.LastSyncCounts,
+		&i.DerivedAt,
+	)
+	return i, err
+}
+
+const markGoogleCalendarsDue = `-- name: MarkGoogleCalendarsDue :exec
+UPDATE google_calendars SET next_sync_at = $1::timestamptz
+WHERE connection_id = $2 AND sync_enabled
+`
+
+type MarkGoogleCalendarsDueParams struct {
+	Now          pgtype.Timestamptz
+	ConnectionID pgtype.UUID
+}
+
+// Makes the connection's synced calendars due now (after a reconnect).
+func (q *Queries) MarkGoogleCalendarsDue(ctx context.Context, arg MarkGoogleCalendarsDueParams) error {
+	_, err := q.db.Exec(ctx, markGoogleCalendarsDue, arg.Now, arg.ConnectionID)
+	return err
 }
 
 const reconnectGoogleConnection = `-- name: ReconnectGoogleConnection :one
@@ -299,21 +851,39 @@ func (q *Queries) RecordGoogleTokenRefresh(ctx context.Context, arg RecordGoogle
 	return i, err
 }
 
-const setGoogleCalendarSync = `-- name: SetGoogleCalendarSync :one
+const releaseGoogleCalendarSync = `-- name: ReleaseGoogleCalendarSync :exec
 UPDATE google_calendars
-SET sync_enabled = $1,
-    updated_at = CASE WHEN sync_enabled = $1 THEN updated_at ELSE now() END
+SET syncing_until = NULL, next_sync_at = COALESCE($1::timestamptz, next_sync_at)
 WHERE id = $2
-RETURNING id, connection_id, google_calendar_id, summary, color, access_role, is_primary, sync_enabled, created_at, updated_at
 `
 
-type SetGoogleCalendarSyncParams struct {
-	SyncEnabled bool
-	ID          pgtype.UUID
+type ReleaseGoogleCalendarSyncParams struct {
+	DueAt pgtype.Timestamptz
+	ID    pgtype.UUID
 }
 
-func (q *Queries) SetGoogleCalendarSync(ctx context.Context, arg SetGoogleCalendarSyncParams) (GoogleCalendar, error) {
-	row := q.db.QueryRow(ctx, setGoogleCalendarSync, arg.SyncEnabled, arg.ID)
+// Gives the lease up after a sync that could not record an outcome; due_at,
+// when given, reschedules it.
+func (q *Queries) ReleaseGoogleCalendarSync(ctx context.Context, arg ReleaseGoogleCalendarSyncParams) error {
+	_, err := q.db.Exec(ctx, releaseGoogleCalendarSync, arg.DueAt, arg.ID)
+	return err
+}
+
+const resyncGoogleCalendar = `-- name: ResyncGoogleCalendar :one
+UPDATE google_calendars
+SET sync_token = NULL, next_sync_at = $1::timestamptz
+WHERE id = $2 AND sync_enabled
+RETURNING id, connection_id, google_calendar_id, summary, color, access_role, is_primary, sync_enabled, created_at, updated_at, time_zone, sync_token, sync_window_start, next_sync_at, syncing_until, last_sync_attempt_at, last_synced_at, last_sync_error, sync_failures, last_sync_counts, derived_at
+`
+
+type ResyncGoogleCalendarParams struct {
+	Now pgtype.Timestamptz
+	ID  pgtype.UUID
+}
+
+// Forgets the sync token so the next sync lists every event again, due now.
+func (q *Queries) ResyncGoogleCalendar(ctx context.Context, arg ResyncGoogleCalendarParams) (GoogleCalendar, error) {
+	row := q.db.QueryRow(ctx, resyncGoogleCalendar, arg.Now, arg.ID)
 	var i GoogleCalendar
 	err := row.Scan(
 		&i.ID,
@@ -326,6 +896,73 @@ func (q *Queries) SetGoogleCalendarSync(ctx context.Context, arg SetGoogleCalend
 		&i.SyncEnabled,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.TimeZone,
+		&i.SyncToken,
+		&i.SyncWindowStart,
+		&i.NextSyncAt,
+		&i.SyncingUntil,
+		&i.LastSyncAttemptAt,
+		&i.LastSyncedAt,
+		&i.LastSyncError,
+		&i.SyncFailures,
+		&i.LastSyncCounts,
+		&i.DerivedAt,
+	)
+	return i, err
+}
+
+const setGoogleCalendarSync = `-- name: SetGoogleCalendarSync :one
+UPDATE google_calendars
+SET sync_enabled = $1,
+    sync_token = CASE WHEN sync_enabled = $1 THEN sync_token END,
+    sync_window_start = CASE WHEN sync_enabled = $1 THEN sync_window_start END,
+    next_sync_at = CASE WHEN sync_enabled = $1 THEN next_sync_at
+                        WHEN $1::boolean THEN $2::timestamptz END,
+    last_sync_error = CASE WHEN sync_enabled = $1 THEN last_sync_error END,
+    sync_failures = CASE WHEN sync_enabled = $1 THEN sync_failures ELSE 0 END,
+    last_sync_counts = CASE WHEN sync_enabled = $1 THEN last_sync_counts END,
+    last_synced_at = CASE WHEN sync_enabled = $1 THEN last_synced_at END,
+    last_sync_attempt_at = CASE WHEN sync_enabled = $1 THEN last_sync_attempt_at END,
+    derived_at = CASE WHEN sync_enabled = $1 THEN derived_at END,
+    updated_at = CASE WHEN sync_enabled = $1 THEN updated_at ELSE now() END
+WHERE id = $3
+RETURNING id, connection_id, google_calendar_id, summary, color, access_role, is_primary, sync_enabled, created_at, updated_at, time_zone, sync_token, sync_window_start, next_sync_at, syncing_until, last_sync_attempt_at, last_synced_at, last_sync_error, sync_failures, last_sync_counts, derived_at
+`
+
+type SetGoogleCalendarSyncParams struct {
+	SyncEnabled bool
+	Now         pgtype.Timestamptz
+	ID          pgtype.UUID
+}
+
+// Records the owner's choice. A change starts over: switched on, the
+// calendar is due for a full sync now; switched off, its sync state is
+// cleared (the caller deletes its source, events, and stored Google events).
+func (q *Queries) SetGoogleCalendarSync(ctx context.Context, arg SetGoogleCalendarSyncParams) (GoogleCalendar, error) {
+	row := q.db.QueryRow(ctx, setGoogleCalendarSync, arg.SyncEnabled, arg.Now, arg.ID)
+	var i GoogleCalendar
+	err := row.Scan(
+		&i.ID,
+		&i.ConnectionID,
+		&i.GoogleCalendarID,
+		&i.Summary,
+		&i.Color,
+		&i.AccessRole,
+		&i.IsPrimary,
+		&i.SyncEnabled,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.TimeZone,
+		&i.SyncToken,
+		&i.SyncWindowStart,
+		&i.NextSyncAt,
+		&i.SyncingUntil,
+		&i.LastSyncAttemptAt,
+		&i.LastSyncedAt,
+		&i.LastSyncError,
+		&i.SyncFailures,
+		&i.LastSyncCounts,
+		&i.DerivedAt,
 	)
 	return i, err
 }
@@ -363,9 +1000,55 @@ func (q *Queries) SetGoogleConnectionStatus(ctx context.Context, arg SetGoogleCo
 	return i, err
 }
 
+const updateGoogleSource = `-- name: UpdateGoogleSource :one
+UPDATE calendar_sources
+SET name = $1, default_reminders = $2, updated_at = now()
+WHERE id = $3
+RETURNING id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id
+`
+
+type UpdateGoogleSourceParams struct {
+	Name             string
+	DefaultReminders []byte
+	ID               pgtype.UUID
+}
+
+// Follows the Google calendar's name and default reminders.
+func (q *Queries) UpdateGoogleSource(ctx context.Context, arg UpdateGoogleSourceParams) (CalendarSource, error) {
+	row := q.db.QueryRow(ctx, updateGoogleSource, arg.Name, arg.DefaultReminders, arg.ID)
+	var i CalendarSource
+	err := row.Scan(
+		&i.ID,
+		&i.Kind,
+		&i.Name,
+		&i.Url,
+		&i.Enabled,
+		&i.FilterInclude,
+		&i.FilterExclude,
+		&i.DefaultReminders,
+		&i.NextRefreshAt,
+		&i.RefreshingUntil,
+		&i.LastAttemptAt,
+		&i.LastSuccessAt,
+		&i.LastOutcome,
+		&i.LastError,
+		&i.LastCounts,
+		&i.ConsecutiveFailures,
+		&i.Etag,
+		&i.LastModified,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Preset,
+		&i.PresetConfig,
+		&i.GoogleCalendarID,
+	)
+	return i, err
+}
+
 const upsertGoogleCalendar = `-- name: UpsertGoogleCalendar :exec
-INSERT INTO google_calendars (connection_id, google_calendar_id, summary, color, access_role, is_primary, sync_enabled)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO google_calendars (connection_id, google_calendar_id, summary, color, access_role, is_primary, sync_enabled, next_sync_at)
+VALUES ($1, $2, $3, $4, $5, $6,
+        $7, CASE WHEN $7::boolean THEN now() END)
 ON CONFLICT (connection_id, google_calendar_id) DO UPDATE
 SET summary = EXCLUDED.summary, color = EXCLUDED.color, access_role = EXCLUDED.access_role,
     is_primary = EXCLUDED.is_primary, updated_at = now()
@@ -384,7 +1067,8 @@ type UpsertGoogleCalendarParams struct {
 }
 
 // Records a calendar as Google lists it. A new one starts with
-// initial_sync_enabled; a known one keeps the owner's choice, and its
+// initial_sync_enabled (and is then due for its first sync now); a known
+// one keeps the owner's choice, and its
 // updated_at moves only when Google's details changed.
 func (q *Queries) UpsertGoogleCalendar(ctx context.Context, arg UpsertGoogleCalendarParams) error {
 	_, err := q.db.Exec(ctx, upsertGoogleCalendar,
@@ -396,5 +1080,25 @@ func (q *Queries) UpsertGoogleCalendar(ctx context.Context, arg UpsertGoogleCale
 		arg.IsPrimary,
 		arg.InitialSyncEnabled,
 	)
+	return err
+}
+
+const upsertGoogleEvents = `-- name: UpsertGoogleEvents :exec
+INSERT INTO google_events (calendar_id, event_id, recurring_event_id, data)
+SELECT $1, item.id, NULLIF(item."recurringEventId", ''), item.data
+FROM jsonb_to_recordset($2::jsonb) AS item(id text, "recurringEventId" text, data jsonb)
+ON CONFLICT (calendar_id, event_id) DO UPDATE
+SET recurring_event_id = EXCLUDED.recurring_event_id, data = EXCLUDED.data, updated_at = now()
+`
+
+type UpsertGoogleEventsParams struct {
+	CalendarID pgtype.UUID
+	Items      []byte
+}
+
+// Stores Google events as sent: items is a JSON array of {"id",
+// "recurringEventId", "data"}, data being the event's JSON.
+func (q *Queries) UpsertGoogleEvents(ctx context.Context, arg UpsertGoogleEventsParams) error {
+	_, err := q.db.Exec(ctx, upsertGoogleEvents, arg.CalendarID, arg.Items)
 	return err
 }

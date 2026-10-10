@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { GoogleConnection } from "./google-calendar";
+import type { GoogleCalendar, GoogleConnection } from "./google-calendar";
 import {
   GOOGLE_RECONNECT,
+  GOOGLE_SYNC_RETRY,
   googlePart,
   statusAlerts,
   toRuntimeStatus,
@@ -117,4 +118,92 @@ test("a connection the server can no longer use needs its settings back", () => 
   const check = calendarCheck(google({ configured: false }));
   assert.equal(check.state, "warning");
   assert.match(check.action ?? "", /LIFE_OS_GOOGLE_/);
+});
+
+const synced = (
+  summary: string,
+  sync: Partial<GoogleCalendar["sync"]> = {},
+  syncEnabled = true,
+): GoogleCalendar => ({
+  id: `id-${summary}`,
+  googleCalendarId: `${summary.toLowerCase()}@example.com`,
+  summary,
+  color: null,
+  accessRole: "owner",
+  primary: false,
+  syncEnabled,
+  sync: {
+    state: syncEnabled ? "synced" : "off",
+    consecutiveFailures: 0,
+    syncing: false,
+    lastSyncedAt: syncEnabled ? "2026-10-10T11:58:00Z" : null,
+    ...sync,
+  },
+  createdAt: "2026-10-10T08:00:00Z",
+  updatedAt: "2026-10-10T08:00:00Z",
+});
+
+test("the Google part shows what syncs and when it last did", () => {
+  const part = googlePart(google(), "Europe/Berlin", [
+    synced("Owner", { lastSyncedAt: "2026-10-10T11:56:00Z" }),
+    synced("Family"),
+    synced("Holidays", {}, false),
+  ]);
+  assert.equal(part?.state, "ok");
+  assert.equal(part?.summary, "Connected as owner@example.com.");
+  assert.deepEqual(part?.facts.slice(2), [
+    { label: "Syncing", value: "Owner, Family" },
+    { label: "Last sync", value: "10 Oct 2026, 13:58 CEST" },
+  ]);
+  const none = googlePart(google(), "Europe/Berlin", [
+    synced("Holidays", {}, false),
+  ]);
+  assert.deepEqual(none?.facts.slice(2), [
+    { label: "Syncing", value: "no calendar chosen" },
+  ]);
+  const first = googlePart(google(), "Europe/Berlin", [
+    synced("Owner", { state: "pending", lastSyncedAt: null }),
+  ]);
+  assert.deepEqual(first?.facts.at(-1), {
+    label: "Last sync",
+    value: "not yet",
+  });
+});
+
+test("a failed sync is retried quietly; one that keeps failing needs attention", () => {
+  const lastError = "Google is unavailable: Calendar API returned HTTP 503";
+  const once = googlePart(google(), "Europe/Berlin", [
+    synced("Owner", { state: "failing", consecutiveFailures: 1, lastError }),
+  ]);
+  assert.equal(once?.state, "ok");
+  assert.equal(
+    once?.summary,
+    "Connected as owner@example.com. The last sync of Owner failed; it is retried automatically.",
+  );
+  assert.equal(once?.detail, lastError);
+
+  const status = toRuntimeStatus(
+    {
+      ...signals(google()),
+      googleCalendars: [
+        synced("Owner", {
+          state: "failing",
+          consecutiveFailures: 4,
+          lastError,
+        }),
+        synced("Family"),
+      ],
+    },
+    now,
+    "Europe/Berlin",
+  );
+  const check = status.checks.find((entry) => entry.id === "calendar")!;
+  assert.equal(check.state, "warning");
+  assert.equal(
+    check.summary,
+    "Syncing Owner keeps failing: 4 attempts in a row.",
+  );
+  assert.equal(check.action, GOOGLE_SYNC_RETRY);
+  assert.equal(check.parts?.[0].detail, lastError);
+  assert.ok(statusAlerts(status).some((alert) => alert.id === "calendar"));
 });

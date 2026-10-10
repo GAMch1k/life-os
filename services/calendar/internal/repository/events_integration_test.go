@@ -321,6 +321,12 @@ func TestRecurrenceExceptionsMigrationKeepsEvents(t *testing.T) {
 		t.Fatal("000008_recurrence_exceptions.up.sql not found")
 	}
 	testdb.Apply(t, pool, migration)
+	// The later migrations too, so the queries read today's events table.
+	for _, path := range testdb.Migrations(t) {
+		if filepath.Base(path)[:6] > "000008" {
+			testdb.Apply(t, pool, path)
+		}
+	}
 	queries := store.New(pool)
 	gym, err := queries.GetEvent(ctx, series)
 	if err != nil {

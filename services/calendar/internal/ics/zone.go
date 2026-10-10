@@ -206,7 +206,7 @@ func parseObservance(base *ical.ComponentBase) (observance, bool) {
 	}
 	item := observance{start: value.wall, offsetTo: offsetTo}
 	if ruleProperty := property(base, "RRULE"); ruleProperty != nil {
-		if rule, err := parseRule(ruleProperty.Value); err == nil {
+		if rule, err := ParseRule(ruleProperty.Value); err == nil {
 			option := rule.Option
 			option.Dtstart = value.wall
 			if rule.UntilWall != nil {
