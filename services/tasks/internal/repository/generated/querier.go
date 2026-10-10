@@ -11,15 +11,34 @@ import (
 )
 
 type Querier interface {
+	// Takes the dispatcher's lease until lease_until, creating the state row on
+	// the first run. Returns no row while another process holds an unexpired
+	// lease.
+	ClaimNotificationRun(ctx context.Context, arg ClaimNotificationRunParams) (TaskNotificationDispatch, error)
 	CompleteTask(ctx context.Context, id pgtype.UUID) (Task, error)
 	CreateTask(ctx context.Context, arg CreateTaskParams) (Task, error)
+	// Moves the cursor and releases the lease, if owner still holds it. A run
+	// with an error keeps its message; one without records its success.
+	FinishNotificationRun(ctx context.Context, arg FinishNotificationRunParams) (int64, error)
+	GetNotificationDispatch(ctx context.Context) (TaskNotificationDispatch, error)
 	GetTask(ctx context.Context, id pgtype.UUID) (Task, error)
+	// Which of the given dedupe keys were already handled.
+	ListHandledNotifications(ctx context.Context, keys []string) ([]string, error)
+	// Open Tasks due before the given instant, oldest due first: everything a
+	// morning, evening, or summary message can list (overdue, today, tomorrow).
+	ListOpenTasksDueBefore(ctx context.Context, before pgtype.Timestamptz) ([]Task, error)
+	// Open Tasks due in (after, through], soonest first. Timed due reminders
+	// are read from it.
+	ListOpenTasksDueIn(ctx context.Context, arg ListOpenTasksDueInParams) ([]Task, error)
 	// Open Tasks first (soonest due, undated last), then completed Tasks, most
 	// recently completed first. The after_* arguments are the previous page's last
 	// row: a keyset cursor over exactly the ORDER BY, where a missing timestamp
 	// sorts as 'infinity' (NULLS FIRST under DESC, NULLS LAST under ASC) and id
 	// breaks ties, so paging never skips or repeats a Task.
 	ListTasks(ctx context.Context, arg ListTasksParams) ([]Task, error)
+	PruneNotificationLog(ctx context.Context, before pgtype.Timestamptz) (int64, error)
+	// Records one notification's outcome; 0 rows when it was already recorded.
+	RecordNotification(ctx context.Context, arg RecordNotificationParams) (int64, error)
 	ReopenTask(ctx context.Context, id pgtype.UUID) (Task, error)
 	UpdateTask(ctx context.Context, arg UpdateTaskParams) (Task, error)
 }
