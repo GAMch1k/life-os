@@ -16,11 +16,12 @@ INSERT INTO events (
     title, description, location, all_day, start_at, end_at, start_date, end_date, time_zone,
     recurrence_frequency, recurrence_interval, recurrence_until, reminders, use_default_reminders,
     status, cancelled_at, source_kind, source_id, external_uid, removed_from_source_at,
-    external_provider, external_id, automation_idempotency_key, automation_payload_hash
+    external_provider, external_id, automation_idempotency_key, automation_payload_hash,
+    recurrence_by_weekday, recurrence_count
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
 ON CONFLICT (automation_idempotency_key) WHERE automation_idempotency_key IS NOT NULL DO UPDATE SET automation_idempotency_key = EXCLUDED.automation_idempotency_key
-RETURNING id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at, automation_idempotency_key, automation_payload_hash, location, time_zone, status, cancelled_at, source_kind, source_id, external_uid, removed_from_source_at, reminders, use_default_reminders
+RETURNING id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at, automation_idempotency_key, automation_payload_hash, location, time_zone, status, cancelled_at, source_kind, source_id, external_uid, removed_from_source_at, reminders, use_default_reminders, recurrence_by_weekday, recurrence_count
 `
 
 type CreateEventParams struct {
@@ -48,6 +49,8 @@ type CreateEventParams struct {
 	ExternalID               *string
 	AutomationIdempotencyKey *string
 	AutomationPayloadHash    *string
+	RecurrenceByWeekday      []string
+	RecurrenceCount          *int32
 }
 
 // A replay with the same automation idempotency key returns the original row.
@@ -77,6 +80,8 @@ func (q *Queries) CreateEvent(ctx context.Context, arg CreateEventParams) (Event
 		arg.ExternalID,
 		arg.AutomationIdempotencyKey,
 		arg.AutomationPayloadHash,
+		arg.RecurrenceByWeekday,
+		arg.RecurrenceCount,
 	)
 	var i Event
 	err := row.Scan(
@@ -107,6 +112,8 @@ func (q *Queries) CreateEvent(ctx context.Context, arg CreateEventParams) (Event
 		&i.RemovedFromSourceAt,
 		&i.Reminders,
 		&i.UseDefaultReminders,
+		&i.RecurrenceByWeekday,
+		&i.RecurrenceCount,
 	)
 	return i, err
 }
@@ -124,7 +131,7 @@ func (q *Queries) DeleteEvent(ctx context.Context, id pgtype.UUID) (int64, error
 }
 
 const getEvent = `-- name: GetEvent :one
-SELECT id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at, automation_idempotency_key, automation_payload_hash, location, time_zone, status, cancelled_at, source_kind, source_id, external_uid, removed_from_source_at, reminders, use_default_reminders FROM events WHERE id = $1
+SELECT id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at, automation_idempotency_key, automation_payload_hash, location, time_zone, status, cancelled_at, source_kind, source_id, external_uid, removed_from_source_at, reminders, use_default_reminders, recurrence_by_weekday, recurrence_count FROM events WHERE id = $1
 `
 
 func (q *Queries) GetEvent(ctx context.Context, id pgtype.UUID) (Event, error) {
@@ -158,12 +165,14 @@ func (q *Queries) GetEvent(ctx context.Context, id pgtype.UUID) (Event, error) {
 		&i.RemovedFromSourceAt,
 		&i.Reminders,
 		&i.UseDefaultReminders,
+		&i.RecurrenceByWeekday,
+		&i.RecurrenceCount,
 	)
 	return i, err
 }
 
 const listEvents = `-- name: ListEvents :many
-SELECT events.id, events.title, events.description, events.all_day, events.start_at, events.end_at, events.start_date, events.end_date, events.recurrence_frequency, events.recurrence_interval, events.recurrence_until, events.external_provider, events.external_id, events.created_at, events.updated_at, events.automation_idempotency_key, events.automation_payload_hash, events.location, events.time_zone, events.status, events.cancelled_at, events.source_kind, events.source_id, events.external_uid, events.removed_from_source_at, events.reminders, events.use_default_reminders, span.starts_at::timestamptz AS starts_at
+SELECT events.id, events.title, events.description, events.all_day, events.start_at, events.end_at, events.start_date, events.end_date, events.recurrence_frequency, events.recurrence_interval, events.recurrence_until, events.external_provider, events.external_id, events.created_at, events.updated_at, events.automation_idempotency_key, events.automation_payload_hash, events.location, events.time_zone, events.status, events.cancelled_at, events.source_kind, events.source_id, events.external_uid, events.removed_from_source_at, events.reminders, events.use_default_reminders, events.recurrence_by_weekday, events.recurrence_count, span.starts_at::timestamptz AS starts_at
 FROM events
 CROSS JOIN LATERAL (
     SELECT
@@ -254,6 +263,8 @@ func (q *Queries) ListEvents(ctx context.Context, arg ListEventsParams) ([]ListE
 			&i.Event.RemovedFromSourceAt,
 			&i.Event.Reminders,
 			&i.Event.UseDefaultReminders,
+			&i.Event.RecurrenceByWeekday,
+			&i.Event.RecurrenceCount,
 			&i.StartsAt,
 		); err != nil {
 			return nil, err
@@ -267,7 +278,7 @@ func (q *Queries) ListEvents(ctx context.Context, arg ListEventsParams) ([]ListE
 }
 
 const listRecurringEvents = `-- name: ListRecurringEvents :many
-SELECT events.id, events.title, events.description, events.all_day, events.start_at, events.end_at, events.start_date, events.end_date, events.recurrence_frequency, events.recurrence_interval, events.recurrence_until, events.external_provider, events.external_id, events.created_at, events.updated_at, events.automation_idempotency_key, events.automation_payload_hash, events.location, events.time_zone, events.status, events.cancelled_at, events.source_kind, events.source_id, events.external_uid, events.removed_from_source_at, events.reminders, events.use_default_reminders
+SELECT events.id, events.title, events.description, events.all_day, events.start_at, events.end_at, events.start_date, events.end_date, events.recurrence_frequency, events.recurrence_interval, events.recurrence_until, events.external_provider, events.external_id, events.created_at, events.updated_at, events.automation_idempotency_key, events.automation_payload_hash, events.location, events.time_zone, events.status, events.cancelled_at, events.source_kind, events.source_id, events.external_uid, events.removed_from_source_at, events.reminders, events.use_default_reminders, events.recurrence_by_weekday, events.recurrence_count
 FROM events
 CROSS JOIN LATERAL (
     SELECT
@@ -275,8 +286,18 @@ CROSS JOIN LATERAL (
         CASE WHEN events.all_day THEN (events.end_date + 1)::timestamp AT TIME ZONE $1::text ELSE events.end_at END AS ends_at
 ) AS span
 WHERE events.recurrence_frequency IS NOT NULL
-  AND span.starts_at < $2::timestamptz
-  AND (events.recurrence_until IS NULL OR events.recurrence_until + (span.ends_at - span.starts_at) > $3::timestamptz)
+  AND (
+    (
+      span.starts_at < $2::timestamptz
+      AND (events.recurrence_until IS NULL
+           OR events.recurrence_until + (span.ends_at - span.starts_at) + CASE WHEN events.all_day THEN interval '1 day' ELSE interval '0' END > $3::timestamptz)
+    )
+    OR EXISTS (
+      SELECT 1 FROM event_exceptions
+      WHERE event_exceptions.event_id = events.id
+        AND (event_exceptions.changes ->> 'startAt' IS NOT NULL OR event_exceptions.changes ->> 'startDate' IS NOT NULL)
+    )
+  )
   AND ($4::boolean OR events.status = 'active')
   AND ($5::text IS NULL OR events.source_kind = $5::text)
   AND ($6::uuid IS NULL OR events.source_id = $6::uuid)
@@ -298,8 +319,10 @@ type ListRecurringEventsRow struct {
 
 // Recurring events that may have an occurrence overlapping
 // [range_start, range_end): they start before range_end, and their last
-// possible occurrence (starting at recurrence_until) ends after range_start.
-// The caller expands them; a personal calendar holds few of them.
+// possible occurrence (starting at recurrence_until, a day later for an
+// all-day series whose until is compared as the owner's date) ends after
+// range_start; or one of their occurrences was moved, possibly into the
+// range. The caller expands them; a personal calendar holds few of them.
 func (q *Queries) ListRecurringEvents(ctx context.Context, arg ListRecurringEventsParams) ([]ListRecurringEventsRow, error) {
 	rows, err := q.db.Query(ctx, listRecurringEvents,
 		arg.TimeZone,
@@ -344,6 +367,8 @@ func (q *Queries) ListRecurringEvents(ctx context.Context, arg ListRecurringEven
 			&i.Event.RemovedFromSourceAt,
 			&i.Event.Reminders,
 			&i.Event.UseDefaultReminders,
+			&i.Event.RecurrenceByWeekday,
+			&i.Event.RecurrenceCount,
 		); err != nil {
 			return nil, err
 		}
@@ -355,8 +380,51 @@ func (q *Queries) ListRecurringEvents(ctx context.Context, arg ListRecurringEven
 	return items, nil
 }
 
+const lockEvent = `-- name: LockEvent :one
+SELECT id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at, automation_idempotency_key, automation_payload_hash, location, time_zone, status, cancelled_at, source_kind, source_id, external_uid, removed_from_source_at, reminders, use_default_reminders, recurrence_by_weekday, recurrence_count FROM events WHERE id = $1 FOR UPDATE
+`
+
+// Reads an event for a change that also writes its occurrence exceptions,
+// holding it until the transaction ends.
+func (q *Queries) LockEvent(ctx context.Context, id pgtype.UUID) (Event, error) {
+	row := q.db.QueryRow(ctx, lockEvent, id)
+	var i Event
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.Description,
+		&i.AllDay,
+		&i.StartAt,
+		&i.EndAt,
+		&i.StartDate,
+		&i.EndDate,
+		&i.RecurrenceFrequency,
+		&i.RecurrenceInterval,
+		&i.RecurrenceUntil,
+		&i.ExternalProvider,
+		&i.ExternalID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.AutomationIdempotencyKey,
+		&i.AutomationPayloadHash,
+		&i.Location,
+		&i.TimeZone,
+		&i.Status,
+		&i.CancelledAt,
+		&i.SourceKind,
+		&i.SourceID,
+		&i.ExternalUid,
+		&i.RemovedFromSourceAt,
+		&i.Reminders,
+		&i.UseDefaultReminders,
+		&i.RecurrenceByWeekday,
+		&i.RecurrenceCount,
+	)
+	return i, err
+}
+
 const searchEvents = `-- name: SearchEvents :many
-SELECT events.id, events.title, events.description, events.all_day, events.start_at, events.end_at, events.start_date, events.end_date, events.recurrence_frequency, events.recurrence_interval, events.recurrence_until, events.external_provider, events.external_id, events.created_at, events.updated_at, events.automation_idempotency_key, events.automation_payload_hash, events.location, events.time_zone, events.status, events.cancelled_at, events.source_kind, events.source_id, events.external_uid, events.removed_from_source_at, events.reminders, events.use_default_reminders, ranked.relevance::integer AS relevance, ordering.bucket::integer AS bucket, ordering.sort_key::bigint AS sort_key
+SELECT events.id, events.title, events.description, events.all_day, events.start_at, events.end_at, events.start_date, events.end_date, events.recurrence_frequency, events.recurrence_interval, events.recurrence_until, events.external_provider, events.external_id, events.created_at, events.updated_at, events.automation_idempotency_key, events.automation_payload_hash, events.location, events.time_zone, events.status, events.cancelled_at, events.source_kind, events.source_id, events.external_uid, events.removed_from_source_at, events.reminders, events.use_default_reminders, events.recurrence_by_weekday, events.recurrence_count, ranked.relevance::integer AS relevance, ordering.bucket::integer AS bucket, ordering.sort_key::bigint AS sort_key
 FROM events
 CROSS JOIN LATERAL (
     SELECT
@@ -477,6 +545,8 @@ func (q *Queries) SearchEvents(ctx context.Context, arg SearchEventsParams) ([]S
 			&i.Event.RemovedFromSourceAt,
 			&i.Event.Reminders,
 			&i.Event.UseDefaultReminders,
+			&i.Event.RecurrenceByWeekday,
+			&i.Event.RecurrenceCount,
 			&i.Relevance,
 			&i.Bucket,
 			&i.SortKey,
@@ -492,7 +562,7 @@ func (q *Queries) SearchEvents(ctx context.Context, arg SearchEventsParams) ([]S
 }
 
 const searchRecurringEvents = `-- name: SearchRecurringEvents :many
-SELECT events.id, events.title, events.description, events.all_day, events.start_at, events.end_at, events.start_date, events.end_date, events.recurrence_frequency, events.recurrence_interval, events.recurrence_until, events.external_provider, events.external_id, events.created_at, events.updated_at, events.automation_idempotency_key, events.automation_payload_hash, events.location, events.time_zone, events.status, events.cancelled_at, events.source_kind, events.source_id, events.external_uid, events.removed_from_source_at, events.reminders, events.use_default_reminders, ranked.relevance::integer AS relevance
+SELECT events.id, events.title, events.description, events.all_day, events.start_at, events.end_at, events.start_date, events.end_date, events.recurrence_frequency, events.recurrence_interval, events.recurrence_until, events.external_provider, events.external_id, events.created_at, events.updated_at, events.automation_idempotency_key, events.automation_payload_hash, events.location, events.time_zone, events.status, events.cancelled_at, events.source_kind, events.source_id, events.external_uid, events.removed_from_source_at, events.reminders, events.use_default_reminders, events.recurrence_by_weekday, events.recurrence_count, ranked.relevance::integer AS relevance
 FROM events
 CROSS JOIN LATERAL (
     SELECT COALESCE(SUM(
@@ -508,7 +578,12 @@ WHERE events.recurrence_frequency IS NOT NULL
     WHERE NOT (events.title ILIKE term.pattern OR COALESCE(events.location, '') ILIKE term.pattern OR COALESCE(events.description, '') ILIKE term.pattern)
   )
   AND ($2::timestamptz IS NULL
-       OR CASE WHEN events.all_day THEN events.start_date::timestamp AT TIME ZONE $3::text ELSE events.start_at END < $2::timestamptz)
+       OR CASE WHEN events.all_day THEN events.start_date::timestamp AT TIME ZONE $3::text ELSE events.start_at END < $2::timestamptz
+       OR EXISTS (
+         SELECT 1 FROM event_exceptions
+         WHERE event_exceptions.event_id = events.id
+           AND (event_exceptions.changes ->> 'startAt' IS NOT NULL OR event_exceptions.changes ->> 'startDate' IS NOT NULL)
+       ))
   AND ($4::boolean OR events.status = 'active')
   AND ($5::text IS NULL OR events.source_kind = $5::text)
   AND ($6::uuid IS NULL OR events.source_id = $6::uuid)
@@ -531,7 +606,8 @@ type SearchRecurringEventsRow struct {
 
 // Recurring events whose title, description, or location contain every
 // pattern, with the same relevance as SearchEvents. The caller picks their
-// occurrences; the range only drops series that start after range_end.
+// occurrences; the range only drops series that start after range_end and
+// have no moved occurrence.
 func (q *Queries) SearchRecurringEvents(ctx context.Context, arg SearchRecurringEventsParams) ([]SearchRecurringEventsRow, error) {
 	rows, err := q.db.Query(ctx, searchRecurringEvents,
 		arg.Patterns,
@@ -576,6 +652,8 @@ func (q *Queries) SearchRecurringEvents(ctx context.Context, arg SearchRecurring
 			&i.Event.RemovedFromSourceAt,
 			&i.Event.Reminders,
 			&i.Event.UseDefaultReminders,
+			&i.Event.RecurrenceByWeekday,
+			&i.Event.RecurrenceCount,
 			&i.Relevance,
 		); err != nil {
 			return nil, err
@@ -594,11 +672,12 @@ SET title = $1, description = $2, location = $3,
     all_day = $4, start_at = $5, end_at = $6,
     start_date = $7, end_date = $8, time_zone = $9,
     recurrence_frequency = $10, recurrence_interval = $11,
-    recurrence_until = $12, reminders = $13, use_default_reminders = $14,
-    status = $15, cancelled_at = $16, removed_from_source_at = $17,
+    recurrence_until = $12, recurrence_by_weekday = $13::text[],
+    recurrence_count = $14, reminders = $15, use_default_reminders = $16,
+    status = $17, cancelled_at = $18, removed_from_source_at = $19,
     updated_at = now()
-WHERE id = $18 AND updated_at = $19
-RETURNING id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at, automation_idempotency_key, automation_payload_hash, location, time_zone, status, cancelled_at, source_kind, source_id, external_uid, removed_from_source_at, reminders, use_default_reminders
+WHERE id = $20 AND updated_at = $21
+RETURNING id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at, automation_idempotency_key, automation_payload_hash, location, time_zone, status, cancelled_at, source_kind, source_id, external_uid, removed_from_source_at, reminders, use_default_reminders, recurrence_by_weekday, recurrence_count
 `
 
 type UpdateEventParams struct {
@@ -614,6 +693,8 @@ type UpdateEventParams struct {
 	RecurrenceFrequency *string
 	RecurrenceInterval  *int32
 	RecurrenceUntil     pgtype.Timestamptz
+	RecurrenceByWeekday []string
+	RecurrenceCount     *int32
 	Reminders           []byte
 	UseDefaultReminders bool
 	Status              string
@@ -640,6 +721,8 @@ func (q *Queries) UpdateEvent(ctx context.Context, arg UpdateEventParams) (Event
 		arg.RecurrenceFrequency,
 		arg.RecurrenceInterval,
 		arg.RecurrenceUntil,
+		arg.RecurrenceByWeekday,
+		arg.RecurrenceCount,
 		arg.Reminders,
 		arg.UseDefaultReminders,
 		arg.Status,
@@ -677,6 +760,8 @@ func (q *Queries) UpdateEvent(ctx context.Context, arg UpdateEventParams) (Event
 		&i.RemovedFromSourceAt,
 		&i.Reminders,
 		&i.UseDefaultReminders,
+		&i.RecurrenceByWeekday,
+		&i.RecurrenceCount,
 	)
 	return i, err
 }

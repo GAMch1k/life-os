@@ -53,6 +53,9 @@ func TestWritesRequireAnActor(t *testing.T) {
 		{http.MethodPatch, source, `{`},
 		{http.MethodDelete, source, ""},
 		{http.MethodPost, source + "/refresh", ""},
+		{http.MethodPatch, event + "/occurrences/2026-10-10T05:00:00Z", `{`},
+		{http.MethodPost, event + "/occurrences/2026-10-10T05:00:00Z/split", `{`},
+		{http.MethodPost, event + "/occurrences/2026-10-10T05:00:00Z/truncate", ""},
 	} {
 		for _, actor := range []string{"", "agent:", "owner"} {
 			if status, code, _ := send(t, app, write.method, write.target, write.body, actor); status != http.StatusBadRequest || code != activity.ActorRequiredCode {
@@ -93,6 +96,11 @@ func TestInvalidRequestsAreRefusedWithAReason(t *testing.T) {
 		{http.MethodPost, "/v1/events", `{"title":"Pickup","allDay":false,"startAt":"2026-11-17T06:00:00+01:00","endAt":"2026-11-17T06:30:00+01:00","reminders":[{"kind":"localTime","daysBefore":1}]}`, "localTime reminder"},
 		{http.MethodPatch, "/v1/events/7f8d2b1e-1c1a-4b7e-9a51-2f0c6d1e9a10", `{"title":null}`, "title cannot be null"},
 		{http.MethodPatch, "/v1/events/7f8d2b1e-1c1a-4b7e-9a51-2f0c6d1e9a10", `{"id":"x"}`, "names no event field"},
+		{http.MethodPatch, "/v1/events/7f8d2b1e-1c1a-4b7e-9a51-2f0c6d1e9a10/occurrences/2026-10-10T05:00:00Z", `{"recurrence":null}`, "recurrence belongs to the series"},
+		{http.MethodPatch, "/v1/events/7f8d2b1e-1c1a-4b7e-9a51-2f0c6d1e9a10/occurrences/2026-10-10T05:00:00Z", `{"timeZone":"Europe/Berlin"}`, "timeZone belongs to the series"},
+		{http.MethodPost, "/v1/events/7f8d2b1e-1c1a-4b7e-9a51-2f0c6d1e9a10/occurrences/2026-10-10T05:00:00Z/split", `{"id":"x"}`, "names no event field"},
+		{http.MethodPost, "/v1/events", `{"title":"Gym","allDay":false,"startAt":"2026-10-10T07:00:00+02:00","endAt":"2026-10-10T08:00:00+02:00","recurrence":{"frequency":"weekly","interval":1,"byWeekday":["MO"]}}`, "(Saturday)"},
+		{http.MethodPost, "/v1/events", `{"title":"Gym","allDay":false,"startAt":"2026-10-10T07:00:00+02:00","endAt":"2026-10-10T08:00:00+02:00","recurrence":{"frequency":"weekly","interval":1,"count":1001}}`, "count must be between 1 and 1000"},
 		{http.MethodPost, "/v1/sources", `{"name":"ZAW","url":"http://example.org/feed.ics"}`, "https"},
 		{http.MethodPost, "/v1/sources", `{"name":"ZAW","url":"https://169.254.169.254/latest"}`, "private, loopback, or link-local"},
 		{http.MethodPost, "/v1/sources", `{"name":"ZAW","url":"https://localhost/feed.ics"}`, "private, loopback, or link-local"},

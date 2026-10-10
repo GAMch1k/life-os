@@ -129,6 +129,10 @@ func (r Runner) location(item inboxItem) *time.Location {
 // (ICS, Google) events are managed by their source, which alone changes or
 // cancels them, so they are never candidates. The caller acts only on
 // exactly one.
+//
+// A recurring event is found as one occurrence (search items carry
+// occurrence), at most one per series: its next one, or for a cancellation
+// naming a day (onDate) its occurrence on that day when it has one.
 func (r Runner) findEvents(ctx context.Context, item inboxItem, action plannedAction) ([]map[string]any, error) {
 	location := r.location(item)
 	reference := item.CreatedAt
@@ -137,29 +141,127 @@ func (r Runner) findEvents(ctx context.Context, item inboxItem, action plannedAc
 	}
 	local := reference.In(location)
 	from := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, location)
+	type window struct {
+		from, to      time.Time
+		recurringOnly bool
+	}
+	windows := []window{{from: from}}
+	if day, ok := onDate(action, location); ok {
+		// That day's occurrences come first, so they stand for their series.
+		windows = append([]window{{from: day, to: day.AddDate(0, 0, 1), recurringOnly: true}}, windows...)
+	}
 	found := []map[string]any{}
 	seen := map[string]bool{}
-	for _, term := range searchTerms(action.Arguments, "eventQuery", "eventQueryAlternatives") {
-		query := url.Values{"q": {term}, "from": {from.UTC().Format(time.RFC3339)}, "timeZone": {location.String()}, "sourceKind": {"manual"}, "limit": {fmt.Sprint(eventSearchLimit)}}
-		raw, err := r.Tools.Call(ctx, "calendar_search", map[string]any{"query": query.Encode()})
-		if err != nil {
-			return nil, err
-		}
-		var result struct {
-			Items []map[string]any `json:"items"`
-		}
-		if err := json.Unmarshal(toolData(raw), &result); err != nil {
-			// A partial union could look like exactly one match.
-			return nil, fmt.Errorf("decode Calendar search result: %w", err)
-		}
-		for _, event := range result.Items {
-			if id, ok := event["id"].(string); ok && id != "" && !seen[id] {
-				seen[id] = true
-				found = append(found, event)
+	for _, window := range windows {
+		for _, term := range searchTerms(action.Arguments, "eventQuery", "eventQueryAlternatives") {
+			query := url.Values{"q": {term}, "from": {window.from.UTC().Format(time.RFC3339)}, "timeZone": {location.String()}, "sourceKind": {"manual"}, "limit": {fmt.Sprint(eventSearchLimit)}}
+			if !window.to.IsZero() {
+				query.Set("to", window.to.UTC().Format(time.RFC3339))
+			}
+			raw, err := r.Tools.Call(ctx, "calendar_search", map[string]any{"query": query.Encode()})
+			if err != nil {
+				return nil, err
+			}
+			var result struct {
+				Items []map[string]any `json:"items"`
+			}
+			if err := json.Unmarshal(toolData(raw), &result); err != nil {
+				// A partial union could look like exactly one match.
+				return nil, fmt.Errorf("decode Calendar search result: %w", err)
+			}
+			for _, event := range result.Items {
+				if window.recurringOnly && !isRecurring(event) {
+					continue
+				}
+				if id, ok := event["id"].(string); ok && id != "" && !seen[id] {
+					seen[id] = true
+					found = append(found, event)
+				}
 			}
 		}
 	}
 	return found, nil
+}
+
+// onDate is the start, in location, of the day a cancellation names
+// (onDate, an ISO date), if it names one.
+func onDate(action plannedAction, location *time.Location) (time.Time, bool) {
+	if action.Tool != "calendar_cancel" {
+		return time.Time{}, false
+	}
+	value, ok := action.Arguments["onDate"].(string)
+	if !ok {
+		return time.Time{}, false
+	}
+	day, err := time.ParseInLocation(time.DateOnly, value, location)
+	return day, err == nil
+}
+
+// isRecurring reports whether a Calendar item is (an occurrence of) a
+// recurring event.
+func isRecurring(event map[string]any) bool {
+	return event["occurrence"] != nil || event["recurrence"] != nil
+}
+
+// recurrenceID is the recurrence id of an occurrence item, if it is one.
+func recurrenceID(event map[string]any) string {
+	occurrence, _ := event["occurrence"].(map[string]any)
+	id, _ := occurrence["recurrenceId"].(string)
+	return id
+}
+
+// Recurring events are created and changed only in the Calendar; the AI
+// may only skip one occurrence (calendar_cancel with its recurrence id).
+const (
+	recurringChangeReason = "Recurring events are changed in the Calendar."
+	recurringCreateReason = "Recurring events are created in the Calendar."
+)
+
+// plansRecurrence reports whether an action asks for a repeating event,
+// which only the owner sets up, in the Calendar.
+func plansRecurrence(action plannedAction) bool {
+	_, present := action.Arguments["recurrence"]
+	return present && (action.Tool == "calendar_create" || action.Tool == "calendar_update")
+}
+
+// recurringUpdate reports whether a resolved change would edit a recurring
+// event: its one match is an occurrence.
+func recurringUpdate(res resolution) bool {
+	return res.action.Tool == "calendar_update" && len(res.found) == 1 && isRecurring(res.found[0])
+}
+
+// withOccurrences records, for a cancellation that waits for the owner, the
+// occurrence each recurring candidate stands for: Inbox keeps only the
+// chosen candidate's id (the series id), and the approval cancels that
+// occurrence alone. A map the plan brought is replaced.
+func withOccurrences(action plannedAction, found []map[string]any) plannedAction {
+	arguments := make(map[string]any, len(action.Arguments)+1)
+	for field, value := range action.Arguments {
+		arguments[field] = value
+	}
+	delete(arguments, "occurrences")
+	occurrences := map[string]any{}
+	for index, event := range found {
+		if index == eventSearchLimit {
+			break
+		}
+		id, _ := event["id"].(string)
+		if rid := recurrenceID(event); id != "" && rid != "" {
+			occurrences[id] = rid
+		}
+	}
+	if len(occurrences) > 0 {
+		arguments["occurrences"] = occurrences
+	}
+	return plannedAction{Tool: action.Tool, Arguments: arguments}
+}
+
+// approvedOccurrence is the occurrence an approved cancellation of eventID
+// stands for, if it is one.
+func approvedOccurrence(arguments map[string]any, eventID string) string {
+	occurrences, _ := arguments["occurrences"].(map[string]any)
+	rid, _ := occurrences[eventID].(string)
+	return rid
 }
 
 // getEvent reads one event, for an approved update that needs its times.
@@ -181,6 +283,11 @@ func (r Runner) getEvent(ctx context.Context, id string) (map[string]any, error)
 // an optional one joins clear.
 func calendarArguments(tool string, planned map[string]any, eventID string) map[string]any {
 	arguments := map[string]any{"eventId": eventID}
+	if tool == "calendar_cancel" {
+		if rid := approvedOccurrence(planned, eventID); rid != "" {
+			arguments["recurrenceId"] = rid
+		}
+	}
 	if tool != "calendar_update" {
 		return arguments
 	}
@@ -324,6 +431,9 @@ func eventCandidates(found []map[string]any, location *time.Location) []map[stri
 	candidates := make([]map[string]any, 0, len(found))
 	for _, event := range found {
 		candidate := map[string]any{"id": event["id"], "kind": "calendar_event", "title": eventLabel(event, location), "eventTitle": event["title"]}
+		if rid := recurrenceID(event); rid != "" {
+			candidate["recurrenceId"] = rid
+		}
 		for _, field := range []string{"allDay", "startAt", "endAt", "startDate", "endDate", "location", "status"} {
 			if value, ok := event[field]; ok && value != nil {
 				candidate[field] = value

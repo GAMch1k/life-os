@@ -67,8 +67,8 @@ func (p eventPatch) onlyReminders() bool {
 }
 
 // apply merges the patch into current and validates the result. now stamps
-// a cancellation.
-func (p eventPatch) apply(current eventFields, now time.Time) (eventFields, error) {
+// a cancellation; owner is the owner's timezone (see eventFields.validate).
+func (p eventPatch) apply(current eventFields, now time.Time, owner *time.Location) (eventFields, error) {
 	next := current
 	body := p.body
 	if p.present["allDay"] && *body.AllDay != current.AllDay {
@@ -131,5 +131,5 @@ func (p eventPatch) apply(current eventFields, now time.Time) (eventFields, erro
 		}
 		next.Status = *body.Status
 	}
-	return next, next.validate()
+	return next, next.validate(owner)
 }

@@ -18,6 +18,12 @@ import {
   useTransition,
 } from "react";
 
+import {
+  deleteQuestion,
+  editQuestion,
+  ScopeDialog,
+  type ScopeQuestion,
+} from "@/components/calendar-scope-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -31,13 +37,31 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { calendarClient } from "@/lib/api/calendar-client";
 import {
+  customDays,
+  customFrom,
+  type Frequency,
+  readRepeat,
+  recurrenceLabel,
+  type RepeatDraft,
+  repeatOptions,
+  repeatsOnNote,
+  unitLabel,
+  WEEK,
+  WEEKDAY_NAME,
+  weekdayOf,
+  sameRepeat,
+} from "@/lib/calendar-recurrence";
+import {
   apiErrorMessage,
   type CalendarEvent,
   createRequest,
   defaultRemindersNote,
+  deleteOccurrence,
   draftFromEvent,
   editingZone,
   type EventDraft,
+  type EventFields,
+  eventRecurrenceLabel,
   eventWhenLabel,
   fetchOwnerDefaults,
   type FieldErrors,
@@ -48,15 +72,22 @@ import {
   MAX_REMINDERS,
   momentLabel,
   moveStart,
+  occurrenceEdit,
+  occurrenceKey,
   readDraft,
   readOnlyReason,
-  recurrenceLabel,
   reminderChanges,
   type ReminderDefaults,
   type ReminderDraft,
   reminderLines,
+  restoreOccurrence,
+  saveOccurrence,
+  type Scope,
+  seriesZone,
   sourceLabel,
+  updateBody,
   updateRequest,
+  type WriteResult,
 } from "@/lib/calendar-workspace";
 import { cn } from "@/lib/utils";
 
@@ -81,13 +112,19 @@ export function CalendarEventDialog({
   onStateChange,
   onSaved,
   onDeleted,
+  onSeriesChanged,
   ...shared
 }: Shared & {
   state: EventDialogState;
   onStateChange: (state: EventDialogState) => void;
-  /** After a create or update, with the event as Calendar stored it. */
+  /**
+   * After a create or update, with the event as Calendar stored it (an
+   * occurrence changed as This event: the occurrence).
+   */
   onSaved: (event: CalendarEvent, created: boolean) => void;
   onDeleted: (id: string) => void;
+  /** After a recurring event changed to This and following or All events. */
+  onSeriesChanged: () => void;
 }) {
   // The last state stays rendered while the dialog animates closed.
   const [shown, setShown] = useState(state);
@@ -107,7 +144,7 @@ export function CalendarEventDialog({
         {current?.mode === "details" ? (
           <EventDetails
             event={current.event}
-            key={`details-${current.event.id}-${current.event.updatedAt}`}
+            key={`details-${occurrenceKey(current.event)}-${current.event.updatedAt}`}
             onDeleted={onDeleted}
             onEdit={(event, remindersOnly) =>
               onStateChange({ mode: "edit", event, remindersOnly })
@@ -119,11 +156,12 @@ export function CalendarEventDialog({
           <EventForm
             event={current.event}
             initial={draftFromEvent(current.event, shared.timeZone)}
-            key={`edit-${current.event.id}`}
+            key={`edit-${occurrenceKey(current.event)}`}
             onCancel={() =>
               onStateChange({ mode: "details", event: current.event })
             }
             onSaved={(event) => onSaved(event, false)}
+            onSeriesChanged={onSeriesChanged}
             remindersOnly={current.remindersOnly}
             {...shared}
           />
@@ -133,6 +171,7 @@ export function CalendarEventDialog({
             key="create"
             onCancel={() => onStateChange(null)}
             onSaved={(event) => onSaved(event, true)}
+            onSeriesChanged={onSeriesChanged}
             {...shared}
           />
         ) : null}
@@ -198,6 +237,7 @@ function EventDetails({
   onSaved: (event: CalendarEvent) => void;
 }) {
   const [confirming, setConfirming] = useState(false);
+  const [asking, setAsking] = useState<ScopeQuestion | null>(null);
   const [error, setError] = useState<string>();
   const [pending, startTransition] = useTransition();
   const reasonId = useId();
@@ -205,6 +245,9 @@ function EventDetails({
   const cancelled = isCancelled(event);
   const source = sourceLabel(event);
   const lines = reminderLines(event);
+  // One occurrence of a recurring event, as listing and search return them.
+  const occurrence = event.occurrence && !imported ? event.occurrence : null;
+  const repeats = eventRecurrenceLabel(event, timeZone);
   const hint =
     !event.allDay && event.timeZone && event.timeZone !== timeZone
       ? event.timeZone
@@ -234,12 +277,26 @@ function EventDetails({
       onDeleted(event.id);
     });
 
+  // This event skips the occurrence; the others end or delete the series.
+  const removeOccurrence = (scope: Scope) =>
+    run(async () => {
+      const { error: failure, status } = await deleteOccurrence(scope, event);
+      if (failure && status !== 404) {
+        setError(apiErrorMessage(failure) ?? "Could not delete this event.");
+        return;
+      }
+      onDeleted(event.id);
+    });
+
+  // A skipped occurrence comes back alone; any other event as a whole.
   const restore = () =>
     run(async () => {
-      const { data, error: failure } = await calendarClient.PATCH(
-        "/v1/events/{eventId}",
-        { params: { path: { eventId: event.id } }, body: { status: "active" } },
-      );
+      const { data, error: failure } = occurrence
+        ? await restoreOccurrence(event)
+        : await calendarClient.PATCH("/v1/events/{eventId}", {
+            params: { path: { eventId: event.id } },
+            body: { status: "active" },
+          });
       if (failure || !data) {
         setError(apiErrorMessage(failure) ?? "Could not restore this event.");
         return;
@@ -247,16 +304,9 @@ function EventDetails({
       onSaved(data);
     });
 
-  // A recurring event is edited as the stored series, not the occurrence
-  // that was clicked.
-  const edit = (remindersOnly: boolean) =>
-    run(async () => {
-      if (!event.recurrence) return onEdit(event, remindersOnly);
-      const { data } = await calendarClient.GET("/v1/events/{eventId}", {
-        params: { path: { eventId: event.id } },
-      });
-      onEdit(data ?? event, remindersOnly);
-    });
+  // An occurrence opens in the form with its own values; saving asks which
+  // occurrences the change applies to.
+  const edit = (remindersOnly: boolean) => onEdit(event, remindersOnly);
 
   return (
     <>
@@ -269,15 +319,20 @@ function EventDetails({
         >
           {event.title}
         </DialogTitle>
-        {cancelled || source || event.recurrence ? (
-          <div className="flex flex-wrap gap-1.5">
+        {cancelled || source || repeats ? (
+          <div className="flex flex-wrap items-center gap-1.5">
             {cancelled ? <Badge tone="destructive">Cancelled</Badge> : null}
             {source ? <Badge tone="info">Imported · {source}</Badge> : null}
-            {event.recurrence ? (
+            {repeats ? (
               <Badge tone="muted">
                 <Repeat aria-hidden="true" className="mr-1 size-3" />
-                {recurrenceLabel(event.recurrence, timeZone)}
+                <span data-testid="event-recurrence">{repeats}</span>
               </Badge>
+            ) : null}
+            {occurrence?.modified && !cancelled ? (
+              <span className="text-muted-foreground text-xs">
+                Changed for this event
+              </span>
             ) : null}
           </div>
         ) : null}
@@ -375,14 +430,18 @@ function EventDetails({
               aria-describedby={imported ? reasonId : undefined}
               className="sm:mr-auto"
               disabled={pending || imported}
-              onClick={() => setConfirming(true)}
+              onClick={() =>
+                occurrence
+                  ? setAsking(deleteQuestion(event, timeZone, today))
+                  : setConfirming(true)
+              }
               variant="destructive"
             >
               Delete
             </Button>
             {cancelled && !imported ? (
               <Button disabled={pending} onClick={restore} variant="outline">
-                Restore
+                {occurrence ? "Restore this event" : "Restore"}
               </Button>
             ) : null}
             {imported && !cancelled ? (
@@ -404,6 +463,14 @@ function EventDetails({
           </>
         )}
       </DialogFooter>
+      <ScopeDialog
+        onCancel={() => setAsking(null)}
+        onChoose={(scope) => {
+          setAsking(null);
+          removeOccurrence(scope);
+        }}
+        question={asking}
+      />
     </>
   );
 }
@@ -442,21 +509,33 @@ function EventForm({
   initial,
   onCancel,
   onSaved,
+  onSeriesChanged,
   remindersOnly = false,
   timeZone,
+  today,
 }: Shared & {
-  /** The event being edited; a new event when absent. */
+  /** The event being edited (or one occurrence of it); a new event when absent. */
   event?: CalendarEvent;
   initial: EventDraft;
   onCancel: () => void;
   onSaved: (event: CalendarEvent) => void;
+  onSeriesChanged: () => void;
   /** Imported events: only their reminders can change. */
   remindersOnly?: boolean;
 }) {
   const [draft, setDraft] = useState(initial);
   const [errors, setErrors] = useState<FieldErrors>({});
   const [pending, startTransition] = useTransition();
+  // An occurrence's changes wait here while the owner picks their scope.
+  const [asking, setAsking] = useState<{
+    fields: EventFields;
+    question: ScopeQuestion;
+  } | null>(null);
   const id = useId();
+  // One occurrence of a recurring event (only Life OS events repeat so).
+  const occurrence =
+    event?.occurrence && !isImported(event) ? event : undefined;
+  const repeatChanged = !sameRepeat(draft.repeat, initial.repeat);
   // A Life OS event's defaults are the owner's (Reminder defaults), read
   // when the form opens; an imported event's are its source's.
   const ownDefaults = !event || !isImported(event);
@@ -484,36 +563,16 @@ function EventForm({
       ? { "aria-invalid": true, "aria-describedby": `${id}-${field}-error` }
       : {};
 
-  const submit = (formEvent: FormEvent<HTMLFormElement>) => {
-    formEvent.preventDefault();
-    const read = readDraft(draft, timeZone);
-    if ("errors" in read) {
-      setErrors(read.errors);
-      return;
-    }
-    setErrors({});
-    // An imported event sends only its reminder changes; with none there is
-    // nothing to save (Calendar refuses an empty PATCH).
-    const body = event
-      ? remindersOnly
-        ? reminderChanges(read.fields, event)
-        : updateRequest(read.fields, event)
-      : undefined;
-    if (event && body && Object.keys(body).length === 0) return onCancel();
+  /** Saves, then reports Calendar's answer: its 400 message at the field. */
+  const save = (
+    write: () => Promise<WriteResult>,
+    done: (event: CalendarEvent) => void,
+  ) =>
     startTransition(async () => {
       try {
-        const result =
-          event && body
-            ? await calendarClient.PATCH("/v1/events/{eventId}", {
-                params: { path: { eventId: event.id } },
-                body,
-              })
-            : await calendarClient.POST("/v1/events", {
-                body: createRequest(read.fields),
-              });
-        if (result.data) return onSaved(result.data);
-        const message = apiErrorMessage(result.error);
-        const status = result.response.status;
+        const { data, error, status } = await write();
+        if (data) return done(data);
+        const message = apiErrorMessage(error);
         setErrors(
           status === 400 && message
             ? fieldErrorsFromApi(message)
@@ -525,7 +584,64 @@ function EventForm({
         setErrors({ form: UNAVAILABLE });
       }
     });
+
+  const submit = (formEvent: FormEvent<HTMLFormElement>) => {
+    formEvent.preventDefault();
+    const read = readDraft(draft, timeZone);
+    if ("errors" in read) {
+      setErrors(read.errors);
+      return;
+    }
+    setErrors({});
+    // An occurrence asks first which occurrences change; unchanged, there is
+    // nothing to save.
+    if (occurrence && !remindersOnly) {
+      const edit = occurrenceEdit(read.fields, occurrence, repeatChanged);
+      if (!edit.changed) return onCancel();
+      setAsking({
+        fields: read.fields,
+        question: editQuestion(occurrence, edit, timeZone, today),
+      });
+      return;
+    }
+    // An imported event sends only its reminder changes; with none there is
+    // nothing to save (Calendar refuses an empty PATCH).
+    const body = event
+      ? remindersOnly
+        ? reminderChanges(read.fields, event)
+        : updateRequest(read.fields, event)
+      : undefined;
+    if (event && body && Object.keys(body).length === 0) return onCancel();
+    save(async () => {
+      const result =
+        event && body
+          ? await calendarClient.PATCH("/v1/events/{eventId}", {
+              params: { path: { eventId: event.id } },
+              body: updateBody(body),
+            })
+          : await calendarClient.POST("/v1/events", {
+              body: createRequest(read.fields),
+            });
+      return {
+        data: result.data,
+        error: result.error,
+        status: result.response.status,
+      };
+    }, onSaved);
   };
+
+  // This event shows the occurrence again; the wider scopes change several
+  // occurrences, so the calendar reloads.
+  const saveTo = (scope: Scope, fields: EventFields) =>
+    occurrence &&
+    save(
+      () =>
+        saveOccurrence(scope, fields, occurrence, {
+          repeatChanged,
+          ownerZone: timeZone,
+        }),
+      scope === "this" ? onSaved : onSeriesChanged,
+    );
 
   const zones = timeZones();
   const zoneOptions = zones.includes(draft.timeZone)
@@ -681,6 +797,15 @@ function EventForm({
             </div>
           )}
 
+          <RepeatControl
+            error={errors.repeat}
+            id={`${id}-repeat`}
+            onChange={(repeat) => update({ repeat })}
+            repeat={draft.repeat}
+            startDate={draft.startDate}
+            timeZone={seriesZone(draft, timeZone)}
+          />
+
           <div className="grid gap-1.5">
             <label className={LABEL} htmlFor={`${id}-location`}>
               Location
@@ -771,7 +896,234 @@ function EventForm({
           {pending ? "Saving…" : "Save"}
         </Button>
       </DialogFooter>
+      <ScopeDialog
+        onCancel={() => setAsking(null)}
+        onChoose={(scope) => {
+          if (asking) saveTo(scope, asking.fields);
+          setAsking(null);
+        }}
+        question={asking?.question ?? null}
+      />
     </form>
+  );
+}
+
+const FREQUENCIES: Frequency[] = ["daily", "weekly", "monthly", "yearly"];
+
+/**
+ * Repeat, like Google Calendar's: Does not repeat, Daily, Weekly on the
+ * start's weekday, Every weekday, Monthly on its day, Annually on its date,
+ * or Custom (every N days, weeks, months, or years; weekly on chosen days;
+ * ending never, on a day, or after N occurrences). The labels follow the
+ * form's start date. `timeZone` is the zone the series repeats in.
+ */
+function RepeatControl({
+  error,
+  id,
+  onChange,
+  repeat,
+  startDate,
+  timeZone,
+}: {
+  error?: string;
+  id: string;
+  onChange: (repeat: RepeatDraft) => void;
+  repeat: RepeatDraft;
+  startDate: string;
+  timeZone: string;
+}) {
+  const set = (patch: Partial<RepeatDraft>) =>
+    onChange({ ...repeat, ...patch });
+  const errorId = `${id}-error`;
+  const described = error
+    ? { "aria-invalid": true, "aria-describedby": errorId }
+    : {};
+  const start = weekdayOf(startDate);
+  const read =
+    repeat.preset === "custom" ? readRepeat(repeat, startDate, timeZone) : null;
+  const days = customDays(repeat, startDate);
+  const on =
+    repeat.preset === "custom"
+      ? repeatsOnNote(repeat.frequency, startDate)
+      : undefined;
+
+  return (
+    <div className="grid gap-1.5">
+      <label className={LABEL} htmlFor={id}>
+        Repeat
+      </label>
+      <select
+        className={cn(SELECT, "w-full")}
+        id={id}
+        onChange={(change) => {
+          const preset = change.target.value as RepeatDraft["preset"];
+          onChange(
+            preset === "custom" ? customFrom(repeat) : { ...repeat, preset },
+          );
+        }}
+        value={repeat.preset}
+        {...described}
+      >
+        {repeatOptions(startDate).map((option) => (
+          <option
+            disabled={option.disabled && option.value !== repeat.preset}
+            key={option.value}
+            value={option.value}
+          >
+            {option.label}
+          </option>
+        ))}
+      </select>
+
+      {repeat.preset === "custom" ? (
+        <div className="grid gap-3 rounded-lg border p-3">
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <span>Every</span>
+            <Input
+              aria-label="Repeat every"
+              className="w-20"
+              inputMode="numeric"
+              min={1}
+              onChange={(change) => set({ interval: change.target.value })}
+              type="number"
+              value={repeat.interval}
+            />
+            <select
+              aria-label="Repeat unit"
+              className={SELECT}
+              onChange={(change) =>
+                set({ frequency: change.target.value as Frequency })
+              }
+              value={repeat.frequency}
+            >
+              {FREQUENCIES.map((frequency) => (
+                <option key={frequency} value={frequency}>
+                  {unitLabel(frequency, repeat.interval)}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {repeat.frequency === "weekly" ? (
+            <div
+              aria-labelledby={`${id}-days`}
+              className="grid gap-1.5"
+              role="group"
+            >
+              <p
+                className="text-muted-foreground text-xs font-medium"
+                id={`${id}-days`}
+              >
+                Repeat on
+              </p>
+              <div className="flex flex-wrap gap-1">
+                {WEEK.map((day) => {
+                  const chosen = days.includes(day);
+                  return (
+                    <Button
+                      aria-label={WEEKDAY_NAME[day]}
+                      aria-pressed={chosen}
+                      className="w-11"
+                      // The day it starts on always repeats.
+                      disabled={day === start}
+                      key={day}
+                      onClick={() =>
+                        set({
+                          days: chosen
+                            ? repeat.days.filter((other) => other !== day)
+                            : [...repeat.days, day],
+                        })
+                      }
+                      size="sm"
+                      type="button"
+                      variant={chosen ? "default" : "outline"}
+                    >
+                      {WEEKDAY_NAME[day].slice(0, 3)}
+                    </Button>
+                  );
+                })}
+              </div>
+              {start ? (
+                <p className="text-muted-foreground text-xs">
+                  Always on {WEEKDAY_NAME[start]}, the day it starts.
+                </p>
+              ) : null}
+            </div>
+          ) : on ? (
+            <p className="text-muted-foreground text-xs">{on}</p>
+          ) : null}
+
+          <fieldset className="grid min-w-0 gap-2">
+            <legend className="text-muted-foreground mb-1.5 text-xs font-medium">
+              Ends
+            </legend>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                checked={repeat.ends === "never"}
+                className="accent-primary size-4"
+                name={`${id}-ends`}
+                onChange={() => set({ ends: "never" })}
+                type="radio"
+              />
+              Never
+            </label>
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <label className="flex w-16 items-center gap-2">
+                <input
+                  checked={repeat.ends === "on"}
+                  className="accent-primary size-4"
+                  name={`${id}-ends`}
+                  onChange={() => set({ ends: "on" })}
+                  type="radio"
+                />
+                On
+              </label>
+              <Input
+                aria-label="Ends on date"
+                className="min-w-0 flex-1 basis-36"
+                onChange={(change) =>
+                  set({ ends: "on", until: change.target.value })
+                }
+                type="date"
+                value={repeat.until}
+              />
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <label className="flex w-16 items-center gap-2">
+                <input
+                  checked={repeat.ends === "after"}
+                  className="accent-primary size-4"
+                  name={`${id}-ends`}
+                  onChange={() => set({ ends: "after" })}
+                  type="radio"
+                />
+                After
+              </label>
+              <Input
+                aria-label="Number of occurrences"
+                className="w-20"
+                inputMode="numeric"
+                max={1000}
+                min={1}
+                onChange={(change) =>
+                  set({ ends: "after", count: change.target.value })
+                }
+                type="number"
+                value={repeat.count}
+              />
+              <span className="text-muted-foreground">occurrences</span>
+            </div>
+          </fieldset>
+
+          {read && "recurrence" in read && read.recurrence ? (
+            <p className="text-sm" data-testid="repeat-summary">
+              {recurrenceLabel(read.recurrence, startDate, timeZone)}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+      <FieldError id={errorId} message={error} />
+    </div>
   );
 }
 

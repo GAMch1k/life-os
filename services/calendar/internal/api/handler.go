@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/oapi-codegen/runtime/types"
 
 	"github.com/GAMch1k/life-os/pkg/activity"
@@ -24,12 +26,15 @@ const (
 	defaultListLimit   = 50
 	defaultSearchLimit = 20
 	maxPageLimit       = 100
-	// updateAttempts bounds how often an update re-reads an event that
-	// changed between its read and its write.
+	// updateAttempts bounds how often a source update re-reads a source
+	// that changed between its read and its write.
 	updateAttempts = 3
 )
 
 type Handler struct {
+	// pool runs the transactions of writes that change an event and its
+	// occurrence exceptions together; queries runs everything else.
+	pool    *pgxpool.Pool
 	queries *store.Queries
 	// ownerTimeZone is the IANA timezone reads compare all-day dates in
 	// when the request names none; recurring timed events without a
@@ -48,9 +53,9 @@ type Handler struct {
 
 var _ generated.ServerInterface = (*Handler)(nil)
 
-// NewHandler serves the Calendar API from queries. ownerTimeZone is the
-// owner's validated IANA timezone (see config.OwnerTimeZone); empty means UTC.
-func NewHandler(queries *store.Queries, ownerTimeZone string) *Handler {
+// NewHandler serves the Calendar API from pool. ownerTimeZone is the owner's
+// validated IANA timezone (see config.OwnerTimeZone); empty means UTC.
+func NewHandler(pool *pgxpool.Pool, ownerTimeZone string) *Handler {
 	if ownerTimeZone == "" {
 		ownerTimeZone = "UTC"
 	}
@@ -59,7 +64,7 @@ func NewHandler(queries *store.Queries, ownerTimeZone string) *Handler {
 		ownerTimeZone, location = "UTC", time.UTC
 	}
 	return &Handler{
-		queries: queries, ownerTimeZone: ownerTimeZone, ownerLocation: location, now: time.Now,
+		pool: pool, queries: store.New(pool), ownerTimeZone: ownerTimeZone, ownerLocation: location, now: time.Now,
 		fetcher: ics.NewFetcher(0, 0, false), wake: func() {},
 	}
 }
@@ -123,7 +128,15 @@ func (h *Handler) ListEvents(c fiber.Ctx, params generated.ListEventsParams) err
 	if err != nil {
 		return internal(err)
 	}
-	merged, err := h.listOccurrences(recurring, params.From, params.To, zone, after, limit+1)
+	ids := make([]pgtype.UUID, 0, len(recurring))
+	for _, row := range recurring {
+		ids = append(ids, row.Event.ID)
+	}
+	exceptions, err := h.recurringExceptions(c.Context(), ids)
+	if err != nil {
+		return internal(err)
+	}
+	merged, err := h.listOccurrences(recurring, exceptions, params.From, params.To, zone, includeCancelled, after, limit+1)
 	if err != nil {
 		return internal(err)
 	}
@@ -203,7 +216,15 @@ func (h *Handler) SearchEvents(c fiber.Ctx, params generated.SearchEventsParams)
 	if err != nil {
 		return internal(err)
 	}
-	merged, err := h.searchOccurrences(recurring, params.From, params.To, zone, anchor, after, limit+1)
+	ids := make([]pgtype.UUID, 0, len(recurring))
+	for _, row := range recurring {
+		ids = append(ids, row.Event.ID)
+	}
+	exceptions, err := h.recurringExceptions(c.Context(), ids)
+	if err != nil {
+		return internal(err)
+	}
+	merged, err := h.searchOccurrences(recurring, exceptions, params.From, params.To, zone, includeCancelled, anchor, after, limit+1)
 	if err != nil {
 		return internal(err)
 	}
@@ -237,7 +258,7 @@ func (h *Handler) CreateEvent(c fiber.Ctx) error {
 		return badRequest("invalid event request")
 	}
 	fields := fieldsFromCreate(body)
-	if err := fields.validate(); err != nil {
+	if err := fields.validate(h.ownerLocation); err != nil {
 		return badRequest(err.Error())
 	}
 	params, err := fields.createParams()
@@ -292,46 +313,58 @@ func (h *Handler) respond(c fiber.Ctx, status int, item store.Event) error {
 }
 
 // UpdateEvent merges the body into the stored event, validates the result,
-// and writes it only if the event has not changed since it was read.
+// and writes it (All events for a recurring event), holding the event so
+// its occurrence exceptions change with it.
 func (h *Handler) UpdateEvent(c fiber.Ctx, id types.UUID) error {
 	patch, err := decodePatch(c.Body())
 	if err != nil {
 		return badRequest(err.Error())
 	}
-	for range updateAttempts {
-		current, err := h.queries.GetEvent(c.Context(), pgUUID(id))
+	var current, item store.Event
+	err = h.inTx(c.Context(), func(queries *store.Queries) error {
+		current, err = queries.LockEvent(c.Context(), pgUUID(id))
 		if err != nil {
 			return databaseError(err)
 		}
-		if current.SourceKind != string(generated.EventSourceKindManual) && !patch.onlyReminders() {
-			return managedBySource()
-		}
-		fields, err := fieldsFromStore(current)
-		if err != nil {
-			return internal(err)
-		}
-		merged, err := patch.apply(fields, h.now())
-		if err != nil {
-			return badRequest(err.Error())
-		}
-		params, err := merged.updateParams(current.ID, current.UpdatedAt)
-		if err != nil {
-			return internal(err)
-		}
-		item, err := h.queries.UpdateEvent(c.Context(), params)
-		if errors.Is(err, pgx.ErrNoRows) {
-			continue // changed or deleted meanwhile: read it again
-		}
-		if err != nil {
-			return internal(err)
-		}
-		// An update that changes nothing records nothing.
-		if eventType, changes := classifyUpdate(current, item); eventType != "" {
-			h.recordEvent(c, eventType, item, &current, changes)
-		}
-		return h.respond(c, fiber.StatusOK, item)
+		item, err = h.updateLocked(c.Context(), queries, current, patch)
+		return err
+	})
+	if err != nil {
+		return err
 	}
-	return httpserver.NewError(fiber.StatusConflict, "conflict", "the event kept changing; retry the update")
+	// An update that changes nothing records nothing.
+	if eventType, changes := classifyUpdate(current, item); eventType != "" {
+		h.recordEvent(c, eventType, item, &current, changes)
+	}
+	return h.respond(c, fiber.StatusOK, item)
+}
+
+// updateLocked applies patch to current, an event held by the transaction
+// of queries, and removes the exceptions of occurrences the change ends.
+func (h *Handler) updateLocked(ctx context.Context, queries *store.Queries, current store.Event, patch eventPatch) (store.Event, error) {
+	if current.SourceKind != string(generated.EventSourceKindManual) && !patch.onlyReminders() {
+		return store.Event{}, managedBySource()
+	}
+	fields, err := fieldsFromStore(current)
+	if err != nil {
+		return store.Event{}, internal(err)
+	}
+	merged, err := patch.apply(fields, h.now(), h.ownerLocation)
+	if err != nil {
+		return store.Event{}, badRequest(err.Error())
+	}
+	params, err := merged.updateParams(current.ID, current.UpdatedAt)
+	if err != nil {
+		return store.Event{}, internal(err)
+	}
+	item, err := queries.UpdateEvent(ctx, params)
+	if err != nil {
+		return store.Event{}, databaseError(err)
+	}
+	if err := h.dropLostExceptions(ctx, queries, current, item); err != nil {
+		return store.Event{}, internal(err)
+	}
+	return item, nil
 }
 
 // DeleteEvent deletes a manual event. An imported event's source owns it
@@ -353,6 +386,23 @@ func (h *Handler) DeleteEvent(c fiber.Ctx, id types.UUID) error {
 	}
 	h.recordEvent(c, eventDeleted, current, nil, nil)
 	return c.SendStatus(fiber.StatusNoContent)
+}
+
+// inTx runs fn on queries bound to one transaction, committed when fn
+// returns no error and rolled back otherwise.
+func (h *Handler) inTx(ctx context.Context, fn func(*store.Queries) error) error {
+	tx, err := h.pool.Begin(ctx)
+	if err != nil {
+		return internal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := fn(h.queries.WithTx(tx)); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return internal(err)
+	}
+	return nil
 }
 
 // timeZone is the request's IANA timezone, else the owner's.

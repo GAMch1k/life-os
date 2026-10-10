@@ -168,7 +168,7 @@ func newSourcesClient(t *testing.T, pool *pgxpool.Pool, clock *time.Time) source
 	refresher := sources.NewRefresher(pool, ics.NewFetcher(0, 5*time.Second, true), schedule, activity.NewEmitter(activityServer.URL, "calendar", logger), logger)
 	refresher.SetClock(func() time.Time { return *clock })
 	queries := store.New(pool)
-	handler := NewHandler(queries, "Europe/Berlin").WithSources(refresher, nil)
+	handler := NewHandler(pool, "Europe/Berlin").WithSources(refresher, nil)
 	handler.now = func() time.Time { return *clock }
 	return sourcesClient{
 		apiClient: apiClient{t: t, app: newTestApp(handler), handler: handler, queries: queries},

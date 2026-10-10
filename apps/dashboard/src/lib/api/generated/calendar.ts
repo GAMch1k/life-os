@@ -13,7 +13,7 @@ export interface paths {
         };
         /**
          * List calendar events in a time range
-         * @description Events that overlap `[from, to)`, soonest start first (an all-day event starts at midnight of its first day in `timeZone`; ties by id). A timed event overlaps when it starts before `to` and ends after `from`; an all-day event when its days, taken in `timeZone`, do. Cancelled events are left out unless `includeCancelled` is true. When more events match than `limit`, `nextCursor` is set: pass it back as `cursor`, with the same parameters, for the next page. A response without `nextCursor` is the last page. A recurring event is expanded: each occurrence that overlaps the range is listed in its place in the order, with the recurring event's `id` and fields but its own start and end, and `occurrence` set. Non-recurring events are returned as stored.
+         * @description Events that overlap `[from, to)`, soonest start first (an all-day event starts at midnight of its first day in `timeZone`; ties by id). A timed event overlaps when it starts before `to` and ends after `from`; an all-day event when its days, taken in `timeZone`, do. Cancelled events are left out unless `includeCancelled` is true. When more events match than `limit`, `nextCursor` is set: pass it back as `cursor`, with the same parameters, for the next page. A response without `nextCursor` is the last page. A recurring event is expanded: each occurrence that overlaps the range is listed in its place in the order, with the recurring event's `id` and fields but its own start and end, and `occurrence` set. An occurrence's own changes (This event) apply: a moved occurrence is listed at its new time (also when it moved into the range from outside it, and not when it moved out), an edited one with its own fields, both with `occurrence.modified` true; a skipped (cancelled) occurrence is left out unless `includeCancelled` is true, then listed with `status: cancelled` and `cancelledAt`. Non-recurring events are returned as stored.
          */
         get: operations["listEvents"];
         put?: never;
@@ -37,7 +37,7 @@ export interface paths {
         };
         /**
          * Search calendar events
-         * @description Finds events whose title, description (notes), or location contain every word of `q` (case-insensitive substring match), across all dates unless `from`/`to` narrow the range (the same overlap rule as listing; either bound may be left open). The most relevant come first: a word found in the title weighs 3, in the location 2, in the description 1. Among equally relevant events, those not over yet come first, soonest first, then past events, most recent first. Cancelled events are left out unless `includeCancelled` is true. Paging works as for listing; the cursor also keeps the moment that splits upcoming from past, so later pages stay consistent. A matching recurring event is returned as occurrences (with `occurrence` set, as in listing): every occurrence in the range when both `from` and `to` are given, otherwise one, its next occurrence not over yet, or its last one if it has ended.
+         * @description Finds events whose title, description (notes), or location contain every word of `q` (case-insensitive substring match), across all dates unless `from`/`to` narrow the range (the same overlap rule as listing; either bound may be left open). The most relevant come first: a word found in the title weighs 3, in the location 2, in the description 1. Among equally relevant events, those not over yet come first, soonest first, then past events, most recent first. Cancelled events are left out unless `includeCancelled` is true. Paging works as for listing; the cursor also keeps the moment that splits upcoming from past, so later pages stay consistent. A matching recurring event is returned as occurrences (with `occurrence` set, as in listing): every occurrence in the range when both `from` and `to` are given, otherwise one, its next occurrence not over yet, or its last one if it has ended. Occurrences carry their own changes as in listing; a skipped occurrence is passed over (the next one represents the series) unless `includeCancelled` is true. Words are matched against the series' title, location, and description, not against one occurrence's own changes to them.
          */
         get: operations["searchEvents"];
         put?: never;
@@ -64,16 +64,80 @@ export interface paths {
         post?: never;
         /**
          * Delete a calendar event
-         * @description Removes the event permanently. Set `status: cancelled` instead to keep it as history. Imported events cannot be deleted (409 `managed_by_source`): their source removes them.
+         * @description Removes the event permanently; for a recurring event every occurrence and its own changes (**All events**). Set `status: cancelled` instead to keep it as history. Imported events cannot be deleted (409 `managed_by_source`): their source removes them.
          */
         delete: operations["deleteEvent"];
         options?: never;
         head?: never;
         /**
          * Update a calendar event
-         * @description Changes only the fields present in the body; a field set to null is cleared. Changing `allDay` switches the event between timed and all-day: the other kind's fields (`startAt`, `endAt`, `timeZone` or `startDate`, `endDate`) are cleared and the new kind's start and end must be given. The result is validated as a whole, as on create. `status: cancelled` keeps the event as history and drops it from listings; `status: active` restores it. An event imported from a source (`source.kind` other than `manual`) is read-only except for `reminders` and `useDefaultReminders`: naming any other field returns 409 `managed_by_source`.
+         * @description Changes only the fields present in the body; a field set to null is cleared. Changing `allDay` switches the event between timed and all-day: the other kind's fields (`startAt`, `endAt`, `timeZone` or `startDate`, `endDate`) are cleared and the new kind's start and end must be given. The result is validated as a whole, as on create. `status: cancelled` keeps the event as history and drops it from listings; `status: active` restores it. An event imported from a source (`source.kind` other than `manual`) is read-only except for `reminders` and `useDefaultReminders`: naming any other field returns 409 `managed_by_source`. For a recurring event this is **All events**: every occurrence changes. Occurrences keep their own changes, except that a change of the start, the kind (`allDay`), `timeZone`, or the `recurrence` rule removes the changes and skips of occurrences that no longer exist (an occurrence exists while the series still has an occurrence with the same original start, its `recurrenceId`).
          */
         patch: operations["updateEvent"];
+        trace?: never;
+    };
+    "/v1/events/{eventId}/occurrences/{recurrenceId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get one occurrence of a recurring event
+         * @description The occurrence as listing returns it, with its own changes applied and `occurrence` set, whatever its status (a skipped occurrence has `status: cancelled`). 404 when the event does not repeat (`this event does not repeat`) or `recurrenceId` is not one of its occurrences (`occurrence not found`).
+         */
+        get: operations["getEventOccurrence"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change one occurrence of a recurring event (This event)
+         * @description **This event**: changes only this occurrence; the series and its other occurrences stay. Only the fields present change, as for updating an event; `description` or `location` set to null is cleared for this occurrence only. A new start and end keep the series' kind: `startAt`/`endAt` for a timed series, `startDate`/`endDate` for an all-day one; `allDay` other than the series' returns 400 (`an occurrence cannot switch between timed and all-day; change all events instead`), and so do `recurrence` (`recurrence belongs to the series: change all events, or this and following`) and `timeZone` (`timeZone belongs to the series: change all events, or this and following`). Other errors are those of updating an event, such as `endAt must be after startAt`. `status: cancelled` skips the occurrence (kept as history, left out of listings); `status: active` brings it back. A field set back to the series' value stops being this occurrence's own change. Returns the occurrence. An imported event returns 409 `managed_by_source`.
+         */
+        patch: operations["updateEventOccurrence"];
+        trace?: never;
+    };
+    "/v1/events/{eventId}/occurrences/{recurrenceId}/split": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Change this and following occurrences
+         * @description **This and following**: the series ends with the occurrence before this one (its `recurrence` gets `until` at that occurrence's start and loses `count`), and a new series (a new event id) starts at this occurrence with the body's changes, applied as for updating an event. Without a `recurrence` in the body the new series repeats like the old one (`recurrence: null` makes it a single event); a `count` rule is shared out: the old series keeps the occurrences before, the new one the remaining count. Times in the body are the new series' start and end; leave them out to start it at this occurrence's original time. Occurrence changes and skips from this occurrence on move to the new series when their occurrence still exists there (the same original start: no change of time, kind, time zone, or rule), otherwise they are dropped; the fields the body sets replace this occurrence's own changes to them. Returns the new series (201). On the series' first occurrence nothing is split: the body changes the series itself, as `PATCH /v1/events/{eventId}`, and the series is returned (200). An imported event returns 409 `managed_by_source`.
+         */
+        post: operations["splitEventSeries"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/events/{eventId}/occurrences/{recurrenceId}/truncate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Delete this and following occurrences
+         * @description **This and following**, deleted: the series ends with the occurrence before this one (its `recurrence` gets `until` at that occurrence's start and loses `count`), and the changes and skips of this and later occurrences are removed. On the series' first occurrence the whole series is deleted, as `DELETE /v1/events/{eventId}`. An imported event returns 409 `managed_by_source`.
+         */
+        post: operations["truncateEventSeries"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/v1/sources": {
@@ -173,23 +237,37 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        /** @description Repeats the event every `interval` days, weeks, months, or years from its start, as an iCalendar (RFC 5545) rule: a timed event keeps its wall-clock time in its `timeZone` (else the owner's timezone) across daylight saving changes, and a monthly event on the 31st skips months without one. `until` is the latest start of an occurrence (inclusive). */
+        /**
+         * @description A day of the week, as in iCalendar (MO is Monday).
+         * @enum {string}
+         */
+        Weekday: "MO" | "TU" | "WE" | "TH" | "FR" | "SA" | "SU";
+        /** @description Repeats the event every `interval` days, weeks, months, or years from its start, as an iCalendar (RFC 5545) rule. A timed event keeps its wall-clock time in its `timeZone` (else the owner's timezone) across daylight saving changes. Weekly repeats on the start's weekday, or on each of `byWeekday` (which must include the start's weekday in the event's timezone; all-day: its startDate's). Monthly repeats on the start's day of the month and skips months without it (the 31st); yearly on the start's date: an all-day event on 17 September repeats annually on September 17, such as a birthday (29 February only in leap years). The series ends at `until`, the latest start of an occurrence (inclusive; an all-day series compares its dates with until's date in the owner's timezone; not before the event's start), or after `count` occurrences, or never; not both. Errors (400): `recurrence frequency must be daily, weekly, monthly, or yearly`, `recurrence interval must be at least 1`, `recurrence byWeekday is only for weekly recurrence`, `recurrence byWeekday days must be MO, TU, WE, TH, FR, SA, or SU`, `recurrence byWeekday must include the weekday the event starts on (Saturday)` (naming that weekday), `recurrence count must be between 1 and 1000`, `recurrence takes until or count, not both`, `recurrence until must not be before the event starts`. */
         Recurrence: {
             /** @enum {string} */
             frequency: "daily" | "weekly" | "monthly" | "yearly";
             interval: number;
-            /** Format: date-time */
+            /**
+             * Format: date-time
+             * @description The latest start of an occurrence (inclusive). Not with count.
+             */
             until?: string | null;
+            /** @description Ends after this many occurrences ("ends after N times"). Not with until. */
+            count?: number | null;
+            /** @description Weekly only: the days of the week it repeats on, including the start's weekday. Returned in week order (MO first), each day once; absent means the start's weekday. */
+            byWeekday?: components["schemas"]["Weekday"][] | null;
         };
-        /** @description Set on an item that is one occurrence of a recurring event, as listing and search return them. The item's `id` and fields are the recurring event's (update or delete it to change every occurrence), except its start and end, which are this occurrence's. */
+        /** @description Set on an item that is one occurrence of a recurring event, as listing, search, and the occurrence endpoints return them. The item's `id` and fields are the recurring event's (update or delete it to change every occurrence), with this occurrence's start and end, and with this occurrence's own changes applied (see `modified`). */
         EventOccurrence: {
             /**
              * Format: uuid
              * @description The recurring event this is an occurrence of (the same as the item's id).
              */
             seriesId: string;
-            /** @description The occurrence's start, unique within its series: an RFC 3339 instant in UTC for timed events, a date (YYYY-MM-DD) for all-day events. */
+            /** @description The occurrence's original start, unique within its series and kept when the occurrence is moved: an RFC 3339 instant in UTC for timed events, a date (YYYY-MM-DD) for all-day events. */
             recurrenceId: string;
+            /** @description This occurrence has its own changes (This event): title, description, location, start and end, or reminders differ from the series'. A skipped occurrence shows `status: cancelled` instead. */
+            modified: boolean;
         };
         /**
          * @deprecated
@@ -218,7 +296,7 @@ export interface components {
             externalUid?: string | null;
         };
         /**
-         * @description `cancelled` events are kept as history but left out of listings and search unless asked for.
+         * @description `cancelled` events are kept as history but left out of listings and search unless asked for. An occurrence of a recurring event is cancelled when its series is or when it is skipped on its own.
          * @enum {string}
          */
         EventStatus: "active" | "cancelled";
@@ -331,10 +409,30 @@ export interface components {
             /** Format: date */
             endDate?: string | null;
             timeZone?: string | null;
-            recurrence?: components["schemas"]["Recurrence"];
+            /** @description Replaces the rule. Null stops the event repeating (on a split: the new series does not repeat). */
+            recurrence?: components["schemas"]["Recurrence"] | null;
             /** @description Replaces the event's own reminders. Null returns the event to its defaults alone: no own reminders, and `useDefaultReminders` true unless the body sets it. */
             reminders?: components["schemas"]["Reminder"][] | null;
             /** @description Turns the default reminders on or off; the event's own reminders stay. */
+            useDefaultReminders?: boolean;
+            status?: components["schemas"]["EventStatus"];
+        };
+        /** @description One occurrence's own changes. The start and end keep the series' kind (`startAt`/`endAt` for a timed series, `startDate`/`endDate` for an all-day one). `reminders: null` gives the occurrence no own reminders and turns its defaults on unless the body sets `useDefaultReminders`. */
+        UpdateOccurrenceRequest: {
+            title?: string;
+            description?: string | null;
+            location?: string | null;
+            /** @description Must be the series' allDay: an occurrence cannot switch between timed and all-day. */
+            allDay?: boolean;
+            /** Format: date-time */
+            startAt?: string;
+            /** Format: date-time */
+            endAt?: string;
+            /** Format: date */
+            startDate?: string;
+            /** Format: date */
+            endDate?: string;
+            reminders?: components["schemas"]["Reminder"][] | null;
             useDefaultReminders?: boolean;
             status?: components["schemas"]["EventStatus"];
         };
@@ -476,6 +574,9 @@ export interface components {
         SourceKind: components["schemas"]["EventSourceKind"];
         /** @description Only events imported from this source. */
         SourceId: string;
+        EventId: string;
+        /** @description The occurrence's `occurrence.recurrenceId` from a listing (URL-encoded): an RFC 3339 instant for a timed series (2026-10-12T16:00:00Z), a date for an all-day one (2026-10-24). */
+        RecurrenceId: string;
         /** @description The previous page's nextCursor. Opaque; only valid with the parameters it was returned for. */
         Cursor: string;
     };
@@ -735,6 +836,194 @@ export interface operations {
             };
         };
     };
+    getEventOccurrence: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                eventId: components["parameters"]["EventId"];
+                /** @description The occurrence's `occurrence.recurrenceId` from a listing (URL-encoded): an RFC 3339 instant for a timed series (2026-10-12T16:00:00Z), a date for an all-day one (2026-10-24). */
+                recurrenceId: components["parameters"]["RecurrenceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Occurrence */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarEvent"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Event not found (`event not found`), it does not repeat (`this event does not repeat`), or no such occurrence (`occurrence not found`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    updateEventOccurrence: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                eventId: components["parameters"]["EventId"];
+                /** @description The occurrence's `occurrence.recurrenceId` from a listing (URL-encoded): an RFC 3339 instant for a timed series (2026-10-12T16:00:00Z), a date for an all-day one (2026-10-24). */
+                recurrenceId: components["parameters"]["RecurrenceId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateOccurrenceRequest"];
+            };
+        };
+        responses: {
+            /** @description The occurrence */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarEvent"];
+                };
+            };
+            /** @description Invalid request (the message says what to fix), or no valid X-Life-OS-Actor (actor_required) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Event not found, it does not repeat, or no such occurrence */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The event is imported (managed_by_source) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    splitEventSeries: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                eventId: components["parameters"]["EventId"];
+                /** @description The occurrence's `occurrence.recurrenceId` from a listing (URL-encoded): an RFC 3339 instant for a timed series (2026-10-12T16:00:00Z), a date for an all-day one (2026-10-24). */
+                recurrenceId: components["parameters"]["RecurrenceId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateEventRequest"];
+            };
+        };
+        responses: {
+            /** @description The occurrence is the first one: the series, changed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarEvent"];
+                };
+            };
+            /** @description The new series */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarEvent"];
+                };
+            };
+            /** @description Invalid request (the message says what to fix), or no valid X-Life-OS-Actor (actor_required) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Event not found, it does not repeat, or no such occurrence */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The event is imported (managed_by_source), or it kept changing concurrently (retry) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    truncateEventSeries: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                eventId: components["parameters"]["EventId"];
+                /** @description The occurrence's `occurrence.recurrenceId` from a listing (URL-encoded): an RFC 3339 instant for a timed series (2026-10-12T16:00:00Z), a date for an all-day one (2026-10-24). */
+                recurrenceId: components["parameters"]["RecurrenceId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The series ends before this occurrence, or is deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid request, or no valid X-Life-OS-Actor (actor_required) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Event not found, it does not repeat, or no such occurrence */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The event is imported (managed_by_source) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     listSources: {
         parameters: {
             query?: never;
@@ -970,6 +1259,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["CalendarSettings"];
                 };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
