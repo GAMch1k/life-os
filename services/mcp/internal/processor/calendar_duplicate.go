@@ -50,11 +50,12 @@ func plannedStart(arguments map[string]any, location *time.Location) (start time
 // findDuplicates returns the existing events a planned calendar_create
 // would duplicate. It searches the planned title on the planned start's
 // local day (in the capture's timezone, like every Calendar search of the
-// processor), active Life OS events only: imported (ICS, Google) events
-// are managed by their source and never turn a create into an update. An
-// event is a duplicate when it starts when the plan does (a timed event
-// within five minutes, an all-day event on the same date) and its title is
-// the planned one apart from case, diacritics, punctuation, and spacing.
+// processor), among the active events the AI may change (changeableEvents,
+// the filter of every event lookup): events managed by their source never
+// turn a create into an update. An event is a duplicate when it starts
+// when the plan does (a timed event within five minutes, an all-day event
+// on the same date) and its title is the planned one apart from case,
+// diacritics, punctuation, and spacing.
 func (r Runner) findDuplicates(ctx context.Context, item inboxItem, action plannedAction) ([]map[string]any, error) {
 	location := r.location(item)
 	title := text(action.Arguments["title"])
@@ -65,7 +66,7 @@ func (r Runner) findDuplicates(ctx context.Context, item inboxItem, action plann
 	}
 	local := start.In(location)
 	from := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, location)
-	query := url.Values{"q": {terms}, "from": {from.UTC().Format(time.RFC3339)}, "to": {from.AddDate(0, 0, 1).UTC().Format(time.RFC3339)}, "timeZone": {location.String()}, "sourceKind": {"manual"}, "limit": {fmt.Sprint(eventSearchLimit)}}
+	query := url.Values{"q": {terms}, "from": {from.UTC().Format(time.RFC3339)}, "to": {from.AddDate(0, 0, 1).UTC().Format(time.RFC3339)}, "timeZone": {location.String()}, "limit": {fmt.Sprint(eventSearchLimit)}}
 	items, err := r.searchEvents(ctx, query)
 	if err != nil {
 		return nil, searchError{domain: "calendar", kind: classifyActionError(err), err: err}
@@ -85,9 +86,6 @@ func (r Runner) findDuplicates(ctx context.Context, item inboxItem, action plann
 // duplicates reports whether an existing event is the one a planned
 // calendar_create titled title, starting at start, describes.
 func duplicates(event map[string]any, title string, start time.Time, allDay bool) bool {
-	if source, ok := event["source"].(map[string]any); ok && text(source["kind"]) != "manual" {
-		return false
-	}
 	if text(event["status"]) == "cancelled" {
 		return false
 	}

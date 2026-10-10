@@ -165,7 +165,7 @@ func (r Runner) findEvents(ctx context.Context, item inboxItem, action plannedAc
 	seen := map[string]bool{}
 	for _, window := range windows {
 		for _, term := range searchTerms(action.Arguments, "eventQuery", "eventQueryAlternatives") {
-			query := url.Values{"q": {term}, "from": {window.from.UTC().Format(time.RFC3339)}, "timeZone": {location.String()}, "sourceKind": {"manual"}, "limit": {fmt.Sprint(eventSearchLimit)}}
+			query := url.Values{"q": {term}, "from": {window.from.UTC().Format(time.RFC3339)}, "timeZone": {location.String()}, "limit": {fmt.Sprint(eventSearchLimit)}}
 			if !window.to.IsZero() {
 				query.Set("to", window.to.UTC().Format(time.RFC3339))
 			}
@@ -187,8 +187,17 @@ func (r Runner) findEvents(ctx context.Context, item inboxItem, action plannedAc
 	return found, nil
 }
 
-// searchEvents runs one calendar_search and returns the events it found.
+// changeableEvents is the Calendar search filter for the events the AI may
+// change: Life OS events. Imported (ICS, Google) events are managed by
+// their source. Every event lookup of the processor uses it.
+var changeableEvents = url.Values{"sourceKind": {"manual"}}
+
+// searchEvents runs one calendar_search among the events the AI may change
+// and returns the events it found.
 func (r Runner) searchEvents(ctx context.Context, query url.Values) ([]map[string]any, error) {
+	for key, values := range changeableEvents {
+		query[key] = append([]string(nil), values...)
+	}
 	raw, err := r.Tools.Call(ctx, "calendar_search", map[string]any{"query": query.Encode()})
 	if err != nil {
 		return nil, err

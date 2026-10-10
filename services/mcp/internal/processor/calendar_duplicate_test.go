@@ -2,7 +2,9 @@ package processor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -61,11 +63,11 @@ func TestARestatedEventWithAReminderUpdatesThatEventInsteadOfCreatingASecond(t *
 		t.Fatalf("calendar_update input = %#v, want %#v", got, want)
 	}
 	// One search: the planned title on the planned start's day in Berlin,
-	// Life OS events only.
+	// among the events the AI may change, like every event lookup.
 	if len(tools.searches) != 1 {
 		t.Fatalf("searches = %v", tools.searches)
 	}
-	if search := tools.searches[0]; search.Get("from") != "2026-10-09T22:00:00Z" || search.Get("to") != "2026-10-10T22:00:00Z" || search.Get("timeZone") != "Europe/Berlin" || search.Get("sourceKind") != "manual" || search.Get("q") == "" {
+	if search := tools.searches[0]; search.Get("from") != "2026-10-09T22:00:00Z" || search.Get("to") != "2026-10-10T22:00:00Z" || search.Get("timeZone") != "Europe/Berlin" || !searchesChangeableEvents(search) || search.Get("q") == "" {
 		t.Fatalf("search = %v", search)
 	}
 	// The attempt shows the conversion.
@@ -248,24 +250,69 @@ func TestARestatementThatAddsNothingChangesAndCreatesNothing(t *testing.T) {
 	}
 }
 
-func TestTheDuplicateGuardNeverTouchesImportedEvents(t *testing.T) {
-	// Even if Calendar returned them, imported events are their source's: a
-	// capture of the same title and time still creates a Life OS event.
+// searchesChangeableEvents reports whether a search asks Calendar for
+// exactly the events every event lookup of the processor may change.
+func searchesChangeableEvents(search url.Values) bool {
+	for key, values := range changeableEvents {
+		if !reflect.DeepEqual(search[key], values) {
+			return false
+		}
+	}
+	return true
+}
+
+// filteringTools answers calendar_search the way Calendar applies the
+// processor's filter: sourceKind, and editable (Life OS events and events
+// marked editable).
+type filteringTools struct{ *calendarTools }
+
+func (f filteringTools) Call(ctx context.Context, name string, args map[string]any) (json.RawMessage, error) {
+	raw, err := f.calendarTools.Call(ctx, name, args)
+	if name != "calendar_search" || err != nil {
+		return raw, err
+	}
+	query, _ := url.ParseQuery(args["query"].(string))
+	var result struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, err
+	}
+	kept := []map[string]any{}
+	for _, event := range result.Items {
+		source, _ := event["source"].(map[string]any)
+		kind := text(source["kind"])
+		if query.Has("sourceKind") && query.Get("sourceKind") != kind {
+			continue
+		}
+		if query.Get("editable") == "true" && kind != "manual" && event["editable"] != true {
+			continue
+		}
+		kept = append(kept, event)
+	}
+	return json.Marshal(map[string]any{"items": kept})
+}
+
+func TestTheDuplicateGuardNeverTouchesEventsManagedByTheirSource(t *testing.T) {
+	// Feed and read-only Google events are their source's: a capture of the
+	// same title and time still creates a Life OS event.
 	ics := timedEvent("event-ics", "Restmüll", "2026-10-12T04:00:00Z", "2026-10-12T05:00:00Z")
 	ics["source"] = map[string]any{"kind": "ics", "name": "ZAW"}
 	google := timedEvent("event-google", "Restmüll", "2026-10-12T04:00:00Z", "2026-10-12T05:00:00Z")
-	google["source"] = map[string]any{"kind": "google", "name": "Home"}
+	google["source"] = map[string]any{"kind": "google", "name": "Holidays"}
+	google["editable"] = false
 	tools := newCalendarTools("Monday at 6 Restmüll, remind me the evening before")
 	restates(tools, "Restmüll", ics, google)
-	runCalendarPlan(t, tools, `{"actions":[{"tool":"calendar_create","arguments":{"title":"Restmüll","allDay":false,"startAt":"2026-10-12T06:00:00+02:00","reminders":[{"kind":"localTime","daysBefore":1,"localTime":"19:00"}]}}],"confidence":0.95}`)
+	runner := Runner{Planner: fakePlanner{output: `{"actions":[{"tool":"calendar_create","arguments":{"title":"Restmüll","allDay":false,"startAt":"2026-10-12T06:00:00+02:00","reminders":[{"kind":"localTime","daysBefore":1,"localTime":"19:00"}]}}],"confidence":0.95}`}, Tools: filteringTools{tools}, Model: "test", TimeZone: berlin(t)}
+	if _, err := runner.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 
 	if !contains(tools.calls, "calendar_create") || contains(tools.calls, "calendar_update") || tools.review != nil {
 		t.Fatalf("calls = %#v, review = %#v", tools.calls, tools.review)
 	}
-	for _, search := range tools.searches {
-		if search.Get("sourceKind") != "manual" {
-			t.Fatalf("search %v includes imported events", search)
-		}
+	if len(tools.searches) != 1 || !searchesChangeableEvents(tools.searches[0]) {
+		t.Fatalf("searches = %v", tools.searches)
 	}
 }
 
