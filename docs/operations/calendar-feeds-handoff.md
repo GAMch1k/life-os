@@ -1,5 +1,7 @@
 # Calendar feeds handoff (P11-08)
 
+> **History.** This was the one-time upgrade to the P11-08 release, kept as a record. P11-09 removed the `calendar-feeds handoff` command and its compose service after Calendar's migration 000017 dropped the legacy feed columns it read; the steps below cannot be run on a current release. A stack still on a release before P11-08 has to go through the P11-08 release first (000017 refuses to run while Calendar still refreshes a feed itself).
+
 The release that adds [calendar-feeds](../services/calendar-feeds.md) moves the ICS feeds, the ZAW waste calendar among them, out of Calendar. It is done once, in this order, so no feed is refreshed by two services, nothing is imported twice, and the feeds keep their schedule, validators, and last outcome. Nothing here prints the ZAW URL; keep it that way (no `docker compose config`, no `env` dumps of these services).
 
 1. **Prepare `.env`**: add `LIFE_OS_CALENDAR_FEEDS_DB_PASSWORD` (a new random value). `LIFE_OS_ZAW_ICS_URL` and `LIFE_OS_CALENDAR_SOURCE_REFRESH_AT` stay as they are: calendar-feeds reads them now.
