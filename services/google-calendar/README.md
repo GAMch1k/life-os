@@ -1,38 +1,26 @@
-# Canonical Go + Fiber service template
+# Google Calendar integration
 
-This is the neutral starting point for Life OS backend services. It provides
-the standard process, HTTP, persistence, migration, and OpenAPI layout without
-introducing a Finance, Tasks, Inbox, Calendar, or other business domain.
-
-Run `make create-service SERVICE=<name>` from the repository root to turn this
-template into a named service. Do not add business entities, routes, tables,
-or queries to the template itself.
+The `google-calendar` service connects the owner's Google account and syncs
+the chosen Google calendars both ways with Calendar, through Calendar's
+integration API only. See [docs/services/google-calendar.md](../../docs/services/google-calendar.md)
+for what it does and [docs/operations/google-calendar.md](../../docs/operations/google-calendar.md)
+for setup, the one-time handoff from Calendar, and troubleshooting.
 
 ## Layout
 
 ```text
-api/openapi.yaml                 # transport-contract placeholder
-cmd/server/                      # process entrypoint
-db/migrations/                   # reversible, service-owned migrations
-db/queries/                      # service-owned sqlc input
-internal/api/                    # HTTP adapters
-internal/config/                 # service configuration
-internal/domain/                 # service domain types
-internal/repository/             # persistence adapters and sqlc output
-internal/service/                # service use cases
+api/openapi.yaml                 # the integration's own API (connection, calendars, exports)
+cmd/server/                      # the service, and the `handoff` command
+db/migrations/                   # google_calendar_db
+db/queries/                      # sqlc input
+internal/api/                    # HTTP handlers
+internal/calendar/               # Calendar's integration and events API (client)
+internal/google/                 # OAuth, sealing, Google's API, mapping, sync, exports, edits
+internal/google/fakegoogle/      # a fake Google for tests
+internal/handoff/                # the one-time copy from calendar_db
+internal/ics, internal/recurrence, internal/sources  # copies used by the mapping
+internal/testsupport/            # fake Google + the real Calendar for integration tests
 ```
-
-## Conventions
-
-- Every generated service is an independent Go module.
-- Shared infrastructure comes only from `github.com/GAMch1k/life-os/pkg`.
-- The service owns all contents of `db/`; it never reads another service's
-  database.
-- Migrations are six-digit, ordered, and reversible.
-- sqlc input lives in `db/queries`; generated pgx/v5 code is committed under
-  `internal/repository/generated`.
-- The process exposes the shared `/health` and `/ready` endpoints and performs
-  graceful shutdown through `pkg/httpserver`.
 
 ## Commands
 
@@ -45,14 +33,12 @@ make migrate-up DATABASE_URL='postgres://...'
 make run DATABASE_URL='postgres://...'
 ```
 
-Build the image from the repository root context and run it on the local Life
-OS Docker network:
+Integration tests need a throwaway Postgres in
+`GOOGLE_CALENDAR_TEST_DATABASE_URL`; they run Calendar's own server (built
+from `services/calendar`) on a private schema of it and skip when it is unset.
+
+The handoff (once, with Calendar stopped and migrated):
 
 ```sh
-make docker-build
-make docker-run DATABASE_URL='postgres://google_calendar_user:password@postgres:5432/google_calendar_db?sslmode=disable'
+docker compose run --rm --no-deps -e HANDOFF_CALENDAR_DATABASE_URL='postgres://calendar_user:...@postgres:5432/calendar_db?sslmode=disable' google-calendar handoff
 ```
-
-The template's baseline migration is intentionally a no-op. It proves the
-migration workflow without creating a sample business table; generated services
-replace it with their first service-owned migration.

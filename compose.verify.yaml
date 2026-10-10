@@ -39,6 +39,21 @@ services:
         source: /dev/null
         target: /run/secrets/enablebanking.pem
         read_only: true
+  # Never the owner's Google account: no OAuth client or token key, and
+  # Google's endpoints at addresses that resolve nowhere (tools/verify-compose
+  # refuses a plan with the Google settings set). Browser tests stub the
+  # integration in the page.
+  google-calendar:
+    image: lifeos-google-calendar:latest
+    ports: !reset []
+    environment:
+      LIFE_OS_GOOGLE_CLIENT_ID: ""
+      LIFE_OS_GOOGLE_CLIENT_SECRET: ""
+      LIFE_OS_GOOGLE_TOKEN_KEY: ""
+      GOOGLE_AUTH_URL: "http://accounts.google.invalid/o/oauth2/v2/auth"
+      GOOGLE_TOKEN_URL: "http://oauth2.google.invalid/token"
+      GOOGLE_REVOKE_URL: "http://oauth2.google.invalid/revoke"
+      GOOGLE_CALENDAR_API_URL: "http://www.google.invalid/calendar/v3"
   dashboard:
     image: lifeos-dashboard:latest
     ports: !reset []

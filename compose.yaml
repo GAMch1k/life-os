@@ -80,7 +80,7 @@ services:
     restart: "no"
   calendar:
     build: {context: ., dockerfile: services/calendar/Dockerfile}
-    environment: {SERVICE_NAME: calendar, PORT: 8080, DATABASE_URL: "postgres://calendar_user:${LIFE_OS_CALENDAR_DB_PASSWORD}@postgres:5432/calendar_db?sslmode=disable", LIFE_OS_TIMEZONE: "${LIFE_OS_TIMEZONE:-UTC}", ACTIVITY_SERVICE_URL: "http://activity:8080", CALENDAR_SOURCE_REFRESH_AT: "${LIFE_OS_CALENDAR_SOURCE_REFRESH_AT:-04:30}", CALENDAR_ZAW_ICS_URL: "${LIFE_OS_ZAW_ICS_URL:-}", LIFE_OS_GOOGLE_CLIENT_ID: "${LIFE_OS_GOOGLE_CLIENT_ID:-}", LIFE_OS_GOOGLE_CLIENT_SECRET: "${LIFE_OS_GOOGLE_CLIENT_SECRET:-}", LIFE_OS_GOOGLE_TOKEN_KEY: "${LIFE_OS_GOOGLE_TOKEN_KEY:-}", LIFE_OS_GOOGLE_REDIRECT_URI: "${LIFE_OS_GOOGLE_REDIRECT_URI:-https://lifeos.gamch1k.com/calendar/google/callback}", CALENDAR_GOOGLE_SYNC_SECONDS: "${LIFE_OS_CALENDAR_GOOGLE_SYNC_SECONDS:-120}", NOTIFICATIONS_SERVICE_URL: "http://notifications:8080"}
+    environment: {SERVICE_NAME: calendar, PORT: 8080, DATABASE_URL: "postgres://calendar_user:${LIFE_OS_CALENDAR_DB_PASSWORD}@postgres:5432/calendar_db?sslmode=disable", LIFE_OS_TIMEZONE: "${LIFE_OS_TIMEZONE:-UTC}", ACTIVITY_SERVICE_URL: "http://activity:8080", CALENDAR_SOURCE_REFRESH_AT: "${LIFE_OS_CALENDAR_SOURCE_REFRESH_AT:-04:30}", CALENDAR_ZAW_ICS_URL: "${LIFE_OS_ZAW_ICS_URL:-}", NOTIFICATIONS_SERVICE_URL: "http://notifications:8080"}
     expose: ["8080"]
     depends_on: {calendar-migrate: {condition: service_completed_successfully}}
     networks: [backend]
@@ -167,6 +167,47 @@ services:
     networks: [backend]
     restart: unless-stopped
 
+  google-calendar-migrate:
+    image: migrate/migrate:v4.18.3
+    command: ["-path", "/migrations", "-database", "postgres://google_calendar_user:${LIFE_OS_GOOGLE_CALENDAR_DB_PASSWORD}@postgres:5432/google_calendar_db?sslmode=disable", "up"]
+    volumes: ["./services/google-calendar/db/migrations:/migrations:ro"]
+    depends_on: {postgres: {condition: service_healthy}}
+    networks: [backend]
+    restart: "no"
+  # The Google Calendar integration (docs/services/google-calendar.md): the
+  # owner's Google connection (OAuth, the refresh token sealed with
+  # LIFE_OS_GOOGLE_TOKEN_KEY), the calendars chosen to sync, and the two-way
+  # sync with Calendar through Calendar's integration API only. Unset Google
+  # settings leave it "not configured". It reaches Google through the
+  # backend network's outbound access and publishes nothing; the gateway
+  # routes /api/integrations/google-calendar/. `docker compose run --rm --no-deps
+  # google-calendar handoff` copies the connection Calendar kept before
+  # P11-07 (docs/operations/google-calendar.md).
+  google-calendar:
+    build: {context: ., dockerfile: services/google-calendar/Dockerfile}
+    environment:
+      SERVICE_NAME: google-calendar
+      PORT: 8080
+      DATABASE_URL: "postgres://google_calendar_user:${LIFE_OS_GOOGLE_CALENDAR_DB_PASSWORD}@postgres:5432/google_calendar_db?sslmode=disable"
+      CALENDAR_SERVICE_URL: http://calendar:8080
+      ACTIVITY_SERVICE_URL: http://activity:8080
+      LIFE_OS_TIMEZONE: "${LIFE_OS_TIMEZONE:-UTC}"
+      LIFE_OS_GOOGLE_CLIENT_ID: "${LIFE_OS_GOOGLE_CLIENT_ID:-}"
+      LIFE_OS_GOOGLE_CLIENT_SECRET: "${LIFE_OS_GOOGLE_CLIENT_SECRET:-}"
+      LIFE_OS_GOOGLE_TOKEN_KEY: "${LIFE_OS_GOOGLE_TOKEN_KEY:-}"
+      LIFE_OS_GOOGLE_REDIRECT_URI: "${LIFE_OS_GOOGLE_REDIRECT_URI:-https://lifeos.gamch1k.com/calendar/google/callback}"
+      GOOGLE_CALENDAR_SYNC_SECONDS: "${LIFE_OS_CALENDAR_GOOGLE_SYNC_SECONDS:-120}"
+      GOOGLE_CALENDAR_FEED_SECONDS: "${LIFE_OS_GOOGLE_CALENDAR_FEED_SECONDS:-15}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    expose: ["8080"]
+    depends_on:
+      google-calendar-migrate: {condition: service_completed_successfully}
+      calendar: {condition: service_started}
+    networks: [backend]
+    restart: unless-stopped
+
   dashboard:
     build: {context: ., dockerfile: apps/dashboard/Dockerfile}
     environment:
@@ -180,6 +221,7 @@ services:
       PROCESSOR_STATUS_URL: http://processor:8081
       MONITOR_SERVICE_URL: http://monitor:8080
       BANKING_SERVICE_URL: http://banking:8080
+      GOOGLE_CALENDAR_SERVICE_URL: http://google-calendar:8080
       LIFE_OS_TIMEZONE: ${LIFE_OS_TIMEZONE:-UTC}
     expose: ["3000"]
     depends_on:
@@ -348,6 +390,7 @@ services:
       activity: {condition: service_started}
       notifications: {condition: service_started}
       banking: {condition: service_started}
+      google-calendar: {condition: service_started}
     # edge: how the Cloudflare connector reaches the gateway (and only it).
     networks: [backend, edge]
     restart: unless-stopped
