@@ -468,7 +468,7 @@ func (q *Queries) ListDueSources(ctx context.Context, now pgtype.Timestamptz) ([
 
 const listSourceEvents = `-- name: ListSourceEvents :many
 
-SELECT id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at, automation_idempotency_key, automation_payload_hash, location, time_zone, status, cancelled_at, source_kind, source_id, external_uid, removed_from_source_at, reminders, use_default_reminders FROM events WHERE source_id = $1 ORDER BY id FOR UPDATE
+SELECT id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at, automation_idempotency_key, automation_payload_hash, location, time_zone, status, cancelled_at, source_kind, source_id, external_uid, removed_from_source_at, reminders, use_default_reminders, recurrence_by_weekday, recurrence_count FROM events WHERE source_id = $1 ORDER BY id FOR UPDATE
 `
 
 // Imported events are written only by Calendar's source adapter, inside the
@@ -510,6 +510,8 @@ func (q *Queries) ListSourceEvents(ctx context.Context, sourceID pgtype.UUID) ([
 			&i.RemovedFromSourceAt,
 			&i.Reminders,
 			&i.UseDefaultReminders,
+			&i.RecurrenceByWeekday,
+			&i.RecurrenceCount,
 		); err != nil {
 			return nil, err
 		}

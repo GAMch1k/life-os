@@ -68,4 +68,15 @@ type Event struct {
 	RemovedFromSourceAt      pgtype.Timestamptz
 	Reminders                []byte
 	UseDefaultReminders      bool
+	RecurrenceByWeekday      []string
+	RecurrenceCount          *int32
+}
+
+type EventException struct {
+	EventID      pgtype.UUID
+	RecurrenceID string
+	Changes      []byte
+	CancelledAt  pgtype.Timestamptz
+	CreatedAt    pgtype.Timestamptz
+	UpdatedAt    pgtype.Timestamptz
 }
