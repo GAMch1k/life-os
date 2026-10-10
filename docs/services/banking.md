@@ -67,7 +67,7 @@ PSD2 lets a bank refuse more than about four reads a day made without the accoun
 | The bank or provider fails (5xx, timeout, `ASPSP_ERROR`) | Retried after 15 minutes, doubling up to 2 hours, never later than the next sync time; each retry is an unattended read. |
 | Too many reads (`429`, `ASPSP_RATE_LIMIT_EXCEEDED`) | The next attempt is the first sync time at least 6 hours later, as the provider recommends. |
 | The application is refused (`UNAUTHORIZED_ACCESS`, `ACCESS_DENIED`) | Retried at the next sync time; check the application id and key. |
-| The session ended (`EXPIRED_SESSION`, `REVOKED_SESSION`, `CLOSED_SESSION`) | The connection expires and the owner is notified. |
+| The session ended (`EXPIRED_SESSION`, `REVOKED_SESSION`, `CLOSED_SESSION`) | The connection expires; the Status check needs attention, so the monitor tells the owner. |
 | The bank needs the owner (`ASPSP_PSU_ACTION_REQUIRED`) | The connection goes into `error`: reconnect. |
 | Finance unavailable (5xx, no answer) | What was read is kept (`pending_import`) and sent again after 1 minute, doubling up to 30, without reading the bank again. |
 | Finance refuses the import (400 `currency_mismatch`, `unknown_account`, `invalid_request`) | Not retried in a loop: the import is dropped, the error recorded, and the next sync time reads again. |
@@ -97,13 +97,14 @@ Finance answers with its account ids and counts (`accounts.created/updated`, `tr
 
 ## Consent
 
-A consent lasts as long as the bank allows (Deutsche Bank: 180 days). Banking notifies the owner through [Notifications](notifications.md) (`pkg/notify`, importance `medium`, category `banking.consent`, link `/finance`, a dedupe key per connection, consent end, and notice):
+A consent lasts as long as the bank allows (Deutsche Bank: 180 days). The owner hears of each consent event exactly once.
 
-- 7 days before `consent_valid_until`: "Deutsche Bank access expires on Sat 7 Apr 2027";
-- 1 day before: "Deutsche Bank access expires within a day";
-- when it has ended (the connection becomes `expired`), or the provider says the session ended: "Deutsche Bank access expired".
+- **Before it ends, Banking reminds the owner** through [Notifications](notifications.md) (`pkg/notify`, importance `medium`, category `banking.consent`, link `/finance`, a dedupe key per connection, consent end, and reminder):
+  - 7 days before `consent_valid_until`: "Deutsche Bank access expires on Sat 7 Apr 2027";
+  - 1 day before: "Deutsche Bank access expires within a day".
 
-A notice that fails to send is tried again at the next check; the dedupe key prevents doubles. Reconnecting starts the notices over for the new consent. The Status page's Bank connection check also turns to Needs attention 7 days ahead (so the [monitor](monitor.md) notifies too).
+  A reminder that fails to send is tried again at the next check; the dedupe key prevents doubles. Reconnecting starts the reminders over for the new consent. Meanwhile the Status page shows the coming end ("Deutsche Bank access ends on …") but the Bank connection check stays OK, so the [monitor](monitor.md) sends nothing.
+- **When it has ended** (the connection becomes `expired`: the consent ran out, or the provider says the session ended or was revoked at the bank), Banking sends no notice of its own. The Bank connection check turns to Needs attention, so the monitor sends "Bank connection needs attention" (medium, link `/status`) with the check's summary and "Reconnect the bank in Finance …", and a low "Bank connection recovered" once the owner has reconnected. Banking records `banking.consent.expired` in Activity.
 
 ## Activity
 
@@ -134,7 +135,7 @@ Connect, disconnect, and owner-started syncs carry the owner as actor; scheduled
 | `BANKING_SYNC_TIMES` | Scheduled syncs, HH:MM, at most four (`.env`: `LIFE_OS_BANKING_SYNC_TIMES`). |
 | `BANKING_MAX_UNATTENDED_PER_DAY`, `BANKING_MANUAL_SYNC_MINUTES`, `BANKING_INITIAL_DAYS`, `BANKING_OVERLAP_DAYS`, `BANKING_TICK_SECONDS` | 4, 10, 90, 7, 60. |
 
-Not configured (no application id, key, or token key), Banking still runs: it lists connections, reports `configured: false` with the missing settings in `setupProblem`, sends consent notices for stored connections, disconnects, and refuses the rest with `503 banking_not_configured`. The JWT is RS256 with header `{typ: JWT, alg: RS256, kid: <app id>}` and claims `{iss: enablebanking.com, aud: api.enablebanking.com, iat, exp}`, valid for one hour and renewed 5 minutes before it expires.
+Not configured (no application id, key, or token key), Banking still runs: it lists connections, reports `configured: false` with the missing settings in `setupProblem`, sends consent reminders and expires ended consents of stored connections, disconnects, and refuses the rest with `503 banking_not_configured`. The JWT is RS256 with header `{typ: JWT, alg: RS256, kid: <app id>}` and claims `{iss: enablebanking.com, aud: api.enablebanking.com, iat, exp}`, valid for one hour and renewed 5 minutes before it expires.
 
 ## Tests
 

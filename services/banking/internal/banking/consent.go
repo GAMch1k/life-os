@@ -17,23 +17,25 @@ import (
 // ConsentCategory is the notification category of consent reminders.
 const ConsentCategory = "banking.consent"
 
-// Consent notices, in the order they are sent.
+// Consent notices, in the order they are sent. Banking sends no notice of
+// its own when a consent has ended: the connection turns expired, the
+// Status page's Bank connection check needs attention, and the monitor
+// tells the owner (and again, as recovered, after a reconnect), so the
+// owner hears of each consent event once.
 const (
-	notice7d      = "7d"
-	notice1d      = "1d"
-	noticeExpired = "expired"
+	notice7d = "7d"
+	notice1d = "1d"
 )
 
-var noticeRank = map[string]int{notice7d: 1, notice1d: 2, noticeExpired: 3}
+var noticeRank = map[string]int{notice7d: 1, notice1d: 2}
 
 // checkConsent reminds the owner 7 days and 1 day before a live
-// connection's consent ends, expires it when it has ended, and makes sure
-// an expired connection's notice was sent. Notices that fail to send are
-// tried again at the next check (their dedupe keys prevent doubles).
+// connection's consent ends and expires it when it has ended. Reminders
+// that fail to send are tried again at the next check (their dedupe keys
+// prevent doubles); a reconnect's new consent starts over.
 func (s *Service) checkConsent(ctx context.Context, conn store.BankConnection) store.BankConnection {
 	now := s.now()
-	switch {
-	case active(conn) && conn.ConsentValidUntil.Valid:
+	if active(conn) && conn.ConsentValidUntil.Valid {
 		left := conn.ConsentValidUntil.Time.Sub(now)
 		switch {
 		case left <= 0:
@@ -48,15 +50,14 @@ func (s *Service) checkConsent(ctx context.Context, conn store.BankConnection) s
 		case left <= 7*24*time.Hour:
 			s.remind(ctx, conn, notice7d)
 		}
-	case conn.Status == StatusExpired:
-		s.remind(ctx, conn, noticeExpired)
 	}
 	return conn
 }
 
 // expire marks a connection expired (reason "consent_ended": its consent
-// ran out; "ended_at_bank": the provider says the session ended) and tells
-// the owner.
+// ran out; "ended_at_bank": the provider says the session ended) and
+// records it in Activity. The owner hears of it from the monitor (the
+// Status page's Bank connection check), not from Banking.
 func (s *Service) expire(ctx context.Context, conn store.BankConnection, reason string) (store.BankConnection, error) {
 	message := fmt.Sprintf("%s access expired on %s. Reconnect the bank to keep syncing.", conn.Institution, s.formatDay(conn.ConsentValidUntil.Time))
 	if reason != "consent_ended" || !conn.ConsentValidUntil.Valid {
@@ -77,12 +78,11 @@ func (s *Service) expire(ctx context.Context, conn store.BankConnection, reason 
 		Outcome: activity.Failed, Summary: conn.Institution + " access expired",
 		Data: map[string]any{"institution": conn.Institution, "reason": reason, "consentValidUntil": optionalTime(conn.ConsentValidUntil)},
 	})
-	s.remind(ctx, row, noticeExpired)
 	return row, nil
 }
 
-// remind sends a consent notice unless it, or a later one, was already sent
-// for this consent.
+// remind sends a consent reminder unless it, or a later one, was already
+// sent for this consent.
 func (s *Service) remind(ctx context.Context, conn store.BankConnection, notice string) {
 	sent := ""
 	if conn.ConsentNotice != nil && sameInstant(conn.ConsentNoticeFor, conn.ConsentValidUntil) {
@@ -97,12 +97,9 @@ func (s *Service) remind(ctx context.Context, conn store.BankConnection, notice 
 	case notice7d:
 		title = fmt.Sprintf("%s access expires on %s", conn.Institution, s.formatDay(until))
 		body = fmt.Sprintf("Reconnect %s in Finance before then to keep your transactions syncing. Your accounts and history stay as they are.", conn.Institution)
-	case notice1d:
+	default:
 		title = fmt.Sprintf("%s access expires within a day", conn.Institution)
 		body = fmt.Sprintf("It ends on %s. Reconnect %s in Finance to keep your transactions syncing.", s.formatTime(until), conn.Institution)
-	default:
-		title = fmt.Sprintf("%s access expired", conn.Institution)
-		body = fmt.Sprintf("Transactions no longer sync. Reconnect %s in Finance; your accounts and history stay.", conn.Institution)
 	}
 	err := s.notify.Send(ctx, notify.Notification{
 		Title: title, Body: body, Importance: notify.Medium, Category: ConsentCategory, Link: "/finance",
@@ -115,15 +112,13 @@ func (s *Service) remind(ctx context.Context, conn store.BankConnection, notice 
 	if err := s.queries.SetConsentNotice(ctx, store.SetConsentNoticeParams{Notice: &notice, NoticeFor: conn.ConsentValidUntil, Now: timestamptz(s.now()), ID: conn.ID}); err != nil {
 		s.logger.Warn("recording the bank consent notice failed", "connection", uuidString(conn.ID), "error", err)
 	}
-	if notice != noticeExpired {
-		trace := activity.TraceFrom(ctx)
-		s.emit(ctx, activity.Event{
-			ID:   activity.EventID(EventConsentExpiring, uuidString(conn.ID), consentKey(conn), notice),
-			Type: EventConsentExpiring, Subject: subject(conn), Actor: trace.Actor, CorrelationID: trace.CorrelationID,
-			Outcome: activity.Pending, Summary: fmt.Sprintf("%s access expires on %s", conn.Institution, s.formatDay(until)),
-			Data: map[string]any{"institution": conn.Institution, "notice": notice, "consentValidUntil": optionalTime(conn.ConsentValidUntil)},
-		})
-	}
+	trace := activity.TraceFrom(ctx)
+	s.emit(ctx, activity.Event{
+		ID:   activity.EventID(EventConsentExpiring, uuidString(conn.ID), consentKey(conn), notice),
+		Type: EventConsentExpiring, Subject: subject(conn), Actor: trace.Actor, CorrelationID: trace.CorrelationID,
+		Outcome: activity.Pending, Summary: fmt.Sprintf("%s access expires on %s", conn.Institution, s.formatDay(until)),
+		Data: map[string]any{"institution": conn.Institution, "notice": notice, "consentValidUntil": optionalTime(conn.ConsentValidUntil)},
+	})
 }
 
 // consentKey names the consent a notice is about.

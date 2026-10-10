@@ -45,9 +45,10 @@ CREATE TABLE bank_connections (
     -- Finance has not archived the accounts of this disconnected
     -- connection yet: retried.
     archive_pending BOOLEAN NOT NULL DEFAULT false,
-    -- The latest consent notice sent ('7d', '1d', 'expired') and the
-    -- consent_valid_until it was about: a new consent starts over.
-    consent_notice TEXT CHECK (consent_notice IN ('7d', '1d', 'expired')),
+    -- The latest consent reminder sent ('7d', '1d') and the
+    -- consent_valid_until it was about: a new consent starts over. An ended
+    -- consent is told by the monitor (Status), not by a reminder.
+    consent_notice TEXT CHECK (consent_notice IN ('7d', '1d')),
     consent_notice_for TIMESTAMPTZ,
     connected_at TIMESTAMPTZ,
     disconnected_at TIMESTAMPTZ,

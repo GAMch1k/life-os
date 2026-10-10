@@ -290,10 +290,12 @@ func TestConsentRemindersAndExpiry(t *testing.T) {
 	if conn.Status != banking.StatusExpired || conn.NextSyncAt.Valid || conn.LastError == nil {
 		t.Fatalf("after the consent: %+v", conn)
 	}
-	if notes = h.Notifications.Bodies(); len(notes) != 3 || notes[2]["title"] != "Deutsche Bank access expired" {
-		t.Fatalf("expiry notice = %+v", notes)
+	// The end itself is told by the monitor (the Status check), not by
+	// banking: no third notice, but the Activity event.
+	if notes = h.Notifications.Bodies(); len(notes) != 2 {
+		t.Fatalf("banking notified the expiry itself: %+v", notes)
 	}
-	if events := h.Activity.OfType(banking.EventConsentExpired); len(events) != 1 {
+	if events := h.Activity.OfType(banking.EventConsentExpired); len(events) != 1 || events[0]["data"].(map[string]any)["reason"] != "consent_ended" {
 		t.Fatalf("expired events = %+v", events)
 	}
 	if h.Bank.AccountReads() != reads {
@@ -316,6 +318,16 @@ func TestConsentRemindersAndExpiry(t *testing.T) {
 	if len(old) != 1 || h.Bank.SessionStatus(old[0]) != "CLOSED" {
 		t.Fatalf("the replaced session was not ended: %v %s", old, h.Bank.SessionStatus(old[0]))
 	}
+
+	// The new consent gets its own reminders.
+	h.Set(again.ConsentValidUntil.Time.Add(-7*24*time.Hour + time.Hour))
+	h.Service.Tick(ctx)
+	h.Set(again.ConsentValidUntil.Time.Add(-time.Hour))
+	h.Service.Tick(ctx)
+	if notes = h.Notifications.Bodies(); len(notes) != 4 || notes[2]["dedupeKey"] == notes[0]["dedupeKey"] ||
+		!strings.HasPrefix(notes[2]["title"].(string), "Deutsche Bank access expires on ") || notes[3]["title"] != "Deutsche Bank access expires within a day" {
+		t.Fatalf("reminders for the new consent = %+v", notes)
+	}
 }
 
 func TestAConsentEndedAtTheBankExpiresTheConnection(t *testing.T) {
@@ -328,8 +340,11 @@ func TestAConsentEndedAtTheBankExpiresTheConnection(t *testing.T) {
 	if conn.Status != banking.StatusExpired || !strings.Contains(*conn.LastError, "revoked at the bank") {
 		t.Fatalf("connection = %+v", conn)
 	}
-	if notes := h.Notifications.Bodies(); len(notes) != 1 || notes[0]["title"] != "Deutsche Bank access expired" {
-		t.Fatalf("notices = %+v", notes)
+	if notes := h.Notifications.Bodies(); len(notes) != 0 {
+		t.Fatalf("banking notified the end itself: %+v", notes)
+	}
+	if events := h.Activity.OfType(banking.EventConsentExpired); len(events) != 1 || events[0]["data"].(map[string]any)["reason"] != "ended_at_bank" {
+		t.Fatalf("expired events = %+v", events)
 	}
 }
 

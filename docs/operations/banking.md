@@ -46,7 +46,7 @@ If the callback says the consent expired or was already used, start again from F
 
 ## When the access is about to end, or has ended
 
-PSD2 consents end: Deutsche Bank's after 180 days. Seven days before, and again one day before, Life OS notifies you ("Deutsche Bank access expires on …", link to Finance), the card shows **Expires soon**, and Status shows Needs attention. When it has ended (or you revoke it at the bank), the connection is **Expired**, syncing stops, and you get "Deutsche Bank access expired".
+PSD2 consents end: Deutsche Bank's after 180 days. Seven days before, and again one day before, Life OS reminds you ("Deutsche Bank access expires on …", then "… expires within a day", both linking to Finance); the card shows **Expires soon**, and Status shows the coming end without raising an alert. When it has ended (or you revoke it at the bank), the connection is **Expired** and syncing stops; Status's Bank connection check needs attention, so you get one "Bank connection needs attention" notification (from the monitor, linking to Status), and "Bank connection recovered" after you reconnect.
 
 To renew, choose **Reconnect** on the card and give consent again. Reconnecting keeps the same connection and the same Finance accounts and history; the next sync starts where the last one stopped (up to 90 days back), so nothing is missing if you reconnect within 90 days of the last sync. A Reconnect while the access is still valid ends the old consent.
 
@@ -54,7 +54,7 @@ To renew, choose **Reconnect** on the card and give consent again. Reconnecting 
 
 **Disconnect** on the card (it asks first) ends Life OS's session at Enable Banking, which closes the bank consent where the bank allows it, stops syncing, and archives the accounts in Finance with all their transactions. If Finance is down at that moment, the archive is retried automatically. Connecting again later creates new Finance accounts; the archived ones keep their history.
 
-You can also revoke the consent at Deutsche Bank (online banking, third-party access) or in the Enable Banking control panel. Life OS notices at the next sync (the provider reports the session as revoked), marks the connection Expired, and notifies you; then Disconnect or Reconnect.
+You can also revoke the consent at Deutsche Bank (online banking, third-party access) or in the Enable Banking control panel. Life OS notices at the next sync (the provider reports the session as revoked) and marks the connection Expired, and Status (through the monitor) tells you; then Disconnect or Reconnect.
 
 To take Life OS's access away entirely, also remove the application or its key in the Enable Banking control panel, and delete the key file and the `LIFE_OS_ENABLE_BANKING_*` and `LIFE_OS_BANKING_TOKEN_KEY` lines from `.env` (`docker compose up --detach banking`). Banking then reports "not configured".
 
