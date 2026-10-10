@@ -14,6 +14,8 @@ const event = (
 ): CalendarEvent => ({
   id,
   title: `Event ${id}`,
+  status: "active",
+  source: { kind: "manual" },
   createdAt: "2026-10-01T00:00:00Z",
   updatedAt: "2026-10-01T00:00:00Z",
   ...fields,

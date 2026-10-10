@@ -12,40 +12,65 @@ import (
 )
 
 const createEvent = `-- name: CreateEvent :one
-INSERT INTO events (title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, automation_idempotency_key, automation_payload_hash)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
-ON CONFLICT (automation_idempotency_key) WHERE automation_idempotency_key IS NOT NULL DO UPDATE SET automation_idempotency_key = EXCLUDED.automation_idempotency_key RETURNING id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at, automation_idempotency_key, automation_payload_hash
+INSERT INTO events (
+    title, description, location, all_day, start_at, end_at, start_date, end_date, time_zone,
+    recurrence_frequency, recurrence_interval, recurrence_until, reminders,
+    status, cancelled_at, source_kind, source_id, external_uid, removed_from_source_at,
+    external_provider, external_id, automation_idempotency_key, automation_payload_hash
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
+ON CONFLICT (automation_idempotency_key) WHERE automation_idempotency_key IS NOT NULL DO UPDATE SET automation_idempotency_key = EXCLUDED.automation_idempotency_key
+RETURNING id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at, automation_idempotency_key, automation_payload_hash, location, time_zone, status, cancelled_at, source_kind, source_id, external_uid, removed_from_source_at, reminders
 `
 
 type CreateEventParams struct {
 	Title                    string
 	Description              *string
+	Location                 *string
 	AllDay                   bool
 	StartAt                  pgtype.Timestamptz
 	EndAt                    pgtype.Timestamptz
 	StartDate                pgtype.Date
 	EndDate                  pgtype.Date
+	TimeZone                 *string
 	RecurrenceFrequency      *string
 	RecurrenceInterval       *int32
 	RecurrenceUntil          pgtype.Timestamptz
+	Reminders                []byte
+	Status                   string
+	CancelledAt              pgtype.Timestamptz
+	SourceKind               string
+	SourceID                 pgtype.UUID
+	ExternalUid              *string
+	RemovedFromSourceAt      pgtype.Timestamptz
 	ExternalProvider         *string
 	ExternalID               *string
 	AutomationIdempotencyKey *string
 	AutomationPayloadHash    *string
 }
 
+// A replay with the same automation idempotency key returns the original row.
 func (q *Queries) CreateEvent(ctx context.Context, arg CreateEventParams) (Event, error) {
 	row := q.db.QueryRow(ctx, createEvent,
 		arg.Title,
 		arg.Description,
+		arg.Location,
 		arg.AllDay,
 		arg.StartAt,
 		arg.EndAt,
 		arg.StartDate,
 		arg.EndDate,
+		arg.TimeZone,
 		arg.RecurrenceFrequency,
 		arg.RecurrenceInterval,
 		arg.RecurrenceUntil,
+		arg.Reminders,
+		arg.Status,
+		arg.CancelledAt,
+		arg.SourceKind,
+		arg.SourceID,
+		arg.ExternalUid,
+		arg.RemovedFromSourceAt,
 		arg.ExternalProvider,
 		arg.ExternalID,
 		arg.AutomationIdempotencyKey,
@@ -70,6 +95,15 @@ func (q *Queries) CreateEvent(ctx context.Context, arg CreateEventParams) (Event
 		&i.UpdatedAt,
 		&i.AutomationIdempotencyKey,
 		&i.AutomationPayloadHash,
+		&i.Location,
+		&i.TimeZone,
+		&i.Status,
+		&i.CancelledAt,
+		&i.SourceKind,
+		&i.SourceID,
+		&i.ExternalUid,
+		&i.RemovedFromSourceAt,
+		&i.Reminders,
 	)
 	return i, err
 }
@@ -87,7 +121,7 @@ func (q *Queries) DeleteEvent(ctx context.Context, id pgtype.UUID) (int64, error
 }
 
 const getEvent = `-- name: GetEvent :one
-SELECT id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at, automation_idempotency_key, automation_payload_hash FROM events WHERE id = $1
+SELECT id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at, automation_idempotency_key, automation_payload_hash, location, time_zone, status, cancelled_at, source_kind, source_id, external_uid, removed_from_source_at, reminders FROM events WHERE id = $1
 `
 
 func (q *Queries) GetEvent(ctx context.Context, id pgtype.UUID) (Event, error) {
@@ -111,55 +145,241 @@ func (q *Queries) GetEvent(ctx context.Context, id pgtype.UUID) (Event, error) {
 		&i.UpdatedAt,
 		&i.AutomationIdempotencyKey,
 		&i.AutomationPayloadHash,
+		&i.Location,
+		&i.TimeZone,
+		&i.Status,
+		&i.CancelledAt,
+		&i.SourceKind,
+		&i.SourceID,
+		&i.ExternalUid,
+		&i.RemovedFromSourceAt,
+		&i.Reminders,
 	)
 	return i, err
 }
 
 const listEvents = `-- name: ListEvents :many
-SELECT id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at, automation_idempotency_key, automation_payload_hash FROM events WHERE (all_day AND start_date <= $1::date AND end_date >= $2::date) OR (NOT all_day AND start_at < $3::timestamptz AND end_at > $4::timestamptz) ORDER BY COALESCE(start_at, start_date::timestamptz) LIMIT $5
+SELECT events.id, events.title, events.description, events.all_day, events.start_at, events.end_at, events.start_date, events.end_date, events.recurrence_frequency, events.recurrence_interval, events.recurrence_until, events.external_provider, events.external_id, events.created_at, events.updated_at, events.automation_idempotency_key, events.automation_payload_hash, events.location, events.time_zone, events.status, events.cancelled_at, events.source_kind, events.source_id, events.external_uid, events.removed_from_source_at, events.reminders, span.starts_at::timestamptz AS starts_at
+FROM events
+CROSS JOIN LATERAL (
+    SELECT
+        CASE WHEN events.all_day THEN events.start_date::timestamp AT TIME ZONE $1::text ELSE events.start_at END AS starts_at,
+        CASE WHEN events.all_day THEN (events.end_date + 1)::timestamp AT TIME ZONE $1::text ELSE events.end_at END AS ends_at
+) AS span
+WHERE span.starts_at < $2::timestamptz
+  AND span.ends_at > $3::timestamptz
+  AND ($4::boolean OR events.status = 'active')
+  AND ($5::text IS NULL OR events.source_kind = $5::text)
+  AND ($6::uuid IS NULL OR events.source_id = $6::uuid)
+  AND (
+    $7::uuid IS NULL
+    OR (span.starts_at, events.id) > ($8::timestamptz, $7::uuid)
+  )
+ORDER BY span.starts_at, events.id
+LIMIT $9
 `
 
 type ListEventsParams struct {
-	ToDate    pgtype.Date
-	FromDate  pgtype.Date
-	ToTime    pgtype.Timestamptz
-	FromTime  pgtype.Timestamptz
-	PageLimit int32
+	TimeZone         string
+	RangeEnd         pgtype.Timestamptz
+	RangeStart       pgtype.Timestamptz
+	IncludeCancelled bool
+	SourceKind       *string
+	SourceID         pgtype.UUID
+	AfterID          pgtype.UUID
+	AfterStartsAt    pgtype.Timestamptz
+	PageLimit        int32
 }
 
-func (q *Queries) ListEvents(ctx context.Context, arg ListEventsParams) ([]Event, error) {
+type ListEventsRow struct {
+	Event    Event
+	StartsAt pgtype.Timestamptz
+}
+
+// Events overlapping [range_start, range_end). An all-day event spans from
+// midnight of its first day to midnight after its last day in time_zone, so
+// its dates are matched as the owner's days. The after_* arguments are the
+// previous page's last row: a keyset cursor over exactly the ORDER BY.
+func (q *Queries) ListEvents(ctx context.Context, arg ListEventsParams) ([]ListEventsRow, error) {
 	rows, err := q.db.Query(ctx, listEvents,
-		arg.ToDate,
-		arg.FromDate,
-		arg.ToTime,
-		arg.FromTime,
+		arg.TimeZone,
+		arg.RangeEnd,
+		arg.RangeStart,
+		arg.IncludeCancelled,
+		arg.SourceKind,
+		arg.SourceID,
+		arg.AfterID,
+		arg.AfterStartsAt,
 		arg.PageLimit,
 	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []Event{}
+	items := []ListEventsRow{}
 	for rows.Next() {
-		var i Event
+		var i ListEventsRow
 		if err := rows.Scan(
-			&i.ID,
-			&i.Title,
-			&i.Description,
-			&i.AllDay,
-			&i.StartAt,
-			&i.EndAt,
-			&i.StartDate,
-			&i.EndDate,
-			&i.RecurrenceFrequency,
-			&i.RecurrenceInterval,
-			&i.RecurrenceUntil,
-			&i.ExternalProvider,
-			&i.ExternalID,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-			&i.AutomationIdempotencyKey,
-			&i.AutomationPayloadHash,
+			&i.Event.ID,
+			&i.Event.Title,
+			&i.Event.Description,
+			&i.Event.AllDay,
+			&i.Event.StartAt,
+			&i.Event.EndAt,
+			&i.Event.StartDate,
+			&i.Event.EndDate,
+			&i.Event.RecurrenceFrequency,
+			&i.Event.RecurrenceInterval,
+			&i.Event.RecurrenceUntil,
+			&i.Event.ExternalProvider,
+			&i.Event.ExternalID,
+			&i.Event.CreatedAt,
+			&i.Event.UpdatedAt,
+			&i.Event.AutomationIdempotencyKey,
+			&i.Event.AutomationPayloadHash,
+			&i.Event.Location,
+			&i.Event.TimeZone,
+			&i.Event.Status,
+			&i.Event.CancelledAt,
+			&i.Event.SourceKind,
+			&i.Event.SourceID,
+			&i.Event.ExternalUid,
+			&i.Event.RemovedFromSourceAt,
+			&i.Event.Reminders,
+			&i.StartsAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const searchEvents = `-- name: SearchEvents :many
+SELECT events.id, events.title, events.description, events.all_day, events.start_at, events.end_at, events.start_date, events.end_date, events.recurrence_frequency, events.recurrence_interval, events.recurrence_until, events.external_provider, events.external_id, events.created_at, events.updated_at, events.automation_idempotency_key, events.automation_payload_hash, events.location, events.time_zone, events.status, events.cancelled_at, events.source_kind, events.source_id, events.external_uid, events.removed_from_source_at, events.reminders, ranked.relevance::integer AS relevance, ordering.bucket::integer AS bucket, ordering.sort_key::bigint AS sort_key
+FROM events
+CROSS JOIN LATERAL (
+    SELECT
+        CASE WHEN events.all_day THEN events.start_date::timestamp AT TIME ZONE $1::text ELSE events.start_at END AS starts_at,
+        CASE WHEN events.all_day THEN (events.end_date + 1)::timestamp AT TIME ZONE $1::text ELSE events.end_at END AS ends_at
+) AS span
+CROSS JOIN LATERAL (
+    SELECT COALESCE(SUM(
+        CASE WHEN events.title ILIKE term.pattern THEN 3 ELSE 0 END
+        + CASE WHEN COALESCE(events.location, '') ILIKE term.pattern THEN 2 ELSE 0 END
+        + CASE WHEN COALESCE(events.description, '') ILIKE term.pattern THEN 1 ELSE 0 END
+    ), 0) AS relevance
+    FROM unnest($2::text[]) AS term(pattern)
+) AS ranked
+CROSS JOIN LATERAL (
+    SELECT
+        CASE WHEN span.ends_at > $3::timestamptz THEN 0 ELSE 1 END AS bucket,
+        CASE WHEN span.ends_at > $3::timestamptz THEN 1 ELSE -1 END
+            * (EXTRACT(EPOCH FROM span.starts_at) * 1000000)::bigint AS sort_key
+) AS ordering
+WHERE NOT EXISTS (
+    SELECT 1 FROM unnest($2::text[]) AS term(pattern)
+    WHERE NOT (events.title ILIKE term.pattern OR COALESCE(events.location, '') ILIKE term.pattern OR COALESCE(events.description, '') ILIKE term.pattern)
+  )
+  AND ($4::timestamptz IS NULL OR span.starts_at < $4::timestamptz)
+  AND ($5::timestamptz IS NULL OR span.ends_at > $5::timestamptz)
+  AND ($6::boolean OR events.status = 'active')
+  AND ($7::text IS NULL OR events.source_kind = $7::text)
+  AND ($8::uuid IS NULL OR events.source_id = $8::uuid)
+  AND (
+    $9::uuid IS NULL
+    OR (-ranked.relevance, ordering.bucket, ordering.sort_key, events.id)
+       > (-$10::integer, $11::integer, $12::bigint, $9::uuid)
+  )
+ORDER BY ranked.relevance DESC, ordering.bucket, ordering.sort_key, events.id
+LIMIT $13
+`
+
+type SearchEventsParams struct {
+	TimeZone         string
+	Patterns         []string
+	Anchor           pgtype.Timestamptz
+	RangeEnd         pgtype.Timestamptz
+	RangeStart       pgtype.Timestamptz
+	IncludeCancelled bool
+	SourceKind       *string
+	SourceID         pgtype.UUID
+	AfterID          pgtype.UUID
+	AfterRelevance   *int32
+	AfterBucket      *int32
+	AfterSortKey     *int64
+	PageLimit        int32
+}
+
+type SearchEventsRow struct {
+	Event     Event
+	Relevance int32
+	Bucket    int32
+	SortKey   int64
+}
+
+// Events whose title, description, or location contain every pattern (ILIKE
+// patterns, already escaped). Relevance weighs a pattern found in the title
+// 3, in the location 2, in the description 1. Then events not over at the
+// anchor instant come first (bucket 0, soonest start first), then past events
+// (bucket 1, most recent start first): sort_key is the start in microseconds,
+// negated for past events, so one ascending keyset covers both directions.
+func (q *Queries) SearchEvents(ctx context.Context, arg SearchEventsParams) ([]SearchEventsRow, error) {
+	rows, err := q.db.Query(ctx, searchEvents,
+		arg.TimeZone,
+		arg.Patterns,
+		arg.Anchor,
+		arg.RangeEnd,
+		arg.RangeStart,
+		arg.IncludeCancelled,
+		arg.SourceKind,
+		arg.SourceID,
+		arg.AfterID,
+		arg.AfterRelevance,
+		arg.AfterBucket,
+		arg.AfterSortKey,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SearchEventsRow{}
+	for rows.Next() {
+		var i SearchEventsRow
+		if err := rows.Scan(
+			&i.Event.ID,
+			&i.Event.Title,
+			&i.Event.Description,
+			&i.Event.AllDay,
+			&i.Event.StartAt,
+			&i.Event.EndAt,
+			&i.Event.StartDate,
+			&i.Event.EndDate,
+			&i.Event.RecurrenceFrequency,
+			&i.Event.RecurrenceInterval,
+			&i.Event.RecurrenceUntil,
+			&i.Event.ExternalProvider,
+			&i.Event.ExternalID,
+			&i.Event.CreatedAt,
+			&i.Event.UpdatedAt,
+			&i.Event.AutomationIdempotencyKey,
+			&i.Event.AutomationPayloadHash,
+			&i.Event.Location,
+			&i.Event.TimeZone,
+			&i.Event.Status,
+			&i.Event.CancelledAt,
+			&i.Event.SourceKind,
+			&i.Event.SourceID,
+			&i.Event.ExternalUid,
+			&i.Event.RemovedFromSourceAt,
+			&i.Event.Reminders,
+			&i.Relevance,
+			&i.Bucket,
+			&i.SortKey,
 		); err != nil {
 			return nil, err
 		}
@@ -172,36 +392,62 @@ func (q *Queries) ListEvents(ctx context.Context, arg ListEventsParams) ([]Event
 }
 
 const updateEvent = `-- name: UpdateEvent :one
-UPDATE events SET title=COALESCE($1,title), description=COALESCE($2,description), all_day=COALESCE($3,all_day), start_at=COALESCE($4,start_at), end_at=COALESCE($5,end_at), start_date=COALESCE($6,start_date), end_date=COALESCE($7,end_date), recurrence_frequency=COALESCE($8,recurrence_frequency), recurrence_interval=COALESCE($9,recurrence_interval), recurrence_until=COALESCE($10,recurrence_until), updated_at=now() WHERE id=$11 RETURNING id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at, automation_idempotency_key, automation_payload_hash
+UPDATE events
+SET title = $1, description = $2, location = $3,
+    all_day = $4, start_at = $5, end_at = $6,
+    start_date = $7, end_date = $8, time_zone = $9,
+    recurrence_frequency = $10, recurrence_interval = $11,
+    recurrence_until = $12, reminders = $13,
+    status = $14, cancelled_at = $15, removed_from_source_at = $16,
+    updated_at = now()
+WHERE id = $17 AND updated_at = $18
+RETURNING id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at, automation_idempotency_key, automation_payload_hash, location, time_zone, status, cancelled_at, source_kind, source_id, external_uid, removed_from_source_at, reminders
 `
 
 type UpdateEventParams struct {
-	Title               *string
+	Title               string
 	Description         *string
-	AllDay              *bool
+	Location            *string
+	AllDay              bool
 	StartAt             pgtype.Timestamptz
 	EndAt               pgtype.Timestamptz
 	StartDate           pgtype.Date
 	EndDate             pgtype.Date
+	TimeZone            *string
 	RecurrenceFrequency *string
 	RecurrenceInterval  *int32
 	RecurrenceUntil     pgtype.Timestamptz
+	Reminders           []byte
+	Status              string
+	CancelledAt         pgtype.Timestamptz
+	RemovedFromSourceAt pgtype.Timestamptz
 	ID                  pgtype.UUID
+	ExpectedUpdatedAt   pgtype.Timestamptz
 }
 
+// Writes the whole merged event. The expected_updated_at guard makes the
+// read-merge-write optimistic: a concurrent change makes it match nothing.
+// Source identity is never updated.
 func (q *Queries) UpdateEvent(ctx context.Context, arg UpdateEventParams) (Event, error) {
 	row := q.db.QueryRow(ctx, updateEvent,
 		arg.Title,
 		arg.Description,
+		arg.Location,
 		arg.AllDay,
 		arg.StartAt,
 		arg.EndAt,
 		arg.StartDate,
 		arg.EndDate,
+		arg.TimeZone,
 		arg.RecurrenceFrequency,
 		arg.RecurrenceInterval,
 		arg.RecurrenceUntil,
+		arg.Reminders,
+		arg.Status,
+		arg.CancelledAt,
+		arg.RemovedFromSourceAt,
 		arg.ID,
+		arg.ExpectedUpdatedAt,
 	)
 	var i Event
 	err := row.Scan(
@@ -222,6 +468,15 @@ func (q *Queries) UpdateEvent(ctx context.Context, arg UpdateEventParams) (Event
 		&i.UpdatedAt,
 		&i.AutomationIdempotencyKey,
 		&i.AutomationPayloadHash,
+		&i.Location,
+		&i.TimeZone,
+		&i.Status,
+		&i.CancelledAt,
+		&i.SourceKind,
+		&i.SourceID,
+		&i.ExternalUid,
+		&i.RemovedFromSourceAt,
+		&i.Reminders,
 	)
 	return i, err
 }

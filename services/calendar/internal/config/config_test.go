@@ -46,6 +46,33 @@ func TestLoadFromRequiresDatabaseURL(t *testing.T) {
 	}
 }
 
+func TestOwnerTimeZone(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		value, want string
+		warns       bool
+	}{
+		{"", "UTC", false},
+		{"Europe/Berlin", "Europe/Berlin", false},
+		{"Mars/Olympus", "UTC", true},
+		{"Local", "UTC", true},
+	} {
+		values := map[string]string{"DATABASE_URL": "postgres://calendar_user:secret@localhost/calendar_db"}
+		if tc.value != "" {
+			values["LIFE_OS_TIMEZONE"] = tc.value
+		}
+		cfg, err := LoadFrom(mapLookup(values))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, warning := cfg.OwnerTimeZone()
+		if got != tc.want || (warning != nil) != tc.warns {
+			t.Errorf("LIFE_OS_TIMEZONE=%q: %q, %v; want %q (warning %v)", tc.value, got, warning, tc.want, tc.warns)
+		}
+	}
+}
+
 func mapLookup(values map[string]string) func(string) (string, bool) {
 	return func(key string) (string, bool) {
 		value, ok := values[key]

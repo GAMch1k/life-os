@@ -11,47 +11,231 @@ info:
     rejected with 400 and error code `actor_required`; nothing is attributed to
     the owner by default. Reads do not need the header. The public gateway
     passes only `user` and `dev:<name>`.
+
+
+    Timed events are instants: `startAt`/`endAt` are RFC 3339 date-times,
+    stored and returned in UTC. All-day events are local dates:
+    `startDate`/`endDate` (inclusive) carry no timezone and mean those days in
+    the owner's timezone. Reads that compare all-day events with instants take
+    a `timeZone` (an IANA name such as Europe/Berlin) and default to the
+    owner's timezone configured for Calendar (LIFE_OS_TIMEZONE, else UTC).
   license: {name: UNLICENSED, url: https://life-os.local/license}
 servers: [{url: http://calendar:8080}]
 paths:
   /v1/events:
     get:
-      summary: List calendar events
+      summary: List calendar events in a time range
+      description: >-
+        Events that overlap `[from, to)`, soonest start first (an all-day
+        event starts at midnight of its first day in `timeZone`; ties by id).
+        A timed event overlaps when it starts before `to` and ends after
+        `from`; an all-day event when its days, taken in `timeZone`, do.
+        Cancelled events are left out unless `includeCancelled` is true. When
+        more events match than `limit`, `nextCursor` is set: pass it back as
+        `cursor`, with the same parameters, for the next page. A response
+        without `nextCursor` is the last page. Recurring events are returned
+        once, as stored; occurrences are not expanded.
       operationId: listEvents
       security: []
-      parameters: [{name: from, in: query, required: true, schema: {type: string, format: date-time}}, {name: to, in: query, required: true, schema: {type: string, format: date-time}}, {name: cursor, in: query, schema: {type: string}}, {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}]
-      responses: {'200': {description: Events, content: {application/json: {schema: {$ref: '#/components/schemas/EventList'}}}}, '400': {description: Invalid request}}
+      parameters:
+        - {name: from, in: query, required: true, description: Start of the range (inclusive)., schema: {type: string, format: date-time}}
+        - {name: to, in: query, required: true, description: End of the range (exclusive); must be after from., schema: {type: string, format: date-time}}
+        - $ref: '#/components/parameters/TimeZone'
+        - $ref: '#/components/parameters/IncludeCancelled'
+        - $ref: '#/components/parameters/SourceKind'
+        - $ref: '#/components/parameters/SourceId'
+        - $ref: '#/components/parameters/Cursor'
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}
+      responses:
+        '200': {description: Events, content: {application/json: {schema: {$ref: '#/components/schemas/EventList'}}}}
+        '400': {description: 'Invalid request, such as a range whose to is not after from, an unknown timeZone, or a malformed cursor'}
     post:
       summary: Create a calendar event
+      description: >-
+        Creates an active event whose source is `manual`. Imported events
+        (`ics`, `google`) are written by Calendar's own source adapters, not
+        through this endpoint. An `Idempotency-Key` header makes the request
+        safe to retry: an identical repeat returns the original event, and
+        reusing the key with a different body returns 409.
       operationId: createEvent
       security: []
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateEventRequest'}}}}
-      responses: {'201': {description: Event, content: {application/json: {schema: {$ref: '#/components/schemas/CalendarEvent'}}}}, '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}}
+      responses:
+        '201': {description: Event, content: {application/json: {schema: {$ref: '#/components/schemas/CalendarEvent'}}}}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}
+        '409': {description: The Idempotency-Key was already used with a different body}
+  /v1/events/search:
+    get:
+      summary: Search calendar events
+      description: >-
+        Finds events whose title, description (notes), or location contain
+        every word of `q` (case-insensitive substring match), across all
+        dates unless `from`/`to` narrow the range (the same overlap rule as
+        listing; either bound may be left open). The most relevant come first:
+        a word found in the title weighs 3, in the location 2, in the
+        description 1. Among equally relevant events, those not over yet come
+        first, soonest first, then past events, most recent first. Cancelled
+        events are left out unless `includeCancelled` is true. Paging works as
+        for listing; the cursor also keeps the moment that splits upcoming
+        from past, so later pages stay consistent.
+      operationId: searchEvents
+      security: []
+      parameters:
+        - {name: q, in: query, required: true, description: 'Words to find, separated by spaces; at most 10 words.', schema: {type: string, minLength: 1, maxLength: 200}}
+        - {name: from, in: query, description: Only events that end after this instant., schema: {type: string, format: date-time}}
+        - {name: to, in: query, description: Only events that start before this instant., schema: {type: string, format: date-time}}
+        - $ref: '#/components/parameters/TimeZone'
+        - $ref: '#/components/parameters/IncludeCancelled'
+        - $ref: '#/components/parameters/SourceKind'
+        - $ref: '#/components/parameters/SourceId'
+        - $ref: '#/components/parameters/Cursor'
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 20}}
+      responses:
+        '200': {description: Matching events, content: {application/json: {schema: {$ref: '#/components/schemas/EventList'}}}}
+        '400': {description: 'Invalid request, such as an empty q, an unknown timeZone, or a malformed cursor'}
   /v1/events/{eventId}:
     get:
       summary: Get a calendar event
+      description: Returns the event whatever its status, so cancelled events stay reachable as history.
       operationId: getEvent
       security: []
       parameters: [{name: eventId, in: path, required: true, schema: {type: string, format: uuid}}]
-      responses: {'200': {description: Event, content: {application/json: {schema: {$ref: '#/components/schemas/CalendarEvent'}}}}, '400': {description: Invalid request}, '404': {description: Event not found}}
+      responses:
+        '200': {description: Event, content: {application/json: {schema: {$ref: '#/components/schemas/CalendarEvent'}}}}
+        '400': {description: Invalid request}
+        '404': {description: Event not found}
     patch:
       summary: Update a calendar event
+      description: >-
+        Changes only the fields present in the body; a field set to null is
+        cleared. Changing `allDay` switches the event between timed and
+        all-day: the other kind's fields (`startAt`, `endAt`, `timeZone` or
+        `startDate`, `endDate`) are cleared and the new kind's start and end
+        must be given. The result is validated as a whole, as on create.
+        `status: cancelled` keeps the event as history and drops it from
+        listings; `status: active` restores it.
       operationId: updateEvent
       security: []
       parameters: [{name: eventId, in: path, required: true, schema: {type: string, format: uuid}}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateEventRequest'}}}}
-      responses: {'200': {description: Event, content: {application/json: {schema: {$ref: '#/components/schemas/CalendarEvent'}}}}, '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}, '404': {description: Event not found}}
+      responses:
+        '200': {description: Event, content: {application/json: {schema: {$ref: '#/components/schemas/CalendarEvent'}}}}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}
+        '404': {description: Event not found}
+        '409': {description: The event kept changing concurrently; retry the update}
     delete:
       summary: Delete a calendar event
+      description: 'Removes the event permanently. Set `status: cancelled` instead to keep it as history.'
       operationId: deleteEvent
       security: []
       parameters: [{name: eventId, in: path, required: true, schema: {type: string, format: uuid}}]
-      responses: {'204': {description: Event deleted}, '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}, '404': {description: Event not found}}
+      responses:
+        '204': {description: Event deleted}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}
+        '404': {description: Event not found}
 components:
+  parameters:
+    TimeZone: {name: timeZone, in: query, description: 'IANA timezone (for example Europe/Berlin) in which all-day dates are compared with instants. Defaults to the owner''s timezone configured for Calendar.', schema: {type: string, minLength: 1, maxLength: 64}}
+    IncludeCancelled: {name: includeCancelled, in: query, description: Also return cancelled events (including those removed by their source)., schema: {type: boolean, default: false}}
+    SourceKind: {name: sourceKind, in: query, description: Only events from this kind of source., schema: {$ref: '#/components/schemas/EventSourceKind'}}
+    SourceId: {name: sourceId, in: query, description: Only events imported from this source., schema: {type: string, format: uuid}}
+    Cursor: {name: cursor, in: query, description: The previous page's nextCursor. Opaque; only valid with the parameters it was returned for., schema: {type: string}}
   schemas:
     Recurrence: {type: object, required: [frequency, interval], properties: {frequency: {type: string, enum: [daily, weekly, monthly, yearly]}, interval: {type: integer, minimum: 1}, until: {type: string, format: date-time, nullable: true}}}
-    ExternalReference: {type: object, required: [provider, externalId], properties: {provider: {type: string}, externalId: {type: string}}}
-    CalendarEvent: {type: object, required: [id, title, allDay, createdAt, updatedAt], properties: {id: {type: string, format: uuid}, title: {type: string}, description: {type: string, nullable: true}, allDay: {type: boolean}, startAt: {type: string, format: date-time, nullable: true}, endAt: {type: string, format: date-time, nullable: true}, startDate: {type: string, format: date, nullable: true}, endDate: {type: string, format: date, nullable: true}, recurrence: {$ref: '#/components/schemas/Recurrence'}, externalReference: {$ref: '#/components/schemas/ExternalReference'}, createdAt: {type: string, format: date-time}, updatedAt: {type: string, format: date-time}}}
-    CreateEventRequest: {type: object, required: [title, allDay], properties: {title: {type: string}, description: {type: string}, allDay: {type: boolean}, startAt: {type: string, format: date-time}, endAt: {type: string, format: date-time}, startDate: {type: string, format: date}, endDate: {type: string, format: date}, recurrence: {$ref: '#/components/schemas/Recurrence'}, externalReference: {$ref: '#/components/schemas/ExternalReference'}}}
-    UpdateEventRequest: {type: object, minProperties: 1, properties: {title: {type: string}, description: {type: string, nullable: true}, allDay: {type: boolean}, startAt: {type: string, format: date-time, nullable: true}, endAt: {type: string, format: date-time, nullable: true}, startDate: {type: string, format: date, nullable: true}, endDate: {type: string, format: date, nullable: true}, recurrence: {$ref: '#/components/schemas/Recurrence', nullable: true}}}
-    EventList: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/CalendarEvent'}}, nextCursor: {type: string, nullable: true}}}
+    ExternalReference:
+      type: object
+      deprecated: true
+      description: Legacy provider reference, kept for compatibility. New code uses `source`.
+      required: [provider, externalId]
+      properties: {provider: {type: string}, externalId: {type: string}}
+    EventSourceKind:
+      type: string
+      enum: [manual, ics, google]
+      description: '`manual`: created in Life OS (the Dashboard, MCP, or a capture). `ics`: imported from an ICS/iCal feed. `google`: synchronized from Google Calendar.'
+    EventSource:
+      type: object
+      description: Where the event comes from. Set when the event is created; updates never change it.
+      required: [kind]
+      properties:
+        kind: {$ref: '#/components/schemas/EventSourceKind'}
+        sourceId: {type: string, format: uuid, nullable: true, description: 'The Calendar source (feed or connected calendar) the event was imported from; null for manual events.'}
+        externalUid: {type: string, nullable: true, description: 'The event''s identity in its source, such as an ICS UID; null for manual events.'}
+    EventStatus:
+      type: string
+      enum: [active, cancelled]
+      description: '`cancelled` events are kept as history but left out of listings and search unless asked for.'
+    Reminder:
+      type: object
+      description: >-
+        Reminder intent only; Calendar stores it and does not deliver
+        notifications. `relative`: `minutesBefore` the event starts (an
+        all-day event starts at midnight of its first day, owner-local).
+        `localTime`: at `localTime` (HH:MM on the owner's wall clock) on the
+        day `daysBefore` days before the event's start date in the owner's
+        timezone, resolved when the reminder is due so daylight saving changes
+        are respected. Example: a pickup on 17 November with `{"kind":
+        "localTime", "daysBefore": 1, "localTime": "19:00"}` reminds on 16
+        November at 19:00.
+      required: [kind]
+      properties:
+        kind: {type: string, enum: [relative, localTime]}
+        minutesBefore: {type: integer, minimum: 0, maximum: 40320, description: Required for relative (and only there); at most 28 days.}
+        daysBefore: {type: integer, minimum: 0, maximum: 28, description: Required for localTime (and only there); 0 is the event's own day.}
+        localTime: {type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$', description: Required for localTime (and only there); 24-hour HH:MM.}
+    CalendarEvent:
+      type: object
+      required: [id, title, allDay, status, source, createdAt, updatedAt]
+      properties:
+        id: {type: string, format: uuid}
+        title: {type: string}
+        description: {type: string, nullable: true, description: Free-form notes or details.}
+        location: {type: string, nullable: true}
+        allDay: {type: boolean}
+        startAt: {type: string, format: date-time, nullable: true, description: Start instant (UTC) of a timed event.}
+        endAt: {type: string, format: date-time, nullable: true, description: 'End instant (UTC) of a timed event, exclusive.'}
+        startDate: {type: string, format: date, nullable: true, description: First day of an all-day event.}
+        endDate: {type: string, format: date, nullable: true, description: Last day (inclusive) of an all-day event.}
+        timeZone: {type: string, nullable: true, description: 'IANA timezone a timed event was scheduled in (for example an ICS TZID); a display hint. Null for all-day events and when unknown.'}
+        recurrence: {$ref: '#/components/schemas/Recurrence'}
+        reminders: {type: array, nullable: true, items: {$ref: '#/components/schemas/Reminder'}, description: 'Reminder intent. Null means the event follows its source''s (or the owner''s) defaults; an empty list means explicitly none.'}
+        status: {$ref: '#/components/schemas/EventStatus'}
+        cancelledAt: {type: string, format: date-time, nullable: true, description: When the event was cancelled; set exactly when status is cancelled.}
+        removedFromSourceAt: {type: string, format: date-time, nullable: true, description: 'When an imported event disappeared from its source, which also cancels it; null for manual events.'}
+        source: {$ref: '#/components/schemas/EventSource'}
+        externalReference: {$ref: '#/components/schemas/ExternalReference'}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    CreateEventRequest:
+      type: object
+      description: 'A timed event needs startAt and endAt (endAt after startAt); an all-day event needs startDate and endDate (endDate not before startDate) and takes no timeZone.'
+      required: [title, allDay]
+      properties:
+        title: {type: string, minLength: 1}
+        description: {type: string}
+        location: {type: string}
+        allDay: {type: boolean}
+        startAt: {type: string, format: date-time}
+        endAt: {type: string, format: date-time}
+        startDate: {type: string, format: date}
+        endDate: {type: string, format: date}
+        timeZone: {type: string, description: IANA timezone of a timed event.}
+        recurrence: {$ref: '#/components/schemas/Recurrence'}
+        reminders: {type: array, maxItems: 10, items: {$ref: '#/components/schemas/Reminder'}, description: Leave out to follow the defaults.}
+        externalReference: {$ref: '#/components/schemas/ExternalReference'}
+    UpdateEventRequest:
+      type: object
+      minProperties: 1
+      properties:
+        title: {type: string, minLength: 1}
+        description: {type: string, nullable: true}
+        location: {type: string, nullable: true}
+        allDay: {type: boolean}
+        startAt: {type: string, format: date-time, nullable: true}
+        endAt: {type: string, format: date-time, nullable: true}
+        startDate: {type: string, format: date, nullable: true}
+        endDate: {type: string, format: date, nullable: true}
+        timeZone: {type: string, nullable: true}
+        recurrence: {$ref: '#/components/schemas/Recurrence', nullable: true}
+        reminders: {type: array, nullable: true, maxItems: 10, items: {$ref: '#/components/schemas/Reminder'}, description: Replaces the reminders; null returns the event to the defaults.}
+        status: {$ref: '#/components/schemas/EventStatus'}
+    EventList: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/CalendarEvent'}}, nextCursor: {type: string, nullable: true, description: Set when more events match; pass it as cursor for the next page.}}}

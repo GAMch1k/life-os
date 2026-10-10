@@ -43,9 +43,10 @@ Optional `.env` settings for the processor:
 
 ## Owner timezone
 
-The owner's timezone is the browser's own timezone when it is known, else `LIFE_OS_TIMEZONE` (an IANA name, default `UTC`), else UTC. Set `LIFE_OS_TIMEZONE` to where the owner usually is, before the processor and Dashboard start; changing it needs a restart of both (`docker compose up -d processor dashboard`). An unknown name falls back to UTC; the processor logs it at startup and its zone is listed under Automatic processing on `/status`.
+The owner's timezone is the browser's own timezone when it is known, else `LIFE_OS_TIMEZONE` (an IANA name, default `UTC`), else UTC. Set `LIFE_OS_TIMEZONE` to where the owner usually is, before the processor, Calendar, and Dashboard start; changing it needs a restart of them (`docker compose up -d processor calendar dashboard`). An unknown name falls back to UTC; the processor and Calendar log it at startup and the processor's zone is listed under Automatic processing on `/status`.
 
 - **Dashboard.** Every "today", date, and time is shown in the browser's timezone, which the browser reports in the `lifeos-tz` cookie; until it has (the very first page load) and for clients without it, in `LIFE_OS_TIMEZONE`. See [Dashboard](../frontend/dashboard.md).
+- **Calendar.** All-day events are dates; reads that compare them with instants use the `timeZone` the client passes (the Dashboard passes the zone it shows), else `LIFE_OS_TIMEZONE`. See [Calendar](../services/calendar.md).
 - **Processor.** Captures such as "tomorrow at 10" or "on Friday at 15:00" are resolved in the capturing browser's timezone (sent as `sourceMetadata.timeZone` with text and voice captures), else in `LIFE_OS_TIMEZONE`, from the moment the capture was made, and stored as the correct instants. See [MCP and AI](../services/mcp.md#dates-and-the-owners-timezone).
 
 Stored data and API payloads stay UTC instants. Changing the timezone, or travelling, does not rewrite them: Tasks and events keep their instants and are shown in the new zone.

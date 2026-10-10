@@ -44,7 +44,13 @@ export async function getCalendarSummary(): Promise<CalendarSummaryState> {
   const { data, error } = await calendarClient
     .GET("/v1/events", {
       params: {
-        query: { from: from.toISOString(), to: to.toISOString(), limit: 30 },
+        query: {
+          from: from.toISOString(),
+          to: to.toISOString(),
+          // All-day events are matched as the owner's days in this zone.
+          timeZone,
+          limit: 30,
+        },
       },
     })
     .catch(() => ({ data: undefined, error: true }));
@@ -65,8 +71,8 @@ export function toCalendarSummary(
   timeZone: string = DEFAULT_TIME_ZONE,
 ): CalendarSummaryState {
   const agenda = agendaWindow(now, timeZone);
-  // Calendar matches all-day events by the UTC date of `from`, which can be
-  // the owner's yesterday; anything over before today is dropped.
+  // Calendar matches all-day events as the owner's days and timed events by
+  // overlap; anything already over before today is dropped all the same.
   const current = items.filter((event) => !endsBeforeToday(event, agenda));
   if (current.length === 0) {
     return { kind: "empty" };
