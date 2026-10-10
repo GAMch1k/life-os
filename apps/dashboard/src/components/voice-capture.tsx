@@ -19,7 +19,19 @@ import {
 
 type CaptureState = "idle" | "recording" | "uploading" | "failed";
 
-export function VoiceCapture() {
+/**
+ * The Record control. A recording is uploaded to Voice, which transcribes it
+ * and creates the Inbox item. `metadata` is added to the upload's
+ * `sourceMetadata` (with the browser's timezone), which Voice passes on to
+ * that item; `onUploaded` hears when Voice accepted the recording.
+ */
+export function VoiceCapture({
+  metadata,
+  onUploaded,
+}: {
+  metadata?: Record<string, unknown>;
+  onUploaded?: (job: VoiceJob) => void;
+}) {
   const [state, setState] = useState<CaptureState>("idle");
   const [message, setMessage] = useState(
     "Record a thought; it will be transcribed in the background.",
@@ -28,12 +40,19 @@ export function VoiceCapture() {
   const recorder = useRef<MediaRecorder | undefined>(undefined);
   const chunks = useRef<Blob[]>([]);
   const pendingAudio = useRef<Blob | undefined>(undefined);
+  const mounted = useRef(false);
 
-  useEffect(
-    () => () =>
-      recorder.current?.stream.getTracks().forEach((track) => track.stop()),
-    [],
-  );
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      // Leaving mid-recording (another page, or cancelling a Human Review
+      // edit) drops the recording: only Stop sends it. Ending the tracks
+      // would otherwise stop the recorder and upload what it has.
+      if (recorder.current) recorder.current.onstop = null;
+      recorder.current?.stream.getTracks().forEach((track) => track.stop());
+    };
+  }, []);
 
   useEffect(() => {
     if (!job || isVoiceJobTerminal(job.status)) return;
@@ -107,10 +126,11 @@ export function VoiceCapture() {
     }
     setState("uploading");
     let status: number | undefined;
+    let uploaded: VoiceJob | undefined;
     try {
       const body = new FormData();
       body.append("audio", audio, recordingFileName(audio.type));
-      body.append("sourceMetadata", JSON.stringify(captureMetadata()));
+      body.append("sourceMetadata", JSON.stringify(captureMetadata(metadata)));
       body.append("source", "web");
       const { data, error, response } = await voiceClient.POST(
         "/v1/audio-jobs",
@@ -121,12 +141,15 @@ export function VoiceCapture() {
       setJob(data);
       setState("idle");
       setMessage(voiceJobMessage(data));
+      uploaded = data;
     } catch {
       const failure = voiceUploadError(status, audio.size);
       if (!failure.retryable) pendingAudio.current = undefined;
       setState("failed");
       setMessage(failure.message);
     }
+    // Not after the control is gone, such as an edit cancelled meanwhile.
+    if (uploaded && mounted.current) onUploaded?.(uploaded);
   }
   function retry() {
     if (pendingAudio.current) void upload();
