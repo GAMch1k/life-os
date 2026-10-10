@@ -29,6 +29,8 @@ type CalendarSource struct {
 	LastModified        *string
 	CreatedAt           pgtype.Timestamptz
 	UpdatedAt           pgtype.Timestamptz
+	Preset              *string
+	PresetConfig        []byte
 }
 
 type Event struct {
