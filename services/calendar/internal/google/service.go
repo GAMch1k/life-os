@@ -276,6 +276,8 @@ func (s *Service) Connect(ctx context.Context, code, state string) (store.Google
 	s.recordConnected(ctx, row, len(entries))
 	s.recordSourcesRemoved(ctx, replaced, removedReplaced)
 	s.recordSourcesRemoved(ctx, unlisted, removedUnlisted)
+	// Upcoming Life OS events are exported to the Life OS calendar.
+	s.queueUpcoming(ctx, row)
 	s.syncer.Wake()
 	return row, nil
 }

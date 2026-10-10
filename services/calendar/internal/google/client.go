@@ -64,6 +64,7 @@ type API interface {
 	CalendarList(ctx context.Context, accessToken string) ([]CalendarEntry, error)
 	// Events reads one page of a calendar's events (see Client.Events).
 	Events(ctx context.Context, accessToken, calendarID string, query EventsQuery) (EventsPage, error)
+	Writer
 }
 
 // OAuthError is a refusal from Google's OAuth endpoints, such as

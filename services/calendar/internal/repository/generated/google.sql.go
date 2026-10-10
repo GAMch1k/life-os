@@ -100,7 +100,7 @@ func (q *Queries) CountSourceEvents(ctx context.Context, sourceID pgtype.UUID) (
 const createGoogleConnection = `-- name: CreateGoogleConnection :one
 INSERT INTO google_connections (account_email, scopes, refresh_token_ciphertext, refresh_token_nonce, access_token_expires_at)
 VALUES ($1, $2::text[], $3, $4, $5)
-RETURNING id, singleton, account_email, scopes, refresh_token_ciphertext, refresh_token_nonce, access_token_expires_at, status, last_error, connected_at, created_at, updated_at
+RETURNING id, singleton, account_email, scopes, refresh_token_ciphertext, refresh_token_nonce, access_token_expires_at, status, last_error, connected_at, created_at, updated_at, export_enabled, lifeos_calendar_id, lifeos_calendar_created_at, lifeos_calendar_note
 `
 
 type CreateGoogleConnectionParams struct {
@@ -134,6 +134,10 @@ func (q *Queries) CreateGoogleConnection(ctx context.Context, arg CreateGoogleCo
 		&i.ConnectedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ExportEnabled,
+		&i.LifeosCalendarID,
+		&i.LifeosCalendarCreatedAt,
+		&i.LifeosCalendarNote,
 	)
 	return i, err
 }
@@ -422,7 +426,7 @@ func (q *Queries) GetGoogleCalendar(ctx context.Context, id pgtype.UUID) (Google
 }
 
 const getGoogleConnection = `-- name: GetGoogleConnection :one
-SELECT id, singleton, account_email, scopes, refresh_token_ciphertext, refresh_token_nonce, access_token_expires_at, status, last_error, connected_at, created_at, updated_at FROM google_connections WHERE singleton
+SELECT id, singleton, account_email, scopes, refresh_token_ciphertext, refresh_token_nonce, access_token_expires_at, status, last_error, connected_at, created_at, updated_at, export_enabled, lifeos_calendar_id, lifeos_calendar_created_at, lifeos_calendar_note FROM google_connections WHERE singleton
 `
 
 func (q *Queries) GetGoogleConnection(ctx context.Context) (GoogleConnection, error) {
@@ -441,6 +445,10 @@ func (q *Queries) GetGoogleConnection(ctx context.Context) (GoogleConnection, er
 		&i.ConnectedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ExportEnabled,
+		&i.LifeosCalendarID,
+		&i.LifeosCalendarCreatedAt,
+		&i.LifeosCalendarNote,
 	)
 	return i, err
 }
@@ -769,7 +777,7 @@ SET scopes = $1::text[], refresh_token_ciphertext = $2,
     refresh_token_nonce = $3, access_token_expires_at = $4,
     status = 'connected', last_error = NULL, connected_at = now(), updated_at = now()
 WHERE id = $5
-RETURNING id, singleton, account_email, scopes, refresh_token_ciphertext, refresh_token_nonce, access_token_expires_at, status, last_error, connected_at, created_at, updated_at
+RETURNING id, singleton, account_email, scopes, refresh_token_ciphertext, refresh_token_nonce, access_token_expires_at, status, last_error, connected_at, created_at, updated_at, export_enabled, lifeos_calendar_id, lifeos_calendar_created_at, lifeos_calendar_note
 `
 
 type ReconnectGoogleConnectionParams struct {
@@ -803,6 +811,10 @@ func (q *Queries) ReconnectGoogleConnection(ctx context.Context, arg ReconnectGo
 		&i.ConnectedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ExportEnabled,
+		&i.LifeosCalendarID,
+		&i.LifeosCalendarCreatedAt,
+		&i.LifeosCalendarNote,
 	)
 	return i, err
 }
@@ -814,7 +826,7 @@ SET access_token_expires_at = $1,
     refresh_token_nonce = COALESCE($3, refresh_token_nonce),
     status = 'connected', last_error = NULL, updated_at = now()
 WHERE id = $4
-RETURNING id, singleton, account_email, scopes, refresh_token_ciphertext, refresh_token_nonce, access_token_expires_at, status, last_error, connected_at, created_at, updated_at
+RETURNING id, singleton, account_email, scopes, refresh_token_ciphertext, refresh_token_nonce, access_token_expires_at, status, last_error, connected_at, created_at, updated_at, export_enabled, lifeos_calendar_id, lifeos_calendar_created_at, lifeos_calendar_note
 `
 
 type RecordGoogleTokenRefreshParams struct {
@@ -847,6 +859,10 @@ func (q *Queries) RecordGoogleTokenRefresh(ctx context.Context, arg RecordGoogle
 		&i.ConnectedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ExportEnabled,
+		&i.LifeosCalendarID,
+		&i.LifeosCalendarCreatedAt,
+		&i.LifeosCalendarNote,
 	)
 	return i, err
 }
@@ -971,7 +987,7 @@ const setGoogleConnectionStatus = `-- name: SetGoogleConnectionStatus :one
 UPDATE google_connections
 SET status = $1, last_error = $2, updated_at = now()
 WHERE id = $3
-RETURNING id, singleton, account_email, scopes, refresh_token_ciphertext, refresh_token_nonce, access_token_expires_at, status, last_error, connected_at, created_at, updated_at
+RETURNING id, singleton, account_email, scopes, refresh_token_ciphertext, refresh_token_nonce, access_token_expires_at, status, last_error, connected_at, created_at, updated_at, export_enabled, lifeos_calendar_id, lifeos_calendar_created_at, lifeos_calendar_note
 `
 
 type SetGoogleConnectionStatusParams struct {
@@ -996,6 +1012,10 @@ func (q *Queries) SetGoogleConnectionStatus(ctx context.Context, arg SetGoogleCo
 		&i.ConnectedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ExportEnabled,
+		&i.LifeosCalendarID,
+		&i.LifeosCalendarCreatedAt,
+		&i.LifeosCalendarNote,
 	)
 	return i, err
 }
@@ -1089,6 +1109,11 @@ SELECT $1, item.id, NULLIF(item."recurringEventId", ''), item.data
 FROM jsonb_to_recordset($2::jsonb) AS item(id text, "recurringEventId" text, data jsonb)
 ON CONFLICT (calendar_id, event_id) DO UPDATE
 SET recurring_event_id = EXCLUDED.recurring_event_id, data = EXCLUDED.data, updated_at = now()
+WHERE NOT (
+    COALESCE(google_events.data ->> 'updated', '') ~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$'
+    AND COALESCE(EXCLUDED.data ->> 'updated', '') ~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$'
+    AND (EXCLUDED.data ->> 'updated')::timestamptz < (google_events.data ->> 'updated')::timestamptz
+)
 `
 
 type UpsertGoogleEventsParams struct {
@@ -1097,7 +1122,10 @@ type UpsertGoogleEventsParams struct {
 }
 
 // Stores Google events as sent: items is a JSON array of {"id",
-// "recurringEventId", "data"}, data being the event's JSON.
+// "recurringEventId", "data"}, data being the event's JSON. A version older
+// than the stored one (by Google's updated time, when both have one) does
+// not replace it: a listing read before one of Calendar's own writes
+// cannot undo it.
 func (q *Queries) UpsertGoogleEvents(ctx context.Context, arg UpsertGoogleEventsParams) error {
 	_, err := q.db.Exec(ctx, upsertGoogleEvents, arg.CalendarID, arg.Items)
 	return err

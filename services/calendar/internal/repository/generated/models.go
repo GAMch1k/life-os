@@ -108,18 +108,22 @@ type GoogleCalendar struct {
 }
 
 type GoogleConnection struct {
-	ID                     pgtype.UUID
-	Singleton              bool
-	AccountEmail           string
-	Scopes                 []string
-	RefreshTokenCiphertext []byte
-	RefreshTokenNonce      []byte
-	AccessTokenExpiresAt   pgtype.Timestamptz
-	Status                 string
-	LastError              *string
-	ConnectedAt            pgtype.Timestamptz
-	CreatedAt              pgtype.Timestamptz
-	UpdatedAt              pgtype.Timestamptz
+	ID                      pgtype.UUID
+	Singleton               bool
+	AccountEmail            string
+	Scopes                  []string
+	RefreshTokenCiphertext  []byte
+	RefreshTokenNonce       []byte
+	AccessTokenExpiresAt    pgtype.Timestamptz
+	Status                  string
+	LastError               *string
+	ConnectedAt             pgtype.Timestamptz
+	CreatedAt               pgtype.Timestamptz
+	UpdatedAt               pgtype.Timestamptz
+	ExportEnabled           bool
+	LifeosCalendarID        *string
+	LifeosCalendarCreatedAt pgtype.Timestamptz
+	LifeosCalendarNote      *string
 }
 
 type GoogleEvent struct {
@@ -128,6 +132,26 @@ type GoogleEvent struct {
 	RecurringEventID *string
 	Data             []byte
 	UpdatedAt        pgtype.Timestamptz
+}
+
+type GoogleExport struct {
+	EventID            pgtype.UUID
+	ConnectionID       pgtype.UUID
+	GoogleCalendarID   *string
+	GoogleEventID      *string
+	Etag               *string
+	GoogleUpdated      pgtype.Timestamptz
+	ExportedExceptions []string
+	State              string
+	Deleted            bool
+	RequestedAt        pgtype.Timestamptz
+	NextAttemptAt      pgtype.Timestamptz
+	ExportingUntil     pgtype.Timestamptz
+	Attempts           int32
+	LastError          *string
+	ExportedAt         pgtype.Timestamptz
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
 }
 
 type GoogleOauthState struct {

@@ -125,12 +125,13 @@ func (s *Syncer) Wake() {
 	}
 }
 
-// Run syncs due calendars until ctx ends.
+// Run exports Life OS events and syncs due calendars until ctx ends.
 func (s *Syncer) Run(ctx context.Context) {
 	s.logger.Info("Google Calendar sync scheduled", "every", s.interval.String())
 	ticker := time.NewTicker(s.interval)
 	defer ticker.Stop()
 	for {
+		s.ExportDue(ctx)
 		s.SyncDue(ctx)
 		select {
 		case <-ctx.Done():
@@ -400,6 +401,13 @@ func (s *Syncer) store(ctx context.Context, claimed store.GoogleCalendar, found 
 		}
 	}
 	keep, forget := partition(found.items)
+	if !found.full {
+		// Calendar's own writes come back in the next listing with the etag
+		// stored when they were made: already applied, not a change.
+		if keep, err = withoutOwnWrites(ctx, q, current.ID, keep); err != nil {
+			return store.GoogleCalendar{}, nil, err
+		}
+	}
 	if len(keep) > 0 {
 		raw, err := json.Marshal(keep)
 		if err != nil {
@@ -432,37 +440,11 @@ func (s *Syncer) store(ctx context.Context, claimed store.GoogleCalendar, found 
 	}
 	var counts *sources.Counts
 	if changed || !current.DerivedAt.Valid || now.Sub(current.DerivedAt.Time) >= rederiveAfter {
-		rows, err := q.ListGoogleEvents(ctx, current.ID)
+		gone := deletedInListing{ids: forget, full: found.full, startedAt: now}
+		result, err := s.derive(ctx, q, current, source, windowStart, zoneName, now, &gone)
 		if err != nil {
 			return store.GoogleCalendar{}, nil, err
 		}
-		events := make([]Event, 0, len(rows))
-		for _, row := range rows {
-			var event Event
-			if err := json.Unmarshal(row.Data, &event); err != nil {
-				return store.GoogleCalendar{}, nil, fmt.Errorf("decode stored Google event: %w", err)
-			}
-			events = append(events, event)
-		}
-		zone := loadZone(zoneName)
-		if zone == nil {
-			zone = s.owner
-		}
-		// Derived from the full listing's window start, but never more than
-		// SyncLookback back: incremental syncs keep the window start for
-		// months, and expanded occurrences would pile up. Older history
-		// stays as it is.
-		derivedFrom := windowStart.Time
-		if floor := now.Add(-SyncLookback); derivedFrom.Before(floor) {
-			derivedFrom = floor
-		}
-		m := mapper{owner: s.owner, zone: zone, now: now, windowStart: derivedFrom}
-		items, skipped := m.derive(events)
-		result, err := sources.Reconcile(ctx, q, source, items, sources.SyncRules(derivedFrom, s.owner), now)
-		if err != nil {
-			return store.GoogleCalendar{}, nil, err
-		}
-		result.FeedEvents, result.Skipped = len(events), skipped
 		counts = &result
 		if params.LastSyncCounts, err = json.Marshal(result); err != nil {
 			return store.GoogleCalendar{}, nil, err
@@ -474,6 +456,98 @@ func (s *Syncer) store(ctx context.Context, claimed store.GoogleCalendar, found 
 		return store.GoogleCalendar{}, nil, err
 	}
 	return updated, counts, tx.Commit(ctx)
+}
+
+// deletedInListing is what a listing says was deleted: the events it
+// reported cancelled (ids) or, for a full listing (full), every event it
+// did not list that existed before it started (startedAt).
+type deletedInListing struct {
+	ids       []string
+	full      bool
+	startedAt time.Time
+}
+
+// derive derives the calendar's events from every stored Google event and
+// reconciles them with the source's events. In the Life OS calendar, the
+// copies of exported Life OS events are not imported: a change made to one
+// in Google is applied to its Life OS event instead (see linked.go); gone
+// says which copies a listing found deleted (nil outside a sync).
+func (s *Syncer) derive(ctx context.Context, q *store.Queries, current store.GoogleCalendar, source store.CalendarSource, windowStart pgtype.Timestamptz, zoneName string, now time.Time, gone *deletedInListing) (sources.Counts, error) {
+	rows, err := q.ListGoogleEvents(ctx, current.ID)
+	if err != nil {
+		return sources.Counts{}, err
+	}
+	events := make([]Event, 0, len(rows))
+	for _, row := range rows {
+		var event Event
+		if err := json.Unmarshal(row.Data, &event); err != nil {
+			return sources.Counts{}, fmt.Errorf("decode stored Google event: %w", err)
+		}
+		events = append(events, event)
+	}
+	zone := loadZone(zoneName)
+	if zone == nil {
+		zone = s.owner
+	}
+	// Derived from the full listing's window start, but never more than
+	// SyncLookback back: incremental syncs keep the window start for
+	// months, and expanded occurrences would pile up. Older history
+	// stays as it is.
+	derivedFrom := windowStart.Time
+	if floor := now.Add(-SyncLookback); derivedFrom.Before(floor) {
+		derivedFrom = floor
+	}
+	m := mapper{owner: s.owner, zone: zone, now: now, windowStart: derivedFrom}
+	lifeOS, err := s.isLifeOSCalendar(ctx, q, current)
+	if err != nil {
+		return sources.Counts{}, err
+	}
+	var copies []Event
+	if lifeOS {
+		events, copies = splitCopies(events)
+	}
+	items, skipped := m.derive(events)
+	result, err := sources.Reconcile(ctx, q, source, items, sources.SyncRules(derivedFrom, s.owner), now)
+	if err != nil {
+		return sources.Counts{}, err
+	}
+	result.FeedEvents, result.Skipped = len(events), skipped
+	if lifeOS {
+		if err := s.followCopies(ctx, q, current, m, copies, gone, now); err != nil {
+			return sources.Counts{}, err
+		}
+	}
+	return result, nil
+}
+
+// withoutOwnWrites drops the listed events whose etag is the stored one:
+// Calendar wrote them itself and stored what Google answered.
+func withoutOwnWrites(ctx context.Context, q *store.Queries, calendar pgtype.UUID, keep []storedEvent) ([]storedEvent, error) {
+	ids := make([]string, 0, len(keep))
+	for _, item := range keep {
+		if item.Data.ETag != "" {
+			ids = append(ids, item.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return keep, nil
+	}
+	rows, err := q.ListGoogleEventETags(ctx, store.ListGoogleEventETagsParams{CalendarID: calendar, EventIds: ids})
+	if err != nil {
+		return nil, err
+	}
+	stored := make(map[string]string, len(rows))
+	for _, row := range rows {
+		stored[row.EventID] = row.Etag
+	}
+	out := keep[:0]
+	for _, item := range keep {
+		if etag, ok := stored[item.ID]; ok && etag != "" && etag == item.Data.ETag {
+			continue
+		}
+		out = append(out, item)
+	}
+	return out, nil
 }
 
 // storedEvent is one row for UpsertGoogleEvents.
