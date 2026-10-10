@@ -11,10 +11,13 @@ import (
 )
 
 type Querier interface {
+	AccountNameExists(ctx context.Context, name string) (bool, error)
 	// An account the owner already called Cash becomes the built-in one.
 	AdoptAccountAsBuiltIn(ctx context.Context, arg AdoptAccountAsBuiltInParams) (Account, error)
+	ArchiveConnectionAccounts(ctx context.Context, connectionID pgtype.UUID) ([]Account, error)
 	CountAccountTransactions(ctx context.Context, accountID pgtype.UUID) (int64, error)
 	CreateAccount(ctx context.Context, arg CreateAccountParams) (Account, error)
+	CreateBankAccount(ctx context.Context, arg CreateBankAccountParams) (Account, error)
 	CreateBuiltInAccount(ctx context.Context, arg CreateBuiltInAccountParams) (Account, error)
 	CreateCategoryRule(ctx context.Context, arg CreateCategoryRuleParams) (CategoryRule, error)
 	CreateFinancialCategory(ctx context.Context, arg CreateFinancialCategoryParams) (FinancialCategory, error)
@@ -22,7 +25,14 @@ type Querier interface {
 	CreateImportedTransaction(ctx context.Context, arg CreateImportedTransactionParams) (Transaction, error)
 	CreateTransaction(ctx context.Context, arg CreateTransactionParams) (Transaction, error)
 	DeleteCategoryRule(ctx context.Context, id pgtype.UUID) (CategoryRule, error)
+	// Pending bank transactions of the connection booked inside the sync window
+	// that the sync no longer has.
+	DeleteStalePending(ctx context.Context, arg DeleteStalePendingParams) (int64, error)
 	DeleteTransaction(ctx context.Context, id pgtype.UUID) error
+	// The pending bank transaction a new booked one replaces: same account and
+	// amount, the same counterparty ignoring case and spacing, booked at most
+	// three days apart, and absent from the sync (keep).
+	FindReplacedPending(ctx context.Context, arg FindReplacedPendingParams) (Transaction, error)
 	GetAccount(ctx context.Context, id pgtype.UUID) (Account, error)
 	GetBuiltInAccount(ctx context.Context, systemKey string) (Account, error)
 	GetCategoryRule(ctx context.Context, id pgtype.UUID) (CategoryRule, error)
@@ -32,11 +42,15 @@ type Querier interface {
 	GetMonthlyCategoryTotals(ctx context.Context, arg GetMonthlyCategoryTotalsParams) ([]GetMonthlyCategoryTotalsRow, error)
 	GetTransaction(ctx context.Context, id pgtype.UUID) (Transaction, error)
 	GetTransactionForUpdate(ctx context.Context, id pgtype.UUID) (Transaction, error)
+	// A bank account that reported a booked balance shows it; every other
+	// account shows its opening balance plus its booked transactions.
 	ListAccountsWithBalance(ctx context.Context, arg ListAccountsWithBalanceParams) ([]ListAccountsWithBalanceRow, error)
 	// The rules that may categorize: those of categories that are not archived,
 	// in the order they are tried.
 	ListActiveCategoryRules(ctx context.Context) ([]CategoryRule, error)
+	ListBankTransactions(ctx context.Context, arg ListBankTransactionsParams) ([]Transaction, error)
 	ListCategoryRules(ctx context.Context) ([]CategoryRule, error)
+	ListConnectionAccounts(ctx context.Context, connectionID pgtype.UUID) ([]Account, error)
 	ListFinancialCategories(ctx context.Context, includeArchived bool) ([]FinancialCategory, error)
 	// Transactions whose category was not chosen by hand: those without a
 	// category, plus those a rule categorized when all_categorized is set.
@@ -45,10 +59,16 @@ type Querier interface {
 	// the last row of the previous page. Every search word must occur in the
 	// counterparty, description, or notes (the words arrive LIKE-escaped).
 	ListTransactions(ctx context.Context, arg ListTransactionsParams) ([]Transaction, error)
+	// One sync of a connection at a time.
+	LockBankConnection(ctx context.Context, connectionID pgtype.UUID) error
 	LockBuiltInAccounts(ctx context.Context) error
 	// Gives each transaction the category its rule chose (null: none).
 	SetRuleCategories(ctx context.Context, arg SetRuleCategoriesParams) error
 	UpdateAccount(ctx context.Context, arg UpdateAccountParams) (Account, error)
+	// A re-sync refreshes what the bank reports; the owner's name, kind, and
+	// archive state stay. A balance the sync does not report stays as it was.
+	UpdateBankAccount(ctx context.Context, arg UpdateBankAccountParams) (Account, error)
+	UpdateBankTransaction(ctx context.Context, arg UpdateBankTransactionParams) (Transaction, error)
 	UpdateCategoryRule(ctx context.Context, arg UpdateCategoryRuleParams) (CategoryRule, error)
 	UpdateFinancialCategory(ctx context.Context, arg UpdateFinancialCategoryParams) (FinancialCategory, error)
 	UpdateTransaction(ctx context.Context, arg UpdateTransactionParams) (Transaction, error)

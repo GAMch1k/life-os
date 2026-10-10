@@ -880,7 +880,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `account_name_taken`, `account_has_transactions`, or `built_in_account` */
+            /** @description `account_name_taken`, `account_has_transactions`, `built_in_account`, or `managed_by_source` (the currency of a bank account) */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -972,7 +972,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `account_archived`, `category_archived`, or `idempotency_conflict` */
+            /** @description `account_archived`, `managed_by_source` (a bank account), `category_archived`, or `idempotency_conflict` */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -1112,7 +1112,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description `managed_by_source`, `account_archived`, or `category_archived` */
+            /** @description `managed_by_source` (an imported transaction, or a move to a bank account), `account_archived`, or `category_archived` */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -1512,7 +1512,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description The account is archived (`account_archived`) */
+            /** @description The account is archived (`account_archived`) or a bank account (`managed_by_source`) */
             409: {
                 headers: {
                     [name: string]: unknown;

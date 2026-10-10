@@ -35,6 +35,10 @@ const (
 	rulesApplied       = "finance.category_rules.applied"
 	importCompleted    = "finance.import.completed"
 	importFailed       = "finance.import.failed"
+	// A bank sync is one summary event with its counts, never transaction
+	// details.
+	bankImportCompleted   = "finance.bank_import.completed"
+	bankConnectionRemoved = "finance.bank_connection.removed"
 )
 
 // emit records one event. With a request, the event carries its actor,

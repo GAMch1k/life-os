@@ -9,18 +9,26 @@ import (
 )
 
 type Account struct {
-	ID                  pgtype.UUID
-	Name                string
-	Currency            string
-	OpeningBalanceMinor int64
-	CreatedAt           pgtype.Timestamptz
-	UpdatedAt           pgtype.Timestamptz
-	Kind                string
-	SystemKey           *string
-	ArchivedAt          pgtype.Timestamptz
-	SourceKind          string
-	ConnectionID        pgtype.UUID
-	ExternalID          *string
+	ID                    pgtype.UUID
+	Name                  string
+	Currency              string
+	OpeningBalanceMinor   int64
+	CreatedAt             pgtype.Timestamptz
+	UpdatedAt             pgtype.Timestamptz
+	Kind                  string
+	SystemKey             *string
+	ArchivedAt            pgtype.Timestamptz
+	SourceKind            string
+	ConnectionID          pgtype.UUID
+	ExternalID            *string
+	Provider              *string
+	Institution           *string
+	IbanMasked            *string
+	BookedBalanceMinor    *int64
+	BookedBalanceDate     pgtype.Date
+	AvailableBalanceMinor *int64
+	AvailableBalanceDate  pgtype.Date
+	SyncedAt              pgtype.Timestamptz
 }
 
 type CategoryRule struct {
@@ -66,4 +74,6 @@ type Transaction struct {
 	ConnectionID             pgtype.UUID
 	CategorizedBy            *string
 	CategoryRuleID           pgtype.UUID
+	MerchantCategoryCode     *string
+	BankReference            *string
 }

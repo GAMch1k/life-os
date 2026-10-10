@@ -163,3 +163,36 @@ func TestWorkspaceMigrationPreservesLedgerDataAndRollsBack(t *testing.T) {
 }
 
 func ptr[T any](value T) *T { return &value }
+
+func TestBankImportMigrationRollsBackAndForward(t *testing.T) {
+	pool := testdb.Open(t, "")
+	ctx := context.Background()
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := pool.Exec(ctx, sql, args...); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	var accountID string
+	if err := pool.QueryRow(ctx, `INSERT INTO accounts (name, currency, kind, source_kind, connection_id, external_id, booked_balance_minor, booked_balance_date)
+	      VALUES ('DB Giro', 'EUR', 'bank', 'bank', gen_random_uuid(), 'acc-1', 5000, '2026-10-10') RETURNING id`).Scan(&accountID); err != nil {
+		t.Fatal(err)
+	}
+	exec(`INSERT INTO transactions (account_id, amount_minor, currency, occurred_on, import_source, import_external_id, connection_id, merchant_category_code)
+	      SELECT id, -500, 'EUR', '2026-10-02', 'bank', 't1', connection_id, '5411' FROM accounts WHERE id = $1`, accountID)
+	// The same bank id twice in one connection is refused.
+	if _, err := pool.Exec(ctx, `INSERT INTO transactions (account_id, amount_minor, currency, occurred_on, import_source, import_external_id, connection_id)
+	      SELECT id, -1, 'EUR', '2026-10-02', 'bank', 't1', connection_id FROM accounts WHERE id = $1`, accountID); err == nil {
+		t.Fatal("a duplicate bank transaction id was accepted")
+	}
+	// A booked balance needs its date.
+	if _, err := pool.Exec(ctx, `UPDATE accounts SET booked_balance_date = NULL WHERE id = $1`, accountID); err == nil {
+		t.Fatal("a booked balance without a date was accepted")
+	}
+	testdb.Apply(t, pool, testdb.Migration(t, "000005", "down"))
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM transactions WHERE connection_id IS NOT NULL`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("bank transactions after rollback: %d %v", count, err)
+	}
+	testdb.Apply(t, pool, testdb.Migration(t, "000005", "up"))
+}

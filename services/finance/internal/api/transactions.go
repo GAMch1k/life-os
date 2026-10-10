@@ -43,6 +43,7 @@ func transactionView(item store.Transaction) generated.Transaction {
 		BookingDate: types.Date{Time: item.OccurredOn.Time}, ValueDate: nullableDate(item.ValueDate),
 		Status: generated.TransactionStatus(item.Status), Counterparty: item.Counterparty, Description: item.Description,
 		Notes: item.Note, CategoryId: nullableUUID(item.CategoryID), CategoryRuleId: nullableUUID(item.CategoryRuleID),
+		MerchantCategoryCode: item.MerchantCategoryCode, BankReference: item.BankReference,
 		Source: generated.TransactionSource{Kind: generated.TransactionSourceKind(sourceKind(item)), ConnectionId: nullableUUID(item.ConnectionID),
 			ExternalId: item.ImportExternalID},
 		ReadOnly: item.ImportSource != nil, CreatedAt: item.CreatedAt.Time.UTC(), UpdatedAt: item.UpdatedAt.Time.UTC(),
@@ -196,6 +197,9 @@ func usableAccount(ctx context.Context, q *store.Queries, id pgtype.UUID) (store
 	}
 	if account.ArchivedAt.Valid {
 		return store.Account{}, apiError(fiber.StatusConflict, "account_archived", "The account "+account.Name+" is archived")
+	}
+	if account.SourceKind == "bank" {
+		return store.Account{}, apiError(fiber.StatusConflict, "managed_by_source", "The transactions of "+account.Name+" come from its bank")
 	}
 	return account, nil
 }

@@ -275,6 +275,7 @@ var (
 	ErrAccountRequired = errors.New("account required")
 	ErrUnknownAccount  = errors.New("unknown account")
 	ErrAccountArchived = errors.New("account archived")
+	ErrAccountManaged  = errors.New("bank account")
 )
 
 // Input is what an import needs besides the file.
@@ -292,8 +293,8 @@ type Result struct {
 }
 
 // Import stores the parsed rows. It returns an error for a request it cannot
-// serve at all (ErrAccountRequired, ErrUnknownAccount, ErrAccountArchived)
-// or a failing database; row problems are counted and reported instead.
+// serve at all (ErrAccountRequired, ErrUnknownAccount, ErrAccountArchived,
+// ErrAccountManaged) or a failing database; row problems are counted and reported instead.
 func Import(ctx context.Context, queries Store, parsed Parsed, input Input) (Result, error) {
 	result := Result{Failed: len(parsed.Errors), Errors: append([]Error(nil), parsed.Errors...)}
 	accounts := map[uuid.UUID]*store.Account{}
@@ -322,6 +323,9 @@ func Import(ctx context.Context, queries Store, parsed Parsed, input Input) (Res
 		}
 		if account.ArchivedAt.Valid {
 			return Result{}, ErrAccountArchived
+		}
+		if account.SourceKind == "bank" {
+			return Result{}, ErrAccountManaged
 		}
 		result.Account = account
 	} else if !parsed.HasAccountColumn {
@@ -360,6 +364,10 @@ func Import(ctx context.Context, queries Store, parsed Parsed, input Input) (Res
 			}
 			if found.ArchivedAt.Valid {
 				fail(row, "the account is archived")
+				continue
+			}
+			if found.SourceKind == "bank" {
+				fail(row, "the account's transactions come from its bank")
 				continue
 			}
 			account = found

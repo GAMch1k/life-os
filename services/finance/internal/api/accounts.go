@@ -187,6 +187,9 @@ func (h *Handler) UpdateAccount(c fiber.Ctx, accountID types.UUID) error {
 			}
 		}
 		if params.Currency != nil && *params.Currency != before.Currency {
+			if before.SourceKind == "bank" {
+				return apiError(fiber.StatusConflict, "managed_by_source", "A bank account keeps the currency its bank reports")
+			}
 			count, err := q.CountAccountTransactions(c.Context(), params.ID)
 			if err != nil {
 				return err
@@ -235,14 +238,23 @@ func (h *Handler) accountWithBalance(ctx context.Context, q *store.Queries, id p
 }
 
 func accountView(row store.ListAccountsWithBalanceRow) generated.Account {
-	return generated.Account{
+	view := generated.Account{
 		Id: uuid(row.ID), Name: row.Name, Kind: generated.AccountKind(row.Kind), Currency: row.Currency,
 		OpeningBalance: money(row.OpeningBalanceMinor, row.Currency), Balance: money(row.BalanceMinor, row.Currency),
 		Pending: money(row.PendingMinor, row.Currency), TransactionCount: int(row.TransactionCount),
 		BuiltIn: row.SystemKey != nil, Archived: row.ArchivedAt.Valid, ArchivedAt: nullableTime(row.ArchivedAt),
-		Source:    generated.AccountSource{Kind: generated.AccountSourceKind(row.SourceKind), ConnectionId: nullableUUID(row.ConnectionID), ExternalId: row.ExternalID},
+		Source: generated.AccountSource{Kind: generated.AccountSourceKind(row.SourceKind), ConnectionId: nullableUUID(row.ConnectionID), ExternalId: row.ExternalID,
+			Provider: row.Provider, Institution: row.Institution, IbanMasked: row.IbanMasked, SyncedAt: nullableTime(row.SyncedAt)},
 		CreatedAt: row.CreatedAt.Time.UTC(), UpdatedAt: row.UpdatedAt.Time.UTC(),
 	}
+	if row.SourceKind == "bank" {
+		// The balance query shows the bank's booked balance when it has one.
+		view.BalanceAsOf = nullableDate(row.BookedBalanceDate)
+		if row.AvailableBalanceMinor != nil {
+			view.Available = pointer(money(*row.AvailableBalanceMinor, row.Currency))
+		}
+	}
+	return view
 }
 
 // classifyAccountUpdate names what an update did: archived, restored, or

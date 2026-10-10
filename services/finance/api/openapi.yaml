@@ -105,7 +105,7 @@ paths:
         '200': {description: Account, content: {application/json: {schema: {$ref: '#/components/schemas/Account'}}}}
         '400': {description: 'Invalid request (`invalid_request`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
         '404': {description: Account not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
-        '409': {description: '`account_name_taken`, `account_has_transactions`, or `built_in_account`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`account_name_taken`, `account_has_transactions`, `built_in_account`, or `managed_by_source` (the currency of a bank account)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
   /v1/transactions:
     get:
       summary: List, search, and filter transactions
@@ -151,7 +151,7 @@ paths:
       responses:
         '201': {description: Transaction, content: {application/json: {schema: {$ref: '#/components/schemas/Transaction'}}}}
         '400': {description: 'Invalid request (`invalid_request`, `unknown_account`, `unknown_category`, `currency_mismatch`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
-        '409': {description: '`account_archived`, `category_archived`, or `idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`account_archived`, `managed_by_source` (a bank account), `category_archived`, or `idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
   /v1/transactions/{transactionId}:
     get:
       summary: Get a transaction
@@ -180,7 +180,7 @@ paths:
         '200': {description: Transaction, content: {application/json: {schema: {$ref: '#/components/schemas/Transaction'}}}}
         '400': {description: 'Invalid request (`invalid_request`, `unknown_account`, `unknown_category`, `currency_mismatch`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
         '404': {description: Transaction not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
-        '409': {description: '`managed_by_source`, `account_archived`, or `category_archived`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`managed_by_source` (an imported transaction, or a move to a bank account), `account_archived`, or `category_archived`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
     delete:
       summary: Delete a manual transaction
       description: Deletes a manual transaction permanently. Imported transactions cannot be deleted (409 `managed_by_source`).
@@ -352,7 +352,7 @@ paths:
       responses:
         '200': {description: Import result, content: {application/json: {schema: {$ref: '#/components/schemas/CsvImport'}}}}
         '400': {description: 'Unreadable CSV or missing columns (`invalid_csv`), no account (`account_required`), an unknown account (`unknown_account`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
-        '409': {description: The account is archived (`account_archived`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: 'The account is archived (`account_archived`) or a bank account (`managed_by_source`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
   /v1/imports/bank:
     post:
       summary: Import one bank sync

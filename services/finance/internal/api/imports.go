@@ -52,6 +52,8 @@ func (h *Handler) CreateCsvImport(c fiber.Ctx, params generated.CreateCsvImportP
 		return apiError(fiber.StatusBadRequest, "unknown_account", "accountId is not a Finance account")
 	case errors.Is(err, importer.ErrAccountArchived):
 		return apiError(fiber.StatusConflict, "account_archived", "The account is archived")
+	case errors.Is(err, importer.ErrAccountManaged):
+		return apiError(fiber.StatusConflict, "managed_by_source", "The transactions of a bank account come from its bank")
 	case err != nil:
 		return internal(err)
 	}
