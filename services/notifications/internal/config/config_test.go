@@ -107,3 +107,24 @@ func TestLoadFromRejectsInvalidDeliverySettings(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadFromReadsTheNtfyChannel(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := LoadFrom(mapLookup(map[string]string{
+		"DATABASE_URL":                "postgres://notifications_user:secret@localhost/notifications_db",
+		"NOTIFICATIONS_CHANNELS":      "ntfy",
+		"NOTIFICATIONS_NTFY_URL":      "http://ntfy:80",
+		"NOTIFICATIONS_NTFY_TOKEN":    "tk_abcdefghijklmnopqrstuvwxyz012",
+		"NOTIFICATIONS_LINK_BASE_URL": "https://lifeos.example.com",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.NtfyURL != "http://ntfy:80" || cfg.NtfyTopic != "lifeos" || cfg.NtfyToken == "" || cfg.LinkBaseURL != "https://lifeos.example.com" {
+		t.Fatalf("unexpected ntfy settings: url %q topic %q link base %q", cfg.NtfyURL, cfg.NtfyTopic, cfg.LinkBaseURL)
+	}
+	if got := cfg.ChannelNames(); len(got) != 1 || got[0] != "ntfy" {
+		t.Fatalf("channels = %v, want [ntfy]", got)
+	}
+}

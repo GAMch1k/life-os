@@ -72,14 +72,14 @@ func TestErrorClassification(t *testing.T) {
 }
 
 func TestBuildChannels(t *testing.T) {
-	channels, err := Build([]string{"log"}, nil)
+	channels, err := Build([]string{"log"}, Settings{})
 	if err != nil || len(channels) != 1 || channels[0].Name() != "log" {
 		t.Fatalf("Build(log) = %v, %v", channels, err)
 	}
-	if _, err := Build([]string{"ntfy-typo"}, nil); err == nil {
+	if _, err := Build([]string{"ntfy-typo"}, Settings{}); err == nil {
 		t.Fatal("an unknown channel must be an error")
 	}
-	if channels, err := Build(nil, nil); err != nil || len(channels) != 0 {
+	if channels, err := Build(nil, Settings{}); err != nil || len(channels) != 0 {
 		t.Fatalf("Build(nil) = %v, %v", channels, err)
 	}
 }
