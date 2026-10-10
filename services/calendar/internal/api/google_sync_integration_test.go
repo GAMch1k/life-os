@@ -18,6 +18,7 @@ import (
 	"github.com/GAMch1k/life-os/pkg/activity"
 	"github.com/GAMch1k/life-os/services/calendar/internal/api/generated"
 	"github.com/GAMch1k/life-os/services/calendar/internal/google"
+	"github.com/GAMch1k/life-os/services/calendar/internal/google/fakegoogle"
 )
 
 // These tests drive Google inbound sync against the fake Google: the
@@ -592,5 +593,37 @@ func TestGoogleSyncResumesAfterRestartAndRunsOncePerCalendar(t *testing.T) {
 	var stored int
 	if err := c.pool.QueryRow(context.Background(), `SELECT count(*) FROM events WHERE source_kind = 'google'`).Scan(&stored); err != nil || stored != 2 {
 		t.Fatalf("stored events = %d, %v", stored, err)
+	}
+}
+
+func TestGoogleSyncCalendarNoLongerListedRemovesItsEvents(t *testing.T) {
+	c := newSyncingClient(t, googleDentist)
+	c.fake.PutEvent(familyCalendar.ID, google.Event{ID: "dinner", Summary: "Family dinner", Start: gtimed("2026-10-18T18:00:00+02:00"), End: gtimed("2026-10-18T20:00:00+02:00")})
+	family := c.googleCalendar(familyCalendar.ID)
+	c.call(http.MethodPatch, "/v1/google/calendars/"+family.Id.String(), map[string]any{"syncEnabled": true}, http.StatusOK, nil)
+	c.syncDue()
+	seen := len(c.recorder.all())
+
+	// A list without the primary calendar is a fault at Google: refused,
+	// nothing removed.
+	c.fake.Lock()
+	c.fake.Calendars = []fakegoogle.Calendar{familyCalendar}
+	c.fake.Unlock()
+	c.failure(http.MethodPost, "/v1/google/calendars/refresh", nil, http.StatusBadGateway, "google_rejected")
+	if events := c.googleEvents("2026-10-10T00:00:00Z", "2026-11-01T00:00:00Z"); len(events) != 2 {
+		t.Fatalf("after a list without the primary: %q", titles(events))
+	}
+
+	// The family calendar is gone from Google: dropped with its events.
+	c.fake.Lock()
+	c.fake.Calendars = []fakegoogle.Calendar{ownerCalendar}
+	c.fake.Unlock()
+	c.call(http.MethodPost, "/v1/google/calendars/refresh", nil, http.StatusOK, nil)
+	removed := expectRecorded(t, c.recorder, &seen, google.EventSourceRemoved)[0]
+	if removed.Data["reason"] != "calendar_unlisted" || removed.Summary != "Google no longer lists Family: its 1 event removed from Life OS" {
+		t.Fatalf("removed = %+v", removed)
+	}
+	if events := c.googleEvents("2026-10-10T00:00:00Z", "2026-11-01T00:00:00Z", "includeCancelled", "true"); len(events) != 1 || events[0].Title != "Dentist" {
+		t.Fatalf("after the family calendar left: %q", titles(events))
 	}
 }

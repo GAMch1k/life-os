@@ -429,6 +429,12 @@ func (s *Service) RefreshCalendars(ctx context.Context) ([]store.GoogleCalendar,
 	if err != nil {
 		return nil, err
 	}
+	if primaryID(entries) == "" {
+		// Every account has a primary calendar: a list without one is a
+		// fault at Google, and applying it would drop every calendar and
+		// the events synced from them.
+		return nil, ErrNoPrimary
+	}
 	var calendars []store.GoogleCalendar
 	var unlisted []removedSource
 	err = s.inTx(ctx, func(q *store.Queries) error {
