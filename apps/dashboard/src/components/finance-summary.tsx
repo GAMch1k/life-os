@@ -1,14 +1,7 @@
-import { Landmark } from "lucide-react";
-
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { FinanceImport } from "@/components/finance-import";
-import type { FinanceSummaryState } from "@/lib/finance-summary";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { CSV_COLUMNS, FinanceImport } from "@/components/finance-import";
+import { type FinanceSummaryState, monthLabel } from "@/lib/finance-summary";
+import { cn } from "@/lib/utils";
 
 function money(amount: number, currency: string) {
   return new Intl.NumberFormat("en", {
@@ -19,115 +12,129 @@ function money(amount: number, currency: string) {
 }
 
 export function FinanceSummary({ state }: { state: FinanceSummaryState }) {
-  if (state.kind === "unavailable") {
-    return (
-      <Card id="finance">
-        <CardHeader>
-          <CardTitle>Finance</CardTitle>
-          <CardDescription>
-            Finance is temporarily unavailable. Your data has not been replaced
-            with placeholders.
-          </CardDescription>
-        </CardHeader>
-      </Card>
-    );
-  }
-
-  if (state.kind === "empty") {
-    return <EmptyFinance />;
-  }
-
-  const { summary } = state;
-  const netTone =
-    summary.net.amount >= 0 ? "text-emerald-600" : "text-rose-600";
-
   return (
-    <Card id="finance">
-      <CardHeader>
-        <div className="flex items-center gap-2">
-          <Landmark aria-hidden="true" className="size-4" />
-          <CardTitle>Finance</CardTitle>
-        </div>
-        <CardDescription>
-          Current balance and this month&apos;s cash flow.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <section className="bg-muted/50 rounded-lg p-4 sm:col-span-2">
-          <p className="text-muted-foreground text-xs font-medium">
-            Current balance
+    <div className="mx-auto max-w-5xl space-y-3" id="finance">
+      <div className="relative flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+        <h1 className="flex items-baseline gap-2 text-lg font-semibold tracking-tight">
+          Finance
+          <span className="text-muted-foreground text-sm font-normal">
+            {monthLabel(state.month)}
+          </span>
+        </h1>
+        {state.kind === "unavailable" ? null : <FinanceImport />}
+      </div>
+      {state.kind === "unavailable" ? (
+        <p className="text-muted-foreground text-sm">
+          Finance is unavailable right now.
+        </p>
+      ) : state.kind === "empty" ? (
+        <>
+          <p className="text-muted-foreground text-sm">
+            No transactions this month yet. Import a CSV to see your cash flow.
           </p>
-          <p className="mt-1 text-3xl font-semibold tracking-tight">
-            {money(summary.totalBalance.amount, summary.totalBalance.currency)}
-          </p>
-        </section>
+          <CsvHint />
+        </>
+      ) : (
+        <ReadyFinance summary={state.summary} />
+      )}
+    </div>
+  );
+}
+
+function ReadyFinance({
+  summary,
+}: {
+  summary: Extract<FinanceSummaryState, { kind: "ready" }>["summary"];
+}) {
+  return (
+    <>
+      <div className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-4">
+        <Metric
+          label="Balance"
+          value={money(
+            summary.totalBalance.amount,
+            summary.totalBalance.currency,
+          )}
+        />
         <Metric
           label="Income"
-          money={money(summary.income.amount, summary.income.currency)}
+          value={money(summary.income.amount, summary.income.currency)}
         />
         <Metric
           label="Expenses"
-          money={money(summary.spending.amount, summary.spending.currency)}
+          value={money(summary.spending.amount, summary.spending.currency)}
         />
-        <section className="rounded-lg border p-4 sm:col-span-2 lg:col-span-4">
-          <p className="text-muted-foreground text-xs font-medium">
-            Monthly net
-          </p>
-          <p className={`mt-1 text-2xl font-semibold ${netTone}`}>
-            {money(summary.net.amount, summary.net.currency)}
-          </p>
-        </section>
-        <section className="sm:col-span-2 lg:col-span-4">
-          <p className="text-muted-foreground mb-2 text-xs font-medium">
-            Spending by category
-          </p>
+        <Metric
+          className={
+            summary.net.amount >= 0 ? "text-success" : "text-destructive"
+          }
+          label="Net this month"
+          value={money(summary.net.amount, summary.net.currency)}
+        />
+      </div>
+      <Card size="sm">
+        <CardHeader>
+          <CardTitle>Spending by category</CardTitle>
+        </CardHeader>
+        <CardContent>
           {summary.spendingByCategory.length === 0 ? (
-            <p className="text-muted-foreground text-sm">
+            <p className="text-muted-foreground">
               No categorized spending this month.
             </p>
           ) : (
-            <ul className="divide-y rounded-lg border">
+            <ul className="divide-y">
               {summary.spendingByCategory.map((category) => (
                 <li
-                  className="flex items-center justify-between gap-4 px-4 py-3 text-sm"
+                  className="flex items-baseline justify-between gap-3 py-1.5 first:pt-0 last:pb-0"
                   key={category.categoryId}
                 >
-                  <span>{category.categoryName}</span>
-                  <span className="font-medium">
+                  <span className="min-w-0 wrap-anywhere">
+                    {category.categoryName}
+                  </span>
+                  <span className="shrink-0 font-medium tabular-nums">
                     {money(category.amount.amount, category.amount.currency)}
                   </span>
                 </li>
               ))}
             </ul>
           )}
-        </section>
-        <FinanceImport />
-      </CardContent>
-    </Card>
+        </CardContent>
+      </Card>
+      <CsvHint />
+    </>
   );
 }
 
-function EmptyFinance() {
+function CsvHint() {
   return (
-    <Card id="finance">
-      <CardHeader>
-        <CardTitle>Finance</CardTitle>
-        <CardDescription>
-          Import transactions to start seeing this month&apos;s cash flow.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="grid gap-4">
-        <FinanceImport />
-      </CardContent>
-    </Card>
+    <p className="text-muted-foreground text-xs wrap-anywhere">
+      CSV columns: {CSV_COLUMNS}.
+    </p>
   );
 }
 
-function Metric({ label, money }: { label: string; money: string }) {
+function Metric({
+  className,
+  label,
+  value,
+}: {
+  className?: string;
+  label: string;
+  value: string;
+}) {
   return (
-    <section className="rounded-lg border p-4">
-      <p className="text-muted-foreground text-xs font-medium">{label}</p>
-      <p className="mt-1 text-xl font-semibold">{money}</p>
-    </section>
+    <Card size="sm">
+      <CardContent>
+        <p className="text-muted-foreground text-xs font-medium">{label}</p>
+        <p
+          className={cn(
+            "mt-0.5 text-lg font-semibold tracking-tight wrap-anywhere tabular-nums sm:text-xl",
+            className,
+          )}
+        >
+          {value}
+        </p>
+      </CardContent>
+    </Card>
   );
 }
