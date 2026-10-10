@@ -19,6 +19,7 @@ export default async function FinancePage() {
       key={timeZone}
       month={month}
       state={await getFinanceWorkspace(month)}
+      timeZone={timeZone}
       today={dayKey(now, timeZone)}
     />
   );

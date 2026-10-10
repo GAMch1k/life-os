@@ -2,7 +2,7 @@
 
 Internal service paths begin `/v1`; external/browser paths prepend the gateway base. Every service provides `GET /health` and `GET /ready`. Successful JSON is the entity/list schema in its OpenAPI file; malformed bodies, invalid UUID/date/query values, and invalid state return 400; an absent entity returns 404; unexpected failures return a safe 5xx error envelope.
 
-Every write (`POST`, `PUT`, `PATCH`, `DELETE`) to Finance, Tasks, Inbox, Calendar, Voice, or Notifications must say who makes it in the `X-Life-OS-Actor` header: `user` (the owner; the Dashboard sends it), `agent:<name>` (the Life OS AI), `system:<name>` (a Life OS component), or `dev:<name>` (a development tool or agent, for example `dev:claude-code`). Names are 1–64 letters, digits, `.`, `_`, or `-`. A write without a valid actor returns 400 with error code `actor_required`; nothing is recorded as the owner by default. Reads need no actor. Through the gateway only `user` and `dev:<name>` are accepted; `agent:`/`system:` claims are dropped. See [Activity](../services/activity.md#actors).
+Every write (`POST`, `PUT`, `PATCH`, `DELETE`) to Finance, Tasks, Inbox, Calendar, Voice, Notifications, or Banking must say who makes it in the `X-Life-OS-Actor` header: `user` (the owner; the Dashboard sends it), `agent:<name>` (the Life OS AI), `system:<name>` (a Life OS component), or `dev:<name>` (a development tool or agent, for example `dev:claude-code`). Names are 1–64 letters, digits, `.`, `_`, or `-`. A write without a valid actor returns 400 with error code `actor_required`; nothing is recorded as the owner by default. Reads need no actor. Through the gateway only `user` and `dev:<name>` are accepted; `agent:`/`system:` claims are dropped. See [Activity](../services/activity.md#actors).
 
 | Owner (gateway base) | API |
 | --- | --- |
@@ -13,6 +13,7 @@ Every write (`POST`, `PUT`, `PATCH`, `DELETE`) to Finance, Tasks, Inbox, Calenda
 | Voice (`/api/voice`) | `POST /v1/audio-jobs` (multipart audio, returns 202), `GET /v1/audio-jobs/{id}` |
 | Activity (`/api/activity`, read-only) | `GET /v1/activity-events` (filters: `correlationId`, `subjectType`/`subjectId`, `type`, `source`, `outcome`, `from`/`to`), `GET /v1/activity-events/{id}`; recording is internal only — see [Activity](../services/activity.md) |
 | Notifications (`/api/notifications`) | `GET/POST /v1/notifications` (filters: `importance`, `category` prefix, `source`, `unread`; `dedupeKey` makes sending idempotent), `GET /v1/notifications/{id}`, `POST /v1/notifications/{id}/read`, `POST /v1/notifications/read-all`, `GET /v1/notifications/unread-count`; see [Notifications](../services/notifications.md) |
+| Banking (`/api/integrations/banking`) | `GET /v1/connections`, `POST /v1/connections/authorize` (the bank's consent page), `POST /v1/connections` (the callback's `code` and `state`), `POST /v1/connections/{id}/sync` (owner-present, at most every 10 minutes), `DELETE /v1/connections/{id}`; see [Banking](../services/banking.md) |
 | Dashboard (`/api/status`) | `GET /api/status`: the Status page's checks as JSON, never cached; the [monitor](../services/monitor.md) polls it |
 | MCP (`/api/mcp`) | Streamable HTTP endpoint at `/mcp`; health and readiness probes |
 

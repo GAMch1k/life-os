@@ -121,6 +121,52 @@ services:
     networks: [backend, notify-internal]
     restart: unless-stopped
 
+  banking-migrate:
+    image: migrate/migrate:v4.18.3
+    command: ["-path", "/migrations", "-database", "postgres://banking_user:${LIFE_OS_BANKING_DB_PASSWORD}@postgres:5432/banking_db?sslmode=disable", "up"]
+    volumes: ["./services/banking/db/migrations:/migrations:ro"]
+    depends_on: {postgres: {condition: service_healthy}}
+    networks: [backend]
+    restart: "no"
+  # The bank integration (docs/services/banking.md): read-only Enable Banking
+  # consent, scheduled syncs pushed into Finance through its bank import API.
+  # The application's private key is bind-mounted read-only from the host
+  # path in LIFE_OS_ENABLE_BANKING_KEY_FILE (unset: an empty /dev/null, and
+  # banking reports "not configured"); the container runs as
+  # LIFE_OS_BANKING_RUNTIME_UID, the key file's owner, with a read-only root.
+  # It reaches api.enablebanking.com through the backend network's outbound
+  # access and publishes nothing; the gateway routes /api/integrations/banking/.
+  banking:
+    build: {context: ., dockerfile: services/banking/Dockerfile}
+    environment:
+      SERVICE_NAME: banking
+      PORT: 8080
+      DATABASE_URL: "postgres://banking_user:${LIFE_OS_BANKING_DB_PASSWORD}@postgres:5432/banking_db?sslmode=disable"
+      FINANCE_SERVICE_URL: http://finance:8080
+      NOTIFICATIONS_SERVICE_URL: http://notifications:8080
+      ACTIVITY_SERVICE_URL: http://activity:8080
+      LIFE_OS_TIMEZONE: "${LIFE_OS_TIMEZONE:-UTC}"
+      LIFE_OS_ENABLE_BANKING_APP_ID: "${LIFE_OS_ENABLE_BANKING_APP_ID:-}"
+      LIFE_OS_ENABLE_BANKING_KEY_FILE: /run/secrets/enablebanking.pem
+      LIFE_OS_BANKING_TOKEN_KEY: "${LIFE_OS_BANKING_TOKEN_KEY:-}"
+      LIFE_OS_BANKING_REDIRECT_URI: "${LIFE_OS_BANKING_REDIRECT_URI:-https://lifeos.gamch1k.com/finance/bank/callback}"
+      BANKING_SYNC_TIMES: "${LIFE_OS_BANKING_SYNC_TIMES:-06:00,12:00,18:00,23:00}"
+    volumes:
+      - type: bind
+        source: "${LIFE_OS_ENABLE_BANKING_KEY_FILE:-/dev/null}"
+        target: /run/secrets/enablebanking.pem
+        read_only: true
+    user: "${LIFE_OS_BANKING_RUNTIME_UID:-1000}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    expose: ["8080"]
+    depends_on:
+      banking-migrate: {condition: service_completed_successfully}
+      finance: {condition: service_started}
+    networks: [backend]
+    restart: unless-stopped
+
   dashboard:
     build: {context: ., dockerfile: apps/dashboard/Dockerfile}
     environment:
@@ -133,6 +179,7 @@ services:
       NOTIFICATIONS_SERVICE_URL: http://notifications:8080
       PROCESSOR_STATUS_URL: http://processor:8081
       MONITOR_SERVICE_URL: http://monitor:8080
+      BANKING_SERVICE_URL: http://banking:8080
       LIFE_OS_TIMEZONE: ${LIFE_OS_TIMEZONE:-UTC}
     expose: ["3000"]
     depends_on:
@@ -300,6 +347,7 @@ services:
       voice: {condition: service_started}
       activity: {condition: service_started}
       notifications: {condition: service_started}
+      banking: {condition: service_started}
     # edge: how the Cloudflare connector reaches the gateway (and only it).
     networks: [backend, edge]
     restart: unless-stopped

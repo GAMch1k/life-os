@@ -3,6 +3,7 @@ go 1.27.1
 use (
 	./pkg
 	./services/activity
+	./services/banking
 	./services/calendar
 	./services/finance
 	./services/inbox

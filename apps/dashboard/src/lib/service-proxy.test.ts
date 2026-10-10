@@ -62,3 +62,37 @@ test("the service proxy passes on an Idempotency-Key", async () => {
   }
   assert.equal(seen, "dashboard-abc");
 });
+
+test("the service proxy passes on the extra headers a route asks for", async () => {
+  const original = globalThis.fetch;
+  let seen: Headers | undefined;
+  globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    seen = new Headers(init?.headers);
+    return Response.json({});
+  }) as typeof fetch;
+  try {
+    const request = new NextRequest(
+      "http://dashboard.test/api/integrations/banking/v1/connections/c/sync",
+      {
+        method: "POST",
+        headers: {
+          "X-Life-OS-Actor": "user",
+          "User-Agent": "Firefox",
+          "X-Real-IP": "203.0.113.7",
+          Cookie: "secret=1",
+        },
+      },
+    );
+    await proxyServiceRequest(
+      request,
+      { params: Promise.resolve({ path: ["v1", "connections", "c", "sync"] }) },
+      "http://banking.test",
+      { forwardHeaders: ["user-agent", "x-real-ip"] },
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
+  assert.equal(seen?.get("user-agent"), "Firefox");
+  assert.equal(seen?.get("x-real-ip"), "203.0.113.7");
+  assert.equal(seen?.get("cookie"), null);
+});

@@ -8,6 +8,7 @@ import {
   type AccountDialogState,
   FinanceAccounts,
 } from "@/components/finance-accounts";
+import { BankConnections } from "@/components/bank-connections";
 import { FinanceCategories } from "@/components/finance-categories";
 import { FinanceImport } from "@/components/finance-import";
 import { FinanceSummary } from "@/components/finance-summary";
@@ -74,8 +75,11 @@ export function FinanceWorkspace({
   state,
   month,
   today,
+  timeZone,
 }: {
   state: FinanceWorkspaceState;
+  /** The zone the bank connection's times are shown in. */
+  timeZone: string;
   /** The owner's current month (YYYY-MM). */
   month: string;
   /** The owner's today (YYYY-MM-DD), decided once by the server render. */
@@ -94,19 +98,29 @@ export function FinanceWorkspace({
             </CardDescription>
           </CardHeader>
         </Card>
+        <BankConnections timeZone={timeZone} />
       </div>
     );
-  return <ReadyWorkspace initial={state} month={month} today={today} />;
+  return (
+    <ReadyWorkspace
+      initial={state}
+      month={month}
+      timeZone={timeZone}
+      today={today}
+    />
+  );
 }
 
 function ReadyWorkspace({
   initial,
   month: thisMonth,
   today,
+  timeZone,
 }: {
   initial: Extract<FinanceWorkspaceState, { kind: "ready" }>;
   month: string;
   today: string;
+  timeZone: string;
 }) {
   const [tab, setTab] = useState<Tab>("transactions");
   const [accounts, setAccounts] = useState(initial.accounts);
@@ -300,6 +314,11 @@ function ReadyWorkspace({
         onEdit={setAccountDialog}
         onSelect={showAccount}
         selectedId={filters.accountId}
+      />
+
+      <BankConnections
+        onChanged={() => transactionsChanged(true)}
+        timeZone={timeZone}
       />
 
       <Tabs
