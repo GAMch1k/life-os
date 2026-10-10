@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { AlertTriangle, ArrowRight, CheckCircle2, XCircle } from "lucide-react";
 
+import { MasonryGrid } from "@/components/masonry-grid";
 import {
   Card,
   CardContent,
@@ -152,11 +153,11 @@ export function RuntimeStatusView({ status }: { status: RuntimeStatus }) {
           ? "Everything is working."
           : `${alerts.length} ${alerts.length === 1 ? "thing needs" : "things need"} attention.`}
       </p>
-      <div className="grid gap-4 md:grid-cols-2">
+      <MasonryGrid className="md:grid-cols-2">
         {status.checks.map((check) => (
           <CheckCard check={check} key={check.id} />
         ))}
-      </div>
+      </MasonryGrid>
     </div>
   );
 }

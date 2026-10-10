@@ -17,8 +17,9 @@ import { expect, test, type Page } from "./fixtures";
 // stack and checks that the Dashboard explains each one. Faults are injected
 // only through tools/verify-compose, which refuses non-verification resources.
 // Run with `make runtime-status-smoke`; it stops services, so it never runs as
-// part of the parallel browser suite. Calendar feed health (at the end) runs
-// in the browser suite too: a feed failing once raises no Home alert.
+// part of the parallel browser suite. Calendar feed health and the card
+// layout (at the end) run in the browser suite too: a feed failing once raises
+// no Home alert, and the cards pack into two level columns (POL-10).
 const enabled = Boolean(
   process.env.LIFE_OS_E2E_URL && process.env.LIFE_OS_E2E_FAULTS,
 );
@@ -374,5 +375,118 @@ test.describe("Calendar feed health on Status", () => {
     } finally {
       await deleteSource(request, source.id);
     }
+  });
+});
+
+test.describe("Status card layout", () => {
+  test.skip(
+    !process.env.LIFE_OS_E2E_URL,
+    "set LIFE_OS_E2E_URL to run against the isolated stack",
+  );
+
+  // The order of the checks in the runtime status; Calendar sources is left
+  // out when the Dashboard does not ask Calendar.
+  const checkOrder = [
+    "Automatic processing",
+    "Inbox backlog",
+    "Voice transcription",
+    "Calendar sources",
+    "Services",
+  ];
+
+  /** The grid holding the check cards. */
+  function cardGrid(page: Page) {
+    return page
+      .getByRole("region", { name: "Inbox backlog" })
+      .locator("xpath=..");
+  }
+
+  /** Each card in page order: its title, box, and the height its content needs. */
+  function cardBoxes(page: Page) {
+    return cardGrid(page).evaluate((grid) => ({
+      gridTop: grid.getBoundingClientRect().top,
+      cards: Array.from(grid.children, (card) => {
+        const box = card.getBoundingClientRect();
+        const end = card.lastElementChild!.getBoundingClientRect().bottom;
+        return {
+          title: card.querySelector('[data-slot="card-title"]')!.textContent!,
+          left: Math.round(box.left),
+          top: box.top,
+          bottom: box.bottom,
+          height: box.height,
+          // Down to the end of its last part, plus its bottom padding.
+          content:
+            end - box.top + parseFloat(getComputedStyle(card).paddingBottom),
+        };
+      }),
+    }));
+  }
+
+  test("cards sit tightly in two columns that end level, in the checks' order", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto("/status");
+    await expect(cardGrid(page)).toHaveAttribute("data-packed");
+
+    await expect(async () => {
+      const { gridTop, cards } = await cardBoxes(page);
+      const titles = cards.map((card) => card.title);
+      expect(titles.length).toBeGreaterThanOrEqual(4);
+      expect(titles).toEqual(
+        checkOrder.filter((title) => titles.includes(title)),
+      );
+      // Reading top to bottom, then left to right, follows the same order.
+      const reading = [...cards]
+        .sort((a, b) => a.top - b.top || a.left - b.left)
+        .map((card) => card.title);
+      expect(reading).toEqual(titles);
+
+      const lefts = [...new Set(cards.map((card) => card.left))];
+      expect(lefts).toHaveLength(2);
+      const columns = lefts.map((left) =>
+        cards.filter((card) => card.left === left),
+      );
+      for (const column of columns) {
+        // Each card starts one 1rem gap under the previous card in its column.
+        expect(Math.abs(column[0].top - gridTop)).toBeLessThanOrEqual(1);
+        for (let index = 1; index < column.length; index++) {
+          const gap = column[index].top - column[index - 1].bottom;
+          expect(gap, `gap above ${column[index].title}`).toBeGreaterThan(15);
+          expect(gap, `gap above ${column[index].title}`).toBeLessThan(18);
+        }
+        // Only the column's last card may be taller than its content.
+        for (const card of column.slice(0, -1)) {
+          expect(
+            Math.abs(card.height - card.content),
+            `empty space in ${card.title}`,
+          ).toBeLessThanOrEqual(2);
+        }
+      }
+      // Inbox backlog is short: unless it ends its column, it has no empty
+      // space under its content.
+      const inbox = cards.find((card) => card.title === "Inbox backlog")!;
+      const inboxColumn = columns.find((column) => column.includes(inbox))!;
+      if (inboxColumn.at(-1) !== inbox) {
+        expect(inbox.height - inbox.content).toBeLessThanOrEqual(2);
+      }
+      const [left, right] = columns.map((column) => column.at(-1)!.bottom);
+      expect(Math.abs(left - right), "column bottoms").toBeLessThanOrEqual(2);
+    }).toPass({ timeout: 10_000 });
+
+    // On a phone the cards are one column, in the same order.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(cardGrid(page)).not.toHaveAttribute("data-packed");
+    await expect(async () => {
+      const { cards } = await cardBoxes(page);
+      const titles = cards.map((card) => card.title);
+      expect(titles).toEqual(
+        checkOrder.filter((title) => titles.includes(title)),
+      );
+      expect(new Set(cards.map((card) => card.left)).size).toBe(1);
+      for (let index = 1; index < cards.length; index++) {
+        expect(cards[index].top).toBeGreaterThan(cards[index - 1].bottom);
+      }
+    }).toPass({ timeout: 10_000 });
   });
 });
