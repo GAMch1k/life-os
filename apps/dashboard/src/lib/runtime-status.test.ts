@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  SOURCE_FAILURE_ALERT,
   formatAge,
   limitResetsAt,
   runtimeFacts,
@@ -9,6 +10,7 @@ import {
   toRuntimeStatus,
   usageFacts,
   type AudioBacklog,
+  type CalendarSource,
   type InboxBacklog,
   type ProcessorStatus,
   type RuntimeSignals,
@@ -418,5 +420,133 @@ test("a processor configured with another timezone than the Dashboard is pointed
     status.checks[0].facts.find((fact) => fact.label === "Planning timezone")
       ?.value,
     "capture's browser timezone, else UTC (the Dashboard's LIFE_OS_TIMEZONE is Europe/Berlin)",
+  );
+});
+
+const feed = (
+  name: string,
+  refresh: Partial<CalendarSource["refresh"]> = {},
+  overrides: Partial<CalendarSource> = {},
+): CalendarSource => ({
+  id: `source-${name}`,
+  kind: "ics",
+  name,
+  url: `https://feeds.example.org/${name}/private-street.ics`,
+  enabled: true,
+  filter: { include: [], exclude: [] },
+  defaultReminders: null,
+  refresh: {
+    consecutiveFailures: 0,
+    refreshing: false,
+    lastAttemptAt: minutesAgo(30),
+    lastSuccessAt: minutesAgo(30),
+    nextRefreshAt: "2026-10-10T02:30:00Z",
+    lastOutcome: "imported",
+    lastCounts: {
+      feedEvents: 29,
+      imported: 21,
+      inserted: 3,
+      updated: 0,
+      removed: 1,
+      restored: 0,
+      unchanged: 17,
+    },
+    ...refresh,
+  },
+  createdAt: minutesAgo(600),
+  updatedAt: minutesAgo(600),
+  ...overrides,
+});
+const calendarCheck = (sources: CalendarSource[] | null) => {
+  const status = toRuntimeStatus(
+    { ...healthy, calendarSources: sources },
+    now,
+    "Europe/Berlin",
+  );
+  return { status, check: status.checks.find((c) => c.id === "calendar")! };
+};
+
+test("calendar feeds show their last refresh, success, and next run", () => {
+  const { status, check } = calendarCheck([feed("ZAW")]);
+  assert.equal(status.overall, "ok");
+  assert.equal(check.title, "Calendar sources");
+  assert.equal(check.summary, "1 calendar feed refreshing normally.");
+  const [part] = check.parts!;
+  assert.equal(part.title, "ZAW");
+  assert.equal(part.state, "ok");
+  assert.deepEqual(part.facts, [
+    {
+      label: "Last refresh",
+      value: "imported, 3 added, 1 cancelled (9 Oct 2026, 19:30 CEST)",
+    },
+    { label: "Last success", value: "9 Oct 2026, 19:30 CEST" },
+    { label: "Next refresh", value: "10 Oct 2026, 04:30 CEST" },
+  ]);
+  // The feed URL can carry personal data such as a street.
+  assert.doesNotMatch(JSON.stringify(status), /private-street|feeds\.example/);
+
+  assert.equal(
+    calendarCheck([]).check.summary,
+    "No calendar feeds are subscribed.",
+  );
+  const unavailable = calendarCheck(null);
+  assert.equal(unavailable.check.state, "problem");
+  assert.equal(unavailable.check.summary, "Calendar sources are unavailable.");
+  // Without the signal the check is left out.
+  assert.equal(
+    toRuntimeStatus(healthy, now).checks.some((c) => c.id === "calendar"),
+    false,
+  );
+});
+
+test("a failed feed refresh shows on Status; Home hears only of repeated failures", () => {
+  const failed = (failures: number) =>
+    feed("ZAW", {
+      lastOutcome: "failed",
+      lastError: "the feed answered HTTP 503",
+      consecutiveFailures: failures,
+      lastAttemptAt: minutesAgo(5),
+      nextRefreshAt: "2026-10-09T18:15:00Z",
+    });
+
+  const retrying = calendarCheck([failed(1), feed("School")]);
+  assert.equal(retrying.check.state, "ok");
+  assert.match(retrying.check.summary, /^ZAW: the last refresh failed/);
+  assert.deepEqual(statusAlerts(retrying.status), []);
+  const [zaw, school] = retrying.check.parts!;
+  assert.equal(zaw.state, "warning");
+  assert.equal(zaw.detail, "the feed answered HTTP 503");
+  assert.match(zaw.summary, /retried automatically/);
+  assert.deepEqual(
+    zaw.facts.map((fact) => fact.label),
+    ["Last refresh", "Last success", "Failed in a row", "Next refresh"],
+  );
+  assert.equal(zaw.facts[0].value, "failed (9 Oct 2026, 19:55 CEST)");
+  assert.equal(school.state, "ok");
+
+  const keepsFailing = calendarCheck([failed(SOURCE_FAILURE_ALERT)]);
+  assert.equal(keepsFailing.check.state, "warning");
+  assert.equal(
+    keepsFailing.check.summary,
+    "The calendar feed ZAW has failed 3 refreshes in a row.",
+  );
+  assert.equal(keepsFailing.status.overall, "warning");
+  assert.deepEqual(
+    statusAlerts(keepsFailing.status).map((check) => check.id),
+    ["calendar"],
+  );
+  assert.match(keepsFailing.check.parts![0].summary, /^Keeps failing: 3/);
+
+  // A disabled feed is not refreshed, so its old failure needs nothing.
+  const disabled = calendarCheck([
+    { ...failed(5), enabled: false },
+    feed("New", { lastOutcome: undefined, lastSuccessAt: null }),
+  ]);
+  assert.equal(disabled.check.state, "ok");
+  assert.match(disabled.check.parts![0].summary, /^Disabled/);
+  assert.equal(disabled.check.parts![0].facts.at(-1)?.value, "none (disabled)");
+  assert.equal(
+    disabled.check.parts![1].summary,
+    "Waiting for its first refresh.",
   );
 });
