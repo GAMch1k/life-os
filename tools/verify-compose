@@ -14,6 +14,9 @@ export COMPOSE_PROFILES=
 # Nor does it import the owner's personal feeds from .env: the ZAW preset would
 # fetch their real waste calendar and mix it into test data.
 export LIFE_OS_ZAW_ICS_URL=
+# Nor the owner's Google OAuth client: the verification stack never talks to
+# Google (its browser tests stub the Google endpoints).
+export LIFE_OS_GOOGLE_CLIENT_ID= LIFE_OS_GOOGLE_CLIENT_SECRET= LIFE_OS_GOOGLE_TOKEN_KEY=
 # A smoke may add overlays (colon-separated paths); the isolation check below
 # still applies to the merged plan.
 if [[ -n "${LIFE_OS_VERIFY_OVERLAYS:-}" ]]; then

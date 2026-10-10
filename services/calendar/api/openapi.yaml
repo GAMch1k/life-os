@@ -259,6 +259,102 @@ paths:
       responses:
         '200': {description: Settings, content: {application/json: {schema: {$ref: '#/components/schemas/CalendarSettings'}}}}
         '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}
+  # Google Calendar connection (P11-01).
+  /v1/google/connection:
+    get:
+      summary: Get the Google Calendar connection
+      description: >-
+        Whether Google is configured on this server and the state of the
+        owner's one Google connection. Never returns tokens or the client
+        secret. `expired` means Google refused the stored authorization
+        (expired or revoked) and the owner must reconnect; `error` means
+        another refusal, described in `lastError`.
+      operationId: getGoogleConnection
+      security: []
+      responses:
+        '200': {description: Connection, content: {application/json: {schema: {$ref: '#/components/schemas/GoogleConnection'}}}}
+    post:
+      summary: Complete a Google authorization
+      description: >-
+        Takes the `code` and `state` Google returned to the Dashboard's
+        callback route. The state must come from `authorize` within 10 minutes
+        and is used once. Calendar exchanges the code (with its PKCE
+        verifier), stores the refresh token encrypted, identifies the account
+        from its primary calendar, and stores its calendar list (a new primary
+        calendar starts with sync on). Connecting another account replaces
+        the connection and its calendar choices.
+      operationId: connectGoogle
+      security: []
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/GoogleConnectRequest'}}}}
+      responses:
+        '200': {description: The new connection, content: {application/json: {schema: {$ref: '#/components/schemas/GoogleConnection'}}}}
+        '400': {description: 'Invalid request, no valid X-Life-OS-Actor (actor_required), a state that is unknown, expired, or used (invalid_state), or a code Google refused (google_code_rejected)'}
+        '403': {description: The owner did not grant reading the calendar list (google_scope_missing)}
+        '502': {description: 'Google refused or failed the request (google_rejected, google_unavailable)'}
+        '503': {description: Google is not configured on this server (google_not_configured)}
+    delete:
+      summary: Disconnect Google Calendar
+      description: >-
+        Revokes the authorization at Google (best effort: a failure is
+        recorded in Activity and the connection is removed anyway) and deletes
+        the connection and its calendar choices. Succeeds also without a
+        connection.
+      operationId: disconnectGoogle
+      security: []
+      responses:
+        '204': {description: Disconnected}
+        '400': {description: 'No valid X-Life-OS-Actor (actor_required)'}
+  /v1/google/connection/authorize:
+    post:
+      summary: Start a Google authorization
+      description: >-
+        Returns Google's consent page URL for the Dashboard to open. It asks
+        for offline access with forced consent (so Google issues a refresh
+        token), carries a single-use `state` valid for 10 minutes, and a PKCE
+        (S256) challenge. Google returns the owner to the configured redirect
+        URI (the Dashboard's /calendar/google/callback).
+      operationId: authorizeGoogle
+      security: []
+      responses:
+        '200': {description: Consent page, content: {application/json: {schema: {$ref: '#/components/schemas/GoogleAuthorization'}}}}
+        '400': {description: 'No valid X-Life-OS-Actor (actor_required)'}
+        '503': {description: Google is not configured on this server (google_not_configured)}
+  /v1/google/calendars:
+    get:
+      summary: List the connected account's Google calendars
+      description: The calendar list as last read from Google, primary first, then by name, with the owner's sync choice. Empty without a connection.
+      operationId: listGoogleCalendars
+      security: []
+      responses:
+        '200': {description: Calendars, content: {application/json: {schema: {$ref: '#/components/schemas/GoogleCalendarList'}}}}
+  /v1/google/calendars/refresh:
+    post:
+      summary: Read the calendar list from Google again
+      description: >-
+        New calendars are added (sync off, except a new primary calendar),
+        known ones keep the owner's choice, and calendars Google no longer
+        lists are dropped. Refreshes the access token when needed; a refresh
+        token Google refuses marks the connection `expired`.
+      operationId: refreshGoogleCalendars
+      security: []
+      responses:
+        '200': {description: Calendars, content: {application/json: {schema: {$ref: '#/components/schemas/GoogleCalendarList'}}}}
+        '400': {description: 'No valid X-Life-OS-Actor (actor_required)'}
+        '409': {description: 'Not connected (google_not_connected), or the authorization expired or was revoked (google_expired)'}
+        '502': {description: 'Google refused or failed the request (google_rejected, google_unavailable)'}
+        '503': {description: Google is not configured on this server (google_not_configured)}
+  /v1/google/calendars/{calendarId}:
+    patch:
+      summary: Choose whether a Google calendar syncs
+      description: Records the owner's choice; syncing itself starts in a later release.
+      operationId: updateGoogleCalendar
+      security: []
+      parameters: [{name: calendarId, in: path, required: true, description: 'The calendar''s id in Calendar (not its Google id).', schema: {type: string, format: uuid}}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateGoogleCalendarRequest'}}}}
+      responses:
+        '200': {description: Calendar, content: {application/json: {schema: {$ref: '#/components/schemas/GoogleCalendar'}}}}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}
+        '404': {description: Calendar not found}
 components:
   parameters:
     TimeZone: {name: timeZone, in: query, description: 'IANA timezone (for example Europe/Berlin) in which all-day dates are compared with instants. Defaults to the owner''s timezone configured for Calendar.', schema: {type: string, minLength: 1, maxLength: 64}}
@@ -499,3 +595,49 @@ components:
           properties:
             timed: {type: array, maxItems: 10, items: {$ref: '#/components/schemas/Reminder'}}
             allDay: {type: array, maxItems: 10, items: {$ref: '#/components/schemas/Reminder'}}
+    # Google Calendar connection (P11-01).
+    GoogleConnectionStatus:
+      type: string
+      enum: [not_connected, connected, expired, error]
+      description: '`not_connected`: no Google account is connected. `connected`: usable. `expired`: Google refused the stored authorization (it expired or was revoked); reconnect. `error`: another refusal, such as a changed client secret; see `lastError`.'
+    GoogleConnection:
+      type: object
+      required: [configured, status, scopes, missingScopes]
+      properties:
+        configured: {type: boolean, description: 'Whether this server has the Google client credentials and token key (LIFE_OS_GOOGLE_CLIENT_ID, LIFE_OS_GOOGLE_CLIENT_SECRET, LIFE_OS_GOOGLE_TOKEN_KEY). Without them nothing can be connected.'}
+        status: {$ref: '#/components/schemas/GoogleConnectionStatus'}
+        accountEmail: {type: string, nullable: true, description: The connected Google account (its primary calendar's id).}
+        scopes: {type: array, items: {type: string}, description: The scopes Google granted.}
+        missingScopes: {type: array, items: {type: string}, description: 'Scopes Life OS asks for that Google did not grant (the owner may untick some on the consent page); empty when everything was granted or nothing is connected.'}
+        connectedAt: {type: string, format: date-time, nullable: true, description: When the account was last connected.}
+        lastError: {type: string, nullable: true, description: 'Why the connection is expired or in error; null while connected.'}
+    GoogleAuthorization:
+      type: object
+      required: [url]
+      properties:
+        url: {type: string, description: Google's consent page; open it in the browser.}
+    GoogleConnectRequest:
+      type: object
+      required: [code, state]
+      properties:
+        code: {type: string, minLength: 1, maxLength: 2048, description: The authorization code Google returned.}
+        state: {type: string, minLength: 1, maxLength: 256, description: The state Google returned with it.}
+    GoogleCalendar:
+      type: object
+      required: [id, googleCalendarId, summary, accessRole, primary, syncEnabled, createdAt, updatedAt]
+      properties:
+        id: {type: string, format: uuid}
+        googleCalendarId: {type: string, description: 'The calendar''s id at Google (the account''s address for the primary calendar).'}
+        summary: {type: string, description: 'The calendar''s name as the owner sees it in Google Calendar.'}
+        color: {type: string, nullable: true, description: 'Its background color in Google Calendar, such as #9fe1e7.'}
+        accessRole: {type: string, enum: [owner, writer, reader, freeBusyReader], description: 'The account''s access to the calendar.'}
+        primary: {type: boolean, description: 'The account''s primary calendar.'}
+        syncEnabled: {type: boolean, description: 'Whether the calendar will sync into Life OS (syncing starts in a later release).'}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    GoogleCalendarList: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/GoogleCalendar'}}}}
+    UpdateGoogleCalendarRequest:
+      type: object
+      required: [syncEnabled]
+      properties:
+        syncEnabled: {type: boolean}
