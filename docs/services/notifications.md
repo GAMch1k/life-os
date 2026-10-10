@@ -1,6 +1,6 @@
 # Notifications service
 
-Notifications is the one path by which Life OS lets its owner know about something. A service that needs to tell the owner something (a service went down, Inbox needs Human Review, a Calendar reminder is due) sends a notification here. Notifications stores it in its own `notifications_db`, so the Dashboard can list every notification. It keeps the read state and delivers the notification through the channels configured on its server. Gateway base: `/api/notifications`. The contract is `services/notifications/api/openapi.yaml`; `/health` and `/ready` are available.
+Notifications is the one path by which Life OS lets its owner know about something. A service that needs to tell the owner something (a service went down, Inbox needs Human Review, a Calendar reminder or a Task is due) sends a notification here. Notifications stores it in its own `notifications_db`, so the Dashboard can list every notification. It keeps the read state and delivers the notification through the channels configured on its server. Gateway base: `/api/notifications`. The contract is `services/notifications/api/openapi.yaml`; `/health` and `/ready` are available.
 
 ## The one-path rule
 
@@ -12,6 +12,7 @@ Notifications is the one path by which Life OS lets its owner know about somethi
 ```mermaid
 flowchart LR
   Calendar -- "pkg/notify" --> N[Notifications / notifications_db]
+  Tasks -- "pkg/notify" --> N
   Inbox -- "pkg/notify" --> N
   Monitor -- "pkg/notify" --> N
   Dashboard -- "GET /api/notifications" --> Gateway --> N
@@ -177,8 +178,12 @@ The service that owns a state change sends its notification, so every path into 
 | Inbox | `inbox.failed` | `medium` | Automatic processing gave up on a capture (attempt `failed`). Not for retries or successes. | `/inbox#failed` | `inbox.failed:<itemId>:<attemptId>` |
 | [Monitor](monitor.md) | `status.<check>`, such as `status.processing` or `status.services`; `status.dashboard` while the Status checks cannot be read | `high` for a problem, `medium` for a warning, `low` for a recovery | A Status check holds a new state for the confirmations (two evaluations a minute apart). | `/status` | `status:<check>:<state>:<since>` |
 | Calendar | `calendar.reminder` | the event's effective priority (`medium` unless set) | An effective reminder of an active event or occurrence is due: every one of them, exactly once. One due while Calendar was down is sent within `CALENDAR_REMINDER_GRACE_MINUTES` (2 h) with "(late)", and recorded in Activity as missed after that. A failed send is retried at the next run. | `/calendar?date=<start date>` | `calendar:reminder:<eventId>:<recurrenceId or single>:<start>:<reminder>` |
+| [Tasks](tasks.md#notifications) | `tasks.due` | `medium` | `TASKS_TIMED_LEAD_MINUTES` (30) before an open Task with a due time is due, once per Task and due time. | `/tasks` | `tasks:due:<taskId>:<dueAt>` |
+| Tasks | `tasks.morning` | `medium` | Daily at `TASKS_MORNING_TIME` (09:00): one message with the date-only Tasks due today and every overdue Task; not sent when empty. | `/tasks` | `tasks:morning:<local date>` |
+| Tasks | `tasks.evening` | `medium` | Daily at `TASKS_EVENING_TIME` (19:00): one message with the date-only Tasks due tomorrow; not sent when empty. | `/tasks` | `tasks:evening:<local date>` |
+| Tasks | `summary.morning` | `low` (`medium` when merged with the morning list and naming its Tasks) | Daily at `TASKS_SUMMARY_TIME` (08:00): today's events (from Calendar), Tasks, and overdue Tasks; not sent when there is nothing. At the morning-list time it replaces the morning list. | `/` | `summary:morning:<local date>` |
 
-See [Inbox](inbox.md#notifications), [Monitor](monitor.md), and [Calendar](calendar.md#reminder-delivery) for the payloads and failure handling.
+For all of Tasks' messages, one due while Tasks was down is sent within `TASKS_NOTIFY_GRACE_MINUTES` (2 h) and recorded in Activity as missed after that; a failed send is retried at the next run. See [Inbox](inbox.md#notifications), [Monitor](monitor.md), [Calendar](calendar.md#reminder-delivery), and [Tasks](tasks.md#notifications) for the payloads and failure handling.
 
 ## Operations
 

@@ -57,10 +57,11 @@ Optional `.env` settings for the processor:
 
 ## Owner timezone
 
-The owner's timezone is the browser's own timezone when it is known, else `LIFE_OS_TIMEZONE` (an IANA name, default `UTC`), else UTC. Set `LIFE_OS_TIMEZONE` to where the owner usually is, before the processor, Calendar, and Dashboard start; changing it needs a restart of them (`docker compose up -d processor calendar dashboard`). An unknown name falls back to UTC; the processor and Calendar log it at startup and the processor's zone is listed under Automatic processing on `/status`.
+The owner's timezone is the browser's own timezone when it is known, else `LIFE_OS_TIMEZONE` (an IANA name, default `UTC`), else UTC. Set `LIFE_OS_TIMEZONE` to where the owner usually is, before the processor, Calendar, and Dashboard start; changing it needs a restart of them (`docker compose up -d processor calendar tasks dashboard`). An unknown name falls back to UTC; the processor and Calendar log it at startup and the processor's zone is listed under Automatic processing on `/status`.
 
 - **Dashboard.** Every "today", date, and time is shown in the browser's timezone, which the browser reports in the `lifeos-tz` cookie; until it has (the very first page load) and for clients without it, in `LIFE_OS_TIMEZONE`. See [Dashboard](../frontend/dashboard.md).
 - **Calendar.** All-day events are dates; reads that compare them with instants use the `timeZone` the client passes (the Dashboard passes the zone it shows), else `LIFE_OS_TIMEZONE`. See [Calendar](../services/calendar.md).
+- **Tasks.** A due date without a time is the owner-local midnight, and Task notifications (the reminders, the morning and evening lists, the morning summary) are due on the owner's wall clock. See [Tasks](../services/tasks.md#notifications).
 - **Processor.** Captures such as "tomorrow at 10" or "on Friday at 15:00" are resolved in the capturing browser's timezone (sent as `sourceMetadata.timeZone` with text and voice captures), else in `LIFE_OS_TIMEZONE`, from the moment the capture was made, and stored as the correct instants. See [MCP and AI](../services/mcp.md#dates-and-the-owners-timezone).
 
 Stored data and API payloads stay UTC instants. Changing the timezone, or travelling, does not rewrite them: Tasks and events keep their instants and are shown in the new zone.
@@ -78,6 +79,10 @@ Calendar needs outbound https from the `backend` network to reach feeds, and ref
 ## Google Calendar
 
 Optional. Migration `000009_google_connection` adds the connection tables and `000010_google_sync` the sync state on the next `calendar-migrate` run; calendars already chosen to sync start syncing as soon as the new Calendar runs (every `LIFE_OS_CALENDAR_GOOGLE_SYNC_SECONDS`, default 120); without `LIFE_OS_GOOGLE_CLIENT_ID`, `LIFE_OS_GOOGLE_CLIENT_SECRET`, and `LIFE_OS_GOOGLE_TOKEN_KEY` in `.env`, Calendar runs as before and the Calendar page says Google is not set up. The owner's one-time setup (Google Cloud project, consent screen in production, Web client with the redirect URI `https://lifeos.gamch1k.com/calendar/google/callback`, the `.env` lines, `openssl rand -base64 32` for the key) is in [Google Calendar setup](google-calendar.md). The verification stack never receives these settings (`tools/verify-compose` blanks them). Back up the token key with the other secrets: without it the stored refresh token cannot be decrypted and Google must be reconnected.
+
+## Task notifications
+
+Tasks sends its reminders, the morning and evening lists, and the morning summary through Notifications (see [Tasks](../services/tasks.md#notifications)). Migration `000004_task_notifications` adds the dispatcher state on the next `tasks-migrate` run; compose gives Tasks `NOTIFICATIONS_SERVICE_URL`, `CALENDAR_SERVICE_URL`, and `LIFE_OS_TIMEZONE`. Optional `.env` settings, HH:MM in `LIFE_OS_TIMEZONE`: `LIFE_OS_TASKS_SUMMARY_TIME` (08:00), `LIFE_OS_TASKS_MORNING_TIME` (09:00; the same as the summary time sends one message), `LIFE_OS_TASKS_EVENING_TIME` (19:00), and `LIFE_OS_TASKS_TIMED_LEAD_MINUTES` (30); apply them with `docker compose up -d tasks`. The first run after the deployment only starts the cursor, so nothing due before it is sent. Health: `GET /v1/notifications/status` on Tasks (inside the stack).
 
 ## Voice worker recovery
 

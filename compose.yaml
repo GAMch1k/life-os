@@ -50,7 +50,7 @@ services:
     restart: "no"
   tasks:
     build: {context: ., dockerfile: services/tasks/Dockerfile}
-    environment: {SERVICE_NAME: tasks, PORT: 8080, DATABASE_URL: "postgres://tasks_user:${LIFE_OS_TASKS_DB_PASSWORD}@postgres:5432/tasks_db?sslmode=disable", ACTIVITY_SERVICE_URL: "http://activity:8080"}
+    environment: {SERVICE_NAME: tasks, PORT: 8080, DATABASE_URL: "postgres://tasks_user:${LIFE_OS_TASKS_DB_PASSWORD}@postgres:5432/tasks_db?sslmode=disable", ACTIVITY_SERVICE_URL: "http://activity:8080", LIFE_OS_TIMEZONE: "${LIFE_OS_TIMEZONE:-UTC}", NOTIFICATIONS_SERVICE_URL: "http://notifications:8080", CALENDAR_SERVICE_URL: "http://calendar:8080", TASKS_SUMMARY_TIME: "${LIFE_OS_TASKS_SUMMARY_TIME:-08:00}", TASKS_MORNING_TIME: "${LIFE_OS_TASKS_MORNING_TIME:-09:00}", TASKS_EVENING_TIME: "${LIFE_OS_TASKS_EVENING_TIME:-19:00}", TASKS_TIMED_LEAD_MINUTES: "${LIFE_OS_TASKS_TIMED_LEAD_MINUTES:-30}"}
     expose: ["8080"]
     depends_on: {tasks-migrate: {condition: service_completed_successfully}}
     networks: [backend]
