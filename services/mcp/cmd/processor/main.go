@@ -59,7 +59,7 @@ func main() {
 		fmt.Println(plan)
 		return
 	}
-	runner := processor.Runner{Planner: planner, Tools: &processor.MCPClient{URL: cfg.MCPURL}, Model: cfg.Profile(), DryRun: *dryRun}
+	runner := processor.Runner{Planner: planner, Tools: &processor.MCPClient{URL: cfg.MCPURL}, Model: cfg.Profile(), DryRun: *dryRun, TimeZone: cfg.TimeZone}
 	if *serve {
 		monitor := processor.NewMonitor(cfg.Model)
 		runner.Owner = instanceID()

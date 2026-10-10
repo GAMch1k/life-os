@@ -49,16 +49,6 @@ type taskMutation struct {
 	DueAt      *string `json:"dueAt,omitempty" jsonschema:"RFC3339 due time"`
 	ClearDueAt *bool   `json:"clearDueAt,omitempty"`
 }
-type eventAction struct {
-	IdempotencyKey string  `json:"idempotencyKey,omitempty"`
-	Title          string  `json:"title" jsonschema:"Event title"`
-	Description    *string `json:"description,omitempty"`
-	AllDay         bool    `json:"allDay"`
-	StartAt        *string `json:"startAt,omitempty" jsonschema:"RFC3339 start time"`
-	EndAt          *string `json:"endAt,omitempty" jsonschema:"RFC3339 end time"`
-	StartDate      *string `json:"startDate,omitempty" jsonschema:"ISO date for all-day event"`
-	EndDate        *string `json:"endDate,omitempty" jsonschema:"ISO date for all-day event"`
-}
 type financeAction struct {
 	IdempotencyKey string         `json:"idempotencyKey,omitempty"`
 	AccountID      string         `json:"accountId" jsonschema:"Explicit Finance account UUID from trusted source metadata"`
@@ -85,24 +75,13 @@ func run(ctx context.Context) error {
 	hc := &http.Client{Timeout: 10 * time.Second}
 	emitter := activity.NewEmitter(cfg.ActivityURL, "mcp", nil)
 	s := mcp.NewServer(&mcp.Implementation{Name: "life-os", Version: "0.1.0"}, nil)
-	add := func(n, d, b, p string) {
-		mcp.AddTool(s, &mcp.Tool{Name: n, Description: d}, func(ctx context.Context, req *mcp.CallToolRequest, in query) (*mcp.CallToolResult, Output, error) {
-			headers := http.Header{}
-			traceOf(req).Apply(headers)
-			body, e := coreclient.Client{BaseURL: b, HTTP: hc}.DoWithHeaders(ctx, http.MethodGet, p+in.Query, nil, headers)
-			if e != nil {
-				return nil, Output{}, e
-			}
-			out, e := output(body)
-			return nil, out, e
-		})
-	}
+	add := func(n, d, b, p string) { addReadTool(s, hc, n, d, b, p) }
 	add("finance_month_summary", "Get Finance monthly summary", cfg.FinanceURL, "/v1/summaries/monthly?")
 	add("finance_find_transactions", "Find Finance transactions", cfg.FinanceURL, "/v1/transactions?")
 	add("task_list", "List Tasks", cfg.TasksURL, "/v1/tasks?")
 	add("task_search", "Search Tasks by title or notes before mutating one", cfg.TasksURL, "/v1/tasks?")
 	add("inbox_list", "List Inbox items", cfg.InboxURL, "/v1/inbox-items?")
-	add("calendar_list", "List Calendar events", cfg.CalendarURL, "/v1/events?")
+	addCalendarTools(s, hc, cfg.CalendarURL, emitter)
 	// Inbox mutations are exposed as MCP tools so processors never bypass the
 	// service API or write the Inbox database directly.
 	mcp.AddTool(s, &mcp.Tool{Name: "inbox_start_processing_attempt", Description: "Start an auditable Inbox processing attempt"}, func(ctx context.Context, req *mcp.CallToolRequest, in inboxAction) (*mcp.CallToolResult, Output, error) {
@@ -164,11 +143,6 @@ func run(ctx context.Context) error {
 			return post(ctx, hc, trace, cfg.TasksURL, "/v1/tasks/"+in.TaskID+"/reopen", nil)
 		})
 	})
-	mcp.AddTool(s, &mcp.Tool{Name: "calendar_create", Description: "Create a Life OS calendar event"}, func(ctx context.Context, req *mcp.CallToolRequest, in eventAction) (*mcp.CallToolResult, Output, error) {
-		return audited(ctx, emitter, req, "calendar_create", in, func(trace activity.Trace) (*mcp.CallToolResult, Output, error) {
-			return post(ctx, hc, trace, cfg.CalendarURL, "/v1/events", in, in.IdempotencyKey)
-		})
-	})
 	mcp.AddTool(s, &mcp.Tool{Name: "finance_create_manual_transaction", Description: "Record a manual finance transaction only when account, amount, currency, and date are explicit"}, func(ctx context.Context, req *mcp.CallToolRequest, in financeAction) (*mcp.CallToolResult, Output, error) {
 		return audited(ctx, emitter, req, "finance_create_manual_transaction", in, func(trace activity.Trace) (*mcp.CallToolResult, Output, error) {
 			return post(ctx, hc, trace, cfg.FinanceURL, "/v1/transactions", in, in.IdempotencyKey)
@@ -179,6 +153,21 @@ func run(ctx context.Context) error {
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{"status":"ok"}`)) })
 	mux.HandleFunc("/ready", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{"status":"ready"}`)) })
 	return http.ListenAndServe(fmt.Sprintf(":%d", cfg.Port), mux)
+}
+
+// addReadTool registers a read tool that GETs path plus the caller's URL
+// query from the owning service.
+func addReadTool(s *mcp.Server, hc *http.Client, name, description, baseURL, path string) {
+	mcp.AddTool(s, &mcp.Tool{Name: name, Description: description}, func(ctx context.Context, req *mcp.CallToolRequest, in query) (*mcp.CallToolResult, Output, error) {
+		headers := http.Header{}
+		traceOf(req).Apply(headers)
+		body, err := coreclient.Client{BaseURL: baseURL, HTTP: hc}.DoWithHeaders(ctx, http.MethodGet, path+in.Query, nil, headers)
+		if err != nil {
+			return nil, Output{}, err
+		}
+		out, err := output(body)
+		return nil, out, err
+	})
 }
 
 // traceOf reads the workflow trace an MCP client sent with its HTTP request.

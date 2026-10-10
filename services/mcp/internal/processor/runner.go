@@ -35,6 +35,10 @@ type Runner struct {
 	OnRuntime func(RuntimeEvent)
 	// OnTokens, when set, receives the token usage Codex reports per run.
 	OnTokens func(TokenUsage)
+	// TimeZone is the owner's configured timezone; Calendar events are
+	// searched from the start of the capture's day in it (or in the
+	// capture's own timezone). Nil means UTC.
+	TimeZone *time.Location
 }
 type inboxList struct {
 	Items []inboxItem `json:"items"`
@@ -122,7 +126,11 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 		return Proposal{}, err
 	}
 	parsed, err := approvedReviewPlan(item)
-	if err != nil {
+	// The event the owner chose for an approved Calendar change.
+	approvedEvent := ""
+	if err == nil {
+		parsed, approvedEvent = approvedCalendarTarget(parsed)
+	} else {
 		// The attempt is durable before Codex is spawned; its runtime record
 		// heartbeats until the outcome is stored.
 		runtime := r.trackRuntime(ctx, item.ID, started.ID, RuntimeSpawning)
@@ -140,9 +148,9 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 		}
 		parsed, err = decodePlan(rawPlan)
 	}
-	if err == nil && (parsed.Ambiguous || parsed.Confidence < 0.8) && len(parsed.Actions) == 1 && isTaskMutation(parsed.Actions[0]) && validAction(parsed.Actions[0]) {
-		if candidates, searchErr := r.findTasks(ctx, parsed.Actions[0]); searchErr == nil {
-			return Proposal{}, r.humanReview(ctx, item.ID, started.ID, parsed.Actions[0], reviewCandidates(candidates), "ambiguous or low-confidence Task selection")
+	if err == nil && (parsed.Ambiguous || parsed.Confidence < 0.8) && len(parsed.Actions) == 1 && (isTaskMutation(parsed.Actions[0]) || isCalendarMutation(parsed.Actions[0])) && validAction(parsed.Actions[0]) {
+		if res, searchErr := r.resolve(ctx, item, parsed.Actions[0]); searchErr == nil {
+			return Proposal{}, r.humanReview(ctx, item.ID, started.ID, res.action, r.reviewCandidatesFor(item, res.action, res.found), lowConfidenceReason(res.action))
 		}
 	}
 	if err != nil {
@@ -162,31 +170,61 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 		if !validAction(action) {
 			return Proposal{}, r.retryLater(ctx, item.ID, started.ID, actions, "invalid proposed action: "+action.Tool, failureModelOutput, previous)
 		}
+		// target is the one existing Task or event a search found.
+		var target map[string]any
+		if (isTaskMutation(action) && action.Arguments["taskId"] == nil) || (isCalendarMutation(action) && approvedEvent == "") {
+			res, findErr := r.resolve(ctx, item, action)
+			if findErr != nil {
+				reason, kind := failedSearch(findErr)
+				return Proposal{}, r.retryLater(ctx, item.ID, started.ID, actions, reason, kind, previous)
+			}
+			// Every cancellation the AI proposes waits for the owner, even
+			// when exactly one event matches; it runs once approved.
+			if res.action.Tool == "calendar_cancel" || len(res.found) != 1 {
+				return Proposal{}, r.humanReview(ctx, item.ID, started.ID, res.action, r.reviewCandidatesFor(item, res.action, res.found), reviewReason(res))
+			}
+			// The equivalent action, when only the other domain matched.
+			action, target = res.action, res.found[0]
+		}
 		arguments := make(map[string]any, len(action.Arguments)+1)
 		for field, value := range action.Arguments {
 			arguments[field] = value
 		}
 		if isTaskMutation(action) {
-			if arguments["taskId"] == nil {
-				candidates, findErr := r.findTasks(ctx, action)
-				if findErr != nil {
-					return Proposal{}, r.retryLater(ctx, item.ID, started.ID, actions, "task search failed: "+findErr.Error(), failureDependency, previous)
-				}
-				if len(candidates) != 1 {
-					return Proposal{}, r.humanReview(ctx, item.ID, started.ID, action, reviewCandidates(candidates), "ambiguous or missing Task selection")
-				}
-				arguments["taskId"] = candidates[0]["id"]
+			if target != nil {
+				arguments["taskId"] = target["id"]
 			}
 			// The search terms only identify the Task (a Human Review approval
 			// may still carry the alternatives); the Tasks operation takes its id.
 			delete(arguments, "taskQuery")
 			delete(arguments, "taskQueryAlternatives")
 		}
+		if isCalendarMutation(action) {
+			eventID, event := approvedEvent, target
+			if target != nil {
+				eventID, _ = target["id"].(string)
+			}
+			arguments = calendarArguments(action.Tool, arguments, eventID)
+			if action.Tool == "calendar_update" && missingEnd(arguments) {
+				if event == nil {
+					var getErr error
+					if event, getErr = r.getEvent(ctx, eventID); getErr != nil {
+						return Proposal{}, r.retryLater(ctx, item.ID, started.ID, actions, "calendar read failed: "+getErr.Error(), classifyActionError(getErr), previous)
+					}
+				}
+				keepTimeOfDay(arguments, event, r.location(item))
+				keepDuration(arguments, event)
+			}
+		}
 		if action.Tool == "task_create" || action.Tool == "calendar_create" || action.Tool == "finance_create_manual_transaction" {
 			arguments["idempotencyKey"] = actionIdempotencyKey(item, len(actions), action)
 		}
 		result, err := r.Tools.Call(ctx, action.Tool, arguments)
 		audit := map[string]any{"tool": action.Tool, "arguments": arguments}
+		if err != nil && isCalendarMutation(action) && managedBySource(err) {
+			// An imported event: a decision for the owner, never a retry.
+			return Proposal{}, r.humanReview(ctx, item.ID, started.ID, action, []map[string]any{}, managedBySourceReason)
+		}
 		if err != nil {
 			actions = append(actions, audit)
 			return Proposal{}, r.retryLater(ctx, item.ID, started.ID, actions, fmt.Sprintf("%s failed: %v", action.Tool, err), classifyActionError(err), previous)
@@ -224,6 +262,12 @@ const (
 // forms), trimmed and without duplicates. A title in Russian or German is
 // found from an English capture only through an alternative.
 func taskQueries(arguments map[string]any) []string {
+	return searchTerms(arguments, "taskQuery", "taskQueryAlternatives")
+}
+
+// searchTerms is a mutation's primary search term (the primary field) and
+// its alternatives, trimmed, deduplicated, and bounded like taskQueries.
+func searchTerms(arguments map[string]any, primaryField, alternativesField string) []string {
 	var queries []string
 	seen := map[string]bool{}
 	add := func(term string) bool {
@@ -235,9 +279,9 @@ func taskQueries(arguments map[string]any) []string {
 		queries = append(queries, term)
 		return true
 	}
-	primary, _ := arguments["taskQuery"].(string)
+	primary, _ := arguments[primaryField].(string)
 	add(primary)
-	alternatives, _ := arguments["taskQueryAlternatives"].([]any)
+	alternatives, _ := arguments[alternativesField].([]any)
 	used := 0
 	for _, alternative := range alternatives {
 		if used == maxTaskQueryAlternatives {
@@ -399,7 +443,26 @@ func (r Runner) record(ctx context.Context, itemID, attemptID, status string, ac
 	return err
 }
 func allowed(name string) bool {
-	return name == "task_create" || name == "task_update" || name == "task_complete" || name == "task_reopen" || name == "calendar_create" || name == "finance_create_manual_transaction"
+	return name == "task_create" || name == "task_update" || name == "task_complete" || name == "task_reopen" || name == "calendar_create" || name == "calendar_update" || name == "calendar_cancel" || name == "finance_create_manual_transaction"
+}
+
+// validSearchTerms checks a mutation's primary search term and alternatives.
+func validSearchTerms(arguments map[string]any, primaryField, alternativesField string) bool {
+	if primary, ok := arguments[primaryField].(string); !ok || strings.TrimSpace(primary) == "" {
+		return false
+	}
+	if alternatives, present := arguments[alternativesField]; present && alternatives != nil {
+		terms, ok := alternatives.([]any)
+		if !ok {
+			return false
+		}
+		for _, term := range terms {
+			if _, ok := term.(string); !ok {
+				return false
+			}
+		}
+	}
+	return true
 }
 func validAction(action plannedAction) bool {
 	if !allowed(action.Tool) || action.Arguments == nil {
@@ -420,8 +483,16 @@ func validAction(action plannedAction) bool {
 				}
 			}
 		}
+	} else if isCalendarMutation(action) {
+		// A planned Calendar change names its event only by search terms.
+		if !validSearchTerms(action.Arguments, "eventQuery", "eventQueryAlternatives") || (action.Tool == "calendar_update" && !validCalendarChange(action.Arguments)) {
+			return false
+		}
 	} else if action.Tool != "finance_create_manual_transaction" {
 		if title, ok := action.Arguments["title"].(string); !ok || strings.TrimSpace(title) == "" {
+			return false
+		}
+		if action.Tool == "calendar_create" && !validReminders(action.Arguments["reminders"]) {
 			return false
 		}
 	}
@@ -430,7 +501,9 @@ func validAction(action plannedAction) bool {
 		"task_update":                       {"taskQuery": true, "taskQueryAlternatives": true, "taskId": true, "title": true, "notes": true, "dueAt": true, "clearDueAt": true},
 		"task_complete":                     {"taskQuery": true, "taskQueryAlternatives": true, "taskId": true},
 		"task_reopen":                       {"taskQuery": true, "taskQueryAlternatives": true, "taskId": true},
-		"calendar_create":                   {"title": true, "description": true, "allDay": true, "startAt": true, "endAt": true, "startDate": true, "endDate": true},
+		"calendar_create":                   {"title": true, "description": true, "location": true, "allDay": true, "startAt": true, "endAt": true, "startDate": true, "endDate": true, "timeZone": true, "reminders": true},
+		"calendar_update":                   {"eventQuery": true, "eventQueryAlternatives": true, "title": true, "description": true, "location": true, "allDay": true, "startAt": true, "endAt": true, "startDate": true, "endDate": true, "timeZone": true, "reminders": true, "clear": true},
+		"calendar_cancel":                   {"eventQuery": true, "eventQueryAlternatives": true},
 		"finance_create_manual_transaction": {"accountId": true, "categoryId": true, "amount": true, "occurredOn": true, "note": true},
 	}
 	for field := range action.Arguments {
