@@ -11,7 +11,7 @@ Until P11-06, Google Calendar (`internal/google`) and ICS feeds (`internal/sourc
 | Ticket | What happens |
 | --- | --- |
 | P11-06 | Adds this API and migration 000014. Calendar's in-process Google and ICS adapters keep working as before. |
-| P11-07 | `google-calendar` takes over OAuth, inbound sync, and writing Life OS events and edits to Google. Calendar's in-process Google code goes. |
+| P11-07 | `google-calendar` takes over OAuth, inbound sync, and writing Life OS events and edits to Google ([google-calendar](google-calendar.md)). Calendar's in-process Google code goes; migration 000016 (`google_calendar_handover`) hands the Google sources over, and `google-calendar handoff` copies the connection. |
 | P11-08 | `calendar-feeds` takes over ICS feeds and the ZAW preset ([calendar-feeds](calendar-feeds.md)). The in-process ICS refresher goes; migration 000015 (`calendar_feeds_handover`) hands the feeds over, and `/v1/sources` no longer adds or refreshes feeds. |
 | P11-09 | Drops the legacy columns and tables (`google_*`, the feed columns of `calendar_sources`, the `ics`/`google` source kinds). |
 
@@ -212,7 +212,7 @@ The events of read-only sources are not in the feed.
 - **`source`** tells an integration where its event belongs, including for a tombstone. It is null for a Life OS event.
 - **`actors`** lists everyone who made the changes the entry stands for, and `actor` is the latest of them. Values are as in `X-Life-OS-Actor`.
   - Skip an entry as your own write only when `actors` is just `["system:<you>"]`.
-  - The integration's own syncs of writable sources produce such entries, and Calendar's in-process Google reverse sync records `system:google-calendar`.
+  - The integration's own syncs of writable sources and its own writes through the events API produce such entries (and so did Calendar's in-process Google reverse sync before P11-07).
   - Snapshot entries have no actor.
 - **Collapsing:** entries come in commit order, and several changes of one event within a page become one entry. With `limit=1`, every change is its own entry.
 - **`scope`:**
@@ -248,7 +248,7 @@ The feed reads the `calendar_event_changes` journal. Constraint triggers on `eve
 ### Two-way calendar (google-calendar)
 
 1. Register each Google calendar the owner syncs. Set `readOnly` to `true` unless the account's access role is owner or writer.
-2. **Inbound:** derive items from Google's events as `internal/google/mapping.go` does today. Send a snapshot with `window: {"start": <the full listing's time window>}`, or deltas for incremental syncs.
+2. **Inbound:** derive items from Google's events as `internal/google/mapping.go` does (google-calendar sends deltas of what changed since Calendar was last told, with `window.start`). Send a snapshot with `window: {"start": <the full listing's time window>}`, or deltas for incremental syncs.
 3. **Outbound:** follow the change feed.
    - **Life OS events** (`source: null`): write them to the "Life OS" calendar. This replaces `google_exports`.
    - **Events of your writable calendars:** write the owner's edits to Google with the stored etag. Skip entries whose `actors` is only you.
