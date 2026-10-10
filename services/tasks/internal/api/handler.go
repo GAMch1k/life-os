@@ -22,6 +22,9 @@ import (
 type Handler struct {
 	queries  *store.Queries
 	activity *activity.Emitter
+	// notifications reports Task notifications' health (see
+	// WithNotifications).
+	notifications NotificationStatus
 }
 
 var _ generated.ServerInterface = (*Handler)(nil)

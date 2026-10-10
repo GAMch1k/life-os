@@ -22,3 +22,23 @@ type Task struct {
 	AutomationIdempotencyKey *string
 	AutomationPayloadHash    *string
 }
+
+type TaskNotificationDispatch struct {
+	ID            bool
+	LastRunAt     pgtype.Timestamptz
+	LeaseOwner    *string
+	LeaseUntil    pgtype.Timestamptz
+	LastAttemptAt pgtype.Timestamptz
+	LastSuccessAt pgtype.Timestamptz
+	LastError     *string
+	LastErrorAt   pgtype.Timestamptz
+	LastSentAt    pgtype.Timestamptz
+	UpdatedAt     pgtype.Timestamptz
+}
+
+type TaskNotificationLog struct {
+	DedupeKey  string
+	DueAt      pgtype.Timestamptz
+	Outcome    string
+	RecordedAt pgtype.Timestamptz
+}
