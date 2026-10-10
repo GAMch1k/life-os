@@ -49,7 +49,7 @@ Names are 1–64 letters, digits, `.`, `_`, or `-`. An event emitted without any
 
 ### The actor gate
 
-Finance, Tasks, Inbox, Calendar, and Voice reject every write (`POST`, `PUT`, `PATCH`, `DELETE`) without a valid `X-Life-OS-Actor` with `400` and error code `actor_required` (`pkg/activity.RequireActor`). Reads, `/health`, and `/ready` do not need it. Internal callers always send one: the processor and MCP as agents, the Voice worker as `system:voice-worker`, and traces forward `user` explicitly.
+Finance, Tasks, Inbox, Calendar, Voice, and Notifications reject every write (`POST`, `PUT`, `PATCH`, `DELETE`) without a valid `X-Life-OS-Actor` with `400` and error code `actor_required` (`pkg/activity.RequireActor`). Reads, `/health`, and `/ready` do not need it. Internal callers always send one: the processor and MCP as agents, the Voice worker as `system:voice-worker`, and traces forward `user` explicitly.
 
 Two endpoints are deliberately not gated:
 
@@ -74,6 +74,8 @@ The public gateway passes only `user` and `dev:<name>`: a claim to be the Life O
 | `task.created` / `.updated` / `.completed` / `.reopened` | tasks | `task` | Every Task mutation, from the Dashboard or an agent. |
 | `calendar.event.created` / `.updated` / `.rescheduled` / `.cancelled` / `.restored` / `.deleted` | calendar | `calendar_event` | One per event change through the Calendar API, from the Dashboard (`user`), an agent, or a tool, with the request's correlation and causation; an update that changes nothing records nothing. `data` holds the title, times, status, source, and for updates the changed fields. See [Calendar](calendar.md#activity). |
 | `calendar.source.refreshed` / `.refresh_failed` | calendar | `calendar_source` | One per refresh of a subscribed feed (scheduled or "Refresh now"), also when nothing changed, by the source as `system:ics-<name>` (for example `system:ics-zaw`); `data` holds `sourceName`, `outcome`, the counts (inserted, updated, removed, restored) or the error, and `requestedBy` for a manual refresh. Never the feed URL, and no events per imported event. |
+| `notification.created` | notifications | `notification` | A notification was sent through the one path, by its producer (for example `system:calendar`); `data` holds `importance`, `category`, `source`, `link`, and the channels; the title is in the summary, never the body. A repeat with a known dedupe key records nothing. See [Notifications](notifications.md#activity). |
+| `notification.delivered` / `.delivery_failed` | notifications | `notification` | One per channel, by `system:notifications`, in the producer's workflow (caused by `notification.created`); `data` holds `channel`, `attempts`, and for a failure the `error`. Retries record nothing. |
 
 Finance changes are not recorded by Finance yet; its agent-driven changes still appear as `mcp.action.*` events.
 
