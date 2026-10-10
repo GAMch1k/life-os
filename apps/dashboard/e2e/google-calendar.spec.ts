@@ -25,9 +25,18 @@ type Calendar = {
   accessRole: string;
   primary: boolean;
   syncEnabled: boolean;
+  sync: {
+    state: "off" | "pending" | "synced" | "failing";
+    consecutiveFailures: number;
+    syncing: boolean;
+    lastSyncedAt?: string;
+    lastCounts?: Record<string, number>;
+  };
   createdAt: string;
   updatedAt: string;
 };
+
+const OFF = { state: "off", consecutiveFailures: 0, syncing: false } as const;
 
 const calendar = (
   id: string,
@@ -41,6 +50,7 @@ const calendar = (
   accessRole: "writer",
   primary: false,
   syncEnabled: false,
+  sync: OFF,
   createdAt: "2026-10-10T10:00:00Z",
   updatedAt: "2026-10-10T10:00:00Z",
   ...extra,
@@ -122,6 +132,21 @@ async function stubGoogle(page: Page, baseURL: string) {
           accessRole: "owner",
           primary: true,
           syncEnabled: true,
+          sync: {
+            state: "synced",
+            consecutiveFailures: 0,
+            syncing: false,
+            lastSyncedAt: "2026-10-10T10:05:00Z",
+            lastCounts: {
+              feedEvents: 3,
+              imported: 3,
+              inserted: 3,
+              updated: 0,
+              removed: 0,
+              restored: 0,
+              unchanged: 0,
+            },
+          },
         }),
         calendar("c2", "Family"),
         calendar("c3", "Holidays in Germany", {
@@ -136,7 +161,15 @@ async function stubGoogle(page: Page, baseURL: string) {
       const body = request.postDataJSON() as { syncEnabled: boolean };
       state.patches.push({ id, ...body });
       state.calendars = state.calendars.map((item) =>
-        item.id === id ? { ...item, syncEnabled: body.syncEnabled } : item,
+        item.id === id
+          ? {
+              ...item,
+              syncEnabled: body.syncEnabled,
+              sync: body.syncEnabled
+                ? { state: "pending", consecutiveFailures: 0, syncing: false }
+                : OFF,
+            }
+          : item,
       );
       return json(
         route,
@@ -206,8 +239,14 @@ test.describe("Google Calendar connection", () => {
     await expect(list.getByRole("checkbox")).toHaveCount(3);
     await expect(list.getByRole("checkbox", { name: /Owner/ })).toBeChecked();
     await expect(dialog).toContainText("1 of 3 calendars chosen to sync");
+    // Each chosen calendar says how its sync is going.
+    await expect(list.getByTestId("google-calendar-sync")).toHaveCount(1);
+    await expect(list.getByTestId("google-calendar-sync")).toContainText(
+      /^Synced .* · 3 events$/,
+    );
     await list.getByRole("checkbox", { name: /Family/ }).check();
     await expect(dialog).toContainText("2 of 3 calendars chosen to sync");
+    await expect(list).toContainText("Waiting for its first sync");
     expect(google.patches).toEqual([{ id: "c2", syncEnabled: true }]);
 
     await dialog.getByRole("button", { name: "Refresh list" }).click();

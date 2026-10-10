@@ -2,7 +2,7 @@
 
 import { AlertTriangle, CalendarSync, CheckCircle2 } from "lucide-react";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 
 import { LABEL, UNAVAILABLE } from "@/components/calendar-event-dialog";
 import { Button } from "@/components/ui/button";
@@ -26,16 +26,19 @@ import {
   googleState,
   missingPermissions,
   replaceCalendar,
+  SYNC_NOTE,
+  syncDetail,
   syncSummary,
   withoutGoogleParam,
 } from "@/lib/google-calendar";
+import { browserTimeZone } from "@/lib/time-zone";
 import { cn } from "@/lib/utils";
 
 /**
  * The Calendar toolbar's "Google Calendar" button and dialog: connect the
- * owner's Google account, choose which of its calendars will sync, refresh
- * the list, or disconnect. Back from Google's consent page
- * (`/calendar?google=connected`), the dialog opens by itself.
+ * owner's Google account, choose which of its calendars sync (and see how
+ * their sync is going), refresh the list, or disconnect. Back from Google's
+ * consent page (`/calendar?google=connected`), the dialog opens by itself.
  */
 export function GoogleCalendarControl() {
   const justConnected =
@@ -133,6 +136,19 @@ function GooglePanel({ justConnected }: { justConnected: boolean }) {
     }
   };
 
+  // A calendar switched on syncs within moments: read the list again once
+  // shortly after, to show its first sync.
+  const followUp = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(followUp.current), []);
+  const showFirstSync = () => {
+    clearTimeout(followUp.current);
+    followUp.current = setTimeout(() => {
+      loadGoogle()
+        .then(setLoaded)
+        .catch(() => undefined);
+    }, 5000);
+  };
+
   // Google's consent page; it returns to /calendar/google/callback.
   const connect = () =>
     startTransition(async () => {
@@ -213,8 +229,10 @@ function GooglePanel({ justConnected }: { justConnected: boolean }) {
           body: { syncEnabled },
         },
       );
-      if (data) update(data);
-      else {
+      if (data) {
+        update(data);
+        if (syncEnabled) showFirstSync();
+      } else {
         update(calendar);
         setError(`Could not save the choice for “${calendar.summary}”.`);
       }
@@ -406,50 +424,67 @@ function CalendarChoices({
   onChoose: (calendar: GoogleCalendar, syncEnabled: boolean) => void;
   saving?: string;
 }) {
+  // The list is read in the browser, so its zone is known here.
+  const timeZone = browserTimeZone() ?? "UTC";
   return (
     <fieldset className="grid min-w-0 gap-2">
       <legend className={cn(LABEL, "mb-1")}>Calendars to sync</legend>
       <p className="text-muted-foreground text-xs">
-        {syncSummary(calendars)} Syncing starts in a later release; your choices
-        are kept until then.
+        {syncSummary(calendars)} {SYNC_NOTE}
       </p>
       {calendars.length ? (
         <ul
           className="divide-y rounded-lg border"
           data-testid="google-calendar-list"
         >
-          {calendars.map((calendar) => (
-            <li key={calendar.id}>
-              <label className="flex cursor-pointer items-center gap-3 px-3 py-2">
-                <input
-                  checked={calendar.syncEnabled}
-                  className="accent-primary size-4 shrink-0"
-                  disabled={disabled || saving === calendar.id}
-                  onChange={(change) =>
-                    onChoose(calendar, change.target.checked)
-                  }
-                  type="checkbox"
-                />
-                <span
-                  aria-hidden="true"
-                  className="bg-muted size-3 shrink-0 rounded-full border"
-                  style={
-                    calendar.color
-                      ? { backgroundColor: calendar.color }
-                      : undefined
-                  }
-                />
-                <span className="grid min-w-0">
-                  <span className="truncate font-medium">
-                    {calendar.summary}
+          {calendars.map((calendar) => {
+            const sync = syncDetail(calendar, timeZone);
+            return (
+              <li key={calendar.id}>
+                <label className="flex cursor-pointer items-center gap-3 px-3 py-2">
+                  <input
+                    checked={calendar.syncEnabled}
+                    className="accent-primary size-4 shrink-0"
+                    disabled={disabled || saving === calendar.id}
+                    onChange={(change) =>
+                      onChoose(calendar, change.target.checked)
+                    }
+                    type="checkbox"
+                  />
+                  <span
+                    aria-hidden="true"
+                    className="bg-muted size-3 shrink-0 rounded-full border"
+                    style={
+                      calendar.color
+                        ? { backgroundColor: calendar.color }
+                        : undefined
+                    }
+                  />
+                  <span className="grid min-w-0">
+                    <span className="truncate font-medium">
+                      {calendar.summary}
+                    </span>
+                    <span className="text-muted-foreground text-xs">
+                      {calendarDetail(calendar)}
+                    </span>
+                    {sync ? (
+                      <span
+                        className={cn(
+                          "text-xs break-words",
+                          sync.failing
+                            ? "text-destructive"
+                            : "text-muted-foreground",
+                        )}
+                        data-testid="google-calendar-sync"
+                      >
+                        {sync.text}
+                      </span>
+                    ) : null}
                   </span>
-                  <span className="text-muted-foreground text-xs">
-                    {calendarDetail(calendar)}
-                  </span>
-                </span>
-              </label>
-            </li>
-          ))}
+                </label>
+              </li>
+            );
+          })}
         </ul>
       ) : null}
     </fieldset>
