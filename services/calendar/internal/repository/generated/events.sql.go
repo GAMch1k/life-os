@@ -166,7 +166,8 @@ CROSS JOIN LATERAL (
         CASE WHEN events.all_day THEN events.start_date::timestamp AT TIME ZONE $1::text ELSE events.start_at END AS starts_at,
         CASE WHEN events.all_day THEN (events.end_date + 1)::timestamp AT TIME ZONE $1::text ELSE events.end_at END AS ends_at
 ) AS span
-WHERE span.starts_at < $2::timestamptz
+WHERE events.recurrence_frequency IS NULL
+  AND span.starts_at < $2::timestamptz
   AND span.ends_at > $3::timestamptz
   AND ($4::boolean OR events.status = 'active')
   AND ($5::text IS NULL OR events.source_kind = $5::text)
@@ -196,10 +197,12 @@ type ListEventsRow struct {
 	StartsAt pgtype.Timestamptz
 }
 
-// Events overlapping [range_start, range_end). An all-day event spans from
-// midnight of its first day to midnight after its last day in time_zone, so
-// its dates are matched as the owner's days. The after_* arguments are the
-// previous page's last row: a keyset cursor over exactly the ORDER BY.
+// Non-recurring events overlapping [range_start, range_end) (recurring ones
+// are expanded into occurrences by the caller, see ListRecurringEvents). An
+// all-day event spans from midnight of its first day to midnight after its
+// last day in time_zone, so its dates are matched as the owner's days. The
+// after_* arguments are the previous page's last row: a keyset cursor over
+// exactly the ORDER BY.
 func (q *Queries) ListEvents(ctx context.Context, arg ListEventsParams) ([]ListEventsRow, error) {
 	rows, err := q.db.Query(ctx, listEvents,
 		arg.TimeZone,
@@ -258,6 +261,94 @@ func (q *Queries) ListEvents(ctx context.Context, arg ListEventsParams) ([]ListE
 	return items, nil
 }
 
+const listRecurringEvents = `-- name: ListRecurringEvents :many
+SELECT events.id, events.title, events.description, events.all_day, events.start_at, events.end_at, events.start_date, events.end_date, events.recurrence_frequency, events.recurrence_interval, events.recurrence_until, events.external_provider, events.external_id, events.created_at, events.updated_at, events.automation_idempotency_key, events.automation_payload_hash, events.location, events.time_zone, events.status, events.cancelled_at, events.source_kind, events.source_id, events.external_uid, events.removed_from_source_at, events.reminders
+FROM events
+CROSS JOIN LATERAL (
+    SELECT
+        CASE WHEN events.all_day THEN events.start_date::timestamp AT TIME ZONE $1::text ELSE events.start_at END AS starts_at,
+        CASE WHEN events.all_day THEN (events.end_date + 1)::timestamp AT TIME ZONE $1::text ELSE events.end_at END AS ends_at
+) AS span
+WHERE events.recurrence_frequency IS NOT NULL
+  AND span.starts_at < $2::timestamptz
+  AND (events.recurrence_until IS NULL OR events.recurrence_until + (span.ends_at - span.starts_at) > $3::timestamptz)
+  AND ($4::boolean OR events.status = 'active')
+  AND ($5::text IS NULL OR events.source_kind = $5::text)
+  AND ($6::uuid IS NULL OR events.source_id = $6::uuid)
+ORDER BY events.id
+`
+
+type ListRecurringEventsParams struct {
+	TimeZone         string
+	RangeEnd         pgtype.Timestamptz
+	RangeStart       pgtype.Timestamptz
+	IncludeCancelled bool
+	SourceKind       *string
+	SourceID         pgtype.UUID
+}
+
+type ListRecurringEventsRow struct {
+	Event Event
+}
+
+// Recurring events that may have an occurrence overlapping
+// [range_start, range_end): they start before range_end, and their last
+// possible occurrence (starting at recurrence_until) ends after range_start.
+// The caller expands them; a personal calendar holds few of them.
+func (q *Queries) ListRecurringEvents(ctx context.Context, arg ListRecurringEventsParams) ([]ListRecurringEventsRow, error) {
+	rows, err := q.db.Query(ctx, listRecurringEvents,
+		arg.TimeZone,
+		arg.RangeEnd,
+		arg.RangeStart,
+		arg.IncludeCancelled,
+		arg.SourceKind,
+		arg.SourceID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListRecurringEventsRow{}
+	for rows.Next() {
+		var i ListRecurringEventsRow
+		if err := rows.Scan(
+			&i.Event.ID,
+			&i.Event.Title,
+			&i.Event.Description,
+			&i.Event.AllDay,
+			&i.Event.StartAt,
+			&i.Event.EndAt,
+			&i.Event.StartDate,
+			&i.Event.EndDate,
+			&i.Event.RecurrenceFrequency,
+			&i.Event.RecurrenceInterval,
+			&i.Event.RecurrenceUntil,
+			&i.Event.ExternalProvider,
+			&i.Event.ExternalID,
+			&i.Event.CreatedAt,
+			&i.Event.UpdatedAt,
+			&i.Event.AutomationIdempotencyKey,
+			&i.Event.AutomationPayloadHash,
+			&i.Event.Location,
+			&i.Event.TimeZone,
+			&i.Event.Status,
+			&i.Event.CancelledAt,
+			&i.Event.SourceKind,
+			&i.Event.SourceID,
+			&i.Event.ExternalUid,
+			&i.Event.RemovedFromSourceAt,
+			&i.Event.Reminders,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const searchEvents = `-- name: SearchEvents :many
 SELECT events.id, events.title, events.description, events.all_day, events.start_at, events.end_at, events.start_date, events.end_date, events.recurrence_frequency, events.recurrence_interval, events.recurrence_until, events.external_provider, events.external_id, events.created_at, events.updated_at, events.automation_idempotency_key, events.automation_payload_hash, events.location, events.time_zone, events.status, events.cancelled_at, events.source_kind, events.source_id, events.external_uid, events.removed_from_source_at, events.reminders, ranked.relevance::integer AS relevance, ordering.bucket::integer AS bucket, ordering.sort_key::bigint AS sort_key
 FROM events
@@ -280,7 +371,8 @@ CROSS JOIN LATERAL (
         CASE WHEN span.ends_at > $3::timestamptz THEN 1 ELSE -1 END
             * (EXTRACT(EPOCH FROM span.starts_at) * 1000000)::bigint AS sort_key
 ) AS ordering
-WHERE NOT EXISTS (
+WHERE events.recurrence_frequency IS NULL
+  AND NOT EXISTS (
     SELECT 1 FROM unnest($2::text[]) AS term(pattern)
     WHERE NOT (events.title ILIKE term.pattern OR COALESCE(events.location, '') ILIKE term.pattern OR COALESCE(events.description, '') ILIKE term.pattern)
   )
@@ -321,8 +413,9 @@ type SearchEventsRow struct {
 	SortKey   int64
 }
 
-// Events whose title, description, or location contain every pattern (ILIKE
-// patterns, already escaped). Relevance weighs a pattern found in the title
+// Non-recurring events whose title, description, or location contain every
+// pattern (ILIKE patterns, already escaped; recurring ones come from
+// SearchRecurringEvents). Relevance weighs a pattern found in the title
 // 3, in the location 2, in the description 1. Then events not over at the
 // anchor instant come first (bucket 0, soonest start first), then past events
 // (bucket 1, most recent start first): sort_key is the start in microseconds,
@@ -380,6 +473,102 @@ func (q *Queries) SearchEvents(ctx context.Context, arg SearchEventsParams) ([]S
 			&i.Relevance,
 			&i.Bucket,
 			&i.SortKey,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const searchRecurringEvents = `-- name: SearchRecurringEvents :many
+SELECT events.id, events.title, events.description, events.all_day, events.start_at, events.end_at, events.start_date, events.end_date, events.recurrence_frequency, events.recurrence_interval, events.recurrence_until, events.external_provider, events.external_id, events.created_at, events.updated_at, events.automation_idempotency_key, events.automation_payload_hash, events.location, events.time_zone, events.status, events.cancelled_at, events.source_kind, events.source_id, events.external_uid, events.removed_from_source_at, events.reminders, ranked.relevance::integer AS relevance
+FROM events
+CROSS JOIN LATERAL (
+    SELECT COALESCE(SUM(
+        CASE WHEN events.title ILIKE term.pattern THEN 3 ELSE 0 END
+        + CASE WHEN COALESCE(events.location, '') ILIKE term.pattern THEN 2 ELSE 0 END
+        + CASE WHEN COALESCE(events.description, '') ILIKE term.pattern THEN 1 ELSE 0 END
+    ), 0) AS relevance
+    FROM unnest($1::text[]) AS term(pattern)
+) AS ranked
+WHERE events.recurrence_frequency IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM unnest($1::text[]) AS term(pattern)
+    WHERE NOT (events.title ILIKE term.pattern OR COALESCE(events.location, '') ILIKE term.pattern OR COALESCE(events.description, '') ILIKE term.pattern)
+  )
+  AND ($2::timestamptz IS NULL
+       OR CASE WHEN events.all_day THEN events.start_date::timestamp AT TIME ZONE $3::text ELSE events.start_at END < $2::timestamptz)
+  AND ($4::boolean OR events.status = 'active')
+  AND ($5::text IS NULL OR events.source_kind = $5::text)
+  AND ($6::uuid IS NULL OR events.source_id = $6::uuid)
+ORDER BY events.id
+`
+
+type SearchRecurringEventsParams struct {
+	Patterns         []string
+	RangeEnd         pgtype.Timestamptz
+	TimeZone         string
+	IncludeCancelled bool
+	SourceKind       *string
+	SourceID         pgtype.UUID
+}
+
+type SearchRecurringEventsRow struct {
+	Event     Event
+	Relevance int32
+}
+
+// Recurring events whose title, description, or location contain every
+// pattern, with the same relevance as SearchEvents. The caller picks their
+// occurrences; the range only drops series that start after range_end.
+func (q *Queries) SearchRecurringEvents(ctx context.Context, arg SearchRecurringEventsParams) ([]SearchRecurringEventsRow, error) {
+	rows, err := q.db.Query(ctx, searchRecurringEvents,
+		arg.Patterns,
+		arg.RangeEnd,
+		arg.TimeZone,
+		arg.IncludeCancelled,
+		arg.SourceKind,
+		arg.SourceID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SearchRecurringEventsRow{}
+	for rows.Next() {
+		var i SearchRecurringEventsRow
+		if err := rows.Scan(
+			&i.Event.ID,
+			&i.Event.Title,
+			&i.Event.Description,
+			&i.Event.AllDay,
+			&i.Event.StartAt,
+			&i.Event.EndAt,
+			&i.Event.StartDate,
+			&i.Event.EndDate,
+			&i.Event.RecurrenceFrequency,
+			&i.Event.RecurrenceInterval,
+			&i.Event.RecurrenceUntil,
+			&i.Event.ExternalProvider,
+			&i.Event.ExternalID,
+			&i.Event.CreatedAt,
+			&i.Event.UpdatedAt,
+			&i.Event.AutomationIdempotencyKey,
+			&i.Event.AutomationPayloadHash,
+			&i.Event.Location,
+			&i.Event.TimeZone,
+			&i.Event.Status,
+			&i.Event.CancelledAt,
+			&i.Event.SourceKind,
+			&i.Event.SourceID,
+			&i.Event.ExternalUid,
+			&i.Event.RemovedFromSourceAt,
+			&i.Event.Reminders,
+			&i.Relevance,
 		); err != nil {
 			return nil, err
 		}

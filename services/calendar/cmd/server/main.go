@@ -4,15 +4,21 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 	// The alpine runtime image has no zoneinfo; embed it so the owner's and
 	// requests' IANA timezones resolve.
 	_ "time/tzdata"
 
+	"github.com/GAMch1k/life-os/pkg/activity"
 	"github.com/GAMch1k/life-os/pkg/database"
 	"github.com/GAMch1k/life-os/pkg/httpserver"
 	"github.com/GAMch1k/life-os/services/calendar/internal/api"
 	serviceconfig "github.com/GAMch1k/life-os/services/calendar/internal/config"
+	"github.com/GAMch1k/life-os/services/calendar/internal/ics"
 	repository "github.com/GAMch1k/life-os/services/calendar/internal/repository/generated"
+	"github.com/GAMch1k/life-os/services/calendar/internal/sources"
 )
 
 func main() {
@@ -33,6 +39,17 @@ func run(ctx context.Context) error {
 	if err != nil {
 		logger.Warn(err.Error())
 	}
+	owner, err := time.LoadLocation(ownerTimeZone)
+	if err != nil {
+		return fmt.Errorf("load owner timezone: %w", err)
+	}
+	schedule, err := sources.ParseSchedule(cfg.SourceRefreshAt, owner)
+	if err != nil {
+		return err
+	}
+	if cfg.ICSAllowPrivateURLs {
+		logger.Warn("CALENDAR_ICS_ALLOW_PRIVATE_URLS is set: calendar feeds may use http and private addresses (development only)")
+	}
 	pool, err := database.Open(ctx, cfg.DatabaseConfig())
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
@@ -43,8 +60,31 @@ func run(ctx context.Context) error {
 		httpserver.WithLogger(logger),
 		httpserver.WithReadinessCheck(pool.Ping),
 	)
-	api.Register(app, api.NewHandler(repository.New(pool), ownerTimeZone))
+	fetcher := ics.NewFetcher(cfg.ICSMaxBytes, time.Duration(cfg.ICSTimeoutSeconds)*time.Second, cfg.ICSAllowPrivateURLs)
+	refresher := sources.NewRefresher(pool, fetcher, schedule, activity.NewEmitter(cfg.ActivityURL, "calendar", logger), logger)
+	scheduler := sources.NewScheduler(refresher, time.Minute, logger)
+	api.Register(app, api.NewHandler(repository.New(pool), ownerTimeZone).WithSources(refresher, scheduler.Wake))
 	app.OnShutdown(database.ClosePool(pool))
 
-	return app.Run(fmt.Sprintf(":%d", cfg.Port))
+	// The scheduler stops (finishing a refresh under way) before the pool
+	// closes: shutdown hooks run in reverse order.
+	runCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	schedulerCtx, stopScheduler := context.WithCancel(context.Background())
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		scheduler.Run(schedulerCtx)
+	}()
+	app.OnShutdown(func(shutdown context.Context) error {
+		stopScheduler()
+		select {
+		case <-stopped:
+			return nil
+		case <-shutdown.Done():
+			return fmt.Errorf("calendar source scheduler did not stop: %w", shutdown.Err())
+		}
+	})
+
+	return app.RunContext(runCtx, fmt.Sprintf(":%d", cfg.Port))
 }
