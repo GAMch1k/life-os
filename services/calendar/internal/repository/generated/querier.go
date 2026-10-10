@@ -38,6 +38,7 @@ type Querier interface {
 	// Google, for reference; it is never fetched as a feed.
 	CreateGoogleSource(ctx context.Context, arg CreateGoogleSourceParams) (CalendarSource, error)
 	CreatePresetSource(ctx context.Context, arg CreatePresetSourceParams) (CalendarSource, error)
+	// A null default_priority is medium.
 	CreateSource(ctx context.Context, arg CreateSourceParams) (CalendarSource, error)
 	DeleteEvent(ctx context.Context, id pgtype.UUID) (int64, error)
 	DeleteEventExceptions(ctx context.Context, arg DeleteEventExceptionsParams) (int64, error)
@@ -132,7 +133,8 @@ type Querier interface {
 	// Imported events are written only by Calendar's source adapter, inside the
 	// refresh transaction that holds LockSource.
 	ListSourceEvents(ctx context.Context, sourceID pgtype.UUID) ([]Event, error)
-	// What an imported event shows of its source: its name and default reminders.
+	// What an imported event shows of its source: its name, default reminders,
+	// and default priority.
 	ListSourceSummaries(ctx context.Context) ([]ListSourceSummariesRow, error)
 	// The feeds (ICS sources). Google calendars are sources too, managed through
 	// the Google connection (google_calendars), and are not listed here.
@@ -194,7 +196,7 @@ type Querier interface {
 	// Follows the Google calendar's name and default reminders.
 	UpdateGoogleSource(ctx context.Context, arg UpdateGoogleSourceParams) (CalendarSource, error)
 	// Rewrites an imported event from its source (also restoring one the source
-	// had removed). The source identity stays. reminders, use_default_reminders,
+	// had removed). The source identity and the owner's priority stay. reminders, use_default_reminders,
 	// and source_reminders change only when given: a feed never gives them (the
 	// owner's reminders stay), a Google sync gives the source's new reminders
 	// unless the owner changed the event's own.
@@ -205,7 +207,7 @@ type Querier interface {
 	// Writes the whole merged configuration, guarded by the updated_at it was
 	// read with. reset_validators drops the conditional-request validators (a
 	// changed URL or filter needs a full download); next_refresh_at, when given,
-	// reschedules the source.
+	// reschedules the source; a null default_priority keeps the source's.
 	UpdateSource(ctx context.Context, arg UpdateSourceParams) (CalendarSource, error)
 	// Writes one occurrence's changes and skip, replacing any it had.
 	UpsertEventException(ctx context.Context, arg UpsertEventExceptionParams) (EventException, error)

@@ -5,9 +5,9 @@ INSERT INTO events (
     recurrence_frequency, recurrence_interval, recurrence_until, reminders, use_default_reminders,
     status, cancelled_at, source_kind, source_id, external_uid, removed_from_source_at,
     external_provider, external_id, automation_idempotency_key, automation_payload_hash,
-    recurrence_by_weekday, recurrence_count
+    recurrence_by_weekday, recurrence_count, priority
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
 ON CONFLICT (automation_idempotency_key) WHERE automation_idempotency_key IS NOT NULL DO UPDATE SET automation_idempotency_key = EXCLUDED.automation_idempotency_key
 RETURNING *;
 
@@ -168,6 +168,7 @@ SET title = sqlc.arg(title), description = sqlc.narg(description), location = sq
     recurrence_frequency = sqlc.narg(recurrence_frequency), recurrence_interval = sqlc.narg(recurrence_interval),
     recurrence_until = sqlc.narg(recurrence_until), recurrence_by_weekday = sqlc.narg(recurrence_by_weekday)::text[],
     recurrence_count = sqlc.narg(recurrence_count), reminders = sqlc.arg(reminders), use_default_reminders = sqlc.arg(use_default_reminders),
+    priority = sqlc.narg(priority),
     status = sqlc.arg(status), cancelled_at = sqlc.narg(cancelled_at), removed_from_source_at = sqlc.narg(removed_from_source_at),
     updated_at = now()
 WHERE id = sqlc.arg(id) AND updated_at = sqlc.arg(expected_updated_at)

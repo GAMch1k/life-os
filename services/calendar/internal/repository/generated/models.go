@@ -59,6 +59,7 @@ type CalendarSource struct {
 	Preset              *string
 	PresetConfig        []byte
 	GoogleCalendarID    pgtype.UUID
+	DefaultPriority     string
 }
 
 type Event struct {
@@ -92,6 +93,7 @@ type Event struct {
 	RecurrenceByWeekday      []string
 	RecurrenceCount          *int32
 	SourceReminders          []byte
+	Priority                 *string
 }
 
 type EventException struct {

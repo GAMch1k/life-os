@@ -351,6 +351,9 @@ func (e expansion) item(o seriesOccurrence) generated.CalendarEvent {
 		if changes.UseDefaultReminders != nil {
 			item.UseDefaultReminders = *changes.UseDefaultReminders
 		}
+		if changes.Priority != nil {
+			item.Priority = *changes.Priority
+		}
 		if o.ex.cancelledAt != nil && item.Status == generated.Active {
 			cancelledAt := *o.ex.cancelledAt
 			item.Status, item.CancelledAt = generated.Cancelled, &cancelledAt

@@ -96,20 +96,25 @@ func TestOccurrenceChangesRoundTrip(t *testing.T) {
 		Title: ptr("Gym with Anna"), Description: optionalText{set: true}, Location: optionalText{set: true, value: ptr("Park")},
 		StartAt: instant("2026-10-17T07:00:00Z"), EndAt: instant("2026-10-17T08:00:00Z"),
 		Reminders: &[]generated.Reminder{{Kind: generated.Relative, MinutesBefore: ptr(15)}}, UseDefaultReminders: ptr(false),
+		Priority: ptr(generated.High),
 	}
 	raw, err := changes.encode()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := `{"title":"Gym with Anna","description":null,"location":"Park","startAt":"2026-10-17T07:00:00Z","endAt":"2026-10-17T08:00:00Z","reminders":[{"kind":"relative","minutesBefore":15}],"useDefaultReminders":false}`; string(raw) != want {
+	if want := `{"title":"Gym with Anna","description":null,"location":"Park","startAt":"2026-10-17T07:00:00Z","endAt":"2026-10-17T08:00:00Z","reminders":[{"kind":"relative","minutesBefore":15}],"useDefaultReminders":false,"priority":"high"}`; string(raw) != want {
 		t.Fatalf("encoded %s\nwant    %s", raw, want)
 	}
 	back, err := decodeChanges(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !back.Description.set || back.Description.value != nil || *back.Location.value != "Park" || !back.moves() || back.empty() || len(*back.Reminders) != 1 {
+	if !back.Description.set || back.Description.value != nil || *back.Location.value != "Park" || !back.moves() || back.empty() || len(*back.Reminders) != 1 ||
+		*back.Priority != generated.High {
 		t.Fatalf("decoded %+v", back)
+	}
+	if only, err := decodeChanges([]byte(`{"priority":"low"}`)); err != nil || only.empty() || *only.Priority != generated.Low {
+		t.Fatalf("a priority alone = %+v, %v", only, err)
 	}
 	if empty, _ := decodeChanges([]byte(`{}`)); !empty.empty() || empty.moves() {
 		t.Fatalf("empty changes = %+v", empty)
@@ -151,6 +156,39 @@ func TestDiffOccurrence(t *testing.T) {
 	rest := changes.without(map[string]bool{"title": true, "startAt": true})
 	if rest.Title != nil || rest.moves() || !rest.Description.set {
 		t.Fatalf("without title and times = %+v", rest)
+	}
+}
+
+// An occurrence's own priority is one that differs from the series' as it
+// applies (a series without its own has the Life OS default, medium).
+func TestDiffOccurrencePriority(t *testing.T) {
+	natural := timedFields()
+	natural.Reminders = []generated.Reminder{}
+	next := natural
+	next.Priority = ptr(generated.Medium)
+	if changes := diffOccurrence(natural, next); !changes.empty() {
+		t.Fatalf("medium on a series without its own = %+v, want no change", changes)
+	}
+	next.Priority = ptr(generated.High)
+	changes := diffOccurrence(natural, next)
+	if changes.Priority == nil || *changes.Priority != generated.High || changes.Title != nil {
+		t.Fatalf("high = %+v", changes)
+	}
+	if applied := changes.applyTo(natural); *applied.Priority != generated.High {
+		t.Fatalf("applied = %+v", applied.Priority)
+	}
+	// On a high series, medium is the occurrence's own and high is none.
+	natural.Priority = ptr(generated.High)
+	next.Priority = ptr(generated.Medium)
+	if changes := diffOccurrence(natural, next); changes.Priority == nil || *changes.Priority != generated.Medium {
+		t.Fatalf("medium on a high series = %+v", changes)
+	}
+	next.Priority = ptr(generated.High)
+	if changes := diffOccurrence(natural, next); !changes.empty() {
+		t.Fatalf("high on a high series = %+v, want no change", changes)
+	}
+	if rest := changes.without(map[string]bool{"priority": true}); rest.Priority != nil {
+		t.Fatalf("without priority = %+v", rest)
 	}
 }
 
