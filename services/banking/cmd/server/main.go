@@ -7,6 +7,9 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+	// The alpine runtime image has no zoneinfo; embed it so the owner's
+	// timezone resolves.
+	_ "time/tzdata"
 
 	"github.com/GAMch1k/life-os/pkg/activity"
 	"github.com/GAMch1k/life-os/pkg/database"
