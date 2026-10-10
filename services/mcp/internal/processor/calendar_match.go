@@ -102,9 +102,10 @@ func validReminders(value any) bool {
 // of an approved calendar action. Inbox records the chosen candidate as
 // taskId (its one selection field, also used for Tasks); eventId is accepted
 // too. Only an approved action may name its event; a planned one is resolved
-// by search.
+// by search. An approved calendar_create names the existing event it
+// restates, which it then updates (see findDuplicates).
 func approvedCalendarTarget(approved plan) (plan, string) {
-	if len(approved.Actions) != 1 || !isCalendarMutation(approved.Actions[0]) {
+	if len(approved.Actions) != 1 || !(isCalendarMutation(approved.Actions[0]) || approved.Actions[0].Tool == "calendar_create") {
 		return approved, ""
 	}
 	arguments := approved.Actions[0].Arguments
@@ -168,18 +169,11 @@ func (r Runner) findEvents(ctx context.Context, item inboxItem, action plannedAc
 			if !window.to.IsZero() {
 				query.Set("to", window.to.UTC().Format(time.RFC3339))
 			}
-			raw, err := r.Tools.Call(ctx, "calendar_search", map[string]any{"query": query.Encode()})
+			items, err := r.searchEvents(ctx, query)
 			if err != nil {
 				return nil, err
 			}
-			var result struct {
-				Items []map[string]any `json:"items"`
-			}
-			if err := json.Unmarshal(toolData(raw), &result); err != nil {
-				// A partial union could look like exactly one match.
-				return nil, fmt.Errorf("decode Calendar search result: %w", err)
-			}
-			for _, event := range result.Items {
+			for _, event := range items {
 				if window.recurringOnly && !isRecurring(event) {
 					continue
 				}
@@ -191,6 +185,22 @@ func (r Runner) findEvents(ctx context.Context, item inboxItem, action plannedAc
 		}
 	}
 	return found, nil
+}
+
+// searchEvents runs one calendar_search and returns the events it found.
+func (r Runner) searchEvents(ctx context.Context, query url.Values) ([]map[string]any, error) {
+	raw, err := r.Tools.Call(ctx, "calendar_search", map[string]any{"query": query.Encode()})
+	if err != nil {
+		return nil, err
+	}
+	var result struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal(toolData(raw), &result); err != nil {
+		// A partial union could look like exactly one match.
+		return nil, fmt.Errorf("decode Calendar search result: %w", err)
+	}
+	return result.Items, nil
 }
 
 // onDate is the start, in location, of the day a cancellation names

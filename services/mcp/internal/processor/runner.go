@@ -180,7 +180,39 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 		}
 		// target is the one existing Task or event a search found.
 		var target map[string]any
-		if (isTaskMutation(action) && action.Arguments["taskId"] == nil) || (isCalendarMutation(action) && approvedEvent == "") {
+		// restated is the planned calendar_create of an event that already
+		// exists, which an update of that event replaces.
+		var restated map[string]any
+		if action.Tool == "calendar_create" {
+			// The event the owner chose in Human Review, else a search.
+			var found []map[string]any
+			var findErr error
+			if approvedEvent != "" {
+				event, getErr := r.getEvent(ctx, approvedEvent)
+				if getErr != nil {
+					return Proposal{}, r.retryLater(ctx, item.ID, started.ID, actions, "calendar read failed: "+getErr.Error(), classifyActionError(getErr), previous)
+				}
+				found = []map[string]any{event}
+			} else if found, findErr = r.findDuplicates(ctx, item, action); findErr != nil {
+				reason, kind := failedSearch(findErr)
+				return Proposal{}, r.retryLater(ctx, item.ID, started.ID, actions, reason, kind, previous)
+			}
+			switch {
+			case len(found) > 1:
+				// Approving a candidate runs this create as an update of it.
+				return Proposal{}, r.humanReview(ctx, item.ID, started.ID, action, eventCandidates(found, r.location(item)), duplicateReason)
+			case len(found) == 1 && isRecurring(found[0]):
+				return Proposal{}, r.humanReview(ctx, item.ID, started.ID, action, []map[string]any{}, recurringChangeReason)
+			case len(found) == 1:
+				restated, target = action.Arguments, found[0]
+				action = plannedAction{Tool: "calendar_update", Arguments: duplicateChange(restated, target)}
+				if len(action.Arguments) == 0 {
+					actions = append(actions, map[string]any{"tool": "none", "convertedFrom": "calendar_create", "plannedArguments": restated, "duplicateOf": target["id"], "reason": unchangedDuplicateReason})
+					continue
+				}
+			}
+		}
+		if target == nil && ((isTaskMutation(action) && action.Arguments["taskId"] == nil) || (isCalendarMutation(action) && approvedEvent == "")) {
 			res, findErr := r.resolve(ctx, item, action)
 			if findErr != nil {
 				reason, kind := failedSearch(findErr)
@@ -244,6 +276,10 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 		}
 		result, err := r.Tools.Call(ctx, action.Tool, arguments)
 		audit := map[string]any{"tool": action.Tool, "arguments": arguments}
+		if restated != nil {
+			audit["convertedFrom"] = "calendar_create"
+			audit["plannedArguments"] = restated
+		}
 		if err != nil && isCalendarMutation(action) && managedBySource(err) {
 			// An imported event: a decision for the owner, never a retry.
 			return Proposal{}, r.humanReview(ctx, item.ID, started.ID, action, []map[string]any{}, managedBySourceReason)

@@ -375,7 +375,8 @@ func TestExistingCalendarCreatePlansStillWork(t *testing.T) {
 		tools := newCalendarTools("Add dentist")
 		runCalendarPlan(t, tools, raw)
 		input := tools.inputs["calendar_create"]
-		if input == nil || input["idempotencyKey"] == "" || !contains(tools.calls, "inbox_resolve") || len(tools.searches) != 0 {
+		// The only search is the duplicate check on the event's own day.
+		if input == nil || input["idempotencyKey"] == "" || !contains(tools.calls, "inbox_resolve") || len(tools.searches) != 1 || !tools.searches[0].Has("to") {
 			t.Fatalf("plan %s: calls = %#v, input = %#v", raw, tools.calls, input)
 		}
 		var parsed plan
