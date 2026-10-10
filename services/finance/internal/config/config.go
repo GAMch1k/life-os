@@ -26,8 +26,11 @@ type Config struct {
 	// there. Unset or unknown means UTC.
 	TimeZone string `env:"LIFE_OS_TIMEZONE" default:"UTC"`
 	// DefaultCurrency is the currency of the built-in Cash account when
-	// Finance creates it.
+	// Finance creates it, and of budgets.
 	DefaultCurrency string `env:"FINANCE_DEFAULT_CURRENCY" default:"EUR"`
+	// NotificationsURL is the Notifications service the budget alerts send
+	// to; empty sends nothing.
+	NotificationsURL string `env:"NOTIFICATIONS_SERVICE_URL"`
 }
 
 var currencyCode = regexp.MustCompile(`^[A-Z]{3}$`)

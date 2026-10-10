@@ -230,6 +230,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/budgets/{month}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a month's budget and its progress
+         * @description The plan that applies to the month (its own plan, or the regular plan that rolls forward; `plan` is null when there is none) and the month's progress in the budget currency. Spending is money out in expense categories, booked and pending (pending money counts so a warning comes early), less refunds in the same category; the Savings category, transfers, and income are not spending. Uncategorized money out is its own line. `savings.saved` is the income minus the spending: what was moved to the Savings category plus what is left over. Transactions in other currencies are left out (`excludedCurrencies`).
+         */
+        get: operations["getBudgetMonth"];
+        /**
+         * Save a month's budget plan
+         * @description Saves the plan for the month. Scope `month` gives only this month its own plan; the regular plan stays as it is. Scope `following` makes it the regular plan from this month on: later months that had their own plan follow it too, and earlier months keep theirs. Amounts are minor units of the budget currency; a category with 0 is left out of the plan. Lines must name expense categories.
+         */
+        put: operations["saveBudgetPlan"];
+        post?: never;
+        /**
+         * Return a month to the regular plan
+         * @description Removes the month's own plan, so it follows the regular plan again. Idempotent: a month without its own plan also answers 204.
+         */
+        delete: operations["resetBudgetMonth"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/budgets/{month}/suggestions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Suggest starting amounts for a month's plan
+         * @description Starting amounts from real spending: for every active expense category, the median of its booked spending (less refunds) over the last three complete months before the month (and never after the current month), rounded up to a whole unit of the currency. Only months with booked transactions in the budget currency count (bank data covers about 90 days once connected); a month with history but no spending in a category counts as 0. `suggested` is null when the category had no spending in those months, and `months` is empty when there is no history yet. `income` and `saved` are the medians of the monthly income and of income minus spending.
+         */
+        get: operations["getBudgetSuggestions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/imports/csv": {
         parameters: {
             query?: never;
@@ -416,7 +464,7 @@ export interface components {
             /** @description Identity at the source: the CSV external_id (or a content hash), or the bank transaction id. */
             externalId: string | null;
         };
-        /** @description `categorizedBy` is `manual` when the category was chosen by hand (by the owner, the AI, or the import file; possibly none), `rule` when a category rule chose it (`categoryRuleId` names the rule), and null while nobody chose. `readOnly` is true for imported transactions: only `categoryId` and `notes` change, and they cannot be deleted. */
+        /** @description `categorizedBy` is `manual` when the category was chosen by hand (by the owner, the AI, or the import file; possibly none), `rule` when a category rule chose it (`categoryRuleId` names the rule), `mcc` when no rule matched and the card's merchant category code gave a default category, and null while nobody chose. `readOnly` is true for imported transactions: only `categoryId` and `notes` change, and they cannot be deleted. */
         Transaction: {
             /** Format: uuid */
             id: string;
@@ -437,7 +485,7 @@ export interface components {
             /** Format: uuid */
             categoryId: string | null;
             /** @enum {string|null} */
-            categorizedBy: "manual" | "rule" | null;
+            categorizedBy: "manual" | "rule" | "mcc" | null;
             /** Format: uuid */
             categoryRuleId: string | null;
             /** @description The card merchant category code (ISO 18245) a bank reported. */
@@ -493,12 +541,15 @@ export interface components {
          * @enum {string}
          */
         CategoryKind: "expense" | "income" | "transfer";
+        /** @description `systemKey` marks a default category Finance added (or an existing one of the same name and kind it adopted), such as `groceries` or `savings`. It never changes, also when the category is renamed, so the default merchant rules, the merchant category codes, and the budget's savings keep finding it. */
         Category: {
             /** Format: uuid */
             id: string;
             name: string;
             kind: components["schemas"]["CategoryKind"];
             color: string | null;
+            /** @enum {string|null} */
+            systemKey: "groceries" | "eating_out" | "housing" | "utilities" | "transport" | "subscriptions" | "shopping" | "health" | "fun" | "savings" | "income" | "transfers" | "other" | null;
             archived: boolean;
             /** Format: date-time */
             archivedAt: string | null;
@@ -550,7 +601,7 @@ export interface components {
         CategoryRuleList: {
             items: components["schemas"]["CategoryRule"][];
         };
-        /** @description Without `priority` the rule comes after every existing rule. */
+        /** @description Without `priority` the rule comes after the owner's existing rules but before the default merchant rules, which have priorities from 100000. */
         CreateCategoryRuleRequest: {
             /** Format: uuid */
             categoryId: string;
@@ -606,6 +657,119 @@ export interface components {
             net: components["schemas"]["Money"];
             spendingByCategory: components["schemas"]["SpendingByCategory"][];
             byCategory: components["schemas"]["CategoryTotal"][];
+        };
+        /**
+         * @description `month`: only this month. `following`: the regular plan from this month on.
+         * @enum {string}
+         */
+        BudgetScope: "month" | "following";
+        /**
+         * @description `month`: the month has its own plan. `regular`: it follows the regular plan.
+         * @enum {string}
+         */
+        BudgetPlanSource: "month" | "regular";
+        /** @description The plan that applies to the month. `since` is the month the regular plan applies from (the month itself for its own plan). `unallocated` is the expected income minus the planned spending and the savings goal; negative when the plan spends more than the income. */
+        BudgetPlan: {
+            source: components["schemas"]["BudgetPlanSource"];
+            /** @description YYYY-MM. */
+            since: string;
+            expectedIncome: components["schemas"]["Money"];
+            savingsGoal: components["schemas"]["Money"];
+            unallocated: components["schemas"]["Money"];
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        /**
+         * @description `under`: below 80% of the planned amount. `near`: 80% or more. `over`: more than planned. `unplanned`: spending in a category the plan has no amount for.
+         * @enum {string}
+         */
+        BudgetLineStatus: "under" | "near" | "over" | "unplanned";
+        /** @description One expense category's month. `spent` is its money out less refunds (never below 0), booked and pending; `pending` is the part of it still pending. `remaining` is planned minus spent (negative when over). `percent` is spent as a percentage of planned, rounded down; null without a planned amount. */
+        BudgetLine: {
+            /** Format: uuid */
+            categoryId: string;
+            categoryName: string;
+            categoryColor: string | null;
+            archived: boolean;
+            planned: components["schemas"]["Money"];
+            spent: components["schemas"]["Money"];
+            pending: components["schemas"]["Money"];
+            remaining: components["schemas"]["Money"];
+            percent: number | null;
+            status: components["schemas"]["BudgetLineStatus"];
+            transactionCount: number;
+        };
+        /** @description Money out without a category, booked and pending; it counts as spending. */
+        BudgetUncategorized: {
+            spent: components["schemas"]["Money"];
+            pending: components["schemas"]["Money"];
+            transactionCount: number;
+        };
+        /** @description `planned` is the sum of the plan's category amounts; `spent` all spending (planned categories, unplanned ones, and uncategorized), of it `pending`; `remaining` is planned minus spent. */
+        BudgetTotals: {
+            planned: components["schemas"]["Money"];
+            spent: components["schemas"]["Money"];
+            pending: components["schemas"]["Money"];
+            remaining: components["schemas"]["Money"];
+            percent: number | null;
+        };
+        /** @description Money in, booked and pending, in income categories (less money out there) and without a category; of it `pending`. */
+        BudgetIncome: {
+            actual: components["schemas"]["Money"];
+            pending: components["schemas"]["Money"];
+        };
+        /** @description `saved` is the month's income minus its spending. `movedToSavings` is the money moved out in the Savings category (`systemKey` savings) from accounts other than savings accounts, less money moved back; `leftover` is the rest of `saved`. `percent` is saved against the plan's savings goal, rounded down; null without a goal. */
+        BudgetSavings: {
+            movedToSavings: components["schemas"]["Money"];
+            leftover: components["schemas"]["Money"];
+            saved: components["schemas"]["Money"];
+            percent: number | null;
+        };
+        ExcludedCurrency: {
+            currency: string;
+            transactionCount: number;
+        };
+        /** @description A month's budget in `currency` (the budget currency). `lines` lists the plan's categories by name, then expense categories with spending the plan has no amount for (`unplanned`), largest first. */
+        BudgetMonth: {
+            /** @description YYYY-MM. */
+            month: string;
+            currency: string;
+            plan: components["schemas"]["BudgetPlan"] | null;
+            lines: components["schemas"]["BudgetLine"][];
+            uncategorized: components["schemas"]["BudgetUncategorized"];
+            totals: components["schemas"]["BudgetTotals"];
+            income: components["schemas"]["BudgetIncome"];
+            savings: components["schemas"]["BudgetSavings"];
+            /** @description Currencies with transactions in the month that the budget leaves out. */
+            excludedCurrencies: components["schemas"]["ExcludedCurrency"][];
+        };
+        BudgetLineInput: {
+            /** Format: uuid */
+            categoryId: string;
+            /** Format: int64 */
+            amountMinor: number;
+        };
+        SaveBudgetPlanRequest: {
+            scope: components["schemas"]["BudgetScope"];
+            /** Format: int64 */
+            expectedIncomeMinor: number;
+            /** Format: int64 */
+            savingsGoalMinor: number;
+            lines: components["schemas"]["BudgetLineInput"][];
+        };
+        BudgetCategorySuggestion: {
+            /** Format: uuid */
+            categoryId: string;
+            suggested: components["schemas"]["Money"] | null;
+            monthsWithSpending: number;
+        };
+        /** @description `months` are the complete months (YYYY-MM, oldest first) the suggestions are based on. */
+        BudgetSuggestions: {
+            currency: string;
+            months: string[];
+            income: components["schemas"]["Money"] | null;
+            saved: components["schemas"]["Money"] | null;
+            categories: components["schemas"]["BudgetCategorySuggestion"][];
         };
         CsvImportError: {
             /** @description The CSV line (the header is row 1). */
@@ -718,6 +882,8 @@ export interface components {
         TransactionId: string;
         CategoryId: string;
         RuleId: string;
+        /** @description YYYY-MM. */
+        Month: string;
     };
     requestBodies: never;
     headers: never;
@@ -1468,6 +1634,136 @@ export interface operations {
                 };
             };
             /** @description Invalid request (`invalid_request`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getBudgetMonth: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description YYYY-MM. */
+                month: components["parameters"]["Month"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The month's budget */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetMonth"];
+                };
+            };
+            /** @description The month is not YYYY-MM (`invalid_request`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    saveBudgetPlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description YYYY-MM. */
+                month: components["parameters"]["Month"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SaveBudgetPlanRequest"];
+            };
+        };
+        responses: {
+            /** @description The month's budget with the saved plan */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetMonth"];
+                };
+            };
+            /** @description Invalid request (`invalid_request`: a bad month, a negative amount, a category named twice or not an expense category), an unknown category (`unknown_category`), or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    resetBudgetMonth: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description YYYY-MM. */
+                month: components["parameters"]["Month"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The month follows the regular plan */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The month is not YYYY-MM (`invalid_request`), or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getBudgetSuggestions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description YYYY-MM. */
+                month: components["parameters"]["Month"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Suggestions */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetSuggestions"];
+                };
+            };
+            /** @description The month is not YYYY-MM (`invalid_request`) */
             400: {
                 headers: {
                     [name: string]: unknown;

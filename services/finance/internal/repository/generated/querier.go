@@ -14,17 +14,28 @@ type Querier interface {
 	AccountNameExists(ctx context.Context, name string) (bool, error)
 	// An account the owner already called Cash becomes the built-in one.
 	AdoptAccountAsBuiltIn(ctx context.Context, arg AdoptAccountAsBuiltInParams) (Account, error)
+	// An existing category of the default's name (any case) and kind becomes
+	// the default one; only its system key is set.
+	AdoptCategory(ctx context.Context, arg AdoptCategoryParams) (FinancialCategory, error)
 	ArchiveConnectionAccounts(ctx context.Context, connectionID pgtype.UUID) ([]Account, error)
+	CategoryNameTaken(ctx context.Context, name string) (bool, error)
+	ClaimBudgetNotification(ctx context.Context, arg ClaimBudgetNotificationParams) (int64, error)
 	CountAccountTransactions(ctx context.Context, accountID pgtype.UUID) (int64, error)
 	CreateAccount(ctx context.Context, arg CreateAccountParams) (Account, error)
 	CreateBankAccount(ctx context.Context, arg CreateBankAccountParams) (Account, error)
 	CreateBuiltInAccount(ctx context.Context, arg CreateBuiltInAccountParams) (Account, error)
 	CreateCategoryRule(ctx context.Context, arg CreateCategoryRuleParams) (CategoryRule, error)
+	CreateDefaultCategory(ctx context.Context, arg CreateDefaultCategoryParams) (FinancialCategory, error)
 	CreateFinancialCategory(ctx context.Context, arg CreateFinancialCategoryParams) (FinancialCategory, error)
 	// No row comes back when the account already has this import identity.
 	CreateImportedTransaction(ctx context.Context, arg CreateImportedTransactionParams) (Transaction, error)
 	CreateTransaction(ctx context.Context, arg CreateTransactionParams) (Transaction, error)
+	DeleteBudgetPlanLines(ctx context.Context, planID pgtype.UUID) error
 	DeleteCategoryRule(ctx context.Context, id pgtype.UUID) (CategoryRule, error)
+	// A regular plan starting in a month replaces the months' own plans from
+	// then on and the regular plans that would start later.
+	DeleteLaterBudgetPlans(ctx context.Context, month pgtype.Date) ([]DeleteLaterBudgetPlansRow, error)
+	DeleteMonthBudgetPlan(ctx context.Context, month pgtype.Date) (BudgetPlan, error)
 	// Pending bank transactions of the connection booked inside the sync window
 	// that the sync no longer has.
 	DeleteStalePending(ctx context.Context, arg DeleteStalePendingParams) (int64, error)
@@ -34,14 +45,26 @@ type Querier interface {
 	// three days apart, and absent from the sync (keep).
 	FindReplacedPending(ctx context.Context, arg FindReplacedPendingParams) (Transaction, error)
 	GetAccount(ctx context.Context, id pgtype.UUID) (Account, error)
+	// Booked money per month and category in one currency, for suggestions.
+	GetBudgetHistory(ctx context.Context, arg GetBudgetHistoryParams) ([]GetBudgetHistoryRow, error)
+	// A month's money in one currency per category (null: uncategorized):
+	// money out and in, booked and pending, and the net amount on accounts
+	// that are not savings accounts (for the Savings category).
+	GetBudgetMonthTotals(ctx context.Context, arg GetBudgetMonthTotalsParams) ([]GetBudgetMonthTotalsRow, error)
+	GetBudgetPlan(ctx context.Context, arg GetBudgetPlanParams) (BudgetPlan, error)
 	GetBuiltInAccount(ctx context.Context, systemKey string) (Account, error)
+	GetCategoryBySystemKey(ctx context.Context, systemKey string) (FinancialCategory, error)
 	GetCategoryRule(ctx context.Context, id pgtype.UUID) (CategoryRule, error)
+	// The plan of a month: its own plan, else the latest regular plan that
+	// started in or before it.
+	GetEffectiveBudgetPlan(ctx context.Context, month pgtype.Date) (BudgetPlan, error)
 	GetFinancialCategory(ctx context.Context, id pgtype.UUID) (FinancialCategory, error)
 	// Booked transactions of the month in one currency, leaving out transfers.
 	GetMonthlyCashflow(ctx context.Context, arg GetMonthlyCashflowParams) (GetMonthlyCashflowRow, error)
 	GetMonthlyCategoryTotals(ctx context.Context, arg GetMonthlyCategoryTotalsParams) ([]GetMonthlyCategoryTotalsRow, error)
 	GetTransaction(ctx context.Context, id pgtype.UUID) (Transaction, error)
 	GetTransactionForUpdate(ctx context.Context, id pgtype.UUID) (Transaction, error)
+	InsertBudgetPlanLines(ctx context.Context, arg InsertBudgetPlanLinesParams) error
 	// A bank account that reported a booked balance shows it; every other
 	// account shows its opening balance plus its booked transactions.
 	ListAccountsWithBalance(ctx context.Context, arg ListAccountsWithBalanceParams) ([]ListAccountsWithBalanceRow, error)
@@ -49,11 +72,18 @@ type Querier interface {
 	// in the order they are tried.
 	ListActiveCategoryRules(ctx context.Context) ([]CategoryRule, error)
 	ListBankTransactions(ctx context.Context, arg ListBankTransactionsParams) ([]Transaction, error)
+	ListBudgetNotifications(ctx context.Context, month pgtype.Date) ([]string, error)
+	ListBudgetPlanLines(ctx context.Context, planID pgtype.UUID) ([]BudgetPlanLine, error)
 	ListCategoryRules(ctx context.Context) ([]CategoryRule, error)
 	ListConnectionAccounts(ctx context.Context, connectionID pgtype.UUID) ([]Account, error)
+	// The active default categories, for the merchant category code fallback.
+	ListDefaultCategories(ctx context.Context) ([]FinancialCategory, error)
+	// The month's transactions in other currencies than the budget's.
+	ListExcludedCurrencies(ctx context.Context, arg ListExcludedCurrenciesParams) ([]ListExcludedCurrenciesRow, error)
 	ListFinancialCategories(ctx context.Context, includeArchived bool) ([]FinancialCategory, error)
 	// Transactions whose category was not chosen by hand: those without a
-	// category, plus those a rule categorized when all_categorized is set.
+	// category, plus those a rule or a merchant category code categorized when
+	// all_categorized is set.
 	ListRuleCandidates(ctx context.Context, allCategorized bool) ([]ListRuleCandidatesRow, error)
 	// Latest booking date first, then latest created; the after_* position is
 	// the last row of the previous page. Every search word must occur in the
@@ -61,8 +91,15 @@ type Querier interface {
 	ListTransactions(ctx context.Context, arg ListTransactionsParams) ([]Transaction, error)
 	// One sync of a connection at a time.
 	LockBankConnection(ctx context.Context, connectionID pgtype.UUID) error
+	// One plan change at a time.
+	LockBudgetPlans(ctx context.Context) error
 	LockBuiltInAccounts(ctx context.Context) error
-	// Gives each transaction the category its rule chose (null: none).
+	LockSeeds(ctx context.Context) error
+	MarkSeedApplied(ctx context.Context, name string) error
+	ReleaseBudgetNotification(ctx context.Context, dedupeKey string) error
+	SeedApplied(ctx context.Context, name string) (bool, error)
+	// Gives each transaction the category its rule or merchant category code
+	// chose (null: none); categorized_by is 'rule', 'mcc', or '' for none.
 	SetRuleCategories(ctx context.Context, arg SetRuleCategoriesParams) error
 	UpdateAccount(ctx context.Context, arg UpdateAccountParams) (Account, error)
 	// A re-sync refreshes what the bank reports; the owner's name, kind, and
@@ -72,6 +109,7 @@ type Querier interface {
 	UpdateCategoryRule(ctx context.Context, arg UpdateCategoryRuleParams) (CategoryRule, error)
 	UpdateFinancialCategory(ctx context.Context, arg UpdateFinancialCategoryParams) (FinancialCategory, error)
 	UpdateTransaction(ctx context.Context, arg UpdateTransactionParams) (Transaction, error)
+	UpsertBudgetPlan(ctx context.Context, arg UpsertBudgetPlanParams) (BudgetPlan, error)
 }
 
 var _ Querier = (*Queries)(nil)

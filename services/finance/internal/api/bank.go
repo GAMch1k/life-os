@@ -221,11 +221,10 @@ func (h *Handler) ImportBankSync(c fiber.Ctx) error {
 		for _, item := range stored {
 			existing[*item.ImportExternalID] = item
 		}
-		active, err := q.ListActiveCategoryRules(ctx)
+		chooser, err := categorizer(ctx, q)
 		if err != nil {
 			return err
 		}
-		ruleList := ruleSet(active)
 		for _, item := range body.Transactions {
 			account, ok := accounts[item.AccountExternalId]
 			if !ok {
@@ -239,7 +238,7 @@ func (h *Handler) ImportBankSync(c fiber.Ctx) error {
 				continue
 			}
 			if before, ok := existing[item.ExternalId]; ok {
-				changed, err := h.updateBankTransaction(c, q, ruleList, before, account, item)
+				changed, err := h.updateBankTransaction(c, q, chooser, before, account, item)
 				if err != nil {
 					return err
 				}
@@ -274,10 +273,9 @@ func (h *Handler) ImportBankSync(c fiber.Ctx) error {
 				}
 			}
 			if params.CategorizedBy == nil {
-				if rule, ok := rules.First(ruleList, textOf(item.Counterparty, item.Description)); ok {
-					params.CategoryID = pgtype.UUID{Bytes: rule.CategoryID, Valid: true}
-					params.CategoryRuleID = pgtype.UUID{Bytes: rule.ID, Valid: true}
-					params.CategorizedBy = pointer("rule")
+				// The rules choose, else the card's merchant category code.
+				if assignment, ok := chooser.Choose(textWithCode(item.Counterparty, item.Description, item.MerchantCategoryCode)); ok {
+					params.CategoryID, params.CategoryRuleID, params.CategorizedBy = assignmentFields(assignment)
 				}
 			}
 			if _, err := q.CreateImportedTransaction(ctx, params); err != nil {
@@ -293,6 +291,7 @@ func (h *Handler) ImportBankSync(c fiber.Ctx) error {
 		return passThrough(err)
 	}
 	h.recordBankImport(c, body, counts)
+	h.budgetChanged()
 	result := generated.BankImportResult{AccountIds: accountIDs}
 	result.Accounts.Created, result.Accounts.Updated = counts.AccountsCreated, counts.AccountsUpdated
 	result.Transactions.Created, result.Transactions.Updated, result.Transactions.Unchanged = counts.Created, counts.Updated, counts.Unchanged
@@ -302,16 +301,17 @@ func (h *Handler) ImportBankSync(c fiber.Ctx) error {
 
 // updateBankTransaction applies a re-synced transaction's bank fields; the
 // owner's category and notes stay, and a category not chosen by hand
-// follows the rules when the text changed. It reports whether anything
-// changed.
-func (h *Handler) updateBankTransaction(c fiber.Ctx, q *store.Queries, ruleList []rules.Rule, before store.Transaction, account store.Account, item generated.BankTransactionInput) (bool, error) {
+// follows the rules (and the merchant category code) when the text or the
+// code changed. It reports whether anything changed.
+func (h *Handler) updateBankTransaction(c fiber.Ctx, q *store.Queries, chooser rules.Categorizer, before store.Transaction, account store.Account, item generated.BankTransactionInput) (bool, error) {
 	next := before
 	next.AccountID, next.AmountMinor, next.Currency = account.ID, item.Amount.Amount, item.Amount.Currency
 	next.OccurredOn, next.ValueDate, next.Status = pgDate(item.BookingDate), optionalDate(item.ValueDate), string(item.Status)
 	next.Counterparty, next.Description = item.Counterparty, item.Description
 	next.MerchantCategoryCode, next.BankReference = item.MerchantCategoryCode, item.BankReference
-	if (next.CategorizedBy == nil || *next.CategorizedBy != "manual") && (!sameText(before.Counterparty, next.Counterparty) || !sameText(before.Description, next.Description)) {
-		assignment, _ := rules.Reapply(ruleList, assignmentOf(before), textOf(next.Counterparty, next.Description))
+	if (next.CategorizedBy == nil || *next.CategorizedBy != "manual") &&
+		(!sameText(before.Counterparty, next.Counterparty) || !sameText(before.Description, next.Description) || !sameText(before.MerchantCategoryCode, next.MerchantCategoryCode)) {
+		assignment, _ := chooser.Reapply(assignmentOf(before), textWithCode(next.Counterparty, next.Description, next.MerchantCategoryCode))
 		applyAssignment(&next, assignment)
 	}
 	if len(transactionChanges(before, next)) == 0 && sameText(before.MerchantCategoryCode, next.MerchantCategoryCode) && sameText(before.BankReference, next.BankReference) {

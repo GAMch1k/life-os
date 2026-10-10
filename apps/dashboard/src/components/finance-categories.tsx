@@ -391,7 +391,9 @@ function RuleList({
       <p className="text-muted-foreground mb-2 text-xs">
         A rule gives a category to transactions without one, by their
         counterparty or description. Rules are tried in order and the first
-        match wins; a category you chose by hand is never changed.
+        match wins; a category you chose by hand is never changed. A card
+        payment no rule matches gets a default category from its merchant
+        category code.
       </p>
       {error ? (
         <p className="text-destructive text-sm" role="alert">
@@ -457,7 +459,7 @@ function RuleList({
             Transactions without a category
           </NativeSelectOption>
           <NativeSelectOption value="all">
-            Also re-check rule-chosen categories
+            Also re-check categories rules or codes chose
           </NativeSelectOption>
         </NativeSelect>
         <Button
@@ -867,7 +869,8 @@ function RuleForm({
           }
         />
         <FieldDescription className="text-xs" id={`${id}-priority-note`}>
-          Lower numbers are tried first. Empty puts a new rule after the others.
+          Lower numbers are tried first. Empty puts a new rule after your other
+          rules, before the default merchant rules (100000 and up).
         </FieldDescription>
         <FieldError id={`${id}-priority-error`}>{errors.priority}</FieldError>
       </Field>

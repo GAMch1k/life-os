@@ -15,8 +15,14 @@ func TestLoadFromAppliesDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.ServiceName != "finance" || cfg.Port != 8080 || cfg.LogLevel != "info" || cfg.DefaultCurrency != "EUR" || cfg.ActivityURL != "" {
+	if cfg.ServiceName != "finance" || cfg.Port != 8080 || cfg.LogLevel != "info" || cfg.DefaultCurrency != "EUR" || cfg.ActivityURL != "" || cfg.NotificationsURL != "" {
 		t.Fatalf("unexpected config: %+v", cfg)
+	}
+	withNotifications, err := LoadFrom(mapLookup(map[string]string{
+		"DATABASE_URL": "postgres://finance_user:secret@localhost/finance_db", "NOTIFICATIONS_SERVICE_URL": "http://notifications:8080",
+	}))
+	if err != nil || withNotifications.NotificationsURL != "http://notifications:8080" {
+		t.Fatalf("notifications URL = %q %v", withNotifications.NotificationsURL, err)
 	}
 	if location, err := cfg.OwnerLocation(); err != nil || location != time.UTC {
 		t.Fatalf("owner location = %v %v", location, err)

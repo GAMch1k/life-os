@@ -31,6 +31,29 @@ type Account struct {
 	SyncedAt              pgtype.Timestamptz
 }
 
+type BudgetNotification struct {
+	DedupeKey string
+	Month     pgtype.Date
+	ClaimedAt pgtype.Timestamptz
+}
+
+type BudgetPlan struct {
+	ID                  pgtype.UUID
+	Month               pgtype.Date
+	Scope               string
+	Currency            string
+	ExpectedIncomeMinor int64
+	SavingsGoalMinor    int64
+	CreatedAt           pgtype.Timestamptz
+	UpdatedAt           pgtype.Timestamptz
+}
+
+type BudgetPlanLine struct {
+	PlanID      pgtype.UUID
+	CategoryID  pgtype.UUID
+	AmountMinor int64
+}
+
 type CategoryRule struct {
 	ID            pgtype.UUID
 	CategoryID    pgtype.UUID
@@ -42,6 +65,11 @@ type CategoryRule struct {
 	UpdatedAt     pgtype.Timestamptz
 }
 
+type FinanceSeed struct {
+	Name      string
+	AppliedAt pgtype.Timestamptz
+}
+
 type FinancialCategory struct {
 	ID         pgtype.UUID
 	Name       string
@@ -50,6 +78,7 @@ type FinancialCategory struct {
 	UpdatedAt  pgtype.Timestamptz
 	Color      *string
 	ArchivedAt pgtype.Timestamptz
+	SystemKey  *string
 }
 
 type Transaction struct {
