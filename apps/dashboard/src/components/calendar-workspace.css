@@ -1,0 +1,144 @@
+/*
+ * FullCalendar themed with the Dashboard's tokens (src/app/globals.css), so
+ * the calendar follows the light and dark themes. Everything is scoped to
+ * .lifeos-calendar: Next.js keeps an imported stylesheet after navigating
+ * away, and nothing here may touch other pages.
+ */
+.lifeos-calendar {
+  --fc-small-font-size: 0.75rem;
+  --fc-page-bg-color: var(--card);
+  --fc-neutral-bg-color: var(--muted);
+  --fc-neutral-text-color: var(--muted-foreground);
+  --fc-border-color: var(--border);
+  --fc-event-bg-color: var(--primary);
+  --fc-event-border-color: var(--primary);
+  --fc-event-text-color: var(--primary-foreground);
+  --fc-event-selected-overlay-color: color-mix(
+    in oklch,
+    var(--foreground) 20%,
+    transparent
+  );
+  --fc-more-link-bg-color: var(--muted);
+  --fc-more-link-text-color: var(--foreground);
+  --fc-non-business-color: color-mix(in oklch, var(--muted) 50%, transparent);
+  --fc-highlight-color: color-mix(in oklch, var(--info) 18%, transparent);
+  --fc-today-bg-color: color-mix(in oklch, var(--info) 10%, transparent);
+  --fc-now-indicator-color: var(--destructive);
+  --fc-list-event-hover-bg-color: var(--muted);
+  color: var(--card-foreground);
+  font-size: 0.8125rem;
+}
+
+/* The surrounding card draws the outer frame. */
+.lifeos-calendar .fc-theme-standard .fc-scrollgrid,
+.lifeos-calendar .fc-theme-standard .fc-list {
+  border: 0;
+}
+
+/* Sticky day headers stay below the Dashboard's 3rem header. */
+.lifeos-calendar
+  .fc
+  .fc-scrollgrid-section-header.fc-scrollgrid-section-sticky
+  > *,
+.lifeos-calendar .fc .fc-list-sticky .fc-list-day > * {
+  top: 3rem;
+}
+
+.lifeos-calendar .fc .fc-col-header-cell-cushion {
+  padding: 0.375rem 0.25rem;
+  font-weight: 500;
+  color: var(--muted-foreground);
+}
+
+.lifeos-calendar .fc .fc-daygrid-day-number {
+  padding: 0.25rem 0.375rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.lifeos-calendar .fc .fc-day-other .fc-daygrid-day-top {
+  opacity: 0.5;
+}
+
+.lifeos-calendar .fc .fc-timegrid-slot-label-cushion,
+.lifeos-calendar .fc .fc-timegrid-axis-cushion {
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+}
+
+.lifeos-calendar .fc .fc-list-day-cushion {
+  padding: 0.375rem 0.75rem;
+  font-weight: 500;
+}
+
+.lifeos-calendar .fc .fc-list-table td {
+  padding: 0.5rem 0.75rem;
+}
+
+.lifeos-calendar .fc .fc-list-event-time {
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+}
+
+.lifeos-calendar .fc .fc-list-empty {
+  background: transparent;
+  color: var(--muted-foreground);
+}
+
+.lifeos-calendar .fc .fc-list-empty-cushion {
+  margin: 2.5rem 0;
+}
+
+.lifeos-calendar .fc-event {
+  border-radius: calc(var(--radius) * 0.6);
+  cursor: pointer;
+}
+
+.lifeos-calendar .fc-h-event,
+.lifeos-calendar .fc-v-event {
+  padding: 0 0.125rem;
+}
+
+.lifeos-calendar .fc .fc-event:focus-visible,
+.lifeos-calendar .fc a[data-navlink]:focus-visible,
+.lifeos-calendar .fc .fc-more-link:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
+.lifeos-calendar .fc .fc-more-link {
+  font-weight: 500;
+}
+
+.lifeos-calendar .fc-theme-standard .fc-popover {
+  background: var(--popover);
+  color: var(--popover-foreground);
+  border-color: var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px color-mix(in oklch, var(--foreground) 15%, transparent);
+  overflow: hidden;
+}
+
+.lifeos-calendar .fc-theme-standard .fc-popover-header {
+  padding: 0.375rem 0.5rem;
+  font-weight: 500;
+}
+
+/* Imported events (an ICS feed, Google Calendar): a tinted, read-only look. */
+.lifeos-calendar .lifeos-event-imported {
+  --fc-event-bg-color: var(--info-subtle);
+  --fc-event-border-color: var(--info);
+  --fc-event-text-color: var(--info);
+}
+
+/* Cancelled events (shown only with "Show cancelled"). */
+.lifeos-calendar .lifeos-event-cancelled {
+  --fc-event-bg-color: var(--muted);
+  --fc-event-border-color: var(--muted-foreground);
+  --fc-event-text-color: var(--muted-foreground);
+  opacity: 0.75;
+}
+
+.lifeos-calendar .lifeos-event-cancelled .fc-event-title,
+.lifeos-calendar .lifeos-event-cancelled .fc-list-event-title {
+  text-decoration: line-through;
+}
