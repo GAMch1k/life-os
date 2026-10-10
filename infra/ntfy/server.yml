@@ -8,14 +8,17 @@
 # through NTFY_AUTH_USERS, NTFY_AUTH_ACCESS, and NTFY_AUTH_TOKENS (compose.yaml).
 # ntfy deletes provisioned users, rights, and tokens that leave that list.
 
-# The public URL the phone uses (Cloudflare Tunnel → gateway → here).
+# The public URL the phone uses (Cloudflare Tunnel → here, on the
+# notify-edge network; the Life OS gateway is not involved).
 base-url: "https://ntfy.gamch1k.com"
 listen-http: ":80"
 
-# The gateway sets X-Forwarded-For to the real client address (Cloudflare's
-# CF-Connecting-IP), so rate limits apply per visitor, not to the gateway.
+# Requests through the tunnel carry the visitor's address in CF-Connecting-IP,
+# set by Cloudflare, so rate limits apply per visitor, not to the connector.
+# Only the connector and the Notifications service can reach ntfy at all;
+# the service's requests have no such header and count by their own address.
 behind-proxy: true
-proxy-forwarded-header: "X-Forwarded-For"
+proxy-forwarded-header: "CF-Connecting-IP"
 
 # Messages are kept 12 hours, so the phone catches up after being offline.
 cache-file: "/var/lib/ntfy/cache.db"

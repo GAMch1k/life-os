@@ -48,6 +48,11 @@ networks:
     ipam:
       config: !override
         - subnet: 10.255.249.8/29
+  notify-edge:
+    name: lifeos-verify-notify-edge
+    ipam:
+      config: !override
+        - subnet: 10.255.249.24/29
 
 volumes:
   postgres-data:

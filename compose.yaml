@@ -111,13 +111,14 @@ services:
   # The one path for notifications to the owner. Channels are configured here
   # (LIFE_OS_NOTIFICATIONS_CHANNELS); none by default, so notifications are
   # stored and listed in the Dashboard only. "ntfy" publishes to the ntfy
-  # service below with the publisher token (docs/operations/ntfy.md).
+  # service below with the publisher token (docs/operations/ntfy.md), over
+  # the notify-edge network, the only Life OS service on it.
   notifications:
     build: {context: ., dockerfile: services/notifications/Dockerfile}
     environment: {SERVICE_NAME: notifications, PORT: 8080, DATABASE_URL: "postgres://notifications_user:${LIFE_OS_NOTIFICATIONS_DB_PASSWORD}@postgres:5432/notifications_db?sslmode=disable", ACTIVITY_SERVICE_URL: "http://activity:8080", NOTIFICATIONS_CHANNELS: "${LIFE_OS_NOTIFICATIONS_CHANNELS:-}", NOTIFICATIONS_NTFY_URL: "http://ntfy:80", NOTIFICATIONS_NTFY_TOPIC: "${LIFE_OS_NTFY_TOPIC:-lifeos}", NOTIFICATIONS_NTFY_TOKEN: "${LIFE_OS_NTFY_PUBLISHER_TOKEN:-}", NOTIFICATIONS_LINK_BASE_URL: "${LIFE_OS_PUBLIC_URL:-https://lifeos.gamch1k.com}"}
     expose: ["8080"]
     depends_on: {notifications-migrate: {condition: service_completed_successfully}}
-    networks: [backend]
+    networks: [backend, notify-edge]
     restart: unless-stopped
 
   dashboard:
@@ -285,19 +286,20 @@ services:
       voice: {condition: service_started}
       activity: {condition: service_started}
       notifications: {condition: service_started}
-    # Not on ntfy: it is optional, and the gateway looks it up per request.
-    # edge: the only network the Cloudflare connector shares with Life OS.
+    # edge: how the Cloudflare connector reaches the gateway (and only it).
     networks: [backend, edge]
     restart: unless-stopped
 
   # Opt-in ntfy server (COMPOSE_PROFILES=ntfy): push notifications to the
-  # owner's phone (docs/operations/ntfy.md). The Notifications service
-  # publishes to it on the private network; the gateway serves it, and only
-  # it, on the ntfy hostname, whose Cloudflare route has no Access (the ntfy
-  # app cannot log in through it). ntfy's own deny-all accounts protect it:
-  # ntfy provisions the publisher (write-only on the topic, by token) and the
-  # phone (read-only, by password) at every start from the ignored .env.
-  # Bcrypt hashes and the token never appear in the repository.
+  # owner's phone (docs/operations/ntfy.md). It is on the notify-edge network
+  # only, with the Cloudflare connector (the tunnel route ntfy.gamch1k.com ->
+  # http://ntfy:80, without Access: the ntfy app cannot log in through it) and
+  # the Notifications service, which publishes to it. It never shares a
+  # network with the gateway or the other services, so that route cannot
+  # reach Life OS. ntfy's own deny-all accounts protect it: ntfy provisions the
+  # publisher (write-only on the topic, by token) and the phone (read-only, by
+  # password) at every start from the ignored .env. Bcrypt hashes and the
+  # token never appear in the repository.
   ntfy:
     image: ${LIFE_OS_NTFY_IMAGE:-binwiederhier/ntfy:v2.29.0}
     profiles: [ntfy]
@@ -310,7 +312,7 @@ services:
       - ./infra/ntfy/server.yml:/etc/ntfy/server.yml:ro
       - ntfy-data:/var/lib/ntfy
     expose: ["80"]
-    networks: [backend]
+    networks: [notify-edge]
     restart: unless-stopped
     init: true
     read_only: true
@@ -328,9 +330,11 @@ services:
 
   # Opt-in Cloudflare Tunnel (COMPOSE_PROFILES=cloudflare). An outbound-only
   # connector on the private network that hands Cloudflare traffic to the
-  # gateway; it publishes no port. The public hostname and its route
-  # (http://gateway:80) live in the Cloudflare tunnel configuration, and the
-  # token comes only from the ignored .env. See docs/operations/cloudflare.md.
+  # gateway (lifeos.gamch1k.com, behind Access) and to ntfy (ntfy.gamch1k.com);
+  # it publishes no port. The public hostnames and their routes
+  # (http://gateway:80, http://ntfy:80) live in the Cloudflare tunnel
+  # configuration, and the token comes only from the ignored .env. See
+  # docs/operations/cloudflare.md.
   cloudflared:
     image: ${LIFE_OS_CLOUDFLARED_IMAGE:-cloudflare/cloudflared:2026.10.0}
     profiles: [cloudflare]
@@ -339,8 +343,10 @@ services:
       TUNNEL_TOKEN: ${LIFE_OS_CLOUDFLARE_TUNNEL_TOKEN:-}
     depends_on:
       gateway: {condition: service_started}
-    # Only the gateway is reachable from here; services stay on backend.
-    networks: [edge]
+    # edge reaches only the gateway (Life OS, behind Access); notify-edge
+    # reaches only ntfy (and Notifications, which publishes to it). Services
+    # stay on backend.
+    networks: [edge, notify-edge]
     restart: unless-stopped
     read_only: true
     tmpfs: [/tmp]
@@ -366,6 +372,15 @@ networks:
     ipam:
       config:
         - subnet: 10.255.249.0/29
+  # The Cloudflare connector, ntfy, and the Notifications service only: the
+  # tunnel's ntfy route (no Access) reaches ntfy here and nothing of Life OS
+  # but Notifications' own port. ntfy is on no other network.
+  notify-edge:
+    name: lifeos-notify-edge
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.255.249.16/29
 
 volumes:
   postgres-data:
