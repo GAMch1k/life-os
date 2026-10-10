@@ -116,21 +116,6 @@ services:
       calendar: {condition: service_started}
     networks: [backend]
     restart: unless-stopped
-  # One-time handoff of the feeds Calendar refreshed itself (P11-08,
-  # docs/operations/calendar-feeds-handoff.md):
-  # `docker compose --profile handoff run --rm calendar-feeds-handoff`. It
-  # reads calendar_db in a read-only transaction and prints counts only.
-  calendar-feeds-handoff:
-    build: {context: ., dockerfile: services/calendar-feeds/Dockerfile}
-    profiles: [handoff]
-    command: ["handoff"]
-    environment:
-      DATABASE_URL: "postgres://calendar_feeds_user:${LIFE_OS_CALENDAR_FEEDS_DB_PASSWORD}@postgres:5432/calendar_feeds_db?sslmode=disable"
-      HANDOFF_CALENDAR_DATABASE_URL: "postgres://calendar_user:${LIFE_OS_CALENDAR_DB_PASSWORD}@postgres:5432/calendar_db?sslmode=disable"
-    depends_on:
-      calendar-feeds-migrate: {condition: service_completed_successfully}
-    networks: [backend]
-    restart: "no"
 
   activity-migrate:
     image: migrate/migrate:v4.18.3
@@ -228,22 +213,6 @@ services:
   # settings leave it "not configured". It reaches Google through the
   # backend network's outbound access and publishes nothing; the gateway
   # routes /api/integrations/google-calendar/.
-  # The one-time handoff of the Google connection Calendar kept before P11-07
-  # (docs/operations/google-calendar.md#handoff-from-calendar-p11-07):
-  # `docker compose --profile handoff run --rm google-calendar-handoff`, with
-  # Calendar stopped and migrated. It reads calendar_db in a read-only
-  # transaction and prints counts only.
-  google-calendar-handoff:
-    build: {context: ., dockerfile: services/google-calendar/Dockerfile}
-    profiles: [handoff]
-    command: ["handoff"]
-    environment:
-      DATABASE_URL: "postgres://google_calendar_user:${LIFE_OS_GOOGLE_CALENDAR_DB_PASSWORD}@postgres:5432/google_calendar_db?sslmode=disable"
-      HANDOFF_CALENDAR_DATABASE_URL: "postgres://calendar_user:${LIFE_OS_CALENDAR_DB_PASSWORD}@postgres:5432/calendar_db?sslmode=disable"
-    depends_on:
-      google-calendar-migrate: {condition: service_completed_successfully}
-    networks: [backend]
-    restart: "no"
   google-calendar:
     build: {context: ., dockerfile: services/google-calendar/Dockerfile}
     environment:
