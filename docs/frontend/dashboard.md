@@ -42,9 +42,11 @@ The log starts when the Activity service was deployed; nothing earlier was backf
 - **What it led to**: everything caused by it, directly or indirectly.
 - **Same <entity> in other workflows**: for example, the user completing a Task that the agent created earlier.
 - **Whole workflow**: the causation tree, with the selected entry highlighted.
-- **Diagnostics**: a collapsed section with ids, correlation, causation, actor, timestamps, and the raw event data.
+- **Diagnostics**: a collapsed section with ids, correlation, causation, actor, timestamps, and the raw event data. **Copy diagnostics** copies the event data JSON exactly as shown and announces "Copied"; over plain http, where the Clipboard API is unavailable, it falls back to a hidden-textarea copy, and if that fails too it selects the JSON for copying by hand.
 
 Every entry in these sections opens its own trace, so a chain such as Inbox capture → processing → MCP `task_create` → Task created → Task later completed can be followed click by click. A workflow and a subject history are each read as up to 500 events. If an event's cause was recorded in another workflow, the Event Log links to it instead of guessing. The Event Log never writes; like the gateway, its `/api/activity` proxy allows only GET/HEAD.
+
+Services shorten long text in summaries with "…" (for example a retry's Codex error) and keep a longer copy in the event data (`errorSummary`, `reason`, `content`, …). The selected entry shows the short summary with a **Show more** toggle that expands it in place to the longer text, and **Show less** collapses it again; list rows stay short. On desktop the selected entry sticks below the header and never grows past the bottom of the screen, so a tall entry scrolls on its own without moving the list; on a phone it follows the list in the normal page flow.
 
 `/status` answers "is Life OS working, and if not, what do I do?" It is built only from supported runtime state (`src/lib/runtime-status.ts`), never from UI behaviour. Four checks are shown, each as OK, Needs attention, or Problem, with the runtime's own error text and a suggested action:
 
