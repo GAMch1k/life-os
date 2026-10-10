@@ -44,6 +44,8 @@ Open **Finance** and choose **Connect Deutsche Bank** on the Bank connection car
 
 If the callback says the consent expired or was already used, start again from Finance: a consent link is valid for 10 minutes and can be used once.
 
+If the bank sends you back with an error instead (for example "The bank did not complete the consent (server_error)." with the bank's own description), the callback reports it to banking, which keeps it: the Bank connection card then shows it next to **Connect Deutsche Bank**, for example "Last attempt failed on 10 Oct, 20:19 CEST: server_error — …", until a connection succeeds. The Event Log has it as "Bank consent failed: server_error". See [Troubleshooting](#troubleshooting).
+
 ## When the access is about to end, or has ended
 
 PSD2 consents end: Deutsche Bank's after 180 days. Seven days before, and again one day before, Life OS reminds you ("Deutsche Bank access expires on …", then "… expires within a day", both linking to Finance); the card shows **Expires soon**, and Status shows the coming end without raising an alert. When it has ended (or you revoke it at the bank), the connection is **Expired** and syncing stops; Status's Bank connection check needs attention, so you get one "Bank connection needs attention" notification (from the monitor, linking to Status), and "Bank connection recovered" after you reconnect.
@@ -70,8 +72,9 @@ To take Life OS's access away entirely, also remove the application or its key i
 | "Finance refused the sync (400 …)" | Finance rejected the import; it is read again at the next sync time. Check Finance's log for the reason. |
 | Status: "Syncing Deutsche Bank keeps failing: N attempts in a row" | The bank or provider keeps failing; transactions from the last good sync are kept, and retries continue. |
 | "The stored bank session cannot be decrypted with LIFE_OS_BANKING_TOKEN_KEY" | The token key changed. Reconnect. |
+| Card: "Last attempt failed on …: server_error — …" | Deutsche Bank or Enable Banking ended the consent with an error, so no code came back. Try again from a desktop browser (the bank's consent pages and its app hand-off can fail on a phone); on Enable Banking's page, check the Deutsche Bank ID you enter is the one you use for Deutsche Bank online banking; and if the bank refuses a long consent, lower `LIFE_OS_BANKING_CONSENT_DAYS` in `.env` (for example to 90) and run `docker compose up --detach banking`. Every attempt's reason is kept in banking (the card shows the newest; earlier ones are in the Event Log as "Bank consent failed"). |
 
-Logs never contain the session id, the key, its tokens, or IBANs. Events in the Event Log (source Bank connection) show connects, disconnects, syncs that changed something (counts only), failures, and the consent's expiry.
+Logs never contain the session id, the key, its tokens, or IBANs. Events in the Event Log (source Bank connection) show connects, disconnects, syncs that changed something (counts only), failures, consents the bank did not complete, and the consent's expiry.
 
 ## The verification stack never reaches the bank
 
