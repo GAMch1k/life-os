@@ -2,6 +2,7 @@ import type {
   CalendarEvent,
   CalendarSummaryState,
 } from "@/lib/calendar-summary";
+import { occurrenceKey } from "@/lib/calendar-workspace";
 import { dateTimeFormat, dayKey } from "@/lib/time-zone";
 
 const DAY = { weekday: "short", day: "numeric", month: "short" } as const;
@@ -46,7 +47,7 @@ function EventList({
   return (
     <ul className="bg-card divide-y rounded-lg border">
       {events.map((event) => (
-        <li className="min-w-0 px-3 py-2.5" key={event.id}>
+        <li className="min-w-0 px-3 py-2.5" key={occurrenceKey(event)}>
           <p className="font-medium break-words">{event.title}</p>
           <time
             className="text-muted-foreground mt-0.5 block text-xs"

@@ -25,6 +25,7 @@ import {
   toReminderDraft,
   updateRequest,
   viewOf,
+  occurrenceKey,
 } from "./calendar-workspace";
 
 const event = (
@@ -495,4 +496,16 @@ test("imported events name their source and why they are read-only", () => {
   );
   assert.equal(sourceLabel(timed), undefined);
   assert.equal(readOnlyReason(timed), undefined);
+});
+
+test("occurrences of a recurring event get distinct keys", () => {
+  const base = { id: "e1" } as Parameters<typeof occurrenceKey>[0];
+  assert.equal(occurrenceKey(base), "e1");
+  assert.equal(
+    occurrenceKey({
+      ...base,
+      occurrence: { seriesId: "e1", recurrenceId: "20261017T070000Z" },
+    }),
+    "e1:20261017T070000Z",
+  );
 });
