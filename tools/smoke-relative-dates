@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# Relative-date acceptance (BUG-12) on the isolated verification stack, with
+# the real authenticated Codex CLI and LIFE_OS_TIMEZONE=Europe/Berlin.
+#
+# Proves: the processor runs in the owner's timezone (it reports the zone on
+# /status, and its image has the zone data), and captures phrased relative to
+# the moment of capture ("tomorrow at 10", "on Friday at 15:00", "the day
+# after tomorrow") are stored as the instants and dates they mean in that
+# timezone, not in the container's UTC. Expectations are computed with
+# `TZ=Europe/Berlin date` from each Inbox item's own createdAt.
+set -euo pipefail
+
+zone=Europe/Berlin
+export LIFE_OS_TIMEZONE=$zone
+compose=(./tools/verify-compose)
+cleanup() { "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true; }
+trap cleanup EXIT
+
+fail() { echo "FAIL: $*" >&2; exit 1; }
+local_time() { TZ=$zone date -d "$1" '+%a %F %R %Z'; }
+
+"${compose[@]}" up --detach --no-build
+gateway=http://127.0.0.1:13001
+ready() { for _ in $(seq 1 90); do curl --fail --silent "$gateway/api/$1/ready" >/dev/null && return; sleep 1; done; fail "$1 is not ready"; }
+for service in inbox tasks calendar; do ready "$service"; done
+
+processor_status() { "${compose[@]}" exec -T processor wget -q -O - http://127.0.0.1:8081/status; }
+for _ in $(seq 1 60); do processor_status >/dev/null 2>&1 && break; sleep 1; done
+reported=$(processor_status | jq -r '.timeZone // empty')
+[ "$reported" = "$zone" ] || fail "processor /status reports timezone '$reported', want $zone"
+# busybox date silently falls back to UTC when the image lacks zone data.
+container_zone=$("${compose[@]}" exec -T processor date +%Z | tr -d '\r')
+[ "$container_zone" = "$(TZ=$zone date +%Z)" ] || fail "processor container reports $container_zone; is tzdata installed?"
+
+# Keep each capture and the local day it is judged by apart from midnight.
+while (( 10#$(TZ=$zone date +%H%M) >= 2358 )); do sleep 10; done
+# "On Friday" said on a Friday is ambiguous (today or next week); use a
+# weekday that is unambiguously ahead instead.
+weekday=Friday
+[ "$(TZ=$zone date +%A)" != Friday ] || weekday=Monday
+
+capture() {
+  curl --fail --silent -H 'content-type: application/json' \
+    --data "$(jq -nc --arg content "$1" '{content:$content,source:"web",sourceMetadata:{verification:"bug-12-relative-dates"}}')" \
+    "$gateway/api/inbox/v1/inbox-items"
+}
+
+# processed_action <item id> <tool>: the single processed action's audit
+# record, which carries the owning service's created row as `result`.
+processed_action() {
+  local id=$1 tool=$2 attempts
+  for _ in $(seq 1 180); do
+    attempts=$(curl --fail --silent "$gateway/api/inbox/v1/inbox-items/$id/processing-attempts")
+    if jq -e 'any(.items[]; .status == "processed")' >/dev/null <<<"$attempts"; then
+      jq -ce --arg tool "$tool" 'first(.items[] | select(.status == "processed")) | .actions | select(length == 1 and .[0].tool == $tool) | .[0]' <<<"$attempts" ||
+        fail "item $id was processed with other actions: $(jq -c '[.items[].actions]' <<<"$attempts")"
+      return
+    fi
+    if jq -e 'any(.items[]; .status == "human_review" or .status == "failed")' >/dev/null <<<"$attempts"; then
+      fail "item $id was not processed automatically: $(jq -c '[.items[] | {status, errorSummary}]' <<<"$attempts")"
+    fi
+    sleep 2
+  done
+  fail "item $id was not processed within 6 minutes"
+}
+
+# expect_instant <what> <actual RFC3339> <expected local "YYYY-MM-DD HH:MM">
+expect_instant() {
+  local actual expected
+  actual=$(date -d "$2" +%s) || fail "$1: '$2' is not a time"
+  expected=$(TZ=$zone date -d "$3" +%s)
+  [ "$actual" = "$expected" ] || fail "$1 is $2 ($(local_time "$2")), want $3 $zone"
+  echo "ok: $1 = $2 ($(local_time "$2"))"
+}
+
+task_item=$(capture "Remind me to call mom tomorrow at 10.")
+event_item=$(capture "Add a calendar event: dentist on $weekday at 15:00 for one hour.")
+birthday_item=$(capture "Add an all-day calendar event: Anna's birthday the day after tomorrow.")
+
+# The local day each item was captured on.
+captured_day() { TZ=$zone date -d "$(jq -r '.createdAt' <<<"$1")" +%F; }
+day_after() { date -u -d "$1 + $2 days" +%F; }
+
+# 1. "tomorrow at 10" is 10:00 on the owner's next day.
+action=$(processed_action "$(jq -r '.id' <<<"$task_item")" task_create)
+task=$(curl --fail --silent "$gateway/api/tasks/v1/tasks/$(jq -r '.result.id' <<<"$action")")
+day=$(captured_day "$task_item")
+expect_instant "Task dueAt for 'tomorrow at 10' (captured $day)" "$(jq -r '.dueAt // empty' <<<"$task")" "$(day_after "$day" 1) 10:00"
+
+# 2. "on <weekday> at 15:00 for one hour" is its next occurrence, 15:00-16:00.
+action=$(processed_action "$(jq -r '.id' <<<"$event_item")" calendar_create)
+event=$(curl --fail --silent "$gateway/api/calendar/v1/events/$(jq -r '.result.id' <<<"$action")")
+day=$(captured_day "$event_item")
+ahead=$(( ($(date -d "$weekday" +%u) - $(date -d "$day" +%u) + 7) % 7 ))
+[ "$ahead" -ne 0 ] || ahead=7
+event_day=$(day_after "$day" "$ahead")
+jq -e '.allDay == false' >/dev/null <<<"$event" || fail "the $weekday event is not timed: $event"
+expect_instant "Event startAt for '$weekday at 15:00' (captured $day)" "$(jq -r '.startAt // empty' <<<"$event")" "$event_day 15:00"
+expect_instant "Event endAt" "$(jq -r '.endAt // empty' <<<"$event")" "$event_day 16:00"
+
+# 3. "the day after tomorrow" is a local date, not a UTC one.
+action=$(processed_action "$(jq -r '.id' <<<"$birthday_item")" calendar_create)
+event=$(curl --fail --silent "$gateway/api/calendar/v1/events/$(jq -r '.result.id' <<<"$action")")
+day=$(captured_day "$birthday_item")
+expected=$(day_after "$day" 2)
+jq -e --arg day "$expected" '.allDay == true and .startDate == $day' >/dev/null <<<"$event" ||
+  fail "the birthday should be an all-day event on $expected (captured $day): $(jq -c '{allDay, startDate, endDate}' <<<"$event")"
+echo "ok: all-day startDate for 'the day after tomorrow' = $expected (captured $day)"
+
+echo "relative-date smoke passed: captures resolve in $zone"
