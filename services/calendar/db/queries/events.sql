@@ -212,3 +212,15 @@ RETURNING *;
 
 -- name: DeleteEvent :execrows
 DELETE FROM events WHERE id = $1;
+
+-- name: ListEventsByID :many
+SELECT * FROM events WHERE id = ANY(sqlc.arg(ids)::uuid[]);
+
+-- name: ListOwnEvents :many
+-- Events created in Life OS (source kind manual) after after_id, by id: the
+-- full listing that starts the change feed.
+SELECT * FROM events
+WHERE source_kind = 'manual'
+  AND (sqlc.narg(after_id)::uuid IS NULL OR id > sqlc.narg(after_id)::uuid)
+ORDER BY id
+LIMIT sqlc.arg(page_limit);

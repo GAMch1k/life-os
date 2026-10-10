@@ -296,6 +296,129 @@ func (q *Queries) ListEvents(ctx context.Context, arg ListEventsParams) ([]ListE
 	return items, nil
 }
 
+const listEventsByID = `-- name: ListEventsByID :many
+SELECT id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at, automation_idempotency_key, automation_payload_hash, location, time_zone, status, cancelled_at, source_kind, source_id, external_uid, removed_from_source_at, reminders, use_default_reminders, recurrence_by_weekday, recurrence_count, source_reminders, priority FROM events WHERE id = ANY($1::uuid[])
+`
+
+func (q *Queries) ListEventsByID(ctx context.Context, ids []pgtype.UUID) ([]Event, error) {
+	rows, err := q.db.Query(ctx, listEventsByID, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Event{}
+	for rows.Next() {
+		var i Event
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.Description,
+			&i.AllDay,
+			&i.StartAt,
+			&i.EndAt,
+			&i.StartDate,
+			&i.EndDate,
+			&i.RecurrenceFrequency,
+			&i.RecurrenceInterval,
+			&i.RecurrenceUntil,
+			&i.ExternalProvider,
+			&i.ExternalID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.AutomationIdempotencyKey,
+			&i.AutomationPayloadHash,
+			&i.Location,
+			&i.TimeZone,
+			&i.Status,
+			&i.CancelledAt,
+			&i.SourceKind,
+			&i.SourceID,
+			&i.ExternalUid,
+			&i.RemovedFromSourceAt,
+			&i.Reminders,
+			&i.UseDefaultReminders,
+			&i.RecurrenceByWeekday,
+			&i.RecurrenceCount,
+			&i.SourceReminders,
+			&i.Priority,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOwnEvents = `-- name: ListOwnEvents :many
+SELECT id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at, automation_idempotency_key, automation_payload_hash, location, time_zone, status, cancelled_at, source_kind, source_id, external_uid, removed_from_source_at, reminders, use_default_reminders, recurrence_by_weekday, recurrence_count, source_reminders, priority FROM events
+WHERE source_kind = 'manual'
+  AND ($1::uuid IS NULL OR id > $1::uuid)
+ORDER BY id
+LIMIT $2
+`
+
+type ListOwnEventsParams struct {
+	AfterID   pgtype.UUID
+	PageLimit int32
+}
+
+// Events created in Life OS (source kind manual) after after_id, by id: the
+// full listing that starts the change feed.
+func (q *Queries) ListOwnEvents(ctx context.Context, arg ListOwnEventsParams) ([]Event, error) {
+	rows, err := q.db.Query(ctx, listOwnEvents, arg.AfterID, arg.PageLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Event{}
+	for rows.Next() {
+		var i Event
+		if err := rows.Scan(
+			&i.ID,
+			&i.Title,
+			&i.Description,
+			&i.AllDay,
+			&i.StartAt,
+			&i.EndAt,
+			&i.StartDate,
+			&i.EndDate,
+			&i.RecurrenceFrequency,
+			&i.RecurrenceInterval,
+			&i.RecurrenceUntil,
+			&i.ExternalProvider,
+			&i.ExternalID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.AutomationIdempotencyKey,
+			&i.AutomationPayloadHash,
+			&i.Location,
+			&i.TimeZone,
+			&i.Status,
+			&i.CancelledAt,
+			&i.SourceKind,
+			&i.SourceID,
+			&i.ExternalUid,
+			&i.RemovedFromSourceAt,
+			&i.Reminders,
+			&i.UseDefaultReminders,
+			&i.RecurrenceByWeekday,
+			&i.RecurrenceCount,
+			&i.SourceReminders,
+			&i.Priority,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRecurringEvents = `-- name: ListRecurringEvents :many
 SELECT events.id, events.title, events.description, events.all_day, events.start_at, events.end_at, events.start_date, events.end_date, events.recurrence_frequency, events.recurrence_interval, events.recurrence_until, events.external_provider, events.external_id, events.created_at, events.updated_at, events.automation_idempotency_key, events.automation_payload_hash, events.location, events.time_zone, events.status, events.cancelled_at, events.source_kind, events.source_id, events.external_uid, events.removed_from_source_at, events.reminders, events.use_default_reminders, events.recurrence_by_weekday, events.recurrence_count, events.source_reminders, events.priority
 FROM events

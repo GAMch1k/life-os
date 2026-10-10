@@ -160,9 +160,12 @@ func (q *Queries) CreateGoogleOAuthState(ctx context.Context, arg CreateGoogleOA
 }
 
 const createGoogleSource = `-- name: CreateGoogleSource :one
-INSERT INTO calendar_sources (kind, name, url, enabled, default_reminders, google_calendar_id)
-VALUES ('google', $1, $2, true, $3, $4)
-RETURNING id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id, default_priority
+INSERT INTO calendar_sources (kind, name, url, enabled, default_reminders, google_calendar_id, integration, external_id, provider, read_only)
+SELECT 'google', $1, $2, true, $3, google_calendars.id,
+       'google-calendar', google_calendars.google_calendar_id, 'Google', google_calendars.access_role NOT IN ('owner', 'writer')
+FROM google_calendars
+WHERE google_calendars.id = $4
+RETURNING id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id, default_priority, integration, external_id, provider, read_only, in_process, integration_config
 `
 
 type CreateGoogleSourceParams struct {
@@ -173,7 +176,9 @@ type CreateGoogleSourceParams struct {
 }
 
 // A synced calendar's source. Its url is the calendar's events endpoint at
-// Google, for reference; it is never fetched as a feed.
+// Google, for reference; it is never fetched as a feed. It belongs to the
+// google-calendar integration under the calendar's Google id (see the
+// integration API), read-only unless the account may edit the calendar.
 func (q *Queries) CreateGoogleSource(ctx context.Context, arg CreateGoogleSourceParams) (CalendarSource, error) {
 	row := q.db.QueryRow(ctx, createGoogleSource,
 		arg.Name,
@@ -207,6 +212,12 @@ func (q *Queries) CreateGoogleSource(ctx context.Context, arg CreateGoogleSource
 		&i.PresetConfig,
 		&i.GoogleCalendarID,
 		&i.DefaultPriority,
+		&i.Integration,
+		&i.ExternalID,
+		&i.Provider,
+		&i.ReadOnly,
+		&i.InProcess,
+		&i.IntegrationConfig,
 	)
 	return i, err
 }
@@ -457,7 +468,7 @@ func (q *Queries) GetGoogleConnection(ctx context.Context) (GoogleConnection, er
 }
 
 const getGoogleSource = `-- name: GetGoogleSource :one
-SELECT id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id, default_priority FROM calendar_sources WHERE google_calendar_id = $1
+SELECT id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id, default_priority, integration, external_id, provider, read_only, in_process, integration_config FROM calendar_sources WHERE google_calendar_id = $1
 `
 
 func (q *Queries) GetGoogleSource(ctx context.Context, googleCalendarID pgtype.UUID) (CalendarSource, error) {
@@ -488,6 +499,12 @@ func (q *Queries) GetGoogleSource(ctx context.Context, googleCalendarID pgtype.U
 		&i.PresetConfig,
 		&i.GoogleCalendarID,
 		&i.DefaultPriority,
+		&i.Integration,
+		&i.ExternalID,
+		&i.Provider,
+		&i.ReadOnly,
+		&i.InProcess,
+		&i.IntegrationConfig,
 	)
 	return i, err
 }
@@ -1031,7 +1048,7 @@ const updateGoogleSource = `-- name: UpdateGoogleSource :one
 UPDATE calendar_sources
 SET name = $1, default_reminders = $2, updated_at = now()
 WHERE id = $3
-RETURNING id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id, default_priority
+RETURNING id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, refreshing_until, last_attempt_at, last_success_at, last_outcome, last_error, last_counts, consecutive_failures, etag, last_modified, created_at, updated_at, preset, preset_config, google_calendar_id, default_priority, integration, external_id, provider, read_only, in_process, integration_config
 `
 
 type UpdateGoogleSourceParams struct {
@@ -1069,6 +1086,12 @@ func (q *Queries) UpdateGoogleSource(ctx context.Context, arg UpdateGoogleSource
 		&i.PresetConfig,
 		&i.GoogleCalendarID,
 		&i.DefaultPriority,
+		&i.Integration,
+		&i.ExternalID,
+		&i.Provider,
+		&i.ReadOnly,
+		&i.InProcess,
+		&i.IntegrationConfig,
 	)
 	return i, err
 }

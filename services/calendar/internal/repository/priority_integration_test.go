@@ -49,12 +49,14 @@ func TestPriorityMigration(t *testing.T) {
 	if err != nil || gym.Priority != nil || gym.Title != "Gym" {
 		t.Fatalf("migrated event = %+v, %v", gym, err)
 	}
-	zaw, err := queries.GetSource(ctx, sourceID)
-	if err != nil || zaw.DefaultPriority != "medium" {
-		t.Fatalf("migrated source = %+v, %v", zaw, err)
+	// Sources are read with SQL: the generated queries know the later
+	// columns of calendar_sources.
+	var zaw, other string
+	if err := pool.QueryRow(ctx, `SELECT default_priority FROM calendar_sources WHERE id = $1`, sourceID).Scan(&zaw); err != nil || zaw != "medium" {
+		t.Fatalf("migrated source priority = %q, %v", zaw, err)
 	}
-	if other, err := queries.GetSource(ctx, source(t, queries, "other")); err != nil || other.DefaultPriority != "medium" {
-		t.Fatalf("a source created without a default priority = %+v, %v", other, err)
+	if err := pool.QueryRow(ctx, `INSERT INTO calendar_sources (kind, name, url) VALUES ('ics', 'other', 'https://calendar.example.org/other.ics') RETURNING default_priority`).Scan(&other); err != nil || other != "medium" {
+		t.Fatalf("a source created without a default priority = %q, %v", other, err)
 	}
 	if _, err := pool.Exec(ctx, `UPDATE events SET priority = 'high' WHERE id = $1`, series); err != nil {
 		t.Fatalf("high: %v", err)

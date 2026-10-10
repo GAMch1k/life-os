@@ -1,8 +1,12 @@
 -- name: CreateSource :one
--- A null default_priority is medium.
-INSERT INTO calendar_sources (kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, default_priority)
-VALUES (sqlc.arg(kind), sqlc.arg(name), sqlc.arg(url), sqlc.arg(enabled), sqlc.arg(filter_include), sqlc.arg(filter_exclude),
-        sqlc.narg(default_reminders), sqlc.arg(next_refresh_at), COALESCE(sqlc.narg(default_priority)::text, 'medium'))
+-- A null default_priority is medium. A feed belongs to the calendar-feeds
+-- integration under its own id (see the integration API).
+WITH new AS (SELECT gen_random_uuid() AS id)
+INSERT INTO calendar_sources (id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, default_priority,
+                              integration, external_id, provider)
+VALUES ((SELECT id FROM new), sqlc.arg(kind), sqlc.arg(name), sqlc.arg(url), sqlc.arg(enabled), sqlc.arg(filter_include), sqlc.arg(filter_exclude),
+        sqlc.narg(default_reminders), sqlc.arg(next_refresh_at), COALESCE(sqlc.narg(default_priority)::text, 'medium'),
+        'calendar-feeds', (SELECT id FROM new)::text, 'ICS')
 RETURNING *;
 
 -- name: GetSource :one
@@ -35,10 +39,12 @@ RETURNING *;
 DELETE FROM calendar_sources WHERE id = $1 AND kind = 'ics';
 
 -- name: ListDueSources :many
--- Enabled feeds whose next refresh is due and that nobody is refreshing.
+-- Enabled feeds whose next refresh is due and that nobody is refreshing
+-- (only those Calendar refreshes itself, not an integration's).
 SELECT id FROM calendar_sources
 WHERE enabled
   AND kind = 'ics'
+  AND in_process
   AND next_refresh_at <= sqlc.arg(now)::timestamptz
   AND (refreshing_until IS NULL OR refreshing_until <= sqlc.arg(now)::timestamptz)
 ORDER BY next_refresh_at, id;
@@ -51,6 +57,7 @@ SET refreshing_until = sqlc.arg(lease_until)::timestamptz, last_attempt_at = sql
 WHERE id = sqlc.arg(id)
   AND enabled
   AND kind = 'ics'
+  AND in_process
   AND (refreshing_until IS NULL OR refreshing_until <= sqlc.arg(now)::timestamptz)
 RETURNING *;
 
@@ -94,15 +101,18 @@ SELECT * FROM calendar_sources WHERE preset = sqlc.arg(preset)::text FOR UPDATE;
 -- A source added through the API for the preset's feed URL: the preset takes
 -- it over rather than adding a second source for the same feed.
 SELECT * FROM calendar_sources
-WHERE preset IS NULL AND kind = 'ics' AND url = sqlc.arg(url)
+WHERE preset IS NULL AND kind = 'ics' AND in_process AND url = sqlc.arg(url)
 ORDER BY created_at, id
 LIMIT 1
 FOR UPDATE;
 
 -- name: CreatePresetSource :one
-INSERT INTO calendar_sources (kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, preset, preset_config)
-VALUES (sqlc.arg(kind), sqlc.arg(name), sqlc.arg(url), true, sqlc.arg(filter_include)::text[], sqlc.arg(filter_exclude)::text[],
-        sqlc.narg(default_reminders), sqlc.arg(next_refresh_at), sqlc.arg(preset)::text, sqlc.arg(preset_config))
+WITH new AS (SELECT gen_random_uuid() AS id)
+INSERT INTO calendar_sources (id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, preset, preset_config,
+                              integration, external_id, provider)
+VALUES ((SELECT id FROM new), sqlc.arg(kind), sqlc.arg(name), sqlc.arg(url), true, sqlc.arg(filter_include)::text[], sqlc.arg(filter_exclude)::text[],
+        sqlc.narg(default_reminders), sqlc.arg(next_refresh_at), sqlc.arg(preset)::text, sqlc.arg(preset_config),
+        'calendar-feeds', (SELECT id FROM new)::text, CASE WHEN sqlc.arg(preset)::text = 'zaw' THEN 'ZAW' ELSE 'ICS' END)
 RETURNING *;
 
 -- name: ApplySourcePreset :one
@@ -114,6 +124,7 @@ SET name = sqlc.arg(name), url = sqlc.arg(url),
     filter_include = sqlc.arg(filter_include)::text[], filter_exclude = sqlc.arg(filter_exclude)::text[],
     default_reminders = sqlc.narg(default_reminders),
     preset = sqlc.arg(preset)::text, preset_config = sqlc.arg(preset_config),
+    provider = CASE WHEN sqlc.arg(preset)::text = 'zaw' THEN 'ZAW' ELSE provider END,
     etag = CASE WHEN sqlc.arg(reset_validators)::boolean THEN NULL ELSE etag END,
     last_modified = CASE WHEN sqlc.arg(reset_validators)::boolean THEN NULL ELSE last_modified END,
     next_refresh_at = COALESCE(sqlc.narg(next_refresh_at)::timestamptz, next_refresh_at),

@@ -70,6 +70,14 @@ info:
     event whose rule fits this model (changed through the same scopes,
     written to Google); an imported feed's recurring events, like Google
     rules outside the model, are stored one read-only event per occurrence.
+
+
+    Integrations (P11-06) are separate services that give Calendar the
+    events of their sources, and follow the events created in Life OS, only
+    through this API (`/v1/integrations/...`, actor `system:<integration>`):
+    they register their sources, sync each source's events in snapshots or
+    deltas, and read the change feed of Life OS events. See
+    docs/services/calendar-integration-api.md.
   license: {name: UNLICENSED, url: https://life-os.local/license}
 servers: [{url: http://calendar:8080}]
 paths:
@@ -378,7 +386,10 @@ paths:
         next refresh download the feed in full and schedules it right away;
         events that the new filter excludes are reconciled like events that
         left the feed. Enabling a source schedules a refresh right away;
-        disabling it stops its refreshes and keeps its events.
+        disabling it stops its refreshes and keeps its events. A feed an
+        integration syncs (see `/v1/integrations`) keeps its own URL and
+        filter there: changing them here returns 409
+        `managed_by_integration`.
       operationId: updateSource
       security: []
       parameters: [{name: sourceId, in: path, required: true, schema: {type: string, format: uuid}}]
@@ -387,7 +398,7 @@ paths:
         '200': {description: Source, content: {application/json: {schema: {$ref: '#/components/schemas/CalendarSource'}}}}
         '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}
         '404': {description: Source not found}
-        '409': {description: The source kept changing concurrently; retry the update}
+        '409': {description: 'The source kept changing concurrently; retry the update (conflict). The source is a feed an integration syncs and the update changes its url or filter (managed_by_integration).'}
     delete:
       summary: Delete a calendar source
       description: 'Removes the source and every event imported from it. Set `enabled: false` instead to stop refreshing and keep its events.'
@@ -415,7 +426,7 @@ paths:
         '200': {description: The source after the refresh, content: {application/json: {schema: {$ref: '#/components/schemas/CalendarSource'}}}}
         '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}
         '404': {description: Source not found}
-        '409': {description: 'The source is disabled (source_disabled), a refresh is already running (refresh_in_progress), or the source changed during the refresh (conflict)'}
+        '409': {description: 'The source is disabled (source_disabled), a refresh is already running (refresh_in_progress), the source changed during the refresh (conflict), or an integration syncs it (managed_by_integration)'}
   /v1/settings:
     get:
       summary: Get the Calendar settings
@@ -591,16 +602,152 @@ paths:
         '404': {description: Calendar not found}
         '409': {description: 'The calendar does not sync (google_sync_disabled), it is syncing right now (sync_in_progress), its sync changed meanwhile (conflict), or Google is not connected (google_not_connected) or its authorization expired (google_expired)'}
         '503': {description: Google is not configured on this server (google_not_configured)}
+  # Integration API (P11-06).
+  /v1/integrations/{integration}/sources:
+    get:
+      summary: List an integration's sources
+      description: >-
+        Every source registered for the integration, oldest first, including
+        those Calendar's in-process adapter still syncs (`inProcess`). Only
+        the integration itself (actor `system:<integration>`) or a dev tool
+        (`dev:<name>`) may call it; any other actor, or none, gets 403
+        `forbidden`.
+      operationId: listIntegrationSources
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/Integration'
+      responses:
+        '200': {description: Sources, content: {application/json: {schema: {$ref: '#/components/schemas/IntegrationSourceList'}}}}
+        '400': {description: An invalid integration name}
+        '403': {description: 'The actor is not system:<integration> or dev:<name> (forbidden)'}
+  /v1/integrations/{integration}/sources/{externalId}:
+    get:
+      summary: Get one of an integration's sources
+      operationId: getIntegrationSource
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/Integration'
+        - $ref: '#/components/parameters/ExternalSourceId'
+      responses:
+        '200': {description: Source, content: {application/json: {schema: {$ref: '#/components/schemas/IntegrationSource'}}}}
+        '400': {description: An invalid integration name or external id}
+        '403': {description: 'The actor is not system:<integration> or dev:<name> (forbidden)'}
+        '404': {description: The integration has no source with this external id}
+    put:
+      summary: Register or update an integration's source
+      description: >-
+        Idempotent by (integration, externalId): the first call adds the
+        source (201, enabled), later ones update it (200). `provider`,
+        `readOnly`, and `url` always take the request's values. `name`,
+        `defaultReminders`, and `defaultPriority` are also the owner's
+        settings (renamed in the Dashboard, for example): each changes only
+        when the integration sends a value other than the one it last sent,
+        so a Google calendar renamed in Google renames the source, while an
+        owner's rename stays until the source itself is renamed. Leaving
+        `defaultReminders` or `defaultPriority` out says nothing about them.
+        `enabled` is the owner's alone. `kind` is fixed when the source is
+        added (409 `kind_mismatch`). A source Calendar's in-process adapter
+        still syncs (`inProcess`, the sources from before the integration
+        services) cannot be registered, synced, or deleted here (409
+        `source_in_process`) until the release that switches that adapter
+        off hands it over.
+      operationId: registerIntegrationSource
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/Integration'
+        - $ref: '#/components/parameters/ExternalSourceId'
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RegisterIntegrationSourceRequest'}}}}
+      responses:
+        '200': {description: 'The source, updated or unchanged', content: {application/json: {schema: {$ref: '#/components/schemas/IntegrationSource'}}}}
+        '201': {description: 'The source, added', content: {application/json: {schema: {$ref: '#/components/schemas/IntegrationSource'}}}}
+        '400': {description: 'Invalid request (invalid_source, the message says what to fix), or no valid X-Life-OS-Actor (actor_required)'}
+        '403': {description: 'The actor is not system:<integration> or dev:<name> (forbidden)'}
+        '409': {description: 'The source was added with another kind (kind_mismatch), or Calendar''s in-process adapter still syncs it (source_in_process)'}
+    delete:
+      summary: Delete an integration's source
+      description: Removes the source and every event imported from it.
+      operationId: deleteIntegrationSource
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/Integration'
+        - $ref: '#/components/parameters/ExternalSourceId'
+      responses:
+        '204': {description: Source and its events deleted}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}
+        '403': {description: 'The actor is not system:<integration> or dev:<name> (forbidden)'}
+        '404': {description: The integration has no source with this external id}
+        '409': {description: Calendar's in-process adapter still syncs the source (source_in_process)}
+  /v1/integrations/{integration}/sources/{externalId}/sync:
+    post:
+      summary: Sync the events of an integration's source
+      description: >-
+        Writes one batch of the source's events, keyed by `externalUid`, in
+        one transaction, and returns what changed. Repeating a batch changes
+        nothing. `snapshot` lists every event of the source: a stored event
+        it leaves out is cancelled and marked `removedFromSourceAt` (kept as
+        history, restored if it comes back), except as `window` says.
+        `delta` lists only new and changed events, with the external uids
+        of events the source no longer has in `deleted` (handled like events
+        a snapshot leaves out). The owner's own reminders and priority of an
+        imported event survive every sync: an item's `reminders` replace the
+        event's only while the owner has not changed them, and an item
+        without `priority` leaves the event's alone. A disabled source
+        refuses syncs (409 `source_disabled`), keeping its events.
+      operationId: syncIntegrationSource
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/Integration'
+        - $ref: '#/components/parameters/ExternalSourceId'
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/SyncIntegrationSourceRequest'}}}}
+      responses:
+        '200': {description: What the batch changed, content: {application/json: {schema: {$ref: '#/components/schemas/SyncIntegrationSourceResult'}}}}
+        '400': {description: 'Invalid batch: invalid_sync_request, invalid_item, invalid_exception, or duplicate_uid, with a message naming the item and what to fix; or no valid X-Life-OS-Actor (actor_required)'}
+        '403': {description: 'The actor is not system:<integration> or dev:<name> (forbidden)'}
+        '404': {description: The integration has no source with this external id}
+        '409': {description: 'The source is disabled (source_disabled), Calendar''s in-process adapter still syncs it (source_in_process), or an empty snapshot with emptyGuard would remove upcoming events (empty_snapshot)'}
+  /v1/integrations/changes:
+    get:
+      summary: Follow the changes of events created in Life OS
+      description: >-
+        The change feed of Life OS events (`source.kind` `manual`), for
+        integrations that write them elsewhere (such as the Life OS calendar
+        in Google). Each entry is one event with its current state (`event`
+        with its occurrence `exceptions`), or a tombstone (`deleted`), and
+        `actors`, who changed it, so an integration can skip the changes it
+        made itself. Changes come in commit order; several changes of one
+        event within a page are one entry. Without `cursor` the feed starts
+        with a snapshot (`phase` `snapshot`): every Life OS event as it is
+        now, by id; its last page (`hasMore` false) returns a cursor that
+        continues with the changes made since the snapshot started, so
+        nothing is missed. Pass `nextCursor` back as `cursor` (store it after
+        handling the page); `hasMore` true means more entries are waiting.
+        Entries are kept for CALENDAR_CHANGE_RETENTION_DAYS (30 by default):
+        a cursor older than that gets 410 `cursor_expired`; start again
+        without a cursor (`GET /v1/events?sourceKind=manual` also lists the
+        Life OS events). Only `system:<name>` and `dev:<name>` actors may
+        read it; any other actor, or none, gets 403 `forbidden`.
+      operationId: listChanges
+      security: []
+      parameters:
+        - {name: cursor, in: query, description: The previous page's nextCursor; leave out to start with a snapshot., schema: {type: string, maxLength: 200}}
+        - {name: limit, in: query, description: 'At most this many changes (snapshot: events) per page.', schema: {type: integer, minimum: 1, maximum: 500, default: 100}}
+      responses:
+        '200': {description: Changes, content: {application/json: {schema: {$ref: '#/components/schemas/ChangeFeedPage'}}}}
+        '400': {description: 'A malformed cursor (invalid_cursor) or limit'}
+        '403': {description: 'The actor is not system:<name> or dev:<name> (forbidden)'}
+        '410': {description: 'The changes after the cursor were pruned (cursor_expired); start again without a cursor'}
 components:
   parameters:
     TimeZone: {name: timeZone, in: query, description: 'IANA timezone (for example Europe/Berlin) in which all-day dates are compared with instants. Defaults to the owner''s timezone configured for Calendar.', schema: {type: string, minLength: 1, maxLength: 64}}
     IncludeCancelled: {name: includeCancelled, in: query, description: Also return cancelled events (including those removed by their source)., schema: {type: boolean, default: false}}
-    SourceKind: {name: sourceKind, in: query, description: Only events from this kind of source., schema: {$ref: '#/components/schemas/EventSourceKind'}}
+    SourceKind: {name: sourceKind, in: query, description: 'Only events from this kind of source; `manual` lists the events created in Life OS.', schema: {$ref: '#/components/schemas/EventSourceKind'}}
     SourceId: {name: sourceId, in: query, description: Only events imported from this source., schema: {type: string, format: uuid}}
     Editable: {name: editable, in: query, description: 'Only events that can be changed through this API (`editable`): Life OS events, and Google events of calendars the account may edit that are single events or series Calendar holds; not feed events, read-only Google calendars, or occurrences expanded from a Google rule. The AI looks for the events to change this way.', schema: {type: boolean, default: false}}
     EventId: {name: eventId, in: path, required: true, schema: {type: string, format: uuid}}
     RecurrenceId: {name: recurrenceId, in: path, required: true, description: 'The occurrence''s `occurrence.recurrenceId` from a listing (URL-encoded): an RFC 3339 instant for a timed series (2026-10-12T16:00:00Z), a date for an all-day one (2026-10-24).', schema: {type: string, minLength: 1, maxLength: 64}}
     Cursor: {name: cursor, in: query, description: The previous page's nextCursor. Opaque; only valid with the parameters it was returned for., schema: {type: string}}
+    Integration: {name: integration, in: path, required: true, description: 'The integration service, such as `google-calendar` or `calendar-feeds`: lower-case letters, digits, and dashes. Its actor is `system:<integration>`.', schema: {type: string, pattern: '^[a-z0-9][a-z0-9-]{0,62}$'}}
+    ExternalSourceId: {name: externalId, in: path, required: true, description: 'The source''s id in the integration (URL-encoded), such as a Google calendar''s id.', schema: {type: string, minLength: 1, maxLength: 1024}}
   schemas:
     Weekday:
       type: string
@@ -1023,3 +1170,166 @@ components:
       required: [syncEnabled]
       properties:
         syncEnabled: {type: boolean}
+    # Integration API (P11-06).
+    IntegrationSourceKind:
+      type: string
+      enum: [ics, google]
+      description: 'How the events API and the Dashboard show the source''s events (`source.kind`): `ics` for a subscribed feed, `google` for a Google calendar.'
+    IntegrationSource:
+      type: object
+      required: [id, integration, externalId, kind, provider, name, enabled, readOnly, inProcess, url, defaultReminders, defaultPriority, createdAt, updatedAt]
+      properties:
+        id: {type: string, format: uuid, description: 'The source''s id in Calendar: its events carry it as `source.sourceId`.'}
+        integration: {type: string}
+        externalId: {type: string}
+        kind: {$ref: '#/components/schemas/IntegrationSourceKind'}
+        provider: {type: string, description: 'The label shown for the source, such as Google, ZAW, or ICS.'}
+        name: {type: string, description: 'The name shown with its events (the owner may have changed it).'}
+        enabled: {type: boolean, description: The owner's switch; a disabled source refuses syncs and keeps its events.}
+        readOnly: {type: boolean, description: 'Whether the source accepts changes to its events. Calendar does not route event changes to integrations yet: the events of every source an integration syncs are read-only except for their reminders and priority.'}
+        inProcess: {type: boolean, description: 'Calendar''s in-process adapter still syncs the source (a source from before the integration services); it cannot be synced through this API until it is handed over.'}
+        url: {type: string, description: A reference link for the source (empty when none); Calendar never fetches it.}
+        defaultReminders: {type: array, nullable: true, items: {$ref: '#/components/schemas/Reminder'}, description: Default reminders of the source's events; null means none.}
+        defaultPriority: {$ref: '#/components/schemas/EventPriority'}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    IntegrationSourceList: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/IntegrationSource'}}}}
+    RegisterIntegrationSourceRequest:
+      type: object
+      required: [kind, name, provider, readOnly]
+      properties:
+        kind: {$ref: '#/components/schemas/IntegrationSourceKind'}
+        name: {type: string, minLength: 1, maxLength: 500, description: 'The source''s name in the integration, such as the Google calendar''s name.'}
+        provider: {type: string, minLength: 1, maxLength: 50, description: 'The label shown for the source, such as Google or ZAW.'}
+        readOnly: {type: boolean, description: Whether the source accepts changes to its events.}
+        url: {type: string, nullable: true, maxLength: 2048, description: A reference link (never fetched by Calendar); null or left out for none.}
+        defaultReminders: {type: array, nullable: true, maxItems: 10, items: {$ref: '#/components/schemas/Reminder'}, description: 'The source''s own default reminders (null: none). Leave out when the source has none to say.'}
+        defaultPriority: {allOf: [{$ref: '#/components/schemas/EventPriority'}], description: Leave out when the source has none to say (new sources get medium).}
+    SourceEventReminders:
+      type: object
+      description: The reminders the source gives an event, like Google Calendar's notifications.
+      required: [useDefault, reminders]
+      properties:
+        useDefault: {type: boolean, description: The event follows the source's default reminders.}
+        reminders: {type: array, maxItems: 10, items: {$ref: '#/components/schemas/Reminder'}, description: The event's own reminders.}
+    SourceEventPriority:
+      type: string
+      enum: [low, medium, high, default]
+      x-enum-varnames: [SourcePriorityLow, SourcePriorityMedium, SourcePriorityHigh, SourcePriorityDefault]
+      description: 'An event''s own priority as its source gives it; `default`: none of its own, so it follows the source''s `defaultPriority`.'
+    OccurrenceChanges:
+      type: object
+      description: >-
+        The fields one occurrence of a series overrides, as Calendar stores
+        them; absent fields follow the series. `description` or `location`
+        null clears it for the occurrence. A moved occurrence gives both
+        ends: `startAt` and `endAt` for a timed series, `startDate` and
+        `endDate` (inclusive) for an all-day one.
+      properties:
+        title: {type: string, minLength: 1, maxLength: 500}
+        description: {type: string, nullable: true, maxLength: 10000}
+        location: {type: string, nullable: true, maxLength: 500}
+        startAt: {type: string, format: date-time}
+        endAt: {type: string, format: date-time}
+        startDate: {type: string, format: date}
+        endDate: {type: string, format: date}
+        reminders: {type: array, maxItems: 10, items: {$ref: '#/components/schemas/Reminder'}}
+        useDefaultReminders: {type: boolean}
+        priority: {$ref: '#/components/schemas/EventPriority'}
+    SourceEventException:
+      type: object
+      description: 'One occurrence of a series changed or skipped (Google''s changed or cancelled instances, EXDATEs). It must skip the occurrence or change something.'
+      required: [recurrenceId]
+      properties:
+        recurrenceId: {type: string, minLength: 1, maxLength: 64, description: 'The occurrence''s original start: an RFC 3339 instant in UTC for a timed series (2026-10-12T16:00:00Z), a date for an all-day one (2026-10-24).'}
+        cancelled: {type: boolean, default: false, description: The occurrence is skipped.}
+        changes: {$ref: '#/components/schemas/OccurrenceChanges'}
+    SourceEvent:
+      type: object
+      description: >-
+        One event of a source as the integration has it. A timed event needs
+        `startAt` and `endAt` (after it); an all-day event `startDate` and
+        `endDate` (inclusive, not before it) and no `timeZone`. A series has
+        its `recurrence` (Calendar's model; a rule outside it is sent as one
+        event per occurrence) and its occurrences' own changes and skips in
+        `exceptions`. Validated like events created in Life OS.
+      required: [externalUid, title, allDay]
+      properties:
+        externalUid: {type: string, minLength: 1, maxLength: 2048, description: 'The event''s identity in the source, unique within it, such as a Google event id or an ICS UID.'}
+        title: {type: string, minLength: 1, maxLength: 500}
+        description: {type: string, nullable: true, maxLength: 10000}
+        location: {type: string, nullable: true, maxLength: 500}
+        allDay: {type: boolean}
+        startAt: {type: string, format: date-time, nullable: true}
+        endAt: {type: string, format: date-time, nullable: true}
+        startDate: {type: string, format: date, nullable: true}
+        endDate: {type: string, format: date, nullable: true}
+        timeZone: {type: string, nullable: true, description: The IANA timezone a timed event is scheduled in.}
+        status: {allOf: [{$ref: '#/components/schemas/EventStatus'}], description: '`cancelled`: the source cancelled the event (kept as cancelled history). Default active.'}
+        recurrence: {type: object, allOf: [{$ref: '#/components/schemas/Recurrence'}], nullable: true}
+        exceptions: {type: array, maxItems: 1000, items: {$ref: '#/components/schemas/SourceEventException'}, description: A series' changed or skipped occurrences.}
+        reminders: {$ref: '#/components/schemas/SourceEventReminders'}
+        priority: {$ref: '#/components/schemas/SourceEventPriority'}
+    SyncWindow:
+      type: object
+      description: >-
+        Which stored events the batch speaks for; at most one of the two.
+        `start`: the source lists its events from this instant on (Google's
+        time window): a stored event that ended before it is history the
+        source no longer lists and stays as it is. `upcomingOnly`: the source
+        lists only events still to come (many ICS feeds): a stored event that
+        started before now is neither removed nor rewritten, unless the
+        batch moves it into the future.
+      properties:
+        start: {type: string, format: date-time}
+        upcomingOnly: {type: boolean, default: false}
+    SyncIntegrationSourceRequest:
+      type: object
+      required: [mode, items]
+      properties:
+        mode: {type: string, enum: [snapshot, delta]}
+        items: {type: array, maxItems: 10000, items: {$ref: '#/components/schemas/SourceEvent'}, description: 'Every event of the source (snapshot), or the new and changed ones (delta).'}
+        deleted: {type: array, maxItems: 10000, items: {type: string, minLength: 1, maxLength: 2048}, description: 'delta only: the external uids of events the source no longer has. Unknown ones are ignored.'}
+        window: {$ref: '#/components/schemas/SyncWindow'}
+        emptyGuard: {type: boolean, default: false, description: 'snapshot only: a snapshot without items is refused (409 empty_snapshot, nothing changes) while the source still has upcoming active events, such as when a feed comes back empty by mistake.'}
+    SyncIntegrationSourceResult:
+      type: object
+      required: [mode, received, inserted, updated, removed, restored, unchanged]
+      properties:
+        mode: {type: string, enum: [snapshot, delta]}
+        received: {type: integer, description: Items in the batch.}
+        inserted: {type: integer}
+        updated: {type: integer}
+        removed: {type: integer, description: 'Events cancelled and marked removedFromSourceAt: left out of a snapshot, or deleted in a delta.'}
+        restored: {type: integer, description: Removed events back in the source.}
+        unchanged: {type: integer}
+    OccurrenceException:
+      type: object
+      description: One occurrence of a series with its own changes or skipped (This event).
+      required: [recurrenceId, cancelled, changes, updatedAt]
+      properties:
+        recurrenceId: {type: string, description: 'The occurrence''s original start (see `occurrence.recurrenceId`).'}
+        cancelled: {type: boolean, description: The occurrence is skipped.}
+        cancelledAt: {type: string, format: date-time, nullable: true}
+        changes: {$ref: '#/components/schemas/OccurrenceChanges'}
+        updatedAt: {type: string, format: date-time}
+    ChangeFeedEntry:
+      type: object
+      required: [eventId, deleted, actors, changedAt, exceptions]
+      properties:
+        eventId: {type: string, format: uuid}
+        deleted: {type: boolean, description: 'The event no longer exists (a tombstone): `event` is null.'}
+        event: {type: object, allOf: [{$ref: '#/components/schemas/CalendarEvent'}], nullable: true, description: 'The event as it is now (as GET /v1/events/{eventId} returns it); null when deleted.'}
+        exceptions: {type: array, items: {$ref: '#/components/schemas/OccurrenceException'}, description: 'A series'' occurrence changes and skips as they are now; empty otherwise.'}
+        actor: {type: string, nullable: true, description: 'Who made the latest change, as in X-Life-OS-Actor (user, agent:<name>, system:<name>, dev:<name>); null in a snapshot.'}
+        actors: {type: array, items: {type: string}, description: 'Everyone who made the changes this entry stands for, each once; empty in a snapshot. An integration skips an entry as its own write only when it is the only actor.'}
+        changedAt: {type: string, format: date-time, description: 'When the latest change was made (in a snapshot: the event''s updatedAt).'}
+        sequence: {type: integer, format: int64, nullable: true, description: The feed position of the latest change; null in a snapshot.}
+    ChangeFeedPage:
+      type: object
+      required: [items, nextCursor, hasMore, phase]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/ChangeFeedEntry'}}
+        nextCursor: {type: string, description: Pass it back as cursor for what follows; always set.}
+        hasMore: {type: boolean, description: 'More entries of this phase are waiting now. On a snapshot page, false means the snapshot is complete: every Life OS event it did not list no longer exists, and nextCursor continues with changes.'}
+        phase: {type: string, enum: [snapshot, changes], description: 'Whether the items are a snapshot (every Life OS event as it is now) or changes since the cursor.'}

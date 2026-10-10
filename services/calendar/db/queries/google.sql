@@ -155,9 +155,14 @@ SELECT * FROM calendar_sources WHERE google_calendar_id = $1;
 
 -- name: CreateGoogleSource :one
 -- A synced calendar's source. Its url is the calendar's events endpoint at
--- Google, for reference; it is never fetched as a feed.
-INSERT INTO calendar_sources (kind, name, url, enabled, default_reminders, google_calendar_id)
-VALUES ('google', sqlc.arg(name), sqlc.arg(url), true, sqlc.narg(default_reminders), sqlc.arg(google_calendar_id))
+-- Google, for reference; it is never fetched as a feed. It belongs to the
+-- google-calendar integration under the calendar's Google id (see the
+-- integration API), read-only unless the account may edit the calendar.
+INSERT INTO calendar_sources (kind, name, url, enabled, default_reminders, google_calendar_id, integration, external_id, provider, read_only)
+SELECT 'google', sqlc.arg(name), sqlc.arg(url), true, sqlc.narg(default_reminders), google_calendars.id,
+       'google-calendar', google_calendars.google_calendar_id, 'Google', google_calendars.access_role NOT IN ('owner', 'writer')
+FROM google_calendars
+WHERE google_calendars.id = sqlc.arg(google_calendar_id)
 RETURNING *;
 
 -- name: UpdateGoogleSource :one

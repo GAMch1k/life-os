@@ -8,6 +8,20 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type CalendarChangeFeed struct {
+	ID            bool
+	PrunedThrough int64
+	PrunedAt      pgtype.Timestamptz
+}
+
+type CalendarEventChange struct {
+	Seq           int64
+	EventID       pgtype.UUID
+	Actor         string
+	TransactionID int64
+	ChangedAt     pgtype.Timestamptz
+}
+
 type CalendarReminderDispatch struct {
 	ID            bool
 	LastRunAt     pgtype.Timestamptz
@@ -60,6 +74,12 @@ type CalendarSource struct {
 	PresetConfig        []byte
 	GoogleCalendarID    pgtype.UUID
 	DefaultPriority     string
+	Integration         *string
+	ExternalID          *string
+	Provider            *string
+	ReadOnly            bool
+	InProcess           bool
+	IntegrationConfig   []byte
 }
 
 type Event struct {
