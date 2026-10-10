@@ -32,7 +32,7 @@ const hydrationProblem =
 
 async function seed(request: APIRequestContext, stamp: number) {
   const long =
-    "A deliberately long task title that would push a fixed desktop row layout past the edge of a phone screen";
+    "Polish long row: this name is long enough to push a fixed desktop row layout past the edge of a phone screen";
   for (const data of [
     { title: `${long} ${stamp}` },
     { title: `Polish dated ${stamp}`, dueAt: new Date().toISOString() },

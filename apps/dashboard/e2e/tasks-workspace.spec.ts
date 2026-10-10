@@ -147,9 +147,9 @@ test.describe("Tasks workspace", () => {
 
     const { timeZone } = await openTasks(page);
     await page.getByLabel(`Edit ${original}`).click();
-    await page.getByLabel("Task title").fill(renamed);
-    await page.getByLabel("Task notes").fill(notes);
-    await page.getByLabel("Due date").fill("2026-10-21T09:30");
+    await page.getByLabel("Task title", { exact: true }).fill(renamed);
+    await page.getByLabel("Task notes", { exact: true }).fill(notes);
+    await page.getByLabel("Due date", { exact: true }).fill("2026-10-21T09:30");
     await page.getByRole("button", { name: "Save" }).click();
     await expect(page.getByText(renamed)).toBeVisible();
     // The due date is the owner's wall time, not the browser's.
