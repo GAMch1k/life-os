@@ -41,7 +41,7 @@ async function expectHomeAlert(page: Page, text: RegExp) {
   await expect(alert).toContainText(text);
   await alert.click();
   await expect(
-    page.getByRole("heading", { name: "Is Life OS working?" }),
+    page.getByRole("heading", { level: 1, name: "Status", exact: true }),
   ).toBeVisible();
 }
 

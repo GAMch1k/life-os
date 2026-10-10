@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { addDays, dayKey, startOfDay } from "./time-zone";
+import { addDays, dateTimeFormat, dayKey, startOfDay } from "./time-zone";
 
 test("dayKey uses the configured timezone, not UTC", () => {
   // 23:41 UTC on Friday is already Saturday in Berlin (summer time).
@@ -32,4 +32,15 @@ test("startOfDay is local midnight, across DST changes", () => {
 test("addDays crosses month boundaries", () => {
   assert.equal(addDays("2026-10-31", 1), "2026-11-01");
   assert.equal(addDays("2026-03-01", -1), "2026-02-28");
+});
+
+test("dateTimeFormat renders in the timezone with the fixed locale", () => {
+  const options = { hour: "2-digit", minute: "2-digit" } as const;
+  const at = new Date("2026-10-09T23:41:00Z");
+  assert.equal(dateTimeFormat("Europe/Berlin", options).format(at), "01:41");
+  assert.equal(dateTimeFormat("UTC", options).format(at), "23:41");
+  assert.equal(
+    dateTimeFormat("Europe/Berlin", options),
+    dateTimeFormat("Europe/Berlin", { ...options }),
+  );
 });
