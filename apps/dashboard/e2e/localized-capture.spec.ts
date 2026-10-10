@@ -26,16 +26,16 @@ test.describe("Dashboard localized text capture", () => {
       const content = instruction(title);
       await page.goto("/");
       await page.locator("#inbox-capture").fill(content);
+      const created = page.waitForResponse(
+        (response) =>
+          response.request().method() === "POST" &&
+          response.url().includes("/api/inbox/v1/inbox-items"),
+      );
       await page.getByRole("button", { name: "Capture" }).click();
-
-      const inbox = await request.get(
-        "/api/inbox/v1/inbox-items?query=state=raw&limit=100",
-      );
-      expect(inbox.ok()).toBeTruthy();
-      const item = (await inbox.json()).items.find(
-        (entry: { content: string }) => entry.content === content,
-      );
-      expect(item).toBeTruthy();
+      const response = await created;
+      expect(response.status()).toBe(201);
+      const item = (await response.json()) as { id: string; content: string };
+      expect(item.content).toBe(content);
 
       await expect
         .poll(
