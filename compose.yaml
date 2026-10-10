@@ -111,6 +111,7 @@ services:
       VOICE_SERVICE_URL: http://voice:8080
       ACTIVITY_SERVICE_URL: http://activity:8080
       PROCESSOR_STATUS_URL: http://processor:8081
+      LIFE_OS_TIMEZONE: ${LIFE_OS_TIMEZONE:-UTC}
     expose: ["3000"]
     depends_on:
       finance: {condition: service_started}
@@ -151,6 +152,8 @@ services:
       LIFE_OS_CODEX_TIMEOUT_SECONDS: ${LIFE_OS_CODEX_TIMEOUT_SECONDS:-300}
       LIFE_OS_CODEX_MAX_CONCURRENCY: ${LIFE_OS_CODEX_MAX_CONCURRENCY:-1}
       LIFE_OS_PROCESSOR_STALE_AFTER_SECONDS: ${LIFE_OS_PROCESSOR_STALE_AFTER_SECONDS:-120}
+      LIFE_OS_TIMEZONE: ${LIFE_OS_TIMEZONE:-UTC}
+      TZ: ${LIFE_OS_TIMEZONE:-UTC}
       CODEX_HOME: /tmp/lifeos-codex
     volumes:
       - type: bind
