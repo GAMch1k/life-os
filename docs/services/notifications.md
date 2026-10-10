@@ -91,7 +91,7 @@ A delivery belongs to the channels enabled when its notification was created. En
 
 ### ntfy
 
-The `ntfy` channel publishes to one private topic on the ntfy server in the Life OS stack ([setup and operations](../operations/ntfy.md)), over the `notify-edge` network (which only the Cloudflare connector, ntfy, and this service share) with ntfy's JSON publish API: `POST http://ntfy:80/` with `Authorization: Bearer <publisher token>` and
+The `ntfy` channel publishes to one private topic on the ntfy server in the Life OS stack ([setup and operations](../operations/ntfy.md)), over the internal `notify-internal` network (which only ntfy and this service share) with ntfy's JSON publish API: `POST http://ntfy:80/` with `Authorization: Bearer <publisher token>` and
 
 | ntfy field | From the notification |
 | --- | --- |

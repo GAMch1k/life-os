@@ -1,10 +1,10 @@
 # ntfy: notifications on the owner's phone
 
-Life OS pushes notifications to the owner's Android phone through [ntfy](https://ntfy.sh), self-hosted in the Life OS stack (not the public ntfy.sh). The Notifications service publishes each notification to one private ntfy topic over a dedicated Docker network; the ntfy Android app on the phone subscribes to that topic at `https://ntfy.gamch1k.com`, which the Cloudflare Tunnel hands straight to the ntfy container. The Life OS gateway is not involved. Life OS's own Android app later becomes another channel, next to or instead of ntfy. What a notification looks like on the phone (priority, emoji, tap target) is in [Notifications → ntfy](../services/notifications.md#ntfy).
+Life OS pushes notifications to the owner's Android phone through [ntfy](https://ntfy.sh), self-hosted in the Life OS stack (not the public ntfy.sh). The Notifications service publishes each notification to one private ntfy topic over an internal Docker network; the ntfy Android app on the phone subscribes to that topic at `https://ntfy.gamch1k.com`, which the Cloudflare Tunnel hands straight to the ntfy container. The Life OS gateway is not involved. Life OS's own Android app later becomes another channel, next to or instead of ntfy. What a notification looks like on the phone (priority, emoji, tap target) is in [Notifications → ntfy](../services/notifications.md#ntfy).
 
 ```mermaid
 flowchart LR
-  subgraph notify-edge["notify-edge network (cloudflared, ntfy, notifications)"]
+  subgraph notify-edge["notify-edge network (cloudflared, ntfy)"]
     Ntfy["ntfy container<br>(no ports)"]
   end
   subgraph edge["edge network (cloudflared, gateway)"]
@@ -14,46 +14,46 @@ flowchart LR
   Browser -- "https://lifeos.gamch1k.com" --> Access[Cloudflare Access] --> Connector
   Connector -- "route ntfy.gamch1k.com → http://ntfy:80" --> Ntfy
   Connector -- "route lifeos.gamch1k.com → http://gateway:80" --> Gateway --> LifeOS["Life OS services (backend)"]
-  N["Notifications service<br>(backend + notify-edge)"] -- "POST http://ntfy:80/ (publisher token)" --> Ntfy
+  N["Notifications service<br>(backend + notify-internal)"] -- "notify-internal network (ntfy, notifications)<br>POST http://ntfy:80/ (publisher token)" --> Ntfy
 ```
 
 ## Security model
 
 The phone reaches ntfy through the same Cloudflare Tunnel as Life OS, on a second hostname and route. That route has **no Cloudflare Access**: the ntfy app talks to its server directly with a user and password and cannot complete an Access login. Life OS itself stays behind Access. What keeps this safe:
 
-- **Structural separation.** The ntfy route points at `http://ntfy:80`, not at the gateway. ntfy sits on its own Docker network, `notify-edge` (`10.255.249.16/29`), shared only by the connector (`cloudflared`), ntfy, and the Notifications service, which publishes to it. ntfy is on no other network. The gateway, the Dashboard, MCP, Postgres, and every other service are not on `notify-edge`, so nothing that arrives on that route can reach them, whatever the Host header or the gateway's configuration. `tools/check-ingress` enforces the memberships.
+- **Structural separation.** The ntfy route points at `http://ntfy:80`, not at the gateway. ntfy is on exactly two Docker networks of its own: `notify-edge` (`10.255.249.16/29`), shared only with the connector (`cloudflared`), and `notify-internal` (`10.255.249.32/29`, internal: no outside access), shared only with the Notifications service, which publishes to it. The connector is on no network with the gateway's services or with Notifications: from the ntfy route, the gateway, the Dashboard, MCP, Postgres, Notifications, and every other service are unreachable, whatever the Host header, the gateway's configuration, or the route's target. `tools/check-ingress` enforces the memberships.
 - **ntfy denies everything by default.** `auth-default-access: deny-all`: an anonymous visitor can neither read nor write any topic. Signup, web login, topic reservations, the web app, and attachments are off, and nothing is forwarded to ntfy.sh or Firebase.
 - **Only two accounts exist, both provisioned by ntfy itself** from the ignored `.env` at every start (`auth-users`, `auth-access`, `auth-tokens`). ntfy deletes provisioned accounts, rights, and tokens that leave that list. Neither account is an admin.
 
-  | User | Rights | Authenticates with | Used by |
-  | --- | --- | --- | --- |
-  | `lifeos-publisher` | write-only on the topic | token `LIFE_OS_NTFY_PUBLISHER_TOKEN` (its password is never used) | Notifications service |
-  | `lifeos-phone` | read-only on the topic | password (only its bcrypt hash, `LIFE_OS_NTFY_PHONE_PASSWORD_HASH`, is on the server) | ntfy app on the phone |
+  | User               | Rights                  | Authenticates with                                                                    | Used by               |
+  | ------------------ | ----------------------- | ------------------------------------------------------------------------------------- | --------------------- |
+  | `lifeos-publisher` | write-only on the topic | token `LIFE_OS_NTFY_PUBLISHER_TOKEN` (its password is never used)                     | Notifications service |
+  | `lifeos-phone`     | read-only on the topic  | password (only its bcrypt hash, `LIFE_OS_NTFY_PHONE_PASSWORD_HASH`, is on the server) | ntfy app on the phone |
 
   A leaked phone password can only read notifications; the publisher token can only post them.
+
 - **The gateway does not know ntfy, and serves Life OS only for its listed hosts.** Any other Host, the ntfy hostname included, gets no answer (444), so even a mistaken route from the ntfy hostname to the gateway would not reach Life OS; a tunnel request without an Access token is refused as well. See [Networking](../architecture/networking.md#gateway-hosts).
 - **Rate limits.** ntfy limits each visitor (requests, subscriptions, messages per day, failed logins), by the visitor address Cloudflare puts in `CF-Connecting-IP`.
 - **The container** publishes no port, has a read-only filesystem, no capabilities but binding port 80, `no-new-privileges`, and 128 MB of memory.
-- **Residual exposure.** The connector can also reach the Notifications service's port on `notify-edge`. No route points there; a route to `http://notifications:8080` would have to be added by hand in Cloudflare, and must never be (it would expose the Notifications API without Access).
 
 ## Configuration in the repository
 
 - **Container.** The `ntfy` service in `compose.yaml`, image `binwiederhier/ntfy:v2.29.0` (pinned; override with `LIFE_OS_NTFY_IMAGE`), in the opt-in Compose profile `ntfy`, so a stack without the setup never starts it. Its data (message cache `cache.db`, accounts `user.db`) is in the volume `lifeos-ntfy-data` at `/var/lib/ntfy`. The health check is ntfy's `/v1/health`.
-- **Network.** `notify-edge` in `compose.yaml` (`lifeos-notify-edge`, `10.255.249.16/29`): `cloudflared` joins it next to `edge`, `notifications` next to `backend`, and `ntfy` joins nothing else.
+- **Networks.** In `compose.yaml`: `notify-edge` (`lifeos-notify-edge`, `10.255.249.16/29`) holds `cloudflared` (next to `edge`) and `ntfy`; `notify-internal` (`lifeos-notify-internal`, `10.255.249.32/29`, `internal: true`) holds `ntfy` and `notifications` (next to `backend`). ntfy joins nothing else.
 - **Server settings.** `infra/ntfy/server.yml`, mounted read-only: `base-url: https://ntfy.gamch1k.com`, `behind-proxy` with `CF-Connecting-IP`, messages cached for 12 hours (the phone catches up after being offline), deny-all access, no web app, no attachments, no upstream, and visitor limits (60-request burst refilled every 5 s, 10 subscriptions, 500 messages a day). Nothing secret is in it.
 - **Accounts.** `compose.yaml` builds `NTFY_AUTH_USERS`, `NTFY_AUTH_ACCESS`, and `NTFY_AUTH_TOKENS` from the `.env` values below.
 - **Tunnel route** (in Cloudflare, not in the repository): `ntfy.gamch1k.com` → HTTP → `ntfy:80`, without an Access application and without Access JWT validation. The connector resolves `ntfy` on `notify-edge`; while ntfy is not running, the hostname answers 502. The ntfy app keeps its subscription open as a WebSocket or a JSON stream, with ntfy's 45 s keepalive under Cloudflare's idle timeout.
 - **Channel.** `LIFE_OS_NOTIFICATIONS_CHANNELS=ntfy` makes the Notifications service deliver to it; see [Notifications → ntfy](../services/notifications.md#ntfy).
 
-| `.env` variable | Value |
-| --- | --- |
-| `COMPOSE_PROFILES` | add `ntfy`, for example `cloudflare,ntfy` |
-| `LIFE_OS_NOTIFICATIONS_CHANNELS` | `ntfy` |
-| `LIFE_OS_PUBLIC_URL` | `https://lifeos.gamch1k.com` (default): tapped notifications open their page there |
-| `LIFE_OS_NTFY_TOPIC` | `lifeos` (default): the one topic; letters, digits, `-`, `_` |
-| `LIFE_OS_NTFY_PUBLISHER_TOKEN` | secret: `tk_` and 29 characters |
-| `LIFE_OS_NTFY_PUBLISHER_PASSWORD_HASH` | secret: bcrypt hash of a random password nobody keeps, in single quotes |
-| `LIFE_OS_NTFY_PHONE_PASSWORD_HASH` | secret: bcrypt hash of the phone's password, in single quotes |
+| `.env` variable                        | Value                                                                              |
+| -------------------------------------- | ---------------------------------------------------------------------------------- |
+| `COMPOSE_PROFILES`                     | add `ntfy`, for example `cloudflare,ntfy`                                          |
+| `LIFE_OS_NOTIFICATIONS_CHANNELS`       | `ntfy`                                                                             |
+| `LIFE_OS_PUBLIC_URL`                   | `https://lifeos.gamch1k.com` (default): tapped notifications open their page there |
+| `LIFE_OS_NTFY_TOPIC`                   | `lifeos` (default): the one topic; letters, digits, `-`, `_`                       |
+| `LIFE_OS_NTFY_PUBLISHER_TOKEN`         | secret: `tk_` and 29 characters                                                    |
+| `LIFE_OS_NTFY_PUBLISHER_PASSWORD_HASH` | secret: bcrypt hash of a random password nobody keeps, in single quotes            |
+| `LIFE_OS_NTFY_PHONE_PASSWORD_HASH`     | secret: bcrypt hash of the phone's password, in single quotes                      |
 
 ## Setup
 
@@ -147,20 +147,20 @@ It appears on the phone (and the watch) and in Life OS under Notifications, its 
 
 ## Troubleshooting
 
-| Symptom | Likely cause | Fix |
-| --- | --- | --- |
-| ntfy restarts; log `invalid auth-users: …, password hash invalid` | A hash is missing, or broken by `$` expansion (no single quotes) | Put the hash in single quotes in `.env`; `docker compose up -d ntfy` |
-| Log `invalid auth-tokens: … token … invalid` | The token is not `tk_` and 29 characters | Generate one with `ntfy token generate` |
-| Status: ntfy failing with `ntfy is unreachable: … lookup ntfy` | ntfy is not running: profile missing or container stopped | `COMPOSE_PROFILES` includes `ntfy`; `docker compose up -d ntfy` |
-| Status: `401 unauthorized` | ntfy and Notifications have different tokens | Same `LIFE_OS_NTFY_PUBLISHER_TOKEN` for both; `docker compose up -d ntfy notifications` |
-| Status: `403 forbidden` | The topic differs between ntfy's rights and the service | Restart both after changing `LIFE_OS_NTFY_TOPIC` |
-| The app says unauthorized when subscribing | Wrong username or password, or the server URL in the user differs from the subscription's | User `lifeos-phone`, URL exactly `https://ntfy.gamch1k.com`; re-hash the password if unsure |
-| Status OK, but nothing arrives on the phone | The phone is not subscribed to this topic on this server, or Android stopped ntfy | Check the subscription; turn battery optimisation off for ntfy |
-| `https://ntfy.gamch1k.com` answers 502 | ntfy is not running, or the connector is not on `notify-edge` (not recreated since this change) | `docker compose up -d ntfy`; `docker compose up -d cloudflared`; `docker inspect lifeos-cloudflared-1` must list `lifeos-edge` and `lifeos-notify-edge` |
-| `https://ntfy.gamch1k.com` shows the Cloudflare Access login | An Access application covers the hostname (for example a wildcard `*.gamch1k.com`) | Exclude `ntfy.gamch1k.com` from it |
-| `https://ntfy.gamch1k.com` gives a Cloudflare error after the connector answered | The route points somewhere else, such as `gateway:80` (which answers no unlisted host) | The route must be HTTP `ntfy:80` |
-| WireGuard or a script gets an empty reply from the gateway | It uses a Host that is not in the gateway's list | Use `10.66.66.1`, `127.0.0.1`, or `localhost`, or add the name to the list ([Networking](../architecture/networking.md#gateway-hosts)) |
-| Cloudflare error 1033 / 530 | The connector is down | See [Cloudflare → Diagnose](cloudflare.md#diagnose) |
+| Symptom                                                                          | Likely cause                                                                                    | Fix                                                                                                                                                     |
+| -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ntfy restarts; log `invalid auth-users: …, password hash invalid`                | A hash is missing, or broken by `$` expansion (no single quotes)                                | Put the hash in single quotes in `.env`; `docker compose up -d ntfy`                                                                                    |
+| Log `invalid auth-tokens: … token … invalid`                                     | The token is not `tk_` and 29 characters                                                        | Generate one with `ntfy token generate`                                                                                                                 |
+| Status: ntfy failing with `ntfy is unreachable: … lookup ntfy`                   | ntfy is not running: profile missing or container stopped                                       | `COMPOSE_PROFILES` includes `ntfy`; `docker compose up -d ntfy`                                                                                         |
+| Status: `401 unauthorized`                                                       | ntfy and Notifications have different tokens                                                    | Same `LIFE_OS_NTFY_PUBLISHER_TOKEN` for both; `docker compose up -d ntfy notifications`                                                                 |
+| Status: `403 forbidden`                                                          | The topic differs between ntfy's rights and the service                                         | Restart both after changing `LIFE_OS_NTFY_TOPIC`                                                                                                        |
+| The app says unauthorized when subscribing                                       | Wrong username or password, or the server URL in the user differs from the subscription's       | User `lifeos-phone`, URL exactly `https://ntfy.gamch1k.com`; re-hash the password if unsure                                                             |
+| Status OK, but nothing arrives on the phone                                      | The phone is not subscribed to this topic on this server, or Android stopped ntfy               | Check the subscription; turn battery optimisation off for ntfy                                                                                          |
+| `https://ntfy.gamch1k.com` answers 502                                           | ntfy is not running, or the connector is not on `notify-edge` (not recreated since this change) | `docker compose up -d ntfy`; `docker compose up -d cloudflared`; `docker inspect lifeos-cloudflared-1` must list `lifeos-edge` and `lifeos-notify-edge` |
+| `https://ntfy.gamch1k.com` shows the Cloudflare Access login                     | An Access application covers the hostname (for example a wildcard `*.gamch1k.com`)              | Exclude `ntfy.gamch1k.com` from it                                                                                                                      |
+| `https://ntfy.gamch1k.com` gives a Cloudflare error after the connector answered | The route points somewhere else, such as `gateway:80` (which answers no unlisted host)          | The route must be HTTP `ntfy:80`                                                                                                                        |
+| WireGuard or a script gets an empty reply from the gateway                       | It uses a Host that is not in the gateway's list                                                | Use `10.66.66.1`, `127.0.0.1`, or `localhost`, or add the name to the list ([Networking](../architecture/networking.md#gateway-hosts))                  |
+| Cloudflare error 1033 / 530                                                      | The connector is down                                                                           | See [Cloudflare → Diagnose](cloudflare.md#diagnose)                                                                                                     |
 
 ## Verification stack
 

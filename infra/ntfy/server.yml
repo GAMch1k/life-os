@@ -15,8 +15,9 @@ listen-http: ":80"
 
 # Requests through the tunnel carry the visitor's address in CF-Connecting-IP,
 # set by Cloudflare, so rate limits apply per visitor, not to the connector.
-# Only the connector and the Notifications service can reach ntfy at all;
-# the service's requests have no such header and count by their own address.
+# Only the connector (notify-edge) and the Notifications service
+# (notify-internal) can reach ntfy at all; the service's requests have no
+# such header and count by their own address.
 behind-proxy: true
 proxy-forwarded-header: "CF-Connecting-IP"
 

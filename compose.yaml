@@ -112,13 +112,13 @@ services:
   # (LIFE_OS_NOTIFICATIONS_CHANNELS); none by default, so notifications are
   # stored and listed in the Dashboard only. "ntfy" publishes to the ntfy
   # service below with the publisher token (docs/operations/ntfy.md), over
-  # the notify-edge network, the only Life OS service on it.
+  # the internal notify-internal network, which only the two of them share.
   notifications:
     build: {context: ., dockerfile: services/notifications/Dockerfile}
     environment: {SERVICE_NAME: notifications, PORT: 8080, DATABASE_URL: "postgres://notifications_user:${LIFE_OS_NOTIFICATIONS_DB_PASSWORD}@postgres:5432/notifications_db?sslmode=disable", ACTIVITY_SERVICE_URL: "http://activity:8080", NOTIFICATIONS_CHANNELS: "${LIFE_OS_NOTIFICATIONS_CHANNELS:-}", NOTIFICATIONS_NTFY_URL: "http://ntfy:80", NOTIFICATIONS_NTFY_TOPIC: "${LIFE_OS_NTFY_TOPIC:-lifeos}", NOTIFICATIONS_NTFY_TOKEN: "${LIFE_OS_NTFY_PUBLISHER_TOKEN:-}", NOTIFICATIONS_LINK_BASE_URL: "${LIFE_OS_PUBLIC_URL:-https://lifeos.gamch1k.com}"}
     expose: ["8080"]
     depends_on: {notifications-migrate: {condition: service_completed_successfully}}
-    networks: [backend, notify-edge]
+    networks: [backend, notify-internal]
     restart: unless-stopped
 
   dashboard:
@@ -291,12 +291,13 @@ services:
     restart: unless-stopped
 
   # Opt-in ntfy server (COMPOSE_PROFILES=ntfy): push notifications to the
-  # owner's phone (docs/operations/ntfy.md). It is on the notify-edge network
-  # only, with the Cloudflare connector (the tunnel route ntfy.gamch1k.com ->
-  # http://ntfy:80, without Access: the ntfy app cannot log in through it) and
-  # the Notifications service, which publishes to it. It never shares a
-  # network with the gateway or the other services, so that route cannot
-  # reach Life OS. ntfy's own deny-all accounts protect it: ntfy provisions the
+  # owner's phone (docs/operations/ntfy.md). It is on two networks only:
+  # notify-edge, with the Cloudflare connector alone (the tunnel route
+  # ntfy.gamch1k.com -> http://ntfy:80, without Access: the ntfy app cannot
+  # log in through it), and the internal notify-internal, with the
+  # Notifications service alone, which publishes to it. It never shares a
+  # network with the gateway or the other services, and the connector shares
+  # none with Notifications, so that route cannot reach Life OS. ntfy's own deny-all accounts protect it: ntfy provisions the
   # publisher (write-only on the topic, by token) and the phone (read-only, by
   # password) at every start from the ignored .env. Bcrypt hashes and the
   # token never appear in the repository.
@@ -312,7 +313,7 @@ services:
       - ./infra/ntfy/server.yml:/etc/ntfy/server.yml:ro
       - ntfy-data:/var/lib/ntfy
     expose: ["80"]
-    networks: [notify-edge]
+    networks: [notify-edge, notify-internal]
     restart: unless-stopped
     init: true
     read_only: true
@@ -344,8 +345,7 @@ services:
     depends_on:
       gateway: {condition: service_started}
     # edge reaches only the gateway (Life OS, behind Access); notify-edge
-    # reaches only ntfy (and Notifications, which publishes to it). Services
-    # stay on backend.
+    # reaches only ntfy. Services stay on backend.
     networks: [edge, notify-edge]
     restart: unless-stopped
     read_only: true
@@ -372,15 +372,23 @@ networks:
     ipam:
       config:
         - subnet: 10.255.249.0/29
-  # The Cloudflare connector, ntfy, and the Notifications service only: the
-  # tunnel's ntfy route (no Access) reaches ntfy here and nothing of Life OS
-  # but Notifications' own port. ntfy is on no other network.
+  # The Cloudflare connector and ntfy only: the tunnel's ntfy route (no
+  # Access) reaches ntfy here and nothing of Life OS.
   notify-edge:
     name: lifeos-notify-edge
     driver: bridge
     ipam:
       config:
         - subnet: 10.255.249.16/29
+  # ntfy and the Notifications service only, so Notifications can publish
+  # without sharing a network with the connector. Internal: no outside access.
+  notify-internal:
+    name: lifeos-notify-internal
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.255.249.32/29
 
 volumes:
   postgres-data:

@@ -21,7 +21,7 @@ flowchart LR
 - **Never in the verification stack.** `tools/verify-compose` clears `COMPOSE_PROFILES` and refuses any plan that contains `cloudflared`. The disposable stack reads the same `.env`, and a second connector holding the real tunnel token would receive production traffic.
 - **Token.** The tunnel is managed remotely in the Cloudflare Zero Trust dashboard, and the connector authenticates with the tunnel token in `LIFE_OS_CLOUDFLARE_TUNNEL_TOKEN` in the ignored `.env`. The token is a credential: anyone holding it can run a connector for this tunnel. Never commit it or paste it into tickets or chat.
 - **Routes.** The tunnel's public hostname `lifeos.gamch1k.com` points to the service URL `http://gateway:80`, the gateway's Docker DNS name on the `edge` network. The gateway serves the same Dashboard and `/api/*` routes as on its other listed hosts; no service is exposed on its own. The second route, `ntfy.gamch1k.com`, points to `http://ntfy:80` on the `notify-edge` network ([below](#two-entry-points-life-os-and-ntfy)). Routes are configured in Cloudflare, not in the repository.
-- **Ingress check.** `tools/check-ingress` asserts, for the full Compose plan including the `cloudflare` and `ntfy` profiles, that only the gateway publishes a host port, that `edge` holds only `cloudflared` and the gateway, that `notify-edge` holds only `cloudflared`, `ntfy`, and `notifications`, that ntfy is on no other network, and (through `tools/check-gateway-hosts`) that the gateway answers only its listed hosts.
+- **Ingress check.** `tools/check-ingress` asserts, for the full Compose plan including the `cloudflare` and `ntfy` profiles, that only the gateway publishes a host port, that `edge` holds only `cloudflared` and the gateway, that `notify-edge` holds only `cloudflared` and `ntfy`, that the internal `notify-internal` holds only `ntfy` and `notifications`, that ntfy is on those two networks only, and (through `tools/check-gateway-hosts`) that the gateway answers only its listed hosts.
 
 The WireGuard-bound gateway port (`LIFE_OS_GATEWAY_BIND_ADDRESS`) is unchanged and remains the private path.
 
@@ -33,7 +33,7 @@ The Access application for the hostname must exist before the connector serves t
 
 The public path is designed so that Cloudflare Access cannot be bypassed:
 
-- **The connector reaches only the gateway and ntfy.** `cloudflared` sits on the `edge` network (`10.255.249.0/29`), which it shares with the gateway and nothing else, and on `notify-edge` (`10.255.249.16/29`), which it shares with ntfy and the Notifications service only. A tunnel route pointing anywhere else, for example `tasks:8080`, cannot reach a service; Postgres, MCP, the Dashboard, and every other service are unreachable from both networks. `tools/check-ingress` enforces the memberships. (Notifications' own port is reachable on `notify-edge` because it publishes to ntfy there: never add a route to `notifications:8080`.)
+- **The connector reaches only the gateway and ntfy.** `cloudflared` sits on the `edge` network (`10.255.249.0/29`), which it shares with the gateway and nothing else, and on `notify-edge` (`10.255.249.16/29`), which it shares with ntfy and nothing else. A tunnel route pointing anywhere else, for example `tasks:8080` or `notifications:8080`, cannot reach a service; Postgres, MCP, the Dashboard, Notifications, and every other service are unreachable from both networks. Notifications publishes to ntfy over the separate internal `notify-internal` network, which the connector is not on. `tools/check-ingress` enforces the memberships.
 - **The gateway answers only its listed hosts.** `lifeos.gamch1k.com`, the WireGuard address `10.66.66.1`, `127.0.0.1`, and `localhost`; any other Host gets no answer (444). See [Networking → Gateway hosts](../architecture/networking.md#gateway-hosts).
 - **No public origin.** The gateway publishes only on the WireGuard address (`10.66.66.1:3001`, IPv4). The server's public IP refuses that port. The pre-existing host Nginx (`:80`/`:443`, other applications) has no route to Life OS, and `lifeos.gamch1k.com` resolves to Cloudflare, not to this server.
 - **Cloudflare headers are trusted from the edge network only.** For requests from `10.255.249.0/29`, the gateway takes the visitor's address from `CF-Connecting-IP`; rate limits and logs then see the real client. It also reports `https` as `X-Forwarded-Proto`. From WireGuard or anywhere else, the header is ignored, so a spoofed value has no effect. The gateway never forwards `CF-Connecting-IP`, `Cf-Access-Jwt-Assertion`, or `Cf-Access-Authenticated-User-Email` to services: none of them authenticates with Cloudflare, so nothing can trust a forged copy.
@@ -56,9 +56,9 @@ The tunnel carries two hostnames to two different containers on two different ne
 | Hostname | Route | Network | Cloudflare Access | Protected by |
 | --- | --- | --- | --- | --- |
 | `lifeos.gamch1k.com` | HTTP `gateway:80` | `edge` (cloudflared + gateway) | Yes, plus JWT validation at the connector | Access login; the gateway's host list and Access-token check |
-| `ntfy.gamch1k.com` | HTTP `ntfy:80` | `notify-edge` (cloudflared + ntfy + notifications) | No | ntfy's deny-all accounts and rate limits |
+| `ntfy.gamch1k.com` | HTTP `ntfy:80` | `notify-edge` (cloudflared + ntfy) | No | ntfy's deny-all accounts and rate limits |
 
-The ntfy hostname cannot use Access: the ntfy Android app talks to its server directly with a username and password and cannot complete an Access login. It is safe without it because it is structurally separate from Life OS. Its route points at ntfy, not at the gateway, and ntfy shares a network only with the connector and the Notifications service, so nothing arriving on that hostname can reach the gateway or any Life OS service, whatever its Host header. ntfy itself allows nothing anonymous. Setup, accounts, and operations are in [ntfy](ntfy.md).
+The ntfy hostname cannot use Access: the ntfy Android app talks to its server directly with a username and password and cannot complete an Access login. It is safe without it because it is structurally separate from Life OS. Its route points at ntfy, not at the gateway, and the connector shares `notify-edge` with ntfy alone (Notifications reaches ntfy over the internal `notify-internal`, without the connector), so nothing arriving on that hostname can reach the gateway or any Life OS service, whatever its Host header. ntfy itself allows nothing anonymous. Setup, accounts, and operations are in [ntfy](ntfy.md).
 
 After a deploy that touches ntfy, the gateway, or the tunnel, run `./tools/check-ntfy-route`: `https://ntfy.gamch1k.com` must answer as ntfy (its `/v1/health` JSON) and never as Life OS, anonymous reads and writes on the topic must be refused, and `https://lifeos.gamch1k.com` must still redirect to the Access login.
 
@@ -107,7 +107,7 @@ The detailed setup, debugging, and recovery guide for this deployment is kept in
 ```sh
 cd ~/life-os
 ./tools/check-cloudflare-access   # anonymous → 302 everywhere; service token → 200
-./tools/check-ingress             # only the gateway publishes; edge = cloudflared + gateway; notify-edge = cloudflared + ntfy + notifications
+./tools/check-ingress             # only the gateway publishes; edge = cloudflared + gateway; notify-edge = cloudflared + ntfy; notify-internal = ntfy + notifications
 ./tools/check-ntfy-route          # ntfy.gamch1k.com is ntfy, never Life OS; anonymous refused
 docker compose ps cloudflared     # Up … (healthy)
 docker compose logs cloudflared | grep 'Registered tunnel connection' | tail -4
