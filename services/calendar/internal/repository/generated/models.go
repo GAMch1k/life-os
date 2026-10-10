@@ -38,6 +38,7 @@ type CalendarSource struct {
 	UpdatedAt           pgtype.Timestamptz
 	Preset              *string
 	PresetConfig        []byte
+	GoogleCalendarID    pgtype.UUID
 	DefaultPriority     string
 }
 
@@ -71,6 +72,7 @@ type Event struct {
 	UseDefaultReminders      bool
 	RecurrenceByWeekday      []string
 	RecurrenceCount          *int32
+	SourceReminders          []byte
 	Priority                 *string
 }
 
@@ -84,16 +86,27 @@ type EventException struct {
 }
 
 type GoogleCalendar struct {
-	ID               pgtype.UUID
-	ConnectionID     pgtype.UUID
-	GoogleCalendarID string
-	Summary          string
-	Color            *string
-	AccessRole       string
-	IsPrimary        bool
-	SyncEnabled      bool
-	CreatedAt        pgtype.Timestamptz
-	UpdatedAt        pgtype.Timestamptz
+	ID                pgtype.UUID
+	ConnectionID      pgtype.UUID
+	GoogleCalendarID  string
+	Summary           string
+	Color             *string
+	AccessRole        string
+	IsPrimary         bool
+	SyncEnabled       bool
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+	TimeZone          *string
+	SyncToken         *string
+	SyncWindowStart   pgtype.Timestamptz
+	NextSyncAt        pgtype.Timestamptz
+	SyncingUntil      pgtype.Timestamptz
+	LastSyncAttemptAt pgtype.Timestamptz
+	LastSyncedAt      pgtype.Timestamptz
+	LastSyncError     *string
+	SyncFailures      int32
+	LastSyncCounts    []byte
+	DerivedAt         pgtype.Timestamptz
 }
 
 type GoogleConnection struct {
@@ -109,6 +122,14 @@ type GoogleConnection struct {
 	ConnectedAt            pgtype.Timestamptz
 	CreatedAt              pgtype.Timestamptz
 	UpdatedAt              pgtype.Timestamptz
+}
+
+type GoogleEvent struct {
+	CalendarID       pgtype.UUID
+	EventID          string
+	RecurringEventID *string
+	Data             []byte
+	UpdatedAt        pgtype.Timestamptz
 }
 
 type GoogleOauthState struct {

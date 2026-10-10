@@ -30,7 +30,10 @@ require_command go
 require_command sqlc
 require_command npm
 
-printf '==> Contract checks\n'
+printf '==> Gateway host separation\n'
+"$repo_root/tools/check-gateway-hosts"
+
+printf '\n==> Contract checks\n'
 "$repo_root/tools/check-contracts"
 
 mapfile -t modules < <(find pkg templates services -name go.mod -type f -print 2>/dev/null | sort)

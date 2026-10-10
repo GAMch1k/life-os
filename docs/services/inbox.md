@@ -12,7 +12,7 @@ An ambiguous or low-confidence Task mutation becomes `human_review`, rather than
 
 The Dashboard Status page uses it to show retries and prolonged backlogs.
 
-Inbox records `inbox.*` activity events for capture, processing attempts (started, completed, retry scheduled, failed), Human Review (requested, resolved), and resolution or discard. They are recorded under the item's workflow correlation. A caller such as the Voice worker may supply `X-Correlation-ID`, and Inbox stores it in `inbox_items.correlation_id` (migration `000006`). Otherwise the item id is the correlation. Either way it is returned as `InboxItem.correlationId`. See [Activity](activity.md).
+Inbox records `inbox.*` activity events for capture, processing attempts (started, completed, retry scheduled, failed), Human Review (requested, resolved), resolution or discard, and a notification it could not send. They are recorded under the item's workflow correlation. A caller such as the Voice worker may supply `X-Correlation-ID`, and Inbox stores it in `inbox_items.correlation_id` (migration `000006`). Otherwise the item id is the correlation. Either way it is returned as `InboxItem.correlationId`. See [Activity](activity.md).
 
 The current dashboard captures and resolves/discards items. The automatic MCP/Codex processor reads raw items only through MCP, preserves an audit trail, handles ambiguity safely, and calls core APIs through MCP tools. Its processing lifecycle is `raw → processing → resolved`. The outcome of an attempt decides what happens next:
 
@@ -21,3 +21,20 @@ The current dashboard captures and resolves/discards items. The automatic MCP/Co
 - **`human_review`** (a decision for the user) never enters technical retry.
 
 Each attempt also carries its agent runtime: `runtimeState` (`spawning`, `running`, `completed`, `failed`, `timed_out`, `cancelled`), `runtimeOwner` (the processor instance), `runtimeSessionId` (the Codex session), and `runtimeHeartbeatAt`. The processor records these with `PUT .../processing-attempts/{attemptId}/runtime`; a finished attempt answers 409. `GET /v1/stale-processing-attempts?staleAfterSeconds=N` lists unfinished attempts whose heartbeat stopped, for captures still `raw` or `processing`, so a later processor can reconcile them after a crash. `GET /v1/inbox-items?state=raw&due=true` lists only items with no schedule or whose time has come. It is the processor's only work source, so a schedule survives restarts of both the processor and Inbox. Any other state change clears the schedule. The backlog reports the next scheduled retry with its reason, and the number of failed items. Each retry creates a distinct audit attempt key (`<operation>.retry.<n>`), preserving the original attempt and avoiding the former uniqueness collision; a processed attempt for the same deterministic operation prevents later duplicates. Invalid requests return 400 and missing items 404; readiness is at `/ready`. Test with `make db-test SERVICE=inbox` and `make e2e-smoke`.
+
+## Notifications
+
+Inbox tells the owner when a capture needs them, through the Notifications service (`pkg/notify`, as `system:inbox`; see [Notifications](notifications.md#producers)). Inbox owns these state changes, so the processor, Voice captures, retries, and a new review round are all covered by the same two sends:
+
+| When | Category | Title | Link | Dedupe key |
+| --- | --- | --- | --- | --- |
+| `POST .../human-review` moves an item to `human_review` | `inbox.human_review` | Needs your review | `/inbox#human-review` | `inbox.human_review:<itemId>:<attemptId>` |
+| An attempt is recorded `failed`, so the item is `failed` | `inbox.failed` | A capture failed | `/inbox#failed` | `inbox.failed:<itemId>:<attemptId>` |
+
+- Both are `medium`. The body is the capture on one line, shortened to 200 characters, with the reason (`errorSummary`) on the next line. `occurredAt` is the item's state change.
+- The dedupe key names the attempt. A repeated request (the processor retrying a call) notifies once; another review round, after the owner's decision or a retry, has a new attempt and notifies again. An edited capture is a new item.
+- A `retryable` outcome, a processed attempt, a resolution, and a discard notify nothing.
+- The notification carries the item's correlation id, and its causation is the Inbox event (`inbox.human_review.requested` or `inbox.processing.failed`), so the Event Log shows it in the capture's workflow.
+- Sending is best effort and never affects the Inbox operation. It starts after the change is stored, on a background goroutine, and Inbox answers without waiting: the processor allows each outcome write 10 s, and the synchronous Activity emission can already take most of that. `pkg/notify` bounds a send to 5 s with brief retries. A send that still fails is logged (`inbox notification not sent`) and recorded as an `inbox.notification.failed` activity event with the error. On shutdown Inbox lets sends in flight finish.
+- Configuration: `NOTIFICATIONS_SERVICE_URL` (compose: `http://notifications:8080`). Empty disables notifications.
+- Tests: unit tests against a fake Notifications service (payloads, trace headers, a failed or slow send, no URL), and handler tests against the Postgres in `INBOX_TEST_DATABASE_URL` (Human Review once per round, failure for good only, Notifications down or slow, no URL).

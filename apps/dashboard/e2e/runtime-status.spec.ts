@@ -384,15 +384,32 @@ test.describe("Status card layout", () => {
     "set LIFE_OS_E2E_URL to run against the isolated stack",
   );
 
-  // The order of the checks in the runtime status; Calendar sources is left
-  // out when the Dashboard does not ask Calendar.
+  // The order of the checks in the runtime status; Calendar sources and
+  // Notifications are left out when the Dashboard does not ask them.
   const checkOrder = [
     "Automatic processing",
     "Inbox backlog",
     "Voice transcription",
     "Calendar sources",
+    "Notifications",
     "Services",
   ];
+
+  test("Notifications is not set up on the verification stack, and that is fine", async ({
+    page,
+  }) => {
+    // tools/verify-compose never passes the owner's delivery channels.
+    await page.goto("/status");
+    const card = page.getByRole("region", { name: "Notifications" });
+    await expect(card).toContainText("Not set up");
+    await expect(card).toContainText(
+      "No delivery channel is set up: notifications are listed in Life OS only.",
+    );
+    await page.goto("/");
+    await expect(
+      page.getByRole("link", { name: /^System status:.*delivery channel/ }),
+    ).toHaveCount(0);
+  });
 
   /** The grid holding the check cards. */
   function cardGrid(page: Page) {

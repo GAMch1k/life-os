@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# Asserts the gateway's host allowlist in infra/nginx/life-os.conf (or the file
+# given), without Docker:
+#  - the default server answers every unlisted Host with 444 (no response)
+#    and does nothing else;
+#  - one Life OS server lists its hosts by exact name (no wildcard, regex, or
+#    catch-all), including the public hostname, the WireGuard address, and
+#    loopback;
+#  - nothing in the gateway refers to ntfy, which has its own network and
+#    tunnel route and is never served by the gateway.
+# See docs/architecture/networking.md and docs/operations/ntfy.md.
+# Usage: tools/check-gateway-hosts [nginx-config]
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+config=${1:-infra/nginx/life-os.conf}
+failed=0
+fail() { echo "check-gateway-hosts: $*" >&2; failed=1; }
+
+# One line per directive inside a top-level server: "<server number>
+# <directive and arguments>" (a block's opening line, such as "location /",
+# counts as one). Comments and quoted strings are removed first, so braces in
+# regexes such as {1,64} do not count as blocks.
+directives=$(awk -v q="'" '
+  {
+    line = $0
+    sub(/#.*/, "", line)
+    gsub(/"[^"]*"/, "\"\"", line)
+    gsub(q "[^" q "]*" q, "\"\"", line)
+    n = length(line)
+    for (i = 1; i <= n; i++) {
+      c = substr(line, i, 1)
+      if (c != "{" && c != ";" && c != "}") { current = current c; continue }
+      d = current
+      gsub(/^[ \t]+|[ \t]+$/, "", d)
+      gsub(/[ \t]+/, " ", d)
+      current = ""
+      if (c == "{" && depth == 0 && d == "server") { server++; inside = 1 }
+      else if (inside && d != "") print server, d
+      if (c == "{") depth++
+      if (c == "}" && --depth == 0) inside = 0
+    }
+    current = current " "
+  }
+' "$config")
+
+servers=$(awk '{print $1}' <<<"$directives" | sort -u)
+[ "$(wc -l <<<"$servers")" -eq 2 ] || fail "expected exactly two servers (the catch-all and Life OS); found $(wc -l <<<"$servers")"
+
+of() { awk -v n="$1" '$1 == n { $1 = ""; sub(/^ /, ""); print }' <<<"$directives"; }
+default_server=$(awk '$2 == "listen" && / default_server( |$)/ {print $1}' <<<"$directives" | sort -u)
+[ -n "$default_server" ] && [ "$(wc -l <<<"$default_server")" -eq 1 ] || fail "exactly one server must be listen ... default_server"
+
+if [ -n "$default_server" ] && [ "$(wc -l <<<"$default_server")" -eq 1 ]; then
+  catchall=$(of "$default_server" | grep -v -E '^(listen|server_name|server_tokens) ')
+  [ "$catchall" = "return 444" ] || fail "the default server must only return 444 for unlisted hosts; found: ${catchall//$'\n'/; }"
+  [ "$(of "$default_server" | grep '^server_name ')" = "server_name _" ] || fail "the default server must be server_name _"
+fi
+
+lifeos_server=$(grep -v -x -F "$default_server" <<<"$servers" | head -1)
+names=$(of "$lifeos_server" | awk '$1 == "server_name" { for (i = 2; i <= NF; i++) print $i }')
+[ -n "$names" ] || fail "the Life OS server must list its hosts in server_name"
+while IFS= read -r name; do
+  [ -n "$name" ] || continue
+  [[ "$name" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]] || fail "Life OS server_name '$name' must be an exact lowercase host name or address (no wildcard, regex, or _)"
+done <<<"$names"
+for required in lifeos.gamch1k.com 10.66.66.1 127.0.0.1; do
+  grep -q -x -F "$required" <<<"$names" || fail "the Life OS server must list $required"
+done
+if of "$lifeos_server" | grep -q '^listen .*default_server'; then fail "the Life OS server must not be the default server"; fi
+
+ntfy_refs=$(sed 's/#.*//' "$config" | grep -i 'ntfy' | sed 's/^[[:space:]]*//' || true)
+[ -z "$ntfy_refs" ] || fail "the gateway must not refer to ntfy (it has its own network and route): ${ntfy_refs//$'\n'/; }"
+
+if [ "$failed" -ne 0 ]; then exit 1; fi
+echo "gateway hosts ok: Life OS answers only $(tr '\n' ' ' <<<"$names" | sed 's/ $//; s/ /, /g'); every other Host gets 444"

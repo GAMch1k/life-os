@@ -379,7 +379,7 @@ func (p *parser) expand(event parsedEvent) ([]instance, error) {
 	series := recurrence.Series{Start: event.start.wall, AllDay: event.item.AllDay, Duration: event.duration, Days: event.days, Zone: event.zone}
 	var occurrences []recurrence.Occurrence
 	if rule := property(event.base, "RRULE"); rule != nil {
-		parsedRule, err := parseRule(rule.Value)
+		parsedRule, err := ParseRule(rule.Value)
 		if err != nil {
 			return nil, err
 		}
@@ -516,10 +516,11 @@ func (p *parser) instant(value dateValue) (time.Time, zone) {
 	return floating.Instant(value.wall), floating
 }
 
-// parseRule reads an RRULE value. UNTIL is kept out of the rrule options:
-// a UTC UNTIL bounds occurrence instants, a floating or date one their wall
-// clock (a date includes its whole day). Unknown parts are ignored.
-func parseRule(value string) (recurrence.Rule, error) {
+// ParseRule reads an RRULE value (with or without its "RRULE:" name).
+// UNTIL is kept out of the rrule options: a UTC UNTIL bounds occurrence
+// instants, a floating or date one their wall clock (a date includes its
+// whole day). Unknown parts are ignored.
+func ParseRule(value string) (recurrence.Rule, error) {
 	var parts []string
 	var rule recurrence.Rule
 	known := map[string]bool{"FREQ": true, "INTERVAL": true, "COUNT": true, "WKST": true, "BYSETPOS": true, "BYMONTH": true,

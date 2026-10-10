@@ -149,7 +149,7 @@ export interface paths {
         };
         /**
          * List calendar sources
-         * @description Every source, oldest first, with its configuration and refresh state.
+         * @description Every feed (ICS source), oldest first, with its configuration and refresh state. Synced Google calendars are sources too, managed and listed under `/v1/google/calendars`; their ids answer 404 here.
          */
         get: operations["listSources"];
         put?: never;
@@ -336,9 +336,29 @@ export interface paths {
         head?: never;
         /**
          * Choose whether a Google calendar syncs
-         * @description Records the owner's choice; syncing itself starts in a later release.
+         * @description Switched on, the calendar is synced right away (its events listed in full) and then every few minutes. Switched off, every event synced from it is removed from Life OS (they stay in Google), its source goes, and Activity records `calendar.source.removed`; switching it on again lists its events in full again.
          */
         patch: operations["updateGoogleCalendar"];
+        trace?: never;
+    };
+    "/v1/google/calendars/{calendarId}/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sync a Google calendar now
+         * @description Reads the changes since the last sync from Google (with `full=true`, every event again, as after an expired sync token) and reconciles the calendar's events, then returns the calendar with its sync state. The request succeeds whether or not the sync does: read `sync.state` and `sync.lastError`. A failed sync keeps the events from the last good one and is retried with backoff.
+         */
+        post: operations["syncGoogleCalendar"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
 }
@@ -400,7 +420,7 @@ export interface components {
             sourceId?: string | null;
             /** @description The name of that source, such as "ZAW", as it is now (renaming the source renames it here); null for manual events. Set by Calendar in responses. */
             name?: string | null;
-            /** @description The event's identity in its source; null for manual events. For an ICS event, its UID; one occurrence of a recurring ICS event is imported as its own event, `<UID>#<RECURRENCE-ID>`, where the RECURRENCE-ID is its original start (20261017T040000Z, or 20261017 for an all-day event). */
+            /** @description The event's identity in its source; null for manual events. For an ICS event, its UID; one occurrence of a recurring ICS event is imported as its own event, `<UID>#<RECURRENCE-ID>`, where the RECURRENCE-ID is its original start (20261017T040000Z, or 20261017 for an all-day event). For a Google event, its Google event id; one occurrence of a recurring Google event imported as its own event is `<id>_<original start>` as Google names its instances (`<id>_20261017T040000Z`, or `<id>_20261017` for an all-day event). */
             externalUid?: string | null;
         };
         /**
@@ -741,12 +761,45 @@ export interface components {
             accessRole: "owner" | "writer" | "reader" | "freeBusyReader";
             /** @description The account's primary calendar. */
             primary: boolean;
-            /** @description Whether the calendar will sync into Life OS (syncing starts in a later release). */
+            /** @description Whether the calendar syncs into Life OS. */
             syncEnabled: boolean;
+            sync: components["schemas"]["GoogleCalendarSync"];
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
             updatedAt: string;
+        };
+        /** @description The calendar's sync state. Read-only. Its events are imported as source `sourceId` (`source.kind` `google`, `source.name` the calendar's name). */
+        GoogleCalendarSync: {
+            /**
+             * @description `off`: not chosen to sync. `pending`: chosen, waiting for its first sync. `synced`: the last sync succeeded. `failing`: the last sync failed (see `lastError`); it is retried automatically and the events from the last good sync are kept.
+             * @enum {string}
+             */
+            state: "off" | "pending" | "synced" | "failing";
+            /**
+             * Format: uuid
+             * @description The Calendar source its events carry as `source.sourceId`; null while it does not sync (or before its first sync).
+             */
+            sourceId?: string | null;
+            /** Format: date-time */
+            lastAttemptAt?: string | null;
+            /**
+             * Format: date-time
+             * @description When it was last synced successfully.
+             */
+            lastSyncedAt?: string | null;
+            /**
+             * Format: date-time
+             * @description When it is synced next (every few minutes, later after failures).
+             */
+            nextSyncAt?: string | null;
+            /** @description Why the last sync failed; null after a success. */
+            lastError?: string | null;
+            /** @description Failed syncs since the last success; drives the retry backoff. */
+            consecutiveFailures: number;
+            lastCounts?: components["schemas"]["SourceRefreshCounts"];
+            /** @description A sync is running now. */
+            syncing: boolean;
         };
         GoogleCalendarList: {
             items: components["schemas"]["GoogleCalendar"][];
@@ -1738,6 +1791,60 @@ export interface operations {
             };
             /** @description Calendar not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    syncGoogleCalendar: {
+        parameters: {
+            query?: {
+                /** @description List every event again instead of the changes since the last sync. */
+                full?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description The calendar's id in Calendar (not its Google id). */
+                calendarId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The calendar after the sync */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoogleCalendar"];
+                };
+            };
+            /** @description Invalid request, or no valid X-Life-OS-Actor (actor_required) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Calendar not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The calendar does not sync (google_sync_disabled), it is syncing right now (sync_in_progress), its sync changed meanwhile (conflict), or Google is not connected (google_not_connected) or its authorization expired (google_expired) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Google is not configured on this server (google_not_configured) */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

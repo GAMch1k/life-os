@@ -10,6 +10,7 @@ import {
   googleState,
   missingPermissions,
   replaceCalendar,
+  syncDetail,
   syncSummary,
   withoutGoogleParam,
 } from "./google-calendar";
@@ -42,6 +43,7 @@ const calendar = (
   accessRole: "writer",
   primary: false,
   syncEnabled: false,
+  sync: { state: "off", consecutiveFailures: 0, syncing: false },
   createdAt: "2026-10-10T10:00:00Z",
   updatedAt: "2026-10-10T10:00:00Z",
   ...overrides,
@@ -185,4 +187,63 @@ test("the connected marker leaves the rest of the query alone", () => {
     "?view=week&date=2026-10-14",
   );
   assert.equal(withoutGoogleParam(""), "");
+});
+
+test("a chosen calendar says how its sync is going", () => {
+  assert.equal(syncDetail(calendar("Off"), "Europe/Berlin"), undefined);
+  const counts = {
+    feedEvents: 43,
+    imported: 42,
+    inserted: 0,
+    updated: 1,
+    removed: 0,
+    restored: 0,
+    unchanged: 41,
+  };
+  assert.deepEqual(
+    syncDetail(
+      calendar("Work", {
+        syncEnabled: true,
+        sync: { state: "pending", consecutiveFailures: 0, syncing: true },
+      }),
+      "Europe/Berlin",
+    ),
+    { text: "Waiting for its first sync…", failing: false },
+  );
+  assert.deepEqual(
+    syncDetail(
+      calendar("Work", {
+        syncEnabled: true,
+        sync: {
+          state: "synced",
+          consecutiveFailures: 0,
+          syncing: false,
+          lastSyncedAt: "2026-10-10T10:05:00Z",
+          lastCounts: counts,
+        },
+      }),
+      "Europe/Berlin",
+    ),
+    { text: "Synced 10 Oct, 12:05 CEST · 42 events", failing: false },
+  );
+  assert.deepEqual(
+    syncDetail(
+      calendar("Work", {
+        syncEnabled: true,
+        sync: {
+          state: "failing",
+          consecutiveFailures: 2,
+          syncing: false,
+          lastSyncedAt: "2026-10-10T10:05:00Z",
+          lastError: "Google is unavailable: Calendar API returned HTTP 503",
+          lastCounts: counts,
+        },
+      }),
+      "Europe/Berlin",
+    ),
+    {
+      text: "Sync failed: Google is unavailable: Calendar API returned HTTP 503. Retrying automatically. Last synced 10 Oct, 12:05 CEST.",
+      failing: true,
+    },
+  );
 });

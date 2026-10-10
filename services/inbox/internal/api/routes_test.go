@@ -14,7 +14,7 @@ import (
 
 func TestWritesRequireAnActor(t *testing.T) {
 	app := httpserver.New("inbox", httpserver.WithLogger(httpserver.NewJSONLogger(io.Discard, nil)))
-	Register(app, NewHandler(nil, nil))
+	Register(app, NewHandler(nil, nil, nil))
 	write := func(actor string) (int, string) {
 		t.Helper()
 		req := httptest.NewRequest(http.MethodPost, "/v1/inbox-items", strings.NewReader(`{`))

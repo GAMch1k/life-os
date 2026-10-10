@@ -78,6 +78,7 @@ const EVENT_LABELS: Record<string, string> = {
   "calendar.event.deleted": "Event deleted",
   "calendar.source.refreshed": "Source refreshed",
   "calendar.source.refresh_failed": "Source refresh failed",
+  "calendar.source.removed": "Source removed",
   "calendar.google.connected": "Google Calendar connected",
   "calendar.google.disconnected": "Google Calendar disconnected",
   "calendar.google.expired": "Google Calendar access expired",
@@ -146,6 +147,12 @@ export function eventLabel(event: Pick<ActivityEvent, "type" | "data">) {
   if (event.type === "calendar.source.refresh_failed" && source) {
     return `${label}: ${source}`;
   }
+  if (event.type === "calendar.source.removed" && source) {
+    const removed = event.data?.removedEvents;
+    return typeof removed === "number"
+      ? `${label}: ${source} — ${removed} event${removed === 1 ? "" : "s"} removed`
+      : `${label}: ${source}`;
+  }
   const account = text(event.data?.accountEmail);
   if (event.type.startsWith("calendar.google.") && account) {
     return `${label}: ${account}`;
@@ -208,6 +215,7 @@ export function sourceDescription(source: string | undefined) {
 
 const ACTOR_NAMES: Record<string, string> = {
   "codex-inbox-processor": "Inbox processor (Codex)",
+  "google-calendar": "Google Calendar sync",
   mcp: "Agent via MCP",
   "voice-worker": "Voice worker",
 };

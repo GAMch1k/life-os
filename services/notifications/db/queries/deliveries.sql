@@ -43,3 +43,19 @@ UPDATE deliveries SET status = sqlc.arg(status)::text, last_error = $2, next_att
   lease_owner = NULL, lease_expires_at = NULL, updated_at = now()
 WHERE id = $1 AND lease_owner = sqlc.arg(lease_owner)::text AND status IN ('pending', 'retrying')
 RETURNING *;
+
+-- name: ChannelHealth :many
+-- What each channel's deliveries show: its latest success; its latest
+-- failure (a failed delivery, or one waiting for a retry) and that error;
+-- how many failed or wait for a retry, last changed since the given instant;
+-- and how many wait for a retry or a first attempt now.
+SELECT channel,
+       max(sent_at)::timestamptz AS last_success_at,
+       (max(updated_at) FILTER (WHERE status IN ('retrying', 'failed')))::timestamptz AS last_failure_at,
+       COALESCE((array_agg(last_error ORDER BY updated_at DESC) FILTER (WHERE status IN ('retrying', 'failed')))[1], '')::text AS last_error,
+       (count(*) FILTER (WHERE status IN ('retrying', 'failed') AND updated_at >= sqlc.arg(since)::timestamptz))::integer AS recent_failures,
+       (count(*) FILTER (WHERE status = 'retrying'))::integer AS retrying,
+       (count(*) FILTER (WHERE status = 'pending'))::integer AS pending
+FROM deliveries
+WHERE channel = ANY(sqlc.arg(channels)::text[])
+GROUP BY channel;

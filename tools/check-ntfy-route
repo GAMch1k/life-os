@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# Checks the public ntfy route, from wherever it runs (it only uses the public
+# hostnames). Run it after a deploy that touches ntfy, the gateway, or the
+# tunnel (docs/operations/ntfy.md):
+#  - https://ntfy.gamch1k.com answers as ntfy (its /v1/health JSON) and never
+#    as Life OS: no Dashboard page and no Life OS API under that hostname;
+#  - anonymous reads and writes on the topic are refused (ntfy's deny-all);
+#  - https://lifeos.gamch1k.com still sends anonymous visitors to the Access
+#    login.
+# Usage: tools/check-ntfy-route [ntfy-hostname] [lifeos-hostname]
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+ntfy=${1:-${LIFE_OS_NTFY_HOSTNAME:-ntfy.gamch1k.com}}
+lifeos=${2:-${LIFE_OS_PUBLIC_HOSTNAME:-lifeos.gamch1k.com}}
+team=${LIFE_OS_CF_ACCESS_TEAM_DOMAIN:-damp-surf-d6be.cloudflareaccess.com}
+# The topic name is not a secret; deny-all protects it.
+topic=${LIFE_OS_NTFY_TOPIC:-$(grep '^LIFE_OS_NTFY_TOPIC=' .env 2>/dev/null | tail -1 | cut -d= -f2- || true)}
+topic=${topic:-lifeos}
+# Only Life OS answers with these: the Dashboard's Next.js assets and title,
+# and the services' readiness body and error envelope.
+lifeos_markers='/_next/|<title>Life OS|"status":"ready"|"request_id"'
+failed=0
+ok() { printf '  ok    %-46s %s\n' "$1" "$2"; }
+bad() { printf '  FAIL  %-46s %s\n' "$1" "$2"; failed=1; }
+
+body=$(mktemp)
+trap 'rm -f "$body"' EXIT
+# fetch <url> [curl args…]: prints the status code; the body is in $body.
+fetch() {
+  local url=$1
+  shift
+  curl -s -o "$body" -w '%{http_code}' --max-time 20 "$@" "$url" || true
+}
+
+echo "https://$ntfy answers as ntfy, never as Life OS:"
+code=$(fetch "https://$ntfy/v1/health")
+if [ "$code" = 200 ] && grep -Eq '"healthy" *: *true' "$body"; then ok /v1/health "$code healthy"; else bad /v1/health "$code $(head -c 120 "$body")"; fi
+for path in / /tasks /status /api/tasks/ready /api/notifications/v1/notifications /api/mcp/; do
+  code=$(fetch "https://$ntfy$path")
+  if grep -Eq "$lifeos_markers" "$body"; then
+    bad "$path" "$code Life OS answered"
+  elif [ "$code" = 200 ] && [ "$path" != / ]; then
+    bad "$path" "$code (expected ntfy's 404 or a refusal)"
+  else
+    ok "$path" "$code not Life OS"
+  fi
+done
+
+echo "anonymous access to the topic is refused (expect 401 or 403):"
+code=$(fetch "https://$ntfy/$topic/json?poll=1")
+if [ "$code" = 401 ] || [ "$code" = 403 ]; then ok "GET /<topic>/json?poll=1" "$code"; else bad "GET /<topic>/json?poll=1" "$code"; fi
+code=$(fetch "https://$ntfy/$topic" -H 'Title: check-ntfy-route' --data 'check-ntfy-route: an anonymous message must never be delivered')
+if [ "$code" = 401 ] || [ "$code" = 403 ]; then ok "POST /<topic>" "$code"; else bad "POST /<topic>" "$code"; fi
+code=$(fetch "https://$ntfy/$topic" -H 'Authorization: Bearer tk_checkntfyroutenotarealtoken00' --data 'check-ntfy-route: a made-up token must never deliver')
+if [ "$code" = 401 ] || [ "$code" = 403 ]; then ok "POST /<topic> with a made-up token" "$code"; else bad "POST /<topic> with a made-up token" "$code"; fi
+
+echo "https://$lifeos still requires Cloudflare Access (expect 302 to https://$team):"
+read -r code location < <(curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' --max-time 20 "https://$lifeos/" || echo "000 -")
+if [ "$code" = 302 ] && [[ "$location" == "https://$team/"* ]]; then ok / "$code"; else bad / "$code $location"; fi
+
+exit "$failed"

@@ -65,7 +65,7 @@ services:
     restart: "no"
   inbox:
     build: {context: ., dockerfile: services/inbox/Dockerfile}
-    environment: {SERVICE_NAME: inbox, PORT: 8080, DATABASE_URL: "postgres://inbox_user:${LIFE_OS_INBOX_DB_PASSWORD}@postgres:5432/inbox_db?sslmode=disable", ACTIVITY_SERVICE_URL: "http://activity:8080"}
+    environment: {SERVICE_NAME: inbox, PORT: 8080, DATABASE_URL: "postgres://inbox_user:${LIFE_OS_INBOX_DB_PASSWORD}@postgres:5432/inbox_db?sslmode=disable", ACTIVITY_SERVICE_URL: "http://activity:8080", NOTIFICATIONS_SERVICE_URL: "http://notifications:8080"}
     expose: ["8080"]
     depends_on: {inbox-migrate: {condition: service_completed_successfully}}
     networks: [backend]
@@ -80,7 +80,7 @@ services:
     restart: "no"
   calendar:
     build: {context: ., dockerfile: services/calendar/Dockerfile}
-    environment: {SERVICE_NAME: calendar, PORT: 8080, DATABASE_URL: "postgres://calendar_user:${LIFE_OS_CALENDAR_DB_PASSWORD}@postgres:5432/calendar_db?sslmode=disable", LIFE_OS_TIMEZONE: "${LIFE_OS_TIMEZONE:-UTC}", ACTIVITY_SERVICE_URL: "http://activity:8080", CALENDAR_SOURCE_REFRESH_AT: "${LIFE_OS_CALENDAR_SOURCE_REFRESH_AT:-04:30}", CALENDAR_ZAW_ICS_URL: "${LIFE_OS_ZAW_ICS_URL:-}", LIFE_OS_GOOGLE_CLIENT_ID: "${LIFE_OS_GOOGLE_CLIENT_ID:-}", LIFE_OS_GOOGLE_CLIENT_SECRET: "${LIFE_OS_GOOGLE_CLIENT_SECRET:-}", LIFE_OS_GOOGLE_TOKEN_KEY: "${LIFE_OS_GOOGLE_TOKEN_KEY:-}", LIFE_OS_GOOGLE_REDIRECT_URI: "${LIFE_OS_GOOGLE_REDIRECT_URI:-https://lifeos.gamch1k.com/calendar/google/callback}"}
+    environment: {SERVICE_NAME: calendar, PORT: 8080, DATABASE_URL: "postgres://calendar_user:${LIFE_OS_CALENDAR_DB_PASSWORD}@postgres:5432/calendar_db?sslmode=disable", LIFE_OS_TIMEZONE: "${LIFE_OS_TIMEZONE:-UTC}", ACTIVITY_SERVICE_URL: "http://activity:8080", CALENDAR_SOURCE_REFRESH_AT: "${LIFE_OS_CALENDAR_SOURCE_REFRESH_AT:-04:30}", CALENDAR_ZAW_ICS_URL: "${LIFE_OS_ZAW_ICS_URL:-}", LIFE_OS_GOOGLE_CLIENT_ID: "${LIFE_OS_GOOGLE_CLIENT_ID:-}", LIFE_OS_GOOGLE_CLIENT_SECRET: "${LIFE_OS_GOOGLE_CLIENT_SECRET:-}", LIFE_OS_GOOGLE_TOKEN_KEY: "${LIFE_OS_GOOGLE_TOKEN_KEY:-}", LIFE_OS_GOOGLE_REDIRECT_URI: "${LIFE_OS_GOOGLE_REDIRECT_URI:-https://lifeos.gamch1k.com/calendar/google/callback}", CALENDAR_GOOGLE_SYNC_SECONDS: "${LIFE_OS_CALENDAR_GOOGLE_SYNC_SECONDS:-120}"}
     expose: ["8080"]
     depends_on: {calendar-migrate: {condition: service_completed_successfully}}
     networks: [backend]
@@ -110,13 +110,15 @@ services:
     restart: "no"
   # The one path for notifications to the owner. Channels are configured here
   # (LIFE_OS_NOTIFICATIONS_CHANNELS); none by default, so notifications are
-  # stored and listed in the Dashboard only.
+  # stored and listed in the Dashboard only. "ntfy" publishes to the ntfy
+  # service below with the publisher token (docs/operations/ntfy.md), over
+  # the internal notify-internal network, which only the two of them share.
   notifications:
     build: {context: ., dockerfile: services/notifications/Dockerfile}
-    environment: {SERVICE_NAME: notifications, PORT: 8080, DATABASE_URL: "postgres://notifications_user:${LIFE_OS_NOTIFICATIONS_DB_PASSWORD}@postgres:5432/notifications_db?sslmode=disable", ACTIVITY_SERVICE_URL: "http://activity:8080", NOTIFICATIONS_CHANNELS: "${LIFE_OS_NOTIFICATIONS_CHANNELS:-}"}
+    environment: {SERVICE_NAME: notifications, PORT: 8080, DATABASE_URL: "postgres://notifications_user:${LIFE_OS_NOTIFICATIONS_DB_PASSWORD}@postgres:5432/notifications_db?sslmode=disable", ACTIVITY_SERVICE_URL: "http://activity:8080", NOTIFICATIONS_CHANNELS: "${LIFE_OS_NOTIFICATIONS_CHANNELS:-}", NOTIFICATIONS_NTFY_URL: "http://ntfy:80", NOTIFICATIONS_NTFY_TOPIC: "${LIFE_OS_NTFY_TOPIC:-lifeos}", NOTIFICATIONS_NTFY_TOKEN: "${LIFE_OS_NTFY_PUBLISHER_TOKEN:-}", NOTIFICATIONS_LINK_BASE_URL: "${LIFE_OS_PUBLIC_URL:-https://lifeos.gamch1k.com}"}
     expose: ["8080"]
     depends_on: {notifications-migrate: {condition: service_completed_successfully}}
-    networks: [backend]
+    networks: [backend, notify-internal]
     restart: unless-stopped
 
   dashboard:
@@ -284,15 +286,56 @@ services:
       voice: {condition: service_started}
       activity: {condition: service_started}
       notifications: {condition: service_started}
-    # edge: the only network the Cloudflare connector shares with Life OS.
+    # edge: how the Cloudflare connector reaches the gateway (and only it).
     networks: [backend, edge]
     restart: unless-stopped
 
+  # Opt-in ntfy server (COMPOSE_PROFILES=ntfy): push notifications to the
+  # owner's phone (docs/operations/ntfy.md). It is on two networks only:
+  # notify-edge, with the Cloudflare connector alone (the tunnel route
+  # ntfy.gamch1k.com -> http://ntfy:80, without Access: the ntfy app cannot
+  # log in through it), and the internal notify-internal, with the
+  # Notifications service alone, which publishes to it. It never shares a
+  # network with the gateway or the other services, and the connector shares
+  # none with Notifications, so that route cannot reach Life OS. ntfy's own deny-all accounts protect it: ntfy provisions the
+  # publisher (write-only on the topic, by token) and the phone (read-only, by
+  # password) at every start from the ignored .env. Bcrypt hashes and the
+  # token never appear in the repository.
+  ntfy:
+    image: ${LIFE_OS_NTFY_IMAGE:-binwiederhier/ntfy:v2.29.0}
+    profiles: [ntfy]
+    command: ["serve"]
+    environment:
+      NTFY_AUTH_USERS: "lifeos-publisher:${LIFE_OS_NTFY_PUBLISHER_PASSWORD_HASH:-}:user,lifeos-phone:${LIFE_OS_NTFY_PHONE_PASSWORD_HASH:-}:user"
+      NTFY_AUTH_ACCESS: "lifeos-publisher:${LIFE_OS_NTFY_TOPIC:-lifeos}:write-only,lifeos-phone:${LIFE_OS_NTFY_TOPIC:-lifeos}:read-only"
+      NTFY_AUTH_TOKENS: "lifeos-publisher:${LIFE_OS_NTFY_PUBLISHER_TOKEN:-}:notifications-service"
+    volumes:
+      - ./infra/ntfy/server.yml:/etc/ntfy/server.yml:ro
+      - ntfy-data:/var/lib/ntfy
+    expose: ["80"]
+    networks: [notify-edge, notify-internal]
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:80/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
   # Opt-in Cloudflare Tunnel (COMPOSE_PROFILES=cloudflare). An outbound-only
   # connector on the private network that hands Cloudflare traffic to the
-  # gateway; it publishes no port. The public hostname and its route
-  # (http://gateway:80) live in the Cloudflare tunnel configuration, and the
-  # token comes only from the ignored .env. See docs/operations/cloudflare.md.
+  # gateway (lifeos.gamch1k.com, behind Access) and to ntfy (ntfy.gamch1k.com);
+  # it publishes no port. The public hostnames and their routes
+  # (http://gateway:80, http://ntfy:80) live in the Cloudflare tunnel
+  # configuration, and the token comes only from the ignored .env. See
+  # docs/operations/cloudflare.md.
   cloudflared:
     image: ${LIFE_OS_CLOUDFLARED_IMAGE:-cloudflare/cloudflared:2026.10.0}
     profiles: [cloudflare]
@@ -301,8 +344,9 @@ services:
       TUNNEL_TOKEN: ${LIFE_OS_CLOUDFLARE_TUNNEL_TOKEN:-}
     depends_on:
       gateway: {condition: service_started}
-    # Only the gateway is reachable from here; services stay on backend.
-    networks: [edge]
+    # edge reaches only the gateway (Life OS, behind Access); notify-edge
+    # reaches only ntfy. Services stay on backend.
+    networks: [edge, notify-edge]
     restart: unless-stopped
     read_only: true
     tmpfs: [/tmp]
@@ -328,6 +372,23 @@ networks:
     ipam:
       config:
         - subnet: 10.255.249.0/29
+  # The Cloudflare connector and ntfy only: the tunnel's ntfy route (no
+  # Access) reaches ntfy here and nothing of Life OS.
+  notify-edge:
+    name: lifeos-notify-edge
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.255.249.16/29
+  # ntfy and the Notifications service only, so Notifications can publish
+  # without sharing a network with the connector. Internal: no outside access.
+  notify-internal:
+    name: lifeos-notify-internal
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.255.249.32/29
 
 volumes:
   postgres-data:
@@ -336,3 +397,5 @@ volumes:
     name: lifeos-whisper-models
   voice-audio:
     name: lifeos-voice-audio
+  ntfy-data:
+    name: lifeos-ntfy-data

@@ -1,25 +1,60 @@
 #!/usr/bin/env bash
 # Asserts the Life OS ingress model for the full Compose plan, including the
-# opt-in Cloudflare connector: only the gateway publishes a host port, and the
-# cloudflared connector publishes none (it only dials out to Cloudflare).
+# opt-in Cloudflare connector and ntfy:
+#  - only the gateway publishes a host port; cloudflared (it only dials out to
+#    Cloudflare) and ntfy publish none;
+#  - edge joins cloudflared and the gateway only, so the Life OS route reaches
+#    the gateway and nothing else;
+#  - notify-edge joins cloudflared and ntfy only, so the ntfy route (no
+#    Cloudflare Access) reaches ntfy and no Life OS service;
+#  - notify-internal, an internal network, joins ntfy and notifications only,
+#    so Notifications can publish without sharing a network with cloudflared;
+#    ntfy is on these two networks and no other;
+#  - the gateway serves Life OS only for its listed hosts
+#    (tools/check-gateway-hosts).
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-plan=$(docker compose --profile cloudflare config --format json)
+plan=$(docker compose --profile cloudflare --profile ntfy config --format json)
 published=$(jq -r '.services | to_entries[] | select(.value.ports != null and (.value.ports | length) > 0) | .key' <<<"$plan")
 if [ "$published" != gateway ]; then
   echo "check-ingress: only the gateway may publish ports; found: ${published//$'\n'/, }" >&2
   exit 1
 fi
-jq -e '.services.cloudflared | (.ports == null) and (.networks | keys == ["edge"])' <<<"$plan" >/dev/null || {
-  echo "check-ingress: cloudflared must sit on the edge network only, without ports" >&2
+jq -e '.services.cloudflared | (.ports == null) and ((.networks | keys) == ["edge", "notify-edge"])' <<<"$plan" >/dev/null || {
+  echo "check-ingress: cloudflared must sit on the edge and notify-edge networks only, without ports" >&2
   exit 1
 }
+jq -e '.services.ntfy | (.ports == null) and ((.networks | keys) == ["notify-edge", "notify-internal"])' <<<"$plan" >/dev/null || {
+  echo "check-ingress: ntfy must sit on the notify-edge and notify-internal networks only, without ports" >&2
+  exit 1
+}
+jq -e '.networks["notify-internal"].internal == true' <<<"$plan" >/dev/null || {
+  echo "check-ingress: notify-internal must be an internal network" >&2
+  exit 1
+}
+members() { jq -r --arg network "$1" '[.services | to_entries[] | select(.value.networks // {} | has($network)) | .key] | sort | join(",")' <<<"$plan"; }
 # The edge network joins the connector and the gateway, nothing else, so a
 # tunnel route can never reach a service directly.
-edge_members=$(jq -r '[.services | to_entries[] | select(.value.networks | has("edge")) | .key] | sort | join(",")' <<<"$plan")
+edge_members=$(members edge)
 if [ "$edge_members" != "cloudflared,gateway" ]; then
   echo "check-ingress: the edge network must contain only cloudflared and gateway; found: $edge_members" >&2
   exit 1
 fi
-echo "ingress ok: gateway publishes $(jq -r '.services.gateway.ports | map("\(.host_ip // "0.0.0.0"):\(.published)") | join(", ")' <<<"$plan"); cloudflared publishes nothing and shares only the edge network with the gateway"
+# notify-edge carries the ntfy route, which has no Access: no Life OS service
+# (dashboard, tasks, inbox, calendar, finance, voice, activity, mcp,
+# processor, postgres, notifications, the gateway, …) may join it.
+notify_members=$(members notify-edge)
+if [ "$notify_members" != "cloudflared,ntfy" ]; then
+  echo "check-ingress: the notify-edge network must contain only cloudflared and ntfy; found: $notify_members" >&2
+  exit 1
+fi
+# notify-internal lets Notifications publish to ntfy; the connector never
+# joins it, so no tunnel route can reach notifications:8080.
+internal_members=$(members notify-internal)
+if [ "$internal_members" != "notifications,ntfy" ]; then
+  echo "check-ingress: the notify-internal network must contain only notifications and ntfy; found: $internal_members" >&2
+  exit 1
+fi
+echo "ingress ok: gateway publishes $(jq -r '.services.gateway.ports | map("\(.host_ip // "0.0.0.0"):\(.published)") | join(", ")' <<<"$plan"); edge = cloudflared + gateway; notify-edge = cloudflared + ntfy; notify-internal (internal) = notifications + ntfy; cloudflared and ntfy publish nothing"
+./tools/check-gateway-hosts

@@ -14,8 +14,20 @@ func TestLoadFromAppliesDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.ServiceName != "inbox" || cfg.Port != 8080 || cfg.LogLevel != "info" {
+	if cfg.ServiceName != "inbox" || cfg.Port != 8080 || cfg.LogLevel != "info" || cfg.NotificationsURL != "" {
 		t.Fatalf("unexpected config: %+v", cfg)
+	}
+}
+
+func TestLoadFromReadsTheNotificationsURL(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := LoadFrom(mapLookup(map[string]string{
+		"DATABASE_URL":              "postgres://inbox_user:secret@localhost/inbox_db",
+		"NOTIFICATIONS_SERVICE_URL": "http://notifications:8080",
+	}))
+	if err != nil || cfg.NotificationsURL != "http://notifications:8080" {
+		t.Fatalf("NotificationsURL = %q, err = %v", cfg.NotificationsURL, err)
 	}
 }
 

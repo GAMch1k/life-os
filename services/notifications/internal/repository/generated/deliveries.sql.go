@@ -11,6 +11,66 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const channelHealth = `-- name: ChannelHealth :many
+SELECT channel,
+       max(sent_at)::timestamptz AS last_success_at,
+       (max(updated_at) FILTER (WHERE status IN ('retrying', 'failed')))::timestamptz AS last_failure_at,
+       COALESCE((array_agg(last_error ORDER BY updated_at DESC) FILTER (WHERE status IN ('retrying', 'failed')))[1], '')::text AS last_error,
+       (count(*) FILTER (WHERE status IN ('retrying', 'failed') AND updated_at >= $1::timestamptz))::integer AS recent_failures,
+       (count(*) FILTER (WHERE status = 'retrying'))::integer AS retrying,
+       (count(*) FILTER (WHERE status = 'pending'))::integer AS pending
+FROM deliveries
+WHERE channel = ANY($2::text[])
+GROUP BY channel
+`
+
+type ChannelHealthParams struct {
+	Since    pgtype.Timestamptz
+	Channels []string
+}
+
+type ChannelHealthRow struct {
+	Channel        string
+	LastSuccessAt  pgtype.Timestamptz
+	LastFailureAt  pgtype.Timestamptz
+	LastError      string
+	RecentFailures int32
+	Retrying       int32
+	Pending        int32
+}
+
+// What each channel's deliveries show: its latest success; its latest
+// failure (a failed delivery, or one waiting for a retry) and that error;
+// how many failed or wait for a retry, last changed since the given instant;
+// and how many wait for a retry or a first attempt now.
+func (q *Queries) ChannelHealth(ctx context.Context, arg ChannelHealthParams) ([]ChannelHealthRow, error) {
+	rows, err := q.db.Query(ctx, channelHealth, arg.Since, arg.Channels)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ChannelHealthRow{}
+	for rows.Next() {
+		var i ChannelHealthRow
+		if err := rows.Scan(
+			&i.Channel,
+			&i.LastSuccessAt,
+			&i.LastFailureAt,
+			&i.LastError,
+			&i.RecentFailures,
+			&i.Retrying,
+			&i.Pending,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const claimDelivery = `-- name: ClaimDelivery :one
 WITH candidate AS (
   SELECT id FROM deliveries

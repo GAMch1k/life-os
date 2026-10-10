@@ -592,3 +592,43 @@ func TestOtherCalendarConflictsAreStillRetried(t *testing.T) {
 		t.Fatalf("audit = %#v", tools.records)
 	}
 }
+
+// Events synced from Google Calendar (source.kind google) belong to Google
+// until two-way sync: the processor's search asks Calendar for Life OS
+// events only, so a synced event is never a candidate, and a change the
+// owner approved for one that Calendar refuses (409 managed_by_source)
+// goes back to Human Review instead of technical retry.
+func TestASyncedGoogleEventIsLeftToGoogle(t *testing.T) {
+	synced := timedEvent("event-google", "Team sync", "2026-10-16T13:00:00Z", "2026-10-16T14:00:00Z")
+	synced["source"] = map[string]any{"kind": "google", "name": "Work", "externalUid": "abc123"}
+
+	tools := newCalendarTools("Move the team sync to Monday at 9", synced)
+	runCalendarPlan(t, tools, `{"actions":[{"tool":"calendar_update","arguments":{"eventQuery":"team sync","startAt":"2026-10-12T09:00:00+02:00"}}],"confidence":0.95}`)
+	if len(tools.searches) == 0 {
+		t.Fatal("the processor did not search")
+	}
+	for _, search := range tools.searches {
+		if search.Get("sourceKind") != "manual" {
+			t.Fatalf("search %v includes synced events", search)
+		}
+	}
+	if tools.review == nil || !strings.HasPrefix(tools.review["errorSummary"].(string), "No upcoming Calendar event") || contains(tools.calls, "calendar_update") {
+		t.Fatalf("calls = %#v, review = %#v", tools.calls, tools.review)
+	}
+
+	tools = newCalendarTools("Cancel the team sync", synced)
+	approvedItem(tools, map[string]any{"tool": "calendar_cancel", "arguments": map[string]any{"eventQuery": "team sync", "taskId": "event-google"}})
+	tools.failTool = map[string]error{"calendar_cancel": errors.New(`MCP tool calendar_cancel rejected: service returned 409: {"error":{"code":"managed_by_source","message":"this event is managed by its source"}}`)}
+	runner := Runner{Planner: fakePlanner{err: errors.New("not planned")}, Tools: tools, Model: "test", TimeZone: berlin(t)}
+	if _, err := runner.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if tools.review == nil || tools.review["errorSummary"] != managedBySourceReason || contains(tools.calls, "inbox_resolve") {
+		t.Fatalf("calls = %#v, review = %#v", tools.calls, tools.review)
+	}
+	for _, record := range tools.records {
+		if record["status"] == "retryable" || record["status"] == "failed" {
+			t.Fatalf("a synced event entered technical retry: %#v", tools.records)
+		}
+	}
+}
