@@ -17,10 +17,16 @@ paths:
   /v1/tasks:
     get:
       summary: List tasks
+      description: >-
+        Open Tasks come first, soonest due first, with undated ones after the
+        dated ones (newest first); then completed Tasks, most recently
+        completed first. When more Tasks match than `limit`, `nextCursor` is
+        set: pass it back as `cursor`, with the same filters, for the next
+        page. A response without `nextCursor` is the last page.
       operationId: listTasks
       security: []
-      parameters: [{name: completed, in: query, schema: {type: boolean}}, {name: dueBefore, in: query, schema: {type: string, format: date-time}}, {name: includeUndated, in: query, description: Include unscheduled tasks when using dueBefore. Defaults to true so open tasks are not hidden solely because they have no due date., schema: {type: boolean, default: true}}, {name: query, in: query, description: Case-insensitive title or notes search for entity resolution., schema: {type: string, minLength: 1, maxLength: 200}}, {name: cursor, in: query, schema: {type: string}}, {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}]
-      responses: {'200': {description: Tasks, content: {application/json: {schema: {$ref: '#/components/schemas/TaskList'}}}}, '400': {description: Invalid request}}
+      parameters: [{name: completed, in: query, schema: {type: boolean}}, {name: dueBefore, in: query, schema: {type: string, format: date-time}}, {name: includeUndated, in: query, description: Include unscheduled tasks when using dueBefore. Defaults to true so open tasks are not hidden solely because they have no due date., schema: {type: boolean, default: true}}, {name: undated, in: query, description: 'true lists only Tasks without a due date, false only Tasks with one. Applies together with the other filters.', schema: {type: boolean}}, {name: query, in: query, description: Case-insensitive title or notes search for entity resolution., schema: {type: string, minLength: 1, maxLength: 200}}, {name: cursor, in: query, description: The previous page's nextCursor. Opaque; only valid with the filters it was returned for., schema: {type: string}}, {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}]
+      responses: {'200': {description: Tasks, content: {application/json: {schema: {$ref: '#/components/schemas/TaskList'}}}}, '400': {description: 'Invalid request, such as a malformed cursor'}}
     post:
       summary: Create a task
       operationId: createTask
@@ -61,4 +67,4 @@ components:
     Task: {type: object, required: [id, title, completed, createdAt, updatedAt], properties: {id: {type: string, format: uuid}, title: {type: string}, notes: {type: string, nullable: true}, dueAt: {type: string, format: date-time, nullable: true}, completed: {type: boolean}, completedAt: {type: string, format: date-time, nullable: true}, recurrence: {$ref: '#/components/schemas/Recurrence'}, createdAt: {type: string, format: date-time}, updatedAt: {type: string, format: date-time}}}
     CreateTaskRequest: {type: object, required: [title], properties: {title: {type: string}, notes: {type: string}, dueAt: {type: string, format: date-time}, recurrence: {$ref: '#/components/schemas/Recurrence'}}}
     UpdateTaskRequest: {type: object, minProperties: 1, properties: {title: {type: string}, notes: {type: string, nullable: true}, dueAt: {type: string, format: date-time}, clearDueAt: {type: boolean, description: Clear the due date and return the Task to Unscheduled.}, recurrence: {$ref: '#/components/schemas/Recurrence', nullable: true}}}
-    TaskList: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/Task'}}, nextCursor: {type: string, nullable: true}}}
+    TaskList: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/Task'}}, nextCursor: {type: string, nullable: true, description: Set when more Tasks match; pass it as cursor for the next page.}}}

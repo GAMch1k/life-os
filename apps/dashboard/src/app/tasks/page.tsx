@@ -11,12 +11,13 @@ export default async function TasksPage() {
   // the browser's language is. The key starts the workspace over (selected
   // day, month) when TimeZoneSync re-renders the page in the browser's zone.
   const timeZone = await userTimeZone();
+  const today = dayKey(new Date(), timeZone);
   return (
     <TasksWorkspace
       key={timeZone}
-      state={await getTasksWorkspace()}
+      state={await getTasksWorkspace({ today, timeZone })}
       timeZone={timeZone}
-      today={dayKey(new Date(), timeZone)}
+      today={today}
     />
   );
 }

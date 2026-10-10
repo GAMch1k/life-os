@@ -8,15 +8,35 @@ RETURNING *;
 SELECT * FROM tasks WHERE id = $1;
 
 -- name: ListTasks :many
+-- Open Tasks first (soonest due, undated last), then completed Tasks, most
+-- recently completed first. The after_* arguments are the previous page's last
+-- row: a keyset cursor over exactly the ORDER BY, where a missing timestamp
+-- sorts as 'infinity' (NULLS FIRST under DESC, NULLS LAST under ASC) and id
+-- breaks ties, so paging never skips or repeats a Task.
 SELECT * FROM tasks
 WHERE (sqlc.narg(completed_filter)::boolean IS NULL OR (completed_at IS NOT NULL) = sqlc.narg(completed_filter)::boolean)
+  AND (sqlc.narg(undated_filter)::boolean IS NULL OR (due_at IS NULL) = sqlc.narg(undated_filter)::boolean)
   AND (sqlc.narg(search_query)::text IS NULL OR title ILIKE '%' || sqlc.narg(search_query)::text || '%' OR notes ILIKE '%' || sqlc.narg(search_query)::text || '%')
   AND (
     sqlc.narg(due_before)::timestamptz IS NULL
     OR due_at <= sqlc.narg(due_before)::timestamptz
     OR (sqlc.arg(include_undated)::boolean AND due_at IS NULL)
   )
-ORDER BY completed_at NULLS FIRST, due_at NULLS LAST, created_at DESC
+  AND (
+    sqlc.narg(after_id)::uuid IS NULL
+    OR COALESCE(completed_at, 'infinity'::timestamptz) < COALESCE(sqlc.narg(after_completed_at)::timestamptz, 'infinity'::timestamptz)
+    OR (
+      COALESCE(completed_at, 'infinity'::timestamptz) = COALESCE(sqlc.narg(after_completed_at)::timestamptz, 'infinity'::timestamptz)
+      AND (
+        COALESCE(due_at, 'infinity'::timestamptz) > COALESCE(sqlc.narg(after_due_at)::timestamptz, 'infinity'::timestamptz)
+        OR (
+          COALESCE(due_at, 'infinity'::timestamptz) = COALESCE(sqlc.narg(after_due_at)::timestamptz, 'infinity'::timestamptz)
+          AND (created_at, id) < (sqlc.narg(after_created_at)::timestamptz, sqlc.narg(after_id)::uuid)
+        )
+      )
+    )
+  )
+ORDER BY completed_at DESC NULLS FIRST, due_at ASC NULLS LAST, created_at DESC, id DESC
 LIMIT sqlc.arg(page_limit);
 
 -- name: UpdateTask :one

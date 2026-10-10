@@ -2,22 +2,130 @@ import { tasksClient } from "@/lib/api/tasks-client";
 import type { Task } from "@/lib/tasks-summary";
 import { DATE_LOCALE, addDays, dayKey, startOfDay } from "@/lib/time-zone";
 
+/** The Tasks API's largest page. */
+export const TASKS_PAGE_SIZE = 100;
+/** A safety cap: at most this many open Tasks load with the page. */
+export const OPEN_TASKS_CAP = 1000;
+/** Recently completed means completed today or in the six days before. */
+export const RECENT_COMPLETED_DAYS = 7;
+
+/** A run of Tasks in the API's order; `nextCursor` continues it. */
+export type TaskPage = { items: Task[]; nextCursor: string | null };
+
 export type TasksWorkspaceState =
-  | { kind: "ready"; tasks: Task[] }
-  | { kind: "empty" }
+  | {
+      kind: "ready";
+      /** Every open Task, unless there are more than the cap. */
+      open: Task[];
+      /** True when more open Tasks exist than were loaded. */
+      openCapped: boolean;
+      /**
+       * Completed Tasks, most recently completed first: every recent one (up
+       * to the cap) and possibly some older ones; `nextCursor` continues with
+       * older ones. Null when they could not be read.
+       */
+      completed: TaskPage | null;
+    }
   | { kind: "unavailable" };
 
-export async function getTasksWorkspace(): Promise<TasksWorkspaceState> {
-  // A refused connection throws rather than returning an error response; the
-  // page shows its unavailable state either way instead of crashing.
+/**
+ * One page of `GET /v1/tasks`, or undefined when the service answers with an
+ * error or cannot be reached. On the server it calls the service directly; in
+ * the browser it goes through the Dashboard's `/api/tasks` proxy.
+ */
+export async function fetchTaskPage(
+  completed: boolean,
+  cursor?: string,
+): Promise<TaskPage | undefined> {
   const { data, error } = await tasksClient
     .GET("/v1/tasks", {
-      params: { query: { limit: 100 } },
+      params: {
+        query: {
+          completed,
+          limit: TASKS_PAGE_SIZE,
+          ...(cursor ? { cursor } : {}),
+        },
+      },
     })
     .catch(() => ({ data: undefined, error: true }));
-  if (error || !data) return { kind: "unavailable" };
-  if (data.items.length === 0) return { kind: "empty" };
-  return { kind: "ready", tasks: data.items };
+  if (error || !data) return undefined;
+  return { items: data.items, nextCursor: data.nextCursor ?? null };
+}
+
+/**
+ * Follows `nextCursor` until the list ends, at least `cap` Tasks are loaded,
+ * or `enough` says the loaded Tasks suffice. The result's `nextCursor` is set
+ * when the list goes on. Undefined when any page fails: a partial list must
+ * not pass for the whole one.
+ */
+export async function collectTasks(
+  fetchPage: (cursor?: string) => Promise<TaskPage | undefined>,
+  { cap, enough }: { cap: number; enough?: (items: Task[]) => boolean },
+): Promise<TaskPage | undefined> {
+  const items: Task[] = [];
+  let cursor: string | null = null;
+  do {
+    const page = await fetchPage(cursor ?? undefined);
+    if (!page) return undefined;
+    items.push(...page.items);
+    cursor = page.nextCursor;
+  } while (cursor && items.length < cap && !enough?.(items));
+  return { items, nextCursor: cursor };
+}
+
+/** The first instant of the recently completed window, in the owner's zone. */
+export function recentCompletedSince(today: string, timeZone: string) {
+  return startOfDay(addDays(today, 1 - RECENT_COMPLETED_DAYS), timeZone);
+}
+
+/** Whether a completed Task was completed at or after `since`. */
+export function completedSince(task: Task, since: Date) {
+  return Boolean(
+    task.completedAt && new Date(task.completedAt).getTime() >= since.getTime(),
+  );
+}
+
+/**
+ * Splits completed Tasks (most recent first) into those completed since
+ * `since` and older ones.
+ */
+export function splitCompleted(completed: Task[], since: Date) {
+  return {
+    recent: completed.filter((task) => completedSince(task, since)),
+    older: completed.filter((task) => !completedSince(task, since)),
+  };
+}
+
+/**
+ * Loads every open Task (up to the cap) and the completed Tasks the page
+ * shows first: the recently completed ones. Completed Tasks come most recent
+ * first, so paging stops once a page reaches past the recent window.
+ */
+export async function getTasksWorkspace({
+  today,
+  timeZone,
+}: {
+  today: string;
+  timeZone: string;
+}): Promise<TasksWorkspaceState> {
+  const since = recentCompletedSince(today, timeZone);
+  const [open, completed] = await Promise.all([
+    collectTasks((cursor) => fetchTaskPage(false, cursor), {
+      cap: OPEN_TASKS_CAP,
+    }),
+    collectTasks((cursor) => fetchTaskPage(true, cursor), {
+      cap: OPEN_TASKS_CAP,
+      enough: (items) =>
+        items.length > 0 && !completedSince(items[items.length - 1], since),
+    }),
+  ]);
+  if (!open) return { kind: "unavailable" };
+  return {
+    kind: "ready",
+    open: open.items,
+    openCapped: open.nextCursor !== null,
+    completed: completed ?? null,
+  };
 }
 
 // Everything below is pure and runs identically on the server and in the
@@ -54,7 +162,8 @@ export type TaskGroups = Record<
  * Splits Tasks into the List view's sections. Every Task lands in exactly one
  * section; open Tasks due on a focused day other than today move from
  * Overdue/Upcoming into `selected`. Undated open Tasks are always
- * `unscheduled`, never given a made-up date.
+ * `unscheduled` (newest first), never given a made-up date; `completed` is
+ * most recently completed first.
  */
 export function groupTasks(
   tasks: Task[],
@@ -81,7 +190,19 @@ export function groupTasks(
     else if (day < today) groups.overdue.push(task);
     else groups.upcoming.push(task);
   }
+  // Newest undated work first, and the most recently completed first, also
+  // for Tasks that changed section on this page.
+  groups.unscheduled.sort((a, b) => later(a.createdAt, b.createdAt));
+  groups.completed.sort((a, b) => later(a.completedAt, b.completedAt));
   return groups;
+}
+
+/** Sort order for "most recent first"; a missing instant sorts last. */
+function later(a: string | null | undefined, b: string | null | undefined) {
+  const [first, second] = [a, b].map((value) =>
+    value ? Date.parse(value) : -Infinity,
+  );
+  return first === second ? 0 : first > second ? -1 : 1;
 }
 
 /** The days that have open dated Tasks, for the date picker's indicator. */

@@ -67,7 +67,9 @@ type Task struct {
 
 // TaskList defines model for TaskList.
 type TaskList struct {
-	Items      []Task  `json:"items"`
+	Items []Task `json:"items"`
+
+	// NextCursor Set when more Tasks match; pass it as cursor for the next page.
 	NextCursor *string `json:"nextCursor,omitempty"`
 }
 
@@ -89,8 +91,13 @@ type ListTasksParams struct {
 	// IncludeUndated Include unscheduled tasks when using dueBefore. Defaults to true so open tasks are not hidden solely because they have no due date.
 	IncludeUndated *bool `form:"includeUndated,omitempty" json:"includeUndated,omitempty"`
 
+	// Undated true lists only Tasks without a due date, false only Tasks with one. Applies together with the other filters.
+	Undated *bool `form:"undated,omitempty" json:"undated,omitempty"`
+
 	// Query Case-insensitive title or notes search for entity resolution.
-	Query  *string `form:"query,omitempty" json:"query,omitempty"`
+	Query *string `form:"query,omitempty" json:"query,omitempty"`
+
+	// Cursor The previous page's nextCursor. Opaque; only valid with the filters it was returned for.
 	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
 	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
 }
@@ -166,6 +173,13 @@ func (siw *ServerInterfaceWrapper) ListTasks(c fiber.Ctx) error {
 	err = runtime.BindQueryParameterWithOptions("form", true, false, "includeUndated", query, &params.IncludeUndated, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
 	if err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter includeUndated: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "undated" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "undated", query, &params.Undated, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter undated: %w", err).Error())
 	}
 
 	// ------------- Optional query parameter "query" -------------

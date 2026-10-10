@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  REVIEW_LIMIT,
   ownerToday,
   toHomeAttention,
   unavailableOnFailure,
 } from "./home-attention";
+import type { InboxItem } from "./inbox-summary";
 
 const now = new Date("2026-10-09T15:00:00Z");
 const task = (id: string, dueAt?: string) => ({
@@ -16,6 +18,8 @@ const task = (id: string, dueAt?: string) => ({
   updatedAt: "2026-10-01T00:00:00Z",
   ...(dueAt ? { dueAt } : {}),
 });
+/** Only the id matters to Home's review preview logic. */
+const reviewItem = (id: string) => ({ id }) as unknown as InboxItem;
 const list = <T>(items: T[], nextCursor?: string) => ({
   data: { items, nextCursor },
 });
@@ -47,6 +51,40 @@ test("Home splits overdue from due-today Tasks and keeps previews capped", () =>
   assert.equal(attention.unscheduled?.items.length, 3);
   assert.equal(attention.unscheduled?.more, true);
   assert.equal(attention.humanReview?.more, true);
+});
+
+test("Home counts carry a + only when the service has more rows", () => {
+  const due = "2026-10-09T18:00:00Z";
+  const capped = toHomeAttention(
+    {
+      // The Inbox list does not page: a full page means there may be more.
+      review: list(
+        Array.from({ length: REVIEW_LIMIT }, (_, index) =>
+          reviewItem(`review-${index}`),
+        ),
+      ),
+      urgent: list([task("today", due)], "next-urgent"),
+      open: list([task("a")], "next-undated"),
+      events: list([]),
+    },
+    now,
+  );
+  assert.equal(capped.humanReview?.more, true);
+  assert.equal(capped.urgent?.more, true);
+  assert.equal(capped.unscheduled?.more, true);
+
+  const complete = toHomeAttention(
+    {
+      review: list([reviewItem("review")]),
+      urgent: list([task("today", due)]),
+      open: list([task("a"), task("b")]),
+      events: list([]),
+    },
+    now,
+  );
+  assert.equal(complete.humanReview?.more, false);
+  assert.equal(complete.urgent?.more, false);
+  assert.equal(complete.unscheduled?.more, false);
 });
 
 test("Home distinguishes an empty service from an unavailable one", () => {
