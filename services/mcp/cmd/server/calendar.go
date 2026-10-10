@@ -33,7 +33,8 @@ type eventAction struct {
 	StartDate      *string     `json:"startDate,omitempty" jsonschema:"ISO date for all-day event"`
 	EndDate        *string     `json:"endDate,omitempty" jsonschema:"ISO date for all-day event (inclusive)"`
 	TimeZone       *string     `json:"timeZone,omitempty" jsonschema:"IANA timezone a timed event is scheduled in"`
-	Reminders      *[]reminder `json:"reminders,omitempty" jsonschema:"Reminder intent; leave out for the defaults, [] for none"`
+	Reminders      *[]reminder `json:"reminders,omitempty" jsonschema:"The event's own reminders, added to the owner's default reminders; leave out for none of its own"`
+	UseDefault     *bool       `json:"useDefaultReminders,omitempty" jsonschema:"Whether the owner's default reminders apply as well (default true); false without reminders means no reminders at all"`
 }
 
 // eventMutation changes one existing event. Only the fields given change;
@@ -49,8 +50,9 @@ type eventMutation struct {
 	StartDate   *string     `json:"startDate,omitempty" jsonschema:"ISO date for all-day event"`
 	EndDate     *string     `json:"endDate,omitempty" jsonschema:"ISO date for all-day event (inclusive)"`
 	TimeZone    *string     `json:"timeZone,omitempty" jsonschema:"IANA timezone of a timed event"`
-	Reminders   *[]reminder `json:"reminders,omitempty" jsonschema:"Replaces the reminders; [] for none"`
-	Clear       []string    `json:"clear,omitempty" jsonschema:"Fields to remove: description, location, timeZone, or reminders (back to the defaults)"`
+	Reminders   *[]reminder `json:"reminders,omitempty" jsonschema:"Replaces the event's own reminders, which are added to its defaults"`
+	UseDefault  *bool       `json:"useDefaultReminders,omitempty" jsonschema:"Turns the event's default reminders on or off; its own reminders stay"`
+	Clear       []string    `json:"clear,omitempty" jsonschema:"Fields to remove: description, location, timeZone, or reminders (back to the defaults alone)"`
 }
 
 type eventRef struct {
@@ -148,6 +150,9 @@ func eventUpdateBody(in eventMutation) (map[string]any, error) {
 	}
 	if in.Reminders != nil {
 		body["reminders"] = *in.Reminders
+	}
+	if in.UseDefault != nil {
+		body["useDefaultReminders"] = *in.UseDefault
 	}
 	for _, field := range in.Clear {
 		if !clearable[field] {

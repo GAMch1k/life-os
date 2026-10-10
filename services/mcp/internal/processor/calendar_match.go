@@ -22,14 +22,15 @@ const eventSearchLimit = 10
 
 // calendarChangeFields are what calendar_update may change; clear names the
 // optional ones to remove.
-var calendarChangeFields = []string{"title", "description", "location", "allDay", "startAt", "endAt", "startDate", "endDate", "timeZone", "reminders", "clear"}
+var calendarChangeFields = []string{"title", "description", "location", "allDay", "startAt", "endAt", "startDate", "endDate", "timeZone", "reminders", "useDefaultReminders", "clear"}
 
 // clearableEventFields are the optional event fields an update may remove.
 var clearableEventFields = map[string]bool{"description": true, "location": true, "timeZone": true, "reminders": true}
 
 // validCalendarChange checks the fields of a calendar_update beyond their
-// names: something must change, clear names only optional fields, and
-// reminders are objects. Calendar validates the values themselves.
+// names: something must change, clear names only optional fields,
+// reminders are objects, and useDefaultReminders is a boolean. Calendar
+// validates the values themselves.
 func validCalendarChange(arguments map[string]any) bool {
 	changes := 0
 	for _, field := range calendarChangeFields {
@@ -57,7 +58,17 @@ func validCalendarChange(arguments map[string]any) bool {
 			}
 		}
 	}
-	return validReminders(arguments["reminders"])
+	return validReminders(arguments["reminders"]) && validUseDefault(arguments)
+}
+
+// validUseDefault accepts a missing useDefaultReminders or a boolean.
+func validUseDefault(arguments map[string]any) bool {
+	value, present := arguments["useDefaultReminders"]
+	if !present {
+		return true
+	}
+	_, ok := value.(bool)
+	return ok
 }
 
 // validReminders accepts a missing reminders field or a list of objects.

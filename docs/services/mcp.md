@@ -41,8 +41,8 @@ MCP's Calendar tools are Calendar API operations, the same ones the Dashboard us
 | --- | --- |
 | `calendar_list`, `calendar_search` | `GET /v1/events`, `GET /v1/events/search` (the caller's URL query, such as `q=Zahnarzt&from=…&timeZone=Europe/Berlin`) |
 | `calendar_get` | `GET /v1/events/{id}` |
-| `calendar_create` | `POST /v1/events` with `title`, `description`, `location`, `allDay`, `startAt`/`endAt` or `startDate`/`endDate`, `timeZone`, `reminders` (left out: the defaults; `[]`: none), and the action's `Idempotency-Key` |
-| `calendar_update` | `PATCH /v1/events/{id}` with only the given fields; `clear` names fields to remove (`description`, `location`, `timeZone`, `reminders`), sent as `null`. A field both set and cleared, an unknown `clear` entry, or nothing to change is rejected before Calendar is called |
+| `calendar_create` | `POST /v1/events` with `title`, `description`, `location`, `allDay`, `startAt`/`endAt` or `startDate`/`endDate`, `timeZone`, `reminders` (the event's own, added to the owner's default reminders), `useDefaultReminders` (left out: true; `false` with no `reminders`: none at all), and the action's `Idempotency-Key` |
+| `calendar_update` | `PATCH /v1/events/{id}` with only the given fields (`reminders` replaces the event's own, `useDefaultReminders` turns its defaults on or off); `clear` names fields to remove (`description`, `location`, `timeZone`, `reminders`, which returns the event to its defaults alone), sent as `null`. A field both set and cleared, an unknown `clear` entry, or nothing to change is rejected before Calendar is called |
 | `calendar_cancel` | `PATCH /v1/events/{id}` `{"status":"cancelled"}`: kept as history, restorable |
 | `calendar_delete` | `DELETE /v1/events/{id}`, permanent; for an MCP client acting on the owner's explicit request. The processor never uses it |
 
