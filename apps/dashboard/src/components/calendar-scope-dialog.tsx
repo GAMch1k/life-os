@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 
-import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -11,6 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/app-dialog";
+import { Button } from "@/components/ui/button";
 import {
   type CalendarEvent,
   deleteScopes,
