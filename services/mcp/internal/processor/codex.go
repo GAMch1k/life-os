@@ -16,8 +16,9 @@ import (
 
 // planPrompt instructs Codex to classify one Inbox item into a constrained
 // JSON plan. Codex only plans; the processor validates and executes actions
-// through MCP.
-const planPrompt = "Classify this Inbox item. Return only JSON in this schema: {\"actions\":[{\"tool\":\"task_create|task_update|task_complete|task_reopen|calendar_create|finance_create_manual_transaction\",\"arguments\":{...}}],\"ambiguous\":boolean,\"confidence\":0.0,\"reason\":string}. Existing Task mutations require a taskQuery. It is matched as a case-insensitive substring of existing Task titles and notes, so use the shortest distinctive word or phrase that would literally appear in the Task title (for example \"chicken\" or \"Anna\"), never a paraphrase or a whole sentence. The processor searches existing Tasks with it and proceeds only when exactly one Task matches; otherwise it asks the user, so you do not need to know the existing Tasks. A statement that something has been done (for example \"I already bought the chicken\" or \"I called the dentist\") is task_complete for the Task it refers to, with taskQuery set to that distinctive word (\"chicken\", \"dentist\"). Set ambiguous true and actions to [] only when no Task can be identified from the words at all. task_update may only use taskQuery, title, notes, dueAt (RFC3339), clearDueAt. task_complete/task_reopen may only use taskQuery. Never create a Task as fallback for an uncertain existing Task. task_create arguments may only use title, notes, dueAt (RFC3339). calendar_create arguments may only use title, description, allDay, startAt/endAt (RFC3339) or startDate/endDate (ISO date). finance_create_manual_transaction may only use accountId, categoryId, amount ({amount signed integer,currency}), occurredOn (ISO date), note; only propose it if accountId, amount, currency, and date are explicit in trusted source metadata or content. Never claim an action succeeded or execute an action. If information is materially unclear or confidence is below 0.8, set ambiguous true and actions to []. Never propose calendar update or deletion. Inbox item: "
+// through MCP. Each run appends the owner's local time (timeContext) and then
+// the item, so the fixed instructions stay a stable prompt prefix.
+const planPrompt = "Classify this Inbox item. Return only JSON in this schema: {\"actions\":[{\"tool\":\"task_create|task_update|task_complete|task_reopen|calendar_create|finance_create_manual_transaction\",\"arguments\":{...}}],\"ambiguous\":boolean,\"confidence\":0.0,\"reason\":string}. Existing Task mutations require a taskQuery. It is matched as a case-insensitive substring of existing Task titles and notes, so use the shortest distinctive word or phrase that would literally appear in the Task title (for example \"chicken\" or \"Anna\"), never a paraphrase or a whole sentence. The processor searches existing Tasks with it and proceeds only when exactly one Task matches; otherwise it asks the user, so you do not need to know the existing Tasks. A statement that something has been done (for example \"I already bought the chicken\" or \"I called the dentist\") is task_complete for the Task it refers to, with taskQuery set to that distinctive word (\"chicken\", \"dentist\"). Set ambiguous true and actions to [] only when no Task can be identified from the words at all. task_update may only use taskQuery, title, notes, dueAt (RFC3339), clearDueAt. task_complete/task_reopen may only use taskQuery. Never create a Task as fallback for an uncertain existing Task. task_create arguments may only use title, notes, dueAt (RFC3339). calendar_create arguments may only use title, description, allDay, startAt/endAt (RFC3339) or startDate/endDate (ISO date). finance_create_manual_transaction may only use accountId, categoryId, amount ({amount signed integer,currency}), occurredOn (ISO date), note; only propose it if accountId, amount, currency, and date are explicit in trusted source metadata or content. Never claim an action succeeded or execute an action. If information is materially unclear or confidence is below 0.8, set ambiguous true and actions to []. Never propose calendar update or deletion. "
 
 // CodexCLI is the processor's agent runtime: the machine's existing,
 // authenticated Codex CLI run as a managed subprocess. It keeps the processor
@@ -39,6 +40,11 @@ type CodexCLI struct {
 	Grace time.Duration
 	// Slots limits concurrent planning runs; nil means unlimited.
 	Slots chan struct{}
+	// TimeZone is the owner's timezone. Relative dates in captures are
+	// resolved in it, and every Codex run gets it as TZ. Nil means UTC.
+	TimeZone *time.Location
+	// Now is the clock for the planning prompt; tests replace it.
+	Now func() time.Time
 	// Run builds the command; tests replace it.
 	Run func(context.Context, string, ...string) *exec.Cmd
 }
@@ -81,6 +87,59 @@ func observerFrom(ctx context.Context) RunObserver {
 	return nil
 }
 
+type capturedAtKey struct{}
+
+// WithCapturedAt tells planning runs started with ctx when the item was
+// captured, so "tomorrow" in a capture that waited for a retry still means
+// the day after it was captured.
+func WithCapturedAt(ctx context.Context, at time.Time) context.Context {
+	return context.WithValue(ctx, capturedAtKey{}, at)
+}
+
+func capturedAtFrom(ctx context.Context) time.Time {
+	at, _ := ctx.Value(capturedAtKey{}).(time.Time)
+	return at
+}
+
+// delayedCapture is how long after its capture an item is planned before
+// the prompt states the capture time separately from the current time.
+const delayedCapture = 10 * time.Minute
+
+// timeContext states the owner's timezone and local date, time, and weekday
+// for one planning run. Without it Codex sees only the container's UTC clock,
+// so "tomorrow at 10" landed two hours off in Berlin, or on the wrong day near
+// midnight. The coming week is spelled out because weekday arithmetic is
+// where models slip, and its offsets cover a daylight-saving change.
+func timeContext(now, capturedAt time.Time, location *time.Location) string {
+	if location == nil {
+		location = time.UTC
+	}
+	local := func(t time.Time) string {
+		t = t.In(location)
+		return t.Format("Monday 2006-01-02 15:04 (-07:00)")
+	}
+	reference := now
+	var b strings.Builder
+	if !capturedAt.IsZero() && capturedAt.Before(now.Add(-delayedCapture)) {
+		reference = capturedAt
+		fmt.Fprintf(&b, "The owner's timezone is %s. The item was captured on %s there, and it is now %s; resolve relative dates from the capture time. ", location, local(capturedAt), local(now))
+	} else {
+		fmt.Fprintf(&b, "The owner's timezone is %s; it is now %s there. ", location, local(now))
+	}
+	day := reference.In(location)
+	b.WriteString("The coming days are ")
+	for i := 1; i <= 7; i++ {
+		next := time.Date(day.Year(), day.Month(), day.Day()+i, 12, 0, 0, 0, location)
+		if i > 1 {
+			b.WriteString(", ")
+		}
+		b.WriteString(next.Format("Monday 2006-01-02 (-07:00)"))
+	}
+	tomorrowAtTen := time.Date(day.Year(), day.Month(), day.Day()+1, 10, 0, 0, 0, location)
+	fmt.Fprintf(&b, ". Interpret every date and time in the item in the owner's timezone: today, tomorrow, tonight, this or next week, and bare clock times are relative to that local date and time, and a weekday (\"on Friday\") means its next occurrence that is not already past. Write dueAt, startAt, and endAt as RFC3339 with the owner's UTC offset on that date (for example, tomorrow at 10:00 is %s), and startDate, endDate, and occurredOn as the owner's local date. ", tomorrowAtTen.Format(time.RFC3339))
+	return b.String()
+}
+
 func (c CodexCLI) Plan(ctx context.Context, content string) (string, error) {
 	if c.Slots != nil {
 		select {
@@ -108,7 +167,8 @@ func (c CodexCLI) Plan(ctx context.Context, content string) (string, error) {
 	if c.ReasoningEffort != "" {
 		args = append(args, "-c", "model_reasoning_effort="+c.ReasoningEffort)
 	}
-	cmd := c.command(runCtx, append(args, "-o", name, planPrompt+content)...)
+	prompt := planPrompt + timeContext(c.now(), capturedAtFrom(ctx), c.TimeZone) + "Inbox item: " + content
+	cmd := c.command(runCtx, append(args, "-o", name, prompt)...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return "", err
@@ -145,6 +205,11 @@ func (c CodexCLI) Plan(ctx context.Context, content string) (string, error) {
 func (c CodexCLI) command(ctx context.Context, args ...string) *exec.Cmd {
 	cmd := c.runner()(ctx, c.binary(), args...)
 	cmd.Env = sanitizedEnv(os.Environ())
+	if c.TimeZone != nil {
+		// Codex's own environment context then reports the owner's zone too,
+		// rather than contradicting the prompt with the container's UTC.
+		cmd.Env = append(withoutKey(cmd.Env, "TZ"), "TZ="+c.TimeZone.String())
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
 		// Ask the whole group to stop; Wait kills it after WaitDelay.
@@ -171,6 +236,16 @@ func killGroup(cmd *exec.Cmd) {
 // allowedEnv is everything a Codex run inherits; credentials come only from
 // the Codex home (the existing ChatGPT sign-in), never from API keys.
 var allowedEnv = map[string]bool{"PATH": true, "HOME": true, "USER": true, "CODEX_HOME": true, "LANG": true, "LC_ALL": true, "TZ": true, "TMPDIR": true, "SSL_CERT_FILE": true, "SSL_CERT_DIR": true}
+
+func withoutKey(environ []string, key string) []string {
+	kept := environ[:0]
+	for _, entry := range environ {
+		if !strings.HasPrefix(entry, key+"=") {
+			kept = append(kept, entry)
+		}
+	}
+	return kept
+}
 
 func sanitizedEnv(environ []string) []string {
 	env := make([]string, 0, len(allowedEnv))
@@ -305,6 +380,13 @@ func (c CodexCLI) LoggedIn(ctx context.Context) bool {
 	err := cmd.Run()
 	killGroup(cmd)
 	return err == nil
+}
+
+func (c CodexCLI) now() time.Time {
+	if c.Now != nil {
+		return c.Now()
+	}
+	return time.Now()
 }
 
 func (c CodexCLI) binary() string {

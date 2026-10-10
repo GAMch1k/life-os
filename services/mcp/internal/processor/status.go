@@ -23,12 +23,14 @@ type Status struct {
 	Model string `json:"model"`
 	// ReasoningEffort is the configured model_reasoning_effort ("" = Codex
 	// default).
-	ReasoningEffort string             `json:"reasoningEffort,omitempty"`
-	StartedAt       time.Time          `json:"startedAt"`
-	Poll            PollStatus         `json:"poll"`
-	Codex           CodexStatus        `json:"codex"`
-	Usage           UsageStatus        `json:"usage"`
-	Runtime         AgentRuntimeStatus `json:"runtime"`
+	ReasoningEffort string `json:"reasoningEffort,omitempty"`
+	// TimeZone is the owner's timezone relative dates are resolved in.
+	TimeZone  string             `json:"timeZone,omitempty"`
+	StartedAt time.Time          `json:"startedAt"`
+	Poll      PollStatus         `json:"poll"`
+	Codex     CodexStatus        `json:"codex"`
+	Usage     UsageStatus        `json:"usage"`
+	Runtime   AgentRuntimeStatus `json:"runtime"`
 }
 
 // AgentRuntimeStatus describes the Codex runtime: its configuration, the run
@@ -192,6 +194,13 @@ func (m *Monitor) SetReasoningEffort(effort string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.status.ReasoningEffort = effort
+}
+
+// SetTimeZone records the owner's timezone the planner uses.
+func (m *Monitor) SetTimeZone(name string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.status.TimeZone = name
 }
 
 // RecordTokens adds one planning run's token usage.

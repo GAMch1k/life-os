@@ -45,6 +45,7 @@ type inboxItem struct {
 	Source             string         `json:"source"`
 	SourceMetadata     map[string]any `json:"sourceMetadata"`
 	ProcessingMetadata map[string]any `json:"processingMetadata"`
+	CreatedAt          time.Time      `json:"createdAt"`
 }
 type plan struct {
 	Actions    []plannedAction `json:"actions"`
@@ -126,7 +127,7 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 		runtime := r.trackRuntime(ctx, item.ID, started.ID, RuntimeSpawning)
 		defer runtime.close()
 		prompt, _ := json.Marshal(map[string]any{"content": item.Content, "source": item.Source, "sourceMetadata": item.SourceMetadata})
-		rawPlan, planErr := r.Planner.Plan(WithRunObserver(ctx, runtime), string(prompt))
+		rawPlan, planErr := r.Planner.Plan(WithCapturedAt(WithRunObserver(ctx, runtime), item.CreatedAt), string(prompt))
 		runtime.finish(ctx, runtimeOutcome(ctx, planErr))
 		if planErr != nil {
 			if ctx.Err() != nil {
@@ -279,7 +280,7 @@ func (r Runner) nextAttemptKey(ctx context.Context, itemID, key string) (bool, s
 }
 func (r Runner) plan(ctx context.Context, item inboxItem) (Proposal, error) {
 	prompt, _ := json.Marshal(map[string]any{"content": item.Content, "source": item.Source, "sourceMetadata": item.SourceMetadata})
-	raw, err := r.Planner.Plan(ctx, string(prompt))
+	raw, err := r.Planner.Plan(WithCapturedAt(ctx, item.CreatedAt), string(prompt))
 	if err != nil {
 		return Proposal{}, err
 	}

@@ -14,8 +14,10 @@ ENTRYPOINT ["/service"]
 
 # The worker needs the local Codex CLI. Authentication is never part of this
 # image: Compose mounts it read-only and the entrypoint copies it to tmpfs.
+# tzdata lets TZ (the owner's LIFE_OS_TIMEZONE) take effect for Codex runs.
 FROM node:22-alpine AS processor
-RUN npm install --global @openai/codex@0.160.0 \
+RUN apk add --no-cache tzdata \
+    && npm install --global @openai/codex@0.160.0 \
     && mkdir -p /workspace \
     && addgroup -S lifeos && adduser -S -G lifeos lifeos
 COPY --from=build /out/processor /processor

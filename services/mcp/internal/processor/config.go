@@ -5,6 +5,7 @@ import (
 	"os"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -27,6 +28,12 @@ type Config struct {
 	// ReasoningEffort is passed to Codex as model_reasoning_effort when set;
 	// empty keeps the Codex configuration's default.
 	ReasoningEffort string
+	// TimeZone is the owner's timezone (LIFE_OS_TIMEZONE, an IANA name such
+	// as Europe/Berlin). Relative dates and clock times in captures are
+	// interpreted in it. Unset or unknown means UTC.
+	TimeZone *time.Location
+	// Warnings are non-fatal configuration problems to log at startup.
+	Warnings []string
 }
 
 // Profile names the model and reasoning effort, for example
@@ -64,7 +71,26 @@ func LoadConfig() (Config, error) {
 	if c.CodexCommand == "" {
 		return c, fmt.Errorf("LIFE_OS_CODEX_COMMAND must not be empty")
 	}
+	if c.TimeZone, err = OwnerTimeZone(os.Getenv("LIFE_OS_TIMEZONE")); err != nil {
+		c.Warnings = append(c.Warnings, err.Error()+"; using UTC")
+	}
 	return c, nil
+}
+
+// OwnerTimeZone resolves LIFE_OS_TIMEZONE. Unset means UTC. An unknown name
+// also falls back to UTC, as in the Dashboard, and is reported, so a typo is
+// logged instead of stopping capture processing.
+func OwnerTimeZone(name string) (*time.Location, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return time.UTC, nil
+	}
+	// "Local" would silently mean the container's own zone.
+	location, err := time.LoadLocation(name)
+	if err != nil || name == "Local" {
+		return time.UTC, fmt.Errorf("LIFE_OS_TIMEZONE %q is not an IANA timezone name such as Europe/Berlin", name)
+	}
+	return location, nil
 }
 
 var effortPattern = regexp.MustCompile(`^[a-z]*$`)
