@@ -6,10 +6,48 @@ package generated
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Querier interface {
-	Ping(ctx context.Context) (int32, error)
+	// Records a sync the owner asked for, unless one was asked for after
+	// not_before (no row: too soon).
+	ClaimManualSync(ctx context.Context, arg ClaimManualSyncParams) (pgtype.Timestamptz, error)
+	ClearArchivePending(ctx context.Context, arg ClearArchivePendingParams) error
+	// Single use: the state is deleted as it is read.
+	ConsumeAuthState(ctx context.Context, stateHash []byte) (BankAuthState, error)
+	CreateAuthState(ctx context.Context, arg CreateAuthStateParams) error
+	CreateConnection(ctx context.Context, arg CreateConnectionParams) (BankConnection, error)
+	DeleteExpiredAuthStates(ctx context.Context, now pgtype.Timestamptz) error
+	// The owner removed the connection: its session is wiped and it is never
+	// synced again; Finance still has to archive its accounts.
+	DisconnectConnection(ctx context.Context, arg DisconnectConnectionParams) (BankConnection, error)
+	GetConnection(ctx context.Context, id pgtype.UUID) (BankConnection, error)
+	// The bank's live (not disconnected) connection, if any.
+	GetLiveConnection(ctx context.Context, arg GetLiveConnectionParams) (BankConnection, error)
+	// Live connections first, then by when they were created (newest first).
+	ListConnections(ctx context.Context) ([]BankConnection, error)
+	// A new consent for a live connection (after expiry, an error, or while
+	// still valid): a new session and account list, usable again. Its sync
+	// history, cursor, and any import waiting for Finance are kept.
+	ReconnectConnection(ctx context.Context, arg ReconnectConnectionParams) (BankConnection, error)
+	// A sync failed: one more failure in a row, the next attempt, and the
+	// import still waiting for Finance (NULL when none).
+	RecordSyncFailure(ctx context.Context, arg RecordSyncFailureParams) (BankConnection, error)
+	// Finance accepted a sync: the connection is connected, its failures and
+	// any waiting import are cleared.
+	RecordSyncSuccess(ctx context.Context, arg RecordSyncSuccessParams) (BankConnection, error)
+	// Gives back a claimed manual sync that never reached the bank.
+	ReleaseManualSync(ctx context.Context, arg ReleaseManualSyncParams) error
+	// The provider ended the connection (expired) or refuses it (error): it is
+	// not synced again until reconnected.
+	SetConnectionStatus(ctx context.Context, arg SetConnectionStatusParams) (BankConnection, error)
+	SetConsentNotice(ctx context.Context, arg SetConsentNoticeParams) error
+	SetNextSync(ctx context.Context, arg SetNextSyncParams) error
+	// Counts one read without the owner present on day, unless max were
+	// already made that day (no row).
+	TakeUnattendedRead(ctx context.Context, arg TakeUnattendedReadParams) (int32, error)
 }
 
 var _ Querier = (*Queries)(nil)
