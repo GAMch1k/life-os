@@ -131,12 +131,18 @@ const enqueueUpcomingGoogleExports = `-- name: EnqueueUpcomingGoogleExports :exe
 INSERT INTO google_exports (event_id, connection_id, requested_at, next_attempt_at)
 SELECT events.id, $1, $2::timestamptz, $2::timestamptz
 FROM events
+CROSS JOIN LATERAL (
+    SELECT CASE WHEN events.all_day THEN (events.end_date + 1)::timestamp AT TIME ZONE 'UTC' + interval '14 hours' ELSE events.end_at END AS ends_at,
+           CASE events.recurrence_frequency WHEN 'daily' THEN interval '1 day' WHEN 'weekly' THEN interval '1 week'
+                WHEN 'monthly' THEN interval '1 month' ELSE interval '1 year' END AS unit
+) AS span
 WHERE events.source_kind = 'manual'
   AND events.status = 'active'
   AND CASE
-        WHEN events.recurrence_frequency IS NOT NULL THEN events.recurrence_until IS NULL OR events.recurrence_until >= $2::timestamptz - interval '1 day'
-        WHEN events.all_day THEN events.end_date >= ($2::timestamptz - interval '1 day')::date
-        ELSE events.end_at > $2::timestamptz
+        WHEN events.recurrence_frequency IS NULL THEN span.ends_at > $2::timestamptz
+        WHEN events.recurrence_count IS NOT NULL THEN
+          span.ends_at + span.unit * (events.recurrence_count * COALESCE(events.recurrence_interval, 1)) > $2::timestamptz
+        ELSE events.recurrence_until IS NULL OR events.recurrence_until + (span.ends_at - COALESCE(events.start_at, events.start_date::timestamp AT TIME ZONE 'UTC')) + interval '1 day' > $2::timestamptz
       END
 ON CONFLICT (event_id) DO NOTHING
 `
@@ -146,9 +152,12 @@ type EnqueueUpcomingGoogleExportsParams struct {
 	Now          pgtype.Timestamptz
 }
 
-// Queues every active Life OS event that is not over at now (a series that
-// has not ended) that has no export yet: switching export on, or connecting
-// Google, exports what is still ahead.
+// Queues every active Life OS event that is not over at now and has no
+// export yet (an export already queued, done, or removed stays as it is,
+// so queuing again changes nothing): a single event that ends after now, a
+// series without an end or ending after now. A series ending after a count
+// of occurrences is taken as lasting count times its interval at most.
+// Past events stay in Life OS.
 func (q *Queries) EnqueueUpcomingGoogleExports(ctx context.Context, arg EnqueueUpcomingGoogleExportsParams) (int64, error) {
 	result, err := q.db.Exec(ctx, enqueueUpcomingGoogleExports, arg.ConnectionID, arg.Now)
 	if err != nil {
@@ -759,7 +768,7 @@ func (q *Queries) ListStoredGoogleInstances(ctx context.Context, arg ListStoredG
 }
 
 const lockGoogleConnection = `-- name: LockGoogleConnection :one
-SELECT id, singleton, account_email, scopes, refresh_token_ciphertext, refresh_token_nonce, access_token_expires_at, status, last_error, connected_at, created_at, updated_at, export_enabled, lifeos_calendar_id, lifeos_calendar_created_at, lifeos_calendar_note FROM google_connections WHERE id = $1 FOR UPDATE
+SELECT id, singleton, account_email, scopes, refresh_token_ciphertext, refresh_token_nonce, access_token_expires_at, status, last_error, connected_at, created_at, updated_at, export_enabled, export_backfilled_at, lifeos_calendar_id, lifeos_calendar_created_at, lifeos_calendar_note FROM google_connections WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) LockGoogleConnection(ctx context.Context, id pgtype.UUID) (GoogleConnection, error) {
@@ -779,11 +788,26 @@ func (q *Queries) LockGoogleConnection(ctx context.Context, id pgtype.UUID) (Goo
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ExportEnabled,
+		&i.ExportBackfilledAt,
 		&i.LifeosCalendarID,
 		&i.LifeosCalendarCreatedAt,
 		&i.LifeosCalendarNote,
 	)
 	return i, err
+}
+
+const markGoogleExportBackfilled = `-- name: MarkGoogleExportBackfilled :exec
+UPDATE google_connections SET export_backfilled_at = $1::timestamptz, updated_at = now() WHERE id = $2
+`
+
+type MarkGoogleExportBackfilledParams struct {
+	Now pgtype.Timestamptz
+	ID  pgtype.UUID
+}
+
+func (q *Queries) MarkGoogleExportBackfilled(ctx context.Context, arg MarkGoogleExportBackfilledParams) error {
+	_, err := q.db.Exec(ctx, markGoogleExportBackfilled, arg.Now, arg.ID)
+	return err
 }
 
 const markGoogleExportDeleted = `-- name: MarkGoogleExportDeleted :exec
@@ -867,7 +891,7 @@ const setGoogleExportEnabled = `-- name: SetGoogleExportEnabled :one
 UPDATE google_connections
 SET export_enabled = $1, updated_at = now()
 WHERE id = $2
-RETURNING id, singleton, account_email, scopes, refresh_token_ciphertext, refresh_token_nonce, access_token_expires_at, status, last_error, connected_at, created_at, updated_at, export_enabled, lifeos_calendar_id, lifeos_calendar_created_at, lifeos_calendar_note
+RETURNING id, singleton, account_email, scopes, refresh_token_ciphertext, refresh_token_nonce, access_token_expires_at, status, last_error, connected_at, created_at, updated_at, export_enabled, export_backfilled_at, lifeos_calendar_id, lifeos_calendar_created_at, lifeos_calendar_note
 `
 
 type SetGoogleExportEnabledParams struct {
@@ -894,6 +918,7 @@ func (q *Queries) SetGoogleExportEnabled(ctx context.Context, arg SetGoogleExpor
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ExportEnabled,
+		&i.ExportBackfilledAt,
 		&i.LifeosCalendarID,
 		&i.LifeosCalendarCreatedAt,
 		&i.LifeosCalendarNote,
@@ -906,7 +931,7 @@ UPDATE google_connections
 SET lifeos_calendar_id = $1, lifeos_calendar_created_at = $2::timestamptz,
     lifeos_calendar_note = $3, updated_at = now()
 WHERE id = $4
-RETURNING id, singleton, account_email, scopes, refresh_token_ciphertext, refresh_token_nonce, access_token_expires_at, status, last_error, connected_at, created_at, updated_at, export_enabled, lifeos_calendar_id, lifeos_calendar_created_at, lifeos_calendar_note
+RETURNING id, singleton, account_email, scopes, refresh_token_ciphertext, refresh_token_nonce, access_token_expires_at, status, last_error, connected_at, created_at, updated_at, export_enabled, export_backfilled_at, lifeos_calendar_id, lifeos_calendar_created_at, lifeos_calendar_note
 `
 
 type SetLifeOSCalendarParams struct {
@@ -940,6 +965,7 @@ func (q *Queries) SetLifeOSCalendar(ctx context.Context, arg SetLifeOSCalendarPa
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ExportEnabled,
+		&i.ExportBackfilledAt,
 		&i.LifeosCalendarID,
 		&i.LifeosCalendarCreatedAt,
 		&i.LifeosCalendarNote,

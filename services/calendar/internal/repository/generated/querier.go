@@ -69,9 +69,12 @@ type Querier interface {
 	DeleteUnexportedGoogleExport(ctx context.Context, eventID pgtype.UUID) (int64, error)
 	// Queues the export of a Life OS event's latest state, due now.
 	EnqueueGoogleExport(ctx context.Context, arg EnqueueGoogleExportParams) error
-	// Queues every active Life OS event that is not over at now (a series that
-	// has not ended) that has no export yet: switching export on, or connecting
-	// Google, exports what is still ahead.
+	// Queues every active Life OS event that is not over at now and has no
+	// export yet (an export already queued, done, or removed stays as it is,
+	// so queuing again changes nothing): a single event that ends after now, a
+	// series without an end or ending after now. A series ending after a count
+	// of occurrences is taken as lasting count times its interval at most.
+	// Past events stay in Life OS.
 	EnqueueUpcomingGoogleExports(ctx context.Context, arg EnqueueUpcomingGoogleExportsParams) (int64, error)
 	// Records a failed sync (the stored events stay) and releases the lease;
 	// a calendar switched off meanwhile has nothing to record (no row).
@@ -209,6 +212,7 @@ type Querier interface {
 	LockSource(ctx context.Context, id pgtype.UUID) (CalendarSource, error)
 	// Makes the connection's synced calendars due now (after a reconnect).
 	MarkGoogleCalendarsDue(ctx context.Context, arg MarkGoogleCalendarsDueParams) error
+	MarkGoogleExportBackfilled(ctx context.Context, arg MarkGoogleExportBackfilledParams) error
 	// The event was deleted in Life OS: its copy in Google is deleted next.
 	MarkGoogleExportDeleted(ctx context.Context, arg MarkGoogleExportDeletedParams) error
 	// Makes every waiting export due now (after reconnecting or switching

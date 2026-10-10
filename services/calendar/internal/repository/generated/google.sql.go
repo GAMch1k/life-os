@@ -100,7 +100,7 @@ func (q *Queries) CountSourceEvents(ctx context.Context, sourceID pgtype.UUID) (
 const createGoogleConnection = `-- name: CreateGoogleConnection :one
 INSERT INTO google_connections (account_email, scopes, refresh_token_ciphertext, refresh_token_nonce, access_token_expires_at)
 VALUES ($1, $2::text[], $3, $4, $5)
-RETURNING id, singleton, account_email, scopes, refresh_token_ciphertext, refresh_token_nonce, access_token_expires_at, status, last_error, connected_at, created_at, updated_at, export_enabled, lifeos_calendar_id, lifeos_calendar_created_at, lifeos_calendar_note
+RETURNING id, singleton, account_email, scopes, refresh_token_ciphertext, refresh_token_nonce, access_token_expires_at, status, last_error, connected_at, created_at, updated_at, export_enabled, export_backfilled_at, lifeos_calendar_id, lifeos_calendar_created_at, lifeos_calendar_note
 `
 
 type CreateGoogleConnectionParams struct {
@@ -135,6 +135,7 @@ func (q *Queries) CreateGoogleConnection(ctx context.Context, arg CreateGoogleCo
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ExportEnabled,
+		&i.ExportBackfilledAt,
 		&i.LifeosCalendarID,
 		&i.LifeosCalendarCreatedAt,
 		&i.LifeosCalendarNote,
@@ -427,7 +428,7 @@ func (q *Queries) GetGoogleCalendar(ctx context.Context, id pgtype.UUID) (Google
 }
 
 const getGoogleConnection = `-- name: GetGoogleConnection :one
-SELECT id, singleton, account_email, scopes, refresh_token_ciphertext, refresh_token_nonce, access_token_expires_at, status, last_error, connected_at, created_at, updated_at, export_enabled, lifeos_calendar_id, lifeos_calendar_created_at, lifeos_calendar_note FROM google_connections WHERE singleton
+SELECT id, singleton, account_email, scopes, refresh_token_ciphertext, refresh_token_nonce, access_token_expires_at, status, last_error, connected_at, created_at, updated_at, export_enabled, export_backfilled_at, lifeos_calendar_id, lifeos_calendar_created_at, lifeos_calendar_note FROM google_connections WHERE singleton
 `
 
 func (q *Queries) GetGoogleConnection(ctx context.Context) (GoogleConnection, error) {
@@ -447,6 +448,7 @@ func (q *Queries) GetGoogleConnection(ctx context.Context) (GoogleConnection, er
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ExportEnabled,
+		&i.ExportBackfilledAt,
 		&i.LifeosCalendarID,
 		&i.LifeosCalendarCreatedAt,
 		&i.LifeosCalendarNote,
@@ -779,7 +781,7 @@ SET scopes = $1::text[], refresh_token_ciphertext = $2,
     refresh_token_nonce = $3, access_token_expires_at = $4,
     status = 'connected', last_error = NULL, connected_at = now(), updated_at = now()
 WHERE id = $5
-RETURNING id, singleton, account_email, scopes, refresh_token_ciphertext, refresh_token_nonce, access_token_expires_at, status, last_error, connected_at, created_at, updated_at, export_enabled, lifeos_calendar_id, lifeos_calendar_created_at, lifeos_calendar_note
+RETURNING id, singleton, account_email, scopes, refresh_token_ciphertext, refresh_token_nonce, access_token_expires_at, status, last_error, connected_at, created_at, updated_at, export_enabled, export_backfilled_at, lifeos_calendar_id, lifeos_calendar_created_at, lifeos_calendar_note
 `
 
 type ReconnectGoogleConnectionParams struct {
@@ -814,6 +816,7 @@ func (q *Queries) ReconnectGoogleConnection(ctx context.Context, arg ReconnectGo
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ExportEnabled,
+		&i.ExportBackfilledAt,
 		&i.LifeosCalendarID,
 		&i.LifeosCalendarCreatedAt,
 		&i.LifeosCalendarNote,
@@ -828,7 +831,7 @@ SET access_token_expires_at = $1,
     refresh_token_nonce = COALESCE($3, refresh_token_nonce),
     status = 'connected', last_error = NULL, updated_at = now()
 WHERE id = $4
-RETURNING id, singleton, account_email, scopes, refresh_token_ciphertext, refresh_token_nonce, access_token_expires_at, status, last_error, connected_at, created_at, updated_at, export_enabled, lifeos_calendar_id, lifeos_calendar_created_at, lifeos_calendar_note
+RETURNING id, singleton, account_email, scopes, refresh_token_ciphertext, refresh_token_nonce, access_token_expires_at, status, last_error, connected_at, created_at, updated_at, export_enabled, export_backfilled_at, lifeos_calendar_id, lifeos_calendar_created_at, lifeos_calendar_note
 `
 
 type RecordGoogleTokenRefreshParams struct {
@@ -862,6 +865,7 @@ func (q *Queries) RecordGoogleTokenRefresh(ctx context.Context, arg RecordGoogle
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ExportEnabled,
+		&i.ExportBackfilledAt,
 		&i.LifeosCalendarID,
 		&i.LifeosCalendarCreatedAt,
 		&i.LifeosCalendarNote,
@@ -989,7 +993,7 @@ const setGoogleConnectionStatus = `-- name: SetGoogleConnectionStatus :one
 UPDATE google_connections
 SET status = $1, last_error = $2, updated_at = now()
 WHERE id = $3
-RETURNING id, singleton, account_email, scopes, refresh_token_ciphertext, refresh_token_nonce, access_token_expires_at, status, last_error, connected_at, created_at, updated_at, export_enabled, lifeos_calendar_id, lifeos_calendar_created_at, lifeos_calendar_note
+RETURNING id, singleton, account_email, scopes, refresh_token_ciphertext, refresh_token_nonce, access_token_expires_at, status, last_error, connected_at, created_at, updated_at, export_enabled, export_backfilled_at, lifeos_calendar_id, lifeos_calendar_created_at, lifeos_calendar_note
 `
 
 type SetGoogleConnectionStatusParams struct {
@@ -1015,6 +1019,7 @@ func (q *Queries) SetGoogleConnectionStatus(ctx context.Context, arg SetGoogleCo
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ExportEnabled,
+		&i.ExportBackfilledAt,
 		&i.LifeosCalendarID,
 		&i.LifeosCalendarCreatedAt,
 		&i.LifeosCalendarNote,

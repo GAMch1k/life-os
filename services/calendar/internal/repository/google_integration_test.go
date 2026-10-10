@@ -205,7 +205,7 @@ func TestGoogleTwoWayMigration(t *testing.T) {
 	}
 	testdb.Apply(t, pool, strings.Replace(migration, ".up.sql", ".down.sql", 1))
 	if n := count(`SELECT count(*) FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'google_exports'`) +
-		count(`SELECT count(*) FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'google_connections' AND column_name IN ('export_enabled', 'lifeos_calendar_id', 'lifeos_calendar_created_at', 'lifeos_calendar_note')`); n != 0 {
+		count(`SELECT count(*) FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'google_connections' AND column_name IN ('export_enabled', 'export_backfilled_at', 'lifeos_calendar_id', 'lifeos_calendar_created_at', 'lifeos_calendar_note')`); n != 0 {
 		t.Fatalf("after down: %d leftovers", n)
 	}
 	if n := count(`SELECT count(*) FROM google_connections`); n != 1 {

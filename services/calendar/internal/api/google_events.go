@@ -49,7 +49,7 @@ func readOnlyFeed(name *string) string {
 	if name != nil && strings.TrimSpace(*name) != "" {
 		from = "“" + strings.TrimSpace(*name) + "”"
 	}
-	return "Imported from " + from + ", so it can only be changed there. Its reminders can still be adjusted here."
+	return "Imported from " + from + ", so it can only be changed there. Its reminders and priority can still be adjusted here."
 }
 
 // resolveGoogle completes each item with what it allows (editable,

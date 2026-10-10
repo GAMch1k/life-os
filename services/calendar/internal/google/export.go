@@ -110,8 +110,16 @@ func (s *Service) queueUpcoming(ctx context.Context, connection store.GoogleConn
 		return
 	}
 	now := timestamptz(s.now())
-	if _, err := s.queries.EnqueueUpcomingGoogleExports(ctx, store.EnqueueUpcomingGoogleExportsParams{ConnectionID: connection.ID, Now: now}); err != nil {
+	queued, err := s.queries.EnqueueUpcomingGoogleExports(ctx, store.EnqueueUpcomingGoogleExportsParams{ConnectionID: connection.ID, Now: now})
+	if err != nil {
 		s.logger.Warn("upcoming Life OS events not queued for export", "error", err)
+		return
+	}
+	if err := s.queries.MarkGoogleExportBackfilled(ctx, store.MarkGoogleExportBackfilledParams{ID: connection.ID, Now: now}); err != nil {
+		s.logger.Warn("export backfill not recorded", "error", err)
+	}
+	if queued > 0 {
+		s.logger.Info("upcoming Life OS events queued for export to Google", "events", queued)
 	}
 	if err := s.queries.MarkGoogleExportsDue(ctx, store.MarkGoogleExportsDueParams{ConnectionID: connection.ID, Now: now}); err != nil {
 		s.logger.Warn("waiting exports not made due", "error", err)
@@ -156,6 +164,12 @@ func (s *Syncer) ExportDue(ctx context.Context) {
 			s.logger.Warn("Life OS calendar not created in Google", "error", err)
 		}
 		return
+	}
+	if !connection.ExportBackfilledAt.Valid {
+		// Once (such as after the release that brought exporting, for a
+		// connection made before it): the Life OS events still ahead,
+		// series included, go to Google, not only those created later.
+		s.service.queueUpcoming(ctx, connection)
 	}
 	for range maxExportsPerRun {
 		if ctx.Err() != nil {

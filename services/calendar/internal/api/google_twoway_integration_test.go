@@ -766,3 +766,64 @@ func TestGooglePriorityRoundTrips(t *testing.T) {
 	var raw json.RawMessage
 	c.call(http.MethodGet, "/v1/google/connection", nil, http.StatusOK, &raw)
 }
+
+func TestGoogleExportBackfillsUpcomingLifeOSEventsOnce(t *testing.T) {
+	c := newGoogleClient(t, ownerCalendar)
+	c.fake.SetCalendarDetails(ownerCalendar.ID, "Europe/Berlin")
+	c.connect()
+	// As after deploying the release that exports, for a connection made
+	// before it: Life OS events exist, none exported, nothing backfilled.
+	upcoming := c.createEvent(map[string]any{"title": "Dentist", "allDay": false, "startAt": "2026-10-20T09:00:00+02:00", "endAt": "2026-10-20T10:00:00+02:00"})
+	today := c.createEvent(map[string]any{"title": "Market", "allDay": true, "startDate": "2026-10-10", "endDate": "2026-10-10"})
+	weekly := c.createEvent(map[string]any{
+		"title": "Gym", "allDay": false, "startAt": "2026-09-07T07:00:00+02:00", "endAt": "2026-09-07T08:00:00+02:00",
+		"recurrence": map[string]any{"frequency": "weekly", "interval": 1},
+	})
+	counted := c.createEvent(map[string]any{
+		"title": "Course", "allDay": false, "startAt": "2026-09-28T18:00:00+02:00", "endAt": "2026-09-28T19:00:00+02:00",
+		"recurrence": map[string]any{"frequency": "weekly", "interval": 1, "count": 6},
+	})
+	c.createEvent(map[string]any{"title": "Old party", "allDay": false, "startAt": "2026-09-20T19:00:00+02:00", "endAt": "2026-09-20T23:00:00+02:00"})
+	c.createEvent(map[string]any{
+		"title": "Summer swim", "allDay": false, "startAt": "2026-06-01T07:00:00+02:00", "endAt": "2026-06-01T08:00:00+02:00",
+		"recurrence": map[string]any{"frequency": "daily", "interval": 1, "until": "2026-08-31T05:00:00Z"},
+	})
+	c.createEvent(map[string]any{
+		"title": "Spring course", "allDay": false, "startAt": "2026-03-02T18:00:00+01:00", "endAt": "2026-03-02T19:00:00+01:00",
+		"recurrence": map[string]any{"frequency": "weekly", "interval": 1, "count": 4},
+	})
+	called := c.createEvent(map[string]any{"title": "Called off", "allDay": false, "startAt": "2026-10-22T09:00:00+02:00", "endAt": "2026-10-22T10:00:00+02:00"})
+	c.patchEvent(called.Id, map[string]any{"status": "cancelled"})
+	if _, err := c.pool.Exec(context.Background(), `DELETE FROM google_exports; UPDATE google_connections SET export_backfilled_at = NULL`); err != nil {
+		t.Fatal(err)
+	}
+
+	c.exportDue()
+	lifeOS := c.lifeOSCalendar()
+	var exported []string
+	for _, event := range c.fake.Events(lifeOS) {
+		exported = append(exported, event.Summary)
+	}
+	slices.Sort(exported)
+	equal(t, "backfilled", exported, []string{"Course", "Dentist", "Gym", "Market"})
+	for _, event := range []generated.CalendarEvent{upcoming, today, weekly, counted} {
+		if got := c.getEvent(event.Id).Google; got == nil || got.State != generated.EventGoogleLinkStateSynced {
+			t.Fatalf("%s export = %+v", event.Title, got)
+		}
+	}
+	if gym := c.fakeEvent(lifeOS, google.ExportID(googleuuid.UUID(weekly.Id))); len(gym.Recurrence) != 1 || gym.Recurrence[0] != "RRULE:FREQ=WEEKLY" {
+		t.Fatalf("series copy = %+v", gym)
+	}
+	// Once: the next runs (and a restart) queue nothing again.
+	written := len(c.fake.Writes())
+	c.restart(googleConfig())
+	c.exportDue()
+	c.exportDue()
+	if writes := c.writesSince(written); len(writes) != 0 {
+		t.Fatalf("backfilled again: %+v", writes)
+	}
+	var backfilled bool
+	if err := c.pool.QueryRow(context.Background(), `SELECT export_backfilled_at IS NOT NULL FROM google_connections`).Scan(&backfilled); err != nil || !backfilled {
+		t.Fatalf("backfill not recorded: %v %v", backfilled, err)
+	}
+}

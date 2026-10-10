@@ -6,9 +6,13 @@
 -- exporting is on (the owner's "Export events created in Life OS").
 -- lifeos_calendar_note says what happened to the calendar last, such as
 -- that it was deleted in Google and created again; null when nothing needs
--- saying.
+-- saying. export_backfilled_at is when the Life OS events still ahead were
+-- last queued for export as a whole: null (as for a connection made before
+-- this release) queues them once, so upcoming events, series included, are
+-- exported and not only those created afterwards.
 ALTER TABLE google_connections
     ADD COLUMN export_enabled BOOLEAN NOT NULL DEFAULT true,
+    ADD COLUMN export_backfilled_at TIMESTAMPTZ,
     ADD COLUMN lifeos_calendar_id TEXT CHECK (lifeos_calendar_id IS NULL OR lifeos_calendar_id <> ''),
     ADD COLUMN lifeos_calendar_created_at TIMESTAMPTZ,
     ADD COLUMN lifeos_calendar_note TEXT;

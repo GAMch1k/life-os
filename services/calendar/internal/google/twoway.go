@@ -50,13 +50,13 @@ func ReaderReason(calendar, role string) string {
 	if role == "freeBusyReader" {
 		what = "can only see as free or busy"
 	}
-	return fmt.Sprintf("“%s” is a Google calendar you %s, so its events can only be changed in Google Calendar by someone who may edit it. Its reminders can still be adjusted here.", calendar, what)
+	return fmt.Sprintf("“%s” is a Google calendar you %s, so its events can only be changed in Google Calendar by someone who may edit it. Its reminders and priority can still be adjusted here.", calendar, what)
 }
 
 // ExpandedReason is why one occurrence of a repeating Google event whose
 // rule Life OS cannot hold is read-only.
 func ExpandedReason(calendar string) string {
-	return fmt.Sprintf("This is one occurrence of a repeating event in “%s” whose rule Life OS can't edit, so it can only be changed in Google Calendar. Its reminders can still be adjusted here.", calendar)
+	return fmt.Sprintf("This is one occurrence of a repeating event in “%s” whose rule Life OS can't edit, so it can only be changed in Google Calendar. Its reminders and priority can still be adjusted here.", calendar)
 }
 
 // Target is a synced Google event that Life OS writes to.

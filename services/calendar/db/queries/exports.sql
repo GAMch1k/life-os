@@ -29,20 +29,32 @@ SET requested_at = EXCLUDED.requested_at, next_attempt_at = EXCLUDED.next_attemp
     state = CASE WHEN google_exports.state = 'failed' THEN 'failed' ELSE 'pending' END, updated_at = now();
 
 -- name: EnqueueUpcomingGoogleExports :execrows
--- Queues every active Life OS event that is not over at now (a series that
--- has not ended) that has no export yet: switching export on, or connecting
--- Google, exports what is still ahead.
+-- Queues every active Life OS event that is not over at now and has no
+-- export yet (an export already queued, done, or removed stays as it is,
+-- so queuing again changes nothing): a single event that ends after now, a
+-- series without an end or ending after now. A series ending after a count
+-- of occurrences is taken as lasting count times its interval at most.
+-- Past events stay in Life OS.
 INSERT INTO google_exports (event_id, connection_id, requested_at, next_attempt_at)
 SELECT events.id, sqlc.arg(connection_id), sqlc.arg(now)::timestamptz, sqlc.arg(now)::timestamptz
 FROM events
+CROSS JOIN LATERAL (
+    SELECT CASE WHEN events.all_day THEN (events.end_date + 1)::timestamp AT TIME ZONE 'UTC' + interval '14 hours' ELSE events.end_at END AS ends_at,
+           CASE events.recurrence_frequency WHEN 'daily' THEN interval '1 day' WHEN 'weekly' THEN interval '1 week'
+                WHEN 'monthly' THEN interval '1 month' ELSE interval '1 year' END AS unit
+) AS span
 WHERE events.source_kind = 'manual'
   AND events.status = 'active'
   AND CASE
-        WHEN events.recurrence_frequency IS NOT NULL THEN events.recurrence_until IS NULL OR events.recurrence_until >= sqlc.arg(now)::timestamptz - interval '1 day'
-        WHEN events.all_day THEN events.end_date >= (sqlc.arg(now)::timestamptz - interval '1 day')::date
-        ELSE events.end_at > sqlc.arg(now)::timestamptz
+        WHEN events.recurrence_frequency IS NULL THEN span.ends_at > sqlc.arg(now)::timestamptz
+        WHEN events.recurrence_count IS NOT NULL THEN
+          span.ends_at + span.unit * (events.recurrence_count * COALESCE(events.recurrence_interval, 1)) > sqlc.arg(now)::timestamptz
+        ELSE events.recurrence_until IS NULL OR events.recurrence_until + (span.ends_at - COALESCE(events.start_at, events.start_date::timestamp AT TIME ZONE 'UTC')) + interval '1 day' > sqlc.arg(now)::timestamptz
       END
 ON CONFLICT (event_id) DO NOTHING;
+
+-- name: MarkGoogleExportBackfilled :exec
+UPDATE google_connections SET export_backfilled_at = sqlc.arg(now)::timestamptz, updated_at = now() WHERE id = sqlc.arg(id);
 
 -- name: DeleteUnexportedGoogleExport :execrows
 -- Forgets the export of a deleted event that never reached Google.

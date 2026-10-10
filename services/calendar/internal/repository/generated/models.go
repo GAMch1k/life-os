@@ -143,6 +143,7 @@ type GoogleConnection struct {
 	CreatedAt               pgtype.Timestamptz
 	UpdatedAt               pgtype.Timestamptz
 	ExportEnabled           bool
+	ExportBackfilledAt      pgtype.Timestamptz
 	LifeosCalendarID        *string
 	LifeosCalendarCreatedAt pgtype.Timestamptz
 	LifeosCalendarNote      *string
