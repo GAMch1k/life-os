@@ -134,6 +134,9 @@ func (c apiClient) seed(params store.CreateEventParams) store.Event {
 	if params.SourceKind == "" {
 		params.SourceKind = "manual"
 	}
+	if params.Reminders == nil {
+		params.Reminders, params.UseDefaultReminders = []byte(`[]`), true
+	}
 	item, err := c.queries.CreateEvent(context.Background(), params)
 	if err != nil {
 		c.t.Fatalf("seed %q: %v", params.Title, err)
@@ -201,7 +204,7 @@ func TestEventLifecycleOverHTTP(t *testing.T) {
 	}
 
 	updated := c.event(http.MethodPatch, "/v1/events/"+created.Id.String(), `{"location":null,"description":"Bring card and X-ray","reminders":[]}`, http.StatusOK)
-	if updated.Location != nil || *updated.Description != "Bring card and X-ray" || updated.Reminders == nil || len(*updated.Reminders) != 0 || updated.Title != "Dentist" || !updated.StartAt.Equal(*created.StartAt) {
+	if updated.Location != nil || *updated.Description != "Bring card and X-ray" || len(updated.Reminders) != 0 || !updated.UseDefaultReminders || updated.Title != "Dentist" || !updated.StartAt.Equal(*created.StartAt) {
 		t.Fatalf("partial update = %+v", updated)
 	}
 	if !updated.UpdatedAt.After(created.UpdatedAt) || !updated.CreatedAt.Equal(created.CreatedAt) {
@@ -421,7 +424,7 @@ func TestImportedEventsSitAlongsideUserEvents(t *testing.T) {
 		t.Fatalf("listing: %+v", all.Items)
 	}
 	source := all.Items[1].Source
-	if source.Kind != generated.EventSourceKindIcs || *source.SourceId != feed || *source.ExternalUid != "zaw-bio-17" || all.Items[1].Reminders != nil {
+	if source.Kind != generated.EventSourceKindIcs || *source.SourceId != feed || *source.ExternalUid != "zaw-bio-17" || len(all.Items[1].Reminders) != 0 || !all.Items[1].UseDefaultReminders {
 		t.Fatalf("imported event: %+v", all.Items[1])
 	}
 	equal(t, "manual filter", c.titles(window+"&sourceKind=manual"), []string{"Bring bins out"})
@@ -435,7 +438,7 @@ func TestImportedEventsSitAlongsideUserEvents(t *testing.T) {
 	// The owner can override an imported event's reminders (the source's
 	// default is "the evening before"); its source identity stays put.
 	override := c.event(http.MethodPatch, "/v1/events/"+uuid(imported.ID).String(), `{"reminders":[{"kind":"localTime","daysBefore":1,"localTime":"20:30"}],"source":{"kind":"manual"}}`, http.StatusOK)
-	if override.Source.Kind != generated.EventSourceKindIcs || *override.Source.ExternalUid != "zaw-bio-17" || override.Reminders == nil || *(*override.Reminders)[0].LocalTime != "20:30" {
+	if override.Source.Kind != generated.EventSourceKindIcs || *override.Source.ExternalUid != "zaw-bio-17" || len(override.Reminders) != 1 || *override.Reminders[0].LocalTime != "20:30" {
 		t.Fatalf("override: %+v", override)
 	}
 }

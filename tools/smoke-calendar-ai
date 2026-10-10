@@ -16,6 +16,9 @@
 #      (cross-language search terms);
 #   5. "Move my meeting to Thursday at 14:00" with two meetings goes to Human
 #      Review with both as candidates, and neither changes;
+#   6. with the owner's default of 30 minutes before for timed events, "remind
+#      me a day before and 3 hours before" gives the new event those two
+#      reminders of its own on top of the default (P10-08);
 #   and no other event is created. Relative dates are judged in Berlin from
 #   each Inbox item's own createdAt.
 set -euo pipefail
@@ -174,11 +177,27 @@ jq -e --arg a "$team" --arg b "$anna" '(.processingMetadata.humanReview.candidat
 [ "$(event "$anna" | jq -c '{startAt, endAt, status}')" = "$anna_before" ] || fail "two meetings: Meeting with Anna changed"
 echo "ok: 5. 'Move my meeting' with two meetings waits in Human Review: $(jq -c '[.processingMetadata.humanReview.candidates[].title]' <<<"$review")"
 
-# No other event: the created dentist (now cancelled) and the three seeds.
+# 6. Reminders the item asks for are the event's own, added to the defaults.
+api -X PATCH -H 'content-type: application/json' --data '{"defaultReminders":{"timed":[{"kind":"relative","minutesBefore":30}]}}' "$gateway/api/calendar/v1/settings" >/dev/null
+haircut_day=Saturday
+[ "$(TZ=$zone date +%A)" != Saturday ] || haircut_day=Sunday
+haircut_item=$(capture "Add a haircut on $haircut_day at 11:00, remind me a day before and 3 hours before.")
+action=$(processed_action "reminders" "$(jq -r '.id' <<<"$haircut_item")" calendar_create)
+haircut=$(event "$(jq -r '.result.id' <<<"$action")")
+# "A day before" may be 24 hours or the previous day at a time of day.
+jq -e '.useDefaultReminders and (.reminders | length == 2)
+  and any(.reminders[]; .kind == "relative" and .minutesBefore == 180)
+  and any(.reminders[]; (.kind == "relative" and .minutesBefore == 1440) or (.kind == "localTime" and .daysBefore == 1))
+  and (.effectiveReminders | length == 3) and .effectiveReminders[0] == {kind: "relative", minutesBefore: 30}' >/dev/null <<<"$haircut" ||
+  fail "reminders: $(jq -c '{useDefaultReminders, reminders, effectiveReminders}' <<<"$haircut"), want 1 day and 3 hours of its own plus the 30-minute default"
+echo "ok: 6. the haircut has its own reminders on top of the default: $(jq -c '.effectiveReminders' <<<"$haircut")"
+
+# No other event: the created dentist (now cancelled), the three seeds, and
+# the haircut.
 from=$(date -u -d '-2 days' +%Y-%m-%dT%H:%M:%SZ)
 to=$(date -u -d '+40 days' +%Y-%m-%dT%H:%M:%SZ)
 all=$(api "$gateway/api/calendar/v1/events?from=$from&to=$to&includeCancelled=true&limit=100")
-[ "$(jq '.items | length' <<<"$all")" = 4 ] || fail "$(jq '.items | length' <<<"$all") events exist, want 4: $(jq -c '[.items[] | {title, status}]' <<<"$all")"
+[ "$(jq '.items | length' <<<"$all")" = 5 ] || fail "$(jq '.items | length' <<<"$all") events exist, want 5: $(jq -c '[.items[] | {title, status}]' <<<"$all")"
 echo "ok: no other event was created"
 
 echo "calendar AI smoke passed"

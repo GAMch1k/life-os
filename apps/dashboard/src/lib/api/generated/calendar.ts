@@ -71,7 +71,7 @@ export interface paths {
         head?: never;
         /**
          * Update a calendar event
-         * @description Changes only the fields present in the body; a field set to null is cleared. Changing `allDay` switches the event between timed and all-day: the other kind's fields (`startAt`, `endAt`, `timeZone` or `startDate`, `endDate`) are cleared and the new kind's start and end must be given. The result is validated as a whole, as on create. `status: cancelled` keeps the event as history and drops it from listings; `status: active` restores it. An event imported from a source (`source.kind` other than `manual`) is read-only except for `reminders`: naming any other field returns 409 `managed_by_source`.
+         * @description Changes only the fields present in the body; a field set to null is cleared. Changing `allDay` switches the event between timed and all-day: the other kind's fields (`startAt`, `endAt`, `timeZone` or `startDate`, `endDate`) are cleared and the new kind's start and end must be given. The result is validated as a whole, as on create. `status: cancelled` keeps the event as history and drops it from listings; `status: active` restores it. An event imported from a source (`source.kind` other than `manual`) is read-only except for `reminders` and `useDefaultReminders`: naming any other field returns 409 `managed_by_source`.
          */
         patch: operations["updateEvent"];
         trace?: never;
@@ -143,6 +143,30 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/v1/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the Calendar settings
+         * @description The owner's default reminders for the events they create in Life OS.
+         */
+        get: operations["getSettings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update the Calendar settings
+         * @description Replaces the default reminder lists present in the body. Every Life OS event that uses its defaults follows the change; imported events keep their source's defaults.
+         */
+        patch: operations["updateSettings"];
         trace?: never;
     };
 }
@@ -240,10 +264,14 @@ export interface components {
             /** @description IANA timezone a timed event was scheduled in (for example an ICS TZID); a display hint. Null for all-day events and when unknown. */
             timeZone?: string | null;
             recurrence?: components["schemas"]["Recurrence"];
-            /** @description Reminder intent. Null means the event follows its source's (or the owner's) defaults; an empty list means explicitly none. */
-            reminders?: components["schemas"]["Reminder"][] | null;
-            /** @description The reminders that apply: `reminders` when set, else the default reminders of the event's source, else none. Read-only. */
-            effectiveReminders?: components["schemas"]["Reminder"][];
+            /** @description The event's own reminders, added to its defaults when `useDefaultReminders` is true. */
+            reminders: components["schemas"]["Reminder"][];
+            /** @description Whether the event's default reminders apply as well as its own. */
+            useDefaultReminders: boolean;
+            /** @description The default reminders for this event, whether or not it uses them: its source's `defaultReminders` for an imported event, else the owner's defaults for timed or all-day events (Calendar settings). Read-only. */
+            defaultReminders: components["schemas"]["Reminder"][];
+            /** @description Every reminder that applies: `defaultReminders` when `useDefaultReminders` is true, then the event's own `reminders`, each reminder once. A notifier triggers each of them. Read-only. */
+            effectiveReminders: components["schemas"]["Reminder"][];
             occurrence?: components["schemas"]["EventOccurrence"];
             status: components["schemas"]["EventStatus"];
             /**
@@ -280,8 +308,13 @@ export interface components {
             /** @description IANA timezone of a timed event. */
             timeZone?: string;
             recurrence?: components["schemas"]["Recurrence"];
-            /** @description Leave out to follow the defaults. */
+            /** @description The event's own reminders, added to its defaults; leave out for none. */
             reminders?: components["schemas"]["Reminder"][];
+            /**
+             * @description Whether the default reminders apply as well; false (with no `reminders`) means no reminders at all.
+             * @default true
+             */
+            useDefaultReminders: boolean;
             externalReference?: components["schemas"]["ExternalReference"];
         };
         UpdateEventRequest: {
@@ -299,8 +332,10 @@ export interface components {
             endDate?: string | null;
             timeZone?: string | null;
             recurrence?: components["schemas"]["Recurrence"];
-            /** @description Replaces the reminders; null returns the event to the defaults. */
+            /** @description Replaces the event's own reminders. Null returns the event to its defaults alone: no own reminders, and `useDefaultReminders` true unless the body sets it. */
             reminders?: components["schemas"]["Reminder"][] | null;
+            /** @description Turns the default reminders on or off; the event's own reminders stay. */
+            useDefaultReminders?: boolean;
             status?: components["schemas"]["EventStatus"];
         };
         EventList: {
@@ -376,7 +411,7 @@ export interface components {
             /** @description Set (such as `zaw`) for a source Calendar configures from its own environment at startup; null for sources added through the API. A preset source can be edited like any other, but while its environment setting is present a deleted one is added again at the next start. */
             preset?: string | null;
             filter: components["schemas"]["SourceFilter"];
-            /** @description Reminder intent for this source's events whose own reminders are null (for example the evening before a waste pickup, `{"kind":"localTime","daysBefore":1,"localTime":"19:00"}`). Null means none. */
+            /** @description Default reminders for this source's events: every event that uses its defaults gets them, together with its own (for example the evening before a waste pickup, `{"kind":"localTime","daysBefore":1,"localTime":"19:00"}`). Null means none. */
             defaultReminders: components["schemas"]["Reminder"][] | null;
             refresh: components["schemas"]["SourceRefreshState"];
             /** Format: date-time */
@@ -407,6 +442,28 @@ export interface components {
         };
         SourceList: {
             items: components["schemas"]["CalendarSource"][];
+        };
+        /** @description The owner's default reminders for the events they create in Life OS. */
+        ReminderDefaults: {
+            /** @description For timed events, such as `{"kind":"relative","minutesBefore":30}`. */
+            timed: components["schemas"]["Reminder"][];
+            /** @description For all-day events, such as `{"kind":"localTime","daysBefore":1,"localTime":"19:00"}`. */
+            allDay: components["schemas"]["Reminder"][];
+        };
+        CalendarSettings: {
+            defaultReminders: components["schemas"]["ReminderDefaults"];
+            /**
+             * Format: date-time
+             * @description When the settings last changed; null while they never have.
+             */
+            updatedAt: string | null;
+        };
+        UpdateSettingsRequest: {
+            /** @description The lists to replace; a list left out stays. */
+            defaultReminders?: {
+                timed?: components["schemas"]["Reminder"][];
+                allDay?: components["schemas"]["Reminder"][];
+            };
         };
     };
     responses: never;
@@ -669,7 +726,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The event kept changing concurrently (retry the update), or it is imported and the update names more than reminders (managed_by_source) */
+            /** @description The event kept changing concurrently (retry the update), or it is imported and the update names more than its reminders (managed_by_source) */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -889,6 +946,57 @@ export interface operations {
             };
             /** @description The source is disabled (source_disabled), a refresh is already running (refresh_in_progress), or the source changed during the refresh (conflict) */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Settings */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarSettings"];
+                };
+            };
+        };
+    };
+    updateSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description Settings */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarSettings"];
+                };
+            };
+            /** @description Invalid request, or no valid X-Life-OS-Actor (actor_required) */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

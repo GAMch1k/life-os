@@ -138,11 +138,14 @@ type CalendarEvent struct {
 	CancelledAt *time.Time `json:"cancelledAt,omitempty"`
 	CreatedAt   time.Time  `json:"createdAt"`
 
+	// DefaultReminders The default reminders for this event, whether or not it uses them: its source's `defaultReminders` for an imported event, else the owner's defaults for timed or all-day events (Calendar settings). Read-only.
+	DefaultReminders []Reminder `json:"defaultReminders"`
+
 	// Description Free-form notes or details.
 	Description *string `json:"description,omitempty"`
 
-	// EffectiveReminders The reminders that apply: `reminders` when set, else the default reminders of the event's source, else none. Read-only.
-	EffectiveReminders *[]Reminder `json:"effectiveReminders,omitempty"`
+	// EffectiveReminders Every reminder that applies: `defaultReminders` when `useDefaultReminders` is true, then the event's own `reminders`, each reminder once. A notifier triggers each of them. Read-only.
+	EffectiveReminders []Reminder `json:"effectiveReminders"`
 
 	// EndAt End instant (UTC) of a timed event, exclusive.
 	EndAt *time.Time `json:"endAt,omitempty"`
@@ -162,8 +165,8 @@ type CalendarEvent struct {
 	// Recurrence Repeats the event every `interval` days, weeks, months, or years from its start, as an iCalendar (RFC 5545) rule: a timed event keeps its wall-clock time in its `timeZone` (else the owner's timezone) across daylight saving changes, and a monthly event on the 31st skips months without one. `until` is the latest start of an occurrence (inclusive).
 	Recurrence *Recurrence `json:"recurrence,omitempty"`
 
-	// Reminders Reminder intent. Null means the event follows its source's (or the owner's) defaults; an empty list means explicitly none.
-	Reminders *[]Reminder `json:"reminders,omitempty"`
+	// Reminders The event's own reminders, added to its defaults when `useDefaultReminders` is true.
+	Reminders []Reminder `json:"reminders"`
 
 	// RemovedFromSourceAt When an imported event disappeared from its source (or its source's filter came to exclude it), which also cancels it; null for manual events and while the event is in its source.
 	RemovedFromSourceAt *time.Time `json:"removedFromSourceAt,omitempty"`
@@ -184,13 +187,25 @@ type CalendarEvent struct {
 	TimeZone  *string   `json:"timeZone,omitempty"`
 	Title     string    `json:"title"`
 	UpdatedAt time.Time `json:"updatedAt"`
+
+	// UseDefaultReminders Whether the event's default reminders apply as well as its own.
+	UseDefaultReminders bool `json:"useDefaultReminders"`
+}
+
+// CalendarSettings defines model for CalendarSettings.
+type CalendarSettings struct {
+	// DefaultReminders The owner's default reminders for the events they create in Life OS.
+	DefaultReminders ReminderDefaults `json:"defaultReminders"`
+
+	// UpdatedAt When the settings last changed; null while they never have.
+	UpdatedAt *time.Time `json:"updatedAt"`
 }
 
 // CalendarSource defines model for CalendarSource.
 type CalendarSource struct {
 	CreatedAt time.Time `json:"createdAt"`
 
-	// DefaultReminders Reminder intent for this source's events whose own reminders are null (for example the evening before a waste pickup, `{"kind":"localTime","daysBefore":1,"localTime":"19:00"}`). Null means none.
+	// DefaultReminders Default reminders for this source's events: every event that uses its defaults gets them, together with its own (for example the evening before a waste pickup, `{"kind":"localTime","daysBefore":1,"localTime":"19:00"}`). Null means none.
 	DefaultReminders *[]Reminder `json:"defaultReminders"`
 
 	// Enabled Disabled sources are not refreshed; their events stay as they are.
@@ -237,7 +252,7 @@ type CreateEventRequest struct {
 	// Recurrence Repeats the event every `interval` days, weeks, months, or years from its start, as an iCalendar (RFC 5545) rule: a timed event keeps its wall-clock time in its `timeZone` (else the owner's timezone) across daylight saving changes, and a monthly event on the 31st skips months without one. `until` is the latest start of an occurrence (inclusive).
 	Recurrence *Recurrence `json:"recurrence,omitempty"`
 
-	// Reminders Leave out to follow the defaults.
+	// Reminders The event's own reminders, added to its defaults; leave out for none.
 	Reminders *[]Reminder         `json:"reminders,omitempty"`
 	StartAt   *time.Time          `json:"startAt,omitempty"`
 	StartDate *openapi_types.Date `json:"startDate,omitempty"`
@@ -245,6 +260,9 @@ type CreateEventRequest struct {
 	// TimeZone IANA timezone of a timed event.
 	TimeZone *string `json:"timeZone,omitempty"`
 	Title    string  `json:"title"`
+
+	// UseDefaultReminders Whether the default reminders apply as well; false (with no `reminders`) means no reminders at all.
+	UseDefaultReminders *bool `json:"useDefaultReminders,omitempty"`
 }
 
 // CreateSourceRequest defines model for CreateSourceRequest.
@@ -335,6 +353,15 @@ type Reminder struct {
 // ReminderKind defines model for Reminder.Kind.
 type ReminderKind string
 
+// ReminderDefaults The owner's default reminders for the events they create in Life OS.
+type ReminderDefaults struct {
+	// AllDay For all-day events, such as `{"kind":"localTime","daysBefore":1,"localTime":"19:00"}`.
+	AllDay []Reminder `json:"allDay"`
+
+	// Timed For timed events, such as `{"kind":"relative","minutesBefore":30}`.
+	Timed []Reminder `json:"timed"`
+}
+
 // SourceFilter Which feed events to import. A term matches an event when it equals one of the event's CATEGORIES or occurs in its SUMMARY (both case-insensitive). With `include` terms, only events matching one of them are imported; then events matching an `exclude` term are dropped. Empty lists import everything.
 type SourceFilter struct {
 	Exclude []string `json:"exclude"`
@@ -410,7 +437,7 @@ type UpdateEventRequest struct {
 	// Recurrence Repeats the event every `interval` days, weeks, months, or years from its start, as an iCalendar (RFC 5545) rule: a timed event keeps its wall-clock time in its `timeZone` (else the owner's timezone) across daylight saving changes, and a monthly event on the 31st skips months without one. `until` is the latest start of an occurrence (inclusive).
 	Recurrence *Recurrence `json:"recurrence,omitempty"`
 
-	// Reminders Replaces the reminders; null returns the event to the defaults.
+	// Reminders Replaces the event's own reminders. Null returns the event to its defaults alone: no own reminders, and `useDefaultReminders` true unless the body sets it.
 	Reminders *[]Reminder         `json:"reminders,omitempty"`
 	StartAt   *time.Time          `json:"startAt,omitempty"`
 	StartDate *openapi_types.Date `json:"startDate,omitempty"`
@@ -419,6 +446,18 @@ type UpdateEventRequest struct {
 	Status   *EventStatus `json:"status,omitempty"`
 	TimeZone *string      `json:"timeZone,omitempty"`
 	Title    *string      `json:"title,omitempty"`
+
+	// UseDefaultReminders Turns the default reminders on or off; the event's own reminders stay.
+	UseDefaultReminders *bool `json:"useDefaultReminders,omitempty"`
+}
+
+// UpdateSettingsRequest defines model for UpdateSettingsRequest.
+type UpdateSettingsRequest struct {
+	// DefaultReminders The lists to replace; a list left out stays.
+	DefaultReminders *struct {
+		AllDay *[]Reminder `json:"allDay,omitempty"`
+		Timed  *[]Reminder `json:"timed,omitempty"`
+	} `json:"defaultReminders,omitempty"`
 }
 
 // UpdateSourceRequest defines model for UpdateSourceRequest.
@@ -507,6 +546,9 @@ type CreateEventJSONRequestBody = CreateEventRequest
 // UpdateEventJSONRequestBody defines body for UpdateEvent for application/json ContentType.
 type UpdateEventJSONRequestBody = UpdateEventRequest
 
+// UpdateSettingsJSONRequestBody defines body for UpdateSettings for application/json ContentType.
+type UpdateSettingsJSONRequestBody = UpdateSettingsRequest
+
 // CreateSourceJSONRequestBody defines body for CreateSource for application/json ContentType.
 type CreateSourceJSONRequestBody = CreateSourceRequest
 
@@ -533,6 +575,12 @@ type ServerInterface interface {
 	// UpdateEvent Update a calendar event
 	// (PATCH /v1/events/{eventId})
 	UpdateEvent(c fiber.Ctx, eventId openapi_types.UUID) error
+	// GetSettings Get the Calendar settings
+	// (GET /v1/settings)
+	GetSettings(c fiber.Ctx) error
+	// UpdateSettings Update the Calendar settings
+	// (PATCH /v1/settings)
+	UpdateSettings(c fiber.Ctx) error
 	// ListSources List calendar sources
 	// (GET /v1/sources)
 	ListSources(c fiber.Ctx) error
@@ -846,6 +894,42 @@ func (siw *ServerInterfaceWrapper) UpdateEvent(c fiber.Ctx) error {
 	return handler(c)
 }
 
+// GetSettings operation middleware
+func (siw *ServerInterfaceWrapper) GetSettings(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.GetSettings(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// UpdateSettings operation middleware
+func (siw *ServerInterfaceWrapper) UpdateSettings(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.UpdateSettings(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
 // ListSources operation middleware
 func (siw *ServerInterfaceWrapper) ListSources(c fiber.Ctx) error {
 
@@ -1044,5 +1128,9 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	router.Patch(options.BaseURL+"/v1/sources/:sourceId", wrapper.UpdateSource)
 
 	router.Post(options.BaseURL+"/v1/sources/:sourceId/refresh", wrapper.RefreshSource)
+
+	router.Get(options.BaseURL+"/v1/settings", wrapper.GetSettings)
+
+	router.Patch(options.BaseURL+"/v1/settings", wrapper.UpdateSettings)
 
 }

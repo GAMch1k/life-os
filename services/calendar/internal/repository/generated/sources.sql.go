@@ -468,7 +468,7 @@ func (q *Queries) ListDueSources(ctx context.Context, now pgtype.Timestamptz) ([
 
 const listSourceEvents = `-- name: ListSourceEvents :many
 
-SELECT id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at, automation_idempotency_key, automation_payload_hash, location, time_zone, status, cancelled_at, source_kind, source_id, external_uid, removed_from_source_at, reminders FROM events WHERE source_id = $1 ORDER BY id FOR UPDATE
+SELECT id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at, automation_idempotency_key, automation_payload_hash, location, time_zone, status, cancelled_at, source_kind, source_id, external_uid, removed_from_source_at, reminders, use_default_reminders FROM events WHERE source_id = $1 ORDER BY id FOR UPDATE
 `
 
 // Imported events are written only by Calendar's source adapter, inside the
@@ -509,6 +509,7 @@ func (q *Queries) ListSourceEvents(ctx context.Context, sourceID pgtype.UUID) ([
 			&i.ExternalUid,
 			&i.RemovedFromSourceAt,
 			&i.Reminders,
+			&i.UseDefaultReminders,
 		); err != nil {
 			return nil, err
 		}
@@ -772,7 +773,7 @@ type UpdateImportedEventParams struct {
 }
 
 // Rewrites an imported event from its source (also restoring one the source
-// had removed). The owner's reminder override and the source identity stay.
+// had removed). The owner's reminders and the source identity stay.
 func (q *Queries) UpdateImportedEvent(ctx context.Context, arg UpdateImportedEventParams) error {
 	_, err := q.db.Exec(ctx, updateImportedEvent,
 		arg.Title,

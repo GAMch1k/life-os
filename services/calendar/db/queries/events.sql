@@ -2,11 +2,11 @@
 -- A replay with the same automation idempotency key returns the original row.
 INSERT INTO events (
     title, description, location, all_day, start_at, end_at, start_date, end_date, time_zone,
-    recurrence_frequency, recurrence_interval, recurrence_until, reminders,
+    recurrence_frequency, recurrence_interval, recurrence_until, reminders, use_default_reminders,
     status, cancelled_at, source_kind, source_id, external_uid, removed_from_source_at,
     external_provider, external_id, automation_idempotency_key, automation_payload_hash
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
 ON CONFLICT (automation_idempotency_key) WHERE automation_idempotency_key IS NOT NULL DO UPDATE SET automation_idempotency_key = EXCLUDED.automation_idempotency_key
 RETURNING *;
 
@@ -142,7 +142,7 @@ SET title = sqlc.arg(title), description = sqlc.narg(description), location = sq
     all_day = sqlc.arg(all_day), start_at = sqlc.narg(start_at), end_at = sqlc.narg(end_at),
     start_date = sqlc.narg(start_date), end_date = sqlc.narg(end_date), time_zone = sqlc.narg(time_zone),
     recurrence_frequency = sqlc.narg(recurrence_frequency), recurrence_interval = sqlc.narg(recurrence_interval),
-    recurrence_until = sqlc.narg(recurrence_until), reminders = sqlc.narg(reminders),
+    recurrence_until = sqlc.narg(recurrence_until), reminders = sqlc.arg(reminders), use_default_reminders = sqlc.arg(use_default_reminders),
     status = sqlc.arg(status), cancelled_at = sqlc.narg(cancelled_at), removed_from_source_at = sqlc.narg(removed_from_source_at),
     updated_at = now()
 WHERE id = sqlc.arg(id) AND updated_at = sqlc.arg(expected_updated_at)

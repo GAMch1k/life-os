@@ -27,23 +27,36 @@ const (
 	maxFilterLength = 100
 )
 
-// resolveSources completes each item from its source: its effectiveReminders
-// (its own reminders when set, else its source's default reminders, else
-// none) and, for an imported event, its source's name. Sources are read only
-// when an item comes from one.
+// resolveSources completes each item from its source and the owner's
+// settings: an imported event's source name, its defaultReminders (its
+// source's defaults, or for a Life OS event the owner's defaults for timed
+// or all-day events) and its effectiveReminders (the defaults when it uses
+// them, then its own, each reminder once). Sources and settings are read
+// only when an item needs them.
 func (h *Handler) resolveSources(ctx context.Context, items []generated.CalendarEvent) error {
 	type summary struct {
 		name      string
 		reminders []generated.Reminder
 	}
 	var summaries map[types.UUID]summary
+	var owner *ownerDefaults
 	for index := range items {
 		item := &items[index]
-		effective := []generated.Reminder{}
-		if item.Reminders != nil {
-			effective = append(effective, *item.Reminders...)
-		}
-		if item.Source.SourceId != nil {
+		defaults := []generated.Reminder{}
+		switch {
+		case item.Source.Kind == generated.EventSourceKindManual:
+			if owner == nil {
+				loaded, err := h.ownerDefaults(ctx)
+				if err != nil {
+					return err
+				}
+				owner = &loaded
+			}
+			defaults = owner.timed
+			if item.AllDay {
+				defaults = owner.allDay
+			}
+		case item.Source.SourceId != nil:
 			if summaries == nil {
 				rows, err := h.queries.ListSourceSummaries(ctx)
 				if err != nil {
@@ -55,24 +68,47 @@ func (h *Handler) resolveSources(ctx context.Context, items []generated.Calendar
 					if err != nil {
 						return err
 					}
-					found := summary{name: row.Name}
-					if reminders != nil {
-						found.reminders = *reminders
-					}
-					summaries[uuid(row.ID)] = found
+					summaries[uuid(row.ID)] = summary{name: row.Name, reminders: remindersOrNone(reminders)}
 				}
 			}
 			if found, ok := summaries[*item.Source.SourceId]; ok {
 				name := found.name
 				item.Source.Name = &name
-				if item.Reminders == nil {
-					effective = append(effective, found.reminders...)
-				}
+				defaults = found.reminders
 			}
 		}
-		item.EffectiveReminders = &effective
+		item.DefaultReminders = defaults
+		item.EffectiveReminders = effectiveReminders(item.UseDefaultReminders, defaults, item.Reminders)
 	}
 	return nil
+}
+
+// effectiveReminders is every reminder that applies: the defaults when they
+// are used, then the event's own, each reminder once.
+func effectiveReminders(useDefaults bool, defaults, own []generated.Reminder) []generated.Reminder {
+	effective := make([]generated.Reminder, 0, len(defaults)+len(own))
+	add := func(reminder generated.Reminder) {
+		for _, existing := range effective {
+			if sameReminder(existing, reminder) {
+				return
+			}
+		}
+		effective = append(effective, reminder)
+	}
+	if useDefaults {
+		for _, reminder := range defaults {
+			add(reminder)
+		}
+	}
+	for _, reminder := range own {
+		add(reminder)
+	}
+	return effective
+}
+
+func sameReminder(a, b generated.Reminder) bool {
+	sameInt := func(x, y *int) bool { return (x == nil && y == nil) || (x != nil && y != nil && *x == *y) }
+	return a.Kind == b.Kind && sameInt(a.MinutesBefore, b.MinutesBefore) && sameInt(a.DaysBefore, b.DaysBefore) && sameString(a.LocalTime, b.LocalTime)
 }
 
 func sourceNotFound() error {
@@ -153,14 +189,7 @@ func (h *Handler) validate(config *sourceConfig) error {
 		*terms = cleaned
 	}
 	if config.DefaultReminders != nil {
-		if len(*config.DefaultReminders) > maxReminders {
-			return fmt.Errorf("a source takes at most %d default reminders", maxReminders)
-		}
-		for _, reminder := range *config.DefaultReminders {
-			if err := validateReminder(reminder); err != nil {
-				return err
-			}
-		}
+		return validateReminders(*config.DefaultReminders, "a source takes at most %d default reminders")
 	}
 	return nil
 }

@@ -14,7 +14,11 @@ An event has a `title`, optional `description` (notes/details) and `location`, i
 
 **Source.** `source.kind` is `manual` (created in Life OS), `ics` (an ICS/iCal feed), or `google` (Google Calendar). Imported events also carry `source.sourceId` (the Calendar source they came from, see [Sources](#sources-ics-feeds)), `source.name` (that source's current name, such as "ZAW", which the Dashboard shows as the event's origin), and `source.externalUid` (their identity there: the ICS `UID`, or `<UID>#<RECURRENCE-ID>` for one occurrence of a recurring ICS event); a source holds each `externalUid` once, so refreshes update in place. The API only creates `manual` events (a `source` in a request body is ignored) and updates never change the source. **Imported events are read-only:** a `PATCH` that names anything but `reminders`, and any `DELETE`, return 409 `managed_by_source`; only their source changes, cancels (`removedFromSourceAt`), and restores them. The legacy `externalReference` (`provider`/`externalId`) is still accepted and returned but deprecated.
 
-**Reminders** are stored intent only; Calendar delivers no notifications. Each reminder is either `{"kind":"relative","minutesBefore":30}` (before the start; an all-day event starts at owner-local midnight) or `{"kind":"localTime","daysBefore":1,"localTime":"19:00"}` (at 19:00 on the owner's wall clock, one calendar day before the event's start date, resolved in the owner's timezone when due, so a pickup on 17 November at 06:00 reminds on 16 November at 19:00, whatever daylight saving does). At most 10 per event. `reminders: null` (the default) means "follow the defaults" — for imported events their source's `defaultReminders` — while `[]` means explicitly none. Every returned event also has `effectiveReminders`: its own reminders when set, else its source's defaults, else none.
+**Reminders** are stored intent only; Calendar delivers no notifications. Each reminder is either `{"kind":"relative","minutesBefore":30}` (before the start; an all-day event starts at owner-local midnight) or `{"kind":"localTime","daysBefore":1,"localTime":"19:00"}` (at 19:00 on the owner's wall clock, one calendar day before the event's start date, resolved in the owner's timezone when due, so a pickup on 17 November at 06:00 reminds on 16 November at 19:00, whatever daylight saving does). They work like Google Calendar's notifications: an event follows its calendar's default reminders while `useDefaultReminders` is true (the default) and adds any number of its own (`reminders`, at most 10) on top, so "1 day before, 3 hours before, 30 minutes before" can all apply at once. The defaults are an imported event's source's `defaultReminders` and, for an event created in Life OS, the owner's defaults from [settings](#settings), one list for timed and one for all-day events. Every returned event has `reminders` (its own), `useDefaultReminders`, `defaultReminders` (the defaults for this event, whether it uses them or not), and `effectiveReminders`: the defaults when used, then its own, each reminder once. A notifier will trigger every effective reminder.
+
+### Settings
+
+`GET /v1/settings` returns the owner's default reminders for the events they create, `defaultReminders.timed` and `defaultReminders.allDay` (at most 10 each, none until first set), and `updatedAt` (null until the first change). `PATCH /v1/settings` replaces the lists it names, for example `{"defaultReminders":{"timed":[{"kind":"relative","minutesBefore":30}]}}`; every Life OS event that uses its defaults follows. The settings live in `calendar_settings`, a single row. Changing them, like changing a source's configuration, is not recorded in Activity.
 
 **Recurrence** (`daily`/`weekly`/`monthly`/`yearly`, `interval`, optional `until`) is stored once with the event and follows iCalendar (RFC 5545) rules: a timed event keeps its wall-clock time in its `timeZone` (else the owner's) across daylight-saving changes, a monthly event on the 31st skips shorter months, and `until` is the latest start of an occurrence. Listing and search **expand** recurring events (below); reading, updating, or deleting by id works on the stored recurring event, so a change applies to every occurrence.
 
@@ -39,7 +43,7 @@ A source has a `name` (the label shown with its events, such as "ZAW"), the feed
 **Reconciliation** (one transaction per refresh, idempotent):
 
 - an event whose UID is new is inserted (active, or cancelled if the feed says `STATUS:CANCELLED`);
-- an event whose feed entry changed is updated in place (same id; the owner's reminder override stays);
+- an event whose feed entry changed is updated in place (same id; the owner's reminders stay);
 - a **future** event that is no longer in the feed (or that the filter now excludes) is cancelled and marked `removedFromSourceAt`: it leaves active views but stays as history — never deleted, never silently kept active;
 - a removed event whose UID comes back is restored (`active`, `removedFromSourceAt` and `cancelledAt` cleared);
 - past events (started before the refresh) are left as they are, so feeds that list only upcoming dates do not cancel history.
@@ -77,7 +81,7 @@ Unset, Calendar leaves an existing ZAW source as it is (and logs that); to remov
 
 **Titles.** For this source only, the trailing ` - <town>, <street>` is removed from each title when it repeats the event's location, which keeps it (`Bioabfall`, `Gelber Sack`, `Papier Tonnen und Container`, `Restmüll Tonnen und Container 14-täglich`). This happens before filtering, so a street whose name contains a waste type cannot bring back an excluded type.
 
-**Removed pickups** (a date ZAW moves or drops) are cancelled by the source and kept as history, like any feed's. The events are read-only in the Calendar UI, labelled "ZAW"; only their reminders can be changed.
+**Removed pickups** (a date ZAW moves or drops) are cancelled by the source and kept as history, like any feed's. The events are read-only in the Calendar UI, labelled "ZAW"; only their reminders can be changed (add your own, or turn the ZAW default off for one pickup).
 
 ## Activity
 
@@ -101,7 +105,7 @@ Source refreshes record one summary event per refresh (see [Sources](#sources-ic
 | --- | --- |
 | `POST /v1/events` | Creates an active manual event (201). Requires `title` and `allDay` plus that kind's start and end. `Idempotency-Key`: an identical repeat returns the original event; reuse with a different body is 409. |
 | `GET /v1/events/{id}` | The event, whatever its status. |
-| `PATCH /v1/events/{id}` | Changes only the named fields; `null` clears a nullable field (`description`, `location`, `timeZone`, `recurrence`, `reminders`, and the start/end fields). Changing `allDay` switches kind: the other kind's fields are cleared and the new kind's start and end must be given. The merged event is validated as a whole; a concurrent change makes the update re-read (409 if it keeps changing). Imported events: only `reminders` (else 409 `managed_by_source`). |
+| `PATCH /v1/events/{id}` | Changes only the named fields; `null` clears a nullable field (`description`, `location`, `timeZone`, `recurrence`, `reminders`, and the start/end fields). Changing `allDay` switches kind: the other kind's fields are cleared and the new kind's start and end must be given. The merged event is validated as a whole; a concurrent change makes the update re-read (409 if it keeps changing). `reminders: null` returns the event to its defaults alone (no own reminders, `useDefaultReminders` true unless the body sets it). Imported events: only `reminders` and `useDefaultReminders` (else 409 `managed_by_source`). |
 | `DELETE /v1/events/{id}` | Deletes a manual event permanently (204); imported events return 409 `managed_by_source`. |
 | `GET /v1/events?from&to` | Events and occurrences overlapping `[from, to)` (`to` must be after `from`), soonest start first. Optional `timeZone`, `includeCancelled`, `sourceKind`, `sourceId`, `limit` (1–100, default 50), and `cursor`. |
 | `GET /v1/events/search?q` | Events whose title, description, or location contain every word of `q` (case-insensitive substring, up to 10 words), across all dates. Optional `from`/`to` (either may be open), `timeZone`, `includeCancelled`, `sourceKind`, `sourceId`, `limit` (1–100, default 20), and `cursor`. |
@@ -110,6 +114,7 @@ Source refreshes record one summary event per refresh (see [Sources](#sources-ic
 | `GET /v1/sources/{id}` | The source. |
 | `PATCH /v1/sources/{id}` | Changes the named fields (`defaultReminders: null` removes them). A new `url` or `filter` drops the validators and schedules a full refresh now. |
 | `DELETE /v1/sources/{id}` | Deletes the source and its events (204). |
+| `GET /v1/settings`, `PATCH /v1/settings` | The owner's default reminders for timed and all-day Life OS events (see [Settings](#settings)). |
 | `POST /v1/sources/{id}/refresh` | Refreshes now and returns the source (200, whatever the outcome); 409 `source_disabled`, `refresh_in_progress`, or `conflict` (the source changed meanwhile). |
 
 Search ranks a word found in the title 3, in the location 2, in the description 1, most relevant first; among equals, events not over yet come first (soonest first), then past ones (most recent first). Listing and search page with an opaque `nextCursor`: pass it back as `cursor` with the same parameters; no `nextCursor` means the last page. A search cursor also keeps the moment that split upcoming from past, so paging stays consistent while time passes.

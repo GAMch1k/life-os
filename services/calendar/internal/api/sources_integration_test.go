@@ -268,11 +268,11 @@ func TestICSSourceImportAndRefresh(t *testing.T) {
 	paper := events[0]
 	if paper.Title != "Papier Tonnen und Container - Musterstadt, Beispielweg" || paper.StartAt.Format(time.RFC3339) != "2026-10-15T04:00:00Z" ||
 		paper.Source.Kind != generated.EventSourceKindIcs || *paper.Source.SourceId != id || !strings.HasSuffix(*paper.Source.ExternalUid, "@mymuell") ||
-		*paper.TimeZone != "Europe/Berlin" || paper.Reminders != nil || paper.Occurrence != nil {
+		*paper.TimeZone != "Europe/Berlin" || len(paper.Reminders) != 0 || !paper.UseDefaultReminders || paper.Occurrence != nil {
 		t.Fatalf("first event = %+v", paper)
 	}
 	// Reminders follow the source's default: the evening before at 19:00.
-	if paper.EffectiveReminders == nil || len(*paper.EffectiveReminders) != 1 || *(*paper.EffectiveReminders)[0].LocalTime != "19:00" {
+	if len(paper.EffectiveReminders) != 1 || *paper.EffectiveReminders[0].LocalTime != "19:00" || len(paper.DefaultReminders) != 1 {
 		t.Fatalf("effective reminders = %+v", paper.EffectiveReminders)
 	}
 
@@ -296,9 +296,20 @@ func TestICSSourceImportAndRefresh(t *testing.T) {
 		t.Errorf("DELETE: %d %s", status, raw)
 	}
 	override := c.event(http.MethodPatch, paperURL, `{"reminders":[{"kind":"localTime","daysBefore":1,"localTime":"20:30"}]}`, http.StatusOK)
-	if *(*override.EffectiveReminders)[0].LocalTime != "20:30" {
-		t.Fatalf("override = %+v", override.EffectiveReminders)
+	// An own reminder is added to the source's: the evening before at 19:00
+	// and at 20:30.
+	if len(override.EffectiveReminders) != 2 || *override.EffectiveReminders[0].LocalTime != "19:00" || *override.EffectiveReminders[1].LocalTime != "20:30" {
+		t.Fatalf("own reminder = %+v", override.EffectiveReminders)
 	}
+	// The source's default can be turned off for one pickup, and back on.
+	if status, raw := c.do(http.MethodPatch, paperURL, `{"useDefaultReminders":false,"title":"Mine"}`); status != http.StatusConflict || !strings.Contains(string(raw), "managed_by_source") {
+		t.Errorf("defaults off with a title: %d %s", status, raw)
+	}
+	quiet := c.event(http.MethodPatch, paperURL, `{"useDefaultReminders":false}`, http.StatusOK)
+	if len(quiet.EffectiveReminders) != 1 || *quiet.EffectiveReminders[0].LocalTime != "20:30" || len(quiet.DefaultReminders) != 1 {
+		t.Fatalf("defaults off = %+v", quiet)
+	}
+	c.event(http.MethodPatch, paperURL, `{"useDefaultReminders":true}`, http.StatusOK)
 
 	// The feed moves the paper pickup to the next day: same event, updated
 	// in place, the owner's reminder kept.
@@ -311,7 +322,7 @@ func TestICSSourceImportAndRefresh(t *testing.T) {
 		t.Fatalf("changed counts = %+v", got)
 	}
 	moved := c.event(http.MethodGet, paperURL, nil, http.StatusOK)
-	if moved.StartAt.Format(time.RFC3339) != "2026-10-16T04:00:00Z" || moved.Reminders == nil || *(*moved.Reminders)[0].LocalTime != "20:30" || moved.Status != generated.Active {
+	if moved.StartAt.Format(time.RFC3339) != "2026-10-16T04:00:00Z" || len(moved.Reminders) != 1 || *moved.Reminders[0].LocalTime != "20:30" || moved.Status != generated.Active {
 		t.Fatalf("moved = %+v", moved)
 	}
 
@@ -514,7 +525,7 @@ func TestICSSourceConfiguration(t *testing.T) {
 	}
 	// Default reminders apply to events without their own.
 	c.source(http.MethodPatch, path, `{"defaultReminders":[{"kind":"relative","minutesBefore":60}],"name":"ZAW"}`, http.StatusOK)
-	if item := c.events(id, false)[0]; len(*item.EffectiveReminders) != 1 || *(*item.EffectiveReminders)[0].MinutesBefore != 60 {
+	if item := c.events(id, false)[0]; len(item.EffectiveReminders) != 1 || *item.EffectiveReminders[0].MinutesBefore != 60 {
 		t.Fatalf("effective reminders = %+v", item.EffectiveReminders)
 	}
 	cleared := c.source(http.MethodPatch, path, `{"defaultReminders":null}`, http.StatusOK)

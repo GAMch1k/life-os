@@ -14,13 +14,13 @@ import (
 const createEvent = `-- name: CreateEvent :one
 INSERT INTO events (
     title, description, location, all_day, start_at, end_at, start_date, end_date, time_zone,
-    recurrence_frequency, recurrence_interval, recurrence_until, reminders,
+    recurrence_frequency, recurrence_interval, recurrence_until, reminders, use_default_reminders,
     status, cancelled_at, source_kind, source_id, external_uid, removed_from_source_at,
     external_provider, external_id, automation_idempotency_key, automation_payload_hash
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
 ON CONFLICT (automation_idempotency_key) WHERE automation_idempotency_key IS NOT NULL DO UPDATE SET automation_idempotency_key = EXCLUDED.automation_idempotency_key
-RETURNING id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at, automation_idempotency_key, automation_payload_hash, location, time_zone, status, cancelled_at, source_kind, source_id, external_uid, removed_from_source_at, reminders
+RETURNING id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at, automation_idempotency_key, automation_payload_hash, location, time_zone, status, cancelled_at, source_kind, source_id, external_uid, removed_from_source_at, reminders, use_default_reminders
 `
 
 type CreateEventParams struct {
@@ -37,6 +37,7 @@ type CreateEventParams struct {
 	RecurrenceInterval       *int32
 	RecurrenceUntil          pgtype.Timestamptz
 	Reminders                []byte
+	UseDefaultReminders      bool
 	Status                   string
 	CancelledAt              pgtype.Timestamptz
 	SourceKind               string
@@ -65,6 +66,7 @@ func (q *Queries) CreateEvent(ctx context.Context, arg CreateEventParams) (Event
 		arg.RecurrenceInterval,
 		arg.RecurrenceUntil,
 		arg.Reminders,
+		arg.UseDefaultReminders,
 		arg.Status,
 		arg.CancelledAt,
 		arg.SourceKind,
@@ -104,6 +106,7 @@ func (q *Queries) CreateEvent(ctx context.Context, arg CreateEventParams) (Event
 		&i.ExternalUid,
 		&i.RemovedFromSourceAt,
 		&i.Reminders,
+		&i.UseDefaultReminders,
 	)
 	return i, err
 }
@@ -121,7 +124,7 @@ func (q *Queries) DeleteEvent(ctx context.Context, id pgtype.UUID) (int64, error
 }
 
 const getEvent = `-- name: GetEvent :one
-SELECT id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at, automation_idempotency_key, automation_payload_hash, location, time_zone, status, cancelled_at, source_kind, source_id, external_uid, removed_from_source_at, reminders FROM events WHERE id = $1
+SELECT id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at, automation_idempotency_key, automation_payload_hash, location, time_zone, status, cancelled_at, source_kind, source_id, external_uid, removed_from_source_at, reminders, use_default_reminders FROM events WHERE id = $1
 `
 
 func (q *Queries) GetEvent(ctx context.Context, id pgtype.UUID) (Event, error) {
@@ -154,12 +157,13 @@ func (q *Queries) GetEvent(ctx context.Context, id pgtype.UUID) (Event, error) {
 		&i.ExternalUid,
 		&i.RemovedFromSourceAt,
 		&i.Reminders,
+		&i.UseDefaultReminders,
 	)
 	return i, err
 }
 
 const listEvents = `-- name: ListEvents :many
-SELECT events.id, events.title, events.description, events.all_day, events.start_at, events.end_at, events.start_date, events.end_date, events.recurrence_frequency, events.recurrence_interval, events.recurrence_until, events.external_provider, events.external_id, events.created_at, events.updated_at, events.automation_idempotency_key, events.automation_payload_hash, events.location, events.time_zone, events.status, events.cancelled_at, events.source_kind, events.source_id, events.external_uid, events.removed_from_source_at, events.reminders, span.starts_at::timestamptz AS starts_at
+SELECT events.id, events.title, events.description, events.all_day, events.start_at, events.end_at, events.start_date, events.end_date, events.recurrence_frequency, events.recurrence_interval, events.recurrence_until, events.external_provider, events.external_id, events.created_at, events.updated_at, events.automation_idempotency_key, events.automation_payload_hash, events.location, events.time_zone, events.status, events.cancelled_at, events.source_kind, events.source_id, events.external_uid, events.removed_from_source_at, events.reminders, events.use_default_reminders, span.starts_at::timestamptz AS starts_at
 FROM events
 CROSS JOIN LATERAL (
     SELECT
@@ -249,6 +253,7 @@ func (q *Queries) ListEvents(ctx context.Context, arg ListEventsParams) ([]ListE
 			&i.Event.ExternalUid,
 			&i.Event.RemovedFromSourceAt,
 			&i.Event.Reminders,
+			&i.Event.UseDefaultReminders,
 			&i.StartsAt,
 		); err != nil {
 			return nil, err
@@ -262,7 +267,7 @@ func (q *Queries) ListEvents(ctx context.Context, arg ListEventsParams) ([]ListE
 }
 
 const listRecurringEvents = `-- name: ListRecurringEvents :many
-SELECT events.id, events.title, events.description, events.all_day, events.start_at, events.end_at, events.start_date, events.end_date, events.recurrence_frequency, events.recurrence_interval, events.recurrence_until, events.external_provider, events.external_id, events.created_at, events.updated_at, events.automation_idempotency_key, events.automation_payload_hash, events.location, events.time_zone, events.status, events.cancelled_at, events.source_kind, events.source_id, events.external_uid, events.removed_from_source_at, events.reminders
+SELECT events.id, events.title, events.description, events.all_day, events.start_at, events.end_at, events.start_date, events.end_date, events.recurrence_frequency, events.recurrence_interval, events.recurrence_until, events.external_provider, events.external_id, events.created_at, events.updated_at, events.automation_idempotency_key, events.automation_payload_hash, events.location, events.time_zone, events.status, events.cancelled_at, events.source_kind, events.source_id, events.external_uid, events.removed_from_source_at, events.reminders, events.use_default_reminders
 FROM events
 CROSS JOIN LATERAL (
     SELECT
@@ -338,6 +343,7 @@ func (q *Queries) ListRecurringEvents(ctx context.Context, arg ListRecurringEven
 			&i.Event.ExternalUid,
 			&i.Event.RemovedFromSourceAt,
 			&i.Event.Reminders,
+			&i.Event.UseDefaultReminders,
 		); err != nil {
 			return nil, err
 		}
@@ -350,7 +356,7 @@ func (q *Queries) ListRecurringEvents(ctx context.Context, arg ListRecurringEven
 }
 
 const searchEvents = `-- name: SearchEvents :many
-SELECT events.id, events.title, events.description, events.all_day, events.start_at, events.end_at, events.start_date, events.end_date, events.recurrence_frequency, events.recurrence_interval, events.recurrence_until, events.external_provider, events.external_id, events.created_at, events.updated_at, events.automation_idempotency_key, events.automation_payload_hash, events.location, events.time_zone, events.status, events.cancelled_at, events.source_kind, events.source_id, events.external_uid, events.removed_from_source_at, events.reminders, ranked.relevance::integer AS relevance, ordering.bucket::integer AS bucket, ordering.sort_key::bigint AS sort_key
+SELECT events.id, events.title, events.description, events.all_day, events.start_at, events.end_at, events.start_date, events.end_date, events.recurrence_frequency, events.recurrence_interval, events.recurrence_until, events.external_provider, events.external_id, events.created_at, events.updated_at, events.automation_idempotency_key, events.automation_payload_hash, events.location, events.time_zone, events.status, events.cancelled_at, events.source_kind, events.source_id, events.external_uid, events.removed_from_source_at, events.reminders, events.use_default_reminders, ranked.relevance::integer AS relevance, ordering.bucket::integer AS bucket, ordering.sort_key::bigint AS sort_key
 FROM events
 CROSS JOIN LATERAL (
     SELECT
@@ -470,6 +476,7 @@ func (q *Queries) SearchEvents(ctx context.Context, arg SearchEventsParams) ([]S
 			&i.Event.ExternalUid,
 			&i.Event.RemovedFromSourceAt,
 			&i.Event.Reminders,
+			&i.Event.UseDefaultReminders,
 			&i.Relevance,
 			&i.Bucket,
 			&i.SortKey,
@@ -485,7 +492,7 @@ func (q *Queries) SearchEvents(ctx context.Context, arg SearchEventsParams) ([]S
 }
 
 const searchRecurringEvents = `-- name: SearchRecurringEvents :many
-SELECT events.id, events.title, events.description, events.all_day, events.start_at, events.end_at, events.start_date, events.end_date, events.recurrence_frequency, events.recurrence_interval, events.recurrence_until, events.external_provider, events.external_id, events.created_at, events.updated_at, events.automation_idempotency_key, events.automation_payload_hash, events.location, events.time_zone, events.status, events.cancelled_at, events.source_kind, events.source_id, events.external_uid, events.removed_from_source_at, events.reminders, ranked.relevance::integer AS relevance
+SELECT events.id, events.title, events.description, events.all_day, events.start_at, events.end_at, events.start_date, events.end_date, events.recurrence_frequency, events.recurrence_interval, events.recurrence_until, events.external_provider, events.external_id, events.created_at, events.updated_at, events.automation_idempotency_key, events.automation_payload_hash, events.location, events.time_zone, events.status, events.cancelled_at, events.source_kind, events.source_id, events.external_uid, events.removed_from_source_at, events.reminders, events.use_default_reminders, ranked.relevance::integer AS relevance
 FROM events
 CROSS JOIN LATERAL (
     SELECT COALESCE(SUM(
@@ -568,6 +575,7 @@ func (q *Queries) SearchRecurringEvents(ctx context.Context, arg SearchRecurring
 			&i.Event.ExternalUid,
 			&i.Event.RemovedFromSourceAt,
 			&i.Event.Reminders,
+			&i.Event.UseDefaultReminders,
 			&i.Relevance,
 		); err != nil {
 			return nil, err
@@ -586,11 +594,11 @@ SET title = $1, description = $2, location = $3,
     all_day = $4, start_at = $5, end_at = $6,
     start_date = $7, end_date = $8, time_zone = $9,
     recurrence_frequency = $10, recurrence_interval = $11,
-    recurrence_until = $12, reminders = $13,
-    status = $14, cancelled_at = $15, removed_from_source_at = $16,
+    recurrence_until = $12, reminders = $13, use_default_reminders = $14,
+    status = $15, cancelled_at = $16, removed_from_source_at = $17,
     updated_at = now()
-WHERE id = $17 AND updated_at = $18
-RETURNING id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at, automation_idempotency_key, automation_payload_hash, location, time_zone, status, cancelled_at, source_kind, source_id, external_uid, removed_from_source_at, reminders
+WHERE id = $18 AND updated_at = $19
+RETURNING id, title, description, all_day, start_at, end_at, start_date, end_date, recurrence_frequency, recurrence_interval, recurrence_until, external_provider, external_id, created_at, updated_at, automation_idempotency_key, automation_payload_hash, location, time_zone, status, cancelled_at, source_kind, source_id, external_uid, removed_from_source_at, reminders, use_default_reminders
 `
 
 type UpdateEventParams struct {
@@ -607,6 +615,7 @@ type UpdateEventParams struct {
 	RecurrenceInterval  *int32
 	RecurrenceUntil     pgtype.Timestamptz
 	Reminders           []byte
+	UseDefaultReminders bool
 	Status              string
 	CancelledAt         pgtype.Timestamptz
 	RemovedFromSourceAt pgtype.Timestamptz
@@ -632,6 +641,7 @@ func (q *Queries) UpdateEvent(ctx context.Context, arg UpdateEventParams) (Event
 		arg.RecurrenceInterval,
 		arg.RecurrenceUntil,
 		arg.Reminders,
+		arg.UseDefaultReminders,
 		arg.Status,
 		arg.CancelledAt,
 		arg.RemovedFromSourceAt,
@@ -666,6 +676,7 @@ func (q *Queries) UpdateEvent(ctx context.Context, arg UpdateEventParams) (Event
 		&i.ExternalUid,
 		&i.RemovedFromSourceAt,
 		&i.Reminders,
+		&i.UseDefaultReminders,
 	)
 	return i, err
 }

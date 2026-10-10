@@ -46,9 +46,17 @@ Final run on `master` (after P10-06), one job at a time:
 - **The verification stack imported the owner's feed** (above).
 - **The Codex actions smoke was stale** since Phase 8 (Human Review) and BUG-12 (owner-timezone dates); fixed.
 
+## Follow-up: P10-08 reminder defaults
+
+The owner asked what "Default reminders" meant (BUG-28: the details showed that label instead of the reminders that apply) and asked for Google Calendar-style reminders: several at once, defaults and an event's own together. Since P10-08 every event follows its calendar's default reminders and adds its own on top; Life OS events have owner defaults for timed and all-day events (`/v1/settings`), imported events their source's, and the Dashboard's Reminder defaults dialog edits both. Migration 000007 keeps every existing event's reminders.
+
+- Calendar unit and integration tests, including the migration up and down: passed.
+- `tools/check`: passed. Browser suite: 56 passed, 22 skipped, 0 failed, with two new specs: several own reminders on top of a default, and Reminder defaults for the owner and a source.
+- `make calendar-ai-smoke` has a sixth step: with a 30-minute default, "remind me a day before and 3 hours before" gives the new event both reminders of its own plus the default. Its first run found BUG-31: Codex planned the haircut without an end, Calendar refused it, and the capture retried. A new event without an end now lasts one hour (all-day: one day), and the smoke passes all six steps. Benchmark after the prompt changes: 20/20.
+
 ## Known limitations accepted for Phase 10
 
-- Phase 10 stores reminder intent only; nothing sends notifications yet.
+- Phase 10 stores reminder intent only; nothing sends notifications yet. A notifier will trigger every effective reminder.
 - Manual recurring events have no per-occurrence exceptions. ICS `RANGE=THISANDFUTURE` is treated as a single occurrence, and VALARMs in feeds are not imported (source defaults apply).
 - A manual "Refresh now" is attributed to the feed (`system:ics-<slug>`); who asked is in `data.requestedBy`.
 - Human Review stores the chosen Calendar event in Inbox's `taskId` field; a neutral `candidateId` would be a later cleanup.
