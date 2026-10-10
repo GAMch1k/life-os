@@ -16,6 +16,7 @@ import (
 // Defines values for ActivityActorKind.
 const (
 	Agent  ActivityActorKind = "agent"
+	Dev    ActivityActorKind = "dev"
 	System ActivityActorKind = "system"
 	User   ActivityActorKind = "user"
 )
@@ -24,6 +25,8 @@ const (
 func (e ActivityActorKind) Valid() bool {
 	switch e {
 	case Agent:
+		return true
+	case Dev:
 		return true
 	case System:
 		return true
@@ -57,13 +60,14 @@ func (e ActivityOutcome) Valid() bool {
 
 // ActivityActor defines model for ActivityActor.
 type ActivityActor struct {
+	// Kind user = the owner; agent = the Life OS AI (for example the Inbox processor or MCP); system = a Life OS component such as the Voice worker; dev = a development tool or agent working on Life OS, such as Claude Code.
 	Kind ActivityActorKind `json:"kind"`
 
-	// Name Optional actor name, for example codex-inbox-processor or voice-worker.
+	// Name Optional actor name, for example codex-inbox-processor, voice-worker, or claude-code.
 	Name *string `json:"name,omitempty"`
 }
 
-// ActivityActorKind defines model for ActivityActor.Kind.
+// ActivityActorKind user = the owner; agent = the Life OS AI (for example the Inbox processor or MCP); system = a Life OS component such as the Voice worker; dev = a development tool or agent working on Life OS, such as Claude Code.
 type ActivityActorKind string
 
 // ActivityEvent defines model for ActivityEvent.

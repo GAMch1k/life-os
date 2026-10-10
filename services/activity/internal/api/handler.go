@@ -132,7 +132,7 @@ func recordParams(body generated.ActivityEventCreateRequest) (store.RecordActivi
 	case blank(body.CorrelationId, 128):
 		return store.RecordActivityEventParams{}, errors.New("correlationId is required")
 	case !body.Actor.Kind.Valid():
-		return store.RecordActivityEventParams{}, errors.New("actor kind must be user, agent, or system")
+		return store.RecordActivityEventParams{}, errors.New("actor kind must be user, agent, system, or dev")
 	case body.Actor.Name != nil && len(*body.Actor.Name) > 128:
 		return store.RecordActivityEventParams{}, errors.New("actor name is too long")
 	case !body.Outcome.Valid():
