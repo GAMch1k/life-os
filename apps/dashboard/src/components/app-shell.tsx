@@ -5,7 +5,6 @@ import {
   CalendarDays,
   CheckSquare2,
   HeartPulse,
-  CircleUserRound,
   Inbox,
   Landmark,
   LayoutDashboard,
@@ -14,11 +13,11 @@ import {
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-import { Button } from "@/components/ui/button";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { cn } from "@/lib/utils";
 
 const navigation = [
-  { href: "/", label: "Overview", icon: LayoutDashboard },
+  { href: "/", label: "Home", icon: LayoutDashboard },
   { href: "/finance", label: "Finance", icon: Landmark },
   { href: "/tasks", label: "Tasks", icon: CheckSquare2 },
   { href: "/inbox", label: "Inbox", icon: Inbox },
@@ -27,66 +26,66 @@ const navigation = [
   { href: "/status", label: "Status", icon: HeartPulse },
 ] as const;
 
+function isCurrent(pathname: string, href: string) {
+  return href === "/"
+    ? pathname === "/"
+    : pathname === href || pathname.startsWith(`${href}/`);
+}
+
 export function AppShell({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   const pathname = usePathname();
   return (
-    <div className="bg-muted/40 min-h-screen">
+    <div className="bg-canvas min-h-dvh">
       <a
-        className="bg-background focus:ring-ring sr-only z-50 rounded-md px-4 py-2 font-medium focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:ring-2"
+        className="bg-background focus:ring-ring sr-only z-50 rounded-md px-4 py-2 font-medium focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:ring-2"
         href="#main-content"
       >
         Skip to content
       </a>
       <header className="bg-background/95 supports-[backdrop-filter]:bg-background/80 sticky top-0 z-10 border-b backdrop-blur">
-        <div className="mx-auto flex h-16 max-w-screen-2xl items-center justify-between px-4 sm:px-6">
-          <div className="flex items-center gap-3">
-            <div className="bg-primary text-primary-foreground flex size-9 items-center justify-center rounded-xl shadow-sm">
-              <Sparkles aria-hidden="true" className="size-4" />
-            </div>
-            <div>
-              <p className="font-semibold tracking-tight">Life OS</p>
-              <p className="text-muted-foreground text-xs">
-                Personal workspace
-              </p>
-            </div>
-          </div>
-
-          <Button
-            aria-label="Account controls are not available yet"
-            disabled
-            size="icon"
-            variant="ghost"
+        <div className="mx-auto flex h-12 max-w-screen-2xl items-center justify-between gap-3 px-3 sm:px-4">
+          <Link
+            className="focus-visible:ring-ring flex items-center gap-2 rounded-md text-sm font-semibold tracking-tight outline-none focus-visible:ring-2"
+            href="/"
           >
-            <CircleUserRound aria-hidden="true" />
-          </Button>
+            <span className="bg-primary text-primary-foreground flex size-7 items-center justify-center rounded-lg">
+              <Sparkles aria-hidden="true" className="size-3.5" />
+            </span>
+            Life OS
+          </Link>
+          <ThemeToggle />
         </div>
       </header>
 
-      <div className="mx-auto grid max-w-screen-2xl md:grid-cols-[15rem_minmax(0,1fr)]">
-        <aside className="bg-background hidden min-h-[calc(100vh-4rem)] border-r p-4 md:block">
-          <nav aria-label="Main navigation" className="space-y-1">
-            {navigation.map(({ href, icon: Icon, label }) => (
-              <Link
-                className={cn(
-                  "focus-visible:ring-ring flex h-10 items-center gap-3 rounded-lg px-3 text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none",
-                  pathname === href
-                    ? "bg-secondary text-secondary-foreground"
-                    : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
-                )}
-                href={href}
-                key={label}
-              >
-                <Icon aria-hidden="true" className="size-4" />
-                <span>{label}</span>
-              </Link>
-            ))}
+      <div className="mx-auto grid max-w-screen-2xl md:grid-cols-[12rem_minmax(0,1fr)]">
+        <aside className="bg-background sticky top-12 hidden h-[calc(100dvh-3rem)] self-start overflow-y-auto border-r p-2 md:block">
+          <nav aria-label="Main navigation" className="space-y-0.5">
+            {navigation.map(({ href, icon: Icon, label }) => {
+              const current = isCurrent(pathname, href);
+              return (
+                <Link
+                  aria-current={current ? "page" : undefined}
+                  className={cn(
+                    "focus-visible:ring-ring flex h-8 items-center gap-2.5 rounded-md px-2.5 text-sm font-medium transition-colors outline-none focus-visible:ring-2",
+                    current
+                      ? "bg-secondary text-secondary-foreground"
+                      : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+                  )}
+                  href={href}
+                  key={href}
+                >
+                  <Icon aria-hidden="true" className="size-4" />
+                  {label}
+                </Link>
+              );
+            })}
           </nav>
         </aside>
 
         <main
-          className="min-w-0 p-4 pb-28 sm:p-6 sm:pb-28 md:pb-8 lg:p-10"
+          className="min-w-0 px-3 pt-3 pb-[calc(4.5rem+env(safe-area-inset-bottom))] sm:px-4 sm:pt-4 md:p-5 lg:p-6"
           id="main-content"
         >
           {children}
@@ -95,24 +94,28 @@ export function AppShell({
 
       <nav
         aria-label="Mobile navigation"
-        className="bg-background/95 supports-[backdrop-filter]:bg-background/85 fixed inset-x-0 bottom-0 z-20 border-t px-2 pt-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))] backdrop-blur md:hidden"
+        className="bg-background/95 supports-[backdrop-filter]:bg-background/85 fixed inset-x-0 bottom-0 z-20 border-t px-1 pt-1 pb-[calc(0.25rem+env(safe-area-inset-bottom))] backdrop-blur md:hidden"
       >
-        <div className="mx-auto grid max-w-lg grid-cols-7">
-          {navigation.map(({ href, icon: Icon, label }) => (
-            <Link
-              className={cn(
-                "focus-visible:ring-ring flex min-h-14 flex-col items-center justify-center gap-1 rounded-lg px-1 text-[0.6875rem] font-medium transition-colors focus-visible:ring-2 focus-visible:outline-none",
-                pathname === href
-                  ? "text-foreground"
-                  : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
-              )}
-              href={href}
-              key={label}
-            >
-              <Icon aria-hidden="true" className="size-5" />
-              <span>{label}</span>
-            </Link>
-          ))}
+        <div className="mx-auto grid max-w-lg grid-cols-7 gap-0.5">
+          {navigation.map(({ href, icon: Icon, label }) => {
+            const current = isCurrent(pathname, href);
+            return (
+              <Link
+                aria-current={current ? "page" : undefined}
+                className={cn(
+                  "focus-visible:ring-ring flex min-h-12 min-w-0 flex-col items-center justify-center gap-0.5 rounded-md text-[0.625rem] leading-tight font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-inset",
+                  current
+                    ? "bg-secondary text-secondary-foreground"
+                    : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+                )}
+                href={href}
+                key={href}
+              >
+                <Icon aria-hidden="true" className="size-5" />
+                <span className="max-w-full truncate">{label}</span>
+              </Link>
+            );
+          })}
         </div>
       </nav>
     </div>

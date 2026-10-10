@@ -5,12 +5,16 @@ import { type ChangeEvent, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { financeClient } from "@/lib/api/finance-client";
 import type { components } from "@/lib/api/generated/finance";
+import { CSV_COLUMNS, csvFileProblem } from "@/lib/finance-csv";
 
 type CsvImport = components["schemas"]["CsvImport"];
 
+/**
+ * The CSV import button and its feedback. It renders inside a wrapping flex
+ * row: the button sits in the row, the feedback takes a full-width line.
+ */
 export function FinanceImport() {
   const router = useRouter();
   const [error, setError] = useState<string>();
@@ -22,14 +26,11 @@ export function FinanceImport() {
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
-    if (!file.name.toLowerCase().endsWith(".csv")) {
-      setResult(undefined);
-      setError("Choose a .csv file.");
-      return;
-    }
-
-    setError(undefined);
     setResult(undefined);
+    const problem = csvFileProblem(file);
+    setError(problem);
+    if (problem) return;
+
     startTransition(async () => {
       const { data, error: requestError } = await financeClient.POST(
         "/v1/imports/csv",
@@ -41,7 +42,7 @@ export function FinanceImport() {
       );
       if (requestError || !data) {
         setError(
-          "The CSV could not be imported. Check the file and try again.",
+          `The CSV could not be imported. Expected columns: ${CSV_COLUMNS}.`,
         );
         return;
       }
@@ -51,44 +52,39 @@ export function FinanceImport() {
   }
 
   return (
-    <section className="rounded-lg border p-4 sm:col-span-2 lg:col-span-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <p className="text-sm font-medium">Import transactions</p>
-          <p className="text-muted-foreground mt-1 text-xs">
-            CSV: account_id, occurred_on, amount_minor, currency, external_id;
-            category_id and note are optional.
-          </p>
-        </div>
-        <Button
-          disabled={isPending}
-          onClick={() => inputRef.current?.click()}
-          size="sm"
-          type="button"
-          variant="outline"
-        >
-          {isPending ? (
-            <LoaderCircle aria-hidden="true" className="animate-spin" />
-          ) : (
-            <FileUp aria-hidden="true" />
-          )}
-          Select CSV
-        </Button>
-      </div>
-      <Input
+    <>
+      <Button
+        disabled={isPending}
+        onClick={() => inputRef.current?.click()}
+        size="sm"
+        type="button"
+        variant="outline"
+      >
+        {isPending ? (
+          <LoaderCircle aria-hidden="true" className="animate-spin" />
+        ) : (
+          <FileUp aria-hidden="true" />
+        )}
+        Import CSV
+      </Button>
+      {/* A plain input: the styled Input is full width, which made the page
+          scroll sideways even with sr-only (BUG-11). The button opens it. */}
+      <input
         accept=".csv,text/csv"
+        aria-hidden="true"
         className="sr-only"
         disabled={isPending}
         onChange={upload}
         ref={inputRef}
+        tabIndex={-1}
         type="file"
       />
       {result ? (
-        <div className="mt-3 text-sm" role="status">
+        <div className="basis-full text-sm" role="status">
           Imported {result.created}; skipped {result.skipped}; failed{" "}
           {result.failed}.
           {result.errors.length ? (
-            <ul className="text-destructive mt-2 list-disc pl-5">
+            <ul className="text-destructive mt-1 list-disc pl-5 wrap-anywhere">
               {result.errors.map((item) => (
                 <li key={`${item.row}-${item.message}`}>
                   Row {item.row}: {item.message}
@@ -98,7 +94,14 @@ export function FinanceImport() {
           ) : null}
         </div>
       ) : null}
-      {error ? <p className="text-destructive mt-3 text-sm">{error}</p> : null}
-    </section>
+      {error ? (
+        <p
+          className="text-destructive basis-full text-sm wrap-anywhere"
+          role="alert"
+        >
+          {error}
+        </p>
+      ) : null}
+    </>
   );
 }

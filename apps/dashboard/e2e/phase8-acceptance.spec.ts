@@ -166,7 +166,7 @@ test.describe("Phase 8 acceptance", () => {
   test("2. the browser edits an existing Task", async ({ page, request }) => {
     await page.goto("/tasks");
     await page.getByLabel(`Edit ${undated.title}`).click();
-    await page.getByLabel("Task title").fill(electrician);
+    await page.getByLabel("Task title", { exact: true }).fill(electrician);
     await page.getByRole("button", { name: "Save" }).click();
     await expect(page.getByText(electrician)).toBeVisible();
     await page.reload();

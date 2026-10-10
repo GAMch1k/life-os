@@ -1,12 +1,26 @@
 import { financeClient } from "@/lib/api/finance-client";
+import { DATE_LOCALE, dayKey, userTimeZone } from "@/lib/time-zone";
+
+type MonthlySummary = NonNullable<Awaited<ReturnType<typeof loadSummary>>>;
 
 export type FinanceSummaryState =
-  | {
-      kind: "ready";
-      summary: NonNullable<Awaited<ReturnType<typeof loadSummary>>>;
-    }
-  | { kind: "empty" }
-  | { kind: "unavailable" };
+  | { kind: "ready"; month: string; summary: MonthlySummary }
+  | { kind: "empty"; month: string }
+  | { kind: "unavailable"; month: string };
+
+/** The current month (YYYY-MM) in the owner's timezone. */
+export function currentMonth(now: Date, timeZone: string) {
+  return dayKey(now, timeZone).slice(0, 7);
+}
+
+/** A YYYY-MM month as text, for example "October 2026". */
+export function monthLabel(month: string) {
+  return new Intl.DateTimeFormat(DATE_LOCALE, {
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(`${month}-01T00:00:00Z`));
+}
 
 async function loadSummary(month: string) {
   try {
@@ -25,11 +39,11 @@ async function loadSummary(month: string) {
 }
 
 export async function getFinanceSummary(): Promise<FinanceSummaryState> {
-  const month = new Date().toISOString().slice(0, 7);
+  const month = currentMonth(new Date(), userTimeZone());
   const summary = await loadSummary(month);
 
   if (!summary) {
-    return { kind: "unavailable" };
+    return { kind: "unavailable", month };
   }
   if (
     summary.totalBalance.amount === 0 &&
@@ -37,8 +51,8 @@ export async function getFinanceSummary(): Promise<FinanceSummaryState> {
     summary.spending.amount === 0 &&
     summary.spendingByCategory.length === 0
   ) {
-    return { kind: "empty" };
+    return { kind: "empty", month };
   }
 
-  return { kind: "ready", summary };
+  return { kind: "ready", month, summary };
 }

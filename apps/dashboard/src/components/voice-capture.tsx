@@ -106,37 +106,37 @@ export function VoiceCapture() {
     else void start();
   }
 
+  // Presentation: an inline control for the capture card's action row. The
+  // status line stays empty until there is something to report; on phones it
+  // wraps below the button.
   return (
-    <div className="flex items-center gap-3">
-      <span className="bg-background flex size-10 items-center justify-center rounded-xl border shadow-sm">
-        <Mic aria-hidden="true" className="size-4" />
-      </span>
-      <div className="min-w-0 flex-1">
-        <p className="text-sm font-medium">Voice capture</p>
-        <p aria-live="polite" className="text-muted-foreground text-xs">
-          {message}
-        </p>
-      </div>
+    <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
       {state === "recording" ? (
-        <Button onClick={stop} size="sm" variant="destructive">
+        <Button onClick={stop} size="lg" variant="destructive">
           <Square /> Stop
         </Button>
       ) : state === "uploading" ? (
-        <Button disabled size="sm">
+        <Button disabled size="lg" variant="outline">
           <LoaderCircle className="animate-spin" /> Sending
         </Button>
       ) : state === "failed" ||
         (job &&
           isVoiceJobTerminal(job.status) &&
           job.status !== "succeeded") ? (
-        <Button onClick={retry} size="sm" variant="outline">
+        <Button onClick={retry} size="lg" variant="outline">
           <RotateCcw /> Retry
         </Button>
       ) : (
-        <Button onClick={start} size="sm">
-          <Mic /> {job ? "Record again" : "Record"}
+        <Button onClick={start} size="lg" variant="outline">
+          <Mic /> Record
         </Button>
       )}
+      <p
+        aria-live="polite"
+        className="text-muted-foreground min-w-0 basis-full text-xs sm:flex-1 sm:basis-0"
+      >
+        {state === "idle" && !job ? null : message}
+      </p>
     </div>
   );
 }

@@ -25,6 +25,22 @@ export function userTimeZone() {
     : DEFAULT_TIME_ZONE;
 }
 
+const formats = new Map<string, Intl.DateTimeFormat>();
+
+/** A cached DATE_LOCALE formatter for instants in the given timezone. */
+export function dateTimeFormat(
+  timeZone: string,
+  options: Intl.DateTimeFormatOptions,
+) {
+  const key = `${timeZone}|${JSON.stringify(options)}`;
+  let format = formats.get(key);
+  if (!format) {
+    format = new Intl.DateTimeFormat(DATE_LOCALE, { ...options, timeZone });
+    formats.set(key, format);
+  }
+  return format;
+}
+
 const dayKeyFormats = new Map<string, Intl.DateTimeFormat>();
 
 /** The calendar day (YYYY-MM-DD) of an instant in the given timezone. */

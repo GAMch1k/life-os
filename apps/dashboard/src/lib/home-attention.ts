@@ -4,6 +4,13 @@ import { tasksClient } from "@/lib/api/tasks-client";
 import type { CalendarEvent } from "@/lib/calendar-summary";
 import type { InboxItem } from "@/lib/inbox-summary";
 import type { Task } from "@/lib/tasks-summary";
+import {
+  addDays,
+  dayKey,
+  DEFAULT_TIME_ZONE,
+  startOfDay,
+  userTimeZone,
+} from "@/lib/time-zone";
 
 // Home is a read-only projection over the owning services' list APIs. It only
 // decides what to surface; every change happens in the dedicated workspaces.
@@ -25,16 +32,17 @@ export type HomeAttention = {
 export const HOME_LIST_LIMIT = 100;
 export const UNSCHEDULED_PREVIEW = 3;
 
-export function startOfUtcDay(now: Date) {
-  const start = new Date(now);
-  start.setUTCHours(0, 0, 0, 0);
-  return start;
-}
-
-export function endOfUtcDay(now: Date) {
-  const end = new Date(now);
-  end.setUTCHours(23, 59, 59, 999);
-  return end;
+/**
+ * The owner's current day: its first instant and its last millisecond, in
+ * the owner's timezone, so "overdue" and "due today" match the Tasks page
+ * rather than UTC midnight.
+ */
+export function ownerToday(now: Date, timeZone: string) {
+  const today = dayKey(now, timeZone);
+  return {
+    start: startOfDay(today, timeZone),
+    end: new Date(startOfDay(addDays(today, 1), timeZone).getTime() - 1),
+  };
 }
 
 /** `null` in the result means the owning service could not be read. */
@@ -46,9 +54,10 @@ export function toHomeAttention(
     events: ListResult<CalendarEvent>;
   },
   now: Date,
+  timeZone: string = DEFAULT_TIME_ZONE,
 ): HomeAttention {
   const { review, urgent, open, events } = results;
-  const start = startOfUtcDay(now);
+  const { start } = ownerToday(now, timeZone);
   const isOverdue = (task: Task) =>
     task.dueAt !== undefined &&
     task.dueAt !== null &&
@@ -90,6 +99,7 @@ export function unavailableOnFailure<T>(request: Promise<ListResult<T>>) {
 
 export async function getHomeAttention(): Promise<HomeAttention> {
   const now = new Date();
+  const timeZone = userTimeZone();
   const eventWindowEnd = new Date(now);
   eventWindowEnd.setUTCDate(eventWindowEnd.getUTCDate() + 30);
   const [review, urgent, open, events] = await Promise.all([
@@ -104,7 +114,7 @@ export async function getHomeAttention(): Promise<HomeAttention> {
         params: {
           query: {
             completed: false,
-            dueBefore: endOfUtcDay(now).toISOString(),
+            dueBefore: ownerToday(now, timeZone).end.toISOString(),
             includeUndated: false,
             limit: HOME_LIST_LIMIT,
           },
@@ -128,5 +138,5 @@ export async function getHomeAttention(): Promise<HomeAttention> {
       }),
     ),
   ]);
-  return toHomeAttention({ review, urgent, open, events }, now);
+  return toHomeAttention({ review, urgent, open, events }, now, timeZone);
 }
