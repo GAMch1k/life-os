@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import path from "node:path";
 
 import { expect, test, type APIRequestContext, type Page } from "./fixtures";
@@ -15,6 +15,19 @@ const enabled = Boolean(
 );
 const repoRoot = path.resolve(process.cwd(), "../..");
 const stamp = Date.now();
+
+// Chain 4 records through the browser's real MediaRecorder; Chromium's fake
+// microphone plays the committed spoken fixture once per capture.
+test.use({
+  launchOptions: {
+    args: [
+      "--use-fake-ui-for-media-stream",
+      "--use-fake-device-for-media-stream",
+      `--use-file-for-fake-audio-capture=${path.join(__dirname, "fixtures", "chicken.wav")}%noloop`,
+    ],
+  },
+  permissions: ["microphone"],
+});
 
 type Task = {
   id: string;
@@ -193,42 +206,22 @@ test.describe("Phase 8 acceptance", () => {
     request,
   }) => {
     const chicken = await createTask(request, "Buy chicken for dinner");
-    const bytes = Array.from(
-      readFileSync(process.env.LIFE_OS_E2E_PHASE8_VOICE!),
-    );
-    await page.addInitScript((audioBytes: number[]) => {
-      const stream = { getTracks: () => [{ stop: () => undefined }] };
-      class FixtureMediaRecorder {
-        mimeType = "audio/wav";
-        ondataavailable?: (event: { data: Blob }) => void;
-        onstop?: () => void;
-        start() {}
-        stop() {
-          this.ondataavailable?.({
-            data: new Blob([Uint8Array.from(audioBytes).buffer], {
-              type: this.mimeType,
-            }),
-          });
-          this.onstop?.();
-        }
-      }
-      Object.defineProperty(navigator, "mediaDevices", {
-        configurable: true,
-        value: { getUserMedia: async () => stream },
-      });
-      Object.defineProperty(window, "MediaRecorder", {
-        configurable: true,
-        value: FixtureMediaRecorder,
-      });
-    }, bytes);
+    // The browser's own MediaRecorder records the spoken fixture from
+    // Chromium's fake microphone (see test.use above), as in voice-capture.
     await page.goto("/");
-    await page.getByRole("button", { name: "Record" }).click();
+    await page
+      .getByRole("button", { name: /record|voice|dictate/i })
+      .first()
+      .click();
+    const stop = page.getByRole("button", { name: /stop/i });
+    await expect(stop).toBeVisible();
+    await page.waitForTimeout(4_500);
     const upload = page.waitForResponse(
       (response) =>
         response.request().method() === "POST" &&
         response.url().includes("/api/voice/v1/audio-jobs"),
     );
-    await page.getByRole("button", { name: "Stop" }).click();
+    await stop.click();
     const job = (await (await upload).json()) as { id: string };
     let inboxItemId = "";
     await expect
