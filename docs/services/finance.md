@@ -3,7 +3,8 @@
 Finance is the owner's personal-finance tool: accounts and their balances,
 every transaction, manual and cash entries, categories with simple rules, CSV
 imports, bank syncs pushed by the banking integration service, monthly
-summaries, and monthly budgets with their notifications. It keeps them in `finance_db` and is their only source of truth:
+summaries, monthly budgets with their notifications, and subscriptions with
+the money alerts (renewals, large debits, low balances). It keeps them in `finance_db` and is their only source of truth:
 clients (the Dashboard's Finance workspace, MCP, the banking service) use its
 API, never its database. It does not create Tasks or Calendar events. Gateway
 base: `/api/finance`; the contract is `services/finance/api/openapi.yaml`;
@@ -24,7 +25,9 @@ An account has a `name` (unique; 409 `account_name_taken`), a `kind` (`bank`,
 is the sum of the pending ones, which are not in the balance;
 `transactionCount` counts both. A bank account that reported a booked balance
 shows the bank's balance instead, as of `balanceAsOf`, with the bank's
-`available` balance next to it (see [Bank syncs](#bank-syncs)).
+`available` balance next to it (see [Bank syncs](#bank-syncs)). `lowBalance`
+is true while the low-balance alert is on and the account is below its
+threshold (see [Alerts](#alerts)).
 
 `GET /v1/accounts` lists the active accounts, the built-in Cash account first,
 then by name (`includeArchived=true` adds archived ones); `POST /v1/accounts`
@@ -315,6 +318,133 @@ A summary due while Finance was down is still sent during the first week of
 the month. Without `NOTIFICATIONS_SERVICE_URL` nothing is sent (logged at
 startup).
 
+## Subscriptions
+
+A subscription is a recurring payment. Finance finds them itself, in
+deterministic code (no AI), and the owner confirms or ignores each one, or
+marks a transaction as one.
+
+**Detection.** Finance looks at booked money out of the last 800 days (any
+account, archived ones too), leaving out transfer categories (money moved
+between own accounts is not a payment), and groups it by merchant:
+
+- A known service named in the counterparty or the description, as the
+  default Subscriptions rules match: Netflix, Spotify, Disney+ (also Disney
+  Plus), Amazon Prime (also Prime Video), YouTube Premium, iCloud, Apple
+  Music, Google One, Audible, DAZN, Microsoft 365. So "PayPal Europe …" with
+  "Ihr Einkauf bei Spotify AB", or a Google Play payment naming YouTube
+  Premium, groups with the direct ones. Words match whole ("Inaudible" is not
+  Audible).
+- Else, for an intermediary counterparty (PayPal, Google Payment/Google
+  Play/"GOOGLE *…", Apple/iTunes, Klarna) the merchant it paid: the card
+  descriptor after "*" ("GOOGLE *Duolingo" → "Duolingo via Google"), else
+  "Einkauf bei X" / "purchase at X" in the description ("Patreon via
+  PayPal"), else the description's first words.
+- Else the counterparty, compared without case, punctuation, words with
+  digits (references, store numbers), and legal forms: "Stadtwerke Darmstadt
+  GmbH" and "STADTWERKE DARMSTADT GMBH 4711" are one merchant.
+- Else, with no counterparty, the description's first three words without
+  digits, months, and SEPA terms ("Miete Oktober 2026 Wohnung 3" →
+  "Miete Wohnung").
+
+Within a merchant (in the currency of its latest payment), payments of
+similar amounts (within 10% or 2 units of the currency, €2, whichever is
+more) form a group, starting from the latest. A group is regular when its
+latest payments follow each other at one cadence's interval: weekly 6–8
+days, monthly 26–35, quarterly 84–98, yearly 350–380; at least three in a
+row, or two for yearly (then with `confidence` low). A shorter gap ends the
+run, so a café paid at random is not a subscription. A run whose next
+payment is already more than a week late is not suggested. Each merchant
+has at most one subscription per cadence. The typical amount is the median
+of the last three payments; the next expected date is the last payment
+plus the cadence (a week, or one, three, or twelve months; the 31st becomes
+the month's last day).
+
+Detection runs in the background loop (see [Alerts](#alerts)): at startup,
+right after every transaction change, CSV import, bank sync, rule
+application, account or setting change, and once a day. It stores each
+candidate as a subscription with state `suggested`, the cadence, typical
+amount, last and next date, account and category of the latest payment, and
+the matched transactions. Later runs keep a suggestion up to date and remove
+it when its payments are no longer regular. A **confirmed** subscription
+follows its merchant's payments of a similar amount: the latest gives its
+last and next date, the median of the last three its amount. An **ignored**
+one is never touched again, and detection never suggests the same merchant
+and cadence again. A name, amount, or category the owner set stays.
+
+**Renewal.** A confirmed subscription's `renewal` is `upcoming` from the
+renewal reminders' lead days before its next date (today included),
+`overdue` up to a week after it without a payment, `missed` more than a week
+late (shown, never alerted), and `scheduled` otherwise.
+
+**API.** `GET /v1/subscriptions` lists them, suggested first, then
+confirmed, then ignored (`state` filters), each with `amount`,
+`monthlyAmount` (weekly × 52/12, quarterly ÷ 3, yearly ÷ 12), `transactionIds`
+(latest first), `source` (`detected` or `manual`), and `totals`: the monthly
+equivalent of the confirmed ones in the default currency, how many, and how
+many in other currencies are left out. `POST /v1/subscriptions/{id}/confirm`
+and `/ignore` change the state (ignored ones can be confirmed again; a
+repeat changes nothing). `PATCH /v1/subscriptions/{id}` changes `name`,
+`cadence` (moving the next date), `amountMinor`, and `categoryId` (`null`
+removes it). `DELETE` removes one; its transactions stay, and detection may
+suggest it again (ignore it instead to keep it away).
+
+**This is a subscription.** `POST /v1/subscriptions` with a money-out
+`transactionId` (400 `invalid_request` for money in or a transaction with
+neither counterparty nor description, 400 `unknown_transaction`) makes a
+confirmed subscription (`source` manual) named after the merchant, with the
+transaction's amount and category, repeating at `cadence` (default
+monthly); optional `name` and `categoryId`. It follows the merchant's other
+similar payments at once (201). When the merchant already has a
+subscription with this cadence, that one is confirmed (if it was not), takes
+the transaction, and comes back with 200.
+
+## Alerts
+
+`GET /v1/settings` and `PUT /v1/settings` read and replace the alert
+settings (every field required; amounts are minor units of
+`FINANCE_DEFAULT_CURRENCY`):
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `largeDebit` | on, €250 | Money out of at least `thresholdMinor` (at least 1) |
+| `lowBalance` | on, €100 | A bank or cash account below `thresholdMinor` (0 or more) |
+| `renewals` | on, 3 days | A reminder `leadDays` (0–30; 0 is on the day) before a confirmed subscription's next payment |
+
+Only accounts and transactions in the default currency are checked. The
+low-balance alert watches active (not archived) accounts of kind `bank` or
+`cash` with a known balance: the bank's reported booked balance for a bank
+account, else the opening balance plus booked transactions; an account
+without transactions or a bank balance (an unused Cash account) is not
+watched.
+
+**Notifications.** A background loop (every 5 minutes, at startup, and
+right after a change) sends them through Notifications (`pkg/notify`):
+
+| When | Category | Importance | Title, for example | Link | Dedupe key |
+| --- | --- | --- | --- | --- | --- |
+| Lead days before a confirmed subscription's next payment, until that day | `finance.subscription` | low | "Netflix renews in 3 days: €13.99" ("tomorrow", "today") | `/finance?tab=subscriptions` | `finance.subscription:<id>:<YYYY-MM-DD>` |
+| A money-out transaction of at least the threshold, booked or pending, booked on one of the last three days or later | `finance.large_debit` | medium | "Large debit: €480.00 at MediaMarkt" | `/finance` | `finance.large_debit:<transactionId>` |
+| A watched account falls below the threshold | `finance.low_balance` | medium | "Low balance: Girokonto at €84.20" | `/finance` | `finance.low_balance:<accountId>:<episode>` |
+
+A renewal reminder's body says the date, the account, and, for another
+cadence than monthly, the monthly cost ("Expected on Tue, 13 Oct 2026 from
+Girokonto. Renews yearly, €7.83 a month."). A large debit is notified once
+per transaction; only transactions booked in the last three days count, so
+a first 90-day bank import does not notify old ones, and a booked bank
+transaction that replaces a pending one keeps the pending one's claim (the
+same debit is not notified twice). A low balance is notified once per
+episode: an account that falls below starts a new episode, and one back at
+or above the threshold is re-armed. Episodes are tracked while the alert is
+off too; switching it on while an account is low notifies that episode. A
+switched-off alert sends nothing; missed renewals are never alerted.
+
+Each notification is claimed in `alert_notifications` before it is sent,
+so a restart repeats nothing; a send that fails for now gives the claim back
+and is retried at the next check, and one Notifications refuses (4xx) is not
+retried. Without `NOTIFICATIONS_SERVICE_URL` nothing is sent, but
+subscriptions are still detected.
+
 ## Activity
 
 Finance records each change in [Activity](activity.md), attributed to the
@@ -334,13 +464,18 @@ tool) and tied to its correlation and causation:
 | `finance.budget.saved` | `finance_budget` (the month) | "Regular budget from October 2026 on saved: 9 categories, €2,100.00 planned, €400.00 savings goal; 1 later month's own budget replaced", "Budget for December 2026 saved: …" |
 | `finance.budget.reset` | `finance_budget` | "Budget for December 2026 returned to the regular plan" |
 | `finance.budget_defaults.added` | `finance_category_defaults` | "Default budget categories added: 12 created, 1 existing category used; 31 merchant rules added" (`system:finance`) |
+| `finance.subscription.created` | `finance_subscription` | "“Urban Sports Club” marked as a subscription (€29.99 monthly)" |
+| `finance.subscription.confirmed` / `.ignored` | `finance_subscription` | "Subscription “Netflix” confirmed (€13.99 monthly)", "Subscription “FitX” ignored" |
+| `finance.subscription.updated` / `.deleted` | `finance_subscription` | "Subscription “iCloud+” updated: name, cadence, amount, category" |
+| `finance.settings.updated` | `finance_settings` (`alerts`) | "Alert settings updated: large debits from €300.00, low balance below €100.00 (off), renewal reminders 1 day ahead" |
 
 Amounts are formatted in the transaction's currency ("€1,234.50", "12.00
 CHF"). `data` holds the account, amount, booking date, status, source,
 counterparty, description, and category id of a transaction, and the counts of
 an import or sync; never the owner's notes, and never transaction details for
 an import or a bank sync, which are one summary event each. Budget events
-hold the month, scope, counts, and amounts only. Creates and
+hold the month, scope, counts, and amounts only. Detection's own
+suggestions and the alerts it sends are not recorded. Creates and
 deletes have deterministic ids (an idempotent replay records nothing new);
 updates are identified by the state they wrote; an update that changes nothing
 records nothing. Recording needs `ACTIVITY_SERVICE_URL` (set in compose).
@@ -367,11 +502,19 @@ one per month and scope) with `budget_plan_lines`, the
 unchanged. Its rollback keeps every category and rule (the defaults stay as
 ordinary ones), turns a code's choice into a rule's (so applying the rules
 with scope `all` re-checks it), and drops the plans and claims.
+`000007_subscriptions_alerts` adds `subscriptions` (identified by merchant
+key and the cadence found, so an ignored one keeps its identity; the owner's
+cadence, name, amount, and category beside it, with flags for what the owner
+set) with `subscription_transactions`, the one-row `finance_settings` with
+the defaults above, the `alert_notifications` claims, and
+`low_balance_states` (each account's episode); existing rows are unchanged.
+Its rollback drops those tables and keeps every transaction, account, and
+category.
 
 Configuration: `DATABASE_URL`, `ACTIVITY_SERVICE_URL`, `LIFE_OS_TIMEZONE`
 (unset or unknown means UTC, logged at startup; budget months and the summary
 time follow it), `FINANCE_DEFAULT_CURRENCY` (default EUR; also the budget
 currency), and `NOTIFICATIONS_SERVICE_URL` (compose:
-`http://notifications:8080`; empty sends no budget notifications). Tests: `make db-test SERVICE=finance`
+`http://notifications:8080`; empty sends no budget or alert notifications). Tests: `make db-test SERVICE=finance`
 with `FINANCE_TEST_DATABASE_URL` pointing at a throwaway Postgres runs the
 integration tests, each in its own schema.
