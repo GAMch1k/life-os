@@ -109,10 +109,11 @@ func (h *Handler) ListEvents(c fiber.Ctx, params generated.ListEventsParams) err
 		return err
 	}
 	includeCancelled := params.IncludeCancelled != nil && *params.IncludeCancelled
+	editable := params.Editable != nil && *params.Editable
 	// One row beyond the page tells whether another page exists.
 	query := store.ListEventsParams{
 		TimeZone: timeZone, RangeStart: timestamp(&params.From), RangeEnd: timestamp(&params.To),
-		IncludeCancelled: includeCancelled, SourceKind: sourceKind, SourceID: sourceIDFilter(params.SourceId), PageLimit: int32(limit + 1),
+		IncludeCancelled: includeCancelled, SourceKind: sourceKind, SourceID: sourceIDFilter(params.SourceId), EditableOnly: editable, PageLimit: int32(limit + 1),
 	}
 	var after *listPosition
 	if params.Cursor != nil {
@@ -129,7 +130,7 @@ func (h *Handler) ListEvents(c fiber.Ctx, params generated.ListEventsParams) err
 	}
 	recurring, err := h.queries.ListRecurringEvents(c.Context(), store.ListRecurringEventsParams{
 		TimeZone: timeZone, RangeStart: query.RangeStart, RangeEnd: query.RangeEnd,
-		IncludeCancelled: includeCancelled, SourceKind: sourceKind, SourceID: query.SourceID,
+		IncludeCancelled: includeCancelled, SourceKind: sourceKind, SourceID: query.SourceID, EditableOnly: editable,
 	})
 	if err != nil {
 		return internal(err)
@@ -195,10 +196,11 @@ func (h *Handler) SearchEvents(c fiber.Ctx, params generated.SearchEventsParams)
 		return err
 	}
 	includeCancelled := params.IncludeCancelled != nil && *params.IncludeCancelled
+	editable := params.Editable != nil && *params.Editable
 	anchor := h.now().UTC()
 	query := store.SearchEventsParams{
 		TimeZone: timeZone, Patterns: patterns, RangeStart: timestamp(params.From), RangeEnd: timestamp(params.To),
-		IncludeCancelled: includeCancelled, SourceKind: sourceKind, SourceID: sourceIDFilter(params.SourceId), PageLimit: int32(limit + 1),
+		IncludeCancelled: includeCancelled, SourceKind: sourceKind, SourceID: sourceIDFilter(params.SourceId), EditableOnly: editable, PageLimit: int32(limit + 1),
 	}
 	var after *searchPosition
 	if params.Cursor != nil {
@@ -217,7 +219,7 @@ func (h *Handler) SearchEvents(c fiber.Ctx, params generated.SearchEventsParams)
 	}
 	recurring, err := h.queries.SearchRecurringEvents(c.Context(), store.SearchRecurringEventsParams{
 		Patterns: patterns, RangeEnd: query.RangeEnd, TimeZone: timeZone,
-		IncludeCancelled: includeCancelled, SourceKind: sourceKind, SourceID: query.SourceID,
+		IncludeCancelled: includeCancelled, SourceKind: sourceKind, SourceID: query.SourceID, EditableOnly: editable,
 	})
 	if err != nil {
 		return internal(err)
@@ -284,6 +286,7 @@ func (h *Handler) CreateEvent(c fiber.Ctx) error {
 		return httpserver.NewError(fiber.StatusConflict, "conflict", "idempotency key was already used with a different payload")
 	}
 	h.recordEvent(c, eventCreated, item, nil, nil)
+	h.google.QueueExport(c.Context(), item.ID)
 	return h.respond(c, fiber.StatusCreated, item)
 }
 
@@ -320,11 +323,28 @@ func (h *Handler) respond(c fiber.Ctx, status int, item store.Event) error {
 
 // UpdateEvent merges the body into the stored event, validates the result,
 // and writes it (All events for a recurring event), holding the event so
-// its occurrence exceptions change with it.
+// its occurrence exceptions change with it. A synced Google event is
+// written to Google first (see updateGoogleEvent); a Life OS event's
+// change is queued for export.
 func (h *Handler) UpdateEvent(c fiber.Ctx, id types.UUID) error {
 	patch, err := decodePatch(c.Body())
 	if err != nil {
 		return badRequest(err.Error())
+	}
+	if h.google != nil {
+		current, err := h.queries.GetEvent(c.Context(), pgUUID(id))
+		if err != nil {
+			return databaseError(err)
+		}
+		if current.SourceKind == string(generated.EventSourceKindGoogle) {
+			target, write, err := h.googleTarget(c.Context(), current, &patch)
+			if err != nil {
+				return err
+			}
+			if write {
+				return h.updateGoogleEvent(c, current, target, patch, fiber.StatusOK)
+			}
+		}
 	}
 	var current, item store.Event
 	err = h.inTx(c.Context(), func(queries *store.Queries) error {
@@ -341,6 +361,9 @@ func (h *Handler) UpdateEvent(c fiber.Ctx, id types.UUID) error {
 	// An update that changes nothing records nothing.
 	if eventType, changes := classifyUpdate(current, item); eventType != "" {
 		h.recordEvent(c, eventType, item, &current, changes)
+		if item.SourceKind == string(generated.EventSourceKindManual) {
+			h.google.QueueExport(c.Context(), item.ID)
+		}
 	}
 	return h.respond(c, fiber.StatusOK, item)
 }
@@ -393,12 +416,21 @@ func priorityDefault(ctx context.Context, queries *store.Queries, row store.Even
 	return generated.EventPriority(source.DefaultPriority), nil
 }
 
-// DeleteEvent deletes a manual event. An imported event's source owns it
-// (and cancels it when it leaves the feed), so it cannot be deleted here.
+// DeleteEvent deletes a Life OS event (and queues deleting its copy in
+// Google) or an editable synced Google event (in Google first). A feed
+// event's source owns it (and cancels it when it leaves the feed), so it
+// cannot be deleted here.
 func (h *Handler) DeleteEvent(c fiber.Ctx, id types.UUID) error {
 	current, err := h.queries.GetEvent(c.Context(), pgUUID(id))
 	if err != nil {
 		return databaseError(err)
+	}
+	if current.SourceKind == string(generated.EventSourceKindGoogle) && h.google != nil {
+		target, _, err := h.googleTarget(c.Context(), current, nil)
+		if err != nil {
+			return err
+		}
+		return h.deleteGoogleEvent(c, current, target)
 	}
 	if current.SourceKind != string(generated.EventSourceKindManual) {
 		return managedBySource()
@@ -411,6 +443,7 @@ func (h *Handler) DeleteEvent(c fiber.Ctx, id types.UUID) error {
 		return notFound()
 	}
 	h.recordEvent(c, eventDeleted, current, nil, nil)
+	h.google.QueueDeletion(c.Context(), current.ID)
 	return c.SendStatus(fiber.StatusNoContent)
 }
 

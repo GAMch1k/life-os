@@ -67,6 +67,9 @@ type Rules struct {
 	// frozen reports whether a stored event whose item changed stays as it
 	// is.
 	frozen func(store.Event, Item) bool
+	// defaultPriority is the source's default priority (set by Reconcile):
+	// an item's priority equal to it is none of its own.
+	defaultPriority string
 }
 
 // FeedRules are a feed's: feeds often list only upcoming dates, so an event
@@ -138,7 +141,7 @@ func reconcileItems(existing []store.Event, exceptions map[[16]byte][]store.Even
 		}
 		writes, drops := exceptionChanges(exceptions[event.ID.Bytes], item.Exceptions)
 		removed := event.RemovedFromSourceAt.Valid
-		if !removed && matches(event, item) && len(writes) == 0 && len(drops) == 0 {
+		if !removed && matches(event, item, rules.defaultPriority) && len(writes) == 0 && len(drops) == 0 {
 			result.counts.Unchanged++
 			continue
 		}
@@ -267,8 +270,9 @@ func lastEnd(event store.Event, owner *time.Location) (time.Time, bool) {
 }
 
 // matches reports whether the stored event already says what item says
-// (occurrence exceptions are compared separately).
-func matches(event store.Event, item Item) bool {
+// (occurrence exceptions are compared separately); defaultPriority is the
+// source's (see ownPriority).
+func matches(event store.Event, item Item, defaultPriority string) bool {
 	status := "active"
 	if item.Cancelled {
 		status = "cancelled"
@@ -281,6 +285,9 @@ func matches(event store.Event, item Item) bool {
 		if stored, ok := sourceReminders(event); !ok || !stored.Equal(*item.Reminders) {
 			return false
 		}
+	}
+	if item.Priority != nil && !sameText(event.Priority, ownPriority(item, defaultPriority)) {
+		return false
 	}
 	if item.AllDay {
 		return sameDay(event.StartDate, item.StartDate) && sameDay(event.EndDate, item.EndDate)

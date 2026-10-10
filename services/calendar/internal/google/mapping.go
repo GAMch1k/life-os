@@ -214,7 +214,24 @@ func (m mapper) itemAt(event Event, uid string, when span) sources.Item {
 		item.StartAt, item.EndAt, item.TimeZone = when.start, when.end, when.zoneName
 	}
 	reminders := eventReminders(event, when.allDay)
-	return sources.Item{Item: item, Reminders: &reminders}
+	return sources.Item{Item: item, Reminders: &reminders, Priority: eventPriority(event)}
+}
+
+// eventPriority is the Life OS priority an event carries in its private
+// extended properties (written by Life OS), nil when it carries none.
+func eventPriority(event Event) *string {
+	if event.ExtendedProperties == nil {
+		return nil
+	}
+	value, ok := event.ExtendedProperties.Private[propertyPriority]
+	if !ok {
+		return nil
+	}
+	switch value {
+	case "", "low", "medium", "high":
+		return &value
+	}
+	return nil
 }
 
 // eventReminders are the event's reminders as Calendar keeps them: its
@@ -547,6 +564,10 @@ func occurrenceChanges(base, own sources.Item, key string, when span) sources.Ch
 			startAt, endAt := own.StartAt, own.EndAt
 			changes.StartAt, changes.EndAt = &startAt, &endAt
 		}
+	}
+	if own.Priority != nil && *own.Priority != "" && !sameText(own.Priority, base.Priority) {
+		priority := *own.Priority
+		changes.Priority = &priority
 	}
 	if own.Reminders != nil && base.Reminders != nil {
 		if !(sources.Reminders{Reminders: own.Reminders.Reminders}).Equal(sources.Reminders{Reminders: base.Reminders.Reminders}) {

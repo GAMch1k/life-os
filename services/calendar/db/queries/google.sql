@@ -211,12 +211,20 @@ DELETE FROM google_events WHERE calendar_id = $1;
 
 -- name: UpsertGoogleEvents :exec
 -- Stores Google events as sent: items is a JSON array of {"id",
--- "recurringEventId", "data"}, data being the event's JSON.
+-- "recurringEventId", "data"}, data being the event's JSON. A version older
+-- than the stored one (by Google's updated time, when both have one) does
+-- not replace it: a listing read before one of Calendar's own writes
+-- cannot undo it.
 INSERT INTO google_events (calendar_id, event_id, recurring_event_id, data)
 SELECT sqlc.arg(calendar_id), item.id, NULLIF(item."recurringEventId", ''), item.data
 FROM jsonb_to_recordset(sqlc.arg(items)::jsonb) AS item(id text, "recurringEventId" text, data jsonb)
 ON CONFLICT (calendar_id, event_id) DO UPDATE
-SET recurring_event_id = EXCLUDED.recurring_event_id, data = EXCLUDED.data, updated_at = now();
+SET recurring_event_id = EXCLUDED.recurring_event_id, data = EXCLUDED.data, updated_at = now()
+WHERE NOT (
+    COALESCE(google_events.data ->> 'updated', '') ~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$'
+    AND COALESCE(EXCLUDED.data ->> 'updated', '') ~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$'
+    AND (EXCLUDED.data ->> 'updated')::timestamptz < (google_events.data ->> 'updated')::timestamptz
+);
 
 -- name: DeleteGoogleEventsByID :exec
 -- Forgets Google events, and the occurrences of the recurring ones among them.

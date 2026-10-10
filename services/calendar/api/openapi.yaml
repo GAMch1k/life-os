@@ -23,9 +23,17 @@ info:
 
     Calendar sources are external feeds (ICS/iCal) and the owner's Google
     calendars chosen to sync, whose events Calendar imports and keeps up to
-    date on its own schedule. Imported events are read-only through this API
-    except for their reminders and priority; only their source changes, cancels, or
-    restores them.
+    date on its own schedule. Feed events are read-only through this API
+    except for their reminders and priority; only their feed changes,
+    cancels, or restores them. Google events sync both ways: in a calendar the account may edit
+    (`accessRole` owner or writer) every change is written to Google first,
+    with the event's etag, and the event then shows Google's answer; a
+    concurrent change in Google is never overwritten (409 `google_conflict`,
+    and the event shows Google's version). `editable` and `readOnlyReason`
+    say what an event allows. Events created in Life OS are exported to a
+    "Life OS" calendar Calendar creates in Google (see
+    `/v1/google/connection`); `google` says where an event is in Google and
+    how its sync stands.
 
 
     Reminders work like Google Calendar's notifications. Every event can
@@ -57,11 +65,11 @@ info:
     occurrence's own changes, or `status: cancelled` to skip it), **This and
     following** (`POST .../split` to change, `POST .../truncate` to delete:
     the series ends before that occurrence), and **All events**
-    (`PATCH`/`DELETE /v1/events/{eventId}`). Only events created in Life OS
-    (`source.kind` `manual`) recur this way; a recurring Google event whose
-    rule fits this model is synchronized as such a series (read-only), and an
-    imported feed's recurring events, like Google rules outside the model,
-    are stored one event per occurrence.
+    (`PATCH`/`DELETE /v1/events/{eventId}`). Events created in Life OS
+    (`source.kind` `manual`) recur this way, and so does a recurring Google
+    event whose rule fits this model (changed through the same scopes,
+    written to Google); an imported feed's recurring events, like Google
+    rules outside the model, are stored one read-only event per occurrence.
   license: {name: UNLICENSED, url: https://life-os.local/license}
 servers: [{url: http://calendar:8080}]
 paths:
@@ -95,6 +103,7 @@ paths:
         - $ref: '#/components/parameters/IncludeCancelled'
         - $ref: '#/components/parameters/SourceKind'
         - $ref: '#/components/parameters/SourceId'
+        - $ref: '#/components/parameters/Editable'
         - $ref: '#/components/parameters/Cursor'
         - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}
       responses:
@@ -147,6 +156,7 @@ paths:
         - $ref: '#/components/parameters/IncludeCancelled'
         - $ref: '#/components/parameters/SourceKind'
         - $ref: '#/components/parameters/SourceId'
+        - $ref: '#/components/parameters/Editable'
         - $ref: '#/components/parameters/Cursor'
         - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 20}}
       responses:
@@ -173,9 +183,22 @@ paths:
         must be given. The result is validated as a whole, as on create.
         `status: cancelled` keeps the event as history and drops it from
         listings; `status: active` restores it. An event imported from a
-        source (`source.kind` other than `manual`) is read-only except for
-        `reminders`, `useDefaultReminders`, and `priority`: naming any other
-        field returns 409 `managed_by_source`. For a recurring event this is **All events**:
+        feed (`source.kind` `ics`), or a Google event that is not `editable`
+        (a calendar the account can only read, or one occurrence of a rule
+        Calendar cannot hold), is read-only except for `reminders`,
+        `useDefaultReminders`, and `priority`: naming any other field returns 409
+        `managed_by_source` (feeds) or `google_read_only` (Google, with the
+        reason). An editable Google event is changed in Google first (with
+        its etag); cancelling one deletes it in Google (Life OS keeps it as
+        cancelled history), and its reminders become Google's notifications
+        (at most 5, minutes before the start; a reminder at a time of day
+        only on an all-day event, at least a day before: else 400). When the
+        event changed in Google meanwhile nothing is written and the answer
+        is 409 `google_conflict` ("Changed in Google meanwhile; showing the
+        latest version"); Google unreachable is 502 `google_unavailable`,
+        an expired connection 409 `google_expired`, and nothing changes in
+        Life OS. A Life OS event is changed here and its change exported to
+        the Life OS calendar afterwards. For a recurring event this is **All events**:
         every occurrence changes. Occurrences keep their own changes, except
         that a change of the start, the kind (`allDay`), `timeZone`, or the
         `recurrence` rule removes the changes and skips of occurrences that no
@@ -189,10 +212,11 @@ paths:
         '200': {description: Event, content: {application/json: {schema: {$ref: '#/components/schemas/CalendarEvent'}}}}
         '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}
         '404': {description: Event not found}
-        '409': {description: 'The event kept changing concurrently (retry the update), or it is imported and the update names more than its reminders and priority (managed_by_source)'}
+        '409': {description: 'The event kept changing concurrently (retry the update), it is imported and the update names more than its reminders and priority (managed_by_source, google_read_only), it changed in Google meanwhile (google_conflict) or was deleted there (google_deleted), or the Google connection expired (google_expired)'}
+        '502': {description: 'Google could not be reached or refused the change (google_unavailable, google_rejected); nothing changed'}
     delete:
       summary: Delete a calendar event
-      description: 'Removes the event permanently; for a recurring event every occurrence and its own changes (**All events**). Set `status: cancelled` instead to keep it as history. Imported events cannot be deleted (409 `managed_by_source`): their source removes them.'
+      description: 'Removes the event permanently; for a recurring event every occurrence and its own changes (**All events**). Set `status: cancelled` instead to keep it as history. Feed events and read-only Google events cannot be deleted (409 `managed_by_source`, `google_read_only`). An editable Google event is deleted in Google first. A Life OS event exported to Google is deleted from the Life OS calendar afterwards.'
       operationId: deleteEvent
       security: []
       parameters: [{name: eventId, in: path, required: true, schema: {type: string, format: uuid}}]
@@ -200,7 +224,8 @@ paths:
         '204': {description: Event deleted}
         '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}
         '404': {description: Event not found}
-        '409': {description: The event is imported from a source (managed_by_source)}
+        '409': {description: 'The event is imported from a feed (managed_by_source) or read-only in Google (google_read_only), it changed in Google meanwhile (google_conflict), or the Google connection expired (google_expired)'}
+        '502': {description: 'Google could not be reached or refused the change (google_unavailable, google_rejected)'}
   /v1/events/{eventId}/occurrences/{recurrenceId}:
     get:
       summary: Get one occurrence of a recurring event
@@ -236,7 +261,10 @@ paths:
         after startAt`. `status: cancelled` skips the occurrence (kept as history, left
         out of listings); `status: active` brings it back. A field set back to
         the series' value stops being this occurrence's own change. Returns
-        the occurrence. An imported event returns 409 `managed_by_source`.
+        the occurrence. A feed event returns 409 `managed_by_source`; for a
+        Google series the change is written to Google's instance of the
+        occurrence (skipping cancels the instance), with the errors of
+        updating a Google event.
       operationId: updateEventOccurrence
       security: []
       parameters:
@@ -247,7 +275,8 @@ paths:
         '200': {description: The occurrence, content: {application/json: {schema: {$ref: '#/components/schemas/CalendarEvent'}}}}
         '400': {description: 'Invalid request (the message says what to fix), or no valid X-Life-OS-Actor (actor_required)'}
         '404': {description: 'Event not found, it does not repeat, or no such occurrence'}
-        '409': {description: 'The event is imported (managed_by_source)'}
+        '409': {description: 'The event is imported from a feed (managed_by_source) or read-only in Google (google_read_only), or it changed in Google meanwhile (google_conflict)'}
+        '502': {description: 'Google could not be reached or refused the change (google_unavailable, google_rejected)'}
   /v1/events/{eventId}/occurrences/{recurrenceId}/split:
     post:
       summary: Change this and following occurrences
@@ -268,8 +297,11 @@ paths:
         replace this occurrence's own changes to them. Returns the new series
         (201). On the series' first occurrence nothing is split: the body
         changes the series itself, as `PATCH /v1/events/{eventId}`, and the
-        series is returned (200). An imported event returns 409
-        `managed_by_source`.
+        series is returned (200). A feed event returns 409
+        `managed_by_source`. For a Google series the new series is created
+        in Google, its skips and occurrence changes carried over, and then
+        the old series is ended with an UNTIL (if that fails the new one is
+        deleted again).
       operationId: splitEventSeries
       security: []
       parameters:
@@ -281,7 +313,8 @@ paths:
         '201': {description: The new series, content: {application/json: {schema: {$ref: '#/components/schemas/CalendarEvent'}}}}
         '400': {description: 'Invalid request (the message says what to fix), or no valid X-Life-OS-Actor (actor_required)'}
         '404': {description: 'Event not found, it does not repeat, or no such occurrence'}
-        '409': {description: 'The event is imported (managed_by_source), or it kept changing concurrently (retry)'}
+        '409': {description: 'The event is imported from a feed (managed_by_source) or read-only in Google (google_read_only), it changed in Google meanwhile (google_conflict), or it kept changing concurrently (retry)'}
+        '502': {description: 'Google could not be reached or refused the change (google_unavailable, google_rejected)'}
   /v1/events/{eventId}/occurrences/{recurrenceId}/truncate:
     post:
       summary: Delete this and following occurrences
@@ -290,8 +323,9 @@ paths:
         before this one (its `recurrence` gets `until` at that occurrence's
         start and loses `count`), and the changes and skips of this and later
         occurrences are removed. On the series' first occurrence the whole
-        series is deleted, as `DELETE /v1/events/{eventId}`. An imported event
-        returns 409 `managed_by_source`.
+        series is deleted, as `DELETE /v1/events/{eventId}`. A feed event
+        returns 409 `managed_by_source`; a Google series is ended (or
+        deleted) in Google first.
       operationId: truncateEventSeries
       security: []
       parameters:
@@ -301,7 +335,8 @@ paths:
         '204': {description: 'The series ends before this occurrence, or is deleted'}
         '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}
         '404': {description: 'Event not found, it does not repeat, or no such occurrence'}
-        '409': {description: 'The event is imported (managed_by_source)'}
+        '409': {description: 'The event is imported from a feed (managed_by_source) or read-only in Google (google_read_only), or it changed in Google meanwhile (google_conflict)'}
+        '502': {description: 'Google could not be reached or refused the change (google_unavailable, google_rejected)'}
   /v1/sources:
     get:
       summary: List calendar sources
@@ -464,6 +499,20 @@ paths:
       responses:
         '204': {description: Disconnected}
         '400': {description: 'No valid X-Life-OS-Actor (actor_required)'}
+    patch:
+      summary: Change the Google connection's settings
+      description: >-
+        `exportEnabled` switches exporting events created in Life OS to the
+        Life OS calendar on or off. Switched on, every upcoming Life OS event
+        (and every later change) is exported; switched off, nothing more is
+        written there (what it holds stays in Google).
+      operationId: updateGoogleConnection
+      security: []
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateGoogleConnectionRequest'}}}}
+      responses:
+        '200': {description: The connection, content: {application/json: {schema: {$ref: '#/components/schemas/GoogleConnection'}}}}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}
+        '409': {description: Not connected (google_not_connected)}
   /v1/google/connection/authorize:
     post:
       summary: Start a Google authorization
@@ -548,6 +597,7 @@ components:
     IncludeCancelled: {name: includeCancelled, in: query, description: Also return cancelled events (including those removed by their source)., schema: {type: boolean, default: false}}
     SourceKind: {name: sourceKind, in: query, description: Only events from this kind of source., schema: {$ref: '#/components/schemas/EventSourceKind'}}
     SourceId: {name: sourceId, in: query, description: Only events imported from this source., schema: {type: string, format: uuid}}
+    Editable: {name: editable, in: query, description: 'Only events that can be changed through this API (`editable`): Life OS events, and Google events of calendars the account may edit that are single events or series Calendar holds; not feed events, read-only Google calendars, or occurrences expanded from a Google rule. The AI looks for the events to change this way.', schema: {type: boolean, default: false}}
     EventId: {name: eventId, in: path, required: true, schema: {type: string, format: uuid}}
     RecurrenceId: {name: recurrenceId, in: path, required: true, description: 'The occurrence''s `occurrence.recurrenceId` from a listing (URL-encoded): an RFC 3339 instant for a timed series (2026-10-12T16:00:00Z), a date for an all-day one (2026-10-24).', schema: {type: string, minLength: 1, maxLength: 64}}
     Cursor: {name: cursor, in: query, description: The previous page's nextCursor. Opaque; only valid with the parameters it was returned for., schema: {type: string}}
@@ -646,7 +696,7 @@ components:
         localTime: {type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$', description: Required for localTime (and only there); 24-hour HH:MM.}
     CalendarEvent:
       type: object
-      required: [id, title, allDay, reminders, useDefaultReminders, defaultReminders, effectiveReminders, priority, defaultPriority, status, source, createdAt, updatedAt]
+      required: [id, title, allDay, reminders, useDefaultReminders, defaultReminders, effectiveReminders, priority, defaultPriority, status, source, editable, createdAt, updatedAt]
       properties:
         id: {type: string, format: uuid}
         title: {type: string}
@@ -670,9 +720,30 @@ components:
         cancelledAt: {type: string, format: date-time, nullable: true, description: When the event was cancelled; set exactly when status is cancelled.}
         removedFromSourceAt: {type: string, format: date-time, nullable: true, description: 'When an imported event disappeared from its source (or its source''s filter came to exclude it), which also cancels it; null for manual events and while the event is in its source.'}
         source: {$ref: '#/components/schemas/EventSource'}
+        editable: {type: boolean, description: 'Whether the event can be changed through this API beyond its reminders: Life OS events and Google events of calendars the account may edit; not feed events, events of Google calendars the account can only read, or occurrences of a Google rule Calendar cannot hold.'}
+        readOnlyReason: {type: string, nullable: true, description: 'Why the event is not editable, for the owner; null when it is.'}
+        google: {$ref: '#/components/schemas/EventGoogleLink'}
         externalReference: {$ref: '#/components/schemas/ExternalReference'}
         createdAt: {type: string, format: date-time}
         updatedAt: {type: string, format: date-time}
+    EventGoogleLink:
+      type: object
+      nullable: true
+      description: >-
+        Where the event is in Google Calendar and how its sync stands; null
+        for an event that is not in Google (a feed event, or a Life OS event
+        while Google is not connected or export is off). A Google event is
+        always `synced` (its changes are written to Google first). A Life OS
+        event is `pending` while its latest change waits to be exported to
+        the Life OS calendar, `synced` once Google has it, and `failed` when
+        the last attempt failed (`error`; retried automatically).
+      required: [calendarName, lifeOs, state]
+      properties:
+        calendarId: {type: string, format: uuid, nullable: true, description: 'The Google calendar''s id in Calendar (see /v1/google/calendars); null before the Life OS calendar exists.'}
+        calendarName: {type: string, description: 'The Google calendar''s name, such as "Owner" or "Life OS".'}
+        lifeOs: {type: boolean, description: The event is a Life OS event exported to the Life OS calendar.}
+        state: {type: string, enum: [synced, pending, failed]}
+        error: {type: string, nullable: true, description: Why the last export failed; null otherwise.}
     CreateEventRequest:
       type: object
       description: 'A timed event needs startAt and endAt (endAt after startAt); an all-day event needs startDate and endDate (endDate not before startDate) and takes no timeZone.'
@@ -863,7 +934,7 @@ components:
       description: '`not_connected`: no Google account is connected. `connected`: usable. `expired`: Google refused the stored authorization (it expired or was revoked); reconnect. `error`: another refusal, such as a changed client secret; see `lastError`.'
     GoogleConnection:
       type: object
-      required: [configured, status, scopes, missingScopes]
+      required: [configured, status, scopes, missingScopes, exportEnabled, export]
       properties:
         configured: {type: boolean, description: 'Whether this server has the Google client credentials and token key (LIFE_OS_GOOGLE_CLIENT_ID, LIFE_OS_GOOGLE_CLIENT_SECRET, LIFE_OS_GOOGLE_TOKEN_KEY). Without them nothing can be connected.'}
         status: {$ref: '#/components/schemas/GoogleConnectionStatus'}
@@ -872,6 +943,34 @@ components:
         missingScopes: {type: array, items: {type: string}, description: 'Scopes Life OS asks for that Google did not grant (the owner may untick some on the consent page); empty when everything was granted or nothing is connected.'}
         connectedAt: {type: string, format: date-time, nullable: true, description: When the account was last connected.}
         lastError: {type: string, nullable: true, description: 'Why the connection is expired or in error; null while connected.'}
+        exportEnabled: {type: boolean, description: 'Whether events created in Life OS are exported to the Life OS calendar (the owner''s "Export events created in Life OS"; on by default).'}
+        lifeOsCalendar: {$ref: '#/components/schemas/LifeOsCalendar'}
+        export: {$ref: '#/components/schemas/GoogleExportState'}
+    LifeOsCalendar:
+      type: object
+      nullable: true
+      description: 'The "Life OS" calendar Calendar created in the owner''s Google account for the events created in Life OS; null until it exists. Created when Google is connected with export on; if the owner deletes it in Google, Calendar creates it again at the next export and says so in `note`.'
+      required: [googleCalendarId, summary]
+      properties:
+        googleCalendarId: {type: string}
+        calendarId: {type: string, format: uuid, nullable: true, description: 'Its id in Calendar''s calendar list (/v1/google/calendars), where it syncs like the others.'}
+        summary: {type: string}
+        createdAt: {type: string, format: date-time, nullable: true}
+        note: {type: string, nullable: true, description: 'What happened to it last, such as that it was deleted in Google and created again; null when nothing needs saying.'}
+    GoogleExportState:
+      type: object
+      description: How exporting Life OS events goes.
+      required: [pending, failed]
+      properties:
+        pending: {type: integer, description: Life OS events whose latest change waits to be exported.}
+        failed: {type: integer, description: 'Life OS events whose last export failed; retried automatically with growing pauses.'}
+        lastError: {type: string, nullable: true, description: The latest export failure.}
+        lastExportedAt: {type: string, format: date-time, nullable: true}
+    UpdateGoogleConnectionRequest:
+      type: object
+      required: [exportEnabled]
+      properties:
+        exportEnabled: {type: boolean}
     GoogleAuthorization:
       type: object
       required: [url]
@@ -885,7 +984,7 @@ components:
         state: {type: string, minLength: 1, maxLength: 256, description: The state Google returned with it.}
     GoogleCalendar:
       type: object
-      required: [id, googleCalendarId, summary, accessRole, primary, syncEnabled, sync, createdAt, updatedAt]
+      required: [id, googleCalendarId, summary, accessRole, primary, syncEnabled, lifeOs, sync, createdAt, updatedAt]
       properties:
         id: {type: string, format: uuid}
         googleCalendarId: {type: string, description: 'The calendar''s id at Google (the account''s address for the primary calendar).'}
@@ -894,6 +993,7 @@ components:
         accessRole: {type: string, enum: [owner, writer, reader, freeBusyReader], description: 'The account''s access to the calendar.'}
         primary: {type: boolean, description: 'The account''s primary calendar.'}
         syncEnabled: {type: boolean, description: 'Whether the calendar syncs into Life OS.'}
+        lifeOs: {type: boolean, description: 'This is the Life OS calendar, where events created in Life OS are exported.'}
         sync: {$ref: '#/components/schemas/GoogleCalendarSync'}
         createdAt: {type: string, format: date-time}
         updatedAt: {type: string, format: date-time}

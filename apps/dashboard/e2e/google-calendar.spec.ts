@@ -81,6 +81,9 @@ async function stubGoogle(page: Page, baseURL: string) {
       state.status === "expired"
         ? "Google refused the request (invalid_grant: Token has been expired or revoked.): reconnect Google in Calendar."
         : null,
+    exportEnabled: true,
+    export: { pending: 0, failed: 0 },
+    lifeOsCalendar: null,
   });
   const json = (route: Route, body: unknown, status = 200) =>
     route.fulfill({

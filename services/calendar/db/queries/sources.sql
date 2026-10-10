@@ -131,12 +131,14 @@ SELECT * FROM events WHERE source_id = $1 ORDER BY id FOR UPDATE;
 -- A source's new event. A series (Google) has its rule; reminders and
 -- use_default_reminders are the source's (an ICS feed gives the column
 -- defaults: none of its own, following the source's defaults), and
--- source_reminders records them (null for a feed).
+-- source_reminders records them (null for a feed). priority is the event's
+-- own priority as its source gives it (Google, through a Life OS extended
+-- property); null follows the source's default.
 INSERT INTO events (
     title, description, location, all_day, start_at, end_at, start_date, end_date, time_zone,
     recurrence_frequency, recurrence_interval, recurrence_until, recurrence_by_weekday, recurrence_count,
     reminders, use_default_reminders, source_reminders,
-    status, cancelled_at, source_kind, source_id, external_uid
+    status, cancelled_at, source_kind, source_id, external_uid, priority
 )
 VALUES (
     sqlc.arg(title), sqlc.narg(description), sqlc.narg(location), sqlc.arg(all_day), sqlc.narg(start_at), sqlc.narg(end_at),
@@ -144,7 +146,7 @@ VALUES (
     sqlc.narg(recurrence_frequency), sqlc.narg(recurrence_interval), sqlc.narg(recurrence_until),
     sqlc.narg(recurrence_by_weekday)::text[], sqlc.narg(recurrence_count),
     sqlc.arg(reminders), sqlc.arg(use_default_reminders), sqlc.narg(source_reminders),
-    sqlc.arg(status), sqlc.narg(cancelled_at), sqlc.arg(source_kind), sqlc.arg(source_id), sqlc.arg(external_uid)
+    sqlc.arg(status), sqlc.narg(cancelled_at), sqlc.arg(source_kind), sqlc.arg(source_id), sqlc.arg(external_uid), sqlc.narg(priority)
 )
 RETURNING id;
 
@@ -153,7 +155,8 @@ RETURNING id;
 -- had removed). The source identity and the owner's priority stay. reminders, use_default_reminders,
 -- and source_reminders change only when given: a feed never gives them (the
 -- owner's reminders stay), a Google sync gives the source's new reminders
--- unless the owner changed the event's own.
+-- unless the owner changed the event's own. priority changes only with
+-- set_priority: a Google event that carries Life OS's priority property.
 UPDATE events
 SET title = sqlc.arg(title), description = sqlc.narg(description), location = sqlc.narg(location),
     all_day = sqlc.arg(all_day), start_at = sqlc.narg(start_at), end_at = sqlc.narg(end_at),
@@ -164,6 +167,7 @@ SET title = sqlc.arg(title), description = sqlc.narg(description), location = sq
     reminders = COALESCE(sqlc.narg(reminders), reminders),
     use_default_reminders = COALESCE(sqlc.narg(use_default_reminders), use_default_reminders),
     source_reminders = COALESCE(sqlc.narg(source_reminders), source_reminders),
+    priority = CASE WHEN sqlc.arg(set_priority)::boolean THEN sqlc.narg(priority) ELSE priority END,
     status = sqlc.arg(status), cancelled_at = sqlc.narg(cancelled_at), removed_from_source_at = NULL,
     updated_at = now()
 WHERE id = sqlc.arg(id) AND source_id = sqlc.arg(source_id);

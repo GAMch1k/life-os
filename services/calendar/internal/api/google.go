@@ -27,7 +27,7 @@ func (h *Handler) WithGoogle(service *google.Service) *Handler {
 func (h *Handler) GetGoogleConnection(c fiber.Ctx) error {
 	view := generated.GoogleConnection{
 		Configured: h.google.Configured(), Status: generated.GoogleConnectionStatus(google.StatusNotConnected),
-		Scopes: []string{}, MissingScopes: []string{},
+		Scopes: []string{}, MissingScopes: []string{}, ExportEnabled: true,
 	}
 	if h.google == nil {
 		return c.JSON(view)
@@ -37,7 +37,9 @@ func (h *Handler) GetGoogleConnection(c fiber.Ctx) error {
 		return internal(err)
 	}
 	if found {
-		view = googleConnection(row, view.Configured)
+		if view, err = h.googleConnectionView(c.Context(), row, view.Configured); err != nil {
+			return internal(err)
+		}
 	}
 	return c.JSON(view)
 }
@@ -68,7 +70,11 @@ func (h *Handler) ConnectGoogle(c fiber.Ctx) error {
 	if err != nil {
 		return googleError(err)
 	}
-	return c.JSON(googleConnection(row, true))
+	view, err := h.googleConnectionView(c.Context(), row, true)
+	if err != nil {
+		return internal(err)
+	}
+	return c.JSON(view)
 }
 
 func (h *Handler) DisconnectGoogle(c fiber.Ctx) error {
@@ -132,23 +138,37 @@ func (h *Handler) SyncGoogleCalendar(c fiber.Ctx, calendarID types.UUID, params 
 }
 
 func (h *Handler) respondGoogleCalendar(c fiber.Ctx, row store.GoogleCalendar) error {
-	linked, err := h.google.Sources(c.Context())
+	linked, lifeOS, err := h.googleCalendarContext(c.Context())
 	if err != nil {
 		return internal(err)
 	}
-	return c.JSON(h.googleCalendar(row, linked))
+	return c.JSON(h.googleCalendar(row, linked, lifeOS))
 }
 
 func (h *Handler) respondGoogleCalendars(c fiber.Ctx, rows []store.GoogleCalendar) error {
-	linked, err := h.google.Sources(c.Context())
+	linked, lifeOS, err := h.googleCalendarContext(c.Context())
 	if err != nil {
 		return internal(err)
 	}
 	items := make([]generated.GoogleCalendar, 0, len(rows))
 	for _, row := range rows {
-		items = append(items, h.googleCalendar(row, linked))
+		items = append(items, h.googleCalendar(row, linked, lifeOS))
 	}
 	return c.JSON(generated.GoogleCalendarList{Items: items})
+}
+
+// googleCalendarContext is what rendering calendars needs: the synced
+// calendars' sources and the Life OS calendar's Google id ("" when none).
+func (h *Handler) googleCalendarContext(ctx context.Context) (map[[16]byte]pgtype.UUID, string, error) {
+	linked, err := h.google.Sources(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	row, found, err := h.google.Connection(ctx)
+	if err != nil || !found || row.LifeosCalendarID == nil {
+		return linked, "", err
+	}
+	return linked, *row.LifeosCalendarID, nil
 }
 
 // traced carries the request's actor and workflow to the Activity events
@@ -157,6 +177,8 @@ func (h *Handler) traced(c fiber.Ctx) context.Context {
 	return activity.WithTrace(c.Context(), activity.FromRequest(c))
 }
 
+// googleConnection renders the connection (without its export state, see
+// googleConnectionView).
 func googleConnection(row store.GoogleConnection, configured bool) generated.GoogleConnection {
 	email := row.AccountEmail
 	scopes := row.Scopes
@@ -166,14 +188,16 @@ func googleConnection(row store.GoogleConnection, configured bool) generated.Goo
 	return generated.GoogleConnection{
 		Configured: configured, Status: generated.GoogleConnectionStatus(row.Status), AccountEmail: &email,
 		Scopes: scopes, MissingScopes: google.MissingScopes(scopes), ConnectedAt: nullableTime(row.ConnectedAt), LastError: row.LastError,
+		ExportEnabled: row.ExportEnabled,
 	}
 }
 
 // googleCalendar renders a calendar with its sync state; linked are the
-// synced calendars' sources by calendar.
-func (h *Handler) googleCalendar(row store.GoogleCalendar, linked map[[16]byte]pgtype.UUID) generated.GoogleCalendar {
+// synced calendars' sources by calendar, lifeOS the Life OS calendar's
+// Google id.
+func (h *Handler) googleCalendar(row store.GoogleCalendar, linked map[[16]byte]pgtype.UUID, lifeOS string) generated.GoogleCalendar {
 	sync := generated.GoogleCalendarSync{
-		State: generated.Off, ConsecutiveFailures: int(row.SyncFailures), LastAttemptAt: nullableTime(row.LastSyncAttemptAt),
+		State: generated.GoogleCalendarSyncStateOff, ConsecutiveFailures: int(row.SyncFailures), LastAttemptAt: nullableTime(row.LastSyncAttemptAt),
 		LastSyncedAt: nullableTime(row.LastSyncedAt), LastError: row.LastSyncError,
 		Syncing: row.SyncEnabled && row.SyncingUntil.Valid && row.SyncingUntil.Time.After(h.now()),
 	}
@@ -181,11 +205,11 @@ func (h *Handler) googleCalendar(row store.GoogleCalendar, linked map[[16]byte]p
 		sync.NextSyncAt = nullableTime(row.NextSyncAt)
 		switch {
 		case row.SyncFailures > 0:
-			sync.State = generated.Failing
+			sync.State = generated.GoogleCalendarSyncStateFailing
 		case row.LastSyncedAt.Valid:
-			sync.State = generated.Synced
+			sync.State = generated.GoogleCalendarSyncStateSynced
 		default:
-			sync.State = generated.Pending
+			sync.State = generated.GoogleCalendarSyncStatePending
 		}
 		if source, ok := linked[row.ID.Bytes]; ok {
 			id := uuid(source)
@@ -205,7 +229,7 @@ func (h *Handler) googleCalendar(row store.GoogleCalendar, linked map[[16]byte]p
 	return generated.GoogleCalendar{
 		Id: uuid(row.ID), GoogleCalendarId: row.GoogleCalendarID, Summary: row.Summary, Color: row.Color,
 		AccessRole: generated.GoogleCalendarAccessRole(row.AccessRole), Primary: row.IsPrimary, SyncEnabled: row.SyncEnabled,
-		Sync: sync, CreatedAt: row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time,
+		LifeOs: lifeOS != "" && row.GoogleCalendarID == lifeOS, Sync: sync, CreatedAt: row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time,
 	}
 }
 

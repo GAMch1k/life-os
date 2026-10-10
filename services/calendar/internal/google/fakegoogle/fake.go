@@ -73,6 +73,26 @@ type Server struct {
 	EventsPageSize int
 	// EventRequests are the events.list queries received, by calendar.
 	EventRequests map[string][]url.Values
+
+	// WriteStatus, when set, fails every write (event insert, patch, and
+	// delete, calendar insert) with this HTTP status.
+	WriteStatus int
+	// writes are the writes received (see Writes).
+	writes []Write
+	// gone keeps a deleted event's last version, so a patch with status
+	// confirmed restores it as Google does.
+	gone map[string]google.Event
+	// timeZones are the time zones of calendars created through the API.
+	timeZones map[string]string
+}
+
+// Write is one write request the fake received.
+type Write struct {
+	Method, Calendar, EventID string
+	// IfMatch is the etag the request sent, if any.
+	IfMatch string
+	// Body is the JSON body.
+	Body map[string]any
 }
 
 // eventLog is one calendar's events with a change sequence: a sync token
@@ -97,7 +117,7 @@ func New(t *testing.T, calendars ...Calendar) *Server {
 	t.Helper()
 	server := &Server{
 		Calendars: calendars, codes: map[string]string{}, refresh: map[string]bool{}, access: map[string]bool{}, PageSize: 2,
-		events: map[string]*eventLog{}, EventRequests: map[string][]url.Values{},
+		events: map[string]*eventLog{}, EventRequests: map[string][]url.Values{}, gone: map[string]google.Event{}, timeZones: map[string]string{},
 	}
 	server.Server = httptest.NewServer(http.HandlerFunc(server.serve))
 	t.Cleanup(server.Close)
@@ -183,13 +203,35 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	case r.Method == http.MethodGet && r.URL.Path == "/calendar/v3/users/me/calendarList":
 		s.calendarList(w, r)
-	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/calendar/v3/calendars/") && strings.HasSuffix(r.URL.Path, "/events"):
-		calendarID, err := url.PathUnescape(strings.TrimSuffix(strings.TrimPrefix(r.URL.EscapedPath(), "/calendar/v3/calendars/"), "/events"))
+	case r.Method == http.MethodPost && r.URL.Path == "/calendar/v3/calendars":
+		s.insertCalendar(w, r)
+	case strings.HasPrefix(r.URL.EscapedPath(), "/calendar/v3/calendars/"):
+		s.calendarRequest(w, r)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+// calendarRequest routes /calendars/{calendar}/events[/{event}[/instances]].
+func (s *Server) calendarRequest(w http.ResponseWriter, r *http.Request) {
+	parts := strings.Split(strings.TrimPrefix(r.URL.EscapedPath(), "/calendar/v3/calendars/"), "/")
+	for index, part := range parts {
+		unescaped, err := url.PathUnescape(part)
 		if err != nil {
 			http.NotFound(w, r)
 			return
 		}
-		s.listEvents(w, r, calendarID)
+		parts[index] = unescaped
+	}
+	switch {
+	case len(parts) == 2 && parts[1] == "events" && r.Method == http.MethodGet:
+		s.listEvents(w, r, parts[0])
+	case len(parts) == 2 && parts[1] == "events" && r.Method == http.MethodPost:
+		s.insertEvent(w, r, parts[0])
+	case len(parts) == 3 && parts[1] == "events":
+		s.eventRequest(w, r, parts[0], parts[2])
+	case len(parts) == 4 && parts[1] == "events" && parts[3] == "instances" && r.Method == http.MethodGet:
+		s.instances(w, r, parts[0], parts[2])
 	default:
 		http.NotFound(w, r)
 	}
@@ -341,11 +383,7 @@ func (s *Server) PutEvent(calendarID string, events ...google.Event) {
 		if event.Status == "" {
 			event.Status = "confirmed"
 		}
-		log.seq++
-		if _, known := log.events[event.ID]; !known {
-			log.order = append(log.order, event.ID)
-		}
-		log.events[event.ID] = &loggedEvent{event: event, changed: log.seq}
+		s.store(log, event)
 	}
 }
 
@@ -470,4 +508,370 @@ func (s *Server) listEvents(w http.ResponseWriter, r *http.Request, calendarID s
 		page["nextSyncToken"] = fmt.Sprintf("sync-%d", log.seq)
 	}
 	writeJSON(w, http.StatusOK, page)
+}
+
+// apiError answers like the Calendar API refusing a request.
+func apiError(w http.ResponseWriter, status int, message string) {
+	writeJSON(w, status, map[string]any{"error": map[string]any{"code": status, "message": message}})
+}
+
+// Writes returns the write requests received so far.
+func (s *Server) Writes() []Write {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]Write(nil), s.writes...)
+}
+
+// Event returns a calendar's stored event (a deleted one is cancelled).
+func (s *Server) Event(calendarID, id string) (google.Event, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	stored, ok := s.log(calendarID).events[id]
+	if !ok {
+		return google.Event{}, false
+	}
+	return stored.event, true
+}
+
+// Events returns a calendar's stored events in the order they were added.
+func (s *Server) Events(calendarID string) []google.Event {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	log := s.log(calendarID)
+	out := []google.Event{}
+	for _, id := range log.order {
+		if stored, ok := log.events[id]; ok {
+			out = append(out, stored.event)
+		}
+	}
+	return out
+}
+
+// ChangeEvent changes a stored event as the owner would in Google: a new
+// etag and updated time, reported by the next listing.
+func (s *Server) ChangeEvent(calendarID, id string, change func(*google.Event)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	log := s.log(calendarID)
+	stored, ok := log.events[id]
+	if !ok {
+		return
+	}
+	event := stored.event
+	change(&event)
+	s.store(log, event)
+}
+
+// CalendarTimeZone is the time zone a calendar was created with.
+func (s *Server) CalendarTimeZone(calendarID string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.timeZones[calendarID]
+}
+
+// stamp gives an event a new etag and updated time (always later).
+func (s *Server) stamp(event *google.Event) {
+	s.serial++
+	event.ETag = fmt.Sprintf("\"etag-%d\"", s.serial)
+	event.Updated = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Add(time.Duration(s.serial) * time.Second).Format("2006-01-02T15:04:05.000Z")
+}
+
+// store saves a changed event as a change of the calendar.
+func (s *Server) store(log *eventLog, event google.Event) google.Event {
+	if event.Status == "" {
+		event.Status = "confirmed"
+	}
+	s.stamp(&event)
+	log.seq++
+	if _, known := log.events[event.ID]; !known {
+		log.order = append(log.order, event.ID)
+	}
+	log.events[event.ID] = &loggedEvent{event: event, changed: log.seq}
+	return event
+}
+
+func (s *Server) calendar(calendarID string) (Calendar, bool) {
+	for _, calendar := range s.Calendars {
+		if calendar.ID == calendarID {
+			return calendar, true
+		}
+	}
+	return Calendar{}, false
+}
+
+// write checks a write: a known, writable calendar, a live access token,
+// and no configured failure; it logs it and reports whether to go on.
+func (s *Server) write(w http.ResponseWriter, r *http.Request, calendarID, eventID string, body map[string]any) bool {
+	s.writes = append(s.writes, Write{Method: r.Method, Calendar: calendarID, EventID: eventID, IfMatch: r.Header.Get("If-Match"), Body: body})
+	if !s.access[strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")] {
+		apiError(w, http.StatusUnauthorized, "Request had invalid authentication credentials.")
+		return false
+	}
+	if s.WriteStatus != 0 {
+		apiError(w, s.WriteStatus, "Backend Error")
+		return false
+	}
+	if calendarID == "" {
+		return true
+	}
+	calendar, ok := s.calendar(calendarID)
+	if !ok {
+		apiError(w, http.StatusNotFound, "Not Found")
+		return false
+	}
+	if calendar.AccessRole != "owner" && calendar.AccessRole != "writer" {
+		apiError(w, http.StatusForbidden, "Forbidden")
+		return false
+	}
+	return true
+}
+
+func readBody(r *http.Request) (map[string]any, error) {
+	body := map[string]any{}
+	if r.Body == nil {
+		return body, nil
+	}
+	err := json.NewDecoder(r.Body).Decode(&body)
+	if err != nil && err.Error() == "EOF" {
+		return map[string]any{}, nil
+	}
+	return body, err
+}
+
+func (s *Server) insertCalendar(w http.ResponseWriter, r *http.Request) {
+	body, err := readBody(r)
+	if err != nil {
+		apiError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	if !s.write(w, r, "", "", body) {
+		return
+	}
+	s.serial++
+	id := fmt.Sprintf("lifeos%d@group.calendar.google.com", s.serial)
+	summary, _ := body["summary"].(string)
+	zone, _ := body["timeZone"].(string)
+	s.Calendars = append(s.Calendars, Calendar{ID: id, Summary: summary, AccessRole: "owner"})
+	s.timeZones[id] = zone
+	s.log(id).timeZone = zone
+	writeJSON(w, http.StatusOK, map[string]any{"kind": "calendar#calendar", "id": id, "summary": summary, "timeZone": zone})
+}
+
+// toEvent decodes a request body as an event.
+func toEvent(body map[string]any) (google.Event, error) {
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return google.Event{}, err
+	}
+	var event google.Event
+	err = json.Unmarshal(raw, &event)
+	return event, err
+}
+
+func (s *Server) insertEvent(w http.ResponseWriter, r *http.Request, calendarID string) {
+	body, err := readBody(r)
+	if err != nil {
+		apiError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	if !s.write(w, r, calendarID, "", body) {
+		return
+	}
+	event, err := toEvent(body)
+	if err != nil || event.Start == nil || event.End == nil {
+		apiError(w, http.StatusBadRequest, "Missing start or end time.")
+		return
+	}
+	log := s.log(calendarID)
+	if event.ID == "" {
+		s.serial++
+		event.ID = fmt.Sprintf("evt%d", s.serial)
+	} else if _, exists := log.events[event.ID]; exists {
+		apiError(w, http.StatusConflict, "The requested identifier already exists.")
+		return
+	}
+	event.Status = "confirmed"
+	writeJSON(w, http.StatusOK, s.store(log, event))
+}
+
+// lookup finds an event by id: stored, or an instance of a stored recurring
+// event named as Google names instances (not stored until changed).
+func (s *Server) lookup(log *eventLog, id string) (google.Event, bool) {
+	if stored, ok := log.events[id]; ok {
+		return stored.event, true
+	}
+	master, suffix, ok := strings.Cut(id, "_")
+	if !ok {
+		return google.Event{}, false
+	}
+	stored, ok := log.events[master]
+	if !ok || len(stored.event.Recurrence) == 0 || stored.event.Cancelled() {
+		return google.Event{}, false
+	}
+	return instanceOf(stored.event, suffix)
+}
+
+// instanceOf is the unchanged instance of master originally starting at
+// suffix (20261012T070000Z, or 20261024 all-day).
+func instanceOf(master google.Event, suffix string) (google.Event, bool) {
+	instance := master
+	instance.ID, instance.RecurringEventID, instance.Recurrence = master.ID+"_"+suffix, master.ID, nil
+	instance.ETag = fmt.Sprintf("\"%s-%s\"", strings.Trim(master.ETag, "\""), suffix)
+	if master.Start != nil && master.Start.Date != "" {
+		day, err := time.Parse("20060102", suffix)
+		if err != nil {
+			return google.Event{}, false
+		}
+		first, _ := time.Parse(time.DateOnly, master.Start.Date)
+		last := first.AddDate(0, 0, 1)
+		if master.End != nil && master.End.Date != "" {
+			last, _ = time.Parse(time.DateOnly, master.End.Date)
+		}
+		instance.OriginalStartTime = &google.EventTime{Date: day.Format(time.DateOnly)}
+		instance.Start = &google.EventTime{Date: day.Format(time.DateOnly)}
+		instance.End = &google.EventTime{Date: day.Add(last.Sub(first)).Format(time.DateOnly)}
+		return instance, true
+	}
+	at, err := time.Parse("20060102T150405Z", suffix)
+	if err != nil || master.Start == nil || master.End == nil {
+		return google.Event{}, false
+	}
+	start, err1 := time.Parse(time.RFC3339, master.Start.DateTime)
+	end, err2 := time.Parse(time.RFC3339, master.End.DateTime)
+	if err1 != nil || err2 != nil {
+		return google.Event{}, false
+	}
+	zone := master.Start.TimeZone
+	loc, err := time.LoadLocation(zone)
+	if err != nil {
+		loc = time.UTC
+	}
+	instance.OriginalStartTime = &google.EventTime{DateTime: at.In(loc).Format(time.RFC3339), TimeZone: zone}
+	instance.Start = &google.EventTime{DateTime: at.In(loc).Format(time.RFC3339), TimeZone: zone}
+	instance.End = &google.EventTime{DateTime: at.Add(end.Sub(start)).In(loc).Format(time.RFC3339), TimeZone: zone}
+	return instance, true
+}
+
+func (s *Server) eventRequest(w http.ResponseWriter, r *http.Request, calendarID, eventID string) {
+	log := s.log(calendarID)
+	if r.Method == http.MethodGet {
+		if !s.access[strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")] {
+			apiError(w, http.StatusUnauthorized, "Request had invalid authentication credentials.")
+			return
+		}
+		if _, ok := s.calendar(calendarID); !ok {
+			apiError(w, http.StatusNotFound, "Not Found")
+			return
+		}
+		event, ok := s.lookup(log, eventID)
+		if !ok {
+			apiError(w, http.StatusNotFound, "Not Found")
+			return
+		}
+		writeJSON(w, http.StatusOK, event)
+		return
+	}
+	body, err := readBody(r)
+	if err != nil {
+		apiError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	if r.Method != http.MethodPatch && r.Method != http.MethodDelete {
+		http.NotFound(w, r)
+		return
+	}
+	if !s.write(w, r, calendarID, eventID, body) {
+		return
+	}
+	current, ok := s.lookup(log, eventID)
+	if !ok {
+		apiError(w, http.StatusNotFound, "Not Found")
+		return
+	}
+	if match := r.Header.Get("If-Match"); match != "" && match != current.ETag {
+		apiError(w, http.StatusPreconditionFailed, "Precondition Failed")
+		return
+	}
+	if r.Method == http.MethodDelete {
+		if current.Cancelled() {
+			apiError(w, http.StatusGone, "Resource has been deleted")
+			return
+		}
+		s.gone[calendarID+"/"+eventID] = current
+		gone := google.Event{ID: eventID, Status: "cancelled", RecurringEventID: current.RecurringEventID, OriginalStartTime: current.OriginalStartTime}
+		s.store(log, gone)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if current.Cancelled() && current.RecurringEventID == "" {
+		if previous, ok := s.gone[calendarID+"/"+eventID]; ok {
+			current = previous
+		}
+	}
+	patched, err := mergePatch(current, body)
+	if err != nil {
+		apiError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	patched.ID, patched.RecurringEventID, patched.OriginalStartTime = current.ID, current.RecurringEventID, current.OriginalStartTime
+	writeJSON(w, http.StatusOK, s.store(log, patched))
+}
+
+// mergePatch applies a PATCH body to an event as Google does: objects are
+// merged, null removes a field, and arrays are replaced.
+func mergePatch(event google.Event, body map[string]any) (google.Event, error) {
+	raw, err := json.Marshal(event)
+	if err != nil {
+		return google.Event{}, err
+	}
+	var target map[string]any
+	if err := json.Unmarshal(raw, &target); err != nil {
+		return google.Event{}, err
+	}
+	merge(target, body)
+	return toEvent(target)
+}
+
+func merge(target, patch map[string]any) {
+	for key, value := range patch {
+		if value == nil {
+			delete(target, key)
+			continue
+		}
+		if object, ok := value.(map[string]any); ok {
+			existing, _ := target[key].(map[string]any)
+			if existing == nil {
+				existing = map[string]any{}
+			}
+			merge(existing, object)
+			target[key] = existing
+			continue
+		}
+		target[key] = value
+	}
+}
+
+func (s *Server) instances(w http.ResponseWriter, r *http.Request, calendarID, eventID string) {
+	if !s.access[strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")] {
+		apiError(w, http.StatusUnauthorized, "Request had invalid authentication credentials.")
+		return
+	}
+	log := s.log(calendarID)
+	master, ok := log.events[eventID]
+	if !ok || master.event.Cancelled() {
+		apiError(w, http.StatusNotFound, "Not Found")
+		return
+	}
+	original := r.URL.Query().Get("originalStart")
+	suffix := ""
+	if day, err := time.Parse(time.DateOnly, original); err == nil {
+		suffix = day.Format("20060102")
+	} else if at, err := time.Parse(time.RFC3339, original); err == nil {
+		suffix = at.UTC().Format("20060102T150405Z")
+	}
+	items := []google.Event{}
+	if instance, ok := s.lookup(log, eventID+"_"+suffix); ok && suffix != "" {
+		items = append(items, instance)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"kind": "calendar#events", "items": items})
 }

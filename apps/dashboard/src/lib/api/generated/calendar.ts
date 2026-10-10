@@ -64,14 +64,14 @@ export interface paths {
         post?: never;
         /**
          * Delete a calendar event
-         * @description Removes the event permanently; for a recurring event every occurrence and its own changes (**All events**). Set `status: cancelled` instead to keep it as history. Imported events cannot be deleted (409 `managed_by_source`): their source removes them.
+         * @description Removes the event permanently; for a recurring event every occurrence and its own changes (**All events**). Set `status: cancelled` instead to keep it as history. Feed events and read-only Google events cannot be deleted (409 `managed_by_source`, `google_read_only`). An editable Google event is deleted in Google first. A Life OS event exported to Google is deleted from the Life OS calendar afterwards.
          */
         delete: operations["deleteEvent"];
         options?: never;
         head?: never;
         /**
          * Update a calendar event
-         * @description Changes only the fields present in the body; a field set to null is cleared. Changing `allDay` switches the event between timed and all-day: the other kind's fields (`startAt`, `endAt`, `timeZone` or `startDate`, `endDate`) are cleared and the new kind's start and end must be given. The result is validated as a whole, as on create. `status: cancelled` keeps the event as history and drops it from listings; `status: active` restores it. An event imported from a source (`source.kind` other than `manual`) is read-only except for `reminders`, `useDefaultReminders`, and `priority`: naming any other field returns 409 `managed_by_source`. For a recurring event this is **All events**: every occurrence changes. Occurrences keep their own changes, except that a change of the start, the kind (`allDay`), `timeZone`, or the `recurrence` rule removes the changes and skips of occurrences that no longer exist (an occurrence exists while the series still has an occurrence with the same original start, its `recurrenceId`).
+         * @description Changes only the fields present in the body; a field set to null is cleared. Changing `allDay` switches the event between timed and all-day: the other kind's fields (`startAt`, `endAt`, `timeZone` or `startDate`, `endDate`) are cleared and the new kind's start and end must be given. The result is validated as a whole, as on create. `status: cancelled` keeps the event as history and drops it from listings; `status: active` restores it. An event imported from a feed (`source.kind` `ics`), or a Google event that is not `editable` (a calendar the account can only read, or one occurrence of a rule Calendar cannot hold), is read-only except for `reminders`, `useDefaultReminders`, and `priority`: naming any other field returns 409 `managed_by_source` (feeds) or `google_read_only` (Google, with the reason). An editable Google event is changed in Google first (with its etag); cancelling one deletes it in Google (Life OS keeps it as cancelled history), and its reminders become Google's notifications (at most 5, minutes before the start; a reminder at a time of day only on an all-day event, at least a day before: else 400). When the event changed in Google meanwhile nothing is written and the answer is 409 `google_conflict` ("Changed in Google meanwhile; showing the latest version"); Google unreachable is 502 `google_unavailable`, an expired connection 409 `google_expired`, and nothing changes in Life OS. A Life OS event is changed here and its change exported to the Life OS calendar afterwards. For a recurring event this is **All events**: every occurrence changes. Occurrences keep their own changes, except that a change of the start, the kind (`allDay`), `timeZone`, or the `recurrence` rule removes the changes and skips of occurrences that no longer exist (an occurrence exists while the series still has an occurrence with the same original start, its `recurrenceId`).
          */
         patch: operations["updateEvent"];
         trace?: never;
@@ -95,7 +95,7 @@ export interface paths {
         head?: never;
         /**
          * Change one occurrence of a recurring event (This event)
-         * @description **This event**: changes only this occurrence; the series and its other occurrences stay. Only the fields present change, as for updating an event; `description` or `location` set to null is cleared for this occurrence only. A new start and end keep the series' kind: `startAt`/`endAt` for a timed series, `startDate`/`endDate` for an all-day one; `allDay` other than the series' returns 400 (`an occurrence cannot switch between timed and all-day; change all events instead`), and so do `recurrence` (`recurrence belongs to the series: change all events, or this and following`) and `timeZone` (`timeZone belongs to the series: change all events, or this and following`). Other errors are those of updating an event, such as `endAt must be after startAt`. `status: cancelled` skips the occurrence (kept as history, left out of listings); `status: active` brings it back. A field set back to the series' value stops being this occurrence's own change. Returns the occurrence. An imported event returns 409 `managed_by_source`.
+         * @description **This event**: changes only this occurrence; the series and its other occurrences stay. Only the fields present change, as for updating an event; `description` or `location` set to null is cleared for this occurrence only. A new start and end keep the series' kind: `startAt`/`endAt` for a timed series, `startDate`/`endDate` for an all-day one; `allDay` other than the series' returns 400 (`an occurrence cannot switch between timed and all-day; change all events instead`), and so do `recurrence` (`recurrence belongs to the series: change all events, or this and following`) and `timeZone` (`timeZone belongs to the series: change all events, or this and following`). Other errors are those of updating an event, such as `endAt must be after startAt`. `status: cancelled` skips the occurrence (kept as history, left out of listings); `status: active` brings it back. A field set back to the series' value stops being this occurrence's own change. Returns the occurrence. A feed event returns 409 `managed_by_source`; for a Google series the change is written to Google's instance of the occurrence (skipping cancels the instance), with the errors of updating a Google event.
          */
         patch: operations["updateEventOccurrence"];
         trace?: never;
@@ -111,7 +111,7 @@ export interface paths {
         put?: never;
         /**
          * Change this and following occurrences
-         * @description **This and following**: the series ends with the occurrence before this one (its `recurrence` gets `until` at that occurrence's start and loses `count`), and a new series (a new event id) starts at this occurrence with the body's changes, applied as for updating an event. Without a `recurrence` in the body the new series repeats like the old one (`recurrence: null` makes it a single event); a `count` rule is shared out: the old series keeps the occurrences before, the new one the remaining count. Times in the body are the new series' start and end; leave them out to start it at this occurrence's original time. Occurrence changes and skips from this occurrence on move to the new series when their occurrence still exists there (the same original start: no change of time, kind, time zone, or rule), otherwise they are dropped; the fields the body sets replace this occurrence's own changes to them. Returns the new series (201). On the series' first occurrence nothing is split: the body changes the series itself, as `PATCH /v1/events/{eventId}`, and the series is returned (200). An imported event returns 409 `managed_by_source`.
+         * @description **This and following**: the series ends with the occurrence before this one (its `recurrence` gets `until` at that occurrence's start and loses `count`), and a new series (a new event id) starts at this occurrence with the body's changes, applied as for updating an event. Without a `recurrence` in the body the new series repeats like the old one (`recurrence: null` makes it a single event); a `count` rule is shared out: the old series keeps the occurrences before, the new one the remaining count. Times in the body are the new series' start and end; leave them out to start it at this occurrence's original time. Occurrence changes and skips from this occurrence on move to the new series when their occurrence still exists there (the same original start: no change of time, kind, time zone, or rule), otherwise they are dropped; the fields the body sets replace this occurrence's own changes to them. Returns the new series (201). On the series' first occurrence nothing is split: the body changes the series itself, as `PATCH /v1/events/{eventId}`, and the series is returned (200). A feed event returns 409 `managed_by_source`. For a Google series the new series is created in Google, its skips and occurrence changes carried over, and then the old series is ended with an UNTIL (if that fails the new one is deleted again).
          */
         post: operations["splitEventSeries"];
         delete?: never;
@@ -131,7 +131,7 @@ export interface paths {
         put?: never;
         /**
          * Delete this and following occurrences
-         * @description **This and following**, deleted: the series ends with the occurrence before this one (its `recurrence` gets `until` at that occurrence's start and loses `count`), and the changes and skips of this and later occurrences are removed. On the series' first occurrence the whole series is deleted, as `DELETE /v1/events/{eventId}`. An imported event returns 409 `managed_by_source`.
+         * @description **This and following**, deleted: the series ends with the occurrence before this one (its `recurrence` gets `until` at that occurrence's start and loses `count`), and the changes and skips of this and later occurrences are removed. On the series' first occurrence the whole series is deleted, as `DELETE /v1/events/{eventId}`. A feed event returns 409 `managed_by_source`; a Google series is ended (or deleted) in Google first.
          */
         post: operations["truncateEventSeries"];
         delete?: never;
@@ -278,7 +278,11 @@ export interface paths {
         delete: operations["disconnectGoogle"];
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Change the Google connection's settings
+         * @description `exportEnabled` switches exporting events created in Life OS to the Life OS calendar on or off. Switched on, every upcoming Life OS event (and every later change) is exported; switched off, nothing more is written there (what it holds stays in Google).
+         */
+        patch: operations["updateGoogleConnection"];
         trace?: never;
     };
     "/v1/google/connection/authorize": {
@@ -520,12 +524,33 @@ export interface components {
              */
             removedFromSourceAt?: string | null;
             source: components["schemas"]["EventSource"];
+            /** @description Whether the event can be changed through this API beyond its reminders: Life OS events and Google events of calendars the account may edit; not feed events, events of Google calendars the account can only read, or occurrences of a Google rule Calendar cannot hold. */
+            editable: boolean;
+            /** @description Why the event is not editable, for the owner; null when it is. */
+            readOnlyReason?: string | null;
+            google?: components["schemas"]["EventGoogleLink"];
             externalReference?: components["schemas"]["ExternalReference"];
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
             updatedAt: string;
         };
+        /** @description Where the event is in Google Calendar and how its sync stands; null for an event that is not in Google (a feed event, or a Life OS event while Google is not connected or export is off). A Google event is always `synced` (its changes are written to Google first). A Life OS event is `pending` while its latest change waits to be exported to the Life OS calendar, `synced` once Google has it, and `failed` when the last attempt failed (`error`; retried automatically). */
+        EventGoogleLink: {
+            /**
+             * Format: uuid
+             * @description The Google calendar's id in Calendar (see /v1/google/calendars); null before the Life OS calendar exists.
+             */
+            calendarId?: string | null;
+            /** @description The Google calendar's name, such as "Owner" or "Life OS". */
+            calendarName: string;
+            /** @description The event is a Life OS event exported to the Life OS calendar. */
+            lifeOs: boolean;
+            /** @enum {string} */
+            state: "synced" | "pending" | "failed";
+            /** @description Why the last export failed; null otherwise. */
+            error?: string | null;
+        } | null;
         /** @description A timed event needs startAt and endAt (endAt after startAt); an all-day event needs startDate and endDate (endDate not before startDate) and takes no timeZone. */
         CreateEventRequest: {
             title: string;
@@ -786,6 +811,38 @@ export interface components {
             connectedAt?: string | null;
             /** @description Why the connection is expired or in error; null while connected. */
             lastError?: string | null;
+            /** @description Whether events created in Life OS are exported to the Life OS calendar (the owner's "Export events created in Life OS"; on by default). */
+            exportEnabled: boolean;
+            lifeOsCalendar?: components["schemas"]["LifeOsCalendar"];
+            export: components["schemas"]["GoogleExportState"];
+        };
+        /** @description The "Life OS" calendar Calendar created in the owner's Google account for the events created in Life OS; null until it exists. Created when Google is connected with export on; if the owner deletes it in Google, Calendar creates it again at the next export and says so in `note`. */
+        LifeOsCalendar: {
+            googleCalendarId: string;
+            /**
+             * Format: uuid
+             * @description Its id in Calendar's calendar list (/v1/google/calendars), where it syncs like the others.
+             */
+            calendarId?: string | null;
+            summary: string;
+            /** Format: date-time */
+            createdAt?: string | null;
+            /** @description What happened to it last, such as that it was deleted in Google and created again; null when nothing needs saying. */
+            note?: string | null;
+        } | null;
+        /** @description How exporting Life OS events goes. */
+        GoogleExportState: {
+            /** @description Life OS events whose latest change waits to be exported. */
+            pending: number;
+            /** @description Life OS events whose last export failed; retried automatically with growing pauses. */
+            failed: number;
+            /** @description The latest export failure. */
+            lastError?: string | null;
+            /** Format: date-time */
+            lastExportedAt?: string | null;
+        };
+        UpdateGoogleConnectionRequest: {
+            exportEnabled: boolean;
         };
         GoogleAuthorization: {
             /** @description Google's consent page; open it in the browser. */
@@ -815,6 +872,8 @@ export interface components {
             primary: boolean;
             /** @description Whether the calendar syncs into Life OS. */
             syncEnabled: boolean;
+            /** @description This is the Life OS calendar, where events created in Life OS are exported. */
+            lifeOs: boolean;
             sync: components["schemas"]["GoogleCalendarSync"];
             /** Format: date-time */
             createdAt: string;
@@ -870,6 +929,8 @@ export interface components {
         SourceKind: components["schemas"]["EventSourceKind"];
         /** @description Only events imported from this source. */
         SourceId: string;
+        /** @description Only events that can be changed through this API (`editable`): Life OS events, and Google events of calendars the account may edit that are single events or series Calendar holds; not feed events, read-only Google calendars, or occurrences expanded from a Google rule. The AI looks for the events to change this way. */
+        Editable: boolean;
         EventId: string;
         /** @description The occurrence's `occurrence.recurrenceId` from a listing (URL-encoded): an RFC 3339 instant for a timed series (2026-10-12T16:00:00Z), a date for an all-day one (2026-10-24). */
         RecurrenceId: string;
@@ -897,6 +958,8 @@ export interface operations {
                 sourceKind?: components["parameters"]["SourceKind"];
                 /** @description Only events imported from this source. */
                 sourceId?: components["parameters"]["SourceId"];
+                /** @description Only events that can be changed through this API (`editable`): Life OS events, and Google events of calendars the account may edit that are single events or series Calendar holds; not feed events, read-only Google calendars, or occurrences expanded from a Google rule. The AI looks for the events to change this way. */
+                editable?: components["parameters"]["Editable"];
                 /** @description The previous page's nextCursor. Opaque; only valid with the parameters it was returned for. */
                 cursor?: components["parameters"]["Cursor"];
                 limit?: number;
@@ -980,6 +1043,8 @@ export interface operations {
                 sourceKind?: components["parameters"]["SourceKind"];
                 /** @description Only events imported from this source. */
                 sourceId?: components["parameters"]["SourceId"];
+                /** @description Only events that can be changed through this API (`editable`): Life OS events, and Google events of calendars the account may edit that are single events or series Calendar holds; not feed events, read-only Google calendars, or occurrences expanded from a Google rule. The AI looks for the events to change this way. */
+                editable?: components["parameters"]["Editable"];
                 /** @description The previous page's nextCursor. Opaque; only valid with the parameters it was returned for. */
                 cursor?: components["parameters"]["Cursor"];
                 limit?: number;
@@ -1076,8 +1141,15 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The event is imported from a source (managed_by_source) */
+            /** @description The event is imported from a feed (managed_by_source) or read-only in Google (google_read_only), it changed in Google meanwhile (google_conflict), or the Google connection expired (google_expired) */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Google could not be reached or refused the change (google_unavailable, google_rejected) */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1123,8 +1195,15 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The event kept changing concurrently (retry the update), or it is imported and the update names more than its reminders and priority (managed_by_source) */
+            /** @description The event kept changing concurrently (retry the update), it is imported and the update names more than its reminders and priority (managed_by_source, google_read_only), it changed in Google meanwhile (google_conflict) or was deleted there (google_deleted), or the Google connection expired (google_expired) */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Google could not be reached or refused the change (google_unavailable, google_rejected); nothing changed */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1210,8 +1289,15 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The event is imported (managed_by_source) */
+            /** @description The event is imported from a feed (managed_by_source) or read-only in Google (google_read_only), or it changed in Google meanwhile (google_conflict) */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Google could not be reached or refused the change (google_unavailable, google_rejected) */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1268,8 +1354,15 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The event is imported (managed_by_source), or it kept changing concurrently (retry) */
+            /** @description The event is imported from a feed (managed_by_source) or read-only in Google (google_read_only), it changed in Google meanwhile (google_conflict), or it kept changing concurrently (retry) */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Google could not be reached or refused the change (google_unavailable, google_rejected) */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1311,8 +1404,15 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The event is imported (managed_by_source) */
+            /** @description The event is imported from a feed (managed_by_source) or read-only in Google (google_read_only), or it changed in Google meanwhile (google_conflict) */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Google could not be reached or refused the change (google_unavailable, google_rejected) */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -1720,6 +1820,44 @@ export interface operations {
             };
             /** @description No valid X-Life-OS-Actor (actor_required) */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    updateGoogleConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateGoogleConnectionRequest"];
+            };
+        };
+        responses: {
+            /** @description The connection */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoogleConnection"];
+                };
+            };
+            /** @description Invalid request, or no valid X-Life-OS-Actor (actor_required) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not connected (google_not_connected) */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

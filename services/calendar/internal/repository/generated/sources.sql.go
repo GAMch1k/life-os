@@ -417,7 +417,7 @@ INSERT INTO events (
     title, description, location, all_day, start_at, end_at, start_date, end_date, time_zone,
     recurrence_frequency, recurrence_interval, recurrence_until, recurrence_by_weekday, recurrence_count,
     reminders, use_default_reminders, source_reminders,
-    status, cancelled_at, source_kind, source_id, external_uid
+    status, cancelled_at, source_kind, source_id, external_uid, priority
 )
 VALUES (
     $1, $2, $3, $4, $5, $6,
@@ -425,7 +425,7 @@ VALUES (
     $10, $11, $12,
     $13::text[], $14,
     $15, $16, $17,
-    $18, $19, $20, $21, $22
+    $18, $19, $20, $21, $22, $23
 )
 RETURNING id
 `
@@ -453,12 +453,15 @@ type InsertImportedEventParams struct {
 	SourceKind          string
 	SourceID            pgtype.UUID
 	ExternalUid         *string
+	Priority            *string
 }
 
 // A source's new event. A series (Google) has its rule; reminders and
 // use_default_reminders are the source's (an ICS feed gives the column
 // defaults: none of its own, following the source's defaults), and
-// source_reminders records them (null for a feed).
+// source_reminders records them (null for a feed). priority is the event's
+// own priority as its source gives it (Google, through a Life OS extended
+// property); null follows the source's default.
 func (q *Queries) InsertImportedEvent(ctx context.Context, arg InsertImportedEventParams) (pgtype.UUID, error) {
 	row := q.db.QueryRow(ctx, insertImportedEvent,
 		arg.Title,
@@ -483,6 +486,7 @@ func (q *Queries) InsertImportedEvent(ctx context.Context, arg InsertImportedEve
 		arg.SourceKind,
 		arg.SourceID,
 		arg.ExternalUid,
+		arg.Priority,
 	)
 	var id pgtype.UUID
 	err := row.Scan(&id)
@@ -831,9 +835,10 @@ SET title = $1, description = $2, location = $3,
     reminders = COALESCE($15, reminders),
     use_default_reminders = COALESCE($16, use_default_reminders),
     source_reminders = COALESCE($17, source_reminders),
-    status = $18, cancelled_at = $19, removed_from_source_at = NULL,
+    priority = CASE WHEN $18::boolean THEN $19 ELSE priority END,
+    status = $20, cancelled_at = $21, removed_from_source_at = NULL,
     updated_at = now()
-WHERE id = $20 AND source_id = $21
+WHERE id = $22 AND source_id = $23
 `
 
 type UpdateImportedEventParams struct {
@@ -854,6 +859,8 @@ type UpdateImportedEventParams struct {
 	Reminders           []byte
 	UseDefaultReminders *bool
 	SourceReminders     []byte
+	SetPriority         bool
+	Priority            *string
 	Status              string
 	CancelledAt         pgtype.Timestamptz
 	ID                  pgtype.UUID
@@ -864,7 +871,8 @@ type UpdateImportedEventParams struct {
 // had removed). The source identity and the owner's priority stay. reminders, use_default_reminders,
 // and source_reminders change only when given: a feed never gives them (the
 // owner's reminders stay), a Google sync gives the source's new reminders
-// unless the owner changed the event's own.
+// unless the owner changed the event's own. priority changes only with
+// set_priority: a Google event that carries Life OS's priority property.
 func (q *Queries) UpdateImportedEvent(ctx context.Context, arg UpdateImportedEventParams) error {
 	_, err := q.db.Exec(ctx, updateImportedEvent,
 		arg.Title,
@@ -884,6 +892,8 @@ func (q *Queries) UpdateImportedEvent(ctx context.Context, arg UpdateImportedEve
 		arg.Reminders,
 		arg.UseDefaultReminders,
 		arg.SourceReminders,
+		arg.SetPriority,
+		arg.Priority,
 		arg.Status,
 		arg.CancelledAt,
 		arg.ID,

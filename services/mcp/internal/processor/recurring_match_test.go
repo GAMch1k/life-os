@@ -47,7 +47,7 @@ func TestCancelGymTodayProposesTodaysOccurrence(t *testing.T) {
 	}
 	for index, search := range tools.searches {
 		bounded := index < 2
-		if search.Get("from") != "2026-10-09T22:00:00Z" || search.Has("to") != bounded || (bounded && search.Get("to") != "2026-10-10T22:00:00Z") || search.Get("sourceKind") != "manual" {
+		if search.Get("from") != "2026-10-09T22:00:00Z" || search.Has("to") != bounded || (bounded && search.Get("to") != "2026-10-10T22:00:00Z") || search.Get("editable") != "true" || search.Has("sourceKind") {
 			t.Fatalf("search %d = %v", index, search)
 		}
 	}

@@ -104,6 +104,16 @@ export function isImported(event: CalendarEvent) {
   return event.source.kind !== "manual";
 }
 
+/**
+ * Whether the event can be changed here beyond its reminders and priority:
+ * Life OS events and Google events of calendars you may edit (changed in
+ * Google first). Feed events, Google calendars you can only read, and
+ * occurrences of Google rules Calendar cannot hold are read-only.
+ */
+export function isEditable(event: CalendarEvent) {
+  return event.editable;
+}
+
 export function isCancelled(event: CalendarEvent) {
   return event.status === "cancelled";
 }
@@ -127,17 +137,79 @@ export function sourceLabel(event: CalendarEvent) {
   }
 }
 
-/** Why an imported event can't be edited here; undefined for Life OS events. */
+/**
+ * Why an event can't be edited here (Calendar says why); undefined when it
+ * can.
+ */
 export function readOnlyReason(event: CalendarEvent) {
+  if (event.editable) return undefined;
+  if (event.readOnlyReason) return event.readOnlyReason;
   const from =
     event.source.kind === "ics"
       ? (sourceName(event) ?? "an ICS feed")
-      : event.source.kind === "google"
-        ? (sourceName(event) ?? "Google Calendar")
-        : undefined;
-  return from
-    ? `Imported from ${from}, so it can only be changed there. Its reminders and priority can still be adjusted here.`
-    : undefined;
+      : (sourceName(event) ?? "Google Calendar");
+  return `Imported from ${from}, so it can only be changed there. Its reminders and priority can still be adjusted here.`;
+}
+
+/**
+ * The source badge of an event that is not a Life OS one: "Google · Owner"
+ * for a Google event, "Imported · ZAW" for a feed's.
+ */
+export function sourceBadge(event: CalendarEvent) {
+  const source = sourceLabel(event);
+  if (!source) return undefined;
+  return event.source.kind === "google"
+    ? `Google · ${source}`
+    : `Imported · ${source}`;
+}
+
+/**
+ * Where the event is in Google and how its sync stands, for its details:
+ * "In Google: Life OS" with "Exported", "Waiting to be exported", or the
+ * export's failure ("In Google: Owner", "Synced both ways" for a Google
+ * event); undefined when it is not in Google.
+ */
+export function googleSyncLabel(
+  event: CalendarEvent,
+): { place: string; state: string; failing: boolean } | undefined {
+  const link = event.google;
+  if (!link) return undefined;
+  const place = `In Google: ${link.calendarName}`;
+  switch (link.state) {
+    case "pending":
+      return { place, state: "Waiting to be exported", failing: false };
+    case "failed":
+      return {
+        place,
+        state: `Export failed${link.error ? `: ${link.error}` : ""}. Retrying automatically.`,
+        failing: true,
+      };
+    default:
+      return {
+        place,
+        state: link.lifeOs ? "Exported" : "Synced both ways",
+        failing: false,
+      };
+  }
+}
+
+/** The code of a Calendar error response, such as "google_conflict". */
+export function apiErrorCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null || !("error" in error)) {
+    return undefined;
+  }
+  const body = (error as { error?: { code?: unknown } }).error;
+  return typeof body?.code === "string" ? body.code : undefined;
+}
+
+/**
+ * Whether Calendar refused a change because the event changed or was
+ * deleted in Google meanwhile: it then shows Google's version, so the page
+ * reads the event again.
+ */
+export function changedInGoogle(error: unknown) {
+  const code = apiErrorCode(error);
+  return code === "google_conflict" || code === "google_deleted";
 }
 
 // Priority ----------------------------------------------------------------------
@@ -184,8 +256,8 @@ export function occurrenceKey(event: CalendarEvent) {
 /**
  * The event as FullCalendar input. An all-day event's last day is inclusive
  * in the API and its end exclusive in FullCalendar, so the end moves one day
- * later. Imported and cancelled events can't be dragged; dragging an
- * occurrence of a recurring event asks which occurrences move.
+ * later. Read-only (see isEditable) and cancelled events can't be dragged;
+ * dragging an occurrence of a recurring event asks which occurrences move.
  */
 export function toEventInput(event: CalendarEvent): EventInput | undefined {
   const imported = isImported(event);
@@ -193,7 +265,7 @@ export function toEventInput(event: CalendarEvent): EventInput | undefined {
   const common: EventInput = {
     id: occurrenceKey(event),
     title: event.title,
-    editable: !imported && !cancelled,
+    editable: isEditable(event) && !cancelled,
     classNames: [
       "lifeos-event",
       ...(imported ? ["lifeos-event-imported"] : []),
@@ -1562,4 +1634,23 @@ export async function restoreOccurrence(
     },
   );
   return { data, error, status: response.status };
+}
+
+/**
+ * The event (or the occurrence) as Calendar has it now, such as after a
+ * change refused because it changed in Google meanwhile; undefined when it
+ * no longer exists.
+ */
+export async function latestEvent(
+  event: CalendarEvent,
+): Promise<CalendarEvent | undefined> {
+  const { data } = event.occurrence
+    ? await calendarClient.GET(
+        "/v1/events/{eventId}/occurrences/{recurrenceId}",
+        { params: { path: occurrencePath(event) } },
+      )
+    : await calendarClient.GET("/v1/events/{eventId}", {
+        params: { path: { eventId: event.id } },
+      });
+  return data;
 }

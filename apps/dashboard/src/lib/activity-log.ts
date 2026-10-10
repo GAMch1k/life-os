@@ -82,6 +82,9 @@ const EVENT_LABELS: Record<string, string> = {
   "calendar.google.connected": "Google Calendar connected",
   "calendar.google.disconnected": "Google Calendar disconnected",
   "calendar.google.expired": "Google Calendar access expired",
+  "calendar.google.conflict": "Changed in Google meanwhile",
+  "calendar.google.calendar_created": "Life OS calendar created in Google",
+  "calendar.google.export_failed": "Export to Google failed",
   "notification.created": "Notification created",
   "notification.delivered": "Notification delivered",
   "notification.delivery_failed": "Notification delivery failed",
@@ -137,7 +140,12 @@ export function eventLabel(event: Pick<ActivityEvent, "type" | "data">) {
   const tool = text(event.data?.tool);
   if (event.type.startsWith("mcp.action.") && tool) return `${label}: ${tool}`;
   const title = text(event.data?.title);
-  if (event.type.startsWith("calendar.event.") && title) {
+  if (
+    (event.type.startsWith("calendar.event.") ||
+      event.type === "calendar.google.conflict" ||
+      event.type === "calendar.google.export_failed") &&
+    title
+  ) {
     return `${label}: ${title}`;
   }
   const source = text(event.data?.sourceName);

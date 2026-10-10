@@ -21,6 +21,8 @@ import { calendarClient } from "@/lib/api/calendar-client";
 import {
   calendarDetail,
   connectFailure,
+  EXPORT_NOTE,
+  exportDetail,
   GOOGLE_CONNECTED,
   GOOGLE_PARAM,
   GOOGLE_SETTINGS,
@@ -39,7 +41,8 @@ import { cn } from "@/lib/utils";
 /**
  * The Calendar toolbar's "Google Calendar" button and dialog: connect the
  * owner's Google account, choose which of its calendars sync (and see how
- * their sync is going), refresh the list, or disconnect. Back from Google's
+ * their sync is going), whether events created in Life OS are exported to
+ * the Life OS calendar, refresh the list, or disconnect. Back from Google's
  * consent page (`/calendar?google=connected`), the dialog opens by itself.
  * Sync times are shown in timeZone (the Calendar's: the browser's, else
  * the owner's).
@@ -254,6 +257,28 @@ function GooglePanel({
     }
   };
 
+  // Exporting Life OS events on or off; switched on, the upcoming ones go
+  // to Google within moments.
+  const setExport = (exportEnabled: boolean) =>
+    startTransition(async () => {
+      setError(undefined);
+      try {
+        const { data } = await calendarClient.PATCH("/v1/google/connection", {
+          body: { exportEnabled },
+        });
+        if (!data) {
+          setError("Could not save the export setting. Try again.");
+          return;
+        }
+        setLoaded((current) =>
+          current ? { ...current, connection: data } : current,
+        );
+        if (exportEnabled) showFirstSync();
+      } catch {
+        setError(UNAVAILABLE);
+      }
+    });
+
   const state = loaded ? googleState(loaded.connection) : undefined;
   const connection = loaded?.connection;
   const linked = Boolean(connection && connection.status !== "not_connected");
@@ -355,6 +380,15 @@ function GooglePanel({
           disabled={pending}
           onChoose={choose}
           saving={saving}
+          timeZone={timeZone}
+        />
+      ) : null}
+
+      {loaded && linked && state !== "not_configured" && connection ? (
+        <ExportSetting
+          connection={connection}
+          disabled={pending}
+          onChange={setExport}
           timeZone={timeZone}
         />
       ) : null}
@@ -497,6 +531,56 @@ function CalendarChoices({
             );
           })}
         </ul>
+      ) : null}
+    </FieldSet>
+  );
+}
+
+function ExportSetting({
+  connection,
+  disabled,
+  onChange,
+  timeZone,
+}: {
+  connection: GoogleConnection;
+  disabled: boolean;
+  onChange: (exportEnabled: boolean) => void;
+  timeZone: string;
+}) {
+  const detail = exportDetail(connection, timeZone);
+  const note = connection.lifeOsCalendar?.note;
+  return (
+    <FieldSet className="min-w-0 gap-2" data-testid="google-export">
+      <FieldLegend className="mb-1" variant="label">
+        Life OS calendar
+      </FieldLegend>
+      <p className="text-muted-foreground text-xs">{EXPORT_NOTE}</p>
+      <Label className="cursor-pointer gap-3 leading-normal font-normal">
+        <Checkbox
+          checked={connection.exportEnabled}
+          disabled={disabled}
+          onCheckedChange={onChange}
+        />
+        <span className="grid min-w-0">
+          <span className="font-medium">Export events created in Life OS</span>
+          <span
+            className={cn(
+              "text-xs break-words",
+              detail.failing ? "text-destructive" : "text-muted-foreground",
+            )}
+            data-testid="google-export-state"
+          >
+            {detail.text}
+          </span>
+        </span>
+      </Label>
+      {note ? (
+        <p
+          className="bg-warning-subtle border-warning/30 rounded-lg border px-3 py-2 text-xs break-words"
+          role="note"
+        >
+          {note}
+        </p>
       ) : null}
     </FieldSet>
   );

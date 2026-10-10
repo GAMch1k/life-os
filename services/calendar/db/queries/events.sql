@@ -39,6 +39,15 @@ WHERE events.recurrence_frequency IS NULL
   AND (sqlc.arg(include_cancelled)::boolean OR events.status = 'active')
   AND (sqlc.narg(source_kind)::text IS NULL OR events.source_kind = sqlc.narg(source_kind)::text)
   AND (sqlc.narg(source_id)::uuid IS NULL OR events.source_id = sqlc.narg(source_id)::uuid)
+  AND (NOT sqlc.arg(editable_only)::boolean OR events.source_kind = 'manual' OR (
+    events.source_kind = 'google' AND EXISTS (
+      SELECT 1 FROM calendar_sources AS editable_source
+      JOIN google_calendars AS editable_calendar ON editable_calendar.id = editable_source.google_calendar_id
+      JOIN google_events AS editable_event ON editable_event.calendar_id = editable_calendar.id
+      WHERE editable_source.id = events.source_id AND editable_calendar.access_role IN ('owner', 'writer')
+        AND editable_event.event_id = events.external_uid AND editable_event.recurring_event_id IS NULL
+    )
+  ))
   AND (
     sqlc.narg(after_id)::uuid IS NULL
     OR (span.starts_at, events.id) > (sqlc.narg(after_starts_at)::timestamptz, sqlc.narg(after_id)::uuid)
@@ -76,6 +85,15 @@ WHERE events.recurrence_frequency IS NOT NULL
   AND (sqlc.arg(include_cancelled)::boolean OR events.status = 'active')
   AND (sqlc.narg(source_kind)::text IS NULL OR events.source_kind = sqlc.narg(source_kind)::text)
   AND (sqlc.narg(source_id)::uuid IS NULL OR events.source_id = sqlc.narg(source_id)::uuid)
+  AND (NOT sqlc.arg(editable_only)::boolean OR events.source_kind = 'manual' OR (
+    events.source_kind = 'google' AND EXISTS (
+      SELECT 1 FROM calendar_sources AS editable_source
+      JOIN google_calendars AS editable_calendar ON editable_calendar.id = editable_source.google_calendar_id
+      JOIN google_events AS editable_event ON editable_event.calendar_id = editable_calendar.id
+      WHERE editable_source.id = events.source_id AND editable_calendar.access_role IN ('owner', 'writer')
+        AND editable_event.event_id = events.external_uid AND editable_event.recurring_event_id IS NULL
+    )
+  ))
 ORDER BY events.id;
 
 -- name: SearchEvents :many
@@ -117,6 +135,15 @@ WHERE events.recurrence_frequency IS NULL
   AND (sqlc.arg(include_cancelled)::boolean OR events.status = 'active')
   AND (sqlc.narg(source_kind)::text IS NULL OR events.source_kind = sqlc.narg(source_kind)::text)
   AND (sqlc.narg(source_id)::uuid IS NULL OR events.source_id = sqlc.narg(source_id)::uuid)
+  AND (NOT sqlc.arg(editable_only)::boolean OR events.source_kind = 'manual' OR (
+    events.source_kind = 'google' AND EXISTS (
+      SELECT 1 FROM calendar_sources AS editable_source
+      JOIN google_calendars AS editable_calendar ON editable_calendar.id = editable_source.google_calendar_id
+      JOIN google_events AS editable_event ON editable_event.calendar_id = editable_calendar.id
+      WHERE editable_source.id = events.source_id AND editable_calendar.access_role IN ('owner', 'writer')
+        AND editable_event.event_id = events.external_uid AND editable_event.recurring_event_id IS NULL
+    )
+  ))
   AND (
     sqlc.narg(after_id)::uuid IS NULL
     OR (-ranked.relevance, ordering.bucket, ordering.sort_key, events.id)
@@ -155,6 +182,15 @@ WHERE events.recurrence_frequency IS NOT NULL
   AND (sqlc.arg(include_cancelled)::boolean OR events.status = 'active')
   AND (sqlc.narg(source_kind)::text IS NULL OR events.source_kind = sqlc.narg(source_kind)::text)
   AND (sqlc.narg(source_id)::uuid IS NULL OR events.source_id = sqlc.narg(source_id)::uuid)
+  AND (NOT sqlc.arg(editable_only)::boolean OR events.source_kind = 'manual' OR (
+    events.source_kind = 'google' AND EXISTS (
+      SELECT 1 FROM calendar_sources AS editable_source
+      JOIN google_calendars AS editable_calendar ON editable_calendar.id = editable_source.google_calendar_id
+      JOIN google_events AS editable_event ON editable_event.calendar_id = editable_calendar.id
+      WHERE editable_source.id = events.source_id AND editable_calendar.access_role IN ('owner', 'writer')
+        AND editable_event.event_id = events.external_uid AND editable_event.recurring_event_id IS NULL
+    )
+  ))
 ORDER BY events.id;
 
 -- name: UpdateEvent :one
