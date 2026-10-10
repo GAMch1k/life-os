@@ -821,6 +821,7 @@ const SERVICE_NAMES: Record<keyof typeof serviceBaseUrls, string> = {
   finance: "Finance",
   voice: "Voice",
   activity: "Activity",
+  notifications: "Notifications",
 };
 
 export async function getRuntimeStatus(): Promise<RuntimeStatus> {

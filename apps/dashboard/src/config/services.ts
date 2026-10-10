@@ -5,6 +5,7 @@ const DEFAULT_SERVICE_URLS = {
   calendar: "http://localhost:8084",
   voice: "http://localhost:8085",
   activity: "http://localhost:8086",
+  notifications: "http://localhost:8087",
 } as const;
 
 export function normalizeServiceUrl(name: string, value: string): string {
@@ -71,6 +72,11 @@ export const serviceBaseUrls = Object.freeze({
     "NEXT_PUBLIC_ACTIVITY_SERVICE_URL",
     "ACTIVITY_SERVICE_URL",
     DEFAULT_SERVICE_URLS.activity,
+  ),
+  notifications: configuredServiceUrl(
+    "NEXT_PUBLIC_NOTIFICATIONS_SERVICE_URL",
+    "NOTIFICATIONS_SERVICE_URL",
+    DEFAULT_SERVICE_URLS.notifications,
   ),
 });
 
