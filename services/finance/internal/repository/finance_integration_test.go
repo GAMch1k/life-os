@@ -196,3 +196,29 @@ func TestBankImportMigrationRollsBackAndForward(t *testing.T) {
 	}
 	testdb.Apply(t, pool, testdb.Migration(t, "000005", "up"))
 }
+
+func TestEveryMigrationRollsBackAndForwardWithData(t *testing.T) {
+	pool := testdb.Open(t, "")
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `INSERT INTO accounts (name, currency) VALUES ('Giro', 'EUR');
+		INSERT INTO transactions (account_id, amount_minor, currency, occurred_on, counterparty, status)
+		SELECT id, -100, 'EUR', '2026-10-01', 'Kiosk', 'pending' FROM accounts WHERE name = 'Giro'`); err != nil {
+		t.Fatal(err)
+	}
+	downs := testdb.Migrations(t, "down")
+	// Down to 000002: the 000001 rollback drops the ledger itself.
+	for index := len(downs) - 1; index >= 2; index-- {
+		testdb.Apply(t, pool, downs[index])
+	}
+	var note string
+	if err := pool.QueryRow(ctx, `SELECT note FROM transactions`).Scan(&note); err != nil || note != "Kiosk" {
+		t.Fatalf("after rolling back to 000002: note %q, %v", note, err)
+	}
+	for _, up := range testdb.Migrations(t, "up")[2:] {
+		testdb.Apply(t, pool, up)
+	}
+	var status string
+	if err := pool.QueryRow(ctx, `SELECT status FROM transactions`).Scan(&status); err != nil || status != "booked" {
+		t.Fatalf("after migrating forward again: status %q, %v", status, err)
+	}
+}

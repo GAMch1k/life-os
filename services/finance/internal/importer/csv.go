@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -234,7 +235,7 @@ func parseRow(line int, value func(string) string) (Row, string) {
 	if len(row.ExternalID) > 200 {
 		return Row{}, "external_id must be at most 200 characters"
 	}
-	if len(row.Counterparty) > 200 || len(row.Description) > 1000 || len(row.Notes) > 2000 {
+	if utf8.RuneCountInString(row.Counterparty) > 200 || utf8.RuneCountInString(row.Description) > 1000 || utf8.RuneCountInString(row.Notes) > 2000 {
 		return Row{}, "counterparty, description, or notes is too long (200, 1000, 2000 characters at most)"
 	}
 	return row, ""
