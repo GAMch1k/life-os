@@ -17,6 +17,21 @@ export function reviewTotal(
   return items ? Math.max(total ?? 0, items.length) : total;
 }
 
+/**
+ * What a Human Review edit adds to its new capture's `sourceMetadata` (text,
+ * or voice, which Voice passes on to the Inbox item): the capture it replaces.
+ */
+export function replacementMetadata(itemId: string) {
+  return { replacesItemId: itemId };
+}
+
+/** What the queue says once an edit replaced a capture. */
+export function replacementNotice(kind: "text" | "voice") {
+  return kind === "text"
+    ? "Captured your edit; the original was discarded."
+    : "Recording sent; it becomes a new capture once transcribed. The original was discarded.";
+}
+
 /** `null` when Inbox could not be read, so it is not mistaken for "none". */
 export async function getHumanReviewItems(): Promise<HumanReviewItem[] | null> {
   try {

@@ -66,6 +66,20 @@ export async function requestHumanReview(
   expect(review.ok()).toBeTruthy();
 }
 
+/** A capture made through the API that waits in Human Review; its id. */
+export async function captureInReview(
+  request: APIRequestContext,
+  content: string,
+) {
+  const created = await request.post("/api/inbox/v1/inbox-items", {
+    data: { content, source: "manual" },
+  });
+  expect(created.status()).toBe(201);
+  const { id } = (await created.json()) as { id: string };
+  await requestHumanReview(request, id);
+  return id;
+}
+
 export async function inboxItem(request: APIRequestContext, itemId: string) {
   return (await (
     await request.get(`/api/inbox/v1/inbox-items/${itemId}`)
