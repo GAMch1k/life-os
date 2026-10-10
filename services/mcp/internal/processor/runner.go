@@ -212,6 +212,7 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 						return Proposal{}, r.retryLater(ctx, item.ID, started.ID, actions, "calendar read failed: "+getErr.Error(), classifyActionError(getErr), previous)
 					}
 				}
+				keepTimeOfDay(arguments, event, r.location(item))
 				keepDuration(arguments, event)
 			}
 		}

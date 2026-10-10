@@ -70,7 +70,8 @@ func (r Runner) findTargets(ctx context.Context, item inboxItem, action plannedA
 }
 
 // equivalentReschedule is a reschedule in the other domain: a task_update
-// that sets dueAt becomes a calendar_update starting then, and a
+// that sets dueAt becomes a calendar_update starting then (on that date when
+// it is due at the owner-local midnight), and a
 // calendar_update with a new start becomes a task_update due then (an
 // all-day start is due at the owner-local midnight of that date, like a
 // date-only Task). Search terms, the title, and notes/description carry
@@ -91,6 +92,14 @@ func equivalentReschedule(action plannedAction, location *time.Location) (planne
 		copyField(out, "title", in, "title")
 		copyField(out, "description", in, "notes")
 		out["startAt"] = dueAt
+		// Due at the owner-local midnight is a date-only due date: the event
+		// moves to that day (a timed one keeps its time of day).
+		if at, err := time.Parse(time.RFC3339, dueAt); err == nil {
+			if local := at.In(location); local.Hour() == 0 && local.Minute() == 0 && local.Second() == 0 && local.Nanosecond() == 0 {
+				delete(out, "startAt")
+				out["startDate"] = local.Format(time.DateOnly)
+			}
+		}
 	case action.Tool == "calendar_update":
 		dueAt, ok := in["startAt"].(string)
 		if !ok || dueAt == "" {

@@ -217,3 +217,79 @@ func TestPlanPromptTellsTasksFromEvents(t *testing.T) {
 		}
 	}
 }
+
+func TestADateOnlyRescheduleOfATimedEventKeepsItsTimeOfDay(t *testing.T) {
+	// The Task plan is due at Berlin midnight, a date-only due date; the
+	// matched event is Friday 15:00-16:30 summer time.
+	for _, tc := range []struct{ name, dueAt, startAt, endAt string }{
+		{"same offset", "2026-10-19T00:00:00+02:00", "2026-10-19T15:00:00+02:00", "2026-10-19T16:30:00+02:00"},
+		// After summer time ends on 25 October: still 15:00 Berlin, still 90 minutes.
+		{"across daylight saving", "2026-10-26T00:00:00+01:00", "2026-10-26T15:00:00+01:00", "2026-10-26T16:30:00+01:00"},
+		{"midnight written in UTC", "2026-10-25T23:00:00Z", "2026-10-26T15:00:00+01:00", "2026-10-26T16:30:00+01:00"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tools := newCalendarTools("Move the dentist appointment to Monday", timedEvent("event-de", "Zahnarzt", "2026-10-16T13:00:00Z", "2026-10-16T14:30:00Z"))
+			tools.matches["Zahnarzt"] = []string{"event-de"}
+			runCalendarPlan(t, tools, `{"actions":[{"tool":"task_update","arguments":{"taskQuery":"dentist","taskQueryAlternatives":["Zahnarzt"],"dueAt":"`+tc.dueAt+`"}}],"confidence":0.9}`)
+			want := map[string]any{"eventId": "event-de", "startAt": tc.startAt, "endAt": tc.endAt}
+			if got := tools.inputs["calendar_update"]; !reflect.DeepEqual(got, want) {
+				t.Fatalf("calendar_update input = %#v, want %#v", got, want)
+			}
+		})
+	}
+	// A due time that is not midnight is a time: the event starts then.
+	tools := newCalendarTools("Move the dentist appointment to Monday at 9", timedEvent("event-de", "Zahnarzt", "2026-10-16T13:00:00Z", "2026-10-16T14:30:00Z"))
+	tools.matches["Zahnarzt"] = []string{"event-de"}
+	runCalendarPlan(t, tools, `{"actions":[{"tool":"task_update","arguments":{"taskQuery":"Zahnarzt","dueAt":"2026-10-26T00:30:00+01:00"}}],"confidence":0.9}`)
+	if got := tools.inputs["calendar_update"]["startAt"]; got != "2026-10-26T00:30:00+01:00" {
+		t.Fatalf("startAt = %#v", got)
+	}
+}
+
+func TestAnApprovedDateOnlyRescheduleKeepsTheChosenEventsTimeOfDay(t *testing.T) {
+	// Several events matched after the fallback, so the review proposed the
+	// new date; the owner chose one.
+	tools := newCalendarTools("Move my meeting to Monday",
+		timedEvent("event-team", "Team meeting", "2026-10-12T08:00:00Z", "2026-10-12T09:00:00Z"),
+		timedEvent("event-anna", "Meeting with Anna", "2026-10-13T12:00:00Z", "2026-10-13T12:30:00Z"))
+	tools.matches["meeting"] = []string{"event-team", "event-anna"}
+	runCalendarPlan(t, tools, `{"actions":[{"tool":"task_update","arguments":{"taskQuery":"meeting","dueAt":"2026-10-26T00:00:00+01:00"}}],"confidence":0.9}`)
+	proposed := tools.review["proposedAction"].(plannedAction)
+	if proposed.Arguments["startDate"] != "2026-10-26" {
+		t.Fatalf("proposed = %#v", proposed)
+	}
+	approved := newCalendarTools("Move my meeting to Monday", timedEvent("event-anna", "Meeting with Anna", "2026-10-13T12:00:00Z", "2026-10-13T12:30:00Z"))
+	approvedItem(approved, map[string]any{"tool": "calendar_update", "arguments": map[string]any{"eventQuery": "meeting", "startDate": "2026-10-26", "taskId": "event-anna"}})
+	runner := Runner{Planner: fakePlanner{err: errors.New("not planned")}, Tools: approved, Model: "test", TimeZone: berlin(t)}
+	if _, err := runner.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{"eventId": "event-anna", "startAt": "2026-10-26T14:00:00+01:00", "endAt": "2026-10-26T14:30:00+01:00"}
+	if got := approved.inputs["calendar_update"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("calendar_update input = %#v, want %#v", got, want)
+	}
+}
+
+func TestKeepTimeOfDayLeavesOtherChangesAlone(t *testing.T) {
+	timed := timedEvent("e", "Dentist", "2026-10-16T13:00:00Z", "2026-10-16T14:00:00Z")
+	allDay := map[string]any{"allDay": true, "startDate": "2026-10-16", "endDate": "2026-10-16"}
+	for _, tc := range []struct {
+		name      string
+		event     map[string]any
+		arguments map[string]any
+	}{
+		{"all-day event", allDay, map[string]any{"startDate": "2026-10-19"}},
+		{"switching to all day", timed, map[string]any{"allDay": true, "startDate": "2026-10-19"}},
+		{"a time is given", timed, map[string]any{"startAt": "2026-10-19T09:00:00+02:00", "startDate": "2026-10-19"}},
+		{"an end date is given", timed, map[string]any{"startDate": "2026-10-19", "endDate": "2026-10-20"}},
+	} {
+		before := map[string]any{}
+		for field, value := range tc.arguments {
+			before[field] = value
+		}
+		keepTimeOfDay(tc.arguments, tc.event, berlin(t))
+		if !reflect.DeepEqual(tc.arguments, before) {
+			t.Errorf("%s: %#v, want unchanged %#v", tc.name, tc.arguments, before)
+		}
+	}
+}

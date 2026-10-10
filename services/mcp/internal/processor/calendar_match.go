@@ -258,6 +258,28 @@ func keepDuration(arguments, event map[string]any) {
 	arguments["endAt"] = newStart.Add(oldEnd.Sub(oldStart)).Format(time.RFC3339)
 }
 
+// keepTimeOfDay completes a date-only reschedule of a timed event ("move
+// the dentist to Monday"): it starts on the new date at its original local
+// time of day, in the owner's timezone, so a daylight-saving change between
+// the two dates does not shift it.
+func keepTimeOfDay(arguments, event map[string]any, location *time.Location) {
+	if allDay, _ := event["allDay"].(bool); allDay {
+		return
+	}
+	_, switching := arguments["allDay"]
+	_, hasStartAt := arguments["startAt"]
+	_, hasEndDate := arguments["endDate"]
+	date, isDate := arguments["startDate"].(string)
+	day, err := time.ParseInLocation(time.DateOnly, date, location)
+	start, startErr := time.Parse(time.RFC3339, text(event["startAt"]))
+	if switching || hasStartAt || hasEndDate || !isDate || err != nil || startErr != nil {
+		return
+	}
+	local := start.In(location)
+	delete(arguments, "startDate")
+	arguments["startAt"] = time.Date(day.Year(), day.Month(), day.Day(), local.Hour(), local.Minute(), local.Second(), 0, location).Format(time.RFC3339)
+}
+
 func text(value any) string {
 	s, _ := value.(string)
 	return s
