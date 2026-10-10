@@ -6,6 +6,7 @@ use (
 	./services/banking
 	./services/calendar
 	./services/finance
+	./services/google-calendar
 	./services/inbox
 	./services/mcp
 	./services/monitor
