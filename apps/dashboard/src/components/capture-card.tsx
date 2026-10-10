@@ -224,7 +224,10 @@ export function CaptureCard({
   return (
     <Card aria-label="Capture" id="capture" role="region" size="sm">
       <CardContent className="space-y-2">
-        <form className="space-y-2" onSubmit={onSubmit}>
+        {/* A flex column, not space-y: the hidden status line is the last
+            child, and space-y left a margin under the buttons for it (BUG-30).
+            An sr-only element takes no part in flex layout. */}
+        <form className="flex flex-col gap-2" onSubmit={onSubmit}>
           <label className="sr-only" htmlFor="inbox-capture">
             Capture a thought
           </label>

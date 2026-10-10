@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { voiceClient } from "@/lib/api";
 import { captureMetadata } from "@/lib/time-zone";
+import { cn } from "@/lib/utils";
 import {
   isVoiceJobTerminal,
   pickRecordingType,
@@ -135,6 +136,7 @@ export function VoiceCapture() {
   // Presentation: an inline control for the capture card's action row. The
   // status line stays empty until there is something to report; on phones it
   // wraps below the button.
+  const quiet = state === "idle" && !job;
   return (
     <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
       {state === "recording" ? (
@@ -157,11 +159,16 @@ export function VoiceCapture() {
           <Mic /> Record
         </Button>
       )}
+      {/* Always rendered, so screen readers hear its first message; while
+          empty it is sr-only, so on phones it adds no line under the button. */}
       <p
         aria-live="polite"
-        className="text-muted-foreground min-w-0 basis-full text-xs sm:flex-1 sm:basis-0"
+        className={cn(
+          "text-muted-foreground min-w-0 basis-full text-xs sm:flex-1 sm:basis-0",
+          quiet && "sr-only",
+        )}
       >
-        {state === "idle" && !job ? null : message}
+        {quiet ? null : message}
       </p>
     </div>
   );
