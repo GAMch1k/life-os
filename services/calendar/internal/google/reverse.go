@@ -331,3 +331,42 @@ func instanceID(eventID, key string, allDay bool) string {
 	}
 	return eventID + "_" + instant.UTC().Format("20060102T150405Z")
 }
+
+// RecurrenceLines are a series' recurrence for Google: its RRULE (none for
+// a single event) and the kept lines, such as the EXDATEs Google already
+// has (see Target.KeptRecurrence).
+func RecurrenceLines(rule *sources.Recurrence, allDay bool, owner *time.Location, keep []string) []string {
+	return recurrenceLines(rule, allDay, owner, keep)
+}
+
+// SeriesBody is a new event of a synced calendar written whole (the new
+// series of a split): f, with the skips exdates.
+func SeriesBody(f Fields, owner *time.Location, exdates []string) (map[string]any, error) {
+	reminders, err := remindersBody(f)
+	if err != nil {
+		return nil, err
+	}
+	start, end := f.times(owner)
+	body := map[string]any{
+		"summary": f.Title, "description": textValue(f.Description), "location": textValue(f.Location),
+		"start": start, "end": end, "recurrence": recurrenceLines(f.Recurrence, f.AllDay, owner, exdates), "reminders": reminders,
+	}
+	if f.Priority != nil {
+		body["extendedProperties"] = map[string]any{"private": map[string]any{propertyPriority: *f.Priority}}
+	}
+	return body, nil
+}
+
+// InstanceBody is a changed occurrence of a synced series written whole to
+// its instance: its title, notes, place, times, and reminders.
+func InstanceBody(f Fields, owner *time.Location) (map[string]any, error) {
+	reminders, err := remindersBody(f)
+	if err != nil {
+		return nil, err
+	}
+	start, end := f.times(owner)
+	return map[string]any{
+		"summary": f.Title, "description": textValue(f.Description), "location": textValue(f.Location),
+		"start": start, "end": end, "reminders": reminders,
+	}, nil
+}

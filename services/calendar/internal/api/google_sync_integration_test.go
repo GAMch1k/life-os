@@ -137,7 +137,7 @@ func TestGoogleSyncImportsEventsAndFollowsChanges(t *testing.T) {
 	c := newSyncingClient(t, googleDentist, googleTrip, googleStandup, googleStandupMoved, googleStandupSkipped, googleClub, googlePast)
 	seen := 0
 	expectRecorded(t, c.recorder, &seen, google.EventConnected)
-	if state := c.googleCalendar(ownerCalendar.ID).Sync.State; state != generated.Pending {
+	if state := c.googleCalendar(ownerCalendar.ID).Sync.State; state != generated.GoogleCalendarSyncStatePending {
 		t.Fatalf("before the first sync: %s", state)
 	}
 
@@ -157,11 +157,11 @@ func TestGoogleSyncImportsEventsAndFollowsChanges(t *testing.T) {
 		t.Fatalf("October:\n got %q\nwant %q", got, want)
 	}
 	owner := c.googleCalendar(ownerCalendar.ID)
-	if owner.Sync.State != generated.Synced || owner.Sync.SourceId == nil || owner.Sync.LastSyncedAt == nil || !owner.Sync.LastSyncedAt.Equal(fixedNow) ||
+	if owner.Sync.State != generated.GoogleCalendarSyncStateSynced || owner.Sync.SourceId == nil || owner.Sync.LastSyncedAt == nil || !owner.Sync.LastSyncedAt.Equal(fixedNow) ||
 		owner.Sync.LastError != nil || owner.Sync.LastCounts == nil || owner.Sync.NextSyncAt == nil || !owner.Sync.NextSyncAt.Equal(fixedNow.Add(2*time.Minute)) {
 		t.Fatalf("owner sync = %+v", owner.Sync)
 	}
-	if family := c.googleCalendar(familyCalendar.ID); family.Sync.State != generated.Off || family.Sync.SourceId != nil {
+	if family := c.googleCalendar(familyCalendar.ID); family.Sync.State != generated.GoogleCalendarSyncStateOff || family.Sync.SourceId != nil {
 		t.Fatalf("family sync = %+v", family.Sync)
 	}
 	dentist := october[1]
@@ -212,21 +212,26 @@ func TestGoogleSyncImportsEventsAndFollowsChanges(t *testing.T) {
 		t.Fatalf("after an empty sync: %q", titles(before))
 	}
 
-	// The owner adds a reminder of their own to the dentist in Life OS; an
-	// AI change of anything else is refused (Human Review handles it).
-	c.call(http.MethodPatch, "/v1/events/"+dentist.Id.String(), map[string]any{"reminders": []map[string]any{{"kind": "relative", "minutesBefore": 120}}}, http.StatusOK, nil)
-	expectRecorded(t, c.recorder, &seen, "calendar.event.updated")
-	status, raw := c.do(http.MethodPatch, "/v1/events/"+dentist.Id.String(), map[string]any{"title": "Zahnarzt"}, activity.ActorHeader, "agent:codex")
-	if status != http.StatusConflict || !strings.Contains(string(raw), "managed_by_source") {
-		t.Fatalf("AI rename: %d %s", status, raw)
+	// Single events and series of a calendar the account may edit are
+	// editable (written to Google, see google_twoway_integration_test.go);
+	// an occurrence of the book club (a rule Life OS cannot hold) is
+	// read-only, with the reason, and changing or deleting it is refused.
+	if !dentist.Editable || dentist.ReadOnlyReason != nil || dentist.Google == nil || dentist.Google.CalendarName != "Owner" || dentist.Google.State != generated.EventGoogleLinkStateSynced {
+		t.Fatalf("dentist = %+v", dentist)
 	}
-	status, raw = c.do(http.MethodPatch, "/v1/events/"+standup.Id.String()+"/occurrences/2026-10-26T08:00:00Z", map[string]any{"status": "cancelled"}, activity.ActorHeader, "agent:codex")
-	if status != http.StatusConflict || !strings.Contains(string(raw), "managed_by_source") {
-		t.Fatalf("AI occurrence cancel: %d %s", status, raw)
+	var club generated.CalendarEvent
+	for _, item := range before {
+		if item.Title == "Book club" {
+			club = item
+		}
 	}
-	status, _ = c.do(http.MethodDelete, "/v1/events/"+dentist.Id.String(), nil, activity.ActorHeader, "user")
-	if status != http.StatusConflict {
-		t.Fatalf("delete: %d", status)
+	if club.Editable || club.ReadOnlyReason == nil || !strings.Contains(*club.ReadOnlyReason, "can't edit") {
+		t.Fatalf("club = %+v", club)
+	}
+	c.failure(http.MethodPatch, "/v1/events/"+club.Id.String(), map[string]any{"title": "Lesekreis"}, http.StatusConflict, "google_read_only")
+	c.failure(http.MethodDelete, "/v1/events/"+club.Id.String(), nil, http.StatusConflict, "google_read_only")
+	if writes := c.fake.Writes(); len(writes) != 0 {
+		t.Fatalf("writes to Google = %+v", writes)
 	}
 	// Synced events are found by search like any other.
 	var found generated.EventList
@@ -259,8 +264,8 @@ func TestGoogleSyncImportsEventsAndFollowsChanges(t *testing.T) {
 	if trip := after[5]; trip.RemovedFromSourceAt == nil || trip.CancelledAt == nil {
 		t.Fatalf("trip = %+v", trip)
 	}
-	// The owner's own reminder stays; Google's new one is not forced on it.
-	if movedDentist := after[1]; movedDentist.Id != dentist.Id || remindersOf(movedDentist.Reminders) != "120" {
+	// The event follows Google's new reminders.
+	if movedDentist := after[1]; movedDentist.Id != dentist.Id || remindersOf(movedDentist.Reminders) != "15" {
 		t.Fatalf("dentist after the move = %+v", movedDentist)
 	}
 	event = expectRecorded(t, c.recorder, &seen, google.EventSourceRefreshed)[0]
@@ -392,7 +397,7 @@ func TestGoogleSyncFailuresKeepEventsAndBackOff(t *testing.T) {
 	c.clock.Advance(2 * time.Minute)
 	c.syncDue()
 	owner := c.googleCalendar(ownerCalendar.ID)
-	if owner.Sync.State != generated.Failing || owner.Sync.ConsecutiveFailures != 1 || owner.Sync.LastError == nil ||
+	if owner.Sync.State != generated.GoogleCalendarSyncStateFailing || owner.Sync.ConsecutiveFailures != 1 || owner.Sync.LastError == nil ||
 		!strings.Contains(*owner.Sync.LastError, "Google is unavailable") || !owner.Sync.NextSyncAt.Equal(fixedNow.Add(4*time.Minute)) ||
 		!owner.Sync.LastSyncedAt.Equal(fixedNow) {
 		t.Fatalf("after a failure: %+v", owner.Sync)
@@ -417,7 +422,7 @@ func TestGoogleSyncFailuresKeepEventsAndBackOff(t *testing.T) {
 	c.fake.Unlock()
 	c.clock.Advance(4 * time.Minute)
 	c.syncDue()
-	if owner = c.googleCalendar(ownerCalendar.ID); owner.Sync.State != generated.Synced || owner.Sync.ConsecutiveFailures != 0 || owner.Sync.LastError != nil {
+	if owner = c.googleCalendar(ownerCalendar.ID); owner.Sync.State != generated.GoogleCalendarSyncStateSynced || owner.Sync.ConsecutiveFailures != 0 || owner.Sync.LastError != nil {
 		t.Fatalf("after recovering: %+v", owner.Sync)
 	}
 	expectRecorded(t, c.recorder, &seen, google.EventSourceRefreshed)
@@ -433,7 +438,7 @@ func TestGoogleSyncFailuresKeepEventsAndBackOff(t *testing.T) {
 	if connection := c.connection(); connection.Status != "expired" {
 		t.Fatalf("connection = %+v", connection)
 	}
-	if owner = c.googleCalendar(ownerCalendar.ID); owner.Sync.State != generated.Failing || !strings.Contains(*owner.Sync.LastError, "reconnect Google") {
+	if owner = c.googleCalendar(ownerCalendar.ID); owner.Sync.State != generated.GoogleCalendarSyncStateFailing || !strings.Contains(*owner.Sync.LastError, "reconnect Google") {
 		t.Fatalf("after expiry: %+v", owner.Sync)
 	}
 	expectRecorded(t, c.recorder, &seen, google.EventExpired)
@@ -458,7 +463,7 @@ func TestGoogleSyncFailuresKeepEventsAndBackOff(t *testing.T) {
 	if len(last) != requests+1 || last[len(last)-1].Get("syncToken") == "" {
 		t.Fatalf("after reconnecting: %v", last[requests:])
 	}
-	if owner = c.googleCalendar(ownerCalendar.ID); owner.Sync.State != generated.Synced {
+	if owner = c.googleCalendar(ownerCalendar.ID); owner.Sync.State != generated.GoogleCalendarSyncStateSynced {
 		t.Fatalf("after reconnecting: %+v", owner.Sync)
 	}
 }
@@ -475,12 +480,12 @@ func TestGoogleSyncSwitchedOffOrDisconnectedRemovesEvents(t *testing.T) {
 	family := c.googleCalendar(familyCalendar.ID)
 	var chosen generated.GoogleCalendar
 	c.call(http.MethodPatch, "/v1/google/calendars/"+family.Id.String(), map[string]any{"syncEnabled": true}, http.StatusOK, &chosen)
-	if chosen.Sync.State != generated.Pending || !chosen.Sync.NextSyncAt.Equal(fixedNow) {
+	if chosen.Sync.State != generated.GoogleCalendarSyncStatePending || !chosen.Sync.NextSyncAt.Equal(fixedNow) {
 		t.Fatalf("chosen = %+v", chosen.Sync)
 	}
 	c.syncDue()
 	family = c.googleCalendar(familyCalendar.ID)
-	if family.Sync.State != generated.Synced || family.Sync.SourceId == nil || c.countSourceEvents(*family.Sync.SourceId) != 2 {
+	if family.Sync.State != generated.GoogleCalendarSyncStateSynced || family.Sync.SourceId == nil || c.countSourceEvents(*family.Sync.SourceId) != 2 {
 		t.Fatalf("family = %+v", family.Sync)
 	}
 	if dinner := c.googleEvents("2026-10-18T00:00:00Z", "2026-10-19T00:00:00Z"); len(dinner) != 1 || *dinner[0].Source.Name != "Family" {
@@ -490,7 +495,7 @@ func TestGoogleSyncSwitchedOffOrDisconnectedRemovesEvents(t *testing.T) {
 
 	// Unticking it removes its events from Life OS (they stay in Google).
 	c.call(http.MethodPatch, "/v1/google/calendars/"+family.Id.String(), map[string]any{"syncEnabled": false}, http.StatusOK, &chosen)
-	if chosen.Sync.State != generated.Off || chosen.Sync.SourceId != nil || chosen.Sync.LastSyncedAt != nil || c.countSourceEvents(*family.Sync.SourceId) != 0 {
+	if chosen.Sync.State != generated.GoogleCalendarSyncStateOff || chosen.Sync.SourceId != nil || chosen.Sync.LastSyncedAt != nil || c.countSourceEvents(*family.Sync.SourceId) != 0 {
 		t.Fatalf("unticked = %+v", chosen.Sync)
 	}
 	removed := expectRecorded(t, c.recorder, &seen, google.EventSourceRemoved)[0]
@@ -550,7 +555,7 @@ func TestGoogleSyncResumesAfterRestartAndRunsOncePerCalendar(t *testing.T) {
 	c.call(http.MethodPost, "/v1/google/calendars/"+owner.Id.String()+"/sync", nil, http.StatusOK, &synced)
 	c.call(http.MethodPost, "/v1/google/calendars/"+owner.Id.String()+"/sync?full=true", nil, http.StatusOK, &synced)
 	requests = c.fake.Requests(ownerCalendar.ID)
-	if len(requests) != 4 || requests[2].Get("syncToken") == "" || requests[3].Has("syncToken") || synced.Sync.State != generated.Synced {
+	if len(requests) != 4 || requests[2].Get("syncToken") == "" || requests[3].Has("syncToken") || synced.Sync.State != generated.GoogleCalendarSyncStateSynced {
 		t.Fatalf("manual syncs = %v, %+v", requests[2:], synced.Sync)
 	}
 	family := c.googleCalendar(familyCalendar.ID)
@@ -640,7 +645,7 @@ func TestGoogleSyncThatCannotBeSavedBacksOff(t *testing.T) {
 	c.clock.Advance(2 * time.Minute)
 	c.syncDue()
 	owner := c.googleCalendar(ownerCalendar.ID)
-	if owner.Sync.State != generated.Failing || owner.Sync.LastError == nil || *owner.Sync.LastError != "the events read from Google could not be saved in Calendar" ||
+	if owner.Sync.State != generated.GoogleCalendarSyncStateFailing || owner.Sync.LastError == nil || *owner.Sync.LastError != "the events read from Google could not be saved in Calendar" ||
 		!owner.Sync.NextSyncAt.Equal(fixedNow.Add(4*time.Minute)) {
 		t.Fatalf("after a failed save: %+v", owner.Sync)
 	}

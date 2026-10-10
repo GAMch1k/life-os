@@ -68,7 +68,7 @@ func (s *Service) QueueExport(ctx context.Context, eventID pgtype.UUID) {
 // QueueDeletion queues deleting the copy of a Life OS event deleted in Life
 // OS; an event never exported is only forgotten.
 func (s *Service) QueueDeletion(ctx context.Context, eventID pgtype.UUID) {
-	if s == nil {
+	if !s.Configured() {
 		return
 	}
 	forgotten, err := s.queries.DeleteUnexportedGoogleExport(ctx, eventID)

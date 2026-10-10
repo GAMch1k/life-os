@@ -576,7 +576,7 @@ func (q *Queries) ListGoogleEventETags(ctx context.Context, arg ListGoogleEventE
 
 const listGoogleEventLinks = `-- name: ListGoogleEventLinks :many
 SELECT calendar_sources.id AS source_id, google_calendars.id AS calendar_id, google_calendars.summary,
-       google_calendars.access_role, (google_calendars.google_calendar_id = google_connections.lifeos_calendar_id)::boolean AS lifeos,
+       google_calendars.access_role, COALESCE(google_calendars.google_calendar_id = google_connections.lifeos_calendar_id, false)::boolean AS lifeos,
        COALESCE((SELECT array_agg(google_events.event_id ORDER BY google_events.event_id) FROM google_events
                  WHERE google_events.calendar_id = google_calendars.id AND google_events.recurring_event_id IS NULL
                    AND google_events.event_id = ANY ($1::text[])), '{}')::text[] AS masters
