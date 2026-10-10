@@ -102,7 +102,7 @@ func capturedAtFrom(ctx context.Context) time.Time {
 }
 
 // delayedCapture is how long after its capture an item is planned before
-// the prompt states the capture time separately from the current time.
+// the prompt also states the current time.
 const delayedCapture = 10 * time.Minute
 
 // timeContext states the owner's timezone and local date, time, and weekday
@@ -110,21 +110,28 @@ const delayedCapture = 10 * time.Minute
 // so "tomorrow at 10" landed two hours off in Berlin, or on the wrong day near
 // midnight. The coming week is spelled out because weekday arithmetic is
 // where models slip, and its offsets cover a daylight-saving change.
+//
+// Relative dates mean what they meant when the owner captured the item, so
+// the capture time is the reference when known: a capture taken at 23:59 and
+// planned at 00:00, or retried hours later, keeps its "tomorrow".
 func timeContext(now, capturedAt time.Time, location *time.Location) string {
 	if location == nil {
 		location = time.UTC
 	}
 	local := func(t time.Time) string {
-		t = t.In(location)
-		return t.Format("Monday 2006-01-02 15:04 (-07:00)")
+		return t.In(location).Format("Monday 2006-01-02 15:04 (-07:00)")
 	}
 	reference := now
 	var b strings.Builder
-	if !capturedAt.IsZero() && capturedAt.Before(now.Add(-delayedCapture)) {
-		reference = capturedAt
-		fmt.Fprintf(&b, "The owner's timezone is %s. The item was captured on %s there, and it is now %s; resolve relative dates from the capture time. ", location, local(capturedAt), local(now))
-	} else {
+	if capturedAt.IsZero() {
 		fmt.Fprintf(&b, "The owner's timezone is %s; it is now %s there. ", location, local(now))
+	} else {
+		reference = capturedAt
+		fmt.Fprintf(&b, "The owner's timezone is %s. The item was captured on %s there; resolve relative dates from that moment", location, local(capturedAt))
+		if now.Sub(capturedAt) > delayedCapture {
+			fmt.Fprintf(&b, " (it is now %s)", local(now))
+		}
+		b.WriteString(". ")
 	}
 	day := reference.In(location)
 	b.WriteString("The coming days are ")

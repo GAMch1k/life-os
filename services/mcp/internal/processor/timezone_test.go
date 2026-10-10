@@ -87,12 +87,12 @@ func TestTimeContextStatesTheOwnersLocalDateTimeAndWeekday(t *testing.T) {
 	}
 }
 
-func TestTimeContextResolvesDelayedCapturesFromTheCaptureTime(t *testing.T) {
+func TestTimeContextResolvesRelativeDatesFromTheCaptureTime(t *testing.T) {
 	captured := time.Date(2026, 10, 9, 21, 0, 0, 0, time.UTC) // Friday 23:00 Berlin
-	now := captured.Add(11 * time.Hour)                       // Saturday 10:00 Berlin
+	now := captured.Add(11 * time.Hour)                       // Saturday 10:00 Berlin, after a retry
 	got := timeContext(now, captured, berlin(t))
 	for _, want := range []string{
-		"The item was captured on Friday 2026-10-09 23:00 (+02:00) there, and it is now Saturday 2026-10-10 10:00 (+02:00); resolve relative dates from the capture time.",
+		"The owner's timezone is Europe/Berlin. The item was captured on Friday 2026-10-09 23:00 (+02:00) there; resolve relative dates from that moment (it is now Saturday 2026-10-10 10:00 (+02:00)).",
 		"The coming days are Saturday 2026-10-10 (+02:00),",
 		"tomorrow at 10:00 is 2026-10-10T10:00:00+02:00",
 	} {
@@ -100,9 +100,15 @@ func TestTimeContextResolvesDelayedCapturesFromTheCaptureTime(t *testing.T) {
 			t.Errorf("time context lacks %q:\n%s", want, got)
 		}
 	}
-	// A capture planned right away reads as "now".
-	if got := timeContext(now, now.Add(-time.Minute), berlin(t)); !strings.Contains(got, "it is now Saturday 2026-10-10 10:00 (+02:00) there.") || strings.Contains(got, "captured") {
-		t.Errorf("fresh capture:\n%s", got)
+
+	// Captured at 23:59:30 and planned just after midnight: "tomorrow" is
+	// still the day after the capture.
+	captured = time.Date(2026, 10, 9, 21, 59, 30, 0, time.UTC)
+	got = timeContext(captured.Add(40*time.Second), captured, berlin(t))
+	if !strings.Contains(got, "The item was captured on Friday 2026-10-09 23:59 (+02:00) there; resolve relative dates from that moment. ") ||
+		strings.Contains(got, "it is now") ||
+		!strings.Contains(got, "tomorrow at 10:00 is 2026-10-10T10:00:00+02:00") {
+		t.Errorf("capture just before midnight:\n%s", got)
 	}
 }
 
