@@ -20,6 +20,9 @@ type calendarTools struct {
 	// events are the active events by id; matches maps a search term to ids.
 	events  map[string]map[string]any
 	matches map[string][]string
+	// dayMatches answers searches bounded by to (one day's): a search term
+	// to the items found, such as one occurrence of a recurring event.
+	dayMatches map[string][]map[string]any
 	// failSearch makes every calendar_search fail.
 	failSearch bool
 	// failTool makes a Calendar mutation fail with that error.
@@ -47,8 +50,12 @@ func (c *calendarTools) Call(ctx context.Context, name string, args map[string]a
 		query, _ := url.ParseQuery(args["query"].(string))
 		c.searches = append(c.searches, query)
 		items := []map[string]any{}
-		for _, id := range c.matches[query.Get("q")] {
-			items = append(items, c.events[id])
+		if query.Has("to") {
+			items = append(items, c.dayMatches[query.Get("q")]...)
+		} else {
+			for _, id := range c.matches[query.Get("q")] {
+				items = append(items, c.events[id])
+			}
 		}
 		raw, _ := json.Marshal(map[string]any{"items": items})
 		return raw, nil
@@ -392,6 +399,14 @@ func TestValidActionChecksCalendarChanges(t *testing.T) {
 		{"create with a bad defaults flag", "calendar_create", map[string]any{"title": "Dentist", "allDay": true, "useDefaultReminders": "yes"}, false},
 		{"cancel", "calendar_cancel", map[string]any{"eventQuery": "dentist", "eventQueryAlternatives": []any{"Zahnarzt"}}, true},
 		{"cancel with change", "calendar_cancel", map[string]any{"eventQuery": "dentist", "title": "x"}, false},
+		{"cancel on a day", "calendar_cancel", map[string]any{"eventQuery": "gym", "onDate": "2026-10-10"}, true},
+		{"cancel on no date", "calendar_cancel", map[string]any{"eventQuery": "gym", "onDate": "today"}, false},
+		{"cancel on a number", "calendar_cancel", map[string]any{"eventQuery": "gym", "onDate": 10.0}, false},
+		{"approved occurrences", "calendar_cancel", map[string]any{"eventQuery": "gym", "occurrences": map[string]any{"series-1": "2026-10-10T05:00:00Z"}}, true},
+		{"bad occurrences", "calendar_cancel", map[string]any{"eventQuery": "gym", "occurrences": map[string]any{"series-1": 1.0}}, false},
+		{"occurrences not a map", "calendar_cancel", map[string]any{"eventQuery": "gym", "occurrences": []any{"x"}}, false},
+		{"update on a day", "calendar_update", map[string]any{"eventQuery": "gym", "onDate": "2026-10-10", "title": "x"}, false},
+		{"create repeating", "calendar_create", map[string]any{"title": "Gym", "allDay": true, "recurrence": map[string]any{"frequency": "weekly"}}, false},
 		{"create with location", "calendar_create", map[string]any{"title": "Dentist", "location": "Dr. Weber", "allDay": true, "startDate": "2026-10-12", "endDate": "2026-10-12", "timeZone": "Europe/Berlin"}, true},
 		{"create with bad reminders", "calendar_create", map[string]any{"title": "Dentist", "allDay": true, "reminders": []any{"soon"}}, false},
 		{"create with search terms", "calendar_create", map[string]any{"title": "Dentist", "allDay": true, "eventQuery": "dentist"}, false},
@@ -489,7 +504,9 @@ func TestPlanPromptAllowsCalendarChangesThroughSearchTermsAndReview(t *testing.T
 		"location (where it takes place",
 		`eventQuery "dentist", eventQueryAlternatives ["Zahnarzt", "стоматолог", "зубн"]`,
 		"changes one only when exactly one matches, otherwise it asks the owner, so you do not need to know the existing events; the owner approves every cancellation",
-		"calendar_cancel may only use eventQuery, eventQueryAlternatives.",
+		"calendar_cancel may only use eventQuery, eventQueryAlternatives, and onDate (the ISO date of the day the item names",
+		"for a repeating event the processor cancels only its occurrence on that day, else its next one",
+		`reason "Recurring events are created in the Calendar."`,
 		"the processor otherwise keeps the event's length",
 		"Never create an event as a fallback for an uncertain existing event.",
 	} {

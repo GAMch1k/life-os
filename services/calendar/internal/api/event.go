@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 
 	"github.com/GAMch1k/life-os/services/calendar/internal/api/generated"
 	"github.com/GAMch1k/life-os/services/calendar/internal/config"
+	"github.com/GAMch1k/life-os/services/calendar/internal/recurrence"
 	store "github.com/GAMch1k/life-os/services/calendar/internal/repository/generated"
 )
 
@@ -72,8 +74,9 @@ func fieldsFromStore(value store.Event) (eventFields, error) {
 	}, nil
 }
 
-// validate checks the event as a whole.
-func (f eventFields) validate() error {
+// validate checks the event as a whole. owner is the owner's timezone, in
+// which a timed event without its own timeZone repeats.
+func (f eventFields) validate(owner *time.Location) error {
 	if strings.TrimSpace(f.Title) == "" {
 		return errors.New("title must not be empty")
 	}
@@ -89,11 +92,8 @@ func (f eventFields) validate() error {
 		}
 	}
 	if f.Recurrence != nil {
-		if !f.Recurrence.Frequency.Valid() {
-			return errors.New("recurrence frequency must be daily, weekly, monthly, or yearly")
-		}
-		if f.Recurrence.Interval < 1 {
-			return errors.New("recurrence interval must be at least 1")
+		if err := f.validateRecurrence(owner); err != nil {
+			return err
 		}
 	}
 	if err := validateReminders(f.Reminders, "an event takes at most %d reminders of its own"); err != nil {
@@ -103,6 +103,91 @@ func (f eventFields) validate() error {
 		return errors.New("status must be active or cancelled")
 	}
 	return nil
+}
+
+// maxRecurrenceCount bounds a rule that ends after a number of occurrences.
+const maxRecurrenceCount = 1000
+
+// validateRecurrence checks the rule against the event it repeats: weekdays
+// only for a weekly rule and including the start's weekday (in the event's
+// timezone, else owner; an all-day event's start date), a count or an until
+// but not both, and an until not before the start.
+func (f eventFields) validateRecurrence(owner *time.Location) error {
+	rule := f.Recurrence
+	if !rule.Frequency.Valid() {
+		return errors.New("recurrence frequency must be daily, weekly, monthly, or yearly")
+	}
+	if rule.Interval < 1 {
+		return errors.New("recurrence interval must be at least 1")
+	}
+	if rule.ByWeekday != nil && len(*rule.ByWeekday) > 0 {
+		if rule.Frequency != generated.Weekly {
+			return errors.New("recurrence byWeekday is only for weekly recurrence")
+		}
+		codes := make([]string, 0, len(*rule.ByWeekday))
+		for _, day := range *rule.ByWeekday {
+			if !day.Valid() {
+				return errors.New("recurrence byWeekday days must be MO, TU, WE, TH, FR, SA, or SU")
+			}
+			codes = append(codes, string(day))
+		}
+		start := f.startWeekday(owner)
+		if !slices.Contains(codes, recurrence.WeekdayCode(start)) {
+			return fmt.Errorf("recurrence byWeekday must include the weekday the event starts on (%s)", start)
+		}
+	}
+	if rule.Count != nil {
+		if *rule.Count < 1 || *rule.Count > maxRecurrenceCount {
+			return fmt.Errorf("recurrence count must be between 1 and %d", maxRecurrenceCount)
+		}
+		if rule.Until != nil {
+			return errors.New("recurrence takes until or count, not both")
+		}
+	}
+	if rule.Until != nil {
+		before := !f.AllDay && rule.Until.Before(*f.StartAt)
+		if f.AllDay {
+			// An all-day series compares its dates with until's date in the
+			// owner's timezone.
+			before = untilDate(*rule.Until, owner).Before(f.StartDate.Time)
+		}
+		if before {
+			return errors.New("recurrence until must not be before the event starts")
+		}
+	}
+	return nil
+}
+
+// startWeekday is the weekday the event starts on: a timed event's in its
+// timeZone (else owner), an all-day event's start date's.
+func (f eventFields) startWeekday(owner *time.Location) time.Weekday {
+	if f.AllDay {
+		return f.StartDate.Time.Weekday()
+	}
+	return f.StartAt.In(f.clock(owner)).Weekday()
+}
+
+// clock is the timezone a timed event repeats in: its own, else owner.
+func (f eventFields) clock(owner *time.Location) *time.Location {
+	if f.TimeZone != nil {
+		if loc, err := time.LoadLocation(*f.TimeZone); err == nil {
+			return loc
+		}
+	}
+	if owner == nil {
+		return time.UTC
+	}
+	return owner
+}
+
+// untilDate is the date of an all-day series' until in the owner's
+// timezone, at midnight UTC like stored dates.
+func untilDate(until time.Time, owner *time.Location) time.Time {
+	if owner == nil {
+		owner = time.UTC
+	}
+	local := until.In(owner)
+	return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, time.UTC)
 }
 
 func validateTimes(allDay bool, start, end *time.Time, startDate, endDate *types.Date) error {
@@ -129,11 +214,12 @@ func (f eventFields) createParams() (store.CreateEventParams, error) {
 	if err != nil {
 		return store.CreateEventParams{}, err
 	}
-	frequency, interval, until := recurrenceColumns(f.Recurrence)
+	rule := recurrenceColumns(f.Recurrence)
 	return store.CreateEventParams{
 		Title: f.Title, Description: f.Description, Location: f.Location, AllDay: f.AllDay,
 		StartAt: timestamp(f.StartAt), EndAt: timestamp(f.EndAt), StartDate: datePointer(f.StartDate), EndDate: datePointer(f.EndDate),
-		TimeZone: f.TimeZone, RecurrenceFrequency: frequency, RecurrenceInterval: interval, RecurrenceUntil: until,
+		TimeZone: f.TimeZone, RecurrenceFrequency: rule.frequency, RecurrenceInterval: rule.interval, RecurrenceUntil: rule.until,
+		RecurrenceByWeekday: rule.byWeekday, RecurrenceCount: rule.count,
 		Reminders: reminders, UseDefaultReminders: f.UseDefaultReminders, Status: string(f.Status), CancelledAt: timestamp(f.CancelledAt),
 		SourceKind: string(generated.EventSourceKindManual), RemovedFromSourceAt: timestamp(f.RemovedFromSourceAt),
 	}, nil
@@ -144,11 +230,12 @@ func (f eventFields) updateParams(id pgtype.UUID, expectedUpdatedAt pgtype.Times
 	if err != nil {
 		return store.UpdateEventParams{}, err
 	}
-	frequency, interval, until := recurrenceColumns(f.Recurrence)
+	rule := recurrenceColumns(f.Recurrence)
 	return store.UpdateEventParams{
 		Title: f.Title, Description: f.Description, Location: f.Location, AllDay: f.AllDay,
 		StartAt: timestamp(f.StartAt), EndAt: timestamp(f.EndAt), StartDate: datePointer(f.StartDate), EndDate: datePointer(f.EndDate),
-		TimeZone: f.TimeZone, RecurrenceFrequency: frequency, RecurrenceInterval: interval, RecurrenceUntil: until,
+		TimeZone: f.TimeZone, RecurrenceFrequency: rule.frequency, RecurrenceInterval: rule.interval, RecurrenceUntil: rule.until,
+		RecurrenceByWeekday: rule.byWeekday, RecurrenceCount: rule.count,
 		Reminders: reminders, UseDefaultReminders: f.UseDefaultReminders, Status: string(f.Status), CancelledAt: timestamp(f.CancelledAt),
 		RemovedFromSourceAt: timestamp(f.RemovedFromSourceAt), ID: id, ExpectedUpdatedAt: expectedUpdatedAt,
 	}, nil
@@ -263,20 +350,56 @@ func decodeReminders(raw []byte) (*[]generated.Reminder, error) {
 	return &reminders, nil
 }
 
-func recurrenceColumns(value *generated.Recurrence) (*string, *int32, pgtype.Timestamptz) {
+// ruleColumns are a Recurrence's stored columns, all null for none.
+type ruleColumns struct {
+	frequency *string
+	interval  *int32
+	until     pgtype.Timestamptz
+	byWeekday []string // in week order, each day once
+	count     *int32
+}
+
+func recurrenceColumns(value *generated.Recurrence) ruleColumns {
 	if value == nil {
-		return nil, nil, pgtype.Timestamptz{}
+		return ruleColumns{}
 	}
 	frequency := string(value.Frequency)
 	interval := int32(value.Interval)
-	return &frequency, &interval, timestamp(value.Until)
+	columns := ruleColumns{frequency: &frequency, interval: &interval, until: timestamp(value.Until)}
+	if value.ByWeekday != nil && len(*value.ByWeekday) > 0 {
+		codes := make([]string, 0, len(*value.ByWeekday))
+		for _, day := range *value.ByWeekday {
+			codes = append(codes, string(day))
+		}
+		if normalized, ok := recurrence.NormalizeWeekdays(codes); ok {
+			codes = normalized
+		}
+		columns.byWeekday = codes
+	}
+	if value.Count != nil {
+		count := int32(*value.Count)
+		columns.count = &count
+	}
+	return columns
 }
 
 func recurrenceOutput(value store.Event) *generated.Recurrence {
 	if value.RecurrenceFrequency == nil || value.RecurrenceInterval == nil {
 		return nil
 	}
-	return &generated.Recurrence{Frequency: generated.RecurrenceFrequency(*value.RecurrenceFrequency), Interval: int(*value.RecurrenceInterval), Until: nullableTime(value.RecurrenceUntil)}
+	rule := &generated.Recurrence{Frequency: generated.RecurrenceFrequency(*value.RecurrenceFrequency), Interval: int(*value.RecurrenceInterval), Until: nullableTime(value.RecurrenceUntil)}
+	if len(value.RecurrenceByWeekday) > 0 {
+		days := make([]generated.Weekday, 0, len(value.RecurrenceByWeekday))
+		for _, code := range value.RecurrenceByWeekday {
+			days = append(days, generated.Weekday(code))
+		}
+		rule.ByWeekday = &days
+	}
+	if value.RecurrenceCount != nil {
+		count := int(*value.RecurrenceCount)
+		rule.Count = &count
+	}
+	return rule
 }
 
 func uuid(value pgtype.UUID) types.UUID   { return types.UUID(value.Bytes) }

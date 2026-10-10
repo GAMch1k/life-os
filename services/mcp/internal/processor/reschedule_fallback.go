@@ -156,6 +156,20 @@ func (r Runner) reviewCandidatesFor(item inboxItem, action plannedAction, found 
 	return reviewCandidates(found)
 }
 
+// reviewResolution sends a resolved mutation to Human Review with reason.
+// A change that would edit a recurring event offers nothing to approve; a
+// cancellation records which occurrence each recurring candidate stands for.
+func (r Runner) reviewResolution(ctx context.Context, item inboxItem, attemptID string, res resolution, reason string) error {
+	if recurringUpdate(res) {
+		return r.humanReview(ctx, item.ID, attemptID, res.action, []map[string]any{}, recurringChangeReason)
+	}
+	action := res.action
+	if action.Tool == "calendar_cancel" {
+		action = withOccurrences(action, res.found)
+	}
+	return r.humanReview(ctx, item.ID, attemptID, action, r.reviewCandidatesFor(item, action, res.found), reason)
+}
+
 // reviewReason says why a mutation waits for the owner.
 func reviewReason(res resolution) string {
 	switch {

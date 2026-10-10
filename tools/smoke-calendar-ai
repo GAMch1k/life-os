@@ -19,6 +19,10 @@
 #   6. with the owner's default of 30 minutes before for timed events, "remind
 #      me a day before and 3 hours before" gives the new event those two
 #      reminders of its own on top of the default (P10-08);
+#   7. with a weekly "Gym" series that has an occurrence today, "Cancel gym
+#      today" goes to Human Review with exactly today's occurrence (P10-09);
+#      approving it cancels only that occurrence: next week's and the series
+#      stay active;
 #   and no other event is created. Relative dates are judged in Berlin from
 #   each Inbox item's own createdAt.
 set -euo pipefail
@@ -192,12 +196,50 @@ jq -e '.useDefaultReminders and (.reminders | length == 2)
   fail "reminders: $(jq -c '{useDefaultReminders, reminders, effectiveReminders}' <<<"$haircut"), want 1 day and 3 hours of its own plus the 30-minute default"
 echo "ok: 6. the haircut has its own reminders on top of the default: $(jq -c '.effectiveReminders' <<<"$haircut")"
 
-# No other event: the created dentist (now cancelled), the three seeds, and
-# the haircut.
+# 7. Skipping one occurrence of a recurring event (P10-09): the AI never
+# changes a series, but "cancel gym today" skips today's occurrence once
+# the owner approves. The series repeats weekly at 07:00 Berlin from a week
+# ago, so it has an occurrence today (past or not).
+while (( 10#$(TZ=$zone date +%H%M) >= 2350 )); do sleep 20; done
+today=$(TZ=$zone date +%F)
+gym=$(post_json /api/calendar/v1/events "$(jq -nc --arg start "$(local_at "$(day_after "$today" -7)" 07:00)" --arg end "$(local_at "$(day_after "$today" -7)" 08:00)" \
+  '{title:"Gym",allDay:false,startAt:$start,endAt:$end,timeZone:"Europe/Berlin",recurrence:{frequency:"weekly",interval:1}}')" | jq -r '.id')
+utc_at() { date -u -d "$(local_at "$1" "$2")" +%Y-%m-%dT%H:%M:%SZ; }
+today_rid=$(utc_at "$today" 07:00)
+next_rid=$(utc_at "$(day_after "$today" 7)" 07:00)
+occurrence() { api "$gateway/api/calendar/v1/events/$1/occurrences/$(jq -rn --arg rid "$2" '$rid|@uri')"; }
+gym_item=$(capture "Cancel gym today." | jq -r '.id')
+state=$(settle "$gym_item")
+review=$(item "$gym_item")
+[ "$state" = human_review ] || fail "cancel gym today: item is '$state', want human_review: $(jq -c '.processingMetadata' <<<"$review") $(attempts "$gym_item" | jq -c '[.items[] | {status, actions}]')"
+jq -e --arg id "$gym" --arg rid "$today_rid" '.processingMetadata.humanReview
+  | (.candidates | map(.id)) == [$id] and .candidates[0].recurrenceId == $rid
+  and .proposedAction.tool == "calendar_cancel" and .proposedAction.arguments.occurrences[$id] == $rid' >/dev/null <<<"$review" ||
+  fail "cancel gym today: review is $(jq -c '.processingMetadata.humanReview | {proposedAction, candidates: [.candidates[] | {id, title, recurrenceId}]}' <<<"$review"), want today's occurrence $today_rid of $gym only"
+[ "$(occurrence "$gym" "$today_rid" | jq -r '.status')" = active ] || fail "cancel gym today: the occurrence was cancelled before approval"
+echo "ok: 7a. 'Cancel gym today' waits in Human Review: $(jq -c '.processingMetadata.humanReview | {errorSummary, candidates: [.candidates[].title]}' <<<"$review")"
+post_json "/api/inbox/v1/inbox-items/$gym_item/human-review/resolve" "$(jq -nc --arg id "$gym" '{candidateId:$id}')" >/dev/null
+action=$(processed_action "approved occurrence cancel" "$gym_item" calendar_cancel)
+jq -e --arg id "$gym" --arg rid "$today_rid" '.arguments.eventId == $id and .arguments.recurrenceId == $rid' >/dev/null <<<"$action" ||
+  fail "approved occurrence cancel: cancelled $(jq -c '.arguments' <<<"$action"), want occurrence $today_rid of $gym"
+jq -e --arg rid "$today_rid" '.status == "cancelled" and .cancelledAt != null and .occurrence.recurrenceId == $rid' >/dev/null <<<"$(occurrence "$gym" "$today_rid")" ||
+  fail "approved occurrence cancel: today's occurrence is $(occurrence "$gym" "$today_rid" | jq -c '{status, cancelledAt, occurrence}')"
+day_from=$(date -u -d "$(local_at "$today" 00:00)" +%Y-%m-%dT%H:%M:%SZ)
+day_to=$(date -u -d "$(local_at "$(day_after "$today" 1)" 00:00)" +%Y-%m-%dT%H:%M:%SZ)
+listed=$(api "$gateway/api/calendar/v1/events?from=$day_from&to=$day_to&includeCancelled=true&limit=100")
+jq -e --arg id "$gym" '[.items[] | select(.id == $id)] | length == 1 and .[0].status == "cancelled"' >/dev/null <<<"$listed" ||
+  fail "approved occurrence cancel: today's listing shows $(jq -c --arg id "$gym" '[.items[] | select(.id == $id) | {status, occurrence}]' <<<"$listed")"
+[ "$(occurrence "$gym" "$next_rid" | jq -r '.status')" = active ] || fail "approved occurrence cancel: next week's occurrence is not active"
+[ "$(event "$gym" | jq -r '.status')" = active ] || fail "approved occurrence cancel: the series was cancelled"
+echo "ok: 7b. approval cancelled only today's gym; next week's and the series stay active"
+
+# No other event: the created dentist (now cancelled), the three seeds, the
+# haircut, and the gym's six occurrences in the window (today's cancelled).
 from=$(date -u -d '-2 days' +%Y-%m-%dT%H:%M:%SZ)
 to=$(date -u -d '+40 days' +%Y-%m-%dT%H:%M:%SZ)
 all=$(api "$gateway/api/calendar/v1/events?from=$from&to=$to&includeCancelled=true&limit=100")
-[ "$(jq '.items | length' <<<"$all")" = 5 ] || fail "$(jq '.items | length' <<<"$all") events exist, want 5: $(jq -c '[.items[] | {title, status}]' <<<"$all")"
+[ "$(jq '.items | length' <<<"$all")" = 11 ] || fail "$(jq '.items | length' <<<"$all") events exist, want 11: $(jq -c '[.items[] | {title, status}]' <<<"$all")"
+[ "$(jq '[.items[] | select(.title == "Gym" and .status == "cancelled")] | length' <<<"$all")" = 1 ] || fail "$(jq -c '[.items[] | select(.title == "Gym") | {startAt, status}]' <<<"$all"): want exactly one cancelled gym occurrence"
 echo "ok: no other event was created"
 
 echo "calendar AI smoke passed"

@@ -29,9 +29,9 @@ export default function PrivacyPage() {
       <section>
         <h2>Where it is kept</h2>
         <p>
-          Everything stays on the owner&apos;s server. The tokens Google issues
-          are stored there encrypted, and they are never shown in the app or
-          written to logs.
+          Life OS stores everything on the owner&apos;s server. The tokens
+          Google issues are stored there encrypted, and they are never shown in
+          the app or written to logs.
         </p>
       </section>
       <section>
@@ -39,6 +39,11 @@ export default function PrivacyPage() {
         <p>
           Life OS does not sell Google user data, share it with third parties,
           or use it for advertising, and it does not use it to train AI models.
+          The one transfer happens at the owner&apos;s own request: Life
+          OS&apos;s assistant runs on the owner&apos;s OpenAI Codex account, so
+          when the owner asks it to work with their calendar (for example
+          &ldquo;move the dentist to Monday&rdquo;), the events it needs to find
+          and change are sent to that account to plan the change.
         </p>
       </section>
       <section>

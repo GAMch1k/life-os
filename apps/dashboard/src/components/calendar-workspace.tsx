@@ -33,6 +33,11 @@ import {
 } from "@/components/calendar-event-dialog";
 import { GoogleCalendarControl } from "@/components/calendar-google";
 import { ReminderDefaultsDialog } from "@/components/calendar-reminder-defaults";
+import {
+  editQuestion,
+  ScopeDialog,
+  type ScopeQuestion,
+} from "@/components/calendar-scope-dialog";
 import { CalendarSearch } from "@/components/calendar-search";
 import { Button } from "@/components/ui/button";
 import { calendarClient } from "@/lib/api/calendar-client";
@@ -41,12 +46,18 @@ import {
   CALENDAR_VIEWS,
   type CalendarEvent,
   type CalendarView,
+  type EventFields,
   eventStartDay,
   fetchEventsInRange,
   FULLCALENDAR_VIEW,
+  isImported,
   localDay,
+  movedFields,
   newDraft,
+  occurrenceEdit,
   rescheduleRequest,
+  saveOccurrence,
+  type Scope,
   toEventInput,
   VIEW_LABEL,
   viewOf,
@@ -89,6 +100,14 @@ const isTimeGrid = (view: string) => view.startsWith("timeGrid");
 const noSubscription = () => () => {};
 
 type Mover = { event: EventApi; revert: () => void };
+
+/** An occurrence dragged or resized, waiting for the owner to pick a scope. */
+type PendingMove = {
+  revert: () => void;
+  occurrence: CalendarEvent;
+  fields: EventFields;
+  question: ScopeQuestion;
+};
 
 /**
  * FullCalendar with stable options. It renders only in the browser (its
@@ -209,6 +228,7 @@ export function CalendarWorkspace({
   const [showCancelled, setShowCancelled] = useState(false);
   const [dialog, setDialog] = useState<EventDialogState>(null);
   const [defaultsOpen, setDefaultsOpen] = useState(false);
+  const [moving, setMoving] = useState<PendingMove | null>(null);
 
   useEffect(() => {
     zoneRef.current = zone;
@@ -266,6 +286,27 @@ export function CalendarWorkspace({
   const onEventMoved = useCallback(async ({ event, revert }: Mover) => {
     const original = event.extendedProps.event as CalendarEvent | undefined;
     if (!original || !event.start) return revert();
+    // An occurrence of a recurring event: ask which occurrences move.
+    if (original.occurrence && !isImported(original)) {
+      const fields = movedFields(
+        { allDay: event.allDay, start: event.start, end: event.end },
+        original,
+      );
+      const edit = occurrenceEdit(fields, original, false);
+      if (!edit.changed) return revert();
+      setMoving({
+        revert,
+        occurrence: original,
+        fields,
+        question: editQuestion(
+          original,
+          edit,
+          zoneRef.current,
+          localDay(new Date()),
+        ),
+      });
+      return;
+    }
     try {
       const { data, error } = await calendarClient.PATCH(
         "/v1/events/{eventId}",
@@ -291,6 +332,30 @@ export function CalendarWorkspace({
       setNotice("Calendar is unavailable right now; the event was not moved.");
     }
   }, []);
+
+  // Every scope can change other occurrences too (All events moves them
+  // all), so the calendar reloads; a refused move snaps back.
+  const moveTo = async (scope: Scope, move: PendingMove) => {
+    const { occurrence, fields, revert } = move;
+    try {
+      const { data, error } = await saveOccurrence(scope, fields, occurrence, {
+        repeatChanged: false,
+        ownerZone: zone,
+      });
+      if (!data) {
+        revert();
+        setNotice(
+          `Could not move “${occurrence.title}”: ${apiErrorMessage(error) ?? "Calendar refused the change"}.`,
+        );
+        return;
+      }
+      setNotice(undefined);
+      api()?.refetchEvents();
+    } catch {
+      revert();
+      setNotice("Calendar is unavailable right now; the event was not moved.");
+    }
+  };
 
   /** Shows the event's day (and time) unless it is already in view. */
   const reveal = (event: CalendarEvent, always = false) => {
@@ -320,6 +385,9 @@ export function CalendarWorkspace({
     setDialog(null);
     api()?.refetchEvents();
   };
+
+  // This and following, or All events: several occurrences changed.
+  const onSeriesChanged = onDeleted;
 
   const openFromSearch = (event: CalendarEvent) => {
     reveal(event, true);
@@ -505,6 +573,7 @@ export function CalendarWorkspace({
       <CalendarEventDialog
         onDeleted={onDeleted}
         onSaved={onSaved}
+        onSeriesChanged={onSeriesChanged}
         onStateChange={setDialog}
         state={dialog}
         timeZone={zone}
@@ -514,6 +583,17 @@ export function CalendarWorkspace({
         onOpenChange={setDefaultsOpen}
         onSaved={onDefaultsSaved}
         open={defaultsOpen}
+      />
+      <ScopeDialog
+        onCancel={() => {
+          moving?.revert();
+          setMoving(null);
+        }}
+        onChoose={(scope) => {
+          if (moving) void moveTo(scope, moving);
+          setMoving(null);
+        }}
+        question={moving?.question ?? null}
       />
     </div>
   );

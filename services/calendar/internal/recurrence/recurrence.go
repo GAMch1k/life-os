@@ -7,6 +7,7 @@ package recurrence
 
 import (
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/teambition/rrule-go"
@@ -45,18 +46,92 @@ type Rule struct {
 	UntilWall *time.Time
 }
 
-// SimpleRule is the rule of the API's Recurrence: every interval days,
-// weeks, months, or years until an optional instant.
+// SimpleRule is the rule of the API's simplest Recurrence: every interval
+// days, weeks, months, or years until an optional instant.
 func SimpleRule(frequency string, interval int, until *time.Time) (Rule, error) {
-	frequencies := map[string]rrule.Frequency{"daily": rrule.DAILY, "weekly": rrule.WEEKLY, "monthly": rrule.MONTHLY, "yearly": rrule.YEARLY}
-	freq, ok := frequencies[frequency]
-	if !ok {
-		return Rule{}, fmt.Errorf("unknown recurrence frequency %q", frequency)
+	return Spec{Frequency: frequency, Interval: interval, Until: until}.Rule()
+}
+
+// Spec is the API's Recurrence: every Interval days, weeks, months, or years
+// from the series' start; a weekly rule on each of ByWeekday (iCalendar day
+// codes, MO to SU) when given; ending after Count occurrences (0: no count)
+// or at Until (an inclusive instant), or never.
+type Spec struct {
+	Frequency string
+	Interval  int
+	ByWeekday []string
+	Count     int
+	Until     *time.Time
+}
+
+// weekdays maps iCalendar day codes to rule weekdays, in week order.
+var weekdays = []struct {
+	code    string
+	weekday time.Weekday
+	rule    rrule.Weekday
+}{
+	{"MO", time.Monday, rrule.MO}, {"TU", time.Tuesday, rrule.TU}, {"WE", time.Wednesday, rrule.WE},
+	{"TH", time.Thursday, rrule.TH}, {"FR", time.Friday, rrule.FR}, {"SA", time.Saturday, rrule.SA}, {"SU", time.Sunday, rrule.SU},
+}
+
+// WeekdayCode is the iCalendar code of day, such as "MO".
+func WeekdayCode(day time.Weekday) string {
+	for _, entry := range weekdays {
+		if entry.weekday == day {
+			return entry.code
+		}
 	}
-	if interval < 1 {
+	return ""
+}
+
+// NormalizeWeekdays returns codes in week order, each once, and false if
+// one of them is not a day code.
+func NormalizeWeekdays(codes []string) ([]string, bool) {
+	seen := map[string]bool{}
+	for _, code := range codes {
+		seen[code] = true
+	}
+	out := make([]string, 0, len(seen))
+	for _, entry := range weekdays {
+		if seen[entry.code] {
+			out = append(out, entry.code)
+			delete(seen, entry.code)
+		}
+	}
+	if len(seen) > 0 {
+		return nil, false
+	}
+	return out, true
+}
+
+// Rule is the spec as a Rule.
+func (s Spec) Rule() (Rule, error) {
+	frequencies := map[string]rrule.Frequency{"daily": rrule.DAILY, "weekly": rrule.WEEKLY, "monthly": rrule.MONTHLY, "yearly": rrule.YEARLY}
+	freq, ok := frequencies[s.Frequency]
+	if !ok {
+		return Rule{}, fmt.Errorf("unknown recurrence frequency %q", s.Frequency)
+	}
+	if s.Interval < 1 {
 		return Rule{}, fmt.Errorf("recurrence interval must be at least 1")
 	}
-	return Rule{Option: rrule.ROption{Freq: freq, Interval: interval}, Until: until}, nil
+	if s.Count < 0 {
+		return Rule{}, fmt.Errorf("recurrence count must not be negative")
+	}
+	option := rrule.ROption{Freq: freq, Interval: s.Interval, Count: s.Count}
+	if len(s.ByWeekday) > 0 {
+		if freq != rrule.WEEKLY {
+			return Rule{}, fmt.Errorf("byWeekday is only for weekly recurrence")
+		}
+		if _, ok := NormalizeWeekdays(s.ByWeekday); !ok {
+			return Rule{}, fmt.Errorf("unknown weekday in %v", s.ByWeekday)
+		}
+		for _, entry := range weekdays {
+			if slices.Contains(s.ByWeekday, entry.code) {
+				option.Byweekday = append(option.Byweekday, entry.rule)
+			}
+		}
+	}
+	return Rule{Option: option, Until: s.Until}, nil
 }
 
 // Series is a recurring event.

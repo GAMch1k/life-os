@@ -141,3 +141,46 @@ func TestIterationIsBounded(t *testing.T) {
 		t.Fatalf("a rule starting centuries ago stops after %d steps: %v %v", MaxSteps, got, err)
 	}
 }
+
+// The API's rule: a weekly rule on several days, a count, and a yearly
+// rule on the start's date ("annually on September 17").
+func TestSpecRules(t *testing.T) {
+	berlin := mustLoad(t, "Europe/Berlin")
+	rule, err := Spec{Frequency: "weekly", Interval: 1, ByWeekday: []string{"TH", "MO", "MO"}, Count: 5}.Rule()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Monday 07:00 Berlin, across the end of summer time on 25 October.
+	series := Series{Rule: rule, Start: wall("2026-10-19T07:00"), Duration: time.Hour, Zone: LocationZone{berlin}}
+	got, _ := series.Between(instant("2026-01-01T00:00:00Z"), instant("2027-01-01T00:00:00Z"), 0, nil)
+	if want := "2026-10-19T05:00Z 2026-10-22T05:00Z 2026-10-26T06:00Z 2026-10-29T06:00Z 2026-11-02T06:00Z"; starts(got) != want {
+		t.Fatalf("weekly on Monday and Thursday, 5 times = %s, want %s", starts(got), want)
+	}
+	every2, _ := Spec{Frequency: "weekly", Interval: 2, ByWeekday: []string{"MO", "WE"}}.Rule()
+	series = Series{Rule: every2, Start: wall("2026-10-12T10:00"), Duration: time.Hour, Zone: LocationZone{time.UTC}}
+	got, _ = series.Between(instant("2026-10-01T00:00:00Z"), instant("2026-11-01T00:00:00Z"), 0, nil)
+	if want := "2026-10-12T10:00Z 2026-10-14T10:00Z 2026-10-26T10:00Z 2026-10-28T10:00Z"; starts(got) != want {
+		t.Fatalf("every other week on Monday and Wednesday = %s, want %s", starts(got), want)
+	}
+	birthday, _ := Spec{Frequency: "yearly", Interval: 1}.Rule()
+	series = Series{Rule: birthday, AllDay: true, Start: wall("1990-09-17T00:00"), Days: 1, Zone: LocationZone{berlin}}
+	got, _ = series.Between(instant("2026-01-01T00:00:00Z"), instant("2028-12-31T00:00:00Z"), 0, nil)
+	if len(got) != 3 || got[0].Wall.Format(time.DateOnly) != "2026-09-17" || got[2].Wall.Format(time.DateOnly) != "2028-09-17" {
+		t.Fatalf("annually on September 17 = %+v", got)
+	}
+	for name, spec := range map[string]Spec{
+		"weekdays on a monthly rule": {Frequency: "monthly", Interval: 1, ByWeekday: []string{"MO"}},
+		"an unknown weekday":         {Frequency: "weekly", Interval: 1, ByWeekday: []string{"XX"}},
+		"a negative count":           {Frequency: "daily", Interval: 1, Count: -1},
+	} {
+		if _, err := spec.Rule(); err == nil {
+			t.Errorf("%s: no error", name)
+		}
+	}
+	if codes, ok := NormalizeWeekdays([]string{"SU", "MO", "SU", "WE"}); !ok || strings.Join(codes, ",") != "MO,WE,SU" {
+		t.Errorf("normalized = %v %v", codes, ok)
+	}
+	if WeekdayCode(time.Saturday) != "SA" {
+		t.Errorf("Saturday = %q", WeekdayCode(time.Saturday))
+	}
+}

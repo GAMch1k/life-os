@@ -87,7 +87,7 @@ func newGoogleClient(t *testing.T, calendars ...fakegoogle.Calendar) *googleClie
 // same database, with config.
 func (c *googleClient) restart(config google.Config) {
 	queries := store.New(c.pool)
-	handler := NewHandler(queries, "Europe/Berlin")
+	handler := NewHandler(c.pool, "Europe/Berlin")
 	handler.now = func() time.Time { return fixedNow }
 	service := google.NewService(config, c.pool, c.fake.Endpoints(), c.emitter, slog.New(slog.NewTextHandler(io.Discard, nil))).WithClock(c.clock.Now)
 	handler.WithActivity(c.emitter).WithGoogle(service)

@@ -182,24 +182,28 @@ func TestReminderDefaultsMigrationKeepsEffectiveReminders(t *testing.T) {
 		t.Fatal("000007_reminder_defaults.up.sql not found")
 	}
 	testdb.Apply(t, pool, migration)
-	queries := store.New(pool)
+	// The generated queries name columns of later migrations, so events are
+	// read and written with the columns this one knows.
 	for id, want := range map[pgtype.UUID]struct {
 		reminders   string
 		useDefaults bool
 	}{defaults: {"[]", true}, none: {"[]", false}, own: {evening, false}} {
-		event, err := queries.GetEvent(ctx, id)
-		if err != nil {
+		var title string
+		var reminders []byte
+		var useDefaults bool
+		if err := pool.QueryRow(ctx, `SELECT title, reminders, use_default_reminders FROM events WHERE id = $1`, id).Scan(&title, &reminders, &useDefaults); err != nil {
 			t.Fatal(err)
 		}
-		if !sameJSON(t, event.Reminders, want.reminders) || event.UseDefaultReminders != want.useDefaults {
-			t.Errorf("%s: reminders %s, defaults %v; want %s, %v", event.Title, event.Reminders, event.UseDefaultReminders, want.reminders, want.useDefaults)
+		if !sameJSON(t, reminders, want.reminders) || useDefaults != want.useDefaults {
+			t.Errorf("%s: reminders %s, defaults %v; want %s, %v", title, reminders, useDefaults, want.reminders, want.useDefaults)
 		}
 	}
 	// New events start with defaults on and none of their own.
-	created, err := queries.CreateEvent(ctx, store.CreateEventParams{Title: "New", AllDay: true, StartDate: on(time.Date(2026, time.November, 18, 0, 0, 0, 0, time.UTC)), EndDate: on(time.Date(2026, time.November, 18, 0, 0, 0, 0, time.UTC)),
-		Reminders: []byte(`[]`), UseDefaultReminders: true, Status: "active", SourceKind: "manual"})
-	if err != nil || !created.UseDefaultReminders {
-		t.Fatalf("created = %+v, %v", created, err)
+	var createdDefaults bool
+	var createdReminders []byte
+	if err := pool.QueryRow(ctx, `INSERT INTO events (title, all_day, start_date, end_date) VALUES ('New', true, '2026-11-18', '2026-11-18')
+		RETURNING use_default_reminders, reminders`).Scan(&createdDefaults, &createdReminders); err != nil || !createdDefaults || string(createdReminders) != "[]" {
+		t.Fatalf("created: defaults %v, reminders %s, %v", createdDefaults, createdReminders, err)
 	}
 	var settings int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM calendar_settings`).Scan(&settings); err != nil || settings != 0 {
@@ -289,5 +293,99 @@ func TestEventConstraints(t *testing.T) {
 		if !errors.As(err, &pgError) || pgError.ConstraintName != tc.constraint {
 			t.Errorf("%s: err = %v, want a %s violation", name, err, tc.constraint)
 		}
+	}
+}
+
+// The recurrence-exceptions migration keeps every event and its rule as it
+// was (no weekdays, no count, no exceptions), enforces the new rules'
+// invariants, and reverses cleanly: going down drops the exceptions and the
+// new rule parts and keeps the events.
+func TestRecurrenceExceptionsMigrationKeepsEvents(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Open(t, "000007")
+	var series, single pgtype.UUID
+	if err := pool.QueryRow(ctx, `INSERT INTO events (title, all_day, start_at, end_at, time_zone, recurrence_frequency, recurrence_interval)
+		VALUES ('Gym', false, '2026-10-10T05:00:00Z', '2026-10-10T06:00:00Z', 'Europe/Berlin', 'weekly', 1) RETURNING id`).Scan(&series); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `INSERT INTO events (title, all_day, start_date, end_date) VALUES ('Holiday', true, '2026-12-24', '2026-12-26') RETURNING id`).Scan(&single); err != nil {
+		t.Fatal(err)
+	}
+	var migration string
+	for _, path := range testdb.Migrations(t) {
+		if filepath.Base(path) == "000008_recurrence_exceptions.up.sql" {
+			migration = path
+		}
+	}
+	if migration == "" {
+		t.Fatal("000008_recurrence_exceptions.up.sql not found")
+	}
+	testdb.Apply(t, pool, migration)
+	queries := store.New(pool)
+	gym, err := queries.GetEvent(ctx, series)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *gym.RecurrenceFrequency != "weekly" || *gym.RecurrenceInterval != 1 || gym.RecurrenceByWeekday != nil || gym.RecurrenceCount != nil || gym.Title != "Gym" {
+		t.Fatalf("migrated series = %+v", gym)
+	}
+	if holiday, err := queries.GetEvent(ctx, single); err != nil || holiday.RecurrenceFrequency != nil || holiday.StartDate.Time.Format(time.DateOnly) != "2026-12-24" {
+		t.Fatalf("migrated event = %+v, %v", holiday, err)
+	}
+	cancelled, err := queries.UpsertEventException(ctx, store.UpsertEventExceptionParams{EventID: series, RecurrenceID: "2026-10-17T05:00:00Z", Changes: []byte(`{}`), CancelledAt: at(time.Now())})
+	if err != nil || cancelled.CancelledAt.Valid != true {
+		t.Fatalf("cancelled exception = %+v, %v", cancelled, err)
+	}
+	if _, err := queries.UpsertEventException(ctx, store.UpsertEventExceptionParams{EventID: series, RecurrenceID: "2026-10-24T05:00:00Z", Changes: []byte(`{"title":"Gym with Anna","description":null}`)}); err != nil {
+		t.Fatal(err)
+	}
+	moved, err := queries.MoveEventExceptions(ctx, store.MoveEventExceptionsParams{ToEventID: single, FromEventID: series, RecurrenceIds: []string{"2026-10-24T05:00:00Z"}})
+	if err != nil || moved != 1 {
+		t.Fatalf("moved = %d, %v", moved, err)
+	}
+
+	violations := map[string]struct {
+		constraint string
+		statement  string
+	}{
+		"weekdays on a daily rule": {"events_recurrence_by_weekday_check", `UPDATE events SET recurrence_frequency = 'daily', recurrence_by_weekday = ARRAY['SA'] WHERE id = $1`},
+		"an unknown weekday":       {"events_recurrence_by_weekday_check", `UPDATE events SET recurrence_by_weekday = ARRAY['XX'] WHERE id = $1`},
+		"no weekdays":              {"events_recurrence_by_weekday_check", `UPDATE events SET recurrence_by_weekday = ARRAY[]::text[] WHERE id = $1`},
+		"count and until":          {"events_recurrence_count_check", `UPDATE events SET recurrence_count = 3, recurrence_until = now() WHERE id = $1`},
+		"count out of range":       {"events_recurrence_count_check", `UPDATE events SET recurrence_count = 1001 WHERE id = $1`},
+		"an empty exception":       {"event_exceptions_records_something_check", `INSERT INTO event_exceptions (event_id, recurrence_id) VALUES ($1, '2026-10-31T05:00:00Z')`},
+		"changes not an object":    {"event_exceptions_changes_check", `INSERT INTO event_exceptions (event_id, recurrence_id, changes) VALUES ($1, '2026-10-31T05:00:00Z', '[]')`},
+	}
+	for name, tc := range violations {
+		_, err := pool.Exec(ctx, tc.statement, series)
+		var pgError *pgconn.PgError
+		if !errors.As(err, &pgError) || pgError.ConstraintName != tc.constraint {
+			t.Errorf("%s: err = %v, want a %s violation", name, err, tc.constraint)
+		}
+	}
+	if _, err := pool.Exec(ctx, `UPDATE events SET recurrence_by_weekday = ARRAY['SA', 'MO'], recurrence_count = 10 WHERE id = $1`, series); err != nil {
+		t.Fatalf("a weekly rule on two days with a count: %v", err)
+	}
+	// Deleting a series deletes its exceptions.
+	if _, err := queries.DeleteEvent(ctx, single); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := queries.ListEventExceptions(ctx, []pgtype.UUID{series, single})
+	if err != nil || len(rows) != 1 || rows[0].EventID != series {
+		t.Fatalf("exceptions after deleting an event = %+v, %v", rows, err)
+	}
+
+	testdb.Apply(t, pool, strings.Replace(migration, ".up.sql", ".down.sql", 1))
+	var title, frequency string
+	if err := pool.QueryRow(ctx, `SELECT title, recurrence_frequency FROM events WHERE id = $1`, series).Scan(&title, &frequency); err != nil || title != "Gym" || frequency != "weekly" {
+		t.Fatalf("down: %s %s %v", title, frequency, err)
+	}
+	var tables int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'event_exceptions'`).Scan(&tables); err != nil || tables != 0 {
+		t.Fatalf("down: event_exceptions tables = %d, %v", tables, err)
+	}
+	testdb.Apply(t, pool, migration)
+	if gym, err := queries.GetEvent(ctx, series); err != nil || gym.RecurrenceByWeekday != nil || gym.RecurrenceCount != nil {
+		t.Fatalf("down and up again: %+v, %v", gym, err)
 	}
 }
