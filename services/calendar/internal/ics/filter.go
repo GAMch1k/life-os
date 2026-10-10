@@ -49,3 +49,21 @@ func matchesAny(terms []string, item Item) bool {
 	}
 	return false
 }
+
+// StripLocationSuffix removes a trailing " - <location>" from the item's
+// title when it repeats the item's own location, as MyMüll waste-collection
+// feeds do ("Bioabfall - <town>, <street>" at "<town>, <street>"). The
+// location stays in Location; any other title is left as it is.
+func StripLocationSuffix(item Item) Item {
+	if item.Location == nil {
+		return item
+	}
+	location := strings.TrimSpace(*item.Location)
+	if location == "" {
+		return item
+	}
+	if title, found := strings.CutSuffix(strings.TrimSpace(item.Title), " - "+location); found && strings.TrimSpace(title) != "" {
+		item.Title = strings.TrimSpace(title)
+	}
+	return item
+}

@@ -43,7 +43,8 @@ func TestSourcesMigrationKeepsExistingEvents(t *testing.T) {
 	}
 	testdb.Apply(t, pool, strings.Replace(migration, ".up.sql", ".down.sql", 1))
 	testdb.Apply(t, pool, migration)
-	if _, err := queries.ListSources(ctx); err != nil {
+	// Raw SQL: the generated queries expect the later migrations' columns.
+	if _, err := pool.Exec(ctx, "SELECT id, name, url, filter_include FROM calendar_sources"); err != nil {
 		t.Fatalf("after down and up again: %v", err)
 	}
 }
@@ -101,5 +102,54 @@ func TestSourceRegistryConstraintsAndLease(t *testing.T) {
 	events, err := queries.ListEvents(ctx, store.ListEventsParams{TimeZone: "UTC", RangeStart: pgtype.Timestamptz{Time: pickup.Add(-time.Hour), Valid: true}, RangeEnd: pgtype.Timestamptz{Time: pickup.Add(2 * time.Hour), Valid: true}, IncludeCancelled: true, PageLimit: 10})
 	if err != nil || len(events) != 1 || events[0].Event.ID != manual.ID {
 		t.Fatalf("after deleting the source: %+v %v", events, err)
+	}
+}
+
+// The presets migration applies to existing sources (none is a preset) and
+// reverses cleanly; a preset names at most one source. Raw SQL throughout:
+// the generated queries expect the later migrations' columns.
+func TestPresetsMigrationAndUniqueness(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Open(t, "000005")
+	if _, err := pool.Exec(ctx, `INSERT INTO calendar_sources (kind, name, url) VALUES ('ics', 'Existing', 'https://calendar.example.org/existing.ics')`); err != nil {
+		t.Fatal(err)
+	}
+	var migration string
+	for _, path := range testdb.Migrations(t) {
+		if filepath.Base(path) == "000006_source_presets.up.sql" {
+			migration = path
+		}
+	}
+	if migration == "" {
+		t.Fatal("000006_source_presets.up.sql not found")
+	}
+	testdb.Apply(t, pool, migration)
+	var presets int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM calendar_sources WHERE preset IS NOT NULL OR preset_config IS NOT NULL`).Scan(&presets); err != nil || presets != 0 {
+		t.Fatalf("existing source after the migration: %d presets, %v", presets, err)
+	}
+
+	create := func(name string) error {
+		_, err := pool.Exec(ctx, `INSERT INTO calendar_sources (kind, name, url, preset, preset_config) VALUES ('ics', $1, 'https://calendar.example.org/zaw.ics', 'zaw', '{"name":"ZAW"}')`, name)
+		return err
+	}
+	if err := create("first"); err != nil {
+		t.Fatal(err)
+	}
+	var pgError *pgconn.PgError
+	if err := create("second"); !errors.As(err, &pgError) || pgError.ConstraintName != "calendar_sources_preset_key" {
+		t.Fatalf("a second source for the preset: %v", err)
+	}
+	for _, bad := range []string{`UPDATE calendar_sources SET preset = ' ' WHERE name = 'Existing'`, `UPDATE calendar_sources SET preset_config = '[]' WHERE name = 'first'`} {
+		if _, err := pool.Exec(ctx, bad); !errors.As(err, &pgError) || pgError.Code != "23514" {
+			t.Errorf("%s: %v", bad, err)
+		}
+	}
+
+	testdb.Apply(t, pool, strings.Replace(migration, ".up.sql", ".down.sql", 1))
+	testdb.Apply(t, pool, migration)
+	var sources int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM calendar_sources WHERE preset IS NULL`).Scan(&sources); err != nil || sources != 2 {
+		t.Fatalf("after down and up again: %d sources, %v", sources, err)
 	}
 }

@@ -55,8 +55,9 @@ A redeploy or `docker compose stop processor` cancels a run in progress and hand
 
 ## Calendar sources
 
-Calendar refreshes subscribed ICS feeds itself (see [Calendar](../services/calendar.md#sources-ics-feeds)); no extra service is involved. Migration `000005_calendar_sources` adds the source registry on the next `calendar-migrate` run. Optional `.env` setting:
+Calendar refreshes subscribed ICS feeds itself (see [Calendar](../services/calendar.md#sources-ics-feeds)); no extra service is involved. Migration `000005_calendar_sources` adds the source registry and `000006_source_presets` the preset columns on the next `calendar-migrate` run. Optional `.env` settings:
 - `LIFE_OS_CALENDAR_SOURCE_REFRESH_AT` (default `04:30`): the daily refresh time, HH:MM in `LIFE_OS_TIMEZONE`.
+- `LIFE_OS_ZAW_ICS_URL` (default empty): the owner's personal ZAW waste-collection feed (the MyMüll iCal export, `https://service.mymuell.de/api.php?m=zaw&r=ical&city_id=<city>&area_id=<area>&…`). When set, Calendar keeps one "ZAW" source for it, created or updated at its start and imported right away; change it with `docker compose up -d calendar`. See [ZAW waste collection](../services/calendar.md#zaw-waste-collection).
 
 Calendar needs outbound https from the `backend` network to reach feeds, and refuses feeds on private or loopback addresses. A refresh outcome (and the last error) is on the source (`GET /api/calendar/v1/sources`) and in the Event Log; a failing feed keeps its last good events and is retried with backoff. Keep personal feed URLs (they can carry a street) in the ignored `.env` or in the source registry, never in the repository.
 

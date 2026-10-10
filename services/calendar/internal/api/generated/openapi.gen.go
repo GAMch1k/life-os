@@ -206,6 +206,9 @@ type CalendarSource struct {
 	// Name The label shown with the source's events, such as "ZAW".
 	Name string `json:"name"`
 
+	// Preset Set (such as `zaw`) for a source Calendar configures from its own environment at startup; null for sources added through the API. A preset source can be edited like any other, but while its environment setting is present a deleted one is added again at the next start.
+	Preset *string `json:"preset,omitempty"`
+
 	// Refresh The source's refresh schedule and last outcome (`lastOutcome` and `lastCounts` are absent before the first refresh). Read-only.
 	Refresh SourceRefreshState `json:"refresh"`
 
@@ -284,6 +287,9 @@ type EventSource struct {
 
 	// Kind `manual`: created in Life OS (the Dashboard, MCP, or a capture). `ics`: imported from an ICS/iCal feed. `google`: synchronized from Google Calendar.
 	Kind EventSourceKind `json:"kind"`
+
+	// Name The name of that source, such as "ZAW", as it is now (renaming the source renames it here); null for manual events. Set by Calendar in responses.
+	Name *string `json:"name,omitempty"`
 
 	// SourceId The Calendar source (feed or connected calendar) the event was imported from; null for manual events.
 	SourceId *openapi_types.UUID `json:"sourceId,omitempty"`

@@ -35,6 +35,11 @@ type Config struct {
 	// addresses. For local development and verification only: it disables
 	// the protection against reaching internal services.
 	ICSAllowPrivateURLs bool `env:"CALENDAR_ICS_ALLOW_PRIVATE_URLS" default:"false"`
+	// ZAWICSURL is the owner's personal ZAW (MyMüll) waste-collection iCal
+	// feed. When set, Calendar keeps one "ZAW" source for it, configured at
+	// startup; empty leaves any existing one alone. It names a street:
+	// never log it.
+	ZAWICSURL string `env:"CALENDAR_ZAW_ICS_URL"`
 }
 
 // Load reads Config from the process environment.

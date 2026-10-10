@@ -188,6 +188,8 @@ export interface components {
              * @description The Calendar source (feed or connected calendar) the event was imported from; null for manual events.
              */
             sourceId?: string | null;
+            /** @description The name of that source, such as "ZAW", as it is now (renaming the source renames it here); null for manual events. Set by Calendar in responses. */
+            name?: string | null;
             /** @description The event's identity in its source; null for manual events. For an ICS event, its UID; one occurrence of a recurring ICS event is imported as its own event, `<UID>#<RECURRENCE-ID>`, where the RECURRENCE-ID is its original start (20261017T040000Z, or 20261017 for an all-day event). */
             externalUid?: string | null;
         };
@@ -371,6 +373,8 @@ export interface components {
             url: string;
             /** @description Disabled sources are not refreshed; their events stay as they are. */
             enabled: boolean;
+            /** @description Set (such as `zaw`) for a source Calendar configures from its own environment at startup; null for sources added through the API. A preset source can be edited like any other, but while its environment setting is present a deleted one is added again at the next start. */
+            preset?: string | null;
             filter: components["schemas"]["SourceFilter"];
             /** @description Reminder intent for this source's events whose own reminders are null (for example the evening before a waste pickup, `{"kind":"localTime","daysBefore":1,"localTime":"19:00"}`). Null means none. */
             defaultReminders: components["schemas"]["Reminder"][] | null;

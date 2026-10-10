@@ -11,11 +11,16 @@ import (
 )
 
 type Querier interface {
+	// Writes a preset's configuration to its source and records it as applied.
+	// reset_validators and next_refresh_at work as in UpdateSource; enabled and
+	// the refresh state stay.
+	ApplySourcePreset(ctx context.Context, arg ApplySourcePresetParams) (CalendarSource, error)
 	// Takes the source's refresh lease: one refresh per source at a time, across
 	// processes too. A lease left by a crashed refresh expires and is taken over.
 	ClaimSourceRefresh(ctx context.Context, arg ClaimSourceRefreshParams) (CalendarSource, error)
 	// A replay with the same automation idempotency key returns the original row.
 	CreateEvent(ctx context.Context, arg CreateEventParams) (Event, error)
+	CreatePresetSource(ctx context.Context, arg CreatePresetSourceParams) (CalendarSource, error)
 	CreateSource(ctx context.Context, arg CreateSourceParams) (CalendarSource, error)
 	DeleteEvent(ctx context.Context, id pgtype.UUID) (int64, error)
 	// Also deletes the source's imported events (ON DELETE CASCADE).
@@ -24,6 +29,9 @@ type Querier interface {
 	// under LockSource) and releases the lease.
 	FinishSourceRefresh(ctx context.Context, arg FinishSourceRefreshParams) (CalendarSource, error)
 	GetEvent(ctx context.Context, id pgtype.UUID) (Event, error)
+	// Preset sources are configured from Calendar's environment at startup
+	// (EnsurePreset), inside one transaction holding LockPreset.
+	GetPresetSource(ctx context.Context, preset string) (CalendarSource, error)
 	GetSource(ctx context.Context, id pgtype.UUID) (CalendarSource, error)
 	InsertImportedEvent(ctx context.Context, arg InsertImportedEventParams) error
 	// Enabled sources whose next refresh is due and that nobody is refreshing.
@@ -43,8 +51,15 @@ type Querier interface {
 	// Imported events are written only by Calendar's source adapter, inside the
 	// refresh transaction that holds LockSource.
 	ListSourceEvents(ctx context.Context, sourceID pgtype.UUID) ([]Event, error)
-	ListSourceReminderDefaults(ctx context.Context) ([]ListSourceReminderDefaultsRow, error)
+	// What an imported event shows of its source: its name and default reminders.
+	ListSourceSummaries(ctx context.Context) ([]ListSourceSummariesRow, error)
 	ListSources(ctx context.Context) ([]CalendarSource, error)
+	// A source added through the API for the preset's feed URL: the preset takes
+	// it over rather than adding a second source for the same feed.
+	LockAdoptableSource(ctx context.Context, url string) (CalendarSource, error)
+	// Serializes ensuring a preset across processes until the transaction ends.
+	LockPreset(ctx context.Context, preset string) error
+	LockPresetSource(ctx context.Context, preset string) (CalendarSource, error)
 	LockSource(ctx context.Context, id pgtype.UUID) (CalendarSource, error)
 	// The event left its source: cancelled, kept as history, and marked removed.
 	MarkImportedEventRemoved(ctx context.Context, arg MarkImportedEventRemovedParams) error

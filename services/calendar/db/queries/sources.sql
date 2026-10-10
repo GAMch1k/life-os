@@ -65,8 +65,53 @@ SET refreshing_until = NULL,
 WHERE id = sqlc.arg(id)
 RETURNING *;
 
--- name: ListSourceReminderDefaults :many
-SELECT id, default_reminders FROM calendar_sources WHERE default_reminders IS NOT NULL;
+-- name: ListSourceSummaries :many
+-- What an imported event shows of its source: its name and default reminders.
+SELECT id, name, default_reminders FROM calendar_sources ORDER BY id;
+
+-- Preset sources are configured from Calendar's environment at startup
+-- (EnsurePreset), inside one transaction holding LockPreset.
+
+-- name: GetPresetSource :one
+SELECT * FROM calendar_sources WHERE preset = sqlc.arg(preset)::text;
+
+-- name: LockPreset :exec
+-- Serializes ensuring a preset across processes until the transaction ends.
+SELECT pg_advisory_xact_lock(hashtext('calendar_sources.preset:' || sqlc.arg(preset)::text));
+
+-- name: LockPresetSource :one
+SELECT * FROM calendar_sources WHERE preset = sqlc.arg(preset)::text FOR UPDATE;
+
+-- name: LockAdoptableSource :one
+-- A source added through the API for the preset's feed URL: the preset takes
+-- it over rather than adding a second source for the same feed.
+SELECT * FROM calendar_sources
+WHERE preset IS NULL AND kind = 'ics' AND url = sqlc.arg(url)
+ORDER BY created_at, id
+LIMIT 1
+FOR UPDATE;
+
+-- name: CreatePresetSource :one
+INSERT INTO calendar_sources (kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, preset, preset_config)
+VALUES (sqlc.arg(kind), sqlc.arg(name), sqlc.arg(url), true, sqlc.arg(filter_include)::text[], sqlc.arg(filter_exclude)::text[],
+        sqlc.narg(default_reminders), sqlc.arg(next_refresh_at), sqlc.arg(preset)::text, sqlc.arg(preset_config))
+RETURNING *;
+
+-- name: ApplySourcePreset :one
+-- Writes a preset's configuration to its source and records it as applied.
+-- reset_validators and next_refresh_at work as in UpdateSource; enabled and
+-- the refresh state stay.
+UPDATE calendar_sources
+SET name = sqlc.arg(name), url = sqlc.arg(url),
+    filter_include = sqlc.arg(filter_include)::text[], filter_exclude = sqlc.arg(filter_exclude)::text[],
+    default_reminders = sqlc.narg(default_reminders),
+    preset = sqlc.arg(preset)::text, preset_config = sqlc.arg(preset_config),
+    etag = CASE WHEN sqlc.arg(reset_validators)::boolean THEN NULL ELSE etag END,
+    last_modified = CASE WHEN sqlc.arg(reset_validators)::boolean THEN NULL ELSE last_modified END,
+    next_refresh_at = COALESCE(sqlc.narg(next_refresh_at)::timestamptz, next_refresh_at),
+    updated_at = now()
+WHERE id = sqlc.arg(id)
+RETURNING *;
 
 -- Imported events are written only by Calendar's source adapter, inside the
 -- refresh transaction that holds LockSource.

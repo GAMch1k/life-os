@@ -17,8 +17,21 @@ func TestLoadFromAppliesDefaults(t *testing.T) {
 	if cfg.ServiceName != "calendar" || cfg.Port != 8080 || cfg.LogLevel != "info" {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
-	if cfg.SourceRefreshAt != "04:30" || cfg.ICSMaxBytes != 5<<20 || cfg.ICSTimeoutSeconds != 30 || cfg.ICSAllowPrivateURLs || cfg.ActivityURL != "" {
+	if cfg.SourceRefreshAt != "04:30" || cfg.ICSMaxBytes != 5<<20 || cfg.ICSTimeoutSeconds != 30 || cfg.ICSAllowPrivateURLs || cfg.ActivityURL != "" || cfg.ZAWICSURL != "" {
 		t.Fatalf("unexpected source defaults: %+v", cfg)
+	}
+}
+
+func TestLoadFromReadsZAWFeed(t *testing.T) {
+	t.Parallel()
+
+	const feed = "https://feeds.example.test/abholtermine.ics?area=<area>"
+	cfg, err := LoadFrom(mapLookup(map[string]string{
+		"DATABASE_URL":         "postgres://calendar_user:secret@localhost/calendar_db",
+		"CALENDAR_ZAW_ICS_URL": feed,
+	}))
+	if err != nil || cfg.ZAWICSURL != feed {
+		t.Fatalf("LoadFrom() = %q, %v", cfg.ZAWICSURL, err)
 	}
 }
 
