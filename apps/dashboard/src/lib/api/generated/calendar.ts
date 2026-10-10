@@ -169,6 +169,114 @@ export interface paths {
         patch: operations["updateSettings"];
         trace?: never;
     };
+    "/v1/google/connection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the Google Calendar connection
+         * @description Whether Google is configured on this server and the state of the owner's one Google connection. Never returns tokens or the client secret. `expired` means Google refused the stored authorization (expired or revoked) and the owner must reconnect; `error` means another refusal, described in `lastError`.
+         */
+        get: operations["getGoogleConnection"];
+        put?: never;
+        /**
+         * Complete a Google authorization
+         * @description Takes the `code` and `state` Google returned to the Dashboard's callback route. The state must come from `authorize` within 10 minutes and is used once. Calendar exchanges the code (with its PKCE verifier), stores the refresh token encrypted, identifies the account from its primary calendar, and stores its calendar list (a new primary calendar starts with sync on). Connecting another account replaces the connection and its calendar choices.
+         */
+        post: operations["connectGoogle"];
+        /**
+         * Disconnect Google Calendar
+         * @description Revokes the authorization at Google (best effort: a failure is recorded in Activity and the connection is removed anyway) and deletes the connection and its calendar choices. Succeeds also without a connection.
+         */
+        delete: operations["disconnectGoogle"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/google/connection/authorize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start a Google authorization
+         * @description Returns Google's consent page URL for the Dashboard to open. It asks for offline access with forced consent (so Google issues a refresh token), carries a single-use `state` valid for 10 minutes, and a PKCE (S256) challenge. Google returns the owner to the configured redirect URI (the Dashboard's /calendar/google/callback).
+         */
+        post: operations["authorizeGoogle"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/google/calendars": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the connected account's Google calendars
+         * @description The calendar list as last read from Google, primary first, then by name, with the owner's sync choice. Empty without a connection.
+         */
+        get: operations["listGoogleCalendars"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/google/calendars/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Read the calendar list from Google again
+         * @description New calendars are added (sync off, except a new primary calendar), known ones keep the owner's choice, and calendars Google no longer lists are dropped. Refreshes the access token when needed; a refresh token Google refuses marks the connection `expired`.
+         */
+        post: operations["refreshGoogleCalendars"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/google/calendars/{calendarId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Choose whether a Google calendar syncs
+         * @description Records the owner's choice; syncing itself starts in a later release.
+         */
+        patch: operations["updateGoogleCalendar"];
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -464,6 +572,68 @@ export interface components {
                 timed?: components["schemas"]["Reminder"][];
                 allDay?: components["schemas"]["Reminder"][];
             };
+        };
+        /**
+         * @description `not_connected`: no Google account is connected. `connected`: usable. `expired`: Google refused the stored authorization (it expired or was revoked); reconnect. `error`: another refusal, such as a changed client secret; see `lastError`.
+         * @enum {string}
+         */
+        GoogleConnectionStatus: "not_connected" | "connected" | "expired" | "error";
+        GoogleConnection: {
+            /** @description Whether this server has the Google client credentials and token key (LIFE_OS_GOOGLE_CLIENT_ID, LIFE_OS_GOOGLE_CLIENT_SECRET, LIFE_OS_GOOGLE_TOKEN_KEY). Without them nothing can be connected. */
+            configured: boolean;
+            status: components["schemas"]["GoogleConnectionStatus"];
+            /** @description The connected Google account (its primary calendar's id). */
+            accountEmail?: string | null;
+            /** @description The scopes Google granted. */
+            scopes: string[];
+            /** @description Scopes Life OS asks for that Google did not grant (the owner may untick some on the consent page); empty when everything was granted or nothing is connected. */
+            missingScopes: string[];
+            /**
+             * Format: date-time
+             * @description When the account was last connected.
+             */
+            connectedAt?: string | null;
+            /** @description Why the connection is expired or in error; null while connected. */
+            lastError?: string | null;
+        };
+        GoogleAuthorization: {
+            /** @description Google's consent page; open it in the browser. */
+            url: string;
+        };
+        GoogleConnectRequest: {
+            /** @description The authorization code Google returned. */
+            code: string;
+            /** @description The state Google returned with it. */
+            state: string;
+        };
+        GoogleCalendar: {
+            /** Format: uuid */
+            id: string;
+            /** @description The calendar's id at Google (the account's address for the primary calendar). */
+            googleCalendarId: string;
+            /** @description The calendar's name as the owner sees it in Google Calendar. */
+            summary: string;
+            /** @description Its background color in Google Calendar, such as #9fe1e7. */
+            color?: string | null;
+            /**
+             * @description The account's access to the calendar.
+             * @enum {string}
+             */
+            accessRole: "owner" | "writer" | "reader" | "freeBusyReader";
+            /** @description The account's primary calendar. */
+            primary: boolean;
+            /** @description Whether the calendar will sync into Life OS (syncing starts in a later release). */
+            syncEnabled: boolean;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        GoogleCalendarList: {
+            items: components["schemas"]["GoogleCalendar"][];
+        };
+        UpdateGoogleCalendarRequest: {
+            syncEnabled: boolean;
         };
     };
     responses: never;
@@ -997,6 +1167,246 @@ export interface operations {
             };
             /** @description Invalid request, or no valid X-Life-OS-Actor (actor_required) */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getGoogleConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Connection */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoogleConnection"];
+                };
+            };
+        };
+    };
+    connectGoogle: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GoogleConnectRequest"];
+            };
+        };
+        responses: {
+            /** @description The new connection */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoogleConnection"];
+                };
+            };
+            /** @description Invalid request, no valid X-Life-OS-Actor (actor_required), a state that is unknown, expired, or used (invalid_state), or a code Google refused (google_code_rejected) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The owner did not grant reading the calendar list (google_scope_missing) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Google refused or failed the request (google_rejected, google_unavailable) */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Google is not configured on this server (google_not_configured) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    disconnectGoogle: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Disconnected */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No valid X-Life-OS-Actor (actor_required) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    authorizeGoogle: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Consent page */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoogleAuthorization"];
+                };
+            };
+            /** @description No valid X-Life-OS-Actor (actor_required) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Google is not configured on this server (google_not_configured) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listGoogleCalendars: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Calendars */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoogleCalendarList"];
+                };
+            };
+        };
+    };
+    refreshGoogleCalendars: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Calendars */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoogleCalendarList"];
+                };
+            };
+            /** @description No valid X-Life-OS-Actor (actor_required) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not connected (google_not_connected), or the authorization expired or was revoked (google_expired) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Google refused or failed the request (google_rejected, google_unavailable) */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Google is not configured on this server (google_not_configured) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    updateGoogleCalendar: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The calendar's id in Calendar (not its Google id). */
+                calendarId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateGoogleCalendarRequest"];
+            };
+        };
+        responses: {
+            /** @description Calendar */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoogleCalendar"];
+                };
+            };
+            /** @description Invalid request, or no valid X-Life-OS-Actor (actor_required) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Calendar not found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

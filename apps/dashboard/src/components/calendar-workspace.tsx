@@ -31,6 +31,7 @@ import {
   CalendarEventDialog,
   type EventDialogState,
 } from "@/components/calendar-event-dialog";
+import { GoogleCalendarControl } from "@/components/calendar-google";
 import { ReminderDefaultsDialog } from "@/components/calendar-reminder-defaults";
 import { CalendarSearch } from "@/components/calendar-search";
 import { Button } from "@/components/ui/button";
@@ -415,6 +416,7 @@ export function CalendarWorkspace({
             <Bell />
             Reminder defaults
           </Button>
+          <GoogleCalendarControl />
           <span
             className="text-muted-foreground hidden items-center gap-1 text-xs lg:flex"
             title="Times are shown in this time zone"
