@@ -18,6 +18,7 @@ import {
   selectedEventId,
   sourceDescription,
   sourceLabel,
+  subjectLabel,
   type ActivityEvent,
 } from "./activity-log";
 
@@ -436,5 +437,42 @@ test("calendar entries link to the event's day in the owner's timezone", () => {
   assert.equal(
     calendarHref(entry("task.created", {}, "task"), "UTC"),
     undefined,
+  );
+});
+
+test("notifications read with their title and the channel used", () => {
+  assert.equal(sourceLabel("notifications"), "Notifications");
+  assert.equal(subjectLabel("notification"), "Notification");
+  assert.equal(
+    eventLabel({
+      type: "notification.created",
+      data: { title: "Inbox needs review" },
+    }),
+    "Notification created: Inbox needs review",
+  );
+  assert.equal(
+    eventLabel({
+      type: "notification.delivered",
+      data: { title: "Inbox needs review", channel: "ntfy" },
+    }),
+    "Notification delivered: Inbox needs review (ntfy)",
+  );
+  assert.equal(
+    eventLabel({
+      type: "notification.delivery_failed",
+      data: { title: "Inbox needs review", channel: "ntfy" },
+    }),
+    "Notification delivery failed: Inbox needs review (ntfy)",
+  );
+  for (const type of [
+    "notification.created",
+    "notification.delivered",
+    "notification.delivery_failed",
+  ]) {
+    assert.ok(EVENT_TYPES.includes(type));
+  }
+  assert.equal(
+    eventLabel({ type: "notification.delivery_failed", data: {} }),
+    "Notification delivery failed",
   );
 });

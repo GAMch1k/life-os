@@ -21,6 +21,9 @@ services:
   activity:
     image: lifeos-activity:latest
     ports: !reset []
+  notifications:
+    image: lifeos-notifications:latest
+    ports: !reset []
   dashboard:
     image: lifeos-dashboard:latest
     ports: !reset []
