@@ -142,7 +142,7 @@ func (h *Handler) ListEvents(c fiber.Ctx, params generated.ListEventsParams) err
 		}
 		result.Items = append(result.Items, entry.item)
 	}
-	if err := h.resolveReminders(c.Context(), result.Items); err != nil {
+	if err := h.resolveSources(c.Context(), result.Items); err != nil {
 		return internal(err)
 	}
 	return c.JSON(result)
@@ -222,7 +222,7 @@ func (h *Handler) SearchEvents(c fiber.Ctx, params generated.SearchEventsParams)
 		}
 		result.Items = append(result.Items, entry.item)
 	}
-	if err := h.resolveReminders(c.Context(), result.Items); err != nil {
+	if err := h.resolveSources(c.Context(), result.Items); err != nil {
 		return internal(err)
 	}
 	return c.JSON(result)
@@ -274,14 +274,14 @@ func (h *Handler) GetEvent(c fiber.Ctx, id types.UUID) error {
 	return h.respond(c, fiber.StatusOK, item)
 }
 
-// respond renders one stored event, with its effective reminders.
+// respond renders one stored event, with its effective reminders and source.
 func (h *Handler) respond(c fiber.Ctx, status int, item store.Event) error {
 	output, err := event(item)
 	if err != nil {
 		return internal(err)
 	}
 	items := []generated.CalendarEvent{output}
-	if err := h.resolveReminders(c.Context(), items); err != nil {
+	if err := h.resolveSources(c.Context(), items); err != nil {
 		return internal(err)
 	}
 	return c.Status(status).JSON(items[0])

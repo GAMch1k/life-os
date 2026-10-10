@@ -188,6 +188,8 @@ export interface components {
              * @description The Calendar source (feed or connected calendar) the event was imported from; null for manual events.
              */
             sourceId?: string | null;
+            /** @description The name of that source, such as "ZAW", as it is now (renaming the source renames it here); null for manual events. Set by Calendar in responses. */
+            name?: string | null;
             /** @description The event's identity in its source; null for manual events. For an ICS event, its UID; one occurrence of a recurring ICS event is imported as its own event, `<UID>#<RECURRENCE-ID>`, where the RECURRENCE-ID is its original start (20261017T040000Z, or 20261017 for an all-day event). */
             externalUid?: string | null;
         };

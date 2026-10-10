@@ -65,8 +65,9 @@ SET refreshing_until = NULL,
 WHERE id = sqlc.arg(id)
 RETURNING *;
 
--- name: ListSourceReminderDefaults :many
-SELECT id, default_reminders FROM calendar_sources WHERE default_reminders IS NOT NULL;
+-- name: ListSourceSummaries :many
+-- What an imported event shows of its source: its name and default reminders.
+SELECT id, name, default_reminders FROM calendar_sources ORDER BY id;
 
 -- Imported events are written only by Calendar's source adapter, inside the
 -- refresh transaction that holds LockSource.

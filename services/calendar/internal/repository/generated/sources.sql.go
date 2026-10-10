@@ -345,25 +345,27 @@ func (q *Queries) ListSourceEvents(ctx context.Context, sourceID pgtype.UUID) ([
 	return items, nil
 }
 
-const listSourceReminderDefaults = `-- name: ListSourceReminderDefaults :many
-SELECT id, default_reminders FROM calendar_sources WHERE default_reminders IS NOT NULL
+const listSourceSummaries = `-- name: ListSourceSummaries :many
+SELECT id, name, default_reminders FROM calendar_sources ORDER BY id
 `
 
-type ListSourceReminderDefaultsRow struct {
+type ListSourceSummariesRow struct {
 	ID               pgtype.UUID
+	Name             string
 	DefaultReminders []byte
 }
 
-func (q *Queries) ListSourceReminderDefaults(ctx context.Context) ([]ListSourceReminderDefaultsRow, error) {
-	rows, err := q.db.Query(ctx, listSourceReminderDefaults)
+// What an imported event shows of its source: its name and default reminders.
+func (q *Queries) ListSourceSummaries(ctx context.Context) ([]ListSourceSummariesRow, error) {
+	rows, err := q.db.Query(ctx, listSourceSummaries)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ListSourceReminderDefaultsRow{}
+	items := []ListSourceSummariesRow{}
 	for rows.Next() {
-		var i ListSourceReminderDefaultsRow
-		if err := rows.Scan(&i.ID, &i.DefaultReminders); err != nil {
+		var i ListSourceSummariesRow
+		if err := rows.Scan(&i.ID, &i.Name, &i.DefaultReminders); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

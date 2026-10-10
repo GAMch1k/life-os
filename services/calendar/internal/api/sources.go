@@ -27,35 +27,48 @@ const (
 	maxFilterLength = 100
 )
 
-// resolveReminders sets each item's effectiveReminders: its own reminders
-// when set, else its source's default reminders, else none. Source defaults
-// are read only when an item needs them.
-func (h *Handler) resolveReminders(ctx context.Context, items []generated.CalendarEvent) error {
-	var defaults map[types.UUID][]generated.Reminder
+// resolveSources completes each item from its source: its effectiveReminders
+// (its own reminders when set, else its source's default reminders, else
+// none) and, for an imported event, its source's name. Sources are read only
+// when an item comes from one.
+func (h *Handler) resolveSources(ctx context.Context, items []generated.CalendarEvent) error {
+	type summary struct {
+		name      string
+		reminders []generated.Reminder
+	}
+	var summaries map[types.UUID]summary
 	for index := range items {
 		item := &items[index]
 		effective := []generated.Reminder{}
-		switch {
-		case item.Reminders != nil:
+		if item.Reminders != nil {
 			effective = append(effective, *item.Reminders...)
-		case item.Source.SourceId != nil:
-			if defaults == nil {
-				rows, err := h.queries.ListSourceReminderDefaults(ctx)
+		}
+		if item.Source.SourceId != nil {
+			if summaries == nil {
+				rows, err := h.queries.ListSourceSummaries(ctx)
 				if err != nil {
 					return err
 				}
-				defaults = make(map[types.UUID][]generated.Reminder, len(rows))
+				summaries = make(map[types.UUID]summary, len(rows))
 				for _, row := range rows {
 					reminders, err := decodeReminders(row.DefaultReminders)
 					if err != nil {
 						return err
 					}
+					found := summary{name: row.Name}
 					if reminders != nil {
-						defaults[uuid(row.ID)] = *reminders
+						found.reminders = *reminders
 					}
+					summaries[uuid(row.ID)] = found
 				}
 			}
-			effective = append(effective, defaults[*item.Source.SourceId]...)
+			if found, ok := summaries[*item.Source.SourceId]; ok {
+				name := found.name
+				item.Source.Name = &name
+				if item.Reminders == nil {
+					effective = append(effective, found.reminders...)
+				}
+			}
 		}
 		item.EffectiveReminders = &effective
 	}

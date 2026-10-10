@@ -43,7 +43,8 @@ type Querier interface {
 	// Imported events are written only by Calendar's source adapter, inside the
 	// refresh transaction that holds LockSource.
 	ListSourceEvents(ctx context.Context, sourceID pgtype.UUID) ([]Event, error)
-	ListSourceReminderDefaults(ctx context.Context) ([]ListSourceReminderDefaultsRow, error)
+	// What an imported event shows of its source: its name and default reminders.
+	ListSourceSummaries(ctx context.Context) ([]ListSourceSummariesRow, error)
 	ListSources(ctx context.Context) ([]CalendarSource, error)
 	LockSource(ctx context.Context, id pgtype.UUID) (CalendarSource, error)
 	// The event left its source: cancelled, kept as history, and marked removed.

@@ -285,6 +285,9 @@ type EventSource struct {
 	// Kind `manual`: created in Life OS (the Dashboard, MCP, or a capture). `ics`: imported from an ICS/iCal feed. `google`: synchronized from Google Calendar.
 	Kind EventSourceKind `json:"kind"`
 
+	// Name The name of that source, such as "ZAW", as it is now (renaming the source renames it here); null for manual events. Set by Calendar in responses.
+	Name *string `json:"name,omitempty"`
+
 	// SourceId The Calendar source (feed or connected calendar) the event was imported from; null for manual events.
 	SourceId *openapi_types.UUID `json:"sourceId,omitempty"`
 }
