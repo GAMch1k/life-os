@@ -54,6 +54,9 @@ paths:
         '200':
           description: The connections.
           content: {application/json: {schema: {$ref: '#/components/schemas/BankConnectionList'}}}
+        '400':
+          description: Invalid request.
+          content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
     post:
       summary: Complete a bank connection
       description: >-
@@ -247,6 +250,7 @@ components:
         consecutiveFailures: {type: integer}
         lastError: {type: string, nullable: true}
         lastCounts:
+          type: object
           allOf: [{$ref: '#/components/schemas/BankSyncCounts'}]
           nullable: true
         unattendedReadsToday: {type: integer, description: Reads without the owner made today (owner-local).}

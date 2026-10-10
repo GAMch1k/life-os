@@ -435,7 +435,11 @@ func (s *Service) Disconnect(ctx context.Context, id pgtype.UUID, psu *enableban
 	}
 	if conn.Status != StatusDisconnected {
 		revoked := false
-		if conn.SessionCiphertext != nil && s.Configured() {
+		switch {
+		case conn.SessionCiphertext == nil:
+		case !s.Configured():
+			s.logger.Warn("banking is not configured, so the bank session was not ended at the provider; it ends with the consent", "connection", uuidString(id))
+		default:
 			sessionID, err := s.sealer.Open(conn.SessionCiphertext, conn.SessionNonce)
 			if err == nil {
 				err = s.bank.DeleteSession(ctx, string(sessionID), psu)

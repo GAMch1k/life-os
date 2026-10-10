@@ -232,6 +232,15 @@ export interface operations {
                     "application/json": components["schemas"]["BankConnectionList"];
                 };
             };
+            /** @description Invalid request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
         };
     };
     connectBankConnection: {
