@@ -1,5 +1,12 @@
 import Link from "next/link";
-import { ArrowDown, ArrowUp, History, Workflow, Wrench } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  CalendarDays,
+  History,
+  Workflow,
+  Wrench,
+} from "lucide-react";
 
 import {
   Card,
@@ -14,6 +21,7 @@ import { SelectedEventPane } from "@/components/selected-event-pane";
 import {
   activityHref,
   actorLabel,
+  calendarHref,
   emptyState,
   EVENT_TYPES,
   eventLabel,
@@ -499,6 +507,7 @@ function TraceView({
 }) {
   const { selected } = trace;
   const subject = subjectLabel(selected.subject.type).toLowerCase();
+  const inCalendar = calendarHref(selected, timeZone);
   return (
     <Card>
       <CardHeader>
@@ -516,6 +525,17 @@ function TraceView({
           />
         </CardDescription>
         <EventMeta event={selected} timeZone={timeZone} />
+        {inCalendar && (
+          <Link
+            className="text-primary inline-flex w-fit items-center gap-1.5 text-sm underline-offset-4 hover:underline"
+            href={inCalendar}
+          >
+            <CalendarDays aria-hidden="true" className="size-4" />
+            {selected.subject.type === "calendar_source"
+              ? "Open Calendar"
+              : "Open in Calendar"}
+          </Link>
+        )}
       </CardHeader>
       <CardContent className="space-y-6">
         <section aria-labelledby="upstream-heading" className="space-y-2">

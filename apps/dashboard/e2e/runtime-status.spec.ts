@@ -1,13 +1,24 @@
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 
+import {
+  createSource,
+  deleteSource,
+  failingFeedUrl,
+  FEED_OVERLAY_HINT,
+  feedDir,
+  refreshSource,
+  waitForRefresh,
+  writeFeed,
+} from "./calendar-feed";
 import { expect, test, type Page } from "./fixtures";
 
 // Forces real dependency and worker problems on the disposable verification
 // stack and checks that the Dashboard explains each one. Faults are injected
 // only through tools/verify-compose, which refuses non-verification resources.
 // Run with `make runtime-status-smoke`; it stops services, so it never runs as
-// part of the parallel browser suite.
+// part of the parallel browser suite. Calendar feed health (at the end) runs
+// in the browser suite too: a feed failing once raises no Home alert.
 const enabled = Boolean(
   process.env.LIFE_OS_E2E_URL && process.env.LIFE_OS_E2E_FAULTS,
 );
@@ -247,6 +258,121 @@ test.describe("Runtime status under forced problems", () => {
       await expectHomeAlert(page, /Voice worker is not picking up/);
     } finally {
       compose("start", "voice-worker");
+    }
+  });
+
+  test("a calendar feed that keeps failing reaches Home only after repeated failures", async ({
+    page,
+    request,
+  }) => {
+    const stamp = Date.now();
+    const name = `E2E broken feed ${stamp}`;
+    const source = await createSource(request, name, failingFeedUrl(stamp));
+    try {
+      await waitForRefresh(request, source.id, "failed");
+      await expectCheck(page, "Calendar sources", name);
+      await page.goto("/");
+      await expect(
+        page.getByRole("link", { name: new RegExp(`System status:.*${name}`) }),
+      ).toHaveCount(0);
+
+      // "Refresh now" until it has failed three times in a row.
+      let failures = 1;
+      for (let attempt = 0; failures < 3 && attempt < 6; attempt++) {
+        failures = (await refreshSource(request, source.id)).refresh
+          .consecutiveFailures;
+      }
+      expect(failures).toBeGreaterThanOrEqual(3);
+      await expectCheck(
+        page,
+        "Calendar sources",
+        new RegExp(
+          `The calendar feed ${name} has failed \\d+ refreshes in a row`,
+        ),
+      );
+      await expectHomeAlert(page, new RegExp(`${name} has failed`));
+    } finally {
+      await deleteSource(request, source.id);
+    }
+    await expectCheck(
+      page,
+      "Calendar sources",
+      /No calendar feeds|refreshing normally/,
+    );
+  });
+});
+
+test.describe("Calendar feed health on Status", () => {
+  test.skip(
+    !process.env.LIFE_OS_E2E_URL,
+    "set LIFE_OS_E2E_URL to run against the isolated stack",
+  );
+
+  test("a failed refresh shows the feed's error and next try, without a Home alert", async ({
+    page,
+    request,
+  }) => {
+    const stamp = Date.now();
+    const name = `E2E status feed ${stamp}`;
+    const source = await createSource(request, name, failingFeedUrl(stamp));
+    try {
+      const failed = await waitForRefresh(request, source.id, "failed");
+      await page.goto("/status");
+      const feed = page
+        .getByRole("region", { name: "Calendar sources" })
+        .getByRole("listitem")
+        .filter({ hasText: name });
+      await expect(feed).toContainText(
+        "The last refresh failed; it is retried automatically.",
+      );
+      await expect(feed).toContainText(failed.refresh.lastError!);
+      for (const fact of ["Last refresh", "Last success", "Next refresh"]) {
+        await expect(feed).toContainText(fact);
+      }
+      await expect(feed).toContainText(/Last refreshfailed \(/);
+      await expect(feed).toContainText("Last successnever");
+      // The feed URL is never shown.
+      await expect(page.getByText(`e2e-${stamp}.ics`)).toHaveCount(0);
+
+      // One failure is retried automatically: Home stays quiet about it.
+      await page.goto("/");
+      await expect(
+        page.getByRole("link", { name: new RegExp(`System status:.*${name}`) }),
+      ).toHaveCount(0);
+    } finally {
+      await deleteSource(request, source.id);
+    }
+  });
+
+  test("an imported feed shows what its last refresh did", async ({
+    page,
+    request,
+  }) => {
+    test.skip(!feedDir, FEED_OVERLAY_HINT);
+    const stamp = Date.now();
+    const name = `E2E healthy feed ${stamp}`;
+    const start = new Date(Date.now() + 5 * 86_400_000);
+    const url = writeFeed(`status-${stamp}.ics`, [
+      {
+        uid: `class-${stamp}`,
+        title: `Feed class ${stamp}`,
+        start,
+        end: new Date(start.getTime() + 3_600_000),
+      },
+    ]);
+    const source = await createSource(request, name, url);
+    try {
+      await waitForRefresh(request, source.id, "imported");
+      await page.goto("/status");
+      const feed = page
+        .getByRole("region", { name: "Calendar sources" })
+        .getByRole("listitem")
+        .filter({ hasText: name });
+      await expect(feed).toContainText("Refreshing normally.");
+      await expect(feed).toContainText(/Last refreshimported, 1 added \(/);
+      await expect(feed).not.toContainText("Failed in a row");
+    } finally {
+      await deleteSource(request, source.id);
     }
   });
 });

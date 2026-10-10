@@ -92,7 +92,8 @@ export function HomeAttentionSurface({
       />
       <AttentionCard
         id="attention-calendar"
-        href="/calendar"
+        // At the next event's day, so it is in view.
+        href={nextEvent?.kind === "event" ? nextEvent.href : "/calendar"}
         linkLabel="Open Calendar"
         icon={<CalendarDays aria-hidden="true" className="size-4" />}
         title="Next on your calendar"
@@ -105,7 +106,14 @@ export function HomeAttentionSurface({
         }
         items={
           nextEvent?.kind === "event"
-            ? [{ id: nextEvent.event.id, label: nextEvent.event.title }]
+            ? [
+                {
+                  id: nextEvent.event.id,
+                  label: nextEvent.event.title,
+                  // Imported events name their source, such as "ZAW".
+                  hint: nextEvent.sourceName,
+                },
+              ]
             : undefined
         }
       />
@@ -175,7 +183,7 @@ function AttentionCard({
               >
                 <span className="truncate">{item.label}</span>
                 {item.hint ? (
-                  <span className="text-muted-foreground shrink-0 text-xs">
+                  <span className="text-muted-foreground max-w-[50%] shrink-0 truncate text-xs">
                     {item.hint}
                   </span>
                 ) : null}

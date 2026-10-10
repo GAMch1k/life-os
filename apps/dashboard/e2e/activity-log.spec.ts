@@ -1,4 +1,16 @@
-import { expect, test } from "./fixtures";
+import {
+  addDays,
+  berlinDay,
+  createSource,
+  deleteSource,
+  failingFeedUrl,
+  FEED_OVERLAY_HINT,
+  feedDir,
+  refreshSource,
+  waitForRefresh,
+  writeFeed,
+} from "./calendar-feed";
+import { type APIRequestContext, expect, type Page, test } from "./fixtures";
 
 const enabled = Boolean(process.env.LIFE_OS_E2E_URL);
 
@@ -288,6 +300,218 @@ test.describe("Event Log", () => {
           .getByRole("heading", { name: "Whole workflow" }),
       ).toBeVisible();
       expect(await overflow()).toBeLessThanOrEqual(0);
+    }
+  });
+});
+
+/** Waits until Activity has recorded an event of `type` for the subject. */
+async function recorded(
+  request: APIRequestContext,
+  subjectType: string,
+  subjectId: string,
+  type: string,
+) {
+  await expect
+    .poll(
+      async () => {
+        const response = await request.get(
+          `/api/activity/v1/activity-events?subjectType=${subjectType}&subjectId=${subjectId}&type=${type}`,
+        );
+        return ((await response.json()).items ?? []).length;
+      },
+      { timeout: 30_000 },
+    )
+    .toBeGreaterThan(0);
+}
+
+/** The Event Log filtered to the Calendar domain through its form. */
+async function openCalendarDomain(page: Page) {
+  await page.goto("/activity");
+  await page
+    .getByRole("combobox", { name: "Domain" })
+    .selectOption({ label: "Calendar" });
+  await page.getByRole("button", { name: "Apply" }).click();
+  await expect(page).toHaveURL(/source=calendar/);
+  return page.getByRole("list", { name: "Activity entries" });
+}
+
+test.describe("Event Log: Calendar", () => {
+  test.skip(!enabled, "set LIFE_OS_E2E_URL to run against the isolated stack");
+
+  test("an event you edit in the Calendar shows as yours, apart from the tool that created it", async ({
+    page,
+    request,
+  }) => {
+    const stamp = Date.now();
+    const title = `Activity dentist ${stamp}`;
+    const moved = `${title} moved`;
+    const day = addDays(berlinDay(new Date()), 5);
+    const next = addDays(day, 1);
+    // 08:00 UTC is 09:00 or 10:00 in Berlin, the same day.
+    const created = await request.post("/api/calendar/v1/events", {
+      data: {
+        title,
+        allDay: false,
+        startAt: `${day}T08:00:00Z`,
+        endAt: `${day}T08:45:00Z`,
+      },
+    });
+    expect(created.status()).toBe(201);
+    const event = (await created.json()) as { id: string };
+    try {
+      // The owner renames and moves it in the Calendar workspace.
+      await page.goto(`/calendar?view=week&date=${day}`);
+      const events = page.getByRole("region", { name: "Calendar events" });
+      await expect(events).toHaveAttribute("aria-busy", "false");
+      await events.locator(".fc-event", { hasText: title }).click();
+      const dialog = page.getByRole("dialog");
+      await dialog.getByRole("button", { name: "Edit", exact: true }).click();
+      await dialog.getByLabel("Title").fill(moved);
+      await dialog.getByLabel("Start date").fill(next);
+      await dialog.getByRole("button", { name: "Save" }).click();
+      await expect(dialog.getByRole("heading", { name: moved })).toBeVisible();
+      await page.keyboard.press("Escape");
+      await recorded(
+        request,
+        "calendar_event",
+        event.id,
+        "calendar.event.rescheduled",
+      );
+
+      // In the Calendar domain of the Event Log, the change is the owner's.
+      const entries = await openCalendarDomain(page);
+      const entry = entries
+        .getByRole("link")
+        .filter({ hasText: `Event rescheduled: ${moved}` });
+      await expect(entry).toContainText(`Event “${moved}” moved to`);
+      await expect(entry).toContainText("Calendar · You");
+      await entry.click();
+
+      // The creation by the development tool is the same event's history.
+      const selected = page.getByRole("region", { name: "Selected event" });
+      const related = selected.locator("section").filter({
+        has: page.getByRole("heading", {
+          name: "Same calendar event in other workflows",
+        }),
+      });
+      await expect(
+        related.getByRole("link", { name: /^Event created: / }),
+      ).toContainText("by Developer tool (e2e)");
+
+      // The entry opens the Calendar at the event's new day.
+      await selected.getByRole("link", { name: "Open in Calendar" }).click();
+      await expect(page).toHaveURL(new RegExp(`/calendar\\?date=${next}$`));
+      await expect(events).toHaveAttribute("aria-busy", "false");
+      await expect(
+        events.locator(".fc-event", { hasText: moved }),
+      ).toBeVisible();
+    } finally {
+      await request.delete(`/api/calendar/v1/events/${event.id}`);
+    }
+  });
+
+  test("a failed feed refresh shows as the feed's own entry", async ({
+    page,
+    request,
+  }) => {
+    const stamp = Date.now();
+    const name = `E2E failing feed ${stamp}`;
+    const source = await createSource(request, name, failingFeedUrl(stamp));
+    try {
+      const failed = await waitForRefresh(request, source.id, "failed");
+      expect(failed.refresh.lastError).toBeTruthy();
+      await recorded(
+        request,
+        "calendar_source",
+        source.id,
+        "calendar.source.refresh_failed",
+      );
+
+      const entries = await openCalendarDomain(page);
+      const entry = entries
+        .getByRole("link")
+        .filter({ hasText: `Source refresh failed: ${name}` });
+      await expect(entry).toContainText(
+        `Calendar feed (e2e-failing-feed-${stamp})`,
+      );
+      await expect(entry).toContainText(
+        `Refreshing ${name} failed: ${failed.refresh.lastError}`,
+      );
+      await entry.click();
+      const selected = page.getByRole("region", { name: "Selected event" });
+      await expect(
+        selected.getByRole("link", { name: "Open Calendar" }),
+      ).toHaveAttribute("href", "/calendar");
+      // The feed's URL is never recorded.
+      await selected.getByText("Diagnostics", { exact: true }).click();
+      await expect(selected.locator("pre")).not.toContainText("feed.invalid/");
+    } finally {
+      await deleteSource(request, source.id);
+    }
+  });
+
+  test("each feed refresh is one entry that says what it changed", async ({
+    page,
+    request,
+  }) => {
+    test.skip(!feedDir, FEED_OVERLAY_HINT);
+    const stamp = Date.now();
+    const name = `E2E feed ${stamp}`;
+    const file = `activity-${stamp}.ics`;
+    const day = addDays(berlinDay(new Date()), 3);
+    const inAWeek = new Date(Date.now() + 7 * 86_400_000);
+    const url = writeFeed(file, [
+      { uid: `pickup-${stamp}`, title: `Feed pickup ${stamp}`, day },
+      {
+        uid: `meeting-${stamp}`,
+        title: `Feed meeting ${stamp}`,
+        start: inAWeek,
+        end: new Date(inAWeek.getTime() + 3_600_000),
+      },
+    ]);
+    const source = await createSource(request, name, url);
+    try {
+      const first = await waitForRefresh(request, source.id, "imported");
+      expect(first.refresh.lastCounts?.inserted).toBe(2);
+
+      // The pickup leaves the feed and another event joins it.
+      writeFeed(file, [
+        {
+          uid: `meeting-${stamp}`,
+          title: `Feed meeting ${stamp}`,
+          start: inAWeek,
+          end: new Date(inAWeek.getTime() + 3_600_000),
+        },
+        {
+          uid: `other-${stamp}`,
+          title: `Feed other ${stamp}`,
+          day: addDays(day, 1),
+        },
+      ]);
+      const second = await refreshSource(request, source.id);
+      expect(second.refresh.lastCounts).toMatchObject({
+        inserted: 1,
+        removed: 1,
+      });
+
+      const entries = await openCalendarDomain(page);
+      const refreshes = entries
+        .getByRole("link")
+        .filter({ hasText: `Source refreshed: ${name}` });
+      await expect(refreshes).toHaveCount(2);
+      await expect(
+        refreshes.filter({ hasText: `${name} — 1 added, 1 cancelled` }),
+      ).toContainText(`Calendar feed (e2e-feed-${stamp})`);
+      await expect(
+        refreshes.filter({ hasText: `${name} — 2 added` }),
+      ).toBeVisible();
+      // Imported events are summarized by their refresh, not listed one by
+      // one.
+      await expect(
+        entries.getByRole("link").filter({ hasText: `Feed pickup ${stamp}` }),
+      ).toHaveCount(0);
+    } finally {
+      await deleteSource(request, source.id);
     }
   });
 });

@@ -1,3 +1,12 @@
+import {
+  berlinDay,
+  createSource,
+  deleteSource,
+  FEED_OVERLAY_HINT,
+  feedDir,
+  waitForRefresh,
+  writeFeed,
+} from "./calendar-feed";
 import { type APIRequestContext, expect, type Page, test } from "./fixtures";
 
 const enabled = Boolean(process.env.LIFE_OS_E2E_URL);
@@ -50,6 +59,53 @@ async function createHumanReview(request: APIRequestContext, stamp: number) {
   );
   expect(review.ok()).toBeTruthy();
   return { id: inbox.id as string, content };
+}
+
+type ListedEvent = {
+  id: string;
+  title: string;
+  allDay: boolean;
+  startAt?: string | null;
+};
+
+async function createEvent(
+  request: APIRequestContext,
+  title: string,
+  start: Date,
+): Promise<ListedEvent> {
+  const response = await request.post("/api/calendar/v1/events", {
+    data: {
+      title,
+      allDay: false,
+      startAt: start.toISOString(),
+      endAt: new Date(start.getTime() + 30 * 60_000).toISOString(),
+    },
+  });
+  expect(response.status()).toBe(201);
+  return response.json();
+}
+
+/**
+ * Whether another spec's timed event starts between now and `start`, so it,
+ * and not ours, is what Home shows next. Specs share this stack.
+ */
+async function anotherEventFirst(
+  request: APIRequestContext,
+  ours: string,
+  start: string,
+) {
+  const now = new Date().toISOString();
+  const response = await request.get(
+    `/api/calendar/v1/events?from=${encodeURIComponent(now)}&to=${encodeURIComponent(start)}&limit=100`,
+  );
+  const { items } = (await response.json()) as { items: ListedEvent[] };
+  return items.some(
+    (event) =>
+      event.title !== ours &&
+      !event.allDay &&
+      event.startAt &&
+      Date.parse(event.startAt) >= Date.parse(now),
+  );
 }
 
 /** How far the page scrolls sideways; 0 means nothing overflows. */
@@ -129,8 +185,9 @@ test.describe("Home attention surface", () => {
     await urgent.getByRole("link", { name: "Open Tasks" }).click();
     await expect(page).toHaveURL(/\/tasks$/);
     await page.goBack();
+    // The Calendar opens at the next event's day.
     await calendar.getByRole("link", { name: "Open Calendar" }).click();
-    await expect(page).toHaveURL(/\/calendar$/);
+    await expect(page).toHaveURL(/\/calendar\?date=\d{4}-\d{2}-\d{2}$/);
     await request.post(`/api/inbox/v1/inbox-items/${reviewItem.id}/discard`);
   });
 
@@ -205,6 +262,95 @@ test.describe("Home attention surface", () => {
       await expect(page.locator("#capture")).not.toContainText(content);
     } finally {
       await request.post(`/api/inbox/v1/inbox-items/${id}/discard`);
+    }
+  });
+
+  test("the next event is an active one that has not started, opening the Calendar at its day", async ({
+    page,
+    request,
+  }) => {
+    const stamp = Date.now();
+    const cancelledTitle = `Home cancelled ${stamp}`;
+    const nextTitle = `Home upcoming ${stamp}`;
+    const cancelled = await createEvent(
+      request,
+      cancelledTitle,
+      new Date(Date.now() + 2 * 60_000),
+    );
+    const upcoming = await createEvent(
+      request,
+      nextTitle,
+      new Date(Date.now() + 4 * 60_000),
+    );
+    try {
+      const patch = await request.patch(
+        `/api/calendar/v1/events/${cancelled.id}`,
+        { data: { status: "cancelled" } },
+      );
+      expect(patch.ok()).toBeTruthy();
+      test.skip(
+        await anotherEventFirst(request, nextTitle, upcoming.startAt!),
+        "another spec's event comes first on this shared stack",
+      );
+
+      await page.goto("/");
+      const calendar = page.getByRole("region", {
+        name: "Next on your calendar",
+      });
+      await expect(calendar).toContainText(nextTitle);
+      await expect(calendar).not.toContainText(cancelledTitle);
+      const open = calendar.getByRole("link", { name: "Open Calendar" });
+      const day = berlinDay(upcoming.startAt!);
+      await expect(open).toHaveAttribute("href", `/calendar?date=${day}`);
+      await open.click();
+      await expect(page).toHaveURL(new RegExp(`/calendar\\?date=${day}$`));
+      const events = page.getByRole("region", { name: "Calendar events" });
+      await expect(events).toHaveAttribute("aria-busy", "false");
+      await expect(
+        events.locator(".fc-event", { hasText: nextTitle }),
+      ).toBeVisible();
+    } finally {
+      for (const event of [cancelled, upcoming]) {
+        await request.delete(`/api/calendar/v1/events/${event.id}`);
+      }
+    }
+  });
+
+  test("an imported next event names the feed it comes from", async ({
+    page,
+    request,
+  }) => {
+    test.skip(!feedDir, FEED_OVERLAY_HINT);
+    const stamp = Date.now();
+    const name = `E2E home feed ${stamp}`;
+    const title = `Feed visit ${stamp}`;
+    const start = new Date(Date.now() + 3 * 60_000);
+    const url = writeFeed(`home-${stamp}.ics`, [
+      {
+        uid: `visit-${stamp}`,
+        title,
+        start,
+        end: new Date(start.getTime() + 30 * 60_000),
+      },
+    ]);
+    const source = await createSource(request, name, url);
+    try {
+      await waitForRefresh(request, source.id, "imported");
+      test.skip(
+        await anotherEventFirst(request, title, start.toISOString()),
+        "another spec's event comes first on this shared stack",
+      );
+      await page.goto("/");
+      const calendar = page.getByRole("region", {
+        name: "Next on your calendar",
+      });
+      const item = calendar.getByRole("listitem").filter({ hasText: title });
+      await expect(item).toContainText(name);
+      await expect(
+        calendar.getByRole("link", { name: "Open Calendar" }),
+      ).toHaveAttribute("href", `/calendar?date=${berlinDay(start)}`);
+    } finally {
+      await deleteSource(request, source.id);
     }
   });
 });

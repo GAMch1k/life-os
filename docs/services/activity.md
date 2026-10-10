@@ -72,9 +72,10 @@ The public gateway passes only `user` and `dev:<name>`: a claim to be the Life O
 | `inbox.item.resolved` / `.discarded` | inbox | `inbox_item` | Final Inbox state. |
 | `mcp.action.requested` / `.completed` / `.failed` | mcp | `mcp_action` | Every mutation tool call (Tasks, Calendar, Finance). Read and search tools are not recorded. The Dashboard shows this domain as "Agent changes". |
 | `task.created` / `.updated` / `.completed` / `.reopened` | tasks | `task` | Every Task mutation, from the Dashboard or an agent. |
-| `calendar.source.refreshed` / `.refresh_failed` | calendar | `calendar_source` | One per refresh of a subscribed feed (scheduled or "Refresh now"), by the source as `system:ics-<name>` (for example `system:ics-zaw`); `data` holds the counts (new, changed, removed, restored) or the error, and `requestedBy` for a manual refresh. Never the feed URL. |
+| `calendar.event.created` / `.updated` / `.rescheduled` / `.cancelled` / `.restored` / `.deleted` | calendar | `calendar_event` | One per event change through the Calendar API, from the Dashboard (`user`), an agent, or a tool, with the request's correlation and causation; an update that changes nothing records nothing. `data` holds the title, times, status, source, and for updates the changed fields. See [Calendar](calendar.md#activity). |
+| `calendar.source.refreshed` / `.refresh_failed` | calendar | `calendar_source` | One per refresh of a subscribed feed (scheduled or "Refresh now"), also when nothing changed, by the source as `system:ics-<name>` (for example `system:ics-zaw`); `data` holds `sourceName`, `outcome`, the counts (inserted, updated, removed, restored) or the error, and `requestedBy` for a manual refresh. Never the feed URL, and no events per imported event. |
 
-Calendar records only its source refreshes; Calendar event edits and Finance changes are not recorded by their services yet. Their agent-driven changes still appear as `mcp.action.*` events.
+Finance changes are not recorded by Finance yet; its agent-driven changes still appear as `mcp.action.*` events.
 
 ## Correlation, causation, and subject
 
