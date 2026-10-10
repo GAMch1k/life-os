@@ -143,6 +143,7 @@ export async function getHomeAttention(): Promise<HomeAttention> {
           query: {
             from: now.toISOString(),
             to: eventWindowEnd.toISOString(),
+            timeZone,
             limit: 1,
           },
         },
