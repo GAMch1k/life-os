@@ -150,6 +150,10 @@ func TestFailedNotificationSaysWhy(t *testing.T) {
 	if body := notificationBody("Pay the rent", ""); body != "Pay the rent" {
 		t.Fatalf("body without a reason = %q", body)
 	}
+	// Notifications refuses control characters other than line breaks.
+	if body := notificationBody("Pay\tthe\x00 rent", "\x1b[31mexit status 1\x1b[0m\a"); body != "Pay the rent\n[31mexit status 1[0m" {
+		t.Fatalf("body with control characters = %q", body)
+	}
 }
 
 func TestNotifierSendsAsInboxInTheItemsWorkflow(t *testing.T) {

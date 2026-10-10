@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"unicode"
 
 	googleuuid "github.com/google/uuid"
 
@@ -131,13 +132,25 @@ func failedNotification(item store.InboxItem, attemptID, reason string) notify.N
 }
 
 // notificationBody is the capture shortened to one line, with the reason on
-// the next; well within the 2000 characters Notifications accepts.
+// the next: plain text well within the 2000 characters Notifications accepts.
 func notificationBody(content, reason string) string {
 	lines := make([]string, 0, 2)
-	for _, line := range []string{activity.Preview(content, 200), activity.Preview(reason, 500)} {
+	for _, line := range []string{plainLine(content, 200), plainLine(reason, 500)} {
 		if line != "" {
 			lines = append(lines, line)
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// plainLine shortens text to one line of at most limit characters, without
+// the control characters (a terminal escape in an error, say) that
+// Notifications refuses in a body.
+func plainLine(text string, limit int) string {
+	return activity.Preview(strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) && !unicode.IsSpace(r) {
+			return -1
+		}
+		return r
+	}, text), limit)
 }
