@@ -20,9 +20,9 @@ import (
 )
 
 // Syncing an integration's source: one batch of its events (a snapshot or
-// a delta), validated like events created in Life OS and reconciled with
-// the rules of Calendar's in-process adapters (package sources), so the
-// owner's own reminders and priority survive every sync.
+// a delta), validated like events created in Life OS and reconciled by
+// package sources, so the owner's own reminders and priority survive every
+// sync.
 
 // Limits of a sync batch (mirrored in the OpenAPI contract).
 const (
@@ -461,9 +461,6 @@ func (h *Handler) SyncIntegrationSource(c fiber.Ctx, integration, externalID str
 		}
 		if err != nil {
 			return internal(err)
-		}
-		if source.InProcess {
-			return sourceInProcess()
 		}
 		if !source.Enabled {
 			return httpserver.NewError(fiber.StatusConflict, "source_disabled", "the owner disabled this source; its events stay as they are until it is enabled")

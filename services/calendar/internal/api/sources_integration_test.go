@@ -32,10 +32,10 @@ func (a *activityRecorder) all() []activity.Event {
 	return append([]activity.Event(nil), a.events...)
 }
 
-// After the handover (P11-08) Calendar refreshes no feed: /v1/sources serves
-// a feed's owner settings (name, enabled, default reminders and priority),
-// its URL, filter, preset, and refresh state are calendar-feeds', and feeds
-// are added and refreshed there.
+// Calendar refreshes no feed: /v1/sources serves a feed's owner settings
+// (name, enabled, default reminders and priority) and its identity in its
+// integration; its URL, filter, preset, and refresh state are
+// calendar-feeds', and feeds are added and refreshed there.
 func TestSourcesServeTheOwnersSettingsOfFeeds(t *testing.T) {
 	c := newIntegrationClient(t)
 	registered := c.register(feedsActor, "calendar-feeds", "3c1d2e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f", map[string]any{
@@ -50,11 +50,21 @@ func TestSourcesServeTheOwnersSettingsOfFeeds(t *testing.T) {
 		t.Fatalf("listed %d sources", len(listed.Items))
 	}
 	source := listed.Items[0]
-	if source.Kind != generated.CalendarSourceKindExternal || source.Name != "ZAW" || source.Url != "" || source.Preset != nil || !source.Enabled ||
-		len(source.Filter.Include) != 0 || source.Refresh.LastOutcome != nil || source.Refresh.NextRefreshAt != nil || source.Refresh.Refreshing ||
-		source.Provider == nil || *source.Provider != "ZAW" || source.Integration == nil || *source.Integration != "calendar-feeds" ||
+	if source.Kind != generated.CalendarSourceKindExternal || source.Name != "ZAW" || !source.Enabled || !source.ReadOnly || source.PrivateLocation ||
+		source.Provider != "ZAW" || source.Integration != "calendar-feeds" || source.ExternalId != "3c1d2e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f" ||
 		source.DefaultReminders == nil || len(*source.DefaultReminders) != 1 {
 		t.Fatalf("source = %+v", source)
+	}
+	// No legacy field is served.
+	_, raw := c.as("user", http.MethodGet, path, nil)
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatal(err)
+	}
+	for _, legacy := range []string{"url", "filter", "preset", "refresh", "inProcess"} {
+		if _, found := fields[legacy]; found {
+			t.Errorf("the source still has %q: %s", legacy, raw)
+		}
 	}
 
 	// The owner's settings change here.
@@ -63,11 +73,9 @@ func TestSourcesServeTheOwnersSettingsOfFeeds(t *testing.T) {
 	if updated.Name != "Müllabfuhr" || updated.Enabled || updated.DefaultPriority != generated.High || updated.DefaultReminders != nil {
 		t.Fatalf("updated = %+v", updated)
 	}
-	// The feed's URL and filter are calendar-feeds'; feeds are added and
-	// refreshed there.
-	for _, body := range []string{`{"url":"https://feeds.example.test/zaw.ics"}`, `{"filter":{"include":["Papier"],"exclude":[]},"name":"x"}`} {
-		c.refused("user", http.MethodPatch, path, body, http.StatusConflict, "managed_by_integration")
-	}
+	// The feed's URL and filter are calendar-feeds' (no settings of the
+	// source here); feeds are added and refreshed there.
+	c.refused("user", http.MethodPatch, path, `{"url":"https://feeds.example.test/zaw.ics"}`, http.StatusBadRequest, "bad_request")
 	for _, request := range []struct{ method, target string }{{http.MethodPost, "/v1/sources"}, {http.MethodPost, path + "/refresh"}} {
 		if status, raw := c.as("user", request.method, request.target, `{"name":"ZAW","url":"https://feeds.example.test/zaw.ics"}`); status != http.StatusNotFound && status != http.StatusMethodNotAllowed {
 			t.Errorf("%s %s: %d %s", request.method, request.target, status, raw)

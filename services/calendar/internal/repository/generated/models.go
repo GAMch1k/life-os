@@ -52,36 +52,20 @@ type CalendarSetting struct {
 }
 
 type CalendarSource struct {
-	ID                  pgtype.UUID
-	Kind                string
-	Name                string
-	Url                 *string
-	Enabled             bool
-	FilterInclude       []string
-	FilterExclude       []string
-	DefaultReminders    []byte
-	NextRefreshAt       pgtype.Timestamptz
-	RefreshingUntil     pgtype.Timestamptz
-	LastAttemptAt       pgtype.Timestamptz
-	LastSuccessAt       pgtype.Timestamptz
-	LastOutcome         *string
-	LastError           *string
-	LastCounts          []byte
-	ConsecutiveFailures int32
-	Etag                *string
-	LastModified        *string
-	CreatedAt           pgtype.Timestamptz
-	UpdatedAt           pgtype.Timestamptz
-	Preset              *string
-	PresetConfig        []byte
-	GoogleCalendarID    pgtype.UUID
-	DefaultPriority     string
-	Integration         *string
-	ExternalID          *string
-	Provider            *string
-	ReadOnly            bool
-	InProcess           bool
-	IntegrationConfig   []byte
+	ID                pgtype.UUID
+	Kind              string
+	Name              string
+	Enabled           bool
+	DefaultReminders  []byte
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+	DefaultPriority   string
+	Integration       string
+	ExternalID        string
+	Provider          string
+	ReadOnly          bool
+	IntegrationConfig []byte
+	PrivateLocation   bool
 }
 
 type Event struct {
@@ -126,83 +110,4 @@ type EventException struct {
 	CancelledAt  pgtype.Timestamptz
 	CreatedAt    pgtype.Timestamptz
 	UpdatedAt    pgtype.Timestamptz
-}
-
-type GoogleCalendar struct {
-	ID                pgtype.UUID
-	ConnectionID      pgtype.UUID
-	GoogleCalendarID  string
-	Summary           string
-	Color             *string
-	AccessRole        string
-	IsPrimary         bool
-	SyncEnabled       bool
-	CreatedAt         pgtype.Timestamptz
-	UpdatedAt         pgtype.Timestamptz
-	TimeZone          *string
-	SyncToken         *string
-	SyncWindowStart   pgtype.Timestamptz
-	NextSyncAt        pgtype.Timestamptz
-	SyncingUntil      pgtype.Timestamptz
-	LastSyncAttemptAt pgtype.Timestamptz
-	LastSyncedAt      pgtype.Timestamptz
-	LastSyncError     *string
-	SyncFailures      int32
-	LastSyncCounts    []byte
-	DerivedAt         pgtype.Timestamptz
-}
-
-type GoogleConnection struct {
-	ID                      pgtype.UUID
-	Singleton               bool
-	AccountEmail            string
-	Scopes                  []string
-	RefreshTokenCiphertext  []byte
-	RefreshTokenNonce       []byte
-	AccessTokenExpiresAt    pgtype.Timestamptz
-	Status                  string
-	LastError               *string
-	ConnectedAt             pgtype.Timestamptz
-	CreatedAt               pgtype.Timestamptz
-	UpdatedAt               pgtype.Timestamptz
-	ExportEnabled           bool
-	ExportBackfilledAt      pgtype.Timestamptz
-	LifeosCalendarID        *string
-	LifeosCalendarCreatedAt pgtype.Timestamptz
-	LifeosCalendarNote      *string
-}
-
-type GoogleEvent struct {
-	CalendarID       pgtype.UUID
-	EventID          string
-	RecurringEventID *string
-	Data             []byte
-	UpdatedAt        pgtype.Timestamptz
-}
-
-type GoogleExport struct {
-	EventID            pgtype.UUID
-	ConnectionID       pgtype.UUID
-	GoogleCalendarID   *string
-	GoogleEventID      *string
-	Etag               *string
-	GoogleUpdated      pgtype.Timestamptz
-	ExportedExceptions []string
-	State              string
-	Deleted            bool
-	RequestedAt        pgtype.Timestamptz
-	NextAttemptAt      pgtype.Timestamptz
-	ExportingUntil     pgtype.Timestamptz
-	Attempts           int32
-	LastError          *string
-	ExportedAt         pgtype.Timestamptz
-	CreatedAt          pgtype.Timestamptz
-	UpdatedAt          pgtype.Timestamptz
-}
-
-type GoogleOauthState struct {
-	StateHash    []byte
-	CodeVerifier string
-	ExpiresAt    pgtype.Timestamptz
-	CreatedAt    pgtype.Timestamptz
 }

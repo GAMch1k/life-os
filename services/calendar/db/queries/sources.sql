@@ -2,17 +2,14 @@
 SELECT * FROM calendar_sources WHERE id = $1;
 
 -- name: ListSources :many
--- The feeds (ICS sources) and the sources integrations sync (external).
--- Legacy sources of Calendar's former in-process Google sync (kind google,
--- handed over to the google-calendar integration by migration 000016) are
--- not listed.
-SELECT * FROM calendar_sources WHERE kind IN ('ics', 'external') ORDER BY created_at, id;
+-- Every source: each is one an integration syncs.
+SELECT * FROM calendar_sources ORDER BY created_at, id;
 
 -- name: UpdateSource :one
 -- Writes the owner's settings of a source (name, enabled, default
 -- reminders, default priority), guarded by the updated_at they were read
--- with; a null default_priority keeps the source's. A feed's URL and filter
--- belong to the calendar-feeds integration.
+-- with; a null default_priority keeps the source's. The rest of a source's
+-- configuration (such as a feed's URL and filter) is its integration's.
 UPDATE calendar_sources
 SET name = sqlc.arg(name), enabled = sqlc.arg(enabled),
     default_reminders = sqlc.narg(default_reminders), default_priority = COALESCE(sqlc.narg(default_priority)::text, default_priority),
@@ -21,9 +18,8 @@ WHERE id = sqlc.arg(id) AND updated_at = sqlc.arg(expected_updated_at)
 RETURNING *;
 
 -- name: DeleteSource :execrows
--- Deletes a feed or an integration's source and its imported events (ON
--- DELETE CASCADE).
-DELETE FROM calendar_sources WHERE id = $1 AND kind IN ('ics', 'external');
+-- Deletes a source and its imported events (ON DELETE CASCADE).
+DELETE FROM calendar_sources WHERE id = $1;
 
 -- name: ListSourceSummaries :many
 -- What an imported event shows of its source: its name, default reminders,
@@ -31,21 +27,20 @@ DELETE FROM calendar_sources WHERE id = $1 AND kind IN ('ics', 'external');
 -- changes.
 SELECT id, name, default_reminders, default_priority, integration, provider, read_only FROM calendar_sources ORDER BY id;
 
--- Imported events are written only by the reconciliation (an integration's
--- sync, or Calendar's in-process Google adapter), inside the transaction
--- that holds the source row.
+-- Imported events are written only by the reconciliation of an
+-- integration's sync, inside the transaction that holds the source row.
 
 -- name: ListSourceEvents :many
 SELECT * FROM events WHERE source_id = $1 ORDER BY id FOR UPDATE;
 
 -- name: InsertImportedEvent :one
--- A source's new event. A series (Google) has its rule; reminders and
--- use_default_reminders are the source's (an ICS feed gives the column
--- defaults: none of its own, following the source's defaults), and
--- source_reminders records them (null for a feed). priority is the event's
--- own priority as its source gives it (Google, through a Life OS extended
--- property); null follows the source's default. read_only_reason is why an
--- integration's event cannot be changed although its source accepts changes.
+-- A source's new event. A series has its rule; reminders and
+-- use_default_reminders are the source's (a source that gives none gets the
+-- column defaults: none of its own, following the source's defaults), and
+-- source_reminders records them (null when the source gives none). priority
+-- is the event's own priority as its source gives it; null follows the
+-- source's default. read_only_reason is why an integration's event cannot be
+-- changed although its source accepts changes.
 INSERT INTO events (
     title, description, location, all_day, start_at, end_at, start_date, end_date, time_zone,
     recurrence_frequency, recurrence_interval, recurrence_until, recurrence_by_weekday, recurrence_count,
@@ -65,11 +60,12 @@ RETURNING id;
 
 -- name: UpdateImportedEvent :exec
 -- Rewrites an imported event from its source (also restoring one the source
--- had removed). The source identity and the owner's priority stay. reminders, use_default_reminders,
--- and source_reminders change only when given: a feed never gives them (the
--- owner's reminders stay), a Google sync gives the source's new reminders
--- unless the owner changed the event's own. priority changes only with
--- set_priority: a Google event that carries Life OS's priority property.
+-- had removed). The source identity and the owner's priority stay.
+-- reminders, use_default_reminders, and source_reminders change only when
+-- given: a source that gives none (a feed) leaves the owner's, one that does
+-- gives its new reminders unless the owner changed the event's own.
+-- priority changes only with set_priority: an event whose source gives its
+-- priority.
 UPDATE events
 SET title = sqlc.arg(title), description = sqlc.narg(description), location = sqlc.narg(location),
     all_day = sqlc.arg(all_day), start_at = sqlc.narg(start_at), end_at = sqlc.narg(end_at),

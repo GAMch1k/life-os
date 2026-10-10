@@ -11,12 +11,12 @@ import (
 // Which events may be changed here beyond their reminders and priority,
 // and why not: Life OS events may; an integration's event may when its
 // source accepts changes and it is not read-only on its own (its
-// readOnlyReason, given by the integration); feed events and the events of
-// sources an adapter still syncs in process may not.
+// readOnlyReason, given by the integration); the events of sources that do
+// not accept changes (such as feeds) may not.
 
 // readOnlyFeed is why an imported event is read-only.
 func readOnlyFeed(name *string) string {
-	from := "an ICS feed"
+	from := "another calendar"
 	if name != nil && strings.TrimSpace(*name) != "" {
 		from = "“" + strings.TrimSpace(*name) + "”"
 	}

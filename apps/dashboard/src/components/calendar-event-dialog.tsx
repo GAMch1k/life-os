@@ -74,7 +74,6 @@ import {
 import {
   apiErrorMessage,
   type CalendarEvent,
-  changedInGoogle,
   createRequest,
   defaultPriorityNote,
   defaultRemindersNote,
@@ -93,7 +92,6 @@ import {
   isCancelled,
   isEditable,
   isImported,
-  latestEvent,
   MAX_REMINDERS,
   momentLabel,
   moveStart,
@@ -124,8 +122,7 @@ import { cn } from "@/lib/utils";
 
 /** What the event dialog shows; null when it is closed. */
 export type EventDialogState =
-  /** notice: why the event shows what it does, such as a change in Google. */
-  | { mode: "details"; event: CalendarEvent; notice?: string }
+  | { mode: "details"; event: CalendarEvent }
   | { mode: "edit"; event: CalendarEvent; remindersOnly: boolean }
   | { mode: "create"; draft: EventDraft }
   | null;
@@ -145,7 +142,6 @@ export function CalendarEventDialog({
   onSaved,
   onDeleted,
   onSeriesChanged,
-  onRefresh,
   ...shared
 }: Shared & {
   state: EventDialogState;
@@ -158,21 +154,7 @@ export function CalendarEventDialog({
   onDeleted: (id: string) => void;
   /** After a recurring event changed to This and following or All events. */
   onSeriesChanged: () => void;
-  /** The calendar shows other events now (such as Google's version). */
-  onRefresh: () => void;
 }) {
-  // A change refused because the event changed or went in Google
-  // meanwhile: the event is read again and shown as Google has it.
-  const showLatest = (event: CalendarEvent, notice: string) => {
-    onRefresh();
-    latestEvent(event)
-      .then((latest) =>
-        onStateChange(
-          latest ? { mode: "details", event: latest, notice } : null,
-        ),
-      )
-      .catch(() => onStateChange(null));
-  };
   // The last state stays rendered while the dialog animates closed.
   const [shown, setShown] = useState(state);
   if (state && state !== shown) setShown(state);
@@ -192,7 +174,6 @@ export function CalendarEventDialog({
           <EventDetails
             event={current.event}
             key={`details-${occurrenceKey(current.event)}-${current.event.updatedAt}`}
-            notice={current.notice}
             onDeleted={onDeleted}
             onEdit={(event, remindersOnly) =>
               onStateChange({ mode: "edit", event, remindersOnly })
@@ -208,7 +189,6 @@ export function CalendarEventDialog({
             onCancel={() =>
               onStateChange({ mode: "details", event: current.event })
             }
-            onChangedInGoogle={(notice) => showLatest(current.event, notice)}
             onSaved={(event) => onSaved(event, false)}
             onSeriesChanged={onSeriesChanged}
             remindersOnly={current.remindersOnly}
@@ -252,7 +232,6 @@ function DetailRow({
 
 function EventDetails({
   event,
-  notice,
   onDeleted,
   onEdit,
   onSaved,
@@ -260,7 +239,6 @@ function EventDetails({
   today,
 }: Shared & {
   event: CalendarEvent;
-  notice?: string;
   onDeleted: (id: string) => void;
   onEdit: (event: CalendarEvent, remindersOnly: boolean) => void;
   onSaved: (event: CalendarEvent) => void;
@@ -456,15 +434,6 @@ function EventDetails({
         ) : null}
       </dl>
 
-      {notice ? (
-        <p
-          className="bg-info-subtle border-info/30 rounded-lg border px-3 py-2 text-sm"
-          role="status"
-        >
-          {notice}
-        </p>
-      ) : null}
-
       {cancelled && event.removedFromSourceAt ? (
         <p className="text-muted-foreground text-xs">
           Removed from its source on{" "}
@@ -577,7 +546,6 @@ function EventForm({
   event,
   initial,
   onCancel,
-  onChangedInGoogle,
   onSaved,
   onSeriesChanged,
   remindersOnly = false,
@@ -588,11 +556,6 @@ function EventForm({
   event?: CalendarEvent;
   initial: EventDraft;
   onCancel: () => void;
-  /**
-   * Calendar refused the change because the event changed or went in
-   * Google meanwhile (its message says so); Google's version is shown.
-   */
-  onChangedInGoogle?: (notice: string) => void;
   onSaved: (event: CalendarEvent) => void;
   onSeriesChanged: () => void;
   /** Read-only events: only their reminders and priority can change. */
@@ -647,12 +610,6 @@ function EventForm({
         const { data, error, status } = await write();
         if (data) return done(data);
         const message = apiErrorMessage(error);
-        if (status === 409 && changedInGoogle(error) && onChangedInGoogle) {
-          return onChangedInGoogle(
-            message ??
-              "Changed in Google meanwhile; showing the latest version",
-          );
-        }
         setErrors(
           status === 400 && message
             ? fieldErrorsFromApi(message)

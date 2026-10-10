@@ -365,16 +365,18 @@ func TestAllDayAndImportedEventsUseTheirDefaults(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 	var zaw, club googleuuid.UUID
-	if err := h.pool.QueryRow(ctx, `INSERT INTO calendar_sources (kind, name, url, default_reminders, preset)
-		VALUES ('ics', 'ZAW', 'https://feeds.example.test/zaw.ics', '[{"kind":"localTime","daysBefore":1,"localTime":"19:00"}]', 'zaw') RETURNING id`).Scan(&zaw); err != nil {
+	// Feeds of calendar-feeds: the ZAW feed's event locations are the
+	// owner's street (private), the club's are not.
+	if err := h.pool.QueryRow(ctx, `INSERT INTO calendar_sources (kind, name, default_reminders, integration, external_id, provider, private_location)
+		VALUES ('external', 'ZAW', '[{"kind":"localTime","daysBefore":1,"localTime":"19:00"}]', 'calendar-feeds', 'zaw', 'ZAW', true) RETURNING id`).Scan(&zaw); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.pool.QueryRow(ctx, `INSERT INTO calendar_sources (kind, name, url, default_reminders)
-		VALUES ('ics', 'Club', 'https://feeds.example.test/club.ics', '[{"kind":"relative","minutesBefore":60}]') RETURNING id`).Scan(&club); err != nil {
+	if err := h.pool.QueryRow(ctx, `INSERT INTO calendar_sources (kind, name, default_reminders, integration, external_id, provider)
+		VALUES ('external', 'Club', '[{"kind":"relative","minutesBefore":60}]', 'calendar-feeds', 'club', 'ICS') RETURNING id`).Scan(&club); err != nil {
 		t.Fatal(err)
 	}
 	imported := `INSERT INTO events (title, location, all_day, start_at, end_at, source_kind, source_id, external_uid, status)
-		VALUES ($1, $2, false, $3, $4, 'ics', $5, $6, $7)`
+		VALUES ($1, $2, false, $3, $4, 'external', $5, $6, $7)`
 	h.exec(imported, "Papier", "Roßdorf, Darmstädter Str.", instant("2026-10-14T04:00:00Z"), instant("2026-10-14T04:15:00Z"), zaw, "zaw-1", "active")
 	h.exec(imported, "Bioabfall", "Roßdorf, Darmstädter Str.", instant("2026-10-15T04:00:00Z"), instant("2026-10-15T04:15:00Z"), zaw, "zaw-2", "active")
 	h.exec(`UPDATE events SET status = 'cancelled', cancelled_at = now(), removed_from_source_at = now() WHERE external_uid = 'zaw-2'`)
@@ -408,8 +410,8 @@ func TestIntegrationEventsRemindToo(t *testing.T) {
 	// of kind external; its default reminders are the calendar's (10
 	// minutes here).
 	var source googleuuid.UUID
-	if err := h.pool.QueryRow(ctx, `INSERT INTO calendar_sources (kind, name, default_reminders, integration, external_id, provider, read_only, in_process)
-		VALUES ('external', 'Personal', '[{"kind":"relative","minutesBefore":10}]', 'google-calendar', 'owner@example.com', 'Google', false, false) RETURNING id`).Scan(&source); err != nil {
+	if err := h.pool.QueryRow(ctx, `INSERT INTO calendar_sources (kind, name, default_reminders, integration, external_id, provider, read_only)
+		VALUES ('external', 'Personal', '[{"kind":"relative","minutesBefore":10}]', 'google-calendar', 'owner@example.com', 'Google', false) RETURNING id`).Scan(&source); err != nil {
 		t.Fatal(err)
 	}
 	// Following the defaults plus its own Google override of an hour.
@@ -462,11 +464,11 @@ func TestImportanceFollowsTheEventsPriority(t *testing.T) {
 	// An imported event follows its source's default priority, unless the
 	// owner set one on it.
 	var source googleuuid.UUID
-	if err := h.pool.QueryRow(ctx, `INSERT INTO calendar_sources (kind, name, url, default_reminders, default_priority, preset)
-		VALUES ('ics', 'ZAW', 'https://feeds.example.test/zaw.ics', '[{"kind":"relative","minutesBefore":30}]', 'low', 'zaw') RETURNING id`).Scan(&source); err != nil {
+	if err := h.pool.QueryRow(ctx, `INSERT INTO calendar_sources (kind, name, default_reminders, default_priority, integration, external_id, provider, private_location)
+		VALUES ('external', 'ZAW', '[{"kind":"relative","minutesBefore":30}]', 'low', 'calendar-feeds', 'zaw', 'ZAW', true) RETURNING id`).Scan(&source); err != nil {
 		t.Fatal(err)
 	}
-	imported := `INSERT INTO events (title, all_day, start_at, end_at, source_kind, source_id, external_uid, priority) VALUES ($1, false, $2, $3, 'ics', $4, $5, $6)`
+	imported := `INSERT INTO events (title, all_day, start_at, end_at, source_kind, source_id, external_uid, priority) VALUES ($1, false, $2, $3, 'external', $4, $5, $6)`
 	h.exec(imported, "Papier", begin, begin.Add(15*time.Minute), source, "zaw-1", nil)
 	h.exec(imported, "Restmüll", begin, begin.Add(15*time.Minute), source, "zaw-2", "high")
 	// An occurrence with its own priority; the others follow the series.

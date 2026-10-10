@@ -27,8 +27,7 @@ type Querier interface {
 	DeleteEventExceptions(ctx context.Context, arg DeleteEventExceptionsParams) (int64, error)
 	// Also deletes the source's events (ON DELETE CASCADE).
 	DeleteIntegrationSource(ctx context.Context, id pgtype.UUID) (int64, error)
-	// Deletes a feed or an integration's source and its imported events (ON
-	// DELETE CASCADE).
+	// Deletes a source and its imported events (ON DELETE CASCADE).
 	DeleteSource(ctx context.Context, id pgtype.UUID) (int64, error)
 	// Moves the cursor and releases the lease, if owner still holds it. A run
 	// with an error keeps its message; one without records its success.
@@ -46,13 +45,13 @@ type Querier interface {
 	// Whether the feed has changes after the given entry to the source's
 	// events made by anyone but actor (the integration syncing it).
 	HasUnhandledChanges(ctx context.Context, arg HasUnhandledChangesParams) (bool, error)
-	// A source's new event. A series (Google) has its rule; reminders and
-	// use_default_reminders are the source's (an ICS feed gives the column
-	// defaults: none of its own, following the source's defaults), and
-	// source_reminders records them (null for a feed). priority is the event's
-	// own priority as its source gives it (Google, through a Life OS extended
-	// property); null follows the source's default. read_only_reason is why an
-	// integration's event cannot be changed although its source accepts changes.
+	// A source's new event. A series has its rule; reminders and
+	// use_default_reminders are the source's (a source that gives none gets the
+	// column defaults: none of its own, following the source's defaults), and
+	// source_reminders records them (null when the source gives none). priority
+	// is the event's own priority as its source gives it; null follows the
+	// source's default. read_only_reason is why an integration's event cannot be
+	// changed although its source accepts changes.
 	InsertImportedEvent(ctx context.Context, arg InsertImportedEventParams) (pgtype.UUID, error)
 	// The entries after the given one, oldest first.
 	ListEventChanges(ctx context.Context, arg ListEventChangesParams) ([]ListEventChangesRow, error)
@@ -73,8 +72,9 @@ type Querier interface {
 	// Which of the given dedupe keys were already handled.
 	ListHandledReminders(ctx context.Context, keys []string) ([]string, error)
 	ListIntegrationSources(ctx context.Context, integration string) ([]CalendarSource, error)
-	// The sources Calendar configures itself (ZAW).
-	ListPresetSourceIDs(ctx context.Context) ([]pgtype.UUID, error)
+	// The sources whose event locations are private (such as the owner's own
+	// address): reminders leave them out.
+	ListPrivateLocationSourceIDs(ctx context.Context) ([]pgtype.UUID, error)
 	// Recurring events that may have an occurrence overlapping
 	// [range_start, range_end): they start before range_end, and their last
 	// possible occurrence (starting at recurrence_until, a day later for an
@@ -89,9 +89,8 @@ type Querier interface {
 	// events come from ListRecurringEvents. Each arm uses its kind's start
 	// index.
 	ListReminderEvents(ctx context.Context, arg ListReminderEventsParams) ([]Event, error)
-	// Imported events are written only by the reconciliation (an integration's
-	// sync, or Calendar's in-process Google adapter), inside the transaction
-	// that holds the source row.
+	// Imported events are written only by the reconciliation of an
+	// integration's sync, inside the transaction that holds the source row.
 	ListSourceEvents(ctx context.Context, sourceID pgtype.UUID) ([]Event, error)
 	// The integration identity of the given sources, for the change feed.
 	ListSourceIdentities(ctx context.Context, ids []pgtype.UUID) ([]ListSourceIdentitiesRow, error)
@@ -99,10 +98,7 @@ type Querier interface {
 	// default priority, integration, provider label, and whether it accepts
 	// changes.
 	ListSourceSummaries(ctx context.Context) ([]ListSourceSummariesRow, error)
-	// The feeds (ICS sources) and the sources integrations sync (external).
-	// Legacy sources of Calendar's former in-process Google sync (kind google,
-	// handed over to the google-calendar integration by migration 000016) are
-	// not listed.
+	// Every source: each is one an integration syncs.
 	ListSources(ctx context.Context) ([]CalendarSource, error)
 	// Reads an event for a change that also writes its occurrence exceptions,
 	// holding it until the transaction ends.
@@ -145,11 +141,12 @@ type Querier interface {
 	// Source identity is never updated.
 	UpdateEvent(ctx context.Context, arg UpdateEventParams) (Event, error)
 	// Rewrites an imported event from its source (also restoring one the source
-	// had removed). The source identity and the owner's priority stay. reminders, use_default_reminders,
-	// and source_reminders change only when given: a feed never gives them (the
-	// owner's reminders stay), a Google sync gives the source's new reminders
-	// unless the owner changed the event's own. priority changes only with
-	// set_priority: a Google event that carries Life OS's priority property.
+	// had removed). The source identity and the owner's priority stay.
+	// reminders, use_default_reminders, and source_reminders change only when
+	// given: a source that gives none (a feed) leaves the owner's, one that does
+	// gives its new reminders unless the owner changed the event's own.
+	// priority changes only with set_priority: an event whose source gives its
+	// priority.
 	UpdateImportedEvent(ctx context.Context, arg UpdateImportedEventParams) error
 	// Writes a registration again (the whole merged state, computed by the
 	// caller under LockIntegrationSource).
@@ -159,8 +156,8 @@ type Querier interface {
 	UpdateSettings(ctx context.Context, arg UpdateSettingsParams) (CalendarSetting, error)
 	// Writes the owner's settings of a source (name, enabled, default
 	// reminders, default priority), guarded by the updated_at they were read
-	// with; a null default_priority keeps the source's. A feed's URL and filter
-	// belong to the calendar-feeds integration.
+	// with; a null default_priority keeps the source's. The rest of a source's
+	// configuration (such as a feed's URL and filter) is its integration's.
 	UpdateSource(ctx context.Context, arg UpdateSourceParams) (CalendarSource, error)
 	// Writes one occurrence's changes and skip, replacing any it had.
 	UpsertEventException(ctx context.Context, arg UpsertEventExceptionParams) (EventException, error)

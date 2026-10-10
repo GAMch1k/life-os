@@ -207,7 +207,7 @@ SELECT * FROM events WHERE id = ANY(sqlc.arg(ids)::uuid[]);
 SELECT sqlc.embed(events) FROM events
 LEFT JOIN calendar_sources ON calendar_sources.id = events.source_id
 WHERE (events.source_kind = 'manual' OR (
-    events.source_kind = 'external' AND NOT calendar_sources.in_process AND NOT calendar_sources.read_only
+    events.source_kind = 'external' AND NOT calendar_sources.read_only
     AND (sqlc.narg(integration)::text IS NULL OR calendar_sources.integration = sqlc.narg(integration)::text)
   ))
   AND (sqlc.narg(after_id)::uuid IS NULL OR events.id > sqlc.narg(after_id)::uuid)

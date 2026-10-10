@@ -65,7 +65,6 @@ type Source struct {
 	Name       string `json:"name"`
 	Enabled    bool   `json:"enabled"`
 	ReadOnly   bool   `json:"readOnly"`
-	InProcess  bool   `json:"inProcess"`
 }
 
 // SourceEvent is one event of a source as the integration has it.

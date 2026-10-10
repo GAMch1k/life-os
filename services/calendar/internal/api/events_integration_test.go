@@ -145,17 +145,17 @@ func (c apiClient) seed(params store.CreateEventParams) store.Event {
 	return item
 }
 
-// newSource adds a feed as Calendar refreshed it itself before the handover
-// to calendar-feeds (kind ics, in process, with the identity migration 000014
-// gave it); imported events must belong to a source.
+// newSource adds a feed calendar-feeds syncs (kind external, read-only,
+// known there by the source's own id); imported events must belong to a
+// source.
 func (c apiClient) newSource(name string) googleuuid.UUID {
 	c.t.Helper()
 	var id pgtype.UUID
 	err := c.handler.pool.QueryRow(context.Background(), `
 WITH new AS (SELECT gen_random_uuid() AS id)
-INSERT INTO calendar_sources (id, kind, name, url, integration, external_id, provider)
-VALUES ((SELECT id FROM new), 'ics', $1, $2, 'calendar-feeds', (SELECT id FROM new)::text, 'ICS')
-RETURNING id`, name, "https://calendar.example.org/"+name+".ics").Scan(&id)
+INSERT INTO calendar_sources (id, kind, name, integration, external_id, provider)
+VALUES ((SELECT id FROM new), 'external', $1, 'calendar-feeds', (SELECT id FROM new)::text, 'ICS')
+RETURNING id`, name).Scan(&id)
 	if err != nil {
 		c.t.Fatalf("source %q: %v", name, err)
 	}
@@ -169,7 +169,7 @@ func timedParams(title, start string, minutes int) store.CreateEventParams {
 
 func importedParams(source googleuuid.UUID, uid, title, start string) store.CreateEventParams {
 	params := timedParams(title, start, 30)
-	params.SourceKind, params.SourceID, params.ExternalUid = "ics", pgtype.UUID{Bytes: source, Valid: true}, &uid
+	params.SourceKind, params.SourceID, params.ExternalUid = "external", pgtype.UUID{Bytes: source, Valid: true}, &uid
 	return params
 }
 
@@ -361,7 +361,7 @@ func TestSearchFindsEventsAcrossMonths(t *testing.T) {
 	equal(t, "nothing", search("q", "zahnarzt"), nil)
 
 	papier := c.list("/v1/events/search?" + q("q", "papier"))
-	if len(papier.Items) != 3 || papier.Items[0].Source.Kind != generated.EventSourceKindIcs || *papier.Items[0].Source.ExternalUid != "zaw-papier-1" || *papier.Items[0].Source.SourceId != zaw {
+	if len(papier.Items) != 3 || papier.Items[0].Source.Kind != generated.EventSourceKindExternal || *papier.Items[0].Source.ExternalUid != "zaw-papier-1" || *papier.Items[0].Source.SourceId != zaw {
 		t.Fatalf("papier: %+v", papier.Items)
 	}
 	// Upcoming soonest first, then past most recent first; the event its
@@ -383,7 +383,7 @@ func TestSearchFindsEventsAcrossMonths(t *testing.T) {
 
 	// Filters: source and date range.
 	equal(t, "manual only", search("q", "papier", "sourceKind", "manual"), nil)
-	equal(t, "from this feed", search("q", "papier", "sourceKind", "ics", "sourceId", zaw.String()), []string{"Papier", "Papier", "Papier"})
+	equal(t, "from this feed", search("q", "papier", "sourceKind", "external", "sourceId", zaw.String()), []string{"Papier", "Papier", "Papier"})
 	equal(t, "from another feed", search("q", "papier", "sourceId", other.String()), nil)
 	equal(t, "manual dentist", search("q", "dentist", "sourceKind", "manual"), []string{"Dentist follow-up", "Dentist checkup", "Lunch", "Team meeting"})
 	equal(t, "papier from November", starts(c.list("/v1/events/search?"+q("q", "papier", "from", "2026-11-01T00:00:00Z"))), []string{"2026-11-12 active"})
@@ -418,7 +418,7 @@ func TestImportedEventsSitAlongsideUserEvents(t *testing.T) {
 	gone.Status, gone.CancelledAt, gone.RemovedFromSourceAt = "cancelled", pgtype.Timestamptz{Time: fixedNow, Valid: true}, pgtype.Timestamptz{Time: fixedNow, Valid: true}
 	removed := c.seed(gone)
 	// A client cannot create an imported event: the source is ignored.
-	manual := c.event(http.MethodPost, "/v1/events", `{"title":"Bring bins out","allDay":false,"startAt":"2026-11-16T18:00:00Z","endAt":"2026-11-16T18:15:00Z","source":{"kind":"ics","sourceId":"`+feed.String()+`","externalUid":"forged"}}`, http.StatusCreated)
+	manual := c.event(http.MethodPost, "/v1/events", `{"title":"Bring bins out","allDay":false,"startAt":"2026-11-16T18:00:00Z","endAt":"2026-11-16T18:15:00Z","source":{"kind":"external","sourceId":"`+feed.String()+`","externalUid":"forged"}}`, http.StatusCreated)
 	if manual.Source.Kind != generated.EventSourceKindManual || manual.Source.SourceId != nil || manual.Source.ExternalUid != nil {
 		t.Fatalf("manual event source = %+v", manual.Source)
 	}
@@ -429,11 +429,17 @@ func TestImportedEventsSitAlongsideUserEvents(t *testing.T) {
 		t.Fatalf("listing: %+v", all.Items)
 	}
 	source := all.Items[1].Source
-	if source.Kind != generated.EventSourceKindIcs || *source.SourceId != feed || *source.ExternalUid != "zaw-bio-17" || len(all.Items[1].Reminders) != 0 || !all.Items[1].UseDefaultReminders {
+	if source.Kind != generated.EventSourceKindExternal || *source.SourceId != feed || *source.ExternalUid != "zaw-bio-17" || len(all.Items[1].Reminders) != 0 || !all.Items[1].UseDefaultReminders {
 		t.Fatalf("imported event: %+v", all.Items[1])
 	}
 	equal(t, "manual filter", c.titles(window+"&sourceKind=manual"), []string{"Bring bins out"})
-	equal(t, "ics filter", c.titles(window+"&sourceKind=ics"), []string{"Bioabfall"})
+	equal(t, "external filter", c.titles(window+"&sourceKind=external"), []string{"Bioabfall"})
+	// The legacy kinds are gone from the contract.
+	for _, kind := range []string{"ics", "google"} {
+		if status, raw := c.do(http.MethodGet, window+"&sourceKind="+kind, nil); status != http.StatusBadRequest || !strings.Contains(string(raw), "sourceKind must be manual or external") {
+			t.Errorf("sourceKind=%s: %d %s", kind, status, raw)
+		}
+	}
 	equal(t, "this feed", c.titles(window+"&sourceId="+feed.String()), []string{"Bioabfall"})
 	equal(t, "with history", c.titles(window+"&includeCancelled=true"), []string{"Bioabfall", "Bring bins out", "Bioabfall"})
 	if history := c.event(http.MethodGet, "/v1/events/"+uuid(removed.ID).String(), nil, http.StatusOK); history.Status != generated.Cancelled || history.RemovedFromSourceAt == nil {
@@ -443,7 +449,7 @@ func TestImportedEventsSitAlongsideUserEvents(t *testing.T) {
 	// The owner can override an imported event's reminders (the source's
 	// default is "the evening before"); its source identity stays put.
 	override := c.event(http.MethodPatch, "/v1/events/"+uuid(imported.ID).String(), `{"reminders":[{"kind":"localTime","daysBefore":1,"localTime":"20:30"}],"source":{"kind":"manual"}}`, http.StatusOK)
-	if override.Source.Kind != generated.EventSourceKindIcs || *override.Source.ExternalUid != "zaw-bio-17" || len(override.Reminders) != 1 || *override.Reminders[0].LocalTime != "20:30" {
+	if override.Source.Kind != generated.EventSourceKindExternal || *override.Source.ExternalUid != "zaw-bio-17" || len(override.Reminders) != 1 || *override.Reminders[0].LocalTime != "20:30" {
 		t.Fatalf("override: %+v", override)
 	}
 }

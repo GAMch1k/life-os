@@ -301,7 +301,7 @@ func (h *Handler) changesPage(ctx context.Context, queries *store.Queries, after
 					continue // its source is gone too: nothing to write anywhere
 				}
 				entry.Source = &generated.ChangeFeedSource{
-					SourceId: uuid(found.latest.SourceID), Integration: deref(identity.Integration), ExternalId: deref(identity.ExternalID),
+					SourceId: uuid(found.latest.SourceID), Integration: identity.Integration, ExternalId: identity.ExternalID,
 					ExternalUid: deref(found.latest.ExternalUid),
 				}
 			}
@@ -391,7 +391,7 @@ func (h *Handler) feedEvents(ctx context.Context, queries *store.Queries, rows [
 		if row.SourceID.Valid {
 			identity := identities[row.SourceID.Bytes]
 			entry.Source = &generated.ChangeFeedSource{
-				SourceId: uuid(row.SourceID), Integration: deref(identity.Integration), ExternalId: deref(identity.ExternalID),
+				SourceId: uuid(row.SourceID), Integration: identity.Integration, ExternalId: identity.ExternalID,
 				ExternalUid: deref(row.ExternalUid),
 			}
 		}

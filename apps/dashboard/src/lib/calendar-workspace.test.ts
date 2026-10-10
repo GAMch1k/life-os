@@ -3,11 +3,9 @@ import test from "node:test";
 
 import { NO_REPEAT } from "./calendar-recurrence";
 import {
-  apiErrorCode,
   apiErrorMessage,
   type CalendarEvent,
   type CalendarSource,
-  changedInGoogle,
   createRequest,
   defaultPriorityNote,
   defaultRemindersNote,
@@ -111,10 +109,13 @@ const evening = {
   localTime: "19:00",
 };
 const zawSource = {
-  kind: "ics" as const,
+  kind: "external" as const,
   sourceId: "s",
   externalUid: "u",
+  integration: "calendar-feeds",
+  provider: "ZAW",
   name: "ZAW",
+  readOnly: true,
 };
 
 test("views and days from the URL are validated", () => {
@@ -147,7 +148,7 @@ test("timed events keep their instants; only editable events can be dragged", ()
 
   const imported = toEventInput({
     ...timed,
-    source: { kind: "ics", sourceId: "s", externalUid: "u" },
+    source: { kind: "external", sourceId: "s", externalUid: "u" },
     editable: false,
   });
   assert.equal(imported?.editable, false);
@@ -168,12 +169,16 @@ test("timed events keep their instants; only editable events can be dragged", ()
   assert.equal(recurring?.editable, true);
   assert.equal(toEventInput({ ...timed, startAt: null }), undefined);
   // A Google event of a calendar the owner may edit can be dragged (the
-  // move is written to Google); one of a calendar they can only read not.
+  // integration writes the move to Google); one of a calendar they can
+  // only read not.
   const google = {
-    kind: "google" as const,
+    kind: "external" as const,
     sourceId: "g",
     externalUid: "dentist",
+    integration: "google-calendar",
+    provider: "Google",
     name: "Owner",
+    readOnly: false,
   };
   assert.equal(toEventInput({ ...timed, source: google })?.editable, true);
   assert.equal(
@@ -829,31 +834,30 @@ test("search results list upcoming events soonest first, then past ones", () => 
 });
 
 test("imported events name their source and why they are read-only", () => {
-  const ics = {
+  const unnamed = {
     ...timed,
-    source: { kind: "ics" as const, sourceId: "s", externalUid: "u" },
+    source: { kind: "external" as const, sourceId: "s", externalUid: "u" },
     editable: false,
   };
-  assert.equal(sourceLabel(ics), "ICS feed");
-  assert.match(readOnlyReason(ics) ?? "", /^Imported from an ICS feed/);
+  assert.equal(sourceLabel(unnamed), undefined);
+  assert.match(
+    readOnlyReason(unnamed) ?? "",
+    /^Imported from another calendar/,
+  );
   // Calendar names the source, such as the ZAW waste-collection feed.
-  const zaw = { ...ics, source: { ...ics.source, name: "ZAW" } };
+  const zaw = { ...unnamed, source: { ...unnamed.source, name: "ZAW" } };
   assert.equal(sourceLabel(zaw), "ZAW");
   assert.match(
     readOnlyReason(zaw) ?? "",
     /^Imported from ZAW, so it can only be changed there\. Its reminders/,
   );
   assert.equal(
-    sourceLabel({ ...timed, source: { ...ics.source, name: " " } }),
-    "ICS feed",
-  );
-  assert.equal(
-    sourceLabel({ ...timed, source: { kind: "google" } }),
-    "Google Calendar",
+    sourceLabel({ ...timed, source: { ...unnamed.source, name: " " } }),
+    undefined,
   );
   assert.equal(sourceLabel(timed), undefined);
   assert.equal(readOnlyReason(timed), undefined);
-  assert.equal(sourceBadge(zaw), "Imported · ZAW");
+  assert.equal(sourceBadge(zaw), "ZAW");
   assert.equal(sourceBadge(timed), undefined);
 });
 
@@ -934,13 +938,6 @@ test("Google events are editable unless Calendar says why not", () => {
     state: "Synced from Google",
     failing: false,
   });
-  // The legacy kind keeps its labels until P11-09.
-  const legacy = {
-    ...timed,
-    source: { kind: "google" as const, name: "Owner" },
-  };
-  assert.equal(sourceBadge(legacy), "Google · Owner");
-  assert.equal(googleSyncLabel(legacy), undefined);
 });
 
 test("a Life OS event says how its export to Google stands", () => {
@@ -974,18 +971,8 @@ test("a Life OS event says how its export to Google stands", () => {
     },
   );
   // Only a Life OS event is exported.
-  const feed = { ...timed, source: { kind: "ics" as const, name: "ZAW" } };
+  const feed = { ...timed, source: zawSource };
   assert.equal(googleSyncLabel(feed, { ...link, state: "synced" }), undefined);
-});
-
-test("a change refused because the event changed in Google is recognized", () => {
-  const refusal = (code: string) => ({ error: { code, message: "m" } });
-  assert.equal(apiErrorCode(refusal("google_conflict")), "google_conflict");
-  assert.equal(changedInGoogle(refusal("google_conflict")), true);
-  assert.equal(changedInGoogle(refusal("google_deleted")), true);
-  assert.equal(changedInGoogle(refusal("google_read_only")), false);
-  assert.equal(changedInGoogle(undefined), false);
-  assert.equal(apiErrorCode("text"), undefined);
 });
 
 test("occurrences of a recurring event get distinct keys", () => {

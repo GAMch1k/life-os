@@ -414,22 +414,21 @@ func TestFeedsFollowCalendar(t *testing.T) {
 	}
 }
 
-// Feeds from before the integration service: a new preset feed is never
-// registered while Calendar has sources this service does not know (the
-// handoff has not run), so the ZAW events are never imported twice; a
-// handed-over feed cannot sync until Calendar's handover migration, and
-// then continues with the same source.
-func TestFeedsWaitForTheHandover(t *testing.T) {
+// A new preset feed is never registered while Calendar has sources of this
+// integration that no feed here belongs to (such as after the feeds
+// database was replaced), so the ZAW events are never imported twice; once
+// they are gone from Calendar, it registers (its locations private) and
+// syncs.
+func TestNewFeedsWaitWhileCalendarHasUnknownSources(t *testing.T) {
 	h := newHarness(t, nil)
 	fx := loadFixture(t)
 	server := &feedServer{body: fx.feed(nil)}
 	feed := httptest.NewServer(server)
 	defer feed.Close()
 	feedURL := feed.URL + "/api.php?m=zaw&r=ical&area_id=1"
-	legacy := types.UUID(mustUUID(t, "8f0b6a2e-3c4d-4e5f-8a9b-0c1d2e3f4a5b"))
-	h.calendar.AddInProcess(legacy.String(), "ZAW", feeds.ProviderZAW)
+	unknown := "8f0b6a2e-3c4d-4e5f-8a9b-0c1d2e3f4a5b"
+	h.calendar.Add(unknown, "ZAW", feeds.ProviderZAW)
 
-	// calendar-feeds started before the handoff (the wrong order).
 	ensured, err := h.refresher.EnsurePreset(context.Background(), feeds.ZAWPreset(feedURL))
 	if err != nil || ensured.Action != feeds.EnsureCreated || !ensured.Feed.RegisterPending {
 		t.Fatalf("ensure = %+v, %v", ensured, err)
@@ -438,62 +437,23 @@ func TestFeedsWaitForTheHandover(t *testing.T) {
 	if h.calendar.Count() != 1 {
 		t.Fatalf("a second ZAW source was registered: %d sources", h.calendar.Count())
 	}
-	waiting := h.get(types.UUID(ensured.Feed.ID.Bytes))
-	if waiting.SourceId != nil || outcome(waiting) != "failed" || !strings.Contains(*waiting.Refresh.LastError, "calendar-feeds handoff") || server.requests != 0 {
+	id := types.UUID(ensured.Feed.ID.Bytes)
+	waiting := h.get(id)
+	if waiting.SourceId != nil || outcome(waiting) != "failed" || !strings.Contains(*waiting.Refresh.LastError, "this service does not know") || server.requests != 0 {
 		t.Fatalf("waiting = %+v (%v)", waiting.Refresh, waiting.Refresh.LastError)
 	}
 
-	// The handoff replaces the unregistered preset feed with Calendar's.
-	ctx := context.Background()
-	if replaced, err := h.queries.DeleteUnregisteredPresetFeed(ctx, store.DeleteUnregisteredPresetFeedParams{Preset: feeds.PresetZAW, ID: pgUUID(legacy)}); err != nil || replaced != 1 {
-		t.Fatalf("replaced %d, %v", replaced, err)
-	}
-	preset := feeds.PresetZAW
-	config, _ := json.Marshal(feeds.ZAWPreset(feedURL).Config)
-	stamp := pgtype.Timestamptz{Time: fixedNow.Add(-24 * time.Hour), Valid: true}
-	if added, err := h.queries.HandOverFeed(ctx, store.HandOverFeedParams{
-		ID: pgUUID(legacy), Name: "ZAW", Url: feedURL, Enabled: true, FilterInclude: feeds.ZAWPreset("").Config.Include, FilterExclude: []string{},
-		Preset: &preset, PresetConfig: config, NextRefreshAt: pgtype.Timestamptz{Time: fixedNow, Valid: true}, CreatedAt: stamp, UpdatedAt: stamp,
-	}); err != nil || added != 1 {
-		t.Fatalf("handed over %d, %v", added, err)
-	}
-	// Calendar still refreshes it itself until its migration: no sync.
-	h.runDue()
-	inProcess := h.get(legacy)
-	if outcome(inProcess) != "failed" || !strings.Contains(*inProcess.Refresh.LastError, "source_in_process") || inProcess.SourceId == nil || inProcess.SourceId.String() != legacy.String() {
-		t.Fatalf("in process = %+v (%v)", inProcess, inProcess.Refresh.LastError)
-	}
-	if again, err := h.refresher.EnsurePreset(ctx, feeds.ZAWPreset(feedURL)); err != nil || again.Action != feeds.EnsureUnchanged {
-		t.Fatalf("ensure after the handoff = %+v, %v", again, err)
-	}
-
-	// Calendar's handover migration ran: the same source syncs, registered
-	// again with its preset's name and reminders; no second source.
-	h.calendar.HandOver(legacy.String())
+	// The unknown source is deleted in Calendar: the feed registers and syncs.
+	h.calendar.Remove(unknown)
 	*h.clock = fixedNow.Add(20 * time.Minute)
 	h.runDue()
-	synced := h.get(legacy)
-	source := h.source(legacy)
+	synced := h.get(id)
+	source := h.source(id)
 	if outcome(synced) != "imported" || counts(t, synced).Inserted != 21 || h.calendar.Count() != 1 || source.Provider != feeds.ProviderZAW ||
-		!strings.Contains(string(source.DefaultReminders), `"19:00"`) {
-		t.Fatalf("after the handover = %+v / %+v", synced.Refresh, source.Source)
+		!source.PrivateLocation || !strings.Contains(string(source.DefaultReminders), `"19:00"`) {
+		t.Fatalf("after the unknown source went = %+v / %+v", synced.Refresh, source.Source)
 	}
-	if rows, _ := h.queries.ListRegisterPending(ctx); len(rows) != 0 {
+	if rows, _ := h.queries.ListRegisterPending(context.Background()); len(rows) != 0 {
 		t.Fatalf("%d feeds still wait for registration", len(rows))
 	}
-	if titles := source.Active(); len(titles) != 21 {
-		t.Fatalf("events = %d", len(titles))
-	}
-	if paper := eventAt(t, source, "2026-10-15T04:00:00Z"); paper.Item.Title != "Papier Tonnen und Container" {
-		t.Fatalf("the ZAW title clean-up is gone: %q", paper.Item.Title)
-	}
-}
-
-func mustUUID(t *testing.T, value string) [16]byte {
-	t.Helper()
-	var id pgtype.UUID
-	if err := id.Scan(value); err != nil {
-		t.Fatal(err)
-	}
-	return id.Bytes
 }

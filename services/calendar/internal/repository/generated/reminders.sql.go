@@ -133,13 +133,14 @@ func (q *Queries) ListHandledReminders(ctx context.Context, keys []string) ([]st
 	return items, nil
 }
 
-const listPresetSourceIDs = `-- name: ListPresetSourceIDs :many
-SELECT id FROM calendar_sources WHERE preset IS NOT NULL
+const listPrivateLocationSourceIDs = `-- name: ListPrivateLocationSourceIDs :many
+SELECT id FROM calendar_sources WHERE private_location
 `
 
-// The sources Calendar configures itself (ZAW).
-func (q *Queries) ListPresetSourceIDs(ctx context.Context) ([]pgtype.UUID, error) {
-	rows, err := q.db.Query(ctx, listPresetSourceIDs)
+// The sources whose event locations are private (such as the owner's own
+// address): reminders leave them out.
+func (q *Queries) ListPrivateLocationSourceIDs(ctx context.Context) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listPrivateLocationSourceIDs)
 	if err != nil {
 		return nil, err
 	}

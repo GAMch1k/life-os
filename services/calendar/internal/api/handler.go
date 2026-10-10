@@ -467,7 +467,7 @@ func sourceKindFilter(kind *generated.EventSourceKind) (*string, error) {
 		return nil, nil
 	}
 	if !kind.Valid() {
-		return nil, badRequest("sourceKind must be manual, ics, google, or external")
+		return nil, badRequest("sourceKind must be manual or external")
 	}
 	value := string(*kind)
 	return &value, nil

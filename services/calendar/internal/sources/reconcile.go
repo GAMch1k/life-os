@@ -11,23 +11,11 @@ import (
 	store "github.com/GAMch1k/life-os/services/calendar/internal/repository/generated"
 )
 
-// Reconciling a source's stored events with the items its integration (or
-// Calendar's in-process Google adapter) gives: inside the caller's
-// transaction, which holds the source row. ICS feeds are refreshed by the
-// calendar-feeds integration service, which syncs them through the
-// integration API (sync.go) with FeedRules.
-
-// Reconcile makes a source's stored events match items, inside the
-// caller's transaction (which holds the source row), and returns what it
-// changed. A feed's refresh reconciles with FeedRules, a Google calendar's
-// sync with SyncRules.
-func Reconcile(ctx context.Context, queries *store.Queries, source store.CalendarSource, items []Item, rules Rules, now time.Time) (Counts, error) {
-	existing, err := queries.ListSourceEvents(ctx, source.ID)
-	if err != nil {
-		return Counts{}, err
-	}
-	return reconcileStored(ctx, queries, source, existing, items, rules, now)
-}
+// Reconciling a source's stored events with the items its integration
+// gives through the integration API (sync.go): inside the caller's
+// transaction, which holds the source row. A feed's sync (window
+// upcomingOnly) reconciles with FeedRules, a synced calendar's (window
+// start) with SyncRules, any other with AuthoritativeRules.
 
 // reconcileStored reconciles existing, stored events of source (held by the
 // transaction of queries), with items.

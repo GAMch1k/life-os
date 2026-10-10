@@ -141,7 +141,7 @@ func TestIntegrationSourcesRegisterIdempotentlyAndKeepTheOwnersSettings(t *testi
 	c := newIntegrationClient(t)
 	created := c.register(feedsActor, "calendar-feeds", "zaw", zawRegistration("ZAW"), http.StatusCreated)
 	if created.Integration != "calendar-feeds" || created.ExternalId != "zaw" || created.Provider != "ZAW" || created.Name != "ZAW" ||
-		!created.Enabled || !created.ReadOnly || created.InProcess || created.DefaultPriority != generated.Medium ||
+		!created.Enabled || !created.ReadOnly || created.PrivateLocation || created.DefaultPriority != generated.Medium ||
 		created.DefaultReminders == nil || len(*created.DefaultReminders) != 1 {
 		t.Fatalf("created = %+v", created)
 	}
@@ -155,8 +155,8 @@ func TestIntegrationSourcesRegisterIdempotentlyAndKeepTheOwnersSettings(t *testi
 	path := "/v1/sources/" + created.Id.String()
 	var listed generated.SourceList
 	c.expect("user", http.MethodGet, "/v1/sources", nil, http.StatusOK, &listed)
-	if len(listed.Items) != 1 || listed.Items[0].Kind != generated.CalendarSourceKindExternal || listed.Items[0].Url != "" ||
-		deref(listed.Items[0].Provider) != "ZAW" || deref(listed.Items[0].Integration) != "calendar-feeds" || deref(listed.Items[0].ExternalId) != "zaw" {
+	if len(listed.Items) != 1 || listed.Items[0].Kind != generated.CalendarSourceKindExternal || listed.Items[0].PrivateLocation ||
+		listed.Items[0].Provider != "ZAW" || listed.Items[0].Integration != "calendar-feeds" || listed.Items[0].ExternalId != "zaw" {
 		t.Fatalf("listed = %+v", listed.Items)
 	}
 	var owned generated.CalendarSource
@@ -183,10 +183,10 @@ func TestIntegrationSourcesRegisterIdempotentlyAndKeepTheOwnersSettings(t *testi
 		t.Fatalf("reminded = %+v", reminded)
 	}
 
-	// A feed an integration syncs keeps its URL and filter there; the
-	// owner's switch stays the owner's.
-	c.refused("user", http.MethodPatch, path, map[string]any{"url": "https://calendar.example.org/zaw.ics"}, http.StatusConflict, "managed_by_integration")
-	c.refused("user", http.MethodPatch, path, map[string]any{"filter": map[string]any{"include": []string{"Papier"}, "exclude": []string{}}}, http.StatusConflict, "managed_by_integration")
+	// A feed's URL and filter are its integration's, not settings of the
+	// source here; the owner's switch stays the owner's.
+	c.refused("user", http.MethodPatch, path, map[string]any{"url": "https://calendar.example.org/zaw.ics"}, http.StatusBadRequest, "bad_request")
+	c.refused("user", http.MethodPatch, path, map[string]any{"filter": map[string]any{"include": []string{"Papier"}, "exclude": []string{}}}, http.StatusBadRequest, "bad_request")
 	// Calendar refreshes no feed since the handover to calendar-feeds (P11-08).
 	c.refused("user", http.MethodPost, path+"/refresh", nil, http.StatusNotFound, "not_found")
 	c.expect("user", http.MethodPatch, path, map[string]any{"enabled": false}, http.StatusOK, &owned)
@@ -202,6 +202,26 @@ func TestIntegrationSourcesRegisterIdempotentlyAndKeepTheOwnersSettings(t *testi
 		t.Fatalf("get = %+v, list = %+v", got, list)
 	}
 
+	// The integration says whether its events' locations are private (such
+	// as the owner's street in a waste-collection feed); leaving it out keeps
+	// the source's.
+	private := c.register(feedsActor, "calendar-feeds", "zaw", map[string]any{"name": "ZAW Roßdorf", "provider": "ZAW", "readOnly": true, "privateLocation": true}, http.StatusOK)
+	if !private.PrivateLocation {
+		t.Fatalf("private = %+v", private)
+	}
+	var shown generated.CalendarSource
+	c.expect("user", http.MethodGet, path, nil, http.StatusOK, &shown)
+	if !shown.PrivateLocation || !c.register(feedsActor, "calendar-feeds", "zaw", zawRegistration("ZAW Roßdorf"), http.StatusOK).PrivateLocation {
+		t.Fatalf("shown = %+v", shown)
+	}
+	if c.register(feedsActor, "calendar-feeds", "zaw", map[string]any{"name": "ZAW Roßdorf", "provider": "ZAW", "readOnly": true, "privateLocation": false}, http.StatusOK).PrivateLocation {
+		t.Fatal("privateLocation false was not applied")
+	}
+	if created := c.register(feedsActor, "calendar-feeds", "street", map[string]any{"name": "Street", "provider": "ICS", "readOnly": true, "privateLocation": true}, http.StatusCreated); !created.PrivateLocation {
+		t.Fatalf("created private = %+v", created)
+	}
+	c.expect(feedsActor, http.MethodDelete, sourcePath("calendar-feeds", "street"), nil, http.StatusNoContent, nil)
+
 	// Ids in the path are URL-encoded, such as a Google calendar's.
 	familyID := "en.german#holiday@group.v.calendar.google.com"
 	family := c.register(googleActor, "google-calendar", familyID, map[string]any{"name": "Holidays", "provider": "Google", "readOnly": true}, http.StatusCreated)
@@ -216,6 +236,7 @@ func TestIntegrationSourcesRegisterIdempotentlyAndKeepTheOwnersSettings(t *testi
 		{"name": " ", "provider": "ZAW", "readOnly": true},
 		{"name": "ZAW", "provider": "ZAW", "readOnly": true, "defaultPriority": "urgent"},
 		{"name": "ZAW", "provider": "ZAW", "readOnly": true, "defaultReminders": []map[string]any{{"kind": "relative"}}},
+		{"name": "ZAW", "provider": "ZAW", "readOnly": true, "privateLocation": nil},
 	} {
 		c.refused(feedsActor, http.MethodPut, sourcePath("calendar-feeds", "other"), body, http.StatusBadRequest, "invalid_source")
 	}
@@ -249,23 +270,6 @@ func TestIntegrationEndpointsAdmitOnlyTheirIntegration(t *testing.T) {
 	c.expect("dev:claude-code", http.MethodGet, path, nil, http.StatusOK, nil)
 	c.expect(feedsActor, http.MethodGet, "/v1/integrations/changes", nil, http.StatusOK, nil)
 	c.expect("dev:claude-code", http.MethodPost, path+"/sync", sync, http.StatusOK, nil)
-}
-
-func TestIntegrationCannotTakeOverSourcesCalendarStillSyncs(t *testing.T) {
-	c := newIntegrationClient(t)
-	legacy := c.newSource("Club feed")
-	var listed generated.IntegrationSourceList
-	c.expect(feedsActor, http.MethodGet, "/v1/integrations/calendar-feeds/sources", nil, http.StatusOK, &listed)
-	if len(listed.Items) != 1 || listed.Items[0].ExternalId != legacy.String() || !listed.Items[0].InProcess || listed.Items[0].Provider != "ICS" {
-		t.Fatalf("listed = %+v", listed.Items)
-	}
-	path := sourcePath("calendar-feeds", legacy.String())
-	c.refused(feedsActor, http.MethodPut, path, map[string]any{"name": "Club", "provider": "ICS", "readOnly": true}, http.StatusConflict, "source_in_process")
-	c.refused(feedsActor, http.MethodPost, path+"/sync", map[string]any{"mode": "snapshot", "items": []any{}}, http.StatusConflict, "source_in_process")
-	c.refused(feedsActor, http.MethodDelete, path, nil, http.StatusConflict, "source_in_process")
-	if source, err := c.queries.GetSource(context.Background(), pgID(legacy)); err != nil || source.Name != "Club feed" || !source.InProcess {
-		t.Fatalf("legacy source = %+v, %v", source, err)
-	}
 }
 
 // feedItems are a feed's events: two pickups, a concert with its own

@@ -15,12 +15,7 @@ import (
 	"github.com/GAMch1k/life-os/pkg/httpserver"
 	"github.com/GAMch1k/life-os/services/calendar/internal/api/generated"
 	store "github.com/GAMch1k/life-os/services/calendar/internal/repository/generated"
-	"github.com/GAMch1k/life-os/services/calendar/internal/sources"
 )
-
-// maxSourceName is the longest name the owner gives a source of Calendar's
-// own (mirrored in the OpenAPI contract).
-const maxSourceName = 100
 
 // resolveSources completes each item from its source and the owner's
 // settings: an imported event's source name, its defaultReminders (its
@@ -35,7 +30,7 @@ func (h *Handler) resolveSources(ctx context.Context, items []generated.Calendar
 		name                  string
 		reminders             []generated.Reminder
 		priority              generated.EventPriority
-		integration, provider *string
+		integration, provider string
 		readOnly              bool
 	}
 	var summaries map[types.UUID]summary
@@ -76,8 +71,8 @@ func (h *Handler) resolveSources(ctx context.Context, items []generated.Calendar
 				}
 			}
 			if found, ok := summaries[*item.Source.SourceId]; ok {
-				name, readOnly := found.name, found.readOnly
-				item.Source.Name, item.Source.Integration, item.Source.Provider, item.Source.ReadOnly = &name, found.integration, found.provider, &readOnly
+				name, integration, provider, readOnly := found.name, found.integration, found.provider, found.readOnly
+				item.Source.Name, item.Source.Integration, item.Source.Provider, item.Source.ReadOnly = &name, &integration, &provider, &readOnly
 				defaults, priority = found.reminders, found.priority
 			}
 		}
@@ -119,22 +114,6 @@ func sameReminder(a, b generated.Reminder) bool {
 	return a.Kind == b.Kind && sameInt(a.MinutesBefore, b.MinutesBefore) && sameInt(a.DaysBefore, b.DaysBefore) && sameString(a.LocalTime, b.LocalTime)
 }
 
-// managedByIntegration refuses what only the integration that syncs a feed
-// does: changing its URL or filter (calendar-feeds keeps them, and refreshes
-// the feed).
-func managedByIntegration(name string) error {
-	return httpserver.NewError(fiber.StatusConflict, "managed_by_integration",
-		fmt.Sprintf("“%s” is synced by an integration, which keeps its URL and filter and refreshes it (feeds: the calendar-feeds service); its name, default reminders, default priority, and enabled can be changed here", name))
-}
-
-// listedSource reports whether row is served under /v1/sources: a feed or
-// a source an integration syncs, not a legacy Google source of Calendar's
-// former in-process sync (kind google; migration 000016 hands them over to
-// the google-calendar integration).
-func listedSource(row store.CalendarSource) bool {
-	return row.Kind == string(generated.CalendarSourceKindIcs) || row.Kind == string(generated.CalendarSourceKindExternal)
-}
-
 func sourceNotFound() error {
 	return httpserver.NewError(fiber.StatusNotFound, "not_found", "source not found")
 }
@@ -157,8 +136,7 @@ func (h *Handler) ListSources(c fiber.Ctx) error {
 
 func (h *Handler) GetSource(c fiber.Ctx, id types.UUID) error {
 	row, err := h.queries.GetSource(c.Context(), pgUUID(id))
-	if errors.Is(err, pgx.ErrNoRows) || err == nil && !listedSource(row) {
-		// A legacy in-process Google source is not served.
+	if errors.Is(err, pgx.ErrNoRows) {
 		return sourceNotFound()
 	}
 	if err != nil {
@@ -181,19 +159,14 @@ type sourceConfig struct {
 	Enabled          bool
 	DefaultReminders *[]generated.Reminder
 	DefaultPriority  generated.EventPriority
-	// Integration: an integration syncs the source and may name it longer.
-	Integration bool
 }
 
-// validate checks the settings and normalizes them (a trimmed name).
+// validate checks the settings and normalizes them (a trimmed name, as long
+// as its integration may name it).
 func (h *Handler) validate(config *sourceConfig) error {
 	config.Name = strings.TrimSpace(config.Name)
-	limit := maxSourceName
-	if config.Integration {
-		limit = maxIntegrationName // as long as an integration may name it
-	}
-	if config.Name == "" || utf8.RuneCountInString(config.Name) > limit {
-		return fmt.Errorf("name must be 1 to %d characters", limit)
+	if config.Name == "" || utf8.RuneCountInString(config.Name) > maxIntegrationName {
+		return fmt.Errorf("name must be 1 to %d characters", maxIntegrationName)
 	}
 	if !config.DefaultPriority.Valid() {
 		return errors.New("defaultPriority must be low, medium, or high")
@@ -205,9 +178,9 @@ func (h *Handler) validate(config *sourceConfig) error {
 }
 
 // updatableSourceFields are the UpdateSourceRequest properties; only
-// defaultReminders may be null. url and filter belong to the integration
-// that syncs the source (409 managed_by_integration).
-var updatableSourceFields = map[string]bool{"name": true, "url": true, "enabled": true, "filter": true, "defaultReminders": true, "defaultPriority": true}
+// defaultReminders may be null. The rest of a source's configuration is its
+// integration's.
+var updatableSourceFields = map[string]bool{"name": true, "enabled": true, "defaultReminders": true, "defaultPriority": true}
 
 func (h *Handler) UpdateSource(c fiber.Ctx, id types.UUID) error {
 	var properties map[string]json.RawMessage
@@ -233,14 +206,11 @@ func (h *Handler) UpdateSource(c fiber.Ctx, id types.UUID) error {
 	}
 	for range updateAttempts {
 		current, err := h.queries.GetSource(c.Context(), pgUUID(id))
-		if errors.Is(err, pgx.ErrNoRows) || err == nil && !listedSource(current) {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return sourceNotFound()
 		}
 		if err != nil {
 			return internal(err)
-		}
-		if present["url"] || present["filter"] {
-			return managedByIntegration(current.Name)
 		}
 		reminders, err := decodeReminders(current.DefaultReminders)
 		if err != nil {
@@ -248,7 +218,7 @@ func (h *Handler) UpdateSource(c fiber.Ctx, id types.UUID) error {
 		}
 		next := sourceConfig{
 			Name: current.Name, Enabled: current.Enabled, DefaultReminders: reminders,
-			DefaultPriority: generated.EventPriority(current.DefaultPriority), Integration: !current.InProcess,
+			DefaultPriority: generated.EventPriority(current.DefaultPriority),
 		}
 		if present["name"] {
 			next.Name = *body.Name
@@ -295,56 +265,17 @@ func (h *Handler) DeleteSource(c fiber.Ctx, id types.UUID) error {
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
-// source renders a stored source. A source an integration syncs shows the
-// owner's settings only: its URL, filter, preset, and refresh state are the
-// integration's (the legacy columns of a handed-over feed are left
-// unread until P11-09 drops them).
+// source renders a stored source: the owner's settings and the source's
+// identity in its integration (which keeps the rest of its configuration).
 func (h *Handler) source(row store.CalendarSource) (generated.CalendarSource, error) {
 	reminders, err := decodeReminders(row.DefaultReminders)
 	if err != nil {
 		return generated.CalendarSource{}, err
 	}
-	if !row.InProcess {
-		return generated.CalendarSource{
-			Id: uuid(row.ID), Kind: generated.CalendarSourceKind(row.Kind), Name: row.Name, Enabled: row.Enabled,
-			Integration: row.Integration, ExternalId: row.ExternalID, Provider: row.Provider, ReadOnly: &row.ReadOnly,
-			Filter:           generated.SourceFilter{Include: []string{}, Exclude: []string{}},
-			DefaultReminders: reminders, DefaultPriority: generated.EventPriority(row.DefaultPriority),
-			CreatedAt: row.CreatedAt.Time.UTC(), UpdatedAt: row.UpdatedAt.Time.UTC(),
-		}, nil
-	}
-	refresh := generated.SourceRefreshState{
-		NextRefreshAt: nullableTime(row.NextRefreshAt), LastAttemptAt: nullableTime(row.LastAttemptAt), LastSuccessAt: nullableTime(row.LastSuccessAt),
-		LastError: row.LastError, ConsecutiveFailures: int(row.ConsecutiveFailures), Etag: row.Etag, LastModified: row.LastModified,
-		Refreshing: row.RefreshingUntil.Valid && row.RefreshingUntil.Time.After(h.now()),
-	}
-	if row.LastOutcome != nil {
-		outcome := generated.SourceRefreshOutcome(*row.LastOutcome)
-		refresh.LastOutcome = &outcome
-	}
-	if row.LastCounts != nil {
-		var counts sources.Counts
-		if err := json.Unmarshal(row.LastCounts, &counts); err != nil {
-			return generated.CalendarSource{}, fmt.Errorf("decode refresh counts: %w", err)
-		}
-		skipped := counts.Skipped
-		refresh.LastCounts = &generated.SourceRefreshCounts{
-			FeedEvents: counts.FeedEvents, Imported: counts.Imported, Inserted: counts.Inserted, Updated: counts.Updated,
-			Removed: counts.Removed, Restored: counts.Restored, Unchanged: counts.Unchanged, Skipped: &skipped,
-		}
-	}
 	return generated.CalendarSource{
-		Id: uuid(row.ID), Kind: generated.CalendarSourceKind(row.Kind), Name: row.Name, Url: deref(row.Url), Enabled: row.Enabled, Preset: row.Preset,
-		Integration: row.Integration, ExternalId: row.ExternalID, Provider: row.Provider, ReadOnly: &row.ReadOnly,
-		Filter:           generated.SourceFilter{Include: orEmpty(row.FilterInclude), Exclude: orEmpty(row.FilterExclude)},
-		DefaultReminders: reminders, DefaultPriority: generated.EventPriority(row.DefaultPriority), Refresh: refresh,
+		Id: uuid(row.ID), Kind: generated.CalendarSourceKind(row.Kind), Name: row.Name, Enabled: row.Enabled,
+		Integration: row.Integration, ExternalId: row.ExternalID, Provider: row.Provider, ReadOnly: row.ReadOnly,
+		PrivateLocation: row.PrivateLocation, DefaultReminders: reminders, DefaultPriority: generated.EventPriority(row.DefaultPriority),
 		CreatedAt: row.CreatedAt.Time.UTC(), UpdatedAt: row.UpdatedAt.Time.UTC(),
 	}, nil
-}
-
-func orEmpty(values []string) []string {
-	if values == nil {
-		return []string{}
-	}
-	return values
 }

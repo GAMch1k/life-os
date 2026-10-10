@@ -10,12 +10,11 @@ and syncs their events into Calendar only through Calendar's integration API
 
 ```text
 api/openapi.yaml          # the feeds API (/v1/feeds)
-cmd/server/               # the service, and `handoff` (the one-time handoff from Calendar)
+cmd/server/               # the service
 db/migrations/            # calendar_feeds_db
 internal/ics/             # safe download, iCalendar parsing, type filter
 internal/feeds/           # refresher, scheduler, ZAW preset, Calendar registration
 internal/calendar/        # client of Calendar's integration API (+ fakecalendar for tests)
-internal/handoff/         # reads Calendar's legacy feed columns once
 ```
 
 ## Commands
@@ -27,5 +26,4 @@ make migrate-up DATABASE_URL='postgres://...'
 ```
 
 The integration tests run against a throwaway Postgres named by
-`CALENDAR_FEEDS_TEST_DATABASE_URL`, each in its own schema; the handoff test
-also builds a legacy `calendar_db` schema from Calendar's migrations.
+`CALENDAR_FEEDS_TEST_DATABASE_URL`, each in its own schema.

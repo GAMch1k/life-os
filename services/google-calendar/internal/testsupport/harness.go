@@ -127,24 +127,8 @@ type Harness struct {
 	bodies       []string
 }
 
-// Options shape a harness.
-type Options struct {
-	// UpTo stops Calendar's migrations at a version ("" for all) before
-	// Prepare runs on Calendar's schema (such as seeding the legacy tables
-	// for the handoff); the rest are applied after it, then Before runs
-	// with both schemas, and then Calendar starts.
-	UpTo    string
-	Prepare func(h *Harness)
-	Before  func(h *Harness)
-}
-
 // New starts a harness with the fake account holding calendars.
 func New(t *testing.T, calendars ...fakegoogle.Calendar) *Harness {
-	return NewWith(t, Options{}, calendars...)
-}
-
-// NewWith starts a harness with options.
-func NewWith(t *testing.T, options Options, calendars ...fakegoogle.Calendar) *Harness {
 	t.Helper()
 	databaseURL := os.Getenv("GOOGLE_CALENDAR_TEST_DATABASE_URL")
 	if databaseURL == "" {
@@ -152,16 +136,7 @@ func NewWith(t *testing.T, options Options, calendars ...fakegoogle.Calendar) *H
 	}
 	h := &Harness{T: t, DatabaseURL: databaseURL, Pool: testdb.Open(t), Fake: fakegoogle.New(t, calendars...), Clock: &Clock{now: FixedNow}, Recorder: newRecorder(t)}
 	var schema string
-	h.CalendarPool, schema = CalendarSchema(t, databaseURL, options.UpTo)
-	if options.Prepare != nil {
-		options.Prepare(h)
-	}
-	if options.UpTo != "" {
-		ApplyCalendarMigrations(t, h.CalendarPool, options.UpTo)
-	}
-	if options.Before != nil {
-		options.Before(h)
-	}
+	h.CalendarPool, schema = CalendarSchema(t, databaseURL)
 	h.Calendar = StartCalendar(t, databaseURL, schema)
 	h.Restart(Config())
 	t.Cleanup(h.checkNoSecretLeaked)

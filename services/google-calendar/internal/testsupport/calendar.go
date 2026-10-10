@@ -69,10 +69,9 @@ func Cleanup() {
 	}
 }
 
-// CalendarSchema creates a private schema migrated with Calendar's
-// migrations up to and including version upTo ("" for all), dropped when
-// the test ends, and returns a pool on it.
-func CalendarSchema(t testing.TB, databaseURL, upTo string) (*pgxpool.Pool, string) {
+// CalendarSchema creates a private schema migrated with all of Calendar's
+// migrations, dropped when the test ends, and returns a pool on it.
+func CalendarSchema(t testing.TB, databaseURL string) (*pgxpool.Pool, string) {
 	t.Helper()
 	ctx := context.Background()
 	schema := fmt.Sprintf("calendar_it_%d_%d", time.Now().UnixNano(), schemas.Add(1))
@@ -106,23 +105,9 @@ func CalendarSchema(t testing.TB, databaseURL, upTo string) (*pgxpool.Pool, stri
 	}
 	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), "DROP SCHEMA "+schema+" CASCADE") })
 	for _, path := range calendarMigrations(t) {
-		if base := filepath.Base(path); upTo != "" && base[:len(upTo)] > upTo {
-			break
-		}
 		applyFile(t, pool, path)
 	}
 	return pool, schema
-}
-
-// ApplyCalendarMigrations applies Calendar's migrations after version
-// after.
-func ApplyCalendarMigrations(t testing.TB, pool *pgxpool.Pool, after string) {
-	t.Helper()
-	for _, path := range calendarMigrations(t) {
-		if base := filepath.Base(path); base[:len(after)] > after {
-			applyFile(t, pool, path)
-		}
-	}
 }
 
 func calendarMigrations(t testing.TB) []string {

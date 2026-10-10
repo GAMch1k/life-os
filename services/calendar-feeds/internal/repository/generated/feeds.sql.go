@@ -264,26 +264,6 @@ func (q *Queries) DeleteFeed(ctx context.Context, id pgtype.UUID) (int64, error)
 	return result.RowsAffected(), nil
 }
 
-const deleteUnregisteredPresetFeed = `-- name: DeleteUnregisteredPresetFeed :execrows
-DELETE FROM feeds WHERE preset = $1::text AND id <> $2 AND source_id IS NULL
-`
-
-type DeleteUnregisteredPresetFeedParams struct {
-	Preset string
-	ID     pgtype.UUID
-}
-
-// A preset feed this service added before the handoff and never registered
-// in Calendar (its registration waits while Calendar has feeds this service
-// does not know): the handed-over feed replaces it.
-func (q *Queries) DeleteUnregisteredPresetFeed(ctx context.Context, arg DeleteUnregisteredPresetFeedParams) (int64, error) {
-	result, err := q.db.Exec(ctx, deleteUnregisteredPresetFeed, arg.Preset, arg.ID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const finishFeedRefresh = `-- name: FinishFeedRefresh :one
 UPDATE feeds
 SET refreshing_until = NULL,
@@ -417,75 +397,6 @@ func (q *Queries) GetPresetFeed(ctx context.Context, preset string) (Feed, error
 		&i.UpdatedAt,
 	)
 	return i, err
-}
-
-const handOverFeed = `-- name: HandOverFeed :execrows
-
-INSERT INTO feeds (id, source_id, name, url, enabled, filter_include, filter_exclude, preset, preset_config, register_pending,
-                   next_refresh_at, last_attempt_at, last_success_at, last_outcome, last_error, last_counts,
-                   consecutive_failures, etag, last_modified, created_at, updated_at)
-VALUES ($1, $1, $2, $3, $4,
-        $5::text[], $6::text[], $7, $8, true,
-        $9, $10, $11, $12,
-        $13, $14, $15, $16, $17,
-        $18, $19)
-ON CONFLICT (id) DO NOTHING
-`
-
-type HandOverFeedParams struct {
-	ID                  pgtype.UUID
-	Name                string
-	Url                 string
-	Enabled             bool
-	FilterInclude       []string
-	FilterExclude       []string
-	Preset              *string
-	PresetConfig        []byte
-	NextRefreshAt       pgtype.Timestamptz
-	LastAttemptAt       pgtype.Timestamptz
-	LastSuccessAt       pgtype.Timestamptz
-	LastOutcome         *string
-	LastError           *string
-	LastCounts          []byte
-	ConsecutiveFailures int32
-	Etag                *string
-	LastModified        *string
-	CreatedAt           pgtype.Timestamptz
-	UpdatedAt           pgtype.Timestamptz
-}
-
-// The one-time handoff from Calendar (calendar-feeds handoff).
-// Adds a feed Calendar refreshed itself until now, with its configuration and
-// refresh state, under its Calendar source's id (its externalId too). It is
-// registered again before its first refresh, as the integration API asks
-// after a handover; Calendar keeps the owner's settings. A feed already
-// handed over stays as it is, so the handoff can run again.
-func (q *Queries) HandOverFeed(ctx context.Context, arg HandOverFeedParams) (int64, error) {
-	result, err := q.db.Exec(ctx, handOverFeed,
-		arg.ID,
-		arg.Name,
-		arg.Url,
-		arg.Enabled,
-		arg.FilterInclude,
-		arg.FilterExclude,
-		arg.Preset,
-		arg.PresetConfig,
-		arg.NextRefreshAt,
-		arg.LastAttemptAt,
-		arg.LastSuccessAt,
-		arg.LastOutcome,
-		arg.LastError,
-		arg.LastCounts,
-		arg.ConsecutiveFailures,
-		arg.Etag,
-		arg.LastModified,
-		arg.CreatedAt,
-		arg.UpdatedAt,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
 }
 
 const listDueFeeds = `-- name: ListDueFeeds :many

@@ -155,7 +155,8 @@ func TestGoogleSyncMigration(t *testing.T) {
 
 func TestGoogleTwoWayMigration(t *testing.T) {
 	ctx := context.Background()
-	pool := testdb.Open(t, "")
+	// Up to the last release with the google_* tables (000017 drops them).
+	pool := testdb.Open(t, "000016")
 	count := func(query string, args ...any) int {
 		t.Helper()
 		var n int

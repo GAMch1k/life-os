@@ -202,7 +202,7 @@ func (d *Dispatcher) handle(ctx context.Context, now, from time.Time, result *Re
 	if err != nil {
 		return from, false, fmt.Errorf("list occurrences: %w", err)
 	}
-	presets, err := d.presetSources(ctx)
+	private, err := d.privateLocationSources(ctx)
 	if err != nil {
 		return from, false, err
 	}
@@ -242,7 +242,7 @@ func (d *Dispatcher) handle(ctx context.Context, now, from time.Time, result *Re
 			continue
 		}
 		late := now.Sub(reminder.At) > d.lateAfter
-		showLocation := reminder.Event.Source.SourceId == nil || !presets[*reminder.Event.Source.SourceId]
+		showLocation := reminder.Event.Source.SourceId == nil || !private[*reminder.Event.Source.SourceId]
 		err := d.notifier.Send(ctx, notification(reminder, now, late, showLocation, d.owner))
 		if err != nil && !permanent(err) {
 			// Notifications is unreachable or failing: retry from here.
@@ -273,12 +273,13 @@ func (d *Dispatcher) handle(ctx context.Context, now, from time.Time, result *Re
 	return now, sent, errors.Join(errs...)
 }
 
-// presetSources are the sources Calendar configures itself (ZAW). Their
-// events' location is the owner's own street, so reminders leave it out.
-func (d *Dispatcher) presetSources(ctx context.Context) (map[googleuuid.UUID]bool, error) {
-	ids, err := d.queries.ListPresetSourceIDs(ctx)
+// privateLocationSources are the sources whose event locations are private
+// (privateLocation, such as the ZAW feed, whose events' location is the
+// owner's own street), so reminders leave them out.
+func (d *Dispatcher) privateLocationSources(ctx context.Context) (map[googleuuid.UUID]bool, error) {
+	ids, err := d.queries.ListPrivateLocationSourceIDs(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list preset sources: %w", err)
+		return nil, fmt.Errorf("list private-location sources: %w", err)
 	}
 	out := make(map[googleuuid.UUID]bool, len(ids))
 	for _, id := range ids {

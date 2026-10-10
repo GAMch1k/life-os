@@ -2,7 +2,8 @@
 // iCalendar (RFC 5545) rules. Rules run on wall-clock times (a time.Time in
 // UTC whose fields are the local date and clock), which a Zone turns into
 // instants, so an event keeps its local time across daylight saving changes.
-// Both the API's recurring events and recurring ICS events use it.
+// The API's recurring events and the integrations' recurring events (stored
+// as a series) use it.
 package recurrence
 
 import (

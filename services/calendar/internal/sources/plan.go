@@ -10,21 +10,14 @@ import (
 	store "github.com/GAMch1k/life-os/services/calendar/internal/repository/generated"
 )
 
-// Counts summarizes a reconciling refresh.
+// Counts summarizes a reconcile: the items received and what they changed.
 type Counts struct {
-	FeedEvents int `json:"feedEvents"`
-	Imported   int `json:"imported"`
-	Inserted   int `json:"inserted"`
-	Updated    int `json:"updated"`
-	Removed    int `json:"removed"`
-	Restored   int `json:"restored"`
-	Unchanged  int `json:"unchanged"`
-	Skipped    int `json:"skipped"`
-}
-
-// Changed reports whether the reconcile changed any stored event.
-func (c Counts) Changed() bool {
-	return c.Inserted+c.Updated+c.Removed+c.Restored > 0
+	Imported  int
+	Inserted  int
+	Updated   int
+	Removed   int
+	Restored  int
+	Unchanged int
 }
 
 // update rewrites a stored event from its item.
@@ -83,7 +76,7 @@ func FeedRules(now time.Time, owner *time.Location) Rules {
 	}
 }
 
-// SyncRules are a synced calendar's (Google), which is authoritative for
+// SyncRules are a synced calendar's (such as Google's), which is authoritative for
 // every event it sends, past ones included, back to windowStart, the start
 // of the time window its last full listing covered: an event that is no
 // longer there is removed unless it ended before windowStart (history the

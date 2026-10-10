@@ -4,16 +4,16 @@ Calendar owns events. **Integrations** are separate services that connect a prov
 
 This page explains that API for developers who build an integration. The contract is in `services/calendar/api/openapi.yaml` (paths under `/v1/integrations`). It was added in P11-06.
 
-## Why, and where we are
+## History
 
-Until P11-06, Google Calendar (`internal/google`) and ICS feeds (`internal/sources`, `internal/ics`) ran inside the Calendar service. The owner's rule is that integrations are replaceable services that talk to a domain service only through its API. The migration happens in steps:
+Until P11-06, Google Calendar and ICS feeds ran inside the Calendar service. The owner's rule is that integrations are replaceable services that talk to a domain service only through its API, and that a domain service contains no provider code. The move happened in steps, and is complete:
 
-| Ticket | What happens |
+| Ticket | What happened |
 | --- | --- |
-| P11-06 | Adds this API and migration 000014. Calendar's in-process Google and ICS adapters keep working as before. |
-| P11-07 | `google-calendar` takes over OAuth, inbound sync, and writing Life OS events and edits to Google ([google-calendar](google-calendar.md)). Calendar's in-process Google code goes; migration 000016 (`google_calendar_handover`) hands the Google sources over, and `google-calendar handoff` copies the connection. |
-| P11-08 | `calendar-feeds` takes over ICS feeds and the ZAW preset ([calendar-feeds](calendar-feeds.md)). The in-process ICS refresher goes; migration 000015 (`calendar_feeds_handover`) hands the feeds over, and `/v1/sources` no longer adds or refreshes feeds. |
-| P11-09 | Drops the legacy columns and tables (`google_*`, the feed columns of `calendar_sources`, the `ics`/`google` source kinds). |
+| P11-06 | Added this API and migration 000014, beside Calendar's in-process Google and ICS adapters (sources `in_process`, refused here with 409 `source_in_process`). |
+| P11-07 | `google-calendar` took over OAuth, inbound sync, and writing Life OS events and edits to Google ([google-calendar](google-calendar.md)). Calendar's in-process Google code went; migration 000016 (`google_calendar_handover`) handed the Google sources over, and a one-time `google-calendar handoff` copied the connection. |
+| P11-08 | `calendar-feeds` took over ICS feeds and the ZAW preset ([calendar-feeds](calendar-feeds.md)). The in-process ICS refresher went; migration 000015 (`calendar_feeds_handover`) handed the feeds over, a one-time `calendar-feeds handoff` copied them, and `/v1/sources` stopped adding or refreshing feeds. |
+| P11-09 | Migration 000017 (`calendar_contract`) dropped what only the adapters used (the `google_*` tables, the feed and Google columns of `calendar_sources`, `in_process`, the `ics`/`google` kinds), after checking nothing was left to hand over; the handoff commands, `inProcess`, `source_in_process`, and `managed_by_integration` went with it. Every source is an integration's now. See [Calendar: contract](calendar.md#contract-p11-09). |
 
 ## Concepts
 
@@ -24,7 +24,7 @@ Until P11-06, Google Calendar (`internal/google`) and ICS feeds (`internal/sourc
 - `provider`: a display label such as `Google`, `ZAW`, or `ICS`.
 - `readOnly`: whether the source accepts changes to its events.
 - `enabled`: the owner's switch. A disabled source refuses syncs and keeps its events.
-- `inProcess`: true while Calendar's own adapter still syncs the source. See [Handover](#handover-from-the-in-process-adapters).
+- `privateLocation`: whether its events' locations are private, such as the owner's own address in the ZAW waste feed. Reminder notifications leave them out.
 
 The owner also sets the source's name, default reminders, and default priority (see [Registering a source](#registering-a-source)).
 
@@ -57,15 +57,15 @@ X-Life-OS-Actor: system:google-calendar
  "defaultReminders": [{"kind": "relative", "minutesBefore": 10}]}
 ```
 
-`provider` and `readOnly` always take the values you send.
+`provider` and `readOnly` always take the values you send. `privateLocation` takes the value you send when you send it; leaving it out keeps the source's (a new source: `false`). calendar-feeds sends `true` for the ZAW feed.
 
-`name`, `defaultReminders`, and `defaultPriority` are also the owner's settings, so they follow the rule Calendar's presets use. Each one changes only when the integration sends a different value from the one it sent last time (Calendar keeps that in `integration_config`). Examples:
+`name`, `defaultReminders`, and `defaultPriority` are also the owner's settings. Each one changes only when the integration sends a different value from the one it sent last time (Calendar keeps that in `integration_config`). Examples:
 
 - **Renamed at the provider:** a Google calendar renamed in Google. The integration sends the new name, and the source is renamed.
 - **Renamed by the owner:** the owner renames the source in Life OS through `PATCH /v1/sources/{id}`. The integration keeps sending the old name, so the owner's name stays until the source is renamed at the provider.
 - **Field left out:** leaving out `defaultReminders` or `defaultPriority` says nothing about it, so the current value stays.
 
-`enabled` belongs to the owner alone. The owner changes these settings through `/v1/sources/{id}`, which also serves external sources. Changing their `url` or `filter` there, or refreshing them, returns 409 `managed_by_integration`.
+`enabled` belongs to the owner alone. The owner changes these settings through `/v1/sources/{id}`, which serves every source. The rest of a source's configuration (such as a feed's URL and filter) and its sync state are the integration's own, and are not part of a Calendar source.
 
 Other source endpoints:
 
@@ -73,33 +73,13 @@ Other source endpoints:
 - `DELETE .../sources/{externalId}` deletes the source and all its events. Deleting a source writes nothing to the change feed, so a deletion in Life OS never deletes events at the provider.
 - Feed URLs are not part of this API. A feed URL is the integration's own configuration, and the ZAW URL names a street, so it stays in `calendar-feeds`.
 
-### Handover from the in-process adapters
-
-Migration 000014 gave every existing source its identity:
-
-- **Google sources:** `google-calendar` / the Google calendar id, provider `Google`, read-only unless the account may edit the calendar.
-- **ICS feeds:** `calendar-feeds` / the source's own UUID, provider `ZAW` for the preset and `ICS` otherwise.
-
-These sources keep `kind` `ics` or `google` and have `inProcess: true`. Registering, syncing, or deleting them through this API returns 409 `source_in_process`, so two writers never sync the same source.
-
-The release that switches an in-process adapter off hands its sources over in one migration:
-
-```sql
-SET CONSTRAINTS events_record_change, event_exceptions_record_change IMMEDIATE;
-UPDATE calendar_sources SET in_process = false, kind = 'external' WHERE integration = 'google-calendar';
-UPDATE events SET source_kind = 'external'
-WHERE source_id IN (SELECT id FROM calendar_sources WHERE integration = 'google-calendar');
-```
-
-The first line is needed only if the same migration also alters `events` or `event_exceptions` (see [Notes for migrations](#notes-for-migrations)). After the handover, the integration registers the sources again with the same `externalId` and continues from there. calendar-feeds' handover is migration 000015, `calendar_feeds_handover`, followed once by `calendar-feeds handoff`, which copies each feed's URL, filter, preset, and refresh state from the legacy columns (not from `integration_config`, which holds only the owner's settings the integration last sent); see [Calendar feeds handoff](../operations/calendar-feeds-handoff.md).
-
 ## Syncing events
 
 `POST /v1/integrations/{integration}/sources/{externalId}/sync` writes one batch of a source's events in one transaction and returns what changed. Events are keyed by `externalUid`, and sending the same batch again changes nothing.
 
 | Mode | What the batch contains | How the rest is handled |
 | --- | --- | --- |
-| `snapshot` | every event of the source | A stored event the batch leaves out is cancelled and marked `removedFromSourceAt`. It is kept as history and restored if it comes back. This is today's ICS and Google reconcile. |
+| `snapshot` | every event of the source | A stored event the batch leaves out is cancelled and marked `removedFromSourceAt`. It is kept as history and restored if it comes back. calendar-feeds and google-calendar's full listings use it. |
 | `delta` | new and changed events in `items`, and the uids of events the source no longer has in `deleted` | A deleted uid is handled like an event a snapshot leaves out. Unknown uids are ignored. Events the batch does not name stay as they are. |
 
 The response looks like this:
@@ -130,11 +110,11 @@ The response looks like this:
 }
 ```
 
-Items are validated like events created in Life OS. The item covers everything today's Google derivation and ICS import write:
+Items are validated like events created in Life OS. The item covers everything the Google mapping and the ICS import write:
 
 - **Time:** a timed event has `startAt` and `endAt`, and optionally `timeZone`. An all-day event has `startDate` and `endDate` (inclusive) and no time zone.
 - **Status:** `cancelled` keeps the event as cancelled history, as a feed's `STATUS:CANCELLED` does.
-- **Series:** `recurrence` is Calendar's model. A rule outside the model is sent as one event per occurrence, which is what Google's expansion does today. `exceptions` holds the series' changed and skipped occurrences:
+- **Series:** `recurrence` is Calendar's model. A rule outside the model is sent as one event per occurrence, which is what google-calendar does for such a Google rule. `exceptions` holds the series' changed and skipped occurrences:
   - `recurrenceId` is the occurrence's original start: a UTC instant for a timed series, a date for an all-day one. Other offsets are accepted and converted.
   - `changes` uses the stored form of `event_exceptions`. A `null` description or location clears it for that occurrence.
   - An exception must skip the occurrence or change something.
@@ -150,11 +130,11 @@ Items are validated like events created in Life OS. The item covers everything t
 ### Options
 
 - **`window`** says which stored events the batch speaks for:
-  - `{"start": "<instant>"}`: the source lists its events from that instant on, like Google's time window. A stored event that ended before `start` is history the source no longer lists, and it stays as it is. Today's Google sync uses this rule.
-  - `{"upcomingOnly": true}`: the source lists only events still to come, as many ICS feeds do. A stored event that already started is neither removed nor rewritten, unless the batch moves it into the future. Today's ICS refresh uses this rule.
+  - `{"start": "<instant>"}`: the source lists its events from that instant on, like Google's time window. A stored event that ended before `start` is history the source no longer lists, and it stays as it is. google-calendar's sync uses this rule.
+  - `{"upcomingOnly": true}`: the source lists only events still to come, as many ICS feeds do. A stored event that already started is neither removed nor rewritten, unless the batch moves it into the future. calendar-feeds' refresh uses this rule.
   - Without `window`, the batch speaks for every event of the source.
   - The rules apply to both modes. In a delta, they apply to `deleted` and to rewrites.
-- **`emptyGuard`** (snapshot only): a snapshot with no items is refused with 409 `empty_snapshot` while the source still has upcoming active events. Nothing changes. Today's ICS refresh treats an empty feed this way. Set the flag when the provider returned nothing at all.
+- **`emptyGuard`** (snapshot only): a snapshot with no items is refused with 409 `empty_snapshot` while the source still has upcoming active events. Nothing changes. calendar-feeds sends it for a feed with no events at all. Set the flag when the provider returned nothing at all.
 - **`feedCursor`**: the change-feed cursor the integration has handled. The sync is refused with 409 `unhandled_changes` while the feed still has changes to this source's events after that cursor that someone else made, so a sync never overwrites an edit made in Life OS that has not reached the provider yet. See [Two-way calendar](#two-way-calendar-google-calendar).
 
 ### Errors
@@ -167,13 +147,12 @@ Items are validated like events created in Life OS. The item covers everything t
 | 400 | `duplicate_uid` | A uid twice in the batch, or both in `items` and `deleted` |
 | 404 | `not_found` | The integration has no such source |
 | 409 | `source_disabled` | The owner disabled the source |
-| 409 | `source_in_process` | Calendar's own adapter still syncs it |
 | 409 | `empty_snapshot` | See `emptyGuard` |
 | 409 | `unhandled_changes` | See `feedCursor` |
 
 A batch holds at most 10,000 items, and a request body at most 16 MiB. A large delta can be sent in several batches. A snapshot must fit in one request.
 
-Calendar records nothing in Activity for a sync. The integration records its own outcome, as the in-process adapters do today: `calendar.source.refreshed`, `calendar.source.refresh_failed`, and `calendar.source.removed`, with subject `calendar_source` and the source's Calendar id.
+Calendar records nothing in Activity for a sync. The integration records its own outcome: `calendar.source.refreshed`, `calendar.source.refresh_failed`, and `calendar.source.removed`, with subject `calendar_source` and the source's Calendar id.
 
 ## Change feed
 
@@ -212,7 +191,7 @@ The events of read-only sources are not in the feed.
 - **`source`** tells an integration where its event belongs, including for a tombstone. It is null for a Life OS event.
 - **`actors`** lists everyone who made the changes the entry stands for, and `actor` is the latest of them. Values are as in `X-Life-OS-Actor`.
   - Skip an entry as your own write only when `actors` is just `["system:<you>"]`.
-  - The integration's own syncs of writable sources and its own writes through the events API produce such entries (and so did Calendar's in-process Google reverse sync before P11-07).
+  - The integration's own syncs of writable sources and its own writes through the events API produce such entries.
   - Snapshot entries have no actor.
 - **Collapsing:** entries come in commit order, and several changes of one event within a page become one entry. With `limit=1`, every change is its own entry.
 - **`scope`:**
@@ -225,9 +204,9 @@ Entries are kept for `CALENDAR_CHANGE_RETENTION_DAYS` (default 30), and a small 
 
 ### How the journal works
 
-The feed reads the `calendar_event_changes` journal. Constraint triggers on `events` and `event_exceptions` write it in the same transaction as each change, so no code path can change a followed event without an entry: not the API, not the in-process Google reverse sync, not an integration's sync.
+The feed reads the `calendar_event_changes` journal. Constraint triggers on `events` and `event_exceptions` write it in the same transaction as each change, so no code path can change a followed event without an entry: not the API, not an integration's sync, not a migration.
 
-- **Actor:** the writing transaction names the actor with `SELECT set_config('calendar.actor', $1, true)` (the `SetChangeActor` query). API transactions use the request's actor and the in-process Google sync uses `system:google-calendar`. A write that names none is recorded as `system:calendar`.
+- **Actor:** the writing transaction names the actor with `SELECT set_config('calendar.actor', $1, true)` (the `SetChangeActor` query). API transactions use the request's actor (an integration's sync: `system:<integration>`; the handover migration 000016 named `system:google-calendar`). A write that names none is recorded as `system:calendar`.
 - **Commit order:** the triggers are deferred to commit time and append while holding one advisory lock until the transaction ends. Entries are therefore numbered in commit order, and a reader that moves past a number never skips an entry still to come.
 - **No-op updates:** an update that changes nothing but `updated_at` writes no entry.
 - **Deleted sources:** deleting a source deletes its events without entries.
@@ -243,32 +222,31 @@ The feed reads the `calendar_event_changes` journal. Constraint triggers on `eve
    ```
 
 2. On every refresh: download the feed, parse it, apply the type filter (ZAW: the four bin types), and send a snapshot with `window: {"upcomingOnly": true}`. Add `emptyGuard: true` when the feed had no `VEVENT` at all.
-3. Record the outcome (counts, failures, backoff) in Activity and in the integration's own state, as the refresher does today.
+3. Record the outcome (counts, failures, backoff) in Activity and in the integration's own state.
 
 ### Two-way calendar (google-calendar)
 
 1. Register each Google calendar the owner syncs. Set `readOnly` to `true` unless the account's access role is owner or writer.
-2. **Inbound:** derive items from Google's events as `internal/google/mapping.go` does (google-calendar sends deltas of what changed since Calendar was last told, with `window.start`). Send a snapshot with `window: {"start": <the full listing's time window>}`, or deltas for incremental syncs.
+2. **Inbound:** derive items from Google's events (google-calendar's `internal/google/mapping.go`; it sends deltas of what changed since Calendar was last told, with `window.start`). Send a snapshot with `window: {"start": <the full listing's time window>}`, or deltas for incremental syncs.
 3. **Outbound:** follow the change feed.
-   - **Life OS events** (`source: null`): write them to the "Life OS" calendar. This replaces `google_exports`.
+   - **Life OS events** (`source: null`): write them to the "Life OS" calendar.
    - **Events of your writable calendars:** write the owner's edits to Google with the stored etag. Skip entries whose `actors` is only you.
 4. **Recommended loop:** drain the feed and push what it holds, then sync with `feedCursor` set to the cursor you have handled. A 409 `unhandled_changes` means an edit arrived in between: drain again, then retry.
 5. **Splits:** a series split in Life OS (This and following) creates its new series in the same source, with `externalUid` `lifeos:<uuid>`. Create it in Google. Then sync the item with Google's id as `externalUid` and the placeholder as `previousExternalUid`. Calendar re-keys the event in place and keeps its id.
-6. **Conflicts:** if an edit conflicts with a newer version in Google, keep Google's version and sync it. It overwrites the Life OS edit, which is today's `google_conflict` behaviour.
+6. **Conflicts:** if an edit conflicts with a newer version in Google, keep Google's version and sync it. It overwrites the Life OS edit.
 
 ### Recovering
 
 - **410 `cursor_expired`:** read the feed without a cursor and reconcile against the snapshot.
-- **409 `source_in_process`:** wait for the handover release.
 
-## Notes for P11-07 and P11-08
+## Notes for integrations
 
-These behaviours of today's in-process code are what the integrations reproduce:
+Behaviours the existing integrations keep, and a new one should consider:
 
-- **Google source names and reminders:** a Google source's name follows the calendar's summary at every sync, and its default reminders follow the calendar's defaults whenever a listing carries them. The registration rule above gives the same result.
-- **Google's own writes:** Google echoes Calendar's own writes back with their etag, and the sync ignores them (`withoutOwnWrites`). An integration does the same with its own store.
-- **ICS feeds:** expanded occurrences are keyed `<UID>#<RECURRENCE-ID>`. The ZAW preset strips the location suffix from titles before filtering, and its default reminder is 19:00 the day before.
-- **Editability:** for parity with `Target` in `internal/google/twoway.go`, set `readOnlyReason` on the occurrences of rules Calendar cannot hold (`<id>_<date>`) and on lone instances.
+- **Source names and reminders:** a Google source's name follows the calendar's summary at every sync, and its default reminders follow the calendar's defaults whenever a listing carries them. The registration rule above keeps the owner's own edits.
+- **Your own writes:** a provider may echo the integration's own writes back (Google does, with their etag). Ignore them with your own store, as google-calendar does.
+- **ICS feeds:** expanded occurrences are keyed `<UID>#<RECURRENCE-ID>`. The ZAW preset strips the location suffix from titles before filtering, its default reminder is 19:00 the day before, and its source has `privateLocation`.
+- **Editability:** set `readOnlyReason` on the events Calendar cannot hold as a series and still let you write back, such as the occurrences of a Google rule outside Calendar's model (`<id>_<date>`) and lone instances.
 
 ## Notes for migrations
 

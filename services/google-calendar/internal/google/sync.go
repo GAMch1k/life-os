@@ -881,8 +881,6 @@ func syncErrorMessage(err error) string {
 		return err.Error()
 	case calendar.HasCode(err, http.StatusConflict, "source_disabled"):
 		return "the calendar is turned off in Life OS's Calendar sources; turn it on there to sync it again"
-	case calendar.HasCode(err, http.StatusConflict, "source_in_process"):
-		return "Calendar still syncs this calendar itself; run the Google Calendar handoff (docs/operations/google-calendar.md)"
 	case calendar.IsUnavailable(err):
 		return "Calendar could not be reached; the sync is retried automatically"
 	case errors.As(err, &calendarErr):

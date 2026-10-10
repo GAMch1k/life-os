@@ -96,7 +96,7 @@ func TestZAWPresetFeed(t *testing.T) {
 	}
 	source := h.source(id)
 	if refreshed.SourceId == nil || source.ID != refreshed.SourceId.String() || source.Name != "ZAW" || source.Provider != feeds.ProviderZAW || !source.ReadOnly ||
-		!sameJSON(t, source.DefaultReminders, []byte(eveningBefore)) || source.DefaultPriority != "medium" {
+		!source.PrivateLocation || !sameJSON(t, source.DefaultReminders, []byte(eveningBefore)) || source.DefaultPriority != "medium" {
 		t.Fatalf("registered = %+v", source.Source)
 	}
 	perType := map[string]int{}

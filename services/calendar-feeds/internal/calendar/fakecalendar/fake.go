@@ -100,16 +100,12 @@ func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPut:
 		f.register(w, r, externalID)
 	case r.Method == http.MethodDelete:
-		source, found := f.sources[externalID]
-		switch {
-		case !found:
+		if _, found := f.sources[externalID]; !found {
 			fail(w, http.StatusNotFound, "not_found", "the integration has no source with this externalId")
-		case source.InProcess:
-			fail(w, http.StatusConflict, calendar.CodeSourceInProcess, "in process")
-		default:
-			delete(f.sources, externalID)
-			w.WriteHeader(http.StatusNoContent)
+			return
 		}
+		delete(f.sources, externalID)
+		w.WriteHeader(http.StatusNoContent)
 	default:
 		fail(w, http.StatusMethodNotAllowed, "method_not_allowed", r.Method)
 	}
@@ -168,11 +164,11 @@ func (f *Fake) register(w http.ResponseWriter, r *http.Request, externalID strin
 	if !found {
 		source = f.newSource(externalID)
 		status = http.StatusCreated
-	} else if source.InProcess {
-		fail(w, http.StatusConflict, calendar.CodeSourceInProcess, "Calendar's own adapter still syncs this source")
-		return
 	}
 	source.Provider, source.ReadOnly = body.Provider, body.ReadOnly
+	if body.PrivateLocation != nil {
+		source.PrivateLocation = *body.PrivateLocation
+	}
 	sent := map[string]json.RawMessage{"name": jsonString(body.Name)}
 	if value, ok := present["defaultReminders"]; ok {
 		sent["defaultReminders"] = value
@@ -212,10 +208,6 @@ func (f *Fake) sync(w http.ResponseWriter, r *http.Request, externalID string) {
 	source, found := f.sources[externalID]
 	if !found {
 		fail(w, http.StatusNotFound, "not_found", "the integration has no source with this externalId")
-		return
-	}
-	if source.InProcess {
-		fail(w, http.StatusConflict, calendar.CodeSourceInProcess, "Calendar's own adapter still syncs this source")
 		return
 	}
 	if !source.Enabled {
@@ -281,23 +273,15 @@ func same(a, b calendar.Event) bool {
 	return string(left) == string(right)
 }
 
-// AddInProcess adds a source Calendar's in-process adapter still syncs (a
-// feed from before the integration service), as migration 000014 left it.
-func (f *Fake) AddInProcess(externalID, name, provider string) calendar.Source {
+// Add adds a source of this integration that the service may not know,
+// such as one registered before its database was replaced.
+func (f *Fake) Add(externalID, name, provider string) calendar.Source {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	source := f.newSource(externalID)
-	source.ID, source.Name, source.Provider, source.InProcess = externalID, name, provider, true
+	source.Name, source.Provider = name, provider
 	source.Config["name"] = jsonString(name)
 	return source.Source
-}
-
-// HandOver ends in-process syncing of the source (Calendar's handover
-// migration).
-func (f *Fake) HandOver(externalID string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.sources[externalID].InProcess = false
 }
 
 // Update changes a source as the owner does through /v1/sources.

@@ -75,12 +75,6 @@ func ServiceMigrations() string {
 	return filepath.Join(here(), "..", "..", "db", "migrations")
 }
 
-// CalendarMigrations is Calendar's migrations directory, for the handoff test
-// that builds a legacy calendar_db schema.
-func CalendarMigrations() string {
-	return filepath.Join(here(), "..", "..", "..", "calendar", "db", "migrations")
-}
-
 // Migrations lists the migration files of one direction ("up" or "down") in
 // dir, up in order and down in reverse order.
 func Migrations(t testing.TB, dir, direction string) []string {

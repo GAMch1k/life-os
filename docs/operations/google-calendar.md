@@ -1,6 +1,6 @@
 # Google Calendar setup
 
-Life OS connects to the owner's one Google account through an OAuth client in the owner's own Google Cloud project. The client credentials and the token key live only in the server's ignored `.env`; the **google-calendar** integration service stores the refresh token encrypted in its own database (`google_calendar_db`). How it works is described in [Google Calendar integration](../services/google-calendar.md). Until P11-07 Calendar did this itself; upgrading from that release needs the one-time [handoff](#handoff-from-calendar-p11-07).
+Life OS connects to the owner's one Google account through an OAuth client in the owner's own Google Cloud project. The client credentials and the token key live only in the server's ignored `.env`; the **google-calendar** integration service stores the refresh token encrypted in its own database (`google_calendar_db`). How it works is described in [Google Calendar integration](../services/google-calendar.md). Until P11-07 Calendar did this itself; the P11-07 release moved the connection over once (see [History](#history-the-handoff-from-calendar-p11-07)).
 
 Once connected, the calendars you tick sync both ways: their events come into Life OS every two minutes, and editing them in Life OS changes them in Google a few seconds later. Events you create in Life OS go to a dedicated "Life OS" calendar that Life OS creates in your Google account.
 
@@ -112,7 +112,6 @@ The sync interval is `LIFE_OS_CALENDAR_GOOGLE_SYNC_SECONDS` in `.env` (default 1
 | Refresh list: "Google could not be reached" | google-calendar has no outbound https or Google is down. The connection is unchanged; try later. |
 | Dialog or Status: "Calendar's changes could not be read" / "Sync failed: Calendar could not be reached" | The integration cannot reach Calendar. Nothing is lost: Life OS events and edits wait and go to Google once Calendar answers; check `docker compose ps calendar`. |
 | Dialog: "N edits made here could not be written to Google yet" | Google or the network failed; the edits are kept and retried automatically, and the calendar does not sync from Google until they are written. |
-| Sync failed: "Calendar still syncs this calendar itself; run the Google Calendar handoff" | Calendar's migration 000016 has not run (the handover). Run the deploy steps in [Handoff from Calendar](#handoff-from-calendar-p11-07). |
 | Dialog: "Sync failed: Google is unavailable …" | Google or the network failed. Nothing to do: the events from the last good sync stay, and the calendar is retried after 2, 4, 8 … up to 60 minutes. Status warns after three failures in a row. |
 | Dialog: "Sync failed: Google no longer has this calendar …" | The calendar was deleted or unshared in Google. **Refresh list**: a calendar Google no longer lists is dropped with its events. |
 | A Google event is missing in Life OS | Is its calendar ticked? Events that ended more than a year before the calendar's first sync, and work location markers, are not imported. A sync failure shows in the dialog and on Status. |
@@ -126,24 +125,8 @@ The sync interval is `LIFE_OS_CALENDAR_GOOGLE_SYNC_SECONDS` in `.env` (default 1
 
 **Removing Google:** Disconnect in the dialog (Life OS revokes its access at Google and deletes the stored token and choices), then remove the `LIFE_OS_GOOGLE_*` lines if you like. Disconnecting after the settings are gone only forgets the connection; remove Life OS at [myaccount.google.com/connections](https://myaccount.google.com/connections) as well.
 
-## Handoff from Calendar (P11-07)
+## History: the handoff from Calendar (P11-07)
 
-Until P11-07 Calendar kept the Google connection in `calendar_db`. The release that brings the google-calendar service moves it over once, so **you do not reconnect Google**, no event is duplicated in Life OS or created again in Google, and your own reminders and priorities stay. Calendar keeps its legacy `google_*` tables, unread, until P11-09.
+Until P11-07 Calendar kept the Google connection in `calendar_db`. The P11-07 release moved it over once, so the owner did not reconnect Google: Calendar's migration 000016 handed its Google sources over to the integration (kind `external`), and a one-time `google-calendar handoff` command (the `google-calendar-handoff` compose service, reading `calendar_db` read-only) copied the connection with its sealed refresh token, the calendar list, the raw Google events, and the export links into `google_calendar_db`.
 
-Prerequisites: `.env` has `LIFE_OS_GOOGLE_CALENDAR_DB_PASSWORD` (new) and still the same `LIFE_OS_GOOGLE_CLIENT_ID`, `LIFE_OS_GOOGLE_CLIENT_SECRET`, and **the same `LIFE_OS_GOOGLE_TOKEN_KEY`** (the handed-over token is sealed with it). Then, in this order:
-
-1. **Stop Calendar**, so nothing changes while the connection moves: `docker compose stop calendar` (the gateway answers Calendar requests with an error meanwhile).
-2. **Back up** `calendar_db` (see [deployment](deployment.md)).
-3. **Provision and migrate:** recreate PostgreSQL if needed and `make db-provision` once (it adds `google_calendar_db`), then `docker compose up --no-deps calendar-migrate google-calendar-migrate` (Calendar's 000016 hands its Google sources over to the integration: kind `external`, out of process; the integration gets its tables).
-4. **Hand off:**
-
-   ```sh
-   docker compose build google-calendar-handoff
-   docker compose --profile handoff run --rm google-calendar-handoff
-   ```
-
-   The `google-calendar-handoff` service is the integration's image running `handoff` with `DATABASE_URL` (google_calendar_db) and `HANDOFF_CALENDAR_DATABASE_URL` (calendar_db, as `calendar_user`) from `.env`; it waits for `google-calendar-migrate` and does not start Calendar. (By hand: `docker compose run --rm --no-deps -e HANDOFF_CALENDAR_DATABASE_URL=postgres://calendar_user:…@postgres:5432/calendar_db?sslmode=disable google-calendar handoff`.) It reads `calendar_db` in a read-only transaction and prints counts only, for example `connections 1 found, 1 copied`, `calendars`, `google events`, `exports`, `event uids`, and `sources … linked here`; never a token. Running it again copies nothing twice. It refuses to run before 000016 or when `google_calendar_db` already holds another connection.
-5. **Start** Calendar, the integration, and the rest: `docker compose up --detach --build calendar google-calendar dashboard gateway`.
-6. **Verify:** the Google dialog says "Connected as …" with the same calendars ticked; within two minutes each shows "Synced …" (Event Log: "Source refreshed: Owner …", by Google Calendar sync); Status shows the Google part healthy and "Google Calendar" ready; an event of your calendar keeps its reminders; creating a Life OS event puts it in the "Life OS" calendar on your phone within seconds; nothing was duplicated on the phone. `docker compose logs google-calendar` shows no "not configured" line.
-
-If the handoff fails: Calendar is stopped and unchanged apart from 000016; fix the cause (the message says which) and run it again. To go back, start the previous release's Calendar after `migrate down 1` on calendar_db (000016's down gives the sources back to the in-process sync).
+P11-09 removed that command, its compose service, and `HANDOFF_CALENDAR_DATABASE_URL`, after Calendar's migration 000017 dropped the legacy `google_*` tables: the integration never reads Calendar's database. A stack still on the release before P11-07 has to go through the P11-07 and P11-08 releases (and their handoffs) before this one; migration 000017 refuses to run, changing nothing, while Calendar still syncs a source itself.
