@@ -120,7 +120,7 @@ type Querier interface {
 	ListSourceSummaries(ctx context.Context) ([]ListSourceSummariesRow, error)
 	// The feeds (ICS sources) and the sources integrations sync (external).
 	// Legacy sources of Calendar's former in-process Google sync (kind google,
-	// handed over to the google-calendar integration by migration 000015) are
+	// handed over to the google-calendar integration by migration 000016) are
 	// not listed.
 	ListSources(ctx context.Context) ([]CalendarSource, error)
 	// A source added through the API for the preset's feed URL: the preset takes

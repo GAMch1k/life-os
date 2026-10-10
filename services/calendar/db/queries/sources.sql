@@ -15,7 +15,7 @@ SELECT * FROM calendar_sources WHERE id = $1;
 -- name: ListSources :many
 -- The feeds (ICS sources) and the sources integrations sync (external).
 -- Legacy sources of Calendar's former in-process Google sync (kind google,
--- handed over to the google-calendar integration by migration 000015) are
+-- handed over to the google-calendar integration by migration 000016) are
 -- not listed.
 SELECT * FROM calendar_sources WHERE kind IN ('ics', 'external') ORDER BY created_at, id;
 

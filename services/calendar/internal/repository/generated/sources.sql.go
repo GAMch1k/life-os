@@ -691,7 +691,7 @@ SELECT id, kind, name, url, enabled, filter_include, filter_exclude, default_rem
 
 // The feeds (ICS sources) and the sources integrations sync (external).
 // Legacy sources of Calendar's former in-process Google sync (kind google,
-// handed over to the google-calendar integration by migration 000015) are
+// handed over to the google-calendar integration by migration 000016) are
 // not listed.
 func (q *Queries) ListSources(ctx context.Context) ([]CalendarSource, error) {
 	rows, err := q.db.Query(ctx, listSources)

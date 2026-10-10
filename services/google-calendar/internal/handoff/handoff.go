@@ -29,8 +29,8 @@ type Counts struct {
 type Pair struct{ Read, Copied int }
 
 // ErrNotHandedOver means Calendar still syncs Google itself: its handover
-// migration (000015) has not run.
-var ErrNotHandedOver = errors.New("Calendar still syncs Google itself (sources in process): run Calendar's migrations (000015) before the handoff")
+// migration (000016) has not run.
+var ErrNotHandedOver = errors.New("Calendar still syncs Google itself (sources in process): run Calendar's migrations (000016) before the handoff")
 
 // ErrOtherConnection means this service already has another connection.
 var ErrOtherConnection = errors.New("google_calendar_db already holds another Google connection; the handoff copies nothing over it")
@@ -68,7 +68,7 @@ func Run(ctx context.Context, legacy, target *pgxpool.Pool) (Counts, error) {
 	defer func() { _ = source.Rollback(context.WithoutCancel(ctx)) }()
 	var inProcess int
 	if err := source.QueryRow(ctx, `SELECT count(*) FROM calendar_sources WHERE integration = 'google-calendar' AND in_process`).Scan(&inProcess); err != nil {
-		return counts, fmt.Errorf("read Calendar's sources (is Calendar migrated to 000015?): %w", err)
+		return counts, fmt.Errorf("read Calendar's sources (is Calendar migrated to 000016?): %w", err)
 	}
 	if inProcess > 0 {
 		return counts, ErrNotHandedOver
@@ -101,7 +101,7 @@ func Run(ctx context.Context, legacy, target *pgxpool.Pool) (Counts, error) {
 		},
 		{
 			// Each calendar with its source in Calendar (handed over by
-			// 000015), due when it was (at once after the downtime); its
+			// 000016), due when it was (at once after the downtime); its
 			// lease does not carry over.
 			name: "google_calendars",
 			read: `SELECT calendar.id, calendar.connection_id, calendar.google_calendar_id, calendar.summary, calendar.color, calendar.access_role,

@@ -133,7 +133,7 @@ func managedByIntegration(name string) error {
 
 // listedSource reports whether row is served under /v1/sources: a feed or
 // a source an integration syncs, not a legacy Google source of Calendar's
-// former in-process sync (kind google; migration 000015 hands them over to
+// former in-process sync (kind google; migration 000016 hands them over to
 // the google-calendar integration).
 func listedSource(row store.CalendarSource) bool {
 	return row.Kind == string(generated.CalendarSourceKindIcs) || row.Kind == string(generated.CalendarSourceKindExternal)

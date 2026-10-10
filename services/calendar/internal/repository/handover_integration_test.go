@@ -9,7 +9,7 @@ import (
 	"github.com/GAMch1k/life-os/services/calendar/internal/testdb"
 )
 
-// The Google Calendar handover (000015) gives the sources Calendar's
+// The Google Calendar handover (000016) gives the sources Calendar's
 // in-process Google sync kept to the google-calendar integration: not in
 // process, kind external, their events too, keeping every event with its
 // uid and the owner's reminders and priority. Feeds and Life OS events stay
@@ -186,10 +186,10 @@ func TestGoogleCalendarHandoverMigration(t *testing.T) {
 func handoverMigration(t *testing.T) string {
 	t.Helper()
 	for _, path := range testdb.Migrations(t) {
-		if filepath.Base(path) == "000015_google_calendar_handover.up.sql" {
+		if filepath.Base(path) == "000016_google_calendar_handover.up.sql" {
 			return path
 		}
 	}
-	t.Fatal("000015_google_calendar_handover.up.sql not found")
+	t.Fatal("000016_google_calendar_handover.up.sql not found")
 	return ""
 }
