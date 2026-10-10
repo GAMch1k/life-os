@@ -50,15 +50,6 @@ func ownPriority(item Item, defaultPriority string) *string {
 	return nil
 }
 
-// FeedItems wraps feed events as items.
-func FeedItems(items []ics.Item) []Item {
-	out := make([]Item, 0, len(items))
-	for _, item := range items {
-		out = append(out, Item{Item: item})
-	}
-	return out
-}
-
 // Recurrence is a series' rule in Calendar's model (the API's Recurrence):
 // every Interval days, weeks, months, or years from the start, a weekly rule
 // on each of ByWeekday (MO to SU, in week order), ending after Count

@@ -104,12 +104,18 @@ export function nextUpcomingEvent(
   });
 }
 
-/** The name of the feed an imported event comes from; unset for yours. */
+/** The name of the calendar an imported event comes from; unset for yours. */
 export function eventSourceName(
   event: CalendarEvent,
   sources: CalendarSource[] | undefined,
 ) {
   if (event.source.kind === "manual") return undefined;
+  if (event.source.kind === "external") {
+    // An integration's source: its name, else its provider's label.
+    return (
+      event.source.name?.trim() || event.source.provider?.trim() || undefined
+    );
+  }
   const source = sources?.find((entry) => entry.id === event.source.sourceId);
   if (source) return source.name;
   return event.source.kind === "google" ? "Google Calendar" : "ICS feed";
@@ -268,12 +274,13 @@ export async function getHomeAttention(): Promise<HomeAttention> {
       })
       .catch(() => ({ data: undefined })),
   ]);
-  // An imported event is labelled with its source's name.
+  // An imported event is labelled with its source's name, which an
+  // integration's event carries itself.
   const next = events.data
     ? nextUpcomingEvent(events.data.items, now, timeZone)
     : undefined;
   const sources =
-    next && next.source.kind !== "manual"
+    next && next.source.kind !== "manual" && next.source.kind !== "external"
       ? await unavailableOnFailure(calendarClient.GET("/v1/sources"))
       : undefined;
   return toHomeAttention(

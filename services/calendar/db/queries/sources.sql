@@ -1,14 +1,3 @@
--- name: CreateSource :one
--- A null default_priority is medium. A feed belongs to the calendar-feeds
--- integration under its own id (see the integration API).
-WITH new AS (SELECT gen_random_uuid() AS id)
-INSERT INTO calendar_sources (id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, default_priority,
-                              integration, external_id, provider)
-VALUES ((SELECT id FROM new), sqlc.arg(kind), sqlc.arg(name), sqlc.arg(url)::text, sqlc.arg(enabled), sqlc.arg(filter_include), sqlc.arg(filter_exclude),
-        sqlc.narg(default_reminders), sqlc.arg(next_refresh_at), COALESCE(sqlc.narg(default_priority)::text, 'medium'),
-        'calendar-feeds', (SELECT id FROM new)::text, 'ICS')
-RETURNING *;
-
 -- name: GetSource :one
 SELECT * FROM calendar_sources WHERE id = $1;
 
@@ -19,17 +8,13 @@ SELECT * FROM calendar_sources WHERE id = $1;
 SELECT * FROM calendar_sources WHERE kind IN ('ics', 'external') ORDER BY created_at, id;
 
 -- name: UpdateSource :one
--- Writes the whole merged configuration, guarded by the updated_at it was
--- read with. reset_validators drops the conditional-request validators (a
--- changed URL or filter needs a full download); next_refresh_at, when given,
--- reschedules the source; a null default_priority keeps the source's.
+-- Writes the owner's settings of a source (name, enabled, default
+-- reminders, default priority), guarded by the updated_at they were read
+-- with; a null default_priority keeps the source's. A feed's URL and filter
+-- belong to the calendar-feeds integration.
 UPDATE calendar_sources
-SET name = sqlc.arg(name), url = sqlc.narg(url), enabled = sqlc.arg(enabled),
-    filter_include = sqlc.arg(filter_include)::text[], filter_exclude = sqlc.arg(filter_exclude)::text[],
+SET name = sqlc.arg(name), enabled = sqlc.arg(enabled),
     default_reminders = sqlc.narg(default_reminders), default_priority = COALESCE(sqlc.narg(default_priority)::text, default_priority),
-    etag = CASE WHEN sqlc.arg(reset_validators)::boolean THEN NULL ELSE etag END,
-    last_modified = CASE WHEN sqlc.arg(reset_validators)::boolean THEN NULL ELSE last_modified END,
-    next_refresh_at = COALESCE(sqlc.narg(next_refresh_at)::timestamptz, next_refresh_at),
     updated_at = now()
 WHERE id = sqlc.arg(id) AND updated_at = sqlc.arg(expected_updated_at)
 RETURNING *;
@@ -40,103 +25,15 @@ RETURNING *;
 -- syncing.
 DELETE FROM calendar_sources WHERE id = $1 AND kind IN ('ics', 'external');
 
--- name: ListDueSources :many
--- Enabled feeds whose next refresh is due and that nobody is refreshing
--- (only those Calendar refreshes itself, not an integration's).
-SELECT id FROM calendar_sources
-WHERE enabled
-  AND kind = 'ics'
-  AND in_process
-  AND next_refresh_at <= sqlc.arg(now)::timestamptz
-  AND (refreshing_until IS NULL OR refreshing_until <= sqlc.arg(now)::timestamptz)
-ORDER BY next_refresh_at, id;
-
--- name: ClaimSourceRefresh :one
--- Takes the source's refresh lease: one refresh per source at a time, across
--- processes too. A lease left by a crashed refresh expires and is taken over.
-UPDATE calendar_sources
-SET refreshing_until = sqlc.arg(lease_until)::timestamptz, last_attempt_at = sqlc.arg(now)::timestamptz
-WHERE id = sqlc.arg(id)
-  AND enabled
-  AND kind = 'ics'
-  AND in_process
-  AND (refreshing_until IS NULL OR refreshing_until <= sqlc.arg(now)::timestamptz)
-RETURNING *;
-
--- name: ReleaseSourceRefresh :exec
--- Gives the lease up after a refresh that could not record an outcome.
-UPDATE calendar_sources SET refreshing_until = NULL WHERE id = $1;
-
--- name: LockSource :one
-SELECT * FROM calendar_sources WHERE id = $1 FOR UPDATE;
-
--- name: FinishSourceRefresh :one
--- Records a refresh outcome (the whole new state, computed by the caller
--- under LockSource) and releases the lease.
-UPDATE calendar_sources
-SET refreshing_until = NULL,
-    last_outcome = sqlc.narg(last_outcome), last_error = sqlc.narg(last_error), last_counts = sqlc.narg(last_counts),
-    last_success_at = sqlc.narg(last_success_at), consecutive_failures = sqlc.arg(consecutive_failures),
-    etag = sqlc.narg(etag), last_modified = sqlc.narg(last_modified), next_refresh_at = sqlc.narg(next_refresh_at)
-WHERE id = sqlc.arg(id)
-RETURNING *;
-
 -- name: ListSourceSummaries :many
 -- What an imported event shows of its source: its name, default reminders,
 -- default priority, integration, provider label, and whether it accepts
 -- changes.
 SELECT id, name, default_reminders, default_priority, integration, provider, read_only FROM calendar_sources ORDER BY id;
 
--- Preset sources are configured from Calendar's environment at startup
--- (EnsurePreset), inside one transaction holding LockPreset.
-
--- name: GetPresetSource :one
-SELECT * FROM calendar_sources WHERE preset = sqlc.arg(preset)::text;
-
--- name: LockPreset :exec
--- Serializes ensuring a preset across processes until the transaction ends.
-SELECT pg_advisory_xact_lock(hashtext('calendar_sources.preset:' || sqlc.arg(preset)::text));
-
--- name: LockPresetSource :one
-SELECT * FROM calendar_sources WHERE preset = sqlc.arg(preset)::text FOR UPDATE;
-
--- name: LockAdoptableSource :one
--- A source added through the API for the preset's feed URL: the preset takes
--- it over rather than adding a second source for the same feed.
-SELECT * FROM calendar_sources
-WHERE preset IS NULL AND kind = 'ics' AND in_process AND url = sqlc.arg(url)::text
-ORDER BY created_at, id
-LIMIT 1
-FOR UPDATE;
-
--- name: CreatePresetSource :one
-WITH new AS (SELECT gen_random_uuid() AS id)
-INSERT INTO calendar_sources (id, kind, name, url, enabled, filter_include, filter_exclude, default_reminders, next_refresh_at, preset, preset_config,
-                              integration, external_id, provider)
-VALUES ((SELECT id FROM new), sqlc.arg(kind), sqlc.arg(name), sqlc.arg(url)::text, true, sqlc.arg(filter_include)::text[], sqlc.arg(filter_exclude)::text[],
-        sqlc.narg(default_reminders), sqlc.arg(next_refresh_at), sqlc.arg(preset)::text, sqlc.arg(preset_config),
-        'calendar-feeds', (SELECT id FROM new)::text, CASE WHEN sqlc.arg(preset)::text = 'zaw' THEN 'ZAW' ELSE 'ICS' END)
-RETURNING *;
-
--- name: ApplySourcePreset :one
--- Writes a preset's configuration to its source and records it as applied.
--- reset_validators and next_refresh_at work as in UpdateSource; enabled and
--- the refresh state stay.
-UPDATE calendar_sources
-SET name = sqlc.arg(name), url = sqlc.arg(url)::text,
-    filter_include = sqlc.arg(filter_include)::text[], filter_exclude = sqlc.arg(filter_exclude)::text[],
-    default_reminders = sqlc.narg(default_reminders),
-    preset = sqlc.arg(preset)::text, preset_config = sqlc.arg(preset_config),
-    provider = CASE WHEN sqlc.arg(preset)::text = 'zaw' THEN 'ZAW' ELSE provider END,
-    etag = CASE WHEN sqlc.arg(reset_validators)::boolean THEN NULL ELSE etag END,
-    last_modified = CASE WHEN sqlc.arg(reset_validators)::boolean THEN NULL ELSE last_modified END,
-    next_refresh_at = COALESCE(sqlc.narg(next_refresh_at)::timestamptz, next_refresh_at),
-    updated_at = now()
-WHERE id = sqlc.arg(id)
-RETURNING *;
-
--- Imported events are written only by Calendar's source adapter, inside the
--- refresh transaction that holds LockSource.
+-- Imported events are written only by the reconciliation (an integration's
+-- sync, or Calendar's in-process Google adapter), inside the transaction
+-- that holds the source row.
 
 -- name: ListSourceEvents :many
 SELECT * FROM events WHERE source_id = $1 ORDER BY id FOR UPDATE;

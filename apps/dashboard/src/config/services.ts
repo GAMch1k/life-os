@@ -7,6 +7,7 @@ const DEFAULT_SERVICE_URLS = {
   activity: "http://localhost:8086",
   notifications: "http://localhost:8087",
   banking: "http://localhost:8089",
+  calendarFeeds: "http://localhost:8090",
 } as const;
 
 export function normalizeServiceUrl(name: string, value: string): string {
@@ -83,6 +84,11 @@ export const serviceBaseUrls = Object.freeze({
     "NEXT_PUBLIC_BANKING_SERVICE_URL",
     "BANKING_SERVICE_URL",
     DEFAULT_SERVICE_URLS.banking,
+  ),
+  calendarFeeds: configuredServiceUrl(
+    "NEXT_PUBLIC_CALENDAR_FEEDS_SERVICE_URL",
+    "CALENDAR_FEEDS_SERVICE_URL",
+    DEFAULT_SERVICE_URLS.calendarFeeds,
   ),
 });
 

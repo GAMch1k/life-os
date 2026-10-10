@@ -96,20 +96,8 @@ func TestParsesTheZAWStyleFeed(t *testing.T) {
 	if len(items) != 29 {
 		t.Fatalf("UIDs are not unique: %d", len(items))
 	}
-	// The owner's ZAW filter keeps four of the six waste types.
-	zaw := Filter{Include: []string{"Bioabfall", "Gelber Sack", "Papier", "Restmüll Tonnen und Container 14-täglich"}}
-	kept := zaw.Apply(feed.Items)
-	counts := map[string]int{}
-	for _, item := range kept {
-		counts[strings.SplitN(item.Title, " - ", 2)[0]]++
-	}
-	if len(kept) != 21 || counts["Restmüll Container wöchentlich"] != 0 || counts["Schadstoffmobil"] != 0 || counts["Bioabfall"] != 6 || counts["Gelber Sack"] != 6 || counts["Papier Tonnen und Container"] != 3 || counts["Restmüll Tonnen und Container 14-täglich"] != 6 {
-		t.Fatalf("kept %d: %v", len(kept), counts)
-	}
-	// The same selection by exclusion.
-	if excluded := (Filter{Exclude: []string{"container wöchentlich", "SCHADSTOFFMOBIL"}}).Apply(feed.Items); len(excluded) != 21 {
-		t.Fatalf("exclude filter kept %d", len(excluded))
-	}
+	// The feed's type filter lives in calendar-feeds, with its copy of
+	// this parser.
 }
 
 func TestAllDayFloatingAndUTCTimes(t *testing.T) {
@@ -281,10 +269,6 @@ func TestUnreadableEventsAreSkippedNotFatal(t *testing.T) {
 	again := byUID(parse(t, calendar(vevent("DTSTART:20261022T090000Z", "SUMMARY:No UID"))))
 	if _, stable := again[synthetic]; synthetic == "" || !stable {
 		t.Errorf("an event without UID gets a stable key: %q %v", synthetic, again)
-	}
-	// Category filter terms match whole categories.
-	if !(Filter{Include: []string{"recycling"}}).Keep(ok) || (Filter{Include: []string{"cycling"}}).Keep(ok) {
-		t.Error("category matching")
 	}
 }
 

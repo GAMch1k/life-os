@@ -187,7 +187,8 @@ func TestIntegrationSourcesRegisterIdempotentlyAndKeepTheOwnersSettings(t *testi
 	// owner's switch stays the owner's.
 	c.refused("user", http.MethodPatch, path, map[string]any{"url": "https://calendar.example.org/zaw.ics"}, http.StatusConflict, "managed_by_integration")
 	c.refused("user", http.MethodPatch, path, map[string]any{"filter": map[string]any{"include": []string{"Papier"}, "exclude": []string{}}}, http.StatusConflict, "managed_by_integration")
-	c.refused("user", http.MethodPost, path+"/refresh", nil, http.StatusConflict, "managed_by_integration")
+	// Calendar refreshes no feed since the handover to calendar-feeds (P11-08).
+	c.refused("user", http.MethodPost, path+"/refresh", nil, http.StatusNotFound, "not_found")
 	c.expect("user", http.MethodPatch, path, map[string]any{"enabled": false}, http.StatusOK, &owned)
 	if c.register(feedsActor, "calendar-feeds", "zaw", zawRegistration("ZAW Roßdorf"), http.StatusOK).Enabled {
 		t.Fatal("registering enabled a source the owner disabled")

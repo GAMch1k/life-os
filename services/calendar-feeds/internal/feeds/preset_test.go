@@ -1,4 +1,4 @@
-package sources
+package feeds
 
 import (
 	"encoding/json"
@@ -7,7 +7,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/GAMch1k/life-os/services/calendar/internal/ics"
+	"github.com/GAMch1k/life-os/services/calendar-feeds/internal/ics"
 )
 
 func zawFixture(t *testing.T) []ics.Item {
@@ -68,7 +68,7 @@ func TestZAWPresetSelectsTheFourBinTypes(t *testing.T) {
 func TestPresetItemsCleanUpOnlyZAWBeforeFiltering(t *testing.T) {
 	plain := zawFixture(t)
 	if got := presetItems(nil, slices.Clone(plain)); got[0].Title != "Restmüll Container wöchentlich - Musterstadt, Beispielweg" {
-		t.Fatalf("a source without a preset was changed: %q", got[0].Title)
+		t.Fatalf("a feed without a preset was changed: %q", got[0].Title)
 	}
 	other := "other"
 	if got := presetItems(&other, slices.Clone(plain)); got[0].Title != plain[0].Title {

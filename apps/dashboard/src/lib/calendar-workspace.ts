@@ -125,9 +125,22 @@ function sourceName(event: CalendarEvent) {
     : event.source.name?.trim() || undefined;
 }
 
+/**
+ * The provider label of an integration's source, such as "ZAW", "ICS", or
+ * "Google"; undefined for other events.
+ */
+function sourceProvider(event: CalendarEvent) {
+  return event.source.kind === "external"
+    ? event.source.provider?.trim() || undefined
+    : undefined;
+}
+
 /** Where an imported event comes from; undefined for Life OS events. */
 export function sourceLabel(event: CalendarEvent) {
   switch (event.source.kind) {
+    case "external":
+      // An integration's source: its name, else its provider's label.
+      return sourceName(event) ?? sourceProvider(event);
     case "ics":
       return sourceName(event) ?? "ICS feed";
     case "google":
@@ -145,19 +158,30 @@ export function readOnlyReason(event: CalendarEvent) {
   if (event.editable) return undefined;
   if (event.readOnlyReason) return event.readOnlyReason;
   const from =
-    event.source.kind === "ics"
-      ? (sourceName(event) ?? "an ICS feed")
-      : (sourceName(event) ?? "Google Calendar");
+    event.source.kind === "external"
+      ? (sourceLabel(event) ?? "another calendar")
+      : event.source.kind === "ics"
+        ? (sourceName(event) ?? "an ICS feed")
+        : (sourceName(event) ?? "Google Calendar");
   return `Imported from ${from}, so it can only be changed there. Its reminders and priority can still be adjusted here.`;
 }
 
 /**
- * The source badge of an event that is not a Life OS one: "Google · Owner"
- * for a Google event, "Imported · ZAW" for a feed's.
+ * The source badge of an event that is not a Life OS one: "<provider> ·
+ * <name>" for an integration's ("ZAW · Müllabfuhr", or just "ZAW" while
+ * the name is the provider's), "Google · Owner" for a Google event,
+ * "Imported · ZAW" for a feed Calendar imported itself.
  */
 export function sourceBadge(event: CalendarEvent) {
   const source = sourceLabel(event);
   if (!source) return undefined;
+  if (event.source.kind === "external") {
+    const provider = sourceProvider(event);
+    const name = sourceName(event);
+    return provider && name && name !== provider
+      ? `${provider} · ${name}`
+      : (provider ?? source);
+  }
   return event.source.kind === "google"
     ? `Google · ${source}`
     : `Imported · ${source}`;

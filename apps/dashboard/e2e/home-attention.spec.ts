@@ -1,7 +1,7 @@
 import {
   berlinDay,
-  createSource,
-  deleteSource,
+  createFeed,
+  deleteFeed,
   FEED_OVERLAY_HINT,
   feedDir,
   waitForRefresh,
@@ -333,7 +333,7 @@ test.describe("Home attention surface", () => {
         end: new Date(start.getTime() + 30 * 60_000),
       },
     ]);
-    const source = await createSource(request, name, url);
+    const source = await createFeed(request, name, url);
     try {
       await waitForRefresh(request, source.id, "imported");
       test.skip(
@@ -350,7 +350,7 @@ test.describe("Home attention surface", () => {
         calendar.getByRole("link", { name: "Open Calendar" }),
       ).toHaveAttribute("href", `/calendar?date=${berlinDay(start)}`);
     } finally {
-      await deleteSource(request, source.id);
+      await deleteFeed(request, source.id);
     }
   });
 });

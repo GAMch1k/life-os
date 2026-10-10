@@ -1,12 +1,12 @@
 import {
   addDays,
   berlinDay,
-  createSource,
-  deleteSource,
+  createFeed,
+  deleteFeed,
   failingFeedUrl,
   FEED_OVERLAY_HINT,
   feedDir,
-  refreshSource,
+  refreshFeed,
   waitForRefresh,
   writeFeed,
 } from "./calendar-feed";
@@ -325,16 +325,25 @@ async function recorded(
     .toBeGreaterThan(0);
 }
 
-/** The Event Log filtered to the Calendar domain through its form. */
-async function openCalendarDomain(page: Page) {
+/** The Event Log filtered to one domain through its form. */
+async function openDomain(page: Page, label: string, source: string) {
   await page.goto("/activity");
-  await page
-    .getByRole("combobox", { name: "Domain" })
-    .selectOption({ label: "Calendar" });
+  await page.getByRole("combobox", { name: "Domain" }).selectOption({ label });
   await page.getByRole("button", { name: "Apply" }).click();
-  await expect(page).toHaveURL(/source=calendar/);
+  await expect(page).toHaveURL(new RegExp(`source=${source}(&|$)`));
   return page.getByRole("list", { name: "Activity entries" });
 }
+
+/** The Event Log filtered to the Calendar domain through its form. */
+const openCalendarDomain = (page: Page) =>
+  openDomain(page, "Calendar", "calendar");
+
+/**
+ * The Event Log filtered to the calendar-feeds integration, which records
+ * each feed refresh.
+ */
+const openFeedsDomain = (page: Page) =>
+  openDomain(page, "Calendar feeds", "calendar-feeds");
 
 test.describe("Event Log: Calendar", () => {
   test.skip(!enabled, "set LIFE_OS_E2E_URL to run against the isolated stack");
@@ -417,18 +426,19 @@ test.describe("Event Log: Calendar", () => {
   }) => {
     const stamp = Date.now();
     const name = `E2E failing feed ${stamp}`;
-    const source = await createSource(request, name, failingFeedUrl(stamp));
+    const feed = await createFeed(request, name, failingFeedUrl(stamp));
     try {
-      const failed = await waitForRefresh(request, source.id, "failed");
+      const failed = await waitForRefresh(request, feed.id, "failed");
       expect(failed.refresh.lastError).toBeTruthy();
+      // About the feed's Calendar source, recorded by calendar-feeds.
       await recorded(
         request,
         "calendar_source",
-        source.id,
+        feed.sourceId,
         "calendar.source.refresh_failed",
       );
 
-      const entries = await openCalendarDomain(page);
+      const entries = await openFeedsDomain(page);
       const entry = entries
         .getByRole("link")
         .filter({ hasText: `Source refresh failed: ${name}` });
@@ -447,7 +457,7 @@ test.describe("Event Log: Calendar", () => {
       await selected.getByText("Diagnostics", { exact: true }).click();
       await expect(selected.locator("pre")).not.toContainText("feed.invalid/");
     } finally {
-      await deleteSource(request, source.id);
+      await deleteFeed(request, feed.id);
     }
   });
 
@@ -470,9 +480,9 @@ test.describe("Event Log: Calendar", () => {
         end: new Date(inAWeek.getTime() + 3_600_000),
       },
     ]);
-    const source = await createSource(request, name, url);
+    const feed = await createFeed(request, name, url);
     try {
-      const first = await waitForRefresh(request, source.id, "imported");
+      const first = await waitForRefresh(request, feed.id, "imported");
       expect(first.refresh.lastCounts?.inserted).toBe(2);
 
       // The pickup leaves the feed and another event joins it.
@@ -489,13 +499,13 @@ test.describe("Event Log: Calendar", () => {
           day: addDays(day, 1),
         },
       ]);
-      const second = await refreshSource(request, source.id);
+      const second = await refreshFeed(request, feed.id);
       expect(second.refresh.lastCounts).toMatchObject({
         inserted: 1,
         removed: 1,
       });
 
-      const entries = await openCalendarDomain(page);
+      const entries = await openFeedsDomain(page);
       const refreshes = entries
         .getByRole("link")
         .filter({ hasText: `Source refreshed: ${name}` });
@@ -507,12 +517,21 @@ test.describe("Event Log: Calendar", () => {
         refreshes.filter({ hasText: `${name} — 2 added` }),
       ).toBeVisible();
       // Imported events are summarized by their refresh, not listed one by
-      // one.
+      // one, here or in the Calendar domain (Calendar records no sync).
       await expect(
         entries.getByRole("link").filter({ hasText: `Feed pickup ${stamp}` }),
       ).toHaveCount(0);
+      const calendar = await openCalendarDomain(page);
+      await expect(
+        calendar.getByRole("link").filter({ hasText: `Feed pickup ${stamp}` }),
+      ).toHaveCount(0);
+      await expect(
+        calendar
+          .getByRole("link")
+          .filter({ hasText: `Source refreshed: ${name}` }),
+      ).toHaveCount(0);
     } finally {
-      await deleteSource(request, source.id);
+      await deleteFeed(request, feed.id);
     }
   });
 });

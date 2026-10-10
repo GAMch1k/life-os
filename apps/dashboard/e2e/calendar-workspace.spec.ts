@@ -1,4 +1,4 @@
-import { deleteSource, failingFeedUrl } from "./calendar-feed";
+import { createFeed, deleteFeed, failingFeedUrl } from "./calendar-feed";
 import { datePicker, pickDate } from "./date-picker";
 import { type APIRequestContext, expect, type Page, test } from "./fixtures";
 
@@ -525,12 +525,12 @@ test.describe("Calendar workspace", () => {
     const feedName = `Workspace feed ${stamp}`;
     const day = addDays(today(), 6);
     const original = await ownerDefaults(request);
-    // Disabled, so it is never refreshed and Status stays quiet about it.
-    const created = await request.post("/api/calendar/v1/sources", {
-      data: { name: feedName, url: failingFeedUrl(stamp), enabled: false },
+    // A feed of calendar-feeds, disabled in Calendar so it is not refreshed
+    // again and Status stays quiet about it. Its defaults are its Calendar
+    // source's.
+    const feed = await createFeed(request, feedName, failingFeedUrl(stamp), {
+      enabled: false,
     });
-    expect(created.status(), await created.text()).toBe(201);
-    const source = (await created.json()) as { id: string };
     try {
       await setOwnerDefaults(request, { timed: [], allDay: [] });
 
@@ -542,9 +542,9 @@ test.describe("Calendar workspace", () => {
       ).toBeVisible();
       const timed = dialog.getByRole("group", { name: "Your timed events" });
       const allDay = dialog.getByRole("group", { name: "Your all-day events" });
-      const feed = dialog.getByRole("group", { name: feedName });
+      const feedGroup = dialog.getByRole("group", { name: feedName });
       await expect(allDay).toContainText("No default reminders.");
-      await expect(feed).toContainText("No default reminders.");
+      await expect(feedGroup).toContainText("No default reminders.");
 
       await timed.getByRole("button", { name: "Add reminder" }).click();
       await dialog.getByLabel("Timed default 1 amount").fill("2");
@@ -555,13 +555,15 @@ test.describe("Calendar workspace", () => {
         dialog.getByLabel("All-day default 1 days before"),
       ).toHaveValue("1");
       await dialog.getByLabel("All-day default 1 time").fill("18:30");
-      await feed.getByRole("button", { name: "Add reminder" }).click();
+      await feedGroup.getByRole("button", { name: "Add reminder" }).click();
       await dialog
         .getByLabel(`${feedName} default 1 type`)
         .selectOption("localTime");
       // The feed's events are important unless one gets another priority.
-      await expect(feed.getByLabel("Default priority")).toHaveValue("medium");
-      await feed.getByLabel("Default priority").selectOption("high");
+      await expect(feedGroup.getByLabel("Default priority")).toHaveValue(
+        "medium",
+      );
+      await feedGroup.getByLabel("Default priority").selectOption("high");
       await dialog.getByRole("button", { name: "Save" }).click();
       await expect(dialog).toBeHidden();
 
@@ -569,7 +571,9 @@ test.describe("Calendar workspace", () => {
         timed: [{ kind: "relative", minutesBefore: 120 }],
         allDay: [{ kind: "localTime", daysBefore: 1, localTime: "18:30" }],
       });
-      const saved = await request.get(`/api/calendar/v1/sources/${source.id}`);
+      const saved = await request.get(
+        `/api/calendar/v1/sources/${feed.sourceId}`,
+      );
       expect(
         (await saved.json()) as {
           defaultReminders: Reminder[] | null;
@@ -617,7 +621,7 @@ test.describe("Calendar workspace", () => {
       expect(problems).toEqual([]);
     } finally {
       await setOwnerDefaults(request, original);
-      await deleteSource(request, source.id);
+      await deleteFeed(request, feed.id);
       for (const event of await findByTitle(request, title)) {
         await request.delete(`/api/calendar/v1/events/${event.id}`);
       }

@@ -18,7 +18,11 @@ export const AGENT_CHANGES_DESCRIPTION =
 
 /** What the "calendar" domain records. */
 export const CALENDAR_DESCRIPTION =
-  "Calendar events created, changed, cancelled, or deleted (by you, the AI, or a tool), each refresh of a subscribed calendar feed, and the Google Calendar connection.";
+  "Calendar events created, changed, cancelled, or deleted (by you, the AI, or a tool), and the Google Calendar connection and syncs.";
+
+/** What the "calendar-feeds" domain records. */
+export const CALENDAR_FEEDS_DESCRIPTION =
+  "Each refresh of a subscribed calendar feed (ICS/iCal, such as ZAW): what it added, changed, or cancelled, or why it failed.";
 
 export const BANKING_DESCRIPTION =
   "The bank connection: connecting, disconnecting, each sync into Finance that changed something (counts only, never transaction details), failed syncs, and the consent's expiry.";
@@ -37,6 +41,11 @@ export const SOURCES: readonly {
   },
   { value: "tasks", label: "Tasks" },
   { value: "calendar", label: "Calendar", description: CALENDAR_DESCRIPTION },
+  {
+    value: "calendar-feeds",
+    label: "Calendar feeds",
+    description: CALENDAR_FEEDS_DESCRIPTION,
+  },
   { value: "notifications", label: "Notifications" },
   {
     value: "banking",
