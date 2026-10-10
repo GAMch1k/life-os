@@ -309,3 +309,26 @@ export function fromDateTimeInput(value: string, timeZone: string) {
     wanted;
   return new Date(instant).toISOString();
 }
+
+/**
+ * A due instant as the edit form's date picker and time field show it: the
+ * owner's wall date (YYYY-MM-DD) and time (HH:mm); both "" when undated.
+ */
+export function toDueFields(
+  dueAt: string | null | undefined,
+  timeZone: string,
+) {
+  const [date = "", time = ""] = toDateTimeInput(dueAt, timeZone).split("T");
+  return { date, time };
+}
+
+/**
+ * The edit form's date and time, read as the owner's wall time, as a due
+ * instant. A date without a time is due when that day starts (shown without
+ * a time, see isDateOnly); without a date there is none.
+ */
+export function fromDueFields(date: string, time: string, timeZone: string) {
+  return date
+    ? fromDateTimeInput(`${date}T${time || "00:00"}`, timeZone)
+    : undefined;
+}
