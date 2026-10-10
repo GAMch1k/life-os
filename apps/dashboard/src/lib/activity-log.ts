@@ -18,7 +18,7 @@ export const AGENT_CHANGES_DESCRIPTION =
 
 /** What the "calendar" domain records. */
 export const CALENDAR_DESCRIPTION =
-  "Calendar events created, changed, cancelled, or deleted (by you, the AI, or a tool) and each refresh of a subscribed calendar feed.";
+  "Calendar events created, changed, cancelled, or deleted (by you, the AI, or a tool), each refresh of a subscribed calendar feed, and the Google Calendar connection.";
 
 export const SOURCES: readonly {
   value: string;
@@ -44,6 +44,7 @@ export const SUBJECT_TYPES = [
   { value: "task", label: "Task" },
   { value: "calendar_event", label: "Calendar event" },
   { value: "calendar_source", label: "Calendar source" },
+  { value: "google_connection", label: "Google connection" },
 ] as const;
 
 const EVENT_LABELS: Record<string, string> = {
@@ -75,6 +76,9 @@ const EVENT_LABELS: Record<string, string> = {
   "calendar.event.deleted": "Event deleted",
   "calendar.source.refreshed": "Source refreshed",
   "calendar.source.refresh_failed": "Source refresh failed",
+  "calendar.google.connected": "Google Calendar connected",
+  "calendar.google.disconnected": "Google Calendar disconnected",
+  "calendar.google.expired": "Google Calendar access expired",
 };
 
 export const EVENT_TYPES = Object.keys(EVENT_LABELS);
@@ -137,6 +141,10 @@ export function eventLabel(event: Pick<ActivityEvent, "type" | "data">) {
   if (event.type === "calendar.source.refresh_failed" && source) {
     return `${label}: ${source}`;
   }
+  const account = text(event.data?.accountEmail);
+  if (event.type.startsWith("calendar.google.") && account) {
+    return `${label}: ${account}`;
+  }
   return label;
 }
 
@@ -149,7 +157,12 @@ export function calendarHref(
   event: Pick<ActivityEvent, "type" | "subject" | "data">,
   timeZone: string,
 ) {
-  if (event.subject.type === "calendar_source") return "/calendar";
+  if (
+    event.subject.type === "calendar_source" ||
+    event.subject.type === "google_connection"
+  ) {
+    return "/calendar";
+  }
   if (
     event.subject.type !== "calendar_event" ||
     event.type === "calendar.event.deleted"
