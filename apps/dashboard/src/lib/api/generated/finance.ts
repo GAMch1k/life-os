@@ -11,14 +11,94 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List finance accounts */
+        /**
+         * List finance accounts
+         * @description Accounts with their current balance: the built-in Cash account first, then by name. Archived accounts are left out unless `includeArchived` is true.
+         */
         get: operations["listAccounts"];
+        put?: never;
+        /**
+         * Create a finance account
+         * @description Creates an account kept in Life OS (`source.kind` `manual`). Names are unique (409 `account_name_taken`).
+         */
+        post: operations["createAccount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/accounts/{accountId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a finance account
+         * @description Returns the account, archived or not.
+         */
+        get: operations["getAccount"];
         put?: never;
         post?: never;
         delete?: never;
         options?: never;
         head?: never;
+        /**
+         * Update or archive a finance account
+         * @description Changes only the fields present. `archived: true` archives the account: it leaves the account list and takes no new transactions, but keeps its history; `archived: false` restores it. The currency changes only while the account has no transactions (409 `account_has_transactions`). The built-in Cash account can be renamed and given another opening balance, but not archived or given another kind (409 `built_in_account`).
+         */
+        patch: operations["updateAccount"];
+        trace?: never;
+    };
+    "/v1/transactions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List, search, and filter transactions
+         * @description Transactions of every account (or of one, with `accountId`), latest `bookingDate` first, then latest created first. Filters combine. `q` matches every word (case-insensitive substring) in the counterparty, description, or notes. When more transactions match than `limit`, `nextCursor` is set: pass it back as `cursor`, with the same filters, for the next page. A response without `nextCursor` is the last page.
+         */
+        get: operations["listTransactions"];
+        put?: never;
+        /**
+         * Record a manual transaction
+         * @description Records a manual transaction (`source.kind` `manual`). Without `accountId` it goes to the built-in Cash account; without `bookingDate` it is dated today in the owner's timezone. The amount's currency must be the account's (400 `currency_mismatch`). Without `categoryId` the category rules choose one (or none). An `Idempotency-Key` header makes the request safe to retry: an identical repeat returns the original transaction, and reusing the key with a different body returns 409 `idempotency_conflict`.
+         */
+        post: operations["createManualTransaction"];
+        delete?: never;
+        options?: never;
+        head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/v1/transactions/{transactionId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a transaction */
+        get: operations["getTransaction"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a manual transaction
+         * @description Deletes a manual transaction permanently. Imported transactions cannot be deleted (409 `managed_by_source`).
+         */
+        delete: operations["deleteTransaction"];
+        options?: never;
+        head?: never;
+        /**
+         * Update a transaction
+         * @description Changes only the fields present; `null` clears a nullable field. A manual transaction takes every field; an imported one (`readOnly`) only `categoryId` and `notes`, and naming any other field returns 409 `managed_by_source`. Setting `categoryId`, or clearing it with null, is a choice by hand that rules leave alone from then on. When the counterparty or description of a transaction whose category was not chosen by hand changes, the rules choose again.
+         */
+        patch: operations["updateTransaction"];
         trace?: never;
     };
     "/v1/categories": {
@@ -28,10 +108,17 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List finance categories */
+        /**
+         * List finance categories
+         * @description Categories by kind, then name. Archived categories are left out unless `includeArchived` is true.
+         */
         get: operations["listCategories"];
         put?: never;
-        post?: never;
+        /**
+         * Create a finance category
+         * @description A name is unique per kind (409 `category_exists`).
+         */
+        post: operations["createCategory"];
         delete?: never;
         options?: never;
         head?: never;
@@ -51,22 +138,72 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** Update a finance category */
+        /**
+         * Update or archive a finance category
+         * @description Changes only the fields present; `color: null` removes the color. `archived: true` archives the category: transactions keep it, but it cannot be given to transactions or rules any more (409 `category_archived`) and its rules are skipped; `archived: false` restores it.
+         */
         patch: operations["updateCategory"];
         trace?: never;
     };
-    "/v1/transactions": {
+    "/v1/categories/rules": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** List and filter transactions */
-        get: operations["listTransactions"];
+        /**
+         * List category rules
+         * @description Rules in the order they are tried (priority, lowest first; then oldest first).
+         */
+        get: operations["listCategoryRules"];
         put?: never;
-        /** Record a manual transaction */
-        post: operations["createManualTransaction"];
+        /**
+         * Create a category rule
+         * @description Without `priority` the rule is tried after every existing rule. It applies to transactions created from now on; apply it to existing ones with `POST /v1/categories/rules/apply`.
+         */
+        post: operations["createCategoryRule"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/categories/rules/{ruleId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete a category rule
+         * @description Transactions it categorized keep their category until the rules are applied again with scope `all`.
+         */
+        delete: operations["deleteCategoryRule"];
+        options?: never;
+        head?: never;
+        /** Update a category rule */
+        patch: operations["updateCategoryRule"];
+        trace?: never;
+    };
+    "/v1/categories/rules/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Apply the category rules to existing transactions
+         * @description `uncategorized` (the default) gives a category to transactions that have none and whose category was not chosen by hand. `all` also re-evaluates every transaction a rule categorized: it may get another category, or none when no rule matches any more. Categories chosen by hand are never changed. Returns the counts.
+         */
+        post: operations["applyCategoryRules"];
         delete?: never;
         options?: never;
         head?: never;
@@ -80,7 +217,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get a monthly finance summary */
+        /**
+         * Get a monthly finance summary
+         * @description Booked transactions of the month in one currency (`currency`, by default the built-in Cash account's): income, spending, and net. Transactions in a `transfer` category (money moved between own accounts) are left out of income, spending, and net, but listed in `byCategory`. `totalBalance` is the current balance of the accounts in that currency, archived ones included. With `accountId` only that account counts.
+         */
         get: operations["getMonthlySummary"];
         put?: never;
         post?: never;
@@ -99,9 +239,62 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Submit a CSV import */
+        /**
+         * Import transactions from a CSV file
+         * @description Imports the rows of a UTF-8 CSV file (a byte-order mark is ignored; comma or semicolon separated, detected from the header) into the account `accountId` (picked in the Dashboard). The rows become `csv` transactions: booked, and read-only except category and notes. Columns are matched by header name, case-insensitively, in any order; unknown columns are ignored.
+         *
+         *     Columns: `date` (required; YYYY-MM-DD or DD.MM.YYYY; `booking_date` and `occurred_on` are accepted names), `amount` (signed decimal in major units, at most two decimals, `.` or `,` as the decimal mark: `-12.50`, `-12,50`, `1.234,56`) or `amount_minor` (signed integer in minor units; one of the two is required), `currency` (optional; must be the account's, which it defaults to), `value_date` (optional), `counterparty`, `description`, `notes` (`note` is accepted), `category` (a category name, case-insensitive; an unknown or archived name leaves the choice to the rules) or `category_id`, and `external_id` (optional).
+         *
+         *     Re-importing is idempotent: a row whose `external_id` the account already has, or, without one, whose content (date, amount, currency, counterparty, description, and its position among identical rows of the file) it already has, counts as a duplicate. Rows without a category get one from the rules. Valid rows are imported even when others fail; each failed row is reported with its row number and reason. Files in the older format (`account_id,occurred_on,amount_minor,currency,external_id,category_id,note`) are still accepted without `accountId`: each row goes to its `account_id`.
+         */
         post: operations["createCsvImport"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/imports/bank": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Import one bank sync
+         * @description Called by the banking integration service (actor `system:banking`) after it synced a bank connection; Finance never calls a bank. The whole sync is applied in one database transaction.
+         *
+         *     Accounts are upserted by (`connectionId`, `externalId`) as bank accounts (`source.kind` `bank`). A new account takes the bank's name (with the institution, or the masked IBAN, added when another account already has the name), kind, and currency; later syncs update the bank-reported balances, masked IBAN, provider, and institution but keep the owner's name, kind, and archive state. An account's currency never changes (400 `currency_mismatch`).
+         *
+         *     Transactions are upserted by (`connectionId`, `externalId`) as `bank` transactions: read-only except category and notes, which re-syncs never change. A re-sync updates the bank's fields (status, dates, amount, counterparty, description, merchant category code, bank reference); when the counterparty or description of a transaction whose category was not chosen by hand changes, the rules choose again. New transactions without a category get one from the rules. A new booked transaction that replaces a pending one (same account and amount, the same counterparty ignoring case, booking dates at most 3 days apart, the pending one absent from this sync) removes the pending one and takes over its notes and a category chosen by hand. Pending transactions of the connection's accounts booked inside `window` that are absent from the sync are removed; booked transactions are never deleted. Transactions with a zero amount are skipped.
+         *
+         *     Errors: a transaction naming an account that is neither in the sync nor already imported for the connection is 400 `unknown_account`; an amount or balance in another currency than its account is 400 `currency_mismatch`; duplicate external ids, an empty name, an unknown kind or status, or `window.from` after `window.to` are 400 `invalid_request`. Nothing is stored when the request fails.
+         */
+        post: operations["importBankSync"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/imports/bank/{connectionId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a bank connection
+         * @description Archives every account of the connection; all their transactions stay as history. Idempotent: an unknown or already removed connection also answers 204.
+         */
+        delete: operations["removeBankConnection"];
         options?: never;
         head?: never;
         patch?: never;
@@ -111,60 +304,279 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        ErrorResponse: {
+            error: {
+                /** @description Machine-readable code, such as managed_by_source. */
+                code: string;
+                /** @description A sentence for people. */
+                message: string;
+            };
+            request_id: string;
+        };
         Money: {
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description Minor units (cents); negative is money out.
+             */
             amount: number;
+            /** @example EUR */
             currency: string;
         };
+        /** @enum {string} */
+        AccountKind: "bank" | "cash" | "card" | "savings" | "other";
+        /**
+         * @description `manual`: kept in Life OS. `bank`: connected to a bank (planned).
+         * @enum {string}
+         */
+        AccountSourceKind: "manual" | "bank";
+        AccountSource: {
+            kind: components["schemas"]["AccountSourceKind"];
+            /**
+             * Format: uuid
+             * @description The bank connection of a bank account.
+             */
+            connectionId: string | null;
+            /** @description The account's id at the bank. */
+            externalId: string | null;
+            /** @description The open-banking provider, such as enablebanking. */
+            provider: string | null;
+            /** @description The bank, such as Deutsche Bank. */
+            institution: string | null;
+            /** @description The masked IBAN, such as DE23…2300. */
+            ibanMasked: string | null;
+            /**
+             * Format: date-time
+             * @description When the last bank sync reached the account.
+             */
+            syncedAt: string | null;
+        };
+        /** @description `balance` is the opening balance plus every booked transaction; for a bank account that reported one, it is the bank's booked balance as of `balanceAsOf` instead, and `available` is the bank's available balance. `pending` is the sum of the pending transactions, which are not in a computed balance. `transactionCount` counts both. */
         Account: {
             /** Format: uuid */
             id: string;
             name: string;
+            kind: components["schemas"]["AccountKind"];
+            currency: string;
+            openingBalance: components["schemas"]["Money"];
             balance: components["schemas"]["Money"];
+            /**
+             * Format: date
+             * @description The date of the bank-reported balance; null for a computed balance.
+             */
+            balanceAsOf: string | null;
+            available: components["schemas"]["Money"] | null;
+            pending: components["schemas"]["Money"];
+            transactionCount: number;
+            /** @description True for the built-in Cash account. */
+            builtIn: boolean;
+            archived: boolean;
+            /** Format: date-time */
+            archivedAt: string | null;
+            source: components["schemas"]["AccountSource"];
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
         };
-        Category: {
-            /** Format: uuid */
-            id: string;
+        AccountList: {
+            items: components["schemas"]["Account"][];
+        };
+        /** @description `kind` defaults to other; `openingBalanceMinor` (minor units of the currency) to 0. */
+        CreateAccountRequest: {
             name: string;
-            /** @enum {string} */
-            kind: "income" | "expense";
+            kind?: components["schemas"]["AccountKind"];
+            currency: string;
+            /** Format: int64 */
+            openingBalanceMinor?: number;
         };
+        UpdateAccountRequest: {
+            name?: string;
+            kind?: components["schemas"]["AccountKind"];
+            currency?: string;
+            /** Format: int64 */
+            openingBalanceMinor?: number;
+            archived?: boolean;
+        };
+        /**
+         * @description `booked`: settled, counted in the balance. `pending`: not yet settled.
+         * @enum {string}
+         */
+        TransactionStatus: "booked" | "pending";
+        /** @enum {string} */
+        TransactionSourceKind: "manual" | "csv" | "bank";
+        /** @enum {string} */
+        TransactionDirection: "in" | "out";
+        TransactionSource: {
+            kind: components["schemas"]["TransactionSourceKind"];
+            /**
+             * Format: uuid
+             * @description The bank connection of a bank transaction.
+             */
+            connectionId: string | null;
+            /** @description Identity at the source: the CSV external_id (or a content hash), or the bank transaction id. */
+            externalId: string | null;
+        };
+        /** @description `categorizedBy` is `manual` when the category was chosen by hand (by the owner, the AI, or the import file; possibly none), `rule` when a category rule chose it (`categoryRuleId` names the rule), and null while nobody chose. `readOnly` is true for imported transactions: only `categoryId` and `notes` change, and they cannot be deleted. */
         Transaction: {
             /** Format: uuid */
             id: string;
             /** Format: uuid */
             accountId: string;
-            /** Format: uuid */
-            categoryId?: string | null;
             amount: components["schemas"]["Money"];
             /** Format: date */
-            occurredOn: string;
-            note?: string;
+            bookingDate: string;
+            /** Format: date */
+            valueDate: string | null;
+            status: components["schemas"]["TransactionStatus"];
+            /** @description Who was paid, or who paid, such as REWE. */
+            counterparty: string | null;
+            /** @description What it was for (a bank's purpose text). */
+            description: string | null;
+            /** @description The owner's own notes. */
+            notes: string | null;
+            /** Format: uuid */
+            categoryId: string | null;
+            /** @enum {string|null} */
+            categorizedBy: "manual" | "rule" | null;
+            /** Format: uuid */
+            categoryRuleId: string | null;
+            /** @description The card merchant category code (ISO 18245) a bank reported. */
+            merchantCategoryCode: string | null;
+            /** @description The bank's own reference. */
+            bankReference: string | null;
+            source: components["schemas"]["TransactionSource"];
+            readOnly: boolean;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
         };
-        AccountList: {
-            items: components["schemas"]["Account"][];
+        TransactionList: {
+            items: components["schemas"]["Transaction"][];
+            /** @description Set when more transactions match; pass it as cursor for the next page. */
+            nextCursor?: string | null;
+        };
+        /** @description `accountId` defaults to the built-in Cash account, `bookingDate` to today in the owner's timezone, `status` to booked. Without `categoryId` the category rules choose. */
+        CreateManualTransactionRequest: {
+            /** Format: uuid */
+            accountId?: string;
+            amount: components["schemas"]["Money"];
+            /** Format: date */
+            bookingDate?: string;
+            /** Format: date */
+            valueDate?: string;
+            status?: components["schemas"]["TransactionStatus"];
+            counterparty?: string;
+            description?: string;
+            notes?: string;
+            /** Format: uuid */
+            categoryId?: string;
+        };
+        /** @description Imported transactions take only categoryId and notes. */
+        UpdateTransactionRequest: {
+            /** Format: uuid */
+            accountId?: string;
+            amount?: components["schemas"]["Money"];
+            /** Format: date */
+            bookingDate?: string;
+            /** Format: date */
+            valueDate?: string | null;
+            status?: components["schemas"]["TransactionStatus"];
+            counterparty?: string | null;
+            description?: string | null;
+            notes?: string | null;
+            /** Format: uuid */
+            categoryId?: string | null;
+        };
+        /**
+         * @description `transfer` is money moved between own accounts; it is neither income nor spending.
+         * @enum {string}
+         */
+        CategoryKind: "expense" | "income" | "transfer";
+        Category: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            kind: components["schemas"]["CategoryKind"];
+            color: string | null;
+            archived: boolean;
+            /** Format: date-time */
+            archivedAt: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
         };
         CategoryList: {
             items: components["schemas"]["Category"][];
         };
-        TransactionList: {
-            items: components["schemas"]["Transaction"][];
-            nextCursor?: string | null;
-        };
-        CreateManualTransactionRequest: {
-            /** Format: uuid */
-            accountId: string;
-            /** Format: uuid */
-            categoryId?: string;
-            amount: components["schemas"]["Money"];
-            /** Format: date */
-            occurredOn: string;
-            note?: string;
+        CreateCategoryRequest: {
+            name: string;
+            kind: components["schemas"]["CategoryKind"];
+            color?: string;
         };
         UpdateCategoryRequest: {
             name?: string;
-            /** @enum {string} */
-            kind?: "income" | "expense";
+            kind?: components["schemas"]["CategoryKind"];
+            color?: string | null;
+            archived?: boolean;
+        };
+        /**
+         * @description `any` matches the counterparty or the description.
+         * @enum {string}
+         */
+        RuleField: "counterparty" | "description" | "any";
+        /** @enum {string} */
+        RuleOperator: "contains" | "equals";
+        /** @description Case-insensitive; surrounding spaces are ignored. Example: counterparty contains "REWE". */
+        RuleMatch: {
+            field: components["schemas"]["RuleField"];
+            operator: components["schemas"]["RuleOperator"];
+            text: string;
+        };
+        /** @description Rules are tried lowest `priority` first (then oldest first); the first match wins. */
+        CategoryRule: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            categoryId: string;
+            match: components["schemas"]["RuleMatch"];
+            priority: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        CategoryRuleList: {
+            items: components["schemas"]["CategoryRule"][];
+        };
+        /** @description Without `priority` the rule comes after every existing rule. */
+        CreateCategoryRuleRequest: {
+            /** Format: uuid */
+            categoryId: string;
+            match: components["schemas"]["RuleMatch"];
+            priority?: number;
+        };
+        UpdateCategoryRuleRequest: {
+            /** Format: uuid */
+            categoryId?: string;
+            match?: components["schemas"]["RuleMatch"];
+            priority?: number;
+        };
+        /** @enum {string} */
+        ApplyScope: "uncategorized" | "all";
+        /** @description `scope` defaults to uncategorized. */
+        ApplyCategoryRulesRequest: {
+            scope?: components["schemas"]["ApplyScope"];
+        };
+        /** @description `examined`: transactions the rules were tried on. `categorized`: had no category and got one. `recategorized`: a rule's category was replaced by another rule's. `cleared`: a rule's category was removed because no rule matches any more (scope all). `unchanged`: the rest. */
+        ApplyCategoryRulesResult: {
+            scope: components["schemas"]["ApplyScope"];
+            examined: number;
+            categorized: number;
+            recategorized: number;
+            cleared: number;
+            unchanged: number;
         };
         SpendingByCategory: {
             /** Format: uuid */
@@ -172,31 +584,141 @@ export interface components {
             categoryName: string;
             amount: components["schemas"]["Money"];
         };
+        /** @description One category's month: `income` (money in) and `spending` (money out) are positive, `net` is income minus spending. `categoryId`, `categoryName`, and `categoryKind` are null for uncategorized transactions. */
+        CategoryTotal: {
+            /** Format: uuid */
+            categoryId: string | null;
+            categoryName: string | null;
+            /** @enum {string|null} */
+            categoryKind: "expense" | "income" | "transfer" | null;
+            income: components["schemas"]["Money"];
+            spending: components["schemas"]["Money"];
+            net: components["schemas"]["Money"];
+            transactionCount: number;
+        };
+        /** @description `spendingByCategory` is the spending per category (not transfers or uncategorized), largest first. `byCategory` has every category with transactions in the month, uncategorized included, largest spending first: the basis for budgets. */
         MonthlySummary: {
             month: string;
+            currency: string;
             totalBalance: components["schemas"]["Money"];
             income: components["schemas"]["Money"];
             spending: components["schemas"]["Money"];
             net: components["schemas"]["Money"];
             spendingByCategory: components["schemas"]["SpendingByCategory"][];
+            byCategory: components["schemas"]["CategoryTotal"][];
         };
         CsvImportError: {
+            /** @description The CSV line (the header is row 1). */
             row: number;
             message: string;
         };
+        /** @description `imported`: new transactions. `duplicates`: rows the account already had. `categorized`: imported rows that got their category from a rule. `status` is failed when nothing was imported and some rows failed. `accountId` is null for an older-format file. */
         CsvImport: {
             /** Format: uuid */
             id: string;
+            /** Format: uuid */
+            accountId: string | null;
             /** @enum {string} */
-            status: "accepted" | "processing" | "completed" | "failed";
-            created: number;
-            skipped: number;
+            status: "completed" | "failed";
+            imported: number;
+            duplicates: number;
             failed: number;
+            categorized: number;
             errors: components["schemas"]["CsvImportError"][];
+        };
+        BankBalance: {
+            /**
+             * Format: int64
+             * @description Minor units.
+             */
+            amount: number;
+            currency: string;
+            /**
+             * Format: date
+             * @description The day the bank reported it for.
+             */
+            date: string;
+        };
+        BankAccountInput: {
+            /** @description Stable per connection. */
+            externalId: string;
+            name: string;
+            /** @enum {string} */
+            kind: "bank" | "card" | "savings";
+            currency: string;
+            /** @description Such as DE23…2300; never the full IBAN. */
+            ibanMasked?: string;
+            bookedBalance?: components["schemas"]["BankBalance"];
+            availableBalance?: components["schemas"]["BankBalance"];
+        };
+        BankTransactionInput: {
+            accountExternalId: string;
+            /** @description The bank's stable transaction id. */
+            externalId: string;
+            status: components["schemas"]["TransactionStatus"];
+            /** Format: date */
+            bookingDate: string;
+            /** Format: date */
+            valueDate?: string;
+            amount: components["schemas"]["Money"];
+            counterparty?: string;
+            /** @description The remittance text. */
+            description?: string;
+            merchantCategoryCode?: string;
+            bankReference?: string;
+        };
+        /** @description The booking dates this sync covers (inclusive). */
+        BankImportWindow: {
+            /** Format: date */
+            from: string;
+            /** Format: date */
+            to: string;
+        };
+        BankImportRequest: {
+            /**
+             * Format: uuid
+             * @description The connection's id in the banking service.
+             */
+            connectionId: string;
+            /** @example enablebanking */
+            provider: string;
+            /** @example Deutsche Bank */
+            institution: string;
+            window: components["schemas"]["BankImportWindow"];
+            accounts: components["schemas"]["BankAccountInput"][];
+            transactions: components["schemas"]["BankTransactionInput"][];
+        };
+        BankAccountId: {
+            externalId: string;
+            /**
+             * Format: uuid
+             * @description The Finance account id.
+             */
+            id: string;
+        };
+        /** @description `accountIds` maps every account of the sync to its Finance id. `transactions.removedPending` counts pending transactions removed because a booked one replaced them or the sync no longer has them; `skipped` counts zero-amount transactions. */
+        BankImportResult: {
+            accountIds: components["schemas"]["BankAccountId"][];
+            accounts: {
+                created: number;
+                updated: number;
+            };
+            transactions: {
+                created: number;
+                updated: number;
+                unchanged: number;
+                removedPending: number;
+                skipped: number;
+            };
         };
     };
     responses: never;
-    parameters: never;
+    parameters: {
+        AccountId: string;
+        TransactionId: string;
+        CategoryId: string;
+        RuleId: string;
+    };
     requestBodies: never;
     headers: never;
     pathItems: never;
@@ -205,7 +727,9 @@ export type $defs = Record<string, never>;
 export interface operations {
     listAccounts: {
         parameters: {
-            query?: never;
+            query?: {
+                includeArchived?: boolean;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -226,26 +750,72 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
         };
     };
-    listCategories: {
+    createAccount: {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateAccountRequest"];
+            };
+        };
+        responses: {
+            /** @description Account */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Account"];
+                };
+            };
+            /** @description Invalid request (`invalid_request`), or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Another account has this name (`account_name_taken`) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                accountId: components["parameters"]["AccountId"];
+            };
+            cookie?: never;
+        };
         requestBody?: never;
         responses: {
-            /** @description Categories */
+            /** @description Account */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CategoryList"];
+                    "application/json": components["schemas"]["Account"];
                 };
             };
             /** @description Invalid request */
@@ -253,57 +823,95 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Account not found (`not_found`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
         };
     };
-    updateCategory: {
+    updateAccount: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                categoryId: string;
+                accountId: components["parameters"]["AccountId"];
             };
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["UpdateCategoryRequest"];
+                "application/json": components["schemas"]["UpdateAccountRequest"];
             };
         };
         responses: {
-            /** @description Category */
+            /** @description Account */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Category"];
+                    "application/json": components["schemas"]["Account"];
                 };
             };
-            /** @description Invalid request, or no valid X-Life-OS-Actor (actor_required) */
+            /** @description Invalid request (`invalid_request`), or no valid X-Life-OS-Actor (`actor_required`) */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
-            /** @description Category not found */
+            /** @description Account not found (`not_found`) */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `account_name_taken`, `account_has_transactions`, `built_in_account`, or `managed_by_source` (the currency of a bank account) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
         };
     };
     listTransactions: {
         parameters: {
             query?: {
+                /** @description Words to find in the counterparty, description, or notes; every word must match. */
+                q?: string;
                 accountId?: string;
+                /** @description A category id, or `uncategorized` for transactions without a category. */
                 categoryId?: string;
+                /** @description Earliest bookingDate (inclusive). */
                 from?: string;
+                /** @description Latest bookingDate (inclusive). */
                 to?: string;
+                /** @description `in` for money in (positive amounts), `out` for money out (negative). */
+                direction?: components["schemas"]["TransactionDirection"];
+                /** @description Smallest absolute amount in minor units (1250 matches -12.50 and 12.50). */
+                amountMin?: number;
+                /** @description Largest absolute amount in minor units. */
+                amountMax?: number;
+                status?: components["schemas"]["TransactionStatus"];
+                source?: components["schemas"]["TransactionSourceKind"];
+                /** @description The previous page's nextCursor. Opaque; only valid with the filters it was returned for. */
                 cursor?: string;
                 limit?: number;
             };
@@ -322,12 +930,14 @@ export interface operations {
                     "application/json": components["schemas"]["TransactionList"];
                 };
             };
-            /** @description Invalid request */
+            /** @description Invalid request (`invalid_request`, such as an unknown categoryId value or amountMin above amountMax), or a malformed cursor (`invalid_cursor`) */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
         };
     };
@@ -353,19 +963,494 @@ export interface operations {
                     "application/json": components["schemas"]["Transaction"];
                 };
             };
-            /** @description Invalid request, or no valid X-Life-OS-Actor (actor_required) */
+            /** @description Invalid request (`invalid_request`, `unknown_account`, `unknown_category`, `currency_mismatch`), or no valid X-Life-OS-Actor (`actor_required`) */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `account_archived`, `managed_by_source` (a bank account), `category_archived`, or `idempotency_conflict` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getTransaction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                transactionId: components["parameters"]["TransactionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Transaction */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Transaction"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Transaction not found (`not_found`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    deleteTransaction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                transactionId: components["parameters"]["TransactionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
                 content?: never;
+            };
+            /** @description Invalid request, or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Transaction not found (`not_found`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The transaction is imported (`managed_by_source`) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    updateTransaction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                transactionId: components["parameters"]["TransactionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateTransactionRequest"];
+            };
+        };
+        responses: {
+            /** @description Transaction */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Transaction"];
+                };
+            };
+            /** @description Invalid request (`invalid_request`, `unknown_account`, `unknown_category`, `currency_mismatch`), or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Transaction not found (`not_found`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `managed_by_source` (an imported transaction, or a move to a bank account), `account_archived`, or `category_archived` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    listCategories: {
+        parameters: {
+            query?: {
+                includeArchived?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Categories */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CategoryList"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    createCategory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateCategoryRequest"];
+            };
+        };
+        responses: {
+            /** @description Category */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Category"];
+                };
+            };
+            /** @description Invalid request (`invalid_request`), or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A category of this kind has this name (`category_exists`) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    updateCategory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                categoryId: components["parameters"]["CategoryId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateCategoryRequest"];
+            };
+        };
+        responses: {
+            /** @description Category */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Category"];
+                };
+            };
+            /** @description Invalid request (`invalid_request`), or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Category not found (`not_found`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A category of this kind has this name (`category_exists`) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    listCategoryRules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Rules */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CategoryRuleList"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    createCategoryRule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateCategoryRuleRequest"];
+            };
+        };
+        responses: {
+            /** @description Rule */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CategoryRule"];
+                };
+            };
+            /** @description Invalid request (`invalid_request`, `unknown_category`), or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The category is archived (`category_archived`) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    deleteCategoryRule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ruleId: components["parameters"]["RuleId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid request, or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Rule not found (`not_found`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    updateCategoryRule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ruleId: components["parameters"]["RuleId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateCategoryRuleRequest"];
+            };
+        };
+        responses: {
+            /** @description Rule */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CategoryRule"];
+                };
+            };
+            /** @description Invalid request (`invalid_request`, `unknown_category`), or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Rule not found (`not_found`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The category is archived (`category_archived`) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    applyCategoryRules: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ApplyCategoryRulesRequest"];
+            };
+        };
+        responses: {
+            /** @description Counts */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApplyCategoryRulesResult"];
+                };
+            };
+            /** @description Invalid request (`invalid_request`), or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
         };
     };
     getMonthlySummary: {
         parameters: {
             query: {
+                /** @description YYYY-MM. */
                 month: string;
+                currency?: string;
+                accountId?: string;
             };
             header?: never;
             path?: never;
@@ -382,18 +1467,23 @@ export interface operations {
                     "application/json": components["schemas"]["MonthlySummary"];
                 };
             };
-            /** @description Invalid request */
+            /** @description Invalid request (`invalid_request`) */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
         };
     };
     createCsvImport: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description The account to import into. Required unless the file has an account_id column. */
+                accountId?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -404,8 +1494,8 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Accepted */
-            202: {
+            /** @description Import result */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -413,12 +1503,85 @@ export interface operations {
                     "application/json": components["schemas"]["CsvImport"];
                 };
             };
-            /** @description Invalid CSV, or no valid X-Life-OS-Actor (actor_required) */
+            /** @description Unreadable CSV or missing columns (`invalid_csv`), no account (`account_required`), an unknown account (`unknown_account`), or no valid X-Life-OS-Actor (`actor_required`) */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The account is archived (`account_archived`) or a bank account (`managed_by_source`) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    importBankSync: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BankImportRequest"];
+            };
+        };
+        responses: {
+            /** @description Import result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BankImportResult"];
+                };
+            };
+            /** @description `invalid_request`, `unknown_account`, or `currency_mismatch`, or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    removeBankConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                connectionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
                 content?: never;
+            };
+            /** @description Invalid request, or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
         };
     };

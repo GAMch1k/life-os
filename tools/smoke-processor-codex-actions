@@ -69,7 +69,7 @@ curl --fail --silent "$gateway/api/calendar/v1/events?from=2026-10-12T00:00:00Z&
 
 finance_id=$(capture "Record a finance transaction for account $account_id: spent 123 USD at $finance_note on 2026-10-08.")
 wait_for_action "$finance_id" finance_create_manual_transaction
-curl --fail --silent "$gateway/api/finance/v1/transactions?limit=100" | jq -e --arg note "$finance_note" '.items | map(select((.note // "") | ascii_downcase | contains($note | ascii_downcase))) | length == 1' >/dev/null
+curl --fail --silent "$gateway/api/finance/v1/transactions?limit=100" | jq -e --arg note "$finance_note" '.items | map(select(((.notes // "") + " " + (.counterparty // "") + " " + (.description // "")) | ascii_downcase | contains($note | ascii_downcase))) | length == 1' >/dev/null
 
 task_title="P8 Codex mutation $stamp"
 task_id=$(curl "${actor[@]}" --fail --silent -H 'content-type: application/json' --data "$(jq -nc --arg title "$task_title" '{title:$title}')" "$gateway/api/tasks/v1/tasks" | jq -r '.id')

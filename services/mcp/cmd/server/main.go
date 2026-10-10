@@ -49,14 +49,6 @@ type taskMutation struct {
 	DueAt      *string `json:"dueAt,omitempty" jsonschema:"RFC3339 due time"`
 	ClearDueAt *bool   `json:"clearDueAt,omitempty"`
 }
-type financeAction struct {
-	IdempotencyKey string         `json:"idempotencyKey,omitempty"`
-	AccountID      string         `json:"accountId" jsonschema:"Explicit Finance account UUID from trusted source metadata"`
-	CategoryID     *string        `json:"categoryId,omitempty"`
-	Amount         map[string]any `json:"amount" jsonschema:"Money object with signed integer amount and currency"`
-	OccurredOn     string         `json:"occurredOn" jsonschema:"ISO transaction date"`
-	Note           *string        `json:"note,omitempty"`
-}
 type Output struct {
 	Data map[string]any `json:"data"`
 }
@@ -76,12 +68,11 @@ func run(ctx context.Context) error {
 	emitter := activity.NewEmitter(cfg.ActivityURL, "mcp", nil)
 	s := mcp.NewServer(&mcp.Implementation{Name: "life-os", Version: "0.1.0"}, nil)
 	add := func(n, d, b, p string) { addReadTool(s, hc, n, d, b, p) }
-	add("finance_month_summary", "Get Finance monthly summary", cfg.FinanceURL, "/v1/summaries/monthly?")
-	add("finance_find_transactions", "Find Finance transactions", cfg.FinanceURL, "/v1/transactions?")
 	add("task_list", "List Tasks", cfg.TasksURL, "/v1/tasks?")
 	add("task_search", "Search Tasks by title or notes before mutating one", cfg.TasksURL, "/v1/tasks?")
 	add("inbox_list", "List Inbox items", cfg.InboxURL, "/v1/inbox-items?")
 	addCalendarTools(s, hc, cfg.CalendarURL, emitter)
+	addFinanceTools(s, hc, cfg.FinanceURL, emitter)
 	// Inbox mutations are exposed as MCP tools so processors never bypass the
 	// service API or write the Inbox database directly.
 	mcp.AddTool(s, &mcp.Tool{Name: "inbox_start_processing_attempt", Description: "Start an auditable Inbox processing attempt"}, func(ctx context.Context, req *mcp.CallToolRequest, in inboxAction) (*mcp.CallToolResult, Output, error) {
@@ -141,11 +132,6 @@ func run(ctx context.Context) error {
 	mcp.AddTool(s, &mcp.Tool{Name: "task_reopen", Description: "Reopen one completed Task"}, func(ctx context.Context, req *mcp.CallToolRequest, in taskMutation) (*mcp.CallToolResult, Output, error) {
 		return audited(ctx, emitter, req, "task_reopen", in, func(trace activity.Trace) (*mcp.CallToolResult, Output, error) {
 			return post(ctx, hc, trace, cfg.TasksURL, "/v1/tasks/"+in.TaskID+"/reopen", nil)
-		})
-	})
-	mcp.AddTool(s, &mcp.Tool{Name: "finance_create_manual_transaction", Description: "Record a manual finance transaction only when account, amount, currency, and date are explicit"}, func(ctx context.Context, req *mcp.CallToolRequest, in financeAction) (*mcp.CallToolResult, Output, error) {
-		return audited(ctx, emitter, req, "finance_create_manual_transaction", in, func(trace activity.Trace) (*mcp.CallToolResult, Output, error) {
-			return post(ctx, hc, trace, cfg.FinanceURL, "/v1/transactions", in, in.IdempotencyKey)
 		})
 	})
 	mux := http.NewServeMux()
