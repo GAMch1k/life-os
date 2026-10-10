@@ -23,7 +23,7 @@ flowchart LR
 | --- | --- |
 | `id` | Event UUID. Chosen by the emitter; often deterministic (see below). |
 | `type` | Dotted name, e.g. `task.completed`. |
-| `source` | Emitting service: `voice`, `inbox`, `mcp`, `tasks`. |
+| `source` | Emitting service: `voice`, `inbox`, `mcp`, `tasks`, `calendar`, `finance`, `notifications`. |
 | `subject` | The entity the event is about: `{type, id}`, e.g. `{task, <uuid>}`. |
 | `correlationId` | The workflow this event belongs to. |
 | `causationId` | The event that directly caused this one (optional). |
@@ -78,7 +78,8 @@ The public gateway passes only `user` and `dev:<name>`: a claim to be the Life O
 | `notification.created` | notifications | `notification` | A notification was sent through the one path, by its producer (for example `system:calendar`); `data` holds `importance`, `category`, `source`, `link`, and the channels; the title is in the summary, never the body. A repeat with a known dedupe key records nothing. See [Notifications](notifications.md#activity). |
 | `notification.delivered` / `.delivery_failed` | notifications | `notification` | One per channel, by `system:notifications`, in the producer's workflow (caused by `notification.created`); `data` holds `channel`, `attempts`, and for a failure the `error`. Retries record nothing. |
 
-Finance changes are not recorded by Finance yet; its agent-driven changes still appear as `mcp.action.*` events.
+| `finance.account.*`, `finance.transaction.*`, `finance.category.*`, `finance.category_rule.*` | finance | `finance_account`, `finance_transaction`, `finance_category`, `finance_category_rule` | One per change through the Finance API (created, updated, archived/restored or deleted), by the request's actor, with its correlation and causation; transaction summaries name the amount and account ("Spent €12.00 at Bäckerei (Cash)"); never the owner's notes. Creating the built-in Cash account at startup is `system:finance`. See [Finance](finance.md#activity). |
+| `finance.category_rules.applied`, `finance.import.completed` / `.failed`, `finance.bank_import.completed`, `finance.bank_connection.removed` | finance | `finance_category_rules`, `finance_import`, `finance_bank_connection` | One summary event per re-apply of the rules, CSV import, bank sync (by `system:banking`), or removed bank connection, with counts only; imported transactions get no events of their own. |
 
 ## Correlation, causation, and subject
 
@@ -135,6 +136,6 @@ The contract is `services/activity/api/openapi.yaml`. The Dashboard Event Log (`
 ## Operations
 
 - Database: `activity_db` / `activity_user`, password `LIFE_OS_ACTIVITY_DB_PASSWORD` in `.env`. Fresh volumes are provisioned automatically. For an existing deployment, add the password and run `make db-provision` once before starting the new `activity` and `activity-migrate` services.
-- Emitting services (`tasks`, `inbox`, `voice`, `voice-worker`, `mcp`) read `ACTIVITY_SERVICE_URL`.
+- Emitting services (`tasks`, `inbox`, `voice`, `voice-worker`, `mcp`, `calendar`, `finance`) read `ACTIVITY_SERVICE_URL`.
 - Retention: events are kept indefinitely for now; they are small and single-user.
 - Verification: `make activity-trace-smoke` speaks a Task request (espeak-ng in a throwaway container). It sends the request through Voice, whisper.cpp, Inbox, the automatic processor with the authenticated Codex CLI, MCP, and Tasks on the disposable verification stack, then completes the Task itself (recorded as `dev:smoke-activity-trace`). It reconstructs and checks the whole chain from the Activity API alone.
