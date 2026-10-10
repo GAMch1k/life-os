@@ -88,10 +88,21 @@ func (p RetryPolicy) backoff(previous int) time.Duration {
 	return time.Duration(delay * (0.8 + 0.4*p.Jitter()))
 }
 
+// googleUnusable are Calendar's answers when Google cannot be written now
+// (unreachable, connection expired or missing): a dependency to wait for,
+// whatever the HTTP status.
+var googleUnusable = []string{"google_unavailable", "google_expired", "google_not_connected"}
+
 // classifyActionError separates an owning service rejecting the action (model
 // output) from it being unreachable (dependency).
 func classifyActionError(err error) failureKind {
-	if text := err.Error(); strings.Contains(text, " rejected") || strings.Contains(text, "returned 4") {
+	text := err.Error()
+	for _, code := range googleUnusable {
+		if strings.Contains(text, code) {
+			return failureDependency
+		}
+	}
+	if strings.Contains(text, " rejected") || strings.Contains(text, "returned 4") {
 		return failureModelOutput
 	}
 	return failureDependency

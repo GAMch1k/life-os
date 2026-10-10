@@ -131,14 +131,16 @@ func (r Runner) location(item inboxItem) *time.Location {
 	return time.UTC
 }
 
-// findEvents returns the distinct active manual events any of a mutation's
-// search terms matches, in the order found. The search covers events that
-// have not ended before the day the item was captured (in the owner's
-// timezone), so last year's appointment of the same name never makes a
-// capture ambiguous; cancelled events are left out by Calendar. Imported
-// (ICS, Google) events are managed by their source, which alone changes or
-// cancels them, so they are never candidates. The caller acts only on
-// exactly one.
+// findEvents returns the distinct active events the AI may change that any
+// of a mutation's search terms matches, in the order found. The search
+// covers events that have not ended before the day the item was captured
+// (in the owner's timezone), so last year's appointment of the same name
+// never makes a capture ambiguous; cancelled events are left out by
+// Calendar. Calendar is asked only for editable events: Life OS events and
+// Google events of calendars the owner may edit (written to Google). Feed
+// (ICS) events, read-only Google calendars, and occurrences of Google rules
+// Calendar cannot hold are managed by their source, so they are never
+// candidates. The caller acts only on exactly one.
 //
 // A recurring event is found as one occurrence (search items carry
 // occurrence), at most one per series: its next one, or for a cancellation
@@ -164,7 +166,7 @@ func (r Runner) findEvents(ctx context.Context, item inboxItem, action plannedAc
 	seen := map[string]bool{}
 	for _, window := range windows {
 		for _, term := range searchTerms(action.Arguments, "eventQuery", "eventQueryAlternatives") {
-			query := url.Values{"q": {term}, "from": {window.from.UTC().Format(time.RFC3339)}, "timeZone": {location.String()}, "sourceKind": {"manual"}, "limit": {fmt.Sprint(eventSearchLimit)}}
+			query := url.Values{"q": {term}, "from": {window.from.UTC().Format(time.RFC3339)}, "timeZone": {location.String()}, "editable": {"true"}, "limit": {fmt.Sprint(eventSearchLimit)}}
 			if !window.to.IsZero() {
 				query.Set("to", window.to.UTC().Format(time.RFC3339))
 			}
@@ -500,9 +502,11 @@ func eventWhen(event map[string]any, location *time.Location) string {
 const managedBySourceReason = "This event is managed by its source and can't be changed by capture"
 
 // managedBySource reports whether Calendar refused a change because the
-// event is imported (409, code managed_by_source). Retrying cannot help.
+// event is imported from a feed (409 managed_by_source) or read-only in
+// Google (409 google_read_only, such as a calendar the owner can only
+// read). Retrying cannot help.
 func managedBySource(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "managed_by_source")
+	return err != nil && (strings.Contains(err.Error(), "managed_by_source") || strings.Contains(err.Error(), "google_read_only"))
 }
 
 // calendarReviewReason tells the owner, in the Human Review queue, what the

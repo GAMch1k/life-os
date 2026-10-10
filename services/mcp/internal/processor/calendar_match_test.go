@@ -145,10 +145,11 @@ func TestCalendarUpdateFindsTheOneEventAcrossLanguagesAndKeepsItsLength(t *testi
 	if got, want := tools.terms(), []string{"dentist", "Zahnarzt", "стоматолог"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("searched %q, want %q", got, want)
 	}
-	// From the start of the capture's day in Berlin, in Berlin, active manual
-	// events only: imported ones are managed by their source.
+	// From the start of the capture's day in Berlin, in Berlin, active
+	// editable events only: feed events and read-only Google events are
+	// managed by their source.
 	for _, search := range tools.searches {
-		if search.Get("from") != "2026-10-09T22:00:00Z" || search.Get("timeZone") != "Europe/Berlin" || search.Get("limit") != "10" || search.Has("includeCancelled") || search.Get("sourceKind") != "manual" {
+		if search.Get("from") != "2026-10-09T22:00:00Z" || search.Get("timeZone") != "Europe/Berlin" || search.Get("limit") != "10" || search.Has("includeCancelled") || search.Get("editable") != "true" || search.Has("sourceKind") {
 			t.Fatalf("search %v", search)
 		}
 	}
@@ -237,9 +238,9 @@ func TestCalendarCancelAlwaysWaitsForTheOwnersApproval(t *testing.T) {
 	if tools.review == nil || !reflect.DeepEqual(tools.candidateIDs(), []string{"event-1"}) {
 		t.Fatalf("review = %#v", tools.review)
 	}
-	// Imported events are cancelled only by their source.
+	// Feed and read-only Google events are cancelled only by their source.
 	for _, search := range tools.searches {
-		if search.Get("sourceKind") != "manual" {
+		if search.Get("editable") != "true" || search.Has("sourceKind") {
 			t.Fatalf("cancel searched %v", search)
 		}
 	}
@@ -593,32 +594,50 @@ func TestOtherCalendarConflictsAreStillRetried(t *testing.T) {
 	}
 }
 
-// Events synced from Google Calendar (source.kind google) belong to Google
-// until two-way sync: the processor's search asks Calendar for Life OS
-// events only, so a synced event is never a candidate, and a change the
-// owner approved for one that Calendar refuses (409 managed_by_source)
-// goes back to Human Review instead of technical retry.
-func TestASyncedGoogleEventIsLeftToGoogle(t *testing.T) {
+// Events synced from Google Calendar (source.kind google) sync both ways:
+// the processor's search asks Calendar for the events it may change
+// (editable), which includes Google events of calendars the owner may edit,
+// so a single Google event is changed like a Life OS event (Calendar writes
+// it to Google). A change Calendar refuses because the event is read-only
+// in Google (409 google_read_only) goes to Human Review instead of
+// technical retry, and Google being unreachable or the connection expired
+// is a dependency to wait for.
+func TestAnEditableGoogleEventIsChangedLikeALifeOSEvent(t *testing.T) {
 	synced := timedEvent("event-google", "Team sync", "2026-10-16T13:00:00Z", "2026-10-16T14:00:00Z")
 	synced["source"] = map[string]any{"kind": "google", "name": "Work", "externalUid": "abc123"}
+	synced["editable"] = true
 
 	tools := newCalendarTools("Move the team sync to Monday at 9", synced)
+	tools.matches["team sync"] = []string{"event-google"}
 	runCalendarPlan(t, tools, `{"actions":[{"tool":"calendar_update","arguments":{"eventQuery":"team sync","startAt":"2026-10-12T09:00:00+02:00"}}],"confidence":0.95}`)
-	if len(tools.searches) == 0 {
-		t.Fatal("the processor did not search")
-	}
 	for _, search := range tools.searches {
-		if search.Get("sourceKind") != "manual" {
-			t.Fatalf("search %v includes synced events", search)
+		if search.Get("editable") != "true" || search.Has("sourceKind") {
+			t.Fatalf("search %v", search)
 		}
 	}
-	if tools.review == nil || !strings.HasPrefix(tools.review["errorSummary"].(string), "No upcoming Calendar event") || contains(tools.calls, "calendar_update") {
-		t.Fatalf("calls = %#v, review = %#v", tools.calls, tools.review)
+	want := map[string]any{"eventId": "event-google", "startAt": "2026-10-12T09:00:00+02:00", "endAt": "2026-10-12T10:00:00+02:00"}
+	if got := tools.inputs["calendar_update"]; !reflect.DeepEqual(got, want) || tools.review != nil || !contains(tools.calls, "inbox_resolve") {
+		t.Fatalf("calendar_update input = %#v, review = %#v", got, tools.review)
 	}
 
-	tools = newCalendarTools("Cancel the team sync", synced)
+	// A recurring Google event is changed only in the Calendar, like any.
+	series := timedEvent("event-standup", "Standup", "2026-10-12T07:00:00Z", "2026-10-12T07:15:00Z")
+	series["source"] = map[string]any{"kind": "google", "name": "Work", "externalUid": "standup"}
+	series["occurrence"] = map[string]any{"seriesId": "event-standup", "recurrenceId": "2026-10-12T07:00:00Z"}
+	tools = newCalendarTools("Move the standup to 10", series)
+	tools.matches["standup"] = []string{"event-standup"}
+	runCalendarPlan(t, tools, `{"actions":[{"tool":"calendar_update","arguments":{"eventQuery":"standup","startAt":"2026-10-12T10:00:00+02:00"}}],"confidence":0.95}`)
+	if contains(tools.calls, "calendar_update") || tools.review == nil {
+		t.Fatalf("a recurring Google event was changed by capture: %#v", tools.calls)
+	}
+}
+
+func TestAReadOnlyGoogleEventGoesToHumanReviewNotRetry(t *testing.T) {
+	synced := timedEvent("event-google", "Team sync", "2026-10-16T13:00:00Z", "2026-10-16T14:00:00Z")
+	synced["source"] = map[string]any{"kind": "google", "name": "Work", "externalUid": "abc123"}
+	tools := newCalendarTools("Cancel the team sync", synced)
 	approvedItem(tools, map[string]any{"tool": "calendar_cancel", "arguments": map[string]any{"eventQuery": "team sync", "taskId": "event-google"}})
-	tools.failTool = map[string]error{"calendar_cancel": errors.New(`MCP tool calendar_cancel rejected: service returned 409: {"error":{"code":"managed_by_source","message":"this event is managed by its source"}}`)}
+	tools.failTool = map[string]error{"calendar_cancel": errors.New(`MCP tool calendar_cancel rejected: service returned 409: {"error":{"code":"google_read_only","message":"“Work” is a Google calendar you can only read"}}`)}
 	runner := Runner{Planner: fakePlanner{err: errors.New("not planned")}, Tools: tools, Model: "test", TimeZone: berlin(t)}
 	if _, err := runner.Run(context.Background()); err != nil {
 		t.Fatal(err)
@@ -628,7 +647,19 @@ func TestASyncedGoogleEventIsLeftToGoogle(t *testing.T) {
 	}
 	for _, record := range tools.records {
 		if record["status"] == "retryable" || record["status"] == "failed" {
-			t.Fatalf("a synced event entered technical retry: %#v", tools.records)
+			t.Fatalf("a read-only Google event entered technical retry: %#v", tools.records)
 		}
+	}
+}
+
+func TestGoogleUnreachableIsADependencyFailure(t *testing.T) {
+	for _, code := range []string{"google_unavailable", "google_expired"} {
+		err := errors.New(`MCP tool calendar_update rejected: service returned 409: {"error":{"code":"` + code + `"}}`)
+		if kind := classifyActionError(err); kind != failureDependency {
+			t.Errorf("%s classified as %v", code, kind)
+		}
+	}
+	if kind := classifyActionError(errors.New(`MCP tool calendar_update rejected: service returned 409: {"error":{"code":"google_conflict"}}`)); kind != failureModelOutput {
+		t.Errorf("google_conflict classified as %v", kind)
 	}
 }
