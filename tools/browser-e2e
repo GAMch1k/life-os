@@ -2,7 +2,13 @@
 set -euo pipefail
 
 compose=(./tools/verify-compose)
-cleanup() { "${compose[@]}" down --volumes --remove-orphans >/dev/null; }
+# The Calendar feed tests serve their own ICS files from a fixture container
+# (verify-only overlay; never used for the deployed stack).
+ics_dir=$(mktemp -d)
+chmod 755 "$ics_dir"
+export LIFE_OS_E2E_ICS_DIR=$ics_dir
+export LIFE_OS_VERIFY_OVERLAYS=${LIFE_OS_VERIFY_OVERLAYS:+$LIFE_OS_VERIFY_OVERLAYS:}tools/fixtures/calendar-ics.compose.yaml
+cleanup() { "${compose[@]}" down --volumes --remove-orphans >/dev/null; rm -rf "$ics_dir"; }
 trap cleanup EXIT
 # The verification overlay deliberately uses immutable local image names. Build
 # the dashboard first so this browser test always exercises the current branch,
