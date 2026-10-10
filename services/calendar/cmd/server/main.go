@@ -3,10 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 	// The alpine runtime image has no zoneinfo; embed it so the owner's and
@@ -14,7 +12,6 @@ import (
 	_ "time/tzdata"
 
 	"github.com/gofiber/fiber/v3"
-	googleuuid "github.com/google/uuid"
 
 	"github.com/GAMch1k/life-os/pkg/activity"
 	"github.com/GAMch1k/life-os/pkg/database"
@@ -24,9 +21,7 @@ import (
 	"github.com/GAMch1k/life-os/services/calendar/internal/changefeed"
 	serviceconfig "github.com/GAMch1k/life-os/services/calendar/internal/config"
 	"github.com/GAMch1k/life-os/services/calendar/internal/google"
-	"github.com/GAMch1k/life-os/services/calendar/internal/ics"
 	"github.com/GAMch1k/life-os/services/calendar/internal/reminders"
-	"github.com/GAMch1k/life-os/services/calendar/internal/sources"
 )
 
 func main() {
@@ -51,13 +46,6 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("load owner timezone: %w", err)
 	}
-	schedule, err := sources.ParseSchedule(cfg.SourceRefreshAt, owner)
-	if err != nil {
-		return err
-	}
-	if cfg.ICSAllowPrivateURLs {
-		logger.Warn("CALENDAR_ICS_ALLOW_PRIVATE_URLS is set: calendar feeds may use http and private addresses (development only)")
-	}
 	pool, err := database.Open(ctx, cfg.DatabaseConfig())
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
@@ -70,13 +58,9 @@ func run(ctx context.Context) error {
 		// An integration's snapshot of a large calendar is one request.
 		httpserver.WithFiberConfig(fiber.Config{BodyLimit: 16 << 20}),
 	)
-	fetcher := ics.NewFetcher(cfg.ICSMaxBytes, time.Duration(cfg.ICSTimeoutSeconds)*time.Second, cfg.ICSAllowPrivateURLs)
+	// ICS feeds are refreshed by the calendar-feeds integration service
+	// through the integration API; Calendar downloads nothing itself.
 	emitter := activity.NewEmitter(cfg.ActivityURL, "calendar", logger)
-	refresher := sources.NewRefresher(pool, fetcher, schedule, emitter, logger)
-	scheduler := sources.NewScheduler(refresher, time.Minute, logger)
-	// Before the scheduler starts, so a new or reconfigured ZAW source is
-	// refreshed right away.
-	ensureZAW(ctx, refresher, cfg.ZAWICSURL, logger)
 	googleConfig, err := cfg.Google()
 	switch {
 	case err != nil:
@@ -86,7 +70,7 @@ func run(ctx context.Context) error {
 	}
 	googleService := google.NewService(googleConfig, pool, google.GoogleEndpoints, emitter, logger)
 	syncer := google.NewSyncer(googleService, owner, time.Duration(cfg.GoogleSyncSeconds)*time.Second, logger)
-	handler := api.NewHandler(pool, ownerTimeZone).WithSources(refresher, scheduler.Wake).WithActivity(emitter).WithGoogle(googleService)
+	handler := api.NewHandler(pool, ownerTimeZone).WithActivity(emitter).WithGoogle(googleService)
 	// Reminder delivery reads the events and occurrences as the API lists
 	// them and sends every effective reminder through Notifications.
 	dispatcher := reminders.New(pool, handler, notify.New(cfg.NotificationsURL, "calendar"), emitter, reminders.Config{
@@ -97,12 +81,11 @@ func run(ctx context.Context) error {
 	api.Register(app, handler.WithReminders(dispatcher))
 	app.OnShutdown(database.ClosePool(pool))
 
-	// The source scheduler, the Google syncer, and reminder delivery stop
-	// (finishing a refresh, sync, or run under way) before the pool closes:
-	// shutdown hooks run in reverse order.
+	// The Google syncer, reminder delivery, and the change feed pruning stop
+	// (finishing a sync or run under way) before the pool closes: shutdown
+	// hooks run in reverse order.
 	runCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	background(app, "calendar source scheduler", scheduler.Run)
 	background(app, "Google Calendar sync", syncer.Run)
 	background(app, "calendar reminder delivery", dispatcher.Run)
 	pruner := changefeed.NewPruner(pool, time.Duration(cfg.ChangeRetentionDays)*24*time.Hour, logger)
@@ -128,33 +111,4 @@ func background(app *httpserver.App, name string, work func(context.Context)) {
 			return fmt.Errorf("%s did not stop: %w", name, shutdown.Err())
 		}
 	})
-}
-
-// ensureZAW keeps the ZAW waste-collection source configured from
-// CALENDAR_ZAW_ICS_URL; unset leaves an existing one as it is. A failure is
-// logged, not fatal: Calendar serves without the source. The URL names a
-// street and is never logged.
-func ensureZAW(ctx context.Context, refresher *sources.Refresher, url string, logger *slog.Logger) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	if strings.TrimSpace(url) == "" {
-		existing, found, err := refresher.PresetSource(ctx, sources.PresetZAW)
-		switch {
-		case err != nil:
-			logger.Warn("ZAW source not checked", "error", err)
-		case found:
-			logger.Info("CALENDAR_ZAW_ICS_URL is not set; the existing ZAW source is left as it is",
-				"source", googleuuid.UUID(existing.ID.Bytes), "enabled", existing.Enabled)
-		default:
-			logger.Info("CALENDAR_ZAW_ICS_URL is not set; no ZAW source is configured")
-		}
-		return
-	}
-	result, err := refresher.EnsurePreset(ctx, sources.ZAWPreset(url))
-	if err != nil {
-		logger.Error("ZAW source not configured", "error", err)
-		return
-	}
-	logger.Info("ZAW source ensured", "source", googleuuid.UUID(result.Source.ID.Bytes), "action", result.Action,
-		"enabled", result.Source.Enabled, "refreshDue", result.Due)
 }

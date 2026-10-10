@@ -4,6 +4,7 @@ use (
 	./pkg
 	./services/activity
 	./services/calendar
+	./services/calendar-feeds
 	./services/finance
 	./services/inbox
 	./services/mcp

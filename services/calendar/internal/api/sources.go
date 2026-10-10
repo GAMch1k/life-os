@@ -12,20 +12,15 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/oapi-codegen/runtime/types"
 
-	"github.com/GAMch1k/life-os/pkg/activity"
 	"github.com/GAMch1k/life-os/pkg/httpserver"
 	"github.com/GAMch1k/life-os/services/calendar/internal/api/generated"
 	store "github.com/GAMch1k/life-os/services/calendar/internal/repository/generated"
 	"github.com/GAMch1k/life-os/services/calendar/internal/sources"
 )
 
-// Source configuration limits (mirrored in the OpenAPI contract).
-const (
-	maxSourceName   = 100
-	maxSourceURL    = 2048
-	maxFilterTerms  = 50
-	maxFilterLength = 100
-)
+// maxSourceName is the longest name the owner gives a source of Calendar's
+// own (mirrored in the OpenAPI contract).
+const maxSourceName = 100
 
 // resolveSources completes each item from its source and the owner's
 // settings: an imported event's source name, its defaultReminders (its
@@ -125,10 +120,11 @@ func sameReminder(a, b generated.Reminder) bool {
 }
 
 // managedByIntegration refuses what only the integration that syncs a feed
-// does: changing its URL or filter, or refreshing it.
+// does: changing its URL or filter (calendar-feeds keeps them, and refreshes
+// the feed).
 func managedByIntegration(name string) error {
 	return httpserver.NewError(fiber.StatusConflict, "managed_by_integration",
-		fmt.Sprintf("“%s” is synced by an integration, which keeps its URL and filter and refreshes it; its name, default reminders, default priority, and enabled can be changed here", name))
+		fmt.Sprintf("“%s” is synced by an integration, which keeps its URL and filter and refreshes it (feeds: the calendar-feeds service); its name, default reminders, default priority, and enabled can be changed here", name))
 }
 
 // listedSource reports whether row is served under /v1/sources: a feed or
@@ -178,21 +174,17 @@ func (h *Handler) respondSource(c fiber.Ctx, status int, row store.CalendarSourc
 	return c.Status(status).JSON(item)
 }
 
-// sourceConfig is a source's editable configuration.
+// sourceConfig is the owner's settings of a source.
 type sourceConfig struct {
 	Name             string
-	URL              string
 	Enabled          bool
-	Include, Exclude []string
 	DefaultReminders *[]generated.Reminder
 	DefaultPriority  generated.EventPriority
-	// Integration: an integration syncs the feed and keeps its URL and
-	// filter (see integration.go); they are not checked here.
+	// Integration: an integration syncs the source and may name it longer.
 	Integration bool
 }
 
-// validate checks the configuration and normalizes it (trimmed name and
-// terms, webcal:// as https://).
+// validate checks the settings and normalizes them (a trimmed name).
 func (h *Handler) validate(config *sourceConfig) error {
 	config.Name = strings.TrimSpace(config.Name)
 	limit := maxSourceName
@@ -201,30 +193,6 @@ func (h *Handler) validate(config *sourceConfig) error {
 	}
 	if config.Name == "" || utf8.RuneCountInString(config.Name) > limit {
 		return fmt.Errorf("name must be 1 to %d characters", limit)
-	}
-	if len(config.URL) > maxSourceURL {
-		return fmt.Errorf("url must be at most %d characters", maxSourceURL)
-	}
-	if !config.Integration {
-		normalized, err := h.fetcher.NormalizeURL(config.URL)
-		if err != nil {
-			return err
-		}
-		config.URL = normalized
-	}
-	for label, terms := range map[string]*[]string{"filter.include": &config.Include, "filter.exclude": &config.Exclude} {
-		if len(*terms) > maxFilterTerms {
-			return fmt.Errorf("%s takes at most %d terms", label, maxFilterTerms)
-		}
-		cleaned := make([]string, 0, len(*terms))
-		for _, term := range *terms {
-			term = strings.TrimSpace(term)
-			if term == "" || utf8.RuneCountInString(term) > maxFilterLength {
-				return fmt.Errorf("%s terms must be 1 to %d characters", label, maxFilterLength)
-			}
-			cleaned = append(cleaned, term)
-		}
-		*terms = cleaned
 	}
 	if !config.DefaultPriority.Valid() {
 		return errors.New("defaultPriority must be low, medium, or high")
@@ -235,46 +203,9 @@ func (h *Handler) validate(config *sourceConfig) error {
 	return nil
 }
 
-func (h *Handler) CreateSource(c fiber.Ctx) error {
-	var body generated.CreateSourceRequest
-	if err := c.Bind().Body(&body); err != nil {
-		return badRequest("invalid source request")
-	}
-	if body.Kind != nil && *body.Kind != generated.CalendarSourceKindIcs {
-		return badRequest("kind must be ics")
-	}
-	config := sourceConfig{
-		Name: body.Name, URL: body.Url, Enabled: body.Enabled == nil || *body.Enabled, Include: []string{}, Exclude: []string{},
-		DefaultReminders: body.DefaultReminders, DefaultPriority: priorityOr(body.DefaultPriority, defaultPriority),
-	}
-	if body.Filter != nil {
-		config.Include, config.Exclude = orEmpty(body.Filter.Include), orEmpty(body.Filter.Exclude)
-	}
-	if err := h.validate(&config); err != nil {
-		return badRequest(err.Error())
-	}
-	reminders, err := encodeReminders(config.DefaultReminders)
-	if err != nil {
-		return internal(err)
-	}
-	now := h.now().UTC()
-	row, err := h.queries.CreateSource(c.Context(), store.CreateSourceParams{
-		Kind: string(generated.CalendarSourceKindIcs), Name: config.Name, Url: config.URL, Enabled: config.Enabled,
-		FilterInclude: config.Include, FilterExclude: config.Exclude, DefaultReminders: reminders, DefaultPriority: priorityColumn(&config.DefaultPriority),
-		// The first import is due right away.
-		NextRefreshAt: timestamp(&now),
-	})
-	if err != nil {
-		return internal(err)
-	}
-	if config.Enabled {
-		h.wake()
-	}
-	return h.respondSource(c, fiber.StatusCreated, row)
-}
-
 // updatableSourceFields are the UpdateSourceRequest properties; only
-// defaultReminders may be null.
+// defaultReminders may be null. url and filter belong to the integration
+// that syncs the source (409 managed_by_integration).
 var updatableSourceFields = map[string]bool{"name": true, "url": true, "enabled": true, "filter": true, "defaultReminders": true, "defaultPriority": true}
 
 func (h *Handler) UpdateSource(c fiber.Ctx, id types.UUID) error {
@@ -307,25 +238,22 @@ func (h *Handler) UpdateSource(c fiber.Ctx, id types.UUID) error {
 		if err != nil {
 			return internal(err)
 		}
+		if present["url"] || present["filter"] {
+			return managedByIntegration(current.Name)
+		}
 		reminders, err := decodeReminders(current.DefaultReminders)
 		if err != nil {
 			return internal(err)
 		}
 		next := sourceConfig{
-			Name: current.Name, URL: deref(current.Url), Enabled: current.Enabled, Include: current.FilterInclude, Exclude: current.FilterExclude,
-			DefaultReminders: reminders, DefaultPriority: generated.EventPriority(current.DefaultPriority), Integration: !current.InProcess,
+			Name: current.Name, Enabled: current.Enabled, DefaultReminders: reminders,
+			DefaultPriority: generated.EventPriority(current.DefaultPriority), Integration: !current.InProcess,
 		}
 		if present["name"] {
 			next.Name = *body.Name
 		}
-		if present["url"] {
-			next.URL = *body.Url
-		}
 		if present["enabled"] {
 			next.Enabled = *body.Enabled
-		}
-		if present["filter"] {
-			next.Include, next.Exclude = orEmpty(body.Filter.Include), orEmpty(body.Filter.Exclude)
 		}
 		if present["defaultReminders"] {
 			next.DefaultReminders = body.DefaultReminders
@@ -340,35 +268,15 @@ func (h *Handler) UpdateSource(c fiber.Ctx, id types.UUID) error {
 		if err != nil {
 			return internal(err)
 		}
-		// A new URL or filter needs a full download and reconcile; so does a
-		// source that is switched back on. Either is due right away.
-		reconfigured := next.URL != deref(current.Url) || !equalTerms(next.Include, current.FilterInclude) || !equalTerms(next.Exclude, current.FilterExclude)
-		if next.Integration && reconfigured {
-			return managedByIntegration(current.Name)
-		}
-		url := current.Url // an integration's source keeps none
-		if !next.Integration {
-			url = &next.URL
-		}
-		params := store.UpdateSourceParams{
-			ID: current.ID, ExpectedUpdatedAt: current.UpdatedAt, Name: next.Name, Url: url, Enabled: next.Enabled,
-			FilterInclude: next.Include, FilterExclude: next.Exclude, DefaultReminders: encoded, DefaultPriority: priorityColumn(&next.DefaultPriority),
-			ResetValidators: reconfigured,
-		}
-		due := next.Enabled && (reconfigured || !current.Enabled) && !next.Integration
-		if due {
-			now := h.now().UTC()
-			params.NextRefreshAt = timestamp(&now)
-		}
-		row, err := h.queries.UpdateSource(c.Context(), params)
+		row, err := h.queries.UpdateSource(c.Context(), store.UpdateSourceParams{
+			ID: current.ID, ExpectedUpdatedAt: current.UpdatedAt, Name: next.Name, Enabled: next.Enabled,
+			DefaultReminders: encoded, DefaultPriority: priorityColumn(&next.DefaultPriority),
+		})
 		if errors.Is(err, pgx.ErrNoRows) {
 			continue // changed or deleted meanwhile: read it again
 		}
 		if err != nil {
 			return internal(err)
-		}
-		if due {
-			h.wake()
 		}
 		return h.respondSource(c, fiber.StatusOK, row)
 	}
@@ -386,42 +294,23 @@ func (h *Handler) DeleteSource(c fiber.Ctx, id types.UUID) error {
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
-// RefreshSource runs a refresh now and returns the source with its outcome.
-func (h *Handler) RefreshSource(c fiber.Ctx, id types.UUID) error {
-	current, err := h.queries.GetSource(c.Context(), pgUUID(id))
-	if errors.Is(err, pgx.ErrNoRows) || err == nil && !listedSource(current) {
-		return sourceNotFound() // a synced Google calendar syncs through /v1/google/calendars
-	}
-	if err != nil {
-		return internal(err)
-	}
-	if !current.InProcess {
-		return managedByIntegration(current.Name)
-	}
-	if h.refresher == nil {
-		return internal(errors.New("source refresh is not configured"))
-	}
-	row, err := h.refresher.Refresh(c.Context(), id, sources.Trigger{Manual: true, Trace: activity.FromRequest(c)})
-	switch {
-	case errors.Is(err, sources.ErrNotFound):
-		return sourceNotFound()
-	case errors.Is(err, sources.ErrDisabled):
-		return httpserver.NewError(fiber.StatusConflict, "source_disabled", "the source is disabled; enable it to refresh it")
-	case errors.Is(err, sources.ErrInProgress):
-		return httpserver.NewError(fiber.StatusConflict, "refresh_in_progress", "a refresh of this source is already running; try again shortly")
-	case errors.Is(err, sources.ErrSuperseded):
-		return httpserver.NewError(fiber.StatusConflict, "conflict", sources.ErrSuperseded.Error())
-	case err != nil:
-		return internal(err)
-	}
-	return h.respondSource(c, fiber.StatusOK, row)
-}
-
-// source renders a stored source.
+// source renders a stored source. A source an integration syncs shows the
+// owner's settings only: its URL, filter, preset, and refresh state are the
+// integration's (the legacy columns of a handed-over feed are left
+// unread until P11-09 drops them).
 func (h *Handler) source(row store.CalendarSource) (generated.CalendarSource, error) {
 	reminders, err := decodeReminders(row.DefaultReminders)
 	if err != nil {
 		return generated.CalendarSource{}, err
+	}
+	if !row.InProcess {
+		return generated.CalendarSource{
+			Id: uuid(row.ID), Kind: generated.CalendarSourceKind(row.Kind), Name: row.Name, Enabled: row.Enabled,
+			Integration: row.Integration, ExternalId: row.ExternalID, Provider: row.Provider, ReadOnly: &row.ReadOnly,
+			Filter:           generated.SourceFilter{Include: []string{}, Exclude: []string{}},
+			DefaultReminders: reminders, DefaultPriority: generated.EventPriority(row.DefaultPriority),
+			CreatedAt: row.CreatedAt.Time.UTC(), UpdatedAt: row.UpdatedAt.Time.UTC(),
+		}, nil
 	}
 	refresh := generated.SourceRefreshState{
 		NextRefreshAt: nullableTime(row.NextRefreshAt), LastAttemptAt: nullableTime(row.LastAttemptAt), LastSuccessAt: nullableTime(row.LastSuccessAt),
@@ -457,16 +346,4 @@ func orEmpty(values []string) []string {
 		return []string{}
 	}
 	return values
-}
-
-func equalTerms(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for index := range a {
-		if a[index] != b[index] {
-			return false
-		}
-	}
-	return true
 }

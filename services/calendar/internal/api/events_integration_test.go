@@ -145,17 +145,21 @@ func (c apiClient) seed(params store.CreateEventParams) store.Event {
 	return item
 }
 
-// newSource registers a calendar source (imported events must belong to
-// one) without refreshing it.
+// newSource adds a feed as Calendar refreshed it itself before the handover
+// to calendar-feeds (kind ics, in process, with the identity migration 000014
+// gave it); imported events must belong to a source.
 func (c apiClient) newSource(name string) googleuuid.UUID {
 	c.t.Helper()
-	source, err := c.queries.CreateSource(context.Background(), store.CreateSourceParams{
-		Kind: "ics", Name: name, Url: "https://calendar.example.org/" + name + ".ics", Enabled: true, FilterInclude: []string{}, FilterExclude: []string{},
-	})
+	var id pgtype.UUID
+	err := c.handler.pool.QueryRow(context.Background(), `
+WITH new AS (SELECT gen_random_uuid() AS id)
+INSERT INTO calendar_sources (id, kind, name, url, integration, external_id, provider)
+VALUES ((SELECT id FROM new), 'ics', $1, $2, 'calendar-feeds', (SELECT id FROM new)::text, 'ICS')
+RETURNING id`, name, "https://calendar.example.org/"+name+".ics").Scan(&id)
 	if err != nil {
 		c.t.Fatalf("source %q: %v", name, err)
 	}
-	return source.ID.Bytes
+	return id.Bytes
 }
 
 func timedParams(title, start string, minutes int) store.CreateEventParams {

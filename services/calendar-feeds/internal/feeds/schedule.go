@@ -1,7 +1,9 @@
-// Package sources runs Calendar's source registry: refreshing a source
-// (download, parse, reconcile its imported events, record the outcome) and
-// the daily scheduler. The ICS specifics live in package ics.
-package sources
+// Package feeds runs the calendar feeds: refreshing a feed (download,
+// parse, filter, sync its events to its Calendar source, record the
+// outcome), the daily scheduler, and the presets configured from the
+// environment. The ICS specifics live in package ics; Calendar is reached
+// only through package calendar.
+package feeds
 
 import (
 	"fmt"
