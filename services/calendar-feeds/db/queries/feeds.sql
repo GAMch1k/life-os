@@ -133,27 +133,3 @@ SET url = sqlc.arg(url), filter_include = sqlc.arg(filter_include)::text[], filt
     updated_at = now()
 WHERE id = sqlc.arg(id)
 RETURNING *;
-
--- The one-time handoff from Calendar (calendar-feeds handoff).
-
--- name: HandOverFeed :execrows
--- Adds a feed Calendar refreshed itself until now, with its configuration and
--- refresh state, under its Calendar source's id (its externalId too). It is
--- registered again before its first refresh, as the integration API asks
--- after a handover; Calendar keeps the owner's settings. A feed already
--- handed over stays as it is, so the handoff can run again.
-INSERT INTO feeds (id, source_id, name, url, enabled, filter_include, filter_exclude, preset, preset_config, register_pending,
-                   next_refresh_at, last_attempt_at, last_success_at, last_outcome, last_error, last_counts,
-                   consecutive_failures, etag, last_modified, created_at, updated_at)
-VALUES (sqlc.arg(id), sqlc.arg(id), sqlc.arg(name), sqlc.arg(url), sqlc.arg(enabled),
-        sqlc.arg(filter_include)::text[], sqlc.arg(filter_exclude)::text[], sqlc.narg(preset), sqlc.narg(preset_config), true,
-        sqlc.narg(next_refresh_at), sqlc.narg(last_attempt_at), sqlc.narg(last_success_at), sqlc.narg(last_outcome),
-        sqlc.narg(last_error), sqlc.narg(last_counts), sqlc.arg(consecutive_failures), sqlc.narg(etag), sqlc.narg(last_modified),
-        sqlc.arg(created_at), sqlc.arg(updated_at))
-ON CONFLICT (id) DO NOTHING;
-
--- name: DeleteUnregisteredPresetFeed :execrows
--- A preset feed this service added before the handoff and never registered
--- in Calendar (its registration waits while Calendar has feeds this service
--- does not know): the handed-over feed replaces it.
-DELETE FROM feeds WHERE preset = sqlc.arg(preset)::text AND id <> sqlc.arg(id) AND source_id IS NULL;

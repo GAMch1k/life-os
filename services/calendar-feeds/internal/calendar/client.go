@@ -45,7 +45,7 @@ type Source struct {
 	Name             string          `json:"name"`
 	Enabled          bool            `json:"enabled"`
 	ReadOnly         bool            `json:"readOnly"`
-	InProcess        bool            `json:"inProcess"`
+	PrivateLocation  bool            `json:"privateLocation"`
 	DefaultReminders json.RawMessage `json:"defaultReminders"`
 	DefaultPriority  string          `json:"defaultPriority"`
 }
@@ -53,11 +53,14 @@ type Source struct {
 // Registration registers or updates a source
 // (RegisterIntegrationSourceRequest). DefaultReminders and DefaultPriority
 // are sent only when set: raw JSON (null for none) and a priority; left out,
-// they say nothing about the owner's settings.
+// they say nothing about the owner's settings. PrivateLocation, when set,
+// says whether the events' locations are private (reminders leave them
+// out); left out, Calendar keeps the source's.
 type Registration struct {
 	Name             string          `json:"name"`
 	Provider         string          `json:"provider"`
 	ReadOnly         bool            `json:"readOnly"`
+	PrivateLocation  *bool           `json:"privateLocation,omitempty"`
 	DefaultReminders json.RawMessage `json:"defaultReminders,omitempty"`
 	DefaultPriority  string          `json:"defaultPriority,omitempty"`
 }
@@ -106,9 +109,8 @@ type SyncResult struct {
 
 // Error codes of Calendar's answers this service acts on.
 const (
-	CodeSourceDisabled  = "source_disabled"
-	CodeSourceInProcess = "source_in_process"
-	CodeEmptySnapshot   = "empty_snapshot"
+	CodeSourceDisabled = "source_disabled"
+	CodeEmptySnapshot  = "empty_snapshot"
 )
 
 // StatusError is an answer other than success.

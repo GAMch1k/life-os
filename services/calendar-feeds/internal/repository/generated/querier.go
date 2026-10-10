@@ -28,10 +28,6 @@ type Querier interface {
 	// its first refresh (register_pending).
 	CreatePresetFeed(ctx context.Context, arg CreatePresetFeedParams) (Feed, error)
 	DeleteFeed(ctx context.Context, id pgtype.UUID) (int64, error)
-	// A preset feed this service added before the handoff and never registered
-	// in Calendar (its registration waits while Calendar has feeds this service
-	// does not know): the handed-over feed replaces it.
-	DeleteUnregisteredPresetFeed(ctx context.Context, arg DeleteUnregisteredPresetFeedParams) (int64, error)
 	// Records a refresh outcome (the whole new state, computed by the caller
 	// under LockFeed) and releases the lease.
 	FinishFeedRefresh(ctx context.Context, arg FinishFeedRefreshParams) (Feed, error)
@@ -39,13 +35,6 @@ type Querier interface {
 	// Preset feeds are configured from the environment at startup
 	// (EnsurePreset), inside one transaction holding LockPreset.
 	GetPresetFeed(ctx context.Context, preset string) (Feed, error)
-	// The one-time handoff from Calendar (calendar-feeds handoff).
-	// Adds a feed Calendar refreshed itself until now, with its configuration and
-	// refresh state, under its Calendar source's id (its externalId too). It is
-	// registered again before its first refresh, as the integration API asks
-	// after a handover; Calendar keeps the owner's settings. A feed already
-	// handed over stays as it is, so the handoff can run again.
-	HandOverFeed(ctx context.Context, arg HandOverFeedParams) (int64, error)
 	// Enabled feeds whose next refresh is due and that nobody is refreshing.
 	ListDueFeeds(ctx context.Context, now pgtype.Timestamptz) ([]pgtype.UUID, error)
 	ListFeeds(ctx context.Context) ([]Feed, error)

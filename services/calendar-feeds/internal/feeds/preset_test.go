@@ -5,9 +5,11 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/GAMch1k/life-os/services/calendar-feeds/internal/ics"
+	store "github.com/GAMch1k/life-os/services/calendar-feeds/internal/repository/generated"
 )
 
 func zawFixture(t *testing.T) []ics.Item {
@@ -104,5 +106,24 @@ func TestSameJSON(t *testing.T) {
 		if got := sameJSON([]byte(tc.a), []byte(tc.b)); got != tc.want {
 			t.Errorf("sameJSON(%s, %s) = %v", tc.a, tc.b, got)
 		}
+	}
+}
+
+// Only the ZAW feed's source says its locations are private (the owner's
+// street); another feed leaves Calendar's setting alone.
+func TestOnlyTheZAWFeedRegistersPrivateLocations(t *testing.T) {
+	preset := PresetZAW
+	config, _ := json.Marshal(ZAWPreset("https://feeds.example.test/zaw.ics").Config)
+	zaw := Registration(store.Feed{Name: "ZAW", Preset: &preset, PresetConfig: config})
+	if zaw.Provider != ProviderZAW || zaw.PrivateLocation == nil || !*zaw.PrivateLocation {
+		t.Fatalf("ZAW registration = %+v", zaw)
+	}
+	other := Registration(store.Feed{Name: "Holidays"})
+	if other.Provider != ProviderICS || other.PrivateLocation != nil {
+		t.Fatalf("other registration = %+v", other)
+	}
+	encoded, _ := json.Marshal(other)
+	if strings.Contains(string(encoded), "privateLocation") {
+		t.Fatalf("another feed sends privateLocation: %s", encoded)
 	}
 }

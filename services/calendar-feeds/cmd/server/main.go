@@ -22,19 +22,11 @@ import (
 	"github.com/GAMch1k/life-os/services/calendar-feeds/internal/calendar"
 	serviceconfig "github.com/GAMch1k/life-os/services/calendar-feeds/internal/config"
 	"github.com/GAMch1k/life-os/services/calendar-feeds/internal/feeds"
-	"github.com/GAMch1k/life-os/services/calendar-feeds/internal/handoff"
 	"github.com/GAMch1k/life-os/services/calendar-feeds/internal/ics"
 	store "github.com/GAMch1k/life-os/services/calendar-feeds/internal/repository/generated"
 )
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "handoff" {
-		if err := runHandoff(context.Background()); err != nil {
-			fmt.Fprintf(os.Stderr, "calendar-feeds handoff failed: %v\n", err)
-			os.Exit(1)
-		}
-		return
-	}
 	if err := run(context.Background()); err != nil {
 		fmt.Fprintf(os.Stderr, "service startup failed: %v\n", err)
 		os.Exit(1)
@@ -138,44 +130,4 @@ func ensureZAW(ctx context.Context, refresher *feeds.Refresher, url string, logg
 	}
 	logger.Info("ZAW feed ensured", "feed", googleuuid.UUID(result.Feed.ID.Bytes), "action", result.Action,
 		"enabled", result.Feed.Enabled, "refreshDue", result.Due, "registrationPending", result.Feed.RegisterPending)
-}
-
-// runHandoff is `calendar-feeds handoff`: the one-time handoff of Calendar's
-// ICS feeds (docs/operations/calendar-feeds-handoff.md). DATABASE_URL is the
-// feeds database (already migrated); HANDOFF_CALENDAR_DATABASE_URL is
-// Calendar's, read only. It prints counts only, never a feed URL.
-func runHandoff(ctx context.Context) error {
-	feedsURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
-	calendarURL := strings.TrimSpace(os.Getenv("HANDOFF_CALENDAR_DATABASE_URL"))
-	if feedsURL == "" || calendarURL == "" {
-		return fmt.Errorf("set DATABASE_URL (calendar_feeds_db) and HANDOFF_CALENDAR_DATABASE_URL (calendar_db, read only)")
-	}
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-	defer cancel()
-	// Calendar's database is only read: every transaction of this pool is
-	// read-only, and the handoff reads in one read-only transaction.
-	calendarConfig, err := database.ParsePoolConfig(database.Config{URL: calendarURL, ApplicationName: "calendar-feeds-handoff"})
-	if err != nil {
-		return fmt.Errorf("open Calendar's database: %w", err)
-	}
-	calendarConfig.ConnConfig.RuntimeParams["default_transaction_read_only"] = "on"
-	calendarPool, err := database.OpenConfig(ctx, calendarConfig)
-	if err != nil {
-		return fmt.Errorf("open Calendar's database: %w", err)
-	}
-	defer calendarPool.Close()
-	feedsPool, err := database.Open(ctx, database.Config{URL: feedsURL, ApplicationName: "calendar-feeds-handoff"})
-	if err != nil {
-		return fmt.Errorf("open the feeds database: %w", err)
-	}
-	defer feedsPool.Close()
-	result, err := handoff.Run(ctx, calendarPool, feedsPool)
-	if err != nil {
-		return err
-	}
-	fmt.Println(result.String())
-	if result.InProcess > 0 {
-		fmt.Println("warning: Calendar still refreshes some of these feeds itself; run Calendar's migrations (calendar-migrate) before starting calendar-feeds")
-	}
-	return nil
 }

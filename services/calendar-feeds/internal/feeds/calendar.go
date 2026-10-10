@@ -36,10 +36,10 @@ const (
 )
 
 // errUnknownSources: Calendar has sources of this integration the feeds
-// database does not know, so the feeds from before this service have not
-// been handed over; registering a new preset source now would import its
-// events a second time.
-var errUnknownSources = errors.New("Calendar has calendar-feeds sources this service does not know: run `calendar-feeds handoff` first")
+// database does not know (such as after calendar_feeds_db was replaced);
+// registering a new preset source now would import its events a second
+// time.
+var errUnknownSources = errors.New("Calendar has calendar-feeds sources this service does not know (was calendar_feeds_db replaced?); delete them in Calendar, or restore the feeds database, before new feeds are registered")
 
 // SourceEvents turns feed items into the events Calendar's sync takes. An
 // item Calendar would refuse (beyond its limits, such as an over-long UID)
@@ -114,13 +114,16 @@ func nonEmpty(value *string) *string {
 // name and default reminders it configures (Calendar changes them only when
 // they differ from what was sent before, so the owner's edits stay);
 // another feed sends its name and says nothing about the owner's settings.
+// The ZAW feed's event locations are the owner's own street, so its source
+// says they are private (reminders leave them out).
 func Registration(feed store.Feed) calendar.Registration {
 	registration := calendar.Registration{Name: feed.Name, Provider: ProviderICS, ReadOnly: true}
 	if feed.Preset == nil {
 		return registration
 	}
 	if *feed.Preset == PresetZAW {
-		registration.Provider = ProviderZAW
+		private := true
+		registration.Provider, registration.PrivateLocation = ProviderZAW, &private
 	}
 	var config PresetConfig
 	if json.Unmarshal(feed.PresetConfig, &config) == nil {
@@ -137,11 +140,11 @@ func Registration(feed store.Feed) calendar.Registration {
 // Register registers (or registers again) the feed's source in Calendar
 // and records what Calendar answered: the source's id, the owner's name for
 // it, and whether it is enabled. A feed whose source Calendar has never
-// registered waits while Calendar has sources of this integration that are
-// not handed over (errUnknownSources).
+// registered waits while Calendar has sources of this integration that no
+// feed here belongs to (errUnknownSources).
 func (r *Refresher) Register(ctx context.Context, feed store.Feed) (store.Feed, error) {
 	if !feed.SourceID.Valid {
-		if err := r.checkHandedOver(ctx); err != nil {
+		if err := r.checkKnownSources(ctx); err != nil {
 			return feed, err
 		}
 	}
@@ -160,9 +163,9 @@ func (r *Refresher) Register(ctx context.Context, feed store.Feed) (store.Feed, 
 	return updated, nil
 }
 
-// checkHandedOver refuses while Calendar has sources of this integration
+// checkKnownSources refuses while Calendar has sources of this integration
 // that no feed here belongs to.
-func (r *Refresher) checkHandedOver(ctx context.Context) error {
+func (r *Refresher) checkKnownSources(ctx context.Context) error {
 	sources, err := r.calendar.ListSources(ctx)
 	if err != nil {
 		return err
