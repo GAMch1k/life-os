@@ -1,6 +1,6 @@
 .PHONY: build run test generate generate-api migrate-up migrate-down docker-build docker-run check
 
-IMAGE ?= lifeos-service-template:local
+IMAGE ?= lifeos-banking:local
 PORT ?= 8080
 
 build:

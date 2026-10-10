@@ -22,7 +22,7 @@ var sequence atomic.Int64
 
 // Open creates a fresh schema, applies every up migration in order, and
 // drops the schema when the test ends.
-func Open(t *testing.T) *pgxpool.Pool {
+func Open(t testing.TB) *pgxpool.Pool {
 	t.Helper()
 	url := os.Getenv("BANKING_TEST_DATABASE_URL")
 	if url == "" {
@@ -53,7 +53,7 @@ func Open(t *testing.T) *pgxpool.Pool {
 
 // Migrations lists the migration files of one direction ("up" or "down"),
 // up in order and down in reverse order.
-func Migrations(t *testing.T, direction string) []string {
+func Migrations(t testing.TB, direction string) []string {
 	t.Helper()
 	_, file, _, _ := runtime.Caller(0)
 	paths, err := filepath.Glob(filepath.Join(filepath.Dir(file), "..", "..", "db", "migrations", "*."+direction+".sql"))
@@ -70,7 +70,7 @@ func Migrations(t *testing.T, direction string) []string {
 }
 
 // Apply runs one migration file.
-func Apply(t *testing.T, pool *pgxpool.Pool, path string) {
+func Apply(t testing.TB, pool *pgxpool.Pool, path string) {
 	t.Helper()
 	migration, err := os.ReadFile(path)
 	if err != nil {

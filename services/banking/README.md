@@ -1,58 +1,44 @@
-# Canonical Go + Fiber service template
+# Banking service
 
-This is the neutral starting point for Life OS backend services. It provides
-the standard process, HTTP, persistence, migration, and OpenAPI layout without
-introducing a Finance, Tasks, Inbox, Calendar, or other business domain.
+The bank integration. Banking connects the owner's bank accounts through
+[Enable Banking](https://enablebanking.com/docs/), a licensed PSD2 provider,
+with read-only account information consent (never payments). It owns
+everything bank-side: the provider adapter, the consent and the sealed
+provider session, the sync schedule within the banks' daily limits, and the
+consent reminders. It pushes accounts and transactions into Finance only
+through Finance's bank import endpoint (`POST /v1/imports/bank`, and
+`DELETE /v1/imports/bank/{connectionId}` on disconnect). It never reads
+Finance's database, and services never read `banking_db`.
 
-Run `make create-service SERVICE=<name>` from the repository root to turn this
-template into a named service. Do not add business entities, routes, tables,
-or queries to the template itself.
+See [`docs/services/banking.md`](../../docs/services/banking.md) for the
+design, the API, and the sync rules, and
+[`docs/operations/banking.md`](../../docs/operations/banking.md) for setup,
+reconnecting, and revoking.
 
 ## Layout
 
 ```text
-api/openapi.yaml                 # transport-contract placeholder
-cmd/server/                      # process entrypoint
-db/migrations/                   # reversible, service-owned migrations
-db/queries/                      # service-owned sqlc input
-internal/api/                    # HTTP adapters
-internal/config/                 # service configuration
-internal/domain/                 # service domain types
-internal/repository/             # persistence adapters and sqlc output
-internal/service/                # service use cases
+api/openapi.yaml               # Banking API contract (source of truth)
+cmd/server/                    # process entrypoint: HTTP API and the scheduler
+db/migrations/                 # bank_connections and bank_auth_states
+db/queries/                    # sqlc input
+internal/api/                  # HTTP adapter
+internal/banking/              # connect, sync, consent, disconnect; mapping to Finance
+internal/enablebanking/        # Enable Banking client (JWT, PSU headers, errors)
+internal/enablebanking/fakebank/  # in-memory Enable Banking API for tests
+internal/finance/              # Finance bank import client (mirrors Finance's contract)
+internal/finance/fakefinance/  # Finance stand-in for tests
+internal/testdb/, internal/testsupport/  # integration test wiring
 ```
 
-## Conventions
+## Tests
 
-- Every generated service is an independent Go module.
-- Shared infrastructure comes only from `github.com/GAMch1k/life-os/pkg`.
-- The service owns all contents of `db/`; it never reads another service's
-  database.
-- Migrations are six-digit, ordered, and reversible.
-- sqlc input lives in `db/queries`; generated pgx/v5 code is committed under
-  `internal/repository/generated`.
-- The process exposes the shared `/health` and `/ready` endpoints and performs
-  graceful shutdown through `pkg/httpserver`.
-
-## Commands
-
-From this directory, with `DATABASE_URL` set to this service's database:
+Unit tests need nothing. Integration tests run against the throwaway Postgres
+named by `BANKING_TEST_DATABASE_URL` (each test creates and drops its own
+schema) and skip when it is unset. They never call the real Enable Banking
+API: `fakebank` checks each request's JWT against a test key.
 
 ```sh
-make generate
-make test
-make migrate-up DATABASE_URL='postgres://...'
-make run DATABASE_URL='postgres://...'
+BANKING_TEST_DATABASE_URL='postgres://postgres:test@127.0.0.1:55441/postgres?sslmode=disable' \
+  GOWORK=off go test -count=1 ./...
 ```
-
-Build the image from the repository root context and run it on the local Life
-OS Docker network:
-
-```sh
-make docker-build
-make docker-run DATABASE_URL='postgres://banking_user:password@postgres:5432/banking_db?sslmode=disable'
-```
-
-The template's baseline migration is intentionally a no-op. It proves the
-migration workflow without creating a sample business table; generated services
-replace it with their first service-owned migration.
