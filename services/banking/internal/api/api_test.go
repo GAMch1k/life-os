@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -211,5 +212,59 @@ func assertNoSecrets(t *testing.T, h *testsupport.Harness, body string) {
 		if strings.Contains(body, secret) {
 			t.Errorf("response contains %q: %s", secret, body)
 		}
+	}
+}
+
+func TestConsentFailuresOverHTTP(t *testing.T) {
+	h := testsupport.New(t)
+	app := newApp(h.Service)
+
+	if got := send(t, app, http.MethodPost, "/v1/connections/consent-failure", `{"error":"server_error"}`, nil); got.status != http.StatusBadRequest || got.error.Code != activity.ActorRequiredCode {
+		t.Fatalf("no actor = %d %+v", got.status, got.error)
+	}
+	for _, body := range []string{`{}`, `{"error":"  "}`, `not json`, `{"error":"` + strings.Repeat("e", 101) + `"}`, `{"error":"x","errorDescription":"` + strings.Repeat("d", 2001) + `"}`} {
+		if got := send(t, app, http.MethodPost, "/v1/connections/consent-failure", body, owner); got.status != http.StatusBadRequest || got.error.Code != "bad_request" {
+			t.Fatalf("%s = %d %+v", body, got.status, got.error)
+		}
+	}
+	list := send(t, app, http.MethodGet, "/v1/connections", "", nil)
+	if !strings.Contains(list.raw, `"lastConsentFailure":null`) {
+		t.Fatalf("list = %s", list.raw)
+	}
+
+	state := h.Authorize()
+	// A code sent along is ignored and never stored.
+	body := `{"state":"` + state + `","error":"server_error","errorDescription":"Internal error at the bank","code":"secret-code"}`
+	if got := send(t, app, http.MethodPost, "/v1/connections/consent-failure", body, owner); got.status != http.StatusNoContent {
+		t.Fatalf("record = %d %s", got.status, got.raw)
+	}
+	list = send(t, app, http.MethodGet, "/v1/connections", "", nil)
+	var parsed struct {
+		LastConsentFailure *struct {
+			At           time.Time
+			Error        string
+			Description  *string
+			Institution  *string
+			StateMatched bool
+		}
+	}
+	if err := json.Unmarshal([]byte(list.raw), &parsed); err != nil || parsed.LastConsentFailure == nil {
+		t.Fatalf("list = %s", list.raw)
+	}
+	failure := parsed.LastConsentFailure
+	if !failure.At.Equal(testsupport.Start) || failure.Error != "server_error" || failure.Description == nil || *failure.Description != "Internal error at the bank" ||
+		failure.Institution == nil || *failure.Institution != "Deutsche Bank" || !failure.StateMatched {
+		t.Fatalf("failure = %+v", failure)
+	}
+	if strings.Contains(list.raw, state) {
+		t.Fatal("the state is listed")
+	}
+	var stored string
+	if err := h.Pool.QueryRow(context.Background(), "SELECT row_to_json(f)::text FROM bank_consent_failures f").Scan(&stored); err != nil ||
+		strings.Contains(stored, "secret-code") || strings.Contains(stored, state) {
+		t.Fatalf("stored = %s, %v", stored, err)
+	}
+	if strings.Contains(h.Logs(), "secret-code") || strings.Contains(h.Logs(), state) {
+		t.Fatal("the code or state was logged")
 	}
 }

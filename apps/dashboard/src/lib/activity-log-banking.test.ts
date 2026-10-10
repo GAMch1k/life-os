@@ -30,6 +30,14 @@ test("bank events read with their bank, syncs with what they changed", () => {
     "Bank access expired",
   );
   assert.equal(
+    eventLabel({
+      type: "banking.consent.failed",
+      data: { error: "server_error", description: "Internal error" },
+    }),
+    "Bank consent failed: server_error",
+  );
+  assert.equal(subjectLabel("bank_consent"), "Bank consent");
+  assert.equal(
     bankSyncChanges({ created: 0, removedPending: 2 }),
     "2 pending removed",
   );
@@ -41,6 +49,7 @@ test("bank events read with their bank, syncs with what they changed", () => {
     "banking.sync.failed",
     "banking.consent.expiring",
     "banking.consent.expired",
+    "banking.consent.failed",
   ]) {
     assert.ok(EVENT_TYPES.includes(type), type);
   }

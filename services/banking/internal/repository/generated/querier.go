@@ -15,10 +15,12 @@ type Querier interface {
 	// not_before (no row: too soon).
 	ClaimManualSync(ctx context.Context, arg ClaimManualSyncParams) (pgtype.Timestamptz, error)
 	ClearArchivePending(ctx context.Context, arg ClearArchivePendingParams) error
+	ClearConsentFailures(ctx context.Context, now pgtype.Timestamptz) error
 	// Single use: the state is deleted as it is read.
 	ConsumeAuthState(ctx context.Context, stateHash []byte) (BankAuthState, error)
 	CreateAuthState(ctx context.Context, arg CreateAuthStateParams) error
 	CreateConnection(ctx context.Context, arg CreateConnectionParams) (BankConnection, error)
+	CreateConsentFailure(ctx context.Context, arg CreateConsentFailureParams) (BankConsentFailure, error)
 	DeleteExpiredAuthStates(ctx context.Context, now pgtype.Timestamptz) error
 	// The owner removed the connection: its session is wiped and it is never
 	// synced again; Finance still has to archive its accounts.
@@ -26,8 +28,12 @@ type Querier interface {
 	GetConnection(ctx context.Context, id pgtype.UUID) (BankConnection, error)
 	// The bank's live (not disconnected) connection, if any.
 	GetLiveConnection(ctx context.Context, arg GetLiveConnectionParams) (BankConnection, error)
+	// The newest failure no connection has succeeded after.
+	LatestConsentFailure(ctx context.Context) (BankConsentFailure, error)
 	// Live connections first, then by when they were created (newest first).
 	ListConnections(ctx context.Context) ([]BankConnection, error)
+	// Keeps the newest keep failures.
+	PruneConsentFailures(ctx context.Context, keep int32) error
 	// A new consent for a live connection (after expiry, an error, or while
 	// still valid): a new session and account list, usable again. Its sync
 	// history, cursor, and any import waiting for Finance are kept.

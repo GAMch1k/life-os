@@ -68,6 +68,8 @@ async function stubBanking(page: Page, baseURL: string) {
   const state = {
     items: [] as Connection[],
     connectBodies: [] as unknown[],
+    failureBodies: [] as unknown[],
+    failure: null as null | Record<string, unknown>,
     syncs: 0,
     disconnected: 0,
     actors: new Set<string>(),
@@ -96,6 +98,7 @@ async function stubBanking(page: Page, baseURL: string) {
         schedule: SCHEDULE,
         items: state.items,
         nextCursor: null,
+        lastConsentFailure: state.failure,
       });
     }
     if (method === "POST" && path === "/v1/connections/authorize") {
@@ -121,6 +124,21 @@ async function stubBanking(page: Page, baseURL: string) {
       }
       state.items = [connected()];
       return json(route, state.items[0]);
+    }
+    if (method === "POST" && path === "/v1/connections/consent-failure") {
+      const body = request.postDataJSON() as {
+        error: string;
+        errorDescription?: string;
+      };
+      state.failureBodies.push(body);
+      state.failure = {
+        at: new Date().toISOString(),
+        error: body.error,
+        description: body.errorDescription ?? null,
+        institution: "Deutsche Bank",
+        stateMatched: true,
+      };
+      return route.fulfill({ status: 204 });
     }
     if (method === "POST" && path.endsWith("/sync")) {
       state.syncs++;
@@ -257,16 +275,41 @@ test.describe("Bank connection", () => {
     await expect(card.getByRole("button", { name: "Sync now" })).toBeEnabled();
   });
 
-  test("the callback explains a refusal and drops the code from the address bar", async ({
+  test("the callback explains a refusal, keeps it in banking, and drops the code from the address bar", async ({
     page,
     baseURL,
   }) => {
-    await stubBanking(page, baseURL!);
-    await page.goto("/finance/bank/callback?error=access_denied&state=x");
+    const bank = await stubBanking(page, baseURL!);
+    await page.goto(
+      "/finance/bank/callback?error=server_error&error_description=Internal%20error&state=x",
+    );
+    await expect(
+      page.locator("#main-content").getByRole("alert"),
+    ).toContainText("The bank did not complete the consent (server_error).");
+    await expect(page).toHaveURL(/\/finance\/bank\/callback$/);
+    // Reported to banking as the owner, without a code.
+    await expect
+      .poll(() => bank.failureBodies)
+      .toEqual([
+        {
+          error: "server_error",
+          state: "x",
+          errorDescription: "Internal error",
+        },
+      ]);
+    expect([...bank.actors]).toEqual(["user"]);
+    // Finance shows the last failure next to Connect.
+    await page.goto("/finance");
+    await expect(
+      bankCard(page).getByTestId("bank-consent-failure"),
+    ).toContainText(
+      /^Last attempt failed on .*: server_error — Internal error$/,
+    );
+
+    await page.goto("/finance/bank/callback?error=access_denied&state=y");
     await expect(
       page.locator("#main-content").getByRole("alert"),
     ).toContainText("You did not give consent at the bank");
-    await expect(page).toHaveURL(/\/finance\/bank\/callback$/);
 
     await page.goto("/finance/bank/callback?code=old&state=used");
     await expect(

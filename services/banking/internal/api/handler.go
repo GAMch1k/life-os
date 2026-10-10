@@ -58,6 +58,16 @@ func (h *Handler) ListBankConnections(c fiber.Ctx) error {
 	if problem := h.service.SetupProblem(); problem != "" {
 		list.SetupProblem = &problem
 	}
+	failure, err := h.service.LatestConsentFailure(c.Context())
+	if err != nil {
+		return internal(err)
+	}
+	if failure != nil {
+		list.LastConsentFailure = &generated.BankConsentFailure{
+			At: failure.OccurredAt.Time.UTC(), Error: failure.Error, Description: failure.Description,
+			Institution: failure.Institution, StateMatched: failure.StateMatch == banking.StateMatched,
+		}
+	}
 	for _, row := range rows {
 		list.Items = append(list.Items, h.view(row))
 	}
@@ -104,6 +114,35 @@ func (h *Handler) ConnectBankConnection(c fiber.Ctx) error {
 		return serviceError(err)
 	}
 	return c.JSON(h.view(row))
+}
+
+// RecordBankConsentFailure keeps a consent the bank returned with an error.
+// Only the state, error, and description are read; anything else in the
+// body (a code) is ignored and never stored.
+func (h *Handler) RecordBankConsentFailure(c fiber.Ctx) error {
+	var body generated.BankConsentFailureRequest
+	if err := json.Unmarshal(c.Body(), &body); err != nil {
+		return badRequest("the request must be a JSON object with error, and optional state and errorDescription")
+	}
+	state, description := "", ""
+	if body.State != nil {
+		state = *body.State
+	}
+	if body.ErrorDescription != nil {
+		description = *body.ErrorDescription
+	}
+	switch {
+	case strings.TrimSpace(body.Error) == "" || len(body.Error) > 100:
+		return badRequest("error must be the error the bank returned, 1-100 characters")
+	case len(state) > 256:
+		return badRequest("state must be at most 256 characters")
+	case len(description) > 2000:
+		return badRequest("errorDescription must be at most 2000 characters")
+	}
+	if _, err := h.service.RecordConsentFailure(traced(c), state, body.Error, description); err != nil {
+		return internal(err)
+	}
+	return c.SendStatus(fiber.StatusNoContent)
 }
 
 func (h *Handler) SyncBankConnection(c fiber.Ctx, connectionID generated.ConnectionId) error {

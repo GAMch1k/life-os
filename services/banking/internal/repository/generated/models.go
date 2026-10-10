@@ -46,3 +46,16 @@ type BankConnection struct {
 	CreatedAt            pgtype.Timestamptz
 	UpdatedAt            pgtype.Timestamptz
 }
+
+type BankConsentFailure struct {
+	ID           pgtype.UUID
+	OccurredAt   pgtype.Timestamptz
+	Error        string
+	Description  *string
+	Institution  *string
+	Country      *string
+	ConnectionID pgtype.UUID
+	StateMatch   string
+	ClearedAt    pgtype.Timestamptz
+	CreatedAt    pgtype.Timestamptz
+}

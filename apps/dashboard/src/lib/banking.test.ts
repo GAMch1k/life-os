@@ -15,6 +15,7 @@ import {
   withoutBankParam,
   type BankConnection,
   type BankConnectionList,
+  consentFailureText,
 } from "./banking";
 
 const now = new Date("2026-10-10T10:00:00Z");
@@ -76,6 +77,7 @@ const list = (items: BankConnection[]): BankConnectionList => ({
   },
   items,
   nextCursor: null,
+  lastConsentFailure: null,
 });
 
 test("the live connection is the bank's, never a disconnected one", () => {
@@ -224,6 +226,62 @@ test("sync now waits for the throttle and an active connection", () => {
   assert.equal(
     syncNowState(connection({ status: "expired" }), timeZone, now).allowed,
     false,
+  );
+});
+
+test("a refusal is reported to banking with its state and description, never a code", () => {
+  assert.deepEqual(
+    callbackStep({
+      error: "server_error",
+      error_description: "  Internal\n error  ",
+      state: "s1",
+      code: "never",
+    }),
+    {
+      kind: "error",
+      message:
+        "The bank did not complete the consent (server_error). Internal error",
+      report: {
+        error: "server_error",
+        state: "s1",
+        errorDescription: "Internal error",
+      },
+    },
+  );
+  assert.deepEqual(
+    (callbackStep({ error: "access_denied" }) as { report?: unknown }).report,
+    { error: "access_denied" },
+  );
+  // Visiting the page without the bank's answer reports nothing.
+  assert.equal((callbackStep({}) as { report?: unknown }).report, undefined);
+});
+
+test("the last failed consent is described with its time and reason", () => {
+  assert.equal(
+    consentFailureText(
+      {
+        at: "2026-10-10T18:19:00Z",
+        error: "server_error",
+        description: "Internal error",
+        institution: "Deutsche Bank",
+        stateMatched: true,
+      },
+      "Europe/Berlin",
+    ),
+    "Last attempt failed on 10 Oct, 20:19 CEST: server_error — Internal error",
+  );
+  assert.equal(
+    consentFailureText(
+      {
+        at: "2026-10-10T18:19:00Z",
+        error: "access_denied",
+        description: null,
+        institution: null,
+        stateMatched: false,
+      },
+      "Europe/Berlin",
+    ),
+    "Last attempt failed on 10 Oct, 20:19 CEST: access_denied",
   );
 });
 

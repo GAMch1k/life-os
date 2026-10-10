@@ -10,6 +10,7 @@ import { dateTimeFormat } from "@/lib/time-zone";
 export type BankConnection = components["schemas"]["BankConnection"];
 export type BankConnectionList = components["schemas"]["BankConnectionList"];
 export type BankAccount = components["schemas"]["BankAccount"];
+export type BankConsentFailure = components["schemas"]["BankConsentFailure"];
 
 /** The callback route the bank returns to (LIFE_OS_BANKING_REDIRECT_URI). */
 export const BANK_CALLBACK_PATH = "/finance/bank/callback";
@@ -196,10 +197,20 @@ function first(value: QueryValue) {
   return Array.isArray(value) ? value[0] : value;
 }
 
+/**
+ * What the callback reports to banking when the bank returned an error
+ * instead of a code, so the reason is kept (never a code).
+ */
+export type ConsentFailureReport = {
+  state?: string;
+  error: string;
+  errorDescription?: string;
+};
+
 /** What the callback route does with the query the bank returned. */
 export type CallbackStep =
   | { kind: "exchange"; code: string; state: string }
-  | { kind: "error"; message: string };
+  | { kind: "error"; message: string; report?: ConsentFailureReport };
 
 const BANK_ERRORS: Record<string, string> = {
   access_denied:
@@ -223,9 +234,15 @@ export function callbackStep(query: {
     const message =
       BANK_ERRORS[error] ??
       `The bank did not complete the consent (${error.slice(0, 64)}).`;
+    const state = first(query.state)?.slice(0, 256);
     return {
       kind: "error",
       message: description ? `${message} ${description}` : message,
+      report: {
+        error: error.slice(0, 100),
+        ...(state ? { state } : {}),
+        ...(description ? { errorDescription: description } : {}),
+      },
     };
   }
   const code = first(query.code);
@@ -237,6 +254,18 @@ export function callbackStep(query: {
     };
   }
   return { kind: "exchange", code, state };
+}
+
+/**
+ * The last consent the bank did not complete, for the card, such as "Last
+ * attempt failed on 10 Oct, 20:19 CEST: server_error — Internal error".
+ */
+export function consentFailureText(
+  failure: BankConsentFailure,
+  timeZone: string,
+) {
+  const text = `Last attempt failed on ${bankTime(failure.at, timeZone)}: ${failure.error}`;
+  return failure.description ? `${text} — ${failure.description}` : text;
 }
 
 /** Why banking refused a request, in plain words. */
