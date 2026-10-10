@@ -383,7 +383,13 @@ func (h *Handler) UpdateEvent(c fiber.Ctx, id types.UUID) error {
 // of queries, and removes the exceptions of occurrences the change ends.
 func (h *Handler) updateLocked(ctx context.Context, queries *store.Queries, current store.Event, patch eventPatch) (store.Event, error) {
 	if current.SourceKind != string(generated.EventSourceKindManual) && !patch.importedEditable() {
-		return store.Event{}, managedBySource()
+		changeable, err := changeableHere(ctx, queries, current)
+		if err != nil {
+			return store.Event{}, internal(err)
+		}
+		if !changeable {
+			return store.Event{}, readOnlyHere(current)
+		}
 	}
 	fields, err := fieldsFromStore(current)
 	if err != nil {
@@ -447,8 +453,12 @@ func (h *Handler) DeleteEvent(c fiber.Ctx, id types.UUID) error {
 		}
 		return h.deleteGoogleEvent(c, current, target)
 	}
-	if current.SourceKind != string(generated.EventSourceKindManual) {
-		return managedBySource()
+	changeable, err := changeableHere(c.Context(), h.queries, current)
+	if err != nil {
+		return internal(err)
+	}
+	if !changeable {
+		return readOnlyHere(current)
 	}
 	err = h.inTx(c, func(queries *store.Queries) error {
 		affected, err := queries.DeleteEvent(c.Context(), pgUUID(id))
@@ -464,7 +474,9 @@ func (h *Handler) DeleteEvent(c fiber.Ctx, id types.UUID) error {
 		return err
 	}
 	h.recordEvent(c, eventDeleted, current, nil, nil)
-	h.google.QueueDeletion(c.Context(), current.ID)
+	if current.SourceKind == string(generated.EventSourceKindManual) {
+		h.google.QueueDeletion(c.Context(), current.ID)
+	}
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
@@ -517,7 +529,7 @@ func sourceKindFilter(kind *generated.EventSourceKind) (*string, error) {
 		return nil, nil
 	}
 	if !kind.Valid() {
-		return nil, badRequest("sourceKind must be manual, ics, or google")
+		return nil, badRequest("sourceKind must be manual, ics, google, or external")
 	}
 	value := string(*kind)
 	return &value, nil

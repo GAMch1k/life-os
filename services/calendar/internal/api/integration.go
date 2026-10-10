@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -89,6 +90,38 @@ func deref(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+// changeableHere reports whether row can be changed through this API
+// beyond its reminders and priority: a Life OS event, or the event of a
+// source an integration syncs that accepts changes (and is not read-only
+// on its own), whose change the integration then writes to the provider
+// through the change feed. Google events Calendar syncs itself are changed
+// in Google first (see google_events.go).
+func changeableHere(ctx context.Context, queries *store.Queries, row store.Event) (bool, error) {
+	switch {
+	case row.SourceKind == string(generated.EventSourceKindManual):
+		return true, nil
+	case row.SourceKind != string(generated.EventSourceKindExternal) || !row.SourceID.Valid || row.ReadOnlyReason != nil:
+		return false, nil
+	}
+	source, err := queries.GetSource(ctx, row.SourceID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return !source.InProcess && !source.ReadOnly, nil
+}
+
+// readOnlyHere refuses a change to an imported event that allows only its
+// reminders and priority.
+func readOnlyHere(row store.Event) error {
+	if row.ReadOnlyReason != nil {
+		return httpserver.NewError(fiber.StatusConflict, "managed_by_source", *row.ReadOnlyReason+" Its reminders and priority can still be changed here.")
+	}
+	return managedBySource()
 }
 
 func integrationSourceNotFound() error {

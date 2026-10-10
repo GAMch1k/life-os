@@ -89,6 +89,15 @@ func (h *Handler) resolveGoogle(ctx context.Context, items []generated.CalendarE
 				sourceIDs = append(sourceIDs, pgUUID(*item.Source.SourceId))
 				uids = append(uids, *item.Source.ExternalUid)
 			}
+		case generated.EventSourceKindExternal:
+			// Editable when its source accepts changes and it is not
+			// read-only on its own (readOnlyReason, set by event).
+			writable := item.Source.ReadOnly != nil && !*item.Source.ReadOnly
+			item.Editable = writable && item.ReadOnlyReason == nil
+			if !item.Editable && item.ReadOnlyReason == nil {
+				reason := readOnlyFeed(item.Source.Name)
+				item.ReadOnlyReason = &reason
+			}
 		default:
 			reason := readOnlyFeed(item.Source.Name)
 			item.Editable, item.ReadOnlyReason = false, &reason
@@ -127,6 +136,8 @@ func (h *Handler) resolveGoogle(ctx context.Context, items []generated.CalendarE
 		}
 		calendarID := uuid(link.CalendarID)
 		item.Google = &generated.EventGoogleLink{CalendarId: &calendarID, CalendarName: link.Summary, State: generated.EventGoogleLinkStateSynced}
+		readOnly := !google.Writable(link.AccessRole)
+		item.Source.ReadOnly = &readOnly
 		uid := *item.Source.ExternalUid
 		master := slices.Contains(link.Masters, uid)
 		restorable := item.RemovedFromSourceAt != nil && !strings.Contains(uid, "_")

@@ -30,6 +30,10 @@ type Item struct {
 	// event's priority to the owner (a feed, or a Google event without Life
 	// OS's priority property).
 	Priority *string
+	// ReadOnlyReason, set by an integration for an event of a source that
+	// accepts changes, makes it read-only in Life OS and says why (such as
+	// one occurrence of a rule Calendar cannot hold).
+	ReadOnlyReason *string
 }
 
 // ownPriority is the priority to store for item: none when the source

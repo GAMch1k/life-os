@@ -286,7 +286,7 @@ func apply(ctx context.Context, queries *store.Queries, source store.CalendarSou
 			RecurrenceByWeekday: fields.rule.byWeekday, RecurrenceCount: fields.rule.count,
 			Reminders: []byte("[]"), UseDefaultReminders: true,
 			Status: fields.status, CancelledAt: fields.cancelledAt, SourceKind: source.Kind, SourceID: source.ID, ExternalUid: &uid,
-			Priority: ownPriority(item, source.DefaultPriority),
+			Priority: ownPriority(item, source.DefaultPriority), ReadOnlyReason: item.ReadOnlyReason,
 		}
 		if item.Reminders != nil {
 			own, whole, err := item.Reminders.encode()
@@ -316,6 +316,7 @@ func apply(ctx context.Context, queries *store.Queries, source store.CalendarSou
 			RecurrenceFrequency: fields.rule.frequency, RecurrenceInterval: fields.rule.interval, RecurrenceUntil: fields.rule.until,
 			RecurrenceByWeekday: fields.rule.byWeekday, RecurrenceCount: fields.rule.count,
 			SetPriority: change.item.Priority != nil, Priority: ownPriority(change.item, source.DefaultPriority),
+			ReadOnlyReason: change.item.ReadOnlyReason,
 		}
 		if change.item.Reminders != nil {
 			own, whole, err := change.item.Reminders.encode()

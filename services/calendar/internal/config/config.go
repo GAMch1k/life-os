@@ -59,6 +59,10 @@ type Config struct {
 	NotificationsURL        string `env:"NOTIFICATIONS_SERVICE_URL"`
 	ReminderIntervalSeconds int    `env:"CALENDAR_REMINDER_INTERVAL_SECONDS" default:"30"`
 	ReminderGraceMinutes    int    `env:"CALENDAR_REMINDER_GRACE_MINUTES" default:"120"`
+	// ChangeRetentionDays is how long the change feed of the events
+	// integrations follow keeps its entries; an integration's cursor older
+	// than that has expired (it starts again with a snapshot).
+	ChangeRetentionDays int `env:"CALENDAR_CHANGE_RETENTION_DAYS" default:"30"`
 }
 
 // Load reads Config from the process environment.
@@ -112,6 +116,9 @@ func (c Config) Validate() error {
 	}
 	if c.ReminderGraceMinutes < 10 || c.ReminderGraceMinutes > 1440 {
 		validationErrors = append(validationErrors, fmt.Errorf("CALENDAR_REMINDER_GRACE_MINUTES must be between 10 and 1440"))
+	}
+	if c.ChangeRetentionDays < 1 || c.ChangeRetentionDays > 3650 {
+		validationErrors = append(validationErrors, fmt.Errorf("CALENDAR_CHANGE_RETENTION_DAYS must be between 1 and 3650"))
 	}
 	return errors.Join(validationErrors...)
 }

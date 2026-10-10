@@ -13,6 +13,7 @@ import (
 	// requests' IANA timezones resolve.
 	_ "time/tzdata"
 
+	"github.com/gofiber/fiber/v3"
 	googleuuid "github.com/google/uuid"
 
 	"github.com/GAMch1k/life-os/pkg/activity"
@@ -20,6 +21,7 @@ import (
 	"github.com/GAMch1k/life-os/pkg/httpserver"
 	"github.com/GAMch1k/life-os/pkg/notify"
 	"github.com/GAMch1k/life-os/services/calendar/internal/api"
+	"github.com/GAMch1k/life-os/services/calendar/internal/changefeed"
 	serviceconfig "github.com/GAMch1k/life-os/services/calendar/internal/config"
 	"github.com/GAMch1k/life-os/services/calendar/internal/google"
 	"github.com/GAMch1k/life-os/services/calendar/internal/ics"
@@ -65,6 +67,8 @@ func run(ctx context.Context) error {
 		cfg.ServiceName,
 		httpserver.WithLogger(logger),
 		httpserver.WithReadinessCheck(pool.Ping),
+		// An integration's snapshot of a large calendar is one request.
+		httpserver.WithFiberConfig(fiber.Config{BodyLimit: 16 << 20}),
 	)
 	fetcher := ics.NewFetcher(cfg.ICSMaxBytes, time.Duration(cfg.ICSTimeoutSeconds)*time.Second, cfg.ICSAllowPrivateURLs)
 	emitter := activity.NewEmitter(cfg.ActivityURL, "calendar", logger)
@@ -101,6 +105,8 @@ func run(ctx context.Context) error {
 	background(app, "calendar source scheduler", scheduler.Run)
 	background(app, "Google Calendar sync", syncer.Run)
 	background(app, "calendar reminder delivery", dispatcher.Run)
+	pruner := changefeed.NewPruner(pool, time.Duration(cfg.ChangeRetentionDays)*24*time.Hour, logger)
+	background(app, "calendar change feed pruning", pruner.Run)
 
 	return app.RunContext(runCtx, fmt.Sprintf(":%d", cfg.Port))
 }
