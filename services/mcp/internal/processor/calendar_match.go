@@ -22,23 +22,18 @@ const eventSearchLimit = 10
 
 // calendarChangeFields are what calendar_update may change; clear names the
 // optional ones to remove.
-var calendarChangeFields = []string{"title", "description", "location", "allDay", "startAt", "endAt", "startDate", "endDate", "timeZone", "reminders", "useDefaultReminders", "priority", "clear"}
+var calendarChangeFields = []string{"title", "description", "location", "allDay", "startAt", "endAt", "startDate", "endDate", "timeZone", "reminders", "priority", "clear"}
 
 // clearableEventFields are the optional event fields an update may remove.
 var clearableEventFields = map[string]bool{"description": true, "location": true, "timeZone": true, "reminders": true}
 
 // validCalendarChange checks the fields of a calendar_update beyond their
-// names: something must change, clear names only optional fields,
-// reminders are objects, useDefaultReminders is a boolean, and priority is
-// low, medium, or high. Calendar validates the values themselves.
+// names: something must change, clear names only optional fields that are
+// not also set (reminders may be both: the new ones replace the event's
+// own, see addReminders), reminders are objects, and priority is low,
+// medium, or high. Calendar validates the values themselves.
 func validCalendarChange(arguments map[string]any) bool {
-	changes := 0
-	for _, field := range calendarChangeFields {
-		if _, ok := arguments[field]; ok {
-			changes++
-		}
-	}
-	if changes == 0 {
+	if !changesEvent(arguments) {
 		return false
 	}
 	if title, present := arguments["title"]; present {
@@ -53,12 +48,48 @@ func validCalendarChange(arguments map[string]any) bool {
 		}
 		for _, field := range fields {
 			name, ok := field.(string)
-			if value, alsoSet := arguments[name]; !ok || !clearableEventFields[name] || (alsoSet && value != nil) {
+			if value, alsoSet := arguments[name]; !ok || !clearableEventFields[name] || (alsoSet && value != nil && name != "reminders") {
 				return false
 			}
 		}
 	}
-	return validReminders(arguments["reminders"]) && validUseDefault(arguments) && validPriority(arguments)
+	return validReminders(arguments["reminders"]) && validPriority(arguments)
+}
+
+// changesEvent reports whether a calendar_update names something to change.
+func changesEvent(arguments map[string]any) bool {
+	for _, field := range calendarChangeFields {
+		if _, ok := arguments[field]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// aiDroppedFields are what the processor removes from every planned or
+// approved Calendar action before validating it: AI reminders only ever
+// add to the owner's default reminders, and turning the defaults off or on
+// is the owner's, in the Calendar. (The MCP tools keep the parameter for
+// other clients.)
+var aiDroppedFields = map[string][]string{"calendar_create": {"useDefaultReminders"}, "calendar_update": {"useDefaultReminders"}}
+
+// defaultRemindersReason is the Human Review reason for a planned change
+// that only turned an event's default reminders off or on.
+const defaultRemindersReason = "Default reminders are turned off or on in the Calendar."
+
+// dropAIFields removes aiDroppedFields from each action of a plan and
+// returns, per action, the names it removed.
+func dropAIFields(p plan) [][]string {
+	dropped := make([][]string, len(p.Actions))
+	for index, action := range p.Actions {
+		for _, field := range aiDroppedFields[action.Tool] {
+			if _, present := action.Arguments[field]; present {
+				delete(action.Arguments, field)
+				dropped[index] = append(dropped[index], field)
+			}
+		}
+	}
+	return dropped
 }
 
 // validPriority accepts a missing priority or low, medium, or high.
@@ -69,16 +100,6 @@ func validPriority(arguments map[string]any) bool {
 	}
 	priority, _ := value.(string)
 	return priority == "low" || priority == "medium" || priority == "high"
-}
-
-// validUseDefault accepts a missing useDefaultReminders or a boolean.
-func validUseDefault(arguments map[string]any) bool {
-	value, present := arguments["useDefaultReminders"]
-	if !present {
-		return true
-	}
-	_, ok := value.(bool)
-	return ok
 }
 
 // validReminders accepts a missing reminders field or a list of objects.
@@ -102,9 +123,10 @@ func validReminders(value any) bool {
 // of an approved calendar action. Inbox records the chosen candidate as
 // taskId (its one selection field, also used for Tasks); eventId is accepted
 // too. Only an approved action may name its event; a planned one is resolved
-// by search.
+// by search. An approved calendar_create names the existing event it
+// restates, which it then updates (see findDuplicates).
 func approvedCalendarTarget(approved plan) (plan, string) {
-	if len(approved.Actions) != 1 || !isCalendarMutation(approved.Actions[0]) {
+	if len(approved.Actions) != 1 || !(isCalendarMutation(approved.Actions[0]) || approved.Actions[0].Tool == "calendar_create") {
 		return approved, ""
 	}
 	arguments := approved.Actions[0].Arguments
@@ -166,22 +188,15 @@ func (r Runner) findEvents(ctx context.Context, item inboxItem, action plannedAc
 	seen := map[string]bool{}
 	for _, window := range windows {
 		for _, term := range searchTerms(action.Arguments, "eventQuery", "eventQueryAlternatives") {
-			query := url.Values{"q": {term}, "from": {window.from.UTC().Format(time.RFC3339)}, "timeZone": {location.String()}, "editable": {"true"}, "limit": {fmt.Sprint(eventSearchLimit)}}
+			query := url.Values{"q": {term}, "from": {window.from.UTC().Format(time.RFC3339)}, "timeZone": {location.String()}, "limit": {fmt.Sprint(eventSearchLimit)}}
 			if !window.to.IsZero() {
 				query.Set("to", window.to.UTC().Format(time.RFC3339))
 			}
-			raw, err := r.Tools.Call(ctx, "calendar_search", map[string]any{"query": query.Encode()})
+			items, err := r.searchEvents(ctx, query)
 			if err != nil {
 				return nil, err
 			}
-			var result struct {
-				Items []map[string]any `json:"items"`
-			}
-			if err := json.Unmarshal(toolData(raw), &result); err != nil {
-				// A partial union could look like exactly one match.
-				return nil, fmt.Errorf("decode Calendar search result: %w", err)
-			}
-			for _, event := range result.Items {
+			for _, event := range items {
 				if window.recurringOnly && !isRecurring(event) {
 					continue
 				}
@@ -193,6 +208,31 @@ func (r Runner) findEvents(ctx context.Context, item inboxItem, action plannedAc
 		}
 	}
 	return found, nil
+}
+
+// changeableEvents is the Calendar search filter for the events the AI may
+// change: Life OS events. Imported (ICS, Google) events are managed by
+// their source. Every event lookup of the processor uses it.
+var changeableEvents = url.Values{"editable": {"true"}}
+
+// searchEvents runs one calendar_search among the events the AI may change
+// and returns the events it found.
+func (r Runner) searchEvents(ctx context.Context, query url.Values) ([]map[string]any, error) {
+	for key, values := range changeableEvents {
+		query[key] = append([]string(nil), values...)
+	}
+	raw, err := r.Tools.Call(ctx, "calendar_search", map[string]any{"query": query.Encode()})
+	if err != nil {
+		return nil, err
+	}
+	var result struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal(toolData(raw), &result); err != nil {
+		// A partial union could look like exactly one match.
+		return nil, fmt.Errorf("decode Calendar search result: %w", err)
+	}
+	return result.Items, nil
 }
 
 // onDate is the start, in location, of the day a cancellation names
@@ -335,6 +375,51 @@ func calendarArguments(tool string, planned map[string]any, eventID string) map[
 		arguments["clear"] = fields
 	}
 	return arguments
+}
+
+// unchangedRemindersReason is recorded when a planned calendar_update only
+// adds reminders the event already has.
+const unchangedRemindersReason = "The event already has these reminders, so nothing changed"
+
+// addReminders makes the reminders of a planned calendar_update (the
+// Calendar arguments for event) add to the event's own: "remind me 2 hours
+// before" keeps the reminders it has, each reminder once (mergeReminders,
+// as for a restated event). Only a plan that also names reminders in clear
+// replaces them, because the item asked to remove or replace them; Calendar
+// then gets just the new ones. It reports whether anything is left to
+// change.
+func addReminders(arguments, event map[string]any) bool {
+	added, ok := arguments["reminders"].([]any)
+	if !ok {
+		return true
+	}
+	clear, _ := arguments["clear"].([]any)
+	others := []any{}
+	for _, field := range clear {
+		if field != "reminders" {
+			others = append(others, field)
+		}
+	}
+	if len(others) < len(clear) {
+		if len(others) == 0 {
+			delete(arguments, "clear")
+		} else {
+			arguments["clear"] = others
+		}
+		return true
+	}
+	own, _ := event["reminders"].([]any)
+	if merged, grew := mergeReminders(own, added); grew {
+		arguments["reminders"] = merged
+		return true
+	}
+	delete(arguments, "reminders")
+	for field := range arguments {
+		if field != "eventId" {
+			return true
+		}
+	}
+	return false
 }
 
 // missingEnd reports whether an update moves an event's start without
