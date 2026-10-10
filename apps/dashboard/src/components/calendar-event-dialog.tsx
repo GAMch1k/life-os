@@ -931,7 +931,8 @@ function RepeatControl({
       : undefined;
 
   return (
-    <Field data-invalid={Boolean(error)}>
+    // No data-invalid: it would turn the whole Custom panel red.
+    <Field>
       <FieldLabel htmlFor={id}>Repeat</FieldLabel>
       <NativeSelect
         className="w-full"
