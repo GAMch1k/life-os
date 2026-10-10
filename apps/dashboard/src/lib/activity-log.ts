@@ -125,6 +125,38 @@ export function eventTime(value: string, timeZone: string) {
   return format.format(new Date(value));
 }
 
+/** Shortest piece of shortened text that may be matched against the data. */
+const MIN_OVERLAP = 16;
+
+/**
+ * The event's summary with its shortened part restored, when the event's data
+ * holds more of it, for example a retry's full `errorSummary` behind
+ * "Processing will be retried: planning failed: …". Services shorten text in
+ * summaries with a trailing "…" after collapsing whitespace; the data keeps a
+ * longer copy. Undefined when there is nothing more to show.
+ */
+export function fullSummary(event: Pick<ActivityEvent, "summary" | "data">) {
+  const cut = event.summary.lastIndexOf("…");
+  if (cut < 0) return undefined;
+  const before = event.summary.slice(0, cut);
+  const after = event.summary.slice(cut + 1);
+  for (const value of Object.values(event.data ?? {})) {
+    if (typeof value !== "string") continue;
+    const text = value.trim();
+    const flat = text.replace(/\s+/g, " ");
+    // Text the summary already shows in full is not what was shortened.
+    if (event.summary.includes(flat)) continue;
+    // The shortened part is the start of the text; the earliest match is the
+    // longest overlap.
+    for (let start = 0; start <= before.length - MIN_OVERLAP; start++) {
+      if (flat.startsWith(before.slice(start))) {
+        return before.slice(0, start) + text + after;
+      }
+    }
+  }
+  return undefined;
+}
+
 // ---- Filters ---------------------------------------------------------------
 
 export type SearchParams = Record<string, string | string[] | undefined>;

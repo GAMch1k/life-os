@@ -8,6 +8,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { ExpandableText } from "@/components/expandable-text";
 import {
   activityHref,
   actorLabel,
@@ -15,6 +16,7 @@ import {
   EVENT_TYPES,
   eventLabel,
   eventTime,
+  fullSummary,
   hasFilters,
   OUTCOMES,
   SOURCES,
@@ -485,8 +487,12 @@ function TraceView({
           </CardTitle>
           <OutcomeBadge outcome={selected.outcome} />
         </div>
-        <CardDescription className="wrap-anywhere">
-          {selected.summary}
+        <CardDescription>
+          <ExpandableText
+            fullText={fullSummary(selected)}
+            key={selected.id}
+            text={selected.summary}
+          />
         </CardDescription>
         <EventMeta event={selected} timeZone={timeZone} />
       </CardHeader>
