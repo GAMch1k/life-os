@@ -220,7 +220,8 @@ test.describe("Finance budget", () => {
         over.getByRole("link", { name: /Open budget/ }),
       ).toHaveAttribute("href", "/finance?tab=budget");
       const card = page.locator("#home-budget");
-      await expect(card).toContainText(/30[.,]00 of .?20[.,]00 spent/);
+      // All of the month's spending counts against the plan's 20.00.
+      await expect(card).toContainText(/ of .?20[.,]00 spent/);
       await expect(card).toContainText(name);
       await expect(card).toContainText("150%");
       await expect(

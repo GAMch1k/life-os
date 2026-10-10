@@ -46,6 +46,7 @@ import { cn } from "@/lib/utils";
  * transactions of the month; the plan is edited in a dialog.
  */
 export function FinanceBudget({
+  actionError,
   budget,
   loading,
   month,
@@ -57,6 +58,8 @@ export function FinanceBudget({
   onReset,
   onShowCategory,
 }: {
+  /** Why the last plan change failed, if it did. */
+  actionError?: string;
   budget: Loaded<BudgetMonth>;
   loading: boolean;
   /** YYYY-MM. */
@@ -131,6 +134,11 @@ export function FinanceBudget({
         ) : null}
       </div>
 
+      {actionError ? (
+        <p className="text-destructive text-sm" role="alert">
+          {actionError}
+        </p>
+      ) : null}
       {budget.error !== undefined ? (
         <p className="text-destructive text-sm" role="alert">
           {budget.error}
@@ -180,7 +188,12 @@ function Overview({ budget, today }: { budget: BudgetMonth; today: string }) {
       <Metric
         label="Spent"
         money={totals.spent}
-        note={`of ${formatMoney(totals.planned, locale)} planned`}
+        note={[
+          `of ${formatMoney(totals.planned, locale)} planned`,
+          pendingText(totals.pending, locale),
+        ]
+          .filter(Boolean)
+          .join(", ")}
         progress={{
           label: "Spent against the plan",
           value: progressValue(totals.spent.amount, totals.planned.amount),
@@ -198,7 +211,7 @@ function Overview({ budget, today }: { budget: BudgetMonth; today: string }) {
         }}
         note={
           left === undefined
-            ? pendingText(totals.pending, locale) || undefined
+            ? undefined
             : `${left} ${left === 1 ? "day" : "days"} left`
         }
       />

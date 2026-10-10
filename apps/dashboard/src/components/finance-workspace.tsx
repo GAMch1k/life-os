@@ -154,6 +154,7 @@ function ReadyWorkspace({
   const [budgetLoading, setBudgetLoading] = useState(false);
   const [budgetEditor, setBudgetEditor] = useState<BudgetEditorState>(null);
   const [budgetPending, startBudgetChange] = useTransition();
+  const [budgetActionError, setBudgetActionError] = useState<string>();
   const [transactionDialog, setTransactionDialog] =
     useState<TransactionDialogState>(null);
   const [accountDialog, setAccountDialog] = useState<AccountDialogState>(null);
@@ -278,22 +279,21 @@ function ReadyWorkspace({
 
   const changeBudgetMonth = (month: string) => {
     setBudgetMonth(month);
+    setBudgetActionError(undefined);
     loadBudget(month);
     showInURL("budget", month);
   };
 
   const resetBudget = (month: string) =>
     startBudgetChange(async () => {
+      setBudgetActionError(undefined);
       const { error, response } = await financeClient
         .DELETE("/v1/budgets/{month}", { params: { path: { month } } })
         .catch(() => ({ error: undefined, response: undefined }));
       if (!response?.ok) {
-        setBudget({
-          error: financeErrorMessage(
-            error,
-            "Could not return to the regular plan.",
-          ),
-        });
+        setBudgetActionError(
+          financeErrorMessage(error, "Could not return to the regular plan."),
+        );
         return;
       }
       loadBudget(month);
@@ -443,6 +443,7 @@ function ReadyWorkspace({
         </TabsContent>
         <TabsContent value="budget">
           <FinanceBudget
+            actionError={budgetActionError}
             budget={budget}
             loading={budgetLoading}
             month={budgetMonth}
