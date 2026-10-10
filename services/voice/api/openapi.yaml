@@ -1,5 +1,17 @@
 openapi: 3.0.3
-info: {title: Life OS Voice API, version: 1.0.0, license: {name: UNLICENSED, url: https://life-os.local/license}}
+info:
+  title: Life OS Voice API
+  version: 1.0.0
+  description: >-
+    Every write (POST, PUT, PATCH, DELETE) must say who makes it in the
+    X-Life-OS-Actor header: `user` (the owner), `agent:<name>` (the Life OS
+    AI), `system:<name>` (a Life OS component), or `dev:<name>` (a development
+    tool or agent working on Life OS, such as Claude Code). Names are 1-64
+    letters, digits, '.', '_', or '-'. A write without a valid actor is
+    rejected with 400 and error code `actor_required`; nothing is attributed to
+    the owner by default. Reads do not need the header. The public gateway
+    passes only `user` and `dev:<name>`.
+  license: {name: UNLICENSED, url: https://life-os.local/license}
 servers: [{url: http://voice:8080}]
 paths:
   /v1/backlog:

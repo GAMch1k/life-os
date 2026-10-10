@@ -173,7 +173,7 @@ export interface operations {
                     "application/json": components["schemas"]["CalendarEvent"];
                 };
             };
-            /** @description Invalid request */
+            /** @description Invalid request, or no valid X-Life-OS-Actor (actor_required) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -236,7 +236,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Invalid request */
+            /** @description Invalid request, or no valid X-Life-OS-Actor (actor_required) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -276,7 +276,7 @@ export interface operations {
                     "application/json": components["schemas"]["CalendarEvent"];
                 };
             };
-            /** @description Invalid request */
+            /** @description Invalid request, or no valid X-Life-OS-Actor (actor_required) */
             400: {
                 headers: {
                     [name: string]: unknown;
