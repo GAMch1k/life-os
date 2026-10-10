@@ -5,7 +5,7 @@ The monitor tells the owner when Life OS breaks or recovers. It reads the Status
 ```mermaid
 flowchart LR
   Monitor -- "GET /api/status, every minute" --> Dashboard
-  Dashboard -- "probes" --> Sources["processor /status, Inbox and Voice backlogs, Calendar sources, every service's /ready"]
+  Dashboard -- "probes" --> Sources["processor /status, Inbox and Voice backlogs, Calendar sources, notification channels, every service's /ready"]
   Monitor -- "pkg/notify" --> Notifications
   Dashboard -. "/ready" .-> Monitor
 ```
@@ -33,7 +33,7 @@ The rules that decide whether something is ok, a warning, or a problem live in o
 }
 ```
 
-The monitor uses each check's `id`, `title`, `state`, `summary`, and `action`. The states are `ok`, `warning`, and `problem`; any other value is treated like `ok`. The checks today are `processing` (Automatic processing), `inbox` (Inbox backlog), `voice` (Voice transcription), `calendar` (Calendar sources, with the Google connection), and `services` (every service's `/ready`, the monitor's own included). A check the Dashboard adds later is watched without a change here. The endpoint itself counts as one more check, `dashboard`: it is a problem while the status cannot be read (no answer within 10 s, an error status, or a payload that is not a runtime status).
+The monitor uses each check's `id`, `title`, `state`, `summary`, and `action`. The states are `ok`, `neutral` (nothing to do, such as no delivery channel set up), `warning`, and `problem`; `neutral` and any other value are treated like `ok`. The checks today are `processing` (Automatic processing), `inbox` (Inbox backlog), `voice` (Voice transcription), `calendar` (Calendar sources, with the Google connection and calendars), `notifications` (delivery channel health), and `services` (every service's `/ready`, the monitor's own included). A check the Dashboard adds later is watched without a change here. The endpoint itself counts as one more check, `dashboard`: it is a problem while the status cannot be read (no answer within 10 s, an error status, or a payload that is not a runtime status).
 
 ## When it notifies
 
@@ -50,7 +50,7 @@ The monitor uses each check's `id`, `title`, `state`, `summary`, and `action`. T
 | status unreadable | high | "Life OS status is unreachable" | Why it could not be read, and to check the dashboard service. |
 | status readable again | low | "Life OS status is reachable again" | As for a recovery. |
 
-Every notification has the category `status.<check>` (`status.processing`, `status.inbox`, `status.voice`, `status.calendar`, `status.services`, `status.dashboard`), links to `/status`, and has the source `monitor` (actor `system:monitor`). Its `occurredAt` is when the monitor first saw the new state. The dedupe key is `status:<check>:<state>:<since>`, for example `status:processing:problem:2026-10-10T12:03:00Z`, with `since` the same moment in UTC. A failed send is retried at every evaluation with the same key, so the owner never gets the same change twice.
+Every notification has the category `status.<check>` (`status.processing`, `status.inbox`, `status.voice`, `status.calendar`, `status.notifications`, `status.services`, `status.dashboard`), links to `/status`, and has the source `monitor` (actor `system:monitor`). Its `occurredAt` is when the monitor first saw the new state. The dedupe key is `status:<check>:<state>:<since>`, for example `status:processing:problem:2026-10-10T12:03:00Z`, with `since` the same moment in UTC. A failed send is retried at every evaluation with the same key, so the owner never gets the same change twice.
 
 ## Restarts
 
@@ -63,7 +63,7 @@ The monitor keeps its state in memory. The Notifications history is its memory a
 
 ## Limits
 
-- If the host, Docker, the Notifications service, or the delivery channel (ntfy, P12-02) is down, nothing can notify the owner. An external dead-man check is later work.
+- If the host, Docker, the Notifications service, or the delivery channel ([ntfy](../operations/ntfy.md)) is down, nothing can notify the owner. When the phone channel itself fails, "Notifications needs attention" is listed in Life OS but cannot reach the phone. An external dead-man check is later work.
 - A stopped monitor notifies nothing. The Status page then shows "Monitor is not ready" under Services, because the Dashboard probes the monitor's `/ready` (`MONITOR_SERVICE_URL`). `/ready` fails when no evaluation has finished for three intervals plus a minute.
 - While the Dashboard is unreachable, the other checks are unknown; only "Life OS status is unreachable" is sent.
 - The unit is a check. While Services is a problem because one service is down, a second service going down does not notify again; the Status page names both. One fault can make two checks a problem: a stopped Inbox makes both Inbox backlog and Services a problem, and then two notifications arrive, as the Status page shows two problems.
