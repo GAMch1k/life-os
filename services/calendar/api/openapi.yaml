@@ -273,6 +273,7 @@ paths:
       security: []
       responses:
         '200': {description: Connection, content: {application/json: {schema: {$ref: '#/components/schemas/GoogleConnection'}}}}
+        '400': {description: Invalid request}
     post:
       summary: Complete a Google authorization
       description: >-
@@ -327,6 +328,7 @@ paths:
       security: []
       responses:
         '200': {description: Calendars, content: {application/json: {schema: {$ref: '#/components/schemas/GoogleCalendarList'}}}}
+        '400': {description: Invalid request}
   /v1/google/calendars/refresh:
     post:
       summary: Read the calendar list from Google again

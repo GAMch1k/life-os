@@ -1192,6 +1192,13 @@ export interface operations {
                     "application/json": components["schemas"]["GoogleConnection"];
                 };
             };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     connectGoogle: {
@@ -1322,6 +1329,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["GoogleCalendarList"];
                 };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
