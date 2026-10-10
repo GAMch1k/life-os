@@ -1,5 +1,6 @@
 import { activityClient } from "@/lib/api/activity-client";
 import type { components } from "@/lib/api/generated/activity";
+import { addDays, DATE_LOCALE, startOfDay } from "@/lib/time-zone";
 
 // The Event Log is a read-only view over the Activity API. Everything here is
 // presentation: filters map to API query parameters, and a selected event's
@@ -11,12 +12,24 @@ export type ActivityOutcome = components["schemas"]["ActivityOutcome"];
 
 export const OUTCOMES: ActivityOutcome[] = ["succeeded", "pending", "failed"];
 
-export const SOURCES = [
+/** What the agent's changes are, wherever the "mcp" domain is explained. */
+export const AGENT_CHANGES_DESCRIPTION =
+  "Changes the AI made through MCP, such as creating or completing Tasks. Its decisions, such as Human Review requests, appear under Inbox.";
+
+export const SOURCES: readonly {
+  value: string;
+  label: string;
+  description?: string;
+}[] = [
   { value: "voice", label: "Voice" },
   { value: "inbox", label: "Inbox" },
-  { value: "mcp", label: "Agent actions" },
+  {
+    value: "mcp",
+    label: "Agent changes",
+    description: AGENT_CHANGES_DESCRIPTION,
+  },
   { value: "tasks", label: "Tasks" },
-] as const;
+];
 
 export const SUBJECT_TYPES = [
   { value: "voice_job", label: "Voice recording" },
@@ -76,6 +89,10 @@ export function sourceLabel(source: string) {
   );
 }
 
+export function sourceDescription(source: string | undefined) {
+  return SOURCES.find((entry) => entry.value === source)?.description;
+}
+
 const ACTOR_NAMES: Record<string, string> = {
   "codex-inbox-processor": "Inbox processor (Codex)",
   mcp: "Agent via MCP",
@@ -88,14 +105,24 @@ export function actorLabel(actor: ActivityEvent["actor"]) {
   return name ?? humanize(actor.kind);
 }
 
-const timeFormat = new Intl.DateTimeFormat("en-GB", {
-  dateStyle: "medium",
-  timeStyle: "medium",
-  timeZone: "UTC",
-});
+const timeFormats = new Map<string, Intl.DateTimeFormat>();
 
-export function eventTime(value: string) {
-  return `${timeFormat.format(new Date(value))} UTC`;
+/**
+ * An event time in the owner's timezone, with the zone's abbreviation, for
+ * example "9 Oct 2026, 23:21:30 CEST". The locale and timezone are fixed, so
+ * the text does not depend on where it is rendered.
+ */
+export function eventTime(value: string, timeZone: string) {
+  let format = timeFormats.get(timeZone);
+  if (!format) {
+    format = new Intl.DateTimeFormat(DATE_LOCALE, {
+      dateStyle: "medium",
+      timeStyle: "long",
+      timeZone,
+    });
+    timeFormats.set(timeZone, format);
+  }
+  return format.format(new Date(value));
 }
 
 // ---- Filters ---------------------------------------------------------------
@@ -109,9 +136,9 @@ export type ActivityFilters = {
   type?: string;
   outcome?: ActivityOutcome;
   correlationId?: string;
-  /** Inclusive first day, YYYY-MM-DD (UTC). */
+  /** Inclusive first day, YYYY-MM-DD in the owner's timezone. */
   fromDate?: string;
-  /** Inclusive last day, YYYY-MM-DD (UTC). */
+  /** Inclusive last day, YYYY-MM-DD in the owner's timezone. */
   toDate?: string;
   cursor?: string;
 };
@@ -166,13 +193,16 @@ export function selectedEventId(params: SearchParams) {
   return id && /^[0-9a-f-]{36}$/i.test(id) ? id.toLowerCase() : undefined;
 }
 
-/** Activity API query for the list; the "to" day is inclusive for the user. */
-export function listQuery(filters: ActivityFilters, limit = 50) {
-  const nextDay = (date: string) => {
-    const day = new Date(`${date}T00:00:00Z`);
-    day.setUTCDate(day.getUTCDate() + 1);
-    return day.toISOString();
-  };
+/**
+ * Activity API query for the list. Days are the owner's calendar days, and the
+ * "to" day is inclusive for the user.
+ */
+export function listQuery(
+  filters: ActivityFilters,
+  timeZone: string,
+  limit = 50,
+) {
+  const dayStart = (day: string) => startOfDay(day, timeZone).toISOString();
   return {
     source: filters.source,
     subjectType: filters.subjectType,
@@ -180,8 +210,8 @@ export function listQuery(filters: ActivityFilters, limit = 50) {
     type: filters.type,
     outcome: filters.outcome,
     correlationId: filters.correlationId,
-    from: filters.fromDate ? `${filters.fromDate}T00:00:00.000Z` : undefined,
-    to: filters.toDate ? nextDay(filters.toDate) : undefined,
+    from: filters.fromDate ? dayStart(filters.fromDate) : undefined,
+    to: filters.toDate ? dayStart(addDays(filters.toDate, 1)) : undefined,
     cursor: filters.cursor,
     limit,
   };
@@ -204,6 +234,35 @@ export function activityHref(
 
 export function hasFilters(filters: ActivityFilters) {
   return FILTER_KEYS.some((key) => key !== "cursor" && filters[key]);
+}
+
+export type EmptyState = {
+  message: string;
+  /** A related view that explains or contains what the user looked for. */
+  link?: { label: string; href: string };
+};
+
+/** Why the event list is empty, specific to the active filters. */
+export function emptyState(filters: ActivityFilters): EmptyState {
+  if (!hasFilters(filters)) return { message: "No activity recorded yet." };
+  const narrowed = (
+    ["subjectType", "subjectId", "type", "outcome", "correlationId"] as const
+  ).some((key) => filters[key]);
+  if (filters.source === "mcp" && !narrowed) {
+    // Usually not a fault: the agent only shows up here when it changed
+    // something; its decisions are recorded by Inbox.
+    return {
+      message:
+        filters.fromDate || filters.toDate
+          ? "The agent hasn't changed anything in this range."
+          : "The agent hasn't changed anything yet.",
+      link: {
+        label: "Show Inbox activity",
+        href: activityHref(filters, { source: "inbox", cursor: undefined }),
+      },
+    };
+  }
+  return { message: "No activity matches these filters." };
 }
 
 // ---- Trace -----------------------------------------------------------------
@@ -333,6 +392,8 @@ export type Selection =
 
 export type ActivityLog = {
   filters: ActivityFilters;
+  /** The owner's timezone, for filter days and displayed times. */
+  timeZone: string;
   /** `null` when the Activity service could not be read. */
   list: ActivityList | null;
   selectedId?: string;
@@ -384,17 +445,20 @@ async function loadSelection(id: string): Promise<Selection> {
 
 export async function getActivityLog(
   params: SearchParams,
+  timeZone: string,
 ): Promise<ActivityLog> {
   const filters = parseFilters(params);
   const selectedId = selectedEventId(params);
   const [list, selection] = await Promise.all([
     activityClient
-      .GET("/v1/activity-events", { params: { query: listQuery(filters) } })
+      .GET("/v1/activity-events", {
+        params: { query: listQuery(filters, timeZone) },
+      })
       .then(
         ({ data }) => data ?? null,
         () => null,
       ),
     selectedId ? loadSelection(selectedId) : Promise.resolve(null),
   ]);
-  return { filters, list, selectedId, selection };
+  return { filters, timeZone, list, selectedId, selection };
 }

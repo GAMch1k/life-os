@@ -3,11 +3,16 @@ import test from "node:test";
 
 import {
   activityHref,
+  actorLabel,
   buildTrace,
+  emptyState,
   eventLabel,
+  eventTime,
   listQuery,
   parseFilters,
   selectedEventId,
+  sourceDescription,
+  sourceLabel,
   type ActivityEvent,
 } from "./activity-log";
 
@@ -123,7 +128,7 @@ test("filters are parsed defensively and map to the Activity API query", () => {
     toDate: "2026-10-09",
     type: "task.completed",
   });
-  assert.deepEqual(listQuery(filters, 25), {
+  assert.deepEqual(listQuery(filters, "UTC", 25), {
     source: "tasks",
     subjectType: undefined,
     subjectId: undefined,
@@ -136,6 +141,33 @@ test("filters are parsed defensively and map to the Activity API query", () => {
     limit: 25,
   });
   assert.deepEqual(parseFilters({ fromDate: "yesterday" }), {});
+});
+
+test("filter days are the owner's calendar days", () => {
+  // Berlin is UTC+2 in October; the inclusive "to" day ends at its midnight.
+  const query = listQuery(
+    { fromDate: "2026-10-09", toDate: "2026-10-09" },
+    "Europe/Berlin",
+  );
+  assert.equal(query.from, "2026-10-08T22:00:00.000Z");
+  assert.equal(query.to, "2026-10-09T22:00:00.000Z");
+  // Across the end of summer time the day is 25 hours long.
+  const fallBack = listQuery(
+    { fromDate: "2026-10-25", toDate: "2026-10-25" },
+    "Europe/Berlin",
+  );
+  assert.equal(fallBack.from, "2026-10-24T22:00:00.000Z");
+  assert.equal(fallBack.to, "2026-10-25T23:00:00.000Z");
+});
+
+test("event times render in the owner's timezone, not UTC", () => {
+  const at = "2026-10-09T21:21:30.679Z";
+  assert.equal(eventTime(at, "Europe/Berlin"), "9 Oct 2026, 23:21:30 CEST");
+  assert.equal(eventTime(at, "UTC"), "9 Oct 2026, 21:21:30 UTC");
+  assert.equal(
+    eventTime("2026-12-09T21:21:30Z", "Europe/Berlin"),
+    "9 Dec 2026, 22:21:30 CET",
+  );
 });
 
 test("links keep the active filters and apply overrides", () => {
@@ -153,6 +185,49 @@ test("only a UUID can select an event", () => {
     "9c3b6f3e-1d1f-4e55-9c59-3a8a0b6a7e10",
   );
   assert.equal(selectedEventId({ event: "../../etc" }), undefined);
+});
+
+test("the agent's domain says what it records", () => {
+  assert.equal(sourceLabel("mcp"), "Agent changes");
+  assert.match(sourceDescription("mcp")!, /through MCP/);
+  assert.match(sourceDescription("mcp")!, /Human Review requests.*Inbox/);
+  assert.equal(sourceDescription("tasks"), undefined);
+  assert.equal(sourceDescription(undefined), undefined);
+});
+
+test("an empty list explains itself for the active filters", () => {
+  assert.deepEqual(emptyState({}), { message: "No activity recorded yet." });
+  assert.deepEqual(emptyState({ source: "tasks" }), {
+    message: "No activity matches these filters.",
+  });
+  // The agent's domain is empty until the agent changes something; its
+  // decisions are under Inbox, in the same range.
+  assert.deepEqual(
+    emptyState({ source: "mcp", fromDate: "2026-10-01", cursor: "abc" }),
+    {
+      message: "The agent hasn't changed anything in this range.",
+      link: {
+        label: "Show Inbox activity",
+        href: "/activity?source=inbox&fromDate=2026-10-01",
+      },
+    },
+  );
+  assert.equal(
+    emptyState({ source: "mcp" }).message,
+    "The agent hasn't changed anything yet.",
+  );
+  assert.deepEqual(emptyState({ source: "mcp", outcome: "failed" }), {
+    message: "No activity matches these filters.",
+  });
+});
+
+test("processor work reads as the Inbox processor", () => {
+  assert.equal(
+    actorLabel({ kind: "agent", name: "codex-inbox-processor" }),
+    "Inbox processor (Codex)",
+  );
+  assert.equal(actorLabel({ kind: "agent", name: "mcp" }), "Agent via MCP");
+  assert.equal(actorLabel({ kind: "user" }), "You");
 });
 
 test("agent actions name their tool", () => {

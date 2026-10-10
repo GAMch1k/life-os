@@ -11,12 +11,14 @@ import {
 import {
   activityHref,
   actorLabel,
+  emptyState,
   EVENT_TYPES,
   eventLabel,
   eventTime,
   hasFilters,
   OUTCOMES,
   SOURCES,
+  sourceDescription,
   sourceLabel,
   SUBJECT_TYPES,
   subjectLabel,
@@ -51,10 +53,18 @@ function OutcomeBadge({ outcome }: { outcome: string }) {
   );
 }
 
-function EventMeta({ event }: { event: ActivityEvent }) {
+function EventMeta({
+  event,
+  timeZone,
+}: {
+  event: ActivityEvent;
+  timeZone: string;
+}) {
   return (
     <p className="text-muted-foreground text-xs">
-      <time dateTime={event.occurredAt}>{eventTime(event.occurredAt)}</time>
+      <time dateTime={event.occurredAt}>
+        {eventTime(event.occurredAt, timeZone)}
+      </time>
       {" · "}
       {sourceLabel(event.source)} · {actorLabel(event.actor)}
     </p>
@@ -62,22 +72,18 @@ function EventMeta({ event }: { event: ActivityEvent }) {
 }
 
 export function ActivityLogView({ log }: { log: ActivityLog }) {
-  const { filters, list, selectedId, selection } = log;
+  const { filters, timeZone, list, selectedId, selection } = log;
   return (
-    <div className="mx-auto max-w-screen-xl space-y-6">
-      <section>
-        <p className="text-muted-foreground text-sm font-medium">Activity</p>
-        <h1 className="mt-1 text-3xl font-semibold tracking-tight">
-          Event Log
-        </h1>
-        <p className="text-muted-foreground mt-2 max-w-2xl">
-          What happened across Life OS, who did it, and what led to it. Open an
-          entry to follow its chain from capture to result.
-        </p>
-      </section>
+    <div className="mx-auto max-w-screen-xl space-y-4 sm:space-y-6">
+      <h1 className="text-2xl font-semibold tracking-tight">Event Log</h1>
       <Filters filters={filters} />
-      <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]">
-        <EventList filters={filters} list={list} selectedId={selectedId} />
+      <div className="grid items-start gap-4 sm:gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]">
+        <EventList
+          filters={filters}
+          list={list}
+          selectedId={selectedId}
+          timeZone={timeZone}
+        />
         <section aria-label="Selected event" className="lg:sticky lg:top-20">
           {selection === null ? (
             <Card>
@@ -98,7 +104,11 @@ export function ActivityLogView({ log }: { log: ActivityLog }) {
               </CardContent>
             </Card>
           ) : (
-            <TraceView filters={filters} trace={selection.trace} />
+            <TraceView
+              filters={filters}
+              timeZone={timeZone}
+              trace={selection.trace}
+            />
           )}
         </section>
       </div>
@@ -111,7 +121,7 @@ function Filters({ filters }: { filters: ActivityFilters }) {
     <form
       action="/activity"
       aria-label="Filter activity"
-      className="bg-background grid gap-3 rounded-xl border p-4 sm:grid-cols-2 lg:grid-cols-[repeat(6,minmax(0,1fr))_auto]"
+      className="bg-background grid grid-cols-2 gap-3 rounded-xl border p-3 sm:grid-cols-3 sm:p-4 lg:grid-cols-[repeat(6,minmax(0,1fr))_auto]"
     >
       {/* Narrowed views (one workflow or one entity) survive filter changes. */}
       {filters.correlationId && (
@@ -124,7 +134,7 @@ function Filters({ filters }: { filters: ActivityFilters }) {
       {filters.subjectId && (
         <input name="subjectId" type="hidden" value={filters.subjectId} />
       )}
-      <label className="space-y-1 text-sm">
+      <label className="min-w-0 space-y-1 text-sm">
         <span className="font-medium">Domain</span>
         <select
           className={fieldClass}
@@ -133,13 +143,17 @@ function Filters({ filters }: { filters: ActivityFilters }) {
         >
           <option value="">All domains</option>
           {SOURCES.map((source) => (
-            <option key={source.value} value={source.value}>
+            <option
+              key={source.value}
+              title={source.description}
+              value={source.value}
+            >
               {source.label}
             </option>
           ))}
         </select>
       </label>
-      <label className="space-y-1 text-sm">
+      <label className="min-w-0 space-y-1 text-sm">
         <span className="font-medium">Entity</span>
         <select
           className={fieldClass}
@@ -154,7 +168,7 @@ function Filters({ filters }: { filters: ActivityFilters }) {
           ))}
         </select>
       </label>
-      <label className="space-y-1 text-sm">
+      <label className="min-w-0 space-y-1 text-sm">
         <span className="font-medium">Event</span>
         <select
           className={fieldClass}
@@ -172,7 +186,7 @@ function Filters({ filters }: { filters: ActivityFilters }) {
           )}
         </select>
       </label>
-      <label className="space-y-1 text-sm">
+      <label className="min-w-0 space-y-1 text-sm">
         <span className="font-medium">Status</span>
         <select
           className={fieldClass}
@@ -187,8 +201,8 @@ function Filters({ filters }: { filters: ActivityFilters }) {
           ))}
         </select>
       </label>
-      <label className="space-y-1 text-sm">
-        <span className="font-medium">From (UTC)</span>
+      <label className="min-w-0 space-y-1 text-sm">
+        <span className="font-medium">From</span>
         <input
           className={fieldClass}
           defaultValue={filters.fromDate}
@@ -196,8 +210,8 @@ function Filters({ filters }: { filters: ActivityFilters }) {
           type="date"
         />
       </label>
-      <label className="space-y-1 text-sm">
-        <span className="font-medium">To (UTC)</span>
+      <label className="min-w-0 space-y-1 text-sm">
+        <span className="font-medium">To</span>
         <input
           className={fieldClass}
           defaultValue={filters.toDate}
@@ -205,7 +219,7 @@ function Filters({ filters }: { filters: ActivityFilters }) {
           type="date"
         />
       </label>
-      <div className="flex items-end gap-2">
+      <div className="col-span-2 flex items-end gap-2 sm:col-span-3 lg:col-span-1">
         <button
           className="bg-primary text-primary-foreground hover:bg-primary/80 h-9 rounded-lg px-3 text-sm font-medium"
           type="submit"
@@ -229,11 +243,15 @@ function EventList({
   filters,
   list,
   selectedId,
+  timeZone,
 }: {
   filters: ActivityFilters;
   list: ActivityLog["list"];
   selectedId?: string;
+  timeZone: string;
 }) {
+  const empty = emptyState(filters);
+  const domain = sourceDescription(filters.source);
   const narrowed = filters.correlationId
     ? "Showing one workflow."
     : filters.subjectId
@@ -251,6 +269,14 @@ function EventList({
           </CardTitle>
           <CardDescription>
             Newest first.{" "}
+            {domain && (
+              <>
+                <span className="text-foreground font-medium">
+                  {sourceLabel(filters.source!)}:
+                </span>{" "}
+                {domain}{" "}
+              </>
+            )}
             {narrowed && (
               <>
                 {narrowed}{" "}
@@ -278,11 +304,17 @@ function EventList({
               Activity is unavailable right now.
             </p>
           ) : list.items.length === 0 ? (
-            <p className="text-muted-foreground py-6 text-center text-sm">
-              {hasFilters(filters)
-                ? "No activity matches these filters."
-                : "No activity recorded yet."}
-            </p>
+            <div className="space-y-2 py-6 text-center text-sm">
+              <p className="text-muted-foreground">{empty.message}</p>
+              {empty.link && (
+                <Link
+                  className="text-primary underline-offset-4 hover:underline"
+                  href={empty.link.href}
+                >
+                  {empty.link.label}
+                </Link>
+              )}
+            </div>
           ) : (
             <ol aria-label="Activity entries" className="divide-y">
               {list.items.map((event) => (
@@ -297,16 +329,16 @@ function EventList({
                     scroll={false}
                   >
                     <span className="flex items-start justify-between gap-3">
-                      <span className="text-sm font-medium">
+                      <span className="min-w-0 text-sm font-medium wrap-anywhere">
                         {eventLabel(event)}
                       </span>
                       <OutcomeBadge outcome={event.outcome} />
                     </span>
-                    <span className="mt-0.5 block text-sm">
+                    <span className="mt-0.5 block text-sm wrap-anywhere">
                       {event.summary}
                     </span>
                     <span className="mt-1 block">
-                      <EventMeta event={event} />
+                      <EventMeta event={event} timeZone={timeZone} />
                     </span>
                   </Link>
                 </li>
@@ -374,8 +406,10 @@ function TraceTree({
             scroll={false}
           >
             <span className="flex items-center justify-between gap-2">
-              <span className="font-medium">{eventLabel(node.event)}</span>
-              <span className="flex items-center gap-1.5">
+              <span className="min-w-0 font-medium wrap-anywhere">
+                {eventLabel(node.event)}
+              </span>
+              <span className="flex shrink-0 items-center gap-1.5">
                 {RELATION_LABELS[node.relation] && (
                   <span className="text-muted-foreground text-xs">
                     {RELATION_LABELS[node.relation]}
@@ -386,7 +420,7 @@ function TraceTree({
                 )}
               </span>
             </span>
-            <span className="text-muted-foreground block text-xs">
+            <span className="text-muted-foreground block text-xs wrap-anywhere">
               {node.event.summary}
             </span>
           </Link>
@@ -418,7 +452,7 @@ function ChainList({
       {events.map((event) => (
         <li key={event.id}>
           <Link
-            className="hover:bg-muted/60 -mx-2 block rounded-md px-2 py-1 text-sm"
+            className="hover:bg-muted/60 -mx-2 block rounded-md px-2 py-1 text-sm wrap-anywhere"
             href={activityHref(filters, { event: event.id })}
             scroll={false}
           >
@@ -433,9 +467,11 @@ function ChainList({
 
 function TraceView({
   filters,
+  timeZone,
   trace,
 }: {
   filters: ActivityFilters;
+  timeZone: string;
   trace: Trace;
 }) {
   const { selected } = trace;
@@ -444,11 +480,15 @@ function TraceView({
     <Card>
       <CardHeader>
         <div className="flex items-start justify-between gap-3">
-          <CardTitle id="selected-heading">{eventLabel(selected)}</CardTitle>
+          <CardTitle className="min-w-0 wrap-anywhere" id="selected-heading">
+            {eventLabel(selected)}
+          </CardTitle>
           <OutcomeBadge outcome={selected.outcome} />
         </div>
-        <CardDescription>{selected.summary}</CardDescription>
-        <EventMeta event={selected} />
+        <CardDescription className="wrap-anywhere">
+          {selected.summary}
+        </CardDescription>
+        <EventMeta event={selected} timeZone={timeZone} />
       </CardHeader>
       <CardContent className="space-y-6">
         <section aria-labelledby="upstream-heading" className="space-y-2">
@@ -504,14 +544,14 @@ function TraceView({
               {trace.related.map((event) => (
                 <li key={event.id}>
                   <Link
-                    className="hover:bg-muted/60 -mx-2 block rounded-md px-2 py-1 text-sm"
+                    className="hover:bg-muted/60 -mx-2 block rounded-md px-2 py-1 text-sm wrap-anywhere"
                     href={activityHref(filters, { event: event.id })}
                     scroll={false}
                   >
                     <span className="font-medium">{eventLabel(event)}</span>
                     <span className="text-muted-foreground">
                       {" "}
-                      — {eventTime(event.occurredAt)} by{" "}
+                      — {eventTime(event.occurredAt, timeZone)} by{" "}
                       {actorLabel(event.actor)}
                     </span>
                   </Link>
