@@ -117,16 +117,23 @@ async function createTasks(
   tasks: { title: string; dueAt?: string }[],
 ) {
   const created: Task[] = [];
-  for (let start = 0; start < tasks.length; start += 20)
+  for (let start = 0; start < tasks.length; start += BATCH) {
     created.push(
       ...(await Promise.all(
         tasks
-          .slice(start, start + 20)
+          .slice(start, start + BATCH)
           .map(({ title, dueAt }) => createTask(request, title, dueAt)),
       )),
     );
+    await pace();
+  }
   return created;
 }
+
+// The gateway allows 30 API requests per second per client (burst 60), shared
+// with the specs running in parallel; bulk seeding stays well under it.
+const BATCH = 10;
+const pace = () => new Promise((resolve) => setTimeout(resolve, 1_000));
 
 async function completeTask(request: APIRequestContext, id: string) {
   const response = await request.post(`/api/tasks/v1/tasks/${id}/complete`);
@@ -336,12 +343,14 @@ test.describe("Tasks workspace sections", () => {
       ).toHaveCount(101);
     } finally {
       // Keep the shared stack's open lists small for the other specs.
-      for (let start = 0; start < dated.length; start += 20)
+      for (let start = 0; start < dated.length; start += BATCH) {
         await Promise.all(
           dated
-            .slice(start, start + 20)
+            .slice(start, start + BATCH)
             .map((task) => completeTask(request, task.id)),
         );
+        await pace();
+      }
     }
   });
 });
