@@ -8,12 +8,13 @@ Life OS is a local-first personal operating system. This index is the human-read
 - [Networking and data flows](architecture/networking.md) — ingress and common request paths.
 - [Editable entities and UI/agent parity](architecture/editable-entities.md) — how editing is added to a domain so the Dashboard and the agent share one implementation.
 - [Getting started](development/getting-started.md) — run the stack locally.
-- [Services](services/finance.md) — Finance, [Tasks](services/tasks.md), [Inbox](services/inbox.md), [Calendar](services/calendar.md), [MCP](services/mcp.md), [Voice/STT](services/voice-stt.md), [Activity](services/activity.md) (correlated activity/event trace), [Notifications](services/notifications.md) (the one path for telling the owner something), and the [Monitor](services/monitor.md) (notifies the owner when a Status check breaks or recovers).
+- [Services](services/finance.md) — Finance, [Tasks](services/tasks.md), [Inbox](services/inbox.md), [Calendar](services/calendar.md), [MCP](services/mcp.md), [Voice/STT](services/voice-stt.md), [Activity](services/activity.md) (correlated activity/event trace), [Notifications](services/notifications.md) (the one path for telling the owner something), the [Monitor](services/monitor.md) (notifies the owner when a Status check breaks or recovers), and [Banking](services/banking.md) (the bank integration: read-only Enable Banking consent, syncs pushed into Finance).
 - [MCP tool contract](services/mcp-tool-contract.md) — permitted semantic AI actions and safety boundaries.
 - [API overview](api/overview.md) — gateway addresses, all current endpoints, examples, and errors.
 - [Dashboard](frontend/dashboard.md), [data and code generation](development/data-and-codegen.md), and [operations](operations/deployment.md).
 - [Cloudflare Tunnel and Access](operations/cloudflare.md) — the authenticated public path to the gateway. Sign-off: [Phase 9 verification](verification/phase-9.md).
 - [ntfy](operations/ntfy.md) — the self-hosted ntfy server that pushes notifications to the owner's phone, on its own network and tunnel route.
+- [Bank connection](operations/banking.md) — setting up Enable Banking, connecting, reconnecting before the consent ends, and revoking.
 
 ## Scope
 

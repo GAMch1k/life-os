@@ -20,6 +20,9 @@ export const AGENT_CHANGES_DESCRIPTION =
 export const CALENDAR_DESCRIPTION =
   "Calendar events created, changed, cancelled, or deleted (by you, the AI, or a tool), each refresh of a subscribed calendar feed, and the Google Calendar connection.";
 
+export const BANKING_DESCRIPTION =
+  "The bank connection: connecting, disconnecting, each sync into Finance that changed something (counts only, never transaction details), failed syncs, and the consent's expiry.";
+
 export const SOURCES: readonly {
   value: string;
   label: string;
@@ -35,6 +38,11 @@ export const SOURCES: readonly {
   { value: "tasks", label: "Tasks" },
   { value: "calendar", label: "Calendar", description: CALENDAR_DESCRIPTION },
   { value: "notifications", label: "Notifications" },
+  {
+    value: "banking",
+    label: "Bank connection",
+    description: BANKING_DESCRIPTION,
+  },
 ];
 
 export const SUBJECT_TYPES = [
@@ -47,6 +55,7 @@ export const SUBJECT_TYPES = [
   { value: "calendar_source", label: "Calendar source" },
   { value: "google_connection", label: "Google connection" },
   { value: "notification", label: "Notification" },
+  { value: "bank_connection", label: "Bank connection" },
 ] as const;
 
 const EVENT_LABELS: Record<string, string> = {
@@ -88,6 +97,12 @@ const EVENT_LABELS: Record<string, string> = {
   "notification.created": "Notification created",
   "notification.delivered": "Notification delivered",
   "notification.delivery_failed": "Notification delivery failed",
+  "banking.connected": "Bank connected",
+  "banking.disconnected": "Bank disconnected",
+  "banking.sync.completed": "Bank synced",
+  "banking.sync.failed": "Bank sync failed",
+  "banking.consent.expiring": "Bank access expiring",
+  "banking.consent.expired": "Bank access expired",
 };
 
 export const EVENT_TYPES = Object.keys(EVENT_LABELS);
@@ -135,6 +150,28 @@ export function refreshChanges(data: ActivityEvent["data"] | undefined) {
   return parts.length ? parts.join(", ") : "no changes";
 }
 
+/**
+ * What a bank sync changed in Finance, such as "3 new, 1 updated" or "no
+ * changes", from its recorded counts.
+ */
+export function bankSyncChanges(data: ActivityEvent["data"] | undefined) {
+  const parts = (
+    [
+      ["created", "new"],
+      ["updated", "updated"],
+      ["removedPending", "pending removed"],
+    ] as const
+  )
+    .map(([key, words]) => {
+      const count = data?.[key];
+      return typeof count === "number" && count > 0
+        ? `${count} ${words}`
+        : undefined;
+    })
+    .filter(Boolean);
+  return parts.length ? parts.join(", ") : "no changes";
+}
+
 export function eventLabel(event: Pick<ActivityEvent, "type" | "data">) {
   const label = EVENT_LABELS[event.type] ?? humanize(event.type);
   const tool = text(event.data?.tool);
@@ -164,6 +201,14 @@ export function eventLabel(event: Pick<ActivityEvent, "type" | "data">) {
   const account = text(event.data?.accountEmail);
   if (event.type.startsWith("calendar.google.") && account) {
     return `${label}: ${account}`;
+  }
+  // A bank event by its bank; a sync by what it changed (counts only).
+  const institution = text(event.data?.institution);
+  if (event.type === "banking.sync.completed" && institution) {
+    return `${label}: ${institution} — ${bankSyncChanges(event.data)}`;
+  }
+  if (event.type.startsWith("banking.") && institution) {
+    return `${label}: ${institution}`;
   }
   // A notification by its title, and a delivery by the channel it used.
   if (event.type.startsWith("notification.") && title) {
@@ -223,6 +268,7 @@ export function sourceDescription(source: string | undefined) {
 
 const ACTOR_NAMES: Record<string, string> = {
   "codex-inbox-processor": "Inbox processor (Codex)",
+  banking: "Bank sync",
   "google-calendar": "Google Calendar sync",
   mcp: "Agent via MCP",
   "voice-worker": "Voice worker",

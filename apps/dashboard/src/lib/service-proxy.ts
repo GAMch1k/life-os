@@ -4,20 +4,37 @@ import { ACTOR_HEADER, PUBLIC_ACTOR } from "@/lib/api/actor";
 
 type RouteContext = { params: Promise<{ path: string[] }> };
 
-const FORWARDED_REQUEST_HEADERS = ["accept", "content-type"] as const;
+export type ProxyOptions = {
+  /**
+   * More request headers to pass on, such as the owner's browser details
+   * the banking service needs to mark a bank read as owner-present.
+   */
+  forwardHeaders?: readonly string[];
+};
+
+// Idempotency-Key makes a retried Finance write return the first result.
+const FORWARDED_REQUEST_HEADERS = [
+  "accept",
+  "content-type",
+  "idempotency-key",
+] as const;
 const FORWARDED_RESPONSE_HEADERS = ["content-type", "location"] as const;
 
 export async function proxyServiceRequest(
   request: NextRequest,
   context: RouteContext,
   serviceUrl: string,
+  options: ProxyOptions = {},
 ) {
   const { path } = await context.params;
   const target = new URL(path.join("/"), `${serviceUrl}/`);
   target.search = request.nextUrl.search;
 
   const headers = new Headers();
-  for (const name of FORWARDED_REQUEST_HEADERS) {
+  for (const name of [
+    ...FORWARDED_REQUEST_HEADERS,
+    ...(options.forwardHeaders ?? []),
+  ]) {
     const value = request.headers.get(name);
     if (value) {
       headers.set(name, value);

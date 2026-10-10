@@ -25,7 +25,6 @@ for service in inbox calendar finance; do
   curl --fail --silent "$gateway/api/$service/ready" >/dev/null
 done
 
-account_id=$("${compose[@]}" exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d finance_db -Atqc "INSERT INTO accounts (name,currency,opening_balance_minor) VALUES ('"'"'P7 Codex capture account'"'"','"'"'USD'"'"',0) RETURNING id"')
 stamp=$(date +%s)
 calendar_title="P7 Codex calendar $stamp"
 finance_note="P7 Codex finance $stamp"
@@ -67,9 +66,11 @@ calendar_id=$(capture "Create an all-day calendar event titled $calendar_title o
 wait_for_action "$calendar_id" calendar_create
 curl --fail --silent "$gateway/api/calendar/v1/events?from=2026-10-12T00:00:00Z&to=2026-10-13T00:00:00Z" | jq -e --arg title "$calendar_title" '.items | map(select(.title == $title)) | length == 1' >/dev/null
 
-finance_id=$(capture "Record a finance transaction for account $account_id: spent 123 USD at $finance_note on 2026-10-08.")
+# Cash spending lands in the built-in Cash account (EUR), on the day named.
+finance_id=$(capture "Spent 123 euros in cash at $finance_note on 2026-10-08.")
 wait_for_action "$finance_id" finance_create_manual_transaction
-curl --fail --silent "$gateway/api/finance/v1/transactions?limit=100" | jq -e --arg note "$finance_note" '.items | map(select((.note // "") | ascii_downcase | contains($note | ascii_downcase))) | length == 1' >/dev/null
+cash_id=$(curl --fail --silent "$gateway/api/finance/v1/accounts" | jq -r '[.items[] | select(.builtIn)][0].id')
+curl --fail --silent "$gateway/api/finance/v1/transactions?limit=100" | jq -e --arg note "$finance_note" --arg cash "$cash_id" '.items | map(select(.accountId == $cash and .amount.amount == -12300 and .amount.currency == "EUR" and .bookingDate == "2026-10-08" and (((.notes // "") + " " + (.counterparty // "") + " " + (.description // "")) | ascii_downcase | contains($note | ascii_downcase)))) | length == 1' >/dev/null
 
 task_title="P8 Codex mutation $stamp"
 task_id=$(curl "${actor[@]}" --fail --silent -H 'content-type: application/json' --data "$(jq -nc --arg title "$task_title" '{title:$title}')" "$gateway/api/tasks/v1/tasks" | jq -r '.id')

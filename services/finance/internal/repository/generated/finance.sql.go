@@ -11,20 +11,37 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const createAccount = `-- name: CreateAccount :one
-INSERT INTO accounts (name, currency, opening_balance_minor)
-VALUES ($1, $2, $3)
-RETURNING id, name, currency, opening_balance_minor, created_at, updated_at
+const accountNameExists = `-- name: AccountNameExists :one
+SELECT EXISTS (SELECT 1 FROM accounts WHERE name = $1)
 `
 
-type CreateAccountParams struct {
-	Name                string
-	Currency            string
-	OpeningBalanceMinor int64
+func (q *Queries) AccountNameExists(ctx context.Context, name string) (bool, error) {
+	row := q.db.QueryRow(ctx, accountNameExists, name)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }
 
-func (q *Queries) CreateAccount(ctx context.Context, arg CreateAccountParams) (Account, error) {
-	row := q.db.QueryRow(ctx, createAccount, arg.Name, arg.Currency, arg.OpeningBalanceMinor)
+const adoptAccountAsBuiltIn = `-- name: AdoptAccountAsBuiltIn :one
+UPDATE accounts
+SET system_key = $1::text, kind = 'cash', archived_at = NULL, updated_at = now()
+WHERE id = (
+    SELECT a.id FROM accounts AS a
+    WHERE a.system_key IS NULL AND a.source_kind = 'manual' AND lower(a.name) = lower($2::text)
+    ORDER BY a.created_at, a.id
+    LIMIT 1
+)
+RETURNING id, name, currency, opening_balance_minor, created_at, updated_at, kind, system_key, archived_at, source_kind, connection_id, external_id, provider, institution, iban_masked, booked_balance_minor, booked_balance_date, available_balance_minor, available_balance_date, synced_at
+`
+
+type AdoptAccountAsBuiltInParams struct {
+	SystemKey string
+	Name      string
+}
+
+// An account the owner already called Cash becomes the built-in one.
+func (q *Queries) AdoptAccountAsBuiltIn(ctx context.Context, arg AdoptAccountAsBuiltInParams) (Account, error) {
+	row := q.db.QueryRow(ctx, adoptAccountAsBuiltIn, arg.SystemKey, arg.Name)
 	var i Account
 	err := row.Scan(
 		&i.ID,
@@ -33,23 +50,291 @@ func (q *Queries) CreateAccount(ctx context.Context, arg CreateAccountParams) (A
 		&i.OpeningBalanceMinor,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Kind,
+		&i.SystemKey,
+		&i.ArchivedAt,
+		&i.SourceKind,
+		&i.ConnectionID,
+		&i.ExternalID,
+		&i.Provider,
+		&i.Institution,
+		&i.IbanMasked,
+		&i.BookedBalanceMinor,
+		&i.BookedBalanceDate,
+		&i.AvailableBalanceMinor,
+		&i.AvailableBalanceDate,
+		&i.SyncedAt,
+	)
+	return i, err
+}
+
+const archiveConnectionAccounts = `-- name: ArchiveConnectionAccounts :many
+UPDATE accounts
+SET archived_at = now(), updated_at = now()
+WHERE connection_id = $1 AND archived_at IS NULL
+RETURNING id, name, currency, opening_balance_minor, created_at, updated_at, kind, system_key, archived_at, source_kind, connection_id, external_id, provider, institution, iban_masked, booked_balance_minor, booked_balance_date, available_balance_minor, available_balance_date, synced_at
+`
+
+func (q *Queries) ArchiveConnectionAccounts(ctx context.Context, connectionID pgtype.UUID) ([]Account, error) {
+	rows, err := q.db.Query(ctx, archiveConnectionAccounts, connectionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Account{}
+	for rows.Next() {
+		var i Account
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Currency,
+			&i.OpeningBalanceMinor,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Kind,
+			&i.SystemKey,
+			&i.ArchivedAt,
+			&i.SourceKind,
+			&i.ConnectionID,
+			&i.ExternalID,
+			&i.Provider,
+			&i.Institution,
+			&i.IbanMasked,
+			&i.BookedBalanceMinor,
+			&i.BookedBalanceDate,
+			&i.AvailableBalanceMinor,
+			&i.AvailableBalanceDate,
+			&i.SyncedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const countAccountTransactions = `-- name: CountAccountTransactions :one
+SELECT COUNT(*)::bigint FROM transactions WHERE account_id = $1
+`
+
+func (q *Queries) CountAccountTransactions(ctx context.Context, accountID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countAccountTransactions, accountID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const createAccount = `-- name: CreateAccount :one
+INSERT INTO accounts (name, currency, opening_balance_minor, kind)
+VALUES ($1, $2, $3, $4)
+RETURNING id, name, currency, opening_balance_minor, created_at, updated_at, kind, system_key, archived_at, source_kind, connection_id, external_id, provider, institution, iban_masked, booked_balance_minor, booked_balance_date, available_balance_minor, available_balance_date, synced_at
+`
+
+type CreateAccountParams struct {
+	Name                string
+	Currency            string
+	OpeningBalanceMinor int64
+	Kind                string
+}
+
+func (q *Queries) CreateAccount(ctx context.Context, arg CreateAccountParams) (Account, error) {
+	row := q.db.QueryRow(ctx, createAccount,
+		arg.Name,
+		arg.Currency,
+		arg.OpeningBalanceMinor,
+		arg.Kind,
+	)
+	var i Account
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Currency,
+		&i.OpeningBalanceMinor,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Kind,
+		&i.SystemKey,
+		&i.ArchivedAt,
+		&i.SourceKind,
+		&i.ConnectionID,
+		&i.ExternalID,
+		&i.Provider,
+		&i.Institution,
+		&i.IbanMasked,
+		&i.BookedBalanceMinor,
+		&i.BookedBalanceDate,
+		&i.AvailableBalanceMinor,
+		&i.AvailableBalanceDate,
+		&i.SyncedAt,
+	)
+	return i, err
+}
+
+const createBankAccount = `-- name: CreateBankAccount :one
+INSERT INTO accounts (
+    name, kind, currency, source_kind, connection_id, external_id, provider, institution, iban_masked,
+    booked_balance_minor, booked_balance_date, available_balance_minor, available_balance_date, synced_at
+)
+VALUES (
+    $1, $2, $3, 'bank', $4, $5::text,
+    $6, $7, $8,
+    $9, $10, $11, $12, now()
+)
+RETURNING id, name, currency, opening_balance_minor, created_at, updated_at, kind, system_key, archived_at, source_kind, connection_id, external_id, provider, institution, iban_masked, booked_balance_minor, booked_balance_date, available_balance_minor, available_balance_date, synced_at
+`
+
+type CreateBankAccountParams struct {
+	Name                  string
+	Kind                  string
+	Currency              string
+	ConnectionID          pgtype.UUID
+	ExternalID            string
+	Provider              *string
+	Institution           *string
+	IbanMasked            *string
+	BookedBalanceMinor    *int64
+	BookedBalanceDate     pgtype.Date
+	AvailableBalanceMinor *int64
+	AvailableBalanceDate  pgtype.Date
+}
+
+func (q *Queries) CreateBankAccount(ctx context.Context, arg CreateBankAccountParams) (Account, error) {
+	row := q.db.QueryRow(ctx, createBankAccount,
+		arg.Name,
+		arg.Kind,
+		arg.Currency,
+		arg.ConnectionID,
+		arg.ExternalID,
+		arg.Provider,
+		arg.Institution,
+		arg.IbanMasked,
+		arg.BookedBalanceMinor,
+		arg.BookedBalanceDate,
+		arg.AvailableBalanceMinor,
+		arg.AvailableBalanceDate,
+	)
+	var i Account
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Currency,
+		&i.OpeningBalanceMinor,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Kind,
+		&i.SystemKey,
+		&i.ArchivedAt,
+		&i.SourceKind,
+		&i.ConnectionID,
+		&i.ExternalID,
+		&i.Provider,
+		&i.Institution,
+		&i.IbanMasked,
+		&i.BookedBalanceMinor,
+		&i.BookedBalanceDate,
+		&i.AvailableBalanceMinor,
+		&i.AvailableBalanceDate,
+		&i.SyncedAt,
+	)
+	return i, err
+}
+
+const createBuiltInAccount = `-- name: CreateBuiltInAccount :one
+INSERT INTO accounts (name, currency, kind, system_key)
+VALUES ($1, $2, 'cash', $3::text)
+RETURNING id, name, currency, opening_balance_minor, created_at, updated_at, kind, system_key, archived_at, source_kind, connection_id, external_id, provider, institution, iban_masked, booked_balance_minor, booked_balance_date, available_balance_minor, available_balance_date, synced_at
+`
+
+type CreateBuiltInAccountParams struct {
+	Name      string
+	Currency  string
+	SystemKey string
+}
+
+func (q *Queries) CreateBuiltInAccount(ctx context.Context, arg CreateBuiltInAccountParams) (Account, error) {
+	row := q.db.QueryRow(ctx, createBuiltInAccount, arg.Name, arg.Currency, arg.SystemKey)
+	var i Account
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Currency,
+		&i.OpeningBalanceMinor,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Kind,
+		&i.SystemKey,
+		&i.ArchivedAt,
+		&i.SourceKind,
+		&i.ConnectionID,
+		&i.ExternalID,
+		&i.Provider,
+		&i.Institution,
+		&i.IbanMasked,
+		&i.BookedBalanceMinor,
+		&i.BookedBalanceDate,
+		&i.AvailableBalanceMinor,
+		&i.AvailableBalanceDate,
+		&i.SyncedAt,
+	)
+	return i, err
+}
+
+const createCategoryRule = `-- name: CreateCategoryRule :one
+INSERT INTO category_rules (category_id, match_field, match_operator, match_text, priority)
+VALUES (
+    $1, $2, $3, $4,
+    COALESCE($5::integer, (SELECT COALESCE(MAX(priority), 0) + 10 FROM category_rules))
+)
+RETURNING id, category_id, match_field, match_operator, match_text, priority, created_at, updated_at
+`
+
+type CreateCategoryRuleParams struct {
+	CategoryID    pgtype.UUID
+	MatchField    string
+	MatchOperator string
+	MatchText     string
+	Priority      *int32
+}
+
+func (q *Queries) CreateCategoryRule(ctx context.Context, arg CreateCategoryRuleParams) (CategoryRule, error) {
+	row := q.db.QueryRow(ctx, createCategoryRule,
+		arg.CategoryID,
+		arg.MatchField,
+		arg.MatchOperator,
+		arg.MatchText,
+		arg.Priority,
+	)
+	var i CategoryRule
+	err := row.Scan(
+		&i.ID,
+		&i.CategoryID,
+		&i.MatchField,
+		&i.MatchOperator,
+		&i.MatchText,
+		&i.Priority,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
 
 const createFinancialCategory = `-- name: CreateFinancialCategory :one
-INSERT INTO financial_categories (name, kind)
-VALUES ($1, $2)
-RETURNING id, name, kind, created_at, updated_at
+INSERT INTO financial_categories (name, kind, color)
+VALUES ($1, $2, $3)
+RETURNING id, name, kind, created_at, updated_at, color, archived_at
 `
 
 type CreateFinancialCategoryParams struct {
-	Name string
-	Kind string
+	Name  string
+	Kind  string
+	Color *string
 }
 
 func (q *Queries) CreateFinancialCategory(ctx context.Context, arg CreateFinancialCategoryParams) (FinancialCategory, error) {
-	row := q.db.QueryRow(ctx, createFinancialCategory, arg.Name, arg.Kind)
+	row := q.db.QueryRow(ctx, createFinancialCategory, arg.Name, arg.Kind, arg.Color)
 	var i FinancialCategory
 	err := row.Scan(
 		&i.ID,
@@ -57,18 +342,115 @@ func (q *Queries) CreateFinancialCategory(ctx context.Context, arg CreateFinanci
 		&i.Kind,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Color,
+		&i.ArchivedAt,
+	)
+	return i, err
+}
+
+const createImportedTransaction = `-- name: CreateImportedTransaction :one
+INSERT INTO transactions (
+    account_id, category_id, amount_minor, currency, occurred_on, value_date, status,
+    counterparty, description, note, categorized_by, category_rule_id,
+    import_source, import_external_id, connection_id, merchant_category_code, bank_reference, source_metadata
+)
+VALUES (
+    $1, $2, $3, $4, $5,
+    $6, $7, $8, $9, $10,
+    $11, $12, $13::text, $14::text,
+    $15, $16, $17, $18
+)
+ON CONFLICT (account_id, import_source, import_external_id) WHERE import_source IS NOT NULL DO NOTHING
+RETURNING id, account_id, category_id, amount_minor, currency, occurred_on, note, import_source, import_external_id, source_metadata, created_at, updated_at, automation_idempotency_key, automation_payload_hash, counterparty, description, status, value_date, connection_id, categorized_by, category_rule_id, merchant_category_code, bank_reference
+`
+
+type CreateImportedTransactionParams struct {
+	AccountID            pgtype.UUID
+	CategoryID           pgtype.UUID
+	AmountMinor          int64
+	Currency             string
+	OccurredOn           pgtype.Date
+	ValueDate            pgtype.Date
+	Status               string
+	Counterparty         *string
+	Description          *string
+	Note                 *string
+	CategorizedBy        *string
+	CategoryRuleID       pgtype.UUID
+	ImportSource         string
+	ImportExternalID     string
+	ConnectionID         pgtype.UUID
+	MerchantCategoryCode *string
+	BankReference        *string
+	SourceMetadata       []byte
+}
+
+// No row comes back when the account already has this import identity.
+func (q *Queries) CreateImportedTransaction(ctx context.Context, arg CreateImportedTransactionParams) (Transaction, error) {
+	row := q.db.QueryRow(ctx, createImportedTransaction,
+		arg.AccountID,
+		arg.CategoryID,
+		arg.AmountMinor,
+		arg.Currency,
+		arg.OccurredOn,
+		arg.ValueDate,
+		arg.Status,
+		arg.Counterparty,
+		arg.Description,
+		arg.Note,
+		arg.CategorizedBy,
+		arg.CategoryRuleID,
+		arg.ImportSource,
+		arg.ImportExternalID,
+		arg.ConnectionID,
+		arg.MerchantCategoryCode,
+		arg.BankReference,
+		arg.SourceMetadata,
+	)
+	var i Transaction
+	err := row.Scan(
+		&i.ID,
+		&i.AccountID,
+		&i.CategoryID,
+		&i.AmountMinor,
+		&i.Currency,
+		&i.OccurredOn,
+		&i.Note,
+		&i.ImportSource,
+		&i.ImportExternalID,
+		&i.SourceMetadata,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.AutomationIdempotencyKey,
+		&i.AutomationPayloadHash,
+		&i.Counterparty,
+		&i.Description,
+		&i.Status,
+		&i.ValueDate,
+		&i.ConnectionID,
+		&i.CategorizedBy,
+		&i.CategoryRuleID,
+		&i.MerchantCategoryCode,
+		&i.BankReference,
 	)
 	return i, err
 }
 
 const createTransaction = `-- name: CreateTransaction :one
 INSERT INTO transactions (
-    account_id, category_id, amount_minor, currency, occurred_on, note,
-    import_source, import_external_id, source_metadata, automation_idempotency_key, automation_payload_hash
+    account_id, category_id, amount_minor, currency, occurred_on, value_date, status,
+    counterparty, description, note, categorized_by, category_rule_id,
+    source_metadata, automation_idempotency_key, automation_payload_hash
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-ON CONFLICT (automation_idempotency_key) WHERE automation_idempotency_key IS NOT NULL DO UPDATE SET automation_idempotency_key = EXCLUDED.automation_idempotency_key
-RETURNING id, account_id, category_id, amount_minor, currency, occurred_on, note, import_source, import_external_id, source_metadata, created_at, updated_at, automation_idempotency_key, automation_payload_hash
+VALUES (
+    $1, $2, $3, $4, $5,
+    $6, $7, $8, $9, $10,
+    $11, $12, $13,
+    $14, $15
+)
+ON CONFLICT (automation_idempotency_key) WHERE automation_idempotency_key IS NOT NULL
+DO UPDATE SET automation_idempotency_key = EXCLUDED.automation_idempotency_key
+RETURNING id, account_id, category_id, amount_minor, currency, occurred_on, note, import_source, import_external_id, source_metadata, created_at, updated_at, automation_idempotency_key, automation_payload_hash, counterparty, description, status, value_date, connection_id, categorized_by, category_rule_id, merchant_category_code, bank_reference
 `
 
 type CreateTransactionParams struct {
@@ -77,9 +459,13 @@ type CreateTransactionParams struct {
 	AmountMinor              int64
 	Currency                 string
 	OccurredOn               pgtype.Date
+	ValueDate                pgtype.Date
+	Status                   string
+	Counterparty             *string
+	Description              *string
 	Note                     *string
-	ImportSource             *string
-	ImportExternalID         *string
+	CategorizedBy            *string
+	CategoryRuleID           pgtype.UUID
 	SourceMetadata           []byte
 	AutomationIdempotencyKey *string
 	AutomationPayloadHash    *string
@@ -92,9 +478,13 @@ func (q *Queries) CreateTransaction(ctx context.Context, arg CreateTransactionPa
 		arg.AmountMinor,
 		arg.Currency,
 		arg.OccurredOn,
+		arg.ValueDate,
+		arg.Status,
+		arg.Counterparty,
+		arg.Description,
 		arg.Note,
-		arg.ImportSource,
-		arg.ImportExternalID,
+		arg.CategorizedBy,
+		arg.CategoryRuleID,
 		arg.SourceMetadata,
 		arg.AutomationIdempotencyKey,
 		arg.AutomationPayloadHash,
@@ -115,82 +505,114 @@ func (q *Queries) CreateTransaction(ctx context.Context, arg CreateTransactionPa
 		&i.UpdatedAt,
 		&i.AutomationIdempotencyKey,
 		&i.AutomationPayloadHash,
+		&i.Counterparty,
+		&i.Description,
+		&i.Status,
+		&i.ValueDate,
+		&i.ConnectionID,
+		&i.CategorizedBy,
+		&i.CategoryRuleID,
+		&i.MerchantCategoryCode,
+		&i.BankReference,
 	)
 	return i, err
 }
 
-const getMonthlyCashflow = `-- name: GetMonthlyCashflow :one
-SELECT COALESCE(SUM(amount_minor) FILTER (WHERE amount_minor > 0), 0)::bigint AS income_minor,
-       COALESCE(-SUM(amount_minor) FILTER (WHERE amount_minor < 0), 0)::bigint AS spending_minor,
-       COALESCE(SUM(amount_minor), 0)::bigint AS net_minor
-FROM transactions
-WHERE occurred_on >= $1::date
-  AND occurred_on < ($1::date + INTERVAL '1 month')
+const deleteCategoryRule = `-- name: DeleteCategoryRule :one
+DELETE FROM category_rules WHERE id = $1
+RETURNING id, category_id, match_field, match_operator, match_text, priority, created_at, updated_at
 `
 
-type GetMonthlyCashflowRow struct {
-	IncomeMinor   int64
-	SpendingMinor int64
-	NetMinor      int64
-}
-
-func (q *Queries) GetMonthlyCashflow(ctx context.Context, monthStart pgtype.Date) (GetMonthlyCashflowRow, error) {
-	row := q.db.QueryRow(ctx, getMonthlyCashflow, monthStart)
-	var i GetMonthlyCashflowRow
-	err := row.Scan(&i.IncomeMinor, &i.SpendingMinor, &i.NetMinor)
+func (q *Queries) DeleteCategoryRule(ctx context.Context, id pgtype.UUID) (CategoryRule, error) {
+	row := q.db.QueryRow(ctx, deleteCategoryRule, id)
+	var i CategoryRule
+	err := row.Scan(
+		&i.ID,
+		&i.CategoryID,
+		&i.MatchField,
+		&i.MatchOperator,
+		&i.MatchText,
+		&i.Priority,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
 	return i, err
 }
 
-const getMonthlySpendingByCategory = `-- name: GetMonthlySpendingByCategory :many
-SELECT c.id AS category_id, c.name AS category_name,
-       COALESCE(-SUM(t.amount_minor), 0)::bigint AS amount_minor
-FROM transactions AS t
-JOIN financial_categories AS c ON c.id = t.category_id
-WHERE t.amount_minor < 0
-  AND t.occurred_on >= $1::date
-  AND t.occurred_on < ($1::date + INTERVAL '1 month')
-GROUP BY c.id, c.name
-ORDER BY amount_minor DESC, c.name
+const deleteStalePending = `-- name: DeleteStalePending :execrows
+DELETE FROM transactions
+WHERE connection_id = $1
+  AND import_source = 'bank'
+  AND status = 'pending'
+  AND occurred_on BETWEEN $2::date AND $3::date
+  AND NOT (import_external_id = ANY($4::text[]))
 `
 
-type GetMonthlySpendingByCategoryRow struct {
-	CategoryID   pgtype.UUID
-	CategoryName string
-	AmountMinor  int64
+type DeleteStalePendingParams struct {
+	ConnectionID pgtype.UUID
+	WindowFrom   pgtype.Date
+	WindowTo     pgtype.Date
+	Keep         []string
 }
 
-func (q *Queries) GetMonthlySpendingByCategory(ctx context.Context, monthStart pgtype.Date) ([]GetMonthlySpendingByCategoryRow, error) {
-	rows, err := q.db.Query(ctx, getMonthlySpendingByCategory, monthStart)
+// Pending bank transactions of the connection booked inside the sync window
+// that the sync no longer has.
+func (q *Queries) DeleteStalePending(ctx context.Context, arg DeleteStalePendingParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteStalePending,
+		arg.ConnectionID,
+		arg.WindowFrom,
+		arg.WindowTo,
+		arg.Keep,
+	)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
-	defer rows.Close()
-	items := []GetMonthlySpendingByCategoryRow{}
-	for rows.Next() {
-		var i GetMonthlySpendingByCategoryRow
-		if err := rows.Scan(&i.CategoryID, &i.CategoryName, &i.AmountMinor); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
+	return result.RowsAffected(), nil
 }
 
-const getTransactionByImportIdentity = `-- name: GetTransactionByImportIdentity :one
-SELECT id, account_id, category_id, amount_minor, currency, occurred_on, note, import_source, import_external_id, source_metadata, created_at, updated_at, automation_idempotency_key, automation_payload_hash FROM transactions
-WHERE import_source = $1 AND import_external_id = $2
+const deleteTransaction = `-- name: DeleteTransaction :exec
+DELETE FROM transactions WHERE id = $1
 `
 
-type GetTransactionByImportIdentityParams struct {
-	ImportSource     *string
-	ImportExternalID *string
+func (q *Queries) DeleteTransaction(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteTransaction, id)
+	return err
 }
 
-func (q *Queries) GetTransactionByImportIdentity(ctx context.Context, arg GetTransactionByImportIdentityParams) (Transaction, error) {
-	row := q.db.QueryRow(ctx, getTransactionByImportIdentity, arg.ImportSource, arg.ImportExternalID)
+const findReplacedPending = `-- name: FindReplacedPending :one
+SELECT id, account_id, category_id, amount_minor, currency, occurred_on, note, import_source, import_external_id, source_metadata, created_at, updated_at, automation_idempotency_key, automation_payload_hash, counterparty, description, status, value_date, connection_id, categorized_by, category_rule_id, merchant_category_code, bank_reference FROM transactions
+WHERE account_id = $1
+  AND import_source = 'bank'
+  AND status = 'pending'
+  AND amount_minor = $2
+  AND lower(regexp_replace(btrim(COALESCE(counterparty, '')), '\s+', ' ', 'g'))
+      = lower(regexp_replace(btrim(COALESCE($3::text, '')), '\s+', ' ', 'g'))
+  AND abs(occurred_on - $4::date) <= 3
+  AND NOT (import_external_id = ANY($5::text[]))
+ORDER BY abs(occurred_on - $4::date), created_at, id
+LIMIT 1
+FOR UPDATE
+`
+
+type FindReplacedPendingParams struct {
+	AccountID    pgtype.UUID
+	AmountMinor  int64
+	Counterparty *string
+	BookingDate  pgtype.Date
+	Keep         []string
+}
+
+// The pending bank transaction a new booked one replaces: same account and
+// amount, the same counterparty ignoring case and spacing, booked at most
+// three days apart, and absent from the sync (keep).
+func (q *Queries) FindReplacedPending(ctx context.Context, arg FindReplacedPendingParams) (Transaction, error) {
+	row := q.db.QueryRow(ctx, findReplacedPending,
+		arg.AccountID,
+		arg.AmountMinor,
+		arg.Counterparty,
+		arg.BookingDate,
+		arg.Keep,
+	)
 	var i Transaction
 	err := row.Scan(
 		&i.ID,
@@ -207,32 +629,333 @@ func (q *Queries) GetTransactionByImportIdentity(ctx context.Context, arg GetTra
 		&i.UpdatedAt,
 		&i.AutomationIdempotencyKey,
 		&i.AutomationPayloadHash,
+		&i.Counterparty,
+		&i.Description,
+		&i.Status,
+		&i.ValueDate,
+		&i.ConnectionID,
+		&i.CategorizedBy,
+		&i.CategoryRuleID,
+		&i.MerchantCategoryCode,
+		&i.BankReference,
+	)
+	return i, err
+}
+
+const getAccount = `-- name: GetAccount :one
+SELECT id, name, currency, opening_balance_minor, created_at, updated_at, kind, system_key, archived_at, source_kind, connection_id, external_id, provider, institution, iban_masked, booked_balance_minor, booked_balance_date, available_balance_minor, available_balance_date, synced_at FROM accounts WHERE id = $1
+`
+
+func (q *Queries) GetAccount(ctx context.Context, id pgtype.UUID) (Account, error) {
+	row := q.db.QueryRow(ctx, getAccount, id)
+	var i Account
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Currency,
+		&i.OpeningBalanceMinor,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Kind,
+		&i.SystemKey,
+		&i.ArchivedAt,
+		&i.SourceKind,
+		&i.ConnectionID,
+		&i.ExternalID,
+		&i.Provider,
+		&i.Institution,
+		&i.IbanMasked,
+		&i.BookedBalanceMinor,
+		&i.BookedBalanceDate,
+		&i.AvailableBalanceMinor,
+		&i.AvailableBalanceDate,
+		&i.SyncedAt,
+	)
+	return i, err
+}
+
+const getBuiltInAccount = `-- name: GetBuiltInAccount :one
+SELECT id, name, currency, opening_balance_minor, created_at, updated_at, kind, system_key, archived_at, source_kind, connection_id, external_id, provider, institution, iban_masked, booked_balance_minor, booked_balance_date, available_balance_minor, available_balance_date, synced_at FROM accounts WHERE system_key = $1::text
+`
+
+func (q *Queries) GetBuiltInAccount(ctx context.Context, systemKey string) (Account, error) {
+	row := q.db.QueryRow(ctx, getBuiltInAccount, systemKey)
+	var i Account
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Currency,
+		&i.OpeningBalanceMinor,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Kind,
+		&i.SystemKey,
+		&i.ArchivedAt,
+		&i.SourceKind,
+		&i.ConnectionID,
+		&i.ExternalID,
+		&i.Provider,
+		&i.Institution,
+		&i.IbanMasked,
+		&i.BookedBalanceMinor,
+		&i.BookedBalanceDate,
+		&i.AvailableBalanceMinor,
+		&i.AvailableBalanceDate,
+		&i.SyncedAt,
+	)
+	return i, err
+}
+
+const getCategoryRule = `-- name: GetCategoryRule :one
+SELECT id, category_id, match_field, match_operator, match_text, priority, created_at, updated_at FROM category_rules WHERE id = $1
+`
+
+func (q *Queries) GetCategoryRule(ctx context.Context, id pgtype.UUID) (CategoryRule, error) {
+	row := q.db.QueryRow(ctx, getCategoryRule, id)
+	var i CategoryRule
+	err := row.Scan(
+		&i.ID,
+		&i.CategoryID,
+		&i.MatchField,
+		&i.MatchOperator,
+		&i.MatchText,
+		&i.Priority,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getFinancialCategory = `-- name: GetFinancialCategory :one
+SELECT id, name, kind, created_at, updated_at, color, archived_at FROM financial_categories WHERE id = $1
+`
+
+func (q *Queries) GetFinancialCategory(ctx context.Context, id pgtype.UUID) (FinancialCategory, error) {
+	row := q.db.QueryRow(ctx, getFinancialCategory, id)
+	var i FinancialCategory
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Kind,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Color,
+		&i.ArchivedAt,
+	)
+	return i, err
+}
+
+const getMonthlyCashflow = `-- name: GetMonthlyCashflow :one
+SELECT COALESCE(SUM(t.amount_minor) FILTER (WHERE t.amount_minor > 0), 0)::bigint AS income_minor,
+       COALESCE(-SUM(t.amount_minor) FILTER (WHERE t.amount_minor < 0), 0)::bigint AS spending_minor,
+       COALESCE(SUM(t.amount_minor), 0)::bigint AS net_minor
+FROM transactions AS t
+LEFT JOIN financial_categories AS c ON c.id = t.category_id
+WHERE t.status = 'booked'
+  AND t.currency = $1
+  AND ($2::uuid IS NULL OR t.account_id = $2::uuid)
+  AND c.kind IS DISTINCT FROM 'transfer'
+  AND t.occurred_on >= $3::date
+  AND t.occurred_on < ($3::date + INTERVAL '1 month')
+`
+
+type GetMonthlyCashflowParams struct {
+	Currency   string
+	AccountID  pgtype.UUID
+	MonthStart pgtype.Date
+}
+
+type GetMonthlyCashflowRow struct {
+	IncomeMinor   int64
+	SpendingMinor int64
+	NetMinor      int64
+}
+
+// Booked transactions of the month in one currency, leaving out transfers.
+func (q *Queries) GetMonthlyCashflow(ctx context.Context, arg GetMonthlyCashflowParams) (GetMonthlyCashflowRow, error) {
+	row := q.db.QueryRow(ctx, getMonthlyCashflow, arg.Currency, arg.AccountID, arg.MonthStart)
+	var i GetMonthlyCashflowRow
+	err := row.Scan(&i.IncomeMinor, &i.SpendingMinor, &i.NetMinor)
+	return i, err
+}
+
+const getMonthlyCategoryTotals = `-- name: GetMonthlyCategoryTotals :many
+SELECT t.category_id, c.name AS category_name, c.kind AS category_kind,
+       COALESCE(SUM(t.amount_minor) FILTER (WHERE t.amount_minor > 0), 0)::bigint AS income_minor,
+       COALESCE(-SUM(t.amount_minor) FILTER (WHERE t.amount_minor < 0), 0)::bigint AS spending_minor,
+       COUNT(*)::bigint AS transaction_count
+FROM transactions AS t
+LEFT JOIN financial_categories AS c ON c.id = t.category_id
+WHERE t.status = 'booked'
+  AND t.currency = $1
+  AND ($2::uuid IS NULL OR t.account_id = $2::uuid)
+  AND t.occurred_on >= $3::date
+  AND t.occurred_on < ($3::date + INTERVAL '1 month')
+GROUP BY t.category_id, c.name, c.kind
+ORDER BY spending_minor DESC, income_minor DESC, c.name NULLS LAST
+`
+
+type GetMonthlyCategoryTotalsParams struct {
+	Currency   string
+	AccountID  pgtype.UUID
+	MonthStart pgtype.Date
+}
+
+type GetMonthlyCategoryTotalsRow struct {
+	CategoryID       pgtype.UUID
+	CategoryName     *string
+	CategoryKind     *string
+	IncomeMinor      int64
+	SpendingMinor    int64
+	TransactionCount int64
+}
+
+func (q *Queries) GetMonthlyCategoryTotals(ctx context.Context, arg GetMonthlyCategoryTotalsParams) ([]GetMonthlyCategoryTotalsRow, error) {
+	rows, err := q.db.Query(ctx, getMonthlyCategoryTotals, arg.Currency, arg.AccountID, arg.MonthStart)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GetMonthlyCategoryTotalsRow{}
+	for rows.Next() {
+		var i GetMonthlyCategoryTotalsRow
+		if err := rows.Scan(
+			&i.CategoryID,
+			&i.CategoryName,
+			&i.CategoryKind,
+			&i.IncomeMinor,
+			&i.SpendingMinor,
+			&i.TransactionCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getTransaction = `-- name: GetTransaction :one
+SELECT id, account_id, category_id, amount_minor, currency, occurred_on, note, import_source, import_external_id, source_metadata, created_at, updated_at, automation_idempotency_key, automation_payload_hash, counterparty, description, status, value_date, connection_id, categorized_by, category_rule_id, merchant_category_code, bank_reference FROM transactions WHERE id = $1
+`
+
+func (q *Queries) GetTransaction(ctx context.Context, id pgtype.UUID) (Transaction, error) {
+	row := q.db.QueryRow(ctx, getTransaction, id)
+	var i Transaction
+	err := row.Scan(
+		&i.ID,
+		&i.AccountID,
+		&i.CategoryID,
+		&i.AmountMinor,
+		&i.Currency,
+		&i.OccurredOn,
+		&i.Note,
+		&i.ImportSource,
+		&i.ImportExternalID,
+		&i.SourceMetadata,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.AutomationIdempotencyKey,
+		&i.AutomationPayloadHash,
+		&i.Counterparty,
+		&i.Description,
+		&i.Status,
+		&i.ValueDate,
+		&i.ConnectionID,
+		&i.CategorizedBy,
+		&i.CategoryRuleID,
+		&i.MerchantCategoryCode,
+		&i.BankReference,
+	)
+	return i, err
+}
+
+const getTransactionForUpdate = `-- name: GetTransactionForUpdate :one
+SELECT id, account_id, category_id, amount_minor, currency, occurred_on, note, import_source, import_external_id, source_metadata, created_at, updated_at, automation_idempotency_key, automation_payload_hash, counterparty, description, status, value_date, connection_id, categorized_by, category_rule_id, merchant_category_code, bank_reference FROM transactions WHERE id = $1 FOR UPDATE
+`
+
+func (q *Queries) GetTransactionForUpdate(ctx context.Context, id pgtype.UUID) (Transaction, error) {
+	row := q.db.QueryRow(ctx, getTransactionForUpdate, id)
+	var i Transaction
+	err := row.Scan(
+		&i.ID,
+		&i.AccountID,
+		&i.CategoryID,
+		&i.AmountMinor,
+		&i.Currency,
+		&i.OccurredOn,
+		&i.Note,
+		&i.ImportSource,
+		&i.ImportExternalID,
+		&i.SourceMetadata,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.AutomationIdempotencyKey,
+		&i.AutomationPayloadHash,
+		&i.Counterparty,
+		&i.Description,
+		&i.Status,
+		&i.ValueDate,
+		&i.ConnectionID,
+		&i.CategorizedBy,
+		&i.CategoryRuleID,
+		&i.MerchantCategoryCode,
+		&i.BankReference,
 	)
 	return i, err
 }
 
 const listAccountsWithBalance = `-- name: ListAccountsWithBalance :many
-SELECT a.id, a.name, a.currency, a.opening_balance_minor,
-       (a.opening_balance_minor + COALESCE(SUM(t.amount_minor), 0))::bigint AS balance_minor,
-       a.created_at, a.updated_at
+SELECT a.id, a.name, a.currency, a.opening_balance_minor, a.kind, a.system_key, a.archived_at,
+       a.source_kind, a.connection_id, a.external_id, a.provider, a.institution, a.iban_masked,
+       a.booked_balance_date, a.available_balance_minor, a.synced_at, a.created_at, a.updated_at,
+       (CASE WHEN a.source_kind = 'bank' AND a.booked_balance_minor IS NOT NULL THEN a.booked_balance_minor
+             ELSE a.opening_balance_minor + COALESCE(SUM(t.amount_minor) FILTER (WHERE t.status = 'booked'), 0) END)::bigint AS balance_minor,
+       COALESCE(SUM(t.amount_minor) FILTER (WHERE t.status = 'pending'), 0)::bigint AS pending_minor,
+       COUNT(t.id)::bigint AS transaction_count
 FROM accounts AS a
 LEFT JOIN transactions AS t ON t.account_id = a.id
+WHERE ($1::boolean OR a.archived_at IS NULL)
+  AND ($2::uuid IS NULL OR a.id = $2::uuid)
 GROUP BY a.id
-ORDER BY a.name
+ORDER BY (a.system_key IS NULL), lower(a.name), a.id
 `
 
-type ListAccountsWithBalanceRow struct {
-	ID                  pgtype.UUID
-	Name                string
-	Currency            string
-	OpeningBalanceMinor int64
-	BalanceMinor        int64
-	CreatedAt           pgtype.Timestamptz
-	UpdatedAt           pgtype.Timestamptz
+type ListAccountsWithBalanceParams struct {
+	IncludeArchived bool
+	AccountID       pgtype.UUID
 }
 
-func (q *Queries) ListAccountsWithBalance(ctx context.Context) ([]ListAccountsWithBalanceRow, error) {
-	rows, err := q.db.Query(ctx, listAccountsWithBalance)
+type ListAccountsWithBalanceRow struct {
+	ID                    pgtype.UUID
+	Name                  string
+	Currency              string
+	OpeningBalanceMinor   int64
+	Kind                  string
+	SystemKey             *string
+	ArchivedAt            pgtype.Timestamptz
+	SourceKind            string
+	ConnectionID          pgtype.UUID
+	ExternalID            *string
+	Provider              *string
+	Institution           *string
+	IbanMasked            *string
+	BookedBalanceDate     pgtype.Date
+	AvailableBalanceMinor *int64
+	SyncedAt              pgtype.Timestamptz
+	CreatedAt             pgtype.Timestamptz
+	UpdatedAt             pgtype.Timestamptz
+	BalanceMinor          int64
+	PendingMinor          int64
+	TransactionCount      int64
+}
+
+// A bank account that reported a booked balance shows it; every other
+// account shows its opening balance plus its booked transactions.
+func (q *Queries) ListAccountsWithBalance(ctx context.Context, arg ListAccountsWithBalanceParams) ([]ListAccountsWithBalanceRow, error) {
+	rows, err := q.db.Query(ctx, listAccountsWithBalance, arg.IncludeArchived, arg.AccountID)
 	if err != nil {
 		return nil, err
 	}
@@ -245,7 +968,59 @@ func (q *Queries) ListAccountsWithBalance(ctx context.Context) ([]ListAccountsWi
 			&i.Name,
 			&i.Currency,
 			&i.OpeningBalanceMinor,
+			&i.Kind,
+			&i.SystemKey,
+			&i.ArchivedAt,
+			&i.SourceKind,
+			&i.ConnectionID,
+			&i.ExternalID,
+			&i.Provider,
+			&i.Institution,
+			&i.IbanMasked,
+			&i.BookedBalanceDate,
+			&i.AvailableBalanceMinor,
+			&i.SyncedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 			&i.BalanceMinor,
+			&i.PendingMinor,
+			&i.TransactionCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listActiveCategoryRules = `-- name: ListActiveCategoryRules :many
+SELECT r.id, r.category_id, r.match_field, r.match_operator, r.match_text, r.priority, r.created_at, r.updated_at FROM category_rules AS r
+JOIN financial_categories AS c ON c.id = r.category_id
+WHERE c.archived_at IS NULL
+ORDER BY r.priority, r.created_at, r.id
+`
+
+// The rules that may categorize: those of categories that are not archived,
+// in the order they are tried.
+func (q *Queries) ListActiveCategoryRules(ctx context.Context) ([]CategoryRule, error) {
+	rows, err := q.db.Query(ctx, listActiveCategoryRules)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CategoryRule{}
+	for rows.Next() {
+		var i CategoryRule
+		if err := rows.Scan(
+			&i.ID,
+			&i.CategoryID,
+			&i.MatchField,
+			&i.MatchOperator,
+			&i.MatchText,
+			&i.Priority,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -259,13 +1034,148 @@ func (q *Queries) ListAccountsWithBalance(ctx context.Context) ([]ListAccountsWi
 	return items, nil
 }
 
-const listFinancialCategories = `-- name: ListFinancialCategories :many
-SELECT id, name, kind, created_at, updated_at FROM financial_categories
-ORDER BY kind, name
+const listBankTransactions = `-- name: ListBankTransactions :many
+SELECT id, account_id, category_id, amount_minor, currency, occurred_on, note, import_source, import_external_id, source_metadata, created_at, updated_at, automation_idempotency_key, automation_payload_hash, counterparty, description, status, value_date, connection_id, categorized_by, category_rule_id, merchant_category_code, bank_reference FROM transactions
+WHERE connection_id = $1 AND import_external_id = ANY($2::text[])
+FOR UPDATE
 `
 
-func (q *Queries) ListFinancialCategories(ctx context.Context) ([]FinancialCategory, error) {
-	rows, err := q.db.Query(ctx, listFinancialCategories)
+type ListBankTransactionsParams struct {
+	ConnectionID pgtype.UUID
+	ExternalIds  []string
+}
+
+func (q *Queries) ListBankTransactions(ctx context.Context, arg ListBankTransactionsParams) ([]Transaction, error) {
+	rows, err := q.db.Query(ctx, listBankTransactions, arg.ConnectionID, arg.ExternalIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Transaction{}
+	for rows.Next() {
+		var i Transaction
+		if err := rows.Scan(
+			&i.ID,
+			&i.AccountID,
+			&i.CategoryID,
+			&i.AmountMinor,
+			&i.Currency,
+			&i.OccurredOn,
+			&i.Note,
+			&i.ImportSource,
+			&i.ImportExternalID,
+			&i.SourceMetadata,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.AutomationIdempotencyKey,
+			&i.AutomationPayloadHash,
+			&i.Counterparty,
+			&i.Description,
+			&i.Status,
+			&i.ValueDate,
+			&i.ConnectionID,
+			&i.CategorizedBy,
+			&i.CategoryRuleID,
+			&i.MerchantCategoryCode,
+			&i.BankReference,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCategoryRules = `-- name: ListCategoryRules :many
+SELECT id, category_id, match_field, match_operator, match_text, priority, created_at, updated_at FROM category_rules
+ORDER BY priority, created_at, id
+`
+
+func (q *Queries) ListCategoryRules(ctx context.Context) ([]CategoryRule, error) {
+	rows, err := q.db.Query(ctx, listCategoryRules)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CategoryRule{}
+	for rows.Next() {
+		var i CategoryRule
+		if err := rows.Scan(
+			&i.ID,
+			&i.CategoryID,
+			&i.MatchField,
+			&i.MatchOperator,
+			&i.MatchText,
+			&i.Priority,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listConnectionAccounts = `-- name: ListConnectionAccounts :many
+SELECT id, name, currency, opening_balance_minor, created_at, updated_at, kind, system_key, archived_at, source_kind, connection_id, external_id, provider, institution, iban_masked, booked_balance_minor, booked_balance_date, available_balance_minor, available_balance_date, synced_at FROM accounts WHERE connection_id = $1 ORDER BY created_at, id
+`
+
+func (q *Queries) ListConnectionAccounts(ctx context.Context, connectionID pgtype.UUID) ([]Account, error) {
+	rows, err := q.db.Query(ctx, listConnectionAccounts, connectionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Account{}
+	for rows.Next() {
+		var i Account
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Currency,
+			&i.OpeningBalanceMinor,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Kind,
+			&i.SystemKey,
+			&i.ArchivedAt,
+			&i.SourceKind,
+			&i.ConnectionID,
+			&i.ExternalID,
+			&i.Provider,
+			&i.Institution,
+			&i.IbanMasked,
+			&i.BookedBalanceMinor,
+			&i.BookedBalanceDate,
+			&i.AvailableBalanceMinor,
+			&i.AvailableBalanceDate,
+			&i.SyncedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listFinancialCategories = `-- name: ListFinancialCategories :many
+SELECT id, name, kind, created_at, updated_at, color, archived_at FROM financial_categories
+WHERE ($1::boolean OR archived_at IS NULL)
+ORDER BY kind, lower(name), id
+`
+
+func (q *Queries) ListFinancialCategories(ctx context.Context, includeArchived bool) ([]FinancialCategory, error) {
+	rows, err := q.db.Query(ctx, listFinancialCategories, includeArchived)
 	if err != nil {
 		return nil, err
 	}
@@ -279,6 +1189,55 @@ func (q *Queries) ListFinancialCategories(ctx context.Context) ([]FinancialCateg
 			&i.Kind,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Color,
+			&i.ArchivedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRuleCandidates = `-- name: ListRuleCandidates :many
+SELECT id, counterparty, description, category_id, categorized_by, category_rule_id
+FROM transactions
+WHERE categorized_by IS DISTINCT FROM 'manual'
+  AND ($1::boolean OR category_id IS NULL)
+ORDER BY id
+FOR UPDATE
+`
+
+type ListRuleCandidatesRow struct {
+	ID             pgtype.UUID
+	Counterparty   *string
+	Description    *string
+	CategoryID     pgtype.UUID
+	CategorizedBy  *string
+	CategoryRuleID pgtype.UUID
+}
+
+// Transactions whose category was not chosen by hand: those without a
+// category, plus those a rule categorized when all_categorized is set.
+func (q *Queries) ListRuleCandidates(ctx context.Context, allCategorized bool) ([]ListRuleCandidatesRow, error) {
+	rows, err := q.db.Query(ctx, listRuleCandidates, allCategorized)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListRuleCandidatesRow{}
+	for rows.Next() {
+		var i ListRuleCandidatesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Counterparty,
+			&i.Description,
+			&i.CategoryID,
+			&i.CategorizedBy,
+			&i.CategoryRuleID,
 		); err != nil {
 			return nil, err
 		}
@@ -291,29 +1250,66 @@ func (q *Queries) ListFinancialCategories(ctx context.Context) ([]FinancialCateg
 }
 
 const listTransactions = `-- name: ListTransactions :many
-SELECT id, account_id, category_id, amount_minor, currency, occurred_on, note, import_source, import_external_id, source_metadata, created_at, updated_at, automation_idempotency_key, automation_payload_hash FROM transactions
+SELECT id, account_id, category_id, amount_minor, currency, occurred_on, note, import_source, import_external_id, source_metadata, created_at, updated_at, automation_idempotency_key, automation_payload_hash, counterparty, description, status, value_date, connection_id, categorized_by, category_rule_id, merchant_category_code, bank_reference FROM transactions
 WHERE ($1::uuid IS NULL OR account_id = $1::uuid)
   AND ($2::uuid IS NULL OR category_id = $2::uuid)
-  AND ($3::date IS NULL OR occurred_on >= $3::date)
-  AND ($4::date IS NULL OR occurred_on <= $4::date)
-ORDER BY occurred_on DESC, id DESC
-LIMIT $5
+  AND (NOT $3::boolean OR category_id IS NULL)
+  AND ($4::date IS NULL OR occurred_on >= $4::date)
+  AND ($5::date IS NULL OR occurred_on <= $5::date)
+  AND ($6::text IS NULL
+       OR ($6::text = 'in' AND amount_minor > 0)
+       OR ($6::text = 'out' AND amount_minor < 0))
+  AND ($7::bigint IS NULL OR abs(amount_minor) >= $7::bigint)
+  AND ($8::bigint IS NULL OR abs(amount_minor) <= $8::bigint)
+  AND ($9::text IS NULL OR status = $9::text)
+  AND ($10::text IS NULL OR COALESCE(import_source, 'manual') = $10::text)
+  AND NOT EXISTS (
+      SELECT 1 FROM unnest($11::text[]) AS word
+      WHERE concat_ws(' ', counterparty, description, note) NOT ILIKE '%' || word || '%'
+  )
+  AND ($12::date IS NULL
+       OR (occurred_on, created_at, id) < ($12::date, $13::timestamptz, $14::uuid))
+ORDER BY occurred_on DESC, created_at DESC, id DESC
+LIMIT $15
 `
 
 type ListTransactionsParams struct {
-	AccountID  pgtype.UUID
-	CategoryID pgtype.UUID
-	FromDate   pgtype.Date
-	ToDate     pgtype.Date
-	PageLimit  int32
+	AccountID      pgtype.UUID
+	CategoryID     pgtype.UUID
+	Uncategorized  bool
+	FromDate       pgtype.Date
+	ToDate         pgtype.Date
+	Direction      *string
+	AmountMin      *int64
+	AmountMax      *int64
+	Status         *string
+	SourceKind     *string
+	Words          []string
+	AfterDate      pgtype.Date
+	AfterCreatedAt pgtype.Timestamptz
+	AfterID        pgtype.UUID
+	PageLimit      int32
 }
 
+// Latest booking date first, then latest created; the after_* position is
+// the last row of the previous page. Every search word must occur in the
+// counterparty, description, or notes (the words arrive LIKE-escaped).
 func (q *Queries) ListTransactions(ctx context.Context, arg ListTransactionsParams) ([]Transaction, error) {
 	rows, err := q.db.Query(ctx, listTransactions,
 		arg.AccountID,
 		arg.CategoryID,
+		arg.Uncategorized,
 		arg.FromDate,
 		arg.ToDate,
+		arg.Direction,
+		arg.AmountMin,
+		arg.AmountMax,
+		arg.Status,
+		arg.SourceKind,
+		arg.Words,
+		arg.AfterDate,
+		arg.AfterCreatedAt,
+		arg.AfterID,
 		arg.PageLimit,
 	)
 	if err != nil {
@@ -338,6 +1334,15 @@ func (q *Queries) ListTransactions(ctx context.Context, arg ListTransactionsPara
 			&i.UpdatedAt,
 			&i.AutomationIdempotencyKey,
 			&i.AutomationPayloadHash,
+			&i.Counterparty,
+			&i.Description,
+			&i.Status,
+			&i.ValueDate,
+			&i.ConnectionID,
+			&i.CategorizedBy,
+			&i.CategoryRuleID,
+			&i.MerchantCategoryCode,
+			&i.BankReference,
 		); err != nil {
 			return nil, err
 		}
@@ -349,23 +1354,334 @@ func (q *Queries) ListTransactions(ctx context.Context, arg ListTransactionsPara
 	return items, nil
 }
 
+const lockBankConnection = `-- name: LockBankConnection :exec
+SELECT pg_advisory_xact_lock(7313002, hashtext($1::uuid::text))
+`
+
+// One sync of a connection at a time.
+func (q *Queries) LockBankConnection(ctx context.Context, connectionID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, lockBankConnection, connectionID)
+	return err
+}
+
+const lockBuiltInAccounts = `-- name: LockBuiltInAccounts :exec
+SELECT pg_advisory_xact_lock(7313001)
+`
+
+func (q *Queries) LockBuiltInAccounts(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, lockBuiltInAccounts)
+	return err
+}
+
+const setRuleCategories = `-- name: SetRuleCategories :exec
+UPDATE transactions AS t
+SET category_id = u.category_id,
+    category_rule_id = u.rule_id,
+    categorized_by = CASE WHEN u.category_id IS NULL THEN NULL ELSE 'rule' END,
+    updated_at = now()
+FROM (SELECT unnest($1::uuid[]) AS id,
+             unnest($2::uuid[]) AS category_id,
+             unnest($3::uuid[]) AS rule_id) AS u
+WHERE t.id = u.id
+`
+
+type SetRuleCategoriesParams struct {
+	Ids         []pgtype.UUID
+	CategoryIds []pgtype.UUID
+	RuleIds     []pgtype.UUID
+}
+
+// Gives each transaction the category its rule chose (null: none).
+func (q *Queries) SetRuleCategories(ctx context.Context, arg SetRuleCategoriesParams) error {
+	_, err := q.db.Exec(ctx, setRuleCategories, arg.Ids, arg.CategoryIds, arg.RuleIds)
+	return err
+}
+
+const updateAccount = `-- name: UpdateAccount :one
+UPDATE accounts
+SET name = COALESCE($1, name),
+    kind = COALESCE($2, kind),
+    currency = COALESCE($3, currency),
+    opening_balance_minor = COALESCE($4, opening_balance_minor),
+    archived_at = CASE
+        WHEN $5::boolean IS NULL THEN archived_at
+        WHEN $5::boolean THEN COALESCE(archived_at, now())
+        ELSE NULL
+    END,
+    updated_at = now()
+WHERE id = $6
+RETURNING id, name, currency, opening_balance_minor, created_at, updated_at, kind, system_key, archived_at, source_kind, connection_id, external_id, provider, institution, iban_masked, booked_balance_minor, booked_balance_date, available_balance_minor, available_balance_date, synced_at
+`
+
+type UpdateAccountParams struct {
+	Name                *string
+	Kind                *string
+	Currency            *string
+	OpeningBalanceMinor *int64
+	Archived            *bool
+	ID                  pgtype.UUID
+}
+
+func (q *Queries) UpdateAccount(ctx context.Context, arg UpdateAccountParams) (Account, error) {
+	row := q.db.QueryRow(ctx, updateAccount,
+		arg.Name,
+		arg.Kind,
+		arg.Currency,
+		arg.OpeningBalanceMinor,
+		arg.Archived,
+		arg.ID,
+	)
+	var i Account
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Currency,
+		&i.OpeningBalanceMinor,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Kind,
+		&i.SystemKey,
+		&i.ArchivedAt,
+		&i.SourceKind,
+		&i.ConnectionID,
+		&i.ExternalID,
+		&i.Provider,
+		&i.Institution,
+		&i.IbanMasked,
+		&i.BookedBalanceMinor,
+		&i.BookedBalanceDate,
+		&i.AvailableBalanceMinor,
+		&i.AvailableBalanceDate,
+		&i.SyncedAt,
+	)
+	return i, err
+}
+
+const updateBankAccount = `-- name: UpdateBankAccount :one
+UPDATE accounts
+SET provider = $1,
+    institution = $2,
+    iban_masked = COALESCE($3, iban_masked),
+    booked_balance_minor = CASE WHEN $4::date IS NULL THEN booked_balance_minor ELSE $5::bigint END,
+    booked_balance_date = COALESCE($4::date, booked_balance_date),
+    available_balance_minor = CASE WHEN $6::date IS NULL THEN available_balance_minor ELSE $7::bigint END,
+    available_balance_date = COALESCE($6::date, available_balance_date),
+    synced_at = now(),
+    updated_at = now()
+WHERE id = $8
+RETURNING id, name, currency, opening_balance_minor, created_at, updated_at, kind, system_key, archived_at, source_kind, connection_id, external_id, provider, institution, iban_masked, booked_balance_minor, booked_balance_date, available_balance_minor, available_balance_date, synced_at
+`
+
+type UpdateBankAccountParams struct {
+	Provider              *string
+	Institution           *string
+	IbanMasked            *string
+	BookedBalanceDate     pgtype.Date
+	BookedBalanceMinor    *int64
+	AvailableBalanceDate  pgtype.Date
+	AvailableBalanceMinor *int64
+	ID                    pgtype.UUID
+}
+
+// A re-sync refreshes what the bank reports; the owner's name, kind, and
+// archive state stay. A balance the sync does not report stays as it was.
+func (q *Queries) UpdateBankAccount(ctx context.Context, arg UpdateBankAccountParams) (Account, error) {
+	row := q.db.QueryRow(ctx, updateBankAccount,
+		arg.Provider,
+		arg.Institution,
+		arg.IbanMasked,
+		arg.BookedBalanceDate,
+		arg.BookedBalanceMinor,
+		arg.AvailableBalanceDate,
+		arg.AvailableBalanceMinor,
+		arg.ID,
+	)
+	var i Account
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Currency,
+		&i.OpeningBalanceMinor,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Kind,
+		&i.SystemKey,
+		&i.ArchivedAt,
+		&i.SourceKind,
+		&i.ConnectionID,
+		&i.ExternalID,
+		&i.Provider,
+		&i.Institution,
+		&i.IbanMasked,
+		&i.BookedBalanceMinor,
+		&i.BookedBalanceDate,
+		&i.AvailableBalanceMinor,
+		&i.AvailableBalanceDate,
+		&i.SyncedAt,
+	)
+	return i, err
+}
+
+const updateBankTransaction = `-- name: UpdateBankTransaction :one
+UPDATE transactions
+SET account_id = $1,
+    amount_minor = $2,
+    currency = $3,
+    occurred_on = $4,
+    value_date = $5,
+    status = $6,
+    counterparty = $7,
+    description = $8,
+    merchant_category_code = $9,
+    bank_reference = $10,
+    category_id = $11,
+    categorized_by = $12,
+    category_rule_id = $13,
+    updated_at = now()
+WHERE id = $14
+RETURNING id, account_id, category_id, amount_minor, currency, occurred_on, note, import_source, import_external_id, source_metadata, created_at, updated_at, automation_idempotency_key, automation_payload_hash, counterparty, description, status, value_date, connection_id, categorized_by, category_rule_id, merchant_category_code, bank_reference
+`
+
+type UpdateBankTransactionParams struct {
+	AccountID            pgtype.UUID
+	AmountMinor          int64
+	Currency             string
+	OccurredOn           pgtype.Date
+	ValueDate            pgtype.Date
+	Status               string
+	Counterparty         *string
+	Description          *string
+	MerchantCategoryCode *string
+	BankReference        *string
+	CategoryID           pgtype.UUID
+	CategorizedBy        *string
+	CategoryRuleID       pgtype.UUID
+	ID                   pgtype.UUID
+}
+
+func (q *Queries) UpdateBankTransaction(ctx context.Context, arg UpdateBankTransactionParams) (Transaction, error) {
+	row := q.db.QueryRow(ctx, updateBankTransaction,
+		arg.AccountID,
+		arg.AmountMinor,
+		arg.Currency,
+		arg.OccurredOn,
+		arg.ValueDate,
+		arg.Status,
+		arg.Counterparty,
+		arg.Description,
+		arg.MerchantCategoryCode,
+		arg.BankReference,
+		arg.CategoryID,
+		arg.CategorizedBy,
+		arg.CategoryRuleID,
+		arg.ID,
+	)
+	var i Transaction
+	err := row.Scan(
+		&i.ID,
+		&i.AccountID,
+		&i.CategoryID,
+		&i.AmountMinor,
+		&i.Currency,
+		&i.OccurredOn,
+		&i.Note,
+		&i.ImportSource,
+		&i.ImportExternalID,
+		&i.SourceMetadata,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.AutomationIdempotencyKey,
+		&i.AutomationPayloadHash,
+		&i.Counterparty,
+		&i.Description,
+		&i.Status,
+		&i.ValueDate,
+		&i.ConnectionID,
+		&i.CategorizedBy,
+		&i.CategoryRuleID,
+		&i.MerchantCategoryCode,
+		&i.BankReference,
+	)
+	return i, err
+}
+
+const updateCategoryRule = `-- name: UpdateCategoryRule :one
+UPDATE category_rules
+SET category_id = COALESCE($1, category_id),
+    match_field = COALESCE($2, match_field),
+    match_operator = COALESCE($3, match_operator),
+    match_text = COALESCE($4, match_text),
+    priority = COALESCE($5, priority),
+    updated_at = now()
+WHERE id = $6
+RETURNING id, category_id, match_field, match_operator, match_text, priority, created_at, updated_at
+`
+
+type UpdateCategoryRuleParams struct {
+	CategoryID    pgtype.UUID
+	MatchField    *string
+	MatchOperator *string
+	MatchText     *string
+	Priority      *int32
+	ID            pgtype.UUID
+}
+
+func (q *Queries) UpdateCategoryRule(ctx context.Context, arg UpdateCategoryRuleParams) (CategoryRule, error) {
+	row := q.db.QueryRow(ctx, updateCategoryRule,
+		arg.CategoryID,
+		arg.MatchField,
+		arg.MatchOperator,
+		arg.MatchText,
+		arg.Priority,
+		arg.ID,
+	)
+	var i CategoryRule
+	err := row.Scan(
+		&i.ID,
+		&i.CategoryID,
+		&i.MatchField,
+		&i.MatchOperator,
+		&i.MatchText,
+		&i.Priority,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const updateFinancialCategory = `-- name: UpdateFinancialCategory :one
 UPDATE financial_categories
 SET name = COALESCE($1, name),
     kind = COALESCE($2, kind),
+    color = CASE WHEN $3::boolean THEN $4 ELSE color END,
+    archived_at = CASE
+        WHEN $5::boolean IS NULL THEN archived_at
+        WHEN $5::boolean THEN COALESCE(archived_at, now())
+        ELSE NULL
+    END,
     updated_at = now()
-WHERE id = $3
-RETURNING id, name, kind, created_at, updated_at
+WHERE id = $6
+RETURNING id, name, kind, created_at, updated_at, color, archived_at
 `
 
 type UpdateFinancialCategoryParams struct {
-	Name *string
-	Kind *string
-	ID   pgtype.UUID
+	Name     *string
+	Kind     *string
+	SetColor bool
+	Color    *string
+	Archived *bool
+	ID       pgtype.UUID
 }
 
 func (q *Queries) UpdateFinancialCategory(ctx context.Context, arg UpdateFinancialCategoryParams) (FinancialCategory, error) {
-	row := q.db.QueryRow(ctx, updateFinancialCategory, arg.Name, arg.Kind, arg.ID)
+	row := q.db.QueryRow(ctx, updateFinancialCategory,
+		arg.Name,
+		arg.Kind,
+		arg.SetColor,
+		arg.Color,
+		arg.Archived,
+		arg.ID,
+	)
 	var i FinancialCategory
 	err := row.Scan(
 		&i.ID,
@@ -373,6 +1689,88 @@ func (q *Queries) UpdateFinancialCategory(ctx context.Context, arg UpdateFinanci
 		&i.Kind,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Color,
+		&i.ArchivedAt,
+	)
+	return i, err
+}
+
+const updateTransaction = `-- name: UpdateTransaction :one
+UPDATE transactions
+SET account_id = $1,
+    amount_minor = $2,
+    currency = $3,
+    occurred_on = $4,
+    value_date = $5,
+    status = $6,
+    counterparty = $7,
+    description = $8,
+    note = $9,
+    category_id = $10,
+    categorized_by = $11,
+    category_rule_id = $12,
+    updated_at = now()
+WHERE id = $13
+RETURNING id, account_id, category_id, amount_minor, currency, occurred_on, note, import_source, import_external_id, source_metadata, created_at, updated_at, automation_idempotency_key, automation_payload_hash, counterparty, description, status, value_date, connection_id, categorized_by, category_rule_id, merchant_category_code, bank_reference
+`
+
+type UpdateTransactionParams struct {
+	AccountID      pgtype.UUID
+	AmountMinor    int64
+	Currency       string
+	OccurredOn     pgtype.Date
+	ValueDate      pgtype.Date
+	Status         string
+	Counterparty   *string
+	Description    *string
+	Note           *string
+	CategoryID     pgtype.UUID
+	CategorizedBy  *string
+	CategoryRuleID pgtype.UUID
+	ID             pgtype.UUID
+}
+
+func (q *Queries) UpdateTransaction(ctx context.Context, arg UpdateTransactionParams) (Transaction, error) {
+	row := q.db.QueryRow(ctx, updateTransaction,
+		arg.AccountID,
+		arg.AmountMinor,
+		arg.Currency,
+		arg.OccurredOn,
+		arg.ValueDate,
+		arg.Status,
+		arg.Counterparty,
+		arg.Description,
+		arg.Note,
+		arg.CategoryID,
+		arg.CategorizedBy,
+		arg.CategoryRuleID,
+		arg.ID,
+	)
+	var i Transaction
+	err := row.Scan(
+		&i.ID,
+		&i.AccountID,
+		&i.CategoryID,
+		&i.AmountMinor,
+		&i.Currency,
+		&i.OccurredOn,
+		&i.Note,
+		&i.ImportSource,
+		&i.ImportExternalID,
+		&i.SourceMetadata,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.AutomationIdempotencyKey,
+		&i.AutomationPayloadHash,
+		&i.Counterparty,
+		&i.Description,
+		&i.Status,
+		&i.ValueDate,
+		&i.ConnectionID,
+		&i.CategorizedBy,
+		&i.CategoryRuleID,
+		&i.MerchantCategoryCode,
+		&i.BankReference,
 	)
 	return i, err
 }

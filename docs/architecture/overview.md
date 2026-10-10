@@ -13,6 +13,10 @@ flowchart LR
   Gateway --> Voice --> VDB[(voice_db)]
   Gateway -. read only .-> Activity --> ADB[(activity_db)]
   Gateway --> Notifications --> NDB[(notifications_db)]
+  Gateway -- "/api/integrations/banking" --> Banking --> BDB[(banking_db)]
+  Banking -- "Enable Banking (PSD2, read-only)" --> Bank[Bank]
+  Banking -- "POST /v1/imports/bank" --> Finance
+  Banking -- notify --> Notifications
   Monitor -- "GET /api/status" --> Dashboard
   Monitor -- notify --> Notifications
   Voice -. record .-> Activity
@@ -36,5 +40,7 @@ MCP uses service APIs to perform semantic actions and records an Inbox audit tra
 Activity stores user-facing activity events. Each owning service records its own meaningful operations (capture, processing, MCP actions, Task changes) over HTTP. Correlation, causation, and actor headers travel with each call, so a whole Voice → Inbox → MCP → Task workflow can be reconstructed from one API. See [Activity](../services/activity.md).
 
 Notifications is the one path by which any service lets the owner know about something. Producers post a notification over HTTP (`pkg/notify`); Notifications stores it for the Dashboard and delivers it through the channels configured on its server, so no producer talks to ntfy or a phone app itself. See [Notifications](../services/notifications.md).
+
+Banking is an integration service: it owns everything bank-side (the Enable Banking adapter, the read-only consent and its sealed session, the sync schedule within the banks' four-reads-a-day limit, consent reminders) and hands accounts and transactions to Finance only through Finance's bank import API, so Finance never calls a bank and Banking never touches Finance's data. Integrations are routed under `/api/integrations/<name>/`. See [Banking](../services/banking.md).
 
 The monitor is a small internal service without a database or a gateway route. Once a minute it reads the Dashboard's runtime status (`GET /api/status`, the checks the Status page renders) and notifies the owner through Notifications when a check breaks or recovers. The rules that make something a problem therefore exist once, in the Dashboard. See [Monitor](../services/monitor.md).

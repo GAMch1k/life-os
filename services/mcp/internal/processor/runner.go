@@ -585,7 +585,7 @@ func validAction(action plannedAction) bool {
 		"calendar_create":                   {"title": true, "description": true, "location": true, "allDay": true, "startAt": true, "endAt": true, "startDate": true, "endDate": true, "timeZone": true, "reminders": true, "priority": true},
 		"calendar_update":                   {"eventQuery": true, "eventQueryAlternatives": true, "title": true, "description": true, "location": true, "allDay": true, "startAt": true, "endAt": true, "startDate": true, "endDate": true, "timeZone": true, "reminders": true, "priority": true, "clear": true},
 		"calendar_cancel":                   {"eventQuery": true, "eventQueryAlternatives": true, "onDate": true, "occurrences": true},
-		"finance_create_manual_transaction": {"accountId": true, "categoryId": true, "amount": true, "occurredOn": true, "note": true},
+		"finance_create_manual_transaction": {"accountId": true, "categoryId": true, "amount": true, "occurredOn": true, "note": true, "counterparty": true, "description": true},
 	}
 	for field := range action.Arguments {
 		if !allowedFields[action.Tool][field] {
@@ -593,13 +593,24 @@ func validAction(action plannedAction) bool {
 		}
 	}
 	if action.Tool == "finance_create_manual_transaction" {
-		account, accountOK := action.Arguments["accountId"].(string)
+		// Only the amount is required: Finance records a transaction without
+		// an account in the built-in Cash account, dated today.
 		amount, amountOK := action.Arguments["amount"].(map[string]any)
-		occurred, occurredOK := action.Arguments["occurredOn"].(string)
 		money, moneyOK := amount["amount"].(float64)
 		currency, currencyOK := amount["currency"].(string)
-		if !accountOK || account == "" || !amountOK || !moneyOK || money == 0 || !currencyOK || currency == "" || !occurredOK || occurred == "" {
+		if !amountOK || !moneyOK || money == 0 || money != float64(int64(money)) || !currencyOK || currency == "" {
 			return false
+		}
+		if value, present := action.Arguments["accountId"]; present && value != nil {
+			if account, ok := value.(string); !ok || strings.TrimSpace(account) == "" {
+				return false
+			}
+		}
+		if value, present := action.Arguments["occurredOn"]; present && value != nil {
+			day, ok := value.(string)
+			if _, err := time.Parse(time.DateOnly, day); !ok || err != nil {
+				return false
+			}
 		}
 	}
 	return true

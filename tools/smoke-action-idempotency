@@ -46,9 +46,10 @@ stamp=$(date +%s)
 replay "$gateway/api/tasks/v1/tasks" "p7-task-$stamp" "{\"title\":\"P7 task crash replay $stamp\"}"
 replay "$gateway/api/calendar/v1/events" "p7-event-$stamp" "{\"title\":\"P7 event crash replay $stamp\",\"allDay\":true,\"startDate\":\"2026-10-08\",\"endDate\":\"2026-10-08\"}"
 
-# Finance has no public account-create endpoint; seed only the disposable
-# database used by verify-compose, then exercise its public transaction API.
-account_id=$("${compose[@]}" exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d finance_db -Atqc "INSERT INTO accounts (name, currency, opening_balance_minor) VALUES ('"'"'P7 idempotency smoke'"'"', '"'"'USD'"'"', 0) RETURNING id"')
-replay "$gateway/api/finance/v1/transactions" "p7-finance-$stamp" "{\"accountId\":\"$account_id\",\"amount\":{\"amount\":-125,\"currency\":\"USD\"},\"occurredOn\":\"2026-10-08\",\"note\":\"P7 finance crash replay\"}"
+# A Finance account for this run, through Finance's public API.
+account_id=$(curl "${actor[@]}" --fail --silent -H 'content-type: application/json' -d "{\"name\":\"P7 idempotency smoke $stamp\",\"kind\":\"other\",\"currency\":\"USD\"}" "$gateway/api/finance/v1/accounts" | jq -r '.id')
+replay "$gateway/api/finance/v1/transactions" "p7-finance-$stamp" "{\"accountId\":\"$account_id\",\"amount\":{\"amount\":-125,\"currency\":\"USD\"},\"bookingDate\":\"2026-10-08\",\"notes\":\"P7 finance crash replay\"}"
+# Cash spending needs no account.
+replay "$gateway/api/finance/v1/transactions" "p7-cash-$stamp" "{\"amount\":{\"amount\":-300,\"currency\":\"EUR\"},\"counterparty\":\"P7 cash replay\"}"
 
 echo "action idempotency crash-replay smoke passed"

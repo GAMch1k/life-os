@@ -66,7 +66,7 @@ run_profile() {
   echo "== $profile"
   "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
   LIFE_OS_CODEX_MODEL=$model LIFE_OS_CODEX_REASONING_EFFORT=$effort "${compose[@]}" up --detach --no-build >/dev/null 2>&1
-  for service in inbox tasks calendar voice; do
+  for service in inbox tasks calendar voice finance; do
     for _ in $(seq 1 90); do api "$gateway/api/$service/ready" >/dev/null 2>&1 && break; sleep 1; done
   done
   for _ in $(seq 1 180); do
@@ -114,6 +114,9 @@ run_profile() {
   ids[cal_reschedule]=$(capture "Move my physiotherapy appointment to tomorrow at 9:00.")
   ids[cal_ambiguous]=$(capture "Move my meeting to Friday at 15:00.")
   ids[cal_cancel]=$(capture "Cancel my haircut appointment.")
+  ids[fin_cash_en]=$(capture "Spent 12 euros at the bakery.")
+  ids[fin_cash_ru]=$(capture "Потратил 7,50 евро на кофе.")
+  ids[fin_card]=$(capture "Paid 45 euros by card at REWE.")
   local job
   job=$(api -F "audio=@$work/chicken.wav;type=audio/wav" -F source=web "$gateway/api/voice/v1/audio-jobs" | jq -r '.id')
   for _ in $(seq 1 120); do
@@ -189,6 +192,22 @@ run_profile() {
   check cal_cancel "$([ "$s" = human_review ] && [ "$(review_ids "${ids[cal_cancel]}")" = "[\"$haircut\"]" ] && [ "$(event "$haircut" | jq -r .status)" = active ] && echo 1 || echo 0)" "state=$s candidates=$(review_ids "${ids[cal_cancel]}") haircut=$(event "$haircut" | jq -r .status)"
   s=$(state "${ids[voice_complete]}")
   check voice_complete "$([ "$s" = resolved ] && [ "$(task "$chicken" | jq -r .completed)" = true ] && [ "$(tasks_matching chicken)" = 1 ] && echo 1 || echo 0)" "state=$s transcript=\"$(item "${ids[voice_complete]}" | jq -r .content)\" completed=$(task "$chicken" | jq -r .completed)"
+  # Cash spending goes to the built-in Cash account with the amount in cents;
+  # a card payment is left to the bank connection.
+  local cash txns
+  cash=$(api "$gateway/api/finance/v1/accounts" | jq -r '[.items[] | select(.builtIn)][0].id')
+  txns=$(api "$gateway/api/finance/v1/transactions?limit=100")
+  spent() { # spent <scenario> <minor units>
+    s=$(state "${ids[$1]}")
+    local n
+    n=$(jq --arg cash "$cash" --argjson amount "$2" '[.items[] | select(.accountId == $cash and .amount.amount == $amount and .amount.currency == "EUR")] | length' <<<"$txns")
+    check "$1" "$([ "$s" = resolved ] && [ "$n" = 1 ] && echo 1 || echo 0)" "state=$s matching_cash_transactions=$n"
+  }
+  spent fin_cash_en -1200
+  spent fin_cash_ru -750
+  s=$(state "${ids[fin_card]}")
+  check fin_card "$([ "$s" != resolved ] && [ "$(jq '[.items[] | select(.amount.amount == -4500)] | length' <<<"$txns")" = 0 ] && echo 1 || echo 0)" "state=$s"
+  check no_extra_transactions "$([ "$(jq '.items | length' <<<"$txns")" = 2 ] && echo 1 || echo 0)" "transactions=$(jq -c '[.items[] | {amount: .amount.amount, counterparty, description}]' <<<"$txns") (expected 2)"
   # No fallback or invented entities: ten seeds plus three creates.
   local total
   total=$(api "$gateway/api/tasks/v1/tasks?limit=100" | jq '.items | length')

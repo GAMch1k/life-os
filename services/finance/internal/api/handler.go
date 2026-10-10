@@ -2,147 +2,151 @@
 package api
 
 import (
-	"bytes"
+	"context"
 	"crypto/sha256"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gofiber/fiber/v3"
-	googleuuid "github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/oapi-codegen/runtime/types"
 
+	"github.com/GAMch1k/life-os/pkg/activity"
+	"github.com/GAMch1k/life-os/pkg/httpserver"
 	"github.com/GAMch1k/life-os/services/finance/internal/api/generated"
-	"github.com/GAMch1k/life-os/services/finance/internal/importer"
 	store "github.com/GAMch1k/life-os/services/finance/internal/repository/generated"
+	"github.com/GAMch1k/life-os/services/finance/internal/rules"
 )
 
-type Handler struct{ queries *store.Queries }
+// Handler serves the Finance API.
+type Handler struct {
+	pool            *pgxpool.Pool
+	queries         *store.Queries
+	activity        *activity.Emitter
+	location        *time.Location
+	defaultCurrency string
+	now             func() time.Time
+}
 
 var _ generated.ServerInterface = (*Handler)(nil)
 
-func NewHandler(queries *store.Queries) *Handler { return &Handler{queries: queries} }
-
-func (h *Handler) ListAccounts(c fiber.Ctx) error {
-	items, err := h.queries.ListAccountsWithBalance(c.Context())
-	if err != nil {
-		return internal(err)
-	}
-	result := make([]generated.Account, 0, len(items))
-	for _, item := range items {
-		result = append(result, generated.Account{Id: uuid(item.ID), Name: item.Name, Balance: generated.Money{Amount: item.BalanceMinor, Currency: item.Currency}})
-	}
-	return c.JSON(generated.AccountList{Items: result})
+// Options configure a Handler.
+type Options struct {
+	// Location is the owner's timezone; a manual transaction without a date
+	// is dated today there. Nil means UTC.
+	Location *time.Location
+	// DefaultCurrency is the built-in Cash account's currency when Finance
+	// creates it. Empty means EUR.
+	DefaultCurrency string
+	// Activity records changes; nil records nothing.
+	Activity *activity.Emitter
 }
 
-func (h *Handler) ListCategories(c fiber.Ctx) error {
-	items, err := h.queries.ListFinancialCategories(c.Context())
-	if err != nil {
-		return internal(err)
+// NewHandler serves the Finance API from pool.
+func NewHandler(pool *pgxpool.Pool, options Options) *Handler {
+	h := &Handler{pool: pool, activity: options.Activity, location: options.Location, defaultCurrency: options.DefaultCurrency, now: time.Now}
+	if pool != nil {
+		h.queries = store.New(pool)
 	}
-	result := make([]generated.Category, 0, len(items))
-	for _, item := range items {
-		result = append(result, generated.Category{Id: uuid(item.ID), Name: item.Name, Kind: generated.CategoryKind(item.Kind)})
+	if h.location == nil {
+		h.location = time.UTC
 	}
-	return c.JSON(generated.CategoryList{Items: result})
+	if h.defaultCurrency == "" {
+		h.defaultCurrency = "EUR"
+	}
+	return h
 }
 
-func (h *Handler) UpdateCategory(c fiber.Ctx, categoryID types.UUID) error {
-	var body generated.UpdateCategoryJSONRequestBody
-	if err := c.Bind().Body(&body); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid category request")
-	}
-	var kind *string
-	if body.Kind != nil {
-		value := string(*body.Kind)
-		kind = &value
-	}
-	item, err := h.queries.UpdateFinancialCategory(c.Context(), store.UpdateFinancialCategoryParams{ID: pgUUID(categoryID), Name: body.Name, Kind: kind})
-	if err != nil {
-		return databaseError(err)
-	}
-	return c.JSON(generated.Category{Id: uuid(item.ID), Name: item.Name, Kind: generated.CategoryKind(item.Kind)})
+// inTx runs fn in one database transaction.
+func (h *Handler) inTx(ctx context.Context, fn func(*store.Queries) error) error {
+	return pgx.BeginFunc(ctx, h.pool, func(tx pgx.Tx) error { return fn(h.queries.WithTx(tx)) })
 }
 
-func (h *Handler) CreateCsvImport(c fiber.Ctx) error {
-	result := importer.Import(c.Context(), h.queries, bytes.NewReader(c.Body()))
-	errors := make([]generated.CsvImportError, 0, len(result.Errors))
-	for _, item := range result.Errors {
-		errors = append(errors, generated.CsvImportError{Row: item.Row, Message: item.Message})
-	}
-	status := generated.Completed
-	if result.Failed > 0 && result.Created == 0 {
-		status = generated.Failed
-	}
-	return c.Status(fiber.StatusAccepted).JSON(generated.CsvImport{Id: googleuuid.New(), Status: status, Created: result.Created, Skipped: result.Skipped, Failed: result.Failed, Errors: errors})
+// today is the owner's current date.
+func (h *Handler) today() pgtype.Date {
+	now := h.now().In(h.location)
+	return pgtype.Date{Time: time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC), Valid: true}
 }
 
-func (h *Handler) GetMonthlySummary(c fiber.Ctx, params generated.GetMonthlySummaryParams) error {
-	month, err := time.Parse("2006-01", params.Month)
-	if err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "month must use YYYY-MM")
-	}
-	cashflow, err := h.queries.GetMonthlyCashflow(c.Context(), pgtype.Date{Time: month, Valid: true})
-	if err != nil {
-		return internal(err)
-	}
-	accounts, err := h.queries.ListAccountsWithBalance(c.Context())
-	if err != nil {
-		return internal(err)
-	}
-	var balance int64
-	for _, account := range accounts {
-		balance += account.BalanceMinor
-	}
-	currency := "USD"
-	if len(accounts) > 0 {
-		currency = accounts[0].Currency
-	}
-	spendingRows, err := h.queries.GetMonthlySpendingByCategory(c.Context(), pgtype.Date{Time: month, Valid: true})
-	if err != nil {
-		return internal(err)
-	}
-	spendingByCategory := make([]generated.SpendingByCategory, 0, len(spendingRows))
-	for _, row := range spendingRows {
-		spendingByCategory = append(spendingByCategory, generated.SpendingByCategory{CategoryId: uuid(row.CategoryID), CategoryName: row.CategoryName, Amount: generated.Money{Amount: row.AmountMinor, Currency: currency}})
-	}
-	return c.JSON(generated.MonthlySummary{Month: params.Month, TotalBalance: generated.Money{Amount: balance, Currency: currency}, Income: generated.Money{Amount: cashflow.IncomeMinor, Currency: currency}, Spending: generated.Money{Amount: cashflow.SpendingMinor, Currency: currency}, Net: generated.Money{Amount: cashflow.NetMinor, Currency: currency}, SpendingByCategory: spendingByCategory})
+// Errors.
+
+func apiError(status int, code, message string) error {
+	return httpserver.NewError(status, code, message)
+}
+func invalid(message string) error {
+	return apiError(fiber.StatusBadRequest, "invalid_request", message)
+}
+func notFound(what string) error {
+	return apiError(fiber.StatusNotFound, "not_found", what+" not found")
 }
 
-func (h *Handler) ListTransactions(c fiber.Ctx, params generated.ListTransactionsParams) error {
-	limit := 50
-	if params.Limit != nil {
-		limit = *params.Limit
-	}
-	items, err := h.queries.ListTransactions(c.Context(), store.ListTransactionsParams{AccountID: optionalUUID(params.AccountId), CategoryID: optionalUUID(params.CategoryId), FromDate: optionalDate(params.From), ToDate: optionalDate(params.To), PageLimit: int32(limit)})
-	if err != nil {
-		return internal(err)
-	}
-	result := make([]generated.Transaction, 0, len(items))
-	for _, item := range items {
-		result = append(result, transaction(item))
-	}
-	return c.JSON(generated.TransactionList{Items: result})
+func internal(err error) error {
+	return httpserver.WrapError(err, fiber.StatusInternalServerError, "internal_error", "Finance could not complete the request")
 }
 
-func (h *Handler) CreateManualTransaction(c fiber.Ctx) error {
-	var body generated.CreateManualTransactionJSONRequestBody
-	if err := c.Bind().Body(&body); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid transaction request")
+// passThrough keeps an API error and wraps anything else as internal.
+func passThrough(err error) error {
+	var appError *httpserver.Error
+	if errors.As(err, &appError) {
+		return err
 	}
-	if body.Amount.Amount == 0 || len(body.Amount.Currency) != 3 {
-		return fiber.NewError(fiber.StatusBadRequest, "amount must be non-zero with a three-letter currency")
-	}
-	key, hash := idempotency(c)
-	item, err := h.queries.CreateTransaction(c.Context(), store.CreateTransactionParams{AccountID: pgUUID(body.AccountId), CategoryID: optionalUUID(body.CategoryId), AmountMinor: body.Amount.Amount, Currency: body.Amount.Currency, OccurredOn: pgtype.Date{Time: body.OccurredOn.Time, Valid: true}, Note: body.Note, SourceMetadata: []byte(`{}`), AutomationIdempotencyKey: key, AutomationPayloadHash: hash})
-	if err != nil {
-		return databaseError(err)
-	}
-	if key != nil && (item.AutomationPayloadHash == nil || *item.AutomationPayloadHash != *hash) {
-		return fiber.NewError(fiber.StatusConflict, "idempotency key was already used with a different payload")
-	}
-	return c.Status(fiber.StatusCreated).JSON(transaction(item))
+	return internal(err)
 }
+
+func uniqueViolation(err error, constraint string) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505" && (constraint == "" || pgErr.ConstraintName == constraint)
+}
+
+// decodeObject reads a JSON object body into target and returns which
+// properties it names, so a PATCH can tell an absent property from null.
+func decodeObject(raw []byte, target any) (map[string]json.RawMessage, error) {
+	var properties map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &properties); err != nil || properties == nil {
+		return nil, errors.New("the body must be a JSON object")
+	}
+	if err := json.Unmarshal(raw, target); err != nil {
+		return nil, fmt.Errorf("invalid field: %s", fieldError(err))
+	}
+	return properties, nil
+}
+
+func fieldError(err error) string {
+	var typeError *json.UnmarshalTypeError
+	if errors.As(err, &typeError) && typeError.Field != "" {
+		return typeError.Field
+	}
+	return err.Error()
+}
+
+func isNull(properties map[string]json.RawMessage, name string) bool {
+	value, ok := properties[name]
+	return ok && strings.TrimSpace(string(value)) == "null"
+}
+
+// cleanText trims a text field: empty means none. It fails when the text is
+// longer than limit characters.
+func cleanText(name string, value *string, limit int) (*string, error) {
+	if value == nil {
+		return nil, nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return nil, nil
+	}
+	if utf8.RuneCountInString(trimmed) > limit {
+		return nil, invalid(fmt.Sprintf("%s must be at most %d characters", name, limit))
+	}
+	return &trimmed, nil
+}
+
 func idempotency(c fiber.Ctx) (*string, *string) {
 	key := c.Get("Idempotency-Key")
 	if key == "" {
@@ -153,11 +157,11 @@ func idempotency(c fiber.Ctx) (*string, *string) {
 	return &key, &hash
 }
 
-func transaction(item store.Transaction) generated.Transaction {
-	return generated.Transaction{Id: uuid(item.ID), AccountId: uuid(item.AccountID), CategoryId: nullableUUID(item.CategoryID), Amount: generated.Money{Amount: item.AmountMinor, Currency: item.Currency}, OccurredOn: types.Date{Time: item.OccurredOn.Time}, Note: item.Note}
-}
+// Conversions.
+
 func uuid(value pgtype.UUID) types.UUID   { return types.UUID(value.Bytes) }
 func pgUUID(value types.UUID) pgtype.UUID { return pgtype.UUID{Bytes: [16]byte(value), Valid: true} }
+
 func nullableUUID(value pgtype.UUID) *types.UUID {
 	if !value.Valid {
 		return nil
@@ -165,24 +169,50 @@ func nullableUUID(value pgtype.UUID) *types.UUID {
 	result := uuid(value)
 	return &result
 }
+
 func optionalUUID(value *types.UUID) pgtype.UUID {
 	if value == nil {
 		return pgtype.UUID{}
 	}
 	return pgUUID(*value)
 }
+
+func pgDate(value types.Date) pgtype.Date {
+	return pgtype.Date{Time: time.Date(value.Year(), value.Month(), value.Day(), 0, 0, 0, 0, time.UTC), Valid: true}
+}
+
 func optionalDate(value *types.Date) pgtype.Date {
 	if value == nil {
 		return pgtype.Date{}
 	}
-	return pgtype.Date{Time: value.Time, Valid: true}
+	return pgDate(*value)
 }
-func internal(err error) error {
-	return fiber.NewError(fiber.StatusInternalServerError, fmt.Sprintf("finance query failed: %v", err))
-}
-func databaseError(err error) error {
-	if err != nil {
-		return internal(err)
+
+func nullableDate(value pgtype.Date) *types.Date {
+	if !value.Valid {
+		return nil
 	}
-	return nil
+	return &types.Date{Time: value.Time}
 }
+
+func nullableTime(value pgtype.Timestamptz) *time.Time {
+	if !value.Valid {
+		return nil
+	}
+	result := value.Time.UTC()
+	return &result
+}
+
+func money(amount int64, currency string) generated.Money {
+	return generated.Money{Amount: amount, Currency: currency}
+}
+
+func ruleSet(rows []store.CategoryRule) []rules.Rule {
+	result := make([]rules.Rule, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, rules.Rule{ID: row.ID.Bytes, CategoryID: row.CategoryID.Bytes, Field: row.MatchField, Operator: row.MatchOperator, Text: row.MatchText})
+	}
+	return result
+}
+
+func pointer[T any](value T) *T { return &value }

@@ -1,4 +1,5 @@
 import { normalizeServiceUrl, serviceBaseUrls } from "@/config/services";
+import { bankingClient } from "@/lib/api/banking-client";
 import { calendarClient } from "@/lib/api/calendar-client";
 import type { components as CalendarComponents } from "@/lib/api/generated/calendar";
 import { inboxClient } from "@/lib/api/inbox-client";
@@ -12,6 +13,12 @@ import {
   type GoogleConnection,
   missingPermissions,
 } from "@/lib/google-calendar";
+import {
+  accountLabel,
+  type BankConnection,
+  type BankConnectionList,
+  expiringSoon,
+} from "@/lib/banking";
 import { DEFAULT_TIME_ZONE, dateTimeFormat } from "@/lib/time-zone";
 import { configuredTimeZone, userTimeZone } from "@/lib/user-time-zone";
 
@@ -21,6 +28,7 @@ import { configuredTimeZone, userTimeZone } from "@/lib/user-time-zone";
 // - the Calendar sources API (each subscribed feed's refresh state), its
 //   Google connection, and the sync state of the Google calendars,
 // - the Notifications channels API (each delivery channel's recent outcomes),
+// - the banking integration's connections (consent and sync state),
 // - each owning service's /ready endpoint.
 // Nothing here is inferred from UI behaviour.
 
@@ -221,6 +229,7 @@ export type StatusCheck = {
     | "voice"
     | "calendar"
     | "notifications"
+    | "banking"
     | "services";
   title: string;
   state: CheckState;
@@ -251,6 +260,11 @@ export type RuntimeSignals = {
   notificationChannels?: NotificationChannel[] | null;
   /** The Google calendars with their sync state; null or absent when not read. */
   googleCalendars?: GoogleCalendar[] | null;
+  /**
+   * The bank connections; null when banking could not be read, absent when
+   * not checked (the check is left out).
+   */
+  bankConnections?: BankConnectionList | null;
   services: { name: string; ready: boolean }[];
 };
 
@@ -1045,6 +1059,177 @@ function notificationsCheck(
   };
 }
 
+/** What to do when the bank connection needs the owner. */
+export const BANK_RECONNECT =
+  "Reconnect the bank in Finance (Bank connection → Reconnect). Its accounts and history stay.";
+
+/** What to do when bank syncs keep failing. */
+export const BANK_SYNC_RETRY =
+  "Transactions from the last good sync are kept, and the sync is retried automatically. If this persists, see docs/operations/banking.md.";
+
+/** Failed syncs in a row after which a bank connection needs attention. */
+export const BANK_FAILURE_ALERT = 3;
+
+/** One bank connection's consent and sync state. */
+export function bankPart(
+  connection: BankConnection,
+  now: Date,
+  timeZone: string,
+): StatusPart {
+  const name = connection.institution;
+  const facts: StatusFact[] = [
+    {
+      label: "Accounts",
+      value: connection.accounts.map(accountLabel).join(", ") || "none",
+    },
+    {
+      label: "Last sync",
+      value: formatTime(connection.lastSuccessAt, timeZone),
+    },
+  ];
+  if (connection.nextSyncAt) {
+    facts.push({
+      label: "Next sync",
+      value: formatTime(connection.nextSyncAt, timeZone),
+    });
+  }
+  if (connection.consentValidUntil) {
+    facts.push({
+      label: "Access until",
+      value: formatTime(connection.consentValidUntil, timeZone),
+    });
+  }
+  const base = { id: `bank-${connection.id}`, title: name, facts };
+  const detail = connection.lastError ?? undefined;
+  switch (connection.status) {
+    case "expired":
+      return {
+        ...base,
+        state: "warning",
+        summary: `${name} access expired; transactions no longer sync.`,
+        detail,
+      };
+    case "error":
+      return {
+        ...base,
+        state: "warning",
+        summary: `${name} needs you to connect again.`,
+        detail,
+      };
+  }
+  if (connection.consecutiveFailures >= BANK_FAILURE_ALERT) {
+    return {
+      ...base,
+      state: "warning",
+      summary: `Syncing ${name} keeps failing: ${connection.consecutiveFailures} attempts in a row.`,
+      detail,
+    };
+  }
+  // A consent ending within 7 days is shown but stays OK: banking's own
+  // 7-day and 1-day reminders tell the owner, so the monitor (which
+  // notifies on warnings) does not tell them twice. Once it has ended, the
+  // connection is expired, above.
+  if (expiringSoon(connection, now) && connection.consentValidUntil) {
+    return {
+      ...base,
+      state: "ok",
+      summary: `${name} access ends on ${formatTime(connection.consentValidUntil, timeZone)}.`,
+    };
+  }
+  if (connection.consecutiveFailures > 0) {
+    return {
+      ...base,
+      state: "ok",
+      summary: `Connected. The last sync failed; it is retried automatically.`,
+      detail,
+    };
+  }
+  return {
+    ...base,
+    state: "ok",
+    summary: connection.lastSuccessAt
+      ? "Connected and syncing."
+      : "Connected; importing transactions.",
+  };
+}
+
+function bankingCheck(
+  list: BankConnectionList | null,
+  now: Date,
+  timeZone: string,
+): StatusCheck {
+  const base = { id: "banking" as const, title: "Bank connection" };
+  if (list === null) {
+    return {
+      ...base,
+      state: "warning",
+      summary: "The bank connection is unavailable.",
+      action:
+        "Bank transactions do not sync until the banking service is back.",
+      facts: [],
+    };
+  }
+  if (!list.configured) {
+    return list.setupProblem
+      ? {
+          ...base,
+          state: "warning",
+          summary: "The bank connection is set up incompletely.",
+          detail: list.setupProblem,
+          action:
+            "Fix the Enable Banking settings in the server's .env and restart banking (docs/operations/banking.md).",
+          facts: [],
+        }
+      : {
+          ...base,
+          state: "neutral",
+          summary: "No bank connection is set up.",
+          action:
+            "To sync your bank into Finance, set up Enable Banking (docs/operations/banking.md).",
+          facts: [],
+        };
+  }
+  const live = list.items.filter((item) => item.status !== "disconnected");
+  if (live.length === 0) {
+    return {
+      ...base,
+      state: "neutral",
+      summary: "No bank is connected.",
+      action: "Connect your bank in Finance to sync its transactions.",
+      facts: [],
+    };
+  }
+  const parts = live.map((connection) => bankPart(connection, now, timeZone));
+  const trouble = parts.filter((part) => part.state !== "ok");
+  if (trouble.length) {
+    const [first] = trouble;
+    const connection = live[parts.indexOf(first)];
+    const reconnect =
+      connection.status === "expired" || connection.status === "error";
+    return {
+      ...base,
+      state: worst(trouble.map((part) => part.state)),
+      summary: first.summary,
+      detail: first.detail,
+      action: reconnect ? BANK_RECONNECT : BANK_SYNC_RETRY,
+      facts: [],
+      parts,
+    };
+  }
+  return {
+    ...base,
+    state: "ok",
+    summary:
+      parts.length !== 1
+        ? `${parts.length} banks connected.`
+        : parts[0].summary.startsWith(parts[0].title)
+          ? parts[0].summary
+          : `${parts[0].title}: ${parts[0].summary}`,
+    facts: [],
+    parts,
+  };
+}
+
 function servicesCheck(services: RuntimeSignals["services"]): StatusCheck {
   const down = services.filter((service) => !service.ready);
   return {
@@ -1087,6 +1272,9 @@ export function toRuntimeStatus(
     ...(signals.notificationChannels === undefined
       ? []
       : [notificationsCheck(signals.notificationChannels, timeZone)]),
+    ...(signals.bankConnections === undefined
+      ? []
+      : [bankingCheck(signals.bankConnections, now, timeZone)]),
     servicesCheck(signals.services),
   ];
   return {
@@ -1155,6 +1343,7 @@ const SERVICE_NAMES: Record<keyof typeof serviceBaseUrls, string> = {
   voice: "Voice",
   activity: "Activity",
   notifications: "Notifications",
+  banking: "Banking",
 };
 
 export async function getRuntimeStatus(): Promise<RuntimeStatus> {
@@ -1162,6 +1351,10 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
   const notificationChannels = notificationsClient
     .GET("/v1/channels", timeout)
     .then(({ data }) => data?.items ?? null)
+    .catch(() => null);
+  const bankConnections = bankingClient
+    .GET("/v1/connections", timeout)
+    .then(({ data }) => data ?? null)
     .catch(() => null);
   const [
     processor,
@@ -1212,6 +1405,7 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
       googleConnection,
       notificationChannels: await notificationChannels,
       googleCalendars,
+      bankConnections: await bankConnections,
       services,
     },
     new Date(),

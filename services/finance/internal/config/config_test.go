@@ -3,6 +3,7 @@ package config
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadFromAppliesDefaults(t *testing.T) {
@@ -14,8 +15,23 @@ func TestLoadFromAppliesDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.ServiceName != "finance" || cfg.Port != 8080 || cfg.LogLevel != "info" {
+	if cfg.ServiceName != "finance" || cfg.Port != 8080 || cfg.LogLevel != "info" || cfg.DefaultCurrency != "EUR" || cfg.ActivityURL != "" {
 		t.Fatalf("unexpected config: %+v", cfg)
+	}
+	if location, err := cfg.OwnerLocation(); err != nil || location != time.UTC {
+		t.Fatalf("owner location = %v %v", location, err)
+	}
+}
+
+func TestOwnerLocationFallsBackToUTC(t *testing.T) {
+	t.Parallel()
+
+	berlin, err := Config{TimeZone: "Europe/Berlin"}.OwnerLocation()
+	if err != nil || berlin.String() != "Europe/Berlin" {
+		t.Fatalf("Europe/Berlin = %v %v", berlin, err)
+	}
+	if location, err := (Config{TimeZone: "Mars/Olympus"}).OwnerLocation(); err == nil || location != time.UTC {
+		t.Fatalf("unknown zone = %v %v", location, err)
 	}
 }
 
@@ -23,14 +39,15 @@ func TestLoadFromRejectsInvalidConfiguration(t *testing.T) {
 	t.Parallel()
 
 	_, err := LoadFrom(mapLookup(map[string]string{
-		"DATABASE_URL": "postgres://finance_user:secret@localhost/finance_db",
-		"PORT":         "70000",
-		"LOG_LEVEL":    "loud",
+		"DATABASE_URL":             "postgres://finance_user:secret@localhost/finance_db",
+		"PORT":                     "70000",
+		"LOG_LEVEL":                "loud",
+		"FINANCE_DEFAULT_CURRENCY": "euro",
 	}))
 	if err == nil {
 		t.Fatal("LoadFrom() error = nil")
 	}
-	for _, want := range []string{"PORT", "LOG_LEVEL"} {
+	for _, want := range []string{"PORT", "LOG_LEVEL", "FINANCE_DEFAULT_CURRENCY"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not contain %q", err, want)
 		}

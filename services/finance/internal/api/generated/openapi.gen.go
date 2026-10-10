@@ -6,16 +6,102 @@ package generated
 import (
 	"fmt"
 	"net/url"
+	"time"
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/oapi-codegen/runtime"
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
+// Defines values for AccountKind.
+const (
+	AccountKindBank    AccountKind = "bank"
+	AccountKindCard    AccountKind = "card"
+	AccountKindCash    AccountKind = "cash"
+	AccountKindOther   AccountKind = "other"
+	AccountKindSavings AccountKind = "savings"
+)
+
+// Valid indicates whether the value is a known member of the AccountKind enum.
+func (e AccountKind) Valid() bool {
+	switch e {
+	case AccountKindBank:
+		return true
+	case AccountKindCard:
+		return true
+	case AccountKindCash:
+		return true
+	case AccountKindOther:
+		return true
+	case AccountKindSavings:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AccountSourceKind.
+const (
+	AccountSourceKindBank   AccountSourceKind = "bank"
+	AccountSourceKindManual AccountSourceKind = "manual"
+)
+
+// Valid indicates whether the value is a known member of the AccountSourceKind enum.
+func (e AccountSourceKind) Valid() bool {
+	switch e {
+	case AccountSourceKindBank:
+		return true
+	case AccountSourceKindManual:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ApplyScope.
+const (
+	All           ApplyScope = "all"
+	Uncategorized ApplyScope = "uncategorized"
+)
+
+// Valid indicates whether the value is a known member of the ApplyScope enum.
+func (e ApplyScope) Valid() bool {
+	switch e {
+	case All:
+		return true
+	case Uncategorized:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BankAccountInputKind.
+const (
+	BankAccountInputKindBank    BankAccountInputKind = "bank"
+	BankAccountInputKindCard    BankAccountInputKind = "card"
+	BankAccountInputKindSavings BankAccountInputKind = "savings"
+)
+
+// Valid indicates whether the value is a known member of the BankAccountInputKind enum.
+func (e BankAccountInputKind) Valid() bool {
+	switch e {
+	case BankAccountInputKindBank:
+		return true
+	case BankAccountInputKindCard:
+		return true
+	case BankAccountInputKindSavings:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CategoryKind.
 const (
-	CategoryKindExpense CategoryKind = "expense"
-	CategoryKindIncome  CategoryKind = "income"
+	CategoryKindExpense  CategoryKind = "expense"
+	CategoryKindIncome   CategoryKind = "income"
+	CategoryKindTransfer CategoryKind = "transfer"
 )
 
 // Valid indicates whether the value is a known member of the CategoryKind enum.
@@ -25,6 +111,29 @@ func (e CategoryKind) Valid() bool {
 		return true
 	case CategoryKindIncome:
 		return true
+	case CategoryKindTransfer:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CategoryTotalCategoryKind.
+const (
+	CategoryTotalCategoryKindExpense  CategoryTotalCategoryKind = "expense"
+	CategoryTotalCategoryKindIncome   CategoryTotalCategoryKind = "income"
+	CategoryTotalCategoryKindTransfer CategoryTotalCategoryKind = "transfer"
+)
+
+// Valid indicates whether the value is a known member of the CategoryTotalCategoryKind enum.
+func (e CategoryTotalCategoryKind) Valid() bool {
+	switch e {
+	case CategoryTotalCategoryKindExpense:
+		return true
+	case CategoryTotalCategoryKindIncome:
+		return true
+	case CategoryTotalCategoryKindTransfer:
+		return true
 	default:
 		return false
 	}
@@ -32,66 +141,324 @@ func (e CategoryKind) Valid() bool {
 
 // Defines values for CsvImportStatus.
 const (
-	Accepted   CsvImportStatus = "accepted"
-	Completed  CsvImportStatus = "completed"
-	Failed     CsvImportStatus = "failed"
-	Processing CsvImportStatus = "processing"
+	Completed CsvImportStatus = "completed"
+	Failed    CsvImportStatus = "failed"
 )
 
 // Valid indicates whether the value is a known member of the CsvImportStatus enum.
 func (e CsvImportStatus) Valid() bool {
 	switch e {
-	case Accepted:
-		return true
 	case Completed:
 		return true
 	case Failed:
 		return true
-	case Processing:
-		return true
 	default:
 		return false
 	}
 }
 
-// Defines values for UpdateCategoryRequestKind.
+// Defines values for RuleField.
 const (
-	UpdateCategoryRequestKindExpense UpdateCategoryRequestKind = "expense"
-	UpdateCategoryRequestKindIncome  UpdateCategoryRequestKind = "income"
+	Any          RuleField = "any"
+	Counterparty RuleField = "counterparty"
+	Description  RuleField = "description"
 )
 
-// Valid indicates whether the value is a known member of the UpdateCategoryRequestKind enum.
-func (e UpdateCategoryRequestKind) Valid() bool {
+// Valid indicates whether the value is a known member of the RuleField enum.
+func (e RuleField) Valid() bool {
 	switch e {
-	case UpdateCategoryRequestKindExpense:
+	case Any:
 		return true
-	case UpdateCategoryRequestKindIncome:
+	case Counterparty:
+		return true
+	case Description:
 		return true
 	default:
 		return false
 	}
 }
 
-// Account defines model for Account.
-type Account struct {
-	Balance Money              `json:"balance"`
-	Id      openapi_types.UUID `json:"id"`
-	Name    string             `json:"name"`
+// Defines values for RuleOperator.
+const (
+	Contains RuleOperator = "contains"
+	Equals   RuleOperator = "equals"
+)
+
+// Valid indicates whether the value is a known member of the RuleOperator enum.
+func (e RuleOperator) Valid() bool {
+	switch e {
+	case Contains:
+		return true
+	case Equals:
+		return true
+	default:
+		return false
+	}
 }
+
+// Defines values for TransactionCategorizedBy.
+const (
+	TransactionCategorizedByManual TransactionCategorizedBy = "manual"
+	TransactionCategorizedByRule   TransactionCategorizedBy = "rule"
+)
+
+// Valid indicates whether the value is a known member of the TransactionCategorizedBy enum.
+func (e TransactionCategorizedBy) Valid() bool {
+	switch e {
+	case TransactionCategorizedByManual:
+		return true
+	case TransactionCategorizedByRule:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TransactionDirection.
+const (
+	In  TransactionDirection = "in"
+	Out TransactionDirection = "out"
+)
+
+// Valid indicates whether the value is a known member of the TransactionDirection enum.
+func (e TransactionDirection) Valid() bool {
+	switch e {
+	case In:
+		return true
+	case Out:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TransactionSourceKind.
+const (
+	TransactionSourceKindBank   TransactionSourceKind = "bank"
+	TransactionSourceKindCsv    TransactionSourceKind = "csv"
+	TransactionSourceKindManual TransactionSourceKind = "manual"
+)
+
+// Valid indicates whether the value is a known member of the TransactionSourceKind enum.
+func (e TransactionSourceKind) Valid() bool {
+	switch e {
+	case TransactionSourceKindBank:
+		return true
+	case TransactionSourceKindCsv:
+		return true
+	case TransactionSourceKindManual:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TransactionStatus.
+const (
+	Booked  TransactionStatus = "booked"
+	Pending TransactionStatus = "pending"
+)
+
+// Valid indicates whether the value is a known member of the TransactionStatus enum.
+func (e TransactionStatus) Valid() bool {
+	switch e {
+	case Booked:
+		return true
+	case Pending:
+		return true
+	default:
+		return false
+	}
+}
+
+// Account `balance` is the opening balance plus every booked transaction; for a bank account that reported one, it is the bank's booked balance as of `balanceAsOf` instead, and `available` is the bank's available balance. `pending` is the sum of the pending transactions, which are not in a computed balance. `transactionCount` counts both.
+type Account struct {
+	Archived   bool       `json:"archived"`
+	ArchivedAt *time.Time `json:"archivedAt"`
+	Available  *Money     `json:"available"`
+	Balance    Money      `json:"balance"`
+
+	// BalanceAsOf The date of the bank-reported balance; null for a computed balance.
+	BalanceAsOf *openapi_types.Date `json:"balanceAsOf"`
+
+	// BuiltIn True for the built-in Cash account.
+	BuiltIn          bool               `json:"builtIn"`
+	CreatedAt        time.Time          `json:"createdAt"`
+	Currency         string             `json:"currency"`
+	Id               openapi_types.UUID `json:"id"`
+	Kind             AccountKind        `json:"kind"`
+	Name             string             `json:"name"`
+	OpeningBalance   Money              `json:"openingBalance"`
+	Pending          Money              `json:"pending"`
+	Source           AccountSource      `json:"source"`
+	TransactionCount int                `json:"transactionCount"`
+	UpdatedAt        time.Time          `json:"updatedAt"`
+}
+
+// AccountKind defines model for AccountKind.
+type AccountKind string
 
 // AccountList defines model for AccountList.
 type AccountList struct {
 	Items []Account `json:"items"`
 }
 
-// Category defines model for Category.
-type Category struct {
-	Id   openapi_types.UUID `json:"id"`
-	Kind CategoryKind       `json:"kind"`
-	Name string             `json:"name"`
+// AccountSource defines model for AccountSource.
+type AccountSource struct {
+	// ConnectionId The bank connection of a bank account.
+	ConnectionId *openapi_types.UUID `json:"connectionId"`
+
+	// ExternalId The account's id at the bank.
+	ExternalId *string `json:"externalId"`
+
+	// IbanMasked The masked IBAN, such as DE23…2300.
+	IbanMasked *string `json:"ibanMasked"`
+
+	// Institution The bank, such as Deutsche Bank.
+	Institution *string `json:"institution"`
+
+	// Kind `manual`: kept in Life OS. `bank`: connected to a bank (planned).
+	Kind AccountSourceKind `json:"kind"`
+
+	// Provider The open-banking provider, such as enablebanking.
+	Provider *string `json:"provider"`
+
+	// SyncedAt When the last bank sync reached the account.
+	SyncedAt *time.Time `json:"syncedAt"`
 }
 
-// CategoryKind defines model for Category.Kind.
+// AccountSourceKind `manual`: kept in Life OS. `bank`: connected to a bank (planned).
+type AccountSourceKind string
+
+// ApplyCategoryRulesRequest `scope` defaults to uncategorized.
+type ApplyCategoryRulesRequest struct {
+	Scope *ApplyScope `json:"scope,omitempty"`
+}
+
+// ApplyCategoryRulesResult `examined`: transactions the rules were tried on. `categorized`: had no category and got one. `recategorized`: a rule's category was replaced by another rule's. `cleared`: a rule's category was removed because no rule matches any more (scope all). `unchanged`: the rest.
+type ApplyCategoryRulesResult struct {
+	Categorized   int        `json:"categorized"`
+	Cleared       int        `json:"cleared"`
+	Examined      int        `json:"examined"`
+	Recategorized int        `json:"recategorized"`
+	Scope         ApplyScope `json:"scope"`
+	Unchanged     int        `json:"unchanged"`
+}
+
+// ApplyScope defines model for ApplyScope.
+type ApplyScope string
+
+// BankAccountId defines model for BankAccountId.
+type BankAccountId struct {
+	ExternalId string `json:"externalId"`
+
+	// Id The Finance account id.
+	Id openapi_types.UUID `json:"id"`
+}
+
+// BankAccountInput defines model for BankAccountInput.
+type BankAccountInput struct {
+	AvailableBalance *BankBalance `json:"availableBalance,omitempty"`
+	BookedBalance    *BankBalance `json:"bookedBalance,omitempty"`
+	Currency         string       `json:"currency"`
+
+	// ExternalId Stable per connection.
+	ExternalId string `json:"externalId"`
+
+	// IbanMasked Such as DE23…2300; never the full IBAN.
+	IbanMasked *string              `json:"ibanMasked,omitempty"`
+	Kind       BankAccountInputKind `json:"kind"`
+	Name       string               `json:"name"`
+}
+
+// BankAccountInputKind defines model for BankAccountInput.Kind.
+type BankAccountInputKind string
+
+// BankBalance defines model for BankBalance.
+type BankBalance struct {
+	// Amount Minor units.
+	Amount   int64  `json:"amount"`
+	Currency string `json:"currency"`
+
+	// Date The day the bank reported it for.
+	Date openapi_types.Date `json:"date"`
+}
+
+// BankImportRequest defines model for BankImportRequest.
+type BankImportRequest struct {
+	Accounts []BankAccountInput `json:"accounts"`
+
+	// ConnectionId The connection's id in the banking service.
+	ConnectionId openapi_types.UUID `json:"connectionId"`
+
+	// Institution Example: Deutsche Bank
+	Institution string `json:"institution"`
+
+	// Provider Example: enablebanking
+	Provider     string                 `json:"provider"`
+	Transactions []BankTransactionInput `json:"transactions"`
+
+	// Window The booking dates this sync covers (inclusive).
+	Window BankImportWindow `json:"window"`
+}
+
+// BankImportResult `accountIds` maps every account of the sync to its Finance id. `transactions.removedPending` counts pending transactions removed because a booked one replaced them or the sync no longer has them; `skipped` counts zero-amount transactions.
+type BankImportResult struct {
+	AccountIds []BankAccountId `json:"accountIds"`
+	Accounts   struct {
+		Created int `json:"created"`
+		Updated int `json:"updated"`
+	} `json:"accounts"`
+	Transactions struct {
+		Created        int `json:"created"`
+		RemovedPending int `json:"removedPending"`
+		Skipped        int `json:"skipped"`
+		Unchanged      int `json:"unchanged"`
+		Updated        int `json:"updated"`
+	} `json:"transactions"`
+}
+
+// BankImportWindow The booking dates this sync covers (inclusive).
+type BankImportWindow struct {
+	From openapi_types.Date `json:"from"`
+	To   openapi_types.Date `json:"to"`
+}
+
+// BankTransactionInput defines model for BankTransactionInput.
+type BankTransactionInput struct {
+	AccountExternalId string             `json:"accountExternalId"`
+	Amount            Money              `json:"amount"`
+	BankReference     *string            `json:"bankReference,omitempty"`
+	BookingDate       openapi_types.Date `json:"bookingDate"`
+	Counterparty      *string            `json:"counterparty,omitempty"`
+
+	// Description The remittance text.
+	Description *string `json:"description,omitempty"`
+
+	// ExternalId The bank's stable transaction id.
+	ExternalId           string  `json:"externalId"`
+	MerchantCategoryCode *string `json:"merchantCategoryCode,omitempty"`
+
+	// Status `booked`: settled, counted in the balance. `pending`: not yet settled.
+	Status    TransactionStatus   `json:"status"`
+	ValueDate *openapi_types.Date `json:"valueDate,omitempty"`
+}
+
+// Category defines model for Category.
+type Category struct {
+	Archived   bool               `json:"archived"`
+	ArchivedAt *time.Time         `json:"archivedAt"`
+	Color      *string            `json:"color"`
+	CreatedAt  time.Time          `json:"createdAt"`
+	Id         openapi_types.UUID `json:"id"`
+
+	// Kind `transfer` is money moved between own accounts; it is neither income nor spending.
+	Kind      CategoryKind `json:"kind"`
+	Name      string       `json:"name"`
+	UpdatedAt time.Time    `json:"updatedAt"`
+}
+
+// CategoryKind `transfer` is money moved between own accounts; it is neither income nor spending.
 type CategoryKind string
 
 // CategoryList defines model for CategoryList.
@@ -99,23 +466,88 @@ type CategoryList struct {
 	Items []Category `json:"items"`
 }
 
-// CreateManualTransactionRequest defines model for CreateManualTransactionRequest.
-type CreateManualTransactionRequest struct {
-	AccountId  openapi_types.UUID  `json:"accountId"`
-	Amount     Money               `json:"amount"`
-	CategoryId *openapi_types.UUID `json:"categoryId,omitempty"`
-	Note       *string             `json:"note,omitempty"`
-	OccurredOn openapi_types.Date  `json:"occurredOn"`
+// CategoryRule Rules are tried lowest `priority` first (then oldest first); the first match wins.
+type CategoryRule struct {
+	CategoryId openapi_types.UUID `json:"categoryId"`
+	CreatedAt  time.Time          `json:"createdAt"`
+	Id         openapi_types.UUID `json:"id"`
+
+	// Match Case-insensitive; surrounding spaces are ignored. Example: counterparty contains "REWE".
+	Match     RuleMatch `json:"match"`
+	Priority  int       `json:"priority"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
-// CsvImport defines model for CsvImport.
+// CategoryRuleList defines model for CategoryRuleList.
+type CategoryRuleList struct {
+	Items []CategoryRule `json:"items"`
+}
+
+// CategoryTotal One category's month: `income` (money in) and `spending` (money out) are positive, `net` is income minus spending. `categoryId`, `categoryName`, and `categoryKind` are null for uncategorized transactions.
+type CategoryTotal struct {
+	CategoryId       *openapi_types.UUID        `json:"categoryId"`
+	CategoryKind     *CategoryTotalCategoryKind `json:"categoryKind"`
+	CategoryName     *string                    `json:"categoryName"`
+	Income           Money                      `json:"income"`
+	Net              Money                      `json:"net"`
+	Spending         Money                      `json:"spending"`
+	TransactionCount int                        `json:"transactionCount"`
+}
+
+// CategoryTotalCategoryKind defines model for CategoryTotal.CategoryKind.
+type CategoryTotalCategoryKind string
+
+// CreateAccountRequest `kind` defaults to other; `openingBalanceMinor` (minor units of the currency) to 0.
+type CreateAccountRequest struct {
+	Currency            string       `json:"currency"`
+	Kind                *AccountKind `json:"kind,omitempty"`
+	Name                string       `json:"name"`
+	OpeningBalanceMinor *int64       `json:"openingBalanceMinor,omitempty"`
+}
+
+// CreateCategoryRequest defines model for CreateCategoryRequest.
+type CreateCategoryRequest struct {
+	Color *string `json:"color,omitempty"`
+
+	// Kind `transfer` is money moved between own accounts; it is neither income nor spending.
+	Kind CategoryKind `json:"kind"`
+	Name string       `json:"name"`
+}
+
+// CreateCategoryRuleRequest Without `priority` the rule comes after every existing rule.
+type CreateCategoryRuleRequest struct {
+	CategoryId openapi_types.UUID `json:"categoryId"`
+
+	// Match Case-insensitive; surrounding spaces are ignored. Example: counterparty contains "REWE".
+	Match    RuleMatch `json:"match"`
+	Priority *int      `json:"priority,omitempty"`
+}
+
+// CreateManualTransactionRequest `accountId` defaults to the built-in Cash account, `bookingDate` to today in the owner's timezone, `status` to booked. Without `categoryId` the category rules choose.
+type CreateManualTransactionRequest struct {
+	AccountId    *openapi_types.UUID `json:"accountId,omitempty"`
+	Amount       Money               `json:"amount"`
+	BookingDate  *openapi_types.Date `json:"bookingDate,omitempty"`
+	CategoryId   *openapi_types.UUID `json:"categoryId,omitempty"`
+	Counterparty *string             `json:"counterparty,omitempty"`
+	Description  *string             `json:"description,omitempty"`
+	Notes        *string             `json:"notes,omitempty"`
+
+	// Status `booked`: settled, counted in the balance. `pending`: not yet settled.
+	Status    *TransactionStatus  `json:"status,omitempty"`
+	ValueDate *openapi_types.Date `json:"valueDate,omitempty"`
+}
+
+// CsvImport `imported`: new transactions. `duplicates`: rows the account already had. `categorized`: imported rows that got their category from a rule. `status` is failed when nothing was imported and some rows failed. `accountId` is null for an older-format file.
 type CsvImport struct {
-	Created int                `json:"created"`
-	Errors  []CsvImportError   `json:"errors"`
-	Failed  int                `json:"failed"`
-	Id      openapi_types.UUID `json:"id"`
-	Skipped int                `json:"skipped"`
-	Status  CsvImportStatus    `json:"status"`
+	AccountId   *openapi_types.UUID `json:"accountId"`
+	Categorized int                 `json:"categorized"`
+	Duplicates  int                 `json:"duplicates"`
+	Errors      []CsvImportError    `json:"errors"`
+	Failed      int                 `json:"failed"`
+	Id          openapi_types.UUID  `json:"id"`
+	Imported    int                 `json:"imported"`
+	Status      CsvImportStatus     `json:"status"`
 }
 
 // CsvImportStatus defines model for CsvImport.Status.
@@ -124,17 +556,36 @@ type CsvImportStatus string
 // CsvImportError defines model for CsvImportError.
 type CsvImportError struct {
 	Message string `json:"message"`
-	Row     int    `json:"row"`
+
+	// Row The CSV line (the header is row 1).
+	Row int `json:"row"`
+}
+
+// ErrorResponse defines model for ErrorResponse.
+type ErrorResponse struct {
+	Error struct {
+		// Code Machine-readable code, such as managed_by_source.
+		Code string `json:"code"`
+
+		// Message A sentence for people.
+		Message string `json:"message"`
+	} `json:"error"`
+	RequestId string `json:"request_id"`
 }
 
 // Money defines model for Money.
 type Money struct {
-	Amount   int64  `json:"amount"`
+	// Amount Minor units (cents); negative is money out.
+	Amount int64 `json:"amount"`
+
+	// Currency Example: EUR
 	Currency string `json:"currency"`
 }
 
-// MonthlySummary defines model for MonthlySummary.
+// MonthlySummary `spendingByCategory` is the spending per category (not transfers or uncategorized), largest first. `byCategory` has every category with transactions in the month, uncategorized included, largest spending first: the basis for budgets.
 type MonthlySummary struct {
+	ByCategory         []CategoryTotal      `json:"byCategory"`
+	Currency           string               `json:"currency"`
 	Income             Money                `json:"income"`
 	Month              string               `json:"month"`
 	Net                Money                `json:"net"`
@@ -143,6 +594,20 @@ type MonthlySummary struct {
 	TotalBalance       Money                `json:"totalBalance"`
 }
 
+// RuleField `any` matches the counterparty or the description.
+type RuleField string
+
+// RuleMatch Case-insensitive; surrounding spaces are ignored. Example: counterparty contains "REWE".
+type RuleMatch struct {
+	// Field `any` matches the counterparty or the description.
+	Field    RuleField    `json:"field"`
+	Operator RuleOperator `json:"operator"`
+	Text     string       `json:"text"`
+}
+
+// RuleOperator defines model for RuleOperator.
+type RuleOperator string
+
 // SpendingByCategory defines model for SpendingByCategory.
 type SpendingByCategory struct {
 	Amount       Money              `json:"amount"`
@@ -150,75 +615,275 @@ type SpendingByCategory struct {
 	CategoryName string             `json:"categoryName"`
 }
 
-// Transaction defines model for Transaction.
+// Transaction `categorizedBy` is `manual` when the category was chosen by hand (by the owner, the AI, or the import file; possibly none), `rule` when a category rule chose it (`categoryRuleId` names the rule), and null while nobody chose. `readOnly` is true for imported transactions: only `categoryId` and `notes` change, and they cannot be deleted.
 type Transaction struct {
-	AccountId  openapi_types.UUID  `json:"accountId"`
-	Amount     Money               `json:"amount"`
-	CategoryId *openapi_types.UUID `json:"categoryId,omitempty"`
-	Id         openapi_types.UUID  `json:"id"`
-	Note       *string             `json:"note,omitempty"`
-	OccurredOn openapi_types.Date  `json:"occurredOn"`
+	AccountId openapi_types.UUID `json:"accountId"`
+	Amount    Money              `json:"amount"`
+
+	// BankReference The bank's own reference.
+	BankReference  *string                   `json:"bankReference"`
+	BookingDate    openapi_types.Date        `json:"bookingDate"`
+	CategorizedBy  *TransactionCategorizedBy `json:"categorizedBy"`
+	CategoryId     *openapi_types.UUID       `json:"categoryId"`
+	CategoryRuleId *openapi_types.UUID       `json:"categoryRuleId"`
+
+	// Counterparty Who was paid, or who paid, such as REWE.
+	Counterparty *string   `json:"counterparty"`
+	CreatedAt    time.Time `json:"createdAt"`
+
+	// Description What it was for (a bank's purpose text).
+	Description *string            `json:"description"`
+	Id          openapi_types.UUID `json:"id"`
+
+	// MerchantCategoryCode The card merchant category code (ISO 18245) a bank reported.
+	MerchantCategoryCode *string `json:"merchantCategoryCode"`
+
+	// Notes The owner's own notes.
+	Notes    *string           `json:"notes"`
+	ReadOnly bool              `json:"readOnly"`
+	Source   TransactionSource `json:"source"`
+
+	// Status `booked`: settled, counted in the balance. `pending`: not yet settled.
+	Status    TransactionStatus   `json:"status"`
+	UpdatedAt time.Time           `json:"updatedAt"`
+	ValueDate *openapi_types.Date `json:"valueDate"`
 }
+
+// TransactionCategorizedBy defines model for Transaction.CategorizedBy.
+type TransactionCategorizedBy string
+
+// TransactionDirection defines model for TransactionDirection.
+type TransactionDirection string
 
 // TransactionList defines model for TransactionList.
 type TransactionList struct {
-	Items      []Transaction `json:"items"`
-	NextCursor *string       `json:"nextCursor,omitempty"`
+	Items []Transaction `json:"items"`
+
+	// NextCursor Set when more transactions match; pass it as cursor for the next page.
+	NextCursor *string `json:"nextCursor,omitempty"`
+}
+
+// TransactionSource defines model for TransactionSource.
+type TransactionSource struct {
+	// ConnectionId The bank connection of a bank transaction.
+	ConnectionId *openapi_types.UUID `json:"connectionId"`
+
+	// ExternalId Identity at the source: the CSV external_id (or a content hash), or the bank transaction id.
+	ExternalId *string               `json:"externalId"`
+	Kind       TransactionSourceKind `json:"kind"`
+}
+
+// TransactionSourceKind defines model for TransactionSourceKind.
+type TransactionSourceKind string
+
+// TransactionStatus `booked`: settled, counted in the balance. `pending`: not yet settled.
+type TransactionStatus string
+
+// UpdateAccountRequest defines model for UpdateAccountRequest.
+type UpdateAccountRequest struct {
+	Archived            *bool        `json:"archived,omitempty"`
+	Currency            *string      `json:"currency,omitempty"`
+	Kind                *AccountKind `json:"kind,omitempty"`
+	Name                *string      `json:"name,omitempty"`
+	OpeningBalanceMinor *int64       `json:"openingBalanceMinor,omitempty"`
 }
 
 // UpdateCategoryRequest defines model for UpdateCategoryRequest.
 type UpdateCategoryRequest struct {
-	Kind *UpdateCategoryRequestKind `json:"kind,omitempty"`
-	Name *string                    `json:"name,omitempty"`
+	Archived *bool   `json:"archived,omitempty"`
+	Color    *string `json:"color,omitempty"`
+
+	// Kind `transfer` is money moved between own accounts; it is neither income nor spending.
+	Kind *CategoryKind `json:"kind,omitempty"`
+	Name *string       `json:"name,omitempty"`
 }
 
-// UpdateCategoryRequestKind defines model for UpdateCategoryRequest.Kind.
-type UpdateCategoryRequestKind string
+// UpdateCategoryRuleRequest defines model for UpdateCategoryRuleRequest.
+type UpdateCategoryRuleRequest struct {
+	CategoryId *openapi_types.UUID `json:"categoryId,omitempty"`
+
+	// Match Case-insensitive; surrounding spaces are ignored. Example: counterparty contains "REWE".
+	Match    *RuleMatch `json:"match,omitempty"`
+	Priority *int       `json:"priority,omitempty"`
+}
+
+// UpdateTransactionRequest Imported transactions take only categoryId and notes.
+type UpdateTransactionRequest struct {
+	AccountId    *openapi_types.UUID `json:"accountId,omitempty"`
+	Amount       *Money              `json:"amount,omitempty"`
+	BookingDate  *openapi_types.Date `json:"bookingDate,omitempty"`
+	CategoryId   *openapi_types.UUID `json:"categoryId,omitempty"`
+	Counterparty *string             `json:"counterparty,omitempty"`
+	Description  *string             `json:"description,omitempty"`
+	Notes        *string             `json:"notes,omitempty"`
+
+	// Status `booked`: settled, counted in the balance. `pending`: not yet settled.
+	Status    *TransactionStatus  `json:"status,omitempty"`
+	ValueDate *openapi_types.Date `json:"valueDate,omitempty"`
+}
+
+// AccountId defines model for AccountId.
+type AccountId = openapi_types.UUID
+
+// CategoryId defines model for CategoryId.
+type CategoryId = openapi_types.UUID
+
+// RuleId defines model for RuleId.
+type RuleId = openapi_types.UUID
+
+// TransactionId defines model for TransactionId.
+type TransactionId = openapi_types.UUID
+
+// ListAccountsParams defines parameters for ListAccounts.
+type ListAccountsParams struct {
+	IncludeArchived *bool `form:"includeArchived,omitempty" json:"includeArchived,omitempty"`
+}
+
+// ListCategoriesParams defines parameters for ListCategories.
+type ListCategoriesParams struct {
+	IncludeArchived *bool `form:"includeArchived,omitempty" json:"includeArchived,omitempty"`
+}
+
+// CreateCsvImportParams defines parameters for CreateCsvImport.
+type CreateCsvImportParams struct {
+	// AccountId The account to import into. Required unless the file has an account_id column.
+	AccountId *openapi_types.UUID `form:"accountId,omitempty" json:"accountId,omitempty"`
+}
 
 // GetMonthlySummaryParams defines parameters for GetMonthlySummary.
 type GetMonthlySummaryParams struct {
-	Month string `form:"month" json:"month"`
+	// Month YYYY-MM.
+	Month     string              `form:"month" json:"month"`
+	Currency  *string             `form:"currency,omitempty" json:"currency,omitempty"`
+	AccountId *openapi_types.UUID `form:"accountId,omitempty" json:"accountId,omitempty"`
 }
 
 // ListTransactionsParams defines parameters for ListTransactions.
 type ListTransactionsParams struct {
-	AccountId  *openapi_types.UUID `form:"accountId,omitempty" json:"accountId,omitempty"`
-	CategoryId *openapi_types.UUID `form:"categoryId,omitempty" json:"categoryId,omitempty"`
-	From       *openapi_types.Date `form:"from,omitempty" json:"from,omitempty"`
-	To         *openapi_types.Date `form:"to,omitempty" json:"to,omitempty"`
-	Cursor     *string             `form:"cursor,omitempty" json:"cursor,omitempty"`
-	Limit      *int                `form:"limit,omitempty" json:"limit,omitempty"`
+	// Q Words to find in the counterparty, description, or notes; every word must match.
+	Q         *string             `form:"q,omitempty" json:"q,omitempty"`
+	AccountId *openapi_types.UUID `form:"accountId,omitempty" json:"accountId,omitempty"`
+
+	// CategoryId A category id, or `uncategorized` for transactions without a category.
+	CategoryId *string `form:"categoryId,omitempty" json:"categoryId,omitempty"`
+
+	// From Earliest bookingDate (inclusive).
+	From *openapi_types.Date `form:"from,omitempty" json:"from,omitempty"`
+
+	// To Latest bookingDate (inclusive).
+	To *openapi_types.Date `form:"to,omitempty" json:"to,omitempty"`
+
+	// Direction `in` for money in (positive amounts), `out` for money out (negative).
+	Direction *TransactionDirection `form:"direction,omitempty" json:"direction,omitempty"`
+
+	// AmountMin Smallest absolute amount in minor units (1250 matches -12.50 and 12.50).
+	AmountMin *int64 `form:"amountMin,omitempty" json:"amountMin,omitempty"`
+
+	// AmountMax Largest absolute amount in minor units.
+	AmountMax *int64                 `form:"amountMax,omitempty" json:"amountMax,omitempty"`
+	Status    *TransactionStatus     `form:"status,omitempty" json:"status,omitempty"`
+	Source    *TransactionSourceKind `form:"source,omitempty" json:"source,omitempty"`
+
+	// Cursor The previous page's nextCursor. Opaque; only valid with the filters it was returned for.
+	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
 }
+
+// CreateAccountJSONRequestBody defines body for CreateAccount for application/json ContentType.
+type CreateAccountJSONRequestBody = CreateAccountRequest
+
+// UpdateAccountJSONRequestBody defines body for UpdateAccount for application/json ContentType.
+type UpdateAccountJSONRequestBody = UpdateAccountRequest
+
+// CreateCategoryJSONRequestBody defines body for CreateCategory for application/json ContentType.
+type CreateCategoryJSONRequestBody = CreateCategoryRequest
+
+// CreateCategoryRuleJSONRequestBody defines body for CreateCategoryRule for application/json ContentType.
+type CreateCategoryRuleJSONRequestBody = CreateCategoryRuleRequest
+
+// ApplyCategoryRulesJSONRequestBody defines body for ApplyCategoryRules for application/json ContentType.
+type ApplyCategoryRulesJSONRequestBody = ApplyCategoryRulesRequest
+
+// UpdateCategoryRuleJSONRequestBody defines body for UpdateCategoryRule for application/json ContentType.
+type UpdateCategoryRuleJSONRequestBody = UpdateCategoryRuleRequest
 
 // UpdateCategoryJSONRequestBody defines body for UpdateCategory for application/json ContentType.
 type UpdateCategoryJSONRequestBody = UpdateCategoryRequest
 
+// ImportBankSyncJSONRequestBody defines body for ImportBankSync for application/json ContentType.
+type ImportBankSyncJSONRequestBody = BankImportRequest
+
 // CreateManualTransactionJSONRequestBody defines body for CreateManualTransaction for application/json ContentType.
 type CreateManualTransactionJSONRequestBody = CreateManualTransactionRequest
+
+// UpdateTransactionJSONRequestBody defines body for UpdateTransaction for application/json ContentType.
+type UpdateTransactionJSONRequestBody = UpdateTransactionRequest
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
 	// ListAccounts List finance accounts
 	// (GET /v1/accounts)
-	ListAccounts(c fiber.Ctx) error
+	ListAccounts(c fiber.Ctx, params ListAccountsParams) error
+	// CreateAccount Create a finance account
+	// (POST /v1/accounts)
+	CreateAccount(c fiber.Ctx) error
+	// GetAccount Get a finance account
+	// (GET /v1/accounts/{accountId})
+	GetAccount(c fiber.Ctx, accountId AccountId) error
+	// UpdateAccount Update or archive a finance account
+	// (PATCH /v1/accounts/{accountId})
+	UpdateAccount(c fiber.Ctx, accountId AccountId) error
 	// ListCategories List finance categories
 	// (GET /v1/categories)
-	ListCategories(c fiber.Ctx) error
-	// UpdateCategory Update a finance category
+	ListCategories(c fiber.Ctx, params ListCategoriesParams) error
+	// CreateCategory Create a finance category
+	// (POST /v1/categories)
+	CreateCategory(c fiber.Ctx) error
+	// ListCategoryRules List category rules
+	// (GET /v1/categories/rules)
+	ListCategoryRules(c fiber.Ctx) error
+	// CreateCategoryRule Create a category rule
+	// (POST /v1/categories/rules)
+	CreateCategoryRule(c fiber.Ctx) error
+	// ApplyCategoryRules Apply the category rules to existing transactions
+	// (POST /v1/categories/rules/apply)
+	ApplyCategoryRules(c fiber.Ctx) error
+	// DeleteCategoryRule Delete a category rule
+	// (DELETE /v1/categories/rules/{ruleId})
+	DeleteCategoryRule(c fiber.Ctx, ruleId RuleId) error
+	// UpdateCategoryRule Update a category rule
+	// (PATCH /v1/categories/rules/{ruleId})
+	UpdateCategoryRule(c fiber.Ctx, ruleId RuleId) error
+	// UpdateCategory Update or archive a finance category
 	// (PATCH /v1/categories/{categoryId})
-	UpdateCategory(c fiber.Ctx, categoryId openapi_types.UUID) error
-	// CreateCsvImport Submit a CSV import
+	UpdateCategory(c fiber.Ctx, categoryId CategoryId) error
+	// ImportBankSync Import one bank sync
+	// (POST /v1/imports/bank)
+	ImportBankSync(c fiber.Ctx) error
+	// RemoveBankConnection Remove a bank connection
+	// (DELETE /v1/imports/bank/{connectionId})
+	RemoveBankConnection(c fiber.Ctx, connectionId openapi_types.UUID) error
+	// CreateCsvImport Import transactions from a CSV file
 	// (POST /v1/imports/csv)
-	CreateCsvImport(c fiber.Ctx) error
+	CreateCsvImport(c fiber.Ctx, params CreateCsvImportParams) error
 	// GetMonthlySummary Get a monthly finance summary
 	// (GET /v1/summaries/monthly)
 	GetMonthlySummary(c fiber.Ctx, params GetMonthlySummaryParams) error
-	// ListTransactions List and filter transactions
+	// ListTransactions List, search, and filter transactions
 	// (GET /v1/transactions)
 	ListTransactions(c fiber.Ctx, params ListTransactionsParams) error
 	// CreateManualTransaction Record a manual transaction
 	// (POST /v1/transactions)
 	CreateManualTransaction(c fiber.Ctx) error
+	// DeleteTransaction Delete a manual transaction
+	// (DELETE /v1/transactions/{transactionId})
+	DeleteTransaction(c fiber.Ctx, transactionId TransactionId) error
+	// GetTransaction Get a transaction
+	// (GET /v1/transactions/{transactionId})
+	GetTransaction(c fiber.Ctx, transactionId TransactionId) error
+	// UpdateTransaction Update a transaction
+	// (PATCH /v1/transactions/{transactionId})
+	UpdateTransaction(c fiber.Ctx, transactionId TransactionId) error
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -233,8 +898,103 @@ type HandlerMiddlewareFunc func(c fiber.Ctx, next fiber.Handler) error
 // ListAccounts operation middleware
 func (siw *ServerInterfaceWrapper) ListAccounts(c fiber.Ctx) error {
 
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListAccountsParams
+
+	var query url.Values
+	query, err = url.ParseQuery(string(c.Request().URI().QueryString()))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for query string: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "includeArchived" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "includeArchived", query, &params.IncludeArchived, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter includeArchived: %w", err).Error())
+	}
+
 	handler := func(c fiber.Ctx) error {
-		return siw.Handler.ListAccounts(c)
+		return siw.Handler.ListAccounts(c, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// CreateAccount operation middleware
+func (siw *ServerInterfaceWrapper) CreateAccount(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.CreateAccount(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// GetAccount operation middleware
+func (siw *ServerInterfaceWrapper) GetAccount(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "accountId" -------------
+	var accountId AccountId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "accountId", c.Params("accountId"), &accountId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter accountId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.GetAccount(c, accountId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// UpdateAccount operation middleware
+func (siw *ServerInterfaceWrapper) UpdateAccount(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "accountId" -------------
+	var accountId AccountId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "accountId", c.Params("accountId"), &accountId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter accountId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.UpdateAccount(c, accountId)
 	}
 
 	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
@@ -251,8 +1011,157 @@ func (siw *ServerInterfaceWrapper) ListAccounts(c fiber.Ctx) error {
 // ListCategories operation middleware
 func (siw *ServerInterfaceWrapper) ListCategories(c fiber.Ctx) error {
 
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListCategoriesParams
+
+	var query url.Values
+	query, err = url.ParseQuery(string(c.Request().URI().QueryString()))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for query string: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "includeArchived" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "includeArchived", query, &params.IncludeArchived, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter includeArchived: %w", err).Error())
+	}
+
 	handler := func(c fiber.Ctx) error {
-		return siw.Handler.ListCategories(c)
+		return siw.Handler.ListCategories(c, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// CreateCategory operation middleware
+func (siw *ServerInterfaceWrapper) CreateCategory(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.CreateCategory(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// ListCategoryRules operation middleware
+func (siw *ServerInterfaceWrapper) ListCategoryRules(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.ListCategoryRules(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// CreateCategoryRule operation middleware
+func (siw *ServerInterfaceWrapper) CreateCategoryRule(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.CreateCategoryRule(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// ApplyCategoryRules operation middleware
+func (siw *ServerInterfaceWrapper) ApplyCategoryRules(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.ApplyCategoryRules(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// DeleteCategoryRule operation middleware
+func (siw *ServerInterfaceWrapper) DeleteCategoryRule(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "ruleId" -------------
+	var ruleId RuleId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "ruleId", c.Params("ruleId"), &ruleId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter ruleId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.DeleteCategoryRule(c, ruleId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// UpdateCategoryRule operation middleware
+func (siw *ServerInterfaceWrapper) UpdateCategoryRule(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "ruleId" -------------
+	var ruleId RuleId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "ruleId", c.Params("ruleId"), &ruleId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter ruleId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.UpdateCategoryRule(c, ruleId)
 	}
 
 	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
@@ -273,7 +1182,7 @@ func (siw *ServerInterfaceWrapper) UpdateCategory(c fiber.Ctx) error {
 	_ = err
 
 	// ------------- Path parameter "categoryId" -------------
-	var categoryId openapi_types.UUID
+	var categoryId CategoryId
 
 	err = runtime.BindStyledParameterWithOptions("simple", "categoryId", c.Params("categoryId"), &categoryId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
 	if err != nil {
@@ -295,11 +1204,77 @@ func (siw *ServerInterfaceWrapper) UpdateCategory(c fiber.Ctx) error {
 	return handler(c)
 }
 
+// ImportBankSync operation middleware
+func (siw *ServerInterfaceWrapper) ImportBankSync(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.ImportBankSync(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// RemoveBankConnection operation middleware
+func (siw *ServerInterfaceWrapper) RemoveBankConnection(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "connectionId" -------------
+	var connectionId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "connectionId", c.Params("connectionId"), &connectionId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter connectionId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.RemoveBankConnection(c, connectionId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
 // CreateCsvImport operation middleware
 func (siw *ServerInterfaceWrapper) CreateCsvImport(c fiber.Ctx) error {
 
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreateCsvImportParams
+
+	var query url.Values
+	query, err = url.ParseQuery(string(c.Request().URI().QueryString()))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for query string: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "accountId" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "accountId", query, &params.AccountId, runtime.BindQueryParameterOptions{Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter accountId: %w", err).Error())
+	}
+
 	handler := func(c fiber.Ctx) error {
-		return siw.Handler.CreateCsvImport(c)
+		return siw.Handler.CreateCsvImport(c, params)
 	}
 
 	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
@@ -335,6 +1310,20 @@ func (siw *ServerInterfaceWrapper) GetMonthlySummary(c fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter month: %w", err).Error())
 	}
 
+	// ------------- Optional query parameter "currency" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "currency", query, &params.Currency, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter currency: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "accountId" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "accountId", query, &params.AccountId, runtime.BindQueryParameterOptions{Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter accountId: %w", err).Error())
+	}
+
 	handler := func(c fiber.Ctx) error {
 		return siw.Handler.GetMonthlySummary(c, params)
 	}
@@ -365,6 +1354,13 @@ func (siw *ServerInterfaceWrapper) ListTransactions(c fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for query string: %w", err).Error())
 	}
 
+	// ------------- Optional query parameter "q" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "q", query, &params.Q, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter q: %w", err).Error())
+	}
+
 	// ------------- Optional query parameter "accountId" -------------
 
 	err = runtime.BindQueryParameterWithOptions("form", true, false, "accountId", query, &params.AccountId, runtime.BindQueryParameterOptions{Type: "string", Format: "uuid"})
@@ -374,7 +1370,7 @@ func (siw *ServerInterfaceWrapper) ListTransactions(c fiber.Ctx) error {
 
 	// ------------- Optional query parameter "categoryId" -------------
 
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "categoryId", query, &params.CategoryId, runtime.BindQueryParameterOptions{Type: "string", Format: "uuid"})
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "categoryId", query, &params.CategoryId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
 	if err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter categoryId: %w", err).Error())
 	}
@@ -391,6 +1387,41 @@ func (siw *ServerInterfaceWrapper) ListTransactions(c fiber.Ctx) error {
 	err = runtime.BindQueryParameterWithOptions("form", true, false, "to", query, &params.To, runtime.BindQueryParameterOptions{Type: "string", Format: "date"})
 	if err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter to: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "direction" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "direction", query, &params.Direction, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter direction: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "amountMin" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "amountMin", query, &params.AmountMin, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter amountMin: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "amountMax" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "amountMax", query, &params.AmountMax, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter amountMax: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "status" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "status", query, &params.Status, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter status: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "source" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "source", query, &params.Source, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter source: %w", err).Error())
 	}
 
 	// ------------- Optional query parameter "cursor" -------------
@@ -440,6 +1471,93 @@ func (siw *ServerInterfaceWrapper) CreateManualTransaction(c fiber.Ctx) error {
 	return handler(c)
 }
 
+// DeleteTransaction operation middleware
+func (siw *ServerInterfaceWrapper) DeleteTransaction(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "transactionId" -------------
+	var transactionId TransactionId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "transactionId", c.Params("transactionId"), &transactionId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter transactionId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.DeleteTransaction(c, transactionId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// GetTransaction operation middleware
+func (siw *ServerInterfaceWrapper) GetTransaction(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "transactionId" -------------
+	var transactionId TransactionId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "transactionId", c.Params("transactionId"), &transactionId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter transactionId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.GetTransaction(c, transactionId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// UpdateTransaction operation middleware
+func (siw *ServerInterfaceWrapper) UpdateTransaction(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "transactionId" -------------
+	var transactionId TransactionId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "transactionId", c.Params("transactionId"), &transactionId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter transactionId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.UpdateTransaction(c, transactionId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
 // FiberServerOptions provides options for the Fiber server.
 type FiberServerOptions struct {
 	BaseURL            string
@@ -465,16 +1583,44 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 
 	router.Get(options.BaseURL+"/v1/accounts", wrapper.ListAccounts)
 
-	router.Get(options.BaseURL+"/v1/categories", wrapper.ListCategories)
+	router.Post(options.BaseURL+"/v1/accounts", wrapper.CreateAccount)
 
-	router.Patch(options.BaseURL+"/v1/categories/:categoryId", wrapper.UpdateCategory)
+	router.Get(options.BaseURL+"/v1/accounts/:accountId", wrapper.GetAccount)
+
+	router.Patch(options.BaseURL+"/v1/accounts/:accountId", wrapper.UpdateAccount)
 
 	router.Get(options.BaseURL+"/v1/transactions", wrapper.ListTransactions)
 
 	router.Post(options.BaseURL+"/v1/transactions", wrapper.CreateManualTransaction)
 
+	router.Delete(options.BaseURL+"/v1/transactions/:transactionId", wrapper.DeleteTransaction)
+
+	router.Get(options.BaseURL+"/v1/transactions/:transactionId", wrapper.GetTransaction)
+
+	router.Patch(options.BaseURL+"/v1/transactions/:transactionId", wrapper.UpdateTransaction)
+
+	router.Get(options.BaseURL+"/v1/categories", wrapper.ListCategories)
+
+	router.Post(options.BaseURL+"/v1/categories", wrapper.CreateCategory)
+
+	router.Patch(options.BaseURL+"/v1/categories/:categoryId", wrapper.UpdateCategory)
+
+	router.Get(options.BaseURL+"/v1/categories/rules", wrapper.ListCategoryRules)
+
+	router.Post(options.BaseURL+"/v1/categories/rules", wrapper.CreateCategoryRule)
+
+	router.Delete(options.BaseURL+"/v1/categories/rules/:ruleId", wrapper.DeleteCategoryRule)
+
+	router.Patch(options.BaseURL+"/v1/categories/rules/:ruleId", wrapper.UpdateCategoryRule)
+
+	router.Post(options.BaseURL+"/v1/categories/rules/apply", wrapper.ApplyCategoryRules)
+
 	router.Get(options.BaseURL+"/v1/summaries/monthly", wrapper.GetMonthlySummary)
 
 	router.Post(options.BaseURL+"/v1/imports/csv", wrapper.CreateCsvImport)
+
+	router.Post(options.BaseURL+"/v1/imports/bank", wrapper.ImportBankSync)
+
+	router.Delete(options.BaseURL+"/v1/imports/bank/:connectionId", wrapper.RemoveBankConnection)
 
 }

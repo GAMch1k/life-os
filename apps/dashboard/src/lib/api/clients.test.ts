@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   createActivityClient,
+  createBankingClient,
   createCalendarClient,
   createFinanceClient,
   createInboxClient,
@@ -22,6 +23,7 @@ test("each generated service client accepts an explicit base URL", () => {
   assert.ok(createVoiceClient(url));
   assert.ok(createActivityClient(url));
   assert.ok(createNotificationsClient(url));
+  assert.ok(createBankingClient(url));
 });
 
 test("service clients act for the owner on every request", async () => {
@@ -50,10 +52,13 @@ test("service clients act for the owner on every request", async () => {
       "/v1/notifications/{notificationId}/read",
       { params: { path: { notificationId: "n" } } },
     );
+    await createBankingClient(url).POST("/v1/connections/{connectionId}/sync", {
+      params: { path: { connectionId: "c" } },
+    });
   } finally {
     globalThis.fetch = original;
   }
-  assert.deepEqual(actors, Array(7).fill("user"));
+  assert.deepEqual(actors, Array(8).fill("user"));
 });
 
 test("only owner and development-tool actors count as public", () => {
