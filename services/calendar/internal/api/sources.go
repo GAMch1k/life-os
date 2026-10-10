@@ -347,7 +347,7 @@ func (h *Handler) source(row store.CalendarSource) (generated.CalendarSource, er
 		}
 	}
 	return generated.CalendarSource{
-		Id: uuid(row.ID), Kind: generated.CalendarSourceKind(row.Kind), Name: row.Name, Url: row.Url, Enabled: row.Enabled,
+		Id: uuid(row.ID), Kind: generated.CalendarSourceKind(row.Kind), Name: row.Name, Url: row.Url, Enabled: row.Enabled, Preset: row.Preset,
 		Filter:           generated.SourceFilter{Include: orEmpty(row.FilterInclude), Exclude: orEmpty(row.FilterExclude)},
 		DefaultReminders: reminders, Refresh: refresh,
 		CreatedAt: row.CreatedAt.Time.UTC(), UpdatedAt: row.UpdatedAt.Time.UTC(),

@@ -206,6 +206,9 @@ type CalendarSource struct {
 	// Name The label shown with the source's events, such as "ZAW".
 	Name string `json:"name"`
 
+	// Preset Set (such as `zaw`) for a source Calendar configures from its own environment at startup; null for sources added through the API. A preset source can be edited like any other, but while its environment setting is present a deleted one is added again at the next start.
+	Preset *string `json:"preset,omitempty"`
+
 	// Refresh The source's refresh schedule and last outcome (`lastOutcome` and `lastCounts` are absent before the first refresh). Read-only.
 	Refresh SourceRefreshState `json:"refresh"`
 

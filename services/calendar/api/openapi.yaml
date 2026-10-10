@@ -414,6 +414,7 @@ components:
         name: {type: string, description: 'The label shown with the source''s events, such as "ZAW".'}
         url: {type: string, description: The feed URL.}
         enabled: {type: boolean, description: Disabled sources are not refreshed; their events stay as they are.}
+        preset: {type: string, nullable: true, description: 'Set (such as `zaw`) for a source Calendar configures from its own environment at startup; null for sources added through the API. A preset source can be edited like any other, but while its environment setting is present a deleted one is added again at the next start.'}
         filter: {$ref: '#/components/schemas/SourceFilter'}
         defaultReminders: {type: array, nullable: true, items: {$ref: '#/components/schemas/Reminder'}, description: 'Reminder intent for this source''s events whose own reminders are null (for example the evening before a waste pickup, `{"kind":"localTime","daysBefore":1,"localTime":"19:00"}`). Null means none.'}
         refresh: {$ref: '#/components/schemas/SourceRefreshState'}

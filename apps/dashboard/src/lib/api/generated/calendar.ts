@@ -373,6 +373,8 @@ export interface components {
             url: string;
             /** @description Disabled sources are not refreshed; their events stay as they are. */
             enabled: boolean;
+            /** @description Set (such as `zaw`) for a source Calendar configures from its own environment at startup; null for sources added through the API. A preset source can be edited like any other, but while its environment setting is present a deleted one is added again at the next start. */
+            preset?: string | null;
             filter: components["schemas"]["SourceFilter"];
             /** @description Reminder intent for this source's events whose own reminders are null (for example the evening before a waste pickup, `{"kind":"localTime","daysBefore":1,"localTime":"19:00"}`). Null means none. */
             defaultReminders: components["schemas"]["Reminder"][] | null;

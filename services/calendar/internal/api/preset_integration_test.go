@@ -80,7 +80,7 @@ func TestZAWPresetSource(t *testing.T) {
 		t.Fatalf("%d sources after restarts", len(listed))
 	}
 	source := listed[0]
-	if source.Id != id || source.Name != "ZAW" || source.Url != feedURL || !source.Enabled || !slices.Equal(source.Filter.Include, zawTypes) ||
+	if source.Id != id || source.Name != "ZAW" || source.Url != feedURL || !source.Enabled || source.Preset == nil || *source.Preset != "zaw" || !slices.Equal(source.Filter.Include, zawTypes) ||
 		len(source.Filter.Exclude) != 0 || !isEveningBefore(source.DefaultReminders) || !source.Refresh.NextRefreshAt.Equal(fixedNow) || source.Refresh.LastOutcome != nil {
 		t.Fatalf("source = %+v", source)
 	}
@@ -191,7 +191,7 @@ func TestZAWPresetAdoptsAHandAddedSource(t *testing.T) {
 	if got.Name != "ZAW" || !slices.Equal(got.Filter.Include, zawTypes) || !isEveningBefore(got.DefaultReminders) || got.Enabled {
 		t.Fatalf("taken over = %+v", got)
 	}
-	if listed := c.sources(); len(listed) != 2 || listed[1].Id != other.Id || listed[1].Name != "Other" {
+	if listed := c.sources(); len(listed) != 2 || listed[1].Id != other.Id || listed[1].Name != "Other" || listed[1].Preset != nil || listed[0].Preset == nil {
 		t.Fatalf("sources = %+v", listed)
 	}
 	if again := c.ensure(sources.ZAWPreset(feedURL)); again.Action != sources.EnsureUnchanged {
