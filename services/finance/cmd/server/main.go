@@ -13,6 +13,7 @@ import (
 	"github.com/GAMch1k/life-os/pkg/database"
 	"github.com/GAMch1k/life-os/pkg/httpserver"
 	"github.com/GAMch1k/life-os/pkg/notify"
+	"github.com/GAMch1k/life-os/services/finance/internal/alerts"
 	"github.com/GAMch1k/life-os/services/finance/internal/api"
 	"github.com/GAMch1k/life-os/services/finance/internal/budget"
 	serviceconfig "github.com/GAMch1k/life-os/services/finance/internal/config"
@@ -43,14 +44,18 @@ func run(ctx context.Context) error {
 	}
 
 	// Budget alerts check the plan in the background and right after money
-	// or a plan changes.
-	alerts := budget.NewAlerts(repository.New(pool), notify.New(cfg.NotificationsURL, "finance"),
+	// or a plan changes; the money alerts detect subscriptions and watch
+	// renewals, large debits, and low balances the same way.
+	notifier := notify.New(cfg.NotificationsURL, "finance")
+	budgetAlerts := budget.NewAlerts(repository.New(pool), notifier,
 		budget.AlertConfig{Owner: owner, Currency: cfg.DefaultCurrency}, logger)
+	moneyAlerts := alerts.New(pool, notifier, alerts.Config{Owner: owner, Currency: cfg.DefaultCurrency}, logger)
 	handler := api.NewHandler(pool, api.Options{
 		Location:        owner,
 		DefaultCurrency: cfg.DefaultCurrency,
 		Activity:        activity.NewEmitter(cfg.ActivityURL, "finance", logger),
-		BudgetChanged:   alerts.Wake,
+		BudgetChanged:   budgetAlerts.Wake,
+		MoneyChanged:    moneyAlerts.Wake,
 	})
 	// The built-in Cash account exists before the first request: a manual
 	// transaction without an account goes there. The default categories
@@ -80,7 +85,8 @@ func run(ctx context.Context) error {
 	app.OnShutdown(database.ClosePool(pool))
 	// The alerts stop (finishing a check under way) before the pool closes:
 	// shutdown hooks run in reverse order.
-	background(app, "budget alerts", alerts.Run)
+	background(app, "budget alerts", budgetAlerts.Run)
+	background(app, "money alerts", moneyAlerts.Run)
 
 	return app.Run(fmt.Sprintf(":%d", cfg.Port))
 }

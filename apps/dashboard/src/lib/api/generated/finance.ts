@@ -278,6 +278,118 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/subscriptions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List subscriptions
+         * @description Recurring payments, detected or marked by the owner: suggested ones first, then confirmed, then ignored, each by name. `state` limits the list to one state. `totals` is always the monthly equivalent of every confirmed subscription in the default currency. Detection runs in the background after every transaction change, import, or bank sync, and daily.
+         */
+        get: operations["listSubscriptions"];
+        put?: never;
+        /**
+         * Mark a transaction as a subscription
+         * @description "This is a subscription": creates a confirmed subscription from a money-out transaction, named after its counterparty (or the known service it names), repeating at `cadence` (default monthly), with the transaction's amount and category. Later payments to the same counterparty with a similar amount keep it up to date. When the counterparty already has a subscription with this cadence, that one is confirmed (if it was not) and returned with 200 instead.
+         */
+        post: operations["createSubscriptionFromTransaction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/subscriptions/{subscriptionId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete a subscription
+         * @description Removes it; its transactions stay. Detection may suggest a deleted one again; ignore it instead to keep it away.
+         */
+        delete: operations["deleteSubscription"];
+        options?: never;
+        head?: never;
+        /**
+         * Update a subscription
+         * @description Changes only the fields present; `categoryId: null` removes the category. A new cadence moves the next expected date (the last payment plus the cadence). A name, amount, or category set here stays: detection no longer changes it.
+         */
+        patch: operations["updateSubscription"];
+        trace?: never;
+    };
+    "/v1/subscriptions/{subscriptionId}/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirm a subscription
+         * @description A suggested (or ignored) subscription becomes confirmed: it counts in the monthly total, keeps following new payments, and gets renewal reminders. Confirming a confirmed one changes nothing.
+         */
+        post: operations["confirmSubscription"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/subscriptions/{subscriptionId}/ignore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ignore a subscription
+         * @description The subscription becomes ignored: it leaves the total and gets no reminders, and detection never suggests the same counterparty with the same cadence again. Ignoring an ignored one changes nothing.
+         */
+        post: operations["ignoreSubscription"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the alert settings
+         * @description The thresholds of the large-debit and low-balance alerts, in the default currency, and the renewal reminders' lead days, each with its on/off switch.
+         */
+        get: operations["getFinanceSettings"];
+        /**
+         * Save the alert settings
+         * @description Replaces every alert setting. Amounts are minor units of the default currency.
+         */
+        put: operations["updateFinanceSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/imports/csv": {
         parameters: {
             query?: never;
@@ -398,7 +510,7 @@ export interface components {
              */
             syncedAt: string | null;
         };
-        /** @description `balance` is the opening balance plus every booked transaction; for a bank account that reported one, it is the bank's booked balance as of `balanceAsOf` instead, and `available` is the bank's available balance. `pending` is the sum of the pending transactions, which are not in a computed balance. `transactionCount` counts both. */
+        /** @description `balance` is the opening balance plus every booked transaction; for a bank account that reported one, it is the bank's booked balance as of `balanceAsOf` instead, and `available` is the bank's available balance. `pending` is the sum of the pending transactions, which are not in a computed balance. `transactionCount` counts both. `lowBalance` is true while the low-balance alert is on and the balance of this bank or cash account (active, in the default currency) is below its threshold. */
         Account: {
             /** Format: uuid */
             id: string;
@@ -415,6 +527,8 @@ export interface components {
             available: components["schemas"]["Money"] | null;
             pending: components["schemas"]["Money"];
             transactionCount: number;
+            /** @description The balance is below the low-balance alert's threshold. */
+            lowBalance: boolean;
             /** @description True for the built-in Cash account. */
             builtIn: boolean;
             archived: boolean;
@@ -771,6 +885,115 @@ export interface components {
             saved: components["schemas"]["Money"] | null;
             categories: components["schemas"]["BudgetCategorySuggestion"][];
         };
+        /**
+         * @description `suggested`: detected, waiting for the owner. `confirmed`: the owner's. `ignored`: never suggested again for this counterparty and cadence.
+         * @enum {string}
+         */
+        SubscriptionState: "suggested" | "confirmed" | "ignored";
+        /** @enum {string} */
+        SubscriptionCadence: "weekly" | "monthly" | "quarterly" | "yearly";
+        /**
+         * @description Where a confirmed subscription's next payment stands, in the owner's days: `upcoming` within the renewal reminders' lead days (today included), `overdue` up to a week after the expected date without a payment, `missed` more than a week late (shown, never alerted), `scheduled` otherwise.
+         * @enum {string}
+         */
+        SubscriptionRenewal: "scheduled" | "upcoming" | "overdue" | "missed";
+        /** @description A recurring payment. `amount` is the typical payment (the median of the last three, positive) unless the owner set one; `monthlyAmount` is its monthly equivalent (weekly times 52/12, quarterly a third, yearly a twelfth). `lastDate` is the latest matching payment and `nextDate` the date the next one is expected (the last plus the cadence). `renewal` is null unless the subscription is confirmed. `confidence` is low for a yearly payment seen only twice. `transactionIds` are the matching payments, latest first. `source` is `detected` or `manual` (marked from a transaction). */
+        Subscription: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            state: components["schemas"]["SubscriptionState"];
+            cadence: components["schemas"]["SubscriptionCadence"];
+            amount: components["schemas"]["Money"];
+            monthlyAmount: components["schemas"]["Money"];
+            /** Format: uuid */
+            categoryId: string | null;
+            /**
+             * Format: uuid
+             * @description The account of the latest payment.
+             */
+            accountId: string | null;
+            /** Format: date */
+            lastDate: string | null;
+            /** Format: date */
+            nextDate: string | null;
+            renewal: components["schemas"]["SubscriptionRenewal"] | null;
+            /** @enum {string} */
+            confidence: "high" | "low";
+            /** @enum {string} */
+            source: "detected" | "manual";
+            transactionIds: string[];
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        /** @description `monthly` is the monthly equivalent of the confirmed subscriptions in `currency` (the default currency), `confirmed` how many there are; `excluded` counts confirmed subscriptions in other currencies, which are left out. */
+        SubscriptionTotals: {
+            currency: string;
+            monthly: components["schemas"]["Money"];
+            confirmed: number;
+            excluded: number;
+        };
+        SubscriptionList: {
+            items: components["schemas"]["Subscription"][];
+            totals: components["schemas"]["SubscriptionTotals"];
+        };
+        /** @description `cadence` defaults to monthly; `name` to the counterparty; `categoryId` to the transaction's category. */
+        CreateSubscriptionRequest: {
+            /** Format: uuid */
+            transactionId: string;
+            cadence?: components["schemas"]["SubscriptionCadence"];
+            name?: string;
+            /** Format: uuid */
+            categoryId?: string;
+        };
+        UpdateSubscriptionRequest: {
+            name?: string;
+            cadence?: components["schemas"]["SubscriptionCadence"];
+            /**
+             * Format: int64
+             * @description The typical payment in minor units (positive).
+             */
+            amountMinor?: number;
+            /** Format: uuid */
+            categoryId?: string | null;
+        };
+        AmountAlert: {
+            enabled: boolean;
+            threshold: components["schemas"]["Money"];
+        };
+        RenewalAlert: {
+            enabled: boolean;
+            /** @description How many days before a confirmed subscription's next payment the reminder comes (0 is on the day). */
+            leadDays: number;
+        };
+        /** @description `largeDebit`: a medium notification for each money-out transaction of at least the threshold (booked or pending, booked in the last three days). `lowBalance`: a medium notification when a bank or cash account's balance falls below the threshold, again after it went back above. `renewals`: a low notification `leadDays` before a confirmed subscription's next payment. Thresholds are in `currency`, the default currency; accounts and transactions in other currencies are not checked. */
+        FinanceSettings: {
+            currency: string;
+            largeDebit: components["schemas"]["AmountAlert"];
+            lowBalance: components["schemas"]["AmountAlert"];
+            renewals: components["schemas"]["RenewalAlert"];
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        AmountAlertInput: {
+            enabled: boolean;
+            /**
+             * Format: int64
+             * @description Minor units of the default currency; at least 1 for large debits.
+             */
+            thresholdMinor: number;
+        };
+        RenewalAlertInput: {
+            enabled: boolean;
+            leadDays: number;
+        };
+        UpdateFinanceSettingsRequest: {
+            largeDebit: components["schemas"]["AmountAlertInput"];
+            lowBalance: components["schemas"]["AmountAlertInput"];
+            renewals: components["schemas"]["RenewalAlertInput"];
+        };
         CsvImportError: {
             /** @description The CSV line (the header is row 1). */
             row: number;
@@ -884,6 +1107,7 @@ export interface components {
         RuleId: string;
         /** @description YYYY-MM. */
         Month: string;
+        SubscriptionId: string;
     };
     requestBodies: never;
     headers: never;
@@ -1764,6 +1988,321 @@ export interface operations {
                 };
             };
             /** @description The month is not YYYY-MM (`invalid_request`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    listSubscriptions: {
+        parameters: {
+            query?: {
+                state?: components["schemas"]["SubscriptionState"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Subscriptions */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubscriptionList"];
+                };
+            };
+            /** @description Invalid request (`invalid_request`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    createSubscriptionFromTransaction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateSubscriptionRequest"];
+            };
+        };
+        responses: {
+            /** @description The counterparty's existing subscription with this cadence, now confirmed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Subscription"];
+                };
+            };
+            /** @description Subscription */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Subscription"];
+                };
+            };
+            /** @description Invalid request (`invalid_request`: money in, or a transaction without counterparty and description), an unknown transaction (`unknown_transaction`) or category (`unknown_category`), or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The category is archived (`category_archived`) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    deleteSubscription: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                subscriptionId: components["parameters"]["SubscriptionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid request, or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Subscription not found (`not_found`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    updateSubscription: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                subscriptionId: components["parameters"]["SubscriptionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSubscriptionRequest"];
+            };
+        };
+        responses: {
+            /** @description Subscription */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Subscription"];
+                };
+            };
+            /** @description Invalid request (`invalid_request`, `unknown_category`), or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Subscription not found (`not_found`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The category is archived (`category_archived`) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    confirmSubscription: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                subscriptionId: components["parameters"]["SubscriptionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Subscription */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Subscription"];
+                };
+            };
+            /** @description Invalid request, or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Subscription not found (`not_found`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    ignoreSubscription: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                subscriptionId: components["parameters"]["SubscriptionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Subscription */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Subscription"];
+                };
+            };
+            /** @description Invalid request, or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Subscription not found (`not_found`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getFinanceSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Settings */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FinanceSettings"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    updateFinanceSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateFinanceSettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description Settings */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FinanceSettings"];
+                };
+            };
+            /** @description Invalid request (`invalid_request`: a large-debit threshold below 1, a negative low-balance threshold, or lead days outside 0 to 30), or no valid X-Life-OS-Actor (`actor_required`) */
             400: {
                 headers: {
                     [name: string]: unknown;

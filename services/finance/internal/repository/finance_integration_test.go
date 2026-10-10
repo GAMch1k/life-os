@@ -256,3 +256,59 @@ func TestBudgetMigrationRollsBackAndForwardKeepingCategories(t *testing.T) {
 	testdb.Apply(t, pool, testdb.Migration(t, "000006", "up"))
 	exec(`UPDATE transactions SET categorized_by = 'mcc'`)
 }
+
+func TestSubscriptionsMigrationRollsBackAndForwardKeepingTransactions(t *testing.T) {
+	pool := testdb.Open(t, "000006")
+	ctx := context.Background()
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := pool.Exec(ctx, sql, args...); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	exec(`INSERT INTO accounts (name, currency, kind) VALUES ('Giro', 'EUR', 'bank')`)
+	exec(`INSERT INTO transactions (account_id, amount_minor, currency, occurred_on, counterparty)
+	      SELECT id, -1399, 'EUR', '2026-10-01', 'NETFLIX.COM' FROM accounts`)
+
+	testdb.Apply(t, pool, testdb.Migration(t, "000007", "up"))
+	queries := generated.New(pool)
+	settings, err := queries.GetFinanceSettings(ctx)
+	if err != nil || !settings.LargeDebitEnabled || settings.LargeDebitMinor != 25000 || !settings.LowBalanceEnabled || settings.LowBalanceMinor != 10000 ||
+		!settings.RenewalsEnabled || settings.RenewalLeadDays != 3 {
+		t.Fatalf("default settings = %+v, %v", settings, err)
+	}
+	exec(`INSERT INTO subscriptions (merchant_key, match_cadence, state, source, name, cadence, amount_minor, currency, confidence, last_date, next_date)
+	      VALUES ('service:netflix', 'monthly', 'confirmed', 'manual', 'Netflix', 'monthly', 1399, 'EUR', 'high', '2026-10-01', '2026-11-01')`)
+	exec(`INSERT INTO subscription_transactions (subscription_id, transaction_id) SELECT s.id, t.id FROM subscriptions s, transactions t`)
+	exec(`INSERT INTO alert_notifications (dedupe_key) VALUES ('finance.large_debit:x')`)
+	exec(`INSERT INTO low_balance_states (account_id, below, episode) SELECT id, true, 1 FROM accounts`)
+	// One subscription per counterparty and cadence; one settings row.
+	if _, err := pool.Exec(ctx, `INSERT INTO subscriptions (merchant_key, match_cadence, state, source, name, cadence, amount_minor, currency, confidence)
+	      VALUES ('service:netflix', 'monthly', 'suggested', 'detected', 'Netflix', 'yearly', 1399, 'EUR', 'high')`); err == nil {
+		t.Fatal("a second Netflix monthly subscription was accepted")
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO finance_settings (id) VALUES (false)`); err == nil {
+		t.Fatal("a second settings row was accepted")
+	}
+	// Deleting a transaction drops its link, not the subscription.
+	exec(`DELETE FROM transactions`)
+	var links, subs int
+	if err := pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM subscription_transactions), (SELECT count(*) FROM subscriptions)`).Scan(&links, &subs); err != nil ||
+		links != 0 || subs != 1 {
+		t.Fatalf("after deleting the transaction: %d links, %d subscriptions, %v", links, subs, err)
+	}
+	exec(`INSERT INTO transactions (account_id, amount_minor, currency, occurred_on, counterparty)
+	      SELECT id, -1399, 'EUR', '2026-11-01', 'NETFLIX.COM' FROM accounts`)
+
+	testdb.Apply(t, pool, testdb.Migration(t, "000007", "down"))
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM transactions`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("transactions after rollback: %d %v", count, err)
+	}
+	var tables int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.tables WHERE table_schema = current_schema()
+	      AND table_name IN ('subscriptions', 'subscription_transactions', 'finance_settings', 'alert_notifications', 'low_balance_states')`).Scan(&tables); err != nil || tables != 0 {
+		t.Fatalf("tables left after rollback: %d %v", tables, err)
+	}
+	testdb.Apply(t, pool, testdb.Migration(t, "000007", "up"))
+}

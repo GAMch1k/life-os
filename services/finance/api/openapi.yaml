@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Life OS Finance API
-  version: 1.2.0
+  version: 1.3.0
   description: >-
     Every write (POST, PUT, PATCH, DELETE) must say who makes it in the
     X-Life-OS-Actor header: `user` (the owner), `agent:<name>` (the Life OS
@@ -56,6 +56,14 @@ info:
     instead. Budget progress counts booked and pending money in the
     default currency (`FINANCE_DEFAULT_CURRENCY`); transactions in other
     currencies are left out and counted in `excludedCurrencies`.
+
+
+    Subscriptions (`/v1/subscriptions`) are recurring payments: Finance
+    detects them in booked money out (the same counterparty at a regular
+    interval with a similar amount) and suggests them; the owner confirms
+    or ignores each one, or marks a transaction as a subscription. Alert
+    settings (`/v1/settings`) hold the thresholds for large debits and low
+    balances and the lead days of renewal reminders.
 
 
     Errors use the shared envelope `{"error": {"code", "message"},
@@ -390,6 +398,119 @@ paths:
       responses:
         '200': {description: Suggestions, content: {application/json: {schema: {$ref: '#/components/schemas/BudgetSuggestions'}}}}
         '400': {description: The month is not YYYY-MM (`invalid_request`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/subscriptions:
+    get:
+      summary: List subscriptions
+      description: >-
+        Recurring payments, detected or marked by the owner: suggested ones
+        first, then confirmed, then ignored, each by name. `state` limits
+        the list to one state. `totals` is always the monthly equivalent of
+        every confirmed subscription in the default currency. Detection runs
+        in the background after every transaction change, import, or bank
+        sync, and daily.
+      operationId: listSubscriptions
+      security: []
+      parameters:
+        - {name: state, in: query, schema: {$ref: '#/components/schemas/SubscriptionState'}}
+      responses:
+        '200': {description: Subscriptions, content: {application/json: {schema: {$ref: '#/components/schemas/SubscriptionList'}}}}
+        '400': {description: Invalid request (`invalid_request`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    post:
+      summary: Mark a transaction as a subscription
+      description: >-
+        "This is a subscription": creates a confirmed subscription from a
+        money-out transaction, named after its counterparty (or the known
+        service it names), repeating at `cadence` (default monthly), with
+        the transaction's amount and category. Later payments to the same
+        counterparty with a similar amount keep it up to date. When the
+        counterparty already has a subscription with this cadence, that one
+        is confirmed (if it was not) and returned with 200 instead.
+      operationId: createSubscriptionFromTransaction
+      security: []
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateSubscriptionRequest'}}}}
+      responses:
+        '200': {description: 'The counterparty''s existing subscription with this cadence, now confirmed', content: {application/json: {schema: {$ref: '#/components/schemas/Subscription'}}}}
+        '201': {description: Subscription, content: {application/json: {schema: {$ref: '#/components/schemas/Subscription'}}}}
+        '400': {description: 'Invalid request (`invalid_request`: money in, or a transaction without counterparty and description), an unknown transaction (`unknown_transaction`) or category (`unknown_category`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: The category is archived (`category_archived`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/subscriptions/{subscriptionId}:
+    patch:
+      summary: Update a subscription
+      description: >-
+        Changes only the fields present; `categoryId: null` removes the
+        category. A new cadence moves the next expected date (the last
+        payment plus the cadence). A name, amount, or category set here
+        stays: detection no longer changes it.
+      operationId: updateSubscription
+      security: []
+      parameters: [{$ref: '#/components/parameters/SubscriptionId'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateSubscriptionRequest'}}}}
+      responses:
+        '200': {description: Subscription, content: {application/json: {schema: {$ref: '#/components/schemas/Subscription'}}}}
+        '400': {description: 'Invalid request (`invalid_request`, `unknown_category`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: Subscription not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: The category is archived (`category_archived`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    delete:
+      summary: Delete a subscription
+      description: >-
+        Removes it; its transactions stay. Detection may suggest a deleted
+        one again; ignore it instead to keep it away.
+      operationId: deleteSubscription
+      security: []
+      parameters: [{$ref: '#/components/parameters/SubscriptionId'}]
+      responses:
+        '204': {description: Deleted}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: Subscription not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/subscriptions/{subscriptionId}/confirm:
+    post:
+      summary: Confirm a subscription
+      description: >-
+        A suggested (or ignored) subscription becomes confirmed: it counts
+        in the monthly total, keeps following new payments, and gets renewal
+        reminders. Confirming a confirmed one changes nothing.
+      operationId: confirmSubscription
+      security: []
+      parameters: [{$ref: '#/components/parameters/SubscriptionId'}]
+      responses:
+        '200': {description: Subscription, content: {application/json: {schema: {$ref: '#/components/schemas/Subscription'}}}}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: Subscription not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/subscriptions/{subscriptionId}/ignore:
+    post:
+      summary: Ignore a subscription
+      description: >-
+        The subscription becomes ignored: it leaves the total and gets no
+        reminders, and detection never suggests the same counterparty with
+        the same cadence again. Ignoring an ignored one changes nothing.
+      operationId: ignoreSubscription
+      security: []
+      parameters: [{$ref: '#/components/parameters/SubscriptionId'}]
+      responses:
+        '200': {description: Subscription, content: {application/json: {schema: {$ref: '#/components/schemas/Subscription'}}}}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: Subscription not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/settings:
+    get:
+      summary: Get the alert settings
+      description: >-
+        The thresholds of the large-debit and low-balance alerts, in the
+        default currency, and the renewal reminders' lead days, each with
+        its on/off switch.
+      operationId: getFinanceSettings
+      security: []
+      responses:
+        '200': {description: Settings, content: {application/json: {schema: {$ref: '#/components/schemas/FinanceSettings'}}}}
+        '400': {description: Invalid request, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    put:
+      summary: Save the alert settings
+      description: Replaces every alert setting. Amounts are minor units of the default currency.
+      operationId: updateFinanceSettings
+      security: []
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateFinanceSettingsRequest'}}}}
+      responses:
+        '200': {description: Settings, content: {application/json: {schema: {$ref: '#/components/schemas/FinanceSettings'}}}}
+        '400': {description: 'Invalid request (`invalid_request`: a large-debit threshold below 1, a negative low-balance threshold, or lead days outside 0 to 30), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
   /v1/imports/csv:
     post:
       summary: Import transactions from a CSV file
@@ -500,6 +621,7 @@ components:
     CategoryId: {name: categoryId, in: path, required: true, schema: {type: string, format: uuid}}
     RuleId: {name: ruleId, in: path, required: true, schema: {type: string, format: uuid}}
     Month: {name: month, in: path, required: true, description: YYYY-MM., schema: {type: string, pattern: '^\d{4}-\d{2}$'}}
+    SubscriptionId: {name: subscriptionId, in: path, required: true, schema: {type: string, format: uuid}}
   schemas:
     ErrorResponse:
       type: object
@@ -544,7 +666,10 @@ components:
         as of `balanceAsOf` instead, and `available` is the bank's available
         balance. `pending` is the sum of the pending transactions, which are
         not in a computed balance. `transactionCount` counts both.
-      required: [id, name, kind, currency, openingBalance, balance, balanceAsOf, available, pending, transactionCount, builtIn, archived, archivedAt, source, createdAt, updatedAt]
+        `lowBalance` is true while the low-balance alert is on and the
+        balance of this bank or cash account (active, in the default
+        currency) is below its threshold.
+      required: [id, name, kind, currency, openingBalance, balance, balanceAsOf, available, pending, transactionCount, lowBalance, builtIn, archived, archivedAt, source, createdAt, updatedAt]
       properties:
         id: {type: string, format: uuid}
         name: {type: string}
@@ -556,6 +681,7 @@ components:
         available: {type: object, allOf: [{$ref: '#/components/schemas/Money'}], nullable: true}
         pending: {$ref: '#/components/schemas/Money'}
         transactionCount: {type: integer}
+        lowBalance: {type: boolean, description: The balance is below the low-balance alert's threshold.}
         builtIn: {type: boolean, description: True for the built-in Cash account.}
         archived: {type: boolean}
         archivedAt: {type: string, format: date-time, nullable: true}
@@ -969,6 +1095,137 @@ components:
         income: {type: object, allOf: [{$ref: '#/components/schemas/Money'}], nullable: true}
         saved: {type: object, allOf: [{$ref: '#/components/schemas/Money'}], nullable: true}
         categories: {type: array, items: {$ref: '#/components/schemas/BudgetCategorySuggestion'}}
+    SubscriptionState:
+      type: string
+      description: '`suggested`: detected, waiting for the owner. `confirmed`: the owner''s. `ignored`: never suggested again for this counterparty and cadence.'
+      enum: [suggested, confirmed, ignored]
+    SubscriptionCadence:
+      type: string
+      enum: [weekly, monthly, quarterly, yearly]
+    SubscriptionRenewal:
+      type: string
+      description: >-
+        Where a confirmed subscription's next payment stands, in the
+        owner's days: `upcoming` within the renewal reminders' lead days
+        (today included), `overdue` up to a week after the expected date
+        without a payment, `missed` more than a week late (shown, never
+        alerted), `scheduled` otherwise.
+      enum: [scheduled, upcoming, overdue, missed]
+    Subscription:
+      type: object
+      description: >-
+        A recurring payment. `amount` is the typical payment (the median of
+        the last three, positive) unless the owner set one; `monthlyAmount`
+        is its monthly equivalent (weekly times 52/12, quarterly a third,
+        yearly a twelfth). `lastDate` is the latest matching payment and
+        `nextDate` the date the next one is expected (the last plus the
+        cadence). `renewal` is null unless the subscription is confirmed.
+        `confidence` is low for a yearly payment seen only twice.
+        `transactionIds` are the matching payments, latest first. `source`
+        is `detected` or `manual` (marked from a transaction).
+      required: [id, name, state, cadence, amount, monthlyAmount, categoryId, accountId, lastDate, nextDate, renewal, confidence, source, transactionIds, createdAt, updatedAt]
+      properties:
+        id: {type: string, format: uuid}
+        name: {type: string}
+        state: {$ref: '#/components/schemas/SubscriptionState'}
+        cadence: {$ref: '#/components/schemas/SubscriptionCadence'}
+        amount: {$ref: '#/components/schemas/Money'}
+        monthlyAmount: {$ref: '#/components/schemas/Money'}
+        categoryId: {type: string, format: uuid, nullable: true}
+        accountId: {type: string, format: uuid, nullable: true, description: The account of the latest payment.}
+        lastDate: {type: string, format: date, nullable: true}
+        nextDate: {type: string, format: date, nullable: true}
+        renewal: {type: object, allOf: [{$ref: '#/components/schemas/SubscriptionRenewal'}], nullable: true}
+        confidence: {type: string, enum: [high, low]}
+        source: {type: string, enum: [detected, manual]}
+        transactionIds: {type: array, items: {type: string, format: uuid}}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    SubscriptionTotals:
+      type: object
+      description: >-
+        `monthly` is the monthly equivalent of the confirmed subscriptions in
+        `currency` (the default currency), `confirmed` how many there are;
+        `excluded` counts confirmed subscriptions in other currencies, which
+        are left out.
+      required: [currency, monthly, confirmed, excluded]
+      properties:
+        currency: {type: string}
+        monthly: {$ref: '#/components/schemas/Money'}
+        confirmed: {type: integer}
+        excluded: {type: integer}
+    SubscriptionList:
+      type: object
+      required: [items, totals]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/Subscription'}}
+        totals: {$ref: '#/components/schemas/SubscriptionTotals'}
+    CreateSubscriptionRequest:
+      type: object
+      description: '`cadence` defaults to monthly; `name` to the counterparty; `categoryId` to the transaction''s category.'
+      required: [transactionId]
+      properties:
+        transactionId: {type: string, format: uuid}
+        cadence: {$ref: '#/components/schemas/SubscriptionCadence'}
+        name: {type: string, minLength: 1, maxLength: 100}
+        categoryId: {type: string, format: uuid}
+    UpdateSubscriptionRequest:
+      type: object
+      minProperties: 1
+      properties:
+        name: {type: string, minLength: 1, maxLength: 100}
+        cadence: {$ref: '#/components/schemas/SubscriptionCadence'}
+        amountMinor: {type: integer, format: int64, minimum: 1, description: The typical payment in minor units (positive).}
+        categoryId: {type: string, format: uuid, nullable: true}
+    AmountAlert:
+      type: object
+      required: [enabled, threshold]
+      properties:
+        enabled: {type: boolean}
+        threshold: {$ref: '#/components/schemas/Money'}
+    RenewalAlert:
+      type: object
+      required: [enabled, leadDays]
+      properties:
+        enabled: {type: boolean}
+        leadDays: {type: integer, minimum: 0, maximum: 30, description: How many days before a confirmed subscription's next payment the reminder comes (0 is on the day).}
+    FinanceSettings:
+      type: object
+      description: >-
+        `largeDebit`: a medium notification for each money-out transaction
+        of at least the threshold (booked or pending, booked in the last
+        three days). `lowBalance`: a medium notification when a bank or
+        cash account's balance falls below the threshold, again after it
+        went back above. `renewals`: a low notification `leadDays` before a
+        confirmed subscription's next payment. Thresholds are in
+        `currency`, the default currency; accounts and transactions in other
+        currencies are not checked.
+      required: [currency, largeDebit, lowBalance, renewals, updatedAt]
+      properties:
+        currency: {type: string}
+        largeDebit: {$ref: '#/components/schemas/AmountAlert'}
+        lowBalance: {$ref: '#/components/schemas/AmountAlert'}
+        renewals: {$ref: '#/components/schemas/RenewalAlert'}
+        updatedAt: {type: string, format: date-time}
+    AmountAlertInput:
+      type: object
+      required: [enabled, thresholdMinor]
+      properties:
+        enabled: {type: boolean}
+        thresholdMinor: {type: integer, format: int64, minimum: 0, description: Minor units of the default currency; at least 1 for large debits.}
+    RenewalAlertInput:
+      type: object
+      required: [enabled, leadDays]
+      properties:
+        enabled: {type: boolean}
+        leadDays: {type: integer, minimum: 0, maximum: 30}
+    UpdateFinanceSettingsRequest:
+      type: object
+      required: [largeDebit, lowBalance, renewals]
+      properties:
+        largeDebit: {$ref: '#/components/schemas/AmountAlertInput'}
+        lowBalance: {$ref: '#/components/schemas/AmountAlertInput'}
+        renewals: {$ref: '#/components/schemas/RenewalAlertInput'}
     CsvImportError:
       type: object
       required: [row, message]

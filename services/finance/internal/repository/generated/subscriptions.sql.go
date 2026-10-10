@@ -196,31 +196,33 @@ func (q *Queries) GetSubscriptionForUpdate(ctx context.Context, id pgtype.UUID) 
 
 const insertSubscription = `-- name: InsertSubscription :one
 INSERT INTO subscriptions (
-    merchant_key, match_cadence, state, source, name, cadence, amount_minor, currency,
-    category_id, account_id, confidence, last_date, next_date
+    merchant_key, match_cadence, state, source, name, name_edited, cadence, amount_minor, currency,
+    category_id, category_edited, account_id, confidence, last_date, next_date
 )
 VALUES (
-    $1, $2, $3, $4, $5, $6,
-    $7, $8, $9, $10, $11,
-    $12, $13
+    $1, $2, $3, $4, $5, $6, $7,
+    $8, $9, $10, $11, $12, $13,
+    $14, $15
 )
 RETURNING id, merchant_key, match_cadence, state, source, name, name_edited, cadence, amount_minor, amount_edited, currency, category_id, category_edited, account_id, confidence, last_date, next_date, created_at, updated_at
 `
 
 type InsertSubscriptionParams struct {
-	MerchantKey  string
-	MatchCadence string
-	State        string
-	Source       string
-	Name         string
-	Cadence      string
-	AmountMinor  int64
-	Currency     string
-	CategoryID   pgtype.UUID
-	AccountID    pgtype.UUID
-	Confidence   string
-	LastDate     pgtype.Date
-	NextDate     pgtype.Date
+	MerchantKey    string
+	MatchCadence   string
+	State          string
+	Source         string
+	Name           string
+	NameEdited     bool
+	Cadence        string
+	AmountMinor    int64
+	Currency       string
+	CategoryID     pgtype.UUID
+	CategoryEdited bool
+	AccountID      pgtype.UUID
+	Confidence     string
+	LastDate       pgtype.Date
+	NextDate       pgtype.Date
 }
 
 func (q *Queries) InsertSubscription(ctx context.Context, arg InsertSubscriptionParams) (Subscription, error) {
@@ -230,10 +232,12 @@ func (q *Queries) InsertSubscription(ctx context.Context, arg InsertSubscription
 		arg.State,
 		arg.Source,
 		arg.Name,
+		arg.NameEdited,
 		arg.Cadence,
 		arg.AmountMinor,
 		arg.Currency,
 		arg.CategoryID,
+		arg.CategoryEdited,
 		arg.AccountID,
 		arg.Confidence,
 		arg.LastDate,
@@ -440,6 +444,8 @@ LEFT JOIN low_balance_states AS s ON s.account_id = a.id
 WHERE a.archived_at IS NULL
   AND a.kind IN ('bank', 'cash')
   AND a.currency = $1
+  AND ((a.source_kind = 'bank' AND a.booked_balance_minor IS NOT NULL)
+       OR EXISTS (SELECT 1 FROM transactions AS t WHERE t.account_id = a.id))
 ORDER BY lower(a.name), a.id
 `
 
@@ -455,7 +461,8 @@ type ListLowBalanceAccountsRow struct {
 
 // Active bank and cash accounts in one currency with the balance they
 // show (the bank's booked balance when it reported one) and their
-// low-balance state.
+// low-balance state. An account without transactions or a bank-reported
+// balance (an unused Cash account) has no balance to watch.
 func (q *Queries) ListLowBalanceAccounts(ctx context.Context, currency string) ([]ListLowBalanceAccountsRow, error) {
 	rows, err := q.db.Query(ctx, listLowBalanceAccounts, currency)
 	if err != nil {

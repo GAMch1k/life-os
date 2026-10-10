@@ -43,6 +43,14 @@ const (
 	budgetSaved         = "finance.budget.saved"
 	budgetReset         = "finance.budget.reset"
 	budgetDefaultsAdded = "finance.budget_defaults.added"
+	// Subscriptions the owner changes, and the alert settings. Detection's
+	// own suggestions are not recorded.
+	subscriptionCreated   = "finance.subscription.created"
+	subscriptionConfirmed = "finance.subscription.confirmed"
+	subscriptionIgnored   = "finance.subscription.ignored"
+	subscriptionUpdated   = "finance.subscription.updated"
+	subscriptionDeleted   = "finance.subscription.deleted"
+	settingsUpdated       = "finance.settings.updated"
 )
 
 // emit records one event. With a request, the event carries its actor,

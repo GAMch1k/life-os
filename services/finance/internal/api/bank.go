@@ -13,6 +13,7 @@ import (
 	"github.com/oapi-codegen/runtime/types"
 
 	"github.com/GAMch1k/life-os/pkg/activity"
+	"github.com/GAMch1k/life-os/services/finance/internal/alerts"
 	"github.com/GAMch1k/life-os/services/finance/internal/api/generated"
 	financemoney "github.com/GAMch1k/life-os/services/finance/internal/money"
 	store "github.com/GAMch1k/life-os/services/finance/internal/repository/generated"
@@ -253,6 +254,7 @@ func (h *Handler) ImportBankSync(c fiber.Ctx) error {
 				OccurredOn: pgDate(item.BookingDate), ValueDate: optionalDate(item.ValueDate), Status: string(item.Status),
 				Counterparty: item.Counterparty, Description: item.Description, ImportSource: bankSource, ImportExternalID: item.ExternalId,
 				ConnectionID: connection, MerchantCategoryCode: item.MerchantCategoryCode, BankReference: item.BankReference, SourceMetadata: []byte(`{}`)}
+			var replacedID pgtype.UUID
 			if item.Status == generated.Booked {
 				replaced, err := q.FindReplacedPending(ctx, store.FindReplacedPendingParams{AccountID: account.ID, AmountMinor: item.Amount.Amount,
 					Counterparty: item.Counterparty, BookingDate: params.OccurredOn, Keep: keep})
@@ -267,6 +269,7 @@ func (h *Handler) ImportBankSync(c fiber.Ctx) error {
 					if err := q.DeleteTransaction(ctx, replaced.ID); err != nil {
 						return err
 					}
+					replacedID = replaced.ID
 					counts.RemovedPending++
 				case !errors.Is(err, pgx.ErrNoRows):
 					return err
@@ -278,8 +281,17 @@ func (h *Handler) ImportBankSync(c fiber.Ctx) error {
 					params.CategoryID, params.CategoryRuleID, params.CategorizedBy = assignmentFields(assignment)
 				}
 			}
-			if _, err := q.CreateImportedTransaction(ctx, params); err != nil {
+			created, err := q.CreateImportedTransaction(ctx, params)
+			if err != nil {
 				return err
+			}
+			if replacedID.Valid {
+				// The booked transaction is the debit the pending one was:
+				// a large-debit alert sent for it is not sent again.
+				if err := q.CarryOverAlertClaim(ctx, store.CarryOverAlertClaimParams{FromKey: alerts.LargeDebitKey(replacedID.Bytes),
+					ToKey: alerts.LargeDebitKey(created.ID.Bytes)}); err != nil {
+					return err
+				}
 			}
 			counts.Created++
 		}

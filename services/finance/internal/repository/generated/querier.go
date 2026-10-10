@@ -99,7 +99,8 @@ type Querier interface {
 	ListLargeDebits(ctx context.Context, arg ListLargeDebitsParams) ([]ListLargeDebitsRow, error)
 	// Active bank and cash accounts in one currency with the balance they
 	// show (the bank's booked balance when it reported one) and their
-	// low-balance state.
+	// low-balance state. An account without transactions or a bank-reported
+	// balance (an unused Cash account) has no balance to watch.
 	ListLowBalanceAccounts(ctx context.Context, currency string) ([]ListLowBalanceAccountsRow, error)
 	// Booked money out since a day, for detecting recurring payments; money
 	// moved between own accounts (transfer categories) is not a payment.

@@ -33,6 +33,7 @@ type Handler struct {
 	location        *time.Location
 	defaultCurrency string
 	onBudgetChange  func()
+	onMoneyChange   func()
 	now             func() time.Time
 }
 
@@ -51,12 +52,16 @@ type Options struct {
 	// BudgetChanged is called after money or a budget plan changed, so the
 	// budget alerts check soon; nil does nothing.
 	BudgetChanged func()
+	// MoneyChanged is called after transactions, accounts, subscriptions,
+	// or the alert settings changed, so subscription detection and the
+	// money alerts run soon; nil does nothing.
+	MoneyChanged func()
 }
 
 // NewHandler serves the Finance API from pool.
 func NewHandler(pool *pgxpool.Pool, options Options) *Handler {
 	h := &Handler{pool: pool, activity: options.Activity, location: options.Location, defaultCurrency: options.DefaultCurrency,
-		onBudgetChange: options.BudgetChanged, now: time.Now}
+		onBudgetChange: options.BudgetChanged, onMoneyChange: options.MoneyChanged, now: time.Now}
 	if pool != nil {
 		h.queries = store.New(pool)
 	}

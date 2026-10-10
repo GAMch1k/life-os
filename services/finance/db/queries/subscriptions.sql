@@ -41,12 +41,12 @@ FOR UPDATE;
 
 -- name: InsertSubscription :one
 INSERT INTO subscriptions (
-    merchant_key, match_cadence, state, source, name, cadence, amount_minor, currency,
-    category_id, account_id, confidence, last_date, next_date
+    merchant_key, match_cadence, state, source, name, name_edited, cadence, amount_minor, currency,
+    category_id, category_edited, account_id, confidence, last_date, next_date
 )
 VALUES (
-    sqlc.arg(merchant_key), sqlc.arg(match_cadence), sqlc.arg(state), sqlc.arg(source), sqlc.arg(name), sqlc.arg(cadence),
-    sqlc.arg(amount_minor), sqlc.arg(currency), sqlc.narg(category_id), sqlc.narg(account_id), sqlc.arg(confidence),
+    sqlc.arg(merchant_key), sqlc.arg(match_cadence), sqlc.arg(state), sqlc.arg(source), sqlc.arg(name), sqlc.arg(name_edited), sqlc.arg(cadence),
+    sqlc.arg(amount_minor), sqlc.arg(currency), sqlc.narg(category_id), sqlc.arg(category_edited), sqlc.narg(account_id), sqlc.arg(confidence),
     sqlc.narg(last_date), sqlc.narg(next_date)
 )
 RETURNING *;
@@ -135,7 +135,8 @@ ORDER BY t.occurred_on, t.created_at, t.id;
 -- name: ListLowBalanceAccounts :many
 -- Active bank and cash accounts in one currency with the balance they
 -- show (the bank's booked balance when it reported one) and their
--- low-balance state.
+-- low-balance state. An account without transactions or a bank-reported
+-- balance (an unused Cash account) has no balance to watch.
 SELECT a.id, a.name, a.source_kind, a.booked_balance_date,
        (CASE WHEN a.source_kind = 'bank' AND a.booked_balance_minor IS NOT NULL THEN a.booked_balance_minor
              ELSE a.opening_balance_minor + COALESCE((SELECT SUM(t.amount_minor) FROM transactions AS t
@@ -146,6 +147,8 @@ LEFT JOIN low_balance_states AS s ON s.account_id = a.id
 WHERE a.archived_at IS NULL
   AND a.kind IN ('bank', 'cash')
   AND a.currency = sqlc.arg(currency)
+  AND ((a.source_kind = 'bank' AND a.booked_balance_minor IS NOT NULL)
+       OR EXISTS (SELECT 1 FROM transactions AS t WHERE t.account_id = a.id))
 ORDER BY lower(a.name), a.id;
 
 -- name: SetLowBalanceState :exec
