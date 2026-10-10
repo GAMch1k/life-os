@@ -27,13 +27,20 @@ flowchart LR
 | `subject` | The entity the event is about: `{type, id}`, e.g. `{task, <uuid>}`. |
 | `correlationId` | The workflow this event belongs to. |
 | `causationId` | The event that directly caused this one (optional). |
-| `actor` | `user`, `agent` (e.g. `codex-inbox-processor`, `mcp`), or `system` (e.g. `voice-worker`). |
+| `actor` | `user`, `agent` (e.g. `codex-inbox-processor`, `mcp`), or `system` (e.g. `voice-worker`). See [Actors](#actors). |
 | `outcome` | `succeeded`, `pending` (accepted/scheduled), or `failed`. |
 | `summary` | One short human-readable sentence. |
 | `data` | Small structured details (titles, tools, errors; ≤16 KB). |
 | `occurredAt` / `recordedAt` | When it happened / when Activity stored it. |
 
-Events are append-only. There is no update or delete API.
+Events are append-only. There is no update or delete API. The history starts when the Activity service was deployed; operations before that were not backfilled.
+
+### Actors
+
+- `user`: a request without an actor header, such as a Dashboard edit.
+- `agent:codex-inbox-processor`: the automatic Inbox processor. Every call it makes carries this actor: processing attempts, Human Review requests, MCP changes, runtime records, and the crash-recovery reconciliation that schedules a `recovered` retry. Older `recovered` retry events, recorded before reconciliation carried this actor, show `agent:mcp`.
+- `agent:mcp`: an MCP caller that sent no actor header, for example an external MCP client. MCP treats every caller as an agent.
+- `system:voice-worker`: Voice transcription.
 
 ### Recorded events
 
@@ -47,7 +54,7 @@ Events are append-only. There is no update or delete API.
 | `inbox.processing.completed` / `.retry_scheduled` / `.failed` | inbox | `processing_attempt` | Attempt outcome recorded by the processor. |
 | `inbox.human_review.requested` / `.resolved` | inbox | `inbox_item` | Ambiguous work waiting for, then given, a user decision. |
 | `inbox.item.resolved` / `.discarded` | inbox | `inbox_item` | Final Inbox state. |
-| `mcp.action.requested` / `.completed` / `.failed` | mcp | `mcp_action` | Every mutation tool call (Tasks, Calendar, Finance). |
+| `mcp.action.requested` / `.completed` / `.failed` | mcp | `mcp_action` | Every mutation tool call (Tasks, Calendar, Finance). Read and search tools are not recorded. The Dashboard shows this domain as "Agent changes". |
 | `task.created` / `.updated` / `.completed` / `.reopened` | tasks | `task` | Every Task mutation, from the Dashboard or an agent. |
 
 Other domains (Calendar, Finance) do not record their own events yet. Their agent-driven changes still appear as `mcp.action.*` events.

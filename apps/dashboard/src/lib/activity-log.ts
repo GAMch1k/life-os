@@ -11,12 +11,24 @@ export type ActivityOutcome = components["schemas"]["ActivityOutcome"];
 
 export const OUTCOMES: ActivityOutcome[] = ["succeeded", "pending", "failed"];
 
-export const SOURCES = [
+/** What the agent's changes are, wherever the "mcp" domain is explained. */
+export const AGENT_CHANGES_DESCRIPTION =
+  "Changes the AI made through MCP, such as creating or completing Tasks. Its decisions, such as Human Review requests, appear under Inbox.";
+
+export const SOURCES: readonly {
+  value: string;
+  label: string;
+  description?: string;
+}[] = [
   { value: "voice", label: "Voice" },
   { value: "inbox", label: "Inbox" },
-  { value: "mcp", label: "Agent actions" },
+  {
+    value: "mcp",
+    label: "Agent changes",
+    description: AGENT_CHANGES_DESCRIPTION,
+  },
   { value: "tasks", label: "Tasks" },
-] as const;
+];
 
 export const SUBJECT_TYPES = [
   { value: "voice_job", label: "Voice recording" },
@@ -74,6 +86,10 @@ export function sourceLabel(source: string) {
   return (
     SOURCES.find((entry) => entry.value === source)?.label ?? humanize(source)
   );
+}
+
+export function sourceDescription(source: string | undefined) {
+  return SOURCES.find((entry) => entry.value === source)?.description;
 }
 
 const ACTOR_NAMES: Record<string, string> = {
@@ -204,6 +220,35 @@ export function activityHref(
 
 export function hasFilters(filters: ActivityFilters) {
   return FILTER_KEYS.some((key) => key !== "cursor" && filters[key]);
+}
+
+export type EmptyState = {
+  message: string;
+  /** A related view that explains or contains what the user looked for. */
+  link?: { label: string; href: string };
+};
+
+/** Why the event list is empty, specific to the active filters. */
+export function emptyState(filters: ActivityFilters): EmptyState {
+  if (!hasFilters(filters)) return { message: "No activity recorded yet." };
+  const narrowed = (
+    ["subjectType", "subjectId", "type", "outcome", "correlationId"] as const
+  ).some((key) => filters[key]);
+  if (filters.source === "mcp" && !narrowed) {
+    // Usually not a fault: the agent only shows up here when it changed
+    // something; its decisions are recorded by Inbox.
+    return {
+      message:
+        filters.fromDate || filters.toDate
+          ? "The agent hasn't changed anything in this range."
+          : "The agent hasn't changed anything yet.",
+      link: {
+        label: "Show Inbox activity",
+        href: activityHref(filters, { source: "inbox", cursor: undefined }),
+      },
+    };
+  }
+  return { message: "No activity matches these filters." };
 }
 
 // ---- Trace -----------------------------------------------------------------

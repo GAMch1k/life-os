@@ -11,12 +11,14 @@ import {
 import {
   activityHref,
   actorLabel,
+  emptyState,
   EVENT_TYPES,
   eventLabel,
   eventTime,
   hasFilters,
   OUTCOMES,
   SOURCES,
+  sourceDescription,
   sourceLabel,
   SUBJECT_TYPES,
   subjectLabel,
@@ -133,7 +135,11 @@ function Filters({ filters }: { filters: ActivityFilters }) {
         >
           <option value="">All domains</option>
           {SOURCES.map((source) => (
-            <option key={source.value} value={source.value}>
+            <option
+              key={source.value}
+              title={source.description}
+              value={source.value}
+            >
               {source.label}
             </option>
           ))}
@@ -234,6 +240,8 @@ function EventList({
   list: ActivityLog["list"];
   selectedId?: string;
 }) {
+  const empty = emptyState(filters);
+  const domain = sourceDescription(filters.source);
   const narrowed = filters.correlationId
     ? "Showing one workflow."
     : filters.subjectId
@@ -251,6 +259,14 @@ function EventList({
           </CardTitle>
           <CardDescription>
             Newest first.{" "}
+            {domain && (
+              <>
+                <span className="text-foreground font-medium">
+                  {sourceLabel(filters.source!)}:
+                </span>{" "}
+                {domain}{" "}
+              </>
+            )}
             {narrowed && (
               <>
                 {narrowed}{" "}
@@ -278,11 +294,17 @@ function EventList({
               Activity is unavailable right now.
             </p>
           ) : list.items.length === 0 ? (
-            <p className="text-muted-foreground py-6 text-center text-sm">
-              {hasFilters(filters)
-                ? "No activity matches these filters."
-                : "No activity recorded yet."}
-            </p>
+            <div className="space-y-2 py-6 text-center text-sm">
+              <p className="text-muted-foreground">{empty.message}</p>
+              {empty.link && (
+                <Link
+                  className="text-primary underline-offset-4 hover:underline"
+                  href={empty.link.href}
+                >
+                  {empty.link.label}
+                </Link>
+              )}
+            </div>
           ) : (
             <ol aria-label="Activity entries" className="divide-y">
               {list.items.map((event) => (

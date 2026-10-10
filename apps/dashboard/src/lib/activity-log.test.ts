@@ -3,11 +3,15 @@ import test from "node:test";
 
 import {
   activityHref,
+  actorLabel,
   buildTrace,
+  emptyState,
   eventLabel,
   listQuery,
   parseFilters,
   selectedEventId,
+  sourceDescription,
+  sourceLabel,
   type ActivityEvent,
 } from "./activity-log";
 
@@ -153,6 +157,49 @@ test("only a UUID can select an event", () => {
     "9c3b6f3e-1d1f-4e55-9c59-3a8a0b6a7e10",
   );
   assert.equal(selectedEventId({ event: "../../etc" }), undefined);
+});
+
+test("the agent's domain says what it records", () => {
+  assert.equal(sourceLabel("mcp"), "Agent changes");
+  assert.match(sourceDescription("mcp")!, /through MCP/);
+  assert.match(sourceDescription("mcp")!, /Human Review requests.*Inbox/);
+  assert.equal(sourceDescription("tasks"), undefined);
+  assert.equal(sourceDescription(undefined), undefined);
+});
+
+test("an empty list explains itself for the active filters", () => {
+  assert.deepEqual(emptyState({}), { message: "No activity recorded yet." });
+  assert.deepEqual(emptyState({ source: "tasks" }), {
+    message: "No activity matches these filters.",
+  });
+  // The agent's domain is empty until the agent changes something; its
+  // decisions are under Inbox, in the same range.
+  assert.deepEqual(
+    emptyState({ source: "mcp", fromDate: "2026-10-01", cursor: "abc" }),
+    {
+      message: "The agent hasn't changed anything in this range.",
+      link: {
+        label: "Show Inbox activity",
+        href: "/activity?source=inbox&fromDate=2026-10-01",
+      },
+    },
+  );
+  assert.equal(
+    emptyState({ source: "mcp" }).message,
+    "The agent hasn't changed anything yet.",
+  );
+  assert.deepEqual(emptyState({ source: "mcp", outcome: "failed" }), {
+    message: "No activity matches these filters.",
+  });
+});
+
+test("processor work reads as the Inbox processor", () => {
+  assert.equal(
+    actorLabel({ kind: "agent", name: "codex-inbox-processor" }),
+    "Inbox processor (Codex)",
+  );
+  assert.equal(actorLabel({ kind: "agent", name: "mcp" }), "Agent via MCP");
+  assert.equal(actorLabel({ kind: "user" }), "You");
 });
 
 test("agent actions name their tool", () => {
