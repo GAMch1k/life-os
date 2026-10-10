@@ -9,7 +9,7 @@ Every write (`POST`, `PUT`, `PATCH`, `DELETE`) to Finance, Tasks, Inbox, Calenda
 | Finance (`/api/finance`) | `GET /v1/accounts`, `GET /v1/categories`, `PATCH /v1/categories/{id}`, `GET/POST /v1/transactions`, `GET /v1/summaries/monthly?month=YYYY-MM`, `POST /v1/imports/csv` |
 | Tasks (`/api/tasks`) | `GET/POST /v1/tasks`, `GET/PATCH /v1/tasks/{id}`, `POST /v1/tasks/{id}/complete` |
 | Inbox (`/api/inbox`) | `GET/POST /v1/inbox-items`, `GET /v1/inbox-items/{id}`, `POST /resolve`, `POST /discard` |
-| Calendar (`/api/calendar`) | `GET/POST /v1/events`, `GET /v1/events/search?q=…`, `GET/PATCH/DELETE /v1/events/{id}`; see [Calendar](../services/calendar.md) |
+| Calendar (`/api/calendar`) | `GET/POST /v1/events`, `GET /v1/events/search?q=…`, `GET/PATCH/DELETE /v1/events/{id}`, `GET/POST /v1/sources`, `GET/PATCH/DELETE /v1/sources/{id}`, `POST /v1/sources/{id}/refresh`; see [Calendar](../services/calendar.md) |
 | Voice (`/api/voice`) | `POST /v1/audio-jobs` (multipart audio, returns 202), `GET /v1/audio-jobs/{id}` |
 | Activity (`/api/activity`, read-only) | `GET /v1/activity-events` (filters: `correlationId`, `subjectType`/`subjectId`, `type`, `source`, `outcome`, `from`/`to`), `GET /v1/activity-events/{id}`; recording is internal only — see [Activity](../services/activity.md) |
 | MCP (`/api/mcp`) | Streamable HTTP endpoint at `/mcp`; health and readiness probes |
