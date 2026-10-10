@@ -334,7 +334,7 @@ func (d *Dispatcher) dayEvents(ctx context.Context, day time.Time) ([]Event, Eve
 	}
 	events, err := d.events.EventsOn(ctx, day)
 	if err != nil {
-		d.logger.Warn("the morning summary is sent without events: Calendar is unavailable", "day", day.Format(time.DateOnly), "error", err)
+		d.logger.Warn("Calendar is unavailable: the morning summary lists no events", "day", day.Format(time.DateOnly), "error", err)
 		return nil, EventsUnavailable
 	}
 	return events, EventsListed
