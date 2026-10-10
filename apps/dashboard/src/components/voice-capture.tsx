@@ -7,8 +7,12 @@ import { Button } from "@/components/ui/button";
 import { voiceClient } from "@/lib/api";
 import {
   isVoiceJobTerminal,
+  pickRecordingType,
+  recordingFileName,
   type VoiceJob,
   voiceJobMessage,
+  voiceRecordingProblem,
+  voiceUploadError,
 } from "@/lib/voice-job-state";
 
 type CaptureState = "idle" | "recording" | "uploading" | "failed";
@@ -54,14 +58,21 @@ export function VoiceCapture() {
       setJob(undefined);
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       chunks.current = [];
-      const next = new MediaRecorder(stream);
+      // Ask for a format Voice accepts instead of the browser default.
+      const mimeType = pickRecordingType((type) =>
+        MediaRecorder.isTypeSupported(type),
+      );
+      const next = new MediaRecorder(
+        stream,
+        mimeType ? { mimeType } : undefined,
+      );
       next.ondataavailable = (event) => {
         if (event.data.size) chunks.current.push(event.data);
       };
       next.onstop = () => {
         stream.getTracks().forEach((track) => track.stop());
         pendingAudio.current = new Blob(chunks.current, {
-          type: next.mimeType || "audio/webm",
+          type: next.mimeType || mimeType || "",
         });
         void upload();
       };
@@ -84,21 +95,34 @@ export function VoiceCapture() {
   async function upload() {
     const audio = pendingAudio.current;
     if (!audio) return;
+    // An unusable recording cannot be retried; Retry records a new one.
+    const problem = voiceRecordingProblem(audio.size);
+    if (problem) {
+      pendingAudio.current = undefined;
+      setState("failed");
+      setMessage(problem);
+      return;
+    }
     setState("uploading");
+    let status: number | undefined;
     try {
       const body = new FormData();
-      body.append("audio", audio, "voice-capture.webm");
+      body.append("audio", audio, recordingFileName(audio.type));
       body.append("source", "web");
-      const { data, error } = await voiceClient.POST("/v1/audio-jobs", {
-        body: body as never,
-      });
+      const { data, error, response } = await voiceClient.POST(
+        "/v1/audio-jobs",
+        { body: body as never },
+      );
+      status = response.status;
       if (!data || error) throw new Error("upload failed");
       setJob(data);
       setState("idle");
       setMessage(voiceJobMessage(data));
     } catch {
+      const failure = voiceUploadError(status, audio.size);
+      if (!failure.retryable) pendingAudio.current = undefined;
       setState("failed");
-      setMessage("Could not upload this recording. Try sending it again.");
+      setMessage(failure.message);
     }
   }
   function retry() {
