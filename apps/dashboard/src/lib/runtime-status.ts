@@ -1083,6 +1083,16 @@ const processorStatusUrl = normalizeServiceUrl(
   process.env.PROCESSOR_STATUS_URL ?? "http://localhost:8091",
 );
 
+/**
+ * The monitor (docs/services/monitor.md) has no API of its own. It is listed
+ * under Services so that a stopped monitor, which means no status
+ * notifications, shows here.
+ */
+const monitorUrl = normalizeServiceUrl(
+  "MONITOR_SERVICE_URL",
+  process.env.MONITOR_SERVICE_URL ?? "http://localhost:8088",
+);
+
 async function getJson<T>(url: string): Promise<T | null> {
   try {
     const response = await fetch(url, {
@@ -1153,14 +1163,15 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
       .GET("/v1/google/calendars", timeout)
       .then(({ data }) => data?.items ?? null)
       .catch(() => null),
-    Promise.all(
-      (Object.keys(SERVICE_NAMES) as (keyof typeof serviceBaseUrls)[]).map(
+    Promise.all([
+      ...(Object.keys(SERVICE_NAMES) as (keyof typeof serviceBaseUrls)[]).map(
         async (key) => ({
           name: SERVICE_NAMES[key],
           ready: await ready(serviceBaseUrls[key]),
         }),
       ),
-    ),
+      ready(monitorUrl).then((ok) => ({ name: "Monitor", ready: ok })),
+    ]),
   ]);
   return toRuntimeStatus(
     {
