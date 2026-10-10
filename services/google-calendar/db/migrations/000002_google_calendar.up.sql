@@ -182,7 +182,7 @@ CREATE TABLE google_pushes (
     last_error TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT google_pushes_payload_check CHECK (deleted OR payload IS NOT NULL)
+    CONSTRAINT google_pushes_deleted_check CHECK (deleted OR payload IS NOT NULL)
 );
 
 CREATE INDEX google_pushes_calendar_idx ON google_pushes (calendar_id);

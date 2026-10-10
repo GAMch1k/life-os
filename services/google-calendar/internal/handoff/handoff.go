@@ -112,14 +112,14 @@ func Run(ctx context.Context, legacy, target *pgxpool.Pool) (Counts, error) {
 			count: &counts.Calendars,
 		},
 		{
-			name:   "google_oauth_states",
-			read:   `SELECT state_hash, code_verifier, expires_at, created_at FROM google_oauth_states WHERE expires_at > now()`,
-			count:  &counts.States,
+			name:  "google_oauth_states",
+			read:  `SELECT state_hash, code_verifier, expires_at, created_at FROM google_oauth_states WHERE expires_at > now()`,
+			count: &counts.States,
 		},
 		{
-			name:   "google_events",
-			read:   `SELECT calendar_id, event_id, recurring_event_id, data, updated_at FROM google_events`,
-			count:  &counts.Events,
+			name:  "google_events",
+			read:  `SELECT calendar_id, event_id, recurring_event_id, data, updated_at FROM google_events`,
+			count: &counts.Events,
 		},
 		{
 			// The export links with Google's etags; a lease does not carry
@@ -140,7 +140,7 @@ func Run(ctx context.Context, legacy, target *pgxpool.Pool) (Counts, error) {
 			       JOIN calendar_sources AS source ON source.id = event.source_id AND source.integration = 'google-calendar'
 			       JOIN google_calendars AS calendar ON calendar.id = source.google_calendar_id
 			       WHERE event.external_uid IS NOT NULL`,
-			count:  &counts.SentEvents,
+			count: &counts.SentEvents,
 		},
 	}
 	for _, step := range tables {

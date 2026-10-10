@@ -169,10 +169,12 @@ WHERE id = sqlc.arg(id) AND sync_enabled
 RETURNING *;
 
 -- name: MarkGoogleCalendarDue :exec
--- Makes one calendar due now (Google's answer to a write is to reach
--- Calendar soon).
-UPDATE google_calendars SET next_sync_at = sqlc.arg(now)::timestamptz
-WHERE id = sqlc.arg(id) AND sync_enabled AND (next_sync_at IS NULL OR next_sync_at > sqlc.arg(now)::timestamptz);
+-- Makes one calendar due now and its events derived again at that sync:
+-- Google's answer to one of this service's writes is stored, and is to
+-- reach Calendar right away (the listing then only echoes it).
+UPDATE google_calendars
+SET next_sync_at = LEAST(COALESCE(next_sync_at, sqlc.arg(now)::timestamptz), sqlc.arg(now)::timestamptz), derived_at = NULL
+WHERE id = sqlc.arg(id) AND sync_enabled;
 
 -- name: MarkGoogleCalendarsDue :exec
 -- Makes the connection's synced calendars due now (after a reconnect).

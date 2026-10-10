@@ -975,8 +975,9 @@ func (q *Queries) LockGoogleCalendar(ctx context.Context, id pgtype.UUID) (Googl
 }
 
 const markGoogleCalendarDue = `-- name: MarkGoogleCalendarDue :exec
-UPDATE google_calendars SET next_sync_at = $1::timestamptz
-WHERE id = $2 AND sync_enabled AND (next_sync_at IS NULL OR next_sync_at > $1::timestamptz)
+UPDATE google_calendars
+SET next_sync_at = LEAST(COALESCE(next_sync_at, $1::timestamptz), $1::timestamptz), derived_at = NULL
+WHERE id = $2 AND sync_enabled
 `
 
 type MarkGoogleCalendarDueParams struct {
@@ -984,8 +985,9 @@ type MarkGoogleCalendarDueParams struct {
 	ID  pgtype.UUID
 }
 
-// Makes one calendar due now (Google's answer to a write is to reach
-// Calendar soon).
+// Makes one calendar due now and its events derived again at that sync:
+// Google's answer to one of this service's writes is stored, and is to
+// reach Calendar right away (the listing then only echoes it).
 func (q *Queries) MarkGoogleCalendarDue(ctx context.Context, arg MarkGoogleCalendarDueParams) error {
 	_, err := q.db.Exec(ctx, markGoogleCalendarDue, arg.Now, arg.ID)
 	return err

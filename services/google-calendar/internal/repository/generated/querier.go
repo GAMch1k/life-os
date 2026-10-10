@@ -123,8 +123,9 @@ type Querier interface {
 	// started_at): their events no longer exist.
 	ListUnseenGoogleExports(ctx context.Context, arg ListUnseenGoogleExportsParams) ([]GoogleExport, error)
 	LockGoogleCalendar(ctx context.Context, id pgtype.UUID) (GoogleCalendar, error)
-	// Makes one calendar due now (Google's answer to a write is to reach
-	// Calendar soon).
+	// Makes one calendar due now and its events derived again at that sync:
+	// Google's answer to one of this service's writes is stored, and is to
+	// reach Calendar right away (the listing then only echoes it).
 	MarkGoogleCalendarDue(ctx context.Context, arg MarkGoogleCalendarDueParams) error
 	// Makes the connection's synced calendars due now (after a reconnect).
 	MarkGoogleCalendarsDue(ctx context.Context, arg MarkGoogleCalendarsDueParams) error
