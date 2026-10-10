@@ -141,6 +141,19 @@ func (c apiClient) seed(params store.CreateEventParams) store.Event {
 	return item
 }
 
+// newSource registers a calendar source (imported events must belong to
+// one) without refreshing it.
+func (c apiClient) newSource(name string) googleuuid.UUID {
+	c.t.Helper()
+	source, err := c.queries.CreateSource(context.Background(), store.CreateSourceParams{
+		Kind: "ics", Name: name, Url: "https://calendar.example.org/" + name + ".ics", Enabled: true, FilterInclude: []string{}, FilterExclude: []string{},
+	})
+	if err != nil {
+		c.t.Fatalf("source %q: %v", name, err)
+	}
+	return source.ID.Bytes
+}
+
 func timedParams(title, start string, minutes int) store.CreateEventParams {
 	begin := *instant(start)
 	return store.CreateEventParams{Title: title, StartAt: pgtype.Timestamptz{Time: begin, Valid: true}, EndAt: pgtype.Timestamptz{Time: begin.Add(time.Duration(minutes) * time.Minute), Valid: true}}
@@ -307,7 +320,7 @@ func TestListPagesWithACursor(t *testing.T) {
 
 func TestSearchFindsEventsAcrossMonths(t *testing.T) {
 	c := newAPIClient(t)
-	zaw, other := googleuuid.New(), googleuuid.New()
+	zaw, other := c.newSource("zaw"), googleuuid.New()
 	description := func(params store.CreateEventParams, text string) store.CreateEventParams {
 		params.Description = &text
 		return params
@@ -391,7 +404,7 @@ func TestSearchFindsEventsAcrossMonths(t *testing.T) {
 
 func TestImportedEventsSitAlongsideUserEvents(t *testing.T) {
 	c := newAPIClient(t)
-	feed := googleuuid.New()
+	feed := c.newSource("zaw")
 	imported := c.seed(importedParams(feed, "zaw-bio-17", "Bioabfall", "2026-11-17T05:00:00Z"))
 	gone := importedParams(feed, "zaw-bio-03", "Bioabfall", "2026-11-03T05:00:00Z")
 	gone.Status, gone.CancelledAt, gone.RemovedFromSourceAt = "cancelled", pgtype.Timestamptz{Time: fixedNow, Valid: true}, pgtype.Timestamptz{Time: fixedNow, Valid: true}

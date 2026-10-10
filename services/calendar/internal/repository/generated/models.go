@@ -8,6 +8,29 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type CalendarSource struct {
+	ID                  pgtype.UUID
+	Kind                string
+	Name                string
+	Url                 string
+	Enabled             bool
+	FilterInclude       []string
+	FilterExclude       []string
+	DefaultReminders    []byte
+	NextRefreshAt       pgtype.Timestamptz
+	RefreshingUntil     pgtype.Timestamptz
+	LastAttemptAt       pgtype.Timestamptz
+	LastSuccessAt       pgtype.Timestamptz
+	LastOutcome         *string
+	LastError           *string
+	LastCounts          []byte
+	ConsecutiveFailures int32
+	Etag                *string
+	LastModified        *string
+	CreatedAt           pgtype.Timestamptz
+	UpdatedAt           pgtype.Timestamptz
+}
+
 type Event struct {
 	ID                       pgtype.UUID
 	Title                    string

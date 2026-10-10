@@ -11,15 +11,38 @@ import (
 )
 
 type Querier interface {
+	// Takes the source's refresh lease: one refresh per source at a time, across
+	// processes too. A lease left by a crashed refresh expires and is taken over.
+	ClaimSourceRefresh(ctx context.Context, arg ClaimSourceRefreshParams) (CalendarSource, error)
 	// A replay with the same automation idempotency key returns the original row.
 	CreateEvent(ctx context.Context, arg CreateEventParams) (Event, error)
+	CreateSource(ctx context.Context, arg CreateSourceParams) (CalendarSource, error)
 	DeleteEvent(ctx context.Context, id pgtype.UUID) (int64, error)
+	// Also deletes the source's imported events (ON DELETE CASCADE).
+	DeleteSource(ctx context.Context, id pgtype.UUID) (int64, error)
+	// Records a refresh outcome (the whole new state, computed by the caller
+	// under LockSource) and releases the lease.
+	FinishSourceRefresh(ctx context.Context, arg FinishSourceRefreshParams) (CalendarSource, error)
 	GetEvent(ctx context.Context, id pgtype.UUID) (Event, error)
+	GetSource(ctx context.Context, id pgtype.UUID) (CalendarSource, error)
+	InsertImportedEvent(ctx context.Context, arg InsertImportedEventParams) error
+	// Enabled sources whose next refresh is due and that nobody is refreshing.
+	ListDueSources(ctx context.Context, now pgtype.Timestamptz) ([]pgtype.UUID, error)
 	// Events overlapping [range_start, range_end). An all-day event spans from
 	// midnight of its first day to midnight after its last day in time_zone, so
 	// its dates are matched as the owner's days. The after_* arguments are the
 	// previous page's last row: a keyset cursor over exactly the ORDER BY.
 	ListEvents(ctx context.Context, arg ListEventsParams) ([]ListEventsRow, error)
+	// Imported events are written only by Calendar's source adapter, inside the
+	// refresh transaction that holds LockSource.
+	ListSourceEvents(ctx context.Context, sourceID pgtype.UUID) ([]Event, error)
+	ListSourceReminderDefaults(ctx context.Context) ([]ListSourceReminderDefaultsRow, error)
+	ListSources(ctx context.Context) ([]CalendarSource, error)
+	LockSource(ctx context.Context, id pgtype.UUID) (CalendarSource, error)
+	// The event left its source: cancelled, kept as history, and marked removed.
+	MarkImportedEventRemoved(ctx context.Context, arg MarkImportedEventRemovedParams) error
+	// Gives the lease up after a refresh that could not record an outcome.
+	ReleaseSourceRefresh(ctx context.Context, id pgtype.UUID) error
 	// Events whose title, description, or location contain every pattern (ILIKE
 	// patterns, already escaped). Relevance weighs a pattern found in the title
 	// 3, in the location 2, in the description 1. Then events not over at the
@@ -31,6 +54,14 @@ type Querier interface {
 	// read-merge-write optimistic: a concurrent change makes it match nothing.
 	// Source identity is never updated.
 	UpdateEvent(ctx context.Context, arg UpdateEventParams) (Event, error)
+	// Rewrites an imported event from its source (also restoring one the source
+	// had removed). The owner's reminder override and the source identity stay.
+	UpdateImportedEvent(ctx context.Context, arg UpdateImportedEventParams) error
+	// Writes the whole merged configuration, guarded by the updated_at it was
+	// read with. reset_validators drops the conditional-request validators (a
+	// changed URL or filter needs a full download); next_refresh_at, when given,
+	// reschedules the source.
+	UpdateSource(ctx context.Context, arg UpdateSourceParams) (CalendarSource, error)
 }
 
 var _ Querier = (*Queries)(nil)
