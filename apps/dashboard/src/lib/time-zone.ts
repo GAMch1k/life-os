@@ -1,14 +1,24 @@
-// The owner's timezone (LIFE_OS_TIMEZONE, an IANA name such as Europe/Berlin).
-// Every "today", day grouping, and displayed date or time in the Dashboard uses
-// it, on the server and in the browser alike, so server-rendered and hydrated
-// output agree regardless of the browser's own timezone or language.
+// The timezone the Dashboard shows dates and times in: the owner's browser
+// zone when the browser has reported it (the `lifeos-tz` cookie, see
+// TimeZoneSync), else LIFE_OS_TIMEZONE (an IANA name such as Europe/Berlin),
+// else UTC. The server resolves it once per request (user-time-zone.ts) and
+// passes it to client components as a prop, so every "today", day grouping,
+// and displayed date or time agrees between the server HTML and the hydrated
+// page, whatever the browser's language. Stored data stays UTC instants.
 
 export const DEFAULT_TIME_ZONE = "UTC";
 
 /** Fixed formatting locale, so server and browser render identical text. */
 export const DATE_LOCALE = "en-GB";
 
+/** Cookie holding the browser's IANA timezone, written by TimeZoneSync. */
+export const TIME_ZONE_COOKIE = "lifeos-tz";
+
+/** A year, in seconds: the browser rewrites the cookie when it changes. */
+const TIME_ZONE_COOKIE_MAX_AGE = 365 * 24 * 60 * 60;
+
 export function isValidTimeZone(timeZone: string) {
+  if (!timeZone.trim()) return false;
   try {
     new Intl.DateTimeFormat("en-US", { timeZone });
     return true;
@@ -17,12 +27,64 @@ export function isValidTimeZone(timeZone: string) {
   }
 }
 
-/** Server only: the configured timezone, or UTC when unset or invalid. */
-export function userTimeZone() {
-  const configured = process.env.LIFE_OS_TIMEZONE?.trim();
-  return configured && isValidTimeZone(configured)
-    ? configured
-    : DEFAULT_TIME_ZONE;
+/** The first valid IANA timezone among the candidates, else UTC. */
+export function resolveTimeZone(...candidates: (string | null | undefined)[]) {
+  for (const candidate of candidates) {
+    const timeZone = candidate?.trim();
+    if (timeZone && isValidTimeZone(timeZone)) return timeZone;
+  }
+  return DEFAULT_TIME_ZONE;
+}
+
+/** Browser only (events and effects): the device's timezone, if valid. */
+export function browserTimeZone() {
+  try {
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return timeZone && isValidTimeZone(timeZone) ? timeZone : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The `document.cookie` assignment that stores the browser's timezone. */
+export function timeZoneCookie(timeZone: string) {
+  return `${TIME_ZONE_COOKIE}=${encodeURIComponent(timeZone)}; Path=/; Max-Age=${TIME_ZONE_COOKIE_MAX_AGE}; SameSite=Lax`;
+}
+
+/** The timezone stored in a `document.cookie` string, if any. */
+export function storedTimeZone(cookie: string) {
+  for (const pair of cookie.split(/;\s*/)) {
+    const [name, ...value] = pair.split("=");
+    if (name === TIME_ZONE_COOKIE) {
+      try {
+        return decodeURIComponent(value.join("="));
+      } catch {
+        return undefined;
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * What TimeZoneSync does about the browser's timezone: store it when the
+ * cookie holds something else, and re-render (refresh) when the page was
+ * rendered in another zone. When the cookie already holds the browser's zone
+ * but the server still rendered another, the server cannot use it (for
+ * example its ICU lacks that zone), so refreshing again would loop.
+ */
+export function timeZoneSync({
+  browser,
+  rendered,
+  stored,
+}: {
+  browser: string | undefined;
+  rendered: string;
+  stored: string | undefined;
+}) {
+  if (!browser) return { store: false, refresh: false };
+  const store = stored !== browser;
+  return { store, refresh: store && rendered !== browser };
 }
 
 const formats = new Map<string, Intl.DateTimeFormat>();

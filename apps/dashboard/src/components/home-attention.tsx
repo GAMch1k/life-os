@@ -23,13 +23,16 @@ function plural(count: number, more: boolean, noun: string) {
 /**
  * Home's summaries under the capture card. `humanReviewCount` is the true
  * count from the Inbox backlog; the review list itself is only a preview.
+ * `timeZone` is the zone the page renders times in.
  */
 export function HomeAttentionSurface({
   attention,
   humanReviewCount,
+  timeZone,
 }: {
   attention: HomeAttention;
   humanReviewCount?: number;
+  timeZone: string;
 }) {
   const { humanReview, nextEvent, unscheduled, urgent } = attention;
   const urgentItems: AttentionItem[] = urgent
@@ -98,7 +101,7 @@ export function HomeAttentionSurface({
             ? "Calendar is unavailable right now."
             : nextEvent.kind === "none"
               ? "Nothing scheduled in the next 30 days."
-              : eventTimeLabel(nextEvent.event)
+              : eventTimeLabel(nextEvent.event, timeZone)
         }
         items={
           nextEvent?.kind === "event"

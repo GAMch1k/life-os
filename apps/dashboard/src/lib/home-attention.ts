@@ -9,8 +9,8 @@ import {
   dayKey,
   DEFAULT_TIME_ZONE,
   startOfDay,
-  userTimeZone,
 } from "@/lib/time-zone";
+import { userTimeZone } from "@/lib/user-time-zone";
 
 // Home is a read-only projection over the owning services' list APIs. It only
 // decides what to surface; every change happens in the dedicated workspaces.
@@ -99,7 +99,7 @@ export function unavailableOnFailure<T>(request: Promise<ListResult<T>>) {
 
 export async function getHomeAttention(): Promise<HomeAttention> {
   const now = new Date();
-  const timeZone = userTimeZone();
+  const timeZone = await userTimeZone();
   const eventWindowEnd = new Date(now);
   eventWindowEnd.setUTCDate(eventWindowEnd.getUTCDate() + 30);
   const [review, urgent, open, events] = await Promise.all([

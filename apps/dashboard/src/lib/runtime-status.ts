@@ -3,11 +3,8 @@ import { inboxClient } from "@/lib/api/inbox-client";
 import type { components as InboxComponents } from "@/lib/api/generated/inbox";
 import type { components as VoiceComponents } from "@/lib/api/generated/voice";
 import { voiceClient } from "@/lib/api/voice-client";
-import {
-  DEFAULT_TIME_ZONE,
-  dateTimeFormat,
-  userTimeZone,
-} from "@/lib/time-zone";
+import { DEFAULT_TIME_ZONE, dateTimeFormat } from "@/lib/time-zone";
+import { configuredTimeZone, userTimeZone } from "@/lib/user-time-zone";
 
 // The Status page turns supported runtime state into actionable checks:
 // - the processor's private /status endpoint (what the running process saw),
@@ -21,7 +18,10 @@ export type AudioBacklog = VoiceComponents["schemas"]["AudioBacklog"];
 /** Mirrors `Status` in services/mcp/internal/processor/status.go. */
 export type ProcessorStatus = {
   model: string;
-  /** The owner's timezone the planner resolves relative dates in. */
+  /**
+   * The planner's fallback timezone (its LIFE_OS_TIMEZONE), for captures
+   * whose source metadata names no browser timezone.
+   */
   timeZone?: string;
   startedAt: string;
   poll: {
@@ -207,7 +207,7 @@ export type RuntimeSignals = {
 
 export type RuntimeStatus = {
   checkedAt: string;
-  /** The owner's timezone every time on the page is shown in. */
+  /** The timezone every time on the page is shown in. */
   timeZone: string;
   overall: CheckState;
   checks: StatusCheck[];
@@ -253,9 +253,23 @@ function worst(states: CheckState[]): CheckState {
   );
 }
 
+/**
+ * Captures are planned in their browser's timezone, else the processor's
+ * configured one. That the page is shown in another (the viewer's browser)
+ * is expected; a processor configured differently from the Dashboard's
+ * LIFE_OS_TIMEZONE is worth pointing out.
+ */
+function planningTimeZone(processorZone: string, configured: string) {
+  const fallback = `capture's browser timezone, else ${processorZone}`;
+  return processorZone === configured
+    ? fallback
+    : `${fallback} (the Dashboard's LIFE_OS_TIMEZONE is ${configured})`;
+}
+
 function processingCheck(
   processor: ProcessorStatus | null,
   timeZone: string,
+  configured: string,
 ): StatusCheck {
   const base = { id: "processing" as const, title: "Automatic processing" };
   if (!processor) {
@@ -274,11 +288,8 @@ function processingCheck(
     ...(processor.timeZone
       ? [
           {
-            label: "Timezone",
-            value:
-              processor.timeZone === timeZone
-                ? processor.timeZone
-                : `${processor.timeZone} (Dashboard uses ${timeZone})`,
+            label: "Planning timezone",
+            value: planningTimeZone(processor.timeZone, configured),
           },
         ]
       : []),
@@ -562,9 +573,10 @@ export function toRuntimeStatus(
   signals: RuntimeSignals,
   now: Date,
   timeZone: string = DEFAULT_TIME_ZONE,
+  configured: string = timeZone,
 ): RuntimeStatus {
   const checks = [
-    processingCheck(signals.processor, timeZone),
+    processingCheck(signals.processor, timeZone, configured),
     inboxCheck(signals.inbox, now, timeZone),
     voiceCheck(signals.voice, now, timeZone),
     servicesCheck(signals.services),
@@ -650,6 +662,7 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
   return toRuntimeStatus(
     { processor, inbox, voice, services },
     new Date(),
-    userTimeZone(),
+    await userTimeZone(),
+    configuredTimeZone(),
   );
 }

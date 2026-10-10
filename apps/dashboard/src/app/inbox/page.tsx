@@ -8,7 +8,7 @@ import {
 } from "@/components/inbox-summary";
 import { getHumanReviewItems } from "@/lib/human-review";
 import { getInboxOverview } from "@/lib/inbox-summary";
-import { userTimeZone } from "@/lib/time-zone";
+import { userTimeZone } from "@/lib/user-time-zone";
 
 export const dynamic = "force-dynamic";
 
@@ -16,12 +16,12 @@ export const dynamic = "force-dynamic";
 // (decisions), Pending (automatic work, including scheduled retries), Failed
 // (automatic processing gave up), and Recently processed.
 export default async function InboxPage() {
-  const [overview, humanReview] = await Promise.all([
+  const [overview, humanReview, timeZone] = await Promise.all([
     getInboxOverview(),
     getHumanReviewItems(),
+    userTimeZone(),
   ]);
   const { backlog, failed, pending, processed } = overview;
-  const timeZone = userTimeZone();
   const renderedAt = new Date().toISOString();
   const now = new Date(renderedAt);
   const unavailable =
