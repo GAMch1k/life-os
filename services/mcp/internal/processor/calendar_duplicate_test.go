@@ -295,13 +295,13 @@ func (f filteringTools) Call(ctx context.Context, name string, args map[string]a
 func TestTheDuplicateGuardNeverTouchesEventsManagedByTheirSource(t *testing.T) {
 	// Feed and read-only Google events are their source's: a capture of the
 	// same title and time still creates a Life OS event.
-	ics := timedEvent("event-ics", "Restmüll", "2026-10-12T04:00:00Z", "2026-10-12T05:00:00Z")
-	ics["source"] = map[string]any{"kind": "ics", "name": "ZAW"}
+	feed := timedEvent("event-feed", "Restmüll", "2026-10-12T04:00:00Z", "2026-10-12T05:00:00Z")
+	feed["source"] = map[string]any{"kind": "external", "integration": "calendar-feeds", "provider": "ZAW", "name": "ZAW", "readOnly": true}
 	google := timedEvent("event-google", "Restmüll", "2026-10-12T04:00:00Z", "2026-10-12T05:00:00Z")
-	google["source"] = map[string]any{"kind": "google", "name": "Holidays"}
+	google["source"] = map[string]any{"kind": "external", "integration": "google-calendar", "provider": "Google", "name": "Holidays", "readOnly": true}
 	google["editable"] = false
 	tools := newCalendarTools("Monday at 6 Restmüll, remind me the evening before")
-	restates(tools, "Restmüll", ics, google)
+	restates(tools, "Restmüll", feed, google)
 	runner := Runner{Planner: fakePlanner{output: `{"actions":[{"tool":"calendar_create","arguments":{"title":"Restmüll","allDay":false,"startAt":"2026-10-12T06:00:00+02:00","reminders":[{"kind":"localTime","daysBefore":1,"localTime":"19:00"}]}}],"confidence":0.95}`}, Tools: filteringTools{tools}, Model: "test", TimeZone: berlin(t)}
 	if _, err := runner.Run(context.Background()); err != nil {
 		t.Fatal(err)

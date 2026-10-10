@@ -600,17 +600,17 @@ func TestOtherCalendarConflictsAreStillRetried(t *testing.T) {
 	}
 }
 
-// Events synced from Google Calendar (source.kind google) sync both ways:
-// the processor's search asks Calendar for the events it may change
-// (editable), which includes Google events of calendars the owner may edit,
-// so a single Google event is changed like a Life OS event (Calendar writes
-// it to Google). A change Calendar refuses because the event is read-only
-// in Google (409 google_read_only) goes to Human Review instead of
-// technical retry, and Google being unreachable or the connection expired
-// is a dependency to wait for.
+// Events of Google calendars the google-calendar integration syncs
+// (source.kind external) sync both ways: the processor's search asks
+// Calendar for the events it may change (editable), which includes the
+// events of Google calendars the owner may edit, so a single Google event is
+// changed like a Life OS event (the integration writes it to Google). A
+// change Calendar refuses because the event is read-only (409
+// managed_by_source, such as a Google calendar the owner can only read)
+// goes to Human Review instead of technical retry.
 func TestAnEditableGoogleEventIsChangedLikeALifeOSEvent(t *testing.T) {
 	synced := timedEvent("event-google", "Team sync", "2026-10-16T13:00:00Z", "2026-10-16T14:00:00Z")
-	synced["source"] = map[string]any{"kind": "google", "name": "Work", "externalUid": "abc123"}
+	synced["source"] = googleSource("abc123")
 	synced["editable"] = true
 
 	tools := newCalendarTools("Move the team sync to Monday at 9", synced)
@@ -628,7 +628,7 @@ func TestAnEditableGoogleEventIsChangedLikeALifeOSEvent(t *testing.T) {
 
 	// A recurring Google event is changed only in the Calendar, like any.
 	series := timedEvent("event-standup", "Standup", "2026-10-12T07:00:00Z", "2026-10-12T07:15:00Z")
-	series["source"] = map[string]any{"kind": "google", "name": "Work", "externalUid": "standup"}
+	series["source"] = googleSource("standup")
 	series["occurrence"] = map[string]any{"seriesId": "event-standup", "recurrenceId": "2026-10-12T07:00:00Z"}
 	tools = newCalendarTools("Move the standup to 10", series)
 	tools.matches["standup"] = []string{"event-standup"}
@@ -640,10 +640,10 @@ func TestAnEditableGoogleEventIsChangedLikeALifeOSEvent(t *testing.T) {
 
 func TestAReadOnlyGoogleEventGoesToHumanReviewNotRetry(t *testing.T) {
 	synced := timedEvent("event-google", "Team sync", "2026-10-16T13:00:00Z", "2026-10-16T14:00:00Z")
-	synced["source"] = map[string]any{"kind": "google", "name": "Work", "externalUid": "abc123"}
+	synced["source"] = googleSource("abc123")
 	tools := newCalendarTools("Cancel the team sync", synced)
 	approvedItem(tools, map[string]any{"tool": "calendar_cancel", "arguments": map[string]any{"eventQuery": "team sync", "taskId": "event-google"}})
-	tools.failTool = map[string]error{"calendar_cancel": errors.New(`MCP tool calendar_cancel rejected: service returned 409: {"error":{"code":"google_read_only","message":"“Work” is a Google calendar you can only read"}}`)}
+	tools.failTool = map[string]error{"calendar_cancel": errors.New(`MCP tool calendar_cancel rejected: service returned 409: {"error":{"code":"managed_by_source","message":"“Work” is a Google calendar you can only read. Its reminders and priority can still be changed here."}}`)}
 	runner := Runner{Planner: fakePlanner{err: errors.New("not planned")}, Tools: tools, Model: "test", TimeZone: berlin(t)}
 	if _, err := runner.Run(context.Background()); err != nil {
 		t.Fatal(err)
@@ -658,14 +658,8 @@ func TestAReadOnlyGoogleEventGoesToHumanReviewNotRetry(t *testing.T) {
 	}
 }
 
-func TestGoogleUnreachableIsADependencyFailure(t *testing.T) {
-	for _, code := range []string{"google_unavailable", "google_expired"} {
-		err := errors.New(`MCP tool calendar_update rejected: service returned 409: {"error":{"code":"` + code + `"}}`)
-		if kind := classifyActionError(err); kind != failureDependency {
-			t.Errorf("%s classified as %v", code, kind)
-		}
-	}
-	if kind := classifyActionError(errors.New(`MCP tool calendar_update rejected: service returned 409: {"error":{"code":"google_conflict"}}`)); kind != failureModelOutput {
-		t.Errorf("google_conflict classified as %v", kind)
-	}
+// googleSource is the source of an event the google-calendar integration
+// syncs from the owner's "Work" calendar.
+func googleSource(uid string) map[string]any {
+	return map[string]any{"kind": "external", "integration": "google-calendar", "provider": "Google", "name": "Work", "externalUid": uid}
 }

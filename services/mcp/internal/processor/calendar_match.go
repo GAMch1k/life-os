@@ -159,9 +159,10 @@ func (r Runner) location(item inboxItem) *time.Location {
 // (in the owner's timezone), so last year's appointment of the same name
 // never makes a capture ambiguous; cancelled events are left out by
 // Calendar. Calendar is asked only for editable events: Life OS events and
-// Google events of calendars the owner may edit (written to Google). Feed
-// (ICS) events, read-only Google calendars, and occurrences of Google rules
-// Calendar cannot hold are managed by their source, so they are never
+// the events of integrations' sources that accept changes (such as Google
+// calendars the owner may edit; the integration writes the change to the
+// provider). Feed events, read-only Google calendars, and occurrences of
+// rules Calendar cannot hold are managed by their source, so they are never
 // candidates. The caller acts only on exactly one.
 //
 // A recurring event is found as one occurrence (search items carry
@@ -211,8 +212,8 @@ func (r Runner) findEvents(ctx context.Context, item inboxItem, action plannedAc
 }
 
 // changeableEvents is the Calendar search filter for the events the AI may
-// change: Life OS events. Imported (ICS, Google) events are managed by
-// their source. Every event lookup of the processor uses it.
+// change (editable): Life OS events and those of integrations' sources that
+// accept changes. Every event lookup of the processor uses it.
 var changeableEvents = url.Values{"editable": {"true"}}
 
 // searchEvents runs one calendar_search among the events the AI may change
@@ -587,11 +588,11 @@ func eventWhen(event map[string]any, location *time.Location) string {
 const managedBySourceReason = "This event is managed by its source and can't be changed by capture"
 
 // managedBySource reports whether Calendar refused a change because the
-// event is imported from a feed (409 managed_by_source) or read-only in
-// Google (409 google_read_only, such as a calendar the owner can only
-// read). Retrying cannot help.
+// event belongs to a source that does not accept it, such as a feed or a
+// Google calendar the owner can only read (409 managed_by_source). Retrying
+// cannot help.
 func managedBySource(err error) bool {
-	return err != nil && (strings.Contains(err.Error(), "managed_by_source") || strings.Contains(err.Error(), "google_read_only"))
+	return err != nil && strings.Contains(err.Error(), "managed_by_source")
 }
 
 // calendarReviewReason tells the owner, in the Human Review queue, what the

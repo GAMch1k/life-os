@@ -98,7 +98,7 @@ func addCalendarTools(s *mcp.Server, hc *http.Client, baseURL string, emitter *a
 			return post(ctx, hc, trace, baseURL, "/v1/events", in, in.IdempotencyKey)
 		})
 	})
-	mcp.AddTool(s, &mcp.Tool{Name: "calendar_update", Description: "Reschedule or edit one existing Calendar event: only the given fields change, and clear removes optional fields. A Life OS event is exported to Google afterwards; a Google event (of a calendar the owner may edit) is changed in Google first and the call fails if Google refuses or changed it meanwhile"}, func(ctx context.Context, req *mcp.CallToolRequest, in eventMutation) (*mcp.CallToolResult, Output, error) {
+	mcp.AddTool(s, &mcp.Tool{Name: "calendar_update", Description: "Reschedule or edit one existing Calendar event: only the given fields change, and clear removes optional fields. The change is stored in Calendar; the integrations follow it afterwards (a Life OS event is exported to Google, and an event of a calendar an integration syncs that accepts changes, such as a Google calendar the owner may edit, is written to its provider). Events of read-only sources, such as feeds, allow only their reminders and priority"}, func(ctx context.Context, req *mcp.CallToolRequest, in eventMutation) (*mcp.CallToolResult, Output, error) {
 		return audited(ctx, emitter, req, "calendar_update", in, func(trace activity.Trace) (*mcp.CallToolResult, Output, error) {
 			path, err := eventPath(in.EventID)
 			if err != nil {
@@ -111,7 +111,7 @@ func addCalendarTools(s *mcp.Server, hc *http.Client, baseURL string, emitter *a
 			return patch(ctx, hc, trace, baseURL, path, body)
 		})
 	})
-	mcp.AddTool(s, &mcp.Tool{Name: "calendar_cancel", Description: "Cancel one existing Calendar event, or with recurrenceId only that occurrence of a recurring event; it stays readable as history and can be restored. A Google event is deleted in Google (an occurrence is skipped there)"}, func(ctx context.Context, req *mcp.CallToolRequest, in eventCancellation) (*mcp.CallToolResult, Output, error) {
+	mcp.AddTool(s, &mcp.Tool{Name: "calendar_cancel", Description: "Cancel one existing Calendar event, or with recurrenceId only that occurrence of a recurring event; it stays readable as history and can be restored. The integrations follow the cancellation afterwards (such as a Google event being cancelled in Google, an occurrence skipped there)"}, func(ctx context.Context, req *mcp.CallToolRequest, in eventCancellation) (*mcp.CallToolResult, Output, error) {
 		return audited(ctx, emitter, req, "calendar_cancel", in, func(trace activity.Trace) (*mcp.CallToolResult, Output, error) {
 			path, err := eventPath(in.EventID)
 			if err != nil {
