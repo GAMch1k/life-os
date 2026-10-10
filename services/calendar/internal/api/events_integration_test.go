@@ -187,7 +187,7 @@ func TestEventLifecycleOverHTTP(t *testing.T) {
 		"startAt": "2026-11-17T09:30:00+01:00", "endAt": "2026-11-17T10:15:00+01:00", "timeZone": "Europe/Berlin",
 		"reminders": []map[string]any{{"kind": "relative", "minutesBefore": 30}, {"kind": "localTime", "daysBefore": 1, "localTime": "19:00"}},
 	}, http.StatusCreated)
-	if created.Status != generated.Active || created.Source.Kind != generated.Manual || created.Source.SourceId != nil || created.CancelledAt != nil {
+	if created.Status != generated.Active || created.Source.Kind != generated.EventSourceKindManual || created.Source.SourceId != nil || created.CancelledAt != nil {
 		t.Fatalf("created = %+v", created)
 	}
 	// The offset instant is stored and returned as the same instant in UTC,
@@ -353,7 +353,7 @@ func TestSearchFindsEventsAcrossMonths(t *testing.T) {
 	equal(t, "nothing", search("q", "zahnarzt"), nil)
 
 	papier := c.list("/v1/events/search?" + q("q", "papier"))
-	if len(papier.Items) != 3 || papier.Items[0].Source.Kind != generated.Ics || *papier.Items[0].Source.ExternalUid != "zaw-papier-1" || *papier.Items[0].Source.SourceId != zaw {
+	if len(papier.Items) != 3 || papier.Items[0].Source.Kind != generated.EventSourceKindIcs || *papier.Items[0].Source.ExternalUid != "zaw-papier-1" || *papier.Items[0].Source.SourceId != zaw {
 		t.Fatalf("papier: %+v", papier.Items)
 	}
 	// Upcoming soonest first, then past most recent first; the event its
@@ -411,7 +411,7 @@ func TestImportedEventsSitAlongsideUserEvents(t *testing.T) {
 	removed := c.seed(gone)
 	// A client cannot create an imported event: the source is ignored.
 	manual := c.event(http.MethodPost, "/v1/events", `{"title":"Bring bins out","allDay":false,"startAt":"2026-11-16T18:00:00Z","endAt":"2026-11-16T18:15:00Z","source":{"kind":"ics","sourceId":"`+feed.String()+`","externalUid":"forged"}}`, http.StatusCreated)
-	if manual.Source.Kind != generated.Manual || manual.Source.SourceId != nil || manual.Source.ExternalUid != nil {
+	if manual.Source.Kind != generated.EventSourceKindManual || manual.Source.SourceId != nil || manual.Source.ExternalUid != nil {
 		t.Fatalf("manual event source = %+v", manual.Source)
 	}
 
@@ -421,7 +421,7 @@ func TestImportedEventsSitAlongsideUserEvents(t *testing.T) {
 		t.Fatalf("listing: %+v", all.Items)
 	}
 	source := all.Items[1].Source
-	if source.Kind != generated.Ics || *source.SourceId != feed || *source.ExternalUid != "zaw-bio-17" || all.Items[1].Reminders != nil {
+	if source.Kind != generated.EventSourceKindIcs || *source.SourceId != feed || *source.ExternalUid != "zaw-bio-17" || all.Items[1].Reminders != nil {
 		t.Fatalf("imported event: %+v", all.Items[1])
 	}
 	equal(t, "manual filter", c.titles(window+"&sourceKind=manual"), []string{"Bring bins out"})
@@ -435,7 +435,7 @@ func TestImportedEventsSitAlongsideUserEvents(t *testing.T) {
 	// The owner can override an imported event's reminders (the source's
 	// default is "the evening before"); its source identity stays put.
 	override := c.event(http.MethodPatch, "/v1/events/"+uuid(imported.ID).String(), `{"reminders":[{"kind":"localTime","daysBefore":1,"localTime":"20:30"}],"source":{"kind":"manual"}}`, http.StatusOK)
-	if override.Source.Kind != generated.Ics || *override.Source.ExternalUid != "zaw-bio-17" || override.Reminders == nil || *(*override.Reminders)[0].LocalTime != "20:30" {
+	if override.Source.Kind != generated.EventSourceKindIcs || *override.Source.ExternalUid != "zaw-bio-17" || override.Reminders == nil || *(*override.Reminders)[0].LocalTime != "20:30" {
 		t.Fatalf("override: %+v", override)
 	}
 }

@@ -54,6 +54,12 @@ func decodePatch(raw []byte) (eventPatch, error) {
 	return patch, nil
 }
 
+// onlyReminders reports whether the patch changes nothing but reminders,
+// the one thing the owner may change on an imported event.
+func (p eventPatch) onlyReminders() bool {
+	return len(p.present) == 1 && p.present["reminders"]
+}
+
 // apply merges the patch into current and validates the result. now stamps
 // a cancellation.
 func (p eventPatch) apply(current eventFields, now time.Time) (eventFields, error) {

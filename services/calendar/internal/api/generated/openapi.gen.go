@@ -13,21 +13,36 @@ import (
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
+// Defines values for CalendarSourceKind.
+const (
+	CalendarSourceKindIcs CalendarSourceKind = "ics"
+)
+
+// Valid indicates whether the value is a known member of the CalendarSourceKind enum.
+func (e CalendarSourceKind) Valid() bool {
+	switch e {
+	case CalendarSourceKindIcs:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for EventSourceKind.
 const (
-	Google EventSourceKind = "google"
-	Ics    EventSourceKind = "ics"
-	Manual EventSourceKind = "manual"
+	EventSourceKindGoogle EventSourceKind = "google"
+	EventSourceKindIcs    EventSourceKind = "ics"
+	EventSourceKindManual EventSourceKind = "manual"
 )
 
 // Valid indicates whether the value is a known member of the EventSourceKind enum.
 func (e EventSourceKind) Valid() bool {
 	switch e {
-	case Google:
+	case EventSourceKindGoogle:
 		return true
-	case Ics:
+	case EventSourceKindIcs:
 		return true
-	case Manual:
+	case EventSourceKindManual:
 		return true
 	default:
 		return false
@@ -94,6 +109,27 @@ func (e ReminderKind) Valid() bool {
 	}
 }
 
+// Defines values for SourceRefreshOutcome.
+const (
+	Failed      SourceRefreshOutcome = "failed"
+	Imported    SourceRefreshOutcome = "imported"
+	NotModified SourceRefreshOutcome = "not_modified"
+)
+
+// Valid indicates whether the value is a known member of the SourceRefreshOutcome enum.
+func (e SourceRefreshOutcome) Valid() bool {
+	switch e {
+	case Failed:
+		return true
+	case Imported:
+		return true
+	case NotModified:
+		return true
+	default:
+		return false
+	}
+}
+
 // CalendarEvent defines model for CalendarEvent.
 type CalendarEvent struct {
 	AllDay bool `json:"allDay"`
@@ -104,6 +140,9 @@ type CalendarEvent struct {
 
 	// Description Free-form notes or details.
 	Description *string `json:"description,omitempty"`
+
+	// EffectiveReminders The reminders that apply: `reminders` when set, else the default reminders of the event's source, else none. Read-only.
+	EffectiveReminders *[]Reminder `json:"effectiveReminders,omitempty"`
 
 	// EndAt End instant (UTC) of a timed event, exclusive.
 	EndAt *time.Time `json:"endAt,omitempty"`
@@ -116,12 +155,17 @@ type CalendarEvent struct {
 	ExternalReference *ExternalReference `json:"externalReference,omitempty"`
 	Id                openapi_types.UUID `json:"id"`
 	Location          *string            `json:"location,omitempty"`
-	Recurrence        *Recurrence        `json:"recurrence,omitempty"`
+
+	// Occurrence Set on an item that is one occurrence of a recurring event, as listing and search return them. The item's `id` and fields are the recurring event's (update or delete it to change every occurrence), except its start and end, which are this occurrence's.
+	Occurrence *EventOccurrence `json:"occurrence,omitempty"`
+
+	// Recurrence Repeats the event every `interval` days, weeks, months, or years from its start, as an iCalendar (RFC 5545) rule: a timed event keeps its wall-clock time in its `timeZone` (else the owner's timezone) across daylight saving changes, and a monthly event on the 31st skips months without one. `until` is the latest start of an occurrence (inclusive).
+	Recurrence *Recurrence `json:"recurrence,omitempty"`
 
 	// Reminders Reminder intent. Null means the event follows its source's (or the owner's) defaults; an empty list means explicitly none.
 	Reminders *[]Reminder `json:"reminders,omitempty"`
 
-	// RemovedFromSourceAt When an imported event disappeared from its source, which also cancels it; null for manual events.
+	// RemovedFromSourceAt When an imported event disappeared from its source (or its source's filter came to exclude it), which also cancels it; null for manual events and while the event is in its source.
 	RemovedFromSourceAt *time.Time `json:"removedFromSourceAt,omitempty"`
 
 	// Source Where the event comes from. Set when the event is created; updates never change it.
@@ -142,6 +186,39 @@ type CalendarEvent struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
+// CalendarSource defines model for CalendarSource.
+type CalendarSource struct {
+	CreatedAt time.Time `json:"createdAt"`
+
+	// DefaultReminders Reminder intent for this source's events whose own reminders are null (for example the evening before a waste pickup, `{"kind":"localTime","daysBefore":1,"localTime":"19:00"}`). Null means none.
+	DefaultReminders *[]Reminder `json:"defaultReminders"`
+
+	// Enabled Disabled sources are not refreshed; their events stay as they are.
+	Enabled bool `json:"enabled"`
+
+	// Filter Which feed events to import. A term matches an event when it equals one of the event's CATEGORIES or occurs in its SUMMARY (both case-insensitive). With `include` terms, only events matching one of them are imported; then events matching an `exclude` term are dropped. Empty lists import everything.
+	Filter SourceFilter       `json:"filter"`
+	Id     openapi_types.UUID `json:"id"`
+
+	// Kind `ics`: an ICS/iCal feed downloaded from a URL.
+	Kind CalendarSourceKind `json:"kind"`
+
+	// Name The label shown with the source's events, such as "ZAW".
+	Name string `json:"name"`
+
+	// Refresh The source's refresh schedule and last outcome (`lastOutcome` and `lastCounts` are absent before the first refresh). Read-only.
+	Refresh SourceRefreshState `json:"refresh"`
+
+	// UpdatedAt When the configuration last changed.
+	UpdatedAt time.Time `json:"updatedAt"`
+
+	// Url The feed URL.
+	Url string `json:"url"`
+}
+
+// CalendarSourceKind `ics`: an ICS/iCal feed downloaded from a URL.
+type CalendarSourceKind string
+
 // CreateEventRequest A timed event needs startAt and endAt (endAt after startAt); an all-day event needs startDate and endDate (endDate not before startDate) and takes no timeZone.
 type CreateEventRequest struct {
 	AllDay      bool                `json:"allDay"`
@@ -153,7 +230,9 @@ type CreateEventRequest struct {
 	// Deprecated: this property has been marked as deprecated upstream, but no `x-deprecated-reason` was set
 	ExternalReference *ExternalReference `json:"externalReference,omitempty"`
 	Location          *string            `json:"location,omitempty"`
-	Recurrence        *Recurrence        `json:"recurrence,omitempty"`
+
+	// Recurrence Repeats the event every `interval` days, weeks, months, or years from its start, as an iCalendar (RFC 5545) rule: a timed event keeps its wall-clock time in its `timeZone` (else the owner's timezone) across daylight saving changes, and a monthly event on the 31st skips months without one. `until` is the latest start of an occurrence (inclusive).
+	Recurrence *Recurrence `json:"recurrence,omitempty"`
 
 	// Reminders Leave out to follow the defaults.
 	Reminders *[]Reminder         `json:"reminders,omitempty"`
@@ -165,6 +244,22 @@ type CreateEventRequest struct {
 	Title    string  `json:"title"`
 }
 
+// CreateSourceRequest defines model for CreateSourceRequest.
+type CreateSourceRequest struct {
+	DefaultReminders *[]Reminder `json:"defaultReminders,omitempty"`
+	Enabled          *bool       `json:"enabled,omitempty"`
+
+	// Filter Which feed events to import. A term matches an event when it equals one of the event's CATEGORIES or occurs in its SUMMARY (both case-insensitive). With `include` terms, only events matching one of them are imported; then events matching an `exclude` term are dropped. Empty lists import everything.
+	Filter *SourceFilter `json:"filter,omitempty"`
+
+	// Kind `ics`: an ICS/iCal feed downloaded from a URL.
+	Kind *CalendarSourceKind `json:"kind,omitempty"`
+	Name string              `json:"name"`
+
+	// Url An https URL of an ICS/iCal feed (webcal:// is accepted and means https).
+	Url string `json:"url"`
+}
+
 // EventList defines model for EventList.
 type EventList struct {
 	Items []CalendarEvent `json:"items"`
@@ -173,9 +268,18 @@ type EventList struct {
 	NextCursor *string `json:"nextCursor,omitempty"`
 }
 
+// EventOccurrence Set on an item that is one occurrence of a recurring event, as listing and search return them. The item's `id` and fields are the recurring event's (update or delete it to change every occurrence), except its start and end, which are this occurrence's.
+type EventOccurrence struct {
+	// RecurrenceId The occurrence's start, unique within its series: an RFC 3339 instant in UTC for timed events, a date (YYYY-MM-DD) for all-day events.
+	RecurrenceId string `json:"recurrenceId"`
+
+	// SeriesId The recurring event this is an occurrence of (the same as the item's id).
+	SeriesId openapi_types.UUID `json:"seriesId"`
+}
+
 // EventSource Where the event comes from. Set when the event is created; updates never change it.
 type EventSource struct {
-	// ExternalUid The event's identity in its source, such as an ICS UID; null for manual events.
+	// ExternalUid The event's identity in its source; null for manual events. For an ICS event, its UID; one occurrence of a recurring ICS event is imported as its own event, `<UID>#<RECURRENCE-ID>`, where the RECURRENCE-ID is its original start (20261017T040000Z, or 20261017 for an all-day event).
 	ExternalUid *string `json:"externalUid,omitempty"`
 
 	// Kind `manual`: created in Life OS (the Dashboard, MCP, or a capture). `ics`: imported from an ICS/iCal feed. `google`: synchronized from Google Calendar.
@@ -199,7 +303,7 @@ type ExternalReference struct {
 	Provider   string `json:"provider"`
 }
 
-// Recurrence defines model for Recurrence.
+// Recurrence Repeats the event every `interval` days, weeks, months, or years from its start, as an iCalendar (RFC 5545) rule: a timed event keeps its wall-clock time in its `timeZone` (else the owner's timezone) across daylight saving changes, and a monthly event on the 31st skips months without one. `until` is the latest start of an occurrence (inclusive).
 type Recurrence struct {
 	Frequency RecurrenceFrequency `json:"frequency"`
 	Interval  int                 `json:"interval"`
@@ -225,6 +329,70 @@ type Reminder struct {
 // ReminderKind defines model for Reminder.Kind.
 type ReminderKind string
 
+// SourceFilter Which feed events to import. A term matches an event when it equals one of the event's CATEGORIES or occurs in its SUMMARY (both case-insensitive). With `include` terms, only events matching one of them are imported; then events matching an `exclude` term are dropped. Empty lists import everything.
+type SourceFilter struct {
+	Exclude []string `json:"exclude"`
+	Include []string `json:"include"`
+}
+
+// SourceList defines model for SourceList.
+type SourceList struct {
+	Items []CalendarSource `json:"items"`
+}
+
+// SourceRefreshCounts What the last reconciling refresh did.
+type SourceRefreshCounts struct {
+	// FeedEvents Events (occurrences) in the feed.
+	FeedEvents int `json:"feedEvents"`
+
+	// Imported Feed events kept by the filter.
+	Imported int `json:"imported"`
+	Inserted int `json:"inserted"`
+
+	// Removed Future events no longer in the feed (or now filtered out): cancelled and marked removedFromSourceAt.
+	Removed int `json:"removed"`
+
+	// Restored Events back in the feed after having been removed.
+	Restored int `json:"restored"`
+
+	// Skipped Feed events that could not be read (such as a missing start) and were left out.
+	Skipped   *int `json:"skipped,omitempty"`
+	Unchanged int  `json:"unchanged"`
+	Updated   int  `json:"updated"`
+}
+
+// SourceRefreshOutcome `imported`: the feed was downloaded and its events reconciled. `not_modified`: the server confirmed the feed is unchanged (ETag/Last-Modified). `failed`: the refresh failed; the events from the last good refresh are kept.
+type SourceRefreshOutcome string
+
+// SourceRefreshState The source's refresh schedule and last outcome (`lastOutcome` and `lastCounts` are absent before the first refresh). Read-only.
+type SourceRefreshState struct {
+	// ConsecutiveFailures Failed refreshes since the last success; drives the retry backoff.
+	ConsecutiveFailures int `json:"consecutiveFailures"`
+
+	// Etag The feed's ETag from the last download, sent back as If-None-Match.
+	Etag          *string    `json:"etag,omitempty"`
+	LastAttemptAt *time.Time `json:"lastAttemptAt,omitempty"`
+
+	// LastCounts What the last reconciling refresh did.
+	LastCounts *SourceRefreshCounts `json:"lastCounts,omitempty"`
+
+	// LastError Why the last refresh failed; null after a success.
+	LastError *string `json:"lastError,omitempty"`
+
+	// LastModified The feed's Last-Modified from the last download, sent back as If-Modified-Since.
+	LastModified *string `json:"lastModified,omitempty"`
+
+	// LastOutcome `imported`: the feed was downloaded and its events reconciled. `not_modified`: the server confirmed the feed is unchanged (ETag/Last-Modified). `failed`: the refresh failed; the events from the last good refresh are kept.
+	LastOutcome   *SourceRefreshOutcome `json:"lastOutcome,omitempty"`
+	LastSuccessAt *time.Time            `json:"lastSuccessAt,omitempty"`
+
+	// NextRefreshAt When the source is refreshed next (daily at the quiet hour, sooner after a failure).
+	NextRefreshAt *time.Time `json:"nextRefreshAt,omitempty"`
+
+	// Refreshing A refresh is running now.
+	Refreshing bool `json:"refreshing"`
+}
+
 // UpdateEventRequest defines model for UpdateEventRequest.
 type UpdateEventRequest struct {
 	AllDay      *bool               `json:"allDay,omitempty"`
@@ -232,7 +400,9 @@ type UpdateEventRequest struct {
 	EndAt       *time.Time          `json:"endAt,omitempty"`
 	EndDate     *openapi_types.Date `json:"endDate,omitempty"`
 	Location    *string             `json:"location,omitempty"`
-	Recurrence  *Recurrence         `json:"recurrence,omitempty"`
+
+	// Recurrence Repeats the event every `interval` days, weeks, months, or years from its start, as an iCalendar (RFC 5545) rule: a timed event keeps its wall-clock time in its `timeZone` (else the owner's timezone) across daylight saving changes, and a monthly event on the 31st skips months without one. `until` is the latest start of an occurrence (inclusive).
+	Recurrence *Recurrence `json:"recurrence,omitempty"`
 
 	// Reminders Replaces the reminders; null returns the event to the defaults.
 	Reminders *[]Reminder         `json:"reminders,omitempty"`
@@ -243,6 +413,18 @@ type UpdateEventRequest struct {
 	Status   *EventStatus `json:"status,omitempty"`
 	TimeZone *string      `json:"timeZone,omitempty"`
 	Title    *string      `json:"title,omitempty"`
+}
+
+// UpdateSourceRequest defines model for UpdateSourceRequest.
+type UpdateSourceRequest struct {
+	// DefaultReminders Replaces the default reminders; null removes them.
+	DefaultReminders *[]Reminder `json:"defaultReminders,omitempty"`
+	Enabled          *bool       `json:"enabled,omitempty"`
+
+	// Filter Which feed events to import. A term matches an event when it equals one of the event's CATEGORIES or occurs in its SUMMARY (both case-insensitive). With `include` terms, only events matching one of them are imported; then events matching an `exclude` term are dropped. Empty lists import everything.
+	Filter *SourceFilter `json:"filter,omitempty"`
+	Name   *string       `json:"name,omitempty"`
+	Url    *string       `json:"url,omitempty"`
 }
 
 // Cursor defines model for Cursor.
@@ -319,6 +501,12 @@ type CreateEventJSONRequestBody = CreateEventRequest
 // UpdateEventJSONRequestBody defines body for UpdateEvent for application/json ContentType.
 type UpdateEventJSONRequestBody = UpdateEventRequest
 
+// CreateSourceJSONRequestBody defines body for CreateSource for application/json ContentType.
+type CreateSourceJSONRequestBody = CreateSourceRequest
+
+// UpdateSourceJSONRequestBody defines body for UpdateSource for application/json ContentType.
+type UpdateSourceJSONRequestBody = UpdateSourceRequest
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
 	// ListEvents List calendar events in a time range
@@ -339,6 +527,24 @@ type ServerInterface interface {
 	// UpdateEvent Update a calendar event
 	// (PATCH /v1/events/{eventId})
 	UpdateEvent(c fiber.Ctx, eventId openapi_types.UUID) error
+	// ListSources List calendar sources
+	// (GET /v1/sources)
+	ListSources(c fiber.Ctx) error
+	// CreateSource Add a calendar source
+	// (POST /v1/sources)
+	CreateSource(c fiber.Ctx) error
+	// DeleteSource Delete a calendar source
+	// (DELETE /v1/sources/{sourceId})
+	DeleteSource(c fiber.Ctx, sourceId openapi_types.UUID) error
+	// GetSource Get a calendar source
+	// (GET /v1/sources/{sourceId})
+	GetSource(c fiber.Ctx, sourceId openapi_types.UUID) error
+	// UpdateSource Update a calendar source
+	// (PATCH /v1/sources/{sourceId})
+	UpdateSource(c fiber.Ctx, sourceId openapi_types.UUID) error
+	// RefreshSource Refresh a calendar source now
+	// (POST /v1/sources/{sourceId}/refresh)
+	RefreshSource(c fiber.Ctx, sourceId openapi_types.UUID) error
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -634,6 +840,158 @@ func (siw *ServerInterfaceWrapper) UpdateEvent(c fiber.Ctx) error {
 	return handler(c)
 }
 
+// ListSources operation middleware
+func (siw *ServerInterfaceWrapper) ListSources(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.ListSources(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// CreateSource operation middleware
+func (siw *ServerInterfaceWrapper) CreateSource(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.CreateSource(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// DeleteSource operation middleware
+func (siw *ServerInterfaceWrapper) DeleteSource(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "sourceId" -------------
+	var sourceId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "sourceId", c.Params("sourceId"), &sourceId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter sourceId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.DeleteSource(c, sourceId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// GetSource operation middleware
+func (siw *ServerInterfaceWrapper) GetSource(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "sourceId" -------------
+	var sourceId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "sourceId", c.Params("sourceId"), &sourceId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter sourceId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.GetSource(c, sourceId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// UpdateSource operation middleware
+func (siw *ServerInterfaceWrapper) UpdateSource(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "sourceId" -------------
+	var sourceId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "sourceId", c.Params("sourceId"), &sourceId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter sourceId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.UpdateSource(c, sourceId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// RefreshSource operation middleware
+func (siw *ServerInterfaceWrapper) RefreshSource(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "sourceId" -------------
+	var sourceId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "sourceId", c.Params("sourceId"), &sourceId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter sourceId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.RefreshSource(c, sourceId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
 // FiberServerOptions provides options for the Fiber server.
 type FiberServerOptions struct {
 	BaseURL            string
@@ -668,5 +1026,17 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	router.Get(options.BaseURL+"/v1/events/:eventId", wrapper.GetEvent)
 
 	router.Patch(options.BaseURL+"/v1/events/:eventId", wrapper.UpdateEvent)
+
+	router.Get(options.BaseURL+"/v1/sources", wrapper.ListSources)
+
+	router.Post(options.BaseURL+"/v1/sources", wrapper.CreateSource)
+
+	router.Delete(options.BaseURL+"/v1/sources/:sourceId", wrapper.DeleteSource)
+
+	router.Get(options.BaseURL+"/v1/sources/:sourceId", wrapper.GetSource)
+
+	router.Patch(options.BaseURL+"/v1/sources/:sourceId", wrapper.UpdateSource)
+
+	router.Post(options.BaseURL+"/v1/sources/:sourceId/refresh", wrapper.RefreshSource)
 
 }

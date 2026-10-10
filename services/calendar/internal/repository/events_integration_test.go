@@ -59,9 +59,15 @@ func TestEventPersistenceSupportsTimedAndAllDayEvents(t *testing.T) {
 	if allDay.Status != "active" || allDay.SourceKind != "manual" || allDay.Reminders != nil {
 		t.Fatalf("defaults: %+v", allDay)
 	}
+	// Listing returns the non-recurring event; the recurring one comes from
+	// its own query, for the API to expand into occurrences.
 	items, err := queries.ListEvents(ctx, store.ListEventsParams{TimeZone: "UTC", RangeStart: at(start), RangeEnd: at(end), PageLimit: 10})
-	if err != nil || len(items) != 2 || items[0].Event.ID != allDay.ID || items[1].Event.ID != timed.ID {
+	if err != nil || len(items) != 1 || items[0].Event.ID != timed.ID {
 		t.Fatalf("events=%#v err=%v", items, err)
+	}
+	recurring, err := queries.ListRecurringEvents(ctx, store.ListRecurringEventsParams{TimeZone: "UTC", RangeStart: at(start.AddDate(1, 0, 0)), RangeEnd: at(end.AddDate(1, 0, 0))})
+	if err != nil || len(recurring) != 1 || recurring[0].Event.ID != allDay.ID {
+		t.Fatalf("recurring=%#v err=%v", recurring, err)
 	}
 
 	// The update writes the merged row, guarded by the updated_at it read.

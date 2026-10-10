@@ -13,7 +13,7 @@ export interface paths {
         };
         /**
          * List calendar events in a time range
-         * @description Events that overlap `[from, to)`, soonest start first (an all-day event starts at midnight of its first day in `timeZone`; ties by id). A timed event overlaps when it starts before `to` and ends after `from`; an all-day event when its days, taken in `timeZone`, do. Cancelled events are left out unless `includeCancelled` is true. When more events match than `limit`, `nextCursor` is set: pass it back as `cursor`, with the same parameters, for the next page. A response without `nextCursor` is the last page. Recurring events are returned once, as stored; occurrences are not expanded.
+         * @description Events that overlap `[from, to)`, soonest start first (an all-day event starts at midnight of its first day in `timeZone`; ties by id). A timed event overlaps when it starts before `to` and ends after `from`; an all-day event when its days, taken in `timeZone`, do. Cancelled events are left out unless `includeCancelled` is true. When more events match than `limit`, `nextCursor` is set: pass it back as `cursor`, with the same parameters, for the next page. A response without `nextCursor` is the last page. A recurring event is expanded: each occurrence that overlaps the range is listed in its place in the order, with the recurring event's `id` and fields but its own start and end, and `occurrence` set. Non-recurring events are returned as stored.
          */
         get: operations["listEvents"];
         put?: never;
@@ -37,7 +37,7 @@ export interface paths {
         };
         /**
          * Search calendar events
-         * @description Finds events whose title, description (notes), or location contain every word of `q` (case-insensitive substring match), across all dates unless `from`/`to` narrow the range (the same overlap rule as listing; either bound may be left open). The most relevant come first: a word found in the title weighs 3, in the location 2, in the description 1. Among equally relevant events, those not over yet come first, soonest first, then past events, most recent first. Cancelled events are left out unless `includeCancelled` is true. Paging works as for listing; the cursor also keeps the moment that splits upcoming from past, so later pages stay consistent.
+         * @description Finds events whose title, description (notes), or location contain every word of `q` (case-insensitive substring match), across all dates unless `from`/`to` narrow the range (the same overlap rule as listing; either bound may be left open). The most relevant come first: a word found in the title weighs 3, in the location 2, in the description 1. Among equally relevant events, those not over yet come first, soonest first, then past events, most recent first. Cancelled events are left out unless `includeCancelled` is true. Paging works as for listing; the cursor also keeps the moment that splits upcoming from past, so later pages stay consistent. A matching recurring event is returned as occurrences (with `occurrence` set, as in listing): every occurrence in the range when both `from` and `to` are given, otherwise one, its next occurrence not over yet, or its last one if it has ended.
          */
         get: operations["searchEvents"];
         put?: never;
@@ -64,28 +64,108 @@ export interface paths {
         post?: never;
         /**
          * Delete a calendar event
-         * @description Removes the event permanently. Set `status: cancelled` instead to keep it as history.
+         * @description Removes the event permanently. Set `status: cancelled` instead to keep it as history. Imported events cannot be deleted (409 `managed_by_source`): their source removes them.
          */
         delete: operations["deleteEvent"];
         options?: never;
         head?: never;
         /**
          * Update a calendar event
-         * @description Changes only the fields present in the body; a field set to null is cleared. Changing `allDay` switches the event between timed and all-day: the other kind's fields (`startAt`, `endAt`, `timeZone` or `startDate`, `endDate`) are cleared and the new kind's start and end must be given. The result is validated as a whole, as on create. `status: cancelled` keeps the event as history and drops it from listings; `status: active` restores it.
+         * @description Changes only the fields present in the body; a field set to null is cleared. Changing `allDay` switches the event between timed and all-day: the other kind's fields (`startAt`, `endAt`, `timeZone` or `startDate`, `endDate`) are cleared and the new kind's start and end must be given. The result is validated as a whole, as on create. `status: cancelled` keeps the event as history and drops it from listings; `status: active` restores it. An event imported from a source (`source.kind` other than `manual`) is read-only except for `reminders`: naming any other field returns 409 `managed_by_source`.
          */
         patch: operations["updateEvent"];
+        trace?: never;
+    };
+    "/v1/sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List calendar sources
+         * @description Every source, oldest first, with its configuration and refresh state.
+         */
+        get: operations["listSources"];
+        put?: never;
+        /**
+         * Add a calendar source
+         * @description Subscribes to an ICS/iCal feed. The URL must be https and reach a public address (Calendar refuses private, loopback, and link-local addresses, also after redirects). An enabled source is imported shortly after it is added and then refreshed daily at the configured quiet hour in the owner's timezone.
+         */
+        post: operations["createSource"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/sources/{sourceId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a calendar source */
+        get: operations["getSource"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a calendar source
+         * @description Removes the source and every event imported from it. Set `enabled: false` instead to stop refreshing and keep its events.
+         */
+        delete: operations["deleteSource"];
+        options?: never;
+        head?: never;
+        /**
+         * Update a calendar source
+         * @description Changes only the fields present in the body; `defaultReminders: null` removes the default reminders. A changed `url` or `filter` makes the next refresh download the feed in full and schedules it right away; events that the new filter excludes are reconciled like events that left the feed. Enabling a source schedules a refresh right away; disabling it stops its refreshes and keeps its events.
+         */
+        patch: operations["updateSource"];
+        trace?: never;
+    };
+    "/v1/sources/{sourceId}/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refresh a calendar source now
+         * @description Downloads the feed and reconciles its events right away (the Dashboard's "Refresh now"), then returns the source. The request succeeds whether or not the refresh does: read `refresh.lastOutcome` and `refresh.lastError`. A failed refresh keeps the events from the last good one and is retried with backoff. A refresh of the source already running elsewhere returns 409 `refresh_in_progress`.
+         */
+        post: operations["refreshSource"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description Repeats the event every `interval` days, weeks, months, or years from its start, as an iCalendar (RFC 5545) rule: a timed event keeps its wall-clock time in its `timeZone` (else the owner's timezone) across daylight saving changes, and a monthly event on the 31st skips months without one. `until` is the latest start of an occurrence (inclusive). */
         Recurrence: {
             /** @enum {string} */
             frequency: "daily" | "weekly" | "monthly" | "yearly";
             interval: number;
             /** Format: date-time */
             until?: string | null;
+        };
+        /** @description Set on an item that is one occurrence of a recurring event, as listing and search return them. The item's `id` and fields are the recurring event's (update or delete it to change every occurrence), except its start and end, which are this occurrence's. */
+        EventOccurrence: {
+            /**
+             * Format: uuid
+             * @description The recurring event this is an occurrence of (the same as the item's id).
+             */
+            seriesId: string;
+            /** @description The occurrence's start, unique within its series: an RFC 3339 instant in UTC for timed events, a date (YYYY-MM-DD) for all-day events. */
+            recurrenceId: string;
         };
         /**
          * @deprecated
@@ -108,7 +188,7 @@ export interface components {
              * @description The Calendar source (feed or connected calendar) the event was imported from; null for manual events.
              */
             sourceId?: string | null;
-            /** @description The event's identity in its source, such as an ICS UID; null for manual events. */
+            /** @description The event's identity in its source; null for manual events. For an ICS event, its UID; one occurrence of a recurring ICS event is imported as its own event, `<UID>#<RECURRENCE-ID>`, where the RECURRENCE-ID is its original start (20261017T040000Z, or 20261017 for an all-day event). */
             externalUid?: string | null;
         };
         /**
@@ -160,6 +240,9 @@ export interface components {
             recurrence?: components["schemas"]["Recurrence"];
             /** @description Reminder intent. Null means the event follows its source's (or the owner's) defaults; an empty list means explicitly none. */
             reminders?: components["schemas"]["Reminder"][] | null;
+            /** @description The reminders that apply: `reminders` when set, else the default reminders of the event's source, else none. Read-only. */
+            effectiveReminders?: components["schemas"]["Reminder"][];
+            occurrence?: components["schemas"]["EventOccurrence"];
             status: components["schemas"]["EventStatus"];
             /**
              * Format: date-time
@@ -168,7 +251,7 @@ export interface components {
             cancelledAt?: string | null;
             /**
              * Format: date-time
-             * @description When an imported event disappeared from its source, which also cancels it; null for manual events.
+             * @description When an imported event disappeared from its source (or its source's filter came to exclude it), which also cancels it; null for manual events and while the event is in its source.
              */
             removedFromSourceAt?: string | null;
             source: components["schemas"]["EventSource"];
@@ -222,6 +305,104 @@ export interface components {
             items: components["schemas"]["CalendarEvent"][];
             /** @description Set when more events match; pass it as cursor for the next page. */
             nextCursor?: string | null;
+        };
+        /**
+         * @description `ics`: an ICS/iCal feed downloaded from a URL.
+         * @enum {string}
+         */
+        CalendarSourceKind: "ics";
+        /** @description Which feed events to import. A term matches an event when it equals one of the event's CATEGORIES or occurs in its SUMMARY (both case-insensitive). With `include` terms, only events matching one of them are imported; then events matching an `exclude` term are dropped. Empty lists import everything. */
+        SourceFilter: {
+            include: string[];
+            exclude: string[];
+        };
+        /**
+         * @description `imported`: the feed was downloaded and its events reconciled. `not_modified`: the server confirmed the feed is unchanged (ETag/Last-Modified). `failed`: the refresh failed; the events from the last good refresh are kept.
+         * @enum {string}
+         */
+        SourceRefreshOutcome: "imported" | "not_modified" | "failed";
+        /** @description What the last reconciling refresh did. */
+        SourceRefreshCounts: {
+            /** @description Events (occurrences) in the feed. */
+            feedEvents: number;
+            /** @description Feed events kept by the filter. */
+            imported: number;
+            inserted: number;
+            updated: number;
+            /** @description Future events no longer in the feed (or now filtered out): cancelled and marked removedFromSourceAt. */
+            removed: number;
+            /** @description Events back in the feed after having been removed. */
+            restored: number;
+            unchanged: number;
+            /** @description Feed events that could not be read (such as a missing start) and were left out. */
+            skipped?: number;
+        };
+        /** @description The source's refresh schedule and last outcome (`lastOutcome` and `lastCounts` are absent before the first refresh). Read-only. */
+        SourceRefreshState: {
+            /**
+             * Format: date-time
+             * @description When the source is refreshed next (daily at the quiet hour, sooner after a failure).
+             */
+            nextRefreshAt?: string | null;
+            /** Format: date-time */
+            lastAttemptAt?: string | null;
+            /** Format: date-time */
+            lastSuccessAt?: string | null;
+            lastOutcome?: components["schemas"]["SourceRefreshOutcome"];
+            /** @description Why the last refresh failed; null after a success. */
+            lastError?: string | null;
+            /** @description Failed refreshes since the last success; drives the retry backoff. */
+            consecutiveFailures: number;
+            lastCounts?: components["schemas"]["SourceRefreshCounts"];
+            /** @description The feed's ETag from the last download, sent back as If-None-Match. */
+            etag?: string | null;
+            /** @description The feed's Last-Modified from the last download, sent back as If-Modified-Since. */
+            lastModified?: string | null;
+            /** @description A refresh is running now. */
+            refreshing: boolean;
+        };
+        CalendarSource: {
+            /** Format: uuid */
+            id: string;
+            kind: components["schemas"]["CalendarSourceKind"];
+            /** @description The label shown with the source's events, such as "ZAW". */
+            name: string;
+            /** @description The feed URL. */
+            url: string;
+            /** @description Disabled sources are not refreshed; their events stay as they are. */
+            enabled: boolean;
+            filter: components["schemas"]["SourceFilter"];
+            /** @description Reminder intent for this source's events whose own reminders are null (for example the evening before a waste pickup, `{"kind":"localTime","daysBefore":1,"localTime":"19:00"}`). Null means none. */
+            defaultReminders: components["schemas"]["Reminder"][] | null;
+            refresh: components["schemas"]["SourceRefreshState"];
+            /** Format: date-time */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description When the configuration last changed.
+             */
+            updatedAt: string;
+        };
+        CreateSourceRequest: {
+            kind?: components["schemas"]["CalendarSourceKind"];
+            name: string;
+            /** @description An https URL of an ICS/iCal feed (webcal:// is accepted and means https). */
+            url: string;
+            /** @default true */
+            enabled: boolean;
+            filter?: components["schemas"]["SourceFilter"];
+            defaultReminders?: components["schemas"]["Reminder"][] | null;
+        };
+        UpdateSourceRequest: {
+            name?: string;
+            url?: string;
+            enabled?: boolean;
+            filter?: components["schemas"]["SourceFilter"];
+            /** @description Replaces the default reminders; null removes them. */
+            defaultReminders?: components["schemas"]["Reminder"][] | null;
+        };
+        SourceList: {
+            items: components["schemas"]["CalendarSource"][];
         };
     };
     responses: never;
@@ -437,6 +618,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description The event is imported from a source (managed_by_source) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     updateEvent: {
@@ -477,7 +665,225 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The event kept changing concurrently; retry the update */
+            /** @description The event kept changing concurrently (retry the update), or it is imported and the update names more than reminders (managed_by_source) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listSources: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Sources */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceList"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    createSource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateSourceRequest"];
+            };
+        };
+        responses: {
+            /** @description Source */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarSource"];
+                };
+            };
+            /** @description Invalid request, or no valid X-Life-OS-Actor (actor_required) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getSource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sourceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Source */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarSource"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Source not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    deleteSource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sourceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Source and its events deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid request, or no valid X-Life-OS-Actor (actor_required) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Source not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    updateSource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sourceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateSourceRequest"];
+            };
+        };
+        responses: {
+            /** @description Source */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarSource"];
+                };
+            };
+            /** @description Invalid request, or no valid X-Life-OS-Actor (actor_required) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Source not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The source kept changing concurrently; retry the update */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    refreshSource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sourceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The source after the refresh */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarSource"];
+                };
+            };
+            /** @description Invalid request, or no valid X-Life-OS-Actor (actor_required) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Source not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The source is disabled (source_disabled), a refresh is already running (refresh_in_progress), or the source changed during the refresh (conflict) */
             409: {
                 headers: {
                     [name: string]: unknown;

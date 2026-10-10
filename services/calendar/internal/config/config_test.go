@@ -17,6 +17,28 @@ func TestLoadFromAppliesDefaults(t *testing.T) {
 	if cfg.ServiceName != "calendar" || cfg.Port != 8080 || cfg.LogLevel != "info" {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
+	if cfg.SourceRefreshAt != "04:30" || cfg.ICSMaxBytes != 5<<20 || cfg.ICSTimeoutSeconds != 30 || cfg.ICSAllowPrivateURLs || cfg.ActivityURL != "" {
+		t.Fatalf("unexpected source defaults: %+v", cfg)
+	}
+}
+
+func TestLoadFromRejectsInvalidSourceSettings(t *testing.T) {
+	t.Parallel()
+
+	_, err := LoadFrom(mapLookup(map[string]string{
+		"DATABASE_URL":                 "postgres://calendar_user:secret@localhost/calendar_db",
+		"CALENDAR_SOURCE_REFRESH_AT":   "4:30",
+		"CALENDAR_ICS_MAX_BYTES":       "10",
+		"CALENDAR_ICS_TIMEOUT_SECONDS": "0",
+	}))
+	if err == nil {
+		t.Fatal("LoadFrom() error = nil")
+	}
+	for _, want := range []string{"CALENDAR_SOURCE_REFRESH_AT", "CALENDAR_ICS_MAX_BYTES", "CALENDAR_ICS_TIMEOUT_SECONDS"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not contain %q", err, want)
+		}
+	}
 }
 
 func TestLoadFromRejectsInvalidConfiguration(t *testing.T) {

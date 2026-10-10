@@ -14,7 +14,9 @@ import (
 	"github.com/GAMch1k/life-os/pkg/httpserver"
 	"github.com/GAMch1k/life-os/services/calendar/internal/api/generated"
 	"github.com/GAMch1k/life-os/services/calendar/internal/config"
+	"github.com/GAMch1k/life-os/services/calendar/internal/ics"
 	store "github.com/GAMch1k/life-os/services/calendar/internal/repository/generated"
+	"github.com/GAMch1k/life-os/services/calendar/internal/sources"
 )
 
 const (
@@ -29,9 +31,16 @@ const (
 type Handler struct {
 	queries *store.Queries
 	// ownerTimeZone is the IANA timezone reads compare all-day dates in
-	// when the request names none.
+	// when the request names none; recurring timed events without a
+	// timeZone repeat on its wall clock.
 	ownerTimeZone string
+	ownerLocation *time.Location
 	now           func() time.Time
+	// refresher runs source refreshes; fetcher validates feed URLs; wake
+	// tells the scheduler a source needs a refresh now.
+	refresher *sources.Refresher
+	fetcher   *ics.Fetcher
+	wake      func()
 }
 
 var _ generated.ServerInterface = (*Handler)(nil)
@@ -42,7 +51,27 @@ func NewHandler(queries *store.Queries, ownerTimeZone string) *Handler {
 	if ownerTimeZone == "" {
 		ownerTimeZone = "UTC"
 	}
-	return &Handler{queries: queries, ownerTimeZone: ownerTimeZone, now: time.Now}
+	location, err := time.LoadLocation(ownerTimeZone)
+	if err != nil {
+		ownerTimeZone, location = "UTC", time.UTC
+	}
+	return &Handler{
+		queries: queries, ownerTimeZone: ownerTimeZone, ownerLocation: location, now: time.Now,
+		fetcher: ics.NewFetcher(0, 0, false), wake: func() {},
+	}
+}
+
+// WithSources enables source refreshes: refresher runs them (its fetcher
+// also validates feed URLs) and wake, if not nil, prompts the scheduler.
+func (h *Handler) WithSources(refresher *sources.Refresher, wake func()) *Handler {
+	h.refresher = refresher
+	if refresher != nil {
+		h.fetcher = refresher.Fetcher()
+	}
+	if wake != nil {
+		h.wake = wake
+	}
+	return h
 }
 
 func (h *Handler) ListEvents(c fiber.Ctx, params generated.ListEventsParams) error {
@@ -54,6 +83,10 @@ func (h *Handler) ListEvents(c fiber.Ctx, params generated.ListEventsParams) err
 	if err != nil {
 		return err
 	}
+	zone, err := time.LoadLocation(timeZone)
+	if err != nil {
+		return badRequest("timeZone must be an IANA timezone such as Europe/Berlin")
+	}
 	if !params.To.After(params.From) {
 		return badRequest("to must be after from")
 	}
@@ -61,36 +94,56 @@ func (h *Handler) ListEvents(c fiber.Ctx, params generated.ListEventsParams) err
 	if err != nil {
 		return err
 	}
+	includeCancelled := params.IncludeCancelled != nil && *params.IncludeCancelled
 	// One row beyond the page tells whether another page exists.
 	query := store.ListEventsParams{
 		TimeZone: timeZone, RangeStart: timestamp(&params.From), RangeEnd: timestamp(&params.To),
-		IncludeCancelled: params.IncludeCancelled != nil && *params.IncludeCancelled,
-		SourceKind:       sourceKind, SourceID: sourceIDFilter(params.SourceId), PageLimit: int32(limit + 1),
+		IncludeCancelled: includeCancelled, SourceKind: sourceKind, SourceID: sourceIDFilter(params.SourceId), PageLimit: int32(limit + 1),
 	}
+	var after *listPosition
 	if params.Cursor != nil {
-		after, err := decodeListCursor(*params.Cursor)
+		position, err := decodeListCursor(*params.Cursor)
 		if err != nil {
 			return badRequest("invalid cursor")
 		}
-		query.AfterStartsAt, query.AfterID = timestamp(&after.StartsAt), pgID(after.ID)
+		after = &position
+		query.AfterStartsAt, query.AfterID = timestamp(&position.StartsAt), pgID(position.ID)
 	}
 	rows, err := h.queries.ListEvents(c.Context(), query)
 	if err != nil {
 		return internal(err)
 	}
-	result := generated.EventList{Items: make([]generated.CalendarEvent, 0, min(len(rows), limit))}
-	for index, row := range rows {
-		if index == limit {
-			last := rows[index-1]
-			cursor := encodeListCursor(listPosition{StartsAt: last.StartsAt.Time, ID: last.Event.ID.Bytes})
-			result.NextCursor = &cursor
-			break
-		}
+	recurring, err := h.queries.ListRecurringEvents(c.Context(), store.ListRecurringEventsParams{
+		TimeZone: timeZone, RangeStart: query.RangeStart, RangeEnd: query.RangeEnd,
+		IncludeCancelled: includeCancelled, SourceKind: sourceKind, SourceID: query.SourceID,
+	})
+	if err != nil {
+		return internal(err)
+	}
+	merged, err := h.listOccurrences(recurring, params.From, params.To, zone, after, limit+1)
+	if err != nil {
+		return internal(err)
+	}
+	for _, row := range rows {
 		item, err := event(row.Event)
 		if err != nil {
 			return internal(err)
 		}
-		result.Items = append(result.Items, item)
+		merged = append(merged, listed{startsAt: row.StartsAt.Time, id: row.Event.ID.Bytes, item: item})
+	}
+	sortListed(merged)
+	result := generated.EventList{Items: make([]generated.CalendarEvent, 0, min(len(merged), limit))}
+	for index, entry := range merged {
+		if index == limit {
+			last := merged[index-1]
+			cursor := encodeListCursor(listPosition{StartsAt: last.startsAt, ID: last.id})
+			result.NextCursor = &cursor
+			break
+		}
+		result.Items = append(result.Items, entry.item)
+	}
+	if err := h.resolveReminders(c.Context(), result.Items); err != nil {
+		return internal(err)
 	}
 	return c.JSON(result)
 }
@@ -108,6 +161,10 @@ func (h *Handler) SearchEvents(c fiber.Ctx, params generated.SearchEventsParams)
 	if err != nil {
 		return err
 	}
+	zone, err := time.LoadLocation(timeZone)
+	if err != nil {
+		return badRequest("timeZone must be an IANA timezone such as Europe/Berlin")
+	}
 	if params.From != nil && params.To != nil && !params.To.After(*params.From) {
 		return badRequest("to must be after from")
 	}
@@ -115,39 +172,58 @@ func (h *Handler) SearchEvents(c fiber.Ctx, params generated.SearchEventsParams)
 	if err != nil {
 		return err
 	}
+	includeCancelled := params.IncludeCancelled != nil && *params.IncludeCancelled
 	anchor := h.now().UTC()
 	query := store.SearchEventsParams{
 		TimeZone: timeZone, Patterns: patterns, RangeStart: timestamp(params.From), RangeEnd: timestamp(params.To),
-		IncludeCancelled: params.IncludeCancelled != nil && *params.IncludeCancelled,
-		SourceKind:       sourceKind, SourceID: sourceIDFilter(params.SourceId), PageLimit: int32(limit + 1),
+		IncludeCancelled: includeCancelled, SourceKind: sourceKind, SourceID: sourceIDFilter(params.SourceId), PageLimit: int32(limit + 1),
 	}
+	var after *searchPosition
 	if params.Cursor != nil {
-		after, err := decodeSearchCursor(*params.Cursor)
+		position, err := decodeSearchCursor(*params.Cursor)
 		if err != nil {
 			return badRequest("invalid cursor")
 		}
 		// Later pages split upcoming from past where the first page did.
-		anchor = after.Anchor
-		query.AfterRelevance, query.AfterBucket, query.AfterSortKey, query.AfterID = &after.Relevance, &after.Bucket, &after.SortKey, pgID(after.ID)
+		after, anchor = &position, position.Anchor
+		query.AfterRelevance, query.AfterBucket, query.AfterSortKey, query.AfterID = &position.Relevance, &position.Bucket, &position.SortKey, pgID(position.ID)
 	}
 	query.Anchor = timestamp(&anchor)
 	rows, err := h.queries.SearchEvents(c.Context(), query)
 	if err != nil {
 		return internal(err)
 	}
-	result := generated.EventList{Items: make([]generated.CalendarEvent, 0, min(len(rows), limit))}
-	for index, row := range rows {
-		if index == limit {
-			last := rows[index-1]
-			cursor := encodeSearchCursor(searchPosition{Anchor: anchor, Relevance: last.Relevance, Bucket: last.Bucket, SortKey: last.SortKey, ID: last.Event.ID.Bytes})
-			result.NextCursor = &cursor
-			break
-		}
+	recurring, err := h.queries.SearchRecurringEvents(c.Context(), store.SearchRecurringEventsParams{
+		Patterns: patterns, RangeEnd: query.RangeEnd, TimeZone: timeZone,
+		IncludeCancelled: includeCancelled, SourceKind: sourceKind, SourceID: query.SourceID,
+	})
+	if err != nil {
+		return internal(err)
+	}
+	merged, err := h.searchOccurrences(recurring, params.From, params.To, zone, anchor, after, limit+1)
+	if err != nil {
+		return internal(err)
+	}
+	for _, row := range rows {
 		item, err := event(row.Event)
 		if err != nil {
 			return internal(err)
 		}
-		result.Items = append(result.Items, item)
+		merged = append(merged, ranked{relevance: row.Relevance, bucket: row.Bucket, sortKey: row.SortKey, id: row.Event.ID.Bytes, item: item})
+	}
+	sortRanked(merged)
+	result := generated.EventList{Items: make([]generated.CalendarEvent, 0, min(len(merged), limit))}
+	for index, entry := range merged {
+		if index == limit {
+			last := merged[index-1]
+			cursor := encodeSearchCursor(searchPosition{Anchor: anchor, Relevance: last.relevance, Bucket: last.bucket, SortKey: last.sortKey, ID: last.id})
+			result.NextCursor = &cursor
+			break
+		}
+		result.Items = append(result.Items, entry.item)
+	}
+	if err := h.resolveReminders(c.Context(), result.Items); err != nil {
+		return internal(err)
 	}
 	return c.JSON(result)
 }
@@ -177,11 +253,7 @@ func (h *Handler) CreateEvent(c fiber.Ctx) error {
 	if key != nil && (item.AutomationPayloadHash == nil || *item.AutomationPayloadHash != *hash) {
 		return httpserver.NewError(fiber.StatusConflict, "conflict", "idempotency key was already used with a different payload")
 	}
-	output, err := event(item)
-	if err != nil {
-		return internal(err)
-	}
-	return c.Status(fiber.StatusCreated).JSON(output)
+	return h.respond(c, fiber.StatusCreated, item)
 }
 
 func idempotency(c fiber.Ctx) (*string, *string) {
@@ -199,11 +271,20 @@ func (h *Handler) GetEvent(c fiber.Ctx, id types.UUID) error {
 	if err != nil {
 		return databaseError(err)
 	}
+	return h.respond(c, fiber.StatusOK, item)
+}
+
+// respond renders one stored event, with its effective reminders.
+func (h *Handler) respond(c fiber.Ctx, status int, item store.Event) error {
 	output, err := event(item)
 	if err != nil {
 		return internal(err)
 	}
-	return c.JSON(output)
+	items := []generated.CalendarEvent{output}
+	if err := h.resolveReminders(c.Context(), items); err != nil {
+		return internal(err)
+	}
+	return c.Status(status).JSON(items[0])
 }
 
 // UpdateEvent merges the body into the stored event, validates the result,
@@ -217,6 +298,9 @@ func (h *Handler) UpdateEvent(c fiber.Ctx, id types.UUID) error {
 		current, err := h.queries.GetEvent(c.Context(), pgUUID(id))
 		if err != nil {
 			return databaseError(err)
+		}
+		if current.SourceKind != string(generated.EventSourceKindManual) && !patch.onlyReminders() {
+			return managedBySource()
 		}
 		fields, err := fieldsFromStore(current)
 		if err != nil {
@@ -237,16 +321,21 @@ func (h *Handler) UpdateEvent(c fiber.Ctx, id types.UUID) error {
 		if err != nil {
 			return internal(err)
 		}
-		output, err := event(item)
-		if err != nil {
-			return internal(err)
-		}
-		return c.JSON(output)
+		return h.respond(c, fiber.StatusOK, item)
 	}
 	return httpserver.NewError(fiber.StatusConflict, "conflict", "the event kept changing; retry the update")
 }
 
+// DeleteEvent deletes a manual event. An imported event's source owns it
+// (and cancels it when it leaves the feed), so it cannot be deleted here.
 func (h *Handler) DeleteEvent(c fiber.Ctx, id types.UUID) error {
+	current, err := h.queries.GetEvent(c.Context(), pgUUID(id))
+	if err != nil {
+		return databaseError(err)
+	}
+	if current.SourceKind != string(generated.EventSourceKindManual) {
+		return managedBySource()
+	}
 	affected, err := h.queries.DeleteEvent(c.Context(), pgUUID(id))
 	if err != nil {
 		return internal(err)
@@ -303,6 +392,11 @@ func badRequest(message string) error {
 
 func notFound() error {
 	return httpserver.NewError(fiber.StatusNotFound, "not_found", "event not found")
+}
+
+func managedBySource() error {
+	return httpserver.NewError(fiber.StatusConflict, "managed_by_source",
+		"this event is imported from a calendar source and is read-only except for its reminders; its source updates, cancels, and restores it")
 }
 
 func internal(err error) error {

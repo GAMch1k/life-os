@@ -28,11 +28,18 @@ type Querier interface {
 	InsertImportedEvent(ctx context.Context, arg InsertImportedEventParams) error
 	// Enabled sources whose next refresh is due and that nobody is refreshing.
 	ListDueSources(ctx context.Context, now pgtype.Timestamptz) ([]pgtype.UUID, error)
-	// Events overlapping [range_start, range_end). An all-day event spans from
-	// midnight of its first day to midnight after its last day in time_zone, so
-	// its dates are matched as the owner's days. The after_* arguments are the
-	// previous page's last row: a keyset cursor over exactly the ORDER BY.
+	// Non-recurring events overlapping [range_start, range_end) (recurring ones
+	// are expanded into occurrences by the caller, see ListRecurringEvents). An
+	// all-day event spans from midnight of its first day to midnight after its
+	// last day in time_zone, so its dates are matched as the owner's days. The
+	// after_* arguments are the previous page's last row: a keyset cursor over
+	// exactly the ORDER BY.
 	ListEvents(ctx context.Context, arg ListEventsParams) ([]ListEventsRow, error)
+	// Recurring events that may have an occurrence overlapping
+	// [range_start, range_end): they start before range_end, and their last
+	// possible occurrence (starting at recurrence_until) ends after range_start.
+	// The caller expands them; a personal calendar holds few of them.
+	ListRecurringEvents(ctx context.Context, arg ListRecurringEventsParams) ([]ListRecurringEventsRow, error)
 	// Imported events are written only by Calendar's source adapter, inside the
 	// refresh transaction that holds LockSource.
 	ListSourceEvents(ctx context.Context, sourceID pgtype.UUID) ([]Event, error)
@@ -43,13 +50,18 @@ type Querier interface {
 	MarkImportedEventRemoved(ctx context.Context, arg MarkImportedEventRemovedParams) error
 	// Gives the lease up after a refresh that could not record an outcome.
 	ReleaseSourceRefresh(ctx context.Context, id pgtype.UUID) error
-	// Events whose title, description, or location contain every pattern (ILIKE
-	// patterns, already escaped). Relevance weighs a pattern found in the title
+	// Non-recurring events whose title, description, or location contain every
+	// pattern (ILIKE patterns, already escaped; recurring ones come from
+	// SearchRecurringEvents). Relevance weighs a pattern found in the title
 	// 3, in the location 2, in the description 1. Then events not over at the
 	// anchor instant come first (bucket 0, soonest start first), then past events
 	// (bucket 1, most recent start first): sort_key is the start in microseconds,
 	// negated for past events, so one ascending keyset covers both directions.
 	SearchEvents(ctx context.Context, arg SearchEventsParams) ([]SearchEventsRow, error)
+	// Recurring events whose title, description, or location contain every
+	// pattern, with the same relevance as SearchEvents. The caller picks their
+	// occurrences; the range only drops series that start after range_end.
+	SearchRecurringEvents(ctx context.Context, arg SearchRecurringEventsParams) ([]SearchRecurringEventsRow, error)
 	// Writes the whole merged event. The expected_updated_at guard makes the
 	// read-merge-write optimistic: a concurrent change makes it match nothing.
 	// Source identity is never updated.
