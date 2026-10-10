@@ -154,6 +154,7 @@ func (r *Refresher) complete(ctx context.Context, source store.CalendarSource, n
 	result, err := r.fetcher.Fetch(ctx, source.Url, deref(source.Etag), deref(source.LastModified))
 	if err == nil && !result.NotModified {
 		feed, err = ics.Parse(result.Body, ics.Options{Owner: r.owner, Now: now})
+		feed.Items = presetItems(source.Preset, feed.Items)
 	}
 	found := outcome{kind: OutcomeImported, err: err, etag: optional(result.ETag), lastModified: optional(result.LastModified)}
 	switch {

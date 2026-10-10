@@ -3,13 +3,17 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 	// The alpine runtime image has no zoneinfo; embed it so the owner's and
 	// requests' IANA timezones resolve.
 	_ "time/tzdata"
+
+	googleuuid "github.com/google/uuid"
 
 	"github.com/GAMch1k/life-os/pkg/activity"
 	"github.com/GAMch1k/life-os/pkg/database"
@@ -63,6 +67,9 @@ func run(ctx context.Context) error {
 	fetcher := ics.NewFetcher(cfg.ICSMaxBytes, time.Duration(cfg.ICSTimeoutSeconds)*time.Second, cfg.ICSAllowPrivateURLs)
 	refresher := sources.NewRefresher(pool, fetcher, schedule, activity.NewEmitter(cfg.ActivityURL, "calendar", logger), logger)
 	scheduler := sources.NewScheduler(refresher, time.Minute, logger)
+	// Before the scheduler starts, so a new or reconfigured ZAW source is
+	// refreshed right away.
+	ensureZAW(ctx, refresher, cfg.ZAWICSURL, logger)
 	api.Register(app, api.NewHandler(repository.New(pool), ownerTimeZone).WithSources(refresher, scheduler.Wake))
 	app.OnShutdown(database.ClosePool(pool))
 
@@ -87,4 +94,33 @@ func run(ctx context.Context) error {
 	})
 
 	return app.RunContext(runCtx, fmt.Sprintf(":%d", cfg.Port))
+}
+
+// ensureZAW keeps the ZAW waste-collection source configured from
+// CALENDAR_ZAW_ICS_URL; unset leaves an existing one as it is. A failure is
+// logged, not fatal: Calendar serves without the source. The URL names a
+// street and is never logged.
+func ensureZAW(ctx context.Context, refresher *sources.Refresher, url string, logger *slog.Logger) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if strings.TrimSpace(url) == "" {
+		existing, found, err := refresher.PresetSource(ctx, sources.PresetZAW)
+		switch {
+		case err != nil:
+			logger.Warn("ZAW source not checked", "error", err)
+		case found:
+			logger.Info("CALENDAR_ZAW_ICS_URL is not set; the existing ZAW source is left as it is",
+				"source", googleuuid.UUID(existing.ID.Bytes), "enabled", existing.Enabled)
+		default:
+			logger.Info("CALENDAR_ZAW_ICS_URL is not set; no ZAW source is configured")
+		}
+		return
+	}
+	result, err := refresher.EnsurePreset(ctx, sources.ZAWPreset(url))
+	if err != nil {
+		logger.Error("ZAW source not configured", "error", err)
+		return
+	}
+	logger.Info("ZAW source ensured", "source", googleuuid.UUID(result.Source.ID.Bytes), "action", result.Action,
+		"enabled", result.Source.Enabled, "refreshDue", result.Due)
 }
