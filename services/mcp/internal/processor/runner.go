@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/GAMch1k/life-os/pkg/activity"
 )
@@ -140,9 +141,8 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 		parsed, err = decodePlan(rawPlan)
 	}
 	if err == nil && (parsed.Ambiguous || parsed.Confidence < 0.8) && len(parsed.Actions) == 1 && isTaskMutation(parsed.Actions[0]) && validAction(parsed.Actions[0]) {
-		query, _ := parsed.Actions[0].Arguments["taskQuery"].(string)
-		if candidates, searchErr := r.taskCandidates(ctx, query); searchErr == nil {
-			return Proposal{}, r.humanReview(ctx, item.ID, started.ID, parsed.Actions[0], candidates, "ambiguous or low-confidence Task selection")
+		if candidates, searchErr := r.findTasks(ctx, parsed.Actions[0]); searchErr == nil {
+			return Proposal{}, r.humanReview(ctx, item.ID, started.ID, parsed.Actions[0], reviewCandidates(candidates), "ambiguous or low-confidence Task selection")
 		}
 	}
 	if err != nil {
@@ -166,26 +166,21 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 		for field, value := range action.Arguments {
 			arguments[field] = value
 		}
-		if (action.Tool == "task_update" || action.Tool == "task_complete" || action.Tool == "task_reopen") && arguments["taskId"] == nil {
-			query, _ := arguments["taskQuery"].(string)
-			raw, findErr := r.Tools.Call(ctx, "task_search", map[string]any{"query": "query=" + url.QueryEscape(query) + "&limit=10"})
-			if findErr != nil {
-				return Proposal{}, r.retryLater(ctx, item.ID, started.ID, actions, "task search failed: "+findErr.Error(), failureDependency, previous)
-			}
-			var found struct {
-				Items []map[string]any `json:"items"`
-			}
-			if json.Unmarshal(toolData(raw), &found) != nil || len(found.Items) != 1 || found.Items[0]["id"] == nil {
-				candidates := make([]map[string]any, 0, len(found.Items))
-				for _, candidate := range found.Items {
-					if id, ok := candidate["id"].(string); ok && id != "" {
-						candidates = append(candidates, candidate)
-					}
+		if isTaskMutation(action) {
+			if arguments["taskId"] == nil {
+				candidates, findErr := r.findTasks(ctx, action)
+				if findErr != nil {
+					return Proposal{}, r.retryLater(ctx, item.ID, started.ID, actions, "task search failed: "+findErr.Error(), failureDependency, previous)
 				}
-				return Proposal{}, r.humanReview(ctx, item.ID, started.ID, action, candidates, "ambiguous or missing Task selection")
+				if len(candidates) != 1 {
+					return Proposal{}, r.humanReview(ctx, item.ID, started.ID, action, reviewCandidates(candidates), "ambiguous or missing Task selection")
+				}
+				arguments["taskId"] = candidates[0]["id"]
 			}
-			arguments["taskId"] = found.Items[0]["id"]
+			// The search terms only identify the Task (a Human Review approval
+			// may still carry the alternatives); the Tasks operation takes its id.
 			delete(arguments, "taskQuery")
+			delete(arguments, "taskQueryAlternatives")
 		}
 		if action.Tool == "task_create" || action.Tool == "calendar_create" || action.Tool == "finance_create_manual_transaction" {
 			arguments["idempotencyKey"] = actionIdempotencyKey(item, len(actions), action)
@@ -210,24 +205,91 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 func isTaskMutation(action plannedAction) bool {
 	return action.Tool == "task_update" || action.Tool == "task_complete" || action.Tool == "task_reopen"
 }
-func (r Runner) taskCandidates(ctx context.Context, query string) ([]map[string]any, error) {
-	raw, err := r.Tools.Call(ctx, "task_search", map[string]any{"query": "query=" + url.QueryEscape(query) + "&limit=10"})
-	if err != nil {
-		return nil, err
+
+const (
+	// taskSearchLimit bounds each Task search and the candidates a Human
+	// Review lists.
+	taskSearchLimit = 10
+	// maxTaskQueryAlternatives bounds the extra search terms one Task
+	// mutation may carry.
+	maxTaskQueryAlternatives = 6
+	// minTaskQueryAlternative is the shortest extra search term used, in
+	// characters; a shorter fragment identifies no particular Task.
+	minTaskQueryAlternative = 3
+)
+
+// taskQueries is every term existing Tasks are searched with for one
+// mutation: its taskQuery, then its taskQueryAlternatives (the same thing in
+// the owner's other languages, or a word stem that also matches inflected
+// forms), trimmed and without duplicates. A title in Russian or German is
+// found from an English capture only through an alternative.
+func taskQueries(arguments map[string]any) []string {
+	var queries []string
+	seen := map[string]bool{}
+	add := func(term string) bool {
+		term = strings.TrimSpace(term)
+		if term == "" || seen[strings.ToLower(term)] {
+			return false
+		}
+		seen[strings.ToLower(term)] = true
+		queries = append(queries, term)
+		return true
 	}
-	var found struct {
-		Items []map[string]any `json:"items"`
-	}
-	if err := json.Unmarshal(toolData(raw), &found); err != nil {
-		return nil, err
-	}
-	candidates := make([]map[string]any, 0, len(found.Items))
-	for _, candidate := range found.Items {
-		if id, ok := candidate["id"].(string); ok && id != "" {
-			candidates = append(candidates, candidate)
+	primary, _ := arguments["taskQuery"].(string)
+	add(primary)
+	alternatives, _ := arguments["taskQueryAlternatives"].([]any)
+	used := 0
+	for _, alternative := range alternatives {
+		if used == maxTaskQueryAlternatives {
+			break
+		}
+		term, _ := alternative.(string)
+		if utf8.RuneCountInString(strings.TrimSpace(term)) >= minTaskQueryAlternative && add(term) {
+			used++
 		}
 	}
-	return candidates, nil
+	return queries
+}
+
+// findTasks returns the distinct Tasks any of a mutation's search terms
+// matches, in the order found. Only open Tasks can be completed or updated
+// and only completed ones reopened, so a finished Task with the same name
+// never makes a capture ambiguous. The caller acts only on exactly one.
+func (r Runner) findTasks(ctx context.Context, action plannedAction) ([]map[string]any, error) {
+	completed := "false"
+	if action.Tool == "task_reopen" {
+		completed = "true"
+	}
+	found := []map[string]any{}
+	seen := map[string]bool{}
+	for _, term := range taskQueries(action.Arguments) {
+		raw, err := r.Tools.Call(ctx, "task_search", map[string]any{"query": fmt.Sprintf("query=%s&completed=%s&limit=%d", url.QueryEscape(term), completed, taskSearchLimit)})
+		if err != nil {
+			return nil, err
+		}
+		var result struct {
+			Items []map[string]any `json:"items"`
+		}
+		if err := json.Unmarshal(toolData(raw), &result); err != nil {
+			// A partial union could look like exactly one match.
+			return nil, fmt.Errorf("decode Task search result: %w", err)
+		}
+		for _, task := range result.Items {
+			if id, ok := task["id"].(string); ok && id != "" && !seen[id] {
+				seen[id] = true
+				found = append(found, task)
+			}
+		}
+	}
+	return found, nil
+}
+
+// reviewCandidates is the Tasks a Human Review offers to choose from.
+func reviewCandidates(found []map[string]any) []map[string]any {
+	if len(found) > taskSearchLimit {
+		return found[:taskSearchLimit]
+	}
+	return found
 }
 
 // planContext carries what planning needs to resolve the item's relative
@@ -347,6 +409,17 @@ func validAction(action plannedAction) bool {
 		if taskQuery, ok := action.Arguments["taskQuery"].(string); (!ok || strings.TrimSpace(taskQuery) == "") && action.Arguments["taskId"] == nil {
 			return false
 		}
+		if alternatives, present := action.Arguments["taskQueryAlternatives"]; present && alternatives != nil {
+			terms, ok := alternatives.([]any)
+			if !ok {
+				return false
+			}
+			for _, term := range terms {
+				if _, ok := term.(string); !ok {
+					return false
+				}
+			}
+		}
 	} else if action.Tool != "finance_create_manual_transaction" {
 		if title, ok := action.Arguments["title"].(string); !ok || strings.TrimSpace(title) == "" {
 			return false
@@ -354,9 +427,9 @@ func validAction(action plannedAction) bool {
 	}
 	allowedFields := map[string]map[string]bool{
 		"task_create":                       {"title": true, "notes": true, "dueAt": true},
-		"task_update":                       {"taskQuery": true, "taskId": true, "title": true, "notes": true, "dueAt": true, "clearDueAt": true},
-		"task_complete":                     {"taskQuery": true, "taskId": true},
-		"task_reopen":                       {"taskQuery": true, "taskId": true},
+		"task_update":                       {"taskQuery": true, "taskQueryAlternatives": true, "taskId": true, "title": true, "notes": true, "dueAt": true, "clearDueAt": true},
+		"task_complete":                     {"taskQuery": true, "taskQueryAlternatives": true, "taskId": true},
+		"task_reopen":                       {"taskQuery": true, "taskQueryAlternatives": true, "taskId": true},
 		"calendar_create":                   {"title": true, "description": true, "allDay": true, "startAt": true, "endAt": true, "startDate": true, "endDate": true},
 		"finance_create_manual_transaction": {"accountId": true, "categoryId": true, "amount": true, "occurredOn": true, "note": true},
 	}

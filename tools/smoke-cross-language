@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+# Cross-language Task matching (POL-08) on the isolated verification stack,
+# with the real authenticated Codex CLI and whisper.cpp.
+#
+# Proves: a statement that something was done completes the one open Task it
+# means even when that Task's title is in another of the owner's languages
+# (English, Russian, German), typed or spoken, without creating a Task; a
+# completed Task with the same name is not a candidate; and two open Tasks in
+# different languages that both fit still go to Human Review, with both
+# offered and neither changed.
+set -euo pipefail
+
+compose=(./tools/verify-compose)
+gateway=http://127.0.0.1:13001
+work=$(mktemp -d)
+cleanup() {
+  "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
+  rm -rf "$work"
+}
+trap cleanup EXIT
+fail() { echo "FAIL: $*" >&2; exit 1; }
+
+# The voice note: English speech for a German-titled Task.
+docker run --rm -v "$work:/out" alpine:3.22 sh -c \
+  "apk add --no-cache espeak-ng >/dev/null && espeak-ng -v en-us -s 125 -w /out/chicken.wav 'I already bought the chicken.' && chmod 644 /out/chicken.wav"
+
+"${compose[@]}" up --detach --no-build
+ready() { for _ in $(seq 1 90); do curl --fail --silent "$gateway/api/$1/ready" >/dev/null && return; sleep 1; done; fail "$1 is not ready"; }
+for service in inbox tasks voice; do ready "$service"; done
+for _ in $(seq 1 180); do
+  [ "$("${compose[@]}" ps whisper --format '{{.Health}}')" = healthy ] && break
+  sleep 2
+done
+
+# Writes are attributed to this script as a development tool, never to the
+# owner (CONTRIBUTING.md, "Development tools and live data").
+api() { curl --fail --silent -H 'X-Life-OS-Actor: dev:smoke-cross-language' "$@"; }
+post_json() { api -H 'content-type: application/json' --data "$2" "$gateway$1"; }
+seed() { post_json /api/tasks/v1/tasks "$(jq -nc --arg title "$1" '{title:$title}')" | jq -r '.id'; }
+capture() {
+  post_json /api/inbox/v1/inbox-items "$(jq -nc --arg content "$1" '{content:$content,source:"web",sourceMetadata:{verification:"pol-08-cross-language"}}')" | jq -r '.id'
+}
+item() { api "$gateway/api/inbox/v1/inbox-items/$1"; }
+completed() { api "$gateway/api/tasks/v1/tasks/$1" | jq -r '.completed'; }
+task_count() { api "$gateway/api/tasks/v1/tasks?limit=100" | jq '.items | length'; }
+
+# settle <item id>: the item's state once the processor has decided it.
+settle() {
+  local state=
+  for _ in $(seq 1 180); do
+    state=$(item "$1" | jq -r '.state')
+    case "$state" in resolved | human_review | failed) break ;; esac
+    sleep 2
+  done
+  echo "$state"
+}
+
+# expect_completed <scenario> <item id> <task id>: the capture was resolved by
+# one task_complete of exactly that Task.
+expect_completed() {
+  local scenario=$1 id=$2 task=$3 state attempts
+  state=$(settle "$id")
+  attempts=$(api "$gateway/api/inbox/v1/inbox-items/$id/processing-attempts")
+  [ "$state" = resolved ] ||
+    fail "$scenario: item is '$state', want resolved. Review: $(item "$id" | jq -c '.processingMetadata.humanReview // {}') Attempts: $(jq -c '[.items[] | {status, errorSummary}]' <<<"$attempts")"
+  jq -e --arg task "$task" 'any(.items[]; .status == "processed" and (.actions | length == 1 and .[0].tool == "task_complete" and .[0].arguments.taskId == $task))' >/dev/null <<<"$attempts" ||
+    fail "$scenario: not resolved by completing $task: $(jq -c '[.items[] | {status, actions}]' <<<"$attempts")"
+  [ "$(completed "$task")" = true ] || fail "$scenario: Task $task is not completed"
+  echo "ok: $scenario"
+}
+
+# 1. Typed captures whose Task is titled in another language. The unrelated
+#    Tasks, one per language, must stay open.
+chicken_ru=$(seed "Купить курицу на ужин")
+milk_en=$(seed "Buy milk")
+trash_en=$(seed "Take out the trash")
+passport_en=$(seed "Renew the passport")
+mama_ru=$(seed "Позвонить маме")
+zahnarzt_de=$(seed "Zahnarzt anrufen")
+en_item=$(capture "I already bought the chicken.")
+de_item=$(capture "Ich habe die Milch schon gekauft.")
+ru_item=$(capture "Я уже вынес мусор.")
+expect_completed "EN 'I already bought the chicken.' completes 'Купить курицу на ужин'" "$en_item" "$chicken_ru"
+expect_completed "DE 'Ich habe die Milch schon gekauft.' completes 'Buy milk'" "$de_item" "$milk_en"
+expect_completed "RU 'Я уже вынес мусор.' completes 'Take out the trash'" "$ru_item" "$trash_en"
+for task in "$passport_en" "$mama_ru" "$zahnarzt_de"; do
+  [ "$(completed "$task")" = false ] || fail "unrelated Task $task was completed"
+done
+echo "ok: unrelated Tasks stay open"
+
+# 2. Voice: the same English sentence, spoken, for a German-titled Task. The
+#    Russian chicken Task completed in step 1 still matches the words, but a
+#    completed Task cannot be completed again, so it is not a candidate.
+hahnchen_de=$(seed "Hähnchen fürs Abendessen kaufen")
+job=$(api -F "audio=@$work/chicken.wav;type=audio/wav" -F source=web "$gateway/api/voice/v1/audio-jobs" | jq -r '.id')
+voice_item=
+for _ in $(seq 1 120); do
+  voice_item=$(api "$gateway/api/voice/v1/audio-jobs/$job" | jq -r '.inboxItemId // empty')
+  [ -n "$voice_item" ] && break
+  sleep 2
+done
+[ -n "$voice_item" ] || fail "the voice note did not reach the Inbox: $(api "$gateway/api/voice/v1/audio-jobs/$job" | jq -c '{status, errorSummary}')"
+echo "transcript: $(item "$voice_item" | jq -r '.content')"
+expect_completed "Voice (spoken English) completes 'Hähnchen fürs Abendessen kaufen'" "$voice_item" "$hahnchen_de"
+
+# 3. Two open chicken Tasks in different languages: the capture fits both.
+soup_ru=$(seed "Купить курицу для супа")
+wings_en=$(seed "Buy chicken wings")
+ambiguous_item=$(capture "I already bought the chicken.")
+state=$(settle "$ambiguous_item")
+review=$(item "$ambiguous_item")
+[ "$state" = human_review ] || fail "two chicken Tasks: item is '$state', want human_review: $(jq -c '.processingMetadata' <<<"$review")"
+jq -e --arg a "$soup_ru" --arg b "$wings_en" '(.processingMetadata.humanReview.candidates | map(.id) | sort) == ([$a, $b] | sort)' >/dev/null <<<"$review" ||
+  fail "two chicken Tasks: candidates are $(jq -c '[.processingMetadata.humanReview.candidates[] | .title]' <<<"$review"), want exactly the two open ones"
+for task in "$soup_ru" "$wings_en"; do
+  [ "$(completed "$task")" = false ] || fail "two chicken Tasks: Task $task was completed without a decision"
+done
+echo "ok: two open chicken Tasks in different languages go to Human Review with both as candidates ($(jq -c '.processingMetadata.humanReview.proposedAction.arguments' <<<"$review"))"
+
+# No Task was created: the nine seeds are all there is.
+total=$(task_count)
+[ "$total" = 9 ] || fail "$total Tasks exist, want the 9 seeded: $(api "$gateway/api/tasks/v1/tasks?limit=100" | jq -c '[.items[].title]')"
+echo "ok: no Task was created"
+
+echo "cross-language Task matching smoke passed"
