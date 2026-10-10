@@ -1,0 +1,215 @@
+openapi: 3.0.3
+info:
+  title: Life OS Calendar Feeds API
+  version: 1.0.0
+  description: >-
+    The calendar-feeds integration subscribes to ICS/iCal feeds (such as the
+    owner's ZAW waste calendar) and keeps their events in Calendar. It owns
+    each feed's configuration (URL, type filter, preset), its refresh
+    schedule, the conditional-request validators, and the last outcome. It
+    downloads a feed safely, parses its events, and hands them to Calendar
+    only through Calendar's integration API
+    (`/v1/integrations/calendar-feeds/...`, actor `system:calendar-feeds`):
+    each feed is one Calendar source, known there by the feed's `id` as its
+    `externalId`. Calendar owns the events and the owner's settings of the
+    source: its name, `enabled`, default reminders, and default priority are
+    changed through Calendar's `/v1/sources`, not here.
+
+
+    Every write (POST, PATCH, DELETE) must say who makes it in the
+    X-Life-OS-Actor header: `user` (the owner), `agent:<name>` (the Life OS
+    AI), `system:<name>` (a Life OS component), or `dev:<name>` (a
+    development tool or agent working on Life OS, such as Claude Code). A
+    write without a valid actor is rejected with 400 and error code
+    `actor_required`. Reads do not need the header. The public gateway
+    passes only `user` and `dev:<name>`.
+
+
+    Errors use the shared envelope `{"error": {"code", "message"},
+    "request_id"}`. A feed URL can carry personal data (the ZAW feed names a
+    street): it is returned to the owner here but never logged, recorded in
+    Activity, or put in `lastError`.
+  license: {name: UNLICENSED, url: https://life-os.local/license}
+servers: [{url: http://calendar-feeds:8080}]
+paths:
+  /v1/feeds:
+    get:
+      summary: List feeds
+      description: Every feed, oldest first, with its configuration and refresh state.
+      operationId: listFeeds
+      security: []
+      responses:
+        '200': {description: Feeds, content: {application/json: {schema: {$ref: '#/components/schemas/FeedList'}}}}
+        '400': {description: Invalid request}
+    post:
+      summary: Subscribe to a feed
+      description: >-
+        Adds a feed and registers its source in Calendar (with the default
+        reminders and default priority given here, which are then the
+        owner's settings in Calendar). The URL must be https and reach a
+        public address (private, loopback, and link-local addresses are
+        refused, also after redirects). The feed is imported shortly after
+        it is added and then refreshed daily at the configured quiet hour in
+        the owner's timezone. Nothing is added when Calendar cannot register
+        the source (502).
+      operationId: createFeed
+      security: []
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateFeedRequest'}}}}
+      responses:
+        '201': {description: Feed, content: {application/json: {schema: {$ref: '#/components/schemas/Feed'}}}}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}
+        '502': {description: 'Calendar could not be reached or refused the source (calendar_unavailable); nothing was added'}
+  /v1/feeds/{feedId}:
+    get:
+      summary: Get a feed
+      operationId: getFeed
+      security: []
+      parameters: [{$ref: '#/components/parameters/FeedId'}]
+      responses:
+        '200': {description: Feed, content: {application/json: {schema: {$ref: '#/components/schemas/Feed'}}}}
+        '400': {description: Invalid request}
+        '404': {description: Feed not found}
+    patch:
+      summary: Change a feed's URL or filter
+      description: >-
+        Changes only the fields present in the body. A changed `url` or
+        `filter` makes the next refresh download the feed in full and
+        schedules it right away; events the new filter excludes are
+        reconciled like events that left the feed. The feed's name, enabled,
+        default reminders, and default priority are its Calendar source's
+        (`PATCH /v1/sources/{sourceId}` in Calendar).
+      operationId: updateFeed
+      security: []
+      parameters: [{$ref: '#/components/parameters/FeedId'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateFeedRequest'}}}}
+      responses:
+        '200': {description: Feed, content: {application/json: {schema: {$ref: '#/components/schemas/Feed'}}}}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}
+        '404': {description: Feed not found}
+        '409': {description: 'The feed kept changing concurrently; retry the update (conflict)'}
+    delete:
+      summary: Unsubscribe from a feed
+      description: >-
+        Deletes the feed and its Calendar source with every event imported
+        from it. To stop refreshing and keep the events, disable the source
+        in Calendar instead. A preset feed (ZAW) comes back at the next start
+        while its environment setting is present.
+      operationId: deleteFeed
+      security: []
+      parameters: [{$ref: '#/components/parameters/FeedId'}]
+      responses:
+        '204': {description: Feed and its events deleted}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}
+        '404': {description: Feed not found}
+        '502': {description: 'Calendar could not be reached (calendar_unavailable); nothing was deleted'}
+  /v1/feeds/{feedId}/refresh:
+    post:
+      summary: Refresh a feed now
+      description: >-
+        Downloads the feed and syncs its events to Calendar right away (the
+        "Refresh now" of a feed), then returns the feed. The request
+        succeeds whether or not the refresh does: read `refresh.lastOutcome`
+        and `refresh.lastError`. A failed refresh keeps the events from the
+        last good one and is retried with backoff.
+      operationId: refreshFeed
+      security: []
+      parameters: [{$ref: '#/components/parameters/FeedId'}]
+      responses:
+        '200': {description: The feed after the refresh, content: {application/json: {schema: {$ref: '#/components/schemas/Feed'}}}}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}
+        '404': {description: Feed not found (or its Calendar source was deleted)}
+        '409': {description: 'The source is disabled in Calendar (source_disabled), a refresh is already running (refresh_in_progress), or the feed changed during the refresh (conflict)'}
+components:
+  parameters:
+    FeedId: {name: feedId, in: path, required: true, description: 'The feed''s id (its Calendar source''s externalId).', schema: {type: string, format: uuid}}
+  schemas:
+    EventPriority:
+      type: string
+      enum: [low, medium, high]
+      description: How important an event is; the importance of its reminder notifications.
+    Reminder:
+      type: object
+      description: >-
+        A reminder as Calendar takes it. `relative`: `minutesBefore` the
+        event starts. `localTime`: at `localTime` (HH:MM on the owner's wall
+        clock) on the day `daysBefore` days before the event's start date.
+      required: [kind]
+      properties:
+        kind: {type: string, enum: [relative, localTime]}
+        minutesBefore: {type: integer, minimum: 0, maximum: 40320}
+        daysBefore: {type: integer, minimum: 0, maximum: 28}
+        localTime: {type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$'}
+    FeedFilter:
+      type: object
+      description: >-
+        Which feed events to import. A term matches an event when it equals
+        one of the event's CATEGORIES or occurs in its SUMMARY (both
+        case-insensitive). With `include` terms, only events matching one of
+        them are imported; then events matching an `exclude` term are
+        dropped. Empty lists import everything.
+      required: [include, exclude]
+      properties:
+        include: {type: array, maxItems: 50, items: {type: string, minLength: 1, maxLength: 100}}
+        exclude: {type: array, maxItems: 50, items: {type: string, minLength: 1, maxLength: 100}}
+    FeedRefreshOutcome:
+      type: string
+      enum: [imported, not_modified, failed]
+      description: '`imported`: the feed was downloaded and its events synced to Calendar. `not_modified`: the server confirmed the feed is unchanged (ETag/Last-Modified). `failed`: the refresh failed; the events from the last good refresh are kept.'
+    FeedRefreshCounts:
+      type: object
+      description: What the last syncing refresh did.
+      required: [feedEvents, imported, inserted, updated, removed, restored, unchanged]
+      properties:
+        feedEvents: {type: integer, description: Events (occurrences) in the feed.}
+        imported: {type: integer, description: Feed events kept by the filter and sent to Calendar.}
+        inserted: {type: integer}
+        updated: {type: integer}
+        removed: {type: integer, description: 'Future events no longer in the feed (or now filtered out): cancelled and marked removedFromSourceAt.'}
+        restored: {type: integer, description: Events back in the feed after having been removed.}
+        unchanged: {type: integer}
+        skipped: {type: integer, description: Feed events that could not be read (such as a missing start) and were left out.}
+    FeedRefreshState:
+      type: object
+      description: The feed's refresh schedule and last outcome (`lastOutcome` and `lastCounts` are absent before the first refresh).
+      required: [consecutiveFailures, refreshing]
+      properties:
+        nextRefreshAt: {type: string, format: date-time, nullable: true, description: 'When the feed is refreshed next (daily at the quiet hour, sooner after a failure).'}
+        lastAttemptAt: {type: string, format: date-time, nullable: true}
+        lastSuccessAt: {type: string, format: date-time, nullable: true}
+        lastOutcome: {$ref: '#/components/schemas/FeedRefreshOutcome'}
+        lastError: {type: string, nullable: true, description: Why the last refresh failed; null after a success.}
+        consecutiveFailures: {type: integer, description: Failed refreshes since the last success; drives the retry backoff.}
+        lastCounts: {$ref: '#/components/schemas/FeedRefreshCounts'}
+        etag: {type: string, nullable: true, description: 'The feed''s ETag from the last download, sent back as If-None-Match.'}
+        lastModified: {type: string, nullable: true, description: 'The feed''s Last-Modified from the last download, sent back as If-Modified-Since.'}
+        refreshing: {type: boolean, description: A refresh is running now.}
+    Feed:
+      type: object
+      required: [id, name, url, enabled, filter, refresh, createdAt, updatedAt]
+      properties:
+        id: {type: string, format: uuid, description: 'The feed''s id: its Calendar source''s externalId (for a feed from before the integration service, also the source''s id).'}
+        sourceId: {type: string, format: uuid, nullable: true, description: 'The Calendar source the feed''s events belong to (`source.sourceId` of its events); null until Calendar has registered it.'}
+        name: {type: string, description: 'The source''s name as Calendar last reported it (the owner renames it in Calendar).'}
+        url: {type: string, description: 'The feed URL (https; webcal:// is stored as https).'}
+        enabled: {type: boolean, description: 'Whether the source is enabled in Calendar, as last reported (the owner''s switch, in Calendar). A disabled source is not refreshed; its events stay as they are.'}
+        preset: {type: string, nullable: true, description: 'Set (such as `zaw`) for a feed this service configures from its own environment at startup; null for feeds added through the API. A preset feed can be changed like any other, but while its environment setting is present a deleted one is added again at the next start.'}
+        filter: {$ref: '#/components/schemas/FeedFilter'}
+        refresh: {$ref: '#/components/schemas/FeedRefreshState'}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time, description: When the configuration last changed.}
+    FeedList: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/Feed'}}}}
+    CreateFeedRequest:
+      type: object
+      required: [name, url]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 100, description: 'The name shown with the feed''s events, such as "Holidays".'}
+        url: {type: string, minLength: 1, maxLength: 2048, description: 'An https URL of an ICS/iCal feed (webcal:// is accepted and means https).'}
+        filter: {$ref: '#/components/schemas/FeedFilter'}
+        defaultReminders: {type: array, nullable: true, maxItems: 10, items: {$ref: '#/components/schemas/Reminder'}, description: The source's default reminders in Calendar; leave out for none.}
+        defaultPriority: {allOf: [{$ref: '#/components/schemas/EventPriority'}], description: The source's default priority in Calendar; leave out for medium.}
+    UpdateFeedRequest:
+      type: object
+      minProperties: 1
+      properties:
+        url: {type: string, minLength: 1, maxLength: 2048}
+        filter: {$ref: '#/components/schemas/FeedFilter'}

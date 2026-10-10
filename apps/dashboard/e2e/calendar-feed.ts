@@ -3,11 +3,15 @@ import path from "node:path";
 
 import { type APIRequestContext, expect } from "./fixtures";
 
-// Calendar sources (ICS feeds) for the browser tests. A source whose host
-// does not exist fails on every verification stack. Feeds that import need
-// the verification overlay tools/fixtures/calendar-ics.compose.yaml: it
-// serves the files a test writes to LIFE_OS_E2E_ICS_DIR at
-// http://ics-fixture/ and lets that stack's Calendar fetch them.
+// Calendar feeds (ICS) for the browser tests, through the calendar-feeds
+// integration (/api/integrations/calendar-feeds). A feed is one Calendar
+// source: `id` is the feed's, `sourceId` its Calendar source's (its events'
+// source.sourceId, its Activity subject, and /api/calendar/v1/sources for
+// its name, enabled, and defaults). A feed whose host does not exist fails
+// on every verification stack. Feeds that import need the verification
+// overlay tools/fixtures/calendar-ics.compose.yaml: it serves the files a
+// test writes to LIFE_OS_E2E_ICS_DIR at http://ics-fixture/ and lets that
+// stack's calendar-feeds fetch them.
 
 export const feedDir = process.env.LIFE_OS_E2E_ICS_DIR;
 const feedBase = (
@@ -24,9 +28,13 @@ export type FeedEvent = { uid: string; title: string } & (
   { start: Date; end: Date } | { day: string }
 );
 
-export type CalendarSource = {
+const FEEDS = "/api/integrations/calendar-feeds/v1/feeds";
+
+export type CalendarFeed = {
   id: string;
+  sourceId: string;
   name: string;
+  enabled: boolean;
   refresh: {
     lastOutcome?: string;
     lastError?: string | null;
@@ -97,73 +105,82 @@ export function writeFeed(file: string, events: FeedEvent[]) {
   return `${feedBase}/${file}`;
 }
 
-export async function createSource(
+/**
+ * Subscribes to a feed; `enabled: false` switches its Calendar source off
+ * right away (a disabled feed is not refreshed).
+ */
+export async function createFeed(
   request: APIRequestContext,
   name: string,
   url: string,
-): Promise<CalendarSource> {
-  const response = await request.post("/api/calendar/v1/sources", {
-    data: { name, url },
-  });
+  { enabled = true }: { enabled?: boolean } = {},
+): Promise<CalendarFeed> {
+  const response = await request.post(FEEDS, { data: { name, url } });
   expect(response.status(), await response.text()).toBe(201);
-  return response.json();
+  const feed = (await response.json()) as CalendarFeed;
+  if (!enabled) {
+    const off = await request.patch(
+      `/api/calendar/v1/sources/${feed.sourceId}`,
+      { data: { enabled: false } },
+    );
+    expect(off.status(), await off.text()).toBe(200);
+  }
+  return feed;
 }
 
-async function getSource(
+async function getFeed(
   request: APIRequestContext,
   id: string,
-): Promise<CalendarSource> {
-  const response = await request.get(`/api/calendar/v1/sources/${id}`);
+): Promise<CalendarFeed> {
+  const response = await request.get(`${FEEDS}/${id}`);
   expect(response.ok()).toBeTruthy();
   return response.json();
 }
 
 /**
- * Waits for the source's first refresh, which Calendar's scheduler starts as
- * soon as the source is added.
+ * Waits for the feed's first refresh, which calendar-feeds' scheduler starts
+ * as soon as the feed is added.
  */
 export async function waitForRefresh(
   request: APIRequestContext,
   id: string,
   outcome: "imported" | "failed",
 ) {
-  let source: CalendarSource | undefined;
+  let feed: CalendarFeed | undefined;
   await expect
     .poll(
       async () => {
-        source = await getSource(request, id);
-        return source.refresh.lastOutcome;
+        feed = await getFeed(request, id);
+        return feed.refresh.lastOutcome;
       },
       { timeout: 90_000 },
     )
     .toBe(outcome);
-  return source!;
+  return feed!;
 }
 
-/** "Refresh now", retried while another refresh of the source runs. */
-export async function refreshSource(
+/** "Refresh now", retried while another refresh of the feed runs. */
+export async function refreshFeed(
   request: APIRequestContext,
   id: string,
-): Promise<CalendarSource> {
-  let source: CalendarSource | undefined;
+): Promise<CalendarFeed> {
+  let feed: CalendarFeed | undefined;
   await expect
     .poll(
       async () => {
-        const response = await request.post(
-          `/api/calendar/v1/sources/${id}/refresh`,
-        );
+        const response = await request.post(`${FEEDS}/${id}/refresh`);
         if (response.status() === 409) return "running";
         expect(response.status(), await response.text()).toBe(200);
-        source = await response.json();
+        feed = await response.json();
         return "done";
       },
       { timeout: 60_000 },
     )
     .toBe("done");
-  return source!;
+  return feed!;
 }
 
-/** Removes the source and the events it imported. */
-export async function deleteSource(request: APIRequestContext, id: string) {
-  await request.delete(`/api/calendar/v1/sources/${id}`);
+/** Unsubscribes: the feed, its Calendar source, and its events go. */
+export async function deleteFeed(request: APIRequestContext, id: string) {
+  await request.delete(`${FEEDS}/${id}`);
 }

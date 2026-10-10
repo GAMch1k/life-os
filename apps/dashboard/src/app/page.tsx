@@ -4,6 +4,7 @@ import { StatusAlert } from "@/components/runtime-status";
 import { getHomeAttention } from "@/lib/home-attention";
 import { getInboxBacklog } from "@/lib/inbox-summary";
 import { getRuntimeStatus } from "@/lib/runtime-status";
+import { dayKey } from "@/lib/time-zone";
 import { userTimeZone } from "@/lib/user-time-zone";
 
 export const dynamic = "force-dynamic";
@@ -31,6 +32,7 @@ export default async function Home() {
         attention={attention}
         humanReviewCount={backlog?.humanReviewCount}
         timeZone={timeZone}
+        today={dayKey(new Date(), timeZone)}
       />
     </div>
   );

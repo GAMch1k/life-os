@@ -379,26 +379,26 @@ type CalendarSource struct {
 	// DefaultReminders Default reminders for this source's events: every event that uses its defaults gets them, together with its own (for example the evening before a waste pickup, `{"kind":"localTime","daysBefore":1,"localTime":"19:00"}`). Null means none.
 	DefaultReminders *[]Reminder `json:"defaultReminders"`
 
-	// Enabled Disabled sources are not refreshed; their events stay as they are.
+	// Enabled The owner's switch: a disabled source is not synced (its integration's syncs are refused); its events stay as they are.
 	Enabled bool `json:"enabled"`
 
 	// ExternalId The source's id in its integration.
 	ExternalId *string `json:"externalId,omitempty"`
 
-	// Filter Which feed events to import. A term matches an event when it equals one of the event's CATEGORIES or occurs in its SUMMARY (both case-insensitive). With `include` terms, only events matching one of them are imported; then events matching an `exclude` term are dropped. Empty lists import everything.
+	// Filter Which feed events to import. A term matches an event when it equals one of the event's CATEGORIES or occurs in its SUMMARY (both case-insensitive). With `include` terms, only events matching one of them are imported; then events matching an `exclude` term are dropped. Empty lists import everything. Empty for a source an integration syncs: a feed's filter is calendar-feeds'.
 	Filter SourceFilter       `json:"filter"`
 	Id     openapi_types.UUID `json:"id"`
 
 	// Integration The integration the source belongs to, such as calendar-feeds.
 	Integration *string `json:"integration,omitempty"`
 
-	// Kind `ics`: an ICS/iCal feed Calendar downloads from a URL. `external`: a source an integration syncs (see `/v1/integrations`), which keeps its own URL, filter, and refresh state.
+	// Kind `external`: a source an integration syncs (see `/v1/integrations`), which keeps its own URL, filter, and refresh state, such as a feed of calendar-feeds. `ics`: a feed Calendar downloaded itself before the handover to calendar-feeds (P11-08); none remain after its migration, and P11-09 drops the kind.
 	Kind CalendarSourceKind `json:"kind"`
 
 	// Name The label shown with the source's events, such as "ZAW".
 	Name string `json:"name"`
 
-	// Preset Set (such as `zaw`) for a source Calendar configures from its own environment at startup; null for sources added through the API. A preset source can be edited like any other, but while its environment setting is present a deleted one is added again at the next start.
+	// Preset Set (such as `zaw`) for a feed Calendar refreshed itself and configured from its environment, before the handover; null for a source an integration syncs (calendar-feeds keeps its preset).
 	Preset *string `json:"preset,omitempty"`
 
 	// Provider The label of the source's provider, such as ZAW or ICS.
@@ -407,17 +407,17 @@ type CalendarSource struct {
 	// ReadOnly Whether the source accepts changes to its events.
 	ReadOnly *bool `json:"readOnly,omitempty"`
 
-	// Refresh The source's refresh schedule and last outcome (`lastOutcome` and `lastCounts` are absent before the first refresh). Read-only.
+	// Refresh The refresh schedule and last outcome of a feed Calendar refreshed itself (`lastOutcome` and `lastCounts` are absent before the first refresh). Read-only. Empty (no outcome, no failures) for a source an integration syncs: its integration keeps that state (a feed's is calendar-feeds' `refresh`).
 	Refresh SourceRefreshState `json:"refresh"`
 
 	// UpdatedAt When the configuration last changed.
 	UpdatedAt time.Time `json:"updatedAt"`
 
-	// Url The feed URL; empty for a source an integration syncs.
+	// Url The feed URL of a feed Calendar refreshed itself (before the handover); empty for a source an integration syncs (its integration keeps the URL).
 	Url string `json:"url"`
 }
 
-// CalendarSourceKind `ics`: an ICS/iCal feed Calendar downloads from a URL. `external`: a source an integration syncs (see `/v1/integrations`), which keeps its own URL, filter, and refresh state.
+// CalendarSourceKind `external`: a source an integration syncs (see `/v1/integrations`), which keeps its own URL, filter, and refresh state, such as a feed of calendar-feeds. `ics`: a feed Calendar downloaded itself before the handover to calendar-feeds (P11-08); none remain after its migration, and P11-09 drops the kind.
 type CalendarSourceKind string
 
 // ChangeFeedEntry defines model for ChangeFeedEntry.
@@ -504,24 +504,6 @@ type CreateEventRequest struct {
 
 	// UseDefaultReminders Whether the default reminders apply as well; false (with no `reminders`) means no reminders at all.
 	UseDefaultReminders *bool `json:"useDefaultReminders,omitempty"`
-}
-
-// CreateSourceRequest defines model for CreateSourceRequest.
-type CreateSourceRequest struct {
-	// DefaultPriority Leave out for medium.
-	DefaultPriority  *EventPriority `json:"defaultPriority,omitempty"`
-	DefaultReminders *[]Reminder    `json:"defaultReminders,omitempty"`
-	Enabled          *bool          `json:"enabled,omitempty"`
-
-	// Filter Which feed events to import. A term matches an event when it equals one of the event's CATEGORIES or occurs in its SUMMARY (both case-insensitive). With `include` terms, only events matching one of them are imported; then events matching an `exclude` term are dropped. Empty lists import everything.
-	Filter *SourceFilter `json:"filter,omitempty"`
-
-	// Kind `ics`: an ICS/iCal feed Calendar downloads from a URL. `external`: a source an integration syncs (see `/v1/integrations`), which keeps its own URL, filter, and refresh state.
-	Kind *CalendarSourceKind `json:"kind,omitempty"`
-	Name string              `json:"name"`
-
-	// Url An https URL of an ICS/iCal feed (webcal:// is accepted and means https).
-	Url string `json:"url"`
 }
 
 // EventList defines model for EventList.
@@ -801,7 +783,7 @@ type SourceEventReminders struct {
 	UseDefault bool `json:"useDefault"`
 }
 
-// SourceFilter Which feed events to import. A term matches an event when it equals one of the event's CATEGORIES or occurs in its SUMMARY (both case-insensitive). With `include` terms, only events matching one of them are imported; then events matching an `exclude` term are dropped. Empty lists import everything.
+// SourceFilter Which feed events to import. A term matches an event when it equals one of the event's CATEGORIES or occurs in its SUMMARY (both case-insensitive). With `include` terms, only events matching one of them are imported; then events matching an `exclude` term are dropped. Empty lists import everything. Empty for a source an integration syncs: a feed's filter is calendar-feeds'.
 type SourceFilter struct {
 	Exclude []string `json:"exclude"`
 	Include []string `json:"include"`
@@ -836,7 +818,7 @@ type SourceRefreshCounts struct {
 // SourceRefreshOutcome `imported`: the feed was downloaded and its events reconciled. `not_modified`: the server confirmed the feed is unchanged (ETag/Last-Modified). `failed`: the refresh failed; the events from the last good refresh are kept.
 type SourceRefreshOutcome string
 
-// SourceRefreshState The source's refresh schedule and last outcome (`lastOutcome` and `lastCounts` are absent before the first refresh). Read-only.
+// SourceRefreshState The refresh schedule and last outcome of a feed Calendar refreshed itself (`lastOutcome` and `lastCounts` are absent before the first refresh). Read-only. Empty (no outcome, no failures) for a source an integration syncs: its integration keeps that state (a feed's is calendar-feeds' `refresh`).
 type SourceRefreshState struct {
 	// ConsecutiveFailures Failed refreshes since the last success; drives the retry backoff.
 	ConsecutiveFailures int `json:"consecutiveFailures"`
@@ -980,10 +962,12 @@ type UpdateSourceRequest struct {
 	DefaultReminders *[]Reminder `json:"defaultReminders,omitempty"`
 	Enabled          *bool       `json:"enabled,omitempty"`
 
-	// Filter Which feed events to import. A term matches an event when it equals one of the event's CATEGORIES or occurs in its SUMMARY (both case-insensitive). With `include` terms, only events matching one of them are imported; then events matching an `exclude` term are dropped. Empty lists import everything.
+	// Filter Which feed events to import. A term matches an event when it equals one of the event's CATEGORIES or occurs in its SUMMARY (both case-insensitive). With `include` terms, only events matching one of them are imported; then events matching an `exclude` term are dropped. Empty lists import everything. Empty for a source an integration syncs: a feed's filter is calendar-feeds'.
 	Filter *SourceFilter `json:"filter,omitempty"`
 	Name   *string       `json:"name,omitempty"`
-	Url    *string       `json:"url,omitempty"`
+
+	// Url Not changeable here: a feed's URL and filter belong to its integration (409 managed_by_integration).
+	Url *string `json:"url,omitempty"`
 }
 
 // Weekday A day of the week, as in iCalendar (MO is Monday).
@@ -1114,9 +1098,6 @@ type SyncIntegrationSourceJSONRequestBody = SyncIntegrationSourceRequest
 // UpdateSettingsJSONRequestBody defines body for UpdateSettings for application/json ContentType.
 type UpdateSettingsJSONRequestBody = UpdateSettingsRequest
 
-// CreateSourceJSONRequestBody defines body for CreateSource for application/json ContentType.
-type CreateSourceJSONRequestBody = CreateSourceRequest
-
 // UpdateSourceJSONRequestBody defines body for UpdateSource for application/json ContentType.
 type UpdateSourceJSONRequestBody = UpdateSourceRequest
 
@@ -1182,9 +1163,6 @@ type ServerInterface interface {
 	// ListSources List calendar sources
 	// (GET /v1/sources)
 	ListSources(c fiber.Ctx) error
-	// CreateSource Add a calendar source
-	// (POST /v1/sources)
-	CreateSource(c fiber.Ctx) error
 	// DeleteSource Delete a calendar source
 	// (DELETE /v1/sources/{sourceId})
 	DeleteSource(c fiber.Ctx, sourceId openapi_types.UUID) error
@@ -1194,9 +1172,6 @@ type ServerInterface interface {
 	// UpdateSource Update a calendar source
 	// (PATCH /v1/sources/{sourceId})
 	UpdateSource(c fiber.Ctx, sourceId openapi_types.UUID) error
-	// RefreshSource Refresh a calendar source now
-	// (POST /v1/sources/{sourceId}/refresh)
-	RefreshSource(c fiber.Ctx, sourceId openapi_types.UUID) error
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -1954,24 +1929,6 @@ func (siw *ServerInterfaceWrapper) ListSources(c fiber.Ctx) error {
 	return handler(c)
 }
 
-// CreateSource operation middleware
-func (siw *ServerInterfaceWrapper) CreateSource(c fiber.Ctx) error {
-
-	handler := func(c fiber.Ctx) error {
-		return siw.Handler.CreateSource(c)
-	}
-
-	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
-		m := siw.HandlerMiddlewares[i]
-		next := handler
-		handler = func(c fiber.Ctx) error {
-			return m(c, next)
-		}
-	}
-
-	return handler(c)
-}
-
 // DeleteSource operation middleware
 func (siw *ServerInterfaceWrapper) DeleteSource(c fiber.Ctx) error {
 
@@ -2059,35 +2016,6 @@ func (siw *ServerInterfaceWrapper) UpdateSource(c fiber.Ctx) error {
 	return handler(c)
 }
 
-// RefreshSource operation middleware
-func (siw *ServerInterfaceWrapper) RefreshSource(c fiber.Ctx) error {
-
-	var err error
-	_ = err
-
-	// ------------- Path parameter "sourceId" -------------
-	var sourceId openapi_types.UUID
-
-	err = runtime.BindStyledParameterWithOptions("simple", "sourceId", c.Params("sourceId"), &sourceId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
-	if err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter sourceId: %w", err).Error())
-	}
-
-	handler := func(c fiber.Ctx) error {
-		return siw.Handler.RefreshSource(c, sourceId)
-	}
-
-	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
-		m := siw.HandlerMiddlewares[i]
-		next := handler
-		handler = func(c fiber.Ctx) error {
-			return m(c, next)
-		}
-	}
-
-	return handler(c)
-}
-
 // FiberServerOptions provides options for the Fiber server.
 type FiberServerOptions struct {
 	BaseURL            string
@@ -2133,15 +2061,11 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 
 	router.Get(options.BaseURL+"/v1/sources", wrapper.ListSources)
 
-	router.Post(options.BaseURL+"/v1/sources", wrapper.CreateSource)
-
 	router.Delete(options.BaseURL+"/v1/sources/:sourceId", wrapper.DeleteSource)
 
 	router.Get(options.BaseURL+"/v1/sources/:sourceId", wrapper.GetSource)
 
 	router.Patch(options.BaseURL+"/v1/sources/:sourceId", wrapper.UpdateSource)
-
-	router.Post(options.BaseURL+"/v1/sources/:sourceId/refresh", wrapper.RefreshSource)
 
 	router.Get(options.BaseURL+"/v1/settings", wrapper.GetSettings)
 

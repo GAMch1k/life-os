@@ -19,7 +19,7 @@ const signals = (
   processor: null,
   inbox: { pendingCount: 0, retryingCount: 0, humanReviewCount: 0 },
   voice: null,
-  calendarSources: [],
+  calendarFeeds: [],
   googleConnection,
   services: [],
 });

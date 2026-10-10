@@ -5,6 +5,7 @@ use (
 	./services/activity
 	./services/banking
 	./services/calendar
+	./services/calendar-feeds
 	./services/finance
 	./services/google-calendar
 	./services/inbox

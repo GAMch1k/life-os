@@ -217,7 +217,12 @@ type AuthRequest struct {
 // transactions) and returns the bank's page where the owner gives it.
 func (c *Client) StartAuth(ctx context.Context, request AuthRequest) (string, error) {
 	body := map[string]any{
-		"access":       map[string]any{"valid_until": request.ValidUntil.UTC().Format(time.RFC3339), "balances": true, "transactions": true},
+		// Only valid_until: the bank's full account information consent.
+		// Naming balances and transactions without accounts asks a Berlin
+		// Group bank to let the owner pick accounts, and Deutsche Bank
+		// answered that with server_error (2026-10-10); the plain consent
+		// is the one its read test granted.
+		"access":       map[string]any{"valid_until": request.ValidUntil.UTC().Format(time.RFC3339)},
 		"aspsp":        map[string]string{"name": request.ASPSPName, "country": request.Country},
 		"state":        request.State,
 		"redirect_url": request.RedirectURL,

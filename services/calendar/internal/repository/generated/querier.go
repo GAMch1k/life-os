@@ -11,17 +11,10 @@ import (
 )
 
 type Querier interface {
-	// Writes a preset's configuration to its source and records it as applied.
-	// reset_validators and next_refresh_at work as in UpdateSource; enabled and
-	// the refresh state stay.
-	ApplySourcePreset(ctx context.Context, arg ApplySourcePresetParams) (CalendarSource, error)
 	// Takes the dispatcher's lease until lease_until, creating the state row on
 	// the first run. Returns no row while another process holds an unexpired
 	// lease.
 	ClaimReminderRun(ctx context.Context, arg ClaimReminderRunParams) (CalendarReminderDispatch, error)
-	// Takes the source's refresh lease: one refresh per source at a time, across
-	// processes too. A lease left by a crashed refresh expires and is taken over.
-	ClaimSourceRefresh(ctx context.Context, arg ClaimSourceRefreshParams) (CalendarSource, error)
 	// A replay with the same automation idempotency key returns the original row.
 	CreateEvent(ctx context.Context, arg CreateEventParams) (Event, error)
 	// The integration API (P11-06): integration services register their
@@ -30,10 +23,6 @@ type Querier interface {
 	// Registers a source an integration syncs; nothing (no row) when it is
 	// already registered: the caller then locks and updates it.
 	CreateIntegrationSource(ctx context.Context, arg CreateIntegrationSourceParams) (CalendarSource, error)
-	CreatePresetSource(ctx context.Context, arg CreatePresetSourceParams) (CalendarSource, error)
-	// A null default_priority is medium. A feed belongs to the calendar-feeds
-	// integration under its own id (see the integration API).
-	CreateSource(ctx context.Context, arg CreateSourceParams) (CalendarSource, error)
 	DeleteEvent(ctx context.Context, id pgtype.UUID) (int64, error)
 	DeleteEventExceptions(ctx context.Context, arg DeleteEventExceptionsParams) (int64, error)
 	// Also deletes the source's events (ON DELETE CASCADE).
@@ -44,18 +33,12 @@ type Querier interface {
 	// Moves the cursor and releases the lease, if owner still holds it. A run
 	// with an error keeps its message; one without records its success.
 	FinishReminderRun(ctx context.Context, arg FinishReminderRunParams) (int64, error)
-	// Records a refresh outcome (the whole new state, computed by the caller
-	// under LockSource) and releases the lease.
-	FinishSourceRefresh(ctx context.Context, arg FinishSourceRefreshParams) (CalendarSource, error)
 	// The feed's state: entries up to pruned_through were pruned; head is the
 	// latest entry (or pruned_through when none is left).
 	GetChangeFeed(ctx context.Context) (GetChangeFeedRow, error)
 	GetEvent(ctx context.Context, id pgtype.UUID) (Event, error)
 	GetEventException(ctx context.Context, arg GetEventExceptionParams) (EventException, error)
 	GetIntegrationSource(ctx context.Context, arg GetIntegrationSourceParams) (CalendarSource, error)
-	// Preset sources are configured from Calendar's environment at startup
-	// (EnsurePreset), inside one transaction holding LockPreset.
-	GetPresetSource(ctx context.Context, preset string) (CalendarSource, error)
 	GetReminderDispatch(ctx context.Context) (CalendarReminderDispatch, error)
 	GetSettings(ctx context.Context) (CalendarSetting, error)
 	GetSource(ctx context.Context, id pgtype.UUID) (CalendarSource, error)
@@ -71,9 +54,6 @@ type Querier interface {
 	// property); null follows the source's default. read_only_reason is why an
 	// integration's event cannot be changed although its source accepts changes.
 	InsertImportedEvent(ctx context.Context, arg InsertImportedEventParams) (pgtype.UUID, error)
-	// Enabled feeds whose next refresh is due and that nobody is refreshing
-	// (only those Calendar refreshes itself, not an integration's).
-	ListDueSources(ctx context.Context, now pgtype.Timestamptz) ([]pgtype.UUID, error)
 	// The entries after the given one, oldest first.
 	ListEventChanges(ctx context.Context, arg ListEventChangesParams) ([]ListEventChangesRow, error)
 	// The occurrence exceptions of the given series.
@@ -109,8 +89,9 @@ type Querier interface {
 	// events come from ListRecurringEvents. Each arm uses its kind's start
 	// index.
 	ListReminderEvents(ctx context.Context, arg ListReminderEventsParams) ([]Event, error)
-	// Imported events are written only by Calendar's source adapter, inside the
-	// refresh transaction that holds LockSource.
+	// Imported events are written only by the reconciliation (an integration's
+	// sync, or Calendar's in-process Google adapter), inside the transaction
+	// that holds the source row.
 	ListSourceEvents(ctx context.Context, sourceID pgtype.UUID) ([]Event, error)
 	// The integration identity of the given sources, for the change feed.
 	ListSourceIdentities(ctx context.Context, ids []pgtype.UUID) ([]ListSourceIdentitiesRow, error)
@@ -123,17 +104,10 @@ type Querier interface {
 	// handed over to the google-calendar integration by migration 000016) are
 	// not listed.
 	ListSources(ctx context.Context) ([]CalendarSource, error)
-	// A source added through the API for the preset's feed URL: the preset takes
-	// it over rather than adding a second source for the same feed.
-	LockAdoptableSource(ctx context.Context, url string) (CalendarSource, error)
 	// Reads an event for a change that also writes its occurrence exceptions,
 	// holding it until the transaction ends.
 	LockEvent(ctx context.Context, id pgtype.UUID) (Event, error)
 	LockIntegrationSource(ctx context.Context, arg LockIntegrationSourceParams) (CalendarSource, error)
-	// Serializes ensuring a preset across processes until the transaction ends.
-	LockPreset(ctx context.Context, preset string) error
-	LockPresetSource(ctx context.Context, preset string) (CalendarSource, error)
-	LockSource(ctx context.Context, id pgtype.UUID) (CalendarSource, error)
 	// The event left its source: cancelled, kept as history, and marked removed.
 	MarkImportedEventRemoved(ctx context.Context, arg MarkImportedEventRemovedParams) error
 	// Hands occurrence exceptions to another series (a split's new series).
@@ -148,8 +122,6 @@ type Querier interface {
 	// event created in Life OS for the source, such as a split's new series,
 	// once the integration has created it there), unless that uid is taken.
 	RekeyImportedEvent(ctx context.Context, arg RekeyImportedEventParams) (int64, error)
-	// Gives the lease up after a refresh that could not record an outcome.
-	ReleaseSourceRefresh(ctx context.Context, id pgtype.UUID) error
 	// Non-recurring events whose title, description, or location contain every
 	// pattern (ILIKE patterns, already escaped; recurring ones come from
 	// SearchRecurringEvents). Relevance weighs a pattern found in the title
@@ -185,10 +157,10 @@ type Querier interface {
 	// Replaces the lists given (a NULL list stays), creating the row on the
 	// first change.
 	UpdateSettings(ctx context.Context, arg UpdateSettingsParams) (CalendarSetting, error)
-	// Writes the whole merged configuration, guarded by the updated_at it was
-	// read with. reset_validators drops the conditional-request validators (a
-	// changed URL or filter needs a full download); next_refresh_at, when given,
-	// reschedules the source; a null default_priority keeps the source's.
+	// Writes the owner's settings of a source (name, enabled, default
+	// reminders, default priority), guarded by the updated_at they were read
+	// with; a null default_priority keeps the source's. A feed's URL and filter
+	// belong to the calendar-feeds integration.
 	UpdateSource(ctx context.Context, arg UpdateSourceParams) (CalendarSource, error)
 	// Writes one occurrence's changes and skip, replacing any it had.
 	UpsertEventException(ctx context.Context, arg UpsertEventExceptionParams) (EventException, error)

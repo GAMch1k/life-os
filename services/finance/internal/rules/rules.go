@@ -1,7 +1,9 @@
 // Package rules is Finance's category rules engine: a rule gives a
 // transaction a category when text in its counterparty or description
-// matches. It is pure; callers load the rules (in priority order) and store
-// the outcome.
+// matches, and a card transaction no rule matches may get the default
+// category of its merchant category code. It is pure; callers load the
+// rules (in priority order) and the default categories, and store the
+// outcome.
 package rules
 
 import "strings"
@@ -28,11 +30,20 @@ type Rule struct {
 	Text       string
 }
 
-// Text is what a rule is matched against.
+// Text is what a rule is matched against. MerchantCategoryCode is the
+// card's code a bank reported, for the fallback.
 type Text struct {
-	Counterparty string
-	Description  string
+	Counterparty         string
+	Description          string
+	MerchantCategoryCode string
 }
+
+// Who chose a category.
+const (
+	ByManual = "manual"
+	ByRule   = "rule"
+	ByMCC    = "mcc"
+)
 
 // ValidField and ValidOperator check stored or requested values.
 func ValidField(field string) bool {
@@ -91,7 +102,7 @@ func First(rules []Rule, text Text) (Rule, bool) {
 type Assignment struct {
 	CategoryID    *[16]byte
 	RuleID        *[16]byte
-	CategorizedBy string // "", "manual", or "rule"
+	CategorizedBy string // "", "manual", "rule", or "mcc"
 }
 
 // Outcome classifies what re-applying the rules does to one transaction.
@@ -104,30 +115,55 @@ const (
 	Cleared
 )
 
-// Reapply computes a transaction's new assignment from the rules. A choice
-// by hand (CategorizedBy "manual") is never changed. A transaction no rule
-// matches keeps no category; one a rule categorized loses it when no rule
+// Categorizer chooses the category of a transaction whose category was not
+// chosen by hand: the first rule that matches, else the default category
+// for its merchant category code.
+type Categorizer struct {
+	// Rules in the order they are tried.
+	Rules []Rule
+	// Defaults maps a default category's system key (such as groceries) to
+	// the category; a key without an active category gives none.
+	Defaults map[string][16]byte
+}
+
+// Choose returns the category the rules, else the merchant category code,
+// give the text; false when neither does.
+func (c Categorizer) Choose(text Text) (Assignment, bool) {
+	if rule, ok := First(c.Rules, text); ok {
+		return Assignment{CategoryID: &rule.CategoryID, RuleID: &rule.ID, CategorizedBy: ByRule}, true
+	}
+	if key, ok := MerchantGroup(text.MerchantCategoryCode); ok {
+		if category, ok := c.Defaults[key]; ok {
+			return Assignment{CategoryID: &category, CategorizedBy: ByMCC}, true
+		}
+	}
+	return Assignment{}, false
+}
+
+// Reapply computes a transaction's new assignment. A choice by hand
+// (CategorizedBy "manual") is never changed. A transaction nothing matches
+// keeps no category; one a rule or a code categorized loses it when nothing
 // matches any more.
-func Reapply(rules []Rule, current Assignment, text Text) (Assignment, Outcome) {
-	if current.CategorizedBy == "manual" {
+func (c Categorizer) Reapply(current Assignment, text Text) (Assignment, Outcome) {
+	if current.CategorizedBy == ByManual {
 		return current, Unchanged
 	}
-	rule, ok := First(rules, text)
-	if !ok {
-		if current.CategoryID == nil {
-			return Assignment{}, Unchanged
-		}
-		return Assignment{}, Cleared
-	}
-	next := Assignment{CategoryID: &rule.CategoryID, RuleID: &rule.ID, CategorizedBy: "rule"}
+	next, ok := c.Choose(text)
 	switch {
+	case !ok && current.CategoryID == nil:
+		return Assignment{}, Unchanged
+	case !ok:
+		return Assignment{}, Cleared
 	case current.CategoryID == nil:
 		return next, Categorized
-	case *current.CategoryID != rule.CategoryID:
+	case *current.CategoryID != *next.CategoryID:
 		return next, Recategorized
-	case current.RuleID == nil || *current.RuleID != rule.ID || current.CategorizedBy != "rule":
-		// Same category, now attributed to the rule that matches first.
-		return next, Unchanged
 	}
-	return current, Unchanged
+	// Same category, now attributed to whatever chose it first.
+	return next, Unchanged
+}
+
+// Reapply is Categorizer{Rules: rules}.Reapply: rules only.
+func Reapply(rules []Rule, current Assignment, text Text) (Assignment, Outcome) {
+	return Categorizer{Rules: rules}.Reapply(current, text)
 }

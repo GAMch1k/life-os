@@ -1,8 +1,15 @@
 import { calendarClient } from "@/lib/api/calendar-client";
+import { financeClient } from "@/lib/api/finance-client";
 import type { components as CalendarComponents } from "@/lib/api/generated/calendar";
 import { inboxClient } from "@/lib/api/inbox-client";
 import { tasksClient } from "@/lib/api/tasks-client";
 import type { CalendarEvent } from "@/lib/calendar-summary";
+import {
+  type BudgetMonth,
+  type HomeBudget,
+  homeBudget,
+} from "@/lib/finance-budget";
+import { currentMonth } from "@/lib/finance-summary";
 import type { InboxItem } from "@/lib/inbox-summary";
 import type { Task } from "@/lib/tasks-summary";
 import {
@@ -40,6 +47,8 @@ export type HomeAttention = {
   urgent: { overdue: Task[]; today: Task[]; more: boolean } | null;
   unscheduled: AttentionList<Task> | null;
   nextEvent: NextEvent | { kind: "none" } | null;
+  /** This month's budget; null when Finance could not be read. */
+  budget: HomeBudget | null;
 };
 
 export const HOME_LIST_LIMIT = 100;
@@ -131,11 +140,13 @@ export function toHomeAttention(
     events: ListResult<CalendarEvent>;
     /** Calendar sources, read when the next event is imported. */
     sources?: ListResult<CalendarSource>;
+    /** This month's budget from Finance. */
+    budget?: { data?: BudgetMonth };
   },
   now: Date,
   timeZone: string = DEFAULT_TIME_ZONE,
 ): HomeAttention {
-  const { review, urgent, open, events, sources } = results;
+  const { review, urgent, open, events, sources, budget } = results;
   const { start } = ownerToday(now, timeZone);
   const isOverdue = (task: Task) =>
     task.dueAt !== undefined &&
@@ -181,6 +192,7 @@ export function toHomeAttention(
           }
         : { kind: "none" }
       : null,
+    budget: budget?.data ? homeBudget(budget.data) : null,
   };
 }
 
@@ -227,7 +239,7 @@ async function upcomingEvents(
 export async function getHomeAttention(): Promise<HomeAttention> {
   const now = new Date();
   const timeZone = await userTimeZone();
-  const [review, urgent, open, events] = await Promise.all([
+  const [review, urgent, open, events, budget] = await Promise.all([
     unavailableOnFailure(
       inboxClient.GET("/v1/inbox-items", {
         params: { query: { state: "human_review", limit: REVIEW_LIMIT } },
@@ -255,6 +267,12 @@ export async function getHomeAttention(): Promise<HomeAttention> {
       }),
     ),
     unavailableOnFailure(upcomingEvents(now, timeZone)),
+    // The month's budget in the owner's timezone; Finance down is null.
+    financeClient
+      .GET("/v1/budgets/{month}", {
+        params: { path: { month: currentMonth(now, timeZone) } },
+      })
+      .catch(() => ({ data: undefined })),
   ]);
   // An imported event is labelled with its source's name, which an
   // integration's event carries itself.
@@ -266,7 +284,7 @@ export async function getHomeAttention(): Promise<HomeAttention> {
       ? await unavailableOnFailure(calendarClient.GET("/v1/sources"))
       : undefined;
   return toHomeAttention(
-    { review, urgent, open, events, sources },
+    { review, urgent, open, events, sources, budget },
     now,
     timeZone,
   );

@@ -1,13 +1,14 @@
 # Overlay for the Calendar feed browser tests only, on the verification stack
 # (LIFE_OS_VERIFY_OVERLAYS=tools/fixtures/calendar-ics.compose.yaml): serves
 # the feeds the tests write to $LIFE_OS_E2E_ICS_DIR at http://ics-fixture/ and
-# lets this stack's Calendar fetch them over http from a private address.
-# Never use it for the deployed stack: CALENDAR_ICS_ALLOW_PRIVATE_URLS turns
-# off Calendar's protection against reaching internal services.
+# lets this stack's calendar-feeds fetch them over http from a private
+# address. Never use it for the deployed stack:
+# CALENDAR_FEEDS_ALLOW_PRIVATE_URLS turns off calendar-feeds' protection
+# against reaching internal services.
 services:
-  calendar:
+  calendar-feeds:
     environment:
-      CALENDAR_ICS_ALLOW_PRIVATE_URLS: "true"
+      CALENDAR_FEEDS_ALLOW_PRIVATE_URLS: "true"
   ics-fixture:
     image: nginx:1.28-alpine
     volumes:

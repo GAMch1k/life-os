@@ -283,14 +283,12 @@ func (h *Handler) CreateManualTransaction(c fiber.Ctx) error {
 		}
 		params.CategoryID, params.CategorizedBy = category.ID, pointer("manual")
 	} else {
-		active, err := h.queries.ListActiveCategoryRules(ctx)
+		chooser, err := categorizer(ctx, h.queries)
 		if err != nil {
 			return internal(err)
 		}
-		if rule, ok := rules.First(ruleSet(active), textOf(params.Counterparty, params.Description)); ok {
-			params.CategoryID = pgtype.UUID{Bytes: rule.CategoryID, Valid: true}
-			params.CategoryRuleID = pgtype.UUID{Bytes: rule.ID, Valid: true}
-			params.CategorizedBy = pointer("rule")
+		if assignment, ok := chooser.Choose(textOf(params.Counterparty, params.Description)); ok {
+			params.CategoryID, params.CategoryRuleID, params.CategorizedBy = assignmentFields(assignment)
 		}
 	}
 	key, hash := idempotency(c)
@@ -304,10 +302,17 @@ func (h *Handler) CreateManualTransaction(c fiber.Ctx) error {
 	}
 	// A deterministic event id makes an idempotent replay record nothing new.
 	h.recordTransaction(c, transactionCreated, item, nil)
+	h.budgetChanged()
 	return c.Status(fiber.StatusCreated).JSON(transactionView(item))
 }
 
 func textOf(counterparty, description *string) rules.Text {
+	return textWithCode(counterparty, description, nil)
+}
+
+// textWithCode is what the rules and the merchant category code fallback
+// look at.
+func textWithCode(counterparty, description, merchantCategoryCode *string) rules.Text {
 	var text rules.Text
 	if counterparty != nil {
 		text.Counterparty = *counterparty
@@ -315,7 +320,17 @@ func textOf(counterparty, description *string) rules.Text {
 	if description != nil {
 		text.Description = *description
 	}
+	if merchantCategoryCode != nil {
+		text.MerchantCategoryCode = *merchantCategoryCode
+	}
 	return text
+}
+
+// assignmentFields are a chosen category's stored columns.
+func assignmentFields(assignment rules.Assignment) (categoryID, ruleID pgtype.UUID, categorizedBy *string) {
+	var item store.Transaction
+	applyAssignment(&item, assignment)
+	return item.CategoryID, item.CategoryRuleID, item.CategorizedBy
 }
 
 // transactionFields are the UpdateTransactionRequest properties;
@@ -420,11 +435,11 @@ func (h *Handler) UpdateTransaction(c fiber.Ctx, transactionID types.UUID) error
 				next.CategoryID = id
 			}
 		} else if (next.CategorizedBy == nil || *next.CategorizedBy != "manual") && (!sameText(before.Counterparty, next.Counterparty) || !sameText(before.Description, next.Description)) {
-			active, err := q.ListActiveCategoryRules(ctx)
+			chooser, err := categorizer(ctx, q)
 			if err != nil {
 				return err
 			}
-			assignment, _ := rules.Reapply(ruleSet(active), assignmentOf(before), textOf(next.Counterparty, next.Description))
+			assignment, _ := chooser.Reapply(assignmentOf(before), textWithCode(next.Counterparty, next.Description, next.MerchantCategoryCode))
 			applyAssignment(&next, assignment)
 		}
 		if changes = transactionChanges(before, next); len(changes) == 0 {
@@ -443,6 +458,7 @@ func (h *Handler) UpdateTransaction(c fiber.Ctx, transactionID types.UUID) error
 	}
 	if len(changes) > 0 {
 		h.recordTransaction(c, transactionUpdated, after, changes)
+		h.budgetChanged()
 	}
 	return c.JSON(transactionView(after))
 }
@@ -468,6 +484,7 @@ func (h *Handler) DeleteTransaction(c fiber.Ctx, transactionID types.UUID) error
 		return passThrough(err)
 	}
 	h.recordTransaction(c, transactionDeleted, deleted, nil)
+	h.budgetChanged()
 	return c.SendStatus(fiber.StatusNoContent)
 }
 

@@ -250,6 +250,15 @@ test("the callback exchanges the code or explains the bank's answer", () => {
     (callbackStep({ error: "x".repeat(100) }) as { message: string }).message,
     /\(x{64}\)/,
   );
+  assert.equal(
+    (
+      callbackStep({
+        error: "server_error",
+        error_description: "  Consent\n failed at the bank ",
+      }) as { message: string }
+    ).message,
+    "The bank did not complete the consent (server_error). Consent failed at the bank",
+  );
   assert.match(
     (callbackStep({}) as { message: string }).message,
     /Connect Deutsche Bank/,

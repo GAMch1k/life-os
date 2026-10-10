@@ -39,6 +39,10 @@ const (
 	// details.
 	bankImportCompleted   = "finance.bank_import.completed"
 	bankConnectionRemoved = "finance.bank_connection.removed"
+	// Budget plans: counts and amounts only.
+	budgetSaved         = "finance.budget.saved"
+	budgetReset         = "finance.budget.reset"
+	budgetDefaultsAdded = "finance.budget_defaults.added"
 )
 
 // emit records one event. With a request, the event carries its actor,

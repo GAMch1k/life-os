@@ -117,6 +117,7 @@ function category(overrides: Partial<Category> = {}): Category {
     name: "Groceries",
     kind: "expense",
     color: null,
+    systemKey: null,
     archived: false,
     archivedAt: null,
     createdAt: STAMP,

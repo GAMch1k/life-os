@@ -6,7 +6,6 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/GAMch1k/life-os/services/calendar/internal/ics"
 	"github.com/GAMch1k/life-os/services/calendar/internal/recurrence"
 	store "github.com/GAMch1k/life-os/services/calendar/internal/repository/generated"
 )
@@ -72,9 +71,9 @@ type Rules struct {
 	defaultPriority string
 }
 
-// FeedRules are a feed's: feeds often list only upcoming dates, so an event
-// that started before now is neither removed nor rewritten unless the feed
-// moves it into the future.
+// FeedRules are a feed's (a sync with window upcomingOnly): feeds often
+// list only upcoming dates, so an event that started before now is neither
+// removed nor rewritten unless the feed moves it into the future.
 func FeedRules(now time.Time, owner *time.Location) Rules {
 	return Rules{
 		keep: func(event store.Event) bool { return startOf(event, owner).Before(now) },
@@ -97,12 +96,6 @@ func SyncRules(windowStart time.Time, owner *time.Location) Rules {
 		},
 		frozen: func(store.Event, Item) bool { return false },
 	}
-}
-
-// reconcile compares a feed's stored events with its items (already
-// filtered) at now, with FeedRules.
-func reconcile(existing []store.Event, items []ics.Item, now time.Time, owner *time.Location) plan {
-	return reconcileItems(existing, nil, FeedItems(items), FeedRules(now, owner))
 }
 
 // reconcileItems compares a source's stored events (with the occurrence

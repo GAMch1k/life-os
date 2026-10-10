@@ -18,7 +18,11 @@ export const AGENT_CHANGES_DESCRIPTION =
 
 /** What the "calendar" domain records. */
 export const CALENDAR_DESCRIPTION =
-  "Calendar events created, changed, cancelled, or deleted (by you, the AI, a tool, or an integration such as Google Calendar), and each refresh of a subscribed calendar feed.";
+  "Calendar events created, changed, cancelled, or deleted (by you, the AI, a tool, or an integration such as Google Calendar).";
+
+/** What the "calendar-feeds" domain records. */
+export const CALENDAR_FEEDS_DESCRIPTION =
+  "Each refresh of a subscribed calendar feed (ICS/iCal, such as ZAW): what it added, changed, or cancelled, or why it failed.";
 
 /** What the "google-calendar" integration records. */
 export const GOOGLE_CALENDAR_DESCRIPTION =
@@ -41,6 +45,11 @@ export const SOURCES: readonly {
   },
   { value: "tasks", label: "Tasks" },
   { value: "calendar", label: "Calendar", description: CALENDAR_DESCRIPTION },
+  {
+    value: "calendar-feeds",
+    label: "Calendar feeds",
+    description: CALENDAR_FEEDS_DESCRIPTION,
+  },
   { value: "notifications", label: "Notifications" },
   {
     value: "banking",

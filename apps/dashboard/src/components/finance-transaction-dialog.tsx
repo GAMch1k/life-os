@@ -250,10 +250,13 @@ function TransactionForm({
       ? [accountsById.get(transaction.accountId) as Account]
       : [],
   );
-  // A rule chose the category shown (until the owner picks another).
-  const ruleChosen =
-    transaction?.categorizedBy === "rule" &&
-    draft.categoryId === transaction.categoryId;
+  // A rule or the card's merchant category code chose the category shown
+  // (until the owner picks another).
+  const chosenBy =
+    transaction && draft.categoryId === transaction.categoryId
+      ? transaction.categorizedBy
+      : null;
+  const ruleChosen = chosenBy === "rule" || chosenBy === "mcc";
   const categoryField = (
     <Field>
       <FieldLabel htmlFor={`${id}-category`}>Category</FieldLabel>
@@ -280,7 +283,9 @@ function TransactionForm({
       </NativeSelect>
       {ruleChosen ? (
         <FieldDescription className="text-xs" id={`${id}-category-note`}>
-          Chosen by a rule. Picking one here keeps the rules away from it.
+          {chosenBy === "mcc"
+            ? "Chosen from the card's merchant category code. Picking one here keeps the rules away from it."
+            : "Chosen by a rule. Picking one here keeps the rules away from it."}
         </FieldDescription>
       ) : null}
     </Field>

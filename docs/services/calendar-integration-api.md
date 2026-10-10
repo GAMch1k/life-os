@@ -12,7 +12,7 @@ Until P11-06, Google Calendar (`internal/google`) and ICS feeds (`internal/sourc
 | --- | --- |
 | P11-06 | Adds this API and migration 000014. Calendar's in-process Google and ICS adapters keep working as before. |
 | P11-07 | `google-calendar` takes over OAuth, inbound sync, and writing Life OS events and edits to Google. Calendar's in-process Google code goes. |
-| P11-08 | `calendar-feeds` takes over ICS feeds and the ZAW preset. The in-process ICS refresher goes. |
+| P11-08 | `calendar-feeds` takes over ICS feeds and the ZAW preset ([calendar-feeds](calendar-feeds.md)). The in-process ICS refresher goes; migration 000015 (`calendar_feeds_handover`) hands the feeds over, and `/v1/sources` no longer adds or refreshes feeds. |
 | P11-09 | Drops the legacy columns and tables (`google_*`, the feed columns of `calendar_sources`, the `ics`/`google` source kinds). |
 
 ## Concepts
@@ -91,7 +91,7 @@ UPDATE events SET source_kind = 'external'
 WHERE source_id IN (SELECT id FROM calendar_sources WHERE integration = 'google-calendar');
 ```
 
-The first line is needed only if the same migration also alters `events` or `event_exceptions` (see [Notes for migrations](#notes-for-migrations)). After the handover, the integration registers the sources again with the same `externalId` and continues from there.
+The first line is needed only if the same migration also alters `events` or `event_exceptions` (see [Notes for migrations](#notes-for-migrations)). After the handover, the integration registers the sources again with the same `externalId` and continues from there. calendar-feeds' handover is migration 000015, `calendar_feeds_handover`, followed once by `calendar-feeds handoff`, which copies each feed's URL, filter, preset, and refresh state from the legacy columns (not from `integration_config`, which holds only the owner's settings the integration last sent); see [Calendar feeds handoff](../operations/calendar-feeds-handoff.md).
 
 ## Syncing events
 

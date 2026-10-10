@@ -17,9 +17,7 @@ import (
 	"github.com/GAMch1k/life-os/pkg/httpserver"
 	"github.com/GAMch1k/life-os/services/calendar/internal/api/generated"
 	"github.com/GAMch1k/life-os/services/calendar/internal/config"
-	"github.com/GAMch1k/life-os/services/calendar/internal/ics"
 	store "github.com/GAMch1k/life-os/services/calendar/internal/repository/generated"
-	"github.com/GAMch1k/life-os/services/calendar/internal/sources"
 )
 
 const (
@@ -42,11 +40,6 @@ type Handler struct {
 	ownerTimeZone string
 	ownerLocation *time.Location
 	now           func() time.Time
-	// refresher runs source refreshes; fetcher validates feed URLs; wake
-	// tells the scheduler a source needs a refresh now.
-	refresher *sources.Refresher
-	fetcher   *ics.Fetcher
-	wake      func()
 	// activity records event changes (see WithActivity); nil records none.
 	activity *activity.Emitter
 	// reminders reports reminder delivery's health (see WithReminders).
@@ -67,21 +60,7 @@ func NewHandler(pool *pgxpool.Pool, ownerTimeZone string) *Handler {
 	}
 	return &Handler{
 		pool: pool, queries: store.New(pool), ownerTimeZone: ownerTimeZone, ownerLocation: location, now: time.Now,
-		fetcher: ics.NewFetcher(0, 0, false), wake: func() {},
 	}
-}
-
-// WithSources enables source refreshes: refresher runs them (its fetcher
-// also validates feed URLs) and wake, if not nil, prompts the scheduler.
-func (h *Handler) WithSources(refresher *sources.Refresher, wake func()) *Handler {
-	h.refresher = refresher
-	if refresher != nil {
-		h.fetcher = refresher.Fetcher()
-	}
-	if wake != nil {
-		h.wake = wake
-	}
-	return h
 }
 
 func (h *Handler) ListEvents(c fiber.Ctx, params generated.ListEventsParams) error {

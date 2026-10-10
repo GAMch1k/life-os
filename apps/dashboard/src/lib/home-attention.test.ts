@@ -288,3 +288,78 @@ test("an imported next event carries its source's name", () => {
     "/calendar?date=2026-10-13",
   );
 });
+
+test("Home shows the month's budget, or says Finance is unavailable", () => {
+  const eur = (amount: number) => ({ amount, currency: "EUR" });
+  const budget = {
+    month: "2026-10",
+    currency: "EUR",
+    plan: {
+      source: "regular" as const,
+      since: "2026-10",
+      expectedIncome: eur(300000),
+      savingsGoal: eur(0),
+      unallocated: eur(290000),
+      updatedAt: "2026-10-01T00:00:00Z",
+    },
+    lines: [
+      {
+        categoryId: "dining",
+        categoryName: "Eating out",
+        categoryColor: null,
+        archived: false,
+        planned: eur(10000),
+        spent: eur(12000),
+        pending: eur(0),
+        remaining: eur(-2000),
+        percent: 120,
+        status: "over" as const,
+        transactionCount: 3,
+      },
+    ],
+    uncategorized: { spent: eur(0), pending: eur(0), transactionCount: 0 },
+    totals: {
+      planned: eur(10000),
+      spent: eur(12000),
+      pending: eur(0),
+      remaining: eur(-2000),
+      percent: 120,
+    },
+    income: { actual: eur(0), pending: eur(0) },
+    savings: {
+      movedToSavings: eur(0),
+      leftover: eur(-12000),
+      saved: eur(-12000),
+      percent: null,
+    },
+    excludedCurrencies: [],
+  };
+  const planned = toHomeAttention(
+    { ...empty, events: list([]), budget: { data: budget } },
+    now,
+  );
+  assert.equal(planned.budget?.kind, "plan");
+  assert.deepEqual(
+    planned.budget?.kind === "plan" &&
+      planned.budget.over.map((line) => line.categoryName),
+    ["Eating out"],
+  );
+  const none = toHomeAttention(
+    {
+      ...empty,
+      events: list([]),
+      budget: { data: { ...budget, plan: null, lines: [] } },
+    },
+    now,
+  );
+  assert.deepEqual(none.budget, { kind: "none", month: "2026-10" });
+  // Finance down (or not asked): the card says so instead of zeros.
+  assert.equal(
+    toHomeAttention({ ...empty, events: list([]), budget: {} }, now).budget,
+    null,
+  );
+  assert.equal(
+    toHomeAttention({ ...empty, events: list([]) }, now).budget,
+    null,
+  );
+});

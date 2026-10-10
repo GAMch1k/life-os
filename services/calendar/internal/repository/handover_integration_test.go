@@ -73,12 +73,14 @@ func TestGoogleCalendarHandoverMigration(t *testing.T) {
 	if err := pool.QueryRow(ctx, `INSERT INTO events (title, all_day, start_at, end_at) VALUES ('Gym', false, '2026-10-10T05:00:00Z', '2026-10-10T06:00:00Z') RETURNING id`).Scan(&manual); err != nil {
 		t.Fatal(err)
 	}
+	// The feeds' handover (000015, P11-08) runs first.
+	testdb.Apply(t, pool, migrationFile(t, "000015_calendar_feeds_handover.up.sql"))
 	var journalBefore int64
 	if err := pool.QueryRow(ctx, `SELECT COALESCE(max(seq), 0) FROM calendar_event_changes`).Scan(&journalBefore); err != nil {
 		t.Fatal(err)
 	}
 
-	migration := handoverMigration(t)
+	migration := migrationFile(t, "000016_google_calendar_handover.up.sql")
 	testdb.Apply(t, pool, migration)
 
 	sourceState := func(id string) (kind string, inProcess bool) {
@@ -93,8 +95,8 @@ func TestGoogleCalendarHandoverMigration(t *testing.T) {
 			t.Fatalf("handed-over source = %s, in process %v", kind, inProcess)
 		}
 	}
-	if kind, inProcess := sourceState(feed); kind != "ics" || !inProcess {
-		t.Fatalf("feed = %s, in process %v", kind, inProcess)
+	if kind, inProcess := sourceState(feed); kind != "external" || inProcess {
+		t.Fatalf("feed (handed over by 000015) = %s, in process %v", kind, inProcess)
 	}
 	kindOf := func(id string) string {
 		t.Helper()
@@ -104,7 +106,7 @@ func TestGoogleCalendarHandoverMigration(t *testing.T) {
 		}
 		return kind
 	}
-	for id, want := range map[string]string{dentist: "external", series: "external", holiday: "external", paper: "ics", manual: "manual"} {
+	for id, want := range map[string]string{dentist: "external", series: "external", holiday: "external", paper: "external", manual: "manual"} {
 		if got := kindOf(id); got != want {
 			t.Fatalf("event %s kind = %s, want %s", id, got, want)
 		}
@@ -172,7 +174,7 @@ func TestGoogleCalendarHandoverMigration(t *testing.T) {
 	if kind, inProcess := sourceState(registered); kind != "external" || inProcess {
 		t.Fatalf("registered source after down = %s, in process %v", kind, inProcess)
 	}
-	for id, want := range map[string]string{dentist: "google", holiday: "google", paper: "ics", manual: "manual"} {
+	for id, want := range map[string]string{dentist: "google", holiday: "google", paper: "external", manual: "manual"} {
 		if got := kindOf(id); got != want {
 			t.Fatalf("event %s kind after down = %s, want %s", id, got, want)
 		}
@@ -183,13 +185,13 @@ func TestGoogleCalendarHandoverMigration(t *testing.T) {
 	}
 }
 
-func handoverMigration(t *testing.T) string {
+func migrationFile(t *testing.T, name string) string {
 	t.Helper()
 	for _, path := range testdb.Migrations(t) {
-		if filepath.Base(path) == "000016_google_calendar_handover.up.sql" {
+		if filepath.Base(path) == name {
 			return path
 		}
 	}
-	t.Fatal("000016_google_calendar_handover.up.sql not found")
+	t.Fatalf("%s not found", name)
 	return ""
 }

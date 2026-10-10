@@ -97,6 +97,117 @@ func (e BankAccountInputKind) Valid() bool {
 	}
 }
 
+// Defines values for BudgetLineStatus.
+const (
+	Near      BudgetLineStatus = "near"
+	Over      BudgetLineStatus = "over"
+	Under     BudgetLineStatus = "under"
+	Unplanned BudgetLineStatus = "unplanned"
+)
+
+// Valid indicates whether the value is a known member of the BudgetLineStatus enum.
+func (e BudgetLineStatus) Valid() bool {
+	switch e {
+	case Near:
+		return true
+	case Over:
+		return true
+	case Under:
+		return true
+	case Unplanned:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BudgetPlanSource.
+const (
+	BudgetPlanSourceMonth   BudgetPlanSource = "month"
+	BudgetPlanSourceRegular BudgetPlanSource = "regular"
+)
+
+// Valid indicates whether the value is a known member of the BudgetPlanSource enum.
+func (e BudgetPlanSource) Valid() bool {
+	switch e {
+	case BudgetPlanSourceMonth:
+		return true
+	case BudgetPlanSourceRegular:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BudgetScope.
+const (
+	BudgetScopeFollowing BudgetScope = "following"
+	BudgetScopeMonth     BudgetScope = "month"
+)
+
+// Valid indicates whether the value is a known member of the BudgetScope enum.
+func (e BudgetScope) Valid() bool {
+	switch e {
+	case BudgetScopeFollowing:
+		return true
+	case BudgetScopeMonth:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CategorySystemKey.
+const (
+	CategorySystemKeyEatingOut     CategorySystemKey = "eating_out"
+	CategorySystemKeyFun           CategorySystemKey = "fun"
+	CategorySystemKeyGroceries     CategorySystemKey = "groceries"
+	CategorySystemKeyHealth        CategorySystemKey = "health"
+	CategorySystemKeyHousing       CategorySystemKey = "housing"
+	CategorySystemKeyIncome        CategorySystemKey = "income"
+	CategorySystemKeyOther         CategorySystemKey = "other"
+	CategorySystemKeySavings       CategorySystemKey = "savings"
+	CategorySystemKeyShopping      CategorySystemKey = "shopping"
+	CategorySystemKeySubscriptions CategorySystemKey = "subscriptions"
+	CategorySystemKeyTransfers     CategorySystemKey = "transfers"
+	CategorySystemKeyTransport     CategorySystemKey = "transport"
+	CategorySystemKeyUtilities     CategorySystemKey = "utilities"
+)
+
+// Valid indicates whether the value is a known member of the CategorySystemKey enum.
+func (e CategorySystemKey) Valid() bool {
+	switch e {
+	case CategorySystemKeyEatingOut:
+		return true
+	case CategorySystemKeyFun:
+		return true
+	case CategorySystemKeyGroceries:
+		return true
+	case CategorySystemKeyHealth:
+		return true
+	case CategorySystemKeyHousing:
+		return true
+	case CategorySystemKeyIncome:
+		return true
+	case CategorySystemKeyOther:
+		return true
+	case CategorySystemKeySavings:
+		return true
+	case CategorySystemKeyShopping:
+		return true
+	case CategorySystemKeySubscriptions:
+		return true
+	case CategorySystemKeyTransfers:
+		return true
+	case CategorySystemKeyTransport:
+		return true
+	case CategorySystemKeyUtilities:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CategoryKind.
 const (
 	CategoryKindExpense  CategoryKind = "expense"
@@ -199,6 +310,7 @@ func (e RuleOperator) Valid() bool {
 // Defines values for TransactionCategorizedBy.
 const (
 	TransactionCategorizedByManual TransactionCategorizedBy = "manual"
+	TransactionCategorizedByMcc    TransactionCategorizedBy = "mcc"
 	TransactionCategorizedByRule   TransactionCategorizedBy = "rule"
 )
 
@@ -206,6 +318,8 @@ const (
 func (e TransactionCategorizedBy) Valid() bool {
 	switch e {
 	case TransactionCategorizedByManual:
+		return true
+	case TransactionCategorizedByMcc:
 		return true
 	case TransactionCategorizedByRule:
 		return true
@@ -444,7 +558,124 @@ type BankTransactionInput struct {
 	ValueDate *openapi_types.Date `json:"valueDate,omitempty"`
 }
 
-// Category defines model for Category.
+// BudgetCategorySuggestion defines model for BudgetCategorySuggestion.
+type BudgetCategorySuggestion struct {
+	CategoryId         openapi_types.UUID `json:"categoryId"`
+	MonthsWithSpending int                `json:"monthsWithSpending"`
+	Suggested          *Money             `json:"suggested"`
+}
+
+// BudgetIncome Money in, booked and pending, in income categories (less money out there) and without a category; of it `pending`.
+type BudgetIncome struct {
+	Actual  Money `json:"actual"`
+	Pending Money `json:"pending"`
+}
+
+// BudgetLine One expense category's month. `spent` is its money out less refunds (never below 0), booked and pending; `pending` is the part of it still pending. `remaining` is planned minus spent (negative when over). `percent` is spent as a percentage of planned, rounded down; null without a planned amount.
+type BudgetLine struct {
+	Archived      bool               `json:"archived"`
+	CategoryColor *string            `json:"categoryColor"`
+	CategoryId    openapi_types.UUID `json:"categoryId"`
+	CategoryName  string             `json:"categoryName"`
+	Pending       Money              `json:"pending"`
+	Percent       *int               `json:"percent"`
+	Planned       Money              `json:"planned"`
+	Remaining     Money              `json:"remaining"`
+	Spent         Money              `json:"spent"`
+
+	// Status `under`: below 80% of the planned amount. `near`: 80% or more. `over`: more than planned. `unplanned`: spending in a category the plan has no amount for.
+	Status           BudgetLineStatus `json:"status"`
+	TransactionCount int              `json:"transactionCount"`
+}
+
+// BudgetLineInput defines model for BudgetLineInput.
+type BudgetLineInput struct {
+	AmountMinor int64              `json:"amountMinor"`
+	CategoryId  openapi_types.UUID `json:"categoryId"`
+}
+
+// BudgetLineStatus `under`: below 80% of the planned amount. `near`: 80% or more. `over`: more than planned. `unplanned`: spending in a category the plan has no amount for.
+type BudgetLineStatus string
+
+// BudgetMonth A month's budget in `currency` (the budget currency). `lines` lists the plan's categories by name, then expense categories with spending the plan has no amount for (`unplanned`), largest first.
+type BudgetMonth struct {
+	Currency string `json:"currency"`
+
+	// ExcludedCurrencies Currencies with transactions in the month that the budget leaves out.
+	ExcludedCurrencies []ExcludedCurrency `json:"excludedCurrencies"`
+
+	// Income Money in, booked and pending, in income categories (less money out there) and without a category; of it `pending`.
+	Income BudgetIncome `json:"income"`
+	Lines  []BudgetLine `json:"lines"`
+
+	// Month YYYY-MM.
+	Month string      `json:"month"`
+	Plan  *BudgetPlan `json:"plan"`
+
+	// Savings `saved` is the month's income minus its spending. `movedToSavings` is the money moved out in the Savings category (`systemKey` savings) from accounts other than savings accounts, less money moved back; `leftover` is the rest of `saved`. `percent` is saved against the plan's savings goal, rounded down; null without a goal.
+	Savings BudgetSavings `json:"savings"`
+
+	// Totals `planned` is the sum of the plan's category amounts; `spent` all spending (planned categories, unplanned ones, and uncategorized), of it `pending`; `remaining` is planned minus spent.
+	Totals BudgetTotals `json:"totals"`
+
+	// Uncategorized Money out without a category, booked and pending; it counts as spending.
+	Uncategorized BudgetUncategorized `json:"uncategorized"`
+}
+
+// BudgetPlan The plan that applies to the month. `since` is the month the regular plan applies from (the month itself for its own plan). `unallocated` is the expected income minus the planned spending and the savings goal; negative when the plan spends more than the income.
+type BudgetPlan struct {
+	ExpectedIncome Money `json:"expectedIncome"`
+	SavingsGoal    Money `json:"savingsGoal"`
+
+	// Since YYYY-MM.
+	Since string `json:"since"`
+
+	// Source `month`: the month has its own plan. `regular`: it follows the regular plan.
+	Source      BudgetPlanSource `json:"source"`
+	Unallocated Money            `json:"unallocated"`
+	UpdatedAt   time.Time        `json:"updatedAt"`
+}
+
+// BudgetPlanSource `month`: the month has its own plan. `regular`: it follows the regular plan.
+type BudgetPlanSource string
+
+// BudgetSavings `saved` is the month's income minus its spending. `movedToSavings` is the money moved out in the Savings category (`systemKey` savings) from accounts other than savings accounts, less money moved back; `leftover` is the rest of `saved`. `percent` is saved against the plan's savings goal, rounded down; null without a goal.
+type BudgetSavings struct {
+	Leftover       Money `json:"leftover"`
+	MovedToSavings Money `json:"movedToSavings"`
+	Percent        *int  `json:"percent"`
+	Saved          Money `json:"saved"`
+}
+
+// BudgetScope `month`: only this month. `following`: the regular plan from this month on.
+type BudgetScope string
+
+// BudgetSuggestions `months` are the complete months (YYYY-MM, oldest first) the suggestions are based on.
+type BudgetSuggestions struct {
+	Categories []BudgetCategorySuggestion `json:"categories"`
+	Currency   string                     `json:"currency"`
+	Income     *Money                     `json:"income"`
+	Months     []string                   `json:"months"`
+	Saved      *Money                     `json:"saved"`
+}
+
+// BudgetTotals `planned` is the sum of the plan's category amounts; `spent` all spending (planned categories, unplanned ones, and uncategorized), of it `pending`; `remaining` is planned minus spent.
+type BudgetTotals struct {
+	Pending   Money `json:"pending"`
+	Percent   *int  `json:"percent"`
+	Planned   Money `json:"planned"`
+	Remaining Money `json:"remaining"`
+	Spent     Money `json:"spent"`
+}
+
+// BudgetUncategorized Money out without a category, booked and pending; it counts as spending.
+type BudgetUncategorized struct {
+	Pending          Money `json:"pending"`
+	Spent            Money `json:"spent"`
+	TransactionCount int   `json:"transactionCount"`
+}
+
+// Category `systemKey` marks a default category Finance added (or an existing one of the same name and kind it adopted), such as `groceries` or `savings`. It never changes, also when the category is renamed, so the default merchant rules, the merchant category codes, and the budget's savings keep finding it.
 type Category struct {
 	Archived   bool               `json:"archived"`
 	ArchivedAt *time.Time         `json:"archivedAt"`
@@ -453,10 +684,14 @@ type Category struct {
 	Id         openapi_types.UUID `json:"id"`
 
 	// Kind `transfer` is money moved between own accounts; it is neither income nor spending.
-	Kind      CategoryKind `json:"kind"`
-	Name      string       `json:"name"`
-	UpdatedAt time.Time    `json:"updatedAt"`
+	Kind      CategoryKind       `json:"kind"`
+	Name      string             `json:"name"`
+	SystemKey *CategorySystemKey `json:"systemKey"`
+	UpdatedAt time.Time          `json:"updatedAt"`
 }
+
+// CategorySystemKey defines model for Category.SystemKey.
+type CategorySystemKey string
 
 // CategoryKind `transfer` is money moved between own accounts; it is neither income nor spending.
 type CategoryKind string
@@ -514,7 +749,7 @@ type CreateCategoryRequest struct {
 	Name string       `json:"name"`
 }
 
-// CreateCategoryRuleRequest Without `priority` the rule comes after every existing rule.
+// CreateCategoryRuleRequest Without `priority` the rule comes after the owner's existing rules but before the default merchant rules, which have priorities from 100000.
 type CreateCategoryRuleRequest struct {
 	CategoryId openapi_types.UUID `json:"categoryId"`
 
@@ -573,6 +808,12 @@ type ErrorResponse struct {
 	RequestId string `json:"request_id"`
 }
 
+// ExcludedCurrency defines model for ExcludedCurrency.
+type ExcludedCurrency struct {
+	Currency         string `json:"currency"`
+	TransactionCount int    `json:"transactionCount"`
+}
+
 // Money defines model for Money.
 type Money struct {
 	// Amount Minor units (cents); negative is money out.
@@ -608,6 +849,16 @@ type RuleMatch struct {
 // RuleOperator defines model for RuleOperator.
 type RuleOperator string
 
+// SaveBudgetPlanRequest defines model for SaveBudgetPlanRequest.
+type SaveBudgetPlanRequest struct {
+	ExpectedIncomeMinor int64             `json:"expectedIncomeMinor"`
+	Lines               []BudgetLineInput `json:"lines"`
+	SavingsGoalMinor    int64             `json:"savingsGoalMinor"`
+
+	// Scope `month`: only this month. `following`: the regular plan from this month on.
+	Scope BudgetScope `json:"scope"`
+}
+
 // SpendingByCategory defines model for SpendingByCategory.
 type SpendingByCategory struct {
 	Amount       Money              `json:"amount"`
@@ -615,7 +866,7 @@ type SpendingByCategory struct {
 	CategoryName string             `json:"categoryName"`
 }
 
-// Transaction `categorizedBy` is `manual` when the category was chosen by hand (by the owner, the AI, or the import file; possibly none), `rule` when a category rule chose it (`categoryRuleId` names the rule), and null while nobody chose. `readOnly` is true for imported transactions: only `categoryId` and `notes` change, and they cannot be deleted.
+// Transaction `categorizedBy` is `manual` when the category was chosen by hand (by the owner, the AI, or the import file; possibly none), `rule` when a category rule chose it (`categoryRuleId` names the rule), `mcc` when no rule matched and the card's merchant category code gave a default category, and null while nobody chose. `readOnly` is true for imported transactions: only `categoryId` and `notes` change, and they cannot be deleted.
 type Transaction struct {
 	AccountId openapi_types.UUID `json:"accountId"`
 	Amount    Money              `json:"amount"`
@@ -728,6 +979,9 @@ type AccountId = openapi_types.UUID
 // CategoryId defines model for CategoryId.
 type CategoryId = openapi_types.UUID
 
+// Month defines model for Month.
+type Month = string
+
 // RuleId defines model for RuleId.
 type RuleId = openapi_types.UUID
 
@@ -795,6 +1049,9 @@ type CreateAccountJSONRequestBody = CreateAccountRequest
 // UpdateAccountJSONRequestBody defines body for UpdateAccount for application/json ContentType.
 type UpdateAccountJSONRequestBody = UpdateAccountRequest
 
+// SaveBudgetPlanJSONRequestBody defines body for SaveBudgetPlan for application/json ContentType.
+type SaveBudgetPlanJSONRequestBody = SaveBudgetPlanRequest
+
 // CreateCategoryJSONRequestBody defines body for CreateCategory for application/json ContentType.
 type CreateCategoryJSONRequestBody = CreateCategoryRequest
 
@@ -833,6 +1090,18 @@ type ServerInterface interface {
 	// UpdateAccount Update or archive a finance account
 	// (PATCH /v1/accounts/{accountId})
 	UpdateAccount(c fiber.Ctx, accountId AccountId) error
+	// ResetBudgetMonth Return a month to the regular plan
+	// (DELETE /v1/budgets/{month})
+	ResetBudgetMonth(c fiber.Ctx, month Month) error
+	// GetBudgetMonth Get a month's budget and its progress
+	// (GET /v1/budgets/{month})
+	GetBudgetMonth(c fiber.Ctx, month Month) error
+	// SaveBudgetPlan Save a month's budget plan
+	// (PUT /v1/budgets/{month})
+	SaveBudgetPlan(c fiber.Ctx, month Month) error
+	// GetBudgetSuggestions Suggest starting amounts for a month's plan
+	// (GET /v1/budgets/{month}/suggestions)
+	GetBudgetSuggestions(c fiber.Ctx, month Month) error
 	// ListCategories List finance categories
 	// (GET /v1/categories)
 	ListCategories(c fiber.Ctx, params ListCategoriesParams) error
@@ -995,6 +1264,122 @@ func (siw *ServerInterfaceWrapper) UpdateAccount(c fiber.Ctx) error {
 
 	handler := func(c fiber.Ctx) error {
 		return siw.Handler.UpdateAccount(c, accountId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// ResetBudgetMonth operation middleware
+func (siw *ServerInterfaceWrapper) ResetBudgetMonth(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "month" -------------
+	var month Month
+
+	err = runtime.BindStyledParameterWithOptions("simple", "month", c.Params("month"), &month, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter month: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.ResetBudgetMonth(c, month)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// GetBudgetMonth operation middleware
+func (siw *ServerInterfaceWrapper) GetBudgetMonth(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "month" -------------
+	var month Month
+
+	err = runtime.BindStyledParameterWithOptions("simple", "month", c.Params("month"), &month, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter month: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.GetBudgetMonth(c, month)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// SaveBudgetPlan operation middleware
+func (siw *ServerInterfaceWrapper) SaveBudgetPlan(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "month" -------------
+	var month Month
+
+	err = runtime.BindStyledParameterWithOptions("simple", "month", c.Params("month"), &month, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter month: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.SaveBudgetPlan(c, month)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// GetBudgetSuggestions operation middleware
+func (siw *ServerInterfaceWrapper) GetBudgetSuggestions(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "month" -------------
+	var month Month
+
+	err = runtime.BindStyledParameterWithOptions("simple", "month", c.Params("month"), &month, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter month: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.GetBudgetSuggestions(c, month)
 	}
 
 	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
@@ -1616,6 +2001,14 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	router.Post(options.BaseURL+"/v1/categories/rules/apply", wrapper.ApplyCategoryRules)
 
 	router.Get(options.BaseURL+"/v1/summaries/monthly", wrapper.GetMonthlySummary)
+
+	router.Delete(options.BaseURL+"/v1/budgets/:month", wrapper.ResetBudgetMonth)
+
+	router.Get(options.BaseURL+"/v1/budgets/:month", wrapper.GetBudgetMonth)
+
+	router.Put(options.BaseURL+"/v1/budgets/:month", wrapper.SaveBudgetPlan)
+
+	router.Get(options.BaseURL+"/v1/budgets/:month/suggestions", wrapper.GetBudgetSuggestions)
 
 	router.Post(options.BaseURL+"/v1/imports/csv", wrapper.CreateCsvImport)
 

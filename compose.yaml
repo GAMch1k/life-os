@@ -35,7 +35,7 @@ services:
     restart: "no"
   finance:
     build: {context: ., dockerfile: services/finance/Dockerfile}
-    environment: {SERVICE_NAME: finance, PORT: 8080, DATABASE_URL: "postgres://finance_user:${LIFE_OS_FINANCE_DB_PASSWORD}@postgres:5432/finance_db?sslmode=disable", ACTIVITY_SERVICE_URL: "http://activity:8080", LIFE_OS_TIMEZONE: "${LIFE_OS_TIMEZONE:-UTC}", FINANCE_DEFAULT_CURRENCY: "${LIFE_OS_FINANCE_CURRENCY:-EUR}"}
+    environment: {SERVICE_NAME: finance, PORT: 8080, DATABASE_URL: "postgres://finance_user:${LIFE_OS_FINANCE_DB_PASSWORD}@postgres:5432/finance_db?sslmode=disable", ACTIVITY_SERVICE_URL: "http://activity:8080", LIFE_OS_TIMEZONE: "${LIFE_OS_TIMEZONE:-UTC}", FINANCE_DEFAULT_CURRENCY: "${LIFE_OS_FINANCE_CURRENCY:-EUR}", NOTIFICATIONS_SERVICE_URL: "http://notifications:8080"}
     expose: ["8080"]
     depends_on: {finance-migrate: {condition: service_completed_successfully}}
     networks: [backend]
@@ -80,11 +80,57 @@ services:
     restart: "no"
   calendar:
     build: {context: ., dockerfile: services/calendar/Dockerfile}
-    environment: {SERVICE_NAME: calendar, PORT: 8080, DATABASE_URL: "postgres://calendar_user:${LIFE_OS_CALENDAR_DB_PASSWORD}@postgres:5432/calendar_db?sslmode=disable", LIFE_OS_TIMEZONE: "${LIFE_OS_TIMEZONE:-UTC}", ACTIVITY_SERVICE_URL: "http://activity:8080", CALENDAR_SOURCE_REFRESH_AT: "${LIFE_OS_CALENDAR_SOURCE_REFRESH_AT:-04:30}", CALENDAR_ZAW_ICS_URL: "${LIFE_OS_ZAW_ICS_URL:-}", NOTIFICATIONS_SERVICE_URL: "http://notifications:8080"}
+    environment: {SERVICE_NAME: calendar, PORT: 8080, DATABASE_URL: "postgres://calendar_user:${LIFE_OS_CALENDAR_DB_PASSWORD}@postgres:5432/calendar_db?sslmode=disable", LIFE_OS_TIMEZONE: "${LIFE_OS_TIMEZONE:-UTC}", ACTIVITY_SERVICE_URL: "http://activity:8080", NOTIFICATIONS_SERVICE_URL: "http://notifications:8080"}
     expose: ["8080"]
     depends_on: {calendar-migrate: {condition: service_completed_successfully}}
     networks: [backend]
     restart: unless-stopped
+
+  calendar-feeds-migrate:
+    image: migrate/migrate:v4.18.3
+    command: ["-path", "/migrations", "-database", "postgres://calendar_feeds_user:${LIFE_OS_CALENDAR_FEEDS_DB_PASSWORD}@postgres:5432/calendar_feeds_db?sslmode=disable", "up"]
+    volumes: ["./services/calendar-feeds/db/migrations:/migrations:ro"]
+    depends_on: {postgres: {condition: service_healthy}}
+    networks: [backend]
+    restart: "no"
+  # The ICS/iCal feed integration (docs/services/calendar-feeds.md): it owns
+  # the feeds (URL, filter, the ZAW preset from LIFE_OS_ZAW_ICS_URL, which
+  # names a street and is never logged), downloads them over outbound HTTPS
+  # from the backend network, and syncs their events into Calendar only
+  # through its integration API. It publishes nothing; the gateway routes
+  # /api/integrations/calendar-feeds/.
+  calendar-feeds:
+    build: {context: ., dockerfile: services/calendar-feeds/Dockerfile}
+    environment:
+      SERVICE_NAME: calendar-feeds
+      PORT: 8080
+      DATABASE_URL: "postgres://calendar_feeds_user:${LIFE_OS_CALENDAR_FEEDS_DB_PASSWORD}@postgres:5432/calendar_feeds_db?sslmode=disable"
+      CALENDAR_SERVICE_URL: http://calendar:8080
+      ACTIVITY_SERVICE_URL: http://activity:8080
+      LIFE_OS_TIMEZONE: "${LIFE_OS_TIMEZONE:-UTC}"
+      CALENDAR_FEEDS_REFRESH_AT: "${LIFE_OS_CALENDAR_SOURCE_REFRESH_AT:-04:30}"
+      LIFE_OS_ZAW_ICS_URL: "${LIFE_OS_ZAW_ICS_URL:-}"
+    expose: ["8080"]
+    depends_on:
+      calendar-feeds-migrate: {condition: service_completed_successfully}
+      calendar: {condition: service_started}
+    networks: [backend]
+    restart: unless-stopped
+  # One-time handoff of the feeds Calendar refreshed itself (P11-08,
+  # docs/operations/calendar-feeds-handoff.md):
+  # `docker compose --profile handoff run --rm calendar-feeds-handoff`. It
+  # reads calendar_db in a read-only transaction and prints counts only.
+  calendar-feeds-handoff:
+    build: {context: ., dockerfile: services/calendar-feeds/Dockerfile}
+    profiles: [handoff]
+    command: ["handoff"]
+    environment:
+      DATABASE_URL: "postgres://calendar_feeds_user:${LIFE_OS_CALENDAR_FEEDS_DB_PASSWORD}@postgres:5432/calendar_feeds_db?sslmode=disable"
+      HANDOFF_CALENDAR_DATABASE_URL: "postgres://calendar_user:${LIFE_OS_CALENDAR_DB_PASSWORD}@postgres:5432/calendar_db?sslmode=disable"
+    depends_on:
+      calendar-feeds-migrate: {condition: service_completed_successfully}
+    networks: [backend]
+    restart: "no"
 
   activity-migrate:
     image: migrate/migrate:v4.18.3
@@ -151,6 +197,7 @@ services:
       LIFE_OS_BANKING_TOKEN_KEY: "${LIFE_OS_BANKING_TOKEN_KEY:-}"
       LIFE_OS_BANKING_REDIRECT_URI: "${LIFE_OS_BANKING_REDIRECT_URI:-https://lifeos.gamch1k.com/finance/bank/callback}"
       BANKING_SYNC_TIMES: "${LIFE_OS_BANKING_SYNC_TIMES:-06:00,12:00,18:00,23:00}"
+      BANKING_CONSENT_DAYS: "${LIFE_OS_BANKING_CONSENT_DAYS:-180}"
     volumes:
       - type: bind
         source: "${LIFE_OS_ENABLE_BANKING_KEY_FILE:-/dev/null}"
@@ -215,6 +262,7 @@ services:
       TASKS_SERVICE_URL: http://tasks:8080
       INBOX_SERVICE_URL: http://inbox:8080
       CALENDAR_SERVICE_URL: http://calendar:8080
+      CALENDAR_FEEDS_SERVICE_URL: http://calendar-feeds:8080
       VOICE_SERVICE_URL: http://voice:8080
       ACTIVITY_SERVICE_URL: http://activity:8080
       NOTIFICATIONS_SERVICE_URL: http://notifications:8080
@@ -391,6 +439,7 @@ services:
       notifications: {condition: service_started}
       banking: {condition: service_started}
       google-calendar: {condition: service_started}
+      calendar-feeds: {condition: service_started}
     # edge: how the Cloudflare connector reaches the gateway (and only it).
     networks: [backend, edge]
     restart: unless-stopped

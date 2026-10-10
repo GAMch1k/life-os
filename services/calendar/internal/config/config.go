@@ -22,24 +22,9 @@ type Config struct {
 	// as Europe/Berlin): the default in which all-day dates are compared
 	// with instants when a read does not name a timeZone.
 	TimeZone string `env:"LIFE_OS_TIMEZONE" default:"UTC"`
-	// ActivityURL enables activity events (source refresh outcomes); empty
-	// disables them.
+	// ActivityURL enables activity events (event changes); empty disables
+	// them.
 	ActivityURL string `env:"ACTIVITY_SERVICE_URL"`
-	// SourceRefreshAt is the daily quiet-hour time (HH:MM, owner-local) at
-	// which calendar sources are refreshed.
-	SourceRefreshAt string `env:"CALENDAR_SOURCE_REFRESH_AT" default:"04:30"`
-	// ICSMaxBytes and ICSTimeoutSeconds bound one feed download.
-	ICSMaxBytes       int64 `env:"CALENDAR_ICS_MAX_BYTES" default:"5242880"`
-	ICSTimeoutSeconds int   `env:"CALENDAR_ICS_TIMEOUT_SECONDS" default:"30"`
-	// ICSAllowPrivateURLs lets feeds use http:// and private or loopback
-	// addresses. For local development and verification only: it disables
-	// the protection against reaching internal services.
-	ICSAllowPrivateURLs bool `env:"CALENDAR_ICS_ALLOW_PRIVATE_URLS" default:"false"`
-	// ZAWICSURL is the owner's personal ZAW (MyMüll) waste-collection iCal
-	// feed. When set, Calendar keeps one "ZAW" source for it, configured at
-	// startup; empty leaves any existing one alone. It names a street:
-	// never log it.
-	ZAWICSURL string `env:"CALENDAR_ZAW_ICS_URL"`
 	// Reminder delivery: the Notifications service reminders are sent to
 	// (empty turns delivery off), how often due reminders are looked for,
 	// and how late one may still be sent after Calendar was down (older
@@ -86,15 +71,6 @@ func (c Config) Validate() error {
 	var level slog.Level
 	if err := level.UnmarshalText([]byte(c.LogLevel)); err != nil {
 		validationErrors = append(validationErrors, fmt.Errorf("LOG_LEVEL must be a slog level: %w", err))
-	}
-	if refreshAt, err := time.Parse("15:04", c.SourceRefreshAt); err != nil || refreshAt.Format("15:04") != c.SourceRefreshAt {
-		validationErrors = append(validationErrors, fmt.Errorf("CALENDAR_SOURCE_REFRESH_AT must be a 24-hour HH:MM time such as 04:30"))
-	}
-	if c.ICSMaxBytes < 1024 || c.ICSMaxBytes > 100<<20 {
-		validationErrors = append(validationErrors, fmt.Errorf("CALENDAR_ICS_MAX_BYTES must be between 1024 and 104857600"))
-	}
-	if c.ICSTimeoutSeconds < 1 || c.ICSTimeoutSeconds > 300 {
-		validationErrors = append(validationErrors, fmt.Errorf("CALENDAR_ICS_TIMEOUT_SECONDS must be between 1 and 300"))
 	}
 	if c.ReminderIntervalSeconds < 5 || c.ReminderIntervalSeconds > 300 {
 		validationErrors = append(validationErrors, fmt.Errorf("CALENDAR_REMINDER_INTERVAL_SECONDS must be between 5 and 300"))

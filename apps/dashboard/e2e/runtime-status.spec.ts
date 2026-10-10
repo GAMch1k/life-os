@@ -2,12 +2,12 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 
 import {
-  createSource,
-  deleteSource,
+  createFeed,
+  deleteFeed,
   failingFeedUrl,
   FEED_OVERLAY_HINT,
   feedDir,
-  refreshSource,
+  refreshFeed,
   waitForRefresh,
   writeFeed,
 } from "./calendar-feed";
@@ -268,7 +268,7 @@ test.describe("Runtime status under forced problems", () => {
   }) => {
     const stamp = Date.now();
     const name = `E2E broken feed ${stamp}`;
-    const source = await createSource(request, name, failingFeedUrl(stamp));
+    const source = await createFeed(request, name, failingFeedUrl(stamp));
     try {
       await waitForRefresh(request, source.id, "failed");
       await expectCheck(page, "Calendar sources", name);
@@ -280,7 +280,7 @@ test.describe("Runtime status under forced problems", () => {
       // "Refresh now" until it has failed three times in a row.
       let failures = 1;
       for (let attempt = 0; failures < 3 && attempt < 6; attempt++) {
-        failures = (await refreshSource(request, source.id)).refresh
+        failures = (await refreshFeed(request, source.id)).refresh
           .consecutiveFailures;
       }
       expect(failures).toBeGreaterThanOrEqual(3);
@@ -293,7 +293,7 @@ test.describe("Runtime status under forced problems", () => {
       );
       await expectHomeAlert(page, new RegExp(`${name} has failed`));
     } finally {
-      await deleteSource(request, source.id);
+      await deleteFeed(request, source.id);
     }
     await expectCheck(
       page,
@@ -315,7 +315,7 @@ test.describe("Calendar feed health on Status", () => {
   }) => {
     const stamp = Date.now();
     const name = `E2E status feed ${stamp}`;
-    const source = await createSource(request, name, failingFeedUrl(stamp));
+    const source = await createFeed(request, name, failingFeedUrl(stamp));
     try {
       const failed = await waitForRefresh(request, source.id, "failed");
       await page.goto("/status");
@@ -335,13 +335,19 @@ test.describe("Calendar feed health on Status", () => {
       // The feed URL is never shown.
       await expect(page.getByText(`e2e-${stamp}.ics`)).toHaveCount(0);
 
+      // calendar-feeds is one of the services Status (and the monitor)
+      // watches.
+      await expect(
+        page.getByRole("region", { name: "Services" }),
+      ).toContainText("Calendar feedsready");
+
       // One failure is retried automatically: Home stays quiet about it.
       await page.goto("/");
       await expect(
         page.getByRole("link", { name: new RegExp(`System status:.*${name}`) }),
       ).toHaveCount(0);
     } finally {
-      await deleteSource(request, source.id);
+      await deleteFeed(request, source.id);
     }
   });
 
@@ -361,7 +367,7 @@ test.describe("Calendar feed health on Status", () => {
         end: new Date(start.getTime() + 3_600_000),
       },
     ]);
-    const source = await createSource(request, name, url);
+    const source = await createFeed(request, name, url);
     try {
       await waitForRefresh(request, source.id, "imported");
       await page.goto("/status");
@@ -372,8 +378,24 @@ test.describe("Calendar feed health on Status", () => {
       await expect(feed).toContainText("Refreshing normally.");
       await expect(feed).toContainText(/Last refreshimported, 1 added \(/);
       await expect(feed).not.toContainText("Failed in a row");
+
+      // Renamed by the owner in Calendar (the source's name is theirs):
+      // Status shows the new name at once.
+      const renamed = `${name} renamed`;
+      const patched = await request.patch(
+        `/api/calendar/v1/sources/${source.sourceId}`,
+        { data: { name: renamed } },
+      );
+      expect(patched.status(), await patched.text()).toBe(200);
+      await page.reload();
+      await expect(
+        page
+          .getByRole("region", { name: "Calendar sources" })
+          .getByRole("listitem")
+          .filter({ hasText: renamed }),
+      ).toContainText("Refreshing normally.");
     } finally {
-      await deleteSource(request, source.id);
+      await deleteFeed(request, source.id);
     }
   });
 });
@@ -392,6 +414,7 @@ test.describe("Status card layout", () => {
     "Voice transcription",
     "Calendar sources",
     "Notifications",
+    "Bank connection",
     "Services",
   ];
 

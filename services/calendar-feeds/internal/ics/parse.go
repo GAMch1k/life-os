@@ -15,7 +15,7 @@ import (
 	ical "github.com/arran4/golang-ical"
 	"github.com/teambition/rrule-go"
 
-	"github.com/GAMch1k/life-os/services/calendar/internal/recurrence"
+	"github.com/GAMch1k/life-os/services/calendar-feeds/internal/recurrence"
 )
 
 // Normalization limits and defaults.

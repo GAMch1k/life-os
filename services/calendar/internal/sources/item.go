@@ -6,16 +6,45 @@ import (
 	"slices"
 	"time"
 
-	"github.com/GAMch1k/life-os/services/calendar/internal/ics"
 	store "github.com/GAMch1k/life-os/services/calendar/internal/repository/generated"
 )
 
-// Item is one event of a source, ready to reconcile: an ICS feed event
-// (always a single event, see ics.Item) or a Google Calendar event, which
-// may be a series with its occurrences' own changes and carries its own
-// reminders. The zero values of the extra fields are a feed's.
+// Event is the part of an item every source gives: one event with its
+// identity in the source. (It was the feed parser's item; the parser left
+// Calendar with the feeds, P11-08, and the Google mapping with P11-07.)
+type Event struct {
+	// ExternalUID is the event's identity in its source.
+	ExternalUID string
+	Title       string
+	Description *string
+	Location    *string
+	AllDay      bool
+	// StartAt/EndAt are a timed event's instants (UTC).
+	StartAt, EndAt time.Time
+	// StartDate/EndDate are an all-day event's first and last (inclusive)
+	// days, at UTC midnight.
+	StartDate, EndDate time.Time
+	// TimeZone is the IANA zone a timed event is scheduled in, when known.
+	TimeZone *string
+	// Cancelled: the source cancelled the event.
+	Cancelled  bool
+	Categories []string
+}
+
+// Start is the event's start instant; an all-day event starts at midnight
+// of its first day in loc.
+func (e Event) Start(loc *time.Location) time.Time {
+	if e.AllDay {
+		return time.Date(e.StartDate.Year(), e.StartDate.Month(), e.StartDate.Day(), 0, 0, 0, 0, loc)
+	}
+	return e.StartAt
+}
+
+// Item is one event of a source, ready to reconcile, as an integration
+// syncs it: a single event or a series with its occurrences' own changes,
+// with the reminders and priority the source gives it, if any.
 type Item struct {
-	ics.Item
+	Event
 	// Recurrence is a series' rule; nil for a single event.
 	Recurrence *Recurrence
 	// Exceptions are a series' occurrence changes and skips, by recurrence
@@ -48,15 +77,6 @@ func ownPriority(item Item, defaultPriority string) *string {
 		return &value
 	}
 	return nil
-}
-
-// FeedItems wraps feed events as items.
-func FeedItems(items []ics.Item) []Item {
-	out := make([]Item, 0, len(items))
-	for _, item := range items {
-		out = append(out, Item{Item: item})
-	}
-	return out
 }
 
 // Recurrence is a series' rule in Calendar's model (the API's Recurrence):
