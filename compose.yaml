@@ -80,7 +80,7 @@ services:
     restart: "no"
   calendar:
     build: {context: ., dockerfile: services/calendar/Dockerfile}
-    environment: {SERVICE_NAME: calendar, PORT: 8080, DATABASE_URL: "postgres://calendar_user:${LIFE_OS_CALENDAR_DB_PASSWORD}@postgres:5432/calendar_db?sslmode=disable", LIFE_OS_TIMEZONE: "${LIFE_OS_TIMEZONE:-UTC}", ACTIVITY_SERVICE_URL: "http://activity:8080", CALENDAR_SOURCE_REFRESH_AT: "${LIFE_OS_CALENDAR_SOURCE_REFRESH_AT:-04:30}", CALENDAR_ZAW_ICS_URL: "${LIFE_OS_ZAW_ICS_URL:-}", LIFE_OS_GOOGLE_CLIENT_ID: "${LIFE_OS_GOOGLE_CLIENT_ID:-}", LIFE_OS_GOOGLE_CLIENT_SECRET: "${LIFE_OS_GOOGLE_CLIENT_SECRET:-}", LIFE_OS_GOOGLE_TOKEN_KEY: "${LIFE_OS_GOOGLE_TOKEN_KEY:-}", LIFE_OS_GOOGLE_REDIRECT_URI: "${LIFE_OS_GOOGLE_REDIRECT_URI:-https://lifeos.gamch1k.com/calendar/google/callback}", CALENDAR_GOOGLE_SYNC_SECONDS: "${LIFE_OS_CALENDAR_GOOGLE_SYNC_SECONDS:-120}"}
+    environment: {SERVICE_NAME: calendar, PORT: 8080, DATABASE_URL: "postgres://calendar_user:${LIFE_OS_CALENDAR_DB_PASSWORD}@postgres:5432/calendar_db?sslmode=disable", LIFE_OS_TIMEZONE: "${LIFE_OS_TIMEZONE:-UTC}", ACTIVITY_SERVICE_URL: "http://activity:8080", CALENDAR_SOURCE_REFRESH_AT: "${LIFE_OS_CALENDAR_SOURCE_REFRESH_AT:-04:30}", CALENDAR_ZAW_ICS_URL: "${LIFE_OS_ZAW_ICS_URL:-}", LIFE_OS_GOOGLE_CLIENT_ID: "${LIFE_OS_GOOGLE_CLIENT_ID:-}", LIFE_OS_GOOGLE_CLIENT_SECRET: "${LIFE_OS_GOOGLE_CLIENT_SECRET:-}", LIFE_OS_GOOGLE_TOKEN_KEY: "${LIFE_OS_GOOGLE_TOKEN_KEY:-}", LIFE_OS_GOOGLE_REDIRECT_URI: "${LIFE_OS_GOOGLE_REDIRECT_URI:-https://lifeos.gamch1k.com/calendar/google/callback}", CALENDAR_GOOGLE_SYNC_SECONDS: "${LIFE_OS_CALENDAR_GOOGLE_SYNC_SECONDS:-120}", NOTIFICATIONS_SERVICE_URL: "http://notifications:8080"}
     expose: ["8080"]
     depends_on: {calendar-migrate: {condition: service_completed_successfully}}
     networks: [backend]
@@ -132,6 +132,7 @@ services:
       ACTIVITY_SERVICE_URL: http://activity:8080
       NOTIFICATIONS_SERVICE_URL: http://notifications:8080
       PROCESSOR_STATUS_URL: http://processor:8081
+      MONITOR_SERVICE_URL: http://monitor:8080
       LIFE_OS_TIMEZONE: ${LIFE_OS_TIMEZONE:-UTC}
     expose: ["3000"]
     depends_on:
@@ -139,6 +140,19 @@ services:
       tasks: {condition: service_started}
       inbox: {condition: service_started}
       calendar: {condition: service_started}
+    networks: [backend]
+    restart: unless-stopped
+
+  # Reads the Dashboard's runtime status (/api/status) every minute and
+  # notifies the owner through Notifications when a check breaks or recovers
+  # (docs/services/monitor.md). No database and no gateway route.
+  monitor:
+    build: {context: ., dockerfile: services/monitor/Dockerfile}
+    environment: {SERVICE_NAME: monitor, PORT: 8080, MONITOR_STATUS_URL: "http://dashboard:3000/api/status", NOTIFICATIONS_SERVICE_URL: "http://notifications:8080", MONITOR_INTERVAL_SECONDS: "${LIFE_OS_MONITOR_INTERVAL_SECONDS:-60}", MONITOR_CONFIRMATIONS: "${LIFE_OS_MONITOR_CONFIRMATIONS:-2}"}
+    expose: ["8080"]
+    depends_on:
+      dashboard: {condition: service_started}
+      notifications: {condition: service_started}
     networks: [backend]
     restart: unless-stopped
 

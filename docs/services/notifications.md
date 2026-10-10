@@ -26,7 +26,7 @@ flowchart LR
 | `title` | One line, 1–200 characters, no control characters. Surrounding spaces are trimmed. |
 | `body` | Optional plain text, at most 2000 characters. Line breaks and tabs are kept; no HTML or Markdown. |
 | `importance` | `low`, `medium`, or `high` (below). |
-| `category` | Dotted lowercase kind with at least two parts, at most 100 characters: `calendar.reminder`, `inbox.human_review`, `status.service_down`, `test.manual`. |
+| `category` | Dotted lowercase kind with at least two parts, at most 100 characters: `calendar.reminder`, `inbox.human_review`, `status.processing`, `test.manual`. |
 | `source` | The producing service, such as `calendar`. Defaults to the actor's name (below). |
 | `link` | Optional Life OS path to open, starting with a single `/`, for example `/inbox` or `/calendar?date=2026-10-10`. Absolute (`https://…`) and protocol-relative (`//…`) URLs, backslashes, and spaces are rejected. At most 500 characters. |
 | `dedupeKey` | Required idempotency key, 1–200 characters, unique across all notifications (below). |
@@ -58,7 +58,7 @@ Like every Life OS write, sending needs `X-Life-OS-Actor`. Without an explicit `
 
 ### Dedupe
 
-`dedupeKey` makes sending idempotent. The first notification with a key is stored (201). Any later request with the same key returns that original notification unchanged with 200: its fields are ignored, nothing new is stored or delivered, and no Activity event is recorded. This holds for concurrent requests too. A producer can therefore retry, or send again after a restart, without notifying twice. Namespace keys with the category and make them name the occurrence, for example `calendar.reminder:<eventId>:<startAt>:<minutes>` or `status.service_down:<service>:<since>`.
+`dedupeKey` makes sending idempotent. The first notification with a key is stored (201). Any later request with the same key returns that original notification unchanged with 200: its fields are ignored, nothing new is stored or delivered, and no Activity event is recorded. This holds for concurrent requests too. A producer can therefore retry, or send again after a restart, without notifying twice. Namespace keys with the category and make them name the occurrence, for example `calendar.reminder:<eventId>:<startAt>:<minutes>` or the monitor's `status:<check>:<state>:<since>`.
 
 ## Delivery
 
@@ -165,6 +165,8 @@ err := notifier.Send(ctx, notify.Notification{
 
 `Send` posts as `system:<service>` with a 5 s timeout (`Client.Timeout`), refuses a notification without a dedupe key, title, valid importance, or category (`notify.ErrInvalid`), retries network errors and 5xx twice (safe thanks to the dedupe key), and returns a `*notify.StatusError` for a rejection. It forwards the correlation and causation of an `activity.Trace` in the context. With an empty `NOTIFICATIONS_SERVICE_URL` it sends nothing and returns nil, so a service runs unchanged where Notifications is not configured.
 
+`Latest(ctx, category)` returns the newest notification the client's own service sent in a category (and below it), or nil when there is none. A producer that keeps its state in memory reads its own history with it after a restart; the monitor does, so a restart neither repeats nor loses a status episode.
+
 ### Producers
 
 The service that owns a state change sends its notification, so every path into that state is covered once. Compose gives each producer `NOTIFICATIONS_SERVICE_URL: http://notifications:8080`; it does not depend on Notifications starting first, because sends are best effort.
@@ -173,8 +175,10 @@ The service that owns a state change sends its notification, so every path into 
 | --- | --- | --- | --- | --- | --- |
 | Inbox | `inbox.human_review` | `medium` | A capture moves to Human Review, once per review round. | `/inbox#human-review` | `inbox.human_review:<itemId>:<attemptId>` |
 | Inbox | `inbox.failed` | `medium` | Automatic processing gave up on a capture (attempt `failed`). Not for retries or successes. | `/inbox#failed` | `inbox.failed:<itemId>:<attemptId>` |
+| [Monitor](monitor.md) | `status.<check>`, such as `status.processing` or `status.services`; `status.dashboard` while the Status checks cannot be read | `high` for a problem, `medium` for a warning, `low` for a recovery | A Status check holds a new state for the confirmations (two evaluations a minute apart). | `/status` | `status:<check>:<state>:<since>` |
+| Calendar | `calendar.reminder` | the event's effective priority (`medium` unless set) | An effective reminder of an active event or occurrence is due: every one of them, exactly once. One due while Calendar was down is sent within `CALENDAR_REMINDER_GRACE_MINUTES` (2 h) with "(late)", and recorded in Activity as missed after that. A failed send is retried at the next run. | `/calendar?date=<start date>` | `calendar:reminder:<eventId>:<recurrenceId or single>:<start>:<reminder>` |
 
-See [Inbox](inbox.md#notifications) for the payloads and failure handling.
+See [Inbox](inbox.md#notifications), [Monitor](monitor.md), and [Calendar](calendar.md#reminder-delivery) for the payloads and failure handling.
 
 ## Operations
 

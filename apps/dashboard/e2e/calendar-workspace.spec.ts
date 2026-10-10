@@ -4,8 +4,8 @@ import { type APIRequestContext, expect, type Page, test } from "./fixtures";
 
 // The Calendar workspace (/calendar): FullCalendar month, week, day, and list
 // views over the Calendar API, event create/inspect/edit/delete dialogs,
-// default plus own reminders and Reminder defaults, search across months,
-// cancelled events, phone width, and the dark theme. The browser runs in
+// default plus own reminders, priority, and Reminder defaults, search across
+// months, cancelled events, phone width, and the dark theme. The browser runs in
 // Europe/Berlin (playwright.config.ts).
 
 const enabled = Boolean(process.env.LIFE_OS_E2E_URL);
@@ -32,6 +32,7 @@ type CalendarEvent = {
   reminders: Reminder[];
   useDefaultReminders: boolean;
   effectiveReminders: Reminder[];
+  priority: "low" | "medium" | "high";
 };
 
 type ReminderDefaults = { timed: Reminder[]; allDay: Reminder[] };
@@ -457,6 +458,64 @@ test.describe("Calendar workspace", () => {
     }
   });
 
+  test("a high-priority event shows its priority in its details", async ({
+    page,
+    request,
+  }) => {
+    const problems = watchForProblems(page);
+    const title = `Workspace visa ${stamp}`;
+    const day = addDays(today(), 5);
+    try {
+      await open(page, "week", day);
+      await page.getByRole("button", { name: "New event" }).click();
+      const dialog = page.getByRole("dialog");
+      await dialog.getByLabel("Title").fill(title);
+      await pickDate(dialog, "Start date", day);
+      await dialog.getByLabel("Start time").fill("09:00");
+      await pickDate(dialog, "End date", day);
+      await dialog.getByLabel("End time").fill("10:00");
+      const priority = dialog.getByLabel("Priority");
+      await expect(priority).toHaveValue("medium");
+      await priority.selectOption("high");
+      await dialog.getByRole("button", { name: "Save" }).click();
+      await expect(dialog).toBeHidden();
+
+      const [stored] = await findByTitle(request, title);
+      expect(stored.priority).toBe("high");
+      // The calendar marks it.
+      await expect(eventIn(page, title)).toHaveClass(/lifeos-event-high/);
+
+      await eventIn(page, title).click();
+      await expect(dialog.getByTestId("event-priority")).toHaveText(
+        "High priority",
+      );
+
+      // Low is named too; medium, the usual, is not.
+      await dialog.getByRole("button", { name: "Edit", exact: true }).click();
+      await expect(dialog.getByLabel("Priority")).toHaveValue("high");
+      await dialog.getByLabel("Priority").selectOption("low");
+      await dialog.getByRole("button", { name: "Save" }).click();
+      await expect(dialog.getByTestId("event-priority")).toHaveText(
+        "Low priority",
+      );
+      await dialog.getByRole("button", { name: "Edit", exact: true }).click();
+      await dialog.getByLabel("Priority").selectOption("medium");
+      await dialog.getByRole("button", { name: "Save" }).click();
+      await expect(dialog.getByRole("heading", { name: title })).toBeVisible();
+      await expect(dialog.getByTestId("event-priority")).toHaveCount(0);
+      const [edited] = await findByTitle(request, title);
+      expect(edited.priority).toBe("medium");
+      await page.keyboard.press("Escape");
+      await expect(dialog).toBeHidden();
+      await expect(eventIn(page, title)).not.toHaveClass(/lifeos-event-high/);
+      expect(problems).toEqual([]);
+    } finally {
+      for (const event of await findByTitle(request, title)) {
+        await request.delete(`/api/calendar/v1/events/${event.id}`);
+      }
+    }
+  });
+
   test("Reminder defaults sets the owner's and a source's defaults", async ({
     page,
     request,
@@ -500,6 +559,9 @@ test.describe("Calendar workspace", () => {
       await dialog
         .getByLabel(`${feedName} default 1 type`)
         .selectOption("localTime");
+      // The feed's events are important unless one gets another priority.
+      await expect(feed.getByLabel("Default priority")).toHaveValue("medium");
+      await feed.getByLabel("Default priority").selectOption("high");
       await dialog.getByRole("button", { name: "Save" }).click();
       await expect(dialog).toBeHidden();
 
@@ -509,9 +571,16 @@ test.describe("Calendar workspace", () => {
       });
       const saved = await request.get(`/api/calendar/v1/sources/${source.id}`);
       expect(
-        ((await saved.json()) as { defaultReminders: Reminder[] | null })
-          .defaultReminders,
-      ).toEqual([{ kind: "localTime", daysBefore: 1, localTime: "19:00" }]);
+        (await saved.json()) as {
+          defaultReminders: Reminder[] | null;
+          defaultPriority: string;
+        },
+      ).toMatchObject({
+        defaultReminders: [
+          { kind: "localTime", daysBefore: 1, localTime: "19:00" },
+        ],
+        defaultPriority: "high",
+      });
 
       // A new event offers the defaults for its kind and uses them.
       await page.getByRole("button", { name: "New event" }).click();

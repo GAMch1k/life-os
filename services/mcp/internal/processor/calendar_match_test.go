@@ -166,6 +166,20 @@ func TestCalendarUpdateFindsTheOneEventAcrossLanguagesAndKeepsItsLength(t *testi
 	}
 }
 
+func TestCalendarUpdateSetsThePriorityOfTheOneEvent(t *testing.T) {
+	// "Das Visum-Gespräch ist wichtig": only the priority changes.
+	tools := newCalendarTools("Das Visum-Gespräch ist wichtig", timedEvent("event-visa", "Visa appointment", "2026-10-16T07:00:00Z", "2026-10-16T08:00:00Z"))
+	tools.matches["Visa"] = []string{"event-visa"}
+	runCalendarPlan(t, tools, `{"actions":[{"tool":"calendar_update","arguments":{"eventQuery":"Visum","eventQueryAlternatives":["Visa","виз"],"priority":"high"}}],"confidence":0.95}`)
+	want := map[string]any{"eventId": "event-visa", "priority": "high"}
+	if got := tools.inputs["calendar_update"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("calendar_update input = %#v, want %#v", got, want)
+	}
+	if !contains(tools.calls, "inbox_resolve") || tools.review != nil {
+		t.Fatalf("calls = %#v, review = %#v", tools.calls, tools.review)
+	}
+}
+
 func TestCalendarUpdateWithSeveralMatchesGoesToHumanReviewWithCandidates(t *testing.T) {
 	tools := newCalendarTools("Move my meeting to Thursday at 14:00",
 		timedEvent("event-team", "Team meeting", "2026-10-12T08:00:00Z", "2026-10-12T09:00:00Z"),
@@ -356,6 +370,7 @@ func TestExistingCalendarCreatePlansStillWork(t *testing.T) {
 		`{"actions":[{"tool":"calendar_create","arguments":{"title":"Dentist","allDay":false,"startAt":"2026-10-16T15:00:00+02:00","endAt":"2026-10-16T16:00:00+02:00"}}],"confidence":0.95}`,
 		`{"actions":[{"tool":"calendar_create","arguments":{"title":"Anna's birthday","description":"Bring flowers","allDay":true,"startDate":"2026-10-12","endDate":"2026-10-12"}}],"confidence":0.95}`,
 		`{"actions":[{"tool":"calendar_create","arguments":{"title":"Dentist","location":"Dr. Weber","allDay":false,"startAt":"2026-10-16T15:00:00+02:00","endAt":"2026-10-16T16:00:00+02:00","reminders":[{"kind":"relative","minutesBefore":30}]}}],"confidence":0.95}`,
+		`{"actions":[{"tool":"calendar_create","arguments":{"title":"Visa appointment","allDay":false,"startAt":"2026-10-16T09:00:00+02:00","endAt":"2026-10-16T10:00:00+02:00","priority":"high"}}],"confidence":0.95}`,
 	} {
 		tools := newCalendarTools("Add dentist")
 		runCalendarPlan(t, tools, raw)
@@ -397,6 +412,13 @@ func TestValidActionChecksCalendarChanges(t *testing.T) {
 		{"bad defaults flag", "calendar_update", map[string]any{"eventQuery": "dentist", "useDefaultReminders": "no"}, false},
 		{"create with own reminders only", "calendar_create", map[string]any{"title": "Dentist", "allDay": true, "useDefaultReminders": false, "reminders": []any{map[string]any{"kind": "relative", "minutesBefore": 10.0}}}, true},
 		{"create with a bad defaults flag", "calendar_create", map[string]any{"title": "Dentist", "allDay": true, "useDefaultReminders": "yes"}, false},
+		{"create important", "calendar_create", map[string]any{"title": "Visa", "allDay": true, "priority": "high"}, true},
+		{"create unimportant", "calendar_create", map[string]any{"title": "Visa", "allDay": true, "priority": "low"}, true},
+		{"create with an unknown priority", "calendar_create", map[string]any{"title": "Visa", "allDay": true, "priority": "urgent"}, false},
+		{"create with a numeric priority", "calendar_create", map[string]any{"title": "Visa", "allDay": true, "priority": 3.0}, false},
+		{"priority alone", "calendar_update", map[string]any{"eventQuery": "dentist", "priority": "high"}, true},
+		{"update with an unknown priority", "calendar_update", map[string]any{"eventQuery": "dentist", "priority": "wichtig"}, false},
+		{"clear priority", "calendar_update", map[string]any{"eventQuery": "dentist", "clear": []any{"priority"}}, false},
 		{"cancel", "calendar_cancel", map[string]any{"eventQuery": "dentist", "eventQueryAlternatives": []any{"Zahnarzt"}}, true},
 		{"cancel with change", "calendar_cancel", map[string]any{"eventQuery": "dentist", "title": "x"}, false},
 		{"cancel on a day", "calendar_cancel", map[string]any{"eventQuery": "gym", "onDate": "2026-10-10"}, true},
@@ -509,6 +531,8 @@ func TestPlanPromptAllowsCalendarChangesThroughSearchTermsAndReview(t *testing.T
 		`reason "Recurring events are created in the Calendar."`,
 		"the processor otherwise keeps the event's length",
 		"Never create an event as a fallback for an uncertain existing event.",
+		`and priority (only when the item says how important it is: "high" for important or urgent, such as "wichtig" or "важно", "low" for not important or low priority; otherwise leave it out)`,
+		"useDefaultReminders, priority, and clear",
 	} {
 		if !strings.Contains(planPrompt, want) {
 			t.Errorf("planPrompt lacks %q", want)

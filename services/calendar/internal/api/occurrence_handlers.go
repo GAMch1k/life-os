@@ -296,7 +296,7 @@ func (h *Handler) SplitEventSeries(c fiber.Ctx, id types.UUID, rid string) error
 		if err != nil {
 			return badRequest(err.Error())
 		}
-		params, err := next.createParams()
+		params, err := next.withPriorityDefault(defaultPriority).createParams()
 		if err != nil {
 			return internal(err)
 		}

@@ -209,7 +209,7 @@ func sourceReminders(list []generated.Reminder) []sources.Reminder {
 func (h *Handler) googleTarget(ctx context.Context, current store.Event, patch *eventPatch) (google.Target, bool, error) {
 	target, err := h.google.Target(ctx, current)
 	var readOnly *google.ReadOnlyError
-	if errors.As(err, &readOnly) && patch != nil && patch.onlyReminders() {
+	if errors.As(err, &readOnly) && patch != nil && patch.importedEditable() {
 		return google.Target{}, false, nil
 	}
 	if err != nil {

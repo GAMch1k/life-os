@@ -227,12 +227,44 @@ func TestPatchTurnsDefaultRemindersOnAndOffAndKeepsOwn(t *testing.T) {
 		`{"reminders":[]}`:                                               true,
 		`{"useDefaultReminders":false}`:                                  true,
 		`{"reminders":null,"useDefaultReminders":true}`:                  true,
+		`{"priority":"high"}`:                                            true,
+		`{"priority":"low","reminders":[]}`:                              true,
 		`{"reminders":[],"title":"Moved"}`:                               false,
+		`{"priority":"high","status":"cancelled"}`:                       false,
 		`{"useDefaultReminders":false,"startAt":"2026-11-17T09:00:00Z"}`: false,
 	} {
-		if got := mustPatch(t, body).onlyReminders(); got != want {
-			t.Errorf("onlyReminders(%s) = %v, want %v", body, got, want)
+		if got := mustPatch(t, body).importedEditable(); got != want {
+			t.Errorf("importedEditable(%s) = %v, want %v", body, got, want)
 		}
+	}
+}
+
+// A priority is set, validated, and kept only while it is not the event's
+// default.
+func TestPatchSetsPriority(t *testing.T) {
+	current := timedFields()
+	next, err := mustPatch(t, `{"priority":"high"}`).apply(current, time.Now(), time.UTC)
+	if err != nil || next.Priority == nil || *next.Priority != generated.High {
+		t.Fatalf("priority high = %+v, %v", next.Priority, err)
+	}
+	if kept, err := mustPatch(t, `{"title":"Dentist (Dr. Weber)"}`).apply(next, time.Now(), time.UTC); err != nil || *kept.Priority != generated.High {
+		t.Fatalf("a rename changed the priority: %+v, %v", kept.Priority, err)
+	}
+	if _, err := mustPatch(t, `{"priority":"urgent"}`).apply(current, time.Now(), time.UTC); err == nil || err.Error() != "priority must be low, medium, or high" {
+		t.Errorf("priority urgent = %v, want refused", err)
+	}
+	if _, err := decodePatch([]byte(`{"priority":null}`)); err == nil || !strings.Contains(err.Error(), "priority cannot be null") {
+		t.Errorf("priority:null = %v, want refused", err)
+	}
+	// The default is no priority of the event's own.
+	if got := next.withPriorityDefault(generated.High); got.Priority != nil {
+		t.Errorf("high with a high default = %v, want none of its own", *got.Priority)
+	}
+	if got := next.withPriorityDefault(generated.Medium); got.Priority == nil || *got.Priority != generated.High {
+		t.Errorf("high with a medium default = %v, want high", got.Priority)
+	}
+	if priorityOr(nil, generated.Low) != generated.Low || priorityOr(ptr(generated.High), generated.Low) != generated.High {
+		t.Error("priorityOr")
 	}
 }
 

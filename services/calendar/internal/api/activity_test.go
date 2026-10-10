@@ -45,6 +45,7 @@ func TestClassifyUpdate(t *testing.T) {
 			e.Reminders = []byte(`[{"kind":"relative","minutesBefore":180}]`)
 		}, eventUpdated, "location reminders"},
 		{"default reminders off", func(e *store.Event) { e.UseDefaultReminders = false }, eventUpdated, "reminders"},
+		{"priority", func(e *store.Event) { e.Priority = ptr("high") }, eventUpdated, "priority"},
 		{"repeats", func(e *store.Event) { e.RecurrenceFrequency = &frequency }, eventUpdated, "recurrence"},
 		{"moved", func(e *store.Event) {
 			e.StartAt.Time = e.StartAt.Time.Add(24 * time.Hour)

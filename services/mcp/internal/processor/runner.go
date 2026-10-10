@@ -518,7 +518,7 @@ func validAction(action plannedAction) bool {
 		if title, ok := action.Arguments["title"].(string); !ok || strings.TrimSpace(title) == "" {
 			return false
 		}
-		if action.Tool == "calendar_create" && (!validReminders(action.Arguments["reminders"]) || !validUseDefault(action.Arguments)) {
+		if action.Tool == "calendar_create" && (!validReminders(action.Arguments["reminders"]) || !validUseDefault(action.Arguments) || !validPriority(action.Arguments)) {
 			return false
 		}
 	}
@@ -527,8 +527,8 @@ func validAction(action plannedAction) bool {
 		"task_update":                       {"taskQuery": true, "taskQueryAlternatives": true, "taskId": true, "title": true, "notes": true, "dueAt": true, "clearDueAt": true},
 		"task_complete":                     {"taskQuery": true, "taskQueryAlternatives": true, "taskId": true},
 		"task_reopen":                       {"taskQuery": true, "taskQueryAlternatives": true, "taskId": true},
-		"calendar_create":                   {"title": true, "description": true, "location": true, "allDay": true, "startAt": true, "endAt": true, "startDate": true, "endDate": true, "timeZone": true, "reminders": true, "useDefaultReminders": true},
-		"calendar_update":                   {"eventQuery": true, "eventQueryAlternatives": true, "title": true, "description": true, "location": true, "allDay": true, "startAt": true, "endAt": true, "startDate": true, "endDate": true, "timeZone": true, "reminders": true, "useDefaultReminders": true, "clear": true},
+		"calendar_create":                   {"title": true, "description": true, "location": true, "allDay": true, "startAt": true, "endAt": true, "startDate": true, "endDate": true, "timeZone": true, "reminders": true, "useDefaultReminders": true, "priority": true},
+		"calendar_update":                   {"eventQuery": true, "eventQueryAlternatives": true, "title": true, "description": true, "location": true, "allDay": true, "startAt": true, "endAt": true, "startDate": true, "endDate": true, "timeZone": true, "reminders": true, "useDefaultReminders": true, "priority": true, "clear": true},
 		"calendar_cancel":                   {"eventQuery": true, "eventQueryAlternatives": true, "onDate": true, "occurrences": true},
 		"finance_create_manual_transaction": {"accountId": true, "categoryId": true, "amount": true, "occurredOn": true, "note": true},
 	}

@@ -49,6 +49,27 @@ func (e EventGoogleLinkState) Valid() bool {
 	}
 }
 
+// Defines values for EventPriority.
+const (
+	High   EventPriority = "high"
+	Low    EventPriority = "low"
+	Medium EventPriority = "medium"
+)
+
+// Valid indicates whether the value is a known member of the EventPriority enum.
+func (e EventPriority) Valid() bool {
+	switch e {
+	case High:
+		return true
+	case Low:
+		return true
+	case Medium:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for EventSourceKind.
 const (
 	EventSourceKindGoogle EventSourceKind = "google"
@@ -264,6 +285,9 @@ type CalendarEvent struct {
 	CancelledAt *time.Time `json:"cancelledAt,omitempty"`
 	CreatedAt   time.Time  `json:"createdAt"`
 
+	// DefaultPriority The priority of the event without one of its own: its source's `defaultPriority` for an imported event, else `medium`. Read-only.
+	DefaultPriority EventPriority `json:"defaultPriority"`
+
 	// DefaultReminders The default reminders for this event, whether or not it uses them: its source's `defaultReminders` for an imported event, else the owner's defaults for timed or all-day events (Calendar settings). Read-only.
 	DefaultReminders []Reminder `json:"defaultReminders"`
 
@@ -293,6 +317,9 @@ type CalendarEvent struct {
 
 	// Occurrence Set on an item that is one occurrence of a recurring event, as listing, search, and the occurrence endpoints return them. The item's `id` and fields are the recurring event's (update or delete it to change every occurrence), with this occurrence's start and end, and with this occurrence's own changes applied (see `modified`).
 	Occurrence *EventOccurrence `json:"occurrence,omitempty"`
+
+	// Priority The event's priority, the importance of its reminder notifications: its own (for an occurrence, its own or else the series'), else `defaultPriority`.
+	Priority EventPriority `json:"priority"`
 
 	// ReadOnlyReason Why the event is not editable, for the owner; null when it is.
 	ReadOnlyReason *string `json:"readOnlyReason,omitempty"`
@@ -340,6 +367,9 @@ type CalendarSettings struct {
 type CalendarSource struct {
 	CreatedAt time.Time `json:"createdAt"`
 
+	// DefaultPriority The priority of this source's events that have none of their own; medium unless set.
+	DefaultPriority EventPriority `json:"defaultPriority"`
+
 	// DefaultReminders Default reminders for this source's events: every event that uses its defaults gets them, together with its own (for example the evening before a waste pickup, `{"kind":"localTime","daysBefore":1,"localTime":"19:00"}`). Null means none.
 	DefaultReminders *[]Reminder `json:"defaultReminders"`
 
@@ -384,6 +414,9 @@ type CreateEventRequest struct {
 	ExternalReference *ExternalReference `json:"externalReference,omitempty"`
 	Location          *string            `json:"location,omitempty"`
 
+	// Priority Leave out for the default (medium).
+	Priority *EventPriority `json:"priority,omitempty"`
+
 	// Recurrence Repeats the event every `interval` days, weeks, months, or years from its start, as an iCalendar (RFC 5545) rule. A timed event keeps its wall-clock time in its `timeZone` (else the owner's timezone) across daylight saving changes. Weekly repeats on the start's weekday, or on each of `byWeekday` (which must include the start's weekday in the event's timezone; all-day: its startDate's). Monthly repeats on the start's day of the month and skips months without it (the 31st); yearly on the start's date: an all-day event on 17 September repeats annually on September 17, such as a birthday (29 February only in leap years). The series ends at `until`, the latest start of an occurrence (inclusive; an all-day series compares its dates with until's date in the owner's timezone; not before the event's start), or after `count` occurrences, or never; not both. Errors (400): `recurrence frequency must be daily, weekly, monthly, or yearly`, `recurrence interval must be at least 1`, `recurrence byWeekday is only for weekly recurrence`, `recurrence byWeekday days must be MO, TU, WE, TH, FR, SA, or SU`, `recurrence byWeekday must include the weekday the event starts on (Saturday)` (naming that weekday), `recurrence count must be between 1 and 1000`, `recurrence takes until or count, not both`, `recurrence until must not be before the event starts`.
 	Recurrence *Recurrence `json:"recurrence,omitempty"`
 
@@ -402,8 +435,10 @@ type CreateEventRequest struct {
 
 // CreateSourceRequest defines model for CreateSourceRequest.
 type CreateSourceRequest struct {
-	DefaultReminders *[]Reminder `json:"defaultReminders,omitempty"`
-	Enabled          *bool       `json:"enabled,omitempty"`
+	// DefaultPriority Leave out for medium.
+	DefaultPriority  *EventPriority `json:"defaultPriority,omitempty"`
+	DefaultReminders *[]Reminder    `json:"defaultReminders,omitempty"`
+	Enabled          *bool          `json:"enabled,omitempty"`
 
 	// Filter Which feed events to import. A term matches an event when it equals one of the event's CATEGORIES or occurs in its SUMMARY (both case-insensitive). With `include` terms, only events matching one of them are imported; then events matching an `exclude` term are dropped. Empty lists import everything.
 	Filter *SourceFilter `json:"filter,omitempty"`
@@ -445,7 +480,7 @@ type EventList struct {
 
 // EventOccurrence Set on an item that is one occurrence of a recurring event, as listing, search, and the occurrence endpoints return them. The item's `id` and fields are the recurring event's (update or delete it to change every occurrence), with this occurrence's start and end, and with this occurrence's own changes applied (see `modified`).
 type EventOccurrence struct {
-	// Modified This occurrence has its own changes (This event): title, description, location, start and end, or reminders differ from the series'. A skipped occurrence shows `status: cancelled` instead.
+	// Modified This occurrence has its own changes (This event): title, description, location, start and end, reminders, or priority differ from the series'. A skipped occurrence shows `status: cancelled` instead.
 	Modified bool `json:"modified"`
 
 	// RecurrenceId The occurrence's original start, unique within its series and kept when the occurrence is moved: an RFC 3339 instant in UTC for timed events, a date (YYYY-MM-DD) for all-day events.
@@ -454,6 +489,9 @@ type EventOccurrence struct {
 	// SeriesId The recurring event this is an occurrence of (the same as the item's id).
 	SeriesId openapi_types.UUID `json:"seriesId"`
 }
+
+// EventPriority How important an event is; the importance of its reminder notifications.
+type EventPriority string
 
 // EventSource Where the event comes from. Set when the event is created; updates never change it.
 type EventSource struct {
@@ -646,7 +684,7 @@ type Recurrence struct {
 // RecurrenceFrequency defines model for Recurrence.Frequency.
 type RecurrenceFrequency string
 
-// Reminder Reminder intent only; Calendar stores it and does not deliver notifications. `relative`: `minutesBefore` the event starts (an all-day event starts at midnight of its first day, owner-local). `localTime`: at `localTime` (HH:MM on the owner's wall clock) on the day `daysBefore` days before the event's start date in the owner's timezone, resolved when the reminder is due so daylight saving changes are respected. Example: a pickup on 17 November with `{"kind": "localTime", "daysBefore": 1, "localTime": "19:00"}` reminds on 16 November at 19:00.
+// Reminder Calendar sends a notification for each effective reminder when it is due. `relative`: `minutesBefore` the event starts (an all-day event starts at midnight of its first day, owner-local). `localTime`: at `localTime` (HH:MM on the owner's wall clock) on the day `daysBefore` days before the event's start date in the owner's timezone, resolved when the reminder is due so daylight saving changes are respected. Example: a pickup on 17 November with `{"kind": "localTime", "daysBefore": 1, "localTime": "19:00"}` reminds on 16 November at 19:00.
 type Reminder struct {
 	// DaysBefore Required for localTime (and only there); 0 is the event's own day.
 	DaysBefore *int         `json:"daysBefore,omitempty"`
@@ -669,6 +707,34 @@ type ReminderDefaults struct {
 
 	// Timed For timed events, such as `{"kind":"relative","minutesBefore":30}`.
 	Timed []Reminder `json:"timed"`
+}
+
+// ReminderDeliveryStatus defines model for ReminderDeliveryStatus.
+type ReminderDeliveryStatus struct {
+	// Enabled Whether Calendar sends reminders: false when NOTIFICATIONS_SERVICE_URL is not set.
+	Enabled bool `json:"enabled"`
+
+	// GraceMinutes How late a reminder may still be sent (marked "(late)") after Calendar was down; older ones are recorded as missed.
+	GraceMinutes int `json:"graceMinutes"`
+
+	// HandledThrough Every reminder due up to this instant has been sent, recorded as missed, or refused by Notifications; null before the first run.
+	HandledThrough *time.Time `json:"handledThrough"`
+
+	// IntervalSeconds How often due reminders are looked for.
+	IntervalSeconds int `json:"intervalSeconds"`
+
+	// LastError The last run error, kept until the next one: current when lastErrorAt is after lastSuccessAt.
+	LastError   *string    `json:"lastError"`
+	LastErrorAt *time.Time `json:"lastErrorAt"`
+
+	// LastRunAt When a run last started.
+	LastRunAt *time.Time `json:"lastRunAt"`
+
+	// LastSentAt When a run last sent a reminder.
+	LastSentAt *time.Time `json:"lastSentAt"`
+
+	// LastSuccessAt When a run last finished without an error.
+	LastSuccessAt *time.Time `json:"lastSuccessAt"`
 }
 
 // SourceFilter Which feed events to import. A term matches an event when it equals one of the event's CATEGORIES or occurs in its SUMMARY (both case-insensitive). With `include` terms, only events matching one of them are imported; then events matching an `exclude` term are dropped. Empty lists import everything.
@@ -743,6 +809,9 @@ type UpdateEventRequest struct {
 	EndDate     *openapi_types.Date `json:"endDate,omitempty"`
 	Location    *string             `json:"location,omitempty"`
 
+	// Priority The event's priority; its `defaultPriority` makes it follow its default again. Also allowed on an imported event.
+	Priority *EventPriority `json:"priority,omitempty"`
+
 	// Recurrence Replaces the rule. Null stops the event repeating (on a split: the new series does not repeat).
 	Recurrence *Recurrence `json:"recurrence,omitempty"`
 
@@ -778,9 +847,12 @@ type UpdateOccurrenceRequest struct {
 	EndAt       *time.Time          `json:"endAt,omitempty"`
 	EndDate     *openapi_types.Date `json:"endDate,omitempty"`
 	Location    *string             `json:"location,omitempty"`
-	Reminders   *[]Reminder         `json:"reminders,omitempty"`
-	StartAt     *time.Time          `json:"startAt,omitempty"`
-	StartDate   *openapi_types.Date `json:"startDate,omitempty"`
+
+	// Priority This occurrence's priority; the series' priority makes it follow the series again.
+	Priority  *EventPriority      `json:"priority,omitempty"`
+	Reminders *[]Reminder         `json:"reminders,omitempty"`
+	StartAt   *time.Time          `json:"startAt,omitempty"`
+	StartDate *openapi_types.Date `json:"startDate,omitempty"`
 
 	// Status `cancelled` events are kept as history but left out of listings and search unless asked for. An occurrence of a recurring event is cancelled when its series is or when it is skipped on its own.
 	Status              *EventStatus `json:"status,omitempty"`
@@ -799,6 +871,9 @@ type UpdateSettingsRequest struct {
 
 // UpdateSourceRequest defines model for UpdateSourceRequest.
 type UpdateSourceRequest struct {
+	// DefaultPriority Replaces the default priority; the source's events without one of their own follow it.
+	DefaultPriority *EventPriority `json:"defaultPriority,omitempty"`
+
 	// DefaultReminders Replaces the default reminders; null removes them.
 	DefaultReminders *[]Reminder `json:"defaultReminders,omitempty"`
 	Enabled          *bool       `json:"enabled,omitempty"`
@@ -981,6 +1056,9 @@ type ServerInterface interface {
 	// AuthorizeGoogle Start a Google authorization
 	// (POST /v1/google/connection/authorize)
 	AuthorizeGoogle(c fiber.Ctx) error
+	// GetReminderStatus Get the reminder delivery health
+	// (GET /v1/reminders/status)
+	GetReminderStatus(c fiber.Ctx) error
 	// GetSettings Get the Calendar settings
 	// (GET /v1/settings)
 	GetSettings(c fiber.Ctx) error
@@ -1648,6 +1726,24 @@ func (siw *ServerInterfaceWrapper) AuthorizeGoogle(c fiber.Ctx) error {
 	return handler(c)
 }
 
+// GetReminderStatus operation middleware
+func (siw *ServerInterfaceWrapper) GetReminderStatus(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.GetReminderStatus(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
 // GetSettings operation middleware
 func (siw *ServerInterfaceWrapper) GetSettings(c fiber.Ctx) error {
 
@@ -1894,6 +1990,8 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	router.Get(options.BaseURL+"/v1/settings", wrapper.GetSettings)
 
 	router.Patch(options.BaseURL+"/v1/settings", wrapper.UpdateSettings)
+
+	router.Get(options.BaseURL+"/v1/reminders/status", wrapper.GetReminderStatus)
 
 	router.Delete(options.BaseURL+"/v1/google/connection", wrapper.DisconnectGoogle)
 

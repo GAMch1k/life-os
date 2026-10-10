@@ -179,7 +179,7 @@ func updateParams(event store.Event) store.UpdateEventParams {
 		StartAt: event.StartAt, EndAt: event.EndAt, StartDate: event.StartDate, EndDate: event.EndDate, TimeZone: event.TimeZone,
 		RecurrenceFrequency: event.RecurrenceFrequency, RecurrenceInterval: event.RecurrenceInterval, RecurrenceUntil: event.RecurrenceUntil,
 		RecurrenceByWeekday: event.RecurrenceByWeekday, RecurrenceCount: event.RecurrenceCount,
-		Reminders: event.Reminders, UseDefaultReminders: event.UseDefaultReminders,
+		Reminders: event.Reminders, UseDefaultReminders: event.UseDefaultReminders, Priority: event.Priority,
 		Status: event.Status, CancelledAt: event.CancelledAt, RemovedFromSourceAt: event.RemovedFromSourceAt,
 		ID: event.ID, ExpectedUpdatedAt: event.UpdatedAt,
 	}

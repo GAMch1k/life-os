@@ -20,6 +20,10 @@ Optional. The `ntfy` container (Compose profile `ntfy`) pushes notifications to 
 
 A deploy of this change also recreates the gateway (`docker compose up -d --force-recreate --no-deps gateway`): it now answers only its listed hosts. Check WireGuard (`curl -s -o /dev/null -w '%{http_code}\n' http://10.66.66.1:3001/` gives 200) and the public path (`tools/check-cloudflare-access`) afterwards.
 
+## Adding the monitor to an existing deployment
+
+The [monitor](../services/monitor.md) needs no database, secret, or `.env` change (`LIFE_OS_MONITOR_INTERVAL_SECONDS` and `LIFE_OS_MONITOR_CONFIRMATIONS` are optional). Rebuild and start it with the Dashboard, which gains `/api/status` and probes the monitor's readiness: `docker compose up --detach --build dashboard monitor`. Status then lists Monitor under Services. A first deployment has no notification history, so a check that is already a problem is notified after the confirmations (two minutes at the defaults).
+
 ## Safe verification on a deployed host
 
 Do not use raw `docker compose down --volumes` with the normal deployment to

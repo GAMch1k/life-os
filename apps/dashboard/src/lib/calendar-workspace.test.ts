@@ -5,7 +5,9 @@ import { NO_REPEAT } from "./calendar-recurrence";
 import {
   apiErrorMessage,
   type CalendarEvent,
+  type CalendarSource,
   createRequest,
+  defaultPriorityNote,
   defaultRemindersNote,
   deleteScopes,
   draftFromEvent,
@@ -26,9 +28,11 @@ import {
   occurrenceRequest,
   parseDay,
   parseView,
+  priorityBadge,
   readDraft,
   readOnlyReason,
   readReminders,
+  reminderAndPriorityChanges,
   reminderChanges,
   reminderLabel,
   reminderLines,
@@ -36,6 +40,7 @@ import {
   sameReminders,
   seriesRequest,
   settingsRequest,
+  sourceDefaultsRequest,
   sourceLabel,
   splitRequest,
   splitSearchResults,
@@ -57,6 +62,8 @@ const event = (
   useDefaultReminders: true,
   defaultReminders: [],
   effectiveReminders: [],
+  priority: "medium",
+  defaultPriority: "medium",
   createdAt: "2026-10-01T00:00:00Z",
   updatedAt: "2026-10-01T00:00:00Z",
   ...fields,
@@ -85,6 +92,7 @@ const draft = (fields: Partial<EventDraft>): EventDraft => ({
   notes: "",
   useDefaultReminders: true,
   reminders: [],
+  priority: "medium",
   repeat: NO_REPEAT,
   ...fields,
 });
@@ -485,6 +493,7 @@ test("the form is read in the zone its times are in", () => {
     location: "Praxis",
     reminders: [],
     useDefaultReminders: true,
+    priority: "medium",
     recurrence: null,
     allDay: false,
     startAt: "2026-10-16T13:00:00.000Z",
@@ -643,6 +652,95 @@ test("Reminder defaults saves only the lists that changed", () => {
   assert.deepEqual(settingsRequest(saved, { timed: [], allDay: [] }), {
     defaultReminders: { timed: [], allDay: [] },
   });
+});
+
+// Priority --------------------------------------------------------------------
+
+test("details name high and low priority, not the usual medium", () => {
+  assert.equal(priorityBadge({ priority: "high" }), "High priority");
+  assert.equal(priorityBadge({ priority: "low" }), "Low priority");
+  assert.equal(priorityBadge({ priority: "medium" }), undefined);
+});
+
+test("high-priority events are marked on the calendar", () => {
+  assert.ok(
+    toEventInput({ ...timed, priority: "high" })?.classNames?.includes(
+      "lifeos-event-high",
+    ),
+  );
+  for (const priority of ["medium", "low"] as const) {
+    assert.ok(
+      !toEventInput({ ...timed, priority })?.classNames?.includes(
+        "lifeos-event-high",
+      ),
+    );
+  }
+});
+
+test("the form edits the priority and sends it only when it changed", () => {
+  assert.equal(newDraft("UTC", new Date()).priority, "medium");
+  const urgent = { ...timed, priority: "high" as const };
+  assert.equal(draftFromEvent(urgent, "UTC").priority, "high");
+
+  // Created: medium (the default) is left out.
+  const plain = readDraft(draft({}), "UTC");
+  assert.ok("fields" in plain);
+  assert.equal("priority" in createRequest(plain.fields), false);
+  const high = readDraft(draft({ priority: "high" }), "UTC");
+  assert.ok("fields" in high);
+  assert.equal(high.fields.priority, "high");
+  assert.equal(createRequest(high.fields).priority, "high");
+
+  // Updated: only a change is sent.
+  assert.equal(updateRequest(high.fields, urgent).priority, undefined);
+  assert.equal(updateRequest(plain.fields, urgent).priority, "medium");
+  assert.equal(updateRequest(high.fields, timed).priority, "high");
+});
+
+test("an imported event sends only its reminder and priority changes", () => {
+  const zaw = {
+    ...timed,
+    source: zawSource,
+    priority: "high" as const,
+    defaultPriority: "high" as const,
+  };
+  const fields = { reminders: [], useDefaultReminders: true };
+  assert.deepEqual(
+    reminderAndPriorityChanges({ ...fields, priority: "high" }, zaw),
+    {},
+  );
+  assert.deepEqual(
+    reminderAndPriorityChanges(
+      { ...fields, useDefaultReminders: false, priority: "low" },
+      zaw,
+    ),
+    { useDefaultReminders: false, priority: "low" },
+  );
+  assert.equal(
+    defaultPriorityNote(zaw),
+    "ZAW events are high priority unless you choose another.",
+  );
+  assert.equal(defaultPriorityNote(timed), undefined);
+});
+
+test("Reminder defaults saves a source's changed default priority", () => {
+  const source = {
+    id: "s",
+    defaultReminders: [evening],
+    defaultPriority: "medium",
+  } as CalendarSource;
+  assert.equal(
+    sourceDefaultsRequest(source, { reminders: [evening], priority: "medium" }),
+    undefined,
+  );
+  assert.deepEqual(
+    sourceDefaultsRequest(source, { reminders: [evening], priority: "high" }),
+    { defaultPriority: "high" },
+  );
+  assert.deepEqual(
+    sourceDefaultsRequest(source, { reminders: [], priority: "low" }),
+    { defaultReminders: [], defaultPriority: "low" },
+  );
 });
 
 test("API messages land at the field they concern", () => {
@@ -948,6 +1046,33 @@ test("This event sends only what changed in the occurrence", () => {
       birthday2027,
     ),
     { startDate: "2027-09-18", endDate: "2027-09-18" },
+  );
+});
+
+test("a priority change is offered for every scope, like other fields", () => {
+  const important = edited(gymNov, { priority: "high" });
+  const edit = occurrenceEdit(important, gymNov, false);
+  assert.deepEqual(edit, { changed: true, seriesOnly: false });
+  assert.deepEqual(editScopes(edit), ["this", "following", "all"]);
+  assert.deepEqual(occurrenceRequest(important, gymNov), { priority: "high" });
+  assert.deepEqual(splitRequest(important, gymNov, options), {
+    priority: "high",
+  });
+  assert.deepEqual(seriesRequest(important, gymNov, gym, options), {
+    priority: "high",
+  });
+  // A drag keeps the occurrence's priority.
+  const urgent = { ...gymNov, priority: "high" as const };
+  assert.equal(
+    movedFields(
+      {
+        allDay: false,
+        start: new Date("2026-11-04T18:00:00Z"),
+        end: new Date("2026-11-04T19:00:00Z"),
+      },
+      urgent,
+    ).priority,
+    "high",
   );
 });
 

@@ -30,19 +30,23 @@ const (
 // resolveSources completes each item from its source and the owner's
 // settings: an imported event's source name, its defaultReminders (its
 // source's defaults, or for a Life OS event the owner's defaults for timed
-// or all-day events) and its effectiveReminders (the defaults when it uses
-// them, then its own, each reminder once). Sources and settings are read
-// only when an item needs them.
+// or all-day events), its effectiveReminders (the defaults when it uses
+// them, then its own, each reminder once), its defaultPriority (its
+// source's, else defaultPriority), and its priority when it has none of its
+// own (see event). Sources and settings are read only when an item needs
+// them.
 func (h *Handler) resolveSources(ctx context.Context, items []generated.CalendarEvent) error {
 	type summary struct {
 		name      string
 		reminders []generated.Reminder
+		priority  generated.EventPriority
 	}
 	var summaries map[types.UUID]summary
 	var owner *ownerDefaults
 	for index := range items {
 		item := &items[index]
 		defaults := []generated.Reminder{}
+		priority := defaultPriority
 		switch {
 		case item.Source.Kind == generated.EventSourceKindManual:
 			if owner == nil {
@@ -68,17 +72,21 @@ func (h *Handler) resolveSources(ctx context.Context, items []generated.Calendar
 					if err != nil {
 						return err
 					}
-					summaries[uuid(row.ID)] = summary{name: row.Name, reminders: remindersOrNone(reminders)}
+					summaries[uuid(row.ID)] = summary{name: row.Name, reminders: remindersOrNone(reminders), priority: generated.EventPriority(row.DefaultPriority)}
 				}
 			}
 			if found, ok := summaries[*item.Source.SourceId]; ok {
 				name := found.name
 				item.Source.Name = &name
-				defaults = found.reminders
+				defaults, priority = found.reminders, found.priority
 			}
 		}
 		item.DefaultReminders = defaults
 		item.EffectiveReminders = effectiveReminders(item.UseDefaultReminders, defaults, item.Reminders)
+		item.DefaultPriority = priority
+		if item.Priority == "" {
+			item.Priority = priority
+		}
 	}
 	return h.resolveGoogle(ctx, items)
 }
@@ -158,6 +166,7 @@ type sourceConfig struct {
 	Enabled          bool
 	Include, Exclude []string
 	DefaultReminders *[]generated.Reminder
+	DefaultPriority  generated.EventPriority
 }
 
 // validate checks the configuration and normalizes it (trimmed name and
@@ -189,6 +198,9 @@ func (h *Handler) validate(config *sourceConfig) error {
 		}
 		*terms = cleaned
 	}
+	if !config.DefaultPriority.Valid() {
+		return errors.New("defaultPriority must be low, medium, or high")
+	}
 	if config.DefaultReminders != nil {
 		return validateReminders(*config.DefaultReminders, "a source takes at most %d default reminders")
 	}
@@ -203,7 +215,10 @@ func (h *Handler) CreateSource(c fiber.Ctx) error {
 	if body.Kind != nil && *body.Kind != generated.CalendarSourceKindIcs {
 		return badRequest("kind must be ics")
 	}
-	config := sourceConfig{Name: body.Name, URL: body.Url, Enabled: body.Enabled == nil || *body.Enabled, Include: []string{}, Exclude: []string{}, DefaultReminders: body.DefaultReminders}
+	config := sourceConfig{
+		Name: body.Name, URL: body.Url, Enabled: body.Enabled == nil || *body.Enabled, Include: []string{}, Exclude: []string{},
+		DefaultReminders: body.DefaultReminders, DefaultPriority: priorityOr(body.DefaultPriority, defaultPriority),
+	}
 	if body.Filter != nil {
 		config.Include, config.Exclude = orEmpty(body.Filter.Include), orEmpty(body.Filter.Exclude)
 	}
@@ -217,7 +232,7 @@ func (h *Handler) CreateSource(c fiber.Ctx) error {
 	now := h.now().UTC()
 	row, err := h.queries.CreateSource(c.Context(), store.CreateSourceParams{
 		Kind: string(generated.CalendarSourceKindIcs), Name: config.Name, Url: config.URL, Enabled: config.Enabled,
-		FilterInclude: config.Include, FilterExclude: config.Exclude, DefaultReminders: reminders,
+		FilterInclude: config.Include, FilterExclude: config.Exclude, DefaultReminders: reminders, DefaultPriority: priorityColumn(&config.DefaultPriority),
 		// The first import is due right away.
 		NextRefreshAt: timestamp(&now),
 	})
@@ -232,7 +247,7 @@ func (h *Handler) CreateSource(c fiber.Ctx) error {
 
 // updatableSourceFields are the UpdateSourceRequest properties; only
 // defaultReminders may be null.
-var updatableSourceFields = map[string]bool{"name": true, "url": true, "enabled": true, "filter": true, "defaultReminders": true}
+var updatableSourceFields = map[string]bool{"name": true, "url": true, "enabled": true, "filter": true, "defaultReminders": true, "defaultPriority": true}
 
 func (h *Handler) UpdateSource(c fiber.Ctx, id types.UUID) error {
 	var properties map[string]json.RawMessage
@@ -268,7 +283,10 @@ func (h *Handler) UpdateSource(c fiber.Ctx, id types.UUID) error {
 		if err != nil {
 			return internal(err)
 		}
-		next := sourceConfig{Name: current.Name, URL: current.Url, Enabled: current.Enabled, Include: current.FilterInclude, Exclude: current.FilterExclude, DefaultReminders: reminders}
+		next := sourceConfig{
+			Name: current.Name, URL: current.Url, Enabled: current.Enabled, Include: current.FilterInclude, Exclude: current.FilterExclude,
+			DefaultReminders: reminders, DefaultPriority: generated.EventPriority(current.DefaultPriority),
+		}
 		if present["name"] {
 			next.Name = *body.Name
 		}
@@ -284,6 +302,9 @@ func (h *Handler) UpdateSource(c fiber.Ctx, id types.UUID) error {
 		if present["defaultReminders"] {
 			next.DefaultReminders = body.DefaultReminders
 		}
+		if present["defaultPriority"] {
+			next.DefaultPriority = *body.DefaultPriority
+		}
 		if err := h.validate(&next); err != nil {
 			return badRequest(err.Error())
 		}
@@ -296,7 +317,8 @@ func (h *Handler) UpdateSource(c fiber.Ctx, id types.UUID) error {
 		reconfigured := next.URL != current.Url || !equalTerms(next.Include, current.FilterInclude) || !equalTerms(next.Exclude, current.FilterExclude)
 		params := store.UpdateSourceParams{
 			ID: current.ID, ExpectedUpdatedAt: current.UpdatedAt, Name: next.Name, Url: next.URL, Enabled: next.Enabled,
-			FilterInclude: next.Include, FilterExclude: next.Exclude, DefaultReminders: encoded, ResetValidators: reconfigured,
+			FilterInclude: next.Include, FilterExclude: next.Exclude, DefaultReminders: encoded, DefaultPriority: priorityColumn(&next.DefaultPriority),
+			ResetValidators: reconfigured,
 		}
 		due := next.Enabled && (reconfigured || !current.Enabled)
 		if due {
@@ -386,7 +408,7 @@ func (h *Handler) source(row store.CalendarSource) (generated.CalendarSource, er
 	return generated.CalendarSource{
 		Id: uuid(row.ID), Kind: generated.CalendarSourceKind(row.Kind), Name: row.Name, Url: row.Url, Enabled: row.Enabled, Preset: row.Preset,
 		Filter:           generated.SourceFilter{Include: orEmpty(row.FilterInclude), Exclude: orEmpty(row.FilterExclude)},
-		DefaultReminders: reminders, Refresh: refresh,
+		DefaultReminders: reminders, DefaultPriority: generated.EventPriority(row.DefaultPriority), Refresh: refresh,
 		CreatedAt: row.CreatedAt.Time.UTC(), UpdatedAt: row.UpdatedAt.Time.UTC(),
 	}, nil
 }
