@@ -23,6 +23,10 @@
 #      today" goes to Human Review with exactly today's occurrence (P10-09);
 #      approving it cancels only that occurrence: next week's and the series
 #      stay active;
+#   8. "Tomorrow at 19:00 dinner with Anna for two hours." then "Tomorrow at
+#      19:00 dinner with Anna, remind me two hours before." leave exactly one
+#      dinner with Anna, 19:00-21:00 Berlin, with a 120-minute reminder of its
+#      own: the second capture updates the first event (BUG-33);
 #   and no other event is created. Relative dates are judged in Berlin from
 #   each Inbox item's own createdAt.
 set -euo pipefail
@@ -233,12 +237,33 @@ jq -e --arg id "$gym" '[.items[] | select(.id == $id)] | length == 1 and .[0].st
 [ "$(event "$gym" | jq -r '.status')" = active ] || fail "approved occurrence cancel: the series was cancelled"
 echo "ok: 7b. approval cancelled only today's gym; next week's and the series stay active"
 
+# 8. A capture that restates an existing event to add a reminder (BUG-33)
+# changes that event: the second capture is resolved by one calendar_update
+# of the first event (planned so, or a planned create the processor turned
+# into the update), which keeps its two hours and gains the reminder.
+while (( 10#$(TZ=$zone date +%H%M) >= 2350 )); do sleep 20; done
+dinner_item=$(capture "Tomorrow at 19:00 dinner with Anna for two hours.")
+action=$(processed_action "dinner" "$(jq -r '.id' <<<"$dinner_item")" calendar_create)
+dinner=$(jq -r '.result.id' <<<"$action")
+remind_item=$(capture "Tomorrow at 19:00 dinner with Anna, remind me two hours before.")
+action=$(processed_action "dinner reminder" "$(jq -r '.id' <<<"$remind_item")" calendar_update)
+[ "$(jq -r '.arguments.eventId' <<<"$action")" = "$dinner" ] || fail "dinner reminder: updated $(jq -c '.arguments' <<<"$action"), want the dinner $dinner"
+restated=$(event "$dinner")
+tomorrow=$(day_after "$(captured_day "$dinner_item")" 1)
+expect_instant "dinner reminder: startAt" "$(jq -r '.startAt' <<<"$restated")" "$tomorrow 19:00"
+expect_instant "dinner reminder: endAt keeps the two hours" "$(jq -r '.endAt' <<<"$restated")" "$tomorrow 21:00"
+jq -e '.status == "active" and ([.reminders[] | select(.kind == "relative" and .minutesBefore == 120)] | length == 1)' >/dev/null <<<"$restated" ||
+  fail "dinner reminder: $(jq -c '{status, reminders}' <<<"$restated"), want an active event with a 120-minute reminder of its own"
+[ "$(active_matches "dinner Anna")" = 1 ] || fail "dinner reminder: $(active_matches "dinner Anna") active dinners with Anna, want 1"
+echo "ok: 8. restating the dinner added the reminder to it ($(jq -c '{convertedFrom, arguments}' <<<"$action")), nothing created"
+
 # No other event: the created dentist (now cancelled), the three seeds, the
-# haircut, and the gym's six occurrences in the window (today's cancelled).
+# haircut, the gym's six occurrences in the window (today's cancelled), and
+# the dinner.
 from=$(date -u -d '-2 days' +%Y-%m-%dT%H:%M:%SZ)
 to=$(date -u -d '+40 days' +%Y-%m-%dT%H:%M:%SZ)
 all=$(api "$gateway/api/calendar/v1/events?from=$from&to=$to&includeCancelled=true&limit=100")
-[ "$(jq '.items | length' <<<"$all")" = 11 ] || fail "$(jq '.items | length' <<<"$all") events exist, want 11: $(jq -c '[.items[] | {title, status}]' <<<"$all")"
+[ "$(jq '.items | length' <<<"$all")" = 12 ] || fail "$(jq '.items | length' <<<"$all") events exist, want 12: $(jq -c '[.items[] | {title, status}]' <<<"$all")"
 [ "$(jq '[.items[] | select(.title == "Gym" and .status == "cancelled")] | length' <<<"$all")" = 1 ] || fail "$(jq -c '[.items[] | select(.title == "Gym") | {startAt, status}]' <<<"$all"): want exactly one cancelled gym occurrence"
 echo "ok: no other event was created"
 
