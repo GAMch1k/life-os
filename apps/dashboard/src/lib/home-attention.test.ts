@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { toHomeAttention, unavailableOnFailure } from "./home-attention";
+import {
+  ownerToday,
+  toHomeAttention,
+  unavailableOnFailure,
+} from "./home-attention";
 
 const now = new Date("2026-10-09T15:00:00Z");
 const task = (id: string, dueAt?: string) => ({
@@ -74,4 +78,37 @@ test("Home treats an unreachable service as unavailable", async () => {
     ).nextEvent,
     null,
   );
+});
+
+test("Home's today is the owner's day, not the UTC day", () => {
+  // 23:30 UTC on Friday is 01:30 on Saturday in Berlin (summer time).
+  const nearMidnight = new Date("2026-10-09T23:30:00Z");
+  const bounds = ownerToday(nearMidnight, "Europe/Berlin");
+  assert.equal(bounds.start.toISOString(), "2026-10-09T22:00:00.000Z");
+  assert.equal(bounds.end.toISOString(), "2026-10-10T21:59:59.999Z");
+
+  const urgent = list([
+    // Friday 23:00 in Berlin: already yesterday for the owner.
+    task("friday-night", "2026-10-09T21:00:00Z"),
+    // Saturday 10:00 in Berlin.
+    task("saturday", "2026-10-10T08:00:00Z"),
+  ]);
+  const results = {
+    review: list([]),
+    urgent,
+    open: list([]),
+    events: list([]),
+  };
+  const berlin = toHomeAttention(results, nearMidnight, "Europe/Berlin");
+  assert.deepEqual(
+    berlin.urgent?.overdue.map((item) => item.id),
+    ["friday-night"],
+  );
+  assert.deepEqual(
+    berlin.urgent?.today.map((item) => item.id),
+    ["saturday"],
+  );
+  // The same instant in UTC is still Friday, so nothing is overdue yet.
+  const utc = toHomeAttention(results, nearMidnight, "UTC");
+  assert.deepEqual(utc.urgent?.overdue, []);
 });
