@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
+	"time"
 
 	sharedconfig "github.com/GAMch1k/life-os/pkg/config"
 	"github.com/GAMch1k/life-os/pkg/database"
@@ -16,6 +18,10 @@ type Config struct {
 	Port        int    `env:"PORT" default:"8080"`
 	LogLevel    string `env:"LOG_LEVEL" default:"info"`
 	DatabaseURL string `env:"DATABASE_URL" required:"true"`
+	// TimeZone is the owner's timezone (LIFE_OS_TIMEZONE, an IANA name such
+	// as Europe/Berlin): the default in which all-day dates are compared
+	// with instants when a read does not name a timeZone.
+	TimeZone string `env:"LIFE_OS_TIMEZONE" default:"UTC"`
 }
 
 // Load reads Config from the process environment.
@@ -68,4 +74,29 @@ func (c Config) DatabaseConfig() database.Config {
 		URL:             c.DatabaseURL,
 		ApplicationName: c.ServiceName,
 	}
+}
+
+// OwnerTimeZone returns the validated LIFE_OS_TIMEZONE name. Unset means UTC.
+// An unknown name also falls back to UTC, as in the Dashboard and the
+// processor, and is returned as an error to log, so a typo does not stop the
+// service.
+func (c Config) OwnerTimeZone() (string, error) {
+	name := strings.TrimSpace(c.TimeZone)
+	if name == "" {
+		return "UTC", nil
+	}
+	if !ValidTimeZone(name) {
+		return "UTC", fmt.Errorf("LIFE_OS_TIMEZONE %q is not an IANA timezone name such as Europe/Berlin; using UTC", name)
+	}
+	return name, nil
+}
+
+// ValidTimeZone reports whether name is an IANA timezone such as
+// Europe/Berlin. "Local" (the process's own zone) is not one here.
+func ValidTimeZone(name string) bool {
+	if name == "" || name == "Local" || strings.TrimSpace(name) != name {
+		return false
+	}
+	_, err := time.LoadLocation(name)
+	return err == nil
 }
