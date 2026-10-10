@@ -37,6 +37,7 @@ type eventAction struct {
 	TimeZone       *string     `json:"timeZone,omitempty" jsonschema:"IANA timezone a timed event is scheduled in"`
 	Reminders      *[]reminder `json:"reminders,omitempty" jsonschema:"The event's own reminders, added to the owner's default reminders; leave out for none of its own"`
 	UseDefault     *bool       `json:"useDefaultReminders,omitempty" jsonschema:"Whether the owner's default reminders apply as well (default true); false without reminders means no reminders at all"`
+	Priority       *string     `json:"priority,omitempty" jsonschema:"low, medium, or high: how important the event is, the importance of its reminder notifications; leave out for medium"`
 }
 
 // eventMutation changes one existing event. Only the fields given change;
@@ -54,6 +55,7 @@ type eventMutation struct {
 	TimeZone    *string     `json:"timeZone,omitempty" jsonschema:"IANA timezone of a timed event"`
 	Reminders   *[]reminder `json:"reminders,omitempty" jsonschema:"Replaces the event's own reminders, which are added to its defaults"`
 	UseDefault  *bool       `json:"useDefaultReminders,omitempty" jsonschema:"Turns the event's default reminders on or off; its own reminders stay"`
+	Priority    *string     `json:"priority,omitempty" jsonschema:"low, medium, or high: how important the event is; medium is the default"`
 	Clear       []string    `json:"clear,omitempty" jsonschema:"Fields to remove: description, location, timeZone, or reminders (back to the defaults alone)"`
 }
 
@@ -167,7 +169,7 @@ func occurrencePath(eventPath, recurrenceID string) (string, error) {
 // for each cleared one.
 func eventUpdateBody(in eventMutation) (map[string]any, error) {
 	body := map[string]any{}
-	for field, value := range map[string]*string{"title": in.Title, "description": in.Description, "location": in.Location, "startAt": in.StartAt, "endAt": in.EndAt, "startDate": in.StartDate, "endDate": in.EndDate, "timeZone": in.TimeZone} {
+	for field, value := range map[string]*string{"title": in.Title, "description": in.Description, "location": in.Location, "startAt": in.StartAt, "endAt": in.EndAt, "startDate": in.StartDate, "endDate": in.EndDate, "timeZone": in.TimeZone, "priority": in.Priority} {
 		if value != nil {
 			body[field] = *value
 		}
