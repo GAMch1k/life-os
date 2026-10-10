@@ -376,7 +376,8 @@ func TestExistingCalendarCreatePlansStillWork(t *testing.T) {
 		tools := newCalendarTools("Add dentist")
 		runCalendarPlan(t, tools, raw)
 		input := tools.inputs["calendar_create"]
-		if input == nil || input["idempotencyKey"] == "" || !contains(tools.calls, "inbox_resolve") || len(tools.searches) != 0 {
+		// The only search is the duplicate check on the event's own day.
+		if input == nil || input["idempotencyKey"] == "" || !contains(tools.calls, "inbox_resolve") || len(tools.searches) != 1 || !tools.searches[0].Has("to") {
 			t.Fatalf("plan %s: calls = %#v, input = %#v", raw, tools.calls, input)
 		}
 		var parsed plan
@@ -406,13 +407,13 @@ func TestValidActionChecksCalendarChanges(t *testing.T) {
 		{"blank title", "calendar_update", map[string]any{"eventQuery": "dentist", "title": ""}, false},
 		{"clear title", "calendar_update", map[string]any{"eventQuery": "dentist", "clear": []any{"title"}}, false},
 		{"set and clear", "calendar_update", map[string]any{"eventQuery": "dentist", "location": "x", "clear": []any{"location"}}, false},
+		{"replace reminders", "calendar_update", map[string]any{"eventQuery": "dentist", "reminders": []any{map[string]any{"kind": "relative", "minutesBefore": 30.0}}, "clear": []any{"reminders"}}, true},
 		{"status", "calendar_update", map[string]any{"eventQuery": "dentist", "status": "cancelled"}, false},
 		{"bad alternatives", "calendar_update", map[string]any{"eventQuery": "dentist", "eventQueryAlternatives": "Zahnarzt", "title": "x"}, false},
 		{"bad reminders", "calendar_update", map[string]any{"eventQuery": "dentist", "reminders": "30 minutes"}, false},
-		{"defaults off", "calendar_update", map[string]any{"eventQuery": "dentist", "useDefaultReminders": false}, true},
-		{"bad defaults flag", "calendar_update", map[string]any{"eventQuery": "dentist", "useDefaultReminders": "no"}, false},
-		{"create with own reminders only", "calendar_create", map[string]any{"title": "Dentist", "allDay": true, "useDefaultReminders": false, "reminders": []any{map[string]any{"kind": "relative", "minutesBefore": 10.0}}}, true},
-		{"create with a bad defaults flag", "calendar_create", map[string]any{"title": "Dentist", "allDay": true, "useDefaultReminders": "yes"}, false},
+		// The runner drops useDefaultReminders before validating (dropAIFields).
+		{"defaults off", "calendar_update", map[string]any{"eventQuery": "dentist", "reminders": []any{}, "useDefaultReminders": false}, false},
+		{"create with own reminders only", "calendar_create", map[string]any{"title": "Dentist", "allDay": true, "useDefaultReminders": false, "reminders": []any{map[string]any{"kind": "relative", "minutesBefore": 10.0}}}, false},
 		{"create important", "calendar_create", map[string]any{"title": "Visa", "allDay": true, "priority": "high"}, true},
 		{"create unimportant", "calendar_create", map[string]any{"title": "Visa", "allDay": true, "priority": "low"}, true},
 		{"create with an unknown priority", "calendar_create", map[string]any{"title": "Visa", "allDay": true, "priority": "urgent"}, false},
@@ -533,11 +534,16 @@ func TestPlanPromptAllowsCalendarChangesThroughSearchTermsAndReview(t *testing.T
 		"the processor otherwise keeps the event's length",
 		"Never create an event as a fallback for an uncertain existing event.",
 		`and priority (only when the item says how important it is: "high" for important or urgent, such as "wichtig" or "важно", "low" for not important or low priority; otherwise leave it out)`,
-		"useDefaultReminders, priority, and clear",
+		"reminders (added to the event's own; to replace them, also name reminders in clear), priority, and clear",
+		"they are added to the owner's default reminders), and priority",
+		"A request to be reminded of, or to add a reminder to, an event that already exists (even when the item restates the event) is calendar_update with eventQuery and reminders, not calendar_create.",
 	} {
 		if !strings.Contains(planPrompt, want) {
 			t.Errorf("planPrompt lacks %q", want)
 		}
+	}
+	if strings.Contains(planPrompt, "useDefaultReminders") {
+		t.Error("planPrompt still offers turning default reminders off")
 	}
 	if strings.Contains(planPrompt, "Never propose calendar update") || strings.Contains(planPrompt, "calendar_delete") {
 		t.Error("planPrompt still forbids calendar changes or offers permanent deletion")
