@@ -49,6 +49,13 @@ type Config struct {
 	GoogleClientSecret string `env:"LIFE_OS_GOOGLE_CLIENT_SECRET"`
 	GoogleTokenKey     string `env:"LIFE_OS_GOOGLE_TOKEN_KEY"`
 	GoogleRedirectURI  string `env:"LIFE_OS_GOOGLE_REDIRECT_URI" default:"https://lifeos.gamch1k.com/calendar/google/callback"`
+	// Reminder delivery: the Notifications service reminders are sent to
+	// (empty turns delivery off), how often due reminders are looked for,
+	// and how late one may still be sent after Calendar was down (older
+	// ones are recorded as missed).
+	NotificationsURL        string `env:"NOTIFICATIONS_SERVICE_URL"`
+	ReminderIntervalSeconds int    `env:"CALENDAR_REMINDER_INTERVAL_SECONDS" default:"30"`
+	ReminderGraceMinutes    int    `env:"CALENDAR_REMINDER_GRACE_MINUTES" default:"120"`
 }
 
 // Load reads Config from the process environment.
@@ -93,6 +100,12 @@ func (c Config) Validate() error {
 	}
 	if c.ICSTimeoutSeconds < 1 || c.ICSTimeoutSeconds > 300 {
 		validationErrors = append(validationErrors, fmt.Errorf("CALENDAR_ICS_TIMEOUT_SECONDS must be between 1 and 300"))
+	}
+	if c.ReminderIntervalSeconds < 5 || c.ReminderIntervalSeconds > 300 {
+		validationErrors = append(validationErrors, fmt.Errorf("CALENDAR_REMINDER_INTERVAL_SECONDS must be between 5 and 300"))
+	}
+	if c.ReminderGraceMinutes < 10 || c.ReminderGraceMinutes > 1440 {
+		validationErrors = append(validationErrors, fmt.Errorf("CALENDAR_REMINDER_GRACE_MINUTES must be between 10 and 1440"))
 	}
 	return errors.Join(validationErrors...)
 }
