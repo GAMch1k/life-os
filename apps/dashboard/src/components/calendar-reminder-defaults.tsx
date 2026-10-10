@@ -9,21 +9,21 @@ import {
 } from "react";
 
 import {
-  LABEL,
-  NEW_LOCAL_TIME,
-  NEW_RELATIVE,
-  ReminderList,
-  UNAVAILABLE,
-} from "@/components/calendar-event-dialog";
-import { Button } from "@/components/ui/button";
-import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from "@/components/app-dialog";
+import {
+  NEW_LOCAL_TIME,
+  NEW_RELATIVE,
+  ReminderList,
+  UNAVAILABLE,
+} from "@/components/calendar-event-dialog";
+import { Button } from "@/components/ui/button";
+import { FieldLegend, FieldSet } from "@/components/ui/field";
 import { calendarClient } from "@/lib/api/calendar-client";
 import {
   apiErrorMessage,
@@ -38,7 +38,6 @@ import {
   settingsRequest,
   toReminderDraft,
 } from "@/lib/calendar-workspace";
-import { cn } from "@/lib/utils";
 
 type Saved = { owner: ReminderDefaults; sources: CalendarSource[] };
 
@@ -304,8 +303,10 @@ function DefaultsSection({
   title: string;
 }) {
   return (
-    <fieldset className="grid min-w-0 gap-2">
-      <legend className={cn(LABEL, "mb-1")}>{title}</legend>
+    <FieldSet className="min-w-0 gap-2">
+      <FieldLegend className="mb-1" variant="label">
+        {title}
+      </FieldLegend>
       <p className="text-muted-foreground text-xs">{note}</p>
       <ReminderList
         empty="No default reminders."
@@ -316,6 +317,6 @@ function DefaultsSection({
         onChange={onChange}
         reminders={reminders}
       />
-    </fieldset>
+    </FieldSet>
   );
 }

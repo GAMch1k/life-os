@@ -1,4 +1,5 @@
 import { deleteSource, failingFeedUrl } from "./calendar-feed";
+import { datePicker, pickDate } from "./date-picker";
 import { type APIRequestContext, expect, type Page, test } from "./fixtures";
 
 // The Calendar workspace (/calendar): FullCalendar month, week, day, and list
@@ -166,10 +167,12 @@ test.describe("Calendar workspace", () => {
       dialog.getByRole("heading", { name: "New event" }),
     ).toBeVisible();
     await dialog.getByLabel("Title").fill(title);
-    await expect(dialog.getByLabel("All day")).not.toBeChecked();
-    await dialog.getByLabel("Start date").fill(day);
+    await expect(
+      dialog.getByRole("checkbox", { name: "All day" }),
+    ).not.toBeChecked();
+    await pickDate(dialog, "Start date", day);
     await dialog.getByLabel("Start time").fill("10:00");
-    await dialog.getByLabel("End date").fill(day);
+    await pickDate(dialog, "End date", day);
     await dialog.getByLabel("End time").fill("11:30");
     await dialog.getByLabel("Location").fill("Praxis Dr. Weber");
     await dialog.getByLabel("Notes").fill("Bring the insurance card");
@@ -219,8 +222,11 @@ test.describe("Calendar workspace", () => {
       dialog.getByRole("heading", { name: "Edit event" }),
     ).toBeVisible();
     await dialog.getByLabel("Title").fill(moved);
-    await dialog.getByLabel("Start date").fill(next);
-    await expect(dialog.getByLabel("End date")).toHaveValue(next);
+    await pickDate(dialog, "Start date", next);
+    await expect(datePicker(dialog, "End date")).toHaveAttribute(
+      "data-value",
+      next,
+    );
     await dialog.getByRole("button", { name: "Save" }).click();
     await expect(dialog.getByRole("heading", { name: moved })).toBeVisible();
     await expect(dialog.getByTestId("event-when")).toHaveText(
@@ -271,10 +277,10 @@ test.describe("Calendar workspace", () => {
     await page.getByRole("button", { name: "New event" }).click();
     const dialog = page.getByRole("dialog");
     await dialog.getByLabel("Title").fill(title);
-    await dialog.getByLabel("All day").check();
+    await dialog.getByRole("checkbox", { name: "All day" }).check();
     await expect(dialog.getByLabel("Start time")).toHaveCount(0);
-    await dialog.getByLabel("Start date").fill(first);
-    await dialog.getByLabel("End date").fill(last);
+    await pickDate(dialog, "Start date", first);
+    await pickDate(dialog, "End date", last);
     await dialog.getByRole("button", { name: "Save" }).click();
     await expect(dialog).toBeHidden();
     await expect(eventIn(page, title).first()).toBeVisible();
@@ -295,7 +301,7 @@ test.describe("Calendar workspace", () => {
     );
 
     await dialog.getByRole("button", { name: "Edit", exact: true }).click();
-    await dialog.getByLabel("End date").fill(first);
+    await pickDate(dialog, "End date", first);
     await dialog.getByRole("button", { name: "Save" }).click();
     await expect(dialog.getByTestId("event-when")).toHaveText(
       `${dayLabel(first)} · All day`,
@@ -331,9 +337,9 @@ test.describe("Calendar workspace", () => {
     await expect(dialog.getByText("Add a title.")).toBeVisible();
 
     await dialog.getByLabel("Title").fill(`Workspace invalid ${stamp}`);
-    await dialog.getByLabel("Start date").fill(day);
+    await pickDate(dialog, "Start date", day);
     await dialog.getByLabel("Start time").fill("10:00");
-    await dialog.getByLabel("End date").fill(day);
+    await pickDate(dialog, "End date", day);
     await dialog.getByLabel("End time").fill("09:00");
     await dialog.getByRole("button", { name: "Save" }).click();
     await expect(
@@ -365,15 +371,17 @@ test.describe("Calendar workspace", () => {
       await page.getByRole("button", { name: "New event" }).click();
       const dialog = page.getByRole("dialog");
       await dialog.getByLabel("Title").fill(title);
-      await dialog.getByLabel("Start date").fill(day);
+      await pickDate(dialog, "Start date", day);
       await dialog.getByLabel("Start time").fill("14:00");
-      await dialog.getByLabel("End date").fill(day);
+      await pickDate(dialog, "End date", day);
       await dialog.getByLabel("End time").fill("15:00");
       const reminders = dialog.getByRole("group", {
         name: "Reminders",
         exact: true,
       });
-      await expect(reminders.getByLabel("Use default reminders")).toBeChecked();
+      await expect(
+        reminders.getByRole("checkbox", { name: "Use default reminders" }),
+      ).toBeChecked();
       await expect(dialog.getByTestId("default-reminders")).toHaveText(
         "10 minutes before (your default for timed events)",
       );
@@ -410,14 +418,18 @@ test.describe("Calendar workspace", () => {
 
       // Without the defaults, and one reminder fewer.
       await dialog.getByRole("button", { name: "Edit", exact: true }).click();
-      await dialog.getByLabel("Use default reminders").uncheck();
+      await dialog
+        .getByRole("checkbox", { name: "Use default reminders" })
+        .uncheck();
       await dialog.getByRole("button", { name: "Remove reminder 2" }).click();
       await dialog.getByRole("button", { name: "Save" }).click();
       await expect(listed).toHaveText(["1 day before"]);
 
       // Back to the defaults alone.
       await dialog.getByRole("button", { name: "Edit", exact: true }).click();
-      await dialog.getByLabel("Use default reminders").check();
+      await dialog
+        .getByRole("checkbox", { name: "Use default reminders" })
+        .check();
       await dialog.getByRole("button", { name: "Remove reminder 1" }).click();
       await dialog.getByRole("button", { name: "Save" }).click();
       await expect(listed).toHaveText(["10 minutes before · default"]);
@@ -429,7 +441,9 @@ test.describe("Calendar workspace", () => {
 
       // Neither: no reminders at all.
       await dialog.getByRole("button", { name: "Edit", exact: true }).click();
-      await dialog.getByLabel("Use default reminders").uncheck();
+      await dialog
+        .getByRole("checkbox", { name: "Use default reminders" })
+        .uncheck();
       await dialog.getByRole("button", { name: "Save" }).click();
       await expect(listed).toHaveText(["No reminders"]);
       await page.keyboard.press("Escape");
@@ -505,12 +519,12 @@ test.describe("Calendar workspace", () => {
       await expect(dialog.getByTestId("default-reminders")).toHaveText(
         "2 hours before (your default for timed events)",
       );
-      await dialog.getByLabel("All day").check();
+      await dialog.getByRole("checkbox", { name: "All day" }).check();
       await expect(dialog.getByTestId("default-reminders")).toHaveText(
         "1 day before at 18:30 (your default for all-day events)",
       );
-      await dialog.getByLabel("Start date").fill(day);
-      await dialog.getByLabel("End date").fill(day);
+      await pickDate(dialog, "Start date", day);
+      await pickDate(dialog, "End date", day);
       await dialog.getByRole("button", { name: "Save" }).click();
       await expect(dialog).toBeHidden();
       await eventIn(page, title).click();
@@ -637,7 +651,7 @@ test.describe("Calendar workspace", () => {
 
     await open(page, "list", day);
     await expect(eventIn(page, title)).toHaveCount(0);
-    await page.getByLabel("Show cancelled").check();
+    await page.getByRole("checkbox", { name: "Show cancelled" }).check();
     const shown = eventIn(page, title);
     await expect(shown).toBeVisible();
     await expect(shown).toHaveClass(/lifeos-event-cancelled/);
@@ -648,7 +662,7 @@ test.describe("Calendar workspace", () => {
     await dialog.getByRole("button", { name: "Restore" }).click();
     await expect(dialog.getByText("Cancelled", { exact: true })).toHaveCount(0);
     await page.keyboard.press("Escape");
-    await page.getByLabel("Show cancelled").uncheck();
+    await page.getByRole("checkbox", { name: "Show cancelled" }).uncheck();
     await expect(eventIn(page, title)).toBeVisible();
     await expect(eventIn(page, title)).not.toHaveClass(
       /lifeos-event-cancelled/,

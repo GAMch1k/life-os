@@ -5,6 +5,7 @@ import {
   type Locator,
   type Page,
 } from "./fixtures";
+import { pickDate } from "./date-picker";
 
 const enabled = Boolean(process.env.LIFE_OS_E2E_URL);
 
@@ -209,7 +210,8 @@ test.describe("Tasks workspace", () => {
     await page.getByLabel(`Edit ${original}`).click();
     await page.getByLabel("Task title", { exact: true }).fill(renamed);
     await page.getByLabel("Task notes", { exact: true }).fill(notes);
-    await page.getByLabel("Due date", { exact: true }).fill("2026-10-21T09:30");
+    await pickDate(page, "Due date", "2026-10-21");
+    await page.getByLabel("Due time", { exact: true }).fill("09:30");
     await page.getByRole("button", { name: "Save" }).click();
     await expect(page.getByText(renamed)).toBeVisible();
     // The due date is wall time in the page's (the browser's) timezone.

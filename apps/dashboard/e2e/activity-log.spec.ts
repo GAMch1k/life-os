@@ -10,6 +10,7 @@ import {
   waitForRefresh,
   writeFeed,
 } from "./calendar-feed";
+import { pickDate } from "./date-picker";
 import { type APIRequestContext, expect, type Page, test } from "./fixtures";
 
 const enabled = Boolean(process.env.LIFE_OS_E2E_URL);
@@ -252,8 +253,8 @@ test.describe("Event Log", () => {
     await page
       .getByRole("combobox", { name: "Domain" })
       .selectOption({ label: "Agent changes" });
-    await page.getByLabel("From", { exact: true }).fill("2000-01-01");
-    await page.getByLabel("To", { exact: true }).fill("2000-01-01");
+    await pickDate(page, "From", "2000-01-01");
+    await pickDate(page, "To", "2000-01-01");
     await page.getByRole("button", { name: "Apply" }).click();
     await expect(page).toHaveURL(/source=mcp/);
 
@@ -367,7 +368,7 @@ test.describe("Event Log: Calendar", () => {
       const dialog = page.getByRole("dialog");
       await dialog.getByRole("button", { name: "Edit", exact: true }).click();
       await dialog.getByLabel("Title").fill(moved);
-      await dialog.getByLabel("Start date").fill(next);
+      await pickDate(dialog, "Start date", next);
       await dialog.getByRole("button", { name: "Save" }).click();
       await expect(dialog.getByRole("heading", { name: moved })).toBeVisible();
       await page.keyboard.press("Escape");

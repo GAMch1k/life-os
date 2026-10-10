@@ -19,22 +19,40 @@ import {
 } from "react";
 
 import {
-  deleteQuestion,
-  editQuestion,
-  ScopeDialog,
-  type ScopeQuestion,
-} from "@/components/calendar-scope-dialog";
-import { Button } from "@/components/ui/button";
-import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from "@/components/app-dialog";
+import {
+  deleteQuestion,
+  editQuestion,
+  ScopeDialog,
+  type ScopeQuestion,
+} from "@/components/calendar-scope-dialog";
+import { DatePicker, TimeInput } from "@/components/date-picker";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Field,
+  FieldDescription,
+  FieldError,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  NativeSelect,
+  NativeSelectOption,
+} from "@/components/ui/native-select";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { calendarClient } from "@/lib/api/calendar-client";
 import {
   customDays,
@@ -180,28 +198,6 @@ export function CalendarEventDialog({
   );
 }
 
-function Badge({
-  children,
-  tone,
-}: {
-  children: ReactNode;
-  tone: "destructive" | "info" | "muted";
-}) {
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center rounded-md border px-1.5 py-0.5 text-xs font-medium",
-        tone === "destructive" &&
-          "bg-destructive-subtle border-destructive/30 text-destructive",
-        tone === "info" && "bg-info-subtle border-info/30 text-info",
-        tone === "muted" && "bg-muted text-muted-foreground",
-      )}
-    >
-      {children}
-    </span>
-  );
-}
-
 function DetailRow({
   children,
   icon: Icon,
@@ -321,11 +317,20 @@ function EventDetails({
         </DialogTitle>
         {cancelled || source || repeats ? (
           <div className="flex flex-wrap items-center gap-1.5">
-            {cancelled ? <Badge tone="destructive">Cancelled</Badge> : null}
-            {source ? <Badge tone="info">Imported · {source}</Badge> : null}
+            {cancelled ? <Badge variant="destructive">Cancelled</Badge> : null}
+            {source ? (
+              <Badge
+                className="border-info/30 bg-info-subtle text-info"
+                variant="outline"
+              >
+                Imported · {source}
+              </Badge>
+            ) : null}
             {repeats ? (
-              <Badge tone="muted">
-                <Repeat aria-hidden="true" className="mr-1 size-3" />
+              // A long rule ("Weekly on Monday and Wednesday, until …")
+              // wraps on a phone instead of being cut off.
+              <Badge className="h-auto whitespace-normal" variant="secondary">
+                <Repeat aria-hidden="true" />
                 <span data-testid="event-recurrence">{repeats}</span>
               </Badge>
             ) : null}
@@ -475,11 +480,6 @@ function EventDetails({
   );
 }
 
-const SELECT =
-  "border-input focus-visible:border-ring focus-visible:ring-ring/50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:bg-input/30 dark:aria-invalid:ring-destructive/40 h-8 min-w-0 rounded-lg border bg-transparent px-2 text-base transition-colors outline-none focus-visible:ring-3 aria-invalid:ring-3 md:text-sm";
-
-export const LABEL = "text-sm font-medium";
-
 let zoneList: string[] | undefined;
 
 /** Every IANA zone the browser knows, for the time zone picker. */
@@ -494,14 +494,6 @@ function timeZones() {
     zoneList = zones.includes("UTC") ? zones : [...zones, "UTC"];
   }
   return zoneList;
-}
-
-export function FieldError({ id, message }: { id: string; message?: string }) {
-  return message ? (
-    <p className="text-destructive text-xs" id={id}>
-      {message}
-    </p>
-  ) : null;
 }
 
 function EventForm({
@@ -668,10 +660,8 @@ function EventForm({
 
       {remindersOnly ? null : (
         <>
-          <div className="grid gap-1.5">
-            <label className={LABEL} htmlFor={`${id}-title`}>
-              Title
-            </label>
+          <Field data-invalid={Boolean(errors.title)}>
+            <FieldLabel htmlFor={`${id}-title`}>Title</FieldLabel>
             <Input
               autoFocus={!event}
               id={`${id}-title`}
@@ -679,40 +669,39 @@ function EventForm({
               value={draft.title}
               {...invalid("title")}
             />
-            <FieldError id={`${id}-title-error`} message={errors.title} />
-          </div>
+            <FieldError id={`${id}-title-error`}>{errors.title}</FieldError>
+          </Field>
 
-          <label className="flex items-center gap-2 text-sm">
-            <input
+          <Label className="w-fit font-normal">
+            <Checkbox
               checked={draft.allDay}
-              className="accent-primary size-4"
-              onChange={(change) => update({ allDay: change.target.checked })}
-              type="checkbox"
+              onCheckedChange={(allDay) => update({ allDay })}
             />
             All day
-          </label>
+          </Label>
 
           <div className="grid gap-3">
-            <fieldset className="grid min-w-0 gap-1.5">
-              <legend className={cn(LABEL, "mb-1.5")}>Start</legend>
+            <FieldSet className="min-w-0 gap-1.5">
+              <FieldLegend variant="label">Start</FieldLegend>
               <div className="flex flex-wrap gap-2">
-                <Input
-                  aria-label="Start date"
-                  className="min-w-0 flex-1 basis-36"
-                  onChange={(change) =>
+                <DatePicker
+                  className="flex-1 basis-36"
+                  label="Start date"
+                  onChange={(startDate) =>
                     setDraft((current) =>
                       moveStart(current, {
-                        startDate: change.target.value,
+                        startDate,
                         startTime: current.startTime,
                       }),
                     )
                   }
-                  type="date"
+                  required
+                  today={today}
                   value={draft.startDate}
                   {...invalid("start")}
                 />
                 {draft.allDay ? null : (
-                  <Input
+                  <TimeInput
                     aria-label="Start time"
                     className="w-30 shrink-0"
                     onChange={(change) =>
@@ -723,78 +712,76 @@ function EventForm({
                         }),
                       )
                     }
-                    type="time"
                     value={draft.startTime}
                   />
                 )}
               </div>
-              <FieldError id={`${id}-start-error`} message={errors.start} />
-            </fieldset>
-            <fieldset className="grid min-w-0 gap-1.5">
-              <legend className={cn(LABEL, "mb-1.5")}>
+              <FieldError id={`${id}-start-error`}>{errors.start}</FieldError>
+            </FieldSet>
+            <FieldSet className="min-w-0 gap-1.5">
+              <FieldLegend variant="label">
                 {draft.allDay ? "Last day" : "End"}
-              </legend>
+              </FieldLegend>
               <div className="flex flex-wrap gap-2">
-                <Input
-                  aria-label="End date"
-                  className="min-w-0 flex-1 basis-36"
-                  onChange={(change) =>
-                    update({ endDate: change.target.value })
-                  }
-                  type="date"
+                <DatePicker
+                  className="flex-1 basis-36"
+                  label="End date"
+                  // It cannot end before it starts.
+                  min={draft.startDate}
+                  onChange={(endDate) => update({ endDate })}
+                  required
+                  today={today}
                   value={draft.endDate}
                   {...invalid("end")}
                 />
                 {draft.allDay ? null : (
-                  <Input
+                  <TimeInput
                     aria-label="End time"
                     className="w-30 shrink-0"
                     onChange={(change) =>
                       update({ endTime: change.target.value })
                     }
-                    type="time"
                     value={draft.endTime}
                     {...invalid("end")}
                   />
                 )}
               </div>
-              <FieldError id={`${id}-end-error`} message={errors.end} />
-            </fieldset>
+              <FieldError id={`${id}-end-error`}>{errors.end}</FieldError>
+            </FieldSet>
           </div>
 
           {draft.allDay ? null : (
-            <div className="grid gap-1.5">
-              <label className={LABEL} htmlFor={`${id}-zone`}>
-                Time zone
-              </label>
-              <select
-                className={cn(SELECT, "w-full")}
+            <Field data-invalid={Boolean(errors.timeZone)}>
+              <FieldLabel htmlFor={`${id}-zone`}>Time zone</FieldLabel>
+              <NativeSelect
+                className="w-full"
                 id={`${id}-zone`}
                 onChange={(change) => update({ timeZone: change.target.value })}
                 value={draft.timeZone}
                 {...invalid("timeZone")}
               >
-                <option value="">Your time zone ({timeZone})</option>
+                <NativeSelectOption value="">
+                  Your time zone ({timeZone})
+                </NativeSelectOption>
                 {zoneOptions
                   .filter(
                     (zone) => zone !== timeZone || zone === draft.timeZone,
                   )
                   .map((zone) => (
-                    <option key={zone} value={zone}>
+                    <NativeSelectOption key={zone} value={zone}>
                       {zone.replaceAll("_", " ")}
-                    </option>
+                    </NativeSelectOption>
                   ))}
-              </select>
+              </NativeSelect>
               {draft.timeZone ? (
-                <p className="text-muted-foreground text-xs">
+                <FieldDescription className="text-xs">
                   Start and end are in {editedZone}.
-                </p>
+                </FieldDescription>
               ) : null}
-              <FieldError
-                id={`${id}-timeZone-error`}
-                message={errors.timeZone}
-              />
-            </div>
+              <FieldError id={`${id}-timeZone-error`}>
+                {errors.timeZone}
+              </FieldError>
+            </Field>
           )}
 
           <RepeatControl
@@ -806,47 +793,43 @@ function EventForm({
             timeZone={seriesZone(draft, timeZone)}
           />
 
-          <div className="grid gap-1.5">
-            <label className={LABEL} htmlFor={`${id}-location`}>
-              Location
-            </label>
+          <Field>
+            <FieldLabel htmlFor={`${id}-location`}>Location</FieldLabel>
             <Input
               id={`${id}-location`}
               onChange={(change) => update({ location: change.target.value })}
               value={draft.location}
             />
-          </div>
+          </Field>
 
-          <div className="grid gap-1.5">
-            <label className={LABEL} htmlFor={`${id}-notes`}>
-              Notes
-            </label>
+          <Field>
+            <FieldLabel htmlFor={`${id}-notes`}>Notes</FieldLabel>
             <Textarea
               id={`${id}-notes`}
               onChange={(change) => update({ notes: change.target.value })}
               value={draft.notes}
             />
-          </div>
+          </Field>
         </>
       )}
 
-      <fieldset className="grid min-w-0 gap-3">
-        <legend className={cn(LABEL, "mb-2")}>Reminders</legend>
+      <FieldSet className="min-w-0 gap-3">
+        <FieldLegend className="mb-2" variant="label">
+          Reminders
+        </FieldLegend>
         <div className="grid gap-1">
-          <label className="flex items-center gap-2 text-sm">
-            <input
+          <Label className="w-fit font-normal">
+            <Checkbox
               aria-describedby={`${id}-defaults`}
               checked={draft.useDefaultReminders}
-              className="accent-primary size-4"
-              onChange={(change) =>
-                update({ useDefaultReminders: change.target.checked })
+              onCheckedChange={(useDefaultReminders) =>
+                update({ useDefaultReminders })
               }
-              type="checkbox"
             />
             Use default reminders
-          </label>
-          <p
-            className="text-muted-foreground pl-6 text-xs"
+          </Label>
+          <FieldDescription
+            className="pl-6 text-xs"
             data-testid="default-reminders"
             id={`${id}-defaults`}
           >
@@ -854,7 +837,7 @@ function EventForm({
               allDay: draft.allDay,
               source: event ? sourceLabel(event) : undefined,
             })}
-          </p>
+          </FieldDescription>
         </div>
         <div
           aria-labelledby={`${id}-own`}
@@ -875,7 +858,7 @@ function EventForm({
             reminders={draft.reminders}
           />
         </div>
-      </fieldset>
+      </FieldSet>
 
       {errors.form ? (
         <p className="text-destructive text-sm" role="alert">
@@ -948,12 +931,11 @@ function RepeatControl({
       : undefined;
 
   return (
-    <div className="grid gap-1.5">
-      <label className={LABEL} htmlFor={id}>
-        Repeat
-      </label>
-      <select
-        className={cn(SELECT, "w-full")}
+    // No data-invalid: it would turn the whole Custom panel red.
+    <Field>
+      <FieldLabel htmlFor={id}>Repeat</FieldLabel>
+      <NativeSelect
+        className="w-full"
         id={id}
         onChange={(change) => {
           const preset = change.target.value as RepeatDraft["preset"];
@@ -965,15 +947,15 @@ function RepeatControl({
         {...described}
       >
         {repeatOptions(startDate).map((option) => (
-          <option
+          <NativeSelectOption
             disabled={option.disabled && option.value !== repeat.preset}
             key={option.value}
             value={option.value}
           >
             {option.label}
-          </option>
+          </NativeSelectOption>
         ))}
-      </select>
+      </NativeSelect>
 
       {repeat.preset === "custom" ? (
         <div className="grid gap-3 rounded-lg border p-3">
@@ -988,61 +970,62 @@ function RepeatControl({
               type="number"
               value={repeat.interval}
             />
-            <select
+            <NativeSelect
               aria-label="Repeat unit"
-              className={SELECT}
               onChange={(change) =>
                 set({ frequency: change.target.value as Frequency })
               }
               value={repeat.frequency}
             >
               {FREQUENCIES.map((frequency) => (
-                <option key={frequency} value={frequency}>
+                <NativeSelectOption key={frequency} value={frequency}>
                   {unitLabel(frequency, repeat.interval)}
-                </option>
+                </NativeSelectOption>
               ))}
-            </select>
+            </NativeSelect>
           </div>
 
           {repeat.frequency === "weekly" ? (
-            <div
-              aria-labelledby={`${id}-days`}
-              className="grid gap-1.5"
-              role="group"
-            >
+            <div className="grid gap-1.5">
               <p
                 className="text-muted-foreground text-xs font-medium"
                 id={`${id}-days`}
               >
                 Repeat on
               </p>
-              <div className="flex flex-wrap gap-1">
-                {WEEK.map((day) => {
-                  const chosen = days.includes(day);
-                  return (
-                    <Button
-                      aria-label={WEEKDAY_NAME[day]}
-                      aria-pressed={chosen}
-                      className="w-11"
-                      // The day it starts on always repeats.
-                      disabled={day === start}
-                      key={day}
-                      onClick={() =>
-                        set({
-                          days: chosen
-                            ? repeat.days.filter((other) => other !== day)
-                            : [...repeat.days, day],
-                        })
-                      }
-                      size="sm"
-                      type="button"
-                      variant={chosen ? "default" : "outline"}
-                    >
-                      {WEEKDAY_NAME[day].slice(0, 3)}
-                    </Button>
-                  );
-                })}
-              </div>
+              <ToggleGroup
+                aria-labelledby={`${id}-days`}
+                className="flex-wrap"
+                multiple
+                onValueChange={(chosen) =>
+                  // The start's weekday always repeats; it is kept only if it
+                  // was chosen before, so it still follows the start date.
+                  set({
+                    days: WEEK.filter(
+                      (day) =>
+                        chosen.includes(day) &&
+                        (day !== start || repeat.days.includes(day)),
+                    ),
+                  })
+                }
+                size="sm"
+                spacing={1}
+                value={days}
+                variant="outline"
+              >
+                {WEEK.map((day) => (
+                  <ToggleGroupItem
+                    aria-label={WEEKDAY_NAME[day]}
+                    className="aria-pressed:bg-primary aria-pressed:text-primary-foreground w-11"
+                    // The day it starts on always repeats.
+                    disabled={day === start}
+                    key={day}
+                    value={day}
+                  >
+                    {WEEKDAY_NAME[day].slice(0, 3)}
+                  </ToggleGroupItem>
+                ))}
+              </ToggleGroup>
               {start ? (
                 <p className="text-muted-foreground text-xs">
                   Always on {WEEKDAY_NAME[start]}, the day it starts.
@@ -1053,67 +1036,58 @@ function RepeatControl({
             <p className="text-muted-foreground text-xs">{on}</p>
           ) : null}
 
-          <fieldset className="grid min-w-0 gap-2">
-            <legend className="text-muted-foreground mb-1.5 text-xs font-medium">
+          <FieldSet className="min-w-0 gap-2">
+            <FieldLegend
+              className="text-muted-foreground text-xs"
+              id={`${id}-ends`}
+              variant="label"
+            >
               Ends
-            </legend>
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                checked={repeat.ends === "never"}
-                className="accent-primary size-4"
-                name={`${id}-ends`}
-                onChange={() => set({ ends: "never" })}
-                type="radio"
-              />
-              Never
-            </label>
-            <div className="flex flex-wrap items-center gap-2 text-sm">
-              <label className="flex w-16 items-center gap-2">
-                <input
-                  checked={repeat.ends === "on"}
-                  className="accent-primary size-4"
-                  name={`${id}-ends`}
-                  onChange={() => set({ ends: "on" })}
-                  type="radio"
+            </FieldLegend>
+            <RadioGroup
+              aria-labelledby={`${id}-ends`}
+              onValueChange={(ends: RepeatDraft["ends"]) => set({ ends })}
+              value={repeat.ends}
+            >
+              <Label className="w-fit font-normal">
+                <RadioGroupItem value="never" />
+                Never
+              </Label>
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <Label className="w-16 font-normal">
+                  <RadioGroupItem value="on" />
+                  On
+                </Label>
+                <DatePicker
+                  className="flex-1 basis-36"
+                  label="Ends on date"
+                  // The last day cannot come before the first.
+                  min={startDate}
+                  onChange={(until) => set({ ends: "on", until })}
+                  value={repeat.until}
                 />
-                On
-              </label>
-              <Input
-                aria-label="Ends on date"
-                className="min-w-0 flex-1 basis-36"
-                onChange={(change) =>
-                  set({ ends: "on", until: change.target.value })
-                }
-                type="date"
-                value={repeat.until}
-              />
-            </div>
-            <div className="flex flex-wrap items-center gap-2 text-sm">
-              <label className="flex w-16 items-center gap-2">
-                <input
-                  checked={repeat.ends === "after"}
-                  className="accent-primary size-4"
-                  name={`${id}-ends`}
-                  onChange={() => set({ ends: "after" })}
-                  type="radio"
+              </div>
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <Label className="w-16 font-normal">
+                  <RadioGroupItem value="after" />
+                  After
+                </Label>
+                <Input
+                  aria-label="Number of occurrences"
+                  className="w-20"
+                  inputMode="numeric"
+                  max={1000}
+                  min={1}
+                  onChange={(change) =>
+                    set({ ends: "after", count: change.target.value })
+                  }
+                  type="number"
+                  value={repeat.count}
                 />
-                After
-              </label>
-              <Input
-                aria-label="Number of occurrences"
-                className="w-20"
-                inputMode="numeric"
-                max={1000}
-                min={1}
-                onChange={(change) =>
-                  set({ ends: "after", count: change.target.value })
-                }
-                type="number"
-                value={repeat.count}
-              />
-              <span className="text-muted-foreground">occurrences</span>
-            </div>
-          </fieldset>
+                <span className="text-muted-foreground">occurrences</span>
+              </div>
+            </RadioGroup>
+          </FieldSet>
 
           {read && "recurrence" in read && read.recurrence ? (
             <p className="text-sm" data-testid="repeat-summary">
@@ -1122,8 +1096,8 @@ function RepeatControl({
           ) : null}
         </div>
       ) : null}
-      <FieldError id={errorId} message={error} />
-    </div>
+      <FieldError id={errorId}>{error}</FieldError>
+    </Field>
   );
 }
 
@@ -1182,10 +1156,9 @@ export function ReminderList({
                 className="flex flex-wrap items-center gap-2 text-sm"
                 key={index}
               >
-                <select
+                <NativeSelect
                   aria-describedby={error ? errorId : undefined}
                   aria-label={`${row} type`}
-                  className={SELECT}
                   onChange={(change) =>
                     set(
                       index,
@@ -1196,9 +1169,13 @@ export function ReminderList({
                   }
                   value={reminder.kind}
                 >
-                  <option value="relative">Before the start</option>
-                  <option value="localTime">Days before, at a time</option>
-                </select>
+                  <NativeSelectOption value="relative">
+                    Before the start
+                  </NativeSelectOption>
+                  <NativeSelectOption value="localTime">
+                    Days before, at a time
+                  </NativeSelectOption>
+                </NativeSelect>
                 {reminder.kind === "relative" ? (
                   <>
                     <Input
@@ -1215,9 +1192,8 @@ export function ReminderList({
                       type="number"
                       value={reminder.amount}
                     />
-                    <select
+                    <NativeSelect
                       aria-label={`${row} unit`}
-                      className={SELECT}
                       onChange={(change) =>
                         set(index, {
                           ...reminder,
@@ -1226,10 +1202,14 @@ export function ReminderList({
                       }
                       value={reminder.unit}
                     >
-                      <option value="minutes">minutes</option>
-                      <option value="hours">hours</option>
-                      <option value="days">days</option>
-                    </select>
+                      <NativeSelectOption value="minutes">
+                        minutes
+                      </NativeSelectOption>
+                      <NativeSelectOption value="hours">
+                        hours
+                      </NativeSelectOption>
+                      <NativeSelectOption value="days">days</NativeSelectOption>
+                    </NativeSelect>
                     <span className="text-muted-foreground">before</span>
                   </>
                 ) : (
@@ -1251,13 +1231,12 @@ export function ReminderList({
                     <span className="text-muted-foreground">
                       days before at
                     </span>
-                    <Input
+                    <TimeInput
                       aria-label={`${row} time`}
                       className="w-32"
                       onChange={(change) =>
                         set(index, { ...reminder, time: change.target.value })
                       }
-                      type="time"
                       value={reminder.time}
                     />
                   </>
@@ -1292,7 +1271,7 @@ export function ReminderList({
           Add reminder
         </Button>
       ) : null}
-      <FieldError id={errorId} message={error} />
+      <FieldError id={errorId}>{error}</FieldError>
     </div>
   );
 }

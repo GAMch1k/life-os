@@ -1,4 +1,5 @@
 import { type APIRequestContext, expect, type Page, test } from "./fixtures";
+import { datePicker, pickDate } from "./date-picker";
 
 // Recurring events on /calendar: Repeat in the event form (Custom weekly on
 // two days, "Annually on September 17"), skipping and restoring one
@@ -124,9 +125,9 @@ test.describe("Recurring events", () => {
       await page.getByRole("button", { name: "New event" }).click();
       const form = page.getByRole("dialog", { name: "New event" });
       await form.getByLabel("Title").fill(title);
-      await form.getByLabel("Start date").fill(monday);
+      await pickDate(form, "Start date", monday);
       await form.getByLabel("Start time").fill("18:00");
-      await form.getByLabel("End date").fill(monday);
+      await pickDate(form, "End date", monday);
       await form.getByLabel("End time").fill("19:00");
       const repeat = form.getByLabel("Repeat", { exact: true });
       await expect(repeat).toHaveValue("none");
@@ -188,7 +189,7 @@ test.describe("Recurring events", () => {
       await expect(dialogs(page)).toHaveCount(0);
       await expect(eventOn(page, title, wednesday)).toHaveCount(0);
       await expect(eventOn(page, title, monday)).toHaveCount(1);
-      await page.getByLabel("Show cancelled").check();
+      await page.getByRole("checkbox", { name: "Show cancelled" }).check();
       const skipped = eventOn(page, title, wednesday);
       await expect(skipped).toHaveClass(/lifeos-event-cancelled/);
       await skipped.click();
@@ -201,7 +202,7 @@ test.describe("Recurring events", () => {
       );
       await page.keyboard.press("Escape");
       await expect(dialogs(page)).toHaveCount(0);
-      await page.getByLabel("Show cancelled").uncheck();
+      await page.getByRole("checkbox", { name: "Show cancelled" }).uncheck();
       await expect(eventOn(page, title, wednesday)).toHaveCount(1);
       await expect(eventOn(page, title, wednesday)).not.toHaveClass(
         /lifeos-event-cancelled/,
@@ -212,7 +213,10 @@ test.describe("Recurring events", () => {
       await eventOn(page, title, monday2).click();
       await details.getByRole("button", { name: "Edit", exact: true }).click();
       const edit = page.getByRole("dialog", { name: "Edit event" });
-      await expect(edit.getByLabel("Start date")).toHaveValue(monday2);
+      await expect(datePicker(edit, "Start date")).toHaveAttribute(
+        "data-value",
+        monday2,
+      );
       await edit.getByLabel("Start time").fill("19:00");
       await expect(edit.getByLabel("End time")).toHaveValue("20:00");
       await edit.getByRole("button", { name: "Save" }).click();
@@ -283,9 +287,9 @@ test.describe("Recurring events", () => {
       await page.getByRole("button", { name: "New event" }).click();
       const form = page.getByRole("dialog", { name: "New event" });
       await form.getByLabel("Title").fill(title);
-      await form.getByLabel("All day").check();
-      await form.getByLabel("Start date").fill(first);
-      await form.getByLabel("End date").fill(first);
+      await form.getByRole("checkbox", { name: "All day" }).check();
+      await pickDate(form, "Start date", first);
+      await pickDate(form, "End date", first);
       // The plainly worded choice follows the start date.
       await form
         .getByLabel("Repeat", { exact: true })

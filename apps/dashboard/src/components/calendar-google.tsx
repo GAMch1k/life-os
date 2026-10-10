@@ -4,8 +4,6 @@ import { AlertTriangle, CalendarSync, CheckCircle2 } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
 
-import { LABEL, UNAVAILABLE } from "@/components/calendar-event-dialog";
-import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -13,7 +11,12 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from "@/components/app-dialog";
+import { UNAVAILABLE } from "@/components/calendar-event-dialog";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { FieldLegend, FieldSet } from "@/components/ui/field";
+import { Label } from "@/components/ui/label";
 import { calendarClient } from "@/lib/api/calendar-client";
 import {
   calendarDetail,
@@ -29,7 +32,6 @@ import {
   syncSummary,
   withoutGoogleParam,
 } from "@/lib/google-calendar";
-import { cn } from "@/lib/utils";
 
 /**
  * The Calendar toolbar's "Google Calendar" button and dialog: connect the
@@ -407,8 +409,10 @@ function CalendarChoices({
   saving?: string;
 }) {
   return (
-    <fieldset className="grid min-w-0 gap-2">
-      <legend className={cn(LABEL, "mb-1")}>Calendars to sync</legend>
+    <FieldSet className="min-w-0 gap-2">
+      <FieldLegend className="mb-1" variant="label">
+        Calendars to sync
+      </FieldLegend>
       <p className="text-muted-foreground text-xs">
         {syncSummary(calendars)} Syncing starts in a later release; your choices
         are kept until then.
@@ -420,15 +424,13 @@ function CalendarChoices({
         >
           {calendars.map((calendar) => (
             <li key={calendar.id}>
-              <label className="flex cursor-pointer items-center gap-3 px-3 py-2">
-                <input
+              <Label className="cursor-pointer gap-3 px-3 py-2 leading-normal font-normal">
+                <Checkbox
                   checked={calendar.syncEnabled}
-                  className="accent-primary size-4 shrink-0"
                   disabled={disabled || saving === calendar.id}
-                  onChange={(change) =>
-                    onChoose(calendar, change.target.checked)
+                  onCheckedChange={(syncEnabled) =>
+                    onChoose(calendar, syncEnabled)
                   }
-                  type="checkbox"
                 />
                 <span
                   aria-hidden="true"
@@ -447,11 +449,11 @@ function CalendarChoices({
                     {calendarDetail(calendar)}
                   </span>
                 </span>
-              </label>
+              </Label>
             </li>
           ))}
         </ul>
       ) : null}
-    </fieldset>
+    </FieldSet>
   );
 }
