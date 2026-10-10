@@ -6,7 +6,7 @@ Routine Inbox and Voice planning runs through the authenticated Codex CLI. X-01 
 
 ## How it was measured
 
-`tools/benchmark-ai-runtime <model/effort>…` starts a fresh disposable verification stack for each profile and seeds existing Tasks. It then submits the same captures: EN, RU, and DE text through the Inbox API the Dashboard uses, plus a recorded voice note through Voice and whisper.cpp. The automatic processor plans them with the real Codex CLI and acts through MCP and the owning services. The tool checks the persisted results:
+`tools/benchmark-ai-runtime <model/effort>…` starts a fresh disposable verification stack for each profile, with the owner's timezone set to Europe/Berlin, and seeds existing Tasks and Calendar events. It then submits the same captures: EN, RU, and DE text through the Inbox API the Dashboard uses, plus a recorded voice note through Voice and whisper.cpp. The automatic processor plans them with the real Codex CLI and acts through MCP and the owning services. The tool checks the persisted results:
 
 | Scenario | Pass condition |
 | --- | --- |
@@ -25,13 +25,17 @@ Routine Inbox and Voice planning runs through the authenticated Codex CLI. X-01 
 | EN → RU complete ("I already bought the batteries.", Task "Купить батарейки") | Resolved; that Task is completed; no new Task |
 | DE → EN complete ("Ich habe die Pflanzen schon gegossen.", Task "Water the plants") | Resolved; that Task is completed; no new Task |
 | RU → DE complete ("Я уже помыл окна.", Task "Fenster putzen") | Resolved; that Task is completed; no new Task |
+| Calendar reschedule ("Move my physiotherapy appointment to tomorrow at 9:00.", event "Physiotherapy" 14:00–15:00 in three days) | Resolved; the event is 09:00–10:00 Berlin on the day after capture (its hour kept); still one physiotherapy event |
+| Calendar ambiguous ("Move my meeting to Friday at 15:00.", events "Team meeting" and "Meeting with Anna") | Human Review with exactly those two candidates; neither changes |
+| Calendar cancel ("Cancel my haircut appointment.", event "Haircut") | Human Review with that event as the only candidate; it stays active |
 | No extra entities | Exactly 10 seeded + 3 created Tasks exist |
+| No extra events | Exactly the 4 seeded events + the created one exist, all active |
 
 The reschedule cases turned out to separate the profiles. They were also repeated three times each directly against the planner (`processor -content`), to see how often a profile gets them right.
 
 ## Results (2026-10-09, Codex CLI 0.160.0, ChatGPT Plus)
 
-Full real-runtime runs. They predate the three cross-language completions (POL-08, see [cross-language Task matching](../services/mcp.md)), so they count 13 checks; a run now has 16. Token figures are totals for the run, as reported by Codex (`turn.completed`).
+Full real-runtime runs. They predate the three cross-language completions (POL-08, see [cross-language Task matching](../services/mcp.md)) and the Calendar change scenarios (P10-03, see [Calendar events](../services/mcp.md#calendar-events)), so they count 13 checks; a run now has 20. Token figures are totals for the run, as reported by Codex (`turn.completed`).
 
 | Profile | Checks passed | Failed checks | Attempts | Output tokens | Reasoning tokens |
 | --- | --- | --- | --- | --- | --- |
