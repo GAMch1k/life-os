@@ -15,7 +15,7 @@ func TestMigrationsAreReversible(t *testing.T) {
 		}
 		return count
 	}
-	if tables() != 2 {
+	if tables() != 3 {
 		t.Fatalf("%d tables after migrating up", tables())
 	}
 	for _, path := range Migrations(t, "down") {
@@ -27,7 +27,7 @@ func TestMigrationsAreReversible(t *testing.T) {
 	for _, path := range Migrations(t, "up") {
 		Apply(t, pool, path)
 	}
-	if tables() != 2 {
+	if tables() != 3 {
 		t.Fatalf("%d tables after migrating up again", tables())
 	}
 }

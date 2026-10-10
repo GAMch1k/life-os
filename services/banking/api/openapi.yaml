@@ -37,6 +37,11 @@ info:
     error code `actor_required`. Reads do not need the header.
 
 
+    A consent the bank returns with an error instead of a code is recorded
+    (`recordBankConsentFailure`) and listed as `lastConsentFailure` until a
+    connection succeeds.
+
+
     Errors use the shared envelope `{"error": {"code", "message"},
     "request_id"}`.
   license: {name: UNLICENSED, url: https://life-os.local/license}
@@ -119,6 +124,29 @@ paths:
           content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
         '503':
           description: '`banking_not_configured`.'
+          content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
+  /v1/connections/consent-failure:
+    post:
+      summary: Record a consent the bank did not complete
+      description: >-
+        The Dashboard's `/finance/bank/callback` posts it when the bank or
+        provider returned an `error` instead of a `code`. Banking keeps the
+        failure durably (when, the error, its description cleaned and cut to
+        300 characters, and the bank of the authorization the state belonged
+        to), uses the state up, and records `banking.consent.failed` in
+        Activity. An unknown or expired state is accepted and recorded as
+        such. The state is never stored or logged; no code is accepted. The
+        newest failure is listed as `lastConsentFailure` until a connection
+        succeeds.
+      operationId: recordBankConsentFailure
+      security: []
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/BankConsentFailureRequest'}}}
+      responses:
+        '204': {description: Recorded.}
+        '400':
+          description: '`bad_request` or `actor_required`.'
           content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
   /v1/connections/{connectionId}/sync:
     post:
@@ -268,15 +296,36 @@ components:
         timeZone: {type: string, example: Europe/Berlin}
         unattendedPerDay: {type: integer}
         manualSyncMinutes: {type: integer}
+    BankConsentFailure:
+      type: object
+      required: [at, error, description, institution, stateMatched]
+      properties:
+        at: {type: string, format: date-time}
+        error: {type: string, example: server_error, description: 'The provider''s error code.'}
+        description: {type: string, nullable: true, description: 'The provider''s description, at most 300 characters.'}
+        institution: {type: string, nullable: true, description: The bank of the authorization; null when the state was unknown.}
+        stateMatched: {type: boolean, description: 'Whether the state belonged to a pending authorization (not unknown or expired).'}
+    BankConsentFailureRequest:
+      type: object
+      required: [error]
+      properties:
+        state: {type: string, maxLength: 256, description: The state the bank returned; may be missing.}
+        error: {type: string, minLength: 1, maxLength: 100}
+        errorDescription: {type: string, maxLength: 2000}
     BankConnectionList:
       type: object
-      required: [configured, setupProblem, schedule, items, nextCursor]
+      required: [configured, setupProblem, schedule, items, nextCursor, lastConsentFailure]
       properties:
         configured: {type: boolean, description: Whether Enable Banking is set up on this server.}
         setupProblem: {type: string, nullable: true, description: 'What is missing or wrong in the setup (setting names only, never values).'}
         schedule: {$ref: '#/components/schemas/BankSchedule'}
         items: {type: array, items: {$ref: '#/components/schemas/BankConnection'}}
         nextCursor: {type: string, nullable: true}
+        lastConsentFailure:
+          type: object
+          allOf: [{$ref: '#/components/schemas/BankConsentFailure'}]
+          nullable: true
+          description: The newest consent the bank did not complete since a connection last succeeded; null when none.
     BankAuthorizationRequest:
       type: object
       properties:

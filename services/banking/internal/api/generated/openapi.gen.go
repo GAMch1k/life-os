@@ -139,8 +139,11 @@ type BankConnectionList struct {
 	// Configured Whether Enable Banking is set up on this server.
 	Configured bool             `json:"configured"`
 	Items      []BankConnection `json:"items"`
-	NextCursor *string          `json:"nextCursor"`
-	Schedule   BankSchedule     `json:"schedule"`
+
+	// LastConsentFailure The newest consent the bank did not complete since a connection last succeeded; null when none.
+	LastConsentFailure *BankConsentFailure `json:"lastConsentFailure"`
+	NextCursor         *string             `json:"nextCursor"`
+	Schedule           BankSchedule        `json:"schedule"`
 
 	// SetupProblem What is missing or wrong in the setup (setting names only, never values).
 	SetupProblem *string `json:"setupProblem"`
@@ -148,6 +151,34 @@ type BankConnectionList struct {
 
 // BankConnectionStatus defines model for BankConnectionStatus.
 type BankConnectionStatus string
+
+// BankConsentFailure defines model for BankConsentFailure.
+type BankConsentFailure struct {
+	At time.Time `json:"at"`
+
+	// Description The provider's description, at most 300 characters.
+	Description *string `json:"description"`
+
+	// Error The provider's error code.
+	//
+	// Example: server_error
+	Error string `json:"error"`
+
+	// Institution The bank of the authorization; null when the state was unknown.
+	Institution *string `json:"institution"`
+
+	// StateMatched Whether the state belonged to a pending authorization (not unknown or expired).
+	StateMatched bool `json:"stateMatched"`
+}
+
+// BankConsentFailureRequest defines model for BankConsentFailureRequest.
+type BankConsentFailureRequest struct {
+	Error            string  `json:"error"`
+	ErrorDescription *string `json:"errorDescription,omitempty"`
+
+	// State The state the bank returned; may be missing.
+	State *string `json:"state,omitempty"`
+}
 
 // BankSchedule defines model for BankSchedule.
 type BankSchedule struct {
@@ -198,6 +229,9 @@ type ConnectBankConnectionJSONRequestBody = BankConnectRequest
 // AuthorizeBankConnectionJSONRequestBody defines body for AuthorizeBankConnection for application/json ContentType.
 type AuthorizeBankConnectionJSONRequestBody = BankAuthorizationRequest
 
+// RecordBankConsentFailureJSONRequestBody defines body for RecordBankConsentFailure for application/json ContentType.
+type RecordBankConsentFailureJSONRequestBody = BankConsentFailureRequest
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
 	// ListBankConnections List bank connections
@@ -209,6 +243,9 @@ type ServerInterface interface {
 	// AuthorizeBankConnection Start connecting a bank
 	// (POST /v1/connections/authorize)
 	AuthorizeBankConnection(c fiber.Ctx) error
+	// RecordBankConsentFailure Record a consent the bank did not complete
+	// (POST /v1/connections/consent-failure)
+	RecordBankConsentFailure(c fiber.Ctx) error
 	// DisconnectBankConnection Disconnect a bank
 	// (DELETE /v1/connections/{connectionId})
 	DisconnectBankConnection(c fiber.Ctx, connectionId ConnectionId) error
@@ -267,6 +304,24 @@ func (siw *ServerInterfaceWrapper) AuthorizeBankConnection(c fiber.Ctx) error {
 
 	handler := func(c fiber.Ctx) error {
 		return siw.Handler.AuthorizeBankConnection(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// RecordBankConsentFailure operation middleware
+func (siw *ServerInterfaceWrapper) RecordBankConsentFailure(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.RecordBankConsentFailure(c)
 	}
 
 	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
@@ -366,6 +421,8 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	router.Post(options.BaseURL+"/v1/connections", wrapper.ConnectBankConnection)
 
 	router.Post(options.BaseURL+"/v1/connections/authorize", wrapper.AuthorizeBankConnection)
+
+	router.Post(options.BaseURL+"/v1/connections/consent-failure", wrapper.RecordBankConsentFailure)
 
 	router.Post(options.BaseURL+"/v1/connections/:connectionId/sync", wrapper.SyncBankConnection)
 

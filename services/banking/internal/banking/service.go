@@ -347,6 +347,7 @@ func (s *Service) Connect(ctx context.Context, code, state string, psu *enableba
 	if err != nil {
 		return store.BankConnection{}, err
 	}
+	s.clearConsentFailures(ctx, now)
 	// A renewal replaces a session that may still be valid: end it, so no
 	// consent is left behind.
 	if renewed && previousSession != nil {
