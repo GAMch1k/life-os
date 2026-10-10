@@ -1002,13 +1002,6 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The settings kept changing concurrently; retry the update */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
         };
     };
 }
