@@ -1,5 +1,6 @@
 import { activityClient } from "@/lib/api/activity-client";
 import type { components } from "@/lib/api/generated/activity";
+import { addDays, DATE_LOCALE, startOfDay } from "@/lib/time-zone";
 
 // The Event Log is a read-only view over the Activity API. Everything here is
 // presentation: filters map to API query parameters, and a selected event's
@@ -104,14 +105,24 @@ export function actorLabel(actor: ActivityEvent["actor"]) {
   return name ?? humanize(actor.kind);
 }
 
-const timeFormat = new Intl.DateTimeFormat("en-GB", {
-  dateStyle: "medium",
-  timeStyle: "medium",
-  timeZone: "UTC",
-});
+const timeFormats = new Map<string, Intl.DateTimeFormat>();
 
-export function eventTime(value: string) {
-  return `${timeFormat.format(new Date(value))} UTC`;
+/**
+ * An event time in the owner's timezone, with the zone's abbreviation, for
+ * example "9 Oct 2026, 23:21:30 CEST". The locale and timezone are fixed, so
+ * the text does not depend on where it is rendered.
+ */
+export function eventTime(value: string, timeZone: string) {
+  let format = timeFormats.get(timeZone);
+  if (!format) {
+    format = new Intl.DateTimeFormat(DATE_LOCALE, {
+      dateStyle: "medium",
+      timeStyle: "long",
+      timeZone,
+    });
+    timeFormats.set(timeZone, format);
+  }
+  return format.format(new Date(value));
 }
 
 // ---- Filters ---------------------------------------------------------------
@@ -125,9 +136,9 @@ export type ActivityFilters = {
   type?: string;
   outcome?: ActivityOutcome;
   correlationId?: string;
-  /** Inclusive first day, YYYY-MM-DD (UTC). */
+  /** Inclusive first day, YYYY-MM-DD in the owner's timezone. */
   fromDate?: string;
-  /** Inclusive last day, YYYY-MM-DD (UTC). */
+  /** Inclusive last day, YYYY-MM-DD in the owner's timezone. */
   toDate?: string;
   cursor?: string;
 };
@@ -182,13 +193,16 @@ export function selectedEventId(params: SearchParams) {
   return id && /^[0-9a-f-]{36}$/i.test(id) ? id.toLowerCase() : undefined;
 }
 
-/** Activity API query for the list; the "to" day is inclusive for the user. */
-export function listQuery(filters: ActivityFilters, limit = 50) {
-  const nextDay = (date: string) => {
-    const day = new Date(`${date}T00:00:00Z`);
-    day.setUTCDate(day.getUTCDate() + 1);
-    return day.toISOString();
-  };
+/**
+ * Activity API query for the list. Days are the owner's calendar days, and the
+ * "to" day is inclusive for the user.
+ */
+export function listQuery(
+  filters: ActivityFilters,
+  timeZone: string,
+  limit = 50,
+) {
+  const dayStart = (day: string) => startOfDay(day, timeZone).toISOString();
   return {
     source: filters.source,
     subjectType: filters.subjectType,
@@ -196,8 +210,8 @@ export function listQuery(filters: ActivityFilters, limit = 50) {
     type: filters.type,
     outcome: filters.outcome,
     correlationId: filters.correlationId,
-    from: filters.fromDate ? `${filters.fromDate}T00:00:00.000Z` : undefined,
-    to: filters.toDate ? nextDay(filters.toDate) : undefined,
+    from: filters.fromDate ? dayStart(filters.fromDate) : undefined,
+    to: filters.toDate ? dayStart(addDays(filters.toDate, 1)) : undefined,
     cursor: filters.cursor,
     limit,
   };
@@ -378,6 +392,8 @@ export type Selection =
 
 export type ActivityLog = {
   filters: ActivityFilters;
+  /** The owner's timezone, for filter days and displayed times. */
+  timeZone: string;
   /** `null` when the Activity service could not be read. */
   list: ActivityList | null;
   selectedId?: string;
@@ -429,17 +445,20 @@ async function loadSelection(id: string): Promise<Selection> {
 
 export async function getActivityLog(
   params: SearchParams,
+  timeZone: string,
 ): Promise<ActivityLog> {
   const filters = parseFilters(params);
   const selectedId = selectedEventId(params);
   const [list, selection] = await Promise.all([
     activityClient
-      .GET("/v1/activity-events", { params: { query: listQuery(filters) } })
+      .GET("/v1/activity-events", {
+        params: { query: listQuery(filters, timeZone) },
+      })
       .then(
         ({ data }) => data ?? null,
         () => null,
       ),
     selectedId ? loadSelection(selectedId) : Promise.resolve(null),
   ]);
-  return { filters, list, selectedId, selection };
+  return { filters, timeZone, list, selectedId, selection };
 }

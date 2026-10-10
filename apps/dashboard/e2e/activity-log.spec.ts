@@ -101,4 +101,63 @@ test.describe("Event Log", () => {
     await selected.getByText("Diagnostics").click();
     await expect(selected.getByText(`task/${task!.id}`)).toBeVisible();
   });
+
+  test("explains an empty agent domain and fits a phone screen", async ({
+    page,
+  }) => {
+    // A day long before the Event Log existed: nothing can match it.
+    await page.goto("/activity");
+    await page
+      .getByRole("combobox", { name: "Domain" })
+      .selectOption({ label: "Agent changes" });
+    await page.getByLabel("From", { exact: true }).fill("2000-01-01");
+    await page.getByLabel("To", { exact: true }).fill("2000-01-01");
+    await page.getByRole("button", { name: "Apply" }).click();
+    await expect(page).toHaveURL(/source=mcp/);
+
+    // The domain says what it records and why it is empty, and points to
+    // where the agent's decisions are.
+    const events = page.getByRole("region", { name: "Events" });
+    await expect(
+      events.getByText(/Changes the AI made through MCP/),
+    ).toBeVisible();
+    await expect(
+      events.getByText("The agent hasn't changed anything in this range."),
+    ).toBeVisible();
+    await expect(
+      events.getByRole("link", { name: "Show Inbox activity" }),
+    ).toHaveAttribute("href", /source=inbox&fromDate=2000-01-01/);
+    await expect(
+      page.getByText("No activity matches these filters."),
+    ).toHaveCount(0);
+
+    // No horizontal scrolling on a small phone: the filters wrap, and long
+    // summaries and tool names break instead of widening the page.
+    const overflow = () =>
+      page.evaluate(
+        () =>
+          document.documentElement.scrollWidth -
+          document.documentElement.clientWidth,
+      );
+    await page.setViewportSize({ width: 360, height: 780 });
+    expect(await overflow()).toBeLessThanOrEqual(0);
+    await page.goto("/activity");
+    await expect(
+      page.getByRole("heading", { name: "Event Log", level: 1 }),
+    ).toBeVisible();
+    expect(await overflow()).toBeLessThanOrEqual(0);
+    const entries = page
+      .getByRole("list", { name: "Activity entries" })
+      .getByRole("link");
+    if ((await entries.count()) > 0) {
+      await entries.first().click();
+      await expect(page).toHaveURL(/event=/);
+      await expect(
+        page
+          .getByRole("region", { name: "Selected event" })
+          .getByRole("heading", { name: "Whole workflow" }),
+      ).toBeVisible();
+      expect(await overflow()).toBeLessThanOrEqual(0);
+    }
+  });
 });

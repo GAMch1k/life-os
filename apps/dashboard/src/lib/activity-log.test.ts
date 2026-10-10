@@ -7,6 +7,7 @@ import {
   buildTrace,
   emptyState,
   eventLabel,
+  eventTime,
   listQuery,
   parseFilters,
   selectedEventId,
@@ -127,7 +128,7 @@ test("filters are parsed defensively and map to the Activity API query", () => {
     toDate: "2026-10-09",
     type: "task.completed",
   });
-  assert.deepEqual(listQuery(filters, 25), {
+  assert.deepEqual(listQuery(filters, "UTC", 25), {
     source: "tasks",
     subjectType: undefined,
     subjectId: undefined,
@@ -140,6 +141,33 @@ test("filters are parsed defensively and map to the Activity API query", () => {
     limit: 25,
   });
   assert.deepEqual(parseFilters({ fromDate: "yesterday" }), {});
+});
+
+test("filter days are the owner's calendar days", () => {
+  // Berlin is UTC+2 in October; the inclusive "to" day ends at its midnight.
+  const query = listQuery(
+    { fromDate: "2026-10-09", toDate: "2026-10-09" },
+    "Europe/Berlin",
+  );
+  assert.equal(query.from, "2026-10-08T22:00:00.000Z");
+  assert.equal(query.to, "2026-10-09T22:00:00.000Z");
+  // Across the end of summer time the day is 25 hours long.
+  const fallBack = listQuery(
+    { fromDate: "2026-10-25", toDate: "2026-10-25" },
+    "Europe/Berlin",
+  );
+  assert.equal(fallBack.from, "2026-10-24T22:00:00.000Z");
+  assert.equal(fallBack.to, "2026-10-25T23:00:00.000Z");
+});
+
+test("event times render in the owner's timezone, not UTC", () => {
+  const at = "2026-10-09T21:21:30.679Z";
+  assert.equal(eventTime(at, "Europe/Berlin"), "9 Oct 2026, 23:21:30 CEST");
+  assert.equal(eventTime(at, "UTC"), "9 Oct 2026, 21:21:30 UTC");
+  assert.equal(
+    eventTime("2026-12-09T21:21:30Z", "Europe/Berlin"),
+    "9 Dec 2026, 22:21:30 CET",
+  );
 });
 
 test("links keep the active filters and apply overrides", () => {
