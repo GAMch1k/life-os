@@ -18,17 +18,29 @@ type Querier interface {
 	// Takes the source's refresh lease: one refresh per source at a time, across
 	// processes too. A lease left by a crashed refresh expires and is taken over.
 	ClaimSourceRefresh(ctx context.Context, arg ClaimSourceRefreshParams) (CalendarSource, error)
+	// A state is used once: reading it deletes it.
+	ConsumeGoogleOAuthState(ctx context.Context, stateHash []byte) (ConsumeGoogleOAuthStateRow, error)
 	// A replay with the same automation idempotency key returns the original row.
 	CreateEvent(ctx context.Context, arg CreateEventParams) (Event, error)
+	// The one connection (a second insert violates the singleton key).
+	CreateGoogleConnection(ctx context.Context, arg CreateGoogleConnectionParams) (GoogleConnection, error)
+	CreateGoogleOAuthState(ctx context.Context, arg CreateGoogleOAuthStateParams) error
 	CreatePresetSource(ctx context.Context, arg CreatePresetSourceParams) (CalendarSource, error)
 	CreateSource(ctx context.Context, arg CreateSourceParams) (CalendarSource, error)
 	DeleteEvent(ctx context.Context, id pgtype.UUID) (int64, error)
+	DeleteExpiredGoogleOAuthStates(ctx context.Context, now pgtype.Timestamptz) error
+	// Drops the calendars Google no longer lists.
+	DeleteGoogleCalendarsNotListed(ctx context.Context, arg DeleteGoogleCalendarsNotListedParams) (int64, error)
+	// Also deletes its calendar list (ON DELETE CASCADE).
+	DeleteGoogleConnection(ctx context.Context, id pgtype.UUID) (int64, error)
 	// Also deletes the source's imported events (ON DELETE CASCADE).
 	DeleteSource(ctx context.Context, id pgtype.UUID) (int64, error)
 	// Records a refresh outcome (the whole new state, computed by the caller
 	// under LockSource) and releases the lease.
 	FinishSourceRefresh(ctx context.Context, arg FinishSourceRefreshParams) (CalendarSource, error)
 	GetEvent(ctx context.Context, id pgtype.UUID) (Event, error)
+	GetGoogleCalendar(ctx context.Context, id pgtype.UUID) (GoogleCalendar, error)
+	GetGoogleConnection(ctx context.Context) (GoogleConnection, error)
 	// Preset sources are configured from Calendar's environment at startup
 	// (EnsurePreset), inside one transaction holding LockPreset.
 	GetPresetSource(ctx context.Context, preset string) (CalendarSource, error)
@@ -44,6 +56,8 @@ type Querier interface {
 	// after_* arguments are the previous page's last row: a keyset cursor over
 	// exactly the ORDER BY.
 	ListEvents(ctx context.Context, arg ListEventsParams) ([]ListEventsRow, error)
+	// The connection's calendars: the primary first, then by name.
+	ListGoogleCalendars(ctx context.Context, connectionID pgtype.UUID) ([]GoogleCalendar, error)
 	// Recurring events that may have an occurrence overlapping
 	// [range_start, range_end): they start before range_end, and their last
 	// possible occurrence (starting at recurrence_until) ends after range_start.
@@ -64,6 +78,11 @@ type Querier interface {
 	LockSource(ctx context.Context, id pgtype.UUID) (CalendarSource, error)
 	// The event left its source: cancelled, kept as history, and marked removed.
 	MarkImportedEventRemoved(ctx context.Context, arg MarkImportedEventRemovedParams) error
+	// A new authorization of the same account: new token and scopes, usable again.
+	ReconnectGoogleConnection(ctx context.Context, arg ReconnectGoogleConnectionParams) (GoogleConnection, error)
+	// A refresh succeeded: the connection is usable. Google may rotate the
+	// refresh token; a NULL ciphertext keeps the stored one.
+	RecordGoogleTokenRefresh(ctx context.Context, arg RecordGoogleTokenRefreshParams) (GoogleConnection, error)
 	// Gives the lease up after a refresh that could not record an outcome.
 	ReleaseSourceRefresh(ctx context.Context, id pgtype.UUID) error
 	// Non-recurring events whose title, description, or location contain every
@@ -78,6 +97,8 @@ type Querier interface {
 	// pattern, with the same relevance as SearchEvents. The caller picks their
 	// occurrences; the range only drops series that start after range_end.
 	SearchRecurringEvents(ctx context.Context, arg SearchRecurringEventsParams) ([]SearchRecurringEventsRow, error)
+	SetGoogleCalendarSync(ctx context.Context, arg SetGoogleCalendarSyncParams) (GoogleCalendar, error)
+	SetGoogleConnectionStatus(ctx context.Context, arg SetGoogleConnectionStatusParams) (GoogleConnection, error)
 	// Writes the whole merged event. The expected_updated_at guard makes the
 	// read-merge-write optimistic: a concurrent change makes it match nothing.
 	// Source identity is never updated.
@@ -93,6 +114,10 @@ type Querier interface {
 	// changed URL or filter needs a full download); next_refresh_at, when given,
 	// reschedules the source.
 	UpdateSource(ctx context.Context, arg UpdateSourceParams) (CalendarSource, error)
+	// Records a calendar as Google lists it. A new one starts with
+	// initial_sync_enabled; a known one keeps the owner's choice, and its
+	// updated_at moves only when Google's details changed.
+	UpsertGoogleCalendar(ctx context.Context, arg UpsertGoogleCalendarParams) error
 }
 
 var _ Querier = (*Queries)(nil)

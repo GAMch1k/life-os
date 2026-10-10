@@ -69,3 +69,38 @@ type Event struct {
 	Reminders                []byte
 	UseDefaultReminders      bool
 }
+
+type GoogleCalendar struct {
+	ID               pgtype.UUID
+	ConnectionID     pgtype.UUID
+	GoogleCalendarID string
+	Summary          string
+	Color            *string
+	AccessRole       string
+	IsPrimary        bool
+	SyncEnabled      bool
+	CreatedAt        pgtype.Timestamptz
+	UpdatedAt        pgtype.Timestamptz
+}
+
+type GoogleConnection struct {
+	ID                     pgtype.UUID
+	Singleton              bool
+	AccountEmail           string
+	Scopes                 []string
+	RefreshTokenCiphertext []byte
+	RefreshTokenNonce      []byte
+	AccessTokenExpiresAt   pgtype.Timestamptz
+	Status                 string
+	LastError              *string
+	ConnectedAt            pgtype.Timestamptz
+	CreatedAt              pgtype.Timestamptz
+	UpdatedAt              pgtype.Timestamptz
+}
+
+type GoogleOauthState struct {
+	StateHash    []byte
+	CodeVerifier string
+	ExpiresAt    pgtype.Timestamptz
+	CreatedAt    pgtype.Timestamptz
+}
