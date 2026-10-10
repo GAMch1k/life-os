@@ -9,7 +9,6 @@ import (
 	"github.com/GAMch1k/life-os/pkg/database"
 	"github.com/GAMch1k/life-os/pkg/httpserver"
 	"github.com/GAMch1k/life-os/services/tasks/internal/api"
-	"github.com/GAMch1k/life-os/services/tasks/internal/api/generated"
 	serviceconfig "github.com/GAMch1k/life-os/services/tasks/internal/config"
 	repository "github.com/GAMch1k/life-os/services/tasks/internal/repository/generated"
 )
@@ -38,7 +37,7 @@ func run(ctx context.Context) error {
 		httpserver.WithLogger(logger),
 		httpserver.WithReadinessCheck(pool.Ping),
 	)
-	generated.RegisterHandlers(app, api.NewHandler(repository.New(pool), activity.NewEmitter(cfg.ActivityURL, "tasks", logger)))
+	api.Register(app, api.NewHandler(repository.New(pool), activity.NewEmitter(cfg.ActivityURL, "tasks", logger)))
 	app.OnShutdown(database.ClosePool(pool))
 
 	return app.Run(fmt.Sprintf(":%d", cfg.Port))
