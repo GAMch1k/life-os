@@ -73,6 +73,55 @@ type TaskList struct {
 	NextCursor *string `json:"nextCursor,omitempty"`
 }
 
+// TaskNotificationStatus defines model for TaskNotificationStatus.
+type TaskNotificationStatus struct {
+	// CalendarConfigured Whether the morning summary reads the day's events from Calendar (CALENDAR_SERVICE_URL).
+	CalendarConfigured bool `json:"calendarConfigured"`
+
+	// Enabled Whether Tasks sends notifications: false when NOTIFICATIONS_SERVICE_URL is not set.
+	Enabled bool `json:"enabled"`
+
+	// EveningTime When the evening list of tomorrow's date-only Tasks is due, HH:MM.
+	EveningTime string `json:"eveningTime"`
+
+	// GraceMinutes How late a notification may still be sent after Tasks was down; older ones are recorded as missed.
+	GraceMinutes int `json:"graceMinutes"`
+
+	// HandledThrough Every notification due up to this instant has been sent, recorded as missed or empty, or refused by Notifications; null before the first run.
+	HandledThrough *time.Time `json:"handledThrough"`
+
+	// IntervalSeconds How often due notifications are looked for.
+	IntervalSeconds int `json:"intervalSeconds"`
+
+	// LastError The last run error, kept until the next one: current when lastErrorAt is after lastSuccessAt.
+	LastError   *string    `json:"lastError"`
+	LastErrorAt *time.Time `json:"lastErrorAt"`
+
+	// LastRunAt When a run last started.
+	LastRunAt *time.Time `json:"lastRunAt"`
+
+	// LastSentAt When a run last sent a notification.
+	LastSentAt *time.Time `json:"lastSentAt"`
+
+	// LastSuccessAt When a run last finished without an error.
+	LastSuccessAt *time.Time `json:"lastSuccessAt"`
+
+	// MergedMorning The summary and the morning list are due at the same time and sent as one message (the summary).
+	MergedMorning bool `json:"mergedMorning"`
+
+	// MorningTime When the morning list of date-only and overdue Tasks is due, HH:MM.
+	MorningTime string `json:"morningTime"`
+
+	// SummaryTime When the daily morning summary is due, HH:MM.
+	SummaryTime string `json:"summaryTime"`
+
+	// TimeZone The owner's timezone the times below are in (LIFE_OS_TIMEZONE).
+	TimeZone string `json:"timeZone"`
+
+	// TimedLeadMinutes How long before a timed Task is due its reminder is sent.
+	TimedLeadMinutes int `json:"timedLeadMinutes"`
+}
+
 // UpdateTaskRequest defines model for UpdateTaskRequest.
 type UpdateTaskRequest struct {
 	// ClearDueAt Clear the due date and return the Task to Unscheduled.
@@ -110,6 +159,9 @@ type UpdateTaskJSONRequestBody = UpdateTaskRequest
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
+	// GetNotificationStatus Get the Task notifications health
+	// (GET /v1/notifications/status)
+	GetNotificationStatus(c fiber.Ctx) error
 	// ListTasks List tasks
 	// (GET /v1/tasks)
 	ListTasks(c fiber.Ctx, params ListTasksParams) error
@@ -138,6 +190,24 @@ type ServerInterfaceWrapper struct {
 
 type MiddlewareFunc fiber.Handler
 type HandlerMiddlewareFunc func(c fiber.Ctx, next fiber.Handler) error
+
+// GetNotificationStatus operation middleware
+func (siw *ServerInterfaceWrapper) GetNotificationStatus(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.GetNotificationStatus(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
 
 // ListTasks operation middleware
 func (siw *ServerInterfaceWrapper) ListTasks(c fiber.Ctx) error {
@@ -386,5 +456,7 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	router.Post(options.BaseURL+"/v1/tasks/:taskId/complete", wrapper.CompleteTask)
 
 	router.Post(options.BaseURL+"/v1/tasks/:taskId/reopen", wrapper.ReopenTask)
+
+	router.Get(options.BaseURL+"/v1/notifications/status", wrapper.GetNotificationStatus)
 
 }
