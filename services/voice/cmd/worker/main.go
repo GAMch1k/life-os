@@ -9,7 +9,10 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"regexp"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -147,12 +150,24 @@ func expired(ctx context.Context, q *store.Queries) []store.AudioJob {
 	}
 	return jobs
 }
+
+// errNoSpeech is Whisper hearing no speech in a recording: an outcome, not
+// a failure, so the job ends at once with noSpeechSummary instead of being
+// retried.
+var errNoSpeech = errors.New("no speech in the recording")
+
+const noSpeechSummary = "No speech was heard in the recording. Record it again."
+
 func fail(ctx context.Context, q *store.Queries, job store.AudioJob, cfg serviceconfig.Config, workerID string, cause error, emitter *activity.Emitter) error {
 	status := "retryable"
 	if int(job.AttemptCount) >= cfg.WorkerMaxAttempts {
 		status = "failed"
 	}
 	message := cause.Error()
+	noSpeech := errors.Is(cause, errNoSpeech)
+	if noSpeech {
+		status, message = "failed", noSpeechSummary
+	}
 	backoff := time.Duration(cfg.WorkerRetryBackoffSeconds) * time.Second * time.Duration(job.AttemptCount)
 	retryAt := time.Now().Add(backoff)
 	if _, err := q.RetryAudioJob(ctx, store.RetryAudioJobParams{ID: job.ID, Status: status, ErrorSummary: &message, AvailableAt: pgtype.Timestamptz{Time: retryAt, Valid: true}, LeaseOwner: &workerID}); err != nil {
@@ -173,6 +188,10 @@ func fail(ctx context.Context, q *store.Queries, job store.AudioJob, cfg service
 	if status == "failed" {
 		event.Type, event.Outcome, event.Summary = "voice.job.failed", activity.Failed, "Transcription failed: "+activity.Preview(message, 160)
 		delete(event.Data, "retryAt")
+	}
+	if noSpeech {
+		event.Summary = "No speech was heard in the recording"
+		event.Data["reason"] = "no_speech"
 	}
 	event.ID = activity.EventID(event.Type, jobID, fmt.Sprint(job.AttemptCount))
 	emitter.Emit(ctx, event)
@@ -202,12 +221,29 @@ func transcribe(ctx context.Context, c *http.Client, base, path, contentType str
 		return "", fmt.Errorf("whisper returned %s: %s", resp.Status, string(raw))
 	}
 	var out struct {
-		Transcript string `json:"transcript"`
+		Transcript *string `json:"transcript"`
 	}
-	if err := json.Unmarshal(raw, &out); err != nil || out.Transcript == "" {
+	if err := json.Unmarshal(raw, &out); err != nil || out.Transcript == nil {
 		return "", fmt.Errorf("invalid whisper response")
 	}
-	return out.Transcript, nil
+	transcript := strings.TrimSpace(*out.Transcript)
+	if !spoken(transcript) {
+		return "", errNoSpeech
+	}
+	return transcript, nil
+}
+
+// nonSpeech matches Whisper's annotations for what is not speech, such as
+// "[BLANK_AUDIO]", "[ Silence ]", "(music)", or "*silence*".
+var nonSpeech = regexp.MustCompile(`\[[^\]]*\]|\([^)]*\)|\*[^*]*\*`)
+
+// spoken reports whether a transcript holds any words once Whisper's
+// non-speech annotations are left out. A transcript with words is kept as
+// it is, annotations included.
+func spoken(transcript string) bool {
+	return strings.IndexFunc(nonSpeech.ReplaceAllString(transcript, ""), func(r rune) bool {
+		return unicode.IsLetter(r) || unicode.IsDigit(r)
+	}) >= 0
 }
 
 // captureMetadata is the Inbox item's source metadata: the upload's own (for

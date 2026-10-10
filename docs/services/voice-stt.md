@@ -1,6 +1,6 @@
 # Voice and STT
 
-Voice ingestion is an asynchronous workflow: `POST /v1/audio-jobs` stores an audio object and returns a `202` job immediately; clients poll `GET /v1/audio-jobs/{jobId}`. A worker claims queued/retryable jobs, invokes self-hosted `whisper.cpp`, persists the transcript, and creates exactly one Inbox item before marking the job `succeeded`.
+Voice ingestion is an asynchronous workflow: `POST /v1/audio-jobs` stores an audio object and returns a `202` job immediately; clients poll `GET /v1/audio-jobs/{jobId}`. A worker claims queued/retryable jobs, invokes self-hosted `whisper.cpp`, persists the transcript, and creates exactly one Inbox item before marking the job `succeeded`. A recording without speech (an empty transcript, or only Whisper's non-speech annotations such as `[BLANK_AUDIO]`, `[ Silence ]`, or `(music)`) is an outcome, not a Whisper failure: the job is `failed` at once, without retries and without an Inbox item, with the error summary "No speech was heard in the recording. Record it again." and a `voice.job.failed` Activity event ("No speech was heard in the recording", `data.reason: no_speech`), so such recordings stay trackable. A transcript with words keeps its annotations. A malformed Whisper answer or an unreachable Whisper stays a retryable failure.
 
 Audio ingress accepts the containers browsers record, recognized by sniffing the leading bytes; the declared MIME type and file name are not trusted:
 
