@@ -231,7 +231,7 @@ func (w *Worker) emitDelivered(ctx context.Context, row store.Notification, d st
 		Summary:       fmt.Sprintf("Notification “%s” delivered via %s", activity.Preview(row.Title, 120), d.Channel),
 		Data: map[string]any{
 			"channel": d.Channel, "attempts": d.Attempts,
-			"importance": row.Importance, "category": row.Category, "source": row.Source,
+			"importance": row.Importance, "category": row.Category, "source": row.Source, "title": row.Title,
 		},
 	})
 }
@@ -255,7 +255,7 @@ func (w *Worker) emitFailed(ctx context.Context, row store.Notification, d store
 		Summary:       fmt.Sprintf("Notification “%s” not delivered via %s", activity.Preview(row.Title, 120), d.Channel),
 		Data: map[string]any{
 			"channel": d.Channel, "attempts": d.Attempts, "error": lastError,
-			"importance": row.Importance, "category": row.Category, "source": row.Source,
+			"importance": row.Importance, "category": row.Category, "source": row.Source, "title": row.Title,
 		},
 	})
 }

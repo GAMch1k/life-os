@@ -34,6 +34,7 @@ export const SOURCES: readonly {
   },
   { value: "tasks", label: "Tasks" },
   { value: "calendar", label: "Calendar", description: CALENDAR_DESCRIPTION },
+  { value: "notifications", label: "Notifications" },
 ];
 
 export const SUBJECT_TYPES = [
@@ -45,6 +46,7 @@ export const SUBJECT_TYPES = [
   { value: "calendar_event", label: "Calendar event" },
   { value: "calendar_source", label: "Calendar source" },
   { value: "google_connection", label: "Google connection" },
+  { value: "notification", label: "Notification" },
 ] as const;
 
 const EVENT_LABELS: Record<string, string> = {
@@ -79,6 +81,9 @@ const EVENT_LABELS: Record<string, string> = {
   "calendar.google.connected": "Google Calendar connected",
   "calendar.google.disconnected": "Google Calendar disconnected",
   "calendar.google.expired": "Google Calendar access expired",
+  "notification.created": "Notification created",
+  "notification.delivered": "Notification delivered",
+  "notification.delivery_failed": "Notification delivery failed",
 };
 
 export const EVENT_TYPES = Object.keys(EVENT_LABELS);
@@ -144,6 +149,11 @@ export function eventLabel(event: Pick<ActivityEvent, "type" | "data">) {
   const account = text(event.data?.accountEmail);
   if (event.type.startsWith("calendar.google.") && account) {
     return `${label}: ${account}`;
+  }
+  // A notification by its title, and a delivery by the channel it used.
+  if (event.type.startsWith("notification.") && title) {
+    const channel = text(event.data?.channel);
+    return channel ? `${label}: ${title} (${channel})` : `${label}: ${title}`;
   }
   return label;
 }

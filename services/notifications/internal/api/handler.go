@@ -124,6 +124,7 @@ func (h *Handler) recordCreated(c fiber.Ctx, trace activity.Trace, row store.Not
 		"category":   row.Category,
 		"source":     row.Source,
 		"channels":   h.channels,
+		"title":      row.Title,
 	}
 	if row.Link != nil {
 		data["link"] = *row.Link

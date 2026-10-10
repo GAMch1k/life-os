@@ -93,7 +93,7 @@ Notifications records, through `pkg/activity`, with subject `notification/<id>`:
 
 | Type | Actor | Data |
 | --- | --- | --- |
-| `notification.created` | The sender (for example `system:calendar`) | `importance`, `category`, `source`, `link`, `channels`. The title is in the summary. Never the body. |
+| `notification.created` | The sender (for example `system:calendar`) | `title`, `importance`, `category`, `source`, `link`, `channels`; the title is also in the summary. Never the body. |
 | `notification.delivered` | `system:notifications` | `channel`, `attempts`, `importance`, `category`, `source` |
 | `notification.delivery_failed` | `system:notifications` | the same, plus `error` |
 
