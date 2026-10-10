@@ -23,12 +23,16 @@ type CaptureState = "idle" | "recording" | "uploading" | "failed";
  * The Record control. A recording is uploaded to Voice, which transcribes it
  * and creates the Inbox item. `metadata` is added to the upload's
  * `sourceMetadata` (with the browser's timezone), which Voice passes on to
- * that item; `onUploaded` hears when Voice accepted the recording.
+ * that item; `onUploaded` hears when Voice accepted the recording. Leaving
+ * mid-recording sends what was recorded, unless `dropOnLeave` (a Human
+ * Review edit, where leaving means Cancel).
  */
 export function VoiceCapture({
+  dropOnLeave = false,
   metadata,
   onUploaded,
 }: {
+  dropOnLeave?: boolean;
   metadata?: Record<string, unknown>;
   onUploaded?: (job: VoiceJob) => void;
 }) {
@@ -41,15 +45,19 @@ export function VoiceCapture({
   const chunks = useRef<Blob[]>([]);
   const pendingAudio = useRef<Blob | undefined>(undefined);
   const mounted = useRef(false);
+  const drop = useRef(dropOnLeave);
+  useEffect(() => {
+    drop.current = dropOnLeave;
+  }, [dropOnLeave]);
 
   useEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
-      // Leaving mid-recording (another page, or cancelling a Human Review
-      // edit) drops the recording: only Stop sends it. Ending the tracks
-      // would otherwise stop the recorder and upload what it has.
-      if (recorder.current) recorder.current.onstop = null;
+      // Ending the tracks stops the recorder, which uploads what it has, so
+      // a thought recorded on Home is not lost by opening another page. A
+      // cancelled Human Review edit drops it instead.
+      if (drop.current && recorder.current) recorder.current.onstop = null;
       recorder.current?.stream.getTracks().forEach((track) => track.stop());
     };
   }, []);

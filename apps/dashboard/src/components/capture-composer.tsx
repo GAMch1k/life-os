@@ -196,6 +196,7 @@ export function CaptureComposer({
       />
       <div className="flex items-start gap-2">
         <VoiceCapture
+          dropOnLeave={Boolean(onCancel)}
           metadata={metadata}
           onUploaded={
             onCaptured
