@@ -133,7 +133,8 @@ func (h *Handler) ListSources(c fiber.Ctx) error {
 
 func (h *Handler) GetSource(c fiber.Ctx, id types.UUID) error {
 	row, err := h.queries.GetSource(c.Context(), pgUUID(id))
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, pgx.ErrNoRows) || err == nil && row.Kind != string(generated.CalendarSourceKindIcs) {
+		// A synced Google calendar is managed under /v1/google/calendars.
 		return sourceNotFound()
 	}
 	if err != nil {
@@ -257,7 +258,7 @@ func (h *Handler) UpdateSource(c fiber.Ctx, id types.UUID) error {
 	}
 	for range updateAttempts {
 		current, err := h.queries.GetSource(c.Context(), pgUUID(id))
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, pgx.ErrNoRows) || err == nil && current.Kind != string(generated.CalendarSourceKindIcs) {
 			return sourceNotFound()
 		}
 		if err != nil {
@@ -330,6 +331,13 @@ func (h *Handler) DeleteSource(c fiber.Ctx, id types.UUID) error {
 
 // RefreshSource runs a refresh now and returns the source with its outcome.
 func (h *Handler) RefreshSource(c fiber.Ctx, id types.UUID) error {
+	current, err := h.queries.GetSource(c.Context(), pgUUID(id))
+	if errors.Is(err, pgx.ErrNoRows) || err == nil && current.Kind != string(generated.CalendarSourceKindIcs) {
+		return sourceNotFound() // a synced Google calendar syncs through /v1/google/calendars
+	}
+	if err != nil {
+		return internal(err)
+	}
 	if h.refresher == nil {
 		return internal(errors.New("source refresh is not configured"))
 	}

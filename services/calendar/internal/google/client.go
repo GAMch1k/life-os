@@ -62,6 +62,8 @@ type API interface {
 	Revoke(ctx context.Context, token string) error
 	// CalendarList reads every calendar in the account's list.
 	CalendarList(ctx context.Context, accessToken string) ([]CalendarEntry, error)
+	// Events reads one page of a calendar's events (see Client.Events).
+	Events(ctx context.Context, accessToken, calendarID string, query EventsQuery) (EventsPage, error)
 }
 
 // OAuthError is a refusal from Google's OAuth endpoints, such as
