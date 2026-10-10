@@ -46,7 +46,7 @@ A source has a `name` (the label shown with its events, such as "ZAW"), the feed
 
 **Failures** keep the last good data: an unreachable feed, an HTTP error, a response that is not a complete iCalendar document (an HTML error page, a cut-off download), or an empty calendar where there were upcoming events records `lastOutcome: failed` and `lastError`, and the source is retried after 15 minutes, doubling up to 6 hours but never later than the next daily slot. The next good refresh resets `consecutiveFailures`.
 
-**Activity.** Each refresh records `calendar.source.refreshed` or `calendar.source.refresh_failed` in Activity (when `ACTIVITY_SERVICE_URL` is set), attributed to the source as `system:ics-<name>` (for example `system:ics-zaw`), with the counts or the error. The feed URL, which can carry personal data such as a street, is never put in Activity, logs, or `lastError`.
+**Activity.** Each refresh records `calendar.source.refreshed` or `calendar.source.refresh_failed` in Activity (when `ACTIVITY_SERVICE_URL` is set), attributed to the source as `system:ics-<name>` (for example `system:ics-zaw`), with the counts or the error. The feed URL, which can carry personal data such as a street, is never put in Activity, logs, or `lastError`. It is one summary event per refresh, also when nothing changed (the feed answered 304 or its events were all unchanged), so the Event Log shows that the daily refresh ran; the events a refresh imports, changes, cancels, or restores get no events of their own (see [Activity](#activity)). The Dashboard labels it with what changed ("Source refreshed: ZAW — 3 added, 1 cancelled") and shows each source's refresh health on Status.
 
 **ICS normalization.** Parsing uses [golang-ical](https://github.com/arran4/golang-ical) for the document structure and [rrule-go](https://github.com/teambition/rrule-go) for recurrence rules:
 
@@ -59,6 +59,22 @@ A source has a `name` (the label shown with its events, such as "ZAW"), the feed
 **Safe fetching.** Feeds are downloaded only over https and only from public addresses: after DNS resolution, every connection to a loopback, private (including the Docker networks), link-local (including cloud metadata at 169.254.169.254), unique-local, or other special-purpose address is refused, and every redirect (at most 5) is checked again. Downloads are capped (`CALENDAR_ICS_MAX_BYTES`, default 5 MiB, also after decompression) and time-limited (`CALENDAR_ICS_TIMEOUT_SECONDS`, default 30), and never go through an environment proxy. `CALENDAR_ICS_ALLOW_PRIVATE_URLS=true` lifts the address and https rules for local development and verification against a local feed only.
 
 **Deleting** a source deletes the events imported from it; set `enabled: false` instead to stop refreshing and keep them.
+
+## Activity
+
+When `ACTIVITY_SERVICE_URL` is set, every event change made through the API records exactly one Activity event once it is stored, with subject `calendar_event` and the event's id. It is attributed to the request's `X-Life-OS-Actor` (`user` for the owner in the Dashboard, `agent:<name>` for the AI through MCP, `dev:<name>` for development tools) and carries the request's `X-Correlation-ID` and `X-Causation-ID`, so a change the agent makes appears in its capture's workflow in the Event Log, after the MCP action that caused it.
+
+| Type | Recorded for |
+| --- | --- |
+| `calendar.event.created` | `POST /v1/events`. Its id is derived from the event's, so an idempotent replay is recorded once. |
+| `calendar.event.rescheduled` | A `PATCH` that changes the start, the end, or all-day (with whatever else it changes, unless it also changes the status). |
+| `calendar.event.cancelled` / `calendar.event.restored` | A `PATCH` that changes `status`. |
+| `calendar.event.updated` | Any other `PATCH` that changes something: title, notes, location, time zone, repetition, or reminders (also an imported event's reminders). |
+| `calendar.event.deleted` | `DELETE /v1/events/{id}`. |
+
+A `PATCH` that changes nothing, and any refused request (invalid, 404, 409 `managed_by_source`), records nothing. `data` holds the `title`, the times (`startAt`/`endAt` or `startDate`/`endDate`), `allDay`, `timeZone`, `status`, `sourceKind` and `sourceId`, and `recurrence`; an update adds `changes` (the changed fields) and, when renamed, `previousTitle`; a reschedule adds `previous` (the old times). Notes, location, and reminders are not copied into Activity. The summary is a sentence with times in the owner's timezone, such as "Event “Dentist” moved to Thu 19 Nov 2026, 09:00 CET".
+
+Source refreshes record one summary event per refresh (see [Sources](#sources-ics-feeds)), not one per imported event: a first import brings dozens of events, and the refresh's counts say what changed.
 
 ## API
 
@@ -87,7 +103,7 @@ Every write needs `X-Life-OS-Actor` (see [API overview](../api/overview.md)). In
 | --- | --- | --- |
 | `LIFE_OS_TIMEZONE` | `UTC` | The owner's timezone (all-day matching, recurrence wall clock, refresh schedule, floating ICS times). |
 | `CALENDAR_SOURCE_REFRESH_AT` | `04:30` | Daily source refresh time, HH:MM owner-local (compose passes `LIFE_OS_CALENDAR_SOURCE_REFRESH_AT`). |
-| `ACTIVITY_SERVICE_URL` | empty | Activity service for refresh outcomes; empty records nothing. |
+| `ACTIVITY_SERVICE_URL` | empty | Activity service for event changes and refresh outcomes; empty records nothing. |
 | `CALENDAR_ICS_MAX_BYTES` | `5242880` | Largest feed download. |
 | `CALENDAR_ICS_TIMEOUT_SECONDS` | `30` | Time limit of one download. |
 | `CALENDAR_ICS_ALLOW_PRIVATE_URLS` | `false` | Development only: allow http and private/loopback feed addresses. |
