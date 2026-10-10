@@ -4,7 +4,12 @@ import { ACTOR_HEADER, PUBLIC_ACTOR } from "@/lib/api/actor";
 
 type RouteContext = { params: Promise<{ path: string[] }> };
 
-const FORWARDED_REQUEST_HEADERS = ["accept", "content-type"] as const;
+// Idempotency-Key makes a retried Finance write return the first result.
+const FORWARDED_REQUEST_HEADERS = [
+  "accept",
+  "content-type",
+  "idempotency-key",
+] as const;
 const FORWARDED_RESPONSE_HEADERS = ["content-type", "location"] as const;
 
 export async function proxyServiceRequest(

@@ -8,7 +8,7 @@
 // shadcn CLI's own output; Life OS's choices live here.
 
 import { ChevronDownIcon } from "lucide-react";
-import { type ComponentProps, useState, useSyncExternalStore } from "react";
+import { type ComponentProps, useState } from "react";
 import { enGB } from "react-day-picker/locale/en-GB";
 
 import { Button } from "@/components/ui/button";
@@ -25,23 +25,8 @@ import {
   pickerLabel,
   pickerRange,
 } from "@/lib/date-picker";
-import { DATE_LOCALE } from "@/lib/time-zone";
+import { useBrowserLocale } from "@/lib/use-browser-locale";
 import { cn } from "@/lib/utils";
-
-const noSubscription = () => () => {};
-
-/**
- * The browser's language for the button's date. The server render (and the
- * hydration pass) uses DATE_LOCALE, so a server-rendered picker hydrates
- * without a mismatch and then shows the browser's format.
- */
-function useBrowserLocale() {
-  return useSyncExternalStore(
-    noSubscription,
-    () => navigator.language || DATE_LOCALE,
-    () => DATE_LOCALE,
-  );
-}
 
 export type DatePickerProps = {
   /**
