@@ -54,6 +54,9 @@ const (
 	EventSourceRemoved       = "calendar.source.removed"
 )
 
+// errNotSaved: a listing was read but could not be written.
+var errNotSaved = errors.New("the events read from Google could not be saved in Calendar")
+
 var (
 	ErrSyncDisabled   = errors.New("this calendar does not sync; turn syncing on for it first")
 	ErrSyncInProgress = errors.New("this calendar is syncing right now; try again shortly")
@@ -152,7 +155,10 @@ func (s *Syncer) SyncDue(ctx context.Context) {
 		}
 		return
 	}
-	due, err := s.service.queries.ListDueGoogleCalendars(ctx, store.ListDueGoogleCalendarsParams{ConnectionID: connection.ID, Now: timestamptz(s.now().UTC())})
+	// A calendar synced at the last tick is due an interval after that sync
+	// started, a moment after this tick: dueSlack counts it due now, so
+	// each calendar syncs every interval rather than every other tick.
+	due, err := s.service.queries.ListDueGoogleCalendars(ctx, store.ListDueGoogleCalendarsParams{ConnectionID: connection.ID, Now: timestamptz(s.now().UTC().Add(dueSlack(s.interval)))})
 	if err != nil {
 		if ctx.Err() == nil {
 			s.logger.Warn("Google calendars due for sync not listed", "error", err)
@@ -181,7 +187,14 @@ func (s *Syncer) SyncDue(ctx context.Context) {
 // with backoff) while the events from the last good sync stay. The sync
 // outlives a cancelled caller.
 func (s *Syncer) Sync(ctx context.Context, id googleuuid.UUID, trigger SyncTrigger) (store.GoogleCalendar, error) {
-	result, err, _ := s.group.Do(id.String(), func() (any, error) {
+	// A full resync does not share a running incremental sync: it then
+	// finds the calendar syncing (ErrSyncInProgress) and, having dropped
+	// the sync token, makes that sync's result give way to a full listing.
+	key := id.String()
+	if trigger.Full {
+		key += "/full"
+	}
+	result, err, _ := s.group.Do(key, func() (any, error) {
 		work, cancel := context.WithTimeout(context.WithoutCancel(ctx), syncLease)
 		defer cancel()
 		return s.sync(work, id, trigger)
@@ -232,10 +245,18 @@ func (s *Syncer) sync(ctx context.Context, id googleuuid.UUID, trigger SyncTrigg
 		return s.fail(ctx, claimed, source, err, trigger, now)
 	}
 	updated, counts, err := s.store(ctx, claimed, found, now)
-	if err != nil {
+	switch {
+	case errors.Is(err, ErrSyncSuperseded), errors.Is(err, ErrCalendarNotFound):
 		due := now
 		s.release(claimed.ID, &due)
 		return store.GoogleCalendar{}, err
+	case err != nil:
+		// The listing could not be saved (the sync token stays, so the
+		// next attempt lists the same changes): a failure like Google's,
+		// with backoff, so a lasting fault neither hammers Google nor
+		// goes unseen.
+		s.logger.Error("Google calendar sync not saved", "calendar", id, "error", err)
+		return s.fail(ctx, claimed, source, errNotSaved, trigger, now)
 	}
 	// The first sync, a sync that changed events, and the first good one
 	// after failures are recorded; a sync that changed nothing is not.
@@ -427,9 +448,17 @@ func (s *Syncer) store(ctx context.Context, claimed store.GoogleCalendar, found 
 		if zone == nil {
 			zone = s.owner
 		}
-		m := mapper{owner: s.owner, zone: zone, now: now, windowStart: windowStart.Time}
+		// Derived from the full listing's window start, but never more than
+		// SyncLookback back: incremental syncs keep the window start for
+		// months, and expanded occurrences would pile up. Older history
+		// stays as it is.
+		derivedFrom := windowStart.Time
+		if floor := now.Add(-SyncLookback); derivedFrom.Before(floor) {
+			derivedFrom = floor
+		}
+		m := mapper{owner: s.owner, zone: zone, now: now, windowStart: derivedFrom}
 		items, skipped := m.derive(events)
-		result, err := sources.Reconcile(ctx, q, source, items, sources.SyncRules(windowStart.Time, s.owner), now)
+		result, err := sources.Reconcile(ctx, q, source, items, sources.SyncRules(derivedFrom, s.owner), now)
 		if err != nil {
 			return store.GoogleCalendar{}, nil, err
 		}
@@ -535,6 +564,13 @@ func (s *Syncer) fail(ctx context.Context, calendar store.GoogleCalendar, source
 	updated, err := s.service.queries.FailGoogleCalendarSync(ctx, store.FailGoogleCalendarSyncParams{
 		ID: calendar.ID, LastSyncError: &message, NextSyncAt: timestamptz(now.Add(SyncBackoff(s.interval, failures))),
 	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Switched off (or disconnected) meanwhile: nothing to record, and
+		// a source this sync added goes again.
+		s.release(calendar.ID, nil)
+		s.dropSourceIfOff(ctx, calendar.ID)
+		return store.GoogleCalendar{}, ErrSyncSuperseded
+	}
 	if err != nil {
 		s.release(calendar.ID, nil)
 		return store.GoogleCalendar{}, err
@@ -543,6 +579,36 @@ func (s *Syncer) fail(ctx context.Context, calendar store.GoogleCalendar, source
 		s.recordFailed(ctx, updated, source, message, trigger, now)
 	}
 	return updated, nil
+}
+
+// dueSlack is how early SyncDue takes a calendar as due: a tenth of the
+// interval, at most 30 seconds.
+func dueSlack(interval time.Duration) time.Duration {
+	return min(interval/10, 30*time.Second)
+}
+
+// dropSourceIfOff deletes the source of a calendar that no longer syncs.
+func (s *Syncer) dropSourceIfOff(ctx context.Context, id pgtype.UUID) {
+	err := s.service.inTx(ctx, func(q *store.Queries) error {
+		current, err := q.LockGoogleCalendar(ctx, id)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil || current.SyncEnabled {
+			return err
+		}
+		source, err := q.GetGoogleSource(ctx, id)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		return q.DeleteGoogleSource(ctx, source.ID)
+	})
+	if err != nil {
+		s.logger.Warn("source of a calendar no longer syncing not removed", "calendar", googleuuid.UUID(id.Bytes), "error", err)
+	}
 }
 
 // SyncBackoff is the pause after failures failed syncs in a row: the
@@ -571,6 +637,8 @@ func syncErrorMessage(err error) string {
 		return "Google no longer has this calendar, or this account cannot see it; refresh the calendar list"
 	case errors.As(err, &apiErr), errors.As(err, &oauth), errors.As(err, &unavailable):
 		return err.Error()
+	case errors.Is(err, errNotSaved):
+		return errNotSaved.Error()
 	case errors.Is(err, ErrUnreadableToken):
 		return "the stored Google token cannot be decrypted with LIFE_OS_GOOGLE_TOKEN_KEY (was the key changed?); reconnect Google in Calendar"
 	}

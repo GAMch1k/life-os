@@ -277,3 +277,20 @@ func TestOrphanInstancesAndUnreadableEvents(t *testing.T) {
 		t.Fatalf("items = %+v, skipped %d", items, skipped)
 	}
 }
+
+func TestUnreadableInstancesAreCounted(t *testing.T) {
+	master := Event{ID: "standup", Summary: "Standup", Start: timed("2026-10-12T09:00:00+02:00", "Europe/Berlin"), End: timed("2026-10-12T09:15:00+02:00", "Europe/Berlin"),
+		Recurrence: []string{"RRULE:FREQ=WEEKLY"}}
+	broken := Event{ID: "standup_20261019T070000Z", RecurringEventID: "standup", OriginalStartTime: timed("2026-10-19T09:00:00+02:00", "Europe/Berlin"), Summary: "Moved"}
+	items, skipped := testMapper().derive([]Event{master, broken})
+	if len(items) != 1 || items[0].Recurrence == nil || len(items[0].Exceptions) != 0 || skipped != 1 {
+		t.Fatalf("fitting series: %+v, skipped %d", items, skipped)
+	}
+	master.Recurrence = []string{"RRULE:FREQ=MONTHLY;BYDAY=3MO"}
+	broken.OriginalStartTime = timed("2026-10-19T09:00:00+02:00", "Europe/Berlin")
+	items, skipped = testMapper().derive([]Event{master, broken})
+	october := byUID(items)["standup_20261019T070000Z"]
+	if skipped != 1 || october.Title != "Standup" || !october.StartAt.Equal(time.Date(2026, 10, 19, 7, 0, 0, 0, time.UTC)) {
+		t.Fatalf("expanded series: %+v, skipped %d", october, skipped)
+	}
+}

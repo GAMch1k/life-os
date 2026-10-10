@@ -91,7 +91,8 @@ func (m mapper) derive(events []Event) ([]sources.Item, int) {
 			add([]sources.Item{item})
 			continue
 		}
-		found, err := m.series(master, group)
+		found, unread, err := m.series(master, group)
+		skipped += unread
 		if err != nil {
 			skipped++
 			continue
@@ -249,15 +250,17 @@ func relativeReminders(list []Reminder) []sources.Reminder {
 	return out
 }
 
-// series maps a recurring event and its changed or cancelled instances.
-func (m mapper) series(master Event, instances []Event) ([]sources.Item, error) {
+// series maps a recurring event and its changed or cancelled instances,
+// and counts the changed instances it could not read (their occurrences
+// keep the series' values).
+func (m mapper) series(master Event, instances []Event) ([]sources.Item, int, error) {
 	when, err := m.span(master)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	base := m.itemAt(master, master.ID, when)
-	if items, ok := m.fit(master, base, when, instances); ok {
-		return items, nil
+	if items, unread, ok := m.fit(master, base, when, instances); ok {
+		return items, unread, nil
 	}
 	return m.expand(master, base, when, instances)
 }
@@ -275,7 +278,7 @@ const maxSeriesCount = 1000
 // BYMONTH that only repeats the start's day or month is accepted. EXDATEs
 // and the instances become occurrence exceptions. ok is false when the
 // rule or an instance does not fit; the series is then expanded.
-func (m mapper) fit(master Event, base sources.Item, when span, instances []Event) ([]sources.Item, bool) {
+func (m mapper) fit(master Event, base sources.Item, when span, instances []Event) ([]sources.Item, int, bool) {
 	var rules, exdates []string
 	for _, line := range master.Recurrence {
 		switch propertyName(line) {
@@ -284,22 +287,22 @@ func (m mapper) fit(master Event, base sources.Item, when span, instances []Even
 		case "EXDATE":
 			exdates = append(exdates, line)
 		default:
-			return nil, false // RDATE, EXRULE
+			return nil, 0, false // RDATE, EXRULE
 		}
 	}
 	if len(rules) != 1 {
-		return nil, false
+		return nil, 0, false
 	}
 	rule, err := ics.ParseRule(cleanLine(rules[0]))
 	if err != nil {
-		return nil, false
+		return nil, 0, false
 	}
 	option := rule.Option
 	frequencies := map[rrule.Frequency]string{rrule.DAILY: "daily", rrule.WEEKLY: "weekly", rrule.MONTHLY: "monthly", rrule.YEARLY: "yearly"}
 	frequency, known := frequencies[option.Freq]
 	if !known || len(option.Bysetpos) > 0 || len(option.Byyearday) > 0 || len(option.Byweekno) > 0 || len(option.Byhour) > 0 ||
 		len(option.Byminute) > 0 || len(option.Bysecond) > 0 || len(option.Byeaster) > 0 {
-		return nil, false
+		return nil, 0, false
 	}
 	wall, weekday := when.first, when.first.Weekday()
 	if !when.allDay {
@@ -309,43 +312,43 @@ func (m mapper) fit(master Event, base sources.Item, when span, instances []Even
 	series := &sources.Recurrence{Frequency: frequency, Interval: max(option.Interval, 1), Count: option.Count}
 	if len(option.Byweekday) > 0 {
 		if option.Freq != rrule.WEEKLY {
-			return nil, false // such as monthly on the second Tuesday
+			return nil, 0, false // such as monthly on the second Tuesday
 		}
 		var codes []string
 		for _, day := range option.Byweekday {
 			if day.N() != 0 {
-				return nil, false
+				return nil, 0, false
 			}
 			codes = append(codes, weekdayCodes[day.Day()])
 		}
 		codes, _ = recurrence.NormalizeWeekdays(codes)
 		if !slices.Contains(codes, recurrence.WeekdayCode(weekday)) {
-			return nil, false
+			return nil, 0, false
 		}
 		if len(codes) > 1 && series.Interval > 1 && option.Wkst != rrule.MO {
-			return nil, false // weeks starting on another day group the days differently
+			return nil, 0, false // weeks starting on another day group the days differently
 		}
 		if len(codes) > 1 || codes[0] != recurrence.WeekdayCode(weekday) {
 			series.ByWeekday = codes
 		}
 	}
 	if len(option.Bymonthday) > 0 && (option.Freq != rrule.MONTHLY && option.Freq != rrule.YEARLY || len(option.Bymonthday) != 1 || option.Bymonthday[0] != wall.Day()) {
-		return nil, false
+		return nil, 0, false
 	}
 	if len(option.Bymonth) > 0 && (option.Freq != rrule.YEARLY || len(option.Bymonth) != 1 || option.Bymonth[0] != int(wall.Month())) {
-		return nil, false
+		return nil, 0, false
 	}
 	if option.Freq == rrule.YEARLY && len(option.Bymonthday) > 0 && len(option.Bymonth) == 0 {
-		return nil, false // the day in every month
+		return nil, 0, false // the day in every month
 	}
 	if series.Count > maxSeriesCount || series.Count > 0 && (rule.Until != nil || rule.UntilWall != nil) {
-		return nil, false
+		return nil, 0, false
 	}
 	switch {
 	case when.allDay && (rule.Until != nil || rule.UntilWall != nil):
 		last := m.untilDate(rule)
 		if last.Before(when.first) {
-			return nil, false
+			return nil, 0, false
 		}
 		// The series compares its dates with until's date in the owner's
 		// timezone: noon there names that date.
@@ -359,11 +362,11 @@ func (m mapper) fit(master Event, base sources.Item, when span, instances []Even
 		series.Until = &until
 	}
 	if series.Until != nil && !when.allDay && series.Until.Before(when.start) {
-		return nil, false
+		return nil, 0, false
 	}
 	expansion, err := m.recurrenceSeries(series, base, when, wall)
 	if err != nil {
-		return nil, false
+		return nil, 0, false
 	}
 	exceptions := map[string]sources.Exception{}
 	for _, line := range exdates {
@@ -376,7 +379,7 @@ func (m mapper) fit(master Event, base sources.Item, when span, instances []Even
 	for _, instance := range instances {
 		key, ok := instanceKey(instance, when)
 		if !ok {
-			return nil, false
+			return nil, 0, false
 		}
 		if instance.Cancelled() {
 			exceptions[key] = sources.Exception{Cancelled: true}
@@ -391,14 +394,16 @@ func (m mapper) fit(master Event, base sources.Item, when span, instances []Even
 	}
 	occurs := occurrenceKeys(expansion, when.allDay, wanted)
 	var standalone []sources.Item
+	unread := 0
 	for _, instance := range changed {
 		key := keys[instance.ID]
 		own, err := m.item(instance, instance.ID)
 		if err != nil {
+			unread++
 			continue
 		}
 		if own.AllDay != when.allDay {
-			return nil, false // an occurrence cannot switch between timed and all-day
+			return nil, 0, false // an occurrence cannot switch between timed and all-day
 		}
 		if !occurs[key] {
 			// Not an occurrence of the series as Calendar repeats it: keep
@@ -417,7 +422,7 @@ func (m mapper) fit(master Event, base sources.Item, when span, instances []Even
 	if len(exceptions) > 0 {
 		item.Exceptions = exceptions
 	}
-	return append([]sources.Item{item}, standalone...), true
+	return append([]sources.Item{item}, standalone...), unread, true
 }
 
 // untilDate is an all-day series' last date: a date UNTIL as is, a UTC one
@@ -622,14 +627,14 @@ func exdateKeys(line string, when span, wall time.Time) []string {
 // (any RRULE, RDATE, and EXDATE). Each is keyed as Google names the instance
 // ("<id>_20261012T070000Z", or "<id>_20261012" all-day); a changed instance
 // replaces its occurrence and a cancelled one removes it.
-func (m mapper) expand(master Event, base sources.Item, when span, instances []Event) ([]sources.Item, error) {
+func (m mapper) expand(master Event, base sources.Item, when span, instances []Event) ([]sources.Item, int, error) {
 	lookback := m.now.Sub(m.windowStart)
 	if m.windowStart.IsZero() || lookback <= 0 {
 		lookback = ics.DefaultLookback
 	}
 	feed, err := ics.Parse(vevent(when, master.Recurrence), ics.Options{Owner: when.zoneOr(m.owner), Now: m.now, Lookback: lookback, Horizon: ExpansionHorizon})
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	overrides := map[string]Event{}
 	var order []string
@@ -644,11 +649,12 @@ func (m mapper) expand(master Event, base sources.Item, when span, instances []E
 		overrides[key] = instance
 	}
 	var items []sources.Item
+	unread := 0
 	used := map[string]bool{}
 	for _, occurrence := range feed.Items {
 		_, key, recurring := strings.Cut(occurrence.ExternalUID, "#")
 		if !recurring {
-			return []sources.Item{base}, nil // no RRULE or RDATE after all
+			return []sources.Item{base}, 0, nil // no RRULE or RDATE after all
 		}
 		uid := master.ID + "_" + key
 		if instance, ok := overrides[key]; ok {
@@ -658,8 +664,9 @@ func (m mapper) expand(master Event, base sources.Item, when span, instances []E
 			}
 			if own, err := m.item(instance, uid); err == nil {
 				items = append(items, own)
+				continue
 			}
-			continue
+			unread++ // the occurrence keeps the series' values
 		}
 		item := base
 		item.ExternalUID = uid
@@ -679,9 +686,11 @@ func (m mapper) expand(master Event, base sources.Item, when span, instances []E
 		}
 		if own, err := m.item(instance, master.ID+"_"+key); err == nil {
 			items = append(items, own)
+		} else {
+			unread++
 		}
 	}
-	return items, nil
+	return items, unread, nil
 }
 
 func (s span) zoneOr(fallback *time.Location) *time.Location {

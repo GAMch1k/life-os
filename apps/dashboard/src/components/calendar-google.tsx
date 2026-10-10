@@ -31,7 +31,6 @@ import {
   syncSummary,
   withoutGoogleParam,
 } from "@/lib/google-calendar";
-import { browserTimeZone } from "@/lib/time-zone";
 import { cn } from "@/lib/utils";
 
 /**
@@ -39,8 +38,10 @@ import { cn } from "@/lib/utils";
  * owner's Google account, choose which of its calendars sync (and see how
  * their sync is going), refresh the list, or disconnect. Back from Google's
  * consent page (`/calendar?google=connected`), the dialog opens by itself.
+ * Sync times are shown in timeZone (the Calendar's: the browser's, else
+ * the owner's).
  */
-export function GoogleCalendarControl() {
+export function GoogleCalendarControl({ timeZone }: { timeZone: string }) {
   const justConnected =
     useSearchParams().get(GOOGLE_PARAM) === GOOGLE_CONNECTED;
   const [open, setOpen] = useState(justConnected);
@@ -69,7 +70,7 @@ export function GoogleCalendarControl() {
       </Button>
       <Dialog onOpenChange={change} open={open}>
         <DialogContent className="sm:max-w-lg">
-          <GooglePanel justConnected={connected} />
+          <GooglePanel justConnected={connected} timeZone={timeZone} />
         </DialogContent>
       </Dialog>
     </>
@@ -89,7 +90,13 @@ async function loadGoogle(): Promise<Loaded> {
   return { connection: connection.data, calendars: calendars.data.items };
 }
 
-function GooglePanel({ justConnected }: { justConnected: boolean }) {
+function GooglePanel({
+  justConnected,
+  timeZone,
+}: {
+  justConnected: boolean;
+  timeZone: string;
+}) {
   const [loaded, setLoaded] = useState<Loaded>();
   const [failed, setFailed] = useState(false);
   const [error, setError] = useState<string>();
@@ -345,6 +352,7 @@ function GooglePanel({ justConnected }: { justConnected: boolean }) {
           disabled={pending}
           onChoose={choose}
           saving={saving}
+          timeZone={timeZone}
         />
       ) : null}
 
@@ -418,14 +426,14 @@ function CalendarChoices({
   disabled,
   onChoose,
   saving,
+  timeZone,
 }: {
   calendars: GoogleCalendar[];
   disabled: boolean;
   onChoose: (calendar: GoogleCalendar, syncEnabled: boolean) => void;
   saving?: string;
+  timeZone: string;
 }) {
-  // The list is read in the browser, so its zone is known here.
-  const timeZone = browserTimeZone() ?? "UTC";
   return (
     <fieldset className="grid min-w-0 gap-2">
       <legend className={cn(LABEL, "mb-1")}>Calendars to sync</legend>

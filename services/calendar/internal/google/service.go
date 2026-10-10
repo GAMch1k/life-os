@@ -538,19 +538,19 @@ func (s *Service) SyncCalendar(ctx context.Context, id googleuuid.UUID, full boo
 	return s.syncer.Sync(ctx, id, SyncTrigger{Manual: true, Full: full, Trace: activity.TraceFrom(ctx)})
 }
 
-// Sources are the calendar sources of the synced calendars, by calendar.
-func (s *Service) Sources(ctx context.Context) (map[[16]byte]store.ListGoogleSourcesRow, error) {
-	out := map[[16]byte]store.ListGoogleSourcesRow{}
+// Sources are the ids of the synced calendars' sources, by calendar.
+func (s *Service) Sources(ctx context.Context) (map[[16]byte]pgtype.UUID, error) {
+	out := map[[16]byte]pgtype.UUID{}
 	row, found, err := s.Connection(ctx)
 	if err != nil || !found {
 		return out, err
 	}
-	rows, err := s.queries.ListGoogleSources(ctx, store.ListGoogleSourcesParams{ConnectionID: row.ID})
+	rows, err := s.queries.ListGoogleSourceIDs(ctx, row.ID)
 	if err != nil {
 		return nil, err
 	}
 	for _, source := range rows {
-		out[source.CalendarID.Bytes] = source
+		out[source.GoogleCalendarID.Bytes] = source.ID
 	}
 	return out, nil
 }

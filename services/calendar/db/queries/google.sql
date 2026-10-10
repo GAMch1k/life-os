@@ -48,10 +48,12 @@ SELECT * FROM google_calendars WHERE id = $1;
 
 -- name: UpsertGoogleCalendar :exec
 -- Records a calendar as Google lists it. A new one starts with
--- initial_sync_enabled; a known one keeps the owner's choice, and its
+-- initial_sync_enabled (and is then due for its first sync now); a known
+-- one keeps the owner's choice, and its
 -- updated_at moves only when Google's details changed.
-INSERT INTO google_calendars (connection_id, google_calendar_id, summary, color, access_role, is_primary, sync_enabled)
-VALUES (sqlc.arg(connection_id), sqlc.arg(google_calendar_id), sqlc.arg(summary), sqlc.narg(color), sqlc.arg(access_role), sqlc.arg(is_primary), sqlc.arg(initial_sync_enabled))
+INSERT INTO google_calendars (connection_id, google_calendar_id, summary, color, access_role, is_primary, sync_enabled, next_sync_at)
+VALUES (sqlc.arg(connection_id), sqlc.arg(google_calendar_id), sqlc.arg(summary), sqlc.narg(color), sqlc.arg(access_role), sqlc.arg(is_primary),
+        sqlc.arg(initial_sync_enabled), CASE WHEN sqlc.arg(initial_sync_enabled)::boolean THEN now() END)
 ON CONFLICT (connection_id, google_calendar_id) DO UPDATE
 SET summary = EXCLUDED.summary, color = EXCLUDED.color, access_role = EXCLUDED.access_role,
     is_primary = EXCLUDED.is_primary, updated_at = now()
@@ -128,13 +130,12 @@ WHERE id = sqlc.arg(id)
 RETURNING *;
 
 -- name: FailGoogleCalendarSync :one
--- Records a failed sync (the stored events stay) and releases the lease.
--- drop_token forgets the sync token, so the next sync lists everything.
+-- Records a failed sync (the stored events stay) and releases the lease;
+-- a calendar switched off meanwhile has nothing to record (no row).
 UPDATE google_calendars
 SET syncing_until = NULL, last_sync_error = sqlc.arg(last_sync_error), sync_failures = sync_failures + 1,
-    next_sync_at = sqlc.arg(next_sync_at),
-    sync_token = CASE WHEN sqlc.arg(drop_token)::boolean THEN NULL ELSE sync_token END
-WHERE id = sqlc.arg(id)
+    next_sync_at = sqlc.arg(next_sync_at)
+WHERE id = sqlc.arg(id) AND sync_enabled
 RETURNING *;
 
 -- name: ResyncGoogleCalendar :one
@@ -181,6 +182,13 @@ JOIN google_calendars ON google_calendars.id = calendar_sources.google_calendar_
 WHERE google_calendars.connection_id = sqlc.arg(connection_id)
   AND (sqlc.narg(calendar_ids)::uuid[] IS NULL OR google_calendars.id = ANY (sqlc.narg(calendar_ids)::uuid[]))
 ORDER BY calendar_sources.name, calendar_sources.id;
+
+-- name: ListGoogleSourceIDs :many
+-- The source of each synced calendar of the connection.
+SELECT calendar_sources.id, calendar_sources.google_calendar_id
+FROM calendar_sources
+JOIN google_calendars ON google_calendars.id = calendar_sources.google_calendar_id
+WHERE google_calendars.connection_id = $1;
 
 -- name: ListGoogleCalendarsNotListed :many
 -- The calendars Google no longer lists (DeleteGoogleCalendarsNotListed

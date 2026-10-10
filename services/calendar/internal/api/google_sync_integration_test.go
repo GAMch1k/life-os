@@ -627,3 +627,38 @@ func TestGoogleSyncCalendarNoLongerListedRemovesItsEvents(t *testing.T) {
 		t.Fatalf("after the family calendar left: %q", titles(events))
 	}
 }
+
+func TestGoogleSyncThatCannotBeSavedBacksOff(t *testing.T) {
+	c := newSyncingClient(t, googleDentist)
+	c.syncDue()
+	seen := len(c.recorder.all())
+	// A stored Google event Calendar cannot read: every derivation fails.
+	if _, err := c.pool.Exec(context.Background(), `INSERT INTO google_events (calendar_id, event_id, data) SELECT id, 'broken', '{"id":"broken","start":"x"}' FROM google_calendars WHERE google_calendar_id = $1`, ownerCalendar.ID); err != nil {
+		t.Fatal(err)
+	}
+	c.fake.PutEvent(ownerCalendar.ID, googleTrip)
+	c.clock.Advance(2 * time.Minute)
+	c.syncDue()
+	owner := c.googleCalendar(ownerCalendar.ID)
+	if owner.Sync.State != generated.Failing || owner.Sync.LastError == nil || *owner.Sync.LastError != "the events read from Google could not be saved in Calendar" ||
+		!owner.Sync.NextSyncAt.Equal(fixedNow.Add(4*time.Minute)) {
+		t.Fatalf("after a failed save: %+v", owner.Sync)
+	}
+	expectRecorded(t, c.recorder, &seen, google.EventSourceRefreshFailed)
+	// Not retried before the backoff; the same changes are listed again
+	// once the fault is gone.
+	requests := len(c.fake.Requests(ownerCalendar.ID))
+	c.syncDue()
+	if len(c.fake.Requests(ownerCalendar.ID)) != requests {
+		t.Fatal("retried before the backoff")
+	}
+	if _, err := c.pool.Exec(context.Background(), `DELETE FROM google_events WHERE event_id = 'broken'`); err != nil {
+		t.Fatal(err)
+	}
+	c.clock.Advance(2 * time.Minute)
+	c.syncDue()
+	if trip := c.googleEvents("2026-10-20T00:00:00Z", "2026-10-21T00:00:00Z"); len(trip) != 1 {
+		t.Fatalf("after recovering: %q", titles(trip))
+	}
+	expectRecorded(t, c.recorder, &seen, google.EventSourceRefreshed)
+}

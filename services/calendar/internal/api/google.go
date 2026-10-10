@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"github.com/gofiber/fiber/v3"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/oapi-codegen/runtime/types"
 
 	"github.com/GAMch1k/life-os/pkg/activity"
@@ -170,7 +171,7 @@ func googleConnection(row store.GoogleConnection, configured bool) generated.Goo
 
 // googleCalendar renders a calendar with its sync state; linked are the
 // synced calendars' sources by calendar.
-func (h *Handler) googleCalendar(row store.GoogleCalendar, linked map[[16]byte]store.ListGoogleSourcesRow) generated.GoogleCalendar {
+func (h *Handler) googleCalendar(row store.GoogleCalendar, linked map[[16]byte]pgtype.UUID) generated.GoogleCalendar {
 	sync := generated.GoogleCalendarSync{
 		State: generated.Off, ConsecutiveFailures: int(row.SyncFailures), LastAttemptAt: nullableTime(row.LastSyncAttemptAt),
 		LastSyncedAt: nullableTime(row.LastSyncedAt), LastError: row.LastSyncError,
@@ -187,7 +188,7 @@ func (h *Handler) googleCalendar(row store.GoogleCalendar, linked map[[16]byte]s
 			sync.State = generated.Pending
 		}
 		if source, ok := linked[row.ID.Bytes]; ok {
-			id := uuid(source.ID)
+			id := uuid(source)
 			sync.SourceId = &id
 		}
 	}

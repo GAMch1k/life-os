@@ -51,8 +51,8 @@ type Querier interface {
 	// Deletes a feed and its imported events (ON DELETE CASCADE). A Google
 	// calendar's source goes when its calendar stops syncing.
 	DeleteSource(ctx context.Context, id pgtype.UUID) (int64, error)
-	// Records a failed sync (the stored events stay) and releases the lease.
-	// drop_token forgets the sync token, so the next sync lists everything.
+	// Records a failed sync (the stored events stay) and releases the lease;
+	// a calendar switched off meanwhile has nothing to record (no row).
 	FailGoogleCalendarSync(ctx context.Context, arg FailGoogleCalendarSyncParams) (GoogleCalendar, error)
 	// Records a successful sync and releases the lease.
 	FinishGoogleCalendarSync(ctx context.Context, arg FinishGoogleCalendarSyncParams) (GoogleCalendar, error)
@@ -97,6 +97,8 @@ type Querier interface {
 	// drops them).
 	ListGoogleCalendarsNotListed(ctx context.Context, arg ListGoogleCalendarsNotListedParams) ([]pgtype.UUID, error)
 	ListGoogleEvents(ctx context.Context, calendarID pgtype.UUID) ([]GoogleEvent, error)
+	// The source of each synced calendar of the connection.
+	ListGoogleSourceIDs(ctx context.Context, connectionID pgtype.UUID) ([]ListGoogleSourceIDsRow, error)
 	// The sources of a connection's calendars with how many events each holds,
 	// for recording what disconnecting or unlisting removes. calendar_ids, when
 	// not null, narrows them to those calendars.
@@ -186,7 +188,8 @@ type Querier interface {
 	// Writes one occurrence's changes and skip, replacing any it had.
 	UpsertEventException(ctx context.Context, arg UpsertEventExceptionParams) (EventException, error)
 	// Records a calendar as Google lists it. A new one starts with
-	// initial_sync_enabled; a known one keeps the owner's choice, and its
+	// initial_sync_enabled (and is then due for its first sync now); a known
+	// one keeps the owner's choice, and its
 	// updated_at moves only when Google's details changed.
 	UpsertGoogleCalendar(ctx context.Context, arg UpsertGoogleCalendarParams) error
 	// Stores Google events as sent: items is a JSON array of {"id",
