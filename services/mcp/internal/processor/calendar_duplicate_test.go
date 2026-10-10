@@ -219,7 +219,6 @@ func TestDuplicateChangeCarriesOnlyWhatTheCaptureAdds(t *testing.T) {
 		{"its own place and notes stay", with(start, map[string]any{"location": "Rosa", "description": "Remind me"}), located, map[string]any{}},
 		{"a priority", with(start, map[string]any{"priority": "high"}), timed(), map[string]any{"priority": "high"}},
 		{"the priority it has", with(start, map[string]any{"priority": "medium"}), timed(), map[string]any{}},
-		{"only the reminders it names", with(start, map[string]any{"useDefaultReminders": false}), timed(), map[string]any{"useDefaultReminders": false}},
 		{"Codex's default hour keeps a longer event", with(start, map[string]any{"endAt": "2026-10-11T20:00:00+02:00"}), timed(), map[string]any{}},
 		{"a stated end", with(start, map[string]any{"endAt": "2026-10-11T23:30:00+02:00"}), timed(), map[string]any{"endAt": "2026-10-11T23:30:00+02:00"}},
 		{"the end it has", with(start, map[string]any{"endAt": "2026-10-11T22:00:00+02:00"}), timed(), map[string]any{}},
@@ -451,5 +450,58 @@ func TestAnAIUpdateThatClearsRemindersReplacesThem(t *testing.T) {
 				t.Fatalf("calendar_update input = %#v, want %#v; calls = %#v", got, tc.want, tools.calls)
 			}
 		})
+	}
+}
+
+// The AI never turns default reminders off (BUG-33, smoke step 6): Codex
+// planned useDefaultReminders false unasked for "Add a haircut … remind me
+// a day before and 3 hours before", which would have dropped the owner's
+// 30-minute default. The processor drops the field from every Calendar
+// action and records it.
+func TestTheAINeverTurnsDefaultRemindersOff(t *testing.T) {
+	tools := newCalendarTools("Add a haircut on Sunday at 11:00, remind me a day before and 3 hours before.")
+	runCalendarPlan(t, tools, `{"actions":[{"tool":"calendar_create","arguments":{"title":"Haircut","allDay":false,"startAt":"2026-10-11T11:00:00+02:00","reminders":[{"kind":"relative","minutesBefore":1440},{"kind":"relative","minutesBefore":180}],"useDefaultReminders":false}}],"confidence":0.95}`)
+	input := tools.inputs["calendar_create"]
+	if _, present := input["useDefaultReminders"]; input == nil || present || len(input["reminders"].([]any)) != 2 || !contains(tools.calls, "inbox_resolve") {
+		t.Fatalf("calendar_create input = %#v, calls = %#v", input, tools.calls)
+	}
+	if audit := lastAudit(t, tools); !reflect.DeepEqual(audit["droppedFields"], []string{"useDefaultReminders"}) {
+		t.Fatalf("audit = %#v", audit)
+	}
+
+	// An update keeps its reminders and loses the flag.
+	tools = newCalendarTools("Only remind me 2 hours before the dentist, no default reminders", dentistWithReminder())
+	tools.matches["dentist"] = []string{"event-dentist"}
+	runCalendarPlan(t, tools, `{"actions":[{"tool":"calendar_update","arguments":{"eventQuery":"dentist","reminders":[{"kind":"relative","minutesBefore":120}],"useDefaultReminders":false}}],"confidence":0.95}`)
+	want := map[string]any{"eventId": "event-dentist", "reminders": []any{map[string]any{"kind": "relative", "minutesBefore": 1440.0}, map[string]any{"kind": "relative", "minutesBefore": 120.0}}}
+	if got := tools.inputs["calendar_update"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("calendar_update input = %#v, want %#v", got, want)
+	}
+	if audit := lastAudit(t, tools); !reflect.DeepEqual(audit["droppedFields"], []string{"useDefaultReminders"}) {
+		t.Fatalf("audit = %#v", audit)
+	}
+
+	// An update that only turned the defaults off is the owner's to make.
+	tools = newCalendarTools("No default reminders for the dentist", dentistWithReminder())
+	tools.matches["dentist"] = []string{"event-dentist"}
+	runCalendarPlan(t, tools, `{"actions":[{"tool":"calendar_update","arguments":{"eventQuery":"dentist","useDefaultReminders":false}}],"confidence":0.95}`)
+	if contains(tools.calls, "calendar_update") || tools.review == nil || tools.review["errorSummary"] != defaultRemindersReason {
+		t.Fatalf("calls = %#v, review = %#v", tools.calls, tools.review)
+	}
+	for _, record := range tools.records {
+		if record["status"] == "retryable" || record["status"] == "failed" {
+			t.Fatalf("a dropped field caused a retry: %#v", tools.records)
+		}
+	}
+
+	// And from an action approved in Human Review.
+	tools = newCalendarTools("Remind me 2 hours before my appointment", dentistWithReminder())
+	approvedItem(tools, map[string]any{"tool": "calendar_update", "arguments": map[string]any{"eventQuery": "appointment", "reminders": []any{map[string]any{"kind": "relative", "minutesBefore": 120}}, "useDefaultReminders": false, "taskId": "event-dentist"}})
+	runner := Runner{Planner: fakePlanner{err: errors.New("not planned")}, Tools: tools, Model: "test", TimeZone: berlin(t)}
+	if _, err := runner.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := tools.inputs["calendar_update"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("approved calendar_update input = %#v, want %#v", got, want)
 	}
 }

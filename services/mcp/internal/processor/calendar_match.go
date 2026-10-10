@@ -22,7 +22,7 @@ const eventSearchLimit = 10
 
 // calendarChangeFields are what calendar_update may change; clear names the
 // optional ones to remove.
-var calendarChangeFields = []string{"title", "description", "location", "allDay", "startAt", "endAt", "startDate", "endDate", "timeZone", "reminders", "useDefaultReminders", "priority", "clear"}
+var calendarChangeFields = []string{"title", "description", "location", "allDay", "startAt", "endAt", "startDate", "endDate", "timeZone", "reminders", "priority", "clear"}
 
 // clearableEventFields are the optional event fields an update may remove.
 var clearableEventFields = map[string]bool{"description": true, "location": true, "timeZone": true, "reminders": true}
@@ -30,17 +30,10 @@ var clearableEventFields = map[string]bool{"description": true, "location": true
 // validCalendarChange checks the fields of a calendar_update beyond their
 // names: something must change, clear names only optional fields that are
 // not also set (reminders may be both: the new ones replace the event's
-// own, see addReminders), reminders are objects, useDefaultReminders is a
-// boolean, and priority is low, medium, or high. Calendar validates the
-// values themselves.
+// own, see addReminders), reminders are objects, and priority is low,
+// medium, or high. Calendar validates the values themselves.
 func validCalendarChange(arguments map[string]any) bool {
-	changes := 0
-	for _, field := range calendarChangeFields {
-		if _, ok := arguments[field]; ok {
-			changes++
-		}
-	}
-	if changes == 0 {
+	if !changesEvent(arguments) {
 		return false
 	}
 	if title, present := arguments["title"]; present {
@@ -60,7 +53,43 @@ func validCalendarChange(arguments map[string]any) bool {
 			}
 		}
 	}
-	return validReminders(arguments["reminders"]) && validUseDefault(arguments) && validPriority(arguments)
+	return validReminders(arguments["reminders"]) && validPriority(arguments)
+}
+
+// changesEvent reports whether a calendar_update names something to change.
+func changesEvent(arguments map[string]any) bool {
+	for _, field := range calendarChangeFields {
+		if _, ok := arguments[field]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// aiDroppedFields are what the processor removes from every planned or
+// approved Calendar action before validating it: AI reminders only ever
+// add to the owner's default reminders, and turning the defaults off or on
+// is the owner's, in the Calendar. (The MCP tools keep the parameter for
+// other clients.)
+var aiDroppedFields = map[string][]string{"calendar_create": {"useDefaultReminders"}, "calendar_update": {"useDefaultReminders"}}
+
+// defaultRemindersReason is the Human Review reason for a planned change
+// that only turned an event's default reminders off or on.
+const defaultRemindersReason = "Default reminders are turned off or on in the Calendar."
+
+// dropAIFields removes aiDroppedFields from each action of a plan and
+// returns, per action, the names it removed.
+func dropAIFields(p plan) [][]string {
+	dropped := make([][]string, len(p.Actions))
+	for index, action := range p.Actions {
+		for _, field := range aiDroppedFields[action.Tool] {
+			if _, present := action.Arguments[field]; present {
+				delete(action.Arguments, field)
+				dropped[index] = append(dropped[index], field)
+			}
+		}
+	}
+	return dropped
 }
 
 // validPriority accepts a missing priority or low, medium, or high.
@@ -71,16 +100,6 @@ func validPriority(arguments map[string]any) bool {
 	}
 	priority, _ := value.(string)
 	return priority == "low" || priority == "medium" || priority == "high"
-}
-
-// validUseDefault accepts a missing useDefaultReminders or a boolean.
-func validUseDefault(arguments map[string]any) bool {
-	value, present := arguments["useDefaultReminders"]
-	if !present {
-		return true
-	}
-	_, ok := value.(bool)
-	return ok
 }
 
 // validReminders accepts a missing reminders field or a list of objects.

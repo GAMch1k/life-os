@@ -113,7 +113,6 @@ func duplicates(event map[string]any, title string, start time.Time, allDay bool
 // its title, time, and everything the capture does not change:
 //   - reminders: the event's own and the new ones, each once (an update
 //     replaces the event's own reminders, so they are merged here);
-//   - useDefaultReminders, when the plan sets it to another value;
 //   - location and description, when the event has none yet;
 //   - priority, when the plan gives another one;
 //   - the end, when the plan states another one (see statedEnd).
@@ -125,11 +124,6 @@ func duplicateChange(planned, event map[string]any) map[string]any {
 		own, _ := event["reminders"].([]any)
 		if merged, grew := mergeReminders(own, added); grew {
 			change["reminders"] = merged
-		}
-	}
-	if use, ok := planned["useDefaultReminders"].(bool); ok {
-		if current, known := event["useDefaultReminders"].(bool); !known || current != use {
-			change["useDefaultReminders"] = use
 		}
 	}
 	for _, field := range []string{"location", "description"} {

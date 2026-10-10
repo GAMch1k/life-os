@@ -148,6 +148,8 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 		}
 		parsed, err = decodePlan(rawPlan)
 	}
+	// Fields the AI may not set are dropped and recorded, never an error.
+	dropped := dropAIFields(parsed)
 	if err == nil && (parsed.Ambiguous || parsed.Confidence < 0.8) && len(parsed.Actions) == 1 && (isTaskMutation(parsed.Actions[0]) || isCalendarMutation(parsed.Actions[0])) && validAction(parsed.Actions[0]) {
 		if res, searchErr := r.resolve(ctx, item, parsed.Actions[0]); searchErr == nil {
 			return Proposal{}, r.reviewResolution(ctx, item, started.ID, res, lowConfidenceReason(res.action))
@@ -166,7 +168,14 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 		return Proposal{}, r.humanReview(ctx, item.ID, started.ID, plannedAction{Tool: "none", Arguments: map[string]any{}}, []map[string]any{}, reason)
 	}
 	actions := make([]map[string]any, 0, len(parsed.Actions))
-	for _, action := range parsed.Actions {
+	for index, action := range parsed.Actions {
+		// noted adds what was dropped from this action to its audit entry.
+		noted := func(audit map[string]any) map[string]any {
+			if len(dropped[index]) > 0 {
+				audit["droppedFields"] = dropped[index]
+			}
+			return audit
+		}
 		if plansRecurrence(action) {
 			// Only the owner sets up or changes a repeating event.
 			reason := recurringChangeReason
@@ -174,6 +183,10 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 				reason = recurringCreateReason
 			}
 			return Proposal{}, r.humanReview(ctx, item.ID, started.ID, action, []map[string]any{}, reason)
+		}
+		if action.Tool == "calendar_update" && len(dropped[index]) > 0 && !changesEvent(action.Arguments) {
+			// It only turned the event's default reminders off or on.
+			return Proposal{}, r.humanReview(ctx, item.ID, started.ID, action, []map[string]any{}, defaultRemindersReason)
 		}
 		if !validAction(action) {
 			return Proposal{}, r.retryLater(ctx, item.ID, started.ID, actions, "invalid proposed action: "+action.Tool, failureModelOutput, previous)
@@ -207,7 +220,7 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 				restated, target = action.Arguments, found[0]
 				action = plannedAction{Tool: "calendar_update", Arguments: duplicateChange(restated, target)}
 				if len(action.Arguments) == 0 {
-					actions = append(actions, map[string]any{"tool": "none", "convertedFrom": "calendar_create", "plannedArguments": restated, "duplicateOf": target["id"], "reason": unchangedDuplicateReason})
+					actions = append(actions, noted(map[string]any{"tool": "none", "convertedFrom": "calendar_create", "plannedArguments": restated, "duplicateOf": target["id"], "reason": unchangedDuplicateReason}))
 					continue
 				}
 			}
@@ -270,7 +283,7 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 			// New reminders add to the event's own (a restated event's are
 			// merged already).
 			if action.Tool == "calendar_update" && restated == nil && !addReminders(arguments, event) {
-				actions = append(actions, map[string]any{"tool": "none", "plannedTool": action.Tool, "plannedArguments": action.Arguments, "eventId": eventID, "reason": unchangedRemindersReason})
+				actions = append(actions, noted(map[string]any{"tool": "none", "plannedTool": action.Tool, "plannedArguments": action.Arguments, "eventId": eventID, "reason": unchangedRemindersReason}))
 				continue
 			}
 		}
@@ -281,7 +294,7 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 			arguments["idempotencyKey"] = actionIdempotencyKey(item, len(actions), action)
 		}
 		result, err := r.Tools.Call(ctx, action.Tool, arguments)
-		audit := map[string]any{"tool": action.Tool, "arguments": arguments}
+		audit := noted(map[string]any{"tool": action.Tool, "arguments": arguments})
 		if restated != nil {
 			audit["convertedFrom"] = "calendar_create"
 			audit["plannedArguments"] = restated
@@ -560,7 +573,7 @@ func validAction(action plannedAction) bool {
 		if title, ok := action.Arguments["title"].(string); !ok || strings.TrimSpace(title) == "" {
 			return false
 		}
-		if action.Tool == "calendar_create" && (!validReminders(action.Arguments["reminders"]) || !validUseDefault(action.Arguments) || !validPriority(action.Arguments)) {
+		if action.Tool == "calendar_create" && (!validReminders(action.Arguments["reminders"]) || !validPriority(action.Arguments)) {
 			return false
 		}
 	}
@@ -569,8 +582,8 @@ func validAction(action plannedAction) bool {
 		"task_update":                       {"taskQuery": true, "taskQueryAlternatives": true, "taskId": true, "title": true, "notes": true, "dueAt": true, "clearDueAt": true},
 		"task_complete":                     {"taskQuery": true, "taskQueryAlternatives": true, "taskId": true},
 		"task_reopen":                       {"taskQuery": true, "taskQueryAlternatives": true, "taskId": true},
-		"calendar_create":                   {"title": true, "description": true, "location": true, "allDay": true, "startAt": true, "endAt": true, "startDate": true, "endDate": true, "timeZone": true, "reminders": true, "useDefaultReminders": true, "priority": true},
-		"calendar_update":                   {"eventQuery": true, "eventQueryAlternatives": true, "title": true, "description": true, "location": true, "allDay": true, "startAt": true, "endAt": true, "startDate": true, "endDate": true, "timeZone": true, "reminders": true, "useDefaultReminders": true, "priority": true, "clear": true},
+		"calendar_create":                   {"title": true, "description": true, "location": true, "allDay": true, "startAt": true, "endAt": true, "startDate": true, "endDate": true, "timeZone": true, "reminders": true, "priority": true},
+		"calendar_update":                   {"eventQuery": true, "eventQueryAlternatives": true, "title": true, "description": true, "location": true, "allDay": true, "startAt": true, "endAt": true, "startDate": true, "endDate": true, "timeZone": true, "reminders": true, "priority": true, "clear": true},
 		"calendar_cancel":                   {"eventQuery": true, "eventQueryAlternatives": true, "onDate": true, "occurrences": true},
 		"finance_create_manual_transaction": {"accountId": true, "categoryId": true, "amount": true, "occurredOn": true, "note": true},
 	}
