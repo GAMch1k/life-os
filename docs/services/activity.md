@@ -27,7 +27,7 @@ flowchart LR
 | `subject` | The entity the event is about: `{type, id}`, e.g. `{task, <uuid>}`. |
 | `correlationId` | The workflow this event belongs to. |
 | `causationId` | The event that directly caused this one (optional). |
-| `actor` | `user`, `agent` (e.g. `codex-inbox-processor`, `mcp`), or `system` (e.g. `voice-worker`). See [Actors](#actors). |
+| `actor` | `user`, `agent` (e.g. `codex-inbox-processor`, `mcp`), `system` (e.g. `voice-worker`), or `dev` (e.g. `claude-code`). See [Actors](#actors). |
 | `outcome` | `succeeded`, `pending` (accepted/scheduled), or `failed`. |
 | `summary` | One short human-readable sentence. |
 | `data` | Small structured details (titles, tools, errors; ≤16 KB). |
@@ -37,10 +37,26 @@ Events are append-only. There is no update or delete API. The history starts whe
 
 ### Actors
 
-- `user`: a request without an actor header, such as a Dashboard edit.
+Every write names its actor in `X-Life-OS-Actor`; nothing is attributed to the owner by default (see [The actor gate](#the-actor-gate)).
+
+- `user`: the owner, for example a Dashboard edit. The Dashboard sends `X-Life-OS-Actor: user` on every service call. The Event Log shows it as "You".
 - `agent:codex-inbox-processor`: the automatic Inbox processor. Every call it makes carries this actor: processing attempts, Human Review requests, MCP changes, runtime records, and the crash-recovery reconciliation that schedules a `recovered` retry. Older `recovered` retry events, recorded before reconciliation carried this actor, show `agent:mcp`.
-- `agent:mcp`: an MCP caller that sent no actor header, for example an external MCP client. MCP treats every caller as an agent.
+- `agent:mcp`: an MCP caller that sent no actor header (or claimed to be `user`), for example an external MCP client. MCP treats every caller as an agent.
 - `system:voice-worker`: Voice transcription.
+- `dev:<name>`: a development tool or agent working on Life OS, never the owner or the Life OS AI. Claude Code and its subagents use `dev:claude-code`, Playwright specs `dev:e2e`, and `tools/` scripts `dev:<script>`. The Event Log shows "Developer tool (<name>)" with an outline badge. Events recorded before this kind existed (for example the smoke-test cleanup of 2026-10-09) keep their original `user` actor; events are never rewritten.
+
+Names are 1–64 letters, digits, `.`, `_`, or `-`. An event emitted without any actor is attributed to the emitting service (`system:<source>`), never to the owner.
+
+### The actor gate
+
+Finance, Tasks, Inbox, Calendar, and Voice reject every write (`POST`, `PUT`, `PATCH`, `DELETE`) without a valid `X-Life-OS-Actor` with `400` and error code `actor_required` (`pkg/activity.RequireActor`). Reads, `/health`, and `/ready` do not need it. Internal callers always send one: the processor and MCP as agents, the Voice worker as `system:voice-worker`, and traces forward `user` explicitly.
+
+Two endpoints are deliberately not gated:
+
+- MCP (`/api/mcp`) is itself the agent. It records an unnamed caller as `agent:mcp` and sends that actor on every downstream call, so the owning services' gate always passes.
+- Activity's `POST /v1/activity-events` is internal (the gateway denies it) and carries the actor as a required, validated field of the event body. The emitting service is the messenger, not the actor, so a header would add nothing.
+
+The public gateway passes only `user` and `dev:<name>`: a claim to be the Life OS AI (`agent:`) or a component (`system:`) is dropped, so such a write fails the gate. See [Networking](../architecture/networking.md).
 
 ### Recorded events
 
@@ -73,7 +89,9 @@ These travel as HTTP headers between services:
 | --- | --- |
 | `X-Correlation-ID` | Workflow id (already propagated by the shared HTTP runtime). |
 | `X-Causation-ID` | The id of the event that caused the request. |
-| `X-Life-OS-Actor` | `agent:<name>` or `system:<name>`; absent means the user. |
+| `X-Life-OS-Actor` | `user`, `agent:<name>`, `system:<name>`, or `dev:<name>`. Required on writes. |
+
+The gateway clears `X-Correlation-ID` and `X-Causation-ID` on public traffic, so only services link events to workflows.
 
 Inbox stores an explicit upstream correlation id on the item (`inbox_items.correlation_id`, NULL for self-rooted items). It exposes the effective value as `InboxItem.correlationId`, so the processor can continue the workflow for every MCP call it makes.
 
@@ -114,4 +132,4 @@ The contract is `services/activity/api/openapi.yaml`. The Dashboard Event Log (`
 - Database: `activity_db` / `activity_user`, password `LIFE_OS_ACTIVITY_DB_PASSWORD` in `.env`. Fresh volumes are provisioned automatically. For an existing deployment, add the password and run `make db-provision` once before starting the new `activity` and `activity-migrate` services.
 - Emitting services (`tasks`, `inbox`, `voice`, `voice-worker`, `mcp`) read `ACTIVITY_SERVICE_URL`.
 - Retention: events are kept indefinitely for now; they are small and single-user.
-- Verification: `make activity-trace-smoke` speaks a Task request (espeak-ng in a throwaway container). It sends the request through Voice, whisper.cpp, Inbox, the automatic processor with the authenticated Codex CLI, MCP, and Tasks on the disposable verification stack, then completes the Task as the user. It reconstructs and checks the whole chain from the Activity API alone.
+- Verification: `make activity-trace-smoke` speaks a Task request (espeak-ng in a throwaway container). It sends the request through Voice, whisper.cpp, Inbox, the automatic processor with the authenticated Codex CLI, MCP, and Tasks on the disposable verification stack, then completes the Task itself (recorded as `dev:smoke-activity-trace`). It reconstructs and checks the whole chain from the Activity API alone.
