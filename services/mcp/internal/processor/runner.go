@@ -150,7 +150,7 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 	}
 	if err == nil && (parsed.Ambiguous || parsed.Confidence < 0.8) && len(parsed.Actions) == 1 && (isTaskMutation(parsed.Actions[0]) || isCalendarMutation(parsed.Actions[0])) && validAction(parsed.Actions[0]) {
 		if res, searchErr := r.resolve(ctx, item, parsed.Actions[0]); searchErr == nil {
-			return Proposal{}, r.humanReview(ctx, item.ID, started.ID, res.action, r.reviewCandidatesFor(item, res.action, res.found), lowConfidenceReason(res.action))
+			return Proposal{}, r.reviewResolution(ctx, item, started.ID, res, lowConfidenceReason(res.action))
 		}
 	}
 	if err != nil {
@@ -167,6 +167,14 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 	}
 	actions := make([]map[string]any, 0, len(parsed.Actions))
 	for _, action := range parsed.Actions {
+		if plansRecurrence(action) {
+			// Only the owner sets up or changes a repeating event.
+			reason := recurringChangeReason
+			if action.Tool == "calendar_create" {
+				reason = recurringCreateReason
+			}
+			return Proposal{}, r.humanReview(ctx, item.ID, started.ID, action, []map[string]any{}, reason)
+		}
 		if !validAction(action) {
 			return Proposal{}, r.retryLater(ctx, item.ID, started.ID, actions, "invalid proposed action: "+action.Tool, failureModelOutput, previous)
 		}
@@ -179,9 +187,10 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 				return Proposal{}, r.retryLater(ctx, item.ID, started.ID, actions, reason, kind, previous)
 			}
 			// Every cancellation the AI proposes waits for the owner, even
-			// when exactly one event matches; it runs once approved.
-			if res.action.Tool == "calendar_cancel" || len(res.found) != 1 {
-				return Proposal{}, r.humanReview(ctx, item.ID, started.ID, res.action, r.reviewCandidatesFor(item, res.action, res.found), reviewReason(res))
+			// when exactly one event matches; it runs once approved. A
+			// recurring event is never changed by capture.
+			if res.action.Tool == "calendar_cancel" || len(res.found) != 1 || recurringUpdate(res) {
+				return Proposal{}, r.reviewResolution(ctx, item, started.ID, res, reviewReason(res))
 			}
 			// The equivalent action, when only the other domain matched.
 			action, target = res.action, res.found[0]
@@ -205,6 +214,17 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 				eventID, _ = target["id"].(string)
 			}
 			arguments = calendarArguments(action.Tool, arguments, eventID)
+			// The owner chose the event: a recurring one is only ever
+			// skipped one occurrence at a time, never changed as a whole.
+			if target == nil && (action.Tool == "calendar_update" || arguments["recurrenceId"] == nil) {
+				var getErr error
+				if event, getErr = r.getEvent(ctx, eventID); getErr != nil {
+					return Proposal{}, r.retryLater(ctx, item.ID, started.ID, actions, "calendar read failed: "+getErr.Error(), classifyActionError(getErr), previous)
+				}
+				if isRecurring(event) {
+					return Proposal{}, r.humanReview(ctx, item.ID, started.ID, action, []map[string]any{}, recurringChangeReason)
+				}
+			}
 			if action.Tool == "calendar_update" && missingEnd(arguments) {
 				if event == nil {
 					var getErr error
@@ -491,6 +511,9 @@ func validAction(action plannedAction) bool {
 		if !validSearchTerms(action.Arguments, "eventQuery", "eventQueryAlternatives") || (action.Tool == "calendar_update" && !validCalendarChange(action.Arguments)) {
 			return false
 		}
+		if action.Tool == "calendar_cancel" && !validCancelDay(action.Arguments) {
+			return false
+		}
 	} else if action.Tool != "finance_create_manual_transaction" {
 		if title, ok := action.Arguments["title"].(string); !ok || strings.TrimSpace(title) == "" {
 			return false
@@ -506,7 +529,7 @@ func validAction(action plannedAction) bool {
 		"task_reopen":                       {"taskQuery": true, "taskQueryAlternatives": true, "taskId": true},
 		"calendar_create":                   {"title": true, "description": true, "location": true, "allDay": true, "startAt": true, "endAt": true, "startDate": true, "endDate": true, "timeZone": true, "reminders": true, "useDefaultReminders": true},
 		"calendar_update":                   {"eventQuery": true, "eventQueryAlternatives": true, "title": true, "description": true, "location": true, "allDay": true, "startAt": true, "endAt": true, "startDate": true, "endDate": true, "timeZone": true, "reminders": true, "useDefaultReminders": true, "clear": true},
-		"calendar_cancel":                   {"eventQuery": true, "eventQueryAlternatives": true},
+		"calendar_cancel":                   {"eventQuery": true, "eventQueryAlternatives": true, "onDate": true, "occurrences": true},
 		"finance_create_manual_transaction": {"accountId": true, "categoryId": true, "amount": true, "occurredOn": true, "note": true},
 	}
 	for field := range action.Arguments {
@@ -526,6 +549,30 @@ func validAction(action plannedAction) bool {
 	}
 	return true
 }
+
+// validCancelDay checks a cancellation's optional onDate (an ISO date) and
+// the occurrences a Human Review recorded (series id to recurrence id).
+func validCancelDay(arguments map[string]any) bool {
+	if value, present := arguments["onDate"]; present && value != nil {
+		day, ok := value.(string)
+		if _, err := time.Parse(time.DateOnly, day); !ok || err != nil {
+			return false
+		}
+	}
+	if value, present := arguments["occurrences"]; present && value != nil {
+		occurrences, ok := value.(map[string]any)
+		if !ok {
+			return false
+		}
+		for _, rid := range occurrences {
+			if _, ok := rid.(string); !ok {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func idempotencyKey(item inboxItem) string {
 	sum := sha256.Sum256([]byte(item.ID + "\x00" + item.Content))
 	return fmt.Sprintf("codex-%x", sum[:12])
