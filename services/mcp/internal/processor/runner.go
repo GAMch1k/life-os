@@ -127,7 +127,7 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 		runtime := r.trackRuntime(ctx, item.ID, started.ID, RuntimeSpawning)
 		defer runtime.close()
 		prompt, _ := json.Marshal(map[string]any{"content": item.Content, "source": item.Source, "sourceMetadata": item.SourceMetadata})
-		rawPlan, planErr := r.Planner.Plan(WithCapturedAt(WithRunObserver(ctx, runtime), item.CreatedAt), string(prompt))
+		rawPlan, planErr := r.Planner.Plan(planContext(WithRunObserver(ctx, runtime), item), string(prompt))
 		runtime.finish(ctx, runtimeOutcome(ctx, planErr))
 		if planErr != nil {
 			if ctx.Err() != nil {
@@ -229,6 +229,15 @@ func (r Runner) taskCandidates(ctx context.Context, query string) ([]map[string]
 	}
 	return candidates, nil
 }
+
+// planContext carries what planning needs to resolve the item's relative
+// dates: when it was captured, and the timezone it was captured in (the
+// capturing browser's, sourceMetadata.timeZone, when the client sent one).
+func planContext(ctx context.Context, item inboxItem) context.Context {
+	timeZone, _ := item.SourceMetadata["timeZone"].(string)
+	return WithCaptureTimeZone(WithCapturedAt(ctx, item.CreatedAt), timeZone)
+}
+
 func approvedReviewPlan(item inboxItem) (plan, error) {
 	raw, ok := item.ProcessingMetadata["approvedAction"].(map[string]any)
 	if !ok {
@@ -280,7 +289,7 @@ func (r Runner) nextAttemptKey(ctx context.Context, itemID, key string) (bool, s
 }
 func (r Runner) plan(ctx context.Context, item inboxItem) (Proposal, error) {
 	prompt, _ := json.Marshal(map[string]any{"content": item.Content, "source": item.Source, "sourceMetadata": item.SourceMetadata})
-	raw, err := r.Planner.Plan(WithCapturedAt(ctx, item.CreatedAt), string(prompt))
+	raw, err := r.Planner.Plan(planContext(ctx, item), string(prompt))
 	if err != nil {
 		return Proposal{}, err
 	}
