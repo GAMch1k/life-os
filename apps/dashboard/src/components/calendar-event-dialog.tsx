@@ -12,6 +12,7 @@ import {
 import {
   type FormEvent,
   type ReactNode,
+  useEffect,
   useId,
   useState,
   useTransition,
@@ -33,12 +34,15 @@ import {
   apiErrorMessage,
   type CalendarEvent,
   createRequest,
+  defaultRemindersNote,
   draftFromEvent,
   editingZone,
   type EventDraft,
   eventWhenLabel,
+  fetchOwnerDefaults,
   type FieldErrors,
   fieldErrorsFromApi,
+  formDefaults,
   isCancelled,
   isImported,
   MAX_REMINDERS,
@@ -47,9 +51,10 @@ import {
   readDraft,
   readOnlyReason,
   recurrenceLabel,
+  reminderChanges,
+  type ReminderDefaults,
   type ReminderDraft,
-  type ReminderMode,
-  remindersSummary,
+  reminderLines,
   sourceLabel,
   updateRequest,
 } from "@/lib/calendar-workspace";
@@ -69,7 +74,7 @@ type Shared = {
   today: string;
 };
 
-const UNAVAILABLE = "Calendar is unavailable right now. Try again.";
+export const UNAVAILABLE = "Calendar is unavailable right now. Try again.";
 
 export function CalendarEventDialog({
   state,
@@ -199,6 +204,7 @@ function EventDetails({
   const imported = isImported(event);
   const cancelled = isCancelled(event);
   const source = sourceLabel(event);
+  const lines = reminderLines(event);
   const hint =
     !event.allDay && event.timeZone && event.timeZone !== timeZone
       ? event.timeZone
@@ -304,9 +310,23 @@ function EventDetails({
           </DetailRow>
         ) : null}
         <DetailRow icon={Bell} label="Reminders">
-          {remindersSummary(event.reminders).map((line, index) => (
-            <p key={index}>{line}</p>
-          ))}
+          <ul className="space-y-0.5" data-testid="event-reminders">
+            {lines.length ? (
+              lines.map((line, index) => (
+                <li key={index}>
+                  {line.label}
+                  {line.origin ? (
+                    <span className="text-muted-foreground">
+                      {" "}
+                      · {line.origin}
+                    </span>
+                  ) : null}
+                </li>
+              ))
+            ) : (
+              <li>No reminders</li>
+            )}
+          </ul>
         </DetailRow>
       </dl>
 
@@ -391,7 +411,7 @@ function EventDetails({
 const SELECT =
   "border-input focus-visible:border-ring focus-visible:ring-ring/50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:bg-input/30 dark:aria-invalid:ring-destructive/40 h-8 min-w-0 rounded-lg border bg-transparent px-2 text-base transition-colors outline-none focus-visible:ring-3 aria-invalid:ring-3 md:text-sm";
 
-const LABEL = "text-sm font-medium";
+export const LABEL = "text-sm font-medium";
 
 let zoneList: string[] | undefined;
 
@@ -409,7 +429,7 @@ function timeZones() {
   return zoneList;
 }
 
-function FieldError({ id, message }: { id: string; message?: string }) {
+export function FieldError({ id, message }: { id: string; message?: string }) {
   return message ? (
     <p className="text-destructive text-xs" id={id}>
       {message}
@@ -437,6 +457,26 @@ function EventForm({
   const [errors, setErrors] = useState<FieldErrors>({});
   const [pending, startTransition] = useTransition();
   const id = useId();
+  // A Life OS event's defaults are the owner's (Reminder defaults), read
+  // when the form opens; an imported event's are its source's.
+  const ownDefaults = !event || !isImported(event);
+  const [owner, setOwner] = useState<
+    ReminderDefaults | "loading" | "unavailable"
+  >("loading");
+  useEffect(() => {
+    if (!ownDefaults) return;
+    let current = true;
+    fetchOwnerDefaults()
+      .then((defaults) => {
+        if (current) setOwner(defaults);
+      })
+      .catch(() => {
+        if (current) setOwner("unavailable");
+      });
+    return () => {
+      current = false;
+    };
+  }, [ownDefaults]);
   const update = (patch: Partial<EventDraft>) =>
     setDraft((current) => ({ ...current, ...patch }));
   const invalid = (field: keyof FieldErrors) =>
@@ -452,18 +492,25 @@ function EventForm({
       return;
     }
     setErrors({});
+    // An imported event sends only its reminder changes; with none there is
+    // nothing to save (Calendar refuses an empty PATCH).
+    const body = event
+      ? remindersOnly
+        ? reminderChanges(read.fields, event)
+        : updateRequest(read.fields, event)
+      : undefined;
+    if (event && body && Object.keys(body).length === 0) return onCancel();
     startTransition(async () => {
       try {
-        const result = event
-          ? await calendarClient.PATCH("/v1/events/{eventId}", {
-              params: { path: { eventId: event.id } },
-              body: remindersOnly
-                ? { reminders: read.fields.reminders }
-                : updateRequest(read.fields),
-            })
-          : await calendarClient.POST("/v1/events", {
-              body: createRequest(read.fields),
-            });
+        const result =
+          event && body
+            ? await calendarClient.PATCH("/v1/events/{eventId}", {
+                params: { path: { eventId: event.id } },
+                body,
+              })
+            : await calendarClient.POST("/v1/events", {
+                body: createRequest(read.fields),
+              });
         if (result.data) return onSaved(result.data);
         const message = apiErrorMessage(result.error);
         const status = result.response.status;
@@ -658,16 +705,52 @@ function EventForm({
         </>
       )}
 
-      <RemindersField
-        error={errors.reminders}
-        errorId={`${id}-reminders-error`}
-        id={`${id}-reminders`}
-        mode={draft.reminderMode}
-        onChange={(reminderMode, reminders) =>
-          update({ reminderMode, reminders })
-        }
-        reminders={draft.reminders}
-      />
+      <fieldset className="grid min-w-0 gap-3">
+        <legend className={cn(LABEL, "mb-2")}>Reminders</legend>
+        <div className="grid gap-1">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              aria-describedby={`${id}-defaults`}
+              checked={draft.useDefaultReminders}
+              className="accent-primary size-4"
+              onChange={(change) =>
+                update({ useDefaultReminders: change.target.checked })
+              }
+              type="checkbox"
+            />
+            Use default reminders
+          </label>
+          <p
+            className="text-muted-foreground pl-6 text-xs"
+            data-testid="default-reminders"
+            id={`${id}-defaults`}
+          >
+            {defaultRemindersNote(formDefaults(event, draft.allDay, owner), {
+              allDay: draft.allDay,
+              source: event ? sourceLabel(event) : undefined,
+            })}
+          </p>
+        </div>
+        <div
+          aria-labelledby={`${id}-own`}
+          className="grid min-w-0 gap-2"
+          role="group"
+        >
+          <p
+            className="text-muted-foreground text-xs font-medium"
+            id={`${id}-own`}
+          >
+            Your reminders
+          </p>
+          <ReminderList
+            error={errors.reminders}
+            errorId={`${id}-reminders-error`}
+            fresh={draft.allDay ? NEW_LOCAL_TIME : NEW_RELATIVE}
+            onChange={(reminders) => update({ reminders })}
+            reminders={draft.reminders}
+          />
+        </div>
+      </fieldset>
 
       {errors.form ? (
         <p className="text-destructive text-sm" role="alert">
@@ -692,188 +775,170 @@ function EventForm({
   );
 }
 
-const NEW_RELATIVE: ReminderDraft = {
+export const NEW_RELATIVE: ReminderDraft = {
   kind: "relative",
   amount: "30",
   unit: "minutes",
 };
-// The evening before, as for a waste pickup.
-const NEW_LOCAL_TIME: ReminderDraft = {
+// The evening before, as for a waste pickup or an all-day event.
+export const NEW_LOCAL_TIME: ReminderDraft = {
   kind: "localTime",
   daysBefore: "1",
   time: "19:00",
 };
 
-function RemindersField({
+/**
+ * A list of reminders, each row minutes, hours, or days before the start,
+ * or N days before at a time, with Add reminder (up to ten). Every row is
+ * labelled `${label} N`, such as "Reminder 1 amount".
+ */
+export function ReminderList({
+  empty,
   error,
   errorId,
-  id,
-  mode,
+  fresh = NEW_RELATIVE,
+  label = "Reminder",
   onChange,
   reminders,
 }: {
+  /** Shown while the list is empty. */
+  empty?: string;
   error?: string;
   errorId: string;
-  id: string;
-  mode: ReminderMode;
-  onChange: (mode: ReminderMode, reminders: ReminderDraft[]) => void;
+  /** What Add reminder adds. */
+  fresh?: ReminderDraft;
+  label?: string;
+  onChange: (reminders: ReminderDraft[]) => void;
   reminders: ReminderDraft[];
 }) {
   const set = (index: number, reminder: ReminderDraft) =>
     onChange(
-      mode,
       reminders.map((current, at) => (at === index ? reminder : current)),
     );
   return (
     <div className="grid min-w-0 gap-2">
-      <label className={LABEL} htmlFor={id}>
-        Reminders
-      </label>
-      <select
-        aria-describedby={error ? errorId : undefined}
-        aria-invalid={error ? true : undefined}
-        className={cn(SELECT, "w-full sm:w-56")}
-        id={id}
-        onChange={(change) => {
-          const next = change.target.value as ReminderMode;
-          onChange(
-            next,
-            next === "custom" && reminders.length === 0
-              ? [NEW_RELATIVE]
-              : reminders,
-          );
-        }}
-        value={mode}
-      >
-        <option value="default">Default reminders</option>
-        <option value="none">No reminders</option>
-        <option value="custom">Custom</option>
-      </select>
-      {mode === "custom" ? (
-        <>
-          <ul className="grid gap-2">
-            {reminders.map((reminder, index) => {
-              const label = `Reminder ${index + 1}`;
-              return (
-                <li
-                  className="flex flex-wrap items-center gap-2 text-sm"
-                  key={index}
+      {reminders.length ? (
+        <ul className="grid gap-2">
+          {reminders.map((reminder, index) => {
+            const row = `${label} ${index + 1}`;
+            // "Remove reminder 1", but "Remove ZAW default 1".
+            const remove = /^[A-Z][a-z]/.test(row)
+              ? row.charAt(0).toLowerCase() + row.slice(1)
+              : row;
+            return (
+              <li
+                className="flex flex-wrap items-center gap-2 text-sm"
+                key={index}
+              >
+                <select
+                  aria-describedby={error ? errorId : undefined}
+                  aria-label={`${row} type`}
+                  className={SELECT}
+                  onChange={(change) =>
+                    set(
+                      index,
+                      change.target.value === "localTime"
+                        ? NEW_LOCAL_TIME
+                        : NEW_RELATIVE,
+                    )
+                  }
+                  value={reminder.kind}
                 >
-                  <select
-                    aria-label={`${label} type`}
-                    className={SELECT}
-                    onChange={(change) =>
-                      set(
-                        index,
-                        change.target.value === "localTime"
-                          ? NEW_LOCAL_TIME
-                          : NEW_RELATIVE,
-                      )
-                    }
-                    value={reminder.kind}
-                  >
-                    <option value="relative">Before the start</option>
-                    <option value="localTime">Days before, at a time</option>
-                  </select>
-                  {reminder.kind === "relative" ? (
-                    <>
-                      <Input
-                        aria-label={`${label} amount`}
-                        className="w-20"
-                        inputMode="numeric"
-                        min={0}
-                        onChange={(change) =>
-                          set(index, {
-                            ...reminder,
-                            amount: change.target.value,
-                          })
-                        }
-                        type="number"
-                        value={reminder.amount}
-                      />
-                      <select
-                        aria-label={`${label} unit`}
-                        className={SELECT}
-                        onChange={(change) =>
-                          set(index, {
-                            ...reminder,
-                            unit: change.target.value as typeof reminder.unit,
-                          })
-                        }
-                        value={reminder.unit}
-                      >
-                        <option value="minutes">minutes</option>
-                        <option value="hours">hours</option>
-                        <option value="days">days</option>
-                      </select>
-                      <span className="text-muted-foreground">before</span>
-                    </>
-                  ) : (
-                    <>
-                      <Input
-                        aria-label={`${label} days before`}
-                        className="w-16"
-                        inputMode="numeric"
-                        min={0}
-                        onChange={(change) =>
-                          set(index, {
-                            ...reminder,
-                            daysBefore: change.target.value,
-                          })
-                        }
-                        type="number"
-                        value={reminder.daysBefore}
-                      />
-                      <span className="text-muted-foreground">
-                        days before at
-                      </span>
-                      <Input
-                        aria-label={`${label} time`}
-                        className="w-32"
-                        onChange={(change) =>
-                          set(index, { ...reminder, time: change.target.value })
-                        }
-                        type="time"
-                        value={reminder.time}
-                      />
-                    </>
-                  )}
-                  <Button
-                    aria-label={`Remove ${label.toLowerCase()}`}
-                    onClick={() =>
-                      onChange(
-                        mode,
-                        reminders.filter((_, at) => at !== index),
-                      )
-                    }
-                    size="icon-sm"
-                    type="button"
-                    variant="ghost"
-                  >
-                    <X />
-                  </Button>
-                </li>
-              );
-            })}
-          </ul>
-          {reminders.length < MAX_REMINDERS ? (
-            <Button
-              className="justify-self-start"
-              onClick={() => onChange(mode, [...reminders, NEW_RELATIVE])}
-              size="sm"
-              type="button"
-              variant="outline"
-            >
-              <Plus />
-              Add reminder
-            </Button>
-          ) : null}
-          {reminders.length === 0 ? (
-            <p className="text-muted-foreground text-xs">
-              Without a reminder the defaults apply.
-            </p>
-          ) : null}
-        </>
+                  <option value="relative">Before the start</option>
+                  <option value="localTime">Days before, at a time</option>
+                </select>
+                {reminder.kind === "relative" ? (
+                  <>
+                    <Input
+                      aria-label={`${row} amount`}
+                      className="w-20"
+                      inputMode="numeric"
+                      min={0}
+                      onChange={(change) =>
+                        set(index, {
+                          ...reminder,
+                          amount: change.target.value,
+                        })
+                      }
+                      type="number"
+                      value={reminder.amount}
+                    />
+                    <select
+                      aria-label={`${row} unit`}
+                      className={SELECT}
+                      onChange={(change) =>
+                        set(index, {
+                          ...reminder,
+                          unit: change.target.value as typeof reminder.unit,
+                        })
+                      }
+                      value={reminder.unit}
+                    >
+                      <option value="minutes">minutes</option>
+                      <option value="hours">hours</option>
+                      <option value="days">days</option>
+                    </select>
+                    <span className="text-muted-foreground">before</span>
+                  </>
+                ) : (
+                  <>
+                    <Input
+                      aria-label={`${row} days before`}
+                      className="w-16"
+                      inputMode="numeric"
+                      min={0}
+                      onChange={(change) =>
+                        set(index, {
+                          ...reminder,
+                          daysBefore: change.target.value,
+                        })
+                      }
+                      type="number"
+                      value={reminder.daysBefore}
+                    />
+                    <span className="text-muted-foreground">
+                      days before at
+                    </span>
+                    <Input
+                      aria-label={`${row} time`}
+                      className="w-32"
+                      onChange={(change) =>
+                        set(index, { ...reminder, time: change.target.value })
+                      }
+                      type="time"
+                      value={reminder.time}
+                    />
+                  </>
+                )}
+                <Button
+                  aria-label={`Remove ${remove}`}
+                  onClick={() =>
+                    onChange(reminders.filter((_, at) => at !== index))
+                  }
+                  size="icon-sm"
+                  type="button"
+                  variant="ghost"
+                >
+                  <X />
+                </Button>
+              </li>
+            );
+          })}
+        </ul>
+      ) : empty ? (
+        <p className="text-muted-foreground text-xs">{empty}</p>
+      ) : null}
+      {reminders.length < MAX_REMINDERS ? (
+        <Button
+          className="justify-self-start"
+          onClick={() => onChange([...reminders, fresh])}
+          size="sm"
+          type="button"
+          variant="outline"
+        >
+          <Plus />
+          Add reminder
+        </Button>
       ) : null}
       <FieldError id={errorId} message={error} />
     </div>

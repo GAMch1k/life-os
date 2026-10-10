@@ -22,10 +22,9 @@ import (
 func TestSourcesMigrationKeepsExistingEvents(t *testing.T) {
 	ctx := context.Background()
 	pool := testdb.Open(t, "000004")
-	queries := store.New(pool)
-	start := time.Date(2026, time.November, 3, 9, 0, 0, 0, time.UTC)
-	kept, err := queries.CreateEvent(ctx, manualTimed("Dentist", start, start.Add(time.Hour)))
-	if err != nil {
+	// Raw SQL: the generated queries expect the later migrations' columns.
+	var id pgtype.UUID
+	if err := pool.QueryRow(ctx, `INSERT INTO events (title, all_day, start_at, end_at) VALUES ('Dentist', false, '2026-11-03T09:00:00Z', '2026-11-03T10:00:00Z') RETURNING id`).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
 	var migration string
@@ -38,12 +37,12 @@ func TestSourcesMigrationKeepsExistingEvents(t *testing.T) {
 		t.Fatal("000005_calendar_sources.up.sql not found")
 	}
 	testdb.Apply(t, pool, migration)
-	if got, err := queries.GetEvent(ctx, kept.ID); err != nil || got.Title != "Dentist" || got.SourceKind != "manual" {
-		t.Fatalf("existing event after the migration: %+v %v", got, err)
+	var title, sourceKind string
+	if err := pool.QueryRow(ctx, `SELECT title, source_kind FROM events WHERE id = $1`, id).Scan(&title, &sourceKind); err != nil || title != "Dentist" || sourceKind != "manual" {
+		t.Fatalf("existing event after the migration: %q %q %v", title, sourceKind, err)
 	}
 	testdb.Apply(t, pool, strings.Replace(migration, ".up.sql", ".down.sql", 1))
 	testdb.Apply(t, pool, migration)
-	// Raw SQL: the generated queries expect the later migrations' columns.
 	if _, err := pool.Exec(ctx, "SELECT id, name, url, filter_include FROM calendar_sources"); err != nil {
 		t.Fatalf("after down and up again: %v", err)
 	}

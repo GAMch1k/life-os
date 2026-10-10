@@ -109,14 +109,17 @@ func TestCalendarCreateForwardsLocationRemindersAndTimeZone(t *testing.T) {
 		t.Fatalf("reminders = %#v", got.Body["reminders"])
 	}
 
-	// Leaving reminders out keeps the defaults; [] explicitly means none.
+	// Leaving reminders and useDefaultReminders out keeps the defaults alone;
+	// useDefaultReminders false with [] means none at all.
 	callTool(t, session, "calendar_create", map[string]any{"title": "A", "allDay": true, "startDate": "2026-10-16", "endDate": "2026-10-16"})
-	callTool(t, session, "calendar_create", map[string]any{"title": "B", "allDay": true, "startDate": "2026-10-16", "endDate": "2026-10-16", "reminders": []any{}})
-	if _, present := (*requests)[1].Body["reminders"]; present {
-		t.Fatalf("omitted reminders were sent: %s", (*requests)[1].RawBody)
+	callTool(t, session, "calendar_create", map[string]any{"title": "B", "allDay": true, "startDate": "2026-10-16", "endDate": "2026-10-16", "reminders": []any{}, "useDefaultReminders": false})
+	for _, field := range []string{"reminders", "useDefaultReminders"} {
+		if _, present := (*requests)[1].Body[field]; present {
+			t.Fatalf("omitted %s was sent: %s", field, (*requests)[1].RawBody)
+		}
 	}
-	if reminders, ok := (*requests)[2].Body["reminders"].([]any); !ok || len(reminders) != 0 {
-		t.Fatalf("explicit [] reminders became %s", (*requests)[2].RawBody)
+	if reminders, ok := (*requests)[2].Body["reminders"].([]any); !ok || len(reminders) != 0 || (*requests)[2].Body["useDefaultReminders"] != false {
+		t.Fatalf("no reminders at all became %s", (*requests)[2].RawBody)
 	}
 }
 
@@ -133,6 +136,12 @@ func TestCalendarUpdatePatchesOnlyTheGivenFieldsAndClears(t *testing.T) {
 	want := map[string]any{"startAt": "2026-10-19T09:00:00+02:00", "endAt": "2026-10-19T10:00:00+02:00", "location": nil, "reminders": nil}
 	if !reflect.DeepEqual(got.Body, want) {
 		t.Fatalf("PATCH body = %s", got.RawBody)
+	}
+
+	// The defaults are turned off on their own; the event's reminders stay.
+	callTool(t, session, "calendar_update", map[string]any{"eventId": eventID, "useDefaultReminders": false})
+	if got := (*requests)[1]; !reflect.DeepEqual(got.Body, map[string]any{"useDefaultReminders": false}) {
+		t.Fatalf("defaults off PATCH body = %s", got.RawBody)
 	}
 }
 

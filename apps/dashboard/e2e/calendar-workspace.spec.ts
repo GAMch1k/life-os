@@ -1,15 +1,24 @@
+import { deleteSource, failingFeedUrl } from "./calendar-feed";
 import { type APIRequestContext, expect, type Page, test } from "./fixtures";
 
 // The Calendar workspace (/calendar): FullCalendar month, week, day, and list
 // views over the Calendar API, event create/inspect/edit/delete dialogs,
-// search across months, cancelled events, phone width, and the dark theme.
-// The browser runs in Europe/Berlin (playwright.config.ts).
+// default plus own reminders and Reminder defaults, search across months,
+// cancelled events, phone width, and the dark theme. The browser runs in
+// Europe/Berlin (playwright.config.ts).
 
 const enabled = Boolean(process.env.LIFE_OS_E2E_URL);
 const ZONE = "Europe/Berlin";
 
 const hydrationProblem =
   /hydrat|did not match|Minified React error #4(18|19|21|23|25)/i;
+
+type Reminder = {
+  kind: "relative" | "localTime";
+  minutesBefore?: number;
+  daysBefore?: number;
+  localTime?: string;
+};
 
 type CalendarEvent = {
   id: string;
@@ -19,7 +28,12 @@ type CalendarEvent = {
   startDate?: string | null;
   endDate?: string | null;
   status: string;
+  reminders: Reminder[];
+  useDefaultReminders: boolean;
+  effectiveReminders: Reminder[];
 };
+
+type ReminderDefaults = { timed: Reminder[]; allDay: Reminder[] };
 
 /** Today in the browser's zone, as YYYY-MM-DD. */
 function today() {
@@ -91,6 +105,24 @@ async function findByTitle(request: APIRequestContext, title: string) {
   return items.filter((event) => event.title === title);
 }
 
+/** The owner's default reminders (Calendar settings). */
+async function ownerDefaults(request: APIRequestContext) {
+  const response = await request.get("/api/calendar/v1/settings");
+  expect(response.ok()).toBeTruthy();
+  return ((await response.json()) as { defaultReminders: ReminderDefaults })
+    .defaultReminders;
+}
+
+async function setOwnerDefaults(
+  request: APIRequestContext,
+  defaultReminders: ReminderDefaults,
+) {
+  const response = await request.patch("/api/calendar/v1/settings", {
+    data: { defaultReminders },
+  });
+  expect(response.ok(), await response.text()).toBeTruthy();
+}
+
 async function horizontalOverflow(page: Page) {
   return page.evaluate(
     () => document.documentElement.scrollWidth - window.innerWidth,
@@ -141,7 +173,7 @@ test.describe("Calendar workspace", () => {
     await dialog.getByLabel("End time").fill("11:30");
     await dialog.getByLabel("Location").fill("Praxis Dr. Weber");
     await dialog.getByLabel("Notes").fill("Bring the insurance card");
-    await dialog.getByLabel("Reminders").selectOption("custom");
+    await dialog.getByRole("button", { name: "Add reminder" }).click();
     await dialog.getByLabel("Reminder 1 amount").fill("45");
     await dialog.getByRole("button", { name: "Save" }).click();
     await expect(dialog).toBeHidden();
@@ -313,6 +345,200 @@ test.describe("Calendar workspace", () => {
     );
     await dialog.getByRole("button", { name: "Cancel" }).click();
     await expect(dialog).toBeHidden();
+  });
+
+  test("an event gets several reminders of its own on top of the defaults", async ({
+    page,
+    request,
+  }) => {
+    const problems = watchForProblems(page);
+    const title = `Workspace reminders ${stamp}`;
+    const day = addDays(today(), 4);
+    const original = await ownerDefaults(request);
+    try {
+      await setOwnerDefaults(request, {
+        timed: [{ kind: "relative", minutesBefore: 10 }],
+        allDay: [],
+      });
+
+      await open(page, "week", day);
+      await page.getByRole("button", { name: "New event" }).click();
+      const dialog = page.getByRole("dialog");
+      await dialog.getByLabel("Title").fill(title);
+      await dialog.getByLabel("Start date").fill(day);
+      await dialog.getByLabel("Start time").fill("14:00");
+      await dialog.getByLabel("End date").fill(day);
+      await dialog.getByLabel("End time").fill("15:00");
+      const reminders = dialog.getByRole("group", {
+        name: "Reminders",
+        exact: true,
+      });
+      await expect(reminders.getByLabel("Use default reminders")).toBeChecked();
+      await expect(dialog.getByTestId("default-reminders")).toHaveText(
+        "10 minutes before (your default for timed events)",
+      );
+
+      // Like Google Calendar: 1 day and 3 hours before, as well as the default.
+      const add = reminders.getByRole("button", { name: "Add reminder" });
+      await add.click();
+      await dialog.getByLabel("Reminder 1 amount").fill("1");
+      await dialog.getByLabel("Reminder 1 unit").selectOption("days");
+      await add.click();
+      await dialog.getByLabel("Reminder 2 amount").fill("3");
+      await dialog.getByLabel("Reminder 2 unit").selectOption("hours");
+      await dialog.getByRole("button", { name: "Save" }).click();
+      await expect(dialog).toBeHidden();
+
+      const [stored] = await findByTitle(request, title);
+      expect(stored.useDefaultReminders).toBe(true);
+      expect(stored.reminders).toEqual([
+        { kind: "relative", minutesBefore: 1440 },
+        { kind: "relative", minutesBefore: 180 },
+      ]);
+      expect(stored.effectiveReminders).toHaveLength(3);
+
+      // The details list every reminder that applies, the default marked.
+      await eventIn(page, title).click();
+      const listed = dialog
+        .getByTestId("event-reminders")
+        .getByRole("listitem");
+      await expect(listed).toHaveText([
+        "10 minutes before · default",
+        "1 day before",
+        "3 hours before",
+      ]);
+
+      // Without the defaults, and one reminder fewer.
+      await dialog.getByRole("button", { name: "Edit", exact: true }).click();
+      await dialog.getByLabel("Use default reminders").uncheck();
+      await dialog.getByRole("button", { name: "Remove reminder 2" }).click();
+      await dialog.getByRole("button", { name: "Save" }).click();
+      await expect(listed).toHaveText(["1 day before"]);
+
+      // Back to the defaults alone.
+      await dialog.getByRole("button", { name: "Edit", exact: true }).click();
+      await dialog.getByLabel("Use default reminders").check();
+      await dialog.getByRole("button", { name: "Remove reminder 1" }).click();
+      await dialog.getByRole("button", { name: "Save" }).click();
+      await expect(listed).toHaveText(["10 minutes before · default"]);
+      const [edited] = await findByTitle(request, title);
+      expect(edited).toMatchObject({
+        useDefaultReminders: true,
+        reminders: [],
+      });
+
+      // Neither: no reminders at all.
+      await dialog.getByRole("button", { name: "Edit", exact: true }).click();
+      await dialog.getByLabel("Use default reminders").uncheck();
+      await dialog.getByRole("button", { name: "Save" }).click();
+      await expect(listed).toHaveText(["No reminders"]);
+      await page.keyboard.press("Escape");
+      await expect(dialog).toBeHidden();
+      expect(problems).toEqual([]);
+    } finally {
+      await setOwnerDefaults(request, original);
+      for (const event of await findByTitle(request, title)) {
+        await request.delete(`/api/calendar/v1/events/${event.id}`);
+      }
+    }
+  });
+
+  test("Reminder defaults sets the owner's and a source's defaults", async ({
+    page,
+    request,
+  }) => {
+    const problems = watchForProblems(page);
+    const title = `Workspace defaults ${stamp}`;
+    const feedName = `Workspace feed ${stamp}`;
+    const day = addDays(today(), 6);
+    const original = await ownerDefaults(request);
+    // Disabled, so it is never refreshed and Status stays quiet about it.
+    const created = await request.post("/api/calendar/v1/sources", {
+      data: { name: feedName, url: failingFeedUrl(stamp), enabled: false },
+    });
+    expect(created.status(), await created.text()).toBe(201);
+    const source = (await created.json()) as { id: string };
+    try {
+      await setOwnerDefaults(request, { timed: [], allDay: [] });
+
+      await open(page, "month", day);
+      await page.getByRole("button", { name: "Reminder defaults" }).click();
+      const dialog = page.getByRole("dialog");
+      await expect(
+        dialog.getByRole("heading", { name: "Reminder defaults" }),
+      ).toBeVisible();
+      const timed = dialog.getByRole("group", { name: "Your timed events" });
+      const allDay = dialog.getByRole("group", { name: "Your all-day events" });
+      const feed = dialog.getByRole("group", { name: feedName });
+      await expect(allDay).toContainText("No default reminders.");
+      await expect(feed).toContainText("No default reminders.");
+
+      await timed.getByRole("button", { name: "Add reminder" }).click();
+      await dialog.getByLabel("Timed default 1 amount").fill("2");
+      await dialog.getByLabel("Timed default 1 unit").selectOption("hours");
+      // An all-day default starts as the evening before.
+      await allDay.getByRole("button", { name: "Add reminder" }).click();
+      await expect(
+        dialog.getByLabel("All-day default 1 days before"),
+      ).toHaveValue("1");
+      await dialog.getByLabel("All-day default 1 time").fill("18:30");
+      await feed.getByRole("button", { name: "Add reminder" }).click();
+      await dialog
+        .getByLabel(`${feedName} default 1 type`)
+        .selectOption("localTime");
+      await dialog.getByRole("button", { name: "Save" }).click();
+      await expect(dialog).toBeHidden();
+
+      expect(await ownerDefaults(request)).toEqual({
+        timed: [{ kind: "relative", minutesBefore: 120 }],
+        allDay: [{ kind: "localTime", daysBefore: 1, localTime: "18:30" }],
+      });
+      const saved = await request.get(`/api/calendar/v1/sources/${source.id}`);
+      expect(
+        ((await saved.json()) as { defaultReminders: Reminder[] | null })
+          .defaultReminders,
+      ).toEqual([{ kind: "localTime", daysBefore: 1, localTime: "19:00" }]);
+
+      // A new event offers the defaults for its kind and uses them.
+      await page.getByRole("button", { name: "New event" }).click();
+      await dialog.getByLabel("Title").fill(title);
+      await expect(dialog.getByTestId("default-reminders")).toHaveText(
+        "2 hours before (your default for timed events)",
+      );
+      await dialog.getByLabel("All day").check();
+      await expect(dialog.getByTestId("default-reminders")).toHaveText(
+        "1 day before at 18:30 (your default for all-day events)",
+      );
+      await dialog.getByLabel("Start date").fill(day);
+      await dialog.getByLabel("End date").fill(day);
+      await dialog.getByRole("button", { name: "Save" }).click();
+      await expect(dialog).toBeHidden();
+      await eventIn(page, title).click();
+      await expect(
+        dialog.getByTestId("event-reminders").getByRole("listitem"),
+      ).toHaveText(["1 day before at 18:30 · default"]);
+      await page.keyboard.press("Escape");
+      await expect(dialog).toBeHidden();
+
+      // The dialog reopens with what was saved; Cancel changes nothing.
+      await page.getByRole("button", { name: "Reminder defaults" }).click();
+      await expect(dialog.getByLabel("All-day default 1 time")).toHaveValue(
+        "18:30",
+      );
+      await dialog
+        .getByRole("button", { name: "Remove all-day default 1" })
+        .click();
+      await dialog.getByRole("button", { name: "Cancel" }).click();
+      await expect(dialog).toBeHidden();
+      expect((await ownerDefaults(request)).allDay).toHaveLength(1);
+      expect(problems).toEqual([]);
+    } finally {
+      await setOwnerDefaults(request, original);
+      await deleteSource(request, source.id);
+      for (const event of await findByTitle(request, title)) {
+        await request.delete(`/api/calendar/v1/events/${event.id}`);
+      }
+    }
   });
 
   test("search finds an event months away and opens it on its date", async ({

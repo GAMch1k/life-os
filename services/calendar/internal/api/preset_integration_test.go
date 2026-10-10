@@ -42,11 +42,11 @@ func (c sourcesClient) sources() []generated.CalendarSource {
 
 // isEveningBefore reports whether reminders are exactly "the day before at
 // 19:00", the ZAW default.
-func isEveningBefore(reminders *[]generated.Reminder) bool {
-	if reminders == nil || len(*reminders) != 1 {
+func isEveningBefore(reminders []generated.Reminder) bool {
+	if len(reminders) != 1 {
 		return false
 	}
-	reminder := (*reminders)[0]
+	reminder := reminders[0]
 	return reminder.Kind == generated.LocalTime && reminder.DaysBefore != nil && *reminder.DaysBefore == 1 &&
 		reminder.LocalTime != nil && *reminder.LocalTime == "19:00" && reminder.MinutesBefore == nil
 }
@@ -81,7 +81,7 @@ func TestZAWPresetSource(t *testing.T) {
 	}
 	source := listed[0]
 	if source.Id != id || source.Name != "ZAW" || source.Url != feedURL || !source.Enabled || source.Preset == nil || *source.Preset != "zaw" || !slices.Equal(source.Filter.Include, zawTypes) ||
-		len(source.Filter.Exclude) != 0 || !isEveningBefore(source.DefaultReminders) || !source.Refresh.NextRefreshAt.Equal(fixedNow) || source.Refresh.LastOutcome != nil {
+		len(source.Filter.Exclude) != 0 || source.DefaultReminders == nil || !isEveningBefore(*source.DefaultReminders) || !source.Refresh.NextRefreshAt.Equal(fixedNow) || source.Refresh.LastOutcome != nil {
 		t.Fatalf("source = %+v", source)
 	}
 
@@ -97,7 +97,7 @@ func TestZAWPresetSource(t *testing.T) {
 		perType[event.Title]++
 		if event.Location == nil || *event.Location != "Musterstadt, Beispielweg" || event.Status != generated.Active ||
 			event.Source.Kind != generated.EventSourceKindIcs || event.Source.Name == nil || *event.Source.Name != "ZAW" ||
-			event.Reminders != nil || !isEveningBefore(event.EffectiveReminders) {
+			len(event.Reminders) != 0 || !event.UseDefaultReminders || !isEveningBefore(event.EffectiveReminders) {
 			t.Errorf("event = %+v (source %+v)", event, event.Source)
 		}
 	}
@@ -138,7 +138,7 @@ func TestZAWPresetSource(t *testing.T) {
 	if edited.Name != "Müllabfuhr" || edited.DefaultReminders == nil || *(*edited.DefaultReminders)[0].MinutesBefore != 90 {
 		t.Fatalf("edits lost on restart: %+v", edited)
 	}
-	if event := c.events(id, false)[0]; *event.Source.Name != "Müllabfuhr" || *(*event.EffectiveReminders)[0].MinutesBefore != 90 {
+	if event := c.events(id, false)[0]; *event.Source.Name != "Müllabfuhr" || *event.EffectiveReminders[0].MinutesBefore != 90 {
 		t.Fatalf("event after the edit: %+v", event.Source)
 	}
 
@@ -188,7 +188,7 @@ func TestZAWPresetAdoptsAHandAddedSource(t *testing.T) {
 		t.Fatalf("adopted = %+v", adopted)
 	}
 	got := c.source(http.MethodGet, "/v1/sources/"+manual.Id.String(), nil, http.StatusOK)
-	if got.Name != "ZAW" || !slices.Equal(got.Filter.Include, zawTypes) || !isEveningBefore(got.DefaultReminders) || got.Enabled {
+	if got.Name != "ZAW" || !slices.Equal(got.Filter.Include, zawTypes) || got.DefaultReminders == nil || !isEveningBefore(*got.DefaultReminders) || got.Enabled {
 		t.Fatalf("taken over = %+v", got)
 	}
 	if listed := c.sources(); len(listed) != 2 || listed[1].Id != other.Id || listed[1].Name != "Other" || listed[1].Preset != nil || listed[0].Preset == nil {

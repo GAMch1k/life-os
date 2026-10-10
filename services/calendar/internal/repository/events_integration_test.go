@@ -2,8 +2,10 @@ package repository_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -32,11 +34,11 @@ func source(t *testing.T, queries *store.Queries, name string) pgtype.UUID {
 }
 
 func manualAllDay(title string, first, last time.Time) store.CreateEventParams {
-	return store.CreateEventParams{Title: title, AllDay: true, StartDate: on(first), EndDate: on(last), Status: "active", SourceKind: "manual"}
+	return store.CreateEventParams{Title: title, AllDay: true, StartDate: on(first), EndDate: on(last), Reminders: []byte(`[]`), UseDefaultReminders: true, Status: "active", SourceKind: "manual"}
 }
 
 func manualTimed(title string, start, end time.Time) store.CreateEventParams {
-	return store.CreateEventParams{Title: title, StartAt: at(start), EndAt: at(end), Status: "active", SourceKind: "manual"}
+	return store.CreateEventParams{Title: title, StartAt: at(start), EndAt: at(end), Reminders: []byte(`[]`), UseDefaultReminders: true, Status: "active", SourceKind: "manual"}
 }
 
 func TestEventPersistenceSupportsTimedAndAllDayEvents(t *testing.T) {
@@ -56,7 +58,7 @@ func TestEventPersistenceSupportsTimedAndAllDayEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if allDay.Status != "active" || allDay.SourceKind != "manual" || allDay.Reminders != nil {
+	if allDay.Status != "active" || allDay.SourceKind != "manual" || string(allDay.Reminders) != "[]" || !allDay.UseDefaultReminders {
 		t.Fatalf("defaults: %+v", allDay)
 	}
 	// Listing returns the non-recurring event; the recurring one comes from
@@ -122,22 +124,111 @@ func TestLifecycleMigrationKeepsExistingEvents(t *testing.T) {
 		t.Fatal("000004_event_lifecycle.up.sql not found")
 	}
 	testdb.Apply(t, pool, lifecycle)
-	queries := store.New(pool)
-	old, err := queries.GetEvent(ctx, id)
-	if err != nil {
+	// The generated queries name columns of later migrations, so the event is
+	// read with the columns this one knows.
+	var old struct {
+		status, sourceKind                          string
+		sourceID                                    pgtype.UUID
+		cancelledAt                                 pgtype.Timestamptz
+		reminders                                   []byte
+		location, description, provider, externalID *string
+		startDate                                   pgtype.Date
+	}
+	read := func() error {
+		return pool.QueryRow(ctx, `SELECT status, source_kind, source_id, cancelled_at, reminders, location, description, external_provider, external_id, start_date
+			FROM events WHERE id = $1`, id).Scan(&old.status, &old.sourceKind, &old.sourceID, &old.cancelledAt, &old.reminders,
+			&old.location, &old.description, &old.provider, &old.externalID, &old.startDate)
+	}
+	if err := read(); err != nil {
 		t.Fatal(err)
 	}
-	if old.Status != "active" || old.SourceKind != "manual" || old.SourceID.Valid || old.CancelledAt.Valid || old.Reminders != nil || old.Location != nil {
+	if old.status != "active" || old.sourceKind != "manual" || old.sourceID.Valid || old.cancelledAt.Valid || old.reminders != nil || old.location != nil {
 		t.Fatalf("migrated event = %+v", old)
 	}
-	if *old.Description != "kept" || *old.ExternalProvider != "legacy" || *old.ExternalID != "abc" || old.StartDate.Time.Format(time.DateOnly) != "2026-12-24" {
+	if *old.description != "kept" || *old.provider != "legacy" || *old.externalID != "abc" || old.startDate.Time.Format(time.DateOnly) != "2026-12-24" {
 		t.Fatalf("existing fields changed: %+v", old)
 	}
 	testdb.Apply(t, pool, strings.Replace(lifecycle, ".up.sql", ".down.sql", 1))
 	testdb.Apply(t, pool, lifecycle)
-	if _, err := queries.GetEvent(ctx, id); err != nil {
+	if err := read(); err != nil {
 		t.Fatalf("after down and up again: %v", err)
 	}
+}
+
+// The reminder-defaults migration keeps the reminders that apply to every
+// event: one that followed the defaults keeps them with none of its own, an
+// explicit list (even an empty one) applies instead of the defaults. Going
+// back down restores the old form.
+func TestReminderDefaultsMigrationKeepsEffectiveReminders(t *testing.T) {
+	ctx := context.Background()
+	pool := testdb.Open(t, "000006")
+	insert := func(title string, reminders any) pgtype.UUID {
+		var id pgtype.UUID
+		if err := pool.QueryRow(ctx, `INSERT INTO events (title, all_day, start_date, end_date, reminders)
+			VALUES ($1, true, '2026-11-17', '2026-11-17', $2::jsonb) RETURNING id`, title, reminders).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	evening := `[{"kind":"localTime","daysBefore":1,"localTime":"19:00"}]`
+	defaults, none, own := insert("Defaults", nil), insert("None", "[]"), insert("Own", evening)
+	var migration string
+	for _, path := range testdb.Migrations(t) {
+		if filepath.Base(path) == "000007_reminder_defaults.up.sql" {
+			migration = path
+		}
+	}
+	if migration == "" {
+		t.Fatal("000007_reminder_defaults.up.sql not found")
+	}
+	testdb.Apply(t, pool, migration)
+	queries := store.New(pool)
+	for id, want := range map[pgtype.UUID]struct {
+		reminders   string
+		useDefaults bool
+	}{defaults: {"[]", true}, none: {"[]", false}, own: {evening, false}} {
+		event, err := queries.GetEvent(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !sameJSON(t, event.Reminders, want.reminders) || event.UseDefaultReminders != want.useDefaults {
+			t.Errorf("%s: reminders %s, defaults %v; want %s, %v", event.Title, event.Reminders, event.UseDefaultReminders, want.reminders, want.useDefaults)
+		}
+	}
+	// New events start with defaults on and none of their own.
+	created, err := queries.CreateEvent(ctx, store.CreateEventParams{Title: "New", AllDay: true, StartDate: on(time.Date(2026, time.November, 18, 0, 0, 0, 0, time.UTC)), EndDate: on(time.Date(2026, time.November, 18, 0, 0, 0, 0, time.UTC)),
+		Reminders: []byte(`[]`), UseDefaultReminders: true, Status: "active", SourceKind: "manual"})
+	if err != nil || !created.UseDefaultReminders {
+		t.Fatalf("created = %+v, %v", created, err)
+	}
+	var settings int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM calendar_settings`).Scan(&settings); err != nil || settings != 0 {
+		t.Fatalf("settings rows = %d, %v; want none before the first change", settings, err)
+	}
+
+	testdb.Apply(t, pool, strings.Replace(migration, ".up.sql", ".down.sql", 1))
+	for id, want := range map[pgtype.UUID]*string{defaults: nil, none: text("[]"), own: &evening} {
+		var reminders []byte
+		if err := pool.QueryRow(ctx, `SELECT reminders FROM events WHERE id = $1`, id).Scan(&reminders); err != nil {
+			t.Fatal(err)
+		}
+		if (want == nil) != (reminders == nil) || (want != nil && !sameJSON(t, reminders, *want)) {
+			t.Errorf("down: reminders %s, want %v", reminders, want)
+		}
+	}
+	testdb.Apply(t, pool, migration)
+}
+
+func sameJSON(t *testing.T, raw []byte, want string) bool {
+	t.Helper()
+	var got, expected any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("decode %s: %v", raw, err)
+	}
+	if err := json.Unmarshal([]byte(want), &expected); err != nil {
+		t.Fatal(err)
+	}
+	return reflect.DeepEqual(got, expected)
 }
 
 // The schema keeps the lifecycle invariants even for writers that bypass the

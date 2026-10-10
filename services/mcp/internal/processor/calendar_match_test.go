@@ -386,6 +386,10 @@ func TestValidActionChecksCalendarChanges(t *testing.T) {
 		{"status", "calendar_update", map[string]any{"eventQuery": "dentist", "status": "cancelled"}, false},
 		{"bad alternatives", "calendar_update", map[string]any{"eventQuery": "dentist", "eventQueryAlternatives": "Zahnarzt", "title": "x"}, false},
 		{"bad reminders", "calendar_update", map[string]any{"eventQuery": "dentist", "reminders": "30 minutes"}, false},
+		{"defaults off", "calendar_update", map[string]any{"eventQuery": "dentist", "useDefaultReminders": false}, true},
+		{"bad defaults flag", "calendar_update", map[string]any{"eventQuery": "dentist", "useDefaultReminders": "no"}, false},
+		{"create with own reminders only", "calendar_create", map[string]any{"title": "Dentist", "allDay": true, "useDefaultReminders": false, "reminders": []any{map[string]any{"kind": "relative", "minutesBefore": 10.0}}}, true},
+		{"create with a bad defaults flag", "calendar_create", map[string]any{"title": "Dentist", "allDay": true, "useDefaultReminders": "yes"}, false},
 		{"cancel", "calendar_cancel", map[string]any{"eventQuery": "dentist", "eventQueryAlternatives": []any{"Zahnarzt"}}, true},
 		{"cancel with change", "calendar_cancel", map[string]any{"eventQuery": "dentist", "title": "x"}, false},
 		{"create with location", "calendar_create", map[string]any{"title": "Dentist", "location": "Dr. Weber", "allDay": true, "startDate": "2026-10-12", "endDate": "2026-10-12", "timeZone": "Europe/Berlin"}, true},
@@ -421,6 +425,34 @@ func TestKeepDurationCompletesAReschedule(t *testing.T) {
 		if !reflect.DeepEqual(tc.arguments, tc.want) {
 			t.Errorf("%s: %#v, want %#v", tc.name, tc.arguments, tc.want)
 		}
+	}
+}
+
+func TestCompleteCreateGivesANewEventItsDefaultLength(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		arguments map[string]any
+		want      map[string]any
+	}{
+		{"timed lasts an hour", map[string]any{"startAt": "2026-10-11T11:00:00+02:00"}, map[string]any{"startAt": "2026-10-11T11:00:00+02:00", "endAt": "2026-10-11T12:00:00+02:00"}},
+		{"in UTC", map[string]any{"startAt": "2026-10-25T00:30:00Z"}, map[string]any{"startAt": "2026-10-25T00:30:00Z", "endAt": "2026-10-25T01:30:00Z"}},
+		{"all-day is one day", map[string]any{"allDay": true, "startDate": "2026-10-12"}, map[string]any{"allDay": true, "startDate": "2026-10-12", "endDate": "2026-10-12"}},
+		{"an explicit end is kept", map[string]any{"startAt": "2026-10-11T11:00:00+02:00", "endAt": "2026-10-11T11:30:00+02:00"}, map[string]any{"startAt": "2026-10-11T11:00:00+02:00", "endAt": "2026-10-11T11:30:00+02:00"}},
+		{"an unreadable start is left to Calendar", map[string]any{"startAt": "Sunday at 11"}, map[string]any{"startAt": "Sunday at 11"}},
+	} {
+		completeCreate(tc.arguments)
+		if !reflect.DeepEqual(tc.arguments, tc.want) {
+			t.Errorf("%s: %#v, want %#v", tc.name, tc.arguments, tc.want)
+		}
+	}
+}
+
+func TestACalendarCreateWithoutAnEndLastsAnHour(t *testing.T) {
+	tools := newCalendarTools("Add a haircut on Sunday at 11:00, remind me a day before and 3 hours before.")
+	runCalendarPlan(t, tools, `{"actions":[{"tool":"calendar_create","arguments":{"title":"Haircut","allDay":false,"startAt":"2026-10-11T11:00:00+02:00","reminders":[{"kind":"relative","minutesBefore":1440},{"kind":"relative","minutesBefore":180}]}}],"confidence":0.95}`)
+	input := tools.inputs["calendar_create"]
+	if input == nil || input["endAt"] != "2026-10-11T12:00:00+02:00" || !contains(tools.calls, "inbox_resolve") {
+		t.Fatalf("calls = %#v, input = %#v", tools.calls, input)
 	}
 }
 

@@ -5,10 +5,12 @@ import {
   apiErrorMessage,
   type CalendarEvent,
   createRequest,
+  defaultRemindersNote,
   draftFromEvent,
   type EventDraft,
   eventWhenLabel,
   fieldErrorsFromApi,
+  formDefaults,
   fromReminderDraft,
   moveStart,
   newDraft,
@@ -16,9 +18,13 @@ import {
   parseView,
   readDraft,
   readOnlyReason,
-  remindersSummary,
+  readReminders,
+  reminderChanges,
   reminderLabel,
+  reminderLines,
   rescheduleRequest,
+  sameReminders,
+  settingsRequest,
   sourceLabel,
   splitSearchResults,
   toEventInput,
@@ -36,6 +42,10 @@ const event = (
   title: `Event ${id}`,
   status: "active",
   source: { kind: "manual" },
+  reminders: [],
+  useDefaultReminders: true,
+  defaultReminders: [],
+  effectiveReminders: [],
   createdAt: "2026-10-01T00:00:00Z",
   updatedAt: "2026-10-01T00:00:00Z",
   ...fields,
@@ -62,10 +72,24 @@ const draft = (fields: Partial<EventDraft>): EventDraft => ({
   timeZone: "",
   location: "",
   notes: "",
-  reminderMode: "default",
+  useDefaultReminders: true,
   reminders: [],
   ...fields,
 });
+
+const halfHour = { kind: "relative" as const, minutesBefore: 30 };
+const threeHours = { kind: "relative" as const, minutesBefore: 180 };
+const evening = {
+  kind: "localTime" as const,
+  daysBefore: 1,
+  localTime: "19:00",
+};
+const zawSource = {
+  kind: "ics" as const,
+  sourceId: "s",
+  externalUid: "u",
+  name: "ZAW",
+};
 
 test("views and days from the URL are validated", () => {
   assert.equal(parseView("week"), "week");
@@ -198,7 +222,7 @@ test("event times read in the owner's zone, with the year when it differs", () =
   );
 });
 
-test("reminders read as words; null follows the defaults, [] means none", () => {
+test("reminders read as words", () => {
   assert.equal(
     reminderLabel({ kind: "relative", minutesBefore: 0 }),
     "At the start",
@@ -223,9 +247,98 @@ test("reminders read as words; null follows the defaults, [] means none", () => 
     reminderLabel({ kind: "localTime", daysBefore: 0, localTime: "08:00" }),
     "On the day at 08:00",
   );
-  assert.deepEqual(remindersSummary(null), ["Default reminders"]);
-  assert.deepEqual(remindersSummary(undefined), ["Default reminders"]);
-  assert.deepEqual(remindersSummary([]), ["No reminders"]);
+});
+
+test("the details list every reminder that applies and where defaults come from", () => {
+  // A Life OS event: the owner's default, then its own reminders.
+  assert.deepEqual(
+    reminderLines({
+      ...timed,
+      reminders: [threeHours, halfHour],
+      defaultReminders: [halfHour],
+      effectiveReminders: [halfHour, threeHours],
+    }),
+    [
+      { label: "30 minutes before", origin: "default" },
+      { label: "3 hours before" },
+    ],
+  );
+  // An imported event's defaults are its source's.
+  assert.deepEqual(
+    reminderLines({
+      ...timed,
+      source: zawSource,
+      reminders: [halfHour],
+      defaultReminders: [evening],
+      effectiveReminders: [evening, halfHour],
+    }),
+    [
+      { label: "1 day before at 19:00", origin: "ZAW default" },
+      { label: "30 minutes before" },
+    ],
+  );
+  // Defaults turned off: an own reminder equal to a default is just own.
+  assert.deepEqual(
+    reminderLines({
+      ...timed,
+      reminders: [halfHour],
+      useDefaultReminders: false,
+      defaultReminders: [halfHour],
+      effectiveReminders: [halfHour],
+    }),
+    [{ label: "30 minutes before" }],
+  );
+  assert.deepEqual(reminderLines(timed), []);
+});
+
+test("the form offers the source's defaults, else the owner's for the event's kind", () => {
+  const owner = { timed: [halfHour], allDay: [evening] };
+  assert.deepEqual(formDefaults(undefined, false, owner), [halfHour]);
+  assert.deepEqual(formDefaults(undefined, true, owner), [evening]);
+  assert.equal(formDefaults(undefined, true, "loading"), "loading");
+  const imported = {
+    ...timed,
+    source: zawSource,
+    defaultReminders: [evening],
+  };
+  assert.deepEqual(formDefaults(imported, false, owner), [evening]);
+  assert.deepEqual(formDefaults(imported, false, "unavailable"), [evening]);
+  // While the settings load, an event's own defaults stand in for its kind.
+  const own = { ...timed, defaultReminders: [threeHours] };
+  assert.deepEqual(formDefaults(own, false, "loading"), [threeHours]);
+  assert.equal(formDefaults(own, true, "loading"), "loading");
+  assert.deepEqual(formDefaults(own, true, owner), [evening]);
+});
+
+test("the defaults note lists what would apply, or where to set some", () => {
+  assert.equal(
+    defaultRemindersNote([evening], { allDay: false, source: "ZAW" }),
+    "1 day before at 19:00 (ZAW)",
+  );
+  assert.equal(
+    defaultRemindersNote([halfHour], { allDay: false }),
+    "30 minutes before (your default for timed events)",
+  );
+  assert.equal(
+    defaultRemindersNote([evening, halfHour], { allDay: true }),
+    "1 day before at 19:00, 30 minutes before (your defaults for all-day events)",
+  );
+  assert.equal(
+    defaultRemindersNote([], { allDay: true }),
+    "No default reminders for all-day events yet; set them in Reminder defaults.",
+  );
+  assert.equal(
+    defaultRemindersNote([], { allDay: false, source: "ZAW" }),
+    "ZAW has no default reminders yet; set them in Reminder defaults.",
+  );
+  assert.equal(
+    defaultRemindersNote("loading", { allDay: false }),
+    "Loading your default reminders…",
+  );
+  assert.equal(
+    defaultRemindersNote("unavailable", { allDay: false }),
+    "Your default reminders could not be loaded.",
+  );
 });
 
 test("reminder rows round-trip through the form", () => {
@@ -251,6 +364,27 @@ test("reminder rows round-trip through the form", () => {
     fromReminderDraft({ kind: "localTime", daysBefore: "1", time: "" }),
     undefined,
   );
+  assert.deepEqual(
+    readReminders([
+      { kind: "relative", amount: "3", unit: "hours" },
+      { kind: "localTime", daysBefore: "1", time: "19:00" },
+    ]),
+    { reminders: [threeHours, evening] },
+  );
+  assert.deepEqual(
+    readReminders([
+      { kind: "relative", amount: "3", unit: "hours" },
+      { kind: "relative", amount: "", unit: "minutes" },
+    ]),
+    {
+      error:
+        "Complete reminder 2: a whole number and, for a day reminder, a time.",
+    },
+  );
+  assert.ok(sameReminders(null, []));
+  assert.ok(sameReminders([evening], [{ ...evening }]));
+  assert.ok(!sameReminders([halfHour, evening], [evening, halfHour]));
+  assert.ok(!sameReminders([halfHour], [{ ...halfHour, minutesBefore: 31 }]));
 });
 
 test("an event fills the form in its own zone, else the owner's", () => {
@@ -259,26 +393,32 @@ test("an event fills the form in its own zone, else the owner's", () => {
   assert.equal(berlin.startTime, "15:00");
   assert.equal(berlin.endTime, "16:00");
   assert.equal(berlin.timeZone, "");
-  assert.equal(berlin.reminderMode, "default");
+  assert.equal(berlin.useDefaultReminders, true);
+  assert.deepEqual(berlin.reminders, []);
 
   const scheduled = draftFromEvent(
     {
       ...timed,
       timeZone: "America/New_York",
-      reminders: [{ kind: "relative", minutesBefore: 10 }],
+      reminders: [{ kind: "relative", minutesBefore: 10 }, evening],
     },
     "Europe/Berlin",
   );
   assert.equal(scheduled.startTime, "09:00");
   assert.equal(scheduled.timeZone, "America/New_York");
-  assert.equal(scheduled.reminderMode, "custom");
-  assert.equal(scheduled.reminders.length, 1);
+  assert.deepEqual(scheduled.reminders, [
+    { kind: "relative", amount: "10", unit: "minutes" },
+    { kind: "localTime", daysBefore: "1", time: "19:00" },
+  ]);
 
-  const allDay = draftFromEvent({ ...trip, reminders: [] }, "Europe/Berlin");
+  const allDay = draftFromEvent(
+    { ...trip, useDefaultReminders: false },
+    "Europe/Berlin",
+  );
   assert.equal(allDay.allDay, true);
   assert.equal(allDay.startDate, "2026-10-16");
   assert.equal(allDay.endDate, "2026-10-18");
-  assert.equal(allDay.reminderMode, "none");
+  assert.equal(allDay.useDefaultReminders, false);
 });
 
 test("a new event starts at the next full hour, or the range picked", () => {
@@ -288,6 +428,8 @@ test("a new event starts at the next full hour, or the range picked", () => {
     [next.startDate, next.startTime, next.endDate, next.endTime],
     ["2026-10-10", "11:00", "2026-10-10", "12:00"],
   );
+  assert.equal(next.useDefaultReminders, true);
+  assert.deepEqual(next.reminders, []);
   const days = newDraft("Europe/Berlin", now, {
     allDay: true,
     start: new Date(2026, 9, 14),
@@ -327,7 +469,8 @@ test("the form is read in the zone its times are in", () => {
     title: "Dentist",
     description: null,
     location: "Praxis",
-    reminders: null,
+    reminders: [],
+    useDefaultReminders: true,
     allDay: false,
     startAt: "2026-10-16T13:00:00.000Z",
     endAt: "2026-10-16T14:00:00.000Z",
@@ -358,10 +501,7 @@ test("the form checks what it can and leaves the rest to the API", () => {
   // An end before the start is the API's call (400), shown at the field.
   assert.ok("fields" in readDraft(draft({ endTime: "14:00" }), "UTC"));
   const reminder = readDraft(
-    draft({
-      reminderMode: "custom",
-      reminders: [{ kind: "relative", amount: "", unit: "minutes" }],
-    }),
+    draft({ reminders: [{ kind: "relative", amount: "", unit: "minutes" }] }),
     "UTC",
   );
   assert.ok("errors" in reminder && reminder.errors.reminders);
@@ -376,6 +516,7 @@ test("all-day forms keep an inclusive last day", () => {
   assert.deepEqual(createRequest(read.fields), {
     title: "Dentist",
     allDay: true,
+    useDefaultReminders: true,
     startDate: "2026-10-16",
     endDate: "2026-10-16",
   });
@@ -383,25 +524,24 @@ test("all-day forms keep an inclusive last day", () => {
 
 test("creating leaves out empty fields; updating clears them", () => {
   const read = readDraft(
-    draft({ reminderMode: "none", timeZone: "Europe/Berlin" }),
+    draft({ useDefaultReminders: false, timeZone: "Europe/Berlin" }),
     "UTC",
   );
   assert.ok("fields" in read);
   assert.deepEqual(createRequest(read.fields), {
     title: "Dentist",
     allDay: false,
-    reminders: [],
+    useDefaultReminders: false,
     startAt: "2026-10-16T13:00:00.000Z",
     endAt: "2026-10-16T14:00:00.000Z",
     timeZone: "Europe/Berlin",
   });
   const cleared = readDraft(draft({}), "UTC");
   assert.ok("fields" in cleared);
-  assert.deepEqual(updateRequest(cleared.fields), {
+  assert.deepEqual(updateRequest(cleared.fields, timed), {
     title: "Dentist",
     description: null,
     location: null,
-    reminders: null,
     allDay: false,
     startAt: "2026-10-16T15:00:00.000Z",
     endAt: "2026-10-16T16:00:00.000Z",
@@ -412,10 +552,82 @@ test("creating leaves out empty fields; updating clears them", () => {
     "UTC",
   );
   assert.ok("fields" in allDay);
-  const body = updateRequest(allDay.fields);
+  const body = updateRequest(allDay.fields, timed);
   assert.equal(body.allDay, true);
   assert.equal(body.endDate, "2026-10-17");
   assert.equal("timeZone" in body, false);
+});
+
+test("several own reminders are created alongside the defaults", () => {
+  const read = readDraft(
+    draft({
+      reminders: [
+        { kind: "relative", amount: "1", unit: "days" },
+        { kind: "relative", amount: "3", unit: "hours" },
+        { kind: "relative", amount: "30", unit: "minutes" },
+      ],
+    }),
+    "UTC",
+  );
+  assert.ok("fields" in read);
+  const body = createRequest(read.fields);
+  assert.deepEqual(body.reminders, [
+    { kind: "relative", minutesBefore: 1440 },
+    threeHours,
+    halfHour,
+  ]);
+  assert.equal(body.useDefaultReminders, true);
+});
+
+test("a PATCH names only the reminder fields that changed", () => {
+  const stored = { ...timed, reminders: [halfHour] };
+  assert.deepEqual(
+    reminderChanges(
+      { reminders: [halfHour], useDefaultReminders: true },
+      stored,
+    ),
+    {},
+  );
+  assert.deepEqual(
+    reminderChanges(
+      { reminders: [halfHour, threeHours], useDefaultReminders: true },
+      stored,
+    ),
+    { reminders: [halfHour, threeHours] },
+  );
+  // Emptying the list sends [] (no own reminders), not null.
+  assert.deepEqual(
+    reminderChanges({ reminders: [], useDefaultReminders: false }, stored),
+    { reminders: [], useDefaultReminders: false },
+  );
+  const read = readDraft(
+    draft({ reminders: [{ kind: "relative", amount: "3", unit: "hours" }] }),
+    "UTC",
+  );
+  assert.ok("fields" in read);
+  assert.deepEqual(updateRequest(read.fields, stored).reminders, [threeHours]);
+  assert.equal(
+    "useDefaultReminders" in updateRequest(read.fields, stored),
+    false,
+  );
+});
+
+test("Reminder defaults saves only the lists that changed", () => {
+  const saved = { timed: [halfHour], allDay: [evening] };
+  assert.equal(
+    settingsRequest(saved, { timed: [halfHour], allDay: [evening] }),
+    undefined,
+  );
+  assert.deepEqual(
+    settingsRequest(saved, {
+      timed: [halfHour, threeHours],
+      allDay: [evening],
+    }),
+    { defaultReminders: { timed: [halfHour, threeHours] } },
+  );
+  assert.deepEqual(settingsRequest(saved, { timed: [], allDay: [] }), {
+    defaultReminders: { timed: [], allDay: [] },
+  });
 });
 
 test("API messages land at the field they concern", () => {

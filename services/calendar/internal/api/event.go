@@ -15,7 +15,7 @@ import (
 	store "github.com/GAMch1k/life-os/services/calendar/internal/repository/generated"
 )
 
-// maxReminders bounds an event's reminder list.
+// maxReminders bounds an event's own reminders and each default list.
 const maxReminders = 10
 
 // eventFields is an event's editable state. Create builds it from the request
@@ -32,7 +32,8 @@ type eventFields struct {
 	StartDate, EndDate  *types.Date
 	TimeZone            *string
 	Recurrence          *generated.Recurrence
-	Reminders           *[]generated.Reminder // nil follows the defaults
+	Reminders           []generated.Reminder // the event's own, never nil
+	UseDefaultReminders bool                 // the defaults apply as well
 	Status              generated.EventStatus
 	CancelledAt         *time.Time
 	RemovedFromSourceAt *time.Time
@@ -42,8 +43,17 @@ func fieldsFromCreate(body generated.CreateEventRequest) eventFields {
 	return eventFields{
 		Title: body.Title, Description: body.Description, Location: body.Location, AllDay: body.AllDay,
 		StartAt: body.StartAt, EndAt: body.EndAt, StartDate: body.StartDate, EndDate: body.EndDate,
-		TimeZone: body.TimeZone, Recurrence: body.Recurrence, Reminders: body.Reminders, Status: generated.Active,
+		TimeZone: body.TimeZone, Recurrence: body.Recurrence, Reminders: remindersOrNone(body.Reminders),
+		UseDefaultReminders: body.UseDefaultReminders == nil || *body.UseDefaultReminders, Status: generated.Active,
 	}
+}
+
+// remindersOrNone is value, or no reminders when value is nil.
+func remindersOrNone(value *[]generated.Reminder) []generated.Reminder {
+	if value == nil {
+		return []generated.Reminder{}
+	}
+	return *value
 }
 
 func fieldsFromStore(value store.Event) (eventFields, error) {
@@ -55,8 +65,9 @@ func fieldsFromStore(value store.Event) (eventFields, error) {
 		Title: value.Title, Description: value.Description, Location: value.Location, AllDay: value.AllDay,
 		StartAt: nullableTime(value.StartAt), EndAt: nullableTime(value.EndAt),
 		StartDate: nullableDate(value.StartDate), EndDate: nullableDate(value.EndDate),
-		TimeZone: value.TimeZone, Recurrence: recurrenceOutput(value), Reminders: reminders,
-		Status: generated.EventStatus(value.Status), CancelledAt: nullableTime(value.CancelledAt),
+		TimeZone: value.TimeZone, Recurrence: recurrenceOutput(value), Reminders: remindersOrNone(reminders),
+		UseDefaultReminders: value.UseDefaultReminders,
+		Status:              generated.EventStatus(value.Status), CancelledAt: nullableTime(value.CancelledAt),
 		RemovedFromSourceAt: nullableTime(value.RemovedFromSourceAt),
 	}, nil
 }
@@ -85,15 +96,8 @@ func (f eventFields) validate() error {
 			return errors.New("recurrence interval must be at least 1")
 		}
 	}
-	if f.Reminders != nil {
-		if len(*f.Reminders) > maxReminders {
-			return fmt.Errorf("an event takes at most %d reminders", maxReminders)
-		}
-		for _, reminder := range *f.Reminders {
-			if err := validateReminder(reminder); err != nil {
-				return err
-			}
-		}
+	if err := validateReminders(f.Reminders, "an event takes at most %d reminders of its own"); err != nil {
+		return err
 	}
 	if !f.Status.Valid() {
 		return errors.New("status must be active or cancelled")
@@ -121,7 +125,7 @@ func validateTimes(allDay bool, start, end *time.Time, startDate, endDate *types
 }
 
 func (f eventFields) createParams() (store.CreateEventParams, error) {
-	reminders, err := encodeReminders(f.Reminders)
+	reminders, err := encodeReminders(&f.Reminders)
 	if err != nil {
 		return store.CreateEventParams{}, err
 	}
@@ -130,13 +134,13 @@ func (f eventFields) createParams() (store.CreateEventParams, error) {
 		Title: f.Title, Description: f.Description, Location: f.Location, AllDay: f.AllDay,
 		StartAt: timestamp(f.StartAt), EndAt: timestamp(f.EndAt), StartDate: datePointer(f.StartDate), EndDate: datePointer(f.EndDate),
 		TimeZone: f.TimeZone, RecurrenceFrequency: frequency, RecurrenceInterval: interval, RecurrenceUntil: until,
-		Reminders: reminders, Status: string(f.Status), CancelledAt: timestamp(f.CancelledAt),
+		Reminders: reminders, UseDefaultReminders: f.UseDefaultReminders, Status: string(f.Status), CancelledAt: timestamp(f.CancelledAt),
 		SourceKind: string(generated.EventSourceKindManual), RemovedFromSourceAt: timestamp(f.RemovedFromSourceAt),
 	}, nil
 }
 
 func (f eventFields) updateParams(id pgtype.UUID, expectedUpdatedAt pgtype.Timestamptz) (store.UpdateEventParams, error) {
-	reminders, err := encodeReminders(f.Reminders)
+	reminders, err := encodeReminders(&f.Reminders)
 	if err != nil {
 		return store.UpdateEventParams{}, err
 	}
@@ -145,7 +149,7 @@ func (f eventFields) updateParams(id pgtype.UUID, expectedUpdatedAt pgtype.Times
 		Title: f.Title, Description: f.Description, Location: f.Location, AllDay: f.AllDay,
 		StartAt: timestamp(f.StartAt), EndAt: timestamp(f.EndAt), StartDate: datePointer(f.StartDate), EndDate: datePointer(f.EndDate),
 		TimeZone: f.TimeZone, RecurrenceFrequency: frequency, RecurrenceInterval: interval, RecurrenceUntil: until,
-		Reminders: reminders, Status: string(f.Status), CancelledAt: timestamp(f.CancelledAt),
+		Reminders: reminders, UseDefaultReminders: f.UseDefaultReminders, Status: string(f.Status), CancelledAt: timestamp(f.CancelledAt),
 		RemovedFromSourceAt: timestamp(f.RemovedFromSourceAt), ID: id, ExpectedUpdatedAt: expectedUpdatedAt,
 	}, nil
 }
@@ -169,6 +173,7 @@ func event(value store.Event) (generated.CalendarEvent, error) {
 		Id: uuid(value.ID), Title: fields.Title, Description: fields.Description, Location: fields.Location,
 		AllDay: fields.AllDay, StartAt: fields.StartAt, EndAt: fields.EndAt, StartDate: fields.StartDate, EndDate: fields.EndDate,
 		TimeZone: fields.TimeZone, Recurrence: fields.Recurrence, Reminders: fields.Reminders,
+		UseDefaultReminders: fields.UseDefaultReminders, DefaultReminders: []generated.Reminder{}, EffectiveReminders: []generated.Reminder{},
 		Status: fields.Status, CancelledAt: fields.CancelledAt, RemovedFromSourceAt: fields.RemovedFromSourceAt,
 		Source: source, ExternalReference: external,
 		CreatedAt: value.CreatedAt.Time.UTC(), UpdatedAt: value.UpdatedAt.Time.UTC(),
@@ -182,6 +187,20 @@ type storedReminder struct {
 	MinutesBefore *int    `json:"minutesBefore,omitempty"`
 	DaysBefore    *int    `json:"daysBefore,omitempty"`
 	LocalTime     *string `json:"localTime,omitempty"`
+}
+
+// validateReminders checks a reminder list: at most maxReminders (tooMany
+// formats the error with the limit), each one valid.
+func validateReminders(list []generated.Reminder, tooMany string) error {
+	if len(list) > maxReminders {
+		return fmt.Errorf(tooMany, maxReminders)
+	}
+	for _, reminder := range list {
+		if err := validateReminder(reminder); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func validateReminder(value generated.Reminder) error {

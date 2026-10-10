@@ -25,6 +25,16 @@ info:
     imports and refreshes on its own schedule. Imported events are read-only
     through this API except for their reminders; only their source changes,
     cancels, or restores them.
+
+
+    Reminders work like Google Calendar's notifications. Every event can
+    follow its calendar's default reminders (`useDefaultReminders`) and add
+    any number of its own (`reminders`, at most 10); `effectiveReminders` is
+    every reminder that applies. An imported event's defaults are its
+    source's `defaultReminders`; an event created in Life OS uses the owner's
+    defaults from Calendar settings, one list for timed and one for all-day
+    events. Calendar stores reminder intent only and delivers no
+    notifications.
   license: {name: UNLICENSED, url: https://life-os.local/license}
 servers: [{url: http://calendar:8080}]
 paths:
@@ -128,7 +138,8 @@ paths:
         `status: cancelled` keeps the event as history and drops it from
         listings; `status: active` restores it. An event imported from a
         source (`source.kind` other than `manual`) is read-only except for
-        `reminders`: naming any other field returns 409 `managed_by_source`.
+        `reminders` and `useDefaultReminders`: naming any other field returns
+        409 `managed_by_source`.
       operationId: updateEvent
       security: []
       parameters: [{name: eventId, in: path, required: true, schema: {type: string, format: uuid}}]
@@ -137,7 +148,7 @@ paths:
         '200': {description: Event, content: {application/json: {schema: {$ref: '#/components/schemas/CalendarEvent'}}}}
         '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}
         '404': {description: Event not found}
-        '409': {description: 'The event kept changing concurrently (retry the update), or it is imported and the update names more than reminders (managed_by_source)'}
+        '409': {description: 'The event kept changing concurrently (retry the update), or it is imported and the update names more than its reminders (managed_by_source)'}
     delete:
       summary: Delete a calendar event
       description: 'Removes the event permanently. Set `status: cancelled` instead to keep it as history. Imported events cannot be deleted (409 `managed_by_source`): their source removes them.'
@@ -228,6 +239,26 @@ paths:
         '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}
         '404': {description: Source not found}
         '409': {description: 'The source is disabled (source_disabled), a refresh is already running (refresh_in_progress), or the source changed during the refresh (conflict)'}
+  /v1/settings:
+    get:
+      summary: Get the Calendar settings
+      description: The owner's default reminders for the events they create in Life OS.
+      operationId: getSettings
+      security: []
+      responses:
+        '200': {description: Settings, content: {application/json: {schema: {$ref: '#/components/schemas/CalendarSettings'}}}}
+    patch:
+      summary: Update the Calendar settings
+      description: >-
+        Replaces the default reminder lists present in the body. Every Life OS
+        event that uses its defaults follows the change; imported events keep
+        their source's defaults.
+      operationId: updateSettings
+      security: []
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateSettingsRequest'}}}}
+      responses:
+        '200': {description: Settings, content: {application/json: {schema: {$ref: '#/components/schemas/CalendarSettings'}}}}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}
 components:
   parameters:
     TimeZone: {name: timeZone, in: query, description: 'IANA timezone (for example Europe/Berlin) in which all-day dates are compared with instants. Defaults to the owner''s timezone configured for Calendar.', schema: {type: string, minLength: 1, maxLength: 64}}
@@ -300,7 +331,7 @@ components:
         localTime: {type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$', description: Required for localTime (and only there); 24-hour HH:MM.}
     CalendarEvent:
       type: object
-      required: [id, title, allDay, status, source, createdAt, updatedAt]
+      required: [id, title, allDay, reminders, useDefaultReminders, defaultReminders, effectiveReminders, status, source, createdAt, updatedAt]
       properties:
         id: {type: string, format: uuid}
         title: {type: string}
@@ -313,8 +344,10 @@ components:
         endDate: {type: string, format: date, nullable: true, description: Last day (inclusive) of an all-day event.}
         timeZone: {type: string, nullable: true, description: 'IANA timezone a timed event was scheduled in (for example an ICS TZID); a display hint. Null for all-day events and when unknown.'}
         recurrence: {$ref: '#/components/schemas/Recurrence'}
-        reminders: {type: array, nullable: true, items: {$ref: '#/components/schemas/Reminder'}, description: 'Reminder intent. Null means the event follows its source''s (or the owner''s) defaults; an empty list means explicitly none.'}
-        effectiveReminders: {type: array, items: {$ref: '#/components/schemas/Reminder'}, description: 'The reminders that apply: `reminders` when set, else the default reminders of the event''s source, else none. Read-only.'}
+        reminders: {type: array, items: {$ref: '#/components/schemas/Reminder'}, description: 'The event''s own reminders, added to its defaults when `useDefaultReminders` is true.'}
+        useDefaultReminders: {type: boolean, description: Whether the event's default reminders apply as well as its own.}
+        defaultReminders: {type: array, items: {$ref: '#/components/schemas/Reminder'}, description: 'The default reminders for this event, whether or not it uses them: its source''s `defaultReminders` for an imported event, else the owner''s defaults for timed or all-day events (Calendar settings). Read-only.'}
+        effectiveReminders: {type: array, items: {$ref: '#/components/schemas/Reminder'}, description: 'Every reminder that applies: `defaultReminders` when `useDefaultReminders` is true, then the event''s own `reminders`, each reminder once. A notifier triggers each of them. Read-only.'}
         occurrence: {$ref: '#/components/schemas/EventOccurrence'}
         status: {$ref: '#/components/schemas/EventStatus'}
         cancelledAt: {type: string, format: date-time, nullable: true, description: When the event was cancelled; set exactly when status is cancelled.}
@@ -338,7 +371,8 @@ components:
         endDate: {type: string, format: date}
         timeZone: {type: string, description: IANA timezone of a timed event.}
         recurrence: {$ref: '#/components/schemas/Recurrence'}
-        reminders: {type: array, maxItems: 10, items: {$ref: '#/components/schemas/Reminder'}, description: Leave out to follow the defaults.}
+        reminders: {type: array, maxItems: 10, items: {$ref: '#/components/schemas/Reminder'}, description: 'The event''s own reminders, added to its defaults; leave out for none.'}
+        useDefaultReminders: {type: boolean, default: true, description: 'Whether the default reminders apply as well; false (with no `reminders`) means no reminders at all.'}
         externalReference: {$ref: '#/components/schemas/ExternalReference'}
     UpdateEventRequest:
       type: object
@@ -354,7 +388,8 @@ components:
         endDate: {type: string, format: date, nullable: true}
         timeZone: {type: string, nullable: true}
         recurrence: {$ref: '#/components/schemas/Recurrence', nullable: true}
-        reminders: {type: array, nullable: true, maxItems: 10, items: {$ref: '#/components/schemas/Reminder'}, description: Replaces the reminders; null returns the event to the defaults.}
+        reminders: {type: array, nullable: true, maxItems: 10, items: {$ref: '#/components/schemas/Reminder'}, description: 'Replaces the event''s own reminders. Null returns the event to its defaults alone: no own reminders, and `useDefaultReminders` true unless the body sets it.'}
+        useDefaultReminders: {type: boolean, description: Turns the default reminders on or off; the event's own reminders stay.}
         status: {$ref: '#/components/schemas/EventStatus'}
     EventList: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/CalendarEvent'}}, nextCursor: {type: string, nullable: true, description: Set when more events match; pass it as cursor for the next page.}}}
     CalendarSourceKind:
@@ -416,7 +451,7 @@ components:
         enabled: {type: boolean, description: Disabled sources are not refreshed; their events stay as they are.}
         preset: {type: string, nullable: true, description: 'Set (such as `zaw`) for a source Calendar configures from its own environment at startup; null for sources added through the API. A preset source can be edited like any other, but while its environment setting is present a deleted one is added again at the next start.'}
         filter: {$ref: '#/components/schemas/SourceFilter'}
-        defaultReminders: {type: array, nullable: true, items: {$ref: '#/components/schemas/Reminder'}, description: 'Reminder intent for this source''s events whose own reminders are null (for example the evening before a waste pickup, `{"kind":"localTime","daysBefore":1,"localTime":"19:00"}`). Null means none.'}
+        defaultReminders: {type: array, nullable: true, items: {$ref: '#/components/schemas/Reminder'}, description: 'Default reminders for this source''s events: every event that uses its defaults gets them, together with its own (for example the evening before a waste pickup, `{"kind":"localTime","daysBefore":1,"localTime":"19:00"}`). Null means none.'}
         refresh: {$ref: '#/components/schemas/SourceRefreshState'}
         createdAt: {type: string, format: date-time}
         updatedAt: {type: string, format: date-time, description: When the configuration last changed.}
@@ -440,3 +475,27 @@ components:
         filter: {$ref: '#/components/schemas/SourceFilter'}
         defaultReminders: {type: array, nullable: true, maxItems: 10, items: {$ref: '#/components/schemas/Reminder'}, description: Replaces the default reminders; null removes them.}
     SourceList: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/CalendarSource'}}}}
+    ReminderDefaults:
+      type: object
+      description: The owner's default reminders for the events they create in Life OS.
+      required: [timed, allDay]
+      properties:
+        timed: {type: array, maxItems: 10, items: {$ref: '#/components/schemas/Reminder'}, description: 'For timed events, such as `{"kind":"relative","minutesBefore":30}`.'}
+        allDay: {type: array, maxItems: 10, items: {$ref: '#/components/schemas/Reminder'}, description: 'For all-day events, such as `{"kind":"localTime","daysBefore":1,"localTime":"19:00"}`.'}
+    CalendarSettings:
+      type: object
+      required: [defaultReminders, updatedAt]
+      properties:
+        defaultReminders: {$ref: '#/components/schemas/ReminderDefaults'}
+        updatedAt: {type: string, format: date-time, nullable: true, description: When the settings last changed; null while they never have.}
+    UpdateSettingsRequest:
+      type: object
+      minProperties: 1
+      properties:
+        defaultReminders:
+          type: object
+          minProperties: 1
+          description: The lists to replace; a list left out stays.
+          properties:
+            timed: {type: array, maxItems: 10, items: {$ref: '#/components/schemas/Reminder'}}
+            allDay: {type: array, maxItems: 10, items: {$ref: '#/components/schemas/Reminder'}}

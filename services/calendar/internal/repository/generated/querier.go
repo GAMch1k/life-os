@@ -32,6 +32,7 @@ type Querier interface {
 	// Preset sources are configured from Calendar's environment at startup
 	// (EnsurePreset), inside one transaction holding LockPreset.
 	GetPresetSource(ctx context.Context, preset string) (CalendarSource, error)
+	GetSettings(ctx context.Context) (CalendarSetting, error)
 	GetSource(ctx context.Context, id pgtype.UUID) (CalendarSource, error)
 	InsertImportedEvent(ctx context.Context, arg InsertImportedEventParams) error
 	// Enabled sources whose next refresh is due and that nobody is refreshing.
@@ -82,8 +83,11 @@ type Querier interface {
 	// Source identity is never updated.
 	UpdateEvent(ctx context.Context, arg UpdateEventParams) (Event, error)
 	// Rewrites an imported event from its source (also restoring one the source
-	// had removed). The owner's reminder override and the source identity stay.
+	// had removed). The owner's reminders and the source identity stay.
 	UpdateImportedEvent(ctx context.Context, arg UpdateImportedEventParams) error
+	// Replaces the lists given (a NULL list stays), creating the row on the
+	// first change.
+	UpdateSettings(ctx context.Context, arg UpdateSettingsParams) (CalendarSetting, error)
 	// Writes the whole merged configuration, guarded by the updated_at it was
 	// read with. reset_validators drops the conditional-request validators (a
 	// changed URL or filter needs a full download); next_refresh_at, when given,
