@@ -33,7 +33,8 @@ test.describe("Owner timezone", () => {
     });
     expect(created.status()).toBe(201);
 
-    await page.goto("/calendar");
+    // The list view runs 30 days from today.
+    await page.goto("/calendar?view=list");
     await expect(
       page.getByRole("heading", { level: 1, name: "Calendar" }),
     ).toBeVisible();
@@ -57,12 +58,22 @@ test.describe("Owner timezone", () => {
         ? `${day(start)} · ${time(start)}–${time(end)}`
         : `${day(start)} · ${time(start)}`;
 
-    const section = page.getByRole("region", {
-      name: dayKey(start) === dayKey(new Date()) ? "Today" : "Upcoming",
-    });
+    // The list shows the times in the browser's zone, and so does the event.
+    const row = page
+      .getByRole("region", { name: "Calendar events" })
+      .locator(".fc-list-event", { hasText: title });
+    await expect(row).toContainText(time(start));
+    await row.click();
     await expect(
-      section.getByRole("listitem").filter({ hasText: title }),
+      page.getByRole("dialog").getByTestId("event-when"),
     ).toContainText(label);
+    await expect(page.getByRole("dialog")).toContainText(
+      `Times in ${timeZone}`,
+    );
+    const deleted = await request.delete(
+      `/api/calendar/v1/events/${(await created.json()).id}`,
+    );
+    expect(deleted.status()).toBe(204);
   });
 
   test.describe("in a New York browser", () => {
