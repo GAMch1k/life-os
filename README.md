@@ -2,7 +2,7 @@
 
 Life OS is a local-first personal operating system. Independent domain services sit behind one dashboard, a constrained AI/MCP interaction layer, and an asynchronous local voice-transcription path.
 
-This repository is the single monorepo for the project. It contains the implemented Finance, Tasks, Inbox, Calendar, Voice, MCP, dashboard, and private Whisper worker components through Phase 6.
+This repository is the single monorepo for the project. It contains the implemented Finance, Tasks, Inbox, Calendar, Voice, MCP, dashboard, and private Whisper worker components through Phase 6, and integration services such as Banking, which syncs the owner's bank accounts into Finance through a licensed PSD2 provider (read-only).
 
 ## Technical documentation
 
@@ -15,7 +15,7 @@ there is no GitHub Pages or Wiki dependency.
 | Path | Purpose |
 | --- | --- |
 | `apps/dashboard/` | Next.js and TypeScript dashboard |
-| `services/` | Independently deployable Go domain services |
+| `services/` | Independently deployable Go domain and integration services |
 | `pkg/` | Shared Go infrastructure packages, never shared domain models |
 | `contracts/` | OpenAPI contracts and client-generation configuration |
 | `templates/` | Canonical service templates used by repository tooling |
