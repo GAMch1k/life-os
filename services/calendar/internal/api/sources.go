@@ -195,8 +195,12 @@ type sourceConfig struct {
 // terms, webcal:// as https://).
 func (h *Handler) validate(config *sourceConfig) error {
 	config.Name = strings.TrimSpace(config.Name)
-	if config.Name == "" || utf8.RuneCountInString(config.Name) > maxSourceName {
-		return fmt.Errorf("name must be 1 to %d characters", maxSourceName)
+	limit := maxSourceName
+	if config.Integration {
+		limit = maxIntegrationName // as long as an integration may name it
+	}
+	if config.Name == "" || utf8.RuneCountInString(config.Name) > limit {
+		return fmt.Errorf("name must be 1 to %d characters", limit)
 	}
 	if len(config.URL) > maxSourceURL {
 		return fmt.Errorf("url must be at most %d characters", maxSourceURL)

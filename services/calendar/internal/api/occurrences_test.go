@@ -134,12 +134,12 @@ func TestDiffOccurrence(t *testing.T) {
 	natural := timedFields()
 	natural.Description, natural.Reminders = ptr("Bring card"), []generated.Reminder{}
 	next := natural
-	if changes := diffOccurrence(natural, next); !changes.empty() {
+	if changes := diffOccurrence(natural, next, defaultPriority); !changes.empty() {
 		t.Fatalf("no change = %+v", changes)
 	}
 	next.Title, next.Description = "Dentist (late)", nil
 	next.StartAt, next.EndAt = instant("2026-11-17T07:00:00+01:00"), natural.EndAt
-	changes := diffOccurrence(natural, next)
+	changes := diffOccurrence(natural, next, defaultPriority)
 	if *changes.Title != "Dentist (late)" || !changes.Description.set || changes.Description.value != nil || changes.Location.set {
 		t.Fatalf("changes = %+v", changes)
 	}
@@ -166,11 +166,11 @@ func TestDiffOccurrencePriority(t *testing.T) {
 	natural.Reminders = []generated.Reminder{}
 	next := natural
 	next.Priority = ptr(generated.Medium)
-	if changes := diffOccurrence(natural, next); !changes.empty() {
+	if changes := diffOccurrence(natural, next, defaultPriority); !changes.empty() {
 		t.Fatalf("medium on a series without its own = %+v, want no change", changes)
 	}
 	next.Priority = ptr(generated.High)
-	changes := diffOccurrence(natural, next)
+	changes := diffOccurrence(natural, next, defaultPriority)
 	if changes.Priority == nil || *changes.Priority != generated.High || changes.Title != nil {
 		t.Fatalf("high = %+v", changes)
 	}
@@ -180,11 +180,11 @@ func TestDiffOccurrencePriority(t *testing.T) {
 	// On a high series, medium is the occurrence's own and high is none.
 	natural.Priority = ptr(generated.High)
 	next.Priority = ptr(generated.Medium)
-	if changes := diffOccurrence(natural, next); changes.Priority == nil || *changes.Priority != generated.Medium {
+	if changes := diffOccurrence(natural, next, defaultPriority); changes.Priority == nil || *changes.Priority != generated.Medium {
 		t.Fatalf("medium on a high series = %+v", changes)
 	}
 	next.Priority = ptr(generated.High)
-	if changes := diffOccurrence(natural, next); !changes.empty() {
+	if changes := diffOccurrence(natural, next, defaultPriority); !changes.empty() {
 		t.Fatalf("high on a high series = %+v, want no change", changes)
 	}
 	if rest := changes.without(map[string]bool{"priority": true}); rest.Priority != nil {

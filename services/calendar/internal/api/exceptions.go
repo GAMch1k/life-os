@@ -192,8 +192,9 @@ func (c occurrenceChanges) applyTo(fields eventFields) eventFields {
 
 // diffOccurrence is what next (the occurrence after a change) overrides of
 // natural (the occurrence as its series has it): a field set back to the
-// series' value is no change of its own.
-func diffOccurrence(natural, next eventFields) occurrenceChanges {
+// series' value is no change of its own. fallback is the series' priority
+// when it has none of its own (see priorityDefault).
+func diffOccurrence(natural, next eventFields, fallback generated.EventPriority) occurrenceChanges {
 	var changes occurrenceChanges
 	if next.Title != natural.Title {
 		title := next.Title
@@ -220,9 +221,7 @@ func diffOccurrence(natural, next eventFields) occurrenceChanges {
 		use := next.UseDefaultReminders
 		changes.UseDefaultReminders = &use
 	}
-	// Only Life OS events recur, so a series without a priority of its own
-	// has the Life OS default.
-	if priority := priorityOr(next.Priority, defaultPriority); priority != priorityOr(natural.Priority, defaultPriority) {
+	if priority := priorityOr(next.Priority, fallback); priority != priorityOr(natural.Priority, fallback) {
 		changes.Priority = &priority
 	}
 	return changes
