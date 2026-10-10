@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { voiceClient } from "@/lib/api";
+import { captureMetadata } from "@/lib/time-zone";
 import {
   isVoiceJobTerminal,
   type VoiceJob,
@@ -88,6 +89,7 @@ export function VoiceCapture() {
     try {
       const body = new FormData();
       body.append("audio", audio, "voice-capture.webm");
+      body.append("sourceMetadata", JSON.stringify(captureMetadata()));
       body.append("source", "web");
       const { data, error } = await voiceClient.POST("/v1/audio-jobs", {
         body: body as never,

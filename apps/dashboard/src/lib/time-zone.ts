@@ -46,6 +46,17 @@ export function browserTimeZone() {
   }
 }
 
+/**
+ * Source metadata for a capture made in this browser: `metadata` plus the
+ * browser's timezone, which the processor resolves relative dates in.
+ */
+export function captureMetadata(
+  metadata: Record<string, unknown> = {},
+  timeZone: string | null | undefined = browserTimeZone(),
+): Record<string, unknown> {
+  return timeZone ? { ...metadata, timeZone } : metadata;
+}
+
 /** The `document.cookie` assignment that stores the browser's timezone. */
 export function timeZoneCookie(timeZone: string) {
   return `${TIME_ZONE_COOKIE}=${encodeURIComponent(timeZone)}; Path=/; Max-Age=${TIME_ZONE_COOKIE_MAX_AGE}; SameSite=Lax`;

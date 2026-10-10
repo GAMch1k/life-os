@@ -209,9 +209,20 @@ func transcribe(ctx context.Context, c *http.Client, base, path, contentType str
 	}
 	return out.Transcript, nil
 }
+
+// captureMetadata is the Inbox item's source metadata: the upload's own (for
+// example the recording browser's timeZone, which planning resolves relative
+// dates in) plus the job's, which wins.
+func captureMetadata(job store.AudioJob) map[string]any {
+	metadata := map[string]any{}
+	if err := json.Unmarshal(job.SourceMetadata, &metadata); err != nil || metadata == nil {
+		metadata = map[string]any{}
+	}
+	metadata["audioJobId"], metadata["contentType"] = uuidString(job.ID), job.ContentType
+	return metadata
+}
 func capture(ctx context.Context, c *http.Client, base string, job store.AudioJob, text string) (pgtype.UUID, error) {
-	metadata := map[string]any{"audioJobId": uuidString(job.ID), "contentType": job.ContentType}
-	body, _ := json.Marshal(map[string]any{"content": text, "source": "voice", "sourceMetadata": metadata, "mediaReferences": []string{}, "dedupeKey": "voice:" + uuidString(job.ID)})
+	body, _ := json.Marshal(map[string]any{"content": text, "source": "voice", "sourceMetadata": captureMetadata(job), "mediaReferences": []string{}, "dedupeKey": "voice:" + uuidString(job.ID)})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/inbox-items", bytes.NewReader(body))
 	if err != nil {
 		return pgtype.UUID{}, err

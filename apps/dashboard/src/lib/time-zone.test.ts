@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   addDays,
+  captureMetadata,
   dateTimeFormat,
   dayKey,
   resolveTimeZone,
@@ -101,6 +102,20 @@ test("time zone sync stores a new browser zone and refreshes only once", () => {
     }),
     { store: false, refresh: false },
   );
+});
+
+test("captures carry the browser's timezone in their source metadata", () => {
+  assert.deepEqual(captureMetadata({}, "America/New_York"), {
+    timeZone: "America/New_York",
+  });
+  assert.deepEqual(captureMetadata({ accountId: "cash" }, "Europe/Berlin"), {
+    accountId: "cash",
+    timeZone: "Europe/Berlin",
+  });
+  // Without a known browser zone the metadata is sent unchanged.
+  assert.deepEqual(captureMetadata({ accountId: "cash" }, null), {
+    accountId: "cash",
+  });
 });
 
 test("dayKey uses the configured timezone, not UTC", () => {
