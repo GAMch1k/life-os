@@ -106,6 +106,20 @@ export function writeFeed(file: string, events: FeedEvent[]) {
 }
 
 /**
+ * Writes another fixture file, such as a recipe page for recipe-import, and
+ * returns its URL on the fixture server (the overlay lets this stack's
+ * recipe-import fetch the ics-fixture host).
+ */
+export function writeFixture(file: string, contents: string) {
+  if (!feedDir) throw new Error(FEED_OVERLAY_HINT);
+  chmodSync(feedDir, 0o755);
+  const target = path.join(feedDir, file);
+  writeFileSync(target, contents);
+  chmodSync(target, 0o644);
+  return `${feedBase}/${file}`;
+}
+
+/**
  * Subscribes to a feed; `enabled: false` switches its Calendar source off
  * right away (a disabled feed is not refreshed).
  */

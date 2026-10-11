@@ -81,6 +81,14 @@ test("Food events read with the item, store, or rule they are about", () => {
     "Meal planned: Pasta",
   );
   assert.equal(subjectLabel("food_recipe"), "Recipe");
+  assert.equal(
+    eventLabel({
+      type: "food.recipe.imported",
+      data: { title: "Spaghetti Bolognese", site: "chefkoch.de" },
+    }),
+    "Recipe imported: Spaghetti Bolognese",
+  );
+  assert.equal(sourceLabel("recipe-import"), "Recipe import");
   assert.equal(subjectLabel("food_meal_plan"), "Meal plan slot");
   assert.equal(sourceLabel("food"), "Food");
   assert.ok(sourceDescription("food"));
@@ -116,6 +124,7 @@ test("Food events read with the item, store, or rule they are about", () => {
     "food.recipe.deleted",
     "food.meal_plan.set",
     "food.meal_plan.cleared",
+    "food.recipe.imported",
   ]) {
     assert.ok(EVENT_TYPES.includes(type), type);
   }

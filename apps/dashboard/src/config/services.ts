@@ -11,6 +11,7 @@ const DEFAULT_SERVICE_URLS = {
   googleCalendar: "http://localhost:8091",
   food: "http://localhost:8092",
   backup: "http://localhost:8093",
+  recipeImport: "http://localhost:8094",
 } as const;
 
 export function normalizeServiceUrl(name: string, value: string): string {
@@ -107,6 +108,11 @@ export const serviceBaseUrls = Object.freeze({
     "NEXT_PUBLIC_BACKUP_SERVICE_URL",
     "BACKUP_SERVICE_URL",
     DEFAULT_SERVICE_URLS.backup,
+  ),
+  recipeImport: configuredServiceUrl(
+    "NEXT_PUBLIC_RECIPE_IMPORT_SERVICE_URL",
+    "RECIPE_IMPORT_SERVICE_URL",
+    DEFAULT_SERVICE_URLS.recipeImport,
   ),
 });
 

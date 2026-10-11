@@ -16,5 +16,9 @@ export {
   notificationsClient,
   createNotificationsClient,
 } from "./notifications-client";
+export {
+  recipeImportClient,
+  createRecipeImportClient,
+} from "./recipe-import-client";
 export { tasksClient, createTasksClient } from "./tasks-client";
 export { voiceClient, createVoiceClient } from "./voice-client";
