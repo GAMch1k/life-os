@@ -139,12 +139,17 @@ func TestEvaluateFindsContainerTrouble(t *testing.T) {
 
 func TestTrackerCountsDeathsAndUnhealthyTime(t *testing.T) {
 	tracker := NewTracker(15 * time.Minute)
-	die := func(minutesAgo int) docker.Event {
-		return docker.Event{Time: start.Add(-time.Duration(minutesAgo) * time.Minute), ID: "fedcba987654", Name: "homeassistant", Action: "die"}
+	// A death Docker restarted by itself: die, then start of the same id.
+	restart := func(minutesAgo int) []docker.Event {
+		at := start.Add(-time.Duration(minutesAgo) * time.Minute)
+		return []docker.Event{
+			{Time: at, ID: "fedcba987654", Name: "homeassistant", Action: "die"},
+			{Time: at.Add(2 * time.Second), ID: "fedcba987654", Name: "homeassistant", Action: "start"},
+		}
 	}
-	tracker.Events([]docker.Event{die(20), die(10), die(5), die(1)})
+	tracker.Events(slices.Concat(restart(20), restart(10), restart(5), restart(1)))
 	// The same events again (an overlapping poll) count once.
-	tracker.Events([]docker.Event{die(5), die(1)})
+	tracker.Events(slices.Concat(restart(5), restart(1)))
 	tracker.Events([]docker.Event{{Time: start.Add(-30 * time.Minute), ID: "aaaaaaaaaaaa", Name: "n8n", Action: "health_status: unhealthy"}})
 	containers := []docker.Container{
 		{ID: "fedcba987654", Name: "homeassistant", State: "running"},
@@ -233,7 +238,7 @@ func TestSamplerSamplesTheHostAndItsContainers(t *testing.T) {
 	if top := status.Containers.Top(5); len(top) != 2 || top[0].Name != "whisper" || dockerSource.memoryRead != 2 {
 		t.Fatalf("top = %+v after %d memory reads (running containers only)", top, dockerSource.memoryRead)
 	}
-	if total, running, _, _ := status.Containers.Counts(); total != 3 || running != 2 {
+	if total, running, _, _, _ := status.Containers.Counts(); total != 3 || running != 2 {
 		t.Fatalf("counts = %d, %d", total, running)
 	}
 	// Events are read from 15 minutes back, then from the last read on.

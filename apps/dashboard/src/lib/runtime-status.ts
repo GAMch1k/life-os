@@ -2004,7 +2004,7 @@ function describeFinding(finding: HostFinding, status: HostStatus) {
       };
     case "container_restarting":
       return {
-        summary: `${containerLabel(finding)} keeps restarting: ${finding.count ?? 0} times in ${finding.minutes ?? 0} min.`,
+        summary: `${containerLabel(finding)} keeps restarting: ${finding.count ?? 0} times in ${finding.minutes ?? 0} min${finding.exitCode !== undefined ? `, last exit code ${finding.exitCode}` : ""}.`,
         action: `See why with docker logs ${finding.subject ?? ""}.`,
       };
     case "container_unhealthy":
@@ -2038,7 +2038,7 @@ function serverFacts(status: HostStatus): StatusFact[] {
     {
       label: "Containers",
       value: containers.available
-        ? `${containers.running} running, ${containers.unhealthy} unhealthy, ${containers.restarting} restarting (${containers.total} in all)`
+        ? `${containers.running} running, ${containers.unhealthy} unhealthy, ${containers.restarting} restarting (${containers.total} in all${containers.testStack ? `, ${containers.testStack} of the test stack` : ""})`
         : "not available",
     },
   ];

@@ -39,8 +39,10 @@ func runServer(ctx context.Context) error {
 	opts := health.Options{
 		Mode:       "host",
 		Thresholds: cfg.Thresholds(),
-		Interval:   cfg.Interval(),
-		Logger:     logger,
+		// The verification stack is no restart loop and no memory user.
+		IgnoreProjects: cfg.IgnoredProjects(),
+		Interval:       cfg.Interval(),
+		Logger:         logger,
 	}
 	var prefill []health.Sample
 	switch {

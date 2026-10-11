@@ -40,8 +40,12 @@ func Evaluate(snapshot host.Snapshot, recent []Sample, containers Containers, do
 		findings = append(findings, Finding{Kind: ContainersUnavailable, Severity: Warning, Error: containers.Error})
 	}
 	for _, item := range containers.Items {
+		if item.TestStack {
+			// The verification stack comes and goes with every test run.
+			continue
+		}
 		if item.RecentDeaths >= t.RestartLoopCount {
-			findings = append(findings, Finding{Kind: ContainerRestarting, Severity: Warning, Subject: item.Name, Project: item.Project, Count: item.RecentDeaths, Minutes: int(t.RestartLoopWindow.Minutes())})
+			findings = append(findings, Finding{Kind: ContainerRestarting, Severity: Warning, Subject: item.Name, Project: item.Project, Count: item.RecentDeaths, ExitCode: item.LastExitCode, Minutes: int(t.RestartLoopWindow.Minutes())})
 		}
 		if !item.UnhealthySince.IsZero() && snapshot.At.Sub(item.UnhealthySince) >= t.UnhealthyFor {
 			findings = append(findings, Finding{Kind: ContainerUnhealthy, Severity: Warning, Subject: item.Name, Project: item.Project, Minutes: int(snapshot.At.Sub(item.UnhealthySince).Minutes())})

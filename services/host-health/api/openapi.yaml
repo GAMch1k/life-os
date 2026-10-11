@@ -82,7 +82,9 @@ components:
         image: {type: string}
         state: {type: string, description: 'Docker''s: created, running, paused, restarting, removing, exited, or dead.'}
         health: {type: string, enum: [healthy, unhealthy, starting], description: Absent without a health check.}
-        recentDeaths: {type: integer, minimum: 0, description: How often it died within the restart-loop window.}
+        recentDeaths: {type: integer, minimum: 0, description: 'How often Docker restarted it by itself (a death followed by a start of the same container, as a restart policy does) within the restart-loop window. Stops, compose down, and recreates do not count.'}
+        lastExitCode: {type: integer, description: The exit code of its last such death; absent without one.}
+        testStack: {type: boolean, description: 'A container of an ignored compose project (HOST_HEALTH_IGNORE_PROJECTS, the verification stack): never in findings or top. Absent otherwise.'}
         unhealthySince: {type: string, format: date-time, description: When it turned unhealthy; absent while it is not.}
         memoryBytes: {type: integer, format: int64, minimum: 0, description: 'Its memory in use, as docker stats shows it; absent when not read.'}
     HostMemoryUser:
@@ -100,8 +102,9 @@ components:
         error: {type: string, description: Why the containers are not available.}
         total: {type: integer, minimum: 0}
         running: {type: integer, minimum: 0}
-        unhealthy: {type: integer, minimum: 0}
-        restarting: {type: integer, minimum: 0}
+        unhealthy: {type: integer, minimum: 0, description: 'Unhealthy containers, the test stack''s left out.'}
+        restarting: {type: integer, minimum: 0, description: 'Containers Docker is restarting, the test stack''s left out.'}
+        testStack: {type: integer, minimum: 0, description: 'Of total, the containers of ignored compose projects (the verification stack).'}
         memorySampledAt: {type: string, format: date-time, description: When the containers' memory was read.}
         items: {type: array, items: {$ref: '#/components/schemas/HostContainer'}}
         top: {type: array, items: {$ref: '#/components/schemas/HostMemoryUser'}, description: 'The containers using the most memory, biggest first (up to 5).'}
@@ -126,7 +129,8 @@ components:
         kind: memory_low (availableBytes, totalBytes, minutes held),
         disk_low (subject is the disk's label, availableBytes, totalBytes),
         load_high (load is the 15-minute load, cpus), container_restarting
-        (subject, project, count deaths within minutes), container_unhealthy
+        (subject, project, count restarts within minutes, exitCode of the
+        last death when known), container_unhealthy
         (subject, project, minutes unhealthy), containers_unavailable
         (error).
       required: [kind, severity]
@@ -139,6 +143,7 @@ components:
         totalBytes: {type: integer, format: int64, minimum: 0}
         minutes: {type: integer, minimum: 0}
         count: {type: integer, minimum: 0}
+        exitCode: {type: integer}
         load: {type: number, format: double, minimum: 0}
         cpus: {type: integer, minimum: 0}
         error: {type: string}

@@ -21,8 +21,14 @@ import (
 var containerID = regexp.MustCompile(`^[a-f0-9]{12,64}$`)
 
 // eventFilters keeps the events the gateway passes on to container die,
-// start, and health_status.
-const eventFilters = `{"type":["container"],"event":["die","start","health_status"]}`
+// start, and health_status, and kill, stop, and destroy, which tell an
+// intentional stop (docker stop, compose down, a recreate) from a crash.
+const eventFilters = `{"type":["container"],"event":["die","start","health_status","kill","stop","destroy"]}`
+
+// passedActions are the event actions the gateway re-encodes; health_status
+// carries its status after a colon. Anything else the engine might add is
+// dropped.
+var passedActions = map[string]bool{"die": true, "start": true, "kill": true, "stop": true, "destroy": true}
 
 // Gateway answers host-health's three requests from the Docker Engine API
 // over the socket.
@@ -148,13 +154,22 @@ func (g *Gateway) events(w http.ResponseWriter, r *http.Request) {
 			g.fail(w, fmt.Errorf("read events: %w", err))
 			return
 		}
-		events = append(events, Event{
+		if !passedActions[e.Action] && !strings.HasPrefix(e.Action, "health_status") {
+			continue
+		}
+		event := Event{
 			Time:    time.Unix(0, e.TimeNano).UTC(),
 			ID:      shortID(e.Actor.ID),
 			Name:    e.Actor.Attributes["name"],
 			Project: e.Actor.Attributes["com.docker.compose.project"],
 			Action:  e.Action,
-		})
+		}
+		if e.Action == "die" {
+			if code, err := strconv.Atoi(e.Actor.Attributes["exitCode"]); err == nil {
+				event.ExitCode = &code
+			}
+		}
+		events = append(events, event)
 	}
 	writeJSON(w, events)
 }

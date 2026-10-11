@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -30,8 +31,11 @@ type Options struct {
 	Host HostSource
 	// Docker is nil when no gateway is set up: container facts are then
 	// not available, which is not a finding.
-	Docker     DockerSource
-	Thresholds Thresholds
+	Docker DockerSource
+	// IgnoreProjects are compose projects left out of findings and the top
+	// memory users (HOST_HEALTH_IGNORE_PROJECTS: the verification stack).
+	IgnoreProjects []string
+	Thresholds     Thresholds
 	// Interval is the time between samples (a minute); MemoryEvery how
 	// often the containers' memory is read while memory is not low.
 	Interval    time.Duration
@@ -149,7 +153,16 @@ func (s *Sampler) readContainers(ctx context.Context, now time.Time, memoryLow b
 		s.tracker.SetMemory(s.readMemory(ctx, list))
 		s.memoryAt = now
 	}
-	return Containers{Available: true, Items: s.tracker.Update(now, list), MemoryAt: s.memoryAt}
+	items := s.tracker.Update(now, list)
+	for i := range items {
+		items[i].TestStack = s.ignored(items[i].Project)
+	}
+	return Containers{Available: true, Items: items, MemoryAt: s.memoryAt}
+}
+
+// ignored says whether a compose project is one of IgnoreProjects.
+func (s *Sampler) ignored(project string) bool {
+	return project != "" && slices.Contains(s.opts.IgnoreProjects, project)
 }
 
 // readMemory reads the running containers' memory, four at a time. One that
@@ -160,7 +173,8 @@ func (s *Sampler) readMemory(ctx context.Context, list []docker.Container) map[s
 	var wg sync.WaitGroup
 	limit := make(chan struct{}, 4)
 	for _, container := range list {
-		if container.State != "running" {
+		// The test stack is never among the biggest users: not read.
+		if container.State != "running" || s.ignored(container.Project) {
 			continue
 		}
 		wg.Add(1)

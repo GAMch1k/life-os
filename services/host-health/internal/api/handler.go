@@ -121,7 +121,7 @@ func toStatus(status health.Status) generated.HostStatus {
 }
 
 func toContainers(containers health.Containers) generated.HostContainers {
-	total, running, unhealthy, restarting := containers.Counts()
+	total, running, unhealthy, restarting, testStack := containers.Counts()
 	response := generated.HostContainers{
 		Available:  containers.Available,
 		Error:      optional(containers.Error),
@@ -129,6 +129,7 @@ func toContainers(containers health.Containers) generated.HostContainers {
 		Running:    running,
 		Unhealthy:  unhealthy,
 		Restarting: restarting,
+		TestStack:  &testStack,
 		Items:      make([]generated.HostContainer, 0, len(containers.Items)),
 		Top:        []generated.HostMemoryUser{},
 	}
@@ -144,6 +145,11 @@ func toContainers(containers health.Containers) generated.HostContainers {
 			Image:        item.Image,
 			State:        item.State,
 			RecentDeaths: item.RecentDeaths,
+			LastExitCode: item.LastExitCode,
+		}
+		if item.TestStack {
+			testStack := true
+			container.TestStack = &testStack
 		}
 		if item.Health != "" {
 			health := generated.HostContainerHealth(item.Health)
@@ -182,7 +188,7 @@ func toFinding(finding health.Finding) generated.HostFinding {
 		response.Load, response.Cpus = &load, &cpus
 	case health.ContainerRestarting:
 		count := finding.Count
-		response.Count = &count
+		response.Count, response.ExitCode = &count, finding.ExitCode
 	}
 	if finding.Kind == health.MemoryLow || finding.Kind == health.ContainerRestarting || finding.Kind == health.ContainerUnhealthy {
 		minutes := finding.Minutes

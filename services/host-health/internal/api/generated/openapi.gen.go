@@ -115,6 +115,9 @@ type HostContainer struct {
 	Health *HostContainerHealth `json:"health,omitempty"`
 	Image  string               `json:"image"`
 
+	// LastExitCode The exit code of its last such death; absent without one.
+	LastExitCode *int `json:"lastExitCode,omitempty"`
+
 	// MemoryBytes Its memory in use, as docker stats shows it; absent when not read.
 	MemoryBytes *int64 `json:"memoryBytes,omitempty"`
 	Name        string `json:"name"`
@@ -122,7 +125,7 @@ type HostContainer struct {
 	// Project The compose project it belongs to.
 	Project *string `json:"project,omitempty"`
 
-	// RecentDeaths How often it died within the restart-loop window.
+	// RecentDeaths How often Docker restarted it by itself (a death followed by a start of the same container, as a restart policy does) within the restart-loop window. Stops, compose down, and recreates do not count.
 	RecentDeaths int `json:"recentDeaths"`
 
 	// Service Its compose service.
@@ -130,6 +133,9 @@ type HostContainer struct {
 
 	// State Docker's: created, running, paused, restarting, removing, exited, or dead.
 	State string `json:"state"`
+
+	// TestStack A container of an ignored compose project (HOST_HEALTH_IGNORE_PROJECTS, the verification stack): never in findings or top. Absent otherwise.
+	TestStack *bool `json:"testStack,omitempty"`
 
 	// UnhealthySince When it turned unhealthy; absent while it is not.
 	UnhealthySince *time.Time `json:"unhealthySince,omitempty"`
@@ -149,13 +155,20 @@ type HostContainers struct {
 
 	// MemorySampledAt When the containers' memory was read.
 	MemorySampledAt *time.Time `json:"memorySampledAt,omitempty"`
-	Restarting      int        `json:"restarting"`
-	Running         int        `json:"running"`
+
+	// Restarting Containers Docker is restarting, the test stack's left out.
+	Restarting int `json:"restarting"`
+	Running    int `json:"running"`
+
+	// TestStack Of total, the containers of ignored compose projects (the verification stack).
+	TestStack *int `json:"testStack,omitempty"`
 
 	// Top The containers using the most memory, biggest first (up to 5).
-	Top       []HostMemoryUser `json:"top"`
-	Total     int              `json:"total"`
-	Unhealthy int              `json:"unhealthy"`
+	Top   []HostMemoryUser `json:"top"`
+	Total int              `json:"total"`
+
+	// Unhealthy Unhealthy containers, the test stack's left out.
+	Unhealthy int `json:"unhealthy"`
 }
 
 // HostDisk One filesystem, reported once however many of the configured paths are on it.
@@ -169,12 +182,13 @@ type HostDisk struct {
 	TotalBytes int64  `json:"totalBytes"`
 }
 
-// HostFinding One thing that needs attention. Which fields are set depends on the kind: memory_low (availableBytes, totalBytes, minutes held), disk_low (subject is the disk's label, availableBytes, totalBytes), load_high (load is the 15-minute load, cpus), container_restarting (subject, project, count deaths within minutes), container_unhealthy (subject, project, minutes unhealthy), containers_unavailable (error).
+// HostFinding One thing that needs attention. Which fields are set depends on the kind: memory_low (availableBytes, totalBytes, minutes held), disk_low (subject is the disk's label, availableBytes, totalBytes), load_high (load is the 15-minute load, cpus), container_restarting (subject, project, count restarts within minutes, exitCode of the last death when known), container_unhealthy (subject, project, minutes unhealthy), containers_unavailable (error).
 type HostFinding struct {
 	AvailableBytes *int64              `json:"availableBytes,omitempty"`
 	Count          *int                `json:"count,omitempty"`
 	Cpus           *int                `json:"cpus,omitempty"`
 	Error          *string             `json:"error,omitempty"`
+	ExitCode       *int                `json:"exitCode,omitempty"`
 	Kind           HostFindingKind     `json:"kind"`
 	Load           *float64            `json:"load,omitempty"`
 	Minutes        *int                `json:"minutes,omitempty"`

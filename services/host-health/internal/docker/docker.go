@@ -7,7 +7,7 @@
 // parameters, and re-encodes only the fields host-health needs:
 //
 //	GET /containers                -> GET /containers/json?all=1: name, compose project and service, image, state, health
-//	GET /events?since=&until=      -> GET /events (container die, start, and health_status only): time, name, action
+//	GET /events?since=&until=      -> GET /events (container die, start, health_status, kill, stop, and destroy only): time, id, name, project, action, a die's exit code
 //	GET /containers/{id}/memory    -> GET /containers/{id}/stats?stream=false&one-shot=true: memory in use and limit
 //
 // Nothing else of the API is reachable through it: not inspect (which holds
@@ -35,14 +35,19 @@ type Container struct {
 	Health string `json:"health,omitempty"`
 }
 
-// Event is one container event: die, start, or health_status.
+// Event is one container event: die, start, health_status, kill, stop, or
+// destroy.
 type Event struct {
-	Time    time.Time `json:"time"`
-	ID      string    `json:"id"`
-	Name    string    `json:"name"`
-	Project string    `json:"project,omitempty"`
-	// Action is die, start, or health_status: healthy|unhealthy|starting.
+	Time time.Time `json:"time"`
+	// ID is the container's short id: a recreated container has a new one.
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Project string `json:"project,omitempty"`
+	// Action is die, start, kill, stop, destroy, or health_status:
+	// healthy|unhealthy|starting.
 	Action string `json:"action"`
+	// ExitCode is a die's exit code.
+	ExitCode *int `json:"exitCode,omitempty"`
 }
 
 // Memory is a container's memory use.

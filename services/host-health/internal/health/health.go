@@ -25,8 +25,9 @@ type Thresholds struct {
 	DiskProblemBytes   uint64
 	// A 15-minute load above LoadWarningPerCPU times the CPUs is a warning.
 	LoadWarningPerCPU float64
-	// A container that died RestartLoopCount times within RestartLoopWindow
-	// is restarting in a loop; one unhealthy for UnhealthyFor is a warning.
+	// A container that Docker restarted by itself after RestartLoopCount
+	// deaths within RestartLoopWindow is restarting in a loop (see Tracker);
+	// one unhealthy for UnhealthyFor is a warning.
 	RestartLoopCount  int
 	RestartLoopWindow time.Duration
 	UnhealthyFor      time.Duration
@@ -82,8 +83,10 @@ type Finding struct {
 	// For memory_low: minutes held; for container_unhealthy: minutes
 	// unhealthy; for container_restarting: the window in minutes.
 	Minutes int
-	// For container_restarting: deaths in the window.
-	Count int
+	// For container_restarting: restarts in the window, and the last
+	// death's exit code when Docker reported it.
+	Count    int
+	ExitCode *int
 	// For load_high: the 15-minute load and the CPUs.
 	Load float64
 	CPUs int
@@ -94,8 +97,15 @@ type Finding struct {
 // ContainerState is a container with what host-health tracked of it.
 type ContainerState struct {
 	docker.Container
-	// RecentDeaths is how often it died within the restart-loop window.
+	// RecentDeaths is how often Docker restarted it by itself within the
+	// restart-loop window.
 	RecentDeaths int
+	// LastExitCode is the exit code of its last such death, when known.
+	LastExitCode *int
+	// TestStack is a container of an ignored compose project (the
+	// verification stack): in the totals, never in a finding or the top
+	// memory users.
+	TestStack bool
 	// UnhealthySince is when it was first seen unhealthy, zero while not.
 	UnhealthySince time.Time
 	// MemoryBytes is its last memory reading; zero when not read.
@@ -113,28 +123,34 @@ type Containers struct {
 	MemoryAt time.Time
 }
 
-// Counts are the containers by state.
-func (c Containers) Counts() (total, running, unhealthy, restarting int) {
+// Counts are the containers by state. The test stack's containers count in
+// total and running, and on their own in testStack, but never as unhealthy
+// or restarting.
+func (c Containers) Counts() (total, running, unhealthy, restarting, testStack int) {
 	for _, item := range c.Items {
 		total++
-		switch item.State {
-		case "running":
+		if item.State == "running" {
 			running++
-		case "restarting":
+		}
+		if item.TestStack {
+			testStack++
+			continue
+		}
+		if item.State == "restarting" {
 			restarting++
 		}
 		if item.Health == "unhealthy" {
 			unhealthy++
 		}
 	}
-	return total, running, unhealthy, restarting
+	return total, running, unhealthy, restarting, testStack
 }
 
 // Top is the n containers using the most memory, biggest first.
 func (c Containers) Top(n int) []ContainerState {
 	var read []ContainerState
 	for _, item := range c.Items {
-		if item.MemoryBytes > 0 {
+		if item.MemoryBytes > 0 && !item.TestStack {
 			read = append(read, item)
 		}
 	}
