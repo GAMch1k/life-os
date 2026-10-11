@@ -1,0 +1,612 @@
+openapi: 3.0.3
+info:
+  title: Life OS Food API
+  version: 1.0.0
+  description: >-
+    Every write (POST, PUT, PATCH, DELETE) must say who makes it in the
+    X-Life-OS-Actor header: `user` (the owner), `agent:<name>` (the Life OS
+    AI), `system:<name>` (a Life OS component), or `dev:<name>` (a development
+    tool or agent working on Life OS, such as Claude Code). Names are 1-64
+    letters, digits, '.', '_', or '-'. A write without a valid actor is
+    rejected with 400 and error code `actor_required`; nothing is attributed to
+    the owner by default. Reads do not need the header. The public gateway
+    passes only `user` and `dev:<name>`.
+
+
+    Food keeps one shopping list, grouped by aisle, where each item may be
+    tagged with a store; the stores; the aisle rules that place new items;
+    and the pantry, what is at home and when it expires. Groceries (food,
+    drinks, household, and drugstore items) go on the shopping list; other
+    purchases stay Tasks.
+
+
+    Names are kept as written and compared normalised: Unicode NFKC, lower
+    case, "ё" as "е", runs of whitespace as one space, surrounding whitespace
+    and punctuation stripped, no stemming (`normalizedName`). The list holds
+    at most one needed item per normalised name: adding a name that is
+    already needed merges into that item (`merged: true`) instead of adding a
+    second one. A store can be given by `storeId` or by `storeName`; an
+    unknown name creates the store (case-insensitive, also normalised).
+
+
+    Every write accepts an `Idempotency-Key` header that makes it safe to
+    retry: a repeat of the same request (method, path, and body) with the
+    same key returns the original response and changes nothing, and the same
+    key with another request returns 409 `idempotency_conflict`. Keys are
+    kept for 30 days.
+
+
+    Errors use the shared envelope `{"error": {"code", "message"},
+    "request_id"}`; the codes are listed with each operation.
+  license: {name: UNLICENSED, url: https://life-os.local/license}
+servers: [{url: http://food:8080}]
+paths:
+  /v1/shopping-items:
+    get:
+      summary: List the shopping list
+      description: >-
+        Needed items first, by aisle (in the order of `Aisle`), then by
+        normalised name; then bought items, the most recently bought first.
+        Filters combine. When more items match than `limit`, `nextCursor` is
+        set: pass it back as `cursor`, with the same filters, for the next
+        page. A response without `nextCursor` is the last page.
+      operationId: listShoppingItems
+      security: []
+      parameters:
+        - {name: state, in: query, schema: {$ref: '#/components/schemas/ShoppingItemState'}}
+        - {name: storeId, in: query, description: Only items tagged with this store., schema: {type: string, format: uuid}}
+        - {name: aisle, in: query, schema: {$ref: '#/components/schemas/Aisle'}}
+        - {name: cursor, in: query, description: The previous page's nextCursor. Opaque; only valid with the filters it was returned for., schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 200, default: 100}}
+      responses:
+        '200': {description: Shopping items, content: {application/json: {schema: {$ref: '#/components/schemas/ShoppingItemList'}}}}
+        '400': {description: 'Invalid request (`invalid_request`), or a malformed cursor (`invalid_cursor`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    post:
+      summary: Add items to the shopping list
+      description: >-
+        Adds 1 to 50 items in one transaction, in the order given; the
+        response lists each one's result in the same order. An item whose
+        normalised name equals a needed item's merges into it (`merged:
+        true`): the `amount`, `note`, and store given replace that item's,
+        and an `aisle` given replaces its aisle; what is not given stays.
+        Two items of one request with the same name merge too. An item
+        without `aisle` is placed by the aisle rules (`aisleSetBy: rule`;
+        no matching rule means `other`). All or none are added: one invalid
+        item refuses the whole request.
+      operationId: addShoppingItems
+      security: []
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AddShoppingItemsRequest'}}}}
+      responses:
+        '200': {description: The added or merged items, content: {application/json: {schema: {$ref: '#/components/schemas/AddShoppingItemsResponse'}}}}
+        '400': {description: 'Invalid request (`invalid_request`, `unknown_store`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`store_archived` (a storeId of an archived store) or `idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/shopping-items/clear-bought:
+    post:
+      summary: Clear bought items
+      description: >-
+        Deletes the bought items, or with `boughtBefore` only those bought
+        before that instant. Needed items stay. Returns how many were
+        deleted.
+      operationId: clearBoughtShoppingItems
+      security: []
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: false, content: {application/json: {schema: {$ref: '#/components/schemas/ClearBoughtRequest'}}}}
+      responses:
+        '200': {description: Count, content: {application/json: {schema: {$ref: '#/components/schemas/ClearBoughtResult'}}}}
+        '400': {description: 'Invalid request (`invalid_request`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/shopping-items/{itemId}:
+    get:
+      summary: Get a shopping item
+      operationId: getShoppingItem
+      security: []
+      parameters: [{$ref: '#/components/parameters/ItemId'}]
+      responses:
+        '200': {description: Shopping item, content: {application/json: {schema: {$ref: '#/components/schemas/ShoppingItem'}}}}
+        '400': {description: Invalid request, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: Item not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    patch:
+      summary: Update a shopping item
+      description: >-
+        Changes only the fields present; `null` clears `amount`, `note`, or
+        the store (`storeId: null`). A new `name` gets a new normalised name;
+        when another needed item has it the rename is refused (409
+        `already_on_list`). When the aisle rules chose the item's aisle, a
+        rename lets them choose again, unless the same request names an
+        `aisle`. Naming an `aisle` sets `aisleSetBy: manual`.
+      operationId: updateShoppingItem
+      security: []
+      parameters: [{$ref: '#/components/parameters/ItemId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateShoppingItemRequest'}}}}
+      responses:
+        '200': {description: Shopping item, content: {application/json: {schema: {$ref: '#/components/schemas/ShoppingItem'}}}}
+        '400': {description: 'Invalid request (`invalid_request`, `unknown_store`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: Item not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`already_on_list` (another needed item has the new name), `store_archived`, or `idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    delete:
+      summary: Delete a shopping item
+      operationId: deleteShoppingItem
+      security: []
+      parameters: [{$ref: '#/components/parameters/ItemId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      responses:
+        '204': {description: Deleted}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: Item not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/shopping-items/{itemId}/bought:
+    post:
+      summary: Mark a shopping item bought
+      description: Sets `state` to `bought` and `boughtAt` to now. An item already bought is returned unchanged.
+      operationId: markShoppingItemBought
+      security: []
+      parameters: [{$ref: '#/components/parameters/ItemId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      responses:
+        '200': {description: Shopping item, content: {application/json: {schema: {$ref: '#/components/schemas/ShoppingItem'}}}}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: Item not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/shopping-items/{itemId}/needed:
+    post:
+      summary: Mark a shopping item needed again
+      description: >-
+        Puts a bought item back on the list. When another item with the same
+        normalised name is needed meanwhile, the two merge: the needed item
+        stays, takes this item's amount, note, and store where it has none,
+        and this item is deleted; the response is the needed item with
+        `merged: true`. An item already needed is returned unchanged.
+      operationId: markShoppingItemNeeded
+      security: []
+      parameters: [{$ref: '#/components/parameters/ItemId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      responses:
+        '200': {description: The needed item, content: {application/json: {schema: {$ref: '#/components/schemas/ShoppingItemResult'}}}}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: Item not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/stores:
+    get:
+      summary: List stores
+      description: Stores by `sortOrder`, then name. Archived stores are left out unless `includeArchived` is true.
+      operationId: listStores
+      security: []
+      parameters:
+        - {name: includeArchived, in: query, schema: {type: boolean, default: false}}
+      responses:
+        '200': {description: Stores, content: {application/json: {schema: {$ref: '#/components/schemas/StoreList'}}}}
+        '400': {description: Invalid request, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    post:
+      summary: Create a store
+      description: >-
+        Names are unique as normalised, so case and spacing do not make a
+        second store (409 `store_exists`). Without `sortOrder` the store goes
+        after the others.
+      operationId: createStore
+      security: []
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateStoreRequest'}}}}
+      responses:
+        '201': {description: Store, content: {application/json: {schema: {$ref: '#/components/schemas/Store'}}}}
+        '400': {description: 'Invalid request (`invalid_request`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`store_exists` or `idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/stores/{storeId}:
+    get:
+      summary: Get a store
+      description: Returns the store, archived or not.
+      operationId: getStore
+      security: []
+      parameters: [{$ref: '#/components/parameters/StoreId'}]
+      responses:
+        '200': {description: Store, content: {application/json: {schema: {$ref: '#/components/schemas/Store'}}}}
+        '400': {description: Invalid request, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: Store not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    patch:
+      summary: Rename, reorder, or archive a store
+      description: >-
+        Changes only the fields present. `archived: true` archives the store:
+        it leaves the store list and cannot be given to items by id any more
+        (409 `store_archived`), but items keep it; giving it by name restores
+        it. `archived: false` restores it.
+      operationId: updateStore
+      security: []
+      parameters: [{$ref: '#/components/parameters/StoreId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateStoreRequest'}}}}
+      responses:
+        '200': {description: Store, content: {application/json: {schema: {$ref: '#/components/schemas/Store'}}}}
+        '400': {description: 'Invalid request (`invalid_request`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: Store not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`store_exists` or `idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/aisle-rules:
+    get:
+      summary: List aisle rules
+      description: Every rule, built-in or added, by keyword; `aisle` keeps one aisle's.
+      operationId: listAisleRules
+      security: []
+      parameters:
+        - {name: aisle, in: query, schema: {$ref: '#/components/schemas/Aisle'}}
+      responses:
+        '200': {description: Rules, content: {application/json: {schema: {$ref: '#/components/schemas/AisleRuleList'}}}}
+        '400': {description: Invalid request, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    post:
+      summary: Create an aisle rule
+      description: >-
+        The keyword is stored normalised and is unique (409
+        `aisle_rule_exists`). The rule places items added from now on; items
+        already on the list keep their aisle.
+      operationId: createAisleRule
+      security: []
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateAisleRuleRequest'}}}}
+      responses:
+        '201': {description: Rule, content: {application/json: {schema: {$ref: '#/components/schemas/AisleRule'}}}}
+        '400': {description: 'Invalid request (`invalid_request`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`aisle_rule_exists` or `idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/aisle-rules/{ruleId}:
+    delete:
+      summary: Delete an aisle rule
+      description: Items it placed keep their aisle.
+      operationId: deleteAisleRule
+      security: []
+      parameters: [{$ref: '#/components/parameters/RuleId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      responses:
+        '204': {description: Deleted}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: Rule not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/pantry-items:
+    get:
+      summary: List pantry items
+      description: >-
+        In-stock items first, soonest `expiresOn` first (items without one
+        last), then by normalised name; then ended items (used up or thrown
+        away), the most recently ended first. `expiringWithinDays=N` keeps
+        in-stock items that expire within N days of today in the owner's
+        timezone (`LIFE_OS_TIMEZONE`), already expired ones included; it
+        cannot be combined with an ended `state`. Paging works as for the
+        shopping list.
+      operationId: listPantryItems
+      security: []
+      parameters:
+        - {name: state, in: query, schema: {$ref: '#/components/schemas/PantryItemState'}}
+        - {name: location, in: query, schema: {$ref: '#/components/schemas/PantryLocation'}}
+        - {name: expiringWithinDays, in: query, description: 'In-stock items that expire on or before today + N days (0: today or earlier).', schema: {type: integer, minimum: 0, maximum: 366}}
+        - {name: cursor, in: query, description: The previous page's nextCursor. Opaque; only valid with the filters it was returned for., schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 200, default: 100}}
+      responses:
+        '200': {description: Pantry items, content: {application/json: {schema: {$ref: '#/components/schemas/PantryItemList'}}}}
+        '400': {description: 'Invalid request (`invalid_request`), or a malformed cursor (`invalid_cursor`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    post:
+      summary: Add pantry items
+      description: >-
+        Adds 1 to 50 items in one transaction; pantry items never merge (two
+        cartons of milk may expire on different days). An item without
+        `location` gets the usual place of its aisle, as the aisle rules
+        place its name: frozen food the freezer, dairy, meat, and fish the
+        fridge, bakery, pantry, drinks, and snacks the pantry, anything else
+        `other`. All or none are added.
+      operationId: addPantryItems
+      security: []
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AddPantryItemsRequest'}}}}
+      responses:
+        '201': {description: The added items, content: {application/json: {schema: {$ref: '#/components/schemas/AddPantryItemsResponse'}}}}
+        '400': {description: 'Invalid request (`invalid_request`, `unknown_shopping_item`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/pantry-items/{itemId}:
+    get:
+      summary: Get a pantry item
+      operationId: getPantryItem
+      security: []
+      parameters: [{$ref: '#/components/parameters/ItemId'}]
+      responses:
+        '200': {description: Pantry item, content: {application/json: {schema: {$ref: '#/components/schemas/PantryItem'}}}}
+        '400': {description: Invalid request, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: Item not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    patch:
+      summary: Update a pantry item
+      description: Changes only the fields present; `null` clears `amount`, `expiresOn`, `openedOn`, or `note`.
+      operationId: updatePantryItem
+      security: []
+      parameters: [{$ref: '#/components/parameters/ItemId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdatePantryItemRequest'}}}}
+      responses:
+        '200': {description: Pantry item, content: {application/json: {schema: {$ref: '#/components/schemas/PantryItem'}}}}
+        '400': {description: 'Invalid request (`invalid_request`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: Item not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    delete:
+      summary: Delete a pantry item
+      description: Deletes the item and its history; to keep it, mark it used up or thrown away instead.
+      operationId: deletePantryItem
+      security: []
+      parameters: [{$ref: '#/components/parameters/ItemId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      responses:
+        '204': {description: Deleted}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: Item not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/pantry-items/{itemId}/used-up:
+    post:
+      summary: Mark a pantry item used up
+      description: Ends the item (`state` `used_up`, `endedAt` now; an item that had already ended keeps its `endedAt`). An item already used up is returned unchanged.
+      operationId: markPantryItemUsedUp
+      security: []
+      parameters: [{$ref: '#/components/parameters/ItemId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      responses:
+        '200': {description: Pantry item, content: {application/json: {schema: {$ref: '#/components/schemas/PantryItem'}}}}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: Item not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/pantry-items/{itemId}/thrown-away:
+    post:
+      summary: Mark a pantry item thrown away
+      description: Ends the item (`state` `thrown_away`, `endedAt` now; an item that had already ended keeps its `endedAt`). An item already thrown away is returned unchanged.
+      operationId: markPantryItemThrownAway
+      security: []
+      parameters: [{$ref: '#/components/parameters/ItemId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      responses:
+        '200': {description: Pantry item, content: {application/json: {schema: {$ref: '#/components/schemas/PantryItem'}}}}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: Item not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/pantry-items/{itemId}/restock:
+    post:
+      summary: Put a pantry item back in stock
+      description: Sets `state` to `in_stock` and clears `endedAt`. An item already in stock is returned unchanged.
+      operationId: restockPantryItem
+      security: []
+      parameters: [{$ref: '#/components/parameters/ItemId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      responses:
+        '200': {description: Pantry item, content: {application/json: {schema: {$ref: '#/components/schemas/PantryItem'}}}}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: Item not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+components:
+  parameters:
+    ItemId: {name: itemId, in: path, required: true, schema: {type: string, format: uuid}}
+    StoreId: {name: storeId, in: path, required: true, schema: {type: string, format: uuid}}
+    RuleId: {name: ruleId, in: path, required: true, schema: {type: string, format: uuid}}
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      description: Makes the write safe to retry; see the API description.
+      schema: {type: string, minLength: 1, maxLength: 200}
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [error, request_id]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: {type: string, description: 'Machine-readable code, such as already_on_list.'}
+            message: {type: string, description: A sentence for people.}
+        request_id: {type: string}
+    Actor:
+      type: object
+      description: Who made a change, as its X-Life-OS-Actor said.
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [user, agent, system, dev]
+          description: >-
+            user = the owner; agent = the Life OS AI; system = a Life OS
+            component; dev = a development tool or agent working on Life OS.
+        name: {type: string, description: 'The agent, system, or dev name, for example codex-inbox-processor.'}
+    Aisle:
+      type: string
+      description: The shopping list's sections, in the order the list shows them.
+      enum: [produce, bakery, dairy, meat_fish, frozen, pantry, drinks, snacks, household, drugstore, other]
+    AisleSetBy:
+      type: string
+      description: '`rule`: the aisle rules chose the aisle. `manual`: a request named it.'
+      enum: [rule, manual]
+    ShoppingItemState:
+      type: string
+      enum: [needed, bought]
+    ItemSource:
+      type: string
+      description: '`manual`: added directly (the Dashboard, a tool). `capture`: added from a capture such as an Inbox item; `sourceRef` names it.'
+      enum: [manual, capture]
+    ShoppingItem:
+      type: object
+      required: [id, name, normalizedName, amount, note, aisle, aisleSetBy, storeId, storeName, state, boughtAt, source, sourceRef, createdAt, updatedAt, createdBy, updatedBy]
+      properties:
+        id: {type: string, format: uuid}
+        name: {type: string, description: As written.}
+        normalizedName: {type: string, description: The name as Food compares it.}
+        amount: {type: string, nullable: true, description: 'Free text, such as "2 l", "6", or "500 g".'}
+        note: {type: string, nullable: true}
+        aisle: {$ref: '#/components/schemas/Aisle'}
+        aisleSetBy: {$ref: '#/components/schemas/AisleSetBy'}
+        storeId: {type: string, format: uuid, nullable: true}
+        storeName: {type: string, nullable: true}
+        state: {$ref: '#/components/schemas/ShoppingItemState'}
+        boughtAt: {type: string, format: date-time, nullable: true}
+        source: {$ref: '#/components/schemas/ItemSource'}
+        sourceRef: {type: string, nullable: true}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+        createdBy: {$ref: '#/components/schemas/Actor'}
+        updatedBy: {$ref: '#/components/schemas/Actor'}
+    ShoppingItemList:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/ShoppingItem'}}
+        nextCursor: {type: string, nullable: true}
+    ShoppingItemResult:
+      type: object
+      required: [item, merged]
+      properties:
+        item: {$ref: '#/components/schemas/ShoppingItem'}
+        merged: {type: boolean, description: True when the request merged into an item that was already needed.}
+    NewShoppingItem:
+      type: object
+      description: Give the store by `storeId` or by `storeName`, not both.
+      required: [name]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 200}
+        amount: {type: string, maxLength: 50}
+        note: {type: string, maxLength: 1000}
+        aisle: {$ref: '#/components/schemas/Aisle'}
+        storeId: {type: string, format: uuid}
+        storeName: {type: string, minLength: 1, maxLength: 100, description: A store's name; an unknown one creates the store.}
+        source: {$ref: '#/components/schemas/ItemSource'}
+        sourceRef: {type: string, maxLength: 200, description: 'What the item came from, such as an Inbox item id.'}
+    AddShoppingItemsRequest:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, minItems: 1, maxItems: 50, items: {$ref: '#/components/schemas/NewShoppingItem'}}
+    AddShoppingItemsResponse:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/ShoppingItemResult'}}
+    UpdateShoppingItemRequest:
+      type: object
+      minProperties: 1
+      description: 'Give the store by `storeId` or by `storeName`, not both; `storeId: null` removes it.'
+      properties:
+        name: {type: string, minLength: 1, maxLength: 200}
+        amount: {type: string, nullable: true, maxLength: 50}
+        note: {type: string, nullable: true, maxLength: 1000}
+        aisle: {$ref: '#/components/schemas/Aisle'}
+        storeId: {type: string, format: uuid, nullable: true}
+        storeName: {type: string, minLength: 1, maxLength: 100}
+    ClearBoughtRequest:
+      type: object
+      properties:
+        boughtBefore: {type: string, format: date-time, description: Only items bought before this instant.}
+    ClearBoughtResult:
+      type: object
+      required: [deleted]
+      properties:
+        deleted: {type: integer}
+    Store:
+      type: object
+      required: [id, name, sortOrder, archived, archivedAt, createdAt, updatedAt, createdBy, updatedBy]
+      properties:
+        id: {type: string, format: uuid}
+        name: {type: string}
+        sortOrder: {type: integer}
+        archived: {type: boolean}
+        archivedAt: {type: string, format: date-time, nullable: true}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+        createdBy: {$ref: '#/components/schemas/Actor'}
+        updatedBy: {$ref: '#/components/schemas/Actor'}
+    StoreList:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/Store'}}
+    CreateStoreRequest:
+      type: object
+      required: [name]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 100}
+        sortOrder: {type: integer, minimum: -1000000, maximum: 1000000}
+    UpdateStoreRequest:
+      type: object
+      minProperties: 1
+      properties:
+        name: {type: string, minLength: 1, maxLength: 100}
+        sortOrder: {type: integer, minimum: -1000000, maximum: 1000000}
+        archived: {type: boolean}
+    AisleRuleMatch:
+      type: string
+      description: '`word`: the keyword matches whole words of a name ("milk" in "oat milk", not in "buttermilk"). `substring`: anywhere, also inside a word, for German compounds ("milch" in "Vollmilch").'
+      enum: [word, substring]
+    AisleRule:
+      type: object
+      description: Places a new item whose normalised name contains `keyword`; when several rules match, the longest keyword wins.
+      required: [id, keyword, aisle, match, createdAt, createdBy]
+      properties:
+        id: {type: string, format: uuid}
+        keyword: {type: string, description: Normalised.}
+        aisle: {$ref: '#/components/schemas/Aisle'}
+        match: {$ref: '#/components/schemas/AisleRuleMatch'}
+        createdAt: {type: string, format: date-time}
+        createdBy: {$ref: '#/components/schemas/Actor'}
+    AisleRuleList:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/AisleRule'}}
+    CreateAisleRuleRequest:
+      type: object
+      required: [keyword, aisle]
+      properties:
+        keyword: {type: string, minLength: 1, maxLength: 100}
+        aisle: {$ref: '#/components/schemas/Aisle'}
+        match: {$ref: '#/components/schemas/AisleRuleMatch'}
+    PantryLocation:
+      type: string
+      enum: [fridge, freezer, pantry, other]
+    PantryItemState:
+      type: string
+      description: '`in_stock`: at home. `used_up` and `thrown_away` end the item; it is kept for history.'
+      enum: [in_stock, used_up, thrown_away]
+    PantryItem:
+      type: object
+      required: [id, name, normalizedName, amount, location, expiresOn, openedOn, note, state, endedAt, source, sourceRef, fromShoppingItemId, createdAt, updatedAt, createdBy, updatedBy]
+      properties:
+        id: {type: string, format: uuid}
+        name: {type: string, description: As written.}
+        normalizedName: {type: string}
+        amount: {type: string, nullable: true}
+        location: {$ref: '#/components/schemas/PantryLocation'}
+        expiresOn: {type: string, format: date, nullable: true}
+        openedOn: {type: string, format: date, nullable: true}
+        note: {type: string, nullable: true}
+        state: {$ref: '#/components/schemas/PantryItemState'}
+        endedAt: {type: string, format: date-time, nullable: true}
+        source: {$ref: '#/components/schemas/ItemSource'}
+        sourceRef: {type: string, nullable: true}
+        fromShoppingItemId: {type: string, format: uuid, nullable: true, description: The shopping item it was bought as.}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+        createdBy: {$ref: '#/components/schemas/Actor'}
+        updatedBy: {$ref: '#/components/schemas/Actor'}
+    PantryItemList:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/PantryItem'}}
+        nextCursor: {type: string, nullable: true}
+    NewPantryItem:
+      type: object
+      required: [name]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 200}
+        amount: {type: string, maxLength: 50}
+        location: {$ref: '#/components/schemas/PantryLocation'}
+        expiresOn: {type: string, format: date}
+        openedOn: {type: string, format: date}
+        note: {type: string, maxLength: 1000}
+        source: {$ref: '#/components/schemas/ItemSource'}
+        sourceRef: {type: string, maxLength: 200}
+        fromShoppingItemId: {type: string, format: uuid, description: The shopping item it was bought as; it must exist.}
+    AddPantryItemsRequest:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, minItems: 1, maxItems: 50, items: {$ref: '#/components/schemas/NewPantryItem'}}
+    AddPantryItemsResponse:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/PantryItem'}}
+    UpdatePantryItemRequest:
+      type: object
+      minProperties: 1
+      properties:
+        name: {type: string, minLength: 1, maxLength: 200}
+        amount: {type: string, nullable: true, maxLength: 50}
+        location: {$ref: '#/components/schemas/PantryLocation'}
+        expiresOn: {type: string, format: date, nullable: true}
+        openedOn: {type: string, format: date, nullable: true}
+        note: {type: string, nullable: true, maxLength: 1000}

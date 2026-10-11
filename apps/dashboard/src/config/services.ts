@@ -9,6 +9,7 @@ const DEFAULT_SERVICE_URLS = {
   banking: "http://localhost:8089",
   calendarFeeds: "http://localhost:8090",
   googleCalendar: "http://localhost:8091",
+  food: "http://localhost:8092",
 } as const;
 
 export function normalizeServiceUrl(name: string, value: string): string {
@@ -95,6 +96,11 @@ export const serviceBaseUrls = Object.freeze({
     "NEXT_PUBLIC_GOOGLE_CALENDAR_SERVICE_URL",
     "GOOGLE_CALENDAR_SERVICE_URL",
     DEFAULT_SERVICE_URLS.googleCalendar,
+  ),
+  food: configuredServiceUrl(
+    "NEXT_PUBLIC_FOOD_SERVICE_URL",
+    "FOOD_SERVICE_URL",
+    DEFAULT_SERVICE_URLS.food,
   ),
 });
 

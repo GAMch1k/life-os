@@ -25,6 +25,9 @@ services:
     ports: !reset []
     environment:
       LIFE_OS_ZAW_ICS_URL: ""
+  food:
+    image: lifeos-food:latest
+    ports: !reset []
   activity:
     image: lifeos-activity:latest
     ports: !reset []

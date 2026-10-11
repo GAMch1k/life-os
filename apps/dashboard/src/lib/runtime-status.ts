@@ -1671,6 +1671,7 @@ const SERVICE_NAMES: Record<keyof typeof serviceBaseUrls, string> = {
   banking: "Banking",
   calendarFeeds: "Calendar feeds",
   googleCalendar: "Google Calendar",
+  food: "Food",
 };
 
 export async function getRuntimeStatus(): Promise<RuntimeStatus> {

@@ -56,6 +56,23 @@ services:
     networks: [backend]
     restart: unless-stopped
 
+  food-migrate:
+    image: migrate/migrate:v4.18.3
+    command: ["-path", "/migrations", "-database", "postgres://food_user:${LIFE_OS_FOOD_DB_PASSWORD}@postgres:5432/food_db?sslmode=disable", "up"]
+    volumes: ["./services/food/db/migrations:/migrations:ro"]
+    depends_on: {postgres: {condition: service_healthy}}
+    networks: [backend]
+    restart: "no"
+  # The shopping list, stores, aisle rules, and pantry (docs/services/food.md).
+  # LIFE_OS_TIMEZONE is the owner's "today" for expiringWithinDays.
+  food:
+    build: {context: ., dockerfile: services/food/Dockerfile}
+    environment: {SERVICE_NAME: food, PORT: 8080, DATABASE_URL: "postgres://food_user:${LIFE_OS_FOOD_DB_PASSWORD}@postgres:5432/food_db?sslmode=disable", ACTIVITY_SERVICE_URL: "http://activity:8080", LIFE_OS_TIMEZONE: "${LIFE_OS_TIMEZONE:-UTC}"}
+    expose: ["8080"]
+    depends_on: {food-migrate: {condition: service_completed_successfully}}
+    networks: [backend]
+    restart: unless-stopped
+
   inbox-migrate:
     image: migrate/migrate:v4.18.3
     command: ["-path", "/migrations", "-database", "postgres://inbox_user:${LIFE_OS_INBOX_DB_PASSWORD}@postgres:5432/inbox_db?sslmode=disable", "up"]
@@ -253,6 +270,7 @@ services:
       MONITOR_SERVICE_URL: http://monitor:8080
       BANKING_SERVICE_URL: http://banking:8080
       GOOGLE_CALENDAR_SERVICE_URL: http://google-calendar:8080
+      FOOD_SERVICE_URL: http://food:8080
       LIFE_OS_TIMEZONE: ${LIFE_OS_TIMEZONE:-UTC}
     expose: ["3000"]
     depends_on:
@@ -423,6 +441,7 @@ services:
       banking: {condition: service_started}
       google-calendar: {condition: service_started}
       calendar-feeds: {condition: service_started}
+      food: {condition: service_started}
     # edge: how the Cloudflare connector reaches the gateway (and only it).
     networks: [backend, edge]
     restart: unless-stopped
