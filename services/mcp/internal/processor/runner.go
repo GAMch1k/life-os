@@ -186,12 +186,39 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 			}
 			return Proposal{}, r.humanReview(ctx, item.ID, started.ID, action, []map[string]any{}, reason)
 		}
+		if missingSlot(action) {
+			// "Pasta on Wednesday": which meal of the day is the owner's.
+			return Proposal{}, r.humanReview(ctx, item.ID, started.ID, action, []map[string]any{}, noSlotReason)
+		}
 		if action.Tool == "calendar_update" && len(dropped[index]) > 0 && !changesEvent(action.Arguments) {
 			// It only turned the event's default reminders off or on.
 			return Proposal{}, r.humanReview(ctx, item.ID, started.ID, action, []map[string]any{}, defaultRemindersReason)
 		}
 		if !validAction(action) {
 			return Proposal{}, r.retryLater(ctx, item.ID, started.ID, actions, "invalid proposed action: "+action.Tool, failureModelOutput, previous)
+		}
+		// recipe is the recipe a meal or its ingredients name: the one the
+		// owner chose in Human Review, else the one the words find. A meal
+		// no recipe matches is planned as its words.
+		recipe := ""
+		if isRecipeAction(action) {
+			recipe = approvedFood
+			if recipe == "" {
+				found, findErr := r.findRecipes(ctx, action)
+				if findErr != nil {
+					return Proposal{}, r.retryLater(ctx, item.ID, started.ID, actions, "recipe search failed: "+findErr.Error(), classifyActionError(findErr), previous)
+				}
+				switch {
+				case len(found) > 1:
+					return Proposal{}, r.humanReview(ctx, item.ID, started.ID, action, recipeCandidates(found), recipeReviewReason(action.Tool))
+				case len(found) == 1:
+					recipe, _ = found[0]["id"].(string)
+				case action.Tool == "food_add_missing_ingredients":
+					// "купи всё для борща" without a borscht recipe: the
+					// owner expects groceries, so they decide.
+					return Proposal{}, r.humanReview(ctx, item.ID, started.ID, action, []map[string]any{}, noRecipeReason(text(action.Arguments["recipeQuery"])))
+				}
+			}
 		}
 		// target is the one existing Task or event a search found.
 		var target map[string]any
@@ -301,6 +328,13 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 				itemID, _ = target["id"].(string)
 			}
 			arguments = foodArguments(action.Tool, arguments, itemID)
+		}
+		if isMealTool(action.Tool) {
+			at := item.CreatedAt
+			if at.IsZero() {
+				at = time.Now()
+			}
+			arguments = mealArguments(action.Tool, arguments, recipe, at, r.location(item))
 		}
 		if action.Tool == "food_add_shopping_items" || action.Tool == "food_add_pantry_items" {
 			// Food records that the items came from this capture.
@@ -616,6 +650,9 @@ func validAction(action plannedAction) bool {
 		"food_add_pantry_items":             {"items": true},
 		"food_mark_bought":                  {"itemQuery": true, "itemQueryAlternatives": true},
 		"food_update_pantry_item":           {"itemQuery": true, "itemQueryAlternatives": true, "state": true},
+		"food_plan_meal":                    {"recipeQuery": true, "recipeQueryAlternatives": true, "date": true, "slot": true, "servings": true, "note": true},
+		"food_clear_meal":                   {"date": true, "slot": true},
+		"food_add_missing_ingredients":      {"recipeQuery": true, "recipeQueryAlternatives": true, "week": true, "from": true, "to": true},
 	}
 	for field := range action.Arguments {
 		if !allowedFields[action.Tool][field] {

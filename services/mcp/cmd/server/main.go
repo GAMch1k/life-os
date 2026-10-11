@@ -221,8 +221,8 @@ func patch(ctx context.Context, hc *http.Client, trace activity.Trace, baseURL, 
 	return write(ctx, hc, trace, http.MethodPatch, baseURL, path, input, idempotencyKey...)
 }
 
-func put(ctx context.Context, hc *http.Client, trace activity.Trace, baseURL, path string, input interface{}) (*mcp.CallToolResult, Output, error) {
-	return write(ctx, hc, trace, http.MethodPut, baseURL, path, input)
+func put(ctx context.Context, hc *http.Client, trace activity.Trace, baseURL, path string, input interface{}, idempotencyKey ...string) (*mcp.CallToolResult, Output, error) {
+	return write(ctx, hc, trace, http.MethodPut, baseURL, path, input, idempotencyKey...)
 }
 
 func write(ctx context.Context, hc *http.Client, trace activity.Trace, method, baseURL, path string, input interface{}, idempotencyKey ...string) (*mcp.CallToolResult, Output, error) {

@@ -380,10 +380,27 @@ purchases as Tasks:
   coming Friday (`food_add_pantry_items`). "Молоко закончилось" marks the one
   matching in-stock item used up (`food_update_pantry_item`), and puts milk
   on the list when the capture says to buy more.
+- "Pasta Bolognese for dinner on Wednesday", "на ужин в среду паста", and
+  "Mittwoch Abendessen: Pasta" plan a meal (`food_plan_meal`, P15-05) in the
+  slot the meal word names, on the day resolved in the owner's timezone. The
+  words find the recipe as [Recipes](#recipes) describes: the exact title,
+  else the only recipe a `q` search finds; several go to Human Review with
+  the recipes as candidates, and none plans the words as text ("В пятницу на
+  обед суп" is the text "суп"). A meal without a meal word goes to Human
+  Review. "Cancel dinner on Friday" clears the slot (`food_clear_meal`; an
+  empty slot is fine).
+- "Add the ingredients for the bolognese to the list" and "купи всё для
+  борща" add the missing ingredients of the recipe the words find
+  (`food_add_missing_ingredients`; with no such recipe the capture goes to
+  Human Review: "No recipe is called “борщ”. Add the recipe on the Food
+  page, or say which items to buy."), and "buy what
+  I need for this week's meals" those of the meals planned Monday to Sunday
+  of the capture's week. "Buy pasta" stays a list item. The AI never creates
+  or edits recipes.
 
 Items from a capture have `source: capture` and the Inbox item's id as
-`sourceRef`, and their rows and events name `agent:codex-inbox-processor` as
-the actor. Every write carries an `Idempotency-Key` derived from the capture
+`sourceRef` (missing ingredients have `source: recipe`, as always), and their
+rows and events name `agent:codex-inbox-processor` as the actor. Every write carries an `Idempotency-Key` derived from the capture
 and the write, so a retried capture changes nothing twice; the merge rule (one
 needed item per name) is the second safety net.
 

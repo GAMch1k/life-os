@@ -4,11 +4,12 @@
 #   tools/benchmark-ai-runtime gpt-6-luna/none gpt-6-luna/low gpt-5.6-luna/medium
 #
 # For each profile (model/effort) a fresh disposable verification stack runs
-# with that profile, seeds Tasks, Calendar events, and a shopping list item,
-# submits the same captures (EN/RU/DE text, including completions of Tasks
-# titled in another of those languages, changes to existing events, cash
-# spending, and groceries for the shopping list and the pantry, through the
-# Inbox API the Dashboard uses, plus one recorded voice note through Voice
+# with that profile, seeds Tasks, Calendar events, a shopping list item, a
+# recipe, a pantry item, and a planned meal, submits the same captures
+# (EN/RU/DE text, including completions of Tasks titled in another of those
+# languages, changes to existing events, cash spending, groceries for the
+# shopping list and the pantry, and meals and a recipe's ingredients, through
+# the Inbox API the Dashboard uses, plus one recorded voice note through Voice
 # and whisper.cpp), lets the automatic processor plan them with the
 # authenticated Codex CLI and act through MCP, and then checks the persisted
 # results. The owner's timezone is Europe/Berlin. Results go to
@@ -67,6 +68,9 @@ captured_day() { TZ=$zone date -d "$(item "$1" | jq -r '.createdAt')" +%F; }
 review_ids() { item "$1" | jq -c '[.processingMetadata.humanReview.candidates[]?.id] | sort'; }
 # seed_list <name>: a needed shopping list item, as added in the Dashboard.
 seed_list() { post_json /api/food/v1/shopping-items "$(jq -n --arg name "$1" '{items: [{name: $name}]}')" | jq -r '.items[0].item.id'; }
+put_json() { api -X PUT -H 'content-type: application/json' --data "$2" "$gateway$1"; }
+# coming <ISO weekday 1-7> <date>: that weekday on or after the date.
+coming() { date -u -d "$2 + $((($1 + 7 - $(date -u -d "$2" +%u)) % 7)) days" +%F; }
 
 run_profile() {
   local profile=$1 model=${1%%/*} effort=""
@@ -107,6 +111,19 @@ run_profile() {
   # On the shopping list in Russian; an English capture marks it bought.
   local bananas
   bananas=$(seed_list "Бананы")
+  # A recipe whose spaghetti is at home; captures plan it and buy the rest.
+  local bolognese today
+  bolognese=$(post_json /api/food/v1/recipes '{"title":"Pasta Bolognese","servings":4,"ingredients":[{"name":"Spaghetti","amount":"500 g"},{"name":"Hackfleisch","amount":"400 g"},{"name":"Tomaten","amount":"1 Dose"}],"tags":["pasta"]}' | jq -r '.id')
+  post_json /api/food/v1/pantry-items '{"items":[{"name":"Spaghetti","location":"pantry"}]}' >/dev/null
+  # Breakfast planned on the coming Saturday, which a capture cancels. Run
+  # on a Saturday, "Saturday" may also mean a week later: both are planned,
+  # and the capture clears one.
+  today=$(TZ=$zone date +%F)
+  local saturdays=("$(coming 6 "$today")")
+  [ "${saturdays[0]}" = "$today" ] && saturdays+=("$(date -u -d "$today + 7 days" +%F)")
+  for saturday in "${saturdays[@]}"; do
+    put_json "/api/food/v1/meal-plan/$saturday/breakfast" '{"text":"Pancakes"}' >/dev/null
+  done
 
   declare -A ids
   ids[en_create]=$(capture "Create a task to renew the passport.")
@@ -136,6 +153,10 @@ run_profile() {
   ids[food_pantry_expiry]=$(capture "Йогурт в холодильнике до пятницы.")
   ids[food_flashdrive_task]=$(capture "Buy a flash drive tomorrow.")
   ids[food_mixed]=$(capture "Buy milk and call the plumber tomorrow.")
+  ids[meal_plan_en]=$(capture "Pasta Bolognese for dinner on Wednesday.")
+  ids[meal_plan_ru_text]=$(capture "В пятницу на обед суп.")
+  ids[meal_clear]=$(capture "Cancel Saturday breakfast.")
+  ids[recipe_ingredients]=$(capture "Add the ingredients for the bolognese to the shopping list.")
   local job
   job=$(api -F "audio=@$work/chicken.wav;type=audio/wav" -F source=web "$gateway/api/voice/v1/audio-jobs" | jq -r '.id')
   for _ in $(seq 1 120); do
@@ -270,10 +291,44 @@ run_profile() {
   # the plumber (not mom: ru_complete's "Я уже позвонил маме" would then match two).
   s=$(state "${ids[food_mixed]}")
   check food_mixed "$([ "$s" = resolved ] && [ "$(listed milk)" = 1 ] && [ "$(tasks_matching plumber)" = 1 ] && [ "$(tasks_matching milk)" = 0 ] && echo 1 || echo 0)" "state=$s milk=$(listed milk) plumber_tasks=$(tasks_matching plumber) milk_tasks=$(tasks_matching milk)"
-  # The seeded bananas plus milk, eggs, bread, cheese, toothpaste, and shower
-  # gel, each once; the yoghurt alone in the pantry.
-  check no_extra_shopping_items "$([ "$(jq '.items | length' <<<"$list")" = 7 ] && [ "$(jq '[.items[].normalizedName] | unique | length' <<<"$list")" = 7 ] && echo 1 || echo 0)" "items=$(jq -c '[.items[] | {name, amount, storeName, state}]' <<<"$list") (expected 7)"
-  check no_extra_pantry_items "$([ "$(jq '.items | length' <<<"$pantry")" = 1 ] && echo 1 || echo 0)" "items=$(jq -c '[.items[] | {name, location, expiresOn}]' <<<"$pantry") (expected 1)"
+  # Meals: a weekday means its coming day from the capture (captured on that
+  # weekday: that day or a week later). The plan is read from the first
+  # capture's day for three weeks.
+  local plan plan_from meal_day meal_later
+  plan_from=$(captured_day "${ids[meal_plan_en]}")
+  plan=$(api "$gateway/api/food/v1/meal-plan?from=$plan_from&to=$(date -u -d "$plan_from + 20 days" +%F)")
+  planned() { # planned <scenario> <ISO weekday> <slot> <jq condition>: such meals on that coming day
+    meal_day=$(coming "$2" "$(captured_day "${ids[$1]}")")
+    meal_later=$(date -u -d "$meal_day + 7 days" +%F)
+    [ "$meal_day" = "$(captured_day "${ids[$1]}")" ] || meal_later=$meal_day
+    jq --arg day "$meal_day" --arg later "$meal_later" --arg slot "$3" --arg recipe "$bolognese" "[.items[] | select((.date == \$day or .date == \$later) and .slot == \$slot and ($4))] | length" <<<"$plan"
+  }
+  # meal_plan_en: Wednesday's dinner is the seeded recipe.
+  s=$(state "${ids[meal_plan_en]}")
+  check meal_plan_en "$([ "$s" = resolved ] && [ "$(planned meal_plan_en 3 dinner '.recipeId == $recipe')" = 1 ] && echo 1 || echo 0)" "state=$s plan=$(jq -c '[.items[] | {date, slot, title, recipeId}]' <<<"$plan") want_recipe=$bolognese"
+  # meal_plan_ru_text: no recipe is soup, so Friday's lunch is the words.
+  s=$(state "${ids[meal_plan_ru_text]}")
+  check meal_plan_ru_text "$([ "$s" = resolved ] && [ "$(planned meal_plan_ru_text 5 lunch '.recipeId == null and (.title | test("^\\s*суп\\s*$"; "i"))')" = 1 ] && echo 1 || echo 0)" "state=$s"
+  # meal_clear: one seeded Saturday breakfast is gone.
+  s=$(state "${ids[meal_clear]}")
+  local kept=0
+  for saturday in "${saturdays[@]}"; do
+    kept=$((kept + $(jq --arg day "$saturday" '[.items[] | select(.date == $day and .slot == "breakfast")] | length' <<<"$plan")))
+  done
+  check meal_clear "$([ "$s" = resolved ] && [ "$kept" = $((${#saturdays[@]} - 1)) ] && echo 1 || echo 0)" "state=$s saturdays=${saturdays[*]} breakfasts_left=$kept"
+  # recipe_ingredients: the minced meat and tomatoes, once each, from the
+  # recipe; the spaghetti is at home.
+  s=$(state "${ids[recipe_ingredients]}")
+  local from_recipe
+  from_recipe=$(jq --arg recipe "$bolognese" '[.items[] | select(.state == "needed" and (.normalizedName == "hackfleisch" or .normalizedName == "tomaten") and .source == "recipe" and .sourceRef == $recipe)] | length' <<<"$list")
+  check recipe_ingredients "$([ "$s" = resolved ] && [ "$(listed hackfleisch)" = 1 ] && [ "$(listed tomaten)" = 1 ] && [ "$from_recipe" = 2 ] && [ "$(jq '[.items[] | select(.normalizedName == "spaghetti")] | length' <<<"$list")" = 0 ] && echo 1 || echo 0)" "state=$s minced_meat=$(listed hackfleisch) tomatoes=$(listed tomaten) from_recipe=$from_recipe"
+  # The seeded bananas plus milk, eggs, bread, cheese, toothpaste, shower
+  # gel, minced meat, and tomatoes, each once; the yoghurt and the seeded
+  # spaghetti in the pantry; Wednesday's dinner, Friday's lunch, and the
+  # Saturday breakfasts but the one cleared.
+  check no_extra_shopping_items "$([ "$(jq '.items | length' <<<"$list")" = 9 ] && [ "$(jq '[.items[].normalizedName] | unique | length' <<<"$list")" = 9 ] && echo 1 || echo 0)" "items=$(jq -c '[.items[] | {name, amount, storeName, state}]' <<<"$list") (expected 9)"
+  check no_extra_pantry_items "$([ "$(jq '.items | length' <<<"$pantry")" = 2 ] && echo 1 || echo 0)" "items=$(jq -c '[.items[] | {name, location, expiresOn}]' <<<"$pantry") (expected 2)"
+  check no_extra_meals "$([ "$(jq '.items | length' <<<"$plan")" = $((1 + ${#saturdays[@]})) ] && echo 1 || echo 0)" "meals=$(jq -c '[.items[] | {date, slot, title}]' <<<"$plan") (expected $((1 + ${#saturdays[@]})))"
   # No fallback or invented entities: ten seeds plus three creates, the
   # flash drive, and the call to the plumber.
   local total
