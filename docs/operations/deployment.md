@@ -128,3 +128,9 @@ Voice jobs use a persisted lease instead of treating `processing` as permanent o
 A recording may be up to 25 MiB (`LIFE_OS_VOICE_MAX_UPLOAD_BYTES`, default 26214400). The limit appears in three places that must change together: `LIFE_OS_VOICE_MAX_UPLOAD_BYTES` in `.env` (Voice also allows 1 MiB of multipart framing on top), `client_max_body_size 26m` in `infra/nginx/life-os.conf`, and `VOICE_MAX_UPLOAD_BYTES` in `apps/dashboard/src/lib/voice-job-state.ts`, which the Dashboard checks before uploading. Through Cloudflare an over-limit upload may show as 502 rather than 413; the Dashboard's own check is what users normally see. See [Voice and STT](../services/voice-stt.md).
 
 The Whisper image converts recordings with ffmpeg. After a change under `services/voice/whisper/`, rebuild it (`docker compose build whisper`) together with `voice` and `voice-worker` before redeploying.
+
+## Phone app, sharing, and capture photos
+
+Installing the Dashboard on the phone and Share → Life OS (P16-01) need no `.env` change: rebuild and recreate the Dashboard (its image now carries `public/`, the icons and the service worker). See [Dashboard → Install on your phone](../frontend/dashboard.md#install-on-your-phone).
+
+Capture photos (P16-02) add the `inbox-media` volume (`lifeos-inbox-media`, created on first start) and Inbox migration `000009` (`inbox-migrate` applies it before Inbox starts). `LIFE_OS_INBOX_MEDIA_MAX_BYTES` (10 MiB) is optional. Rebuild and recreate `inbox` (the volume, `INBOX_MEDIA_DIR`, the larger request limit), `processor` (`INBOX_SERVICE_URL` and the `/workspace` tmpfs the images are written to), the Dashboard, and the gateway (`location = /share`, which carries shared photos, up to 60 MB). `tools/verify-isolation` checks the volume with the others, so it must exist first. See [Inbox → Capture images](../services/inbox.md#capture-images).

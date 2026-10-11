@@ -286,6 +286,17 @@ Codex is the processor's agent runtime. It runs as a managed subprocess of the m
 - **Cancellation.** Graceful: `SIGTERM` to the group, then `SIGKILL` after 5 s. The whole group is killed after every run.
 - **Concurrency.** At most `LIFE_OS_CODEX_MAX_CONCURRENCY` runs at once (default 1).
 - **Structured output.** `--json` events give the Codex session id (`thread.started`) and the failure reason (`turn.failed`). `-o` captures the final plan.
+- **Images.** A capture's photos, as files with `--image` (see [Images](#images)).
+
+### Images
+
+A capture can carry photos ([Inbox → Capture images](inbox.md#capture-images)): shared to Life OS from the phone, or attached in the composer. Codex reads them with the capture's text (`internal/processor/images.go`):
+
+- **Reading.** Before planning, the runner reads the capture's `mediaReferences` from Inbox on the private network (`GET /v1/media/{sha256}` at `INBOX_SERVICE_URL`, `http://inbox:8080`; 30 s per image). A run gets at most five images and 25 MiB in total; one Inbox no longer has, a non-image answer, or one beyond the limits is left out and counted. When Inbox cannot answer, the capture is retried later (a dependency failure) rather than planned without its photos. References that are not Inbox images are ignored, and a capture without images does not ask Inbox.
+- **Handing them over.** `CodexCLI` writes them to a directory of its own inside `LIFE_OS_CODEX_WORKDIR` (`capture-images-…/image-1.jpg`, `image-2.png`, …; in Compose the workdir `/workspace` is a 128 MB tmpfs of the read-only processor container) and passes each with `--image <file>`, before `-o`, which ends the list ahead of the prompt. The directory is removed when the run ends, however it ends; the deadline, cancellation, and process-group handling are unchanged.
+- **Prompt.** One line, only for a capture with images, just before the item: "The item comes with N attached image(s), which are part of the capture: read them together with its text.", plus how many could not be attached. Routing is unchanged: the photos inform the same plan the text would get. (Letters, documents, and receipts are a later ticket.)
+
+Tests: `images_test.go` checks the arguments and files a run gets (in the workdir, before `-o`, removed afterwards, the prompt line, none without images), the reading limits and failures, and that the runner plans with the images or retries when Inbox cannot give them.
 
 ### Lifecycle
 
