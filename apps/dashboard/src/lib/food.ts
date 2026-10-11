@@ -17,6 +17,7 @@ export type PantryLocation = Schemas["PantryLocation"];
 export type UpdateShoppingItemBody = Schemas["UpdateShoppingItemRequest"];
 export type NewPantryItem = Schemas["NewPantryItem"];
 export type UpdatePantryItemBody = Schemas["UpdatePantryItemRequest"];
+export type PutAwayItem = Schemas["PutAwayItem"];
 
 export const FOOD_TABS = ["list", "pantry"] as const;
 export type FoodTab = (typeof FOOD_TABS)[number];
@@ -546,6 +547,77 @@ export function pantryItemPatch(
   const note = optional(draft.note);
   if (note !== item.note) body.note = note;
   return { body: Object.keys(body).length ? body : null, errors: {} };
+}
+
+/**
+ * Where an item of an aisle usually goes at home, as Food decides for an
+ * item put away without a place: frozen food the freezer; dairy, meat, and
+ * fish the fridge; bakery, pantry, drinks, and snacks the pantry.
+ */
+export function aisleLocation(aisle: Aisle): PantryLocation {
+  switch (aisle) {
+    case "frozen":
+      return "freezer";
+    case "dairy":
+    case "meat_fish":
+      return "fridge";
+    case "bakery":
+    case "pantry":
+    case "drinks":
+    case "snacks":
+      return "pantry";
+    default:
+      return "other";
+  }
+}
+
+/** One bought item in the put-away dialog: where it goes and when it expires. */
+export type PutAwayDraft = {
+  id: string;
+  name: string;
+  amount: string | null;
+  location: PantryLocation;
+  /** YYYY-MM-DD, or "" for none. */
+  expiresOn: string;
+};
+
+export function putAwayDrafts(items: ShoppingItem[]): PutAwayDraft[] {
+  return items.map((item) => ({
+    id: item.id,
+    name: item.name,
+    amount: item.amount,
+    location: aisleLocation(item.aisle),
+    expiresOn: "",
+  }));
+}
+
+/** The put-away request's items: each place, and the expiry date when set. */
+export function putAwayItems(drafts: PutAwayDraft[]): PutAwayItem[] {
+  return drafts.map((draft) => ({
+    id: draft.id,
+    location: draft.location,
+    ...(draft.expiresOn ? { expiresOn: draft.expiresOn } : {}),
+  }));
+}
+
+/** The line after a put-away: "Put away “Milch” in the fridge." */
+export function putAwayNote(items: PantryItem[]) {
+  if (items.length === 1) {
+    const [item] = items;
+    const place =
+      item.location === "other"
+        ? ""
+        : ` in the ${locationLabel(item.location).toLowerCase()}`;
+    return `Put away “${item.name}”${place}.`;
+  }
+  return `Put away ${items.length} items in the pantry.`;
+}
+
+/** The line after marking a pantry item used up or thrown away. */
+export function endedNote(item: Pick<PantryItem, "name" | "state">) {
+  return item.state === "thrown_away"
+    ? `Threw away “${item.name}”.`
+    : `Used up “${item.name}”.`;
 }
 
 // ---- Home -------------------------------------------------------------------

@@ -36,6 +36,7 @@ type PantryItem = {
   location: string;
   expiresOn: string | null;
   state: "in_stock" | "used_up" | "thrown_away";
+  fromShoppingItemId: string | null;
 };
 type Store = { id: string; name: string; archived: boolean };
 
@@ -84,6 +85,11 @@ async function addShopping(
   });
   expect(response.ok()).toBeTruthy();
   return (await response.json()).items[0].item;
+}
+
+async function markBought(request: APIRequestContext, id: string) {
+  const response = await request.post(`${api}/shopping-items/${id}/bought`);
+  expect(response.ok()).toBeTruthy();
 }
 
 async function addPantry(
@@ -497,6 +503,115 @@ test.describe("Food workspace", () => {
     await expect(
       page.getByTestId("food-pantry-item").filter({ hasText: milk }),
     ).toContainText("Expires today");
+  });
+
+  test("bought items are put away into the pantry with a place and an expiry", async ({
+    page,
+    request,
+  }) => {
+    const milk = `Milch ${tag}`;
+    const peas = `Erbsen ${tag}`;
+    const bought = [
+      await addShopping(request, { name: milk, amount: "1 l" }),
+      await addShopping(request, { name: peas }),
+    ];
+    for (const item of bought) await markBought(request, item.id);
+    const { today } = await openFood(page);
+    await expand(boughtToggle(page));
+
+    // One item: it starts in its aisle's usual place, the fridge for dairy.
+    await page.getByRole("button", { name: `Put away ${milk}` }).click();
+    const dialog = page.getByRole("dialog", { name: "Put away" });
+    const entry = dialog
+      .getByTestId("food-put-away-item")
+      .filter({ hasText: milk });
+    await expect(entry).toContainText("1 l");
+    await expect(entry.getByLabel("Place")).toHaveValue("fridge");
+    await pickDate(entry, "Expires on", shift(today, 3));
+    await dialog.getByRole("button", { name: "Put away", exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(page.getByTestId("food-list-note")).toHaveText(
+      `Put away “${milk}” in the fridge.`,
+    );
+    await expect(
+      page.getByTestId("food-bought-item").filter({ hasText: milk }),
+    ).toHaveCount(0);
+    expect(await shoppingNamed(request, milk)).toHaveLength(0);
+    const [stored] = await pantryNamed(request, milk);
+    expect(stored).toMatchObject({
+      location: "fridge",
+      amount: "1 l",
+      expiresOn: shift(today, 3),
+      state: "in_stock",
+      fromShoppingItemId: bought[0].id,
+    });
+
+    // The rest at once, the place changed.
+    await page
+      .getByTestId("food-bought")
+      .getByRole("button", { name: "Put away all" })
+      .click();
+    const rest = page.getByRole("dialog", { name: "Put away" });
+    const peasEntry = rest
+      .getByTestId("food-put-away-item")
+      .filter({ hasText: peas });
+    await expect(rest.getByTestId("food-put-away-item")).toHaveCount(
+      await page.getByTestId("food-bought-item").count(),
+    );
+    await peasEntry.getByLabel("Place").selectOption("freezer");
+    await rest.getByRole("button", { name: "Put away", exact: true }).click();
+    await expect(rest).toHaveCount(0);
+    await expect(page.getByTestId("food-bought")).toHaveCount(0);
+    expect(await shoppingNamed(request, peas)).toHaveLength(0);
+
+    // Both are in the pantry now.
+    await page.getByRole("tab", { name: "Pantry" }).click();
+    await expect(
+      page
+        .getByTestId("food-location-fridge")
+        .getByTestId("food-pantry-item")
+        .filter({ hasText: milk }),
+    ).toContainText("Expires in 3 days");
+    await expect(
+      page
+        .getByTestId("food-location-freezer")
+        .getByTestId("food-pantry-item")
+        .filter({ hasText: peas }),
+    ).toBeVisible();
+  });
+
+  test("used up or thrown away offers to put the item back on the list", async ({
+    page,
+    request,
+  }) => {
+    const butter = `Butter ${tag}`;
+    const cheese = `Käse ${tag}`;
+    await addPantry(request, { name: butter });
+    await addPantry(request, { name: cheese });
+    await addShopping(request, { name: cheese });
+    await openFood(page, "/food?tab=pantry");
+    const note = page.getByTestId("food-pantry-note");
+    const offer = page.getByTestId("food-pantry-offer");
+
+    await page.getByRole("button", { name: `Used up: ${butter}` }).click();
+    await expect(note).toHaveText(`Used up “${butter}”.`);
+    await expect(offer).toContainText(`Add “${butter}” to the shopping list?`);
+    await offer.getByRole("button", { name: "Add to list" }).click();
+    await expect(note).toHaveText(`Added “${butter}” to the shopping list.`);
+    await expect(offer).toHaveCount(0);
+    await expect
+      .poll(async () =>
+        (await shoppingNamed(request, butter)).map((item) => item.state),
+      )
+      .toEqual(["needed"]);
+
+    // Already on the list: nothing to offer.
+    await page.getByRole("button", { name: `Thrown away: ${cheese}` }).click();
+    await expect(note).toHaveText(
+      `Threw away “${cheese}”. It is already on the shopping list.`,
+    );
+    await expect(offer).toHaveCount(0);
+    expect(await shoppingNamed(request, cheese)).toHaveLength(1);
   });
 
   test("the list is usable on a phone", async ({ page, request }) => {

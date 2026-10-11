@@ -9,8 +9,10 @@ import {
   activeStores,
   addedNote,
   aisleGroups,
+  aisleLocation,
   boughtItems,
   endedItems,
+  endedNote,
   endedText,
   expiry,
   foodErrorMessage,
@@ -25,6 +27,9 @@ import {
   parseFoodTab,
   parseQuickAdd,
   parseStoreFilter,
+  putAwayDrafts,
+  putAwayItems,
+  putAwayNote,
   reopened,
   shoppingDraft,
   shoppingItemPatch,
@@ -491,5 +496,69 @@ test("the pantry dialog adds what was filled in and patches what changed", () =>
       openedOn: "2026-10-11",
     }).body,
     { location: "freezer", expiresOn: null, openedOn: "2026-10-11" },
+  );
+});
+
+test("put away starts each item in its aisle's usual place", () => {
+  assert.equal(aisleLocation("frozen"), "freezer");
+  assert.equal(aisleLocation("dairy"), "fridge");
+  assert.equal(aisleLocation("meat_fish"), "fridge");
+  assert.equal(aisleLocation("bakery"), "pantry");
+  assert.equal(aisleLocation("drinks"), "pantry");
+  assert.equal(aisleLocation("produce"), "other");
+  assert.equal(aisleLocation("household"), "other");
+  const drafts = putAwayDrafts([
+    shopping({ name: "Milch", aisle: "dairy", amount: "2 l", state: "bought" }),
+    shopping({ name: "Erbsen", aisle: "frozen", state: "bought" }),
+  ]);
+  assert.deepEqual(drafts, [
+    {
+      id: "milch",
+      name: "Milch",
+      amount: "2 l",
+      location: "fridge",
+      expiresOn: "",
+    },
+    {
+      id: "erbsen",
+      name: "Erbsen",
+      amount: null,
+      location: "freezer",
+      expiresOn: "",
+    },
+  ]);
+  // The place always goes; the expiry date only when picked.
+  assert.deepEqual(
+    putAwayItems([
+      { ...drafts[0], expiresOn: "2026-10-14" },
+      { ...drafts[1], location: "other" },
+    ]),
+    [
+      { id: "milch", location: "fridge", expiresOn: "2026-10-14" },
+      { id: "erbsen", location: "other" },
+    ],
+  );
+});
+
+test("put away and ended items say what happened", () => {
+  assert.equal(
+    putAwayNote([pantry({ name: "Milch", location: "fridge" })]),
+    "Put away “Milch” in the fridge.",
+  );
+  assert.equal(
+    putAwayNote([pantry({ name: "Kerzen", location: "other" })]),
+    "Put away “Kerzen”.",
+  );
+  assert.equal(
+    putAwayNote([pantry({ name: "A" }), pantry({ name: "B" })]),
+    "Put away 2 items in the pantry.",
+  );
+  assert.equal(
+    endedNote({ name: "Milch", state: "used_up" }),
+    "Used up “Milch”.",
+  );
+  assert.equal(
+    endedNote({ name: "Milch", state: "thrown_away" }),
+    "Threw away “Milch”.",
   );
 });
