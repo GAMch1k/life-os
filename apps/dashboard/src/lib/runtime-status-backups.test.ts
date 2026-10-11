@@ -84,6 +84,8 @@ const healthy = (overrides: Partial<BackupStatus> = {}): BackupStatus => ({
   },
   retention: { daily: 7, weekly: 4, monthly: 12, failedDays: 3 },
   storage: {
+    mediaFiles: 0,
+    mediaBytes: 0,
     runs: 20,
     totalBytes: 48_000_000,
     freeBytes: 120_000_000_000,
@@ -177,6 +179,8 @@ test("before the first backup, the check is not set up and says when it runs", (
       oldestSuccessAt: undefined,
       lastRestoreCheck: undefined,
       storage: {
+        mediaFiles: 0,
+        mediaBytes: 0,
         runs: 0,
         totalBytes: 0,
         freeBytes: 120_000_000_000,
@@ -425,6 +429,8 @@ test("little free space where backups are kept needs attention", () => {
   const check = backupsCheck(
     healthy({
       storage: {
+        mediaFiles: 0,
+        mediaBytes: 0,
         runs: 20,
         totalBytes: 48_000_000,
         freeBytes: 4_000_000_000,
@@ -494,6 +500,8 @@ test("several issues: the worst leads, the others are listed", () => {
         ],
       }),
       storage: {
+        mediaFiles: 0,
+        mediaBytes: 0,
         runs: 20,
         totalBytes: 48_000_000,
         freeBytes: 1_000_000_000,
@@ -563,4 +571,55 @@ test("formatBytes counts in powers of 1000", () => {
   assert.equal(formatBytes(5_000_000_000), "5.0 GB");
   assert.equal(formatBytes(230_000_000_000), "230 GB");
   assert.equal(formatBytes(2_500_000_000_000), "2.5 TB");
+});
+
+test("the card counts the Inbox images kept with the backups", () => {
+  const status = healthy();
+  status.storage = {
+    ...status.storage,
+    mediaFiles: 312,
+    mediaBytes: 840_000_000,
+  };
+  assert.equal(fact(backupsCheck(status), "Inbox images"), "312 files, 840 MB");
+  status.lastRun = run(hours(8), {
+    media: {
+      service: "inbox",
+      count: 310,
+      bytes: 838_000_000,
+      copied: 4,
+      missing: 2,
+    },
+  });
+  assert.equal(
+    fact(backupsCheck(status), "Inbox images"),
+    "312 files, 840 MB; 2 the last backup could not copy (not on the Inbox volume, or damaged there)",
+  );
+  // Images missing on the volume are warnings in the manifest, not a state.
+  assert.equal(backupsCheck(status)?.state, "ok");
+});
+
+test("Inbox images that could not be backed up say what to do", () => {
+  const error =
+    "the media volume cannot be read: open /media/inbox/ab…: permission denied (the backup service needs the media files' group: set LIFE_OS_INBOX_MEDIA_GID to the output of docker compose exec inbox id -g)";
+  const check = backupsCheck(
+    healthy({
+      lastRun: run(hours(1), {
+        id: "20261011T090000Z",
+        result: "failed",
+        error: "the media could not be backed up: " + error,
+        media: {
+          service: "inbox",
+          count: 0,
+          bytes: 0,
+          copied: 0,
+          missing: 0,
+          error,
+        },
+      }),
+    }),
+  );
+  assert.equal(check?.state, "warning");
+  assert.equal(check?.summary, "The last backup of the Inbox images failed.");
+  assert.equal(check?.action, `${error}. Then use Back up now.`);
+  assert.equal(check?.detail, error);
 });

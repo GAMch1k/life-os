@@ -62,7 +62,14 @@ const status = (overrides: Partial<BackupStatus> = {}): BackupStatus => ({
     restoreCheckDay: "sunday",
   },
   retention: { daily: 7, weekly: 4, monthly: 12, failedDays: 3 },
-  storage: { runs: 1, totalBytes: 3_000, freeBytes: 1e11, sizeBytes: 2e11 },
+  storage: {
+    mediaFiles: 0,
+    mediaBytes: 0,
+    runs: 1,
+    totalBytes: 3_000,
+    freeBytes: 1e11,
+    sizeBytes: 2e11,
+  },
   databases: ["finance_db", "tasks_db"],
   ...overrides,
 });
