@@ -5,10 +5,12 @@ import { calendarClient } from "@/lib/api/calendar-client";
 import { calendarFeedsClient } from "@/lib/api/calendar-feeds-client";
 import type { components as BackupComponents } from "@/lib/api/generated/backup";
 import type { components as CalendarComponents } from "@/lib/api/generated/calendar";
+import type { components as HostHealthComponents } from "@/lib/api/generated/host-health";
 import type { components as CalendarFeedsComponents } from "@/lib/api/generated/calendar-feeds";
 import { foodClient } from "@/lib/api/food-client";
 import type { components as FoodComponents } from "@/lib/api/generated/food";
 import { googleCalendarClient } from "@/lib/api/google-calendar-client";
+import { hostHealthClient } from "@/lib/api/host-health-client";
 import { inboxClient } from "@/lib/api/inbox-client";
 import type { components as InboxComponents } from "@/lib/api/generated/inbox";
 import type { components as NotificationsComponents } from "@/lib/api/generated/notifications";
@@ -29,6 +31,7 @@ import {
   type BankConnectionList,
   expiringSoon,
 } from "@/lib/banking";
+import { downsampleMin, type SparkPoint } from "@/lib/sparkline";
 import { DEFAULT_TIME_ZONE, dateTimeFormat } from "@/lib/time-zone";
 import { configuredTimeZone, userTimeZone } from "@/lib/user-time-zone";
 
@@ -44,6 +47,7 @@ import { configuredTimeZone, userTimeZone } from "@/lib/user-time-zone";
 //   senders' last checks for due reminders),
 // - the banking integration's connections (consent and sync state),
 // - the backup service's status (the last backups and restore check),
+// - host-health's view of the server (memory, load, disks, containers),
 // - each owning service's /ready endpoint.
 // Nothing here is inferred from UI behaviour.
 
@@ -65,6 +69,10 @@ export type TaskNotifications =
   TasksComponents["schemas"]["TaskNotificationStatus"];
 /** The backup service's status (`GET /v1/status`). */
 export type BackupStatus = BackupComponents["schemas"]["BackupStatus"];
+/** host-health's view of the server (`GET /v1/status`). */
+export type HostStatus = HostHealthComponents["schemas"]["HostStatus"];
+/** host-health's samples (`GET /v1/history`). */
+export type HostHistory = HostHealthComponents["schemas"]["HostHistory"];
 /** Food's expiry reminder health (`GET /v1/notifications/status`). */
 export type FoodNotifications =
   FoodComponents["schemas"]["FoodNotificationStatus"];
@@ -263,6 +271,7 @@ export type StatusCheck = {
     | "notifications"
     | "banking"
     | "backups"
+    | "server"
     | "services";
   title: string;
   state: CheckState;
@@ -275,6 +284,16 @@ export type StatusCheck = {
   parts?: StatusPart[];
   /** A control the card offers: Backups' "Back up now". */
   control?: { kind: "backup-now"; running: boolean };
+  /** A small trend the card draws, such as memory available over a day. */
+  chart?: StatusChart;
+};
+
+/** A sparkline: values from 0 to max, with a warning level. */
+export type StatusChart = {
+  label: string;
+  max: number;
+  threshold?: number;
+  points: SparkPoint[];
 };
 
 export type RuntimeSignals = {
@@ -329,6 +348,11 @@ export type RuntimeSignals = {
    * when not checked (the check is left out).
    */
   backups?: BackupStatus | null;
+  /**
+   * host-health's status and history; null when it could not be read,
+   * absent when not checked (the check is left out).
+   */
+  server?: { status: HostStatus; history: HostHistory | null } | null;
   services: { name: string; ready: boolean }[];
 };
 
@@ -1927,6 +1951,208 @@ export function backupsCheck(
   };
 }
 
+/** For example "520 MiB" or "7.7 GiB": powers of 1024, as free -h and df -h. */
+export function formatBinaryBytes(bytes: number) {
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  return unit === 0
+    ? `${value} B`
+    : `${value >= 100 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
+}
+
+/** What to do when memory runs low. */
+export const SERVER_MEMORY_ACTION =
+  "Stop heavy jobs (on this server, one at a time); docker stats shows which containers use the most.";
+/** What to do when a disk fills up. */
+export const SERVER_DISK_ACTION =
+  "Free space on it: old images and build cache (docker system df shows them), logs, or old backups. A full disk stops PostgreSQL.";
+/** What to do when the server is busy. */
+export const SERVER_LOAD_ACTION =
+  "docker stats shows which containers use the CPU; heavy jobs should run one at a time.";
+/** What to do when container facts cannot be read. */
+export const SERVER_CONTAINERS_ACTION =
+  "Check the docker gateway (docker compose logs host-health-docker): LIFE_OS_DOCKER_GID must be the Docker socket's group.";
+
+type HostFinding = HostHealthComponents["schemas"]["HostFinding"];
+
+/** A container's name, with its compose project when that says more. */
+function containerLabel(finding: HostFinding) {
+  const name = finding.subject ?? "A container";
+  return finding.project && !name.startsWith(finding.project)
+    ? `${name} (${finding.project})`
+    : name;
+}
+
+/** A finding in words, with what to do. */
+function describeFinding(finding: HostFinding, status: HostStatus) {
+  const available = formatBinaryBytes(finding.availableBytes ?? 0);
+  const total = formatBinaryBytes(finding.totalBytes ?? 0);
+  switch (finding.kind) {
+    case "memory_low": {
+      const biggest = status.containers.top
+        .slice(0, 3)
+        .map((user) => `${user.name} ${formatBinaryBytes(user.memoryBytes)}`)
+        .join(", ");
+      return {
+        summary: `Memory is ${finding.severity === "problem" ? "very low" : "low"}: ${available} available of ${total}.${biggest ? ` Biggest: ${biggest}.` : ""}`,
+        action: SERVER_MEMORY_ACTION,
+      };
+    }
+    case "disk_low":
+      return {
+        summary: `The ${finding.subject ?? ""} disk is ${finding.severity === "problem" ? "almost full" : "filling up"}: ${available} free of ${total}.`,
+        action: SERVER_DISK_ACTION,
+      };
+    case "load_high":
+      return {
+        summary: `The server is busy: its 15-minute load is ${(finding.load ?? 0).toFixed(1)} on ${finding.cpus ?? 0} CPUs.`,
+        action: SERVER_LOAD_ACTION,
+      };
+    case "container_restarting":
+      return {
+        summary: `${containerLabel(finding)} keeps restarting: ${finding.count ?? 0} times in ${finding.minutes ?? 0} min.`,
+        action: `See why with docker logs ${finding.subject ?? ""}.`,
+      };
+    case "container_unhealthy":
+      return {
+        summary: `${containerLabel(finding)} has been unhealthy for ${formatAge((finding.minutes ?? 0) * 60_000)}.`,
+        action: `See its health check with docker inspect --format '{{json .State.Health}}' ${finding.subject ?? ""}.`,
+      };
+    case "containers_unavailable":
+      return {
+        summary: `The containers cannot be read: ${finding.error ?? "no reason given"}.`,
+        action: SERVER_CONTAINERS_ACTION,
+      };
+  }
+}
+
+function serverFacts(status: HostStatus): StatusFact[] {
+  const { memory, load, containers } = status;
+  const facts: StatusFact[] = [
+    {
+      label: "Memory",
+      value: `${formatBinaryBytes(memory.availableBytes)} available of ${formatBinaryBytes(memory.totalBytes)} (${Math.round(memory.availablePercent)}%)`,
+    },
+    {
+      label: "Load",
+      value: `${load.one.toFixed(2)}, ${load.five.toFixed(2)}, ${load.fifteen.toFixed(2)} (1, 5, 15 min) on ${load.cpus} CPUs`,
+    },
+    ...status.disks.map((disk) => ({
+      label: `Disk ${disk.label}`,
+      value: `${formatBinaryBytes(disk.freeBytes)} free of ${formatBinaryBytes(disk.totalBytes)} (${Math.round(disk.freePercent)}%)`,
+    })),
+    {
+      label: "Containers",
+      value: containers.available
+        ? `${containers.running} running, ${containers.unhealthy} unhealthy, ${containers.restarting} restarting (${containers.total} in all)`
+        : "not available",
+    },
+  ];
+  if (containers.top.length) {
+    facts.push({
+      label: "Most memory",
+      value: containers.top
+        .slice(0, 3)
+        .map((user) => `${user.name} ${formatBinaryBytes(user.memoryBytes)}`)
+        .join(", "),
+    });
+  }
+  facts.push({
+    label: "Up for",
+    value: formatAge(status.uptimeSeconds * 1000),
+  });
+  if (status.mode === "fixture") {
+    facts.push({
+      label: "Source",
+      value: "a made-up server (HOST_HEALTH_FIXTURE)",
+    });
+  }
+  return facts;
+}
+
+/** Memory available over the history, at most 96 points. */
+function memoryChart(
+  status: HostStatus,
+  history: HostHistory | null,
+): StatusChart | undefined {
+  const samples = (history?.samples ?? []).map((sample) => ({
+    at: sample.at,
+    value: sample.memoryAvailableBytes,
+  }));
+  if (samples.length < 2) return undefined;
+  return {
+    label: "Memory available, last 24 h",
+    max: status.memory.totalBytes,
+    threshold:
+      (status.memory.totalBytes * status.thresholds.memoryWarningPercent) / 100,
+    points: downsampleMin(samples, 96),
+  };
+}
+
+/**
+ * The Server check: host-health's findings, worst first. Left out (null)
+ * when host-health cannot be read while Services already reports it not
+ * ready, so one outage is one alert.
+ */
+export function serverCheck(
+  server: { status: HostStatus; history: HostHistory | null } | null,
+  services: RuntimeSignals["services"],
+): StatusCheck | null {
+  const base = { id: "server" as const, title: "Server" };
+  if (server === null) {
+    const down = services.some(
+      (service) => service.name === "Host health" && !service.ready,
+    );
+    return down
+      ? null
+      : {
+          ...base,
+          state: "problem",
+          summary: "The server's health cannot be read.",
+          action:
+            "Check the host-health service logs (docker compose logs host-health).",
+          facts: [],
+        };
+  }
+  const { status, history } = server;
+  const facts = serverFacts(status);
+  const chart = memoryChart(status, history);
+  const [first, ...others] = status.findings;
+  if (!first) {
+    return {
+      ...base,
+      state: "ok",
+      summary: `Running normally: ${formatBinaryBytes(status.memory.availableBytes)} of memory available, a 15-minute load of ${status.load.fifteen.toFixed(1)} on ${status.load.cpus} CPUs.`,
+      facts,
+      chart,
+    };
+  }
+  const { summary, action } = describeFinding(first, status);
+  return {
+    ...base,
+    state: first.severity,
+    summary,
+    action,
+    facts: others.length
+      ? [
+          {
+            label: "Also",
+            value: others
+              .map((finding) => describeFinding(finding, status).summary)
+              .join(" "),
+          },
+          ...facts,
+        ]
+      : facts,
+    chart,
+  };
+}
+
 function servicesCheck(services: RuntimeSignals["services"]): StatusCheck {
   const down = services.filter((service) => !service.ready);
   return {
@@ -1996,6 +2222,9 @@ export function toRuntimeStatus(
     ...(signals.backups === undefined
       ? []
       : [backupsCheck(signals.backups, signals.services, now, timeZone)]),
+    ...(signals.server === undefined
+      ? []
+      : [serverCheck(signals.server, signals.services)]),
     servicesCheck(signals.services),
   ].filter((check): check is StatusCheck => check !== null);
   return {
@@ -2069,6 +2298,7 @@ const SERVICE_NAMES: Record<keyof typeof serviceBaseUrls, string> = {
   googleCalendar: "Google Calendar",
   food: "Food",
   backup: "Backup",
+  hostHealth: "Host health",
 };
 
 export async function getRuntimeStatus(): Promise<RuntimeStatus> {
@@ -2091,6 +2321,14 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
     .catch(() => null);
   const backups = backupClient
     .GET("/v1/status", timeout)
+    .then(({ data }) => data ?? null)
+    .catch(() => null);
+  const hostStatus = hostHealthClient
+    .GET("/v1/status", timeout)
+    .then(({ data }) => data ?? null)
+    .catch(() => null);
+  const hostHistory = hostHealthClient
+    .GET("/v1/history", { ...timeout, params: { query: { hours: 24 } } })
     .then(({ data }) => data ?? null)
     .catch(() => null);
   const foodReminders = foodClient
@@ -2157,6 +2395,9 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
       foodReminders: await foodReminders,
       bankConnections: await bankConnections,
       backups: await backups,
+      server: await hostStatus.then(async (status) =>
+        status ? { status, history: await hostHistory } : null,
+      ),
       services,
     },
     new Date(),

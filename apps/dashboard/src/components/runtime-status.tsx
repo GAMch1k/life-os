@@ -9,6 +9,7 @@ import {
 
 import { BackupNow } from "@/components/backup-now";
 import { MasonryGrid } from "@/components/masonry-grid";
+import { Sparkline } from "@/components/sparkline";
 import {
   Card,
   CardContent,
@@ -17,6 +18,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import {
+  formatBinaryBytes,
   formatTime,
   statusAlerts,
   type CheckState,
@@ -106,7 +108,13 @@ function Part({ part }: { part: StatusPart }) {
   );
 }
 
-function CheckCard({ check }: { check: StatusCheck }) {
+function CheckCard({
+  check,
+  timeZone,
+}: {
+  check: StatusCheck;
+  timeZone: string;
+}) {
   return (
     <Card aria-labelledby={`check-${check.id}`} role="region">
       <CardHeader>
@@ -124,6 +132,13 @@ function CheckCard({ check }: { check: StatusCheck }) {
       <CardContent className="space-y-3">
         {check.detail && <ErrorDetail text={check.detail} />}
         {check.action && <p className="text-sm">{check.action}</p>}
+        {check.chart && (
+          <Sparkline
+            chart={check.chart}
+            format={formatBinaryBytes}
+            timeZone={timeZone}
+          />
+        )}
         {check.facts.length > 0 && <Facts facts={check.facts} />}
         {check.parts && check.parts.length > 0 && (
           <ul aria-label={check.title} className="divide-y border-t pt-3">
@@ -173,7 +188,7 @@ export function RuntimeStatusView({ status }: { status: RuntimeStatus }) {
       </p>
       <MasonryGrid className="md:grid-cols-2">
         {status.checks.map((check) => (
-          <CheckCard check={check} key={check.id} />
+          <CheckCard check={check} key={check.id} timeZone={status.timeZone} />
         ))}
       </MasonryGrid>
     </div>
