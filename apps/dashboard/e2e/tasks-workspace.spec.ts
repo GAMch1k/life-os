@@ -263,7 +263,11 @@ test.describe("Tasks workspace", () => {
     await expect(confirm).toContainText("This can't be undone.");
     await confirm.getByRole("button", { name: "Keep it" }).click();
     await expect(confirm).toBeHidden();
-    await expect(region(page, UNDATED)).toContainText(open.title);
+    // The row is still in edit mode (its title is an input value, not text).
+    await expect(page.getByLabel(`Delete ${open.title}`)).toBeVisible();
+    expect((await request.get(`/api/tasks/v1/tasks/${open.id}`)).status()).toBe(
+      200,
+    );
     await page.getByLabel(`Delete ${open.title}`).click();
     await confirm.getByRole("button", { name: "Delete Task" }).click();
     await expect(confirm).toBeHidden();
