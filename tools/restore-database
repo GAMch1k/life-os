@@ -1,0 +1,328 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Restores one service database from a backup run of the backup service
+# (docs/operations/backups.md):
+#
+#   tools/restore-database <service|database> <run-id|latest> [--confirm] [--no-fresh-dump]
+#
+# `latest` is the newest run with a good dump of that database. Without
+# --confirm it checks the dump and shows the plan, and changes nothing.
+# With --confirm it:
+#
+#   1. checks the dump's size and SHA-256 against the run's manifest;
+#   2. takes a fresh dump of the database as it is now (a backup run of that
+#      one database, kept like other manual runs) and says where it went;
+#      --no-fresh-dump skips it, for a database that is gone or unusable;
+#   3. stops the services connected to the database, and the backup
+#      service (never PostgreSQL);
+#   4. drops the database, creates it again empty with its registry owner
+#      and provisioning's grants, and restores the dump as the PostgreSQL
+#      admin in one transaction, owners and privileges included;
+#   5. compares every table's row count and the migration state with the
+#      manifest;
+#   6. migrates it to this release (<service>-migrate) and starts the
+#      services again.
+#
+# Dropping and recreating, rather than pg_restore --clean, leaves nothing of
+# the old database behind: --clean drops only what the dump contains, so a
+# table a later migration added would stay beside an older
+# schema_migrations, and the migration that adds it again would fail.
+#
+# It works on the stack of this checkout (docker compose), or on the one
+# RESTORE_COMPOSE names: RESTORE_COMPOSE=tools/verify-compose with
+# LIFE_OS_BACKUP_DIR=${TMPDIR:-/tmp}/lifeos-verify-backups rehearses it on
+# the verification stack. For tests,
+# RESTORE_ADMIN_URL (a superuser URL naming a database) points it at a plain
+# PostgreSQL instead: SQL, pg_dump, and pg_restore go there (RESTORE_PSQL,
+# RESTORE_PG_DUMP, RESTORE_PG_RESTORE, by default from PATH), the fresh dump
+# goes to <backup dir>/pre-restore/, and the compose steps are only printed.
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$repo_root"
+
+usage() {
+  printf 'usage: tools/restore-database <service|database> <run-id|latest> [--confirm] [--no-fresh-dump]\n'
+}
+refuse() {
+  printf 'restore-database: %s\n' "$*" >&2
+  exit 2
+}
+step() { printf '\n==> %s\n' "$*"; }
+
+target='' run_arg='' confirm=false fresh_dump=true
+while (($#)); do
+  case "$1" in
+    --confirm) confirm=true ;;
+    --no-fresh-dump) fresh_dump=false ;;
+    -h | --help) usage; exit 0 ;;
+    -*) refuse "unknown option $1" ;;
+    *)
+      if [[ -z "$target" ]]; then target=$1
+      elif [[ -z "$run_arg" ]]; then run_arg=$1
+      else refuse "too many arguments"
+      fi
+      ;;
+  esac
+  shift
+done
+[[ -n "$target" && -n "$run_arg" ]] || { usage >&2; exit 2; }
+command -v jq >/dev/null 2>&1 || refuse "jq is required"
+
+plain=false
+[[ -n "${RESTORE_ADMIN_URL:-}" ]] && plain=true
+if [[ "$plain" == true && ! "$RESTORE_ADMIN_URL" =~ ^postgres(ql)?://[^/]+/[^/?]+ ]]; then
+  refuse "RESTORE_ADMIN_URL must be a postgres:// URL that names a database"
+fi
+
+# The backup directory, as the backup service's compose mount has it.
+backup_dir=${LIFE_OS_BACKUP_DIR:-}
+if [[ -z "$backup_dir" && "$plain" == false ]]; then
+  backup_dir=$(sed -n 's/^LIFE_OS_BACKUP_DIR=//p' .env 2>/dev/null | tail -n 1)
+  backup_dir=${backup_dir#[\"\']}; backup_dir=${backup_dir%[\"\']}
+  backup_dir=${backup_dir/#\~/${HOME:-}}
+  backup_dir=${backup_dir//'${HOME}'/${HOME:-}}; backup_dir=${backup_dir//'$HOME'/${HOME:-}}
+fi
+[[ -n "$backup_dir" ]] || refuse "set LIFE_OS_BACKUP_DIR (in .env, or in the environment)"
+auto="$backup_dir/auto"
+[[ -d "$auto" ]] || refuse "there are no backup runs: $auto does not exist"
+
+# The database, its service, and its owner, from the registry.
+registry=${RESTORE_REGISTRY:-infra/postgres/service-databases.conf}
+service='' database='' role=''
+while IFS='|' read -r r_service r_database r_role _rest; do
+  [[ -z "$r_service" || "$r_service" == \#* ]] && continue
+  if [[ "$target" == "$r_service" || "$target" == "$r_database" ]]; then
+    service=$r_service database=$r_database role=$r_role
+  fi
+done <"$registry"
+[[ -n "$database" ]] || refuse "$target is not in the database registry ($registry)"
+[[ "$database" =~ ^[a-z][a-z0-9_]*$ && "$role" =~ ^[a-z][a-z0-9_]*$ ]] || refuse "the registry row for $service is invalid"
+
+# The run and its dump of the database, which must match the manifest.
+run_pattern='^[0-9]{8}T[0-9]{6}Z$'
+if [[ "$run_arg" == latest ]]; then
+  run_id=''
+  while IFS= read -r candidate; do
+    if jq -e --arg id "$candidate" --arg db "$database" \
+      '.id == $id and any(.databases[]; .name == $db and .result == "succeeded")' \
+      "$auto/$candidate/manifest.json" >/dev/null 2>&1; then
+      run_id=$candidate
+      break
+    fi
+  done < <(find "$auto" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | grep -E "$run_pattern" | sort -r)
+  [[ -n "$run_id" ]] || refuse "no run in $auto has a good dump of $database"
+else
+  [[ "$run_arg" =~ $run_pattern ]] || refuse "$run_arg is not a run id such as 20261011T011500Z, or latest"
+  run_id=$run_arg
+  [[ -d "$auto/$run_id" ]] || refuse "there is no run $run_id in $auto"
+fi
+manifest="$auto/$run_id/manifest.json"
+jq -e --arg id "$run_id" '.id == $id' "$manifest" >/dev/null 2>&1 ||
+  refuse "the manifest of run $run_id is missing, unreadable, or names another run"
+entry=$(jq -c --arg db "$database" 'first(.databases[] | select(.name == $db)) // empty' "$manifest")
+[[ -n "$entry" ]] || refuse "run $run_id did not back up $database"
+[[ "$(jq -r .result <<<"$entry")" == succeeded ]] ||
+  refuse "run $run_id's dump of $database failed: $(jq -r '.error // "no error recorded"' <<<"$entry")"
+[[ "$(jq -r .file <<<"$entry")" == "$database.dump" ]] || refuse "the manifest names an unexpected dump file for $database"
+dump="$auto/$run_id/$database.dump"
+[[ -f "$dump" ]] || refuse "the dump $dump is missing"
+expected_bytes=$(jq -r .bytes <<<"$entry")
+expected_sha=$(jq -r .sha256 <<<"$entry")
+actual_bytes=$(stat -c %s "$dump")
+[[ "$actual_bytes" == "$expected_bytes" ]] || refuse "the dump has $actual_bytes bytes, the manifest says $expected_bytes"
+actual_sha=$(sha256sum "$dump" | cut -d ' ' -f 1)
+[[ "$actual_sha" == "$expected_sha" ]] || refuse "the dump's SHA-256 is $actual_sha, the manifest says $expected_sha"
+expected_counts=$(jq -r '.tables[] | "\(.schema).\(.name)|\(.rows)"' <<<"$entry" | sort)
+expected_migration=$(jq -r 'if .migration then "\(.migration.version)|\(if .migration.dirty then "t" else "f" end)" else "none" end' <<<"$entry")
+started=$(jq -r .startedAt "$manifest")
+migration_label() { # version|t or f, or none, as words
+  case "$1" in
+    none) printf 'none' ;;
+    *'|t') printf 'version %s (dirty)' "${1%|*}" ;;
+    *) printf 'version %s' "${1%|*}" ;;
+  esac
+}
+
+# How to reach PostgreSQL and the stack.
+read -r -a compose <<<"${RESTORE_COMPOSE:-docker compose}"
+admin_user='' maintenance_db=''
+admin_psql() { # <database> [psql arguments]
+  local db=$1
+  shift
+  if [[ "$plain" == true ]]; then
+    "${RESTORE_PSQL:-psql}" -X -q -v ON_ERROR_STOP=1 -d "$(admin_url "$db")" "$@"
+  else
+    "${compose[@]}" exec -T postgres psql -X -q -v ON_ERROR_STOP=1 -U "$admin_user" -d "$db" "$@"
+  fi
+}
+admin_url() { # the admin URL with another database
+  local base=${RESTORE_ADMIN_URL%%\?*} query=''
+  [[ "$RESTORE_ADMIN_URL" == *\?* ]] && query="?${RESTORE_ADMIN_URL#*\?}"
+  printf '%s/%s%s' "${base%/*}" "$1" "$query"
+}
+stack() { # a compose step, only printed with a plain connection
+  if [[ "$plain" == true ]]; then
+    printf '(plain connection, not run) docker compose %s\n' "$*"
+  else
+    "${compose[@]}" "$@"
+  fi
+}
+
+if [[ "$plain" == true ]]; then
+  services=(${RESTORE_SERVICES:-$service})
+  migrate_service="$service-migrate"
+  stop_backup=false
+else
+  config=$("${compose[@]}" config --format json)
+  mapfile -t services < <(jq -r --arg db "$database" '
+    .services | to_entries[]
+    | select(.key | endswith("-migrate") | not)
+    | select((.value.environment.DATABASE_URL // "") | test("@postgres:5432/" + $db + "([?]|$)"))
+    | .key' <<<"$config")
+  migrate_service=''
+  jq -e --arg s "$service-migrate" '.services | has($s)' <<<"$config" >/dev/null && migrate_service="$service-migrate"
+  stop_backup=false
+  jq -e '.services | has("backup")' <<<"$config" >/dev/null && stop_backup=true
+  unset config
+fi
+to_stop=("${services[@]}")
+[[ "$stop_backup" == true ]] && to_stop+=(backup)
+
+printf 'Restore %s (service %s, owner %s)\n' "$database" "$service" "$role"
+printf '  from run %s, started %s\n' "$run_id" "$started"
+printf '  dump %s: %s bytes, SHA-256 verified\n' "$dump" "$actual_bytes"
+printf '  %s tables, %s rows; migration %s\n' "$(jq '.tables | length' <<<"$entry")" "$(jq '[.tables[].rows] | add // 0' <<<"$entry")" "$(migration_label "$expected_migration")"
+printf 'Plan:\n'
+if [[ "$fresh_dump" == true ]]; then
+  printf '  1. take a fresh dump of %s as it is now\n' "$database"
+else
+  printf '  1. no fresh dump (--no-fresh-dump): what %s holds now is lost\n' "$database"
+fi
+printf '  2. stop: %s\n' "${to_stop[*]:-nothing}"
+printf '  3. drop %s, create it again owned by %s, and restore the dump into it in one transaction\n' "$database" "$role"
+printf '  4. compare every table and the migration state with the manifest\n'
+printf '  5. migrate it (%s) and start: %s\n' "${migrate_service:-no migration service}" "${to_stop[*]:-nothing}"
+if [[ "$confirm" != true ]]; then
+  printf '\nNothing changed. Run again with --confirm to restore.\n'
+  exit 2
+fi
+
+step 'Checking PostgreSQL and the owner role'
+if [[ "$plain" == false ]]; then
+  admin_user=$("${compose[@]}" exec -T postgres printenv POSTGRES_USER)
+  maintenance_db=$("${compose[@]}" exec -T postgres printenv POSTGRES_DB)
+else
+  maintenance_db=${RESTORE_ADMIN_URL##*/}
+  maintenance_db=${maintenance_db%%\?*}
+fi
+role_exists=$(admin_psql "$maintenance_db" -At -v role="$role" <<<"SELECT count(*) FROM pg_roles WHERE rolname = :'role';")
+[[ "$role_exists" == 1 ]] || refuse "the owner role $role does not exist: provision the databases first (make db-provision)"
+database_exists=$(admin_psql "$maintenance_db" -At -v db="$database" <<<"SELECT count(*) FROM pg_database WHERE datname = :'db';")
+if [[ "$database_exists" != 1 && "$fresh_dump" == true ]]; then
+  refuse "$database does not exist, so there is nothing to dump first: pass --no-fresh-dump"
+fi
+
+fresh=''
+if [[ "$fresh_dump" == true ]]; then
+  step "Taking a fresh dump of $database"
+  if [[ "$plain" == true ]]; then
+    mkdir -p -m 700 "$backup_dir/pre-restore"
+    fresh="$backup_dir/pre-restore/$database-$(date -u +%Y%m%dT%H%M%SZ).dump"
+    "${RESTORE_PG_DUMP:-pg_dump}" --format=custom --no-password -d "$(admin_url "$database")" >"$fresh"
+    chmod 600 "$fresh"
+  else
+    output=$("${compose[@]}" exec -T backup /service now -actor dev:restore-database "$database" 2>&1) || {
+      printf '%s\n' "$output" >&2
+      refuse "the fresh dump failed; nothing changed. Fix it, or pass --no-fresh-dump if what $database holds now does not matter"
+    }
+    printf '%s\n' "$output"
+    fresh_id=$(sed -n 's/^Backup \([0-9]\{8\}T[0-9]\{6\}Z\) succeeded.*/\1/p' <<<"$output" | head -n 1)
+    [[ -n "$fresh_id" ]] || refuse "could not tell where the fresh dump went; nothing changed"
+    fresh="$auto/$fresh_id/$database.dump (run $fresh_id)"
+  fi
+  printf 'Fresh dump: %s\n' "$fresh"
+fi
+
+# From here on the services are stopped. If a step fails, they stay
+# stopped and this says how to go back.
+on_error() {
+  printf '\nrestore-database: the restore of %s failed; these stay stopped: %s\n' "$database" "${to_stop[*]:-nothing}" >&2
+  if [[ -n "$fresh" && "$plain" == false ]]; then
+    printf 'To go back to the database as it was: tools/restore-database %s %s --confirm --no-fresh-dump\n' "$database" "${fresh_id:-<fresh run id>}" >&2
+  elif [[ -n "$fresh" ]]; then
+    printf 'The database as it was is in %s\n' "$fresh" >&2
+  fi
+  printf 'To start the services as they are: docker compose up -d --no-build --no-deps %s\n' "${to_stop[*]:-}" >&2
+}
+trap on_error ERR
+
+if ((${#to_stop[@]})); then
+  step "Stopping ${to_stop[*]}"
+  stack stop "${to_stop[@]}"
+fi
+
+step "Recreating $database owned by $role"
+admin_psql "$maintenance_db" -v db="$database" -v role="$role" <<'SQL'
+SELECT format('DROP DATABASE IF EXISTS %I WITH (FORCE)', :'db')
+\gexec
+SELECT format('CREATE DATABASE %I OWNER %I ENCODING %L TEMPLATE template0', :'db', :'role', 'UTF8')
+\gexec
+SELECT format('REVOKE ALL ON DATABASE %I FROM PUBLIC', :'db')
+\gexec
+SELECT format('GRANT CONNECT, TEMPORARY ON DATABASE %I TO %I', :'db', :'role')
+\gexec
+SELECT format('GRANT CONNECT ON DATABASE %I TO lifeos_backup', :'db')
+WHERE EXISTS (SELECT FROM pg_roles WHERE rolname = 'lifeos_backup')
+\gexec
+SQL
+
+step "Restoring run $run_id into $database"
+if [[ "$plain" == true ]]; then
+  "${RESTORE_PG_RESTORE:-pg_restore}" --exit-on-error --single-transaction --no-password -d "$(admin_url "$database")" "$dump"
+else
+  "${compose[@]}" exec -T postgres pg_restore --exit-on-error --single-transaction --no-password -U "$admin_user" -d "$database" <"$dump"
+fi
+
+step 'Comparing with the manifest'
+read_migration() { # version|t or f, or none
+  local state
+  if [[ "$(admin_psql "$database" -At <<<"SELECT to_regclass('public.schema_migrations') IS NOT NULL;")" != t ]]; then
+    printf 'none'
+    return
+  fi
+  state=$(admin_psql "$database" -At <<<"SELECT version || '|' || CASE WHEN dirty THEN 't' ELSE 'f' END FROM public.schema_migrations LIMIT 1;")
+  printf '%s' "${state:-none}"
+}
+restored_counts=$(admin_psql "$database" -At -F '|' <<'SQL' | sort
+SELECT format('SELECT %L, count(*) FROM ONLY %I.%I', n.nspname || '.' || c.relname, n.nspname, c.relname)
+FROM pg_catalog.pg_class AS c
+JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
+WHERE c.relkind = 'r' AND c.relpersistence <> 't'
+  AND n.nspname <> 'information_schema' AND n.nspname NOT LIKE 'pg\_%'
+\gexec
+SQL
+)
+restored_migration=$(read_migration)
+if [[ "$restored_counts" != "$expected_counts" || "$restored_migration" != "$expected_migration" ]]; then
+  printf 'The restored database differs from the manifest:\n' >&2
+  diff <(printf '%s\nmigration|%s\n' "$expected_counts" "$expected_migration") \
+    <(printf '%s\nmigration|%s\n' "$restored_counts" "$restored_migration") >&2 || true
+  false
+fi
+printf 'Every table and the migration state (%s) match the manifest.\n' "$(migration_label "$restored_migration")"
+
+if [[ -n "$migrate_service" ]]; then
+  step "Migrating $database ($migrate_service)"
+  stack run --rm --no-deps "$migrate_service"
+fi
+trap - ERR
+if ((${#to_stop[@]})); then
+  step "Starting ${to_stop[*]}"
+  stack up -d --no-build --no-deps "${to_stop[@]}"
+fi
+
+printf '\nRestored %s from run %s (%s).\n' "$database" "$run_id" "$started"
+printf '  migration: %s in the dump, %s now\n' "$(migration_label "$restored_migration")" "$(migration_label "$(read_migration)")"
+[[ -n "$fresh" ]] && printf '  the database as it was before: %s\n' "$fresh"
+printf '  started again: %s\n' "${to_stop[*]:-nothing}"
