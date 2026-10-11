@@ -172,17 +172,28 @@ func TestMissingIngredientsOfTheRecipeTheWordsName(t *testing.T) {
 	}
 	tools.processed(t)
 
-	// "купи всё для борща" without a borscht recipe adds nothing; the rest runs.
+	// "купи всё для борща" without a borscht recipe: the owner expects
+	// groceries, so it waits for them; as in any mixed capture, the actions
+	// after it do not run, and nothing is added or created instead.
 	none := newFoodTools("купи всё для борща и позвони сантехнику")
-	none.run(t, `{"actions":[{"tool":"food_add_missing_ingredients","arguments":{"recipeQuery":"борщ","recipeQueryAlternatives":["borscht","Borschtsch"]}},{"tool":"task_create","arguments":{"title":"Позвонить сантехнику"}}],"confidence":0.95}`)
-	if contains(none.calls, "food_add_missing_ingredients") || contains(none.calls, "food_add_shopping_items") || len(none.inputs["task_create"]) != 1 {
+	none.run(t, `{"actions":[{"tool":"food_add_missing_ingredients","arguments":{"recipeQuery":" борщ ","recipeQueryAlternatives":["borscht","Borschtsch"]}},{"tool":"task_create","arguments":{"title":"Позвонить сантехнику"}}],"confidence":0.95}`)
+	if contains(none.calls, "food_add_missing_ingredients") || contains(none.calls, "food_add_shopping_items") || contains(none.calls, "task_create") || contains(none.calls, "inbox_resolve") {
 		t.Fatalf("calls = %#v", none.calls)
 	}
 	if got, want := none.searches, []string{"борщ", "borscht", "Borschtsch"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("searched %q, want %q", got, want)
 	}
-	if audit := none.processed(t); audit[0]["tool"] != "none" || audit[0]["reason"] != noRecipeReason {
-		t.Fatalf("audit = %#v", audit)
+	if want := "No recipe is called “борщ”. Add the recipe on the Food page, or say which items to buy."; none.review == nil || none.review["errorSummary"] != want || len(none.review["candidates"].([]map[string]any)) != 0 {
+		t.Fatalf("review = %#v", none.review)
+	}
+	if proposed := none.review["proposedAction"].(plannedAction); proposed.Tool != "food_add_missing_ingredients" {
+		t.Fatalf("proposed = %#v", proposed)
+	}
+	// Planned first, the Task has run already.
+	first := newFoodTools("позвони сантехнику и купи всё для борща")
+	first.run(t, `{"actions":[{"tool":"task_create","arguments":{"title":"Позвонить сантехнику"}},{"tool":"food_add_missing_ingredients","arguments":{"recipeQuery":"борщ"}}],"confidence":0.95}`)
+	if len(first.inputs["task_create"]) != 1 || first.review == nil || contains(first.calls, "inbox_resolve") {
+		t.Fatalf("calls = %#v, review = %#v", first.calls, first.review)
 	}
 
 	several := newFoodTools("alles für Pasta einkaufen")

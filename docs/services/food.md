@@ -391,7 +391,9 @@ purchases as Tasks:
   empty slot is fine).
 - "Add the ingredients for the bolognese to the list" and "купи всё для
   борща" add the missing ingredients of the recipe the words find
-  (`food_add_missing_ingredients`; no recipe, nothing added), and "buy what
+  (`food_add_missing_ingredients`; with no such recipe the capture goes to
+  Human Review: "No recipe is called “борщ”. Add the recipe on the Food
+  page, or say which items to buy."), and "buy what
   I need for this week's meals" those of the meals planned Monday to Sunday
   of the capture's week. "Buy pasta" stays a list item. The AI never creates
   or edits recipes.

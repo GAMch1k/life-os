@@ -468,9 +468,12 @@ func recipeReviewReason(tool string) string {
 	return "Several recipes match: choose the one whose ingredients to add"
 }
 
-// noRecipeReason is recorded, and nothing is added, when no recipe matches
-// the words of a missing ingredients request.
-const noRecipeReason = "No recipe matches, so no ingredients were added"
+// noRecipeReason is the Human Review reason when no recipe matches the
+// words of a missing ingredients request: the owner asked for groceries,
+// so the capture waits for them instead of doing nothing.
+func noRecipeReason(query string) string {
+	return fmt.Sprintf("No recipe is called “%s”. Add the recipe on the Food page, or say which items to buy.", strings.TrimSpace(query))
+}
 
 // mealArguments is what a meal MCP tool receives: a meal's date and slot
 // with the recipe (recipeId) or, when none matched, its words as text, and

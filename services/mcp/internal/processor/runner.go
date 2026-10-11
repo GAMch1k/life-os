@@ -214,8 +214,9 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 				case len(found) == 1:
 					recipe, _ = found[0]["id"].(string)
 				case action.Tool == "food_add_missing_ingredients":
-					actions = append(actions, noted(map[string]any{"tool": "none", "plannedTool": action.Tool, "plannedArguments": action.Arguments, "reason": noRecipeReason}))
-					continue
+					// "купи всё для борща" without a borscht recipe: the
+					// owner expects groceries, so they decide.
+					return Proposal{}, r.humanReview(ctx, item.ID, started.ID, action, []map[string]any{}, noRecipeReason(text(action.Arguments["recipeQuery"])))
 				}
 			}
 		}
