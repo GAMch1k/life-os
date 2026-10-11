@@ -41,7 +41,7 @@ Services join the project-scoped `lifeos-backend` bridge and address PostgreSQL 
 
 ## Service database provisioning
 
-The PostgreSQL container runs `infra/postgres/provision-service-databases.sh` when a clean volume is initialized. The same idempotent provisioning can be reapplied to a running container with `make db-provision`.
+The PostgreSQL container runs `infra/postgres/provision-service-databases.sh` when a clean volume is initialized. The same idempotent provisioning can be reapplied to a running container with `make db-provision`. It runs the scripts and reads the registry from the directory mount `/opt/lifeos/postgres/`, never from the single-file mounts (`/docker-entrypoint-initdb.d/10-provision-service-databases.sh`, `/etc/lifeos/service-databases.conf`): a single-file bind mount keeps the file the container was created with after Git replaces it on a pull, until the container is recreated.
 
 Service database declarations live in `infra/postgres/service-databases.conf` as:
 

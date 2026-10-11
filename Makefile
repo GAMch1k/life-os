@@ -99,13 +99,17 @@ infra-logs:
 infra-reset:
 	docker compose down --volumes --remove-orphans
 
+# The scripts and the registry are read from the directory mount
+# /opt/lifeos/postgres: single-file mounts (the initdb script,
+# /etc/lifeos/service-databases.conf) keep the files the container was
+# created with after a pull.
 db-provision: infra-env
-	docker compose exec -T postgres /docker-entrypoint-initdb.d/10-provision-service-databases.sh
+	docker compose exec -T -e LIFE_OS_DATABASE_CONFIG=/opt/lifeos/postgres/service-databases.conf postgres bash /opt/lifeos/postgres/provision-service-databases.sh
 
 # The backup service's read-only login on a running server (idempotent; see
 # docs/services/backup.md). The password comes from .env; no restart needed.
 db-provision-backup: infra-env
-	LIFE_OS_BACKUP_DB_PASSWORD="$$(sed -n 's/^LIFE_OS_BACKUP_DB_PASSWORD=//p' .env | tail -n 1)" docker compose exec -T -e LIFE_OS_BACKUP_DB_PASSWORD postgres bash /opt/lifeos/postgres/provision-backup-role.sh
+	LIFE_OS_BACKUP_DB_PASSWORD="$$(sed -n 's/^LIFE_OS_BACKUP_DB_PASSWORD=//p' .env | tail -n 1)" docker compose exec -T -e LIFE_OS_BACKUP_DB_PASSWORD -e LIFE_OS_DATABASE_CONFIG=/opt/lifeos/postgres/service-databases.conf postgres bash /opt/lifeos/postgres/provision-backup-role.sh
 
 db-check-isolation: infra-env
 	docker compose exec -T postgres /opt/lifeos/postgres/verify-database-isolation.sh
