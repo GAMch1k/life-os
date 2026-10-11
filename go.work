@@ -15,6 +15,7 @@ use (
 	./services/mcp
 	./services/monitor
 	./services/notifications
+	./services/recipe-import
 	./services/tasks
 	./services/voice
 	./templates/go-fiber-service

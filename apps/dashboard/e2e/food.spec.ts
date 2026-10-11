@@ -1,3 +1,4 @@
+import { FEED_OVERLAY_HINT, feedDir, writeFixture } from "./calendar-feed";
 import { pickDate } from "./date-picker";
 import {
   type APIRequestContext,
@@ -765,6 +766,156 @@ test.describe("Food workspace", () => {
         (entry) => entry.slot === "dinner",
       ),
     ).toHaveLength(0);
+  });
+
+  test("a recipe page imports with its ingredients and steps", async ({
+    page,
+    request,
+  }) => {
+    test.skip(!feedDir, FEED_OVERLAY_HINT);
+    const title = `Ofengemüse ${tag}`;
+    const link = writeFixture(
+      `recipe-${tag}.html`,
+      `<!doctype html><html><head><title>${title} | Kochblog</title>
+<script type="application/ld+json">${JSON.stringify({
+        "@context": "https://schema.org",
+        "@graph": [
+          { "@type": "WebSite", name: "Kochblog" },
+          {
+            "@type": "Recipe",
+            name: title,
+            recipeYield: "4 Portionen",
+            keywords: "e2e, Ofen",
+            recipeIngredient: ["500 g Kartoffeln", "2 EL Olivenöl", "Salz"],
+            recipeInstructions: [
+              { "@type": "HowToStep", text: "Gemüse schneiden." },
+              { "@type": "HowToStep", text: "40 Minuten backen." },
+            ],
+          },
+        ],
+      })}</script></head><body></body></html>`,
+    );
+    await openFood(page, "/food?tab=recipes");
+
+    await page.getByRole("button", { name: "Import from link" }).click();
+    const dialog = page.getByRole("dialog", { name: "Import from link" });
+    await dialog.getByRole("textbox", { name: "Recipe link" }).fill(link);
+    await dialog.getByRole("button", { name: "Read", exact: true }).click();
+    const preview = dialog.getByTestId("food-import-preview");
+    await expect(preview).toHaveAttribute("data-method", "structured");
+    await expect(preview).toContainText(
+      "Found the recipe on ics-fixture: 3 ingredients, 2 steps.",
+    );
+    await dialog.getByRole("button", { name: "Review and save" }).click();
+
+    // The recipe form, filled in, to check before saving.
+    const form = page.getByRole("dialog", { name: "Save imported recipe" });
+    await expect(form.getByLabel("Title", { exact: true })).toHaveValue(title);
+    await expect(form.getByLabel("Servings", { exact: true })).toHaveValue("4");
+    await expect(form.getByLabel("Ingredient 1", { exact: true })).toHaveValue(
+      "Kartoffeln",
+    );
+    await expect(form.getByLabel("Amount of ingredient 1")).toHaveValue(
+      "500 g",
+    );
+    await expect(form.getByLabel("Steps", { exact: true })).toHaveValue(
+      "Gemüse schneiden.\n40 Minuten backen.",
+    );
+    await form.getByRole("button", { name: "Save recipe" }).click();
+    await expect(form).toHaveCount(0);
+
+    // The saved recipe opens, with its source.
+    const view = page.getByRole("dialog", { name: title });
+    await expect(view.getByTestId("food-recipe-source")).toHaveText(
+      "From ics-fixture",
+    );
+    await expect(
+      view.getByRole("region", { name: "Ingredients" }).getByRole("listitem"),
+    ).toHaveCount(3);
+    await expect(
+      view.getByRole("region", { name: "Steps" }).getByRole("listitem"),
+    ).toHaveText(["Gemüse schneiden.", "40 Minuten backen."]);
+    const response = await request.get(
+      `${api}/recipes?q=${encodeURIComponent(tag)}`,
+    );
+    const [saved] = (await response.json()).items as {
+      sourceUrl: string;
+      createdBy: { kind: string; name?: string };
+    }[];
+    expect(saved).toMatchObject({
+      sourceUrl: link,
+      createdBy: { kind: "system", name: "recipe-import" },
+    });
+    await page.keyboard.press("Escape");
+    await expect(view).toHaveCount(0);
+
+    // Imported again: it is already saved, and that recipe opens.
+    await page.getByRole("button", { name: "Import from link" }).click();
+    const again = page.getByRole("dialog", { name: "Import from link" });
+    await again.getByRole("textbox", { name: "Recipe link" }).fill(link);
+    await again.getByRole("button", { name: "Read", exact: true }).click();
+    await again.getByRole("button", { name: "Review and save" }).click();
+    await page
+      .getByRole("dialog", { name: "Save imported recipe" })
+      .getByRole("button", { name: "Save recipe" })
+      .click();
+    await expect(page.getByTestId("food-recipes-note")).toHaveText(
+      `“${title}” is already saved.`,
+    );
+    await expect(page.getByRole("dialog", { name: title })).toBeVisible();
+  });
+
+  test("a page without recipe data gives a preview the caption fills in", async ({
+    page,
+  }) => {
+    test.skip(!feedDir, FEED_OVERLAY_HINT);
+    const title = `Creamy pasta ${tag}`;
+    const link = writeFixture(
+      `post-${tag}.html`,
+      `<!doctype html><html><head><title>Post</title>
+<meta property="og:title" content="${title}">
+<meta property="og:description" content="My quick dinner.">
+</head><body></body></html>`,
+    );
+    await openFood(page, "/food?tab=recipes");
+    await page.getByRole("button", { name: "Import from link" }).click();
+    const dialog = page.getByRole("dialog", { name: "Import from link" });
+    await dialog.getByRole("textbox", { name: "Recipe link" }).fill(link);
+    await dialog.getByRole("button", { name: "Read", exact: true }).click();
+    const preview = dialog.getByTestId("food-import-preview");
+    await expect(preview).toHaveAttribute("data-method", "preview");
+    await expect(preview).toContainText(
+      "This page has no recipe data, so only its title, description, and image were read.",
+    );
+    await expect(preview).toContainText("My quick dinner.");
+
+    // The caption, pasted, fills in the ingredients and steps.
+    await dialog
+      .getByLabel("Paste the caption", { exact: true })
+      .fill(
+        `${title}\nZutaten:\n250 g Pasta\n100 ml Sahne\nZubereitung:\n1. Pasta kochen.\n2. Sahne dazugeben.\n#abendessen`,
+      );
+    await dialog.getByRole("button", { name: "Read the caption" }).click();
+    await expect(dialog.getByTestId("food-import-caption-note")).toHaveText(
+      "Read 2 ingredients and 2 steps.",
+    );
+    await dialog.getByRole("button", { name: "Review and save" }).click();
+    const form = page.getByRole("dialog", { name: "Save imported recipe" });
+    await expect(form.getByLabel("Title", { exact: true })).toHaveValue(title);
+    await expect(form.getByLabel("Tags", { exact: true })).toHaveValue(
+      "to-review, abendessen",
+    );
+    await expect(form.getByLabel("Amount of ingredient 2")).toHaveValue(
+      "100 ml",
+    );
+    await form.getByRole("button", { name: "Save recipe" }).click();
+
+    const view = page.getByRole("dialog", { name: title });
+    await expect(
+      view.getByRole("region", { name: "Ingredients" }).getByRole("listitem"),
+    ).toHaveCount(2);
+    await expect(view).toContainText("to-review");
+    await expect(view).toContainText("My quick dinner.");
   });
 
   test("the list is usable on a phone", async ({ page, request }) => {

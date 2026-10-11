@@ -2299,6 +2299,7 @@ const SERVICE_NAMES: Record<keyof typeof serviceBaseUrls, string> = {
   food: "Food",
   backup: "Backup",
   hostHealth: "Host health",
+  recipeImport: "Recipe import",
 };
 
 export async function getRuntimeStatus(): Promise<RuntimeStatus> {

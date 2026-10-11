@@ -23,7 +23,9 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { foodClient } from "@/lib/api/food-client";
+import { recipeImportClient } from "@/lib/api/recipe-import-client";
 import { load, upsert, writeHeader } from "@/lib/food";
+import { type ImportExtras, importOverrides } from "@/lib/food-import";
 import {
   type IngredientRow,
   type Recipe,
@@ -38,12 +40,22 @@ import {
 import type { SyncedList } from "@/lib/use-synced-list";
 import { useClosingState } from "@/lib/use-closing-state";
 
-export type RecipeFormState = { recipe?: Recipe } | null;
+/**
+ * The form's subject: a recipe to edit, or a new one, possibly from an
+ * import (its draft, saved through the recipe-import integration).
+ */
+export type RecipeFormState = {
+  recipe?: Recipe;
+  draft?: RecipeDraft;
+  importFrom?: ImportExtras;
+} | null;
 
 /**
  * Creates or edits a recipe: title, servings, ingredient rows (added,
  * removed, and moved), steps one per line, tags, and a source link; or
- * deletes it. Meals planned with a deleted recipe stay as plain text.
+ * deletes it. Meals planned with a deleted recipe stay as plain text. An
+ * imported draft is saved through the recipe-import integration, which
+ * keeps the page's description and image link in the note.
  */
 export function RecipeDialog({
   state,
@@ -51,12 +63,15 @@ export function RecipeDialog({
   onClose,
   onSaved,
   onDeleted,
+  onExists,
 }: {
   state: RecipeFormState;
   recipes: SyncedList<Recipe>;
   onClose: () => void;
   onSaved: (recipe: Recipe) => void;
   onDeleted: (recipe: Recipe) => void;
+  /** An imported recipe's title is already saved (its id, when known). */
+  onExists?: (recipeId: string | null, title: string) => void;
 }) {
   const current = useClosingState(state);
   return (
@@ -72,10 +87,15 @@ export function RecipeDialog({
             key={
               current.recipe
                 ? `${current.recipe.id}-${current.recipe.updatedAt}`
-                : "new"
+                : current.importFrom
+                  ? `import-${current.importFrom.url}`
+                  : "new"
             }
+            importFrom={current.importFrom}
+            initialDraft={current.draft}
             onCancel={onClose}
             onDeleted={onDeleted}
+            onExists={onExists}
             onSaved={onSaved}
             recipe={current.recipe}
             recipes={recipes}
@@ -88,19 +108,27 @@ export function RecipeDialog({
 
 function RecipeForm({
   recipe,
+  initialDraft,
+  importFrom,
   recipes,
   onCancel,
   onSaved,
   onDeleted,
+  onExists,
 }: {
   recipe?: Recipe;
+  initialDraft?: RecipeDraft;
+  importFrom?: ImportExtras;
   recipes: SyncedList<Recipe>;
   onCancel: () => void;
   onSaved: (recipe: Recipe) => void;
   onDeleted: (recipe: Recipe) => void;
+  onExists?: (recipeId: string | null, title: string) => void;
 }) {
   const id = useId();
-  const [draft, setDraft] = useState<RecipeDraft>(() => recipeDraft(recipe));
+  const [draft, setDraft] = useState<RecipeDraft>(
+    () => initialDraft ?? recipeDraft(recipe),
+  );
   const [errors, setErrors] = useState<RecipeErrors & { form?: string }>({});
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [pending, setPending] = useState(false);
@@ -126,8 +154,46 @@ function RecipeForm({
     });
   };
 
+  /** Saves an imported draft through the integration. */
+  const saveImport = (from: ImportExtras) => {
+    const { overrides, errors: found } = importOverrides(draft, from);
+    if (!overrides) return setErrors(found);
+    setPending(true);
+    setErrors({});
+    void recipes.write(async () => {
+      let answer: Awaited<ReturnType<typeof recipeImportClient.POST>>;
+      try {
+        answer = await recipeImportClient.POST("/v1/imports", {
+          params: { header: writeHeader() },
+          body: { url: from.url, overrides },
+        });
+      } catch {
+        setPending(false);
+        return setErrors({ form: "Could not save this recipe." });
+      }
+      setPending(false);
+      const { data, error } = answer;
+      if (
+        error &&
+        "recipeId" in error &&
+        error.error.code === "recipe_exists"
+      ) {
+        return onExists?.(error.recipeId ?? null, overrides.title);
+      }
+      if (!data) {
+        return setErrors({
+          form: error?.error.message ?? "Could not save this recipe.",
+        });
+      }
+      const saved = data.recipe as Recipe;
+      recipes.change((items) => upsert(items, saved));
+      onSaved(saved);
+    });
+  };
+
   const submit = (event: FormEvent) => {
     event.preventDefault();
+    if (importFrom) return saveImport(importFrom);
     if (!recipe) {
       const { body, errors: found } = newRecipeBody(draft);
       if (!body) return setErrors(found);
@@ -184,9 +250,17 @@ function RecipeForm({
   return (
     <form className="grid gap-4" noValidate onSubmit={submit}>
       <DialogHeader>
-        <DialogTitle>{recipe ? "Edit recipe" : "New recipe"}</DialogTitle>
+        <DialogTitle>
+          {recipe
+            ? "Edit recipe"
+            : importFrom
+              ? "Save imported recipe"
+              : "New recipe"}
+        </DialogTitle>
         <DialogDescription>
-          Steps are plain text, one step per line.
+          {importFrom
+            ? `From ${importFrom.siteName ?? "the link"}. Check it before saving; steps are one per line.`
+            : "Steps are plain text, one step per line."}
         </DialogDescription>
       </DialogHeader>
 
@@ -398,7 +472,13 @@ function RecipeForm({
                 Cancel
               </Button>
               <Button disabled={pending} size="lg" type="submit">
-                {pending ? "Saving…" : recipe ? "Save" : "Add recipe"}
+                {pending
+                  ? "Saving…"
+                  : recipe
+                    ? "Save"
+                    : importFrom
+                      ? "Save recipe"
+                      : "Add recipe"}
               </Button>
             </div>
           </>

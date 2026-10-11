@@ -134,6 +134,20 @@ services:
     networks: [backend]
     restart: unless-stopped
 
+  # Reads recipes from links and pasted text and saves them in Food through
+  # Food's API (docs/services/recipe-import.md). No database. It needs
+  # outbound http(s) from the backend network to fetch recipe pages.
+  recipe-import:
+    build: {context: ., dockerfile: services/recipe-import/Dockerfile}
+    environment:
+      SERVICE_NAME: recipe-import
+      PORT: 8080
+      FOOD_SERVICE_URL: http://food:8080
+      ACTIVITY_SERVICE_URL: http://activity:8080
+    expose: ["8080"]
+    networks: [backend]
+    restart: unless-stopped
+
   activity-migrate:
     image: migrate/migrate:v4.18.3
     command: ["-path", "/migrations", "-database", "postgres://activity_user:${LIFE_OS_ACTIVITY_DB_PASSWORD}@postgres:5432/activity_db?sslmode=disable", "up"]
@@ -273,6 +287,7 @@ services:
       FOOD_SERVICE_URL: http://food:8080
       BACKUP_SERVICE_URL: http://backup:8080
       HOST_HEALTH_SERVICE_URL: http://host-health:8080
+      RECIPE_IMPORT_SERVICE_URL: http://recipe-import:8080
       LIFE_OS_TIMEZONE: ${LIFE_OS_TIMEZONE:-UTC}
     expose: ["3000"]
     depends_on:
@@ -567,6 +582,7 @@ services:
       google-calendar: {condition: service_started}
       calendar-feeds: {condition: service_started}
       food: {condition: service_started}
+      recipe-import: {condition: service_started}
     # edge: how the Cloudflare connector reaches the gateway (and only it).
     networks: [backend, edge]
     restart: unless-stopped

@@ -35,6 +35,9 @@ export const BANKING_DESCRIPTION =
 export const FOOD_DESCRIPTION =
   "The shopping list, its stores and aisle rules, the pantry, recipes, and the meal plan: items added, merged, bought, put away, changed, or removed, recipes written, meals planned, by you or the AI, and expiry reminders Food could not send in time.";
 
+export const RECIPE_IMPORT_DESCRIPTION =
+  "Recipes saved from links by the recipe-import integration; the recipe itself is under Food.";
+
 export const SOURCES: readonly {
   value: string;
   label: string;
@@ -66,6 +69,11 @@ export const SOURCES: readonly {
     description: GOOGLE_CALENDAR_DESCRIPTION,
   },
   { value: "food", label: "Food", description: FOOD_DESCRIPTION },
+  {
+    value: "recipe-import",
+    label: "Recipe import",
+    description: RECIPE_IMPORT_DESCRIPTION,
+  },
 ];
 
 export const SUBJECT_TYPES = [
@@ -163,6 +171,7 @@ const EVENT_LABELS: Record<string, string> = {
   "food.recipe.deleted": "Recipe deleted",
   "food.meal_plan.set": "Meal planned",
   "food.meal_plan.cleared": "Meal cleared",
+  "food.recipe.imported": "Recipe imported",
 };
 
 export const EVENT_TYPES = Object.keys(EVENT_LABELS);

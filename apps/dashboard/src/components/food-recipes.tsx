@@ -1,6 +1,12 @@
 "use client";
 
-import { ExternalLink, Pencil, Plus, ShoppingBasket } from "lucide-react";
+import {
+  ExternalLink,
+  Link2,
+  Pencil,
+  Plus,
+  ShoppingBasket,
+} from "lucide-react";
 import { useState } from "react";
 
 import {
@@ -11,6 +17,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/app-dialog";
+import { ImportDialog } from "@/components/food-import-dialog";
 import {
   MissingIngredientsDialog,
   type MissingRequest,
@@ -24,6 +31,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import type { ShoppingItem } from "@/lib/food";
+import { formDraft, siteName } from "@/lib/food-import";
 import {
   type Recipe,
   allTags,
@@ -60,6 +68,7 @@ export function FoodRecipes({
   const [tag, setTag] = useState(ALL_TAGS);
   const [viewing, setViewing] = useState<Recipe | null>(null);
   const [form, setForm] = useState<RecipeFormState>(null);
+  const [importing, setImporting] = useState(false);
   const [missing, setMissing] = useState<MissingRequest | null>(null);
   const [note, setNote] = useState<string>();
   const tags = allTags(recipes.items);
@@ -75,26 +84,40 @@ export function FoodRecipes({
 
   return (
     <div className="space-y-4" data-testid="food-recipes">
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         <Input
           aria-label="Search recipes"
-          className="h-11 flex-1 text-base"
+          className="h-11 min-w-0 flex-[1_1_14rem] text-base"
           onChange={(event) => setQuery(event.target.value)}
           placeholder="Search by title or ingredient"
           type="search"
           value={query}
         />
-        <Button
-          className="h-11"
-          onClick={() => {
-            setNote(undefined);
-            setForm({});
-          }}
-          size="lg"
-        >
-          <Plus aria-hidden="true" />
-          New recipe
-        </Button>
+        <div className="flex flex-1 gap-2 sm:flex-none">
+          <Button
+            className="h-11 flex-1 sm:flex-none"
+            onClick={() => {
+              setNote(undefined);
+              setImporting(true);
+            }}
+            size="lg"
+            variant="outline"
+          >
+            <Link2 aria-hidden="true" />
+            Import from link
+          </Button>
+          <Button
+            className="h-11 flex-1 sm:flex-none"
+            onClick={() => {
+              setNote(undefined);
+              setForm({});
+            }}
+            size="lg"
+          >
+            <Plus aria-hidden="true" />
+            New recipe
+          </Button>
+        </div>
       </div>
 
       {tags.length ? (
@@ -175,11 +198,26 @@ export function FoodRecipes({
         }}
         recipe={viewing}
       />
+      <ImportDialog
+        onClose={() => setImporting(false)}
+        onContinue={(draft, extras) => {
+          setImporting(false);
+          setForm({ draft: formDraft(draft), importFrom: extras });
+        }}
+        open={importing}
+      />
       <RecipeDialog
         onClose={() => setForm(null)}
         onDeleted={(recipe) => {
           setForm(null);
           setNote(`Deleted “${recipe.title}”.`);
+        }}
+        onExists={(recipeId, title) => {
+          setForm(null);
+          setNote(`“${title}” is already saved.`);
+          const existing = recipes.items.find((item) => item.id === recipeId);
+          if (existing) setViewing(existing);
+          else recipes.reload();
         }}
         onSaved={(recipe) => {
           setForm(null);
@@ -234,15 +272,21 @@ function RecipeView({
                   </Badge>
                 ))}
                 {current.sourceUrl ? (
-                  <a
-                    className="text-primary inline-flex items-center gap-1 underline-offset-4 hover:underline"
-                    href={current.sourceUrl}
-                    rel="noreferrer"
-                    target="_blank"
+                  <span
+                    className="text-muted-foreground inline-flex items-center gap-1"
+                    data-testid="food-recipe-source"
                   >
-                    Source
-                    <ExternalLink aria-hidden="true" className="size-3.5" />
-                  </a>
+                    From
+                    <a
+                      className="text-primary inline-flex items-center gap-1 underline-offset-4 hover:underline"
+                      href={current.sourceUrl}
+                      rel="noreferrer"
+                      target="_blank"
+                    >
+                      {siteName(current.sourceUrl) ?? "the source"}
+                      <ExternalLink aria-hidden="true" className="size-3.5" />
+                    </a>
+                  </span>
                 ) : null}
               </div>
             ) : null}

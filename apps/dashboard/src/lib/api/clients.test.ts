@@ -11,6 +11,7 @@ import {
   createGoogleCalendarClient,
   createInboxClient,
   createNotificationsClient,
+  createRecipeImportClient,
   createTasksClient,
   createVoiceClient,
 } from "./index";
@@ -30,6 +31,7 @@ test("each generated service client accepts an explicit base URL", () => {
   assert.ok(createBankingClient(url));
   assert.ok(createGoogleCalendarClient(url));
   assert.ok(createFoodClient(url));
+  assert.ok(createRecipeImportClient(url));
 });
 
 test("service clients act for the owner on every request", async () => {

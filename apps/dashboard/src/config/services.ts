@@ -12,6 +12,7 @@ const DEFAULT_SERVICE_URLS = {
   food: "http://localhost:8092",
   backup: "http://localhost:8093",
   hostHealth: "http://localhost:8094",
+  recipeImport: "http://localhost:8095",
 } as const;
 
 export function normalizeServiceUrl(name: string, value: string): string {
@@ -113,6 +114,11 @@ export const serviceBaseUrls = Object.freeze({
     "NEXT_PUBLIC_HOST_HEALTH_SERVICE_URL",
     "HOST_HEALTH_SERVICE_URL",
     DEFAULT_SERVICE_URLS.hostHealth,
+  ),
+  recipeImport: configuredServiceUrl(
+    "NEXT_PUBLIC_RECIPE_IMPORT_SERVICE_URL",
+    "RECIPE_IMPORT_SERVICE_URL",
+    DEFAULT_SERVICE_URLS.recipeImport,
   ),
 });
 
