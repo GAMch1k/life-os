@@ -23,7 +23,7 @@ The newest successful full backup of each of the last 7 days, 4 weeks, and 12 mo
 
 ## Checking a backup
 
-- **The status.** The Dashboard's Status page shows the Backups check (P14-03). From the host:
+- **The status.** The Dashboard's Status page shows the Backups check: the last backup, the last restore check, the next backup, and the free disk, with **Back up now**; the monitor notifies you when it needs attention (see [Dashboard](../frontend/dashboard.md)). From the host:
 
   ```sh
   docker compose exec -T backup wget -qO- http://127.0.0.1:8080/v1/status | jq '{lastRun: .lastRun | {id, result, error}, lastSuccess: .lastSuccess.id, lastRestoreCheck: .lastRestoreCheck | {id, runId, ok, error}, storage}'

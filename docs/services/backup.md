@@ -7,7 +7,7 @@ flowchart LR
   Backup -- "pg_dump per database, as lifeos_backup" --> Postgres[(PostgreSQL: every database in the registry)]
   Backup -- "auto/20261011T011500Z/" --> Dir[("LIFE_OS_BACKUP_DIR on the host")]
   Tool["tools/backup-now"] -- "docker compose exec backup /service now" --> Backup
-  Dashboard -. "GET /v1/status (P14-03)" .-> Backup
+  Dashboard -- "GET /v1/status, POST /v1/backups (Back up now)" --> Backup
 ```
 
 ## What is backed up
@@ -141,7 +141,7 @@ It deletes only directories under `auto/` named like a run id (`20261011T011500Z
 
 ## API
 
-The service listens on port 8080 on the private `backend` network only (`http://backup:8080`); there is no gateway route. The Dashboard will use it for the Status page (P14-03). The contract is `services/backup/api/openapi.yaml`.
+The service listens on port 8080 on the private `backend` network only (`http://backup:8080`); there is no gateway route. The Dashboard's Status page reads `GET /v1/status` for its Backups check, and its **Back up now** reaches `POST /v1/backups` through the Dashboard's own `/api/backups/` route, which passes on only those two (see [Dashboard](../frontend/dashboard.md)). The contract is `services/backup/api/openapi.yaml`.
 
 | Endpoint | |
 | --- | --- |
@@ -207,5 +207,5 @@ The container runs as `LIFE_OS_BACKUP_RUNTIME_UID` (default 1000), which must ow
 ## Limits
 
 - The backups are on the same disk as the database until the off-site copy (P14-04).
-- Nothing notifies the owner of a failed backup or restore check yet: the Status card and the monitor's check come with P14-03. Until then, look at `GET /v1/status` or the logs.
+- The owner hears of a failed backup or restore check through the Status page's Backups check, which the monitor watches: within a couple of minutes of the run, not at the moment a database fails.
 - A backup is as fresh as the last run: up to a day of changes can be lost.
