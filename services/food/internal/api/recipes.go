@@ -39,10 +39,55 @@ func recipeExists(title string) error {
 	return apiError(fiber.StatusConflict, "recipe_exists", "A recipe called “"+title+"” already exists")
 }
 
+// recipeMethods is how a recipe is cooked: the methods set on it, or else
+// those its title, tags, and steps name (inferred is then true).
+func recipeMethods(recipe store.Recipe) (methods []string, inferred bool) {
+	if recipe.Methods != nil {
+		return recipe.Methods, false
+	}
+	steps := ""
+	if recipe.Steps != nil {
+		steps = *recipe.Steps
+	}
+	return domain.InferMethods(recipe.Title, recipe.Tags, steps), true
+}
+
+func cookingMethods(values []string) []generated.CookingMethod {
+	out := make([]generated.CookingMethod, 0, len(values))
+	for _, value := range values {
+		out = append(out, generated.CookingMethod(value))
+	}
+	return out
+}
+
+// checkMethods keeps known methods once each, in the order domain.Methods
+// lists them; an empty list stays empty (not nil).
+func checkMethods(values []generated.CookingMethod) ([]string, error) {
+	if len(values) > len(domain.Methods) {
+		return nil, invalid(fmt.Sprintf("methods must hold at most %d methods", len(domain.Methods)))
+	}
+	given := map[string]bool{}
+	for index, value := range values {
+		if !domain.ValidMethod(string(value)) {
+			return nil, invalid(fmt.Sprintf("methods[%d] must be one of %s", index, strings.Join(domain.Methods, ", ")))
+		}
+		given[string(value)] = true
+	}
+	out := []string{}
+	for _, method := range domain.Methods {
+		if given[method] {
+			out = append(out, method)
+		}
+	}
+	return out, nil
+}
+
 func recipeView(recipe store.Recipe, ingredients []store.RecipeIngredient) generated.Recipe {
+	methods, inferred := recipeMethods(recipe)
 	view := generated.Recipe{
 		Id: uuid(recipe.ID), Title: recipe.Title, NormalizedTitle: recipe.NormalizedTitle, Steps: recipe.Steps,
 		Tags: recipe.Tags, SourceUrl: recipe.SourceUrl, Note: recipe.Note,
+		Methods: cookingMethods(methods), MethodsInferred: inferred,
 		Ingredients: make([]generated.Ingredient, 0, len(ingredients)),
 		CreatedAt:   recipe.CreatedAt.Time.UTC(), UpdatedAt: recipe.UpdatedAt.Time.UTC(),
 		CreatedBy: actorOf(recipe.CreatedBy), UpdatedBy: actorOf(recipe.UpdatedBy),
@@ -87,6 +132,8 @@ type recipeInput struct {
 	tags              []string
 	sourceURL         *string
 	note              *string
+	// methods as set; nil lets Food infer them.
+	methods []string
 }
 
 func checkServings(value *int) (*int32, error) {
@@ -277,10 +324,15 @@ func (h *Handler) CreateRecipe(c fiber.Ctx, _ generated.CreateRecipeParams) erro
 	if input.note, err = cleanText("note", body.Note, noteLimit); err != nil {
 		return err
 	}
+	if body.Methods != nil {
+		if input.methods, err = checkMethods(*body.Methods); err != nil {
+			return err
+		}
+	}
 	actor := requestActor(c)
 	return h.write(c, func(ctx context.Context, q *store.Queries) (result, error) {
 		recipe, err := q.InsertRecipe(ctx, store.InsertRecipeParams{Title: input.title, NormalizedTitle: input.normalized, Servings: input.servings,
-			Steps: input.steps, Tags: input.tags, SourceUrl: input.sourceURL, Note: input.note, Actor: actor})
+			Steps: input.steps, Tags: input.tags, SourceUrl: input.sourceURL, Note: input.note, Methods: input.methods, Actor: actor})
 		if uniqueViolation(err, recipeTitleKey) {
 			return result{}, recipeExists(input.title)
 		}
@@ -299,8 +351,8 @@ func (h *Handler) CreateRecipe(c fiber.Ctx, _ generated.CreateRecipeParams) erro
 // recipeFields are the UpdateRecipeRequest properties; nullable ones may be
 // null.
 var (
-	recipeFields   = []string{"title", "servings", "ingredients", "steps", "tags", "sourceUrl", "note"}
-	recipeNullable = map[string]bool{"servings": true, "steps": true, "sourceUrl": true, "note": true}
+	recipeFields   = []string{"title", "servings", "ingredients", "steps", "tags", "sourceUrl", "note", "methods"}
+	recipeNullable = map[string]bool{"servings": true, "steps": true, "sourceUrl": true, "note": true, "methods": true}
 )
 
 func sameIngredients(current []store.RecipeIngredient, next []store.InsertRecipeIngredientParams) bool {
@@ -364,6 +416,11 @@ func (h *Handler) UpdateRecipe(c fiber.Ctx, recipeID generated.RecipeId, _ gener
 	if input.note, err = cleanText("note", body.Note, noteLimit); err != nil {
 		return err
 	}
+	if body.Methods != nil {
+		if input.methods, err = checkMethods(*body.Methods); err != nil {
+			return err
+		}
+	}
 	actor := requestActor(c)
 	return h.write(c, func(ctx context.Context, q *store.Queries) (result, error) {
 		current, err := q.GetRecipeForUpdate(ctx, pgUUID(recipeID))
@@ -379,7 +436,7 @@ func (h *Handler) UpdateRecipe(c fiber.Ctx, recipeID generated.RecipeId, _ gener
 		}
 		ingredients := stored[current.ID.Bytes]
 		next := store.UpdateRecipeParams{ID: current.ID, Title: current.Title, NormalizedTitle: current.NormalizedTitle, Servings: current.Servings,
-			Steps: current.Steps, Tags: current.Tags, SourceUrl: current.SourceUrl, Note: current.Note, Actor: actor}
+			Steps: current.Steps, Tags: current.Tags, SourceUrl: current.SourceUrl, Note: current.Note, Methods: current.Methods, Actor: actor}
 		var changes []string
 		if present["title"] && input.title != current.Title {
 			next.Title, next.NormalizedTitle = input.title, input.normalized
@@ -408,6 +465,10 @@ func (h *Handler) UpdateRecipe(c fiber.Ctx, recipeID generated.RecipeId, _ gener
 		if present["note"] && !sameText(input.note, current.Note) {
 			next.Note = input.note
 			changes = append(changes, "note")
+		}
+		if present["methods"] && ((input.methods == nil) != (current.Methods == nil) || !slices.Equal(input.methods, current.Methods)) {
+			next.Methods = input.methods
+			changes = append(changes, "methods")
 		}
 		if len(changes) == 0 {
 			return result{status: fiber.StatusOK, body: recipeView(current, ingredients)}, nil

@@ -38,13 +38,17 @@ type Querier interface {
 	// Moves the cursor and releases the lease, if owner still holds it. A run
 	// with an error keeps its message; one without records its success.
 	FinishNotificationRun(ctx context.Context, arg FinishNotificationRunParams) (int64, error)
+	GetIdea(ctx context.Context, id pgtype.UUID) (FoodIdea, error)
+	GetIdeaForUpdate(ctx context.Context, id pgtype.UUID) (FoodIdea, error)
 	GetIdempotencyKey(ctx context.Context, key string) (IdempotencyKey, error)
 	GetMealPlanEntryForUpdate(ctx context.Context, arg GetMealPlanEntryForUpdateParams) (MealPlanEntry, error)
 	GetNotificationDispatch(ctx context.Context) (FoodNotificationDispatch, error)
 	GetOpenShoppingItemByName(ctx context.Context, normalizedName string) (ShoppingItem, error)
 	GetPantryItem(ctx context.Context, id pgtype.UUID) (PantryItem, error)
 	GetPantryItemForUpdate(ctx context.Context, id pgtype.UUID) (PantryItem, error)
+	GetPreferences(ctx context.Context) (FoodPreference, error)
 	GetRecipe(ctx context.Context, id pgtype.UUID) (Recipe, error)
+	GetRecipeByTitle(ctx context.Context, normalizedTitle string) (Recipe, error)
 	GetRecipeForUpdate(ctx context.Context, id pgtype.UUID) (Recipe, error)
 	GetShoppingItem(ctx context.Context, id pgtype.UUID) (ShoppingItem, error)
 	GetShoppingItemForUpdate(ctx context.Context, id pgtype.UUID) (ShoppingItem, error)
@@ -56,6 +60,7 @@ type Querier interface {
 	GetStoreForUpdate(ctx context.Context, id pgtype.UUID) (Store, error)
 	// Nothing is inserted (no row) when the keyword already has a rule.
 	InsertAisleRule(ctx context.Context, arg InsertAisleRuleParams) (AisleRule, error)
+	InsertIdea(ctx context.Context, arg InsertIdeaParams) (FoodIdea, error)
 	InsertPantryItem(ctx context.Context, arg InsertPantryItemParams) (PantryItem, error)
 	InsertRecipe(ctx context.Context, arg InsertRecipeParams) (Recipe, error)
 	InsertRecipeIngredient(ctx context.Context, arg InsertRecipeIngredientParams) error
@@ -64,11 +69,19 @@ type Querier interface {
 	// inserted (no row) when a store with the name already exists.
 	InsertStore(ctx context.Context, arg InsertStoreParams) (Store, error)
 	ListAisleRules(ctx context.Context, aisle *string) ([]AisleRule, error)
+	// Every recipe, by normalised title, for ranking (at most row_limit).
+	ListAllRecipes(ctx context.Context, rowLimit int32) ([]Recipe, error)
+	// The normalised names bought or put away since a time: pantry items added
+	// (put away from the list or directly), and bought shopping items.
+	ListBoughtNames(ctx context.Context, since pgtype.Timestamptz) ([]string, error)
 	// Which of the given dedupe keys were already handled.
 	ListHandledNotifications(ctx context.Context, keys []string) ([]string, error)
+	// Ideas in a state, newest first.
+	ListIdeas(ctx context.Context, arg ListIdeasParams) ([]FoodIdea, error)
 	// Which of the given normalised names are in stock in the pantry, with one
 	// such item each (the one expiring soonest).
 	ListInStockNames(ctx context.Context, names []string) ([]PantryItem, error)
+	ListInStockPantryItems(ctx context.Context) ([]PantryItem, error)
 	// The in-stock items with a normalised name, soonest expiry first.
 	ListInStockPantryItemsByName(ctx context.Context, normalizedName string) ([]PantryItem, error)
 	// The meal plan from one day through another, by day, then slot.
@@ -87,6 +100,8 @@ type Querier interface {
 	// The recipes planned from one day through another, in plan order (a
 	// recipe planned twice is listed twice).
 	ListPlannedRecipeIDs(ctx context.Context, arg ListPlannedRecipeIDsParams) ([]pgtype.UUID, error)
+	// The days recipes are planned from one day through another.
+	ListPlannedRecipes(ctx context.Context, arg ListPlannedRecipesParams) ([]ListPlannedRecipesRow, error)
 	// The ingredients of the given recipes, each recipe's in order.
 	ListRecipeIngredients(ctx context.Context, recipeIds []pgtype.UUID) ([]RecipeIngredient, error)
 	// Recipes by normalised title. title_words keeps recipes whose normalised
@@ -112,6 +127,7 @@ type Querier interface {
 	RecordNotification(ctx context.Context, arg RecordNotificationParams) (int64, error)
 	// Keeps the meal plan's title of a recipe in step with the recipe.
 	RenameMealPlanRecipe(ctx context.Context, arg RenameMealPlanRecipeParams) error
+	SetIdeaState(ctx context.Context, arg SetIdeaStateParams) (FoodIdea, error)
 	// Flags an in-stock item as running low (running = true) or clears the flag.
 	SetPantryItemRunningLow(ctx context.Context, arg SetPantryItemRunningLowParams) (PantryItem, error)
 	// in_stock clears ended_at; an ended state keeps an earlier end when the item
@@ -121,6 +137,7 @@ type Querier interface {
 	// Marks a recipe changed when only its ingredients did.
 	TouchRecipe(ctx context.Context, arg TouchRecipeParams) (Recipe, error)
 	UpdatePantryItem(ctx context.Context, arg UpdatePantryItemParams) (PantryItem, error)
+	UpdatePreferences(ctx context.Context, arg UpdatePreferencesParams) (FoodPreference, error)
 	UpdateRecipe(ctx context.Context, arg UpdateRecipeParams) (Recipe, error)
 	UpdateShoppingItem(ctx context.Context, arg UpdateShoppingItemParams) (ShoppingItem, error)
 	UpdateStaple(ctx context.Context, arg UpdateStapleParams) (Staple, error)

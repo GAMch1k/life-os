@@ -26,6 +26,14 @@ info:
     Every write must say who makes it in `X-Life-OS-Actor`; without one it is
     refused with 400 `actor_required`. Errors use the shared envelope
     `{"error": {"code", "message"}, "request_id"}`.
+
+
+    Discovery finds recipes by main ingredient in TheMealDB
+    (https://www.themealdb.com/), a free recipe database, and returns
+    drafts that are never saved by themselves; the owner saves one with
+    `POST /v1/imports` (the draft as `overrides`, its TheMealDB page as
+    `url`). Only TheMealDB's host is requested, through the same guard, and
+    its answers are cached for a day. Recipe data and imagery: TheMealDB.
   license: {name: UNLICENSED, url: https://life-os.local/license}
 servers: [{url: http://recipe-import:8080}]
 paths:
@@ -82,6 +90,29 @@ paths:
         '409': {description: '`recipe_exists`: Food has a recipe with this title, its id in `recipeId`; or `idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/RecipeExistsError'}}}}
         '422': {description: '`import_failed`: the page gives no recipe and no title; the message says why', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
         '502': {description: '`food_unavailable`: Food could not be reached or refused the recipe', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/discover:
+    get:
+      summary: Discover recipes by main ingredient (TheMealDB)
+      description: >-
+        Asks TheMealDB for meals whose main ingredient is `ingredient` and
+        returns up to `limit` of them as drafts, in English (TheMealDB's
+        language). German and Russian main ingredients are asked for in
+        English ("Hähnchenbrust" as chicken breast, "фарш" as minced beef;
+        `query` says what was asked); others as written. Each draft links to
+        its TheMealDB page (`sourceUrl`), has its picture, ingredients with
+        measures, steps, category and cuisine as tags, and a description that
+        credits TheMealDB and names the original source. Nothing is saved.
+        No meals is an empty list; TheMealDB unreachable is 502
+        `provider_unavailable`.
+      operationId: discoverRecipes
+      security: []
+      parameters:
+        - {name: ingredient, in: query, required: true, schema: {type: string, minLength: 1, maxLength: 200}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 12, default: 6}}
+      responses:
+        '200': {description: The drafts found, content: {application/json: {schema: {$ref: '#/components/schemas/DiscoverResult'}}}}
+        '400': {description: 'Invalid request (`invalid_request`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '502': {description: '`provider_unavailable`: TheMealDB could not be reached; the message says why', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
 components:
   schemas:
     ErrorResponse:
@@ -180,6 +211,8 @@ components:
         ingredients: {type: array, items: {$ref: '#/components/schemas/Ingredient'}}
         steps: {type: string, nullable: true}
         tags: {type: array, items: {type: string}}
+        methods: {type: array, description: 'How it is cooked (Food''s `CookingMethod`), passed on from Food.', items: {type: string}}
+        methodsInferred: {type: boolean, description: Whether Food inferred the methods.}
         sourceUrl: {type: string, nullable: true}
         note: {type: string, nullable: true}
         createdAt: {type: string, format: date-time}
@@ -192,3 +225,12 @@ components:
       properties:
         method: {$ref: '#/components/schemas/ImportMethod'}
         recipe: {$ref: '#/components/schemas/Recipe'}
+    DiscoverResult:
+      type: object
+      required: [ingredient, query, provider, attribution, items]
+      properties:
+        ingredient: {type: string, description: The ingredient as given.}
+        query: {type: string, description: 'The English ingredient TheMealDB was asked for, such as "chicken breast".'}
+        provider: {type: string, description: TheMealDB.}
+        attribution: {type: string, description: How to credit the provider wherever the results are shown.}
+        items: {type: array, items: {$ref: '#/components/schemas/RecipeDraft'}}

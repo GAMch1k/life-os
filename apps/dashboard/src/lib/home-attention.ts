@@ -25,6 +25,7 @@ import {
   homeFood,
 } from "@/lib/food";
 import { type MealPlanEntry, todayMeals } from "@/lib/food-recipes";
+import { type SuggestionList, cookTonightLine } from "@/lib/food-suggest";
 import type { InboxItem } from "@/lib/inbox-summary";
 import type { Task } from "@/lib/tasks-summary";
 import {
@@ -190,6 +191,8 @@ export function toHomeAttention(
     meals?: ListResult<MealPlanEntry>;
     /** Food's in-stock items flagged as running low. */
     runningLow?: ListResult<PantryItem>;
+    /** Food's top suggestion for dinner. */
+    tonight?: { data?: Pick<SuggestionList, "items"> };
   },
   now: Date,
   timeZone: string = DEFAULT_TIME_ZONE,
@@ -207,6 +210,7 @@ export function toHomeAttention(
     pantry,
     meals,
     runningLow,
+    tonight,
   } = results;
   const { start } = ownerToday(now, timeZone);
   const isOverdue = (task: Task) =>
@@ -267,6 +271,7 @@ export function toHomeAttention(
             ? todayMeals(meals.data.items, dayKey(now, timeZone))
             : null,
           runningLow?.data,
+          tonight?.data ? cookTonightLine(tonight.data) : null,
         )
       : null,
   };
@@ -327,6 +332,7 @@ export async function getHomeAttention(): Promise<HomeAttention> {
     pantry,
     meals,
     runningLow,
+    tonight,
   ] = await Promise.all([
     unavailableOnFailure(
       inboxClient.GET("/v1/inbox-items", {
@@ -403,6 +409,12 @@ export async function getHomeAttention(): Promise<HomeAttention> {
         },
       }),
     ),
+    // Tonight's suggestion, shown when food about to expire drives it.
+    foodClient
+      .GET("/v1/suggestions", {
+        params: { query: { limit: 1, mealSlot: "dinner" } },
+      })
+      .catch(() => ({ data: undefined })),
   ]);
   // An imported event is labelled with its source's name, which an
   // integration's event carries itself.
@@ -427,6 +439,7 @@ export async function getHomeAttention(): Promise<HomeAttention> {
       pantry,
       meals,
       runningLow,
+      tonight,
     },
     now,
     timeZone,

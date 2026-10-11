@@ -263,7 +263,8 @@ A recipe has a `title` (unique as normalised, like item names: 409
 `amount` (free text, 50 characters), and optional `note`; each with its
 `normalizedName`), `steps` (plain text, one step per line; no markup),
 `tags` (at most 20, kept normalised and without duplicates, in the order
-given), an optional `sourceUrl` (http or https), a `note`, and the actors.
+given), an optional `sourceUrl` (http or https), a `note`, its cooking
+`methods` (see below), and the actors.
 
 - `GET /v1/recipes` lists recipes by normalised title. `q` keeps those whose
   normalised title contains every word of it, also inside a word ("bolo"
@@ -276,6 +277,21 @@ given), an optional `sourceUrl` (http or https), a `note`, and the actors.
   update that changes nothing records nothing.
 - Deleting a recipe keeps the meals planned with it, as plain text with its
   title.
+
+**Cooking methods.** `methods` lists how a recipe is cooked: `air_fryer`,
+`oven`, `stovetop`, `slow_cooker`, `grill`, `microwave`, `no_cook` (in that
+order). Until they are set, Food infers them whenever it reads the recipe
+(`methodsInferred: true`) from the title, tags, and steps by keyword rules in
+English, German, and Russian: "air fryer", "Airfryer", "Heißluftfritteuse",
+"аэрогриль" are the air fryer; "oven", "bake", "Backofen", "Auflauf",
+"духовка", "запекать" the oven; "pan", "skillet", "Pfanne", "anbraten",
+"kochen", "сковорода", "варить" the stove; "slow cooker", "Schongarer",
+"мультиварка"; "grill", "BBQ", "мангал"; "microwave", "Mikrowelle", "СВЧ";
+"no cook", "ohne Kochen", "без варки". A device's words take the verb next
+to them ("Bake in the air fryer", "Запекать в аэрогриле" is only the air
+fryer). So imported and older recipes need nothing. `methods` on create, or
+on `PATCH`, sets them (`methodsInferred: false`, an empty list means none);
+`PATCH` with `methods: null` lets Food infer them again.
 
 **Importing.** Food fetches no page itself: recipes from links and pasted
 captions come through the [recipe-import](recipe-import.md) integration,
@@ -290,6 +306,72 @@ otherwise `GET /v1/recipes?q=<words>` and, when exactly one recipe matches,
 that one; when several match, ask (or plan the words as free text); when none
 does, plan them as free text (`text`), which the owner can turn into a recipe
 later.
+
+## Preferences
+
+`GET /v1/preferences` and `PUT /v1/preferences` (it replaces them all): the
+preferred cooking `methods`, the most preferred first (the air fryer to
+start with, migration 000006); `dislikes`, ingredients never to suggest
+(names as written, at most 50, kept once per normalised name); and free
+`dietaryNotes` (1000 characters) for whoever suggests recipes. A request
+that changes nothing records nothing.
+
+## Suggestions
+
+`GET /v1/suggestions?limit=10&mealSlot=dinner` ranks the saved recipes for
+the owner's today and explains every score: each `reason` has a `kind`, its
+`points`, and a `text`, and the `score` is their sum.
+
+| Reason | Points | Text, for example |
+| --- | --- | --- |
+| `coverage` | up to 40, by the share of its ingredients in stock | You have 4 of its 5 ingredients |
+| `expiring` | 12 per in-stock item it uses that expires today through in 3 days (at most 3) | Hähnchenbrust expires tomorrow, Sahne expires in 2 days |
+| `method` | 10 when it is cooked one of the preferred ways | Air fryer, your preferred way |
+| `habit_planned` | planned in the last 60 days: once 4, twice 7, three times or more 9 | You had it 3 times in the last 60 days |
+| `habit_bought` | up to 8, by the share of its ingredients bought or put away in the last 60 days | You bought 3 of its ingredients lately |
+| `recent` | −10 when it is planned within 3 days before or after today | Planned 2 days ago; Already planned for tomorrow |
+| `slot` | with `mealSlot`: +5 when it was planned for that meal before or is tagged for it ("dinner", "Abendessen", "ужин"); −10 when tagged only for another meal | Fits dinner; Usually breakfast |
+
+Ingredients are compared with the pantry **word by word**, not only by the
+exact normalised name: every word of the shorter name must match a word of
+the other, where words match when they are equal, one is the other's plural
+("Eier"/"Ei", "Tomaten"/"Tomate", "eggs"/"egg"), one of at least five letters
+starts the other ("Hähnchen"/"Hähnchenbrust"), a compound ends with the
+other ("Vollmilch" covers "Milch"), or, in Cyrillic, they share a stem and
+differ in short endings ("молоко"/"молока", "яйцо"/"яйца"). "Egg" does not
+match "eggplant", "tea" not "steak". It is a heuristic; `have` says which
+pantry item covers which ingredient, so the owner sees it. Water, salt,
+pepper, and cooking oil are assumed at home (`basics`) and not counted.
+`missing` lists what to buy with the recipe's amounts, and `expiring` the
+covered items that expire within 3 days, soonest first. A recipe with a
+disliked ingredient (or a disliked word in its title), compared the same
+way, is left out and listed in `excluded` with the dislike. Ties go to fewer
+missing ingredients, then the title.
+
+## Recipe ideas
+
+Ideas are recipe drafts that are not recipes yet, each with why it is
+suggested (`reason`), for the owner to save or dismiss. Food stores them;
+something else writes them (part 2: the AI from the pantry and the
+preferences, or a web search). An idea has the recipe fields (title,
+servings, ingredients, steps, tags, methods), a `source` (`ai`, or `web`
+with the page as `sourceUrl`), the `reason`, a `state` (`new`, `saved`,
+`dismissed`), and, once saved, the `recipeId`.
+
+- `POST /v1/ideas` (201) writes one. Only an agent, a Life OS component, or
+  a development tool may (`agent:`, `system:`, `dev:` actors; `user` is 403
+  `actor_not_allowed`). A new idea with the same normalised title is 409
+  `idea_exists`, a saved recipe with it 409 `recipe_exists`. Methods not
+  given are inferred.
+- `GET /v1/ideas?state=new` (the default; `saved`, `dismissed`), newest
+  first, `limit` up to 100; `GET /v1/ideas/{id}`.
+- `POST /v1/ideas/{id}/save` creates the recipe (201): the idea's fields,
+  its link, the reason as the note, and its methods when they were given
+  (inferred ones stay inferred). An idea already saved answers 200 with its
+  recipe; a title taken meanwhile is 409 `recipe_exists`. A dismissed idea
+  can still be saved.
+- `POST /v1/ideas/{id}/dismiss`; again changes nothing; a saved idea is 409
+  `idea_saved`.
 
 ## Meal plan
 
@@ -471,6 +553,32 @@ purchases as Tasks:
 
 Every one of these takes an `Idempotency-Key` like the other writes, and the items a staple puts on the list have `source: staple`, not `capture`.
 
+**Recipe ideas (for the AI agent, part 2 of P15-09).** Food stores ideas and
+shows them in the Dashboard's "What can I cook?"; the AI writes them. A
+generator job should:
+
+1. Read what it needs: `GET /v1/preferences` (preferred `methods`, the
+   `dislikes`, the `dietaryNotes`), `GET /v1/pantry-items?state=in_stock`
+   (and `expiringWithinDays=3` for what to use first), `GET
+   /v1/suggestions?limit=10` (what the saved recipes already cover, so it
+   suggests something else), `GET /v1/ideas` (the waiting ones, not to
+   repeat), and `GET /v1/recipes?q=` to avoid titles that are saved.
+2. Write each idea with `POST /v1/ideas` as `agent:<name>` and an
+   `Idempotency-Key` derived from the run and the title: `title`,
+   `ingredients` (name and amount, in the owner's language where it can,
+   using the pantry's own names for what is at home so coverage matches),
+   `steps` one per line, `tags`, `methods` (the air fryer when it suits; or
+   leave them out and Food infers them from the steps), `servings`, and a
+   one-sentence `reason` that names what it uses ("Uses the Hähnchen that
+   expires tomorrow and the Paprika you have, in the air fryer"). `source:
+   ai` for its own recipes; `source: web` with `sourceUrl` for one found on
+   a site (the owner then sees "Found on chefkoch.de").
+3. Respect the rules: never an idea with a disliked ingredient; prefer the
+   preferred methods; prefer what expires within 3 days; a few ideas a day
+   at most (each new title waits until saved or dismissed: 409
+   `idea_exists`); 409 `recipe_exists` means it is saved already, skip it.
+   It never saves or dismisses ideas itself; the owner does.
+
 Items from a capture have `source: capture` and the Inbox item's id as
 `sourceRef` (missing ingredients have `source: recipe`, as always), and their
 rows and events name `agent:codex-inbox-processor` as the actor. Every write carries an `Idempotency-Key` derived from the capture
@@ -500,6 +608,8 @@ recorded. A creation or deletion has an id derived from the entity
 | `food.pantry_item.added` / `.updated` / `.used_up` / `.thrown_away` / `.restocked` / `.deleted` | `food_pantry_item` | Added “Joghurt” to the pantry (fridge, expires 2026-10-14) |
 | `food.pantry_item.running_low` / `.running_low_cleared` | `food_pantry_item` | “Milch” is running low; “Milch” is no longer running low (": more came home" and `data.reason: more_at_home` when more was added or put away) |
 | `food.staple.created` / `.updated` / `.deleted` | `food_staple` | “Milch” is now a staple; Staple “Milch” updated: amount, store; “Milch” is no longer a staple |
+| `food.preferences.updated` | `food_preferences` / `preferences` | Cooking preferences updated: methods, dislikes |
+| `food.idea.created` / `.saved` / `.dismissed` | `food_idea` | Recipe idea “Air fryer wings”: Uses the Hähnchen that expires tomorrow; Saved the idea “Air fryer wings” as a recipe (followed by its `food.recipe.created`); Dismissed the idea “Soup” |
 | `food.recipe.created` / `.updated` / `.deleted` | `food_recipe` | Recipe “Pasta Bolognese” created (3 ingredients); updated: title, ingredients |
 | `food.meal_plan.set` / `.cleared` | `food_meal_plan` / `<date>:<slot>` | Planned “Pasta” for dinner on Mon 12 Oct, replacing “Soup”; Cleared “Pasta” from dinner on Mon 12 Oct |
 | `food.notification.missed` | `food_notification` | Expiry reminder due Sun 11 Oct 2026, 08:00 CEST was missed: Food was not running (see [Expiry reminders](#expiry-reminders)) |
@@ -526,7 +636,9 @@ the pantry item's event. See [Activity](activity.md).
   recipes (`recipes`, `recipe_ingredients`), the meal plan
   (`meal_plan_entries`), and the `recipe` source; 000005 the `staples`, the
   pantry's `running_low_at` (in-stock items only), and the `staple` source
-  (down keeps staple items as manual ones).
+  (down keeps staple items as manual ones); 000006 the `food_preferences`
+  row (the air fryer preferred), `recipes.methods` (NULL: inferred), and
+  `food_ideas` (down keeps the recipes saved ideas became).
 - The Dashboard and MCP reach Food at `FOOD_SERVICE_URL` (compose:
   `http://food:8080`), and the browser at `/api/food`; Status probes its
   `/ready` ("Food").
@@ -557,10 +669,21 @@ adding a staple once with its amount, store, aisle, `source: staple`, and
 `sourceRef`; repeating and an item already needed leaving the list alone; an
 archived store left out; another item only flagged unless `addToList`;
 running low by name with and without a pantry row; `not_in_stock`; more at
-home clearing the flag; the idempotent replay), and migrations 000002,
-000003, 000004, and 000005 down and up. The amount join, the ingredient
-grouping, the restock reasons, and the lifecycle result's fields also have
-unit tests. `internal/notifications` has unit
+home clearing the flag; the idempotent replay), preferences (replace,
+order and duplicates, refusals, nothing recorded for no change), recipe
+methods (inferred, set, kept across edits, inferred again on null), the
+suggestions (the order, every reason and its points, missing, basics,
+expiring, a dislike leaving a recipe out, the meal slot, the limit, the
+preference bonus going with the preference), ideas (actors, conflicts with
+ideas and recipes, validation, save with its content and the replay, web
+ideas keeping methods and link, dismiss, the events), and migrations
+000002, 000003, 000004, 000005, and 000006 down and up. The amount join,
+the ingredient grouping, the restock reasons, and the lifecycle result's
+fields also have unit tests, and `internal/domain` has unit tests for the
+word matcher (compounds, plurals, Russian endings, and what must not
+match), the method rules in three languages, and the ranking (coverage,
+the expiring bonus, the air fryer bonus, habits capped, the recency
+penalty, dislikes, the meal slot). `internal/notifications` has unit
 tests (the clock setting, wall times across both daylight saving changes and
 west of UTC, the window, the message's lines, grouping, importance, late
 phrasing, and caps) and integration tests with an in-process Notifications

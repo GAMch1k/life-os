@@ -64,6 +64,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/discover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Discover recipes by main ingredient (TheMealDB)
+         * @description Asks TheMealDB for meals whose main ingredient is `ingredient` and returns up to `limit` of them as drafts, in English (TheMealDB's language). German and Russian main ingredients are asked for in English ("Hähnchenbrust" as chicken breast, "фарш" as minced beef; `query` says what was asked); others as written. Each draft links to its TheMealDB page (`sourceUrl`), has its picture, ingredients with measures, steps, category and cuisine as tags, and a description that credits TheMealDB and names the original source. Nothing is saved. No meals is an empty list; TheMealDB unreachable is 502 `provider_unavailable`.
+         */
+        get: operations["discoverRecipes"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -153,6 +173,10 @@ export interface components {
             ingredients: components["schemas"]["Ingredient"][];
             steps: string | null;
             tags: string[];
+            /** @description How it is cooked (Food's `CookingMethod`), passed on from Food. */
+            methods?: string[];
+            /** @description Whether Food inferred the methods. */
+            methodsInferred?: boolean;
             sourceUrl: string | null;
             note: string | null;
             /** Format: date-time */
@@ -165,6 +189,17 @@ export interface components {
         ImportResult: {
             method: components["schemas"]["ImportMethod"];
             recipe: components["schemas"]["Recipe"];
+        };
+        DiscoverResult: {
+            /** @description The ingredient as given. */
+            ingredient: string;
+            /** @description The English ingredient TheMealDB was asked for, such as "chicken breast". */
+            query: string;
+            /** @description TheMealDB. */
+            provider: string;
+            /** @description How to credit the provider wherever the results are shown. */
+            attribution: string;
+            items: components["schemas"]["RecipeDraft"][];
         };
     };
     responses: never;
@@ -294,6 +329,47 @@ export interface operations {
                 };
             };
             /** @description `food_unavailable`: Food could not be reached or refused the recipe */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    discoverRecipes: {
+        parameters: {
+            query: {
+                ingredient: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The drafts found */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiscoverResult"];
+                };
+            };
+            /** @description Invalid request (`invalid_request`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `provider_unavailable`: TheMealDB could not be reached; the message says why */
             502: {
                 headers: {
                     [name: string]: unknown;

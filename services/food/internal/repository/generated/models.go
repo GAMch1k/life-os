@@ -17,6 +17,26 @@ type AisleRule struct {
 	CreatedBy string
 }
 
+type FoodIdea struct {
+	ID              pgtype.UUID
+	Title           string
+	NormalizedTitle string
+	Servings        *int32
+	Ingredients     []byte
+	Steps           *string
+	Tags            []string
+	Methods         []string
+	Source          string
+	SourceUrl       *string
+	Reason          string
+	State           string
+	RecipeID        pgtype.UUID
+	CreatedAt       pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
+	CreatedBy       string
+	UpdatedBy       string
+}
+
 type FoodNotificationDispatch struct {
 	ID            bool
 	LastRunAt     pgtype.Timestamptz
@@ -35,6 +55,15 @@ type FoodNotificationLog struct {
 	DueAt      pgtype.Timestamptz
 	Outcome    string
 	RecordedAt pgtype.Timestamptz
+}
+
+type FoodPreference struct {
+	ID           bool
+	Methods      []string
+	Dislikes     []string
+	DietaryNotes *string
+	UpdatedAt    pgtype.Timestamptz
+	UpdatedBy    string
 }
 
 type IdempotencyKey struct {
@@ -94,6 +123,7 @@ type Recipe struct {
 	UpdatedAt       pgtype.Timestamptz
 	CreatedBy       string
 	UpdatedBy       string
+	Methods         []string
 }
 
 type RecipeIngredient struct {

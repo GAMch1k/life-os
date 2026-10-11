@@ -6,6 +6,7 @@ import {
   parseWeek,
   weekStart,
 } from "@/lib/food-recipes";
+import { fetchCooking } from "@/lib/food-suggest";
 import { dayKey } from "@/lib/time-zone";
 import { userTimeZone } from "@/lib/user-time-zone";
 
@@ -22,13 +23,15 @@ export default async function FoodPage({ searchParams }: PageProps<"/food">) {
   const timeZone = await userTimeZone();
   const today = dayKey(new Date(), timeZone);
   const week = parseWeek(params.week) ?? weekStart(today);
-  const [state, recipes, plan] = await Promise.all([
+  const [state, recipes, plan, cooking] = await Promise.all([
     getFoodWorkspace(),
     fetchRecipes(),
     fetchWeek(week),
+    fetchCooking(),
   ]);
   return (
     <FoodWorkspace
+      cooking={cooking}
       initialStore={typeof params.store === "string" ? params.store : undefined}
       initialTab={parseFoodTab(params.tab)}
       initialWeek={week}

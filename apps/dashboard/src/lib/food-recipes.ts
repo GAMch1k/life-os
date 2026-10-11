@@ -23,6 +23,7 @@ export type IngredientResult = Schemas["IngredientResult"];
 export type FromRecipesResult = Schemas["FromRecipesResult"];
 export type FromRecipesRequest = Schemas["FromRecipesRequest"];
 export type CreateRecipeBody = Schemas["CreateRecipeRequest"];
+export type CookingMethod = Schemas["CookingMethod"];
 export type UpdateRecipeBody = Schemas["UpdateRecipeRequest"];
 
 /** A day's meals, in the order the plan lists them. */
@@ -95,6 +96,30 @@ export function stepLines(steps: string | null) {
     .filter(Boolean);
 }
 
+/** The cooking methods, in Food's order, with their labels. */
+export const COOKING_METHODS: { value: CookingMethod; label: string }[] = [
+  { value: "air_fryer", label: "Air fryer" },
+  { value: "oven", label: "Oven" },
+  { value: "stovetop", label: "Stovetop" },
+  { value: "slow_cooker", label: "Slow cooker" },
+  { value: "grill", label: "Grill" },
+  { value: "microwave", label: "Microwave" },
+  { value: "no_cook", label: "No cooking" },
+];
+
+export function methodLabel(method: string) {
+  return (
+    COOKING_METHODS.find((entry) => entry.value === method)?.label ?? method
+  );
+}
+
+/** Methods in Food's order, each once. */
+export function orderedMethods(methods: readonly string[]): CookingMethod[] {
+  return COOKING_METHODS.map((entry) => entry.value).filter((value) =>
+    methods.includes(value),
+  );
+}
+
 /** "4 servings · 3 ingredients" */
 export function recipeMeta(recipe: Recipe) {
   const parts = [];
@@ -124,6 +149,8 @@ export type RecipeDraft = {
   /** Comma-separated. */
   tags: string;
   sourceUrl: string;
+  /** The cooking methods as set; null lets Food detect them. */
+  methods: CookingMethod[] | null;
 };
 
 export type RecipeErrors = {
@@ -164,6 +191,10 @@ export function recipeDraft(recipe?: Recipe): RecipeDraft {
     steps: recipe?.steps ?? "",
     tags: recipe?.tags.join(", ") ?? "",
     sourceUrl: recipe?.sourceUrl ?? "",
+    methods:
+      recipe && recipe.methodsInferred === false
+        ? orderedMethods(recipe.methods)
+        : null,
   };
 }
 
@@ -240,6 +271,7 @@ export function newRecipeBody(draft: RecipeDraft): {
   if (checked.steps) body.steps = checked.steps;
   if (checked.tags.length) body.tags = checked.tags;
   if (checked.sourceUrl) body.sourceUrl = checked.sourceUrl;
+  if (draft.methods !== null) body.methods = orderedMethods(draft.methods);
   return { body, errors };
 }
 
@@ -277,6 +309,15 @@ export function recipePatch(
   if (tags.join("\n") !== recipe.tags.join("\n")) body.tags = checked.tags;
   if (checked.sourceUrl !== recipe.sourceUrl)
     body.sourceUrl = checked.sourceUrl;
+  // Null detects the methods again; a list sets them.
+  const setBefore = recipe.methodsInferred === false;
+  if (draft.methods === null) {
+    if (setBefore) body.methods = null;
+  } else {
+    const methods = orderedMethods(draft.methods);
+    if (!setBefore || methods.join() !== orderedMethods(recipe.methods).join())
+      body.methods = methods;
+  }
   return { body: Object.keys(body).length ? body : null, errors };
 }
 

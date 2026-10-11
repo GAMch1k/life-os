@@ -119,6 +119,78 @@ func (e AisleSetBy) Valid() bool {
 	}
 }
 
+// Defines values for CookingMethod.
+const (
+	AirFryer   CookingMethod = "air_fryer"
+	Grill      CookingMethod = "grill"
+	Microwave  CookingMethod = "microwave"
+	NoCook     CookingMethod = "no_cook"
+	Oven       CookingMethod = "oven"
+	SlowCooker CookingMethod = "slow_cooker"
+	Stovetop   CookingMethod = "stovetop"
+)
+
+// Valid indicates whether the value is a known member of the CookingMethod enum.
+func (e CookingMethod) Valid() bool {
+	switch e {
+	case AirFryer:
+		return true
+	case Grill:
+		return true
+	case Microwave:
+		return true
+	case NoCook:
+		return true
+	case Oven:
+		return true
+	case SlowCooker:
+		return true
+	case Stovetop:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for IdeaSource.
+const (
+	Ai  IdeaSource = "ai"
+	Web IdeaSource = "web"
+)
+
+// Valid indicates whether the value is a known member of the IdeaSource enum.
+func (e IdeaSource) Valid() bool {
+	switch e {
+	case Ai:
+		return true
+	case Web:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for IdeaState.
+const (
+	Dismissed IdeaState = "dismissed"
+	New       IdeaState = "new"
+	Saved     IdeaState = "saved"
+)
+
+// Valid indicates whether the value is a known member of the IdeaState enum.
+func (e IdeaState) Valid() bool {
+	switch e {
+	case Dismissed:
+		return true
+	case New:
+		return true
+	case Saved:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for IngredientStatus.
 const (
 	IngredientStatusAdded    IngredientStatus = "added"
@@ -293,6 +365,39 @@ func (e ShoppingItemState) Valid() bool {
 	}
 }
 
+// Defines values for SuggestionReasonKind.
+const (
+	Coverage     SuggestionReasonKind = "coverage"
+	Expiring     SuggestionReasonKind = "expiring"
+	HabitBought  SuggestionReasonKind = "habit_bought"
+	HabitPlanned SuggestionReasonKind = "habit_planned"
+	Method       SuggestionReasonKind = "method"
+	Recent       SuggestionReasonKind = "recent"
+	Slot         SuggestionReasonKind = "slot"
+)
+
+// Valid indicates whether the value is a known member of the SuggestionReasonKind enum.
+func (e SuggestionReasonKind) Valid() bool {
+	switch e {
+	case Coverage:
+		return true
+	case Expiring:
+		return true
+	case HabitBought:
+		return true
+	case HabitPlanned:
+		return true
+	case Method:
+		return true
+	case Recent:
+		return true
+	case Slot:
+		return true
+	default:
+		return false
+	}
+}
+
 // Actor Who made a change, as its X-Life-OS-Actor said.
 type Actor struct {
 	// Kind user = the owner; agent = the Life OS AI; system = a Life OS component; dev = a development tool or agent working on Life OS.
@@ -367,6 +472,9 @@ type ClearBoughtResult struct {
 	Deleted int `json:"deleted"`
 }
 
+// CookingMethod How a recipe is cooked.
+type CookingMethod string
+
 // CreateAisleRuleRequest defines model for CreateAisleRuleRequest.
 type CreateAisleRuleRequest struct {
 	// Aisle The shopping list's sections, in the order the list shows them.
@@ -377,11 +485,31 @@ type CreateAisleRuleRequest struct {
 	Match *AisleRuleMatch `json:"match,omitempty"`
 }
 
+// CreateIdeaRequest defines model for CreateIdeaRequest.
+type CreateIdeaRequest struct {
+	Ingredients *[]NewIngredient `json:"ingredients,omitempty"`
+	Methods     *[]CookingMethod `json:"methods,omitempty"`
+	Reason      string           `json:"reason"`
+	Servings    *int             `json:"servings,omitempty"`
+
+	// Source `ai`: written by the AI from the pantry and the preferences. `web`: found on a site (`sourceUrl`).
+	Source *IdeaSource `json:"source,omitempty"`
+
+	// SourceUrl An http or https URL; for `web`, the page it was found on.
+	SourceUrl *string   `json:"sourceUrl,omitempty"`
+	Steps     *string   `json:"steps,omitempty"`
+	Tags      *[]string `json:"tags,omitempty"`
+	Title     string    `json:"title"`
+}
+
 // CreateRecipeRequest defines model for CreateRecipeRequest.
 type CreateRecipeRequest struct {
 	Ingredients *[]NewIngredient `json:"ingredients,omitempty"`
-	Note        *string          `json:"note,omitempty"`
-	Servings    *int             `json:"servings,omitempty"`
+
+	// Methods How it is cooked; without it Food infers the methods from the title, tags, and steps.
+	Methods  *[]CookingMethod `json:"methods,omitempty"`
+	Note     *string          `json:"note,omitempty"`
+	Servings *int             `json:"servings,omitempty"`
 
 	// SourceUrl An http or https URL.
 	SourceUrl *string   `json:"sourceUrl,omitempty"`
@@ -466,6 +594,59 @@ type FromRecipesResult struct {
 	DryRun bool               `json:"dryRun"`
 	Items  []IngredientResult `json:"items"`
 }
+
+// Idea defines model for Idea.
+type Idea struct {
+	CreatedAt time.Time `json:"createdAt"`
+
+	// CreatedBy Who made a change, as its X-Life-OS-Actor said.
+	CreatedBy       Actor              `json:"createdBy"`
+	Id              openapi_types.UUID `json:"id"`
+	Ingredients     []IdeaIngredient   `json:"ingredients"`
+	Methods         []CookingMethod    `json:"methods"`
+	NormalizedTitle string             `json:"normalizedTitle"`
+
+	// Reason Why it is suggested, such as "Uses the Hähnchen that expires tomorrow, in the air fryer".
+	Reason string `json:"reason"`
+
+	// RecipeId The recipe it was saved as; null otherwise or once that recipe is deleted.
+	RecipeId *openapi_types.UUID `json:"recipeId"`
+	Servings *int                `json:"servings"`
+
+	// Source `ai`: written by the AI from the pantry and the preferences. `web`: found on a site (`sourceUrl`).
+	Source    IdeaSource `json:"source"`
+	SourceUrl *string    `json:"sourceUrl"`
+
+	// State `new`: waiting for the owner. `saved`: saved as a recipe (`recipeId`). `dismissed`: not wanted.
+	State IdeaState `json:"state"`
+
+	// Steps Plain text, one step per line.
+	Steps     *string   `json:"steps"`
+	Tags      []string  `json:"tags"`
+	Title     string    `json:"title"`
+	UpdatedAt time.Time `json:"updatedAt"`
+
+	// UpdatedBy Who made a change, as its X-Life-OS-Actor said.
+	UpdatedBy Actor `json:"updatedBy"`
+}
+
+// IdeaIngredient defines model for IdeaIngredient.
+type IdeaIngredient struct {
+	Amount *string `json:"amount"`
+	Name   string  `json:"name"`
+	Note   *string `json:"note"`
+}
+
+// IdeaList defines model for IdeaList.
+type IdeaList struct {
+	Items []Idea `json:"items"`
+}
+
+// IdeaSource `ai`: written by the AI from the pantry and the preferences. `web`: found on a site (`sourceUrl`).
+type IdeaSource string
+
+// IdeaState `new`: waiting for the owner. `saved`: saved as a recipe (`recipeId`). `dismissed`: not wanted.
+type IdeaState string
 
 // Ingredient defines model for Ingredient.
 type Ingredient struct {
@@ -671,6 +852,30 @@ type PantryItemState string
 // PantryLocation defines model for PantryLocation.
 type PantryLocation string
 
+// Preferences defines model for Preferences.
+type Preferences struct {
+	// DietaryNotes Free notes for whoever suggests recipes, such as "little red meat".
+	DietaryNotes *string `json:"dietaryNotes"`
+
+	// Dislikes Disliked ingredients as written.
+	Dislikes []string `json:"dislikes"`
+
+	// Methods The preferred cooking methods, the most preferred first.
+	Methods   []CookingMethod `json:"methods"`
+	UpdatedAt time.Time       `json:"updatedAt"`
+
+	// UpdatedBy Who made a change, as its X-Life-OS-Actor said.
+	UpdatedBy Actor `json:"updatedBy"`
+}
+
+// PreferencesRequest defines model for PreferencesRequest.
+type PreferencesRequest struct {
+	// DietaryNotes Empty or absent clears them.
+	DietaryNotes *string         `json:"dietaryNotes,omitempty"`
+	Dislikes     []string        `json:"dislikes"`
+	Methods      []CookingMethod `json:"methods"`
+}
+
 // PutAwayItem defines model for PutAwayItem.
 type PutAwayItem struct {
 	// Amount Replaces the shopping item's amount; empty means none. Without it the pantry item keeps the shopping item's amount.
@@ -701,6 +906,12 @@ type Recipe struct {
 	CreatedBy   Actor              `json:"createdBy"`
 	Id          openapi_types.UUID `json:"id"`
 	Ingredients []Ingredient       `json:"ingredients"`
+
+	// Methods How it is cooked, in the order `CookingMethod` lists them.
+	Methods []CookingMethod `json:"methods"`
+
+	// MethodsInferred True when Food inferred `methods` from the title, tags, and steps (and does again when they change); false when they were set.
+	MethodsInferred bool `json:"methodsInferred"`
 
 	// NormalizedTitle The title as Food compares it; unique.
 	NormalizedTitle string  `json:"normalizedTitle"`
@@ -780,6 +991,12 @@ type RunningLowResult struct {
 
 	// Staple The staple of the name; null when it is none.
 	Staple *Staple `json:"staple"`
+}
+
+// SaveIdeaResult defines model for SaveIdeaResult.
+type SaveIdeaResult struct {
+	Idea   Idea   `json:"idea"`
+	Recipe Recipe `json:"recipe"`
 }
 
 // SetMealPlanEntryRequest Give `recipeId` or `text`, exactly one.
@@ -901,6 +1118,78 @@ type StoreList struct {
 	Items []Store `json:"items"`
 }
 
+// Suggestion defines model for Suggestion.
+type Suggestion struct {
+	// Basics Ingredients assumed at home (water, salt, pepper, cooking oil).
+	Basics []string `json:"basics"`
+
+	// Expiring The items of `have` that expire within 3 days, soonest first.
+	Expiring []SuggestionUse `json:"expiring"`
+
+	// Have The ingredients in stock and what covers them.
+	Have []SuggestionUse `json:"have"`
+
+	// Missing The ingredients to buy, with the recipe's amounts.
+	Missing []SuggestionMissing `json:"missing"`
+	Reasons []SuggestionReason  `json:"reasons"`
+	Recipe  Recipe              `json:"recipe"`
+
+	// Score The sum of the reasons' points.
+	Score int `json:"score"`
+}
+
+// SuggestionExclusion defines model for SuggestionExclusion.
+type SuggestionExclusion struct {
+	// Disliked The disliked ingredient (or word) that leaves it out.
+	Disliked string    `json:"disliked"`
+	Recipe   RecipeRef `json:"recipe"`
+}
+
+// SuggestionList defines model for SuggestionList.
+type SuggestionList struct {
+	Excluded []SuggestionExclusion `json:"excluded"`
+	Items    []Suggestion          `json:"items"`
+	MealSlot *MealSlot             `json:"mealSlot"`
+
+	// Today The owner's today the ranking used.
+	Today openapi_types.Date `json:"today"`
+}
+
+// SuggestionMissing defines model for SuggestionMissing.
+type SuggestionMissing struct {
+	Amount *string `json:"amount"`
+	Name   string  `json:"name"`
+}
+
+// SuggestionReason defines model for SuggestionReason.
+type SuggestionReason struct {
+	// Kind `coverage`: ingredients at home. `expiring`: uses food that expires soon. `method`: a preferred cooking method. `habit_planned`: planned before. `habit_bought`: its ingredients were bought lately. `slot`: fits (or not) the meal asked for. `recent`: planned within 3 days.
+	Kind SuggestionReasonKind `json:"kind"`
+
+	// Points What it adds to the score; negative for a penalty.
+	Points int `json:"points"`
+
+	// Text In words, such as "You have 4 of its 5 ingredients" or "Hähnchen expires tomorrow".
+	Text string `json:"text"`
+}
+
+// SuggestionReasonKind `coverage`: ingredients at home. `expiring`: uses food that expires soon. `method`: a preferred cooking method. `habit_planned`: planned before. `habit_bought`: its ingredients were bought lately. `slot`: fits (or not) the meal asked for. `recent`: planned within 3 days.
+type SuggestionReasonKind string
+
+// SuggestionUse defines model for SuggestionUse.
+type SuggestionUse struct {
+	// ExpiresInDays Days until it expires (0: today) when that is within 3 days; null otherwise.
+	ExpiresInDays *int                `json:"expiresInDays"`
+	ExpiresOn     *openapi_types.Date `json:"expiresOn"`
+
+	// Ingredient The recipe's ingredient.
+	Ingredient   string             `json:"ingredient"`
+	PantryItemId openapi_types.UUID `json:"pantryItemId"`
+
+	// PantryItemName The in-stock item that covers it.
+	PantryItemName string `json:"pantryItemName"`
+}
+
 // UpdatePantryItemRequest defines model for UpdatePantryItemRequest.
 type UpdatePantryItemRequest struct {
 	Amount    *string             `json:"amount,omitempty"`
@@ -914,12 +1203,15 @@ type UpdatePantryItemRequest struct {
 // UpdateRecipeRequest defines model for UpdateRecipeRequest.
 type UpdateRecipeRequest struct {
 	Ingredients *[]NewIngredient `json:"ingredients,omitempty"`
-	Note        *string          `json:"note,omitempty"`
-	Servings    *int             `json:"servings,omitempty"`
-	SourceUrl   *string          `json:"sourceUrl,omitempty"`
-	Steps       *string          `json:"steps,omitempty"`
-	Tags        *[]string        `json:"tags,omitempty"`
-	Title       *string          `json:"title,omitempty"`
+
+	// Methods Sets the methods (an empty list: none); null lets Food infer them again.
+	Methods   *[]CookingMethod `json:"methods,omitempty"`
+	Note      *string          `json:"note,omitempty"`
+	Servings  *int             `json:"servings,omitempty"`
+	SourceUrl *string          `json:"sourceUrl,omitempty"`
+	Steps     *string          `json:"steps,omitempty"`
+	Tags      *[]string        `json:"tags,omitempty"`
+	Title     *string          `json:"title,omitempty"`
 }
 
 // UpdateShoppingItemRequest Give the store by `storeId` or by `storeName`, not both; `storeId: null` removes it.
@@ -949,6 +1241,9 @@ type UpdateStoreRequest struct {
 	Name      *string `json:"name,omitempty"`
 	SortOrder *int    `json:"sortOrder,omitempty"`
 }
+
+// IdeaId defines model for IdeaId.
+type IdeaId = openapi_types.UUID
 
 // IdempotencyKey defines model for IdempotencyKey.
 type IdempotencyKey = string
@@ -987,6 +1282,30 @@ type CreateAisleRuleParams struct {
 
 // DeleteAisleRuleParams defines parameters for DeleteAisleRule.
 type DeleteAisleRuleParams struct {
+	// IdempotencyKey Makes the write safe to retry; see the API description.
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// ListIdeasParams defines parameters for ListIdeas.
+type ListIdeasParams struct {
+	State *IdeaState `form:"state,omitempty" json:"state,omitempty"`
+	Limit *int       `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// CreateIdeaParams defines parameters for CreateIdea.
+type CreateIdeaParams struct {
+	// IdempotencyKey Makes the write safe to retry; see the API description.
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// DismissIdeaParams defines parameters for DismissIdea.
+type DismissIdeaParams struct {
+	// IdempotencyKey Makes the write safe to retry; see the API description.
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// SaveIdeaParams defines parameters for SaveIdea.
+type SaveIdeaParams struct {
 	// IdempotencyKey Makes the write safe to retry; see the API description.
 	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
 }
@@ -1069,6 +1388,12 @@ type MarkPantryItemThrownAwayParams struct {
 
 // MarkPantryItemUsedUpParams defines parameters for MarkPantryItemUsedUp.
 type MarkPantryItemUsedUpParams struct {
+	// IdempotencyKey Makes the write safe to retry; see the API description.
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// UpdatePreferencesParams defines parameters for UpdatePreferences.
+type UpdatePreferencesParams struct {
 	// IdempotencyKey Makes the write safe to retry; see the API description.
 	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
 }
@@ -1204,8 +1529,17 @@ type UpdateStoreParams struct {
 	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
 }
 
+// ListSuggestionsParams defines parameters for ListSuggestions.
+type ListSuggestionsParams struct {
+	Limit    *int      `form:"limit,omitempty" json:"limit,omitempty"`
+	MealSlot *MealSlot `form:"mealSlot,omitempty" json:"mealSlot,omitempty"`
+}
+
 // CreateAisleRuleJSONRequestBody defines body for CreateAisleRule for application/json ContentType.
 type CreateAisleRuleJSONRequestBody = CreateAisleRuleRequest
+
+// CreateIdeaJSONRequestBody defines body for CreateIdea for application/json ContentType.
+type CreateIdeaJSONRequestBody = CreateIdeaRequest
 
 // SetMealPlanEntryJSONRequestBody defines body for SetMealPlanEntry for application/json ContentType.
 type SetMealPlanEntryJSONRequestBody = SetMealPlanEntryRequest
@@ -1218,6 +1552,9 @@ type UpdatePantryItemJSONRequestBody = UpdatePantryItemRequest
 
 // MarkPantryItemRunningLowJSONRequestBody defines body for MarkPantryItemRunningLow for application/json ContentType.
 type MarkPantryItemRunningLowJSONRequestBody = RunningLowRequest
+
+// UpdatePreferencesJSONRequestBody defines body for UpdatePreferences for application/json ContentType.
+type UpdatePreferencesJSONRequestBody = PreferencesRequest
 
 // CreateRecipeJSONRequestBody defines body for CreateRecipe for application/json ContentType.
 type CreateRecipeJSONRequestBody = CreateRecipeRequest
@@ -1266,6 +1603,21 @@ type ServerInterface interface {
 	// DeleteAisleRule Delete an aisle rule
 	// (DELETE /v1/aisle-rules/{ruleId})
 	DeleteAisleRule(c fiber.Ctx, ruleId RuleId, params DeleteAisleRuleParams) error
+	// ListIdeas List recipe ideas
+	// (GET /v1/ideas)
+	ListIdeas(c fiber.Ctx, params ListIdeasParams) error
+	// CreateIdea Suggest a recipe idea
+	// (POST /v1/ideas)
+	CreateIdea(c fiber.Ctx, params CreateIdeaParams) error
+	// GetIdea Get a recipe idea
+	// (GET /v1/ideas/{ideaId})
+	GetIdea(c fiber.Ctx, ideaId IdeaId) error
+	// DismissIdea Dismiss an idea
+	// (POST /v1/ideas/{ideaId}/dismiss)
+	DismissIdea(c fiber.Ctx, ideaId IdeaId, params DismissIdeaParams) error
+	// SaveIdea Save an idea as a recipe
+	// (POST /v1/ideas/{ideaId}/save)
+	SaveIdea(c fiber.Ctx, ideaId IdeaId, params SaveIdeaParams) error
 	// ListMealPlan List the meal plan
 	// (GET /v1/meal-plan)
 	ListMealPlan(c fiber.Ctx, params ListMealPlanParams) error
@@ -1308,6 +1660,12 @@ type ServerInterface interface {
 	// MarkPantryItemUsedUp Mark a pantry item used up
 	// (POST /v1/pantry-items/{itemId}/used-up)
 	MarkPantryItemUsedUp(c fiber.Ctx, itemId ItemId, params MarkPantryItemUsedUpParams) error
+	// GetPreferences Get the cooking preferences
+	// (GET /v1/preferences)
+	GetPreferences(c fiber.Ctx) error
+	// UpdatePreferences Set the cooking preferences
+	// (PUT /v1/preferences)
+	UpdatePreferences(c fiber.Ctx, params UpdatePreferencesParams) error
 	// ListRecipes List or find recipes
 	// (GET /v1/recipes)
 	ListRecipes(c fiber.Ctx, params ListRecipesParams) error
@@ -1383,6 +1741,9 @@ type ServerInterface interface {
 	// UpdateStore Rename, reorder, or archive a store
 	// (PATCH /v1/stores/{storeId})
 	UpdateStore(c fiber.Ctx, storeId StoreId, params UpdateStoreParams) error
+	// ListSuggestions Suggest saved recipes to cook
+	// (GET /v1/suggestions)
+	ListSuggestions(c fiber.Ctx, params ListSuggestionsParams) error
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -1512,6 +1873,224 @@ func (siw *ServerInterfaceWrapper) DeleteAisleRule(c fiber.Ctx) error {
 
 	handler := func(c fiber.Ctx) error {
 		return siw.Handler.DeleteAisleRule(c, ruleId, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// ListIdeas operation middleware
+func (siw *ServerInterfaceWrapper) ListIdeas(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListIdeasParams
+
+	var query url.Values
+	query, err = url.ParseQuery(string(c.Request().URI().QueryString()))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for query string: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "state" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "state", query, &params.State, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter state: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", query, &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter limit: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.ListIdeas(c, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// CreateIdea operation middleware
+func (siw *ServerInterfaceWrapper) CreateIdea(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreateIdeaParams
+
+	headers := c.GetReqHeaders()
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("Too many values for ParamName Idempotency-Key, 1 is required, but %d found", n))
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter Idempotency-Key: %w", err).Error())
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.CreateIdea(c, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// GetIdea operation middleware
+func (siw *ServerInterfaceWrapper) GetIdea(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "ideaId" -------------
+	var ideaId IdeaId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "ideaId", c.Params("ideaId"), &ideaId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter ideaId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.GetIdea(c, ideaId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// DismissIdea operation middleware
+func (siw *ServerInterfaceWrapper) DismissIdea(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "ideaId" -------------
+	var ideaId IdeaId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "ideaId", c.Params("ideaId"), &ideaId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter ideaId: %w", err).Error())
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DismissIdeaParams
+
+	headers := c.GetReqHeaders()
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("Too many values for ParamName Idempotency-Key, 1 is required, but %d found", n))
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter Idempotency-Key: %w", err).Error())
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.DismissIdea(c, ideaId, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// SaveIdea operation middleware
+func (siw *ServerInterfaceWrapper) SaveIdea(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "ideaId" -------------
+	var ideaId IdeaId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "ideaId", c.Params("ideaId"), &ideaId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter ideaId: %w", err).Error())
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params SaveIdeaParams
+
+	headers := c.GetReqHeaders()
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("Too many values for ParamName Idempotency-Key, 1 is required, but %d found", n))
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter Idempotency-Key: %w", err).Error())
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.SaveIdea(c, ideaId, params)
 	}
 
 	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
@@ -2193,6 +2772,67 @@ func (siw *ServerInterfaceWrapper) MarkPantryItemUsedUp(c fiber.Ctx) error {
 
 	handler := func(c fiber.Ctx) error {
 		return siw.Handler.MarkPantryItemUsedUp(c, itemId, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// GetPreferences operation middleware
+func (siw *ServerInterfaceWrapper) GetPreferences(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.GetPreferences(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// UpdatePreferences operation middleware
+func (siw *ServerInterfaceWrapper) UpdatePreferences(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdatePreferencesParams
+
+	headers := c.GetReqHeaders()
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("Too many values for ParamName Idempotency-Key, 1 is required, but %d found", n))
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter Idempotency-Key: %w", err).Error())
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.UpdatePreferences(c, params)
 	}
 
 	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
@@ -3310,6 +3950,50 @@ func (siw *ServerInterfaceWrapper) UpdateStore(c fiber.Ctx) error {
 	return handler(c)
 }
 
+// ListSuggestions operation middleware
+func (siw *ServerInterfaceWrapper) ListSuggestions(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListSuggestionsParams
+
+	var query url.Values
+	query, err = url.ParseQuery(string(c.Request().URI().QueryString()))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for query string: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", query, &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter limit: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "mealSlot" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "mealSlot", query, &params.MealSlot, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter mealSlot: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.ListSuggestions(c, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
 // FiberServerOptions provides options for the Fiber server.
 type FiberServerOptions struct {
 	BaseURL            string
@@ -3414,6 +4098,22 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	router.Delete(options.BaseURL+"/v1/meal-plan/:date/:slot", wrapper.ClearMealPlanEntry)
 
 	router.Put(options.BaseURL+"/v1/meal-plan/:date/:slot", wrapper.SetMealPlanEntry)
+
+	router.Get(options.BaseURL+"/v1/preferences", wrapper.GetPreferences)
+
+	router.Put(options.BaseURL+"/v1/preferences", wrapper.UpdatePreferences)
+
+	router.Get(options.BaseURL+"/v1/suggestions", wrapper.ListSuggestions)
+
+	router.Get(options.BaseURL+"/v1/ideas", wrapper.ListIdeas)
+
+	router.Post(options.BaseURL+"/v1/ideas", wrapper.CreateIdea)
+
+	router.Get(options.BaseURL+"/v1/ideas/:ideaId", wrapper.GetIdea)
+
+	router.Post(options.BaseURL+"/v1/ideas/:ideaId/save", wrapper.SaveIdea)
+
+	router.Post(options.BaseURL+"/v1/ideas/:ideaId/dismiss", wrapper.DismissIdea)
 
 	router.Get(options.BaseURL+"/v1/notifications/status", wrapper.GetNotificationStatus)
 

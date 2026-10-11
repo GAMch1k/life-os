@@ -28,6 +28,10 @@ type Config struct {
 	// lift the protection against reaching internal services for those
 	// hosts; never set it on the deployed stack.
 	AllowHosts string `env:"RECIPE_IMPORT_ALLOW_HOSTS"`
+	// MealDBURL is TheMealDB's API (with its public test key); its host
+	// must be TheMealDB's or one of AllowHosts (the verification stack's
+	// fixture server).
+	MealDBURL string `env:"RECIPE_IMPORT_MEALDB_URL" default:"https://www.themealdb.com/api/json/v1/1/"`
 }
 
 // Load reads Config from the process environment.

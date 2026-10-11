@@ -47,6 +47,10 @@ const (
 	recipeDeleted        = "food.recipe.deleted"
 	mealPlanned          = "food.meal_plan.set"
 	mealCleared          = "food.meal_plan.cleared"
+	preferencesUpdated   = "food.preferences.updated"
+	ideaCreated          = "food.idea.created"
+	ideaSaved            = "food.idea.saved"
+	ideaDismissed        = "food.idea.dismissed"
 )
 
 // emit records one event with the request's actor, correlation, and
@@ -76,7 +80,7 @@ func newEvent(eventType, id string, once bool) activity.Event {
 func quoted(text string) string { return "“" + activity.Preview(text, 80) + "”" }
 
 func labels(changes []string) string {
-	names := map[string]string{"storeId": "store", "storeName": "store", "sortOrder": "sort order", "expiresOn": "expiry date", "openedOn": "opened date", "sourceUrl": "source URL"}
+	names := map[string]string{"storeId": "store", "storeName": "store", "sortOrder": "sort order", "expiresOn": "expiry date", "openedOn": "opened date", "sourceUrl": "source URL", "dietaryNotes": "dietary notes"}
 	out := make([]string, 0, len(changes))
 	for _, change := range changes {
 		if label, ok := names[change]; ok {
@@ -330,4 +334,37 @@ func plural(count int64, word string) string {
 		return word
 	}
 	return word + "s"
+}
+
+// preferencesEvent records a change of the cooking preferences; changes
+// names what changed (methods, dislikes, dietaryNotes).
+func preferencesEvent(preferences store.FoodPreference, changes []string) activity.Event {
+	event := newEvent(preferencesUpdated, "preferences", false)
+	event.Subject = activity.Subject{Type: "food_preferences", ID: "preferences"}
+	event.Data = map[string]any{"methods": preferences.Methods, "dislikes": len(preferences.Dislikes), "changes": changes}
+	event.Summary = "Cooking preferences updated: " + labels(changes)
+	return event
+}
+
+// ideaEvent describes a recipe idea: suggested, saved as a recipe, or
+// dismissed.
+func ideaEvent(eventType string, idea store.FoodIdea) activity.Event {
+	id := uuid(idea.ID).String()
+	event := newEvent(eventType, id, true)
+	event.Subject = activity.Subject{Type: "food_idea", ID: id}
+	event.Data = map[string]any{"title": activity.Preview(idea.Title, 200), "source": idea.Source, "state": idea.State}
+	if idea.RecipeID.Valid {
+		event.Data["recipeId"] = uuid(idea.RecipeID).String()
+	}
+	name := quoted(idea.Title)
+	switch eventType {
+	case ideaCreated:
+		event.Data["reason"] = activity.Preview(idea.Reason, 200)
+		event.Summary = "Recipe idea " + name + ": " + activity.Preview(idea.Reason, 200)
+	case ideaSaved:
+		event.Summary = "Saved the idea " + name + " as a recipe"
+	case ideaDismissed:
+		event.Summary = "Dismissed the idea " + name
+	}
+	return event
 }

@@ -11,6 +11,7 @@ import (
 	serviceconfig "github.com/GAMch1k/life-os/services/recipe-import/internal/config"
 	"github.com/GAMch1k/life-os/services/recipe-import/internal/fetch"
 	"github.com/GAMch1k/life-os/services/recipe-import/internal/food"
+	"github.com/GAMch1k/life-os/services/recipe-import/internal/mealdb"
 )
 
 func main() {
@@ -33,7 +34,13 @@ func run(_ context.Context) error {
 	// No database: recipe-import keeps nothing; the recipes are Food's.
 	app := httpserver.New(cfg.ServiceName, httpserver.WithLogger(logger))
 	fetcher := fetch.New(int64(cfg.MaxBytes), cfg.Timeout(), cfg.AllowedHosts())
-	api.Register(app, api.NewHandler(fetcher, food.New(cfg.FoodURL), activity.NewEmitter(cfg.ActivityURL, "recipe-import", logger), logger))
+	// TheMealDB only, through the same guard; its answers are cached.
+	discovery, err := mealdb.New(cfg.MealDBURL, fetcher, mealdb.DefaultTTL, cfg.AllowedHosts())
+	if err != nil {
+		return fmt.Errorf("configure TheMealDB: %w", err)
+	}
+	handler := api.NewHandler(fetcher, food.New(cfg.FoodURL), activity.NewEmitter(cfg.ActivityURL, "recipe-import", logger), logger).WithDiscovery(discovery)
+	api.Register(app, handler)
 
 	return app.Run(fmt.Sprintf(":%d", cfg.Port))
 }
