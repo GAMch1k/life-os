@@ -47,6 +47,18 @@ paths:
       parameters: [{name: taskId, in: path, required: true, schema: {type: string, format: uuid}}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateTaskRequest'}}}}
       responses: {'200': {description: Task, content: {application/json: {schema: {$ref: '#/components/schemas/Task'}}}}, '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}, '404': {description: Task not found}}
+    delete:
+      summary: Delete a task
+      description: >-
+        Removes the Task permanently, open or completed; a recurring Task is
+        one Task, so its whole series goes. Complete it instead to keep it as
+        history. A deleted Task is in no listing, search, or notification
+        from then on; Activity keeps its `task.deleted` event with the title.
+        Deleting is a deliberate Dashboard action: MCP has no tool for it.
+      operationId: deleteTask
+      security: []
+      parameters: [{name: taskId, in: path, required: true, schema: {type: string, format: uuid}}]
+      responses: {'204': {description: Task deleted}, '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}, '404': {description: Task not found}}
   /v1/tasks/{taskId}/complete:
     post:
       summary: Complete a task

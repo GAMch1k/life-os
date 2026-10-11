@@ -55,3 +55,10 @@ RETURNING *;
 UPDATE tasks SET completed_at = NULL, updated_at = now()
 WHERE id = $1
 RETURNING *;
+
+-- name: DeleteTask :one
+-- Removes the Task, a recurring one with its whole series, and returns it
+-- for the activity event. Nothing references a Task: notification log rows
+-- name it only inside their dedupe key and are pruned on their own.
+DELETE FROM tasks WHERE id = $1
+RETURNING *;

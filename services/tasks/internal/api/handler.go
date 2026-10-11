@@ -197,6 +197,19 @@ func (h *Handler) ReopenTask(c fiber.Ctx, id types.UUID) error {
 	return c.JSON(task(item))
 }
 
+// DeleteTask removes the Task for good (a recurring one with its series), so
+// it leaves every list and notification at once. The event carries what the
+// Task was, since nothing is left to look up; a Task is deleted only once, so
+// its id is deterministic.
+func (h *Handler) DeleteTask(c fiber.Ctx, id types.UUID) error {
+	item, err := h.queries.DeleteTask(c.Context(), pgUUID(id))
+	if err != nil {
+		return databaseError(err)
+	}
+	h.record(c, activity.EventID("task.deleted", uuid(item.ID).String()), "task.deleted", item, "deleted", nil)
+	return c.SendStatus(fiber.StatusNoContent)
+}
+
 // record emits a Task activity event after the mutation has persisted. The
 // request's correlation/causation/actor headers tie it to the workflow that
 // asked for it (for example an Inbox capture processed through MCP).

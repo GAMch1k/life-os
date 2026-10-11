@@ -17,6 +17,10 @@ type Querier interface {
 	ClaimNotificationRun(ctx context.Context, arg ClaimNotificationRunParams) (TaskNotificationDispatch, error)
 	CompleteTask(ctx context.Context, id pgtype.UUID) (Task, error)
 	CreateTask(ctx context.Context, arg CreateTaskParams) (Task, error)
+	// Removes the Task, a recurring one with its whole series, and returns it
+	// for the activity event. Nothing references a Task: notification log rows
+	// name it only inside their dedupe key and are pruned on their own.
+	DeleteTask(ctx context.Context, id pgtype.UUID) (Task, error)
 	// Moves the cursor and releases the lease, if owner still holds it. A run
 	// with an error keeps its message; one without records its success.
 	FinishNotificationRun(ctx context.Context, arg FinishNotificationRunParams) (int64, error)
