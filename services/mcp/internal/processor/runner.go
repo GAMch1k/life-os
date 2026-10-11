@@ -39,6 +39,9 @@ type Runner struct {
 	// searched from the start of the capture's day in it (or in the
 	// capture's own timezone). Nil means UTC.
 	TimeZone *time.Location
+	// Media reads a capture's images (InboxMedia) for Codex; nil plans
+	// without them.
+	Media mediaFetcher
 }
 type inboxList struct {
 	Items []inboxItem `json:"items"`
@@ -49,6 +52,7 @@ type inboxItem struct {
 	Content            string         `json:"content"`
 	Source             string         `json:"source"`
 	SourceMetadata     map[string]any `json:"sourceMetadata"`
+	MediaReferences    []string       `json:"mediaReferences"`
 	ProcessingMetadata map[string]any `json:"processingMetadata"`
 	CreatedAt          time.Time      `json:"createdAt"`
 }
@@ -133,12 +137,18 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 		parsed, approvedEvent = approvedCalendarTarget(parsed)
 		parsed, approvedFood = approvedFoodTarget(parsed)
 	} else {
+		// Without its images a capture could be misread: when Inbox cannot
+		// hand them over, it is retried later.
+		images, imagesErr := r.captureImages(ctx, item)
+		if imagesErr != nil {
+			return Proposal{}, r.retryLater(ctx, item.ID, started.ID, nil, "capture images unavailable: "+imagesErr.Error(), failureDependency, previous)
+		}
 		// The attempt is durable before Codex is spawned; its runtime record
 		// heartbeats until the outcome is stored.
 		runtime := r.trackRuntime(ctx, item.ID, started.ID, RuntimeSpawning)
 		defer runtime.close()
 		prompt, _ := json.Marshal(map[string]any{"content": item.Content, "source": item.Source, "sourceMetadata": item.SourceMetadata})
-		rawPlan, planErr := r.Planner.Plan(planContext(WithRunObserver(ctx, runtime), item), string(prompt))
+		rawPlan, planErr := r.Planner.Plan(WithImages(planContext(WithRunObserver(ctx, runtime), item), images), string(prompt))
 		runtime.finish(ctx, runtimeOutcome(ctx, planErr))
 		if planErr != nil {
 			if ctx.Err() != nil {
@@ -473,6 +483,14 @@ func reviewCandidates(found []map[string]any) []map[string]any {
 // planContext carries what planning needs to resolve the item's relative
 // dates: when it was captured, and the timezone it was captured in (the
 // capturing browser's, sourceMetadata.timeZone, when the client sent one).
+// captureImages reads the images of a capture that has any.
+func (r Runner) captureImages(ctx context.Context, item inboxItem) (CaptureImages, error) {
+	if r.Media == nil || len(item.MediaReferences) == 0 {
+		return CaptureImages{}, nil
+	}
+	return r.Media.Fetch(ctx, item.MediaReferences)
+}
+
 func planContext(ctx context.Context, item inboxItem) context.Context {
 	timeZone, _ := item.SourceMetadata["timeZone"].(string)
 	return WithCaptureTimeZone(WithCapturedAt(ctx, item.CreatedAt), timeZone)
@@ -528,8 +546,12 @@ func (r Runner) nextAttemptKey(ctx context.Context, itemID, key string) (bool, s
 	return false, fmt.Sprintf("%s.retry.%d", key, count+1), count, nil
 }
 func (r Runner) plan(ctx context.Context, item inboxItem) (Proposal, error) {
+	images, err := r.captureImages(ctx, item)
+	if err != nil {
+		return Proposal{}, err
+	}
 	prompt, _ := json.Marshal(map[string]any{"content": item.Content, "source": item.Source, "sourceMetadata": item.SourceMetadata})
-	raw, err := r.Planner.Plan(planContext(ctx, item), string(prompt))
+	raw, err := r.Planner.Plan(WithImages(planContext(ctx, item), images), string(prompt))
 	if err != nil {
 		return Proposal{}, err
 	}

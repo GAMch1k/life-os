@@ -64,3 +64,34 @@ func mapLookup(values map[string]string) func(string) (string, bool) {
 		return value, ok
 	}
 }
+
+func TestLoadFromReadsTheCaptureMediaSettings(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := LoadFrom(mapLookup(map[string]string{
+		"DATABASE_URL": "postgres://inbox_user:secret@localhost/inbox_db",
+	}))
+	if err != nil || cfg.MediaDir != "/var/lib/lifeos/inbox-media" || cfg.MaxImageBytes != 10<<20 {
+		t.Fatalf("defaults: %+v, err = %v", cfg, err)
+	}
+	// Five images at the limit, plus multipart framing.
+	if cfg.RequestBodyLimit() != 5*(10<<20)+(1<<20) {
+		t.Fatalf("body limit = %d", cfg.RequestBodyLimit())
+	}
+	cfg, err = LoadFrom(mapLookup(map[string]string{
+		"DATABASE_URL":          "postgres://inbox_user:secret@localhost/inbox_db",
+		"INBOX_MEDIA_DIR":       "/data/media",
+		"INBOX_MEDIA_MAX_BYTES": "2097152",
+	}))
+	if err != nil || cfg.MediaDir != "/data/media" || cfg.MaxImageBytes != 2<<20 {
+		t.Fatalf("configured: %+v, err = %v", cfg, err)
+	}
+	for _, value := range []string{"0", "20971521"} {
+		if _, err := LoadFrom(mapLookup(map[string]string{
+			"DATABASE_URL":          "postgres://inbox_user:secret@localhost/inbox_db",
+			"INBOX_MEDIA_MAX_BYTES": value,
+		})); err == nil || !strings.Contains(err.Error(), "INBOX_MEDIA_MAX_BYTES") {
+			t.Errorf("INBOX_MEDIA_MAX_BYTES=%s: err = %v", value, err)
+		}
+	}
+}

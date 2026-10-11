@@ -25,6 +25,13 @@ type InboxItem struct {
 	RetryReason        *string
 }
 
+type InboxMedium struct {
+	Sha256      string
+	ContentType string
+	ByteSize    int64
+	CreatedAt   pgtype.Timestamptz
+}
+
 type InboxProcessingAttempt struct {
 	ID                 pgtype.UUID
 	InboxItemID        pgtype.UUID

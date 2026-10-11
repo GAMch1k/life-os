@@ -80,9 +80,13 @@ services:
     depends_on: {postgres: {condition: service_healthy}}
     networks: [backend]
     restart: "no"
+  # Capture images (photos shared or attached to captures) live on the
+  # inbox-media volume, one file per image named by its SHA-256
+  # (docs/services/inbox.md#capture-images).
   inbox:
     build: {context: ., dockerfile: services/inbox/Dockerfile}
-    environment: {SERVICE_NAME: inbox, PORT: 8080, DATABASE_URL: "postgres://inbox_user:${LIFE_OS_INBOX_DB_PASSWORD}@postgres:5432/inbox_db?sslmode=disable", ACTIVITY_SERVICE_URL: "http://activity:8080", NOTIFICATIONS_SERVICE_URL: "http://notifications:8080"}
+    environment: {SERVICE_NAME: inbox, PORT: 8080, DATABASE_URL: "postgres://inbox_user:${LIFE_OS_INBOX_DB_PASSWORD}@postgres:5432/inbox_db?sslmode=disable", ACTIVITY_SERVICE_URL: "http://activity:8080", NOTIFICATIONS_SERVICE_URL: "http://notifications:8080", INBOX_MEDIA_DIR: /var/lib/lifeos/inbox-media, INBOX_MEDIA_MAX_BYTES: "${LIFE_OS_INBOX_MEDIA_MAX_BYTES:-10485760}"}
+    volumes: ["inbox-media:/var/lib/lifeos/inbox-media"]
     expose: ["8080"]
     depends_on: {inbox-migrate: {condition: service_completed_successfully}}
     networks: [backend]
@@ -456,6 +460,9 @@ services:
     build: {context: ., dockerfile: services/mcp/Dockerfile, target: processor}
     environment:
       MCP_SERVICE_URL: http://mcp:8080/mcp
+      # A capture's images are read from Inbox (GET /v1/media/{sha256}) and
+      # handed to Codex as files in the workdir, a tmpfs.
+      INBOX_SERVICE_URL: http://inbox:8080
       LIFE_OS_CODEX_WORKDIR: /workspace
       LIFE_OS_CODEX_MODEL: ${LIFE_OS_CODEX_MODEL:-gpt-5.6-luna}
       LIFE_OS_CODEX_REASONING_EFFORT: ${LIFE_OS_CODEX_REASONING_EFFORT:-medium}
@@ -475,6 +482,7 @@ services:
     tmpfs:
       - /tmp
       - /var/lib/lifeos/codex
+      - /workspace:size=128m
     expose: ["8081"]
     depends_on:
       mcp: {condition: service_started}
@@ -701,5 +709,7 @@ volumes:
     name: lifeos-whisper-models
   voice-audio:
     name: lifeos-voice-audio
+  inbox-media:
+    name: lifeos-inbox-media
   ntfy-data:
     name: lifeos-ntfy-data

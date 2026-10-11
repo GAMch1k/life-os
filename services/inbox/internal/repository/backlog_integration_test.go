@@ -2,55 +2,19 @@ package repository_test
 
 import (
 	"context"
-	"fmt"
-	"os"
-	"path/filepath"
-	"sort"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	store "github.com/GAMch1k/life-os/services/inbox/internal/repository/generated"
+	"github.com/GAMch1k/life-os/services/inbox/internal/testdb"
 )
 
 // migratedQueries applies every up migration in order to a throwaway schema.
 func migratedQueries(t *testing.T) (*store.Queries, *pgxpool.Pool) {
 	t.Helper()
-	url := os.Getenv("INBOX_TEST_DATABASE_URL")
-	if url == "" {
-		t.Skip("INBOX_TEST_DATABASE_URL is not set")
-	}
-	ctx := context.Background()
-	schema := fmt.Sprintf("inbox_test_%d", time.Now().UnixNano())
-	config, err := pgxpool.ParseConfig(url)
-	if err != nil {
-		t.Fatal(err)
-	}
-	config.ConnConfig.RuntimeParams["search_path"] = schema
-	pool, err := pgxpool.NewWithConfig(ctx, config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(pool.Close)
-	if _, err := pool.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DROP SCHEMA "+schema+" CASCADE") })
-	files, err := filepath.Glob(filepath.Join("..", "..", "db", "migrations", "*.up.sql"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	sort.Strings(files)
-	for _, file := range files {
-		migration, err := os.ReadFile(file)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := pool.Exec(ctx, string(migration)); err != nil {
-			t.Fatalf("%s: %v", file, err)
-		}
-	}
+	pool := testdb.Open(t, "inbox_test")
 	return store.New(pool), pool
 }
 
