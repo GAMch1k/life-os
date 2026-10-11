@@ -18,7 +18,7 @@ import (
 // owner's decision of 2026-10-11). Codex plans food_add_shopping_items,
 // food_add_pantry_items, food_mark_bought, and food_update_pantry_item; the
 // two changes of existing items name them only by search terms, like Task
-// and Calendar changes. Meals are planned with food_plan_meal and cleared
+// and Calendar changes. Staples and running low are in staples.go. Meals are planned with food_plan_meal and cleared
 // with food_clear_meal, and food_add_missing_ingredients puts what recipes
 // need on the list; a recipe is named only by words (recipeQuery), which
 // the processor resolves.
@@ -65,7 +65,7 @@ func isFoodMutation(action plannedAction) bool {
 
 // isFoodWrite reports whether a tool writes to Food.
 func isFoodWrite(tool string) bool {
-	return tool == "food_add_shopping_items" || tool == "food_add_pantry_items" || tool == "food_mark_bought" || tool == "food_update_pantry_item" || isMealTool(tool)
+	return tool == "food_add_shopping_items" || tool == "food_add_pantry_items" || tool == "food_mark_bought" || tool == "food_update_pantry_item" || isMealTool(tool) || isStapleTool(tool)
 }
 
 // isMealTool reports whether a tool plans or clears meals, or adds what
@@ -93,6 +93,9 @@ func isRecipeAction(action plannedAction) bool {
 func validFoodAction(action plannedAction) bool {
 	if isMealTool(action.Tool) {
 		return validMealAction(action)
+	}
+	if isStapleTool(action.Tool) {
+		return validStapleAction(action)
 	}
 	switch action.Tool {
 	case "food_mark_bought":
@@ -203,6 +206,16 @@ func (r Runner) findFoodItems(ctx context.Context, action plannedAction) ([]map[
 	if action.Tool == "food_update_pantry_item" {
 		tool, state = "food_list_pantry_items", "in_stock"
 	}
+	items, err := r.listFoodItems(ctx, tool, state)
+	if err != nil {
+		return nil, err
+	}
+	return matchFoodItems(items, searchTerms(action.Arguments, "itemQuery", "itemQueryAlternatives")), nil
+}
+
+// listFoodItems reads the whole shopping list or pantry in a state, page by
+// page, within foodListPages pages.
+func (r Runner) listFoodItems(ctx context.Context, tool, state string) ([]map[string]any, error) {
 	var items []map[string]any
 	cursor := ""
 	for page := 0; ; page++ {
@@ -227,11 +240,10 @@ func (r Runner) findFoodItems(ctx context.Context, action plannedAction) ([]map[
 		}
 		items = append(items, result.Items...)
 		if result.NextCursor == "" {
-			break
+			return items, nil
 		}
 		cursor = result.NextCursor
 	}
-	return matchFoodItems(items, searchTerms(action.Arguments, "itemQuery", "itemQueryAlternatives")), nil
 }
 
 // matchFoodItems is the items whose name one of the terms names, compared
@@ -282,12 +294,12 @@ func boughtTask(action plannedAction) (plannedAction, bool) {
 	return other, validAction(other)
 }
 
-// approvedFoodTarget takes the item or recipe the owner chose in Human
-// Review out of an approved Food change, meal, or missing ingredients
-// request. Inbox records the chosen candidate as taskId,
+// approvedFoodTarget takes the item, recipe, or staple the owner chose in
+// Human Review out of an approved Food change, meal, missing ingredients
+// request, or running-low or staple change. Inbox records the chosen candidate as taskId,
 // its one selection field.
 func approvedFoodTarget(approved plan) (plan, string) {
-	if len(approved.Actions) != 1 || !(isFoodMutation(approved.Actions[0]) || isRecipeAction(approved.Actions[0])) {
+	if len(approved.Actions) != 1 || !(isFoodMutation(approved.Actions[0]) || isRecipeAction(approved.Actions[0]) || isNamedFoodAction(approved.Actions[0])) {
 		return approved, ""
 	}
 	arguments := approved.Actions[0].Arguments

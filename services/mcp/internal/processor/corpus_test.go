@@ -55,6 +55,8 @@ func (t *corpusTools) Call(_ context.Context, name string, args map[string]any) 
 		return json.RawMessage(`{"items":[{"id":"shop-1","name":"Молоко","state":"needed"}]}`), nil
 	case "food_list_pantry_items":
 		return json.RawMessage(`{"items":[{"id":"pantry-1","name":"Milch","state":"in_stock"}]}`), nil
+	case "food_list_staples":
+		return json.RawMessage(`{"items":[{"id":"staple-1","name":"Milch","normalizedName":"milch"}]}`), nil
 	case "food_list_recipes":
 		// The recipe book: Pasta Bolognese and Борщ.
 		q := strings.ToLower(args["q"].(string))
@@ -156,6 +158,16 @@ var foodCorpusPlans = map[string]string{
 	"buy milk and call mom tomorrow":   `{"actions":[{"tool":"food_add_shopping_items","arguments":{"items":[{"name":"milk"}]}},{"tool":"task_create","arguments":{"title":"Call mom","dueAt":"2026-10-12T00:00:00+02:00"}}],"confidence":0.95}`,
 	"buy a flash drive tomorrow":       `{"actions":[{"tool":"task_create","arguments":{"title":"Buy a flash drive","dueAt":"2026-10-12T00:00:00+02:00"}}],"confidence":0.95}`,
 	"купить зарядку для телефона":      `{"actions":[{"tool":"task_create","arguments":{"title":"Купить зарядку для телефона"}}],"confidence":0.95}`,
+	// Staples and running low: the pantry and the staples have "Milch".
+	"мясо заканчивается":                     `{"actions":[{"tool":"food_mark_running_low","arguments":{"itemQuery":"мясо","itemQueryAlternatives":["мяс","meat","Fleisch"]}}],"confidence":0.9}`,
+	"молоко заканчивается, купи":             `{"actions":[{"tool":"food_mark_running_low","arguments":{"itemQuery":"молоко","itemQueryAlternatives":["молок","milk","Milch"],"addToList":true}}],"confidence":0.9}`,
+	"almost out of milk":                     `{"actions":[{"tool":"food_mark_running_low","arguments":{"itemQuery":"milk","itemQueryAlternatives":["Milch","молок"]}}],"confidence":0.9}`,
+	"fast keine Milch mehr":                  `{"actions":[{"tool":"food_mark_running_low","arguments":{"itemQuery":"Milch","itemQueryAlternatives":["milk","молок"]}}],"confidence":0.9}`,
+	"молоко всегда должно быть дома":         `{"actions":[{"tool":"food_add_staple","arguments":{"name":"молоко"}}],"confidence":0.9}`,
+	"milk is a staple, 2 l from Lidl":        `{"actions":[{"tool":"food_add_staple","arguments":{"name":"milk","amount":"2 l","storeName":"Lidl"}}],"confidence":0.9}`,
+	"Kaffee sollte ich immer zu Hause haben": `{"actions":[{"tool":"food_add_staple","arguments":{"name":"Kaffee"}}],"confidence":0.9}`,
+	"remove milk from staples":               `{"actions":[{"tool":"food_remove_staple","arguments":{"itemQuery":"milk","itemQueryAlternatives":["Milch","молок"]}}],"confidence":0.9}`,
+	"молоко больше не нужно держать дома":    `{"actions":[{"tool":"food_remove_staple","arguments":{"itemQuery":"молоко","itemQueryAlternatives":["молок","Milch","milk"]}}],"confidence":0.9}`,
 }
 
 func (foodCorpusPlanner) Plan(_ context.Context, input string) (string, error) {
@@ -187,6 +199,15 @@ func TestFoodRoutingCorpusUsesOnlyApprovedMCPTools(t *testing.T) {
 		{"mixed split", "buy milk and call mom tomorrow", []string{"food_add_shopping_items", "task_create"}, nil},
 		{"flash drive stays a task", "buy a flash drive tomorrow", []string{"task_create"}, []string{"food_add_shopping_items"}},
 		{"phone charger stays a task", "купить зарядку для телефона", []string{"task_create"}, []string{"food_add_shopping_items"}},
+		{"russian running low", "мясо заканчивается", []string{"food_list_staples", "food_list_pantry_items", "food_mark_running_low"}, []string{"food_update_pantry_item", "food_add_shopping_items", "task_create"}},
+		{"russian running low, buy it", "молоко заканчивается, купи", []string{"food_mark_running_low"}, []string{"food_add_shopping_items", "task_create"}},
+		{"english running low", "almost out of milk", []string{"food_mark_running_low"}, []string{"food_update_pantry_item", "food_add_shopping_items"}},
+		{"german running low", "fast keine Milch mehr", []string{"food_mark_running_low"}, []string{"food_update_pantry_item", "food_add_shopping_items"}},
+		{"russian new staple", "молоко всегда должно быть дома", []string{"food_add_staple"}, []string{"food_add_shopping_items", "task_create"}},
+		{"english new staple with amount and store", "milk is a staple, 2 l from Lidl", []string{"food_add_staple"}, []string{"food_add_shopping_items", "finance_create_manual_transaction"}},
+		{"german new staple", "Kaffee sollte ich immer zu Hause haben", []string{"food_add_staple"}, []string{"food_add_shopping_items", "task_create"}},
+		{"english staple removed", "remove milk from staples", []string{"food_list_staples", "food_remove_staple"}, []string{"food_list_pantry_items", "task_create"}},
+		{"russian staple removed", "молоко больше не нужно держать дома", []string{"food_remove_staple"}, []string{"food_update_pantry_item", "task_create"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

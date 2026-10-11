@@ -149,6 +149,11 @@ run_profile() {
   local bolognese today
   bolognese=$(post_json /api/food/v1/recipes '{"title":"Pasta Bolognese","servings":4,"ingredients":[{"name":"Spaghetti","amount":"500 g"},{"name":"Hackfleisch","amount":"400 g"},{"name":"Tomaten","amount":"1 Dose"}],"tags":["pasta"]}' | jq -r '.id')
   post_json /api/food/v1/pantry-items '{"items":[{"name":"Spaghetti","location":"pantry"}]}' >/dev/null
+  # A staple that runs low, and rice at home under its German name, which a
+  # Russian capture says is running low (no staple: only flagged).
+  local butter
+  butter=$(post_json /api/food/v1/staples '{"name":"Butter"}' | jq -r '.id')
+  post_json /api/food/v1/pantry-items '{"items":[{"name":"Reis","location":"pantry"}]}' >/dev/null
   # Breakfast planned on the coming Saturday, which a capture cancels. Run
   # on a Saturday, "Saturday" may also mean a week later: both are planned,
   # and the capture clears one.
@@ -191,6 +196,9 @@ run_profile() {
   ids[meal_plan_ru_text]=$(capture "В пятницу на обед суп.")
   ids[meal_clear]=$(capture "Cancel Saturday breakfast.")
   ids[recipe_ingredients]=$(capture "Add the ingredients for the bolognese to the shopping list.")
+  ids[staple_running_low]=$(capture "Butter is almost gone.")
+  ids[running_low_nonstaple]=$(capture "Почти закончился рис.")
+  ids[staple_add]=$(capture "Kaffee sollte ich immer zu Hause haben.")
   ids[recipe_link_structured]=$(capture "Save this recipe: http://ics-fixture/gulasch.html")
   # Photos: a Finanzamt letter with a deadline, a cash receipt, and a card
   # receipt (tools/fixtures/documents).
@@ -378,12 +386,31 @@ run_profile() {
   local from_recipe
   from_recipe=$(jq --arg recipe "$bolognese" '[.items[] | select(.state == "needed" and (.normalizedName == "hackfleisch" or .normalizedName == "tomaten") and .source == "recipe" and .sourceRef == $recipe)] | length' <<<"$list")
   check recipe_ingredients "$([ "$s" = resolved ] && [ "$(listed hackfleisch)" = 1 ] && [ "$(listed tomaten)" = 1 ] && [ "$from_recipe" = 2 ] && [ "$(jq '[.items[] | select(.normalizedName == "spaghetti")] | length' <<<"$list")" = 0 ] && echo 1 || echo 0)" "state=$s minced_meat=$(listed hackfleisch) tomatoes=$(listed tomaten) from_recipe=$from_recipe"
+  # staple_running_low: the staple Butter went back on the list by itself,
+  # once, as the staple's item (not the capture's).
+  s=$(state "${ids[staple_running_low]}")
+  local from_staple
+  from_staple=$(jq --arg staple "$butter" '[.items[] | select(.state == "needed" and .normalizedName == "butter" and .source == "staple" and .sourceRef == $staple)] | length' <<<"$list")
+  check staple_running_low "$([ "$s" = resolved ] && [ "$(listed butter)" = 1 ] && [ "$from_staple" = 1 ] && echo 1 || echo 0)" "state=$s butter=$(listed butter) from_staple=$from_staple"
+  # running_low_nonstaple: the seeded "Reis" is flagged running low and
+  # still in stock; rice is no staple, so nothing went on the list.
+  s=$(state "${ids[running_low_nonstaple]}")
+  local rice
+  rice=$(jq -c '[.items[] | select(.normalizedName == "reis") | {state, runningLow}]' <<<"$pantry")
+  check running_low_nonstaple "$([ "$s" = resolved ] && [ "$rice" = '[{"state":"in_stock","runningLow":true}]' ] && [ "$(jq '[.items[] | select(.normalizedName | test("рис|reis|rice"))] | length' <<<"$list")" = 0 ] && echo 1 || echo 0)" "state=$s rice=$rice"
+  # staple_add: Kaffee is a staple now, and nothing went on the list.
+  s=$(state "${ids[staple_add]}")
+  local staples
+  staples=$(api "$gateway/api/food/v1/staples")
+  check staple_add "$([ "$s" = resolved ] && [ "$(jq '[.items[] | select(.normalizedName == "kaffee")] | length' <<<"$staples")" = 1 ] && [ "$(jq '[.items[] | select(.normalizedName | test("kaffee|coffee|кофе"))] | length' <<<"$list")" = 0 ] && echo 1 || echo 0)" "state=$s staples=$(jq -c '[.items[].name]' <<<"$staples")"
   # The seeded bananas plus milk, eggs, bread, cheese, toothpaste, shower
-  # gel, minced meat, and tomatoes, each once; the yoghurt and the seeded
-  # spaghetti in the pantry; Wednesday's dinner, Friday's lunch, and the
-  # Saturday breakfasts but the one cleared.
-  check no_extra_shopping_items "$([ "$(jq '.items | length' <<<"$list")" = 9 ] && [ "$(jq '[.items[].normalizedName] | unique | length' <<<"$list")" = 9 ] && echo 1 || echo 0)" "items=$(jq -c '[.items[] | {name, amount, storeName, state}]' <<<"$list") (expected 9)"
-  check no_extra_pantry_items "$([ "$(jq '.items | length' <<<"$pantry")" = 2 ] && echo 1 || echo 0)" "items=$(jq -c '[.items[] | {name, location, expiresOn}]' <<<"$pantry") (expected 2)"
+  # gel, minced meat, tomatoes, and the staple butter, each once; the
+  # yoghurt and the seeded spaghetti and rice in the pantry; the seeded
+  # butter and the new coffee as staples; Wednesday's dinner, Friday's
+  # lunch, and the Saturday breakfasts but the one cleared.
+  check no_extra_shopping_items "$([ "$(jq '.items | length' <<<"$list")" = 10 ] && [ "$(jq '[.items[].normalizedName] | unique | length' <<<"$list")" = 10 ] && echo 1 || echo 0)" "items=$(jq -c '[.items[] | {name, amount, storeName, state}]' <<<"$list") (expected 10)"
+  check no_extra_pantry_items "$([ "$(jq '.items | length' <<<"$pantry")" = 3 ] && echo 1 || echo 0)" "items=$(jq -c '[.items[] | {name, location, expiresOn}]' <<<"$pantry") (expected 3)"
+  check no_extra_staples "$([ "$(jq '.items | length' <<<"$staples")" = 2 ] && echo 1 || echo 0)" "staples=$(jq -c '[.items[].name]' <<<"$staples") (expected 2)"
   # Recipe links: a page's recipe, and a post's from its caption, each saved
   # once with the link as its source; the seeded recipe and these two only.
   local recipes
