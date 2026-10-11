@@ -37,6 +37,11 @@ const (
 	pantryItemThrownAway = "food.pantry_item.thrown_away"
 	pantryItemRestocked  = "food.pantry_item.restocked"
 	pantryItemDeleted    = "food.pantry_item.deleted"
+	recipeCreated        = "food.recipe.created"
+	recipeUpdated        = "food.recipe.updated"
+	recipeDeleted        = "food.recipe.deleted"
+	mealPlanned          = "food.meal_plan.set"
+	mealCleared          = "food.meal_plan.cleared"
 )
 
 // emit records one event with the request's actor, correlation, and
@@ -66,7 +71,7 @@ func newEvent(eventType, id string, once bool) activity.Event {
 func quoted(text string) string { return "“" + activity.Preview(text, 80) + "”" }
 
 func labels(changes []string) string {
-	names := map[string]string{"storeId": "store", "storeName": "store", "sortOrder": "sort order", "expiresOn": "expiry date", "openedOn": "opened date"}
+	names := map[string]string{"storeId": "store", "storeName": "store", "sortOrder": "sort order", "expiresOn": "expiry date", "openedOn": "opened date", "sourceUrl": "source URL"}
 	out := make([]string, 0, len(changes))
 	for _, change := range changes {
 		if label, ok := names[change]; ok {
@@ -226,6 +231,55 @@ func pantryEvent(eventType string, item store.PantryItem, changes []string) acti
 		event.Summary = name + " is back in stock"
 	case pantryItemDeleted:
 		event.Summary = "Deleted pantry item " + name
+	}
+	return event
+}
+
+// recipeEvent describes a recipe change; changes lists what an update
+// changed.
+func recipeEvent(eventType string, recipe store.Recipe, ingredients int, changes []string) activity.Event {
+	id := uuid(recipe.ID).String()
+	event := newEvent(eventType, id, eventType != recipeUpdated)
+	event.Subject = activity.Subject{Type: "food_recipe", ID: id}
+	event.Data = map[string]any{"title": activity.Preview(recipe.Title, 200), "ingredients": ingredients, "tags": recipe.Tags}
+	if recipe.Servings != nil {
+		event.Data["servings"] = *recipe.Servings
+	}
+	if changes != nil {
+		event.Data["changes"] = changes
+	}
+	name := quoted(recipe.Title)
+	event.Summary = map[string]string{
+		recipeCreated: fmt.Sprintf("Recipe %s created (%d %s)", name, ingredients, plural(int64(ingredients), "ingredient")),
+		recipeUpdated: "Recipe " + name + " updated: " + labels(changes),
+		recipeDeleted: "Recipe " + name + " deleted",
+	}[eventType]
+	return event
+}
+
+// mealPlanEvent describes a meal planned in, or cleared from, a day's slot.
+// The subject is the slot (date and slot), so its history reads in order.
+func mealPlanEvent(eventType string, entry store.MealPlanEntry, previous *store.MealPlanEntry) activity.Event {
+	day := entry.Day.Time.Format(time.DateOnly)
+	event := newEvent(eventType, "", false)
+	event.Subject = activity.Subject{Type: "food_meal_plan", ID: day + ":" + entry.Slot}
+	event.Data = map[string]any{"date": day, "slot": entry.Slot, "title": activity.Preview(entry.Title, 200)}
+	if entry.RecipeID.Valid {
+		event.Data["recipeId"] = uuid(entry.RecipeID).String()
+	}
+	if entry.Servings != nil {
+		event.Data["servings"] = *entry.Servings
+	}
+	when := entry.Slot + " on " + entry.Day.Time.Format("Mon 2 Jan")
+	switch eventType {
+	case mealPlanned:
+		event.Summary = "Planned " + quoted(entry.Title) + " for " + when
+		if previous != nil && previous.Title != entry.Title {
+			event.Data["previousTitle"] = activity.Preview(previous.Title, 200)
+			event.Summary += ", replacing " + quoted(previous.Title)
+		}
+	case mealCleared:
+		event.Summary = "Cleared " + quoted(entry.Title) + " from " + when
 	}
 	return event
 }

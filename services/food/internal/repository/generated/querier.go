@@ -26,16 +26,22 @@ type Querier interface {
 	ClearBoughtShoppingItems(ctx context.Context, boughtBefore pgtype.Timestamptz) (int64, error)
 	CompleteIdempotencyKey(ctx context.Context, arg CompleteIdempotencyKeyParams) error
 	DeleteAisleRule(ctx context.Context, id pgtype.UUID) (AisleRule, error)
+	DeleteMealPlanEntry(ctx context.Context, arg DeleteMealPlanEntryParams) (MealPlanEntry, error)
 	DeletePantryItem(ctx context.Context, id pgtype.UUID) (PantryItem, error)
+	DeleteRecipe(ctx context.Context, id pgtype.UUID) (Recipe, error)
+	DeleteRecipeIngredients(ctx context.Context, recipeID pgtype.UUID) error
 	DeleteShoppingItem(ctx context.Context, id pgtype.UUID) (ShoppingItem, error)
 	// Moves the cursor and releases the lease, if owner still holds it. A run
 	// with an error keeps its message; one without records its success.
 	FinishNotificationRun(ctx context.Context, arg FinishNotificationRunParams) (int64, error)
 	GetIdempotencyKey(ctx context.Context, key string) (IdempotencyKey, error)
+	GetMealPlanEntryForUpdate(ctx context.Context, arg GetMealPlanEntryForUpdateParams) (MealPlanEntry, error)
 	GetNotificationDispatch(ctx context.Context) (FoodNotificationDispatch, error)
 	GetOpenShoppingItemByName(ctx context.Context, normalizedName string) (ShoppingItem, error)
 	GetPantryItem(ctx context.Context, id pgtype.UUID) (PantryItem, error)
 	GetPantryItemForUpdate(ctx context.Context, id pgtype.UUID) (PantryItem, error)
+	GetRecipe(ctx context.Context, id pgtype.UUID) (Recipe, error)
+	GetRecipeForUpdate(ctx context.Context, id pgtype.UUID) (Recipe, error)
 	GetShoppingItem(ctx context.Context, id pgtype.UUID) (ShoppingItem, error)
 	GetShoppingItemForUpdate(ctx context.Context, id pgtype.UUID) (ShoppingItem, error)
 	GetStore(ctx context.Context, id pgtype.UUID) (Store, error)
@@ -44,12 +50,21 @@ type Querier interface {
 	// Nothing is inserted (no row) when the keyword already has a rule.
 	InsertAisleRule(ctx context.Context, arg InsertAisleRuleParams) (AisleRule, error)
 	InsertPantryItem(ctx context.Context, arg InsertPantryItemParams) (PantryItem, error)
+	InsertRecipe(ctx context.Context, arg InsertRecipeParams) (Recipe, error)
+	InsertRecipeIngredient(ctx context.Context, arg InsertRecipeIngredientParams) error
 	// A new store goes after the others unless it names its place. Nothing is
 	// inserted (no row) when a store with the name already exists.
 	InsertStore(ctx context.Context, arg InsertStoreParams) (Store, error)
 	ListAisleRules(ctx context.Context, aisle *string) ([]AisleRule, error)
 	// Which of the given dedupe keys were already handled.
 	ListHandledNotifications(ctx context.Context, keys []string) ([]string, error)
+	// Which of the given normalised names are in stock in the pantry, with one
+	// such item each (the one expiring soonest).
+	ListInStockNames(ctx context.Context, names []string) ([]PantryItem, error)
+	// The meal plan from one day through another, by day, then slot.
+	ListMealPlan(ctx context.Context, arg ListMealPlanParams) ([]MealPlanEntry, error)
+	// The needed items with the given normalised names.
+	ListOpenShoppingItemsByName(ctx context.Context, names []string) ([]ShoppingItem, error)
 	// In-stock items first, soonest expiry first (no expiry last), then name;
 	// then ended items, the most recently ended first. expires_by keeps in-stock
 	// items that expire on or before that date (already expired ones too). The
@@ -59,6 +74,16 @@ type Querier interface {
 	// In-stock items that expire from one date through another, soonest first,
 	// then by name: what an expiry reminder names.
 	ListPantryItemsExpiringBetween(ctx context.Context, arg ListPantryItemsExpiringBetweenParams) ([]PantryItem, error)
+	// The recipes planned from one day through another, in plan order (a
+	// recipe planned twice is listed twice).
+	ListPlannedRecipeIDs(ctx context.Context, arg ListPlannedRecipeIDsParams) ([]pgtype.UUID, error)
+	// The ingredients of the given recipes, each recipe's in order.
+	ListRecipeIngredients(ctx context.Context, recipeIds []pgtype.UUID) ([]RecipeIngredient, error)
+	// Recipes by normalised title. title_words keeps recipes whose normalised
+	// title contains every word (also inside a word); tag keeps those with the
+	// tag; ingredient those with an ingredient whose normalised name contains
+	// it. after_* are the previous page's last recipe.
+	ListRecipes(ctx context.Context, arg ListRecipesParams) ([]Recipe, error)
 	// Open (needed) items first, by aisle, then name; then bought items, the
 	// most recently bought first. The after_* arguments are the previous page's
 	// last item: its state and, for an open item, its aisle rank and name, for a
@@ -72,12 +97,19 @@ type Querier interface {
 	PruneNotificationLog(ctx context.Context, before pgtype.Timestamptz) (int64, error)
 	// Records one reminder's outcome; 0 rows when it was already recorded.
 	RecordNotification(ctx context.Context, arg RecordNotificationParams) (int64, error)
+	// Keeps the meal plan's title of a recipe in step with the recipe.
+	RenameMealPlanRecipe(ctx context.Context, arg RenameMealPlanRecipeParams) error
 	// in_stock clears ended_at; an ended state keeps an earlier end when the item
 	// had already ended (used up, then marked thrown away instead).
 	SetPantryItemState(ctx context.Context, arg SetPantryItemStateParams) (PantryItem, error)
+	// Marks a recipe changed when only its ingredients did.
+	TouchRecipe(ctx context.Context, arg TouchRecipeParams) (Recipe, error)
 	UpdatePantryItem(ctx context.Context, arg UpdatePantryItemParams) (PantryItem, error)
+	UpdateRecipe(ctx context.Context, arg UpdateRecipeParams) (Recipe, error)
 	UpdateShoppingItem(ctx context.Context, arg UpdateShoppingItemParams) (ShoppingItem, error)
 	UpdateStore(ctx context.Context, arg UpdateStoreParams) (Store, error)
+	// Sets a day's slot, replacing what it held (the entry keeps its id).
+	UpsertMealPlanEntry(ctx context.Context, arg UpsertMealPlanEntryParams) (MealPlanEntry, error)
 }
 
 var _ Querier = (*Queries)(nil)
