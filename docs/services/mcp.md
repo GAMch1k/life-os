@@ -311,9 +311,27 @@ A capture can carry photos ([Inbox → Capture images](inbox.md#capture-images))
 
 - **Reading.** Before planning, the runner reads the capture's `mediaReferences` from Inbox on the private network (`GET /v1/media/{sha256}` at `INBOX_SERVICE_URL`, `http://inbox:8080`; 30 s per image). A run gets at most five images and 25 MiB in total; one Inbox no longer has, a non-image answer, or one beyond the limits is left out and counted. When Inbox cannot answer, the capture is retried later (a dependency failure) rather than planned without its photos. References that are not Inbox images are ignored, and a capture without images does not ask Inbox.
 - **Handing them over.** `CodexCLI` writes them to a directory of its own inside `LIFE_OS_CODEX_WORKDIR` (`capture-images-…/image-1.jpg`, `image-2.png`, …; in Compose the workdir `/workspace` is a 128 MB tmpfs of the read-only processor container) and passes each with `--image <file>`, before `-o`, which ends the list ahead of the prompt. The directory is removed when the run ends, however it ends; the deadline, cancellation, and process-group handling are unchanged.
-- **Prompt.** One line, only for a capture with images, just before the item: "The item comes with N attached image(s), which are part of the capture: read them together with its text.", plus how many could not be attached. Routing is unchanged: the photos inform the same plan the text would get. (Letters, documents, and receipts are a later ticket.)
+- **Prompt.** One line, only for a capture with images, just before the item: "The item comes with N attached image(s), which are part of the capture: read them together with its text.", plus how many could not be attached. The photos inform the same plan the text would get, with the rules for letters and receipts below.
+
+- **Keys.** A capture's image references (content hashes) are part of its processing key, the base of its attempts' and actions' idempotency keys, since photo captures often share the composer's placeholder text "Photo"; a capture without images keeps the key it always had.
 
 Tests: `images_test.go` checks the arguments and files a run gets (in the workdir, before `-o`, removed afterwards, the prompt line, none without images), the reading limits and failures, and that the runner plans with the images or retries when Inbox cannot give them.
+
+### Letters and receipts
+
+The owner lives in Germany and photographs paper letters (from authorities, insurers, the landlord, doctors; mostly in German) and receipts, shared from the phone or taken in the composer, often with no words (the text is then the composer's placeholder "Photo" or "2 photos", which the plan prompt treats as no text) or a short note such as "handle this" or "разберись". The plan prompt (P16-03) tells Codex, for images that show a document:
+- **A letter with a deadline** ("bis zum 30.10.2026", "innerhalb von 14 Tagen ab Zugang", Frist, Zahlungsziel) is `task_create` due that day (00:00 in the owner's timezone unless the letter names a time), titled with the sender as printed and the action, in the language of the capture's text, else English ("Finanzamt: send tax documents"). Its notes are 2 to 4 short lines: what the letter is about, its reference numbers (Aktenzeichen, Steuernummer, Kundennummer, Rechnungsnummer), any amount, and for a relative deadline whether it counts from the letter's printed date or, without one, from the capture date.
+- **An appointment** (Termin with a date, a time, and a place) is `calendar_create` with the place as `location`; a letter with both is both actions.
+- **A bill** (Rechnung with an amount, an IBAN, and a due date) is `task_create` "Pay <sender> <amount>" due on the due date. Life OS never pays; payments stay manual.
+- **A cash receipt** (Kassenbon showing BAR, Bargeld, or cash) is `finance_create_manual_transaction`: the total (SUMME) as the negative amount in cents, the receipt's currency, the merchant as `counterparty`, and `occurredOn` the receipt's date, in the Cash account (see [Finance](#finance)).
+- **A card receipt** (EC, Karte, girocard, Visa, Mastercard, kontaktlos) is a card payment: no action, and Human Review with "Card and bank payments arrive from the bank connection.", since the bank connection brings it.
+- **Anything unclear**, a document Codex cannot read or classify or one with nothing to do, goes to Human Review with a short description of it as the reason ("A letter from AOK with no deadline: what should I do with it?").
+- **The capture's text steers** and wins over these defaults: "just save the deadline" plans only that Task, "это оплачено" leaves nothing to pay. Other photos (a handwritten note, a shopping list, a product) follow the usual rules for what they show.
+- **Privacy.** A document's text is never copied into a title or notes: Codex summarizes and keeps only the key numbers.
+
+The actions are the usual ones and validated as such; nothing else is image-specific. Receipts' items are not matched against the shopping list (that would mark items bought from abbreviated receipt lines, one list read per line, and fall back to Tasks; left out on purpose).
+
+The [AI runtime benchmark](../verification/ai-runtime-benchmark.md) photographs three synthetic documents drawn by `tools/fixtures/documents` (a Finanzamt letter with a deadline, a REWE cash receipt, a girocard receipt), and `make processor-codex-actions-smoke` captures the cash receipt end to end: one −23.47 EUR REWE transaction on 10 October 2026 in the Cash account.
 
 ### Lifecycle
 
