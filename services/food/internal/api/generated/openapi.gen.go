@@ -302,6 +302,40 @@ type ErrorResponse struct {
 	RequestId string `json:"request_id"`
 }
 
+// FoodNotificationStatus defines model for FoodNotificationStatus.
+type FoodNotificationStatus struct {
+	// Enabled Whether Food sends expiry reminders: false when NOTIFICATIONS_SERVICE_URL is not set.
+	Enabled bool `json:"enabled"`
+
+	// ExpiryTime When the daily expiry reminder is due, HH:MM.
+	ExpiryTime string `json:"expiryTime"`
+
+	// GraceMinutes How late a reminder may still be sent after Food was down; older ones are recorded as missed.
+	GraceMinutes int `json:"graceMinutes"`
+
+	// HandledThrough Every reminder due up to this instant has been sent, recorded as missed or empty, or refused by Notifications; null before the first run.
+	HandledThrough *time.Time `json:"handledThrough"`
+
+	// IntervalSeconds How often due reminders are looked for.
+	IntervalSeconds int `json:"intervalSeconds"`
+
+	// LastError The last run error, kept until the next one: current when lastErrorAt is after lastSuccessAt.
+	LastError   *string    `json:"lastError"`
+	LastErrorAt *time.Time `json:"lastErrorAt"`
+
+	// LastRunAt When a run last started.
+	LastRunAt *time.Time `json:"lastRunAt"`
+
+	// LastSentAt When a run last sent a reminder.
+	LastSentAt *time.Time `json:"lastSentAt"`
+
+	// LastSuccessAt When a run last finished without an error.
+	LastSuccessAt *time.Time `json:"lastSuccessAt"`
+
+	// TimeZone The owner's timezone expiryTime is in (LIFE_OS_TIMEZONE).
+	TimeZone string `json:"timeZone"`
+}
+
 // ItemSource `manual`: added directly (the Dashboard, a tool). `capture`: added from a capture such as an Inbox item; `sourceRef` names it.
 type ItemSource string
 
@@ -385,6 +419,28 @@ type PantryItemState string
 
 // PantryLocation defines model for PantryLocation.
 type PantryLocation string
+
+// PutAwayItem defines model for PutAwayItem.
+type PutAwayItem struct {
+	// Amount Replaces the shopping item's amount; empty means none. Without it the pantry item keeps the shopping item's amount.
+	Amount    *string             `json:"amount,omitempty"`
+	ExpiresOn *openapi_types.Date `json:"expiresOn,omitempty"`
+
+	// Id A bought shopping item.
+	Id       openapi_types.UUID `json:"id"`
+	Location *PantryLocation    `json:"location,omitempty"`
+}
+
+// PutAwayRequest defines model for PutAwayRequest.
+type PutAwayRequest struct {
+	Items []PutAwayItem `json:"items"`
+}
+
+// PutAwayResponse defines model for PutAwayResponse.
+type PutAwayResponse struct {
+	// Items The new pantry items in the request's order.
+	Items []PantryItem `json:"items"`
+}
 
 // ShoppingItem defines model for ShoppingItem.
 type ShoppingItem struct {
@@ -592,6 +648,12 @@ type ClearBoughtShoppingItemsParams struct {
 	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
 }
 
+// PutAwayShoppingItemsParams defines parameters for PutAwayShoppingItems.
+type PutAwayShoppingItemsParams struct {
+	// IdempotencyKey Makes the write safe to retry; see the API description.
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
 // DeleteShoppingItemParams defines parameters for DeleteShoppingItem.
 type DeleteShoppingItemParams struct {
 	// IdempotencyKey Makes the write safe to retry; see the API description.
@@ -648,6 +710,9 @@ type AddShoppingItemsJSONRequestBody = AddShoppingItemsRequest
 // ClearBoughtShoppingItemsJSONRequestBody defines body for ClearBoughtShoppingItems for application/json ContentType.
 type ClearBoughtShoppingItemsJSONRequestBody = ClearBoughtRequest
 
+// PutAwayShoppingItemsJSONRequestBody defines body for PutAwayShoppingItems for application/json ContentType.
+type PutAwayShoppingItemsJSONRequestBody = PutAwayRequest
+
 // UpdateShoppingItemJSONRequestBody defines body for UpdateShoppingItem for application/json ContentType.
 type UpdateShoppingItemJSONRequestBody = UpdateShoppingItemRequest
 
@@ -668,6 +733,9 @@ type ServerInterface interface {
 	// DeleteAisleRule Delete an aisle rule
 	// (DELETE /v1/aisle-rules/{ruleId})
 	DeleteAisleRule(c fiber.Ctx, ruleId RuleId, params DeleteAisleRuleParams) error
+	// GetNotificationStatus Get the expiry reminders' health
+	// (GET /v1/notifications/status)
+	GetNotificationStatus(c fiber.Ctx) error
 	// ListPantryItems List pantry items
 	// (GET /v1/pantry-items)
 	ListPantryItems(c fiber.Ctx, params ListPantryItemsParams) error
@@ -701,6 +769,9 @@ type ServerInterface interface {
 	// ClearBoughtShoppingItems Clear bought items
 	// (POST /v1/shopping-items/clear-bought)
 	ClearBoughtShoppingItems(c fiber.Ctx, params ClearBoughtShoppingItemsParams) error
+	// PutAwayShoppingItems Put bought items away in the pantry
+	// (POST /v1/shopping-items/put-away)
+	PutAwayShoppingItems(c fiber.Ctx, params PutAwayShoppingItemsParams) error
 	// DeleteShoppingItem Delete a shopping item
 	// (DELETE /v1/shopping-items/{itemId})
 	DeleteShoppingItem(c fiber.Ctx, itemId ItemId, params DeleteShoppingItemParams) error
@@ -857,6 +928,24 @@ func (siw *ServerInterfaceWrapper) DeleteAisleRule(c fiber.Ctx) error {
 
 	handler := func(c fiber.Ctx) error {
 		return siw.Handler.DeleteAisleRule(c, ruleId, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// GetNotificationStatus operation middleware
+func (siw *ServerInterfaceWrapper) GetNotificationStatus(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.GetNotificationStatus(c)
 	}
 
 	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
@@ -1413,6 +1502,49 @@ func (siw *ServerInterfaceWrapper) ClearBoughtShoppingItems(c fiber.Ctx) error {
 	return handler(c)
 }
 
+// PutAwayShoppingItems operation middleware
+func (siw *ServerInterfaceWrapper) PutAwayShoppingItems(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params PutAwayShoppingItemsParams
+
+	headers := c.GetReqHeaders()
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("Too many values for ParamName Idempotency-Key, 1 is required, but %d found", n))
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter Idempotency-Key: %w", err).Error())
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.PutAwayShoppingItems(c, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
 // DeleteShoppingItem operation middleware
 func (siw *ServerInterfaceWrapper) DeleteShoppingItem(c fiber.Ctx) error {
 
@@ -1835,6 +1967,8 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 
 	router.Post(options.BaseURL+"/v1/shopping-items/clear-bought", wrapper.ClearBoughtShoppingItems)
 
+	router.Post(options.BaseURL+"/v1/shopping-items/put-away", wrapper.PutAwayShoppingItems)
+
 	router.Delete(options.BaseURL+"/v1/shopping-items/:itemId", wrapper.DeleteShoppingItem)
 
 	router.Get(options.BaseURL+"/v1/shopping-items/:itemId", wrapper.GetShoppingItem)
@@ -1874,5 +2008,7 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	router.Post(options.BaseURL+"/v1/pantry-items/:itemId/thrown-away", wrapper.MarkPantryItemThrownAway)
 
 	router.Post(options.BaseURL+"/v1/pantry-items/:itemId/restock", wrapper.RestockPantryItem)
+
+	router.Get(options.BaseURL+"/v1/notifications/status", wrapper.GetNotificationStatus)
 
 }

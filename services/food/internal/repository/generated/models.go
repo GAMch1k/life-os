@@ -17,6 +17,26 @@ type AisleRule struct {
 	CreatedBy string
 }
 
+type FoodNotificationDispatch struct {
+	ID            bool
+	LastRunAt     pgtype.Timestamptz
+	LeaseOwner    *string
+	LeaseUntil    pgtype.Timestamptz
+	LastAttemptAt pgtype.Timestamptz
+	LastSuccessAt pgtype.Timestamptz
+	LastError     *string
+	LastErrorAt   pgtype.Timestamptz
+	LastSentAt    pgtype.Timestamptz
+	UpdatedAt     pgtype.Timestamptz
+}
+
+type FoodNotificationLog struct {
+	DedupeKey  string
+	DueAt      pgtype.Timestamptz
+	Outcome    string
+	RecordedAt pgtype.Timestamptz
+}
+
 type IdempotencyKey struct {
 	Key         string
 	RequestHash string

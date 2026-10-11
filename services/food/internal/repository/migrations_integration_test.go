@@ -17,12 +17,15 @@ func TestMigrationGoesDownAndUp(t *testing.T) {
 	if err := pool.QueryRow(ctx, "SELECT count(*) FROM aisle_rules WHERE created_by = 'system:food'").Scan(&rules); err != nil || rules < 150 {
 		t.Fatalf("%d built-in rules, %v", rules, err)
 	}
+	// Later migrations go down first.
+	testdb.Apply(t, pool, testdb.Migration(t, "000003", "down"))
 	testdb.Apply(t, pool, testdb.Migration(t, "000002", "down"))
 	var tables int
 	if err := pool.QueryRow(ctx, "SELECT count(*) FROM information_schema.tables WHERE table_schema = current_schema()").Scan(&tables); err != nil || tables != 0 {
 		t.Fatalf("%d tables left after down, %v", tables, err)
 	}
 	testdb.Apply(t, pool, testdb.Migration(t, "000002", "up"))
+	testdb.Apply(t, pool, testdb.Migration(t, "000003", "up"))
 	var again int
 	if err := pool.QueryRow(ctx, "SELECT count(*) FROM aisle_rules").Scan(&again); err != nil || again != rules {
 		t.Fatalf("%d rules after up, want %d, %v", again, rules, err)

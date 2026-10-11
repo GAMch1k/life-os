@@ -49,6 +49,9 @@ type Handler struct {
 	// lastPrune is when expired Idempotency-Keys were last pruned (Unix
 	// seconds; see pruneKeys).
 	lastPrune atomic.Int64
+	// notifications reports the expiry reminders' health (see
+	// WithNotifications).
+	notifications NotificationStatus
 }
 
 var _ generated.ServerInterface = (*Handler)(nil)

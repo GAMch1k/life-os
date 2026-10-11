@@ -17,6 +17,38 @@ func TestLoadFromAppliesDefaults(t *testing.T) {
 	if cfg.ServiceName != "food" || cfg.Port != 8080 || cfg.LogLevel != "info" || cfg.TimeZone != "UTC" || cfg.ActivityURL != "" {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
+	// Expiry reminders are off without Notifications, due at 08:00.
+	clock, err := cfg.ExpiryClock()
+	if cfg.NotificationsURL != "" || cfg.NotifyIntervalSeconds != 30 || cfg.NotifyGraceMinutes != 120 || err != nil || clock.String() != "08:00" {
+		t.Fatalf("unexpected reminder config: %+v, %s, %v", cfg, clock, err)
+	}
+}
+
+func TestExpiryReminderSettings(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := LoadFrom(mapLookup(map[string]string{
+		"DATABASE_URL":              "postgres://food_user:secret@localhost/food_db",
+		"NOTIFICATIONS_SERVICE_URL": "http://notifications:8080",
+		"FOOD_EXPIRY_TIME":          "07:30",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if clock, err := cfg.ExpiryClock(); err != nil || clock.String() != "07:30" || cfg.NotificationsURL != "http://notifications:8080" {
+		t.Fatalf("config = %+v, %s, %v", cfg, clock, err)
+	}
+	_, err = LoadFrom(mapLookup(map[string]string{
+		"DATABASE_URL":                 "postgres://food_user:secret@localhost/food_db",
+		"FOOD_EXPIRY_TIME":             "8am",
+		"FOOD_NOTIFY_INTERVAL_SECONDS": "1",
+		"FOOD_NOTIFY_GRACE_MINUTES":    "5",
+	}))
+	for _, want := range []string{"FOOD_EXPIRY_TIME", "FOOD_NOTIFY_INTERVAL_SECONDS", "FOOD_NOTIFY_GRACE_MINUTES"} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("error %v does not name %s", err, want)
+		}
+	}
 }
 
 func TestOwnerTimeZone(t *testing.T) {

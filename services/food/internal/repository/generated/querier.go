@@ -19,12 +19,20 @@ type Querier interface {
 	// key this waits for it; once that one has committed, nothing is inserted and
 	// no row is returned, and the caller reads the stored response instead.
 	ClaimIdempotencyKey(ctx context.Context, arg ClaimIdempotencyKeyParams) (string, error)
+	// Takes the dispatcher's lease until lease_until, creating the state row on
+	// the first run. Returns no row while another process holds an unexpired
+	// lease.
+	ClaimNotificationRun(ctx context.Context, arg ClaimNotificationRunParams) (FoodNotificationDispatch, error)
 	ClearBoughtShoppingItems(ctx context.Context, boughtBefore pgtype.Timestamptz) (int64, error)
 	CompleteIdempotencyKey(ctx context.Context, arg CompleteIdempotencyKeyParams) error
 	DeleteAisleRule(ctx context.Context, id pgtype.UUID) (AisleRule, error)
 	DeletePantryItem(ctx context.Context, id pgtype.UUID) (PantryItem, error)
 	DeleteShoppingItem(ctx context.Context, id pgtype.UUID) (ShoppingItem, error)
+	// Moves the cursor and releases the lease, if owner still holds it. A run
+	// with an error keeps its message; one without records its success.
+	FinishNotificationRun(ctx context.Context, arg FinishNotificationRunParams) (int64, error)
 	GetIdempotencyKey(ctx context.Context, key string) (IdempotencyKey, error)
+	GetNotificationDispatch(ctx context.Context) (FoodNotificationDispatch, error)
 	GetOpenShoppingItemByName(ctx context.Context, normalizedName string) (ShoppingItem, error)
 	GetPantryItem(ctx context.Context, id pgtype.UUID) (PantryItem, error)
 	GetPantryItemForUpdate(ctx context.Context, id pgtype.UUID) (PantryItem, error)
@@ -40,12 +48,17 @@ type Querier interface {
 	// inserted (no row) when a store with the name already exists.
 	InsertStore(ctx context.Context, arg InsertStoreParams) (Store, error)
 	ListAisleRules(ctx context.Context, aisle *string) ([]AisleRule, error)
+	// Which of the given dedupe keys were already handled.
+	ListHandledNotifications(ctx context.Context, keys []string) ([]string, error)
 	// In-stock items first, soonest expiry first (no expiry last), then name;
 	// then ended items, the most recently ended first. expires_by keeps in-stock
 	// items that expire on or before that date (already expired ones too). The
 	// after_* arguments are the previous page's last item: whether it was in
 	// stock and, if so, its expiry (infinity for none) and name, else its end.
 	ListPantryItems(ctx context.Context, arg ListPantryItemsParams) ([]PantryItem, error)
+	// In-stock items that expire from one date through another, soonest first,
+	// then by name: what an expiry reminder names.
+	ListPantryItemsExpiringBetween(ctx context.Context, arg ListPantryItemsExpiringBetweenParams) ([]PantryItem, error)
 	// Open (needed) items first, by aisle, then name; then bought items, the
 	// most recently bought first. The after_* arguments are the previous page's
 	// last item: its state and, for an open item, its aisle rank and name, for a
@@ -56,6 +69,9 @@ type Querier interface {
 	MarkShoppingItemNeeded(ctx context.Context, arg MarkShoppingItemNeededParams) (ShoppingItem, error)
 	Ping(ctx context.Context) (int32, error)
 	PruneIdempotencyKeys(ctx context.Context, before pgtype.Timestamptz) error
+	PruneNotificationLog(ctx context.Context, before pgtype.Timestamptz) (int64, error)
+	// Records one reminder's outcome; 0 rows when it was already recorded.
+	RecordNotification(ctx context.Context, arg RecordNotificationParams) (int64, error)
 	// in_stock clears ended_at; an ended state keeps an earlier end when the item
 	// had already ended (used up, then marked thrown away instead).
 	SetPantryItemState(ctx context.Context, arg SetPantryItemStateParams) (PantryItem, error)
