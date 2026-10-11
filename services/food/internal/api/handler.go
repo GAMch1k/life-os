@@ -177,7 +177,7 @@ func itemSource(source *generated.ItemSource, ref *string) (string, *string, err
 	kind := generated.ItemSourceManual
 	if source != nil {
 		if !source.Valid() {
-			return "", nil, invalid("source must be manual, capture, or recipe")
+			return "", nil, invalid("source must be manual, capture, recipe, or staple")
 		}
 		kind = *source
 	}

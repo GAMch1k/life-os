@@ -223,7 +223,7 @@ func (q *Queries) InsertRecipeIngredient(ctx context.Context, arg InsertRecipeIn
 }
 
 const listInStockNames = `-- name: ListInStockNames :many
-SELECT DISTINCT ON (normalized_name) id, name, normalized_name, amount, location, expires_on, opened_on, note, state, ended_at, source, source_ref, from_shopping_item_id, created_at, updated_at, created_by, updated_by FROM pantry_items
+SELECT DISTINCT ON (normalized_name) id, name, normalized_name, amount, location, expires_on, opened_on, note, state, ended_at, source, source_ref, from_shopping_item_id, created_at, updated_at, created_by, updated_by, running_low_at FROM pantry_items
 WHERE state = 'in_stock' AND normalized_name = ANY($1::text[])
 ORDER BY normalized_name, COALESCE(expires_on, 'infinity'::date), id
 `
@@ -257,6 +257,7 @@ func (q *Queries) ListInStockNames(ctx context.Context, names []string) ([]Pantr
 			&i.UpdatedAt,
 			&i.CreatedBy,
 			&i.UpdatedBy,
+			&i.RunningLowAt,
 		); err != nil {
 			return nil, err
 		}

@@ -37,6 +37,11 @@ const (
 	pantryItemThrownAway = "food.pantry_item.thrown_away"
 	pantryItemRestocked  = "food.pantry_item.restocked"
 	pantryItemDeleted    = "food.pantry_item.deleted"
+	pantryItemRunningLow = "food.pantry_item.running_low"
+	pantryItemNotLow     = "food.pantry_item.running_low_cleared"
+	stapleCreated        = "food.staple.created"
+	stapleUpdated        = "food.staple.updated"
+	stapleDeleted        = "food.staple.deleted"
 	recipeCreated        = "food.recipe.created"
 	recipeUpdated        = "food.recipe.updated"
 	recipeDeleted        = "food.recipe.deleted"
@@ -231,7 +236,43 @@ func pantryEvent(eventType string, item store.PantryItem, changes []string) acti
 		event.Summary = name + " is back in stock"
 	case pantryItemDeleted:
 		event.Summary = "Deleted pantry item " + name
+	case pantryItemRunningLow:
+		event.Summary = name + " is running low"
+	case pantryItemNotLow:
+		event.Summary = name + " is no longer running low"
 	}
+	return event
+}
+
+// stapleEvent describes a staple change; changes lists what an update
+// changed.
+func stapleEvent(eventType string, staple store.Staple, storeName *string, changes []string) activity.Event {
+	id := uuid(staple.ID).String()
+	event := newEvent(eventType, id, eventType != stapleUpdated)
+	event.Subject = activity.Subject{Type: "food_staple", ID: id}
+	data := map[string]any{"name": activity.Preview(staple.Name, 200), "normalizedName": staple.NormalizedName}
+	if staple.Amount != nil {
+		data["amount"] = *staple.Amount
+	}
+	if staple.StoreID.Valid {
+		data["storeId"] = uuid(staple.StoreID).String()
+	}
+	if storeName != nil {
+		data["storeName"] = activity.Preview(*storeName, 200)
+	}
+	if staple.Aisle != nil {
+		data["aisle"] = *staple.Aisle
+	}
+	if changes != nil {
+		data["changes"] = changes
+	}
+	event.Data = data
+	name := quoted(staple.Name)
+	event.Summary = map[string]string{
+		stapleCreated: name + " is now a staple",
+		stapleUpdated: "Staple " + name + " updated: " + labels(changes),
+		stapleDeleted: name + " is no longer a staple",
+	}[eventType]
 	return event
 }
 

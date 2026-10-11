@@ -8,6 +8,7 @@ SELECT * FROM pantry_items
 WHERE (sqlc.narg(state)::text IS NULL OR state = sqlc.narg(state)::text)
   AND (sqlc.narg(location)::text IS NULL OR location = sqlc.narg(location)::text)
   AND (sqlc.narg(expires_by)::date IS NULL OR (state = 'in_stock' AND expires_on <= sqlc.narg(expires_by)::date))
+  AND (sqlc.narg(running_low)::boolean IS NULL OR (running_low_at IS NOT NULL) = sqlc.narg(running_low)::boolean)
   AND (
     sqlc.narg(after_in_stock)::boolean IS NULL
     OR (sqlc.narg(after_in_stock)::boolean AND (state <> 'in_stock'
@@ -44,10 +45,12 @@ RETURNING *;
 
 -- name: SetPantryItemState :one
 -- in_stock clears ended_at; an ended state keeps an earlier end when the item
--- had already ended (used up, then marked thrown away instead).
+-- had already ended (used up, then marked thrown away instead). A change of
+-- state clears the running-low flag.
 UPDATE pantry_items
 SET state = @state,
     ended_at = CASE WHEN @state::text = 'in_stock' THEN NULL ELSE COALESCE(ended_at, now()) END,
+    running_low_at = NULL,
     updated_at = now(), updated_by = @actor
 WHERE id = @id
 RETURNING *;

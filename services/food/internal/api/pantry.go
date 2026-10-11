@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -23,6 +24,7 @@ func pantryView(item store.PantryItem) generated.PantryItem {
 		Id: uuid(item.ID), Name: item.Name, NormalizedName: item.NormalizedName, Amount: item.Amount,
 		Location: generated.PantryLocation(item.Location), ExpiresOn: nullableDate(item.ExpiresOn), OpenedOn: nullableDate(item.OpenedOn),
 		Note: item.Note, State: generated.PantryItemState(item.State), EndedAt: nullableTime(item.EndedAt),
+		RunningLow: item.RunningLowAt.Valid, RunningLowAt: nullableTime(item.RunningLowAt),
 		Source: generated.ItemSource(item.Source), SourceRef: item.SourceRef, FromShoppingItemId: nullableUUID(item.FromShoppingItemID),
 		CreatedAt: item.CreatedAt.Time.UTC(), UpdatedAt: item.UpdatedAt.Time.UTC(),
 		CreatedBy: actorOf(item.CreatedBy), UpdatedBy: actorOf(item.UpdatedBy),
@@ -55,6 +57,7 @@ func (h *Handler) ListPantryItems(c fiber.Ctx, params generated.ListPantryItemsP
 	if query.Location, err = locationFilter(params.Location); err != nil {
 		return err
 	}
+	query.RunningLow = params.RunningLow
 	if days := params.ExpiringWithinDays; days != nil {
 		if *days < 0 || *days > expiringLimit {
 			return invalid(fmt.Sprintf("expiringWithinDays must be between 0 and %d", expiringLimit))
@@ -173,6 +176,11 @@ func (h *Handler) AddPantryItems(c fiber.Ctx, _ generated.AddPantryItemsParams) 
 			}
 			response.Items = append(response.Items, pantryView(item))
 			events = append(events, pantryEvent(pantryItemAdded, item, nil))
+			cleared, err := moreAtHome(ctx, q, actor, item.NormalizedName)
+			if err != nil {
+				return result{}, err
+			}
+			events = append(events, cleared...)
 		}
 		return result{status: fiber.StatusCreated, body: response, events: events}, nil
 	})
@@ -281,8 +289,28 @@ func (h *Handler) RestockPantryItem(c fiber.Ctx, itemID generated.ItemId, _ gene
 	return h.setPantryState(c, itemID, "in_stock", pantryItemRestocked)
 }
 
+// pantryResult is a pantry item with what went on the list by itself.
+func pantryResult(item store.PantryItem, restock *generated.Restock) generated.PantryItemResult {
+	view := pantryView(item)
+	return generated.PantryItemResult{
+		Id: view.Id, Name: view.Name, NormalizedName: view.NormalizedName, Amount: view.Amount, Location: view.Location,
+		ExpiresOn: view.ExpiresOn, OpenedOn: view.OpenedOn, Note: view.Note, State: view.State,
+		EndedAt: view.EndedAt, RunningLow: view.RunningLow, RunningLowAt: view.RunningLowAt,
+		Source: generated.ItemSource(view.Source), SourceRef: view.SourceRef, FromShoppingItemId: view.FromShoppingItemId,
+		CreatedAt: view.CreatedAt, UpdatedAt: view.UpdatedAt, CreatedBy: view.CreatedBy, UpdatedBy: view.UpdatedBy,
+		Restock: restock,
+	}
+}
+
+// endReasons are the states that put a staple back on the list.
+var endReasons = map[string]generated.RestockReason{
+	"used_up":     generated.RestockReasonUsedUp,
+	"thrown_away": generated.RestockReasonThrownAway,
+}
+
 // setPantryState moves an item to state; an item already there is returned
-// unchanged and records nothing.
+// unchanged and records nothing. An item whose name is a staple that is used
+// up or thrown away puts the staple on the list.
 func (h *Handler) setPantryState(c fiber.Ctx, itemID generated.ItemId, state, eventType string) error {
 	actor := requestActor(c)
 	return h.write(c, func(ctx context.Context, q *store.Queries) (result, error) {
@@ -294,13 +322,84 @@ func (h *Handler) setPantryState(c fiber.Ctx, itemID generated.ItemId, state, ev
 			return result{}, err
 		}
 		if current.State == state {
-			return result{status: fiber.StatusOK, body: pantryView(current)}, nil
+			return result{status: fiber.StatusOK, body: pantryResult(current, nil)}, nil
 		}
 		item, err := q.SetPantryItemState(ctx, store.SetPantryItemStateParams{ID: current.ID, State: state, Actor: actor})
 		if err != nil {
 			return result{}, err
 		}
-		return result{status: fiber.StatusOK, body: pantryView(item), events: []activity.Event{pantryEvent(eventType, item, nil)}}, nil
+		events := []activity.Event{pantryEvent(eventType, item, nil)}
+		var restock *generated.Restock
+		if reason, ok := endReasons[state]; ok {
+			var restockEvents []activity.Event
+			if restock, restockEvents, err = h.restock(ctx, q, actor, item.Name, item.NormalizedName, reason, false); err != nil {
+				return result{}, err
+			}
+			events = append(events, restockEvents...)
+		}
+		return result{status: fiber.StatusOK, body: pantryResult(item, restock), events: events}, nil
+	})
+}
+
+func notInStock(name string) error {
+	return apiError(fiber.StatusConflict, "not_in_stock", quoted(name)+" is not in stock")
+}
+
+// MarkPantryItemRunningLow flags an in-stock item as running low and puts
+// its staple, or with addToList the item, on the list.
+func (h *Handler) MarkPantryItemRunningLow(c fiber.Ctx, itemID generated.ItemId, _ generated.MarkPantryItemRunningLowParams) error {
+	var body generated.RunningLowRequest
+	if len(bytes.TrimSpace(c.Body())) > 0 {
+		if _, err := decodeObject(c.Body(), &body); err != nil {
+			return invalid(err.Error())
+		}
+	}
+	force := body.AddToList != nil && *body.AddToList
+	actor := requestActor(c)
+	return h.write(c, func(ctx context.Context, q *store.Queries) (result, error) {
+		item, err := q.GetPantryItemForUpdate(ctx, pgUUID(itemID))
+		if errors.Is(err, pgx.ErrNoRows) {
+			return result{}, notFound("Pantry item")
+		}
+		if err != nil {
+			return result{}, err
+		}
+		if item.State != "in_stock" {
+			return result{}, notInStock(item.Name)
+		}
+		var events []activity.Event
+		if !item.RunningLowAt.Valid {
+			if item, err = q.SetPantryItemRunningLow(ctx, store.SetPantryItemRunningLowParams{ID: item.ID, Running: true, Actor: actor}); err != nil {
+				return result{}, err
+			}
+			events = append(events, pantryEvent(pantryItemRunningLow, item, nil))
+		}
+		restock, restockEvents, err := h.restock(ctx, q, actor, item.Name, item.NormalizedName, generated.RestockReasonRunningLow, force)
+		if err != nil {
+			return result{}, err
+		}
+		return result{status: fiber.StatusOK, body: pantryResult(item, restock), events: append(events, restockEvents...)}, nil
+	})
+}
+
+// ClearPantryItemRunningLow clears the flag; what went on the list stays.
+func (h *Handler) ClearPantryItemRunningLow(c fiber.Ctx, itemID generated.ItemId, _ generated.ClearPantryItemRunningLowParams) error {
+	actor := requestActor(c)
+	return h.write(c, func(ctx context.Context, q *store.Queries) (result, error) {
+		item, err := q.GetPantryItemForUpdate(ctx, pgUUID(itemID))
+		if errors.Is(err, pgx.ErrNoRows) {
+			return result{}, notFound("Pantry item")
+		}
+		if err != nil {
+			return result{}, err
+		}
+		if !item.RunningLowAt.Valid {
+			return result{status: fiber.StatusOK, body: pantryResult(item, nil)}, nil
+		}
+		if item, err = q.SetPantryItemRunningLow(ctx, store.SetPantryItemRunningLowParams{ID: item.ID, Running: false, Actor: actor}); err != nil {
+			return result{}, err
+		}
+		return result{status: fiber.StatusOK, body: pantryResult(item, nil), events: []activity.Event{pantryEvent(pantryItemNotLow, item, nil)}}, nil
 	})
 }
 

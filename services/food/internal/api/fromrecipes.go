@@ -187,11 +187,11 @@ func missingIngredients(ctx context.Context, q *store.Queries, request fromRecip
 	results := make([]generated.IngredientResult, len(needs))
 	for index, need := range needs {
 		results[index] = generated.IngredientResult{Name: need.name, NormalizedName: need.normalized, Amount: joinAmounts(need.amounts),
-			Recipes: need.recipes, Status: generated.Added}
+			Recipes: need.recipes, Status: generated.IngredientStatusAdded}
 		if item, ok := inPantry[need.normalized]; ok {
-			results[index].Status, results[index].PantryItem = generated.InPantry, pointer(pantryView(item))
+			results[index].Status, results[index].PantryItem = generated.IngredientStatusInPantry, pointer(pantryView(item))
 		} else if item, ok := onList[need.normalized]; ok {
-			results[index].Status, results[index].ShoppingItem = generated.OnList, pointer(shoppingView(item, storeNameMap))
+			results[index].Status, results[index].ShoppingItem = generated.IngredientStatusOnList, pointer(shoppingView(item, storeNameMap))
 		}
 	}
 	return needs, results, nil
@@ -225,7 +225,7 @@ func (h *Handler) AddShoppingItemsFromRecipes(c fiber.Ctx, _ generated.AddShoppi
 		var inputs []newShoppingItem
 		var positions []int
 		for index, need := range needs {
-			if results[index].Status != generated.Added {
+			if results[index].Status != generated.IngredientStatusAdded {
 				continue
 			}
 			inputs = append(inputs, newShoppingItem{name: need.name, normalized: need.normalized, amount: results[index].Amount,
@@ -243,7 +243,7 @@ func (h *Handler) AddShoppingItemsFromRecipes(c fiber.Ctx, _ generated.AddShoppi
 		for at, index := range positions {
 			response.Items[index].ShoppingItem = pointer(shoppingView(added.rows[at], added.names))
 			if added.merged[at] {
-				response.Items[index].Status = generated.Merged
+				response.Items[index].Status = generated.IngredientStatusMerged
 			}
 		}
 		return result{status: fiber.StatusOK, body: response, events: added.events}, nil

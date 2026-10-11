@@ -58,7 +58,7 @@ func TestPantryLifecycle(t *testing.T) {
 		t.Fatalf("added = %+v", added)
 	}
 	first := added[0]
-	if first.Location != generated.PantryLocationFridge || *first.Amount != "1 l" || first.State != generated.InStock || first.EndedAt != nil ||
+	if first.Location != generated.PantryLocationFridge || *first.Amount != "1 l" || first.State != generated.PantryItemStateInStock || first.EndedAt != nil ||
 		*first.FromShoppingItemId != milk.Id || first.Source != generated.ItemSourceCapture || *first.SourceRef != "inbox-7" ||
 		first.ExpiresOn.Format("2006-01-02") != "2026-10-15" {
 		t.Fatalf("first = %+v", first)
@@ -85,14 +85,14 @@ func TestPantryLifecycle(t *testing.T) {
 		t.Fatalf("opened = %+v", opened)
 	}
 	used := expect[generated.PantryItem](c, http.MethodPost, path+"/used-up", nil, http.StatusOK)
-	if used.State != generated.UsedUp || used.EndedAt == nil {
+	if used.State != generated.PantryItemStateUsedUp || used.EndedAt == nil {
 		t.Fatalf("used = %+v", used)
 	}
 	if again := expect[generated.PantryItem](c, http.MethodPost, path+"/used-up", nil, http.StatusOK); !again.EndedAt.Equal(*used.EndedAt) {
 		t.Fatalf("used again = %+v", again)
 	}
 	thrown := expect[generated.PantryItem](c, http.MethodPost, path+"/thrown-away", nil, http.StatusOK)
-	if thrown.State != generated.ThrownAway || !thrown.EndedAt.Equal(*used.EndedAt) {
+	if thrown.State != generated.PantryItemStateThrownAway || !thrown.EndedAt.Equal(*used.EndedAt) {
 		t.Fatalf("thrown = %+v", thrown)
 	}
 	// Ended items are kept, after the in-stock ones (no expiry: by name).
@@ -106,7 +106,7 @@ func TestPantryLifecycle(t *testing.T) {
 		t.Fatalf("in stock = %s", got)
 	}
 	restocked := expect[generated.PantryItem](c, http.MethodPost, path+"/restock", nil, http.StatusOK)
-	if restocked.State != generated.InStock || restocked.EndedAt != nil {
+	if restocked.State != generated.PantryItemStateInStock || restocked.EndedAt != nil {
 		t.Fatalf("restocked = %+v", restocked)
 	}
 
