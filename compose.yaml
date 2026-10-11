@@ -271,6 +271,7 @@ services:
       BANKING_SERVICE_URL: http://banking:8080
       GOOGLE_CALENDAR_SERVICE_URL: http://google-calendar:8080
       FOOD_SERVICE_URL: http://food:8080
+      BACKUP_SERVICE_URL: http://backup:8080
       LIFE_OS_TIMEZONE: ${LIFE_OS_TIMEZONE:-UTC}
     expose: ["3000"]
     depends_on:

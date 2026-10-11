@@ -1,7 +1,9 @@
 import { normalizeServiceUrl, serviceBaseUrls } from "@/config/services";
+import { backupClient } from "@/lib/api/backup-client";
 import { bankingClient } from "@/lib/api/banking-client";
 import { calendarClient } from "@/lib/api/calendar-client";
 import { calendarFeedsClient } from "@/lib/api/calendar-feeds-client";
+import type { components as BackupComponents } from "@/lib/api/generated/backup";
 import type { components as CalendarComponents } from "@/lib/api/generated/calendar";
 import type { components as CalendarFeedsComponents } from "@/lib/api/generated/calendar-feeds";
 import { googleCalendarClient } from "@/lib/api/google-calendar-client";
@@ -39,6 +41,7 @@ import { configuredTimeZone, userTimeZone } from "@/lib/user-time-zone";
 // - the reminder delivery health Calendar and Tasks report (their senders'
 //   last checks for due reminders),
 // - the banking integration's connections (consent and sync state),
+// - the backup service's status (the last backups and restore check),
 // - each owning service's /ready endpoint.
 // Nothing here is inferred from UI behaviour.
 
@@ -58,6 +61,8 @@ export type ReminderDelivery =
 /** Tasks' notification delivery health (`GET /v1/notifications/status`). */
 export type TaskNotifications =
   TasksComponents["schemas"]["TaskNotificationStatus"];
+/** The backup service's status (`GET /v1/status`). */
+export type BackupStatus = BackupComponents["schemas"]["BackupStatus"];
 
 /** Mirrors `Status` in services/mcp/internal/processor/status.go. */
 export type ProcessorStatus = {
@@ -252,6 +257,7 @@ export type StatusCheck = {
     | "calendar"
     | "notifications"
     | "banking"
+    | "backups"
     | "services";
   title: string;
   state: CheckState;
@@ -262,6 +268,8 @@ export type StatusCheck = {
   action?: string;
   facts: StatusFact[];
   parts?: StatusPart[];
+  /** A control the card offers: Backups' "Back up now". */
+  control?: { kind: "backup-now"; running: boolean };
 };
 
 export type RuntimeSignals = {
@@ -305,6 +313,11 @@ export type RuntimeSignals = {
    * not checked (the check is left out).
    */
   bankConnections?: BankConnectionList | null;
+  /**
+   * The backup service's status; null when it could not be read, absent
+   * when not checked (the check is left out).
+   */
+  backups?: BackupStatus | null;
   services: { name: string; ready: boolean }[];
 };
 
@@ -1539,6 +1552,331 @@ function bankingCheck(
   };
 }
 
+/** A full backup older than this needs attention… */
+export const BACKUP_RECENT_MS = 26 * 60 * 60 * 1000;
+/** …and older than this is a problem. */
+export const BACKUP_STALE_MS = 50 * 60 * 60 * 1000;
+/** Restore checks are owed at least this often once backups exist. */
+export const RESTORE_CHECK_DUE_MS = 8 * 24 * 60 * 60 * 1000;
+/** Less free space than this where backups are kept needs attention. */
+export const BACKUP_MIN_FREE_BYTES = 5_000_000_000;
+
+/** What to do when the backups have stopped. */
+export const BACKUP_STALLED =
+  "Check the backup service (docker compose logs backup), then use Back up now. See docs/operations/backups.md.";
+/** What to do when a restore check failed. */
+export const RESTORE_CHECK_FAILED =
+  "A backup that does not restore cannot be relied on. See the differences below and docs/operations/backups.md; check again with docker compose exec -T backup /service restore-check.";
+/** What to do when restore checks have stopped. */
+export const RESTORE_CHECK_OVERDUE =
+  "Run one with docker compose exec -T backup /service restore-check, and check that the backup service is running (docs/operations/backups.md).";
+/** What to do when the backup disk fills up. */
+export const BACKUP_DISK_LOW =
+  "Free space on that disk, or keep fewer backups (LIFE_OS_BACKUP_KEEP_*): a backup fails when the disk is full.";
+
+/** For example "1.2 GB" (powers of 1000, as disk sizes are sold). */
+export function formatBytes(bytes: number) {
+  const units = ["B", "kB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1000 && unit < units.length - 1) {
+    value /= 1000;
+    unit++;
+  }
+  return unit === 0
+    ? `${value} B`
+    : `${value >= 100 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
+}
+
+type BackupRun = BackupComponents["schemas"]["BackupRun"];
+type RestoreCheck = BackupComponents["schemas"]["RestoreCheck"];
+
+/** The databases of a run that failed, one line each with its error. */
+function failedDatabases(run: BackupRun) {
+  return run.databases.filter((database) => database.result !== "succeeded");
+}
+
+/** A failed or interrupted run, in words, with what to do. */
+function runFailure(run: BackupRun) {
+  if (run.result === "interrupted") {
+    return {
+      summary:
+        "The last backup was interrupted: the backup service stopped during it.",
+      detail: run.error,
+      action: "Nothing was lost; use Back up now, or wait for the next backup.",
+    };
+  }
+  const failed = failedDatabases(run);
+  const names = failed.map((database) => database.name);
+  return {
+    summary:
+      failed.length === 0
+        ? `The last backup failed: ${run.error ?? "no reason recorded"}.`
+        : failed.length === 1
+          ? `The last backup of ${names[0]} failed.`
+          : `The last backup of ${failed.length} databases failed: ${names.join(", ")}.`,
+    detail:
+      failed
+        .map((database) => `${database.name}: ${database.error ?? "failed"}`)
+        .join("\n") ||
+      run.error ||
+      undefined,
+    // The service's error says what to do ("lifeos_backup cannot connect to
+    // food_db: run make db-provision-backup"); the monitor sends the action.
+    action: failed[0]?.error
+      ? `${failed[0].error}${failed.length > 1 ? ` (and ${failed.length - 1} more below)` : ""}. Then use Back up now.`
+      : "See the error below and docs/operations/backups.md, then use Back up now.",
+  };
+}
+
+/** A failed restore check, in words, with each database's differences. */
+function checkFailure(check: RestoreCheck) {
+  const failed = check.databases.filter((database) => !database.ok);
+  const names = failed.map((database) => database.name);
+  return {
+    summary: failed.length
+      ? `The last restore check failed: ${names.join(", ")} did not restore as ${failed.length === 1 ? "its" : "their"} backup says.`
+      : `The last restore check failed: ${check.error ?? "no reason recorded"}.`,
+    detail:
+      failed
+        .map((database) =>
+          database.error
+            ? `${database.name}: ${database.error}`
+            : `${database.name}: ${database.mismatches.map((mismatch) => `${mismatch.subject}: expected ${mismatch.expected}, restored ${mismatch.actual}`).join("; ")}`,
+        )
+        .join("\n") ||
+      check.error ||
+      undefined,
+  };
+}
+
+function restoreCheckLabel(status: BackupStatus, timeZone: string) {
+  const check = status.lastRestoreCheck;
+  if (check) {
+    return `${check.ok ? "passed" : "failed"}, ${formatTime(check.finishedAt, timeZone)} (backup of ${formatTime(runStart(check.runId), timeZone)})`;
+  }
+  if (status.schedule.restoreCheckDay === "off") return "off";
+  return status.schedule.nextRestoreCheckAt
+    ? `not yet; after the backup of ${formatTime(status.schedule.nextRestoreCheckAt, timeZone)}`
+    : "not yet";
+}
+
+/** A run id (20261011T011500Z) as the instant it names. */
+function runStart(id: string) {
+  return `${id.slice(0, 4)}-${id.slice(4, 6)}-${id.slice(6, 8)}T${id.slice(9, 11)}:${id.slice(11, 13)}:${id.slice(13, 15)}Z`;
+}
+
+function backupFacts(
+  status: BackupStatus,
+  now: Date,
+  timeZone: string,
+): StatusFact[] {
+  const facts: StatusFact[] = [];
+  const last = status.lastSuccess;
+  if (status.running) {
+    const { completed, databases, current } = status.running;
+    facts.push({
+      label: "Backing up now",
+      value: `${current ?? "starting"} (${completed} of ${databases.length} done)`,
+    });
+  }
+  if (status.runningRestoreCheck) {
+    const { completed, databases, current } = status.runningRestoreCheck;
+    facts.push({
+      label: "Restore check now",
+      value: `${current ?? "starting"} (${completed} of ${databases.length} done)`,
+    });
+  }
+  facts.push({
+    label: "Last backup",
+    value: last
+      ? `${formatTime(last.startedAt, timeZone)} (${formatAge(now.getTime() - Date.parse(last.startedAt))} ago)`
+      : "none yet",
+  });
+  if (last) {
+    const backedUp = new Set(last.databases.map((database) => database.name));
+    const missing = status.databases.filter((name) => !backedUp.has(name));
+    facts.push({
+      label: "Databases",
+      value: missing.length
+        ? `${last.databases.length} of ${status.databases.length} (not in it yet: ${missing.join(", ")})`
+        : String(last.databases.length),
+    });
+  }
+  facts.push(
+    {
+      label: "Total size",
+      value: `${formatBytes(status.storage.totalBytes)} in ${status.storage.runs} ${status.storage.runs === 1 ? "backup" : "backups"}`,
+    },
+    {
+      label: "Next backup",
+      value: `${formatTime(status.schedule.nextRunAt, timeZone)}${status.schedule.nextTrigger === "catch-up" ? " (catching up)" : ""}`,
+    },
+    { label: "Last restore check", value: restoreCheckLabel(status, timeZone) },
+    {
+      label: "Retention",
+      value: `${status.retention.daily} daily, ${status.retention.weekly} weekly, ${status.retention.monthly} monthly`,
+    },
+    {
+      label: "Free disk",
+      value: `${formatBytes(status.storage.freeBytes)} of ${formatBytes(status.storage.sizeBytes)}`,
+    },
+  );
+  return facts;
+}
+
+type Issue = {
+  state: CheckState;
+  summary: string;
+  detail?: string;
+  action: string;
+};
+
+/**
+ * The Backups check. Left out (null) when the status cannot be read while
+ * Services already reports the backup service not ready, so one outage is
+ * one alert, as for the reminder parts.
+ */
+export function backupsCheck(
+  status: BackupStatus | null,
+  services: RuntimeSignals["services"],
+  now: Date,
+  timeZone: string,
+): StatusCheck | null {
+  const base = { id: "backups" as const, title: "Backups" };
+  if (status === null) {
+    const down = services.some(
+      (service) => service.name === "Backup" && !service.ready,
+    );
+    return down
+      ? null
+      : {
+          ...base,
+          state: "problem",
+          summary: "The backup status cannot be read.",
+          action: "Check the backup service logs (docker compose logs backup).",
+          facts: [],
+        };
+  }
+  const control = {
+    kind: "backup-now" as const,
+    running: Boolean(status.running || status.runningRestoreCheck),
+  };
+  const facts = backupFacts(status, now, timeZone);
+  const last = status.lastSuccess;
+  const lastRun = status.lastRun;
+  // The latest run, when it failed after the last success.
+  const failedRun =
+    lastRun &&
+    lastRun.result !== "succeeded" &&
+    (!last || Date.parse(lastRun.startedAt) > Date.parse(last.startedAt))
+      ? lastRun
+      : undefined;
+
+  if (!last) {
+    if (failedRun) {
+      const failure = runFailure(failedRun);
+      return {
+        ...base,
+        state: "warning",
+        summary: `No backup has succeeded yet. ${failure.summary}`,
+        detail: failure.detail,
+        action: failure.action,
+        facts,
+        control,
+      };
+    }
+    return {
+      ...base,
+      state: "neutral",
+      summary: status.running
+        ? "The first backup is running now."
+        : `No backup yet. The first one runs at ${formatTime(status.schedule.nextRunAt, timeZone)}.`,
+      facts,
+      control,
+    };
+  }
+
+  const age = now.getTime() - Date.parse(last.startedAt);
+  const check = status.lastRestoreCheck;
+  const issues: Issue[] = [];
+  const failure = failedRun ? runFailure(failedRun) : undefined;
+  if (age > BACKUP_RECENT_MS) {
+    issues.push({
+      state: age > BACKUP_STALE_MS ? "problem" : "warning",
+      summary: `The last backup is ${formatAge(age)} old.`,
+      detail: failure?.detail,
+      action: failure?.action ?? BACKUP_STALLED,
+    });
+  }
+  if (check && !check.ok) {
+    const { summary, detail } = checkFailure(check);
+    issues.push({
+      state: "problem",
+      summary,
+      detail,
+      action: RESTORE_CHECK_FAILED,
+    });
+  }
+  if (failure && age <= BACKUP_RECENT_MS) {
+    issues.push({ state: "warning", ...failure });
+  }
+  if (status.storage.freeBytes < BACKUP_MIN_FREE_BYTES) {
+    issues.push({
+      state: "warning",
+      summary: `Only ${formatBytes(status.storage.freeBytes)} is free where backups are kept.`,
+      action: BACKUP_DISK_LOW,
+    });
+  }
+  if (status.schedule.restoreCheckDay !== "off") {
+    const since = check
+      ? Date.parse(check.startedAt)
+      : status.oldestSuccessAt
+        ? Date.parse(status.oldestSuccessAt)
+        : now.getTime();
+    if (now.getTime() - since > RESTORE_CHECK_DUE_MS) {
+      issues.push({
+        state: "warning",
+        summary: check
+          ? `No restore check for ${formatAge(now.getTime() - since)}.`
+          : `No restore check has run in the ${formatAge(now.getTime() - since)} since backups began.`,
+        action: RESTORE_CHECK_OVERDUE,
+      });
+    }
+  }
+  if (issues.length === 0) {
+    return {
+      ...base,
+      state: "ok",
+      summary: `Last backup ${formatTime(last.startedAt, timeZone)} (${formatAge(age)} ago).`,
+      facts,
+      control,
+    };
+  }
+  const state = worst(issues.map((issue) => issue.state));
+  const [first, ...others] = [
+    ...issues.filter((issue) => issue.state === state),
+    ...issues.filter((issue) => issue.state !== state),
+  ];
+  return {
+    ...base,
+    state,
+    summary: first.summary,
+    detail: first.detail,
+    action: first.action,
+    facts: others.length
+      ? [
+          {
+            label: "Also",
+            value: others.map((issue) => issue.summary).join(" "),
+          },
+          ...facts,
+        ]
+      : facts,
+    control,
+  };
+}
+
 function servicesCheck(services: RuntimeSignals["services"]): StatusCheck {
   const down = services.filter((service) => !service.ready);
   return {
@@ -1600,8 +1938,11 @@ export function toRuntimeStatus(
     ...(signals.bankConnections === undefined
       ? []
       : [bankingCheck(signals.bankConnections, now, timeZone)]),
+    ...(signals.backups === undefined
+      ? []
+      : [backupsCheck(signals.backups, signals.services, now, timeZone)]),
     servicesCheck(signals.services),
-  ];
+  ].filter((check): check is StatusCheck => check !== null);
   return {
     checkedAt: now.toISOString(),
     timeZone,
@@ -1672,6 +2013,7 @@ const SERVICE_NAMES: Record<keyof typeof serviceBaseUrls, string> = {
   calendarFeeds: "Calendar feeds",
   googleCalendar: "Google Calendar",
   food: "Food",
+  backup: "Backup",
 };
 
 export async function getRuntimeStatus(): Promise<RuntimeStatus> {
@@ -1690,6 +2032,10 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
     .catch(() => null);
   const taskReminders = tasksClient
     .GET("/v1/notifications/status", timeout)
+    .then(({ data }) => data ?? null)
+    .catch(() => null);
+  const backups = backupClient
+    .GET("/v1/status", timeout)
     .then(({ data }) => data ?? null)
     .catch(() => null);
   const [
@@ -1750,6 +2096,7 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
       eventReminders: await eventReminders,
       taskReminders: await taskReminders,
       bankConnections: await bankConnections,
+      backups: await backups,
       services,
     },
     new Date(),
