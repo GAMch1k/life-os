@@ -22,11 +22,14 @@ import {
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { foodClient } from "@/lib/api/food-client";
 import { recipeImportClient } from "@/lib/api/recipe-import-client";
 import { load, upsert, writeHeader } from "@/lib/food";
 import { type ImportExtras, importOverrides } from "@/lib/food-import";
 import {
+  COOKING_METHODS,
+  type CookingMethod,
   type IngredientRow,
   type Recipe,
   type RecipeDraft,
@@ -414,6 +417,14 @@ function RecipeForm({
         </Field>
       </div>
 
+      {importFrom ? null : (
+        <MethodsField
+          detected={recipe?.methodsInferred ? recipe.methods : null}
+          methods={draft.methods}
+          onChange={(methods) => update({ methods })}
+        />
+      )}
+
       {errors.form ? (
         <p className="text-destructive text-sm" role="alert">
           {errors.form}
@@ -485,5 +496,63 @@ function RecipeForm({
         )}
       </DialogFooter>
     </form>
+  );
+}
+
+/**
+ * How the recipe is cooked: Food detects it from the title, tags, and
+ * steps ("air fryer", "Backofen", "сковорода") until the owner picks the
+ * methods here; "Detect again" hands it back to Food.
+ */
+function MethodsField({
+  methods,
+  detected,
+  onChange,
+}: {
+  /** As set; null while Food detects them. */
+  methods: CookingMethod[] | null;
+  /** What Food detected, for a saved recipe whose methods are detected. */
+  detected: CookingMethod[] | null;
+  onChange: (methods: CookingMethod[] | null) => void;
+}) {
+  const shown = methods ?? detected ?? [];
+  return (
+    <FieldSet>
+      <FieldLegend variant="label">Cooked in</FieldLegend>
+      <ToggleGroup
+        aria-label="Cooked in"
+        className="flex-wrap"
+        multiple
+        onValueChange={(value) => onChange(value as CookingMethod[])}
+        size="lg"
+        spacing={1}
+        value={shown}
+        variant="outline"
+      >
+        {COOKING_METHODS.map((method) => (
+          <ToggleGroupItem key={method.value} value={method.value}>
+            {method.label}
+          </ToggleGroupItem>
+        ))}
+      </ToggleGroup>
+      <FieldDescription>
+        {methods === null ? (
+          "Detected from the title, tags, and steps."
+        ) : (
+          <>
+            Set by you.{" "}
+            <Button
+              className="h-auto p-0"
+              onClick={() => onChange(null)}
+              size="sm"
+              type="button"
+              variant="link"
+            >
+              Detect again
+            </Button>
+          </>
+        )}
+      </FieldDescription>
+    </FieldSet>
   );
 }

@@ -42,6 +42,11 @@ type PantryItem = {
 };
 type Store = { id: string; name: string; archived: boolean };
 type Staple = { id: string; name: string };
+type Idea = { id: string; title: string };
+type Suggestion = {
+  recipe: { id: string; title: string };
+  reasons: { kind: string; text: string }[];
+};
 type Recipe = { id: string; title: string };
 type MealPlanEntry = {
   date: string;
@@ -153,6 +158,12 @@ async function cleanUp(request: APIRequestContext, tag: string) {
   for (const item of await all<PantryItem>(request, "pantry-items")) {
     if (item.name.includes(tag))
       await request.delete(`${api}/pantry-items/${item.id}`);
+  }
+  const ideas = (await (await request.get(`${api}/ideas?state=new`)).json())
+    .items as Idea[];
+  for (const idea of ideas) {
+    if (idea.title.includes(tag))
+      await request.post(`${api}/ideas/${idea.id}/dismiss`);
   }
   const staples = (await (await request.get(`${api}/staples`)).json())
     .items as Staple[];
@@ -718,6 +729,119 @@ test.describe("Food workspace", () => {
     // Home says what is running low.
     await page.goto("/");
     await expect(page.locator("#attention-food")).toContainText("Running low:");
+  });
+
+  test("What can I cook? ranks saved recipes with reasons, and an idea is saved", async ({
+    page,
+    request,
+  }) => {
+    const { today } = await openFood(page, "/food?tab=recipes");
+    const chicken = `Hähnchenbrust ${tag}`;
+    const onion = `Zwiebel ${tag}`;
+    const pan = `Pfanne ${tag}`;
+    const soup = `Suppe ${tag}`;
+    const wings = `Air fryer wings ${tag}`;
+    await addPantry(request, { name: chicken, expiresOn: shift(today, 1) });
+    await addPantry(request, { name: `Paprika ${tag}` });
+    const created = await request.post(`${api}/recipes`, {
+      data: {
+        title: pan,
+        steps: "Das Hähnchen in der Heißluftfritteuse garen.",
+        ingredients: [
+          { name: `Hähnchen ${tag}`, amount: "400 g" },
+          { name: `Paprika ${tag}` },
+          { name: onion, amount: "1" },
+        ],
+      },
+    });
+    expect(created.ok()).toBeTruthy();
+    const panRecipe = (await created.json()) as {
+      id: string;
+      methods: string[];
+    };
+    expect(panRecipe.methods).toContain("air_fryer");
+    expect(
+      (
+        await request.post(`${api}/recipes`, {
+          data: {
+            title: soup,
+            ingredients: [
+              { name: `Linsen ${tag}` },
+              { name: `Karotten ${tag}` },
+            ],
+          },
+        })
+      ).ok(),
+    ).toBeTruthy();
+    // Habit: the pan was dinner a week ago.
+    expect(
+      (
+        await request.put(`${api}/meal-plan/${shift(today, -7)}/dinner`, {
+          data: { recipeId: panRecipe.id },
+        })
+      ).ok(),
+    ).toBeTruthy();
+    // An idea, as the AI would leave one (the e2e actor may write ideas).
+    expect(
+      (
+        await request.post(`${api}/ideas`, {
+          data: {
+            title: wings,
+            reason: `Uses the ${chicken} that expires tomorrow, in the air fryer`,
+            ingredients: [{ name: `Chicken wings ${tag}`, amount: "1 kg" }],
+            steps: "Air fry for 20 minutes.",
+          },
+        })
+      ).status(),
+    ).toBe(201);
+
+    // Food ranks the pan above the soup and says why.
+    const ranked = (
+      await (await request.get(`${api}/suggestions?limit=50`)).json()
+    ).items as Suggestion[];
+    const titles = ranked.map((item) => item.recipe.title);
+    expect(titles.indexOf(pan)).toBeGreaterThanOrEqual(0);
+    expect(titles.indexOf(pan)).toBeLessThan(titles.indexOf(soup));
+
+    await page.reload();
+    await expect(page.getByTestId("food-workspace")).toHaveAttribute(
+      "aria-busy",
+      "false",
+    );
+    const row = page.getByTestId("food-suggestion").filter({ hasText: pan });
+    const reasons = row.getByTestId("food-suggestion-reasons");
+    await expect(reasons).toContainText("You have 2 of its 3 ingredients");
+    await expect(reasons).toContainText(`${chicken} expires tomorrow`);
+    await expect(reasons).toContainText("You had it once in the last 60 days");
+    await expect(row).toContainText("Air fryer");
+    await expect(row.getByTestId("food-suggestion-missing")).toHaveText(
+      `To buy: ${onion}`,
+    );
+
+    // The missing onion goes on the list.
+    await row
+      .getByRole("button", { name: `Add missing to list: ${pan}` })
+      .click();
+    await expect(page.getByTestId("food-cook-note")).toHaveText(
+      `Added 1 item for “${pan}” to the shopping list.`,
+    );
+    await expect
+      .poll(async () =>
+        (await shoppingNamed(request, onion)).map((item) => item.state),
+      )
+      .toEqual(["needed"]);
+
+    // The idea is saved as a recipe.
+    const idea = page.getByTestId("food-idea").filter({ hasText: wings });
+    await expect(idea).toContainText("AI idea");
+    await idea.getByRole("button", { name: `Save idea: ${wings}` }).click();
+    await expect(page.getByTestId("food-cook-note")).toHaveText(
+      `Saved “${wings}” as a recipe.`,
+    );
+    await expect(idea).toHaveCount(0);
+    await expect(
+      page.getByTestId("food-recipe").filter({ hasText: wings }),
+    ).toHaveCount(1);
   });
 
   test("a recipe is planned for a day and its missing ingredients go on the list", async ({

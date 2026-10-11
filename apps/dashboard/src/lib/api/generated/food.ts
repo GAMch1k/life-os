@@ -534,6 +534,131 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/preferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the cooking preferences
+         * @description The preferred cooking methods (the most preferred first; the air fryer to start with), the disliked ingredients (names as written, compared normalised and word by word, see `GET /v1/suggestions`), and free dietary notes.
+         */
+        get: operations["getPreferences"];
+        /**
+         * Set the cooking preferences
+         * @description Replaces the preferences. Methods are kept in the order given without duplicates; dislikes without duplicates by normalised name. A request that changes nothing records nothing.
+         */
+        put: operations["updatePreferences"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/suggestions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Suggest saved recipes to cook
+         * @description Ranks the saved recipes for the owner's today, highest score first, and says why (`reasons`, each with its points). Coverage: how many of a recipe's ingredients are in stock (up to 40 points), compared word by word (a pantry "Hähnchenbrust" covers "Hähnchen", "Vollmilch" covers "Milch", "Eier" covers "Ei", "молоко" covers "молока"); water, salt, pepper, and cooking oil are assumed at home (`basics`). Expiring: 12 points per in-stock item it uses that expires today through in 3 days (at most 3 items). Method: 10 points when it is cooked one of the preferred ways. Habits: planned in the last 60 days (4, 7, then at most 9 points: repeats are not rewarded further), and how many of its ingredients were bought or put away in the last 60 days (up to 8). Planned within 3 days before or after today: −10. With `mealSlot`, +5 when it was planned for that meal before or is tagged for it ("dinner", "Abendessen", "ужин"), −10 when it is tagged only for another meal. Recipes with a disliked ingredient (or a disliked word in the title) are left out and listed in `excluded`. Ties go to fewer missing ingredients, then the title.
+         */
+        get: operations["listSuggestions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/ideas": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List recipe ideas
+         * @description Ideas in a state (new ones by default), newest first.
+         */
+        get: operations["listIdeas"];
+        put?: never;
+        /**
+         * Suggest a recipe idea
+         * @description Stores an unsaved recipe draft with why it is suggested (`reason`), for the owner to save or dismiss. Written by a generator, not the owner: the actor must be `agent:<name>`, `system:<name>`, or `dev:<name>` (403 `actor_not_allowed` for `user`). A new idea with the same normalised title is 409 `idea_exists`, a saved recipe with it 409 `recipe_exists`. Methods not given are inferred as for recipes.
+         */
+        post: operations["createIdea"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/ideas/{ideaId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a recipe idea */
+        get: operations["getIdea"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/ideas/{ideaId}/save": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Save an idea as a recipe
+         * @description Creates a recipe from the idea (its title, servings, ingredients, steps, tags, link, and, when the idea names any, its methods; the reason becomes the note) and marks the idea saved. An idea already saved answers 200 with its recipe; a recipe with the title already saved is 409 `recipe_exists`. A dismissed idea can still be saved.
+         */
+        post: operations["saveIdea"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/ideas/{ideaId}/dismiss": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dismiss an idea
+         * @description A dismissed idea stays dismissed (no change, nothing recorded); a saved one is 409 `idea_saved`.
+         */
+        post: operations["dismissIdea"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/notifications/status": {
         parameters: {
             query?: never;
@@ -836,6 +961,10 @@ export interface components {
             steps: string | null;
             /** @description Normalised. */
             tags: string[];
+            /** @description How it is cooked, in the order `CookingMethod` lists them. */
+            methods: components["schemas"]["CookingMethod"][];
+            /** @description True when Food inferred `methods` from the title, tags, and steps (and does again when they change); false when they were set. */
+            methodsInferred: boolean;
             sourceUrl: string | null;
             note: string | null;
             /** Format: date-time */
@@ -858,6 +987,8 @@ export interface components {
             /** @description An http or https URL. */
             sourceUrl?: string;
             note?: string;
+            /** @description How it is cooked; without it Food infers the methods from the title, tags, and steps. */
+            methods?: components["schemas"]["CookingMethod"][];
         };
         UpdateRecipeRequest: {
             title?: string;
@@ -867,6 +998,8 @@ export interface components {
             tags?: string[];
             sourceUrl?: string | null;
             note?: string | null;
+            /** @description Sets the methods (an empty list: none); null lets Food infer them again. */
+            methods?: components["schemas"]["CookingMethod"][] | null;
         };
         /**
          * @description A day's meals, in the order the plan lists them.
@@ -1088,6 +1221,147 @@ export interface components {
             openedOn?: string | null;
             note?: string | null;
         };
+        /**
+         * @description How a recipe is cooked.
+         * @enum {string}
+         */
+        CookingMethod: "air_fryer" | "oven" | "stovetop" | "slow_cooker" | "grill" | "microwave" | "no_cook";
+        Preferences: {
+            /** @description The preferred cooking methods, the most preferred first. */
+            methods: components["schemas"]["CookingMethod"][];
+            /** @description Disliked ingredients as written. */
+            dislikes: string[];
+            /** @description Free notes for whoever suggests recipes, such as "little red meat". */
+            dietaryNotes: string | null;
+            /** Format: date-time */
+            updatedAt: string;
+            updatedBy: components["schemas"]["Actor"];
+        };
+        PreferencesRequest: {
+            methods: components["schemas"]["CookingMethod"][];
+            dislikes: string[];
+            /** @description Empty or absent clears them. */
+            dietaryNotes?: string;
+        };
+        /**
+         * @description `coverage`: ingredients at home. `expiring`: uses food that expires soon. `method`: a preferred cooking method. `habit_planned`: planned before. `habit_bought`: its ingredients were bought lately. `slot`: fits (or not) the meal asked for. `recent`: planned within 3 days.
+         * @enum {string}
+         */
+        SuggestionReasonKind: "coverage" | "expiring" | "method" | "habit_planned" | "habit_bought" | "slot" | "recent";
+        SuggestionReason: {
+            kind: components["schemas"]["SuggestionReasonKind"];
+            /** @description What it adds to the score; negative for a penalty. */
+            points: number;
+            /** @description In words, such as "You have 4 of its 5 ingredients" or "Hähnchen expires tomorrow". */
+            text: string;
+        };
+        SuggestionUse: {
+            /** @description The recipe's ingredient. */
+            ingredient: string;
+            /** Format: uuid */
+            pantryItemId: string;
+            /** @description The in-stock item that covers it. */
+            pantryItemName: string;
+            /** Format: date */
+            expiresOn: string | null;
+            /** @description Days until it expires (0: today) when that is within 3 days; null otherwise. */
+            expiresInDays: number | null;
+        };
+        SuggestionMissing: {
+            name: string;
+            amount: string | null;
+        };
+        Suggestion: {
+            recipe: components["schemas"]["Recipe"];
+            /** @description The sum of the reasons' points. */
+            score: number;
+            reasons: components["schemas"]["SuggestionReason"][];
+            /** @description The ingredients in stock and what covers them. */
+            have: components["schemas"]["SuggestionUse"][];
+            /** @description The ingredients to buy, with the recipe's amounts. */
+            missing: components["schemas"]["SuggestionMissing"][];
+            /** @description Ingredients assumed at home (water, salt, pepper, cooking oil). */
+            basics: string[];
+            /** @description The items of `have` that expire within 3 days, soonest first. */
+            expiring: components["schemas"]["SuggestionUse"][];
+        };
+        SuggestionExclusion: {
+            recipe: components["schemas"]["RecipeRef"];
+            /** @description The disliked ingredient (or word) that leaves it out. */
+            disliked: string;
+        };
+        SuggestionList: {
+            /**
+             * Format: date
+             * @description The owner's today the ranking used.
+             */
+            today: string;
+            mealSlot: components["schemas"]["MealSlot"] | null;
+            items: components["schemas"]["Suggestion"][];
+            excluded: components["schemas"]["SuggestionExclusion"][];
+        };
+        /**
+         * @description `new`: waiting for the owner. `saved`: saved as a recipe (`recipeId`). `dismissed`: not wanted.
+         * @enum {string}
+         */
+        IdeaState: "new" | "saved" | "dismissed";
+        /**
+         * @description `ai`: written by the AI from the pantry and the preferences. `web`: found on a site (`sourceUrl`).
+         * @enum {string}
+         */
+        IdeaSource: "ai" | "web";
+        IdeaIngredient: {
+            name: string;
+            amount: string | null;
+            note: string | null;
+        };
+        Idea: {
+            /** Format: uuid */
+            id: string;
+            title: string;
+            normalizedTitle: string;
+            servings: number | null;
+            ingredients: components["schemas"]["IdeaIngredient"][];
+            /** @description Plain text, one step per line. */
+            steps: string | null;
+            tags: string[];
+            methods: components["schemas"]["CookingMethod"][];
+            source: components["schemas"]["IdeaSource"];
+            sourceUrl: string | null;
+            /** @description Why it is suggested, such as "Uses the Hähnchen that expires tomorrow, in the air fryer". */
+            reason: string;
+            state: components["schemas"]["IdeaState"];
+            /**
+             * Format: uuid
+             * @description The recipe it was saved as; null otherwise or once that recipe is deleted.
+             */
+            recipeId: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            createdBy: components["schemas"]["Actor"];
+            updatedBy: components["schemas"]["Actor"];
+        };
+        IdeaList: {
+            items: components["schemas"]["Idea"][];
+        };
+        CreateIdeaRequest: {
+            title: string;
+            servings?: number;
+            ingredients?: components["schemas"]["NewIngredient"][];
+            steps?: string;
+            tags?: string[];
+            methods?: components["schemas"]["CookingMethod"][];
+            source?: components["schemas"]["IdeaSource"];
+            /** @description An http or https URL; for `web`, the page it was found on. */
+            sourceUrl?: string;
+            reason: string;
+        };
+        SaveIdeaResult: {
+            idea: components["schemas"]["Idea"];
+            recipe: components["schemas"]["Recipe"];
+        };
     };
     responses: never;
     parameters: {
@@ -1096,6 +1370,7 @@ export interface components {
         RuleId: string;
         RecipeId: string;
         StapleId: string;
+        IdeaId: string;
         /** @description A plain date (YYYY-MM-DD). */
         PlanDate: string;
         PlanSlot: components["schemas"]["MealSlot"];
@@ -3000,6 +3275,351 @@ export interface operations {
                 };
             };
             /** @description `idempotency_conflict` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getPreferences: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Preferences */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Preferences"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    updatePreferences: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Makes the write safe to retry; see the API description. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PreferencesRequest"];
+            };
+        };
+        responses: {
+            /** @description Preferences */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Preferences"];
+                };
+            };
+            /** @description Invalid request (`invalid_request`), or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `idempotency_conflict` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    listSuggestions: {
+        parameters: {
+            query?: {
+                limit?: number;
+                mealSlot?: components["schemas"]["MealSlot"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Suggestions */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SuggestionList"];
+                };
+            };
+            /** @description Invalid request (`invalid_request`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    listIdeas: {
+        parameters: {
+            query?: {
+                state?: components["schemas"]["IdeaState"];
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ideas */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IdeaList"];
+                };
+            };
+            /** @description Invalid request (`invalid_request`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    createIdea: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Makes the write safe to retry; see the API description. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateIdeaRequest"];
+            };
+        };
+        responses: {
+            /** @description Idea */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Idea"];
+                };
+            };
+            /** @description Invalid request (`invalid_request`), or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `actor_not_allowed`: the owner does not write ideas */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `idea_exists`, `recipe_exists`, or `idempotency_conflict` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getIdea: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ideaId: components["parameters"]["IdeaId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Idea */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Idea"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Idea not found (`not_found`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    saveIdea: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Makes the write safe to retry; see the API description. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                ideaId: components["parameters"]["IdeaId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Already saved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SaveIdeaResult"];
+                };
+            };
+            /** @description Saved */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SaveIdeaResult"];
+                };
+            };
+            /** @description Invalid request, or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Idea not found (`not_found`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `recipe_exists` or `idempotency_conflict` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    dismissIdea: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Makes the write safe to retry; see the API description. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                ideaId: components["parameters"]["IdeaId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Idea */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Idea"];
+                };
+            };
+            /** @description Invalid request, or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Idea not found (`not_found`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `idea_saved` or `idempotency_conflict` */
             409: {
                 headers: {
                     [name: string]: unknown;

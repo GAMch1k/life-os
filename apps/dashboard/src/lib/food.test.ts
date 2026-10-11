@@ -371,6 +371,7 @@ test("Home names the list's size and food expiring today or tomorrow", () => {
     expiringMore: false,
     meals: null,
     runningLow: null,
+    cookTonight: null,
   });
   // Nothing to say, nothing shown.
   assert.equal(homeFood({ items: [] }, { items: [] }, today), null);
@@ -699,5 +700,18 @@ test("Home names what is running low, once per name", () => {
       items: [low("Milch")],
     })?.runningLow,
     "Running low: Milch",
+  );
+});
+
+test("Home's tonight line alone is something to say", () => {
+  const line = "Cook tonight: Pasta (uses Sahne, expiring tomorrow)";
+  assert.equal(
+    homeFood({ items: [] }, undefined, "2026-10-11", null, undefined, line)
+      ?.cookTonight,
+    line,
+  );
+  assert.equal(
+    homeFood({ items: [] }, undefined, "2026-10-11", null, undefined, null),
+    null,
   );
 });

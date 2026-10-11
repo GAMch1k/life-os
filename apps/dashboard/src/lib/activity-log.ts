@@ -33,7 +33,7 @@ export const BANKING_DESCRIPTION =
   "The bank connection: connecting, disconnecting, each sync into Finance that changed something (counts only, never transaction details), failed syncs, and the consent's expiry.";
 
 export const FOOD_DESCRIPTION =
-  "The shopping list, its stores and aisle rules, the pantry, staples, recipes, and the meal plan: items added, merged, bought, put away, changed, running low, or removed, staples put back on the list by themselves, recipes written, meals planned, by you or the AI, and expiry reminders Food could not send in time.";
+  "The shopping list, its stores and aisle rules, the pantry, staples, recipes, and the meal plan: items added, merged, bought, put away, changed, running low, or removed, staples put back on the list by themselves, recipes written, recipe ideas suggested, saved, or dismissed, cooking preferences changed, meals planned, by you or the AI, and expiry reminders Food could not send in time.";
 
 export const RECIPE_IMPORT_DESCRIPTION =
   "Recipes saved from links by the recipe-import integration; the recipe itself is under Food.";
@@ -97,6 +97,8 @@ export const SUBJECT_TYPES = [
   { value: "food_recipe", label: "Recipe" },
   { value: "food_meal_plan", label: "Meal plan slot" },
   { value: "food_staple", label: "Staple" },
+  { value: "food_idea", label: "Recipe idea" },
+  { value: "food_preferences", label: "Cooking preferences" },
 ] as const;
 
 /** Why Food put an item on the list by itself (`data.reason`). */
@@ -178,6 +180,10 @@ const EVENT_LABELS: Record<string, string> = {
   "food.staple.created": "Staple added",
   "food.staple.updated": "Staple updated",
   "food.staple.deleted": "Staple removed",
+  "food.preferences.updated": "Cooking preferences updated",
+  "food.idea.created": "Recipe idea",
+  "food.idea.saved": "Idea saved as a recipe",
+  "food.idea.dismissed": "Idea dismissed",
   "food.notification.missed": "Expiry reminder missed",
   "food.recipe.created": "Recipe created",
   "food.recipe.updated": "Recipe updated",

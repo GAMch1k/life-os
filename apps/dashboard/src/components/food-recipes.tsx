@@ -17,6 +17,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/app-dialog";
+import { FoodCook } from "@/components/food-cook";
 import { ImportDialog } from "@/components/food-import-dialog";
 import {
   MissingIngredientsDialog,
@@ -30,16 +31,18 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import type { ShoppingItem } from "@/lib/food";
+import type { PantryItem, ShoppingItem } from "@/lib/food";
 import { formDraft, siteName } from "@/lib/food-import";
 import {
   type Recipe,
   allTags,
   byTitle,
+  methodLabel,
   recipeMatches,
   recipeMeta,
   stepLines,
 } from "@/lib/food-recipes";
+import type { Cooking } from "@/lib/food-suggest";
 import type { SyncedList } from "@/lib/use-synced-list";
 import { useClosingState } from "@/lib/use-closing-state";
 import { cn } from "@/lib/utils";
@@ -50,17 +53,26 @@ const EMPTY =
 const ALL_TAGS = "*";
 
 /**
- * The recipes: a search over titles and ingredients, tag chips, and the
- * list; a recipe opens with its ingredients and numbered steps, from where
- * it is edited or its missing ingredients go on the shopping list.
+ * The recipes: "What can I cook?" first (suggestions, ideas, preferences,
+ * and Discover), then a search over titles and ingredients, tag chips, and
+ * the list; a recipe opens with its ingredients and numbered steps, from
+ * where it is edited or its missing ingredients go on the shopping list.
  */
 export function FoodRecipes({
   recipes,
   shopping,
+  pantry,
+  cooking,
+  today,
   error,
 }: {
   recipes: SyncedList<Recipe>;
   shopping: SyncedList<ShoppingItem>;
+  pantry: SyncedList<PantryItem>;
+  /** What "What can I cook?" shows first. */
+  cooking: Cooking;
+  /** The owner's today (YYYY-MM-DD). */
+  today: string;
   /** Why the recipes could not be read on the server, if they could not. */
   error?: string;
 }) {
@@ -84,6 +96,30 @@ export function FoodRecipes({
 
   return (
     <div className="space-y-4" data-testid="food-recipes">
+      <FoodCook
+        initial={cooking}
+        onDiscovered={(draft) => {
+          setNote(undefined);
+          setForm({
+            draft: formDraft(draft),
+            importFrom: {
+              url: draft.sourceUrl ?? "",
+              imageUrl: draft.imageUrl,
+              description: draft.description,
+              siteName: draft.siteName,
+            },
+          });
+        }}
+        onOpen={(recipe) => {
+          setNote(undefined);
+          setViewing(recipe);
+        }}
+        pantry={pantry}
+        recipes={recipes}
+        shopping={shopping}
+        today={today}
+      />
+
       <div className="flex flex-wrap gap-2">
         <Input
           aria-label="Search recipes"
@@ -264,8 +300,15 @@ function RecipeView({
               <DialogTitle>{current.title}</DialogTitle>
               <DialogDescription>{recipeMeta(current)}</DialogDescription>
             </DialogHeader>
-            {current.tags.length || current.sourceUrl ? (
+            {current.tags.length ||
+            current.sourceUrl ||
+            current.methods.length ? (
               <div className="flex flex-wrap items-center gap-1.5 text-sm">
+                {current.methods.map((method) => (
+                  <Badge key={method} variant="outline">
+                    {methodLabel(method)}
+                  </Badge>
+                ))}
                 {current.tags.map((entry) => (
                   <Badge key={entry} variant="secondary">
                     {entry}

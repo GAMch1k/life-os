@@ -91,6 +91,8 @@ export function formDraft(draft: ImportDraft): RecipeDraft {
     steps: draft.steps.join("\n"),
     tags: draft.tags.join(", "),
     sourceUrl: draft.sourceUrl ?? "",
+    // Food detects how it is cooked once it is saved.
+    methods: null,
   };
 }
 

@@ -11,10 +11,12 @@ import {
   entriesByDay,
   ingredientStatusLabel,
   missingCounts,
+  methodLabel,
   missingNote,
   moveRow,
   newRecipeBody,
   normalizeText,
+  orderedMethods,
   parseWeek,
   recipeDraft,
   recipeMatches,
@@ -41,6 +43,8 @@ function recipe(overrides: Partial<Recipe> = {}): Recipe {
     ingredients: [],
     steps: null,
     tags: [],
+    methods: [],
+    methodsInferred: true,
     sourceUrl: null,
     note: null,
     createdAt: STAMP,
@@ -195,6 +199,7 @@ test("the recipe form sends what was filled in, and patches what changed", () =>
       steps: "Boil.\n",
       tags: "italian, , quick",
       sourceUrl: "",
+      methods: null,
     }).body,
     {
       title: "Pasta",
@@ -282,5 +287,43 @@ test("the missing-ingredients preview says what will happen", () => {
   assert.equal(
     missingNote({ dryRun: false, items: [result("on_list")] }),
     "Nothing to add: everything is at home or on the list.",
+  );
+});
+
+test("cooking methods are detected until the form sets them", () => {
+  assert.deepEqual(orderedMethods(["oven", "air_fryer", "oven", "campfire"]), [
+    "air_fryer",
+    "oven",
+  ]);
+  assert.equal(methodLabel("slow_cooker"), "Slow cooker");
+  // Detected methods stay detected: the form starts without a choice.
+  const detected = recipe({ methods: ["air_fryer"], methodsInferred: true });
+  const draft = recipeDraft(detected);
+  assert.equal(draft.methods, null);
+  assert.equal(recipePatch(detected, draft).body, null);
+  assert.deepEqual(
+    recipePatch(detected, { ...draft, methods: ["oven", "air_fryer"] }).body,
+    { methods: ["air_fryer", "oven"] },
+  );
+  // Set methods: kept, changed, or handed back to detection (null).
+  const set = recipe({ methods: ["oven"], methodsInferred: false });
+  assert.deepEqual(recipeDraft(set).methods, ["oven"]);
+  assert.equal(recipePatch(set, recipeDraft(set)).body, null);
+  assert.deepEqual(
+    recipePatch(set, { ...recipeDraft(set), methods: [] }).body,
+    {
+      methods: [],
+    },
+  );
+  assert.deepEqual(
+    recipePatch(set, { ...recipeDraft(set), methods: null }).body,
+    { methods: null },
+  );
+  // A new recipe sends methods only when they were picked.
+  const fresh = { ...recipeDraft(), title: "Wings" };
+  assert.equal(newRecipeBody(fresh).body?.methods, undefined);
+  assert.deepEqual(
+    newRecipeBody({ ...fresh, methods: ["grill", "air_fryer"] }).body?.methods,
+    ["air_fryer", "grill"],
   );
 });

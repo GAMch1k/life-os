@@ -724,6 +724,11 @@ export type HomeFood = {
   meals: string | null;
   /** What is running low: "Running low: Milch, Brot". */
   runningLow: string | null;
+  /**
+   * Tonight's suggestion when food about to expire drives it: "Cook
+   * tonight: Hähnchen-Reis-Pfanne (uses Hähnchenbrust, expiring tomorrow)".
+   */
+  cookTonight: string | null;
 };
 
 /**
@@ -739,6 +744,7 @@ export function homeFood(
   today: string,
   meals: string | null = null,
   low: { items: PantryItem[] } | undefined = undefined,
+  cookTonight: string | null = null,
 ): HomeFood | null {
   const tomorrow = addDays(today, 1);
   const soon = (pantry?.items ?? [])
@@ -752,7 +758,8 @@ export function homeFood(
     .sort(bySoonestExpiry);
   const listCount = list.items.filter((item) => item.state === "needed").length;
   const runningLow = runningLowLine(low?.items ?? []);
-  if (!listCount && !soon.length && !meals && !runningLow) return null;
+  if (!listCount && !soon.length && !meals && !runningLow && !cookTonight)
+    return null;
   return {
     listCount,
     listMore: Boolean(list.nextCursor),
@@ -764,6 +771,7 @@ export function homeFood(
     expiringMore: soon.length > HOME_EXPIRING_PREVIEW,
     meals,
     runningLow,
+    cookTonight,
   };
 }
 

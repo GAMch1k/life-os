@@ -31,6 +31,7 @@ import {
   weekStart,
 } from "@/lib/food-recipes";
 import type { FoodList, Loaded } from "@/lib/food";
+import type { Cooking } from "@/lib/food-suggest";
 import { useSyncedList } from "@/lib/use-synced-list";
 
 const noSubscription = () => () => {};
@@ -47,6 +48,7 @@ const noSubscription = () => () => {};
 export function FoodWorkspace({
   state,
   recipes,
+  cooking,
   plan,
   initialTab,
   initialStore,
@@ -56,6 +58,8 @@ export function FoodWorkspace({
 }: {
   state: FoodWorkspaceState;
   recipes: Loaded<FoodList<Recipe>>;
+  /** "What can I cook?": suggestions and ideas. */
+  cooking: Cooking;
   /** The meal plan of initialWeek. */
   plan: Loaded<MealPlanEntry[]>;
   initialTab: FoodTab;
@@ -85,6 +89,7 @@ export function FoodWorkspace({
     );
   return (
     <ReadyWorkspace
+      cooking={cooking}
       initial={state}
       initialStore={initialStore}
       initialTab={initialTab}
@@ -99,6 +104,7 @@ export function FoodWorkspace({
 
 function ReadyWorkspace({
   initial,
+  cooking,
   recipes: initialRecipes,
   plan,
   initialTab,
@@ -108,6 +114,7 @@ function ReadyWorkspace({
   timeZone,
 }: {
   initial: Extract<FoodWorkspaceState, { kind: "ready" }>;
+  cooking: Cooking;
   recipes: Loaded<FoodList<Recipe>>;
   plan: Loaded<MealPlanEntry[]>;
   initialTab: FoodTab;
@@ -239,9 +246,12 @@ function ReadyWorkspace({
         </TabsContent>
         <TabsContent value="recipes">
           <FoodRecipes
+            cooking={cooking}
             error={initialRecipes.error}
+            pantry={pantry}
             recipes={recipes}
             shopping={shopping}
+            today={today}
           />
         </TabsContent>
         {/* Kept mounted, so the week and its meals stay when the tab is

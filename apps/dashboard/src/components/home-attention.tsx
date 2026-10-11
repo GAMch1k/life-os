@@ -253,12 +253,27 @@ export function HomeAttentionSurface({
               ? `${plural(food.listCount, food.listMore, "item")} on the shopping list`
               : food.expiring.length
                 ? `${plural(food.expiring.length, food.expiringMore, "item")} expiring soon`
-                : (food.meals ?? food.runningLow ?? "")
+                : (food.meals ?? food.runningLow ?? food.cookTonight ?? "")
           }
           items={[
             // Today's meals, unless they are the detail already.
             ...(food.meals && (food.listCount || food.expiring.length)
               ? [{ id: "meals", label: food.meals, href: foodHref("plan") }]
+              : []),
+            // Tonight's suggestion, when expiring food drives it and it
+            // is not the detail already.
+            ...(food.cookTonight &&
+            (food.listCount ||
+              food.expiring.length ||
+              food.meals ||
+              food.runningLow)
+              ? [
+                  {
+                    id: "cook-tonight",
+                    label: food.cookTonight,
+                    href: foodHref("recipes"),
+                  },
+                ]
               : []),
             // What is running low, unless it is the detail already.
             ...(food.runningLow &&
