@@ -73,6 +73,7 @@ func run(ctx context.Context) error {
 	add("inbox_list", "List Inbox items", cfg.InboxURL, "/v1/inbox-items?")
 	addCalendarTools(s, hc, cfg.CalendarURL, emitter)
 	addFinanceTools(s, hc, cfg.FinanceURL, emitter)
+	addFoodTools(s, hc, cfg.FoodURL, emitter)
 	// Inbox mutations are exposed as MCP tools so processors never bypass the
 	// service API or write the Inbox database directly.
 	mcp.AddTool(s, &mcp.Tool{Name: "inbox_start_processing_attempt", Description: "Start an auditable Inbox processing attempt"}, func(ctx context.Context, req *mcp.CallToolRequest, in inboxAction) (*mcp.CallToolResult, Output, error) {
@@ -216,21 +217,24 @@ func post(ctx context.Context, hc *http.Client, trace activity.Trace, baseURL, p
 	return nil, out, err
 }
 
-func patch(ctx context.Context, hc *http.Client, trace activity.Trace, baseURL, path string, input interface{}) (*mcp.CallToolResult, Output, error) {
-	return write(ctx, hc, trace, http.MethodPatch, baseURL, path, input)
+func patch(ctx context.Context, hc *http.Client, trace activity.Trace, baseURL, path string, input interface{}, idempotencyKey ...string) (*mcp.CallToolResult, Output, error) {
+	return write(ctx, hc, trace, http.MethodPatch, baseURL, path, input, idempotencyKey...)
 }
 
 func put(ctx context.Context, hc *http.Client, trace activity.Trace, baseURL, path string, input interface{}) (*mcp.CallToolResult, Output, error) {
 	return write(ctx, hc, trace, http.MethodPut, baseURL, path, input)
 }
 
-func write(ctx context.Context, hc *http.Client, trace activity.Trace, method, baseURL, path string, input interface{}) (*mcp.CallToolResult, Output, error) {
+func write(ctx context.Context, hc *http.Client, trace activity.Trace, method, baseURL, path string, input interface{}, idempotencyKey ...string) (*mcp.CallToolResult, Output, error) {
 	raw, err := json.Marshal(input)
 	if err != nil {
 		return nil, Output{}, err
 	}
 	headers := http.Header{}
 	trace.Apply(headers)
+	if len(idempotencyKey) > 0 && idempotencyKey[0] != "" {
+		headers.Set("Idempotency-Key", idempotencyKey[0])
+	}
 	body, err := coreclient.Client{BaseURL: baseURL, HTTP: hc}.DoWithHeaders(ctx, method, path, raw, headers)
 	if err != nil {
 		return nil, Output{}, err
