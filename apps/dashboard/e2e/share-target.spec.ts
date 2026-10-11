@@ -150,3 +150,104 @@ test.describe("Share → Life OS", () => {
     expect(empty.headers().location).toBe("/share/saved?error=empty");
   });
 });
+
+/** A 1×1 PNG, a photo as small as it gets. */
+const PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+  "base64",
+);
+
+test.describe("Photos with a capture", () => {
+  test.skip(!enabled, "set LIFE_OS_E2E_URL to run against the isolated stack");
+
+  test("a shared photo is stored in Inbox, named by the capture, and shown", async ({
+    page,
+    request,
+  }) => {
+    const text = `P16 shared photo ${Date.now()}`;
+    const response = await request.post("/share", {
+      multipart: {
+        text,
+        images: { name: "photo.png", mimeType: "image/png", buffer: PNG },
+      },
+      headers: { "Sec-Fetch-Site": "none" },
+      maxRedirects: 0,
+    });
+    expect(response.status()).toBe(303);
+    const location = response.headers().location;
+    expect(location).toMatch(/^\/share\/saved\?item=/);
+    const id = new URLSearchParams(location.split("?")[1]).get("item");
+
+    const item = (await (
+      await request.get(`/api/inbox/v1/inbox-items/${id}`)
+    ).json()) as InboxItem;
+    expect(item.content).toBe(text);
+    expect(item.mediaReferences).toHaveLength(1);
+    const hash = item.mediaReferences![0].replace("inbox-media:", "");
+    const image = await request.get(`/api/inbox/v1/media/${hash}`);
+    expect(image.status()).toBe(200);
+    expect(image.headers()["content-type"]).toBe("image/png");
+    expect(Buffer.from(await image.body()).equals(PNG)).toBe(true);
+
+    // The confirmation shows the photo; tapping it opens it whole.
+    await page.goto(location);
+    const saved = page.getByRole("region", { name: "Saved to Inbox" });
+    const thumbnail = saved.getByRole("button", { name: "View photo 1 of 1" });
+    await expect(thumbnail).toBeVisible();
+    await expect
+      .poll(() =>
+        thumbnail
+          .locator("img")
+          .evaluate((img: HTMLImageElement) => img.naturalWidth),
+      )
+      .toBe(1);
+    await thumbnail.click();
+    await expect(
+      page.getByRole("dialog").getByRole("img", { name: new RegExp(text) }),
+    ).toBeVisible();
+    await page.keyboard.press("Escape");
+
+    // Inbox lists the capture with its photo, whatever section it is in.
+    await page.goto("/inbox");
+    await expect(
+      page.locator(`img[src="/api/inbox/v1/media/${hash}"]`).first(),
+    ).toBeVisible();
+  });
+
+  test("the composer attaches photos, refuses HEIC, and captures them", async ({
+    page,
+  }) => {
+    const text = `P16 composer photo ${Date.now()}`;
+    await page.goto("/");
+    const gallery = page.locator('#capture input[type="file"][multiple]');
+    await gallery.setInputFiles({
+      name: "IMG_0001.HEIC",
+      mimeType: "image/heic",
+      buffer: Buffer.from("not really heic"),
+    });
+    await expect(
+      page.getByRole("status").filter({ hasText: "HEIC" }),
+    ).toBeVisible();
+
+    await gallery.setInputFiles({
+      name: "photo.png",
+      mimeType: "image/png",
+      buffer: PNG,
+    });
+    const attached = page.getByRole("list", { name: "Photos to capture" });
+    await expect(attached.getByRole("listitem")).toHaveCount(1);
+    await page.locator("#inbox-capture").fill(text);
+    const created = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        response.url().includes("/api/inbox/v1/inbox-items"),
+    );
+    await page.getByRole("button", { name: "Capture", exact: true }).click();
+    const response = await created;
+    expect(response.status()).toBe(201);
+    const item = (await response.json()) as InboxItem;
+    expect(item.content).toBe(text);
+    expect(item.mediaReferences).toHaveLength(1);
+    await expect(attached).toHaveCount(0);
+  });
+});

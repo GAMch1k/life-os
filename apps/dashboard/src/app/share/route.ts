@@ -2,7 +2,14 @@ import { type NextRequest, NextResponse } from "next/server";
 
 import { createInboxClient } from "@/lib/api/inbox-client";
 import {
+  MAX_CAPTURE_IMAGES,
+  photosContent,
+  photosProblem,
+  uploadImages,
+} from "@/lib/capture-images";
+import {
   isShareFromApp,
+  photoShareError,
   SHARE_FIELDS,
   type ShareError,
   shareContent,
@@ -11,9 +18,10 @@ import {
 import { isValidTimeZone, TIME_ZONE_COOKIE } from "@/lib/time-zone";
 
 // Share → Life OS. The installed Dashboard's share target (see
-// src/lib/web-app.ts): the phone's share sheet posts the title, text, and
-// link of what was shared here, as multipart form data. It becomes an
-// ordinary Inbox capture (source "web", sourceMetadata.shared), which the AI
+// src/lib/web-app.ts): the phone's share sheet posts the title, text, link,
+// and photos of what was shared here, as multipart form data. The photos go
+// to Inbox's media store first; then it all becomes one ordinary Inbox
+// capture (source "web", sourceMetadata.shared) naming them, which the AI
 // processes like any other, and the app shows /share/saved.
 
 export const dynamic = "force-dynamic";
@@ -52,19 +60,44 @@ export async function POST(request: NextRequest) {
   } catch {
     return failed("unreadable");
   }
-  const content = shareContent({
+  // A share without photos may still send an empty file part.
+  const images = form
+    .getAll(SHARE_FIELDS.images)
+    .filter(
+      (value): value is File => typeof value !== "string" && value.size > 0,
+    );
+  const text = shareContent({
     title: field(form, SHARE_FIELDS.title),
     text: field(form, SHARE_FIELDS.text),
     url: field(form, SHARE_FIELDS.url),
   });
-  if (!content) return failed("empty");
+  if (!text && !images.length) return failed("empty");
+  const problem = photosProblem(images);
+  if (problem) return failed(problem);
 
+  const inbox = createInboxClient();
+  let mediaReferences: string[] = [];
+  if (images.length) {
+    // Together, on the private network: Inbox takes five at once.
+    const uploaded = await uploadImages(images, {
+      client: inbox,
+      perRequest: MAX_CAPTURE_IMAGES,
+    });
+    if (!uploaded.references) return failed(photoShareError(uploaded.code));
+    mediaReferences = uploaded.references;
+  }
+  const content = text || photosContent(mediaReferences.length);
   const cookie = request.cookies.get(TIME_ZONE_COOKIE)?.value;
   const timeZone = cookie && isValidTimeZone(cookie) ? cookie : undefined;
   try {
     // Written as the owner (the client sends X-Life-OS-Actor: user).
-    const { data } = await createInboxClient().POST("/v1/inbox-items", {
-      body: { content, source: "web", sourceMetadata: shareMetadata(timeZone) },
+    const { data } = await inbox.POST("/v1/inbox-items", {
+      body: {
+        content,
+        source: "web",
+        sourceMetadata: shareMetadata(timeZone),
+        ...(mediaReferences.length ? { mediaReferences } : {}),
+      },
     });
     if (!data) return failed("inbox");
     return seeOther(`/share/saved?item=${encodeURIComponent(data.id)}`);

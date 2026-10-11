@@ -57,7 +57,13 @@ export function webAppManifest(): MetadataRoute.Manifest {
       action: SHARE_ACTION,
       method: "POST",
       enctype: "multipart/form-data",
-      params: { ...SHARE_FIELDS },
+      params: {
+        title: SHARE_FIELDS.title,
+        text: SHARE_FIELDS.text,
+        url: SHARE_FIELDS.url,
+        // Photos from the gallery, the camera, or any app.
+        files: [{ name: SHARE_FIELDS.images, accept: ["image/*"] }],
+      },
     },
   };
 }

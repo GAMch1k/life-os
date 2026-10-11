@@ -3,10 +3,12 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { CircleCheck, TriangleAlert } from "lucide-react";
 
+import { CaptureImageStrip } from "@/components/capture-images";
 import { InboxStateBadge } from "@/components/inbox-summary";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { createInboxClient } from "@/lib/api/inbox-client";
+import { captureImages } from "@/lib/capture-images";
 import { type InboxItem, inboxItemStatus } from "@/lib/inbox-summary";
 import { SHARE_ERRORS, shareError } from "@/lib/share";
 import { userTimeZone } from "@/lib/user-time-zone";
@@ -81,14 +83,20 @@ export default async function ShareSavedPage({
               Saved to Inbox
             </p>
             {item ? (
-              <div className="flex items-start gap-2">
-                <p className="text-muted-foreground line-clamp-4 min-w-0 flex-1 text-sm wrap-anywhere whitespace-pre-line">
-                  {item.content}
-                </p>
-                <InboxStateBadge
-                  now={now}
-                  status={inboxItemStatus(item, now)}
-                  timeZone={timeZone}
+              <div>
+                <div className="flex items-start gap-2">
+                  <p className="text-muted-foreground line-clamp-4 min-w-0 flex-1 text-sm wrap-anywhere whitespace-pre-line">
+                    {item.content}
+                  </p>
+                  <InboxStateBadge
+                    now={now}
+                    status={inboxItemStatus(item, now)}
+                    timeZone={timeZone}
+                  />
+                </div>
+                <CaptureImageStrip
+                  label={item.content}
+                  references={captureImages(item)}
                 />
               </div>
             ) : null}

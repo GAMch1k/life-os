@@ -32,4 +32,8 @@ test("the share target posts the shared fields to /share as multipart", () => {
   assert.equal(target?.params.title, SHARE_FIELDS.title);
   assert.equal(target?.params.text, SHARE_FIELDS.text);
   assert.equal(target?.params.url, SHARE_FIELDS.url);
+  // Photos, as the field /share reads.
+  assert.deepEqual(target?.params.files, [
+    { name: SHARE_FIELDS.images, accept: ["image/*"] },
+  ]);
 });

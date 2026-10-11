@@ -30,10 +30,11 @@ export default function ShareAboutPage() {
             Share from any app
           </h2>
           <p>
-            In Instagram, Chrome, a notes app, or anywhere else, tap Share and
-            choose <strong>Life OS</strong>. What you share (its text and link)
-            is saved to Inbox as a capture, and the AI processes it like
-            anything you type.
+            In Instagram, Chrome, the gallery, a notes app, or anywhere else,
+            tap Share and choose <strong>Life OS</strong>. What you share (its
+            text, link, and up to five photos) is saved to Inbox as a capture,
+            and the AI processes it like anything you type, reading the photos
+            too.
           </p>
         </CardContent>
       </Card>

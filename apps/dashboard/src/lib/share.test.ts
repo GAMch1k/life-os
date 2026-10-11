@@ -3,6 +3,8 @@ import test from "node:test";
 
 import {
   isShareFromApp,
+  photoShareError,
+  SHARE_ERRORS,
   shareContent,
   shareError,
   shareMetadata,
@@ -112,6 +114,15 @@ test("a share is accepted from the app itself, never from another site", () => {
     from({ origin: "not a url", host: "lifeos.gamch1k.com" }),
     false,
   );
+});
+
+test("a refused photo says why nothing was saved", () => {
+  assert.equal(photoShareError("heic_not_supported"), "heic_not_supported");
+  assert.equal(photoShareError("image_too_large"), "image_too_large");
+  assert.equal(photoShareError(undefined), "inbox");
+  assert.equal(photoShareError("internal_error"), "inbox");
+  assert.equal(photoShareError("empty"), "inbox");
+  assert.match(SHARE_ERRORS.heic_not_supported, /HEIC.*Nothing was saved/);
 });
 
 test("only known share errors are shown", () => {

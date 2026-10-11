@@ -1,7 +1,8 @@
 "use client";
 
-import { LoaderCircle, Send } from "lucide-react";
+import { Camera, ImagePlus, LoaderCircle, Send, X } from "lucide-react";
 import {
+  type ChangeEvent,
   type FormEvent,
   type KeyboardEvent,
   useEffect,
@@ -13,6 +14,14 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { VoiceCapture } from "@/components/voice-capture";
 import { inboxClient } from "@/lib/api/inbox-client";
+import {
+  IMAGE_ACCEPT,
+  imageErrorMessage,
+  mediaUrl,
+  photosContent,
+  photosProblem,
+  uploadImages,
+} from "@/lib/capture-images";
 import { announceCapture } from "@/lib/capture-session";
 import type { InboxItem } from "@/lib/inbox-summary";
 import { captureMetadata } from "@/lib/time-zone";
@@ -28,10 +37,20 @@ const CONFIRMATION_MS = 2_500;
 export type ComposerCapture =
   { kind: "text"; item: InboxItem } | { kind: "voice"; job: VoiceJob };
 
+/**
+ * A photo to capture: one already in Inbox (an edited capture's, by its
+ * reference) or one picked here, shown from a local object URL until it is
+ * uploaded with the capture.
+ */
+type Photo =
+  | { key: string; reference: string; url: string }
+  | { key: string; file: File; url: string };
+
 /** The new Inbox item, or undefined when Inbox did not take the capture. */
 async function createCapture(
   content: string,
   metadata: Record<string, unknown> | undefined,
+  mediaReferences: string[],
 ) {
   try {
     // The browser's timezone is what "tomorrow at 10" means to the owner.
@@ -40,6 +59,7 @@ async function createCapture(
         content,
         source: "manual",
         sourceMetadata: captureMetadata(metadata),
+        ...(mediaReferences.length ? { mediaReferences } : {}),
       },
     });
     return error ? undefined : data;
@@ -50,18 +70,22 @@ async function createCapture(
 
 /**
  * The capture composer: a chat-like text field where Enter captures and
- * Shift+Enter starts a new line, the Voice recorder beside the Capture
- * button, and a status line. Text goes to Inbox (`POST /v1/inbox-items`), a
- * recording to Voice, which transcribes it into an Inbox item; both send the
- * browser's timezone plus `metadata` as `sourceMetadata`. Every text capture
- * is announced to the page (`announceCapture`); `onCaptured` hears about both
+ * Shift+Enter starts a new line, photo buttons (the gallery, and on a phone
+ * the camera), the Voice recorder beside the Capture button, and a status
+ * line. Text and photos go to Inbox (the photos to `POST /v1/media` first,
+ * one at a time, then `POST /v1/inbox-items` naming them), a recording to
+ * Voice, which transcribes it into an Inbox item; both send the browser's
+ * timezone plus `metadata` as `sourceMetadata`. Every text capture is
+ * announced to the page (`announceCapture`); `onCaptured` hears about both
  * kinds. With `onCancel` it also offers Cancel (and Escape), for editing a
- * capture in place.
+ * capture in place; `initialMedia` are the edited capture's photos, kept
+ * unless removed.
  */
 export function CaptureComposer({
   focus,
   id,
   initialContent = "",
+  initialMedia,
   label,
   metadata,
   onCancel,
@@ -73,6 +97,8 @@ export function CaptureComposer({
   /** The text field's id; its hint is `${id}-hint`. */
   id: string;
   initialContent?: string;
+  /** Photos already in Inbox to capture again, by reference. */
+  initialMedia?: string[];
   /** The text field's accessible name. */
   label: string;
   metadata?: Record<string, unknown>;
@@ -81,14 +107,35 @@ export function CaptureComposer({
   placeholder: string;
 }) {
   const [content, setContent] = useState(initialContent);
+  const [photos, setPhotos] = useState<Photo[]>(() =>
+    (initialMedia ?? []).flatMap((reference) => {
+      const url = mediaUrl(reference);
+      return url ? [{ key: reference, reference, url }] : [];
+    }),
+  );
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState<{
     kind: "ok" | "error";
     text: string;
   }>();
   const field = useRef<HTMLTextAreaElement>(null);
+  const gallery = useRef<HTMLInputElement>(null);
+  const camera = useRef<HTMLInputElement>(null);
   // Guards against a second submit before React re-renders with `sending`.
   const submitting = useRef(false);
+  // The photos' object URLs are released when the composer goes away.
+  const shownPhotos = useRef(photos);
+  useEffect(() => {
+    shownPhotos.current = photos;
+  }, [photos]);
+  useEffect(
+    () => () => {
+      for (const photo of shownPhotos.current) {
+        if ("file" in photo) URL.revokeObjectURL(photo.url);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     const element = field.current;
@@ -112,12 +159,61 @@ export function CaptureComposer({
     return () => window.clearTimeout(timer);
   }, [notice]);
 
+  function addPhotos(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? []);
+    // The same photo can be picked again after removing it.
+    event.target.value = "";
+    if (!files.length) return;
+    const problem = photosProblem(files, photos.length);
+    if (problem) {
+      setNotice({ kind: "error", text: imageErrorMessage(problem) });
+      return;
+    }
+    setNotice(undefined);
+    setPhotos((current) => [
+      ...current,
+      ...files.map((file) => ({
+        key: `${file.name}-${file.size}-${file.lastModified}-${Math.random()}`,
+        file,
+        url: URL.createObjectURL(file),
+      })),
+    ]);
+  }
+
+  function removePhoto(key: string) {
+    setPhotos((current) =>
+      current.filter((photo) => {
+        if (photo.key !== key) return true;
+        if ("file" in photo) URL.revokeObjectURL(photo.url);
+        return false;
+      }),
+    );
+  }
+
+  /** The photos' references, uploading the new ones; or why not. */
+  async function photoReferences(): Promise<string[] | string> {
+    const files = photos.flatMap((photo) =>
+      "file" in photo ? [photo.file] : [],
+    );
+    const uploaded = files.length
+      ? await uploadImages(files)
+      : { references: [] };
+    if (!uploaded.references) return imageErrorMessage(uploaded.code);
+    let next = 0;
+    return photos.map((photo) =>
+      "file" in photo ? uploaded.references[next++] : photo.reference,
+    );
+  }
+
   async function submit(fromKeyboard: boolean) {
     if (submitting.current) return;
     const text = content.trim();
-    if (!text) {
+    if (!text && !photos.length) {
       if (!fromKeyboard) {
-        setNotice({ kind: "error", text: "Write something to capture first." });
+        setNotice({
+          kind: "error",
+          text: "Write something or add a photo to capture first.",
+        });
       }
       return;
     }
@@ -126,16 +222,34 @@ export function CaptureComposer({
     setNotice(undefined);
     // Clear right away like a chat composer; anything typed meanwhile stays.
     setContent("");
+    const restore = () =>
+      setContent((current) =>
+        text ? (current ? `${text}\n${current}` : text) : current,
+      );
     try {
-      const item = await createCapture(text, metadata);
+      const references = await photoReferences();
+      if (typeof references === "string") {
+        restore();
+        setNotice({ kind: "error", text: references });
+        return;
+      }
+      const item = await createCapture(
+        text || photosContent(references.length),
+        metadata,
+        references,
+      );
       if (!item) {
-        setContent((current) => (current ? `${text}\n${current}` : text));
+        restore();
         setNotice({
           kind: "error",
           text: "Could not save that capture. Please try again.",
         });
         return;
       }
+      for (const photo of photos) {
+        if ("file" in photo) URL.revokeObjectURL(photo.url);
+      }
+      setPhotos([]);
       setNotice({ kind: "ok", text: "Captured." });
       announceCapture(item);
       await onCaptured?.({ kind: "text", item });
@@ -194,7 +308,77 @@ export function CaptureComposer({
         ref={field}
         value={content}
       />
+      {photos.length ? (
+        <ul aria-label="Photos to capture" className="flex flex-wrap gap-2">
+          {photos.map((photo, index) => (
+            <li className="relative" key={photo.key}>
+              {/* A plain img: an object URL, or Inbox's image under the
+                  owner's Access login. */}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                alt={`Photo ${index + 1}`}
+                className="bg-muted size-16 rounded-md border object-cover"
+                src={photo.url}
+              />
+              <Button
+                aria-label={`Remove photo ${index + 1}`}
+                className="absolute -top-2 -right-2 rounded-full"
+                disabled={sending}
+                onClick={() => removePhoto(photo.key)}
+                size="icon-xs"
+                type="button"
+                variant="secondary"
+              >
+                <X />
+              </Button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {/* The gallery (and files); on a phone the camera has its own button,
+          which opens it directly. */}
+      <input
+        accept={IMAGE_ACCEPT}
+        className="hidden"
+        multiple
+        onChange={addPhotos}
+        ref={gallery}
+        tabIndex={-1}
+        type="file"
+      />
+      <input
+        accept={IMAGE_ACCEPT}
+        capture="environment"
+        className="hidden"
+        onChange={addPhotos}
+        ref={camera}
+        tabIndex={-1}
+        type="file"
+      />
       <div className="flex items-start gap-2">
+        <Button
+          aria-label="Add photos"
+          disabled={sending}
+          onClick={() => gallery.current?.click()}
+          size="icon-lg"
+          title="Add photos"
+          type="button"
+          variant="outline"
+        >
+          <ImagePlus />
+        </Button>
+        <Button
+          aria-label="Take a photo"
+          className="pointer-fine:hidden"
+          disabled={sending}
+          onClick={() => camera.current?.click()}
+          size="icon-lg"
+          title="Take a photo"
+          type="button"
+          variant="outline"
+        >
+          <Camera />
+        </Button>
         <VoiceCapture
           dropOnLeave={Boolean(onCancel)}
           metadata={metadata}
