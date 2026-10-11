@@ -2,12 +2,23 @@
 
 set -euo pipefail
 
-config_file=${LIFE_OS_DATABASE_CONFIG:-/etc/lifeos/service-databases.conf}
+# The registry: the copy in the directory-mounted /opt/lifeos/postgres when
+# there is one, because a single-file bind mount (/etc/lifeos/...) keeps the
+# file it was created with after Git replaces it, until the container is
+# recreated. The single file is the fallback where the directory is not
+# mounted.
+default_config=/etc/lifeos/service-databases.conf
+if [[ -r /opt/lifeos/postgres/service-databases.conf ]]; then
+  default_config=/opt/lifeos/postgres/service-databases.conf
+fi
+config_file=${LIFE_OS_DATABASE_CONFIG:-$default_config}
 
 if [[ ! -r "$config_file" ]]; then
   printf 'database config is not readable: %s\n' "$config_file" >&2
   exit 1
 fi
+
+printf 'Database registry: %s\n' "$config_file"
 
 : "${POSTGRES_USER:?POSTGRES_USER is required}"
 : "${POSTGRES_DB:?POSTGRES_DB is required}"
