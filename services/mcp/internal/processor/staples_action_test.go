@@ -264,13 +264,20 @@ func TestRestockFirstOnlyReordersAPlanWithBoth(t *testing.T) {
 }
 
 func TestPlanPromptRoutesStaplesAndRunningLow(t *testing.T) {
+	// The benchmark's own captures stay out of the prompt, so it measures
+	// the rule rather than a memorised example.
+	for _, scenario := range []string{"Butter", "рис", "Kaffee"} {
+		if strings.Contains(planPrompt, scenario) {
+			t.Errorf("planPrompt names the benchmark's %q", scenario)
+		}
+	}
 	for _, want := range []string{
 		`|recipe_import|food_mark_running_low|food_add_staple|food_remove_staple\"`,
-		`Something running low but not finished yet (\"almost out of milk\", \"мясо заканчивается\", \"почти закончился рис\", \"fast keine Milch mehr\", \"Milch wird knapp\") is food_mark_running_low, never food_update_pantry_item or task_create.`,
+		`Something running low but not finished yet (\"almost out of milk\", \"мясо заканчивается\", \"почти закончилось молоко\", \"fast keine Milch mehr\", \"Milch wird knapp\") is food_mark_running_low, never food_update_pantry_item or task_create.`,
 		`itemQuery \"мясо\", itemQueryAlternatives [\"мяс\", \"meat\", \"Fleisch\"]`,
 		`addToList (true only when the item also says to buy it or put it on the list`,
 		"never add food_add_shopping_items for something running low: buying it is addToList.",
-		`(\"milk is a staple\", \"молоко всегда должно быть дома\", \"Milch immer da haben\", \"Kaffee sollte ich immer zu Hause haben\") is food_add_staple`,
+		`(\"milk is a staple\", \"молоко всегда должно быть дома\", \"Milch immer da haben\", \"Eier sollen immer im Haus sein\") is food_add_staple`,
 		"it puts nothing on the list now.",
 		`(\"remove milk from staples\", \"молоко больше не нужно держать дома\", \"Milch muss nicht mehr immer da sein\") is food_remove_staple`,
 		"when it is a staple, Food has already put it back on the list and the processor leaves it out",
