@@ -6,9 +6,9 @@ set -euo pipefail
 actor=(-H 'X-Life-OS-Actor: dev:smoke-processor-codex-actions')
 
 # Opt-in, disposable proof that the deployed processor uses the authenticated
-# local Codex CLI to route explicit Calendar, Finance, grocery, meal, and
-# recipe link captures. It does not call the processor directly or inject
-# actions through the MCP service.
+# local Codex CLI to route explicit Calendar, Finance, grocery, meal, recipe
+# link, and receipt photo captures. It does not call the processor directly
+# or inject actions through the MCP service.
 compose=(./tools/verify-compose)
 # The recipe page a capture links to, served at http://ics-fixture/ by the
 # browser tests' verify-only overlay, which lets recipe-import fetch it.
@@ -88,6 +88,19 @@ finance_id=$(capture "Spent 123 euros in cash at $finance_note on 2026-10-08.")
 wait_for_action "$finance_id" finance_create_manual_transaction
 cash_id=$(curl --fail --silent "$gateway/api/finance/v1/accounts" | jq -r '[.items[] | select(.builtIn)][0].id')
 curl --fail --silent "$gateway/api/finance/v1/transactions?limit=100" | jq -e --arg note "$finance_note" --arg cash "$cash_id" '.items | map(select(.accountId == $cash and .amount.amount == -12300 and .amount.currency == "EUR" and .bookingDate == "2026-10-08" and (((.notes // "") + " " + (.counterparty // "") + " " + (.description // "")) | ascii_downcase | contains($note | ascii_downcase)))) | length == 1' >/dev/null
+
+# A photo of a cash receipt (tools/fixtures/documents), captured like the
+# composer's photo without words, is cash spending on the receipt's date at
+# its merchant, once.
+receipt_ref=$(curl "${actor[@]}" --fail --silent -F "images=@tools/fixtures/documents/receipt-cash-rewe.png;type=image/png" "$gateway/api/inbox/v1/media" | jq -r '.items[0].reference')
+receipt_id=$(curl "${actor[@]}" --fail --silent -H 'content-type: application/json' \
+  --data "$(jq -nc --arg ref "$receipt_ref" '{content:"Photo",source:"web",mediaReferences:[$ref],sourceMetadata:{verification:"p16-03-receipt"}}')" \
+  "$gateway/api/inbox/v1/inbox-items" | jq -r '.id')
+wait_for_action "$receipt_id" finance_create_manual_transaction
+curl --fail --silent "$gateway/api/finance/v1/transactions?limit=100" | jq -e --arg cash "$cash_id" '[.items[] | select(.accountId == $cash and .amount.amount == -2347 and .amount.currency == "EUR" and .bookingDate == "2026-10-10" and ((.counterparty // "") | ascii_downcase | contains("rewe")))] | length == 1' >/dev/null || {
+  echo "Codex action smoke: the cash receipt photo did not become one -23.47 EUR REWE transaction on 2026-10-10" >&2
+  exit 1
+}
 
 # Groceries go on the shopping list, once, marked as coming from the capture.
 oat_milk() {
@@ -199,4 +212,4 @@ curl --fail --silent "$gateway/api/inbox/v1/inbox-items/$ambiguous_id" |
 curl --fail --silent "$gateway/api/tasks/v1/tasks/$ambiguous_task_a" | jq -e '.completed == false' >/dev/null
 curl --fail --silent "$gateway/api/tasks/v1/tasks/$ambiguous_task_b" | jq -e '.completed == false' >/dev/null
 
-echo "authenticated Codex Calendar, Finance, grocery, meal, recipe link, and Task mutation/ambiguity capture smoke passed"
+echo "authenticated Codex Calendar, Finance, receipt photo, grocery, meal, recipe link, and Task mutation/ambiguity capture smoke passed"

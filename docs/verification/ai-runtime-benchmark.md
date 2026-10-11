@@ -6,7 +6,7 @@ Routine Inbox and Voice planning runs through the authenticated Codex CLI. X-01 
 
 ## How it was measured
 
-`tools/benchmark-ai-runtime <model/effort>…` starts a fresh disposable verification stack for each profile, with the browser tests' fixture overlay (`tools/fixtures/calendar-ics.compose.yaml`: the recipe pages it writes are served at `http://ics-fixture/`, which recipe-import may fetch) and the owner's timezone set to Europe/Berlin, and seeds existing Tasks, Calendar events, one shopping list item, the recipe "Pasta Bolognese" (Spaghetti 500 g, Hackfleisch 400 g, Tomaten 1 Dose) with Spaghetti in the pantry, and a breakfast ("Pancakes") on the coming Saturday (run on a Saturday, also on the next one, since "Saturday" may mean either). It then submits the same captures: EN, RU, and DE text through the Inbox API the Dashboard uses, plus a recorded voice note through Voice and whisper.cpp. The automatic processor plans them with the real Codex CLI and acts through MCP and the owning services. The tool checks the persisted results:
+`tools/benchmark-ai-runtime <model/effort>…` starts a fresh disposable verification stack for each profile, with the browser tests' fixture overlay (`tools/fixtures/calendar-ics.compose.yaml`: the recipe pages it writes are served at `http://ics-fixture/`, which recipe-import may fetch) and the owner's timezone set to Europe/Berlin, uploads three synthetic photos through the Inbox media API (drawn by `tools/fixtures/documents`: a Finanzamt letter, a cash and a card receipt; captured with the composer's placeholder text "Photo"), and seeds existing Tasks, Calendar events, one shopping list item, the recipe "Pasta Bolognese" (Spaghetti 500 g, Hackfleisch 400 g, Tomaten 1 Dose) with Spaghetti in the pantry, and a breakfast ("Pancakes") on the coming Saturday (run on a Saturday, also on the next one, since "Saturday" may mean either). It then submits the same captures: EN, RU, and DE text through the Inbox API the Dashboard uses, plus a recorded voice note through Voice and whisper.cpp. The automatic processor plans them with the real Codex CLI and acts through MCP and the owning services. The tool checks the persisted results:
 
 | Scenario | Pass condition |
 | --- | --- |
@@ -31,7 +31,7 @@ Routine Inbox and Voice planning runs through the authenticated Codex CLI. X-01 
 | Cash EN ("Spent 12 euros at the bakery.") | Resolved; one −12.00 EUR transaction in the Cash account |
 | Cash RU ("Потратил 7,50 евро на кофе.") | Resolved; one −7.50 EUR transaction in the Cash account |
 | Card ("Paid 45 euros by card at REWE.") | Not resolved; no −45.00 transaction (the bank connection brings it) |
-| No extra transactions | Exactly the 2 cash transactions exist |
+| No extra transactions | Exactly the 3 cash transactions exist (two typed, one from the receipt) |
 | Food list EN ("Buy milk and 6 eggs.") | Resolved; "milk" and "eggs" (amount 6, `sourceRef` the capture) are needed on the shopping list |
 | Food list RU ("Купить хлеб и сыр в Lidl.") | Resolved; "хлеб" and "сыр" are needed, each tagged Lidl |
 | Food list DE ("Zahnpasta und Duschgel bei dm kaufen.") | Resolved; "Zahnpasta" and "Duschgel" are needed, each tagged dm |
@@ -46,17 +46,20 @@ Routine Inbox and Voice planning runs through the authenticated Codex CLI. X-01 
 | Recipe link ("Save this recipe: http://ics-fixture/gulasch.html", a JSON-LD page) | Resolved; one recipe "Omas Rindergulasch" with that link as its source and its 3 ingredients |
 | Recipe from a caption (an OpenGraph-only post page, like an Instagram reel, plus its pasted caption "Shakshuka in 20 Minuten …" with "Zutaten" and "Zubereitung") | Resolved; one Shakshuka recipe with the post's link as its source and the caption's 4 ingredients |
 | No extra recipes | Exactly the seeded recipe and these two |
+| Letter photo (Finanzamt Darmstadt: "Bitte reichen Sie die Unterlagen bis zum 30.11.2026 ein", Steuernummer 007/123/45678) | Resolved; one Task titled with "Finanzamt", due 30 November 2026 in Berlin |
+| Cash receipt photo (REWE, SUMME EUR 23,47, BAR, 10.10.2026) | Resolved; one −23.47 EUR transaction in the Cash account on 2026-10-10 with counterparty REWE |
+| Card receipt photo (Kartenzahlung girocard, 41,20 EUR) | Not resolved (left to the bank connection); no −41.20 transaction |
 | No extra shopping items | Exactly 9 items (the seeded one + 6 added from captures + 2 from the recipe), each name once |
 | No extra pantry items | Exactly the yoghurt and the seeded spaghetti |
 | No extra meals | Exactly Wednesday's dinner, Friday's lunch, and the seeded Saturday breakfasts but the cleared one, in the three weeks from the capture |
-| No extra entities | Exactly 10 seeded + 5 created Tasks exist (passport, milk, tax return, flash drive, call the plumber) |
+| No extra entities | Exactly 10 seeded + 6 created Tasks exist (passport, milk, tax return, flash drive, call the plumber, the Finanzamt letter) |
 | No extra events | Exactly the 4 seeded events + the created one exist, all active |
 
 The reschedule cases turned out to separate the profiles. They were also repeated three times each directly against the planner (`processor -content`), to see how often a profile gets them right.
 
 ## Results (2026-10-09, Codex CLI 0.160.0, ChatGPT Plus)
 
-Full real-runtime runs. They predate the three cross-language completions (POL-08, see [cross-language Task matching](../services/mcp.md)), the Calendar change scenarios (P10-03, see [Calendar events](../services/mcp.md#calendar-events)), the cash and card captures (P13-01), the grocery captures (P15-03, see [Food](../services/mcp.md#food)), the meal captures (P15-05, see [Meals and recipes](../services/mcp.md#meals-and-recipes)), and the recipe links (P15-07, see [Recipe links](../services/mcp.md#recipe-links)), so they count 13 checks; a run now has 41. Token figures are totals for the run, as reported by Codex (`turn.completed`).
+Full real-runtime runs. They predate the three cross-language completions (POL-08, see [cross-language Task matching](../services/mcp.md)), the Calendar change scenarios (P10-03, see [Calendar events](../services/mcp.md#calendar-events)), the cash and card captures (P13-01), the grocery captures (P15-03, see [Food](../services/mcp.md#food)), the meal captures (P15-05, see [Meals and recipes](../services/mcp.md#meals-and-recipes)), the recipe links (P15-07, see [Recipe links](../services/mcp.md#recipe-links)), and the photos (P16-03, see [Letters and receipts](../services/mcp.md#letters-and-receipts)), so they count 13 checks; a run now has 44. The checks that count Tasks by a word match titles only, since a letter's Task has notes (its reference numbers), and the tax return is matched by "Steuererkl". Token figures are totals for the run, as reported by Codex (`turn.completed`).
 
 | Profile | Checks passed | Failed checks | Attempts | Output tokens | Reasoning tokens |
 | --- | --- | --- | --- | --- | --- |

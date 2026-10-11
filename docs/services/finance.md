@@ -47,7 +47,7 @@ advisory lock). If the owner already has a manual account called Cash (any
 case), that account becomes the built-in one; otherwise a new "Cash" account is
 created in `FINANCE_DEFAULT_CURRENCY` (compose: `LIFE_OS_FINANCE_CURRENCY`,
 default EUR), named "Cash (Life OS)" if a bank account already took "Cash". A
-manual transaction without an `accountId` goes there. It can be renamed and
+manual transaction without an `accountId` goes there: also cash the AI records from a capture, such as "spent 12 euros at the bakery" or a photo of a cash receipt (Kassenbon, BAR; see [Letters and receipts](mcp.md#letters-and-receipts)). Card receipts are left to the bank connection. It can be renamed and
 given another opening balance, but not archived or made another kind (409
 `built_in_account`).
 

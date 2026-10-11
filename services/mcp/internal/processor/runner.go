@@ -487,9 +487,6 @@ func reviewCandidates(found []map[string]any) []map[string]any {
 	return found
 }
 
-// planContext carries what planning needs to resolve the item's relative
-// dates: when it was captured, and the timezone it was captured in (the
-// capturing browser's, sourceMetadata.timeZone, when the client sent one).
 // captureImages reads the images of a capture that has any.
 func (r Runner) captureImages(ctx context.Context, item inboxItem) (CaptureImages, error) {
 	if r.Media == nil || len(item.MediaReferences) == 0 {
@@ -498,6 +495,9 @@ func (r Runner) captureImages(ctx context.Context, item inboxItem) (CaptureImage
 	return r.Media.Fetch(ctx, item.MediaReferences)
 }
 
+// planContext carries what planning needs to resolve the item's relative
+// dates: when it was captured, and the timezone it was captured in (the
+// capturing browser's, sourceMetadata.timeZone, when the client sent one).
 func planContext(ctx context.Context, item inboxItem) context.Context {
 	timeZone, _ := item.SourceMetadata["timeZone"].(string)
 	return WithCaptureTimeZone(WithCapturedAt(ctx, item.CreatedAt), timeZone)
@@ -740,8 +740,17 @@ func validCancelDay(arguments map[string]any) bool {
 	return true
 }
 
+// idempotencyKey is the deterministic key of an item's processing, the base
+// of its attempts' keys and of every action key: its id and text and, for a
+// capture with images, their references (content hashes). Photo captures
+// often share a placeholder text ("Photo"), so the images are part of what
+// the capture is; a capture without images keeps the key it always had.
 func idempotencyKey(item inboxItem) string {
-	sum := sha256.Sum256([]byte(item.ID + "\x00" + item.Content))
+	input := item.ID + "\x00" + item.Content
+	if len(item.MediaReferences) > 0 {
+		input += "\x00" + strings.Join(item.MediaReferences, "\x00")
+	}
+	sum := sha256.Sum256([]byte(input))
 	return fmt.Sprintf("codex-%x", sum[:12])
 }
 func actionIdempotencyKey(item inboxItem, index int, action plannedAction) string {
