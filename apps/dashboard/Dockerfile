@@ -25,6 +25,8 @@ ENV NODE_ENV=production \
     PORT=3000
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/.next ./.next
+# Static files served at the root: the app icons and the service worker.
+COPY --from=build /app/public ./public
 COPY --from=build /app/package.json ./package.json
 EXPOSE 3000
 CMD ["npm", "run", "start"]
