@@ -295,3 +295,67 @@ func TestEachRunAppliesTheRotation(t *testing.T) {
 		t.Fatalf("kept %v\nwant %v", kept, want)
 	}
 }
+
+// fakeTarget records what the runner gives it; with fail set, Put fails.
+type fakeTarget struct {
+	name    string
+	fail    bool
+	puts    []string
+	deletes []string
+}
+
+func (f *fakeTarget) Name() string { return f.name }
+
+func (f *fakeTarget) Put(_ context.Context, manifest Manifest, dir string) error {
+	if _, err := os.Stat(filepath.Join(dir, ManifestFile)); err != nil {
+		return err
+	}
+	if f.fail {
+		return errors.New("bucket unreachable")
+	}
+	f.puts = append(f.puts, manifest.ID)
+	return nil
+}
+
+func (f *fakeTarget) Delete(_ context.Context, id string) error {
+	f.deletes = append(f.deletes, id)
+	return nil
+}
+
+func TestTargetsReceiveCompletedRunsAndDeletions(t *testing.T) {
+	now := time.Date(2026, 10, 11, 1, 15, 0, 0, time.UTC)
+	good, bad := &fakeTarget{name: "offsite"}, &fakeTarget{name: "broken", fail: true}
+	store := openStore(t)
+	runner := NewRunner(RunnerOptions{
+		Store:     store,
+		Dumper:    &fakeDumper{},
+		Registry:  func() ([]Database, error) { return testRegistry, nil },
+		Retention: Retention{Daily: 1, FailedDays: 1},
+		Targets:   []Target{good, bad},
+		Now:       func() time.Time { return now },
+	})
+	t.Cleanup(func() { _ = runner.Close(context.Background()) })
+
+	first, err := runner.Start(Request{Trigger: TriggerSchedule})
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary := wait(t, first)
+	if summary.Result != ResultSucceeded || len(summary.Copies) != 2 || summary.Copies[0] != (Copy{Target: "offsite", Result: ResultSucceeded}) || summary.Copies[1].Result != ResultFailed || summary.Copies[1].Error != "bucket unreachable" {
+		t.Fatalf("summary = %+v", summary)
+	}
+	if history, _ := store.History(); len(history) != 1 || len(history[0].Copies) != 2 {
+		t.Fatalf("history = %+v", history)
+	}
+	// The next day's run makes the rotation (one day kept) delete the first,
+	// on the targets too.
+	now = now.Add(24 * time.Hour)
+	second, err := runner.Start(Request{Trigger: TriggerSchedule})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wait(t, second)
+	if !slices.Equal(good.puts, []string{first.ID(), second.ID()}) || !slices.Equal(good.deletes, []string{first.ID()}) || !slices.Equal(bad.deletes, []string{first.ID()}) {
+		t.Fatalf("puts %v, deletes %v / %v", good.puts, good.deletes, bad.deletes)
+	}
+}

@@ -103,6 +103,8 @@ type Summary struct {
 	TotalBytes      int64             `json:"totalBytes"`
 	Databases       []DatabaseSummary `json:"databases"`
 	Error           string            `json:"error,omitempty"`
+	// Copies are the run's copies on other targets (none yet).
+	Copies []Copy `json:"copies,omitempty"`
 }
 
 // DatabaseSummary is one database of a Summary.

@@ -24,7 +24,7 @@ the live setup.
 api/openapi.yaml       # HTTP contract
 cmd/server/            # process entrypoint; `/service now [database…]` is the client
 internal/api/          # HTTP adapters
-internal/backup/       # registry, dumps, run directory, rotation, schedule
+internal/backup/       # registry, dumps, run directory, rotation, schedule, targets
 internal/cli/          # the `now` client
 internal/config/       # configuration
 ```

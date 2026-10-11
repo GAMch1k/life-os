@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -112,6 +113,8 @@ type RunnerOptions struct {
 	// database added to the registry is backed up from the next run on.
 	Registry  func() ([]Database, error)
 	Retention Retention
+	// Targets receive a copy of every completed run (none yet).
+	Targets []Target
 	// Location is the owner's timezone, for the rotation's days, weeks,
 	// and months.
 	Location *time.Location
@@ -300,6 +303,8 @@ func (r *Runner) execute(job *Job, manifest Manifest, dir string, databases []Da
 			logger.Warn("removing the run's files failed", "error", err)
 		}
 		withoutFiles(&summary)
+	} else {
+		summary.Copies = r.copy(ctx, manifest, logger)
 	}
 	r.record(summary)
 	if ctx.Err() == nil {
@@ -398,7 +403,27 @@ func (r *Runner) rotate() {
 			continue
 		}
 		r.opts.Logger.Info("deleted an expired backup run", "run", id)
+		for _, target := range r.opts.Targets {
+			if err := target.Delete(r.ctx, id); err != nil {
+				r.opts.Logger.Warn("deleting an expired backup run from a target failed", "run", id, "target", target.Name(), "error", err)
+			}
+		}
 	}
+}
+
+// copy puts a completed run on every target.
+func (r *Runner) copy(ctx context.Context, manifest Manifest, logger *slog.Logger) []Copy {
+	var copies []Copy
+	dir := filepath.Join(r.opts.Store.Root(), AutoDir, manifest.ID)
+	for _, target := range r.opts.Targets {
+		result := Copy{Target: target.Name(), Result: ResultSucceeded}
+		if err := target.Put(ctx, manifest, dir); err != nil {
+			result.Result, result.Error = ResultFailed, err.Error()
+			logger.Warn("copying the backup run to a target failed", "target", target.Name(), "error", err)
+		}
+		copies = append(copies, result)
+	}
+	return copies
 }
 
 func (r *Runner) record(summary Summary) {
