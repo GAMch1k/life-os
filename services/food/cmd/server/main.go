@@ -4,11 +4,15 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
+	// The alpine runtime image has no zoneinfo; embed it so the owner's
+	// timezone resolves.
+	_ "time/tzdata"
 
+	"github.com/GAMch1k/life-os/pkg/activity"
 	"github.com/GAMch1k/life-os/pkg/database"
 	"github.com/GAMch1k/life-os/pkg/httpserver"
 	"github.com/GAMch1k/life-os/services/food/internal/api"
-	"github.com/GAMch1k/life-os/services/food/internal/api/generated"
 	serviceconfig "github.com/GAMch1k/life-os/services/food/internal/config"
 )
 
@@ -26,6 +30,14 @@ func run(ctx context.Context) error {
 	}
 
 	logger := httpserver.NewJSONLogger(os.Stdout, cfg.ParsedLogLevel())
+	ownerTimeZone, err := cfg.OwnerTimeZone()
+	if err != nil {
+		logger.Warn(err.Error())
+	}
+	owner, err := time.LoadLocation(ownerTimeZone)
+	if err != nil {
+		return fmt.Errorf("load owner timezone: %w", err)
+	}
 	pool, err := database.Open(ctx, cfg.DatabaseConfig())
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
@@ -36,7 +48,7 @@ func run(ctx context.Context) error {
 		httpserver.WithLogger(logger),
 		httpserver.WithReadinessCheck(pool.Ping),
 	)
-	generated.RegisterHandlers(app, api.NewHandler())
+	api.Register(app, api.NewHandler(pool, api.Options{Location: owner, Activity: activity.NewEmitter(cfg.ActivityURL, "food", logger)}))
 	app.OnShutdown(database.ClosePool(pool))
 
 	return app.Run(fmt.Sprintf(":%d", cfg.Port))

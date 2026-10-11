@@ -14,8 +14,19 @@ func TestLoadFromAppliesDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.ServiceName != "food" || cfg.Port != 8080 || cfg.LogLevel != "info" {
+	if cfg.ServiceName != "food" || cfg.Port != 8080 || cfg.LogLevel != "info" || cfg.TimeZone != "UTC" || cfg.ActivityURL != "" {
 		t.Fatalf("unexpected config: %+v", cfg)
+	}
+}
+
+func TestOwnerTimeZone(t *testing.T) {
+	t.Parallel()
+
+	for value, want := range map[string]string{"": "UTC", "Europe/Berlin": "Europe/Berlin", "Mars/Olympus": "UTC", "Local": "UTC"} {
+		got, err := Config{TimeZone: value}.OwnerTimeZone()
+		if got != want || (err != nil) != (value == "Mars/Olympus" || value == "Local") {
+			t.Errorf("OwnerTimeZone(%q) = %q, %v; want %q", value, got, err, want)
+		}
 	}
 }
 

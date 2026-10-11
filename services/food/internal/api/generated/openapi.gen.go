@@ -5,35 +5,729 @@ package generated
 
 import (
 	"fmt"
+	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/oapi-codegen/runtime"
+	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
-// EchoResponse defines model for EchoResponse.
-type EchoResponse struct {
-	Message string `json:"message"`
+// Defines values for ActorKind.
+const (
+	Agent  ActorKind = "agent"
+	Dev    ActorKind = "dev"
+	System ActorKind = "system"
+	User   ActorKind = "user"
+)
+
+// Valid indicates whether the value is a known member of the ActorKind enum.
+func (e ActorKind) Valid() bool {
+	switch e {
+	case Agent:
+		return true
+	case Dev:
+		return true
+	case System:
+		return true
+	case User:
+		return true
+	default:
+		return false
+	}
 }
 
-// PingResponse defines model for PingResponse.
-type PingResponse struct {
-	Message string `json:"message"`
+// Defines values for Aisle.
+const (
+	AisleBakery    Aisle = "bakery"
+	AisleDairy     Aisle = "dairy"
+	AisleDrinks    Aisle = "drinks"
+	AisleDrugstore Aisle = "drugstore"
+	AisleFrozen    Aisle = "frozen"
+	AisleHousehold Aisle = "household"
+	AisleMeatFish  Aisle = "meat_fish"
+	AisleOther     Aisle = "other"
+	AislePantry    Aisle = "pantry"
+	AisleProduce   Aisle = "produce"
+	AisleSnacks    Aisle = "snacks"
+)
+
+// Valid indicates whether the value is a known member of the Aisle enum.
+func (e Aisle) Valid() bool {
+	switch e {
+	case AisleBakery:
+		return true
+	case AisleDairy:
+		return true
+	case AisleDrinks:
+		return true
+	case AisleDrugstore:
+		return true
+	case AisleFrozen:
+		return true
+	case AisleHousehold:
+		return true
+	case AisleMeatFish:
+		return true
+	case AisleOther:
+		return true
+	case AislePantry:
+		return true
+	case AisleProduce:
+		return true
+	case AisleSnacks:
+		return true
+	default:
+		return false
+	}
 }
 
-// GetEchoParams defines parameters for GetEcho.
-type GetEchoParams struct {
-	Message string `form:"message" json:"message"`
+// Defines values for AisleRuleMatch.
+const (
+	Substring AisleRuleMatch = "substring"
+	Word      AisleRuleMatch = "word"
+)
+
+// Valid indicates whether the value is a known member of the AisleRuleMatch enum.
+func (e AisleRuleMatch) Valid() bool {
+	switch e {
+	case Substring:
+		return true
+	case Word:
+		return true
+	default:
+		return false
+	}
 }
+
+// Defines values for AisleSetBy.
+const (
+	AisleSetByManual AisleSetBy = "manual"
+	AisleSetByRule   AisleSetBy = "rule"
+)
+
+// Valid indicates whether the value is a known member of the AisleSetBy enum.
+func (e AisleSetBy) Valid() bool {
+	switch e {
+	case AisleSetByManual:
+		return true
+	case AisleSetByRule:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ItemSource.
+const (
+	ItemSourceCapture ItemSource = "capture"
+	ItemSourceManual  ItemSource = "manual"
+)
+
+// Valid indicates whether the value is a known member of the ItemSource enum.
+func (e ItemSource) Valid() bool {
+	switch e {
+	case ItemSourceCapture:
+		return true
+	case ItemSourceManual:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PantryItemState.
+const (
+	InStock    PantryItemState = "in_stock"
+	ThrownAway PantryItemState = "thrown_away"
+	UsedUp     PantryItemState = "used_up"
+)
+
+// Valid indicates whether the value is a known member of the PantryItemState enum.
+func (e PantryItemState) Valid() bool {
+	switch e {
+	case InStock:
+		return true
+	case ThrownAway:
+		return true
+	case UsedUp:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PantryLocation.
+const (
+	PantryLocationFreezer PantryLocation = "freezer"
+	PantryLocationFridge  PantryLocation = "fridge"
+	PantryLocationOther   PantryLocation = "other"
+	PantryLocationPantry  PantryLocation = "pantry"
+)
+
+// Valid indicates whether the value is a known member of the PantryLocation enum.
+func (e PantryLocation) Valid() bool {
+	switch e {
+	case PantryLocationFreezer:
+		return true
+	case PantryLocationFridge:
+		return true
+	case PantryLocationOther:
+		return true
+	case PantryLocationPantry:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ShoppingItemState.
+const (
+	Bought ShoppingItemState = "bought"
+	Needed ShoppingItemState = "needed"
+)
+
+// Valid indicates whether the value is a known member of the ShoppingItemState enum.
+func (e ShoppingItemState) Valid() bool {
+	switch e {
+	case Bought:
+		return true
+	case Needed:
+		return true
+	default:
+		return false
+	}
+}
+
+// Actor Who made a change, as its X-Life-OS-Actor said.
+type Actor struct {
+	// Kind user = the owner; agent = the Life OS AI; system = a Life OS component; dev = a development tool or agent working on Life OS.
+	Kind ActorKind `json:"kind"`
+
+	// Name The agent, system, or dev name, for example codex-inbox-processor.
+	Name *string `json:"name,omitempty"`
+}
+
+// ActorKind user = the owner; agent = the Life OS AI; system = a Life OS component; dev = a development tool or agent working on Life OS.
+type ActorKind string
+
+// AddPantryItemsRequest defines model for AddPantryItemsRequest.
+type AddPantryItemsRequest struct {
+	Items []NewPantryItem `json:"items"`
+}
+
+// AddPantryItemsResponse defines model for AddPantryItemsResponse.
+type AddPantryItemsResponse struct {
+	Items []PantryItem `json:"items"`
+}
+
+// AddShoppingItemsRequest defines model for AddShoppingItemsRequest.
+type AddShoppingItemsRequest struct {
+	Items []NewShoppingItem `json:"items"`
+}
+
+// AddShoppingItemsResponse defines model for AddShoppingItemsResponse.
+type AddShoppingItemsResponse struct {
+	Items []ShoppingItemResult `json:"items"`
+}
+
+// Aisle The shopping list's sections, in the order the list shows them.
+type Aisle string
+
+// AisleRule Places a new item whose normalised name contains `keyword`; when several rules match, the longest keyword wins.
+type AisleRule struct {
+	// Aisle The shopping list's sections, in the order the list shows them.
+	Aisle     Aisle     `json:"aisle"`
+	CreatedAt time.Time `json:"createdAt"`
+
+	// CreatedBy Who made a change, as its X-Life-OS-Actor said.
+	CreatedBy Actor              `json:"createdBy"`
+	Id        openapi_types.UUID `json:"id"`
+
+	// Keyword Normalised.
+	Keyword string `json:"keyword"`
+
+	// Match `word`: the keyword matches whole words of a name ("milk" in "oat milk", not in "buttermilk"). `substring`: anywhere, also inside a word, for German compounds ("milch" in "Vollmilch").
+	Match AisleRuleMatch `json:"match"`
+}
+
+// AisleRuleList defines model for AisleRuleList.
+type AisleRuleList struct {
+	Items []AisleRule `json:"items"`
+}
+
+// AisleRuleMatch `word`: the keyword matches whole words of a name ("milk" in "oat milk", not in "buttermilk"). `substring`: anywhere, also inside a word, for German compounds ("milch" in "Vollmilch").
+type AisleRuleMatch string
+
+// AisleSetBy `rule`: the aisle rules chose the aisle. `manual`: a request named it.
+type AisleSetBy string
+
+// ClearBoughtRequest defines model for ClearBoughtRequest.
+type ClearBoughtRequest struct {
+	// BoughtBefore Only items bought before this instant.
+	BoughtBefore *time.Time `json:"boughtBefore,omitempty"`
+}
+
+// ClearBoughtResult defines model for ClearBoughtResult.
+type ClearBoughtResult struct {
+	Deleted int `json:"deleted"`
+}
+
+// CreateAisleRuleRequest defines model for CreateAisleRuleRequest.
+type CreateAisleRuleRequest struct {
+	// Aisle The shopping list's sections, in the order the list shows them.
+	Aisle   Aisle  `json:"aisle"`
+	Keyword string `json:"keyword"`
+
+	// Match `word`: the keyword matches whole words of a name ("milk" in "oat milk", not in "buttermilk"). `substring`: anywhere, also inside a word, for German compounds ("milch" in "Vollmilch").
+	Match *AisleRuleMatch `json:"match,omitempty"`
+}
+
+// CreateStoreRequest defines model for CreateStoreRequest.
+type CreateStoreRequest struct {
+	Name      string `json:"name"`
+	SortOrder *int   `json:"sortOrder,omitempty"`
+}
+
+// ErrorResponse defines model for ErrorResponse.
+type ErrorResponse struct {
+	Error struct {
+		// Code Machine-readable code, such as already_on_list.
+		Code string `json:"code"`
+
+		// Message A sentence for people.
+		Message string `json:"message"`
+	} `json:"error"`
+	RequestId string `json:"request_id"`
+}
+
+// ItemSource `manual`: added directly (the Dashboard, a tool). `capture`: added from a capture such as an Inbox item; `sourceRef` names it.
+type ItemSource string
+
+// NewPantryItem defines model for NewPantryItem.
+type NewPantryItem struct {
+	Amount    *string             `json:"amount,omitempty"`
+	ExpiresOn *openapi_types.Date `json:"expiresOn,omitempty"`
+
+	// FromShoppingItemId The shopping item it was bought as; it must exist.
+	FromShoppingItemId *openapi_types.UUID `json:"fromShoppingItemId,omitempty"`
+	Location           *PantryLocation     `json:"location,omitempty"`
+	Name               string              `json:"name"`
+	Note               *string             `json:"note,omitempty"`
+	OpenedOn           *openapi_types.Date `json:"openedOn,omitempty"`
+
+	// Source `manual`: added directly (the Dashboard, a tool). `capture`: added from a capture such as an Inbox item; `sourceRef` names it.
+	Source    *ItemSource `json:"source,omitempty"`
+	SourceRef *string     `json:"sourceRef,omitempty"`
+}
+
+// NewShoppingItem Give the store by `storeId` or by `storeName`, not both.
+type NewShoppingItem struct {
+	// Aisle The shopping list's sections, in the order the list shows them.
+	Aisle  *Aisle  `json:"aisle,omitempty"`
+	Amount *string `json:"amount,omitempty"`
+	Name   string  `json:"name"`
+	Note   *string `json:"note,omitempty"`
+
+	// Source `manual`: added directly (the Dashboard, a tool). `capture`: added from a capture such as an Inbox item; `sourceRef` names it.
+	Source *ItemSource `json:"source,omitempty"`
+
+	// SourceRef What the item came from, such as an Inbox item id.
+	SourceRef *string             `json:"sourceRef,omitempty"`
+	StoreId   *openapi_types.UUID `json:"storeId,omitempty"`
+
+	// StoreName A store's name; an unknown one creates the store.
+	StoreName *string `json:"storeName,omitempty"`
+}
+
+// PantryItem defines model for PantryItem.
+type PantryItem struct {
+	Amount    *string   `json:"amount"`
+	CreatedAt time.Time `json:"createdAt"`
+
+	// CreatedBy Who made a change, as its X-Life-OS-Actor said.
+	CreatedBy Actor               `json:"createdBy"`
+	EndedAt   *time.Time          `json:"endedAt"`
+	ExpiresOn *openapi_types.Date `json:"expiresOn"`
+
+	// FromShoppingItemId The shopping item it was bought as.
+	FromShoppingItemId *openapi_types.UUID `json:"fromShoppingItemId"`
+	Id                 openapi_types.UUID  `json:"id"`
+	Location           PantryLocation      `json:"location"`
+
+	// Name As written.
+	Name           string              `json:"name"`
+	NormalizedName string              `json:"normalizedName"`
+	Note           *string             `json:"note"`
+	OpenedOn       *openapi_types.Date `json:"openedOn"`
+
+	// Source `manual`: added directly (the Dashboard, a tool). `capture`: added from a capture such as an Inbox item; `sourceRef` names it.
+	Source    ItemSource `json:"source"`
+	SourceRef *string    `json:"sourceRef"`
+
+	// State `in_stock`: at home. `used_up` and `thrown_away` end the item; it is kept for history.
+	State     PantryItemState `json:"state"`
+	UpdatedAt time.Time       `json:"updatedAt"`
+
+	// UpdatedBy Who made a change, as its X-Life-OS-Actor said.
+	UpdatedBy Actor `json:"updatedBy"`
+}
+
+// PantryItemList defines model for PantryItemList.
+type PantryItemList struct {
+	Items      []PantryItem `json:"items"`
+	NextCursor *string      `json:"nextCursor,omitempty"`
+}
+
+// PantryItemState `in_stock`: at home. `used_up` and `thrown_away` end the item; it is kept for history.
+type PantryItemState string
+
+// PantryLocation defines model for PantryLocation.
+type PantryLocation string
+
+// ShoppingItem defines model for ShoppingItem.
+type ShoppingItem struct {
+	// Aisle The shopping list's sections, in the order the list shows them.
+	Aisle Aisle `json:"aisle"`
+
+	// AisleSetBy `rule`: the aisle rules chose the aisle. `manual`: a request named it.
+	AisleSetBy AisleSetBy `json:"aisleSetBy"`
+
+	// Amount Free text, such as "2 l", "6", or "500 g".
+	Amount    *string    `json:"amount"`
+	BoughtAt  *time.Time `json:"boughtAt"`
+	CreatedAt time.Time  `json:"createdAt"`
+
+	// CreatedBy Who made a change, as its X-Life-OS-Actor said.
+	CreatedBy Actor              `json:"createdBy"`
+	Id        openapi_types.UUID `json:"id"`
+
+	// Name As written.
+	Name string `json:"name"`
+
+	// NormalizedName The name as Food compares it.
+	NormalizedName string  `json:"normalizedName"`
+	Note           *string `json:"note"`
+
+	// Source `manual`: added directly (the Dashboard, a tool). `capture`: added from a capture such as an Inbox item; `sourceRef` names it.
+	Source    ItemSource          `json:"source"`
+	SourceRef *string             `json:"sourceRef"`
+	State     ShoppingItemState   `json:"state"`
+	StoreId   *openapi_types.UUID `json:"storeId"`
+	StoreName *string             `json:"storeName"`
+	UpdatedAt time.Time           `json:"updatedAt"`
+
+	// UpdatedBy Who made a change, as its X-Life-OS-Actor said.
+	UpdatedBy Actor `json:"updatedBy"`
+}
+
+// ShoppingItemList defines model for ShoppingItemList.
+type ShoppingItemList struct {
+	Items      []ShoppingItem `json:"items"`
+	NextCursor *string        `json:"nextCursor,omitempty"`
+}
+
+// ShoppingItemResult defines model for ShoppingItemResult.
+type ShoppingItemResult struct {
+	Item ShoppingItem `json:"item"`
+
+	// Merged True when the request merged into an item that was already needed.
+	Merged bool `json:"merged"`
+}
+
+// ShoppingItemState defines model for ShoppingItemState.
+type ShoppingItemState string
+
+// Store defines model for Store.
+type Store struct {
+	Archived   bool       `json:"archived"`
+	ArchivedAt *time.Time `json:"archivedAt"`
+	CreatedAt  time.Time  `json:"createdAt"`
+
+	// CreatedBy Who made a change, as its X-Life-OS-Actor said.
+	CreatedBy Actor              `json:"createdBy"`
+	Id        openapi_types.UUID `json:"id"`
+	Name      string             `json:"name"`
+	SortOrder int                `json:"sortOrder"`
+	UpdatedAt time.Time          `json:"updatedAt"`
+
+	// UpdatedBy Who made a change, as its X-Life-OS-Actor said.
+	UpdatedBy Actor `json:"updatedBy"`
+}
+
+// StoreList defines model for StoreList.
+type StoreList struct {
+	Items []Store `json:"items"`
+}
+
+// UpdatePantryItemRequest defines model for UpdatePantryItemRequest.
+type UpdatePantryItemRequest struct {
+	Amount    *string             `json:"amount,omitempty"`
+	ExpiresOn *openapi_types.Date `json:"expiresOn,omitempty"`
+	Location  *PantryLocation     `json:"location,omitempty"`
+	Name      *string             `json:"name,omitempty"`
+	Note      *string             `json:"note,omitempty"`
+	OpenedOn  *openapi_types.Date `json:"openedOn,omitempty"`
+}
+
+// UpdateShoppingItemRequest Give the store by `storeId` or by `storeName`, not both; `storeId: null` removes it.
+type UpdateShoppingItemRequest struct {
+	// Aisle The shopping list's sections, in the order the list shows them.
+	Aisle     *Aisle              `json:"aisle,omitempty"`
+	Amount    *string             `json:"amount,omitempty"`
+	Name      *string             `json:"name,omitempty"`
+	Note      *string             `json:"note,omitempty"`
+	StoreId   *openapi_types.UUID `json:"storeId,omitempty"`
+	StoreName *string             `json:"storeName,omitempty"`
+}
+
+// UpdateStoreRequest defines model for UpdateStoreRequest.
+type UpdateStoreRequest struct {
+	Archived  *bool   `json:"archived,omitempty"`
+	Name      *string `json:"name,omitempty"`
+	SortOrder *int    `json:"sortOrder,omitempty"`
+}
+
+// IdempotencyKey defines model for IdempotencyKey.
+type IdempotencyKey = string
+
+// ItemId defines model for ItemId.
+type ItemId = openapi_types.UUID
+
+// RuleId defines model for RuleId.
+type RuleId = openapi_types.UUID
+
+// StoreId defines model for StoreId.
+type StoreId = openapi_types.UUID
+
+// ListAisleRulesParams defines parameters for ListAisleRules.
+type ListAisleRulesParams struct {
+	Aisle *Aisle `form:"aisle,omitempty" json:"aisle,omitempty"`
+}
+
+// CreateAisleRuleParams defines parameters for CreateAisleRule.
+type CreateAisleRuleParams struct {
+	// IdempotencyKey Makes the write safe to retry; see the API description.
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// DeleteAisleRuleParams defines parameters for DeleteAisleRule.
+type DeleteAisleRuleParams struct {
+	// IdempotencyKey Makes the write safe to retry; see the API description.
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// ListPantryItemsParams defines parameters for ListPantryItems.
+type ListPantryItemsParams struct {
+	State    *PantryItemState `form:"state,omitempty" json:"state,omitempty"`
+	Location *PantryLocation  `form:"location,omitempty" json:"location,omitempty"`
+
+	// ExpiringWithinDays In-stock items that expire on or before today + N days (0: today or earlier).
+	ExpiringWithinDays *int `form:"expiringWithinDays,omitempty" json:"expiringWithinDays,omitempty"`
+
+	// Cursor The previous page's nextCursor. Opaque; only valid with the filters it was returned for.
+	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// AddPantryItemsParams defines parameters for AddPantryItems.
+type AddPantryItemsParams struct {
+	// IdempotencyKey Makes the write safe to retry; see the API description.
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// DeletePantryItemParams defines parameters for DeletePantryItem.
+type DeletePantryItemParams struct {
+	// IdempotencyKey Makes the write safe to retry; see the API description.
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// UpdatePantryItemParams defines parameters for UpdatePantryItem.
+type UpdatePantryItemParams struct {
+	// IdempotencyKey Makes the write safe to retry; see the API description.
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// RestockPantryItemParams defines parameters for RestockPantryItem.
+type RestockPantryItemParams struct {
+	// IdempotencyKey Makes the write safe to retry; see the API description.
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// MarkPantryItemThrownAwayParams defines parameters for MarkPantryItemThrownAway.
+type MarkPantryItemThrownAwayParams struct {
+	// IdempotencyKey Makes the write safe to retry; see the API description.
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// MarkPantryItemUsedUpParams defines parameters for MarkPantryItemUsedUp.
+type MarkPantryItemUsedUpParams struct {
+	// IdempotencyKey Makes the write safe to retry; see the API description.
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// ListShoppingItemsParams defines parameters for ListShoppingItems.
+type ListShoppingItemsParams struct {
+	State *ShoppingItemState `form:"state,omitempty" json:"state,omitempty"`
+
+	// StoreId Only items tagged with this store.
+	StoreId *openapi_types.UUID `form:"storeId,omitempty" json:"storeId,omitempty"`
+	Aisle   *Aisle              `form:"aisle,omitempty" json:"aisle,omitempty"`
+
+	// Cursor The previous page's nextCursor. Opaque; only valid with the filters it was returned for.
+	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// AddShoppingItemsParams defines parameters for AddShoppingItems.
+type AddShoppingItemsParams struct {
+	// IdempotencyKey Makes the write safe to retry; see the API description.
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// ClearBoughtShoppingItemsParams defines parameters for ClearBoughtShoppingItems.
+type ClearBoughtShoppingItemsParams struct {
+	// IdempotencyKey Makes the write safe to retry; see the API description.
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// DeleteShoppingItemParams defines parameters for DeleteShoppingItem.
+type DeleteShoppingItemParams struct {
+	// IdempotencyKey Makes the write safe to retry; see the API description.
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// UpdateShoppingItemParams defines parameters for UpdateShoppingItem.
+type UpdateShoppingItemParams struct {
+	// IdempotencyKey Makes the write safe to retry; see the API description.
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// MarkShoppingItemBoughtParams defines parameters for MarkShoppingItemBought.
+type MarkShoppingItemBoughtParams struct {
+	// IdempotencyKey Makes the write safe to retry; see the API description.
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// MarkShoppingItemNeededParams defines parameters for MarkShoppingItemNeeded.
+type MarkShoppingItemNeededParams struct {
+	// IdempotencyKey Makes the write safe to retry; see the API description.
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// ListStoresParams defines parameters for ListStores.
+type ListStoresParams struct {
+	IncludeArchived *bool `form:"includeArchived,omitempty" json:"includeArchived,omitempty"`
+}
+
+// CreateStoreParams defines parameters for CreateStore.
+type CreateStoreParams struct {
+	// IdempotencyKey Makes the write safe to retry; see the API description.
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// UpdateStoreParams defines parameters for UpdateStore.
+type UpdateStoreParams struct {
+	// IdempotencyKey Makes the write safe to retry; see the API description.
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// CreateAisleRuleJSONRequestBody defines body for CreateAisleRule for application/json ContentType.
+type CreateAisleRuleJSONRequestBody = CreateAisleRuleRequest
+
+// AddPantryItemsJSONRequestBody defines body for AddPantryItems for application/json ContentType.
+type AddPantryItemsJSONRequestBody = AddPantryItemsRequest
+
+// UpdatePantryItemJSONRequestBody defines body for UpdatePantryItem for application/json ContentType.
+type UpdatePantryItemJSONRequestBody = UpdatePantryItemRequest
+
+// AddShoppingItemsJSONRequestBody defines body for AddShoppingItems for application/json ContentType.
+type AddShoppingItemsJSONRequestBody = AddShoppingItemsRequest
+
+// ClearBoughtShoppingItemsJSONRequestBody defines body for ClearBoughtShoppingItems for application/json ContentType.
+type ClearBoughtShoppingItemsJSONRequestBody = ClearBoughtRequest
+
+// UpdateShoppingItemJSONRequestBody defines body for UpdateShoppingItem for application/json ContentType.
+type UpdateShoppingItemJSONRequestBody = UpdateShoppingItemRequest
+
+// CreateStoreJSONRequestBody defines body for CreateStore for application/json ContentType.
+type CreateStoreJSONRequestBody = CreateStoreRequest
+
+// UpdateStoreJSONRequestBody defines body for UpdateStore for application/json ContentType.
+type UpdateStoreJSONRequestBody = UpdateStoreRequest
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
-	// GetEcho Echo a required query parameter
-	// (GET /v1/echo)
-	GetEcho(c fiber.Ctx, params GetEchoParams) error
-	// GetPing Contract-generation smoke endpoint
-	// (GET /v1/ping)
-	GetPing(c fiber.Ctx) error
+	// ListAisleRules List aisle rules
+	// (GET /v1/aisle-rules)
+	ListAisleRules(c fiber.Ctx, params ListAisleRulesParams) error
+	// CreateAisleRule Create an aisle rule
+	// (POST /v1/aisle-rules)
+	CreateAisleRule(c fiber.Ctx, params CreateAisleRuleParams) error
+	// DeleteAisleRule Delete an aisle rule
+	// (DELETE /v1/aisle-rules/{ruleId})
+	DeleteAisleRule(c fiber.Ctx, ruleId RuleId, params DeleteAisleRuleParams) error
+	// ListPantryItems List pantry items
+	// (GET /v1/pantry-items)
+	ListPantryItems(c fiber.Ctx, params ListPantryItemsParams) error
+	// AddPantryItems Add pantry items
+	// (POST /v1/pantry-items)
+	AddPantryItems(c fiber.Ctx, params AddPantryItemsParams) error
+	// DeletePantryItem Delete a pantry item
+	// (DELETE /v1/pantry-items/{itemId})
+	DeletePantryItem(c fiber.Ctx, itemId ItemId, params DeletePantryItemParams) error
+	// GetPantryItem Get a pantry item
+	// (GET /v1/pantry-items/{itemId})
+	GetPantryItem(c fiber.Ctx, itemId ItemId) error
+	// UpdatePantryItem Update a pantry item
+	// (PATCH /v1/pantry-items/{itemId})
+	UpdatePantryItem(c fiber.Ctx, itemId ItemId, params UpdatePantryItemParams) error
+	// RestockPantryItem Put a pantry item back in stock
+	// (POST /v1/pantry-items/{itemId}/restock)
+	RestockPantryItem(c fiber.Ctx, itemId ItemId, params RestockPantryItemParams) error
+	// MarkPantryItemThrownAway Mark a pantry item thrown away
+	// (POST /v1/pantry-items/{itemId}/thrown-away)
+	MarkPantryItemThrownAway(c fiber.Ctx, itemId ItemId, params MarkPantryItemThrownAwayParams) error
+	// MarkPantryItemUsedUp Mark a pantry item used up
+	// (POST /v1/pantry-items/{itemId}/used-up)
+	MarkPantryItemUsedUp(c fiber.Ctx, itemId ItemId, params MarkPantryItemUsedUpParams) error
+	// ListShoppingItems List the shopping list
+	// (GET /v1/shopping-items)
+	ListShoppingItems(c fiber.Ctx, params ListShoppingItemsParams) error
+	// AddShoppingItems Add items to the shopping list
+	// (POST /v1/shopping-items)
+	AddShoppingItems(c fiber.Ctx, params AddShoppingItemsParams) error
+	// ClearBoughtShoppingItems Clear bought items
+	// (POST /v1/shopping-items/clear-bought)
+	ClearBoughtShoppingItems(c fiber.Ctx, params ClearBoughtShoppingItemsParams) error
+	// DeleteShoppingItem Delete a shopping item
+	// (DELETE /v1/shopping-items/{itemId})
+	DeleteShoppingItem(c fiber.Ctx, itemId ItemId, params DeleteShoppingItemParams) error
+	// GetShoppingItem Get a shopping item
+	// (GET /v1/shopping-items/{itemId})
+	GetShoppingItem(c fiber.Ctx, itemId ItemId) error
+	// UpdateShoppingItem Update a shopping item
+	// (PATCH /v1/shopping-items/{itemId})
+	UpdateShoppingItem(c fiber.Ctx, itemId ItemId, params UpdateShoppingItemParams) error
+	// MarkShoppingItemBought Mark a shopping item bought
+	// (POST /v1/shopping-items/{itemId}/bought)
+	MarkShoppingItemBought(c fiber.Ctx, itemId ItemId, params MarkShoppingItemBoughtParams) error
+	// MarkShoppingItemNeeded Mark a shopping item needed again
+	// (POST /v1/shopping-items/{itemId}/needed)
+	MarkShoppingItemNeeded(c fiber.Ctx, itemId ItemId, params MarkShoppingItemNeededParams) error
+	// ListStores List stores
+	// (GET /v1/stores)
+	ListStores(c fiber.Ctx, params ListStoresParams) error
+	// CreateStore Create a store
+	// (POST /v1/stores)
+	CreateStore(c fiber.Ctx, params CreateStoreParams) error
+	// GetStore Get a store
+	// (GET /v1/stores/{storeId})
+	GetStore(c fiber.Ctx, storeId StoreId) error
+	// UpdateStore Rename, reorder, or archive a store
+	// (PATCH /v1/stores/{storeId})
+	UpdateStore(c fiber.Ctx, storeId StoreId, params UpdateStoreParams) error
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -45,14 +739,14 @@ type ServerInterfaceWrapper struct {
 type MiddlewareFunc fiber.Handler
 type HandlerMiddlewareFunc func(c fiber.Ctx, next fiber.Handler) error
 
-// GetEcho operation middleware
-func (siw *ServerInterfaceWrapper) GetEcho(c fiber.Ctx) error {
+// ListAisleRules operation middleware
+func (siw *ServerInterfaceWrapper) ListAisleRules(c fiber.Ctx) error {
 
 	var err error
 	_ = err
 
 	// Parameter object where we will unmarshal all parameters from the context
-	var params GetEchoParams
+	var params ListAisleRulesParams
 
 	var query url.Values
 	query, err = url.ParseQuery(string(c.Request().URI().QueryString()))
@@ -60,15 +754,15 @@ func (siw *ServerInterfaceWrapper) GetEcho(c fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for query string: %w", err).Error())
 	}
 
-	// ------------- Required query parameter "message" -------------
+	// ------------- Optional query parameter "aisle" -------------
 
-	err = runtime.BindQueryParameterWithOptions("form", true, true, "message", query, &params.Message, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "aisle", query, &params.Aisle, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
 	if err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter message: %w", err).Error())
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter aisle: %w", err).Error())
 	}
 
 	handler := func(c fiber.Ctx) error {
-		return siw.Handler.GetEcho(c, params)
+		return siw.Handler.ListAisleRules(c, params)
 	}
 
 	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
@@ -82,11 +776,1023 @@ func (siw *ServerInterfaceWrapper) GetEcho(c fiber.Ctx) error {
 	return handler(c)
 }
 
-// GetPing operation middleware
-func (siw *ServerInterfaceWrapper) GetPing(c fiber.Ctx) error {
+// CreateAisleRule operation middleware
+func (siw *ServerInterfaceWrapper) CreateAisleRule(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreateAisleRuleParams
+
+	headers := c.GetReqHeaders()
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("Too many values for ParamName Idempotency-Key, 1 is required, but %d found", n))
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter Idempotency-Key: %w", err).Error())
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
 
 	handler := func(c fiber.Ctx) error {
-		return siw.Handler.GetPing(c)
+		return siw.Handler.CreateAisleRule(c, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// DeleteAisleRule operation middleware
+func (siw *ServerInterfaceWrapper) DeleteAisleRule(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "ruleId" -------------
+	var ruleId RuleId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "ruleId", c.Params("ruleId"), &ruleId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter ruleId: %w", err).Error())
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DeleteAisleRuleParams
+
+	headers := c.GetReqHeaders()
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("Too many values for ParamName Idempotency-Key, 1 is required, but %d found", n))
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter Idempotency-Key: %w", err).Error())
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.DeleteAisleRule(c, ruleId, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// ListPantryItems operation middleware
+func (siw *ServerInterfaceWrapper) ListPantryItems(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListPantryItemsParams
+
+	var query url.Values
+	query, err = url.ParseQuery(string(c.Request().URI().QueryString()))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for query string: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "state" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "state", query, &params.State, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter state: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "location" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "location", query, &params.Location, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter location: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "expiringWithinDays" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "expiringWithinDays", query, &params.ExpiringWithinDays, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter expiringWithinDays: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", query, &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter cursor: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", query, &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter limit: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.ListPantryItems(c, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// AddPantryItems operation middleware
+func (siw *ServerInterfaceWrapper) AddPantryItems(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params AddPantryItemsParams
+
+	headers := c.GetReqHeaders()
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("Too many values for ParamName Idempotency-Key, 1 is required, but %d found", n))
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter Idempotency-Key: %w", err).Error())
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.AddPantryItems(c, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// DeletePantryItem operation middleware
+func (siw *ServerInterfaceWrapper) DeletePantryItem(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "itemId" -------------
+	var itemId ItemId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "itemId", c.Params("itemId"), &itemId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter itemId: %w", err).Error())
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DeletePantryItemParams
+
+	headers := c.GetReqHeaders()
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("Too many values for ParamName Idempotency-Key, 1 is required, but %d found", n))
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter Idempotency-Key: %w", err).Error())
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.DeletePantryItem(c, itemId, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// GetPantryItem operation middleware
+func (siw *ServerInterfaceWrapper) GetPantryItem(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "itemId" -------------
+	var itemId ItemId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "itemId", c.Params("itemId"), &itemId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter itemId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.GetPantryItem(c, itemId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// UpdatePantryItem operation middleware
+func (siw *ServerInterfaceWrapper) UpdatePantryItem(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "itemId" -------------
+	var itemId ItemId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "itemId", c.Params("itemId"), &itemId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter itemId: %w", err).Error())
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdatePantryItemParams
+
+	headers := c.GetReqHeaders()
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("Too many values for ParamName Idempotency-Key, 1 is required, but %d found", n))
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter Idempotency-Key: %w", err).Error())
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.UpdatePantryItem(c, itemId, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// RestockPantryItem operation middleware
+func (siw *ServerInterfaceWrapper) RestockPantryItem(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "itemId" -------------
+	var itemId ItemId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "itemId", c.Params("itemId"), &itemId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter itemId: %w", err).Error())
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params RestockPantryItemParams
+
+	headers := c.GetReqHeaders()
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("Too many values for ParamName Idempotency-Key, 1 is required, but %d found", n))
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter Idempotency-Key: %w", err).Error())
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.RestockPantryItem(c, itemId, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// MarkPantryItemThrownAway operation middleware
+func (siw *ServerInterfaceWrapper) MarkPantryItemThrownAway(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "itemId" -------------
+	var itemId ItemId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "itemId", c.Params("itemId"), &itemId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter itemId: %w", err).Error())
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params MarkPantryItemThrownAwayParams
+
+	headers := c.GetReqHeaders()
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("Too many values for ParamName Idempotency-Key, 1 is required, but %d found", n))
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter Idempotency-Key: %w", err).Error())
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.MarkPantryItemThrownAway(c, itemId, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// MarkPantryItemUsedUp operation middleware
+func (siw *ServerInterfaceWrapper) MarkPantryItemUsedUp(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "itemId" -------------
+	var itemId ItemId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "itemId", c.Params("itemId"), &itemId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter itemId: %w", err).Error())
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params MarkPantryItemUsedUpParams
+
+	headers := c.GetReqHeaders()
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("Too many values for ParamName Idempotency-Key, 1 is required, but %d found", n))
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter Idempotency-Key: %w", err).Error())
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.MarkPantryItemUsedUp(c, itemId, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// ListShoppingItems operation middleware
+func (siw *ServerInterfaceWrapper) ListShoppingItems(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListShoppingItemsParams
+
+	var query url.Values
+	query, err = url.ParseQuery(string(c.Request().URI().QueryString()))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for query string: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "state" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "state", query, &params.State, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter state: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "storeId" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "storeId", query, &params.StoreId, runtime.BindQueryParameterOptions{Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter storeId: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "aisle" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "aisle", query, &params.Aisle, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter aisle: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", query, &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter cursor: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", query, &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter limit: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.ListShoppingItems(c, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// AddShoppingItems operation middleware
+func (siw *ServerInterfaceWrapper) AddShoppingItems(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params AddShoppingItemsParams
+
+	headers := c.GetReqHeaders()
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("Too many values for ParamName Idempotency-Key, 1 is required, but %d found", n))
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter Idempotency-Key: %w", err).Error())
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.AddShoppingItems(c, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// ClearBoughtShoppingItems operation middleware
+func (siw *ServerInterfaceWrapper) ClearBoughtShoppingItems(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClearBoughtShoppingItemsParams
+
+	headers := c.GetReqHeaders()
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("Too many values for ParamName Idempotency-Key, 1 is required, but %d found", n))
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter Idempotency-Key: %w", err).Error())
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.ClearBoughtShoppingItems(c, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// DeleteShoppingItem operation middleware
+func (siw *ServerInterfaceWrapper) DeleteShoppingItem(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "itemId" -------------
+	var itemId ItemId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "itemId", c.Params("itemId"), &itemId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter itemId: %w", err).Error())
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DeleteShoppingItemParams
+
+	headers := c.GetReqHeaders()
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("Too many values for ParamName Idempotency-Key, 1 is required, but %d found", n))
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter Idempotency-Key: %w", err).Error())
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.DeleteShoppingItem(c, itemId, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// GetShoppingItem operation middleware
+func (siw *ServerInterfaceWrapper) GetShoppingItem(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "itemId" -------------
+	var itemId ItemId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "itemId", c.Params("itemId"), &itemId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter itemId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.GetShoppingItem(c, itemId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// UpdateShoppingItem operation middleware
+func (siw *ServerInterfaceWrapper) UpdateShoppingItem(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "itemId" -------------
+	var itemId ItemId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "itemId", c.Params("itemId"), &itemId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter itemId: %w", err).Error())
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdateShoppingItemParams
+
+	headers := c.GetReqHeaders()
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("Too many values for ParamName Idempotency-Key, 1 is required, but %d found", n))
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter Idempotency-Key: %w", err).Error())
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.UpdateShoppingItem(c, itemId, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// MarkShoppingItemBought operation middleware
+func (siw *ServerInterfaceWrapper) MarkShoppingItemBought(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "itemId" -------------
+	var itemId ItemId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "itemId", c.Params("itemId"), &itemId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter itemId: %w", err).Error())
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params MarkShoppingItemBoughtParams
+
+	headers := c.GetReqHeaders()
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("Too many values for ParamName Idempotency-Key, 1 is required, but %d found", n))
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter Idempotency-Key: %w", err).Error())
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.MarkShoppingItemBought(c, itemId, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// MarkShoppingItemNeeded operation middleware
+func (siw *ServerInterfaceWrapper) MarkShoppingItemNeeded(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "itemId" -------------
+	var itemId ItemId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "itemId", c.Params("itemId"), &itemId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter itemId: %w", err).Error())
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params MarkShoppingItemNeededParams
+
+	headers := c.GetReqHeaders()
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("Too many values for ParamName Idempotency-Key, 1 is required, but %d found", n))
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter Idempotency-Key: %w", err).Error())
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.MarkShoppingItemNeeded(c, itemId, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// ListStores operation middleware
+func (siw *ServerInterfaceWrapper) ListStores(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListStoresParams
+
+	var query url.Values
+	query, err = url.ParseQuery(string(c.Request().URI().QueryString()))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for query string: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "includeArchived" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "includeArchived", query, &params.IncludeArchived, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter includeArchived: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.ListStores(c, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// CreateStore operation middleware
+func (siw *ServerInterfaceWrapper) CreateStore(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreateStoreParams
+
+	headers := c.GetReqHeaders()
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("Too many values for ParamName Idempotency-Key, 1 is required, but %d found", n))
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter Idempotency-Key: %w", err).Error())
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.CreateStore(c, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// GetStore operation middleware
+func (siw *ServerInterfaceWrapper) GetStore(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "storeId" -------------
+	var storeId StoreId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "storeId", c.Params("storeId"), &storeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter storeId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.GetStore(c, storeId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// UpdateStore operation middleware
+func (siw *ServerInterfaceWrapper) UpdateStore(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "storeId" -------------
+	var storeId StoreId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "storeId", c.Params("storeId"), &storeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter storeId: %w", err).Error())
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdateStoreParams
+
+	headers := c.GetReqHeaders()
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("Too many values for ParamName Idempotency-Key, 1 is required, but %d found", n))
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter Idempotency-Key: %w", err).Error())
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.UpdateStore(c, storeId, params)
 	}
 
 	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
@@ -123,8 +1829,50 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 		router.Use(fiber.Handler(m))
 	}
 
-	router.Get(options.BaseURL+"/v1/ping", wrapper.GetPing)
+	router.Get(options.BaseURL+"/v1/shopping-items", wrapper.ListShoppingItems)
 
-	router.Get(options.BaseURL+"/v1/echo", wrapper.GetEcho)
+	router.Post(options.BaseURL+"/v1/shopping-items", wrapper.AddShoppingItems)
+
+	router.Post(options.BaseURL+"/v1/shopping-items/clear-bought", wrapper.ClearBoughtShoppingItems)
+
+	router.Delete(options.BaseURL+"/v1/shopping-items/:itemId", wrapper.DeleteShoppingItem)
+
+	router.Get(options.BaseURL+"/v1/shopping-items/:itemId", wrapper.GetShoppingItem)
+
+	router.Patch(options.BaseURL+"/v1/shopping-items/:itemId", wrapper.UpdateShoppingItem)
+
+	router.Post(options.BaseURL+"/v1/shopping-items/:itemId/bought", wrapper.MarkShoppingItemBought)
+
+	router.Post(options.BaseURL+"/v1/shopping-items/:itemId/needed", wrapper.MarkShoppingItemNeeded)
+
+	router.Get(options.BaseURL+"/v1/stores", wrapper.ListStores)
+
+	router.Post(options.BaseURL+"/v1/stores", wrapper.CreateStore)
+
+	router.Get(options.BaseURL+"/v1/stores/:storeId", wrapper.GetStore)
+
+	router.Patch(options.BaseURL+"/v1/stores/:storeId", wrapper.UpdateStore)
+
+	router.Get(options.BaseURL+"/v1/aisle-rules", wrapper.ListAisleRules)
+
+	router.Post(options.BaseURL+"/v1/aisle-rules", wrapper.CreateAisleRule)
+
+	router.Delete(options.BaseURL+"/v1/aisle-rules/:ruleId", wrapper.DeleteAisleRule)
+
+	router.Get(options.BaseURL+"/v1/pantry-items", wrapper.ListPantryItems)
+
+	router.Post(options.BaseURL+"/v1/pantry-items", wrapper.AddPantryItems)
+
+	router.Delete(options.BaseURL+"/v1/pantry-items/:itemId", wrapper.DeletePantryItem)
+
+	router.Get(options.BaseURL+"/v1/pantry-items/:itemId", wrapper.GetPantryItem)
+
+	router.Patch(options.BaseURL+"/v1/pantry-items/:itemId", wrapper.UpdatePantryItem)
+
+	router.Post(options.BaseURL+"/v1/pantry-items/:itemId/used-up", wrapper.MarkPantryItemUsedUp)
+
+	router.Post(options.BaseURL+"/v1/pantry-items/:itemId/thrown-away", wrapper.MarkPantryItemThrownAway)
+
+	router.Post(options.BaseURL+"/v1/pantry-items/:itemId/restock", wrapper.RestockPantryItem)
 
 }

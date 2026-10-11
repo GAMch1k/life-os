@@ -1,58 +1,29 @@
-# Canonical Go + Fiber service template
+# food
 
-This is the neutral starting point for Life OS backend services. It provides
-the standard process, HTTP, persistence, migration, and OpenAPI layout without
-introducing a Finance, Tasks, Inbox, Calendar, or other business domain.
-
-Run `make create-service SERVICE=<name>` from the repository root to turn this
-template into a named service. Do not add business entities, routes, tables,
-or queries to the template itself.
+Food (P15-01): one shopping list grouped by aisle, with an optional store per
+item, the stores, the aisle rules that place new items, and the pantry (what is
+at home and when it expires). It owns its database, `food_db`. See
+[docs/services/food.md](../../docs/services/food.md).
 
 ## Layout
 
 ```text
-api/openapi.yaml                 # transport-contract placeholder
-cmd/server/                      # process entrypoint
-db/migrations/                   # reversible, service-owned migrations
-db/queries/                      # service-owned sqlc input
-internal/api/                    # HTTP adapters
-internal/config/                 # service configuration
-internal/domain/                 # service domain types
-internal/repository/             # persistence adapters and sqlc output
-internal/service/                # service use cases
+api/openapi.yaml          # the Food API (/v1/shopping-items, /v1/stores, /v1/aisle-rules, /v1/pantry-items)
+cmd/server/               # the service
+db/migrations/            # food_db, with the built-in aisle rules
+db/queries/               # sqlc input
+internal/domain/          # name normalisation, aisles, aisle rule matching
+internal/api/             # handlers, idempotent writes, Activity events
+internal/testdb/          # a migrated throwaway schema for integration tests
 ```
-
-## Conventions
-
-- Every generated service is an independent Go module.
-- Shared infrastructure comes only from `github.com/GAMch1k/life-os/pkg`.
-- The service owns all contents of `db/`; it never reads another service's
-  database.
-- Migrations are six-digit, ordered, and reversible.
-- sqlc input lives in `db/queries`; generated pgx/v5 code is committed under
-  `internal/repository/generated`.
-- The process exposes the shared `/health` and `/ready` endpoints and performs
-  graceful shutdown through `pkg/httpserver`.
 
 ## Commands
 
-From this directory, with `DATABASE_URL` set to this service's database:
-
 ```sh
-make generate
-make test
+make generate                     # sqlc and the OpenAPI server code
+make test                         # unit tests; integration tests need FOOD_TEST_DATABASE_URL
 make migrate-up DATABASE_URL='postgres://...'
-make run DATABASE_URL='postgres://...'
 ```
 
-Build the image from the repository root context and run it on the local Life
-OS Docker network:
-
-```sh
-make docker-build
-make docker-run DATABASE_URL='postgres://food_user:password@postgres:5432/food_db?sslmode=disable'
-```
-
-The template's baseline migration is intentionally a no-op. It proves the
-migration workflow without creating a sample business table; generated services
-replace it with their first service-owned migration.
+The integration tests run against a throwaway Postgres named by
+`FOOD_TEST_DATABASE_URL`, each in its own schema.

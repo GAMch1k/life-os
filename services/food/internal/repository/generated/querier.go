@@ -6,10 +6,62 @@ package generated
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Querier interface {
+	// Adds an item, or merges it into the open item with the same normalised
+	// stay, and an aisle a request named replaces the open item's. The caller
+	// chooses the new row's id, so an id other than @id means a merge.
+	AddShoppingItem(ctx context.Context, arg AddShoppingItemParams) (ShoppingItem, error)
+	// Claims key for this transaction. While another transaction holds the same
+	// key this waits for it; once that one has committed, nothing is inserted and
+	// no row is returned, and the caller reads the stored response instead.
+	ClaimIdempotencyKey(ctx context.Context, arg ClaimIdempotencyKeyParams) (string, error)
+	ClearBoughtShoppingItems(ctx context.Context, boughtBefore pgtype.Timestamptz) (int64, error)
+	CompleteIdempotencyKey(ctx context.Context, arg CompleteIdempotencyKeyParams) error
+	DeleteAisleRule(ctx context.Context, id pgtype.UUID) (AisleRule, error)
+	DeletePantryItem(ctx context.Context, id pgtype.UUID) (PantryItem, error)
+	DeleteShoppingItem(ctx context.Context, id pgtype.UUID) (ShoppingItem, error)
+	GetIdempotencyKey(ctx context.Context, key string) (IdempotencyKey, error)
+	GetOpenShoppingItemByName(ctx context.Context, normalizedName string) (ShoppingItem, error)
+	GetPantryItem(ctx context.Context, id pgtype.UUID) (PantryItem, error)
+	GetPantryItemForUpdate(ctx context.Context, id pgtype.UUID) (PantryItem, error)
+	GetShoppingItem(ctx context.Context, id pgtype.UUID) (ShoppingItem, error)
+	GetShoppingItemForUpdate(ctx context.Context, id pgtype.UUID) (ShoppingItem, error)
+	GetStore(ctx context.Context, id pgtype.UUID) (Store, error)
+	GetStoreByName(ctx context.Context, normalizedName string) (Store, error)
+	GetStoreForUpdate(ctx context.Context, id pgtype.UUID) (Store, error)
+	// Nothing is inserted (no row) when the keyword already has a rule.
+	InsertAisleRule(ctx context.Context, arg InsertAisleRuleParams) (AisleRule, error)
+	InsertPantryItem(ctx context.Context, arg InsertPantryItemParams) (PantryItem, error)
+	// A new store goes after the others unless it names its place. Nothing is
+	// inserted (no row) when a store with the name already exists.
+	InsertStore(ctx context.Context, arg InsertStoreParams) (Store, error)
+	ListAisleRules(ctx context.Context, aisle *string) ([]AisleRule, error)
+	// In-stock items first, soonest expiry first (no expiry last), then name;
+	// then ended items, the most recently ended first. expires_by keeps in-stock
+	// items that expire on or before that date (already expired ones too). The
+	// after_* arguments are the previous page's last item: whether it was in
+	// stock and, if so, its expiry (infinity for none) and name, else its end.
+	ListPantryItems(ctx context.Context, arg ListPantryItemsParams) ([]PantryItem, error)
+	// Open (needed) items first, by aisle, then name; then bought items, the
+	// most recently bought first. The after_* arguments are the previous page's
+	// last item: its state and, for an open item, its aisle rank and name, for a
+	// bought one its bought time.
+	ListShoppingItems(ctx context.Context, arg ListShoppingItemsParams) ([]ShoppingItem, error)
+	ListStores(ctx context.Context, includeArchived bool) ([]Store, error)
+	MarkShoppingItemBought(ctx context.Context, arg MarkShoppingItemBoughtParams) (ShoppingItem, error)
+	MarkShoppingItemNeeded(ctx context.Context, arg MarkShoppingItemNeededParams) (ShoppingItem, error)
 	Ping(ctx context.Context) (int32, error)
+	PruneIdempotencyKeys(ctx context.Context, before pgtype.Timestamptz) error
+	// in_stock clears ended_at; an ended state keeps an earlier end when the item
+	// had already ended (used up, then marked thrown away instead).
+	SetPantryItemState(ctx context.Context, arg SetPantryItemStateParams) (PantryItem, error)
+	UpdatePantryItem(ctx context.Context, arg UpdatePantryItemParams) (PantryItem, error)
+	UpdateShoppingItem(ctx context.Context, arg UpdateShoppingItemParams) (ShoppingItem, error)
+	UpdateStore(ctx context.Context, arg UpdateStoreParams) (Store, error)
 }
 
 var _ Querier = (*Queries)(nil)
