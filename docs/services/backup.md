@@ -16,11 +16,12 @@ Every database in `infra/postgres/service-databases.conf`, read again at every r
 
 Each dump is a whole database: schemas, data, sequences, owners, and privileges, with `schema_migrations`, so a restored database knows its migration version. Roles and their passwords live outside the databases; provisioning (`infra/postgres/provision-service-databases.sh`) recreates them from `.env`.
 
+**Inbox's capture images** (the photos of letters and receipts on the volume `lifeos-inbox-media`) are backed up with every run that covers `inbox_db`; see [Capture images](#capture-images).
+
 Not backed up, on purpose:
 
 - **`.env` and `~/life-os.secrets`.** They hold every secret: database passwords, the Google OAuth client, the token keys that seal the bank session and the Google refresh token, the ntfy token and hashes, the Cloudflare tunnel token. Secrets do not belong next to the data they unlock; the owner keeps them separately. Without `LIFE_OS_BANKING_TOKEN_KEY` or `LIFE_OS_GOOGLE_TOKEN_KEY`, a restored bank session or Google connection cannot be decrypted and has to be connected again; everything else restores without them.
 - **The Enable Banking key file and the Codex session** (`LIFE_OS_ENABLE_BANKING_KEY_FILE`, `~/.codex`). Host secrets, as above.
-- **Capture images** (volume `lifeos-inbox-media`), for now. The photos attached to captures are kept as long as their captures, but only the databases are dumped: the captures and their references are in `inbox_db`, the image files are not. Losing the volume loses the photos (their captures stay, and Inbox answers 404 for them).
 - **Voice audio** (volume `lifeos-voice-audio`). Recordings are transient: they are deleted after `LIFE_OS_VOICE_RETENTION_HOURS` (7 days), and what they said is already in `inbox_db` and `voice_db`.
 - **Whisper models** (volume `lifeos-whisper-models`). The worker downloads its model again from `LIFE_OS_WHISPER_MODEL_URL`.
 - **ntfy's data** (volume `lifeos-ntfy-data`). Its `user.db` holds only the two accounts, which ntfy provisions from `.env` at every start, deleting any other; a copy holds nothing `.env` does not, and restoring it would change nothing. Its `cache.db` keeps 12 hours of messages that were delivered and are stored in Notifications anyway. Copying `user.db` from a read-only mount would work (it uses SQLite's rollback journal, and file locks work across containers), but it would add a SQLite driver to put the publisher token, in plain text, into every backup for no gain.
@@ -41,19 +42,32 @@ A write committed while the backup runs is in neither the counts nor the dump; t
 
 While a database is backed up, its tables hold `ACCESS SHARE` locks, as `pg_dump` takes anyway: reads and writes go on, and a migration that alters a table waits until the dump is done. One database may take at most 30 minutes.
 
+## Capture images
+
+Inbox stores each capture image once, in a file named by the SHA-256 of its bytes, and records it in `inbox_media` (see [Inbox: capture images](inbox.md#capture-images)). A file never changes, so the backups keep them in one shared, content-addressed store, `media/<first two hex digits>/<sha256>`, and each run only adds what is not there yet:
+
+1. While `inbox_db` is backed up, in the same snapshot transaction its row counts and dump come from, the service reads every `inbox_media` row (hash and size). The run's images are exactly the ones its dump knows: an image uploaded during the backup is in neither.
+2. After the databases, it copies each image the store lacks from the volume, mounted read-only at `/media/inbox`: written aside, hashed while it is copied, checked against its name and size, flushed, and renamed.
+3. The run lists the images it stored in `media-inbox.json` (hash and size) and sums them up in its manifest's `media`.
+
+An image `inbox_media` names that is not on the volume (Inbox's hourly pass may remove an old orphan meanwhile), or whose bytes are not what its name says, is recorded as missing: a warning, not a failure. A volume the service cannot read at all fails the run, with what to do (the backup container needs the files' group, below). A run of only some databases that does not include Inbox stores no images.
+
 ## Layout
 
 ```text
 LIFE_OS_BACKUP_DIR/                 the host directory (mode 700), such as ~/life-os.backups
-  auto/                             the service's own; it touches nothing outside it
+  auto/                             the runs; with media/, all the service touches
     20261011T011500Z/               one completed run, named by its start in UTC
       manifest.json
       finance_db.dump               pg_dump custom format, one per database
       tasks_db.dump
+      media-inbox.json              the capture images this run stored
       …
     .partial-20261012T011500Z/      a run in progress, renamed when complete
     history.json                    the latest 100 runs, including those that left no files
     .lock                           locked (flock) while a run writes
+  media/                            capture images, each stored once for every run that lists it
+    3f/3fa2…c9                      named by its SHA-256, under its first two hex digits
   finance_db-before-p11-09.dump     anything else, such as manual dumps, is left alone
 ```
 
@@ -117,7 +131,9 @@ A backup that does not restore is no backup, so the service restores one regular
 4. counts every table's rows and reads `schema_migrations` there, and compares them with the manifest: a different count, a missing or extra table, or a different migration version or dirty flag is a mismatch;
 5. drops the scratch database, always: after each database, after a failure, and, for databases a crash left behind, at start and before every check (only those the role owns).
 
-The check is `ok` when every database restored and matched. It is recorded in `auto/restore-checks.json` (the latest 50) and reported as `lastRestoreCheck` in `GET /v1/status`, with each database's mismatches and errors.
+It also checks the run's capture images: every image its `media-inbox.json` lists must be in the store with its size, and they are hashed until the check has read 4 GiB (beyond that, presence and size only). A missing or damaged image fails the check.
+
+The check is `ok` when every database restored and matched, and every listed image checked out. It is recorded in `auto/restore-checks.json` (the latest 50) and reported as `lastRestoreCheck` in `GET /v1/status`, with each database's mismatches and errors.
 
 A check follows the nightly run of `BACKUP_RESTORE_CHECK_DAY` (`sunday`), under the same lock, so no run starts in between. If the last check is more than a week old (a missed Sunday), or there has been none, the next nightly run is followed by one whatever the day; the first backup after deployment is therefore checked at once. `off` stops the automatic checks. `POST /v1/restore-checks` and `/service restore-check` run one now. Runs and checks never overlap: while one goes, the other answers 409.
 
@@ -140,13 +156,15 @@ After every run the service deletes the runs its retention no longer keeps:
 
 It deletes only directories under `auto/` named like a run id (`20261011T011500Z`) with a readable manifest; anything else in the backup directory, `auto/` included, is never touched. At the defaults, about 20 full runs are kept, covering a year.
 
+Then it deletes the stored capture images no kept run lists, and half-written copies a crash left. While any kept run's manifest or media list cannot be read, it deletes no image at all: one it might need is never removed. It touches only files under `media/` named like a SHA-256, in directories named by their first two hex digits.
+
 ## API
 
 The service listens on port 8080 on the private `backend` network only (`http://backup:8080`); there is no gateway route. The Dashboard's Status page reads `GET /v1/status` for its Backups check, and its **Back up now** reaches `POST /v1/backups` through the Dashboard's own `/api/backups/` route, which passes on only those two (see [Dashboard](../frontend/dashboard.md)). The contract is `services/backup/api/openapi.yaml`.
 
 | Endpoint | |
 | --- | --- |
-| `GET /v1/status` | The latest run (`lastRun`, including interrupted and failed runs), the latest successful full run (`lastSuccess`), the run in progress (`running`: its databases, how many are done, the one being dumped), the latest restore check (`lastRestoreCheck`) and the one in progress (`runningRestoreCheck`), the schedule (`time`, `timeZone`, `nextRunAt`, `nextTrigger`, `restoreCheckDay`, `nextRestoreCheckAt`), the retention, the storage (`runs`, `totalBytes` under `auto/`, `freeBytes` and `sizeBytes` of the file system), and the databases in the registry now. |
+| `GET /v1/status` | The latest run (`lastRun`, including interrupted and failed runs), the latest successful full run (`lastSuccess`), the run in progress (`running`: its databases, how many are done, the one being dumped), the latest restore check (`lastRestoreCheck`) and the one in progress (`runningRestoreCheck`), the schedule (`time`, `timeZone`, `nextRunAt`, `nextTrigger`, `restoreCheckDay`, `nextRestoreCheckAt`), the retention, the storage (`runs`, `totalBytes` under `auto/`, `mediaFiles` and `mediaBytes` of the capture image store, `freeBytes` and `sizeBytes` of the file system), and the databases in the registry now. |
 | `GET /v1/backups` | The completed runs on disk, newest first, each with its manifest summarised (per database: result, file, size, SHA-256, tables, rows, migration, error). `cursor` and `limit` (1–100, default 50) page through them. |
 | `POST /v1/backups` | Runs a backup now: every database, or with `{"databases": ["finance", "tasks_db"]}` only those (service or database names). 202 with the run in progress; with `waitSeconds` (up to 3600) it waits and answers 200 with the finished run if it ends in time. 409 `backup_running` while a run or a restore check is going, 422 `unknown_database` for a name that is not in the registry. |
 | `POST /v1/restore-checks` | Runs a restore check now: of the newest successful full run, or with `{"runId": "20261011T011500Z"}` of that run. 202 with the check in progress, or 200 with the finished check with `waitSeconds`. 409 `backup_running` while a run or a check is going, 404 `run_not_found`, 422 `no_backup` when there is nothing to check. |
@@ -190,6 +208,7 @@ docker compose exec -T -e LIFE_OS_BACKUP_DB_PASSWORD postgres bash /opt/lifeos/p
 | `BACKUP_KEEP_DAILY`, `BACKUP_KEEP_WEEKLY`, `BACKUP_KEEP_MONTHLY` | `7` (1–366), `4` (0–520), `12` (0–1200) | `LIFE_OS_BACKUP_KEEP_DAILY`, `…_WEEKLY`, `…_MONTHLY` |
 | `BACKUP_KEEP_FAILED_DAYS` | `3` (1–366) | `LIFE_OS_BACKUP_KEEP_FAILED_DAYS` |
 | `BACKUP_RESTORE_CHECK_DAY` | `sunday` (a weekday, or `off`) | `LIFE_OS_BACKUP_RESTORE_CHECK_DAY` |
+| `BACKUP_INBOX_MEDIA_DIR` | empty: capture images are not backed up | `/media/inbox`, the `inbox-media` volume mounted read-only; the container also gets the files' group, `LIFE_OS_INBOX_MEDIA_GID` (101, the inbox image's `lifeos` group: `docker compose exec inbox id -g`) |
 | `BACKUP_PG_DUMP`, `BACKUP_PG_RESTORE` | `pg_dump`, `pg_restore` | the image's own |
 | `SERVICE_NAME`, `PORT`, `LOG_LEVEL` | `backup`, `8080`, `info` | |
 
@@ -201,7 +220,8 @@ The container runs as `LIFE_OS_BACKUP_RUNTIME_UID` (default 1000), which must ow
 - **Checking it.** `docker compose logs backup` shows `backup started` and `backup finished` (with `result`, `duration_seconds`, `bytes`), `database backup failed` with the error, `deleted an expired backup run`, and `removed an interrupted backup run`. `tools/backup-now` runs one and prints it; `ls ~/life-os.backups/auto` lists the runs.
 - **A failed database.** The error is in the run's manifest and in `GET /v1/status`, and says what to do (see [Runs and failures](#runs-and-failures)). A missing grant is fixed with `make db-provision-backup`; a wrong password by running it with the current `.env`, then `docker compose up -d --no-build --no-deps backup`.
 - **The registry in the PostgreSQL container.** Its single-file mount `/etc/lifeos/service-databases.conf` keeps the file it was created with when Git replaces it, so a database added since is missing there until the container is recreated. The provisioning scripts read the directory-mounted `/opt/lifeos/postgres/service-databases.conf` instead, which is always current, and print which one they read. See the [runbook](../operations/backups.md#the-registry-inside-the-postgresql-container).
-- **Checking and restoring.** `docker compose exec -T backup /service restore-check` runs a restore check and prints it; `tools/restore-database <database> <run|latest>` restores one database. Both, and restoring everything after losing PostgreSQL's volume, are in the [runbook](../operations/backups.md). `pg_restore --list <file>` lists a dump's contents.
+- **Capture images that cannot be read.** A run fails with "the media volume cannot be read: … permission denied (the backup service needs the media files' group …)" when `LIFE_OS_INBOX_MEDIA_GID` is not the group Inbox writes its images with (mode 0640): set it to `docker compose exec inbox id -g` and recreate the backup container. A few images missing on the volume are warnings in the manifest (`media.missing`) and the Backups card.
+- **Checking and restoring.** `docker compose exec -T backup /service restore-check` runs a restore check and prints it; `tools/restore-database <database> <run|latest>` restores one database (for Inbox, its capture images too), and `tools/restore-media <run|latest>` copies a run's capture images back onto the volume, adding only what is missing. Both, and restoring everything after losing PostgreSQL's volume, are in the [runbook](../operations/backups.md). `pg_restore --list <file>` lists a dump's contents.
 - **Verification stack.** `tools/verify-compose` gives the backup service a scratch directory of its own (`LIFE_OS_VERIFY_BACKUP_DIR`, by default `$TMPDIR/lifeos-verify-backups`) and refuses a plan that would write to the owner's backup directory (the one in `.env`, or `~/life-os.backups`).
 - **Tests.** `cd services/backup && GOWORK=off go test ./...` covers the registry parser, the schedule (daylight saving time, catch-up), the rotation, the run directory and its atomic completion, the lock, the history, the runner (a failing database, interruption, recovery), restore checks (selection, overlap with runs, the follow-up check, interruption, comparisons), the API, and the clients. The integration tests run against a throwaway PostgreSQL 18 (see `services/backup/README.md`): they back up two databases, commit a write between the snapshot and `pg_dump`, check the manifest's counts, restore a dump into a scratch database with the same counts, owners, and privileges, show that a database the role cannot reach fails alone with what to do, and run restore checks (with pgcrypto, an enum, a view, foreign keys) that pass, that find a changed count, migration, and dump, and that drop their scratch databases and leftovers but not databases the role does not own. `tools/test-restore-database` exercises `tools/restore-database` against the same server.
 

@@ -18,6 +18,8 @@ type fakeDumper struct {
 	block chan struct{}
 	mu    sync.Mutex
 	order []string
+	// media are the media files each database refers to.
+	media map[string][]MediaRef
 }
 
 func (f *fakeDumper) Version(context.Context) (string, error) {
@@ -46,6 +48,9 @@ func (f *fakeDumper) Dump(ctx context.Context, database Database, dir string) (D
 		return result, "18.6"
 	}
 	result.Result, result.File, result.Bytes, result.SHA256 = ResultSucceeded, database.Name+".dump", int64(len("PGDMP "+database.Name)), "abc"
+	f.mu.Lock()
+	result.Media = f.media[database.Name]
+	f.mu.Unlock()
 	return result, "18.6"
 }
 

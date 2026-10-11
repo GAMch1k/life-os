@@ -54,7 +54,10 @@ type Manifest struct {
 	ServerVersion   string           `json:"serverVersion,omitempty"`
 	PgDumpVersion   string           `json:"pgDumpVersion,omitempty"`
 	Databases       []DatabaseResult `json:"databases"`
-	Error           string           `json:"error,omitempty"`
+	// Media is what the run stored of Inbox's capture images, listed from
+	// the same snapshot as inbox_db's dump.
+	Media *MediaSet `json:"media,omitempty"`
+	Error string    `json:"error,omitempty"`
 }
 
 // DatabaseResult is one database of a run.
@@ -73,6 +76,9 @@ type DatabaseResult struct {
 	StartedAt  time.Time   `json:"startedAt"`
 	FinishedAt time.Time   `json:"finishedAt"`
 	Error      string      `json:"error,omitempty"`
+	// Media are the media files the database refers to in that snapshot;
+	// the run stores them and lists them in its own file.
+	Media []MediaRef `json:"-"`
 }
 
 // TableRows is the number of rows of one table.
@@ -104,7 +110,18 @@ type Summary struct {
 	Databases       []DatabaseSummary `json:"databases"`
 	Error           string            `json:"error,omitempty"`
 	// Copies are the run's copies on other targets (none yet).
-	Copies []Copy `json:"copies,omitempty"`
+	Copies []Copy        `json:"copies,omitempty"`
+	Media  *MediaSummary `json:"media,omitempty"`
+}
+
+// MediaSummary is what a run stored of a service's media.
+type MediaSummary struct {
+	Service string `json:"service"`
+	Count   int    `json:"count"`
+	Bytes   int64  `json:"bytes"`
+	Copied  int    `json:"copied"`
+	Missing int    `json:"missing"`
+	Error   string `json:"error,omitempty"`
 }
 
 // DatabaseSummary is one database of a Summary.
@@ -135,6 +152,16 @@ func (m Manifest) Summary() Summary {
 		ServerVersion:   m.ServerVersion,
 		Databases:       make([]DatabaseSummary, 0, len(m.Databases)),
 		Error:           m.Error,
+	}
+	if m.Media != nil {
+		summary.Media = &MediaSummary{
+			Service: m.Media.Service,
+			Count:   m.Media.Count,
+			Bytes:   m.Media.Bytes,
+			Copied:  m.Media.Copied,
+			Missing: len(m.Media.Missing),
+			Error:   m.Media.Error,
+		}
 	}
 	for _, database := range m.Databases {
 		var rows int64
@@ -175,6 +202,9 @@ func (m *Manifest) finish(at time.Time) {
 	case failed > 0:
 		m.Result = ResultFailed
 		m.Error = fmt.Sprintf("%d of %d databases failed", failed, len(m.Databases))
+	case m.Media != nil && m.Media.Error != "":
+		m.Result = ResultFailed
+		m.Error = "the media could not be backed up: " + m.Media.Error
 	default:
 		m.Result = ResultSucceeded
 	}

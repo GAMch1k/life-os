@@ -499,3 +499,105 @@ func waitCheckLong(t *testing.T, job *CheckJob) RestoreCheck {
 		return RestoreCheck{}
 	}
 }
+
+func TestMediaFollowTheInboxSnapshot(t *testing.T) {
+	it := newIntegration(t)
+	admin := it.connect(it.adminURL.Path[1:], "", "")
+	owner, backupRole, inbox := it.name("md_owner"), it.name("md_backup"), it.name("md_inbox")
+	it.exec(admin, fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD 'owner-pw'", owner))
+	it.exec(admin, fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD 'backup-pw' NOSUPERUSER CREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS", backupRole))
+	it.exec(admin, fmt.Sprintf("GRANT pg_read_all_data TO %s", backupRole))
+	t.Cleanup(func() {
+		for _, database := range []string{inbox, ScratchName(inbox)} {
+			_, _ = admin.Exec(context.Background(), "DROP DATABASE IF EXISTS "+database+" WITH (FORCE)")
+		}
+		for _, role := range []string{owner, backupRole} {
+			_, _ = admin.Exec(context.Background(), "DROP ROLE IF EXISTS "+role)
+		}
+	})
+	it.exec(admin, fmt.Sprintf("CREATE DATABASE %s OWNER %s", inbox, owner))
+	it.exec(admin, fmt.Sprintf("REVOKE ALL ON DATABASE %s FROM PUBLIC", inbox))
+	it.exec(admin, fmt.Sprintf("GRANT CONNECT ON DATABASE %s TO %s", inbox, backupRole))
+
+	// Inbox's media: two images on the volume and in inbox_media, one row
+	// whose file is gone, and a file no row names.
+	volume := t.TempDir()
+	letter, receipt := mediaFile(t, volume, "a photo of a letter"), mediaFile(t, volume, "a photo of a receipt")
+	gone := MediaRef{SHA256: hashOf("pruned meanwhile"), Bytes: 16}
+	mediaFile(t, volume, "an upload no capture kept")
+	inboxOwner := it.connect(inbox, owner, "owner-pw")
+	it.exec(inboxOwner, `CREATE TABLE inbox_media (sha256 TEXT PRIMARY KEY, content_type TEXT NOT NULL, byte_size BIGINT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now())`)
+	for _, ref := range []MediaRef{letter, receipt, gone} {
+		it.exec(inboxOwner, fmt.Sprintf("INSERT INTO inbox_media (sha256, content_type, byte_size) VALUES ('%s', 'image/jpeg', %d)", ref.SHA256, ref.Bytes))
+	}
+
+	dir := t.TempDir()
+	registry := filepath.Join(dir, "service-databases.conf")
+	if err := os.WriteFile(registry, []byte(fmt.Sprintf("inbox|%s|%s|LIFE_OS_INBOX_DB_PASSWORD\n", inbox, owner)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "backups"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenStore(filepath.Join(dir, "backups"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection := it.connection(backupRole, "backup-pw")
+	dumper := &Dumper{Connection: connection, PgDump: it.pgDump, PgRestore: it.pgRestore, MediaService: MediaService}
+	// An image uploaded after the snapshot: neither the dump nor the media
+	// list may have it.
+	late := mediaFile(t, volume, "uploaded during the backup")
+	var lateWrite error
+	dumper.afterSnapshot = func(ctx context.Context, database string) {
+		_, lateWrite = inboxOwner.Exec(ctx, fmt.Sprintf("INSERT INTO inbox_media (sha256, content_type, byte_size) VALUES ('%s', 'image/png', %d)", late.SHA256, late.Bytes))
+	}
+	runner := NewRunner(RunnerOptions{
+		Store:       store,
+		Dumper:      dumper,
+		Restorer:    &Restorer{Connection: connection, PgRestore: it.pgRestore},
+		Registry:    func() ([]Database, error) { return LoadDatabases(registry) },
+		Retention:   Retention{Daily: 7, Weekly: 4, Monthly: 12, FailedDays: 3},
+		MediaSource: volume,
+	})
+	t.Cleanup(func() { _ = runner.Close(context.Background()) })
+
+	job, err := runner.Start(Request{Trigger: TriggerManual})
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary := waitLong(t, job)
+	if lateWrite != nil {
+		t.Fatal(lateWrite)
+	}
+	if summary.Result != ResultSucceeded || summary.Media == nil || summary.Media.Count != 2 || summary.Media.Missing != 1 || summary.Media.Copied != 2 {
+		t.Fatalf("summary = %+v, media %+v", summary, summary.Media)
+	}
+	runs, _ := store.Runs()
+	media := runs[0].Manifest.Media
+	list, err := readMediaList(store.RunDir(summary.ID), media.List)
+	want := []MediaRef{letter, receipt}
+	slices.SortFunc(want, func(a, b MediaRef) int { return strings.Compare(a.SHA256, b.SHA256) })
+	if err != nil || !slices.Equal(list, want) {
+		t.Fatalf("list = %+v, %v; want %+v, by hash (the late upload and the gone file are not in it)", list, err, want)
+	}
+	if media.Missing[0].SHA256 != gone.SHA256 || media.Database != inbox {
+		t.Fatalf("media = %+v", media)
+	}
+	if files, _, err := store.Media().Usage(); err != nil || files != 2 {
+		t.Fatalf("the store has %d files, %v", files, err)
+	}
+	// The dump agrees: inbox_media has the three rows of the snapshot.
+	if rows := rowsOf(runs[0].Manifest.Databases[0].Tables)["public.inbox_media"]; rows != 3 {
+		t.Fatalf("inbox_media rows in the manifest = %d, want 3", rows)
+	}
+
+	checkJob, err := runner.StartRestoreCheck(CheckRequest{Trigger: TriggerManual})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := waitCheckLong(t, checkJob)
+	if !check.OK || check.Media == nil || !check.Media.OK || check.Media.Count != 2 || check.Media.Hashed != 2 {
+		t.Fatalf("check = %+v, media %+v", check, check.Media)
+	}
+}

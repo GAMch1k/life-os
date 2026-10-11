@@ -15,6 +15,12 @@ restore check restores every dump of the newest full run into a scratch
 database (`lifeos_restore_check_<database>`, always dropped afterwards) and
 compares every table's row count and the migration state with the manifest.
 
+Inbox's capture images (the `inbox-media` volume, mounted read-only) are
+copied into a shared content-addressed store, `BACKUP_DIR/media/<two hex
+digits>/<sha256>`: each run lists the images `inbox_db`'s snapshot names and
+adds only those the store lacks; the rotation deletes images no kept run
+lists.
+
 It has no database of its own and no gateway route. Its API (`GET
 /v1/status`, `GET /v1/backups`, `POST /v1/backups`, `POST
 /v1/restore-checks`) is for the Dashboard on the private network;
@@ -53,9 +59,11 @@ superuser URL. Without `pg_dump` and `pg_restore` on `PATH`, the wrappers in
 BACKUP_TEST_DATABASE_URL=postgres://postgres:test@127.0.0.1:55442/postgres \
 BACKUP_TEST_PG_DUMP=$PWD/internal/backup/testdata/pg_dump \
 BACKUP_TEST_PG_RESTORE=$PWD/internal/backup/testdata/pg_restore \
-GOWORK=off go test -count=1 -run 'TestBackupsAreConsistentAndRestore|TestRestoreChecks' ./internal/backup/
+GOWORK=off go test -count=1 -run 'TestBackupsAreConsistentAndRestore|TestRestoreChecks|TestMediaFollow' ./internal/backup/
 ```
 
 `tools/test-restore-database` exercises `tools/restore-database` against
 the same throwaway server
 (`RESTORE_TEST_DATABASE_URL=… RESTORE_TEST_PG_BIN=$PWD/services/backup/internal/backup/testdata`).
+`tools/test-restore-media` exercises `tools/restore-media` against scratch
+directories.

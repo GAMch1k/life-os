@@ -1683,6 +1683,15 @@ function runFailure(run: BackupRun) {
   }
   const failed = failedDatabases(run);
   const names = failed.map((database) => database.name);
+  // Every database was dumped, but the Inbox images could not be copied;
+  // the error says what to do (such as the media files' group).
+  if (failed.length === 0 && run.media?.error) {
+    return {
+      summary: "The last backup of the Inbox images failed.",
+      detail: run.media.error,
+      action: `${run.media.error}. Then use Back up now.`,
+    };
+  }
   return {
     summary:
       failed.length === 0
@@ -1741,6 +1750,14 @@ function runStart(id: string) {
   return `${id.slice(0, 4)}-${id.slice(4, 6)}-${id.slice(6, 8)}T${id.slice(9, 11)}:${id.slice(11, 13)}:${id.slice(13, 15)}Z`;
 }
 
+/** The Inbox images the last run could not copy, as a fact's tail. */
+function mediaMissing(run: BackupRun | undefined) {
+  const missing = run?.media?.missing ?? 0;
+  return missing > 0
+    ? `; ${missing} the last backup could not copy (not on the Inbox volume, or damaged there)`
+    : "";
+}
+
 function backupFacts(
   status: BackupStatus,
   now: Date,
@@ -1782,6 +1799,10 @@ function backupFacts(
     {
       label: "Total size",
       value: `${formatBytes(status.storage.totalBytes)} in ${status.storage.runs} ${status.storage.runs === 1 ? "backup" : "backups"}`,
+    },
+    {
+      label: "Inbox images",
+      value: `${status.storage.mediaFiles} ${status.storage.mediaFiles === 1 ? "file" : "files"}, ${formatBytes(status.storage.mediaBytes)}${mediaMissing(status.lastRun)}`,
     },
     {
       label: "Next backup",

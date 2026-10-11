@@ -6,6 +6,8 @@ How Life OS's backups work in practice: what they hold, where they are, how to t
 
 Every database in the registry, `infra/postgres/service-databases.conf`: each night at 03:15 (`LIFE_OS_BACKUP_TIME`, in `LIFE_OS_TIMEZONE`) the backup service dumps each one with `pg_dump` from one consistent snapshot, with its schemas, data, owners, privileges, and migration state. A service added to the registry is included from the first night after its database is provisioned.
 
+Inbox's capture images (the photos of letters and receipts on the volume `lifeos-inbox-media`) are kept too: each run copies the images `inbox_db`'s snapshot names into a shared store, adding only those it lacks, and lists them (see [Backup: capture images](../services/backup.md#capture-images)).
+
 Not backed up, and why (see [What is backed up](../services/backup.md#what-is-backed-up)):
 
 - `.env` and `~/life-os.secrets`: every password and key. Keep them yourself, apart from the backups (a password manager). Without `LIFE_OS_BANKING_TOKEN_KEY` and `LIFE_OS_GOOGLE_TOKEN_KEY` a restored bank session and Google connection must be connected again.
@@ -15,11 +17,11 @@ Not backed up, and why (see [What is backed up](../services/backup.md#what-is-ba
 
 ## Where they are
 
-In `LIFE_OS_BACKUP_DIR` on the host (`~/life-os.backups`, mode 700), under `auto/`. Each run is a directory named by its start time in UTC, such as `auto/20261011T011500Z/`, with `manifest.json` and one `<database>.dump` (pg_dump custom format) per database. `auto/history.json` lists the latest runs and `auto/restore-checks.json` the latest restore checks. Anything else in the directory, such as manual dumps, is never touched.
+In `LIFE_OS_BACKUP_DIR` on the host (`~/life-os.backups`, mode 700), under `auto/` and `media/`. Each run is a directory named by its start time in UTC, such as `auto/20261011T011500Z/`, with `manifest.json`, one `<database>.dump` (pg_dump custom format) per database, and `media-inbox.json`, the capture images it stored. The images themselves are in `media/<first two hex digits>/<sha256>`, each once for every run that lists it. `auto/history.json` lists the latest runs and `auto/restore-checks.json` the latest restore checks. Anything else in the directory, such as manual dumps, is never touched.
 
 ## Retention
 
-The newest successful full backup of each of the last 7 days, 4 weeks, and 12 months that have one (`LIFE_OS_BACKUP_KEEP_DAILY`, `…_WEEKLY`, `…_MONTHLY`), about 20 runs covering a year. Failed runs are kept 3 days (`LIFE_OS_BACKUP_KEEP_FAILED_DAYS`), and runs of only some databases (manual ones, and the fresh dump `tools/restore-database` takes) 7 days. The newest successful backup is never deleted.
+The newest successful full backup of each of the last 7 days, 4 weeks, and 12 months that have one (`LIFE_OS_BACKUP_KEEP_DAILY`, `…_WEEKLY`, `…_MONTHLY`), about 20 runs covering a year. Failed runs are kept 3 days (`LIFE_OS_BACKUP_KEEP_FAILED_DAYS`), and runs of only some databases (manual ones, and the fresh dump `tools/restore-database` takes) 7 days. A capture image stays while a kept run lists it. The newest successful backup is never deleted.
 
 ## Checking a backup
 
@@ -30,7 +32,7 @@ The newest successful full backup of each of the last 7 days, 4 weeks, and 12 mo
   ```
 
 - **A run's manifest.** `jq '{result, error, databases: [.databases[] | {name, result, bytes, rows: ([.tables[].rows] | add), migration, error}]}' ~/life-os.backups/auto/<run>/manifest.json`. To check a dump file by hand: `sha256sum ~/life-os.backups/auto/<run>/<database>.dump` against the manifest's `sha256`.
-- **The restore check.** Every week, after the Sunday nightly run (`LIFE_OS_BACKUP_RESTORE_CHECK_DAY`, or `off`), the backup service restores every dump of the newest full backup, one database at a time, into a scratch database `lifeos_restore_check_<database>`, and compares every table's row count and the migration version and dirty flag with the manifest. It checks each dump's SHA-256 first, restores as `lifeos_backup` (without owners and privileges, which that role cannot set), and always drops the scratch database, also after a failure. If a Sunday is missed, the next nightly run is followed by one; the very first backup is followed by one too. To run one now and wait for it:
+- **The restore check.** Every week, after the Sunday nightly run (`LIFE_OS_BACKUP_RESTORE_CHECK_DAY`, or `off`), the backup service restores every dump of the newest full backup, one database at a time, into a scratch database `lifeos_restore_check_<database>`, and compares every table's row count and the migration version and dirty flag with the manifest. It checks each dump's SHA-256 first, restores as `lifeos_backup` (without owners and privileges, which that role cannot set), and always drops the scratch database, also after a failure. It also checks the run's capture images: each must be in the store with its size, and they are hashed until 4 GiB have been read. If a Sunday is missed, the next nightly run is followed by one; the very first backup is followed by one too. To run one now and wait for it:
 
   ```sh
   docker compose exec -T backup /service restore-check                      # the newest full backup
@@ -55,14 +57,26 @@ The database is named by service or database name; `latest` is the newest run wi
 3. stops the services connected to the database (for `voice_db`, `voice` and `voice-worker`) and the backup service, never PostgreSQL;
 4. drops the database, creates it again owned by its registry role with the grants provisioning gives, and restores the dump as the PostgreSQL admin in one transaction, owners and privileges included;
 5. compares every table's row count and the migration state with the manifest;
-6. runs `<service>-migrate`, which brings an older backup's schema up to this release, and starts again the services that were running before;
-7. prints a summary.
+6. for Inbox, copies the run's capture images back onto the volume with `tools/restore-media`: only those it lacks, nothing deleted (a problem there is reported, but the services start anyway);
+7. runs `<service>-migrate`, which brings an older backup's schema up to this release, and starts again the services that were running before;
+8. prints a summary.
 
 It drops and recreates the database rather than restoring over it with `pg_restore --clean`: `--clean` removes only what the dump contains, so a table a later migration created would survive next to the backup's older `schema_migrations`, and that migration would fail when it runs again.
 
 If a step fails after the services were stopped, they stay stopped, and it prints how to go back: `tools/restore-database finance <fresh run> --confirm --no-fresh-dump` restores the dump taken in step 2. `--no-fresh-dump` skips step 2, only for a database that is gone or that you do not need back.
 
 Everything written to that database since the backup is lost, and other services do not know: for example a Task's events stay in Activity. Rehearse first on the verification stack: `RESTORE_COMPOSE=tools/verify-compose LIFE_OS_BACKUP_DIR=${TMPDIR:-/tmp}/lifeos-verify-backups tools/restore-database finance latest --confirm`, after a backup there (`tools/verify-compose exec -T backup /service now`).
+
+## Restoring capture images
+
+`tools/restore-media` copies the capture images a run stored back onto the `inbox-media` volume, for example after losing that volume, or after `tools/restore-database inbox` reported a problem with them:
+
+```sh
+tools/restore-media latest              # shows what it would copy, changes nothing
+tools/restore-media 20261011T011500Z --confirm
+```
+
+It copies only the images the volume lacks, checks each one's SHA-256 against its name first, and never deletes or overwrites a file; a damaged copy in the store is named and skipped (the command then exits 1). It runs in a one-off `inbox` container as root, which can read the backup directory and gives each file to the volume's owner with Inbox's mode (0640). Images whose captures are not in `inbox_db` are removed by Inbox's hourly pass, so restore `inbox_db` from the same run first when both are lost.
 
 ## Restoring everything after losing PostgreSQL's volume
 
@@ -81,7 +95,7 @@ When the volume `lifeos-postgres-data` is gone or unusable, but the host and `~/
    done
    ```
 
-   Each one is restored with its owners and migrated. The services stay stopped, because they were not running, so nothing (the backup service's catch-up run included) sees a database before its turn.
+   Each one is restored with its owners and migrated, and `inbox_db` gets its capture images back (only those the volume lacks). The services stay stopped, because they were not running, so nothing (the backup service's catch-up run included) sees a database before its turn.
 6. **Start the rest**: `docker compose up -d --no-build` (the Dashboard, the gateway, MCP, the processor, the tunnel).
 7. **Check**: the Status page, then `tools/backup-now` and `docker compose exec -T backup /service restore-check`.
 

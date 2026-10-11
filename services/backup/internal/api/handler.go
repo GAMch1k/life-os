@@ -82,6 +82,8 @@ func (h *Handler) GetBackupStatus(c fiber.Ctx) error {
 		Storage: generated.BackupStorage{
 			Runs:       status.Runs,
 			TotalBytes: status.TotalBytes,
+			MediaFiles: status.MediaFiles,
+			MediaBytes: status.MediaBytes,
 			FreeBytes:  status.FreeBytes,
 			SizeBytes:  status.SizeBytes,
 		},
@@ -283,6 +285,24 @@ func toCheck(check backup.RestoreCheck) generated.RestoreCheck {
 		}
 		response.Databases = append(response.Databases, item)
 	}
+	if media := check.Media; media != nil {
+		response.Media = &generated.RestoreCheckMedia{
+			Ok:     media.OK,
+			Count:  media.Count,
+			Hashed: media.Hashed,
+			Error:  optional(media.Error),
+		}
+		response.Media.Problems = make([]struct {
+			Problem string `json:"problem"`
+			Sha256  string `json:"sha256"`
+		}, 0, len(media.Problems))
+		for _, problem := range media.Problems {
+			response.Media.Problems = append(response.Media.Problems, struct {
+				Problem string `json:"problem"`
+				Sha256  string `json:"sha256"`
+			}{Problem: problem.Problem, Sha256: problem.SHA256})
+		}
+	}
 	return response
 }
 
@@ -334,6 +354,16 @@ func toRun(summary backup.Summary) generated.BackupRun {
 			item.Migration = &generated.BackupMigration{Version: database.Migration.Version, Dirty: database.Migration.Dirty}
 		}
 		run.Databases = append(run.Databases, item)
+	}
+	if media := summary.Media; media != nil {
+		run.Media = &generated.BackupMedia{
+			Service: media.Service,
+			Count:   media.Count,
+			Bytes:   media.Bytes,
+			Copied:  media.Copied,
+			Missing: media.Missing,
+			Error:   optional(media.Error),
+		}
 	}
 	return run
 }

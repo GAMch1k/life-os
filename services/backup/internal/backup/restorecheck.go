@@ -37,11 +37,17 @@ type RestoreCheck struct {
 	StartedAt       time.Time `json:"startedAt"`
 	FinishedAt      time.Time `json:"finishedAt"`
 	DurationSeconds float64   `json:"durationSeconds"`
-	// OK is true when every database restored and matched its manifest.
+	// OK is true when every database restored and matched its manifest,
+	// and every media file the run stored is in the store.
 	OK        bool            `json:"ok"`
 	Databases []DatabaseCheck `json:"databases"`
+	Media     *MediaCheck     `json:"media,omitempty"`
 	Error     string          `json:"error,omitempty"`
 }
+
+// DefaultMediaHashBudget is how many media bytes a restore check hashes;
+// past it, files are checked for presence and size.
+const DefaultMediaHashBudget = 4 << 30
 
 // DatabaseCheck is the check of one database's dump.
 type DatabaseCheck struct {

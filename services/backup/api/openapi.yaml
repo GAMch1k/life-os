@@ -191,7 +191,23 @@ components:
         serverVersion: {type: string, description: 'The PostgreSQL server version, such as 18.6.'}
         totalBytes: {type: integer, format: int64, minimum: 0, description: Size of the run's dump files.}
         databases: {type: array, items: {$ref: '#/components/schemas/BackupDatabase'}}
+        media: {$ref: '#/components/schemas/BackupMedia'}
         error: {type: string, description: 'What went wrong, for a failed or interrupted run.'}
+    BackupMedia:
+      type: object
+      description: >-
+        What a run stored of Inbox's capture images: every file inbox_db
+        refers to in the snapshot of its dump, copied into the backup
+        directory's shared store (media/<two hex digits>/<sha256>) when it
+        was not there yet. Absent for a run that did not cover Inbox.
+      required: [service, count, bytes, copied, missing]
+      properties:
+        service: {type: string, description: 'The service whose media they are: inbox.'}
+        count: {type: integer, minimum: 0, description: The media files the run stored (its list).}
+        bytes: {type: integer, format: int64, minimum: 0}
+        copied: {type: integer, minimum: 0, description: How many of them this run added to the store.}
+        missing: {type: integer, minimum: 0, description: 'Files inbox_db refers to that were not stored: not on the media volume, or not the bytes their name says. Warnings, not failures.'}
+        error: {type: string, description: 'Why no media could be stored, such as a media volume the service cannot read; the run then failed.'}
     BackupProgress:
       type: object
       description: The run in progress.
@@ -238,10 +254,12 @@ components:
     BackupStorage:
       type: object
       description: The backup directory and the file system it is on.
-      required: [runs, totalBytes, freeBytes, sizeBytes]
+      required: [runs, totalBytes, mediaFiles, mediaBytes, freeBytes, sizeBytes]
       properties:
         runs: {type: integer, minimum: 0, description: Completed runs kept.}
-        totalBytes: {type: integer, format: int64, minimum: 0, description: Size of everything the service keeps (its auto/ directory).}
+        totalBytes: {type: integer, format: int64, minimum: 0, description: Size of the runs (the auto/ directory).}
+        mediaFiles: {type: integer, minimum: 0, description: Media files in the shared store (the media/ directory).}
+        mediaBytes: {type: integer, format: int64, minimum: 0}
         freeBytes: {type: integer, format: int64, minimum: 0, description: Space left for the service on the file system.}
         sizeBytes: {type: integer, format: int64, minimum: 0, description: Size of the file system.}
     BackupStatus:
@@ -306,7 +324,27 @@ components:
         durationSeconds: {type: number, format: double, minimum: 0}
         ok: {type: boolean, description: True when every database restored and matched its manifest.}
         databases: {type: array, items: {$ref: '#/components/schemas/RestoreCheckDatabase'}}
+        media: {$ref: '#/components/schemas/RestoreCheckMedia'}
         error: {type: string, description: 'What went wrong, when ok is false.'}
+    RestoreCheckMedia:
+      type: object
+      description: >-
+        The check of the media files the run stored: each must be in the
+        store with its size, and is hashed until the check has read 4 GiB.
+      required: [ok, count, hashed, problems]
+      properties:
+        ok: {type: boolean}
+        count: {type: integer, minimum: 0, description: The media files the run stored.}
+        hashed: {type: integer, minimum: 0, description: How many of them were hashed; the rest were checked for presence and size.}
+        problems:
+          type: array
+          items:
+            type: object
+            required: [sha256, problem]
+            properties:
+              sha256: {type: string}
+              problem: {type: string, description: 'Such as missing from the store, or a different SHA-256.'}
+        error: {type: string, description: 'Why the media could not be checked, such as an unreadable list.'}
     RestoreCheckProgress:
       type: object
       description: The restore check in progress.

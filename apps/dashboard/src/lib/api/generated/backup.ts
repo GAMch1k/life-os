@@ -146,7 +146,23 @@ export interface components {
              */
             totalBytes: number;
             databases: components["schemas"]["BackupDatabase"][];
+            media?: components["schemas"]["BackupMedia"];
             /** @description What went wrong, for a failed or interrupted run. */
+            error?: string;
+        };
+        /** @description What a run stored of Inbox's capture images: every file inbox_db refers to in the snapshot of its dump, copied into the backup directory's shared store (media/<two hex digits>/<sha256>) when it was not there yet. Absent for a run that did not cover Inbox. */
+        BackupMedia: {
+            /** @description The service whose media they are: inbox. */
+            service: string;
+            /** @description The media files the run stored (its list). */
+            count: number;
+            /** Format: int64 */
+            bytes: number;
+            /** @description How many of them this run added to the store. */
+            copied: number;
+            /** @description Files inbox_db refers to that were not stored: not on the media volume, or not the bytes their name says. Warnings, not failures. */
+            missing: number;
+            /** @description Why no media could be stored, such as a media volume the service cannot read; the run then failed. */
             error?: string;
         };
         /** @description The run in progress. */
@@ -199,9 +215,13 @@ export interface components {
             runs: number;
             /**
              * Format: int64
-             * @description Size of everything the service keeps (its auto/ directory).
+             * @description Size of the runs (the auto/ directory).
              */
             totalBytes: number;
+            /** @description Media files in the shared store (the media/ directory). */
+            mediaFiles: number;
+            /** Format: int64 */
+            mediaBytes: number;
             /**
              * Format: int64
              * @description Space left for the service on the file system.
@@ -284,7 +304,23 @@ export interface components {
             /** @description True when every database restored and matched its manifest. */
             ok: boolean;
             databases: components["schemas"]["RestoreCheckDatabase"][];
+            media?: components["schemas"]["RestoreCheckMedia"];
             /** @description What went wrong, when ok is false. */
+            error?: string;
+        };
+        /** @description The check of the media files the run stored: each must be in the store with its size, and is hashed until the check has read 4 GiB. */
+        RestoreCheckMedia: {
+            ok: boolean;
+            /** @description The media files the run stored. */
+            count: number;
+            /** @description How many of them were hashed; the rest were checked for presence and size. */
+            hashed: number;
+            problems: {
+                sha256: string;
+                /** @description Such as missing from the store, or a different SHA-256. */
+                problem: string;
+            }[];
+            /** @description Why the media could not be checked, such as an unreadable list. */
             error?: string;
         };
         /** @description The restore check in progress. */

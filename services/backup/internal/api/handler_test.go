@@ -94,9 +94,10 @@ func summary(id string, result backup.Result, scope backup.Scope) backup.Summary
 func TestGetBackupStatus(t *testing.T) {
 	last := summary("20261011T011500Z", backup.ResultFailed, backup.ScopeAll)
 	last.Error = "1 of 2 databases failed"
+	last.Media = &backup.MediaSummary{Service: "inbox", Count: 310, Bytes: 838_000_000, Copied: 4, Missing: 2}
 	success := summary("20261010T011500Z", backup.ResultSucceeded, backup.ScopeAll)
 	runner := &fakeRunner{status: backup.Status{
-		LastRun: &last, LastSuccess: &success, OldestSuccess: success.StartedAt.AddDate(0, 0, -30), Runs: 2, TotalBytes: 4096, FreeBytes: 10 << 30, SizeBytes: 50 << 30,
+		LastRun: &last, LastSuccess: &success, OldestSuccess: success.StartedAt.AddDate(0, 0, -30), Runs: 2, MediaFiles: 312, MediaBytes: 840_000_000, TotalBytes: 4096, FreeBytes: 10 << 30, SizeBytes: 50 << 30,
 		Running:   &backup.Progress{ID: "20261011T120000Z", Trigger: backup.TriggerManual, Scope: backup.ScopeSubset, Actor: "user", Databases: []string{"tasks_db"}, Current: "tasks_db"},
 		Databases: []string{"finance_db", "tasks_db"},
 	}}
@@ -116,6 +117,12 @@ func TestGetBackupStatus(t *testing.T) {
 	}
 	if got.LastSuccess == nil || got.LastSuccess.Id != "20261010T011500Z" || got.OldestSuccessAt == nil || got.Running == nil || *got.Running.Current != "tasks_db" {
 		t.Errorf("lastSuccess = %+v, running = %+v", got.LastSuccess, got.Running)
+	}
+	if media := got.LastRun.Media; media == nil || media.Service != "inbox" || media.Count != 310 || media.Copied != 4 || media.Missing != 2 || media.Error != nil {
+		t.Errorf("lastRun.media = %+v", got.LastRun.Media)
+	}
+	if got.Storage.MediaFiles != 312 || got.Storage.MediaBytes != 840_000_000 {
+		t.Errorf("storage = %+v", got.Storage)
 	}
 	if got.Storage.Runs != 2 || got.Storage.FreeBytes != 10<<30 || got.Retention.Daily != 7 || got.Retention.FailedDays != 3 || len(got.Databases) != 2 {
 		t.Errorf("status = %+v", got)

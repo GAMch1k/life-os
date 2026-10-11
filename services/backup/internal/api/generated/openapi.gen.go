@@ -174,6 +174,26 @@ type BackupList struct {
 	NextCursor *string `json:"nextCursor,omitempty"`
 }
 
+// BackupMedia What a run stored of Inbox's capture images: every file inbox_db refers to in the snapshot of its dump, copied into the backup directory's shared store (media/<two hex digits>/<sha256>) when it was not there yet. Absent for a run that did not cover Inbox.
+type BackupMedia struct {
+	Bytes int64 `json:"bytes"`
+
+	// Copied How many of them this run added to the store.
+	Copied int `json:"copied"`
+
+	// Count The media files the run stored (its list).
+	Count int `json:"count"`
+
+	// Error Why no media could be stored, such as a media volume the service cannot read; the run then failed.
+	Error *string `json:"error,omitempty"`
+
+	// Missing Files inbox_db refers to that were not stored: not on the media volume, or not the bytes their name says. Warnings, not failures.
+	Missing int `json:"missing"`
+
+	// Service The service whose media they are: inbox.
+	Service string `json:"service"`
+}
+
 // BackupMigration The database's golang-migrate state (its schema_migrations row) in the dumped snapshot.
 type BackupMigration struct {
 	// Dirty True when a migration failed half-way and the schema needs repair.
@@ -227,6 +247,9 @@ type BackupRun struct {
 
 	// Id The run id: its start time in UTC and the name of its directory.
 	Id string `json:"id"`
+
+	// Media What a run stored of Inbox's capture images: every file inbox_db refers to in the snapshot of its dump, copied into the backup directory's shared store (media/<two hex digits>/<sha256>) when it was not there yet. Absent for a run that did not cover Inbox.
+	Media *BackupMedia `json:"media,omitempty"`
 
 	// Result succeeded = every database was dumped and checked; failed = at least one was not (the others are kept), or the run could not start; interrupted = the run stopped before it finished and left no files.
 	Result BackupResult `json:"result"`
@@ -309,7 +332,11 @@ type BackupStatus struct {
 // BackupStorage The backup directory and the file system it is on.
 type BackupStorage struct {
 	// FreeBytes Space left for the service on the file system.
-	FreeBytes int64 `json:"freeBytes"`
+	FreeBytes  int64 `json:"freeBytes"`
+	MediaBytes int64 `json:"mediaBytes"`
+
+	// MediaFiles Media files in the shared store (the media/ directory).
+	MediaFiles int `json:"mediaFiles"`
 
 	// Runs Completed runs kept.
 	Runs int `json:"runs"`
@@ -317,7 +344,7 @@ type BackupStorage struct {
 	// SizeBytes Size of the file system.
 	SizeBytes int64 `json:"sizeBytes"`
 
-	// TotalBytes Size of everything the service keeps (its auto/ directory).
+	// TotalBytes Size of the runs (the auto/ directory).
 	TotalBytes int64 `json:"totalBytes"`
 }
 
@@ -347,6 +374,9 @@ type RestoreCheck struct {
 
 	// Id The check id: its start time in UTC.
 	Id string `json:"id"`
+
+	// Media The check of the media files the run stored: each must be in the store with its size, and is hashed until the check has read 4 GiB.
+	Media *RestoreCheckMedia `json:"media,omitempty"`
 
 	// Ok True when every database restored and matched its manifest.
 	Ok bool `json:"ok"`
@@ -382,6 +412,24 @@ type RestoreCheckDatabase struct {
 
 	// Tables User tables in the restored database.
 	Tables int `json:"tables"`
+}
+
+// RestoreCheckMedia The check of the media files the run stored: each must be in the store with its size, and is hashed until the check has read 4 GiB.
+type RestoreCheckMedia struct {
+	// Count The media files the run stored.
+	Count int `json:"count"`
+
+	// Error Why the media could not be checked, such as an unreadable list.
+	Error *string `json:"error,omitempty"`
+
+	// Hashed How many of them were hashed; the rest were checked for presence and size.
+	Hashed   int  `json:"hashed"`
+	Ok       bool `json:"ok"`
+	Problems []struct {
+		// Problem Such as missing from the store, or a different SHA-256.
+		Problem string `json:"problem"`
+		Sha256  string `json:"sha256"`
+	} `json:"problems"`
 }
 
 // RestoreCheckMismatch One difference from the manifest: a table's row count (expected "25 rows", actual "24 rows"), a table only one side has ("missing", or expected "absent"), or the migration state (subject "migration", such as "version 14" or "version 14 (dirty)" or "none").
