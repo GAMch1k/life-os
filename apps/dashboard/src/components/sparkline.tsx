@@ -2,6 +2,7 @@
 
 import { useId, useRef, useState } from "react";
 
+import { formatBinaryBytes as format } from "@/lib/format-bytes";
 import type { StatusChart } from "@/lib/runtime-status";
 import { lowestPoint, sparkGeometry } from "@/lib/sparkline";
 import { dateTimeFormat } from "@/lib/time-zone";
@@ -17,11 +18,9 @@ const HEIGHT = 48;
  */
 export function Sparkline({
   chart,
-  format,
   timeZone,
 }: {
   chart: StatusChart;
-  format: (value: number) => string;
   timeZone: string;
 }) {
   const [active, setActive] = useState<number | null>(null);
