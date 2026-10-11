@@ -56,6 +56,8 @@ The [backup service](../services/backup.md) dumps every database in `infra/postg
 
 The verification stack writes its backups to a scratch directory of its own; `tools/verify-compose` refuses a plan with the owner's.
 
+**Capture images (P14-06).** The backup service also keeps Inbox's capture images: it mounts the `inbox-media` volume read-only and needs the images' group. Add `LIFE_OS_INBOX_MEDIA_GID` to `.env` (101, the inbox image's `lifeos` group; check with `docker compose exec inbox id -g`), then `docker compose build backup && docker compose up -d --no-build --no-deps backup`, and rebuild the Dashboard for the Backups card's image count (`docker compose build dashboard && docker compose up -d --no-build --no-deps dashboard`). The next run copies every image into `~/life-os.backups/media/`; `tools/restore-media` puts them back (see the [runbook](backups.md#restoring-capture-images)).
+
 ## Server health
 
 [host-health](../services/host-health.md) reports the server's memory, load, disks, and every container on it to the Status page's Server check, which the monitor watches. It only reads: its own `/proc`, statfs on read-only binds of `/` and the Docker data root, and the containers through `host-health-docker`, a gateway that alone mounts the Docker socket and answers three fixed questions (no container environments, logs, or files, and no writes). To add it:
