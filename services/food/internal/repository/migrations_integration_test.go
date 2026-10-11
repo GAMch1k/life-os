@@ -3,6 +3,7 @@ package repository
 import (
 	"testing"
 
+	"github.com/GAMch1k/life-os/services/food/internal/domain"
 	"github.com/GAMch1k/life-os/services/food/internal/testdb"
 )
 
@@ -25,5 +26,20 @@ func TestMigrationGoesDownAndUp(t *testing.T) {
 	var again int
 	if err := pool.QueryRow(ctx, "SELECT count(*) FROM aisle_rules").Scan(&again); err != nil || again != rules {
 		t.Fatalf("%d rules after up, want %d, %v", again, rules, err)
+	}
+}
+
+// TestAisleRankFollowsTheAisles checks that the aisle_rank column orders the
+// aisles as domain.Aisles lists them.
+func TestAisleRankFollowsTheAisles(t *testing.T) {
+	pool := testdb.Open(t, "")
+	ctx := t.Context()
+	for _, aisle := range domain.Aisles {
+		var rank int
+		err := pool.QueryRow(ctx, `INSERT INTO shopping_items (name, normalized_name, aisle, aisle_set_by, created_by, updated_by)
+			VALUES ($1, $1, $1, 'manual', 'dev:test', 'dev:test') RETURNING aisle_rank`, aisle).Scan(&rank)
+		if err != nil || rank != domain.AisleRank(aisle) {
+			t.Errorf("%s: rank %d, want %d (%v)", aisle, rank, domain.AisleRank(aisle), err)
+		}
 	}
 }
