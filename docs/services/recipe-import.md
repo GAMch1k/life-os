@@ -1,6 +1,6 @@
 # Recipe import service
 
-`recipe-import` is the integration that saves recipes from links and pasted text in [Food](food.md) (P15-07). It is a separate, replaceable service: it fetches and reads pages itself and hands recipes to Food only through Food's public API (`POST /v1/recipes`), as `system:recipe-import`. Food stores the recipes; recipe-import keeps nothing, so it has no database.
+`recipe-import` is the integration that saves recipes from links and pasted text in [Food](food.md) (P15-07), and discovers recipes by main ingredient in TheMealDB (P15-09). It is a separate, replaceable service: it fetches and reads pages itself and hands recipes to Food only through Food's public API (`POST /v1/recipes`), as `system:recipe-import`. Food stores the recipes; recipe-import keeps nothing, so it has no database.
 
 - Code: `services/recipe-import`. No database.
 - Contract: `services/recipe-import/api/openapi.yaml`. Gateway base: `/api/integrations/recipe-import`, and the Dashboard's proxy route of the same path. `/health` and `/ready` are available.
@@ -10,17 +10,19 @@
 
 | recipe-import | Food |
 | --- | --- |
-| Fetching pages safely, reading them (JSON-LD, microdata, OpenGraph), reading pasted captions | The recipes: title (unique), ingredients, steps, tags, source link, note |
+| Fetching pages safely, reading them (JSON-LD, microdata, OpenGraph), reading pasted captions | The recipes: title (unique), ingredients, steps, tags, source link, note, cooking methods (inferred) |
+| Asking TheMealDB for recipes by ingredient (cached), as drafts | Suggestions, preferences, and ideas |
 | Activity: one `food.recipe.imported` per saved import, by whoever asked | Activity: `food.recipe.created` for the recipe, by `system:recipe-import`, caused by the import |
 
 ## API
 
-Every request is a POST and needs `X-Life-OS-Actor`.
+Every write is a POST and needs `X-Life-OS-Actor`; discovery is a GET.
 
 | Request | Behavior |
 | --- | --- |
 | `POST /v1/imports/preview` | `{url}`: fetches the page and returns `{method, reason, draft}`. Nothing is saved. A page that cannot be fetched or read is still 200, with `method: failed` and the reason; a link that is not http(s), or a literal private address, is 400 `invalid_request`. |
 | `POST /v1/imports/text` | `{text, sourceUrl?}`: reads pasted text, such as a caption, and returns a draft with `method: text`. Nothing is saved. |
+| `GET /v1/discover?ingredient=&limit=6` | Recipes from TheMealDB whose main ingredient is `ingredient`, up to `limit` (1 to 12) drafts; see [Discovering recipes](#discovering-recipes-themealdb). Nothing is saved. |
 | `POST /v1/imports` | `{url, overrides?}`: saves the recipe in Food with the link as its `sourceUrl` and returns `{method, recipe}` (201; `recipe` is Food's). With `overrides` (the draft as the owner edited it) that draft is saved and the page is not fetched again (`method: edited`); without, the page is fetched and read as for a preview and what it gives is saved, a preview stub too (422 `import_failed` when it gives nothing). A title Food already has is 409 `recipe_exists` with that recipe's `recipeId`. The `Idempotency-Key` header is passed on to Food (prefixed `recipe-import:`), so a retried save creates the recipe once. Food unreachable or failing is 502 `food_unavailable`; a recipe Food refuses is 400 with Food's message. |
 
 A **draft** has `title` (empty when none was found), `servings`, `ingredients` (`{name, amount?}`), `steps` (one per item), `tags`, `sourceUrl`, `imageUrl`, `description`, and `siteName`. Saving puts the steps one per line, leaves out empty ingredients and tags Food would refuse (over 40 characters, or without a letter or a digit), clips to Food's limits, and puts the description and the image link (`Image: <url>`) in the recipe's note, since Food has no image field.
@@ -36,6 +38,20 @@ The `method` says how the draft was obtained:
 **Ingredient lines** are split cheaply: a leading amount (a number, a range such as "2-3", a fraction such as "1/2", "½", or "1 ½") with an optional unit (g, kg, ml, l, EL, TL, Prise, Pck., Dose, Bund, Zehe, Stück, tbsp, tsp, cup, clove, can, ст. л., ч. л., шт, г, кг, мл, стакан, зубчик, and more) followed by the name: "200 g Mehl" is `200 g` of `Mehl`, "2 große Zwiebeln" is `2` of `große Zwiebeln`, "1 ст. л. сахара" is `1 ст. л.` of `сахара`. Anything else ("Salz und Pfeffer", "500g/1lb 2oz lamb mince") is the whole line as the name.
 
 **Pasted text** (`/v1/imports/text`) is read by simple, deterministic rules: "Ingredients", "Zutaten", "Ингредиенты" (and "You need", "Du brauchst", "Нам понадобится" …) start the ingredients, also with words after them ("Zutaten für 4 Personen"); "Steps", "Method", "Instructions", "Zubereitung", "Anleitung", "Приготовление" … start the steps. Bullets ("-", "•", "*", emoji) and numbers ("1.", "2)", "Step 1:", "Schritt 1", "Шаг 1") are stripped. Without headings, a line that starts with an amount, or a short bulleted line, is an ingredient, and numbered lines and lines after the ingredients are steps. The first other short line is the title (without trailing emoji), hashtags become tags, and "für 4 Personen", "serves 4", "4 servings", or "на 4 порции" the servings. A text with neither ingredients nor steps says so in `reason`. The AI may add a smarter path later through the processor.
+
+## Discovering recipes (TheMealDB)
+
+`GET /v1/discover` asks [TheMealDB](https://www.themealdb.com/), a free recipe database, through its JSON API: `filter.php?i=<ingredient>` for the meals with that main ingredient, then `lookup.php?i=<id>` for each of the first `limit`. TheMealDB is in English, so a German or Russian main ingredient is asked for in English by a small built-in table ("Hähnchenbrust" and "куриная грудка" as `chicken_breast`, "Hähnchen" and "курица" as `chicken`, "Hackfleisch" and "фарш" as `minced_beef`, "Rind", "Schwein", "Lachs", "Eier", "Reis", "Kartoffeln", "Nudeln" as spaghetti, and more); anything else is asked for as written (lower case, spaces as underscores). The answer is `{ingredient, query, provider, attribution, items}`: `query` is what was asked ("chicken breast"), and each item is a draft in the import's shape:
+
+- `title` the meal's name, `sourceUrl` its TheMealDB page (`https://www.themealdb.com/meal/<id>`), `imageUrl` its picture, `siteName` "TheMealDB";
+- `ingredients` the meal's ingredients with their measures as amounts ("Chicken Breast", "1"); `steps` its instructions, one per line, without bare "STEP 1" headings;
+- `tags` its category, cuisine, and tags; `description` "Recipe data and imagery: TheMealDB (https://www.themealdb.com/)." and, when the meal has one, "Original: <its source link>".
+
+Nothing is saved: the owner checks a draft and saves it with `POST /v1/imports` (the draft as `overrides`, its TheMealDB page as `url`), so it is tagged and its methods inferred like any import, and the note keeps the credit. No meals is an empty list; TheMealDB unreachable is 502 `provider_unavailable` with the reason.
+
+Only TheMealDB's host is requested: `RECIPE_IMPORT_MEALDB_URL` (default `https://www.themealdb.com/api/json/v1/1/`, the public test key `1`) must name `www.themealdb.com` or `themealdb.com`, or a host in `RECIPE_IMPORT_ALLOW_HOSTS` (the verification stack's fixture server); the service does not start otherwise. Requests go through the same guarded fetcher as pages (public addresses only, the limits, no cookies), reading JSON only. Answers are cached in memory for a day (at most 500), so the same search, also spelled another way, is not sent again.
+
+TheMealDB's terms: the test key "1" is for development and educational use (a publicly released app needs their supporter key); results credit TheMealDB as the data and image source and link each meal to its page, which the drafts and the Dashboard do; the data is used through the JSON API only, never scraped.
 
 ## Safe fetching
 
@@ -68,9 +84,10 @@ The save carries an `Idempotency-Key` derived from the capture, which this servi
 | `RECIPE_IMPORT_TIMEOUT_SECONDS` | `10` | How long a page may take, 1 to 60. |
 | `RECIPE_IMPORT_MAX_BYTES` | `5242880` | How large a page may be, 64 KiB to 20 MiB. |
 | `RECIPE_IMPORT_ALLOW_HOSTS` | empty | Hosts fetched from any address, comma-separated: the verification stack's fixture server only. |
+| `RECIPE_IMPORT_MEALDB_URL` | `https://www.themealdb.com/api/json/v1/1/` | TheMealDB's API for discovery; its host must be TheMealDB's (or an allowlisted fixture host). |
 
-It needs outbound http(s) from the `backend` network to fetch pages.
+It needs outbound http(s) from the `backend` network to fetch pages and to reach TheMealDB.
 
 ## Tests
 
-`make test` runs offline: `internal/recipe` reads saved pages in `testdata/` (a Chefkoch-like page with JSON-LD in `@graph`, a BBC-like page with `HowToSection`s and a relative image, a blog page with a recipe among invalid blocks, other types, and noise, a microdata page, an Instagram-like page with only OpenGraph, and a page with nothing), splits ingredient lines (DE, EN, RU, fractions, ranges), reads captions (headings, bullets, numbers, hashtags, servings, in DE, EN, and RU), and applies the limits; `internal/fetch` tests the address guard on real local connections (literal and resolved loopback, redirects to internal addresses, host names, cloud metadata, and other schemes, a redirect loop), the limits, refusals, charsets, the headers sent, and the test allowlist; `internal/api` runs the API against a local page server and stand-ins for Food and Activity (previews, text, saving as the integration with the key, correlation, and causation passed on, edited drafts saved without fetching, `recipe_exists` with the id, Food refusing or failing, and the import's Activity event).
+`make test` runs offline: `internal/recipe` reads saved pages in `testdata/` (a Chefkoch-like page with JSON-LD in `@graph`, a BBC-like page with `HowToSection`s and a relative image, a blog page with a recipe among invalid blocks, other types, and noise, a microdata page, an Instagram-like page with only OpenGraph, and a page with nothing), splits ingredient lines (DE, EN, RU, fractions, ranges), reads captions (headings, bullets, numbers, hashtags, servings, in DE, EN, and RU), and applies the limits; `internal/fetch` tests the address guard on real local connections (literal and resolved loopback, redirects to internal addresses, host names, cloud metadata, and other schemes, a redirect loop), the limits, refusals, charsets, the headers sent, and the test allowlist; `internal/api` runs the API against a local page server and stand-ins for Food and Activity (previews, text, saving as the integration with the key, correlation, and causation passed on, edited drafts saved without fetching, `recipe_exists` with the id, Food refusing or failing, and the import's Activity event, and discovery: drafts from TheMealDB served locally, the cache, an empty result, refusals, TheMealDB unreachable, and a discovered draft saved through the import without another request). `internal/mealdb` reads TheMealDB answers recorded once from the API (`testdata/`: a filter, three lookups, and a search with no meals): the drafts (ingredients with measures, steps, tags, the page link, the credit), that only TheMealDB's host is asked and only it may be configured, the cache and its expiry, the English names of German and Russian ingredients, and the guarded fetcher refusing a loopback address that is not allowlisted. No test reaches TheMealDB.

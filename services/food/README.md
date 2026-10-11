@@ -2,8 +2,11 @@
 
 Food (P15-01): one shopping list grouped by aisle, with an optional store per
 item, the stores, the aisle rules that place new items, the pantry (what is
-at home and when it expires), and the staples, which go back on the list by
-themselves when they run low. It owns its database, `food_db`. See
+at home and when it expires), the staples, which go back on the list by
+themselves when they run low, recipes and the meal plan, and suggestions of
+what to cook (ranked by the pantry, expiry, the preferred cooking method, and
+habits) with the owner's preferences and recipe ideas. It owns its database,
+`food_db`. See
 [docs/services/food.md](../../docs/services/food.md).
 
 ## Layout
