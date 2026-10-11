@@ -17,8 +17,8 @@ type resolution struct {
 	triedOther bool
 }
 
-// searchError is a failed target search; Task and Calendar failures are
-// retried as before.
+// searchError is a failed target search; Task, Calendar, and Food failures
+// are retried as before.
 type searchError struct {
 	domain string
 	kind   failureKind
@@ -32,8 +32,10 @@ func (e searchError) Error() string { return e.domain + " search failed: " + e.e
 // Monday" as calendar_update while it is a Task): when nothing matches in the
 // planned domain, a reschedule is looked up in the other one with the same
 // search terms, and the equivalent action runs there if that finds
-// something. Cancelling, completing, reopening, and changes without a new
-// time never cross domains.
+// something. Likewise a purchase marked bought that is not on the shopping
+// list is looked up among the open Tasks (boughtTask). Cancelling,
+// completing, reopening, and changes without a new time never cross
+// domains.
 func (r Runner) resolve(ctx context.Context, item inboxItem, action plannedAction) (resolution, error) {
 	found, err := r.findTargets(ctx, item, action)
 	if err != nil || len(found) > 0 {
@@ -41,6 +43,10 @@ func (r Runner) resolve(ctx context.Context, item inboxItem, action plannedActio
 	}
 	location := r.location(item)
 	other, ok := equivalentReschedule(action, location)
+	if !ok {
+		// A purchase not on the shopping list may be an open Task.
+		other, ok = boughtTask(action)
+	}
 	if !ok {
 		return resolution{action: action, found: found}, nil
 	}
@@ -55,6 +61,13 @@ func (r Runner) resolve(ctx context.Context, item inboxItem, action plannedActio
 }
 
 func (r Runner) findTargets(ctx context.Context, item inboxItem, action plannedAction) ([]map[string]any, error) {
+	if isFoodMutation(action) {
+		found, err := r.findFoodItems(ctx, action)
+		if err != nil {
+			return nil, searchError{domain: "food", kind: classifyActionError(err), err: err}
+		}
+		return found, nil
+	}
 	if isTaskMutation(action) {
 		found, err := r.findTasks(ctx, action)
 		if err != nil {
@@ -147,11 +160,14 @@ func fitAllDayEvents(arguments map[string]any, events []map[string]any, location
 	arguments["startDate"] = start.In(location).Format(time.DateOnly)
 }
 
-// reviewCandidatesFor is what a Human Review offers for an action: Tasks or
-// labelled events.
+// reviewCandidatesFor is what a Human Review offers for an action: Tasks,
+// labelled events, or labelled shopping list or pantry items.
 func (r Runner) reviewCandidatesFor(item inboxItem, action plannedAction, found []map[string]any) []map[string]any {
 	if isCalendarMutation(action) {
 		return eventCandidates(found, r.location(item))
+	}
+	if isFoodMutation(action) {
+		return foodCandidates(action.Tool, found)
 	}
 	return reviewCandidates(found)
 }
@@ -179,6 +195,8 @@ func reviewReason(res resolution) string {
 		return "No open Task or upcoming Calendar event matches, so nothing was changed"
 	case isCalendarMutation(res.action):
 		return calendarReviewReason(res.action.Tool, len(res.found))
+	case isFoodMutation(res.action):
+		return foodReviewReason(res.action.Tool)
 	default:
 		return "ambiguous or missing Task selection"
 	}
@@ -188,6 +206,12 @@ func reviewReason(res resolution) string {
 func lowConfidenceReason(action plannedAction) string {
 	if isCalendarMutation(action) {
 		return "ambiguous or low-confidence Calendar event selection"
+	}
+	if action.Tool == "food_mark_bought" {
+		return "ambiguous or low-confidence shopping list item selection"
+	}
+	if action.Tool == "food_update_pantry_item" {
+		return "ambiguous or low-confidence pantry item selection"
 	}
 	return "ambiguous or low-confidence Task selection"
 }
