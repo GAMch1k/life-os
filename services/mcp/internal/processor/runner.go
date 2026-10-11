@@ -204,7 +204,7 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 			// It only turned the event's default reminders off or on.
 			return Proposal{}, r.humanReview(ctx, item.ID, started.ID, action, []map[string]any{}, defaultRemindersReason)
 		}
-		if !validAction(action) {
+		if !validAction(action) || (action.Tool == "recipe_import" && !linkInCapture(item, action)) {
 			return Proposal{}, r.retryLater(ctx, item.ID, started.ID, actions, "invalid proposed action: "+action.Tool, failureModelOutput, previous)
 		}
 		// recipe is the recipe a meal or its ingredients name: the one the
@@ -356,7 +356,7 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 		switch {
 		case action.Tool == "task_create" || action.Tool == "calendar_create" || action.Tool == "finance_create_manual_transaction":
 			arguments["idempotencyKey"] = actionIdempotencyKey(item, len(actions), action)
-		case isFoodWrite(action.Tool):
+		case isFoodWrite(action.Tool) || action.Tool == "recipe_import":
 			arguments["idempotencyKey"] = foodIdempotencyKey(item, action.Tool, arguments)
 		}
 		result, err := r.Tools.Call(ctx, action.Tool, arguments)
@@ -372,6 +372,13 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 		if err != nil {
 			actions = append(actions, audit)
 			return Proposal{}, r.retryLater(ctx, item.ID, started.ID, actions, fmt.Sprintf("%s failed: %v", action.Tool, err), classifyActionError(err), previous)
+		}
+		if action.Tool == "recipe_import" {
+			if reason, saved := importOutcome(result); !saved {
+				// The link gave nothing to save: the owner decides, with
+				// recipe-import's reason (paste the caption, say what it is).
+				return Proposal{}, r.humanReview(ctx, item.ID, started.ID, action, []map[string]any{}, reason)
+			}
 		}
 		audit["result"] = json.RawMessage(toolData(result))
 		actions = append(actions, audit)
@@ -599,7 +606,7 @@ func (r Runner) record(ctx context.Context, itemID, attemptID, status string, ac
 	return err
 }
 func allowed(name string) bool {
-	return name == "task_create" || name == "task_update" || name == "task_complete" || name == "task_reopen" || name == "calendar_create" || name == "calendar_update" || name == "calendar_cancel" || name == "finance_create_manual_transaction" || isFoodWrite(name)
+	return name == "task_create" || name == "task_update" || name == "task_complete" || name == "task_reopen" || name == "calendar_create" || name == "calendar_update" || name == "calendar_cancel" || name == "finance_create_manual_transaction" || isFoodWrite(name) || name == "recipe_import"
 }
 
 // validSearchTerms checks a mutation's primary search term and alternatives.
@@ -651,6 +658,10 @@ func validAction(action plannedAction) bool {
 		if !validFoodAction(action) {
 			return false
 		}
+	} else if action.Tool == "recipe_import" {
+		if !validRecipeImport(action.Arguments) {
+			return false
+		}
 	} else if action.Tool != "finance_create_manual_transaction" {
 		if title, ok := action.Arguments["title"].(string); !ok || strings.TrimSpace(title) == "" {
 			return false
@@ -675,6 +686,7 @@ func validAction(action plannedAction) bool {
 		"food_plan_meal":                    {"recipeQuery": true, "recipeQueryAlternatives": true, "date": true, "slot": true, "servings": true, "note": true},
 		"food_clear_meal":                   {"date": true, "slot": true},
 		"food_add_missing_ingredients":      {"recipeQuery": true, "recipeQueryAlternatives": true, "week": true, "from": true, "to": true},
+		"recipe_import":                     {"url": true, "caption": true, "title": true, "saveLink": true},
 	}
 	for field := range action.Arguments {
 		if !allowedFields[action.Tool][field] {

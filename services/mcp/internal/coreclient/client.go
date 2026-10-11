@@ -37,7 +37,18 @@ func (c Client) DoWithHeaders(ctx context.Context, method, path string, body []b
 	defer r.Body.Close()
 	b, _ := io.ReadAll(r.Body)
 	if r.StatusCode < 200 || r.StatusCode > 299 {
-		return nil, fmt.Errorf("service returned %d: %s", r.StatusCode, string(b))
+		return nil, StatusError{Status: r.StatusCode, Body: b}
 	}
 	return b, nil
+}
+
+// StatusError is a service's answer outside 2xx: its status and body, the
+// error envelope.
+type StatusError struct {
+	Status int
+	Body   []byte
+}
+
+func (e StatusError) Error() string {
+	return fmt.Sprintf("service returned %d: %s", e.Status, string(e.Body))
 }
