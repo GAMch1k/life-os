@@ -6,6 +6,7 @@ import {
   CircleAlert,
   ListTodo,
   Repeat,
+  ShoppingBasket,
   TriangleAlert,
   Wallet,
 } from "lucide-react";
@@ -16,12 +17,19 @@ import { HomeBudgetCard } from "@/components/home-budget";
 import { Card, CardContent } from "@/components/ui/card";
 import { budgetHref, monthName } from "@/lib/finance-budget";
 import { SUBSCRIPTIONS_HREF, inDays } from "@/lib/finance-subscriptions";
+import { foodHref } from "@/lib/food";
 import type { HomeAttention } from "@/lib/home-attention";
 
 const URGENT_PREVIEW = 5;
 const REVIEW_PREVIEW = 2;
 
-type AttentionItem = { id: string; label: string; hint?: React.ReactNode };
+type AttentionItem = {
+  id: string;
+  label: string;
+  hint?: React.ReactNode;
+  /** Where the line itself leads, when not to the card's own link. */
+  href?: string;
+};
 
 function plural(count: number, more: boolean, noun: string) {
   return `${count}${more ? "+" : ""} ${noun}${count === 1 && !more ? "" : "s"}`;
@@ -46,6 +54,7 @@ export function HomeAttentionSurface({
 }) {
   const {
     budget,
+    food,
     humanReview,
     lowBalance,
     nextEvent,
@@ -220,6 +229,26 @@ export function HomeAttentionSurface({
           }))}
         />
       ) : null}
+      {food ? (
+        <AttentionCard
+          id="attention-food"
+          href={foodHref(food.listCount ? "list" : "pantry")}
+          linkLabel={food.listCount ? "Open shopping list" : "Open pantry"}
+          icon={<ShoppingBasket aria-hidden="true" className="size-4" />}
+          title="Food"
+          detail={
+            food.listCount
+              ? `${plural(food.listCount, food.listMore, "item")} on the shopping list`
+              : `${plural(food.expiring.length, food.expiringMore, "item")} expiring soon`
+          }
+          items={food.expiring.map((item) => ({
+            id: item.id,
+            label: item.name,
+            hint: item.text,
+            href: foodHref("pantry"),
+          }))}
+        />
+      ) : null}
       <HomeBudgetCard budget={budget} today={today} />
     </div>
   );
@@ -265,7 +294,13 @@ function AttentionCard({
                 className="flex items-center justify-between gap-3"
                 key={item.id}
               >
-                <span className="truncate">{item.label}</span>
+                {item.href ? (
+                  <Link className="truncate hover:underline" href={item.href}>
+                    {item.label}
+                  </Link>
+                ) : (
+                  <span className="truncate">{item.label}</span>
+                )}
                 {item.hint ? (
                   <span className="text-muted-foreground max-w-[50%] shrink-0 truncate text-xs">
                     {item.hint}
