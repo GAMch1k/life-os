@@ -8,8 +8,9 @@
 # recipe, a pantry item, and a planned meal, submits the same captures
 # (EN/RU/DE text, including completions of Tasks titled in another of those
 # languages, changes to existing events, cash spending, groceries for the
-# shopping list and the pantry, meals and a recipe's ingredients, and recipe
-# links, through the Inbox API the Dashboard uses, plus one recorded voice note through Voice
+# shopping list and the pantry, meals and a recipe's ingredients, recipe
+# links, and photos of a letter and receipts, through the Inbox API the
+# Dashboard uses, plus one recorded voice note through Voice
 # and whisper.cpp), lets the automatic processor plan them with the
 # authenticated Codex CLI and act through MCP, and then checks the persisted
 # results. The owner's timezone is Europe/Berlin. Results go to
@@ -74,7 +75,9 @@ capture() { post_json /api/inbox/v1/inbox-items "$(jq -n --arg content "$1" '{co
 task() { api "$gateway/api/tasks/v1/tasks/$1"; }
 item() { api "$gateway/api/inbox/v1/inbox-items/$1"; }
 tasks_matching() { # tasks_matching <substring>: number of Tasks whose title contains it
-  api "$gateway/api/tasks/v1/tasks?query=$(jq -rn --arg q "$1" '$q|@uri')&limit=100" | jq '.items | length'
+  # (Tasks' query also searches notes, which a letter's Task has, so the
+  # titles are filtered here.)
+  api "$gateway/api/tasks/v1/tasks?query=$(jq -rn --arg q "$1" '$q|@uri')&limit=100" | jq --arg q "$1" '[.items[] | select(.title | test($q; "i"))] | length'
 }
 state() { item "$1" 2>/dev/null | jq -r '.state' 2>/dev/null || echo missing; }
 event() { api "$gateway/api/calendar/v1/events/$1"; }
@@ -92,6 +95,13 @@ captured_day() { TZ=$zone date -d "$(item "$1" | jq -r '.createdAt')" +%F; }
 review_ids() { item "$1" | jq -c '[.processingMetadata.humanReview.candidates[]?.id] | sort'; }
 # seed_list <name>: a needed shopping list item, as added in the Dashboard.
 seed_list() { post_json /api/food/v1/shopping-items "$(jq -n --arg name "$1" '{items: [{name: $name}]}')" | jq -r '.items[0].item.id'; }
+# photo <png>: uploads a photo through the Inbox media API and captures it
+# with the text the capture composer gives a photo without words ("Photo").
+photo() {
+  local reference
+  reference=$(api -F "images=@$1;type=image/png" "$gateway/api/inbox/v1/media" | jq -r '.items[0].reference')
+  post_json /api/inbox/v1/inbox-items "$(jq -n --arg ref "$reference" '{content: "Photo", source: "web", mediaReferences: [$ref]}')" | jq -r '.id'
+}
 put_json() { api -X PUT -H 'content-type: application/json' --data "$2" "$gateway$1"; }
 # coming <ISO weekday 1-7> <date>: that weekday on or after the date.
 coming() { date -u -d "$2 + $((($1 + 7 - $(date -u -d "$2" +%u)) % 7)) days" +%F; }
@@ -182,6 +192,11 @@ run_profile() {
   ids[meal_clear]=$(capture "Cancel Saturday breakfast.")
   ids[recipe_ingredients]=$(capture "Add the ingredients for the bolognese to the shopping list.")
   ids[recipe_link_structured]=$(capture "Save this recipe: http://ics-fixture/gulasch.html")
+  # Photos: a Finanzamt letter with a deadline, a cash receipt, and a card
+  # receipt (tools/fixtures/documents).
+  ids[letter_deadline]=$(photo tools/fixtures/documents/letter-finanzamt.png)
+  ids[receipt_cash]=$(photo tools/fixtures/documents/receipt-cash-rewe.png)
+  ids[receipt_card]=$(photo tools/fixtures/documents/receipt-card-girocard.png)
   ids[recipe_caption]=$(capture $'http://ics-fixture/reel-DGx7abc.html\nShakshuka in 20 Minuten 🍳\nZutaten:\n- 4 Eier\n- 1 Dose Tomaten\n- 1 rote Paprika\n- 1 Zwiebel\nZubereitung:\n1. Zwiebel und Paprika anbraten.\n2. Tomaten dazugeben und 10 Minuten köcheln.\n3. Eier hineinschlagen und stocken lassen.\n#shakshuka #frühstück')
   local job
   job=$(api -F "audio=@$work/chicken.wav;type=audio/wav" -F source=web "$gateway/api/voice/v1/audio-jobs" | jq -r '.id')
@@ -227,7 +242,8 @@ run_profile() {
   s=$(state "${ids[ru_complete]}")
   check ru_complete "$([ "$s" = resolved ] && [ "$(task "$mama" | jq -r .completed)" = true ] && [ "$(tasks_matching маме)" = 1 ] && echo 1 || echo 0)" "state=$s completed=$(task "$mama" | jq -r .completed)"
   s=$(state "${ids[de_create]}")
-  check de_create "$([ "$s" = resolved ] && [ "$(tasks_matching Steuer)" = 1 ] && echo 1 || echo 0)" "state=$s tax_tasks=$(tasks_matching Steuer)"
+  # "Steuererkl", not "Steuer": the Finanzamt letter's Task may name its tax.
+  check de_create "$([ "$s" = resolved ] && [ "$(tasks_matching Steuererkl)" = 1 ] && echo 1 || echo 0)" "state=$s tax_tasks=$(tasks_matching Steuererkl)"
   s=$(state "${ids[de_reschedule]}")
   due=$(task "$zahnarzt" | jq -r '.dueAt // ""')
   check de_reschedule "$([ "$s" = resolved ] && [[ "$due" == 2026-10-21T2* || "$due" == 2026-10-22* || "$due" == 2026-10-23T0* ]] && [ "$(tasks_matching Zahnarzt)" = 1 ] && echo 1 || echo 0)" "state=$s dueAt=$due"
@@ -273,7 +289,21 @@ run_profile() {
   spent fin_cash_ru -750
   s=$(state "${ids[fin_card]}")
   check fin_card "$([ "$s" != resolved ] && [ "$(jq '[.items[] | select(.amount.amount == -4500)] | length' <<<"$txns")" = 0 ] && echo 1 || echo 0)" "state=$s"
-  check no_extra_transactions "$([ "$(jq '.items | length' <<<"$txns")" = 2 ] && echo 1 || echo 0)" "transactions=$(jq -c '[.items[] | {amount: .amount.amount, counterparty, description}]' <<<"$txns") (expected 2)"
+  # Photos: the cash receipt is cash spending on its date at REWE; the card
+  # receipt is left to the bank connection.
+  s=$(state "${ids[receipt_cash]}")
+  local receipt
+  receipt=$(jq --arg cash "$cash" '[.items[] | select(.accountId == $cash and .amount.amount == -2347 and .amount.currency == "EUR" and .bookingDate == "2026-10-10" and ((.counterparty // "") | ascii_downcase | contains("rewe")))] | length' <<<"$txns")
+  check receipt_cash "$([ "$s" = resolved ] && [ "$receipt" = 1 ] && echo 1 || echo 0)" "state=$s matching_transactions=$receipt"
+  s=$(state "${ids[receipt_card]}")
+  check receipt_card "$([ "$s" != resolved ] && [ "$(jq '[.items[] | select(.amount.amount == -4120)] | length' <<<"$txns")" = 0 ] && echo 1 || echo 0)" "state=$s reason=\"$(item "${ids[receipt_card]}" | jq -r '.processingMetadata.humanReview.errorSummary // ""')\""
+  # letter_deadline: a Finanzamt Task due 30 November 2026 (in Berlin).
+  s=$(state "${ids[letter_deadline]}")
+  local letter
+  letter=$(api "$gateway/api/tasks/v1/tasks?query=Finanzamt&limit=100" | jq -c '[.items[] | select(.title | test("finanzamt"; "i"))]')
+  due=$(jq -r 'if length == 1 then .[0].dueAt // "" else "" end' <<<"$letter")
+  check letter_deadline "$([ "$s" = resolved ] && [ -n "$due" ] && [ "$(TZ=$zone date -d "$due" +%F)" = 2026-11-30 ] && echo 1 || echo 0)" "state=$s tasks=$(jq -c 'map({title, dueAt})' <<<"$letter")"
+  check no_extra_transactions "$([ "$(jq '.items | length' <<<"$txns")" = 3 ] && echo 1 || echo 0)" "transactions=$(jq -c '[.items[] | {amount: .amount.amount, counterparty, description}]' <<<"$txns") (expected 3)"
   # Groceries go on the shopping list in the owner's words (Food compares
   # names as normalizedName), with the store a capture names; a name already
   # needed merges; other purchases stay Tasks.
@@ -368,10 +398,10 @@ run_profile() {
   check no_extra_recipes "$([ "$(jq '.items | length' <<<"$recipes")" = 3 ] && echo 1 || echo 0)" "recipes=$(jq -c '[.items[].title]' <<<"$recipes") (expected 3)"
   check no_extra_meals "$([ "$(jq '.items | length' <<<"$plan")" = $((1 + ${#saturdays[@]})) ] && echo 1 || echo 0)" "meals=$(jq -c '[.items[] | {date, slot, title}]' <<<"$plan") (expected $((1 + ${#saturdays[@]})))"
   # No fallback or invented entities: ten seeds plus three creates, the
-  # flash drive, and the call to the plumber.
+  # flash drive, the call to the plumber, and the Finanzamt letter.
   local total
   total=$(api "$gateway/api/tasks/v1/tasks?limit=100" | jq '.items | length')
-  check no_extra_tasks "$([ "$total" = 15 ] && echo 1 || echo 0)" "tasks=$total (expected 15): $(api "$gateway/api/tasks/v1/tasks?limit=100" | jq -c '[.items[].title]')"
+  check no_extra_tasks "$([ "$total" = 16 ] && echo 1 || echo 0)" "tasks=$total (expected 16): $(api "$gateway/api/tasks/v1/tasks?limit=100" | jq -c '[.items[].title]')"
   # Four seeded events plus the one created, none cancelled.
   local all
   all=$(api "$gateway/api/calendar/v1/events?from=2026-01-01T00:00:00Z&to=$(date -u -d '+60 days' +%Y-%m-%dT%H:%M:%SZ)&includeCancelled=true&limit=100")
