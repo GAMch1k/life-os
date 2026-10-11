@@ -3,10 +3,12 @@ package processor
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Groceries go to the shopping list and the pantry: adds carry items with a
@@ -73,14 +75,20 @@ func TestValidActionChecksFoodActions(t *testing.T) {
 }
 
 // foodTools is a fake MCP for Food plans: it serves one capture (with an
-// approved action when set), the shopping list and pantry in pages, and
-// task_search per term, and records every write and the Human Review.
+// approved action and its capture time and timezone when set), the shopping
+// list and pantry in pages, recipe searches and task_search per term, and
+// records every write and the Human Review.
 type foodTools struct {
 	*fakeTools
 	itemID, content string
 	approved        map[string]any
-	shopping        []map[string]any
-	pantry          []map[string]any
+	createdAt       time.Time
+	timeZone        string
+	// recipes maps a recipe search's q to the recipes it finds.
+	recipes  map[string][]map[string]any
+	searches []string
+	shopping []map[string]any
+	pantry   []map[string]any
 	// pageSize splits the lists into pages when set.
 	pageSize    int
 	taskMatches map[string][]string
@@ -97,7 +105,10 @@ func (f *foodTools) Call(ctx context.Context, name string, args map[string]any) 
 	switch name {
 	case "inbox_list":
 		f.calls = append(f.calls, name)
-		item := inboxItem{ID: f.itemID, Content: f.content, Source: "manual", SourceMetadata: map[string]any{}}
+		item := inboxItem{ID: f.itemID, Content: f.content, Source: "manual", SourceMetadata: map[string]any{}, CreatedAt: f.createdAt}
+		if f.timeZone != "" {
+			item.SourceMetadata["timeZone"] = f.timeZone
+		}
 		if f.approved != nil {
 			item.ProcessingMetadata = map[string]any{"approvedAction": f.approved}
 		}
@@ -123,6 +134,19 @@ func (f *foodTools) Call(ctx context.Context, name string, args map[string]any) 
 		}
 		page["items"] = list[from:to]
 		raw, _ := json.Marshal(page)
+		return raw, nil
+	case "food_list_recipes":
+		f.calls = append(f.calls, name)
+		q, _ := args["q"].(string)
+		f.searches = append(f.searches, q)
+		if args["limit"] != recipeSearchLimit {
+			return nil, fmt.Errorf("recipe search limit = %v", args["limit"])
+		}
+		items := f.recipes[q]
+		if items == nil {
+			items = []map[string]any{}
+		}
+		raw, _ := json.Marshal(map[string]any{"items": items})
 		return raw, nil
 	case "task_search":
 		f.calls = append(f.calls, name)

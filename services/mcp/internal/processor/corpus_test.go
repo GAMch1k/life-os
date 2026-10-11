@@ -3,8 +3,10 @@ package processor
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 type corpusPlanner struct{}
@@ -28,10 +30,16 @@ type corpusTools struct {
 	item    inboxItem
 	calls   []string
 	records []map[string]any
+	// inputs are the last arguments each tool received.
+	inputs map[string]map[string]any
 }
 
 func (t *corpusTools) Call(_ context.Context, name string, args map[string]any) (json.RawMessage, error) {
 	t.calls = append(t.calls, name)
+	if t.inputs == nil {
+		t.inputs = map[string]map[string]any{}
+	}
+	t.inputs[name] = args
 	switch name {
 	case "inbox_list":
 		raw, _ := json.Marshal(inboxList{Items: []inboxItem{t.item}})
@@ -47,6 +55,16 @@ func (t *corpusTools) Call(_ context.Context, name string, args map[string]any) 
 		return json.RawMessage(`{"items":[{"id":"shop-1","name":"Молоко","state":"needed"}]}`), nil
 	case "food_list_pantry_items":
 		return json.RawMessage(`{"items":[{"id":"pantry-1","name":"Milch","state":"in_stock"}]}`), nil
+	case "food_list_recipes":
+		// The recipe book: Pasta Bolognese and Борщ.
+		q := strings.ToLower(args["q"].(string))
+		switch {
+		case strings.Contains(q, "bolognese") || strings.Contains(q, "болоньезе"):
+			return json.RawMessage(`{"items":[{"id":"recipe-1","title":"Pasta Bolognese","normalizedTitle":"pasta bolognese"}]}`), nil
+		case strings.Contains(q, "борщ") || strings.Contains(q, "borscht"):
+			return json.RawMessage(`{"items":[{"id":"recipe-2","title":"Борщ","normalizedTitle":"борщ"}]}`), nil
+		}
+		return json.RawMessage(`{"items":[]}`), nil
 	default:
 		return json.RawMessage(`{}`), nil
 	}
@@ -188,6 +206,83 @@ func TestFoodRoutingCorpusUsesOnlyApprovedMCPTools(t *testing.T) {
 				if action["tool"] == "none" {
 					t.Fatalf("an action did nothing: %#v", action)
 				}
+			}
+		})
+	}
+}
+
+// mealCorpusPlans plan meals and their ingredients the way the plan prompt
+// asks: the slot from the meal word, the meal in the owner's words.
+var mealCorpusPlans = map[string]string{
+	"Pasta Bolognese for dinner on Wednesday":       `{"actions":[{"tool":"food_plan_meal","arguments":{"recipeQuery":"Pasta Bolognese","recipeQueryAlternatives":["паста болоньезе","bolognese"],"date":"2026-10-14","slot":"dinner"}}],"confidence":0.95}`,
+	"на ужин в среду паста болоньезе":               `{"actions":[{"tool":"food_plan_meal","arguments":{"recipeQuery":"паста болоньезе","recipeQueryAlternatives":["Pasta Bolognese","bolognese"],"date":"2026-10-14","slot":"dinner"}}],"confidence":0.95}`,
+	"Mittwoch Mittagessen: Pasta Bolognese":         `{"actions":[{"tool":"food_plan_meal","arguments":{"recipeQuery":"Pasta Bolognese","date":"2026-10-14","slot":"lunch"}}],"confidence":0.95}`,
+	"В пятницу на обед суп":                         `{"actions":[{"tool":"food_plan_meal","arguments":{"recipeQuery":"суп","recipeQueryAlternatives":["soup","Suppe"],"date":"2026-10-16","slot":"lunch"}}],"confidence":0.95}`,
+	"Samstag Frühstück: Müsli":                      `{"actions":[{"tool":"food_plan_meal","arguments":{"recipeQuery":"Müsli","recipeQueryAlternatives":["muesli","мюсли"],"date":"2026-10-17","slot":"breakfast"}}],"confidence":0.95}`,
+	"oatmeal for breakfast tomorrow":                `{"actions":[{"tool":"food_plan_meal","arguments":{"recipeQuery":"oatmeal","date":"2026-10-12","slot":"breakfast"}}],"confidence":0.95}`,
+	"cancel dinner on Friday":                       `{"actions":[{"tool":"food_clear_meal","arguments":{"date":"2026-10-16","slot":"dinner"}}],"confidence":0.95}`,
+	"убери ужин в пятницу":                          `{"actions":[{"tool":"food_clear_meal","arguments":{"date":"2026-10-16","slot":"dinner"}}],"confidence":0.95}`,
+	"add the ingredients for bolognese to the list": `{"actions":[{"tool":"food_add_missing_ingredients","arguments":{"recipeQuery":"bolognese","recipeQueryAlternatives":["болоньезе"]}}],"confidence":0.95}`,
+	"купи всё для борща":                            `{"actions":[{"tool":"food_add_missing_ingredients","arguments":{"recipeQuery":"борщ","recipeQueryAlternatives":["borscht","Borschtsch"]}}],"confidence":0.95}`,
+	"buy what I need for this week's meals":         `{"actions":[{"tool":"food_add_missing_ingredients","arguments":{"week":"this"}}],"confidence":0.95}`,
+	"buy pasta":                                     `{"actions":[{"tool":"food_add_shopping_items","arguments":{"items":[{"name":"pasta"}]}}],"confidence":0.95}`,
+}
+
+type mealCorpusPlanner struct{}
+
+func (mealCorpusPlanner) Plan(_ context.Context, input string) (string, error) {
+	var item struct {
+		Content string `json:"content"`
+	}
+	_ = json.Unmarshal([]byte(input), &item)
+	if plan, ok := mealCorpusPlans[item.Content]; ok {
+		return plan, nil
+	}
+	return `{"actions":[],"ambiguous":true,"confidence":0.1,"reason":"clarification required"}`, nil
+}
+
+func TestMealRoutingCorpusUsesOnlyApprovedMCPTools(t *testing.T) {
+	cases := []struct {
+		name, content, tool string
+		// want are fields of the tool's input.
+		want map[string]any
+	}{
+		{"english recipe dinner", "Pasta Bolognese for dinner on Wednesday", "food_plan_meal", map[string]any{"slot": "dinner", "recipeId": "recipe-1"}},
+		{"russian recipe dinner", "на ужин в среду паста болоньезе", "food_plan_meal", map[string]any{"slot": "dinner", "recipeId": "recipe-1"}},
+		{"german recipe lunch", "Mittwoch Mittagessen: Pasta Bolognese", "food_plan_meal", map[string]any{"slot": "lunch", "recipeId": "recipe-1"}},
+		{"russian text lunch", "В пятницу на обед суп", "food_plan_meal", map[string]any{"slot": "lunch", "text": "суп"}},
+		{"german text breakfast", "Samstag Frühstück: Müsli", "food_plan_meal", map[string]any{"slot": "breakfast", "text": "Müsli", "date": "2026-10-17"}},
+		{"english text breakfast", "oatmeal for breakfast tomorrow", "food_plan_meal", map[string]any{"slot": "breakfast", "text": "oatmeal"}},
+		{"english clear", "cancel dinner on Friday", "food_clear_meal", map[string]any{"slot": "dinner", "date": "2026-10-16"}},
+		{"russian clear", "убери ужин в пятницу", "food_clear_meal", map[string]any{"slot": "dinner", "date": "2026-10-16"}},
+		{"english recipe ingredients", "add the ingredients for bolognese to the list", "food_add_missing_ingredients", map[string]any{"recipeIds": []any{"recipe-1"}}},
+		{"russian recipe ingredients", "купи всё для борща", "food_add_missing_ingredients", map[string]any{"recipeIds": []any{"recipe-2"}}},
+		{"this week's ingredients", "buy what I need for this week's meals", "food_add_missing_ingredients", map[string]any{"from": "2026-10-05", "to": "2026-10-11"}},
+		{"buying pasta stays a list item", "buy pasta", "food_add_shopping_items", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Captured on Sunday 11 October 2026 in Berlin.
+			tools := &corpusTools{item: inboxItem{ID: "item-" + tc.name, Content: tc.content, Source: "manual", SourceMetadata: map[string]any{"timeZone": "Europe/Berlin"}, CreatedAt: time.Date(2026, 10, 11, 10, 0, 0, 0, time.UTC)}}
+			if _, err := (Runner{Planner: mealCorpusPlanner{}, Tools: tools, Model: "gpt-5.6-luna"}).Run(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if !contains(tools.calls, tc.tool) || !contains(tools.calls, "inbox_resolve") || contains(tools.calls, "inbox_set_human_review") {
+				t.Fatalf("calls = %#v", tools.calls)
+			}
+			for _, other := range []string{"task_create", "calendar_create", "calendar_cancel", "food_plan_meal", "food_add_shopping_items"} {
+				if other != tc.tool && contains(tools.calls, other) {
+					t.Fatalf("%s called: %#v", other, tools.calls)
+				}
+			}
+			input := tools.inputs[tc.tool]
+			for field, value := range tc.want {
+				if !reflect.DeepEqual(input[field], value) {
+					t.Fatalf("%s input = %#v, want %s = %#v", tc.tool, input, field, value)
+				}
+			}
+			if audit := tools.records[len(tools.records)-1]; audit["status"] != "processed" {
+				t.Fatalf("audit=%#v", tools.records)
 			}
 		})
 	}
