@@ -220,6 +220,12 @@ given), an optional `sourceUrl` (http or https), a `note`, and the actors.
 - Deleting a recipe keeps the meals planned with it, as plain text with its
   title.
 
+**Importing.** Food fetches no page itself: recipes from links and pasted
+captions come through the [recipe-import](recipe-import.md) integration,
+which reads the page and saves the recipe with `POST /v1/recipes` as
+`system:recipe-import`, the link as its `sourceUrl`, and the page's
+description and image link in its `note`.
+
 **Finding a recipe from words** (as the AI does for "plan lasagne for
 Friday"): normalise the words and compare them with `normalizedTitle`. A
 recipe whose normalised title equals them is the one (titles are unique);
