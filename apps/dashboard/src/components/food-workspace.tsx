@@ -161,9 +161,11 @@ function ReadyWorkspace({
             filter={parseStoreFilter(filter, stores)}
             onFilterChange={changeFilter}
             onStoresChanged={storesChanged}
+            pantry={pantry}
             shopping={shopping}
             stores={stores}
             storesError={storesError}
+            today={today}
           />
         </TabsContent>
         <TabsContent value="pantry">

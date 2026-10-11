@@ -48,6 +48,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/shopping-items/put-away": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Put bought items away in the pantry
+         * @description Moves 1 to 50 bought items from the shopping list into the pantry in one transaction: each becomes an in-stock pantry item with the item's name, its amount (or the `amount` given; empty means none), `fromShoppingItemId`, and its `source` and `sourceRef`, in the `location` given or else the usual place of the item's aisle (frozen food the freezer; dairy, meat, and fish the fridge; bakery, pantry, drinks, and snacks the pantry; anything else `other`), with the `expiresOn` given; and the shopping item leaves the list. All or none: an item that is still needed refuses the request (409 `not_bought`), an unknown id is 404 `not_found`, and an id named twice is 400 `invalid_request`, each message naming `items[i]`. The response lists the new pantry items in the request's order.
+         */
+        post: operations["putAwayShoppingItems"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/shopping-items/{itemId}": {
         parameters: {
             query?: never;
@@ -311,6 +331,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/notifications/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the expiry reminders' health
+         * @description Whether Food sends its expiry reminders (it needs the Notifications service), when they are due on the owner's wall clock, how far they have been handled, and the last run, success, and error. Once a day at `expiryTime` Food sends one notification naming the in-stock pantry items that expire that day or the next, when there are any. One due while Food was down is sent late within the grace window and otherwise recorded in Activity as missed.
+         */
+        get: operations["getNotificationStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -543,6 +583,61 @@ export interface components {
         AddPantryItemsResponse: {
             items: components["schemas"]["PantryItem"][];
         };
+        PutAwayItem: {
+            /**
+             * Format: uuid
+             * @description A bought shopping item.
+             */
+            id: string;
+            location?: components["schemas"]["PantryLocation"];
+            /** Format: date */
+            expiresOn?: string;
+            /** @description Replaces the shopping item's amount; empty means none. Without it the pantry item keeps the shopping item's amount. */
+            amount?: string;
+        };
+        PutAwayRequest: {
+            items: components["schemas"]["PutAwayItem"][];
+        };
+        PutAwayResponse: {
+            /** @description The new pantry items in the request's order. */
+            items: components["schemas"]["PantryItem"][];
+        };
+        FoodNotificationStatus: {
+            /** @description Whether Food sends expiry reminders: false when NOTIFICATIONS_SERVICE_URL is not set. */
+            enabled: boolean;
+            /** @description How often due reminders are looked for. */
+            intervalSeconds: number;
+            /** @description How late a reminder may still be sent after Food was down; older ones are recorded as missed. */
+            graceMinutes: number;
+            /** @description The owner's timezone expiryTime is in (LIFE_OS_TIMEZONE). */
+            timeZone: string;
+            /** @description When the daily expiry reminder is due, HH:MM. */
+            expiryTime: string;
+            /**
+             * Format: date-time
+             * @description Every reminder due up to this instant has been sent, recorded as missed or empty, or refused by Notifications; null before the first run.
+             */
+            handledThrough: string | null;
+            /**
+             * Format: date-time
+             * @description When a run last started.
+             */
+            lastRunAt: string | null;
+            /**
+             * Format: date-time
+             * @description When a run last finished without an error.
+             */
+            lastSuccessAt: string | null;
+            /** @description The last run error, kept until the next one: current when lastErrorAt is after lastSuccessAt. */
+            lastError: string | null;
+            /** Format: date-time */
+            lastErrorAt: string | null;
+            /**
+             * Format: date-time
+             * @description When a run last sent a reminder.
+             */
+            lastSentAt: string | null;
+        };
         UpdatePantryItemRequest: {
             name?: string;
             amount?: string | null;
@@ -685,6 +780,60 @@ export interface operations {
                 };
             };
             /** @description `idempotency_conflict` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    putAwayShoppingItems: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Makes the write safe to retry; see the API description. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutAwayRequest"];
+            };
+        };
+        responses: {
+            /** @description The new pantry items */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PutAwayResponse"];
+                };
+            };
+            /** @description Invalid request (`invalid_request`), or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A shopping item not found (`not_found`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `not_bought` (an item is still needed) or `idempotency_conflict` */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -1618,6 +1767,35 @@ export interface operations {
             };
             /** @description `idempotency_conflict` */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getNotificationStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Expiry reminders health */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FoodNotificationStatus"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

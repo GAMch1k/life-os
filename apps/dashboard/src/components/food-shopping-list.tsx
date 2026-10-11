@@ -4,6 +4,7 @@ import { ChevronRight, Plus, Store as StoreIcon } from "lucide-react";
 import { type FormEvent, useState } from "react";
 
 import { ShoppingItemDialog } from "@/components/food-item-dialog";
+import { PutAwayDialog } from "@/components/food-put-away-dialog";
 import { StoresDialog } from "@/components/food-stores-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -20,6 +21,7 @@ import {
   FOOD_MAX_PAGES,
   FOOD_PAGE_SIZE,
   NO_STORE,
+  type PantryItem,
   type ShoppingItem,
   type Store,
   type StoreFilter,
@@ -29,6 +31,7 @@ import {
   boughtItems,
   load,
   parseQuickAdd,
+  putAwayNote,
   reopened,
   upsert,
   writeHeader,
@@ -47,11 +50,14 @@ type Notice = { kind: "info" | "error"; text: string };
 /**
  * The shopping list, made for one hand on a phone in the shop: a quick add
  * that reads "2 l milk" as an amount and a name, a store filter, the needed
- * items by aisle with large checkboxes, and the bought items folded away.
- * Ticking an item moves it at once and puts it back if Food refuses.
+ * items by aisle with large checkboxes, and the bought items folded away,
+ * from where they are put away into the pantry. Ticking an item moves it at
+ * once and puts it back if Food refuses.
  */
 export function FoodShoppingList({
   shopping,
+  pantry,
+  today,
   stores,
   storesError,
   filter,
@@ -60,6 +66,9 @@ export function FoodShoppingList({
   capped,
 }: {
   shopping: SyncedList<ShoppingItem>;
+  pantry: SyncedList<PantryItem>;
+  /** The owner's today (YYYY-MM-DD), for the expiry date pickers. */
+  today: string;
   stores: Store[];
   storesError?: string;
   filter: StoreFilter;
@@ -70,7 +79,9 @@ export function FoodShoppingList({
 }) {
   const [editing, setEditing] = useState<ShoppingItem | null>(null);
   const [storesOpen, setStoresOpen] = useState(false);
+  const [putting, setPutting] = useState<ShoppingItem[] | null>(null);
   const [error, setError] = useState<string>();
+  const [note, setNote] = useState<string>();
   const active = activeStores(stores);
   const groups = aisleGroups(shopping.items, filter);
   const bought = boughtItems(shopping.items);
@@ -82,6 +93,7 @@ export function FoodShoppingList({
   /** Ticks an item off (or back on), at once; Food's refusal undoes it. */
   const mark = (item: ShoppingItem, state: ShoppingItem["state"]) => {
     setError(undefined);
+    setNote(undefined);
     shopping.change((items) =>
       items.map((entry) =>
         entry.id === item.id
@@ -168,6 +180,14 @@ export function FoodShoppingList({
           {error}
         </p>
       ) : null}
+      <p
+        aria-live="polite"
+        className={cn("text-muted-foreground text-sm", !note && "sr-only")}
+        data-testid="food-list-note"
+        role="status"
+      >
+        {note}
+      </p>
       {capped ? (
         <p className={EMPTY} role="note">
           Only the first {FOOD_PAGE_SIZE * FOOD_MAX_PAGES} items are shown.
@@ -214,6 +234,10 @@ export function FoodShoppingList({
       {bought.length ? (
         <BoughtSection
           items={bought}
+          onPutAway={(items) => {
+            setNote(undefined);
+            setPutting(items);
+          }}
           onReopen={(item) => mark(item, "needed")}
           shopping={shopping}
         />
@@ -225,6 +249,14 @@ export function FoodShoppingList({
         onStoresChanged={onStoresChanged}
         shopping={shopping}
         stores={stores}
+      />
+      <PutAwayDialog
+        items={putting}
+        onClose={() => setPutting(null)}
+        onDone={(added) => setNote(putAwayNote(added))}
+        pantry={pantry}
+        shopping={shopping}
+        today={today}
       />
       <StoresDialog
         onChanged={onStoresChanged}
@@ -409,16 +441,19 @@ function NeededRow({
 
 /**
  * Bought items, folded by default with a count. Unticking one puts it back
- * on the list; Clear bought deletes them after a confirmation.
+ * on the list; Put away (one, or all) moves them into the pantry; Clear
+ * bought deletes them after a confirmation.
  */
 function BoughtSection({
   items,
   shopping,
   onReopen,
+  onPutAway,
 }: {
   items: ShoppingItem[];
   shopping: SyncedList<ShoppingItem>;
   onReopen: (item: ShoppingItem) => void;
+  onPutAway: (items: ShoppingItem[]) => void;
 }) {
   const [expanded, setExpanded] = usePersistentToggle(BOUGHT_EXPANDED);
   const [confirming, setConfirming] = useState(false);
@@ -471,10 +506,14 @@ function BoughtSection({
           <>
             <ul className="bg-card divide-y rounded-lg border">
               {items.map((item) => (
-                <li data-testid="food-bought-item" key={item.id}>
-                  {/* The whole row is the checkbox's label: a tap anywhere
-                      puts the item back. */}
-                  <Label className="flex min-h-12 cursor-pointer items-center gap-0 text-base leading-normal font-normal">
+                <li
+                  className="flex items-center"
+                  data-testid="food-bought-item"
+                  key={item.id}
+                >
+                  {/* The row, but for Put away, is the checkbox's label: a
+                      tap on it puts the item back on the list. */}
+                  <Label className="flex min-h-12 min-w-0 flex-1 cursor-pointer items-center gap-0 text-base leading-normal font-normal">
                     <span className="flex w-12 shrink-0 justify-center">
                       <Checkbox
                         aria-label={`${item.name} bought`}
@@ -490,6 +529,15 @@ function BoughtSection({
                       ) : null}
                     </span>
                   </Label>
+                  <Button
+                    aria-label={`Put away ${item.name}`}
+                    className="mr-1.5 shrink-0"
+                    onClick={() => onPutAway([item])}
+                    size="lg"
+                    variant="ghost"
+                  >
+                    Put away
+                  </Button>
                 </li>
               ))}
             </ul>
@@ -519,13 +567,18 @@ function BoughtSection({
                 </div>
               </div>
             ) : (
-              <Button
-                onClick={() => setConfirming(true)}
-                size="lg"
-                variant="outline"
-              >
-                Clear bought
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                <Button onClick={() => onPutAway(items)} size="lg">
+                  Put away all
+                </Button>
+                <Button
+                  onClick={() => setConfirming(true)}
+                  size="lg"
+                  variant="outline"
+                >
+                  Clear bought
+                </Button>
+              </div>
             )}
             {error ? (
               <p className="text-destructive text-sm" role="alert">

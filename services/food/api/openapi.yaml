@@ -96,6 +96,31 @@ paths:
         '200': {description: Count, content: {application/json: {schema: {$ref: '#/components/schemas/ClearBoughtResult'}}}}
         '400': {description: 'Invalid request (`invalid_request`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
         '409': {description: '`idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/shopping-items/put-away:
+    post:
+      summary: Put bought items away in the pantry
+      description: >-
+        Moves 1 to 50 bought items from the shopping list into the pantry in
+        one transaction: each becomes an in-stock pantry item with the
+        item's name, its amount (or the `amount` given; empty means none),
+        `fromShoppingItemId`, and its `source` and `sourceRef`, in the
+        `location` given or else the usual place of the item's aisle (frozen
+        food the freezer; dairy, meat, and fish the fridge; bakery, pantry,
+        drinks, and snacks the pantry; anything else `other`), with the
+        `expiresOn` given; and the shopping item leaves the list. All or
+        none: an item that is still needed refuses the request (409
+        `not_bought`), an unknown id is 404 `not_found`, and an id named
+        twice is 400 `invalid_request`, each message naming `items[i]`. The
+        response lists the new pantry items in the request's order.
+      operationId: putAwayShoppingItems
+      security: []
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PutAwayRequest'}}}}
+      responses:
+        '200': {description: The new pantry items, content: {application/json: {schema: {$ref: '#/components/schemas/PutAwayResponse'}}}}
+        '400': {description: 'Invalid request (`invalid_request`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: 'A shopping item not found (`not_found`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`not_bought` (an item is still needed) or `idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
   /v1/shopping-items/{itemId}:
     get:
       summary: Get a shopping item
@@ -360,6 +385,22 @@ paths:
         '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
         '404': {description: Item not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
         '409': {description: '`idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/notifications/status:
+    get:
+      summary: Get the expiry reminders' health
+      description: >-
+        Whether Food sends its expiry reminders (it needs the Notifications
+        service), when they are due on the owner's wall clock, how far they
+        have been handled, and the last run, success, and error. Once a day
+        at `expiryTime` Food sends one notification naming the in-stock
+        pantry items that expire that day or the next, when there are any.
+        One due while Food was down is sent late within the grace window and
+        otherwise recorded in Activity as missed.
+      operationId: getNotificationStatus
+      security: []
+      responses:
+        '200': {description: Expiry reminders health, content: {application/json: {schema: {$ref: '#/components/schemas/FoodNotificationStatus'}}}}
+        '400': {description: Invalid request, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
 components:
   parameters:
     ItemId: {name: itemId, in: path, required: true, schema: {type: string, format: uuid}}
@@ -600,6 +641,39 @@ components:
       required: [items]
       properties:
         items: {type: array, items: {$ref: '#/components/schemas/PantryItem'}}
+    PutAwayItem:
+      type: object
+      required: [id]
+      properties:
+        id: {type: string, format: uuid, description: A bought shopping item.}
+        location: {$ref: '#/components/schemas/PantryLocation'}
+        expiresOn: {type: string, format: date}
+        amount: {type: string, maxLength: 50, description: 'Replaces the shopping item''s amount; empty means none. Without it the pantry item keeps the shopping item''s amount.'}
+    PutAwayRequest:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, minItems: 1, maxItems: 50, items: {$ref: '#/components/schemas/PutAwayItem'}}
+    PutAwayResponse:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, description: The new pantry items in the request's order., items: {$ref: '#/components/schemas/PantryItem'}}
+    FoodNotificationStatus:
+      type: object
+      required: [enabled, intervalSeconds, graceMinutes, timeZone, expiryTime, handledThrough, lastRunAt, lastSuccessAt, lastError, lastErrorAt, lastSentAt]
+      properties:
+        enabled: {type: boolean, description: 'Whether Food sends expiry reminders: false when NOTIFICATIONS_SERVICE_URL is not set.'}
+        intervalSeconds: {type: integer, description: How often due reminders are looked for.}
+        graceMinutes: {type: integer, description: 'How late a reminder may still be sent after Food was down; older ones are recorded as missed.'}
+        timeZone: {type: string, description: The owner's timezone expiryTime is in (LIFE_OS_TIMEZONE).}
+        expiryTime: {type: string, description: 'When the daily expiry reminder is due, HH:MM.'}
+        handledThrough: {type: string, format: date-time, nullable: true, description: 'Every reminder due up to this instant has been sent, recorded as missed or empty, or refused by Notifications; null before the first run.'}
+        lastRunAt: {type: string, format: date-time, nullable: true, description: When a run last started.}
+        lastSuccessAt: {type: string, format: date-time, nullable: true, description: When a run last finished without an error.}
+        lastError: {type: string, nullable: true, description: 'The last run error, kept until the next one: current when lastErrorAt is after lastSuccessAt.'}
+        lastErrorAt: {type: string, format: date-time, nullable: true}
+        lastSentAt: {type: string, format: date-time, nullable: true, description: When a run last sent a reminder.}
     UpdatePantryItemRequest:
       type: object
       minProperties: 1

@@ -6,6 +6,8 @@ import { calendarFeedsClient } from "@/lib/api/calendar-feeds-client";
 import type { components as BackupComponents } from "@/lib/api/generated/backup";
 import type { components as CalendarComponents } from "@/lib/api/generated/calendar";
 import type { components as CalendarFeedsComponents } from "@/lib/api/generated/calendar-feeds";
+import { foodClient } from "@/lib/api/food-client";
+import type { components as FoodComponents } from "@/lib/api/generated/food";
 import { googleCalendarClient } from "@/lib/api/google-calendar-client";
 import { inboxClient } from "@/lib/api/inbox-client";
 import type { components as InboxComponents } from "@/lib/api/generated/inbox";
@@ -38,8 +40,8 @@ import { configuredTimeZone, userTimeZone } from "@/lib/user-time-zone";
 // - the Google Calendar integration's connection (with its exports and the
 //   edits on their way to Google) and the sync state of its calendars,
 // - the Notifications channels API (each delivery channel's recent outcomes),
-// - the reminder delivery health Calendar and Tasks report (their senders'
-//   last checks for due reminders),
+// - the reminder delivery health Calendar, Tasks, and Food report (their
+//   senders' last checks for due reminders),
 // - the banking integration's connections (consent and sync state),
 // - the backup service's status (the last backups and restore check),
 // - each owning service's /ready endpoint.
@@ -63,6 +65,9 @@ export type TaskNotifications =
   TasksComponents["schemas"]["TaskNotificationStatus"];
 /** The backup service's status (`GET /v1/status`). */
 export type BackupStatus = BackupComponents["schemas"]["BackupStatus"];
+/** Food's expiry reminder health (`GET /v1/notifications/status`). */
+export type FoodNotifications =
+  FoodComponents["schemas"]["FoodNotificationStatus"];
 
 /** Mirrors `Status` in services/mcp/internal/processor/status.go. */
 export type ProcessorStatus = {
@@ -308,6 +313,12 @@ export type RuntimeSignals = {
    * out: Tasks' own unavailability shows under Services).
    */
   taskReminders?: TaskNotifications | null;
+  /**
+   * Food's daily expiry reminder, a Food reminders part of the
+   * Notifications check; null or absent when not read (the part is left
+   * out: Food's own unavailability shows under Services).
+   */
+  foodReminders?: FoodNotifications | null;
   /**
    * The bank connections; null when banking could not be read, absent when
    * not checked (the check is left out).
@@ -1173,7 +1184,7 @@ function notificationsCheck(
   };
 }
 
-/** What reminder senders report alike: Calendar's and Tasks'. */
+/** What reminder senders report alike: Calendar's, Tasks', and Food's. */
 type SenderHealth = Pick<
   ReminderDelivery,
   | "enabled"
@@ -1206,7 +1217,7 @@ function minutesLabel(minutes: number) {
 
 /** What to do while a sender's reminders are not going out. */
 export function senderAction(
-  service: "calendar" | "tasks",
+  service: "calendar" | "tasks" | "food",
   what: string,
   graceMinutes: number,
 ) {
@@ -1351,6 +1362,30 @@ export function taskRemindersPart(
   );
 }
 
+/** Food's daily expiry reminder, a part of the Notifications check. */
+export function foodRemindersPart(
+  status: FoodNotifications,
+  now: Date,
+  timeZone: string,
+): StatusPart {
+  return senderPart(
+    {
+      id: "food-reminders",
+      title: "Food reminders",
+      off: "Food sends no expiry reminders: its NOTIFICATIONS_SERVICE_URL is not set.",
+    },
+    status,
+    now,
+    timeZone,
+    [
+      {
+        label: "Expiry reminder",
+        value: `daily at ${status.expiryTime} (${status.timeZone})`,
+      },
+    ],
+  );
+}
+
 /** Adds Calendar's reminder delivery to the Calendar check. */
 function withEventReminders(
   check: StatusCheck,
@@ -1378,6 +1413,21 @@ function withTaskReminders(
     check,
     taskRemindersPart(status, now, timeZone),
     senderAction("tasks", "Reminders and daily lists", status.graceMinutes),
+  );
+}
+
+/** Adds Food's expiry reminder to the Notifications check. */
+function withFoodReminders(
+  check: StatusCheck,
+  status: FoodNotifications | null | undefined,
+  now: Date,
+  timeZone: string,
+): StatusCheck {
+  if (!status) return check;
+  return withPart(
+    check,
+    foodRemindersPart(status, now, timeZone),
+    senderAction("food", "Expiry reminders", status.graceMinutes),
   );
 }
 
@@ -1928,9 +1978,14 @@ export function toRuntimeStatus(
     ...(signals.notificationChannels === undefined
       ? []
       : [
-          withTaskReminders(
-            notificationsCheck(signals.notificationChannels, timeZone),
-            signals.taskReminders,
+          withFoodReminders(
+            withTaskReminders(
+              notificationsCheck(signals.notificationChannels, timeZone),
+              signals.taskReminders,
+              now,
+              timeZone,
+            ),
+            signals.foodReminders,
             now,
             timeZone,
           ),
@@ -2038,6 +2093,10 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
     .GET("/v1/status", timeout)
     .then(({ data }) => data ?? null)
     .catch(() => null);
+  const foodReminders = foodClient
+    .GET("/v1/notifications/status", timeout)
+    .then(({ data }) => data ?? null)
+    .catch(() => null);
   const [
     processor,
     inbox,
@@ -2095,6 +2154,7 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
       googleCalendars,
       eventReminders: await eventReminders,
       taskReminders: await taskReminders,
+      foodReminders: await foodReminders,
       bankConnections: await bankConnections,
       backups: await backups,
       services,

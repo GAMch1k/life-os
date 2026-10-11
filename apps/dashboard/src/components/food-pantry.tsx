@@ -14,6 +14,7 @@ import {
   type ShoppingItem,
   addedNote,
   endedItems,
+  endedNote,
   endedText,
   expiry,
   load,
@@ -41,12 +42,17 @@ const TONES = {
 
 type Action = "used-up" | "thrown-away" | "restock";
 
-type Notice = { kind: "info" | "error"; text: string };
+/**
+ * The status line, and after an item ended, the offer to put it on the
+ * shopping list (none when it is already there).
+ */
+type Notice = { kind: "info" | "error"; text: string; offer?: PantryItem };
 
 /**
  * The pantry: what is at home, by place (Fridge, Freezer, Pantry, Other),
  * the soonest expiry first. An item can be marked used up or thrown away,
- * put on the shopping list, or edited; ended items stay in a folded
+ * put on the shopping list, or edited; once one is used up or thrown away
+ * the page offers to put it on the list. Ended items stay in a folded
  * history, from which they can be restocked.
  */
 export function FoodPantry({
@@ -99,6 +105,20 @@ export function FoodPantry({
       if (result.error !== undefined)
         return setNotice({ kind: "error", text: result.error });
       pantry.change((items) => upsert(items, result.data));
+      if (action === "restock") return;
+      // Ended: offer to buy it again, unless it is already on the list.
+      const listed = shopping.items.some(
+        (entry) =>
+          entry.state === "needed" &&
+          entry.normalizedName === result.data.normalizedName,
+      );
+      setNotice({
+        kind: "info",
+        text: listed
+          ? `${endedNote(result.data)} It is already on the shopping list.`
+          : endedNote(result.data),
+        offer: listed ? undefined : result.data,
+      });
     });
   };
 
@@ -154,6 +174,24 @@ export function FoodPantry({
       >
         {notice?.text}
       </p>
+      {notice?.offer ? (
+        <div
+          className="bg-card flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2 text-sm"
+          data-testid="food-pantry-offer"
+        >
+          <span className="min-w-0 flex-1">
+            Add “{notice.offer.name}” to the shopping list?
+          </span>
+          <Button
+            disabled={busy.has(notice.offer.id)}
+            onClick={() => addToList(notice.offer!)}
+            size="lg"
+            variant="outline"
+          >
+            Add to list
+          </Button>
+        </div>
+      ) : null}
 
       {error && !pantry.items.length ? (
         <p className="text-destructive text-sm">{error}</p>

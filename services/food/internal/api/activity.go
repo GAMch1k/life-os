@@ -23,6 +23,7 @@ const (
 	shoppingItemBought   = "food.shopping_item.bought"
 	shoppingItemReopened = "food.shopping_item.reopened"
 	shoppingItemDeleted  = "food.shopping_item.deleted"
+	shoppingItemPutAway  = "food.shopping_item.put_away"
 	shoppingItemsCleared = "food.shopping_items.cleared"
 	storeCreated         = "food.store.created"
 	storeUpdated         = "food.store.updated"
@@ -83,7 +84,8 @@ func labels(changes []string) string {
 // changed; data adds details such as the merged item.
 func shoppingEvent(eventType string, item store.ShoppingItem, storeName *string, changes []string, data map[string]any) activity.Event {
 	id := uuid(item.ID).String()
-	event := newEvent(eventType, id, eventType == shoppingItemAdded || eventType == shoppingItemDeleted)
+	// An item is added, put away, and deleted once.
+	event := newEvent(eventType, id, eventType == shoppingItemAdded || eventType == shoppingItemDeleted || eventType == shoppingItemPutAway)
 	event.Subject = activity.Subject{Type: "food_shopping_item", ID: id}
 	if data == nil {
 		data = map[string]any{}
@@ -135,6 +137,11 @@ func shoppingEvent(eventType string, item store.ShoppingItem, storeName *string,
 		}
 	case shoppingItemDeleted:
 		event.Summary = "Removed " + name + " from the shopping list"
+	case shoppingItemPutAway:
+		event.Summary = "Put away " + name
+		if place, ok := map[any]string{"fridge": "the fridge", "freezer": "the freezer", "pantry": "the pantry"}[data["location"]]; ok {
+			event.Summary += " in " + place
+		}
 	}
 	return event
 }

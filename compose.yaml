@@ -67,7 +67,7 @@ services:
   # LIFE_OS_TIMEZONE is the owner's "today" for expiringWithinDays.
   food:
     build: {context: ., dockerfile: services/food/Dockerfile}
-    environment: {SERVICE_NAME: food, PORT: 8080, DATABASE_URL: "postgres://food_user:${LIFE_OS_FOOD_DB_PASSWORD}@postgres:5432/food_db?sslmode=disable", ACTIVITY_SERVICE_URL: "http://activity:8080", LIFE_OS_TIMEZONE: "${LIFE_OS_TIMEZONE:-UTC}"}
+    environment: {SERVICE_NAME: food, PORT: 8080, DATABASE_URL: "postgres://food_user:${LIFE_OS_FOOD_DB_PASSWORD}@postgres:5432/food_db?sslmode=disable", ACTIVITY_SERVICE_URL: "http://activity:8080", LIFE_OS_TIMEZONE: "${LIFE_OS_TIMEZONE:-UTC}", NOTIFICATIONS_SERVICE_URL: "http://notifications:8080", FOOD_EXPIRY_TIME: "${LIFE_OS_FOOD_EXPIRY_TIME:-08:00}"}
     expose: ["8080"]
     depends_on: {food-migrate: {condition: service_completed_successfully}}
     networks: [backend]

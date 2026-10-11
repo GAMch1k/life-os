@@ -10,6 +10,7 @@ import (
 
 	sharedconfig "github.com/GAMch1k/life-os/pkg/config"
 	"github.com/GAMch1k/life-os/pkg/database"
+	"github.com/GAMch1k/life-os/services/food/internal/notifications"
 )
 
 // Config holds the Food process's configuration.
@@ -23,6 +24,14 @@ type Config struct {
 	// TimeZone is the owner's timezone (LIFE_OS_TIMEZONE, an IANA name such
 	// as Europe/Berlin): expiringWithinDays counts from today there.
 	TimeZone string `env:"LIFE_OS_TIMEZONE" default:"UTC"`
+	// Expiry reminders: the Notifications service they are sent to (empty
+	// turns them off), when the daily reminder is due (owner-local HH:MM),
+	// how often due reminders are looked for, and how late one may still be
+	// sent after Food was down.
+	NotificationsURL      string `env:"NOTIFICATIONS_SERVICE_URL"`
+	ExpiryTime            string `env:"FOOD_EXPIRY_TIME" default:"08:00"`
+	NotifyIntervalSeconds int    `env:"FOOD_NOTIFY_INTERVAL_SECONDS" default:"30"`
+	NotifyGraceMinutes    int    `env:"FOOD_NOTIFY_GRACE_MINUTES" default:"120"`
 }
 
 // Load reads Config from the process environment.
@@ -59,7 +68,25 @@ func (c Config) Validate() error {
 	if err := level.UnmarshalText([]byte(c.LogLevel)); err != nil {
 		validationErrors = append(validationErrors, fmt.Errorf("LOG_LEVEL must be a slog level: %w", err))
 	}
+	if c.NotifyIntervalSeconds < 5 || c.NotifyIntervalSeconds > 300 {
+		validationErrors = append(validationErrors, fmt.Errorf("FOOD_NOTIFY_INTERVAL_SECONDS must be between 5 and 300"))
+	}
+	if c.NotifyGraceMinutes < 10 || c.NotifyGraceMinutes > 1440 {
+		validationErrors = append(validationErrors, fmt.Errorf("FOOD_NOTIFY_GRACE_MINUTES must be between 10 and 1440"))
+	}
+	if _, err := c.ExpiryClock(); err != nil {
+		validationErrors = append(validationErrors, err)
+	}
 	return errors.Join(validationErrors...)
+}
+
+// ExpiryClock returns when the daily expiry reminder is due.
+func (c Config) ExpiryClock() (notifications.Clock, error) {
+	clock, err := notifications.ParseClock(strings.TrimSpace(c.ExpiryTime))
+	if err != nil {
+		return notifications.Clock{}, fmt.Errorf("FOOD_EXPIRY_TIME must be a 24-hour HH:MM time: %w", err)
+	}
+	return clock, nil
 }
 
 // OwnerTimeZone returns the validated LIFE_OS_TIMEZONE name. Unset means UTC.
