@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -195,9 +196,27 @@ func (c CodexCLI) Plan(ctx context.Context, content string) (string, error) {
 	if c.ReasoningEffort != "" {
 		args = append(args, "-c", "model_reasoning_effort="+c.ReasoningEffort)
 	}
+	// The capture's images go to Codex as files in a directory of the
+	// workdir that lives as long as the run.
+	images := imagesFrom(ctx)
+	if len(images.Images) > 0 {
+		dir, err := os.MkdirTemp(c.WorkDir, "capture-images-")
+		if err != nil {
+			return "", fmt.Errorf("prepare capture images: %w", err)
+		}
+		defer os.RemoveAll(dir)
+		paths, err := writeImages(dir, images.Images)
+		if err != nil {
+			return "", fmt.Errorf("prepare capture images: %w", err)
+		}
+		for _, path := range paths {
+			args = append(args, "--image", path)
+		}
+	}
 	// This run's prompt and its TZ use the capture's own zone when known.
 	c.TimeZone = c.location(ctx)
-	prompt := planPrompt + timeContext(c.now(), capturedAtFrom(ctx), c.TimeZone) + "Inbox item: " + content
+	prompt := planPrompt + timeContext(c.now(), capturedAtFrom(ctx), c.TimeZone) + imagesNote(images) + "Inbox item: " + content
+	// -o ends the list of --image values before the prompt.
 	cmd := c.command(runCtx, append(args, "-o", name, prompt)...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -228,6 +247,20 @@ func (c CodexCLI) Plan(ctx context.Context, content string) (string, error) {
 		return "", err
 	}
 	return string(raw), nil
+}
+
+// writeImages writes a run's images to dir as image-1.jpg, image-2.png, …
+// and returns their paths.
+func writeImages(dir string, images []Image) ([]string, error) {
+	paths := make([]string, 0, len(images))
+	for index, image := range images {
+		path := filepath.Join(dir, fmt.Sprintf("image-%d%s", index+1, imageExtensions[image.ContentType]))
+		if err := os.WriteFile(path, image.Data, 0o600); err != nil {
+			return nil, err
+		}
+		paths = append(paths, path)
+	}
+	return paths, nil
 }
 
 // command builds a Codex CLI command with the runtime's controls: sanitized
