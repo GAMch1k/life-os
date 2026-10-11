@@ -23,6 +23,8 @@ flowchart LR
   Feeds -. record .-> Activity
   Monitor -- "GET /api/status" --> Dashboard
   Monitor -- notify --> Notifications
+  Backup -- "pg_dump, read-only role" --> PG[(every service database)]
+  Backup --> BDir[(host backup directory)]
   Voice -. record .-> Activity
   Inbox -. record .-> Activity
   Tasks -. record .-> Activity
@@ -50,3 +52,5 @@ Notifications is the one path by which any service lets the owner know about som
 Banking is an integration service: it owns everything bank-side (the Enable Banking adapter, the read-only consent and its sealed session, the sync schedule within the banks' four-reads-a-day limit, consent reminders) and hands accounts and transactions to Finance only through Finance's bank import API, so Finance never calls a bank and Banking never touches Finance's data. Integrations are routed under `/api/integrations/<name>/`. See [Banking](../services/banking.md).
 
 The monitor is a small internal service without a database or a gateway route. Once a minute it reads the Dashboard's runtime status (`GET /api/status`, the checks the Status page renders) and notifies the owner through Notifications when a check breaks or recovers. The rules that make something a problem therefore exist once, in the Dashboard. See [Monitor](../services/monitor.md).
+
+The backup service is the one component that reads every database, and it only reads: once a night it dumps each database in the registry with `pg_dump` as `lifeos_backup`, a role that can read every table but change nothing, from one consistent snapshot per database, into a directory on the host, and rotates old runs. It has no database of its own and no gateway route. See [Backup](../services/backup.md).
