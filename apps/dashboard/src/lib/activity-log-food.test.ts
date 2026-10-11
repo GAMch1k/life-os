@@ -53,6 +53,36 @@ test("Food events read with the item, store, or rule they are about", () => {
   );
   assert.equal(
     eventLabel({
+      type: "food.pantry_item.running_low",
+      data: { name: "Milch" },
+    }),
+    "Running low: Milch",
+  );
+  assert.equal(
+    eventLabel({ type: "food.staple.created", data: { name: "Milch" } }),
+    "Staple added: Milch",
+  );
+  assert.equal(
+    eventLabel({ type: "food.staple.deleted", data: { name: "Milch" } }),
+    "Staple removed: Milch",
+  );
+  // An item a staple put on the list says why.
+  assert.equal(
+    eventLabel({
+      type: "food.shopping_item.added",
+      data: { name: "Milch", reason: "used_up", stapleId: "s1" },
+    }),
+    "Added to the shopping list: Milch — used up (staple)",
+  );
+  assert.equal(
+    eventLabel({
+      type: "food.shopping_item.added",
+      data: { name: "Käse", reason: "running_low" },
+    }),
+    "Added to the shopping list: Käse — running low",
+  );
+  assert.equal(
+    eventLabel({
       type: "food.shopping_item.put_away",
       data: { name: "Milch", location: "fridge" },
     }),
@@ -97,6 +127,7 @@ test("Food events read with the item, store, or rule they are about", () => {
   assert.equal(subjectLabel("food_store"), "Store");
   assert.equal(subjectLabel("food_aisle_rule"), "Aisle rule");
   assert.equal(subjectLabel("food_pantry_item"), "Pantry item");
+  assert.equal(subjectLabel("food_staple"), "Staple");
   for (const type of [
     "food.shopping_item.added",
     "food.shopping_item.merged",
@@ -125,6 +156,11 @@ test("Food events read with the item, store, or rule they are about", () => {
     "food.meal_plan.set",
     "food.meal_plan.cleared",
     "food.recipe.imported",
+    "food.pantry_item.running_low",
+    "food.pantry_item.running_low_cleared",
+    "food.staple.created",
+    "food.staple.updated",
+    "food.staple.deleted",
   ]) {
     assert.ok(EVENT_TYPES.includes(type), type);
   }

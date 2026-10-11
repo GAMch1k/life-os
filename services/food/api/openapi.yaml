@@ -16,7 +16,9 @@ info:
     Food keeps one shopping list, grouped by aisle, where each item may be
     tagged with a store; the stores; the aisle rules that place new items;
     and the pantry, what is at home and when it expires; recipes and the
-    weekly meal plan, from which missing ingredients go on the list.
+    weekly meal plan, from which missing ingredients go on the list; and the
+    staples, the things the owner always wants at home, which go on the
+    list by themselves when they run low.
     Groceries (food, drinks, household, and drugstore items) go on the
     shopping list; other purchases stay Tasks.
 
@@ -112,7 +114,9 @@ paths:
         none: an item that is still needed refuses the request (409
         `not_bought`), an unknown id is 404 `not_found`, and an id named
         twice is 400 `invalid_request`, each message naming `items[i]`. The
-        response lists the new pantry items in the request's order.
+        response lists the new pantry items in the request's order. More of a
+        name at home clears the running-low flag of the in-stock items with
+        that name.
       operationId: putAwayShoppingItems
       security: []
       parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
@@ -319,6 +323,7 @@ paths:
         - {name: state, in: query, schema: {$ref: '#/components/schemas/PantryItemState'}}
         - {name: location, in: query, schema: {$ref: '#/components/schemas/PantryLocation'}}
         - {name: expiringWithinDays, in: query, description: 'In-stock items that expire on or before today + N days (0: today or earlier).', schema: {type: integer, minimum: 0, maximum: 366}}
+        - {name: runningLow, in: query, description: 'true: only items flagged as running low; false: only items not flagged.', schema: {type: boolean}}
         - {name: cursor, in: query, description: The previous page's nextCursor. Opaque; only valid with the filters it was returned for., schema: {type: string}}
         - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 200, default: 100}}
       responses:
@@ -332,7 +337,8 @@ paths:
         `location` gets the usual place of its aisle, as the aisle rules
         place its name: frozen food the freezer, dairy, meat, and fish the
         fridge, bakery, pantry, drinks, and snacks the pantry, anything else
-        `other`. All or none are added.
+        `other`. All or none are added. More of a name at home clears the
+        running-low flag of the in-stock items with that name.
       operationId: addPantryItems
       security: []
       parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
@@ -377,24 +383,24 @@ paths:
   /v1/pantry-items/{itemId}/used-up:
     post:
       summary: Mark a pantry item used up
-      description: Ends the item (`state` `used_up`, `endedAt` now; an item that had already ended keeps its `endedAt`). An item already used up is returned unchanged.
+      description: Ends the item (`state` `used_up`, `endedAt` now; an item that had already ended keeps its `endedAt`) and clears its running-low flag. When its name is a staple, the staple goes on the shopping list (`restock`). An item already used up is returned unchanged.
       operationId: markPantryItemUsedUp
       security: []
       parameters: [{$ref: '#/components/parameters/ItemId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
       responses:
-        '200': {description: Pantry item, content: {application/json: {schema: {$ref: '#/components/schemas/PantryItem'}}}}
+        '200': {description: 'The pantry item, and what a staple put on the list (`restock`)', content: {application/json: {schema: {$ref: '#/components/schemas/PantryItemResult'}}}}
         '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
         '404': {description: Item not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
         '409': {description: '`idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
   /v1/pantry-items/{itemId}/thrown-away:
     post:
       summary: Mark a pantry item thrown away
-      description: Ends the item (`state` `thrown_away`, `endedAt` now; an item that had already ended keeps its `endedAt`). An item already thrown away is returned unchanged.
+      description: Ends the item (`state` `thrown_away`) and clears its running-low flag. When its name is a staple, the staple goes on the shopping list (`restock`). An item already thrown away is returned unchanged.
       operationId: markPantryItemThrownAway
       security: []
       parameters: [{$ref: '#/components/parameters/ItemId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
       responses:
-        '200': {description: Pantry item, content: {application/json: {schema: {$ref: '#/components/schemas/PantryItem'}}}}
+        '200': {description: 'The pantry item, and what a staple put on the list (`restock`)', content: {application/json: {schema: {$ref: '#/components/schemas/PantryItemResult'}}}}
         '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
         '404': {description: Item not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
         '409': {description: '`idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
@@ -406,9 +412,119 @@ paths:
       security: []
       parameters: [{$ref: '#/components/parameters/ItemId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
       responses:
-        '200': {description: Pantry item, content: {application/json: {schema: {$ref: '#/components/schemas/PantryItem'}}}}
+        '200': {description: 'The pantry item, and what a staple put on the list (`restock`)', content: {application/json: {schema: {$ref: '#/components/schemas/PantryItemResult'}}}}
         '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
         '404': {description: Item not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/pantry-items/{itemId}/running-low:
+    post:
+      summary: Flag a pantry item as running low
+      description: >-
+        Flags an in-stock item as running low (`runningLow`, `runningLowAt`).
+        When its name is a staple, the staple goes on the shopping list
+        (`restock`): added with the staple's amount, store, and aisle,
+        `source: staple`, and `sourceRef` the staple's id, unless an item of
+        that name is already needed (`restock.status: on_list`, nothing
+        changes). Another item is only flagged, unless `addToList` is true.
+        An item already flagged keeps its flag (no new event), but its staple
+        still goes on the list when no item of that name is needed, such as
+        after the list item was bought. An ended item is 409 `not_in_stock`.
+      operationId: markPantryItemRunningLow
+      security: []
+      parameters: [{$ref: '#/components/parameters/ItemId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: false, content: {application/json: {schema: {$ref: '#/components/schemas/RunningLowRequest'}}}}
+      responses:
+        '200': {description: 'The pantry item, and what went on the list (`restock`)', content: {application/json: {schema: {$ref: '#/components/schemas/PantryItemResult'}}}}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: Item not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`not_in_stock` (the item has ended) or `idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    delete:
+      summary: Clear a pantry item's running-low flag
+      description: An item not flagged is returned unchanged.
+      operationId: clearPantryItemRunningLow
+      security: []
+      parameters: [{$ref: '#/components/parameters/ItemId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      responses:
+        '200': {description: Pantry item, content: {application/json: {schema: {$ref: '#/components/schemas/PantryItemResult'}}}}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: Item not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/staples:
+    get:
+      summary: List the staples
+      description: Every staple by normalised name, with whether an item of its name is needed on the list (`onList`), in stock at home (`inStock`), and flagged as running low (`runningLow`).
+      operationId: listStaples
+      security: []
+      responses:
+        '200': {description: Staples, content: {application/json: {schema: {$ref: '#/components/schemas/StapleList'}}}}
+        '400': {description: Invalid request, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    post:
+      summary: Add a staple
+      description: >-
+        A staple is a name the owner always wants at home, unique as
+        normalised (409 `staple_exists`), with an optional amount, store
+        (`storeId`, or `storeName`, which creates the store when it is new),
+        and aisle for the list. To mark a pantry or shopping item as a
+        staple, send its name (and amount, store, aisle).
+      operationId: createStaple
+      security: []
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateStapleRequest'}}}}
+      responses:
+        '201': {description: Staple, content: {application/json: {schema: {$ref: '#/components/schemas/Staple'}}}}
+        '400': {description: 'Invalid request (`invalid_request`, `unknown_store`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`staple_exists`, `store_archived`, or `idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/staples/running-low:
+    post:
+      summary: Say that something is running low, by name
+      description: >-
+        For when the owner says "almost out of milk", with or without a
+        pantry item: every in-stock pantry item of the name (normalised) is
+        flagged as running low, and when the name is a staple, or
+        `addToList` is true, it goes on the list as for a pantry item
+        (`restock`; already needed means nothing changes). A name that is
+        neither a staple nor in the pantry, without `addToList`, changes
+        nothing (`changed: false`).
+      operationId: markRunningLowByName
+      security: []
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RunningLowByNameRequest'}}}}
+      responses:
+        '200': {description: What changed, content: {application/json: {schema: {$ref: '#/components/schemas/RunningLowResult'}}}}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/staples/{stapleId}:
+    get:
+      summary: Get a staple
+      operationId: getStaple
+      security: []
+      parameters: [{$ref: '#/components/parameters/StapleId'}]
+      responses:
+        '200': {description: Staple, content: {application/json: {schema: {$ref: '#/components/schemas/Staple'}}}}
+        '400': {description: Invalid request, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: Staple not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    patch:
+      summary: Update a staple
+      description: Changes only the fields present; `null` clears `amount`, the store (`storeId`), or `aisle`. A new name another staple has is 409 `staple_exists`.
+      operationId: updateStaple
+      security: []
+      parameters: [{$ref: '#/components/parameters/StapleId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateStapleRequest'}}}}
+      responses:
+        '200': {description: Staple, content: {application/json: {schema: {$ref: '#/components/schemas/Staple'}}}}
+        '400': {description: 'Invalid request (`invalid_request`, `unknown_store`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: Staple not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`staple_exists`, `store_archived`, or `idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    delete:
+      summary: Remove a staple
+      description: Items it put on the list stay.
+      operationId: deleteStaple
+      security: []
+      parameters: [{$ref: '#/components/parameters/StapleId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      responses:
+        '204': {description: Removed}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: Staple not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
         '409': {description: '`idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
   /v1/recipes:
     get:
@@ -543,6 +659,7 @@ components:
     StoreId: {name: storeId, in: path, required: true, schema: {type: string, format: uuid}}
     RuleId: {name: ruleId, in: path, required: true, schema: {type: string, format: uuid}}
     RecipeId: {name: recipeId, in: path, required: true, schema: {type: string, format: uuid}}
+    StapleId: {name: stapleId, in: path, required: true, schema: {type: string, format: uuid}}
     PlanDate: {name: date, in: path, required: true, description: A plain date (YYYY-MM-DD)., schema: {type: string, format: date}}
     PlanSlot: {name: slot, in: path, required: true, schema: {$ref: '#/components/schemas/MealSlot'}}
     IdempotencyKey:
@@ -587,8 +704,8 @@ components:
       enum: [needed, bought]
     ItemSource:
       type: string
-      description: '`manual`: added directly (the Dashboard, a tool). `capture`: added from a capture such as an Inbox item; `sourceRef` names it. `recipe`: added as a recipe''s missing ingredient; `sourceRef` is the recipe''s id.'
-      enum: [manual, capture, recipe]
+      description: '`manual`: added directly (the Dashboard, a tool). `capture`: added from a capture such as an Inbox item; `sourceRef` names it. `recipe`: added as a recipe''s missing ingredient; `sourceRef` is the recipe''s id. `staple`: put on the list because a staple ran low, was used up, or was thrown away; `sourceRef` is the staple''s id.'
+      enum: [manual, capture, recipe, staple]
     ShoppingItem:
       type: object
       required: [id, name, normalizedName, amount, note, aisle, aisleSetBy, storeId, storeName, state, boughtAt, source, sourceRef, createdAt, updatedAt, createdBy, updatedBy]
@@ -732,7 +849,7 @@ components:
       enum: [in_stock, used_up, thrown_away]
     PantryItem:
       type: object
-      required: [id, name, normalizedName, amount, location, expiresOn, openedOn, note, state, endedAt, source, sourceRef, fromShoppingItemId, createdAt, updatedAt, createdBy, updatedBy]
+      required: [id, name, normalizedName, amount, location, expiresOn, openedOn, note, state, endedAt, runningLow, runningLowAt, source, sourceRef, fromShoppingItemId, createdAt, updatedAt, createdBy, updatedBy]
       properties:
         id: {type: string, format: uuid}
         name: {type: string, description: As written.}
@@ -744,6 +861,8 @@ components:
         note: {type: string, nullable: true}
         state: {$ref: '#/components/schemas/PantryItemState'}
         endedAt: {type: string, format: date-time, nullable: true}
+        runningLow: {type: boolean, description: 'Flagged as running low (in stock only).'}
+        runningLowAt: {type: string, format: date-time, nullable: true}
         source: {$ref: '#/components/schemas/ItemSource'}
         sourceRef: {type: string, nullable: true}
         fromShoppingItemId: {type: string, format: uuid, nullable: true, description: The shopping item it was bought as.}
@@ -925,6 +1044,89 @@ components:
       properties:
         dryRun: {type: boolean}
         items: {type: array, items: {$ref: '#/components/schemas/IngredientResult'}}
+    RestockReason:
+      type: string
+      description: Why an item went on the list by itself.
+      enum: [running_low, used_up, thrown_away]
+    Restock:
+      type: object
+      description: 'What a staple (or `addToList`) put on the shopping list: `added`, `merged` into an item that appeared meanwhile, or `on_list` (already needed; nothing changed).'
+      required: [status, reason, stapleId, shoppingItem, message]
+      properties:
+        status: {type: string, enum: [added, merged, on_list]}
+        reason: {$ref: '#/components/schemas/RestockReason'}
+        stapleId: {type: string, format: uuid, nullable: true, description: The staple; null for an addToList of another item.}
+        shoppingItem: {$ref: '#/components/schemas/ShoppingItem'}
+        message: {type: string, description: 'In plain words, such as "Added “Milch” to the list: running low (staple)" or "“Milch” is already on the list".'}
+    PantryItemResult:
+      description: A pantry item, with what went on the list by itself because of this change.
+      allOf:
+        - {$ref: '#/components/schemas/PantryItem'}
+        - type: object
+          properties:
+            restock: {type: object, allOf: [{$ref: '#/components/schemas/Restock'}], nullable: true}
+    RunningLowRequest:
+      type: object
+      properties:
+        addToList: {type: boolean, default: false, description: Also put an item that is no staple on the list.}
+    RunningLowByNameRequest:
+      type: object
+      required: [name]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 200}
+        addToList: {type: boolean, default: false, description: Put the name on the list also when it is no staple.}
+    RunningLowResult:
+      type: object
+      required: [name, normalizedName, changed, staple, pantryItems, restock]
+      properties:
+        name: {type: string}
+        normalizedName: {type: string}
+        changed: {type: boolean, description: Whether anything was flagged or put on the list.}
+        staple: {type: object, allOf: [{$ref: '#/components/schemas/Staple'}], nullable: true, description: 'The staple of the name; null when it is none.'}
+        pantryItems: {type: array, description: 'The in-stock pantry items of the name, now flagged as running low.', items: {$ref: '#/components/schemas/PantryItem'}}
+        restock: {type: object, allOf: [{$ref: '#/components/schemas/Restock'}], nullable: true}
+    Staple:
+      type: object
+      required: [id, name, normalizedName, amount, storeId, storeName, aisle, onList, inStock, runningLow, createdAt, updatedAt, createdBy, updatedBy]
+      properties:
+        id: {type: string, format: uuid}
+        name: {type: string, description: As written; the list gets this name.}
+        normalizedName: {type: string}
+        amount: {type: string, nullable: true}
+        storeId: {type: string, format: uuid, nullable: true}
+        storeName: {type: string, nullable: true}
+        aisle: {type: string, nullable: true, description: 'The list''s aisle (an `Aisle`); null lets the aisle rules choose.'}
+        onList: {type: boolean, description: An item of its name is needed on the list.}
+        inStock: {type: boolean, description: An item of its name is in stock in the pantry.}
+        runningLow: {type: boolean, description: An in-stock item of its name is flagged as running low.}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+        createdBy: {$ref: '#/components/schemas/Actor'}
+        updatedBy: {$ref: '#/components/schemas/Actor'}
+    StapleList:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/Staple'}}
+    CreateStapleRequest:
+      type: object
+      description: Give the store by `storeId` or by `storeName`, not both.
+      required: [name]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 200}
+        amount: {type: string, maxLength: 50}
+        storeId: {type: string, format: uuid}
+        storeName: {type: string, minLength: 1, maxLength: 100}
+        aisle: {$ref: '#/components/schemas/Aisle'}
+    UpdateStapleRequest:
+      type: object
+      minProperties: 1
+      properties:
+        name: {type: string, minLength: 1, maxLength: 200}
+        amount: {type: string, nullable: true, maxLength: 50}
+        storeId: {type: string, format: uuid, nullable: true}
+        storeName: {type: string, minLength: 1, maxLength: 100}
+        aisle: {type: string, nullable: true, description: 'An `Aisle`; null lets the aisle rules choose.'}
     FoodNotificationStatus:
       type: object
       required: [enabled, intervalSeconds, graceMinutes, timeZone, expiryTime, handledThrough, lastRunAt, lastSuccessAt, lastError, lastErrorAt, lastSentAt]

@@ -58,7 +58,7 @@ func TestPutAwayMovesBoughtItemsIntoThePantry(t *testing.T) {
 			expires = item.ExpiresOn.Format("2006-01-02")
 		}
 		if item.Location != want[index].location || amount != want[index].amount || expires != want[index].expires ||
-			item.FromShoppingItemId == nil || item.FromShoppingItemId.String() != want[index].from || item.State != generated.InStock ||
+			item.FromShoppingItemId == nil || item.FromShoppingItemId.String() != want[index].from || item.State != generated.PantryItemStateInStock ||
 			item.Note != nil || item.CreatedBy.Kind != generated.Dev {
 			t.Errorf("item %d = %+v", index, item)
 		}

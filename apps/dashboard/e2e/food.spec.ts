@@ -29,6 +29,7 @@ type ShoppingItem = {
   state: "needed" | "bought";
   storeId: string | null;
   storeName: string | null;
+  source: string;
 };
 type PantryItem = {
   id: string;
@@ -40,6 +41,7 @@ type PantryItem = {
   fromShoppingItemId: string | null;
 };
 type Store = { id: string; name: string; archived: boolean };
+type Staple = { id: string; name: string };
 type Recipe = { id: string; title: string };
 type MealPlanEntry = {
   date: string;
@@ -127,8 +129,8 @@ async function mealPlan(request: APIRequestContext, from: string, to: string) {
 }
 
 /**
- * Removes everything the test made: items, recipes, and planned meals
- * deleted, stores archived.
+ * Removes everything the test made: items, recipes, planned meals, and
+ * staples deleted, stores archived.
  */
 async function cleanUp(request: APIRequestContext, tag: string) {
   const { from, to } = aroundToday(15);
@@ -151,6 +153,12 @@ async function cleanUp(request: APIRequestContext, tag: string) {
   for (const item of await all<PantryItem>(request, "pantry-items")) {
     if (item.name.includes(tag))
       await request.delete(`${api}/pantry-items/${item.id}`);
+  }
+  const staples = (await (await request.get(`${api}/staples`)).json())
+    .items as Staple[];
+  for (const staple of staples) {
+    if (staple.name.includes(tag))
+      await request.delete(`${api}/staples/${staple.id}`);
   }
   const stores = (await (await request.get(`${api}/stores`)).json())
     .items as Store[];
@@ -651,6 +659,65 @@ test.describe("Food workspace", () => {
     );
     await expect(offer).toHaveCount(0);
     expect(await shoppingNamed(request, cheese)).toHaveLength(1);
+  });
+
+  test("a starred staple goes back on the list by itself, another item only runs low", async ({
+    page,
+    request,
+  }) => {
+    const milk = `Milch ${tag}`;
+    const bread = `Brot ${tag}`;
+    await addPantry(request, { name: milk });
+    await addPantry(request, { name: bread });
+    await openFood(page, "/food?tab=pantry");
+    const note = page.getByTestId("food-pantry-note");
+    const offer = page.getByTestId("food-pantry-offer");
+
+    // Star the milk: it is a staple now.
+    const star = page.getByRole("button", { name: `Staple: ${milk}` });
+    await expect(star).toHaveAttribute("aria-pressed", "false");
+    await star.click();
+    await expect(star).toHaveAttribute("aria-pressed", "true");
+    await expect(note).toContainText(`“${milk}” is now a staple`);
+
+    // Used up: it goes on the list by itself, and nothing is offered.
+    await page.getByRole("button", { name: `Used up: ${milk}` }).click();
+    await expect(note).toHaveText(
+      `Used up “${milk}”. Added “${milk}” to the list: used up (staple).`,
+    );
+    await expect(offer).toHaveCount(0);
+    await expect
+      .poll(async () =>
+        (await shoppingNamed(request, milk)).map((item) => [
+          item.state,
+          item.source,
+        ]),
+      )
+      .toEqual([["needed", "staple"]]);
+
+    // Another item marked running low is only flagged; the list is offered.
+    await page.getByRole("button", { name: `Running low: ${bread}` }).click();
+    await expect(note).toHaveText(`“${bread}” is running low.`);
+    await expect(offer).toContainText(`Add “${bread}” to the shopping list?`);
+    await expect(
+      page.getByTestId("food-pantry-item").filter({ hasText: bread }),
+    ).toContainText("Running low");
+    expect(await shoppingNamed(request, bread)).toHaveLength(0);
+
+    // The Staples dialog lists the milk as on the list.
+    await page.getByRole("button", { name: /^Staples/ }).click();
+    await expect(
+      page.getByTestId("food-staple").filter({ hasText: milk }),
+    ).toContainText("On the list");
+    await page.keyboard.press("Escape");
+
+    // The list marks the milk as a staple's.
+    await openFood(page, "/food");
+    await expect(row(page, milk)).toContainText("(staple)");
+
+    // Home says what is running low.
+    await page.goto("/");
+    await expect(page.locator("#attention-food")).toContainText("Running low:");
   });
 
   test("a recipe is planned for a day and its missing ingredients go on the list", async ({

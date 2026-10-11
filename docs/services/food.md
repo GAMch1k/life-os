@@ -2,9 +2,10 @@
 
 Food keeps the owner's groceries: one shopping list grouped by aisle, where an
 item may be tagged with the store to buy it at; the stores; the aisle rules
-that place new items; the pantry, what is at home and when it expires; and
-the recipes and the weekly meal plan, from which missing ingredients go on
-the list. It
+that place new items; the pantry, what is at home and when it expires; the
+staples, the things the owner always wants at home, which go back on the
+list by themselves when they run low; and the recipes and the weekly meal
+plan, from which missing ingredients go on the list. It
 keeps them in `food_db` and is their only source of truth: clients (the
 Dashboard, the AI through MCP) use its API, never its database. Gateway base:
 `/api/food`; the contract is `services/food/api/openapi.yaml`; `/health` and
@@ -12,9 +13,10 @@ Dashboard, the AI through MCP) use its API, never its database. Gateway base:
 
 The owner uses Food through the Dashboard's Food workspace (`/food`: the
 shopping list, made for the phone in the shop, from where bought items are
-put away into the pantry; the pantry; the recipes; and the meal plan), and
-Home shows the list's size, food expiring today or tomorrow, and today's
-planned meals; see [Dashboard](../frontend/dashboard.md).
+put away into the pantry; the pantry with its staples; the recipes; and the
+meal plan), and Home shows the list's size, food expiring today or tomorrow,
+today's planned meals, and what is running low; see
+[Dashboard](../frontend/dashboard.md).
 Once a day Food also tells the owner which pantry food expires soon (see
 [Expiry reminders](#expiry-reminders)).
 
@@ -185,7 +187,8 @@ cartons of milk may expire on different days.
   and snacks the pantry, anything else `other`.
 - `GET /v1/pantry-items` lists in-stock items first, soonest `expiresOn`
   first (items without one last), then by normalised name, then ended items,
-  the most recently ended first. `state` and `location` filter, and paging
+  the most recently ended first. `state`, `location`, and `runningLow`
+  (`true`: the items flagged as running low) filter, and paging
   works as for the shopping list. `expiringWithinDays=N` (0 to 366) keeps
   in-stock items that expire on or before today + N days, today being the
   owner's (`LIFE_OS_TIMEZONE`): at 00:30 on 11 October in Berlin, still 10
@@ -197,6 +200,60 @@ cartons of milk may expire on different days.
 - `POST /v1/pantry-items/{id}/used-up`, `/thrown-away`, and `/restock` (back to
   `in_stock`). Ended items are kept for history; marking an ended item ended
   the other way keeps its `endedAt`. `DELETE` removes an item and its history.
+  These answer with the item plus `restock`: what went on the shopping list
+  by itself when the item's name is a staple (see
+  [Staples and running low](#staples-and-running-low)); absent otherwise.
+- An in-stock item may be flagged as running low (`runningLow`,
+  `runningLowAt`); ending or restocking it clears the flag, and so does more
+  of its name coming home (added, or put away from the list).
+
+## Staples and running low
+
+A staple is a name the owner always wants at home ("Milch", "Eier"), unique
+by normalised name and independent of pantry rows: Milch stays a staple when
+none is at home. It has an optional `amount`, store, and `aisle`, which the
+shopping list gets (no aisle lets the rules choose; an archived store is left
+out). The staple list says for each whether an item of its name is needed on
+the list (`onList`), in stock (`inStock`), and flagged as running low
+(`runningLow`).
+
+- `GET /v1/staples` lists them by name; `POST /v1/staples` adds one (`name`,
+  optional `amount`, `storeId` or `storeName`, `aisle`; another of the same
+  normalised name is 409 `staple_exists`). "Mark as staple" from a pantry or
+  shopping item is a `POST` with its name.
+- `GET`/`PATCH`/`DELETE /v1/staples/{id}`. `PATCH` changes only the fields
+  present; `null` clears `amount`, `storeId`, or `aisle`. Deleting a staple
+  leaves the list alone.
+- `POST /v1/pantry-items/{id}/running-low` flags an in-stock item (an ended
+  one is 409 `not_in_stock`); `DELETE` on the same path clears the flag and
+  leaves the list alone. An item already flagged keeps its flag and records
+  nothing, but its staple still goes on the list if none is needed there
+  (after the listed one was bought, say).
+- `POST /v1/staples/running-low` `{name, addToList}` is the same by name, for
+  "we're almost out of milk" when the pantry may not track it: every in-stock
+  item of the name is flagged, the staple (if the name is one) goes on the
+  list, and the answer has `changed` (whether anything was flagged or
+  listed), `staple`, `pantryItems`, and `restock`. A name that is neither a
+  staple nor at home changes nothing (`changed: false`, `restock: null`).
+
+**Restock.** When an item whose normalised name is a staple is marked
+running low, used up, or thrown away, Food puts the staple on the shopping
+list in the same transaction, through the same merge-aware add as any other
+add: the staple's name, amount, store, and aisle, `source: staple`, and the
+staple's id as `sourceRef`. If an item of that name is already needed nothing
+changes. The answer's `restock` says what happened:
+
+| `status` | Meaning | `message`, for example |
+| --- | --- | --- |
+| `added` | A new needed item | Added “Milch” to the list: running low (staple) |
+| `merged` | Another request added it meanwhile; merged into it | “Milch” is already on the list |
+| `on_list` | Already needed; nothing changed | “Milch” is already on the list |
+
+with `reason` (`running_low`, `used_up`, `thrown_away`), `stapleId`, and the
+`shoppingItem`. Another item is only flagged, unless `addToList: true` puts
+its own name on the list (`source: manual`, `stapleId: null`, message
+without "(staple)"); used up or thrown away it only ends. Names match by
+their exact normalised form ("Milch" is not "Vollmilch").
 
 ## Recipes
 
@@ -404,6 +461,30 @@ purchases as Tasks:
   of the capture's week. "Buy pasta" stays a list item. The AI never creates
   or edits recipes.
 
+**Staples and running low (for the AI agent).** The owner's words "I'm
+almost out of meat, put it on the list automatically" map onto these
+operations; the phrasing is the AI's, Food only offers them:
+
+- "We're almost out of milk" / "молоко заканчивается" / "Milch wird knapp":
+  `POST /v1/staples/running-low {"name": "Milch", "addToList": false}`. A
+  staple goes on the list by itself; the answer's `restock.message` is the
+  reply ("Added “Milch” to the list: running low (staple)" or "“Milch” is
+  already on the list"). With `restock: null` the name is no staple: ask, or
+  send `addToList: true` when the capture says to buy it ("almost out of
+  milk, buy some"). `changed: false` with no `restock` means Food knows
+  nothing of that name.
+- "Milk is a staple" / "always keep eggs at home": `POST /v1/staples`
+  `{"name", "amount"?, "storeName"?}`; 409 `staple_exists` means it already
+  is one. "Milk is no longer a staple": find it with `GET /v1/staples` (by
+  `normalizedName`) and `DELETE /v1/staples/{id}`.
+- "The milk is finished" stays `used-up` on the matching pantry item; for a
+  staple the answer's `restock` tells what went on the list, so the AI must
+  not add it again itself.
+- "Milk isn't low any more": `DELETE /v1/pantry-items/{id}/running-low`.
+
+Every one of these takes an `Idempotency-Key` like the other writes, and the
+items a staple puts on the list have `source: staple`, not `capture`.
+
 Items from a capture have `source: capture` and the Inbox item's id as
 `sourceRef` (missing ingredients have `source: recipe`, as always), and their
 rows and events name `agent:codex-inbox-processor` as the actor. Every write carries an `Idempotency-Key` derived from the capture
@@ -431,13 +512,18 @@ recorded. A creation or deletion has an id derived from the entity
 | `food.store.created` / `.updated` / `.archived` / `.restored` | `food_store` | Store “Lidl” created (also when an item's `storeName` creates it) |
 | `food.aisle_rule.created` / `.deleted` | `food_aisle_rule` | Aisle rule created: “kerze” → household (also inside words) |
 | `food.pantry_item.added` / `.updated` / `.used_up` / `.thrown_away` / `.restocked` / `.deleted` | `food_pantry_item` | Added “Joghurt” to the pantry (fridge, expires 2026-10-14) |
+| `food.pantry_item.running_low` / `.running_low_cleared` | `food_pantry_item` | “Milch” is running low; “Milch” is no longer running low (": more came home" and `data.reason: more_at_home` when more was added or put away) |
+| `food.staple.created` / `.updated` / `.deleted` | `food_staple` | “Milch” is now a staple; Staple “Milch” updated: amount, store; “Milch” is no longer a staple |
 | `food.recipe.created` / `.updated` / `.deleted` | `food_recipe` | Recipe “Pasta Bolognese” created (3 ingredients); updated: title, ingredients |
 | `food.meal_plan.set` / `.cleared` | `food_meal_plan` / `<date>:<slot>` | Planned “Pasta” for dinner on Mon 12 Oct, replacing “Soup”; Cleared “Pasta” from dinner on Mon 12 Oct |
 | `food.notification.missed` | `food_notification` | Expiry reminder due Sun 11 Oct 2026, 08:00 CEST was missed: Food was not running (see [Expiry reminders](#expiry-reminders)) |
 
 `data` holds the item's name, aisle or location, state, source, amount, store,
 `sourceRef`, expiry date, and for updates and merges the changed fields
-(`changes`). See [Activity](activity.md).
+(`changes`). An item a staple puts on the list is a regular
+`food.shopping_item.added` whose summary says why ("Added “Milch” to the
+list: used up (staple)") with `data.reason` and `data.stapleId`; it follows
+the pantry item's event. See [Activity](activity.md).
 
 ## Storage and operations
 
@@ -452,7 +538,9 @@ recorded. A creation or deletion has an id derived from the entity
   settings. Migration 000003 adds the reminders' state
   (`food_notification_dispatch`, `food_notification_log`); 000004 the
   recipes (`recipes`, `recipe_ingredients`), the meal plan
-  (`meal_plan_entries`), and the `recipe` source.
+  (`meal_plan_entries`), and the `recipe` source; 000005 the `staples`, the
+  pantry's `running_low_at` (in-stock items only), and the `staple` source
+  (down keeps staple items as manual ones).
 - The Dashboard and MCP reach Food at `FOOD_SERVICE_URL` (compose:
   `http://food:8080`), and the browser at `/api/food`; Status probes its
   `/ready` ("Food").
@@ -477,8 +565,16 @@ meals, deletion leaving plain-text meals), the meal plan (one meal per slot,
 replacing, unchanged slots recording nothing, ranges, refusals, clearing),
 missing ingredients (the dry run, joined amounts, in the pantry, on the list,
 used-up items not counting, sources, the replay, a week counting each recipe
-once), and migrations 000002, 000003, and 000004 down and up. The amount join
-and the ingredient grouping also have unit tests. `internal/notifications` has unit
+once), staples (create, unique names, stores by name, updates and clearing,
+deletion, the events), restock (running low, used up, and thrown away each
+adding a staple once with its amount, store, aisle, `source: staple`, and
+`sourceRef`; repeating and an item already needed leaving the list alone; an
+archived store left out; another item only flagged unless `addToList`;
+running low by name with and without a pantry row; `not_in_stock`; more at
+home clearing the flag; the idempotent replay), and migrations 000002,
+000003, 000004, and 000005 down and up. The amount join, the ingredient
+grouping, the restock reasons, and the lifecycle result's fields also have
+unit tests. `internal/notifications` has unit
 tests (the clock setting, wall times across both daylight saving changes and
 west of UTC, the window, the message's lines, grouping, importance, late
 phrasing, and caps) and integration tests with an in-process Notifications

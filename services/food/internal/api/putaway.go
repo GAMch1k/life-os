@@ -117,6 +117,11 @@ func (h *Handler) PutAwayShoppingItems(c fiber.Ctx, _ generated.PutAwayShoppingI
 				shoppingEvent(shoppingItemPutAway, item, nameOf(names, item.StoreID), nil, data),
 				pantryEvent(pantryItemAdded, added, nil),
 			}
+			cleared, err := moreAtHome(ctx, q, actor, added.NormalizedName)
+			if err != nil {
+				return result{}, err
+			}
+			events[index] = append(events[index], cleared...)
 		}
 		response := generated.PutAwayResponse{Items: make([]generated.PantryItem, len(pantry))}
 		var all []activity.Event

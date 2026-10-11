@@ -188,6 +188,8 @@ export function toHomeAttention(
     pantry?: ListResult<PantryItem>;
     /** Food's meal plan for today. */
     meals?: ListResult<MealPlanEntry>;
+    /** Food's in-stock items flagged as running low. */
+    runningLow?: ListResult<PantryItem>;
   },
   now: Date,
   timeZone: string = DEFAULT_TIME_ZONE,
@@ -204,6 +206,7 @@ export function toHomeAttention(
     shopping,
     pantry,
     meals,
+    runningLow,
   } = results;
   const { start } = ownerToday(now, timeZone);
   const isOverdue = (task: Task) =>
@@ -263,6 +266,7 @@ export function toHomeAttention(
           meals?.data
             ? todayMeals(meals.data.items, dayKey(now, timeZone))
             : null,
+          runningLow?.data,
         )
       : null,
   };
@@ -322,6 +326,7 @@ export async function getHomeAttention(): Promise<HomeAttention> {
     shopping,
     pantry,
     meals,
+    runningLow,
   ] = await Promise.all([
     unavailableOnFailure(
       inboxClient.GET("/v1/inbox-items", {
@@ -386,6 +391,18 @@ export async function getHomeAttention(): Promise<HomeAttention> {
         },
       }),
     ),
+    // What is running low.
+    unavailableOnFailure(
+      foodClient.GET("/v1/pantry-items", {
+        params: {
+          query: {
+            state: "in_stock",
+            runningLow: true,
+            limit: FOOD_LIST_LIMIT,
+          },
+        },
+      }),
+    ),
   ]);
   // An imported event is labelled with its source's name, which an
   // integration's event carries itself.
@@ -409,6 +426,7 @@ export async function getHomeAttention(): Promise<HomeAttention> {
       shopping,
       pantry,
       meals,
+      runningLow,
     },
     now,
     timeZone,

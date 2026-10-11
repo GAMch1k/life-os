@@ -78,6 +78,7 @@ type PantryItem struct {
 	UpdatedAt          pgtype.Timestamptz
 	CreatedBy          string
 	UpdatedBy          string
+	RunningLowAt       pgtype.Timestamptz
 }
 
 type Recipe struct {
@@ -118,6 +119,19 @@ type ShoppingItem struct {
 	BoughtAt       pgtype.Timestamptz
 	Source         string
 	SourceRef      *string
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
+	CreatedBy      string
+	UpdatedBy      string
+}
+
+type Staple struct {
+	ID             pgtype.UUID
+	Name           string
+	NormalizedName string
+	Amount         *string
+	StoreID        pgtype.UUID
+	Aisle          *string
 	CreatedAt      pgtype.Timestamptz
 	UpdatedAt      pgtype.Timestamptz
 	CreatedBy      string

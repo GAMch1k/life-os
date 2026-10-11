@@ -12,7 +12,7 @@ import (
 )
 
 const deletePantryItem = `-- name: DeletePantryItem :one
-DELETE FROM pantry_items WHERE id = $1 RETURNING id, name, normalized_name, amount, location, expires_on, opened_on, note, state, ended_at, source, source_ref, from_shopping_item_id, created_at, updated_at, created_by, updated_by
+DELETE FROM pantry_items WHERE id = $1 RETURNING id, name, normalized_name, amount, location, expires_on, opened_on, note, state, ended_at, source, source_ref, from_shopping_item_id, created_at, updated_at, created_by, updated_by, running_low_at
 `
 
 func (q *Queries) DeletePantryItem(ctx context.Context, id pgtype.UUID) (PantryItem, error) {
@@ -36,12 +36,13 @@ func (q *Queries) DeletePantryItem(ctx context.Context, id pgtype.UUID) (PantryI
 		&i.UpdatedAt,
 		&i.CreatedBy,
 		&i.UpdatedBy,
+		&i.RunningLowAt,
 	)
 	return i, err
 }
 
 const getPantryItem = `-- name: GetPantryItem :one
-SELECT id, name, normalized_name, amount, location, expires_on, opened_on, note, state, ended_at, source, source_ref, from_shopping_item_id, created_at, updated_at, created_by, updated_by FROM pantry_items WHERE id = $1
+SELECT id, name, normalized_name, amount, location, expires_on, opened_on, note, state, ended_at, source, source_ref, from_shopping_item_id, created_at, updated_at, created_by, updated_by, running_low_at FROM pantry_items WHERE id = $1
 `
 
 func (q *Queries) GetPantryItem(ctx context.Context, id pgtype.UUID) (PantryItem, error) {
@@ -65,12 +66,13 @@ func (q *Queries) GetPantryItem(ctx context.Context, id pgtype.UUID) (PantryItem
 		&i.UpdatedAt,
 		&i.CreatedBy,
 		&i.UpdatedBy,
+		&i.RunningLowAt,
 	)
 	return i, err
 }
 
 const getPantryItemForUpdate = `-- name: GetPantryItemForUpdate :one
-SELECT id, name, normalized_name, amount, location, expires_on, opened_on, note, state, ended_at, source, source_ref, from_shopping_item_id, created_at, updated_at, created_by, updated_by FROM pantry_items WHERE id = $1 FOR UPDATE
+SELECT id, name, normalized_name, amount, location, expires_on, opened_on, note, state, ended_at, source, source_ref, from_shopping_item_id, created_at, updated_at, created_by, updated_by, running_low_at FROM pantry_items WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) GetPantryItemForUpdate(ctx context.Context, id pgtype.UUID) (PantryItem, error) {
@@ -94,6 +96,7 @@ func (q *Queries) GetPantryItemForUpdate(ctx context.Context, id pgtype.UUID) (P
 		&i.UpdatedAt,
 		&i.CreatedBy,
 		&i.UpdatedBy,
+		&i.RunningLowAt,
 	)
 	return i, err
 }
@@ -101,7 +104,7 @@ func (q *Queries) GetPantryItemForUpdate(ctx context.Context, id pgtype.UUID) (P
 const insertPantryItem = `-- name: InsertPantryItem :one
 INSERT INTO pantry_items (name, normalized_name, amount, location, expires_on, opened_on, note, source, source_ref, from_shopping_item_id, created_by, updated_by)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)
-RETURNING id, name, normalized_name, amount, location, expires_on, opened_on, note, state, ended_at, source, source_ref, from_shopping_item_id, created_at, updated_at, created_by, updated_by
+RETURNING id, name, normalized_name, amount, location, expires_on, opened_on, note, state, ended_at, source, source_ref, from_shopping_item_id, created_at, updated_at, created_by, updated_by, running_low_at
 `
 
 type InsertPantryItemParams struct {
@@ -151,21 +154,23 @@ func (q *Queries) InsertPantryItem(ctx context.Context, arg InsertPantryItemPara
 		&i.UpdatedAt,
 		&i.CreatedBy,
 		&i.UpdatedBy,
+		&i.RunningLowAt,
 	)
 	return i, err
 }
 
 const listPantryItems = `-- name: ListPantryItems :many
-SELECT id, name, normalized_name, amount, location, expires_on, opened_on, note, state, ended_at, source, source_ref, from_shopping_item_id, created_at, updated_at, created_by, updated_by FROM pantry_items
+SELECT id, name, normalized_name, amount, location, expires_on, opened_on, note, state, ended_at, source, source_ref, from_shopping_item_id, created_at, updated_at, created_by, updated_by, running_low_at FROM pantry_items
 WHERE ($1::text IS NULL OR state = $1::text)
   AND ($2::text IS NULL OR location = $2::text)
   AND ($3::date IS NULL OR (state = 'in_stock' AND expires_on <= $3::date))
+  AND ($4::boolean IS NULL OR (running_low_at IS NOT NULL) = $4::boolean)
   AND (
-    $4::boolean IS NULL
-    OR ($4::boolean AND (state <> 'in_stock'
-        OR (COALESCE(expires_on, 'infinity'::date), normalized_name, id) > ($5::date, $6::text, $7::uuid)))
-    OR (NOT $4::boolean AND state <> 'in_stock'
-        AND (ended_at, id) < ($8::timestamptz, $7::uuid))
+    $5::boolean IS NULL
+    OR ($5::boolean AND (state <> 'in_stock'
+        OR (COALESCE(expires_on, 'infinity'::date), normalized_name, id) > ($6::date, $7::text, $8::uuid)))
+    OR (NOT $5::boolean AND state <> 'in_stock'
+        AND (ended_at, id) < ($9::timestamptz, $8::uuid))
   )
 ORDER BY state <> 'in_stock',
   CASE WHEN state = 'in_stock' THEN COALESCE(expires_on, 'infinity'::date) END,
@@ -173,13 +178,14 @@ ORDER BY state <> 'in_stock',
   CASE WHEN state = 'in_stock' THEN id END,
   ended_at DESC,
   id DESC
-LIMIT $9
+LIMIT $10
 `
 
 type ListPantryItemsParams struct {
 	State          *string
 	Location       *string
 	ExpiresBy      pgtype.Date
+	RunningLow     *bool
 	AfterInStock   *bool
 	AfterExpiresOn pgtype.Date
 	AfterName      *string
@@ -198,6 +204,7 @@ func (q *Queries) ListPantryItems(ctx context.Context, arg ListPantryItemsParams
 		arg.State,
 		arg.Location,
 		arg.ExpiresBy,
+		arg.RunningLow,
 		arg.AfterInStock,
 		arg.AfterExpiresOn,
 		arg.AfterName,
@@ -230,6 +237,7 @@ func (q *Queries) ListPantryItems(ctx context.Context, arg ListPantryItemsParams
 			&i.UpdatedAt,
 			&i.CreatedBy,
 			&i.UpdatedBy,
+			&i.RunningLowAt,
 		); err != nil {
 			return nil, err
 		}
@@ -245,9 +253,10 @@ const setPantryItemState = `-- name: SetPantryItemState :one
 UPDATE pantry_items
 SET state = $1,
     ended_at = CASE WHEN $1::text = 'in_stock' THEN NULL ELSE COALESCE(ended_at, now()) END,
+    running_low_at = NULL,
     updated_at = now(), updated_by = $2
 WHERE id = $3
-RETURNING id, name, normalized_name, amount, location, expires_on, opened_on, note, state, ended_at, source, source_ref, from_shopping_item_id, created_at, updated_at, created_by, updated_by
+RETURNING id, name, normalized_name, amount, location, expires_on, opened_on, note, state, ended_at, source, source_ref, from_shopping_item_id, created_at, updated_at, created_by, updated_by, running_low_at
 `
 
 type SetPantryItemStateParams struct {
@@ -257,7 +266,8 @@ type SetPantryItemStateParams struct {
 }
 
 // in_stock clears ended_at; an ended state keeps an earlier end when the item
-// had already ended (used up, then marked thrown away instead).
+// had already ended (used up, then marked thrown away instead). A change of
+// state clears the running-low flag.
 func (q *Queries) SetPantryItemState(ctx context.Context, arg SetPantryItemStateParams) (PantryItem, error) {
 	row := q.db.QueryRow(ctx, setPantryItemState, arg.State, arg.Actor, arg.ID)
 	var i PantryItem
@@ -279,6 +289,7 @@ func (q *Queries) SetPantryItemState(ctx context.Context, arg SetPantryItemState
 		&i.UpdatedAt,
 		&i.CreatedBy,
 		&i.UpdatedBy,
+		&i.RunningLowAt,
 	)
 	return i, err
 }
@@ -289,7 +300,7 @@ SET name = $1, normalized_name = $2, amount = $3, location = $4,
     expires_on = $5, opened_on = $6, note = $7,
     updated_at = now(), updated_by = $8
 WHERE id = $9
-RETURNING id, name, normalized_name, amount, location, expires_on, opened_on, note, state, ended_at, source, source_ref, from_shopping_item_id, created_at, updated_at, created_by, updated_by
+RETURNING id, name, normalized_name, amount, location, expires_on, opened_on, note, state, ended_at, source, source_ref, from_shopping_item_id, created_at, updated_at, created_by, updated_by, running_low_at
 `
 
 type UpdatePantryItemParams struct {
@@ -335,6 +346,7 @@ func (q *Queries) UpdatePantryItem(ctx context.Context, arg UpdatePantryItemPara
 		&i.UpdatedAt,
 		&i.CreatedBy,
 		&i.UpdatedBy,
+		&i.RunningLowAt,
 	)
 	return i, err
 }

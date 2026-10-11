@@ -33,7 +33,7 @@ export const BANKING_DESCRIPTION =
   "The bank connection: connecting, disconnecting, each sync into Finance that changed something (counts only, never transaction details), failed syncs, and the consent's expiry.";
 
 export const FOOD_DESCRIPTION =
-  "The shopping list, its stores and aisle rules, the pantry, recipes, and the meal plan: items added, merged, bought, put away, changed, or removed, recipes written, meals planned, by you or the AI, and expiry reminders Food could not send in time.";
+  "The shopping list, its stores and aisle rules, the pantry, staples, recipes, and the meal plan: items added, merged, bought, put away, changed, running low, or removed, staples put back on the list by themselves, recipes written, meals planned, by you or the AI, and expiry reminders Food could not send in time.";
 
 export const RECIPE_IMPORT_DESCRIPTION =
   "Recipes saved from links by the recipe-import integration; the recipe itself is under Food.";
@@ -96,7 +96,15 @@ export const SUBJECT_TYPES = [
   { value: "food_notification", label: "Food reminder" },
   { value: "food_recipe", label: "Recipe" },
   { value: "food_meal_plan", label: "Meal plan slot" },
+  { value: "food_staple", label: "Staple" },
 ] as const;
+
+/** Why Food put an item on the list by itself (`data.reason`). */
+const RESTOCK_REASONS: Record<string, string> = {
+  running_low: "running low",
+  used_up: "used up",
+  thrown_away: "thrown away",
+};
 
 const EVENT_LABELS: Record<string, string> = {
   "voice.job.accepted": "Voice recording received",
@@ -165,6 +173,11 @@ const EVENT_LABELS: Record<string, string> = {
   "food.pantry_item.thrown_away": "Thrown away",
   "food.pantry_item.restocked": "Back in stock",
   "food.pantry_item.deleted": "Pantry item deleted",
+  "food.pantry_item.running_low": "Running low",
+  "food.pantry_item.running_low_cleared": "No longer running low",
+  "food.staple.created": "Staple added",
+  "food.staple.updated": "Staple updated",
+  "food.staple.deleted": "Staple removed",
   "food.notification.missed": "Expiry reminder missed",
   "food.recipe.created": "Recipe created",
   "food.recipe.updated": "Recipe updated",
@@ -293,6 +306,10 @@ export function eventLabel(event: Pick<ActivityEvent, "type" | "data">) {
     const keyword = text(event.data?.keyword);
     const aisle = text(event.data?.aisle);
     const deleted = event.data?.deleted;
+    // An item a staple (or a running-low item) put on the list says why.
+    const reason = RESTOCK_REASONS[text(event.data?.reason) ?? ""];
+    if (name && reason && event.type === "food.shopping_item.added")
+      return `${label}: ${name} — ${reason}${event.data?.stapleId ? " (staple)" : ""}`;
     if (name) return `${label}: ${name}`;
     if (keyword)
       return aisle ? `${label}: ${keyword} → ${aisleLabel(aisle)}` : label;

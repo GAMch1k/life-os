@@ -134,7 +134,7 @@ func (q *Queries) ListHandledNotifications(ctx context.Context, keys []string) (
 }
 
 const listPantryItemsExpiringBetween = `-- name: ListPantryItemsExpiringBetween :many
-SELECT id, name, normalized_name, amount, location, expires_on, opened_on, note, state, ended_at, source, source_ref, from_shopping_item_id, created_at, updated_at, created_by, updated_by FROM pantry_items
+SELECT id, name, normalized_name, amount, location, expires_on, opened_on, note, state, ended_at, source, source_ref, from_shopping_item_id, created_at, updated_at, created_by, updated_by, running_low_at FROM pantry_items
 WHERE state = 'in_stock'
   AND expires_on >= $1::date
   AND expires_on <= $2::date
@@ -175,6 +175,7 @@ func (q *Queries) ListPantryItemsExpiringBetween(ctx context.Context, arg ListPa
 			&i.UpdatedAt,
 			&i.CreatedBy,
 			&i.UpdatedBy,
+			&i.RunningLowAt,
 		); err != nil {
 			return nil, err
 		}

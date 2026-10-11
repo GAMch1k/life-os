@@ -59,7 +59,7 @@ export interface paths {
         put?: never;
         /**
          * Put bought items away in the pantry
-         * @description Moves 1 to 50 bought items from the shopping list into the pantry in one transaction: each becomes an in-stock pantry item with the item's name, its amount (or the `amount` given; empty means none), `fromShoppingItemId`, and its `source` and `sourceRef`, in the `location` given or else the usual place of the item's aisle (frozen food the freezer; dairy, meat, and fish the fridge; bakery, pantry, drinks, and snacks the pantry; anything else `other`), with the `expiresOn` given; and the shopping item leaves the list. All or none: an item that is still needed refuses the request (409 `not_bought`), an unknown id is 404 `not_found`, and an id named twice is 400 `invalid_request`, each message naming `items[i]`. The response lists the new pantry items in the request's order.
+         * @description Moves 1 to 50 bought items from the shopping list into the pantry in one transaction: each becomes an in-stock pantry item with the item's name, its amount (or the `amount` given; empty means none), `fromShoppingItemId`, and its `source` and `sourceRef`, in the `location` given or else the usual place of the item's aisle (frozen food the freezer; dairy, meat, and fish the fridge; bakery, pantry, drinks, and snacks the pantry; anything else `other`), with the `expiresOn` given; and the shopping item leaves the list. All or none: an item that is still needed refuses the request (409 `not_bought`), an unknown id is 404 `not_found`, and an id named twice is 400 `invalid_request`, each message naming `items[i]`. The response lists the new pantry items in the request's order. More of a name at home clears the running-low flag of the in-stock items with that name.
          */
         post: operations["putAwayShoppingItems"];
         delete?: never;
@@ -257,7 +257,7 @@ export interface paths {
         put?: never;
         /**
          * Add pantry items
-         * @description Adds 1 to 50 items in one transaction; pantry items never merge (two cartons of milk may expire on different days). An item without `location` gets the usual place of its aisle, as the aisle rules place its name: frozen food the freezer, dairy, meat, and fish the fridge, bakery, pantry, drinks, and snacks the pantry, anything else `other`. All or none are added.
+         * @description Adds 1 to 50 items in one transaction; pantry items never merge (two cartons of milk may expire on different days). An item without `location` gets the usual place of its aisle, as the aisle rules place its name: frozen food the freezer, dairy, meat, and fish the fridge, bakery, pantry, drinks, and snacks the pantry, anything else `other`. All or none are added. More of a name at home clears the running-low flag of the in-stock items with that name.
          */
         post: operations["addPantryItems"];
         delete?: never;
@@ -302,7 +302,7 @@ export interface paths {
         put?: never;
         /**
          * Mark a pantry item used up
-         * @description Ends the item (`state` `used_up`, `endedAt` now; an item that had already ended keeps its `endedAt`). An item already used up is returned unchanged.
+         * @description Ends the item (`state` `used_up`, `endedAt` now; an item that had already ended keeps its `endedAt`) and clears its running-low flag. When its name is a staple, the staple goes on the shopping list (`restock`). An item already used up is returned unchanged.
          */
         post: operations["markPantryItemUsedUp"];
         delete?: never;
@@ -322,7 +322,7 @@ export interface paths {
         put?: never;
         /**
          * Mark a pantry item thrown away
-         * @description Ends the item (`state` `thrown_away`, `endedAt` now; an item that had already ended keeps its `endedAt`). An item already thrown away is returned unchanged.
+         * @description Ends the item (`state` `thrown_away`) and clears its running-low flag. When its name is a staple, the staple goes on the shopping list (`restock`). An item already thrown away is returned unchanged.
          */
         post: operations["markPantryItemThrownAway"];
         delete?: never;
@@ -349,6 +349,99 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/v1/pantry-items/{itemId}/running-low": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Flag a pantry item as running low
+         * @description Flags an in-stock item as running low (`runningLow`, `runningLowAt`). When its name is a staple, the staple goes on the shopping list (`restock`): added with the staple's amount, store, and aisle, `source: staple`, and `sourceRef` the staple's id, unless an item of that name is already needed (`restock.status: on_list`, nothing changes). Another item is only flagged, unless `addToList` is true. An item already flagged keeps its flag (no new event), but its staple still goes on the list when no item of that name is needed, such as after the list item was bought. An ended item is 409 `not_in_stock`.
+         */
+        post: operations["markPantryItemRunningLow"];
+        /**
+         * Clear a pantry item's running-low flag
+         * @description An item not flagged is returned unchanged.
+         */
+        delete: operations["clearPantryItemRunningLow"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/staples": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the staples
+         * @description Every staple by normalised name, with whether an item of its name is needed on the list (`onList`), in stock at home (`inStock`), and flagged as running low (`runningLow`).
+         */
+        get: operations["listStaples"];
+        put?: never;
+        /**
+         * Add a staple
+         * @description A staple is a name the owner always wants at home, unique as normalised (409 `staple_exists`), with an optional amount, store (`storeId`, or `storeName`, which creates the store when it is new), and aisle for the list. To mark a pantry or shopping item as a staple, send its name (and amount, store, aisle).
+         */
+        post: operations["createStaple"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/staples/running-low": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Say that something is running low, by name
+         * @description For when the owner says "almost out of milk", with or without a pantry item: every in-stock pantry item of the name (normalised) is flagged as running low, and when the name is a staple, or `addToList` is true, it goes on the list as for a pantry item (`restock`; already needed means nothing changes). A name that is neither a staple nor in the pantry, without `addToList`, changes nothing (`changed: false`).
+         */
+        post: operations["markRunningLowByName"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/staples/{stapleId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a staple */
+        get: operations["getStaple"];
+        put?: never;
+        post?: never;
+        /**
+         * Remove a staple
+         * @description Items it put on the list stay.
+         */
+        delete: operations["deleteStaple"];
+        options?: never;
+        head?: never;
+        /**
+         * Update a staple
+         * @description Changes only the fields present; `null` clears `amount`, the store (`storeId`), or `aisle`. A new name another staple has is 409 `staple_exists`.
+         */
+        patch: operations["updateStaple"];
         trace?: never;
     };
     "/v1/recipes": {
@@ -497,10 +590,10 @@ export interface components {
         /** @enum {string} */
         ShoppingItemState: "needed" | "bought";
         /**
-         * @description `manual`: added directly (the Dashboard, a tool). `capture`: added from a capture such as an Inbox item; `sourceRef` names it. `recipe`: added as a recipe's missing ingredient; `sourceRef` is the recipe's id.
+         * @description `manual`: added directly (the Dashboard, a tool). `capture`: added from a capture such as an Inbox item; `sourceRef` names it. `recipe`: added as a recipe's missing ingredient; `sourceRef` is the recipe's id. `staple`: put on the list because a staple ran low, was used up, or was thrown away; `sourceRef` is the staple's id.
          * @enum {string}
          */
-        ItemSource: "manual" | "capture" | "recipe";
+        ItemSource: "manual" | "capture" | "recipe" | "staple";
         ShoppingItem: {
             /** Format: uuid */
             id: string;
@@ -652,6 +745,10 @@ export interface components {
             state: components["schemas"]["PantryItemState"];
             /** Format: date-time */
             endedAt: string | null;
+            /** @description Flagged as running low (in stock only). */
+            runningLow: boolean;
+            /** Format: date-time */
+            runningLowAt: string | null;
             source: components["schemas"]["ItemSource"];
             sourceRef: string | null;
             /**
@@ -850,6 +947,101 @@ export interface components {
             dryRun: boolean;
             items: components["schemas"]["IngredientResult"][];
         };
+        /**
+         * @description Why an item went on the list by itself.
+         * @enum {string}
+         */
+        RestockReason: "running_low" | "used_up" | "thrown_away";
+        /** @description What a staple (or `addToList`) put on the shopping list: `added`, `merged` into an item that appeared meanwhile, or `on_list` (already needed; nothing changed). */
+        Restock: {
+            /** @enum {string} */
+            status: "added" | "merged" | "on_list";
+            reason: components["schemas"]["RestockReason"];
+            /**
+             * Format: uuid
+             * @description The staple; null for an addToList of another item.
+             */
+            stapleId: string | null;
+            shoppingItem: components["schemas"]["ShoppingItem"];
+            /** @description In plain words, such as "Added “Milch” to the list: running low (staple)" or "“Milch” is already on the list". */
+            message: string;
+        };
+        /** @description A pantry item, with what went on the list by itself because of this change. */
+        PantryItemResult: components["schemas"]["PantryItem"] & {
+            restock?: components["schemas"]["Restock"] | null;
+        };
+        RunningLowRequest: {
+            /**
+             * @description Also put an item that is no staple on the list.
+             * @default false
+             */
+            addToList: boolean;
+        };
+        RunningLowByNameRequest: {
+            name: string;
+            /**
+             * @description Put the name on the list also when it is no staple.
+             * @default false
+             */
+            addToList: boolean;
+        };
+        RunningLowResult: {
+            name: string;
+            normalizedName: string;
+            /** @description Whether anything was flagged or put on the list. */
+            changed: boolean;
+            /** @description The staple of the name; null when it is none. */
+            staple: components["schemas"]["Staple"] | null;
+            /** @description The in-stock pantry items of the name, now flagged as running low. */
+            pantryItems: components["schemas"]["PantryItem"][];
+            restock: components["schemas"]["Restock"] | null;
+        };
+        Staple: {
+            /** Format: uuid */
+            id: string;
+            /** @description As written; the list gets this name. */
+            name: string;
+            normalizedName: string;
+            amount: string | null;
+            /** Format: uuid */
+            storeId: string | null;
+            storeName: string | null;
+            /** @description The list's aisle (an `Aisle`); null lets the aisle rules choose. */
+            aisle: string | null;
+            /** @description An item of its name is needed on the list. */
+            onList: boolean;
+            /** @description An item of its name is in stock in the pantry. */
+            inStock: boolean;
+            /** @description An in-stock item of its name is flagged as running low. */
+            runningLow: boolean;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            createdBy: components["schemas"]["Actor"];
+            updatedBy: components["schemas"]["Actor"];
+        };
+        StapleList: {
+            items: components["schemas"]["Staple"][];
+        };
+        /** @description Give the store by `storeId` or by `storeName`, not both. */
+        CreateStapleRequest: {
+            name: string;
+            amount?: string;
+            /** Format: uuid */
+            storeId?: string;
+            storeName?: string;
+            aisle?: components["schemas"]["Aisle"];
+        };
+        UpdateStapleRequest: {
+            name?: string;
+            amount?: string | null;
+            /** Format: uuid */
+            storeId?: string | null;
+            storeName?: string;
+            /** @description An `Aisle`; null lets the aisle rules choose. */
+            aisle?: string | null;
+        };
         FoodNotificationStatus: {
             /** @description Whether Food sends expiry reminders: false when NOTIFICATIONS_SERVICE_URL is not set. */
             enabled: boolean;
@@ -903,6 +1095,7 @@ export interface components {
         StoreId: string;
         RuleId: string;
         RecipeId: string;
+        StapleId: string;
         /** @description A plain date (YYYY-MM-DD). */
         PlanDate: string;
         PlanSlot: components["schemas"]["MealSlot"];
@@ -1705,6 +1898,8 @@ export interface operations {
                 location?: components["schemas"]["PantryLocation"];
                 /** @description In-stock items that expire on or before today + N days (0: today or earlier). */
                 expiringWithinDays?: number;
+                /** @description true: only items flagged as running low; false: only items not flagged. */
+                runningLow?: boolean;
                 /** @description The previous page's nextCursor. Opaque; only valid with the filters it was returned for. */
                 cursor?: string;
                 limit?: number;
@@ -1940,13 +2135,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Pantry item */
+            /** @description The pantry item, and what a staple put on the list (`restock`) */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PantryItem"];
+                    "application/json": components["schemas"]["PantryItemResult"];
                 };
             };
             /** @description Invalid request, or no valid X-Life-OS-Actor (`actor_required`) */
@@ -1992,13 +2187,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Pantry item */
+            /** @description The pantry item, and what a staple put on the list (`restock`) */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PantryItem"];
+                    "application/json": components["schemas"]["PantryItemResult"];
                 };
             };
             /** @description Invalid request, or no valid X-Life-OS-Actor (`actor_required`) */
@@ -2044,13 +2239,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Pantry item */
+            /** @description The pantry item, and what a staple put on the list (`restock`) */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PantryItem"];
+                    "application/json": components["schemas"]["PantryItemResult"];
                 };
             };
             /** @description Invalid request, or no valid X-Life-OS-Actor (`actor_required`) */
@@ -2072,6 +2267,379 @@ export interface operations {
                 };
             };
             /** @description `idempotency_conflict` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    markPantryItemRunningLow: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Makes the write safe to retry; see the API description. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                itemId: components["parameters"]["ItemId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RunningLowRequest"];
+            };
+        };
+        responses: {
+            /** @description The pantry item, and what went on the list (`restock`) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PantryItemResult"];
+                };
+            };
+            /** @description Invalid request, or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Item not found (`not_found`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `not_in_stock` (the item has ended) or `idempotency_conflict` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    clearPantryItemRunningLow: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Makes the write safe to retry; see the API description. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                itemId: components["parameters"]["ItemId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Pantry item */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PantryItemResult"];
+                };
+            };
+            /** @description Invalid request, or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Item not found (`not_found`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `idempotency_conflict` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    listStaples: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Staples */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StapleList"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    createStaple: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Makes the write safe to retry; see the API description. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateStapleRequest"];
+            };
+        };
+        responses: {
+            /** @description Staple */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Staple"];
+                };
+            };
+            /** @description Invalid request (`invalid_request`, `unknown_store`), or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `staple_exists`, `store_archived`, or `idempotency_conflict` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    markRunningLowByName: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Makes the write safe to retry; see the API description. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RunningLowByNameRequest"];
+            };
+        };
+        responses: {
+            /** @description What changed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunningLowResult"];
+                };
+            };
+            /** @description Invalid request, or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `idempotency_conflict` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getStaple: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                stapleId: components["parameters"]["StapleId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Staple */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Staple"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Staple not found (`not_found`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    deleteStaple: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Makes the write safe to retry; see the API description. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                stapleId: components["parameters"]["StapleId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid request, or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Staple not found (`not_found`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `idempotency_conflict` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    updateStaple: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Makes the write safe to retry; see the API description. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                stapleId: components["parameters"]["StapleId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateStapleRequest"];
+            };
+        };
+        responses: {
+            /** @description Staple */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Staple"];
+                };
+            };
+            /** @description Invalid request (`invalid_request`, `unknown_store`), or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Staple not found (`not_found`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `staple_exists`, `store_archived`, or `idempotency_conflict` */
             409: {
                 headers: {
                     [name: string]: unknown;

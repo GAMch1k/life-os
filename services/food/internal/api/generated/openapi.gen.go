@@ -121,22 +121,22 @@ func (e AisleSetBy) Valid() bool {
 
 // Defines values for IngredientStatus.
 const (
-	Added    IngredientStatus = "added"
-	InPantry IngredientStatus = "in_pantry"
-	Merged   IngredientStatus = "merged"
-	OnList   IngredientStatus = "on_list"
+	IngredientStatusAdded    IngredientStatus = "added"
+	IngredientStatusInPantry IngredientStatus = "in_pantry"
+	IngredientStatusMerged   IngredientStatus = "merged"
+	IngredientStatusOnList   IngredientStatus = "on_list"
 )
 
 // Valid indicates whether the value is a known member of the IngredientStatus enum.
 func (e IngredientStatus) Valid() bool {
 	switch e {
-	case Added:
+	case IngredientStatusAdded:
 		return true
-	case InPantry:
+	case IngredientStatusInPantry:
 		return true
-	case Merged:
+	case IngredientStatusMerged:
 		return true
-	case OnList:
+	case IngredientStatusOnList:
 		return true
 	default:
 		return false
@@ -148,6 +148,7 @@ const (
 	ItemSourceCapture ItemSource = "capture"
 	ItemSourceManual  ItemSource = "manual"
 	ItemSourceRecipe  ItemSource = "recipe"
+	ItemSourceStaple  ItemSource = "staple"
 )
 
 // Valid indicates whether the value is a known member of the ItemSource enum.
@@ -158,6 +159,8 @@ func (e ItemSource) Valid() bool {
 	case ItemSourceManual:
 		return true
 	case ItemSourceRecipe:
+		return true
+	case ItemSourceStaple:
 		return true
 	default:
 		return false
@@ -187,19 +190,19 @@ func (e MealSlot) Valid() bool {
 
 // Defines values for PantryItemState.
 const (
-	InStock    PantryItemState = "in_stock"
-	ThrownAway PantryItemState = "thrown_away"
-	UsedUp     PantryItemState = "used_up"
+	PantryItemStateInStock    PantryItemState = "in_stock"
+	PantryItemStateThrownAway PantryItemState = "thrown_away"
+	PantryItemStateUsedUp     PantryItemState = "used_up"
 )
 
 // Valid indicates whether the value is a known member of the PantryItemState enum.
 func (e PantryItemState) Valid() bool {
 	switch e {
-	case InStock:
+	case PantryItemStateInStock:
 		return true
-	case ThrownAway:
+	case PantryItemStateThrownAway:
 		return true
-	case UsedUp:
+	case PantryItemStateUsedUp:
 		return true
 	default:
 		return false
@@ -224,6 +227,48 @@ func (e PantryLocation) Valid() bool {
 	case PantryLocationOther:
 		return true
 	case PantryLocationPantry:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RestockStatus.
+const (
+	RestockStatusAdded  RestockStatus = "added"
+	RestockStatusMerged RestockStatus = "merged"
+	RestockStatusOnList RestockStatus = "on_list"
+)
+
+// Valid indicates whether the value is a known member of the RestockStatus enum.
+func (e RestockStatus) Valid() bool {
+	switch e {
+	case RestockStatusAdded:
+		return true
+	case RestockStatusMerged:
+		return true
+	case RestockStatusOnList:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RestockReason.
+const (
+	RestockReasonRunningLow RestockReason = "running_low"
+	RestockReasonThrownAway RestockReason = "thrown_away"
+	RestockReasonUsedUp     RestockReason = "used_up"
+)
+
+// Valid indicates whether the value is a known member of the RestockReason enum.
+func (e RestockReason) Valid() bool {
+	switch e {
+	case RestockReasonRunningLow:
+		return true
+	case RestockReasonThrownAway:
+		return true
+	case RestockReasonUsedUp:
 		return true
 	default:
 		return false
@@ -345,6 +390,16 @@ type CreateRecipeRequest struct {
 	Title     string    `json:"title"`
 }
 
+// CreateStapleRequest Give the store by `storeId` or by `storeName`, not both.
+type CreateStapleRequest struct {
+	// Aisle The shopping list's sections, in the order the list shows them.
+	Aisle     *Aisle              `json:"aisle,omitempty"`
+	Amount    *string             `json:"amount,omitempty"`
+	Name      string              `json:"name"`
+	StoreId   *openapi_types.UUID `json:"storeId,omitempty"`
+	StoreName *string             `json:"storeName,omitempty"`
+}
+
 // CreateStoreRequest defines model for CreateStoreRequest.
 type CreateStoreRequest struct {
 	Name      string `json:"name"`
@@ -450,7 +505,7 @@ type IngredientResult struct {
 // IngredientStatus `added`: put on the list (or, in a dry run, would be). `merged`: merged into a needed item that appeared meanwhile. `in_pantry`: in stock at home, skipped. `on_list`: already needed on the list, skipped.
 type IngredientStatus string
 
-// ItemSource `manual`: added directly (the Dashboard, a tool). `capture`: added from a capture such as an Inbox item; `sourceRef` names it. `recipe`: added as a recipe's missing ingredient; `sourceRef` is the recipe's id.
+// ItemSource `manual`: added directly (the Dashboard, a tool). `capture`: added from a capture such as an Inbox item; `sourceRef` names it. `recipe`: added as a recipe's missing ingredient; `sourceRef` is the recipe's id. `staple`: put on the list because a staple ran low, was used up, or was thrown away; `sourceRef` is the staple's id.
 type ItemSource string
 
 // MealPlanEntry defines model for MealPlanEntry.
@@ -505,7 +560,7 @@ type NewPantryItem struct {
 	Note               *string             `json:"note,omitempty"`
 	OpenedOn           *openapi_types.Date `json:"openedOn,omitempty"`
 
-	// Source `manual`: added directly (the Dashboard, a tool). `capture`: added from a capture such as an Inbox item; `sourceRef` names it. `recipe`: added as a recipe's missing ingredient; `sourceRef` is the recipe's id.
+	// Source `manual`: added directly (the Dashboard, a tool). `capture`: added from a capture such as an Inbox item; `sourceRef` names it. `recipe`: added as a recipe's missing ingredient; `sourceRef` is the recipe's id. `staple`: put on the list because a staple ran low, was used up, or was thrown away; `sourceRef` is the staple's id.
 	Source    *ItemSource `json:"source,omitempty"`
 	SourceRef *string     `json:"sourceRef,omitempty"`
 }
@@ -518,7 +573,7 @@ type NewShoppingItem struct {
 	Name   string  `json:"name"`
 	Note   *string `json:"note,omitempty"`
 
-	// Source `manual`: added directly (the Dashboard, a tool). `capture`: added from a capture such as an Inbox item; `sourceRef` names it. `recipe`: added as a recipe's missing ingredient; `sourceRef` is the recipe's id.
+	// Source `manual`: added directly (the Dashboard, a tool). `capture`: added from a capture such as an Inbox item; `sourceRef` names it. `recipe`: added as a recipe's missing ingredient; `sourceRef` is the recipe's id. `staple`: put on the list because a staple ran low, was used up, or was thrown away; `sourceRef` is the staple's id.
 	Source *ItemSource `json:"source,omitempty"`
 
 	// SourceRef What the item came from, such as an Inbox item id.
@@ -550,7 +605,11 @@ type PantryItem struct {
 	Note           *string             `json:"note"`
 	OpenedOn       *openapi_types.Date `json:"openedOn"`
 
-	// Source `manual`: added directly (the Dashboard, a tool). `capture`: added from a capture such as an Inbox item; `sourceRef` names it. `recipe`: added as a recipe's missing ingredient; `sourceRef` is the recipe's id.
+	// RunningLow Flagged as running low (in stock only).
+	RunningLow   bool       `json:"runningLow"`
+	RunningLowAt *time.Time `json:"runningLowAt"`
+
+	// Source `manual`: added directly (the Dashboard, a tool). `capture`: added from a capture such as an Inbox item; `sourceRef` names it. `recipe`: added as a recipe's missing ingredient; `sourceRef` is the recipe's id. `staple`: put on the list because a staple ran low, was used up, or was thrown away; `sourceRef` is the staple's id.
 	Source    ItemSource `json:"source"`
 	SourceRef *string    `json:"sourceRef"`
 
@@ -566,6 +625,44 @@ type PantryItem struct {
 type PantryItemList struct {
 	Items      []PantryItem `json:"items"`
 	NextCursor *string      `json:"nextCursor,omitempty"`
+}
+
+// PantryItemResult A pantry item, with what went on the list by itself because of this change.
+type PantryItemResult struct {
+	Amount    *string   `json:"amount"`
+	CreatedAt time.Time `json:"createdAt"`
+
+	// CreatedBy Who made a change, as its X-Life-OS-Actor said.
+	CreatedBy Actor               `json:"createdBy"`
+	EndedAt   *time.Time          `json:"endedAt"`
+	ExpiresOn *openapi_types.Date `json:"expiresOn"`
+
+	// FromShoppingItemId The shopping item it was bought as.
+	FromShoppingItemId *openapi_types.UUID `json:"fromShoppingItemId"`
+	Id                 openapi_types.UUID  `json:"id"`
+	Location           PantryLocation      `json:"location"`
+
+	// Name As written.
+	Name           string              `json:"name"`
+	NormalizedName string              `json:"normalizedName"`
+	Note           *string             `json:"note"`
+	OpenedOn       *openapi_types.Date `json:"openedOn"`
+	Restock        *Restock            `json:"restock,omitempty"`
+
+	// RunningLow Flagged as running low (in stock only).
+	RunningLow   bool       `json:"runningLow"`
+	RunningLowAt *time.Time `json:"runningLowAt"`
+
+	// Source `manual`: added directly (the Dashboard, a tool). `capture`: added from a capture such as an Inbox item; `sourceRef` names it. `recipe`: added as a recipe's missing ingredient; `sourceRef` is the recipe's id. `staple`: put on the list because a staple ran low, was used up, or was thrown away; `sourceRef` is the staple's id.
+	Source    ItemSource `json:"source"`
+	SourceRef *string    `json:"sourceRef"`
+
+	// State `in_stock`: at home. `used_up` and `thrown_away` end the item; it is kept for history.
+	State     PantryItemState `json:"state"`
+	UpdatedAt time.Time       `json:"updatedAt"`
+
+	// UpdatedBy Who made a change, as its X-Life-OS-Actor said.
+	UpdatedBy Actor `json:"updatedBy"`
 }
 
 // PantryItemState `in_stock`: at home. `used_up` and `thrown_away` end the item; it is kept for history.
@@ -637,6 +734,54 @@ type RecipeRef struct {
 	Title string             `json:"title"`
 }
 
+// Restock What a staple (or `addToList`) put on the shopping list: `added`, `merged` into an item that appeared meanwhile, or `on_list` (already needed; nothing changed).
+type Restock struct {
+	// Message In plain words, such as "Added “Milch” to the list: running low (staple)" or "“Milch” is already on the list".
+	Message string `json:"message"`
+
+	// Reason Why an item went on the list by itself.
+	Reason       RestockReason `json:"reason"`
+	ShoppingItem ShoppingItem  `json:"shoppingItem"`
+
+	// StapleId The staple; null for an addToList of another item.
+	StapleId *openapi_types.UUID `json:"stapleId"`
+	Status   RestockStatus       `json:"status"`
+}
+
+// RestockStatus defines model for Restock.Status.
+type RestockStatus string
+
+// RestockReason Why an item went on the list by itself.
+type RestockReason string
+
+// RunningLowByNameRequest defines model for RunningLowByNameRequest.
+type RunningLowByNameRequest struct {
+	// AddToList Put the name on the list also when it is no staple.
+	AddToList *bool  `json:"addToList,omitempty"`
+	Name      string `json:"name"`
+}
+
+// RunningLowRequest defines model for RunningLowRequest.
+type RunningLowRequest struct {
+	// AddToList Also put an item that is no staple on the list.
+	AddToList *bool `json:"addToList,omitempty"`
+}
+
+// RunningLowResult defines model for RunningLowResult.
+type RunningLowResult struct {
+	// Changed Whether anything was flagged or put on the list.
+	Changed        bool   `json:"changed"`
+	Name           string `json:"name"`
+	NormalizedName string `json:"normalizedName"`
+
+	// PantryItems The in-stock pantry items of the name, now flagged as running low.
+	PantryItems []PantryItem `json:"pantryItems"`
+	Restock     *Restock     `json:"restock"`
+
+	// Staple The staple of the name; null when it is none.
+	Staple *Staple `json:"staple"`
+}
+
 // SetMealPlanEntryRequest Give `recipeId` or `text`, exactly one.
 type SetMealPlanEntryRequest struct {
 	Note     *string             `json:"note,omitempty"`
@@ -669,7 +814,7 @@ type ShoppingItem struct {
 	NormalizedName string  `json:"normalizedName"`
 	Note           *string `json:"note"`
 
-	// Source `manual`: added directly (the Dashboard, a tool). `capture`: added from a capture such as an Inbox item; `sourceRef` names it. `recipe`: added as a recipe's missing ingredient; `sourceRef` is the recipe's id.
+	// Source `manual`: added directly (the Dashboard, a tool). `capture`: added from a capture such as an Inbox item; `sourceRef` names it. `recipe`: added as a recipe's missing ingredient; `sourceRef` is the recipe's id. `staple`: put on the list because a staple ran low, was used up, or was thrown away; `sourceRef` is the staple's id.
 	Source    ItemSource          `json:"source"`
 	SourceRef *string             `json:"sourceRef"`
 	State     ShoppingItemState   `json:"state"`
@@ -697,6 +842,42 @@ type ShoppingItemResult struct {
 
 // ShoppingItemState defines model for ShoppingItemState.
 type ShoppingItemState string
+
+// Staple defines model for Staple.
+type Staple struct {
+	// Aisle The list's aisle (an `Aisle`); null lets the aisle rules choose.
+	Aisle     *string   `json:"aisle"`
+	Amount    *string   `json:"amount"`
+	CreatedAt time.Time `json:"createdAt"`
+
+	// CreatedBy Who made a change, as its X-Life-OS-Actor said.
+	CreatedBy Actor              `json:"createdBy"`
+	Id        openapi_types.UUID `json:"id"`
+
+	// InStock An item of its name is in stock in the pantry.
+	InStock bool `json:"inStock"`
+
+	// Name As written; the list gets this name.
+	Name           string `json:"name"`
+	NormalizedName string `json:"normalizedName"`
+
+	// OnList An item of its name is needed on the list.
+	OnList bool `json:"onList"`
+
+	// RunningLow An in-stock item of its name is flagged as running low.
+	RunningLow bool                `json:"runningLow"`
+	StoreId    *openapi_types.UUID `json:"storeId"`
+	StoreName  *string             `json:"storeName"`
+	UpdatedAt  time.Time           `json:"updatedAt"`
+
+	// UpdatedBy Who made a change, as its X-Life-OS-Actor said.
+	UpdatedBy Actor `json:"updatedBy"`
+}
+
+// StapleList defines model for StapleList.
+type StapleList struct {
+	Items []Staple `json:"items"`
+}
 
 // Store defines model for Store.
 type Store struct {
@@ -752,6 +933,16 @@ type UpdateShoppingItemRequest struct {
 	StoreName *string             `json:"storeName,omitempty"`
 }
 
+// UpdateStapleRequest defines model for UpdateStapleRequest.
+type UpdateStapleRequest struct {
+	// Aisle An `Aisle`; null lets the aisle rules choose.
+	Aisle     *string             `json:"aisle,omitempty"`
+	Amount    *string             `json:"amount,omitempty"`
+	Name      *string             `json:"name,omitempty"`
+	StoreId   *openapi_types.UUID `json:"storeId,omitempty"`
+	StoreName *string             `json:"storeName,omitempty"`
+}
+
 // UpdateStoreRequest defines model for UpdateStoreRequest.
 type UpdateStoreRequest struct {
 	Archived  *bool   `json:"archived,omitempty"`
@@ -776,6 +967,9 @@ type RecipeId = openapi_types.UUID
 
 // RuleId defines model for RuleId.
 type RuleId = openapi_types.UUID
+
+// StapleId defines model for StapleId.
+type StapleId = openapi_types.UUID
 
 // StoreId defines model for StoreId.
 type StoreId = openapi_types.UUID
@@ -823,6 +1017,9 @@ type ListPantryItemsParams struct {
 	// ExpiringWithinDays In-stock items that expire on or before today + N days (0: today or earlier).
 	ExpiringWithinDays *int `form:"expiringWithinDays,omitempty" json:"expiringWithinDays,omitempty"`
 
+	// RunningLow true: only items flagged as running low; false: only items not flagged.
+	RunningLow *bool `form:"runningLow,omitempty" json:"runningLow,omitempty"`
+
 	// Cursor The previous page's nextCursor. Opaque; only valid with the filters it was returned for.
 	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
 	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
@@ -848,6 +1045,18 @@ type UpdatePantryItemParams struct {
 
 // RestockPantryItemParams defines parameters for RestockPantryItem.
 type RestockPantryItemParams struct {
+	// IdempotencyKey Makes the write safe to retry; see the API description.
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// ClearPantryItemRunningLowParams defines parameters for ClearPantryItemRunningLow.
+type ClearPantryItemRunningLowParams struct {
+	// IdempotencyKey Makes the write safe to retry; see the API description.
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// MarkPantryItemRunningLowParams defines parameters for MarkPantryItemRunningLow.
+type MarkPantryItemRunningLowParams struct {
 	// IdempotencyKey Makes the write safe to retry; see the API description.
 	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
 }
@@ -954,6 +1163,30 @@ type MarkShoppingItemNeededParams struct {
 	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
 }
 
+// CreateStapleParams defines parameters for CreateStaple.
+type CreateStapleParams struct {
+	// IdempotencyKey Makes the write safe to retry; see the API description.
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// MarkRunningLowByNameParams defines parameters for MarkRunningLowByName.
+type MarkRunningLowByNameParams struct {
+	// IdempotencyKey Makes the write safe to retry; see the API description.
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// DeleteStapleParams defines parameters for DeleteStaple.
+type DeleteStapleParams struct {
+	// IdempotencyKey Makes the write safe to retry; see the API description.
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// UpdateStapleParams defines parameters for UpdateStaple.
+type UpdateStapleParams struct {
+	// IdempotencyKey Makes the write safe to retry; see the API description.
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
 // ListStoresParams defines parameters for ListStores.
 type ListStoresParams struct {
 	IncludeArchived *bool `form:"includeArchived,omitempty" json:"includeArchived,omitempty"`
@@ -983,6 +1216,9 @@ type AddPantryItemsJSONRequestBody = AddPantryItemsRequest
 // UpdatePantryItemJSONRequestBody defines body for UpdatePantryItem for application/json ContentType.
 type UpdatePantryItemJSONRequestBody = UpdatePantryItemRequest
 
+// MarkPantryItemRunningLowJSONRequestBody defines body for MarkPantryItemRunningLow for application/json ContentType.
+type MarkPantryItemRunningLowJSONRequestBody = RunningLowRequest
+
 // CreateRecipeJSONRequestBody defines body for CreateRecipe for application/json ContentType.
 type CreateRecipeJSONRequestBody = CreateRecipeRequest
 
@@ -1003,6 +1239,15 @@ type PutAwayShoppingItemsJSONRequestBody = PutAwayRequest
 
 // UpdateShoppingItemJSONRequestBody defines body for UpdateShoppingItem for application/json ContentType.
 type UpdateShoppingItemJSONRequestBody = UpdateShoppingItemRequest
+
+// CreateStapleJSONRequestBody defines body for CreateStaple for application/json ContentType.
+type CreateStapleJSONRequestBody = CreateStapleRequest
+
+// MarkRunningLowByNameJSONRequestBody defines body for MarkRunningLowByName for application/json ContentType.
+type MarkRunningLowByNameJSONRequestBody = RunningLowByNameRequest
+
+// UpdateStapleJSONRequestBody defines body for UpdateStaple for application/json ContentType.
+type UpdateStapleJSONRequestBody = UpdateStapleRequest
 
 // CreateStoreJSONRequestBody defines body for CreateStore for application/json ContentType.
 type CreateStoreJSONRequestBody = CreateStoreRequest
@@ -1051,6 +1296,12 @@ type ServerInterface interface {
 	// RestockPantryItem Put a pantry item back in stock
 	// (POST /v1/pantry-items/{itemId}/restock)
 	RestockPantryItem(c fiber.Ctx, itemId ItemId, params RestockPantryItemParams) error
+	// ClearPantryItemRunningLow Clear a pantry item's running-low flag
+	// (DELETE /v1/pantry-items/{itemId}/running-low)
+	ClearPantryItemRunningLow(c fiber.Ctx, itemId ItemId, params ClearPantryItemRunningLowParams) error
+	// MarkPantryItemRunningLow Flag a pantry item as running low
+	// (POST /v1/pantry-items/{itemId}/running-low)
+	MarkPantryItemRunningLow(c fiber.Ctx, itemId ItemId, params MarkPantryItemRunningLowParams) error
 	// MarkPantryItemThrownAway Mark a pantry item thrown away
 	// (POST /v1/pantry-items/{itemId}/thrown-away)
 	MarkPantryItemThrownAway(c fiber.Ctx, itemId ItemId, params MarkPantryItemThrownAwayParams) error
@@ -1102,6 +1353,24 @@ type ServerInterface interface {
 	// MarkShoppingItemNeeded Mark a shopping item needed again
 	// (POST /v1/shopping-items/{itemId}/needed)
 	MarkShoppingItemNeeded(c fiber.Ctx, itemId ItemId, params MarkShoppingItemNeededParams) error
+	// ListStaples List the staples
+	// (GET /v1/staples)
+	ListStaples(c fiber.Ctx) error
+	// CreateStaple Add a staple
+	// (POST /v1/staples)
+	CreateStaple(c fiber.Ctx, params CreateStapleParams) error
+	// MarkRunningLowByName Say that something is running low, by name
+	// (POST /v1/staples/running-low)
+	MarkRunningLowByName(c fiber.Ctx, params MarkRunningLowByNameParams) error
+	// DeleteStaple Remove a staple
+	// (DELETE /v1/staples/{stapleId})
+	DeleteStaple(c fiber.Ctx, stapleId StapleId, params DeleteStapleParams) error
+	// GetStaple Get a staple
+	// (GET /v1/staples/{stapleId})
+	GetStaple(c fiber.Ctx, stapleId StapleId) error
+	// UpdateStaple Update a staple
+	// (PATCH /v1/staples/{stapleId})
+	UpdateStaple(c fiber.Ctx, stapleId StapleId, params UpdateStapleParams) error
 	// ListStores List stores
 	// (GET /v1/stores)
 	ListStores(c fiber.Ctx, params ListStoresParams) error
@@ -1472,6 +1741,13 @@ func (siw *ServerInterfaceWrapper) ListPantryItems(c fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter expiringWithinDays: %w", err).Error())
 	}
 
+	// ------------- Optional query parameter "runningLow" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "runningLow", query, &params.RunningLow, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter runningLow: %w", err).Error())
+	}
+
 	// ------------- Optional query parameter "cursor" -------------
 
 	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", query, &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
@@ -1713,6 +1989,108 @@ func (siw *ServerInterfaceWrapper) RestockPantryItem(c fiber.Ctx) error {
 
 	handler := func(c fiber.Ctx) error {
 		return siw.Handler.RestockPantryItem(c, itemId, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// ClearPantryItemRunningLow operation middleware
+func (siw *ServerInterfaceWrapper) ClearPantryItemRunningLow(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "itemId" -------------
+	var itemId ItemId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "itemId", c.Params("itemId"), &itemId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter itemId: %w", err).Error())
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClearPantryItemRunningLowParams
+
+	headers := c.GetReqHeaders()
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("Too many values for ParamName Idempotency-Key, 1 is required, but %d found", n))
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter Idempotency-Key: %w", err).Error())
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.ClearPantryItemRunningLow(c, itemId, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// MarkPantryItemRunningLow operation middleware
+func (siw *ServerInterfaceWrapper) MarkPantryItemRunningLow(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "itemId" -------------
+	var itemId ItemId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "itemId", c.Params("itemId"), &itemId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter itemId: %w", err).Error())
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params MarkPantryItemRunningLowParams
+
+	headers := c.GetReqHeaders()
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("Too many values for ParamName Idempotency-Key, 1 is required, but %d found", n))
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter Idempotency-Key: %w", err).Error())
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.MarkPantryItemRunningLow(c, itemId, params)
 	}
 
 	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
@@ -2537,6 +2915,241 @@ func (siw *ServerInterfaceWrapper) MarkShoppingItemNeeded(c fiber.Ctx) error {
 	return handler(c)
 }
 
+// ListStaples operation middleware
+func (siw *ServerInterfaceWrapper) ListStaples(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.ListStaples(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// CreateStaple operation middleware
+func (siw *ServerInterfaceWrapper) CreateStaple(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreateStapleParams
+
+	headers := c.GetReqHeaders()
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("Too many values for ParamName Idempotency-Key, 1 is required, but %d found", n))
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter Idempotency-Key: %w", err).Error())
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.CreateStaple(c, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// MarkRunningLowByName operation middleware
+func (siw *ServerInterfaceWrapper) MarkRunningLowByName(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params MarkRunningLowByNameParams
+
+	headers := c.GetReqHeaders()
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("Too many values for ParamName Idempotency-Key, 1 is required, but %d found", n))
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter Idempotency-Key: %w", err).Error())
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.MarkRunningLowByName(c, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// DeleteStaple operation middleware
+func (siw *ServerInterfaceWrapper) DeleteStaple(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "stapleId" -------------
+	var stapleId StapleId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "stapleId", c.Params("stapleId"), &stapleId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter stapleId: %w", err).Error())
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DeleteStapleParams
+
+	headers := c.GetReqHeaders()
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("Too many values for ParamName Idempotency-Key, 1 is required, but %d found", n))
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter Idempotency-Key: %w", err).Error())
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.DeleteStaple(c, stapleId, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// GetStaple operation middleware
+func (siw *ServerInterfaceWrapper) GetStaple(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "stapleId" -------------
+	var stapleId StapleId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "stapleId", c.Params("stapleId"), &stapleId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter stapleId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.GetStaple(c, stapleId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// UpdateStaple operation middleware
+func (siw *ServerInterfaceWrapper) UpdateStaple(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "stapleId" -------------
+	var stapleId StapleId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "stapleId", c.Params("stapleId"), &stapleId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter stapleId: %w", err).Error())
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdateStapleParams
+
+	headers := c.GetReqHeaders()
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("Too many values for ParamName Idempotency-Key, 1 is required, but %d found", n))
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter Idempotency-Key: %w", err).Error())
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.UpdateStaple(c, stapleId, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
 // ListStores operation middleware
 func (siw *ServerInterfaceWrapper) ListStores(c fiber.Ctx) error {
 
@@ -2769,6 +3382,22 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	router.Post(options.BaseURL+"/v1/pantry-items/:itemId/thrown-away", wrapper.MarkPantryItemThrownAway)
 
 	router.Post(options.BaseURL+"/v1/pantry-items/:itemId/restock", wrapper.RestockPantryItem)
+
+	router.Delete(options.BaseURL+"/v1/pantry-items/:itemId/running-low", wrapper.ClearPantryItemRunningLow)
+
+	router.Post(options.BaseURL+"/v1/pantry-items/:itemId/running-low", wrapper.MarkPantryItemRunningLow)
+
+	router.Get(options.BaseURL+"/v1/staples", wrapper.ListStaples)
+
+	router.Post(options.BaseURL+"/v1/staples", wrapper.CreateStaple)
+
+	router.Post(options.BaseURL+"/v1/staples/running-low", wrapper.MarkRunningLowByName)
+
+	router.Delete(options.BaseURL+"/v1/staples/:stapleId", wrapper.DeleteStaple)
+
+	router.Get(options.BaseURL+"/v1/staples/:stapleId", wrapper.GetStaple)
+
+	router.Patch(options.BaseURL+"/v1/staples/:stapleId", wrapper.UpdateStaple)
 
 	router.Get(options.BaseURL+"/v1/recipes", wrapper.ListRecipes)
 

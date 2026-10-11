@@ -19,6 +19,7 @@ import {
   type StoreFilter,
   fetchPantry,
   fetchShoppingList,
+  fetchStaples,
   fetchStores,
   foodHref,
   parseStoreFilter,
@@ -129,6 +130,10 @@ function ReadyWorkspace({
   );
   const shopping = useSyncedList(initial.shopping.items, fetchShoppingList);
   const pantry = useSyncedList(initial.pantry.data?.items ?? [], fetchPantry);
+  const staples = useSyncedList(
+    initial.staples.data?.items ?? [],
+    fetchStaples,
+  );
   const recipes = useSyncedList(initialRecipes.data?.items ?? [], fetchRecipes);
   const [week, setWeek] = useState(initialWeek);
 
@@ -226,6 +231,8 @@ function ReadyWorkspace({
             error={initial.pantry.error}
             pantry={pantry}
             shopping={shopping}
+            staples={staples}
+            stores={stores}
             timeZone={timeZone}
             today={today}
           />
