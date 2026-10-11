@@ -38,10 +38,10 @@ Routine Inbox and Voice planning runs through the authenticated Codex CLI. X-01 
 | Food bought ("I bought the bananas.", list item "Бананы") | Resolved; that item is bought; no other banana item |
 | Food pantry ("Йогурт в холодильнике до пятницы.") | Resolved; one "йогурт" in the fridge, expiring the coming Friday in Berlin from the capture (on a Friday, that day or a week later) |
 | Food flash drive ("Buy a flash drive tomorrow.") | Resolved; one flash drive Task, due the day after capture in Berlin; nothing on the list |
-| Food mixed ("Buy milk and call mom tomorrow.") | Resolved; still one "milk" on the list (merged with the EN list capture's); one "mom" Task; no Task with "milk" in its title |
+| Food mixed ("Buy milk and call the plumber tomorrow.") | Resolved; still one "milk" on the list (merged with the EN list capture's); one "plumber" Task; no Task with "milk" in its title. Not "call mom": RU complete's "Я уже позвонил маме" would then match two open Tasks and rightly go to Human Review |
 | No extra shopping items | Exactly 7 items (the seeded one + 6 added), each name once |
 | No extra pantry items | Exactly the yoghurt |
-| No extra entities | Exactly 10 seeded + 5 created Tasks exist (passport, milk, tax return, flash drive, call mom) |
+| No extra entities | Exactly 10 seeded + 5 created Tasks exist (passport, milk, tax return, flash drive, call the plumber) |
 | No extra events | Exactly the 4 seeded events + the created one exist, all active |
 
 The reschedule cases turned out to separate the profiles. They were also repeated three times each directly against the planner (`processor -content`), to see how often a profile gets them right.

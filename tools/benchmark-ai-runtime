@@ -36,7 +36,13 @@ docker run --rm -v "$work:/out" alpine:3.22 sh -c \
 
 # Requests are attributed to this script as a development tool, never to the
 # owner (CONTRIBUTING.md, "Development tools and live data").
-api() { curl --fail --silent -H 'X-Life-OS-Actor: dev:benchmark-ai-runtime' "$@"; }
+# Reads retry briefly: the checks issue many GETs at once, and a read the
+# gateway's rate limit refuses (503) must not flip a check. Writes never retry.
+api() {
+  local retry=(--retry 4 --retry-delay 1)
+  case " $* " in *" --data "*|*" -F "*|*" -X "*) retry=() ;; esac
+  curl --fail --silent "${retry[@]}" -H 'X-Life-OS-Actor: dev:benchmark-ai-runtime' "$@"
+}
 post_json() { api -H 'content-type: application/json' --data "$2" "$gateway$1"; }
 seed() { post_json /api/tasks/v1/tasks "$(jq -n --arg title "$1" '{title: $title}')" | jq -r '.id'; }
 capture() { post_json /api/inbox/v1/inbox-items "$(jq -n --arg content "$1" '{content: $content, source: "web"}')" | jq -r '.id'; }
@@ -129,7 +135,7 @@ run_profile() {
   ids[food_bought]=$(capture "I bought the bananas.")
   ids[food_pantry_expiry]=$(capture "Йогурт в холодильнике до пятницы.")
   ids[food_flashdrive_task]=$(capture "Buy a flash drive tomorrow.")
-  ids[food_mixed]=$(capture "Buy milk and call mom tomorrow.")
+  ids[food_mixed]=$(capture "Buy milk and call the plumber tomorrow.")
   local job
   job=$(api -F "audio=@$work/chicken.wav;type=audio/wav" -F source=web "$gateway/api/voice/v1/audio-jobs" | jq -r '.id')
   for _ in $(seq 1 120); do
@@ -260,15 +266,16 @@ run_profile() {
   due=$(api "$gateway/api/tasks/v1/tasks?query=flash&limit=100" | jq -r '.items[0].dueAt // ""')
   day=$(date -u -d "$(captured_day "${ids[food_flashdrive_task]}") + 1 day" +%F)
   check food_flashdrive_task "$([ "$s" = resolved ] && [ "$(tasks_matching flash)" = 1 ] && [ -n "$due" ] && [ "$(TZ=$zone date -d "$due" +%F)" = "$day" ] && [ "$(jq '[.items[] | select(.normalizedName | test("flash|usb"))] | length' <<<"$list")" = 0 ] && echo 1 || echo 0)" "state=$s flash_tasks=$(tasks_matching flash) dueAt=$due want=$day"
-  # food_mixed: milk on the list (once, with food_list_en's) and a Task to call mom.
+  # food_mixed: milk on the list (once, with food_list_en's) and a Task to call
+  # the plumber (not mom: ru_complete's "Я уже позвонил маме" would then match two).
   s=$(state "${ids[food_mixed]}")
-  check food_mixed "$([ "$s" = resolved ] && [ "$(listed milk)" = 1 ] && [ "$(tasks_matching mom)" = 1 ] && [ "$(tasks_matching milk)" = 0 ] && echo 1 || echo 0)" "state=$s milk=$(listed milk) mom_tasks=$(tasks_matching mom) milk_tasks=$(tasks_matching milk)"
+  check food_mixed "$([ "$s" = resolved ] && [ "$(listed milk)" = 1 ] && [ "$(tasks_matching plumber)" = 1 ] && [ "$(tasks_matching milk)" = 0 ] && echo 1 || echo 0)" "state=$s milk=$(listed milk) plumber_tasks=$(tasks_matching plumber) milk_tasks=$(tasks_matching milk)"
   # The seeded bananas plus milk, eggs, bread, cheese, toothpaste, and shower
   # gel, each once; the yoghurt alone in the pantry.
   check no_extra_shopping_items "$([ "$(jq '.items | length' <<<"$list")" = 7 ] && [ "$(jq '[.items[].normalizedName] | unique | length' <<<"$list")" = 7 ] && echo 1 || echo 0)" "items=$(jq -c '[.items[] | {name, amount, storeName, state}]' <<<"$list") (expected 7)"
   check no_extra_pantry_items "$([ "$(jq '.items | length' <<<"$pantry")" = 1 ] && echo 1 || echo 0)" "items=$(jq -c '[.items[] | {name, location, expiresOn}]' <<<"$pantry") (expected 1)"
   # No fallback or invented entities: ten seeds plus three creates, the
-  # flash drive, and the call to mom.
+  # flash drive, and the call to the plumber.
   local total
   total=$(api "$gateway/api/tasks/v1/tasks?limit=100" | jq '.items | length')
   check no_extra_tasks "$([ "$total" = 15 ] && echo 1 || echo 0)" "tasks=$total (expected 15): $(api "$gateway/api/tasks/v1/tasks?limit=100" | jq -c '[.items[].title]')"
