@@ -134,13 +134,13 @@ test.describe("Theme", () => {
     page,
   }) => {
     await page.setViewportSize({ width: 360, height: 780 });
-    for (const path of ["/", "/finance"]) {
+    for (const path of ["/", "/finance", "/food"]) {
       await page.goto(path);
       const mobileNav = page.getByRole("navigation", {
         name: "Mobile navigation",
       });
       await expect(mobileNav).toBeVisible();
-      await expect(mobileNav.getByRole("link")).toHaveCount(7);
+      await expect(mobileNav.getByRole("link")).toHaveCount(8);
       // Every label is shown in full, not cut off.
       const clipped = await mobileNav
         .locator("span")
