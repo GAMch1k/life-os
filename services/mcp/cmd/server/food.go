@@ -91,7 +91,52 @@ type pantryQuery struct {
 	Cursor             string `json:"cursor,omitempty" jsonschema:"The previous result's nextCursor, with the same filters"`
 }
 
+// recipeQuery finds recipes; every field is optional.
+type recipeQuery struct {
+	Q          string `json:"q,omitempty" jsonschema:"Words the recipe's title must all contain, also inside a word (bolo finds Pasta Bolognese)"`
+	Tag        string `json:"tag,omitempty" jsonschema:"Only recipes with this tag"`
+	Ingredient string `json:"ingredient,omitempty" jsonschema:"Only recipes with an ingredient whose name contains this, such as hack for Hackfleisch"`
+	Limit      int    `json:"limit,omitempty" jsonschema:"1 to 200 (default 100)"`
+	Cursor     string `json:"cursor,omitempty" jsonschema:"The previous result's nextCursor, with the same filters"`
+}
+
+// mealPlanning sets one slot of the meal plan to a recipe or free text.
+type mealPlanning struct {
+	IdempotencyKey string  `json:"idempotencyKey,omitempty"`
+	Date           string  `json:"date" jsonschema:"The owner's local date, YYYY-MM-DD"`
+	Slot           string  `json:"slot" jsonschema:"breakfast, lunch, or dinner"`
+	RecipeID       string  `json:"recipeId,omitempty" jsonschema:"A recipe UUID (from food_list_recipes); give this or text, not both"`
+	Text           string  `json:"text,omitempty" jsonschema:"The meal as free text, when no recipe is meant; give this or recipeId, not both"`
+	Servings       *int    `json:"servings,omitempty" jsonschema:"For how many people, 1 to 100"`
+	Note           *string `json:"note,omitempty" jsonschema:"A note about the meal"`
+}
+
+// mealSlot names one slot of the meal plan.
+type mealSlot struct {
+	IdempotencyKey string `json:"idempotencyKey,omitempty"`
+	Date           string `json:"date" jsonschema:"The owner's local date, YYYY-MM-DD"`
+	Slot           string `json:"slot" jsonschema:"breakfast, lunch, or dinner"`
+}
+
+// mealPlanRange is the dates a meal plan read covers.
+type mealPlanRange struct {
+	From string `json:"from" jsonschema:"The first date, YYYY-MM-DD"`
+	To   string `json:"to" jsonschema:"The last date, YYYY-MM-DD; at most 31 days in all"`
+}
+
+// missingIngredients puts the ingredients of recipes that are neither at
+// home nor already needed on the shopping list.
+type missingIngredients struct {
+	IdempotencyKey string   `json:"idempotencyKey,omitempty"`
+	RecipeIDs      []string `json:"recipeIds,omitempty" jsonschema:"Recipe UUIDs (from food_list_recipes), 1 to 50; or give from and to"`
+	From           string   `json:"from,omitempty" jsonschema:"With to: every recipe planned from this date, YYYY-MM-DD"`
+	To             string   `json:"to,omitempty" jsonschema:"With from: through this date, at most 31 days in all"`
+	DryRun         bool     `json:"dryRun,omitempty" jsonschema:"Only report what would happen; nothing changes"`
+}
+
 var (
+	// mealSlots are a day's meals, in the order the plan lists them.
+	mealSlots = []string{"breakfast", "lunch", "dinner"}
 	// foodAisles are the shopping list's sections, in the order it shows them.
 	foodAisles = []string{"produce", "bakery", "dairy", "meat_fish", "frozen", "pantry", "drinks", "snacks", "household", "drugstore", "other"}
 	// pantryLocations are where pantry items are kept.
@@ -102,9 +147,14 @@ var (
 	clearablePantryFields = map[string]bool{"amount": true, "expiresOn": true, "openedOn": true, "note": true}
 )
 
-// maxFoodItems is the most items one add or mark-bought call takes, as Food
-// takes in one request.
-const maxFoodItems = 50
+const (
+	// maxFoodItems is the most items one add or mark-bought call takes, as
+	// Food takes in one request; also the most recipes one missing
+	// ingredients call takes.
+	maxFoodItems = 50
+	// planDays is the longest date range the meal plan is read or used for.
+	planDays = 31
+)
 
 // addFoodTools registers the Food tools. Each is a Food API operation, the
 // same one the Dashboard uses; the shopping list's merge rule (one needed
@@ -172,6 +222,73 @@ func addFoodTools(s *mcp.Server, hc *http.Client, baseURL string, emitter *activ
 				return nil, Output{}, err
 			}
 			return post(ctx, hc, trace, baseURL, "/v1/pantry-items", body, in.IdempotencyKey)
+		})
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "food_list_recipes", Description: "Find recipes, by title: q keeps those whose title contains every word of it (also inside a word), tag those with the tag, ingredient those with an ingredient whose name contains it; limit and cursor page. Each recipe has its title, normalizedTitle, servings, ingredients, steps, and tags"}, func(ctx context.Context, req *mcp.CallToolRequest, in recipeQuery) (*mcp.CallToolResult, Output, error) {
+		values := url.Values{}
+		for name, value := range map[string]string{"q": in.Q, "tag": in.Tag, "ingredient": in.Ingredient} {
+			if value = strings.TrimSpace(value); value != "" {
+				values.Set(name, value)
+			}
+		}
+		if err := setPage(values, in.Limit, in.Cursor); err != nil {
+			return nil, Output{}, err
+		}
+		headers := http.Header{}
+		traceOf(req).Apply(headers)
+		return read(ctx, client, headers, "/v1/recipes?"+values.Encode())
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "food_list_meal_plan", Description: "List the meal plan from one date through another (YYYY-MM-DD, at most 31 days), by date, then slot (breakfast, lunch, dinner); empty slots are not listed. Each meal is a recipe (recipeId) or free text, with its title"}, func(ctx context.Context, req *mcp.CallToolRequest, in mealPlanRange) (*mcp.CallToolResult, Output, error) {
+		from, to, err := planRange(in.From, in.To)
+		if err != nil {
+			return nil, Output{}, err
+		}
+		headers := http.Header{}
+		traceOf(req).Apply(headers)
+		return read(ctx, client, headers, "/v1/meal-plan?"+url.Values{"from": {from}, "to": {to}}.Encode())
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "food_plan_meal", Description: "Plan a meal: set a day's breakfast, lunch, or dinner to a recipe (recipeId, from food_list_recipes) or to free text (text), exactly one, with optional servings and note. What the slot held is replaced"}, func(ctx context.Context, req *mcp.CallToolRequest, in mealPlanning) (*mcp.CallToolResult, Output, error) {
+		return audited(ctx, emitter, req, "food_plan_meal", in, func(trace activity.Trace) (*mcp.CallToolResult, Output, error) {
+			path, err := mealPath(in.Date, in.Slot)
+			if err != nil {
+				return nil, Output{}, err
+			}
+			body, err := mealBody(in)
+			if err != nil {
+				return nil, Output{}, err
+			}
+			return put(ctx, hc, trace, baseURL, path, body, in.IdempotencyKey)
+		})
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "food_clear_meal", Description: "Clear a day's breakfast, lunch, or dinner from the meal plan. A slot with nothing planned is left as it is (cleared: false), not an error"}, func(ctx context.Context, req *mcp.CallToolRequest, in mealSlot) (*mcp.CallToolResult, Output, error) {
+		return audited(ctx, emitter, req, "food_clear_meal", in, func(trace activity.Trace) (*mcp.CallToolResult, Output, error) {
+			path, err := mealPath(in.Date, in.Slot)
+			if err != nil {
+				return nil, Output{}, err
+			}
+			headers := http.Header{}
+			trace.Apply(headers)
+			if in.IdempotencyKey != "" {
+				headers.Set("Idempotency-Key", in.IdempotencyKey)
+			}
+			cleared := true
+			// Food answers 204 with no body, or 404 when nothing is planned.
+			if _, err := client.DoWithHeaders(ctx, http.MethodDelete, path, nil, headers); err != nil {
+				if !strings.Contains(err.Error(), "service returned 404") || !strings.Contains(err.Error(), "not_found") {
+					return nil, Output{}, err
+				}
+				cleared = false
+			}
+			return nil, Output{Data: map[string]any{"date": strings.TrimSpace(in.Date), "slot": strings.TrimSpace(in.Slot), "cleared": cleared}}, nil
+		})
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "food_add_missing_ingredients", Description: "Put the ingredients of recipes on the shopping list that are neither in stock in the pantry nor already needed: of the recipes given (recipeIds) or of every recipe planned from one date through another (from, to; at most 31 days). One line per ingredient name, the amounts joined. dryRun only reports. Returns each ingredient's status: added, merged, in_pantry, or on_list"}, func(ctx context.Context, req *mcp.CallToolRequest, in missingIngredients) (*mcp.CallToolResult, Output, error) {
+		return audited(ctx, emitter, req, "food_add_missing_ingredients", in, func(trace activity.Trace) (*mcp.CallToolResult, Output, error) {
+			body, err := missingIngredientsBody(in)
+			if err != nil {
+				return nil, Output{}, err
+			}
+			return post(ctx, hc, trace, baseURL, "/v1/shopping-items/from-recipes", body, in.IdempotencyKey)
 		})
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "food_update_pantry_item", Description: "Change one pantry item, by id (from food_list_pantry_items): state used_up or thrown_away ends it (it stays as history), in_stock puts it back; or, in a separate call, change its name, amount, location, expiresOn, openedOn, or note, and clear removes amount, expiresOn, openedOn, or note"}, func(ctx context.Context, req *mcp.CallToolRequest, in pantryMutation) (*mcp.CallToolResult, Output, error) {
@@ -466,6 +583,99 @@ func pantryUpdateBody(in pantryMutation) (map[string]any, error) {
 	}
 	if len(body) == 0 {
 		return nil, errors.New("nothing to change: give a state, or at least one field to set or clear")
+	}
+	return body, nil
+}
+
+// planRange checks a meal plan date range: ISO dates, to not before from,
+// at most planDays days in all.
+func planRange(from, to string) (string, string, error) {
+	from, to = strings.TrimSpace(from), strings.TrimSpace(to)
+	start, startErr := time.Parse(time.DateOnly, from)
+	end, endErr := time.Parse(time.DateOnly, to)
+	switch {
+	case startErr != nil || endErr != nil:
+		return "", "", errors.New("from and to must be dates such as 2026-10-12")
+	case end.Before(start):
+		return "", "", errors.New("to must not be before from")
+	case end.Sub(start) >= planDays*24*time.Hour:
+		return "", "", fmt.Errorf("the range must be at most %d days", planDays)
+	}
+	return from, to, nil
+}
+
+// mealPath is the Food path of one meal plan slot. The date must be a date
+// and the slot a slot, so a caller cannot reach another path.
+func mealPath(date, slot string) (string, error) {
+	date, slot = strings.TrimSpace(date), strings.TrimSpace(slot)
+	if _, err := time.Parse(time.DateOnly, date); err != nil {
+		return "", errors.New("date must be a date such as 2026-10-14")
+	}
+	if !slices.Contains(mealSlots, slot) {
+		return "", errors.New("slot must be breakfast, lunch, or dinner")
+	}
+	return "/v1/meal-plan/" + date + "/" + slot, nil
+}
+
+// mealBody is the Food body that sets a slot: a recipe or free text,
+// exactly one, with optional servings and note.
+func mealBody(in mealPlanning) (map[string]any, error) {
+	recipe, text := strings.TrimSpace(in.RecipeID), strings.TrimSpace(in.Text)
+	if (recipe == "") == (text == "") {
+		return nil, errors.New("give recipeId or text, exactly one")
+	}
+	body := map[string]any{}
+	if recipe != "" {
+		id, err := uuid.Parse(recipe)
+		if err != nil {
+			return nil, errors.New("recipeId must be a recipe UUID (from food_list_recipes); give a meal without one as text")
+		}
+		body["recipeId"] = id.String()
+	} else {
+		body["text"] = text
+	}
+	if in.Servings != nil {
+		if *in.Servings < 1 || *in.Servings > 100 {
+			return nil, errors.New("servings must be between 1 and 100")
+		}
+		body["servings"] = *in.Servings
+	}
+	setText(body, map[string]*string{"note": in.Note})
+	return body, nil
+}
+
+// missingIngredientsBody is the Food body for missing ingredients: recipe
+// ids (each once) or a date range, not both.
+func missingIngredientsBody(in missingIngredients) (map[string]any, error) {
+	ranged := strings.TrimSpace(in.From) != "" || strings.TrimSpace(in.To) != ""
+	if (len(in.RecipeIDs) > 0) == ranged {
+		return nil, errors.New("give recipeIds, or from and to, not both")
+	}
+	body := map[string]any{}
+	if ranged {
+		from, to, err := planRange(in.From, in.To)
+		if err != nil {
+			return nil, err
+		}
+		body["from"], body["to"] = from, to
+	} else {
+		if len(in.RecipeIDs) > maxFoodItems {
+			return nil, fmt.Errorf("recipeIds must list 1 to %d recipes", maxFoodItems)
+		}
+		ids := make([]string, 0, len(in.RecipeIDs))
+		for _, value := range in.RecipeIDs {
+			id, err := uuid.Parse(strings.TrimSpace(value))
+			if err != nil {
+				return nil, errors.New("recipeIds must be recipe UUIDs (from food_list_recipes)")
+			}
+			if !slices.Contains(ids, id.String()) {
+				ids = append(ids, id.String())
+			}
+		}
+		body["recipeIds"] = ids
+	}
+	if in.DryRun {
+		body["dryRun"] = true
 	}
 	return body, nil
 }

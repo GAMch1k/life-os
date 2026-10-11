@@ -28,6 +28,22 @@ const (
 // item.
 func foodSession(t *testing.T) (*mcp.ClientSession, *[]calendarRequest) {
 	t.Helper()
+	return foodSessionWith(t, func(r *http.Request) (int, string) {
+		switch {
+		case r.URL.Path == "/v1/stores":
+			return http.StatusOK, `{"items":[{"id":"` + storeUUID + `","name":"Lidl"}]}`
+		case r.Method == http.MethodGet:
+			return http.StatusOK, `{"items":[]}`
+		default:
+			return http.StatusOK, `{"id":"` + strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/shopping-items/"), "/bought") + `","state":"bought"}`
+		}
+	})
+}
+
+// foodSessionWith is foodSession with the fake Food API's answers chosen by
+// respond.
+func foodSessionWith(t *testing.T, respond func(*http.Request) (int, string)) (*mcp.ClientSession, *[]calendarRequest) {
+	t.Helper()
 	requests := &[]calendarRequest{}
 	food := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
@@ -36,14 +52,9 @@ func foodSession(t *testing.T) (*mcp.ClientSession, *[]calendarRequest) {
 			_ = json.Unmarshal(raw, &request.Body)
 		}
 		*requests = append(*requests, request)
-		switch {
-		case r.URL.Path == "/v1/stores":
-			_, _ = w.Write([]byte(`{"items":[{"id":"` + storeUUID + `","name":"Lidl"}]}`))
-		case r.Method == http.MethodGet:
-			_, _ = w.Write([]byte(`{"items":[]}`))
-		default:
-			_, _ = w.Write([]byte(`{"id":"` + strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/shopping-items/"), "/bought") + `","state":"bought"}`))
-		}
+		status, body := respond(r)
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(body))
 	}))
 	t.Cleanup(food.Close)
 	server := mcp.NewServer(&mcp.Implementation{Name: "life-os-test", Version: "0"}, nil)
@@ -262,5 +273,135 @@ func TestPantryListBuildsAFilteredQuery(t *testing.T) {
 	}
 	if len(*requests) != 1 {
 		t.Fatalf("refused lists reached Food: %d", len(*requests))
+	}
+}
+
+const recipeUUID = "4d5e6f7a-8b9c-4d4e-9f5a-6b7c8d9e0f1a"
+
+func TestRecipesAreFoundByTitleTagOrIngredient(t *testing.T) {
+	session, requests := foodSession(t)
+	if result := callTool(t, session, "food_list_recipes", map[string]any{"q": " bolognese ", "ingredient": "hack", "limit": 20}); result.IsError {
+		t.Fatalf("list failed: %s", resultText(result))
+	}
+	got := (*requests)[0]
+	query, _ := url.ParseQuery(got.Query)
+	if got.Path != "/v1/recipes" || query.Get("q") != "bolognese" || query.Get("ingredient") != "hack" || query.Get("limit") != "20" || query.Has("tag") {
+		t.Fatalf("Food saw %+v", got)
+	}
+	if result := callTool(t, session, "food_list_recipes", map[string]any{"limit": 201}); !result.IsError || len(*requests) != 1 {
+		t.Fatalf("a limit of 201 was accepted: %s", resultText(result))
+	}
+}
+
+func TestPlanMealSetsTheSlotToARecipeOrText(t *testing.T) {
+	session, requests := foodSession(t)
+	if result := callTool(t, session, "food_plan_meal", map[string]any{"idempotencyKey": "food-5", "date": "2026-10-14", "slot": "dinner", "recipeId": recipeUUID, "servings": 4}); result.IsError {
+		t.Fatalf("plan failed: %s", resultText(result))
+	}
+	if result := callTool(t, session, "food_plan_meal", map[string]any{"date": "2026-10-16", "slot": "lunch", "text": " суп ", "note": "with bread"}); result.IsError {
+		t.Fatalf("plan failed: %s", resultText(result))
+	}
+	recipe, text := (*requests)[0], (*requests)[1]
+	if recipe.Method != http.MethodPut || recipe.Path != "/v1/meal-plan/2026-10-14/dinner" || recipe.Idempotency != "food-5" || recipe.Actor != "agent:mcp" ||
+		!reflect.DeepEqual(recipe.Body, map[string]any{"recipeId": recipeUUID, "servings": 4.0}) {
+		t.Fatalf("recipe plan = %+v %s", recipe, recipe.RawBody)
+	}
+	if text.Path != "/v1/meal-plan/2026-10-16/lunch" || !reflect.DeepEqual(text.Body, map[string]any{"text": "суп", "note": "with bread"}) {
+		t.Fatalf("text plan = %+v %s", text, text.RawBody)
+	}
+	for name, arguments := range map[string]map[string]any{
+		"both":         {"date": "2026-10-14", "slot": "dinner", "recipeId": recipeUUID, "text": "Pasta"},
+		"neither":      {"date": "2026-10-14", "slot": "dinner"},
+		"recipe title": {"date": "2026-10-14", "slot": "dinner", "recipeId": "Pasta Bolognese"},
+		"bad slot":     {"date": "2026-10-14", "slot": "supper", "text": "Pasta"},
+		"bad date":     {"date": "Wednesday", "slot": "dinner", "text": "Pasta"},
+		"a path":       {"date": "2026-10-14/../x", "slot": "dinner", "text": "Pasta"},
+		"servings":     {"date": "2026-10-14", "slot": "dinner", "text": "Pasta", "servings": 0},
+	} {
+		if result := callTool(t, session, "food_plan_meal", arguments); !result.IsError {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+	if len(*requests) != 2 {
+		t.Fatalf("refused plans reached Food: %d requests", len(*requests))
+	}
+}
+
+func TestClearingAnEmptySlotIsNotAnError(t *testing.T) {
+	session, requests := foodSessionWith(t, func(r *http.Request) (int, string) {
+		if strings.HasSuffix(r.URL.Path, "/lunch") {
+			return http.StatusNotFound, `{"error":{"code":"not_found","message":"Nothing is planned there"},"request_id":"r"}`
+		}
+		if strings.HasSuffix(r.URL.Path, "/breakfast") {
+			return http.StatusBadGateway, `{"error":{"code":"unavailable","message":"down"},"request_id":"r"}`
+		}
+		return http.StatusNoContent, ""
+	})
+	result := callTool(t, session, "food_clear_meal", map[string]any{"idempotencyKey": "food-6", "date": "2026-10-17", "slot": "dinner"})
+	if result.IsError || !strings.Contains(resultText(result), `"cleared":true`) {
+		t.Fatalf("clear = %s", resultText(result))
+	}
+	if got := (*requests)[0]; got.Method != http.MethodDelete || got.Path != "/v1/meal-plan/2026-10-17/dinner" || got.Idempotency != "food-6" {
+		t.Fatalf("Food saw %+v", got)
+	}
+	if result := callTool(t, session, "food_clear_meal", map[string]any{"date": "2026-10-17", "slot": "lunch"}); result.IsError || !strings.Contains(resultText(result), `"cleared":false`) {
+		t.Fatalf("empty slot = %s", resultText(result))
+	}
+	if result := callTool(t, session, "food_clear_meal", map[string]any{"date": "2026-10-17", "slot": "breakfast"}); !result.IsError {
+		t.Fatalf("an unavailable Food was a success: %s", resultText(result))
+	}
+	if result := callTool(t, session, "food_clear_meal", map[string]any{"date": "2026-10-17", "slot": "snack"}); !result.IsError || len(*requests) != 3 {
+		t.Fatalf("a bad slot was accepted: %s", resultText(result))
+	}
+}
+
+func TestMealPlanReadsAtMost31Days(t *testing.T) {
+	session, requests := foodSession(t)
+	if result := callTool(t, session, "food_list_meal_plan", map[string]any{"from": "2026-10-01", "to": "2026-10-31"}); result.IsError {
+		t.Fatalf("list failed: %s", resultText(result))
+	}
+	if got := (*requests)[0]; got.Path != "/v1/meal-plan" || got.Query != "from=2026-10-01&to=2026-10-31" {
+		t.Fatalf("Food saw %+v", got)
+	}
+	for name, arguments := range map[string]map[string]any{
+		"32 days": {"from": "2026-10-01", "to": "2026-11-01"}, "backwards": {"from": "2026-10-12", "to": "2026-10-11"}, "words": {"from": "today", "to": "Sunday"},
+	} {
+		if result := callTool(t, session, "food_list_meal_plan", arguments); !result.IsError {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+	if len(*requests) != 1 {
+		t.Fatalf("refused reads reached Food: %d", len(*requests))
+	}
+}
+
+func TestMissingIngredientsComeFromRecipesOrAWeek(t *testing.T) {
+	session, requests := foodSession(t)
+	if result := callTool(t, session, "food_add_missing_ingredients", map[string]any{"idempotencyKey": "food-7", "recipeIds": []any{recipeUUID, strings.ToUpper(recipeUUID)}}); result.IsError {
+		t.Fatalf("add failed: %s", resultText(result))
+	}
+	if result := callTool(t, session, "food_add_missing_ingredients", map[string]any{"from": "2026-10-12", "to": "2026-10-18", "dryRun": true}); result.IsError {
+		t.Fatalf("dry run failed: %s", resultText(result))
+	}
+	recipes, week := (*requests)[0], (*requests)[1]
+	if recipes.Method != http.MethodPost || recipes.Path != "/v1/shopping-items/from-recipes" || recipes.Idempotency != "food-7" || !reflect.DeepEqual(recipes.Body, map[string]any{"recipeIds": []any{recipeUUID}}) {
+		t.Fatalf("recipes = %+v %s", recipes, recipes.RawBody)
+	}
+	if !reflect.DeepEqual(week.Body, map[string]any{"from": "2026-10-12", "to": "2026-10-18", "dryRun": true}) {
+		t.Fatalf("week = %s", week.RawBody)
+	}
+	for name, arguments := range map[string]map[string]any{
+		"neither":     {},
+		"both":        {"recipeIds": []any{recipeUUID}, "from": "2026-10-12", "to": "2026-10-18"},
+		"half range":  {"from": "2026-10-12"},
+		"long range":  {"from": "2026-10-01", "to": "2026-11-15"},
+		"recipe name": {"recipeIds": []any{"Pasta Bolognese"}},
+	} {
+		if result := callTool(t, session, "food_add_missing_ingredients", arguments); !result.IsError {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+	if len(*requests) != 2 {
+		t.Fatalf("refused calls reached Food: %d", len(*requests))
 	}
 }
