@@ -78,6 +78,20 @@ services:
   # owner's backup directory.
   backup:
     image: lifeos-backup:latest
+  # Never the host: a made-up one (HOST_HEALTH_FIXTURE, healthy unless a test
+  # picks low-memory), without the binds of / and the Docker root, and without
+  # the docker gateway, which would hold the host's Docker socket.
+  # tools/verify-compose refuses a plan that mounts any of them.
+  host-health:
+    image: lifeos-host-health:latest
+    environment:
+      HOST_HEALTH_FIXTURE: "${LIFE_OS_VERIFY_HOST_HEALTH_FIXTURE:-healthy}"
+      HOST_HEALTH_DOCKER_URL: ""
+    volumes: !reset []
+  host-health-docker:
+    image: lifeos-host-health-docker:latest
+    profiles: [host-docker]
+    volumes: !reset []
   mcp:
     image: lifeos-mcp:latest
   processor:
@@ -104,6 +118,8 @@ networks:
     ipam:
       config: !override
         - subnet: 10.255.249.24/29
+  host-docker:
+    name: lifeos-verify-host-docker
   notify-internal:
     name: lifeos-verify-notify-internal
     ipam:

@@ -1,0 +1,193 @@
+openapi: 3.0.3
+info:
+  title: Life OS Host Health API
+  version: 1.0.0
+  description: >-
+    The server Life OS runs on, as the Status page's Server check sees it:
+    its memory, load, disks, uptime, and every container on it (all compose
+    projects, not only Life OS), sampled once a minute, with the findings
+    that need attention and the last 24 hours of samples. The service only
+    reads: /proc, statfs on read-only bind mounts, and the containers
+    through a read-only Docker gateway that answers three fixed questions.
+    It has no writes, no database, and no gateway route; the Dashboard
+    reads it on the private network.
+
+
+    Errors use the shared envelope `{"error": {"code", "message"},
+    "request_id"}`: `bad_request` (400), `not_ready` (503, nothing has been
+    sampled yet), and `internal_error` (500).
+  license: {name: UNLICENSED, url: https://life-os.local/license}
+servers: [{url: http://host-health:8080}]
+paths:
+  /v1/status:
+    get:
+      summary: Get the host's state now
+      description: >-
+        The latest sample (at most a minute old): memory, load and CPUs,
+        uptime, each filesystem's space, the containers with their state,
+        health, deaths within the restart-loop window and memory, the
+        thresholds, and the findings, problems first.
+      operationId: getHostStatus
+      security: []
+      responses:
+        '200': {description: The host now, content: {application/json: {schema: {$ref: '#/components/schemas/HostStatus'}}}}
+        '400': {description: Invalid request, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '503': {description: Nothing has been sampled yet (not_ready), content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  /v1/history:
+    get:
+      summary: Get the host's recent samples
+      description: >-
+        The samples of the last `hours` hours, oldest first, one a minute.
+        They live in memory: after a restart the history starts again.
+      operationId: getHostHistory
+      security: []
+      parameters:
+        - {name: hours, in: query, schema: {type: integer, minimum: 1, maximum: 24, default: 24}}
+      responses:
+        '200': {description: Samples, content: {application/json: {schema: {$ref: '#/components/schemas/HostHistory'}}}}
+        '400': {description: 'Invalid request, such as hours out of range (bad_request)', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+components:
+  schemas:
+    HostMemory:
+      type: object
+      required: [totalBytes, availableBytes, availablePercent]
+      properties:
+        totalBytes: {type: integer, format: int64, minimum: 0}
+        availableBytes: {type: integer, format: int64, minimum: 0, description: 'MemAvailable: what can be used without swapping, page cache included.'}
+        availablePercent: {type: number, format: double, minimum: 0}
+    HostLoad:
+      type: object
+      required: [one, five, fifteen, cpus]
+      properties:
+        one: {type: number, format: double, minimum: 0, description: Load average over 1 minute.}
+        five: {type: number, format: double, minimum: 0}
+        fifteen: {type: number, format: double, minimum: 0}
+        cpus: {type: integer, minimum: 1, description: The host's CPUs.}
+    HostDisk:
+      type: object
+      description: One filesystem, reported once however many of the configured paths are on it.
+      required: [label, totalBytes, freeBytes, freePercent]
+      properties:
+        label: {type: string, description: 'Such as root or docker.'}
+        totalBytes: {type: integer, format: int64, minimum: 0}
+        freeBytes: {type: integer, format: int64, minimum: 0, description: 'What an unprivileged user may still write (df''s Avail).'}
+        freePercent: {type: number, format: double, minimum: 0}
+    HostContainer:
+      type: object
+      required: [name, image, state, recentDeaths]
+      properties:
+        name: {type: string}
+        project: {type: string, description: The compose project it belongs to.}
+        service: {type: string, description: Its compose service.}
+        image: {type: string}
+        state: {type: string, description: 'Docker''s: created, running, paused, restarting, removing, exited, or dead.'}
+        health: {type: string, enum: [healthy, unhealthy, starting], description: Absent without a health check.}
+        recentDeaths: {type: integer, minimum: 0, description: How often it died within the restart-loop window.}
+        unhealthySince: {type: string, format: date-time, description: When it turned unhealthy; absent while it is not.}
+        memoryBytes: {type: integer, format: int64, minimum: 0, description: 'Its memory in use, as docker stats shows it; absent when not read.'}
+    HostMemoryUser:
+      type: object
+      required: [name, memoryBytes]
+      properties:
+        name: {type: string}
+        project: {type: string}
+        memoryBytes: {type: integer, format: int64, minimum: 0}
+    HostContainers:
+      type: object
+      required: [available, total, running, unhealthy, restarting, items, top]
+      properties:
+        available: {type: boolean, description: False when the Docker gateway is not set up or could not be read.}
+        error: {type: string, description: Why the containers are not available.}
+        total: {type: integer, minimum: 0}
+        running: {type: integer, minimum: 0}
+        unhealthy: {type: integer, minimum: 0}
+        restarting: {type: integer, minimum: 0}
+        memorySampledAt: {type: string, format: date-time, description: When the containers' memory was read.}
+        items: {type: array, items: {$ref: '#/components/schemas/HostContainer'}}
+        top: {type: array, items: {$ref: '#/components/schemas/HostMemoryUser'}, description: 'The containers using the most memory, biggest first (up to 5).'}
+    HostThresholds:
+      type: object
+      required: [memoryWarningPercent, memoryWarningSamples, memoryProblemPercent, diskWarningBytes, diskWarningPercent, diskProblemBytes, loadWarningPerCpu, restartLoopCount, restartLoopMinutes, unhealthyMinutes]
+      properties:
+        memoryWarningPercent: {type: number, format: double, description: Memory available below this for memoryWarningSamples samples in a row is a warning.}
+        memoryWarningSamples: {type: integer}
+        memoryProblemPercent: {type: number, format: double, description: Memory available below this is a problem.}
+        diskWarningBytes: {type: integer, format: int64, description: A disk with less free is a warning…}
+        diskWarningPercent: {type: number, format: double, description: …as is one with less than this share free.}
+        diskProblemBytes: {type: integer, format: int64, description: A disk with less free is a problem.}
+        loadWarningPerCpu: {type: number, format: double, description: A 15-minute load above the CPUs times this is a warning.}
+        restartLoopCount: {type: integer, description: A container that died this often within restartLoopMinutes is restarting in a loop.}
+        restartLoopMinutes: {type: integer}
+        unhealthyMinutes: {type: integer, description: A container unhealthy this long is a warning.}
+    HostFinding:
+      type: object
+      description: >-
+        One thing that needs attention. Which fields are set depends on the
+        kind: memory_low (availableBytes, totalBytes, minutes held),
+        disk_low (subject is the disk's label, availableBytes, totalBytes),
+        load_high (load is the 15-minute load, cpus), container_restarting
+        (subject, project, count deaths within minutes), container_unhealthy
+        (subject, project, minutes unhealthy), containers_unavailable
+        (error).
+      required: [kind, severity]
+      properties:
+        kind: {type: string, enum: [memory_low, disk_low, load_high, container_restarting, container_unhealthy, containers_unavailable]}
+        severity: {type: string, enum: [warning, problem]}
+        subject: {type: string}
+        project: {type: string}
+        availableBytes: {type: integer, format: int64, minimum: 0}
+        totalBytes: {type: integer, format: int64, minimum: 0}
+        minutes: {type: integer, minimum: 0}
+        count: {type: integer, minimum: 0}
+        load: {type: number, format: double, minimum: 0}
+        cpus: {type: integer, minimum: 0}
+        error: {type: string}
+    HostStatus:
+      type: object
+      required: [sampledAt, mode, memory, load, uptimeSeconds, disks, containers, thresholds, findings]
+      properties:
+        sampledAt: {type: string, format: date-time}
+        mode: {type: string, enum: [host, fixture], description: 'fixture: a made-up host, on the verification stack.'}
+        memory: {$ref: '#/components/schemas/HostMemory'}
+        load: {$ref: '#/components/schemas/HostLoad'}
+        uptimeSeconds: {type: integer, format: int64, minimum: 0}
+        disks: {type: array, items: {$ref: '#/components/schemas/HostDisk'}}
+        diskErrors: {type: array, items: {type: string}, description: Configured disks that could not be read.}
+        containers: {$ref: '#/components/schemas/HostContainers'}
+        thresholds: {$ref: '#/components/schemas/HostThresholds'}
+        findings: {type: array, items: {$ref: '#/components/schemas/HostFinding'}, description: 'Problems first, then warnings; empty when all is well.'}
+    HostSample:
+      type: object
+      required: [at, memoryAvailableBytes, memoryTotalBytes, load1, load5, load15, disks]
+      properties:
+        at: {type: string, format: date-time}
+        memoryAvailableBytes: {type: integer, format: int64, minimum: 0}
+        memoryTotalBytes: {type: integer, format: int64, minimum: 0}
+        load1: {type: number, format: double, minimum: 0}
+        load5: {type: number, format: double, minimum: 0}
+        load15: {type: number, format: double, minimum: 0}
+        disks:
+          type: array
+          items:
+            type: object
+            required: [label, freeBytes]
+            properties:
+              label: {type: string}
+              freeBytes: {type: integer, format: int64, minimum: 0}
+    HostHistory:
+      type: object
+      required: [intervalSeconds, samples]
+      properties:
+        intervalSeconds: {type: integer, minimum: 1, description: The time between two samples.}
+        samples: {type: array, items: {$ref: '#/components/schemas/HostSample'}}
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: {type: string, description: 'Machine-readable code, such as bad_request or not_ready.'}
+            message: {type: string}
+        request_id: {type: string}

@@ -272,6 +272,7 @@ services:
       GOOGLE_CALENDAR_SERVICE_URL: http://google-calendar:8080
       FOOD_SERVICE_URL: http://food:8080
       BACKUP_SERVICE_URL: http://backup:8080
+      HOST_HEALTH_SERVICE_URL: http://host-health:8080
       LIFE_OS_TIMEZONE: ${LIFE_OS_TIMEZONE:-UTC}
     expose: ["3000"]
     depends_on:
@@ -345,6 +346,75 @@ services:
     restart: unless-stopped
     # Room to stop a run in progress, remove its files, and record it.
     stop_grace_period: 30s
+
+  # How the server is doing, for the Status page's Server check
+  # (docs/services/host-health.md): memory, load, disks, and every container
+  # on the host, sampled each minute. It only reads: its own /proc (Docker
+  # does not namespace meminfo, loadavg, uptime, or stat, so they are the
+  # host's), statfs on read-only, non-recursive binds of / and the Docker data
+  # root (as nobody, so it can open only what any unprivileged user could, and
+  # nothing of the root directory's other mounts), and the containers through
+  # host-health-docker. No gateway route; the Dashboard reads it here.
+  host-health:
+    build: {context: ., dockerfile: services/host-health/Dockerfile}
+    environment:
+      SERVICE_NAME: host-health
+      PORT: 8080
+      HOST_HEALTH_DISKS: root=/host,docker=/host-docker
+      HOST_HEALTH_DOCKER_URL: http://host-health-docker:8080
+      HOST_HEALTH_MEMORY_WARNING_PERCENT: "${LIFE_OS_HOST_HEALTH_MEMORY_WARNING_PERCENT:-15}"
+      HOST_HEALTH_MEMORY_WARNING_SAMPLES: "${LIFE_OS_HOST_HEALTH_MEMORY_WARNING_SAMPLES:-3}"
+      HOST_HEALTH_MEMORY_PROBLEM_PERCENT: "${LIFE_OS_HOST_HEALTH_MEMORY_PROBLEM_PERCENT:-7}"
+      HOST_HEALTH_DISK_WARNING_GIB: "${LIFE_OS_HOST_HEALTH_DISK_WARNING_GIB:-10}"
+      HOST_HEALTH_DISK_WARNING_PERCENT: "${LIFE_OS_HOST_HEALTH_DISK_WARNING_PERCENT:-10}"
+      HOST_HEALTH_DISK_PROBLEM_GIB: "${LIFE_OS_HOST_HEALTH_DISK_PROBLEM_GIB:-3}"
+      HOST_HEALTH_LOAD_WARNING_PER_CPU: "${LIFE_OS_HOST_HEALTH_LOAD_WARNING_PER_CPU:-1}"
+      HOST_HEALTH_RESTART_LOOP_COUNT: "${LIFE_OS_HOST_HEALTH_RESTART_LOOP_COUNT:-3}"
+      HOST_HEALTH_RESTART_LOOP_MINUTES: "${LIFE_OS_HOST_HEALTH_RESTART_LOOP_MINUTES:-15}"
+      HOST_HEALTH_UNHEALTHY_MINUTES: "${LIFE_OS_HOST_HEALTH_UNHEALTHY_MINUTES:-5}"
+    volumes:
+      - type: bind
+        source: /
+        target: /host
+        read_only: true
+        bind: {recursive: disabled}
+      - type: bind
+        source: "${LIFE_OS_DOCKER_ROOT:-/var/lib/docker}"
+        target: /host-docker
+        read_only: true
+        bind: {recursive: disabled}
+    user: "65534:65534"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    expose: ["8080"]
+    networks: [backend, host-docker]
+    restart: unless-stopped
+
+  # The read-only docker gateway (docs/services/host-health.md#the-docker-gateway):
+  # the only container that opens the Docker socket. It answers host-health's
+  # three fixed questions (the containers; their die, start, and health
+  # events; one container's memory) with fixed requests of its own and
+  # re-encodes only what host-health needs: no inspect (every container's
+  # environment), logs, files, exec, or writes. The socket's :ro does not
+  # limit the API; the gateway does. It runs as nobody in the socket's group
+  # (LIFE_OS_DOCKER_GID), on an internal network shared with host-health only.
+  host-health-docker:
+    build: {context: ., dockerfile: services/host-health/Dockerfile}
+    entrypoint: ["/service", "docker-gateway"]
+    environment: {PORT: 8080, DOCKER_GATEWAY_SOCKET: /var/run/docker.sock}
+    volumes:
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+        read_only: true
+    user: "65534:${LIFE_OS_DOCKER_GID:-999}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    expose: ["8080"]
+    networks: [host-docker]
+    restart: unless-stopped
 
   mcp:
     build: {context: ., dockerfile: services/mcp/Dockerfile, target: service}
@@ -600,6 +670,13 @@ networks:
     ipam:
       config:
         - subnet: 10.255.249.32/29
+
+  # host-health and its docker gateway only. Internal: the gateway, which
+  # holds the Docker socket, reaches nothing else and nothing else reaches it.
+  host-docker:
+    name: lifeos-host-docker
+    driver: bridge
+    internal: true
 
 volumes:
   postgres-data:

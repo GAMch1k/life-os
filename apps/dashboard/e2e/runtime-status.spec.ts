@@ -32,6 +32,19 @@ function compose(...args: string[]) {
   });
 }
 
+/** Starts host-health again reporting a made-up host (its fixture). */
+function hostHealthFixture(fixture: "healthy" | "low-memory") {
+  execFileSync(
+    "./tools/verify-compose",
+    ["up", "--detach", "--no-build", "--no-deps", "host-health"],
+    {
+      cwd: repoRoot,
+      stdio: "ignore",
+      env: { ...process.env, LIFE_OS_VERIFY_HOST_HEALTH_FIXTURE: fixture },
+    },
+  );
+}
+
 async function expectCheck(
   page: Page,
   check: string,
@@ -234,6 +247,39 @@ test.describe("Runtime status under forced problems", () => {
       compose("start", "tasks");
     }
     await expectCheck(page, "Services", "All services are ready.");
+  });
+
+  test("low memory on the server is a problem naming the biggest users", async ({
+    page,
+  }) => {
+    hostHealthFixture("low-memory");
+    try {
+      await expectCheck(
+        page,
+        "Server",
+        /Memory is very low: 520 MiB available of 7\.7 GiB\. Biggest: lifeos-whisper-1 1\.9 GiB, homeassistant 600 MiB/,
+      );
+      await expect(page.getByRole("region", { name: "Server" })).toContainText(
+        "docker stats shows which containers use the most",
+      );
+      await expectHomeAlert(page, /Memory is very low/);
+    } finally {
+      hostHealthFixture("healthy");
+    }
+    await expectCheck(page, "Server", /Running normally/);
+  });
+
+  test("a stopped host-health is one alert, under Services", async ({
+    page,
+  }) => {
+    compose("stop", "host-health");
+    try {
+      await expectCheck(page, "Services", "Host health is not ready.");
+      await expect(page.getByRole("region", { name: "Server" })).toHaveCount(0);
+    } finally {
+      compose("start", "host-health");
+    }
+    await expectCheck(page, "Server", /Running normally/);
   });
 
   test("a stopped backup service is one alert, under Services", async ({
@@ -465,6 +511,57 @@ test.describe("Reminder delivery on Status", () => {
   });
 });
 
+test.describe("Server on Status", () => {
+  test.skip(
+    !process.env.LIFE_OS_E2E_URL,
+    "set LIFE_OS_E2E_URL to run against the isolated stack",
+  );
+
+  // The verification stack's host-health reports a made-up server
+  // (HOST_HEALTH_FIXTURE=healthy), never the host it runs on.
+  test("the Server card shows the made-up server, with a day of memory", async ({
+    page,
+  }) => {
+    await page.goto("/status");
+    const card = page.getByRole("region", { name: "Server" });
+    await expect(card).toContainText("OK");
+    await expect(card).toContainText(
+      /Running normally: [\d.]+ GiB of memory available, a 15-minute load of 1\.3 on 6 CPUs\./,
+    );
+    await expect(card).toContainText(
+      "Sourcea made-up server (HOST_HEALTH_FIXTURE)",
+    );
+    await expect(card).toContainText("Disk root125 GiB free of 232 GiB (54%)");
+    await expect(card).toContainText(
+      "Containers5 running, 0 unhealthy, 0 restarting (6 in all)",
+    );
+    await expect(card).toContainText(
+      "Most memorylifeos-whisper-1 1.9 GiB, homeassistant 600 MiB, n8n 420 MiB",
+    );
+    await expect(card).toContainText("Up for12 days");
+
+    // The sparkline: a caption that needs no hovering, and a tooltip that
+    // follows the pointer and the arrow keys.
+    const chart = card.getByRole("img", {
+      name: "Memory available, last 24 h",
+    });
+    await expect(card.locator("figcaption")).toHaveText(
+      /^Memory available, last 24 h: lowest [\d.]+ GiB at \d\d:\d\d, now [\d.]+ GiB; warning below 1\.2 GiB\.$/,
+    );
+    await chart.hover({ position: { x: 10, y: 20 } });
+    await expect(card.getByRole("tooltip")).toHaveText(
+      /^[\d.]+ GiB \d\d:\d\d$/,
+    );
+    await page.mouse.move(0, 0);
+    await expect(card.getByRole("tooltip")).toHaveCount(0);
+    await chart.focus();
+    await expect(card.getByRole("tooltip")).toBeVisible();
+    await page.keyboard.press("ArrowLeft");
+    await page.keyboard.press("Escape");
+    await expect(card.getByRole("tooltip")).toHaveCount(0);
+  });
+});
+
 test.describe("Backups on Status", () => {
   test.skip(
     !process.env.LIFE_OS_E2E_URL,
@@ -517,6 +614,7 @@ test.describe("Status card layout", () => {
     "Notifications",
     "Bank connection",
     "Backups",
+    "Server",
     "Services",
   ];
 

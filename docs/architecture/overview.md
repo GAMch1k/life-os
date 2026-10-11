@@ -26,6 +26,8 @@ flowchart LR
   Monitor -- notify --> Notifications
   Backup -- "pg_dump, read-only role" --> PG[(every service database)]
   Backup --> BDir[(host backup directory)]
+  Dashboard -- "GET /v1/status" --> HostHealth[host-health]
+  HostHealth -- "3 fixed GETs" --> DockerGW[host-health-docker] --> DockerSock[(Docker socket)]
   Voice -. record .-> Activity
   Inbox -. record .-> Activity
   Tasks -. record .-> Activity
@@ -57,3 +59,5 @@ Banking is an integration service: it owns everything bank-side (the Enable Bank
 The monitor is a small internal service without a database or a gateway route. Once a minute it reads the Dashboard's runtime status (`GET /api/status`, the checks the Status page renders) and notifies the owner through Notifications when a check breaks or recovers. The rules that make something a problem therefore exist once, in the Dashboard. See [Monitor](../services/monitor.md).
 
 The backup service is the one component that reads every database, and it only reads: once a night it dumps each database in the registry with `pg_dump` as `lifeos_backup`, a role that can read every table but change nothing, from one consistent snapshot per database, into a directory on the host, and rotates old runs. It has no database of its own and no gateway route. See [Backup](../services/backup.md).
+
+host-health reports the server itself to the Status page: memory, load, disks, and every container on the host, from all compose projects. It only reads, from its own `/proc` and statfs on read-only binds, and it reaches the containers through `host-health-docker`, the one container that mounts the Docker socket and answers three fixed questions, so no other Life OS component can read container environments, logs, or files. See [Host health](../services/host-health.md).
