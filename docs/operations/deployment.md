@@ -16,6 +16,19 @@ Life OS supports loopback gateway behind host Nginx TLS/Basic Auth, or a WireGua
 
 `banking_db` is provisioned like `notifications_db`: add `LIFE_OS_BANKING_DB_PASSWORD` to `.env`, recreate the PostgreSQL container (`docker compose up --detach postgres`), and run `make db-provision` once. Then start `banking-migrate` and `banking` before the gateway, which routes `/api/integrations/banking/` and waits for the service. Without the Enable Banking settings Banking runs and reports "not configured"; setting them up (application id, the key file bind-mounted read-only, `LIFE_OS_BANKING_TOKEN_KEY`, `LIFE_OS_BANKING_RUNTIME_UID`), connecting, reconnecting, and revoking are in [Bank connection](banking.md). The verification stack never receives these settings.
 
+## Adding the Food service
+
+[Food](../services/food.md) (P15-01) owns `food_db`. A fresh PostgreSQL volume provisions it; on an existing host, add `LIFE_OS_FOOD_DB_PASSWORD` to `.env` and provision it once (idempotent). PostgreSQL keeps the environment it was created with, so either recreate it (`docker compose up --detach postgres`) and run `make db-provision`, or, without restarting it, pass the new password and read the registry from the directory mount, which sees the updated `infra/postgres/service-databases.conf`:
+
+```sh
+docker compose exec -T \
+  -e LIFE_OS_FOOD_DB_PASSWORD="$(sed -n 's/^LIFE_OS_FOOD_DB_PASSWORD=//p' .env)" \
+  -e LIFE_OS_DATABASE_CONFIG=/opt/lifeos/postgres/service-databases.conf \
+  postgres /docker-entrypoint-initdb.d/10-provision-service-databases.sh
+```
+
+Then build and start `food-migrate` and `food` before the Dashboard and the gateway: the gateway routes `/api/food/` and waits for the service, and the Dashboard's Status page probes Food's `/ready`, so a Dashboard deployed first reports Food as unavailable (and the monitor notifies) until it runs. Food has no settings of its own beyond `LIFE_OS_TIMEZONE`.
+
 ## Phone notifications (ntfy)
 
 Optional. The `ntfy` container (Compose profile `ntfy`) pushes notifications to the owner's Android phone; the Notifications service publishes to it when `LIFE_OS_NOTIFICATIONS_CHANNELS=ntfy`. It shares `notify-edge` with the Cloudflare connector only and the internal `notify-internal` with the Notifications service only, and is reached publicly at `https://ntfy.gamch1k.com` through the tunnel without Access and protected by ntfy's own deny-all accounts. Generating the `.env` values (`LIFE_OS_NTFY_PUBLISHER_TOKEN` and the two bcrypt hashes, in single quotes), the deploy order (ntfy, then notifications, dashboard, and cloudflared, then the gateway), the checks (`tools/check-ingress`, `tools/check-cloudflare-access`, `tools/check-ntfy-route`), the phone setup, rotation, and troubleshooting are in [ntfy](ntfy.md). The verification stack never receives these settings.

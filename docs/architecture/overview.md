@@ -1,6 +1,6 @@
 # Architecture overview
 
-Life OS separates domain ownership from presentation. Finance, Tasks, Inbox, Calendar, and Voice are independently deployable Go + Fiber services; each owns its OpenAPI contract, migrations, sqlc queries, database, credentials, and domain types. Services never read each other's tables. Shared `pkg/` code is infrastructure only: configuration, database/runtime helpers, request IDs, logging, errors, health/readiness, and graceful shutdown.
+Life OS separates domain ownership from presentation. Finance, Tasks, Inbox, Calendar, Food, and Voice are independently deployable Go + Fiber services; each owns its OpenAPI contract, migrations, sqlc queries, database, credentials, and domain types. Services never read each other's tables. Shared `pkg/` code is infrastructure only: configuration, database/runtime helpers, request IDs, logging, errors, health/readiness, and graceful shutdown.
 
 ```mermaid
 flowchart LR
@@ -10,6 +10,7 @@ flowchart LR
   Gateway --> Tasks --> TDB[(tasks_db)]
   Gateway --> Inbox --> IDB[(inbox_db)]
   Gateway --> Calendar --> CDB[(calendar_db)]
+  Gateway --> Food --> FoDB[(food_db)]
   Gateway --> Voice --> VDB[(voice_db)]
   Gateway -. read only .-> Activity --> ADB[(activity_db)]
   Gateway --> Notifications --> NDB[(notifications_db)]
@@ -26,6 +27,7 @@ flowchart LR
   Voice -. record .-> Activity
   Inbox -. record .-> Activity
   Tasks -. record .-> Activity
+  Food -. record .-> Activity
   MCP -. record .-> Activity
   Voice --> Whisper[private whisper.cpp worker]
   Voice --> Inbox

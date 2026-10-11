@@ -23,7 +23,7 @@ flowchart LR
 | --- | --- |
 | `id` | Event UUID. Chosen by the emitter; often deterministic (see below). |
 | `type` | Dotted name, e.g. `task.completed`. |
-| `source` | Emitting service: `voice`, `inbox`, `mcp`, `tasks`, `calendar`, `finance`, `notifications`. |
+| `source` | Emitting service: `voice`, `inbox`, `mcp`, `tasks`, `calendar`, `finance`, `food`, `notifications`. |
 | `subject` | The entity the event is about: `{type, id}`, e.g. `{task, <uuid>}`. |
 | `correlationId` | The workflow this event belongs to. |
 | `causationId` | The event that directly caused this one (optional). |
@@ -49,7 +49,7 @@ Names are 1–64 letters, digits, `.`, `_`, or `-`. An event emitted without any
 
 ### The actor gate
 
-Finance, Tasks, Inbox, Calendar, Voice, and Notifications reject every write (`POST`, `PUT`, `PATCH`, `DELETE`) without a valid `X-Life-OS-Actor` with `400` and error code `actor_required` (`pkg/activity.RequireActor`). Reads, `/health`, and `/ready` do not need it. Internal callers always send one: the processor and MCP as agents, the Voice worker as `system:voice-worker`, and traces forward `user` explicitly.
+Finance, Tasks, Inbox, Calendar, Food, Voice, and Notifications reject every write (`POST`, `PUT`, `PATCH`, `DELETE`) without a valid `X-Life-OS-Actor` with `400` and error code `actor_required` (`pkg/activity.RequireActor`). Reads, `/health`, and `/ready` do not need it. Internal callers always send one: the processor and MCP as agents, the Voice worker as `system:voice-worker`, and traces forward `user` explicitly.
 
 Two endpoints are deliberately not gated:
 
@@ -83,6 +83,7 @@ The public gateway passes only `user` and `dev:<name>`: a claim to be the Life O
 
 | `finance.account.*`, `finance.transaction.*`, `finance.category.*`, `finance.category_rule.*` | finance | `finance_account`, `finance_transaction`, `finance_category`, `finance_category_rule` | One per change through the Finance API (created, updated, archived/restored or deleted), by the request's actor, with its correlation and causation; transaction summaries name the amount and account ("Spent €12.00 at Bäckerei (Cash)"); never the owner's notes. Creating the built-in Cash account at startup is `system:finance`. See [Finance](finance.md#activity). |
 | `finance.category_rules.applied`, `finance.import.completed` / `.failed`, `finance.bank_import.completed`, `finance.bank_connection.removed` | finance | `finance_category_rules`, `finance_import`, `finance_bank_connection` | One summary event per re-apply of the rules, CSV import, bank sync (by `system:banking`), or removed bank connection, with counts only; imported transactions get no events of their own. |
+| `food.shopping_item.added` / `.merged` / `.updated` / `.bought` / `.reopened` / `.deleted`, `food.shopping_items.cleared`, `food.store.*`, `food.aisle_rule.created` / `.deleted`, `food.pantry_item.added` / `.updated` / `.used_up` / `.thrown_away` / `.restocked` / `.deleted` | food | `food_shopping_item`, `food_shopping_list`, `food_store`, `food_aisle_rule`, `food_pantry_item` | One per change through the Food API, by the request's actor, with its correlation and causation ("Added “Vollmilch” (2 l, Lidl) to the shopping list", "“Vollmilch” was already on the shopping list: amount updated"); an add that merges into a needed item is `merged`, clearing bought items is one event with the count, and a change that changes nothing records nothing. Never the owner's notes. See [Food](food.md#activity). |
 
 ## Correlation, causation, and subject
 
@@ -139,6 +140,6 @@ The contract is `services/activity/api/openapi.yaml`. The Dashboard Event Log (`
 ## Operations
 
 - Database: `activity_db` / `activity_user`, password `LIFE_OS_ACTIVITY_DB_PASSWORD` in `.env`. Fresh volumes are provisioned automatically. For an existing deployment, add the password and run `make db-provision` once before starting the new `activity` and `activity-migrate` services.
-- Emitting services (`tasks`, `inbox`, `voice`, `voice-worker`, `mcp`, `calendar`, `finance`) read `ACTIVITY_SERVICE_URL`.
+- Emitting services (`tasks`, `inbox`, `voice`, `voice-worker`, `mcp`, `calendar`, `finance`, `food`) read `ACTIVITY_SERVICE_URL`.
 - Retention: events are kept indefinitely for now; they are small and single-user.
 - Verification: `make activity-trace-smoke` speaks a Task request (espeak-ng in a throwaway container). It sends the request through Voice, whisper.cpp, Inbox, the automatic processor with the authenticated Codex CLI, MCP, and Tasks on the disposable verification stack, then completes the Task itself (recorded as `dev:smoke-activity-trace`). It reconstructs and checks the whole chain from the Activity API alone.
