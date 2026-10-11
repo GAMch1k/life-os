@@ -8,6 +8,11 @@ Dashboard, the AI through MCP) use its API, never its database. Gateway base:
 `/api/food`; the contract is `services/food/api/openapi.yaml`; `/health` and
 `/ready` are runtime probes.
 
+The owner uses Food through the Dashboard's Food workspace (`/food`: the
+shopping list, made for the phone in the shop, and the pantry), and Home
+shows the list's size and food expiring today or tomorrow; see
+[Dashboard](../frontend/dashboard.md).
+
 **Groceries go to the list; other purchases stay Tasks.** Food, drinks,
 household, and drugstore items belong on the shopping list; buying a lamp or
 a birthday present stays a Task. The API serves the AI's routing (P15-03) with
