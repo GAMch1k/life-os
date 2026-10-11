@@ -60,6 +60,7 @@ type RowProps = {
   today: string;
   timeZone: string;
   onChange: (task: Task) => void;
+  onDeleted: (id: string) => void;
 };
 
 type SectionProps = RowProps & {
@@ -170,7 +171,7 @@ function UndatedSection({
  * Completed Tasks, collapsed by default. The heading counts those completed
  * in the last seven days (owner's days); expanded, it lists them and offers
  * older ones a page at a time, loading more from the Tasks API when the
- * loaded ones run out. Nothing is ever removed from Tasks.
+ * loaded ones run out. A Task leaves it only when it is reopened or deleted.
  */
 function CompletedSection({
   recent,
@@ -301,6 +302,9 @@ export function TasksWorkspace({
     setTasks((current) =>
       current.map((task) => (task.id === updated.id ? updated : task)),
     );
+  // A deleted Task leaves every section and the schedule at once.
+  const onDeleted = (id: string) =>
+    setTasks((current) => current.filter((task) => task.id !== id));
   const loadOlderCompleted = async () => {
     if (!completedCursor) return true;
     const page = await fetchTaskPage(true, completedCursor);
@@ -329,7 +333,7 @@ export function TasksWorkspace({
     setSelected(day);
     setMonth(day);
   };
-  const row = { today, timeZone, onChange };
+  const row = { today, timeZone, onChange, onDeleted };
 
   if (state.kind === "unavailable")
     return (

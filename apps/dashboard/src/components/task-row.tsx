@@ -2,6 +2,14 @@
 
 import { useState, useTransition } from "react";
 
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/app-dialog";
 import { DatePicker, TimeInput } from "@/components/date-picker";
 import { Button } from "@/components/ui/button";
 import { FieldLegend, FieldSet } from "@/components/ui/field";
@@ -16,6 +24,8 @@ type RowProps = {
   today: string;
   timeZone: string;
   onChange: (task: Task) => void;
+  /** The Task was deleted (or was already gone): it leaves every list. */
+  onDeleted: (id: string) => void;
 };
 
 /**
@@ -39,8 +49,11 @@ function TaskRow({
   today,
   timeZone,
   onChange,
+  onDeleted,
 }: RowProps & { task: Task }) {
   const [editing, setEditing] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [deleteError, setDeleteError] = useState<string>();
   const [title, setTitle] = useState(task.title);
   const [notes, setNotes] = useState(task.notes ?? "");
   const [due, setDue] = useState(() => toDueFields(task.dueAt, timeZone));
@@ -70,6 +83,22 @@ function TaskRow({
       });
       if (requestError || !data) return setError("Could not update this Task.");
       onChange(data);
+    });
+  const remove = () =>
+    startTransition(async () => {
+      setDeleteError(undefined);
+      try {
+        const { response } = await tasksClient.DELETE("/v1/tasks/{taskId}", {
+          params: { path: { taskId: task.id } },
+        });
+        // Already gone is as good as deleted.
+        if (!response.ok && response.status !== 404)
+          return setDeleteError("Could not delete this Task.");
+      } catch {
+        return setDeleteError("Could not delete this Task.");
+      }
+      setConfirming(false);
+      onDeleted(task.id);
     });
   const dueAt = fromDueFields(due.date, due.time, timeZone);
   const shownDue = dueLabel(task.dueAt, today, timeZone);
@@ -148,7 +177,60 @@ function TaskRow({
             >
               Cancel
             </Button>
+            <Button
+              aria-label={`Delete ${task.title}`}
+              className="ml-auto"
+              size="sm"
+              variant="destructive"
+              disabled={pending}
+              onClick={() => {
+                setDeleteError(undefined);
+                setConfirming(true);
+              }}
+            >
+              Delete
+            </Button>
           </div>
+          {/* Deleting cannot be undone, so it is confirmed first. A recurring
+              Task is one Task: the whole series goes. */}
+          <Dialog
+            open={confirming}
+            onOpenChange={(open) => {
+              if (!pending) setConfirming(open);
+            }}
+          >
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle className="wrap-anywhere">
+                  Delete “{task.title}”?
+                </DialogTitle>
+                <DialogDescription>
+                  This can&apos;t be undone.
+                </DialogDescription>
+              </DialogHeader>
+              {deleteError ? (
+                <p className="text-destructive text-sm" role="alert">
+                  {deleteError}
+                </p>
+              ) : null}
+              <DialogFooter>
+                <Button
+                  disabled={pending}
+                  onClick={() => setConfirming(false)}
+                  variant="outline"
+                >
+                  Keep it
+                </Button>
+                <Button
+                  disabled={pending}
+                  onClick={remove}
+                  variant="destructive"
+                >
+                  {pending ? "Deleting…" : "Delete Task"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </div>
       ) : (
         <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 @xl:grid-cols-[minmax(0,1fr)_10rem_9rem]">

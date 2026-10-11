@@ -111,6 +111,7 @@ const EVENT_LABELS: Record<string, string> = {
   "task.updated": "Task updated",
   "task.completed": "Task completed",
   "task.reopened": "Task reopened",
+  "task.deleted": "Task deleted",
   "calendar.event.created": "Event created",
   "calendar.event.updated": "Event updated",
   "calendar.event.rescheduled": "Event rescheduled",
@@ -244,6 +245,8 @@ export function eventLabel(event: Pick<ActivityEvent, "type" | "data">) {
   ) {
     return `${label}: ${title}`;
   }
+  // A deleted Task by its title, since it is no longer there to look at.
+  if (event.type === "task.deleted" && title) return `${label}: ${title}`;
   const source = text(event.data?.sourceName);
   if (event.type === "calendar.source.refreshed" && source) {
     return `${label}: ${source} — ${refreshChanges(event.data)}`;

@@ -243,6 +243,62 @@ test.describe("Tasks workspace", () => {
     });
     expect(persistedTask.dueAt).toBeFalsy();
   });
+
+  test("deletes open and completed Tasks after confirming, and the Event Log keeps them", async ({
+    page,
+    request,
+  }) => {
+    const stamp = Date.now();
+    const open = await createTask(request, `P8 delete open ${stamp}`);
+    const done = await createTask(request, `P8 delete done ${stamp}`);
+    await completeTask(request, done.id);
+
+    await openTasks(page);
+    await showAllUndated(page);
+    await page.getByLabel(`Edit ${open.title}`).click();
+    const confirm = page.getByRole("dialog");
+    // Keeping it changes nothing.
+    await page.getByLabel(`Delete ${open.title}`).click();
+    await expect(confirm).toContainText(`Delete “${open.title}”?`);
+    await expect(confirm).toContainText("This can't be undone.");
+    await confirm.getByRole("button", { name: "Keep it" }).click();
+    await expect(confirm).toBeHidden();
+    await expect(region(page, UNDATED)).toContainText(open.title);
+    await page.getByLabel(`Delete ${open.title}`).click();
+    await confirm.getByRole("button", { name: "Delete Task" }).click();
+    await expect(confirm).toBeHidden();
+    await expect(region(page, UNDATED)).not.toContainText(open.title);
+
+    await expand(completedToggle(page));
+    await expect(region(page, "Completed")).toContainText(done.title);
+    await page.getByLabel(`Edit ${done.title}`).click();
+    await page.getByLabel(`Delete ${done.title}`).click();
+    await expect(confirm).toContainText(`Delete “${done.title}”?`);
+    await confirm.getByRole("button", { name: "Delete Task" }).click();
+    await expect(confirm).toBeHidden();
+    await expect(region(page, "Completed")).not.toContainText(done.title);
+
+    // Gone from the Tasks API, so from every list after a reload.
+    for (const task of [open, done])
+      expect(
+        (await request.get(`/api/tasks/v1/tasks/${task.id}`)).status(),
+      ).toBe(404);
+    await page.reload();
+    await showAllUndated(page);
+    await expect(region(page, UNDATED)).not.toContainText(open.title);
+    await expect(region(page, "Completed")).not.toContainText(done.title);
+
+    // The Event Log names each deleted Task, deleted by the owner (You).
+    await page.goto("/activity?type=task.deleted");
+    const entries = page.getByRole("list", { name: "Activity entries" });
+    for (const task of [open, done]) {
+      const entry = entries
+        .getByRole("link")
+        .filter({ hasText: `Task deleted: ${task.title}` });
+      await expect(entry).toBeVisible();
+      await expect(entry).toContainText("Tasks · You");
+    }
+  });
 });
 
 test.describe("Tasks workspace sections", () => {
