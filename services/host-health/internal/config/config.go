@@ -7,6 +7,9 @@ import (
 	"log/slog"
 	"net/url"
 	"path/filepath"
+	"regexp"
+	"slices"
+	"strings"
 	"time"
 
 	sharedconfig "github.com/GAMch1k/life-os/pkg/config"
@@ -41,6 +44,25 @@ type Config struct {
 	RestartLoopCount     int     `env:"HOST_HEALTH_RESTART_LOOP_COUNT" default:"3"`
 	RestartLoopMinutes   int     `env:"HOST_HEALTH_RESTART_LOOP_MINUTES" default:"15"`
 	UnhealthyMinutes     int     `env:"HOST_HEALTH_UNHEALTHY_MINUTES" default:"5"`
+	// IgnoreProjects are comma-separated compose projects left out of
+	// findings and the top memory users: the verification stack, which test
+	// runs bring up and down every few minutes.
+	IgnoreProjects string `env:"HOST_HEALTH_IGNORE_PROJECTS" default:"lifeos-verify"`
+}
+
+// composeProject is a compose project name: lowercase letters, digits,
+// dashes, and underscores, starting with a letter or digit.
+var composeProject = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
+
+// IgnoredProjects is IgnoreProjects as a list, each once.
+func (c Config) IgnoredProjects() []string {
+	var projects []string
+	for _, project := range strings.Split(c.IgnoreProjects, ",") {
+		if project = strings.TrimSpace(project); project != "" && !slices.Contains(projects, project) {
+			projects = append(projects, project)
+		}
+	}
+	return projects
 }
 
 // Load reads Config from the process environment.
@@ -114,6 +136,11 @@ func (c Config) Validate() error {
 	}
 	if c.UnhealthyMinutes < 1 || c.UnhealthyMinutes > 1440 {
 		errs = append(errs, fmt.Errorf("HOST_HEALTH_UNHEALTHY_MINUTES must be between 1 and 1440"))
+	}
+	for _, project := range c.IgnoredProjects() {
+		if !composeProject.MatchString(project) {
+			errs = append(errs, fmt.Errorf("HOST_HEALTH_IGNORE_PROJECTS must list compose project names, comma-separated: %q is none", project))
+		}
 	}
 	return errors.Join(errs...)
 }

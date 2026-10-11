@@ -1,6 +1,7 @@
 package config
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -74,5 +75,22 @@ func TestLoadFromRejectsInvalidSettings(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error lacks %s", want)
 		}
+	}
+}
+
+func TestIgnoredProjectsDefaultToTheVerificationStack(t *testing.T) {
+	cfg, err := LoadFrom(mapLookup(map[string]string{}))
+	if err != nil || !slices.Equal(cfg.IgnoredProjects(), []string{"lifeos-verify"}) {
+		t.Fatalf("default = %v, %v", cfg.IgnoredProjects(), err)
+	}
+	cfg, err = LoadFrom(mapLookup(map[string]string{"HOST_HEALTH_IGNORE_PROJECTS": " lifeos-verify, scratch_stack ,lifeos-verify,"}))
+	if err != nil || !slices.Equal(cfg.IgnoredProjects(), []string{"lifeos-verify", "scratch_stack"}) {
+		t.Fatalf("list = %v, %v", cfg.IgnoredProjects(), err)
+	}
+	if cfg, err = LoadFrom(mapLookup(map[string]string{"HOST_HEALTH_IGNORE_PROJECTS": ""})); err != nil || len(cfg.IgnoredProjects()) != 0 {
+		t.Fatalf("none = %v, %v", cfg.IgnoredProjects(), err)
+	}
+	if _, err := LoadFrom(mapLookup(map[string]string{"HOST_HEALTH_IGNORE_PROJECTS": "lifeos-verify,Test Stack"})); err == nil || !strings.Contains(err.Error(), "HOST_HEALTH_IGNORE_PROJECTS") {
+		t.Fatalf("invalid = %v", err)
 	}
 }

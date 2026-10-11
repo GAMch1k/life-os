@@ -100,8 +100,12 @@ export interface components {
              * @enum {string}
              */
             health?: "healthy" | "unhealthy" | "starting";
-            /** @description How often it died within the restart-loop window. */
+            /** @description How often Docker restarted it by itself (a death followed by a start of the same container, as a restart policy does) within the restart-loop window. Stops, compose down, and recreates do not count. */
             recentDeaths: number;
+            /** @description The exit code of its last such death; absent without one. */
+            lastExitCode?: number;
+            /** @description A container of an ignored compose project (HOST_HEALTH_IGNORE_PROJECTS, the verification stack): never in findings or top. Absent otherwise. */
+            testStack?: boolean;
             /**
              * Format: date-time
              * @description When it turned unhealthy; absent while it is not.
@@ -126,8 +130,12 @@ export interface components {
             error?: string;
             total: number;
             running: number;
+            /** @description Unhealthy containers, the test stack's left out. */
             unhealthy: number;
+            /** @description Containers Docker is restarting, the test stack's left out. */
             restarting: number;
+            /** @description Of total, the containers of ignored compose projects (the verification stack). */
+            testStack?: number;
             /**
              * Format: date-time
              * @description When the containers' memory was read.
@@ -175,7 +183,7 @@ export interface components {
             /** @description A container unhealthy this long is a warning. */
             unhealthyMinutes: number;
         };
-        /** @description One thing that needs attention. Which fields are set depends on the kind: memory_low (availableBytes, totalBytes, minutes held), disk_low (subject is the disk's label, availableBytes, totalBytes), load_high (load is the 15-minute load, cpus), container_restarting (subject, project, count deaths within minutes), container_unhealthy (subject, project, minutes unhealthy), containers_unavailable (error). */
+        /** @description One thing that needs attention. Which fields are set depends on the kind: memory_low (availableBytes, totalBytes, minutes held), disk_low (subject is the disk's label, availableBytes, totalBytes), load_high (load is the 15-minute load, cpus), container_restarting (subject, project, count restarts within minutes, exitCode of the last death when known), container_unhealthy (subject, project, minutes unhealthy), containers_unavailable (error). */
         HostFinding: {
             /** @enum {string} */
             kind: "memory_low" | "disk_low" | "load_high" | "container_restarting" | "container_unhealthy" | "containers_unavailable";
@@ -189,6 +197,7 @@ export interface components {
             totalBytes?: number;
             minutes?: number;
             count?: number;
+            exitCode?: number;
             /** Format: double */
             load?: number;
             cpus?: number;

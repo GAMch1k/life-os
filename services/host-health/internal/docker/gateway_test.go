@@ -37,8 +37,14 @@ func (e *fakeEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			{"Id":"aaaaaaaaaaaabbbbbbbb","Names":["/n8n"],"Image":"n8nio/n8n","State":"running","Status":"Up 1 minute (unhealthy)","Labels":{"com.docker.compose.project":"n8n"}}
 		]`))
 	case r.URL.Path == "/events":
-		_, _ = w.Write([]byte(`{"Type":"container","Action":"die","Actor":{"ID":"fedcba9876543210fedc","Attributes":{"name":"homeassistant","exitCode":"1"}},"time":1791720000,"timeNano":1791720000000000000}
+		_, _ = w.Write([]byte(`{"Type":"container","Action":"die","Actor":{"ID":"fedcba9876543210fedc","Attributes":{"name":"homeassistant","exitCode":"1","image":"ghcr.io/home-assistant/home-assistant:stable","SECRET_TOKEN":"x"}},"time":1791720000,"timeNano":1791720000000000000}
+{"Type":"container","Action":"start","Actor":{"ID":"fedcba9876543210fedc","Attributes":{"name":"homeassistant"}},"time":1791720002,"timeNano":1791720002000000000}
 {"Type":"container","Action":"health_status: unhealthy","Actor":{"ID":"aaaaaaaaaaaabbbbbbbb","Attributes":{"name":"n8n","com.docker.compose.project":"n8n"}},"time":1791720060,"timeNano":1791720060000000000}
+{"Type":"container","Action":"kill","Actor":{"ID":"0123456789abcdef0123","Attributes":{"name":"lifeos-backup-1","signal":"15","com.docker.compose.project":"lifeos"}},"time":1791720070,"timeNano":1791720070000000000}
+{"Type":"container","Action":"die","Actor":{"ID":"0123456789abcdef0123","Attributes":{"name":"lifeos-backup-1","exitCode":"oops","com.docker.compose.project":"lifeos"}},"time":1791720071,"timeNano":1791720071000000000}
+{"Type":"container","Action":"stop","Actor":{"ID":"0123456789abcdef0123","Attributes":{"name":"lifeos-backup-1"}},"time":1791720072,"timeNano":1791720072000000000}
+{"Type":"container","Action":"destroy","Actor":{"ID":"0123456789abcdef0123","Attributes":{"name":"lifeos-backup-1"}},"time":1791720073,"timeNano":1791720073000000000}
+{"Type":"container","Action":"exec_create: sh -c cat /run/secrets/token","Actor":{"ID":"0123456789abcdef0123","Attributes":{"name":"lifeos-backup-1"}},"time":1791720074,"timeNano":1791720074000000000}
 `))
 	case strings.HasSuffix(r.URL.Path, "/stats"):
 		_, _ = w.Write([]byte(`{"name":"/lifeos-backup-1","id":"0123456789abcdef0123","memory_stats":{"usage":157286400,"limit":8238493696,"stats":{"inactive_file":52428800,"active_file":1}}}`))
@@ -93,8 +99,24 @@ func TestTheGatewayAnswersItsThreeQuestions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 2 || events[0].Name != "homeassistant" || events[0].Action != "die" || events[1].Action != "health_status: unhealthy" || events[1].Project != "n8n" || !events[0].Time.Equal(time.Unix(1791720000, 0)) {
+	// The id (short), name, project, action, and a die's exit code; no
+	// other attribute, and no action outside the filter.
+	one := 1
+	wantEvents := []Event{
+		{Time: time.Unix(1791720000, 0).UTC(), ID: "fedcba987654", Name: "homeassistant", Action: "die", ExitCode: &one},
+		{Time: time.Unix(1791720002, 0).UTC(), ID: "fedcba987654", Name: "homeassistant", Action: "start"},
+		{Time: time.Unix(1791720060, 0).UTC(), ID: "aaaaaaaaaaaa", Name: "n8n", Project: "n8n", Action: "health_status: unhealthy"},
+		{Time: time.Unix(1791720070, 0).UTC(), ID: "0123456789ab", Name: "lifeos-backup-1", Project: "lifeos", Action: "kill"},
+		{Time: time.Unix(1791720071, 0).UTC(), ID: "0123456789ab", Name: "lifeos-backup-1", Project: "lifeos", Action: "die"},
+		{Time: time.Unix(1791720072, 0).UTC(), ID: "0123456789ab", Name: "lifeos-backup-1", Action: "stop"},
+		{Time: time.Unix(1791720073, 0).UTC(), ID: "0123456789ab", Name: "lifeos-backup-1", Action: "destroy"},
+	}
+	if !slices.EqualFunc(events, wantEvents, sameEvent) {
 		t.Fatalf("events = %+v", events)
+	}
+	raw, err := json.Marshal(events[0])
+	if err != nil || string(raw) != `{"time":"2026-10-11T12:00:00Z","id":"fedcba987654","name":"homeassistant","action":"die","exitCode":1}` {
+		t.Fatalf("the gateway's die event = %s, %v", raw, err)
 	}
 
 	memory, err := client.Memory(ctx, "0123456789ab")
@@ -106,6 +128,10 @@ func TestTheGatewayAnswersItsThreeQuestions(t *testing.T) {
 		t.Fatalf("memory = %+v", memory)
 	}
 
+	// The engine is asked for exactly these container events.
+	if eventFilters != `{"type":["container"],"event":["die","start","health_status","kill","stop","destroy"]}` {
+		t.Fatalf("filters = %s", eventFilters)
+	}
 	requests := engine.seen()
 	filters := url.QueryEscape(eventFilters)
 	wantRequests := []string{
@@ -209,4 +235,14 @@ func TestHealthFromStatus(t *testing.T) {
 			t.Errorf("healthFromStatus(%q) = %q, want %q", status, got, want)
 		}
 	}
+}
+
+func sameEvent(a, b Event) bool {
+	exit := func(code *int) int {
+		if code == nil {
+			return -1
+		}
+		return *code
+	}
+	return a.Time.Equal(b.Time) && a.ID == b.ID && a.Name == b.Name && a.Project == b.Project && a.Action == b.Action && exit(a.ExitCode) == exit(b.ExitCode)
 }

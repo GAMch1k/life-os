@@ -391,6 +391,9 @@ services:
       HOST_HEALTH_RESTART_LOOP_COUNT: "${LIFE_OS_HOST_HEALTH_RESTART_LOOP_COUNT:-3}"
       HOST_HEALTH_RESTART_LOOP_MINUTES: "${LIFE_OS_HOST_HEALTH_RESTART_LOOP_MINUTES:-15}"
       HOST_HEALTH_UNHEALTHY_MINUTES: "${LIFE_OS_HOST_HEALTH_UNHEALTHY_MINUTES:-5}"
+      # Compose projects left out of findings and the top memory users: the
+      # verification stack, which test runs bring up and down.
+      HOST_HEALTH_IGNORE_PROJECTS: "${LIFE_OS_HOST_HEALTH_IGNORE_PROJECTS:-lifeos-verify}"
     volumes:
       - type: bind
         source: /

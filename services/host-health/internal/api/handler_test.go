@@ -11,6 +11,7 @@ import (
 
 	"github.com/GAMch1k/life-os/pkg/httpserver"
 	"github.com/GAMch1k/life-os/services/host-health/internal/api/generated"
+	"github.com/GAMch1k/life-os/services/host-health/internal/docker"
 	"github.com/GAMch1k/life-os/services/host-health/internal/health"
 )
 
@@ -104,4 +105,33 @@ func TestHistory(t *testing.T) {
 			t.Errorf("%s = %d", target, status)
 		}
 	}
+}
+
+func TestContainersAndFindingsCarryTheTestStackAndExitCodes(t *testing.T) {
+	one := 1
+	containers := toContainers(health.Containers{Available: true, Items: []health.ContainerState{
+		{Container: dockerContainer("runner", "forgejo", "restarting"), RecentDeaths: 3, LastExitCode: &one},
+		{Container: dockerContainer("lifeos-verify-gateway-1", "lifeos-verify", "running"), TestStack: true, MemoryBytes: 1 << 30},
+		{Container: dockerContainer("lifeos-whisper-1", "lifeos", "running"), MemoryBytes: 2 << 30},
+	}})
+	if containers.Total != 3 || containers.Running != 2 || containers.Restarting != 1 || containers.TestStack == nil || *containers.TestStack != 1 {
+		t.Fatalf("counts = %+v", containers)
+	}
+	if runner := containers.Items[0]; runner.LastExitCode == nil || *runner.LastExitCode != 1 || runner.TestStack != nil {
+		t.Fatalf("runner = %+v", runner)
+	}
+	if verify := containers.Items[1]; verify.TestStack == nil || !*verify.TestStack || verify.LastExitCode != nil {
+		t.Fatalf("test stack container = %+v", verify)
+	}
+	if len(containers.Top) != 1 || containers.Top[0].Name != "lifeos-whisper-1" {
+		t.Fatalf("top = %+v", containers.Top)
+	}
+	finding := toFinding(health.Finding{Kind: health.ContainerRestarting, Severity: health.Warning, Subject: "runner", Project: "forgejo", Count: 3, ExitCode: &one, Minutes: 15})
+	if finding.Count == nil || *finding.Count != 3 || finding.ExitCode == nil || *finding.ExitCode != 1 || finding.Minutes == nil || *finding.Minutes != 15 {
+		t.Fatalf("finding = %+v", finding)
+	}
+}
+
+func dockerContainer(name, project, state string) docker.Container {
+	return docker.Container{ID: name, Name: name, Project: project, Image: name, State: state}
 }

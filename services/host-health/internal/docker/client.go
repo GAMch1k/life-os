@@ -28,8 +28,8 @@ func (c *Client) Containers(ctx context.Context) ([]Container, error) {
 	return containers, c.get(ctx, "/containers", &containers)
 }
 
-// Events lists the container die, start, and health_status events between
-// since and until.
+// Events lists the container die, start, health_status, kill, stop, and
+// destroy events between since and until.
 func (c *Client) Events(ctx context.Context, since, until time.Time) ([]Event, error) {
 	var events []Event
 	path := "/events?since=" + strconv.FormatInt(since.Unix(), 10) + "&until=" + strconv.FormatInt(until.Unix(), 10)
