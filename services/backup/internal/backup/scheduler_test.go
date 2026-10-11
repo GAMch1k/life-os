@@ -2,6 +2,7 @@ package backup
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -12,12 +13,14 @@ import (
 type fakeStarter struct {
 	mu          sync.Mutex
 	lastSuccess *Summary
+	lastCheck   *RestoreCheck
 	busy        int
 	started     []startedRun
 }
 
 type startedRun struct {
 	trigger Trigger
+	check   bool
 	at      time.Time
 }
 
@@ -28,8 +31,14 @@ func (f *fakeStarter) Start(request Request) (*Job, error) {
 		f.busy--
 		return nil, ErrRunning
 	}
-	f.started = append(f.started, startedRun{trigger: request.Trigger})
+	f.started = append(f.started, startedRun{trigger: request.Trigger, check: request.ThenRestoreCheck})
 	return &Job{}, nil
+}
+
+func (f *fakeStarter) LastRestoreCheck() (*RestoreCheck, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastCheck, nil
 }
 
 func (f *fakeStarter) LastFullSuccess() (*Summary, error) {
@@ -62,13 +71,20 @@ func (c *fakeClock) wait(_ context.Context, d time.Duration) bool {
 
 func runScheduler(t *testing.T, starter *fakeStarter, start, until time.Time) (*Scheduler, *fakeClock) {
 	t.Helper()
+	return runSchedulerWith(t, starter, start, until, false)
+}
+
+func runSchedulerWith(t *testing.T, starter *fakeStarter, start, until time.Time, checks bool) (*Scheduler, *fakeClock) {
+	t.Helper()
 	clock := &fakeClock{now: start, until: until}
 	scheduler := NewScheduler(SchedulerOptions{
-		Runner:       starter,
-		Schedule:     Schedule{Minute: 195, Location: berlin(t)},
-		CatchUpDelay: time.Minute,
-		Tick:         time.Minute,
-		Now:          clock.Now,
+		Runner:          starter,
+		Schedule:        Schedule{Minute: 195, Location: berlin(t)},
+		CatchUpDelay:    time.Minute,
+		Tick:            time.Minute,
+		RestoreChecks:   checks,
+		RestoreCheckDay: time.Sunday,
+		Now:             clock.Now,
 	})
 	scheduler.wait = clock.wait
 	recording := &recordingStarter{fakeStarter: starter, clock: clock}
@@ -88,6 +104,9 @@ func (r *recordingStarter) Start(request Request) (*Job, error) {
 	if err == nil {
 		r.mu.Lock()
 		r.started[len(r.started)-1].at = r.clock.Now()
+		if request.ThenRestoreCheck {
+			r.lastCheck = &RestoreCheck{StartedAt: r.clock.Now()}
+		}
 		r.mu.Unlock()
 	}
 	return job, err
@@ -175,5 +194,62 @@ func TestSchedulerReadiness(t *testing.T) {
 	clock.now = clock.now.Add(5 * time.Minute)
 	if err := scheduler.Ready(context.Background()); err == nil {
 		t.Fatal("Ready after five minutes without a check")
+	}
+}
+
+func TestTheSundayNightlyRunIsFollowedByARestoreCheck(t *testing.T) {
+	location := berlin(t)
+	// Saturday noon, with a check last Sunday: Sunday's run is followed by
+	// one, Monday's and the next days' are not.
+	starter := &fakeStarter{
+		lastSuccess: &Summary{StartedAt: time.Date(2026, 10, 10, 3, 15, 0, 0, location)},
+		lastCheck:   &RestoreCheck{StartedAt: time.Date(2026, 10, 4, 3, 20, 0, 0, location)},
+	}
+	scheduler, _ := runSchedulerWith(t, starter, time.Date(2026, 10, 10, 12, 0, 0, 0, location), time.Date(2026, 10, 14, 12, 0, 0, 0, location), true)
+	var checks []bool
+	for _, run := range starter.started {
+		checks = append(checks, run.check)
+	}
+	if want := []bool{true, false, false, false}; !slices.Equal(checks, want) {
+		t.Fatalf("checks after runs %v, want %v", checks, want)
+	}
+	if got := scheduler.NextRestoreCheck(); !got.Equal(time.Date(2026, 10, 18, 3, 15, 0, 0, location)) {
+		t.Errorf("NextRestoreCheck = %s, want Sunday 18 October 03:15", got)
+	}
+}
+
+func TestAMissedRestoreCheckFollowsTheNextNightlyRun(t *testing.T) {
+	location := berlin(t)
+	// The last check is 8 days old on Monday: Monday's run catches it up.
+	starter := &fakeStarter{
+		lastSuccess: &Summary{StartedAt: time.Date(2026, 10, 11, 3, 15, 0, 0, location)},
+		lastCheck:   &RestoreCheck{StartedAt: time.Date(2026, 10, 4, 3, 20, 0, 0, location)},
+	}
+	scheduler, _ := runSchedulerWith(t, starter, time.Date(2026, 10, 11, 12, 0, 0, 0, location), time.Date(2026, 10, 13, 12, 0, 0, 0, location), true)
+	if len(starter.started) != 2 || !starter.started[0].check || starter.started[1].check {
+		t.Fatalf("started %+v", starter.started)
+	}
+	if got := scheduler.NextRestoreCheck(); !got.Equal(time.Date(2026, 10, 18, 3, 15, 0, 0, location)) {
+		t.Errorf("NextRestoreCheck = %s", got)
+	}
+	// Never checked: the next run is followed by a check, whatever the day.
+	never := &fakeStarter{lastSuccess: &Summary{StartedAt: time.Date(2026, 10, 12, 3, 15, 0, 0, location)}}
+	runSchedulerWith(t, never, time.Date(2026, 10, 12, 12, 0, 0, 0, location), time.Date(2026, 10, 13, 12, 0, 0, 0, location), true)
+	if len(never.started) != 1 || !never.started[0].check {
+		t.Fatalf("never checked: started %+v", never.started)
+	}
+}
+
+func TestRestoreChecksCanBeOff(t *testing.T) {
+	location := berlin(t)
+	starter := &fakeStarter{lastSuccess: &Summary{StartedAt: time.Date(2026, 10, 10, 3, 15, 0, 0, location)}}
+	scheduler, _ := runSchedulerWith(t, starter, time.Date(2026, 10, 10, 12, 0, 0, 0, location), time.Date(2026, 10, 12, 12, 0, 0, 0, location), false)
+	for _, run := range starter.started {
+		if run.check {
+			t.Fatalf("a check with checks off: %+v", starter.started)
+		}
+	}
+	if !scheduler.NextRestoreCheck().IsZero() {
+		t.Error("NextRestoreCheck with checks off")
 	}
 }

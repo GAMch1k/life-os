@@ -21,11 +21,13 @@ import (
 //	auto/<id>/                one completed run: manifest.json and <database>.dump files
 //	auto/.partial-<id>/       a run in progress (renamed to <id> when complete)
 //	auto/history.json         the latest runs' summaries, including runs that left no files
-//	auto/.lock                held (flock) while a run writes
+//	auto/restore-checks.json  the latest restore checks
+//	auto/.lock                held (flock) while a run or a restore check works
 const (
 	AutoDir       = "auto"
 	ManifestFile  = "manifest.json"
 	HistoryFile   = "history.json"
+	ChecksFile    = "restore-checks.json"
 	LockFile      = ".lock"
 	PartialPrefix = ".partial-"
 	// RunIDLayout formats a run's start time in UTC as its id and
@@ -33,6 +35,8 @@ const (
 	RunIDLayout = "20060102T150405Z"
 	// HistoryLimit is how many run summaries history.json keeps.
 	HistoryLimit = 100
+	// ChecksLimit is how many restore checks restore-checks.json keeps.
+	ChecksLimit = 50
 )
 
 var runIDPattern = regexp.MustCompile(`^[0-9]{8}T[0-9]{6}Z$`)
@@ -301,6 +305,58 @@ func (s *Store) Record(summary Summary) error {
 	}
 	return writeJSONAtomic(s.auto, HistoryFile, history{Runs: runs})
 }
+
+type checkHistory struct {
+	Checks []RestoreCheck `json:"checks"`
+}
+
+// RestoreChecks are the latest restore checks, newest first.
+func (s *Store) RestoreChecks() ([]RestoreCheck, error) {
+	data, err := os.ReadFile(filepath.Join(s.auto, ChecksFile))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var h checkHistory
+	if err := json.Unmarshal(data, &h); err != nil {
+		return nil, fmt.Errorf("read %s: %w", ChecksFile, err)
+	}
+	return h.Checks, nil
+}
+
+// RecordCheck adds a restore check to its history, keeping the newest
+// ChecksLimit. Call it only while holding the lock.
+func (s *Store) RecordCheck(check RestoreCheck) error {
+	checks, err := s.RestoreChecks()
+	if err != nil {
+		checks = nil
+	}
+	checks = slices.DeleteFunc(checks, func(c RestoreCheck) bool { return c.ID == check.ID })
+	checks = append([]RestoreCheck{check}, checks...)
+	slices.SortStableFunc(checks, func(a, b RestoreCheck) int { return b.StartedAt.Compare(a.StartedAt) })
+	if len(checks) > ChecksLimit {
+		checks = checks[:ChecksLimit]
+	}
+	return writeJSONAtomic(s.auto, ChecksFile, checkHistory{Checks: checks})
+}
+
+// Run reads one completed run.
+func (s *Store) Run(id string) (Run, error) {
+	if !IsRunID(id) {
+		return Run{}, fmt.Errorf("not a run id: %q", id)
+	}
+	run := Run{ID: id}
+	run.Manifest, run.Err = readManifest(filepath.Join(s.auto, id))
+	if run.Err == nil && run.Manifest.ID != id {
+		run.Err = fmt.Errorf("manifest names run %q", run.Manifest.ID)
+	}
+	return run, nil
+}
+
+// RunDir is the directory of a completed run.
+func (s *Store) RunDir(id string) string { return filepath.Join(s.auto, id) }
 
 func (s *Store) partialPath(id string) string {
 	return filepath.Join(s.auto, PartialPrefix+id)

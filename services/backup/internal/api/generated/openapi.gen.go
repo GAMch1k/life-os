@@ -51,6 +51,42 @@ func (e BackupResult) Valid() bool {
 	}
 }
 
+// Defines values for BackupScheduleRestoreCheckDay.
+const (
+	Friday    BackupScheduleRestoreCheckDay = "friday"
+	Monday    BackupScheduleRestoreCheckDay = "monday"
+	Off       BackupScheduleRestoreCheckDay = "off"
+	Saturday  BackupScheduleRestoreCheckDay = "saturday"
+	Sunday    BackupScheduleRestoreCheckDay = "sunday"
+	Thursday  BackupScheduleRestoreCheckDay = "thursday"
+	Tuesday   BackupScheduleRestoreCheckDay = "tuesday"
+	Wednesday BackupScheduleRestoreCheckDay = "wednesday"
+)
+
+// Valid indicates whether the value is a known member of the BackupScheduleRestoreCheckDay enum.
+func (e BackupScheduleRestoreCheckDay) Valid() bool {
+	switch e {
+	case Friday:
+		return true
+	case Monday:
+		return true
+	case Off:
+		return true
+	case Saturday:
+		return true
+	case Sunday:
+		return true
+	case Thursday:
+		return true
+	case Tuesday:
+		return true
+	case Wednesday:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for BackupScope.
 const (
 	All    BackupScope = "all"
@@ -211,11 +247,17 @@ type BackupRun struct {
 
 // BackupSchedule defines model for BackupSchedule.
 type BackupSchedule struct {
+	// NextRestoreCheckAt The start of the nightly run the next restore check follows; absent when checks are off.
+	NextRestoreCheckAt *time.Time `json:"nextRestoreCheckAt,omitempty"`
+
 	// NextRunAt When the next run is due.
 	NextRunAt time.Time `json:"nextRunAt"`
 
 	// NextTrigger schedule = the nightly run; catch-up = run at start because the last nightly run was missed; manual = asked for through POST /v1/backups (the Dashboard or tools/backup-now).
 	NextTrigger BackupTrigger `json:"nextTrigger"`
+
+	// RestoreCheckDay The weekday whose nightly run a restore check follows, or off. A check also follows the next nightly run once the last one is more than a week old, or when there has been none.
+	RestoreCheckDay BackupScheduleRestoreCheckDay `json:"restoreCheckDay"`
 
 	// Time The nightly run, HH:MM in timeZone.
 	Time string `json:"time"`
@@ -223,6 +265,9 @@ type BackupSchedule struct {
 	// TimeZone IANA timezone, such as Europe/Berlin.
 	TimeZone string `json:"timeZone"`
 }
+
+// BackupScheduleRestoreCheckDay The weekday whose nightly run a restore check follows, or off. A check also follows the next nightly run once the last one is more than a week old, or when there has been none.
+type BackupScheduleRestoreCheckDay string
 
 // BackupScope all = every database in the registry; subset = only the databases a manual run named.
 type BackupScope string
@@ -235,6 +280,9 @@ type BackupStatus struct {
 	// DatabasesError Why the registry could not be read; databases is then empty.
 	DatabasesError *string `json:"databasesError,omitempty"`
 
+	// LastRestoreCheck One finished restore check.
+	LastRestoreCheck *RestoreCheck `json:"lastRestoreCheck,omitempty"`
+
 	// LastRun One finished run.
 	LastRun *BackupRun `json:"lastRun,omitempty"`
 
@@ -245,8 +293,11 @@ type BackupStatus struct {
 	Retention BackupRetention `json:"retention"`
 
 	// Running The run in progress.
-	Running  *BackupProgress `json:"running,omitempty"`
-	Schedule BackupSchedule  `json:"schedule"`
+	Running *BackupProgress `json:"running,omitempty"`
+
+	// RunningRestoreCheck The restore check in progress.
+	RunningRestoreCheck *RestoreCheckProgress `json:"runningRestoreCheck,omitempty"`
+	Schedule            BackupSchedule        `json:"schedule"`
 
 	// Storage The backup directory and the file system it is on.
 	Storage BackupStorage `json:"storage"`
@@ -280,6 +331,88 @@ type Error struct {
 	RequestId *string `json:"request_id,omitempty"`
 }
 
+// RestoreCheck One finished restore check.
+type RestoreCheck struct {
+	// Actor Who asked for a manual check.
+	Actor           *string                `json:"actor,omitempty"`
+	Databases       []RestoreCheckDatabase `json:"databases"`
+	DurationSeconds float64                `json:"durationSeconds"`
+
+	// Error What went wrong, when ok is false.
+	Error      *string   `json:"error,omitempty"`
+	FinishedAt time.Time `json:"finishedAt"`
+
+	// Id The check id: its start time in UTC.
+	Id string `json:"id"`
+
+	// Ok True when every database restored and matched its manifest.
+	Ok bool `json:"ok"`
+
+	// RunId The run whose dumps were checked.
+	RunId     string    `json:"runId"`
+	StartedAt time.Time `json:"startedAt"`
+
+	// Trigger schedule = the nightly run; catch-up = run at start because the last nightly run was missed; manual = asked for through POST /v1/backups (the Dashboard or tools/backup-now).
+	Trigger BackupTrigger `json:"trigger"`
+}
+
+// RestoreCheckCreateRequest defines model for RestoreCheckCreateRequest.
+type RestoreCheckCreateRequest struct {
+	// RunId The run to check. Omit for the newest successful full run.
+	RunId *string `json:"runId,omitempty"`
+}
+
+// RestoreCheckDatabase defines model for RestoreCheckDatabase.
+type RestoreCheckDatabase struct {
+	// Error Why the check could not compare, such as a SHA-256 that differs from the manifest or a failed pg_restore.
+	Error      *string                `json:"error,omitempty"`
+	Mismatches []RestoreCheckMismatch `json:"mismatches"`
+
+	// Name The database, such as finance_db.
+	Name string `json:"name"`
+
+	// Ok True when the dump restored and matched its manifest.
+	Ok bool `json:"ok"`
+
+	// Rows Rows in those tables.
+	Rows int64 `json:"rows"`
+
+	// Tables User tables in the restored database.
+	Tables int `json:"tables"`
+}
+
+// RestoreCheckMismatch One difference from the manifest: a table's row count (expected "25 rows", actual "24 rows"), a table only one side has ("missing", or expected "absent"), or the migration state (subject "migration", such as "version 14" or "version 14 (dirty)" or "none").
+type RestoreCheckMismatch struct {
+	// Actual What the restored database holds.
+	Actual string `json:"actual"`
+
+	// Expected What the manifest says.
+	Expected string `json:"expected"`
+
+	// Subject The table, as schema.table, or migration.
+	Subject string `json:"subject"`
+}
+
+// RestoreCheckProgress The restore check in progress.
+type RestoreCheckProgress struct {
+	Actor *string `json:"actor,omitempty"`
+
+	// Completed How many of them are done.
+	Completed int `json:"completed"`
+
+	// Current The database being restored now.
+	Current *string `json:"current,omitempty"`
+
+	// Databases The databases this check covers, in order.
+	Databases []string  `json:"databases"`
+	Id        string    `json:"id"`
+	RunId     string    `json:"runId"`
+	StartedAt time.Time `json:"startedAt"`
+
+	// Trigger schedule = the nightly run; catch-up = run at start because the last nightly run was missed; manual = asked for through POST /v1/backups (the Dashboard or tools/backup-now).
+	Trigger BackupTrigger `json:"trigger"`
+}
+
 // ListBackupsParams defines parameters for ListBackups.
 type ListBackupsParams struct {
 	// Cursor The previous page's nextCursor.
@@ -293,8 +426,17 @@ type CreateBackupParams struct {
 	WaitSeconds *int `form:"waitSeconds,omitempty" json:"waitSeconds,omitempty"`
 }
 
+// CreateRestoreCheckParams defines parameters for CreateRestoreCheck.
+type CreateRestoreCheckParams struct {
+	// WaitSeconds How long to wait for the check to finish. 0 answers at once.
+	WaitSeconds *int `form:"waitSeconds,omitempty" json:"waitSeconds,omitempty"`
+}
+
 // CreateBackupJSONRequestBody defines body for CreateBackup for application/json ContentType.
 type CreateBackupJSONRequestBody = BackupCreateRequest
+
+// CreateRestoreCheckJSONRequestBody defines body for CreateRestoreCheck for application/json ContentType.
+type CreateRestoreCheckJSONRequestBody = RestoreCheckCreateRequest
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
@@ -304,6 +446,9 @@ type ServerInterface interface {
 	// CreateBackup Run a backup now
 	// (POST /v1/backups)
 	CreateBackup(c fiber.Ctx, params CreateBackupParams) error
+	// CreateRestoreCheck Run a restore check now
+	// (POST /v1/restore-checks)
+	CreateRestoreCheck(c fiber.Ctx, params CreateRestoreCheckParams) error
 	// GetBackupStatus Get the backup status
 	// (GET /v1/status)
 	GetBackupStatus(c fiber.Ctx) error
@@ -399,6 +544,43 @@ func (siw *ServerInterfaceWrapper) CreateBackup(c fiber.Ctx) error {
 	return handler(c)
 }
 
+// CreateRestoreCheck operation middleware
+func (siw *ServerInterfaceWrapper) CreateRestoreCheck(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreateRestoreCheckParams
+
+	var query url.Values
+	query, err = url.ParseQuery(string(c.Request().URI().QueryString()))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for query string: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "waitSeconds" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "waitSeconds", query, &params.WaitSeconds, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter waitSeconds: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.CreateRestoreCheck(c, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
 // GetBackupStatus operation middleware
 func (siw *ServerInterfaceWrapper) GetBackupStatus(c fiber.Ctx) error {
 
@@ -445,5 +627,7 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	router.Get(options.BaseURL+"/v1/backups", wrapper.ListBackups)
 
 	router.Post(options.BaseURL+"/v1/backups", wrapper.CreateBackup)
+
+	router.Post(options.BaseURL+"/v1/restore-checks", wrapper.CreateRestoreCheck)
 
 }

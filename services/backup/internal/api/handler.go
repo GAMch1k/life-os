@@ -18,6 +18,7 @@ import (
 // Runner is the part of backup.Runner the handler uses.
 type Runner interface {
 	Start(backup.Request) (*backup.Job, error)
+	StartRestoreCheck(backup.CheckRequest) (*backup.CheckJob, error)
 	Runs() ([]backup.Summary, error)
 	Status() (backup.Status, error)
 }
@@ -25,12 +26,15 @@ type Runner interface {
 // Scheduler is the part of backup.Scheduler the handler uses.
 type Scheduler interface {
 	Next() (time.Time, backup.Trigger)
+	NextRestoreCheck() time.Time
 }
 
 // Settings are the configuration the status reports.
 type Settings struct {
 	Schedule  backup.Schedule
 	Retention backup.Retention
+	// RestoreCheckDay is a weekday such as sunday, or off.
+	RestoreCheckDay string
 }
 
 // Handler implements the generated transport interface.
@@ -63,10 +67,11 @@ func (h *Handler) GetBackupStatus(c fiber.Ctx) error {
 	next, trigger := h.scheduler.Next()
 	response := generated.BackupStatus{
 		Schedule: generated.BackupSchedule{
-			Time:        h.settings.Schedule.Time(),
-			TimeZone:    h.settings.Schedule.Location.String(),
-			NextRunAt:   next.UTC(),
-			NextTrigger: generated.BackupTrigger(trigger),
+			Time:            h.settings.Schedule.Time(),
+			TimeZone:        h.settings.Schedule.Location.String(),
+			NextRunAt:       next.UTC(),
+			NextTrigger:     generated.BackupTrigger(trigger),
+			RestoreCheckDay: generated.BackupScheduleRestoreCheckDay(h.settings.RestoreCheckDay),
 		},
 		Retention: generated.BackupRetention{
 			Daily:      h.settings.Retention.Daily,
@@ -94,6 +99,18 @@ func (h *Handler) GetBackupStatus(c fiber.Ctx) error {
 	if status.Running != nil {
 		progress := toProgress(*status.Running)
 		response.Running = &progress
+	}
+	if at := h.scheduler.NextRestoreCheck(); !at.IsZero() {
+		at = at.UTC()
+		response.Schedule.NextRestoreCheckAt = &at
+	}
+	if status.LastRestoreCheck != nil {
+		check := toCheck(*status.LastRestoreCheck)
+		response.LastRestoreCheck = &check
+	}
+	if status.RunningCheck != nil {
+		progress := toCheckProgress(*status.RunningCheck)
+		response.RunningRestoreCheck = &progress
 	}
 	return c.JSON(response)
 }
@@ -159,7 +176,7 @@ func (h *Handler) CreateBackup(c fiber.Ctx, params generated.CreateBackupParams)
 	var unknown *backup.UnknownDatabasesError
 	switch {
 	case errors.Is(err, backup.ErrRunning):
-		return httpserver.NewError(fiber.StatusConflict, "backup_running", "A backup is already running; try again when it has finished.")
+		return errRunning
 	case errors.Is(err, backup.ErrStopped):
 		return httpserver.NewError(fiber.StatusServiceUnavailable, "service_unavailable", "The backup service is stopping.")
 	case errors.As(err, &unknown):
@@ -180,6 +197,108 @@ func (h *Handler) CreateBackup(c fiber.Ctx, params generated.CreateBackupParams)
 		}
 	}
 	return c.Status(fiber.StatusAccepted).JSON(toProgress(job.Progress()))
+}
+
+var errRunning = httpserver.NewError(fiber.StatusConflict, "backup_running", "A backup or restore check is already running; try again when it has finished.")
+
+func (h *Handler) CreateRestoreCheck(c fiber.Ctx, params generated.CreateRestoreCheckParams) error {
+	wait := 0
+	if params.WaitSeconds != nil {
+		if *params.WaitSeconds < 0 || *params.WaitSeconds > 3600 {
+			return badRequest("waitSeconds must be between 0 and 3600")
+		}
+		wait = *params.WaitSeconds
+	}
+	var body generated.RestoreCheckCreateRequest
+	if len(c.Body()) > 0 {
+		if err := json.Unmarshal(c.Body(), &body); err != nil {
+			return badRequest("the body must be a JSON object such as {\"runId\": \"20261011T011500Z\"}")
+		}
+	}
+	runID := ""
+	if body.RunId != nil {
+		if !backup.IsRunID(*body.RunId) {
+			return badRequest("runId must be a run id such as 20261011T011500Z")
+		}
+		runID = *body.RunId
+	}
+	actor, _ := activity.ParseActor(c.Get(activity.ActorHeader))
+
+	job, err := h.runner.StartRestoreCheck(backup.CheckRequest{RunID: runID, Trigger: backup.TriggerManual, Actor: actorName(actor)})
+	var unknown *backup.UnknownRunError
+	switch {
+	case errors.Is(err, backup.ErrRunning):
+		return errRunning
+	case errors.Is(err, backup.ErrStopped):
+		return httpserver.NewError(fiber.StatusServiceUnavailable, "service_unavailable", "The backup service is stopping.")
+	case errors.Is(err, backup.ErrNoBackup):
+		return httpserver.NewError(fiber.StatusUnprocessableEntity, "no_backup", "There is no successful backup of every database to check yet.")
+	case errors.Is(err, backup.ErrNothingToCheck):
+		return httpserver.NewError(fiber.StatusUnprocessableEntity, "no_backup", "That run has no dump to check.")
+	case errors.As(err, &unknown):
+		return httpserver.NewError(fiber.StatusNotFound, "run_not_found", "There is no completed backup run "+unknown.ID+".")
+	case err != nil:
+		return httpserver.WrapError(err, fiber.StatusInternalServerError, "internal_error", "The restore check could not start: "+err.Error())
+	}
+
+	if wait > 0 {
+		timer := time.NewTimer(time.Duration(wait) * time.Second)
+		defer timer.Stop()
+		select {
+		case <-job.Done():
+			return c.JSON(toCheck(job.Result()))
+		case <-timer.C:
+		case <-c.Context().Done():
+		}
+	}
+	return c.Status(fiber.StatusAccepted).JSON(toCheckProgress(job.Progress()))
+}
+
+func toCheck(check backup.RestoreCheck) generated.RestoreCheck {
+	response := generated.RestoreCheck{
+		Id:              check.ID,
+		RunId:           check.RunID,
+		Trigger:         generated.BackupTrigger(check.Trigger),
+		Actor:           optional(check.Actor),
+		StartedAt:       check.StartedAt.UTC(),
+		FinishedAt:      check.FinishedAt.UTC(),
+		DurationSeconds: check.DurationSeconds,
+		Ok:              check.OK,
+		Databases:       make([]generated.RestoreCheckDatabase, 0, len(check.Databases)),
+		Error:           optional(check.Error),
+	}
+	for _, database := range check.Databases {
+		item := generated.RestoreCheckDatabase{
+			Name:       database.Name,
+			Ok:         database.OK,
+			Tables:     database.Tables,
+			Rows:       database.Rows,
+			Mismatches: make([]generated.RestoreCheckMismatch, 0, len(database.Mismatches)),
+			Error:      optional(database.Error),
+		}
+		for _, mismatch := range database.Mismatches {
+			item.Mismatches = append(item.Mismatches, generated.RestoreCheckMismatch{Subject: mismatch.Subject, Expected: mismatch.Expected, Actual: mismatch.Actual})
+		}
+		response.Databases = append(response.Databases, item)
+	}
+	return response
+}
+
+func toCheckProgress(progress backup.CheckProgress) generated.RestoreCheckProgress {
+	databases := progress.Databases
+	if databases == nil {
+		databases = []string{}
+	}
+	return generated.RestoreCheckProgress{
+		Id:        progress.ID,
+		RunId:     progress.RunID,
+		Trigger:   generated.BackupTrigger(progress.Trigger),
+		Actor:     optional(progress.Actor),
+		StartedAt: progress.StartedAt.UTC(),
+		Databases: databases,
+		Completed: progress.Completed,
+		Current:   optional(progress.Current),
+	}
 }
 
 func toRun(summary backup.Summary) generated.BackupRun {

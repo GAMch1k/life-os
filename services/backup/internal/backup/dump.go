@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // DefaultDatabaseTimeout bounds the backup of one database, so a stuck
@@ -185,13 +186,9 @@ func (d *Dumper) dump(ctx context.Context, database Database, dir string, result
 	}
 	conn, err := pgx.ConnectConfig(ctx, config)
 	if err != nil {
-		return "", fmt.Errorf("connect: %w", err)
+		return "", connectError(d.Connection.User, database.Name, err)
 	}
-	defer func() {
-		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		conn.Close(cleanup)
-	}()
+	defer closeConn(conn)
 
 	// The transaction ends with the connection; a read-only transaction has
 	// nothing to roll back.
@@ -230,6 +227,24 @@ func (d *Dumper) dump(ctx context.Context, database Database, dir string, result
 	}
 	result.File, result.Bytes, result.SHA256 = file, bytesWritten, sum
 	return serverVersion, nil
+}
+
+// connectError says what to do about a connection the server refused:
+// most often a database that was added to the registry after the backup
+// role was last provisioned.
+func connectError(role, database string, err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		switch pgErr.Code {
+		case "42501": // insufficient_privilege: no CONNECT on the database
+			return fmt.Errorf("%s cannot connect to %s: run make db-provision-backup (%s)", role, database, pgErr.Message)
+		case "3D000": // invalid_catalog_name
+			return fmt.Errorf("%s does not exist: provision it with make db-provision, which also grants it to %s (%s)", database, role, pgErr.Message)
+		case "28P01", "28000": // invalid_password, invalid_authorization_specification
+			return fmt.Errorf("%s cannot log in: set LIFE_OS_BACKUP_DB_PASSWORD in .env, run make db-provision-backup, and restart the backup service (%s)", role, pgErr.Message)
+		}
+	}
+	return fmt.Errorf("connect to %s: %w", database, err)
 }
 
 // countRows counts the rows of every user table (plain tables and

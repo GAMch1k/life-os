@@ -13,9 +13,9 @@ import (
 )
 
 var (
-	// ErrRunning means a run is already in progress, in this process or in
-	// another one holding the backup lock.
-	ErrRunning = errors.New("a backup is already running")
+	// ErrRunning means a run or a restore check is already in progress, in
+	// this process or in another one holding the backup lock.
+	ErrRunning = errors.New("a backup or restore check is already running")
 	// ErrStopped means the service is shutting down.
 	ErrStopped = errors.New("the backup service is stopping")
 )
@@ -35,6 +35,9 @@ type Request struct {
 	Databases []string
 	// Actor is who asked for a manual run, such as dev:backup-now.
 	Actor string
+	// ThenRestoreCheck runs a restore check of the newest successful full
+	// run right after this run, under the same lock.
+	ThenRestoreCheck bool
 }
 
 // Progress is a run in progress.
@@ -115,6 +118,8 @@ type RunnerOptions struct {
 	Retention Retention
 	// Targets receive a copy of every completed run (none yet).
 	Targets []Target
+	// Restorer runs restore checks; without one there are none.
+	Restorer DatabaseRestorer
 	// Location is the owner's timezone, for the rotation's days, weeks,
 	// and months.
 	Location *time.Location
@@ -129,8 +134,9 @@ type Runner struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 
-	mu      sync.Mutex
-	current *Job
+	mu       sync.Mutex
+	current  *Job
+	checking *CheckJob
 }
 
 // NewRunner creates a Runner.
@@ -149,8 +155,9 @@ func NewRunner(opts RunnerOptions) *Runner {
 }
 
 // Recover cleans up after an earlier process: it records the runs a crash
-// or stop interrupted, removes their files, and applies the rotation. It
-// does nothing while another process holds the backup lock.
+// or stop interrupted, removes their files, drops the scratch databases of
+// interrupted restore checks, and applies the rotation. It does nothing
+// while another process holds the backup lock.
 func (r *Runner) Recover() error {
 	lock, err := r.opts.Store.Lock()
 	if errors.Is(err, ErrLocked) {
@@ -161,6 +168,7 @@ func (r *Runner) Recover() error {
 	}
 	defer lock.Release()
 	r.recoverLeftovers()
+	r.dropScratch(r.ctx, r.opts.Logger)
 	r.rotate()
 	return nil
 }
@@ -175,7 +183,7 @@ func (r *Runner) Start(request Request) (*Job, error) {
 	if r.ctx.Err() != nil {
 		return nil, ErrStopped
 	}
-	if r.current != nil {
+	if r.current != nil || r.checking != nil {
 		return nil, ErrRunning
 	}
 	registry, err := r.opts.Registry()
@@ -227,7 +235,7 @@ func (r *Runner) Start(request Request) (*Job, error) {
 	}}
 	r.current = job
 	r.wg.Add(1)
-	go r.execute(job, manifest, dir, databases, lock)
+	go r.execute(job, manifest, dir, databases, lock, request.ThenRestoreCheck)
 	return job, nil
 }
 
@@ -255,7 +263,7 @@ func (r *Runner) Close(ctx context.Context) error {
 	}
 }
 
-func (r *Runner) execute(job *Job, manifest Manifest, dir string, databases []Database, lock *Lock) {
+func (r *Runner) execute(job *Job, manifest Manifest, dir string, databases []Database, lock *Lock, thenCheck bool) {
 	defer r.wg.Done()
 	defer lock.Release()
 	ctx := r.ctx
@@ -312,11 +320,31 @@ func (r *Runner) execute(job *Job, manifest Manifest, dir string, databases []Da
 	}
 	logger.Info("backup finished", "result", summary.Result, "duration_seconds", summary.DurationSeconds, "bytes", summary.TotalBytes, "error", summary.Error)
 
-	lock.Release()
+	// A restore check that follows goes on under the same lock, so no run
+	// starts between the two.
+	var check *CheckJob
+	var checked Run
+	if thenCheck && ctx.Err() == nil && r.opts.Restorer != nil {
+		run, err := r.checkTarget("")
+		if err != nil {
+			logger.Warn("no restore check after this run", "error", err)
+		} else {
+			check, checked = r.newCheckJob(CheckRequest{Trigger: TriggerSchedule}, run), run
+		}
+	}
+	if check == nil {
+		lock.Release()
+	}
 	r.mu.Lock()
 	r.current = nil
+	r.checking = check
 	r.mu.Unlock()
 	job.finish(summary)
+	if check != nil {
+		result := r.runCheck(check, checked)
+		lock.Release()
+		r.finishCheck(check, result)
+	}
 }
 
 // failToStart records a run that could not start. lock is the backup lock
@@ -479,10 +507,14 @@ type Status struct {
 	// LastSuccess is the latest successful run of every database.
 	LastSuccess *Summary
 	Running     *Progress
-	Runs        int
-	TotalBytes  int64
-	FreeBytes   int64
-	SizeBytes   int64
+	// LastRestoreCheck is the newest restore check; RunningCheck the one in
+	// progress.
+	LastRestoreCheck *RestoreCheck
+	RunningCheck     *CheckProgress
+	Runs             int
+	TotalBytes       int64
+	FreeBytes        int64
+	SizeBytes        int64
 	// Databases are the databases in the registry now, or DatabasesError
 	// says why it cannot be read.
 	Databases      []string
@@ -516,6 +548,13 @@ func (r *Runner) Status() (Status, error) {
 	if job := r.Current(); job != nil {
 		progress := job.Progress()
 		status.Running = &progress
+	}
+	if job := r.CurrentCheck(); job != nil {
+		progress := job.Progress()
+		status.RunningCheck = &progress
+	}
+	if status.LastRestoreCheck, err = r.LastRestoreCheck(); err != nil {
+		r.opts.Logger.Warn("reading the restore checks failed", "error", err)
 	}
 	if status.TotalBytes, err = r.opts.Store.Usage(); err != nil {
 		return Status{}, err

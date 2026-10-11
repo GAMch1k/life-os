@@ -38,6 +38,9 @@ type Config struct {
 	KeepWeekly     int `env:"BACKUP_KEEP_WEEKLY" default:"4"`
 	KeepMonthly    int `env:"BACKUP_KEEP_MONTHLY" default:"12"`
 	KeepFailedDays int `env:"BACKUP_KEEP_FAILED_DAYS" default:"3"`
+	// RestoreCheckDay is the weekday whose nightly run a restore check
+	// follows, or off.
+	RestoreCheckDay string `env:"BACKUP_RESTORE_CHECK_DAY" default:"sunday"`
 	// PgDump and PgRestore are the PostgreSQL client programs, of the
 	// server's major version.
 	PgDump    string `env:"BACKUP_PG_DUMP" default:"pg_dump"`
@@ -105,6 +108,9 @@ func (c Config) Validate() error {
 	if c.KeepFailedDays < 1 || c.KeepFailedDays > 366 {
 		validationErrors = append(validationErrors, fmt.Errorf("BACKUP_KEEP_FAILED_DAYS must be between 1 and 366"))
 	}
+	if _, _, err := backup.ParseCheckDay(c.RestoreCheckDay); err != nil {
+		validationErrors = append(validationErrors, fmt.Errorf("BACKUP_RESTORE_CHECK_DAY: %w", err))
+	}
 	if strings.TrimSpace(c.PgDump) == "" || strings.TrimSpace(c.PgRestore) == "" {
 		validationErrors = append(validationErrors, fmt.Errorf("BACKUP_PG_DUMP and BACKUP_PG_RESTORE must not be empty"))
 	}
@@ -131,6 +137,12 @@ func (c Config) Location() *time.Location {
 func (c Config) Schedule() backup.Schedule {
 	minute, _ := backup.ParseTime(c.Time)
 	return backup.Schedule{Minute: minute, Location: c.Location()}
+}
+
+// CheckDay is the validated restore check day; enabled is false for off.
+func (c Config) CheckDay() (day time.Weekday, enabled bool) {
+	day, enabled, _ = backup.ParseCheckDay(c.RestoreCheckDay)
+	return day, enabled
 }
 
 // Retention is the validated rotation policy.

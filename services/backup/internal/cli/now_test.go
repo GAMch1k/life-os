@@ -106,3 +106,60 @@ func TestNowReportsTheServicesAnswer(t *testing.T) {
 		t.Fatalf("no service: exit %d, stderr %s", code, stderr.String())
 	}
 }
+
+func TestRestoreCheckWaitsAndPrints(t *testing.T) {
+	var got generated.RestoreCheckCreateRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/restore-checks" || r.Header.Get("X-Life-OS-Actor") != "dev:backup-cli" {
+			http.Error(w, "unexpected request", http.StatusTeapot)
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &got)
+		errText := "1 of 2 databases did not restore as their manifest says"
+		_ = json.NewEncoder(w).Encode(generated.RestoreCheck{
+			Id: "20261011T012000Z", RunId: "20261011T011500Z", Trigger: generated.Manual, DurationSeconds: 4.2, Error: &errText,
+			Databases: []generated.RestoreCheckDatabase{
+				{Name: "finance_db", Ok: true, Tables: 5, Rows: 42, Mismatches: []generated.RestoreCheckMismatch{}},
+				{Name: "tasks_db", Mismatches: []generated.RestoreCheckMismatch{{Subject: "public.tasks", Expected: "12 rows", Actual: "11 rows"}}},
+			},
+		})
+	}))
+	defer server.Close()
+	var stdout, stderr bytes.Buffer
+	code := RestoreCheck(context.Background(), []string{"-url", server.URL, "-run", "20261011T011500Z"}, &stdout, &stderr)
+	if code != ExitFailed || got.RunId == nil || *got.RunId != "20261011T011500Z" {
+		t.Fatalf("exit %d, request %+v, stderr %s", code, got, stderr.String())
+	}
+	for _, want := range []string{"Restore check 20261011T012000Z of backup 20261011T011500Z failed in 4.2 s.", "finance_db", "42 rows", "tasks_db", "public.tasks: expected 12 rows, restored 11 rows"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Errorf("output lacks %q:\n%s", want, stdout.String())
+		}
+	}
+	if code := RestoreCheck(context.Background(), []string{"extra"}, &stdout, &stderr); code != ExitUsage {
+		t.Errorf("an argument: exit %d", code)
+	}
+}
+
+func TestRestoreCheckFollowsTheStatus(t *testing.T) {
+	var polls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			w.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(w).Encode(generated.RestoreCheckProgress{Id: "20261011T012000Z", RunId: "20261011T011500Z", Databases: []string{"finance_db"}})
+			return
+		}
+		status := generated.BackupStatus{Databases: []string{"finance_db"}}
+		if polls.Add(1) < 2 {
+			status.RunningRestoreCheck = &generated.RestoreCheckProgress{Id: "20261011T012000Z", Databases: []string{"finance_db"}}
+		} else {
+			status.LastRestoreCheck = &generated.RestoreCheck{Id: "20261011T012000Z", RunId: "20261011T011500Z", Ok: true, Databases: []generated.RestoreCheckDatabase{{Name: "finance_db", Ok: true, Mismatches: []generated.RestoreCheckMismatch{}}}}
+		}
+		_ = json.NewEncoder(w).Encode(status)
+	}))
+	defer server.Close()
+	var stdout, stderr bytes.Buffer
+	if code := RestoreCheck(context.Background(), []string{"-url", server.URL, "-poll", "10ms"}, &stdout, &stderr); code != ExitSucceeded || !strings.Contains(stdout.String(), "passed") {
+		t.Fatalf("exit %d, stdout %s, stderr %s", code, stdout.String(), stderr.String())
+	}
+}

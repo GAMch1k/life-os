@@ -33,6 +33,25 @@ func ParseTime(value string) (int, error) {
 	return h*60 + m, nil
 }
 
+// DefaultRestoreCheckDay is the weekday whose nightly run a restore check
+// follows.
+const DefaultRestoreCheckDay = "sunday"
+
+// ParseCheckDay reads a weekday such as sunday, or off. enabled is false
+// for off.
+func ParseCheckDay(value string) (day time.Weekday, enabled bool, err error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "off" {
+		return 0, false, nil
+	}
+	for weekday := time.Sunday; weekday <= time.Saturday; weekday++ {
+		if strings.ToLower(weekday.String()) == value {
+			return weekday, true, nil
+		}
+	}
+	return 0, false, fmt.Errorf("%q is not a weekday such as sunday, or off", value)
+}
+
 // Time is the run time as HH:MM.
 func (s Schedule) Time() string {
 	return fmt.Sprintf("%02d:%02d", s.Minute/60, s.Minute%60)
