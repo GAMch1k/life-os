@@ -127,6 +127,27 @@ func (e InboxItemState) Valid() bool {
 	}
 }
 
+// Defines values for MediaContentType.
+const (
+	Imagejpeg MediaContentType = "image/jpeg"
+	Imagepng  MediaContentType = "image/png"
+	Imagewebp MediaContentType = "image/webp"
+)
+
+// Valid indicates whether the value is a known member of the MediaContentType enum.
+func (e MediaContentType) Valid() bool {
+	switch e {
+	case Imagejpeg:
+		return true
+	case Imagepng:
+		return true
+	case Imagewebp:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ProcessingAttemptRuntimeState.
 const (
 	ProcessingAttemptRuntimeStateCancelled ProcessingAttemptRuntimeState = "cancelled"
@@ -265,8 +286,10 @@ type CreateHumanReviewRequest struct {
 
 // CreateInboxItemRequest defines model for CreateInboxItemRequest.
 type CreateInboxItemRequest struct {
-	Content         string                       `json:"content"`
-	DedupeKey       *string                      `json:"dedupeKey,omitempty"`
+	Content   string  `json:"content"`
+	DedupeKey *string `json:"dedupeKey,omitempty"`
+
+	// MediaReferences Images uploaded with POST /v1/media, by the references it returned (400 invalid_media_reference or unknown_media otherwise).
 	MediaReferences *[]string                    `json:"mediaReferences,omitempty"`
 	Source          CreateInboxItemRequestSource `json:"source"`
 	SourceMetadata  *map[string]interface{}      `json:"sourceMetadata,omitempty"`
@@ -309,10 +332,12 @@ type InboxItem struct {
 	Content string `json:"content"`
 
 	// CorrelationId Workflow correlation id for activity events: the upstream caller's X-Correlation-ID, or the item id when the capture starts its own workflow.
-	CorrelationId   string             `json:"correlationId"`
-	CreatedAt       time.Time          `json:"createdAt"`
-	Id              openapi_types.UUID `json:"id"`
-	MediaReferences *[]string          `json:"mediaReferences,omitempty"`
+	CorrelationId string             `json:"correlationId"`
+	CreatedAt     time.Time          `json:"createdAt"`
+	Id            openapi_types.UUID `json:"id"`
+
+	// MediaReferences The capture's images, as inbox-media:<sha256> references (GET /v1/media/{sha256}).
+	MediaReferences *[]string `json:"mediaReferences,omitempty"`
 
 	// NextRetryAt When a raw item that failed may be retried.
 	NextRetryAt        *time.Time             `json:"nextRetryAt,omitempty"`
@@ -339,6 +364,24 @@ type InboxItemState string
 type InboxItemList struct {
 	Items      []InboxItem `json:"items"`
 	NextCursor *string     `json:"nextCursor,omitempty"`
+}
+
+// Media defines model for Media.
+type Media struct {
+	ByteSize    int64            `json:"byteSize"`
+	ContentType MediaContentType `json:"contentType"`
+
+	// Reference inbox-media:<sha256>, for a capture's mediaReferences.
+	Reference string `json:"reference"`
+	Sha256    string `json:"sha256"`
+}
+
+// MediaContentType defines model for Media.ContentType.
+type MediaContentType string
+
+// MediaList defines model for MediaList.
+type MediaList struct {
+	Items []Media `json:"items"`
 }
 
 // ProcessingAttempt defines model for ProcessingAttempt.
@@ -409,6 +452,11 @@ type ListInboxItemsParams struct {
 // ListInboxItemsParamsState defines parameters for ListInboxItems.
 type ListInboxItemsParamsState string
 
+// UploadMediaMultipartBody defines parameters for UploadMedia.
+type UploadMediaMultipartBody struct {
+	Images []openapi_types.File `json:"images"`
+}
+
 // ListStaleProcessingAttemptsParams defines parameters for ListStaleProcessingAttempts.
 type ListStaleProcessingAttemptsParams struct {
 	StaleAfterSeconds int `form:"staleAfterSeconds" json:"staleAfterSeconds"`
@@ -431,6 +479,9 @@ type UpdateProcessingAttemptJSONRequestBody = UpdateProcessingAttemptRequest
 
 // RecordAttemptRuntimeJSONRequestBody defines body for RecordAttemptRuntime for application/json ContentType.
 type RecordAttemptRuntimeJSONRequestBody = AttemptRuntimeRequest
+
+// UploadMediaMultipartRequestBody defines body for UploadMedia for multipart/form-data ContentType.
+type UploadMediaMultipartRequestBody UploadMediaMultipartBody
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
@@ -470,6 +521,12 @@ type ServerInterface interface {
 	// ResolveInboxItem Resolve an inbox item
 	// (POST /v1/inbox-items/{itemId}/resolve)
 	ResolveInboxItem(c fiber.Ctx, itemId openapi_types.UUID) error
+	// UploadMedia Upload images for a capture
+	// (POST /v1/media)
+	UploadMedia(c fiber.Ctx) error
+	// GetMedia Get a capture image
+	// (GET /v1/media/{sha256})
+	GetMedia(c fiber.Ctx, sha256 string) error
 	// ListStaleProcessingAttempts List unfinished attempts whose runtime stopped reporting
 	// (GET /v1/stale-processing-attempts)
 	ListStaleProcessingAttempts(c fiber.Ctx, params ListStaleProcessingAttemptsParams) error
@@ -862,6 +919,53 @@ func (siw *ServerInterfaceWrapper) ResolveInboxItem(c fiber.Ctx) error {
 	return handler(c)
 }
 
+// UploadMedia operation middleware
+func (siw *ServerInterfaceWrapper) UploadMedia(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.UploadMedia(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// GetMedia operation middleware
+func (siw *ServerInterfaceWrapper) GetMedia(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "sha256" -------------
+	var sha256 string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "sha256", c.Params("sha256"), &sha256, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter sha256: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.GetMedia(c, sha256)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
 // ListStaleProcessingAttempts operation middleware
 func (siw *ServerInterfaceWrapper) ListStaleProcessingAttempts(c fiber.Ctx) error {
 
@@ -945,6 +1049,10 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	router.Patch(options.BaseURL+"/v1/inbox-items/:itemId/processing-attempts/:attemptId", wrapper.UpdateProcessingAttempt)
 
 	router.Put(options.BaseURL+"/v1/inbox-items/:itemId/processing-attempts/:attemptId/runtime", wrapper.RecordAttemptRuntime)
+
+	router.Post(options.BaseURL+"/v1/media", wrapper.UploadMedia)
+
+	router.Get(options.BaseURL+"/v1/media/:sha256", wrapper.GetMedia)
 
 	router.Get(options.BaseURL+"/v1/stale-processing-attempts", wrapper.ListStaleProcessingAttempts)
 

@@ -14,6 +14,7 @@ import (
 
 	"github.com/GAMch1k/life-os/pkg/activity"
 	"github.com/GAMch1k/life-os/services/inbox/internal/api/generated"
+	"github.com/GAMch1k/life-os/services/inbox/internal/media"
 	store "github.com/GAMch1k/life-os/services/inbox/internal/repository/generated"
 )
 
@@ -21,6 +22,10 @@ type Handler struct {
 	queries  *store.Queries
 	activity *activity.Emitter
 	notifier *Notifier
+	// media holds capture images, each at most maxImageBytes (see
+	// WithMedia).
+	media         media.Store
+	maxImageBytes int64
 }
 
 var _ generated.ServerInterface = (*Handler)(nil)
@@ -91,7 +96,11 @@ func (h *Handler) CreateInboxItem(c fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(400, "invalid source metadata")
 	}
-	media, err := json.Marshal(body.MediaReferences)
+	references, err := h.captureMedia(c.Context(), body.MediaReferences)
+	if err != nil {
+		return err
+	}
+	encodedReferences, err := json.Marshal(references)
 	if err != nil {
 		return fiber.NewError(400, "invalid media references")
 	}
@@ -102,11 +111,15 @@ func (h *Handler) CreateInboxItem(c fiber.Ctx) error {
 	if trace.CorrelationID != "" {
 		correlation = &trace.CorrelationID
 	}
-	item, err := h.queries.CreateInboxItem(c.Context(), store.CreateInboxItemParams{Content: body.Content, Source: string(body.Source), SourceMetadata: metadata, MediaReferences: media, SourceDedupeKey: body.DedupeKey, CorrelationID: correlation})
+	item, err := h.queries.CreateInboxItem(c.Context(), store.CreateInboxItemParams{Content: body.Content, Source: string(body.Source), SourceMetadata: metadata, MediaReferences: encodedReferences, SourceDedupeKey: body.DedupeKey, CorrelationID: correlation})
 	if err != nil {
 		return internal(err)
 	}
 	id := uuid(item.ID).String()
+	data := map[string]any{"source": item.Source, "content": activity.Preview(item.Content, 280)}
+	if len(references) > 0 {
+		data["images"] = len(references)
+	}
 	h.record(c, item, activity.Event{
 		ID:          activity.EventID("inbox.item.captured", id),
 		Type:        "inbox.item.captured",
@@ -114,7 +127,7 @@ func (h *Handler) CreateInboxItem(c fiber.Ctx) error {
 		CausationID: trace.CausationID,
 		Outcome:     activity.Succeeded,
 		Summary:     fmt.Sprintf("Captured “%s” from %s", activity.Preview(item.Content, 80), item.Source),
-		Data:        map[string]any{"source": item.Source, "content": activity.Preview(item.Content, 280)},
+		Data:        data,
 	})
 	return c.Status(201).JSON(output(item))
 }
@@ -469,11 +482,15 @@ func correlationID(item store.InboxItem) string {
 func output(item store.InboxItem) generated.InboxItem {
 	var metadata map[string]interface{}
 	var processingMetadata map[string]interface{}
-	var media []string
+	var references []string
 	_ = json.Unmarshal(item.SourceMetadata, &metadata)
 	_ = json.Unmarshal(item.ProcessingMetadata, &processingMetadata)
-	_ = json.Unmarshal(item.MediaReferences, &media)
-	return generated.InboxItem{Id: uuid(item.ID), CorrelationId: correlationID(item), Content: item.Content, Source: generated.InboxItemSource(item.Source), SourceMetadata: &metadata, MediaReferences: &media, State: generated.InboxItemState(item.State), ProcessingMetadata: processingMetadata, NextRetryAt: nullableTime(item.NextRetryAt), RetryReason: item.RetryReason, ResolvedAt: nullableTime(item.ResolvedAt), CreatedAt: item.CreatedAt.Time, UpdatedAt: item.UpdatedAt.Time}
+	_ = json.Unmarshal(item.MediaReferences, &references)
+	if references == nil {
+		// Older captures without images stored JSON null.
+		references = []string{}
+	}
+	return generated.InboxItem{Id: uuid(item.ID), CorrelationId: correlationID(item), Content: item.Content, Source: generated.InboxItemSource(item.Source), SourceMetadata: &metadata, MediaReferences: &references, State: generated.InboxItemState(item.State), ProcessingMetadata: processingMetadata, NextRetryAt: nullableTime(item.NextRetryAt), RetryReason: item.RetryReason, ResolvedAt: nullableTime(item.ResolvedAt), CreatedAt: item.CreatedAt.Time, UpdatedAt: item.UpdatedAt.Time}
 }
 func containsCandidate(raw interface{}, candidateID string) bool {
 	candidates, ok := raw.([]interface{})

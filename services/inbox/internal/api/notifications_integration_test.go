@@ -2,26 +2,21 @@ package api
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
-	"sort"
 	"testing"
 	"time"
 
 	"github.com/gofiber/fiber/v3"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/GAMch1k/life-os/pkg/activity"
 	"github.com/GAMch1k/life-os/pkg/httpserver"
 	"github.com/GAMch1k/life-os/pkg/notify"
 	store "github.com/GAMch1k/life-os/services/inbox/internal/repository/generated"
+	"github.com/GAMch1k/life-os/services/inbox/internal/testdb"
 )
 
 // inboxAPI serves the Inbox API on a fresh schema of the Postgres named by
@@ -34,41 +29,7 @@ type inboxAPI struct {
 
 func newInboxAPI(t *testing.T, notificationsURL string) (*inboxAPI, *Notifier) {
 	t.Helper()
-	url := os.Getenv("INBOX_TEST_DATABASE_URL")
-	if url == "" {
-		t.Skip("INBOX_TEST_DATABASE_URL is not set")
-	}
-	ctx := context.Background()
-	schema := fmt.Sprintf("inbox_notify_test_%d", time.Now().UnixNano())
-	config, err := pgxpool.ParseConfig(url)
-	if err != nil {
-		t.Fatal(err)
-	}
-	config.ConnConfig.RuntimeParams["search_path"] = schema
-	pool, err := pgxpool.NewWithConfig(ctx, config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(pool.Close)
-	if _, err := pool.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DROP SCHEMA "+schema+" CASCADE") })
-	files, err := filepath.Glob(filepath.Join("..", "..", "db", "migrations", "*.up.sql"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	sort.Strings(files)
-	for _, file := range files {
-		migration, err := os.ReadFile(file)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := pool.Exec(ctx, string(migration)); err != nil {
-			t.Fatalf("%s: %v", file, err)
-		}
-	}
-
+	pool := testdb.Open(t, "inbox_notify_test")
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	events := newFakeService(t, nil)
 	emitter := activity.NewEmitter(events.url, "inbox", logger)

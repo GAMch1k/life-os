@@ -102,6 +102,35 @@ paths:
       parameters: [{name: itemId, in: path, required: true, schema: {type: string, format: uuid}}, {name: attemptId, in: path, required: true, schema: {type: string, format: uuid}}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AttemptRuntimeRequest'}}}}
       responses: {'200': {description: Updated attempt, content: {application/json: {schema: {$ref: '#/components/schemas/ProcessingAttempt'}}}}, '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (actor_required)'}, '404': {description: Attempt not found}, '409': {description: Attempt already finished}}
+  /v1/media:
+    post:
+      summary: Upload images for a capture
+      description: >-
+        Stores one to five images (JPEG, PNG, or WebP, recognized from their
+        bytes; each at most INBOX_MEDIA_MAX_BYTES, 10 MiB by default) and
+        returns their media references, in upload order, for a capture's
+        mediaReferences. The same bytes uploaded again return the same
+        reference and are stored once. HEIC photos are refused
+        (heic_not_supported). Media a capture refers to is kept as long as the
+        capture; an upload no capture refers to is removed after a day.
+      operationId: uploadMedia
+      security: []
+      requestBody: {required: true, content: {multipart/form-data: {schema: {type: object, required: [images], properties: {images: {type: array, minItems: 1, maxItems: 5, items: {type: string, format: binary}}}}}}}
+      responses:
+        '201': {description: Stored images, content: {application/json: {schema: {$ref: '#/components/schemas/MediaList'}}}}
+        '400': {description: 'No image (images_required), more than five (too_many_images), not a JPEG, PNG, or WebP image (unsupported_image), a HEIC photo (heic_not_supported), or no valid X-Life-OS-Actor (actor_required)'}
+        '413': {description: An image exceeds the size limit (image_too_large)}
+  /v1/media/{sha256}:
+    get:
+      summary: Get a capture image
+      description: The image's bytes with its content type. Content-addressed, so a response never changes and may be cached privately.
+      operationId: getMedia
+      security: []
+      parameters: [{name: sha256, in: path, required: true, description: 'The image''s SHA-256 (lowercase hex), from its inbox-media reference.', schema: {type: string, pattern: '^[0-9a-f]{64}$'}}]
+      responses:
+        '200': {description: The image, content: {image/jpeg: {schema: {type: string, format: binary}}, image/png: {schema: {type: string, format: binary}}, image/webp: {schema: {type: string, format: binary}}}}
+        '400': {description: Not a SHA-256}
+        '404': {description: Media not found}
   /v1/stale-processing-attempts:
     get:
       summary: List unfinished attempts whose runtime stopped reporting
@@ -112,8 +141,10 @@ paths:
       responses: {'200': {description: Stale attempts, content: {application/json: {schema: {$ref: '#/components/schemas/ProcessingAttemptList'}}}}, '400': {description: Invalid request}}
 components:
   schemas:
-    InboxItem: {type: object, required: [id, content, source, state, processingMetadata, correlationId, createdAt, updatedAt], properties: {id: {type: string, format: uuid}, content: {type: string}, correlationId: {type: string, description: 'Workflow correlation id for activity events: the upstream caller''s X-Correlation-ID, or the item id when the capture starts its own workflow.'}, source: {type: string, enum: [manual, web, voice, watch, email]}, sourceMetadata: {type: object, additionalProperties: true}, mediaReferences: {type: array, items: {type: string, format: uri}}, state: {type: string, enum: [raw, processing, human_review, failed, resolved, discarded], description: 'failed: automatic processing gave up; needs operator attention.'}, processingMetadata: {type: object, additionalProperties: true}, nextRetryAt: {type: string, format: date-time, nullable: true, description: 'When a raw item that failed may be retried.'}, retryReason: {type: string, nullable: true, description: 'Why the retry is scheduled at that time, for example usage_limited or backoff.'}, resolvedAt: {type: string, format: date-time, nullable: true}, createdAt: {type: string, format: date-time}, updatedAt: {type: string, format: date-time}}}
-    CreateInboxItemRequest: {type: object, required: [content, source], properties: {content: {type: string}, source: {type: string, enum: [manual, web, voice, watch, email]}, sourceMetadata: {type: object, additionalProperties: true}, mediaReferences: {type: array, items: {type: string, format: uri}}, dedupeKey: {type: string, maxLength: 255}}}
+    InboxItem: {type: object, required: [id, content, source, state, processingMetadata, correlationId, createdAt, updatedAt], properties: {id: {type: string, format: uuid}, content: {type: string}, correlationId: {type: string, description: 'Workflow correlation id for activity events: the upstream caller''s X-Correlation-ID, or the item id when the capture starts its own workflow.'}, source: {type: string, enum: [manual, web, voice, watch, email]}, sourceMetadata: {type: object, additionalProperties: true}, mediaReferences: {type: array, description: 'The capture''s images, as inbox-media:<sha256> references (GET /v1/media/{sha256}).', items: {type: string, format: uri}}, state: {type: string, enum: [raw, processing, human_review, failed, resolved, discarded], description: 'failed: automatic processing gave up; needs operator attention.'}, processingMetadata: {type: object, additionalProperties: true}, nextRetryAt: {type: string, format: date-time, nullable: true, description: 'When a raw item that failed may be retried.'}, retryReason: {type: string, nullable: true, description: 'Why the retry is scheduled at that time, for example usage_limited or backoff.'}, resolvedAt: {type: string, format: date-time, nullable: true}, createdAt: {type: string, format: date-time}, updatedAt: {type: string, format: date-time}}}
+    CreateInboxItemRequest: {type: object, required: [content, source], properties: {content: {type: string}, source: {type: string, enum: [manual, web, voice, watch, email]}, sourceMetadata: {type: object, additionalProperties: true}, mediaReferences: {type: array, maxItems: 5, description: 'Images uploaded with POST /v1/media, by the references it returned (400 invalid_media_reference or unknown_media otherwise).', items: {type: string, format: uri, pattern: '^inbox-media:[0-9a-f]{64}$'}}, dedupeKey: {type: string, maxLength: 255}}}
+    Media: {type: object, required: [reference, sha256, contentType, byteSize], properties: {reference: {type: string, format: uri, description: 'inbox-media:<sha256>, for a capture''s mediaReferences.'}, sha256: {type: string}, contentType: {type: string, enum: [image/jpeg, image/png, image/webp]}, byteSize: {type: integer, format: int64}}}
+    MediaList: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/Media'}}}}
     InboxBacklog: {type: object, required: [pendingCount, retryingCount, humanReviewCount], properties: {pendingCount: {type: integer, description: Items waiting for or in automatic processing}, retryingCount: {type: integer, description: Pending items that already failed at least once and are being retried}, humanReviewCount: {type: integer}, oldestPendingAt: {type: string, format: date-time, nullable: true}, lastFailureAt: {type: string, format: date-time, nullable: true, description: When the most recent failed or retryable attempt of a pending item was recorded}, lastFailureSummary: {type: string, nullable: true}, failedCount: {type: integer, description: Items that automatic processing gave up on (operator attention)}, nextRetryAt: {type: string, format: date-time, nullable: true, description: Earliest scheduled retry}, nextRetryReason: {type: string, nullable: true}}}
     InboxItemList: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/InboxItem'}}, nextCursor: {type: string, nullable: true}}}
     ProcessingAttempt: {type: object, required: [id, inboxItemId, status, agentName, modelProfile, actions, createdAt], properties: {id: {type: string, format: uuid}, inboxItemId: {type: string, format: uuid}, runtimeState: {type: string, nullable: true, enum: [spawning, running, completed, failed, timed_out, cancelled]}, runtimeOwner: {type: string, nullable: true}, runtimeSessionId: {type: string, nullable: true, description: Agent session id (Codex thread id) when the runtime reports one}, runtimeHeartbeatAt: {type: string, format: date-time, nullable: true}, status: {type: string, enum: [pending, processing, human_review, processed, failed, retryable]}, agentName: {type: string}, modelProfile: {type: string}, idempotencyKey: {type: string}, actions: {type: array, items: {type: object, additionalProperties: true}}, errorSummary: {type: string, nullable: true}, nextRetryAt: {type: string, format: date-time, nullable: true}, startedAt: {type: string, format: date-time, nullable: true}, completedAt: {type: string, format: date-time, nullable: true}, createdAt: {type: string, format: date-time}}}
