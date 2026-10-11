@@ -18,6 +18,7 @@ func TestMigrationGoesDownAndUp(t *testing.T) {
 		t.Fatalf("%d built-in rules, %v", rules, err)
 	}
 	// Later migrations go down first.
+	testdb.Apply(t, pool, testdb.Migration(t, "000006", "down"))
 	testdb.Apply(t, pool, testdb.Migration(t, "000005", "down"))
 	testdb.Apply(t, pool, testdb.Migration(t, "000004", "down"))
 	testdb.Apply(t, pool, testdb.Migration(t, "000003", "down"))
@@ -30,6 +31,7 @@ func TestMigrationGoesDownAndUp(t *testing.T) {
 	testdb.Apply(t, pool, testdb.Migration(t, "000003", "up"))
 	testdb.Apply(t, pool, testdb.Migration(t, "000004", "up"))
 	testdb.Apply(t, pool, testdb.Migration(t, "000005", "up"))
+	testdb.Apply(t, pool, testdb.Migration(t, "000006", "up"))
 	var again int
 	if err := pool.QueryRow(ctx, "SELECT count(*) FROM aisle_rules").Scan(&again); err != nil || again != rules {
 		t.Fatalf("%d rules after up, want %d, %v", again, rules, err)
@@ -53,6 +55,7 @@ func TestRecipeMigrationGoesDownAndUp(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	testdb.Apply(t, pool, testdb.Migration(t, "000006", "down"))
 	testdb.Apply(t, pool, testdb.Migration(t, "000005", "down"))
 	testdb.Apply(t, pool, testdb.Migration(t, "000004", "down"))
 	var tables, recipeSources int
@@ -67,6 +70,7 @@ func TestRecipeMigrationGoesDownAndUp(t *testing.T) {
 	}
 	testdb.Apply(t, pool, testdb.Migration(t, "000004", "up"))
 	testdb.Apply(t, pool, testdb.Migration(t, "000005", "up"))
+	testdb.Apply(t, pool, testdb.Migration(t, "000006", "up"))
 	if _, err := pool.Exec(ctx, `UPDATE shopping_items SET source = 'recipe'`); err != nil {
 		t.Fatalf("source recipe after up: %v", err)
 	}
@@ -128,5 +132,50 @@ func TestAisleRankFollowsTheAisles(t *testing.T) {
 		if err != nil || rank != domain.AisleRank(aisle) {
 			t.Errorf("%s: rank %d, want %d (%v)", aisle, rank, domain.AisleRank(aisle), err)
 		}
+	}
+}
+
+// TestSuggestionMigrationGoesDownAndUp checks that 000006 is reversible:
+// up seeds the air fryer as the preferred method and keeps recipes' methods
+// to be inferred (NULL); down drops the ideas, the methods, and the
+// preferences, and keeps a saved idea's recipe.
+func TestSuggestionMigrationGoesDownAndUp(t *testing.T) {
+	pool := testdb.Open(t, "")
+	ctx := t.Context()
+	var methods []string
+	if err := pool.QueryRow(ctx, `SELECT methods FROM food_preferences`).Scan(&methods); err != nil || len(methods) != 1 || methods[0] != "air_fryer" {
+		t.Fatalf("preferred methods %v, %v", methods, err)
+	}
+	for _, sql := range []string{
+		`INSERT INTO recipes (title, normalized_title, created_by, updated_by) VALUES ('Wings', 'wings', 'dev:test', 'dev:test')`,
+		`INSERT INTO food_ideas (title, normalized_title, source, reason, state, recipe_id, created_by, updated_by)
+			SELECT 'Wings', 'wings', 'ai', 'Uses the chicken', 'saved', id, 'agent:test', 'agent:test' FROM recipes`,
+	} {
+		if _, err := pool.Exec(ctx, sql); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var inferred bool
+	if err := pool.QueryRow(ctx, `SELECT methods IS NULL FROM recipes`).Scan(&inferred); err != nil || !inferred {
+		t.Fatalf("a new recipe's methods are not left to infer: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE recipes SET methods = '{deep_fryer}'`); err == nil {
+		t.Fatal("an unknown method accepted")
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO food_ideas (title, normalized_title, source, reason, created_by, updated_by) VALUES
+		('Soup', 'soup', 'ai', 'r', 'agent:test', 'agent:test'), ('SOUP', 'soup', 'ai', 'r', 'agent:test', 'agent:test')`); err == nil {
+		t.Fatal("two new ideas of one title")
+	}
+	testdb.Apply(t, pool, testdb.Migration(t, "000006", "down"))
+	var tables, recipes int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.tables WHERE table_schema = current_schema() AND table_name IN ('food_ideas', 'food_preferences')`).Scan(&tables); err != nil || tables != 0 {
+		t.Fatalf("%d tables after down, %v", tables, err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM recipes`).Scan(&recipes); err != nil || recipes != 1 {
+		t.Fatalf("%d recipes after down, %v", recipes, err)
+	}
+	testdb.Apply(t, pool, testdb.Migration(t, "000006", "up"))
+	if err := pool.QueryRow(ctx, `SELECT methods FROM food_preferences`).Scan(&methods); err != nil || len(methods) != 1 {
+		t.Fatalf("preferences after up: %v, %v", methods, err)
 	}
 }

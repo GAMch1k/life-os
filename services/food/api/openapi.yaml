@@ -18,7 +18,10 @@ info:
     and the pantry, what is at home and when it expires; recipes and the
     weekly meal plan, from which missing ingredients go on the list; and the
     staples, the things the owner always wants at home, which go on the
-    list by themselves when they run low.
+    list by themselves when they run low; the owner's cooking preferences
+    (the air fryer first), suggestions of saved recipes ranked by what is at
+    home and what expires, and recipe ideas, drafts a generator such as the
+    AI suggests, which the owner saves or dismisses.
     Groceries (food, drinks, household, and drugstore items) go on the
     shopping list; other purchases stay Tasks.
 
@@ -637,6 +640,133 @@ paths:
         '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
         '404': {description: 'Nothing is planned there (`not_found`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
         '409': {description: '`idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/preferences:
+    get:
+      summary: Get the cooking preferences
+      description: >-
+        The preferred cooking methods (the most preferred first; the air
+        fryer to start with), the disliked ingredients (names as written,
+        compared normalised and word by word, see `GET /v1/suggestions`), and
+        free dietary notes.
+      operationId: getPreferences
+      security: []
+      responses:
+        '200': {description: Preferences, content: {application/json: {schema: {$ref: '#/components/schemas/Preferences'}}}}
+        '400': {description: Invalid request, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    put:
+      summary: Set the cooking preferences
+      description: >-
+        Replaces the preferences. Methods are kept in the order given without
+        duplicates; dislikes without duplicates by normalised name. A
+        request that changes nothing records nothing.
+      operationId: updatePreferences
+      security: []
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PreferencesRequest'}}}}
+      responses:
+        '200': {description: Preferences, content: {application/json: {schema: {$ref: '#/components/schemas/Preferences'}}}}
+        '400': {description: 'Invalid request (`invalid_request`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/suggestions:
+    get:
+      summary: Suggest saved recipes to cook
+      description: >-
+        Ranks the saved recipes for the owner's today, highest score first,
+        and says why (`reasons`, each with its points). Coverage: how many of
+        a recipe's ingredients are in stock (up to 40 points), compared word
+        by word (a pantry "Hähnchenbrust" covers "Hähnchen", "Vollmilch"
+        covers "Milch", "Eier" covers "Ei", "молоко" covers "молока"); water,
+        salt, pepper, and cooking oil are assumed at home (`basics`).
+        Expiring: 12 points per in-stock item it uses that expires today
+        through in 3 days (at most 3 items). Method: 10 points when it is
+        cooked one of the preferred ways. Habits: planned in the last 60 days
+        (4, 7, then at most 9 points: repeats are not rewarded further), and
+        how many of its ingredients were bought or put away in the last 60
+        days (up to 8). Planned within 3 days before or after today: −10.
+        With `mealSlot`, +5 when it was planned for that meal before or is
+        tagged for it ("dinner", "Abendessen", "ужин"), −10 when it is tagged
+        only for another meal. Recipes with a disliked ingredient (or a
+        disliked word in the title) are left out and listed in `excluded`.
+        Ties go to fewer missing ingredients, then the title.
+      operationId: listSuggestions
+      security: []
+      parameters:
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 50, default: 10}}
+        - {name: mealSlot, in: query, schema: {$ref: '#/components/schemas/MealSlot'}}
+      responses:
+        '200': {description: Suggestions, content: {application/json: {schema: {$ref: '#/components/schemas/SuggestionList'}}}}
+        '400': {description: 'Invalid request (`invalid_request`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/ideas:
+    get:
+      summary: List recipe ideas
+      description: Ideas in a state (new ones by default), newest first.
+      operationId: listIdeas
+      security: []
+      parameters:
+        - {name: state, in: query, schema: {$ref: '#/components/schemas/IdeaState'}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}
+      responses:
+        '200': {description: Ideas, content: {application/json: {schema: {$ref: '#/components/schemas/IdeaList'}}}}
+        '400': {description: 'Invalid request (`invalid_request`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    post:
+      summary: Suggest a recipe idea
+      description: >-
+        Stores an unsaved recipe draft with why it is suggested (`reason`),
+        for the owner to save or dismiss. Written by a generator, not the
+        owner: the actor must be `agent:<name>`, `system:<name>`, or
+        `dev:<name>` (403 `actor_not_allowed` for `user`). A new idea with
+        the same normalised title is 409 `idea_exists`, a saved recipe with
+        it 409 `recipe_exists`. Methods not given are inferred as for
+        recipes.
+      operationId: createIdea
+      security: []
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateIdeaRequest'}}}}
+      responses:
+        '201': {description: Idea, content: {application/json: {schema: {$ref: '#/components/schemas/Idea'}}}}
+        '400': {description: 'Invalid request (`invalid_request`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '403': {description: '`actor_not_allowed`: the owner does not write ideas', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`idea_exists`, `recipe_exists`, or `idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/ideas/{ideaId}:
+    get:
+      summary: Get a recipe idea
+      operationId: getIdea
+      security: []
+      parameters: [{$ref: '#/components/parameters/IdeaId'}]
+      responses:
+        '200': {description: Idea, content: {application/json: {schema: {$ref: '#/components/schemas/Idea'}}}}
+        '400': {description: Invalid request, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: Idea not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/ideas/{ideaId}/save:
+    post:
+      summary: Save an idea as a recipe
+      description: >-
+        Creates a recipe from the idea (its title, servings, ingredients,
+        steps, tags, link, and, when the idea names any, its methods; the
+        reason becomes the note) and marks the idea saved. An idea already
+        saved answers 200 with its recipe; a recipe with the title already
+        saved is 409 `recipe_exists`. A dismissed idea can still be saved.
+      operationId: saveIdea
+      security: []
+      parameters: [{$ref: '#/components/parameters/IdeaId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      responses:
+        '200': {description: Already saved, content: {application/json: {schema: {$ref: '#/components/schemas/SaveIdeaResult'}}}}
+        '201': {description: Saved, content: {application/json: {schema: {$ref: '#/components/schemas/SaveIdeaResult'}}}}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: Idea not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`recipe_exists` or `idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/ideas/{ideaId}/dismiss:
+    post:
+      summary: Dismiss an idea
+      description: A dismissed idea stays dismissed (no change, nothing recorded); a saved one is 409 `idea_saved`.
+      operationId: dismissIdea
+      security: []
+      parameters: [{$ref: '#/components/parameters/IdeaId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      responses:
+        '200': {description: Idea, content: {application/json: {schema: {$ref: '#/components/schemas/Idea'}}}}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: Idea not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`idea_saved` or `idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
   /v1/notifications/status:
     get:
       summary: Get the expiry reminders' health
@@ -660,6 +790,7 @@ components:
     RuleId: {name: ruleId, in: path, required: true, schema: {type: string, format: uuid}}
     RecipeId: {name: recipeId, in: path, required: true, schema: {type: string, format: uuid}}
     StapleId: {name: stapleId, in: path, required: true, schema: {type: string, format: uuid}}
+    IdeaId: {name: ideaId, in: path, required: true, schema: {type: string, format: uuid}}
     PlanDate: {name: date, in: path, required: true, description: A plain date (YYYY-MM-DD)., schema: {type: string, format: date}}
     PlanSlot: {name: slot, in: path, required: true, schema: {$ref: '#/components/schemas/MealSlot'}}
     IdempotencyKey:
@@ -934,7 +1065,7 @@ components:
         note: {type: string, maxLength: 200}
     Recipe:
       type: object
-      required: [id, title, normalizedTitle, servings, ingredients, steps, tags, sourceUrl, note, createdAt, updatedAt, createdBy, updatedBy]
+      required: [id, title, normalizedTitle, servings, ingredients, steps, tags, methods, methodsInferred, sourceUrl, note, createdAt, updatedAt, createdBy, updatedBy]
       properties:
         id: {type: string, format: uuid}
         title: {type: string, description: As written.}
@@ -943,6 +1074,8 @@ components:
         ingredients: {type: array, items: {$ref: '#/components/schemas/Ingredient'}}
         steps: {type: string, nullable: true, description: 'Plain text, one step per line.'}
         tags: {type: array, description: Normalised., items: {type: string}}
+        methods: {type: array, description: 'How it is cooked, in the order `CookingMethod` lists them.', items: {$ref: '#/components/schemas/CookingMethod'}}
+        methodsInferred: {type: boolean, description: 'True when Food inferred `methods` from the title, tags, and steps (and does again when they change); false when they were set.'}
         sourceUrl: {type: string, nullable: true}
         note: {type: string, nullable: true}
         createdAt: {type: string, format: date-time}
@@ -966,6 +1099,7 @@ components:
         tags: {type: array, maxItems: 20, items: {type: string, minLength: 1, maxLength: 40}}
         sourceUrl: {type: string, maxLength: 2000, description: An http or https URL.}
         note: {type: string, maxLength: 1000}
+        methods: {type: array, maxItems: 7, description: 'How it is cooked; without it Food infers the methods from the title, tags, and steps.', items: {$ref: '#/components/schemas/CookingMethod'}}
     UpdateRecipeRequest:
       type: object
       minProperties: 1
@@ -977,6 +1111,7 @@ components:
         tags: {type: array, maxItems: 20, items: {type: string, minLength: 1, maxLength: 40}}
         sourceUrl: {type: string, nullable: true, maxLength: 2000}
         note: {type: string, nullable: true, maxLength: 1000}
+        methods: {type: array, nullable: true, maxItems: 7, description: 'Sets the methods (an empty list: none); null lets Food infer them again.', items: {$ref: '#/components/schemas/CookingMethod'}}
     MealSlot:
       type: string
       description: A day's meals, in the order the plan lists them.
@@ -1152,3 +1287,134 @@ components:
         expiresOn: {type: string, format: date, nullable: true}
         openedOn: {type: string, format: date, nullable: true}
         note: {type: string, nullable: true, maxLength: 1000}
+    CookingMethod:
+      type: string
+      description: How a recipe is cooked.
+      enum: [air_fryer, oven, stovetop, slow_cooker, grill, microwave, no_cook]
+    Preferences:
+      type: object
+      required: [methods, dislikes, dietaryNotes, updatedAt, updatedBy]
+      properties:
+        methods: {type: array, description: 'The preferred cooking methods, the most preferred first.', items: {$ref: '#/components/schemas/CookingMethod'}}
+        dislikes: {type: array, description: Disliked ingredients as written., items: {type: string}}
+        dietaryNotes: {type: string, nullable: true, description: 'Free notes for whoever suggests recipes, such as "little red meat".'}
+        updatedAt: {type: string, format: date-time}
+        updatedBy: {$ref: '#/components/schemas/Actor'}
+    PreferencesRequest:
+      type: object
+      required: [methods, dislikes]
+      properties:
+        methods: {type: array, maxItems: 7, items: {$ref: '#/components/schemas/CookingMethod'}}
+        dislikes: {type: array, maxItems: 50, items: {type: string, minLength: 1, maxLength: 200}}
+        dietaryNotes: {type: string, maxLength: 1000, description: Empty or absent clears them.}
+    SuggestionReasonKind:
+      type: string
+      description: '`coverage`: ingredients at home. `expiring`: uses food that expires soon. `method`: a preferred cooking method. `habit_planned`: planned before. `habit_bought`: its ingredients were bought lately. `slot`: fits (or not) the meal asked for. `recent`: planned within 3 days.'
+      enum: [coverage, expiring, method, habit_planned, habit_bought, slot, recent]
+    SuggestionReason:
+      type: object
+      required: [kind, points, text]
+      properties:
+        kind: {$ref: '#/components/schemas/SuggestionReasonKind'}
+        points: {type: integer, description: What it adds to the score; negative for a penalty.}
+        text: {type: string, description: 'In words, such as "You have 4 of its 5 ingredients" or "Hähnchen expires tomorrow".'}
+    SuggestionUse:
+      type: object
+      required: [ingredient, pantryItemId, pantryItemName, expiresOn, expiresInDays]
+      properties:
+        ingredient: {type: string, description: The recipe's ingredient.}
+        pantryItemId: {type: string, format: uuid}
+        pantryItemName: {type: string, description: The in-stock item that covers it.}
+        expiresOn: {type: string, format: date, nullable: true}
+        expiresInDays: {type: integer, nullable: true, description: 'Days until it expires (0: today) when that is within 3 days; null otherwise.'}
+    SuggestionMissing:
+      type: object
+      required: [name, amount]
+      properties:
+        name: {type: string}
+        amount: {type: string, nullable: true}
+    Suggestion:
+      type: object
+      required: [recipe, score, reasons, have, missing, basics, expiring]
+      properties:
+        recipe: {$ref: '#/components/schemas/Recipe'}
+        score: {type: integer, description: The sum of the reasons' points.}
+        reasons: {type: array, items: {$ref: '#/components/schemas/SuggestionReason'}}
+        have: {type: array, description: The ingredients in stock and what covers them., items: {$ref: '#/components/schemas/SuggestionUse'}}
+        missing: {type: array, description: 'The ingredients to buy, with the recipe''s amounts.', items: {$ref: '#/components/schemas/SuggestionMissing'}}
+        basics: {type: array, description: 'Ingredients assumed at home (water, salt, pepper, cooking oil).', items: {type: string}}
+        expiring: {type: array, description: 'The items of `have` that expire within 3 days, soonest first.', items: {$ref: '#/components/schemas/SuggestionUse'}}
+    SuggestionExclusion:
+      type: object
+      required: [recipe, disliked]
+      properties:
+        recipe: {$ref: '#/components/schemas/RecipeRef'}
+        disliked: {type: string, description: The disliked ingredient (or word) that leaves it out.}
+    SuggestionList:
+      type: object
+      required: [today, mealSlot, items, excluded]
+      properties:
+        today: {type: string, format: date, description: The owner's today the ranking used.}
+        mealSlot: {type: object, allOf: [{$ref: '#/components/schemas/MealSlot'}], nullable: true}
+        items: {type: array, items: {$ref: '#/components/schemas/Suggestion'}}
+        excluded: {type: array, items: {$ref: '#/components/schemas/SuggestionExclusion'}}
+    IdeaState:
+      type: string
+      description: '`new`: waiting for the owner. `saved`: saved as a recipe (`recipeId`). `dismissed`: not wanted.'
+      enum: [new, saved, dismissed]
+    IdeaSource:
+      type: string
+      description: '`ai`: written by the AI from the pantry and the preferences. `web`: found on a site (`sourceUrl`).'
+      enum: [ai, web]
+    IdeaIngredient:
+      type: object
+      required: [name, amount, note]
+      properties:
+        name: {type: string}
+        amount: {type: string, nullable: true}
+        note: {type: string, nullable: true}
+    Idea:
+      type: object
+      required: [id, title, normalizedTitle, servings, ingredients, steps, tags, methods, source, sourceUrl, reason, state, recipeId, createdAt, updatedAt, createdBy, updatedBy]
+      properties:
+        id: {type: string, format: uuid}
+        title: {type: string}
+        normalizedTitle: {type: string}
+        servings: {type: integer, nullable: true}
+        ingredients: {type: array, items: {$ref: '#/components/schemas/IdeaIngredient'}}
+        steps: {type: string, nullable: true, description: 'Plain text, one step per line.'}
+        tags: {type: array, items: {type: string}}
+        methods: {type: array, items: {$ref: '#/components/schemas/CookingMethod'}}
+        source: {$ref: '#/components/schemas/IdeaSource'}
+        sourceUrl: {type: string, nullable: true}
+        reason: {type: string, description: 'Why it is suggested, such as "Uses the Hähnchen that expires tomorrow, in the air fryer".'}
+        state: {$ref: '#/components/schemas/IdeaState'}
+        recipeId: {type: string, format: uuid, nullable: true, description: The recipe it was saved as; null otherwise or once that recipe is deleted.}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+        createdBy: {$ref: '#/components/schemas/Actor'}
+        updatedBy: {$ref: '#/components/schemas/Actor'}
+    IdeaList:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/Idea'}}
+    CreateIdeaRequest:
+      type: object
+      required: [title, reason]
+      properties:
+        title: {type: string, minLength: 1, maxLength: 200}
+        servings: {type: integer, minimum: 1, maximum: 100}
+        ingredients: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/NewIngredient'}}
+        steps: {type: string, maxLength: 20000}
+        tags: {type: array, maxItems: 20, items: {type: string, minLength: 1, maxLength: 40}}
+        methods: {type: array, maxItems: 7, items: {$ref: '#/components/schemas/CookingMethod'}}
+        source: {$ref: '#/components/schemas/IdeaSource'}
+        sourceUrl: {type: string, maxLength: 2000, description: 'An http or https URL; for `web`, the page it was found on.'}
+        reason: {type: string, minLength: 1, maxLength: 500}
+    SaveIdeaResult:
+      type: object
+      required: [idea, recipe]
+      properties:
+        idea: {$ref: '#/components/schemas/Idea'}
+        recipe: {$ref: '#/components/schemas/Recipe'}

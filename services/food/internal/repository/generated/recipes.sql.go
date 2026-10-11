@@ -41,7 +41,7 @@ func (q *Queries) DeleteMealPlanEntry(ctx context.Context, arg DeleteMealPlanEnt
 }
 
 const deleteRecipe = `-- name: DeleteRecipe :one
-DELETE FROM recipes WHERE id = $1 RETURNING id, title, normalized_title, servings, steps, tags, source_url, note, created_at, updated_at, created_by, updated_by
+DELETE FROM recipes WHERE id = $1 RETURNING id, title, normalized_title, servings, steps, tags, source_url, note, created_at, updated_at, created_by, updated_by, methods
 `
 
 func (q *Queries) DeleteRecipe(ctx context.Context, id pgtype.UUID) (Recipe, error) {
@@ -60,6 +60,7 @@ func (q *Queries) DeleteRecipe(ctx context.Context, id pgtype.UUID) (Recipe, err
 		&i.UpdatedAt,
 		&i.CreatedBy,
 		&i.UpdatedBy,
+		&i.Methods,
 	)
 	return i, err
 }
@@ -103,7 +104,7 @@ func (q *Queries) GetMealPlanEntryForUpdate(ctx context.Context, arg GetMealPlan
 }
 
 const getRecipe = `-- name: GetRecipe :one
-SELECT id, title, normalized_title, servings, steps, tags, source_url, note, created_at, updated_at, created_by, updated_by FROM recipes WHERE id = $1
+SELECT id, title, normalized_title, servings, steps, tags, source_url, note, created_at, updated_at, created_by, updated_by, methods FROM recipes WHERE id = $1
 `
 
 func (q *Queries) GetRecipe(ctx context.Context, id pgtype.UUID) (Recipe, error) {
@@ -122,12 +123,13 @@ func (q *Queries) GetRecipe(ctx context.Context, id pgtype.UUID) (Recipe, error)
 		&i.UpdatedAt,
 		&i.CreatedBy,
 		&i.UpdatedBy,
+		&i.Methods,
 	)
 	return i, err
 }
 
 const getRecipeForUpdate = `-- name: GetRecipeForUpdate :one
-SELECT id, title, normalized_title, servings, steps, tags, source_url, note, created_at, updated_at, created_by, updated_by FROM recipes WHERE id = $1 FOR UPDATE
+SELECT id, title, normalized_title, servings, steps, tags, source_url, note, created_at, updated_at, created_by, updated_by, methods FROM recipes WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) GetRecipeForUpdate(ctx context.Context, id pgtype.UUID) (Recipe, error) {
@@ -146,14 +148,15 @@ func (q *Queries) GetRecipeForUpdate(ctx context.Context, id pgtype.UUID) (Recip
 		&i.UpdatedAt,
 		&i.CreatedBy,
 		&i.UpdatedBy,
+		&i.Methods,
 	)
 	return i, err
 }
 
 const insertRecipe = `-- name: InsertRecipe :one
-INSERT INTO recipes (title, normalized_title, servings, steps, tags, source_url, note, created_by, updated_by)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
-RETURNING id, title, normalized_title, servings, steps, tags, source_url, note, created_at, updated_at, created_by, updated_by
+INSERT INTO recipes (title, normalized_title, servings, steps, tags, source_url, note, methods, created_by, updated_by)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8::text[], $9, $9)
+RETURNING id, title, normalized_title, servings, steps, tags, source_url, note, created_at, updated_at, created_by, updated_by, methods
 `
 
 type InsertRecipeParams struct {
@@ -164,6 +167,7 @@ type InsertRecipeParams struct {
 	Tags            []string
 	SourceUrl       *string
 	Note            *string
+	Methods         []string
 	Actor           string
 }
 
@@ -176,6 +180,7 @@ func (q *Queries) InsertRecipe(ctx context.Context, arg InsertRecipeParams) (Rec
 		arg.Tags,
 		arg.SourceUrl,
 		arg.Note,
+		arg.Methods,
 		arg.Actor,
 	)
 	var i Recipe
@@ -192,6 +197,7 @@ func (q *Queries) InsertRecipe(ctx context.Context, arg InsertRecipeParams) (Rec
 		&i.UpdatedAt,
 		&i.CreatedBy,
 		&i.UpdatedBy,
+		&i.Methods,
 	)
 	return i, err
 }
@@ -423,7 +429,7 @@ func (q *Queries) ListRecipeIngredients(ctx context.Context, recipeIds []pgtype.
 }
 
 const listRecipes = `-- name: ListRecipes :many
-SELECT id, title, normalized_title, servings, steps, tags, source_url, note, created_at, updated_at, created_by, updated_by FROM recipes r
+SELECT id, title, normalized_title, servings, steps, tags, source_url, note, created_at, updated_at, created_by, updated_by, methods FROM recipes r
 WHERE ($1::text IS NULL OR $1::text = ANY(r.tags))
   AND (cardinality($2::text[]) = 0
        OR NOT EXISTS (SELECT 1 FROM unnest($2::text[]) AS word
@@ -479,6 +485,7 @@ func (q *Queries) ListRecipes(ctx context.Context, arg ListRecipesParams) ([]Rec
 			&i.UpdatedAt,
 			&i.CreatedBy,
 			&i.UpdatedBy,
+			&i.Methods,
 		); err != nil {
 			return nil, err
 		}
@@ -506,7 +513,7 @@ func (q *Queries) RenameMealPlanRecipe(ctx context.Context, arg RenameMealPlanRe
 }
 
 const touchRecipe = `-- name: TouchRecipe :one
-UPDATE recipes SET updated_at = now(), updated_by = $1 WHERE id = $2 RETURNING id, title, normalized_title, servings, steps, tags, source_url, note, created_at, updated_at, created_by, updated_by
+UPDATE recipes SET updated_at = now(), updated_by = $1 WHERE id = $2 RETURNING id, title, normalized_title, servings, steps, tags, source_url, note, created_at, updated_at, created_by, updated_by, methods
 `
 
 type TouchRecipeParams struct {
@@ -531,6 +538,7 @@ func (q *Queries) TouchRecipe(ctx context.Context, arg TouchRecipeParams) (Recip
 		&i.UpdatedAt,
 		&i.CreatedBy,
 		&i.UpdatedBy,
+		&i.Methods,
 	)
 	return i, err
 }
@@ -538,9 +546,10 @@ func (q *Queries) TouchRecipe(ctx context.Context, arg TouchRecipeParams) (Recip
 const updateRecipe = `-- name: UpdateRecipe :one
 UPDATE recipes
 SET title = $1, normalized_title = $2, servings = $3, steps = $4,
-    tags = $5, source_url = $6, note = $7, updated_at = now(), updated_by = $8
-WHERE id = $9
-RETURNING id, title, normalized_title, servings, steps, tags, source_url, note, created_at, updated_at, created_by, updated_by
+    tags = $5, source_url = $6, note = $7, methods = $8::text[],
+    updated_at = now(), updated_by = $9
+WHERE id = $10
+RETURNING id, title, normalized_title, servings, steps, tags, source_url, note, created_at, updated_at, created_by, updated_by, methods
 `
 
 type UpdateRecipeParams struct {
@@ -551,6 +560,7 @@ type UpdateRecipeParams struct {
 	Tags            []string
 	SourceUrl       *string
 	Note            *string
+	Methods         []string
 	Actor           string
 	ID              pgtype.UUID
 }
@@ -564,6 +574,7 @@ func (q *Queries) UpdateRecipe(ctx context.Context, arg UpdateRecipeParams) (Rec
 		arg.Tags,
 		arg.SourceUrl,
 		arg.Note,
+		arg.Methods,
 		arg.Actor,
 		arg.ID,
 	)
@@ -581,6 +592,7 @@ func (q *Queries) UpdateRecipe(ctx context.Context, arg UpdateRecipeParams) (Rec
 		&i.UpdatedAt,
 		&i.CreatedBy,
 		&i.UpdatedBy,
+		&i.Methods,
 	)
 	return i, err
 }

@@ -23,14 +23,15 @@ SELECT * FROM recipes WHERE id = @id;
 SELECT * FROM recipes WHERE id = @id FOR UPDATE;
 
 -- name: InsertRecipe :one
-INSERT INTO recipes (title, normalized_title, servings, steps, tags, source_url, note, created_by, updated_by)
-VALUES (@title, @normalized_title, sqlc.narg(servings), sqlc.narg(steps), @tags, sqlc.narg(source_url), sqlc.narg(note), @actor, @actor)
+INSERT INTO recipes (title, normalized_title, servings, steps, tags, source_url, note, methods, created_by, updated_by)
+VALUES (@title, @normalized_title, sqlc.narg(servings), sqlc.narg(steps), @tags, sqlc.narg(source_url), sqlc.narg(note), sqlc.narg(methods)::text[], @actor, @actor)
 RETURNING *;
 
 -- name: UpdateRecipe :one
 UPDATE recipes
 SET title = @title, normalized_title = @normalized_title, servings = sqlc.narg(servings), steps = sqlc.narg(steps),
-    tags = @tags, source_url = sqlc.narg(source_url), note = sqlc.narg(note), updated_at = now(), updated_by = @actor
+    tags = @tags, source_url = sqlc.narg(source_url), note = sqlc.narg(note), methods = sqlc.narg(methods)::text[],
+    updated_at = now(), updated_by = @actor
 WHERE id = @id
 RETURNING *;
 
