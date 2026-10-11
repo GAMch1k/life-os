@@ -91,6 +91,9 @@ type foodTools struct {
 	imported string
 	shopping []map[string]any
 	pantry   []map[string]any
+	staples  []map[string]any
+	// results maps a write tool to its answer (default: {}).
+	results map[string]string
 	// pageSize splits the lists into pages when set.
 	pageSize    int
 	taskMatches map[string][]string
@@ -159,6 +162,14 @@ func (f *foodTools) Call(ctx context.Context, name string, args map[string]any) 
 		}
 		raw, _ := json.Marshal(map[string]any{"items": items})
 		return raw, nil
+	case "food_list_staples":
+		f.calls = append(f.calls, name)
+		items := f.staples
+		if items == nil {
+			items = []map[string]any{}
+		}
+		raw, _ := json.Marshal(map[string]any{"items": items})
+		return raw, nil
 	case "inbox_set_human_review":
 		f.review = args
 	case "recipe_import":
@@ -171,6 +182,10 @@ func (f *foodTools) Call(ctx context.Context, name string, args map[string]any) 
 	}
 	if isFoodWrite(name) || strings.HasPrefix(name, "task_") {
 		f.inputs[name] = append(f.inputs[name], args)
+		if answer, ok := f.results[name]; ok {
+			f.calls = append(f.calls, name)
+			return json.RawMessage(answer), nil
+		}
 	}
 	return f.fakeTools.Call(ctx, name, args)
 }

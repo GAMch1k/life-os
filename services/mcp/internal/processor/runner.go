@@ -160,6 +160,9 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 		}
 		parsed, err = decodePlan(rawPlan)
 	}
+	// What a staple puts on the list by itself comes first, so the
+	// capture's own list add can leave it out.
+	parsed = restockFirst(parsed)
 	// Fields the AI may not set are dropped and recorded, never an error.
 	dropped := dropAIFields(parsed)
 	if err == nil && (parsed.Ambiguous || parsed.Confidence < 0.8) && len(parsed.Actions) == 1 && (isTaskMutation(parsed.Actions[0]) || isCalendarMutation(parsed.Actions[0]) || isFoodMutation(parsed.Actions[0])) && validAction(parsed.Actions[0]) {
@@ -180,6 +183,8 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 		return Proposal{}, r.humanReview(ctx, item.ID, started.ID, plannedAction{Tool: "none", Arguments: map[string]any{}}, []map[string]any{}, reason)
 	}
 	actions := make([]map[string]any, 0, len(parsed.Actions))
+	// restocks is what Food put on the list by itself so far.
+	var restocks []restocked
 	for index, action := range parsed.Actions {
 		// noted adds what was dropped from this action to its audit entry.
 		noted := func(audit map[string]any) map[string]any {
@@ -228,6 +233,31 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 					// owner expects groceries, so they decide.
 					return Proposal{}, r.humanReview(ctx, item.ID, started.ID, action, []map[string]any{}, noRecipeReason(text(action.Arguments["recipeQuery"])))
 				}
+			}
+		}
+		// namedFood is the staple or pantry name a running-low or staple
+		// change means: the one the owner chose in Human Review, else the
+		// one the words find. Running low with none sends the owner's words.
+		namedFood := ""
+		if isNamedFoodAction(action) {
+			names, findErr := r.foodNames(ctx, action.Tool)
+			if findErr != nil {
+				return Proposal{}, r.retryLater(ctx, item.ID, started.ID, actions, "food read failed: "+findErr.Error(), classifyActionError(findErr), previous)
+			}
+			found := matchFoodNames(names, action)
+			if approvedFood != "" {
+				found = chosenFoodName(names, approvedFood)
+			}
+			switch {
+			case len(found) > 1:
+				return Proposal{}, r.humanReview(ctx, item.ID, started.ID, action, namedFoodCandidates(found), namedFoodReviewReason(action.Tool))
+			case len(found) == 1:
+				namedFood = found[0].Name
+			case action.Tool == "food_remove_staple":
+				actions = append(actions, noted(map[string]any{"tool": "none", "plannedTool": action.Tool, "plannedArguments": action.Arguments, "reason": noStapleReason}))
+				continue
+			default:
+				namedFood = strings.TrimSpace(text(action.Arguments["itemQuery"]))
 			}
 		}
 		// target is the one existing Task or event a search found.
@@ -339,6 +369,9 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 			}
 			arguments = foodArguments(action.Tool, arguments, itemID)
 		}
+		if isStapleTool(action.Tool) {
+			arguments = stapleArguments(action.Tool, arguments, namedFood)
+		}
 		if isMealTool(action.Tool) {
 			at := item.CreatedAt
 			if at.IsZero() {
@@ -349,6 +382,19 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 		if action.Tool == "food_add_shopping_items" || action.Tool == "food_add_pantry_items" {
 			// Food records that the items came from this capture.
 			arguments["sourceRef"] = item.ID
+		}
+		// A staple that ran low or was used up is on the list already:
+		// the capture does not add it again, in its words or another
+		// language's.
+		var skipped []string
+		if action.Tool == "food_add_shopping_items" && len(restocks) > 0 {
+			var kept []any
+			kept, skipped = withoutRestocked(arguments["items"], restocks)
+			if len(kept) == 0 {
+				actions = append(actions, noted(map[string]any{"tool": "none", "plannedTool": action.Tool, "plannedArguments": action.Arguments, "reason": restockedReason(skipped)}))
+				continue
+			}
+			arguments["items"] = kept
 		}
 		if action.Tool == "calendar_create" {
 			completeCreate(arguments)
@@ -378,6 +424,15 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 				// The link gave nothing to save: the owner decides, with
 				// recipe-import's reason (paste the caption, say what it is).
 				return Proposal{}, r.humanReview(ctx, item.ID, started.ID, action, []map[string]any{}, reason)
+			}
+		}
+		if len(skipped) > 0 {
+			audit["notAdded"] = skipped
+			audit["reason"] = restockedReason(skipped)
+		}
+		if restocking(action.Tool) {
+			if restock, ok := restockOf(result, action); ok {
+				restocks = append(restocks, restock)
 			}
 		}
 		audit["result"] = json.RawMessage(toolData(result))
@@ -686,6 +741,9 @@ func validAction(action plannedAction) bool {
 		"food_plan_meal":                    {"recipeQuery": true, "recipeQueryAlternatives": true, "date": true, "slot": true, "servings": true, "note": true},
 		"food_clear_meal":                   {"date": true, "slot": true},
 		"food_add_missing_ingredients":      {"recipeQuery": true, "recipeQueryAlternatives": true, "week": true, "from": true, "to": true},
+		"food_mark_running_low":             {"itemQuery": true, "itemQueryAlternatives": true, "addToList": true},
+		"food_add_staple":                   {"name": true, "amount": true, "storeName": true},
+		"food_remove_staple":                {"itemQuery": true, "itemQueryAlternatives": true},
 		"recipe_import":                     {"url": true, "caption": true, "title": true, "saveLink": true},
 	}
 	for field := range action.Arguments {
