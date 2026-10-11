@@ -45,6 +45,21 @@ type IdempotencyKey struct {
 	CreatedAt   pgtype.Timestamptz
 }
 
+type MealPlanEntry struct {
+	ID        pgtype.UUID
+	Day       pgtype.Date
+	Slot      string
+	SlotRank  int16
+	RecipeID  pgtype.UUID
+	Title     string
+	Servings  *int32
+	Note      *string
+	CreatedAt pgtype.Timestamptz
+	UpdatedAt pgtype.Timestamptz
+	CreatedBy string
+	UpdatedBy string
+}
+
 type PantryItem struct {
 	ID                 pgtype.UUID
 	Name               string
@@ -63,6 +78,30 @@ type PantryItem struct {
 	UpdatedAt          pgtype.Timestamptz
 	CreatedBy          string
 	UpdatedBy          string
+}
+
+type Recipe struct {
+	ID              pgtype.UUID
+	Title           string
+	NormalizedTitle string
+	Servings        *int32
+	Steps           *string
+	Tags            []string
+	SourceUrl       *string
+	Note            *string
+	CreatedAt       pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
+	CreatedBy       string
+	UpdatedBy       string
+}
+
+type RecipeIngredient struct {
+	RecipeID       pgtype.UUID
+	Position       int32
+	Name           string
+	NormalizedName string
+	Amount         *string
+	Note           *string
 }
 
 type ShoppingItem struct {

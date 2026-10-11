@@ -2,7 +2,9 @@
 
 Food keeps the owner's groceries: one shopping list grouped by aisle, where an
 item may be tagged with the store to buy it at; the stores; the aisle rules
-that place new items; and the pantry, what is at home and when it expires. It
+that place new items; the pantry, what is at home and when it expires; and
+the recipes and the weekly meal plan, from which missing ingredients go on
+the list. It
 keeps them in `food_db` and is their only source of truth: clients (the
 Dashboard, the AI through MCP) use its API, never its database. Gateway base:
 `/api/food`; the contract is `services/food/api/openapi.yaml`; `/health` and
@@ -10,8 +12,9 @@ Dashboard, the AI through MCP) use its API, never its database. Gateway base:
 
 The owner uses Food through the Dashboard's Food workspace (`/food`: the
 shopping list, made for the phone in the shop, from where bought items are
-put away into the pantry, and the pantry), and Home shows the list's size and
-food expiring today or tomorrow; see [Dashboard](../frontend/dashboard.md).
+put away into the pantry; the pantry; the recipes; and the meal plan), and
+Home shows the list's size, food expiring today or tomorrow, and today's
+planned meals; see [Dashboard](../frontend/dashboard.md).
 Once a day Food also tells the owner which pantry food expires soon (see
 [Expiry reminders](#expiry-reminders)).
 
@@ -40,8 +43,9 @@ different. A name that normalises to nothing ("!!!") is refused (400
 A shopping item has a `name`, an optional `amount` (free text such as "2 l",
 "6", or "500 g"), an optional `note`, an `aisle`, an optional store
 (`storeId`, with its `storeName`), a `state` (`needed` or `bought`, with
-`boughtAt`), a `source` (`manual`, or `capture` for an item that came from a
-capture, with a `sourceRef` such as the Inbox item's id), and who created and
+`boughtAt`), a `source` (`manual`; `capture` for an item that came from a
+capture, with a `sourceRef` such as the Inbox item's id; or `recipe` for a
+recipe's missing ingredient, with the recipe's id), and who created and
 last changed it (`createdBy`, `updatedBy`: `{kind, name}` as the actor header
 said).
 
@@ -194,6 +198,80 @@ cartons of milk may expire on different days.
   `in_stock`). Ended items are kept for history; marking an ended item ended
   the other way keeps its `endedAt`. `DELETE` removes an item and its history.
 
+## Recipes
+
+A recipe has a `title` (unique as normalised, like item names: 409
+`recipe_exists`, so a title names one recipe), optional `servings` (1 to
+100), `ingredients` (an ordered list, at most 100, of `name`, optional
+`amount` (free text, 50 characters), and optional `note`; each with its
+`normalizedName`), `steps` (plain text, one step per line; no markup),
+`tags` (at most 20, kept normalised and without duplicates, in the order
+given), an optional `sourceUrl` (http or https), a `note`, and the actors.
+
+- `GET /v1/recipes` lists recipes by normalised title. `q` keeps those whose
+  normalised title contains every word of it, also inside a word ("bolo"
+  finds "Pasta Bolognese"); `tag` keeps those with the tag; `ingredient`
+  keeps those with an ingredient whose normalised name contains it ("hack"
+  finds "Hackfleisch"). Filters combine; paging as for the shopping list.
+- `POST /v1/recipes` (201), `GET`/`PATCH`/`DELETE /v1/recipes/{id}`. `PATCH`
+  changes only the fields present; `null` clears `servings`, `steps`,
+  `sourceUrl`, or `note`; `ingredients` and `tags` replace the whole list. An
+  update that changes nothing records nothing.
+- Deleting a recipe keeps the meals planned with it, as plain text with its
+  title.
+
+**Finding a recipe from words** (as the AI does for "plan lasagne for
+Friday"): normalise the words and compare them with `normalizedTitle`. A
+recipe whose normalised title equals them is the one (titles are unique);
+otherwise `GET /v1/recipes?q=<words>` and, when exactly one recipe matches,
+that one; when several match, ask (or plan the words as free text); when none
+does, plan them as free text (`text`), which the owner can turn into a recipe
+later.
+
+## Meal plan
+
+The meal plan holds at most one meal per date and slot (`breakfast`,
+`lunch`, `dinner`). A meal is a recipe (`recipeId`) or free text; its `title`
+is the recipe's title (kept in step when the recipe is renamed) or the text.
+It may have `servings` and a `note`. Dates are plain dates, the owner's.
+
+- `GET /v1/meal-plan?from=&to=` lists the meals from one date through
+  another (at most 31 days), by date, then slot. Empty slots are not listed.
+- `PUT /v1/meal-plan/{date}/{slot}` sets a slot, `{"recipeId"}` or
+  `{"text"}` (exactly one), with optional `servings` and `note`, replacing
+  what it held (the entry keeps its id); an unknown recipe is 400
+  `unknown_recipe`. Setting what the slot already holds changes nothing.
+- `DELETE /v1/meal-plan/{date}/{slot}` clears it; nothing planned there is
+  404 `not_found`.
+
+## Missing ingredients
+
+`POST /v1/shopping-items/from-recipes` puts the ingredients of recipes on the
+list that are neither at home nor already needed. It takes the recipes
+directly (`{"recipeIds": [...]}`, 1 to 50) or every recipe planned in a date
+range (`{"from", "to"}`, at most 31 days; a recipe planned twice counts
+once), and `dryRun`.
+
+- **One line per ingredient.** Ingredients of several recipes with the same
+  normalised name are one line: its name as the first recipe writes it, the
+  recipes that need it, and their amounts joined in order, "200 g + 1 Pck."
+  (free text is never added up; empty amounts are left out; shortened to 50
+  characters).
+- **Skipped.** An ingredient with an in-stock pantry item of the same
+  normalised name is `in_pantry` (with that `pantryItem`); one with a needed
+  shopping item of that name is `on_list` (with that `shoppingItem`). Amounts
+  are not compared: having some is having it.
+- **Added.** The rest are added like `POST /v1/shopping-items` (aisle rules,
+  merge), with the joined amount, `source: recipe`, and `sourceRef` the first
+  recipe's id: `added`, or `merged` if a needed item of the name appeared
+  meanwhile; each with its `shoppingItem`.
+- **Dry run.** With `dryRun: true` nothing changes and the statuses say what
+  would happen (`added` for what would be added, without a `shoppingItem`).
+- The response is `{dryRun, items}`, the ingredients in recipe order. An
+  unknown recipe is 404 `not_found` (naming `recipeIds[i]`); both or neither
+  of `recipeIds` and the range is 400. All or nothing, and idempotent with
+  its `Idempotency-Key`.
+
 ## Expiry reminders
 
 Once a day Food tells the owner, through [Notifications](notifications.md)
@@ -330,6 +408,8 @@ recorded. A creation or deletion has an id derived from the entity
 | `food.store.created` / `.updated` / `.archived` / `.restored` | `food_store` | Store “Lidl” created (also when an item's `storeName` creates it) |
 | `food.aisle_rule.created` / `.deleted` | `food_aisle_rule` | Aisle rule created: “kerze” → household (also inside words) |
 | `food.pantry_item.added` / `.updated` / `.used_up` / `.thrown_away` / `.restocked` / `.deleted` | `food_pantry_item` | Added “Joghurt” to the pantry (fridge, expires 2026-10-14) |
+| `food.recipe.created` / `.updated` / `.deleted` | `food_recipe` | Recipe “Pasta Bolognese” created (3 ingredients); updated: title, ingredients |
+| `food.meal_plan.set` / `.cleared` | `food_meal_plan` / `<date>:<slot>` | Planned “Pasta” for dinner on Mon 12 Oct, replacing “Soup”; Cleared “Pasta” from dinner on Mon 12 Oct |
 | `food.notification.missed` | `food_notification` | Expiry reminder due Sun 11 Oct 2026, 08:00 CEST was missed: Food was not running (see [Expiry reminders](#expiry-reminders)) |
 
 `data` holds the item's name, aisle or location, state, source, amount, store,
@@ -347,7 +427,9 @@ recorded. A creation or deletion has an id derived from the entity
   `expiringWithinDays` and the expiry reminder's wall clock; an unknown name
   falls back to UTC, logged), and the [expiry reminders'](#expiry-reminders)
   settings. Migration 000003 adds the reminders' state
-  (`food_notification_dispatch`, `food_notification_log`).
+  (`food_notification_dispatch`, `food_notification_log`); 000004 the
+  recipes (`recipes`, `recipe_ingredients`), the meal plan
+  (`meal_plan_entries`), and the `recipe` source.
 - The Dashboard and MCP reach Food at `FOOD_SERVICE_URL` (compose:
   `http://food:8080`), and the browser at `/api/food`; Status probes its
   `/ready` ("Food").
@@ -365,8 +447,15 @@ API, the pantry lifecycle and `expiringWithinDays` at a timezone day
 boundary, idempotent replays and conflicts (also concurrent requests with one
 key), the actor gate, the Activity events, putting bought items away (places
 from the request or the aisle, amounts, sources, the events, refusals of
-needed, unknown, and repeated items, and the idempotent replay), and
-migrations 000002 and 000003 down and up. `internal/notifications` has unit
+needed, unknown, and repeated items, and the idempotent replay), recipes
+(create, unique titles, validation, search by title words, tag, and
+ingredient, paging, updates that replace ingredients and rename the plan's
+meals, deletion leaving plain-text meals), the meal plan (one meal per slot,
+replacing, unchanged slots recording nothing, ranges, refusals, clearing),
+missing ingredients (the dry run, joined amounts, in the pantry, on the list,
+used-up items not counting, sources, the replay, a week counting each recipe
+once), and migrations 000002, 000003, and 000004 down and up. The amount join
+and the ingredient grouping also have unit tests. `internal/notifications` has unit
 tests (the clock setting, wall times across both daylight saving changes and
 west of UTC, the window, the message's lines, grouping, importance, late
 phrasing, and caps) and integration tests with an in-process Notifications

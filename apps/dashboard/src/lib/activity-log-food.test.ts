@@ -66,6 +66,22 @@ test("Food events read with the item, store, or rule they are about", () => {
     "Expiry reminder missed",
   );
   assert.equal(subjectLabel("food_notification"), "Food reminder");
+  assert.equal(
+    eventLabel({
+      type: "food.recipe.updated",
+      data: { title: "Pasta Bolognese", changes: ["ingredients"] },
+    }),
+    "Recipe updated: Pasta Bolognese",
+  );
+  assert.equal(
+    eventLabel({
+      type: "food.meal_plan.set",
+      data: { date: "2026-10-12", slot: "dinner", title: "Pasta" },
+    }),
+    "Meal planned: Pasta",
+  );
+  assert.equal(subjectLabel("food_recipe"), "Recipe");
+  assert.equal(subjectLabel("food_meal_plan"), "Meal plan slot");
   assert.equal(sourceLabel("food"), "Food");
   assert.ok(sourceDescription("food"));
   assert.equal(subjectLabel("food_shopping_item"), "Shopping item");
@@ -95,6 +111,11 @@ test("Food events read with the item, store, or rule they are about", () => {
     "food.pantry_item.restocked",
     "food.pantry_item.deleted",
     "food.notification.missed",
+    "food.recipe.created",
+    "food.recipe.updated",
+    "food.recipe.deleted",
+    "food.meal_plan.set",
+    "food.meal_plan.cleared",
   ]) {
     assert.ok(EVENT_TYPES.includes(type), type);
   }

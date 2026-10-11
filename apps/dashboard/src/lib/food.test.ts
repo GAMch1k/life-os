@@ -155,11 +155,19 @@ test("quick add keeps names that only look like amounts", () => {
 
 test("the tab and the store filter come from the URL", () => {
   assert.equal(parseFoodTab("pantry"), "pantry");
-  assert.equal(parseFoodTab("recipes"), "list");
+  assert.equal(parseFoodTab("recipes"), "recipes");
+  assert.equal(parseFoodTab("cookbook"), "list");
   assert.equal(parseFoodTab(undefined), "list");
   assert.equal(foodHref("pantry"), "/food?tab=pantry");
   assert.equal(foodHref("list"), "/food");
   assert.equal(foodHref("list", "none"), "/food?store=none");
+  assert.equal(foodHref("recipes"), "/food?tab=recipes");
+  assert.equal(foodHref("plan"), "/food?tab=plan");
+  assert.equal(
+    foodHref("plan", "2026-10-19"),
+    "/food?tab=plan&week=2026-10-19",
+  );
+  assert.equal(parseFoodTab("plan"), "plan");
   const stores = [
     { id: "lidl", archived: false },
     { id: "old", archived: true },
@@ -352,10 +360,16 @@ test("Home names the list's size and food expiring today or tomorrow", () => {
       { id: "cheese", name: "Cheese", text: "Expires tomorrow" },
     ],
     expiringMore: false,
+    meals: null,
   });
   // Nothing to say, nothing shown.
   assert.equal(homeFood({ items: [] }, { items: [] }, today), null);
   assert.equal(homeFood({ items: [] }, undefined, today), null);
+  // Today's meals alone are something to say.
+  assert.equal(
+    homeFood({ items: [] }, undefined, today, "Today: Pasta (dinner)")?.meals,
+    "Today: Pasta (dinner)",
+  );
   assert.equal(
     homeFood({ items: [] }, { items: [pantry({ expiresOn: today })] }, today)
       ?.listCount,

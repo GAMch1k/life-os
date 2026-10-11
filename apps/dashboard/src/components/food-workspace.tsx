@@ -2,7 +2,9 @@
 
 import { useCallback, useState, useSyncExternalStore } from "react";
 
+import { FoodMealPlan } from "@/components/food-meal-plan";
 import { FoodPantry } from "@/components/food-pantry";
+import { FoodRecipes } from "@/components/food-recipes";
 import { FoodShoppingList } from "@/components/food-shopping-list";
 import {
   Card,
@@ -21,28 +23,45 @@ import {
   foodHref,
   parseStoreFilter,
 } from "@/lib/food";
+import {
+  type MealPlanEntry,
+  type Recipe,
+  fetchRecipes,
+  weekStart,
+} from "@/lib/food-recipes";
+import type { FoodList, Loaded } from "@/lib/food";
 import { useSyncedList } from "@/lib/use-synced-list";
 
 const noSubscription = () => () => {};
 
 /**
  * The Food workspace: the shopping list, grouped by aisle and made for the
- * phone in the shop, and the pantry with its expiry dates. The server
- * renders the first view; every change is applied at once and then read
- * back from Food. The tab and the store filter are kept in the URL
- * (`/food?tab=pantry`, `/food?store=<id>`), so a reload or a link opens them.
+ * phone in the shop, the pantry with its expiry dates, the recipes, and the
+ * week's meal plan. The server renders the first view; every change is
+ * applied at once and then read back from Food. The tab, the store filter,
+ * and the plan's week are kept in the URL (`/food?tab=pantry`,
+ * `/food?store=<id>`, `/food?tab=plan&week=2026-10-12`), so a reload or a
+ * link opens them.
  */
 export function FoodWorkspace({
   state,
+  recipes,
+  plan,
   initialTab,
   initialStore,
+  initialWeek,
   today,
   timeZone,
 }: {
   state: FoodWorkspaceState;
+  recipes: Loaded<FoodList<Recipe>>;
+  /** The meal plan of initialWeek. */
+  plan: Loaded<MealPlanEntry[]>;
   initialTab: FoodTab;
   /** The store filter the URL named, checked against the stores. */
   initialStore?: string;
+  /** The plan's week the URL named (its Monday); this week otherwise. */
+  initialWeek?: string;
   /** The owner's today (YYYY-MM-DD), decided once by the server render. */
   today: string;
   /** The owner's timezone, for when pantry items ended. */
@@ -68,6 +87,9 @@ export function FoodWorkspace({
       initial={state}
       initialStore={initialStore}
       initialTab={initialTab}
+      initialWeek={initialWeek ?? weekStart(today)}
+      plan={plan}
+      recipes={recipes}
       timeZone={timeZone}
       today={today}
     />
@@ -76,14 +98,20 @@ export function FoodWorkspace({
 
 function ReadyWorkspace({
   initial,
+  recipes: initialRecipes,
+  plan,
   initialTab,
   initialStore,
+  initialWeek,
   today,
   timeZone,
 }: {
   initial: Extract<FoodWorkspaceState, { kind: "ready" }>;
+  recipes: Loaded<FoodList<Recipe>>;
+  plan: Loaded<MealPlanEntry[]>;
   initialTab: FoodTab;
   initialStore?: string;
+  initialWeek: string;
   today: string;
   timeZone: string;
 }) {
@@ -101,14 +129,30 @@ function ReadyWorkspace({
   );
   const shopping = useSyncedList(initial.shopping.items, fetchShoppingList);
   const pantry = useSyncedList(initial.pantry.data?.items ?? [], fetchPantry);
+  const recipes = useSyncedList(initialRecipes.data?.items ?? [], fetchRecipes);
+  const [week, setWeek] = useState(initialWeek);
+
+  /** The URL of a tab, with its filter or week. */
+  const hrefOf = (next: FoodTab, plannedWeek = week) =>
+    foodHref(
+      next,
+      next === "list"
+        ? filter === "all"
+          ? undefined
+          : filter
+        : next === "plan" && plannedWeek !== weekStart(today)
+          ? plannedWeek
+          : undefined,
+    );
 
   const changeTab = (next: FoodTab) => {
     setTab(next);
-    window.history.replaceState(
-      null,
-      "",
-      foodHref(next, filter === "all" ? undefined : filter),
-    );
+    window.history.replaceState(null, "", hrefOf(next));
+  };
+
+  const changeWeek = (monday: string) => {
+    setWeek(monday);
+    window.history.replaceState(null, "", hrefOf("plan", monday));
   };
 
   const changeFilter = (next: StoreFilter) => {
@@ -145,13 +189,22 @@ function ReadyWorkspace({
         onValueChange={(value) => changeTab(value as FoodTab)}
         value={tab}
       >
-        {/* Full width on a phone: two large targets for the thumb. */}
+        {/* Full width on a phone: large targets for the thumb, with short
+            names that fit 360 px. */}
         <TabsList className="w-full group-data-horizontal/tabs:h-10 sm:w-fit">
           <TabsTrigger className="sm:px-3" value="list">
-            Shopping list
+            <span className="sm:hidden">List</span>
+            <span className="hidden sm:inline">Shopping list</span>
           </TabsTrigger>
           <TabsTrigger className="sm:px-3" value="pantry">
             Pantry
+          </TabsTrigger>
+          <TabsTrigger className="sm:px-3" value="recipes">
+            Recipes
+          </TabsTrigger>
+          <TabsTrigger className="sm:px-3" value="plan">
+            <span className="sm:hidden">Plan</span>
+            <span className="hidden sm:inline">Meal plan</span>
           </TabsTrigger>
         </TabsList>
         <TabsContent value="list">
@@ -174,6 +227,26 @@ function ReadyWorkspace({
             pantry={pantry}
             shopping={shopping}
             timeZone={timeZone}
+            today={today}
+          />
+        </TabsContent>
+        <TabsContent value="recipes">
+          <FoodRecipes
+            error={initialRecipes.error}
+            recipes={recipes}
+            shopping={shopping}
+          />
+        </TabsContent>
+        {/* Kept mounted, so the week and its meals stay when the tab is
+            left and opened again. */}
+        <TabsContent keepMounted value="plan">
+          <FoodMealPlan
+            initialEntries={plan.data ?? []}
+            initialError={plan.error}
+            initialWeek={initialWeek}
+            onWeekChange={changeWeek}
+            recipes={recipes}
+            shopping={shopping}
             today={today}
           />
         </TabsContent>

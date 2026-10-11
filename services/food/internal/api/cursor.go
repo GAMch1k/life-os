@@ -32,6 +32,11 @@ type pantryCursor struct {
 	ID        string     `json:"i"`
 }
 
+type recipeCursor struct {
+	Title string `json:"t"`
+	ID    string `json:"i"`
+}
+
 func invalidCursor() error {
 	return apiError(fiber.StatusBadRequest, "invalid_cursor", "The cursor is not one this list returned")
 }
@@ -51,6 +56,8 @@ func decodeCursor(cursor string, target any) (pgtype.UUID, error) {
 	case *shoppingCursor:
 		id = position.ID
 	case *pantryCursor:
+		id = position.ID
+	case *recipeCursor:
 		id = position.ID
 	}
 	parsed, err := googleuuid.Parse(id)

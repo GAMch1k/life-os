@@ -24,6 +24,7 @@ import {
   type ShoppingItem,
   homeFood,
 } from "@/lib/food";
+import { type MealPlanEntry, todayMeals } from "@/lib/food-recipes";
 import type { InboxItem } from "@/lib/inbox-summary";
 import type { Task } from "@/lib/tasks-summary";
 import {
@@ -185,6 +186,8 @@ export function toHomeAttention(
     shopping?: ListResult<ShoppingItem>;
     /** Food's in-stock items expiring soon. */
     pantry?: ListResult<PantryItem>;
+    /** Food's meal plan for today. */
+    meals?: ListResult<MealPlanEntry>;
   },
   now: Date,
   timeZone: string = DEFAULT_TIME_ZONE,
@@ -200,6 +203,7 @@ export function toHomeAttention(
     subscriptions,
     shopping,
     pantry,
+    meals,
   } = results;
   const { start } = ownerToday(now, timeZone);
   const isOverdue = (task: Task) =>
@@ -252,7 +256,14 @@ export function toHomeAttention(
       ? homeRenewals(subscriptions.data, dayKey(now, timeZone))
       : null,
     food: shopping?.data
-      ? homeFood(shopping.data, pantry?.data, dayKey(now, timeZone))
+      ? homeFood(
+          shopping.data,
+          pantry?.data,
+          dayKey(now, timeZone),
+          meals?.data
+            ? todayMeals(meals.data.items, dayKey(now, timeZone))
+            : null,
+        )
       : null,
   };
 }
@@ -310,6 +321,7 @@ export async function getHomeAttention(): Promise<HomeAttention> {
     subscriptions,
     shopping,
     pantry,
+    meals,
   ] = await Promise.all([
     unavailableOnFailure(
       inboxClient.GET("/v1/inbox-items", {
@@ -366,6 +378,14 @@ export async function getHomeAttention(): Promise<HomeAttention> {
         },
       }),
     ),
+    // Today's planned meals, in the owner's timezone.
+    unavailableOnFailure(
+      foodClient.GET("/v1/meal-plan", {
+        params: {
+          query: { from: dayKey(now, timeZone), to: dayKey(now, timeZone) },
+        },
+      }),
+    ),
   ]);
   // An imported event is labelled with its source's name, which an
   // integration's event carries itself.
@@ -388,6 +408,7 @@ export async function getHomeAttention(): Promise<HomeAttention> {
       subscriptions,
       shopping,
       pantry,
+      meals,
     },
     now,
     timeZone,

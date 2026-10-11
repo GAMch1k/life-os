@@ -158,82 +158,106 @@ func (h *Handler) AddShoppingItems(c fiber.Ctx, _ generated.AddShoppingItemsPara
 		}
 		inputs[index] = input
 	}
+	actor := requestActor(c)
+	return h.write(c, func(ctx context.Context, q *store.Queries) (result, error) {
+		added, err := h.addShoppingItems(ctx, q, actor, inputs)
+		if err != nil {
+			return result{}, err
+		}
+		response := generated.AddShoppingItemsResponse{Items: make([]generated.ShoppingItemResult, len(added.rows))}
+		for index, row := range added.rows {
+			response.Items[index] = generated.ShoppingItemResult{Item: shoppingView(row, added.names), Merged: added.merged[index]}
+		}
+		return result{status: fiber.StatusOK, body: response, events: added.events}, nil
+	})
+}
+
+// addedItems is what addShoppingItems did: each input's row (in the
+// inputs' order), whether it merged into a needed item, the store names,
+// and the Activity events to record.
+type addedItems struct {
+	rows   []store.ShoppingItem
+	merged []bool
+	names  map[[16]byte]string
+	events []activity.Event
+}
+
+// addShoppingItems adds checked items in q's transaction, merging each into
+// the needed item with its normalised name if there is one (an upsert on
+// the partial unique index, so concurrent adds of one name leave one item).
+// Stores named by name are created first, in the inputs' order.
+func (h *Handler) addShoppingItems(ctx context.Context, q *store.Queries, actor string, inputs []newShoppingItem) (addedItems, error) {
 	// Items are written in normalised-name order, so two requests adding the
-	// same names lock them in the same order; the response keeps the
-	// request's order.
+	// same names lock them in the same order; the result keeps the inputs'
+	// order.
 	order := make([]int, len(inputs))
 	for index := range order {
 		order[index] = index
 	}
 	sort.SliceStable(order, func(i, j int) bool { return inputs[order[i]].normalized < inputs[order[j]].normalized })
-	actor := requestActor(c)
-	return h.write(c, func(ctx context.Context, q *store.Queries) (result, error) {
-		rules, err := aisleRules(ctx, q)
+	rules, err := aisleRules(ctx, q)
+	if err != nil {
+		return addedItems{}, err
+	}
+	// Stores first, in the inputs' order, so a new store is named as the
+	// first item that names it writes it.
+	storeIDs := make([]pgtype.UUID, len(inputs))
+	var storeEvents []activity.Event
+	for index, input := range inputs {
+		if input.storeID == nil && input.storeName == nil {
+			continue
+		}
+		item, events, err := h.resolveStore(ctx, q, actor, input.storeID, input.storeName)
 		if err != nil {
-			return result{}, err
+			return addedItems{}, itemError(index, err)
 		}
-		// Stores first, in the request's order, so a new store is named as
-		// the first item that names it writes it.
-		storeIDs := make([]pgtype.UUID, len(inputs))
-		var storeEvents []activity.Event
-		for index, input := range inputs {
-			if input.storeID == nil && input.storeName == nil {
-				continue
-			}
-			item, events, err := h.resolveStore(ctx, q, actor, input.storeID, input.storeName)
-			if err != nil {
-				return result{}, itemError(index, err)
-			}
-			storeIDs[index] = item.ID
-			storeEvents = append(storeEvents, events...)
+		storeIDs[index] = item.ID
+		storeEvents = append(storeEvents, events...)
+	}
+	rows := make([]store.ShoppingItem, len(inputs))
+	merged := make([]bool, len(inputs))
+	changes := make([][]string, len(inputs))
+	for _, index := range order {
+		input := inputs[index]
+		params := store.AddShoppingItemParams{Name: input.name, NormalizedName: input.normalized, Amount: input.amount, Note: input.note,
+			StoreID: storeIDs[index], Source: input.source, SourceRef: input.sourceRef, Actor: actor}
+		params.AisleSetBy = "manual"
+		if input.aisle != nil {
+			params.Aisle = *input.aisle
+		} else {
+			params.Aisle, _, _ = domain.ChooseAisle(input.normalized, rules)
+			params.AisleSetBy = "rule"
 		}
-		rows := make([]store.ShoppingItem, len(inputs))
-		merged := make([]bool, len(inputs))
-		changes := make([][]string, len(inputs))
-		for _, index := range order {
-			input := inputs[index]
-			params := store.AddShoppingItemParams{Name: input.name, NormalizedName: input.normalized, Amount: input.amount, Note: input.note,
-				StoreID: storeIDs[index], Source: input.source, SourceRef: input.sourceRef, Actor: actor}
-			params.AisleSetBy = "manual"
-			if input.aisle != nil {
-				params.Aisle = *input.aisle
-			} else {
-				params.Aisle, _, _ = domain.ChooseAisle(input.normalized, rules)
-				params.AisleSetBy = "rule"
-			}
-			// The open item it may merge into, to tell what the merge changed.
-			before, err := q.GetOpenShoppingItemByName(ctx, input.normalized)
-			found := err == nil
-			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-				return result{}, err
-			}
-			id := googleuuid.New()
-			params.ID = pgtype.UUID{Bytes: id, Valid: true}
-			row, err := q.AddShoppingItem(ctx, params)
-			if err != nil {
-				return result{}, err
-			}
-			rows[index], merged[index] = row, row.ID.Bytes != id
-			if merged[index] {
-				changes[index] = mergeChanges(before, found, row, params)
-			}
+		// The open item it may merge into, to tell what the merge changed.
+		before, err := q.GetOpenShoppingItemByName(ctx, input.normalized)
+		found := err == nil
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return addedItems{}, err
 		}
-		names, err := storeNames(ctx, q)
+		id := googleuuid.New()
+		params.ID = pgtype.UUID{Bytes: id, Valid: true}
+		row, err := q.AddShoppingItem(ctx, params)
 		if err != nil {
-			return result{}, err
+			return addedItems{}, err
 		}
-		response := generated.AddShoppingItemsResponse{Items: make([]generated.ShoppingItemResult, len(rows))}
-		events := storeEvents
-		for index, row := range rows {
-			response.Items[index] = generated.ShoppingItemResult{Item: shoppingView(row, names), Merged: merged[index]}
-			eventType := shoppingItemAdded
-			if merged[index] {
-				eventType = shoppingItemMerged
-			}
-			events = append(events, shoppingEvent(eventType, row, nameOf(names, row.StoreID), changes[index], nil))
+		rows[index], merged[index] = row, row.ID.Bytes != id
+		if merged[index] {
+			changes[index] = mergeChanges(before, found, row, params)
 		}
-		return result{status: fiber.StatusOK, body: response, events: events}, nil
-	})
+	}
+	names, err := storeNames(ctx, q)
+	if err != nil {
+		return addedItems{}, err
+	}
+	events := storeEvents
+	for index, row := range rows {
+		eventType := shoppingItemAdded
+		if merged[index] {
+			eventType = shoppingItemMerged
+		}
+		events = append(events, shoppingEvent(eventType, row, nameOf(names, row.StoreID), changes[index], nil))
+	}
+	return addedItems{rows: rows, merged: merged, names: names, events: events}, nil
 }
 
 // mergeChanges lists what merging params into an open item changed. Without

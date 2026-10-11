@@ -15,9 +15,10 @@ info:
 
     Food keeps one shopping list, grouped by aisle, where each item may be
     tagged with a store; the stores; the aisle rules that place new items;
-    and the pantry, what is at home and when it expires. Groceries (food,
-    drinks, household, and drugstore items) go on the shopping list; other
-    purchases stay Tasks.
+    and the pantry, what is at home and when it expires; recipes and the
+    weekly meal plan, from which missing ingredients go on the list.
+    Groceries (food, drinks, household, and drugstore items) go on the
+    shopping list; other purchases stay Tasks.
 
 
     Names are kept as written and compared normalised: Unicode NFKC, lower
@@ -121,6 +122,30 @@ paths:
         '400': {description: 'Invalid request (`invalid_request`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
         '404': {description: 'A shopping item not found (`not_found`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
         '409': {description: '`not_bought` (an item is still needed) or `idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/shopping-items/from-recipes:
+    post:
+      summary: Add the missing ingredients of recipes to the shopping list
+      description: >-
+        Collects the ingredients of the recipes given (`recipeIds`) or of
+        every recipe planned from `from` through `to` (at most 31 days; a
+        recipe planned twice counts once), in order. One ingredient named by
+        several recipes (the same normalised name) is one line, its amounts
+        joined ("200 g + 1 Pck."). An ingredient in stock in the pantry
+        (`in_pantry`) or already needed on the list (`on_list`) is skipped;
+        the others are added with the usual merge (`added`, or `merged` when
+        a needed item appeared meanwhile), `source: recipe`, and `sourceRef`
+        the first recipe's id. With `dryRun` nothing changes and the statuses
+        say what would happen (`added` for what would be added). Names match
+        normalised, as on the shopping list; amounts are not compared.
+      operationId: addShoppingItemsFromRecipes
+      security: []
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/FromRecipesRequest'}}}}
+      responses:
+        '200': {description: Each ingredient and what happened to it, content: {application/json: {schema: {$ref: '#/components/schemas/FromRecipesResult'}}}}
+        '400': {description: 'Invalid request (`invalid_request`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: 'A recipe not found (`not_found`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
   /v1/shopping-items/{itemId}:
     get:
       summary: Get a shopping item
@@ -385,6 +410,117 @@ paths:
         '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
         '404': {description: Item not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
         '409': {description: '`idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/recipes:
+    get:
+      summary: List or find recipes
+      description: >-
+        Recipes by normalised title. `q` keeps recipes whose normalised title
+        contains every word of it (also inside a word: "bolo" finds "Pasta
+        Bolognese"); `tag` keeps those with the tag (normalised); `ingredient`
+        keeps those with an ingredient whose normalised name contains it.
+        Filters combine; paging works as for the shopping list.
+      operationId: listRecipes
+      security: []
+      parameters:
+        - {name: q, in: query, schema: {type: string, maxLength: 200}}
+        - {name: tag, in: query, schema: {type: string, maxLength: 40}}
+        - {name: ingredient, in: query, schema: {type: string, maxLength: 200}}
+        - {name: cursor, in: query, description: The previous page's nextCursor. Opaque; only valid with the filters it was returned for., schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 200, default: 100}}
+      responses:
+        '200': {description: Recipes, content: {application/json: {schema: {$ref: '#/components/schemas/RecipeList'}}}}
+        '400': {description: 'Invalid request (`invalid_request`), or a malformed cursor (`invalid_cursor`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    post:
+      summary: Create a recipe
+      description: >-
+        A recipe's title is unique as normalised (409 `recipe_exists`), so a
+        title names one recipe. Ingredients keep their order; tags are kept
+        normalised, without duplicates, in the order given; steps are plain
+        text, one step per line.
+      operationId: createRecipe
+      security: []
+      parameters: [{$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CreateRecipeRequest'}}}}
+      responses:
+        '201': {description: Recipe, content: {application/json: {schema: {$ref: '#/components/schemas/Recipe'}}}}
+        '400': {description: 'Invalid request (`invalid_request`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`recipe_exists` (another recipe has the title) or `idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/recipes/{recipeId}:
+    get:
+      summary: Get a recipe
+      operationId: getRecipe
+      security: []
+      parameters: [{$ref: '#/components/parameters/RecipeId'}]
+      responses:
+        '200': {description: Recipe, content: {application/json: {schema: {$ref: '#/components/schemas/Recipe'}}}}
+        '400': {description: Invalid request, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: Recipe not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    patch:
+      summary: Update a recipe
+      description: >-
+        Changes only the fields present; `null` clears `servings`, `steps`,
+        `sourceUrl`, or `note`. `ingredients` and `tags` replace the whole
+        list. A new title is refused when another recipe has it (409
+        `recipe_exists`); the meal plan follows the new title.
+      operationId: updateRecipe
+      security: []
+      parameters: [{$ref: '#/components/parameters/RecipeId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdateRecipeRequest'}}}}
+      responses:
+        '200': {description: Recipe, content: {application/json: {schema: {$ref: '#/components/schemas/Recipe'}}}}
+        '400': {description: 'Invalid request (`invalid_request`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: Recipe not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`recipe_exists` or `idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    delete:
+      summary: Delete a recipe
+      description: Meal plan entries that named it stay, as plain text with its title.
+      operationId: deleteRecipe
+      security: []
+      parameters: [{$ref: '#/components/parameters/RecipeId'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      responses:
+        '204': {description: Deleted}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: Recipe not found (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/meal-plan:
+    get:
+      summary: List the meal plan
+      description: The entries from `from` through `to` (plain dates, at most 31 days), by date, then slot (breakfast, lunch, dinner). Empty slots are not listed.
+      operationId: listMealPlan
+      security: []
+      parameters:
+        - {name: from, in: query, required: true, schema: {type: string, format: date}}
+        - {name: to, in: query, required: true, schema: {type: string, format: date}}
+      responses:
+        '200': {description: Meal plan entries, content: {application/json: {schema: {$ref: '#/components/schemas/MealPlanList'}}}}
+        '400': {description: 'Invalid request (`invalid_request`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/meal-plan/{date}/{slot}:
+    put:
+      summary: Plan a meal
+      description: >-
+        Sets the slot of a day to a recipe (`recipeId`) or to free text
+        (`text`), exactly one of them, replacing what the slot held. An entry
+        that names a recipe takes its title and follows it when the recipe is
+        renamed; when the recipe is deleted the entry stays as plain text.
+        Setting what the slot already holds changes nothing.
+      operationId: setMealPlanEntry
+      security: []
+      parameters: [{$ref: '#/components/parameters/PlanDate'}, {$ref: '#/components/parameters/PlanSlot'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/SetMealPlanEntryRequest'}}}}
+      responses:
+        '200': {description: Meal plan entry, content: {application/json: {schema: {$ref: '#/components/schemas/MealPlanEntry'}}}}
+        '400': {description: 'Invalid request (`invalid_request`, `unknown_recipe`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    delete:
+      summary: Clear a meal
+      operationId: clearMealPlanEntry
+      security: []
+      parameters: [{$ref: '#/components/parameters/PlanDate'}, {$ref: '#/components/parameters/PlanSlot'}, {$ref: '#/components/parameters/IdempotencyKey'}]
+      responses:
+        '204': {description: Cleared}
+        '400': {description: 'Invalid request, or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: 'Nothing is planned there (`not_found`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
   /v1/notifications/status:
     get:
       summary: Get the expiry reminders' health
@@ -406,6 +542,9 @@ components:
     ItemId: {name: itemId, in: path, required: true, schema: {type: string, format: uuid}}
     StoreId: {name: storeId, in: path, required: true, schema: {type: string, format: uuid}}
     RuleId: {name: ruleId, in: path, required: true, schema: {type: string, format: uuid}}
+    RecipeId: {name: recipeId, in: path, required: true, schema: {type: string, format: uuid}}
+    PlanDate: {name: date, in: path, required: true, description: A plain date (YYYY-MM-DD)., schema: {type: string, format: date}}
+    PlanSlot: {name: slot, in: path, required: true, schema: {$ref: '#/components/schemas/MealSlot'}}
     IdempotencyKey:
       name: Idempotency-Key
       in: header
@@ -448,8 +587,8 @@ components:
       enum: [needed, bought]
     ItemSource:
       type: string
-      description: '`manual`: added directly (the Dashboard, a tool). `capture`: added from a capture such as an Inbox item; `sourceRef` names it.'
-      enum: [manual, capture]
+      description: '`manual`: added directly (the Dashboard, a tool). `capture`: added from a capture such as an Inbox item; `sourceRef` names it. `recipe`: added as a recipe''s missing ingredient; `sourceRef` is the recipe''s id.'
+      enum: [manual, capture, recipe]
     ShoppingItem:
       type: object
       required: [id, name, normalizedName, amount, note, aisle, aisleSetBy, storeId, storeName, state, boughtAt, source, sourceRef, createdAt, updatedAt, createdBy, updatedBy]
@@ -659,6 +798,133 @@ components:
       required: [items]
       properties:
         items: {type: array, description: The new pantry items in the request's order., items: {$ref: '#/components/schemas/PantryItem'}}
+    Ingredient:
+      type: object
+      required: [name, normalizedName, amount, note]
+      properties:
+        name: {type: string, description: As written.}
+        normalizedName: {type: string, description: The name as Food compares it with the pantry and the list.}
+        amount: {type: string, nullable: true, description: 'Free text, such as "200 g" or "1 Pck."'}
+        note: {type: string, nullable: true}
+    NewIngredient:
+      type: object
+      required: [name]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 200}
+        amount: {type: string, maxLength: 50}
+        note: {type: string, maxLength: 200}
+    Recipe:
+      type: object
+      required: [id, title, normalizedTitle, servings, ingredients, steps, tags, sourceUrl, note, createdAt, updatedAt, createdBy, updatedBy]
+      properties:
+        id: {type: string, format: uuid}
+        title: {type: string, description: As written.}
+        normalizedTitle: {type: string, description: The title as Food compares it; unique.}
+        servings: {type: integer, nullable: true}
+        ingredients: {type: array, items: {$ref: '#/components/schemas/Ingredient'}}
+        steps: {type: string, nullable: true, description: 'Plain text, one step per line.'}
+        tags: {type: array, description: Normalised., items: {type: string}}
+        sourceUrl: {type: string, nullable: true}
+        note: {type: string, nullable: true}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+        createdBy: {$ref: '#/components/schemas/Actor'}
+        updatedBy: {$ref: '#/components/schemas/Actor'}
+    RecipeList:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/Recipe'}}
+        nextCursor: {type: string, nullable: true}
+    CreateRecipeRequest:
+      type: object
+      required: [title]
+      properties:
+        title: {type: string, minLength: 1, maxLength: 200}
+        servings: {type: integer, minimum: 1, maximum: 100}
+        ingredients: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/NewIngredient'}}
+        steps: {type: string, maxLength: 20000}
+        tags: {type: array, maxItems: 20, items: {type: string, minLength: 1, maxLength: 40}}
+        sourceUrl: {type: string, maxLength: 2000, description: An http or https URL.}
+        note: {type: string, maxLength: 1000}
+    UpdateRecipeRequest:
+      type: object
+      minProperties: 1
+      properties:
+        title: {type: string, minLength: 1, maxLength: 200}
+        servings: {type: integer, nullable: true, minimum: 1, maximum: 100}
+        ingredients: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/NewIngredient'}}
+        steps: {type: string, nullable: true, maxLength: 20000}
+        tags: {type: array, maxItems: 20, items: {type: string, minLength: 1, maxLength: 40}}
+        sourceUrl: {type: string, nullable: true, maxLength: 2000}
+        note: {type: string, nullable: true, maxLength: 1000}
+    MealSlot:
+      type: string
+      description: A day's meals, in the order the plan lists them.
+      enum: [breakfast, lunch, dinner]
+    MealPlanEntry:
+      type: object
+      required: [id, date, slot, recipeId, title, servings, note, createdAt, updatedAt, createdBy, updatedBy]
+      properties:
+        id: {type: string, format: uuid}
+        date: {type: string, format: date}
+        slot: {$ref: '#/components/schemas/MealSlot'}
+        recipeId: {type: string, format: uuid, nullable: true, description: The recipe; null for free text or a deleted recipe.}
+        title: {type: string, description: 'The recipe''s title, or the text.'}
+        servings: {type: integer, nullable: true}
+        note: {type: string, nullable: true}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+        createdBy: {$ref: '#/components/schemas/Actor'}
+        updatedBy: {$ref: '#/components/schemas/Actor'}
+    MealPlanList:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/MealPlanEntry'}}
+    SetMealPlanEntryRequest:
+      type: object
+      description: Give `recipeId` or `text`, exactly one.
+      properties:
+        recipeId: {type: string, format: uuid}
+        text: {type: string, minLength: 1, maxLength: 200}
+        servings: {type: integer, minimum: 1, maximum: 100}
+        note: {type: string, maxLength: 1000}
+    FromRecipesRequest:
+      type: object
+      description: Give `recipeIds`, or `from` and `to`.
+      properties:
+        recipeIds: {type: array, minItems: 1, maxItems: 50, items: {type: string, format: uuid}}
+        from: {type: string, format: date}
+        to: {type: string, format: date}
+        dryRun: {type: boolean, default: false, description: Only report what would happen.}
+    RecipeRef:
+      type: object
+      required: [id, title]
+      properties:
+        id: {type: string, format: uuid}
+        title: {type: string}
+    IngredientStatus:
+      type: string
+      description: '`added`: put on the list (or, in a dry run, would be). `merged`: merged into a needed item that appeared meanwhile. `in_pantry`: in stock at home, skipped. `on_list`: already needed on the list, skipped.'
+      enum: [added, merged, in_pantry, on_list]
+    IngredientResult:
+      type: object
+      required: [name, normalizedName, amount, status, recipes, shoppingItem, pantryItem]
+      properties:
+        name: {type: string, description: As the first recipe writes it.}
+        normalizedName: {type: string}
+        amount: {type: string, nullable: true, description: 'The recipes'' amounts, joined: "200 g + 1 Pck."'}
+        status: {$ref: '#/components/schemas/IngredientStatus'}
+        recipes: {type: array, description: The recipes that need it., items: {$ref: '#/components/schemas/RecipeRef'}}
+        shoppingItem: {type: object, allOf: [{$ref: '#/components/schemas/ShoppingItem'}], nullable: true, description: 'The item added or merged into, or already on the list; null otherwise and in a dry run''s `added`.'}
+        pantryItem: {type: object, allOf: [{$ref: '#/components/schemas/PantryItem'}], nullable: true, description: 'The pantry item in stock (`in_pantry`); null otherwise.'}
+    FromRecipesResult:
+      type: object
+      required: [dryRun, items]
+      properties:
+        dryRun: {type: boolean}
+        items: {type: array, items: {$ref: '#/components/schemas/IngredientResult'}}
     FoodNotificationStatus:
       type: object
       required: [enabled, intervalSeconds, graceMinutes, timeZone, expiryTime, handledThrough, lastRunAt, lastSuccessAt, lastError, lastErrorAt, lastSentAt]
