@@ -504,9 +504,11 @@ func (r *Runner) LastFullSuccess() (*Summary, error) {
 type Status struct {
 	// LastRun is the latest run, including runs that left no files.
 	LastRun *Summary
-	// LastSuccess is the latest successful run of every database.
-	LastSuccess *Summary
-	Running     *Progress
+	// LastSuccess is the latest successful run of every database, and
+	// OldestSuccess the start of the oldest one kept (zero without one).
+	LastSuccess   *Summary
+	OldestSuccess time.Time
+	Running       *Progress
 	// LastRestoreCheck is the newest restore check; RunningCheck the one in
 	// progress.
 	LastRestoreCheck *RestoreCheck
@@ -531,8 +533,10 @@ func (r *Runner) Status() (Status, error) {
 	status.Runs = len(runs)
 	for _, run := range runs {
 		if run.Result == ResultSucceeded && run.Scope == ScopeAll {
-			status.LastSuccess = &run
-			break
+			if status.LastSuccess == nil {
+				status.LastSuccess = &run
+			}
+			status.OldestSuccess = run.StartedAt
 		}
 	}
 	if len(runs) > 0 {

@@ -96,7 +96,7 @@ func TestGetBackupStatus(t *testing.T) {
 	last.Error = "1 of 2 databases failed"
 	success := summary("20261010T011500Z", backup.ResultSucceeded, backup.ScopeAll)
 	runner := &fakeRunner{status: backup.Status{
-		LastRun: &last, LastSuccess: &success, Runs: 2, TotalBytes: 4096, FreeBytes: 10 << 30, SizeBytes: 50 << 30,
+		LastRun: &last, LastSuccess: &success, OldestSuccess: success.StartedAt.AddDate(0, 0, -30), Runs: 2, TotalBytes: 4096, FreeBytes: 10 << 30, SizeBytes: 50 << 30,
 		Running:   &backup.Progress{ID: "20261011T120000Z", Trigger: backup.TriggerManual, Scope: backup.ScopeSubset, Actor: "user", Databases: []string{"tasks_db"}, Current: "tasks_db"},
 		Databases: []string{"finance_db", "tasks_db"},
 	}}
@@ -114,7 +114,7 @@ func TestGetBackupStatus(t *testing.T) {
 	if got.LastRun == nil || got.LastRun.Result != generated.BackupResultFailed || *got.LastRun.Error != "1 of 2 databases failed" || got.LastRun.Databases[0].Migration.Version != 7 {
 		t.Errorf("lastRun = %+v", got.LastRun)
 	}
-	if got.LastSuccess == nil || got.LastSuccess.Id != "20261010T011500Z" || got.Running == nil || *got.Running.Current != "tasks_db" {
+	if got.LastSuccess == nil || got.LastSuccess.Id != "20261010T011500Z" || got.OldestSuccessAt == nil || got.Running == nil || *got.Running.Current != "tasks_db" {
 		t.Errorf("lastSuccess = %+v, running = %+v", got.LastSuccess, got.Running)
 	}
 	if got.Storage.Runs != 2 || got.Storage.FreeBytes != 10<<30 || got.Retention.Daily != 7 || got.Retention.FailedDays != 3 || len(got.Databases) != 2 {

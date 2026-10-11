@@ -95,6 +95,8 @@ func (h *Handler) GetBackupStatus(c fiber.Ctx) error {
 	if status.LastSuccess != nil {
 		run := toRun(*status.LastSuccess)
 		response.LastSuccess = &run
+		oldest := status.OldestSuccess.UTC()
+		response.OldestSuccessAt = &oldest
 	}
 	if status.Running != nil {
 		progress := toProgress(*status.Running)

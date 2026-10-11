@@ -289,6 +289,9 @@ type BackupStatus struct {
 	// LastSuccess One finished run.
 	LastSuccess *BackupRun `json:"lastSuccess,omitempty"`
 
+	// OldestSuccessAt The start of the oldest successful full run kept: about when backups began, until the rotation deletes it (after a year at the defaults).
+	OldestSuccessAt *time.Time `json:"oldestSuccessAt,omitempty"`
+
 	// Retention How many successful full runs the rotation keeps: the newest of each of the last `daily` days, `weekly` ISO weeks, and `monthly` months that have one (days, weeks, and months in the schedule's timezone). The newest successful run is always kept. Failed runs, and runs of only some databases, are deleted after `failedDays` and `daily` days.
 	Retention BackupRetention `json:"retention"`
 

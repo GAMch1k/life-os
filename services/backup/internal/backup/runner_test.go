@@ -177,6 +177,10 @@ func TestASubsetRunNamesItsDatabases(t *testing.T) {
 	if last, err := runner.LastFullSuccess(); err != nil || last == nil || last.ID != job.ID() {
 		t.Fatalf("LastFullSuccess = %+v, %v", last, err)
 	}
+	// The subset run before it is not a full success; this is the only one.
+	if status, err := runner.Status(); err != nil || !status.OldestSuccess.Equal(status.LastSuccess.StartedAt) {
+		t.Fatalf("OldestSuccess = %v, %v", status.OldestSuccess, err)
+	}
 }
 
 func TestARunThatCannotStartIsRecorded(t *testing.T) {

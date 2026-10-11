@@ -250,6 +250,7 @@ components:
       properties:
         lastRun: {$ref: '#/components/schemas/BackupRun'}
         lastSuccess: {$ref: '#/components/schemas/BackupRun'}
+        oldestSuccessAt: {type: string, format: date-time, description: 'The start of the oldest successful full run kept: about when backups began, until the rotation deletes it (after a year at the defaults).'}
         running: {$ref: '#/components/schemas/BackupProgress'}
         lastRestoreCheck: {$ref: '#/components/schemas/RestoreCheck'}
         runningRestoreCheck: {$ref: '#/components/schemas/RestoreCheckProgress'}

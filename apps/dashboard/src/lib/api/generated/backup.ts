@@ -216,6 +216,11 @@ export interface components {
         BackupStatus: {
             lastRun?: components["schemas"]["BackupRun"];
             lastSuccess?: components["schemas"]["BackupRun"];
+            /**
+             * Format: date-time
+             * @description The start of the oldest successful full run kept: about when backups began, until the rotation deletes it (after a year at the defaults).
+             */
+            oldestSuccessAt?: string;
             running?: components["schemas"]["BackupProgress"];
             lastRestoreCheck?: components["schemas"]["RestoreCheck"];
             runningRestoreCheck?: components["schemas"]["RestoreCheckProgress"];
