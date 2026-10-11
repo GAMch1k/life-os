@@ -461,29 +461,15 @@ purchases as Tasks:
   of the capture's week. "Buy pasta" stays a list item. The AI never creates
   or edits recipes.
 
-**Staples and running low (for the AI agent).** The owner's words "I'm
-almost out of meat, put it on the list automatically" map onto these
-operations; the phrasing is the AI's, Food only offers them:
+**Staples and running low** (P15-08; see [MCP and AI](mcp.md#staples-and-running-low)). The processor maps the owner's words onto the staple operations; the phrasing is the AI's, Food only offers them:
 
-- "We're almost out of milk" / "молоко заканчивается" / "Milch wird knapp":
-  `POST /v1/staples/running-low {"name": "Milch", "addToList": false}`. A
-  staple goes on the list by itself; the answer's `restock.message` is the
-  reply ("Added “Milch” to the list: running low (staple)" or "“Milch” is
-  already on the list"). With `restock: null` the name is no staple: ask, or
-  send `addToList: true` when the capture says to buy it ("almost out of
-  milk, buy some"). `changed: false` with no `restock` means Food knows
-  nothing of that name.
-- "Milk is a staple" / "always keep eggs at home": `POST /v1/staples`
-  `{"name", "amount"?, "storeName"?}`; 409 `staple_exists` means it already
-  is one. "Milk is no longer a staple": find it with `GET /v1/staples` (by
-  `normalizedName`) and `DELETE /v1/staples/{id}`.
-- "The milk is finished" stays `used-up` on the matching pantry item; for a
-  staple the answer's `restock` tells what went on the list, so the AI must
-  not add it again itself.
-- "Milk isn't low any more": `DELETE /v1/pantry-items/{id}/running-low`.
+- "We're almost out of milk", "мясо заканчивается", "почти закончился рис", "fast keine Milch mehr": `food_mark_running_low`. The processor matches the words, in any of the three languages, to the one staple or in-stock pantry name Food knows ("мясо" finds the staple "Fleisch", "рис" the pantry's "Reis"; several names go to Human Review) and sends `POST /v1/staples/running-low` with that name, since Food compares names only by their exact normalised form. A staple goes on the list by itself (`source: staple`); another item is only flagged, unless the capture also says to buy it ("заканчивается, купи"), which sends `addToList: true`. A name Food does not know is sent as the owner wrote it and changes nothing (`changed: false`, `restock: null`) unless `addToList` puts it on the list.
+- "Milk is a staple", "молоко всегда должно быть дома", "Milch immer da haben", "Kaffee sollte ich immer zu Hause haben": `POST /v1/staples` with the name as written and the amount and store when said. A name already a staple (409 `staple_exists`) counts as done. Nothing goes on the list now.
+- "Remove milk from staples", "молоко больше не нужно держать дома": the one staple whose name the words match is deleted (found in `GET /v1/staples` by `normalizedName`, then `DELETE /v1/staples/{id}`); none matching removes nothing, several go to Human Review.
+- "The milk is finished, buy more" stays `used-up` on the matching pantry item plus a list add. When the item is a staple, the answer's `restock` says it is on the list already (`added`, `merged`, or `on_list`), and the processor leaves it out of the capture's own add, also when the capture names it in another language ("молоко" for the staple "Milch").
+- "Milk isn't low any more" is not routed by the AI: the flag is cleared on the Food page, or by more of the name coming home.
 
-Every one of these takes an `Idempotency-Key` like the other writes, and the
-items a staple puts on the list have `source: staple`, not `capture`.
+Every one of these takes an `Idempotency-Key` like the other writes, and the items a staple puts on the list have `source: staple`, not `capture`.
 
 Items from a capture have `source: capture` and the Inbox item's id as
 `sourceRef` (missing ingredients have `source: recipe`, as always), and their

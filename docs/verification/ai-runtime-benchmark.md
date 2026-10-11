@@ -6,7 +6,7 @@ Routine Inbox and Voice planning runs through the authenticated Codex CLI. X-01 
 
 ## How it was measured
 
-`tools/benchmark-ai-runtime <model/effort>…` starts a fresh disposable verification stack for each profile, with the browser tests' fixture overlay (`tools/fixtures/calendar-ics.compose.yaml`: the recipe pages it writes are served at `http://ics-fixture/`, which recipe-import may fetch) and the owner's timezone set to Europe/Berlin, and seeds existing Tasks, Calendar events, one shopping list item, the recipe "Pasta Bolognese" (Spaghetti 500 g, Hackfleisch 400 g, Tomaten 1 Dose) with Spaghetti in the pantry, and a breakfast ("Pancakes") on the coming Saturday (run on a Saturday, also on the next one, since "Saturday" may mean either). It then submits the same captures: EN, RU, and DE text through the Inbox API the Dashboard uses, plus a recorded voice note through Voice and whisper.cpp. The automatic processor plans them with the real Codex CLI and acts through MCP and the owning services. The tool checks the persisted results:
+`tools/benchmark-ai-runtime <model/effort>…` starts a fresh disposable verification stack for each profile, with the browser tests' fixture overlay (`tools/fixtures/calendar-ics.compose.yaml`: the recipe pages it writes are served at `http://ics-fixture/`, which recipe-import may fetch) and the owner's timezone set to Europe/Berlin, and seeds existing Tasks, Calendar events, one shopping list item, the recipe "Pasta Bolognese" (Spaghetti 500 g, Hackfleisch 400 g, Tomaten 1 Dose) with Spaghetti in the pantry, the staple "Butter" and "Reis" (rice) in the pantry (no staple), and a breakfast ("Pancakes") on the coming Saturday (run on a Saturday, also on the next one, since "Saturday" may mean either). It then submits the same captures: EN, RU, and DE text through the Inbox API the Dashboard uses, plus a recorded voice note through Voice and whisper.cpp. The automatic processor plans them with the real Codex CLI and acts through MCP and the owning services. The tool checks the persisted results:
 
 | Scenario | Pass condition |
 | --- | --- |
@@ -45,9 +45,13 @@ Routine Inbox and Voice planning runs through the authenticated Codex CLI. X-01 
 | Recipe ingredients ("Add the ingredients for the bolognese to the shopping list.") | Resolved; "Hackfleisch" and "Tomaten" are needed once each, from the recipe (`source: recipe`); no "Spaghetti", which is in the pantry |
 | Recipe link ("Save this recipe: http://ics-fixture/gulasch.html", a JSON-LD page) | Resolved; one recipe "Omas Rindergulasch" with that link as its source and its 3 ingredients |
 | Recipe from a caption (an OpenGraph-only post page, like an Instagram reel, plus its pasted caption "Shakshuka in 20 Minuten …" with "Zutaten" and "Zubereitung") | Resolved; one Shakshuka recipe with the post's link as its source and the caption's 4 ingredients |
+| Staple running low ("Butter is almost gone.", staple "Butter") | Resolved; "Butter" is needed once, the staple's item (`source: staple`, `sourceRef` the staple), not the capture's |
+| Running low, no staple ("Почти закончился рис.", "Reis" in the pantry) | Resolved; "Reis" is flagged running low and still in stock; nothing rice-like on the list |
+| Staple added ("Kaffee sollte ich immer zu Hause haben.") | Resolved; one staple "Kaffee"; nothing coffee-like on the list |
 | No extra recipes | Exactly the seeded recipe and these two |
-| No extra shopping items | Exactly 9 items (the seeded one + 6 added from captures + 2 from the recipe), each name once |
-| No extra pantry items | Exactly the yoghurt and the seeded spaghetti |
+| No extra shopping items | Exactly 10 items (the seeded one + 6 added from captures + 2 from the recipe + the staple butter), each name once |
+| No extra pantry items | Exactly the yoghurt and the seeded spaghetti and rice |
+| No extra staples | Exactly the seeded butter and the new coffee |
 | No extra meals | Exactly Wednesday's dinner, Friday's lunch, and the seeded Saturday breakfasts but the cleared one, in the three weeks from the capture |
 | No extra entities | Exactly 10 seeded + 5 created Tasks exist (passport, milk, tax return, flash drive, call the plumber) |
 | No extra events | Exactly the 4 seeded events + the created one exist, all active |
@@ -56,7 +60,7 @@ The reschedule cases turned out to separate the profiles. They were also repeate
 
 ## Results (2026-10-09, Codex CLI 0.160.0, ChatGPT Plus)
 
-Full real-runtime runs. They predate the three cross-language completions (POL-08, see [cross-language Task matching](../services/mcp.md)), the Calendar change scenarios (P10-03, see [Calendar events](../services/mcp.md#calendar-events)), the cash and card captures (P13-01), the grocery captures (P15-03, see [Food](../services/mcp.md#food)), the meal captures (P15-05, see [Meals and recipes](../services/mcp.md#meals-and-recipes)), and the recipe links (P15-07, see [Recipe links](../services/mcp.md#recipe-links)), so they count 13 checks; a run now has 41. Token figures are totals for the run, as reported by Codex (`turn.completed`).
+Full real-runtime runs. They predate the three cross-language completions (POL-08, see [cross-language Task matching](../services/mcp.md)), the Calendar change scenarios (P10-03, see [Calendar events](../services/mcp.md#calendar-events)), the cash and card captures (P13-01), the grocery captures (P15-03, see [Food](../services/mcp.md#food)), the meal captures (P15-05, see [Meals and recipes](../services/mcp.md#meals-and-recipes)), the recipe links (P15-07, see [Recipe links](../services/mcp.md#recipe-links)), and the staple and running-low captures (P15-08, see [Staples and running low](../services/mcp.md#staples-and-running-low)), so they count 13 checks; a run now has 45. Token figures are totals for the run, as reported by Codex (`turn.completed`).
 
 | Profile | Checks passed | Failed checks | Attempts | Output tokens | Reasoning tokens |
 | --- | --- | --- | --- | --- | --- |

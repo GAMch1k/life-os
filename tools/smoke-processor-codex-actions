@@ -6,8 +6,8 @@ set -euo pipefail
 actor=(-H 'X-Life-OS-Actor: dev:smoke-processor-codex-actions')
 
 # Opt-in, disposable proof that the deployed processor uses the authenticated
-# local Codex CLI to route explicit Calendar, Finance, grocery, meal, and
-# recipe link captures. It does not call the processor directly or inject
+# local Codex CLI to route explicit Calendar, Finance, grocery, running-low,
+# meal, and recipe link captures. It does not call the processor directly or inject
 # actions through the MCP service.
 compose=(./tools/verify-compose)
 # The recipe page a capture links to, served at http://ics-fixture/ by the
@@ -114,6 +114,17 @@ jq -e --arg ref "$grocery_id" 'length == 1 and .[0].sourceRef == $ref' >/dev/nul
   exit 1
 }
 
+# Something running low that is a staple goes back on the list by itself,
+# once, as the staple's item (not the capture's): the processor names the
+# staple and adds nothing of its own.
+mustard_staple=$(curl "${actor[@]}" --fail --silent -H 'content-type: application/json' --data '{"name":"Mustard"}' "$gateway/api/food/v1/staples" | jq -r '.id')
+low_id=$(capture "We're almost out of mustard.")
+wait_for_action "$low_id" food_mark_running_low
+curl --fail --silent "$gateway/api/food/v1/shopping-items?state=needed&limit=200" |
+  jq -e --arg staple "$mustard_staple" '[.items[] | select(.normalizedName == "mustard")] | length == 1 and .[0].source == "staple" and .[0].sourceRef == $staple' >/dev/null || {
+  echo "Codex action smoke: the running-low staple is not on the list once as the staple's item" >&2
+  exit 1
+}
 # A meal is planned once, with the recipe its words name, in the slot it
 # says; replaying the processor's write returns the first answer. The body
 # is the one MCP sent: the planned arguments but the slot's date and slot,
@@ -199,4 +210,4 @@ curl --fail --silent "$gateway/api/inbox/v1/inbox-items/$ambiguous_id" |
 curl --fail --silent "$gateway/api/tasks/v1/tasks/$ambiguous_task_a" | jq -e '.completed == false' >/dev/null
 curl --fail --silent "$gateway/api/tasks/v1/tasks/$ambiguous_task_b" | jq -e '.completed == false' >/dev/null
 
-echo "authenticated Codex Calendar, Finance, grocery, meal, recipe link, and Task mutation/ambiguity capture smoke passed"
+echo "authenticated Codex Calendar, Finance, grocery, running-low staple, meal, recipe link, and Task mutation/ambiguity capture smoke passed"
