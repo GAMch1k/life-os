@@ -12,7 +12,7 @@ flowchart LR
 
 ## What is backed up
 
-Every database in `infra/postgres/service-databases.conf`, read again at every run: a service added to the registry (Food, for example) is backed up from the first run after its database is provisioned, without a change here. Today that is `finance_db`, `tasks_db`, `inbox_db`, `calendar_db`, `voice_db`, `activity_db`, `notifications_db`, `banking_db`, `google_calendar_db`, and `calendar_feeds_db`.
+Every database in `infra/postgres/service-databases.conf`, read again at every run: a service added to the registry (Food, for example) is backed up from the first run after its database is provisioned, without a change here. `GET /v1/status` lists the databases the registry names now.
 
 Each dump is a whole database: schemas, data, sequences, owners, and privileges, with `schema_migrations`, so a restored database knows its migration version. Roles and their passwords live outside the databases; provisioning (`infra/postgres/provision-service-databases.sh`) recreates them from `.env`.
 
