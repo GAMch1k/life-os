@@ -1,0 +1,194 @@
+openapi: 3.0.3
+info:
+  title: Life OS Recipe Import API
+  version: 1.0.0
+  description: >-
+    recipe-import is the integration that reads recipes from web pages and
+    pasted text and saves them in Food. It is a separate, replaceable
+    service: it fetches and parses pages itself and writes to Food only
+    through Food's public API (`POST /v1/recipes`), as
+    `system:recipe-import`. It keeps no data of its own.
+
+
+    A page is read for a schema.org `Recipe` (JSON-LD, including `@graph`,
+    and microdata): that is a `structured` draft. A page without one gives a
+    `preview` draft from its OpenGraph title, description, and image, tagged
+    `to-review`: Instagram, TikTok, YouTube, and pages that block readers
+    end up here, and their caption can be pasted to `POST /v1/imports/text`.
+    A page that cannot be read at all is `failed`, with a plain reason.
+
+
+    Pages are fetched over http or https only, from public addresses only
+    (checked after DNS resolution and on every redirect, at most 5), within
+    10 seconds and 5 MB, without cookies.
+
+
+    Every write must say who makes it in `X-Life-OS-Actor`; without one it is
+    refused with 400 `actor_required`. Errors use the shared envelope
+    `{"error": {"code", "message"}, "request_id"}`.
+  license: {name: UNLICENSED, url: https://life-os.local/license}
+servers: [{url: http://recipe-import:8080}]
+paths:
+  /v1/imports/preview:
+    post:
+      summary: Read a recipe from a link
+      description: >-
+        Fetches the page and returns the recipe draft it gives and how it was
+        obtained. Nothing is saved. A page that cannot be fetched or read is
+        still 200, with `method: failed` and the reason.
+      operationId: previewImport
+      security: []
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PreviewRequest'}}}}
+      responses:
+        '200': {description: The draft, content: {application/json: {schema: {$ref: '#/components/schemas/ImportPreview'}}}}
+        '400': {description: 'Invalid request (`invalid_request`: not an http or https URL, or a private address), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/imports/text:
+    post:
+      summary: Read a recipe from pasted text
+      description: >-
+        Reads a pasted caption or recipe text with simple, deterministic
+        rules: "Ingredients", "Zutaten", or "Ингредиенты" and "Steps",
+        "Zubereitung", or "Приготовление" headings, bullet and numbered
+        lists, and lines that start with an amount ("200 g Mehl", "2 EL
+        Öl", "1 ст. л. сахара"). Hashtags become tags. Returns a draft
+        (`method: text`) to edit; nothing is saved.
+      operationId: parseImportText
+      security: []
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/TextRequest'}}}}
+      responses:
+        '200': {description: The draft, content: {application/json: {schema: {$ref: '#/components/schemas/ImportPreview'}}}}
+        '400': {description: 'Invalid request (`invalid_request`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/imports:
+    post:
+      summary: Save a recipe from a link
+      description: >-
+        Saves a recipe in Food (`POST /v1/recipes`, as
+        `system:recipe-import`) with the link as its `sourceUrl`. With
+        `overrides` (the draft as the owner edited it) that draft is saved as
+        it is and the page is not fetched again; without, the page is fetched
+        and read as for a preview and what it gives is saved (422
+        `import_failed` when it gives nothing, not even a title). A recipe
+        with the same title already in Food is 409 `recipe_exists` with its
+        `recipeId`. The `Idempotency-Key` is passed on to Food, so a retried
+        save creates the recipe once.
+      operationId: createImport
+      security: []
+      parameters:
+        - {name: Idempotency-Key, in: header, description: Makes the save safe to retry., schema: {type: string, minLength: 1, maxLength: 150}}
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ImportRequest'}}}}
+      responses:
+        '201': {description: The recipe saved in Food, content: {application/json: {schema: {$ref: '#/components/schemas/ImportResult'}}}}
+        '400': {description: 'Invalid request (`invalid_request`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {description: '`recipe_exists`: Food has a recipe with this title, its id in `recipeId`; or `idempotency_conflict`', content: {application/json: {schema: {$ref: '#/components/schemas/RecipeExistsError'}}}}
+        '422': {description: '`import_failed`: the page gives no recipe and no title; the message says why', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '502': {description: '`food_unavailable`: Food could not be reached or refused the recipe', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+components:
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [error, request_id]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: {type: string, description: Machine-readable code.}
+            message: {type: string, description: A sentence for people.}
+        request_id: {type: string}
+    RecipeExistsError:
+      type: object
+      required: [error, request_id]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: {type: string}
+            message: {type: string}
+        request_id: {type: string}
+        recipeId: {type: string, format: uuid, description: 'For `recipe_exists`: the recipe Food already has.'}
+    PreviewRequest:
+      type: object
+      required: [url]
+      properties:
+        url: {type: string, minLength: 1, maxLength: 2000, description: An http or https link.}
+    TextRequest:
+      type: object
+      required: [text]
+      properties:
+        text: {type: string, minLength: 1, maxLength: 20000}
+        sourceUrl: {type: string, maxLength: 2000, description: 'The link the text came from, kept as the draft''s sourceUrl.'}
+    ImportMethod:
+      type: string
+      description: '`structured`: the page has a schema.org Recipe. `preview`: only its OpenGraph title, description, and image (tagged `to-review`). `text`: read from pasted text. `failed`: nothing could be read; `reason` says why. `edited`: a saved draft the owner edited (`overrides`).'
+      enum: [structured, preview, text, failed, edited]
+    DraftIngredient:
+      type: object
+      required: [name]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 200}
+        amount: {type: string, maxLength: 50, description: 'The amount split off the line where that is cheap ("200 g"); else the whole line is the name.'}
+    RecipeDraft:
+      type: object
+      required: [title, ingredients, steps, tags]
+      properties:
+        title: {type: string, maxLength: 200, description: Empty when none was found.}
+        servings: {type: integer, minimum: 1, maximum: 100, nullable: true}
+        ingredients: {type: array, maxItems: 100, items: {$ref: '#/components/schemas/DraftIngredient'}}
+        steps: {type: array, maxItems: 200, description: One step per item., items: {type: string, maxLength: 2000}}
+        tags: {type: array, maxItems: 20, items: {type: string, minLength: 1, maxLength: 40}}
+        sourceUrl: {type: string, maxLength: 2000, nullable: true}
+        imageUrl: {type: string, maxLength: 2000, nullable: true}
+        description: {type: string, maxLength: 1000, nullable: true}
+        siteName: {type: string, maxLength: 200, nullable: true, description: 'The site, such as "Chefkoch" or "chefkoch.de".'}
+    ImportPreview:
+      type: object
+      required: [method, draft]
+      properties:
+        method: {$ref: '#/components/schemas/ImportMethod'}
+        reason: {type: string, nullable: true, description: 'Why the draft is not complete, in plain words, such as that Instagram pages cannot be read directly.'}
+        draft: {$ref: '#/components/schemas/RecipeDraft'}
+    ImportRequest:
+      type: object
+      required: [url]
+      properties:
+        url: {type: string, minLength: 1, maxLength: 2000}
+        overrides: {$ref: '#/components/schemas/RecipeDraft'}
+    Actor:
+      type: object
+      required: [kind]
+      properties:
+        kind: {type: string, enum: [user, agent, system, dev]}
+        name: {type: string}
+    Ingredient:
+      type: object
+      required: [name, normalizedName, amount, note]
+      properties:
+        name: {type: string}
+        normalizedName: {type: string}
+        amount: {type: string, nullable: true}
+        note: {type: string, nullable: true}
+    Recipe:
+      type: object
+      description: Food's recipe, as Food returned it.
+      required: [id, title, normalizedTitle, servings, ingredients, steps, tags, sourceUrl, note, createdAt, updatedAt, createdBy, updatedBy]
+      properties:
+        id: {type: string, format: uuid}
+        title: {type: string}
+        normalizedTitle: {type: string}
+        servings: {type: integer, nullable: true}
+        ingredients: {type: array, items: {$ref: '#/components/schemas/Ingredient'}}
+        steps: {type: string, nullable: true}
+        tags: {type: array, items: {type: string}}
+        sourceUrl: {type: string, nullable: true}
+        note: {type: string, nullable: true}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+        createdBy: {$ref: '#/components/schemas/Actor'}
+        updatedBy: {$ref: '#/components/schemas/Actor'}
+    ImportResult:
+      type: object
+      required: [method, recipe]
+      properties:
+        method: {$ref: '#/components/schemas/ImportMethod'}
+        recipe: {$ref: '#/components/schemas/Recipe'}
