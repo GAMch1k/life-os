@@ -7,7 +7,7 @@ import (
 
 // MCP calls each owning service at its compose address unless told otherwise.
 func TestLoadNamesEveryDownstreamService(t *testing.T) {
-	for _, name := range []string{"FINANCE_SERVICE_URL", "TASKS_SERVICE_URL", "INBOX_SERVICE_URL", "CALENDAR_SERVICE_URL", "FOOD_SERVICE_URL", "PORT"} {
+	for _, name := range []string{"FINANCE_SERVICE_URL", "TASKS_SERVICE_URL", "INBOX_SERVICE_URL", "CALENDAR_SERVICE_URL", "FOOD_SERVICE_URL", "RECIPE_IMPORT_SERVICE_URL", "PORT"} {
 		t.Setenv(name, "") // restored after the test
 		_ = os.Unsetenv(name)
 	}
@@ -15,7 +15,7 @@ func TestLoadNamesEveryDownstreamService(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Config{ServiceName: cfg.ServiceName, Port: 8080, FinanceURL: "http://finance:8080", TasksURL: "http://tasks:8080", InboxURL: "http://inbox:8080", CalendarURL: "http://calendar:8080", FoodURL: "http://food:8080", ActivityURL: cfg.ActivityURL}
+	want := Config{ServiceName: cfg.ServiceName, Port: 8080, FinanceURL: "http://finance:8080", TasksURL: "http://tasks:8080", InboxURL: "http://inbox:8080", CalendarURL: "http://calendar:8080", FoodURL: "http://food:8080", RecipeImportURL: "http://recipe-import:8080", ActivityURL: cfg.ActivityURL}
 	if cfg != want {
 		t.Fatalf("config = %+v, want %+v", cfg, want)
 	}

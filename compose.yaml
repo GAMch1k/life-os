@@ -441,6 +441,7 @@ services:
       INBOX_SERVICE_URL: http://inbox:8080
       CALENDAR_SERVICE_URL: http://calendar:8080
       FOOD_SERVICE_URL: http://food:8080
+      RECIPE_IMPORT_SERVICE_URL: http://recipe-import:8080
       ACTIVITY_SERVICE_URL: http://activity:8080
     expose: ["8080"]
     depends_on:
@@ -449,6 +450,7 @@ services:
       inbox: {condition: service_started}
       calendar: {condition: service_started}
       food: {condition: service_started}
+      recipe-import: {condition: service_started}
     networks: [backend]
     restart: unless-stopped
 
@@ -483,6 +485,7 @@ services:
       calendar: {condition: service_started}
       finance: {condition: service_started}
       food: {condition: service_started}
+      recipe-import: {condition: service_started}
     networks: [backend]
     restart: unless-stopped
     user: "${LIFE_OS_CODEX_RUNTIME_UID:?Set LIFE_OS_CODEX_RUNTIME_UID in .env to the UID which owns the local Codex session}"

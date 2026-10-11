@@ -2,6 +2,7 @@ package coreclient
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -26,7 +27,9 @@ func TestDoMakesFailuresUnderstandable(t *testing.T) {
 	t.Parallel()
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "bad input", http.StatusBadRequest) }))
 	defer s.Close()
-	if _, err := (Client{BaseURL: s.URL, HTTP: s.Client()}).Do(context.Background(), http.MethodGet, "/v1/tasks", nil); err == nil {
-		t.Fatal("expected core service error")
+	_, err := (Client{BaseURL: s.URL, HTTP: s.Client()}).Do(context.Background(), http.MethodGet, "/v1/tasks", nil)
+	var status StatusError
+	if !errors.As(err, &status) || status.Status != http.StatusBadRequest || err.Error() != "service returned 400: bad input\n" {
+		t.Fatalf("error = %#v", err)
 	}
 }
