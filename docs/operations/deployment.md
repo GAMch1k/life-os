@@ -18,14 +18,15 @@ Life OS supports loopback gateway behind host Nginx TLS/Basic Auth, or a WireGua
 
 ## Adding the Food service
 
-[Food](../services/food.md) (P15-01) owns `food_db`. A fresh PostgreSQL volume provisions it; on an existing host, add `LIFE_OS_FOOD_DB_PASSWORD` to `.env` and provision it once (idempotent). PostgreSQL keeps the environment it was created with, so either recreate it (`docker compose up --detach postgres`) and run `make db-provision`, or, without restarting it, pass the new password and read the registry from the directory mount, which sees the updated `infra/postgres/service-databases.conf`:
+[Food](../services/food.md) (P15-01) owns `food_db`. A fresh PostgreSQL volume provisions it; on an existing host, add `LIFE_OS_FOOD_DB_PASSWORD` to `.env` and provision it once (idempotent). PostgreSQL keeps the environment it was created with, so either recreate it (`docker compose up --detach postgres`) and run `make db-provision`, or, without restarting it, pass the new password. The provisioning scripts read the registry from the directory mount `/opt/lifeos/postgres/`, which sees the updated `infra/postgres/service-databases.conf` (the single-file mounts, `/etc/lifeos/service-databases.conf` and the initdb copy of the script, keep the old files until the container is recreated; see [the runbook](backups.md#the-registry-inside-the-postgresql-container)):
 
 ```sh
 docker compose exec -T \
   -e LIFE_OS_FOOD_DB_PASSWORD="$(sed -n 's/^LIFE_OS_FOOD_DB_PASSWORD=//p' .env)" \
-  -e LIFE_OS_DATABASE_CONFIG=/opt/lifeos/postgres/service-databases.conf \
-  postgres /docker-entrypoint-initdb.d/10-provision-service-databases.sh
+  postgres bash /opt/lifeos/postgres/provision-service-databases.sh
 ```
+
+Provisioning ends by reconciling the backup service's role, so it can back up the new database.
 
 Then build and start `food-migrate` and `food` before the Dashboard and the gateway: the gateway routes `/api/food/` and waits for the service, and the Dashboard's Status page probes Food's `/ready`, so a Dashboard deployed first reports Food as unavailable (and the monitor notifies) until it runs. Food has no settings of its own beyond `LIFE_OS_TIMEZONE`. Since P15-03, MCP calls Food too (`FOOD_SERVICE_URL`, compose: `http://food:8080`) for captured groceries, so deploy `mcp` and `processor` after Food.
 
@@ -41,12 +42,13 @@ The [monitor](../services/monitor.md) needs no database, secret, or `.env` chang
 
 ## Backups
 
-The [backup service](../services/backup.md) dumps every database in `infra/postgres/service-databases.conf` at `LIFE_OS_BACKUP_TIME` (03:15) in `LIFE_OS_TIMEZONE`, from one consistent snapshot per database, into `LIFE_OS_BACKUP_DIR/auto/` on the host, and rotates the runs (7 daily, 4 weekly, 12 monthly). `.env`, the other secrets, Voice audio, and the Whisper models are not backed up; the page says why. To add it to an existing deployment:
+The [backup service](../services/backup.md) dumps every database in `infra/postgres/service-databases.conf` at `LIFE_OS_BACKUP_TIME` (03:15) in `LIFE_OS_TIMEZONE`, from one consistent snapshot per database, into `LIFE_OS_BACKUP_DIR/auto/` on the host, rotates the runs (7 daily, 4 weekly, 12 monthly), and checks every week that the newest one restores (`LIFE_OS_BACKUP_RESTORE_CHECK_DAY`, Sunday). `.env`, the other secrets, Voice audio, and the Whisper models are not backed up; the page says why. Checking backups, restoring one database (`tools/restore-database`), and restoring everything after losing PostgreSQL's volume are in the [backups runbook](backups.md). To add it to an existing deployment:
 
 1. The backup directory must exist, owned by the runtime UID, mode 700 (`install -d -m 700 ~/life-os.backups`). Manual dumps already in it are left alone; the service writes only under `auto/`.
 2. Add to `.env`: `LIFE_OS_BACKUP_DIR` (its absolute path; compose refuses every command without it), `LIFE_OS_BACKUP_RUNTIME_UID` (`id -u`), and `LIFE_OS_BACKUP_DB_PASSWORD` (letters and digits, such as `openssl rand -hex 24`). `LIFE_OS_BACKUP_TIME` and `LIFE_OS_BACKUP_KEEP_*` are optional.
-3. Provision the read-only `lifeos_backup` role on the running server, without a restart: `make db-provision-backup` (it runs `docker compose exec -T -e LIFE_OS_BACKUP_DB_PASSWORD postgres bash /opt/lifeos/postgres/provision-backup-role.sh` with the password from `.env`). A fresh volume gets the role automatically, and `make db-provision` keeps its grants.
+3. Provision the read-only `lifeos_backup` role on the running server, without a restart: `make db-provision-backup` (it runs `docker compose exec -T -e LIFE_OS_BACKUP_DB_PASSWORD postgres bash /opt/lifeos/postgres/provision-backup-role.sh` with the password from `.env`). A fresh volume gets the role automatically, and `make db-provision` keeps its grants. Both read the registry from the directory mount `/opt/lifeos/postgres/`: the single-file mount `/etc/lifeos/service-databases.conf` keeps the file it was created with after a pull (until PostgreSQL is recreated), which once left the role without the newest databases.
 4. Build and start the service alone: `docker compose build backup && docker compose up -d --no-build --no-deps backup`. A minute later it runs a first (catch-up) backup; `docker compose logs backup` shows it, and `tools/backup-now` runs one on demand.
+5. The Status page's Backups check and **Back up now** come with the Dashboard (`BACKUP_SERVICE_URL`): `docker compose build dashboard && docker compose up -d --no-build --no-deps dashboard`. Services then lists Backup, and the monitor watches the new check without a change.
 
 The verification stack writes its backups to a scratch directory of its own; `tools/verify-compose` refuses a plan with the owner's.
 

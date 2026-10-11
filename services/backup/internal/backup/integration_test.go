@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -315,4 +316,186 @@ func rowsOf(tables []TableRows) map[string]int64 {
 		rows[table.Schema+"."+table.Name] = table.Rows
 	}
 	return rows
+}
+
+func TestRestoreChecksRestoreEveryDumpAndDropTheirScratchDatabases(t *testing.T) {
+	it := newIntegration(t)
+	admin := it.connect(it.adminURL.Path[1:], "", "")
+	owner, backupRole := it.name("rc_owner"), it.name("rc_backup")
+	alpha, beta, gamma := it.name("rc_alpha"), it.name("rc_beta"), it.name("rc_gamma")
+	foreign := ScratchName(it.name("foreign"))
+	it.exec(admin, fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD 'owner-pw'", owner))
+	it.exec(admin, fmt.Sprintf("CREATE ROLE %s LOGIN PASSWORD 'backup-pw' NOSUPERUSER CREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS", backupRole))
+	it.exec(admin, fmt.Sprintf("GRANT pg_read_all_data TO %s", backupRole))
+	t.Cleanup(func() {
+		for _, database := range []string{alpha, beta, gamma, foreign, ScratchName(alpha), ScratchName(beta), ScratchName(it.name("left"))} {
+			_, _ = admin.Exec(context.Background(), "DROP DATABASE IF EXISTS "+database+" WITH (FORCE)")
+		}
+		for _, role := range []string{owner, backupRole} {
+			_, _ = admin.Exec(context.Background(), "DROP ROLE IF EXISTS "+role)
+		}
+	})
+	for _, database := range []string{alpha, beta, gamma} {
+		it.exec(admin, fmt.Sprintf("CREATE DATABASE %s OWNER %s", database, owner))
+		it.exec(admin, fmt.Sprintf("REVOKE ALL ON DATABASE %s FROM PUBLIC", database))
+		if database != gamma {
+			it.exec(admin, fmt.Sprintf("GRANT CONNECT ON DATABASE %s TO %s", database, backupRole))
+		}
+	}
+	// What the services' migrations do: pgcrypto (a trusted extension the
+	// owner creates), defaults that call it, privileges, schema_migrations.
+	alphaOwner := it.connect(alpha, owner, "owner-pw")
+	for _, sql := range []string{
+		"CREATE EXTENSION IF NOT EXISTS pgcrypto",
+		"CREATE TABLE accounts (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), name text NOT NULL)",
+		"INSERT INTO accounts (name) SELECT 'account ' || n FROM generate_series(1, 12) AS n",
+		"CREATE TYPE kind AS ENUM ('a', 'b')",
+		"CREATE TABLE entries (id bigserial PRIMARY KEY, account_id uuid REFERENCES accounts, kind kind NOT NULL DEFAULT 'a')",
+		"INSERT INTO entries (account_id) SELECT id FROM accounts",
+		"CREATE VIEW account_names AS SELECT name FROM accounts",
+		"CREATE TABLE schema_migrations (version bigint NOT NULL PRIMARY KEY, dirty boolean NOT NULL)",
+		"INSERT INTO schema_migrations VALUES (8, false)",
+	} {
+		it.exec(alphaOwner, sql)
+	}
+	betaOwner := it.connect(beta, owner, "owner-pw")
+	it.exec(betaOwner, "CREATE TABLE items (id int)")
+	it.exec(betaOwner, "INSERT INTO items SELECT generate_series(1, 30)")
+
+	dir := t.TempDir()
+	registry := filepath.Join(dir, "service-databases.conf")
+	writeRegistry := func(names ...string) {
+		t.Helper()
+		var lines []string
+		for _, name := range names {
+			lines = append(lines, fmt.Sprintf("svc%d|%s|%s|LIFE_OS_SVC_DB_PASSWORD", len(lines), name, owner))
+		}
+		if err := os.WriteFile(registry, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeRegistry(alpha, beta)
+	if err := os.Mkdir(filepath.Join(dir, "backups"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenStore(filepath.Join(dir, "backups"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection := it.connection(backupRole, "backup-pw")
+	runner := NewRunner(RunnerOptions{
+		Store:     store,
+		Dumper:    &Dumper{Connection: connection, PgDump: it.pgDump, PgRestore: it.pgRestore},
+		Restorer:  &Restorer{Connection: connection, PgRestore: it.pgRestore},
+		Registry:  func() ([]Database, error) { return LoadDatabases(registry) },
+		Retention: Retention{Daily: 7, Weekly: 4, Monthly: 12, FailedDays: 3},
+	})
+	t.Cleanup(func() { _ = runner.Close(context.Background()) })
+
+	// A nightly run followed by its restore check.
+	job, err := runner.Start(Request{Trigger: TriggerSchedule, ThenRestoreCheck: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := waitLong(t, job)
+	if run.Result != ResultSucceeded {
+		t.Fatalf("run = %+v", run)
+	}
+	checkJob := runner.CurrentCheck()
+	if checkJob == nil {
+		t.Fatal("no restore check followed the run")
+	}
+	check := waitCheckLong(t, checkJob)
+	if !check.OK || len(check.Databases) != 2 || check.RunID != run.ID {
+		t.Fatalf("check = %+v", check)
+	}
+	if alphaCheck := check.Databases[0]; alphaCheck.Tables != 3 || alphaCheck.Rows != 12+12+1 {
+		t.Errorf("alpha check = %+v", alphaCheck)
+	}
+	it.requireNoDatabase(admin, ScratchName(alpha), ScratchName(beta))
+
+	// A manifest whose counts the dump does not hold, and a damaged dump.
+	runDir := filepath.Join(store.Root(), AutoDir, run.ID)
+	manifest, err := readManifest(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range manifest.Databases[0].Tables {
+		if manifest.Databases[0].Tables[i].Name == "accounts" {
+			manifest.Databases[0].Tables[i].Rows = 13
+		}
+	}
+	manifest.Databases[0].Migration = &Migration{Version: 9}
+	if err := writeJSONAtomic(runDir, ManifestFile, manifest); err != nil {
+		t.Fatal(err)
+	}
+	dump, err := os.OpenFile(filepath.Join(runDir, manifest.Databases[1].File), os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = dump.Write([]byte{0})
+	dump.Close()
+	// And a scratch database a crash left behind, beside one the role does
+	// not own, which it must leave alone.
+	backupConn := it.connect(alpha, backupRole, "backup-pw")
+	it.exec(backupConn, "CREATE DATABASE "+ScratchName(it.name("left")))
+	it.exec(admin, "CREATE DATABASE "+foreign)
+
+	checkJob, err = runner.StartRestoreCheck(CheckRequest{RunID: run.ID, Trigger: TriggerManual, Actor: "dev:test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check = waitCheckLong(t, checkJob)
+	if check.OK {
+		t.Fatalf("a check of a damaged run passed: %+v", check)
+	}
+	want := []Mismatch{
+		{Subject: "public.accounts", Expected: "13 rows", Actual: "12 rows"},
+		{Subject: "migration", Expected: "version 9", Actual: "version 8"},
+	}
+	if got := check.Databases[0].Mismatches; !slices.Equal(got, want) || check.Databases[0].Error != "" {
+		t.Errorf("alpha = %+v, want mismatches %+v", check.Databases[0], want)
+	}
+	if got := check.Databases[1]; got.OK || !strings.Contains(got.Error, "the manifest says") {
+		t.Errorf("beta = %+v", got)
+	}
+	it.requireNoDatabase(admin, ScratchName(alpha), ScratchName(beta), ScratchName(it.name("left")))
+	var foreignLeft bool
+	if err := admin.QueryRow(it.ctx, "SELECT EXISTS (SELECT FROM pg_database WHERE datname = $1)", foreign).Scan(&foreignLeft); err != nil || !foreignLeft {
+		t.Errorf("a scratch-named database the role does not own was dropped: %v", err)
+	}
+	if last, err := runner.LastRestoreCheck(); err != nil || last == nil || last.ID != check.ID || last.Actor != "dev:test" {
+		t.Errorf("LastRestoreCheck = %+v, %v", last, err)
+	}
+
+	// A registry database the role cannot reach says what to do.
+	writeRegistry(gamma)
+	job, err = runner.Start(Request{Trigger: TriggerManual})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed := waitLong(t, job); !strings.Contains(failed.Databases[0].Error, backupRole+" cannot connect to "+gamma+": run make db-provision-backup") {
+		t.Errorf("gamma = %+v", failed.Databases[0])
+	}
+}
+
+func (it *integration) requireNoDatabase(admin *pgx.Conn, names ...string) {
+	it.t.Helper()
+	for _, name := range names {
+		var exists bool
+		if err := admin.QueryRow(it.ctx, "SELECT EXISTS (SELECT FROM pg_database WHERE datname = $1)", name).Scan(&exists); err != nil || exists {
+			it.t.Errorf("database %s is left behind (%v)", name, err)
+		}
+	}
+}
+
+func waitCheckLong(t *testing.T, job *CheckJob) RestoreCheck {
+	t.Helper()
+	select {
+	case <-job.Done():
+		return job.Result()
+	case <-time.After(5 * time.Minute):
+		t.Fatal("the restore check did not finish")
+		return RestoreCheck{}
+	}
 }

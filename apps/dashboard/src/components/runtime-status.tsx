@@ -7,6 +7,7 @@ import {
   XCircle,
 } from "lucide-react";
 
+import { BackupNow } from "@/components/backup-now";
 import { MasonryGrid } from "@/components/masonry-grid";
 import {
   Card,
@@ -130,6 +131,9 @@ function CheckCard({ check }: { check: StatusCheck }) {
               <Part key={part.id} part={part} />
             ))}
           </ul>
+        )}
+        {check.control?.kind === "backup-now" && (
+          <BackupNow running={check.control.running} />
         )}
       </CardContent>
     </Card>

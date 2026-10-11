@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 	// The runtime image has no zoneinfo; embed it so the owner's timezone
@@ -24,8 +25,13 @@ import (
 const catchUpDelay = time.Minute
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "now" {
-		os.Exit(cli.Now(context.Background(), os.Args[2:], os.Stdout, os.Stderr))
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "now":
+			os.Exit(cli.Now(context.Background(), os.Args[2:], os.Stdout, os.Stderr))
+		case "restore-check":
+			os.Exit(cli.RestoreCheck(context.Background(), os.Args[2:], os.Stdout, os.Stderr))
+		}
 	}
 	if err := run(context.Background()); err != nil {
 		fmt.Fprintf(os.Stderr, "service startup failed: %v\n", err)
@@ -64,6 +70,10 @@ func run(ctx context.Context) error {
 			PgDump:     cfg.PgDump,
 			PgRestore:  cfg.PgRestore,
 		},
+		Restorer: &backup.Restorer{
+			Connection: cfg.Connection(),
+			PgRestore:  cfg.PgRestore,
+		},
 		Registry:  registry,
 		Retention: cfg.Retention(),
 		Location:  cfg.Location(),
@@ -72,13 +82,16 @@ func run(ctx context.Context) error {
 	if err := runner.Recover(); err != nil {
 		return fmt.Errorf("prepare the backup directory: %w", err)
 	}
+	checkDay, checks := cfg.CheckDay()
 	scheduler := backup.NewScheduler(backup.SchedulerOptions{
-		Runner:       runner,
-		Schedule:     cfg.Schedule(),
-		CatchUpDelay: catchUpDelay,
-		Logger:       logger,
+		Runner:          runner,
+		Schedule:        cfg.Schedule(),
+		CatchUpDelay:    catchUpDelay,
+		RestoreChecks:   checks,
+		RestoreCheckDay: checkDay,
+		Logger:          logger,
 	})
-	logger.Info("backups scheduled", "time", cfg.Schedule().Time(), "timezone", cfg.Location().String(), "dir", cfg.Dir)
+	logger.Info("backups scheduled", "time", cfg.Schedule().Time(), "timezone", cfg.Location().String(), "dir", cfg.Dir, "restore_check_day", strings.ToLower(cfg.RestoreCheckDay))
 
 	app := httpserver.New(
 		cfg.ServiceName,
@@ -87,7 +100,11 @@ func run(ctx context.Context) error {
 			return errors.Join(store.Writable(), scheduler.Ready(ctx))
 		}),
 	)
-	api.Register(app, api.NewHandler(runner, scheduler, api.Settings{Schedule: cfg.Schedule(), Retention: cfg.Retention()}))
+	api.Register(app, api.NewHandler(runner, scheduler, api.Settings{
+		Schedule:        cfg.Schedule(),
+		Retention:       cfg.Retention(),
+		RestoreCheckDay: strings.ToLower(strings.TrimSpace(cfg.RestoreCheckDay)),
+	}))
 
 	runCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()

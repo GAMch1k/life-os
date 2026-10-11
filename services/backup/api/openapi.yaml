@@ -20,6 +20,14 @@ info:
     crashed) is `interrupted`; it leaves no files.
 
 
+    A restore check restores every dump of a run, one database at a time,
+    into a scratch database (`lifeos_restore_check_<database>`, dropped
+    afterwards) and compares every table's row count and the migration
+    state with the manifest. One follows the nightly run each week
+    (`BACKUP_RESTORE_CHECK_DAY`, Sunday by default), and POST
+    /v1/restore-checks runs one now. Runs and checks never overlap.
+
+
     Every write (POST) must say who makes it in the X-Life-OS-Actor header:
     `user` (the owner), `agent:<name>` (the Life OS AI), `system:<name>` (a
     Life OS component), or `dev:<name>` (a development tool or agent working
@@ -30,8 +38,10 @@ info:
 
     Errors use the shared envelope `{"error": {"code", "message"},
     "request_id"}`: `bad_request` (400, invalid input), `actor_required`
-    (400), `backup_running` (409, a run is in progress), `unknown_database`
-    (422, a name that is not in the registry), and `internal_error` (500).
+    (400), `run_not_found` (404), `backup_running` (409, a run or a restore
+    check is in progress), `unknown_database` (422, a name that is not in
+    the registry), `no_backup` (422, nothing to check yet), and
+    `internal_error` (500).
   license: {name: UNLICENSED, url: https://life-os.local/license}
 servers: [{url: http://backup:8080}]
 paths:
@@ -40,11 +50,11 @@ paths:
       summary: Get the backup status
       description: >-
         The latest run and the latest successful full run, the run in
-        progress, when the next run is due, the size of the backups and the
-        free space where they are stored, and the retention settings. The
-        latest run includes runs that left no files (interrupted, or failed
-        before any database), which the service records so they survive a
-        restart.
+        progress, when the next run is due, the latest restore check and the
+        one in progress, the size of the backups and the free space where
+        they are stored, and the retention settings. The latest run includes
+        runs that left no files (interrupted, or failed before any
+        database), which the service records so they survive a restart.
       operationId: getBackupStatus
       security: []
       responses:
@@ -90,9 +100,36 @@ paths:
         '200': {description: The run finished within waitSeconds, content: {application/json: {schema: {$ref: '#/components/schemas/BackupRun'}}}}
         '202': {description: The run started and is in progress, content: {application/json: {schema: {$ref: '#/components/schemas/BackupProgress'}}}}
         '400': {description: 'Invalid request (bad_request), or no valid X-Life-OS-Actor (actor_required)', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
-        '409': {description: A run is already in progress (backup_running), content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '409': {description: A run or a restore check is already in progress (backup_running), content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
         '422': {description: A named database is not in the registry (unknown_database), content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
         '500': {description: 'The run could not start, for example because the registry could not be read (internal_error)', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  /v1/restore-checks:
+    post:
+      summary: Run a restore check now
+      description: >-
+        Starts a restore check of the newest successful full run, or with
+        `runId` of that run (its successful dumps). Each dump's size and
+        SHA-256 are checked against the manifest, then it is restored as the
+        backup role into a fresh scratch database with `pg_restore
+        --no-owner --no-acl`, every table's rows are counted and the
+        migration state read there, and the scratch database is dropped,
+        also after a failure. One database at a time. The answer is 202 with
+        the check in progress; with `waitSeconds` it waits up to that long
+        and answers 200 with the finished check, or still 202. 409 while a
+        run or another check is in progress.
+      operationId: createRestoreCheck
+      security: []
+      parameters:
+        - {name: waitSeconds, in: query, description: How long to wait for the check to finish. 0 answers at once., schema: {type: integer, minimum: 0, maximum: 3600, default: 0}}
+      requestBody: {required: false, content: {application/json: {schema: {$ref: '#/components/schemas/RestoreCheckCreateRequest'}}}}
+      responses:
+        '200': {description: The check finished within waitSeconds, content: {application/json: {schema: {$ref: '#/components/schemas/RestoreCheck'}}}}
+        '202': {description: The check started and is in progress, content: {application/json: {schema: {$ref: '#/components/schemas/RestoreCheckProgress'}}}}
+        '400': {description: 'Invalid request (bad_request), or no valid X-Life-OS-Actor (actor_required)', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '404': {description: No completed run has that id (run_not_found), content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '409': {description: A run or a restore check is already in progress (backup_running), content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '422': {description: 'There is no successful full run to check, or the run has no dump to check (no_backup)', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '500': {description: The check could not start (internal_error), content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
 components:
   schemas:
     BackupTrigger:
@@ -170,12 +207,20 @@ components:
         current: {type: string, description: The database being dumped now.}
     BackupSchedule:
       type: object
-      required: [time, timeZone, nextRunAt, nextTrigger]
+      required: [time, timeZone, nextRunAt, nextTrigger, restoreCheckDay]
       properties:
         time: {type: string, pattern: '^[0-9]{2}:[0-9]{2}$', description: 'The nightly run, HH:MM in timeZone.'}
         timeZone: {type: string, description: 'IANA timezone, such as Europe/Berlin.'}
         nextRunAt: {type: string, format: date-time, description: When the next run is due.}
         nextTrigger: {$ref: '#/components/schemas/BackupTrigger'}
+        restoreCheckDay:
+          type: string
+          description: >-
+            The weekday whose nightly run a restore check follows, or off. A
+            check also follows the next nightly run once the last one is
+            more than a week old, or when there has been none.
+          enum: [monday, tuesday, wednesday, thursday, friday, saturday, sunday, 'off']
+        nextRestoreCheckAt: {type: string, format: date-time, description: The start of the nightly run the next restore check follows; absent when checks are off.}
     BackupRetention:
       type: object
       description: >-
@@ -205,7 +250,10 @@ components:
       properties:
         lastRun: {$ref: '#/components/schemas/BackupRun'}
         lastSuccess: {$ref: '#/components/schemas/BackupRun'}
+        oldestSuccessAt: {type: string, format: date-time, description: 'The start of the oldest successful full run kept: about when backups began, until the rotation deletes it (after a year at the defaults).'}
         running: {$ref: '#/components/schemas/BackupProgress'}
+        lastRestoreCheck: {$ref: '#/components/schemas/RestoreCheck'}
+        runningRestoreCheck: {$ref: '#/components/schemas/RestoreCheckProgress'}
         schedule: {$ref: '#/components/schemas/BackupSchedule'}
         retention: {$ref: '#/components/schemas/BackupRetention'}
         storage: {$ref: '#/components/schemas/BackupStorage'}
@@ -226,6 +274,56 @@ components:
           maxItems: 100
           description: Only these databases, by service or database name. Omit for every database.
           items: {type: string, minLength: 1, maxLength: 63, pattern: '^[a-z][a-z0-9_-]*$'}
+    RestoreCheckMismatch:
+      type: object
+      description: 'One difference from the manifest: a table''s row count (expected "25 rows", actual "24 rows"), a table only one side has ("missing", or expected "absent"), or the migration state (subject "migration", such as "version 14" or "version 14 (dirty)" or "none").'
+      required: [subject, expected, actual]
+      properties:
+        subject: {type: string, description: 'The table, as schema.table, or migration.'}
+        expected: {type: string, description: What the manifest says.}
+        actual: {type: string, description: What the restored database holds.}
+    RestoreCheckDatabase:
+      type: object
+      required: [name, ok, tables, rows, mismatches]
+      properties:
+        name: {type: string, description: 'The database, such as finance_db.'}
+        ok: {type: boolean, description: True when the dump restored and matched its manifest.}
+        tables: {type: integer, minimum: 0, description: User tables in the restored database.}
+        rows: {type: integer, format: int64, minimum: 0, description: Rows in those tables.}
+        mismatches: {type: array, items: {$ref: '#/components/schemas/RestoreCheckMismatch'}}
+        error: {type: string, description: 'Why the check could not compare, such as a SHA-256 that differs from the manifest or a failed pg_restore.'}
+    RestoreCheck:
+      type: object
+      description: One finished restore check.
+      required: [id, runId, trigger, startedAt, finishedAt, durationSeconds, ok, databases]
+      properties:
+        id: {type: string, pattern: '^[0-9]{8}T[0-9]{6}Z$', description: 'The check id: its start time in UTC.'}
+        runId: {type: string, pattern: '^[0-9]{8}T[0-9]{6}Z$', description: The run whose dumps were checked.}
+        trigger: {$ref: '#/components/schemas/BackupTrigger'}
+        actor: {type: string, description: Who asked for a manual check.}
+        startedAt: {type: string, format: date-time}
+        finishedAt: {type: string, format: date-time}
+        durationSeconds: {type: number, format: double, minimum: 0}
+        ok: {type: boolean, description: True when every database restored and matched its manifest.}
+        databases: {type: array, items: {$ref: '#/components/schemas/RestoreCheckDatabase'}}
+        error: {type: string, description: 'What went wrong, when ok is false.'}
+    RestoreCheckProgress:
+      type: object
+      description: The restore check in progress.
+      required: [id, runId, trigger, startedAt, databases, completed]
+      properties:
+        id: {type: string, pattern: '^[0-9]{8}T[0-9]{6}Z$'}
+        runId: {type: string, pattern: '^[0-9]{8}T[0-9]{6}Z$'}
+        trigger: {$ref: '#/components/schemas/BackupTrigger'}
+        actor: {type: string}
+        startedAt: {type: string, format: date-time}
+        databases: {type: array, items: {type: string}, description: 'The databases this check covers, in order.'}
+        completed: {type: integer, minimum: 0, description: How many of them are done.}
+        current: {type: string, description: The database being restored now.}
+    RestoreCheckCreateRequest:
+      type: object
+      properties:
+        runId: {type: string, pattern: '^[0-9]{8}T[0-9]{6}Z$', description: The run to check. Omit for the newest successful full run.}
     Error:
       type: object
       required: [error]

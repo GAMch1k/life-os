@@ -271,6 +271,7 @@ services:
       BANKING_SERVICE_URL: http://banking:8080
       GOOGLE_CALENDAR_SERVICE_URL: http://google-calendar:8080
       FOOD_SERVICE_URL: http://food:8080
+      BACKUP_SERVICE_URL: http://backup:8080
       LIFE_OS_TIMEZONE: ${LIFE_OS_TIMEZONE:-UTC}
     expose: ["3000"]
     depends_on:
@@ -321,6 +322,7 @@ services:
       BACKUP_KEEP_WEEKLY: "${LIFE_OS_BACKUP_KEEP_WEEKLY:-4}"
       BACKUP_KEEP_MONTHLY: "${LIFE_OS_BACKUP_KEEP_MONTHLY:-12}"
       BACKUP_KEEP_FAILED_DAYS: "${LIFE_OS_BACKUP_KEEP_FAILED_DAYS:-3}"
+      BACKUP_RESTORE_CHECK_DAY: "${LIFE_OS_BACKUP_RESTORE_CHECK_DAY:-sunday}"
     volumes:
       - type: bind
         source: "${LIFE_OS_BACKUP_DIR:?Set LIFE_OS_BACKUP_DIR in .env to the existing host directory for backups}"

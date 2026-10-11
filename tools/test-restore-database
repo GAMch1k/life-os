@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Exercises tools/restore-database against a throwaway PostgreSQL, never a
+# live one, through its plain-connection mode (RESTORE_ADMIN_URL): the
+# refusals, then a restore that brings back the rows, owners, privileges,
+# and migration state of a backup run and leaves nothing of the newer
+# database behind. The compose steps are only printed in that mode; they
+# are rehearsed on the verification stack.
+#
+#   RESTORE_TEST_DATABASE_URL=postgres://postgres:test@127.0.0.1:55442/postgres tools/test-restore-database
+#
+# The PostgreSQL client programs come from PATH, or from RESTORE_TEST_PG_BIN
+# (services/backup/internal/backup/testdata runs them from the image).
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$repo_root"
+
+admin_url=${RESTORE_TEST_DATABASE_URL:?set RESTORE_TEST_DATABASE_URL to a throwaway PostgreSQL superuser URL}
+bin=${RESTORE_TEST_PG_BIN:-}
+psql_bin=${bin:+$bin/}psql
+pg_dump_bin=${bin:+$bin/}pg_dump
+pg_restore_bin=${bin:+$bin/}pg_restore
+
+suffix=$(date +%s%N | tail -c 9)
+owner="rt_owner_$suffix" reader="rt_reader_$suffix" database="rt_db_$suffix" service="rt$suffix"
+work=$(mktemp -d)
+url_for() { printf '%s/%s' "${admin_url%/*}" "$1"; }
+sql() { "$psql_bin" -X -q -v ON_ERROR_STOP=1 -At -d "$(url_for "${2:-${admin_url##*/}}")" -c "$1"; }
+cleanup() {
+  sql "DROP DATABASE IF EXISTS $database WITH (FORCE)" >/dev/null 2>&1 || true
+  sql "DROP ROLE IF EXISTS $reader" >/dev/null 2>&1 || true
+  sql "DROP ROLE IF EXISTS $owner" >/dev/null 2>&1 || true
+  rm -rf "$work"
+}
+trap cleanup EXIT
+fail() {
+  printf 'test-restore-database: %s\n' "$*" >&2
+  exit 1
+}
+restore() { # runs the tool in plain-connection mode; output in $work/out
+  set +e
+  RESTORE_ADMIN_URL=$admin_url RESTORE_REGISTRY=$work/registry LIFE_OS_BACKUP_DIR=$work/backups \
+    RESTORE_PSQL=$psql_bin RESTORE_PG_DUMP=$pg_dump_bin RESTORE_PG_RESTORE=$pg_restore_bin \
+    RESTORE_SERVICES="$service $service-worker" \
+    tools/restore-database "$@" >"$work/out" 2>&1
+  status=$?
+  set -e
+}
+expect_refusal() { # <message> <arguments…>
+  local message=$1
+  shift
+  restore "$@"
+  [[ "$status" == 2 ]] || { cat "$work/out"; fail "restore-database $* exited $status, want 2"; }
+  grep -qF -- "$message" "$work/out" || { cat "$work/out"; fail "restore-database $* did not say: $message"; }
+}
+
+printf '==> A database as a service leaves it\n'
+sql "CREATE ROLE $owner LOGIN PASSWORD 'owner-pw'" >/dev/null
+sql "CREATE ROLE $reader" >/dev/null
+sql "CREATE DATABASE $database OWNER $owner" >/dev/null
+sql "REVOKE ALL ON DATABASE $database FROM PUBLIC" >/dev/null
+"$psql_bin" -X -q -v ON_ERROR_STOP=1 -d "$(url_for "$database")" <<SQL
+SET ROLE $owner;
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE TABLE notes (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), body text NOT NULL);
+INSERT INTO notes (body) SELECT 'note ' || n FROM generate_series(1, 20) AS n;
+CREATE TABLE tags (id serial PRIMARY KEY, name text);
+INSERT INTO tags (name) VALUES ('a'), ('b');
+GRANT SELECT ON notes TO $reader;
+CREATE TABLE schema_migrations (version bigint NOT NULL PRIMARY KEY, dirty boolean NOT NULL);
+INSERT INTO schema_migrations VALUES (3, false);
+SQL
+printf '%s|%s|%s|LIFE_OS_RT_DB_PASSWORD\n' "$service" "$database" "$owner" >"$work/registry"
+
+printf '==> A backup run of it, as the backup service writes one\n'
+run_id=20261011T011500Z
+run_dir="$work/backups/auto/$run_id"
+mkdir -p "$run_dir"
+"$pg_dump_bin" --format=custom --no-password -d "$(url_for "$database")" >"$run_dir/$database.dump"
+bytes=$(stat -c %s "$run_dir/$database.dump")
+sha=$(sha256sum "$run_dir/$database.dump" | cut -d ' ' -f 1)
+jq -n --arg id "$run_id" --arg db "$database" --arg service "$service" --argjson bytes "$bytes" --arg sha "$sha" '{
+  formatVersion: 1, id: $id, trigger: "schedule", scope: "all", result: "succeeded",
+  startedAt: "2026-10-11T01:15:00Z", finishedAt: "2026-10-11T01:15:02Z", durationSeconds: 2,
+  databases: [{service: $service, name: $db, result: "succeeded", file: ($db + ".dump"), bytes: $bytes, sha256: $sha,
+    tables: [{schema: "public", name: "notes", rows: 20}, {schema: "public", name: "schema_migrations", rows: 1}, {schema: "public", name: "tags", rows: 2}],
+    migration: {version: 3, dirty: false}}]}' >"$run_dir/manifest.json"
+
+printf '==> Changes after the backup\n'
+"$psql_bin" -X -q -v ON_ERROR_STOP=1 -d "$(url_for "$database")" <<SQL
+SET ROLE $owner;
+INSERT INTO notes (body) SELECT 'late ' || n FROM generate_series(1, 5) AS n;
+CREATE TABLE added_later (id int);
+UPDATE schema_migrations SET version = 4;
+SQL
+
+printf '==> Refusals\n'
+expect_refusal 'Run again with --confirm' "$service" latest
+[[ "$(sql 'SELECT count(*) FROM notes' "$database")" == 25 ]] || fail "the plan changed the database"
+grep -qF "stop: $service $service-worker" "$work/out" || { cat "$work/out"; fail "the plan does not name the services to stop"; }
+expect_refusal 'is not in the database registry' food_db latest
+expect_refusal 'there is no run 20200101T000000Z' "$database" 20200101T000000Z --confirm
+expect_refusal 'is not a run id' "$database" yesterday --confirm
+cp -r "$run_dir" "$work/backups/auto/20261011T021500Z"
+jq '.id = "20261011T021500Z" | .databases[0].sha256 = ("0" * 64)' "$run_dir/manifest.json" >"$work/backups/auto/20261011T021500Z/manifest.json"
+expect_refusal "the manifest says $(printf '0%.0s' {1..64})" "$database" 20261011T021500Z --confirm
+jq '.id = "20261011T021500Z" | .databases[0].result = "failed" | .databases[0].error = "connect: refused"' "$run_dir/manifest.json" >"$work/backups/auto/20261011T021500Z/manifest.json"
+expect_refusal 'dump of '"$database"' failed: connect: refused' "$database" 20261011T021500Z --confirm
+jq '.id = "20261011T030000Z"' "$run_dir/manifest.json" >"$work/backups/auto/20261011T021500Z/manifest.json"
+expect_refusal 'names another run' "$database" 20261011T021500Z --confirm
+rm -rf "$work/backups/auto/20261011T021500Z"
+[[ "$(sql 'SELECT count(*) FROM notes' "$database")" == 25 ]] || fail "a refusal changed the database"
+
+printf '==> The restore\n'
+restore "$service" latest --confirm
+[[ "$status" == 0 ]] || { cat "$work/out"; fail "the restore exited $status"; }
+cat "$work/out"
+[[ "$(sql 'SELECT count(*) FROM notes' "$database")" == 20 ]] || fail "notes were not restored to the backup's 20"
+[[ "$(sql 'SELECT count(*) FROM tags' "$database")" == 2 ]] || fail "tags were not restored"
+[[ "$(sql "SELECT to_regclass('public.added_later') IS NULL" "$database")" == t ]] || fail "a table added after the backup is still there"
+[[ "$(sql 'SELECT version FROM schema_migrations' "$database")" == 3 ]] || fail "schema_migrations is not the backup's"
+[[ "$(sql "SELECT tableowner FROM pg_tables WHERE tablename = 'notes'" "$database")" == "$owner" ]] || fail "the table owner was not kept"
+[[ "$(sql "SELECT has_table_privilege('$reader', 'public.notes', 'SELECT')" "$database")" == t ]] || fail "the table privilege was not kept"
+[[ "$(sql "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = '$database'")" == "$owner" ]] || fail "the database owner is not the registry's"
+[[ "$(sql "SELECT has_database_privilege('public', '$database', 'CONNECT')")" == f ]] || fail "PUBLIC may connect to the restored database"
+grep -q '^Fresh dump: .*/pre-restore/'"$database"'-' "$work/out" || fail "the fresh dump is not reported"
+fresh=$(sed -n 's/^Fresh dump: //p' "$work/out")
+[[ "$(head -c 5 "$fresh")" == PGDMP ]] || fail "the fresh dump is not a pg_dump archive"
+grep -q "(plain connection, not run) docker compose stop $service $service-worker" "$work/out" || fail "the stop step was not shown"
+grep -q "(plain connection, not run) docker compose run --rm --no-deps $service-migrate" "$work/out" || fail "the migrate step was not shown"
+grep -q 'Every table and the migration state (version 3) match the manifest.' "$work/out" || fail "the comparison was not reported"
+
+printf '==> A restore that does not match its manifest stops with the services down\n'
+jq '.databases[0].tables[0].rows = 21' "$run_dir/manifest.json" >"$work/manifest" && mv "$work/manifest" "$run_dir/manifest.json"
+restore "$database" "$run_id" --confirm --no-fresh-dump
+[[ "$status" != 0 ]] || fail "a restore that differs from its manifest succeeded"
+grep -q 'differs from the manifest' "$work/out" || { cat "$work/out"; fail "the difference was not reported"; }
+grep -q 'these stay stopped' "$work/out" || { cat "$work/out"; fail "it did not say the services stay stopped"; }
+grep -q '(plain connection, not run) docker compose up' "$work/out" && fail "it started the services after a failure"
+
+printf '\nrestore-database: all checks passed\n'

@@ -13,7 +13,7 @@ export interface paths {
         };
         /**
          * Get the backup status
-         * @description The latest run and the latest successful full run, the run in progress, when the next run is due, the size of the backups and the free space where they are stored, and the retention settings. The latest run includes runs that left no files (interrupted, or failed before any database), which the service records so they survive a restart.
+         * @description The latest run and the latest successful full run, the run in progress, when the next run is due, the latest restore check and the one in progress, the size of the backups and the free space where they are stored, and the retention settings. The latest run includes runs that left no files (interrupted, or failed before any database), which the service records so they survive a restart.
          */
         get: operations["getBackupStatus"];
         put?: never;
@@ -42,6 +42,26 @@ export interface paths {
          * @description Starts a run of every database in the registry, or with `databases` only of those named (service or database names, such as `finance` or `tasks_db`). The answer is 202 with the run in progress. With `waitSeconds`, the request waits up to that long for the run to finish and then answers 200 with the finished run, or still 202 when it has not finished; the run goes on either way. A run of only some databases (scope `subset`) never stands in for the nightly run: it is not considered when deciding on a catch-up and never takes a daily, weekly, or monthly place in the rotation. Only one run is in progress at a time: while one is, the answer is 409.
          */
         post: operations["createBackup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/restore-checks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run a restore check now
+         * @description Starts a restore check of the newest successful full run, or with `runId` of that run (its successful dumps). Each dump's size and SHA-256 are checked against the manifest, then it is restored as the backup role into a fresh scratch database with `pg_restore --no-owner --no-acl`, every table's rows are counted and the migration state read there, and the scratch database is dropped, also after a failure. One database at a time. The answer is 202 with the check in progress; with `waitSeconds` it waits up to that long and answers 200 with the finished check, or still 202. 409 while a run or another check is in progress.
+         */
+        post: operations["createRestoreCheck"];
         delete?: never;
         options?: never;
         head?: never;
@@ -155,6 +175,16 @@ export interface components {
              */
             nextRunAt: string;
             nextTrigger: components["schemas"]["BackupTrigger"];
+            /**
+             * @description The weekday whose nightly run a restore check follows, or off. A check also follows the next nightly run once the last one is more than a week old, or when there has been none.
+             * @enum {string}
+             */
+            restoreCheckDay: "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | "sunday" | "off";
+            /**
+             * Format: date-time
+             * @description The start of the nightly run the next restore check follows; absent when checks are off.
+             */
+            nextRestoreCheckAt?: string;
         };
         /** @description How many successful full runs the rotation keeps: the newest of each of the last `daily` days, `weekly` ISO weeks, and `monthly` months that have one (days, weeks, and months in the schedule's timezone). The newest successful run is always kept. Failed runs, and runs of only some databases, are deleted after `failedDays` and `daily` days. */
         BackupRetention: {
@@ -186,7 +216,14 @@ export interface components {
         BackupStatus: {
             lastRun?: components["schemas"]["BackupRun"];
             lastSuccess?: components["schemas"]["BackupRun"];
+            /**
+             * Format: date-time
+             * @description The start of the oldest successful full run kept: about when backups began, until the rotation deletes it (after a year at the defaults).
+             */
+            oldestSuccessAt?: string;
             running?: components["schemas"]["BackupProgress"];
+            lastRestoreCheck?: components["schemas"]["RestoreCheck"];
+            runningRestoreCheck?: components["schemas"]["RestoreCheckProgress"];
             schedule: components["schemas"]["BackupSchedule"];
             retention: components["schemas"]["BackupRetention"];
             storage: components["schemas"]["BackupStorage"];
@@ -203,6 +240,71 @@ export interface components {
         BackupCreateRequest: {
             /** @description Only these databases, by service or database name. Omit for every database. */
             databases?: string[];
+        };
+        /** @description One difference from the manifest: a table's row count (expected "25 rows", actual "24 rows"), a table only one side has ("missing", or expected "absent"), or the migration state (subject "migration", such as "version 14" or "version 14 (dirty)" or "none"). */
+        RestoreCheckMismatch: {
+            /** @description The table, as schema.table, or migration. */
+            subject: string;
+            /** @description What the manifest says. */
+            expected: string;
+            /** @description What the restored database holds. */
+            actual: string;
+        };
+        RestoreCheckDatabase: {
+            /** @description The database, such as finance_db. */
+            name: string;
+            /** @description True when the dump restored and matched its manifest. */
+            ok: boolean;
+            /** @description User tables in the restored database. */
+            tables: number;
+            /**
+             * Format: int64
+             * @description Rows in those tables.
+             */
+            rows: number;
+            mismatches: components["schemas"]["RestoreCheckMismatch"][];
+            /** @description Why the check could not compare, such as a SHA-256 that differs from the manifest or a failed pg_restore. */
+            error?: string;
+        };
+        /** @description One finished restore check. */
+        RestoreCheck: {
+            /** @description The check id: its start time in UTC. */
+            id: string;
+            /** @description The run whose dumps were checked. */
+            runId: string;
+            trigger: components["schemas"]["BackupTrigger"];
+            /** @description Who asked for a manual check. */
+            actor?: string;
+            /** Format: date-time */
+            startedAt: string;
+            /** Format: date-time */
+            finishedAt: string;
+            /** Format: double */
+            durationSeconds: number;
+            /** @description True when every database restored and matched its manifest. */
+            ok: boolean;
+            databases: components["schemas"]["RestoreCheckDatabase"][];
+            /** @description What went wrong, when ok is false. */
+            error?: string;
+        };
+        /** @description The restore check in progress. */
+        RestoreCheckProgress: {
+            id: string;
+            runId: string;
+            trigger: components["schemas"]["BackupTrigger"];
+            actor?: string;
+            /** Format: date-time */
+            startedAt: string;
+            /** @description The databases this check covers, in order. */
+            databases: string[];
+            /** @description How many of them are done. */
+            completed: number;
+            /** @description The database being restored now. */
+            current?: string;
+        };
+        RestoreCheckCreateRequest: {
+            /** @description The run to check. Omit for the newest successful full run. */
+            runId?: string;
         };
         Error: {
             error: {
@@ -344,7 +446,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description A run is already in progress (backup_running) */
+            /** @description A run or a restore check is already in progress (backup_running) */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -363,6 +465,87 @@ export interface operations {
                 };
             };
             /** @description The run could not start, for example because the registry could not be read (internal_error) */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    createRestoreCheck: {
+        parameters: {
+            query?: {
+                /** @description How long to wait for the check to finish. 0 answers at once. */
+                waitSeconds?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RestoreCheckCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description The check finished within waitSeconds */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestoreCheck"];
+                };
+            };
+            /** @description The check started and is in progress */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestoreCheckProgress"];
+                };
+            };
+            /** @description Invalid request (bad_request), or no valid X-Life-OS-Actor (actor_required) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description No completed run has that id (run_not_found) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description A run or a restore check is already in progress (backup_running) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description There is no successful full run to check, or the run has no dump to check (no_backup) */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The check could not start (internal_error) */
             500: {
                 headers: {
                     [name: string]: unknown;

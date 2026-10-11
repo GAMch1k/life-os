@@ -18,7 +18,16 @@
 
 set -euo pipefail
 
-config_file=${LIFE_OS_DATABASE_CONFIG:-/etc/lifeos/service-databases.conf}
+# The registry: the copy in the directory-mounted /opt/lifeos/postgres when
+# there is one, because a single-file bind mount (/etc/lifeos/...) keeps the
+# file it was created with after Git replaces it, until the container is
+# recreated. The single file is the fallback where the directory is not
+# mounted.
+default_config=/etc/lifeos/service-databases.conf
+if [[ -r /opt/lifeos/postgres/service-databases.conf ]]; then
+  default_config=/opt/lifeos/postgres/service-databases.conf
+fi
+config_file=${LIFE_OS_DATABASE_CONFIG:-$default_config}
 role=lifeos_backup
 password=${LIFE_OS_BACKUP_DB_PASSWORD:-}
 
@@ -38,6 +47,8 @@ psql_admin=(
   --no-psqlrc
   --quiet
 )
+
+printf 'Database registry for %s: %s\n' "$role" "$config_file"
 
 role_exists=$("${psql_admin[@]}" --tuples-only --no-align --set=role_name="$role" <<'SQL'
 SELECT count(*) FROM pg_roles WHERE rolname = :'role_name';

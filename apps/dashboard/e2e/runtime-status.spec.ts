@@ -236,6 +236,24 @@ test.describe("Runtime status under forced problems", () => {
     await expectCheck(page, "Services", "All services are ready.");
   });
 
+  test("a stopped backup service is one alert, under Services", async ({
+    page,
+  }) => {
+    compose("stop", "backup");
+    try {
+      await expectCheck(page, "Services", "Backup is not ready.");
+      // Its status cannot be read either; Services already names it, so the
+      // Backups card is left out rather than alerting twice.
+      await expect(page.getByRole("region", { name: "Backups" })).toHaveCount(
+        0,
+      );
+    } finally {
+      compose("start", "backup");
+    }
+    await expectCheck(page, "Services", "All services are ready.");
+    await expect(page.getByRole("region", { name: "Backups" })).toBeVisible();
+  });
+
   test("a Voice worker that stops picking up recordings is reported", async ({
     page,
     request,
@@ -445,6 +463,42 @@ test.describe("Reminder delivery on Status", () => {
   });
 });
 
+test.describe("Backups on Status", () => {
+  test.skip(
+    !process.env.LIFE_OS_E2E_URL,
+    "set LIFE_OS_E2E_URL to run against the isolated stack",
+  );
+  test.setTimeout(240_000);
+
+  test("the Backups card shows the backups, and Back up now runs one", async ({
+    page,
+  }) => {
+    await page.goto("/status");
+    const card = page.getByRole("region", { name: "Backups" });
+    await expect(card).toContainText("Next backup");
+    await expect(card).toContainText("Retention7 daily, 4 weekly, 12 monthly");
+    await expect(card).toContainText("Free disk");
+
+    // A catch-up backup or restore check may be running on a fresh stack:
+    // then the button follows that one (409) instead of starting another.
+    const button = card.getByRole("button", { name: "Back up now" });
+    await expect(button).toBeEnabled({ timeout: 120_000 });
+    await button.click();
+    await expect(card).toContainText(
+      /Backed up \d+ databases in [\d.]+ s\.|Finished; the card shows the result\./,
+      { timeout: 180_000 },
+    );
+    await expect(
+      card.getByRole("button", { name: "Back up now" }),
+    ).toBeEnabled();
+    // The page was refreshed: the card reports a backup from just now.
+    await expect(card).toContainText(
+      /Last backup.*\((less than a minute|\d+ min) ago\)/,
+    );
+    await expect(card).toContainText("Last restore check");
+  });
+});
+
 test.describe("Status card layout", () => {
   test.skip(
     !process.env.LIFE_OS_E2E_URL,
@@ -460,6 +514,7 @@ test.describe("Status card layout", () => {
     "Calendar sources",
     "Notifications",
     "Bank connection",
+    "Backups",
     "Services",
   ];
 

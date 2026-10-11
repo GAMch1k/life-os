@@ -13,6 +13,7 @@ import (
 type starter interface {
 	Start(Request) (*Job, error)
 	LastFullSuccess() (*Summary, error)
+	LastRestoreCheck() (*RestoreCheck, error)
 }
 
 // SchedulerOptions configure a Scheduler.
@@ -24,9 +25,14 @@ type SchedulerOptions struct {
 	CatchUpDelay time.Duration
 	// Tick is the longest the loop sleeps. A due run that cannot start
 	// because another run is in progress is tried again every Tick.
-	Tick   time.Duration
-	Logger *slog.Logger
-	Now    func() time.Time
+	Tick time.Duration
+	// RestoreChecks turns on the weekly restore check, which follows the
+	// nightly run of RestoreCheckDay, or the next nightly run once the last
+	// check is more than a week old.
+	RestoreChecks   bool
+	RestoreCheckDay time.Weekday
+	Logger          *slog.Logger
+	Now             func() time.Time
 }
 
 // Scheduler starts the nightly run, and at start a catch-up run when the
@@ -137,7 +143,7 @@ func (s *Scheduler) Run(ctx context.Context) {
 // again later); stop is true when the service is shutting down. A run that
 // fails to start for another reason counts as started: it is recorded.
 func (s *Scheduler) start(trigger Trigger) (started, stop bool) {
-	_, err := s.opts.Runner.Start(Request{Trigger: trigger})
+	_, err := s.opts.Runner.Start(Request{Trigger: trigger, ThenRestoreCheck: s.restoreCheckDue(s.opts.Now())})
 	switch {
 	case errors.Is(err, ErrRunning):
 		s.opts.Logger.Info("a backup is in progress: the due run starts after it", "trigger", trigger)
@@ -146,6 +152,40 @@ func (s *Scheduler) start(trigger Trigger) (started, stop bool) {
 		return false, true
 	}
 	return true, false
+}
+
+// restoreCheckDue says whether a nightly run starting at is followed by a
+// restore check: on the check day, and on any day once the last check is
+// more than a week old (or there has been none).
+func (s *Scheduler) restoreCheckDue(at time.Time) bool {
+	if !s.opts.RestoreChecks {
+		return false
+	}
+	if at.In(s.opts.Schedule.location()).Weekday() == s.opts.RestoreCheckDay {
+		return true
+	}
+	last, err := s.opts.Runner.LastRestoreCheck()
+	if err != nil {
+		s.opts.Logger.Warn("reading the restore checks failed", "error", err)
+		return false
+	}
+	return last == nil || at.Sub(last.StartedAt) > RestoreCheckInterval+CatchUpMargin
+}
+
+// NextRestoreCheck is the start of the nightly run the next restore check
+// follows, or zero when checks are off.
+func (s *Scheduler) NextRestoreCheck() time.Time {
+	if !s.opts.RestoreChecks {
+		return time.Time{}
+	}
+	at, _ := s.Next()
+	for range 9 {
+		if s.restoreCheckDue(at) {
+			return at
+		}
+		at = s.opts.Schedule.Next(at)
+	}
+	return time.Time{}
 }
 
 func (s *Scheduler) catchUpDue(now time.Time) bool {
