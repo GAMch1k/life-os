@@ -13,6 +13,9 @@ type Config struct {
 	InboxURL    string `env:"INBOX_SERVICE_URL" default:"http://inbox:8080"`
 	CalendarURL string `env:"CALENDAR_SERVICE_URL" default:"http://calendar:8080"`
 	FoodURL     string `env:"FOOD_SERVICE_URL" default:"http://food:8080"`
+	// RecipeImportURL is the recipe-import integration, which saves recipes
+	// from links in Food.
+	RecipeImportURL string `env:"RECIPE_IMPORT_SERVICE_URL" default:"http://recipe-import:8080"`
 	// ActivityURL enables activity events; empty disables them.
 	ActivityURL string `env:"ACTIVITY_SERVICE_URL"`
 }

@@ -8,8 +8,8 @@
 # recipe, a pantry item, and a planned meal, submits the same captures
 # (EN/RU/DE text, including completions of Tasks titled in another of those
 # languages, changes to existing events, cash spending, groceries for the
-# shopping list and the pantry, and meals and a recipe's ingredients, through
-# the Inbox API the Dashboard uses, plus one recorded voice note through Voice
+# shopping list and the pantry, meals and a recipe's ingredients, and recipe
+# links, through the Inbox API the Dashboard uses, plus one recorded voice note through Voice
 # and whisper.cpp), lets the automatic processor plan them with the
 # authenticated Codex CLI and act through MCP, and then checks the persisted
 # results. The owner's timezone is Europe/Berlin. Results go to
@@ -24,13 +24,37 @@ export LIFE_OS_TIMEZONE=$zone
 out=${LIFE_OS_BENCHMARK_DIR:-$(mktemp -d)}
 mkdir -p "$out"
 work=$(mktemp -d)
+# Recipe pages the recipe link captures point to, served at http://ics-fixture/
+# by the browser tests' verify-only overlay, which also lets recipe-import
+# fetch that host (never used for the deployed stack).
+pages=$(mktemp -d)
+chmod 755 "$pages"
+export LIFE_OS_E2E_ICS_DIR=$pages
+export LIFE_OS_VERIFY_OVERLAYS=${LIFE_OS_VERIFY_OVERLAYS:+$LIFE_OS_VERIFY_OVERLAYS:}tools/fixtures/calendar-ics.compose.yaml
 compose=(./tools/verify-compose)
 gateway=http://127.0.0.1:13001
 cleanup() {
   "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
-  rm -rf "$work"
+  rm -rf "$work" "$pages"
 }
 trap cleanup EXIT
+
+# A recipe page with schema.org data, and a post page with only OpenGraph
+# (like an Instagram reel), whose recipe comes from the pasted caption.
+cat >"$pages/gulasch.html" <<'HTML'
+<!doctype html>
+<html><head><title>Omas Rindergulasch</title>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"Recipe","name":"Omas Rindergulasch","recipeYield":"4 Portionen","recipeIngredient":["1 kg Rindfleisch","3 Zwiebeln","2 EL Paprikapulver"],"recipeInstructions":[{"@type":"HowToStep","text":"Fleisch und Zwiebeln anbraten."},{"@type":"HowToStep","text":"Mit Paprika würzen und zwei Stunden schmoren."}]}</script>
+</head><body><h1>Omas Rindergulasch</h1></body></html>
+HTML
+cat >"$pages/reel-DGx7abc.html" <<'HTML'
+<!doctype html>
+<html><head><title>Instagram</title>
+<meta property="og:title" content="Kitchen Anna on Instagram">
+<meta property="og:site_name" content="Instagram">
+</head><body></body></html>
+HTML
+chmod 644 "$pages"/*.html
 
 docker run --rm -v "$work:/out" alpine:3.22 sh -c \
   "apk add --no-cache espeak-ng >/dev/null && espeak-ng -v en-us -s 125 -w /out/chicken.wav 'I already bought the chicken.' && chmod 644 /out/chicken.wav"
@@ -79,7 +103,7 @@ run_profile() {
   echo "== $profile"
   "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
   LIFE_OS_CODEX_MODEL=$model LIFE_OS_CODEX_REASONING_EFFORT=$effort "${compose[@]}" up --detach --no-build >/dev/null 2>&1
-  for service in inbox tasks calendar voice finance food; do
+  for service in inbox tasks calendar voice finance food integrations/recipe-import; do
     for _ in $(seq 1 90); do api "$gateway/api/$service/ready" >/dev/null 2>&1 && break; sleep 1; done
   done
   for _ in $(seq 1 180); do
@@ -157,6 +181,8 @@ run_profile() {
   ids[meal_plan_ru_text]=$(capture "В пятницу на обед суп.")
   ids[meal_clear]=$(capture "Cancel Saturday breakfast.")
   ids[recipe_ingredients]=$(capture "Add the ingredients for the bolognese to the shopping list.")
+  ids[recipe_link_structured]=$(capture "Save this recipe: http://ics-fixture/gulasch.html")
+  ids[recipe_caption]=$(capture $'http://ics-fixture/reel-DGx7abc.html\nShakshuka in 20 Minuten 🍳\nZutaten:\n- 4 Eier\n- 1 Dose Tomaten\n- 1 rote Paprika\n- 1 Zwiebel\nZubereitung:\n1. Zwiebel und Paprika anbraten.\n2. Tomaten dazugeben und 10 Minuten köcheln.\n3. Eier hineinschlagen und stocken lassen.\n#shakshuka #frühstück')
   local job
   job=$(api -F "audio=@$work/chicken.wav;type=audio/wav" -F source=web "$gateway/api/voice/v1/audio-jobs" | jq -r '.id')
   for _ in $(seq 1 120); do
@@ -166,7 +192,7 @@ run_profile() {
   done
 
   # Let the processor settle every capture.
-  local deadline=$(($(date +%s) + 600)) pending
+  local deadline=$(($(date +%s) + 900)) pending
   while :; do
     pending=0
     for key in "${!ids[@]}"; do
@@ -328,6 +354,18 @@ run_profile() {
   # Saturday breakfasts but the one cleared.
   check no_extra_shopping_items "$([ "$(jq '.items | length' <<<"$list")" = 9 ] && [ "$(jq '[.items[].normalizedName] | unique | length' <<<"$list")" = 9 ] && echo 1 || echo 0)" "items=$(jq -c '[.items[] | {name, amount, storeName, state}]' <<<"$list") (expected 9)"
   check no_extra_pantry_items "$([ "$(jq '.items | length' <<<"$pantry")" = 2 ] && echo 1 || echo 0)" "items=$(jq -c '[.items[] | {name, location, expiresOn}]' <<<"$pantry") (expected 2)"
+  # Recipe links: a page's recipe, and a post's from its caption, each saved
+  # once with the link as its source; the seeded recipe and these two only.
+  local recipes
+  recipes=$(api "$gateway/api/food/v1/recipes?limit=200")
+  imported() { # imported <title word> <link> <ingredients>: recipes so saved
+    jq --arg word "$1" --arg link "$2" --argjson n "$3" '[.items[] | select((.normalizedTitle | contains($word)) and .sourceUrl == $link and (.ingredients | length) == $n)] | length' <<<"$recipes"
+  }
+  s=$(state "${ids[recipe_link_structured]}")
+  check recipe_link_structured "$([ "$s" = resolved ] && [ "$(imported rindergulasch http://ics-fixture/gulasch.html 3)" = 1 ] && echo 1 || echo 0)" "state=$s recipes=$(jq -c '[.items[] | {title, sourceUrl, ingredients: (.ingredients | length)}]' <<<"$recipes")"
+  s=$(state "${ids[recipe_caption]}")
+  check recipe_caption "$([ "$s" = resolved ] && [ "$(imported shakshuka http://ics-fixture/reel-DGx7abc.html 4)" = 1 ] && echo 1 || echo 0)" "state=$s"
+  check no_extra_recipes "$([ "$(jq '.items | length' <<<"$recipes")" = 3 ] && echo 1 || echo 0)" "recipes=$(jq -c '[.items[].title]' <<<"$recipes") (expected 3)"
   check no_extra_meals "$([ "$(jq '.items | length' <<<"$plan")" = $((1 + ${#saturdays[@]})) ] && echo 1 || echo 0)" "meals=$(jq -c '[.items[] | {date, slot, title}]' <<<"$plan") (expected $((1 + ${#saturdays[@]})))"
   # No fallback or invented entities: ten seeds plus three creates, the
   # flash drive, and the call to the plumber.

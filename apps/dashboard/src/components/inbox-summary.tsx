@@ -9,7 +9,9 @@ import {
   Workflow,
 } from "lucide-react";
 
+import { CaptureImageStrip } from "@/components/capture-images";
 import { Card, CardContent } from "@/components/ui/card";
+import { captureImages } from "@/lib/capture-images";
 import {
   formatInboxTime,
   type InboxBacklog,
@@ -194,6 +196,10 @@ export function InboxItemRow({
         <p className="line-clamp-3 wrap-anywhere whitespace-pre-line">
           {item.content}
         </p>
+        <CaptureImageStrip
+          label={item.content}
+          references={captureImages(item)}
+        />
         {children}
       </div>
       <div className="flex shrink-0 flex-col items-end gap-1 sm:flex-row-reverse sm:items-center sm:gap-2">

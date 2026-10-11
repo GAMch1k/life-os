@@ -276,7 +276,7 @@ function RecipeView({
                     className="text-muted-foreground inline-flex items-center gap-1"
                     data-testid="food-recipe-source"
                   >
-                    From
+                    From{" "}
                     <a
                       className="text-primary inline-flex items-center gap-1 underline-offset-4 hover:underline"
                       href={current.sourceUrl}

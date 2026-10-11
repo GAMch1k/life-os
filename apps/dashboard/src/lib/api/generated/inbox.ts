@@ -182,6 +182,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/media": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload images for a capture
+         * @description Stores one to five images (JPEG, PNG, or WebP, recognized from their bytes; each at most INBOX_MEDIA_MAX_BYTES, 10 MiB by default) and returns their media references, in upload order, for a capture's mediaReferences. The same bytes uploaded again return the same reference and are stored once. HEIC photos are refused (heic_not_supported). Media a capture refers to is kept as long as the capture; an upload no capture refers to is removed after a day.
+         */
+        post: operations["uploadMedia"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/media/{sha256}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a capture image
+         * @description The image's bytes with its content type. Content-addressed, so a response never changes and may be cached privately.
+         */
+        get: operations["getMedia"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/stale-processing-attempts": {
         parameters: {
             query?: never;
@@ -217,6 +257,7 @@ export interface components {
             sourceMetadata?: {
                 [key: string]: unknown;
             };
+            /** @description The capture's images, as inbox-media:<sha256> references (GET /v1/media/{sha256}). */
             mediaReferences?: string[];
             /**
              * @description failed: automatic processing gave up; needs operator attention.
@@ -247,8 +288,24 @@ export interface components {
             sourceMetadata?: {
                 [key: string]: unknown;
             };
+            /** @description Images uploaded with POST /v1/media, by the references it returned (400 invalid_media_reference or unknown_media otherwise). */
             mediaReferences?: string[];
             dedupeKey?: string;
+        };
+        Media: {
+            /**
+             * Format: uri
+             * @description inbox-media:<sha256>, for a capture's mediaReferences.
+             */
+            reference: string;
+            sha256: string;
+            /** @enum {string} */
+            contentType: "image/jpeg" | "image/png" | "image/webp";
+            /** Format: int64 */
+            byteSize: number;
+        };
+        MediaList: {
+            items: components["schemas"]["Media"][];
         };
         InboxBacklog: {
             /** @description Items waiting for or in automatic processing */
@@ -794,6 +851,85 @@ export interface operations {
             };
             /** @description Attempt already finished */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    uploadMedia: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": {
+                    images: string[];
+                };
+            };
+        };
+        responses: {
+            /** @description Stored images */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MediaList"];
+                };
+            };
+            /** @description No image (images_required), more than five (too_many_images), not a JPEG, PNG, or WebP image (unsupported_image), a HEIC photo (heic_not_supported), or no valid X-Life-OS-Actor (actor_required) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description An image exceeds the size limit (image_too_large) */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    getMedia: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The image's SHA-256 (lowercase hex), from its inbox-media reference. */
+                sha256: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The image */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/jpeg": string;
+                    "image/png": string;
+                    "image/webp": string;
+                };
+            };
+            /** @description Not a SHA-256 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Media not found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -7,9 +7,11 @@ import {
   CaptureComposer,
   type ComposerCapture,
 } from "@/components/capture-composer";
+import { CaptureImageStrip } from "@/components/capture-images";
 import { InboxSection, SectionUnavailable } from "@/components/inbox-summary";
 import { Button } from "@/components/ui/button";
 import { inboxClient } from "@/lib/api/inbox-client";
+import { captureImages } from "@/lib/capture-images";
 import {
   type HumanReviewItem,
   replacementMetadata,
@@ -192,6 +194,7 @@ function ReviewCard({
   // Discard when the original could not be discarded.
   const focusAfterEdit = useRef<"edit" | "discard" | undefined>(undefined);
   const review = reviewFor(item);
+  const photos = captureImages(item);
   const candidates = (review.candidates ?? []).filter(
     (candidate) => candidate.id,
   );
@@ -236,6 +239,9 @@ function ReviewCard({
           {formatInboxTime(item.createdAt, timeZone, now)}
         </time>
       </div>
+      {editing ? null : (
+        <CaptureImageStrip label={item.content} references={photos} />
+      )}
       {editing ? (
         <>
           <p className="text-muted-foreground mt-1">
@@ -247,6 +253,7 @@ function ReviewCard({
               focus="always"
               id={`review-edit-${item.id}`}
               initialContent={item.content}
+              initialMedia={photos}
               label="Edited capture"
               metadata={replacementMetadata(item.id)}
               onCancel={cancel}

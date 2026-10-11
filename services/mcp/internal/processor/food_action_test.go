@@ -87,6 +87,8 @@ type foodTools struct {
 	// recipes maps a recipe search's q to the recipes it finds.
 	recipes  map[string][]map[string]any
 	searches []string
+	// imported is recipe_import's answer (default: saved).
+	imported string
 	shopping []map[string]any
 	pantry   []map[string]any
 	// pageSize splits the lists into pages when set.
@@ -159,6 +161,13 @@ func (f *foodTools) Call(ctx context.Context, name string, args map[string]any) 
 		return raw, nil
 	case "inbox_set_human_review":
 		f.review = args
+	case "recipe_import":
+		f.calls = append(f.calls, name)
+		f.inputs[name] = append(f.inputs[name], args)
+		if f.imported == "" {
+			return json.RawMessage(`{"saved":true,"method":"structured","recipeId":"recipe-9"}`), nil
+		}
+		return json.RawMessage(f.imported), nil
 	}
 	if isFoodWrite(name) || strings.HasPrefix(name, "task_") {
 		f.inputs[name] = append(f.inputs[name], args)

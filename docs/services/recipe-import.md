@@ -47,9 +47,17 @@ Pages are fetched over http or https only, and only from public addresses: after
 
 A saved import records `food.recipe.imported` (source `recipe-import`) with the request's actor (the owner, or the AI), its correlation, subject `food_recipe` and the recipe's id, a summary such as "Imported the recipe “Spaghetti Bolognese” from chefkoch.de", and `title`, `method`, `site`, `sourceUrl`, and the ingredient count. Its id is known before the save and sent to Food as the causation, so Food's `food.recipe.created` (by `system:recipe-import`) is caused by it in the Event Log; with an Idempotency-Key the id is derived from the link and the key, so a retried save records it once. Previews record nothing.
 
-## For the AI
+## AI capture
 
-The AI capture path (a later ticket) calls this service, not Food, for links: `POST /v1/imports/preview` to read a link and `POST /v1/imports` (with an Idempotency-Key derived from the capture) to save it, or `POST /v1/imports/text` for a pasted caption. A link is worth importing when it is http(s) and the capture is about a recipe or food, or it points to a known recipe site or a social post; the preview's `method` then says what it is: `structured` is a recipe, `preview` a page without recipe data (a social post: save it only with what the caption gives), `failed` nothing to save. A 409 `recipe_exists` means the recipe is already saved (`recipeId`).
+Inbox captures of recipe links reach this service through MCP's `recipe_import` (P15-07; see [MCP and AI](mcp.md#recipe-links)), never Food directly. A capture whose main content is a recipe link, or that asks to save a recipe from a link, in any language, routes there, as does a link to a known recipe site and a bare Instagram, TikTok, or YouTube link shared from the phone; text pasted with the link is passed as the caption. A link clearly about something else follows the other rules, and a bare link with no sign of food goes to Human Review ("What should I do with this link?").
+
+MCP previews the link (`POST /v1/imports/preview`) and branches on the `method`:
+- `structured`: saved with `POST /v1/imports` `{url}`;
+- `preview` or `failed` with a caption that has ingredients or steps: the caption is read (`POST /v1/imports/text`) and that draft, with the page's title when the caption has none and the page's image and site, is saved as `overrides`;
+- `preview` without one, when the owner asked to save the link ("save this", "сохрани рецепт"): the to-review stub (the OpenGraph draft) is saved as `overrides`;
+- otherwise nothing is saved, and the capture goes to Human Review with this service's reason, such as "Instagram posts can't be read directly: paste the caption to fill in the ingredients and steps."
+
+The save carries an `Idempotency-Key` derived from the capture, which this service passes on to Food, so a retried capture saves the recipe once. A 409 `recipe_exists` counts as done (`alreadySaved`, with the `recipeId`). The import's `food.recipe.imported` names the AI (`agent:codex-inbox-processor`), and Food's `food.recipe.created` is by `system:recipe-import` as always.
 
 ## Configuration
 

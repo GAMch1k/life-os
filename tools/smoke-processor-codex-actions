@@ -6,19 +6,35 @@ set -euo pipefail
 actor=(-H 'X-Life-OS-Actor: dev:smoke-processor-codex-actions')
 
 # Opt-in, disposable proof that the deployed processor uses the authenticated
-# local Codex CLI to route explicit Calendar, Finance, grocery, and meal captures. It
-# does not call the processor directly or inject actions through the MCP
-# service.
+# local Codex CLI to route explicit Calendar, Finance, grocery, meal, and
+# recipe link captures. It does not call the processor directly or inject
+# actions through the MCP service.
 compose=(./tools/verify-compose)
-cleanup() { "${compose[@]}" down --volumes --remove-orphans >/dev/null; }
+# The recipe page a capture links to, served at http://ics-fixture/ by the
+# browser tests' verify-only overlay, which lets recipe-import fetch it.
+pages=$(mktemp -d)
+chmod 755 "$pages"
+export LIFE_OS_E2E_ICS_DIR=$pages
+export LIFE_OS_VERIFY_OVERLAYS=${LIFE_OS_VERIFY_OVERLAYS:+$LIFE_OS_VERIFY_OVERLAYS:}tools/fixtures/calendar-ics.compose.yaml
+cleanup() {
+  "${compose[@]}" down --volumes --remove-orphans >/dev/null
+  rm -rf "$pages"
+}
 trap cleanup EXIT
+cat >"$pages/smoke-pilaf.html" <<'HTML'
+<!doctype html>
+<html><head><title>Smoke Pilaf</title>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"Recipe","name":"Smoke Pilaf","recipeIngredient":["300 g Reis","1 Karotte"],"recipeInstructions":["Reis waschen.","Alles zusammen garen."]}</script>
+</head><body></body></html>
+HTML
+chmod 644 "$pages/smoke-pilaf.html"
 
 "${compose[@]}" up --detach --no-build
 gateway=http://127.0.0.1:13001
 # The owner's timezone as the stack runs it: date-only captures resolve in it.
 zone=${LIFE_OS_TIMEZONE:-$(grep -m1 '^LIFE_OS_TIMEZONE=' .env 2>/dev/null | cut -d= -f2- || true)}
 zone=${zone:-UTC}
-for service in inbox calendar finance food; do
+for service in inbox calendar finance food integrations/recipe-import; do
   for _ in $(seq 1 60); do
     curl --fail --silent "$gateway/api/$service/ready" >/dev/null && break
     sleep 1
@@ -118,6 +134,29 @@ jq -e 'length == 1' >/dev/null <<<"$(breakfasts)" || {
   exit 1
 }
 
+# A recipe link is saved once, from the page's recipe data, with the link as
+# its source. Replaying the processor's save (the link alone, as MCP sends it
+# for a recipe page, with its key) returns the same recipe, and the link
+# captured again finds it saved.
+recipe_link=http://ics-fixture/smoke-pilaf.html
+pilafs() {
+  curl --fail --silent "$gateway/api/food/v1/recipes?q=pilaf&limit=200" | jq -c --arg link "$recipe_link" '[.items[] | select(.sourceUrl == $link)]'
+}
+recipe_capture=$(capture "Save this recipe: $recipe_link")
+wait_for_action "$recipe_capture" recipe_import
+jq -e 'length == 1 and (.[0].ingredients | length) == 2' >/dev/null <<<"$(pilafs)"
+recipe_action=$(curl --fail --silent "$gateway/api/inbox/v1/inbox-items/$recipe_capture/processing-attempts" | jq -c '.items[0].actions[0]')
+jq -e '.arguments.title == null and .result.saved == true' >/dev/null <<<"$recipe_action"
+replayed=$(curl "${actor[@]}" --fail --silent -H 'content-type: application/json' -H "Idempotency-Key: $(jq -r '.arguments.idempotencyKey' <<<"$recipe_action")" --data "$(jq -cn --arg url "$recipe_link" '{url: $url}')" "$gateway/api/integrations/recipe-import/v1/imports")
+jq -e --arg id "$(jq -r '.result.recipeId' <<<"$recipe_action")" '.recipe.id == $id' >/dev/null <<<"$replayed"
+recipe_again=$(capture "Save this recipe: $recipe_link")
+wait_for_action "$recipe_again" recipe_import
+curl --fail --silent "$gateway/api/inbox/v1/inbox-items/$recipe_again/processing-attempts" | jq -e --arg id "$(jq -r '.result.recipeId' <<<"$recipe_action")" '.items[0].actions[0].result | .alreadySaved == true and .recipeId == $id' >/dev/null
+jq -e 'length == 1' >/dev/null <<<"$(pilafs)" || {
+  echo "Codex action smoke: the recipe link was saved more than once: $(pilafs)" >&2
+  exit 1
+}
+
 task_title="P8 Codex mutation $stamp"
 task_id=$(curl "${actor[@]}" --fail --silent -H 'content-type: application/json' --data "$(jq -nc --arg title "$task_title" '{title:$title}')" "$gateway/api/tasks/v1/tasks" | jq -r '.id')
 mutation_id=$(capture "Mark the task titled $task_title as done.")
@@ -160,4 +199,4 @@ curl --fail --silent "$gateway/api/inbox/v1/inbox-items/$ambiguous_id" |
 curl --fail --silent "$gateway/api/tasks/v1/tasks/$ambiguous_task_a" | jq -e '.completed == false' >/dev/null
 curl --fail --silent "$gateway/api/tasks/v1/tasks/$ambiguous_task_b" | jq -e '.completed == false' >/dev/null
 
-echo "authenticated Codex Calendar, Finance, grocery, meal, and Task mutation/ambiguity capture smoke passed"
+echo "authenticated Codex Calendar, Finance, grocery, meal, recipe link, and Task mutation/ambiguity capture smoke passed"

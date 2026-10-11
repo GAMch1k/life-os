@@ -44,6 +44,7 @@ flowchart LR
   MCP --> Inbox
   MCP --> Calendar
   MCP --> Food
+  MCP --> RecipeImport
   OpenAPI --> Go[Generated Go/Fiber transport]
   OpenAPI --> TS[Generated dashboard types]
 ```

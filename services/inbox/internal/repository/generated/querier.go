@@ -13,17 +13,25 @@ import (
 type Querier interface {
 	CreateInboxItem(ctx context.Context, arg CreateInboxItemParams) (InboxItem, error)
 	CreateProcessingAttempt(ctx context.Context, arg CreateProcessingAttemptParams) (InboxProcessingAttempt, error)
+	// Removes media uploaded before the given time that no capture refers to,
+	// and returns what it removed so the files go too.
+	DeleteOrphanMedia(ctx context.Context, before pgtype.Timestamptz) ([]string, error)
 	GetInboxBacklog(ctx context.Context) (GetInboxBacklogRow, error)
 	GetInboxItem(ctx context.Context, id pgtype.UUID) (InboxItem, error)
 	GetLatestPendingFailure(ctx context.Context) (GetLatestPendingFailureRow, error)
+	GetMedia(ctx context.Context, sha256 string) (InboxMedium, error)
 	GetProcessingAttemptForItem(ctx context.Context, arg GetProcessingAttemptForItemParams) (InboxProcessingAttempt, error)
 	ListInboxItems(ctx context.Context, arg ListInboxItemsParams) ([]InboxItem, error)
+	ListMedia(ctx context.Context, hashes []string) ([]InboxMedium, error)
 	ListProcessingAttempts(ctx context.Context, inboxItemID pgtype.UUID) ([]InboxProcessingAttempt, error)
 	// Unfinished attempts whose runtime stopped reporting (or never did), for
 	// captures that are still waiting for processing. An open attempt of a capture
 	// that has since been resolved, discarded, or sent to review is history.
 	ListStaleProcessingAttempts(ctx context.Context, staleAfterSeconds int32) ([]InboxProcessingAttempt, error)
 	RecordAttemptRuntime(ctx context.Context, arg RecordAttemptRuntimeParams) (InboxProcessingAttempt, error)
+	// Records an uploaded image. Uploading the same bytes again refreshes its
+	// time, so a fresh upload is never pruned as an old orphan.
+	RecordMedia(ctx context.Context, arg RecordMediaParams) (InboxMedium, error)
 	ResolveInboxItemHumanReview(ctx context.Context, arg ResolveInboxItemHumanReviewParams) (InboxItem, error)
 	ScheduleInboxItemRetry(ctx context.Context, arg ScheduleInboxItemRetryParams) (InboxItem, error)
 	SetInboxItemHumanReview(ctx context.Context, arg SetInboxItemHumanReviewParams) (InboxItem, error)

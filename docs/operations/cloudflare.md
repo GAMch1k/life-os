@@ -77,6 +77,8 @@ Cloudflare Access is the login in front of the hostname. It runs at Cloudflare's
 
 Access denies by default, so only addresses in `Life OS users` receive a code. To add a person, add their email to the group; to remove one, delete it. Life OS has no user accounts of its own, so everyone admitted shares the same data.
 
+**The installed phone app** ([Dashboard → Install on your phone](../frontend/dashboard.md#install-on-your-phone)) stays behind Access: its manifest (`/app.webmanifest`, linked with `crossorigin="use-credentials"` so the Access cookie goes with it), icons (`/icons/`), and service worker (`/sw.js`) are same-origin paths of `lifeos.gamch1k.com` with no bypass. When the 24-hour session has expired, the app opens on the Access login: enter the code once. A share sent to Life OS while the session had expired is lost (Access turns its POST into the login) and must be shared again.
+
 The temporary service token lets automated checks authenticate without a mailbox, using the headers `CF-Access-Client-Id` and `CF-Access-Client-Secret`. Its values live only in `.env` (`LIFE_OS_CF_ACCESS_CLIENT_ID`, `LIFE_OS_CF_ACCESS_CLIENT_SECRET`). The token and its policy are removed after the Phase 9 sign-off.
 
 `tools/check-cloudflare-access` checks the public path from wherever it runs:

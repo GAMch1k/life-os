@@ -18,7 +18,6 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import {
-  formatBinaryBytes,
   formatTime,
   statusAlerts,
   type CheckState,
@@ -132,13 +131,7 @@ function CheckCard({
       <CardContent className="space-y-3">
         {check.detail && <ErrorDetail text={check.detail} />}
         {check.action && <p className="text-sm">{check.action}</p>}
-        {check.chart && (
-          <Sparkline
-            chart={check.chart}
-            format={formatBinaryBytes}
-            timeZone={timeZone}
-          />
-        )}
+        {check.chart && <Sparkline chart={check.chart} timeZone={timeZone} />}
         {check.facts.length > 0 && <Facts facts={check.facts} />}
         {check.parts && check.parts.length > 0 && (
           <ul aria-label={check.title} className="divide-y border-t pt-3">

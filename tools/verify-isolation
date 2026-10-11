@@ -4,7 +4,7 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_root"
 
-normal_volumes=(lifeos-postgres-data lifeos-whisper-models lifeos-voice-audio)
+normal_volumes=(lifeos-postgres-data lifeos-whisper-models lifeos-voice-audio lifeos-inbox-media)
 for volume in "${normal_volumes[@]}"; do
   docker volume inspect "$volume" >/dev/null || {
     printf 'verify-isolation: normal runtime volume is missing: %s\n' "$volume" >&2

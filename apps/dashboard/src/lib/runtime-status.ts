@@ -31,6 +31,7 @@ import {
   type BankConnectionList,
   expiringSoon,
 } from "@/lib/banking";
+import { formatBinaryBytes } from "@/lib/format-bytes";
 import { downsampleMin, type SparkPoint } from "@/lib/sparkline";
 import { DEFAULT_TIME_ZONE, dateTimeFormat } from "@/lib/time-zone";
 import { configuredTimeZone, userTimeZone } from "@/lib/user-time-zone";
@@ -1951,19 +1952,7 @@ export function backupsCheck(
   };
 }
 
-/** For example "520 MiB" or "7.7 GiB": powers of 1024, as free -h and df -h. */
-export function formatBinaryBytes(bytes: number) {
-  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit++;
-  }
-  return unit === 0
-    ? `${value} B`
-    : `${value >= 100 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
-}
+export { formatBinaryBytes };
 
 /** What to do when memory runs low. */
 export const SERVER_MEMORY_ACTION =
