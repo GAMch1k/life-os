@@ -158,6 +158,24 @@ test("a healthy server is OK, with its memory, load, disks, containers, and upti
   assert.equal(check?.action, undefined);
 });
 
+test("the containers count the test stack on its own", () => {
+  const check = serverCheck(
+    healthy({
+      containers: {
+        ...healthy().containers,
+        total: 52,
+        running: 48,
+        testStack: 20,
+      },
+    }),
+  );
+  assert.equal(
+    fact(check, "Containers"),
+    "48 running, 0 unhealthy, 0 restarting (52 in all, 20 of the test stack)",
+  );
+  assert.equal(check?.state, "ok");
+});
+
 test("the card draws memory available over the day", () => {
   const chart = serverCheck(healthy())?.chart;
   assert.ok(chart);
@@ -282,9 +300,10 @@ test("disks, load, and containers each say what is wrong and what to do", () => 
         project: "forgejo",
         count: 3,
         minutes: 15,
+        exitCode: 1,
       },
       "warning",
-      "runner (forgejo) keeps restarting: 3 times in 15 min.",
+      "runner (forgejo) keeps restarting: 3 times in 15 min, last exit code 1.",
       "See why with docker logs runner.",
     ],
     [
