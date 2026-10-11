@@ -21,8 +21,9 @@ set -Eeuo pipefail
 #      admin in one transaction, owners and privileges included;
 #   5. compares every table's row count and the migration state with the
 #      manifest;
-#   6. migrates it to this release (<service>-migrate) and starts the
-#      services again.
+#   6. migrates it to this release (<service>-migrate) and starts again
+#      the services that were running before (so a full restore with the
+#      stack stopped starts nothing early).
 #
 # Dropping and recreating, rather than pg_restore --clean, leaves nothing of
 # the old database behind: --clean drops only what the dump contains, so a
@@ -188,6 +189,18 @@ else
 fi
 to_stop=("${services[@]}")
 [[ "$stop_backup" == true ]] && to_stop+=(backup)
+# Only what runs now is started again afterwards.
+to_start=()
+if [[ "$plain" == true ]]; then
+  to_start=("${to_stop[@]}")
+elif ((${#to_stop[@]})); then
+  mapfile -t running < <("${compose[@]}" ps --services --status running)
+  for candidate in "${to_stop[@]}"; do
+    for name in "${running[@]}"; do
+      [[ "$candidate" == "$name" ]] && to_start+=("$candidate")
+    done
+  done
+fi
 
 printf 'Restore %s (service %s, owner %s)\n' "$database" "$service" "$role"
 printf '  from run %s, started %s\n' "$run_id" "$started"
@@ -202,7 +215,7 @@ fi
 printf '  2. stop: %s\n' "${to_stop[*]:-nothing}"
 printf '  3. drop %s, create it again owned by %s, and restore the dump into it in one transaction\n' "$database" "$role"
 printf '  4. compare every table and the migration state with the manifest\n'
-printf '  5. migrate it (%s) and start: %s\n' "${migrate_service:-no migration service}" "${to_stop[*]:-nothing}"
+printf '  5. migrate it (%s) and start again what runs now: %s\n' "${migrate_service:-no migration service}" "${to_start[*]:-nothing}"
 if [[ "$confirm" != true ]]; then
   printf '\nNothing changed. Run again with --confirm to restore.\n'
   exit 2
@@ -253,7 +266,8 @@ on_error() {
   elif [[ -n "$fresh" ]]; then
     printf 'The database as it was is in %s\n' "$fresh" >&2
   fi
-  printf 'To start the services as they are: docker compose up -d --no-build --no-deps %s\n' "${to_stop[*]:-}" >&2
+  ((${#to_start[@]})) && printf 'To start the services as they are: docker compose up -d --no-build --no-deps %s\n' "${to_start[*]}" >&2
+  return 0
 }
 trap on_error ERR
 
@@ -317,12 +331,12 @@ if [[ -n "$migrate_service" ]]; then
   stack run --rm --no-deps "$migrate_service"
 fi
 trap - ERR
-if ((${#to_stop[@]})); then
-  step "Starting ${to_stop[*]}"
-  stack up -d --no-build --no-deps "${to_stop[@]}"
+if ((${#to_start[@]})); then
+  step "Starting ${to_start[*]}"
+  stack up -d --no-build --no-deps "${to_start[@]}"
 fi
 
 printf '\nRestored %s from run %s (%s).\n' "$database" "$run_id" "$started"
 printf '  migration: %s in the dump, %s now\n' "$(migration_label "$restored_migration")" "$(migration_label "$(read_migration)")"
 [[ -n "$fresh" ]] && printf '  the database as it was before: %s\n' "$fresh"
-printf '  started again: %s\n' "${to_stop[*]:-nothing}"
+printf '  started again: %s\n' "${to_start[*]:-nothing (they were not running)}"
