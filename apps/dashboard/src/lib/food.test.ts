@@ -4,7 +4,9 @@ import test from "node:test";
 import {
   NEW_STORE,
   type PantryItem,
+  type PantryItemResult,
   type ShoppingItem,
+  type Staple,
   type Store,
   activeStores,
   addedNote,
@@ -21,6 +23,7 @@ import {
   matchesStore,
   newIdempotencyKey,
   newPantryItem,
+  pantryChangeNote,
   pantryDraft,
   pantryGroups,
   pantryItemPatch,
@@ -31,8 +34,12 @@ import {
   putAwayItems,
   putAwayNote,
   reopened,
+  restockSentence,
+  runningLowLine,
   shoppingDraft,
   shoppingItemPatch,
+  stapleDetails,
+  stapleOf,
   storeMoves,
   upsert,
 } from "./food";
@@ -77,6 +84,8 @@ function pantry(overrides: Partial<PantryItem> = {}): PantryItem {
     note: null,
     state: "in_stock",
     endedAt: null,
+    runningLow: false,
+    runningLowAt: null,
     source: "manual",
     sourceRef: null,
     fromShoppingItemId: null,
@@ -361,6 +370,7 @@ test("Home names the list's size and food expiring today or tomorrow", () => {
     ],
     expiringMore: false,
     meals: null,
+    runningLow: null,
   });
   // Nothing to say, nothing shown.
   assert.equal(homeFood({ items: [] }, { items: [] }, today), null);
@@ -574,5 +584,120 @@ test("put away and ended items say what happened", () => {
   assert.equal(
     endedNote({ name: "Milch", state: "thrown_away" }),
     "Threw away “Milch”.",
+  );
+});
+
+function staple(overrides: Partial<Staple> = {}): Staple {
+  const name = overrides.name ?? "Milch";
+  return {
+    id: `s-${name.toLowerCase()}`,
+    name,
+    normalizedName: name.toLowerCase(),
+    amount: null,
+    storeId: null,
+    storeName: null,
+    aisle: null,
+    onList: false,
+    inStock: false,
+    runningLow: false,
+    createdAt: STAMP,
+    updatedAt: STAMP,
+    createdBy: actor,
+    updatedBy: actor,
+    ...overrides,
+  };
+}
+
+test("a pantry item's staple is found by its normalised name", () => {
+  const staples = [staple(), staple({ name: "Eier" })];
+  assert.equal(stapleOf(staples, "milch")?.name, "Milch");
+  assert.equal(stapleOf(staples, "brot"), undefined);
+});
+
+test("the line after a pantry change says what went on the list", () => {
+  const result = (overrides: Partial<PantryItemResult>): PantryItemResult => ({
+    ...pantry({ name: "Milch" }),
+    ...overrides,
+  });
+  const restock = {
+    status: "added" as const,
+    reason: "used_up" as const,
+    stapleId: "s-milch",
+    shoppingItem: shopping({ name: "Milch", source: "staple" }),
+    message: "Added “Milch” to the list: used up (staple)",
+  };
+  // A staple went on the list by itself: no offer.
+  assert.deepEqual(
+    pantryChangeNote(result({ state: "used_up", restock }), "used-up", false),
+    {
+      text: "Used up “Milch”. Added “Milch” to the list: used up (staple).",
+      offer: false,
+    },
+  );
+  assert.deepEqual(
+    pantryChangeNote(
+      result({
+        restock: {
+          ...restock,
+          status: "on_list",
+          message: "“Milch” is already on the list",
+        },
+      }),
+      "running-low",
+      true,
+    ),
+    {
+      text: "“Milch” is running low. “Milch” is already on the list.",
+      offer: false,
+    },
+  );
+  // Another item: offered, unless it is already needed.
+  assert.deepEqual(
+    pantryChangeNote(result({ state: "thrown_away" }), "thrown-away", false),
+    { text: "Threw away “Milch”.", offer: true },
+  );
+  assert.deepEqual(pantryChangeNote(result({}), "running-low", true), {
+    text: "“Milch” is running low. It is already on the shopping list.",
+    offer: false,
+  });
+  assert.equal(restockSentence({ message: "Done." }), "Done.");
+});
+
+test("a staple's row says its amount, store, and whether it is needed", () => {
+  assert.equal(
+    stapleDetails(staple({ amount: "2 l", storeName: "Aldi", onList: true })),
+    "2 l · Aldi · On the list",
+  );
+  assert.equal(
+    stapleDetails(staple({ inStock: true, runningLow: true })),
+    "Running low",
+  );
+  assert.equal(stapleDetails(staple({ inStock: true })), "At home");
+  assert.equal(stapleDetails(staple()), "Not at home");
+});
+
+test("Home names what is running low, once per name", () => {
+  const low = (name: string, overrides: Partial<PantryItem> = {}) =>
+    pantry({ name, runningLow: true, runningLowAt: STAMP, ...overrides });
+  assert.equal(runningLowLine([]), null);
+  assert.equal(
+    runningLowLine([
+      low("Milch"),
+      low("milch"),
+      pantry({ name: "Brot" }),
+      low("Eier", { state: "used_up" }),
+    ]),
+    "Running low: Milch",
+  );
+  assert.equal(
+    runningLowLine([low("A"), low("B"), low("C"), low("D"), low("E")]),
+    "Running low: A, B, C and 2 more",
+  );
+  // Running low alone is something to say.
+  assert.equal(
+    homeFood({ items: [] }, undefined, "2026-10-11", null, {
+      items: [low("Milch")],
+    })?.runningLow,
+    "Running low: Milch",
   );
 });

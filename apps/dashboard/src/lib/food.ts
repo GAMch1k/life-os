@@ -18,6 +18,9 @@ export type UpdateShoppingItemBody = Schemas["UpdateShoppingItemRequest"];
 export type NewPantryItem = Schemas["NewPantryItem"];
 export type UpdatePantryItemBody = Schemas["UpdatePantryItemRequest"];
 export type PutAwayItem = Schemas["PutAwayItem"];
+export type PantryItemResult = Schemas["PantryItemResult"];
+export type Restock = Schemas["Restock"];
+export type Staple = Schemas["Staple"];
 
 export const FOOD_TABS = ["list", "pantry", "recipes", "plan"] as const;
 export type FoodTab = (typeof FOOD_TABS)[number];
@@ -626,6 +629,84 @@ export function endedNote(item: Pick<PantryItem, "name" | "state">) {
     : `Used up “${item.name}”.`;
 }
 
+// ---- Staples and running low ---------------------------------------------------
+
+/** The staple with an item's normalised name, if it is one. */
+export function stapleOf(staples: Staple[], normalizedName: string) {
+  return staples.find((staple) => staple.normalizedName === normalizedName);
+}
+
+/** A sentence from Food's restock message: "Added “Milch” to the list: used up (staple)." */
+export function restockSentence(restock: Pick<Restock, "message">) {
+  return /[.!?]$/.test(restock.message)
+    ? restock.message
+    : `${restock.message}.`;
+}
+
+/**
+ * The line after a pantry item ended or was flagged as running low, saying
+ * what went on the shopping list by itself (`restock`), and whether to
+ * offer to put it there: only when nothing went on the list and no item of
+ * its name is needed already.
+ */
+export function pantryChangeNote(
+  result: PantryItemResult,
+  action: "used-up" | "thrown-away" | "running-low",
+  listed: boolean,
+): { text: string; offer: boolean } {
+  const first =
+    action === "running-low"
+      ? `“${result.name}” is running low.`
+      : endedNote(result);
+  if (result.restock)
+    return {
+      text: `${first} ${restockSentence(result.restock)}`,
+      offer: false,
+    };
+  if (listed)
+    return {
+      text: `${first} It is already on the shopping list.`,
+      offer: false,
+    };
+  return { text: first, offer: true };
+}
+
+/** The staple's details for its row: "2 l · Aldi · On the list". */
+export function stapleDetails(staple: Staple) {
+  const state = staple.onList
+    ? "On the list"
+    : staple.runningLow
+      ? "Running low"
+      : staple.inStock
+        ? "At home"
+        : "Not at home";
+  return [staple.amount, staple.storeName, state]
+    .filter((part): part is string => Boolean(part))
+    .join(" · ");
+}
+
+/** How many running-low names Home lists before "and n more". */
+export const HOME_RUNNING_LOW_PREVIEW = 3;
+
+/**
+ * Home's running-low line, one name per normalised name: "Running low:
+ * Milch, Brot and 2 more". Null when nothing is running low.
+ */
+export function runningLowLine(items: PantryItem[]) {
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const item of items) {
+    if (item.state !== "in_stock" || !item.runningLow) continue;
+    if (seen.has(item.normalizedName)) continue;
+    seen.add(item.normalizedName);
+    names.push(item.name);
+  }
+  if (!names.length) return null;
+  const shown = names.slice(0, HOME_RUNNING_LOW_PREVIEW).join(", ");
+  const more = names.length - HOME_RUNNING_LOW_PREVIEW;
+  return `Running low: ${shown}${more > 0 ? ` and ${more} more` : ""}`;
+}
+
 // ---- Home -------------------------------------------------------------------
 
 /** How many expiring items Home names. */
@@ -641,19 +722,23 @@ export type HomeFood = {
   expiringMore: boolean;
   /** Today's planned meals: "Today: Pasta Bolognese (dinner)". */
   meals: string | null;
+  /** What is running low: "Running low: Milch, Brot". */
+  runningLow: string | null;
 };
 
 /**
  * What Home says about food: the shopping list's size, the food that
- * expires today or tomorrow in the owner's timezone, and today's planned
- * meals (`meals`, see todayMeals). Food that already expired is the
- * pantry's to show. Null when there is nothing to say.
+ * expires today or tomorrow in the owner's timezone, today's planned meals
+ * (`meals`, see todayMeals), and what is running low (`low`, the in-stock
+ * items flagged so). Food that already expired is the pantry's to show.
+ * Null when there is nothing to say.
  */
 export function homeFood(
   list: { items: ShoppingItem[]; nextCursor?: string | null },
   pantry: { items: PantryItem[] } | undefined,
   today: string,
   meals: string | null = null,
+  low: { items: PantryItem[] } | undefined = undefined,
 ): HomeFood | null {
   const tomorrow = addDays(today, 1);
   const soon = (pantry?.items ?? [])
@@ -666,7 +751,8 @@ export function homeFood(
     )
     .sort(bySoonestExpiry);
   const listCount = list.items.filter((item) => item.state === "needed").length;
-  if (!listCount && !soon.length && !meals) return null;
+  const runningLow = runningLowLine(low?.items ?? []);
+  if (!listCount && !soon.length && !meals && !runningLow) return null;
   return {
     listCount,
     listMore: Boolean(list.nextCursor),
@@ -677,6 +763,7 @@ export function homeFood(
     })),
     expiringMore: soon.length > HOME_EXPIRING_PREVIEW,
     meals,
+    runningLow,
   };
 }
 
@@ -686,6 +773,8 @@ export function homeFood(
 const ERROR_TEXT: Record<string, string> = {
   already_on_list: "Another item on the list already has this name.",
   store_exists: "A store with this name already exists.",
+  staple_exists: "This is already a staple.",
+  not_in_stock: "This item is no longer in stock. Reload the page.",
   store_archived:
     "This store is archived. Restore it in Stores to use it again.",
   unknown_store: "That store no longer exists. Reload the page.",
@@ -828,27 +917,38 @@ export function fetchPantry() {
   );
 }
 
+/** Every staple, by name. */
+export function fetchStaples() {
+  return load(
+    () => foodClient.GET("/v1/staples"),
+    "Staples could not be loaded.",
+  );
+}
+
 export type FoodWorkspaceState =
   | {
       kind: "ready";
       shopping: FoodList<ShoppingItem>;
       stores: Loaded<Store[]>;
       pantry: Loaded<FoodList<PantryItem>>;
+      staples: Loaded<{ items: Staple[] }>;
     }
   | { kind: "unavailable"; error: string };
 
 /**
  * Everything the workspace shows first. Without the shopping list Food is
- * unavailable; stores or the pantry failing say so in their own place.
+ * unavailable; stores, the pantry, or the staples failing say so in their
+ * own place.
  */
 export async function getFoodWorkspace(): Promise<FoodWorkspaceState> {
-  const [shopping, stores, pantry] = await Promise.all([
+  const [shopping, stores, pantry, staples] = await Promise.all([
     fetchShoppingList(),
     fetchStores(),
     fetchPantry(),
+    fetchStaples(),
   ]);
   if (shopping.error !== undefined) {
     return { kind: "unavailable", error: shopping.error };
   }
-  return { kind: "ready", shopping: shopping.data, stores, pantry };
+  return { kind: "ready", shopping: shopping.data, stores, pantry, staples };
 }

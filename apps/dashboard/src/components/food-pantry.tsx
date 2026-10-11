@@ -1,25 +1,31 @@
 "use client";
 
-import { ChevronRight, Plus } from "lucide-react";
+import { ChevronRight, Plus, Star } from "lucide-react";
 import { useState } from "react";
 
 import {
   type PantryDialogState,
   PantryItemDialog,
 } from "@/components/food-pantry-dialog";
+import { StaplesDialog } from "@/components/food-staples-dialog";
 import { Button } from "@/components/ui/button";
+import { Toggle } from "@/components/ui/toggle";
 import { foodClient } from "@/lib/api/food-client";
 import {
   type PantryItem,
+  type PantryItemResult,
   type ShoppingItem,
+  type Staple,
+  type Store,
   addedNote,
   endedItems,
-  endedNote,
   endedText,
   expiry,
   load,
+  pantryChangeNote,
   pantryGroups,
   shortDay,
+  stapleOf,
   upsert,
   writeHeader,
 } from "@/lib/food";
@@ -40,7 +46,11 @@ const TONES = {
   muted: "text-muted-foreground",
 } as const;
 
-type Action = "used-up" | "thrown-away" | "restock";
+type Action = "used-up" | "thrown-away" | "restock" | "running-low" | "not-low";
+
+/** The tooltip of a pantry row's star. */
+const STAPLE_HINT =
+  "Staple: goes on the shopping list by itself when it runs low, is used up, or is thrown away";
 
 /**
  * The status line, and after an item ended, the offer to put it on the
@@ -50,26 +60,33 @@ type Notice = { kind: "info" | "error"; text: string; offer?: PantryItem };
 
 /**
  * The pantry: what is at home, by place (Fridge, Freezer, Pantry, Other),
- * the soonest expiry first. An item can be marked used up or thrown away,
- * put on the shopping list, or edited; once one is used up or thrown away
- * the page offers to put it on the list. Ended items stay in a folded
- * history, from which they can be restocked.
+ * the soonest expiry first. An item can be marked used up, thrown away, or
+ * running low, put on the shopping list, starred as a staple, or edited.
+ * A staple that runs low, is used up, or is thrown away goes on the list by
+ * itself and the status line says so; for another item the page offers to
+ * put it on the list. Ended items stay in a folded history, from which they
+ * can be restocked. Staples opens the list of staples.
  */
 export function FoodPantry({
   pantry,
   shopping,
+  staples,
+  stores,
   error,
   today,
   timeZone,
 }: {
   pantry: SyncedList<PantryItem>;
   shopping: SyncedList<ShoppingItem>;
+  staples: SyncedList<Staple>;
+  stores: Store[];
   /** Why the pantry could not be read on the server, if it could not. */
   error?: string;
   today: string;
   timeZone: string;
 }) {
   const [dialog, setDialog] = useState<PantryDialogState>(null);
+  const [staplesOpen, setStaplesOpen] = useState(false);
   const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
   const [notice, setNotice] = useState<Notice>();
   const groups = pantryGroups(pantry.items);
@@ -83,42 +100,117 @@ export function FoodPantry({
       return next;
     });
 
+  const send = (item: PantryItem, action: Action) => {
+    const params = { path: { itemId: item.id }, header: writeHeader() };
+    switch (action) {
+      case "used-up":
+        return foodClient.POST("/v1/pantry-items/{itemId}/used-up", { params });
+      case "thrown-away":
+        return foodClient.POST("/v1/pantry-items/{itemId}/thrown-away", {
+          params,
+        });
+      case "restock":
+        return foodClient.POST("/v1/pantry-items/{itemId}/restock", { params });
+      case "running-low":
+        // Only a staple goes on the list; another item is offered.
+        return foodClient.POST("/v1/pantry-items/{itemId}/running-low", {
+          params,
+          body: { addToList: false },
+        });
+      case "not-low":
+        return foodClient.DELETE("/v1/pantry-items/{itemId}/running-low", {
+          params,
+        });
+    }
+  };
+
   const act = (item: PantryItem, action: Action) => {
     setNotice(undefined);
     working(item.id, true);
-    const params = { path: { itemId: item.id }, header: writeHeader() };
+    // Whether it is needed already, before a restock puts it there.
+    const listed = shopping.items.some(
+      (entry) =>
+        entry.state === "needed" &&
+        entry.normalizedName === item.normalizedName,
+    );
     void pantry.write(async () => {
-      const result = await load(
-        () =>
-          action === "used-up"
-            ? foodClient.POST("/v1/pantry-items/{itemId}/used-up", { params })
-            : action === "thrown-away"
-              ? foodClient.POST("/v1/pantry-items/{itemId}/thrown-away", {
-                  params,
-                })
-              : foodClient.POST("/v1/pantry-items/{itemId}/restock", {
-                  params,
-                }),
+      const result = await load<PantryItemResult>(
+        () => send(item, action),
         `Could not update “${item.name}”.`,
       );
       working(item.id, false);
       if (result.error !== undefined)
         return setNotice({ kind: "error", text: result.error });
-      pantry.change((items) => upsert(items, result.data));
+      const { restock, ...changed } = result.data;
+      pantry.change((items) => upsert(items, changed));
+      if (restock) {
+        shopping.change((items) => upsert(items, restock.shoppingItem));
+        staples.reload();
+      }
       if (action === "restock") return;
-      // Ended: offer to buy it again, unless it is already on the list.
-      const listed = shopping.items.some(
-        (entry) =>
-          entry.state === "needed" &&
-          entry.normalizedName === result.data.normalizedName,
-      );
+      if (action === "not-low")
+        return setNotice({
+          kind: "info",
+          text: `“${changed.name}” is no longer running low.`,
+        });
+      const note = pantryChangeNote(result.data, action, listed);
       setNotice({
         kind: "info",
-        text: listed
-          ? `${endedNote(result.data)} It is already on the shopping list.`
-          : endedNote(result.data),
-        offer: listed ? undefined : result.data,
+        text: note.text,
+        offer: note.offer ? changed : undefined,
       });
+    });
+  };
+
+  /** Stars an item as a staple, or unstars it. */
+  const toggleStaple = (item: PantryItem) => {
+    setNotice(undefined);
+    working(item.id, true);
+    const staple = stapleOf(staples.items, item.normalizedName);
+    void staples.write(async () => {
+      const result = staple
+        ? await load(
+            () =>
+              foodClient
+                .DELETE("/v1/staples/{stapleId}", {
+                  params: {
+                    path: { stapleId: staple.id },
+                    header: writeHeader(),
+                  },
+                })
+                .then(({ response, error }) => ({
+                  data: response.ok ? null : undefined,
+                  error,
+                })),
+            `Could not change whether “${item.name}” is a staple.`,
+          )
+        : await load(
+            () =>
+              foodClient.POST("/v1/staples", {
+                params: { header: writeHeader() },
+                body: { name: item.name },
+              }),
+            `Could not change whether “${item.name}” is a staple.`,
+          );
+      working(item.id, false);
+      if (result.error !== undefined)
+        return setNotice({ kind: "error", text: result.error });
+      const created = result.data;
+      if (created) {
+        staples.change((items) => upsert(items, created));
+        setNotice({
+          kind: "info",
+          text: `“${created.name}” is now a staple: it goes on the shopping list by itself when it runs low, is used up, or is thrown away.`,
+        });
+      } else if (staple) {
+        staples.change((items) =>
+          items.filter((entry) => entry.id !== staple.id),
+        );
+        setNotice({
+          kind: "info",
+          text: `“${staple.name}” is no longer a staple.`,
+        });
+      }
     });
   };
 
@@ -154,10 +246,27 @@ export function FoodPantry({
         <p className="text-muted-foreground text-sm">
           What is at home, soonest expiry first.
         </p>
-        <Button onClick={() => setDialog({ mode: "new" })} size="lg">
-          <Plus aria-hidden="true" />
-          Add item
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            onClick={() => {
+              // Whether each is needed or running low may have changed.
+              staples.reload();
+              setStaplesOpen(true);
+            }}
+            size="lg"
+            variant="outline"
+          >
+            <Star aria-hidden="true" />
+            Staples
+            <span className="text-muted-foreground text-xs tabular-nums">
+              {staples.items.length}
+            </span>
+          </Button>
+          <Button onClick={() => setDialog({ mode: "new" })} size="lg">
+            <Plus aria-hidden="true" />
+            Add item
+          </Button>
+        </div>
       </div>
 
       <p
@@ -217,6 +326,8 @@ export function FoodPantry({
                   onAct={(action) => act(item, action)}
                   onAddToList={() => addToList(item)}
                   onEdit={() => setDialog({ mode: "edit", item })}
+                  onToggleStaple={() => toggleStaple(item)}
+                  staple={Boolean(stapleOf(staples.items, item.normalizedName))}
                   today={today}
                 />
               ))}
@@ -243,6 +354,14 @@ export function FoodPantry({
         state={dialog}
         today={today}
       />
+      <StaplesDialog
+        onClose={() => setStaplesOpen(false)}
+        open={staplesOpen}
+        pantry={pantry}
+        shopping={shopping}
+        staples={staples}
+        stores={stores}
+      />
     </div>
   );
 }
@@ -251,16 +370,21 @@ function PantryRow({
   item,
   today,
   busy,
+  staple,
   onAct,
   onAddToList,
   onEdit,
+  onToggleStaple,
 }: {
   item: PantryItem;
   today: string;
   busy: boolean;
+  /** Its name is a staple. */
+  staple: boolean;
   onAct: (action: Action) => void;
   onAddToList: () => void;
   onEdit: () => void;
+  onToggleStaple: () => void;
 }) {
   const expires = item.expiresOn ? expiry(item.expiresOn, today) : undefined;
   return (
@@ -278,6 +402,14 @@ function PantryRow({
         {item.amount ? (
           <span className="text-muted-foreground ml-1.5 text-sm">
             {item.amount}
+          </span>
+        ) : null}
+        {item.runningLow ? (
+          <span
+            className="text-warning block text-xs font-medium"
+            data-slot="food-running-low"
+          >
+            Running low
           </span>
         ) : null}
         {expires || item.openedOn ? (
@@ -302,6 +434,19 @@ function PantryRow({
         ) : null}
       </button>
       <div className="flex flex-wrap gap-1.5">
+        <Toggle
+          aria-label={`Staple: ${item.name}`}
+          disabled={busy}
+          onPressedChange={onToggleStaple}
+          pressed={staple}
+          size="lg"
+          title={STAPLE_HINT}
+        >
+          <Star
+            aria-hidden="true"
+            className={cn(staple && "text-warning fill-current")}
+          />
+        </Toggle>
         <Button
           aria-label={`Used up: ${item.name}`}
           disabled={busy}
@@ -320,6 +465,18 @@ function PantryRow({
         >
           Thrown away
         </Button>
+        <Toggle
+          aria-label={`Running low: ${item.name}`}
+          disabled={busy}
+          onPressedChange={(pressed) =>
+            onAct(pressed ? "running-low" : "not-low")
+          }
+          pressed={item.runningLow}
+          size="lg"
+          variant="outline"
+        >
+          Running low
+        </Toggle>
         <Button
           aria-label={`Add to list: ${item.name}`}
           disabled={busy}

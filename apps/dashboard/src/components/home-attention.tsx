@@ -233,12 +233,16 @@ export function HomeAttentionSurface({
         <AttentionCard
           id="attention-food"
           href={foodHref(
-            food.listCount ? "list" : food.expiring.length ? "pantry" : "plan",
+            food.listCount
+              ? "list"
+              : food.expiring.length || !food.meals
+                ? "pantry"
+                : "plan",
           )}
           linkLabel={
             food.listCount
               ? "Open shopping list"
-              : food.expiring.length
+              : food.expiring.length || !food.meals
                 ? "Open pantry"
                 : "Open meal plan"
           }
@@ -249,12 +253,23 @@ export function HomeAttentionSurface({
               ? `${plural(food.listCount, food.listMore, "item")} on the shopping list`
               : food.expiring.length
                 ? `${plural(food.expiring.length, food.expiringMore, "item")} expiring soon`
-                : (food.meals ?? "")
+                : (food.meals ?? food.runningLow ?? "")
           }
           items={[
             // Today's meals, unless they are the detail already.
             ...(food.meals && (food.listCount || food.expiring.length)
               ? [{ id: "meals", label: food.meals, href: foodHref("plan") }]
+              : []),
+            // What is running low, unless it is the detail already.
+            ...(food.runningLow &&
+            (food.listCount || food.expiring.length || food.meals)
+              ? [
+                  {
+                    id: "running-low",
+                    label: food.runningLow,
+                    href: foodHref("pantry"),
+                  },
+                ]
               : []),
             ...food.expiring.map((item) => ({
               id: item.id,

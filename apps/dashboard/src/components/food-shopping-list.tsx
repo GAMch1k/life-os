@@ -423,6 +423,15 @@ function NeededRow({
               {item.amount}
             </span>
           ) : null}
+          {item.source === "staple" ? (
+            <span
+              className="text-muted-foreground ml-1.5 text-xs"
+              data-slot="food-staple"
+              title="Put on the list by itself: a staple ran low, was used up, or was thrown away"
+            >
+              (staple)
+            </span>
+          ) : null}
           {item.note ? (
             <span className="text-muted-foreground block truncate text-xs">
               {item.note}
