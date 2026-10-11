@@ -27,8 +27,12 @@ type Config struct {
 	// DatabasesFile is the database registry: every database in it is
 	// backed up.
 	DatabasesFile string `env:"BACKUP_DATABASES_FILE" default:"/etc/lifeos/postgres/service-databases.conf"`
-	// Dir is the backup directory; the service writes under its auto/.
+	// Dir is the backup directory; the service writes under its auto/ and
+	// media/.
 	Dir string `env:"BACKUP_DIR" default:"/backups"`
+	// InboxMediaDir is Inbox's capture images (the inbox-media volume,
+	// mounted read-only); empty means they are not backed up.
+	InboxMediaDir string `env:"BACKUP_INBOX_MEDIA_DIR"`
 	// Time is the nightly run, HH:MM in TimeZone.
 	Time     string `env:"BACKUP_TIME" default:"03:15"`
 	TimeZone string `env:"LIFE_OS_TIMEZONE" default:"UTC"`
@@ -89,6 +93,9 @@ func (c Config) Validate() error {
 	}
 	if !filepath.IsAbs(c.Dir) {
 		validationErrors = append(validationErrors, fmt.Errorf("BACKUP_DIR must be an absolute path"))
+	}
+	if c.InboxMediaDir != "" && !filepath.IsAbs(c.InboxMediaDir) {
+		validationErrors = append(validationErrors, fmt.Errorf("BACKUP_INBOX_MEDIA_DIR must be empty or an absolute path"))
 	}
 	if _, err := backup.ParseTime(c.Time); err != nil {
 		validationErrors = append(validationErrors, fmt.Errorf("BACKUP_TIME: %w", err))

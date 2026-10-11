@@ -125,6 +125,9 @@ type Dumper struct {
 	// Timeout bounds one database (DefaultDatabaseTimeout when zero).
 	Timeout time.Duration
 	Now     func() time.Time
+	// MediaService is the service whose database lists media files to back
+	// up (MediaService); empty means none.
+	MediaService string
 
 	// afterSnapshot, for tests, runs once the snapshot is exported and
 	// counted, before pg_dump starts.
@@ -172,7 +175,7 @@ func (d *Dumper) Dump(ctx context.Context, database Database, dir string) (resul
 		result.Result = ResultFailed
 		result.Error = err.Error()
 		result.File, result.Bytes, result.SHA256 = "", 0, ""
-		result.Tables, result.Migration = []TableRows{}, nil
+		result.Tables, result.Migration, result.Media = []TableRows{}, nil, nil
 		return result, serverVersion
 	}
 	result.Result = ResultSucceeded
@@ -206,6 +209,11 @@ func (d *Dumper) dump(ctx context.Context, database Database, dir string, result
 	}
 	if result.Migration, err = readMigration(ctx, tx); err != nil {
 		return serverVersion, err
+	}
+	if d.MediaService != "" && database.Service == d.MediaService {
+		if result.Media, err = readMediaRefs(ctx, tx); err != nil {
+			return serverVersion, err
+		}
 	}
 	if d.afterSnapshot != nil {
 		d.afterSnapshot(ctx, database.Name)

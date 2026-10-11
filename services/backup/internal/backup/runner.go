@@ -120,6 +120,12 @@ type RunnerOptions struct {
 	Targets []Target
 	// Restorer runs restore checks; without one there are none.
 	Restorer DatabaseRestorer
+	// MediaSource is the directory of Inbox's capture images (the
+	// inbox-media volume, read-only); empty means media are not backed up.
+	MediaSource string
+	// MediaHashBudget bounds how many media bytes a restore check hashes
+	// (DefaultMediaHashBudget when zero); the rest are checked for size.
+	MediaHashBudget int64
 	// Location is the owner's timezone, for the rotation's days, weeks,
 	// and months.
 	Location *time.Location
@@ -290,6 +296,9 @@ func (r *Runner) execute(job *Job, manifest Manifest, dir string, databases []Da
 			logger.Warn("database backup failed", "database", database.Name, "error", result.Error)
 		}
 	}
+	if r.opts.MediaSource != "" && ctx.Err() == nil {
+		manifest.Media = r.storeMedia(ctx, manifest.Databases, dir, logger)
+	}
 	manifest.finish(r.opts.Now().UTC())
 
 	kept := true
@@ -344,6 +353,77 @@ func (r *Runner) execute(job *Job, manifest Manifest, dir string, databases []Da
 		result := r.runCheck(check, checked)
 		lock.Release()
 		r.finishCheck(check, result)
+	}
+}
+
+// storeMedia copies the media files the run's inbox_db snapshot refers to
+// into the shared store, and lists them in the run directory. A run that
+// did not cover Inbox stores none.
+func (r *Runner) storeMedia(ctx context.Context, databases []DatabaseResult, dir string, logger *slog.Logger) *MediaSet {
+	index := slices.IndexFunc(databases, func(d DatabaseResult) bool { return d.Service == MediaService })
+	if index < 0 {
+		return nil
+	}
+	database := databases[index]
+	set := &MediaSet{Service: MediaService, Database: database.Name, Missing: []MediaProblem{}}
+	if database.Result != ResultSucceeded {
+		set.Error = database.Name + " was not backed up, so its media were not listed"
+		return set
+	}
+	stored, copied, copiedBytes, problems, err := r.opts.Store.Media().Copy(ctx, r.opts.MediaSource, database.Media)
+	if err != nil {
+		set.Error = err.Error()
+		logger.Warn("backing up the media failed", "error", err)
+		return set
+	}
+	name := mediaListFile(MediaService)
+	if err := writeMediaList(dir, name, stored); err != nil {
+		set.Error = "writing the media list failed: " + err.Error()
+		return set
+	}
+	set.List, set.Count, set.Copied, set.CopiedBytes = name, len(stored), copied, copiedBytes
+	for _, ref := range stored {
+		set.Bytes += ref.Bytes
+	}
+	if problems != nil {
+		set.Missing = problems
+	}
+	for _, problem := range problems {
+		logger.Warn("a media file was not backed up", "sha256", problem.SHA256, "problem", problem.Problem)
+	}
+	logger.Info("media backed up", "files", set.Count, "copied", copied, "missing", len(problems))
+	return set
+}
+
+// collectMedia deletes the stored media files no kept run lists. It does
+// nothing when any run's list cannot be read: a file it might need is
+// never deleted. The caller holds the lock.
+func (r *Runner) collectMedia(runs []Run) {
+	keep := map[string]bool{}
+	for _, run := range runs {
+		if run.Err != nil {
+			r.opts.Logger.Warn("a backup run has no readable manifest; media are not collected", "run", run.ID)
+			return
+		}
+		media := run.Manifest.Media
+		if media == nil || media.List == "" {
+			continue
+		}
+		refs, err := readMediaList(r.opts.Store.RunDir(run.ID), media.List)
+		if err != nil {
+			r.opts.Logger.Warn("a run's media list cannot be read; media are not collected", "run", run.ID, "error", err)
+			return
+		}
+		for _, ref := range refs {
+			keep[ref.SHA256] = true
+		}
+	}
+	removed, err := r.opts.Store.Media().Collect(keep)
+	if removed > 0 {
+		r.opts.Logger.Info("deleted media files no kept run refers to", "files", removed)
+	}
+	if err != nil {
+		r.opts.Logger.Warn("collecting media files failed", "error", err)
 	}
 }
 
@@ -425,6 +505,11 @@ func (r *Runner) rotate() {
 		}
 		infos = append(infos, RunInfo{ID: run.ID, StartedAt: run.Manifest.StartedAt, Result: run.Manifest.Result, Scope: run.Manifest.Scope})
 	}
+	defer func() {
+		if remaining, err := r.opts.Store.Runs(); err == nil {
+			r.collectMedia(remaining)
+		}
+	}()
 	for _, id := range r.opts.Retention.Expired(infos, r.opts.Now(), r.opts.Location) {
 		if err := r.opts.Store.Delete(id); err != nil {
 			r.opts.Logger.Warn("deleting an expired backup run failed", "run", id, "error", err)
@@ -515,8 +600,11 @@ type Status struct {
 	RunningCheck     *CheckProgress
 	Runs             int
 	TotalBytes       int64
-	FreeBytes        int64
-	SizeBytes        int64
+	// MediaFiles and MediaBytes are the stored media files.
+	MediaFiles int
+	MediaBytes int64
+	FreeBytes  int64
+	SizeBytes  int64
 	// Databases are the databases in the registry now, or DatabasesError
 	// says why it cannot be read.
 	Databases      []string
@@ -561,6 +649,9 @@ func (r *Runner) Status() (Status, error) {
 		r.opts.Logger.Warn("reading the restore checks failed", "error", err)
 	}
 	if status.TotalBytes, err = r.opts.Store.Usage(); err != nil {
+		return Status{}, err
+	}
+	if status.MediaFiles, status.MediaBytes, err = r.opts.Store.Media().Usage(); err != nil {
 		return Status{}, err
 	}
 	if status.FreeBytes, status.SizeBytes, err = r.opts.Store.Disk(); err != nil {

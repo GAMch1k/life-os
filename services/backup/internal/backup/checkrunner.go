@@ -204,6 +204,17 @@ func (r *Runner) runCheck(job *CheckJob, run Run) RestoreCheck {
 			logger.Warn("restore check of a database failed", "database", database.Name, "mismatches", len(result.Mismatches), "error", result.Error)
 		}
 	}
+	if media := run.Manifest.Media; media != nil && media.List != "" && ctx.Err() == nil {
+		budget := r.opts.MediaHashBudget
+		if budget <= 0 {
+			budget = DefaultMediaHashBudget
+		}
+		mediaCheck := r.opts.Store.Media().CheckMedia(ctx, dir, media, budget)
+		check.Media = &mediaCheck
+		if !mediaCheck.OK {
+			logger.Warn("restore check of the media failed", "problems", len(mediaCheck.Problems), "error", mediaCheck.Error)
+		}
+	}
 	check.FinishedAt = r.opts.Now().UTC()
 	check.DurationSeconds = check.FinishedAt.Sub(check.StartedAt).Round(time.Millisecond).Seconds()
 	failed := 0
@@ -219,6 +230,8 @@ func (r *Runner) runCheck(job *CheckJob, run Run) RestoreCheck {
 		check.Error = "the run has no dump to check"
 	case failed > 0:
 		check.Error = fmt.Sprintf("%d of %d databases did not restore as their manifest says", failed, len(check.Databases))
+	case check.Media != nil && !check.Media.OK:
+		check.Error = mediaCheckError(check.Media)
 	default:
 		check.OK = true
 	}
@@ -227,6 +240,13 @@ func (r *Runner) runCheck(job *CheckJob, run Run) RestoreCheck {
 	}
 	logger.Info("restore check finished", "ok", check.OK, "duration_seconds", check.DurationSeconds, "error", check.Error)
 	return check
+}
+
+func mediaCheckError(check *MediaCheck) string {
+	if check.Error != "" {
+		return "the media could not be checked: " + check.Error
+	}
+	return fmt.Sprintf("%d of %d media files are missing or damaged in the store", len(check.Problems), check.Count)
 }
 
 func (r *Runner) finishCheck(job *CheckJob, result RestoreCheck) {

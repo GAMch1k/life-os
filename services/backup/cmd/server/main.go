@@ -39,6 +39,15 @@ func main() {
 	}
 }
 
+// mediaService is the service whose media are backed up: Inbox's, when
+// its media directory is mounted.
+func mediaService(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	return backup.MediaService
+}
+
 func run(ctx context.Context) error {
 	cfg, err := serviceconfig.Load()
 	if err != nil {
@@ -66,10 +75,12 @@ func run(ctx context.Context) error {
 	runner := backup.NewRunner(backup.RunnerOptions{
 		Store: store,
 		Dumper: &backup.Dumper{
-			Connection: cfg.Connection(),
-			PgDump:     cfg.PgDump,
-			PgRestore:  cfg.PgRestore,
+			Connection:   cfg.Connection(),
+			PgDump:       cfg.PgDump,
+			PgRestore:    cfg.PgRestore,
+			MediaService: mediaService(cfg.InboxMediaDir),
 		},
+		MediaSource: cfg.InboxMediaDir,
 		Restorer: &backup.Restorer{
 			Connection: cfg.Connection(),
 			PgRestore:  cfg.PgRestore,

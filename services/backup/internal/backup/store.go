@@ -80,6 +80,9 @@ func OpenStore(root string) (*Store, error) {
 // Root is the backup directory.
 func (s *Store) Root() string { return s.root }
 
+// Media is the backup directory's media store.
+func (s *Store) Media() MediaStore { return MediaStore{Root: filepath.Join(s.root, MediaDir)} }
+
 // Writable checks that runs can be written.
 func (s *Store) Writable() error {
 	return unix.Access(s.auto, unix.W_OK|unix.X_OK)
