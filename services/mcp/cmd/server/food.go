@@ -291,7 +291,7 @@ func addFoodTools(s *mcp.Server, hc *http.Client, baseURL string, emitter *activ
 			return post(ctx, hc, trace, baseURL, "/v1/shopping-items/from-recipes", body, in.IdempotencyKey)
 		})
 	})
-	mcp.AddTool(s, &mcp.Tool{Name: "food_update_pantry_item", Description: "Change one pantry item, by id (from food_list_pantry_items): state used_up or thrown_away ends it (it stays as history), in_stock puts it back; or, in a separate call, change its name, amount, location, expiresOn, openedOn, or note, and clear removes amount, expiresOn, openedOn, or note"}, func(ctx context.Context, req *mcp.CallToolRequest, in pantryMutation) (*mcp.CallToolResult, Output, error) {
+	mcp.AddTool(s, &mcp.Tool{Name: "food_update_pantry_item", Description: "Change one pantry item, by id (from food_list_pantry_items): state used_up or thrown_away ends it (it stays as history), in_stock puts it back; or, in a separate call, change its name, amount, location, expiresOn, openedOn, or note, and clear removes amount, expiresOn, openedOn, or note. Returns the item with restock: what its staple put on the shopping list by itself (status added, merged, or on_list, and message), absent or null when nothing did; do not add that item to the list again"}, func(ctx context.Context, req *mcp.CallToolRequest, in pantryMutation) (*mcp.CallToolResult, Output, error) {
 		return audited(ctx, emitter, req, "food_update_pantry_item", in, func(trace activity.Trace) (*mcp.CallToolResult, Output, error) {
 			id, err := uuid.Parse(strings.TrimSpace(in.ItemID))
 			if err != nil {
@@ -308,6 +308,7 @@ func addFoodTools(s *mcp.Server, hc *http.Client, baseURL string, emitter *activ
 			return patch(ctx, hc, trace, baseURL, path, body, in.IdempotencyKey)
 		})
 	})
+	addStapleTools(s, hc, baseURL, emitter)
 }
 
 // read GETs path from Food and returns its JSON object.
