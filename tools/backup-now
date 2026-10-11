@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Runs a backup now on the deployed stack and waits for the result: every
+# database, or only those named by service or database name, for example
+# `tools/backup-now finance tasks_db`. A run of only some databases never
+# stands in for the nightly one. It runs the backup binary's client inside
+# the backup container, which calls the service's API on localhost, so no
+# port is published. Flags such as -timeout 3h go before the names. See
+# docs/services/backup.md.
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$repo_root"
+
+exec docker compose exec -T backup /service now -actor dev:backup-now "$@"

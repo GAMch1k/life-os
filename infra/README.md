@@ -21,6 +21,7 @@ make infra-logs   # follow PostgreSQL logs
 make infra-down   # stop containers; preserve database data
 make infra-reset  # stop containers and deliberately delete local database data
 make db-provision # reconcile configured service databases and roles
+make db-provision-backup # reconcile the backup service's read-only role
 make db-check-isolation # verify every service can reach only its own database
 ```
 
@@ -51,3 +52,5 @@ service|database|role|password_environment_variable
 To add a generated service, add one row to that file and add its referenced password variable to the local `.env` (and a safe placeholder to `.env.example`). Do not put passwords in the service registry. Provisioning creates or updates a non-privileged login, makes it owner of its database, removes grants held by previous owners, revokes public database access, and grants access only to the configured owner.
 
 Provisioning is intentionally non-destructive: removing a registry row does not delete its database or role. Retire those resources through an explicit reviewed migration or administrative operation so data is never dropped merely because a configuration line changed.
+
+The one login that is not a service's own is `lifeos_backup`, the [backup service](../docs/services/backup.md)'s: it reads every table (`pg_read_all_data`), connects to every database in the registry, and may create databases (for restore checks), but owns nothing. `infra/postgres/provision-backup-role.sh` provisions it with the password in `LIFE_OS_BACKUP_DB_PASSWORD`; provisioning runs it last, so a fresh volume gets it and a reapply restores its connect grants and adds new databases. `make db-provision-backup` applies it alone to a running server.

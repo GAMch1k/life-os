@@ -1,4 +1,4 @@
-.PHONY: infra-env infra-up infra-down infra-ps infra-logs infra-reset core-up core-smoke life-up life-smoke verify-clean-db verify-isolation e2e-smoke processor-smoke processor-codex-actions-smoke human-review-smoke activity-trace-smoke runtime-status-smoke retry-schedule-smoke codex-runtime-smoke relative-dates-smoke cross-language-smoke calendar-ai-smoke phase8-acceptance browser-e2e action-idempotency-smoke voice-lease-recovery-smoke db-provision db-check-isolation db-migration-new db-generate db-migrate-up db-migrate-down db-test create-service create-service-smoke dashboard-check check
+.PHONY: infra-env infra-up infra-down infra-ps infra-logs infra-reset core-up core-smoke life-up life-smoke verify-clean-db verify-isolation e2e-smoke processor-smoke processor-codex-actions-smoke human-review-smoke activity-trace-smoke runtime-status-smoke retry-schedule-smoke codex-runtime-smoke relative-dates-smoke cross-language-smoke calendar-ai-smoke phase8-acceptance browser-e2e action-idempotency-smoke voice-lease-recovery-smoke db-provision db-provision-backup db-check-isolation db-migration-new db-generate db-migrate-up db-migrate-down db-test create-service create-service-smoke dashboard-check check
 
 infra-env:
 	@test -f .env || cp .env.example .env
@@ -101,6 +101,11 @@ infra-reset:
 
 db-provision: infra-env
 	docker compose exec -T postgres /docker-entrypoint-initdb.d/10-provision-service-databases.sh
+
+# The backup service's read-only login on a running server (idempotent; see
+# docs/services/backup.md). The password comes from .env; no restart needed.
+db-provision-backup: infra-env
+	LIFE_OS_BACKUP_DB_PASSWORD="$$(sed -n 's/^LIFE_OS_BACKUP_DB_PASSWORD=//p' .env | tail -n 1)" docker compose exec -T -e LIFE_OS_BACKUP_DB_PASSWORD postgres bash /opt/lifeos/postgres/provision-backup-role.sh
 
 db-check-isolation: infra-env
 	docker compose exec -T postgres /opt/lifeos/postgres/verify-database-isolation.sh

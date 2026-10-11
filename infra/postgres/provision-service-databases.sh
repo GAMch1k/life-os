@@ -99,3 +99,13 @@ while IFS='|' read -r service database role password_env extra; do
   fi
   provision_service "$service" "$database" "$role" "$password_env"
 done < "$config_file"
+
+# The backup service's read-only login connects to every database above. The
+# loop revoked database grants from every role but the owner, so the backup
+# role is reconciled after it, which also grants it a newly added database.
+backup_role_script=${LIFE_OS_BACKUP_ROLE_SCRIPT:-/opt/lifeos/postgres/provision-backup-role.sh}
+if [[ -r "$backup_role_script" ]]; then
+  LIFE_OS_DATABASE_CONFIG="$config_file" bash "$backup_role_script"
+else
+  printf 'backup role script is not readable: %s; skipping the backup role\n' "$backup_role_script" >&2
+fi

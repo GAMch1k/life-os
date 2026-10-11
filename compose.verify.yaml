@@ -73,6 +73,11 @@ services:
     image: lifeos-monitor:latest
     environment:
       NOTIFICATIONS_SERVICE_URL: ""
+  # Never the owner's backups: tools/verify-compose points LIFE_OS_BACKUP_DIR
+  # at a scratch directory of its own and refuses a plan that mounts the
+  # owner's backup directory.
+  backup:
+    image: lifeos-backup:latest
   mcp:
     image: lifeos-mcp:latest
   processor:

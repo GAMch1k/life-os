@@ -30,6 +30,21 @@ export LIFE_OS_NTFY_TOPIC=verify LIFE_OS_NTFY_PUBLISHER_TOKEN= LIFE_OS_NTFY_PUBL
 # the verification stack never talks to a bank (compose.verify.yaml also
 # blanks them and points banking at an address that resolves nowhere).
 export LIFE_OS_ENABLE_BANKING_APP_ID= LIFE_OS_ENABLE_BANKING_KEY_FILE= LIFE_OS_BANKING_TOKEN_KEY=
+# Nor the owner's backups: the backup service writes to a scratch directory
+# of the verification stack's own (LIFE_OS_VERIFY_BACKUP_DIR, by default under
+# TMPDIR), never to LIFE_OS_BACKUP_DIR from .env, and the plan is refused with
+# the owner's backup directory.
+owner_backup_dir() {
+  local value
+  value=$(sed -n 's/^LIFE_OS_BACKUP_DIR=//p' .env 2>/dev/null | tail -n 1)
+  value=${value#[\"\']}; value=${value%[\"\']}
+  value=${value/#\~/${HOME:-}}
+  value=${value//'${HOME}'/${HOME:-}}; value=${value//'$HOME'/${HOME:-}}
+  printf '%s' "$value"
+}
+live_backup_dir=$(owner_backup_dir)
+export LIFE_OS_BACKUP_DIR="${LIFE_OS_VERIFY_BACKUP_DIR:-${TMPDIR:-/tmp}/lifeos-verify-backups}"
+mkdir -p -m 700 "$LIFE_OS_BACKUP_DIR"
 # A smoke may add overlays (colon-separated paths); the isolation check below
 # still applies to the merged plan.
 if [[ -n "${LIFE_OS_VERIFY_OVERLAYS:-}" ]]; then
@@ -63,6 +78,18 @@ require_isolated_resources() {
     echo "verify-compose: refusing a plan with a ZAW feed URL: it would import the owner's real waste calendar" >&2
     exit 2
   fi
+  local backup_source owner_dir
+  while IFS= read -r backup_source; do
+    backup_source=$(realpath -m -- "$backup_source")
+    for owner_dir in "${HOME:-}/life-os.backups" "$live_backup_dir"; do
+      [[ -n "$owner_dir" && "$owner_dir" != /life-os.backups ]] || continue
+      owner_dir=$(realpath -m -- "$owner_dir")
+      if [[ "$backup_source" == "$owner_dir" || "$backup_source" == "$owner_dir"/* || "$owner_dir" == "$backup_source"/* ]]; then
+        printf "verify-compose: refusing a plan whose backup service writes to the owner's backups: %s\n" "$backup_source" >&2
+        exit 2
+      fi
+    done
+  done < <(jq -r '.services.backup.volumes[]? | select(.type == "bind" and (.read_only // false | not)) | .source' <<<"$config")
   while IFS= read -r volume; do
     [[ "$volume" == lifeos-verify-* ]] || {
       printf 'verify-compose: refusing shared verification volume: %s\n' "$volume" >&2

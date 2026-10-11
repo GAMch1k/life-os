@@ -1,0 +1,239 @@
+openapi: 3.0.3
+info:
+  title: Life OS Backup API
+  version: 1.0.0
+  description: >-
+    Backups of every service database. Each night at the configured time
+    (`BACKUP_TIME` in `LIFE_OS_TIMEZONE`, 03:15 by default) the backup
+    service dumps every database named in the database registry
+    (`infra/postgres/service-databases.conf`) with `pg_dump`, one consistent
+    snapshot per database, into one run directory with a manifest. Old runs
+    are rotated (daily, weekly, and monthly runs are kept). The service has no
+    gateway route; the Dashboard reaches it on the private network.
+
+
+    A run is identified by its start time in UTC, such as `20261011T031500Z`,
+    which is also its directory name. A run `succeeded` when every database it
+    covered was dumped and checked, and `failed` when at least one was not:
+    one database failing does not stop the others, and the dumps that worked
+    are kept. A run that stopped before it finished (the service shut down or
+    crashed) is `interrupted`; it leaves no files.
+
+
+    Every write (POST) must say who makes it in the X-Life-OS-Actor header:
+    `user` (the owner), `agent:<name>` (the Life OS AI), `system:<name>` (a
+    Life OS component), or `dev:<name>` (a development tool or agent working
+    on Life OS, such as Claude Code). Names are 1-64 letters, digits, '.',
+    '_', or '-'. A write without a valid actor is rejected with 400 and error
+    code `actor_required`. Reads do not need the header.
+
+
+    Errors use the shared envelope `{"error": {"code", "message"},
+    "request_id"}`: `bad_request` (400, invalid input), `actor_required`
+    (400), `backup_running` (409, a run is in progress), `unknown_database`
+    (422, a name that is not in the registry), and `internal_error` (500).
+  license: {name: UNLICENSED, url: https://life-os.local/license}
+servers: [{url: http://backup:8080}]
+paths:
+  /v1/status:
+    get:
+      summary: Get the backup status
+      description: >-
+        The latest run and the latest successful full run, the run in
+        progress, when the next run is due, the size of the backups and the
+        free space where they are stored, and the retention settings. The
+        latest run includes runs that left no files (interrupted, or failed
+        before any database), which the service records so they survive a
+        restart.
+      operationId: getBackupStatus
+      security: []
+      responses:
+        '200': {description: Backup status, content: {application/json: {schema: {$ref: '#/components/schemas/BackupStatus'}}}}
+        '400': {description: Invalid request, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '500': {description: The backup directory could not be read (internal_error), content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  /v1/backups:
+    get:
+      summary: List backup runs
+      description: >-
+        The completed runs kept on disk, newest first (by id, which is the
+        start time), each with its manifest summarised. When more runs exist
+        than `limit`, `nextCursor` is set: pass it back as `cursor` for the
+        next page. A response without `nextCursor` is the last page.
+      operationId: listBackups
+      security: []
+      parameters:
+        - {name: cursor, in: query, description: The previous page's nextCursor., schema: {type: string, pattern: '^[0-9]{8}T[0-9]{6}Z$'}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}
+      responses:
+        '200': {description: Backup runs, content: {application/json: {schema: {$ref: '#/components/schemas/BackupList'}}}}
+        '400': {description: 'Invalid request, such as a malformed cursor (bad_request)', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '500': {description: The backup directory could not be read (internal_error), content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    post:
+      summary: Run a backup now
+      description: >-
+        Starts a run of every database in the registry, or with `databases`
+        only of those named (service or database names, such as `finance` or
+        `tasks_db`). The answer is 202 with the run in progress. With
+        `waitSeconds`, the request waits up to that long for the run to
+        finish and then answers 200 with the finished run, or still 202 when
+        it has not finished; the run goes on either way. A run of only some
+        databases (scope `subset`) never stands in for the nightly run: it
+        is not considered when deciding on a catch-up and never takes a
+        daily, weekly, or monthly place in the rotation. Only one run is in
+        progress at a time: while one is, the answer is 409.
+      operationId: createBackup
+      security: []
+      parameters:
+        - {name: waitSeconds, in: query, description: How long to wait for the run to finish. 0 answers at once., schema: {type: integer, minimum: 0, maximum: 3600, default: 0}}
+      requestBody: {required: false, content: {application/json: {schema: {$ref: '#/components/schemas/BackupCreateRequest'}}}}
+      responses:
+        '200': {description: The run finished within waitSeconds, content: {application/json: {schema: {$ref: '#/components/schemas/BackupRun'}}}}
+        '202': {description: The run started and is in progress, content: {application/json: {schema: {$ref: '#/components/schemas/BackupProgress'}}}}
+        '400': {description: 'Invalid request (bad_request), or no valid X-Life-OS-Actor (actor_required)', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '409': {description: A run is already in progress (backup_running), content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '422': {description: A named database is not in the registry (unknown_database), content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '500': {description: 'The run could not start, for example because the registry could not be read (internal_error)', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+components:
+  schemas:
+    BackupTrigger:
+      type: string
+      description: >-
+        schedule = the nightly run; catch-up = run at start because the last
+        nightly run was missed; manual = asked for through POST /v1/backups
+        (the Dashboard or tools/backup-now).
+      enum: [schedule, catch-up, manual]
+    BackupScope:
+      type: string
+      description: all = every database in the registry; subset = only the databases a manual run named.
+      enum: [all, subset]
+    BackupResult:
+      type: string
+      description: >-
+        succeeded = every database was dumped and checked; failed = at least
+        one was not (the others are kept), or the run could not start;
+        interrupted = the run stopped before it finished and left no files.
+      enum: [succeeded, failed, interrupted]
+    BackupDatabaseResult:
+      type: string
+      enum: [succeeded, failed]
+    BackupMigration:
+      type: object
+      description: The database's golang-migrate state (its schema_migrations row) in the dumped snapshot.
+      required: [version, dirty]
+      properties:
+        version: {type: integer, format: int64}
+        dirty: {type: boolean, description: True when a migration failed half-way and the schema needs repair.}
+    BackupDatabase:
+      type: object
+      description: One database of a run. The manifest file in the run directory also has the row count of each table.
+      required: [service, name, result, bytes, tables, rows]
+      properties:
+        service: {type: string, description: 'The owning service, such as finance.'}
+        name: {type: string, description: 'The database, such as finance_db.'}
+        result: {$ref: '#/components/schemas/BackupDatabaseResult'}
+        file: {type: string, description: 'The dump file in the run directory, such as finance_db.dump (pg_dump custom format). Absent when the database failed.'}
+        bytes: {type: integer, format: int64, minimum: 0, description: Size of the dump file; 0 when the database failed.}
+        sha256: {type: string, description: 'SHA-256 of the dump file, in hex.'}
+        tables: {type: integer, minimum: 0, description: User tables counted in the snapshot.}
+        rows: {type: integer, format: int64, minimum: 0, description: Rows in those tables in the snapshot.}
+        migration: {$ref: '#/components/schemas/BackupMigration'}
+        error: {type: string, description: Why the database failed.}
+    BackupRun:
+      type: object
+      description: One finished run.
+      required: [id, trigger, scope, result, startedAt, finishedAt, durationSeconds, totalBytes, databases]
+      properties:
+        id: {type: string, pattern: '^[0-9]{8}T[0-9]{6}Z$', description: 'The run id: its start time in UTC and the name of its directory.'}
+        trigger: {$ref: '#/components/schemas/BackupTrigger'}
+        scope: {$ref: '#/components/schemas/BackupScope'}
+        result: {$ref: '#/components/schemas/BackupResult'}
+        actor: {type: string, description: 'Who asked for a manual run, such as user or dev:backup-now.'}
+        startedAt: {type: string, format: date-time}
+        finishedAt: {type: string, format: date-time}
+        durationSeconds: {type: number, format: double, minimum: 0}
+        serverVersion: {type: string, description: 'The PostgreSQL server version, such as 18.6.'}
+        totalBytes: {type: integer, format: int64, minimum: 0, description: Size of the run's dump files.}
+        databases: {type: array, items: {$ref: '#/components/schemas/BackupDatabase'}}
+        error: {type: string, description: 'What went wrong, for a failed or interrupted run.'}
+    BackupProgress:
+      type: object
+      description: The run in progress.
+      required: [id, trigger, scope, startedAt, databases, completed]
+      properties:
+        id: {type: string, pattern: '^[0-9]{8}T[0-9]{6}Z$'}
+        trigger: {$ref: '#/components/schemas/BackupTrigger'}
+        scope: {$ref: '#/components/schemas/BackupScope'}
+        actor: {type: string}
+        startedAt: {type: string, format: date-time}
+        databases: {type: array, items: {type: string}, description: 'The databases this run covers, in order.'}
+        completed: {type: integer, minimum: 0, description: How many of them are done.}
+        current: {type: string, description: The database being dumped now.}
+    BackupSchedule:
+      type: object
+      required: [time, timeZone, nextRunAt, nextTrigger]
+      properties:
+        time: {type: string, pattern: '^[0-9]{2}:[0-9]{2}$', description: 'The nightly run, HH:MM in timeZone.'}
+        timeZone: {type: string, description: 'IANA timezone, such as Europe/Berlin.'}
+        nextRunAt: {type: string, format: date-time, description: When the next run is due.}
+        nextTrigger: {$ref: '#/components/schemas/BackupTrigger'}
+    BackupRetention:
+      type: object
+      description: >-
+        How many successful full runs the rotation keeps: the newest of each
+        of the last `daily` days, `weekly` ISO weeks, and `monthly` months
+        that have one (days, weeks, and months in the schedule's timezone).
+        The newest successful run is always kept. Failed runs, and runs of
+        only some databases, are deleted after `failedDays` and `daily` days.
+      required: [daily, weekly, monthly, failedDays]
+      properties:
+        daily: {type: integer, minimum: 1}
+        weekly: {type: integer, minimum: 0}
+        monthly: {type: integer, minimum: 0}
+        failedDays: {type: integer, minimum: 1}
+    BackupStorage:
+      type: object
+      description: The backup directory and the file system it is on.
+      required: [runs, totalBytes, freeBytes, sizeBytes]
+      properties:
+        runs: {type: integer, minimum: 0, description: Completed runs kept.}
+        totalBytes: {type: integer, format: int64, minimum: 0, description: Size of everything the service keeps (its auto/ directory).}
+        freeBytes: {type: integer, format: int64, minimum: 0, description: Space left for the service on the file system.}
+        sizeBytes: {type: integer, format: int64, minimum: 0, description: Size of the file system.}
+    BackupStatus:
+      type: object
+      required: [schedule, retention, storage, databases]
+      properties:
+        lastRun: {$ref: '#/components/schemas/BackupRun'}
+        lastSuccess: {$ref: '#/components/schemas/BackupRun'}
+        running: {$ref: '#/components/schemas/BackupProgress'}
+        schedule: {$ref: '#/components/schemas/BackupSchedule'}
+        retention: {$ref: '#/components/schemas/BackupRetention'}
+        storage: {$ref: '#/components/schemas/BackupStorage'}
+        databases: {type: array, items: {type: string}, description: 'The databases in the registry now, in order.'}
+        databasesError: {type: string, description: Why the registry could not be read; databases is then empty.}
+    BackupList:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/BackupRun'}}
+        nextCursor: {type: string, nullable: true, description: Set when more runs exist; pass it as cursor for the next page.}
+    BackupCreateRequest:
+      type: object
+      properties:
+        databases:
+          type: array
+          minItems: 1
+          maxItems: 100
+          description: Only these databases, by service or database name. Omit for every database.
+          items: {type: string, minLength: 1, maxLength: 63, pattern: '^[a-z][a-z0-9_-]*$'}
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: {type: string, description: 'Machine-readable code, such as bad_request, actor_required, backup_running, or unknown_database.'}
+            message: {type: string}
+        request_id: {type: string}
