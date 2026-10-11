@@ -84,6 +84,34 @@ func (q *Queries) CreateTask(ctx context.Context, arg CreateTaskParams) (Task, e
 	return i, err
 }
 
+const deleteTask = `-- name: DeleteTask :one
+DELETE FROM tasks WHERE id = $1
+RETURNING id, title, notes, due_at, completed_at, recurrence_frequency, recurrence_interval, recurrence_until, created_at, updated_at, automation_idempotency_key, automation_payload_hash
+`
+
+// Removes the Task, a recurring one with its whole series, and returns it
+// for the activity event. Nothing references a Task: notification log rows
+// name it only inside their dedupe key and are pruned on their own.
+func (q *Queries) DeleteTask(ctx context.Context, id pgtype.UUID) (Task, error) {
+	row := q.db.QueryRow(ctx, deleteTask, id)
+	var i Task
+	err := row.Scan(
+		&i.ID,
+		&i.Title,
+		&i.Notes,
+		&i.DueAt,
+		&i.CompletedAt,
+		&i.RecurrenceFrequency,
+		&i.RecurrenceInterval,
+		&i.RecurrenceUntil,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.AutomationIdempotencyKey,
+		&i.AutomationPayloadHash,
+	)
+	return i, err
+}
+
 const getTask = `-- name: GetTask :one
 SELECT id, title, notes, due_at, completed_at, recurrence_frequency, recurrence_interval, recurrence_until, created_at, updated_at, automation_idempotency_key, automation_payload_hash FROM tasks WHERE id = $1
 `

@@ -36,7 +36,11 @@ export interface paths {
         get: operations["getTask"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete a task
+         * @description Removes the Task permanently, open or completed; a recurring Task is one Task, so its whole series goes. Complete it instead to keep it as history. A deleted Task is in no listing, search, or notification from then on; Activity keeps its `task.deleted` event with the title. Deleting is a deliberate Dashboard action: MCP has no tool for it.
+         */
+        delete: operations["deleteTask"];
         options?: never;
         head?: never;
         /** Update a task */
@@ -291,6 +295,40 @@ export interface operations {
                 };
             };
             /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Task not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    deleteTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                taskId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Task deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid request, or no valid X-Life-OS-Actor (actor_required) */
             400: {
                 headers: {
                     [name: string]: unknown;

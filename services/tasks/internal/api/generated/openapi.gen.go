@@ -168,6 +168,9 @@ type ServerInterface interface {
 	// CreateTask Create a task
 	// (POST /v1/tasks)
 	CreateTask(c fiber.Ctx) error
+	// DeleteTask Delete a task
+	// (DELETE /v1/tasks/{taskId})
+	DeleteTask(c fiber.Ctx, taskId openapi_types.UUID) error
 	// GetTask Get a task
 	// (GET /v1/tasks/{taskId})
 	GetTask(c fiber.Ctx, taskId openapi_types.UUID) error
@@ -293,6 +296,35 @@ func (siw *ServerInterfaceWrapper) CreateTask(c fiber.Ctx) error {
 
 	handler := func(c fiber.Ctx) error {
 		return siw.Handler.CreateTask(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// DeleteTask operation middleware
+func (siw *ServerInterfaceWrapper) DeleteTask(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "taskId" -------------
+	var taskId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "taskId", c.Params("taskId"), &taskId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter taskId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.DeleteTask(c, taskId)
 	}
 
 	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
@@ -448,6 +480,8 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	router.Get(options.BaseURL+"/v1/tasks", wrapper.ListTasks)
 
 	router.Post(options.BaseURL+"/v1/tasks", wrapper.CreateTask)
+
+	router.Delete(options.BaseURL+"/v1/tasks/:taskId", wrapper.DeleteTask)
 
 	router.Get(options.BaseURL+"/v1/tasks/:taskId", wrapper.GetTask)
 

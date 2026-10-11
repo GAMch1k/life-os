@@ -329,6 +329,20 @@ test("calendar event changes read with the event's title", () => {
   }
 });
 
+test("a deleted Task reads with its title, other Task changes as before", () => {
+  assert.equal(
+    eventLabel({ type: "task.deleted", data: { title: "Pay rent" } }),
+    "Task deleted: Pay rent",
+  );
+  // The Event filter lists the plain label.
+  assert.ok(EVENT_TYPES.includes("task.deleted"));
+  assert.equal(eventLabel({ type: "task.deleted", data: {} }), "Task deleted");
+  assert.equal(
+    eventLabel({ type: "task.completed", data: { title: "Pay rent" } }),
+    "Task completed",
+  );
+});
+
 test("a source refresh reads as what it changed", () => {
   const refreshed = (data: Record<string, unknown>) =>
     eventLabel({

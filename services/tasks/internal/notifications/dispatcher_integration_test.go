@@ -234,6 +234,13 @@ func (h *harness) update(id string, body map[string]any) {
 	h.task(http.MethodPatch, "/v1/tasks/"+id, body, http.StatusOK)
 }
 
+func (h *harness) delete(id string) {
+	h.t.Helper()
+	if status, raw := h.do(http.MethodDelete, "/v1/tasks/"+id, nil); status != http.StatusNoContent {
+		h.t.Fatalf("delete %s: %d %s", id, status, raw)
+	}
+}
+
 // runAt runs the dispatcher at the given instant, which must succeed.
 func (h *harness) runAt(at string) Result {
 	h.t.Helper()
@@ -447,6 +454,44 @@ func TestCompletingOrChangingATaskTakesEffectOnTheNextRun(t *testing.T) {
 	h.update(gift, map[string]any{"dueAt": "2026-10-11T00:00:00+02:00"})
 	h.runAt("2026-10-10T19:00:10+02:00")
 	h.expectSent("Tasks for tomorrow: Buy gift")
+}
+
+// A deleted Task is gone from every later message: its reminder is not sent,
+// and the summary, morning, and evening lists leave it out, also a recurring
+// one.
+func TestDeletedTasksAreNeverNamedAgain(t *testing.T) {
+	h := newHarness(t, DefaultSchedule())
+	rent := h.create("Pay rent", "2026-10-06T00:00:00+02:00") // overdue
+	call := h.create("Call mom", "2026-10-10T15:00:00+02:00") // timed today, reminded at 14:30
+	h.create("Renew passport", "2026-10-10T00:00:00+02:00")   // date-only today, kept
+	gift := h.create("Buy gift", "2026-10-11T00:00:00+02:00") // date-only tomorrow
+	plants := h.task(http.MethodPost, "/v1/tasks", map[string]any{
+		"title": "Water plants", "dueAt": "2026-10-11T00:00:00+02:00",
+		"recurrence": map[string]any{"frequency": "weekly", "interval": 1},
+	}, http.StatusCreated).Id.String()
+	h.runAt("2026-10-10T07:00:00+02:00")
+	h.runAt("2026-10-10T08:00:10+02:00")
+	h.expectSent("Your day: Tasks: Renew passport · 15:00 Call mom\nOverdue: Pay rent (since Tue 6 Oct)")
+
+	// Deleted after the summary named them: the morning list leaves them out,
+	// and the timed one is not reminded.
+	h.delete(rent)
+	h.delete(call)
+	h.runAt("2026-10-10T09:00:10+02:00")
+	h.expectSent("Tasks for today: Today: Renew passport")
+	h.runAt("2026-10-10T14:29:40+02:00")
+	if result := h.runAt("2026-10-10T14:30:10+02:00"); result.Handled != 0 {
+		t.Fatalf("reminder run = %+v", result)
+	}
+	h.expectSent()
+
+	// Nothing left for tomorrow: the evening list is not sent.
+	h.delete(gift)
+	h.delete(plants)
+	if result := h.runAt("2026-10-10T19:00:10+02:00"); result.Empty != 1 || result.Sent != 0 {
+		t.Fatalf("evening = %+v", result)
+	}
+	h.expectSent()
 }
 
 func TestNotificationsDueWhileDownAreSentLateOrRecordedAsMissed(t *testing.T) {
