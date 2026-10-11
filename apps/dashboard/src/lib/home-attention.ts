@@ -1,5 +1,6 @@
 import { calendarClient } from "@/lib/api/calendar-client";
 import { financeClient } from "@/lib/api/finance-client";
+import { foodClient } from "@/lib/api/food-client";
 import type { components as CalendarComponents } from "@/lib/api/generated/calendar";
 import { inboxClient } from "@/lib/api/inbox-client";
 import { tasksClient } from "@/lib/api/tasks-client";
@@ -17,6 +18,12 @@ import {
 } from "@/lib/finance-subscriptions";
 import { currentMonth } from "@/lib/finance-summary";
 import type { Account } from "@/lib/finance-workspace";
+import {
+  type HomeFood,
+  type PantryItem,
+  type ShoppingItem,
+  homeFood,
+} from "@/lib/food";
 import type { InboxItem } from "@/lib/inbox-summary";
 import type { Task } from "@/lib/tasks-summary";
 import {
@@ -63,6 +70,11 @@ export type HomeAttention = {
    * days, soonest first; null when Finance could not be read.
    */
   renewals: { items: HomeRenewal[]; more: boolean } | null;
+  /**
+   * The shopping list's size and food expiring today or tomorrow; null when
+   * there is nothing to say or Food could not be read.
+   */
+  food: HomeFood | null;
 };
 
 export const HOME_LIST_LIMIT = 100;
@@ -74,6 +86,14 @@ export const NEXT_EVENT_PAGES = 3;
 export const UNSCHEDULED_PREVIEW = 3;
 /** Human Review previews fetched; the true count comes from the backlog. */
 export const REVIEW_LIMIT = 10;
+/** Shopping items read to count the list; more shows as "200+". */
+export const FOOD_LIST_LIMIT = 200;
+/**
+ * Days ahead Home asks Food for expiring food. Food counts days in its own
+ * zone, so one day more covers a browser zone ahead of it; Home then keeps
+ * today and tomorrow in the owner's zone.
+ */
+export const FOOD_EXPIRY_DAYS = 2;
 
 /**
  * The owner's current day: its first instant and its last millisecond, in
@@ -161,6 +181,10 @@ export function toHomeAttention(
     accounts?: ListResult<Account>;
     /** Finance's confirmed subscriptions. */
     subscriptions?: { data?: SubscriptionList };
+    /** Food's needed shopping items. */
+    shopping?: ListResult<ShoppingItem>;
+    /** Food's in-stock items expiring soon. */
+    pantry?: ListResult<PantryItem>;
   },
   now: Date,
   timeZone: string = DEFAULT_TIME_ZONE,
@@ -174,6 +198,8 @@ export function toHomeAttention(
     budget,
     accounts,
     subscriptions,
+    shopping,
+    pantry,
   } = results;
   const { start } = ownerToday(now, timeZone);
   const isOverdue = (task: Task) =>
@@ -225,6 +251,9 @@ export function toHomeAttention(
     renewals: subscriptions?.data
       ? homeRenewals(subscriptions.data, dayKey(now, timeZone))
       : null,
+    food: shopping?.data
+      ? homeFood(shopping.data, pantry?.data, dayKey(now, timeZone))
+      : null,
   };
 }
 
@@ -271,47 +300,73 @@ async function upcomingEvents(
 export async function getHomeAttention(): Promise<HomeAttention> {
   const now = new Date();
   const timeZone = await userTimeZone();
-  const [review, urgent, open, events, budget, accounts, subscriptions] =
-    await Promise.all([
-      unavailableOnFailure(
-        inboxClient.GET("/v1/inbox-items", {
-          params: { query: { state: "human_review", limit: REVIEW_LIMIT } },
-        }),
-      ),
-      // Tasks are ordered by due date, so overdue work comes first.
-      unavailableOnFailure(
-        tasksClient.GET("/v1/tasks", {
-          params: {
-            query: {
-              completed: false,
-              dueBefore: ownerToday(now, timeZone).end.toISOString(),
-              includeUndated: false,
-              limit: HOME_LIST_LIMIT,
-            },
+  const [
+    review,
+    urgent,
+    open,
+    events,
+    budget,
+    accounts,
+    subscriptions,
+    shopping,
+    pantry,
+  ] = await Promise.all([
+    unavailableOnFailure(
+      inboxClient.GET("/v1/inbox-items", {
+        params: { query: { state: "human_review", limit: REVIEW_LIMIT } },
+      }),
+    ),
+    // Tasks are ordered by due date, so overdue work comes first.
+    unavailableOnFailure(
+      tasksClient.GET("/v1/tasks", {
+        params: {
+          query: {
+            completed: false,
+            dueBefore: ownerToday(now, timeZone).end.toISOString(),
+            includeUndated: false,
+            limit: HOME_LIST_LIMIT,
           },
-        }),
-      ),
-      // Only undated Tasks, so any number of dated ones cannot crowd them out.
-      unavailableOnFailure(
-        tasksClient.GET("/v1/tasks", {
-          params: {
-            query: { completed: false, undated: true, limit: HOME_LIST_LIMIT },
+        },
+      }),
+    ),
+    // Only undated Tasks, so any number of dated ones cannot crowd them out.
+    unavailableOnFailure(
+      tasksClient.GET("/v1/tasks", {
+        params: {
+          query: { completed: false, undated: true, limit: HOME_LIST_LIMIT },
+        },
+      }),
+    ),
+    unavailableOnFailure(upcomingEvents(now, timeZone)),
+    // The month's budget in the owner's timezone; Finance down is null.
+    financeClient
+      .GET("/v1/budgets/{month}", {
+        params: { path: { month: currentMonth(now, timeZone) } },
+      })
+      .catch(() => ({ data: undefined })),
+    // Low balances and upcoming renewals; Finance down is null.
+    unavailableOnFailure(financeClient.GET("/v1/accounts")),
+    financeClient
+      .GET("/v1/subscriptions", { params: { query: { state: "confirmed" } } })
+      .catch(() => ({ data: undefined })),
+    // The shopping list's size and food about to expire; Food down is null.
+    unavailableOnFailure(
+      foodClient.GET("/v1/shopping-items", {
+        params: { query: { state: "needed", limit: FOOD_LIST_LIMIT } },
+      }),
+    ),
+    unavailableOnFailure(
+      foodClient.GET("/v1/pantry-items", {
+        params: {
+          query: {
+            state: "in_stock",
+            expiringWithinDays: FOOD_EXPIRY_DAYS,
+            limit: FOOD_LIST_LIMIT,
           },
-        }),
-      ),
-      unavailableOnFailure(upcomingEvents(now, timeZone)),
-      // The month's budget in the owner's timezone; Finance down is null.
-      financeClient
-        .GET("/v1/budgets/{month}", {
-          params: { path: { month: currentMonth(now, timeZone) } },
-        })
-        .catch(() => ({ data: undefined })),
-      // Low balances and upcoming renewals; Finance down is null.
-      unavailableOnFailure(financeClient.GET("/v1/accounts")),
-      financeClient
-        .GET("/v1/subscriptions", { params: { query: { state: "confirmed" } } })
-        .catch(() => ({ data: undefined })),
-    ]);
+        },
+      }),
+    ),
+  ]);
   // An imported event is labelled with its source's name, which an
   // integration's event carries itself.
   const next = events.data
@@ -322,7 +377,18 @@ export async function getHomeAttention(): Promise<HomeAttention> {
       ? await unavailableOnFailure(calendarClient.GET("/v1/sources"))
       : undefined;
   return toHomeAttention(
-    { review, urgent, open, events, sources, budget, accounts, subscriptions },
+    {
+      review,
+      urgent,
+      open,
+      events,
+      sources,
+      budget,
+      accounts,
+      subscriptions,
+      shopping,
+      pantry,
+    },
     now,
     timeZone,
   );

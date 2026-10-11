@@ -1,5 +1,6 @@
 import { activityClient } from "@/lib/api/activity-client";
 import type { components } from "@/lib/api/generated/activity";
+import { aisleLabel } from "@/lib/food";
 import { addDays, DATE_LOCALE, dayKey, startOfDay } from "@/lib/time-zone";
 
 // The Event Log is a read-only view over the Activity API. Everything here is
@@ -31,6 +32,9 @@ export const GOOGLE_CALENDAR_DESCRIPTION =
 export const BANKING_DESCRIPTION =
   "The bank connection: connecting, disconnecting, each sync into Finance that changed something (counts only, never transaction details), failed syncs, and the consent's expiry.";
 
+export const FOOD_DESCRIPTION =
+  "The shopping list, its stores and aisle rules, and the pantry: items added, merged, bought, changed, or removed, by you or the AI.";
+
 export const SOURCES: readonly {
   value: string;
   label: string;
@@ -61,6 +65,7 @@ export const SOURCES: readonly {
     label: "Google Calendar",
     description: GOOGLE_CALENDAR_DESCRIPTION,
   },
+  { value: "food", label: "Food", description: FOOD_DESCRIPTION },
 ];
 
 export const SUBJECT_TYPES = [
@@ -75,6 +80,11 @@ export const SUBJECT_TYPES = [
   { value: "notification", label: "Notification" },
   { value: "bank_connection", label: "Bank connection" },
   { value: "bank_consent", label: "Bank consent" },
+  { value: "food_shopping_item", label: "Shopping item" },
+  { value: "food_shopping_list", label: "Shopping list" },
+  { value: "food_store", label: "Store" },
+  { value: "food_aisle_rule", label: "Aisle rule" },
+  { value: "food_pantry_item", label: "Pantry item" },
 ] as const;
 
 const EVENT_LABELS: Record<string, string> = {
@@ -123,6 +133,25 @@ const EVENT_LABELS: Record<string, string> = {
   "banking.consent.expiring": "Bank access expiring",
   "banking.consent.expired": "Bank access expired",
   "banking.consent.failed": "Bank consent failed",
+  "food.shopping_item.added": "Added to the shopping list",
+  "food.shopping_item.merged": "Already on the shopping list",
+  "food.shopping_item.updated": "Shopping item updated",
+  "food.shopping_item.bought": "Bought",
+  "food.shopping_item.reopened": "Needed again",
+  "food.shopping_item.deleted": "Removed from the shopping list",
+  "food.shopping_items.cleared": "Bought items cleared",
+  "food.store.created": "Store created",
+  "food.store.updated": "Store updated",
+  "food.store.archived": "Store archived",
+  "food.store.restored": "Store restored",
+  "food.aisle_rule.created": "Aisle rule created",
+  "food.aisle_rule.deleted": "Aisle rule deleted",
+  "food.pantry_item.added": "Added to the pantry",
+  "food.pantry_item.updated": "Pantry item updated",
+  "food.pantry_item.used_up": "Used up",
+  "food.pantry_item.thrown_away": "Thrown away",
+  "food.pantry_item.restocked": "Back in stock",
+  "food.pantry_item.deleted": "Pantry item deleted",
 };
 
 export const EVENT_TYPES = Object.keys(EVENT_LABELS);
@@ -234,6 +263,19 @@ export function eventLabel(event: Pick<ActivityEvent, "type" | "data">) {
   }
   if (event.type.startsWith("banking.") && institution) {
     return `${label}: ${institution}`;
+  }
+  // Food entries by the item's or store's name, a rule by its keyword and
+  // aisle, and clearing by how many items went.
+  if (event.type.startsWith("food.")) {
+    const name = text(event.data?.name);
+    const keyword = text(event.data?.keyword);
+    const aisle = text(event.data?.aisle);
+    const deleted = event.data?.deleted;
+    if (name) return `${label}: ${name}`;
+    if (keyword)
+      return aisle ? `${label}: ${keyword} → ${aisleLabel(aisle)}` : label;
+    if (typeof deleted === "number") return `${label}: ${deleted}`;
+    return label;
   }
   // A notification by its title, and a delivery by the channel it used.
   if (event.type.startsWith("notification.") && title) {

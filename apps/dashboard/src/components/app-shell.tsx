@@ -8,6 +8,7 @@ import {
   Inbox,
   Landmark,
   LayoutDashboard,
+  ShoppingBasket,
   Sparkles,
 } from "lucide-react";
 import Link from "next/link";
@@ -23,6 +24,7 @@ const navigation = [
   { href: "/tasks", label: "Tasks", icon: CheckSquare2 },
   { href: "/inbox", label: "Inbox", icon: Inbox },
   { href: "/calendar", label: "Calendar", icon: CalendarDays },
+  { href: "/food", label: "Food", icon: ShoppingBasket },
   { href: "/activity", label: "Activity", icon: Activity },
   { href: "/status", label: "Status", icon: HeartPulse },
 ] as const;
@@ -62,7 +64,7 @@ export function AppShell({
             Life OS
           </Link>
           {/* The bell is the way to notifications on every page and screen
-              size, so the navigation stays seven items. */}
+              size, so the navigation stays eight items. */}
           <div className="flex items-center gap-1.5">
             <NotificationBell timeZone={timeZone} />
             <ThemeToggle />
@@ -105,16 +107,17 @@ export function AppShell({
 
       <nav
         aria-label="Mobile navigation"
-        className="bg-background/95 supports-[backdrop-filter]:bg-background/85 fixed inset-x-0 bottom-0 z-20 border-t px-1 pt-1 pb-[calc(0.25rem+env(safe-area-inset-bottom))] backdrop-blur md:hidden"
+        className="bg-background/95 supports-[backdrop-filter]:bg-background/85 fixed inset-x-0 bottom-0 z-20 border-t px-0.5 pt-1 pb-[calc(0.25rem+env(safe-area-inset-bottom))] backdrop-blur md:hidden"
       >
-        <div className="mx-auto grid max-w-lg grid-cols-7 gap-0.5">
+        {/* Eight items fit a 360 px screen with every label in full. */}
+        <div className="mx-auto grid max-w-lg grid-cols-8">
           {navigation.map(({ href, icon: Icon, label }) => {
             const current = isCurrent(pathname, href);
             return (
               <Link
                 aria-current={current ? "page" : undefined}
                 className={cn(
-                  "focus-visible:ring-ring flex min-h-12 min-w-0 flex-col items-center justify-center gap-0.5 rounded-md text-[0.625rem] leading-tight font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-inset",
+                  "focus-visible:ring-ring flex min-h-12 min-w-0 flex-col items-center justify-center gap-0.5 rounded-md text-[0.625rem] leading-tight font-medium tracking-tight transition-colors outline-none focus-visible:ring-2 focus-visible:ring-inset",
                   current
                     ? "bg-secondary text-secondary-foreground"
                     : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
