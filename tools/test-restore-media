@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Exercises tools/restore-media against scratch directories only, through
+# its plain-directory mode (RESTORE_MEDIA_DIR): the refusals, then a
+# restore that copies back only the images the target lacks, checks each
+# one's SHA-256, skips a damaged copy, and deletes nothing.
+#
+#   tools/test-restore-media
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$repo_root"
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+fail() {
+  printf 'test-restore-media: %s\n' "$*" >&2
+  exit 1
+}
+restore() { # runs the tool in plain-directory mode; output in $work/out
+  set +e
+  LIFE_OS_BACKUP_DIR=$work/backups RESTORE_MEDIA_DIR=$work/volume tools/restore-media "$@" >"$work/out" 2>&1
+  status=$?
+  set -e
+}
+expect() { # <status> <message> <arguments…>
+  local want=$1 message=$2
+  shift 2
+  restore "$@"
+  [[ "$status" == "$want" ]] || { cat "$work/out"; fail "restore-media $* exited $status, want $want"; }
+  grep -qF -- "$message" "$work/out" || { cat "$work/out"; fail "restore-media $* did not say: $message"; }
+}
+hash_of() { printf '%s' "$1" | sha256sum | cut -d ' ' -f 1; }
+store_file() { # <content>: puts it in the store; prints its hash
+  local hash
+  hash=$(hash_of "$1")
+  mkdir -p "$work/backups/media/${hash:0:2}"
+  printf '%s' "$1" >"$work/backups/media/${hash:0:2}/$hash"
+  printf '%s' "$hash"
+}
+
+printf '==> A backup run with four stored images\n'
+run_id=20261011T011500Z
+mkdir -p "$work/backups/auto/$run_id" "$work/volume"
+letter=$(store_file "a letter")
+receipt=$(store_file "a receipt")
+present=$(store_file "already on the volume")
+damaged=$(store_file "the original bytes")
+printf 'changed' >"$work/backups/media/${damaged:0:2}/$damaged"
+jq -n --arg l "$letter" --arg r "$receipt" --arg p "$present" --arg d "$damaged" \
+  '[$l, $r, $p, $d] | map({sha256: ., bytes: 8})' >"$work/backups/auto/$run_id/media-inbox.json"
+jq -n --arg id "$run_id" '{formatVersion: 1, id: $id, result: "succeeded", scope: "all", databases: [],
+  media: {service: "inbox", database: "inbox_db", list: "media-inbox.json", count: 4, bytes: 32, copied: 4, copiedBytes: 32}}' \
+  >"$work/backups/auto/$run_id/manifest.json"
+printf 'already on the volume' >"$work/volume/$present"
+printf 'not from any backup' >"$work/volume/$(hash_of 'unrelated')"
+mkdir -p "$work/backups/auto/20261010T011500Z"
+jq -n '{id: "20261010T011500Z", result: "succeeded", databases: []}' >"$work/backups/auto/20261010T011500Z/manifest.json"
+
+printf '==> Refusals\n'
+expect 2 'Run again with --confirm' latest
+grep -q 'to copy back: 3' "$work/out" || { cat "$work/out"; fail "the plan does not count the images to copy"; }
+[[ -z "$(find "$work/volume" -name "$letter")" ]] || fail "the plan copied something"
+expect 2 'there is no run 20200101T000000Z' 20200101T000000Z --confirm
+expect 2 'is not a run id' yesterday --confirm
+expect 2 'stored no media' 20261010T011500Z --confirm
+
+printf '==> The restore\n'
+expect 1 'copied 2, damaged 1' "$run_id" --confirm
+grep -q "the stored copy of $damaged is damaged; skipped" "$work/out" || fail "the damaged copy was not named"
+[[ "$(cat "$work/volume/$letter")" == "a letter" && "$(cat "$work/volume/$receipt")" == "a receipt" ]] || fail "the missing images were not copied back"
+[[ "$(stat -c %a "$work/volume/$letter")" == 640 ]] || fail "a copied image is not mode 0640"
+[[ ! -e "$work/volume/$damaged" ]] || fail "a damaged copy reached the volume"
+[[ "$(cat "$work/volume/$present")" == "already on the volume" ]] || fail "an image on the volume was touched"
+[[ -e "$work/volume/$(hash_of 'unrelated')" ]] || fail "a file the run does not list was deleted"
+[[ -z "$(find "$work/volume" -name '.restore-*')" ]] || fail "a partial copy was left behind"
+
+printf '==> Again: nothing left to copy but the damaged one\n'
+rm "$work/backups/media/${damaged:0:2}/$damaged"
+expect 2 'not in the media store, so not copied: 1' "$run_id"
+expect 0 'copied 0, damaged 0' "$run_id" --confirm
+
+printf '\nrestore-media: all checks passed\n'

@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Puts the Inbox capture images a backup run stored back on the inbox-media
+# volume (docs/operations/backups.md):
+#
+#   tools/restore-media <run-id|latest> [--confirm]
+#
+# `latest` is the newest run with a media list. Without --confirm it shows
+# what it would copy and changes nothing. With --confirm it copies each
+# image the volume lacks from the backup directory's media store, checking
+# its SHA-256 first; it never deletes or overwrites a file. An image whose
+# copy in the store is damaged is skipped and named. tools/restore-database
+# inbox runs it after restoring inbox_db.
+#
+# It works on the stack of this checkout (a one-off inbox container, which
+# mounts the volume; RESTORE_COMPOSE names another compose command). For
+# tests, RESTORE_MEDIA_DIR points it at a plain directory instead.
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$repo_root"
+
+refuse() {
+  printf 'restore-media: %s\n' "$*" >&2
+  exit 2
+}
+
+run_arg='' confirm=false
+while (($#)); do
+  case "$1" in
+    --confirm) confirm=true ;;
+    -h | --help)
+      printf 'usage: tools/restore-media <run-id|latest> [--confirm]\n'
+      exit 0
+      ;;
+    -*) refuse "unknown option $1" ;;
+    *) [[ -z "$run_arg" ]] || refuse "too many arguments"; run_arg=$1 ;;
+  esac
+  shift
+done
+[[ -n "$run_arg" ]] || refuse "usage: tools/restore-media <run-id|latest> [--confirm]"
+command -v jq >/dev/null 2>&1 || refuse "jq is required"
+
+plain=false
+[[ -n "${RESTORE_MEDIA_DIR:-}" ]] && plain=true
+read -r -a compose <<<"${RESTORE_COMPOSE:-docker compose}"
+volume_dir=/var/lib/lifeos/inbox-media
+
+backup_dir=${LIFE_OS_BACKUP_DIR:-}
+if [[ -z "$backup_dir" && "$plain" == false ]]; then
+  backup_dir=$(sed -n 's/^LIFE_OS_BACKUP_DIR=//p' .env 2>/dev/null | tail -n 1)
+  backup_dir=${backup_dir#[\"\']}; backup_dir=${backup_dir%[\"\']}
+  backup_dir=${backup_dir/#\~/${HOME:-}}
+  backup_dir=${backup_dir//'${HOME}'/${HOME:-}}; backup_dir=${backup_dir//'$HOME'/${HOME:-}}
+fi
+[[ -n "$backup_dir" ]] || refuse "set LIFE_OS_BACKUP_DIR (in .env, or in the environment)"
+auto="$backup_dir/auto"
+store="$backup_dir/media"
+[[ -d "$auto" ]] || refuse "there are no backup runs: $auto does not exist"
+
+run_pattern='^[0-9]{8}T[0-9]{6}Z$'
+if [[ "$run_arg" == latest ]]; then
+  run_id=''
+  while IFS= read -r candidate; do
+    if jq -e --arg id "$candidate" '.id == $id and (.media.list // "") != ""' "$auto/$candidate/manifest.json" >/dev/null 2>&1; then
+      run_id=$candidate
+      break
+    fi
+  done < <(find "$auto" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | grep -E "$run_pattern" | sort -r)
+  [[ -n "$run_id" ]] || refuse "no run in $auto has a media list"
+else
+  [[ "$run_arg" =~ $run_pattern ]] || refuse "$run_arg is not a run id such as 20261011T011500Z, or latest"
+  run_id=$run_arg
+  [[ -d "$auto/$run_id" ]] || refuse "there is no run $run_id in $auto"
+fi
+manifest="$auto/$run_id/manifest.json"
+jq -e --arg id "$run_id" '.id == $id' "$manifest" >/dev/null 2>&1 ||
+  refuse "the manifest of run $run_id is missing, unreadable, or names another run"
+list_name=$(jq -r '.media.list // ""' "$manifest")
+[[ -n "$list_name" && "$list_name" == "$(basename "$list_name")" ]] || refuse "run $run_id stored no media"
+list="$auto/$run_id/$list_name"
+[[ -r "$list" ]] || refuse "the media list $list is missing"
+
+# What the run stored, and what the volume has already.
+mapfile -t stored < <(jq -r '.[] | select(.sha256 | test("^[0-9a-f]{64}$")) | .sha256' "$list")
+if [[ "$plain" == true ]]; then
+  [[ -d "$RESTORE_MEDIA_DIR" ]] || refuse "$RESTORE_MEDIA_DIR is not a directory"
+  present=$(find "$RESTORE_MEDIA_DIR" -mindepth 1 -maxdepth 1 -type f -printf '%f\n')
+else
+  present=$("${compose[@]}" run --rm --no-deps -T --entrypoint ls inbox -1 "$volume_dir")
+fi
+declare -A on_volume=()
+while IFS= read -r name; do
+  [[ -n "$name" ]] && on_volume[$name]=1
+done <<<"$present"
+missing=()
+for hash in "${stored[@]}"; do
+  [[ -n "${on_volume[$hash]:-}" ]] || missing+=("$hash")
+done
+unavailable=()
+for hash in "${missing[@]}"; do
+  [[ -f "$store/${hash:0:2}/$hash" ]] || unavailable+=("$hash")
+done
+
+printf 'Run %s stored %d Inbox images (%s).\n' "$run_id" "${#stored[@]}" "$list_name"
+printf '  on the volume already: %d\n' "$((${#stored[@]} - ${#missing[@]}))"
+printf '  to copy back: %d\n' "${#missing[@]}"
+if ((${#unavailable[@]})); then
+  printf '  not in the media store, so not copied: %d (%s…)\n' "${#unavailable[@]}" "${unavailable[0]}"
+fi
+if [[ "$confirm" != true ]]; then
+  printf '\nNothing changed. Run again with --confirm to copy them.\n'
+  exit 2
+fi
+if ((${#missing[@]} == 0)); then
+  printf 'Nothing to copy.\n'
+  exit 0
+fi
+
+# Copies each named image the target lacks, after checking its SHA-256: in
+# POSIX sh, so it runs in the inbox image's busybox too. Written aside and
+# renamed, owned like the target directory, mode 0640 as Inbox writes them.
+copy_script='
+set -eu
+owner=$(stat -c "%u:%g" "$DST")
+copied=0 damaged=0
+while read -r hash; do
+  dst="$DST/$hash"
+  [ -e "$dst" ] && continue
+  src="$SRC/$(printf "%s" "$hash" | cut -c1-2)/$hash"
+  [ -f "$src" ] || continue
+  got=$(sha256sum "$src" | cut -d " " -f 1)
+  if [ "$got" != "$hash" ]; then
+    echo "restore-media: the stored copy of $hash is damaged; skipped" >&2
+    damaged=$((damaged + 1))
+    continue
+  fi
+  tmp="$DST/.restore-$hash"
+  cp "$src" "$tmp"
+  chown "$owner" "$tmp"
+  chmod 0640 "$tmp"
+  mv "$tmp" "$dst"
+  copied=$((copied + 1))
+done
+echo "copied $copied, damaged $damaged"
+'
+if [[ "$plain" == true ]]; then
+  result=$(printf '%s\n' "${missing[@]}" | SRC="$store" DST="$RESTORE_MEDIA_DIR" sh -c "$copy_script")
+else
+  # As root, so it can read the backup directory (mode 700) and hand each
+  # file to the volume's owner.
+  result=$(printf '%s\n' "${missing[@]}" | "${compose[@]}" run --rm --no-deps -T --user 0:0 --entrypoint sh \
+    -v "$store:/backup-media:ro" -e SRC=/backup-media -e DST="$volume_dir" inbox -c "$copy_script")
+fi
+printf 'Restored Inbox images from run %s: %s.\n' "$run_id" "$result"
+[[ "$result" == *"damaged 0"* ]] || exit 1

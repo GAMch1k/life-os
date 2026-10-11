@@ -23,7 +23,8 @@ pg_dump_bin=${bin:+$bin/}pg_dump
 pg_restore_bin=${bin:+$bin/}pg_restore
 
 suffix=$(date +%s%N | tail -c 9)
-owner="rt_owner_$suffix" reader="rt_reader_$suffix" database="rt_db_$suffix" service="rt$suffix"
+# The service is inbox, so the restore also copies back the run's images.
+owner="rt_owner_$suffix" reader="rt_reader_$suffix" database="rt_db_$suffix" service="inbox"
 work=$(mktemp -d)
 url_for() { printf '%s/%s' "${admin_url%/*}" "$1"; }
 sql() { "$psql_bin" -X -q -v ON_ERROR_STOP=1 -At -d "$(url_for "${2:-${admin_url##*/}}")" -c "$1"; }
@@ -40,7 +41,7 @@ fail() {
 }
 restore() { # runs the tool in plain-connection mode; output in $work/out
   set +e
-  RESTORE_ADMIN_URL=$admin_url RESTORE_REGISTRY=$work/registry LIFE_OS_BACKUP_DIR=$work/backups \
+  RESTORE_ADMIN_URL=$admin_url RESTORE_REGISTRY=$work/registry LIFE_OS_BACKUP_DIR=$work/backups RESTORE_MEDIA_DIR=$work/volume \
     RESTORE_PSQL=$psql_bin RESTORE_PG_DUMP=$pg_dump_bin RESTORE_PG_RESTORE=$pg_restore_bin \
     RESTORE_SERVICES="$service $service-worker" \
     tools/restore-database "$@" >"$work/out" 2>&1
@@ -80,8 +81,14 @@ mkdir -p "$run_dir"
 "$pg_dump_bin" --format=custom --no-password -d "$(url_for "$database")" >"$run_dir/$database.dump"
 bytes=$(stat -c %s "$run_dir/$database.dump")
 sha=$(sha256sum "$run_dir/$database.dump" | cut -d ' ' -f 1)
+mkdir -p "$work/volume"
+photo=$(printf 'a photo of a letter' | sha256sum | cut -d ' ' -f 1)
+mkdir -p "$work/backups/media/${photo:0:2}"
+printf 'a photo of a letter' >"$work/backups/media/${photo:0:2}/$photo"
+jq -n --arg p "$photo" '[{sha256: $p, bytes: 19}]' >"$run_dir/media-inbox.json"
 jq -n --arg id "$run_id" --arg db "$database" --arg service "$service" --argjson bytes "$bytes" --arg sha "$sha" '{
   formatVersion: 1, id: $id, trigger: "schedule", scope: "all", result: "succeeded",
+  media: {service: "inbox", database: $db, list: "media-inbox.json", count: 1, bytes: 19, copied: 1, copiedBytes: 19},
   startedAt: "2026-10-11T01:15:00Z", finishedAt: "2026-10-11T01:15:02Z", durationSeconds: 2,
   databases: [{service: $service, name: $db, result: "succeeded", file: ($db + ".dump"), bytes: $bytes, sha256: $sha,
     tables: [{schema: "public", name: "notes", rows: 20}, {schema: "public", name: "schema_migrations", rows: 1}, {schema: "public", name: "tags", rows: 2}],
@@ -130,6 +137,8 @@ fresh=$(sed -n 's/^Fresh dump: //p' "$work/out")
 grep -q "(plain connection, not run) docker compose stop $service $service-worker" "$work/out" || fail "the stop step was not shown"
 grep -q "(plain connection, not run) docker compose run --rm --no-deps $service-migrate" "$work/out" || fail "the migrate step was not shown"
 grep -q 'Every table and the migration state (version 3) match the manifest.' "$work/out" || fail "the comparison was not reported"
+[[ "$(cat "$work/volume/$photo" 2>/dev/null)" == "a photo of a letter" ]] || { cat "$work/out"; fail "the run's image was not copied back"; }
+grep -q 'Restored Inbox images from run 20261011T011500Z: copied 1, damaged 0.' "$work/out" || fail "the image restore was not reported"
 
 printf '==> A restore that does not match its manifest stops with the services down\n'
 jq '.databases[0].tables[0].rows = 21' "$run_dir/manifest.json" >"$work/manifest" && mv "$work/manifest" "$run_dir/manifest.json"

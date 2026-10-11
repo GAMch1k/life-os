@@ -21,7 +21,10 @@ set -Eeuo pipefail
 #      admin in one transaction, owners and privileges included;
 #   5. compares every table's row count and the migration state with the
 #      manifest;
-#   6. migrates it to this release (<service>-migrate) and starts again
+#   6. for inbox_db, copies the run's capture images back onto the
+#      inbox-media volume (tools/restore-media: only those it lacks, nothing
+#      deleted);
+#   7. migrates it to this release (<service>-migrate) and starts again
 #      the services that were running before (so a full restore with the
 #      stack stopped starts nothing early).
 #
@@ -215,6 +218,11 @@ fi
 printf '  2. stop: %s\n' "${to_stop[*]:-nothing}"
 printf '  3. drop %s, create it again owned by %s, and restore the dump into it in one transaction\n' "$database" "$role"
 printf '  4. compare every table and the migration state with the manifest\n'
+has_media=false
+if [[ "$service" == inbox ]] && jq -e '(.media.list // "") != ""' "$manifest" >/dev/null 2>&1; then
+  has_media=true
+  printf '     and copy back the %s Inbox images it stored that the volume lacks (tools/restore-media)\n' "$(jq -r '.media.count' "$manifest")"
+fi
 printf '  5. migrate it (%s) and start again what runs now: %s\n' "${migrate_service:-no migration service}" "${to_start[*]:-nothing}"
 if [[ "$confirm" != true ]]; then
   printf '\nNothing changed. Run again with --confirm to restore.\n'
@@ -325,6 +333,16 @@ if [[ "$restored_counts" != "$expected_counts" || "$restored_migration" != "$exp
   false
 fi
 printf 'Every table and the migration state (%s) match the manifest.\n' "$(migration_label "$restored_migration")"
+
+if [[ "$has_media" == true ]]; then
+  step "Copying back the run's Inbox images (only those the volume lacks; nothing is deleted)"
+  if [[ "$plain" == true && -z "${RESTORE_MEDIA_DIR:-}" ]]; then
+    printf '(plain connection, not run) tools/restore-media %s --confirm\n' "$run_id"
+  elif ! LIFE_OS_BACKUP_DIR="$backup_dir" tools/restore-media "$run_id" --confirm; then
+    # The database is restored either way; the images can be retried.
+    printf 'restore-database: some Inbox images were not copied back (see above); retry with tools/restore-media %s --confirm\n' "$run_id" >&2
+  fi
+fi
 
 if [[ -n "$migrate_service" ]]; then
   step "Migrating $database ($migrate_service)"
