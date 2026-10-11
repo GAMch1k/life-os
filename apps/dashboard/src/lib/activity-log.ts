@@ -33,7 +33,7 @@ export const BANKING_DESCRIPTION =
   "The bank connection: connecting, disconnecting, each sync into Finance that changed something (counts only, never transaction details), failed syncs, and the consent's expiry.";
 
 export const FOOD_DESCRIPTION =
-  "The shopping list, its stores and aisle rules, and the pantry: items added, merged, bought, changed, or removed, by you or the AI.";
+  "The shopping list, its stores and aisle rules, and the pantry: items added, merged, bought, put away, changed, or removed, by you or the AI, and expiry reminders Food could not send in time.";
 
 export const SOURCES: readonly {
   value: string;
@@ -85,6 +85,7 @@ export const SUBJECT_TYPES = [
   { value: "food_store", label: "Store" },
   { value: "food_aisle_rule", label: "Aisle rule" },
   { value: "food_pantry_item", label: "Pantry item" },
+  { value: "food_notification", label: "Food reminder" },
 ] as const;
 
 const EVENT_LABELS: Record<string, string> = {
@@ -139,6 +140,7 @@ const EVENT_LABELS: Record<string, string> = {
   "food.shopping_item.bought": "Bought",
   "food.shopping_item.reopened": "Needed again",
   "food.shopping_item.deleted": "Removed from the shopping list",
+  "food.shopping_item.put_away": "Put away",
   "food.shopping_items.cleared": "Bought items cleared",
   "food.store.created": "Store created",
   "food.store.updated": "Store updated",
@@ -152,6 +154,7 @@ const EVENT_LABELS: Record<string, string> = {
   "food.pantry_item.thrown_away": "Thrown away",
   "food.pantry_item.restocked": "Back in stock",
   "food.pantry_item.deleted": "Pantry item deleted",
+  "food.notification.missed": "Expiry reminder missed",
 };
 
 export const EVENT_TYPES = Object.keys(EVENT_LABELS);
