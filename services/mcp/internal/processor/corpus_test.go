@@ -65,6 +65,12 @@ func (t *corpusTools) Call(_ context.Context, name string, args map[string]any) 
 			return json.RawMessage(`{"items":[{"id":"recipe-2","title":"Борщ","normalizedTitle":"борщ"}]}`), nil
 		}
 		return json.RawMessage(`{"items":[]}`), nil
+	case "recipe_import":
+		// recipe-import cannot read Instagram: only a caption gives a recipe.
+		if strings.Contains(args["url"].(string), "instagram.com") && args["caption"] == nil {
+			return json.RawMessage(`{"saved":false,"method":"preview","reason":"Instagram posts can't be read directly: paste the caption to fill in the ingredients and steps."}`), nil
+		}
+		return json.RawMessage(`{"saved":true,"method":"structured","recipeId":"recipe-9"}`), nil
 	default:
 		return json.RawMessage(`{}`), nil
 	}
@@ -283,6 +289,79 @@ func TestMealRoutingCorpusUsesOnlyApprovedMCPTools(t *testing.T) {
 			}
 			if audit := tools.records[len(tools.records)-1]; audit["status"] != "processed" {
 				t.Fatalf("audit=%#v", tools.records)
+			}
+		})
+	}
+}
+
+// recipeLinkPlans plan links the way the plan prompt asks: recipe links to
+// recipe_import (with the caption that came along), other links by the
+// other rules, a bare link without food to the owner.
+var recipeLinkPlans = map[string]string{
+	"Save this recipe: https://www.chefkoch.de/rezepte/1234/Omas-Gulasch.html": `{"actions":[{"tool":"recipe_import","arguments":{"url":"https://www.chefkoch.de/rezepte/1234/Omas-Gulasch.html","saveLink":true}}],"confidence":0.95}`,
+	"https://www.chefkoch.de/rezepte/1234/Omas-Gulasch.html":                   `{"actions":[{"tool":"recipe_import","arguments":{"url":"https://www.chefkoch.de/rezepte/1234/Omas-Gulasch.html"}}],"confidence":0.9}`,
+	"сохрани рецепт https://eda.ru/recepty/supy/borsch-12345":                  `{"actions":[{"tool":"recipe_import","arguments":{"url":"https://eda.ru/recepty/supy/borsch-12345","saveLink":true}}],"confidence":0.95}`,
+	"https://www.instagram.com/reel/DGx7abc/\nShakshuka in 20 Minuten 🍳\nZutaten:\n- 4 Eier\n- 1 Dose Tomaten\nZubereitung:\n1. Tomaten köcheln.\n2. Eier hineinschlagen.": `{"actions":[{"tool":"recipe_import","arguments":{"url":"https://www.instagram.com/reel/DGx7abc/","caption":"Shakshuka in 20 Minuten 🍳\nZutaten:\n- 4 Eier\n- 1 Dose Tomaten\nZubereitung:\n1. Tomaten köcheln.\n2. Eier hineinschlagen."}}],"confidence":0.95}`,
+	"Anna on Instagram\nhttps://www.instagram.com/reel/DGx7abc/":                  `{"actions":[{"tool":"recipe_import","arguments":{"url":"https://www.instagram.com/reel/DGx7abc/"}}],"confidence":0.85}`,
+	"Read later: https://www.spiegel.de/politik/deutschland/wahl-2026-a-123.html": `{"actions":[{"tool":"task_create","arguments":{"title":"Read: https://www.spiegel.de/politik/deutschland/wahl-2026-a-123.html"}}],"confidence":0.9}`,
+	"https://www.spiegel.de/politik/deutschland/wahl-2026-a-123.html":             `{"actions":[],"ambiguous":true,"confidence":0.3,"reason":"What should I do with this link?"}`,
+}
+
+type recipeLinkPlanner struct{}
+
+func (recipeLinkPlanner) Plan(_ context.Context, input string) (string, error) {
+	var item struct {
+		Content string `json:"content"`
+	}
+	_ = json.Unmarshal([]byte(input), &item)
+	if plan, ok := recipeLinkPlans[item.Content]; ok {
+		return plan, nil
+	}
+	return `{"actions":[],"ambiguous":true,"confidence":0.1,"reason":"clarification required"}`, nil
+}
+
+func TestRecipeLinkCorpusUsesOnlyApprovedMCPTools(t *testing.T) {
+	cases := []struct {
+		name, content, tool, review string
+		shared                      bool
+	}{
+		{"chefkoch link to save", "Save this recipe: https://www.chefkoch.de/rezepte/1234/Omas-Gulasch.html", "recipe_import", "", false},
+		{"bare chefkoch link shared", "https://www.chefkoch.de/rezepte/1234/Omas-Gulasch.html", "recipe_import", "", true},
+		{"russian save", "сохрани рецепт https://eda.ru/recepty/supy/borsch-12345", "recipe_import", "", false},
+		{"instagram link with its caption", "https://www.instagram.com/reel/DGx7abc/\nShakshuka in 20 Minuten 🍳\nZutaten:\n- 4 Eier\n- 1 Dose Tomaten\nZubereitung:\n1. Tomaten köcheln.\n2. Eier hineinschlagen.", "recipe_import", "", true},
+		{"bare instagram link shared", "Anna on Instagram\nhttps://www.instagram.com/reel/DGx7abc/", "recipe_import", "Instagram posts can't be read directly: paste the caption to fill in the ingredients and steps.", true},
+		{"news link to read", "Read later: https://www.spiegel.de/politik/deutschland/wahl-2026-a-123.html", "task_create", "", false},
+		{"bare news link", "https://www.spiegel.de/politik/deutschland/wahl-2026-a-123.html", "", "What should I do with this link?", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			metadata := map[string]any{}
+			if tc.shared {
+				metadata = map[string]any{"shared": true, "via": "share-target"}
+			}
+			tools := &corpusTools{item: inboxItem{ID: "item-" + tc.name, Content: tc.content, Source: "web", SourceMetadata: metadata}}
+			if _, err := (Runner{Planner: recipeLinkPlanner{}, Tools: tools, Model: "gpt-5.6-luna"}).Run(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if tc.tool != "" && !contains(tools.calls, tc.tool) {
+				t.Fatalf("%s not called: %#v", tc.tool, tools.calls)
+			}
+			for _, other := range []string{"recipe_import", "task_create", "food_add_shopping_items", "calendar_create"} {
+				if other != tc.tool && contains(tools.calls, other) {
+					t.Fatalf("%s called: %#v", other, tools.calls)
+				}
+			}
+			if tc.review == "" {
+				if !contains(tools.calls, "inbox_resolve") || contains(tools.calls, "inbox_set_human_review") {
+					t.Fatalf("calls = %#v", tools.calls)
+				}
+				if input := tools.inputs["recipe_import"]; tc.tool == "recipe_import" && !strings.HasPrefix(input["idempotencyKey"].(string), "food-") {
+					t.Fatalf("recipe_import input = %#v", input)
+				}
+				return
+			}
+			if contains(tools.calls, "inbox_resolve") || tools.inputs["inbox_set_human_review"]["errorSummary"] != tc.review {
+				t.Fatalf("calls = %#v, review = %#v", tools.calls, tools.inputs["inbox_set_human_review"])
 			}
 		})
 	}
