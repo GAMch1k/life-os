@@ -154,19 +154,25 @@ type PreviewRequest struct {
 
 // Recipe Food's recipe, as Food returned it.
 type Recipe struct {
-	CreatedAt       time.Time          `json:"createdAt"`
-	CreatedBy       Actor              `json:"createdBy"`
-	Id              openapi_types.UUID `json:"id"`
-	Ingredients     []Ingredient       `json:"ingredients"`
-	NormalizedTitle string             `json:"normalizedTitle"`
-	Note            *string            `json:"note"`
-	Servings        *int               `json:"servings"`
-	SourceUrl       *string            `json:"sourceUrl"`
-	Steps           *string            `json:"steps"`
-	Tags            []string           `json:"tags"`
-	Title           string             `json:"title"`
-	UpdatedAt       time.Time          `json:"updatedAt"`
-	UpdatedBy       Actor              `json:"updatedBy"`
+	CreatedAt   time.Time          `json:"createdAt"`
+	CreatedBy   Actor              `json:"createdBy"`
+	Id          openapi_types.UUID `json:"id"`
+	Ingredients []Ingredient       `json:"ingredients"`
+
+	// Methods How it is cooked (Food's `CookingMethod`), passed on from Food.
+	Methods *[]string `json:"methods,omitempty"`
+
+	// MethodsInferred Whether Food inferred the methods.
+	MethodsInferred *bool     `json:"methodsInferred,omitempty"`
+	NormalizedTitle string    `json:"normalizedTitle"`
+	Note            *string   `json:"note"`
+	Servings        *int      `json:"servings"`
+	SourceUrl       *string   `json:"sourceUrl"`
+	Steps           *string   `json:"steps"`
+	Tags            []string  `json:"tags"`
+	Title           string    `json:"title"`
+	UpdatedAt       time.Time `json:"updatedAt"`
+	UpdatedBy       Actor     `json:"updatedBy"`
 }
 
 // RecipeDraft defines model for RecipeDraft.

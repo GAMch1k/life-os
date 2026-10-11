@@ -211,6 +211,8 @@ components:
         ingredients: {type: array, items: {$ref: '#/components/schemas/Ingredient'}}
         steps: {type: string, nullable: true}
         tags: {type: array, items: {type: string}}
+        methods: {type: array, description: 'How it is cooked (Food''s `CookingMethod`), passed on from Food.', items: {type: string}}
+        methodsInferred: {type: boolean, description: Whether Food inferred the methods.}
         sourceUrl: {type: string, nullable: true}
         note: {type: string, nullable: true}
         createdAt: {type: string, format: date-time}
