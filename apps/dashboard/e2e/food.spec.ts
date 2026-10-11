@@ -39,6 +39,13 @@ type PantryItem = {
   fromShoppingItemId: string | null;
 };
 type Store = { id: string; name: string; archived: boolean };
+type Recipe = { id: string; title: string };
+type MealPlanEntry = {
+  date: string;
+  slot: string;
+  title: string;
+  recipeId: string | null;
+};
 
 /** Every item of a Food list, following its cursor. */
 async function all<T>(
@@ -103,8 +110,39 @@ async function addPantry(
   return (await response.json()).items[0];
 }
 
-/** Removes everything the test made: items deleted, stores archived. */
+/** The days `days` before and after the Berlin today (the plan's range). */
+function aroundToday(days: number) {
+  const day = (offset: number) =>
+    new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Berlin" }).format(
+      new Date(Date.now() + offset * 86_400_000),
+    );
+  return { from: day(-days), to: day(days) };
+}
+
+async function mealPlan(request: APIRequestContext, from: string, to: string) {
+  const response = await request.get(`${api}/meal-plan?from=${from}&to=${to}`);
+  expect(response.ok()).toBeTruthy();
+  return (await response.json()).items as MealPlanEntry[];
+}
+
+/**
+ * Removes everything the test made: items, recipes, and planned meals
+ * deleted, stores archived.
+ */
 async function cleanUp(request: APIRequestContext, tag: string) {
+  const { from, to } = aroundToday(15);
+  for (const entry of await mealPlan(request, from, to)) {
+    if (entry.title.includes(tag))
+      await request.delete(`${api}/meal-plan/${entry.date}/${entry.slot}`);
+  }
+  const recipes = (
+    await (
+      await request.get(`${api}/recipes?q=${encodeURIComponent(tag)}`)
+    ).json()
+  ).items as Recipe[];
+  for (const recipe of recipes) {
+    await request.delete(`${api}/recipes/${recipe.id}`);
+  }
   for (const item of await all<ShoppingItem>(request, "shopping-items")) {
     if (item.name.includes(tag))
       await request.delete(`${api}/shopping-items/${item.id}`);
@@ -612,6 +650,121 @@ test.describe("Food workspace", () => {
     );
     await expect(offer).toHaveCount(0);
     expect(await shoppingNamed(request, cheese)).toHaveLength(1);
+  });
+
+  test("a recipe is planned for a day and its missing ingredients go on the list", async ({
+    page,
+    request,
+  }) => {
+    const title = `Lasagne ${tag}`;
+    const sheets = `Nudelplatten ${tag}`;
+    const tomatoes = `Tomaten ${tag}`;
+    const cheese = `Mozzarella ${tag}`;
+    // Tomatoes are at home; mozzarella is already on the list.
+    await addPantry(request, { name: tomatoes });
+    await addShopping(request, { name: cheese });
+    const { today } = await openFood(page, "/food?tab=recipes");
+
+    // A recipe with three ingredients, two steps, and a tag.
+    await page.getByRole("button", { name: "New recipe" }).click();
+    const form = page.getByRole("dialog", { name: "New recipe" });
+    await form.getByLabel("Title", { exact: true }).fill(title);
+    await form.getByLabel("Servings", { exact: true }).fill("4");
+    await form.getByLabel("Ingredient 1", { exact: true }).fill(sheets);
+    await form.getByLabel("Amount of ingredient 1").fill("250 g");
+    await form.getByRole("button", { name: "Add ingredient" }).click();
+    await form.getByLabel("Ingredient 2", { exact: true }).fill(tomatoes);
+    await form.getByLabel("Amount of ingredient 2").fill("1 Dose");
+    await form.getByRole("button", { name: "Add ingredient" }).click();
+    await form.getByLabel("Ingredient 3", { exact: true }).fill(cheese);
+    await form
+      .getByLabel("Steps", { exact: true })
+      .fill("1. Schichten.\n2. Backen.");
+    await form.getByLabel("Tags", { exact: true }).fill(tag);
+    await form.getByRole("button", { name: "Add recipe" }).click();
+    await expect(form).toHaveCount(0);
+
+    // It opens with its ingredients and numbered steps.
+    const view = page.getByRole("dialog", { name: title });
+    await expect(view).toContainText("4 servings · 3 ingredients");
+    await expect(
+      view.getByRole("region", { name: "Ingredients" }).getByRole("listitem"),
+    ).toHaveCount(3);
+    await expect(
+      view.getByRole("region", { name: "Steps" }).getByRole("listitem"),
+    ).toHaveText(["Schichten.", "Backen."]);
+    await page.keyboard.press("Escape");
+    await expect(view).toHaveCount(0);
+    await expect(
+      page.getByTestId("food-recipe").filter({ hasText: title }),
+    ).toBeVisible();
+
+    // Planned for today's dinner.
+    await page.getByRole("tab", { name: "Meal plan" }).click();
+    await expect(page).toHaveURL(/\/food\?tab=plan$/);
+    const day = page.locator(
+      `[data-testid="food-plan-day"][data-day="${today}"]`,
+    );
+    await day.locator('[data-meal="dinner"]').click();
+    const slot = page.getByRole("dialog", { name: /^Dinner, / });
+    await slot.getByLabel("Recipe", { exact: true }).fill(tag);
+    await slot.getByRole("button", { name: title }).click();
+    await expect(slot).toHaveCount(0);
+    await expect(day.locator('[data-meal="dinner"]')).toContainText(title);
+    const [planned] = (await mealPlan(request, today, today)).filter(
+      (entry) => entry.slot === "dinner",
+    );
+    expect(planned).toMatchObject({ title });
+    expect(planned.recipeId).toBeTruthy();
+
+    // Home names today's meal.
+    await page.goto("/");
+    await expect(
+      page.getByRole("region", { name: "Food", exact: true }),
+    ).toContainText(`${title} (dinner)`);
+
+    // The week's missing ingredients: a preview first.
+    await openFood(page, "/food?tab=plan");
+    await page
+      .getByRole("button", { name: "Add missing ingredients for this week" })
+      .click();
+    const missing = page.getByRole("dialog", {
+      name: "Add missing ingredients",
+    });
+    const line = (name: string) =>
+      missing.getByTestId("food-missing-item").filter({ hasText: name });
+    await expect(line(sheets)).toHaveAttribute("data-status", "added");
+    await expect(line(sheets)).toContainText("250 g");
+    await expect(line(sheets)).toContainText("Will add");
+    await expect(line(tomatoes)).toHaveAttribute("data-status", "in_pantry");
+    await expect(line(tomatoes)).toContainText("At home");
+    await expect(line(cheese)).toHaveAttribute("data-status", "on_list");
+    await expect(line(cheese)).toContainText("On the list");
+    // Nothing changed yet.
+    expect(await shoppingNamed(request, sheets)).toHaveLength(0);
+    await missing
+      .getByRole("button", { name: /^Add \d+ to the list$/ })
+      .click();
+    await expect(missing).toHaveCount(0);
+    await expect(page.getByTestId("food-plan-note")).toHaveText(
+      /^Added \d+ items? to the shopping list\.$/,
+    );
+    const [added] = await shoppingNamed(request, sheets);
+    expect(added).toMatchObject({ amount: "250 g", state: "needed" });
+    expect(await shoppingNamed(request, tomatoes)).toHaveLength(0);
+    expect(await shoppingNamed(request, cheese)).toHaveLength(1);
+
+    // Cleared again.
+    await day.locator('[data-meal="dinner"]').click();
+    const again = page.getByRole("dialog", { name: /^Dinner, / });
+    await again.getByRole("button", { name: "Clear dinner" }).click();
+    await expect(again).toHaveCount(0);
+    await expect(day.locator('[data-meal="dinner"]')).toContainText("Add");
+    expect(
+      (await mealPlan(request, today, today)).filter(
+        (entry) => entry.slot === "dinner",
+      ),
+    ).toHaveLength(0);
   });
 
   test("the list is usable on a phone", async ({ page, request }) => {

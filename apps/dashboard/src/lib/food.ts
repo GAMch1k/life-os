@@ -19,7 +19,7 @@ export type NewPantryItem = Schemas["NewPantryItem"];
 export type UpdatePantryItemBody = Schemas["UpdatePantryItemRequest"];
 export type PutAwayItem = Schemas["PutAwayItem"];
 
-export const FOOD_TABS = ["list", "pantry"] as const;
+export const FOOD_TABS = ["list", "pantry", "recipes", "plan"] as const;
 export type FoodTab = (typeof FOOD_TABS)[number];
 
 /** A tab named in the URL (`?tab=pantry`); the shopping list otherwise. */
@@ -27,10 +27,16 @@ export function parseFoodTab(value: unknown): FoodTab {
   return FOOD_TABS.find((tab) => tab === value) ?? "list";
 }
 
-/** Where a tab lives, so a reload or a link opens it. */
-export function foodHref(tab: FoodTab, store?: string) {
-  if (tab === "pantry") return "/food?tab=pantry";
-  return store ? `/food?store=${encodeURIComponent(store)}` : "/food";
+/**
+ * Where a tab lives, so a reload or a link opens it. `param` is the
+ * list's store filter, or the meal plan's week (its Monday) when it is not
+ * this week.
+ */
+export function foodHref(tab: FoodTab, param?: string) {
+  if (tab === "list")
+    return param ? `/food?store=${encodeURIComponent(param)}` : "/food";
+  if (tab === "plan" && param) return `/food?tab=plan&week=${param}`;
+  return `/food?tab=${tab}`;
 }
 
 /** The aisles in the order the list shows them, as the service orders them. */
@@ -633,17 +639,21 @@ export type HomeFood = {
   /** In-stock food that expires today or tomorrow, soonest first. */
   expiring: { id: string; name: string; text: string }[];
   expiringMore: boolean;
+  /** Today's planned meals: "Today: Pasta Bolognese (dinner)". */
+  meals: string | null;
 };
 
 /**
- * What Home says about food: the shopping list's size, and the food that
- * expires today or tomorrow in the owner's timezone. Food that already
- * expired is the pantry's to show. Null when there is nothing to say.
+ * What Home says about food: the shopping list's size, the food that
+ * expires today or tomorrow in the owner's timezone, and today's planned
+ * meals (`meals`, see todayMeals). Food that already expired is the
+ * pantry's to show. Null when there is nothing to say.
  */
 export function homeFood(
   list: { items: ShoppingItem[]; nextCursor?: string | null },
   pantry: { items: PantryItem[] } | undefined,
   today: string,
+  meals: string | null = null,
 ): HomeFood | null {
   const tomorrow = addDays(today, 1);
   const soon = (pantry?.items ?? [])
@@ -656,7 +666,7 @@ export function homeFood(
     )
     .sort(bySoonestExpiry);
   const listCount = list.items.filter((item) => item.state === "needed").length;
-  if (!listCount && !soon.length) return null;
+  if (!listCount && !soon.length && !meals) return null;
   return {
     listCount,
     listMore: Boolean(list.nextCursor),
@@ -666,6 +676,7 @@ export function homeFood(
       text: expiry(item.expiresOn!, today).text,
     })),
     expiringMore: soon.length > HOME_EXPIRING_PREVIEW,
+    meals,
   };
 }
 

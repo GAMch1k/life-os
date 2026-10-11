@@ -232,21 +232,37 @@ export function HomeAttentionSurface({
       {food ? (
         <AttentionCard
           id="attention-food"
-          href={foodHref(food.listCount ? "list" : "pantry")}
-          linkLabel={food.listCount ? "Open shopping list" : "Open pantry"}
+          href={foodHref(
+            food.listCount ? "list" : food.expiring.length ? "pantry" : "plan",
+          )}
+          linkLabel={
+            food.listCount
+              ? "Open shopping list"
+              : food.expiring.length
+                ? "Open pantry"
+                : "Open meal plan"
+          }
           icon={<ShoppingBasket aria-hidden="true" className="size-4" />}
           title="Food"
           detail={
             food.listCount
               ? `${plural(food.listCount, food.listMore, "item")} on the shopping list`
-              : `${plural(food.expiring.length, food.expiringMore, "item")} expiring soon`
+              : food.expiring.length
+                ? `${plural(food.expiring.length, food.expiringMore, "item")} expiring soon`
+                : (food.meals ?? "")
           }
-          items={food.expiring.map((item) => ({
-            id: item.id,
-            label: item.name,
-            hint: item.text,
-            href: foodHref("pantry"),
-          }))}
+          items={[
+            // Today's meals, unless they are the detail already.
+            ...(food.meals && (food.listCount || food.expiring.length)
+              ? [{ id: "meals", label: food.meals, href: foodHref("plan") }]
+              : []),
+            ...food.expiring.map((item) => ({
+              id: item.id,
+              label: item.name,
+              hint: item.text,
+              href: foodHref("pantry"),
+            })),
+          ]}
         />
       ) : null}
       <HomeBudgetCard budget={budget} today={today} />
