@@ -68,6 +68,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/shopping-items/from-recipes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add the missing ingredients of recipes to the shopping list
+         * @description Collects the ingredients of the recipes given (`recipeIds`) or of every recipe planned from `from` through `to` (at most 31 days; a recipe planned twice counts once), in order. One ingredient named by several recipes (the same normalised name) is one line, its amounts joined ("200 g + 1 Pck."). An ingredient in stock in the pantry (`in_pantry`) or already needed on the list (`on_list`) is skipped; the others are added with the usual merge (`added`, or `merged` when a needed item appeared meanwhile), `source: recipe`, and `sourceRef` the first recipe's id. With `dryRun` nothing changes and the statuses say what would happen (`added` for what would be added). Names match normalised, as on the shopping list; amounts are not compared.
+         */
+        post: operations["addShoppingItemsFromRecipes"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/shopping-items/{itemId}": {
         parameters: {
             query?: never;
@@ -331,6 +351,96 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/recipes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List or find recipes
+         * @description Recipes by normalised title. `q` keeps recipes whose normalised title contains every word of it (also inside a word: "bolo" finds "Pasta Bolognese"); `tag` keeps those with the tag (normalised); `ingredient` keeps those with an ingredient whose normalised name contains it. Filters combine; paging works as for the shopping list.
+         */
+        get: operations["listRecipes"];
+        put?: never;
+        /**
+         * Create a recipe
+         * @description A recipe's title is unique as normalised (409 `recipe_exists`), so a title names one recipe. Ingredients keep their order; tags are kept normalised, without duplicates, in the order given; steps are plain text, one step per line.
+         */
+        post: operations["createRecipe"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/recipes/{recipeId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a recipe */
+        get: operations["getRecipe"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a recipe
+         * @description Meal plan entries that named it stay, as plain text with its title.
+         */
+        delete: operations["deleteRecipe"];
+        options?: never;
+        head?: never;
+        /**
+         * Update a recipe
+         * @description Changes only the fields present; `null` clears `servings`, `steps`, `sourceUrl`, or `note`. `ingredients` and `tags` replace the whole list. A new title is refused when another recipe has it (409 `recipe_exists`); the meal plan follows the new title.
+         */
+        patch: operations["updateRecipe"];
+        trace?: never;
+    };
+    "/v1/meal-plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the meal plan
+         * @description The entries from `from` through `to` (plain dates, at most 31 days), by date, then slot (breakfast, lunch, dinner). Empty slots are not listed.
+         */
+        get: operations["listMealPlan"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/meal-plan/{date}/{slot}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Plan a meal
+         * @description Sets the slot of a day to a recipe (`recipeId`) or to free text (`text`), exactly one of them, replacing what the slot held. An entry that names a recipe takes its title and follows it when the recipe is renamed; when the recipe is deleted the entry stays as plain text. Setting what the slot already holds changes nothing.
+         */
+        put: operations["setMealPlanEntry"];
+        post?: never;
+        /** Clear a meal */
+        delete: operations["clearMealPlanEntry"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/notifications/status": {
         parameters: {
             query?: never;
@@ -387,10 +497,10 @@ export interface components {
         /** @enum {string} */
         ShoppingItemState: "needed" | "bought";
         /**
-         * @description `manual`: added directly (the Dashboard, a tool). `capture`: added from a capture such as an Inbox item; `sourceRef` names it.
+         * @description `manual`: added directly (the Dashboard, a tool). `capture`: added from a capture such as an Inbox item; `sourceRef` names it. `recipe`: added as a recipe's missing ingredient; `sourceRef` is the recipe's id.
          * @enum {string}
          */
-        ItemSource: "manual" | "capture";
+        ItemSource: "manual" | "capture" | "recipe";
         ShoppingItem: {
             /** Format: uuid */
             id: string;
@@ -602,6 +712,144 @@ export interface components {
             /** @description The new pantry items in the request's order. */
             items: components["schemas"]["PantryItem"][];
         };
+        Ingredient: {
+            /** @description As written. */
+            name: string;
+            /** @description The name as Food compares it with the pantry and the list. */
+            normalizedName: string;
+            /** @description Free text, such as "200 g" or "1 Pck." */
+            amount: string | null;
+            note: string | null;
+        };
+        NewIngredient: {
+            name: string;
+            amount?: string;
+            note?: string;
+        };
+        Recipe: {
+            /** Format: uuid */
+            id: string;
+            /** @description As written. */
+            title: string;
+            /** @description The title as Food compares it; unique. */
+            normalizedTitle: string;
+            servings: number | null;
+            ingredients: components["schemas"]["Ingredient"][];
+            /** @description Plain text, one step per line. */
+            steps: string | null;
+            /** @description Normalised. */
+            tags: string[];
+            sourceUrl: string | null;
+            note: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            createdBy: components["schemas"]["Actor"];
+            updatedBy: components["schemas"]["Actor"];
+        };
+        RecipeList: {
+            items: components["schemas"]["Recipe"][];
+            nextCursor?: string | null;
+        };
+        CreateRecipeRequest: {
+            title: string;
+            servings?: number;
+            ingredients?: components["schemas"]["NewIngredient"][];
+            steps?: string;
+            tags?: string[];
+            /** @description An http or https URL. */
+            sourceUrl?: string;
+            note?: string;
+        };
+        UpdateRecipeRequest: {
+            title?: string;
+            servings?: number | null;
+            ingredients?: components["schemas"]["NewIngredient"][];
+            steps?: string | null;
+            tags?: string[];
+            sourceUrl?: string | null;
+            note?: string | null;
+        };
+        /**
+         * @description A day's meals, in the order the plan lists them.
+         * @enum {string}
+         */
+        MealSlot: "breakfast" | "lunch" | "dinner";
+        MealPlanEntry: {
+            /** Format: uuid */
+            id: string;
+            /** Format: date */
+            date: string;
+            slot: components["schemas"]["MealSlot"];
+            /**
+             * Format: uuid
+             * @description The recipe; null for free text or a deleted recipe.
+             */
+            recipeId: string | null;
+            /** @description The recipe's title, or the text. */
+            title: string;
+            servings: number | null;
+            note: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            createdBy: components["schemas"]["Actor"];
+            updatedBy: components["schemas"]["Actor"];
+        };
+        MealPlanList: {
+            items: components["schemas"]["MealPlanEntry"][];
+        };
+        /** @description Give `recipeId` or `text`, exactly one. */
+        SetMealPlanEntryRequest: {
+            /** Format: uuid */
+            recipeId?: string;
+            text?: string;
+            servings?: number;
+            note?: string;
+        };
+        /** @description Give `recipeIds`, or `from` and `to`. */
+        FromRecipesRequest: {
+            recipeIds?: string[];
+            /** Format: date */
+            from?: string;
+            /** Format: date */
+            to?: string;
+            /**
+             * @description Only report what would happen.
+             * @default false
+             */
+            dryRun: boolean;
+        };
+        RecipeRef: {
+            /** Format: uuid */
+            id: string;
+            title: string;
+        };
+        /**
+         * @description `added`: put on the list (or, in a dry run, would be). `merged`: merged into a needed item that appeared meanwhile. `in_pantry`: in stock at home, skipped. `on_list`: already needed on the list, skipped.
+         * @enum {string}
+         */
+        IngredientStatus: "added" | "merged" | "in_pantry" | "on_list";
+        IngredientResult: {
+            /** @description As the first recipe writes it. */
+            name: string;
+            normalizedName: string;
+            /** @description The recipes' amounts, joined: "200 g + 1 Pck." */
+            amount: string | null;
+            status: components["schemas"]["IngredientStatus"];
+            /** @description The recipes that need it. */
+            recipes: components["schemas"]["RecipeRef"][];
+            /** @description The item added or merged into, or already on the list; null otherwise and in a dry run's `added`. */
+            shoppingItem: components["schemas"]["ShoppingItem"] | null;
+            /** @description The pantry item in stock (`in_pantry`); null otherwise. */
+            pantryItem: components["schemas"]["PantryItem"] | null;
+        };
+        FromRecipesResult: {
+            dryRun: boolean;
+            items: components["schemas"]["IngredientResult"][];
+        };
         FoodNotificationStatus: {
             /** @description Whether Food sends expiry reminders: false when NOTIFICATIONS_SERVICE_URL is not set. */
             enabled: boolean;
@@ -654,6 +902,10 @@ export interface components {
         ItemId: string;
         StoreId: string;
         RuleId: string;
+        RecipeId: string;
+        /** @description A plain date (YYYY-MM-DD). */
+        PlanDate: string;
+        PlanSlot: components["schemas"]["MealSlot"];
         /** @description Makes the write safe to retry; see the API description. */
         IdempotencyKey: string;
     };
@@ -834,6 +1086,60 @@ export interface operations {
                 };
             };
             /** @description `not_bought` (an item is still needed) or `idempotency_conflict` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    addShoppingItemsFromRecipes: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Makes the write safe to retry; see the API description. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FromRecipesRequest"];
+            };
+        };
+        responses: {
+            /** @description Each ingredient and what happened to it */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FromRecipesResult"];
+                };
+            };
+            /** @description Invalid request (`invalid_request`), or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description A recipe not found (`not_found`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `idempotency_conflict` */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -1757,6 +2063,366 @@ export interface operations {
                 };
             };
             /** @description Item not found (`not_found`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `idempotency_conflict` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    listRecipes: {
+        parameters: {
+            query?: {
+                q?: string;
+                tag?: string;
+                ingredient?: string;
+                /** @description The previous page's nextCursor. Opaque; only valid with the filters it was returned for. */
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Recipes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeList"];
+                };
+            };
+            /** @description Invalid request (`invalid_request`), or a malformed cursor (`invalid_cursor`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    createRecipe: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Makes the write safe to retry; see the API description. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateRecipeRequest"];
+            };
+        };
+        responses: {
+            /** @description Recipe */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Recipe"];
+                };
+            };
+            /** @description Invalid request (`invalid_request`), or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `recipe_exists` (another recipe has the title) or `idempotency_conflict` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getRecipe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                recipeId: components["parameters"]["RecipeId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Recipe */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Recipe"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Recipe not found (`not_found`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    deleteRecipe: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Makes the write safe to retry; see the API description. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                recipeId: components["parameters"]["RecipeId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid request, or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Recipe not found (`not_found`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `idempotency_conflict` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    updateRecipe: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Makes the write safe to retry; see the API description. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                recipeId: components["parameters"]["RecipeId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateRecipeRequest"];
+            };
+        };
+        responses: {
+            /** @description Recipe */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Recipe"];
+                };
+            };
+            /** @description Invalid request (`invalid_request`), or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Recipe not found (`not_found`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `recipe_exists` or `idempotency_conflict` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    listMealPlan: {
+        parameters: {
+            query: {
+                from: string;
+                to: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Meal plan entries */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MealPlanList"];
+                };
+            };
+            /** @description Invalid request (`invalid_request`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    setMealPlanEntry: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Makes the write safe to retry; see the API description. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                /** @description A plain date (YYYY-MM-DD). */
+                date: components["parameters"]["PlanDate"];
+                slot: components["parameters"]["PlanSlot"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetMealPlanEntryRequest"];
+            };
+        };
+        responses: {
+            /** @description Meal plan entry */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MealPlanEntry"];
+                };
+            };
+            /** @description Invalid request (`invalid_request`, `unknown_recipe`), or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description `idempotency_conflict` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    clearMealPlanEntry: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Makes the write safe to retry; see the API description. */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                /** @description A plain date (YYYY-MM-DD). */
+                date: components["parameters"]["PlanDate"];
+                slot: components["parameters"]["PlanSlot"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cleared */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid request, or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Nothing is planned there (`not_found`) */
             404: {
                 headers: {
                     [name: string]: unknown;

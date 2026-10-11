@@ -33,7 +33,7 @@ export const BANKING_DESCRIPTION =
   "The bank connection: connecting, disconnecting, each sync into Finance that changed something (counts only, never transaction details), failed syncs, and the consent's expiry.";
 
 export const FOOD_DESCRIPTION =
-  "The shopping list, its stores and aisle rules, and the pantry: items added, merged, bought, put away, changed, or removed, by you or the AI, and expiry reminders Food could not send in time.";
+  "The shopping list, its stores and aisle rules, the pantry, recipes, and the meal plan: items added, merged, bought, put away, changed, or removed, recipes written, meals planned, by you or the AI, and expiry reminders Food could not send in time.";
 
 export const SOURCES: readonly {
   value: string;
@@ -86,6 +86,8 @@ export const SUBJECT_TYPES = [
   { value: "food_aisle_rule", label: "Aisle rule" },
   { value: "food_pantry_item", label: "Pantry item" },
   { value: "food_notification", label: "Food reminder" },
+  { value: "food_recipe", label: "Recipe" },
+  { value: "food_meal_plan", label: "Meal plan slot" },
 ] as const;
 
 const EVENT_LABELS: Record<string, string> = {
@@ -155,6 +157,11 @@ const EVENT_LABELS: Record<string, string> = {
   "food.pantry_item.restocked": "Back in stock",
   "food.pantry_item.deleted": "Pantry item deleted",
   "food.notification.missed": "Expiry reminder missed",
+  "food.recipe.created": "Recipe created",
+  "food.recipe.updated": "Recipe updated",
+  "food.recipe.deleted": "Recipe deleted",
+  "food.meal_plan.set": "Meal planned",
+  "food.meal_plan.cleared": "Meal cleared",
 };
 
 export const EVENT_TYPES = Object.keys(EVENT_LABELS);
@@ -270,7 +277,7 @@ export function eventLabel(event: Pick<ActivityEvent, "type" | "data">) {
   // Food entries by the item's or store's name, a rule by its keyword and
   // aisle, and clearing by how many items went.
   if (event.type.startsWith("food.")) {
-    const name = text(event.data?.name);
+    const name = text(event.data?.name) ?? text(event.data?.title);
     const keyword = text(event.data?.keyword);
     const aisle = text(event.data?.aisle);
     const deleted = event.data?.deleted;
