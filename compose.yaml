@@ -276,6 +276,56 @@ services:
     networks: [backend]
     restart: unless-stopped
 
+  # Nightly backups of every database in the registry (docs/services/backup.md):
+  # one consistent pg_dump per database into LIFE_OS_BACKUP_DIR/auto/ on the
+  # host, rotated daily, weekly, and monthly. It logs in as lifeos_backup, a
+  # read-only role (infra/postgres/provision-backup-role.sh), and runs as
+  # LIFE_OS_BACKUP_RUNTIME_UID, the backup directory's owner. infra/postgres
+  # is mounted as a directory so an updated registry is read at the next run
+  # without recreating the container. The image is the PostgreSQL image, so
+  # pg_dump matches the server. No gateway route: the Dashboard reaches its
+  # API on the private network; tools/backup-now runs a backup now.
+  backup:
+    build:
+      context: .
+      dockerfile: services/backup/Dockerfile
+      args: {POSTGRES_IMAGE: "${LIFE_OS_POSTGRES_IMAGE:-postgres:18.6-alpine}"}
+    environment:
+      SERVICE_NAME: backup
+      PORT: 8080
+      BACKUP_DATABASE_URL: "postgres://lifeos_backup@postgres:5432/?sslmode=disable"
+      BACKUP_DATABASE_PASSWORD: "${LIFE_OS_BACKUP_DB_PASSWORD:-}"
+      BACKUP_DATABASES_FILE: /etc/lifeos/postgres/service-databases.conf
+      BACKUP_DIR: /backups
+      BACKUP_TIME: "${LIFE_OS_BACKUP_TIME:-03:15}"
+      LIFE_OS_TIMEZONE: "${LIFE_OS_TIMEZONE:-UTC}"
+      BACKUP_KEEP_DAILY: "${LIFE_OS_BACKUP_KEEP_DAILY:-7}"
+      BACKUP_KEEP_WEEKLY: "${LIFE_OS_BACKUP_KEEP_WEEKLY:-4}"
+      BACKUP_KEEP_MONTHLY: "${LIFE_OS_BACKUP_KEEP_MONTHLY:-12}"
+      BACKUP_KEEP_FAILED_DAYS: "${LIFE_OS_BACKUP_KEEP_FAILED_DAYS:-3}"
+    volumes:
+      - type: bind
+        source: "${LIFE_OS_BACKUP_DIR:?Set LIFE_OS_BACKUP_DIR in .env to the existing host directory for backups}"
+        target: /backups
+      - type: bind
+        source: ./infra/postgres
+        target: /etc/lifeos/postgres
+        read_only: true
+    # The PostgreSQL base image declares a volume here; the tmpfs keeps
+    # Docker from creating an anonymous one for every container.
+    tmpfs: [/var/lib/postgresql]
+    user: "${LIFE_OS_BACKUP_RUNTIME_UID:-1000}"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    expose: ["8080"]
+    depends_on:
+      postgres: {condition: service_healthy}
+    networks: [backend]
+    restart: unless-stopped
+    # Room to stop a run in progress, remove its files, and record it.
+    stop_grace_period: 30s
+
   mcp:
     build: {context: ., dockerfile: services/mcp/Dockerfile, target: service}
     environment:
