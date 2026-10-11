@@ -14,6 +14,7 @@ const pages = [
   "/activity",
   "/status",
   "/finance",
+  "/food",
 ] as const;
 
 const viewports = [
