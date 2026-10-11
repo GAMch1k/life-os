@@ -28,6 +28,9 @@ services:
   food:
     image: lifeos-food:latest
     ports: !reset []
+  recipe-import:
+    image: lifeos-recipe-import:latest
+    ports: !reset []
   activity:
     image: lifeos-activity:latest
     ports: !reset []
