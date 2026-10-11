@@ -9,9 +9,11 @@ Dashboard, the AI through MCP) use its API, never its database. Gateway base:
 `/ready` are runtime probes.
 
 The owner uses Food through the Dashboard's Food workspace (`/food`: the
-shopping list, made for the phone in the shop, and the pantry), and Home
-shows the list's size and food expiring today or tomorrow; see
-[Dashboard](../frontend/dashboard.md).
+shopping list, made for the phone in the shop, from where bought items are
+put away into the pantry, and the pantry), and Home shows the list's size and
+food expiring today or tomorrow; see [Dashboard](../frontend/dashboard.md).
+Once a day Food also tells the owner which pantry food expires soon (see
+[Expiry reminders](#expiry-reminders)).
 
 **Groceries go to the list; other purchases stay Tasks.** Food, drinks,
 household, and drugstore items belong on the shopping list; buying a lamp or
@@ -85,6 +87,18 @@ bought first. `state`, `storeId`, and `aisle` filter; `limit` is 1 to 200
 - `POST /v1/shopping-items/clear-bought` deletes the bought items, or with
   `{"boughtBefore": "<instant>"}` only those bought before it, and returns
   `{deleted}`.
+- `POST /v1/shopping-items/put-away` puts 1 to 50 bought items away, `{"items":
+  [{"id", "location", "expiresOn", "amount"}]}`, in one transaction: all or
+  none. Each becomes an in-stock [pantry](#pantry) item with the shopping
+  item's name, its amount (or the `amount` given; empty means none),
+  `fromShoppingItemId`, and its `source` and `sourceRef`, in the `location`
+  given or else the usual place of the item's aisle (as for a pantry item
+  added without one), with the `expiresOn` given; and the shopping item
+  leaves the list (its note does not come along). An item that is still
+  needed refuses the request (409 `not_bought`), an unknown id is 404
+  `not_found` (also a second put-away of one item), and an id named twice is
+  400 `invalid_request`, each message naming `items[i]`. The response lists
+  the new pantry items, `{items}`, in the request's order.
 
 Marking a bought item bought, or a needed item needed, returns it unchanged
 and records nothing.
@@ -180,6 +194,75 @@ cartons of milk may expire on different days.
   `in_stock`). Ended items are kept for history; marking an ended item ended
   the other way keeps its `endedAt`. `DELETE` removes an item and its history.
 
+## Expiry reminders
+
+Once a day Food tells the owner, through [Notifications](notifications.md)
+(`pkg/notify`, the one notification path), which in-stock pantry food expires
+soon. There are no quiet hours.
+
+| When | Content | Importance, category | Link | Dedupe key |
+| --- | --- | --- | --- | --- |
+| Daily at `FOOD_EXPIRY_TIME` (08:00) on the owner's wall clock (`LIFE_OS_TIMEZONE`), when anything in stock expires that day or the next. | Titled "Food expiring today", or "Food expiring tomorrow" when nothing expires on the day itself. One line per item, that day's first: "Today: Milch", "Tomorrow: Joghurt (2)" (two items of one name expiring that day share a line). | `medium` when something expires that day, else `low`; `food.expiry` | `/food?tab=pantry` | `food:expiry:<local date>` |
+
+- **What it names.** The pantry is read when the reminder is sent, so food
+  used up, thrown away, or moved to a later date before then is not named.
+  Food that expired before the day is not named again every morning: the
+  Pantry tab shows it in red. Items without an expiry date are never named.
+- **Nothing to say.** A day with nothing expiring today or tomorrow sends
+  nothing (recorded as empty, never as missed).
+- **Lists.** At most 10 lines, then "and 3 more"; names on one line,
+  shortened to 120 characters. A reminder sent late on another day names the
+  days ("Sat 10 Oct: Milch").
+- **Wall clock.** 08:00 stays 08:00 across daylight saving changes; a time
+  skipped when the clocks go forward is the same time after the jump, one that
+  occurs twice is the first, as for Tasks.
+
+**Delivery.** A goroutine in the Food process (`internal/notifications`) runs
+every `FOOD_NOTIFY_INTERVAL_SECONDS` (30) and handles what came due in `(last
+run, now]`. It follows [Tasks' notification delivery](tasks.md#notifications)
+without sharing its code:
+
+- **Exactly once.** Notifications stores a dedupe key once. Food also keeps its
+  cursor (`food_notification_dispatch.last_run_at`) and every handled key
+  (`food_notification_log`: sent, missed, failed, or empty; pruned after 30
+  days), so restarts, overlapping runs, and a cursor set back neither repeat
+  nor skip a reminder. One process runs at a time: a run holds a lease on the
+  state row (two minutes, at least four intervals).
+- **Failures.** When Notifications is unreachable or answers 5xx, the run stops
+  and keeps the cursor just before the reminder, so the next run retries it.
+  A reminder Notifications refuses (4xx) is recorded as failed, logged, and
+  not retried. Either error is kept as `lastError`.
+- **Missed while down.** The first run after Food was down handles what came
+  due since the last run, at most 7 days back. A reminder up to
+  `FOOD_NOTIFY_GRACE_MINUTES` (120) late is sent, the pantry read when it is
+  sent; an older one is not notified but recorded in Activity as
+  `food.notification.missed`. The very first run after deployment only starts
+  the cursor.
+- **Off without Notifications.** With `NOTIFICATIONS_SERVICE_URL` unset the
+  dispatcher does not run (logged at startup).
+
+`food.notification.missed` has actor `system:food`, outcome `failed`,
+`occurredAt` the time the reminder was due, an id derived from the dedupe key
+(recorded once), subject `food_notification` with the dedupe key as id, a
+summary such as "Expiry reminder due Sun 11 Oct 2026, 08:00 CEST was missed:
+Food was not running", and `data` with `kind` (`expiry`), `day`, `dueAt`, and
+`dedupeKey`.
+
+`GET /v1/notifications/status` reports the delivery's health: `enabled`,
+`intervalSeconds`, `graceMinutes`, `timeZone`, `expiryTime`, `handledThrough`
+(the cursor), `lastRunAt`, `lastSuccessAt`, `lastError` with `lastErrorAt`
+(current while later than `lastSuccessAt`), and `lastSentAt`. The Dashboard
+Status page shows it as the Food reminders part of the Notifications check
+(see [Dashboard](../frontend/dashboard.md)), so a reminder sender that stops
+or keeps failing reaches the owner through the monitor.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `NOTIFICATIONS_SERVICE_URL` | empty | The Notifications service (compose: `http://notifications:8080`); empty turns expiry reminders off. |
+| `FOOD_EXPIRY_TIME` | `08:00` | When the daily reminder is due, HH:MM in `LIFE_OS_TIMEZONE` (compose passes `LIFE_OS_FOOD_EXPIRY_TIME`). |
+| `FOOD_NOTIFY_INTERVAL_SECONDS` | `30` | How often due reminders are looked for, 5 to 300. |
+| `FOOD_NOTIFY_GRACE_MINUTES` | `120` | How late a reminder is still sent after Food was down, 10 to 1440; older ones are recorded as missed. |
+
 ## Writes: actors and idempotency
 
 Every write must name its actor in `X-Life-OS-Actor` (`user`, `agent:<name>`,
@@ -242,10 +325,12 @@ recorded. A creation or deletion has an id derived from the entity
 | `food.shopping_item.bought` | `food_shopping_item` | Bought “Milch” |
 | `food.shopping_item.reopened` | `food_shopping_item` (the needed item) | “Milch” is needed again (a merge adds ", merged into the item already on the list" and `data.mergedFromId`) |
 | `food.shopping_item.deleted` | `food_shopping_item` | Removed “Brot” from the shopping list |
+| `food.shopping_item.put_away` | `food_shopping_item` | Put away “Milch” in the fridge (`data.pantryItemId`, `data.location`; followed by the pantry item's `food.pantry_item.added`) |
 | `food.shopping_items.cleared` | `food_shopping_list` / `bought` | Cleared 3 bought items from the shopping list |
 | `food.store.created` / `.updated` / `.archived` / `.restored` | `food_store` | Store “Lidl” created (also when an item's `storeName` creates it) |
 | `food.aisle_rule.created` / `.deleted` | `food_aisle_rule` | Aisle rule created: “kerze” → household (also inside words) |
 | `food.pantry_item.added` / `.updated` / `.used_up` / `.thrown_away` / `.restocked` / `.deleted` | `food_pantry_item` | Added “Joghurt” to the pantry (fridge, expires 2026-10-14) |
+| `food.notification.missed` | `food_notification` | Expiry reminder due Sun 11 Oct 2026, 08:00 CEST was missed: Food was not running (see [Expiry reminders](#expiry-reminders)) |
 
 `data` holds the item's name, aisle or location, state, source, amount, store,
 `sourceRef`, expiry date, and for updates and merges the changed fields
@@ -258,8 +343,11 @@ recorded. A creation or deletion has an id derived from the entity
   PostgreSQL volume provisions it; for an existing deployment see
   [Operations](../operations/deployment.md#adding-the-food-service).
 - Configuration: `ACTIVITY_SERVICE_URL` (compose: `http://activity:8080`;
-  empty records nothing) and `LIFE_OS_TIMEZONE` (the owner's "today" for
-  `expiringWithinDays`; an unknown name falls back to UTC, logged).
+  empty records nothing), `LIFE_OS_TIMEZONE` (the owner's "today" for
+  `expiringWithinDays` and the expiry reminder's wall clock; an unknown name
+  falls back to UTC, logged), and the [expiry reminders'](#expiry-reminders)
+  settings. Migration 000003 adds the reminders' state
+  (`food_notification_dispatch`, `food_notification_log`).
 - The Dashboard and MCP reach Food at `FOOD_SERVICE_URL` (compose:
   `http://food:8080`), and the browser at `/api/food`; Status probes its
   `/ready` ("Food").
@@ -275,4 +363,15 @@ name created once, bought and needed with the merge on reopen, clearing
 bought items, renames and their conflicts, order and paging, the aisle rules
 API, the pantry lifecycle and `expiringWithinDays` at a timezone day
 boundary, idempotent replays and conflicts (also concurrent requests with one
-key), the actor gate, the Activity events, and migration 000002 down and up.
+key), the actor gate, the Activity events, putting bought items away (places
+from the request or the aisle, amounts, sources, the events, refusals of
+needed, unknown, and repeated items, and the idempotent replay), and
+migrations 000002 and 000003 down and up. `internal/notifications` has unit
+tests (the clock setting, wall times across both daylight saving changes and
+west of UTC, the window, the message's lines, grouping, importance, late
+phrasing, and caps) and integration tests with an in-process Notifications
+that deduplicates like the real one: the first run only starts the cursor,
+one reminder a day naming today and tomorrow but not food that expired
+before, days with nothing to say, late and missed reminders after downtime,
+failing and refusing Notifications, a restart and a cursor set back, the
+lease and two processes at once, and migration 000003 down and up.
