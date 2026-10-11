@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -193,6 +194,19 @@ func PublicAddress(addr netip.Addr) bool {
 
 // Fetch downloads a web page and returns it as UTF-8.
 func (f *Fetcher) Fetch(ctx context.Context, raw string) (Page, error) {
+	return f.get(ctx, raw, "text/html,application/xhtml+xml;q=0.9,*/*;q=0.5", "The link is not a web page (%s).", "text/html", "application/xhtml+xml")
+}
+
+// FetchJSON downloads a JSON document (an API's answer) with the same
+// guard and limits as a page.
+func (f *Fetcher) FetchJSON(ctx context.Context, raw string) ([]byte, error) {
+	page, err := f.get(ctx, raw, "application/json", "The answer is not JSON (%s).", "application/json", "text/json")
+	return page.Body, err
+}
+
+// get downloads raw when its media type is one of media (or not given);
+// otherwise it fails with wrongType naming the type.
+func (f *Fetcher) get(ctx context.Context, raw, accept, wrongType string, media ...string) (Page, error) {
 	parsed, err := f.CheckURL(raw)
 	if err != nil {
 		return Page{}, err
@@ -202,7 +216,7 @@ func (f *Fetcher) Fetch(ctx context.Context, raw string) (Page, error) {
 		return Page{}, failure("The link is not a valid URL.")
 	}
 	req.Header.Set("User-Agent", userAgent)
-	req.Header.Set("Accept", "text/html,application/xhtml+xml;q=0.9,*/*;q=0.5")
+	req.Header.Set("Accept", accept)
 	req.Header.Set("Accept-Language", "de,en;q=0.8,ru;q=0.6")
 	resp, err := f.client.Do(req)
 	if err != nil {
@@ -218,8 +232,8 @@ func (f *Fetcher) Fetch(ctx context.Context, raw string) (Page, error) {
 		return Page{}, failure("The page is larger than %d MB.", f.MaxBytes>>20)
 	}
 	contentType := resp.Header.Get("Content-Type")
-	if media, _, err := mime.ParseMediaType(contentType); contentType != "" && (err != nil || (media != "text/html" && media != "application/xhtml+xml")) {
-		return Page{}, failure("The link is not a web page (%s).", strings.SplitN(contentType, ";", 2)[0])
+	if kind, _, err := mime.ParseMediaType(contentType); contentType != "" && (err != nil || !slices.Contains(media, kind)) {
+		return Page{}, failure(wrongType, strings.SplitN(contentType, ";", 2)[0])
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, f.MaxBytes+1))
 	if err != nil {

@@ -21,6 +21,7 @@ import (
 	"github.com/GAMch1k/life-os/services/recipe-import/internal/api/generated"
 	"github.com/GAMch1k/life-os/services/recipe-import/internal/fetch"
 	"github.com/GAMch1k/life-os/services/recipe-import/internal/food"
+	"github.com/GAMch1k/life-os/services/recipe-import/internal/mealdb"
 	"github.com/GAMch1k/life-os/services/recipe-import/internal/recipe"
 )
 
@@ -55,10 +56,16 @@ type Food interface {
 	FindRecipe(ctx context.Context, title string) (*generated.Recipe, error)
 }
 
+// Discoverer finds recipes by main ingredient (*mealdb.Client).
+type Discoverer interface {
+	Discover(ctx context.Context, ingredient string, limit int) (mealdb.Discovery, error)
+}
+
 // Handler serves the recipe-import API.
 type Handler struct {
 	fetcher  Fetcher
 	food     Food
+	discover Discoverer
 	activity *activity.Emitter
 	logger   *slog.Logger
 }
@@ -72,6 +79,13 @@ func NewHandler(fetcher Fetcher, food Food, emitter *activity.Emitter, logger *s
 		logger = slog.Default()
 	}
 	return &Handler{fetcher: fetcher, food: food, activity: emitter, logger: logger}
+}
+
+// WithDiscovery lets the handler discover recipes in TheMealDB; without it
+// discovery answers 502 provider_unavailable.
+func (h *Handler) WithDiscovery(discover Discoverer) *Handler {
+	h.discover = discover
+	return h
 }
 
 // Register mounts the API on router. Every write must say who makes it in
@@ -223,6 +237,40 @@ func (h *Handler) CreateImport(c fiber.Ctx, params generated.CreateImportParams)
 			"sourceUrl": link.String(), "ingredients": len(saved.Ingredients)},
 	})
 	return c.Status(fiber.StatusCreated).JSON(generated.ImportResult{Method: method, Recipe: saved})
+}
+
+// DiscoverRecipes finds recipes by main ingredient in TheMealDB, as drafts.
+func (h *Handler) DiscoverRecipes(c fiber.Ctx, params generated.DiscoverRecipesParams) error {
+	ingredient := strings.TrimSpace(params.Ingredient)
+	if ingredient == "" || utf8.RuneCountInString(ingredient) > nameLimit {
+		return invalid("ingredient must be 1 to 200 characters")
+	}
+	limit := mealdb.DefaultResults
+	if params.Limit != nil {
+		if *params.Limit < 1 || *params.Limit > mealdb.MaxResults {
+			return invalid("limit must be between 1 and 12")
+		}
+		limit = *params.Limit
+	}
+	if h.discover == nil {
+		return httpserver.NewError(fiber.StatusBadGateway, "provider_unavailable", "Recipe discovery is not set up.")
+	}
+	found, err := h.discover.Discover(c.Context(), ingredient, limit)
+	var plain *mealdb.Error
+	switch {
+	case errors.As(err, &plain) && found.Query == "":
+		return invalid(plain.Message)
+	case errors.As(err, &plain):
+		return httpserver.NewError(fiber.StatusBadGateway, "provider_unavailable", plain.Message)
+	case err != nil:
+		return httpserver.WrapError(err, fiber.StatusBadGateway, "provider_unavailable", "TheMealDB could not be reached.")
+	}
+	result := generated.DiscoverResult{Ingredient: ingredient, Query: found.Query, Provider: mealdb.SiteName, Attribution: mealdb.Attribution,
+		Items: make([]generated.RecipeDraft, 0, len(found.Drafts))}
+	for _, draft := range found.Drafts {
+		result.Items = append(result.Items, preview(recipe.Result{Method: recipe.Structured, Draft: draft}).Draft)
+	}
+	return c.JSON(result)
 }
 
 // exists answers a save whose title Food already has, with that recipe's id

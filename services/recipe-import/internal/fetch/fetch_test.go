@@ -217,3 +217,31 @@ func resolveTo(target string, f *Fetcher, more ...string) func(context.Context, 
 		return dialer.DialContext(ctx, network, address)
 	}
 }
+
+func TestFetchJSONReadsOnlyJSON(t *testing.T) {
+	server, base := public(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/page" {
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = w.Write([]byte("<html></html>"))
+			return
+		}
+		if r.Header.Get("Accept") != "application/json" {
+			w.WriteHeader(http.StatusNotAcceptable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_, _ = w.Write([]byte(`{"meals":null}`))
+	})
+	f := testFetcher(t, server.URL)
+	f.client.Transport.(*http.Transport).DialContext = resolveTo(strings.TrimPrefix(server.URL, "http://"), f)
+	if body, err := f.FetchJSON(context.Background(), base+"/api"); err != nil || string(body) != `{"meals":null}` {
+		t.Fatalf("json = %q, %v", body, err)
+	}
+	if _, err := f.FetchJSON(context.Background(), base+"/page"); err == nil || !strings.Contains(err.Error(), "not JSON (text/html)") {
+		t.Fatalf("html as json: %v", err)
+	}
+	// The same address guard as pages.
+	if _, err := New(0, 2*time.Second, nil).FetchJSON(context.Background(), server.URL+"/api"); err == nil || !strings.Contains(err.Error(), "private") {
+		t.Fatalf("loopback: %v", err)
+	}
+}

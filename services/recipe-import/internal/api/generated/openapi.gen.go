@@ -6,6 +6,7 @@ package generated
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/gofiber/fiber/v3"
@@ -72,6 +73,22 @@ type Actor struct {
 
 // ActorKind defines model for Actor.Kind.
 type ActorKind string
+
+// DiscoverResult defines model for DiscoverResult.
+type DiscoverResult struct {
+	// Attribution How to credit the provider wherever the results are shown.
+	Attribution string `json:"attribution"`
+
+	// Ingredient The ingredient as given.
+	Ingredient string        `json:"ingredient"`
+	Items      []RecipeDraft `json:"items"`
+
+	// Provider TheMealDB.
+	Provider string `json:"provider"`
+
+	// Query The English ingredient TheMealDB was asked for, such as "chicken breast".
+	Query string `json:"query"`
+}
 
 // DraftIngredient defines model for DraftIngredient.
 type DraftIngredient struct {
@@ -190,6 +207,12 @@ type TextRequest struct {
 	Text      string  `json:"text"`
 }
 
+// DiscoverRecipesParams defines parameters for DiscoverRecipes.
+type DiscoverRecipesParams struct {
+	Ingredient string `form:"ingredient" json:"ingredient"`
+	Limit      *int   `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
 // CreateImportParams defines parameters for CreateImport.
 type CreateImportParams struct {
 	// IdempotencyKey Makes the save safe to retry.
@@ -207,6 +230,9 @@ type ParseImportTextJSONRequestBody = TextRequest
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
+	// DiscoverRecipes Discover recipes by main ingredient (TheMealDB)
+	// (GET /v1/discover)
+	DiscoverRecipes(c fiber.Ctx, params DiscoverRecipesParams) error
 	// CreateImport Save a recipe from a link
 	// (POST /v1/imports)
 	CreateImport(c fiber.Ctx, params CreateImportParams) error
@@ -226,6 +252,50 @@ type ServerInterfaceWrapper struct {
 
 type MiddlewareFunc fiber.Handler
 type HandlerMiddlewareFunc func(c fiber.Ctx, next fiber.Handler) error
+
+// DiscoverRecipes operation middleware
+func (siw *ServerInterfaceWrapper) DiscoverRecipes(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DiscoverRecipesParams
+
+	var query url.Values
+	query, err = url.ParseQuery(string(c.Request().URI().QueryString()))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for query string: %w", err).Error())
+	}
+
+	// ------------- Required query parameter "ingredient" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "ingredient", query, &params.Ingredient, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter ingredient: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", query, &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter limit: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.DiscoverRecipes(c, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
 
 // CreateImport operation middleware
 func (siw *ServerInterfaceWrapper) CreateImport(c fiber.Ctx) error {
@@ -334,5 +404,7 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	router.Post(options.BaseURL+"/v1/imports/text", wrapper.ParseImportText)
 
 	router.Post(options.BaseURL+"/v1/imports", wrapper.CreateImport)
+
+	router.Get(options.BaseURL+"/v1/discover", wrapper.DiscoverRecipes)
 
 }
