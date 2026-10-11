@@ -12,7 +12,7 @@
     "test": "node --import tsx --test 'src/**/*.test.ts'",
     "test:e2e": "playwright test",
     "generate:api": "../../tools/generate-typescript-api",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "next typegen && tsc --noEmit",
     "check": "npm run format:check && npm run lint && npm run test && npm run typecheck && npm run build"
   },
   "engines": {
