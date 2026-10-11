@@ -167,9 +167,11 @@ func (d *Dumper) Dump(ctx context.Context, database Database, dir string) (resul
 	serverVersion, err = d.dump(ctx, database, dir, &result)
 	result.FinishedAt = d.now()
 	if err != nil {
+		// The counts describe a dump; a failed database has none.
 		result.Result = ResultFailed
 		result.Error = err.Error()
 		result.File, result.Bytes, result.SHA256 = "", 0, ""
+		result.Tables, result.Migration = []TableRows{}, nil
 		return result, serverVersion
 	}
 	result.Result = ResultSucceeded
@@ -185,13 +187,18 @@ func (d *Dumper) dump(ctx context.Context, database Database, dir string, result
 	if err != nil {
 		return "", fmt.Errorf("connect: %w", err)
 	}
-	defer conn.Close(context.WithoutCancel(ctx))
+	defer func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		conn.Close(cleanup)
+	}()
 
+	// The transaction ends with the connection; a read-only transaction has
+	// nothing to roll back.
 	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return "", fmt.Errorf("begin the snapshot transaction: %w", err)
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx))
 
 	var snapshot, serverVersion string
 	if err := tx.QueryRow(ctx, "SELECT pg_export_snapshot(), current_setting('server_version')").Scan(&snapshot, &serverVersion); err != nil {

@@ -13,7 +13,7 @@ build:
 run:
 	@test -n "$(BACKUP_DATABASE_URL)" || (echo "BACKUP_DATABASE_URL is required" >&2; exit 2)
 	mkdir -p bin/backups
-	SERVICE_NAME=$${SERVICE_NAME:-backup} PORT=$(PORT) BACKUP_DATABASE_URL="$(BACKUP_DATABASE_URL)" BACKUP_DATABASES_FILE=../../infra/postgres/service-databases.conf BACKUP_DIR=$(CURDIR)/bin/backups go run ./cmd/server
+	SERVICE_NAME=$${SERVICE_NAME:-backup} PORT=$(PORT) BACKUP_DATABASE_URL="$(BACKUP_DATABASE_URL)" BACKUP_DATABASES_FILE=$(abspath ../../infra/postgres/service-databases.conf) BACKUP_DIR=$(CURDIR)/bin/backups go run ./cmd/server
 
 test:
 	go test ./...
