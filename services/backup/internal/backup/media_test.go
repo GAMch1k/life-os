@@ -84,6 +84,12 @@ func TestMediaStoreSaysWhenTheVolumeCannotBeRead(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "LIFE_OS_INBOX_MEDIA_GID") {
 		t.Fatalf("Copy = %v", err)
 	}
+	if err := CheckMediaSource(source); err == nil || !strings.Contains(err.Error(), "LIFE_OS_INBOX_MEDIA_GID") {
+		t.Fatalf("CheckMediaSource = %v", err)
+	}
+	if err := CheckMediaSource(t.TempDir()); err != nil {
+		t.Fatalf("an empty volume: %v", err)
+	}
 }
 
 func TestMediaStoreCollectsOnlyUnreferencedMedia(t *testing.T) {

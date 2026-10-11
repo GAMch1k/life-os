@@ -65,6 +65,13 @@ func run(ctx context.Context) error {
 	if cfg.Connection().Password == "" {
 		logger.Warn("no database password (BACKUP_DATABASE_PASSWORD): backups fail until LIFE_OS_BACKUP_DB_PASSWORD is set")
 	}
+	if cfg.InboxMediaDir != "" {
+		if err := backup.CheckMediaSource(cfg.InboxMediaDir); err != nil {
+			logger.Warn("the Inbox images cannot be read: backups will fail until this is fixed", "error", err)
+		} else {
+			logger.Info("backing up the Inbox images", "dir", cfg.InboxMediaDir)
+		}
+	}
 	registry := func() ([]backup.Database, error) { return backup.LoadDatabases(cfg.DatabasesFile) }
 	if databases, err := registry(); err != nil {
 		logger.Warn("the database registry cannot be read", "file", cfg.DatabasesFile, "error", err)

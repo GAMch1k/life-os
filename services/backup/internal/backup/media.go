@@ -139,6 +139,26 @@ func (m MediaStore) Copy(ctx context.Context, source string, refs []MediaRef) (s
 	return stored, copied, copiedBytes, problems, nil
 }
 
+// CheckMediaSource says whether the media volume can be read, and what to
+// do when it cannot.
+func CheckMediaSource(source string) error {
+	entries, err := os.ReadDir(source)
+	if err != nil {
+		return mediaSourceError(source, err)
+	}
+	for _, entry := range entries {
+		if !mediaHash.MatchString(entry.Name()) {
+			continue
+		}
+		file, err := os.Open(filepath.Join(source, entry.Name()))
+		if err != nil {
+			return mediaSourceError(source, err)
+		}
+		return file.Close()
+	}
+	return nil
+}
+
 // mediaSourceError says what to do when the media volume cannot be read.
 func mediaSourceError(source string, err error) error {
 	if errors.Is(err, fs.ErrPermission) {
