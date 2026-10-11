@@ -484,7 +484,9 @@ services:
     tmpfs:
       - /tmp
       - /var/lib/lifeos/codex
-      - /workspace:size=128m
+      # World-writable like /tmp: with options given, Docker mounts the tmpfs
+      # root-owned, and the processor runs as LIFE_OS_CODEX_RUNTIME_UID.
+      - /workspace:size=128m,mode=1777
     expose: ["8081"]
     depends_on:
       mcp: {condition: service_started}
