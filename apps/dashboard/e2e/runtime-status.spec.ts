@@ -421,15 +421,16 @@ test.describe("Reminder delivery on Status", () => {
       });
   }
 
-  test("Calendar's and Tasks' reminder senders show their last check", async ({
+  test("Calendar's, Tasks', and Food's reminder senders show their last check", async ({
     page,
   }) => {
-    // Both services get NOTIFICATIONS_SERVICE_URL on the verification stack
-    // and check for due reminders every 30 s.
+    // The three services get NOTIFICATIONS_SERVICE_URL on the verification
+    // stack and check for due reminders every 30 s.
     await page.goto("/status");
     const events = part(page, "Calendar sources", "Event reminders");
     const tasks = part(page, "Notifications", "Task reminders");
-    for (const sender of [events, tasks]) {
+    const food = part(page, "Notifications", "Food reminders");
+    for (const sender of [events, tasks, food]) {
       await expect(sender).toContainText("OK");
       await expect(sender).toContainText(
         /Sending normally\.|Running; nothing sent yet\./,
@@ -442,6 +443,7 @@ test.describe("Reminder delivery on Status", () => {
       /Schedulesummary .*, evening list \d\d:\d\d \(/,
     );
     await expect(tasks).toContainText("Timed Tasksreminded");
+    await expect(food).toContainText(/Expiry reminderdaily at \d\d:\d\d \(/);
   });
 });
 

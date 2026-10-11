@@ -3,12 +3,14 @@ import test from "node:test";
 
 import {
   eventRemindersPart,
+  foodRemindersPart,
   senderAction,
   senderStaleAfterMs,
   statusAlerts,
   taskRemindersPart,
   toRuntimeStatus,
   type CalendarFeed,
+  type FoodNotifications,
   type NotificationChannel,
   type ReminderDelivery,
   type RuntimeSignals,
@@ -44,6 +46,15 @@ const taskNotifications = (
   eveningTime: "19:00",
   timedLeadMinutes: 30,
   mergedMorning: false,
+  ...overrides,
+});
+
+const foodNotifications = (
+  overrides: Partial<FoodNotifications> = {},
+): FoodNotifications => ({
+  ...delivery(),
+  timeZone: "Europe/Berlin",
+  expiryTime: "08:00",
   ...overrides,
 });
 
@@ -459,4 +470,80 @@ test("the grace window reads in hours or minutes", () => {
     senderAction("calendar", "Reminders", 150),
     /up to 150 minutes late/,
   );
+});
+
+test("healthy Food reminders follow Task reminders in Notifications", () => {
+  const notifications = check("notifications", {
+    taskReminders: taskNotifications(),
+    foodReminders: foodNotifications({ lastSentAt: null }),
+  });
+  assert.equal(notifications.state, "ok");
+  assert.deepEqual(
+    notifications.parts?.map((entry) => entry.id),
+    ["ntfy", "task-reminders", "food-reminders"],
+  );
+  const reminders = notifications.parts?.at(-1);
+  assert.equal(reminders?.title, "Food reminders");
+  assert.equal(reminders?.state, "ok");
+  assert.equal(reminders?.summary, "Running; nothing sent yet.");
+  assert.deepEqual(reminders?.facts, [
+    { label: "Last check", value: "10 Oct 2026, 13:59 CEST" },
+    { label: "Last sent", value: "never" },
+    { label: "Check interval", value: "30 s" },
+    { label: "Expiry reminder", value: "daily at 08:00 (Europe/Berlin)" },
+  ]);
+  assert.equal(
+    foodRemindersPart(foodNotifications(), now, zone).summary,
+    "Sending normally.",
+  );
+});
+
+test("stalled or failing Food reminders make Notifications a warning", () => {
+  const stalled = check("notifications", {
+    foodReminders: foodNotifications({
+      lastRunAt: "2026-10-10T11:40:00Z",
+      lastSuccessAt: "2026-10-10T11:40:00Z",
+    }),
+  });
+  assert.equal(stalled.state, "warning");
+  assert.equal(
+    stalled.summary,
+    "Food reminders are not being sent: the last check ran at 10 Oct 2026, 13:40 CEST.",
+  );
+  assert.equal(
+    stalled.action,
+    "Check the food service logs (docker compose logs food). Expiry reminders due meanwhile are sent when it catches up, up to 2 hours late; older ones are recorded in Activity as missed.",
+  );
+  const failing = part("notifications", "food-reminders", {
+    foodReminders: foodNotifications({
+      lastError: "send notification: 503",
+      lastErrorAt: "2026-10-10T11:59:40Z",
+      lastSuccessAt: "2026-10-10T11:58:40Z",
+    }),
+  });
+  assert.equal(failing?.state, "warning");
+  assert.equal(
+    failing?.summary,
+    "Food reminders may be late: the last check failed.",
+  );
+  assert.equal(failing?.detail, "send notification: 503");
+});
+
+test("Food reminders that are off or unreadable leave Notifications as it is", () => {
+  const off = check("notifications", {
+    foodReminders: foodNotifications({ enabled: false }),
+  });
+  assert.equal(off.state, "ok");
+  const reminders = off.parts?.at(-1);
+  assert.equal(reminders?.state, "neutral");
+  assert.equal(
+    reminders?.summary,
+    "Food sends no expiry reminders: its NOTIFICATIONS_SERVICE_URL is not set.",
+  );
+  for (const foodReminders of [null, undefined]) {
+    assert.deepEqual(
+      check("notifications", { foodReminders }).parts?.map((entry) => entry.id),
+      ["ntfy"],
+    );
+  }
 });
