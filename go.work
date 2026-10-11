@@ -10,6 +10,7 @@ use (
 	./services/finance
 	./services/food
 	./services/google-calendar
+	./services/host-health
 	./services/inbox
 	./services/mcp
 	./services/monitor
