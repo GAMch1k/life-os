@@ -27,7 +27,7 @@ docker compose exec -T \
   postgres /docker-entrypoint-initdb.d/10-provision-service-databases.sh
 ```
 
-Then build and start `food-migrate` and `food` before the Dashboard and the gateway: the gateway routes `/api/food/` and waits for the service, and the Dashboard's Status page probes Food's `/ready`, so a Dashboard deployed first reports Food as unavailable (and the monitor notifies) until it runs. Food has no settings of its own beyond `LIFE_OS_TIMEZONE`.
+Then build and start `food-migrate` and `food` before the Dashboard and the gateway: the gateway routes `/api/food/` and waits for the service, and the Dashboard's Status page probes Food's `/ready`, so a Dashboard deployed first reports Food as unavailable (and the monitor notifies) until it runs. Food has no settings of its own beyond `LIFE_OS_TIMEZONE`. Since P15-03, MCP calls Food too (`FOOD_SERVICE_URL`, compose: `http://food:8080`) for captured groceries, so deploy `mcp` and `processor` after Food.
 
 ## Phone notifications (ntfy)
 

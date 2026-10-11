@@ -15,8 +15,8 @@ shows the list's size and food expiring today or tomorrow; see
 
 **Groceries go to the list; other purchases stay Tasks.** Food, drinks,
 household, and drugstore items belong on the shopping list; buying a lamp or
-a birthday present stays a Task. The API serves the AI's routing (P15-03) with
-bulk adds that merge, and stores given by name.
+a birthday present stays a Task. The API serves the AI's routing (see
+[AI capture](#ai-capture)) with bulk adds that merge, and stores given by name.
 
 Every write needs `X-Life-OS-Actor` (see [Activity](activity.md#the-actor-gate))
 and takes an `Idempotency-Key` (see [Writes](#writes-actors-and-idempotency)).
@@ -197,6 +197,35 @@ another request is 409 `idempotency_conflict`. A refused write stores nothing,
 so its key stays free. Keys are kept for 30 days (`idempotency_keys`, pruned
 at most hourly).
 
+## AI capture
+
+Inbox captures reach Food through MCP (P15-03; see
+[MCP and AI](mcp.md#food)). The processor routes groceries written in English,
+Russian, or German to the shopping list and the pantry, and keeps other
+purchases as Tasks:
+
+- "Buy milk and 6 eggs", "купить хлеб и сыр в Lidl", "Zahnpasta und Duschgel
+  bei dm kaufen", and "buy milk tomorrow" add items
+  (`food_add_shopping_items`), named as the owner wrote them and untranslated,
+  with the quantity as `amount` and the store by name. "Buy a flash drive
+  tomorrow" stays a Task, and so does an explicit "Create a task: buy milk";
+  "buy milk and call mom" is split into an item and a Task. When it is
+  unclear whether something is a grocery, the capture goes to Human Review.
+- "I bought the milk" marks the one needed item that matches bought
+  (`food_mark_bought`), also in another language ("Молоко"). With no such
+  item the one matching open Task is completed, with none of either nothing
+  happens, and several matches go to Human Review.
+- "Йогурт в холодильнике до пятницы" adds a pantry item that expires the
+  coming Friday (`food_add_pantry_items`). "Молоко закончилось" marks the one
+  matching in-stock item used up (`food_update_pantry_item`), and puts milk
+  on the list when the capture says to buy more.
+
+Items from a capture have `source: capture` and the Inbox item's id as
+`sourceRef`, and their rows and events name `agent:codex-inbox-processor` as
+the actor. Every write carries an `Idempotency-Key` derived from the capture
+and the write, so a retried capture changes nothing twice; the merge rule (one
+needed item per name) is the second safety net.
+
 ## Activity
 
 Each change made through the API records one event (source `food`) with the
@@ -231,8 +260,8 @@ recorded. A creation or deletion has an id derived from the entity
 - Configuration: `ACTIVITY_SERVICE_URL` (compose: `http://activity:8080`;
   empty records nothing) and `LIFE_OS_TIMEZONE` (the owner's "today" for
   `expiringWithinDays`; an unknown name falls back to UTC, logged).
-- The Dashboard reaches Food at `FOOD_SERVICE_URL` (compose:
-  `http://food:8080`) and the browser at `/api/food`; Status probes its
+- The Dashboard and MCP reach Food at `FOOD_SERVICE_URL` (compose:
+  `http://food:8080`), and the browser at `/api/food`; Status probes its
   `/ready` ("Food").
 
 Tests: `internal/domain` has unit tests for normalisation (NFKC, case, ё,

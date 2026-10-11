@@ -6,7 +6,7 @@ Routine Inbox and Voice planning runs through the authenticated Codex CLI. X-01 
 
 ## How it was measured
 
-`tools/benchmark-ai-runtime <model/effort>…` starts a fresh disposable verification stack for each profile, with the owner's timezone set to Europe/Berlin, and seeds existing Tasks and Calendar events. It then submits the same captures: EN, RU, and DE text through the Inbox API the Dashboard uses, plus a recorded voice note through Voice and whisper.cpp. The automatic processor plans them with the real Codex CLI and acts through MCP and the owning services. The tool checks the persisted results:
+`tools/benchmark-ai-runtime <model/effort>…` starts a fresh disposable verification stack for each profile, with the owner's timezone set to Europe/Berlin, and seeds existing Tasks, Calendar events, and one shopping list item. It then submits the same captures: EN, RU, and DE text through the Inbox API the Dashboard uses, plus a recorded voice note through Voice and whisper.cpp. The automatic processor plans them with the real Codex CLI and acts through MCP and the owning services. The tool checks the persisted results:
 
 | Scenario | Pass condition |
 | --- | --- |
@@ -28,14 +28,27 @@ Routine Inbox and Voice planning runs through the authenticated Codex CLI. X-01 
 | Calendar reschedule ("Move my physiotherapy appointment to tomorrow at 9:00.", event "Physiotherapy" 14:00–15:30 in three days) | Resolved; the event is 09:00–10:30 Berlin on the day after capture (its 90 minutes kept); still one physiotherapy event |
 | Calendar ambiguous ("Move my meeting to Friday at 15:00.", events "Team meeting" and "Meeting with Anna") | Human Review with exactly those two candidates; neither changes |
 | Calendar cancel ("Cancel my haircut appointment.", event "Haircut") | Human Review with that event as the only candidate; it stays active |
-| No extra entities | Exactly 10 seeded + 3 created Tasks exist |
+| Cash EN ("Spent 12 euros at the bakery.") | Resolved; one −12.00 EUR transaction in the Cash account |
+| Cash RU ("Потратил 7,50 евро на кофе.") | Resolved; one −7.50 EUR transaction in the Cash account |
+| Card ("Paid 45 euros by card at REWE.") | Not resolved; no −45.00 transaction (the bank connection brings it) |
+| No extra transactions | Exactly the 2 cash transactions exist |
+| Food list EN ("Buy milk and 6 eggs.") | Resolved; "milk" and "eggs" (amount 6, `sourceRef` the capture) are needed on the shopping list |
+| Food list RU ("Купить хлеб и сыр в Lidl.") | Resolved; "хлеб" and "сыр" are needed, each tagged Lidl |
+| Food list DE ("Zahnpasta und Duschgel bei dm kaufen.") | Resolved; "Zahnpasta" and "Duschgel" are needed, each tagged dm |
+| Food bought ("I bought the bananas.", list item "Бананы") | Resolved; that item is bought; no other banana item |
+| Food pantry ("Йогурт в холодильнике до пятницы.") | Resolved; one "йогурт" in the fridge, expiring the coming Friday in Berlin from the capture (on a Friday, that day or a week later) |
+| Food flash drive ("Buy a flash drive tomorrow.") | Resolved; one flash drive Task, due the day after capture in Berlin; nothing on the list |
+| Food mixed ("Buy milk and call mom tomorrow.") | Resolved; still one "milk" on the list (merged with the EN list capture's); one "mom" Task; no Task with "milk" in its title |
+| No extra shopping items | Exactly 7 items (the seeded one + 6 added), each name once |
+| No extra pantry items | Exactly the yoghurt |
+| No extra entities | Exactly 10 seeded + 5 created Tasks exist (passport, milk, tax return, flash drive, call mom) |
 | No extra events | Exactly the 4 seeded events + the created one exist, all active |
 
 The reschedule cases turned out to separate the profiles. They were also repeated three times each directly against the planner (`processor -content`), to see how often a profile gets them right.
 
 ## Results (2026-10-09, Codex CLI 0.160.0, ChatGPT Plus)
 
-Full real-runtime runs. They predate the three cross-language completions (POL-08, see [cross-language Task matching](../services/mcp.md)) and the Calendar change scenarios (P10-03, see [Calendar events](../services/mcp.md#calendar-events)), so they count 13 checks; a run now has 20. Token figures are totals for the run, as reported by Codex (`turn.completed`).
+Full real-runtime runs. They predate the three cross-language completions (POL-08, see [cross-language Task matching](../services/mcp.md)), the Calendar change scenarios (P10-03, see [Calendar events](../services/mcp.md#calendar-events)), the cash and card captures (P13-01), and the grocery captures (P15-03, see [Food](../services/mcp.md#food)), so they count 13 checks; a run now has 33. Token figures are totals for the run, as reported by Codex (`turn.completed`).
 
 | Profile | Checks passed | Failed checks | Attempts | Output tokens | Reasoning tokens |
 | --- | --- | --- | --- | --- | --- |

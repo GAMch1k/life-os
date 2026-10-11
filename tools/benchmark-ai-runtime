@@ -4,11 +4,12 @@
 #   tools/benchmark-ai-runtime gpt-6-luna/none gpt-6-luna/low gpt-5.6-luna/medium
 #
 # For each profile (model/effort) a fresh disposable verification stack runs
-# with that profile, seeds Tasks and Calendar events, submits the same
-# captures (EN/RU/DE text, including completions of Tasks titled in another
-# of those languages and changes to existing events, through the Inbox API
-# the Dashboard uses, plus one recorded voice note through Voice and
-# whisper.cpp), lets the automatic processor plan them with the
+# with that profile, seeds Tasks, Calendar events, and a shopping list item,
+# submits the same captures (EN/RU/DE text, including completions of Tasks
+# titled in another of those languages, changes to existing events, cash
+# spending, and groceries for the shopping list and the pantry, through the
+# Inbox API the Dashboard uses, plus one recorded voice note through Voice
+# and whisper.cpp), lets the automatic processor plan them with the
 # authenticated Codex CLI and act through MCP, and then checks the persisted
 # results. The owner's timezone is Europe/Berlin. Results go to
 # $LIFE_OS_BENCHMARK_DIR (default: a new temporary directory) as one TSV per
@@ -58,6 +59,8 @@ seed_event() {
 at_local() { [ -n "$1" ] && [ "$(date -d "$1" +%s)" = "$(TZ=$zone date -d "$2 $3" +%s)" ]; }
 captured_day() { TZ=$zone date -d "$(item "$1" | jq -r '.createdAt')" +%F; }
 review_ids() { item "$1" | jq -c '[.processingMetadata.humanReview.candidates[]?.id] | sort'; }
+# seed_list <name>: a needed shopping list item, as added in the Dashboard.
+seed_list() { post_json /api/food/v1/shopping-items "$(jq -n --arg name "$1" '{items: [{name: $name}]}')" | jq -r '.items[0].item.id'; }
 
 run_profile() {
   local profile=$1 model=${1%%/*} effort=""
@@ -66,7 +69,7 @@ run_profile() {
   echo "== $profile"
   "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
   LIFE_OS_CODEX_MODEL=$model LIFE_OS_CODEX_REASONING_EFFORT=$effort "${compose[@]}" up --detach --no-build >/dev/null 2>&1
-  for service in inbox tasks calendar voice finance; do
+  for service in inbox tasks calendar voice finance food; do
     for _ in $(seq 1 90); do api "$gateway/api/$service/ready" >/dev/null 2>&1 && break; sleep 1; done
   done
   for _ in $(seq 1 180); do
@@ -95,6 +98,9 @@ run_profile() {
   haircut=$(seed_event "Haircut" 5 12:00 12:30)
   team_before=$(event "$team" | jq -c '{startAt, endAt, status}')
   anna_before=$(event "$anna" | jq -c '{startAt, endAt, status}')
+  # On the shopping list in Russian; an English capture marks it bought.
+  local bananas
+  bananas=$(seed_list "Бананы")
 
   declare -A ids
   ids[en_create]=$(capture "Create a task to renew the passport.")
@@ -117,6 +123,13 @@ run_profile() {
   ids[fin_cash_en]=$(capture "Spent 12 euros at the bakery.")
   ids[fin_cash_ru]=$(capture "Потратил 7,50 евро на кофе.")
   ids[fin_card]=$(capture "Paid 45 euros by card at REWE.")
+  ids[food_list_en]=$(capture "Buy milk and 6 eggs.")
+  ids[food_list_ru]=$(capture "Купить хлеб и сыр в Lidl.")
+  ids[food_list_de]=$(capture "Zahnpasta und Duschgel bei dm kaufen.")
+  ids[food_bought]=$(capture "I bought the bananas.")
+  ids[food_pantry_expiry]=$(capture "Йогурт в холодильнике до пятницы.")
+  ids[food_flashdrive_task]=$(capture "Buy a flash drive tomorrow.")
+  ids[food_mixed]=$(capture "Buy milk and call mom tomorrow.")
   local job
   job=$(api -F "audio=@$work/chicken.wav;type=audio/wav" -F source=web "$gateway/api/voice/v1/audio-jobs" | jq -r '.id')
   for _ in $(seq 1 120); do
@@ -208,10 +221,57 @@ run_profile() {
   s=$(state "${ids[fin_card]}")
   check fin_card "$([ "$s" != resolved ] && [ "$(jq '[.items[] | select(.amount.amount == -4500)] | length' <<<"$txns")" = 0 ] && echo 1 || echo 0)" "state=$s"
   check no_extra_transactions "$([ "$(jq '.items | length' <<<"$txns")" = 2 ] && echo 1 || echo 0)" "transactions=$(jq -c '[.items[] | {amount: .amount.amount, counterparty, description}]' <<<"$txns") (expected 2)"
-  # No fallback or invented entities: ten seeds plus three creates.
+  # Groceries go on the shopping list in the owner's words (Food compares
+  # names as normalizedName), with the store a capture names; a name already
+  # needed merges; other purchases stay Tasks.
+  local list pantry
+  list=$(api "$gateway/api/food/v1/shopping-items?limit=200")
+  pantry=$(api "$gateway/api/food/v1/pantry-items?limit=200")
+  listed() { # listed <normalized name> [store]: needed items of that name (and store)
+    jq --arg name "$1" --arg store "${2:-}" '[.items[] | select(.state == "needed" and .normalizedName == $name and ($store == "" or ((.storeName // "") | ascii_downcase) == $store))] | length' <<<"$list"
+  }
+  # food_list_en: milk (merged with food_mixed's) and the eggs, 6, from this capture.
+  s=$(state "${ids[food_list_en]}")
+  local eggs
+  eggs=$(jq --arg ref "${ids[food_list_en]}" '[.items[] | select(.state == "needed" and (.normalizedName == "eggs" or .normalizedName == "egg") and ((.amount // "") | test("6")) and .source == "capture" and .sourceRef == $ref)] | length' <<<"$list")
+  check food_list_en "$([ "$s" = resolved ] && [ "$(listed milk)" = 1 ] && [ "$eggs" = 1 ] && echo 1 || echo 0)" "state=$s milk=$(listed milk) eggs_6=$eggs"
+  s=$(state "${ids[food_list_ru]}")
+  check food_list_ru "$([ "$s" = resolved ] && [ "$(listed хлеб lidl)" = 1 ] && [ "$(listed сыр lidl)" = 1 ] && echo 1 || echo 0)" "state=$s bread_at_lidl=$(listed хлеб lidl) cheese_at_lidl=$(listed сыр lidl)"
+  s=$(state "${ids[food_list_de]}")
+  check food_list_de "$([ "$s" = resolved ] && [ "$(listed zahnpasta dm)" = 1 ] && [ "$(listed duschgel dm)" = 1 ] && echo 1 || echo 0)" "state=$s toothpaste_at_dm=$(listed zahnpasta dm) shower_gel_at_dm=$(listed duschgel dm)"
+  # food_bought: the seeded "Бананы" is bought, and no banana item was added.
+  s=$(state "${ids[food_bought]}")
+  local bought
+  bought=$(api "$gateway/api/food/v1/shopping-items/$bananas" | jq -r '.state')
+  check food_bought "$([ "$s" = resolved ] && [ "$bought" = bought ] && [ "$(jq '[.items[] | select(.normalizedName | test("banan|банан"))] | length' <<<"$list")" = 1 ] && echo 1 || echo 0)" "state=$s bananas=$bought"
+  # food_pantry_expiry: "до пятницы" is the coming Friday in Berlin from the
+  # capture (captured on a Friday: that day or a week later).
+  s=$(state "${ids[food_pantry_expiry]}")
+  local yogurt friday later expires
+  day=$(captured_day "${ids[food_pantry_expiry]}")
+  friday=$(date -u -d "$day + $(((12 - $(date -u -d "$day" +%u)) % 7)) days" +%F)
+  later=$friday
+  [ "$friday" = "$day" ] && later=$(date -u -d "$day + 7 days" +%F)
+  yogurt=$(jq -c '[.items[] | select(.state == "in_stock" and .normalizedName == "йогурт")]' <<<"$pantry")
+  expires=$(jq -r 'if length == 1 then .[0].expiresOn // "" else "" end' <<<"$yogurt")
+  check food_pantry_expiry "$([ "$s" = resolved ] && [ "$(jq -r 'if length == 1 then .[0].location else "" end' <<<"$yogurt")" = fridge ] && [[ "$expires" == "$friday" || "$expires" == "$later" ]] && echo 1 || echo 0)" "state=$s pantry=$(jq -c 'map({name, location, expiresOn})' <<<"$yogurt") want_expiresOn=$friday"
+  # food_flashdrive_task: a Task due the day after capture, nothing on the list.
+  s=$(state "${ids[food_flashdrive_task]}")
+  due=$(api "$gateway/api/tasks/v1/tasks?query=flash&limit=100" | jq -r '.items[0].dueAt // ""')
+  day=$(date -u -d "$(captured_day "${ids[food_flashdrive_task]}") + 1 day" +%F)
+  check food_flashdrive_task "$([ "$s" = resolved ] && [ "$(tasks_matching flash)" = 1 ] && [ -n "$due" ] && [ "$(TZ=$zone date -d "$due" +%F)" = "$day" ] && [ "$(jq '[.items[] | select(.normalizedName | test("flash|usb"))] | length' <<<"$list")" = 0 ] && echo 1 || echo 0)" "state=$s flash_tasks=$(tasks_matching flash) dueAt=$due want=$day"
+  # food_mixed: milk on the list (once, with food_list_en's) and a Task to call mom.
+  s=$(state "${ids[food_mixed]}")
+  check food_mixed "$([ "$s" = resolved ] && [ "$(listed milk)" = 1 ] && [ "$(tasks_matching mom)" = 1 ] && [ "$(tasks_matching milk)" = 0 ] && echo 1 || echo 0)" "state=$s milk=$(listed milk) mom_tasks=$(tasks_matching mom) milk_tasks=$(tasks_matching milk)"
+  # The seeded bananas plus milk, eggs, bread, cheese, toothpaste, and shower
+  # gel, each once; the yoghurt alone in the pantry.
+  check no_extra_shopping_items "$([ "$(jq '.items | length' <<<"$list")" = 7 ] && [ "$(jq '[.items[].normalizedName] | unique | length' <<<"$list")" = 7 ] && echo 1 || echo 0)" "items=$(jq -c '[.items[] | {name, amount, storeName, state}]' <<<"$list") (expected 7)"
+  check no_extra_pantry_items "$([ "$(jq '.items | length' <<<"$pantry")" = 1 ] && echo 1 || echo 0)" "items=$(jq -c '[.items[] | {name, location, expiresOn}]' <<<"$pantry") (expected 1)"
+  # No fallback or invented entities: ten seeds plus three creates, the
+  # flash drive, and the call to mom.
   local total
   total=$(api "$gateway/api/tasks/v1/tasks?limit=100" | jq '.items | length')
-  check no_extra_tasks "$([ "$total" = 13 ] && echo 1 || echo 0)" "tasks=$total (expected 13): $(api "$gateway/api/tasks/v1/tasks?limit=100" | jq -c '[.items[].title]')"
+  check no_extra_tasks "$([ "$total" = 15 ] && echo 1 || echo 0)" "tasks=$total (expected 15): $(api "$gateway/api/tasks/v1/tasks?limit=100" | jq -c '[.items[].title]')"
   # Four seeded events plus the one created, none cancelled.
   local all
   all=$(api "$gateway/api/calendar/v1/events?from=2026-01-01T00:00:00Z&to=$(date -u -d '+60 days' +%Y-%m-%dT%H:%M:%SZ)&includeCancelled=true&limit=100")

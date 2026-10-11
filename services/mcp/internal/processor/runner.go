@@ -126,10 +126,12 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 		return Proposal{}, err
 	}
 	parsed, err := approvedReviewPlan(item)
-	// The event the owner chose for an approved Calendar change.
-	approvedEvent := ""
+	// The event the owner chose for an approved Calendar change, and the
+	// shopping list or pantry item for an approved Food change.
+	approvedEvent, approvedFood := "", ""
 	if err == nil {
 		parsed, approvedEvent = approvedCalendarTarget(parsed)
+		parsed, approvedFood = approvedFoodTarget(parsed)
 	} else {
 		// The attempt is durable before Codex is spawned; its runtime record
 		// heartbeats until the outcome is stored.
@@ -150,7 +152,7 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 	}
 	// Fields the AI may not set are dropped and recorded, never an error.
 	dropped := dropAIFields(parsed)
-	if err == nil && (parsed.Ambiguous || parsed.Confidence < 0.8) && len(parsed.Actions) == 1 && (isTaskMutation(parsed.Actions[0]) || isCalendarMutation(parsed.Actions[0])) && validAction(parsed.Actions[0]) {
+	if err == nil && (parsed.Ambiguous || parsed.Confidence < 0.8) && len(parsed.Actions) == 1 && (isTaskMutation(parsed.Actions[0]) || isCalendarMutation(parsed.Actions[0]) || isFoodMutation(parsed.Actions[0])) && validAction(parsed.Actions[0]) {
 		if res, searchErr := r.resolve(ctx, item, parsed.Actions[0]); searchErr == nil {
 			return Proposal{}, r.reviewResolution(ctx, item, started.ID, res, lowConfidenceReason(res.action))
 		}
@@ -225,11 +227,17 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 				}
 			}
 		}
-		if target == nil && ((isTaskMutation(action) && action.Arguments["taskId"] == nil) || (isCalendarMutation(action) && approvedEvent == "")) {
+		if target == nil && ((isTaskMutation(action) && action.Arguments["taskId"] == nil) || (isCalendarMutation(action) && approvedEvent == "") || (isFoodMutation(action) && approvedFood == "")) {
 			res, findErr := r.resolve(ctx, item, action)
 			if findErr != nil {
 				reason, kind := failedSearch(findErr)
 				return Proposal{}, r.retryLater(ctx, item.ID, started.ID, actions, reason, kind, previous)
+			}
+			// Nothing to mark bought or used up: nothing is created
+			// instead, and the capture's other actions still run.
+			if isFoodMutation(action) && len(res.found) == 0 {
+				actions = append(actions, noted(map[string]any{"tool": "none", "plannedTool": action.Tool, "plannedArguments": action.Arguments, "reason": unmatchedFoodReason(action.Tool)}))
+				continue
 			}
 			// Every cancellation the AI proposes waits for the owner, even
 			// when exactly one event matches; it runs once approved. A
@@ -287,11 +295,25 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 				continue
 			}
 		}
+		if isFoodMutation(action) {
+			itemID := approvedFood
+			if target != nil {
+				itemID, _ = target["id"].(string)
+			}
+			arguments = foodArguments(action.Tool, arguments, itemID)
+		}
+		if action.Tool == "food_add_shopping_items" || action.Tool == "food_add_pantry_items" {
+			// Food records that the items came from this capture.
+			arguments["sourceRef"] = item.ID
+		}
 		if action.Tool == "calendar_create" {
 			completeCreate(arguments)
 		}
-		if action.Tool == "task_create" || action.Tool == "calendar_create" || action.Tool == "finance_create_manual_transaction" {
+		switch {
+		case action.Tool == "task_create" || action.Tool == "calendar_create" || action.Tool == "finance_create_manual_transaction":
 			arguments["idempotencyKey"] = actionIdempotencyKey(item, len(actions), action)
+		case isFoodWrite(action.Tool):
+			arguments["idempotencyKey"] = foodIdempotencyKey(item, action.Tool, arguments)
 		}
 		result, err := r.Tools.Call(ctx, action.Tool, arguments)
 		audit := noted(map[string]any{"tool": action.Tool, "arguments": arguments})
@@ -521,7 +543,7 @@ func (r Runner) record(ctx context.Context, itemID, attemptID, status string, ac
 	return err
 }
 func allowed(name string) bool {
-	return name == "task_create" || name == "task_update" || name == "task_complete" || name == "task_reopen" || name == "calendar_create" || name == "calendar_update" || name == "calendar_cancel" || name == "finance_create_manual_transaction"
+	return name == "task_create" || name == "task_update" || name == "task_complete" || name == "task_reopen" || name == "calendar_create" || name == "calendar_update" || name == "calendar_cancel" || name == "finance_create_manual_transaction" || isFoodWrite(name)
 }
 
 // validSearchTerms checks a mutation's primary search term and alternatives.
@@ -569,6 +591,10 @@ func validAction(action plannedAction) bool {
 		if action.Tool == "calendar_cancel" && !validCancelDay(action.Arguments) {
 			return false
 		}
+	} else if isFoodWrite(action.Tool) {
+		if !validFoodAction(action) {
+			return false
+		}
 	} else if action.Tool != "finance_create_manual_transaction" {
 		if title, ok := action.Arguments["title"].(string); !ok || strings.TrimSpace(title) == "" {
 			return false
@@ -586,6 +612,10 @@ func validAction(action plannedAction) bool {
 		"calendar_update":                   {"eventQuery": true, "eventQueryAlternatives": true, "title": true, "description": true, "location": true, "allDay": true, "startAt": true, "endAt": true, "startDate": true, "endDate": true, "timeZone": true, "reminders": true, "priority": true, "clear": true},
 		"calendar_cancel":                   {"eventQuery": true, "eventQueryAlternatives": true, "onDate": true, "occurrences": true},
 		"finance_create_manual_transaction": {"accountId": true, "categoryId": true, "amount": true, "occurredOn": true, "note": true, "counterparty": true, "description": true},
+		"food_add_shopping_items":           {"items": true},
+		"food_add_pantry_items":             {"items": true},
+		"food_mark_bought":                  {"itemQuery": true, "itemQueryAlternatives": true},
+		"food_update_pantry_item":           {"itemQuery": true, "itemQueryAlternatives": true, "state": true},
 	}
 	for field := range action.Arguments {
 		if !allowedFields[action.Tool][field] {
