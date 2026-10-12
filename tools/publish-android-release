@@ -1,0 +1,324 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# Publishes a build of the Android apps at the gateway's /android/
+# (docs/operations/android-releases.md):
+#
+#   tools/publish-android-release <release-dir> [--notes "…"] [--force]
+#
+# <release-dir> is what the app repository's build writes: release.json and
+# the APKs it describes, lifeos-<app>-<versionName>-<versionCode>.apk for
+# the phone and the watch (wear). Before it changes anything, the script
+# checks release.json (every field of each app, and a versionCode newer than
+# the published one: a downgrade, or the same versionCode with other bytes,
+# is refused unless --force) and every APK (present, with the size and
+# SHA-256 release.json gives). It then copies the APKs into the releases
+# directory and writes updates.json (the manifest the app checks) and
+# index.html (the download page), each through a temporary file renamed
+# into place: readers see the old file or the new one, and an interrupted
+# publish leaves the old manifest. It keeps the newest 5 versions of each
+# app, deletes older APKs, and prints what it did. The notes go with every
+# app it publishes. Run again with the same release, it publishes nothing
+# and only rewrites the page and finishes the pruning.
+#
+# The releases directory is LIFE_OS_ANDROID_RELEASES_DIR (the environment,
+# else .env), else /home/gamch1k/life-os.android, as for the gateway's
+# mount. It must exist, be writable by whoever runs this (its owner, uid
+# 1000: never root), and be readable by everyone (the gateway's nginx).
+#
+# Exit status: 0 published (or nothing new), 2 refused (nothing changed),
+# 1 failed.
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+usage='usage: tools/publish-android-release <release-dir> [--notes "…"] [--force]'
+keep=5
+url_prefix=/android/
+
+refuse() {
+  printf 'publish-android-release: %s\n' "$*" >&2
+  exit 2
+}
+fail() {
+  printf 'publish-android-release: %s\n' "$*" >&2
+  exit 1
+}
+
+release_arg='' notes='' force=false
+while (($#)); do
+  case "$1" in
+    --notes)
+      (($# >= 2)) || refuse "--notes needs a text"
+      notes=$2
+      shift
+      ;;
+    --notes=*) notes=${1#--notes=} ;;
+    --force) force=true ;;
+    -h | --help)
+      printf '%s\n' "$usage"
+      exit 0
+      ;;
+    -*) refuse "unknown option $1" ;;
+    *) [[ -z "$release_arg" ]] || refuse "too many arguments"; release_arg=$1 ;;
+  esac
+  shift
+done
+[[ -n "$release_arg" ]] || refuse "$usage"
+(($(id -u) != 0)) || refuse "run it as the releases directory's owner, not as root"
+for command in jq sha256sum flock; do
+  command -v "$command" >/dev/null 2>&1 || refuse "$command is required"
+done
+release_dir=$(realpath -e -- "$release_arg" 2>/dev/null) && [[ -d "$release_dir" ]] ||
+  refuse "$release_arg is not a directory"
+cd "$repo_root"
+
+# A setting from the environment, else from .env, as Compose reads it.
+setting() {
+  local name=$1 value=''
+  if [[ -n "${!name:-}" ]]; then
+    printf '%s' "${!name}"
+    return
+  fi
+  [[ ! -f .env ]] || value=$(sed -n "s/^$name=//p" .env | tail -n 1)
+  value=${value#[\"\']}; value=${value%[\"\']}
+  value=${value/#\~/${HOME:-}}
+  value=${value//'${HOME}'/${HOME:-}}; value=${value//'$HOME'/${HOME:-}}
+  printf '%s' "$value"
+}
+
+dir=$(setting LIFE_OS_ANDROID_RELEASES_DIR)
+dir=${dir:-/home/gamch1k/life-os.android}
+[[ -d "$dir" ]] || refuse "the releases directory $dir does not exist: create it with install -d -m 755 $dir"
+[[ -w "$dir" ]] || refuse "the releases directory $dir is not writable by $(id -un) (if Docker created it for the gateway, it belongs to root: sudo chown $(id -u):$(id -g) $dir)"
+[[ -n "$(find "$dir" -maxdepth 0 -perm -o=rx)" ]] || refuse "the gateway cannot read $dir: chmod 755 $dir"
+dir=$(realpath -e -- "$dir")
+[[ "$dir" != "$release_dir" ]] || refuse "the release directory is the releases directory itself"
+# The page shows times in the owner's zone (and the browser's, once loaded).
+zone=$(setting LIFE_OS_TIMEZONE)
+zone=${zone:-Europe/Berlin}
+
+# One publish at a time; a publish killed midway left only temporary files.
+exec 9<"$dir"
+flock --nonblock 9 || refuse "another publish to $dir is running"
+find "$dir" -maxdepth 1 -type f -name '.publish-*' -delete
+temps=()
+trap 'rm -f -- "${temps[@]}"' EXIT
+trap 'printf "publish-android-release: failed (line %s)\n" "$LINENO" >&2; exit 1' ERR
+
+# The release. The one place where release.json's names map to the
+# contract's: the apps may sit under "apps" or at the top level, and only
+# phone and wear count. Map other spellings here if the build ever writes
+# them.
+release_file=$release_dir/release.json
+[[ -f "$release_file" ]] || refuse "$release_file is missing"
+release=$(jq -c '
+  (if type == "object" and has("apps") then .apps else . end)
+  | if type == "object" then . else error("not an object") end
+  | {phone, wear}
+  | with_entries(select(.value != null))
+  | map_values(if type == "object" then {versionCode, versionName, minSdk, sha256, size, builtAt, commit} else . end)
+' "$release_file" 2>/dev/null) || refuse "$release_file is not a JSON object"
+[[ "$release" != '{}' ]] || refuse "$release_file describes neither phone nor wear"
+problems=$(jq -r '
+  def count: type == "number" and . == floor and . >= 1;
+  to_entries[] | .key as $app | .value
+  | if type != "object" then "\($app) must be an object" else
+      (if .versionCode | count and . <= 2100000000 then empty
+       else "\($app).versionCode must be a whole number from 1 to 2100000000" end),
+      (if .versionName | type == "string" and test("^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$") then empty
+       else "\($app).versionName must be 1 to 64 letters, digits, dots, _, +, or -, starting with a letter or digit" end),
+      (if .minSdk | count then empty else "\($app).minSdk must be a whole number from 1" end),
+      (if .sha256 | type == "string" and test("^[0-9a-f]{64}$") then empty
+       else "\($app).sha256 must be 64 lowercase hexadecimal digits" end),
+      (if .size | count then empty else "\($app).size must be a whole number of bytes" end),
+      (if .builtAt | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$") then empty
+       else "\($app).builtAt must be an RFC 3339 time such as 2026-10-12T10:00:00Z" end),
+      (if .commit | type == "string" and test("^[0-9A-Za-z._+-]{1,64}$") then empty
+       else "\($app).commit must be 1 to 64 letters, digits, dots, _, +, or -" end)
+    end
+' <<<"$release")
+[[ -z "$problems" ]] || refuse "$release_file is not a valid release:"$'\n'"$problems"
+
+# The published manifest, if any.
+manifest=$dir/updates.json
+published='{"apps": {}}'
+if [[ -e "$manifest" ]]; then
+  published=$(jq -c '
+    if type == "object" and (.apps | type) == "object"
+      and all(.apps[]; (.versionCode | type) == "number" and .versionCode == (.versionCode | floor)
+        and (.sha256 | type) == "string" and (.url | type) == "string")
+    then . else error("not a manifest") end
+  ' "$manifest" 2>/dev/null) ||
+    refuse "the published manifest $manifest is unreadable: repair it, or remove it to start over (the next publish then deletes the APKs it no longer lists)"
+fi
+
+# Every APK, and the decision per app, before anything changes.
+declare -A file sha
+apps=() publish=() unchanged=()
+mapfile -t apps < <(jq -r 'keys_unsorted[]' <<<"$release")
+for app in "${apps[@]}"; do
+  IFS=$'\t' read -r name code digest size < <(jq -r --arg app "$app" '.[$app] | [.versionName, .versionCode, .sha256, .size] | @tsv' <<<"$release")
+  file[$app]="lifeos-$app-$name-$code.apk"
+  sha[$app]=$digest
+  source="$release_dir/${file[$app]}"
+  [[ -f "$source" ]] || refuse "$app: ${file[$app]} is not in $release_dir"
+  actual=$(stat -L -c %s -- "$source")
+  [[ "$actual" == "$size" ]] || refuse "$app: ${file[$app]} is $actual bytes, release.json says $size"
+  actual=$(sha256sum <"$source" | cut -d ' ' -f 1)
+  [[ "$actual" == "${sha[$app]}" ]] || refuse "$app: the SHA-256 of ${file[$app]} is $actual, release.json says ${sha[$app]}"
+
+  IFS=$'\t' read -r current_code current_sha current_name < <(jq -r --arg app "$app" '.apps[$app] // {} | [.versionCode // 0, .sha256 // "", .versionName // ""] | @tsv' <<<"$published")
+  if ((code > current_code)); then
+    publish+=("$app")
+  elif ((code == current_code)) && [[ "${sha[$app]}" == "$current_sha" ]]; then
+    unchanged+=("$app")
+  elif [[ "$force" == true ]]; then
+    publish+=("$app")
+  elif ((code == current_code)); then
+    refuse "$app: versionCode $code is already published with a different APK; build it with a higher versionCode (or publish it anyway with --force)"
+  else
+    refuse "$app: versionCode $code ($name) is older than the published $current_code ($current_name); refusing a downgrade (--force publishes it anyway)"
+  fi
+done
+
+# The manifest. A published app's former entry moves to the front of its
+# "previous" list, which keeps the 4 before it.
+now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+updated=$(jq -n --argjson old "$published" --argjson release "$release" \
+  --arg now "$now" --arg notes "$notes" --arg prefix "$url_prefix" --argjson keep "$keep" '
+  $ARGS.positional as $publish
+  | reduce $publish[] as $app ($old.apps;
+      .[$app] as $current
+      | $release[$app] as $r
+      | ($prefix + "lifeos-\($app)-\($r.versionName)-\($r.versionCode).apk") as $url
+      | .[$app] = {versionCode: $r.versionCode, versionName: $r.versionName, minSdk: $r.minSdk, sha256: $r.sha256,
+          size: $r.size, url: $url, publishedAt: $now, builtAt: $r.builtAt, commit: $r.commit, notes: $notes,
+          previous: ((if $current then [$current | del(.previous)] + ($current.previous // []) else [] end)
+            | map(select(.url != $url)) | .[:$keep - 1])})
+  | {formatVersion: 1,
+     updatedAt: (if ($publish | length) > 0 then $now else ($old.updatedAt // $now) end),
+     apps: ({phone, wear} | with_entries(select(.value != null)))}
+' --args "${publish[@]}")
+
+# The download page, from the new manifest; written every time.
+times='{}'
+while IFS= read -r at; do
+  times=$(jq -c --arg at "$at" --arg shown "$(TZ=$zone date -d "$at" '+%-d %B %Y, %H:%M %Z')" '.[$at] = $shown' <<<"$times")
+done < <(jq -r '[.apps[] | .publishedAt, .previous[]?.publishedAt] | unique[]' <<<"$updated")
+page_program=$(cat <<'JQ'
+def mb: if . < 1000000 then "\(. / 1000 | ceil) kB" else "\(. / 100000 | round / 10) MB" end;
+def android: (if . >= 26 and . <= 36 then {"26":"8.0","27":"8.1","28":"9","29":"10","30":"11","31":"12","32":"12L","33":"13","34":"14","35":"15","36":"16"}[tostring] else null end) as $v
+  | if $v then "Android \($v) or newer" else "Android API level \(.) or newer" end;
+def when: @html "<time datetime=\"\(.)\">\($times[.] // .)</time>";
+def facts: @html "Version \(.versionName) (\(.versionCode)) · \(.size | mb) · \(.minSdk | android) · published " + (.publishedAt | when);
+def notes: if (.notes // "") != "" then @html "<p>\(.notes)</p>" else "" end;
+def app_name: {phone: "Phone", wear: "Watch"}[.];
+.apps as $apps
+| [
+  "<!doctype html>",
+  "<html lang=\"en\">",
+  "<head>",
+  "<meta charset=\"utf-8\">",
+  "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
+  "<meta name=\"robots\" content=\"noindex\">",
+  "<title>Life OS for Android</title>",
+  "<style>",
+  ":root { color-scheme: light dark; font-family: system-ui, sans-serif; line-height: 1.5; }",
+  "body { max-width: 36rem; margin: 2rem auto; padding: 0 1rem; }",
+  ".download { display: block; padding: 1rem; border-radius: 0.75rem; background: #2563eb; color: #fff; text-align: center; font-size: 1.25rem; font-weight: 600; text-decoration: none; }",
+  ".meta { opacity: 0.75; font-size: 0.875rem; }",
+  "code { overflow-wrap: anywhere; }",
+  "</style>",
+  "</head>",
+  "<body>",
+  "<h1>Life OS for Android</h1>",
+  (if $apps.phone then $apps.phone | (
+    @html "<p><a class=\"download\" href=\"\(.url)\">Download Life OS \(.versionName)</a></p>",
+    "<p class=\"meta\">" + facts + "</p>",
+    notes,
+    @html "<p class=\"meta\">SHA-256 <code>\(.sha256)</code></p>"
+  ) else "<p>No phone build has been published yet.</p>" end),
+  "<h2>First install</h2>",
+  "<ol>",
+  "<li>Open this page on the phone and tap <strong>Download</strong>.</li>",
+  "<li>Open the downloaded file. The first time, Android asks to allow installing apps from this browser (<em>Install unknown apps</em>): allow it, then tap <strong>Install</strong>.</li>",
+  "<li>From then on the app finds its updates itself, in <a href=\"/android/updates\">the manifest</a>. Android installs an update only when it is signed with the same key as the installed app.</li>",
+  "</ol>",
+  "<h2>Watch</h2>",
+  (if $apps.wear then $apps.wear | (
+    @html "<p><a href=\"\(.url)\">Life OS for Wear OS \(.versionName)</a></p>",
+    "<p class=\"meta\">" + facts + "</p>",
+    notes,
+    @html "<p class=\"meta\">Install it on the watch with wireless debugging on (Developer options): <code>adb install \(.url | ltrimstr("/android/"))</code>. SHA-256 <code>\(.sha256)</code></p>"
+  ) else "<p>No watch build has been published yet.</p>" end),
+  ([$apps | to_entries[] | .key as $app | .value.previous[]? | . + {app: $app}] as $older
+   | if ($older | length) > 0 then
+       "<h2>Older versions</h2>",
+       "<p class=\"meta\">Kept for reference: Android does not install an older version over a newer one.</p>",
+       "<ul>",
+       ($older[] | "<li>" + (@html "<a href=\"\(.url)\">\(.app | app_name) \(.versionName) (\(.versionCode))</a> · \(.size | mb) · published ") + (.publishedAt | when) + "</li>"),
+       "</ul>"
+     else empty end),
+  "<script>",
+  "for (const time of document.querySelectorAll(\"time[datetime]\")) {",
+  "  time.textContent = new Date(time.dateTime).toLocaleString(undefined, { day: \"numeric\", month: \"long\", year: \"numeric\", hour: \"2-digit\", minute: \"2-digit\", timeZoneName: \"short\" });",
+  "}",
+  "</script>",
+  "</body>",
+  "</html>"
+] | map(select(. != "")) | join("\n")
+JQ
+)
+page=$(jq -r --argjson times "$times" "$page_program" <<<"$updated")
+
+# Now the writes, each to a temporary file in the releases directory ($tmp)
+# that place renames into place once it is complete. Both run in this
+# shell, never in a pipeline.
+new_temp() {
+  tmp=$(mktemp -- "$dir/.publish-XXXXXXXX")
+  temps+=("$tmp")
+}
+place() { # <temporary file> <name>
+  chmod 644 -- "$1"
+  sync -- "$1"
+  mv -f -T -- "$1" "$dir/$2"
+}
+# The APKs first: until the manifest is renamed, nothing points at them.
+for app in "${publish[@]}"; do
+  new_temp
+  cp -- "$release_dir/${file[$app]}" "$tmp"
+  [[ "$(sha256sum <"$tmp" | cut -d ' ' -f 1)" == "${sha[$app]}" ]] ||
+    fail "$app: the copy of ${file[$app]} does not match its SHA-256 (is the disk full?); nothing was published"
+  place "$tmp" "${file[$app]}"
+done
+
+if ((${#publish[@]})); then
+  new_temp
+  printf '%s\n' "$updated" >"$tmp"
+  place "$tmp" updates.json
+fi
+
+new_temp
+printf '%s\n' "$page" >"$tmp"
+place "$tmp" index.html
+
+# Older APKs: everything the manifest no longer lists.
+declare -A listed
+while IFS= read -r name; do listed[$name]=1; done < <(jq -r --arg prefix "$url_prefix" '.apps[] | .url, .previous[]?.url | ltrimstr($prefix)' <<<"$updated")
+deleted=()
+for path in "$dir"/lifeos-phone-*.apk "$dir"/lifeos-wear-*.apk; do
+  [[ -f "$path" ]] || continue
+  name=${path##*/}
+  [[ -n "${listed[$name]:-}" ]] && continue
+  rm -f -- "$path"
+  deleted+=("$name")
+done
+
+for app in "${publish[@]}"; do
+  jq -r --arg app "$app" '.apps[$app] | "published \($app) \(.versionName) (\(.versionCode)): \(.url), \(.size) bytes, sha256 \(.sha256)"' <<<"$updated"
+done
+for app in "${unchanged[@]}"; do
+  jq -r --arg app "$app" '.apps[$app] | "unchanged \($app) \(.versionName) (\(.versionCode)): already published \(.publishedAt)"' <<<"$updated"
+done
+for name in "${deleted[@]}"; do printf 'deleted %s (keeping the newest %d of each app)\n' "$name" "$keep"; done
+((${#publish[@]})) || printf 'nothing new to publish; the page is rewritten\n'
+printf 'manifest: %s (served at %supdates), page: %s (served at %s)\n' "$manifest" "$url_prefix" "$dir/index.html" "$url_prefix"
