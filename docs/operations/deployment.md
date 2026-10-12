@@ -44,18 +44,9 @@ Optional. The `ntfy` container (Compose profile `ntfy`) pushes notifications to 
 
 A deploy of this change also recreates the gateway (`docker compose up -d --force-recreate --no-deps gateway`): it now answers only its listed hosts. Check WireGuard (`curl -s -o /dev/null -w '%{http_code}\n' http://10.66.66.1:3001/` gives 200) and the public path (`tools/check-cloudflare-access`) afterwards.
 
-## Web push to the installed app
+## Web push (for the native app)
 
-Optional, next to ntfy (P12-10). The Notifications service pushes every notification to the devices that turned on **Notifications on this device** in the Dashboard, through their browser's push service (FCM for Chrome on Android), which reaches the phone on networks that block ntfy. It needs a VAPID key pair in `.env` and `webpush` in `LIFE_OS_NOTIFICATIONS_CHANNELS`, no new container, network, gateway route, or Access rule: the service already has outbound HTTPS on `backend`.
-
-1. `cd services/notifications && GOWORK=off go run ./cmd/vapid-keys` prints `LIFE_OS_WEBPUSH_VAPID_PUBLIC_KEY=…` and `LIFE_OS_WEBPUSH_VAPID_PRIVATE_KEY=…`: paste both into `.env` (the private key is a secret). Optionally `LIFE_OS_WEBPUSH_SUBJECT=mailto:<address>`. Set `LIFE_OS_NOTIFICATIONS_CHANNELS=ntfy,webpush`.
-2. Build, one at a time: `docker compose build notifications`, then `docker compose build dashboard`.
-3. Migrate: `docker compose up --no-build --no-deps notifications-migrate` applies `000003_push_subscriptions` and exits.
-4. Start: `docker compose up -d --no-build --no-deps notifications`, then `docker compose up -d --no-build --no-deps dashboard`. The gateway is not recreated.
-5. Check: `docker compose logs notifications` shows the channels with `webpush`; `GET /api/notifications/v1/push/config` answers `"configured": true, "delivering": true`.
-6. On the phone: open the installed Life OS app → Notifications → **Turn on** under **Notifications on this device** → allow. **Send test** should show "Test notification" at once; then the Status page lists **Web push (Life OS app)** under Notifications.
-
-Keep the key pair: a new one makes every device's subscription invalid until it is turned on again there. Details: [Notifications → Web push](../services/notifications.md#web-push).
+Notifications can deliver by Web Push (P12-10), but nothing subscribes to it yet: the owner decided on 2026-10-12 against notifications from the Dashboard in the browser, and the planned Android app (P18-05) will register its push endpoint here instead. The channel stays off (`LIFE_OS_NOTIFICATIONS_CHANNELS=ntfy`). The VAPID keys are already in `.env` (from `cd services/notifications && GOWORK=off go run ./cmd/vapid-keys`); keep that pair, since a new one invalidates every subscription. Details: [Notifications → Web push](../services/notifications.md#web-push).
 
 ## Adding the monitor to an existing deployment
 

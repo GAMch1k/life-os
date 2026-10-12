@@ -85,7 +85,7 @@ A channel implements `Name()` and `Send(ctx, notification) error` (`services/not
 
 - Empty (the default): notifications are stored and listed in the Dashboard, and their `deliveries` are empty.
 - `ntfy` pushes each notification to the owner's Android phone through the self-hosted ntfy server (below).
-- `webpush` pushes each notification to every device that turned on notifications in the Dashboard, above all the installed Life OS app on the owner's phone, through the browser vendor's push service ([web push](#web-push)). It needs the VAPID keys.
+- `webpush` pushes each notification to every subscribed device through its push service ([web push](#web-push)). It needs the VAPID keys. Nothing subscribes yet: the Dashboard has no browser notifications (the owner's decision, 2026-10-12), and the planned Android app (P18-05) will register its endpoint through `POST /v1/push/subscriptions`. The deployment lists only `ntfy`.
 - `log` writes each delivery's metadata (never the body) to the service log. It is for development and verification of the delivery path.
 
 The deployment uses `LIFE_OS_NOTIFICATIONS_CHANNELS=ntfy,webpush`: both reach the phone, so a network that blocks one (a work Wi-Fi that resets the TLS handshake to `ntfy.gamch1k.com`) still lets the other through.
@@ -121,27 +121,25 @@ curl -X POST "$GATEWAY/api/notifications/v1/notifications" -H 'X-Life-OS-Actor: 
 
 ### Web push
 
-The `webpush` channel delivers to browsers with the Web Push protocol (RFC 8030): each browser that turns on **Notifications on this device** on `/notifications` subscribes with its push service and gives Life OS the subscription (an endpoint URL and two keys), and Notifications posts each notification to that endpoint. On Android the push service is Google's FCM, which Chrome keeps a connection to anyway, so a push arrives where Chrome reaches Google even when ntfy is blocked, and the installed app shows it even while it is closed. The payload is end-to-end encrypted for the browser (RFC 8291); the push service sees only its size and the request's urgency and lifetime.
+The `webpush` channel delivers to browsers with the Web Push protocol (RFC 8030): a subscriber (planned: the Android app, through UnifiedPush; the Dashboard has no browser notifications) registers its push service subscription with Life OS (an endpoint URL and two keys), and Notifications posts each notification to that endpoint. On Android the push service is Google's FCM, which Chrome keeps a connection to anyway, so a push arrives where Chrome reaches Google even when ntfy is blocked, and the installed app shows it even while it is closed. The payload is end-to-end encrypted for the browser (RFC 8291); the push service sees only its size and the request's urgency and lifetime.
 
 ```mermaid
 sequenceDiagram
-  participant D as Dashboard (phone)
+  participant A as Subscriber (planned: Android app)
   participant N as Notifications
   participant P as Push service (FCM)
-  participant SW as Service worker (sw.js)
-  D->>N: GET /v1/push/config (VAPID public key)
-  D->>P: pushManager.subscribe(key)
-  P-->>D: endpoint + keys
-  D->>N: POST /v1/push/subscriptions
+  A->>N: GET /v1/push/config (VAPID public key)
+  A->>P: subscribe (UnifiedPush / Web Push)
+  P-->>A: endpoint + keys
+  A->>N: POST /v1/push/subscriptions
   Note over N: a notification is created
   N->>P: POST endpoint (encrypted payload, VAPID token)
-  P->>SW: push
-  SW->>D: showNotification; a tap opens the link
+  P->>A: push; the app shows it
 ```
 
 **Signing and encryption.** `internal/webpush` implements the protocol with Go's standard library: each push is encrypted for the subscription with the `aes128gcm` content coding (RFC 8291 over RFC 8188; one record, a fresh ephemeral key and salt each time; checked against the RFC's example byte for byte) and signed with a VAPID token (RFC 8292: an ES256 JWT for the push service's origin, valid 12 hours, `sub` the subject below, and the public key in `Authorization: vapid t=…, k=…`). No third-party Web Push library: the standard library has every primitive (P-256 ECDH and ECDSA, HKDF, AES-GCM), and the channel needs the push service's status codes itself.
 
-**The payload** is JSON that `apps/dashboard/public/sw.js` turns into the notification:
+**The payload** is JSON for the subscriber to turn into a notification:
 
 | Field | From the notification |
 | --- | --- |
@@ -168,7 +166,7 @@ Delivery stays at least once: a crash between a push service accepting a push an
 
 **Network.** Pushes go from the service to the push services over HTTPS (`fcm.googleapis.com`, `updates.push.services.mozilla.com`, `web.push.apple.com`, `*.notify.windows.com`). The service is on the `backend` network, which has outbound access (as the integrations have), so nothing changes there; `notify-internal` stays internal for ntfy. The phone never connects to Life OS for a push.
 
-**Cloudflare Access.** Subscribing and every API call go through `/api/notifications` like the rest of the Dashboard, with the Access cookie. A tap on a notification is an ordinary navigation of the app (`clients.openWindow` or `WindowClient.navigate`), so the cookie goes with it; when the Access session has expired, Access asks for the email code and then opens the page.
+**Cloudflare Access.** A subscriber calls the API through `lifeos.gamch1k.com`, behind Access; pushes themselves go from the server to the push service, so the phone never connects to Life OS to receive one.
 
 **Set it up** (once; see [Operations](#operations) for the deploy):
 
@@ -178,9 +176,9 @@ Delivery stays at least once: a crash between a push service accepting a push an
    cd services/notifications && GOWORK=off go run ./cmd/vapid-keys
    ```
 
-2. Optionally set `LIFE_OS_WEBPUSH_SUBJECT=mailto:<your address>` (default: `LIFE_OS_PUBLIC_URL`), and set `LIFE_OS_NOTIFICATIONS_CHANNELS=ntfy,webpush`.
-3. Deploy (migration `000003_push_subscriptions`, then the service, then the Dashboard).
-4. On the phone, open the installed Life OS app, go to Notifications, tap **Turn on** under **Notifications on this device**, and allow notifications. **Send test** shows a test notification on every device.
+2. Optionally set `LIFE_OS_WEBPUSH_SUBJECT=mailto:<your address>` (default: `LIFE_OS_PUBLIC_URL`). Add `webpush` to `LIFE_OS_NOTIFICATIONS_CHANNELS` (`ntfy,webpush`) only once a subscriber exists.
+3. Deploy (migration `000003_push_subscriptions`, then the service).
+4. The Dashboard has no browser notifications (the owner's decision, 2026-10-12): the Android app (P18-05) will subscribe.
 
 To send a test push to every device from the command line:
 
