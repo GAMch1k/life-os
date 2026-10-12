@@ -3,8 +3,9 @@
 Finance is the owner's personal-finance tool: accounts and their balances,
 every transaction, manual and cash entries, categories with simple rules, CSV
 imports, bank syncs pushed by the banking integration service, monthly
-summaries, monthly budgets with their notifications, and subscriptions with
-the money alerts (renewals, large debits, low balances). It keeps them in `finance_db` and is their only source of truth:
+summaries, monthly budgets with their notifications and the AI's budget
+plans, and subscriptions with the money alerts (renewals, large debits, low
+balances). It keeps them in `finance_db` and is their only source of truth:
 clients (the Dashboard's Finance workspace, MCP, the banking service) use its
 API, never its database. It does not create Tasks or Calendar events. Gateway
 base: `/api/finance`; the contract is `services/finance/api/openapi.yaml`;
@@ -405,6 +406,112 @@ A summary due while Finance was down is still sent during the first week of
 the month. Without `NOTIFICATIONS_SERVICE_URL` nothing is sent (logged at
 startup).
 
+### AI budget plans
+
+The AI plans a month's budget and says where the owner can spend less
+(P13-09). The owner asked for it once their bank data had merchant names
+and categories ("can we have ai planning a budget based on all of that?
+maybe where I can spend less (like food)"); with about €105 left after
+pending payments, the advice has to be concrete. Finance keeps the plans,
+the processor's AI budget plan job runs them through MCP (see
+[MCP](mcp.md#ai-budget-plans)), and the Dashboard shows them on the Budget
+tab. **Nothing changes the budget until the owner applies a plan.**
+
+**Why Finance owns them.** A plan is budget data: it is asked for a month,
+proposes amounts for Finance's categories from Finance's history, and is
+applied into the month's budget in the same database transaction. Kept in
+`finance_db` from the request on, it outlives a processor restart (the
+processor keeps no state of its own), and the owner's request is a Finance
+write like any other budget change, with no processor route to reach.
+
+**Asking.** `POST /v1/ai-budget-plans` with `month` (YYYY-MM: this month or
+one of the next 12; by default the current month during its first 7 days,
+else the next month, in the owner's timezone) and an optional
+`savingsGoalMinor` (per month) makes a `requested` plan (202). Asking for a
+month whose plan is still requested or running answers with that one
+(200): the request joins it. The owner may ask 10 times a day (429
+`daily_limit`); a development tool's requests do not count. `trigger:
+"schedule"` is the job's own plan on the 1st of a month: one per month (a
+repeat answers with it, dismissed or not), and none when the owner already
+asked for that month since it began.
+
+**States.** `requested` → `running` (the job claimed it) → `ready` (the
+AI's proposal is there) or `failed`. A run that failed for now goes back to
+`requested` with its `error` until `retryAt`. A ready plan becomes `applied`
+or `partly_applied` (the owner left some lines out), and any plan can be
+`dismissed`. `GET /v1/ai-budget-plans` lists them newest first (`month`,
+`state`, `limit` 1–50, default 10), with `waiting`, how many the job may
+claim now; `GET /v1/ai-budget-plans/{id}` reads one.
+
+**Planning data.** `GET /v1/budgets/{month}/planning-data` is what the AI is
+told, aggregates only, never single transactions, in the budget currency:
+
+- `months`: the complete months the history covers before the month (never
+  after the current month), at most 12, oldest first. The history starts at
+  the first booked transaction; when that is after the 1st of its month,
+  that month is partial (`firstMonthPartial`). `fullMonths` counts the
+  whole ones; with fewer than 2 the plan is `rough`.
+- per month: the income, all spending, and spending without a category,
+  booked, as the budget counts them;
+- per active expense category but Savings: its spending per month (less
+  refunds), the median of the last three complete months exactly as the
+  suggestions compute it, last month, the trend (`up` or `down` when the
+  last three months' average, or with fewer than four full months the last
+  month, is at least 10% above or below the earlier months' average; else
+  `flat`; none with fewer than two full months; a partial first month is
+  left out of it), its amount in the plan that applies, and its 5 largest
+  merchants over the median's months, grouped as subscriptions group
+  merchants, with how many payments, how much, and how much a month;
+- the plan that applies, the confirmed subscriptions in the currency (their
+  monthly amounts), and the balance now, pending payments included.
+
+**The job's side.** For agents and Life OS components; the owner gets 403
+`actor_not_allowed`. `POST /v1/ai-budget-plans/claim` claims the oldest plan
+that is requested and due, or running on a claim older than 15 minutes (the
+processor stopped during the run): it becomes `running`, one more attempt.
+One plan runs at a time; `plan` is null when another runs or nothing waits.
+`PUT /v1/ai-budget-plans/{id}/result` leaves the proposal of a requested or
+running plan (409 `plan_not_running` otherwise, such as one dismissed
+meanwhile). Finance checks it against the month's planning data and refuses
+it with 400 `invalid_plan`, naming what is wrong:
+
+- the budget currency;
+- a line for every active expense category but Savings, each once, with an
+  amount of 0 or more and a reason; a category without spending in the
+  window and without an amount in the plan may be left out and gets 0;
+- 2 to 5 ways to spend less (none needed without spending), each with a
+  title, a detail, and a monthly saving above 0 and no larger than the
+  spending it comes from: its category's median or last month, whichever is
+  larger; the named merchants' monthly spending (they must be that
+  category's merchants in the planning data); or, without a category, all
+  spending. Together they are no larger than all spending. A link may only
+  be `food_recipes` (Food's recipes, for cooking more);
+- totals that add up to within one unit of the currency: the projected
+  total is the sum of the lines, and the projected savings are the income
+  estimate (0 or more) minus it.
+
+The plan is then `ready`. It keeps the exact totals, the savings goal (the
+owner's, else the plan's), and per line Finance's own evidence: the amount
+in the plan that applied, the median, last month, and the trend, never the
+AI's numbers. `goalGap` is how much the projected savings fall short of the
+goal. `POST /v1/ai-budget-plans/{id}/failure` notes a failed run: with
+`retryAt` the plan waits as `requested` until then; without, it `failed`.
+
+**Applying.** `POST /v1/ai-budget-plans/{id}/apply` takes `lines` (1 to 500,
+the plan's categories, each once, `amountMinor` 0 or more: the proposed
+amounts or the owner's edits), `scope` (`month`, the default, or
+`following`), and optionally `expectedIncomeMinor` and `savingsGoalMinor`.
+It writes through the same save as `PUT /v1/budgets/{month}`: the plan that
+applies to the month, with the chosen categories at the given amounts (0
+leaves one out), the income and goal when given (else the plan's stay), for
+the month only or as the regular plan from it on. The plan is `applied`, or
+`partly_applied` when some of its lines were left out. A ready or applied
+plan can be applied again; the same choice again changes and records
+nothing. A requested, running, or failed plan is 409 `plan_not_ready`, a
+dismissed one 409 `plan_dismissed`. The answer has the plan and the month's
+budget. `POST /v1/ai-budget-plans/{id}/dismiss` dismisses a plan in any
+state; what it applied stays in the budget.
+
 ## Subscriptions
 
 A subscription is a recurring payment. Finance finds them itself, in
@@ -564,6 +671,11 @@ tool) and tied to its correlation and causation:
 | `finance.bank_connection.removed` | `finance_bank_connection` | "Bank connection to Deutsche Bank removed: 2 accounts archived" |
 | `finance.budget.saved` | `finance_budget` (the month) | "Regular budget from October 2026 on saved: 9 categories, €2,100.00 planned, €400.00 savings goal; 1 later month's own budget replaced", "Budget for December 2026 saved: …" |
 | `finance.budget.reset` | `finance_budget` | "Budget for December 2026 returned to the regular plan" |
+| `finance.ai_budget_plan.requested` | `finance_ai_budget_plan` | "AI budget plan for November 2026 requested, savings goal €200.00"; "… scheduled" for the job's plan on the 1st |
+| `finance.ai_budget_plan.created` | `finance_ai_budget_plan` | "AI budget plan for November 2026 ready: €1,190.00 planned for 10 categories, 3 ways to spend less (≈ €85.00 a month)", by the AI (`agent:codex-budget-plan`), "; rough, on little history" when rough; `data` has the counts and amounts, never the AI's texts |
+| `finance.ai_budget_plan.failed` | `finance_ai_budget_plan` | "AI budget plan for November 2026 failed: gave up after 5 runs: …" (outcome failed); a run that is tried again records nothing |
+| `finance.ai_budget_plan.applied` | `finance_ai_budget_plan` | "AI budget plan for November 2026 applied: 8 of 10 categories (€1,100.00), for November 2026 only", after `finance.budget.saved` when the budget changed |
+| `finance.ai_budget_plan.dismissed` | `finance_ai_budget_plan` | "AI budget plan for November 2026 dismissed" |
 | `finance.budget_defaults.added` | `finance_category_defaults` | "Default budget categories added: 12 created, 1 existing category used; 31 merchant rules added" (`system:finance`) |
 | `finance.subscription.created` | `finance_subscription` | "“Urban Sports Club” marked as a subscription (€29.99 monthly)" |
 | `finance.subscription.confirmed` / `.ignored` | `finance_subscription` | "Subscription “Netflix” confirmed (€13.99 monthly)", "Subscription “FitX” ignored" |
@@ -615,7 +727,13 @@ category. `000008_ai_categories` adds the `ai` value of `categorized_by`,
 counterparty or description clears it), and a partial index on the AI's
 candidates; existing rows are unchanged. Its rollback keeps every category:
 an AI choice counts as a rule's (so applying the rules with scope `all`
-re-checks it), and when the AI looked is forgotten.
+re-checks it), and when the AI looked is forgotten. `000009_ai_budget_plans`
+adds `ai_budget_plans`: the month, currency, savings goal, trigger (one
+scheduled plan per month), state, who asked, the attempts with the claim
+time, `retry_at`, and the last error, the checked proposal and what was
+applied (JSON), and when it finished, was applied, or dismissed; existing
+rows are unchanged. Its rollback drops the table; what applied plans wrote
+stays as ordinary budget plans.
 
 Configuration: `DATABASE_URL`, `ACTIVITY_SERVICE_URL`, `LIFE_OS_TIMEZONE`
 (unset or unknown means UTC, logged at startup; budget months and the summary
