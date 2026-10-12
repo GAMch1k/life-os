@@ -163,7 +163,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Accepted transcription job */
+            /** @description Accepted transcription job, or the job an earlier upload with the same Idempotency-Key created */
             202: {
                 headers: {
                     [name: string]: unknown;

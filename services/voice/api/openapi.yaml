@@ -41,7 +41,7 @@ paths:
           description: Makes the upload safe to retry, such as the capture id an app sends with every attempt. 1 to 200 visible ASCII characters; anything else is 400 `invalid_request`.
           schema: {type: string, minLength: 1, maxLength: 200, pattern: '^[!-~]+$'}
       requestBody: {required: true, content: {multipart/form-data: {schema: {type: object, required: [audio], properties: {audio: {type: string, format: binary}, source: {type: string, enum: [web, watch, manual], default: web}, sourceMetadata: {type: string, description: JSON object encoded as a multipart field}}}}}}
-      responses: {'202': {description: Accepted transcription job, or the job an earlier upload with the same Idempotency-Key created, content: {application/json: {schema: {$ref: '#/components/schemas/AudioJob'}}}}, '400': {description: 'Invalid audio, or an invalid Idempotency-Key (`invalid_request`)'}, '409': {description: 'The Idempotency-Key was already used with a different upload (`idempotency_conflict`)'}, '413': {description: Audio exceeds configured limit}}
+      responses: {'202': {description: 'Accepted transcription job, or the job an earlier upload with the same Idempotency-Key created', content: {application/json: {schema: {$ref: '#/components/schemas/AudioJob'}}}}, '400': {description: 'Invalid audio, or an invalid Idempotency-Key (`invalid_request`)'}, '409': {description: 'The Idempotency-Key was already used with a different upload (`idempotency_conflict`)'}, '413': {description: Audio exceeds configured limit}}
   /v1/audio-jobs/{jobId}:
     get:
       summary: Poll an asynchronous transcription job
