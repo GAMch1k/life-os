@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -310,6 +311,12 @@ func TestIdeasAreCheckedStrictly(t *testing.T) {
 		{"a web idea without search", variant(`"source":"ai","sourceUrl":null`, `"source":"web","sourceUrl":"https://example.com/pfanne"`), WebSearchDisabled, false},
 		{"a web idea with search", variant(`"source":"ai","sourceUrl":null`, `"source":"web","sourceUrl":"https://example.com/pfanne"`), WebSearchLive, true},
 		{"a web idea without its page", variant(`"source":"ai","sourceUrl":null`, `"source":"web","sourceUrl":"example.com"`), WebSearchLive, false},
+		{"a web idea on localhost", variant(`"source":"ai","sourceUrl":null`, `"source":"web","sourceUrl":"http://localhost:8080/rezept"`), WebSearchLive, false},
+		{"a web idea on an IP address", variant(`"source":"ai","sourceUrl":null`, `"source":"web","sourceUrl":"http://192.168.1.10/rezept"`), WebSearchLive, false},
+		{"a web idea on an IPv6 address", variant(`"source":"ai","sourceUrl":null`, `"source":"web","sourceUrl":"https://[::1]/rezept"`), WebSearchLive, false},
+		{"a web idea on a bare host name", variant(`"source":"ai","sourceUrl":null`, `"source":"web","sourceUrl":"http://food/rezept"`), WebSearchLive, false},
+		{"a web idea on another scheme", variant(`"source":"ai","sourceUrl":null`, `"source":"web","sourceUrl":"ftp://www.chefkoch.de/rezept"`), WebSearchLive, false},
+		{"a web idea on chefkoch", variant(`"source":"ai","sourceUrl":null`, `"source":"web","sourceUrl":"https://www.chefkoch.de/rezepte/123/paprika-reis-pfanne.html"`), WebSearchCached, true},
 		{"a saved recipe", variant("Paprika-Reis-Pfanne", "pasta bolognese"), WebSearchDisabled, false},
 		{"an idea already suggested", variant("Paprika-Reis-Pfanne", "Ofengemüse!"), WebSearchDisabled, false},
 	} {
@@ -372,7 +379,7 @@ func TestWebSearchIsOnlyForTheIdeasJob(t *testing.T) {
 	job.WebSearch = WebSearchLive
 	job.Request()
 	job.Tick(context.Background())
-	if generator.webSearch[0] != WebSearchLive || !strings.Contains(generator.prompts[0], "You may search the web for recipes") || !strings.Contains(generator.prompts[0], "never copied from the page") {
+	if generator.webSearch[0] != WebSearchLive || !strings.Contains(generator.prompts[0], "Search the web for recipes that fit these rules: at least one idea must be a recipe found on a real recipe page, preferably a site in the owner's language (such as chefkoch.de for German)") || !strings.Contains(generator.prompts[0], "never copied from the page") || !strings.Contains(generator.prompts[0], `The other ideas may be your own, with source "ai" and sourceUrl null.`) || strings.Contains(generator.prompts[0], "do not search the web") {
 		t.Fatalf("web search on: %q", generator.webSearch)
 	}
 	if run := job.Status().LastRun; run.Outcome != "none" || job.Status().WebSearch != WebSearchLive {
@@ -498,5 +505,81 @@ func TestCodexSearchesTheWebOnlyForIdeasAndShapesTheirAnswer(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(temp); len(entries) > 0 {
 		t.Fatalf("files left behind: %v", entries)
+	}
+}
+
+func TestPlanPromptAsksMostIdeasWithTheFirstPreferredMethod(t *testing.T) {
+	rule := "Prefer the preferred cooking methods, the first most: at least 2 of 3 ideas (most of them, whatever their number) cook with the first preferred method wherever the dish suits it, and only a dish that truly needs another method uses one; when that method is the air fryer, cook in the air fryer and give its temperature and time in the steps. "
+	airFryer := ideasPrompt(ideasContext{Preferences: ideasPreferences{Methods: []string{"air_fryer", "oven"}}}, WebSearchDisabled)
+	if !strings.Contains(airFryer, rule) || !strings.Contains(airFryer, "Here the first preferred method is the air fryer (air_fryer): at least 2 of 3 ideas cook with it. ") {
+		t.Fatalf("prompt = %q", airFryer)
+	}
+	oven := ideasPrompt(ideasContext{Preferences: ideasPreferences{Methods: []string{"oven"}}}, WebSearchDisabled)
+	if !strings.Contains(oven, "Here the first preferred method is the oven (oven)") {
+		t.Fatalf("prompt = %q", oven)
+	}
+	if none := ideasPrompt(ideasContext{}, WebSearchDisabled); strings.Contains(none, "Here the first preferred method") || !strings.Contains(none, rule) {
+		t.Fatalf("prompt without preferred methods = %q", none)
+	}
+}
+
+func TestARunCountsIdeasWithThePreferredMethods(t *testing.T) {
+	now := time.Date(2026, 10, 12, 10, 0, 0, 0, ownerZone)
+	// Two air fryer ideas and one in the oven, the second preferred method.
+	answer := strings.Replace(threeIdeas, `"methods":["stovetop"]`, `"methods":["oven"]`, 1)
+	kitchen := newKitchen()
+	var logged []string
+	job := newJob(kitchen, &fakeIdeas{answer: answer}, &now)
+	job.Logf = func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
+	job.Request()
+	job.Tick(context.Background())
+	run := job.Status().LastRun
+	if run.Created != 3 || run.FirstMethod != "air_fryer" || run.WithFirstMethod != 2 || run.WithPreferredMethod != 3 {
+		t.Fatalf("run = %+v", run)
+	}
+	if len(logged) != 1 || logged[0] != "recipe ideas: request run created: 3 created (2 with air_fryer, 3 with a preferred method, 0 from the web), 0 skipped, 0 rejected, 0 failed" {
+		t.Fatalf("logged %q", logged)
+	}
+	// Only created ideas count: one Food already has is skipped.
+	kitchen = newKitchen()
+	kitchen.exists["Knuspriges Hähnchen aus dem Airfryer"] = true
+	job = newJob(kitchen, &fakeIdeas{answer: threeIdeas}, &now)
+	job.Request()
+	job.Tick(context.Background())
+	if run := job.Status().LastRun; run.Created != 2 || run.WithFirstMethod != 1 || run.WithPreferredMethod != 1 {
+		t.Fatalf("run = %+v", run)
+	}
+	var status map[string]any
+	raw, _ := json.Marshal(job.Status())
+	if json.Unmarshal(raw, &status) != nil || status["lastRun"].(map[string]any)["withFirstMethod"] != 1.0 || status["lastRun"].(map[string]any)["firstMethod"] != "air_fryer" {
+		t.Fatalf("status = %s", raw)
+	}
+}
+
+func TestARunCountsIdeasFromTheWeb(t *testing.T) {
+	now := time.Date(2026, 10, 12, 10, 0, 0, 0, ownerZone)
+	answer := strings.Replace(threeIdeas, `"source":"ai","sourceUrl":null}`, `"source":"web","sourceUrl":"https://www.chefkoch.de/rezepte/42/haehnchen-airfryer.html"}`, 1)
+	kitchen := newKitchen()
+	var logged []string
+	job := newJob(kitchen, &fakeIdeas{answer: answer}, &now)
+	job.WebSearch = WebSearchLive
+	job.Logf = func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
+	job.Request()
+	job.Tick(context.Background())
+	if run := job.Status().LastRun; run.Created != 3 || run.FromWeb != 1 {
+		t.Fatalf("run = %+v", run)
+	}
+	if first := kitchen.arguments["food_create_idea"][0]; first["source"] != "web" || first["sourceUrl"] != "https://www.chefkoch.de/rezepte/42/haehnchen-airfryer.html" {
+		t.Fatalf("idea = %#v", first)
+	}
+	if len(logged) != 1 || !strings.Contains(logged[0], "1 from the web") {
+		t.Fatalf("logged %q", logged)
+	}
+	// With search off the same answer's web idea is rejected, not counted.
+	off := newJob(newKitchen(), &fakeIdeas{answer: answer}, &now)
+	off.Request()
+	off.Tick(context.Background())
+	if run := off.Status().LastRun; run.Created != 2 || run.Rejected != 1 || run.FromWeb != 0 {
+		t.Fatalf("run = %+v", run)
 	}
 }

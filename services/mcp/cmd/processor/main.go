@@ -86,7 +86,7 @@ func main() {
 		go monitor.WatchUsage(ctx, planner.Usage, 5*time.Minute)
 		// Recipe ideas from the pantry and the preferences, daily and on the
 		// owner's request, through the same Codex runtime and MCP.
-		ideas := &processor.IdeasJob{Generator: monitor.MonitoredIdeas(planner), Tools: &processor.MCPClient{URL: cfg.MCPURL}, TimeZone: cfg.TimeZone, DailyAt: cfg.IdeasAt, WebSearch: cfg.IdeasWebSearch, OnStatus: monitor.SetIdeas}
+		ideas := &processor.IdeasJob{Generator: monitor.MonitoredIdeas(planner), Tools: &processor.MCPClient{URL: cfg.MCPURL}, TimeZone: cfg.TimeZone, DailyAt: cfg.IdeasAt, WebSearch: cfg.IdeasWebSearch, OnStatus: monitor.SetIdeas, Logf: func(format string, args ...any) { fmt.Fprintf(os.Stderr, format+"\n", args...) }}
 		go ideas.Loop(ctx)
 		service := &processor.Service{Run: func(ctx context.Context) error {
 			_, err := runner.Run(ctx)
