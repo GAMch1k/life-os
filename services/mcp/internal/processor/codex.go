@@ -189,6 +189,13 @@ func (c CodexCLI) Ideas(ctx context.Context, prompt, schema, webSearch string) (
 	return c.run(ctx, runSpec{schema: schema, webSearch: webSearch, prompt: func(CodexCLI) string { return prompt }})
 }
 
+// Categories asks for transaction categories (the AI categories job): the
+// prompt as given and the final message shaped by the JSON schema. It never
+// searches the web.
+func (c CodexCLI) Categories(ctx context.Context, prompt, schema string) (string, error) {
+	return c.run(ctx, runSpec{schema: schema, webSearch: WebSearchDisabled, prompt: func(CodexCLI) string { return prompt }})
+}
+
 // Codex's web_search modes the processor uses. Capture planning always
 // runs with search disabled; the ideas job runs with LIFE_OS_IDEAS_WEB_SEARCH.
 const (

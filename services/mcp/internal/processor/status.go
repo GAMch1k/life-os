@@ -35,6 +35,9 @@ type Status struct {
 	// Ideas is the recipe ideas job: when it runs next and what the last
 	// run did; absent when the job is not configured.
 	Ideas *IdeasStatus `json:"ideas,omitempty"`
+	// Categories is the AI categories job: whether it is on, what waits,
+	// and what the last batch did; absent when the job is not configured.
+	Categories *CategoriesStatus `json:"categories,omitempty"`
 }
 
 // AgentRuntimeStatus describes the Codex runtime: its configuration, the run
@@ -215,6 +218,13 @@ func (m *Monitor) SetIdeas(status IdeasStatus) {
 	m.status.Ideas = &status
 }
 
+// SetCategories records the AI categories job's status.
+func (m *Monitor) SetCategories(status CategoriesStatus) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.status.Categories = &status
+}
+
 // RecordTokens adds one planning run's token usage.
 func (m *Monitor) RecordTokens(usage TokenUsage) {
 	m.mu.Lock()
@@ -361,6 +371,25 @@ func (g monitoredIdeas) Ideas(ctx context.Context, prompt, schema, webSearch str
 	out, err := g.inner.Ideas(WithRunObserver(ctx, tokenCounter{monitor: g.monitor}), prompt, schema, webSearch)
 	if ctx.Err() == nil {
 		g.monitor.RecordPlan(err)
+	}
+	return out, err
+}
+
+// MonitoredCategories records the AI categories job's Codex runs like
+// planning runs: their outcome in the Codex state and their token usage.
+func (m *Monitor) MonitoredCategories(c categoryChooser) categoryChooser {
+	return monitoredCategories{inner: c, monitor: m}
+}
+
+type monitoredCategories struct {
+	inner   categoryChooser
+	monitor *Monitor
+}
+
+func (c monitoredCategories) Categories(ctx context.Context, prompt, schema string) (string, error) {
+	out, err := c.inner.Categories(WithRunObserver(ctx, tokenCounter{monitor: c.monitor}), prompt, schema)
+	if ctx.Err() == nil {
+		c.monitor.RecordPlan(err)
 	}
 	return out, err
 }

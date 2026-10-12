@@ -30,6 +30,11 @@ export LIFE_OS_NTFY_TOPIC=verify LIFE_OS_NTFY_PUBLISHER_TOKEN= LIFE_OS_NTFY_PUBL
 # the verification stack never talks to a bank (compose.verify.yaml also
 # blanks them and points banking at an address that resolves nowhere).
 export LIFE_OS_ENABLE_BANKING_APP_ID= LIFE_OS_ENABLE_BANKING_KEY_FILE= LIFE_OS_BANKING_TOKEN_KEY=
+# Nor the AI categories job: the verification stack's processor uses the
+# real Codex sign-in, and categorizing the browser tests' transactions behind
+# their back would make them flaky. A smoke or benchmark that wants it sets
+# LIFE_OS_VERIFY_AI_CATEGORIES=on.
+export LIFE_OS_AI_CATEGORIES="${LIFE_OS_VERIFY_AI_CATEGORIES:-off}"
 # Nor the owner's backups: the backup service writes to a scratch directory
 # of the verification stack's own (LIFE_OS_VERIFY_BACKUP_DIR, by default under
 # TMPDIR), never to LIFE_OS_BACKUP_DIR from .env, and the plan is refused with
