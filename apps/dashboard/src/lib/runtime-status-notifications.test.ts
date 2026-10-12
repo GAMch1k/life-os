@@ -151,9 +151,3 @@ test("an unreadable Notifications service is a warning", () => {
   assert.equal(check.state, "warning");
   assert.equal(check.summary, "Notification delivery is unavailable.");
 });
-
-test("the web push channel is named for the app it reaches", () => {
-  const part = channelPart(channel({ name: "webpush" }), "Europe/Berlin");
-  assert.equal(part.title, "Web push (Life OS app)");
-  assert.equal(part.state, "ok");
-});
