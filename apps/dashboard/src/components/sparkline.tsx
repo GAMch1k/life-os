@@ -2,9 +2,10 @@
 
 import { useId, useRef, useState } from "react";
 
-import { formatBinaryBytes as format } from "@/lib/format-bytes";
+import { formatBinaryBytes } from "@/lib/format-bytes";
+import { formatCores } from "@/lib/format-usage";
 import type { StatusChart } from "@/lib/runtime-status";
-import { lowestPoint, sparkGeometry } from "@/lib/sparkline";
+import { highestPoint, lowestPoint, sparkGeometry } from "@/lib/sparkline";
 import { dateTimeFormat } from "@/lib/time-zone";
 
 const WIDTH = 300;
@@ -13,8 +14,9 @@ const HEIGHT = 48;
 /**
  * A card's small trend, such as memory available over a day: a 2px line
  * over a faint wash, a hairline at the warning level, and a dot at now. The
- * caption says the lowest and the current value, so nothing depends on
- * hovering; pointer and arrow keys move a crosshair that shows each point.
+ * caption says the worst (the lowest, or for use the highest) and the
+ * current value, so nothing depends on hovering; pointer and arrow keys
+ * move a crosshair that shows each point.
  */
 export function Sparkline({
   chart,
@@ -28,10 +30,12 @@ export function Sparkline({
   const captionId = useId();
   const { points, max, threshold } = chart;
   const { line, area, xs, ys } = sparkGeometry(points, max, WIDTH, HEIGHT);
-  const low = lowestPoint(points);
+  const format = chart.unit === "cores" ? formatCores : formatBinaryBytes;
+  const highest = chart.worst === "highest";
+  const worst = highest ? highestPoint(points) : lowestPoint(points);
   const last = points.length - 1;
   const time = dateTimeFormat(timeZone, { hour: "2-digit", minute: "2-digit" });
-  const caption = `${chart.label}: lowest ${format(low?.value ?? 0)} at ${low ? time.format(new Date(low.at)) : "–"}, now ${format(points[last].value)}${threshold === undefined ? "" : `; warning below ${format(threshold)}`}.`;
+  const caption = `${chart.label}: ${highest ? "highest" : "lowest"} ${format(worst?.value ?? 0)} at ${worst ? time.format(new Date(worst.at)) : "–"}, now ${format(points[last].value)}${threshold === undefined ? "" : `; warning below ${format(threshold)}`}.`;
 
   function pointAt(clientX: number) {
     const rect = box.current?.getBoundingClientRect();

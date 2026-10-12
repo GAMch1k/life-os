@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { downsampleMin, lowestPoint, sparkGeometry } from "./sparkline";
+import {
+  downsampleMax,
+  downsampleMin,
+  highestPoint,
+  lowestPoint,
+  sparkGeometry,
+} from "./sparkline";
 
 const at = (minute: number) =>
   new Date(Date.UTC(2026, 9, 11, 0, minute)).toISOString();
@@ -19,6 +25,32 @@ test("downsampleMin keeps each span's lowest point, and ends with now", () => {
   assert.deepEqual(points[3], { at: at(12), value: 22 });
   // Fewer samples than buckets are kept as they are.
   assert.equal(downsampleMin(samples.slice(0, 2), 3).length, 2);
+});
+
+test("downsampleMax keeps each span's highest point, and ends with now", () => {
+  const samples = Array.from({ length: 13 }, (_, minute) => ({
+    at: at(minute),
+    value: minute === 5 ? 100 : 10 - minute / 2,
+  }));
+  const points = downsampleMax(samples, 4);
+  assert.equal(points.length, 4);
+  assert.deepEqual(points[0], { at: at(0), value: 10 });
+  assert.deepEqual(points[1], { at: at(5), value: 100 });
+  assert.deepEqual(points[2], { at: at(8), value: 6 });
+  assert.deepEqual(points[3], { at: at(12), value: 4 });
+  assert.equal(downsampleMax(samples.slice(0, 2), 3).length, 2);
+});
+
+test("highestPoint finds the earliest highest point", () => {
+  assert.equal(highestPoint([]), undefined);
+  assert.deepEqual(
+    highestPoint([
+      { at: at(0), value: 2 },
+      { at: at(1), value: 5 },
+      { at: at(2), value: 5 },
+    ]),
+    { at: at(1), value: 5 },
+  );
 });
 
 test("lowestPoint finds the earliest lowest point", () => {

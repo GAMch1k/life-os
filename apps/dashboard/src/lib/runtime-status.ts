@@ -32,7 +32,8 @@ import {
   expiringSoon,
 } from "@/lib/banking";
 import { formatBinaryBytes } from "@/lib/format-bytes";
-import { downsampleMin, type SparkPoint } from "@/lib/sparkline";
+import { formatUsage } from "@/lib/format-usage";
+import { downsampleMax, downsampleMin, type SparkPoint } from "@/lib/sparkline";
 import { DEFAULT_TIME_ZONE, dateTimeFormat } from "@/lib/time-zone";
 import { configuredTimeZone, userTimeZone } from "@/lib/user-time-zone";
 
@@ -352,6 +353,8 @@ export type StatusCheck = {
   control?: { kind: "backup-now"; running: boolean };
   /** A small trend the card draws, such as memory available over a day. */
   chart?: StatusChart;
+  /** Smaller trends drawn side by side under it: Life OS's memory and CPU. */
+  sideCharts?: StatusChart[];
 };
 
 /** A sparkline: values from 0 to max, with a warning level. */
@@ -360,6 +363,13 @@ export type StatusChart = {
   max: number;
   threshold?: number;
   points: SparkPoint[];
+  /** What the values count: bytes (the default) or CPU cores. */
+  unit?: "bytes" | "cores";
+  /**
+   * The worst moment its caption names: the lowest value (the default, as
+   * for memory available) or the highest (as for use).
+   */
+  worst?: "lowest" | "highest";
 };
 
 export type RuntimeSignals = {
@@ -2118,6 +2128,7 @@ function serverFacts(status: HostStatus): StatusFact[] {
       label: "Load",
       value: `${load.one.toFixed(2)}, ${load.five.toFixed(2)}, ${load.fifteen.toFixed(2)} (1, 5, 15 min) on ${load.cpus} CPUs`,
     },
+    ...lifeOsFacts(status),
     ...status.disks.map((disk) => ({
       label: `Disk ${disk.label}`,
       value: `${formatBinaryBytes(disk.freeBytes)} free of ${formatBinaryBytes(disk.totalBytes)} (${Math.round(disk.freePercent)}%)`,
@@ -2149,6 +2160,80 @@ function serverFacts(status: HostStatus): StatusFact[] {
     });
   }
   return facts;
+}
+
+/**
+ * How much of the server Life OS uses, its services using the most memory,
+ * the test stack while it runs, and everything else. Facts, not warnings:
+ * none of them is a finding. Left out when host-health does not report it.
+ */
+function lifeOsFacts({ usage }: HostStatus): StatusFact[] {
+  if (!usage) return [];
+  if (!usage.available || !usage.lifeOs)
+    return [
+      {
+        label: "Life OS",
+        value: `CPU and RAM not available${usage.error ? `: ${usage.error}` : ""}`,
+      },
+    ];
+  const facts: StatusFact[] = [
+    { label: "Life OS", value: formatUsage(usage.lifeOs) },
+  ];
+  if (usage.services.length) {
+    facts.push({
+      label: "Life OS services",
+      value: usage.services
+        .map(
+          (service) =>
+            `${service.service}${service.containers > 1 ? ` ×${service.containers}` : ""} ${formatBinaryBytes(service.memoryBytes)}`,
+        )
+        .join(", "),
+    });
+  }
+  if (usage.tests) {
+    facts.push({ label: "Tests running", value: formatUsage(usage.tests) });
+  }
+  if (usage.others) {
+    facts.push({ label: "Everything else", value: formatUsage(usage.others) });
+  }
+  return facts;
+}
+
+/**
+ * Life OS's memory and CPU over the history, each at most 48 points that
+ * keep their span's peak, on the scale of the whole server.
+ */
+function lifeOsCharts(
+  status: HostStatus,
+  history: HostHistory | null,
+): StatusChart[] {
+  const samples = history?.samples ?? [];
+  // Samples without a value (not read, or CPU not known yet) are skipped.
+  const memory = samples.flatMap(({ at, lifeOsMemoryBytes: value }) =>
+    value === undefined ? [] : [{ at, value }],
+  );
+  const cpu = samples.flatMap(({ at, lifeOsCpuCores: value }) =>
+    value === undefined ? [] : [{ at, value }],
+  );
+  const charts: StatusChart[] = [];
+  if (memory.length >= 2) {
+    charts.push({
+      label: "Life OS memory, last 24 h",
+      max: status.memory.totalBytes,
+      points: downsampleMax(memory, 48),
+      worst: "highest",
+    });
+  }
+  if (cpu.length >= 2) {
+    charts.push({
+      label: "Life OS CPU, last 24 h",
+      max: status.load.cpus,
+      points: downsampleMax(cpu, 48),
+      unit: "cores",
+      worst: "highest",
+    });
+  }
+  return charts;
 }
 
 /** Memory available over the history, at most 96 points. */
@@ -2198,6 +2283,8 @@ export function serverCheck(
   const { status, history } = server;
   const facts = serverFacts(status);
   const chart = memoryChart(status, history);
+  const charts = lifeOsCharts(status, history);
+  const sideCharts = charts.length ? charts : undefined;
   const [first, ...others] = status.findings;
   if (!first) {
     return {
@@ -2206,6 +2293,7 @@ export function serverCheck(
       summary: `Running normally: ${formatBinaryBytes(status.memory.availableBytes)} of memory available, a 15-minute load of ${status.load.fifteen.toFixed(1)} on ${status.load.cpus} CPUs.`,
       facts,
       chart,
+      sideCharts,
     };
   }
   const { summary, action } = describeFinding(first, status);
@@ -2226,6 +2314,7 @@ export function serverCheck(
         ]
       : facts,
     chart,
+    sideCharts,
   };
 }
 

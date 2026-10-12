@@ -200,6 +200,139 @@ test("the card draws memory available over the day", () => {
   );
 });
 
+/** Life OS's use of the server, as host-health reports it. */
+const usage = (
+  overrides: Partial<NonNullable<HostStatus["usage"]>> = {},
+): HostStatus["usage"] => ({
+  available: true,
+  lifeOs: {
+    cpuCores: 0.4,
+    cpuPercent: 6.7,
+    memoryBytes: 2.1 * GiB,
+    memoryPercent: 27.4,
+  },
+  others: {
+    cpuCores: 1.2,
+    cpuPercent: 20,
+    memoryBytes: 2 * GiB,
+    memoryPercent: 26.1,
+  },
+  services: [
+    { service: "whisper", containers: 1, memoryBytes: 1.2 * GiB },
+    { service: "postgres", containers: 1, memoryBytes: 310 * MiB },
+    { service: "voice-worker", containers: 2, memoryBytes: 180 * MiB },
+  ],
+  ...overrides,
+});
+
+test("the card says how much of the server Life OS uses, as facts", () => {
+  const check = serverCheck(healthy({ usage: usage() }));
+  assert.equal(check?.state, "ok");
+  assert.equal(
+    fact(check, "Life OS"),
+    "CPU 0.4 cores (7%) · RAM 2.1 GiB (27%)",
+  );
+  // Compose services, replicas summed.
+  assert.equal(
+    fact(check, "Life OS services"),
+    "whisper 1.2 GiB, postgres 310 MiB, voice-worker ×2 180 MiB",
+  );
+  assert.equal(
+    fact(check, "Everything else"),
+    "CPU 1.2 cores (20%) · RAM 2.0 GiB (26%)",
+  );
+  assert.equal(fact(check, "Tests running"), undefined);
+  // Right after Load, before the disks.
+  assert.deepEqual(
+    check?.facts.slice(0, 5).map((item) => item.label),
+    ["Memory", "Load", "Life OS", "Life OS services", "Everything else"],
+  );
+});
+
+test("the test stack shows on its own while it runs", () => {
+  const check = serverCheck(
+    healthy({
+      usage: usage({
+        tests: {
+          cpuCores: 0.8,
+          cpuPercent: 13.3,
+          memoryBytes: 1.2 * GiB,
+          memoryPercent: 15.6,
+        },
+      }),
+    }),
+  );
+  assert.equal(
+    fact(check, "Tests running"),
+    "CPU 0.8 cores (13%) · RAM 1.2 GiB (16%)",
+  );
+  assert.equal(check?.state, "ok");
+});
+
+test("CPU waits for a second sample, and an unreadable use is said, not alerted", () => {
+  const first = serverCheck(
+    healthy({
+      usage: usage({
+        lifeOs: { memoryBytes: 2.1 * GiB, memoryPercent: 27.4 },
+        others: { memoryBytes: 2 * GiB, memoryPercent: 26.1 },
+      }),
+    }),
+  );
+  assert.equal(
+    fact(first, "Life OS"),
+    "CPU not measured yet · RAM 2.1 GiB (27%)",
+  );
+  const unreadable = serverCheck(
+    healthy({
+      usage: {
+        available: false,
+        error: "cgroups: open /host-cgroup: permission denied",
+        services: [],
+      },
+    }),
+  );
+  assert.equal(unreadable?.state, "ok");
+  assert.equal(
+    fact(unreadable, "Life OS"),
+    "CPU and RAM not available: cgroups: open /host-cgroup: permission denied",
+  );
+  assert.equal(fact(unreadable, "Life OS services"), undefined);
+  assert.equal(fact(unreadable, "Everything else"), undefined);
+  assert.equal(
+    fact(unreadable, "Memory"),
+    "3.6 GiB available of 7.7 GiB (47%)",
+  );
+  // A host-health that does not report it: nothing about it.
+  assert.equal(fact(serverCheck(healthy()), "Life OS"), undefined);
+});
+
+test("the card draws Life OS's memory and CPU over the day, keeping peaks", () => {
+  const history = day();
+  history.samples.forEach((sample, minute) => {
+    sample.lifeOsMemoryBytes = (minute === 600 ? 3 : 2) * GiB;
+    // No CPU for the first sample after a restart.
+    if (minute > 0) sample.lifeOsCpuCores = minute === 900 ? 2.5 : 0.4;
+  });
+  const charts = serverCheck(healthy({ usage: usage() }), history)?.sideCharts;
+  assert.equal(charts?.length, 2);
+  const [memory, cpu] = charts ?? [];
+  assert.equal(memory.label, "Life OS memory, last 24 h");
+  assert.equal(memory.max, 8_238_493_696);
+  assert.equal(memory.unit, undefined);
+  assert.equal(memory.worst, "highest");
+  assert.equal(memory.threshold, undefined);
+  assert.ok(memory.points.length <= 48, `${memory.points.length} points`);
+  assert.equal(Math.max(...memory.points.map((point) => point.value)), 3 * GiB);
+  assert.equal(memory.points.at(-1)?.at, now.toISOString());
+  assert.equal(cpu.label, "Life OS CPU, last 24 h");
+  assert.equal(cpu.max, 6);
+  assert.equal(cpu.unit, "cores");
+  assert.equal(Math.max(...cpu.points.map((point) => point.value)), 2.5);
+  // Without Life OS in the history (an older host-health, or cgroups
+  // unreadable all day) there are none.
+  assert.equal(serverCheck(healthy())?.sideCharts, undefined);
+});
+
 test("without host-health the check is left out, and a stopped one is one alert", () => {
   assert.equal(serverCheck(undefined), undefined);
   assert.equal(serverCheck(null, null, false), undefined);
