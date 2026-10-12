@@ -521,8 +521,8 @@ paths:
         (`running`), and then `ready` with the AI's proposal, or `failed`.
         Nothing changes the budget until the owner applies it. A month whose
         plan is still requested or running answers with that one (200): the
-        request joins it. The owner may ask 10 times a day (the owner's day;
-        429 `daily_limit`). `trigger` `schedule` is the job's own plan on
+        request joins it. The owner (`user`) may ask 10 times a day (the
+        owner's day; 429 `daily_limit`). `trigger` `schedule` is the job's own plan on
         the 1st of a month: one per month, and a repeat answers with it
         (200).
       operationId: requestAiBudgetPlan

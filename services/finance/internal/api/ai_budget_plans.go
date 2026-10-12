@@ -38,7 +38,8 @@ const (
 	// take it over (the processor stopped during the run): well beyond a
 	// Codex run's deadline.
 	aiPlanLease = 15 * time.Minute
-	// aiPlanRequestsPerDay bounds the owner's requests of a day.
+	// aiPlanRequestsPerDay bounds the owner's requests of a day (a
+	// development tool's are not counted).
 	aiPlanRequestsPerDay = 10
 	// aiPlanMonthsAhead is how far ahead a plan may be asked for.
 	aiPlanMonthsAhead   = 12
@@ -371,7 +372,7 @@ func (h *Handler) RequestAiBudgetPlan(c fiber.Ctx) error {
 			if err != nil {
 				return err
 			}
-			if count >= aiPlanRequestsPerDay {
+			if actor.Kind == "user" && count >= aiPlanRequestsPerDay {
 				return apiError(fiber.StatusTooManyRequests, "daily_limit", fmt.Sprintf("The AI plans a budget %d times a day: ask again tomorrow.", aiPlanRequestsPerDay))
 			}
 		}

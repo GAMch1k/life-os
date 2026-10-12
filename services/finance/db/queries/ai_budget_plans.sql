@@ -19,7 +19,8 @@ LIMIT 1;
 
 -- name: CountAIBudgetPlanRequestsSince :one
 -- The owner's requests since an instant, for the daily limit.
-SELECT COUNT(*)::bigint FROM ai_budget_plans WHERE trigger = 'request' AND created_at >= sqlc.arg(since);
+SELECT COUNT(*)::bigint FROM ai_budget_plans
+WHERE trigger = 'request' AND requested_by_kind = 'user' AND created_at >= sqlc.arg(since);
 
 -- name: GetAIBudgetPlan :one
 SELECT * FROM ai_budget_plans WHERE id = $1;

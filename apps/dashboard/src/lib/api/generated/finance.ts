@@ -353,7 +353,7 @@ export interface paths {
         put?: never;
         /**
          * Ask the AI to plan a month's budget
-         * @description Asks for a plan for `month` (YYYY-MM: this month or one of the next 12; by default the current month during its first 7 days, else the next month), with an optional savings goal per month. The plan is `requested` (202) until the processor's AI budget plan job runs it (`running`), and then `ready` with the AI's proposal, or `failed`. Nothing changes the budget until the owner applies it. A month whose plan is still requested or running answers with that one (200): the request joins it. The owner may ask 10 times a day (the owner's day; 429 `daily_limit`). `trigger` `schedule` is the job's own plan on the 1st of a month: one per month, and a repeat answers with it (200).
+         * @description Asks for a plan for `month` (YYYY-MM: this month or one of the next 12; by default the current month during its first 7 days, else the next month), with an optional savings goal per month. The plan is `requested` (202) until the processor's AI budget plan job runs it (`running`), and then `ready` with the AI's proposal, or `failed`. Nothing changes the budget until the owner applies it. A month whose plan is still requested or running answers with that one (200): the request joins it. The owner (`user`) may ask 10 times a day (the owner's day; 429 `daily_limit`). `trigger` `schedule` is the job's own plan on the 1st of a month: one per month, and a repeat answers with it (200).
          */
         post: operations["requestAiBudgetPlan"];
         delete?: never;

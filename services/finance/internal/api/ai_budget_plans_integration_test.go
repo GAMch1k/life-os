@@ -328,3 +328,13 @@ func TestTheScheduledPlanIsOnePerMonthAndRequestsAreLimited(t *testing.T) {
 	c.expectError(http.MethodGet, "/v1/ai-budget-plans?limit=51", nil, http.StatusBadRequest, "invalid_request")
 	c.expectError(http.MethodGet, "/v1/ai-budget-plans/c0000000-0000-4000-8000-000000000001", nil, http.StatusNotFound, "not_found")
 }
+
+func TestOnlyTheOwnersRequestsAreLimited(t *testing.T) {
+	c := newAPIClient(t)
+	for month := 10; month <= 21; month++ {
+		key := time.Date(2026, time.Month(month), 1, 0, 0, 0, 0, time.UTC).Format("2006-01")
+		c.requestPlan(map[string]any{"month": key}, http.StatusAccepted, "dev:e2e")
+	}
+	// A development tool's requests leave the owner's ten.
+	c.requestPlan(map[string]any{"month": "2027-10"}, http.StatusAccepted, "user")
+}

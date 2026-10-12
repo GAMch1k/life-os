@@ -120,7 +120,8 @@ func (q *Queries) ClaimAIBudgetPlan(ctx context.Context, arg ClaimAIBudgetPlanPa
 }
 
 const countAIBudgetPlanRequestsSince = `-- name: CountAIBudgetPlanRequestsSince :one
-SELECT COUNT(*)::bigint FROM ai_budget_plans WHERE trigger = 'request' AND created_at >= $1
+SELECT COUNT(*)::bigint FROM ai_budget_plans
+WHERE trigger = 'request' AND requested_by_kind = 'user' AND created_at >= $1
 `
 
 // The owner's requests since an instant, for the daily limit.
