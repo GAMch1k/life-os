@@ -405,3 +405,74 @@ func TestMissingIngredientsComeFromRecipesOrAWeek(t *testing.T) {
 		t.Fatalf("refused calls reached Food: %d", len(*requests))
 	}
 }
+
+func TestIdeaToolsReadAndWriteThroughFood(t *testing.T) {
+	session, requests := foodSession(t)
+	for tool, arguments := range map[string]map[string]any{
+		"food_get_preferences":  {},
+		"food_list_suggestions": {"limit": 10, "mealSlot": "dinner"},
+		"food_list_ideas":       {"state": "dismissed", "limit": 50},
+	} {
+		if result := callTool(t, session, tool, arguments); result.IsError {
+			t.Fatalf("%s failed: %s", tool, resultText(result))
+		}
+	}
+	seen := map[string]string{}
+	for _, request := range *requests {
+		seen[request.Path] = request.Query
+	}
+	if q, ok := seen["/v1/preferences"]; !ok || q != "" {
+		t.Fatalf("preferences read = %#v", seen)
+	}
+	if query, _ := url.ParseQuery(seen["/v1/suggestions"]); query.Get("limit") != "10" || query.Get("mealSlot") != "dinner" {
+		t.Fatalf("suggestions read = %#v", seen)
+	}
+	if query, _ := url.ParseQuery(seen["/v1/ideas"]); query.Get("state") != "dismissed" || query.Get("limit") != "50" {
+		t.Fatalf("ideas read = %#v", seen)
+	}
+	before := len(*requests)
+	result := callTool(t, session, "food_create_idea", map[string]any{
+		"idempotencyKey": "ideas-1", "title": " Hähnchen aus dem Airfryer ", "reason": "Uses the Hähnchenbrust that expires tomorrow, in the air fryer.",
+		"servings": 2, "ingredients": []any{map[string]any{"name": "Hähnchenbrust", "amount": "400 g"}, map[string]any{"name": "Paprika"}},
+		"steps": "Würzen.\nIm Airfryer 18 Minuten bei 200 °C garen.", "tags": []any{"airfryer"}, "methods": []any{"air_fryer"},
+	})
+	if result.IsError {
+		t.Fatalf("create failed: %s", resultText(result))
+	}
+	created := (*requests)[before]
+	want := map[string]any{"title": "Hähnchen aus dem Airfryer", "reason": "Uses the Hähnchenbrust that expires tomorrow, in the air fryer.", "source": "ai", "servings": 2.0,
+		"ingredients": []any{map[string]any{"name": "Hähnchenbrust", "amount": "400 g"}, map[string]any{"name": "Paprika"}},
+		"steps":       "Würzen.\nIm Airfryer 18 Minuten bei 200 °C garen.", "tags": []any{"airfryer"}, "methods": []any{"air_fryer"}}
+	if created.Method != http.MethodPost || created.Path != "/v1/ideas" || created.Idempotency != "ideas-1" || created.Actor != "agent:mcp" || !reflect.DeepEqual(created.Body, want) {
+		t.Fatalf("Food saw %+v %s", created, created.RawBody)
+	}
+	result = callTool(t, session, "food_create_idea", map[string]any{"title": "Shakshuka", "reason": "Found online.", "source": "web", "sourceUrl": "https://example.com/shakshuka"})
+	if result.IsError || (*requests)[len(*requests)-1].Body["sourceUrl"] != "https://example.com/shakshuka" {
+		t.Fatalf("web idea: %s", resultText(result))
+	}
+	before = len(*requests)
+	for name, arguments := range map[string]map[string]any{
+		"no reason":          {"title": "Shakshuka"},
+		"blank title":        {"title": " ", "reason": "Why not."},
+		"web without a page": {"title": "Shakshuka", "reason": "Found online.", "source": "web"},
+		"another source":     {"title": "Shakshuka", "reason": "Why not.", "source": "book"},
+		"a made-up method":   {"title": "Shakshuka", "reason": "Why not.", "methods": []any{"campfire"}},
+		"servings":           {"title": "Shakshuka", "reason": "Why not.", "servings": 0},
+		"a blank ingredient": {"title": "Shakshuka", "reason": "Why not.", "ingredients": []any{map[string]any{"name": " "}}},
+	} {
+		if result := callTool(t, session, "food_create_idea", arguments); !result.IsError {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+	for name, arguments := range map[string]map[string]any{"suggestion limit": {"limit": 51}, "slot": {"mealSlot": "brunch"}} {
+		if result := callTool(t, session, "food_list_suggestions", arguments); !result.IsError {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+	if result := callTool(t, session, "food_list_ideas", map[string]any{"state": "maybe"}); !result.IsError {
+		t.Error("an unknown idea state was accepted")
+	}
+	if len(*requests) != before {
+		t.Fatalf("refused calls reached Food: %d", len(*requests)-before)
+	}
+}
