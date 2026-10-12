@@ -106,8 +106,8 @@ trap 'printf "publish-android-release: failed (line %s)\n" "$LINENO" >&2; exit 1
 
 # The release. The one place where release.json's names map to the
 # contract's: the apps may sit under "apps" or at the top level, and only
-# phone and wear count. Map other spellings here if the build ever writes
-# them.
+# phone and wear count. The app's tools/build writes the commit as
+# "gitCommit". Map other spellings here if the build ever writes them.
 release_file=$release_dir/release.json
 [[ -f "$release_file" ]] || refuse "$release_file is missing"
 release=$(jq -c '
@@ -115,7 +115,7 @@ release=$(jq -c '
   | if type == "object" then . else error("not an object") end
   | {phone, wear}
   | with_entries(select(.value != null))
-  | map_values(if type == "object" then {versionCode, versionName, minSdk, sha256, size, builtAt, commit} else . end)
+  | map_values(if type == "object" then {versionCode, versionName, minSdk, sha256, size, builtAt, commit: (.commit // .gitCommit)} else . end)
 ' "$release_file" 2>/dev/null) || refuse "$release_file is not a JSON object"
 [[ "$release" != '{}' ]] || refuse "$release_file describes neither phone nor wear"
 problems=$(jq -r '
