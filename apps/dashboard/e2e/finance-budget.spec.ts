@@ -108,7 +108,7 @@ test.describe("Finance budget", () => {
       const budget = await openBudget(page);
       await expect(page.locator("#finance-budget-title")).toHaveText(label);
       await page
-        .getByRole("button", { name: /^(Edit plan|Plan )/ })
+        .getByRole("button", { name: /^(Edit plan|Plan (?!my budget))/ })
         .first()
         .click();
       const editor = page.getByRole("dialog");
