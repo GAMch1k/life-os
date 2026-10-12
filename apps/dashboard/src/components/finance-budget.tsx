@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Banknote,
   ChevronLeft,
   ChevronRight,
   Pencil,
@@ -46,8 +47,9 @@ import { cn } from "@/lib/utils";
  * currency), with the income, the savings against their goal, and
  * uncategorized spending as its own line. A category opens its
  * transactions of the month; the plan is edited in a dialog. The AI can
- * propose a plan too ("Plan my budget"), shown above the month as `aiPlan`
- * until the owner applies or dismisses it.
+ * propose a plan too ("Plan my budget", or by itself when the salary
+ * arrives: "Payday"), shown above the month as `aiPlan` until the owner
+ * applies or dismisses it.
  */
 export function FinanceBudget({
   actionError,
@@ -60,6 +62,7 @@ export function FinanceBudget({
   today,
   onEdit,
   onMonthChange,
+  onPayday,
   onPlanWithAI,
   onReset,
   onShowCategory,
@@ -80,6 +83,8 @@ export function FinanceBudget({
   today: string;
   onEdit: (budget: BudgetMonth) => void;
   onMonthChange: (month: string) => void;
+  /** Opens the payday setting (the AI plans when the salary arrives). */
+  onPayday?: () => void;
   /** Asks the AI to plan a month. */
   onPlanWithAI?: () => void;
   /** Returns a month with its own plan to the regular plan. */
@@ -134,6 +139,12 @@ export function FinanceBudget({
               >
                 <RotateCcw aria-hidden="true" />
                 Use the regular plan
+              </Button>
+            ) : null}
+            {onPayday ? (
+              <Button onClick={onPayday} size="sm" variant="outline">
+                <Banknote aria-hidden="true" />
+                Payday
               </Button>
             ) : null}
             {onPlanWithAI ? (

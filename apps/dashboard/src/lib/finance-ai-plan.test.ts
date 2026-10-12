@@ -17,6 +17,7 @@ import {
   roughText,
   savingText,
   trendText,
+  triggerText,
   visiblePlan,
 } from "./finance-ai-plan";
 import type { BudgetMonth } from "./finance-budget";
@@ -41,6 +42,7 @@ const plan = (overrides: Partial<AiBudgetPlan> = {}): AiBudgetPlan => ({
   month: "2026-11",
   currency: "EUR",
   trigger: "request",
+  salary: null,
   state: "ready",
   savingsGoal: null,
   requestedBy: { kind: "user" },
@@ -261,4 +263,18 @@ test("an applied plan says how much of it was applied", () => {
     },
   });
   assert.equal(appliedText(applied), "Applied 1 of 2 categories");
+});
+
+test("a plan the salary asked for says when it arrived", () => {
+  assert.equal(triggerText(plan()), "");
+  assert.equal(triggerText(plan({ trigger: "schedule" })), "");
+  assert.equal(
+    triggerText(
+      plan({
+        trigger: "salary",
+        salary: { bookingDate: "2026-10-28", transactionId: "t1" },
+      }),
+    ),
+    "Planned when your salary arrived on 28 Oct",
+  );
 });

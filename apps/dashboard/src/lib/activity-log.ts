@@ -342,14 +342,18 @@ export function eventLabel(event: Pick<ActivityEvent, "type" | "data">) {
       ? `${label}: ${categorized} (${left} left without a category)`
       : `${label}: ${categorized}`;
   }
-  // An AI budget plan by the month it plans.
+  // An AI budget plan by the month it plans, and why the salary's was
+  // asked for.
   const month = text(event.data?.month);
   if (
     event.type.startsWith("finance.ai_budget_plan.") &&
     month &&
     /^\d{4}-(0[1-9]|1[0-2])$/.test(month)
   ) {
-    return `${label}: ${monthLabel(month)}`;
+    return event.type === "finance.ai_budget_plan.requested" &&
+      event.data?.trigger === "salary"
+      ? `${label}: ${monthLabel(month)}, when your salary arrived`
+      : `${label}: ${monthLabel(month)}`;
   }
   // A notification by its title, and a delivery by the channel it used.
   if (event.type.startsWith("notification.") && title) {

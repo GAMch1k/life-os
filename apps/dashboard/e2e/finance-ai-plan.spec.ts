@@ -11,12 +11,28 @@ import { type APIRequestContext, expect, test } from "./fixtures";
 // merchants' spending. The card shows the plan as made by AI; the owner
 // unticks a line and applies the rest, and only the ticked lines reach the
 // month's budget. Names carry a tag made of the run's timestamp in letters.
+//
+// Payday (P13-10): the owner opens Payday on the Budget tab, takes the payer
+// Finance suggests from two monthly incomes, and saves; a booked payment
+// from that payer then asks for the plan of the month the money is for,
+// and the card says the salary asked for it.
 
 const enabled = Boolean(process.env.LIFE_OS_E2E_URL);
 const api = "/api/finance/v1";
 
 type Category = { id: string; name: string };
-type Plan = { id: string; month: string; state: string };
+type Plan = {
+  id: string;
+  month: string;
+  state: string;
+  trigger: string;
+  salary: { bookingDate: string } | null;
+};
+type Payday = {
+  enabled: boolean;
+  payerMatch: string | null;
+  minAmount: { amount: number } | null;
+};
 type Merchant = { name: string; monthlyMinor: number };
 type PlanningCategory = {
   categoryId: string;
@@ -38,16 +54,26 @@ type BudgetMonth = {
 const tagOf = (stamp: number) =>
   stamp.toString(36).replace(/[0-9]/g, (digit) => "qrstuvwxyz"[+digit]);
 
-/** The owner's month (YYYY-MM): the stack runs in Europe/Berlin. */
-function ownerMonth() {
+/** The owner's today (YYYY-MM-DD): the stack runs in Europe/Berlin. */
+function ownerToday() {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: "Europe/Berlin",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
-  })
-    .format(new Date())
-    .slice(0, 7);
+  }).format(new Date());
+}
+
+/** The owner's month (YYYY-MM). */
+function ownerMonth() {
+  return ownerToday().slice(0, 7);
+}
+
+/** The day `days` after a YYYY-MM-DD day (negative goes back). */
+function shiftDay(day: string, days: number) {
+  const date = new Date(`${day}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
 }
 
 /** The month `months` after a YYYY-MM month. */
@@ -277,6 +303,130 @@ test.describe("AI budget plan", () => {
           .getByTestId("finance-budget-line")
           .filter({ hasText: eating.name }),
       ).toBeVisible();
+    } finally {
+      for (const step of cleanup.reverse()) await step().catch(() => {});
+    }
+  });
+});
+
+test.describe("Payday", () => {
+  test.skip(!enabled, "requires LIFE_OS_E2E_URL (an isolated stack)");
+
+  test("the owner takes the suggested payer, and the salary asks for a plan", async ({
+    page,
+    request,
+  }) => {
+    const tag = tagOf(Date.now());
+    const payer = `E2E ACME Robotics ${tag}`;
+    const today = ownerToday();
+    // The salary is for the next month from the 15th on.
+    const month =
+      Number(today.slice(8, 10)) >= 15
+        ? shiftMonth(today.slice(0, 7), 1)
+        : today.slice(0, 7);
+    const before = (await (
+      await request.get(`${api}/settings/payday`)
+    ).json()) as Payday;
+    const cleanup: (() => Promise<unknown>)[] = [
+      () =>
+        request.put(`${api}/settings/payday`, {
+          data: {
+            enabled: before.enabled,
+            payerMatch: before.payerMatch,
+            minAmountMinor: before.minAmount?.amount ?? null,
+          },
+        }),
+    ];
+    try {
+      const off = await request.put(`${api}/settings/payday`, {
+        data: { enabled: false, payerMatch: null },
+      });
+      expect(off.status(), await off.text()).toBe(200);
+      // The salary's plan is the month's only one.
+      const existing = (await (
+        await request.get(`${api}/ai-budget-plans?month=${month}&limit=50`)
+      ).json()) as { items: Plan[] };
+      for (const plan of existing.items) {
+        if (plan.state !== "failed" && plan.state !== "dismissed") {
+          await request.post(`${api}/ai-budget-plans/${plan.id}/dismiss`);
+        }
+      }
+      const account = await created<{ id: string }>(
+        await request.post(`${api}/accounts`, {
+          data: { name: `E2E Payday ${tag}`, kind: "bank", currency: "EUR" },
+        }),
+      );
+      cleanup.push(() =>
+        request.patch(`${api}/accounts/${account.id}`, {
+          data: { archived: true },
+        }),
+      );
+      // Two monthly salaries, larger than any other income on the stack.
+      const income = async (bookingDate?: string) => {
+        const item = await created<{ id: string }>(
+          await request.post(`${api}/transactions`, {
+            data: {
+              accountId: account.id,
+              amount: { amount: 9876500, currency: "EUR" },
+              ...(bookingDate ? { bookingDate } : {}),
+              counterparty: payer,
+              description: "Lohn - Gehalt Abrechnung",
+            },
+          }),
+        );
+        cleanup.push(() => request.delete(`${api}/transactions/${item.id}`));
+      };
+      await income(shiftDay(today, -60));
+      await income(shiftDay(today, -30));
+
+      await page.goto("/finance?tab=budget");
+      await expect(page.getByTestId("finance-workspace")).toBeVisible();
+      await page.getByRole("button", { name: "Payday" }).click();
+      const dialog = page.getByRole("dialog");
+      await expect(dialog).toContainText("Plan when my salary arrives");
+      const suggestion = dialog.getByTestId("finance-payday-suggestion");
+      await expect(suggestion).toContainText("2 months in a row");
+      await suggestion.getByRole("button", { name: `Use ${payer}` }).click();
+      await expect(
+        dialog.getByRole("checkbox", { name: "Plan when my salary arrives" }),
+      ).toBeChecked();
+      await expect(dialog.getByLabel("Paid by")).toHaveValue(payer);
+      await expect(suggestion).toHaveCount(0);
+      await dialog.getByLabel("Smallest salary (optional)").fill("1000");
+      await dialog.getByRole("button", { name: "Save" }).click();
+      await expect(dialog).toBeHidden();
+      const saved = (await (
+        await request.get(`${api}/settings/payday`)
+      ).json()) as Payday;
+      expect(saved).toMatchObject({
+        enabled: true,
+        payerMatch: payer,
+        minAmount: { amount: 100000 },
+      });
+
+      // Today's salary asks for the month's plan.
+      await income();
+      const plans = (await (
+        await request.get(`${api}/ai-budget-plans?month=${month}`)
+      ).json()) as { items: Plan[] };
+      const plan = plans.items[0];
+      expect(plan).toMatchObject({
+        trigger: "salary",
+        state: "requested",
+        salary: { bookingDate: today },
+      });
+      cleanup.push(() =>
+        request.post(`${api}/ai-budget-plans/${plan.id}/dismiss`),
+      );
+      const arrived = new Intl.DateTimeFormat("en-GB", {
+        day: "numeric",
+        month: "short",
+        timeZone: "UTC",
+      }).format(new Date(`${today}T00:00:00Z`));
+      await page.goto(`/finance?tab=budget&month=${month}`);
+      await expect(page.getByTestId("finance-ai-plan-trigger")).toHaveText(
+        `Planned when your salary arrived on ${arrived}`,
+      );
     } finally {
       for (const step of cleanup.reverse()) await step().catch(() => {});
     }
