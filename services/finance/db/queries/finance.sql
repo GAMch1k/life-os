@@ -30,13 +30,18 @@ VALUES (sqlc.arg(name), sqlc.arg(currency), 'cash', sqlc.arg(system_key)::text)
 RETURNING *;
 
 -- name: ListAccountsWithBalance :many
--- A bank account that reported a booked balance shows it; every other
--- account shows its opening balance plus its booked transactions.
+-- booked_minor is the current booked balance. For a bank account that
+-- reported one it is the bank's booked balance plus every booked
+-- transaction with a later booking date: a balance dated D includes the
+-- bookings through D. Every other account has its opening balance plus its
+-- booked transactions. pending_minor is the sum of the pending ones.
+-- ListLowBalanceAccounts computes the same.
 SELECT a.id, a.name, a.currency, a.opening_balance_minor, a.kind, a.system_key, a.archived_at,
        a.source_kind, a.connection_id, a.external_id, a.provider, a.institution, a.iban_masked,
-       a.booked_balance_date, a.available_balance_minor, a.synced_at, a.created_at, a.updated_at,
-       (CASE WHEN a.source_kind = 'bank' AND a.booked_balance_minor IS NOT NULL THEN a.booked_balance_minor
-             ELSE a.opening_balance_minor + COALESCE(SUM(t.amount_minor) FILTER (WHERE t.status = 'booked'), 0) END)::bigint AS balance_minor,
+       a.booked_balance_minor, a.booked_balance_date, a.available_balance_minor, a.synced_at, a.created_at, a.updated_at,
+       (CASE WHEN a.source_kind = 'bank' AND a.booked_balance_minor IS NOT NULL
+             THEN a.booked_balance_minor + COALESCE(SUM(t.amount_minor) FILTER (WHERE t.status = 'booked' AND t.occurred_on > a.booked_balance_date), 0)
+             ELSE a.opening_balance_minor + COALESCE(SUM(t.amount_minor) FILTER (WHERE t.status = 'booked'), 0) END)::bigint AS booked_minor,
        COALESCE(SUM(t.amount_minor) FILTER (WHERE t.status = 'pending'), 0)::bigint AS pending_minor,
        COUNT(t.id)::bigint AS transaction_count
 FROM accounts AS a

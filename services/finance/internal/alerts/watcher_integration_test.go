@@ -408,7 +408,7 @@ func TestLowBalanceNotifiesEachEpisodeOnce(t *testing.T) {
 	w.sync(girokonto, 8001, "2026-10-10")
 	result, sent := w.run("2026-10-10 10:00")
 	if result.Sent != 1 || len(sent) != 1 || sent[0].Title != "Low balance: Girokonto at €80.01" ||
-		sent[0].Body != "Below your €100.00 alert. Balance reported by the bank on Sat, 10 Oct 2026." ||
+		sent[0].Body != "Below your €100.00 alert." ||
 		sent[0].Importance != notify.Medium || sent[0].Category != "finance.low_balance" || sent[0].Link != "/finance" ||
 		sent[0].DedupeKey != "finance.low_balance:"+uuidText(girokonto.ID.Bytes)+":1" {
 		t.Fatalf("low: %+v %+v", result, sent)

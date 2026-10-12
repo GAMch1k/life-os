@@ -490,15 +490,25 @@ func (e TransactionStatus) Valid() bool {
 	}
 }
 
-// Account `balance` is the opening balance plus every booked transaction; for a bank account that reported one, it is the bank's booked balance as of `balanceAsOf` instead, and `available` is the bank's available balance. `pending` is the sum of the pending transactions, which are not in a computed balance. `transactionCount` counts both. `lowBalance` is true while the low-balance alert is on and this account is watched and below its threshold: an active account from a bank connection, in the default currency, of kind bank, or card or savings with a bank-reported balance. The built-in Cash account and other manual accounts are never low.
+// Account `balance` is the money the account has now: `bookedBalance` plus `pending`, the sum of the pending transactions (mostly card payments the bank has not booked yet, so negative). `bookedBalance` is the opening balance plus every booked transaction; for a bank account that reported a booked balance (`bankBalance`), it is that balance plus every booked transaction with a later booking date, since a balance dated D includes the bookings through D. `available` is the bank's own available balance as it reported it; banks differ in what it holds back (card holds, an overdraft line), so Finance does not use it. `transactionCount` counts booked and pending transactions. `lowBalance` is true while the low-balance alert is on and this account is watched and below its threshold: an active account from a bank connection, in the default currency, of kind bank, or card or savings with a bank-reported balance. The built-in Cash account and other manual accounts are never low.
 type Account struct {
 	Archived   bool       `json:"archived"`
 	ArchivedAt *time.Time `json:"archivedAt"`
-	Available  *Money     `json:"available"`
-	Balance    Money      `json:"balance"`
 
-	// BalanceAsOf The date of the bank-reported balance; null for a computed balance.
+	// Available The available balance the bank last reported, as it reported it; not used by Finance.
+	Available *Money `json:"available"`
+
+	// Balance The money the account has now: `bookedBalance` plus `pending`.
+	Balance Money `json:"balance"`
+
+	// BalanceAsOf For a bank account, the owner-local day of its last sync: the newest data the balance has. Null for a manual account, whose balance is always current.
 	BalanceAsOf *openapi_types.Date `json:"balanceAsOf"`
+
+	// BankBalance The booked balance the bank last reported, with the day it is for; null when it reported none.
+	BankBalance *BankBalance `json:"bankBalance"`
+
+	// BookedBalance The current booked balance, without pending transactions.
+	BookedBalance Money `json:"bookedBalance"`
 
 	// BuiltIn True for the built-in Cash account.
 	BuiltIn   bool               `json:"builtIn"`
@@ -507,10 +517,12 @@ type Account struct {
 	Id        openapi_types.UUID `json:"id"`
 	Kind      AccountKind        `json:"kind"`
 
-	// LowBalance The balance is below the low-balance alert's threshold.
-	LowBalance       bool          `json:"lowBalance"`
-	Name             string        `json:"name"`
-	OpeningBalance   Money         `json:"openingBalance"`
+	// LowBalance The balance (pending money included) is below the low-balance alert's threshold.
+	LowBalance     bool   `json:"lowBalance"`
+	Name           string `json:"name"`
+	OpeningBalance Money  `json:"openingBalance"`
+
+	// Pending The sum of the pending transactions.
 	Pending          Money         `json:"pending"`
 	Source           AccountSource `json:"source"`
 	TransactionCount int           `json:"transactionCount"`
@@ -675,7 +687,7 @@ type BankTransactionInput struct {
 	ExternalId           string  `json:"externalId"`
 	MerchantCategoryCode *string `json:"merchantCategoryCode,omitempty"`
 
-	// Status `booked`: settled, counted in the balance. `pending`: not yet settled.
+	// Status `booked`: settled, in the account's booked balance. `pending`: not yet settled; in its `pending` and its balance.
 	Status    TransactionStatus   `json:"status"`
 	ValueDate *openapi_types.Date `json:"valueDate,omitempty"`
 }
@@ -890,7 +902,7 @@ type CreateManualTransactionRequest struct {
 	Description  *string             `json:"description,omitempty"`
 	Notes        *string             `json:"notes,omitempty"`
 
-	// Status `booked`: settled, counted in the balance. `pending`: not yet settled.
+	// Status `booked`: settled, in the account's booked balance. `pending`: not yet settled; in its `pending` and its balance.
 	Status    *TransactionStatus  `json:"status,omitempty"`
 	ValueDate *openapi_types.Date `json:"valueDate,omitempty"`
 }
@@ -944,7 +956,7 @@ type ExcludedCurrency struct {
 	TransactionCount int    `json:"transactionCount"`
 }
 
-// FinanceSettings `largeDebit`: a medium notification for each money-out transaction of at least the threshold (booked or pending, booked in the last three days; money moved in a transfer category is left out). `lowBalance`: a medium notification when a bank account's balance (from a bank connection: kind bank, or card or savings with a bank-reported balance; never Cash or other manual accounts) falls below the threshold, again after it went back above. `renewals`: a low notification `leadDays` before a confirmed subscription's next payment. Thresholds are in `currency`, the default currency; accounts and transactions in other currencies are not checked.
+// FinanceSettings `largeDebit`: a medium notification for each money-out transaction of at least the threshold (booked or pending, booked in the last three days; money moved in a transfer category is left out). `lowBalance`: a medium notification when a bank account's balance, pending payments included (from a bank connection: kind bank, or card or savings with a bank-reported balance; never Cash or other manual accounts), falls below the threshold, again after it went back above. `renewals`: a low notification `leadDays` before a confirmed subscription's next payment. Thresholds are in `currency`, the default currency; accounts and transactions in other currencies are not checked.
 type FinanceSettings struct {
 	Currency   string       `json:"currency"`
 	LargeDebit AmountAlert  `json:"largeDebit"`
@@ -971,7 +983,15 @@ type MonthlySummary struct {
 	Net                Money                `json:"net"`
 	Spending           Money                `json:"spending"`
 	SpendingByCategory []SpendingByCategory `json:"spendingByCategory"`
-	TotalBalance       Money                `json:"totalBalance"`
+
+	// TotalBalance The accounts' balances now, pending money included.
+	TotalBalance Money `json:"totalBalance"`
+
+	// TotalBookedBalance The accounts' booked balances.
+	TotalBookedBalance Money `json:"totalBookedBalance"`
+
+	// TotalPending The accounts' pending transactions.
+	TotalPending Money `json:"totalPending"`
 }
 
 // RenewalAlert defines model for RenewalAlert.
@@ -1101,7 +1121,7 @@ type Transaction struct {
 	ReadOnly bool              `json:"readOnly"`
 	Source   TransactionSource `json:"source"`
 
-	// Status `booked`: settled, counted in the balance. `pending`: not yet settled.
+	// Status `booked`: settled, in the account's booked balance. `pending`: not yet settled; in its `pending` and its balance.
 	Status    TransactionStatus   `json:"status"`
 	UpdatedAt time.Time           `json:"updatedAt"`
 	ValueDate *openapi_types.Date `json:"valueDate"`
@@ -1134,7 +1154,7 @@ type TransactionSource struct {
 // TransactionSourceKind defines model for TransactionSourceKind.
 type TransactionSourceKind string
 
-// TransactionStatus `booked`: settled, counted in the balance. `pending`: not yet settled.
+// TransactionStatus `booked`: settled, in the account's booked balance. `pending`: not yet settled; in its `pending` and its balance.
 type TransactionStatus string
 
 // UpdateAccountRequest defines model for UpdateAccountRequest.
@@ -1191,7 +1211,7 @@ type UpdateTransactionRequest struct {
 	Description  *string             `json:"description,omitempty"`
 	Notes        *string             `json:"notes,omitempty"`
 
-	// Status `booked`: settled, counted in the balance. `pending`: not yet settled.
+	// Status `booked`: settled, in the account's booked balance. `pending`: not yet settled; in its `pending` and its balance.
 	Status    *TransactionStatus  `json:"status,omitempty"`
 	ValueDate *openapi_types.Date `json:"valueDate,omitempty"`
 }

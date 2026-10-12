@@ -49,13 +49,13 @@ func TestFinanceQueriesPersistMinorUnitsBalancesAndImportIdentity(t *testing.T) 
 	if _, err := queries.CreateImportedTransaction(ctx, imported); err != nil {
 		t.Fatalf("same external id in another account: %v", err)
 	}
-	// A pending transaction is not in the balance.
+	// A pending transaction is not in the booked balance.
 	if _, err := queries.CreateTransaction(ctx, generated.CreateTransactionParams{AccountID: account.ID, AmountMinor: -300, Currency: "USD",
 		OccurredOn: date(2026, time.October, 6), Status: "pending", SourceMetadata: []byte(`{}`)}); err != nil {
 		t.Fatal(err)
 	}
 	accounts, err := queries.ListAccountsWithBalance(ctx, generated.ListAccountsWithBalanceParams{AccountID: account.ID})
-	if err != nil || len(accounts) != 1 || accounts[0].BalanceMinor != 700 || accounts[0].PendingMinor != -300 || accounts[0].TransactionCount != 2 {
+	if err != nil || len(accounts) != 1 || accounts[0].BookedMinor != 700 || accounts[0].PendingMinor != -300 || accounts[0].TransactionCount != 2 {
 		t.Fatalf("account balances = %+v, %v; want 700 booked, -300 pending", accounts, err)
 	}
 	cashflow, err := queries.GetMonthlyCashflow(ctx, generated.GetMonthlyCashflowParams{Currency: "USD", MonthStart: date(2026, time.October, 1)})

@@ -15,14 +15,15 @@ import (
 
 func uuidText(id [16]byte) string { return googleuuid.UUID(id).String() }
 
-// lowBalanceMessage: "Low balance: Girokonto at €84.20".
+// lowBalanceMessage: "Low balance: Girokonto at €84.20", the balance with
+// pending money; the body splits it when some is pending.
 func lowBalanceMessage(row store.ListLowBalanceAccountsRow, episode int32, threshold int64, currency string, now time.Time) notify.Notification {
 	format := func(amount int64) string { return financemoney.Format(amount, currency) }
 	body := fmt.Sprintf("Below your %s alert.", format(threshold))
-	if row.SourceKind == "bank" && row.BookedBalanceDate.Valid {
-		body += " Balance reported by the bank on " + dateText(row.BookedBalanceDate) + "."
+	if row.PendingMinor != 0 {
+		body += fmt.Sprintf(" Booked %s, pending %s.", format(row.BookedMinor), format(row.PendingMinor))
 	}
-	return notify.Notification{Title: fmt.Sprintf("Low balance: %s at %s", activity.Preview(row.Name, 100), format(row.BalanceMinor)), Body: body,
+	return notify.Notification{Title: fmt.Sprintf("Low balance: %s at %s", activity.Preview(row.Name, 100), format(row.BookedMinor+row.PendingMinor)), Body: body,
 		Importance: notify.Medium, Category: LowBalanceCategory, Link: FinanceLink, DedupeKey: LowBalanceKey(row.ID.Bytes, episode), OccurredAt: now}
 }
 

@@ -88,9 +88,10 @@ func TestMonthlySummaryTotalsPerCategory(t *testing.T) {
 	if summary.Currency != "EUR" || summary.Income.Amount != 300000 || summary.Spending.Amount != 5000+1500+700 || summary.Net.Amount != 300000-7200 {
 		t.Fatalf("summary = %+v", summary)
 	}
-	// Balances: Girokonto 100000+300000-5000-50000, Cash -1500-700-100 (pending left out).
-	if summary.TotalBalance.Amount != 345000-2300 {
-		t.Fatalf("total balance = %+v", summary.TotalBalance)
+	// Booked: Girokonto 100000+300000-5000-50000, Cash -1500-700-100; the
+	// total balance adds Cash's pending -9999.
+	if summary.TotalBookedBalance.Amount != 345000-2300 || summary.TotalPending.Amount != -9999 || summary.TotalBalance.Amount != 345000-2300-9999 {
+		t.Fatalf("total balance = %+v, booked %+v, pending %+v", summary.TotalBalance, summary.TotalBookedBalance, summary.TotalPending)
 	}
 	if len(summary.SpendingByCategory) != 1 || summary.SpendingByCategory[0].CategoryId != groceries.Id || summary.SpendingByCategory[0].Amount.Amount != 6500 {
 		t.Fatalf("spending by category = %+v", summary.SpendingByCategory)
@@ -115,7 +116,7 @@ func TestMonthlySummaryTotalsPerCategory(t *testing.T) {
 		t.Fatalf("usd summary = %+v", usdSummary)
 	}
 	cashOnly := expect[generated.MonthlySummary](c, http.MethodGet, "/v1/summaries/monthly?month=2026-10&accountId="+c.cash().Id.String(), nil, http.StatusOK)
-	if cashOnly.Spending.Amount != 2200 || cashOnly.Income.Amount != 0 || cashOnly.TotalBalance.Amount != -2300 {
+	if cashOnly.Spending.Amount != 2200 || cashOnly.Income.Amount != 0 || cashOnly.TotalBalance.Amount != -2300-9999 || cashOnly.TotalPending.Amount != -9999 {
 		t.Fatalf("cash summary = %+v", cashOnly)
 	}
 	c.expectError(http.MethodGet, "/v1/summaries/monthly?month=October", nil, http.StatusBadRequest, "invalid_request")

@@ -81,8 +81,13 @@ func (h *Handler) inTx(ctx context.Context, fn func(*store.Queries) error) error
 
 // today is the owner's current date.
 func (h *Handler) today() pgtype.Date {
-	now := h.now().In(h.location)
-	return pgtype.Date{Time: time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC), Valid: true}
+	return pgtype.Date{Time: h.ownerDay(h.now()), Valid: true}
+}
+
+// ownerDay is the owner's date at an instant, as midnight UTC.
+func (h *Handler) ownerDay(at time.Time) time.Time {
+	local := at.In(h.location)
+	return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, time.UTC)
 }
 
 // Errors.

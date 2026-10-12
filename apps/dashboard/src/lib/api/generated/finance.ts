@@ -13,7 +13,7 @@ export interface paths {
         };
         /**
          * List finance accounts
-         * @description Accounts with their current balance: the built-in Cash account first, then by name. Archived accounts are left out unless `includeArchived` is true.
+         * @description Accounts with their current balances: the built-in Cash account first, then by name. Archived accounts are left out unless `includeArchived` is true.
          */
         get: operations["listAccounts"];
         put?: never;
@@ -219,7 +219,7 @@ export interface paths {
         };
         /**
          * Get a monthly finance summary
-         * @description Booked transactions of the month in one currency (`currency`, by default the built-in Cash account's): income, spending, and net. Transactions in a `transfer` category (money moved between own accounts) are left out of income, spending, and net, but listed in `byCategory`. `totalBalance` is the current balance of the accounts in that currency, archived ones included. With `accountId` only that account counts.
+         * @description Booked transactions of the month in one currency (`currency`, by default the built-in Cash account's): income, spending, and net. Transactions in a `transfer` category (money moved between own accounts) are left out of income, spending, and net, but listed in `byCategory`. `totalBalance` is the current balance of the accounts in that currency, archived ones included, with pending money, as `totalBookedBalance` plus `totalPending`. With `accountId` only that account counts.
          */
         get: operations["getMonthlySummary"];
         put?: never;
@@ -510,7 +510,7 @@ export interface components {
              */
             syncedAt: string | null;
         };
-        /** @description `balance` is the opening balance plus every booked transaction; for a bank account that reported one, it is the bank's booked balance as of `balanceAsOf` instead, and `available` is the bank's available balance. `pending` is the sum of the pending transactions, which are not in a computed balance. `transactionCount` counts both. `lowBalance` is true while the low-balance alert is on and this account is watched and below its threshold: an active account from a bank connection, in the default currency, of kind bank, or card or savings with a bank-reported balance. The built-in Cash account and other manual accounts are never low. */
+        /** @description `balance` is the money the account has now: `bookedBalance` plus `pending`, the sum of the pending transactions (mostly card payments the bank has not booked yet, so negative). `bookedBalance` is the opening balance plus every booked transaction; for a bank account that reported a booked balance (`bankBalance`), it is that balance plus every booked transaction with a later booking date, since a balance dated D includes the bookings through D. `available` is the bank's own available balance as it reported it; banks differ in what it holds back (card holds, an overdraft line), so Finance does not use it. `transactionCount` counts booked and pending transactions. `lowBalance` is true while the low-balance alert is on and this account is watched and below its threshold: an active account from a bank connection, in the default currency, of kind bank, or card or savings with a bank-reported balance. The built-in Cash account and other manual accounts are never low. */
         Account: {
             /** Format: uuid */
             id: string;
@@ -518,16 +518,23 @@ export interface components {
             kind: components["schemas"]["AccountKind"];
             currency: string;
             openingBalance: components["schemas"]["Money"];
+            /** @description The money the account has now: `bookedBalance` plus `pending`. */
             balance: components["schemas"]["Money"];
+            /** @description The current booked balance, without pending transactions. */
+            bookedBalance: components["schemas"]["Money"];
+            /** @description The sum of the pending transactions. */
+            pending: components["schemas"]["Money"];
             /**
              * Format: date
-             * @description The date of the bank-reported balance; null for a computed balance.
+             * @description For a bank account, the owner-local day of its last sync: the newest data the balance has. Null for a manual account, whose balance is always current.
              */
             balanceAsOf: string | null;
+            /** @description The booked balance the bank last reported, with the day it is for; null when it reported none. */
+            bankBalance: components["schemas"]["BankBalance"] | null;
+            /** @description The available balance the bank last reported, as it reported it; not used by Finance. */
             available: components["schemas"]["Money"] | null;
-            pending: components["schemas"]["Money"];
             transactionCount: number;
-            /** @description The balance is below the low-balance alert's threshold. */
+            /** @description The balance (pending money included) is below the low-balance alert's threshold. */
             lowBalance: boolean;
             /** @description True for the built-in Cash account. */
             builtIn: boolean;
@@ -560,7 +567,7 @@ export interface components {
             archived?: boolean;
         };
         /**
-         * @description `booked`: settled, counted in the balance. `pending`: not yet settled.
+         * @description `booked`: settled, in the account's booked balance. `pending`: not yet settled; in its `pending` and its balance.
          * @enum {string}
          */
         TransactionStatus: "booked" | "pending";
@@ -765,7 +772,12 @@ export interface components {
         MonthlySummary: {
             month: string;
             currency: string;
+            /** @description The accounts' balances now, pending money included. */
             totalBalance: components["schemas"]["Money"];
+            /** @description The accounts' booked balances. */
+            totalBookedBalance: components["schemas"]["Money"];
+            /** @description The accounts' pending transactions. */
+            totalPending: components["schemas"]["Money"];
             income: components["schemas"]["Money"];
             spending: components["schemas"]["Money"];
             net: components["schemas"]["Money"];
@@ -968,7 +980,7 @@ export interface components {
             /** @description How many days before a confirmed subscription's next payment the reminder comes (0 is on the day). */
             leadDays: number;
         };
-        /** @description `largeDebit`: a medium notification for each money-out transaction of at least the threshold (booked or pending, booked in the last three days; money moved in a transfer category is left out). `lowBalance`: a medium notification when a bank account's balance (from a bank connection: kind bank, or card or savings with a bank-reported balance; never Cash or other manual accounts) falls below the threshold, again after it went back above. `renewals`: a low notification `leadDays` before a confirmed subscription's next payment. Thresholds are in `currency`, the default currency; accounts and transactions in other currencies are not checked. */
+        /** @description `largeDebit`: a medium notification for each money-out transaction of at least the threshold (booked or pending, booked in the last three days; money moved in a transfer category is left out). `lowBalance`: a medium notification when a bank account's balance, pending payments included (from a bank connection: kind bank, or card or savings with a bank-reported balance; never Cash or other manual accounts), falls below the threshold, again after it went back above. `renewals`: a low notification `leadDays` before a confirmed subscription's next payment. Thresholds are in `currency`, the default currency; accounts and transactions in other currencies are not checked. */
         FinanceSettings: {
             currency: string;
             largeDebit: components["schemas"]["AmountAlert"];

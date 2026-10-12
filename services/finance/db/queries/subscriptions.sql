@@ -136,24 +136,27 @@ WHERE t.currency = sqlc.arg(currency)
 ORDER BY t.occurred_on, t.created_at, t.id;
 
 -- name: ListLowBalanceAccounts :many
--- Active bank accounts (from a bank connection) in one currency with the
--- balance they show and their low-balance state: kind bank, with the bank's
--- booked balance or, before the bank reported one, the computed balance of
--- its transactions; and card or savings accounts that have a bank-reported
--- balance. The built-in Cash account and other manual accounts are never
--- watched.
-SELECT a.id, a.name, a.source_kind, a.booked_balance_date,
-       (CASE WHEN a.source_kind = 'bank' AND a.booked_balance_minor IS NOT NULL THEN a.booked_balance_minor
-             ELSE a.opening_balance_minor + COALESCE((SELECT SUM(t.amount_minor) FROM transactions AS t
-                                                      WHERE t.account_id = a.id AND t.status = 'booked'), 0) END)::bigint AS balance_minor,
+-- Active bank accounts (from a bank connection) in one currency with their
+-- current booked balance and pending sum, computed as in
+-- ListAccountsWithBalance, and their low-balance state: kind bank, with the
+-- bank's booked balance or, before the bank reported one, transactions; and
+-- card or savings accounts that have a bank-reported balance. The built-in
+-- Cash account and other manual accounts are never watched.
+SELECT a.id, a.name,
+       (CASE WHEN a.booked_balance_minor IS NOT NULL
+             THEN a.booked_balance_minor + COALESCE(SUM(t.amount_minor) FILTER (WHERE t.status = 'booked' AND t.occurred_on > a.booked_balance_date), 0)
+             ELSE a.opening_balance_minor + COALESCE(SUM(t.amount_minor) FILTER (WHERE t.status = 'booked'), 0) END)::bigint AS booked_minor,
+       COALESCE(SUM(t.amount_minor) FILTER (WHERE t.status = 'pending'), 0)::bigint AS pending_minor,
        s.below, s.episode
 FROM accounts AS a
+LEFT JOIN transactions AS t ON t.account_id = a.id
 LEFT JOIN low_balance_states AS s ON s.account_id = a.id
 WHERE a.archived_at IS NULL
   AND a.source_kind = 'bank'
   AND a.currency = sqlc.arg(currency)
-  AND ((a.kind = 'bank' AND (a.booked_balance_minor IS NOT NULL OR EXISTS (SELECT 1 FROM transactions AS t WHERE t.account_id = a.id)))
+  AND ((a.kind = 'bank' AND (a.booked_balance_minor IS NOT NULL OR EXISTS (SELECT 1 FROM transactions AS e WHERE e.account_id = a.id)))
        OR (a.kind IN ('card', 'savings') AND a.booked_balance_minor IS NOT NULL))
+GROUP BY a.id, s.account_id
 ORDER BY lower(a.name), a.id;
 
 -- name: SetLowBalanceState :exec

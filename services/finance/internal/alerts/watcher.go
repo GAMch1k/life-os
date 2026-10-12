@@ -264,10 +264,12 @@ func RenewalKey(subscriptionID [16]byte, expected time.Time) string {
 }
 
 // lowBalances keeps each bank account's low-balance state (also while the
-// alert is off) and notifies the episode it is in while its balance is
-// below the threshold: an account that falls below starts a new episode,
-// and one back at or above the threshold is re-armed. Cash and other manual
-// accounts are never watched.
+// alert is off) and notifies the episode it is in while its balance,
+// pending money included, is below the threshold: an account that falls
+// below starts a new episode, and one back at or above the threshold is
+// re-armed. A sync that books a pending payment moves it from pending to
+// booked in one database transaction, so the balance stays and so does the
+// episode. Cash and other manual accounts are never watched.
 func (w *Watcher) lowBalances(ctx context.Context, q *store.Queries, result *Result, settings Settings, now time.Time) error {
 	rows, err := q.ListLowBalanceAccounts(ctx, w.currency)
 	if err != nil {
@@ -275,7 +277,7 @@ func (w *Watcher) lowBalances(ctx context.Context, q *store.Queries, result *Res
 	}
 	var errs []error
 	for _, row := range rows {
-		below := row.BalanceMinor < settings.LowBalanceMinor
+		below := row.BookedMinor+row.PendingMinor < settings.LowBalanceMinor
 		wasBelow := row.Below != nil && *row.Below
 		episode := int32(0)
 		if row.Episode != nil {

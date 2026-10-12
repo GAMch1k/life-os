@@ -82,7 +82,7 @@ func (h *Handler) ListAccounts(c fiber.Ctx, params generated.ListAccountsParams)
 	}
 	result := generated.AccountList{Items: make([]generated.Account, 0, len(rows))}
 	for _, row := range rows {
-		result.Items = append(result.Items, accountView(row, rule))
+		result.Items = append(result.Items, h.accountView(row, rule))
 	}
 	return c.JSON(result)
 }
@@ -245,7 +245,7 @@ func (h *Handler) accountWithBalance(ctx context.Context, q *store.Queries, id p
 	if err != nil {
 		return generated.Account{}, err
 	}
-	return accountView(rows[0], rule), nil
+	return h.accountView(rows[0], rule), nil
 }
 
 // lowBalance is the low-balance alert as accounts show it.
@@ -267,28 +267,37 @@ func (h *Handler) lowBalanceRule(ctx context.Context, q *store.Queries) (lowBala
 // ListLowBalanceAccounts): an active account from a bank connection in the
 // default currency, of kind bank (with the bank's balance, or transactions
 // before the bank reported one), or card or savings with a bank-reported
-// balance, whose balance is below the threshold, while the alert is on.
-// The built-in Cash account and other manual accounts never are.
+// balance, whose balance with pending money is below the threshold, while
+// the alert is on. The built-in Cash account and other manual accounts
+// never are.
 func (rule lowBalance) below(row store.ListAccountsWithBalanceRow) bool {
 	reported := row.BookedBalanceDate.Valid
 	watched := row.SourceKind == "bank" &&
 		((row.Kind == "bank" && (reported || row.TransactionCount > 0)) || ((row.Kind == "card" || row.Kind == "savings") && reported))
-	return rule.enabled && watched && !row.ArchivedAt.Valid && row.Currency == rule.currency && row.BalanceMinor < rule.threshold
+	return rule.enabled && watched && !row.ArchivedAt.Valid && row.Currency == rule.currency && row.BookedMinor+row.PendingMinor < rule.threshold
 }
 
-func accountView(row store.ListAccountsWithBalanceRow, rule lowBalance) generated.Account {
+// accountView is an account as the API shows it: the balance is the booked
+// balance plus pending money, and a bank account's balance is as of its
+// last sync, in the owner's timezone.
+func (h *Handler) accountView(row store.ListAccountsWithBalanceRow, rule lowBalance) generated.Account {
 	view := generated.Account{
 		Id: uuid(row.ID), Name: row.Name, Kind: generated.AccountKind(row.Kind), Currency: row.Currency,
-		OpeningBalance: money(row.OpeningBalanceMinor, row.Currency), Balance: money(row.BalanceMinor, row.Currency),
-		Pending: money(row.PendingMinor, row.Currency), TransactionCount: int(row.TransactionCount), LowBalance: rule.below(row),
+		OpeningBalance: money(row.OpeningBalanceMinor, row.Currency), Balance: money(row.BookedMinor+row.PendingMinor, row.Currency),
+		BookedBalance: money(row.BookedMinor, row.Currency), Pending: money(row.PendingMinor, row.Currency),
+		TransactionCount: int(row.TransactionCount), LowBalance: rule.below(row),
 		BuiltIn: row.SystemKey != nil, Archived: row.ArchivedAt.Valid, ArchivedAt: nullableTime(row.ArchivedAt),
 		Source: generated.AccountSource{Kind: generated.AccountSourceKind(row.SourceKind), ConnectionId: nullableUUID(row.ConnectionID), ExternalId: row.ExternalID,
 			Provider: row.Provider, Institution: row.Institution, IbanMasked: row.IbanMasked, SyncedAt: nullableTime(row.SyncedAt)},
 		CreatedAt: row.CreatedAt.Time.UTC(), UpdatedAt: row.UpdatedAt.Time.UTC(),
 	}
 	if row.SourceKind == "bank" {
-		// The balance query shows the bank's booked balance when it has one.
-		view.BalanceAsOf = nullableDate(row.BookedBalanceDate)
+		if row.SyncedAt.Valid {
+			view.BalanceAsOf = &types.Date{Time: h.ownerDay(row.SyncedAt.Time)}
+		}
+		if row.BookedBalanceMinor != nil {
+			view.BankBalance = &generated.BankBalance{Amount: *row.BookedBalanceMinor, Currency: row.Currency, Date: types.Date{Time: row.BookedBalanceDate.Time}}
+		}
 		if row.AvailableBalanceMinor != nil {
 			view.Available = pointer(money(*row.AvailableBalanceMinor, row.Currency))
 		}
