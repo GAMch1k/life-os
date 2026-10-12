@@ -316,14 +316,15 @@ test.describe("Bank connection", () => {
     // Then it reconnects: "the bank" → the callback → back on Finance.
     await card.getByRole("button", { name: "Load older history" }).click();
     await card.getByRole("button", { name: "Log in at Deutsche Bank" }).click();
-    await page.waitForURL(/\/finance$/);
-    expect(bank.connectBodies).toEqual([
-      { code: "fake-code", state: "fake-state" },
-    ]);
+    // The page is on /finance already, so wait for the card, not the URL.
     // Banking reads the history in the background: the card says so.
     await expect(card.getByTestId("bank-history")).toHaveText(
       "Loading older history from Deutsche Bank…",
     );
+    expect(new URL(page.url()).pathname).toBe("/finance");
+    expect(bank.connectBodies).toEqual([
+      { code: "fake-code", state: "fake-state" },
+    ]);
     await expect(
       card.getByRole("button", { name: "Load older history" }),
     ).toHaveCount(0);
