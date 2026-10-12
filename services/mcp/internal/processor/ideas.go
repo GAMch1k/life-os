@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"slices"
@@ -69,6 +70,8 @@ type IdeasJob struct {
 	Now func() time.Time
 	// OnStatus, when set, receives the job's status after every change.
 	OnStatus func(IdeasStatus)
+	// Logf, when set, logs a line per finished run.
+	Logf func(format string, args ...any)
 
 	mu sync.Mutex
 	// queued is the owner's request waiting for a run.
@@ -109,6 +112,15 @@ type IdeasRun struct {
 	Skipped  int `json:"skipped"`
 	Rejected int `json:"rejected"`
 	Failed   int `json:"failed"`
+	// FirstMethod is the owner's first preferred cooking method (such as
+	// air_fryer); WithFirstMethod counts the created ideas cooked with it,
+	// WithPreferredMethod those cooked with any preferred method. The
+	// prompt asks for most ideas with the first; nothing enforces it.
+	FirstMethod         string `json:"firstMethod,omitempty"`
+	WithFirstMethod     int    `json:"withFirstMethod"`
+	WithPreferredMethod int    `json:"withPreferredMethod"`
+	// FromWeb counts the created ideas found on a web page (source web).
+	FromWeb int `json:"fromWeb"`
 	// Outcome: created, none (nothing new), empty_pantry or done_today (a
 	// daily run with nothing to do), or failed.
 	Outcome string `json:"outcome"`
@@ -204,6 +216,9 @@ func (j *IdeasJob) Tick(ctx context.Context) {
 		return
 	}
 	run := j.run(ctx, trigger, at)
+	if j.Logf != nil {
+		j.Logf("recipe ideas: %s run %s: %d created (%d with %s, %d with a preferred method, %d from the web), %d skipped, %d rejected, %d failed%s", run.Trigger, run.Outcome, run.Created, run.WithFirstMethod, orNone(run.FirstMethod), run.WithPreferredMethod, run.FromWeb, run.Skipped, run.Rejected, run.Failed, errorSuffix(run.Error))
+	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.running = false
@@ -389,6 +404,10 @@ func (j *IdeasJob) run(ctx context.Context, trigger string, at time.Time) IdeasR
 	if err != nil {
 		return finish("failed", err)
 	}
+	preferred := kitchen.Preferences.Methods
+	if len(preferred) > 0 {
+		run.FirstMethod = preferred[0]
+	}
 	for _, idea := range ideas {
 		arguments := idea.arguments()
 		arguments["idempotencyKey"] = ideaKey(runID, idea.Title)
@@ -396,6 +415,15 @@ func (j *IdeasJob) run(ctx context.Context, trigger string, at time.Time) IdeasR
 		switch {
 		case err == nil:
 			run.Created++
+			if run.FirstMethod != "" && slices.Contains(idea.Methods, run.FirstMethod) {
+				run.WithFirstMethod++
+			}
+			if slices.ContainsFunc(idea.Methods, func(method string) bool { return slices.Contains(preferred, method) }) {
+				run.WithPreferredMethod++
+			}
+			if idea.Source == "web" {
+				run.FromWeb++
+			}
 		case strings.Contains(err.Error(), "returned 409") && (strings.Contains(err.Error(), "idea_exists") || strings.Contains(err.Error(), "recipe_exists")):
 			run.Skipped++
 		default:
@@ -557,17 +585,42 @@ const ideasSchema = `{
 
 // ideasPromptRules are the job's fixed instructions; the run's kitchen and,
 // when web search is on, its rule follow.
-const ideasPromptRules = "You suggest recipe ideas to the owner of Life OS, who cooks at home. Return only JSON matching the given schema, with up to 3 ideas. The kitchen below is the owner's: today, cooking preferences, the food in stock (pantry, with expiry dates), the food expiring soon (expiringSoon, within 3 days), saved recipes (savedRecipes), ideas already suggested (existingIdeas), and meals planned recently or soon (recentMeals). Rules: suggest realistic home recipes for a weeknight, each different from the others. Use the food that expires soonest first: each idea should use at least one item of expiringSoon when there is any, and other food in stock where it fits. Name an ingredient that is in stock exactly as the pantry names it, so Life OS sees it is at home. Never use a disliked ingredient (preferences.dislikes), in any form, language, or word, and follow preferences.dietaryNotes. Prefer the preferred cooking methods, the first most: when the air fryer is preferred, cook in the air fryer where it suits and give its temperature and time in the steps. Do not suggest a saved recipe, an idea already suggested, or a meal planned recently. Write titles, ingredients, and steps in the owner's language: the language most pantry names are in, else English. steps: 3 to 10 concise lines, one action each, without numbers. servings: for how many people (2 when nothing says otherwise). tags: 1 to 4 short lower-case words. methods: the cooking methods the steps use. reason: one sentence on why this idea now, such as which expiring item it uses and how it is cooked. "
+const ideasPromptRules = "You suggest recipe ideas to the owner of Life OS, who cooks at home. Return only JSON matching the given schema, with up to 3 ideas. The kitchen below is the owner's: today, cooking preferences, the food in stock (pantry, with expiry dates), the food expiring soon (expiringSoon, within 3 days), saved recipes (savedRecipes), ideas already suggested (existingIdeas), and meals planned recently or soon (recentMeals). Rules: suggest realistic home recipes for a weeknight, each different from the others. Use the food that expires soonest first: each idea should use at least one item of expiringSoon when there is any, and other food in stock where it fits. Name an ingredient that is in stock exactly as the pantry names it, so Life OS sees it is at home. Never use a disliked ingredient (preferences.dislikes), in any form, language, or word, and follow preferences.dietaryNotes. Prefer the preferred cooking methods, the first most: at least 2 of 3 ideas (most of them, whatever their number) cook with the first preferred method wherever the dish suits it, and only a dish that truly needs another method uses one; when that method is the air fryer, cook in the air fryer and give its temperature and time in the steps. Do not suggest a saved recipe, an idea already suggested, or a meal planned recently. Write titles, ingredients, and steps in the owner's language: the language most pantry names are in, else English. steps: 3 to 10 concise lines, one action each, without numbers. servings: for how many people (2 when nothing says otherwise). tags: 1 to 4 short lower-case words. methods: the cooking methods the steps use. reason: one sentence on why this idea now, such as which expiring item it uses and how it is cooked. "
 
 // ideasPrompt is the prompt of one run: the rules, the source rule for its
 // web search mode, and the kitchen.
 func ideasPrompt(kitchen ideasContext, webSearch string) string {
 	source := "source is \"ai\" and sourceUrl is null: write the ideas yourself; do not search the web. "
 	if webSearch == WebSearchCached || webSearch == WebSearchLive {
-		source = "You may search the web for recipes that fit these rules. An idea written by you has source \"ai\" and sourceUrl null; one found on a page has source \"web\" and sourceUrl that page's http or https address, its ingredients as the page lists them (named as the pantry names them where they are in stock), and its steps summarized in your own words, never copied from the page. "
+		source = "Search the web for recipes that fit these rules: at least one idea must be a recipe found on a real recipe page, preferably a site in the owner's language (such as chefkoch.de for German), with source \"web\" and sourceUrl that page's http or https address, its ingredients as the page lists them (named as the pantry names them where they are in stock), and its steps summarized in your own words, never copied from the page. The other ideas may be your own, with source \"ai\" and sourceUrl null. "
+	}
+	first := ""
+	if methods := kitchen.Preferences.Methods; len(methods) > 0 {
+		name, ok := methodNames[methods[0]]
+		if !ok {
+			name = methods[0]
+		}
+		first = fmt.Sprintf("Here the first preferred method is %s (%s): at least 2 of 3 ideas cook with it. ", name, methods[0])
 	}
 	encoded, _ := json.Marshal(kitchen)
-	return ideasPromptRules + source + "Kitchen: " + string(encoded)
+	return ideasPromptRules + first + source + "Kitchen: " + string(encoded)
+}
+
+// methodNames are the cooking methods in words, for the prompt.
+var methodNames = map[string]string{"air_fryer": "the air fryer", "oven": "the oven", "stovetop": "the stove", "slow_cooker": "the slow cooker", "grill": "the grill", "microwave": "the microwave", "no_cook": "no cooking"}
+
+func orNone(value string) string {
+	if value == "" {
+		return "no preferred method"
+	}
+	return value
+}
+
+func errorSuffix(err string) string {
+	if err == "" {
+		return ""
+	}
+	return ": " + err
 }
 
 // idea is one checked recipe idea.
@@ -703,8 +756,7 @@ func checkIdea(in idea, dislikes []string, webSearch string) (idea, bool) {
 	case "ai":
 	case "web":
 		link := deref(in.SourceURL)
-		parsed, err := url.Parse(link)
-		if (webSearch != WebSearchCached && webSearch != WebSearchLive) || err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		if (webSearch != WebSearchCached && webSearch != WebSearchLive) || !publicPage(link) {
 			return idea{}, false
 		}
 		out.SourceURL = &link
@@ -722,6 +774,21 @@ func checkIdea(in idea, dislikes []string, webSearch string) (idea, bool) {
 		}
 	}
 	return out, true
+}
+
+// publicPage reports whether a web idea's link can be a real recipe page:
+// http or https, and a host name with a dot, not localhost or an IP
+// address. The processor never fetches it.
+func publicPage(link string) bool {
+	parsed, err := url.Parse(link)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return false
+	}
+	host := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
+	if host == "" || host == "localhost" || strings.HasSuffix(host, ".localhost") || !strings.Contains(host, ".") || net.ParseIP(host) != nil {
+		return false
+	}
+	return true
 }
 
 // containsDislike reports whether text names a disliked ingredient: every

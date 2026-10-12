@@ -615,6 +615,35 @@ test("the recipe ideas job says its last run and its next", () => {
   };
   const facts = ideasFacts(ideas);
   assert.equal(value(facts, "Recipe ideas"), "3 new, 9 Oct 2026, 14:01 UTC");
+  assert.equal(
+    value(
+      ideasFacts({
+        ...ideas,
+        lastRun: {
+          ...ideas.lastRun,
+          firstMethod: "air_fryer",
+          withFirstMethod: 2,
+        },
+      }),
+      "Recipe ideas",
+    ),
+    "3 new (2 air fryer), 9 Oct 2026, 14:01 UTC",
+  );
+  assert.equal(
+    value(
+      ideasFacts({
+        ...ideas,
+        lastRun: {
+          ...ideas.lastRun,
+          firstMethod: "air_fryer",
+          withFirstMethod: 3,
+          fromWeb: 1,
+        },
+      }),
+      "Recipe ideas",
+    ),
+    "3 new (3 air fryer, 1 from the web), 9 Oct 2026, 14:01 UTC",
+  );
   assert.equal(value(facts, "Next recipe ideas"), "10 Oct 2026, 14:00 UTC");
   assert.equal(
     value(
