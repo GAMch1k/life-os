@@ -135,7 +135,17 @@ It appears on the phone (and the watch) and in Life OS under Notifications, its 
 - **Logs.** `docker compose logs ntfy`. ntfy logs no tokens or passwords in normal operation; at startup it rejects a malformed account line and prints it, so treat such a log as sensitive and rotate what it shows.
 - **Delivery.** A failed delivery stays listed in Life OS. Unreachable ntfy, 429, and 5xx are retried with backoff for up to 24 hours; ntfy refusing a delivery (401, 403, 404, 400) fails it at once. Notifications created while no channel was configured are not sent later.
 - **Change the topic.** Set `LIFE_OS_NTFY_TOPIC`, run `docker compose up -d ntfy notifications`, and subscribe the phone to the new topic (unsubscribe the old one).
-- **Pause phone notifications.** Set `LIFE_OS_NOTIFICATIONS_CHANNELS=` and `docker compose up -d notifications`; notifications are still stored and listed. To stop ntfy too, `docker compose stop ntfy` and remove `ntfy` from `COMPOSE_PROFILES`.
+- **Pause phone notifications.** Set `LIFE_OS_NOTIFICATIONS_CHANNELS=` and `docker compose up -d --no-deps notifications`; notifications are still stored and listed. To stop ntfy too, `docker compose stop ntfy` (keep `ntfy` in `COMPOSE_PROFILES` to pause it; remove it only to retire ntfy).
+
+## Paused since 2026-10-12
+
+The owner moved phone notifications to the Life OS Android app's push (`LIFE_OS_NOTIFICATIONS_CHANNELS=webpush`, see [Notifications → Web push](../services/notifications.md#web-push)) and paused ntfy: the `ntfy` container is stopped, `COMPOSE_PROFILES` still lists `ntfy`, and the `lifeos-ntfy-data` volume and its `.env` settings stay. The tunnel route `ntfy.gamch1k.com` answers 502 meanwhile, and the ntfy phone app shows connection errors (unsubscribe or uninstall it). To resume:
+
+```sh
+docker compose up -d --no-build --no-deps ntfy
+# .env: LIFE_OS_NOTIFICATIONS_CHANNELS=ntfy,webpush
+docker compose up -d --no-build --no-deps notifications
+```
 - **Update ntfy.** Bump the pinned image in `compose.yaml` (read ntfy's release notes), then `docker compose up -d ntfy`.
 
 ## Rotate

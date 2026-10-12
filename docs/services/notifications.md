@@ -88,7 +88,7 @@ A channel implements `Name()` and `Send(ctx, notification) error` (`services/not
 - `webpush` pushes each notification to every subscribed device through its push service ([web push](#web-push)). It needs the VAPID keys. The Dashboard has no browser notifications (the owner's decision, 2026-10-12); the subscriber is the Android app (P18-05, from 0.3.0), which registers its UnifiedPush endpoint through `POST /v1/push/subscriptions`.
 - `log` writes each delivery's metadata (never the body) to the service log. It is for development and verification of the delivery path.
 
-The deployment uses `LIFE_OS_NOTIFICATIONS_CHANNELS=ntfy,webpush`: both reach the phone, so a network that blocks one (a work Wi-Fi that resets the TLS handshake to `ntfy.gamch1k.com`) still lets the other through.
+The deployment uses `LIFE_OS_NOTIFICATIONS_CHANNELS=webpush` since 2026-10-12: notifications reach the phone through the Life OS Android app's push (Google's FCM), which also gets through a work Wi-Fi that resets the TLS handshake to `ntfy.gamch1k.com`. ntfy is **paused**, not removed: its container is stopped, its profile and data stay ([ntfy → Paused](../operations/ntfy.md#paused-since-2026-10-12)); with `ntfy,webpush` both channels deliver again.
 
 Life OS's own Android app later becomes another channel next to or instead of ntfy.
 
