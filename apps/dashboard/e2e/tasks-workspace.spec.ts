@@ -305,6 +305,58 @@ test.describe("Tasks workspace", () => {
   });
 });
 
+test.describe("Tasks workspace links", () => {
+  test.skip(!enabled, "set LIFE_OS_E2E_URL to run against the isolated stack");
+
+  test("a link to one Task highlights it, and says when it is completed or gone", async ({
+    page,
+    request,
+  }) => {
+    const stamp = Date.now();
+    // Five newer undated Tasks put the linked one beyond No date's preview.
+    const linked = await createTask(request, `Linked ${stamp}`);
+    await createTasks(
+      request,
+      Array.from({ length: 5 }, (_, index) => ({
+        title: `Newer ${stamp} ${index}`,
+      })),
+    );
+    const done = await createTask(request, `Linked done ${stamp}`);
+    await completeTask(request, done.id);
+    const gone = await createTask(request, `Linked gone ${stamp}`);
+    expect(
+      (await request.delete(`/api/tasks/v1/tasks/${gone.id}`)).status(),
+    ).toBe(204);
+
+    await openTasks(page);
+    const notice = page.getByTestId("tasks-link-notice");
+    await page.goto(`/tasks?task=${linked.id}`);
+    const row = page.locator(`#task-${linked.id}`);
+    await expect(row).toHaveAttribute("aria-current", "true");
+    await expect(row).toContainText(linked.title);
+    await expect(row).toBeInViewport();
+    await expect(undatedToggle(page)).toHaveAttribute("aria-expanded", "true");
+    await expect(notice).toHaveCount(0);
+
+    await page.goto(`/tasks?task=${done.id}`);
+    await expect(notice.locator("p")).toHaveText(
+      `“${done.title}” was already completed today.`,
+    );
+    await expect(page.locator('li[aria-current="true"]')).toHaveCount(0);
+
+    await page.goto(`/tasks?task=${gone.id}`);
+    await expect(notice).toContainText(
+      "This Task isn't here anymore. It may have been deleted.",
+    );
+    // Dismissing works once the page has hydrated.
+    await expect(async () => {
+      if (await notice.count())
+        await notice.getByRole("button", { name: "Dismiss" }).click();
+      await expect(notice).toHaveCount(0, { timeout: 1_000 });
+    }).toPass();
+  });
+});
+
 test.describe("Tasks workspace sections", () => {
   test.skip(!enabled, "set LIFE_OS_E2E_URL to run against the isolated stack");
 

@@ -15,7 +15,7 @@ func TestTimedReminderMessage(t *testing.T) {
 	got := dueMessage(due, due.At, false, berlin)
 	want := notify.Notification{
 		Title: "Call mom", Body: "Due in 30 minutes · 15:00", Importance: notify.Medium, Category: "tasks.due",
-		Link: "/tasks", DedupeKey: "tasks:due:7f8d2b1e-1c1a-4b7e-9a51-2f0c6d1e9a10:2026-10-10T13:00:00Z", OccurredAt: due.At,
+		Link: "/tasks?task=7f8d2b1e-1c1a-4b7e-9a51-2f0c6d1e9a10", DedupeKey: "tasks:due:7f8d2b1e-1c1a-4b7e-9a51-2f0c6d1e9a10:2026-10-10T13:00:00Z", OccurredAt: due.At,
 	}
 	if got != want {
 		t.Fatalf("message = %+v\nwant %+v", got, want)

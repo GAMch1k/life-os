@@ -321,7 +321,7 @@ func TestTimedTasksRemindOnceBeforeTheyAreDue(t *testing.T) {
 	h.expectSent()
 	result := h.runAt("2026-10-10T14:30:10+02:00")
 	fresh := h.expectSent("Call mom: Due in 30 minutes · 15:00")
-	h.expectFields(fresh[0], "tasks.due", "medium", "/tasks", "tasks:due:"+call+":2026-10-10T13:00:00Z", "2026-10-10T12:30:00Z")
+	h.expectFields(fresh[0], "tasks.due", "medium", "/tasks?task="+call, "tasks:due:"+call+":2026-10-10T13:00:00Z", "2026-10-10T12:30:00Z")
 	if result.Sent != 1 || result.Late != 0 || h.notes.actors[0] != "system:tasks" {
 		t.Fatalf("result = %+v, actor %s", result, h.notes.actors[0])
 	}
