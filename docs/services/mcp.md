@@ -41,7 +41,7 @@ MCP's Finance tools are Finance API operations, the same ones the Dashboard uses
 | --- | --- |
 | `finance_search_transactions` | `GET /v1/transactions` with typed filters: `q` (words in the counterparty, description, or notes), `accountId`, `categoryId` (an id or `uncategorized`), `from`/`to`, `direction` (`in`/`out`), `amountMin`/`amountMax` (absolute minor units), `status`, `source`, `limit` (default 20), and `cursor`. Ids, dates, and enum values are checked before Finance is called |
 | `finance_find_transactions` | `GET /v1/transactions` with the caller's raw URL query (kept for older callers) |
-| `finance_list_accounts`, `finance_list_categories` | `GET /v1/accounts` (balances, the built-in Cash account first), `GET /v1/categories` |
+| `finance_list_accounts`, `finance_list_categories` | `GET /v1/accounts` (balances, the built-in Cash account first; `balance` is what there is to spend, `bookedBalance` plus `pending`), `GET /v1/categories` |
 | `finance_month_summary` | `GET /v1/summaries/monthly` (`month=YYYY-MM`, optional `currency`, `accountId`) |
 | `finance_create_manual_transaction` | `POST /v1/transactions`, with the action's `Idempotency-Key` |
 

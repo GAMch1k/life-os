@@ -58,8 +58,8 @@ var currencyCode = regexp.MustCompile(`^[A-Z]{3}$`)
 // addFinanceTools registers the Finance tools. Each is a Finance API
 // operation, the same one the Dashboard uses.
 func addFinanceTools(s *mcp.Server, hc *http.Client, baseURL string, emitter *activity.Emitter) {
-	addReadTool(s, hc, "finance_month_summary", "Get the Finance summary of a month (month=YYYY-MM, optional currency and accountId): income, spending, net, balance, and totals per category", baseURL, "/v1/summaries/monthly?")
-	addReadTool(s, hc, "finance_list_accounts", "List Finance accounts with their balances (the built-in Cash account first; includeArchived=true for archived ones too)", baseURL, "/v1/accounts?")
+	addReadTool(s, hc, "finance_month_summary", "Get the Finance summary of a month (month=YYYY-MM, optional currency and accountId): income, spending, net, the balance now (totalBalance, pending card payments included; totalBookedBalance and totalPending split it), and totals per category", baseURL, "/v1/summaries/monthly?")
+	addReadTool(s, hc, "finance_list_accounts", "List Finance accounts with their balances (the built-in Cash account first; includeArchived=true for archived ones too). balance is the money there is to spend: bookedBalance plus pending, the card payments the bank has not booked yet", baseURL, "/v1/accounts?")
 	addReadTool(s, hc, "finance_list_categories", "List Finance categories (expense, income, transfer)", baseURL, "/v1/categories?")
 	addReadTool(s, hc, "finance_find_transactions", "List Finance transactions with a raw URL query (q, accountId, categoryId, from, to, direction, amountMin, amountMax, status, source, limit, cursor); prefer finance_search_transactions", baseURL, "/v1/transactions?")
 	mcp.AddTool(s, &mcp.Tool{Name: "finance_search_transactions", Description: "Search Finance transactions by words in their counterparty, description, or notes, and filter by account, category, dates, direction, amount, status, or source; newest first"}, func(ctx context.Context, req *mcp.CallToolRequest, in transactionSearch) (*mcp.CallToolResult, Output, error) {
