@@ -64,7 +64,7 @@ The verification stack writes its backups to a scratch directory of its own; `to
 
 ## Server health
 
-[host-health](../services/host-health.md) reports the server's memory, load, disks, and every container on it to the Status page's Server check, which the monitor watches. It only reads: its own `/proc`, statfs on read-only binds of `/` and the Docker data root, and the containers through `host-health-docker`, a gateway that alone mounts the Docker socket and answers three fixed questions (no container environments, logs, or files, and no writes). To add it:
+[host-health](../services/host-health.md) reports the server's memory, load, disks, and every container on it to the Status page's Server check, which the monitor watches. It only reads: its own `/proc`, statfs on read-only binds of `/` and the Docker data root, the containers' cgroups on a read-only bind of `/sys/fs/cgroup/system.slice` (for how much of the server Life OS uses; `LIFE_OS_DOCKER_CGROUP_DIR` only if Docker puts them elsewhere), and the containers through `host-health-docker`, a gateway that alone mounts the Docker socket and answers three fixed questions (no container environments, logs, or files, and no writes). To add it:
 
 1. Add to `.env`: `LIFE_OS_DOCKER_GID`, the Docker socket's group (`stat -c %g /var/run/docker.sock`); `LIFE_OS_DOCKER_ROOT` only if Docker's data is not in `/var/lib/docker`. The thresholds (`LIFE_OS_HOST_HEALTH_*`) are optional.
 2. Build and start the two containers: `docker compose build host-health host-health-docker`, then `docker compose up -d --no-build --no-deps host-health-docker host-health`.
