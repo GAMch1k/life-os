@@ -547,7 +547,7 @@ paths:
       operationId: claimAiBudgetPlan
       security: []
       responses:
-        '200': {description: The claimed plan, or null, content: {application/json: {schema: {$ref: '#/components/schemas/AiBudgetPlanClaim'}}}}
+        '200': {description: 'The claimed plan, or null', content: {application/json: {schema: {$ref: '#/components/schemas/AiBudgetPlanClaim'}}}}
         '400': {description: No valid X-Life-OS-Actor (`actor_required`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
         '403': {description: The owner does not run plans (`actor_not_allowed`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
   /v1/ai-budget-plans/{planId}:
