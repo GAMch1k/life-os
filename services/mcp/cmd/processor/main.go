@@ -92,6 +92,10 @@ func main() {
 		// without one, polled every few minutes, through the same runtime.
 		categories := &processor.CategoriesJob{Chooser: monitor.MonitoredCategories(planner), Tools: &processor.MCPClient{URL: cfg.MCPURL}, Enabled: cfg.CategoriesEnabled, TimeZone: cfg.TimeZone, Retry: runner.Retry, OnStatus: monitor.SetCategories, Logf: func(format string, args ...any) { fmt.Fprintf(os.Stderr, format+"\n", args...) }}
 		go categories.Loop(ctx)
+		// The AI's budget plans, asked for by the owner in Finance and on
+		// the 1st of each month, through the same runtime.
+		budgetPlans := &processor.BudgetPlanJob{Planner: monitor.MonitoredBudgetPlans(planner), Tools: &processor.MCPClient{URL: cfg.MCPURL}, Enabled: cfg.BudgetPlansEnabled, Monthly: cfg.BudgetPlanMonthly, TimeZone: cfg.TimeZone, Retry: runner.Retry, OnStatus: monitor.SetBudgetPlans, Logf: func(format string, args ...any) { fmt.Fprintf(os.Stderr, format+"\n", args...) }}
+		go budgetPlans.Loop(ctx)
 		service := &processor.Service{Run: func(ctx context.Context) error {
 			_, err := runner.Run(ctx)
 			if ctx.Err() == nil {
