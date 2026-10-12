@@ -362,7 +362,7 @@ VALUES (
     $15, $16, $17, $18
 )
 ON CONFLICT (account_id, import_source, import_external_id) WHERE import_source IS NOT NULL DO NOTHING
-RETURNING id, account_id, category_id, amount_minor, currency, occurred_on, note, import_source, import_external_id, source_metadata, created_at, updated_at, automation_idempotency_key, automation_payload_hash, counterparty, description, status, value_date, connection_id, categorized_by, category_rule_id, merchant_category_code, bank_reference
+RETURNING id, account_id, category_id, amount_minor, currency, occurred_on, note, import_source, import_external_id, source_metadata, created_at, updated_at, automation_idempotency_key, automation_payload_hash, counterparty, description, status, value_date, connection_id, categorized_by, category_rule_id, merchant_category_code, bank_reference, ai_reviewed_at
 `
 
 type CreateImportedTransactionParams struct {
@@ -433,6 +433,7 @@ func (q *Queries) CreateImportedTransaction(ctx context.Context, arg CreateImpor
 		&i.CategoryRuleID,
 		&i.MerchantCategoryCode,
 		&i.BankReference,
+		&i.AiReviewedAt,
 	)
 	return i, err
 }
@@ -451,7 +452,7 @@ VALUES (
 )
 ON CONFLICT (automation_idempotency_key) WHERE automation_idempotency_key IS NOT NULL
 DO UPDATE SET automation_idempotency_key = EXCLUDED.automation_idempotency_key
-RETURNING id, account_id, category_id, amount_minor, currency, occurred_on, note, import_source, import_external_id, source_metadata, created_at, updated_at, automation_idempotency_key, automation_payload_hash, counterparty, description, status, value_date, connection_id, categorized_by, category_rule_id, merchant_category_code, bank_reference
+RETURNING id, account_id, category_id, amount_minor, currency, occurred_on, note, import_source, import_external_id, source_metadata, created_at, updated_at, automation_idempotency_key, automation_payload_hash, counterparty, description, status, value_date, connection_id, categorized_by, category_rule_id, merchant_category_code, bank_reference, ai_reviewed_at
 `
 
 type CreateTransactionParams struct {
@@ -515,6 +516,7 @@ func (q *Queries) CreateTransaction(ctx context.Context, arg CreateTransactionPa
 		&i.CategoryRuleID,
 		&i.MerchantCategoryCode,
 		&i.BankReference,
+		&i.AiReviewedAt,
 	)
 	return i, err
 }
@@ -581,7 +583,7 @@ func (q *Queries) DeleteTransaction(ctx context.Context, id pgtype.UUID) error {
 }
 
 const findReplacedPending = `-- name: FindReplacedPending :one
-SELECT id, account_id, category_id, amount_minor, currency, occurred_on, note, import_source, import_external_id, source_metadata, created_at, updated_at, automation_idempotency_key, automation_payload_hash, counterparty, description, status, value_date, connection_id, categorized_by, category_rule_id, merchant_category_code, bank_reference FROM transactions
+SELECT id, account_id, category_id, amount_minor, currency, occurred_on, note, import_source, import_external_id, source_metadata, created_at, updated_at, automation_idempotency_key, automation_payload_hash, counterparty, description, status, value_date, connection_id, categorized_by, category_rule_id, merchant_category_code, bank_reference, ai_reviewed_at FROM transactions
 WHERE account_id = $1
   AND import_source = 'bank'
   AND status = 'pending'
@@ -639,6 +641,7 @@ func (q *Queries) FindReplacedPending(ctx context.Context, arg FindReplacedPendi
 		&i.CategoryRuleID,
 		&i.MerchantCategoryCode,
 		&i.BankReference,
+		&i.AiReviewedAt,
 	)
 	return i, err
 }
@@ -840,7 +843,7 @@ func (q *Queries) GetMonthlyCategoryTotals(ctx context.Context, arg GetMonthlyCa
 }
 
 const getTransaction = `-- name: GetTransaction :one
-SELECT id, account_id, category_id, amount_minor, currency, occurred_on, note, import_source, import_external_id, source_metadata, created_at, updated_at, automation_idempotency_key, automation_payload_hash, counterparty, description, status, value_date, connection_id, categorized_by, category_rule_id, merchant_category_code, bank_reference FROM transactions WHERE id = $1
+SELECT id, account_id, category_id, amount_minor, currency, occurred_on, note, import_source, import_external_id, source_metadata, created_at, updated_at, automation_idempotency_key, automation_payload_hash, counterparty, description, status, value_date, connection_id, categorized_by, category_rule_id, merchant_category_code, bank_reference, ai_reviewed_at FROM transactions WHERE id = $1
 `
 
 func (q *Queries) GetTransaction(ctx context.Context, id pgtype.UUID) (Transaction, error) {
@@ -870,12 +873,13 @@ func (q *Queries) GetTransaction(ctx context.Context, id pgtype.UUID) (Transacti
 		&i.CategoryRuleID,
 		&i.MerchantCategoryCode,
 		&i.BankReference,
+		&i.AiReviewedAt,
 	)
 	return i, err
 }
 
 const getTransactionForUpdate = `-- name: GetTransactionForUpdate :one
-SELECT id, account_id, category_id, amount_minor, currency, occurred_on, note, import_source, import_external_id, source_metadata, created_at, updated_at, automation_idempotency_key, automation_payload_hash, counterparty, description, status, value_date, connection_id, categorized_by, category_rule_id, merchant_category_code, bank_reference FROM transactions WHERE id = $1 FOR UPDATE
+SELECT id, account_id, category_id, amount_minor, currency, occurred_on, note, import_source, import_external_id, source_metadata, created_at, updated_at, automation_idempotency_key, automation_payload_hash, counterparty, description, status, value_date, connection_id, categorized_by, category_rule_id, merchant_category_code, bank_reference, ai_reviewed_at FROM transactions WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) GetTransactionForUpdate(ctx context.Context, id pgtype.UUID) (Transaction, error) {
@@ -905,6 +909,7 @@ func (q *Queries) GetTransactionForUpdate(ctx context.Context, id pgtype.UUID) (
 		&i.CategoryRuleID,
 		&i.MerchantCategoryCode,
 		&i.BankReference,
+		&i.AiReviewedAt,
 	)
 	return i, err
 }
@@ -1037,7 +1042,7 @@ func (q *Queries) ListActiveCategoryRules(ctx context.Context) ([]CategoryRule, 
 }
 
 const listBankTransactions = `-- name: ListBankTransactions :many
-SELECT id, account_id, category_id, amount_minor, currency, occurred_on, note, import_source, import_external_id, source_metadata, created_at, updated_at, automation_idempotency_key, automation_payload_hash, counterparty, description, status, value_date, connection_id, categorized_by, category_rule_id, merchant_category_code, bank_reference FROM transactions
+SELECT id, account_id, category_id, amount_minor, currency, occurred_on, note, import_source, import_external_id, source_metadata, created_at, updated_at, automation_idempotency_key, automation_payload_hash, counterparty, description, status, value_date, connection_id, categorized_by, category_rule_id, merchant_category_code, bank_reference, ai_reviewed_at FROM transactions
 WHERE connection_id = $1 AND import_external_id = ANY($2::text[])
 FOR UPDATE
 `
@@ -1080,6 +1085,7 @@ func (q *Queries) ListBankTransactions(ctx context.Context, arg ListBankTransact
 			&i.CategoryRuleID,
 			&i.MerchantCategoryCode,
 			&i.BankReference,
+			&i.AiReviewedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1209,7 +1215,7 @@ const listRuleCandidates = `-- name: ListRuleCandidates :many
 SELECT id, counterparty, description, merchant_category_code, category_id, categorized_by, category_rule_id
 FROM transactions
 WHERE categorized_by IS DISTINCT FROM 'manual'
-  AND ($1::boolean OR category_id IS NULL)
+  AND ($1::boolean OR category_id IS NULL OR categorized_by = 'ai')
 ORDER BY id
 FOR UPDATE
 `
@@ -1225,8 +1231,8 @@ type ListRuleCandidatesRow struct {
 }
 
 // Transactions whose category was not chosen by hand: those without a
-// category, plus those a rule or a merchant category code categorized when
-// all_categorized is set.
+// category or with the AI's, plus those a rule or a merchant category code
+// categorized when all_categorized is set.
 func (q *Queries) ListRuleCandidates(ctx context.Context, allCategorized bool) ([]ListRuleCandidatesRow, error) {
 	rows, err := q.db.Query(ctx, listRuleCandidates, allCategorized)
 	if err != nil {
@@ -1256,7 +1262,7 @@ func (q *Queries) ListRuleCandidates(ctx context.Context, allCategorized bool) (
 }
 
 const listTransactions = `-- name: ListTransactions :many
-SELECT id, account_id, category_id, amount_minor, currency, occurred_on, note, import_source, import_external_id, source_metadata, created_at, updated_at, automation_idempotency_key, automation_payload_hash, counterparty, description, status, value_date, connection_id, categorized_by, category_rule_id, merchant_category_code, bank_reference FROM transactions
+SELECT id, account_id, category_id, amount_minor, currency, occurred_on, note, import_source, import_external_id, source_metadata, created_at, updated_at, automation_idempotency_key, automation_payload_hash, counterparty, description, status, value_date, connection_id, categorized_by, category_rule_id, merchant_category_code, bank_reference, ai_reviewed_at FROM transactions
 WHERE ($1::uuid IS NULL OR account_id = $1::uuid)
   AND ($2::uuid IS NULL OR category_id = $2::uuid)
   AND (NOT $3::boolean OR category_id IS NULL)
@@ -1269,14 +1275,15 @@ WHERE ($1::uuid IS NULL OR account_id = $1::uuid)
   AND ($8::bigint IS NULL OR abs(amount_minor) <= $8::bigint)
   AND ($9::text IS NULL OR status = $9::text)
   AND ($10::text IS NULL OR COALESCE(import_source, 'manual') = $10::text)
+  AND ($11::text IS NULL OR categorized_by = $11::text)
   AND NOT EXISTS (
-      SELECT 1 FROM unnest($11::text[]) AS word
+      SELECT 1 FROM unnest($12::text[]) AS word
       WHERE concat_ws(' ', counterparty, description, note) NOT ILIKE '%' || word || '%'
   )
-  AND ($12::date IS NULL
-       OR (occurred_on, created_at, id) < ($12::date, $13::timestamptz, $14::uuid))
+  AND ($13::date IS NULL
+       OR (occurred_on, created_at, id) < ($13::date, $14::timestamptz, $15::uuid))
 ORDER BY occurred_on DESC, created_at DESC, id DESC
-LIMIT $15
+LIMIT $16
 `
 
 type ListTransactionsParams struct {
@@ -1290,6 +1297,7 @@ type ListTransactionsParams struct {
 	AmountMax      *int64
 	Status         *string
 	SourceKind     *string
+	CategorizedBy  *string
 	Words          []string
 	AfterDate      pgtype.Date
 	AfterCreatedAt pgtype.Timestamptz
@@ -1312,6 +1320,7 @@ func (q *Queries) ListTransactions(ctx context.Context, arg ListTransactionsPara
 		arg.AmountMax,
 		arg.Status,
 		arg.SourceKind,
+		arg.CategorizedBy,
 		arg.Words,
 		arg.AfterDate,
 		arg.AfterCreatedAt,
@@ -1349,6 +1358,7 @@ func (q *Queries) ListTransactions(ctx context.Context, arg ListTransactionsPara
 			&i.CategoryRuleID,
 			&i.MerchantCategoryCode,
 			&i.BankReference,
+			&i.AiReviewedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1551,9 +1561,13 @@ SET account_id = $1,
     category_id = $11,
     categorized_by = $12,
     category_rule_id = $13,
+    ai_reviewed_at = CASE
+        WHEN counterparty IS DISTINCT FROM $7 OR description IS DISTINCT FROM $8 THEN NULL
+        ELSE ai_reviewed_at
+    END,
     updated_at = now()
 WHERE id = $14
-RETURNING id, account_id, category_id, amount_minor, currency, occurred_on, note, import_source, import_external_id, source_metadata, created_at, updated_at, automation_idempotency_key, automation_payload_hash, counterparty, description, status, value_date, connection_id, categorized_by, category_rule_id, merchant_category_code, bank_reference
+RETURNING id, account_id, category_id, amount_minor, currency, occurred_on, note, import_source, import_external_id, source_metadata, created_at, updated_at, automation_idempotency_key, automation_payload_hash, counterparty, description, status, value_date, connection_id, categorized_by, category_rule_id, merchant_category_code, bank_reference, ai_reviewed_at
 `
 
 type UpdateBankTransactionParams struct {
@@ -1573,6 +1587,7 @@ type UpdateBankTransactionParams struct {
 	ID                   pgtype.UUID
 }
 
+// A new counterparty or description lets the AI look at it again.
 func (q *Queries) UpdateBankTransaction(ctx context.Context, arg UpdateBankTransactionParams) (Transaction, error) {
 	row := q.db.QueryRow(ctx, updateBankTransaction,
 		arg.AccountID,
@@ -1615,6 +1630,7 @@ func (q *Queries) UpdateBankTransaction(ctx context.Context, arg UpdateBankTrans
 		&i.CategoryRuleID,
 		&i.MerchantCategoryCode,
 		&i.BankReference,
+		&i.AiReviewedAt,
 	)
 	return i, err
 }
@@ -1724,9 +1740,13 @@ SET account_id = $1,
     category_id = $10,
     categorized_by = $11,
     category_rule_id = $12,
+    ai_reviewed_at = CASE
+        WHEN counterparty IS DISTINCT FROM $7 OR description IS DISTINCT FROM $8 THEN NULL
+        ELSE ai_reviewed_at
+    END,
     updated_at = now()
 WHERE id = $13
-RETURNING id, account_id, category_id, amount_minor, currency, occurred_on, note, import_source, import_external_id, source_metadata, created_at, updated_at, automation_idempotency_key, automation_payload_hash, counterparty, description, status, value_date, connection_id, categorized_by, category_rule_id, merchant_category_code, bank_reference
+RETURNING id, account_id, category_id, amount_minor, currency, occurred_on, note, import_source, import_external_id, source_metadata, created_at, updated_at, automation_idempotency_key, automation_payload_hash, counterparty, description, status, value_date, connection_id, categorized_by, category_rule_id, merchant_category_code, bank_reference, ai_reviewed_at
 `
 
 type UpdateTransactionParams struct {
@@ -1745,6 +1765,7 @@ type UpdateTransactionParams struct {
 	ID             pgtype.UUID
 }
 
+// A new counterparty or description lets the AI look at it again.
 func (q *Queries) UpdateTransaction(ctx context.Context, arg UpdateTransactionParams) (Transaction, error) {
 	row := q.db.QueryRow(ctx, updateTransaction,
 		arg.AccountID,
@@ -1786,6 +1807,7 @@ func (q *Queries) UpdateTransaction(ctx context.Context, arg UpdateTransactionPa
 		&i.CategoryRuleID,
 		&i.MerchantCategoryCode,
 		&i.BankReference,
+		&i.AiReviewedAt,
 	)
 	return i, err
 }

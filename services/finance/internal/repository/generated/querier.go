@@ -24,6 +24,7 @@ type Querier interface {
 	CategoryNameTaken(ctx context.Context, name string) (bool, error)
 	ClaimAlertNotification(ctx context.Context, dedupeKey string) (int64, error)
 	ClaimBudgetNotification(ctx context.Context, arg ClaimBudgetNotificationParams) (int64, error)
+	CountAICategoryCandidates(ctx context.Context) (int64, error)
 	CountAccountTransactions(ctx context.Context, accountID pgtype.UUID) (int64, error)
 	CreateAccount(ctx context.Context, arg CreateAccountParams) (Account, error)
 	CreateBankAccount(ctx context.Context, arg CreateBankAccountParams) (Account, error)
@@ -75,6 +76,11 @@ type Querier interface {
 	GetTransactionForUpdate(ctx context.Context, id pgtype.UUID) (Transaction, error)
 	InsertBudgetPlanLines(ctx context.Context, arg InsertBudgetPlanLinesParams) error
 	InsertSubscription(ctx context.Context, arg InsertSubscriptionParams) (Subscription, error)
+	// What the AI may categorize, latest first: booked transactions of active
+	// accounts without a category that nobody chose (a category cleared by hand
+	// stays cleared), which the AI has not looked at since their text last
+	// changed. Pending ones are left out: their text is often incomplete.
+	ListAICategoryCandidates(ctx context.Context, pageLimit int32) ([]ListAICategoryCandidatesRow, error)
 	// A bank account that reported a booked balance shows it; every other
 	// account shows its opening balance plus its booked transactions.
 	ListAccountsWithBalance(ctx context.Context, arg ListAccountsWithBalanceParams) ([]ListAccountsWithBalanceRow, error)
@@ -105,12 +111,16 @@ type Querier interface {
 	// balance. The built-in Cash account and other manual accounts are never
 	// watched.
 	ListLowBalanceAccounts(ctx context.Context, currency string) ([]ListLowBalanceAccountsRow, error)
+	// The owner's latest choice by hand per counterparty (compared without case
+	// or repeated spaces), in a category that is not archived, latest first:
+	// examples of their taste for the AI.
+	ListManualCategoryExamples(ctx context.Context, exampleLimit int32) ([]ListManualCategoryExamplesRow, error)
 	// Booked money out since a day, for detecting recurring payments; money
 	// moved between own accounts (transfer categories) is not a payment.
 	ListRecurringCandidates(ctx context.Context, since pgtype.Date) ([]ListRecurringCandidatesRow, error)
 	// Transactions whose category was not chosen by hand: those without a
-	// category, plus those a rule or a merchant category code categorized when
-	// all_categorized is set.
+	// category or with the AI's, plus those a rule or a merchant category code
+	// categorized when all_categorized is set.
 	ListRuleCandidates(ctx context.Context, allCategorized bool) ([]ListRuleCandidatesRow, error)
 	// The transactions each subscription matched, latest first.
 	ListSubscriptionLinks(ctx context.Context, subscriptionID pgtype.UUID) ([]SubscriptionTransaction, error)
@@ -128,6 +138,11 @@ type Querier interface {
 	LockSeeds(ctx context.Context) error
 	// One detection run or subscription change at a time.
 	LockSubscriptions(ctx context.Context) error
+	// The transactions the AI chose for, locked while its choices apply.
+	LockTransactionsForAI(ctx context.Context, ids []pgtype.UUID) ([]LockTransactionsForAIRow, error)
+	// Notes that the AI looked at transactions it left without a category; one
+	// that got a category meanwhile is left alone.
+	MarkAIReviewed(ctx context.Context, ids []pgtype.UUID) (int64, error)
 	MarkSeedApplied(ctx context.Context, name string) error
 	ReleaseAlertNotification(ctx context.Context, dedupeKey string) error
 	ReleaseBudgetNotification(ctx context.Context, dedupeKey string) error
@@ -135,6 +150,9 @@ type Querier interface {
 	ReplaceSubscriptionLinks(ctx context.Context, arg ReplaceSubscriptionLinksParams) error
 	SaveFinanceSettings(ctx context.Context, arg SaveFinanceSettingsParams) (FinanceSetting, error)
 	SeedApplied(ctx context.Context, name string) (bool, error)
+	// Gives each transaction the AI's category, only while no one else chose
+	// one (or the AI chose it), and notes that the AI looked at it.
+	SetAICategories(ctx context.Context, arg SetAICategoriesParams) (int64, error)
 	SetLowBalanceState(ctx context.Context, arg SetLowBalanceStateParams) error
 	// Gives each transaction the category its rule or merchant category code
 	// chose (null: none); categorized_by is 'rule', 'mcc', or '' for none.
@@ -143,10 +161,12 @@ type Querier interface {
 	// A re-sync refreshes what the bank reports; the owner's name, kind, and
 	// archive state stay. A balance the sync does not report stays as it was.
 	UpdateBankAccount(ctx context.Context, arg UpdateBankAccountParams) (Account, error)
+	// A new counterparty or description lets the AI look at it again.
 	UpdateBankTransaction(ctx context.Context, arg UpdateBankTransactionParams) (Transaction, error)
 	UpdateCategoryRule(ctx context.Context, arg UpdateCategoryRuleParams) (CategoryRule, error)
 	UpdateFinancialCategory(ctx context.Context, arg UpdateFinancialCategoryParams) (FinancialCategory, error)
 	UpdateSubscription(ctx context.Context, arg UpdateSubscriptionParams) (Subscription, error)
+	// A new counterparty or description lets the AI look at it again.
 	UpdateTransaction(ctx context.Context, arg UpdateTransactionParams) (Transaction, error)
 	UpsertBudgetPlan(ctx context.Context, arg UpsertBudgetPlanParams) (BudgetPlan, error)
 }

@@ -184,6 +184,7 @@ WHERE (sqlc.narg(account_id)::uuid IS NULL OR account_id = sqlc.narg(account_id)
   AND (sqlc.narg(amount_max)::bigint IS NULL OR abs(amount_minor) <= sqlc.narg(amount_max)::bigint)
   AND (sqlc.narg(status)::text IS NULL OR status = sqlc.narg(status)::text)
   AND (sqlc.narg(source_kind)::text IS NULL OR COALESCE(import_source, 'manual') = sqlc.narg(source_kind)::text)
+  AND (sqlc.narg(categorized_by)::text IS NULL OR categorized_by = sqlc.narg(categorized_by)::text)
   AND NOT EXISTS (
       SELECT 1 FROM unnest(sqlc.arg(words)::text[]) AS word
       WHERE concat_ws(' ', counterparty, description, note) NOT ILIKE '%' || word || '%'
@@ -194,6 +195,7 @@ ORDER BY occurred_on DESC, created_at DESC, id DESC
 LIMIT sqlc.arg(page_limit);
 
 -- name: UpdateTransaction :one
+-- A new counterparty or description lets the AI look at it again.
 UPDATE transactions
 SET account_id = sqlc.arg(account_id),
     amount_minor = sqlc.arg(amount_minor),
@@ -207,6 +209,10 @@ SET account_id = sqlc.arg(account_id),
     category_id = sqlc.narg(category_id),
     categorized_by = sqlc.narg(categorized_by),
     category_rule_id = sqlc.narg(category_rule_id),
+    ai_reviewed_at = CASE
+        WHEN counterparty IS DISTINCT FROM sqlc.narg(counterparty) OR description IS DISTINCT FROM sqlc.narg(description) THEN NULL
+        ELSE ai_reviewed_at
+    END,
     updated_at = now()
 WHERE id = sqlc.arg(id)
 RETURNING *;
@@ -216,12 +222,12 @@ DELETE FROM transactions WHERE id = $1;
 
 -- name: ListRuleCandidates :many
 -- Transactions whose category was not chosen by hand: those without a
--- category, plus those a rule or a merchant category code categorized when
--- all_categorized is set.
+-- category or with the AI's, plus those a rule or a merchant category code
+-- categorized when all_categorized is set.
 SELECT id, counterparty, description, merchant_category_code, category_id, categorized_by, category_rule_id
 FROM transactions
 WHERE categorized_by IS DISTINCT FROM 'manual'
-  AND (sqlc.arg(all_categorized)::boolean OR category_id IS NULL)
+  AND (sqlc.arg(all_categorized)::boolean OR category_id IS NULL OR categorized_by = 'ai')
 ORDER BY id
 FOR UPDATE;
 
@@ -335,6 +341,7 @@ LIMIT 1
 FOR UPDATE;
 
 -- name: UpdateBankTransaction :one
+-- A new counterparty or description lets the AI look at it again.
 UPDATE transactions
 SET account_id = sqlc.arg(account_id),
     amount_minor = sqlc.arg(amount_minor),
@@ -349,6 +356,10 @@ SET account_id = sqlc.arg(account_id),
     category_id = sqlc.narg(category_id),
     categorized_by = sqlc.narg(categorized_by),
     category_rule_id = sqlc.narg(category_rule_id),
+    ai_reviewed_at = CASE
+        WHEN counterparty IS DISTINCT FROM sqlc.narg(counterparty) OR description IS DISTINCT FROM sqlc.narg(description) THEN NULL
+        ELSE ai_reviewed_at
+    END,
     updated_at = now()
 WHERE id = sqlc.arg(id)
 RETURNING *;

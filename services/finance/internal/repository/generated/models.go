@@ -155,4 +155,5 @@ type Transaction struct {
 	CategoryRuleID           pgtype.UUID
 	MerchantCategoryCode     *string
 	BankReference            *string
+	AiReviewedAt             pgtype.Timestamptz
 }

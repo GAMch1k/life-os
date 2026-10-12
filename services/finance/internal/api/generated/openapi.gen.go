@@ -58,6 +58,57 @@ func (e AccountSourceKind) Valid() bool {
 	}
 }
 
+// Defines values for AiCategoryOutcome.
+const (
+	Categorized AiCategoryOutcome = "categorized"
+	Left        AiCategoryOutcome = "left"
+	Skipped     AiCategoryOutcome = "skipped"
+	Unchanged   AiCategoryOutcome = "unchanged"
+)
+
+// Valid indicates whether the value is a known member of the AiCategoryOutcome enum.
+func (e AiCategoryOutcome) Valid() bool {
+	switch e {
+	case Categorized:
+		return true
+	case Left:
+		return true
+	case Skipped:
+		return true
+	case Unchanged:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AiCategorySkipReason.
+const (
+	CategoryArchived AiCategorySkipReason = "category_archived"
+	Chosen           AiCategorySkipReason = "chosen"
+	KindMismatch     AiCategorySkipReason = "kind_mismatch"
+	NotFound         AiCategorySkipReason = "not_found"
+	UnknownCategory  AiCategorySkipReason = "unknown_category"
+)
+
+// Valid indicates whether the value is a known member of the AiCategorySkipReason enum.
+func (e AiCategorySkipReason) Valid() bool {
+	switch e {
+	case CategoryArchived:
+		return true
+	case Chosen:
+		return true
+	case KindMismatch:
+		return true
+	case NotFound:
+		return true
+	case UnknownCategory:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ApplyScope.
 const (
 	All           ApplyScope = "all"
@@ -414,6 +465,7 @@ func (e SubscriptionState) Valid() bool {
 
 // Defines values for TransactionCategorizedBy.
 const (
+	TransactionCategorizedByAi     TransactionCategorizedBy = "ai"
 	TransactionCategorizedByManual TransactionCategorizedBy = "manual"
 	TransactionCategorizedByMcc    TransactionCategorizedBy = "mcc"
 	TransactionCategorizedByRule   TransactionCategorizedBy = "rule"
@@ -422,6 +474,8 @@ const (
 // Valid indicates whether the value is a known member of the TransactionCategorizedBy enum.
 func (e TransactionCategorizedBy) Valid() bool {
 	switch e {
+	case TransactionCategorizedByAi:
+		return true
 	case TransactionCategorizedByManual:
 		return true
 	case TransactionCategorizedByMcc:
@@ -490,6 +544,30 @@ func (e TransactionStatus) Valid() bool {
 	}
 }
 
+// Defines values for ListTransactionsParamsCategorizedBy.
+const (
+	ListTransactionsParamsCategorizedByAi     ListTransactionsParamsCategorizedBy = "ai"
+	ListTransactionsParamsCategorizedByManual ListTransactionsParamsCategorizedBy = "manual"
+	ListTransactionsParamsCategorizedByMcc    ListTransactionsParamsCategorizedBy = "mcc"
+	ListTransactionsParamsCategorizedByRule   ListTransactionsParamsCategorizedBy = "rule"
+)
+
+// Valid indicates whether the value is a known member of the ListTransactionsParamsCategorizedBy enum.
+func (e ListTransactionsParamsCategorizedBy) Valid() bool {
+	switch e {
+	case ListTransactionsParamsCategorizedByAi:
+		return true
+	case ListTransactionsParamsCategorizedByManual:
+		return true
+	case ListTransactionsParamsCategorizedByMcc:
+		return true
+	case ListTransactionsParamsCategorizedByRule:
+		return true
+	default:
+		return false
+	}
+}
+
 // Account `balance` is the opening balance plus every booked transaction; for a bank account that reported one, it is the bank's booked balance as of `balanceAsOf` instead, and `available` is the bank's available balance. `pending` is the sum of the pending transactions, which are not in a computed balance. `transactionCount` counts both. `lowBalance` is true while the low-balance alert is on and this account is watched and below its threshold: an active account from a bank connection, in the default currency, of kind bank, or card or savings with a bank-reported balance. The built-in Cash account and other manual accounts are never low.
 type Account struct {
 	Archived   bool       `json:"archived"`
@@ -552,6 +630,67 @@ type AccountSource struct {
 // AccountSourceKind `manual`: kept in Life OS. `bank`: connected to a bank (planned).
 type AccountSourceKind string
 
+// AiCategoryCandidate What the AI is told about a transaction: no notes, account names, or bank references.
+type AiCategoryCandidate struct {
+	AccountKind  AccountKind        `json:"accountKind"`
+	Amount       Money              `json:"amount"`
+	BookingDate  openapi_types.Date `json:"bookingDate"`
+	Counterparty *string            `json:"counterparty"`
+	Description  *string            `json:"description"`
+	Id           openapi_types.UUID `json:"id"`
+}
+
+// AiCategoryCandidates defines model for AiCategoryCandidates.
+type AiCategoryCandidates struct {
+	Examples []AiCategoryExample   `json:"examples"`
+	Items    []AiCategoryCandidate `json:"items"`
+
+	// Total Every candidate; items holds at most limit of them.
+	Total int `json:"total"`
+}
+
+// AiCategoryChoice defines model for AiCategoryChoice.
+type AiCategoryChoice struct {
+	// CategoryId The AI's category; null leaves the transaction without one.
+	CategoryId    *openapi_types.UUID `json:"categoryId"`
+	TransactionId openapi_types.UUID  `json:"transactionId"`
+}
+
+// AiCategoryChoiceResult defines model for AiCategoryChoiceResult.
+type AiCategoryChoiceResult struct {
+	Outcome AiCategoryOutcome `json:"outcome"`
+
+	// Reason `chosen`: a choice by hand, a rule, or a merchant category code gave it a category meanwhile (or cleared it by hand). `not_found`: no such transaction. `unknown_category`, `category_archived`: the category cannot be given. `kind_mismatch`: money out to an income category, or money in to an expense category.
+	Reason        *AiCategorySkipReason `json:"reason,omitempty"`
+	TransactionId openapi_types.UUID    `json:"transactionId"`
+}
+
+// AiCategoryChoicesRequest defines model for AiCategoryChoicesRequest.
+type AiCategoryChoicesRequest struct {
+	Choices []AiCategoryChoice `json:"choices"`
+}
+
+// AiCategoryChoicesResult defines model for AiCategoryChoicesResult.
+type AiCategoryChoicesResult struct {
+	Categorized int                      `json:"categorized"`
+	Left        int                      `json:"left"`
+	Results     []AiCategoryChoiceResult `json:"results"`
+	Skipped     int                      `json:"skipped"`
+	Unchanged   int                      `json:"unchanged"`
+}
+
+// AiCategoryExample The category the owner last chose by hand for a counterparty.
+type AiCategoryExample struct {
+	CategoryId   openapi_types.UUID `json:"categoryId"`
+	Counterparty string             `json:"counterparty"`
+}
+
+// AiCategoryOutcome defines model for AiCategoryOutcome.
+type AiCategoryOutcome string
+
+// AiCategorySkipReason `chosen`: a choice by hand, a rule, or a merchant category code gave it a category meanwhile (or cleared it by hand). `not_found`: no such transaction. `unknown_category`, `category_archived`: the category cannot be given. `kind_mismatch`: money out to an income category, or money in to an expense category.
+type AiCategorySkipReason string
+
 // AmountAlert defines model for AmountAlert.
 type AmountAlert struct {
 	Enabled   bool  `json:"enabled"`
@@ -571,7 +710,7 @@ type ApplyCategoryRulesRequest struct {
 	Scope *ApplyScope `json:"scope,omitempty"`
 }
 
-// ApplyCategoryRulesResult `examined`: transactions the rules were tried on. `categorized`: had no category and got one. `recategorized`: a rule's category was replaced by another rule's. `cleared`: a rule's category was removed because no rule matches any more (scope all). `unchanged`: the rest.
+// ApplyCategoryRulesResult `examined`: transactions the rules were tried on. `categorized`: had no category and got one. `recategorized`: a rule's or the AI's category was replaced by another rule's (or a code's). `cleared`: a rule's category was removed because no rule matches any more (scope all). `unchanged`: the rest.
 type ApplyCategoryRulesResult struct {
 	Categorized   int        `json:"categorized"`
 	Cleared       int        `json:"cleared"`
@@ -1073,7 +1212,7 @@ type SubscriptionTotals struct {
 	Monthly   Money  `json:"monthly"`
 }
 
-// Transaction `categorizedBy` is `manual` when the category was chosen by hand (by the owner, the AI, or the import file; possibly none), `rule` when a category rule chose it (`categoryRuleId` names the rule), `mcc` when no rule matched and the card's merchant category code gave a default category, and null while nobody chose. `readOnly` is true for imported transactions: only `categoryId` and `notes` change, and they cannot be deleted.
+// Transaction `categorizedBy` is `manual` when the category was chosen by hand (by the owner, an agent recording a transaction, or the import file; possibly none), `rule` when a category rule chose it (`categoryRuleId` names the rule), `mcc` when no rule matched and the card's merchant category code gave a default category, `ai` when the AI filled the gap (see `/v1/categories/ai/choices`), and null while nobody chose. `readOnly` is true for imported transactions: only `categoryId` and `notes` change, and they cannot be deleted.
 type Transaction struct {
 	AccountId openapi_types.UUID `json:"accountId"`
 	Amount    Money              `json:"amount"`
@@ -1224,6 +1363,11 @@ type ListCategoriesParams struct {
 	IncludeArchived *bool `form:"includeArchived,omitempty" json:"includeArchived,omitempty"`
 }
 
+// ListAiCategoryCandidatesParams defines parameters for ListAiCategoryCandidates.
+type ListAiCategoryCandidatesParams struct {
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
 // CreateCsvImportParams defines parameters for CreateCsvImport.
 type CreateCsvImportParams struct {
 	// AccountId The account to import into. Required unless the file has an account_id column.
@@ -1269,10 +1413,16 @@ type ListTransactionsParams struct {
 	Status    *TransactionStatus     `form:"status,omitempty" json:"status,omitempty"`
 	Source    *TransactionSourceKind `form:"source,omitempty" json:"source,omitempty"`
 
+	// CategorizedBy Who chose the category: `manual`, `rule`, `mcc`, or `ai` (such as `ai` for the categories the AI chose).
+	CategorizedBy *ListTransactionsParamsCategorizedBy `form:"categorizedBy,omitempty" json:"categorizedBy,omitempty"`
+
 	// Cursor The previous page's nextCursor. Opaque; only valid with the filters it was returned for.
 	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
 	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
 }
+
+// ListTransactionsParamsCategorizedBy defines parameters for ListTransactions.
+type ListTransactionsParamsCategorizedBy string
 
 // CreateAccountJSONRequestBody defines body for CreateAccount for application/json ContentType.
 type CreateAccountJSONRequestBody = CreateAccountRequest
@@ -1285,6 +1435,9 @@ type SaveBudgetPlanJSONRequestBody = SaveBudgetPlanRequest
 
 // CreateCategoryJSONRequestBody defines body for CreateCategory for application/json ContentType.
 type CreateCategoryJSONRequestBody = CreateCategoryRequest
+
+// ApplyAiCategoryChoicesJSONRequestBody defines body for ApplyAiCategoryChoices for application/json ContentType.
+type ApplyAiCategoryChoicesJSONRequestBody = AiCategoryChoicesRequest
 
 // CreateCategoryRuleJSONRequestBody defines body for CreateCategoryRule for application/json ContentType.
 type CreateCategoryRuleJSONRequestBody = CreateCategoryRuleRequest
@@ -1348,6 +1501,12 @@ type ServerInterface interface {
 	// CreateCategory Create a finance category
 	// (POST /v1/categories)
 	CreateCategory(c fiber.Ctx) error
+	// ListAiCategoryCandidates List the transactions the AI may categorize
+	// (GET /v1/categories/ai/candidates)
+	ListAiCategoryCandidates(c fiber.Ctx, params ListAiCategoryCandidatesParams) error
+	// ApplyAiCategoryChoices Apply the AI's category choices
+	// (POST /v1/categories/ai/choices)
+	ApplyAiCategoryChoices(c fiber.Ctx) error
 	// ListCategoryRules List category rules
 	// (GET /v1/categories/rules)
 	ListCategoryRules(c fiber.Ctx) error
@@ -1699,6 +1858,61 @@ func (siw *ServerInterfaceWrapper) CreateCategory(c fiber.Ctx) error {
 
 	handler := func(c fiber.Ctx) error {
 		return siw.Handler.CreateCategory(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// ListAiCategoryCandidates operation middleware
+func (siw *ServerInterfaceWrapper) ListAiCategoryCandidates(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListAiCategoryCandidatesParams
+
+	var query url.Values
+	query, err = url.ParseQuery(string(c.Request().URI().QueryString()))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for query string: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", query, &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter limit: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.ListAiCategoryCandidates(c, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// ApplyAiCategoryChoices operation middleware
+func (siw *ServerInterfaceWrapper) ApplyAiCategoryChoices(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.ApplyAiCategoryChoices(c)
 	}
 
 	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
@@ -2280,6 +2494,13 @@ func (siw *ServerInterfaceWrapper) ListTransactions(c fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter source: %w", err).Error())
 	}
 
+	// ------------- Optional query parameter "categorizedBy" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "categorizedBy", query, &params.CategorizedBy, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter categorizedBy: %w", err).Error())
+	}
+
 	// ------------- Optional query parameter "cursor" -------------
 
 	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", query, &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
@@ -2470,6 +2691,10 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	router.Patch(options.BaseURL+"/v1/categories/rules/:ruleId", wrapper.UpdateCategoryRule)
 
 	router.Post(options.BaseURL+"/v1/categories/rules/apply", wrapper.ApplyCategoryRules)
+
+	router.Get(options.BaseURL+"/v1/categories/ai/candidates", wrapper.ListAiCategoryCandidates)
+
+	router.Post(options.BaseURL+"/v1/categories/ai/choices", wrapper.ApplyAiCategoryChoices)
 
 	router.Get(options.BaseURL+"/v1/summaries/monthly", wrapper.GetMonthlySummary)
 
