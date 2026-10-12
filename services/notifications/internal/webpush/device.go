@@ -2,10 +2,18 @@ package webpush
 
 import "strings"
 
+// lifeOSAndroid starts the Life OS Android app's user agent:
+// "LifeOS-Android/<versionName> (<versionCode>)".
+const lifeOSAndroid = "LifeOS-Android/"
+
 // DeviceLabel names a subscribing browser from its user agent, such as
 // "Chrome on Android", so the owner can tell their devices apart. Chrome's
-// reduced user agent still names the browser and the platform.
+// reduced user agent still names the browser and the platform. The Life OS
+// Android app is "Life OS app on Android".
 func DeviceLabel(userAgent string) string {
+	if strings.HasPrefix(strings.TrimSpace(userAgent), lifeOSAndroid) {
+		return "Life OS app on Android"
+	}
 	browser, platform := browserName(userAgent), platformName(userAgent)
 	switch {
 	case browser != "" && platform != "":

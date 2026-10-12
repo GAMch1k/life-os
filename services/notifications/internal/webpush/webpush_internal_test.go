@@ -182,8 +182,10 @@ func TestDeviceLabel(t *testing.T) {
 		"Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1":    "Safari on iOS",
 		"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36":                                      "Chrome on Linux",
 		"Mozilla/5.0 (X11; CrOS x86_64 14541.0.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36":                             "Chrome on ChromeOS",
-		"curl/8.5.0": "Unknown browser",
-		"":           "Unknown browser",
+		"LifeOS-Android/1.0.0 (1)":       "Life OS app on Android",
+		"LifeOS-Android/1.2.3-beta (42)": "Life OS app on Android",
+		"curl/8.5.0":                     "Unknown browser",
+		"":                               "Unknown browser",
 	} {
 		if got := DeviceLabel(ua); got != want {
 			t.Errorf("DeviceLabel(%q) = %q, want %q", ua, got, want)
