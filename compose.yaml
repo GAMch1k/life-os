@@ -179,9 +179,26 @@ services:
   # stored and listed in the Dashboard only. "ntfy" publishes to the ntfy
   # service below with the publisher token (docs/operations/ntfy.md), over
   # the internal notify-internal network, which only the two of them share.
+  # "webpush" pushes to the browsers that turned on notifications (the
+  # installed Life OS app) with the VAPID keys (LIFE_OS_WEBPUSH_*, empty by
+  # default), through their vendors' push services (fcm.googleapis.com,
+  # updates.push.services.mozilla.com, …) over HTTPS: the backend network's
+  # outbound access, as for the other integrations.
   notifications:
     build: {context: ., dockerfile: services/notifications/Dockerfile}
-    environment: {SERVICE_NAME: notifications, PORT: 8080, DATABASE_URL: "postgres://notifications_user:${LIFE_OS_NOTIFICATIONS_DB_PASSWORD}@postgres:5432/notifications_db?sslmode=disable", ACTIVITY_SERVICE_URL: "http://activity:8080", NOTIFICATIONS_CHANNELS: "${LIFE_OS_NOTIFICATIONS_CHANNELS:-}", NOTIFICATIONS_NTFY_URL: "http://ntfy:80", NOTIFICATIONS_NTFY_TOPIC: "${LIFE_OS_NTFY_TOPIC:-lifeos}", NOTIFICATIONS_NTFY_TOKEN: "${LIFE_OS_NTFY_PUBLISHER_TOKEN:-}", NOTIFICATIONS_LINK_BASE_URL: "${LIFE_OS_PUBLIC_URL:-https://lifeos.gamch1k.com}"}
+    environment:
+      SERVICE_NAME: notifications
+      PORT: 8080
+      DATABASE_URL: "postgres://notifications_user:${LIFE_OS_NOTIFICATIONS_DB_PASSWORD}@postgres:5432/notifications_db?sslmode=disable"
+      ACTIVITY_SERVICE_URL: "http://activity:8080"
+      NOTIFICATIONS_CHANNELS: "${LIFE_OS_NOTIFICATIONS_CHANNELS:-}"
+      NOTIFICATIONS_NTFY_URL: "http://ntfy:80"
+      NOTIFICATIONS_NTFY_TOPIC: "${LIFE_OS_NTFY_TOPIC:-lifeos}"
+      NOTIFICATIONS_NTFY_TOKEN: "${LIFE_OS_NTFY_PUBLISHER_TOKEN:-}"
+      NOTIFICATIONS_LINK_BASE_URL: "${LIFE_OS_PUBLIC_URL:-https://lifeos.gamch1k.com}"
+      NOTIFICATIONS_WEBPUSH_VAPID_PUBLIC_KEY: "${LIFE_OS_WEBPUSH_VAPID_PUBLIC_KEY:-}"
+      NOTIFICATIONS_WEBPUSH_VAPID_PRIVATE_KEY: "${LIFE_OS_WEBPUSH_VAPID_PRIVATE_KEY:-}"
+      NOTIFICATIONS_WEBPUSH_SUBJECT: "${LIFE_OS_WEBPUSH_SUBJECT:-}"
     expose: ["8080"]
     depends_on: {notifications-migrate: {condition: service_completed_successfully}}
     networks: [backend, notify-internal]

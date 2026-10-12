@@ -1253,6 +1253,7 @@ function withGoogle(
 
 const CHANNEL_TITLES: Record<string, string> = {
   ntfy: "ntfy (phone)",
+  webpush: "Web push (Life OS app)",
   log: "Service log",
 };
 

@@ -22,9 +22,11 @@ type Config struct {
 	// delivery failed); empty disables them.
 	ActivityURL string `env:"ACTIVITY_SERVICE_URL"`
 	// Channels names the delivery channels, comma-separated: "ntfy" (the
-	// owner's phone) and "log" (the service log, for development). Empty
-	// (the default) means none: notifications are stored and listed only.
-	// Unknown names stop the service at startup.
+	// owner's phone through ntfy), "webpush" (Web Push to the browsers that
+	// turned on notifications, such as the installed Life OS app), and "log"
+	// (the service log, for development). Empty (the default) means none:
+	// notifications are stored and listed only. Unknown names stop the
+	// service at startup.
 	Channels string `env:"NOTIFICATIONS_CHANNELS"`
 	// The ntfy channel (docs/operations/ntfy.md): the ntfy server on the
 	// private network, the one private topic, and the publisher's access
@@ -37,6 +39,16 @@ type Config struct {
 	// https://lifeos.gamch1k.com: tapping a notification on the phone opens
 	// its link there.
 	LinkBaseURL string `env:"NOTIFICATIONS_LINK_BASE_URL"`
+	// Web push (docs/services/notifications.md#web-push): the VAPID key pair,
+	// base64url (go run ./cmd/vapid-keys; the private key is a secret, never
+	// logged), and the subject the push services may contact, a mailto:
+	// address or an https URL (empty: LinkBaseURL). With the keys set, the
+	// Dashboard can subscribe devices and send test pushes; listing
+	// "webpush" in NOTIFICATIONS_CHANNELS also delivers every notification
+	// to them, and then the keys are required.
+	WebPushPublicKey  string `env:"NOTIFICATIONS_WEBPUSH_VAPID_PUBLIC_KEY"`
+	WebPushPrivateKey string `env:"NOTIFICATIONS_WEBPUSH_VAPID_PRIVATE_KEY"`
+	WebPushSubject    string `env:"NOTIFICATIONS_WEBPUSH_SUBJECT"`
 	// WorkerPollMillis is how often the delivery worker looks for due
 	// deliveries. A new notification also wakes it at once.
 	WorkerPollMillis int `env:"NOTIFICATIONS_WORKER_POLL_MILLIS" default:"1000"`
@@ -138,6 +150,15 @@ func ParseChannels(value string) ([]string, error) {
 func (c Config) ChannelNames() []string {
 	names, _ := ParseChannels(c.Channels)
 	return names
+}
+
+// WebPushSubjectOrDefault is the VAPID subject: NOTIFICATIONS_WEBPUSH_SUBJECT,
+// or else Life OS's public URL.
+func (c Config) WebPushSubjectOrDefault() string {
+	if subject := strings.TrimSpace(c.WebPushSubject); subject != "" {
+		return subject
+	}
+	return strings.TrimSpace(c.LinkBaseURL)
 }
 
 // ParsedLogLevel returns the already validated slog level.

@@ -92,3 +92,30 @@ func TestMalformedNotificationIDIsABadRequest(t *testing.T) {
 		t.Fatalf("status = %d, want 400", status)
 	}
 }
+
+func TestPushWritesRequireAnActor(t *testing.T) {
+	app := newTestApp(NewHandler(nil, nil))
+	for _, write := range []struct{ method, target, body string }{
+		{http.MethodPost, "/v1/push/subscriptions", `{"endpoint":"https://fcm.googleapis.com/fcm/send/x","keys":{"p256dh":"x","auth":"y"}}`},
+		{http.MethodDelete, "/v1/push/subscriptions/7f8d2b1e-1c1a-4b7e-9a51-2f0c6d1e9a10", ``},
+		{http.MethodPost, "/v1/push/test", ``},
+	} {
+		status, envelope := send(t, app, write.method, write.target, write.body, "")
+		if status != http.StatusBadRequest || envelope.Error.Code != activity.ActorRequiredCode {
+			t.Errorf("%s %s without an actor = %d %+v, want 400 actor_required", write.method, write.target, status, envelope)
+		}
+	}
+}
+
+func TestPushConfigWithoutKeys(t *testing.T) {
+	app := newTestApp(NewHandler(nil, []string{"ntfy"}))
+	req := httptest.NewRequest(http.MethodGet, "/v1/push/config", nil)
+	resp, err := app.Test(req, fiberTestConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK || string(raw) != `{"configured":false,"delivering":false,"publicKey":null}` {
+		t.Fatalf("GET /v1/push/config = %d %s", resp.StatusCode, raw)
+	}
+}

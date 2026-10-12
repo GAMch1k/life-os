@@ -31,7 +31,9 @@ type Handler struct {
 	channels []string
 	wake     func()
 	activity *activity.Emitter
-	now      func() time.Time
+	// push is web push when its VAPID keys are configured, else nil.
+	push Pusher
+	now  func() time.Time
 }
 
 var _ generated.ServerInterface = (*Handler)(nil)

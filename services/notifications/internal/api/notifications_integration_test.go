@@ -243,7 +243,7 @@ func TestSendQueuesOneDeliveryPerChannel(t *testing.T) {
 	channels := map[string]bool{}
 	for _, d := range created.Deliveries {
 		channels[d.Channel] = true
-		if d.Status != generated.Pending || d.Attempts != 0 || d.NextAttemptAt == nil || d.SentAt != nil || d.LastError != nil {
+		if d.Status != generated.DeliveryStatusPending || d.Attempts != 0 || d.NextAttemptAt == nil || d.SentAt != nil || d.LastError != nil {
 			t.Errorf("delivery = %+v, want a fresh pending one", d)
 		}
 	}
@@ -403,6 +403,9 @@ func TestDatabaseRejectsWhatTheAPIRejects(t *testing.T) {
 		`INSERT INTO notifications (title, importance, category, source, link, dedupe_key, occurred_at) VALUES ('x', 'low', 'a.b', 's', '//evil', 'k3', now())`,
 		`INSERT INTO notifications (title, importance, category, source, link, dedupe_key, occurred_at) VALUES ('x', 'low', 'a.b', 's', '/\evil', 'k4', now())`,
 		`INSERT INTO notifications (title, importance, category, source, dedupe_key, occurred_at) VALUES (' ', 'low', 'a.b', 's', 'k5', now())`,
+		`INSERT INTO push_subscriptions (endpoint, p256dh, auth, device_label) VALUES ('http://push.example.com/x', '` + strings.Repeat("A", 87) + `', '` + strings.Repeat("A", 22) + `', 'Chrome')`,
+		`INSERT INTO push_subscriptions (endpoint, p256dh, auth, device_label) VALUES ('https://push.example.com/x', 'short', '` + strings.Repeat("A", 22) + `', 'Chrome')`,
+		`INSERT INTO push_subscriptions (endpoint, p256dh, auth, device_label) VALUES ('https://push.example.com/x', '` + strings.Repeat("A", 87) + `', '` + strings.Repeat("A", 22) + `', ' ')`,
 	} {
 		if _, err := pool.Exec(context.Background(), insert); err == nil {
 			t.Errorf("accepted: %s", insert)

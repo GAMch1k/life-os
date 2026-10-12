@@ -18,10 +18,12 @@ for importance, dedupe, delivery states, channels, and the API.
 ```text
 api/openapi.yaml       # Notifications API contract (source of truth)
 cmd/server/            # process entrypoint: HTTP API and the delivery worker
-db/migrations/         # notifications and deliveries tables
+cmd/vapid-keys/        # prints a new VAPID key pair for web push
+db/migrations/         # notifications, deliveries, push subscriptions
 db/queries/            # sqlc input
-internal/api/          # HTTP adapter, validation, keyset cursors
-internal/delivery/     # Channel interface, retry policy, lease-based worker
+internal/api/          # HTTP adapter, validation, keyset cursors, push devices
+internal/delivery/     # Channel interface, retry policy, lease-based worker, channels
+internal/webpush/      # Web Push: VAPID (RFC 8292), payload encryption (RFC 8291)
 internal/testdb/       # private migrated schemas for integration tests
 ```
 

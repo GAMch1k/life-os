@@ -4,7 +4,7 @@ Notifications is the one path by which Life OS lets its owner know about somethi
 
 ## The one-path rule
 
-- Producers never talk to a channel (ntfy, a phone app, email) themselves. They post to `POST /v1/notifications`, from Go through `pkg/notify`.
+- Producers never talk to a channel (ntfy, web push, a phone app, email) themselves. They post to `POST /v1/notifications`, from Go through `pkg/notify`.
 - A channel is a server-side concern. Swapping the first channel (a self-hosted ntfy that reaches the owner's Android phone) for Life OS's own Android app later changes nothing for producers.
 - Every notification is stored and listed, whether or not any channel delivers it. The Dashboard notification list (P12-03) reads this API.
 - Notifications never reads another service's database, and no service reads `notifications_db`.
@@ -17,6 +17,7 @@ flowchart LR
   Monitor -- "pkg/notify" --> N
   Dashboard -- "GET /api/notifications" --> Gateway --> N
   N -- "worker (ntfy channel)" --> Ntfy["ntfy (self-hosted)"] -- "ntfy Android app" --> Phone["Owner's phone"]
+  N -- "worker (webpush channel)" --> Push["Browser push service (FCM, …)"] -- "installed Life OS app" --> Phone
   N -. record .-> Activity
 ```
 
@@ -44,7 +45,7 @@ flowchart LR
 | `medium` | Worth knowing soon. | Inbox needs Human Review; a Calendar event reminder. |
 | `low` | Informational. | Future Finance and Food messages. |
 
-There are no quiet hours. Every notification is delivered right away; how loudly it arrives is a channel's decision (a `low` one arrives silently; see [ntfy](#ntfy) for the priorities). The unread count reports high-importance notifications separately for a navigation badge.
+There are no quiet hours. Every notification is delivered right away; how loudly it arrives is a channel's decision (a `low` one arrives silently; see [ntfy](#ntfy) and [web push](#web-push) for the priorities). The unread count reports high-importance notifications separately for a navigation badge.
 
 ### Source from the actor
 
@@ -83,8 +84,11 @@ When a notification is created, one `pending` delivery is queued for each channe
 A channel implements `Name()` and `Send(ctx, notification) error` (`services/notifications/internal/delivery`). An error is retryable unless wrapped with `delivery.Permanent`; `delivery.Skip` ends the delivery as skipped. Channels are configured on the server only, in `NOTIFICATIONS_CHANNELS` (compose: `LIFE_OS_NOTIFICATIONS_CHANNELS`), comma-separated. An unknown name, or a channel missing its settings, stops the service at startup.
 
 - Empty (the default): notifications are stored and listed in the Dashboard, and their `deliveries` are empty.
-- `ntfy` pushes each notification to the owner's Android phone through the self-hosted ntfy server (below). The deployment uses `LIFE_OS_NOTIFICATIONS_CHANNELS=ntfy`.
+- `ntfy` pushes each notification to the owner's Android phone through the self-hosted ntfy server (below).
+- `webpush` pushes each notification to every device that turned on notifications in the Dashboard, above all the installed Life OS app on the owner's phone, through the browser vendor's push service ([web push](#web-push)). It needs the VAPID keys.
 - `log` writes each delivery's metadata (never the body) to the service log. It is for development and verification of the delivery path.
+
+The deployment uses `LIFE_OS_NOTIFICATIONS_CHANNELS=ntfy,webpush`: both reach the phone, so a network that blocks one (a work Wi-Fi that resets the TLS handshake to `ntfy.gamch1k.com`) still lets the other through.
 
 Life OS's own Android app later becomes another channel next to or instead of ntfy.
 
@@ -115,6 +119,75 @@ curl -X POST "$GATEWAY/api/notifications/v1/notifications" -H 'X-Life-OS-Actor: 
   -d '{"title":"Test notification","body":"From Life OS","importance":"low","category":"test.manual","link":"/notifications","dedupeKey":"test.manual:'"$(date +%s)"'"}'
 ```
 
+### Web push
+
+The `webpush` channel delivers to browsers with the Web Push protocol (RFC 8030): each browser that turns on **Notifications on this device** on `/notifications` subscribes with its push service and gives Life OS the subscription (an endpoint URL and two keys), and Notifications posts each notification to that endpoint. On Android the push service is Google's FCM, which Chrome keeps a connection to anyway, so a push arrives where Chrome reaches Google even when ntfy is blocked, and the installed app shows it even while it is closed. The payload is end-to-end encrypted for the browser (RFC 8291); the push service sees only its size and the request's urgency and lifetime.
+
+```mermaid
+sequenceDiagram
+  participant D as Dashboard (phone)
+  participant N as Notifications
+  participant P as Push service (FCM)
+  participant SW as Service worker (sw.js)
+  D->>N: GET /v1/push/config (VAPID public key)
+  D->>P: pushManager.subscribe(key)
+  P-->>D: endpoint + keys
+  D->>N: POST /v1/push/subscriptions
+  Note over N: a notification is created
+  N->>P: POST endpoint (encrypted payload, VAPID token)
+  P->>SW: push
+  SW->>D: showNotification; a tap opens the link
+```
+
+**Signing and encryption.** `internal/webpush` implements the protocol with Go's standard library: each push is encrypted for the subscription with the `aes128gcm` content coding (RFC 8291 over RFC 8188; one record, a fresh ephemeral key and salt each time; checked against the RFC's example byte for byte) and signed with a VAPID token (RFC 8292: an ES256 JWT for the push service's origin, valid 12 hours, `sub` the subject below, and the public key in `Authorization: vapid t=…, k=…`). No third-party Web Push library: the standard library has every primitive (P-256 ECDH and ECDSA, HKDF, AES-GCM), and the channel needs the push service's status codes itself.
+
+**The payload** is JSON that `apps/dashboard/public/sw.js` turns into the notification:
+
+| Field | From the notification |
+| --- | --- |
+| `title`, `body` | `title` and `body`; a body too long for one push is cut on a character boundary with "…", so the whole payload stays within the 4,096 bytes push services accept (at most 3,993 bytes of JSON) |
+| `link` | `link`, or `/notifications` without one. A tap opens it in Life OS |
+| `tag` | `lifeos-<id>`: a notification with the tag of one already shown replaces it, so a repeated delivery never shows twice, while two notifications of one kind (two reminders) both stay |
+| `importance`, `category`, `id` | as stored; `low` shows silently, as on ntfy |
+| `timestamp` | `createdAt` in milliseconds, the time the phone shows |
+
+The request asks the push service for an urgency and a lifetime (`TTL`, how long it keeps the push for a phone that is offline) by importance: `high` → `high`, 24 hours; `medium` → `normal`, 12 hours; `low` → `low` (may wait until the phone wakes by itself), 4 hours. Its `Topic` is the notification's id, so a repeated push replaces one the push service still holds.
+
+**Several devices.** A notification has one `webpush` delivery, whatever the number of devices, and the channel keeps each device's outcome for it in `push_outcomes`:
+
+- An attempt sends to the devices that were subscribed when the notification was created (a device added later does not get older notifications) and have no outcome for it yet, up to four at once within the send timeout.
+- A device's push service accepting it (2xx) records `sent` and the device's latest success. 404 or 410 (the browser unsubscribed, its data was cleared, or the subscription expired) deletes the subscription. Any other refusal (400, 401, 403 such as a key that changed, 413, a redirect) records `failed` for that device and notification. Each failure is also the device's latest failure and error.
+- A device that failed for now (unreachable, 408, 429, 5xx) gets no outcome. The delivery is then retried with the usual backoff, and the retry sends only to the devices still without one: a failing device never blocks the others or makes them get the notification twice. The delivery's error names the devices, such as `1 of 2 devices failed for now: Chrome on Android: push service answered 503 Service Unavailable`.
+- Once every device has its outcome, the delivery is `sent` when at least one device accepted it, `failed` when every device refused it or every one is gone, and `skipped` ("no device has turned on notifications in Life OS") when there was none.
+
+Delivery stays at least once: a crash between a push service accepting a push and its outcome being recorded sends it again to that device, where the tag replaces the first. The maximum delivery age applies to the whole delivery: past it, devices still failing do not get the notification.
+
+**Devices.** `push_subscriptions` holds each device: its endpoint (unique; subscribing again with a known endpoint updates its keys and label and keeps its id), its keys (`p256dh`, `auth`), a label read from the user agent of the browser that subscribed ("Chrome on Android", "Firefox on Windows"), when it was added, and its latest success and failure. The endpoint must be an https URL on a host name (no address, no single-label name such as a container, no credentials), since the server posts to it; requests never follow redirects. Errors and logs name only the push service's host, never the endpoint's path, which identifies the subscription.
+
+**Configuration.** `NOTIFICATIONS_WEBPUSH_VAPID_PUBLIC_KEY` and `NOTIFICATIONS_WEBPUSH_VAPID_PRIVATE_KEY` (compose: `LIFE_OS_WEBPUSH_VAPID_PUBLIC_KEY` and `LIFE_OS_WEBPUSH_VAPID_PRIVATE_KEY`, empty by default) are the VAPID key pair, base64url: the public key an uncompressed P-256 point (87 characters), the private key its 32-byte scalar (43 characters, a secret: only in `.env`, never logged). `NOTIFICATIONS_WEBPUSH_SUBJECT` (`LIFE_OS_WEBPUSH_SUBJECT`) is how a push service's operator can reach the sender, a `mailto:` address or an https URL; empty uses `NOTIFICATIONS_LINK_BASE_URL`. With the keys set, devices can subscribe and receive test pushes; `webpush` in `NOTIFICATIONS_CHANNELS` also delivers every notification to them. A key without its pair, a pair that does not match, an invalid subject, or `webpush` listed without keys stops the service at startup. Replacing the keys invalidates every subscription (the push services refuse the new signature with 401 or 403): turn notifications on again on each device, which replaces its subscription.
+
+**Network.** Pushes go from the service to the push services over HTTPS (`fcm.googleapis.com`, `updates.push.services.mozilla.com`, `web.push.apple.com`, `*.notify.windows.com`). The service is on the `backend` network, which has outbound access (as the integrations have), so nothing changes there; `notify-internal` stays internal for ntfy. The phone never connects to Life OS for a push.
+
+**Cloudflare Access.** Subscribing and every API call go through `/api/notifications` like the rest of the Dashboard, with the Access cookie. A tap on a notification is an ordinary navigation of the app (`clients.openWindow` or `WindowClient.navigate`), so the cookie goes with it; when the Access session has expired, Access asks for the email code and then opens the page.
+
+**Set it up** (once; see [Operations](#operations) for the deploy):
+
+1. Generate the key pair. It prints two `.env` lines; paste them into the root `.env`:
+
+   ```sh
+   cd services/notifications && GOWORK=off go run ./cmd/vapid-keys
+   ```
+
+2. Optionally set `LIFE_OS_WEBPUSH_SUBJECT=mailto:<your address>` (default: `LIFE_OS_PUBLIC_URL`), and set `LIFE_OS_NOTIFICATIONS_CHANNELS=ntfy,webpush`.
+3. Deploy (migration `000003_push_subscriptions`, then the service, then the Dashboard).
+4. On the phone, open the installed Life OS app, go to Notifications, tap **Turn on** under **Notifications on this device**, and allow notifications. **Send test** shows a test notification on every device.
+
+To send a test push to every device from the command line:
+
+```sh
+curl -X POST "$GATEWAY/api/notifications/v1/push/test" -H 'X-Life-OS-Actor: dev:curl'
+```
+
 ### Channel health
 
 `GET /v1/channels` lists each configured channel, in the configured order, with what its deliveries show: `lastSuccessAt` (the latest sent delivery), `lastFailureAt` and `lastError` (the latest delivery that failed or is waiting for a retry), `recentFailures` (deliveries that failed or wait for a retry, last changed in the past 24 hours), `retrying` and `pending` now, and a `state`: `ok` when the latest outcome was a success, `failing` when it was a failure, `idle` before the first outcome. Nothing is probed, so a broken channel shows only once a delivery has tried it, and stays failing until one succeeds (send a test notification after a fix). An empty list means no channel is configured. The Dashboard Status page shows it as the Notifications check.
@@ -140,8 +213,13 @@ A notification keeps the sender's correlation id, so its delivery events join th
 - `POST /v1/notifications/read-all`: mark every unread notification read, or with an optional body `{"before": "<RFC 3339>"}` only those created at or before that instant (so one that arrives while the owner looks at the list stays unread). Returns `{"marked": n}`.
 - `GET /v1/notifications/unread-count`: `{"count": n, "highCount": m}`, cheap enough for a navigation badge.
 - `GET /v1/channels`: the configured delivery channels and their health ([above](#channel-health)).
+- `GET /v1/push/config`: `{"configured", "publicKey", "delivering"}`: whether web push has its VAPID keys, the public key browsers subscribe with (null without keys), and whether `webpush` is a delivery channel.
+- `GET /v1/push/subscriptions`: the subscribed devices, oldest first: `id`, `deviceLabel`, `endpoint`, `pushService` (its host), `createdAt`, `lastSuccessAt`, `lastFailureAt`, `lastError`.
+- `POST /v1/push/subscriptions`: subscribe a device with the browser's `PushSubscription.toJSON()` (`endpoint`, `keys.p256dh`, `keys.auth`; `expirationTime` is ignored). `201` for a new endpoint, `200` with the device for a known one (its keys and label updated); `400` for an invalid one; `409` `push_not_configured` without VAPID keys. The label comes from the request's `User-Agent`.
+- `DELETE /v1/push/subscriptions/{id}`: remove a device (`204`, or `404`). The browser stays subscribed until it unsubscribes; its pushes simply stop.
+- `POST /v1/push/test`: send a test notification ("Test notification", opening `/notifications`, tag `lifeos-test`) to every device, or with `{"subscriptionId": "…"}` to one, right away and outside the queue. It answers each device's outcome: `sent`, `removed` (its push service said 404 or 410, so it was deleted), or `failed` with the error, and records it as the device's latest success or failure. Nothing is stored as a notification. `404` for an unknown device; `409` `push_not_configured` without keys.
 
-Errors use the shared envelope `{"error": {"code", "message"}, "request_id"}`. Through the gateway only `user` and `dev:<name>` actors pass, as for every service.
+Errors use the shared envelope `{"error": {"code", "message"}, "request_id"}`. Writes (`POST`, `DELETE`) need `X-Life-OS-Actor`. Through the gateway only `user` and `dev:<name>` actors pass, as for every service.
 
 ```sh
 curl -X POST "$GATEWAY/api/notifications/v1/notifications" -H 'X-Life-OS-Actor: dev:curl' \
@@ -194,11 +272,13 @@ For all of Tasks' messages, one due while Tasks was down is sent within `TASKS_N
 ## Operations
 
 - Database: `notifications_db` / `notifications_user`, password `LIFE_OS_NOTIFICATIONS_DB_PASSWORD` in `.env`. Fresh volumes are provisioned automatically; for an existing deployment see [Operations](../operations/deployment.md#adding-the-notifications-service-to-an-existing-deployment).
-- Configuration (compose sets these): `DATABASE_URL`, `ACTIVITY_SERVICE_URL`, `NOTIFICATIONS_CHANNELS` (from `LIFE_OS_NOTIFICATIONS_CHANNELS`, empty by default), and the [ntfy settings](#ntfy); the delivery settings above keep their defaults.
+- Configuration (compose sets these): `DATABASE_URL`, `ACTIVITY_SERVICE_URL`, `NOTIFICATIONS_CHANNELS` (from `LIFE_OS_NOTIFICATIONS_CHANNELS`, empty by default), the [ntfy settings](#ntfy), and the [web push settings](#web-push) (`LIFE_OS_WEBPUSH_*`, empty by default); the delivery settings above keep their defaults.
+- Enabling web push on a running deployment: add the two key lines and `webpush` in `LIFE_OS_NOTIFICATIONS_CHANNELS` to `.env` ([setup](#web-push)); build the service and the Dashboard (`docker compose build notifications`, then `docker compose build dashboard`, one at a time); apply migration `000003_push_subscriptions` with `docker compose up --no-build --no-deps notifications-migrate` (it exits when done); then `docker compose up -d --no-build --no-deps notifications` and `docker compose up -d --no-build --no-deps dashboard`. The gateway needs nothing: `/api/notifications/` already routes every method, and passes the user agent on. The service logs `notification channels configured` with `webpush`; `GET /api/notifications/v1/push/config` says `configured` and `delivering`. Then turn it on on the phone. Rolling back the migration (`000003…down.sql`) drops the devices and their outcomes; remove `webpush` from the channels first.
+- The verification stack never receives the web push keys (`tools/verify-compose` blanks them and refuses a plan with a private key), so web push is not set up there; `e2e/web-push.spec.ts` stubs it in the page.
 - The ntfy server is an opt-in container in the same stack (Compose profile `ntfy`); see [ntfy](../operations/ntfy.md) for the owner's setup, token rotation, and troubleshooting. The verification stack never receives the owner's channels or ntfy settings (`tools/verify-compose`).
 - The Dashboard reaches the service through `NOTIFICATIONS_SERVICE_URL` (server rendering) and `/api/notifications` (browser); the Status page lists it under Services and shows channel health as the Notifications check.
 - Retention: notifications are kept indefinitely for now.
-- Tests: unit tests (validation, actor to source, cursor, backoff, maximum age, error classes, configuration, the channel state, and the ntfy channel against a fake ntfy server: JSON request and token, priorities, tags, click links, truncation, refusals and retries, deadline) and integration tests against the Postgres named by `NOTIFICATIONS_TEST_DATABASE_URL` (each test creates and drops its own schema; skipped when unset): sending, concurrent dedupe, filters and paging, read state, the unread count, migrations down and up, and the worker's sent, retry, permanent, maximum-age, skipped, expired-lease, and concurrent-worker paths, and channel health. `pkg/notify` is tested against an in-process server.
+- Tests: unit tests (validation, actor to source, cursor, backoff, maximum age, error classes, configuration, the channel state, the ntfy channel against a fake ntfy server: JSON request and token, priorities, tags, click links, truncation, refusals and retries, deadline; and web push: the RFC 8291 example reproduced byte for byte, VAPID keys and token, the payload and its cut, urgency and TTL, device labels, and sends to `webpushtest`, a fake TLS push service that verifies the VAPID signature and decrypts each payload with the subscription's private key, as the browser does) and integration tests against the Postgres named by `NOTIFICATIONS_TEST_DATABASE_URL` (each test creates and drops its own schema; skipped when unset): sending, concurrent dedupe, filters and paging, read state, the unread count, migrations down and up, the worker's sent, retry, permanent, maximum-age, skipped, expired-lease, and concurrent-worker paths, channel health, and web push through the worker (every device reached, 410 pruning, 429 and an unreachable device retried alone without duplicates, a refusal final for one device, no devices skipped, a long body cut) and its API (config, idempotent subscribe, refused endpoints and keys, remove, test pushes). A real push to a phone cannot be tested automatically. `pkg/notify` is tested against an in-process server.
 
 ```sh
 cd services/notifications

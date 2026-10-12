@@ -26,6 +26,10 @@ export LIFE_OS_GOOGLE_CLIENT_ID= LIFE_OS_GOOGLE_CLIENT_SECRET= LIFE_OS_GOOGLE_TO
 # LIFE_OS_VERIFY_NOTIFICATIONS_CHANNELS.
 export LIFE_OS_NOTIFICATIONS_CHANNELS="${LIFE_OS_VERIFY_NOTIFICATIONS_CHANNELS:-}"
 export LIFE_OS_NTFY_TOPIC=verify LIFE_OS_NTFY_PUBLISHER_TOKEN= LIFE_OS_NTFY_PUBLISHER_PASSWORD_HASH= LIFE_OS_NTFY_PHONE_PASSWORD_HASH=
+# Nor the owner's web push keys: devices subscribed to the owner's Life OS
+# accept pushes signed with them only, so the verification stack has none
+# (web push shows as not set up there; browser tests stub it in the page).
+export LIFE_OS_WEBPUSH_VAPID_PUBLIC_KEY= LIFE_OS_WEBPUSH_VAPID_PRIVATE_KEY= LIFE_OS_WEBPUSH_SUBJECT=
 # Nor the owner's Enable Banking application, its key, or the session key:
 # the verification stack never talks to a bank (compose.verify.yaml also
 # blanks them and points banking at an address that resolves nowhere).
@@ -67,6 +71,10 @@ require_isolated_resources() {
   fi
   if jq -e '(.services | has("ntfy")) or ((.services.notifications.environment.NOTIFICATIONS_NTFY_TOKEN // "") != "")' <<<"$config" >/dev/null; then
     echo "verify-compose: refusing a plan with ntfy or an ntfy token: it could reach the owner's phone" >&2
+    exit 2
+  fi
+  if jq -e '((.services.notifications.environment.NOTIFICATIONS_WEBPUSH_VAPID_PRIVATE_KEY // "") != "")' <<<"$config" >/dev/null; then
+    echo "verify-compose: refusing a plan with a web push key: it could reach the owner's devices" >&2
     exit 2
   fi
   if jq -e '((.services.banking.environment.LIFE_OS_ENABLE_BANKING_APP_ID // "") != "") or ((.services.banking.environment.LIFE_OS_BANKING_TOKEN_KEY // "") != "") or ([.services.banking.volumes[]? | select(.source != "/dev/null")] | length > 0)' <<<"$config" >/dev/null; then

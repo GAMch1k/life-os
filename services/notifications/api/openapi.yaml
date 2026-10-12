@@ -35,9 +35,16 @@ info:
     header. The public gateway passes only `user` and `dev:<name>`.
 
 
+    Web push (`/v1/push/...`): browsers that turn on notifications in the
+    Dashboard, above all the installed Life OS app on the owner's phone,
+    subscribe here, and the `webpush` channel delivers every notification to
+    each of them through its browser's push service.
+
+
     Errors use the shared envelope `{"error": {"code", "message"},
     "request_id"}`: `bad_request` (400, invalid input), `actor_required` (400),
-    `not_found` (404), and `internal_error` (500).
+    `not_found` (404), `push_not_configured` (409, web push has no VAPID keys
+    on this server), and `internal_error` (500).
   license: {name: UNLICENSED, url: https://life-os.local/license}
 servers: [{url: http://notifications:8080}]
 paths:
@@ -147,6 +154,77 @@ paths:
       responses:
         '200': {description: Configured channels, content: {application/json: {schema: {$ref: '#/components/schemas/ChannelList'}}}}
         '400': {description: Invalid request, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  /v1/push/config:
+    get:
+      summary: Web push configuration
+      description: >-
+        What a browser needs to subscribe: the server's VAPID public key (its
+        applicationServerKey), or `configured: false` when web push has no
+        keys on this server. `delivering` says whether notifications are
+        delivered by web push (`webpush` in `NOTIFICATIONS_CHANNELS`);
+        without it, subscribed devices only receive test pushes.
+      operationId: getPushConfig
+      security: []
+      responses:
+        '200': {description: Web push configuration, content: {application/json: {schema: {$ref: '#/components/schemas/PushConfig'}}}}
+        '400': {description: Invalid request, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  /v1/push/subscriptions:
+    get:
+      summary: List the subscribed devices
+      description: Every browser that turned on notifications, oldest first, with its latest push outcome.
+      operationId: listPushSubscriptions
+      security: []
+      responses:
+        '200': {description: Subscribed devices, content: {application/json: {schema: {$ref: '#/components/schemas/PushSubscriptionList'}}}}
+        '400': {description: Invalid request, content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+    post:
+      summary: Subscribe a device
+      description: >-
+        Stores a browser's push subscription, the JSON of its
+        `PushSubscription` (`endpoint` and `keys`). Idempotent by endpoint:
+        subscribing again with a known endpoint updates its keys and label
+        and returns it with 200; a new endpoint is created (201). The device
+        label is read from the request's User-Agent, such as "Chrome on
+        Android". The endpoint must be an https URL on a push service's host
+        name.
+      operationId: createPushSubscription
+      security: []
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PushSubscriptionRequest'}}}}
+      responses:
+        '200': {description: 'The endpoint was already subscribed: the device, updated', content: {application/json: {schema: {$ref: '#/components/schemas/PushSubscription'}}}}
+        '201': {description: Device subscribed, content: {application/json: {schema: {$ref: '#/components/schemas/PushSubscription'}}}}
+        '400': {description: 'Invalid subscription (bad_request), or no valid X-Life-OS-Actor (actor_required)', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '409': {description: Web push has no VAPID keys on this server (push_not_configured), content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  /v1/push/subscriptions/{subscriptionId}:
+    delete:
+      summary: Remove a device
+      description: The device gets no more pushes. Its browser keeps its own subscription until it unsubscribes.
+      operationId: deletePushSubscription
+      security: []
+      parameters: [{name: subscriptionId, in: path, required: true, schema: {type: string, format: uuid}}]
+      responses:
+        '204': {description: Device removed}
+        '400': {description: 'Invalid id, or no valid X-Life-OS-Actor (actor_required)', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '404': {description: No such device (not_found), content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  /v1/push/test:
+    post:
+      summary: Send a test push
+      description: >-
+        Sends a test notification ("Test notification", opening
+        /notifications) to every subscribed device, or to the one named by
+        `subscriptionId`, right away and outside the delivery queue, and
+        answers with each device's outcome: `sent`, `removed` (its push
+        service says the subscription is gone, so it was deleted), or
+        `failed` with the error. It is not stored as a notification. Works
+        whether or not `webpush` is a delivery channel.
+      operationId: sendPushTest
+      security: []
+      requestBody: {required: false, content: {application/json: {schema: {$ref: '#/components/schemas/PushTestRequest'}}}}
+      responses:
+        '200': {description: Each device's outcome; empty without devices, content: {application/json: {schema: {$ref: '#/components/schemas/PushTestResult'}}}}
+        '400': {description: 'Invalid request (bad_request), or no valid X-Life-OS-Actor (actor_required)', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '404': {description: No such device (not_found), content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '409': {description: Web push has no VAPID keys on this server (push_not_configured), content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
 components:
   schemas:
     ChannelState:
@@ -255,6 +333,65 @@ components:
       required: [marked]
       properties:
         marked: {type: integer, minimum: 0, description: Notifications that were unread and are now read.}
+    PushConfig:
+      type: object
+      required: [configured, publicKey, delivering]
+      properties:
+        configured: {type: boolean, description: Whether web push has VAPID keys on this server; without them nothing can subscribe.}
+        publicKey: {type: string, nullable: true, description: 'The VAPID public key (base64url, an uncompressed P-256 point) to subscribe with; null when not configured.'}
+        delivering: {type: boolean, description: Whether notifications are delivered by web push (webpush is a delivery channel).}
+    PushSubscriptionRequest:
+      type: object
+      description: A browser's PushSubscription.toJSON().
+      required: [endpoint, keys]
+      properties:
+        endpoint: {type: string, minLength: 9, maxLength: 2048, description: 'The push service URL, https, such as https://fcm.googleapis.com/fcm/send/….'}
+        expirationTime: {type: number, nullable: true, description: Ignored; push services report an expired subscription with 404 or 410.}
+        keys:
+          type: object
+          required: [p256dh, auth]
+          properties:
+            p256dh: {type: string, minLength: 1, maxLength: 200, description: 'The browser''s P-256 public key, base64url (65 bytes).'}
+            auth: {type: string, minLength: 1, maxLength: 100, description: 'The browser''s auth secret, base64url (16 bytes).'}
+    PushSubscription:
+      type: object
+      description: One subscribed device.
+      required: [id, deviceLabel, endpoint, pushService, createdAt, lastSuccessAt, lastFailureAt, lastError]
+      properties:
+        id: {type: string, format: uuid}
+        deviceLabel: {type: string, description: 'Read from its user agent, such as "Chrome on Android".'}
+        endpoint: {type: string, description: 'Its push service URL; a browser finds its own device by it.'}
+        pushService: {type: string, description: 'The push service''s host, such as fcm.googleapis.com.'}
+        createdAt: {type: string, format: date-time}
+        lastSuccessAt: {type: string, format: date-time, nullable: true, description: When a push to it was last accepted.}
+        lastFailureAt: {type: string, format: date-time, nullable: true, description: When a push to it last failed.}
+        lastError: {type: string, nullable: true, description: That failure's error.}
+    PushSubscriptionList:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/PushSubscription'}}
+    PushTestRequest:
+      type: object
+      properties:
+        subscriptionId: {type: string, format: uuid, description: Only this device; every device when left out.}
+    PushTestOutcome:
+      type: string
+      description: sent = its push service accepted the test; removed = its push service says the subscription is gone (404 or 410), so the device was removed; failed = refused or unreachable (error says why).
+      enum: [sent, removed, failed]
+    PushTestDeviceResult:
+      type: object
+      required: [subscriptionId, deviceLabel, outcome, error]
+      properties:
+        subscriptionId: {type: string, format: uuid}
+        deviceLabel: {type: string}
+        outcome: {$ref: '#/components/schemas/PushTestOutcome'}
+        error: {type: string, nullable: true}
+    PushTestResult:
+      type: object
+      required: [results]
+      properties:
+        results: {type: array, items: {$ref: '#/components/schemas/PushTestDeviceResult'}}
     Error:
       type: object
       required: [error]
@@ -263,6 +400,6 @@ components:
           type: object
           required: [code, message]
           properties:
-            code: {type: string, description: 'Machine-readable code, such as bad_request, actor_required, or not_found.'}
+            code: {type: string, description: 'Machine-readable code, such as bad_request, actor_required, not_found, or push_not_configured.'}
             message: {type: string}
         request_id: {type: string}

@@ -128,6 +128,90 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/push/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Web push configuration
+         * @description What a browser needs to subscribe: the server's VAPID public key (its applicationServerKey), or `configured: false` when web push has no keys on this server. `delivering` says whether notifications are delivered by web push (`webpush` in `NOTIFICATIONS_CHANNELS`); without it, subscribed devices only receive test pushes.
+         */
+        get: operations["getPushConfig"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/push/subscriptions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the subscribed devices
+         * @description Every browser that turned on notifications, oldest first, with its latest push outcome.
+         */
+        get: operations["listPushSubscriptions"];
+        put?: never;
+        /**
+         * Subscribe a device
+         * @description Stores a browser's push subscription, the JSON of its `PushSubscription` (`endpoint` and `keys`). Idempotent by endpoint: subscribing again with a known endpoint updates its keys and label and returns it with 200; a new endpoint is created (201). The device label is read from the request's User-Agent, such as "Chrome on Android". The endpoint must be an https URL on a push service's host name.
+         */
+        post: operations["createPushSubscription"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/push/subscriptions/{subscriptionId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a device
+         * @description The device gets no more pushes. Its browser keeps its own subscription until it unsubscribes.
+         */
+        delete: operations["deletePushSubscription"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/push/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send a test push
+         * @description Sends a test notification ("Test notification", opening /notifications) to every subscribed device, or to the one named by `subscriptionId`, right away and outside the delivery queue, and answers with each device's outcome: `sent`, `removed` (its push service says the subscription is gone, so it was deleted), or `failed` with the error. It is not stored as a notification. Works whether or not `webpush` is a delivery channel.
+         */
+        post: operations["sendPushTest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -264,9 +348,80 @@ export interface components {
             /** @description Notifications that were unread and are now read. */
             marked: number;
         };
+        PushConfig: {
+            /** @description Whether web push has VAPID keys on this server; without them nothing can subscribe. */
+            configured: boolean;
+            /** @description The VAPID public key (base64url, an uncompressed P-256 point) to subscribe with; null when not configured. */
+            publicKey: string | null;
+            /** @description Whether notifications are delivered by web push (webpush is a delivery channel). */
+            delivering: boolean;
+        };
+        /** @description A browser's PushSubscription.toJSON(). */
+        PushSubscriptionRequest: {
+            /** @description The push service URL, https, such as https://fcm.googleapis.com/fcm/send/…. */
+            endpoint: string;
+            /** @description Ignored; push services report an expired subscription with 404 or 410. */
+            expirationTime?: number | null;
+            keys: {
+                /** @description The browser's P-256 public key, base64url (65 bytes). */
+                p256dh: string;
+                /** @description The browser's auth secret, base64url (16 bytes). */
+                auth: string;
+            };
+        };
+        /** @description One subscribed device. */
+        PushSubscription: {
+            /** Format: uuid */
+            id: string;
+            /** @description Read from its user agent, such as "Chrome on Android". */
+            deviceLabel: string;
+            /** @description Its push service URL; a browser finds its own device by it. */
+            endpoint: string;
+            /** @description The push service's host, such as fcm.googleapis.com. */
+            pushService: string;
+            /** Format: date-time */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description When a push to it was last accepted.
+             */
+            lastSuccessAt: string | null;
+            /**
+             * Format: date-time
+             * @description When a push to it last failed.
+             */
+            lastFailureAt: string | null;
+            /** @description That failure's error. */
+            lastError: string | null;
+        };
+        PushSubscriptionList: {
+            items: components["schemas"]["PushSubscription"][];
+        };
+        PushTestRequest: {
+            /**
+             * Format: uuid
+             * @description Only this device; every device when left out.
+             */
+            subscriptionId?: string;
+        };
+        /**
+         * @description sent = its push service accepted the test; removed = its push service says the subscription is gone (404 or 410), so the device was removed; failed = refused or unreachable (error says why).
+         * @enum {string}
+         */
+        PushTestOutcome: "sent" | "removed" | "failed";
+        PushTestDeviceResult: {
+            /** Format: uuid */
+            subscriptionId: string;
+            deviceLabel: string;
+            outcome: components["schemas"]["PushTestOutcome"];
+            error: string | null;
+        };
+        PushTestResult: {
+            results: components["schemas"]["PushTestDeviceResult"][];
+        };
         Error: {
             error: {
-                /** @description Machine-readable code, such as bad_request, actor_required, or not_found. */
+                /** @description Machine-readable code, such as bad_request, actor_required, not_found, or push_not_configured. */
                 code: string;
                 message: string;
             };
@@ -526,6 +681,204 @@ export interface operations {
             };
             /** @description Invalid request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getPushConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Web push configuration */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PushConfig"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listPushSubscriptions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Subscribed devices */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PushSubscriptionList"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    createPushSubscription: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PushSubscriptionRequest"];
+            };
+        };
+        responses: {
+            /** @description The endpoint was already subscribed: the device, updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PushSubscription"];
+                };
+            };
+            /** @description Device subscribed */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PushSubscription"];
+                };
+            };
+            /** @description Invalid subscription (bad_request), or no valid X-Life-OS-Actor (actor_required) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Web push has no VAPID keys on this server (push_not_configured) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    deletePushSubscription: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                subscriptionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Device removed */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid id, or no valid X-Life-OS-Actor (actor_required) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description No such device (not_found) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    sendPushTest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["PushTestRequest"];
+            };
+        };
+        responses: {
+            /** @description Each device's outcome; empty without devices */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PushTestResult"];
+                };
+            };
+            /** @description Invalid request (bad_request), or no valid X-Life-OS-Actor (actor_required) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description No such device (not_found) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Web push has no VAPID keys on this server (push_not_configured) */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

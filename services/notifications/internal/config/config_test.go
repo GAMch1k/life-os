@@ -128,3 +128,33 @@ func TestLoadFromReadsTheNtfyChannel(t *testing.T) {
 		t.Fatalf("channels = %v, want [ntfy]", got)
 	}
 }
+
+func TestWebPushSettings(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := LoadFrom(mapLookup(map[string]string{
+		"DATABASE_URL":                            "postgres://notifications_user:secret@localhost/notifications_db",
+		"NOTIFICATIONS_CHANNELS":                  "ntfy, webpush",
+		"NOTIFICATIONS_LINK_BASE_URL":             "https://lifeos.gamch1k.com",
+		"NOTIFICATIONS_WEBPUSH_VAPID_PUBLIC_KEY":  "public",
+		"NOTIFICATIONS_WEBPUSH_VAPID_PRIVATE_KEY": "private",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.ChannelNames(); len(got) != 2 || got[1] != "webpush" {
+		t.Fatalf("channels = %v", got)
+	}
+	if cfg.WebPushPublicKey != "public" || cfg.WebPushPrivateKey != "private" {
+		t.Fatalf("keys = %q %q", cfg.WebPushPublicKey, cfg.WebPushPrivateKey)
+	}
+	// Without a subject of its own, the push services may reach Life OS's
+	// public URL.
+	if got := cfg.WebPushSubjectOrDefault(); got != "https://lifeos.gamch1k.com" {
+		t.Fatalf("default subject = %q", got)
+	}
+	cfg.WebPushSubject = "mailto:owner@example.com"
+	if got := cfg.WebPushSubjectOrDefault(); got != "mailto:owner@example.com" {
+		t.Fatalf("subject = %q", got)
+	}
+}

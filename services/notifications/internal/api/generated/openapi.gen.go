@@ -36,25 +36,25 @@ func (e ChannelState) Valid() bool {
 
 // Defines values for DeliveryStatus.
 const (
-	Failed   DeliveryStatus = "failed"
-	Pending  DeliveryStatus = "pending"
-	Retrying DeliveryStatus = "retrying"
-	Sent     DeliveryStatus = "sent"
-	Skipped  DeliveryStatus = "skipped"
+	DeliveryStatusFailed   DeliveryStatus = "failed"
+	DeliveryStatusPending  DeliveryStatus = "pending"
+	DeliveryStatusRetrying DeliveryStatus = "retrying"
+	DeliveryStatusSent     DeliveryStatus = "sent"
+	DeliveryStatusSkipped  DeliveryStatus = "skipped"
 )
 
 // Valid indicates whether the value is a known member of the DeliveryStatus enum.
 func (e DeliveryStatus) Valid() bool {
 	switch e {
-	case Failed:
+	case DeliveryStatusFailed:
 		return true
-	case Pending:
+	case DeliveryStatusPending:
 		return true
-	case Retrying:
+	case DeliveryStatusRetrying:
 		return true
-	case Sent:
+	case DeliveryStatusSent:
 		return true
-	case Skipped:
+	case DeliveryStatusSkipped:
 		return true
 	default:
 		return false
@@ -76,6 +76,27 @@ func (e NotificationImportance) Valid() bool {
 	case Low:
 		return true
 	case Medium:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PushTestOutcome.
+const (
+	PushTestOutcomeFailed  PushTestOutcome = "failed"
+	PushTestOutcomeRemoved PushTestOutcome = "removed"
+	PushTestOutcomeSent    PushTestOutcome = "sent"
+)
+
+// Valid indicates whether the value is a known member of the PushTestOutcome enum.
+func (e PushTestOutcome) Valid() bool {
+	switch e {
+	case PushTestOutcomeFailed:
+		return true
+	case PushTestOutcomeRemoved:
+		return true
+	case PushTestOutcomeSent:
 		return true
 	default:
 		return false
@@ -169,7 +190,7 @@ type DeliveryStatus string
 // Error defines model for Error.
 type Error struct {
 	Error struct {
-		// Code Machine-readable code, such as bad_request, actor_required, or not_found.
+		// Code Machine-readable code, such as bad_request, actor_required, not_found, or push_not_configured.
 		Code    string `json:"code"`
 		Message string `json:"message"`
 	} `json:"error"`
@@ -230,6 +251,87 @@ type NotificationList struct {
 	NextCursor *string `json:"nextCursor,omitempty"`
 }
 
+// PushConfig defines model for PushConfig.
+type PushConfig struct {
+	// Configured Whether web push has VAPID keys on this server; without them nothing can subscribe.
+	Configured bool `json:"configured"`
+
+	// Delivering Whether notifications are delivered by web push (webpush is a delivery channel).
+	Delivering bool `json:"delivering"`
+
+	// PublicKey The VAPID public key (base64url, an uncompressed P-256 point) to subscribe with; null when not configured.
+	PublicKey *string `json:"publicKey"`
+}
+
+// PushSubscription One subscribed device.
+type PushSubscription struct {
+	CreatedAt time.Time `json:"createdAt"`
+
+	// DeviceLabel Read from its user agent, such as "Chrome on Android".
+	DeviceLabel string `json:"deviceLabel"`
+
+	// Endpoint Its push service URL; a browser finds its own device by it.
+	Endpoint string             `json:"endpoint"`
+	Id       openapi_types.UUID `json:"id"`
+
+	// LastError That failure's error.
+	LastError *string `json:"lastError"`
+
+	// LastFailureAt When a push to it last failed.
+	LastFailureAt *time.Time `json:"lastFailureAt"`
+
+	// LastSuccessAt When a push to it was last accepted.
+	LastSuccessAt *time.Time `json:"lastSuccessAt"`
+
+	// PushService The push service's host, such as fcm.googleapis.com.
+	PushService string `json:"pushService"`
+}
+
+// PushSubscriptionList defines model for PushSubscriptionList.
+type PushSubscriptionList struct {
+	Items []PushSubscription `json:"items"`
+}
+
+// PushSubscriptionRequest A browser's PushSubscription.toJSON().
+type PushSubscriptionRequest struct {
+	// Endpoint The push service URL, https, such as https://fcm.googleapis.com/fcm/send/….
+	Endpoint string `json:"endpoint"`
+
+	// ExpirationTime Ignored; push services report an expired subscription with 404 or 410.
+	ExpirationTime *float32 `json:"expirationTime,omitempty"`
+	Keys           struct {
+		// Auth The browser's auth secret, base64url (16 bytes).
+		Auth string `json:"auth"`
+
+		// P256dh The browser's P-256 public key, base64url (65 bytes).
+		P256dh string `json:"p256dh"`
+	} `json:"keys"`
+}
+
+// PushTestDeviceResult defines model for PushTestDeviceResult.
+type PushTestDeviceResult struct {
+	DeviceLabel string  `json:"deviceLabel"`
+	Error       *string `json:"error"`
+
+	// Outcome sent = its push service accepted the test; removed = its push service says the subscription is gone (404 or 410), so the device was removed; failed = refused or unreachable (error says why).
+	Outcome        PushTestOutcome    `json:"outcome"`
+	SubscriptionId openapi_types.UUID `json:"subscriptionId"`
+}
+
+// PushTestOutcome sent = its push service accepted the test; removed = its push service says the subscription is gone (404 or 410), so the device was removed; failed = refused or unreachable (error says why).
+type PushTestOutcome string
+
+// PushTestRequest defines model for PushTestRequest.
+type PushTestRequest struct {
+	// SubscriptionId Only this device; every device when left out.
+	SubscriptionId *openapi_types.UUID `json:"subscriptionId,omitempty"`
+}
+
+// PushTestResult defines model for PushTestResult.
+type PushTestResult struct {
+	Results []PushTestDeviceResult `json:"results"`
+}
+
 // UnreadCount defines model for UnreadCount.
 type UnreadCount struct {
 	// Count Unread notifications.
@@ -264,6 +366,12 @@ type CreateNotificationJSONRequestBody = CreateNotificationRequest
 // MarkAllNotificationsReadJSONRequestBody defines body for MarkAllNotificationsRead for application/json ContentType.
 type MarkAllNotificationsReadJSONRequestBody = MarkAllReadRequest
 
+// CreatePushSubscriptionJSONRequestBody defines body for CreatePushSubscription for application/json ContentType.
+type CreatePushSubscriptionJSONRequestBody = PushSubscriptionRequest
+
+// SendPushTestJSONRequestBody defines body for SendPushTest for application/json ContentType.
+type SendPushTestJSONRequestBody = PushTestRequest
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
 	// ListChannels List delivery channels and their health
@@ -287,6 +395,21 @@ type ServerInterface interface {
 	// MarkNotificationRead Mark a notification read
 	// (POST /v1/notifications/{notificationId}/read)
 	MarkNotificationRead(c fiber.Ctx, notificationId openapi_types.UUID) error
+	// GetPushConfig Web push configuration
+	// (GET /v1/push/config)
+	GetPushConfig(c fiber.Ctx) error
+	// ListPushSubscriptions List the subscribed devices
+	// (GET /v1/push/subscriptions)
+	ListPushSubscriptions(c fiber.Ctx) error
+	// CreatePushSubscription Subscribe a device
+	// (POST /v1/push/subscriptions)
+	CreatePushSubscription(c fiber.Ctx) error
+	// DeletePushSubscription Remove a device
+	// (DELETE /v1/push/subscriptions/{subscriptionId})
+	DeletePushSubscription(c fiber.Ctx, subscriptionId openapi_types.UUID) error
+	// SendPushTest Send a test push
+	// (POST /v1/push/test)
+	SendPushTest(c fiber.Ctx) error
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -500,6 +623,107 @@ func (siw *ServerInterfaceWrapper) MarkNotificationRead(c fiber.Ctx) error {
 	return handler(c)
 }
 
+// GetPushConfig operation middleware
+func (siw *ServerInterfaceWrapper) GetPushConfig(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.GetPushConfig(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// ListPushSubscriptions operation middleware
+func (siw *ServerInterfaceWrapper) ListPushSubscriptions(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.ListPushSubscriptions(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// CreatePushSubscription operation middleware
+func (siw *ServerInterfaceWrapper) CreatePushSubscription(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.CreatePushSubscription(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// DeletePushSubscription operation middleware
+func (siw *ServerInterfaceWrapper) DeletePushSubscription(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "subscriptionId" -------------
+	var subscriptionId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "subscriptionId", c.Params("subscriptionId"), &subscriptionId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter subscriptionId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.DeletePushSubscription(c, subscriptionId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// SendPushTest operation middleware
+func (siw *ServerInterfaceWrapper) SendPushTest(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.SendPushTest(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
 // FiberServerOptions provides options for the Fiber server.
 type FiberServerOptions struct {
 	BaseURL            string
@@ -536,5 +760,15 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	router.Post(options.BaseURL+"/v1/notifications/:notificationId/read", wrapper.MarkNotificationRead)
 
 	router.Get(options.BaseURL+"/v1/channels", wrapper.ListChannels)
+
+	router.Get(options.BaseURL+"/v1/push/config", wrapper.GetPushConfig)
+
+	router.Get(options.BaseURL+"/v1/push/subscriptions", wrapper.ListPushSubscriptions)
+
+	router.Post(options.BaseURL+"/v1/push/subscriptions", wrapper.CreatePushSubscription)
+
+	router.Delete(options.BaseURL+"/v1/push/subscriptions/:subscriptionId", wrapper.DeletePushSubscription)
+
+	router.Post(options.BaseURL+"/v1/push/test", wrapper.SendPushTest)
 
 }

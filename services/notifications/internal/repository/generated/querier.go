@@ -20,21 +20,44 @@ type Querier interface {
 	// (a worker that stopped mid-send) is claimable again; the attempt it started
 	// still counts.
 	ClaimDelivery(ctx context.Context, arg ClaimDeliveryParams) (Delivery, error)
+	// How many devices a notification reached, and how many refused it for good.
+	CountPushOutcomes(ctx context.Context, notificationID pgtype.UUID) (CountPushOutcomesRow, error)
 	CountUnreadNotifications(ctx context.Context) (CountUnreadNotificationsRow, error)
+	DeletePushSubscription(ctx context.Context, id pgtype.UUID) (int64, error)
 	// Ends a claimed delivery without sending it: failed or skipped.
 	FinishDelivery(ctx context.Context, arg FinishDeliveryParams) (Delivery, error)
 	GetNotification(ctx context.Context, id pgtype.UUID) (Notification, error)
 	GetNotificationByDedupeKey(ctx context.Context, dedupeKey string) (Notification, error)
+	GetPushSubscription(ctx context.Context, id pgtype.UUID) (PushSubscription, error)
 	InsertDelivery(ctx context.Context, arg InsertDeliveryParams) (Delivery, error)
 	// A repeated dedupe key inserts nothing (no rows): the caller returns the
 	// original instead.
 	InsertNotification(ctx context.Context, arg InsertNotificationParams) (Notification, error)
 	ListDeliveries(ctx context.Context, notificationIds []pgtype.UUID) ([]Delivery, error)
 	ListNotifications(ctx context.Context, arg ListNotificationsParams) ([]Notification, error)
+	ListPushSubscriptions(ctx context.Context) ([]PushSubscription, error)
+	// The devices a notification still has to reach: subscribed by the time it
+	// was created (a device added later does not get older notifications) and
+	// without an outcome for it yet.
+	ListPushTargets(ctx context.Context, arg ListPushTargetsParams) ([]PushSubscription, error)
 	MarkAllNotificationsRead(ctx context.Context, before pgtype.Timestamptz) (int64, error)
 	MarkDeliverySent(ctx context.Context, arg MarkDeliverySentParams) (Delivery, error)
 	MarkNotificationRead(ctx context.Context, id pgtype.UUID) (Notification, error)
+	// A push to the device failed: for now (it is tried again), or a test push.
+	MarkPushFailure(ctx context.Context, arg MarkPushFailureParams) error
+	// A push to the device was accepted (a test push).
+	MarkPushSuccess(ctx context.Context, id pgtype.UUID) error
+	// The push service refused the notification for a device for good: its final
+	// outcome, and the device's latest failure.
+	RecordPushFailed(ctx context.Context, arg RecordPushFailedParams) error
+	// A device accepted the notification: its final outcome, and the device's
+	// latest success. Nothing when the device was removed meanwhile.
+	RecordPushSent(ctx context.Context, arg RecordPushSentParams) error
 	RetryDelivery(ctx context.Context, arg RetryDeliveryParams) (Delivery, error)
+	// Subscribing is idempotent by endpoint: a known endpoint gets the keys and
+	// label it was sent with and keeps its id, creation time, and history.
+	// created is true when the row is new.
+	UpsertPushSubscription(ctx context.Context, arg UpsertPushSubscriptionParams) (UpsertPushSubscriptionRow, error)
 }
 
 var _ Querier = (*Queries)(nil)

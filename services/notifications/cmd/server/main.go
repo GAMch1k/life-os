@@ -31,6 +31,28 @@ func run(ctx context.Context) error {
 	}
 
 	logger := httpserver.NewJSONLogger(os.Stdout, cfg.ParsedLogLevel())
+	pool, err := database.Open(ctx, cfg.DatabaseConfig())
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	queries := repository.New(pool)
+
+	// Web push works once its keys are set: the API subscribes devices and
+	// sends test pushes with it, and the channel delivers when it is listed.
+	var webPush *delivery.WebPushChannel
+	pushConfig := delivery.WebPushConfig{
+		PublicKey:  cfg.WebPushPublicKey,
+		PrivateKey: cfg.WebPushPrivateKey,
+		Subject:    cfg.WebPushSubjectOrDefault(),
+		Store:      queries,
+		Logger:     logger,
+	}
+	if pushConfig.Set() {
+		if webPush, err = delivery.NewWebPush(pushConfig); err != nil {
+			pool.Close()
+			return fmt.Errorf("configure web push: %w", err)
+		}
+	}
 	channels, err := delivery.Build(cfg.ChannelNames(), delivery.Settings{
 		Logger: logger,
 		Ntfy: delivery.NtfyConfig{
@@ -39,18 +61,16 @@ func run(ctx context.Context) error {
 			Token:       cfg.NtfyToken,
 			LinkBaseURL: cfg.LinkBaseURL,
 		},
+		WebPush: webPush,
 	})
 	if err != nil {
+		pool.Close()
 		return err
 	}
 	if len(channels) == 0 {
 		logger.Info("no notification channels configured (NOTIFICATIONS_CHANNELS): notifications are stored and listed only")
 	} else {
 		logger.Info("notification channels configured", "channels", delivery.Names(channels))
-	}
-	pool, err := database.Open(ctx, cfg.DatabaseConfig())
-	if err != nil {
-		return fmt.Errorf("open database: %w", err)
 	}
 
 	app := httpserver.New(
@@ -59,7 +79,7 @@ func run(ctx context.Context) error {
 		httpserver.WithReadinessCheck(pool.Ping),
 	)
 	emitter := activity.NewEmitter(cfg.ActivityURL, "notifications", logger)
-	worker := delivery.NewWorker(repository.New(pool), channels, delivery.Options{
+	worker := delivery.NewWorker(queries, channels, delivery.Options{
 		Policy: delivery.Policy{
 			BaseDelay: serviceconfig.Seconds(cfg.RetryBaseSeconds),
 			MaxDelay:  serviceconfig.Seconds(cfg.RetryMaxSeconds),
@@ -69,7 +89,11 @@ func run(ctx context.Context) error {
 		Lease:       serviceconfig.Seconds(cfg.LeaseSeconds),
 		SendTimeout: serviceconfig.Seconds(cfg.SendTimeoutSeconds),
 	}, emitter, logger)
-	api.Register(app, api.NewHandler(pool, delivery.Names(channels)).WithWake(worker.Wake).WithActivity(emitter))
+	handler := api.NewHandler(pool, delivery.Names(channels)).WithWake(worker.Wake).WithActivity(emitter)
+	if webPush != nil {
+		handler = handler.WithPush(webPush)
+	}
+	api.Register(app, handler)
 	app.OnShutdown(database.ClosePool(pool))
 
 	// The worker stops (finishing a delivery under way) before the pool
