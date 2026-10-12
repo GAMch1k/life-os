@@ -47,10 +47,11 @@ func (h *Handler) GetMonthlySummary(c fiber.Ctx, params generated.GetMonthlySumm
 	if err != nil {
 		return internal(err)
 	}
-	var balance int64
+	var booked, pending int64
 	for _, account := range accounts {
 		if account.Currency == currency {
-			balance += account.BalanceMinor
+			booked += account.BookedMinor
+			pending += account.PendingMinor
 		}
 	}
 	totals, err := h.queries.GetMonthlyCategoryTotals(ctx, store.GetMonthlyCategoryTotalsParams{Currency: currency, AccountID: accountID, MonthStart: start})
@@ -58,7 +59,8 @@ func (h *Handler) GetMonthlySummary(c fiber.Ctx, params generated.GetMonthlySumm
 		return internal(err)
 	}
 	summary := generated.MonthlySummary{
-		Month: params.Month, Currency: currency, TotalBalance: money(balance, currency),
+		Month: params.Month, Currency: currency, TotalBalance: money(booked+pending, currency),
+		TotalBookedBalance: money(booked, currency), TotalPending: money(pending, currency),
 		Income: money(cashflow.IncomeMinor, currency), Spending: money(cashflow.SpendingMinor, currency), Net: money(cashflow.NetMinor, currency),
 		SpendingByCategory: []generated.SpendingByCategory{}, ByCategory: make([]generated.CategoryTotal, 0, len(totals)),
 	}

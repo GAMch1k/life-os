@@ -21,6 +21,8 @@ type Account = {
   name: string;
   builtIn: boolean;
   balance: Money;
+  bookedBalance: Money;
+  pending: Money;
   currency: string;
 };
 type Transaction = {
@@ -144,6 +146,91 @@ test.describe("Finance workspace", () => {
       cashDialog.getByRole("button", { name: "Archive account" }),
     ).toHaveCount(0);
     await cashDialog.getByRole("button", { name: "Cancel" }).click();
+  });
+
+  test("shows a balance with its pending money, and what is booked and pending under it", async ({
+    page,
+    request,
+  }) => {
+    const stamp = Date.now();
+    const name = `E2E Pending ${stamp}`;
+    const cleanup: (() => Promise<unknown>)[] = [];
+    try {
+      const created = await request.post(`${api}/accounts`, {
+        data: {
+          name,
+          kind: "bank",
+          currency: "EUR",
+          openingBalanceMinor: 10000,
+        },
+      });
+      expect(created.status()).toBe(201);
+      const account = (await created.json()) as Account;
+      cleanup.push(() =>
+        request.patch(`${api}/accounts/${account.id}`, {
+          data: { archived: true },
+        }),
+      );
+      // 100.00 opening, 12.50 booked out, and a 45.35 card hold pending.
+      for (const [amount, status] of [
+        [-1250, "booked"],
+        [-4535, "pending"],
+      ] as const) {
+        const response = await request.post(`${api}/transactions`, {
+          data: {
+            accountId: account.id,
+            amount: { amount, currency: "EUR" },
+            status,
+            counterparty: `E2E Shop ${stamp}`,
+          },
+        });
+        expect(response.status()).toBe(201);
+        const { id } = (await response.json()) as Transaction;
+        cleanup.push(() => request.delete(`${api}/transactions/${id}`));
+      }
+      const seeded = (await accounts(request)).find(
+        (item) => item.id === account.id,
+      );
+      expect(seeded).toMatchObject({
+        balance: { amount: 4215 },
+        bookedBalance: { amount: 8750 },
+        pending: { amount: -4535 },
+      });
+
+      // The card shows what there is to spend, and the split quietly.
+      const { today } = await openFinance(page);
+      const card = page
+        .getByTestId("finance-account")
+        .filter({ hasText: name });
+      await expect(card).toContainText(/42[.,]15/);
+      await expect(card.getByTestId("balance-breakdown")).toHaveText(
+        /^Booked .*87[.,]50.* · Pending -.*45[.,]35/,
+      );
+      // An account without pending money has no such line.
+      await expect(
+        page
+          .getByTestId("finance-account")
+          .first()
+          .getByTestId("balance-breakdown"),
+      ).toHaveCount((await cash(request)).pending.amount === 0 ? 0 : 1);
+
+      // The summary's balance now has the pending money too.
+      const summary = await (
+        await request.get(`${api}/summaries/monthly?month=${today.slice(0, 7)}`)
+      ).json();
+      expect(summary.totalBalance.amount).toBe(
+        summary.totalBookedBalance.amount + summary.totalPending.amount,
+      );
+      await page.getByRole("tab", { name: "Summary" }).click();
+      const breakdown = page
+        .getByTestId("finance-summary")
+        .getByTestId("balance-breakdown");
+      if (summary.totalPending.amount !== 0) {
+        await expect(breakdown).toHaveText(/^Booked .* · Pending /);
+      }
+    } finally {
+      for (const step of cleanup.reverse()) await step().catch(() => {});
+    }
   });
 
   test("adds a manual cash expense, finds it, edits it, and deletes it", async ({

@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   amountInput,
+  balanceBreakdown,
   directionOf,
   formatMoney,
   minorDigits,
@@ -101,4 +102,27 @@ test("directionOf and signed agree that money out is negative", () => {
   assert.equal(signed(1250, "out"), -1250);
   assert.equal(signed(-1250, "in"), 1250);
   assert.equal(signed(-1250, "out"), -1250);
+});
+
+test("balanceBreakdown splits a balance with pending money", () => {
+  const booked = { amount: 25105, currency: "EUR" };
+  const holds = { amount: -14535, currency: "EUR" };
+  assert.equal(
+    balanceBreakdown(booked, holds, "en-GB"),
+    "Booked €251.05 · Pending -€145.35",
+  );
+  assert.equal(
+    plain(balanceBreakdown(booked, holds, "de-DE")!),
+    "Booked 251,05 € · Pending -145,35 €",
+  );
+  // A pending refund is money in.
+  assert.equal(
+    balanceBreakdown(booked, { amount: 500, currency: "EUR" }, "en-GB"),
+    "Booked €251.05 · Pending +€5.00",
+  );
+  // Nothing pending: the balance is all booked, so there is no line.
+  assert.equal(
+    balanceBreakdown(booked, { amount: 0, currency: "EUR" }, "en-GB"),
+    undefined,
+  );
 });

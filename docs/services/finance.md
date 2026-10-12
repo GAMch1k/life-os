@@ -21,14 +21,35 @@ positive one money in. Every write needs `X-Life-OS-Actor` (see
 
 An account has a `name` (unique; 409 `account_name_taken`), a `kind` (`bank`,
 `cash`, `card`, `savings`, or `other`), a `currency`, and an opening balance.
-`balance` is the opening balance plus every **booked** transaction; `pending`
-is the sum of the pending ones, which are not in the balance;
-`transactionCount` counts both. A bank account that reported a booked balance
-shows the bank's balance instead, as of `balanceAsOf`, with the bank's
-`available` balance next to it (see [Bank syncs](#bank-syncs)). `lowBalance`
-is true while the low-balance alert is on and the account is a watched bank
-account below its threshold; Cash and other manual accounts never are (see
-[Alerts](#alerts)).
+
+**Balances.** `balance` is the money the account has now, what the owner can
+spend: `bookedBalance` plus `pending`.
+
+- `bookedBalance` is the opening balance plus every **booked** transaction.
+- A bank account that reported a booked balance (`bankBalance`, with the day
+  it is for; see [Bank syncs](#bank-syncs)) starts from it instead: its
+  booked balance is the bank's balance plus every booked transaction with a
+  later booking date. A balance dated D includes all bookings through D,
+  which holds for a bank's closing balance of a day (Deutsche Bank's) and
+  for an interim balance dated today. Without one, a bank account's booked
+  balance is computed like any other.
+- `pending` is the sum of the pending transactions: mostly card payments the
+  bank has not booked yet, so negative. When the bank books one, it moves
+  from `pending` to `bookedBalance` and `balance` stays.
+- `balanceAsOf` is the owner-local day of a bank account's last sync, the
+  newest data in its balance; null for a manual account, whose balance is
+  always current.
+- `available` is the bank's own available balance, as it reported it.
+  Finance does not use it: banks differ in what it holds back (some subtract
+  card holds, some add the overdraft line), so adding pending payments to it
+  could count them twice. The Dashboard does not show it.
+
+For example, Friday's closing balance of €300.67, Monday's bookings of
+−€49.62, and card holds of −€145.35 make a booked balance of €251.05 and a
+balance of €105.70. `transactionCount` counts booked and pending
+transactions. `lowBalance` is true while the low-balance alert is on and the
+account is a watched bank account whose balance is below its threshold; Cash
+and other manual accounts never are (see [Alerts](#alerts)).
 
 `GET /v1/accounts` lists the active accounts, the built-in Cash account first,
 then by name (`includeArchived=true` adds archived ones); `POST /v1/accounts`
@@ -209,7 +230,9 @@ at a time):
   one absent from the sync) removes the pending one and takes over its notes
   and a category chosen by hand. Pending transactions of the connection booked
   inside `window` that the sync no longer has are removed. Booked transactions
-  are never deleted.
+  are never deleted. A sync applies all of this at once, so a payment the
+  bank books leaves the account's balance as it was (see
+  [Accounts](#accounts)).
 - **Errors.** A transaction naming an account that is neither in the sync nor
   already imported for the connection is 400 `unknown_account`; an amount or
   balance in another currency than its account is 400 `currency_mismatch`;
@@ -228,7 +251,8 @@ transactions as history (204, also when there is nothing left to archive).
 transactions in one currency (`currency`, by default the built-in Cash
 account's): `income`, `spending` (positive), and `net`. Transactions in a
 `transfer` category are left out of those three. `totalBalance` is the current
-balance of the accounts in that currency (archived ones included).
+balance of the accounts in that currency (archived ones included), pending
+money included: `totalBookedBalance` plus `totalPending`.
 `spendingByCategory` lists the spending per category (not transfers or
 uncategorized), largest first, and `byCategory` has every category with
 transactions that month, uncategorized included (`categoryId` null), with its
@@ -409,17 +433,18 @@ settings (every field required; amounts are minor units of
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `largeDebit` | on, €250 | Money out of at least `thresholdMinor` (at least 1), not in a transfer category |
-| `lowBalance` | on, €100 | A bank account below `thresholdMinor` (0 or more) |
+| `lowBalance` | on, €100 | A bank account whose balance, pending payments included, is below `thresholdMinor` (0 or more) |
 | `renewals` | on, 3 days | A reminder `leadDays` (0–30; 0 is on the day) before a confirmed subscription's next payment |
 
 Only accounts and transactions in the default currency are checked. The
-low-balance alert watches bank accounts only: active (not archived)
-accounts from a bank connection of kind `bank` (with the bank's reported
-booked balance, or the computed balance of their transactions before the
-bank reported one), and of kind `card` or `savings` once they have a
-bank-reported balance. The built-in Cash account and other manual accounts
-are never watched: cash spending is logged without the withdrawals, so Cash
-goes negative by design. The large-debit alert leaves out money in a
+low-balance alert compares an account's `balance`, what the owner can spend:
+the booked balance with the pending payments (see [Accounts](#accounts)). It
+watches bank accounts only: active (not archived) accounts from a bank
+connection of kind `bank` (with the bank's reported booked balance, or
+their transactions before the bank reported one), and of kind `card` or
+`savings` once they have a bank-reported balance. The built-in Cash account
+and other manual accounts are never watched: cash spending is logged without
+the withdrawals, so Cash goes negative by design. The large-debit alert leaves out money in a
 `transfer`-kind category (Savings, Transfers, or any other transfer
 category): moving money between the owner's own accounts is not a debit to
 warn about.
@@ -444,8 +469,12 @@ alert is due: a transaction given a transfer category before that is left
 out, and one already notified stays notified whatever its category
 becomes. A low balance is notified once per
 episode: an account that falls below starts a new episode, and one back at
-or above the threshold is re-armed. Episodes are tracked while the alert is
-off too; switching it on while an account is low notifies that episode. A
+or above the threshold is re-armed. A card hold the bank books keeps the
+balance, so it keeps the episode too; a hold the shop releases gives the
+money back and may re-arm the alert. The body splits the balance when some
+of it is pending ("Below your €150.00 alert. Booked €251.05, pending -€145.35.").
+Episodes are tracked while the alert is off too; switching it on while an
+account is low notifies that episode. A
 switched-off alert sends nothing; missed renewals are never alerted.
 
 Each notification is claimed in `alert_notifications` before it is sent,

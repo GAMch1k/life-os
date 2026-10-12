@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/GAMch1k/life-os/pkg/activity"
 	"github.com/GAMch1k/life-os/services/finance/internal/api/generated"
@@ -74,7 +75,11 @@ func TestBankSyncsUpsertAccountsAndTransactions(t *testing.T) {
 	}
 	giroID := first.AccountIds[0].Id.String()
 	giro := expect[generated.Account](c, http.MethodGet, "/v1/accounts/"+giroID, nil, http.StatusOK)
-	if giro.Name != "Girokonto (Deutsche Bank)" || giro.Kind != generated.AccountKindBank || giro.Balance.Amount != 123456 || giro.BalanceAsOf.String() != "2026-10-10" ||
+	// The bank's balance of 10 October has every booking so far; the
+	// balance adds the pending ones, and it is as of the sync.
+	if giro.Name != "Girokonto (Deutsche Bank)" || giro.Kind != generated.AccountKindBank || giro.BookedBalance.Amount != 123456 || giro.Balance.Amount != 123456-2099 ||
+		giro.BankBalance == nil || giro.BankBalance.Amount != 123456 || giro.BankBalance.Date.String() != "2026-10-10" || giro.Source.SyncedAt == nil ||
+		giro.BalanceAsOf == nil || giro.BalanceAsOf.String() != c.handler.ownerDay(*giro.Source.SyncedAt).Format(time.DateOnly) ||
 		giro.Available == nil || giro.Available.Amount != 120000 || giro.Pending.Amount != -2099 || giro.Source.Kind != generated.AccountSourceKindBank ||
 		giro.Source.ConnectionId.String() != connectionID || *giro.Source.ExternalId != "acc-1" || *giro.Source.Provider != "enablebanking" ||
 		*giro.Source.Institution != "Deutsche Bank" || *giro.Source.IbanMasked != "DE23…2300" || giro.Source.SyncedAt == nil {
@@ -82,7 +87,8 @@ func TestBankSyncsUpsertAccountsAndTransactions(t *testing.T) {
 	}
 	card := expect[generated.Account](c, http.MethodGet, "/v1/accounts/"+first.AccountIds[1].Id.String(), nil, http.StatusOK)
 	// Without a reported balance, a bank account's balance is computed.
-	if card.Name != "Kreditkarte" || card.Kind != generated.AccountKindCard || card.Balance.Amount != 0 || card.BalanceAsOf != nil || card.Available != nil {
+	if card.Name != "Kreditkarte" || card.Kind != generated.AccountKindCard || card.BookedBalance.Amount != 0 || card.Balance.Amount != -6000 ||
+		card.BankBalance != nil || card.BalanceAsOf == nil || card.Available != nil {
 		t.Fatalf("card = %+v", card)
 	}
 	shop := c.byExternalID("t1")
@@ -115,7 +121,7 @@ func TestBankSyncsUpsertAccountsAndTransactions(t *testing.T) {
 		t.Fatalf("second sync = %+v", second)
 	}
 	giro = expect[generated.Account](c, http.MethodGet, "/v1/accounts/"+giroID, nil, http.StatusOK)
-	if giro.Name != "DB Giro" || giro.Balance.Amount != 118000 || giro.Available.Amount != 115000 || giro.Pending.Amount != -100 {
+	if giro.Name != "DB Giro" || giro.BookedBalance.Amount != 118000 || giro.Balance.Amount != 118000-100 || giro.Available.Amount != 115000 || giro.Pending.Amount != -100 {
 		t.Fatalf("giro after re-sync = %+v", giro)
 	}
 	shop = c.byExternalID("t1")

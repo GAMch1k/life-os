@@ -75,8 +75,12 @@ type Querier interface {
 	GetTransactionForUpdate(ctx context.Context, id pgtype.UUID) (Transaction, error)
 	InsertBudgetPlanLines(ctx context.Context, arg InsertBudgetPlanLinesParams) error
 	InsertSubscription(ctx context.Context, arg InsertSubscriptionParams) (Subscription, error)
-	// A bank account that reported a booked balance shows it; every other
-	// account shows its opening balance plus its booked transactions.
+	// booked_minor is the current booked balance. For a bank account that
+	// reported one it is the bank's booked balance plus every booked
+	// transaction with a later booking date: a balance dated D includes the
+	// bookings through D. Every other account has its opening balance plus its
+	// booked transactions. pending_minor is the sum of the pending ones.
+	// ListLowBalanceAccounts computes the same.
 	ListAccountsWithBalance(ctx context.Context, arg ListAccountsWithBalanceParams) ([]ListAccountsWithBalanceRow, error)
 	// The rules that may categorize: those of categories that are not archived,
 	// in the order they are tried.
@@ -98,12 +102,12 @@ type Querier interface {
 	// booked on or after a day, that has not been notified. Money moved
 	// between own accounts (a transfer category) is not a debit to warn about.
 	ListLargeDebits(ctx context.Context, arg ListLargeDebitsParams) ([]ListLargeDebitsRow, error)
-	// Active bank accounts (from a bank connection) in one currency with the
-	// balance they show and their low-balance state: kind bank, with the bank's
-	// booked balance or, before the bank reported one, the computed balance of
-	// its transactions; and card or savings accounts that have a bank-reported
-	// balance. The built-in Cash account and other manual accounts are never
-	// watched.
+	// Active bank accounts (from a bank connection) in one currency with their
+	// current booked balance and pending sum, computed as in
+	// ListAccountsWithBalance, and their low-balance state: kind bank, with the
+	// bank's booked balance or, before the bank reported one, transactions; and
+	// card or savings accounts that have a bank-reported balance. The built-in
+	// Cash account and other manual accounts are never watched.
 	ListLowBalanceAccounts(ctx context.Context, currency string) ([]ListLowBalanceAccountsRow, error)
 	// Booked money out since a day, for detecting recurring payments; money
 	// moved between own accounts (transfer categories) is not a payment.

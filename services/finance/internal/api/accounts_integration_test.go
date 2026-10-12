@@ -97,7 +97,9 @@ func TestAccountsShowBalancesAndArchive(t *testing.T) {
 	c.spend(map[string]any{"accountId": id, "amount": eur(300000), "bookingDate": "2026-10-02"})
 	c.spend(map[string]any{"accountId": id, "amount": eur(-999), "bookingDate": "2026-10-03", "status": "pending"})
 	giro = expect[generated.Account](c, http.MethodGet, "/v1/accounts/"+id, nil, http.StatusOK)
-	if giro.Balance.Amount != 100000-2500+300000 || giro.Pending.Amount != -999 || giro.TransactionCount != 3 {
+	// The balance has the pending money; the booked balance does not.
+	if giro.BookedBalance.Amount != 100000-2500+300000 || giro.Pending.Amount != -999 || giro.Balance.Amount != 100000-2500+300000-999 ||
+		giro.TransactionCount != 3 || giro.BalanceAsOf != nil || giro.BankBalance != nil {
 		t.Fatalf("balances = %+v", giro)
 	}
 	c.expectError(http.MethodPatch, "/v1/accounts/"+id, map[string]any{"currency": "USD"}, http.StatusConflict, "account_has_transactions")

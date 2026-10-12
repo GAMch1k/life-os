@@ -428,7 +428,7 @@ function TransactionForm({
               checked={draft.pending}
               onCheckedChange={(checked) => update({ pending: checked })}
             />
-            Pending (not settled yet, so not in the balance)
+            Pending (not settled yet, so not in the booked balance)
           </Label>
 
           <Field>
@@ -555,7 +555,7 @@ function ImportedDetails({
     [
       "Status",
       transaction.status === "pending"
-        ? "Pending, not in the balance"
+        ? "Pending, not in the booked balance"
         : "Booked",
     ],
     ["Source", SOURCE_LABELS[transaction.source.kind]],
