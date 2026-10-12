@@ -383,11 +383,12 @@ reads the preferences, the in-stock pantry, the top suggestions, the ideas,
 and the recent meal plan through MCP, asks Codex for up to three home
 recipes that use the food expiring within 3 days first, name in-stock
 ingredients as the pantry does (so coverage matches), avoid every dislike,
-and prefer the preferred methods (the air fryer first), checks them, and
+and prefer the preferred methods (at least 2 of 3 ideas with the first,
+the air fryer), checks them, and
 writes each with `POST /v1/ideas` as `agent:codex-recipe-ideas`, with an
 Idempotency-Key from the run and the title; a 409 is skipped. Web search is
-off unless `LIFE_OS_IDEAS_WEB_SEARCH` turns it on; then ideas found online
-are `source: web` with their page, their steps summarized, not copied. The
+off unless `LIFE_OS_IDEAS_WEB_SEARCH` turns it on; then at least one idea is
+found online, `source: web` with its page, its steps summarized, not copied. The
 job never saves or dismisses ideas.
 
 ## Meal plan

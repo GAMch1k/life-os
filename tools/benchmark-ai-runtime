@@ -446,6 +446,8 @@ run_profile() {
   check ideas_run "$([ "$(jq -r '.lastRun.outcome // ""' <<<"$ideas_job")" = created ] && [ "$count" -ge 1 ] && [ "$count" -le 3 ] && echo 1 || echo 0)" "run=$(jq -c '.lastRun' <<<"$ideas_job") ideas=$(jq -c 'map({title, methods, ingredients: [.ingredients[].name]})' <<<"$ideas")"
   check ideas_no_dislike "$([ "$count" -ge 1 ] && [ "$(jq '[.[] | select((.title | test("pilz|mushroom|гриб"; "i")) or any(.ingredients[]; .name | test("pilz|mushroom|гриб"; "i")))] | length' <<<"$ideas")" = 0 ] && echo 1 || echo 0)" "ideas=$count"
   check ideas_expiring "$([ "$(jq '[.[] | select(any(.ingredients[]; .name | test("h(ä|a)hnchen"; "i")))] | length' <<<"$ideas")" -ge 1 ] && echo 1 || echo 0)" "ideas=$count"
+  # The air fryer is the first preferred method: at least 2 ideas use it.
+  check ideas_air_fryer "$([ "$(jq '[.[] | select(.methods | index("air_fryer"))] | length' <<<"$ideas")" -ge 2 ] && echo 1 || echo 0)" "methods=$(jq -c 'map(.methods)' <<<"$ideas") run=$(jq -c '.lastRun | {withFirstMethod, fromWeb}' <<<"$ideas_job")"
   check no_extra_recipes "$([ "$(jq '.items | length' <<<"$recipes")" = 3 ] && echo 1 || echo 0)" "recipes=$(jq -c '[.items[].title]' <<<"$recipes") (expected 3)"
   check no_extra_meals "$([ "$(jq '.items | length' <<<"$plan")" = $((1 + ${#saturdays[@]})) ] && echo 1 || echo 0)" "meals=$(jq -c '[.items[] | {date, slot, title}]' <<<"$plan") (expected $((1 + ${#saturdays[@]})))"
   # No fallback or invented entities: ten seeds plus three creates, the
