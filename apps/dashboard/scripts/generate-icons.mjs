@@ -19,10 +19,13 @@ const SAMPLES = 4;
 
 // Sizes are fractions of the icon. An "any" icon is a rounded square with
 // transparent corners; a maskable one fills the square, and its mark stays
-// inside the central circle of radius 0.4 that every mask shape keeps.
+// inside the central circle of radius 0.4 that every mask shape keeps. The
+// badge is the mark alone on transparent: Android shows a notification's
+// badge in the status bar as a silhouette of its opaque pixels.
 const DESIGNS = {
   any: { corner: 0.225, outer: 0.3, inner: 0.215, dot: 0.125 },
   maskable: { corner: 0, outer: 0.25, inner: 0.18, dot: 0.105 },
+  badge: { markOnly: true, outer: 0.46, inner: 0.33, dot: 0.19 },
 };
 
 const ICONS = [
@@ -30,6 +33,7 @@ const ICONS = [
   { file: "icon-512.png", size: 512, design: "any" },
   { file: "icon-maskable-192.png", size: 192, design: "maskable" },
   { file: "icon-maskable-512.png", size: 512, design: "maskable" },
+  { file: "badge-96.png", size: 96, design: "badge" },
 ];
 
 /** Whether (x, y) in [0, 1]² is inside the rounded square. */
@@ -58,8 +62,11 @@ function draw(size, design) {
         for (let sx = 0; sx < SAMPLES; sx++) {
           const x = (px + (sx + 0.5) / SAMPLES) / size;
           const y = (py + (sy + 0.5) / SAMPLES) / size;
-          if (!inSquare(x, y, design.corner)) continue;
-          const colour = inMark(x, y, design) ? MARK : BACKGROUND;
+          const mark = inMark(x, y, design);
+          if (design.markOnly ? !mark : !inSquare(x, y, design.corner)) {
+            continue;
+          }
+          const colour = mark ? MARK : BACKGROUND;
           r += colour[0];
           g += colour[1];
           b += colour[2];

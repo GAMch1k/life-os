@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import { PushSettings } from "@/components/push-settings";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -59,8 +60,9 @@ const DELIVERY_TONES: Record<DeliveryView["tone"], string> = {
 
 /**
  * /notifications: every notification, newest first and grouped by day, with
- * filters, read state, delivery state per channel, and a test notification.
- * The server reads the first page; "Show more" reads the next ones here.
+ * filters, read state, delivery state per channel, notifications on this
+ * device (web push), and a test notification. The server reads the first
+ * page; "Show more" reads the next ones here.
  */
 export function NotificationsView({ page }: { page: NotificationsPage }) {
   const { filters, renderedAt, timeZone } = page;
@@ -164,6 +166,7 @@ export function NotificationsView({ page }: { page: NotificationsPage }) {
           Mark all read
         </Button>
       </div>
+      <PushSettings timeZone={timeZone} />
       <TestNotification onSent={() => router.refresh()} />
       <Filters
         filters={filters}
