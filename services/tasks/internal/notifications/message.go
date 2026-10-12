@@ -2,6 +2,7 @@ package notifications
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 	"unicode"
@@ -26,18 +27,25 @@ const (
 	maxItemTitle = 120
 )
 
-// Links the messages open.
+// Links the messages open: the Tasks workspace for a list, Home for the
+// summary. A message about one Task opens that Task (taskLink).
 const (
 	tasksLink = "/tasks"
 	homeLink  = "/"
 )
 
-// dueMessage is a timed Task's reminder. Its title is the Task's title; its
-// body says when it is due, as seen from the reminder time, in the owner's
-// timezone with a 24-hour clock: "Due in 30 minutes · 15:00". A reminder
-// sent late (after Tasks was down) is phrased from sentAt and ends with
-// "(late)": "Due in 10 minutes · 15:00 (late)", "Was due 20 minutes ago ·
-// 15:00 (late)".
+// taskLink opens one Task in the Tasks workspace: "/tasks?task=<id>". The
+// Android app reads the id from it to offer Done on the notification.
+func taskLink(id string) string {
+	return tasksLink + "?task=" + url.QueryEscape(id)
+}
+
+// dueMessage is a timed Task's reminder; it links to the Task (taskLink).
+// Its title is the Task's title; its body says when it is due, as seen from
+// the reminder time, in the owner's timezone with a 24-hour clock: "Due in
+// 30 minutes · 15:00". A reminder sent late (after Tasks was down) is
+// phrased from sentAt and ends with "(late)": "Due in 10 minutes · 15:00
+// (late)", "Was due 20 minutes ago · 15:00 (late)".
 func dueMessage(due Due, sentAt time.Time, late bool, owner *time.Location) notify.Notification {
 	at := due.At
 	if late {
@@ -67,7 +75,7 @@ func dueMessage(due Due, sentAt time.Time, late bool, owner *time.Location) noti
 	}
 	return notify.Notification{
 		Title: clip(title, maxTitle), Body: clip(body, maxBody), Importance: notify.Medium,
-		Category: CategoryDue, Link: tasksLink, DedupeKey: due.Key, OccurredAt: due.At,
+		Category: CategoryDue, Link: taskLink(due.Task.ID), DedupeKey: due.Key, OccurredAt: due.At,
 	}
 }
 
