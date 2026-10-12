@@ -122,6 +122,16 @@ expect 0 'published phone 0.1.1 (2)' "$work/r2" --force
 [[ "$(manifest '[.apps.phone.versionCode, .apps.phone.previous[0].versionCode] | @tsv')" == $'2\t3' ]] || fail "--force did not publish the older version over the newer one"
 consistent
 
+printf '==> A build from uncommitted changes is refused\n'
+snapshot
+release r9 0.1.9 9
+jq '.phone.commit = "0123abc-dirty"' "$work/r9/release.json" >"$work/r9/release.tmp" && mv "$work/r9/release.tmp" "$work/r9/release.json"
+expect 2 'came from uncommitted changes (commit ends in -dirty)' "$work/r9"
+unchanged
+[[ ! -e "$target/lifeos-phone-0.1.9-9.apk" ]] || fail "a refused -dirty APK was copied"
+expect 0 'published phone 0.1.9 (9)' "$work/r9" --force
+consistent
+
 printf '==> A SHA-256 or size mismatch is refused\n'
 fresh
 expect 0 'published phone 0.1.0 (1)' "$work/r1"

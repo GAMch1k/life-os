@@ -11,7 +11,7 @@ set -Eeuo pipefail
 # the phone and the watch (wear). Before it changes anything, the script
 # checks release.json (every field of each app, and a versionCode newer than
 # the published one: a downgrade, or the same versionCode with other bytes,
-# is refused unless --force) and every APK (present, with the size and
+# is refused unless --force; so is a -dirty build) and every APK (present, with the size and
 # SHA-256 release.json gives). It then copies the APKs into the releases
 # directory and writes updates.json (the manifest the app checks) and
 # index.html (the download page), each through a temporary file renamed
@@ -137,6 +137,10 @@ problems=$(jq -r '
     end
 ' <<<"$release")
 [[ -z "$problems" ]] || refuse "$release_file is not a valid release:"$'\n'"$problems"
+# A build from a tree with uncommitted changes (the app build marks its
+# commit "-dirty") cannot be traced to a commit: refused unless --force.
+dirty=$(jq -r 'to_entries[] | select(.value.commit | endswith("-dirty")) | .key' <<<"$release")
+[[ -z "$dirty" || "$force" == true ]] || refuse "the $(tr '\n' ' ' <<<"$dirty")build came from uncommitted changes (commit ends in -dirty): commit and rebuild, or pass --force"
 
 # The published manifest, if any.
 manifest=$dir/updates.json
