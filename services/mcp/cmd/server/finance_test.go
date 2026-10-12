@@ -156,3 +156,44 @@ func TestFinanceReadToolsPassTheirQuery(t *testing.T) {
 		}
 	}
 }
+
+func TestTheAIsCategoryToolsCallFinance(t *testing.T) {
+	session, requests := financeSession(t, http.StatusOK, `{"total":0,"items":[],"examples":[]}`)
+	if result := callTool(t, session, "finance_list_ai_category_candidates", map[string]any{}); result.IsError {
+		t.Fatalf("candidates failed: %s", resultText(result))
+	}
+	if got := (*requests)[0]; got.Method != http.MethodGet || got.Path != "/v1/categories/ai/candidates" || got.Query != "limit=40" {
+		t.Fatalf("Finance saw %+v", got)
+	}
+	if result := callTool(t, session, "finance_list_ai_category_candidates", map[string]any{"limit": 500}); !result.IsError {
+		t.Fatal("limit 500 was accepted")
+	}
+
+	const transaction, category = "4c0b7c1e-8f2a-4d7b-9e6a-1a2b3c4d5e6f", "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
+	result := callTool(t, session, "finance_set_ai_categories", map[string]any{"choices": []map[string]any{
+		{"transactionId": transaction, "categoryId": category},
+		{"transactionId": accountUUID, "categoryId": nil},
+	}})
+	if result.IsError {
+		t.Fatalf("choices failed: %s", resultText(result))
+	}
+	got := (*requests)[1]
+	if got.Method != http.MethodPost || got.Path != "/v1/categories/ai/choices" || got.Actor != "agent:mcp" {
+		t.Fatalf("Finance saw %+v", got)
+	}
+	if got.RawBody != `{"choices":[{"categoryId":"`+category+`","transactionId":"`+transaction+`"},{"categoryId":null,"transactionId":"`+accountUUID+`"}]}` {
+		t.Fatalf("body = %s", got.RawBody)
+	}
+	for name, arguments := range map[string]map[string]any{
+		"no choices":    {"choices": []map[string]any{}},
+		"category name": {"choices": []map[string]any{{"transactionId": transaction, "categoryId": "Eating out"}}},
+		"transaction":   {"choices": []map[string]any{{"transactionId": "kneipe", "categoryId": category}}},
+	} {
+		if result := callTool(t, session, "finance_set_ai_categories", arguments); !result.IsError {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+	if len(*requests) != 2 {
+		t.Fatalf("refused calls reached Finance: %d requests", len(*requests))
+	}
+}

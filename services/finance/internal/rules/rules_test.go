@@ -74,6 +74,48 @@ func TestReapplyNeverOverridesAChoiceByHand(t *testing.T) {
 	}
 }
 
+func TestARuleOrACodeReplacesAnAIChoiceThatOtherwiseStays(t *testing.T) {
+	groceries, eatingOut, fun := id(10), id(20), id(30)
+	rewe := id(1)
+	chooser := Categorizer{
+		Rules:    []Rule{{ID: rewe, CategoryID: groceries, Field: FieldCounterparty, Operator: OperatorContains, Text: "rewe"}},
+		Defaults: map[string][16]byte{KeyEatingOut: eatingOut},
+	}
+	byAI := Assignment{CategoryID: &fun, CategorizedBy: ByAI}
+
+	// A rule takes over.
+	next, outcome := chooser.Reapply(byAI, Text{Counterparty: "REWE Markt"})
+	if outcome != Recategorized || *next.CategoryID != groceries || next.CategorizedBy != ByRule || *next.RuleID != rewe {
+		t.Fatalf("rule: %+v %v", next, outcome)
+	}
+	// So does a merchant category code.
+	next, outcome = chooser.Reapply(byAI, Text{Counterparty: "Kneipe41", MerchantCategoryCode: "5813"})
+	if outcome != Recategorized || *next.CategoryID != eatingOut || next.CategorizedBy != ByMCC {
+		t.Fatalf("code: %+v %v", next, outcome)
+	}
+	// The same category, now the rule's.
+	sameAsRule := Assignment{CategoryID: &groceries, CategorizedBy: ByAI}
+	if next, outcome = chooser.Reapply(sameAsRule, Text{Counterparty: "REWE"}); outcome != Unchanged || next.CategorizedBy != ByRule {
+		t.Fatalf("same category: %+v %v", next, outcome)
+	}
+	// Nothing matches: the AI's choice stays.
+	if next, outcome = chooser.Reapply(byAI, Text{Counterparty: "Kneipe41"}); outcome != Unchanged || next.CategoryID != &fun || next.CategorizedBy != ByAI {
+		t.Fatalf("kept: %+v %v", next, outcome)
+	}
+	// After a text change it is dropped, so the AI looks again; a rule still
+	// takes over, and a choice by hand still wins.
+	if next, outcome = chooser.Rechoose(byAI, Text{Counterparty: "Kneipe 41 Darmstadt"}); outcome != Cleared || next.CategoryID != nil || next.CategorizedBy != "" {
+		t.Fatalf("rechosen: %+v %v", next, outcome)
+	}
+	if next, outcome = chooser.Rechoose(byAI, Text{Counterparty: "REWE"}); outcome != Recategorized || next.CategorizedBy != ByRule {
+		t.Fatalf("rechosen by a rule: %+v %v", next, outcome)
+	}
+	manual := Assignment{CategoryID: &fun, CategorizedBy: ByManual}
+	if next, outcome = chooser.Rechoose(manual, Text{Counterparty: "REWE"}); outcome != Unchanged || next.CategoryID != &fun {
+		t.Fatalf("by hand: %+v %v", next, outcome)
+	}
+}
+
 func TestMerchantCategoryCodesMapToTheDefaultCategories(t *testing.T) {
 	cases := map[string]string{
 		"5411": KeyGroceries, "5499": KeyGroceries, " 5462 ": KeyGroceries,

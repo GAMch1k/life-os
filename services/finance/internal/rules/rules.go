@@ -1,9 +1,10 @@
 // Package rules is Finance's category rules engine: a rule gives a
 // transaction a category when text in its counterparty or description
 // matches, and a card transaction no rule matches may get the default
-// category of its merchant category code. It is pure; callers load the
-// rules (in priority order) and the default categories, and store the
-// outcome.
+// category of its merchant category code. Who chose a category ranks: a
+// choice by hand, then a rule, then a code, then the AI, which fills the
+// gaps the others leave. It is pure; callers load the rules (in priority
+// order) and the default categories, and store the outcome.
 package rules
 
 import "strings"
@@ -43,6 +44,7 @@ const (
 	ByManual = "manual"
 	ByRule   = "rule"
 	ByMCC    = "mcc"
+	ByAI     = "ai"
 )
 
 // ValidField and ValidOperator check stored or requested values.
@@ -102,7 +104,7 @@ func First(rules []Rule, text Text) (Rule, bool) {
 type Assignment struct {
 	CategoryID    *[16]byte
 	RuleID        *[16]byte
-	CategorizedBy string // "", "manual", "rule", or "mcc"
+	CategorizedBy string // "", "manual", "rule", "mcc", or "ai"
 }
 
 // Outcome classifies what re-applying the rules does to one transaction.
@@ -141,8 +143,9 @@ func (c Categorizer) Choose(text Text) (Assignment, bool) {
 }
 
 // Reapply computes a transaction's new assignment. A choice by hand
-// (CategorizedBy "manual") is never changed. A transaction nothing matches
-// keeps no category; one a rule or a code categorized loses it when nothing
+// (CategorizedBy "manual") is never changed. An AI choice gives way to a
+// rule or a code and otherwise stays. A transaction nothing matches keeps
+// no category; one a rule or a code categorized loses it when nothing
 // matches any more.
 func (c Categorizer) Reapply(current Assignment, text Text) (Assignment, Outcome) {
 	if current.CategorizedBy == ByManual {
@@ -150,6 +153,8 @@ func (c Categorizer) Reapply(current Assignment, text Text) (Assignment, Outcome
 	}
 	next, ok := c.Choose(text)
 	switch {
+	case !ok && current.CategorizedBy == ByAI:
+		return current, Unchanged
 	case !ok && current.CategoryID == nil:
 		return Assignment{}, Unchanged
 	case !ok:
@@ -161,6 +166,17 @@ func (c Categorizer) Reapply(current Assignment, text Text) (Assignment, Outcome
 	}
 	// Same category, now attributed to whatever chose it first.
 	return next, Unchanged
+}
+
+// Rechoose is Reapply for a transaction whose text (or code) changed: an
+// AI choice that no rule or code replaces is dropped too, since the AI chose
+// it from the old text, so the AI looks at the new one.
+func (c Categorizer) Rechoose(current Assignment, text Text) (Assignment, Outcome) {
+	next, outcome := c.Reapply(current, text)
+	if next.CategorizedBy == ByAI {
+		return Assignment{}, Cleared
+	}
+	return next, outcome
 }
 
 // Reapply is Categorizer{Rules: rules}.Reapply: rules only.

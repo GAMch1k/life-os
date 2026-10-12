@@ -17,6 +17,7 @@ import {
 } from "@/components/finance-budget-editor";
 import { FinanceCategories } from "@/components/finance-categories";
 import { FinanceImport } from "@/components/finance-import";
+import { RuleOfferBanner } from "@/components/finance-rule-offer";
 import { SubscriptionDialog } from "@/components/finance-subscription-dialog";
 import { FinanceSubscriptions } from "@/components/finance-subscriptions";
 import { FinanceSummary } from "@/components/finance-summary";
@@ -43,6 +44,7 @@ import { monthRange } from "@/lib/finance-summary";
 import {
   type FinanceWorkspaceState,
   NO_FILTERS,
+  type RuleOffer,
   type Transaction,
   type TransactionFilters,
   type TransactionPage,
@@ -55,6 +57,7 @@ import {
   fetchSummary,
   fetchTransactions,
   financeErrorMessage,
+  ruleOffer,
   upsert,
 } from "@/lib/finance-workspace";
 
@@ -181,6 +184,9 @@ function ReadyWorkspace({
   const [transactionDialog, setTransactionDialog] =
     useState<TransactionDialogState>(null);
   const [accountDialog, setAccountDialog] = useState<AccountDialogState>(null);
+  // After the owner corrects a category the AI chose: the offer to make a
+  // rule of it.
+  const [offer, setOffer] = useState<RuleOffer | null>(null);
   // The transaction request in flight (a newer one aborts it), the pending
   // search, and the latest summary request (older answers are dropped).
   const request = useRef<AbortController | null>(null);
@@ -497,6 +503,18 @@ function ReadyWorkspace({
           <TabsTrigger value="categories">Categories &amp; rules</TabsTrigger>
         </TabsList>
         <TabsContent value="transactions">
+          {offer ? (
+            <RuleOfferBanner
+              key={`${offer.counterparty}|${offer.categoryId}`}
+              offer={offer}
+              onCreated={(rule) => {
+                setRules((current) => upsert(current, rule));
+                reloadRules();
+                transactionsChanged(true);
+              }}
+              onDismiss={() => setOffer(null)}
+            />
+          ) : null}
           <FinanceTransactions
             accounts={accounts}
             categories={categories}
@@ -599,6 +617,12 @@ function ReadyWorkspace({
           transactionsChanged(false);
         }}
         onSaved={(transaction) => {
+          const before =
+            transactionDialog?.mode === "edit"
+              ? transactionDialog.transaction
+              : undefined;
+          const next = ruleOffer(before, transaction, categories);
+          if (next) setOffer(next);
           replaceInList(transaction);
           transactionsChanged(false);
         }}

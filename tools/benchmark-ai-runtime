@@ -12,8 +12,9 @@
 # links, and photos of a letter and receipts, through the Inbox API the
 # Dashboard uses, plus one recorded voice note through Voice
 # and whisper.cpp), lets the automatic processor plan them with the
-# authenticated Codex CLI and act through MCP, and then checks the persisted
-# results. The owner's timezone is Europe/Berlin. Results go to
+# authenticated Codex CLI and act through MCP, asks for recipe ideas, lets
+# the AI categories job categorize three transactions no rule matches, and
+# then checks the persisted results. The owner's timezone is Europe/Berlin. Results go to
 # $LIFE_OS_BENCHMARK_DIR (default: a new temporary directory) as one TSV per
 # profile and a summary.
 set -euo pipefail
@@ -22,6 +23,8 @@ zone=Europe/Berlin
 export LIFE_OS_TIMEZONE=$zone
 # Recipe ideas only when the benchmark asks for them, never by the clock.
 export LIFE_OS_IDEAS_TIME=off
+# The AI categories job, which tools/verify-compose keeps off otherwise.
+export LIFE_OS_VERIFY_AI_CATEGORIES=on
 
 [ "$#" -gt 0 ] || { echo "usage: $0 model/effort [model/effort ...]" >&2; exit 2; }
 out=${LIFE_OS_BENCHMARK_DIR:-$(mktemp -d)}
@@ -159,6 +162,18 @@ run_profile() {
   # For recipe ideas: chicken that expires tomorrow, and mushrooms disliked.
   post_json /api/food/v1/pantry-items "$(jq -n --arg day "$(TZ=$zone date -d tomorrow +%F)" '{items: [{name: "Hähnchenbrust", amount: "400 g", location: "fridge", expiresOn: $day}]}')" >/dev/null
   put_json /api/food/v1/preferences '{"methods":["air_fryer","oven"],"dislikes":["Pilze"]}' >/dev/null
+  # For the AI categories job: three bank-like transactions no default rule
+  # matches (made up): a restaurant, a web hosting bill, and a transfer to a
+  # person with a bare thank-you, which says nothing about what it was.
+  local giro restaurant hosting ambiguous
+  giro=$(post_json /api/finance/v1/accounts '{"name":"Benchmark Giro","kind":"bank","currency":"EUR"}' | jq -r '.id')
+  spend() { # spend <counterparty> <description> <minor units>
+    post_json /api/finance/v1/transactions "$(jq -n --arg account "$giro" --arg counterparty "$1" --arg description "$2" --argjson amount "$3" \
+      '{accountId: $account, amount: {amount: $amount, currency: "EUR"}, counterparty: $counterparty, description: $description}')" | jq -r '.id'
+  }
+  restaurant=$(spend "Kabul Restaurant" "Kartenzahlung girocard" -3150)
+  hosting=$(spend "IONOS SE" "Lastschrift Webhosting Vertrag Oktober" -1000)
+  ambiguous=$(spend "Max Mustermann" "Danke" -2000)
   # Breakfast planned on the coming Saturday, which a capture cancels. Run
   # on a Saturday, "Saturday" may also mean a week later: both are planned,
   # and the capture clears one.
@@ -238,6 +253,14 @@ run_profile() {
   for _ in $(seq 1 120); do
     ideas_job=$(api "$gateway/api/processor/ideas" 2>/dev/null || echo '{}')
     jq -e '.lastRun.trigger == "request" and (.running | not) and (.queued | not)' >/dev/null <<<"$ideas_job" && break
+    sleep 3
+  done
+
+  # The AI categories job checks every 5 minutes: wait until it has looked
+  # at every booked transaction nobody categorized (the seeds and the cash
+  # the captures recorded); up to 8 minutes.
+  for _ in $(seq 1 160); do
+    [ "$(api "$gateway/api/finance/v1/categories/ai/candidates?limit=1" | jq -r '.total')" = 0 ] && break
     sleep 3
   done
 
@@ -448,6 +471,22 @@ run_profile() {
   check ideas_expiring "$([ "$(jq '[.[] | select(any(.ingredients[]; .name | test("h(ä|a)hnchen"; "i")))] | length' <<<"$ideas")" -ge 1 ] && echo 1 || echo 0)" "ideas=$count"
   # The air fryer is the first preferred method: at least 2 ideas use it.
   check ideas_air_fryer "$([ "$(jq '[.[] | select(.methods | index("air_fryer"))] | length' <<<"$ideas")" -ge 2 ] && echo 1 || echo 0)" "methods=$(jq -c 'map(.methods)' <<<"$ideas") run=$(jq -c '.lastRun | {withFirstMethod, fromWeb}' <<<"$ideas_job")"
+  # AI categories: the restaurant in Eating out, the hosting bill in
+  # Subscriptions or Utilities & phone (both fit), both marked as the AI's;
+  # the bare transfer to a person left alone.
+  local categories
+  categories=$(api "$gateway/api/finance/v1/categories")
+  ai_txn() { # ai_txn <id>: the transaction with its category's system key
+    api "$gateway/api/finance/v1/transactions/$1" | jq -c --argjson categories "$categories" \
+      '. as $t | {counterparty, categorizedBy, category: ([$categories.items[] | select(.id == $t.categoryId) | .systemKey][0] // null)}'
+  }
+  local got
+  got=$(ai_txn "$restaurant")
+  check ai_restaurant "$(jq -e '.categorizedBy == "ai" and .category == "eating_out"' <<<"$got" >/dev/null && echo 1 || echo 0)" "$got"
+  got=$(ai_txn "$hosting")
+  check ai_hosting "$(jq -e '.categorizedBy == "ai" and (.category == "subscriptions" or .category == "utilities")' <<<"$got" >/dev/null && echo 1 || echo 0)" "$got"
+  got=$(ai_txn "$ambiguous")
+  check ai_ambiguous_left "$(jq -e '.category == null and .categorizedBy == null' <<<"$got" >/dev/null && echo 1 || echo 0)" "$got"
   check no_extra_recipes "$([ "$(jq '.items | length' <<<"$recipes")" = 3 ] && echo 1 || echo 0)" "recipes=$(jq -c '[.items[].title]' <<<"$recipes") (expected 3)"
   check no_extra_meals "$([ "$(jq '.items | length' <<<"$plan")" = $((1 + ${#saturdays[@]})) ] && echo 1 || echo 0)" "meals=$(jq -c '[.items[] | {date, slot, title}]' <<<"$plan") (expected $((1 + ${#saturdays[@]})))"
   # No fallback or invented entities: ten seeds plus three creates, the

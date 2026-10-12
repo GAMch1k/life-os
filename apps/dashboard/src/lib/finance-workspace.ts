@@ -27,6 +27,7 @@ export type RuleField = Schemas["RuleField"];
 export type RuleOperator = Schemas["RuleOperator"];
 export type ApplyScope = Schemas["ApplyScope"];
 export type ApplyResult = Schemas["ApplyCategoryRulesResult"];
+export type RuleMatch = Schemas["RuleMatch"];
 export type CsvImport = Schemas["CsvImport"];
 export type MonthlySummary = Schemas["MonthlySummary"];
 export type CreateTransactionBody = Schemas["CreateManualTransactionRequest"];
@@ -45,6 +46,8 @@ type TransactionQuery = NonNullable<
 export const TRANSACTIONS_PAGE_SIZE = 50;
 /** The category filter's value for transactions without a category. */
 export const UNCATEGORIZED = "uncategorized";
+/** The category filter's "Chosen by AI": every category the AI chose. */
+export const BY_AI = "by-ai";
 /** A new account's currency when there is no Cash account to copy. */
 export const DEFAULT_CURRENCY = "EUR";
 
@@ -337,7 +340,7 @@ export async function getFinanceWorkspace(
 export type TransactionFilters = {
   q: string;
   accountId: string;
-  /** A category id, UNCATEGORIZED, or "". */
+  /** A category id, UNCATEGORIZED, BY_AI, or "". */
   categoryId: string;
   /** Earliest booking day (YYYY-MM-DD). */
   from: string;
@@ -375,7 +378,8 @@ export function transactionQuery(
   const q = filters.q.trim().slice(0, MAX_QUERY);
   if (q) query.q = q;
   if (filters.accountId) query.accountId = filters.accountId;
-  if (filters.categoryId) query.categoryId = filters.categoryId;
+  if (filters.categoryId === BY_AI) query.categorizedBy = "ai";
+  else if (filters.categoryId) query.categoryId = filters.categoryId;
   const [from, to] =
     filters.from && filters.to && filters.from > filters.to
       ? [filters.to, filters.from]
@@ -488,6 +492,11 @@ export function readOnlyReason(transaction: Transaction) {
         ? "a CSV file"
         : "another source";
   return `Imported from ${from}: only the category and notes can change, and it can't be deleted.`;
+}
+
+/** The AI chose the category shown, and nobody changed it since. */
+export function chosenByAI(transaction: Transaction) {
+  return transaction.categorizedBy === "ai" && transaction.categoryId !== null;
 }
 
 /** The short badge for where an imported transaction came from. */
@@ -926,6 +935,80 @@ export function applyResultText(result: ApplyResult) {
   if (result.cleared) parts.push(`${result.cleared} cleared`);
   parts.push(`${result.unchanged} unchanged`);
   return `Checked ${count(result.examined, "transaction")}: ${parts.join(", ")}.`;
+}
+
+// ---- AI categories ----------------------------------------------------------
+
+/** Shorter names occur inside other words ("dm" in "Admiral"). */
+const MIN_CONTAINS_LETTERS = 5;
+
+/**
+ * The safer rule for a counterparty: "contains" its name, without the
+ * store numbers, dates, and references at the end that change from payment
+ * to payment ("SMYTHS TOYS 0423" → contains "SMYTHS TOYS"); "equals" the
+ * whole counterparty when the name is too short to stand alone ("dm",
+ * "IKEA"), as Finance's own default rules do. Undefined without a
+ * counterparty.
+ */
+export function ruleMatchFor(
+  counterparty: string | null,
+): RuleMatch | undefined {
+  const text = (counterparty ?? "").trim().replace(/\s+/g, " ").slice(0, 200);
+  if (!text) return undefined;
+  const words = text.split(" ");
+  while (words.length > 1 && /\d/.test(words[words.length - 1])) words.pop();
+  const name = words.join(" ");
+  if (name.replace(/[^\p{L}\p{N}]/gu, "").length < MIN_CONTAINS_LETTERS) {
+    return { field: "counterparty", operator: "equals", text };
+  }
+  return { field: "counterparty", operator: "contains", text: name };
+}
+
+/** "Always put Kneipe41 in Eating out?", offered after a correction. */
+export type RuleOffer = {
+  counterparty: string;
+  categoryId: string;
+  categoryName: string;
+  match: RuleMatch;
+};
+
+/**
+ * What to offer after the owner saved a transaction: when they changed a
+ * category the AI chose to another one, a rule for its counterparty, so
+ * the correction sticks. Never when the AI's category stays, the category
+ * was cleared, or there is no counterparty to match.
+ */
+export function ruleOffer(
+  before: Transaction | undefined,
+  after: Transaction,
+  categories: Category[],
+): RuleOffer | undefined {
+  if (!before || !chosenByAI(before) || after.categorizedBy !== "manual")
+    return undefined;
+  if (!after.categoryId || after.categoryId === before.categoryId)
+    return undefined;
+  const match = ruleMatchFor(after.counterparty);
+  const category = categories.find((item) => item.id === after.categoryId);
+  if (!match || !category) return undefined;
+  return {
+    counterparty: after.counterparty!.trim().replace(/\s+/g, " "),
+    categoryId: category.id,
+    categoryName: category.name,
+    match,
+  };
+}
+
+/** The offer as a question. */
+export function ruleOfferText(offer: RuleOffer) {
+  return `Always put “${offer.counterparty}” in ${offer.categoryName}?`;
+}
+
+/**
+ * What creating the offered rule and applying the rules did: the rule, then
+ * what applying changed (every rule's work, as Apply rules says it).
+ */
+export function ruleCreatedText(offer: RuleOffer, result: ApplyResult) {
+  return `Rule created: ${ruleText(offer)} → ${offer.categoryName}. ${applyResultText(result)}`;
 }
 
 /** What a CSV import did, in one line (row errors are listed apart). */

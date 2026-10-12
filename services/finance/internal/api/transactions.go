@@ -28,6 +28,7 @@ const (
 var (
 	transactionStatuses = map[string]bool{"booked": true, "pending": true}
 	sourceKinds         = map[string]bool{"manual": true, "csv": true, "bank": true}
+	categorizers        = map[string]bool{rules.ByManual: true, rules.ByRule: true, rules.ByMCC: true, rules.ByAI: true}
 )
 
 func sourceKind(item store.Transaction) string {
@@ -151,6 +152,13 @@ func (h *Handler) ListTransactions(c fiber.Ctx, params generated.ListTransaction
 			return invalid("source must be manual, csv, or bank")
 		}
 		query.SourceKind = &source
+	}
+	if params.CategorizedBy != nil {
+		by := string(*params.CategorizedBy)
+		if !categorizers[by] {
+			return invalid("categorizedBy must be manual, rule, mcc, or ai")
+		}
+		query.CategorizedBy = &by
 	}
 	if params.Cursor != nil {
 		position, err := decodeCursor(*params.Cursor)
@@ -423,7 +431,8 @@ func (h *Handler) UpdateTransaction(c fiber.Ctx, transactionID types.UUID) error
 			}
 		}
 		if present["categoryId"] {
-			// A choice by hand, also when it clears the category.
+			// A choice by hand, also when it clears the category or takes
+			// over the AI's.
 			next.CategoryID, next.CategoryRuleID, next.CategorizedBy = pgtype.UUID{}, pgtype.UUID{}, pointer("manual")
 			if body.CategoryId != nil {
 				id := pgUUID(*body.CategoryId)
@@ -439,7 +448,7 @@ func (h *Handler) UpdateTransaction(c fiber.Ctx, transactionID types.UUID) error
 			if err != nil {
 				return err
 			}
-			assignment, _ := chooser.Reapply(assignmentOf(before), textWithCode(next.Counterparty, next.Description, next.MerchantCategoryCode))
+			assignment, _ := chooser.Rechoose(assignmentOf(before), textWithCode(next.Counterparty, next.Description, next.MerchantCategoryCode))
 			applyAssignment(&next, assignment)
 		}
 		if changes = transactionChanges(before, next); len(changes) == 0 {

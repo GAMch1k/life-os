@@ -1,6 +1,6 @@
 "use client";
 
-import { Trash2 } from "lucide-react";
+import { Sparkles, Trash2 } from "lucide-react";
 import {
   type FormEvent,
   type ReactNode,
@@ -259,18 +259,19 @@ function TransactionForm({
       ? [accountsById.get(transaction.accountId) as Account]
       : [],
   );
-  // A rule or the card's merchant category code chose the category shown
-  // (until the owner picks another).
+  // A rule, the card's merchant category code, or the AI chose the
+  // category shown (until the owner picks another).
   const chosenBy =
     transaction && draft.categoryId === transaction.categoryId
       ? transaction.categorizedBy
       : null;
-  const ruleChosen = chosenBy === "rule" || chosenBy === "mcc";
+  const autoChosen =
+    chosenBy === "rule" || chosenBy === "mcc" || chosenBy === "ai";
   const categoryField = (
     <Field>
       <FieldLabel htmlFor={`${id}-category`}>Category</FieldLabel>
       <NativeSelect
-        aria-describedby={ruleChosen ? `${id}-category-note` : undefined}
+        aria-describedby={autoChosen ? `${id}-category-note` : undefined}
         className="w-full"
         id={`${id}-category`}
         onChange={(event) => update({ categoryId: event.target.value })}
@@ -290,11 +291,22 @@ function TransactionForm({
           </NativeSelectOptGroup>
         ))}
       </NativeSelect>
-      {ruleChosen ? (
-        <FieldDescription className="text-xs" id={`${id}-category-note`}>
-          {chosenBy === "mcc"
-            ? "Chosen from the card's merchant category code. Picking one here keeps the rules away from it."
-            : "Chosen by a rule. Picking one here keeps the rules away from it."}
+      {autoChosen ? (
+        <FieldDescription
+          className="flex items-start gap-1 text-xs"
+          id={`${id}-category-note`}
+        >
+          {chosenBy === "ai" ? (
+            <>
+              <Sparkles aria-hidden="true" className="mt-0.5 size-3 shrink-0" />
+              Chosen by AI. Pick another category to correct it: it is then
+              yours, and you can make a rule from it.
+            </>
+          ) : chosenBy === "mcc" ? (
+            "Chosen from the card's merchant category code. Picking one here keeps the rules away from it."
+          ) : (
+            "Chosen by a rule. Picking one here keeps the rules away from it."
+          )}
         </FieldDescription>
       ) : null}
     </Field>

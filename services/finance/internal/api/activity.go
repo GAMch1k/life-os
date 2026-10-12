@@ -33,8 +33,12 @@ const (
 	ruleUpdated        = "finance.category_rule.updated"
 	ruleDeleted        = "finance.category_rule.deleted"
 	rulesApplied       = "finance.category_rules.applied"
-	importCompleted    = "finance.import.completed"
-	importFailed       = "finance.import.failed"
+	// The AI's categories: one event per request of choices that
+	// categorized something, with counts per category, never one per
+	// transaction.
+	aiCategoriesApplied = "finance.ai_categories.applied"
+	importCompleted     = "finance.import.completed"
+	importFailed        = "finance.import.failed"
 	// A bank sync is one summary event with its counts, never transaction
 	// details.
 	bankImportCompleted   = "finance.bank_import.completed"
@@ -243,13 +247,36 @@ func (h *Handler) recordRulesApplied(c fiber.Ctx, scope string, counts ruleCount
 		target = "all transactions not categorized by hand"
 	}
 	summary := fmt.Sprintf("Category rules applied to %s: %d categorized", target, counts.Categorized)
-	if scope == "all" {
+	switch {
+	case scope == "all":
 		summary += fmt.Sprintf(", %d recategorized, %d cleared", counts.Recategorized, counts.Cleared)
+	case counts.Recategorized > 0:
+		// Rules replace the AI's categories with scope uncategorized too.
+		summary += fmt.Sprintf(", %d recategorized from the AI's choice", counts.Recategorized)
 	}
 	h.emit(c.Context(), c, activity.Event{ID: googleuuid.New(), Type: rulesApplied,
 		Subject: activity.Subject{Type: "finance_category_rules", ID: "all"}, Summary: summary,
 		Data: map[string]any{"scope": scope, "examined": counts.Examined, "categorized": counts.Categorized,
 			"recategorized": counts.Recategorized, "cleared": counts.Cleared, "unchanged": counts.Unchanged}})
+}
+
+// recordAICategories records one request of AI choices that categorized
+// something: "AI categorized 5 transactions: Eating out 3, Shopping 2 (1
+// left without a category)".
+func (h *Handler) recordAICategories(c fiber.Ctx, applied aiApplied) {
+	categories := categoryCounts(applied.byCategory)
+	parts := make([]string, 0, len(categories))
+	for _, category := range categories {
+		parts = append(parts, fmt.Sprintf("%s %d", activity.Preview(category["name"].(string), 60), category["count"]))
+	}
+	summary := fmt.Sprintf("AI categorized %d %s: %s", applied.categorized, plural(applied.categorized, "transaction"), strings.Join(parts, ", "))
+	if applied.left > 0 {
+		summary += fmt.Sprintf(" (%d left without a category)", applied.left)
+	}
+	h.emit(c.Context(), c, activity.Event{ID: googleuuid.New(), Type: aiCategoriesApplied,
+		Subject: activity.Subject{Type: "finance_ai_categories", ID: "all"}, Summary: summary,
+		Data: map[string]any{"categorized": applied.categorized, "unchanged": applied.unchanged, "left": applied.left, "skipped": applied.skipped,
+			"categories": categories, "transactionIds": applied.transactionIDs}})
 }
 
 func (h *Handler) recordImport(c fiber.Ctx, id googleuuid.UUID, account *store.Account, failed bool, imported, duplicates, failures, categorized int) {

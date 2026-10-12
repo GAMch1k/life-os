@@ -53,6 +53,21 @@ type transactionSearch struct {
 	Cursor     string `json:"cursor,omitempty" jsonschema:"The previous result's nextCursor, with the same filters"`
 }
 
+// aiCandidates asks which transactions the AI may categorize.
+type aiCandidates struct {
+	Limit int `json:"limit,omitempty" jsonschema:"1 to 100 (default 40)"`
+}
+
+// aiChoices are the AI's category choices for a batch of transactions.
+type aiChoices struct {
+	Choices []aiChoice `json:"choices" jsonschema:"1 to 100 choices, each transaction once"`
+}
+
+type aiChoice struct {
+	TransactionID string  `json:"transactionId" jsonschema:"Finance transaction UUID (from finance_list_ai_category_candidates)"`
+	CategoryID    *string `json:"categoryId" jsonschema:"Finance category UUID (from finance_list_categories), or null to leave the transaction without a category"`
+}
+
 var currencyCode = regexp.MustCompile(`^[A-Z]{3}$`)
 
 // addFinanceTools registers the Finance tools. Each is a Finance API
@@ -61,7 +76,7 @@ func addFinanceTools(s *mcp.Server, hc *http.Client, baseURL string, emitter *ac
 	addReadTool(s, hc, "finance_month_summary", "Get the Finance summary of a month (month=YYYY-MM, optional currency and accountId): income, spending, net, the balance now (totalBalance, pending card payments included; totalBookedBalance and totalPending split it), and totals per category", baseURL, "/v1/summaries/monthly?")
 	addReadTool(s, hc, "finance_list_accounts", "List Finance accounts with their balances (the built-in Cash account first; includeArchived=true for archived ones too). balance is the money there is to spend: bookedBalance plus pending, the card payments the bank has not booked yet", baseURL, "/v1/accounts?")
 	addReadTool(s, hc, "finance_list_categories", "List Finance categories (expense, income, transfer)", baseURL, "/v1/categories?")
-	addReadTool(s, hc, "finance_find_transactions", "List Finance transactions with a raw URL query (q, accountId, categoryId, from, to, direction, amountMin, amountMax, status, source, limit, cursor); prefer finance_search_transactions", baseURL, "/v1/transactions?")
+	addReadTool(s, hc, "finance_find_transactions", "List Finance transactions with a raw URL query (q, accountId, categoryId, from, to, direction, amountMin, amountMax, status, source, categorizedBy, limit, cursor); prefer finance_search_transactions", baseURL, "/v1/transactions?")
 	mcp.AddTool(s, &mcp.Tool{Name: "finance_search_transactions", Description: "Search Finance transactions by words in their counterparty, description, or notes, and filter by account, category, dates, direction, amount, status, or source; newest first"}, func(ctx context.Context, req *mcp.CallToolRequest, in transactionSearch) (*mcp.CallToolResult, Output, error) {
 		query, err := searchQuery(in)
 		if err != nil {
@@ -75,6 +90,32 @@ func addFinanceTools(s *mcp.Server, hc *http.Client, baseURL string, emitter *ac
 		}
 		out, err := output(body)
 		return nil, out, err
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "finance_list_ai_category_candidates", Description: "List the Finance transactions the AI may categorize: booked, without a category nobody chose, and not looked at since their text changed, latest first, with how many there are (total) and the owner's latest choices by hand per counterparty as examples"}, func(ctx context.Context, req *mcp.CallToolRequest, in aiCandidates) (*mcp.CallToolResult, Output, error) {
+		limit := in.Limit
+		if limit == 0 {
+			limit = 40
+		}
+		if limit < 1 || limit > 100 {
+			return nil, Output{}, errors.New("limit must be between 1 and 100")
+		}
+		headers := http.Header{}
+		traceOf(req).Apply(headers)
+		body, err := coreclient.Client{BaseURL: baseURL, HTTP: hc}.DoWithHeaders(ctx, http.MethodGet, "/v1/categories/ai/candidates?limit="+strconv.Itoa(limit), nil, headers)
+		if err != nil {
+			return nil, Output{}, err
+		}
+		out, err := output(body)
+		return nil, out, err
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "finance_set_ai_categories", Description: "Give Finance transactions the AI's categories (categorizedBy ai), or with categoryId null note that the AI left one without a category. A choice applies only while no one else chose: a choice by hand, a rule, or a merchant category code wins, and rules replace the AI's choice later. Money out goes only to expense or transfer categories, money in only to income or transfer categories. Answers each choice's outcome"}, func(ctx context.Context, req *mcp.CallToolRequest, in aiChoices) (*mcp.CallToolResult, Output, error) {
+		return audited(ctx, emitter, req, "finance_set_ai_categories", in, func(trace activity.Trace) (*mcp.CallToolResult, Output, error) {
+			body, err := aiChoicesBody(in)
+			if err != nil {
+				return nil, Output{}, err
+			}
+			return post(ctx, hc, trace, baseURL, "/v1/categories/ai/choices", body)
+		})
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "finance_create_manual_transaction", Description: "Record a manual Finance transaction. Only the amount (signed minor units and currency) is required: without accountId it goes to the built-in Cash account, so \"spent 12 euros at the bakery\" is {amount: {amount: -1200, currency: EUR}, counterparty: Bäckerei}; without occurredOn it is dated today in the owner's timezone; without categoryId the category rules choose"}, func(ctx context.Context, req *mcp.CallToolRequest, in financeAction) (*mcp.CallToolResult, Output, error) {
 		return audited(ctx, emitter, req, "finance_create_manual_transaction", in, func(trace activity.Trace) (*mcp.CallToolResult, Output, error) {
@@ -121,6 +162,31 @@ func transactionBody(in financeAction) (map[string]any, error) {
 		}
 	}
 	return body, nil
+}
+
+// aiChoicesBody is the Finance body for the AI's choices, checked before
+// Finance is called: 1 to 100 choices with UUIDs.
+func aiChoicesBody(in aiChoices) (map[string]any, error) {
+	if len(in.Choices) == 0 || len(in.Choices) > 100 {
+		return nil, errors.New("choices must have 1 to 100 choices")
+	}
+	choices := make([]map[string]any, 0, len(in.Choices))
+	for _, choice := range in.Choices {
+		transaction, err := uuid.Parse(strings.TrimSpace(choice.TransactionID))
+		if err != nil {
+			return nil, errors.New("transactionId must be a Finance transaction UUID")
+		}
+		entry := map[string]any{"transactionId": transaction.String(), "categoryId": nil}
+		if choice.CategoryID != nil && strings.TrimSpace(*choice.CategoryID) != "" {
+			category, err := uuid.Parse(strings.TrimSpace(*choice.CategoryID))
+			if err != nil {
+				return nil, errors.New("categoryId must be a Finance category UUID or null")
+			}
+			entry["categoryId"] = category.String()
+		}
+		choices = append(choices, entry)
+	}
+	return map[string]any{"choices": choices}, nil
 }
 
 // searchQuery is the Finance list query for a search, checked so a caller

@@ -89,7 +89,8 @@ combine: `q` (every word, case-insensitive, must occur in the counterparty,
 description, or notes; at most 10 words), `accountId`, `categoryId` (an id or
 `uncategorized`), `from`/`to` (booking dates, inclusive), `direction` (`in` or
 `out`), `amountMin`/`amountMax` (absolute minor units: 1250 matches −12.50 and
-12.50), `status`, and `source`. Paging is by keyset cursor: with more matches
+12.50), `status`, `source`, and `categorizedBy` (`manual`, `rule`, `mcc`, or
+`ai`: who chose the category). Paging is by keyset cursor: with more matches
 than `limit` (1–100, default 50) the response has `nextCursor`, passed back as
 `cursor` with the same filters; a malformed cursor is 400 `invalid_cursor`.
 
@@ -124,9 +125,15 @@ transactions keep it, but it cannot be given to transactions or rules any more
 (409 `category_archived`) and its rules are skipped; `archived: false` restores
 it.
 
-Categories are chosen by hand, by **rules**, or for a card payment no rule
-matches by its **merchant category code** (the owner decided against AI
-categorization for now). A rule (`/v1/categories/rules`) gives a
+Categories are chosen by hand, by **rules**, for a card payment no rule
+matches by its **merchant category code**, and for what is still left by the
+**AI** (see [AI categories](#ai-categories)). The owner had decided against AI
+categorization; on 2026-10-12, after the first Deutsche Bank sync left 179 of
+182 transactions without a category (Deutsche Bank sends no merchant category
+codes, and merchants such as Kneipe41, IONOS, or IKEA match no default rule),
+they chose "AI fills the gaps": rules first, the AI for the rest, and their own
+corrections always win. Who chose ranks: by hand, then a rule, then a code,
+then the AI. A rule (`/v1/categories/rules`) gives a
 category when its `match` fits: `field` `counterparty`, `description`, or
 `any` (either), `operator` `contains` or `equals`, and `text`, compared
 case-insensitively, ignoring surrounding and repeated spaces; for example
@@ -151,17 +158,29 @@ priority comes after the owner's existing ones (the highest priority below
   integration puts into the counterparty (see
   [Banking](banking.md#mapping-to-finances-bank-import)).
 - A category chosen by hand (`categorizedBy: manual`: set in the Dashboard, by
-  the AI, or by the import file, also when cleared with `null`) is never
-  changed by a rule.
+  an agent that records a transaction with one, or by the import file, also
+  when cleared with `null`) is never changed by a rule or the AI. Setting a
+  category over the AI's is a choice by hand too.
+- A category the AI chose (`categorizedBy: ai`) gives way to a rule or a code
+  whenever they apply and match, and otherwise stays.
 - When the counterparty or description of a transaction whose category was not
   chosen by hand changes (an edit or a bank re-sync, also when the bank's code
-  changes), the rules and the code choose again.
+  changes), the rules and the code choose again. An AI choice they do not
+  replace is removed, since the AI chose it from the old text, and the AI
+  looks at the transaction again.
 - `POST /v1/categories/rules/apply` re-applies the rules to existing
   transactions: `{"scope": "uncategorized"}` (the default) to those without a
-  category, `{"scope": "all"}` also to every transaction a rule categorized,
-  which may get another category (`recategorized`) or none when no rule matches
-  any more (`cleared`). It applies the merchant category code fallback too, and
-  scope `all` re-checks what a code chose. It answers `examined`, `categorized`, `recategorized`,
+  category and to those the AI categorized, `{"scope": "all"}` also to every
+  transaction a rule categorized, which may get another category
+  (`recategorized`) or none when no rule matches any more (`cleared`). It
+  applies the merchant category code fallback too, and scope `all` re-checks
+  what a code chose. A rule or code that matches replaces an AI choice
+  (`recategorized`) with either scope; an AI choice nothing matches stays.
+  Scope `uncategorized` takes the AI's choices because they are gap fillers,
+  ranked below every rule: when the owner makes a rule ("Kneipe41 → Eating
+  out") and applies it, the other Kneipe41 transactions the AI put elsewhere
+  follow it, without scope `all` re-checking (and possibly clearing) what
+  older rules chose. It answers `examined`, `categorized`, `recategorized`,
   `cleared`, and `unchanged`. Deleting a rule leaves its categories in place
   until the rules are applied with scope `all`.
 
@@ -191,6 +210,45 @@ not used. A default rule is skipped when the owner already has a rule with
 the same match, or when its category was skipped. A deleted default rule does
 not come back. The rules apply to new transactions; **Apply rules** applies
 them to existing ones.
+
+### AI categories
+
+The AI fills the gaps the rules leave (P13-08). It runs as a job of the Inbox
+processor, which reads and writes through MCP like every agent (see
+[MCP](mcp.md#ai-categories)); Finance only offers the two operations and
+guards what the AI may change.
+
+- **Candidates.** `GET /v1/categories/ai/candidates?limit=N` (1–100, default
+  40) lists booked transactions of active accounts without a category that
+  nobody chose (a category cleared by hand stays cleared), which the AI has
+  not looked at since their counterparty or description last changed, latest
+  first, with `total` (all of them; a count is cheap, so the job polls it).
+  Pending transactions are left out: their text is often incomplete. Each
+  candidate has only what the AI needs: `id`, `accountKind`, `amount`,
+  `bookingDate`, `counterparty`, and `description` (no notes, account names,
+  or bank references). `examples` are the owner's latest choice by hand per
+  counterparty (compared without case or repeated spaces), at most 50, latest
+  first, in categories that are not archived, so the AI learns their taste.
+- **Choices.** `POST /v1/categories/ai/choices` takes `choices` (1–100, each
+  transaction once: `transactionId` and `categoryId`, or `null` for none) and
+  applies them in one database transaction, the rows locked while they are
+  checked. A choice gives the category with `categorizedBy: ai`; `null` notes
+  that the AI looked and left the transaction without one, so it is not a
+  candidate again until its text changes. Each choice is answered with its
+  `outcome`: `categorized`, `unchanged` (it already had the AI's category),
+  `left`, or `skipped` with a `reason`: `chosen` (a choice by hand, also of
+  none, a rule, or a code: what landed meanwhile wins), `not_found`,
+  `unknown_category`, `category_archived`, or `kind_mismatch` (money out only
+  to expense or transfer categories, money in only to income or transfer
+  categories). It is for the AI and Life OS components: the owner (`user`) is
+  refused with 403 `actor_not_allowed`, since the owner's own choice is a
+  `PATCH` of the transaction and counts as by hand.
+- **Why an endpoint, not a precondition on PATCH.** A `PATCH` is the owner's
+  edit: it records one `finance.transaction.updated` per transaction and
+  makes the choice `manual`. The AI chooses for up to 40 transactions at a
+  time, needs a guard ("only while no one else chose") rather than a plain
+  write, and must leave a trace of what it skipped; one batch operation gives
+  it all of that atomically, with one Activity event per batch.
 
 ## CSV import
 
@@ -499,7 +557,8 @@ tool) and tied to its correlation and causation:
 | `finance.transaction.created` / `.updated` / `.deleted` | `finance_transaction` | "Spent €12.00 at Bäckerei (Cash)", "Transaction “ACME GmbH” (€2,500.00, Cash) updated: status, notes" |
 | `finance.category.created` / `.updated` / `.archived` / `.restored` | `finance_category` | "Category “Groceries” created (expense)" |
 | `finance.category_rule.created` / `.updated` / `.deleted` | `finance_category_rule` | "Category rule created: counterparty contains “REWE” → Groceries" |
-| `finance.category_rules.applied` | `finance_category_rules` | "Category rules applied to uncategorized transactions: 12 categorized" |
+| `finance.category_rules.applied` | `finance_category_rules` | "Category rules applied to uncategorized transactions: 12 categorized", with ", 3 recategorized from the AI's choice" when rules replaced AI choices |
+| `finance.ai_categories.applied` | `finance_ai_categories` | "AI categorized 31 transactions: Eating out 12, Shopping 9, Subscriptions 4, Groceries 3, Transport 3 (9 left without a category)", by the AI (`agent:codex-finance-categories`); one per batch of choices that categorized something, `data` with the counts (`categorized`, `unchanged`, `left`, `skipped`), `categories` (name and count), and the categorized `transactionIds` |
 | `finance.import.completed` / `.failed` | `finance_import` | "Imported 12 transactions into Girokonto (3 duplicates, 1 failed)" |
 | `finance.bank_import.completed` | `finance_bank_connection` | "Deutsche Bank sync: 5 new, 1 updated, 2 pending removed (2 accounts)" |
 | `finance.bank_connection.removed` | `finance_bank_connection` | "Bank connection to Deutsche Bank removed: 2 accounts archived" |
@@ -551,7 +610,12 @@ set) with `subscription_transactions`, the one-row `finance_settings` with
 the defaults above, the `alert_notifications` claims, and
 `low_balance_states` (each account's episode); existing rows are unchanged.
 Its rollback drops those tables and keeps every transaction, account, and
-category.
+category. `000008_ai_categories` adds the `ai` value of `categorized_by`,
+`ai_reviewed_at` (when the AI last looked at a transaction; a new
+counterparty or description clears it), and a partial index on the AI's
+candidates; existing rows are unchanged. Its rollback keeps every category:
+an AI choice counts as a rule's (so applying the rules with scope `all`
+re-checks it), and when the AI looked is forgotten.
 
 Configuration: `DATABASE_URL`, `ACTIVITY_SERVICE_URL`, `LIFE_OS_TIMEZONE`
 (unset or unknown means UTC, logged at startup; budget months and the summary

@@ -88,6 +88,10 @@ func main() {
 		// owner's request, through the same Codex runtime and MCP.
 		ideas := &processor.IdeasJob{Generator: monitor.MonitoredIdeas(planner), Tools: &processor.MCPClient{URL: cfg.MCPURL}, TimeZone: cfg.TimeZone, DailyAt: cfg.IdeasAt, WebSearch: cfg.IdeasWebSearch, OnStatus: monitor.SetIdeas, Logf: func(format string, args ...any) { fmt.Fprintf(os.Stderr, format+"\n", args...) }}
 		go ideas.Loop(ctx)
+		// The AI's categories for the transactions Finance's rules leave
+		// without one, polled every few minutes, through the same runtime.
+		categories := &processor.CategoriesJob{Chooser: monitor.MonitoredCategories(planner), Tools: &processor.MCPClient{URL: cfg.MCPURL}, Enabled: cfg.CategoriesEnabled, TimeZone: cfg.TimeZone, Retry: runner.Retry, OnStatus: monitor.SetCategories, Logf: func(format string, args ...any) { fmt.Fprintf(os.Stderr, format+"\n", args...) }}
+		go categories.Loop(ctx)
 		service := &processor.Service{Run: func(ctx context.Context) error {
 			_, err := runner.Run(ctx)
 			if ctx.Err() == nil {

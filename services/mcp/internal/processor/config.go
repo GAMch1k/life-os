@@ -40,6 +40,9 @@ type Config struct {
 	// (LIFE_OS_IDEAS_WEB_SEARCH: disabled, the default, cached, or live).
 	// Capture planning never searches.
 	IdeasWebSearch string
+	// CategoriesEnabled switches the AI categories job
+	// (LIFE_OS_AI_CATEGORIES: on, the default, or off).
+	CategoriesEnabled bool
 	// Warnings are non-fatal configuration problems to log at startup.
 	Warnings []string
 }
@@ -88,6 +91,13 @@ func LoadConfig() (Config, error) {
 	c.IdeasWebSearch = env("LIFE_OS_IDEAS_WEB_SEARCH", WebSearchDisabled)
 	if c.IdeasWebSearch != WebSearchDisabled && c.IdeasWebSearch != WebSearchCached && c.IdeasWebSearch != WebSearchLive {
 		return c, fmt.Errorf("LIFE_OS_IDEAS_WEB_SEARCH must be disabled, cached, or live")
+	}
+	switch strings.ToLower(strings.TrimSpace(env("LIFE_OS_AI_CATEGORIES", "on"))) {
+	case "on", "true", "1":
+		c.CategoriesEnabled = true
+	case "off", "false", "0":
+	default:
+		return c, fmt.Errorf("LIFE_OS_AI_CATEGORIES must be on or off")
 	}
 	return c, nil
 }

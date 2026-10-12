@@ -314,7 +314,8 @@ func (h *Handler) ImportBankSync(c fiber.Ctx) error {
 // updateBankTransaction applies a re-synced transaction's bank fields; the
 // owner's category and notes stay, and a category not chosen by hand
 // follows the rules (and the merchant category code) when the text or the
-// code changed. It reports whether anything changed.
+// code changed: an AI choice they do not replace is dropped, so the AI
+// looks at the new text. It reports whether anything changed.
 func (h *Handler) updateBankTransaction(c fiber.Ctx, q *store.Queries, chooser rules.Categorizer, before store.Transaction, account store.Account, item generated.BankTransactionInput) (bool, error) {
 	next := before
 	next.AccountID, next.AmountMinor, next.Currency = account.ID, item.Amount.Amount, item.Amount.Currency
@@ -323,7 +324,7 @@ func (h *Handler) updateBankTransaction(c fiber.Ctx, q *store.Queries, chooser r
 	next.MerchantCategoryCode, next.BankReference = item.MerchantCategoryCode, item.BankReference
 	if (next.CategorizedBy == nil || *next.CategorizedBy != "manual") &&
 		(!sameText(before.Counterparty, next.Counterparty) || !sameText(before.Description, next.Description) || !sameText(before.MerchantCategoryCode, next.MerchantCategoryCode)) {
-		assignment, _ := chooser.Reapply(assignmentOf(before), textWithCode(next.Counterparty, next.Description, next.MerchantCategoryCode))
+		assignment, _ := chooser.Rechoose(assignmentOf(before), textWithCode(next.Counterparty, next.Description, next.MerchantCategoryCode))
 		applyAssignment(&next, assignment)
 	}
 	if len(transactionChanges(before, next)) == 0 && sameText(before.MerchantCategoryCode, next.MerchantCategoryCode) && sameText(before.BankReference, next.BankReference) {

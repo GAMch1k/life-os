@@ -96,7 +96,7 @@ export interface paths {
         head?: never;
         /**
          * Update a transaction
-         * @description Changes only the fields present; `null` clears a nullable field. A manual transaction takes every field; an imported one (`readOnly`) only `categoryId` and `notes`, and naming any other field returns 409 `managed_by_source`. Setting `categoryId`, or clearing it with null, is a choice by hand that rules leave alone from then on. When the counterparty or description of a transaction whose category was not chosen by hand changes, the rules choose again.
+         * @description Changes only the fields present; `null` clears a nullable field. A manual transaction takes every field; an imported one (`readOnly`) only `categoryId` and `notes`, and naming any other field returns 409 `managed_by_source`. Setting `categoryId`, or clearing it with null, is a choice by hand that rules and the AI leave alone from then on, also over a category the AI chose. When the counterparty or description of a transaction whose category was not chosen by hand changes, the rules choose again; a category the AI chose that no rule replaces is removed, so the AI looks at the new text.
          */
         patch: operations["updateTransaction"];
         trace?: never;
@@ -201,9 +201,49 @@ export interface paths {
         put?: never;
         /**
          * Apply the category rules to existing transactions
-         * @description `uncategorized` (the default) gives a category to transactions that have none and whose category was not chosen by hand. `all` also re-evaluates every transaction a rule categorized: it may get another category, or none when no rule matches any more. Categories chosen by hand are never changed. Returns the counts.
+         * @description `uncategorized` (the default) gives a category to transactions that have none and whose category was not chosen by hand, and lets a rule or a merchant category code replace a category the AI chose (the AI's choice stays when none matches). `all` also re-evaluates every transaction a rule or a code categorized: it may get another category, or none when no rule matches any more. Categories chosen by hand are never changed. Returns the counts.
          */
         post: operations["applyCategoryRules"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/categories/ai/candidates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the transactions the AI may categorize
+         * @description The AI fills the gaps the rules leave. Its candidates are booked transactions of active accounts without a category that nobody chose (a category cleared by hand stays cleared), which the AI has not looked at since their counterparty or description last changed, latest first, at most `limit`; `total` counts them all. Pending transactions are left out: their text is often incomplete. `examples` are the owner's latest choice by hand per counterparty (at most 50, latest first, in categories that are not archived), so the AI learns their taste. The AI answers with `POST /v1/categories/ai/choices`.
+         */
+        get: operations["listAiCategoryCandidates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/categories/ai/choices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Apply the AI's category choices
+         * @description For the AI and Life OS components, never the owner (403 `actor_not_allowed`: the owner sets a category with `PATCH /v1/transactions/{transactionId}`). Each choice gives a transaction the AI's category (`categorizedBy: ai`), or with `categoryId` null notes that the AI looked at it and left it without one, so it is not a candidate again until its text changes. A choice applies only while the transaction has no category that someone or something else chose: a choice by hand, a rule, or a merchant category code that landed meanwhile wins, and the choice is `skipped` with reason `chosen`. Money out goes only to expense or transfer categories and money in only to income or transfer categories (`kind_mismatch`); an unknown or archived category is `unknown_category` or `category_archived`, and an unknown transaction `not_found`. The choices apply in one database transaction, and each is answered with its outcome: `categorized`, `unchanged` (it already had this category from the AI), `left` (no category), or `skipped`. Activity records one `finance.ai_categories.applied` event per request that categorized something.
+         */
+        post: operations["applyAiCategoryChoices"];
         delete?: never;
         options?: never;
         head?: never;
@@ -585,7 +625,7 @@ export interface components {
             /** @description Identity at the source: the CSV external_id (or a content hash), or the bank transaction id. */
             externalId: string | null;
         };
-        /** @description `categorizedBy` is `manual` when the category was chosen by hand (by the owner, the AI, or the import file; possibly none), `rule` when a category rule chose it (`categoryRuleId` names the rule), `mcc` when no rule matched and the card's merchant category code gave a default category, and null while nobody chose. `readOnly` is true for imported transactions: only `categoryId` and `notes` change, and they cannot be deleted. */
+        /** @description `categorizedBy` is `manual` when the category was chosen by hand (by the owner, an agent recording a transaction, or the import file; possibly none), `rule` when a category rule chose it (`categoryRuleId` names the rule), `mcc` when no rule matched and the card's merchant category code gave a default category, `ai` when the AI filled the gap (see `/v1/categories/ai/choices`), and null while nobody chose. `readOnly` is true for imported transactions: only `categoryId` and `notes` change, and they cannot be deleted. */
         Transaction: {
             /** Format: uuid */
             id: string;
@@ -606,7 +646,7 @@ export interface components {
             /** Format: uuid */
             categoryId: string | null;
             /** @enum {string|null} */
-            categorizedBy: "manual" | "rule" | "mcc" | null;
+            categorizedBy: "manual" | "rule" | "mcc" | "ai" | null;
             /** Format: uuid */
             categoryRuleId: string | null;
             /** @description The card merchant category code (ISO 18245) a bank reported. */
@@ -741,7 +781,7 @@ export interface components {
         ApplyCategoryRulesRequest: {
             scope?: components["schemas"]["ApplyScope"];
         };
-        /** @description `examined`: transactions the rules were tried on. `categorized`: had no category and got one. `recategorized`: a rule's category was replaced by another rule's. `cleared`: a rule's category was removed because no rule matches any more (scope all). `unchanged`: the rest. */
+        /** @description `examined`: transactions the rules were tried on. `categorized`: had no category and got one. `recategorized`: a rule's or the AI's category was replaced by another rule's (or a code's). `cleared`: a rule's category was removed because no rule matches any more (scope all). `unchanged`: the rest. */
         ApplyCategoryRulesResult: {
             scope: components["schemas"]["ApplyScope"];
             examined: number;
@@ -749,6 +789,61 @@ export interface components {
             recategorized: number;
             cleared: number;
             unchanged: number;
+        };
+        /** @description What the AI is told about a transaction: no notes, account names, or bank references. */
+        AiCategoryCandidate: {
+            /** Format: uuid */
+            id: string;
+            accountKind: components["schemas"]["AccountKind"];
+            amount: components["schemas"]["Money"];
+            /** Format: date */
+            bookingDate: string;
+            counterparty: string | null;
+            description: string | null;
+        };
+        /** @description The category the owner last chose by hand for a counterparty. */
+        AiCategoryExample: {
+            counterparty: string;
+            /** Format: uuid */
+            categoryId: string;
+        };
+        AiCategoryCandidates: {
+            /** @description Every candidate; items holds at most limit of them. */
+            total: number;
+            items: components["schemas"]["AiCategoryCandidate"][];
+            examples: components["schemas"]["AiCategoryExample"][];
+        };
+        AiCategoryChoice: {
+            /** Format: uuid */
+            transactionId: string;
+            /**
+             * Format: uuid
+             * @description The AI's category; null leaves the transaction without one.
+             */
+            categoryId: string | null;
+        };
+        AiCategoryChoicesRequest: {
+            choices: components["schemas"]["AiCategoryChoice"][];
+        };
+        /** @enum {string} */
+        AiCategoryOutcome: "categorized" | "unchanged" | "left" | "skipped";
+        /**
+         * @description `chosen`: a choice by hand, a rule, or a merchant category code gave it a category meanwhile (or cleared it by hand). `not_found`: no such transaction. `unknown_category`, `category_archived`: the category cannot be given. `kind_mismatch`: money out to an income category, or money in to an expense category.
+         * @enum {string}
+         */
+        AiCategorySkipReason: "chosen" | "not_found" | "unknown_category" | "category_archived" | "kind_mismatch";
+        AiCategoryChoiceResult: {
+            /** Format: uuid */
+            transactionId: string;
+            outcome: components["schemas"]["AiCategoryOutcome"];
+            reason?: components["schemas"]["AiCategorySkipReason"];
+        };
+        AiCategoryChoicesResult: {
+            categorized: number;
+            unchanged: number;
+            left: number;
+            skipped: number;
+            results: components["schemas"]["AiCategoryChoiceResult"][];
         };
         SpendingByCategory: {
             /** Format: uuid */
@@ -1313,6 +1408,8 @@ export interface operations {
                 amountMax?: number;
                 status?: components["schemas"]["TransactionStatus"];
                 source?: components["schemas"]["TransactionSourceKind"];
+                /** @description Who chose the category: `manual`, `rule`, `mcc`, or `ai` (such as `ai` for the categories the AI chose). */
+                categorizedBy?: "manual" | "rule" | "mcc" | "ai";
                 /** @description The previous page's nextCursor. Opaque; only valid with the filters it was returned for. */
                 cursor?: string;
                 limit?: number;
@@ -1837,6 +1934,79 @@ export interface operations {
             };
             /** @description Invalid request (`invalid_request`), or no valid X-Life-OS-Actor (`actor_required`) */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    listAiCategoryCandidates: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Candidates */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiCategoryCandidates"];
+                };
+            };
+            /** @description Invalid request (`invalid_request`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    applyAiCategoryChoices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AiCategoryChoicesRequest"];
+            };
+        };
+        responses: {
+            /** @description Outcomes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiCategoryChoicesResult"];
+                };
+            };
+            /** @description Invalid request (`invalid_request`, such as no choices, more than 100, or one transaction twice), or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The owner does not choose as the AI (`actor_not_allowed`) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

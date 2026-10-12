@@ -312,3 +312,42 @@ func TestSubscriptionsMigrationRollsBackAndForwardKeepingTransactions(t *testing
 	}
 	testdb.Apply(t, pool, testdb.Migration(t, "000007", "up"))
 }
+
+func TestAICategoriesMigrationRollsBackAndForwardKeepingCategories(t *testing.T) {
+	pool := testdb.Open(t, "000007")
+	ctx := context.Background()
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := pool.Exec(ctx, sql, args...); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	exec(`INSERT INTO accounts (name, currency, kind) VALUES ('Giro', 'EUR', 'bank')`)
+	exec(`INSERT INTO financial_categories (name, kind) VALUES ('Eating out', 'expense')`)
+	exec(`INSERT INTO transactions (account_id, amount_minor, currency, occurred_on, counterparty)
+	      SELECT id, -2350, 'EUR', '2026-10-05', 'Kneipe41' FROM accounts`)
+	// Before 000008 the AI is no categorizer.
+	if _, err := pool.Exec(ctx, `UPDATE transactions SET categorized_by = 'ai'`); err == nil {
+		t.Fatal("categorized_by ai was accepted before 000008")
+	}
+
+	testdb.Apply(t, pool, testdb.Migration(t, "000008", "up"))
+	exec(`UPDATE transactions SET category_id = (SELECT id FROM financial_categories), categorized_by = 'ai', ai_reviewed_at = now()`)
+	if _, err := pool.Exec(ctx, `UPDATE transactions SET categorized_by = 'robot'`); err == nil {
+		t.Fatal("an unknown categorizer was accepted")
+	}
+
+	testdb.Apply(t, pool, testdb.Migration(t, "000008", "down"))
+	var categorizedBy, category string
+	if err := pool.QueryRow(ctx, `SELECT t.categorized_by, c.name FROM transactions t JOIN financial_categories c ON c.id = t.category_id`).Scan(&categorizedBy, &category); err != nil ||
+		categorizedBy != "rule" || category != "Eating out" {
+		t.Fatalf("after rollback: %q %q %v", categorizedBy, category, err)
+	}
+	var columns int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'transactions' AND column_name = 'ai_reviewed_at'`).Scan(&columns); err != nil || columns != 0 {
+		t.Fatalf("ai_reviewed_at after rollback: %d %v", columns, err)
+	}
+
+	testdb.Apply(t, pool, testdb.Migration(t, "000008", "up"))
+	exec(`UPDATE transactions SET categorized_by = 'ai', ai_reviewed_at = now()`)
+}

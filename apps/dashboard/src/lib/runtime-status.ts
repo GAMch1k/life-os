@@ -139,6 +139,27 @@ export type ProcessorStatus = {
       error?: string;
     } | null;
   };
+  /** The AI categories job (see docs/services/mcp.md#ai-categories). */
+  categories?: {
+    enabled: boolean;
+    running: boolean;
+    nextRunAt: string | null;
+    /** Transactions waiting at the last check; null before it. */
+    waiting: number | null;
+    lastCheckAt: string | null;
+    batchesToday: number;
+    lastRun: {
+      finishedAt: string;
+      examined: number;
+      categorized: number;
+      skipped: number;
+      unsure: number;
+      rejected: number;
+      chosenMeanwhile: number;
+      outcome: string;
+      error?: string;
+    } | null;
+  };
   /** Account usage as reported by the Codex CLI (see docs/services/mcp.md). */
   usage?: {
     current: CodexUsage | null;
@@ -247,6 +268,56 @@ export function ideasFacts(
       value: ideas.nextRunAt
         ? formatTime(ideas.nextRunAt, timeZone)
         : "only when asked for",
+    },
+  ];
+}
+
+/**
+ * The AI categories job in two facts: what its last batch did, and when it
+ * checks next with how many transactions wait.
+ */
+export function categoriesFacts(
+  categories: ProcessorStatus["categories"],
+  timeZone: string = DEFAULT_TIME_ZONE,
+) {
+  if (!categories) return [];
+  if (!categories.enabled)
+    return [{ label: "AI categories", value: "off (LIFE_OS_AI_CATEGORIES)" }];
+  const run = categories.lastRun;
+  const skipped = run
+    ? [
+        ...(run.unsure ? [`${run.unsure} unsure`] : []),
+        ...(run.rejected ? [`${run.rejected} rejected`] : []),
+        ...(run.chosenMeanwhile
+          ? [`${run.chosenMeanwhile} chosen meanwhile`]
+          : []),
+      ]
+    : [];
+  const result = run
+    ? run.outcome === "failed"
+      ? `failed${run.error ? `: ${run.error}` : ""}`
+      : `${run.categorized} categorized, ${run.skipped} skipped${skipped.length ? ` (${skipped.join(", ")})` : ""}`
+    : "";
+  const waiting =
+    categories.waiting === null
+      ? ""
+      : categories.waiting === 0
+        ? ", nothing waiting"
+        : `, ${categories.waiting} waiting`;
+  return [
+    {
+      label: "AI categories",
+      value: categories.running
+        ? "categorizing now"
+        : run
+          ? `${result}, ${formatTime(run.finishedAt, timeZone)}`
+          : "nothing categorized since the processor started",
+    },
+    {
+      label: "Next AI categories",
+      value: categories.nextRunAt
+        ? `${formatTime(categories.nextRunAt, timeZone)}${waiting}`
+        : "not scheduled",
     },
   ];
 }
@@ -531,6 +602,7 @@ function processingCheck(
     },
     ...runtimeFacts(processor.runtime, timeZone),
     ...ideasFacts(processor.ideas, timeZone),
+    ...categoriesFacts(processor.categories, timeZone),
     ...usageFacts(processor.usage, timeZone),
   ];
   if (poll.lastError) {

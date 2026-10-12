@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Life OS Finance API
-  version: 1.4.0
+  version: 1.5.0
   description: >-
     Every write (POST, PUT, PATCH, DELETE) must say who makes it in the
     X-Life-OS-Actor header: `user` (the owner), `agent:<name>` (the Life OS
@@ -46,10 +46,13 @@ info:
     without a category, and `POST /v1/categories/rules/apply` re-applies them.
     A category chosen by hand is never changed by a rule. A bank card
     transaction no rule matches gets a default category from its merchant
-    category code (`categorizedBy: mcc`). Finance adds default categories
-    (Groceries, Transport, Savings, and so on, marked with a `systemKey`) and
-    default merchant rules once; the owner can rename, change, or delete
-    them, and rules the owner adds are tried first.
+    category code (`categorizedBy: mcc`). The AI fills the gaps that are
+    left (`categorizedBy: ai`, `/v1/categories/ai`): a rule or a code
+    replaces its choice, and a choice by hand always wins. Finance adds
+    default categories (Groceries, Transport, Savings, and so on, marked
+    with a `systemKey`) and default merchant rules once; the owner can
+    rename, change, or delete them, and rules the owner adds are tried
+    first.
 
 
     Monthly budgets (`/v1/budgets/{month}`) plan the month: expected income,
@@ -152,6 +155,7 @@ paths:
         - {name: amountMax, in: query, description: Largest absolute amount in minor units., schema: {type: integer, format: int64, minimum: 0}}
         - {name: status, in: query, schema: {$ref: '#/components/schemas/TransactionStatus'}}
         - {name: source, in: query, schema: {$ref: '#/components/schemas/TransactionSourceKind'}}
+        - {name: categorizedBy, in: query, description: 'Who chose the category: `manual`, `rule`, `mcc`, or `ai` (such as `ai` for the categories the AI chose).', schema: {type: string, enum: [manual, rule, mcc, ai]}}
         - {name: cursor, in: query, description: The previous page's nextCursor. Opaque; only valid with the filters it was returned for., schema: {type: string}}
         - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}
       responses:
@@ -192,9 +196,11 @@ paths:
         manual transaction takes every field; an imported one (`readOnly`)
         only `categoryId` and `notes`, and naming any other field returns 409
         `managed_by_source`. Setting `categoryId`, or clearing it with null,
-        is a choice by hand that rules leave alone from then on. When the
-        counterparty or description of a transaction whose category was not
-        chosen by hand changes, the rules choose again.
+        is a choice by hand that rules and the AI leave alone from then on,
+        also over a category the AI chose. When the counterparty or
+        description of a transaction whose category was not chosen by hand
+        changes, the rules choose again; a category the AI chose that no
+        rule replaces is removed, so the AI looks at the new text.
       operationId: updateTransaction
       security: []
       parameters: [{$ref: '#/components/parameters/TransactionId'}]
@@ -303,8 +309,10 @@ paths:
       summary: Apply the category rules to existing transactions
       description: >-
         `uncategorized` (the default) gives a category to transactions that
-        have none and whose category was not chosen by hand. `all` also
-        re-evaluates every transaction a rule categorized: it may get another
+        have none and whose category was not chosen by hand, and lets a rule
+        or a merchant category code replace a category the AI chose (the
+        AI's choice stays when none matches). `all` also re-evaluates every
+        transaction a rule or a code categorized: it may get another
         category, or none when no rule matches any more. Categories chosen by
         hand are never changed. Returns the counts.
       operationId: applyCategoryRules
@@ -313,6 +321,56 @@ paths:
       responses:
         '200': {description: Counts, content: {application/json: {schema: {$ref: '#/components/schemas/ApplyCategoryRulesResult'}}}}
         '400': {description: 'Invalid request (`invalid_request`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/categories/ai/candidates:
+    get:
+      summary: List the transactions the AI may categorize
+      description: >-
+        The AI fills the gaps the rules leave. Its candidates are booked
+        transactions of active accounts without a category that nobody chose
+        (a category cleared by hand stays cleared), which the AI has not
+        looked at since their counterparty or description last changed,
+        latest first, at most `limit`; `total` counts them all. Pending
+        transactions are left out: their text is often incomplete.
+        `examples` are the owner's latest choice by hand per counterparty
+        (at most 50, latest first, in categories that are not archived), so
+        the AI learns their taste. The AI answers with
+        `POST /v1/categories/ai/choices`.
+      operationId: listAiCategoryCandidates
+      security: []
+      parameters:
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 40}}
+      responses:
+        '200': {description: Candidates, content: {application/json: {schema: {$ref: '#/components/schemas/AiCategoryCandidates'}}}}
+        '400': {description: Invalid request (`invalid_request`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/categories/ai/choices:
+    post:
+      summary: Apply the AI's category choices
+      description: >-
+        For the AI and Life OS components, never the owner (403
+        `actor_not_allowed`: the owner sets a category with `PATCH
+        /v1/transactions/{transactionId}`). Each choice gives a transaction
+        the AI's category (`categorizedBy: ai`), or with `categoryId` null
+        notes that the AI looked at it and left it without one, so it is not
+        a candidate again until its text changes. A choice applies only
+        while the transaction has no category that someone or something
+        else chose: a choice by hand, a rule, or a merchant category code
+        that landed meanwhile wins, and the choice is `skipped` with reason
+        `chosen`. Money out goes only to expense or transfer categories and
+        money in only to income or transfer categories (`kind_mismatch`); an
+        unknown or archived category is `unknown_category` or
+        `category_archived`, and an unknown transaction `not_found`. The
+        choices apply in one database transaction, and each is answered with
+        its outcome: `categorized`, `unchanged` (it already had this
+        category from the AI), `left` (no category), or `skipped`. Activity
+        records one `finance.ai_categories.applied` event per request that
+        categorized something.
+      operationId: applyAiCategoryChoices
+      security: []
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AiCategoryChoicesRequest'}}}}
+      responses:
+        '200': {description: Outcomes, content: {application/json: {schema: {$ref: '#/components/schemas/AiCategoryChoicesResult'}}}}
+        '400': {description: 'Invalid request (`invalid_request`, such as no choices, more than 100, or one transaction twice), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '403': {description: The owner does not choose as the AI (`actor_not_allowed`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
   /v1/summaries/monthly:
     get:
       summary: Get a monthly finance summary
@@ -745,10 +803,12 @@ components:
       type: object
       description: >-
         `categorizedBy` is `manual` when the category was chosen by hand (by
-        the owner, the AI, or the import file; possibly none), `rule` when a
-        category rule chose it (`categoryRuleId` names the rule), `mcc` when
-        no rule matched and the card's merchant category code gave a default
-        category, and null while nobody chose. `readOnly` is true for imported
+        the owner, an agent recording a transaction, or the import file;
+        possibly none), `rule` when a category rule chose it
+        (`categoryRuleId` names the rule), `mcc` when no rule matched and the
+        card's merchant category code gave a default category, `ai` when the
+        AI filled the gap (see `/v1/categories/ai/choices`), and null while
+        nobody chose. `readOnly` is true for imported
         transactions: only `categoryId` and `notes` change, and they cannot
         be deleted.
       required: [id, accountId, amount, bookingDate, valueDate, status, counterparty, description, notes, categoryId, categorizedBy, categoryRuleId, merchantCategoryCode, bankReference, source, readOnly, createdAt, updatedAt]
@@ -763,7 +823,7 @@ components:
         description: {type: string, nullable: true, description: What it was for (a bank's purpose text).}
         notes: {type: string, nullable: true, description: The owner's own notes.}
         categoryId: {type: string, format: uuid, nullable: true}
-        categorizedBy: {type: string, enum: [manual, rule, mcc], nullable: true}
+        categorizedBy: {type: string, enum: [manual, rule, mcc, ai], nullable: true}
         categoryRuleId: {type: string, format: uuid, nullable: true}
         merchantCategoryCode: {type: string, nullable: true, description: The card merchant category code (ISO 18245) a bank reported.}
         bankReference: {type: string, nullable: true, description: The bank's own reference.}
@@ -912,9 +972,10 @@ components:
       type: object
       description: >-
         `examined`: transactions the rules were tried on. `categorized`: had
-        no category and got one. `recategorized`: a rule's category was
-        replaced by another rule's. `cleared`: a rule's category was removed
-        because no rule matches any more (scope all). `unchanged`: the rest.
+        no category and got one. `recategorized`: a rule's or the AI's
+        category was replaced by another rule's (or a code's). `cleared`: a
+        rule's category was removed because no rule matches any more (scope
+        all). `unchanged`: the rest.
       required: [scope, examined, categorized, recategorized, cleared, unchanged]
       properties:
         scope: {$ref: '#/components/schemas/ApplyScope'}
@@ -923,6 +984,72 @@ components:
         recategorized: {type: integer}
         cleared: {type: integer}
         unchanged: {type: integer}
+    AiCategoryCandidate:
+      type: object
+      description: >-
+        What the AI is told about a transaction: no notes, account names, or
+        bank references.
+      required: [id, accountKind, amount, bookingDate, counterparty, description]
+      properties:
+        id: {type: string, format: uuid}
+        accountKind: {$ref: '#/components/schemas/AccountKind'}
+        amount: {$ref: '#/components/schemas/Money'}
+        bookingDate: {type: string, format: date}
+        counterparty: {type: string, nullable: true}
+        description: {type: string, nullable: true}
+    AiCategoryExample:
+      type: object
+      description: The category the owner last chose by hand for a counterparty.
+      required: [counterparty, categoryId]
+      properties:
+        counterparty: {type: string}
+        categoryId: {type: string, format: uuid}
+    AiCategoryCandidates:
+      type: object
+      required: [total, items, examples]
+      properties:
+        total: {type: integer, description: Every candidate; items holds at most limit of them.}
+        items: {type: array, items: {$ref: '#/components/schemas/AiCategoryCandidate'}}
+        examples: {type: array, items: {$ref: '#/components/schemas/AiCategoryExample'}}
+    AiCategoryChoice:
+      type: object
+      required: [transactionId, categoryId]
+      properties:
+        transactionId: {type: string, format: uuid}
+        categoryId: {type: string, format: uuid, nullable: true, description: The AI's category; null leaves the transaction without one.}
+    AiCategoryChoicesRequest:
+      type: object
+      required: [choices]
+      properties:
+        choices: {type: array, minItems: 1, maxItems: 100, items: {$ref: '#/components/schemas/AiCategoryChoice'}}
+    AiCategoryOutcome:
+      type: string
+      enum: [categorized, unchanged, left, skipped]
+    AiCategorySkipReason:
+      type: string
+      description: >-
+        `chosen`: a choice by hand, a rule, or a merchant category code gave
+        it a category meanwhile (or cleared it by hand). `not_found`: no such
+        transaction. `unknown_category`, `category_archived`: the category
+        cannot be given. `kind_mismatch`: money out to an income category,
+        or money in to an expense category.
+      enum: [chosen, not_found, unknown_category, category_archived, kind_mismatch]
+    AiCategoryChoiceResult:
+      type: object
+      required: [transactionId, outcome]
+      properties:
+        transactionId: {type: string, format: uuid}
+        outcome: {$ref: '#/components/schemas/AiCategoryOutcome'}
+        reason: {$ref: '#/components/schemas/AiCategorySkipReason'}
+    AiCategoryChoicesResult:
+      type: object
+      required: [categorized, unchanged, left, skipped, results]
+      properties:
+        categorized: {type: integer}
+        unchanged: {type: integer}
+        left: {type: integer}
+        skipped: {type: integer}
+        results: {type: array, items: {$ref: '#/components/schemas/AiCategoryChoiceResult'}}
     SpendingByCategory:
       type: object
       required: [categoryId, categoryName, amount]
