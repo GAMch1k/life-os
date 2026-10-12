@@ -170,6 +170,122 @@ func TestLaterSyncsStartAWeekBeforeTheLastBookedDate(t *testing.T) {
 	}
 }
 
+func TestAPendingHoldOlderThanTheOverlapIsRemovedOnceTheBankDropsIt(t *testing.T) {
+	h := testsupport.New(t)
+	ctx := context.Background()
+	// A card hold from before the overlap (the cursor will be 2026-10-08,
+	// so later syncs would start at 2026-10-01).
+	h.Bank.Accounts[0].Transactions = append(h.Bank.Accounts[0].Transactions,
+		testsupport.Transaction("HOLD", "PDNG", "DBIT", "50.00", "", map[string]any{"transaction_date": "2026-09-20"}))
+	conn := h.Connect()
+	if conn.OldestPendingDate.Time.Format(time.DateOnly) != "2026-09-20" {
+		t.Fatalf("oldest pending = %v", conn.OldestPendingDate)
+	}
+	if _, ok := h.Finance.Known(uuid(conn), "HOLD"); !ok {
+		t.Fatal("Finance did not get the hold")
+	}
+	from := func() string {
+		var seen []string
+		for _, request := range h.Bank.Requests() {
+			if strings.HasSuffix(request.Path, "/transactions") {
+				seen = append(seen, request.Query.Get("date_from"))
+			}
+		}
+		h.Bank.ResetRequests()
+		return strings.Join(seen, ",")
+	}
+	from()
+
+	// The bank releases the hold without a booked payment Finance could
+	// match: the next sync still reads its day, so Finance removes it.
+	h.Bank.Accounts[0].Transactions = h.Bank.Accounts[0].Transactions[:len(h.Bank.Accounts[0].Transactions)-1]
+	h.Set(h.Local("2026-10-10", "12:00"))
+	h.Service.Tick(ctx)
+	if got := from(); got != "2026-09-20" {
+		t.Fatalf("the sync after the hold read from %s", got)
+	}
+	conn = h.Connection(conn)
+	if _, ok := h.Finance.Known(uuid(conn), "HOLD"); ok || counts(t, conn).Transactions.RemovedPending != 1 {
+		t.Fatalf("the released hold stayed in Finance: counts %+v", counts(t, conn))
+	}
+	// Today's pending transaction is now the oldest: back to the overlap.
+	if conn.OldestPendingDate.Time.Format(time.DateOnly) != "2026-10-10" || conn.UnattendedReadsCount != 1 {
+		t.Fatalf("after the release: oldest pending %v, reads %d", conn.OldestPendingDate, conn.UnattendedReadsCount)
+	}
+	h.Set(h.Local("2026-10-10", "18:00"))
+	h.Service.Tick(ctx)
+	if got := from(); got != "2026-10-01" {
+		t.Fatalf("the next sync read from %s", got)
+	}
+}
+
+func TestAMappingChangeReadsTheWholeWindowOnce(t *testing.T) {
+	h := testsupport.New(t)
+	conn := h.Connect()
+	ctx := context.Background()
+	if conn.MappingVersion != banking.MappingVersion {
+		t.Fatalf("the first sync records mapping %d", conn.MappingVersion)
+	}
+	// A card payment booked before the incremental window, which a normal
+	// sync no longer reads; Finance has it in the old mapping.
+	h.Bank.Accounts[0].Transactions = append(h.Bank.Accounts[0].Transactions, testsupport.Transaction("C1", "BOOK", "DBIT", "23.45", "2026-09-15",
+		map[string]any{"creditor": map[string]any{"name": "ABRECHNUNG KARTE"}, "remittance_information": []string{"REWE Markt Muster//Darmstadt/DE 14-09-2026T18:02:11 Kartennr. 4999XXXXXXXX0042"}}))
+	if _, err := h.Pool.Exec(ctx, "UPDATE bank_connections SET mapping_version = 1"); err != nil {
+		t.Fatal(err)
+	}
+	windows := func() []string {
+		var seen []string
+		for _, request := range h.Bank.Requests() {
+			if strings.HasSuffix(request.Path, "/transactions") {
+				seen = append(seen, request.Query.Get("date_from")+".."+request.Query.Get("date_to"))
+			}
+		}
+		h.Bank.ResetRequests()
+		return seen
+	}
+	windows()
+
+	// Finance refuses the first full read: the version stays, so the next
+	// sync reads in full again.
+	h.Set(h.Local("2026-10-10", "12:00"))
+	h.Finance.Fail(http.MethodPost, http.StatusBadRequest, "invalid_request")
+	h.Service.Tick(ctx)
+	if got := windows(); strings.Join(got, ",") != "2026-07-12..2026-10-10" {
+		t.Fatalf("the read after the change = %v", got)
+	}
+	if conn = h.Connection(conn); conn.MappingVersion != 1 {
+		t.Fatalf("a refused full read recorded mapping %d", conn.MappingVersion)
+	}
+	h.Set(h.Local("2026-10-10", "18:00"))
+	h.Service.Tick(ctx)
+	if got := windows(); strings.Join(got, ",") != "2026-07-12..2026-10-10" {
+		t.Fatalf("the read after the refusal = %v", got)
+	}
+	var card finance.Transaction
+	for _, transaction := range lastImport(t, h).Transactions {
+		if transaction.ExternalID == "C1" {
+			card = transaction
+		}
+	}
+	if card.Counterparty != "REWE Markt Muster" || card.Description != "Card payment · Darmstadt, DE · 2026-09-14 18:02:11" {
+		t.Fatalf("the card payment = %+v", card)
+	}
+	conn = h.Connection(conn)
+	if conn.MappingVersion != banking.MappingVersion || conn.SyncCursor.Time.Format(time.DateOnly) != "2026-10-08" {
+		t.Fatalf("after the full read: mapping %d cursor %v", conn.MappingVersion, conn.SyncCursor)
+	}
+	// Once only: the next sync reads from the cursor again. Each of these
+	// syncs took one unattended read, the full ones no more than the others.
+	h.Set(h.Local("2026-10-10", "23:00"))
+	h.Service.Tick(ctx)
+	if got := windows(); strings.Join(got, ",") != "2026-10-01..2026-10-10" {
+		t.Fatalf("the read after the full one = %v", got)
+	}
+	if conn = h.Connection(conn); conn.UnattendedReadsCount != 3 {
+		t.Fatalf("unattended reads = %d", conn.UnattendedReadsCount)
+	}
+}
+
 func TestAtMostFourUnattendedReadsADay(t *testing.T) {
 	h := testsupport.New(t)
 	conn := h.Connect()

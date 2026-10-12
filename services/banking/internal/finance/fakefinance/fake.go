@@ -1,7 +1,8 @@
 // Package fakefinance is a Finance stand-in for tests: it records the bank
 // imports and removals Banking sends, answers like Finance's bank import
 // endpoints (counting transactions as new, updated, or unchanged by their
-// external id), and can fail on demand.
+// external id, and removing the connection's pending transactions inside an
+// import's window that the import does not carry), and can fail on demand.
 package fakefinance
 
 import (
@@ -33,6 +34,7 @@ type Server struct {
 
 type failure struct {
 	method string
+	match  func(finance.Import) bool
 	status int
 	code   string
 }
@@ -50,6 +52,22 @@ func (s *Server) Fail(method string, status int, code string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.fail = append(s.fail, failure{method: method, status: status, code: code})
+}
+
+// FailImport makes the next import match accepts answer status and code.
+func (s *Server) FailImport(match func(finance.Import) bool, status int, code string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.fail = append(s.fail, failure{method: http.MethodPost, match: match, status: status, code: code})
+}
+
+// Known is the transaction Finance holds for the connection under
+// externalID.
+func (s *Server) Known(connectionID, externalID string) (finance.Transaction, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	transaction, ok := s.known[connectionID+"/"+externalID]
+	return transaction, ok
 }
 
 // Imports returns the imports Finance accepted, oldest first.
@@ -77,8 +95,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.actors = append(s.actors, r.Header.Get("X-Life-OS-Actor"))
+	var request finance.Import
+	isImport := r.Method == http.MethodPost && r.URL.Path == "/v1/imports/bank"
+	decoded := isImport && json.NewDecoder(r.Body).Decode(&request) == nil
 	for i, f := range s.fail {
-		if f.method == r.Method {
+		if f.method == r.Method && (f.match == nil || decoded && f.match(request)) {
 			s.fail = slices.Delete(s.fail, i, i+1)
 			writeError(w, f.status, f.code)
 			return
@@ -89,9 +110,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch {
-	case r.Method == http.MethodPost && r.URL.Path == "/v1/imports/bank":
-		var request finance.Import
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+	case isImport:
+		if !decoded {
 			writeError(w, http.StatusBadRequest, "invalid_request")
 			return
 		}
@@ -156,6 +176,14 @@ func (s *Server) importSync(w http.ResponseWriter, request finance.Import) {
 			result.Transactions.Updated++
 		}
 		s.known[key] = transaction
+	}
+	prefix := request.ConnectionID + "/"
+	for key, transaction := range s.known {
+		if strings.HasPrefix(key, prefix) && transaction.Status == "pending" && !seen[transaction.ExternalID] &&
+			transaction.BookingDate >= request.Window.From && transaction.BookingDate <= request.Window.To {
+			delete(s.known, key)
+			result.Transactions.RemovedPending++
+		}
 	}
 	s.imports = append(s.imports, request)
 	w.Header().Set("Content-Type", "application/json")

@@ -2,7 +2,7 @@
 
 import { AlertTriangle, CheckCircle2, Landmark } from "lucide-react";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 
 import { BANKING_UNAVAILABLE } from "@/components/bank-callback";
 import { Badge } from "@/components/ui/badge";
@@ -30,9 +30,12 @@ import {
   consentFailureText,
   consentText,
   DEFAULT_BANK,
+  historySpan,
+  historyText,
   liveConnection,
   needsReconnect,
   nextSyncText,
+  sinceText,
   syncNowState,
   syncText,
   withoutBankParam,
@@ -52,13 +55,19 @@ const BADGES: Partial<
   error: { label: "Needs attention", variant: "destructive" },
 };
 
+/** How often the card checks on a history read under way. */
+const HISTORY_POLL_MS = 10_000;
+
 /**
  * The Finance page's bank connection card: connect Deutsche Bank (read-only,
  * through the banking integration), see the connected accounts with their
- * masked IBANs, the last and next sync and how long the consent lasts, sync
- * now, disconnect, or reconnect when the consent expires. Back from the
- * bank (`/finance?bank=connected`) it confirms the connection once. Times
- * are shown in timeZone (the browser's, else the owner's).
+ * masked IBANs, the last and next sync, how far back the transactions go
+ * and how long the consent lasts, sync now, disconnect, or reconnect when
+ * the consent expires. "Load older history" explains that the bank shares
+ * older history only right after a login, then reconnects; banking reads
+ * it in the background, and the card says so until it is done. Back from
+ * the bank (`/finance?bank=connected`) it confirms the connection once.
+ * Times are shown in timeZone (the browser's, else the owner's).
  */
 export function BankConnections({
   timeZone,
@@ -76,6 +85,7 @@ export function BankConnections({
     justConnected ? `${DEFAULT_BANK} is connected.` : undefined,
   );
   const [confirming, setConfirming] = useState(false);
+  const [explainingHistory, setExplainingHistory] = useState(false);
   const [opening, setOpening] = useState(false);
   const [working, startTransition] = useTransition();
   const [now, setNow] = useState(() => new Date());
@@ -123,6 +133,31 @@ export function BankConnections({
       current = false;
     };
   }, []);
+
+  // A history read under way: check on it until it is done, then let
+  // Finance show the older transactions.
+  const historyRunning =
+    list !== undefined &&
+    liveConnection(list)?.historyRead?.status === "running";
+  const changed = useRef(onChanged);
+  useEffect(() => {
+    changed.current = onChanged;
+  }, [onChanged]);
+  const wasRunning = useRef(false);
+  useEffect(() => {
+    if (wasRunning.current && !historyRunning) changed.current?.();
+    wasRunning.current = historyRunning;
+    if (!historyRunning) return;
+    const timer = setInterval(() => {
+      bankingClient
+        .GET("/v1/connections")
+        .then(({ data }) => {
+          if (data) setList(data);
+        })
+        .catch(() => undefined);
+    }, HISTORY_POLL_MS);
+    return () => clearInterval(timer);
+  }, [historyRunning]);
 
   const reload = async () => {
     try {
@@ -222,6 +257,13 @@ export function BankConnections({
     ? syncNowState(connection, timeZone, now)
     : undefined;
   const name = connection?.institution ?? DEFAULT_BANK;
+  const since = connection ? sinceText(connection) : undefined;
+  const history = connection ? historyText(connection, timeZone) : undefined;
+  const historyDays = list?.schedule.historyDays ?? 0;
+  const canLoadHistory =
+    historyDays > 0 &&
+    !history?.running &&
+    (state === "connected" || state === "pending" || state === "expiring");
 
   return (
     <Card
@@ -284,8 +326,11 @@ export function BankConnections({
           <p>
             No bank is connected. Connecting opens {DEFAULT_BANK}, where you
             allow Life OS to read your accounts (for up to 180 days); then the
-            last 90 days of transactions are imported into Finance. Later syncs
-            run {list.schedule.times.length} times a day (
+            last 90 days of transactions are imported into Finance
+            {historyDays > 0
+              ? `, and older ones in the background, as far as the bank shares them (up to ${historySpan(historyDays)})`
+              : ""}
+            . Later syncs run {list.schedule.times.length} times a day (
             {list.schedule.times.join(", ")}).
           </p>
         ) : (
@@ -346,6 +391,19 @@ export function BankConnections({
               nextSyncText(connection, timeZone) ? (
                 <dd>{nextSyncText(connection, timeZone)}</dd>
               ) : null}
+              {since ? <dd data-testid="bank-since">{since}</dd> : null}
+              {history ? (
+                <dd
+                  className={cn(
+                    "break-words",
+                    history.failing && "text-warning",
+                  )}
+                  data-testid="bank-history"
+                  role={history.running ? "status" : undefined}
+                >
+                  {history.text}
+                </dd>
+              ) : null}
               {consentText(connection, timeZone, now) ? (
                 <dd
                   className={cn(
@@ -367,7 +425,26 @@ export function BankConnections({
       </CardContent>
       {list && state && state !== "not_configured" ? (
         <CardFooter className="flex flex-wrap gap-2">
-          {confirming && connection ? (
+          {explainingHistory && connection ? (
+            <>
+              <p className="w-full text-sm" data-testid="bank-history-help">
+                {name} shares transactions older than 90 days only right after
+                you log in at the bank. Log in again to reconnect (your accounts
+                and history stay); Life OS then loads up to{" "}
+                {historySpan(historyDays)} of older history in the background.
+              </p>
+              <Button
+                disabled={pending}
+                onClick={() => setExplainingHistory(false)}
+                variant="outline"
+              >
+                Not now
+              </Button>
+              <Button disabled={pending} onClick={connect}>
+                {opening ? `Opening ${name}…` : `Log in at ${name}`}
+              </Button>
+            </>
+          ) : confirming && connection ? (
             <>
               <p className="w-full text-sm">
                 Disconnect {name}? Life OS ends its access at the bank and stops
@@ -418,6 +495,18 @@ export function BankConnections({
                   variant="outline"
                 >
                   {working ? "Syncing…" : "Sync now"}
+                </Button>
+              ) : null}
+              {connection && canLoadHistory ? (
+                <Button
+                  disabled={pending}
+                  onClick={() => {
+                    setConfirming(false);
+                    setExplainingHistory(true);
+                  }}
+                  variant="outline"
+                >
+                  Load older history
                 </Button>
               ) : null}
               {connection ? (

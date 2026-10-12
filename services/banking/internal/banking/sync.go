@@ -131,26 +131,38 @@ func (s *Service) takeUnattendedRead(ctx context.Context, conn store.BankConnect
 }
 
 // window is the booking dates to read: from the last booked date less the
-// overlap, never more than InitialDays back (the first sync reads all of
-// them), up to today (the provider takes dates in UTC).
-func (s *Service) window(conn store.BankConnection) finance.Window {
+// overlap, or from the oldest pending transaction of the last sync when that
+// is earlier, never more than InitialDays back (the first sync reads all of
+// them), up to today (the provider takes dates in UTC). A connection last
+// read in full with an older mapping is read in full once more, so Finance
+// gets its transactions again in the new mapping; full reports that.
+func (s *Service) window(conn store.BankConnection) (window finance.Window, full bool) {
 	today := s.now().UTC()
 	earliest := today.AddDate(0, 0, -s.opts.InitialDays)
 	from := earliest
-	if conn.SyncCursor.Valid {
+	if conn.SyncCursor.Valid && conn.MappingVersion >= MappingVersion {
 		if cursor := conn.SyncCursor.Time.AddDate(0, 0, -s.opts.OverlapDays); cursor.After(earliest) {
 			from = cursor
+		}
+		// Finance removes a pending transaction the bank no longer sends
+		// only inside the window: one held from before the overlap (a card
+		// hold the bank books or releases late) is read again until then.
+		if pending := conn.OldestPendingDate; pending.Valid && pending.Time.Before(from) {
+			from = pending.Time
+			if from.Before(earliest) {
+				from = earliest
+			}
 		}
 		if from.After(today) {
 			from = today
 		}
 	}
-	return finance.Window{From: from.Format(time.DateOnly), To: today.Format(time.DateOnly)}
+	return finance.Window{From: from.Format(time.DateOnly), To: today.Format(time.DateOnly)}, !from.After(earliest)
 }
 
 // read reads every account's balances and transactions in the window.
 func (s *Service) read(ctx context.Context, conn store.BankConnection, psu *enablebanking.PSU) (readResult, error) {
-	window := s.window(conn)
+	window, full := s.window(conn)
 	accounts := Accounts(conn)
 	data := make([]accountData, 0, len(accounts))
 	for _, account := range accounts {
@@ -164,7 +176,11 @@ func (s *Service) read(ctx context.Context, conn store.BankConnection, psu *enab
 		}
 		data = append(data, accountData{account: account, balances: balances, transactions: transactions})
 	}
-	return buildImport(uuidString(conn.ID), conn.Institution, window, data), nil
+	read := buildImport(uuidString(conn.ID), conn.Institution, window, data)
+	if full {
+		read.Mapping = MappingVersion
+	}
+	return read, nil
 }
 
 // readTransactions reads every page. A bank that does not serve the whole
@@ -312,7 +328,9 @@ func (s *Service) push(ctx context.Context, conn store.BankConnection, read read
 		}
 	}
 	row, err := s.queries.RecordSyncSuccess(ctx, store.RecordSyncSuccessParams{
-		Now: timestamptz(now), NextSyncAt: timestamptz(s.opts.Schedule.Next(now)), LastCounts: rawCounts, SyncCursor: cursor, ID: conn.ID,
+		Now: timestamptz(now), NextSyncAt: timestamptz(s.opts.Schedule.Next(now)), LastCounts: rawCounts, SyncCursor: cursor,
+		MappingVersion: int32(read.Mapping), EarliestBookingDate: dateOf(read.Earliest), OldestPendingDate: dateOf(read.OldestPending),
+		ID: conn.ID,
 	})
 	if err != nil {
 		return conn, err
@@ -335,6 +353,16 @@ func (s *Service) push(ctx context.Context, conn store.BankConnection, read read
 		})
 	}
 	return row, nil
+}
+
+// dateOf is a YYYY-MM-DD date for the database; unset when empty or not a
+// date.
+func dateOf(day string) pgtype.Date {
+	parsed, err := time.Parse(time.DateOnly, day)
+	if err != nil {
+		return pgtype.Date{}
+	}
+	return pgtype.Date{Time: parsed, Valid: true}
 }
 
 func syncSummary(institution string, counts Counts) string {

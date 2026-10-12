@@ -1,5 +1,5 @@
 import type { components } from "@/lib/api/generated/banking";
-import { dateTimeFormat } from "@/lib/time-zone";
+import { DATE_LOCALE, dateTimeFormat } from "@/lib/time-zone";
 
 // The bank connection as the Dashboard shows it. The banking integration
 // service owns the consent, the provider session, and the sync schedule;
@@ -11,6 +11,7 @@ export type BankConnection = components["schemas"]["BankConnection"];
 export type BankConnectionList = components["schemas"]["BankConnectionList"];
 export type BankAccount = components["schemas"]["BankAccount"];
 export type BankConsentFailure = components["schemas"]["BankConsentFailure"];
+export type BankHistoryRead = components["schemas"]["BankHistoryRead"];
 
 /** The callback route the bank returns to (LIFE_OS_BANKING_REDIRECT_URI). */
 export const BANK_CALLBACK_PATH = "/finance/bank/callback";
@@ -112,6 +113,70 @@ export function bankDay(value: string, timeZone: string) {
 /** A moment such as "10 Oct, 12:05 CEST". */
 export function bankTime(value: string, timeZone: string) {
   return dateTimeFormat(timeZone, MOMENT).format(new Date(value));
+}
+
+/**
+ * A booking date such as "12 Oct 2024": a calendar day, the same in every
+ * timezone.
+ */
+export function bankDate(day: string) {
+  const date = new Date(`${day}T00:00:00Z`);
+  return Number.isNaN(date.getTime())
+    ? day
+    : dateTimeFormat("UTC", DAY).format(date);
+}
+
+/**
+ * How far back Finance holds the connection's transactions, such as
+ * "Transactions since 12 Oct 2024".
+ */
+export function sinceText(connection: BankConnection) {
+  return connection.transactionsSince
+    ? `Transactions since ${bankDate(connection.transactionsSince)}`
+    : undefined;
+}
+
+/** A history span such as "2 years" or "400 days". */
+export function historySpan(days: number) {
+  if (days % 365 !== 0) return `${days} days`;
+  const years = days / 365;
+  return `${years} year${years === 1 ? "" : "s"}`;
+}
+
+/**
+ * How the last history read after a bank login went, such as "Loading older
+ * history from Deutsche Bank…" or "Older history loaded 10 Oct, 12:05 CEST
+ * · 1,204 transactions"; failing marks one that failed (its reason).
+ */
+export function historyText(
+  connection: BankConnection,
+  timeZone: string,
+): { text: string; running: boolean; failing: boolean } | undefined {
+  const read = connection.historyRead;
+  if (!read) return undefined;
+  if (read.status === "running") {
+    return {
+      text: `Loading older history from ${connection.institution}…`,
+      running: true,
+      failing: false,
+    };
+  }
+  if (read.status === "failed") {
+    return {
+      text: read.error ?? "Older history could not be loaded.",
+      running: false,
+      failing: true,
+    };
+  }
+  const at = bankTime(read.finishedAt ?? read.startedAt, timeZone);
+  return {
+    text:
+      read.transactions > 0
+        ? `Older history loaded ${at} · ${read.transactions.toLocaleString(DATE_LOCALE)} transaction${read.transactions === 1 ? "" : "s"}`
+        : `${connection.institution} shared no older transactions (${at})`,
+    running: false,
+    failing: false,
+  };
 }
 
 /** How long the consent lasts, such as "Access valid until 7 Apr 2027". */

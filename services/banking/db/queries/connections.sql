@@ -37,12 +37,18 @@ RETURNING *;
 
 -- name: RecordSyncSuccess :one
 -- Finance accepted a sync: the connection is connected, its failures and
--- any waiting import are cleared.
+-- any waiting import are cleared. mapping_version is the mapping a full
+-- read used (0 for a read of the days since the cursor only);
+-- earliest_booking_date the sync's earliest booked date, and
+-- oldest_pending_date its oldest pending one (NULL: none).
 UPDATE bank_connections
 SET status = CASE WHEN status = 'pending' THEN 'connected' ELSE status END,
     last_sync_at = sqlc.arg(now), last_success_at = sqlc.arg(now), next_sync_at = sqlc.narg(next_sync_at),
     consecutive_failures = 0, last_error = NULL, last_counts = sqlc.arg(last_counts),
-    sync_cursor = sqlc.narg(sync_cursor), pending_import = NULL, updated_at = sqlc.arg(now)
+    sync_cursor = sqlc.narg(sync_cursor), pending_import = NULL,
+    mapping_version = GREATEST(mapping_version, sqlc.arg(mapping_version)::integer),
+    earliest_booking_date = LEAST(earliest_booking_date, sqlc.narg(earliest_booking_date)::date),
+    oldest_pending_date = sqlc.narg(oldest_pending_date)::date, updated_at = sqlc.arg(now)
 WHERE id = sqlc.arg(id)
 RETURNING *;
 
@@ -107,3 +113,39 @@ UPDATE bank_connections SET archive_pending = false, updated_at = sqlc.arg(now) 
 UPDATE bank_connections
 SET consent_notice = sqlc.arg(notice), consent_notice_for = sqlc.arg(notice_for), updated_at = sqlc.arg(now)
 WHERE id = sqlc.arg(id);
+
+-- name: StartHistoryRead :one
+-- A history read starts for a live connection. A newer one replaces one
+-- still under way, whose result is then not recorded (history_started_at
+-- names the read).
+UPDATE bank_connections
+SET history_status = 'running', history_started_at = sqlc.arg(now), history_finished_at = NULL,
+    history_transactions = 0, history_error = NULL, updated_at = sqlc.arg(now)
+WHERE id = sqlc.arg(id) AND status IN ('pending', 'connected')
+RETURNING *;
+
+-- name: RecordHistoryProgress :exec
+-- Finance accepted a part of a history read: imported more transactions,
+-- back to earliest.
+UPDATE bank_connections
+SET earliest_booking_date = LEAST(earliest_booking_date, sqlc.arg(earliest)::date),
+    history_transactions = CASE WHEN history_started_at = sqlc.arg(started) THEN history_transactions + sqlc.arg(imported)::integer
+        ELSE history_transactions END,
+    updated_at = sqlc.arg(now)
+WHERE id = sqlc.arg(id);
+
+-- name: FinishHistoryRead :one
+-- The history read that started at started has completed or failed.
+UPDATE bank_connections
+SET history_status = sqlc.arg(history_status), history_finished_at = sqlc.arg(now),
+    history_error = sqlc.narg(history_error), updated_at = sqlc.arg(now)
+WHERE id = sqlc.arg(id) AND history_started_at = sqlc.arg(started) AND history_status = 'running'
+RETURNING *;
+
+-- name: FailInterruptedHistoryReads :execrows
+-- History reads a stopped process left running (started before it began)
+-- have failed.
+UPDATE bank_connections
+SET history_status = 'failed', history_finished_at = sqlc.arg(now), history_error = sqlc.arg(history_error),
+    updated_at = sqlc.arg(now)
+WHERE history_status = 'running' AND history_started_at < sqlc.arg(before);

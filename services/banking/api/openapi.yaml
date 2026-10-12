@@ -42,6 +42,16 @@ info:
     connection succeeds.
 
 
+    Banks share transactions older than 90 days only shortly after the owner
+    logged in at the bank (PSD2 strong customer authentication). So right
+    after a connect or reconnect made by the owner, Banking runs a history
+    read in the background: up to `historyDays` back (as much as the bank
+    has when it refuses that period), owner-present, never one of the day's
+    unattended reads. A connection's `historyRead` says how it went, and
+    `transactionsSince` how far back Finance holds its transactions; to load
+    older history again, the owner reconnects.
+
+
     Errors use the shared envelope `{"error": {"code", "message"},
     "request_id"}`.
   license: {name: UNLICENSED, url: https://life-os.local/license}
@@ -72,6 +82,9 @@ paths:
         reconnect keeps its id and its Finance accounts), and runs the first
         sync at once (90 days back). A first sync that fails leaves the
         connection `pending` with `lastError`; it is retried automatically.
+        Made by the owner (actor `user` with the owner's address and
+        browser), it then starts the history read in the background: the
+        answer already shows `historyRead` as `running`.
       operationId: connectBankConnection
       security: []
       requestBody:
@@ -263,7 +276,7 @@ components:
         ignored: {type: integer, description: 'Transactions not sent to Finance: cancelled, rejected, or scheduled ones, or ones in another currency than their account.'}
     BankConnection:
       type: object
-      required: [id, provider, institution, country, status, consentValidUntil, accounts, lastSyncAt, lastSuccessAt, nextSyncAt, consecutiveFailures, lastError, lastCounts, unattendedReadsToday, manualSyncAvailableAt, waitingForFinance, connectedAt, disconnectedAt, createdAt, updatedAt]
+      required: [id, provider, institution, country, status, consentValidUntil, accounts, lastSyncAt, lastSuccessAt, nextSyncAt, consecutiveFailures, lastError, lastCounts, unattendedReadsToday, manualSyncAvailableAt, waitingForFinance, transactionsSince, historyRead, connectedAt, disconnectedAt, createdAt, updatedAt]
       properties:
         id: {type: string, format: uuid}
         provider: {type: string, example: enablebanking}
@@ -284,18 +297,39 @@ components:
         unattendedReadsToday: {type: integer, description: Reads without the owner made today (owner-local).}
         manualSyncAvailableAt: {type: string, format: date-time, nullable: true, description: 'When "Sync now" is allowed again; null when it is now.'}
         waitingForFinance: {type: boolean, description: A sync read from the bank waits for Finance and is sent again automatically.}
+        transactionsSince: {type: string, format: date, nullable: true, description: 'The earliest booking date of a booked transaction Finance took from this connection; null before the first one.'}
+        historyRead:
+          type: object
+          allOf: [{$ref: '#/components/schemas/BankHistoryRead'}]
+          nullable: true
+          description: The last history read; null when none ran.
         connectedAt: {type: string, format: date-time, nullable: true}
         disconnectedAt: {type: string, format: date-time, nullable: true}
         createdAt: {type: string, format: date-time}
         updatedAt: {type: string, format: date-time}
+    BankHistoryRead:
+      type: object
+      description: >-
+        A history read after a bank login: `running`, `completed`, or
+        `failed` (`error` says why in plain words; the connection and its
+        normal syncs are not affected). `transactions` counts the older
+        transactions Finance took from it so far.
+      required: [status, startedAt, finishedAt, transactions, error]
+      properties:
+        status: {type: string, enum: [running, completed, failed]}
+        startedAt: {type: string, format: date-time}
+        finishedAt: {type: string, format: date-time, nullable: true}
+        transactions: {type: integer}
+        error: {type: string, nullable: true}
     BankSchedule:
       type: object
-      required: [times, timeZone, unattendedPerDay, manualSyncMinutes]
+      required: [times, timeZone, unattendedPerDay, manualSyncMinutes, historyDays]
       properties:
         times: {type: array, items: {type: string, example: '06:00'}}
         timeZone: {type: string, example: Europe/Berlin}
         unattendedPerDay: {type: integer}
         manualSyncMinutes: {type: integer}
+        historyDays: {type: integer, example: 730, description: 'How far back the history read after a bank login asks, in days; 0 when there is none.'}
     BankConsentFailure:
       type: object
       required: [at, error, description, institution, stateMatched]

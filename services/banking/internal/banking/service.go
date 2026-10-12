@@ -115,6 +115,15 @@ type Options struct {
 	// scheduled one.
 	RequestTimeout time.Duration
 	SyncTimeout    time.Duration
+	// HistoryDays is how far back the history read after a bank login asks
+	// (0: 730 days; negative, or not more than InitialDays: no history
+	// read). HistoryTimeout bounds it, HistoryChunk is about how many
+	// transactions go to Finance in one import, and HistoryRetryWait is the
+	// first pause before an import Finance did not answer is sent again.
+	HistoryDays      int
+	HistoryTimeout   time.Duration
+	HistoryChunk     int
+	HistoryRetryWait time.Duration
 }
 
 func (o Options) withDefaults() Options {
@@ -141,6 +150,18 @@ func (o Options) withDefaults() Options {
 	if o.SyncTimeout <= 0 {
 		o.SyncTimeout = 5 * time.Minute
 	}
+	if o.HistoryDays == 0 {
+		o.HistoryDays = DefaultHistoryDays
+	}
+	if o.HistoryTimeout <= 0 {
+		o.HistoryTimeout = 10 * time.Minute
+	}
+	if o.HistoryChunk <= 0 {
+		o.HistoryChunk = 500
+	}
+	if o.HistoryRetryWait <= 0 {
+		o.HistoryRetryWait = 5 * time.Second
+	}
 	return o
 }
 
@@ -161,6 +182,8 @@ type Service struct {
 
 	// syncMu lets one sync, connect, or disconnect run at a time.
 	syncMu sync.Mutex
+	// history counts the history reads under way in the background.
+	history sync.WaitGroup
 }
 
 // New builds the service. settings may be unconfigured (setupProblem
@@ -377,12 +400,14 @@ func (s *Service) Connect(ctx context.Context, code, state string, psu *enableba
 	synced, err := s.runSync(syncCtx, row, TriggerConnect, psu)
 	if err != nil {
 		s.logger.Warn("the first sync failed", "connection", uuidString(row.ID), "error", err)
+		synced = row
 		if current, getErr := s.queries.GetConnection(ctx, row.ID); getErr == nil {
-			return current, nil
+			synced = current
 		}
-		return row, nil
 	}
-	return synced, nil
+	// Older history, which the bank shares only now, after the login: in
+	// the background, so the owner does not wait for it.
+	return s.startHistoryRead(ctx, synced, psu), nil
 }
 
 // SyncNow syncs a connection the owner asked for. With psu (the owner's

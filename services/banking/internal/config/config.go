@@ -49,6 +49,10 @@ type Config struct {
 	// InitialDays is how far back the first sync reads; OverlapDays how far
 	// before the last booked date a later sync starts.
 	InitialDays int `env:"BANKING_INITIAL_DAYS" default:"90"`
+	// HistoryDays is how far back the history read right after a bank login
+	// asks (0 turns it off; at most 3650). Banks share transactions older
+	// than 90 days only shortly after that login.
+	HistoryDays int `env:"BANKING_HISTORY_DAYS" default:"730"`
 	// ConsentDays caps the consent asked for (1-180; the bank's maximum
 	// still applies).
 	ConsentDays int `env:"BANKING_CONSENT_DAYS" default:"180"`
@@ -111,6 +115,9 @@ func (c Config) Validate() error {
 	if c.InitialDays < 1 || c.InitialDays > 730 {
 		validationErrors = append(validationErrors, fmt.Errorf("BANKING_INITIAL_DAYS must be between 1 and 730"))
 	}
+	if c.HistoryDays < 0 || c.HistoryDays > banking.MaxHistoryDays {
+		validationErrors = append(validationErrors, fmt.Errorf("BANKING_HISTORY_DAYS must be between 0 (off) and %d", banking.MaxHistoryDays))
+	}
 	if c.OverlapDays < 0 || c.OverlapDays > 60 {
 		validationErrors = append(validationErrors, fmt.Errorf("BANKING_OVERLAP_DAYS must be between 0 and 60"))
 	}
@@ -136,6 +143,10 @@ func (c Config) Options() banking.Options {
 	if overlap == 0 {
 		overlap = -1 // explicitly no overlap
 	}
+	history := c.HistoryDays
+	if history == 0 {
+		history = -1 // explicitly no history read
+	}
 	return banking.Options{
 		Schedule:       banking.Schedule{Minutes: minutes, Location: c.Location()},
 		MaxUnattended:  c.MaxUnattended,
@@ -143,6 +154,7 @@ func (c Config) Options() banking.Options {
 		InitialDays:    c.InitialDays,
 		ConsentDays:    c.ConsentDays,
 		OverlapDays:    overlap,
+		HistoryDays:    history,
 	}
 }
 

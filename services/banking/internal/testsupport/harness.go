@@ -145,8 +145,9 @@ type Harness struct {
 var Start = time.Date(2026, 10, 10, 8, 0, 0, 0, time.UTC)
 
 // New builds a configured service with one Deutsche Bank account holding
-// balances and a few transactions.
-func New(t testing.TB) *Harness {
+// balances and a few transactions. The history read after connecting is off
+// unless configure turns it on (WithHistory).
+func New(t testing.TB, configure ...func(*banking.Options)) *Harness {
 	t.Helper()
 	pool := testdb.Open(t)
 	location, err := time.LoadLocation("Europe/Berlin")
@@ -163,9 +164,18 @@ func New(t testing.TB) *Harness {
 	h.Logger = slog.New(slog.NewJSONHandler(h.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	minutes, _ := banking.ParseSyncTimes(banking.DefaultSyncTimes)
 	settings := banking.Settings{AppID: fakebank.AppID, Key: fakebank.Key(), TokenKey: TokenKey, RedirectURI: "https://lifeos.example/finance/bank/callback", APIURL: h.Bank.URL}
+	opts := banking.Options{Schedule: banking.Schedule{Minutes: minutes, Location: location}, HistoryDays: -1, HistoryRetryWait: 10 * time.Millisecond}
+	for _, change := range configure {
+		change(&opts)
+	}
 	h.Service = banking.New(settings, "", pool, finance.New(h.Finance.URL), notify.New(h.Notifications.URL, "banking"),
-		activity.NewEmitter(h.Activity.URL, "banking", h.Logger), banking.Options{Schedule: banking.Schedule{Minutes: minutes, Location: location}}, h.Logger).WithClock(h.Now)
+		activity.NewEmitter(h.Activity.URL, "banking", h.Logger), opts, h.Logger).WithClock(h.Now)
 	return h
+}
+
+// WithHistory turns the history read after connecting on, 730 days back.
+func WithHistory(opts *banking.Options) {
+	opts.HistoryDays = banking.DefaultHistoryDays
 }
 
 // DefaultAccount is the test account: Das Junge Konto, EUR, with closing
@@ -263,7 +273,9 @@ func (h *Harness) Authorize() string {
 	return parsed.Query().Get("state")
 }
 
-// Connect runs the whole consent as the owner and returns the connection.
+// Connect runs the whole consent as the owner and returns the connection
+// as Connect answered it; a history read it started may still run
+// (Service.WaitHistory).
 func (h *Harness) Connect() store.BankConnection {
 	h.T.Helper()
 	state := h.Authorize()
@@ -271,6 +283,7 @@ func (h *Harness) Connect() store.BankConnection {
 	if err != nil {
 		h.T.Fatal(err)
 	}
+	h.T.Cleanup(h.Service.WaitHistory)
 	return conn
 }
 

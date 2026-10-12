@@ -40,7 +40,7 @@ Never commit the key or the token key, and never paste them into tickets or logs
 
 ## Connecting
 
-Open **Finance** and choose **Connect Deutsche Bank** on the Bank connection card. Life OS opens Deutsche Bank's consent page (through Enable Banking); log in, choose the account, and allow access. The bank returns to `/finance/bank/callback`, which completes the connection and imports the last 90 days, then shows Finance with "Deutsche Bank is connected." The card then lists the account with its masked IBAN, the last and next sync, and how long the access lasts (180 days). From then on banking syncs four times a day; **Sync now** reads at once (at most every 10 minutes; it does not count against the bank's daily limit because you are present).
+Open **Finance** and choose **Connect Deutsche Bank** on the Bank connection card. Life OS opens Deutsche Bank's consent page (through Enable Banking); log in, choose the account, and allow access. The bank returns to `/finance/bank/callback`, which completes the connection and imports the last 90 days, then shows Finance with "Deutsche Bank is connected." Older transactions follow in the background, as far as the bank shares them right after this login (up to two years, `BANKING_HISTORY_DAYS`): the card says "Loading older history from Deutsche Bank…" and then "Older history loaded … · 1,204 transactions" (or that the bank shared none). The card then lists the account with its masked IBAN, the last and next sync, how far back the transactions go ("Transactions since 12 Oct 2024"), and how long the access lasts (180 days). From then on banking syncs four times a day; **Sync now** reads at once (at most every 10 minutes; it does not count against the bank's daily limit because you are present).
 
 If the callback says the consent expired or was already used, start again from Finance: a consent link is valid for 10 minutes and can be used once.
 
@@ -51,6 +51,8 @@ If the bank sends you back with an error instead (for example "The bank did not 
 PSD2 consents end: Deutsche Bank's after 180 days. Seven days before, and again one day before, Life OS reminds you ("Deutsche Bank access expires on …", then "… expires within a day", both linking to Finance); the card shows **Expires soon**, and Status shows the coming end without raising an alert. When it has ended (or you revoke it at the bank), the connection is **Expired** and syncing stops; Status's Bank connection check needs attention, so you get one "Bank connection needs attention" notification (from the monitor, linking to Status), and "Bank connection recovered" after you reconnect.
 
 To renew, choose **Reconnect** on the card and give consent again. Reconnecting keeps the same connection and the same Finance accounts and history; the next sync starts where the last one stopped (up to 90 days back), so nothing is missing if you reconnect within 90 days of the last sync. A Reconnect while the access is still valid ends the old consent.
+
+**Load older history** on the card is a Reconnect for older transactions: banks share transactions older than 90 days only right after a login at the bank, so it explains that, then opens the bank's login; afterwards banking reads the older history again in the background. A history read that failed (the card shows why) changes nothing else: syncing and the last 90 days are not affected.
 
 ## Disconnecting and revoking
 

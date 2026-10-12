@@ -295,6 +295,34 @@ test("transactionTitle prefers the counterparty, then the description", () => {
   );
 });
 
+test("a pending bank transaction without any text is a card payment", () => {
+  const hold = transaction({
+    status: "pending",
+    counterparty: null,
+    description: null,
+    source: { kind: "bank", connectionId: "c1", externalId: "h-1" },
+  });
+  assert.equal(transactionTitle(hold), "Card payment");
+  assert.equal(transactionSubtitle(hold), undefined);
+  assert.equal(
+    transactionTitle({ ...hold, amount: { amount: 500, currency: "EUR" } }),
+    "Incoming payment",
+  );
+  assert.equal(
+    transactionTitle({ ...hold, notes: "Hotel deposit" }),
+    "Hotel deposit",
+  );
+  // Booked, or entered by hand, it stays a plain transaction.
+  assert.equal(transactionTitle({ ...hold, status: "booked" }), "Transaction");
+  assert.equal(
+    transactionTitle({
+      ...hold,
+      source: { kind: "manual", connectionId: null, externalId: null },
+    }),
+    "Transaction",
+  );
+});
+
 test("imported transactions say why they are read-only", () => {
   const csv = transaction({
     readOnly: true,

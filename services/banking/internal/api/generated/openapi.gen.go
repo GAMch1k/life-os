@@ -60,6 +60,27 @@ func (e BankConnectionStatus) Valid() bool {
 	}
 }
 
+// Defines values for BankHistoryReadStatus.
+const (
+	Completed BankHistoryReadStatus = "completed"
+	Failed    BankHistoryReadStatus = "failed"
+	Running   BankHistoryReadStatus = "running"
+)
+
+// Valid indicates whether the value is a known member of the BankHistoryReadStatus enum.
+func (e BankHistoryReadStatus) Valid() bool {
+	switch e {
+	case Completed:
+		return true
+	case Failed:
+		return true
+	case Running:
+		return true
+	default:
+		return false
+	}
+}
+
 // BankAccount defines model for BankAccount.
 type BankAccount struct {
 	// Currency Example: EUR
@@ -104,10 +125,13 @@ type BankConnection struct {
 	ConsentValidUntil   *time.Time    `json:"consentValidUntil"`
 
 	// Country Example: DE
-	Country        string             `json:"country"`
-	CreatedAt      time.Time          `json:"createdAt"`
-	DisconnectedAt *time.Time         `json:"disconnectedAt"`
-	Id             openapi_types.UUID `json:"id"`
+	Country        string     `json:"country"`
+	CreatedAt      time.Time  `json:"createdAt"`
+	DisconnectedAt *time.Time `json:"disconnectedAt"`
+
+	// HistoryRead The last history read; null when none ran.
+	HistoryRead *BankHistoryRead   `json:"historyRead"`
+	Id          openapi_types.UUID `json:"id"`
 
 	// Institution Example: Deutsche Bank
 	Institution   string          `json:"institution"`
@@ -125,6 +149,9 @@ type BankConnection struct {
 	// Provider Example: enablebanking
 	Provider string               `json:"provider"`
 	Status   BankConnectionStatus `json:"status"`
+
+	// TransactionsSince The earliest booking date of a booked transaction Finance took from this connection; null before the first one.
+	TransactionsSince *openapi_types.Date `json:"transactionsSince"`
 
 	// UnattendedReadsToday Reads without the owner made today (owner-local).
 	UnattendedReadsToday int       `json:"unattendedReadsToday"`
@@ -180,8 +207,24 @@ type BankConsentFailureRequest struct {
 	State *string `json:"state,omitempty"`
 }
 
+// BankHistoryRead A history read after a bank login: `running`, `completed`, or `failed` (`error` says why in plain words; the connection and its normal syncs are not affected). `transactions` counts the older transactions Finance took from it so far.
+type BankHistoryRead struct {
+	Error        *string               `json:"error"`
+	FinishedAt   *time.Time            `json:"finishedAt"`
+	StartedAt    time.Time             `json:"startedAt"`
+	Status       BankHistoryReadStatus `json:"status"`
+	Transactions int                   `json:"transactions"`
+}
+
+// BankHistoryReadStatus defines model for BankHistoryRead.Status.
+type BankHistoryReadStatus string
+
 // BankSchedule defines model for BankSchedule.
 type BankSchedule struct {
+	// HistoryDays How far back the history read after a bank login asks, in days; 0 when there is none.
+	//
+	// Example: 730
+	HistoryDays       int `json:"historyDays"`
 	ManualSyncMinutes int `json:"manualSyncMinutes"`
 
 	// TimeZone Example: Europe/Berlin

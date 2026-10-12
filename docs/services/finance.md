@@ -137,15 +137,19 @@ priority comes after the owner's existing ones (the highest priority below
 
 - New manual, CSV, and bank transactions that come without a category get one
   from the rules (`categorizedBy: rule`, `categoryRuleId` names the rule).
-- A bank transaction no rule matches that has a `merchantCategoryCode`
-  (Deutsche Bank sends it with card payments) gets the default category of
-  its code (`categorizedBy: mcc`, no rule), when that default category exists
-  and is not archived. The standard code ranges map to the default
-  categories: Groceries 5411, 5422, 5441, 5451, 5462, 5499; Eating out
-  5812–5814; Transport 4111, 4112, 4121, 4131, 4784, 4789, 5541, 5542, 7523;
-  Subscriptions 4899, 5815–5818; Utilities & phone 4812, 4814, 4900; Health &
-  care 5122, 5912, 8011–8099; Fun & leisure 7832, 7922, 7991–7999; Shopping
-  5200–5399, 5600–5699, 5732, 5734, 5940–5999. Other codes give none.
+- A bank transaction no rule matches that has a `merchantCategoryCode` gets
+  the default category of its code (`categorizedBy: mcc`, no rule), when that
+  default category exists and is not archived. The standard code ranges map
+  to the default categories: Groceries 5411, 5422, 5441, 5451, 5462, 5499;
+  Eating out 5812–5814; Transport 4111, 4112, 4121, 4131, 4784, 4789, 5541,
+  5542, 7523; Subscriptions 4899, 5815–5818; Utilities & phone 4812, 4814,
+  4900; Health & care 5122, 5912, 8011–8099; Fun & leisure 7832, 7922,
+  7991–7999; Shopping 5200–5399, 5600–5699, 5732, 5734, 5940–5999. Other
+  codes give none. Deutsche Bank sends no code at all (none of the 182
+  transactions of its first sync in October 2026 had one), so its card
+  payments are categorized by the rules on the merchant, which the banking
+  integration puts into the counterparty (see
+  [Banking](banking.md#mapping-to-finances-bank-import)).
 - A category chosen by hand (`categorizedBy: manual`: set in the Dashboard, by
   the AI, or by the import file, also when cleared with `null`) is never
   changed by a rule.
