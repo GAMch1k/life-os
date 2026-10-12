@@ -1,9 +1,11 @@
 package health
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"math"
+	"slices"
 	"time"
 
 	"github.com/GAMch1k/life-os/services/host-health/internal/docker"
@@ -52,7 +54,9 @@ func (f Fixture) Read(now time.Time) (host.Snapshot, error) {
 	}, nil
 }
 
-// History is a made-up day of samples up to now, one a minute.
+// History is a made-up day of samples up to now, one a minute. Life OS
+// used more memory and CPU in the middle of the day (a transcription, say)
+// than it does now.
 func (f Fixture) History(now time.Time) []Sample {
 	var samples []Sample
 	for minute := HistorySize - 1; minute >= 1; minute-- {
@@ -61,21 +65,29 @@ func (f Fixture) History(now time.Time) []Sample {
 		if f.Scenario == FixtureLowMemory && minute <= 10 {
 			snapshot.Memory.AvailableBytes = f.available(at)
 		}
-		samples = append(samples, SampleOf(snapshot))
+		usage := f.Usage(at, snapshot, f.containers())
+		hump := math.Sin(float64(minute) / HistorySize * math.Pi)
+		usage.LifeOS.MemoryBytes += uint64(hump * 400 * 1024 * 1024)
+		usage.LifeOS.CPUCores += hump * hump * 0.8
+		samples = append(samples, SampleOf(snapshot, usage))
 	}
 	return samples
 }
 
+// fixtureContainers are the made-up containers, with their memory as
+// docker stats and their cgroups show it (the same, for simplicity) and
+// the CPU cores they use.
 var fixtureContainers = []struct {
 	container docker.Container
 	memory    uint64
+	cpu       float64
 }{
-	{docker.Container{ID: "0a1b2c3d4e01", Name: "lifeos-postgres-1", Project: "lifeos", Service: "postgres", Image: "postgres:18.6-alpine", State: "running", Health: "healthy"}, 310 * 1024 * 1024},
-	{docker.Container{ID: "0a1b2c3d4e02", Name: "lifeos-whisper-1", Project: "lifeos", Service: "whisper", Image: "lifeos-whisper", State: "running", Health: "healthy"}, 1900 * 1024 * 1024},
-	{docker.Container{ID: "0a1b2c3d4e03", Name: "lifeos-dashboard-1", Project: "lifeos", Service: "dashboard", Image: "lifeos-dashboard", State: "running"}, 180 * 1024 * 1024},
-	{docker.Container{ID: "0a1b2c3d4e04", Name: "homeassistant", Project: "homeassistant", Service: "homeassistant", Image: "ghcr.io/home-assistant/home-assistant:stable", State: "running", Health: "healthy"}, 600 * 1024 * 1024},
-	{docker.Container{ID: "0a1b2c3d4e05", Name: "n8n", Project: "n8n", Service: "n8n", Image: "n8nio/n8n", State: "running"}, 420 * 1024 * 1024},
-	{docker.Container{ID: "0a1b2c3d4e06", Name: "forgejo-runner", Project: "forgejo", Service: "runner", Image: "code.forgejo.org/forgejo/runner", State: "exited"}, 0},
+	{docker.Container{ID: "0a1b2c3d4e01", Name: "lifeos-postgres-1", Project: "lifeos", Service: "postgres", Image: "postgres:18.6-alpine", State: "running", Health: "healthy"}, 310 * 1024 * 1024, 0.05},
+	{docker.Container{ID: "0a1b2c3d4e02", Name: "lifeos-whisper-1", Project: "lifeos", Service: "whisper", Image: "lifeos-whisper", State: "running", Health: "healthy"}, 1900 * 1024 * 1024, 0.3},
+	{docker.Container{ID: "0a1b2c3d4e03", Name: "lifeos-dashboard-1", Project: "lifeos", Service: "dashboard", Image: "lifeos-dashboard", State: "running"}, 180 * 1024 * 1024, 0.05},
+	{docker.Container{ID: "0a1b2c3d4e04", Name: "homeassistant", Project: "homeassistant", Service: "homeassistant", Image: "ghcr.io/home-assistant/home-assistant:stable", State: "running", Health: "healthy"}, 600 * 1024 * 1024, 0.5},
+	{docker.Container{ID: "0a1b2c3d4e05", Name: "n8n", Project: "n8n", Service: "n8n", Image: "n8nio/n8n", State: "running"}, 420 * 1024 * 1024, 0.3},
+	{docker.Container{ID: "0a1b2c3d4e06", Name: "forgejo-runner", Project: "forgejo", Service: "runner", Image: "code.forgejo.org/forgejo/runner", State: "exited"}, 0, 0},
 }
 
 // Containers is the made-up containers.
@@ -100,4 +112,37 @@ func (f Fixture) Memory(_ context.Context, id string) (docker.Memory, error) {
 		}
 	}
 	return docker.Memory{}, fmt.Errorf("no container %s", id)
+}
+
+// containers is the made-up containers as the sampler sees them.
+func (f Fixture) containers() Containers {
+	containers := Containers{Available: true}
+	for _, item := range fixtureContainers {
+		containers.Items = append(containers.Items, ContainerState{Container: item.container})
+	}
+	return containers
+}
+
+// Usage is the made-up Life OS's use of the server, the same every time:
+// its containers' memory and CPU, with CPU figures from the first sample
+// on. Everything else is the rest of the made-up server's memory, and the
+// other containers' CPU with 0.2 cores for the host itself.
+func (f Fixture) Usage(_ time.Time, snapshot host.Snapshot, _ Containers) Usage {
+	usage := Usage{Available: true, LifeOS: Share{CPUKnown: true}, Others: Share{CPUKnown: true, CPUCores: 0.2}}
+	for _, item := range fixtureContainers {
+		if item.container.State != "running" {
+			continue
+		}
+		if item.container.Project != "lifeos" {
+			usage.Others.CPUCores += item.cpu
+			continue
+		}
+		usage.LifeOS.MemoryBytes += item.memory
+		usage.LifeOS.CPUCores += item.cpu
+		usage.Services = append(usage.Services, ServiceUsage{Service: item.container.Service, Containers: 1, MemoryBytes: item.memory})
+	}
+	slices.SortFunc(usage.Services, func(a, b ServiceUsage) int { return cmp.Compare(b.MemoryBytes, a.MemoryBytes) })
+	used := snapshot.Memory.TotalBytes - snapshot.Memory.AvailableBytes
+	usage.Others.MemoryBytes = used - min(used, usage.LifeOS.MemoryBytes)
+	return usage
 }

@@ -58,11 +58,20 @@ func TestParseLoadavgUptimeAndCPUs(t *testing.T) {
 	}
 	file, _ := os.Open("testdata/stat")
 	defer file.Close()
-	if cpus, err := CountCPUs(file); err != nil || cpus != 6 {
-		t.Fatalf("CountCPUs = %d, %v", cpus, err)
+	// Busy is user, nice, system, irq, softirq, and steal; idle and iowait
+	// are not.
+	if cpus, times, err := ParseStat(file); err != nil || cpus != 6 || times != (CPUTime{Busy: 4705 + 356 + 584 + 23, Total: 4705 + 356 + 584 + 3699 + 23 + 23}) {
+		t.Fatalf("ParseStat = %d, %+v, %v", cpus, times, err)
 	}
-	if _, err := CountCPUs(strings.NewReader("cpu  1 2 3\nintr 5\n")); err == nil {
-		t.Error("CountCPUs found CPUs in the total line")
+	for name, text := range map[string]string{
+		"only the total line": "cpu  1 2 3 4 5\nintr 5\n",
+		"no total line":       "cpu0 1 2 3 4 5\n",
+		"a short total line":  "cpu  1 2 3\ncpu0 1 2 3 4 5\n",
+		"not a number":        "cpu  1 2 x 4 5\ncpu0 1 2 3 4 5\n",
+	} {
+		if _, _, err := ParseStat(strings.NewReader(text)); err == nil {
+			t.Errorf("ParseStat accepted %s", name)
+		}
 	}
 }
 
@@ -103,7 +112,7 @@ func TestReaderReadsAProcDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !snapshot.At.Equal(now) || snapshot.CPUs != 6 || snapshot.Load.Fifteen != 5.02 || snapshot.Memory.AvailableBytes != 3670016*1024 || len(snapshot.Disks) != 1 {
+	if !snapshot.At.Equal(now) || snapshot.CPUs != 6 || snapshot.CPUTime.Total != 9390 || snapshot.Load.Fifteen != 5.02 || snapshot.Memory.AvailableBytes != 3670016*1024 || len(snapshot.Disks) != 1 {
 		t.Fatalf("snapshot = %+v", snapshot)
 	}
 	// A disk that cannot be read leaves the rest of the snapshot good.

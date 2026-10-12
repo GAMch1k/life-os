@@ -63,6 +63,14 @@ func (h *Handler) GetHostHistory(c fiber.Ctx, params generated.GetHostHistoryPar
 			Load5:                sample.Load5,
 			Load15:               sample.Load15,
 		}
+		if sample.LifeOS != nil {
+			memory := int64(sample.LifeOS.MemoryBytes)
+			item.LifeOsMemoryBytes = &memory
+			if sample.LifeOS.CPUKnown {
+				cores := roundCores(sample.LifeOS.CPUCores)
+				item.LifeOsCpuCores = &cores
+			}
+		}
 		item.Disks = make([]struct {
 			FreeBytes int64  `json:"freeBytes"`
 			Label     string `json:"label"`
@@ -116,6 +124,40 @@ func toStatus(status health.Status) generated.HostStatus {
 	response.Containers = toContainers(status.Containers)
 	for _, finding := range status.Findings {
 		response.Findings = append(response.Findings, toFinding(finding))
+	}
+	usage := toUsage(status.Usage, snapshot.Memory.TotalBytes, snapshot.CPUs)
+	response.Usage = &usage
+	return response
+}
+
+// toUsage is Life OS's use of the server, each share also as a percentage
+// of the server's memory and CPUs.
+func toUsage(usage health.Usage, memoryTotal uint64, cpus int) generated.HostUsage {
+	response := generated.HostUsage{Available: usage.Available, Error: optional(usage.Error), Services: []generated.HostServiceUsage{}}
+	if !usage.Available {
+		return response
+	}
+	share := func(share health.Share) *generated.HostUsageShare {
+		out := &generated.HostUsageShare{MemoryBytes: int64(share.MemoryBytes)}
+		if memoryTotal > 0 {
+			out.MemoryPercent = round(float64(share.MemoryBytes) / float64(memoryTotal) * 100)
+		}
+		if share.CPUKnown {
+			cores := roundCores(share.CPUCores)
+			out.CpuCores = &cores
+			if cpus > 0 {
+				percent := round(share.CPUCores / float64(cpus) * 100)
+				out.CpuPercent = &percent
+			}
+		}
+		return out
+	}
+	response.LifeOs, response.Others = share(usage.LifeOS), share(usage.Others)
+	if usage.TestsRunning {
+		response.Tests = share(usage.Tests)
+	}
+	for _, service := range usage.Services[:min(len(usage.Services), 5)] {
+		response.Services = append(response.Services, generated.HostServiceUsage{Service: service.Service, Containers: service.Containers, MemoryBytes: int64(service.MemoryBytes)})
 	}
 	return response
 }
@@ -206,4 +248,9 @@ func optional(value string) *string {
 
 func round(value float64) float64 {
 	return float64(int64(value*10+0.5)) / 10
+}
+
+// roundCores keeps CPU cores to the hundredth.
+func roundCores(value float64) float64 {
+	return float64(int64(value*100+0.5)) / 100
 }

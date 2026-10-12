@@ -244,11 +244,27 @@ type HostSample struct {
 		FreeBytes int64  `json:"freeBytes"`
 		Label     string `json:"label"`
 	} `json:"disks"`
+
+	// LifeOsCpuCores Life OS's CPU over the interval before the sample, in cores; absent when not known.
+	LifeOsCpuCores *float64 `json:"lifeOsCpuCores,omitempty"`
+
+	// LifeOsMemoryBytes Life OS's memory in use (HostUsage); absent when it could not be read.
+	LifeOsMemoryBytes    *int64  `json:"lifeOsMemoryBytes,omitempty"`
 	Load1                float64 `json:"load1"`
 	Load15               float64 `json:"load15"`
 	Load5                float64 `json:"load5"`
 	MemoryAvailableBytes int64   `json:"memoryAvailableBytes"`
 	MemoryTotalBytes     int64   `json:"memoryTotalBytes"`
+}
+
+// HostServiceUsage defines model for HostServiceUsage.
+type HostServiceUsage struct {
+	// Containers Its running replicas, whose memory is summed.
+	Containers  int   `json:"containers"`
+	MemoryBytes int64 `json:"memoryBytes"`
+
+	// Service Its compose service (the container's name without one).
+	Service string `json:"service"`
 }
 
 // HostStatus defines model for HostStatus.
@@ -269,6 +285,9 @@ type HostStatus struct {
 	SampledAt     time.Time      `json:"sampledAt"`
 	Thresholds    HostThresholds `json:"thresholds"`
 	UptimeSeconds int64          `json:"uptimeSeconds"`
+
+	// Usage How much of the server Life OS uses (the running containers of the compose project HOST_HEALTH_LIFEOS_PROJECT, lifeos), against the test stack (HOST_HEALTH_IGNORE_PROJECTS) and everything else, read from the containers' cgroups.
+	Usage *HostUsage `json:"usage,omitempty"`
 }
 
 // HostStatusMode fixture: a made-up host, on the verification stack.
@@ -301,6 +320,40 @@ type HostThresholds struct {
 
 	// UnhealthyMinutes A container unhealthy this long is a warning.
 	UnhealthyMinutes int `json:"unhealthyMinutes"`
+}
+
+// HostUsage How much of the server Life OS uses (the running containers of the compose project HOST_HEALTH_LIFEOS_PROJECT, lifeos), against the test stack (HOST_HEALTH_IGNORE_PROJECTS) and everything else, read from the containers' cgroups.
+type HostUsage struct {
+	// Available False when the cgroups or the containers cannot be read, or no cgroups are set up; then only error is set.
+	Available bool `json:"available"`
+
+	// Error Why Life OS's use is not available.
+	Error *string `json:"error,omitempty"`
+
+	// LifeOs Life OS's containers.
+	LifeOs *HostUsageShare `json:"lifeOs,omitempty"`
+
+	// Others Everything else: the server's use (memory total less available; the CPUs' busy time) less Life OS and the test stack, never below zero.
+	Others *HostUsageShare `json:"others,omitempty"`
+
+	// Services Life OS's compose services using the most memory, biggest first (up to 5).
+	Services []HostServiceUsage `json:"services"`
+
+	// Tests The test stack's containers; only while any of them runs.
+	Tests *HostUsageShare `json:"tests,omitempty"`
+}
+
+// HostUsageShare One part of the server's use. Memory in use is counted as for the whole server (total less MemAvailable): each container's cgroup memory.current less what the kernel can reclaim at once, its page cache on the file lists (active_file, inactive_file) and reclaimable kernel memory (slab_reclaimable). That is less than docker stats shows, which subtracts inactive_file only.
+type HostUsageShare struct {
+	// CpuCores The CPU time used over the last interval, in cores (1 is one CPU busy all the time); absent until two samples allow it, as after a restart or a redeploy.
+	CpuCores *float64 `json:"cpuCores,omitempty"`
+
+	// CpuPercent Of the server's CPUs; absent with cpuCores.
+	CpuPercent  *float64 `json:"cpuPercent,omitempty"`
+	MemoryBytes int64    `json:"memoryBytes"`
+
+	// MemoryPercent Of the server's memory.
+	MemoryPercent float64 `json:"memoryPercent"`
 }
 
 // GetHostHistoryParams defines parameters for GetHostHistory.
