@@ -180,7 +180,8 @@ func (h *Handler) recordPayday(c fiber.Ctx, row store.PaydaySetting, changes []s
 // salary: of the booked payments in the default currency the payday
 // setting recognizes, the latest. A payment booked more than
 // budget.SalaryRecentDays ago (a bank's history read) asks for nothing,
-// and neither does one for a month already past. The plan is for the month
+// and neither does one for a month already past or after the next (an
+// entry dated ahead). The plan is for the month
 // the salary is meant for (budget.SalaryMonth); none is asked for when the
 // payment asked before, or the month has a plan that is waiting, running,
 // ready, or applied (a failed or dismissed one does not count). It returns
@@ -210,8 +211,8 @@ func (h *Handler) planOnSalary(ctx context.Context, q *store.Queries, items []st
 		return nil, nil
 	}
 	now := h.now()
-	month := budget.SalaryMonth(salary.OccurredOn.Time)
-	if !budget.SalaryRecent(salary.OccurredOn.Time, h.ownerDay(now)) || month.Before(budget.CurrentMonth(now, h.location)) {
+	month, current := budget.SalaryMonth(salary.OccurredOn.Time), budget.CurrentMonth(now, h.location)
+	if !budget.SalaryRecent(salary.OccurredOn.Time, h.ownerDay(now)) || month.Before(current) || month.After(budget.AddMonths(current, 1)) {
 		return nil, nil
 	}
 	if err := q.LockAIBudgetPlans(ctx); err != nil {

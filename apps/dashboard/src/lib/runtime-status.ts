@@ -180,7 +180,7 @@ export type ProcessorStatus = {
       planId: string;
       /** YYYY-MM. */
       month: string;
-      trigger: "request" | "schedule";
+      trigger: "request" | "schedule" | "salary";
       startedAt: string;
       finishedAt: string;
       attempt: number;

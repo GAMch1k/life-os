@@ -217,6 +217,11 @@ func TestManualAndCSVSalariesAskToo(t *testing.T) {
 	if len(plans) != 1 || *plans[0].Salary.TransactionId != pending.Id {
 		t.Fatalf("plans = %+v", plans)
 	}
+	// An entry dated months ahead asks for nothing.
+	c.spend(map[string]any{"accountId": cash.Id, "amount": eur(310000), "bookingDate": "2027-03-29", "counterparty": acme})
+	if april := c.plansFor("2027-04"); len(april) != 0 {
+		t.Fatalf("April = %+v", april)
+	}
 	// An entry created booked asks too (here for December, a month later).
 	c.at("2026-11-27", 18)
 	booked := c.spend(map[string]any{"accountId": cash.Id, "amount": eur(310000), "bookingDate": "2026-11-27", "counterparty": acme})

@@ -576,7 +576,8 @@ trigger `salary`, in the same database transaction:
 - for the **next** month when the salary was booked on or after the 15th,
   for its own month when before;
 - not when the payment was booked more than 40 days before the owner's
-  today (a bank's history read, a reconnected bank), or the month is past;
+  today (a bank's history read, a reconnected bank), or the month is past
+  or after the next one (an entry dated ahead);
 - not when that payment asked before (a repeated sync or an idempotent
   replay), or the month has a plan that is requested, running, ready,
   applied, or partly applied. A failed or dismissed plan does not count,
