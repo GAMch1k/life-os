@@ -33,7 +33,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Upload audio and enqueue asynchronous transcription */
+        /**
+         * Upload audio and enqueue asynchronous transcription
+         * @description An `Idempotency-Key` header makes the upload safe to retry: a repeat with the same key, the same audio content, `source`, and `sourceMetadata` stores nothing and returns the job the first upload created, in its current state (202, as the first upload did). Reusing the key with a different upload returns 409 `idempotency_conflict`. The key stays with the job for as long as the job exists. Without the header every upload creates a job.
+         */
         post: operations["createAudioJob"];
         delete?: never;
         options?: never;
@@ -137,7 +140,10 @@ export interface operations {
     createAudioJob: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Makes the upload safe to retry, such as the capture id an app sends with every attempt. 1 to 200 visible ASCII characters; anything else is 400 `invalid_request`. */
+                "Idempotency-Key"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -166,8 +172,15 @@ export interface operations {
                     "application/json": components["schemas"]["AudioJob"];
                 };
             };
-            /** @description Invalid audio */
+            /** @description Invalid audio, or an invalid Idempotency-Key (`invalid_request`) */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The Idempotency-Key was already used with a different upload (`idempotency_conflict`) */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

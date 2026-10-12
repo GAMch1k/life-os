@@ -2,7 +2,9 @@ package storage
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -143,6 +145,22 @@ func isMP4Audio(head []byte) bool {
 		audio = audio || mp4AudioBrands[brand]
 	}
 	return audio
+}
+
+// Digest is the hex SHA-256 of an upload's content. It tells a retried
+// upload of the same recording from a different one before anything is
+// stored.
+func Digest(input *multipart.FileHeader) (string, error) {
+	source, err := input.Open()
+	if err != nil {
+		return "", err
+	}
+	defer source.Close()
+	sum := sha256.New()
+	if _, err := io.Copy(sum, source); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(sum.Sum(nil)), nil
 }
 
 func (f Files) Store(key string, input *multipart.FileHeader) (int64, error) {

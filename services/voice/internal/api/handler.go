@@ -2,11 +2,15 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v3"
@@ -83,7 +87,14 @@ func (h *Handler) GetAudioBacklog(c fiber.Ctx) error {
 	return c.JSON(out)
 }
 
-func (h *Handler) CreateAudioJob(c fiber.Ctx) error {
+// idempotencyKeyLimit is the longest Idempotency-Key accepted, as in Food.
+const idempotencyKeyLimit = 200
+
+func (h *Handler) CreateAudioJob(c fiber.Ctx, params generated.CreateAudioJobParams) error {
+	idempotencyKey, err := uploadIdempotencyKey(params.IdempotencyKey)
+	if err != nil {
+		return err
+	}
 	file, err := c.FormFile("audio")
 	if err != nil || file.Size <= 0 {
 		return fiber.NewError(400, "audio is required")
@@ -108,16 +119,39 @@ func (h *Handler) CreateAudioJob(c fiber.Ctx) error {
 		}
 	}
 	encoded, _ := json.Marshal(metadata)
+	var requestHash *string
+	if idempotencyKey != nil {
+		digest, err := storage.Digest(file)
+		if err != nil {
+			return internal(err)
+		}
+		hash := uploadHash(digest, source, encoded)
+		requestHash = &hash
+		// A replay is answered from its job; the audio is not stored again.
+		existing, err := h.queries.GetAudioJobByIdempotencyKey(c.Context(), *idempotencyKey)
+		switch {
+		case err == nil:
+			return replay(c, existing, hash)
+		case !errors.Is(err, pgx.ErrNoRows):
+			return internal(err)
+		}
+	}
 	key := fmt.Sprintf("%d-%s", time.Now().UnixNano(), filepath.Base(file.Filename))
 	n, err := h.files.Store(key, file)
 	if err != nil {
 		return internal(err)
 	}
 	expires := time.Now().Add(h.retention)
-	job, err := h.queries.CreateAudioJob(c.Context(), store.CreateAudioJobParams{Source: source, SourceMetadata: encoded, ObjectKey: key, ContentType: contentType, ByteSize: n, ExpiresAt: pgtype.Timestamptz{Time: expires, Valid: true}})
+	job, err := h.queries.CreateAudioJob(c.Context(), store.CreateAudioJobParams{Source: source, SourceMetadata: encoded, ObjectKey: key, ContentType: contentType, ByteSize: n, ExpiresAt: pgtype.Timestamptz{Time: expires, Valid: true}, IdempotencyKey: idempotencyKey, RequestHash: requestHash})
 	if err != nil {
 		_ = h.files.Remove(key)
 		return internal(err)
+	}
+	if idempotencyKey != nil && job.ObjectKey != key {
+		// A concurrent upload with the same key created the job first: this
+		// copy of the audio is not needed.
+		_ = h.files.Remove(key)
+		return replay(c, job, *requestHash)
 	}
 	// A Voice job starts its own workflow: its id is the correlation id that
 	// the worker hands on to Inbox.
@@ -132,6 +166,44 @@ func (h *Handler) CreateAudioJob(c fiber.Ctx) error {
 		Summary:       "Voice recording accepted for transcription",
 		Data:          map[string]any{"source": source, "contentType": contentType, "byteSize": n},
 	})
+	return c.Status(202).JSON(output(job))
+}
+
+// uploadIdempotencyKey checks an upload's optional Idempotency-Key: 1 to 200
+// visible ASCII characters, such as the capture id an app sends with every
+// retry. An empty header is no key, as for Tasks.
+func uploadIdempotencyKey(header *string) (*string, error) {
+	if header == nil || *header == "" {
+		return nil, nil
+	}
+	key := *header
+	if len(key) > idempotencyKeyLimit || strings.IndexFunc(key, func(r rune) bool { return r < '!' || r > '~' }) >= 0 {
+		return nil, httpserver.NewError(400, "invalid_request", fmt.Sprintf("Idempotency-Key must be 1 to %d visible ASCII characters", idempotencyKeyLimit))
+	}
+	return &key, nil
+}
+
+// uploadHash identifies what an upload asks for: the audio's content, the
+// source, and the metadata (as stored: re-encoded JSON with sorted keys, so
+// key order and spacing do not matter). Unlike Tasks' JSON body, the
+// multipart body is not hashed as sent, because its boundary changes with
+// every retry.
+func uploadHash(audioDigest, source string, metadata []byte) string {
+	sum := sha256.New()
+	for _, part := range [][]byte{[]byte(audioDigest), []byte(source), metadata} {
+		_ = binary.Write(sum, binary.BigEndian, uint64(len(part)))
+		_, _ = sum.Write(part)
+	}
+	return hex.EncodeToString(sum.Sum(nil))
+}
+
+// replay answers an upload whose Idempotency-Key is already on job: with the
+// job in its current state when the upload is the same, as the first upload
+// was answered (202), and recording nothing new; with 409 when it is not.
+func replay(c fiber.Ctx, job store.AudioJob, requestHash string) error {
+	if job.RequestHash == nil || *job.RequestHash != requestHash {
+		return httpserver.NewError(409, "idempotency_conflict", "The Idempotency-Key was already used with a different upload")
+	}
 	return c.Status(202).JSON(output(job))
 }
 func (h *Handler) GetAudioJob(c fiber.Ctx, id types.UUID) error {

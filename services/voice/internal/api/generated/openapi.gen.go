@@ -5,6 +5,7 @@ package generated
 
 import (
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/gofiber/fiber/v3"
@@ -135,6 +136,12 @@ type CreateAudioJobMultipartBody struct {
 	SourceMetadata *string `json:"sourceMetadata,omitempty"`
 }
 
+// CreateAudioJobParams defines parameters for CreateAudioJob.
+type CreateAudioJobParams struct {
+	// IdempotencyKey Makes the upload safe to retry, such as the capture id an app sends with every attempt. 1 to 200 visible ASCII characters; anything else is 400 `invalid_request`.
+	IdempotencyKey *string `json:"Idempotency-Key,omitempty"`
+}
+
 // CreateAudioJobMultipartBodySource defines parameters for CreateAudioJob.
 type CreateAudioJobMultipartBodySource string
 
@@ -145,7 +152,7 @@ type CreateAudioJobMultipartRequestBody CreateAudioJobMultipartBody
 type ServerInterface interface {
 	// CreateAudioJob Upload audio and enqueue asynchronous transcription
 	// (POST /v1/audio-jobs)
-	CreateAudioJob(c fiber.Ctx) error
+	CreateAudioJob(c fiber.Ctx, params CreateAudioJobParams) error
 	// GetAudioJob Poll an asynchronous transcription job
 	// (GET /v1/audio-jobs/{jobId})
 	GetAudioJob(c fiber.Ctx, jobId openapi_types.UUID) error
@@ -166,8 +173,33 @@ type HandlerMiddlewareFunc func(c fiber.Ctx, next fiber.Handler) error
 // CreateAudioJob operation middleware
 func (siw *ServerInterfaceWrapper) CreateAudioJob(c fiber.Ctx) error {
 
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreateAudioJobParams
+
+	headers := c.GetReqHeaders()
+
+	// ------------- Optional header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey string
+		n := len(valueList)
+		if n != 1 {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("Too many values for ParamName Idempotency-Key, 1 is required, but %d found", n))
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter Idempotency-Key: %w", err).Error())
+		}
+
+		params.IdempotencyKey = &IdempotencyKey
+
+	}
+
 	handler := func(c fiber.Ctx) error {
-		return siw.Handler.CreateAudioJob(c)
+		return siw.Handler.CreateAudioJob(c, params)
 	}
 
 	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {

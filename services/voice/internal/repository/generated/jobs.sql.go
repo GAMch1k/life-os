@@ -18,7 +18,7 @@ WITH candidate AS (
 )
 UPDATE audio_jobs SET status='processing', attempt_count=attempt_count+1, lease_owner=$1,
   lease_expires_at=now() + ($2::integer * INTERVAL '1 second'), last_heartbeat_at=now(), updated_at=now()
-WHERE id=(SELECT id FROM candidate) RETURNING id, source, source_metadata, object_key, content_type, byte_size, status, transcript, inbox_item_id, attempt_count, error_summary, available_at, created_at, updated_at, completed_at, expires_at, lease_owner, lease_expires_at, last_heartbeat_at
+WHERE id=(SELECT id FROM candidate) RETURNING id, source, source_metadata, object_key, content_type, byte_size, status, transcript, inbox_item_id, attempt_count, error_summary, available_at, created_at, updated_at, completed_at, expires_at, lease_owner, lease_expires_at, last_heartbeat_at, idempotency_key, request_hash
 `
 
 type ClaimAudioJobParams struct {
@@ -49,6 +49,8 @@ func (q *Queries) ClaimAudioJob(ctx context.Context, arg ClaimAudioJobParams) (A
 		&i.LeaseOwner,
 		&i.LeaseExpiresAt,
 		&i.LastHeartbeatAt,
+		&i.IdempotencyKey,
+		&i.RequestHash,
 	)
 	return i, err
 }
@@ -56,7 +58,7 @@ func (q *Queries) ClaimAudioJob(ctx context.Context, arg ClaimAudioJobParams) (A
 const completeAudioJob = `-- name: CompleteAudioJob :one
 UPDATE audio_jobs SET status='succeeded', transcript=$2, inbox_item_id=$3, error_summary=NULL, completed_at=now(),
   lease_owner=NULL, lease_expires_at=NULL, last_heartbeat_at=now(), updated_at=now()
-WHERE id=$1 AND status='processing' AND inbox_item_id IS NULL AND lease_owner=$4 AND lease_expires_at > now() RETURNING id, source, source_metadata, object_key, content_type, byte_size, status, transcript, inbox_item_id, attempt_count, error_summary, available_at, created_at, updated_at, completed_at, expires_at, lease_owner, lease_expires_at, last_heartbeat_at
+WHERE id=$1 AND status='processing' AND inbox_item_id IS NULL AND lease_owner=$4 AND lease_expires_at > now() RETURNING id, source, source_metadata, object_key, content_type, byte_size, status, transcript, inbox_item_id, attempt_count, error_summary, available_at, created_at, updated_at, completed_at, expires_at, lease_owner, lease_expires_at, last_heartbeat_at, idempotency_key, request_hash
 `
 
 type CompleteAudioJobParams struct {
@@ -94,13 +96,17 @@ func (q *Queries) CompleteAudioJob(ctx context.Context, arg CompleteAudioJobPara
 		&i.LeaseOwner,
 		&i.LeaseExpiresAt,
 		&i.LastHeartbeatAt,
+		&i.IdempotencyKey,
+		&i.RequestHash,
 	)
 	return i, err
 }
 
 const createAudioJob = `-- name: CreateAudioJob :one
-INSERT INTO audio_jobs (source, source_metadata, object_key, content_type, byte_size, expires_at)
-VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, source, source_metadata, object_key, content_type, byte_size, status, transcript, inbox_item_id, attempt_count, error_summary, available_at, created_at, updated_at, completed_at, expires_at, lease_owner, lease_expires_at, last_heartbeat_at
+INSERT INTO audio_jobs (source, source_metadata, object_key, content_type, byte_size, expires_at, idempotency_key, request_hash)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO UPDATE SET idempotency_key = EXCLUDED.idempotency_key
+RETURNING id, source, source_metadata, object_key, content_type, byte_size, status, transcript, inbox_item_id, attempt_count, error_summary, available_at, created_at, updated_at, completed_at, expires_at, lease_owner, lease_expires_at, last_heartbeat_at, idempotency_key, request_hash
 `
 
 type CreateAudioJobParams struct {
@@ -110,8 +116,13 @@ type CreateAudioJobParams struct {
 	ContentType    string
 	ByteSize       int64
 	ExpiresAt      pgtype.Timestamptz
+	IdempotencyKey *string
+	RequestHash    *string
 }
 
+// With an idempotency key already on a job (a repeated or concurrent upload),
+// nothing is inserted and that job is returned: its object_key is then not
+// the one given.
 func (q *Queries) CreateAudioJob(ctx context.Context, arg CreateAudioJobParams) (AudioJob, error) {
 	row := q.db.QueryRow(ctx, createAudioJob,
 		arg.Source,
@@ -120,6 +131,8 @@ func (q *Queries) CreateAudioJob(ctx context.Context, arg CreateAudioJobParams) 
 		arg.ContentType,
 		arg.ByteSize,
 		arg.ExpiresAt,
+		arg.IdempotencyKey,
+		arg.RequestHash,
 	)
 	var i AudioJob
 	err := row.Scan(
@@ -142,12 +155,14 @@ func (q *Queries) CreateAudioJob(ctx context.Context, arg CreateAudioJobParams) 
 		&i.LeaseOwner,
 		&i.LeaseExpiresAt,
 		&i.LastHeartbeatAt,
+		&i.IdempotencyKey,
+		&i.RequestHash,
 	)
 	return i, err
 }
 
 const expireAudioJob = `-- name: ExpireAudioJob :one
-UPDATE audio_jobs SET status='expired', transcript=NULL, updated_at=now() WHERE id=$1 RETURNING id, source, source_metadata, object_key, content_type, byte_size, status, transcript, inbox_item_id, attempt_count, error_summary, available_at, created_at, updated_at, completed_at, expires_at, lease_owner, lease_expires_at, last_heartbeat_at
+UPDATE audio_jobs SET status='expired', transcript=NULL, updated_at=now() WHERE id=$1 RETURNING id, source, source_metadata, object_key, content_type, byte_size, status, transcript, inbox_item_id, attempt_count, error_summary, available_at, created_at, updated_at, completed_at, expires_at, lease_owner, lease_expires_at, last_heartbeat_at, idempotency_key, request_hash
 `
 
 func (q *Queries) ExpireAudioJob(ctx context.Context, id pgtype.UUID) (AudioJob, error) {
@@ -173,6 +188,8 @@ func (q *Queries) ExpireAudioJob(ctx context.Context, id pgtype.UUID) (AudioJob,
 		&i.LeaseOwner,
 		&i.LeaseExpiresAt,
 		&i.LastHeartbeatAt,
+		&i.IdempotencyKey,
+		&i.RequestHash,
 	)
 	return i, err
 }
@@ -215,7 +232,7 @@ func (q *Queries) GetAudioBacklog(ctx context.Context) (GetAudioBacklogRow, erro
 }
 
 const getAudioJob = `-- name: GetAudioJob :one
-SELECT id, source, source_metadata, object_key, content_type, byte_size, status, transcript, inbox_item_id, attempt_count, error_summary, available_at, created_at, updated_at, completed_at, expires_at, lease_owner, lease_expires_at, last_heartbeat_at FROM audio_jobs WHERE id = $1
+SELECT id, source, source_metadata, object_key, content_type, byte_size, status, transcript, inbox_item_id, attempt_count, error_summary, available_at, created_at, updated_at, completed_at, expires_at, lease_owner, lease_expires_at, last_heartbeat_at, idempotency_key, request_hash FROM audio_jobs WHERE id = $1
 `
 
 func (q *Queries) GetAudioJob(ctx context.Context, id pgtype.UUID) (AudioJob, error) {
@@ -241,6 +258,41 @@ func (q *Queries) GetAudioJob(ctx context.Context, id pgtype.UUID) (AudioJob, er
 		&i.LeaseOwner,
 		&i.LeaseExpiresAt,
 		&i.LastHeartbeatAt,
+		&i.IdempotencyKey,
+		&i.RequestHash,
+	)
+	return i, err
+}
+
+const getAudioJobByIdempotencyKey = `-- name: GetAudioJobByIdempotencyKey :one
+SELECT id, source, source_metadata, object_key, content_type, byte_size, status, transcript, inbox_item_id, attempt_count, error_summary, available_at, created_at, updated_at, completed_at, expires_at, lease_owner, lease_expires_at, last_heartbeat_at, idempotency_key, request_hash FROM audio_jobs WHERE idempotency_key = $1::text
+`
+
+func (q *Queries) GetAudioJobByIdempotencyKey(ctx context.Context, idempotencyKey string) (AudioJob, error) {
+	row := q.db.QueryRow(ctx, getAudioJobByIdempotencyKey, idempotencyKey)
+	var i AudioJob
+	err := row.Scan(
+		&i.ID,
+		&i.Source,
+		&i.SourceMetadata,
+		&i.ObjectKey,
+		&i.ContentType,
+		&i.ByteSize,
+		&i.Status,
+		&i.Transcript,
+		&i.InboxItemID,
+		&i.AttemptCount,
+		&i.ErrorSummary,
+		&i.AvailableAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CompletedAt,
+		&i.ExpiresAt,
+		&i.LeaseOwner,
+		&i.LeaseExpiresAt,
+		&i.LastHeartbeatAt,
+		&i.IdempotencyKey,
+		&i.RequestHash,
 	)
 	return i, err
 }
@@ -264,7 +316,7 @@ func (q *Queries) GetLatestAudioFailure(ctx context.Context) (GetLatestAudioFail
 }
 
 const listExpiredAudioJobs = `-- name: ListExpiredAudioJobs :many
-SELECT id, source, source_metadata, object_key, content_type, byte_size, status, transcript, inbox_item_id, attempt_count, error_summary, available_at, created_at, updated_at, completed_at, expires_at, lease_owner, lease_expires_at, last_heartbeat_at FROM audio_jobs
+SELECT id, source, source_metadata, object_key, content_type, byte_size, status, transcript, inbox_item_id, attempt_count, error_summary, available_at, created_at, updated_at, completed_at, expires_at, lease_owner, lease_expires_at, last_heartbeat_at, idempotency_key, request_hash FROM audio_jobs
 WHERE expires_at <= now() AND status <> 'expired'
   AND (status <> 'processing' OR lease_expires_at <= now())
 ORDER BY expires_at LIMIT $1
@@ -299,6 +351,8 @@ func (q *Queries) ListExpiredAudioJobs(ctx context.Context, limit int32) ([]Audi
 			&i.LeaseOwner,
 			&i.LeaseExpiresAt,
 			&i.LastHeartbeatAt,
+			&i.IdempotencyKey,
+			&i.RequestHash,
 		); err != nil {
 			return nil, err
 		}
@@ -321,7 +375,7 @@ UPDATE audio_jobs AS job SET
   error_summary=$2,
   available_at=CASE WHEN job.attempt_count >= $1 THEN job.available_at ELSE $3 END,
   lease_owner=NULL, lease_expires_at=NULL, updated_at=now()
-WHERE job.id IN (SELECT id FROM abandoned) RETURNING job.id, job.source, job.source_metadata, job.object_key, job.content_type, job.byte_size, job.status, job.transcript, job.inbox_item_id, job.attempt_count, job.error_summary, job.available_at, job.created_at, job.updated_at, job.completed_at, job.expires_at, job.lease_owner, job.lease_expires_at, job.last_heartbeat_at
+WHERE job.id IN (SELECT id FROM abandoned) RETURNING job.id, job.source, job.source_metadata, job.object_key, job.content_type, job.byte_size, job.status, job.transcript, job.inbox_item_id, job.attempt_count, job.error_summary, job.available_at, job.created_at, job.updated_at, job.completed_at, job.expires_at, job.lease_owner, job.lease_expires_at, job.last_heartbeat_at, job.idempotency_key, job.request_hash
 `
 
 type ReclaimExpiredAudioJobsParams struct {
@@ -359,6 +413,8 @@ func (q *Queries) ReclaimExpiredAudioJobs(ctx context.Context, arg ReclaimExpire
 			&i.LeaseOwner,
 			&i.LeaseExpiresAt,
 			&i.LastHeartbeatAt,
+			&i.IdempotencyKey,
+			&i.RequestHash,
 		); err != nil {
 			return nil, err
 		}
@@ -374,7 +430,7 @@ const renewAudioJobLease = `-- name: RenewAudioJobLease :one
 UPDATE audio_jobs SET lease_expires_at=now() + ($1::integer * INTERVAL '1 second'),
   last_heartbeat_at=now(), updated_at=now()
 WHERE id=$2 AND status='processing' AND lease_owner=$3 AND lease_expires_at > now()
-RETURNING id, source, source_metadata, object_key, content_type, byte_size, status, transcript, inbox_item_id, attempt_count, error_summary, available_at, created_at, updated_at, completed_at, expires_at, lease_owner, lease_expires_at, last_heartbeat_at
+RETURNING id, source, source_metadata, object_key, content_type, byte_size, status, transcript, inbox_item_id, attempt_count, error_summary, available_at, created_at, updated_at, completed_at, expires_at, lease_owner, lease_expires_at, last_heartbeat_at, idempotency_key, request_hash
 `
 
 type RenewAudioJobLeaseParams struct {
@@ -406,13 +462,15 @@ func (q *Queries) RenewAudioJobLease(ctx context.Context, arg RenewAudioJobLease
 		&i.LeaseOwner,
 		&i.LeaseExpiresAt,
 		&i.LastHeartbeatAt,
+		&i.IdempotencyKey,
+		&i.RequestHash,
 	)
 	return i, err
 }
 
 const retryAudioJob = `-- name: RetryAudioJob :one
 UPDATE audio_jobs SET status=$2, error_summary=$3, available_at=$4, lease_owner=NULL, lease_expires_at=NULL, updated_at=now()
-WHERE id=$1 AND status='processing' AND lease_owner=$5 AND lease_expires_at > now() RETURNING id, source, source_metadata, object_key, content_type, byte_size, status, transcript, inbox_item_id, attempt_count, error_summary, available_at, created_at, updated_at, completed_at, expires_at, lease_owner, lease_expires_at, last_heartbeat_at
+WHERE id=$1 AND status='processing' AND lease_owner=$5 AND lease_expires_at > now() RETURNING id, source, source_metadata, object_key, content_type, byte_size, status, transcript, inbox_item_id, attempt_count, error_summary, available_at, created_at, updated_at, completed_at, expires_at, lease_owner, lease_expires_at, last_heartbeat_at, idempotency_key, request_hash
 `
 
 type RetryAudioJobParams struct {
@@ -452,6 +510,8 @@ func (q *Queries) RetryAudioJob(ctx context.Context, arg RetryAudioJobParams) (A
 		&i.LeaseOwner,
 		&i.LeaseExpiresAt,
 		&i.LastHeartbeatAt,
+		&i.IdempotencyKey,
+		&i.RequestHash,
 	)
 	return i, err
 }

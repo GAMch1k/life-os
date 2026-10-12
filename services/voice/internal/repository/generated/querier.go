@@ -13,10 +13,14 @@ import (
 type Querier interface {
 	ClaimAudioJob(ctx context.Context, arg ClaimAudioJobParams) (AudioJob, error)
 	CompleteAudioJob(ctx context.Context, arg CompleteAudioJobParams) (AudioJob, error)
+	// With an idempotency key already on a job (a repeated or concurrent upload),
+	// nothing is inserted and that job is returned: its object_key is then not
+	// the one given.
 	CreateAudioJob(ctx context.Context, arg CreateAudioJobParams) (AudioJob, error)
 	ExpireAudioJob(ctx context.Context, id pgtype.UUID) (AudioJob, error)
 	GetAudioBacklog(ctx context.Context) (GetAudioBacklogRow, error)
 	GetAudioJob(ctx context.Context, id pgtype.UUID) (AudioJob, error)
+	GetAudioJobByIdempotencyKey(ctx context.Context, idempotencyKey string) (AudioJob, error)
 	GetLatestAudioFailure(ctx context.Context) (GetLatestAudioFailureRow, error)
 	ListExpiredAudioJobs(ctx context.Context, limit int32) ([]AudioJob, error)
 	ReclaimExpiredAudioJobs(ctx context.Context, arg ReclaimExpiredAudioJobsParams) ([]AudioJob, error)
