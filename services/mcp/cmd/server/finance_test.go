@@ -197,3 +197,62 @@ func TestTheAIsCategoryToolsCallFinance(t *testing.T) {
 		t.Fatalf("refused calls reached Finance: %d requests", len(*requests))
 	}
 }
+
+func TestTheBudgetPlanToolsCallFinance(t *testing.T) {
+	session, requests := financeSession(t, http.StatusOK, `{"items":[],"waiting":0}`)
+	const plan, category = "4c0b7c1e-8f2a-4d7b-9e6a-1a2b3c4d5e6f", "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
+	calls := []struct {
+		tool                string
+		arguments           map[string]any
+		method, path, query string
+	}{
+		{"finance_list_budget_plans", map[string]any{"state": "requested", "limit": 1}, http.MethodGet, "/v1/ai-budget-plans", "limit=1&state=requested"},
+		{"finance_get_budget_planning_data", map[string]any{"month": "2026-11"}, http.MethodGet, "/v1/budgets/2026-11/planning-data", ""},
+		{"finance_request_budget_plan", map[string]any{"month": "2026-11"}, http.MethodPost, "/v1/ai-budget-plans", ""},
+		{"finance_claim_budget_plan", map[string]any{}, http.MethodPost, "/v1/ai-budget-plans/claim", ""},
+		{"finance_set_budget_plan_result", map[string]any{"planId": plan, "currency": "eur", "headline": "Eat out less.",
+			"lines":               []map[string]any{{"categoryId": category, "proposedMinor": 9000, "reason": "Less pizza."}},
+			"suggestions":         []map[string]any{{"title": "Cook", "detail": "Cook twice a week.", "categoryId": category, "merchants": []string{"Pizzeria Roma"}, "monthlySavingMinor": 3000, "link": "food_recipes"}},
+			"projectedTotalMinor": 9000, "incomeEstimateMinor": 200000, "projectedSavingsMinor": 191000}, http.MethodPut, "/v1/ai-budget-plans/" + plan + "/result", ""},
+		{"finance_fail_budget_plan", map[string]any{"planId": plan, "error": "usage limit", "retryAt": "2026-11-01T08:00:00+01:00"}, http.MethodPost, "/v1/ai-budget-plans/" + plan + "/failure", ""},
+	}
+	for index, call := range calls {
+		if result := callTool(t, session, call.tool, call.arguments); result.IsError {
+			t.Fatalf("%s failed: %s", call.tool, resultText(result))
+		}
+		got := (*requests)[index]
+		if got.Method != call.method || got.Path != call.path || got.Query != call.query || got.Actor != "agent:mcp" {
+			t.Fatalf("%s: Finance saw %+v", call.tool, got)
+		}
+	}
+	if body := (*requests)[2].RawBody; body != `{"month":"2026-11","trigger":"schedule"}` {
+		t.Fatalf("request body = %s", body)
+	}
+	if body := (*requests)[4].RawBody; !strings.Contains(body, `"currency":"EUR"`) || strings.Contains(body, "planId") ||
+		!strings.Contains(body, `"categoryId":"`+category+`"`) || !strings.Contains(body, `"link":"food_recipes"`) {
+		t.Fatalf("result body = %s", body)
+	}
+	if body := (*requests)[5].RawBody; body != `{"error":"usage limit","retryAt":"2026-11-01T07:00:00Z"}` {
+		t.Fatalf("failure body = %s", body)
+	}
+	for name, call := range map[string]struct {
+		tool      string
+		arguments map[string]any
+	}{
+		"a bad month":           {"finance_get_budget_planning_data", map[string]any{"month": "November"}},
+		"an unknown state":      {"finance_list_budget_plans", map[string]any{"state": "thinking"}},
+		"a large limit":         {"finance_list_budget_plans", map[string]any{"limit": 500}},
+		"a negative goal":       {"finance_request_budget_plan", map[string]any{"savingsGoalMinor": -1}},
+		"a plan name":           {"finance_set_budget_plan_result", map[string]any{"planId": "November", "lines": []map[string]any{}}},
+		"a category name":       {"finance_set_budget_plan_result", map[string]any{"planId": plan, "lines": []map[string]any{{"categoryId": "Eating out", "proposedMinor": 1, "reason": "x"}}}},
+		"a failure without why": {"finance_fail_budget_plan", map[string]any{"planId": plan, "error": " "}},
+		"a bad retry time":      {"finance_fail_budget_plan", map[string]any{"planId": plan, "error": "x", "retryAt": "tomorrow"}},
+	} {
+		if result := callTool(t, session, call.tool, call.arguments); !result.IsError {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+	if len(*requests) != len(calls) {
+		t.Fatalf("refused calls reached Finance: %d requests", len(*requests))
+	}
+}

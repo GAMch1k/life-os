@@ -68,7 +68,67 @@ type aiChoice struct {
 	CategoryID    *string `json:"categoryId" jsonschema:"Finance category UUID (from finance_list_categories), or null to leave the transaction without a category"`
 }
 
-var currencyCode = regexp.MustCompile(`^[A-Z]{3}$`)
+// budgetPlanRequest asks Finance for an AI budget plan: the monthly
+// schedule's.
+type budgetPlanRequest struct {
+	Month            string `json:"month,omitempty" jsonschema:"YYYY-MM; leave out for Finance's default: this month during its first 7 days, else the next"`
+	SavingsGoalMinor *int64 `json:"savingsGoalMinor,omitempty" jsonschema:"How much to save a month, in minor units (cents)"`
+}
+
+// budgetPlanQuery lists AI budget plans.
+type budgetPlanQuery struct {
+	Month string `json:"month,omitempty" jsonschema:"Only this month's plans, YYYY-MM"`
+	State string `json:"state,omitempty" jsonschema:"Only plans in this state: requested, running, ready, failed, applied, partly_applied, or dismissed"`
+	Limit int    `json:"limit,omitempty" jsonschema:"1 to 50 (default 10)"`
+}
+
+// budgetPlanMonth names the month to plan.
+type budgetPlanMonth struct {
+	Month string `json:"month" jsonschema:"The month to plan, YYYY-MM"`
+}
+
+// budgetPlanClaim claims the next plan to run; it takes nothing.
+type budgetPlanClaim struct{}
+
+// budgetPlanResult is the AI's checked proposal for a claimed plan.
+type budgetPlanResult struct {
+	PlanID                string                 `json:"planId" jsonschema:"The plan's UUID (from finance_claim_budget_plan)"`
+	Currency              string                 `json:"currency" jsonschema:"The plan's currency, such as EUR"`
+	Headline              string                 `json:"headline" jsonschema:"One short sentence on the plan"`
+	Lines                 []budgetPlanLine       `json:"lines" jsonschema:"An amount for every active expense category of the planning data"`
+	Suggestions           []budgetPlanSuggestion `json:"suggestions" jsonschema:"2 to 5 ways to spend less"`
+	ProjectedTotalMinor   int64                  `json:"projectedTotalMinor" jsonschema:"The sum of the lines"`
+	IncomeEstimateMinor   int64                  `json:"incomeEstimateMinor" jsonschema:"The month's expected income"`
+	ProjectedSavingsMinor int64                  `json:"projectedSavingsMinor" jsonschema:"The income estimate minus the projected total"`
+}
+
+type budgetPlanLine struct {
+	CategoryID    string `json:"categoryId" jsonschema:"An active expense category's UUID (from finance_get_budget_planning_data)"`
+	ProposedMinor int64  `json:"proposedMinor" jsonschema:"The amount for the month, 0 or more, in minor units"`
+	Reason        string `json:"reason" jsonschema:"One sentence"`
+}
+
+type budgetPlanSuggestion struct {
+	Title              string   `json:"title"`
+	Detail             string   `json:"detail"`
+	CategoryID         *string  `json:"categoryId" jsonschema:"The category the saving comes from (UUID), or null"`
+	Merchants          []string `json:"merchants" jsonschema:"Names of that category's merchants in the planning data"`
+	MonthlySavingMinor int64    `json:"monthlySavingMinor" jsonschema:"What it saves a month, in minor units"`
+	Link               *string  `json:"link" jsonschema:"food_recipes to point to Food's recipes, or null"`
+}
+
+// budgetPlanFailure notes a failed run of a plan.
+type budgetPlanFailure struct {
+	PlanID  string `json:"planId" jsonschema:"The plan's UUID"`
+	Error   string `json:"error" jsonschema:"What went wrong"`
+	RetryAt string `json:"retryAt,omitempty" jsonschema:"RFC3339 time to try again; leave out to fail the plan for good"`
+}
+
+var (
+	currencyCode = regexp.MustCompile(`^[A-Z]{3}$`)
+	monthKey     = regexp.MustCompile(`^\d{4}-(0[1-9]|1[0-2])$`)
+	planStates   = map[string]bool{"requested": true, "running": true, "ready": true, "failed": true, "applied": true, "partly_applied": true, "dismissed": true}
+)
 
 // addFinanceTools registers the Finance tools. Each is a Finance API
 // operation, the same one the Dashboard uses.
@@ -117,6 +177,7 @@ func addFinanceTools(s *mcp.Server, hc *http.Client, baseURL string, emitter *ac
 			return post(ctx, hc, trace, baseURL, "/v1/categories/ai/choices", body)
 		})
 	})
+	addBudgetPlanTools(s, hc, baseURL, emitter)
 	mcp.AddTool(s, &mcp.Tool{Name: "finance_create_manual_transaction", Description: "Record a manual Finance transaction. Only the amount (signed minor units and currency) is required: without accountId it goes to the built-in Cash account, so \"spent 12 euros at the bakery\" is {amount: {amount: -1200, currency: EUR}, counterparty: Bäckerei}; without occurredOn it is dated today in the owner's timezone; without categoryId the category rules choose"}, func(ctx context.Context, req *mcp.CallToolRequest, in financeAction) (*mcp.CallToolResult, Output, error) {
 		return audited(ctx, emitter, req, "finance_create_manual_transaction", in, func(trace activity.Trace) (*mcp.CallToolResult, Output, error) {
 			body, err := transactionBody(in)
@@ -252,4 +313,143 @@ func searchQuery(in transactionSearch) (string, error) {
 		query.Set("cursor", in.Cursor)
 	}
 	return query.Encode(), nil
+}
+
+// addBudgetPlanTools registers the AI budget plan job's tools (P13-09):
+// two reads and four audited writes, never planned by a capture.
+func addBudgetPlanTools(s *mcp.Server, hc *http.Client, baseURL string, emitter *activity.Emitter) {
+	get := func(ctx context.Context, req *mcp.CallToolRequest, path string) (*mcp.CallToolResult, Output, error) {
+		headers := http.Header{}
+		traceOf(req).Apply(headers)
+		body, err := coreclient.Client{BaseURL: baseURL, HTTP: hc}.DoWithHeaders(ctx, http.MethodGet, path, nil, headers)
+		if err != nil {
+			return nil, Output{}, err
+		}
+		out, err := output(body)
+		return nil, out, err
+	}
+	mcp.AddTool(s, &mcp.Tool{Name: "finance_list_budget_plans", Description: "List the AI's budget plans, newest first, of a month and in a state when given, with how many wait for the AI budget plan job (waiting)"}, func(ctx context.Context, req *mcp.CallToolRequest, in budgetPlanQuery) (*mcp.CallToolResult, Output, error) {
+		query := url.Values{}
+		if in.Month != "" {
+			if !monthKey.MatchString(in.Month) {
+				return nil, Output{}, errors.New("month must be YYYY-MM")
+			}
+			query.Set("month", in.Month)
+		}
+		if in.State != "" {
+			if !planStates[in.State] {
+				return nil, Output{}, errors.New("state must be requested, running, ready, failed, applied, partly_applied, or dismissed")
+			}
+			query.Set("state", in.State)
+		}
+		limit := in.Limit
+		if limit == 0 {
+			limit = 10
+		}
+		if limit < 1 || limit > 50 {
+			return nil, Output{}, errors.New("limit must be between 1 and 50")
+		}
+		query.Set("limit", strconv.Itoa(limit))
+		return get(ctx, req, "/v1/ai-budget-plans?"+query.Encode())
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "finance_get_budget_planning_data", Description: "Get what a month's budget is planned from, aggregates only: up to 12 complete months of income and spending, per active expense category its spending per month, median, last month, trend, planned amount, and top merchants, the plan that applies, confirmed subscriptions, and the balance now"}, func(ctx context.Context, req *mcp.CallToolRequest, in budgetPlanMonth) (*mcp.CallToolResult, Output, error) {
+		if !monthKey.MatchString(in.Month) {
+			return nil, Output{}, errors.New("month must be YYYY-MM")
+		}
+		return get(ctx, req, "/v1/budgets/"+in.Month+"/planning-data")
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "finance_request_budget_plan", Description: "Ask for the monthly AI budget plan of a month (trigger schedule): one per month, and a repeat answers with it"}, func(ctx context.Context, req *mcp.CallToolRequest, in budgetPlanRequest) (*mcp.CallToolResult, Output, error) {
+		return audited(ctx, emitter, req, "finance_request_budget_plan", in, func(trace activity.Trace) (*mcp.CallToolResult, Output, error) {
+			body := map[string]any{"trigger": "schedule"}
+			if in.Month != "" {
+				if !monthKey.MatchString(in.Month) {
+					return nil, Output{}, errors.New("month must be YYYY-MM")
+				}
+				body["month"] = in.Month
+			}
+			if in.SavingsGoalMinor != nil {
+				if *in.SavingsGoalMinor < 0 {
+					return nil, Output{}, errors.New("savingsGoalMinor must not be negative")
+				}
+				body["savingsGoalMinor"] = *in.SavingsGoalMinor
+			}
+			return post(ctx, hc, trace, baseURL, "/v1/ai-budget-plans", body)
+		})
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "finance_claim_budget_plan", Description: "Claim the oldest AI budget plan waiting to run (it becomes running); plan is null when none waits or another runs"}, func(ctx context.Context, req *mcp.CallToolRequest, in budgetPlanClaim) (*mcp.CallToolResult, Output, error) {
+		return audited(ctx, emitter, req, "finance_claim_budget_plan", in, func(trace activity.Trace) (*mcp.CallToolResult, Output, error) {
+			return post(ctx, hc, trace, baseURL, "/v1/ai-budget-plans/claim", nil)
+		})
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "finance_set_budget_plan_result", Description: "Leave the AI's proposal for a claimed budget plan; Finance checks it against the month's planning data (every active expense category, amounts of 0 or more, savings no larger than the spending they come from, totals that add up) and keeps it for the owner to apply or dismiss"}, func(ctx context.Context, req *mcp.CallToolRequest, in budgetPlanResult) (*mcp.CallToolResult, Output, error) {
+		// The audit names the plan and counts; the proposal itself is
+		// Finance's to keep.
+		summary := map[string]any{"planId": in.PlanID, "lines": len(in.Lines), "suggestions": len(in.Suggestions), "projectedTotalMinor": in.ProjectedTotalMinor}
+		return audited(ctx, emitter, req, "finance_set_budget_plan_result", summary, func(trace activity.Trace) (*mcp.CallToolResult, Output, error) {
+			id, body, err := budgetPlanResultBody(in)
+			if err != nil {
+				return nil, Output{}, err
+			}
+			return put(ctx, hc, trace, baseURL, "/v1/ai-budget-plans/"+id+"/result", body)
+		})
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "finance_fail_budget_plan", Description: "Note that a run of an AI budget plan failed: with retryAt it waits until then, without it fails for good"}, func(ctx context.Context, req *mcp.CallToolRequest, in budgetPlanFailure) (*mcp.CallToolResult, Output, error) {
+		return audited(ctx, emitter, req, "finance_fail_budget_plan", in, func(trace activity.Trace) (*mcp.CallToolResult, Output, error) {
+			id, err := uuid.Parse(strings.TrimSpace(in.PlanID))
+			if err != nil {
+				return nil, Output{}, errors.New("planId must be a plan UUID")
+			}
+			if strings.TrimSpace(in.Error) == "" {
+				return nil, Output{}, errors.New("error is required")
+			}
+			body := map[string]any{"error": in.Error}
+			if in.RetryAt != "" {
+				at, err := time.Parse(time.RFC3339, in.RetryAt)
+				if err != nil {
+					return nil, Output{}, errors.New("retryAt must be an RFC3339 time")
+				}
+				body["retryAt"] = at.UTC().Format(time.RFC3339)
+			}
+			return post(ctx, hc, trace, baseURL, "/v1/ai-budget-plans/"+id.String()+"/failure", body)
+		})
+	})
+}
+
+// budgetPlanResultBody is the plan's id and the Finance body of a proposal,
+// its UUIDs and counts checked before Finance is called.
+func budgetPlanResultBody(in budgetPlanResult) (string, map[string]any, error) {
+	id, err := uuid.Parse(strings.TrimSpace(in.PlanID))
+	if err != nil {
+		return "", nil, errors.New("planId must be a plan UUID")
+	}
+	if len(in.Lines) > 500 || len(in.Suggestions) > 20 {
+		return "", nil, errors.New("a proposal has at most 500 lines and 20 suggestions")
+	}
+	lines := make([]map[string]any, 0, len(in.Lines))
+	for _, line := range in.Lines {
+		category, err := uuid.Parse(strings.TrimSpace(line.CategoryID))
+		if err != nil {
+			return "", nil, errors.New("a line's categoryId must be a category UUID")
+		}
+		lines = append(lines, map[string]any{"categoryId": category.String(), "proposedMinor": line.ProposedMinor, "reason": line.Reason})
+	}
+	suggestions := make([]map[string]any, 0, len(in.Suggestions))
+	for _, suggestion := range in.Suggestions {
+		entry := map[string]any{"title": suggestion.Title, "detail": suggestion.Detail, "categoryId": nil, "merchants": suggestion.Merchants,
+			"monthlySavingMinor": suggestion.MonthlySavingMinor, "link": suggestion.Link}
+		if suggestion.Merchants == nil {
+			entry["merchants"] = []string{}
+		}
+		if suggestion.CategoryID != nil && strings.TrimSpace(*suggestion.CategoryID) != "" {
+			category, err := uuid.Parse(strings.TrimSpace(*suggestion.CategoryID))
+			if err != nil {
+				return "", nil, errors.New("a suggestion's categoryId must be a category UUID or null")
+			}
+			entry["categoryId"] = category.String()
+		}
+		suggestions = append(suggestions, entry)
+	}
+	return id.String(), map[string]any{"currency": strings.ToUpper(strings.TrimSpace(in.Currency)), "headline": in.Headline, "lines": lines,
+		"suggestions": suggestions, "projectedTotalMinor": in.ProjectedTotalMinor, "incomeEstimateMinor": in.IncomeEstimateMinor,
+		"projectedSavingsMinor": in.ProjectedSavingsMinor}, nil
 }
