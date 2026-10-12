@@ -9,7 +9,11 @@ import {
   cookTonightLine,
   discoverChoices,
   expiresWhen,
+  hasNewIdea,
   ideaSource,
+  ideasAskProblem,
+  ideasRunNote,
+  ideasRunOver,
   missingItems,
   missingLine,
   preferencesBody,
@@ -183,5 +187,77 @@ test("preferences keep the air fryer first and each dislike once", () => {
       dietaryNotes: " Wenig Fleisch ",
     }),
     { methods: [], dislikes: [], dietaryNotes: "Wenig Fleisch" },
+  );
+});
+
+test("getting ideas says when a run is over and what it brought", () => {
+  const before = {
+    running: false,
+    queued: false,
+    lastRun: {
+      startedAt: "2026-10-12T14:00:00Z",
+      finishedAt: "2026-10-12T14:01:00Z",
+      created: 3,
+      outcome: "created",
+    },
+  };
+  const waiting = { ...before, queued: true };
+  const running = { ...before, running: true };
+  const done = {
+    running: false,
+    queued: false,
+    lastRun: {
+      startedAt: "2026-10-12T15:30:00Z",
+      finishedAt: "2026-10-12T15:31:10Z",
+      created: 2,
+      outcome: "created",
+    },
+  };
+  assert.equal(ideasRunOver(waiting, before), false);
+  assert.equal(ideasRunOver(running, before), false);
+  assert.equal(ideasRunOver(before, before), false);
+  assert.equal(ideasRunOver(done, before), true);
+  assert.equal(ideasRunOver(done, null), true);
+  assert.equal(ideasRunNote(done), "2 new ideas.");
+  assert.equal(
+    ideasRunNote({ ...done, lastRun: { ...done.lastRun, created: 1 } }),
+    "1 new idea.",
+  );
+  assert.match(
+    ideasRunNote({
+      ...done,
+      lastRun: { ...done.lastRun, created: 0, outcome: "none" },
+    }),
+    /^No new ideas this time/,
+  );
+  assert.match(
+    ideasRunNote({
+      ...done,
+      lastRun: { ...done.lastRun, created: 0, outcome: "failed" },
+    }),
+    /could not be thought of/,
+  );
+  assert.equal(hasNewIdea(new Set(["a"]), [{ id: "a" }]), false);
+  assert.equal(hasNewIdea(new Set(["a"]), [{ id: "a" }, { id: "b" }]), true);
+});
+
+test("a refused request for ideas says why", () => {
+  assert.equal(
+    ideasAskProblem({
+      error: {
+        code: "too_soon",
+        message:
+          "Ideas were asked for a few minutes ago: ask again in a little while.",
+      },
+    }),
+    "Ideas were asked for a few minutes ago: ask again in a little while.",
+  );
+  assert.equal(
+    ideasAskProblem(null),
+    "Ideas could not be asked for right now. Try again later.",
+  );
+  assert.equal(
+    ideasAskProblem({ error: { code: "service_unavailable" } }),
+    "Ideas could not be asked for right now. Try again later.",
   );
 });

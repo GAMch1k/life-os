@@ -118,6 +118,22 @@ export type ProcessorStatus = {
     recovered: number;
     lastReconcileError?: string;
   };
+  /** The recipe ideas job (see docs/services/mcp.md). */
+  ideas?: {
+    /** When the daily run is due ("16:00"); absent when it is off. */
+    dailyAt?: string;
+    webSearch: string;
+    nextRunAt: string | null;
+    running: boolean;
+    queued: boolean;
+    lastRun: {
+      trigger: string;
+      finishedAt: string;
+      created: number;
+      outcome: string;
+      error?: string;
+    } | null;
+  };
   /** Account usage as reported by the Codex CLI (see docs/services/mcp.md). */
   usage?: {
     current: CodexUsage | null;
@@ -184,6 +200,43 @@ export function runtimeFacts(
     });
   }
   return facts;
+}
+
+/**
+ * The recipe ideas job in two facts: what its last run brought, and when
+ * it runs next.
+ */
+export function ideasFacts(
+  ideas: ProcessorStatus["ideas"],
+  timeZone: string = DEFAULT_TIME_ZONE,
+) {
+  if (!ideas) return [];
+  const run = ideas.lastRun;
+  const outcomes: Record<string, string> = {
+    empty_pantry: "skipped: nothing in stock",
+    done_today: "skipped: ideas already left today",
+    none: "no new ideas",
+    failed: `failed${run?.error ? `: ${run.error}` : ""}`,
+  };
+  const last = run
+    ? `${outcomes[run.outcome] ?? `${run.created} new`}, ${formatTime(run.finishedAt, timeZone)}${run.trigger === "request" ? " (asked for)" : ""}`
+    : "not run since the processor started";
+  return [
+    {
+      label: "Recipe ideas",
+      value: ideas.running
+        ? "thinking of ideas now"
+        : ideas.queued
+          ? "asked for, starting soon"
+          : last,
+    },
+    {
+      label: "Next recipe ideas",
+      value: ideas.nextRunAt
+        ? formatTime(ideas.nextRunAt, timeZone)
+        : "only when asked for",
+    },
+  ];
 }
 
 /**
@@ -465,6 +518,7 @@ function processingCheck(
       value: formatTime(codex.lastSucceededAt, timeZone),
     },
     ...runtimeFacts(processor.runtime, timeZone),
+    ...ideasFacts(processor.ideas, timeZone),
     ...usageFacts(processor.usage, timeZone),
   ];
   if (poll.lastError) {
@@ -2256,7 +2310,7 @@ export function statusAlerts(status: RuntimeStatus) {
 
 const PROBE_TIMEOUT_MS = 2500;
 
-const processorStatusUrl = normalizeServiceUrl(
+export const processorStatusUrl = normalizeServiceUrl(
   "PROCESSOR_STATUS_URL",
   process.env.PROCESSOR_STATUS_URL ?? "http://localhost:8091",
 );

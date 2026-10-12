@@ -6,8 +6,9 @@ import {
   Search,
   ShoppingBasket,
   SlidersHorizontal,
+  Sparkles,
 } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   Dialog,
@@ -49,9 +50,16 @@ import {
   type Idea,
   type Suggestion,
   type SuggestionList,
+  IDEAS_POLL_LIMIT,
+  IDEAS_POLL_MS,
   fetchIdeas,
+  fetchIdeasJob,
   fetchSuggestions,
+  hasNewIdea,
   ideaSource,
+  ideasRunNote,
+  ideasRunOver,
+  requestIdeas,
   missingItems,
   missingLine,
   reasonPoints,
@@ -65,9 +73,10 @@ const ANY_MEAL = "";
 /**
  * "What can I cook?": the saved recipes Food ranks for today, each with why
  * (what is at home, what expires, the air fryer, habits) and what is
- * missing, to put on the list or plan; the recipe ideas a generator left,
- * to save or dismiss; the cooking preferences; and Discover, recipes from
- * TheMealDB for an ingredient at home.
+ * missing, to put on the list or plan; the recipe ideas the AI left, to
+ * save or dismiss, and "Get ideas" to ask for some now; the cooking
+ * preferences; and Discover, recipes from TheMealDB for an ingredient at
+ * home.
  */
 export function FoodCook({
   initial,
@@ -101,6 +110,15 @@ export function FoodCook({
   const [discovering, setDiscovering] = useState(false);
   // The latest read asked for: an older answer is dropped.
   const ticket = useRef(0);
+  // While the processor thinks of ideas the owner asked for.
+  const [thinking, setThinking] = useState(false);
+  const mounted = useRef(true);
+  useEffect(
+    () => () => {
+      mounted.current = false;
+    },
+    [],
+  );
 
   const working = (id: string, on: boolean) =>
     setBusy((current) => {
@@ -124,6 +142,40 @@ export function FoodCook({
         setList(suggestions.data);
       }
       if (fresh.data) setIdeas(fresh.data.items);
+    });
+  };
+
+  /**
+   * Asks the processor for ideas now, then reads the ideas every few
+   * seconds, showing new ones as they come, until the run is over (or a
+   * few minutes pass).
+   */
+  const getIdeas = async () => {
+    setNote(undefined);
+    const before = await fetchIdeasJob();
+    const asked = await requestIdeas();
+    if (!asked.queued) return setNote({ kind: "error", text: asked.message });
+    setThinking(true);
+    const known = new Set(ideas.map((idea) => idea.id));
+    for (let poll = 0; poll < IDEAS_POLL_LIMIT; poll++) {
+      await new Promise((resolve) => setTimeout(resolve, IDEAS_POLL_MS));
+      if (!mounted.current) return;
+      const [fresh, job] = await Promise.all([fetchIdeas(), fetchIdeasJob()]);
+      if (!mounted.current) return;
+      if (fresh.data) setIdeas(fresh.data.items);
+      const over = job
+        ? ideasRunOver(job, before)
+        : hasNewIdea(known, fresh.data?.items ?? []);
+      if (over) {
+        setThinking(false);
+        if (job) setNote({ kind: "info", text: ideasRunNote(job) });
+        return;
+      }
+    }
+    setThinking(false);
+    setNote({
+      kind: "info",
+      text: "No new ideas yet: they show up here when they are ready.",
     });
   };
 
@@ -299,9 +351,30 @@ export function FoodCook({
         </p>
       ) : null}
 
-      {ideas.length ? (
-        <section aria-label="Ideas" className="space-y-1.5">
-          <h3 className="text-sm font-semibold">Ideas</h3>
+      <section aria-label="Ideas" className="space-y-1.5">
+        <div className="flex items-center gap-2">
+          <h3 className="flex-1 text-sm font-semibold">Ideas</h3>
+          <Button
+            disabled={thinking}
+            onClick={() => void getIdeas()}
+            size="sm"
+            variant="outline"
+          >
+            <Sparkles aria-hidden="true" />
+            Get ideas
+          </Button>
+        </div>
+        {thinking ? (
+          <p
+            aria-live="polite"
+            className="text-muted-foreground text-sm"
+            data-testid="food-ideas-thinking"
+            role="status"
+          >
+            Thinking of ideas…
+          </p>
+        ) : null}
+        {ideas.length ? (
           <ul className="divide-y rounded-lg border" data-testid="food-ideas">
             {ideas.map((idea) => (
               <IdeaRow
@@ -313,8 +386,12 @@ export function FoodCook({
               />
             ))}
           </ul>
-        </section>
-      ) : null}
+        ) : thinking ? null : (
+          <p className="text-muted-foreground text-sm">
+            No ideas yet. Get ideas from what is at home and your preferences.
+          </p>
+        )}
+      </section>
 
       <PlanDialog
         defaultSlot={slot === ANY_MEAL ? "dinner" : slot}
