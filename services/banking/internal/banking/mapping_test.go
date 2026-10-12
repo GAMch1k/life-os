@@ -204,3 +204,85 @@ func equalJSON(a, b any) bool {
 	y, _ := json.Marshal(b)
 	return string(x) == string(y)
 }
+
+func TestCardSettlementsAndPayPalNameTheMerchant(t *testing.T) {
+	account := StoredAccount{UID: "u", Key: "iban-k", Currency: "EUR"}
+	// Made-up values in the shapes Deutsche Bank sends (BUG-38).
+	const card = "Kartennr. 4999XXXXXXXX0042"
+	for _, tc := range []struct {
+		name                    string
+		party, indicator        string
+		remittance              []string
+		counterparty, described string
+	}{
+		{"a card payment", "ABRECHNUNG KARTE", "DBIT", []string{"REWE Markt Muster//Darmstadt/DE 08-10-2026T20:51:57 " + card},
+			"REWE Markt Muster", "Card payment · Darmstadt, DE · 2026-10-08 20:51:57"},
+		{"an online shop keeps the bank's spelling", "ABRECHNUNG KARTE", "DBIT", []string{"WWW.EXAMPLE.. AB1CD2EF3//LUXEMBOURG/LU 05-10-2026T16:51:24 " + card},
+			"WWW.EXAMPLE.. AB1CD2EF3", "Card payment · LUXEMBOURG, LU · 2026-10-05 16:51:24"},
+		{"an app store", "ABRECHNUNG KARTE", "DBIT", []string{"GOOGLE.GOOGLE PLAY APP//DUBLIN/IE 26-09-2026T14:47:08 " + card},
+			"GOOGLE.GOOGLE PLAY APP", "Card payment · DUBLIN, IE · 2026-09-26 14:47:08"},
+		{"a foreign currency fee", "ABRECHNUNG KARTE", "DBIT", []string{"DESIGNTOOL//SAN FRANCISCO/US 28-09-2026T08:27:54 " + card + " Entgelt 0,24 EUR"},
+			"DESIGNTOOL", "Card payment · SAN FRANCISCO, US · 2026-09-28 08:27:54 · Entgelt 0,24 EUR"},
+		{"a restaurant", "ABRECHNUNG KARTE", "DBIT", []string{"GASTRONOMIE MUSTER .S//Darmstadt/DE 05-10-2026T20:31:46 " + card},
+			"GASTRONOMIE MUSTER .S", "Card payment · Darmstadt, DE · 2026-10-05 20:31:46"},
+		{"the marker in any case and spacing, the text across lines", " Abrechnung  karte. ", "DBIT",
+			[]string{"Baeckerei  Muster//Darmstadt/DE 07-10-2026T07:05:00 Kartennr. 4999XXXX", "XXXX0042"},
+			"Baeckerei Muster", "Card payment · Darmstadt, DE · 2026-10-07 07:05:00"},
+		{"a card refund", "ABRECHNUNG KARTE", "CRDT", []string{"SHOP MUSTER//Berlin/DE 01-10-2026T12:00:00 " + card},
+			"SHOP MUSTER", "Card payment · Berlin, DE · 2026-10-01 12:00:00"},
+		{"PayPal", "PayPal Europe S.a.r.l. et Cie S.C.A", "DBIT", []string{"1234567890123/PP.1234.PP/. Example Streaming, LLC, Ihr Einkauf bei Example Streaming, LLC"},
+			"Example Streaming, LLC", "via PayPal · 1234567890123/PP.1234.PP/. Example Streaming, LLC, Ihr Einkauf bei Example Streaming, LLC"},
+		{"PayPal spelt otherwise", "PayPal (Europe) S.a r.l. et Cie, S. C.A.", "DBIT", []string{"1234567890124/PP.1234.PP/. Muster Shop, Ihr Einkauf bei Muster Shop"},
+			"Muster Shop", "via PayPal · 1234567890124/PP.1234.PP/. Muster Shop, Ihr Einkauf bei Muster Shop"},
+		// Every other shape keeps what the bank sent.
+		{"PayPal without a purchase", "PayPal Europe S.a.r.l. et Cie S.C.A", "CRDT", []string{"1234567890125/PP.1234.PP/. Rueckzahlung"},
+			"PayPal Europe S.a.r.l. et Cie S.C.A", "1234567890125/PP.1234.PP/. Rueckzahlung"},
+		{"a salary", "Muster Arbeitgeber GmbH", "CRDT", []string{"Gehalt Oktober 2026"}, "Muster Arbeitgeber GmbH", "Gehalt Oktober 2026"},
+		{"a direct debit", "Fitness Muster InterCo GmbH", "DBIT", []string{"MANDAT 123 Zuschuss Fitness Muster BLACK 10/2026"},
+			"Fitness Muster InterCo GmbH", "MANDAT 123 Zuschuss Fitness Muster BLACK 10/2026"},
+		{"a bank fee", "Deutsche Bank", "DBIT", []string{"Kontofuehrungsentgelt 09/2026"}, "Deutsche Bank", "Kontofuehrungsentgelt 09/2026"},
+		{"a card settlement in an unknown shape keeps its text", "ABRECHNUNG KARTE", "DBIT", []string{"Sammelabrechnung 08-10-2026 " + card + " siehe Beleg"},
+			"ABRECHNUNG KARTE", "Sammelabrechnung 08-10-2026 siehe Beleg"},
+		{"a card settlement without a merchant keeps its text", "ABRECHNUNG KARTE", "DBIT", []string{" //Darmstadt/DE 08-10-2026T20:51:57"},
+			"ABRECHNUNG KARTE", "//Darmstadt/DE 08-10-2026T20:51:57"},
+		{"a merchant without place or time", "ABRECHNUNG KARTE", "DBIT", []string{"KIOSK MUSTER//"}, "KIOSK MUSTER", "Card payment"},
+		{"a pending card hold has nothing", "", "DBIT", nil, "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			party := map[string]any{"name": tc.party}
+			fields := map[string]any{"entry_reference": "E1", "credit_debit_indicator": tc.indicator, "remittance_information": tc.remittance}
+			if tc.party == "" {
+				fields["status"], fields["booking_date"] = "PDNG", nil
+			} else if tc.indicator == "CRDT" {
+				fields["debtor"] = party
+			} else {
+				fields["creditor"] = party
+			}
+			got, ok := mapTransaction(account, transaction(fields), "2026-10-10")
+			if !ok || got.Counterparty != tc.counterparty || got.Description != tc.described {
+				t.Fatalf("got %q / %q, want %q / %q", got.Counterparty, got.Description, tc.counterparty, tc.described)
+			}
+			// The card number never leaves, masked or in pieces.
+			raw, _ := json.Marshal(got)
+			for _, piece := range []string{"0042", "4999", "XXXX", "Kartennr"} {
+				if strings.Contains(string(raw), piece) {
+					t.Fatalf("the card number is in %s", raw)
+				}
+			}
+		})
+	}
+}
+
+func TestCardNumbersAreRemovedFromAnyText(t *testing.T) {
+	for text, want := range map[string]string{
+		"Einkauf Kartennr. 1234XXXXXXXX5678 Danke":    "Einkauf Danke",
+		"Karten-Nr.: 1234 XXXX XXXX 5678 Danke":       "Danke",
+		"Kartennummer 1234XXXXXXXX5678":               "",
+		"Beleg 1234XXXXXXXX5678 vom 01.10.":           "Beleg vom 01.10.",
+		"Einkauf Karte 1234 Ref 1234567890123 Gehalt": "Einkauf Karte 1234 Ref 1234567890123 Gehalt",
+	} {
+		if got := withoutCardNumbers(text); got != want {
+			t.Errorf("withoutCardNumbers(%q) = %q, want %q", text, got, want)
+		}
+	}
+}

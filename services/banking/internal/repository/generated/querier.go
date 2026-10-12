@@ -42,7 +42,8 @@ type Querier interface {
 	// import still waiting for Finance (NULL when none).
 	RecordSyncFailure(ctx context.Context, arg RecordSyncFailureParams) (BankConnection, error)
 	// Finance accepted a sync: the connection is connected, its failures and
-	// any waiting import are cleared.
+	// any waiting import are cleared. mapping_version is the mapping a full
+	// read used (0 for a read of the days since the cursor only).
 	RecordSyncSuccess(ctx context.Context, arg RecordSyncSuccessParams) (BankConnection, error)
 	// Gives back a claimed manual sync that never reached the bank.
 	ReleaseManualSync(ctx context.Context, arg ReleaseManualSyncParams) error

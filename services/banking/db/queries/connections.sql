@@ -37,12 +37,14 @@ RETURNING *;
 
 -- name: RecordSyncSuccess :one
 -- Finance accepted a sync: the connection is connected, its failures and
--- any waiting import are cleared.
+-- any waiting import are cleared. mapping_version is the mapping a full
+-- read used (0 for a read of the days since the cursor only).
 UPDATE bank_connections
 SET status = CASE WHEN status = 'pending' THEN 'connected' ELSE status END,
     last_sync_at = sqlc.arg(now), last_success_at = sqlc.arg(now), next_sync_at = sqlc.narg(next_sync_at),
     consecutive_failures = 0, last_error = NULL, last_counts = sqlc.arg(last_counts),
-    sync_cursor = sqlc.narg(sync_cursor), pending_import = NULL, updated_at = sqlc.arg(now)
+    sync_cursor = sqlc.narg(sync_cursor), pending_import = NULL,
+    mapping_version = GREATEST(mapping_version, sqlc.arg(mapping_version)::integer), updated_at = sqlc.arg(now)
 WHERE id = sqlc.arg(id)
 RETURNING *;
 

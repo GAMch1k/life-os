@@ -196,13 +196,16 @@ type accountData struct {
 }
 
 // readResult is a sync read from the bank, ready for Finance: the import,
-// how many transactions were read and left out, and the latest booking date
-// of a booked transaction (the next sync's cursor).
+// how many transactions were read and left out, the latest booking date of
+// a booked transaction (the next sync's cursor), and the MappingVersion of
+// a read of the whole InitialDays window (0 for a read since the cursor; an
+// import kept for Finance from before a mapping change has none).
 type readResult struct {
 	Import  finance.Import `json:"import"`
 	Fetched int            `json:"fetched"`
 	Ignored int            `json:"ignored"`
 	Cursor  string         `json:"cursor,omitempty"`
+	Mapping int            `json:"mapping,omitempty"`
 }
 
 // buildImport maps a sync read to Finance's bank import.
@@ -322,13 +325,15 @@ func mapTransaction(account StoredAccount, raw enablebanking.Transaction, today 
 	if description == "" {
 		description = clean(raw.Note)
 	}
+	// A card settlement or PayPal names the merchant in the text.
+	name, description := normalizeMerchant(partyName(counterparty), description)
 	mcc := strings.TrimSpace(raw.MerchantCategoryCode)
 	if len(mcc) > 8 {
 		mcc = ""
 	}
 	return finance.Transaction{
 		AccountExternalID: account.Key, Status: status, BookingDate: booking, ValueDate: firstDate(raw.ValueDate),
-		Amount: finance.Money{Amount: amount, Currency: currency}, Counterparty: clip(partyName(counterparty), 200),
+		Amount: finance.Money{Amount: amount, Currency: currency}, Counterparty: clip(name, 200),
 		Description: clip(description, 1000), MerchantCategoryCode: mcc, BankReference: clip(raw.ReferenceNumber, 200),
 	}, true
 }

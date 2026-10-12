@@ -45,6 +45,7 @@ type BankConnection struct {
 	DisconnectedAt       pgtype.Timestamptz
 	CreatedAt            pgtype.Timestamptz
 	UpdatedAt            pgtype.Timestamptz
+	MappingVersion       int32
 }
 
 type BankConsentFailure struct {

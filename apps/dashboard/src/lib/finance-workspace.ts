@@ -452,13 +452,22 @@ export function categoryGroups(categories: Category[], keepId?: string | null) {
 
 // ---- Transactions -----------------------------------------------------------
 
-/** A transaction's headline: who, else what for, else its notes. */
+/**
+ * A transaction's headline: who, else what for, else its notes. A pending
+ * bank transaction with none of them (a card hold, which the bank names only
+ * once it is booked) is a "Card payment", or an "Incoming payment"; the row's
+ * Pending badge says it is pending.
+ */
 export function transactionTitle(transaction: Transaction) {
   return (
     transaction.counterparty?.trim() ||
     transaction.description?.trim() ||
     transaction.notes?.trim() ||
-    "Transaction"
+    (transaction.status === "pending" && transaction.source.kind === "bank"
+      ? transaction.amount.amount < 0
+        ? "Card payment"
+        : "Incoming payment"
+      : "Transaction")
   );
 }
 
