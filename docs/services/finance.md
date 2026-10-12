@@ -4,8 +4,8 @@ Finance is the owner's personal-finance tool: accounts and their balances,
 every transaction, manual and cash entries, categories with simple rules, CSV
 imports, bank syncs pushed by the banking integration service, monthly
 summaries, monthly budgets with their notifications and the AI's budget
-plans, and subscriptions with the money alerts (renewals, large debits, low
-balances). It keeps them in `finance_db` and is their only source of truth:
+plans (also asked for when the salary arrives), and subscriptions with the
+money alerts (renewals, large debits, low balances). It keeps them in `finance_db` and is their only source of truth:
 clients (the Dashboard's Finance workspace, MCP, the banking service) use its
 API, never its database. It does not create Tasks or Calendar events. Gateway
 base: `/api/finance`; the contract is `services/finance/api/openapi.yaml`;
@@ -432,12 +432,16 @@ month whose plan is still requested or running answers with that one
 (200): the request joins it. The owner may ask 10 times a day (429
 `daily_limit`); a development tool's requests do not count. `trigger:
 "schedule"` is the job's own plan on the 1st of a month: one per month (a
-repeat answers with it, dismissed or not), and none while a plan the owner
-asked for that month since it began is there (not dismissed): it answers
-with that one.
+repeat answers with it, dismissed or not), and none while a plan the salary
+asked for that month is there (unless it failed: see [Payday](#payday)) or
+one the owner asked for since the month began (not dismissed): it answers
+with that one. `salary` plans are Finance's own; asking for one is 400
+`invalid_request`.
 
 **States.** `requested` → `running` (the job claimed it) → `ready` (the
-AI's proposal is there) or `failed`. A run that failed for now goes back to
+AI's proposal is there) or `failed`. A plan has its `trigger` (`request`,
+`schedule`, or `salary`) and, for the salary's, `salary`: the payment's
+booking date and transaction id (null once the transaction is deleted). A run that failed for now goes back to
 `requested` with its `error` until `retryAt`. A ready plan becomes `applied`
 or `partly_applied` (the owner left some lines out), and any plan can be
 `dismissed`. `GET /v1/ai-budget-plans` lists them newest first (`month`,
@@ -512,6 +516,88 @@ nothing. A requested, running, or failed plan is 409 `plan_not_ready`, a
 dismissed one 409 `plan_dismissed`; the AI (`agent:`) never applies a plan
 (403 `actor_not_allowed`). The answer has the plan and the month's budget. `POST /v1/ai-budget-plans/{id}/dismiss` dismisses a plan in any
 state; what it applied stays in the budget.
+
+**Notification.** A plan the owner did not ask for (the salary's or the
+schedule's) is notified once it is ready, through Notifications at
+importance **medium**: the owner is not waiting for it. The budget checks
+(see [Monthly budgets](#monthly-budgets)) send it, woken when the job
+leaves the result, claimed in `budget_notifications` like the budget
+notifications; one ready for more than a week (Finance or Notifications was
+down that long), or applied or dismissed before the check, is not sent.
+The owner's own requests are not notified: they asked on the Budget tab,
+where the card follows the plan.
+
+| When | Category | Title, for example | Link | Dedupe key |
+| --- | --- | --- | --- | --- |
+| A salary's or scheduled plan is ready | `finance.ai_budget_plan.ready` | "Your budget plan for November is ready" | `/finance?tab=budget&month=<YYYY-MM>` | `finance.ai_budget_plan.ready:<planId>` |
+
+The body is the AI's headline, then "€1,190.00 planned, 3 ways to spend
+less (≈ €85.00 a month).", for the salary's "Planned when your salary
+arrived on 28 Oct.", and "Nothing changes until you apply it."
+
+### Payday
+
+The owner's salary is booked on the 28th or 29th of each month ("Lohn -
+Gehalt Abrechnung 10/2026" from the employer), just before the month it
+pays for, while the job's own plan comes on the 1st at 06:00, after it. The
+owner asked: "can we also plan budget when new income comes from [my
+employer]? that's my salary". So Finance asks for the plan itself when the
+salary arrives (P13-10).
+
+**The setting.** `GET /v1/settings/payday` and `PUT /v1/settings/payday`
+read and replace it: `enabled`, `payerMatch` (the payer: text the payment's
+counterparty contains, ignoring case and surrounding and repeated spaces,
+as a rule matches a counterparty; 1 to 200 characters, required when on),
+and `minAmountMinor` (at least 1, minor units of the default currency;
+null is any amount), so that a refund from the same company does not
+count. It is off until the owner saves a payer; payments already booked
+ask for nothing.
+
+**The suggestion.** The answer has `suggestion`: the largest income that
+arrives monthly, found as subscriptions are (see
+[Subscriptions](#subscriptions)) but on money in. Booked money in of the
+last 120 days in the default currency, not in a transfer category, is
+grouped by its counterparty (known services and intermediaries are left
+out: a payer is recognized by its counterparty); payments of similar
+amounts (within 10%) count when the latest came in at least two months in
+a row (26 to 35 days apart) and the next is not more than a week late.
+`payerMatch` is the latest payment's counterparty when every payment's
+counterparty contains it, else the payer's key ("acme robotics");
+`typicalAmount` is the median of the last three, `payments` how many in a
+row, `lastDate` the latest. It is only a suggestion: nothing changes until
+the owner saves it.
+
+**The trigger.** When a write creates or books transactions (a bank sync,
+a CSV import, a manual entry, a pending entry marked booked), Finance looks
+at the booked money in the default currency among them that the setting
+recognizes, and takes the latest. It asks for an AI budget plan with
+trigger `salary`, in the same database transaction:
+
+- for the **next** month when the salary was booked on or after the 15th,
+  for its own month when before;
+- not when the payment was booked more than 40 days before the owner's
+  today (a bank's history read, a reconnected bank), or the month is past;
+- not when that payment asked before (a repeated sync or an idempotent
+  replay), or the month has a plan that is requested, running, ready,
+  applied, or partly applied. A failed or dismissed plan does not count,
+  so a month has one salary plan, and another only after that one failed
+  or was dismissed and money from the payer arrives again.
+
+A pending salary asks for nothing; it asks when the bank books it (the same
+id, or a booked one that replaces it). The plan is requested by
+`system:finance`, without a savings goal, and does not count against the
+owner's 10 a day; Activity records it as Finance's own ("AI budget plan for
+November 2026 requested when your salary arrived"), in the trace of the
+write that booked the salary. The job runs it like any other and it is
+notified when ready (above).
+
+**The 1st.** The job still asks for the month's plan on the 1st (and until
+the 3rd), unchanged: Finance answers with the salary's plan when the month
+has one that did not fail, dismissed ones included (the owner has seen that
+month's plan), so no second plan is made. When the salary's plan failed, or
+the salary did not come, the 1st's plan is made as before. Doing this in
+Finance's request validation keeps the processor as it is: its request is
+already idempotent and only needs an answer.
 
 ## Subscriptions
 
@@ -672,7 +758,7 @@ tool) and tied to its correlation and causation:
 | `finance.bank_connection.removed` | `finance_bank_connection` | "Bank connection to Deutsche Bank removed: 2 accounts archived" |
 | `finance.budget.saved` | `finance_budget` (the month) | "Regular budget from October 2026 on saved: 9 categories, €2,100.00 planned, €400.00 savings goal; 1 later month's own budget replaced", "Budget for December 2026 saved: …" |
 | `finance.budget.reset` | `finance_budget` | "Budget for December 2026 returned to the regular plan" |
-| `finance.ai_budget_plan.requested` | `finance_ai_budget_plan` | "AI budget plan for November 2026 requested, savings goal €200.00"; "… scheduled" for the job's plan on the 1st |
+| `finance.ai_budget_plan.requested` | `finance_ai_budget_plan` | "AI budget plan for November 2026 requested, savings goal €200.00"; "… scheduled" for the job's plan on the 1st; "… requested when your salary arrived" for the salary's, by `system:finance`, with `trigger`, `salaryBookedOn`, and `salaryTransactionId` in `data` |
 | `finance.ai_budget_plan.created` | `finance_ai_budget_plan` | "AI budget plan for November 2026 ready: €1,190.00 planned for 10 categories, 3 ways to spend less (≈ €85.00 a month)", by the AI (`agent:codex-budget-plan`), "; rough, on little history" when rough; `data` has the counts and amounts, never the AI's texts |
 | `finance.ai_budget_plan.failed` | `finance_ai_budget_plan` | "AI budget plan for November 2026 failed: gave up after 5 runs: …" (outcome failed); a run that is tried again records nothing |
 | `finance.ai_budget_plan.applied` | `finance_ai_budget_plan` | "AI budget plan for November 2026 applied: 8 of 10 categories (€1,100.00), for November 2026 only", after `finance.budget.saved` when the budget changed |
@@ -681,7 +767,7 @@ tool) and tied to its correlation and causation:
 | `finance.subscription.created` | `finance_subscription` | "“Urban Sports Club” marked as a subscription (€29.99 monthly)" |
 | `finance.subscription.confirmed` / `.ignored` | `finance_subscription` | "Subscription “Netflix” confirmed (€13.99 monthly)", "Subscription “FitX” ignored" |
 | `finance.subscription.updated` / `.deleted` | `finance_subscription` | "Subscription “iCloud+” updated: name, cadence, amount, category" |
-| `finance.settings.updated` | `finance_settings` (`alerts`) | "Alert settings updated: large debits from €300.00, low balance below €100.00 (off), renewal reminders 1 day ahead" |
+| `finance.settings.updated` | `finance_settings` (`alerts`, `payday`) | "Alert settings updated: large debits from €300.00, low balance below €100.00 (off), renewal reminders 1 day ahead"; "Payday updated: plan the budget when money from “ACME Robotics GmbH” of at least €1,000.00 arrives", with " (off)" when switched off |
 
 Amounts are formatted in the transaction's currency ("€1,234.50", "12.00
 CHF"). `data` holds the account, amount, booking date, status, source,
@@ -734,7 +820,15 @@ scheduled plan per month), state, who asked, the attempts with the claim
 time, `retry_at`, and the last error, the checked proposal and what was
 applied (JSON), and when it finished, was applied, or dismissed; existing
 rows are unchanged. Its rollback drops the table; what applied plans wrote
-stays as ordinary budget plans.
+stays as ordinary budget plans. `000010_payday` adds the one-row
+`payday_settings` (off, no payer), the `salary` trigger, and per plan the
+payment that asked for it (`salary_transaction_id`, set to null when the
+transaction is deleted, unique: a payment asks once) and its
+`salary_booked_on` (exactly the salary plans have one); existing rows are
+unchanged. Its rollback drops the setting and the payment columns and
+turns salary plans into plans that were asked for (`request`); the claims
+of the ready notifications stay, so migrating forward again sends none
+twice.
 
 Configuration: `DATABASE_URL`, `ACTIVITY_SERVICE_URL`, `LIFE_OS_TIMEZONE`
 (unset or unknown means UTC, logged at startup; budget months and the summary
