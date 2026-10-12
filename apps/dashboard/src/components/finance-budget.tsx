@@ -6,7 +6,9 @@ import {
   Pencil,
   PiggyBank,
   RotateCcw,
+  Sparkles,
 } from "lucide-react";
+import type { ReactNode } from "react";
 
 import { Amount } from "@/components/finance-amount";
 import { Badge } from "@/components/ui/badge";
@@ -43,10 +45,13 @@ import { cn } from "@/lib/utils";
  * total, live during the month (booked and pending money out in the budget
  * currency), with the income, the savings against their goal, and
  * uncategorized spending as its own line. A category opens its
- * transactions of the month; the plan is edited in a dialog.
+ * transactions of the month; the plan is edited in a dialog. The AI can
+ * propose a plan too ("Plan my budget"), shown above the month as `aiPlan`
+ * until the owner applies or dismisses it.
  */
 export function FinanceBudget({
   actionError,
+  aiPlan,
   budget,
   loading,
   month,
@@ -55,11 +60,14 @@ export function FinanceBudget({
   today,
   onEdit,
   onMonthChange,
+  onPlanWithAI,
   onReset,
   onShowCategory,
 }: {
   /** Why the last plan change failed, if it did. */
   actionError?: string;
+  /** The AI's plan for the month (AiPlanCard), if any. */
+  aiPlan?: ReactNode;
   budget: Loaded<BudgetMonth>;
   loading: boolean;
   /** YYYY-MM. */
@@ -72,6 +80,8 @@ export function FinanceBudget({
   today: string;
   onEdit: (budget: BudgetMonth) => void;
   onMonthChange: (month: string) => void;
+  /** Asks the AI to plan a month. */
+  onPlanWithAI?: () => void;
   /** Returns a month with its own plan to the regular plan. */
   onReset: (month: string) => void;
   /** Shows the month's transactions of a category (null: uncategorized). */
@@ -126,6 +136,17 @@ export function FinanceBudget({
                 Use the regular plan
               </Button>
             ) : null}
+            {onPlanWithAI ? (
+              <Button
+                disabled={pending}
+                onClick={onPlanWithAI}
+                size="sm"
+                variant="outline"
+              >
+                <Sparkles aria-hidden="true" />
+                Plan my budget
+              </Button>
+            ) : null}
             <Button disabled={pending} onClick={() => onEdit(data)} size="sm">
               <Pencil aria-hidden="true" />
               {data.plan ? "Edit plan" : `Plan ${label}`}
@@ -139,6 +160,7 @@ export function FinanceBudget({
           {actionError}
         </p>
       ) : null}
+      {aiPlan}
       {budget.error !== undefined ? (
         <p className="text-destructive text-sm" role="alert">
           {budget.error}

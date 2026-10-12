@@ -10,6 +10,7 @@ import {
 } from "@/components/finance-accounts";
 import { BankConnections } from "@/components/bank-connections";
 import { AlertsDialog } from "@/components/finance-alerts-dialog";
+import { AiPlanCard, AiPlanRequestDialog } from "@/components/finance-ai-plan";
 import { FinanceBudget } from "@/components/finance-budget";
 import {
   BudgetEditor,
@@ -173,6 +174,10 @@ function ReadyWorkspace({
   const [budgetEditor, setBudgetEditor] = useState<BudgetEditorState>(null);
   const [budgetPending, startBudgetChange] = useTransition();
   const [budgetActionError, setBudgetActionError] = useState<string>();
+  // "Plan my budget": the request dialog, and a key that makes the AI
+  // plan's card read afresh after a request.
+  const [aiPlanOpen, setAiPlanOpen] = useState(false);
+  const [aiPlanKey, setAiPlanKey] = useState(0);
   const [subscriptions, setSubscriptions] = useState(initial.subscriptions);
   const [subscriptionsLoading, setSubscriptionsLoading] = useState(false);
   const [subscriptionPending, startSubscriptionChange] = useTransition();
@@ -552,11 +557,28 @@ function ReadyWorkspace({
         <TabsContent value="budget">
           <FinanceBudget
             actionError={budgetActionError}
+            aiPlan={
+              <AiPlanCard
+                budget={
+                  budget.data?.month === budgetMonth ? budget.data : undefined
+                }
+                key={`${budgetMonth}-${aiPlanKey}`}
+                month={budgetMonth}
+                onApplied={(applied) => {
+                  // The answer is the month's budget with the plan applied.
+                  budgetTicket.current++;
+                  setBudget({ data: applied });
+                  setBudgetLoading(false);
+                }}
+                timeZone={timeZone}
+              />
+            }
             budget={budget}
             loading={budgetLoading}
             month={budgetMonth}
             onEdit={(data) => setBudgetEditor({ budget: data })}
             onMonthChange={changeBudgetMonth}
+            onPlanWithAI={() => setAiPlanOpen(true)}
             onReset={resetBudget}
             onShowCategory={showBudgetCategory}
             pending={budgetPending}
@@ -648,6 +670,17 @@ function ReadyWorkspace({
         }}
         open={alertsOpen}
         settings={settings}
+      />
+      <AiPlanRequestDialog
+        currency={budget.data?.currency ?? "EUR"}
+        onClose={() => setAiPlanOpen(false)}
+        onRequested={(plan) => {
+          setAiPlanOpen(false);
+          setAiPlanKey((key) => key + 1);
+          if (plan.month !== budgetMonth) changeBudgetMonth(plan.month);
+        }}
+        open={aiPlanOpen}
+        today={today}
       />
       <BudgetEditor
         categories={categories}
