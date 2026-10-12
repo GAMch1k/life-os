@@ -91,16 +91,17 @@ require_isolated_resources() {
     done
   done < <(jq -r '.services.backup.volumes[]? | select(.type == "bind" and (.read_only // false | not)) | .source' <<<"$config")
   # Nor the host itself: no service may mount the Docker socket (it controls
-  # every container on the host), the host's root or /proc, or the Docker data
-  # root. On this stack host-health reports a made-up host (compose.verify.yaml)
-  # and the docker gateway does not run.
+  # every container on the host), the host's root, /proc, or /sys (the
+  # containers' cgroups), or the Docker data root. On this stack host-health
+  # reports a made-up host (compose.verify.yaml) and the docker gateway does
+  # not run.
   local host_source
   while IFS= read -r host_source; do
     printf "verify-compose: refusing a plan that mounts the host's %s into a service\n" "$host_source" >&2
     exit 2
   done < <(jq -r --arg docker_root "${LIFE_OS_DOCKER_ROOT:-/var/lib/docker}" '
     .services | to_entries[] | .value.volumes[]? | select(.type == "bind") | .source
-    | select(. == "/" or . == "/proc" or startswith("/proc/") or test("(^|/)docker\\.sock$") or . == $docker_root or startswith($docker_root + "/"))' <<<"$config")
+    | select(. == "/" or . == "/proc" or startswith("/proc/") or . == "/sys" or startswith("/sys/") or test("(^|/)docker\\.sock$") or . == $docker_root or startswith($docker_root + "/"))' <<<"$config")
   while IFS= read -r volume; do
     [[ "$volume" == lifeos-verify-* ]] || {
       printf 'verify-compose: refusing shared verification volume: %s\n' "$volume" >&2
