@@ -109,8 +109,14 @@ services:
     ports: !override ["127.0.0.1:13001:80"]
 
 networks:
+  # A fixed subnet (the live backend's is Docker's choice), so
+  # tools/smoke-gateway-recreate can hold a recreated service's old address
+  # with a placeholder: docker run --ip needs a configured subnet.
   backend:
     name: lifeos-verify-backend
+    ipam:
+      config:
+        - subnet: 10.255.250.0/24
   edge:
     name: lifeos-verify-edge
     ipam:
