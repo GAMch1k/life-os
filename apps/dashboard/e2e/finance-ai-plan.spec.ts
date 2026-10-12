@@ -381,7 +381,7 @@ test.describe("Payday", () => {
 
       await page.goto("/finance?tab=budget");
       await expect(page.getByTestId("finance-workspace")).toBeVisible();
-      await page.getByRole("button", { name: "Payday" }).click();
+      await page.getByRole("button", { name: "Payday", exact: true }).click();
       const dialog = page.getByRole("dialog");
       await expect(dialog).toContainText("Plan when my salary arrives");
       const suggestion = dialog.getByTestId("finance-payday-suggestion");
