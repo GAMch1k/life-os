@@ -130,6 +130,11 @@ export type ProcessorStatus = {
       trigger: string;
       finishedAt: string;
       created: number;
+      /** The first preferred cooking method, and how many ideas use it. */
+      firstMethod?: string;
+      withFirstMethod?: number;
+      /** How many ideas were found on a web page. */
+      fromWeb?: number;
       outcome: string;
       error?: string;
     } | null;
@@ -218,8 +223,15 @@ export function ideasFacts(
     none: "no new ideas",
     failed: `failed${run?.error ? `: ${run.error}` : ""}`,
   };
+  const details = [
+    ...(run?.firstMethod
+      ? [`${run.withFirstMethod ?? 0} ${run.firstMethod.replace(/_/g, " ")}`]
+      : []),
+    ...(run?.fromWeb ? [`${run.fromWeb} from the web`] : []),
+  ];
+  const made = `${run?.created ?? 0} new${run?.created && details.length ? ` (${details.join(", ")})` : ""}`;
   const last = run
-    ? `${outcomes[run.outcome] ?? `${run.created} new`}, ${formatTime(run.finishedAt, timeZone)}${run.trigger === "request" ? " (asked for)" : ""}`
+    ? `${outcomes[run.outcome] ?? made}, ${formatTime(run.finishedAt, timeZone)}${run.trigger === "request" ? " (asked for)" : ""}`
     : "not run since the processor started";
   return [
     {
