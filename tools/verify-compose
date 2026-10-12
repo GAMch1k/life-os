@@ -35,6 +35,10 @@ export LIFE_OS_ENABLE_BANKING_APP_ID= LIFE_OS_ENABLE_BANKING_KEY_FILE= LIFE_OS_B
 # their back would make them flaky. A smoke or benchmark that wants it sets
 # LIFE_OS_VERIFY_AI_CATEGORIES=on.
 export LIFE_OS_AI_CATEGORIES="${LIFE_OS_VERIFY_AI_CATEGORIES:-off}"
+# Nor the AI budget plan job, for the same reason: the browser tests leave
+# the AI's plans themselves. A smoke or benchmark that wants it sets
+# LIFE_OS_VERIFY_AI_BUDGET_PLANS=on; the monthly plan stays off there.
+export LIFE_OS_AI_BUDGET_PLANS="${LIFE_OS_VERIFY_AI_BUDGET_PLANS:-off}" LIFE_OS_AI_BUDGET_PLAN_MONTHLY=off
 # Nor the owner's backups: the backup service writes to a scratch directory
 # of the verification stack's own (LIFE_OS_VERIFY_BACKUP_DIR, by default under
 # TMPDIR), never to LIFE_OS_BACKUP_DIR from .env, and the plan is refused with

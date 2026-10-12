@@ -13,8 +13,9 @@
 # Dashboard uses, plus one recorded voice note through Voice
 # and whisper.cpp), lets the automatic processor plan them with the
 # authenticated Codex CLI and act through MCP, asks for recipe ideas, lets
-# the AI categories job categorize three transactions no rule matches, and
-# then checks the persisted results. The owner's timezone is Europe/Berlin. Results go to
+# the AI categories job categorize three transactions no rule matches, asks
+# the AI to plan next month's budget from three made-up months, and then
+# checks the persisted results. The owner's timezone is Europe/Berlin. Results go to
 # $LIFE_OS_BENCHMARK_DIR (default: a new temporary directory) as one TSV per
 # profile and a summary.
 set -euo pipefail
@@ -25,6 +26,8 @@ export LIFE_OS_TIMEZONE=$zone
 export LIFE_OS_IDEAS_TIME=off
 # The AI categories job, which tools/verify-compose keeps off otherwise.
 export LIFE_OS_VERIFY_AI_CATEGORIES=on
+# The AI budget plan job, likewise (its monthly plan stays off).
+export LIFE_OS_VERIFY_AI_BUDGET_PLANS=on
 
 [ "$#" -gt 0 ] || { echo "usage: $0 model/effort [model/effort ...]" >&2; exit 2; }
 out=${LIFE_OS_BENCHMARK_DIR:-$(mktemp -d)}
@@ -174,6 +177,31 @@ run_profile() {
   restaurant=$(spend "Kabul Restaurant" "Kartenzahlung girocard" -3150)
   hosting=$(spend "IONOS SE" "Lastschrift Webhosting Vertrag Oktober" -1000)
   ambiguous=$(spend "Max Mustermann" "Danke" -2000)
+  # For the AI budget plan: three made-up complete months in an account and
+  # categories of their own (so no other check counts them): a salary, rent,
+  # groceries, and eating out with many small payments at a bakery café.
+  local plan_giro plan_salary plan_rent plan_groceries plan_eating plan_month this_month back month day
+  plan_giro=$(post_json /api/finance/v1/accounts '{"name":"Benchmark Plan Giro","kind":"bank","currency":"EUR"}' | jq -r '.id')
+  plan_category() { post_json /api/finance/v1/categories "$(jq -n --arg name "$1" --arg kind "$2" '{name: $name, kind: $kind}')" | jq -r '.id'; }
+  plan_salary=$(plan_category "Benchmark Salary" income)
+  plan_rent=$(plan_category "Benchmark Rent" expense)
+  plan_groceries=$(plan_category "Benchmark Groceries" expense)
+  plan_eating=$(plan_category "Benchmark Eating out" expense)
+  plan_spend() { # plan_spend <YYYY-MM-DD> <counterparty> <minor units> <category>
+    post_json /api/finance/v1/transactions "$(jq -n --arg account "$plan_giro" --arg day "$1" --arg counterparty "$2" --argjson amount "$3" --arg category "$4" \
+      '{accountId: $account, bookingDate: $day, amount: {amount: $amount, currency: "EUR"}, counterparty: $counterparty, categoryId: $category}')" >/dev/null
+  }
+  this_month=$(TZ=$zone date +%Y-%m-01)
+  for back in 3 2 1; do
+    month=$(date -u -d "$this_month -$back month" +%Y-%m)
+    plan_spend "$month-01" "ACME GmbH" 240000 "$plan_salary"
+    plan_spend "$month-01" "Hausverwaltung Schmidt" -95000 "$plan_rent"
+    for day in 03 10 17 24; do plan_spend "$month-$day" "REWE Markt" -6240 "$plan_groceries"; done
+    for day in 05 13 21; do plan_spend "$month-$day" "Trattoria Da Mario" -2850 "$plan_eating"; done
+    for day in 07 14 20 27; do plan_spend "$month-$day" "Burger Haus" -1490 "$plan_eating"; done
+    for day in 02 06 09 11 16 18 23 25; do plan_spend "$month-$day" "Bäckerei Café Kunz" -420 "$plan_eating"; done
+  done
+  plan_month=$(date -u -d "$this_month +1 month" +%Y-%m)
   # Breakfast planned on the coming Saturday, which a capture cancels. Run
   # on a Saturday, "Saturday" may also mean a week later: both are planned,
   # and the capture clears one.
@@ -264,6 +292,17 @@ run_profile() {
     sleep 3
   done
 
+  # The AI budget plan for next month, asked for as "Plan my budget" asks,
+  # with a savings goal of 200 EUR a month; the job checks every 30 seconds.
+  # Up to 6 minutes.
+  local budget_plan='{}' plan_id
+  plan_id=$(post_json /api/finance/v1/ai-budget-plans "$(jq -n --arg month "$plan_month" '{month: $month, savingsGoalMinor: 20000}')" | jq -r '.id')
+  for _ in $(seq 1 120); do
+    budget_plan=$(api "$gateway/api/finance/v1/ai-budget-plans/$plan_id" 2>/dev/null || echo '{}')
+    jq -e '.state == "ready" or .state == "failed"' >/dev/null <<<"$budget_plan" && break
+    sleep 3
+  done
+
   local due
   printf 'scenario\tresult\tdetail\n' >"$results"
   check() { # check <scenario> <pass:0/1> <detail>
@@ -349,10 +388,11 @@ run_profile() {
   letter=$(api "$gateway/api/tasks/v1/tasks?query=Finanzamt&limit=100" | jq -c '[.items[] | select(.title | test("finanzamt"; "i"))]')
   due=$(jq -r 'if length == 1 then .[0].dueAt // "" else "" end' <<<"$letter")
   check letter_deadline "$([ "$s" = resolved ] && [ -n "$due" ] && [ "$(TZ=$zone date -d "$due" +%F)" = 2026-11-30 ] && echo 1 || echo 0)" "state=$s tasks=$(jq -c 'map({title, dueAt})' <<<"$letter")"
-  # The AI categories job's three seeded transactions are in their own
-  # account; only the captures' transactions count here.
+  # The AI categories job's three seeded transactions and the AI budget
+  # plan's months are in accounts of their own; only the captures'
+  # transactions count here.
   local captured
-  captured=$(jq -c --arg giro "$giro" '[.items[] | select(.accountId != $giro)]' <<<"$txns")
+  captured=$(jq -c --arg giro "$giro" --arg plan "$plan_giro" '[.items[] | select(.accountId != $giro and .accountId != $plan)]' <<<"$txns")
   check no_extra_transactions "$([ "$(jq 'length' <<<"$captured")" = 3 ] && echo 1 || echo 0)" "transactions=$(jq -c '[.[] | {amount: .amount.amount, counterparty, description}]' <<<"$captured") (expected 3)"
   # Groceries go on the shopping list in the owner's words (Food compares
   # names as normalizedName), with the store a capture names; a name already
@@ -491,6 +531,12 @@ run_profile() {
   check ai_hosting "$(jq -e '.categorizedBy == "ai" and (.category == "subscriptions" or .category == "utilities")' <<<"$got" >/dev/null && echo 1 || echo 0)" "$got"
   got=$(ai_txn "$ambiguous")
   check ai_ambiguous_left "$(jq -e '.category == null and .categorizedBy == null' <<<"$got" >/dev/null && echo 1 || echo 0)" "$got"
+  # AI budget plan: ready, so Finance's checks passed (a line for every
+  # category with history, amounts of 0 or more, savings within the spending
+  # they come from, totals that add up), with 2 to 5 ways to spend less and
+  # the rent kept; at least one way is in the benchmark's eating out (P13-09).
+  check budget_plan_valid "$(jq -e --arg rent "$plan_rent" '.state == "ready" and (.result.suggestions | length) >= 2 and (.result.suggestions | length) <= 5 and any(.result.lines[]; .categoryId == $rent and .proposed.amount > 0)' <<<"$budget_plan" >/dev/null && echo 1 || echo 0)" "state=$(jq -r '.state // "missing"' <<<"$budget_plan") attempts=$(jq -r '.attempts // ""' <<<"$budget_plan") error=\"$(jq -r '.error // ""' <<<"$budget_plan")\" headline=\"$(jq -r '.result.headline // ""' <<<"$budget_plan")\" total=$(jq -r '.result.projectedTotal.amount // ""' <<<"$budget_plan")"
+  check budget_plan_eating_out "$(jq -e --arg eating "$plan_eating" '[.result.suggestions[]? | select(.categoryId == $eating and .monthlySaving.amount > 0)] | length >= 1' <<<"$budget_plan" >/dev/null && echo 1 || echo 0)" "suggestions=$(jq -c '[.result.suggestions[]? | {title, category: .categoryName, merchants, saving: .monthlySaving.amount}]' <<<"$budget_plan")"
   check no_extra_recipes "$([ "$(jq '.items | length' <<<"$recipes")" = 3 ] && echo 1 || echo 0)" "recipes=$(jq -c '[.items[].title]' <<<"$recipes") (expected 3)"
   check no_extra_meals "$([ "$(jq '.items | length' <<<"$plan")" = $((1 + ${#saturdays[@]})) ] && echo 1 || echo 0)" "meals=$(jq -c '[.items[] | {date, slot, title}]' <<<"$plan") (expected $((1 + ${#saturdays[@]})))"
   # No fallback or invented entities: ten seeds plus three creates, the
