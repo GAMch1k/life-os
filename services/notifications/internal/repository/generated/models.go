@@ -37,3 +37,24 @@ type Notification struct {
 	CreatedAt     pgtype.Timestamptz
 	ReadAt        pgtype.Timestamptz
 }
+
+type PushOutcome struct {
+	NotificationID pgtype.UUID
+	SubscriptionID pgtype.UUID
+	Status         string
+	Error          *string
+	CreatedAt      pgtype.Timestamptz
+}
+
+type PushSubscription struct {
+	ID            pgtype.UUID
+	Endpoint      string
+	P256dh        string
+	Auth          string
+	DeviceLabel   string
+	CreatedAt     pgtype.Timestamptz
+	UpdatedAt     pgtype.Timestamptz
+	LastSuccessAt pgtype.Timestamptz
+	LastFailureAt pgtype.Timestamptz
+	LastError     *string
+}

@@ -1,8 +1,8 @@
 // Package delivery sends stored notifications through pluggable channels.
 //
 // A Channel delivers one notification to one destination: the self-hosted
-// ntfy server that reaches the owner's phone, or the service log. Life OS's
-// own Android app later becomes another channel. The Worker claims due
+// ntfy server that reaches the owner's phone, Web Push to the browsers that
+// turned on notifications (the installed Life OS app), or the service log. The Worker claims due
 // deliveries from the database with a lease, calls the channel, and records
 // the outcome: sent, retried with exponential backoff, or ended (failed or
 // skipped). Producers never see channels; they post notifications to the API.
@@ -101,12 +101,23 @@ func (c LogChannel) Send(ctx context.Context, n Notification) error {
 type Settings struct {
 	Logger *slog.Logger
 	Ntfy   NtfyConfig
+	// WebPush is the web push channel when its VAPID keys are configured
+	// (NewWebPush), else nil. It is built before the channels because the
+	// API uses it too (subscriptions, test pushes), also when the channel
+	// is not listed.
+	WebPush *WebPushChannel
 }
 
 // constructors builds each known channel.
 var constructors = map[string]func(Settings) (Channel, error){
 	"log":  func(settings Settings) (Channel, error) { return LogChannel{Logger: settings.Logger}, nil },
 	"ntfy": func(settings Settings) (Channel, error) { return NewNtfy(settings.Ntfy) },
+	"webpush": func(settings Settings) (Channel, error) {
+		if settings.WebPush == nil {
+			return nil, errors.New("NOTIFICATIONS_WEBPUSH_VAPID_PUBLIC_KEY and NOTIFICATIONS_WEBPUSH_VAPID_PRIVATE_KEY must both be set; generate them with `go run ./cmd/vapid-keys` in services/notifications")
+		}
+		return settings.WebPush, nil
+	},
 }
 
 // Build returns the channels named in NOTIFICATIONS_CHANNELS, in order. An
