@@ -167,6 +167,9 @@ func (h *Handler) ImportBankSync(c fiber.Ctx) error {
 	connection := pgUUID(body.ConnectionId)
 	var counts bankCounts
 	accountIDs := make([]generated.BankAccountId, 0, len(body.Accounts))
+	// What the sync creates or books, for the payday (planOnSalary).
+	var arrived []store.Transaction
+	var salaryPlan *store.AiBudgetPlan
 	err = h.inTx(ctx, func(q *store.Queries) error {
 		if err := q.LockBankConnection(ctx, connection); err != nil {
 			return err
@@ -239,12 +242,15 @@ func (h *Handler) ImportBankSync(c fiber.Ctx) error {
 				continue
 			}
 			if before, ok := existing[item.ExternalId]; ok {
-				changed, err := h.updateBankTransaction(c, q, chooser, before, account, item)
+				after, changed, err := h.updateBankTransaction(c, q, chooser, before, account, item)
 				if err != nil {
 					return err
 				}
 				if changed {
 					counts.Updated++
+					if before.Status != after.Status {
+						arrived = append(arrived, after)
+					}
 				} else {
 					counts.Unchanged++
 				}
@@ -285,6 +291,7 @@ func (h *Handler) ImportBankSync(c fiber.Ctx) error {
 			if err != nil {
 				return err
 			}
+			arrived = append(arrived, created)
 			if replacedID.Valid {
 				// The booked transaction is the debit the pending one was:
 				// a large-debit alert sent for it is not sent again.
@@ -297,12 +304,17 @@ func (h *Handler) ImportBankSync(c fiber.Ctx) error {
 		}
 		removed, err := q.DeleteStalePending(ctx, store.DeleteStalePendingParams{ConnectionID: connection, WindowFrom: pgDate(body.Window.From), WindowTo: pgDate(body.Window.To), Keep: keep})
 		counts.RemovedPending += int(removed)
+		if err != nil {
+			return err
+		}
+		salaryPlan, err = h.planOnSalary(ctx, q, arrived)
 		return err
 	})
 	if err != nil {
 		return passThrough(err)
 	}
 	h.recordBankImport(c, body, counts)
+	h.recordSalaryPlan(c, salaryPlan)
 	h.budgetChanged()
 	result := generated.BankImportResult{AccountIds: accountIDs}
 	result.Accounts.Created, result.Accounts.Updated = counts.AccountsCreated, counts.AccountsUpdated
@@ -315,8 +327,9 @@ func (h *Handler) ImportBankSync(c fiber.Ctx) error {
 // owner's category and notes stay, and a category not chosen by hand
 // follows the rules (and the merchant category code) when the text or the
 // code changed: an AI choice they do not replace is dropped, so the AI
-// looks at the new text. It reports whether anything changed.
-func (h *Handler) updateBankTransaction(c fiber.Ctx, q *store.Queries, chooser rules.Categorizer, before store.Transaction, account store.Account, item generated.BankTransactionInput) (bool, error) {
+// looks at the new text. It returns the transaction and whether anything
+// changed.
+func (h *Handler) updateBankTransaction(c fiber.Ctx, q *store.Queries, chooser rules.Categorizer, before store.Transaction, account store.Account, item generated.BankTransactionInput) (store.Transaction, bool, error) {
 	next := before
 	next.AccountID, next.AmountMinor, next.Currency = account.ID, item.Amount.Amount, item.Amount.Currency
 	next.OccurredOn, next.ValueDate, next.Status = pgDate(item.BookingDate), optionalDate(item.ValueDate), string(item.Status)
@@ -328,13 +341,13 @@ func (h *Handler) updateBankTransaction(c fiber.Ctx, q *store.Queries, chooser r
 		applyAssignment(&next, assignment)
 	}
 	if len(transactionChanges(before, next)) == 0 && sameText(before.MerchantCategoryCode, next.MerchantCategoryCode) && sameText(before.BankReference, next.BankReference) {
-		return false, nil
+		return before, false, nil
 	}
-	_, err := q.UpdateBankTransaction(c.Context(), store.UpdateBankTransactionParams{ID: before.ID, AccountID: next.AccountID, AmountMinor: next.AmountMinor,
+	after, err := q.UpdateBankTransaction(c.Context(), store.UpdateBankTransactionParams{ID: before.ID, AccountID: next.AccountID, AmountMinor: next.AmountMinor,
 		Currency: next.Currency, OccurredOn: next.OccurredOn, ValueDate: next.ValueDate, Status: next.Status, Counterparty: next.Counterparty,
 		Description: next.Description, MerchantCategoryCode: next.MerchantCategoryCode, BankReference: next.BankReference,
 		CategoryID: next.CategoryID, CategorizedBy: next.CategorizedBy, CategoryRuleID: next.CategoryRuleID})
-	return err == nil, err
+	return after, err == nil, err
 }
 
 func (h *Handler) RemoveBankConnection(c fiber.Ctx, connectionID types.UUID) error {

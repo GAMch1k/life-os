@@ -32,25 +32,27 @@ type Account struct {
 }
 
 type AiBudgetPlan struct {
-	ID               pgtype.UUID
-	Month            pgtype.Date
-	Currency         string
-	SavingsGoalMinor *int64
-	Trigger          string
-	State            string
-	RequestedByKind  string
-	RequestedByName  *string
-	Attempts         int32
-	ClaimedAt        pgtype.Timestamptz
-	RetryAt          pgtype.Timestamptz
-	Error            *string
-	Result           []byte
-	FinishedAt       pgtype.Timestamptz
-	Applied          []byte
-	AppliedAt        pgtype.Timestamptz
-	DismissedAt      pgtype.Timestamptz
-	CreatedAt        pgtype.Timestamptz
-	UpdatedAt        pgtype.Timestamptz
+	ID                  pgtype.UUID
+	Month               pgtype.Date
+	Currency            string
+	SavingsGoalMinor    *int64
+	Trigger             string
+	State               string
+	RequestedByKind     string
+	RequestedByName     *string
+	Attempts            int32
+	ClaimedAt           pgtype.Timestamptz
+	RetryAt             pgtype.Timestamptz
+	Error               *string
+	Result              []byte
+	FinishedAt          pgtype.Timestamptz
+	Applied             []byte
+	AppliedAt           pgtype.Timestamptz
+	DismissedAt         pgtype.Timestamptz
+	CreatedAt           pgtype.Timestamptz
+	UpdatedAt           pgtype.Timestamptz
+	SalaryTransactionID pgtype.UUID
+	SalaryBookedOn      pgtype.Date
 }
 
 type AlertNotification struct {
@@ -124,6 +126,14 @@ type LowBalanceState struct {
 	Below     bool
 	Episode   int32
 	ChangedAt pgtype.Timestamptz
+}
+
+type PaydaySetting struct {
+	ID             bool
+	Enabled        bool
+	PayerMatch     *string
+	MinAmountMinor *int64
+	UpdatedAt      pgtype.Timestamptz
 }
 
 type Subscription struct {

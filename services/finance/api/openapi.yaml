@@ -64,7 +64,8 @@ info:
 
 
     AI budget plans (`/v1/ai-budget-plans`): the owner asks the AI to plan
-    a month (the processor also plans each month on its 1st); the
+    a month (the processor also plans each month on its 1st, and Finance
+    asks when the salary arrives, see `/v1/settings/payday`); the
     processor's job reads the month's planning data, aggregates only
     (`/v1/budgets/{month}/planning-data`), and leaves the AI's proposal,
     which Finance checks. Nothing changes the budget until the owner
@@ -524,12 +525,15 @@ paths:
         request joins it. The owner (`user`) may ask 10 times a day (the
         owner's day; 429 `daily_limit`). `trigger` `schedule` is the job's own plan on
         the 1st of a month: one per month, and a repeat answers with it
-        (200).
+        (200); so does a month whose plan the salary asked for (unless it
+        failed) or that the owner asked for since the month began (unless
+        dismissed). `salary` plans are Finance's own and cannot be asked
+        for here.
       operationId: requestAiBudgetPlan
       security: []
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/RequestAiBudgetPlanRequest'}}}}
       responses:
-        '200': {description: The month's plan already requested or running (or its scheduled plan), content: {application/json: {schema: {$ref: '#/components/schemas/AiBudgetPlan'}}}}
+        '200': {description: 'The month''s plan already requested or running (or, for the schedule, its scheduled plan, the salary''s, or the owner''s)', content: {application/json: {schema: {$ref: '#/components/schemas/AiBudgetPlan'}}}}
         '202': {description: Requested, content: {application/json: {schema: {$ref: '#/components/schemas/AiBudgetPlan'}}}}
         '400': {description: 'Invalid request (`invalid_request`, such as a past month or a negative goal), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
         '429': {description: Asked 10 times today already (`daily_limit`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
@@ -768,6 +772,36 @@ paths:
       responses:
         '200': {description: Settings, content: {application/json: {schema: {$ref: '#/components/schemas/FinanceSettings'}}}}
         '400': {description: 'Invalid request (`invalid_request`: a large-debit threshold below 1, a negative low-balance threshold, or lead days outside 0 to 30), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/settings/payday:
+    get:
+      summary: Get the payday setting
+      description: >-
+        Whether the AI plans the budget when the salary arrives: a booked
+        payment in the default currency whose counterparty contains
+        `payerMatch` (ignoring case and spacing, as a rule matches), of at
+        least `minAmount` when one is set, asks for a plan with trigger
+        `salary` (for the next month from the 15th on, else for its own
+        month). `suggestion` is the payer Finance finds in the data, the
+        largest income that arrives monthly; it is only a suggestion, never
+        used until the owner saves it.
+      operationId: getPaydaySettings
+      security: []
+      responses:
+        '200': {description: The payday setting, content: {application/json: {schema: {$ref: '#/components/schemas/PaydaySettings'}}}}
+        '400': {description: Invalid request, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+    put:
+      summary: Save the payday setting
+      description: >-
+        Replaces the payday setting. Switched on, it needs `payerMatch` (1
+        to 200 characters); `minAmountMinor` (at least 1, minor units of the
+        default currency) leaves out smaller payments from the payer, such
+        as refunds. Payments already booked ask for nothing.
+      operationId: updatePaydaySettings
+      security: []
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdatePaydaySettingsRequest'}}}}
+      responses:
+        '200': {description: The payday setting, content: {application/json: {schema: {$ref: '#/components/schemas/PaydaySettings'}}}}
+        '400': {description: 'Invalid request (`invalid_request`: switched on without a payer, a payer longer than 200 characters, or a minimum below 1), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
   /v1/imports/csv:
     post:
       summary: Import transactions from a CSV file
@@ -1502,8 +1536,15 @@ components:
       enum: [requested, running, ready, failed, applied, partly_applied, dismissed]
     AiBudgetPlanTrigger:
       type: string
-      description: '`request`: the owner asked. `schedule`: the job''s plan on the 1st of a month.'
-      enum: [request, schedule]
+      description: '`request`: the owner asked. `schedule`: the job''s plan on the 1st of a month. `salary`: Finance asked when the salary arrived (see `/v1/settings/payday`).'
+      enum: [request, schedule, salary]
+    AiBudgetPlanSalary:
+      type: object
+      description: The payment that asked for a `salary` plan.
+      required: [bookingDate, transactionId]
+      properties:
+        bookingDate: {type: string, format: date}
+        transactionId: {type: string, format: uuid, nullable: true, description: Null once the transaction is deleted.}
     Actor:
       type: object
       description: Who asked, as its X-Life-OS-Actor said.
@@ -1584,12 +1625,15 @@ components:
         A plan the AI makes for a month's budget. `attempts` counts the
         job's runs; `error` is the last failed run's, `retryAt` when a
         requested plan is tried again. `result` is there once ready.
-      required: [id, month, currency, trigger, state, savingsGoal, requestedBy, attempts, claimedAt, retryAt, error, finishedAt, result, applied, dismissedAt, createdAt, updatedAt]
+        `salary` names the payment that asked for a `salary` plan (null for
+        the others).
+      required: [id, month, currency, trigger, salary, state, savingsGoal, requestedBy, attempts, claimedAt, retryAt, error, finishedAt, result, applied, dismissedAt, createdAt, updatedAt]
       properties:
         id: {type: string, format: uuid}
         month: {type: string, description: YYYY-MM.}
         currency: {type: string}
         trigger: {$ref: '#/components/schemas/AiBudgetPlanTrigger'}
+        salary: {type: object, allOf: [{$ref: '#/components/schemas/AiBudgetPlanSalary'}], nullable: true}
         state: {$ref: '#/components/schemas/AiBudgetPlanState'}
         savingsGoal: {type: object, allOf: [{$ref: '#/components/schemas/Money'}], nullable: true, description: The owner's savings goal per month for the plan.}
         requestedBy: {$ref: '#/components/schemas/Actor'}
@@ -1619,7 +1663,10 @@ components:
       properties:
         month: {type: string, nullable: true, description: 'YYYY-MM; by default this month during its first 7 days, else the next.'}
         savingsGoalMinor: {type: integer, format: int64, minimum: 0, nullable: true, description: How much to save a month.}
-        trigger: {$ref: '#/components/schemas/AiBudgetPlanTrigger'}
+        trigger:
+          type: string
+          description: '`request` (the default) or `schedule`, the job''s plan on the 1st.'
+          enum: [request, schedule]
     AiBudgetProposalLine:
       type: object
       required: [categoryId, proposedMinor, reason]
@@ -1784,6 +1831,43 @@ components:
         lowBalance: {$ref: '#/components/schemas/AmountAlert'}
         renewals: {$ref: '#/components/schemas/RenewalAlert'}
         updatedAt: {type: string, format: date-time}
+    PaydaySuggestion:
+      type: object
+      description: >-
+        The largest income that arrives monthly: booked money in from one
+        counterparty (not in a transfer category) in at least 2 months in a
+        row, 26 to 35 days apart, of similar amounts (within 10%), the
+        latest no more than a week past when the next was due. `payerMatch`
+        matches all of them; `typicalAmount` is the median of the last
+        three; `payments` counts the run.
+      required: [payerMatch, typicalAmount, payments, lastDate]
+      properties:
+        payerMatch: {type: string}
+        typicalAmount: {$ref: '#/components/schemas/Money'}
+        payments: {type: integer}
+        lastDate: {type: string, format: date}
+    PaydaySettings:
+      type: object
+      description: >-
+        `enabled`: a booked payment from the payer asks for an AI budget
+        plan. `payerMatch`: text the payment's counterparty contains.
+        `minAmount`: smaller payments from the payer do not count (null:
+        any amount). Amounts are in `currency`, the default currency.
+      required: [enabled, payerMatch, minAmount, currency, suggestion, updatedAt]
+      properties:
+        enabled: {type: boolean}
+        payerMatch: {type: string, nullable: true}
+        minAmount: {type: object, allOf: [{$ref: '#/components/schemas/Money'}], nullable: true}
+        currency: {type: string}
+        suggestion: {type: object, allOf: [{$ref: '#/components/schemas/PaydaySuggestion'}], nullable: true}
+        updatedAt: {type: string, format: date-time}
+    UpdatePaydaySettingsRequest:
+      type: object
+      required: [enabled]
+      properties:
+        enabled: {type: boolean}
+        payerMatch: {type: string, nullable: true, maxLength: 200, description: 'Required when enabled; empty or null means none.'}
+        minAmountMinor: {type: integer, format: int64, minimum: 1, nullable: true, description: Minor units of the default currency; null for any amount.}
     AmountAlertInput:
       type: object
       required: [enabled, thresholdMinor]

@@ -11,6 +11,34 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const aIBudgetPlanForMonthExists = `-- name: AIBudgetPlanForMonthExists :one
+SELECT EXISTS (
+    SELECT 1 FROM ai_budget_plans
+    WHERE month = $1::date AND state IN ('requested', 'running', 'ready', 'applied', 'partly_applied')
+)
+`
+
+// Whether a month has a plan that is waiting, running, ready, or applied:
+// the salary asks for none then. A failed or dismissed one does not count.
+func (q *Queries) AIBudgetPlanForMonthExists(ctx context.Context, month pgtype.Date) (bool, error) {
+	row := q.db.QueryRow(ctx, aIBudgetPlanForMonthExists, month)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
+const aIBudgetPlanForSalaryExists = `-- name: AIBudgetPlanForSalaryExists :one
+SELECT EXISTS (SELECT 1 FROM ai_budget_plans WHERE salary_transaction_id = $1)
+`
+
+// Whether a payment already asked for a plan.
+func (q *Queries) AIBudgetPlanForSalaryExists(ctx context.Context, transactionID pgtype.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, aIBudgetPlanForSalaryExists, transactionID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const aIBudgetPlanRunning = `-- name: AIBudgetPlanRunning :one
 SELECT EXISTS (
     SELECT 1 FROM ai_budget_plans WHERE state = 'running' AND claimed_at > $1::timestamptz
@@ -30,7 +58,7 @@ const applyAIBudgetPlan = `-- name: ApplyAIBudgetPlan :one
 UPDATE ai_budget_plans
 SET state = $1::text, applied = $2, applied_at = $3::timestamptz, updated_at = now()
 WHERE id = $4
-RETURNING id, month, currency, savings_goal_minor, trigger, state, requested_by_kind, requested_by_name, attempts, claimed_at, retry_at, error, result, finished_at, applied, applied_at, dismissed_at, created_at, updated_at
+RETURNING id, month, currency, savings_goal_minor, trigger, state, requested_by_kind, requested_by_name, attempts, claimed_at, retry_at, error, result, finished_at, applied, applied_at, dismissed_at, created_at, updated_at, salary_transaction_id, salary_booked_on
 `
 
 type ApplyAIBudgetPlanParams struct {
@@ -68,6 +96,8 @@ func (q *Queries) ApplyAIBudgetPlan(ctx context.Context, arg ApplyAIBudgetPlanPa
 		&i.DismissedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SalaryTransactionID,
+		&i.SalaryBookedOn,
 	)
 	return i, err
 }
@@ -83,7 +113,7 @@ WHERE id = (
     LIMIT 1
     FOR UPDATE SKIP LOCKED
 )
-RETURNING id, month, currency, savings_goal_minor, trigger, state, requested_by_kind, requested_by_name, attempts, claimed_at, retry_at, error, result, finished_at, applied, applied_at, dismissed_at, created_at, updated_at
+RETURNING id, month, currency, savings_goal_minor, trigger, state, requested_by_kind, requested_by_name, attempts, claimed_at, retry_at, error, result, finished_at, applied, applied_at, dismissed_at, created_at, updated_at, salary_transaction_id, salary_booked_on
 `
 
 type ClaimAIBudgetPlanParams struct {
@@ -115,6 +145,8 @@ func (q *Queries) ClaimAIBudgetPlan(ctx context.Context, arg ClaimAIBudgetPlanPa
 		&i.DismissedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SalaryTransactionID,
+		&i.SalaryBookedOn,
 	)
 	return i, err
 }
@@ -153,18 +185,21 @@ func (q *Queries) CountWaitingAIBudgetPlans(ctx context.Context, arg CountWaitin
 }
 
 const createAIBudgetPlan = `-- name: CreateAIBudgetPlan :one
-INSERT INTO ai_budget_plans (month, currency, savings_goal_minor, trigger, requested_by_kind, requested_by_name)
-VALUES ($1::date, $2, $3, $4, $5, $6)
-RETURNING id, month, currency, savings_goal_minor, trigger, state, requested_by_kind, requested_by_name, attempts, claimed_at, retry_at, error, result, finished_at, applied, applied_at, dismissed_at, created_at, updated_at
+INSERT INTO ai_budget_plans (month, currency, savings_goal_minor, trigger, requested_by_kind, requested_by_name, salary_transaction_id, salary_booked_on)
+VALUES ($1::date, $2, $3, $4, $5, $6,
+        $7, $8::date)
+RETURNING id, month, currency, savings_goal_minor, trigger, state, requested_by_kind, requested_by_name, attempts, claimed_at, retry_at, error, result, finished_at, applied, applied_at, dismissed_at, created_at, updated_at, salary_transaction_id, salary_booked_on
 `
 
 type CreateAIBudgetPlanParams struct {
-	Month            pgtype.Date
-	Currency         string
-	SavingsGoalMinor *int64
-	Trigger          string
-	RequestedByKind  string
-	RequestedByName  *string
+	Month               pgtype.Date
+	Currency            string
+	SavingsGoalMinor    *int64
+	Trigger             string
+	RequestedByKind     string
+	RequestedByName     *string
+	SalaryTransactionID pgtype.UUID
+	SalaryBookedOn      pgtype.Date
 }
 
 func (q *Queries) CreateAIBudgetPlan(ctx context.Context, arg CreateAIBudgetPlanParams) (AiBudgetPlan, error) {
@@ -175,6 +210,8 @@ func (q *Queries) CreateAIBudgetPlan(ctx context.Context, arg CreateAIBudgetPlan
 		arg.Trigger,
 		arg.RequestedByKind,
 		arg.RequestedByName,
+		arg.SalaryTransactionID,
+		arg.SalaryBookedOn,
 	)
 	var i AiBudgetPlan
 	err := row.Scan(
@@ -197,6 +234,8 @@ func (q *Queries) CreateAIBudgetPlan(ctx context.Context, arg CreateAIBudgetPlan
 		&i.DismissedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SalaryTransactionID,
+		&i.SalaryBookedOn,
 	)
 	return i, err
 }
@@ -205,7 +244,7 @@ const dismissAIBudgetPlan = `-- name: DismissAIBudgetPlan :one
 UPDATE ai_budget_plans
 SET state = 'dismissed', dismissed_at = $1::timestamptz, updated_at = now()
 WHERE id = $2
-RETURNING id, month, currency, savings_goal_minor, trigger, state, requested_by_kind, requested_by_name, attempts, claimed_at, retry_at, error, result, finished_at, applied, applied_at, dismissed_at, created_at, updated_at
+RETURNING id, month, currency, savings_goal_minor, trigger, state, requested_by_kind, requested_by_name, attempts, claimed_at, retry_at, error, result, finished_at, applied, applied_at, dismissed_at, created_at, updated_at, salary_transaction_id, salary_booked_on
 `
 
 type DismissAIBudgetPlanParams struct {
@@ -236,6 +275,8 @@ func (q *Queries) DismissAIBudgetPlan(ctx context.Context, arg DismissAIBudgetPl
 		&i.DismissedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SalaryTransactionID,
+		&i.SalaryBookedOn,
 	)
 	return i, err
 }
@@ -248,7 +289,7 @@ SET state = CASE WHEN $1::timestamptz IS NULL THEN 'failed' ELSE 'requested' END
     finished_at = CASE WHEN $1::timestamptz IS NULL THEN $3::timestamptz END,
     updated_at = now()
 WHERE id = $4
-RETURNING id, month, currency, savings_goal_minor, trigger, state, requested_by_kind, requested_by_name, attempts, claimed_at, retry_at, error, result, finished_at, applied, applied_at, dismissed_at, created_at, updated_at
+RETURNING id, month, currency, savings_goal_minor, trigger, state, requested_by_kind, requested_by_name, attempts, claimed_at, retry_at, error, result, finished_at, applied, applied_at, dismissed_at, created_at, updated_at, salary_transaction_id, salary_booked_on
 `
 
 type FailAIBudgetPlanParams struct {
@@ -288,12 +329,14 @@ func (q *Queries) FailAIBudgetPlan(ctx context.Context, arg FailAIBudgetPlanPara
 		&i.DismissedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SalaryTransactionID,
+		&i.SalaryBookedOn,
 	)
 	return i, err
 }
 
 const getAIBudgetPlan = `-- name: GetAIBudgetPlan :one
-SELECT id, month, currency, savings_goal_minor, trigger, state, requested_by_kind, requested_by_name, attempts, claimed_at, retry_at, error, result, finished_at, applied, applied_at, dismissed_at, created_at, updated_at FROM ai_budget_plans WHERE id = $1
+SELECT id, month, currency, savings_goal_minor, trigger, state, requested_by_kind, requested_by_name, attempts, claimed_at, retry_at, error, result, finished_at, applied, applied_at, dismissed_at, created_at, updated_at, salary_transaction_id, salary_booked_on FROM ai_budget_plans WHERE id = $1
 `
 
 func (q *Queries) GetAIBudgetPlan(ctx context.Context, id pgtype.UUID) (AiBudgetPlan, error) {
@@ -319,12 +362,14 @@ func (q *Queries) GetAIBudgetPlan(ctx context.Context, id pgtype.UUID) (AiBudget
 		&i.DismissedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SalaryTransactionID,
+		&i.SalaryBookedOn,
 	)
 	return i, err
 }
 
 const getAIBudgetPlanForUpdate = `-- name: GetAIBudgetPlanForUpdate :one
-SELECT id, month, currency, savings_goal_minor, trigger, state, requested_by_kind, requested_by_name, attempts, claimed_at, retry_at, error, result, finished_at, applied, applied_at, dismissed_at, created_at, updated_at FROM ai_budget_plans WHERE id = $1 FOR UPDATE
+SELECT id, month, currency, savings_goal_minor, trigger, state, requested_by_kind, requested_by_name, attempts, claimed_at, retry_at, error, result, finished_at, applied, applied_at, dismissed_at, created_at, updated_at, salary_transaction_id, salary_booked_on FROM ai_budget_plans WHERE id = $1 FOR UPDATE
 `
 
 func (q *Queries) GetAIBudgetPlanForUpdate(ctx context.Context, id pgtype.UUID) (AiBudgetPlan, error) {
@@ -350,12 +395,14 @@ func (q *Queries) GetAIBudgetPlanForUpdate(ctx context.Context, id pgtype.UUID) 
 		&i.DismissedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SalaryTransactionID,
+		&i.SalaryBookedOn,
 	)
 	return i, err
 }
 
 const getActiveAIBudgetPlan = `-- name: GetActiveAIBudgetPlan :one
-SELECT id, month, currency, savings_goal_minor, trigger, state, requested_by_kind, requested_by_name, attempts, claimed_at, retry_at, error, result, finished_at, applied, applied_at, dismissed_at, created_at, updated_at FROM ai_budget_plans
+SELECT id, month, currency, savings_goal_minor, trigger, state, requested_by_kind, requested_by_name, attempts, claimed_at, retry_at, error, result, finished_at, applied, applied_at, dismissed_at, created_at, updated_at, salary_transaction_id, salary_booked_on FROM ai_budget_plans
 WHERE month = $1::date AND state IN ('requested', 'running')
 ORDER BY created_at DESC, id DESC
 LIMIT 1
@@ -385,6 +432,8 @@ func (q *Queries) GetActiveAIBudgetPlan(ctx context.Context, month pgtype.Date) 
 		&i.DismissedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SalaryTransactionID,
+		&i.SalaryBookedOn,
 	)
 	return i, err
 }
@@ -402,8 +451,46 @@ func (q *Queries) GetHistoryStart(ctx context.Context, currency string) (pgtype.
 	return first_day, err
 }
 
+const getSalaryAIBudgetPlan = `-- name: GetSalaryAIBudgetPlan :one
+SELECT id, month, currency, savings_goal_minor, trigger, state, requested_by_kind, requested_by_name, attempts, claimed_at, retry_at, error, result, finished_at, applied, applied_at, dismissed_at, created_at, updated_at, salary_transaction_id, salary_booked_on FROM ai_budget_plans
+WHERE month = $1::date AND trigger = 'salary' AND state <> 'failed'
+ORDER BY created_at DESC, id DESC
+LIMIT 1
+`
+
+// A month's newest plan the salary asked for that did not fail (dismissed
+// ones included: the owner saw that month's plan).
+func (q *Queries) GetSalaryAIBudgetPlan(ctx context.Context, month pgtype.Date) (AiBudgetPlan, error) {
+	row := q.db.QueryRow(ctx, getSalaryAIBudgetPlan, month)
+	var i AiBudgetPlan
+	err := row.Scan(
+		&i.ID,
+		&i.Month,
+		&i.Currency,
+		&i.SavingsGoalMinor,
+		&i.Trigger,
+		&i.State,
+		&i.RequestedByKind,
+		&i.RequestedByName,
+		&i.Attempts,
+		&i.ClaimedAt,
+		&i.RetryAt,
+		&i.Error,
+		&i.Result,
+		&i.FinishedAt,
+		&i.Applied,
+		&i.AppliedAt,
+		&i.DismissedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SalaryTransactionID,
+		&i.SalaryBookedOn,
+	)
+	return i, err
+}
+
 const getScheduledAIBudgetPlan = `-- name: GetScheduledAIBudgetPlan :one
-SELECT id, month, currency, savings_goal_minor, trigger, state, requested_by_kind, requested_by_name, attempts, claimed_at, retry_at, error, result, finished_at, applied, applied_at, dismissed_at, created_at, updated_at FROM ai_budget_plans WHERE month = $1::date AND trigger = 'schedule'
+SELECT id, month, currency, savings_goal_minor, trigger, state, requested_by_kind, requested_by_name, attempts, claimed_at, retry_at, error, result, finished_at, applied, applied_at, dismissed_at, created_at, updated_at, salary_transaction_id, salary_booked_on FROM ai_budget_plans WHERE month = $1::date AND trigger = 'schedule'
 `
 
 func (q *Queries) GetScheduledAIBudgetPlan(ctx context.Context, month pgtype.Date) (AiBudgetPlan, error) {
@@ -429,12 +516,14 @@ func (q *Queries) GetScheduledAIBudgetPlan(ctx context.Context, month pgtype.Dat
 		&i.DismissedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SalaryTransactionID,
+		&i.SalaryBookedOn,
 	)
 	return i, err
 }
 
 const listAIBudgetPlans = `-- name: ListAIBudgetPlans :many
-SELECT id, month, currency, savings_goal_minor, trigger, state, requested_by_kind, requested_by_name, attempts, claimed_at, retry_at, error, result, finished_at, applied, applied_at, dismissed_at, created_at, updated_at FROM ai_budget_plans
+SELECT id, month, currency, savings_goal_minor, trigger, state, requested_by_kind, requested_by_name, attempts, claimed_at, retry_at, error, result, finished_at, applied, applied_at, dismissed_at, created_at, updated_at, salary_transaction_id, salary_booked_on FROM ai_budget_plans
 WHERE ($1::date IS NULL OR month = $1::date)
   AND ($2::text IS NULL OR state = $2::text)
 ORDER BY created_at DESC, id DESC
@@ -477,6 +566,59 @@ func (q *Queries) ListAIBudgetPlans(ctx context.Context, arg ListAIBudgetPlansPa
 			&i.DismissedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.SalaryTransactionID,
+			&i.SalaryBookedOn,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAIBudgetPlansToNotify = `-- name: ListAIBudgetPlansToNotify :many
+SELECT id, month, currency, savings_goal_minor, trigger, state, requested_by_kind, requested_by_name, attempts, claimed_at, retry_at, error, result, finished_at, applied, applied_at, dismissed_at, created_at, updated_at, salary_transaction_id, salary_booked_on FROM ai_budget_plans
+WHERE state = 'ready' AND trigger IN ('salary', 'schedule') AND finished_at >= $1::timestamptz
+ORDER BY finished_at, id
+`
+
+// Ready plans the AI made without the owner asking (the salary's and the
+// schedule's) that finished since an instant, oldest first: each gets a
+// notification.
+func (q *Queries) ListAIBudgetPlansToNotify(ctx context.Context, since pgtype.Timestamptz) ([]AiBudgetPlan, error) {
+	rows, err := q.db.Query(ctx, listAIBudgetPlansToNotify, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []AiBudgetPlan{}
+	for rows.Next() {
+		var i AiBudgetPlan
+		if err := rows.Scan(
+			&i.ID,
+			&i.Month,
+			&i.Currency,
+			&i.SavingsGoalMinor,
+			&i.Trigger,
+			&i.State,
+			&i.RequestedByKind,
+			&i.RequestedByName,
+			&i.Attempts,
+			&i.ClaimedAt,
+			&i.RetryAt,
+			&i.Error,
+			&i.Result,
+			&i.FinishedAt,
+			&i.Applied,
+			&i.AppliedAt,
+			&i.DismissedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SalaryTransactionID,
+			&i.SalaryBookedOn,
 		); err != nil {
 			return nil, err
 		}
@@ -553,7 +695,7 @@ const setAIBudgetPlanResult = `-- name: SetAIBudgetPlanResult :one
 UPDATE ai_budget_plans
 SET state = 'ready', result = $1, error = NULL, retry_at = NULL, finished_at = $2::timestamptz, updated_at = now()
 WHERE id = $3
-RETURNING id, month, currency, savings_goal_minor, trigger, state, requested_by_kind, requested_by_name, attempts, claimed_at, retry_at, error, result, finished_at, applied, applied_at, dismissed_at, created_at, updated_at
+RETURNING id, month, currency, savings_goal_minor, trigger, state, requested_by_kind, requested_by_name, attempts, claimed_at, retry_at, error, result, finished_at, applied, applied_at, dismissed_at, created_at, updated_at, salary_transaction_id, salary_booked_on
 `
 
 type SetAIBudgetPlanResultParams struct {
@@ -585,6 +727,8 @@ func (q *Queries) SetAIBudgetPlanResult(ctx context.Context, arg SetAIBudgetPlan
 		&i.DismissedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SalaryTransactionID,
+		&i.SalaryBookedOn,
 	)
 	return i, err
 }

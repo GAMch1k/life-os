@@ -64,16 +64,20 @@ const (
 	settingsUpdated       = "finance.settings.updated"
 )
 
-// emit records one event. With a request, the event carries its actor,
-// correlation, and causation; without one (a startup task) it is the
-// service's own (system:finance).
+// emit records one event. With a request, the event carries its
+// correlation and causation, and its actor unless the event names one (a
+// change Finance makes on its own during the request); without one (a
+// startup task) it is the service's own (system:finance).
 func (h *Handler) emit(ctx context.Context, c fiber.Ctx, event activity.Event) {
 	if !h.recording() {
 		return
 	}
 	if c != nil {
 		trace := activity.FromRequest(c)
-		event.CorrelationID, event.CausationID, event.Actor = trace.CorrelationID, trace.CausationID, trace.Actor
+		event.CorrelationID, event.CausationID = trace.CorrelationID, trace.CausationID
+		if event.Actor.IsZero() {
+			event.Actor = trace.Actor
+		}
 	}
 	if event.Outcome == "" {
 		event.Outcome = activity.Succeeded

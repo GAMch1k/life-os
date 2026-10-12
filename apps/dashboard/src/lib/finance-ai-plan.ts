@@ -10,13 +10,14 @@ import {
 } from "@/lib/finance-money";
 import { monthLabel, shiftMonth } from "@/lib/finance-summary";
 import { load } from "@/lib/finance-workspace";
-import { dateTimeFormat } from "@/lib/time-zone";
+import { DATE_LOCALE, dateTimeFormat } from "@/lib/time-zone";
 
 // The AI budget plan on the Budget tab (P13-09): the owner asks the AI to
-// plan a month, the processor's job plans it, and the owner applies the
-// lines they want or dismisses it. Finance keeps the plan; these are its
-// pure rules (texts, the apply request) and the fetch helpers. Everything
-// but the fetch helpers is pure and unit-tested.
+// plan a month (Finance also asks when the salary arrives, P13-10), the
+// processor's job plans it, and the owner applies the lines they want or
+// dismisses it. Finance keeps the plan; these are its pure rules (texts,
+// the apply request) and the fetch helpers. Everything but the fetch
+// helpers is pure and unit-tested.
 
 type Schemas = components["schemas"];
 
@@ -169,6 +170,20 @@ export function goalText(result: AiBudgetPlanResult, locale: string) {
 /** The card's title: "AI budget plan for November 2026". */
 export function planTitle(plan: AiBudgetPlan) {
   return `AI budget plan for ${monthLabel(plan.month)}`;
+}
+
+/**
+ * Why there is a plan the owner did not ask for: "Planned when your salary
+ * arrived on 28 Oct"; "" for the others.
+ */
+export function triggerText(plan: AiBudgetPlan) {
+  if (plan.trigger !== "salary" || !plan.salary) return "";
+  const day = new Intl.DateTimeFormat(DATE_LOCALE, {
+    day: "numeric",
+    month: "short",
+    timeZone: "UTC",
+  }).format(new Date(`${plan.salary.bookingDate}T00:00:00Z`));
+  return `Planned when your salary arrived on ${day}`;
 }
 
 // ---- Applying ---------------------------------------------------------------

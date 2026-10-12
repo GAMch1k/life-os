@@ -10,6 +10,8 @@ import (
 
 	googleuuid "github.com/google/uuid"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
 	"github.com/GAMch1k/life-os/pkg/notify"
 	financemoney "github.com/GAMch1k/life-os/services/finance/internal/money"
 	store "github.com/GAMch1k/life-os/services/finance/internal/repository/generated"
@@ -41,6 +43,7 @@ type AlertStore interface {
 	Store
 	ClaimBudgetNotification(ctx context.Context, arg store.ClaimBudgetNotificationParams) (int64, error)
 	ReleaseBudgetNotification(ctx context.Context, dedupeKey string) error
+	ListAIBudgetPlansToNotify(ctx context.Context, since pgtype.Timestamptz) ([]store.AiBudgetPlan, error)
 }
 
 // AlertConfig configures Alerts.
@@ -56,10 +59,11 @@ type AlertConfig struct {
 // Alerts notify the owner about the budget, at low importance: once per
 // category and month when its spending reaches 80% and 100% of the planned
 // amount, and on the 1st at 09:00 owner-local with the previous month's
-// summary. Each notification is claimed in budget_notifications before it
-// is sent, so a restart repeats none; a send that fails for now gives the
-// claim back and is retried at the next check (the Notifications dedupe
-// key makes a repeat harmless).
+// summary; and at medium importance when an AI budget plan the owner did
+// not ask for is ready. Each notification is claimed in
+// budget_notifications before it is sent, so a restart repeats none; a
+// send that fails for now gives the claim back and is retried at the next
+// check (the Notifications dedupe key makes a repeat harmless).
 type Alerts struct {
 	queries  AlertStore
 	notifier Notifier
@@ -149,8 +153,9 @@ func Key(month time.Time, parts ...string) string {
 	return strings.Join(append([]string{AlertCategory, MonthKey(month)}, parts...), ":")
 }
 
-// RunOnce checks the current month's categories and, when due, sends the
-// previous month's summary.
+// RunOnce checks the current month's categories, sends the previous
+// month's summary when due, and notifies the AI budget plans that are
+// ready.
 func (a *Alerts) RunOnce(ctx context.Context) (AlertResult, error) {
 	var result AlertResult
 	if !a.Enabled() {
@@ -186,6 +191,7 @@ func (a *Alerts) RunOnce(ctx context.Context) (AlertResult, error) {
 			errs = append(errs, a.send(ctx, &result, previous, summaryMessage(last, due)))
 		}
 	}
+	errs = append(errs, a.readyPlans(ctx, &result, now))
 	return result, errors.Join(errs...)
 }
 

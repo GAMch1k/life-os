@@ -71,6 +71,7 @@ import {
   progressText,
   roughText,
   savingText,
+  triggerText,
   visiblePlan,
 } from "@/lib/finance-ai-plan";
 import type { BudgetMonth } from "@/lib/finance-budget";
@@ -88,6 +89,19 @@ function MadeByAI() {
       Made by AI
     </Badge>
   );
+}
+
+/** Why there is a plan the owner did not ask for (the salary's). */
+function TriggerNote({ plan }: { plan: AiBudgetPlan }) {
+  const text = triggerText(plan);
+  return text ? (
+    <p
+      className="text-muted-foreground text-xs"
+      data-testid="finance-ai-plan-trigger"
+    >
+      {text}
+    </p>
+  ) : null;
 }
 
 /**
@@ -364,6 +378,7 @@ export function AiPlanCard({
           />
           <div className="grid min-w-0 flex-1 gap-0.5">
             <p className="font-medium">{planTitle(plan)}</p>
+            <TriggerNote plan={plan} />
             <p className="text-muted-foreground text-sm" role="status">
               {progressText(plan, timeZone)}
             </p>
@@ -417,9 +432,12 @@ export function AiPlanCard({
       <Card data-testid="finance-ai-plan" size="sm">
         <CardContent className="flex flex-wrap items-center gap-2">
           <MadeByAI />
-          <p className="min-w-0 flex-1">
-            {planTitle(plan)}: {appliedText(plan)}
-          </p>
+          <div className="grid min-w-0 flex-1 gap-0.5">
+            <p>
+              {planTitle(plan)}: {appliedText(plan)}
+            </p>
+            <TriggerNote plan={plan} />
+          </div>
           <Button
             disabled={pending}
             onClick={() => dismiss(plan)}
@@ -520,6 +538,7 @@ function ReadyPlan({
         <CardDescription className="text-foreground text-sm">
           {result.headline}
         </CardDescription>
+        <TriggerNote plan={plan} />
         {result.rough ? (
           <p className="text-muted-foreground text-xs" role="note">
             {roughText(result)} Check the amounts before you apply them.

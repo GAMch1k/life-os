@@ -138,16 +138,19 @@ func (e AiBudgetPlanState) Valid() bool {
 
 // Defines values for AiBudgetPlanTrigger.
 const (
-	Request  AiBudgetPlanTrigger = "request"
-	Schedule AiBudgetPlanTrigger = "schedule"
+	AiBudgetPlanTriggerRequest  AiBudgetPlanTrigger = "request"
+	AiBudgetPlanTriggerSalary   AiBudgetPlanTrigger = "salary"
+	AiBudgetPlanTriggerSchedule AiBudgetPlanTrigger = "schedule"
 )
 
 // Valid indicates whether the value is a known member of the AiBudgetPlanTrigger enum.
 func (e AiBudgetPlanTrigger) Valid() bool {
 	switch e {
-	case Request:
+	case AiBudgetPlanTriggerRequest:
 		return true
-	case Schedule:
+	case AiBudgetPlanTriggerSalary:
+		return true
+	case AiBudgetPlanTriggerSchedule:
 		return true
 	default:
 		return false
@@ -445,6 +448,24 @@ func (e CsvImportStatus) Valid() bool {
 	case CsvImportStatusCompleted:
 		return true
 	case CsvImportStatusFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RequestAiBudgetPlanRequestTrigger.
+const (
+	RequestAiBudgetPlanRequestTriggerRequest  RequestAiBudgetPlanRequestTrigger = "request"
+	RequestAiBudgetPlanRequestTriggerSchedule RequestAiBudgetPlanRequestTrigger = "schedule"
+)
+
+// Valid indicates whether the value is a known member of the RequestAiBudgetPlanRequestTrigger enum.
+func (e RequestAiBudgetPlanRequestTrigger) Valid() bool {
+	switch e {
+	case RequestAiBudgetPlanRequestTriggerRequest:
+		return true
+	case RequestAiBudgetPlanRequestTriggerSchedule:
 		return true
 	default:
 		return false
@@ -783,7 +804,7 @@ type Actor struct {
 // ActorKind defines model for Actor.Kind.
 type ActorKind string
 
-// AiBudgetPlan A plan the AI makes for a month's budget. `attempts` counts the job's runs; `error` is the last failed run's, `retryAt` when a requested plan is tried again. `result` is there once ready.
+// AiBudgetPlan A plan the AI makes for a month's budget. `attempts` counts the job's runs; `error` is the last failed run's, `retryAt` when a requested plan is tried again. `result` is there once ready. `salary` names the payment that asked for a `salary` plan (null for the others).
 type AiBudgetPlan struct {
 	Applied     *AiBudgetPlanApplied `json:"applied"`
 	Attempts    int                  `json:"attempts"`
@@ -802,6 +823,7 @@ type AiBudgetPlan struct {
 	RequestedBy Actor               `json:"requestedBy"`
 	Result      *AiBudgetPlanResult `json:"result"`
 	RetryAt     *time.Time          `json:"retryAt"`
+	Salary      *AiBudgetPlanSalary `json:"salary"`
 
 	// SavingsGoal The owner's savings goal per month for the plan.
 	SavingsGoal *Money `json:"savingsGoal"`
@@ -809,7 +831,7 @@ type AiBudgetPlan struct {
 	// State `requested`: waiting for the AI budget plan job (until `retryAt` after a failed run). `running`: the job is planning it. `ready`: the AI's proposal is there to apply or dismiss. `failed`: the AI could not plan it. `applied`, `partly_applied`: the owner applied all of its lines, or some. `dismissed`.
 	State AiBudgetPlanState `json:"state"`
 
-	// Trigger `request`: the owner asked. `schedule`: the job's plan on the 1st of a month.
+	// Trigger `request`: the owner asked. `schedule`: the job's plan on the 1st of a month. `salary`: Finance asked when the salary arrived (see `/v1/settings/payday`).
 	Trigger   AiBudgetPlanTrigger `json:"trigger"`
 	UpdatedAt time.Time           `json:"updatedAt"`
 }
@@ -836,7 +858,7 @@ type AiBudgetPlanApplyResult struct {
 	// Budget A month's budget in `currency` (the budget currency). `lines` lists the plan's categories by name, then expense categories with spending the plan has no amount for (`unplanned`), largest first.
 	Budget BudgetMonth `json:"budget"`
 
-	// Plan A plan the AI makes for a month's budget. `attempts` counts the job's runs; `error` is the last failed run's, `retryAt` when a requested plan is tried again. `result` is there once ready.
+	// Plan A plan the AI makes for a month's budget. `attempts` counts the job's runs; `error` is the last failed run's, `retryAt` when a requested plan is tried again. `result` is there once ready. `salary` names the payment that asked for a `salary` plan (null for the others).
 	Plan AiBudgetPlan `json:"plan"`
 }
 
@@ -903,10 +925,18 @@ type AiBudgetPlanResult struct {
 	Suggestions      []AiBudgetSuggestion `json:"suggestions"`
 }
 
+// AiBudgetPlanSalary The payment that asked for a `salary` plan.
+type AiBudgetPlanSalary struct {
+	BookingDate openapi_types.Date `json:"bookingDate"`
+
+	// TransactionId Null once the transaction is deleted.
+	TransactionId *openapi_types.UUID `json:"transactionId"`
+}
+
 // AiBudgetPlanState `requested`: waiting for the AI budget plan job (until `retryAt` after a failed run). `running`: the job is planning it. `ready`: the AI's proposal is there to apply or dismiss. `failed`: the AI could not plan it. `applied`, `partly_applied`: the owner applied all of its lines, or some. `dismissed`.
 type AiBudgetPlanState string
 
-// AiBudgetPlanTrigger `request`: the owner asked. `schedule`: the job's plan on the 1st of a month.
+// AiBudgetPlanTrigger `request`: the owner asked. `schedule`: the job's plan on the 1st of a month. `salary`: Finance asked when the salary arrived (see `/v1/settings/payday`).
 type AiBudgetPlanTrigger string
 
 // AiBudgetProposalLine defines model for AiBudgetProposalLine.
@@ -1538,6 +1568,24 @@ type MonthlySummary struct {
 	TotalPending Money `json:"totalPending"`
 }
 
+// PaydaySettings `enabled`: a booked payment from the payer asks for an AI budget plan. `payerMatch`: text the payment's counterparty contains. `minAmount`: smaller payments from the payer do not count (null: any amount). Amounts are in `currency`, the default currency.
+type PaydaySettings struct {
+	Currency   string            `json:"currency"`
+	Enabled    bool              `json:"enabled"`
+	MinAmount  *Money            `json:"minAmount"`
+	PayerMatch *string           `json:"payerMatch"`
+	Suggestion *PaydaySuggestion `json:"suggestion"`
+	UpdatedAt  time.Time         `json:"updatedAt"`
+}
+
+// PaydaySuggestion The largest income that arrives monthly: booked money in from one counterparty (not in a transfer category) in at least 2 months in a row, 26 to 35 days apart, of similar amounts (within 10%), the latest no more than a week past when the next was due. `payerMatch` matches all of them; `typicalAmount` is the median of the last three; `payments` counts the run.
+type PaydaySuggestion struct {
+	LastDate      openapi_types.Date `json:"lastDate"`
+	PayerMatch    string             `json:"payerMatch"`
+	Payments      int                `json:"payments"`
+	TypicalAmount Money              `json:"typicalAmount"`
+}
+
 // RenewalAlert defines model for RenewalAlert.
 type RenewalAlert struct {
 	Enabled bool `json:"enabled"`
@@ -1560,9 +1608,12 @@ type RequestAiBudgetPlanRequest struct {
 	// SavingsGoalMinor How much to save a month.
 	SavingsGoalMinor *int64 `json:"savingsGoalMinor,omitempty"`
 
-	// Trigger `request`: the owner asked. `schedule`: the job's plan on the 1st of a month.
-	Trigger *AiBudgetPlanTrigger `json:"trigger,omitempty"`
+	// Trigger `request` (the default) or `schedule`, the job's plan on the 1st.
+	Trigger *RequestAiBudgetPlanRequestTrigger `json:"trigger,omitempty"`
 }
+
+// RequestAiBudgetPlanRequestTrigger `request` (the default) or `schedule`, the job's plan on the 1st.
+type RequestAiBudgetPlanRequestTrigger string
 
 // RuleField `any` matches the counterparty or the description.
 type RuleField string
@@ -1748,6 +1799,17 @@ type UpdateFinanceSettingsRequest struct {
 	Renewals   RenewalAlertInput `json:"renewals"`
 }
 
+// UpdatePaydaySettingsRequest defines model for UpdatePaydaySettingsRequest.
+type UpdatePaydaySettingsRequest struct {
+	Enabled bool `json:"enabled"`
+
+	// MinAmountMinor Minor units of the default currency; null for any amount.
+	MinAmountMinor *int64 `json:"minAmountMinor,omitempty"`
+
+	// PayerMatch Required when enabled; empty or null means none.
+	PayerMatch *string `json:"payerMatch,omitempty"`
+}
+
 // UpdateSubscriptionRequest defines model for UpdateSubscriptionRequest.
 type UpdateSubscriptionRequest struct {
 	// AmountMinor The typical payment in minor units (positive).
@@ -1917,6 +1979,9 @@ type ImportBankSyncJSONRequestBody = BankImportRequest
 // UpdateFinanceSettingsJSONRequestBody defines body for UpdateFinanceSettings for application/json ContentType.
 type UpdateFinanceSettingsJSONRequestBody = UpdateFinanceSettingsRequest
 
+// UpdatePaydaySettingsJSONRequestBody defines body for UpdatePaydaySettings for application/json ContentType.
+type UpdatePaydaySettingsJSONRequestBody = UpdatePaydaySettingsRequest
+
 // CreateSubscriptionFromTransactionJSONRequestBody defines body for CreateSubscriptionFromTransaction for application/json ContentType.
 type CreateSubscriptionFromTransactionJSONRequestBody = CreateSubscriptionRequest
 
@@ -2027,6 +2092,12 @@ type ServerInterface interface {
 	// UpdateFinanceSettings Save the alert settings
 	// (PUT /v1/settings)
 	UpdateFinanceSettings(c fiber.Ctx) error
+	// GetPaydaySettings Get the payday setting
+	// (GET /v1/settings/payday)
+	GetPaydaySettings(c fiber.Ctx) error
+	// UpdatePaydaySettings Save the payday setting
+	// (PUT /v1/settings/payday)
+	UpdatePaydaySettings(c fiber.Ctx) error
 	// ListSubscriptions List subscriptions
 	// (GET /v1/subscriptions)
 	ListSubscriptions(c fiber.Ctx, params ListSubscriptionsParams) error
@@ -2935,6 +3006,42 @@ func (siw *ServerInterfaceWrapper) UpdateFinanceSettings(c fiber.Ctx) error {
 	return handler(c)
 }
 
+// GetPaydaySettings operation middleware
+func (siw *ServerInterfaceWrapper) GetPaydaySettings(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.GetPaydaySettings(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// UpdatePaydaySettings operation middleware
+func (siw *ServerInterfaceWrapper) UpdatePaydaySettings(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.UpdatePaydaySettings(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
 // ListSubscriptions operation middleware
 func (siw *ServerInterfaceWrapper) ListSubscriptions(c fiber.Ctx) error {
 
@@ -3487,6 +3594,10 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	router.Get(options.BaseURL+"/v1/settings", wrapper.GetFinanceSettings)
 
 	router.Put(options.BaseURL+"/v1/settings", wrapper.UpdateFinanceSettings)
+
+	router.Get(options.BaseURL+"/v1/settings/payday", wrapper.GetPaydaySettings)
+
+	router.Put(options.BaseURL+"/v1/settings/payday", wrapper.UpdatePaydaySettings)
 
 	router.Post(options.BaseURL+"/v1/imports/csv", wrapper.CreateCsvImport)
 

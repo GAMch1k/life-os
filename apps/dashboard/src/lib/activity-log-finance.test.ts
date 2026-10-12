@@ -57,6 +57,13 @@ test("an AI budget plan reads with the month it plans", () => {
     }),
     "AI budget plan ready",
   );
+  assert.equal(
+    eventLabel({
+      type: "finance.ai_budget_plan.requested",
+      data: { month: "2026-11", trigger: "salary" },
+    }),
+    "AI budget plan requested: November 2026, when your salary arrived",
+  );
   assert.equal(subjectLabel("finance_ai_budget_plan"), "AI budget plan");
   assert.equal(
     actorLabel({ kind: "agent", name: "codex-budget-plan" }),

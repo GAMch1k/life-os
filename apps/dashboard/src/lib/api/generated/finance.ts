@@ -353,7 +353,7 @@ export interface paths {
         put?: never;
         /**
          * Ask the AI to plan a month's budget
-         * @description Asks for a plan for `month` (YYYY-MM: this month or one of the next 12; by default the current month during its first 7 days, else the next month), with an optional savings goal per month. The plan is `requested` (202) until the processor's AI budget plan job runs it (`running`), and then `ready` with the AI's proposal, or `failed`. Nothing changes the budget until the owner applies it. A month whose plan is still requested or running answers with that one (200): the request joins it. The owner (`user`) may ask 10 times a day (the owner's day; 429 `daily_limit`). `trigger` `schedule` is the job's own plan on the 1st of a month: one per month, and a repeat answers with it (200).
+         * @description Asks for a plan for `month` (YYYY-MM: this month or one of the next 12; by default the current month during its first 7 days, else the next month), with an optional savings goal per month. The plan is `requested` (202) until the processor's AI budget plan job runs it (`running`), and then `ready` with the AI's proposal, or `failed`. Nothing changes the budget until the owner applies it. A month whose plan is still requested or running answers with that one (200): the request joins it. The owner (`user`) may ask 10 times a day (the owner's day; 429 `daily_limit`). `trigger` `schedule` is the job's own plan on the 1st of a month: one per month, and a repeat answers with it (200); so does a month whose plan the salary asked for (unless it failed) or that the owner asked for since the month began (unless dismissed). `salary` plans are Finance's own and cannot be asked for here.
          */
         post: operations["requestAiBudgetPlan"];
         delete?: never;
@@ -584,6 +584,30 @@ export interface paths {
          * @description Replaces every alert setting. Amounts are minor units of the default currency.
          */
         put: operations["updateFinanceSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/settings/payday": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the payday setting
+         * @description Whether the AI plans the budget when the salary arrives: a booked payment in the default currency whose counterparty contains `payerMatch` (ignoring case and spacing, as a rule matches), of at least `minAmount` when one is set, asks for a plan with trigger `salary` (for the next month from the 15th on, else for its own month). `suggestion` is the payer Finance finds in the data, the largest income that arrives monthly; it is only a suggestion, never used until the owner saves it.
+         */
+        get: operations["getPaydaySettings"];
+        /**
+         * Save the payday setting
+         * @description Replaces the payday setting. Switched on, it needs `payerMatch` (1 to 200 characters); `minAmountMinor` (at least 1, minor units of the default currency) leaves out smaller payments from the payer, such as refunds. Payments already booked ask for nothing.
+         */
+        put: operations["updatePaydaySettings"];
         post?: never;
         delete?: never;
         options?: never;
@@ -1250,10 +1274,20 @@ export interface components {
          */
         AiBudgetPlanState: "requested" | "running" | "ready" | "failed" | "applied" | "partly_applied" | "dismissed";
         /**
-         * @description `request`: the owner asked. `schedule`: the job's plan on the 1st of a month.
+         * @description `request`: the owner asked. `schedule`: the job's plan on the 1st of a month. `salary`: Finance asked when the salary arrived (see `/v1/settings/payday`).
          * @enum {string}
          */
-        AiBudgetPlanTrigger: "request" | "schedule";
+        AiBudgetPlanTrigger: "request" | "schedule" | "salary";
+        /** @description The payment that asked for a `salary` plan. */
+        AiBudgetPlanSalary: {
+            /** Format: date */
+            bookingDate: string;
+            /**
+             * Format: uuid
+             * @description Null once the transaction is deleted.
+             */
+            transactionId: string | null;
+        };
         /** @description Who asked, as its X-Life-OS-Actor said. */
         Actor: {
             /** @enum {string} */
@@ -1313,7 +1347,7 @@ export interface components {
             expectedIncome: components["schemas"]["Money"] | null;
             savingsGoal: components["schemas"]["Money"] | null;
         };
-        /** @description A plan the AI makes for a month's budget. `attempts` counts the job's runs; `error` is the last failed run's, `retryAt` when a requested plan is tried again. `result` is there once ready. */
+        /** @description A plan the AI makes for a month's budget. `attempts` counts the job's runs; `error` is the last failed run's, `retryAt` when a requested plan is tried again. `result` is there once ready. `salary` names the payment that asked for a `salary` plan (null for the others). */
         AiBudgetPlan: {
             /** Format: uuid */
             id: string;
@@ -1321,6 +1355,7 @@ export interface components {
             month: string;
             currency: string;
             trigger: components["schemas"]["AiBudgetPlanTrigger"];
+            salary: components["schemas"]["AiBudgetPlanSalary"] | null;
             state: components["schemas"]["AiBudgetPlanState"];
             /** @description The owner's savings goal per month for the plan. */
             savingsGoal: components["schemas"]["Money"] | null;
@@ -1358,7 +1393,11 @@ export interface components {
              * @description How much to save a month.
              */
             savingsGoalMinor?: number | null;
-            trigger?: components["schemas"]["AiBudgetPlanTrigger"];
+            /**
+             * @description `request` (the default) or `schedule`, the job's plan on the 1st.
+             * @enum {string}
+             */
+            trigger?: "request" | "schedule";
         };
         AiBudgetProposalLine: {
             /** Format: uuid */
@@ -1505,6 +1544,34 @@ export interface components {
             renewals: components["schemas"]["RenewalAlert"];
             /** Format: date-time */
             updatedAt: string;
+        };
+        /** @description The largest income that arrives monthly: booked money in from one counterparty (not in a transfer category) in at least 2 months in a row, 26 to 35 days apart, of similar amounts (within 10%), the latest no more than a week past when the next was due. `payerMatch` matches all of them; `typicalAmount` is the median of the last three; `payments` counts the run. */
+        PaydaySuggestion: {
+            payerMatch: string;
+            typicalAmount: components["schemas"]["Money"];
+            payments: number;
+            /** Format: date */
+            lastDate: string;
+        };
+        /** @description `enabled`: a booked payment from the payer asks for an AI budget plan. `payerMatch`: text the payment's counterparty contains. `minAmount`: smaller payments from the payer do not count (null: any amount). Amounts are in `currency`, the default currency. */
+        PaydaySettings: {
+            enabled: boolean;
+            payerMatch: string | null;
+            minAmount: components["schemas"]["Money"] | null;
+            currency: string;
+            suggestion: components["schemas"]["PaydaySuggestion"] | null;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        UpdatePaydaySettingsRequest: {
+            enabled: boolean;
+            /** @description Required when enabled; empty or null means none. */
+            payerMatch?: string | null;
+            /**
+             * Format: int64
+             * @description Minor units of the default currency; null for any amount.
+             */
+            minAmountMinor?: number | null;
         };
         AmountAlertInput: {
             enabled: boolean;
@@ -2682,7 +2749,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The month's plan already requested or running (or its scheduled plan) */
+            /** @description The month's plan already requested or running (or, for the schedule, its scheduled plan, the salary's, or the owner's) */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -3320,6 +3387,68 @@ export interface operations {
                 };
             };
             /** @description Invalid request (`invalid_request`: a large-debit threshold below 1, a negative low-balance threshold, or lead days outside 0 to 30), or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getPaydaySettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The payday setting */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaydaySettings"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    updatePaydaySettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdatePaydaySettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description The payday setting */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaydaySettings"];
+                };
+            };
+            /** @description Invalid request (`invalid_request`: switched on without a payer, a payer longer than 200 characters, or a minimum below 1), or no valid X-Life-OS-Actor (`actor_required`) */
             400: {
                 headers: {
                     [name: string]: unknown;

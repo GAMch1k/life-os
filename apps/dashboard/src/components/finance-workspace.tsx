@@ -12,6 +12,7 @@ import { BankConnections } from "@/components/bank-connections";
 import { AlertsDialog } from "@/components/finance-alerts-dialog";
 import { AiPlanCard, AiPlanRequestDialog } from "@/components/finance-ai-plan";
 import { FinanceBudget } from "@/components/finance-budget";
+import { PaydayDialog } from "@/components/finance-payday-dialog";
 import {
   BudgetEditor,
   type BudgetEditorState,
@@ -178,6 +179,8 @@ function ReadyWorkspace({
   // plan's card read afresh after a request.
   const [aiPlanOpen, setAiPlanOpen] = useState(false);
   const [aiPlanKey, setAiPlanKey] = useState(0);
+  // Payday: the AI plans when the salary arrives.
+  const [paydayOpen, setPaydayOpen] = useState(false);
   const [subscriptions, setSubscriptions] = useState(initial.subscriptions);
   const [subscriptionsLoading, setSubscriptionsLoading] = useState(false);
   const [subscriptionPending, startSubscriptionChange] = useTransition();
@@ -578,6 +581,7 @@ function ReadyWorkspace({
             month={budgetMonth}
             onEdit={(data) => setBudgetEditor({ budget: data })}
             onMonthChange={changeBudgetMonth}
+            onPayday={() => setPaydayOpen(true)}
             onPlanWithAI={() => setAiPlanOpen(true)}
             onReset={resetBudget}
             onShowCategory={showBudgetCategory}
@@ -682,6 +686,7 @@ function ReadyWorkspace({
         open={aiPlanOpen}
         today={today}
       />
+      <PaydayDialog onClose={() => setPaydayOpen(false)} open={paydayOpen} />
       <BudgetEditor
         categories={categories}
         onClose={() => setBudgetEditor(null)}

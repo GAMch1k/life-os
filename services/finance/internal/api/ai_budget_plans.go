@@ -329,12 +329,12 @@ func (h *Handler) RequestAiBudgetPlan(c fiber.Ctx) error {
 	if body.SavingsGoalMinor != nil && *body.SavingsGoalMinor < 0 {
 		return invalid("savingsGoalMinor must not be negative")
 	}
-	trigger := generated.Request
+	trigger := generated.AiBudgetPlanTriggerRequest
 	if body.Trigger != nil {
 		if !body.Trigger.Valid() {
 			return invalid("trigger must be request or schedule")
 		}
-		trigger = *body.Trigger
+		trigger = generated.AiBudgetPlanTrigger(*body.Trigger)
 	}
 	actor, _ := activity.ParseActor(c.Get(activity.ActorHeader))
 	ctx := c.Context()
@@ -345,10 +345,15 @@ func (h *Handler) RequestAiBudgetPlan(c fiber.Ctx) error {
 			return err
 		}
 		var err error
-		if trigger == generated.Schedule {
-			// One scheduled plan a month; none when the owner already
-			// asked for one since the month began.
+		if trigger == generated.AiBudgetPlanTriggerSchedule {
+			// One scheduled plan a month; none when the salary asked for
+			// one (that did not fail), or the owner did since the month
+			// began.
 			row, err = q.GetScheduledAIBudgetPlan(ctx, budget.Date(month))
+			if err == nil || !errors.Is(err, pgx.ErrNoRows) {
+				return err
+			}
+			row, err = q.GetSalaryAIBudgetPlan(ctx, budget.Date(month))
 			if err == nil || !errors.Is(err, pgx.ErrNoRows) {
 				return err
 			}
@@ -510,6 +515,8 @@ func (h *Handler) SetAiBudgetPlanResult(c fiber.Ctx, planID generated.PlanId) er
 		return passThrough(err)
 	}
 	h.recordPlanCreated(c, row)
+	// A plan the owner did not ask for is notified (budget.Alerts).
+	h.budgetChanged()
 	return h.sendPlan(c, fiber.StatusOK, row)
 }
 
@@ -737,6 +744,9 @@ func planView(row store.AiBudgetPlan) (generated.AiBudgetPlan, error) {
 		return pointer(money(*amount, currency))
 	}
 	view.SavingsGoal = optional(row.SavingsGoalMinor)
+	if row.SalaryBookedOn.Valid {
+		view.Salary = &generated.AiBudgetPlanSalary{BookingDate: types.Date{Time: row.SalaryBookedOn.Time}, TransactionId: nullableUUID(row.SalaryTransactionID)}
+	}
 	if len(row.Result) > 0 {
 		var result budget.PlanResult
 		if err := json.Unmarshal(row.Result, &result); err != nil {
@@ -809,19 +819,30 @@ func planSubject(row store.AiBudgetPlan) activity.Subject {
 	return activity.Subject{Type: "finance_ai_budget_plan", ID: uuid(row.ID).String()}
 }
 
+// recordPlanRequested records a plan asked for. The salary's is Finance's
+// own (system:finance), in the trace of the write that booked the salary.
 func (h *Handler) recordPlanRequested(c fiber.Ctx, row store.AiBudgetPlan) {
 	month := budget.MonthKey(row.Month.Time)
 	summary := fmt.Sprintf("AI budget plan for %s requested", budget.MonthLabel(row.Month.Time))
-	if row.Trigger == string(generated.Schedule) {
-		summary = fmt.Sprintf("AI budget plan for %s scheduled", budget.MonthLabel(row.Month.Time))
-	}
 	data := map[string]any{"month": month, "trigger": row.Trigger, "currency": row.Currency}
+	var actor activity.Actor
+	switch row.Trigger {
+	case string(generated.AiBudgetPlanTriggerSchedule):
+		summary = fmt.Sprintf("AI budget plan for %s scheduled", budget.MonthLabel(row.Month.Time))
+	case salaryTrigger:
+		summary += " when your salary arrived"
+		actor = activity.System("finance")
+		data["salaryBookedOn"] = row.SalaryBookedOn.Time.Format(time.DateOnly)
+		if row.SalaryTransactionID.Valid {
+			data["salaryTransactionId"] = uuid(row.SalaryTransactionID).String()
+		}
+	}
 	if row.SavingsGoalMinor != nil {
 		summary += ", savings goal " + financemoney.Format(*row.SavingsGoalMinor, row.Currency)
 		data["savingsGoal"] = *row.SavingsGoalMinor
 	}
 	h.emit(c.Context(), c, activity.Event{ID: activity.EventID(aiBudgetPlanRequested, uuid(row.ID).String()), Type: aiBudgetPlanRequested,
-		Subject: planSubject(row), Summary: summary, Data: data})
+		Subject: planSubject(row), Summary: summary, Data: data, Actor: actor})
 }
 
 func (h *Handler) recordPlanCreated(c fiber.Ctx, row store.AiBudgetPlan) {

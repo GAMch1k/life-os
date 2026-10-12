@@ -3,12 +3,41 @@
 SELECT pg_advisory_xact_lock(7313005);
 
 -- name: CreateAIBudgetPlan :one
-INSERT INTO ai_budget_plans (month, currency, savings_goal_minor, trigger, requested_by_kind, requested_by_name)
-VALUES (sqlc.arg(month)::date, sqlc.arg(currency), sqlc.narg(savings_goal_minor), sqlc.arg(trigger), sqlc.arg(requested_by_kind), sqlc.narg(requested_by_name))
+INSERT INTO ai_budget_plans (month, currency, savings_goal_minor, trigger, requested_by_kind, requested_by_name, salary_transaction_id, salary_booked_on)
+VALUES (sqlc.arg(month)::date, sqlc.arg(currency), sqlc.narg(savings_goal_minor), sqlc.arg(trigger), sqlc.arg(requested_by_kind), sqlc.narg(requested_by_name),
+        sqlc.narg(salary_transaction_id), sqlc.narg(salary_booked_on)::date)
 RETURNING *;
 
 -- name: GetScheduledAIBudgetPlan :one
 SELECT * FROM ai_budget_plans WHERE month = sqlc.arg(month)::date AND trigger = 'schedule';
+
+-- name: GetSalaryAIBudgetPlan :one
+-- A month's newest plan the salary asked for that did not fail (dismissed
+-- ones included: the owner saw that month's plan).
+SELECT * FROM ai_budget_plans
+WHERE month = sqlc.arg(month)::date AND trigger = 'salary' AND state <> 'failed'
+ORDER BY created_at DESC, id DESC
+LIMIT 1;
+
+-- name: AIBudgetPlanForSalaryExists :one
+-- Whether a payment already asked for a plan.
+SELECT EXISTS (SELECT 1 FROM ai_budget_plans WHERE salary_transaction_id = sqlc.arg(transaction_id));
+
+-- name: AIBudgetPlanForMonthExists :one
+-- Whether a month has a plan that is waiting, running, ready, or applied:
+-- the salary asks for none then. A failed or dismissed one does not count.
+SELECT EXISTS (
+    SELECT 1 FROM ai_budget_plans
+    WHERE month = sqlc.arg(month)::date AND state IN ('requested', 'running', 'ready', 'applied', 'partly_applied')
+);
+
+-- name: ListAIBudgetPlansToNotify :many
+-- Ready plans the AI made without the owner asking (the salary's and the
+-- schedule's) that finished since an instant, oldest first: each gets a
+-- notification.
+SELECT * FROM ai_budget_plans
+WHERE state = 'ready' AND trigger IN ('salary', 'schedule') AND finished_at >= sqlc.arg(since)::timestamptz
+ORDER BY finished_at, id;
 
 -- name: GetActiveAIBudgetPlan :one
 -- A month's newest plan that is still waiting or running.

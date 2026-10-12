@@ -32,6 +32,7 @@ func (h *Handler) CreateCsvImport(c fiber.Ctx, params generated.CreateCsvImportP
 	}
 	ctx := c.Context()
 	var result importer.Result
+	var salaryPlan *store.AiBudgetPlan
 	err = h.inTx(ctx, func(q *store.Queries) error {
 		categories, err := q.ListFinancialCategories(ctx, true)
 		if err != nil {
@@ -42,7 +43,10 @@ func (h *Handler) CreateCsvImport(c fiber.Ctx, params generated.CreateCsvImportP
 			return err
 		}
 		input.Categories, input.Rules = categories, ruleSet(active)
-		result, err = importer.Import(ctx, q, parsed, input)
+		if result, err = importer.Import(ctx, q, parsed, input); err != nil {
+			return err
+		}
+		salaryPlan, err = h.planOnSalary(ctx, q, result.Created)
 		return err
 	})
 	switch {
@@ -75,6 +79,7 @@ func (h *Handler) CreateCsvImport(c fiber.Ctx, params generated.CreateCsvImportP
 		response.Errors = append(response.Errors, generated.CsvImportError{Row: item.Row, Message: item.Message})
 	}
 	h.recordImport(c, id, result.Account, failed, result.Imported, result.Duplicates, result.Failed, result.Categorized)
+	h.recordSalaryPlan(c, salaryPlan)
 	if result.Imported > 0 {
 		h.budgetChanged()
 	}

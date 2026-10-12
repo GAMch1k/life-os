@@ -291,6 +291,8 @@ type Result struct {
 	Account                                   *store.Account // the chosen account, if any
 	Imported, Duplicates, Failed, Categorized int
 	Errors                                    []Error
+	// Created are the imported transactions, for the payday.
+	Created []store.Transaction
 }
 
 // Import stores the parsed rows. It returns an error for a request it cannot
@@ -424,7 +426,7 @@ func Import(ctx context.Context, queries Store, parsed Parsed, input Input) (Res
 				params.CategorizedBy, byRule = pointer("rule"), true
 			}
 		}
-		_, err := queries.CreateImportedTransaction(ctx, params)
+		created, err := queries.CreateImportedTransaction(ctx, params)
 		if errors.Is(err, pgx.ErrNoRows) {
 			result.Duplicates++
 			continue
@@ -433,6 +435,7 @@ func Import(ctx context.Context, queries Store, parsed Parsed, input Input) (Res
 			return Result{}, err
 		}
 		result.Imported++
+		result.Created = append(result.Created, created)
 		if byRule {
 			result.Categorized++
 		}
