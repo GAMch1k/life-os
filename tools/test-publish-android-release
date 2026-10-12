@@ -1,0 +1,204 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Exercises tools/publish-android-release against scratch directories only
+# (made-up releases from tools/fixtures/android-release): a release
+# publishes, the same one again publishes nothing, a downgrade and a SHA-256
+# mismatch are refused with nothing changed, the newest 5 versions of each
+# app are kept, and a publish killed midway leaves the old manifest and its
+# APKs intact. No Docker.
+#
+#   tools/test-publish-android-release
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$repo_root"
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+fail() {
+  printf 'test-publish-android-release: %s\n' "$*" >&2
+  exit 1
+}
+target=$work/android
+# Never the owner's directory or zone from .env.
+export LIFE_OS_ANDROID_RELEASES_DIR=$target LIFE_OS_TIMEZONE=Europe/Berlin
+
+# Stands in for mv: when a rename's target matches $INTERRUPT_AT, it kills
+# the publish (SIGKILL, so no cleanup runs), as a crash or a power cut would.
+mkdir -p "$work/bin"
+cat >"$work/bin/mv" <<EOF
+#!/usr/bin/env bash
+target=\${!#}
+if [[ -n "\${INTERRUPT_AT:-}" && "\${target##*/}" == \$INTERRUPT_AT ]]; then
+  kill -KILL "\$PPID"
+  exit 1
+fi
+exec $(command -v mv) "\$@"
+EOF
+chmod +x "$work/bin/mv"
+
+fresh() { # an empty releases directory
+  rm -rf "$target"
+  install -d -m 755 "$target"
+}
+release() { # <name> <versionName> <versionCode> [apps…]: a made-up release in $work/<name>
+  local name=$1
+  shift
+  rm -rf "${work:?}/$name"
+  tools/fixtures/android-release "$work/$name" "$@"
+}
+publish() { # <arguments…>; status in $status, output in $work/out
+  set +e
+  # (The group's stderr takes bash's "Killed" report of an interrupted run.)
+  { env PATH="$work/bin:$PATH" INTERRUPT_AT="${interrupt:-}" tools/publish-android-release "$@" >"$work/out" 2>&1; } 2>/dev/null
+  status=$?
+  set -e
+}
+expect() { # <status> <message> <arguments…>
+  local want=$1 message=$2
+  shift 2
+  publish "$@"
+  [[ "$status" == "$want" ]] || { cat "$work/out"; fail "publish $* exited $status, want $want"; }
+  grep -qF -- "$message" "$work/out" || { cat "$work/out"; fail "publish $* did not say: $message"; }
+}
+manifest() { jq -r "$1" "$target/updates.json"; }
+apks() { # <app>: the versionCodes of its APKs in the releases directory
+  find "$target" -maxdepth 1 -name "lifeos-$1-*.apk" -printf '%f\n' | sed -E 's/.*-([0-9]+)\.apk$/\1/' | sort -n | tr '\n' ' ' | sed 's/ $//'
+}
+consistent() { # every APK the manifest lists is there; the latest ones match it
+  local url
+  while IFS= read -r url; do
+    [[ -f "$target/${url#/android/}" ]] || fail "the manifest lists $url, which is missing"
+  done < <(manifest '.apps[] | .url, .previous[].url')
+  while IFS=$'\t' read -r url sha size; do
+    [[ "$(sha256sum <"$target/${url#/android/}" | cut -d ' ' -f 1)" == "$sha" ]] || fail "$url does not match the manifest's SHA-256"
+    [[ "$(stat -c %s "$target/${url#/android/}")" == "$size" ]] || fail "$url does not match the manifest's size"
+  done < <(manifest '.apps[] | [.url, .sha256, .size] | @tsv')
+}
+snapshot() { cp "$target/updates.json" "$work/updates.before"; cp "$target/index.html" "$work/index.before"; }
+unchanged() { # the manifest and the page are as at the last snapshot
+  cmp -s "$target/updates.json" "$work/updates.before" || fail "the manifest changed"
+  cmp -s "$target/index.html" "$work/index.before" || fail "the page changed"
+}
+
+printf '==> A release publishes\n'
+fresh
+release r1 0.1.0 1
+expect 0 'published phone 0.1.0 (1): /android/lifeos-phone-0.1.0-1.apk' "$work/r1" --notes 'First <b>build</b> & more'
+grep -qF 'published wear 0.1.0 (1): /android/lifeos-wear-0.1.0-1.apk' "$work/out" || fail "the wear app was not published"
+for app in phone wear; do
+  jq -e --arg app "$app" --slurpfile release "$work/r1/release.json" '
+    .formatVersion == 1 and (.apps[$app] | del(.publishedAt)) == ($release[0][$app] + {
+      url: "/android/lifeos-\($app)-0.1.0-1.apk", notes: "First <b>build</b> & more", previous: []})
+    and (.apps[$app].publishedAt | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
+  ' "$target/updates.json" >/dev/null || { cat "$target/updates.json"; fail "the manifest's $app entry is not the release's"; }
+  cmp -s "$work/r1/lifeos-$app-0.1.0-1.apk" "$target/lifeos-$app-0.1.0-1.apk" || fail "the $app APK was not copied as is"
+done
+consistent
+[[ -z "$(find "$target" -type f ! -perm 644)" ]] || fail "a published file is not mode 644 (the gateway reads them)"
+[[ -z "$(find "$target" -name '.publish-*')" ]] || fail "a temporary file was left behind"
+grep -qF '<a class="download" href="/android/lifeos-phone-0.1.0-1.apk">Download Life OS 0.1.0</a>' "$target/index.html" || fail "the page has no phone download"
+grep -qF 'href="/android/lifeos-wear-0.1.0-1.apk"' "$target/index.html" || fail "the page does not list the watch APK"
+grep -qF 'First &lt;b&gt;build&lt;/b&gt; &amp; more' "$target/index.html" || fail "the page does not show the notes, escaped"
+! grep -qF '<b>build' "$target/index.html" || fail "the page shows the notes unescaped"
+
+printf '==> The same release again publishes nothing\n'
+snapshot
+expect 0 'nothing new to publish' "$work/r1"
+grep -qF 'unchanged phone 0.1.0 (1)' "$work/out" || fail "the phone app was not reported unchanged"
+cmp -s "$target/updates.json" "$work/updates.before" || fail "the manifest was rewritten"
+
+printf '==> A downgrade is refused\n'
+release r3 0.1.2 3
+expect 0 'published phone 0.1.2 (3)' "$work/r3"
+snapshot
+release r2 0.1.1 2
+expect 2 'versionCode 2 (0.1.1) is older than the published 3 (0.1.2); refusing a downgrade' "$work/r2"
+unchanged
+[[ ! -e "$target/lifeos-phone-0.1.1-2.apk" && ! -e "$target/lifeos-wear-0.1.1-2.apk" ]] || fail "a refused APK was copied"
+release r3b 0.1.2 3
+expect 2 'versionCode 3 is already published with a different APK' "$work/r3b"
+unchanged
+expect 0 'published phone 0.1.1 (2)' "$work/r2" --force
+[[ "$(manifest '[.apps.phone.versionCode, .apps.phone.previous[0].versionCode] | @tsv')" == $'2\t3' ]] || fail "--force did not publish the older version over the newer one"
+consistent
+
+printf '==> A SHA-256 or size mismatch is refused\n'
+fresh
+expect 0 'published phone 0.1.0 (1)' "$work/r1"
+snapshot
+release r4 0.2.0 4
+jq --arg sha "$(printf 'other' | sha256sum | cut -d ' ' -f 1)" '.wear.sha256 = $sha' "$work/r4/release.json" >"$work/r4/release.edited"
+mv "$work/r4/release.edited" "$work/r4/release.json"
+expect 2 'the SHA-256 of lifeos-wear-0.2.0-4.apk is' "$work/r4"
+unchanged
+[[ "$(apks phone)" == 1 && "$(apks wear)" == 1 ]] || fail "a refused release copied an APK (phone: $(apks phone); wear: $(apks wear))"
+release r4 0.2.0 4
+printf 'x' >>"$work/r4/lifeos-phone-0.2.0-4.apk"
+expect 2 "lifeos-phone-0.2.0-4.apk is $(stat -c %s "$work/r4/lifeos-phone-0.2.0-4.apk") bytes, release.json says" "$work/r4"
+unchanged
+
+printf '==> Invalid releases and directories are refused\n'
+release r5 0.3.0 5
+jq 'del(.phone.minSdk) | .wear.versionName = "../../etc"' "$work/r5/release.json" >"$work/r5/release.edited"
+mv "$work/r5/release.edited" "$work/r5/release.json"
+expect 2 'phone.minSdk must be a whole number' "$work/r5"
+grep -qF 'wear.versionName must be' "$work/out" || fail "a versionName with a path was not refused"
+release r5 0.3.0 5
+rm "$work/r5/lifeos-wear-0.3.0-5.apk"
+expect 2 'wear: lifeos-wear-0.3.0-5.apk is not in' "$work/r5"
+printf 'not json' >"$work/r5/release.json"
+expect 2 'is not a JSON object' "$work/r5"
+printf '{"watch": {}}' >"$work/r5/release.json"
+expect 2 'describes neither phone nor wear' "$work/r5"
+unchanged
+release r5 0.3.0 5
+chmod 700 "$target"
+expect 2 'the gateway cannot read' "$work/r5"
+chmod 755 "$target"
+LIFE_OS_ANDROID_RELEASES_DIR=$work/missing expect 2 'does not exist: create it with install -d -m 755' "$work/r5"
+exec 8<"$target"
+flock 8
+expect 2 'another publish to' "$work/r5"
+exec 8<&-
+unchanged
+
+printf '==> The newest 5 versions of each app are kept\n'
+fresh
+for code in 1 2 3 4 5 6 7; do
+  release "v$code" "0.0.$code" "$code"
+  expect 0 "published phone 0.0.$code ($code)" "$work/v$code"
+done
+grep -qF 'deleted lifeos-phone-0.0.2-2.apk (keeping the newest 5 of each app)' "$work/out" || fail "the deletion was not reported"
+[[ "$(apks phone)" == '3 4 5 6 7' && "$(apks wear)" == '3 4 5 6 7' ]] || fail "kept phone $(apks phone) and wear $(apks wear), want 3 4 5 6 7"
+[[ "$(manifest '[.apps.phone.previous[].versionCode] | join(" ")')" == '6 5 4 3' ]] || fail "the phone's previous versions are not 6 5 4 3"
+consistent
+grep -qF 'Phone 0.0.3 (3)</a>' "$target/index.html" || fail "the page does not list the older versions"
+! grep -qF '0.0.2' "$target/index.html" || fail "the page lists a deleted version"
+
+printf '==> A publish killed midway leaves the old manifest\n'
+snapshot
+release v8 0.0.8 8
+for interrupt in 'lifeos-wear-*.apk' updates.json; do
+  publish "$work/v8"
+  [[ "$status" == 137 ]] || { cat "$work/out"; fail "the publish was not killed at $interrupt (status $status)"; }
+  unchanged
+  consistent
+  [[ "$(manifest '.apps.phone.versionCode')" == 7 ]] || fail "the manifest moved on after a kill at $interrupt"
+done
+interrupt=''
+[[ -n "$(find "$target" -name '.publish-*')" ]] || fail "the kill left no temporary file (did it happen before the rename?)"
+expect 0 'published phone 0.0.8 (8)' "$work/v8"
+[[ -z "$(find "$target" -name '.publish-*')" ]] || fail "the next publish left the killed one's temporary files"
+[[ "$(apks phone)" == '4 5 6 7 8' ]] || fail "kept phone $(apks phone) after the next publish, want 4 5 6 7 8"
+consistent
+
+printf '==> A release under "apps", with one app\n'
+release p9 0.0.9 9 phone
+jq '{apps: .}' "$work/p9/release.json" >"$work/p9/release.edited"
+mv "$work/p9/release.edited" "$work/p9/release.json"
+expect 0 'published phone 0.0.9 (9)' "$work/p9"
+! grep -q 'wear' "$work/out" || { cat "$work/out"; fail "the wear app was touched"; }
+[[ "$(manifest '[.apps.phone.versionCode, .apps.wear.versionCode] | @tsv')" == $'9\t8' ]] || fail "the manifest is not phone 9 and wear 8"
+consistent
+
+printf '\npublish-android-release: all checks passed\n'

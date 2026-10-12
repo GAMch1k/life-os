@@ -8,7 +8,7 @@ Life OS supports loopback gateway behind host Nginx TLS/Basic Auth, or a WireGua
 
 ## Redeploying services and the gateway
 
-Redeploying a service (`up -d --no-build --no-deps <service>`, also with `--force-recreate`) needs nothing more: the gateway resolves service names at request time and keeps each answer at most 10 seconds, so it reaches the new container within about 10 seconds (BUG-37; see [Networking → Upstream addresses](../architecture/networking.md#upstream-addresses)). Recreate the gateway (`up -d --force-recreate --no-deps gateway`) only when its own configuration changes: `infra/nginx/life-os.conf` (a new route, such as a new service's `/api/…/` location, limits, headers, hosts) or its publishing settings in `.env` (`LIFE_OS_GATEWAY_BIND_ADDRESS`, `LIFE_OS_GATEWAY_PORT`). `tools/smoke-gateway-recreate` checks the redeploy path on the verification stack.
+Redeploying a service (`up -d --no-build --no-deps <service>`, also with `--force-recreate`) needs nothing more: the gateway resolves service names at request time and keeps each answer at most 10 seconds, so it reaches the new container within about 10 seconds (BUG-37; see [Networking → Upstream addresses](../architecture/networking.md#upstream-addresses)). Recreate the gateway (`up -d --force-recreate --no-deps gateway`) only when its own configuration changes: `infra/nginx/life-os.conf` (a new route, such as a new service's `/api/…/` location, limits, headers, hosts) or its settings in `.env` (`LIFE_OS_GATEWAY_BIND_ADDRESS`, `LIFE_OS_GATEWAY_PORT`, `LIFE_OS_ANDROID_RELEASES_DIR`). `tools/smoke-gateway-recreate` checks the redeploy path on the verification stack.
 
 ## Adding the Activity service to an existing deployment
 
@@ -152,6 +152,10 @@ Voice jobs use a persisted lease instead of treating `processing` as permanent o
 A recording may be up to 25 MiB (`LIFE_OS_VOICE_MAX_UPLOAD_BYTES`, default 26214400). The limit appears in three places that must change together: `LIFE_OS_VOICE_MAX_UPLOAD_BYTES` in `.env` (Voice also allows 1 MiB of multipart framing on top), `client_max_body_size 26m` in `infra/nginx/life-os.conf`, and `VOICE_MAX_UPLOAD_BYTES` in `apps/dashboard/src/lib/voice-job-state.ts`, which the Dashboard checks before uploading. Through Cloudflare an over-limit upload may show as 502 rather than 413; the Dashboard's own check is what users normally see. See [Voice and STT](../services/voice-stt.md).
 
 The Whisper image converts recordings with ffmpeg. After a change under `services/voice/whisper/`, rebuild it (`docker compose build whisper`) together with `voice` and `voice-worker` before redeploying.
+
+## Android app releases
+
+The gateway serves the Android apps' download page, update manifest, and APKs at `/android/` from the host directory `LIFE_OS_ANDROID_RELEASES_DIR` (default `/home/gamch1k/life-os.android`), mounted read-only (P18-10): create it once (`install -d -m 755 /home/gamch1k/life-os.android`), recreate the gateway for the new mount (`docker compose up -d --no-build --no-deps --force-recreate gateway`), and publish a build with `tools/publish-android-release <release-dir>`; see [Android releases](android-releases.md).
 
 ## Phone app, sharing, and capture photos
 

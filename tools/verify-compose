@@ -47,17 +47,25 @@ export LIFE_OS_AI_BUDGET_PLANS="${LIFE_OS_VERIFY_AI_BUDGET_PLANS:-off}" LIFE_OS_
 # of the verification stack's own (LIFE_OS_VERIFY_BACKUP_DIR, by default under
 # TMPDIR), never to LIFE_OS_BACKUP_DIR from .env, and the plan is refused with
 # the owner's backup directory.
-owner_backup_dir() {
+owner_setting() { # <variable>: the owner's directory setting in .env
   local value
-  value=$(sed -n 's/^LIFE_OS_BACKUP_DIR=//p' .env 2>/dev/null | tail -n 1)
+  value=$(sed -n "s/^$1=//p" .env 2>/dev/null | tail -n 1)
   value=${value#[\"\']}; value=${value%[\"\']}
   value=${value/#\~/${HOME:-}}
   value=${value//'${HOME}'/${HOME:-}}; value=${value//'$HOME'/${HOME:-}}
   printf '%s' "$value"
 }
-live_backup_dir=$(owner_backup_dir)
+live_backup_dir=$(owner_setting LIFE_OS_BACKUP_DIR)
 export LIFE_OS_BACKUP_DIR="${LIFE_OS_VERIFY_BACKUP_DIR:-${TMPDIR:-/tmp}/lifeos-verify-backups}"
 mkdir -p -m 700 "$LIFE_OS_BACKUP_DIR"
+# Nor the owner's Android releases: the gateway serves /android/ from a
+# directory of the verification stack's own (LIFE_OS_VERIFY_ANDROID_RELEASES_DIR,
+# where tools/browser-e2e publishes a made-up release; by default an empty
+# one under TMPDIR), never LIFE_OS_ANDROID_RELEASES_DIR from .env or the
+# default ~/life-os.android, and the plan is refused with the owner's.
+live_android_dir=$(owner_setting LIFE_OS_ANDROID_RELEASES_DIR)
+export LIFE_OS_ANDROID_RELEASES_DIR="${LIFE_OS_VERIFY_ANDROID_RELEASES_DIR:-${TMPDIR:-/tmp}/lifeos-verify-android}"
+mkdir -p -m 755 "$LIFE_OS_ANDROID_RELEASES_DIR"
 # A smoke may add overlays (colon-separated paths); the isolation check below
 # still applies to the merged plan.
 if [[ -n "${LIFE_OS_VERIFY_OVERLAYS:-}" ]]; then
@@ -107,6 +115,18 @@ require_isolated_resources() {
       fi
     done
   done < <(jq -r '.services.backup.volumes[]? | select(.type == "bind" and (.read_only // false | not)) | .source' <<<"$config")
+  local android_source
+  while IFS= read -r android_source; do
+    android_source=$(realpath -m -- "$android_source")
+    for owner_dir in "${HOME:-}/life-os.android" /home/gamch1k/life-os.android "$live_android_dir"; do
+      [[ -n "$owner_dir" && "$owner_dir" != /life-os.android ]] || continue
+      owner_dir=$(realpath -m -- "$owner_dir")
+      if [[ "$android_source" == "$owner_dir" || "$android_source" == "$owner_dir"/* || "$owner_dir" == "$android_source"/* ]]; then
+        printf "verify-compose: refusing a plan that mounts the owner's Android releases: %s\n" "$android_source" >&2
+        exit 2
+      fi
+    done
+  done < <(jq -r '.services | to_entries[] | .value.volumes[]? | select(.type == "bind") | .source' <<<"$config")
   # Nor the host itself: no service may mount the Docker socket (it controls
   # every container on the host), the host's root, /proc, or /sys (the
   # containers' cgroups), or the Docker data root. On this stack host-health

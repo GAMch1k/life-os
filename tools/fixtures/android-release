@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Writes a made-up release of the Android apps, as the app repository's
+# build does (docs/operations/android-releases.md): release.json and an APK
+# per app, which is not a real package. For tests only
+# (tools/test-publish-android-release, tools/test-android-gateway,
+# tools/browser-e2e).
+#
+#   tools/fixtures/android-release <dir> <versionName> <versionCode> [phone|wear]...
+#
+# Without app names it writes both. ANDROID_FIXTURE_APK_BYTES pads each APK
+# to about that size (default 4096).
+
+(($# >= 3)) || { echo 'usage: tools/fixtures/android-release <dir> <versionName> <versionCode> [phone|wear]...' >&2; exit 2; }
+dir=$1 name=$2 code=$3
+shift 3
+apps=("$@")
+((${#apps[@]})) || apps=(phone wear)
+mkdir -p -- "$dir"
+release='{}'
+for app in "${apps[@]}"; do
+  file="$dir/lifeos-$app-$name-$code.apk"
+  {
+    printf 'made-up Life OS %s APK %s (%s)\n' "$app" "$name" "$code"
+    head -c "${ANDROID_FIXTURE_APK_BYTES:-4096}" /dev/urandom
+  } >"$file"
+  release=$(jq -c --arg app "$app" --arg name "$name" --argjson code "$code" \
+    --arg sha "$(sha256sum <"$file" | cut -d ' ' -f 1)" --argjson size "$(stat -c %s -- "$file")" \
+    '.[$app] = {versionCode: $code, versionName: $name, minSdk: (if $app == "wear" then 30 else 34 end),
+      sha256: $sha, size: $size, builtAt: "2026-10-12T10:00:00Z", commit: "0123abc"}' <<<"$release")
+done
+jq . <<<"$release" >"$dir/release.json"

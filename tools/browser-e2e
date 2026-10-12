@@ -8,7 +8,15 @@ ics_dir=$(mktemp -d)
 chmod 755 "$ics_dir"
 export LIFE_OS_E2E_ICS_DIR=$ics_dir
 export LIFE_OS_VERIFY_OVERLAYS=${LIFE_OS_VERIFY_OVERLAYS:+$LIFE_OS_VERIFY_OVERLAYS:}tools/fixtures/calendar-ics.compose.yaml
-cleanup() { "${compose[@]}" down --volumes --remove-orphans >/dev/null; rm -rf "$ics_dir"; }
+# The Android download tests read a made-up release, published into a
+# releases directory of this run's own, which tools/verify-compose mounts
+# into the gateway (never the owner's).
+android_dir=$(mktemp -d)
+install -d -m 755 "$android_dir/releases"
+tools/fixtures/android-release "$android_dir/release" 0.1.0 1
+LIFE_OS_ANDROID_RELEASES_DIR="$android_dir/releases" tools/publish-android-release "$android_dir/release" --notes 'Browser test release' >/dev/null
+export LIFE_OS_VERIFY_ANDROID_RELEASES_DIR="$android_dir/releases" LIFE_OS_E2E_ANDROID_RELEASE=1
+cleanup() { "${compose[@]}" down --volumes --remove-orphans >/dev/null; rm -rf "$ics_dir" "$android_dir"; }
 trap cleanup EXIT
 # The verification overlay deliberately uses immutable local image names. Build
 # the dashboard first so this browser test always exercises the current branch,

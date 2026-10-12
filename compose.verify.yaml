@@ -106,6 +106,9 @@ services:
     image: lifeos-voice:latest
   voice-worker:
     image: lifeos-voice-worker:latest
+  # Never the owner's Android releases: tools/verify-compose mounts a
+  # scratch directory of this stack's own at /srv/android and refuses a plan
+  # that mounts the owner's.
   gateway:
     ports: !override ["127.0.0.1:13001:80"]
 
