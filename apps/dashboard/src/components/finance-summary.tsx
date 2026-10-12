@@ -1,8 +1,9 @@
 "use client";
 
 import { ChevronLeft, ChevronRight } from "lucide-react";
+import type { ReactNode } from "react";
 
-import { Amount } from "@/components/finance-amount";
+import { Amount, BalanceBreakdown } from "@/components/finance-amount";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -17,9 +18,10 @@ import { cn } from "@/lib/utils";
 
 /**
  * A month's booked money in one currency: income, spending, net, and the
- * accounts' balance now, then every category with transactions in the
- * month as a bar, largest spending first. Transfers between own accounts
- * are listed but not counted. A category opens its transactions.
+ * accounts' balance now (pending money included, split under it), then
+ * every category with transactions in the month as a bar, largest spending
+ * first. Transfers between own accounts are listed but not counted. A
+ * category opens its transactions.
  */
 export function FinanceSummary({
   categories,
@@ -115,7 +117,17 @@ export function FinanceSummary({
           data-testid="finance-summary"
         >
           <div className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-4">
-            <Metric label="Balance now" money={summary.data.totalBalance} />
+            <Metric
+              detail={
+                <BalanceBreakdown
+                  booked={summary.data.totalBookedBalance}
+                  className="mt-0.5"
+                  pending={summary.data.totalPending}
+                />
+              }
+              label="Balance now"
+              money={summary.data.totalBalance}
+            />
             <Metric label="Income" money={summary.data.income} />
             <Metric label="Spending" money={summary.data.spending} />
             <Metric
@@ -234,10 +246,13 @@ function CategoryBreakdown({
 
 function Metric({
   className,
+  detail,
   label,
   money,
 }: {
   className?: string;
+  /** A quiet line under the amount. */
+  detail?: ReactNode;
   label: string;
   money: Money;
 }) {
@@ -252,6 +267,7 @@ function Metric({
           )}
           money={money}
         />
+        {detail}
       </CardContent>
     </Card>
   );

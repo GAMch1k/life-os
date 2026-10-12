@@ -1,6 +1,6 @@
 "use client";
 
-import { type Money, formatMoney } from "@/lib/finance-money";
+import { type Money, balanceBreakdown, formatMoney } from "@/lib/finance-money";
 import { useBrowserLocale } from "@/lib/use-browser-locale";
 import { cn } from "@/lib/utils";
 
@@ -28,6 +28,36 @@ export function Amount({
       )}
     >
       {formatMoney(money, locale, { signed })}
+    </span>
+  );
+}
+
+/**
+ * The quiet line under a balance that has pending money: what is booked and
+ * what is pending ("Booked €251.05 · Pending -€145.35"). Nothing when no
+ * money is pending.
+ */
+export function BalanceBreakdown({
+  booked,
+  className,
+  pending,
+}: {
+  booked: Money;
+  className?: string;
+  pending: Money;
+}) {
+  const locale = useBrowserLocale();
+  const text = balanceBreakdown(booked, pending, locale);
+  if (!text) return null;
+  return (
+    <span
+      className={cn(
+        "text-muted-foreground block text-xs tabular-nums",
+        className,
+      )}
+      data-testid="balance-breakdown"
+    >
+      {text}
     </span>
   );
 }

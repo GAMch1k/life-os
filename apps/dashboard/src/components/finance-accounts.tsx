@@ -11,7 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/app-dialog";
-import { Amount } from "@/components/finance-amount";
+import { Amount, BalanceBreakdown } from "@/components/finance-amount";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -48,8 +48,10 @@ export type AccountDialogState = { account?: Account } | null;
 
 /**
  * The accounts with their balances, the built-in Cash account first. A
- * card's main part shows only that account's transactions (pressed again,
- * all of them); Edit opens the account, where it is archived or restored.
+ * balance is the money there is to spend, pending card payments included;
+ * a quiet line under it says what is booked and what is pending. A card's
+ * main part shows only that account's transactions (pressed again, all of
+ * them); Edit opens the account, where it is archived or restored.
  */
 export function FinanceAccounts({
   accounts,
@@ -165,11 +167,10 @@ function AccountCard({
           className="mt-1 block text-lg font-semibold tracking-tight"
           money={account.balance}
         />
-        {account.pending.amount !== 0 ? (
-          <span className="text-muted-foreground block text-xs">
-            <Amount money={account.pending} signed /> pending
-          </span>
-        ) : null}
+        <BalanceBreakdown
+          booked={account.bookedBalance}
+          pending={account.pending}
+        />
       </button>
       <Button
         aria-label={`Edit account ${account.name}`}

@@ -147,3 +147,18 @@ export function signed(size: number, direction: "in" | "out") {
   const magnitude = Math.abs(size);
   return direction === "out" ? -magnitude : magnitude;
 }
+
+/**
+ * The quiet line under a balance that has pending money: "Booked €251.05 ·
+ * Pending -€145.35" in en-GB. The balance itself is both together, the
+ * money there is to spend. Undefined when nothing is pending, so the
+ * balance is all booked.
+ */
+export function balanceBreakdown(
+  booked: Money,
+  pending: Money,
+  locale: string,
+) {
+  if (pending.amount === 0) return undefined;
+  return `Booked ${formatMoney(booked, locale)} · Pending ${formatMoney(pending, locale, { signed: true })}`;
+}
