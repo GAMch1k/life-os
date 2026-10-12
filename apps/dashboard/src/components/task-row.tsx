@@ -26,6 +26,8 @@ type RowProps = {
   onChange: (task: Task) => void;
   /** The Task was deleted (or was already gone): it leaves every list. */
   onDeleted: (id: string) => void;
+  /** The Task the page's link names (`?task=<id>`): it is highlighted. */
+  focusId?: string;
 };
 
 /**
@@ -50,6 +52,7 @@ function TaskRow({
   timeZone,
   onChange,
   onDeleted,
+  focusId,
 }: RowProps & { task: Task }) {
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -102,8 +105,18 @@ function TaskRow({
     });
   const dueAt = fromDueFields(due.date, due.time, timeZone);
   const shownDue = dueLabel(task.dueAt, today, timeZone);
+  // The linked Task is highlighted as Activity highlights the entry its link
+  // opens; its divider gives way to the highlight.
+  const focused = task.id === focusId;
   return (
-    <li className="border-b py-2.5 last:border-0">
+    <li
+      aria-current={focused ? "true" : undefined}
+      className={cn(
+        "border-b py-2.5 last:border-0",
+        focused && "bg-secondary -mx-2 rounded-lg border-transparent px-2",
+      )}
+      id={`task-${task.id}`}
+    >
       {editing ? (
         <div className="space-y-2">
           <Input

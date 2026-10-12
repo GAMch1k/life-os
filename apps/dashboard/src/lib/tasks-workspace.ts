@@ -12,6 +12,16 @@ export const RECENT_COMPLETED_DAYS = 7;
 /** A run of Tasks in the API's order; `nextCursor` continues it. */
 export type TaskPage = { items: Task[]; nextCursor: string | null };
 
+/**
+ * The Task a link names (`/tasks?task=<id>`, as a timed reminder's
+ * notification links): open (highlighted in the list), already completed,
+ * missing (deleted, or never existed), or unknown when Tasks did not answer.
+ */
+export type TaskFocus =
+  | { kind: "open" | "completed"; task: Task }
+  | { kind: "missing" }
+  | { kind: "unknown" };
+
 export type TasksWorkspaceState =
   | {
       kind: "ready";
@@ -25,6 +35,8 @@ export type TasksWorkspaceState =
        * older ones. Null when they could not be read.
        */
       completed: TaskPage | null;
+      /** The Task the page's link names, when it names one. */
+      focus?: TaskFocus;
     }
   | { kind: "unavailable" };
 
@@ -50,6 +62,73 @@ export async function fetchTaskPage(
     .catch(() => ({ data: undefined, error: true }));
   if (error || !data) return undefined;
   return { items: data.items, nextCursor: data.nextCursor ?? null };
+}
+
+/**
+ * One Task by id (`GET /v1/tasks/{taskId}`): null when Tasks answers 404
+ * (deleted, or never existed), undefined when it fails or cannot be reached.
+ */
+export async function fetchTask(id: string): Promise<Task | null | undefined> {
+  const result = await tasksClient
+    .GET("/v1/tasks/{taskId}", { params: { path: { taskId: id } } })
+    .catch(() => undefined);
+  if (result?.data) return result.data;
+  return result?.response.status === 404 ? null : undefined;
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The page's `task` parameter: a Task id (a UUID, lowercase), or undefined. */
+export function parseTaskParam(value: string | string[] | undefined) {
+  const id = typeof value === "string" ? value.trim() : "";
+  return UUID.test(id) ? id.toLowerCase() : undefined;
+}
+
+/**
+ * Resolves the Task a link names: from the Tasks already loaded, else from
+ * Tasks itself (an open Task beyond the open-Task cap, or an older completed
+ * one).
+ */
+export async function resolveTaskFocus(
+  id: string,
+  loaded: Task[],
+  fetchOne: (id: string) => Promise<Task | null | undefined>,
+): Promise<TaskFocus> {
+  const task = loaded.find((entry) => entry.id === id) ?? (await fetchOne(id));
+  if (task === null) return { kind: "missing" };
+  if (!task) return { kind: "unknown" };
+  return { kind: task.completed ? "completed" : "open", task };
+}
+
+/**
+ * What the page says when its link names a Task that is not open: "“Pay
+ * rent” was already completed today", or that it may have been deleted.
+ * Undefined for an open Task (it is highlighted instead) or no link.
+ */
+export function focusNotice(
+  focus: TaskFocus | undefined,
+  today: string,
+  timeZone: string,
+) {
+  switch (focus?.kind) {
+    case "completed": {
+      const done = focus.task.completedAt;
+      const day = done ? dayKey(done, timeZone) : undefined;
+      const when = !day
+        ? ""
+        : day === today
+          ? " today"
+          : day === addDays(today, -1)
+            ? " yesterday"
+            : ` on ${dayLabel(day, today)}`;
+      return `“${focus.task.title}” was already completed${when}.`;
+    }
+    case "missing":
+      return "This Task isn't here anymore. It may have been deleted.";
+    case "unknown":
+      return "This Task isn't among your open Tasks. It may have been completed or deleted.";
+  }
+  return undefined;
 }
 
 /**
@@ -99,14 +178,17 @@ export function splitCompleted(completed: Task[], since: Date) {
 /**
  * Loads every open Task (up to the cap) and the completed Tasks the page
  * shows first: the recently completed ones. Completed Tasks come most recent
- * first, so paging stops once a page reaches past the recent window.
+ * first, so paging stops once a page reaches past the recent window. With
+ * `focus` (a Task id from the page's link) it also resolves that Task.
  */
 export async function getTasksWorkspace({
   today,
   timeZone,
+  focus,
 }: {
   today: string;
   timeZone: string;
+  focus?: string;
 }): Promise<TasksWorkspaceState> {
   const since = recentCompletedSince(today, timeZone);
   const [open, completed] = await Promise.all([
@@ -120,11 +202,15 @@ export async function getTasksWorkspace({
     }),
   ]);
   if (!open) return { kind: "unavailable" };
+  const loaded = [...open.items, ...(completed?.items ?? [])];
   return {
     kind: "ready",
     open: open.items,
     openCapped: open.nextCursor !== null,
     completed: completed ?? null,
+    ...(focus
+      ? { focus: await resolveTaskFocus(focus, loaded, fetchTask) }
+      : {}),
   };
 }
 

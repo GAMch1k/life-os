@@ -8,7 +8,7 @@ import {
   List,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { enGB } from "react-day-picker/locale/en-GB";
 
 import { TaskList } from "@/components/task-row";
@@ -31,6 +31,7 @@ import {
   daysWithTasks,
   dueDay,
   fetchTaskPage,
+  focusNotice,
   groupTasks,
   recentCompletedSince,
   relativeDayLabel,
@@ -61,6 +62,8 @@ type RowProps = {
   timeZone: string;
   onChange: (task: Task) => void;
   onDeleted: (id: string) => void;
+  /** The Task the page's link names, highlighted (see TaskFocus). */
+  focusId?: string;
 };
 
 type SectionProps = RowProps & {
@@ -124,14 +127,20 @@ function TaskSection({
 
 /**
  * Undated open Tasks, newest first. The section is always shown with the
- * full count; it lists the newest few until the owner asks for all of them.
+ * full count; it lists the newest few until the owner asks for all of them,
+ * or lists them all while the linked Task is beyond the newest few (without
+ * remembering that as the owner's choice).
  */
 function UndatedSection({
   tasks,
   capped,
   ...row
 }: RowProps & { tasks: Task[]; capped: boolean }) {
-  const [expanded, setExpanded] = usePersistentToggle(UNDATED_EXPANDED);
+  const [stored, setExpanded] = usePersistentToggle(UNDATED_EXPANDED);
+  const [revealed, setRevealed] = useState(
+    () => tasks.findIndex((task) => task.id === row.focusId) >= UNDATED_PREVIEW,
+  );
+  const expanded = stored || revealed;
   const title = "Unscheduled / No date";
   const collapsible = tasks.length > UNDATED_PREVIEW;
   const shown =
@@ -154,7 +163,10 @@ function UndatedSection({
               className="aria-expanded:bg-transparent"
               size="xs"
               variant="ghost"
-              onClick={() => setExpanded(!expanded)}
+              onClick={() => {
+                setRevealed(false);
+                setExpanded(!expanded);
+              }}
             >
               {expanded ? "Show fewer" : `Show all ${tasks.length}`}
             </Button>
@@ -289,11 +301,28 @@ export function TasksWorkspace({
   const [selected, setSelected] = useState(today);
   const [month, setMonth] = useState(today);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [tasks, setTasks] = useState(() =>
-    state.kind === "ready"
-      ? [...state.open, ...(state.completed?.items ?? [])]
-      : [],
-  );
+  const focus = state.kind === "ready" ? state.focus : undefined;
+  // The linked open Task, listed even when it is beyond the open-Task cap.
+  const focusId = focus?.kind === "open" ? focus.task.id : undefined;
+  const [tasks, setTasks] = useState(() => {
+    if (state.kind !== "ready") return [];
+    const loaded = [...state.open, ...(state.completed?.items ?? [])];
+    return focus?.kind === "open" &&
+      !loaded.some((task) => task.id === focus.task.id)
+      ? [...loaded, focus.task]
+      : loaded;
+  });
+  // A link to a Task that is not open says so, until dismissed.
+  const [noticeShown, setNoticeShown] = useState(true);
+  const notice = noticeShown ? focusNotice(focus, today, timeZone) : undefined;
+  // Scroll to the linked Task once it is rendered (every open Task is in the
+  // List view, which the page opens with).
+  useEffect(() => {
+    if (focusId)
+      document
+        .getElementById(`task-${focusId}`)
+        ?.scrollIntoView({ block: "center" });
+  }, [focusId]);
   // Continues the completed list with older Tasks than those loaded.
   const [completedCursor, setCompletedCursor] = useState(() =>
     state.kind === "ready" ? (state.completed?.nextCursor ?? null) : null,
@@ -333,7 +362,7 @@ export function TasksWorkspace({
     setSelected(day);
     setMonth(day);
   };
-  const row = { today, timeZone, onChange, onDeleted };
+  const row = { today, timeZone, onChange, onDeleted, focusId };
 
   if (state.kind === "unavailable")
     return (
@@ -388,6 +417,23 @@ export function TasksWorkspace({
           </ToggleGroupItem>
         </ToggleGroup>
       </header>
+
+      {notice ? (
+        <div
+          className={cn(EMPTY, "flex items-center gap-2")}
+          data-testid="tasks-link-notice"
+          role="status"
+        >
+          <p className="min-w-0 flex-1 wrap-anywhere">{notice}</p>
+          <Button
+            size="xs"
+            variant="ghost"
+            onClick={() => setNoticeShown(false)}
+          >
+            Dismiss
+          </Button>
+        </div>
+      ) : null}
 
       {capped ? (
         <p className={EMPTY} role="note">

@@ -9,11 +9,14 @@ import {
   daysWithTasks,
   dueDay,
   dueLabel,
+  focusNotice,
   fromDateTimeInput,
   fromDueFields,
   groupTasks,
   isDateOnly,
+  parseTaskParam,
   recentCompletedSince,
+  resolveTaskFocus,
   splitCompleted,
   toDateTimeInput,
   toDueFields,
@@ -334,4 +337,79 @@ test("recently completed means the owner's last seven days", () => {
   );
   assert.deepEqual(ids(recent), ["today", "first-day"]);
   assert.deepEqual(ids(older), ["just-before"]);
+});
+
+const LINKED = "7f8d2b1e-1c1a-4b7e-9a51-2f0c6d1e9a10";
+
+test("the task parameter is one Task id, a UUID", () => {
+  assert.equal(parseTaskParam(LINKED), LINKED);
+  assert.equal(parseTaskParam(` ${LINKED.toUpperCase()} `), LINKED);
+  assert.equal(parseTaskParam(undefined), undefined);
+  assert.equal(parseTaskParam(""), undefined);
+  assert.equal(parseTaskParam("not-a-task"), undefined);
+  assert.equal(parseTaskParam([LINKED, LINKED]), undefined);
+});
+
+test("a linked Task resolves from the loaded Tasks, else from Tasks", async () => {
+  const asked: string[] = [];
+  const fetchOne = (answer: Task | null | undefined) => async (id: string) => {
+    asked.push(id);
+    return answer;
+  };
+  const open = task(LINKED, "2026-10-10T13:00:00Z");
+  assert.deepEqual(await resolveTaskFocus(LINKED, [open], fetchOne(null)), {
+    kind: "open",
+    task: open,
+  });
+  assert.deepEqual(asked, []);
+  // Beyond the open-Task cap, or completed before the loaded ones.
+  assert.deepEqual(await resolveTaskFocus(LINKED, [], fetchOne(open)), {
+    kind: "open",
+    task: open,
+  });
+  const done = task(LINKED, undefined, true);
+  assert.deepEqual(await resolveTaskFocus(LINKED, [], fetchOne(done)), {
+    kind: "completed",
+    task: done,
+  });
+  assert.deepEqual(await resolveTaskFocus(LINKED, [], fetchOne(null)), {
+    kind: "missing",
+  });
+  assert.deepEqual(await resolveTaskFocus(LINKED, [], fetchOne(undefined)), {
+    kind: "unknown",
+  });
+  assert.deepEqual(asked, [LINKED, LINKED, LINKED, LINKED]);
+});
+
+test("a link to a Task that is not open says so politely", () => {
+  const done = (completedAt?: string) => ({
+    kind: "completed" as const,
+    task: { ...task(LINKED, undefined, true), title: "Pay rent", completedAt },
+  });
+  const notice = (focus: Parameters<typeof focusNotice>[0]) =>
+    focusNotice(focus, "2026-10-10", BERLIN);
+  // 00:30 on 10 October in Berlin, still 9 October in UTC.
+  assert.equal(
+    notice(done("2026-10-09T22:30:00Z")),
+    "“Pay rent” was already completed today.",
+  );
+  assert.equal(
+    notice(done("2026-10-09T08:00:00Z")),
+    "“Pay rent” was already completed yesterday.",
+  );
+  assert.equal(
+    notice(done("2026-10-06T08:00:00Z")),
+    "“Pay rent” was already completed on Tue 6 Oct.",
+  );
+  assert.equal(notice(done()), "“Pay rent” was already completed.");
+  assert.equal(
+    notice({ kind: "missing" }),
+    "This Task isn't here anymore. It may have been deleted.",
+  );
+  assert.equal(
+    notice({ kind: "unknown" }),
+    "This Task isn't among your open Tasks. It may have been completed or deleted.",
+  );
+  assert.equal(notice({ kind: "open", task: task(LINKED) }), undefined);
+  assert.equal(notice(undefined), undefined);
 });
