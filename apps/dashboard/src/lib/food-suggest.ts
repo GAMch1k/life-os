@@ -1,3 +1,4 @@
+import { OWNER_HEADERS } from "@/lib/api/actor";
 import { foodClient } from "@/lib/api/food-client";
 import type { components } from "@/lib/api/generated/food";
 import type { components as importComponents } from "@/lib/api/generated/recipe-import";
@@ -207,4 +208,99 @@ export async function fetchCooking(): Promise<Cooking> {
     fetchIdeas(),
   ]);
   return { suggestions, ideas };
+}
+
+// ---- Getting ideas ------------------------------------------------------------
+
+/**
+ * The processor's recipe ideas job, through the Dashboard
+ * (src/app/api/processor): it has no gateway route.
+ */
+export const IDEAS_JOB_PATH = "/api/processor/ideas";
+
+/** How often, and how many times, "Get ideas" looks for the new ideas. */
+export const IDEAS_POLL_MS = 5000;
+export const IDEAS_POLL_LIMIT = 60;
+
+/** What the processor says about its ideas job (GET /ideas). */
+export type IdeasJob = {
+  running: boolean;
+  queued: boolean;
+  lastRun: {
+    startedAt: string;
+    finishedAt: string;
+    created: number;
+    outcome: string;
+  } | null;
+};
+
+/** Asking for ideas: queued, or why not. */
+export type IdeasAsk = { queued: true } | { queued: false; message: string };
+
+/** Asks the processor for recipe ideas now. */
+export async function requestIdeas(): Promise<IdeasAsk> {
+  try {
+    const response = await fetch(`${IDEAS_JOB_PATH}/requests`, {
+      method: "POST",
+      headers: OWNER_HEADERS,
+      cache: "no-store",
+    });
+    if (response.ok) return { queued: true };
+    return {
+      queued: false,
+      message: ideasAskProblem(await response.json().catch(() => null)),
+    };
+  } catch {
+    return { queued: false, message: ideasAskProblem(null) };
+  }
+}
+
+/** Why ideas could not be asked for: the processor's words, or a plain one. */
+export function ideasAskProblem(body: unknown) {
+  const message = (body as { error?: { message?: unknown } } | null)?.error
+    ?.message;
+  return typeof message === "string" && message
+    ? message
+    : "Ideas could not be asked for right now. Try again later.";
+}
+
+/** The ideas job's state, or null when the processor cannot be reached. */
+export async function fetchIdeasJob(): Promise<IdeasJob | null> {
+  try {
+    const response = await fetch(IDEAS_JOB_PATH, { cache: "no-store" });
+    return response.ok ? ((await response.json()) as IdeasJob) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether the run asked for is over: nothing waits or runs, and the last run
+ * is a newer one than `before` (the last run when it was asked for).
+ */
+export function ideasRunOver(job: IdeasJob, before: IdeasJob | null) {
+  return (
+    !job.running &&
+    !job.queued &&
+    job.lastRun !== null &&
+    job.lastRun.startedAt !== before?.lastRun?.startedAt
+  );
+}
+
+/** What a finished run says: how many new ideas, or why there are none. */
+export function ideasRunNote(job: IdeasJob) {
+  const run = job.lastRun;
+  if (!run || run.outcome === "failed")
+    return "Ideas could not be thought of right now. Try again later.";
+  if (run.created === 0)
+    return "No new ideas this time: the ones found are already saved or suggested.";
+  return run.created === 1 ? "1 new idea." : `${run.created} new ideas.`;
+}
+
+/** Whether `after` has an idea that `before` did not. */
+export function hasNewIdea(
+  before: ReadonlySet<string>,
+  after: Pick<Idea, "id">[],
+) {
+  return after.some((idea) => !before.has(idea.id));
 }

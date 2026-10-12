@@ -20,6 +20,8 @@ set -euo pipefail
 
 zone=Europe/Berlin
 export LIFE_OS_TIMEZONE=$zone
+# Recipe ideas only when the benchmark asks for them, never by the clock.
+export LIFE_OS_IDEAS_TIME=off
 
 [ "$#" -gt 0 ] || { echo "usage: $0 model/effort [model/effort ...]" >&2; exit 2; }
 out=${LIFE_OS_BENCHMARK_DIR:-$(mktemp -d)}
@@ -154,6 +156,9 @@ run_profile() {
   local butter
   butter=$(post_json /api/food/v1/staples '{"name":"Butter"}' | jq -r '.id')
   post_json /api/food/v1/pantry-items '{"items":[{"name":"Reis","location":"pantry"}]}' >/dev/null
+  # For recipe ideas: chicken that expires tomorrow, and mushrooms disliked.
+  post_json /api/food/v1/pantry-items "$(jq -n --arg day "$(TZ=$zone date -d tomorrow +%F)" '{items: [{name: "Hähnchenbrust", amount: "400 g", location: "fridge", expiresOn: $day}]}')" >/dev/null
+  put_json /api/food/v1/preferences '{"methods":["air_fryer","oven"],"dislikes":["Pilze"]}' >/dev/null
   # Breakfast planned on the coming Saturday, which a capture cancels. Run
   # on a Saturday, "Saturday" may also mean a week later: both are planned,
   # and the capture clears one.
@@ -223,6 +228,16 @@ run_profile() {
     done
     [ "$pending" = 0 ] && break
     [ "$(date +%s)" -lt "$deadline" ] || break
+    sleep 3
+  done
+
+  # Recipe ideas as "Get ideas" asks for them (through the Dashboard to the
+  # processor), once the captures are done and Codex is free; up to 6 minutes.
+  local ideas_job='{}'
+  post_json /api/processor/ideas/requests '{}' >/dev/null || true
+  for _ in $(seq 1 120); do
+    ideas_job=$(api "$gateway/api/processor/ideas" 2>/dev/null || echo '{}')
+    jq -e '.lastRun.trigger == "request" and (.running | not) and (.queued | not)' >/dev/null <<<"$ideas_job" && break
     sleep 3
   done
 
@@ -409,7 +424,7 @@ run_profile() {
   # butter and the new coffee as staples; Wednesday's dinner, Friday's
   # lunch, and the Saturday breakfasts but the one cleared.
   check no_extra_shopping_items "$([ "$(jq '.items | length' <<<"$list")" = 10 ] && [ "$(jq '[.items[].normalizedName] | unique | length' <<<"$list")" = 10 ] && echo 1 || echo 0)" "items=$(jq -c '[.items[] | {name, amount, storeName, state}]' <<<"$list") (expected 10)"
-  check no_extra_pantry_items "$([ "$(jq '.items | length' <<<"$pantry")" = 3 ] && echo 1 || echo 0)" "items=$(jq -c '[.items[] | {name, location, expiresOn}]' <<<"$pantry") (expected 3)"
+  check no_extra_pantry_items "$([ "$(jq '.items | length' <<<"$pantry")" = 4 ] && echo 1 || echo 0)" "items=$(jq -c '[.items[] | {name, location, expiresOn}]' <<<"$pantry") (expected 4)"
   check no_extra_staples "$([ "$(jq '.items | length' <<<"$staples")" = 2 ] && echo 1 || echo 0)" "staples=$(jq -c '[.items[].name]' <<<"$staples") (expected 2)"
   # Recipe links: a page's recipe, and a post's from its caption, each saved
   # once with the link as its source; the seeded recipe and these two only.
@@ -422,6 +437,15 @@ run_profile() {
   check recipe_link_structured "$([ "$s" = resolved ] && [ "$(imported rindergulasch http://ics-fixture/gulasch.html 3)" = 1 ] && echo 1 || echo 0)" "state=$s recipes=$(jq -c '[.items[] | {title, sourceUrl, ingredients: (.ingredients | length)}]' <<<"$recipes")"
   s=$(state "${ids[recipe_caption]}")
   check recipe_caption "$([ "$s" = resolved ] && [ "$(imported shakshuka http://ics-fixture/reel-DGx7abc.html 4)" = 1 ] && echo 1 || echo 0)" "state=$s"
+  # Recipe ideas: 1 to 3 from the job, none with the disliked mushrooms, one
+  # at least with the chicken that expires tomorrow (the words vary, so the
+  # checks are structural).
+  local ideas count
+  ideas=$(api "$gateway/api/food/v1/ideas?state=new&limit=100" | jq -c '[.items[] | select(.createdBy.kind == "agent" and .createdBy.name == "codex-recipe-ideas")]')
+  count=$(jq 'length' <<<"$ideas")
+  check ideas_run "$([ "$(jq -r '.lastRun.outcome // ""' <<<"$ideas_job")" = created ] && [ "$count" -ge 1 ] && [ "$count" -le 3 ] && echo 1 || echo 0)" "run=$(jq -c '.lastRun' <<<"$ideas_job") ideas=$(jq -c 'map({title, methods, ingredients: [.ingredients[].name]})' <<<"$ideas")"
+  check ideas_no_dislike "$([ "$count" -ge 1 ] && [ "$(jq '[.[] | select((.title | test("pilz|mushroom|гриб"; "i")) or any(.ingredients[]; .name | test("pilz|mushroom|гриб"; "i")))] | length' <<<"$ideas")" = 0 ] && echo 1 || echo 0)" "ideas=$count"
+  check ideas_expiring "$([ "$(jq '[.[] | select(any(.ingredients[]; .name | test("h(ä|a)hnchen"; "i")))] | length' <<<"$ideas")" -ge 1 ] && echo 1 || echo 0)" "ideas=$count"
   check no_extra_recipes "$([ "$(jq '.items | length' <<<"$recipes")" = 3 ] && echo 1 || echo 0)" "recipes=$(jq -c '[.items[].title]' <<<"$recipes") (expected 3)"
   check no_extra_meals "$([ "$(jq '.items | length' <<<"$plan")" = $((1 + ${#saturdays[@]})) ] && echo 1 || echo 0)" "meals=$(jq -c '[.items[] | {date, slot, title}]' <<<"$plan") (expected $((1 + ${#saturdays[@]})))"
   # No fallback or invented entities: ten seeds plus three creates, the

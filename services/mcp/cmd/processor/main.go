@@ -84,13 +84,17 @@ func main() {
 		}, 30*time.Second)
 		// Account usage and reset times, as reported by the Codex CLI.
 		go monitor.WatchUsage(ctx, planner.Usage, 5*time.Minute)
+		// Recipe ideas from the pantry and the preferences, daily and on the
+		// owner's request, through the same Codex runtime and MCP.
+		ideas := &processor.IdeasJob{Generator: monitor.MonitoredIdeas(planner), Tools: &processor.MCPClient{URL: cfg.MCPURL}, TimeZone: cfg.TimeZone, DailyAt: cfg.IdeasAt, WebSearch: cfg.IdeasWebSearch, OnStatus: monitor.SetIdeas}
+		go ideas.Loop(ctx)
 		service := &processor.Service{Run: func(ctx context.Context) error {
 			_, err := runner.Run(ctx)
 			if ctx.Err() == nil {
 				monitor.RecordPoll(err)
 			}
 			return err
-		}, PollInterval: cfg.PollInterval, Monitor: monitor}
+		}, PollInterval: cfg.PollInterval, Monitor: monitor, Ideas: ideas}
 		if err := service.Serve(ctx, ":"+cfg.HealthPort); err != nil && ctx.Err() == nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)

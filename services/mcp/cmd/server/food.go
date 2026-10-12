@@ -91,6 +91,38 @@ type pantryQuery struct {
 	Cursor             string `json:"cursor,omitempty" jsonschema:"The previous result's nextCursor, with the same filters"`
 }
 
+// suggestionQuery asks for Food's ranked suggestions.
+type suggestionQuery struct {
+	Limit    int    `json:"limit,omitempty" jsonschema:"1 to 50 (default 10)"`
+	MealSlot string `json:"mealSlot,omitempty" jsonschema:"breakfast, lunch, or dinner"`
+}
+
+// ideaQuery lists recipe ideas.
+type ideaQuery struct {
+	State string `json:"state,omitempty" jsonschema:"new (the default), saved, or dismissed"`
+	Limit int    `json:"limit,omitempty" jsonschema:"1 to 100 (default 50)"`
+}
+
+// ideaIngredient is one ingredient of a recipe idea.
+type ideaIngredient struct {
+	Name   string  `json:"name" jsonschema:"As the pantry names it when it is at home"`
+	Amount *string `json:"amount,omitempty" jsonschema:"Free text, such as 200 g or 2"`
+}
+
+// newIdea is a recipe idea for the owner to save or dismiss.
+type newIdea struct {
+	IdempotencyKey string           `json:"idempotencyKey,omitempty"`
+	Title          string           `json:"title"`
+	Servings       *int             `json:"servings,omitempty" jsonschema:"1 to 100"`
+	Ingredients    []ideaIngredient `json:"ingredients,omitempty"`
+	Steps          string           `json:"steps,omitempty" jsonschema:"Plain text, one step per line"`
+	Tags           []string         `json:"tags,omitempty"`
+	Methods        []string         `json:"methods,omitempty" jsonschema:"air_fryer, oven, stovetop, slow_cooker, grill, microwave, no_cook; left out, Food infers them"`
+	Source         string           `json:"source,omitempty" jsonschema:"ai (the default) or web"`
+	SourceURL      string           `json:"sourceUrl,omitempty" jsonschema:"For web: the http or https page it was found on"`
+	Reason         string           `json:"reason" jsonschema:"One sentence: why it is suggested now"`
+}
+
 // recipeQuery finds recipes; every field is optional.
 type recipeQuery struct {
 	Q          string `json:"q,omitempty" jsonschema:"Words the recipe's title must all contain, also inside a word (bolo finds Pasta Bolognese)"`
@@ -135,6 +167,8 @@ type missingIngredients struct {
 }
 
 var (
+	// cookingMethods are how a recipe is cooked, as Food names them.
+	cookingMethods = []string{"air_fryer", "oven", "stovetop", "slow_cooker", "grill", "microwave", "no_cook"}
 	// mealSlots are a day's meals, in the order the plan lists them.
 	mealSlots = []string{"breakfast", "lunch", "dinner"}
 	// foodAisles are the shopping list's sections, in the order it shows them.
@@ -222,6 +256,56 @@ func addFoodTools(s *mcp.Server, hc *http.Client, baseURL string, emitter *activ
 				return nil, Output{}, err
 			}
 			return post(ctx, hc, trace, baseURL, "/v1/pantry-items", body, in.IdempotencyKey)
+		})
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "food_get_preferences", Description: "Get the owner's cooking preferences: the preferred cooking methods (the most preferred first), disliked ingredients never to suggest, and dietary notes"}, func(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, Output, error) {
+		headers := http.Header{}
+		traceOf(req).Apply(headers)
+		return read(ctx, client, headers, "/v1/preferences")
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "food_list_suggestions", Description: "Rank the saved recipes for the owner's today, each with its score and reasons (ingredients at home, food expiring soon, the preferred methods, habits), what is at home, and what is missing; recipes with a disliked ingredient are left out (excluded)"}, func(ctx context.Context, req *mcp.CallToolRequest, in suggestionQuery) (*mcp.CallToolResult, Output, error) {
+		values := url.Values{}
+		if in.Limit != 0 {
+			if in.Limit < 1 || in.Limit > 50 {
+				return nil, Output{}, errors.New("limit must be between 1 and 50")
+			}
+			values.Set("limit", strconv.Itoa(in.Limit))
+		}
+		if slot := strings.TrimSpace(in.MealSlot); slot != "" {
+			if !slices.Contains(mealSlots, slot) {
+				return nil, Output{}, errors.New("mealSlot must be breakfast, lunch, or dinner")
+			}
+			values.Set("mealSlot", slot)
+		}
+		headers := http.Header{}
+		traceOf(req).Apply(headers)
+		return read(ctx, client, headers, "/v1/suggestions?"+values.Encode())
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "food_list_ideas", Description: "List recipe ideas in a state (new by default, saved, or dismissed), newest first, with who wrote them and when"}, func(ctx context.Context, req *mcp.CallToolRequest, in ideaQuery) (*mcp.CallToolResult, Output, error) {
+		values := url.Values{}
+		if state := strings.TrimSpace(in.State); state != "" {
+			if state != "new" && state != "saved" && state != "dismissed" {
+				return nil, Output{}, errors.New("state must be new, saved, or dismissed")
+			}
+			values.Set("state", state)
+		}
+		if in.Limit != 0 {
+			if in.Limit < 1 || in.Limit > 100 {
+				return nil, Output{}, errors.New("limit must be between 1 and 100")
+			}
+			values.Set("limit", strconv.Itoa(in.Limit))
+		}
+		headers := http.Header{}
+		traceOf(req).Apply(headers)
+		return read(ctx, client, headers, "/v1/ideas?"+values.Encode())
+	})
+	mcp.AddTool(s, &mcp.Tool{Name: "food_create_idea", Description: "Leave a recipe idea for the owner to save or dismiss in \"What can I cook?\": a title, ingredients (named as the pantry names them), steps one per line, servings, tags, methods, the source (ai, or web with the page as sourceUrl), and a one-sentence reason. An idea or saved recipe with the same title already exists: 409 idea_exists or recipe_exists. Only agents write ideas, never the owner"}, func(ctx context.Context, req *mcp.CallToolRequest, in newIdea) (*mcp.CallToolResult, Output, error) {
+		return audited(ctx, emitter, req, "food_create_idea", in, func(trace activity.Trace) (*mcp.CallToolResult, Output, error) {
+			body, err := ideaBody(in)
+			if err != nil {
+				return nil, Output{}, err
+			}
+			return post(ctx, hc, trace, baseURL, "/v1/ideas", body, in.IdempotencyKey)
 		})
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "food_list_recipes", Description: "Find recipes, by title: q keeps those whose title contains every word of it (also inside a word), tag those with the tag, ingredient those with an ingredient whose name contains it; limit and cursor page. Each recipe has its title, normalizedTitle, servings, ingredients, steps, and tags"}, func(ctx context.Context, req *mcp.CallToolRequest, in recipeQuery) (*mcp.CallToolResult, Output, error) {
@@ -677,6 +761,62 @@ func missingIngredientsBody(in missingIngredients) (map[string]any, error) {
 	}
 	if in.DryRun {
 		body["dryRun"] = true
+	}
+	return body, nil
+}
+
+// ideaBody is the Food body of a recipe idea, checked before Food is called:
+// a title and a reason, methods from Food's list, and for a web idea the
+// page it came from.
+func ideaBody(in newIdea) (map[string]any, error) {
+	title, reason := strings.TrimSpace(in.Title), strings.TrimSpace(in.Reason)
+	if title == "" || reason == "" {
+		return nil, errors.New("an idea needs a title and a reason")
+	}
+	body := map[string]any{"title": title, "reason": reason}
+	switch source := strings.TrimSpace(in.Source); source {
+	case "", "ai":
+		body["source"] = "ai"
+	case "web":
+		if _, err := recipeLink(in.SourceURL); err != nil {
+			return nil, errors.New("a web idea needs the http or https page it was found on as sourceUrl")
+		}
+		body["source"], body["sourceUrl"] = "web", strings.TrimSpace(in.SourceURL)
+	default:
+		return nil, errors.New("source must be ai or web")
+	}
+	if in.Servings != nil {
+		if *in.Servings < 1 || *in.Servings > 100 {
+			return nil, errors.New("servings must be between 1 and 100")
+		}
+		body["servings"] = *in.Servings
+	}
+	if len(in.Ingredients) > 0 {
+		ingredients := make([]map[string]any, 0, len(in.Ingredients))
+		for i, ingredient := range in.Ingredients {
+			name := strings.TrimSpace(ingredient.Name)
+			if name == "" {
+				return nil, fmt.Errorf("ingredients[%d].name must not be empty", i)
+			}
+			entry := map[string]any{"name": name}
+			setText(entry, map[string]*string{"amount": ingredient.Amount})
+			ingredients = append(ingredients, entry)
+		}
+		body["ingredients"] = ingredients
+	}
+	if steps := strings.TrimSpace(in.Steps); steps != "" {
+		body["steps"] = steps
+	}
+	if len(in.Tags) > 0 {
+		body["tags"] = in.Tags
+	}
+	if len(in.Methods) > 0 {
+		for _, method := range in.Methods {
+			if !slices.Contains(cookingMethods, method) {
+				return nil, fmt.Errorf("methods must be among %s", strings.Join(cookingMethods, ", "))
+			}
+		}
+		body["methods"] = in.Methods
 	}
 	return body, nil
 }

@@ -17,6 +17,9 @@ type Service struct {
 	PollInterval time.Duration
 	// Monitor, when set, is served on /status.
 	Monitor *Monitor
+	// Ideas, when set, serves the recipe ideas job (GET /ideas, POST
+	// /ideas/requests).
+	Ideas *IdeasJob
 
 	mu    sync.RWMutex
 	ready bool
@@ -68,6 +71,9 @@ func (s *Service) runOnce(ctx context.Context) error {
 
 func (s *Service) Handler() http.Handler {
 	mux := http.NewServeMux()
+	if s.Ideas != nil {
+		s.Ideas.Routes(mux)
+	}
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ok"}`))

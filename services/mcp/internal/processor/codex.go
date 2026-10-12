@@ -169,7 +169,51 @@ func timeContext(now, capturedAt time.Time, location *time.Location) string {
 	return b.String()
 }
 
+// Plan plans one capture: the plan prompt, the owner's time, the capture's
+// images, and the item. Web search is always off for captures.
 func (c CodexCLI) Plan(ctx context.Context, content string) (string, error) {
+	images := imagesFrom(ctx)
+	return c.run(ctx, runSpec{
+		images:    images,
+		webSearch: WebSearchDisabled,
+		prompt: func(c CodexCLI) string {
+			return planPrompt + timeContext(c.now(), capturedAtFrom(ctx), c.TimeZone) + imagesNote(images) + "Inbox item: " + content
+		},
+	})
+}
+
+// Ideas asks for recipe ideas (the ideas job): the prompt as given, the
+// final message shaped by the JSON schema, and web search as configured
+// for this job alone.
+func (c CodexCLI) Ideas(ctx context.Context, prompt, schema, webSearch string) (string, error) {
+	return c.run(ctx, runSpec{schema: schema, webSearch: webSearch, prompt: func(CodexCLI) string { return prompt }})
+}
+
+// Codex's web_search modes the processor uses. Capture planning always
+// runs with search disabled; the ideas job runs with LIFE_OS_IDEAS_WEB_SEARCH.
+const (
+	WebSearchDisabled = "disabled"
+	WebSearchCached   = "cached"
+	WebSearchLive     = "live"
+)
+
+// runSpec is what one Codex run gets beyond the runtime's controls.
+type runSpec struct {
+	// prompt builds the prompt from the run's CodexCLI, whose TimeZone is
+	// the run's own.
+	prompt func(CodexCLI) string
+	images CaptureImages
+	// schema, when set, is the JSON Schema of the final message
+	// (--output-schema).
+	schema string
+	// webSearch is Codex's web_search mode for the run.
+	webSearch string
+}
+
+// run starts one Codex run with the runtime's controls (a slot, the
+// deadline, the sanitized environment, the process group, graceful
+// termination) and returns its final message.
+func (c CodexCLI) run(ctx context.Context, spec runSpec) (string, error) {
 	if c.Slots != nil {
 		select {
 		case c.Slots <- struct{}{}:
@@ -192,13 +236,29 @@ func (c CodexCLI) Plan(ctx context.Context, content string) (string, error) {
 	}
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	args := []string{"exec", "--json", "--ephemeral", "--skip-git-repo-check", "-s", "read-only", "-C", c.WorkDir, "-m", c.Model, "-c", "mcp_servers={}"}
+	webSearch := spec.webSearch
+	if webSearch != WebSearchCached && webSearch != WebSearchLive {
+		webSearch = WebSearchDisabled
+	}
+	args := []string{"exec", "--json", "--ephemeral", "--skip-git-repo-check", "-s", "read-only", "-C", c.WorkDir, "-m", c.Model, "-c", "mcp_servers={}", "-c", fmt.Sprintf("web_search=%q", webSearch)}
 	if c.ReasoningEffort != "" {
 		args = append(args, "-c", "model_reasoning_effort="+c.ReasoningEffort)
 	}
+	if spec.schema != "" {
+		schema, err := os.CreateTemp("", "life-os-codex-schema-*.json")
+		if err != nil {
+			return "", err
+		}
+		defer os.Remove(schema.Name())
+		_, writeErr := schema.WriteString(spec.schema)
+		if closeErr := schema.Close(); writeErr != nil || closeErr != nil {
+			return "", fmt.Errorf("write output schema: %w", errors.Join(writeErr, closeErr))
+		}
+		args = append(args, "--output-schema", schema.Name())
+	}
 	// The capture's images go to Codex as files in a directory of the
 	// workdir that lives as long as the run.
-	images := imagesFrom(ctx)
+	images := spec.images
 	if len(images.Images) > 0 {
 		dir, err := os.MkdirTemp(c.WorkDir, "capture-images-")
 		if err != nil {
@@ -215,7 +275,7 @@ func (c CodexCLI) Plan(ctx context.Context, content string) (string, error) {
 	}
 	// This run's prompt and its TZ use the capture's own zone when known.
 	c.TimeZone = c.location(ctx)
-	prompt := planPrompt + timeContext(c.now(), capturedAtFrom(ctx), c.TimeZone) + imagesNote(images) + "Inbox item: " + content
+	prompt := spec.prompt(c)
 	// -o ends the list of --image values before the prompt.
 	cmd := c.command(runCtx, append(args, "-o", name, prompt)...)
 	stdout, err := cmd.StdoutPipe()

@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   SOURCE_FAILURE_ALERT,
   formatAge,
+  ideasFacts,
   limitResetsAt,
   runtimeFacts,
   statusAlerts,
@@ -594,4 +595,53 @@ test("a failed feed refresh shows on Status; Home hears only of repeated failure
     disabled.check.parts![1].summary,
     "Waiting for its first refresh.",
   );
+});
+
+test("the recipe ideas job says its last run and its next", () => {
+  const value = (facts: { label: string; value: string }[], label: string) =>
+    facts.find((fact) => fact.label === label)?.value;
+  const ideas = {
+    dailyAt: "16:00",
+    webSearch: "disabled",
+    nextRunAt: "2026-10-10T14:00:00Z",
+    running: false,
+    queued: false,
+    lastRun: {
+      trigger: "daily",
+      finishedAt: "2026-10-09T14:01:00Z",
+      created: 3,
+      outcome: "created",
+    },
+  };
+  const facts = ideasFacts(ideas);
+  assert.equal(value(facts, "Recipe ideas"), "3 new, 9 Oct 2026, 14:01 UTC");
+  assert.equal(value(facts, "Next recipe ideas"), "10 Oct 2026, 14:00 UTC");
+  assert.equal(
+    value(
+      ideasFacts({
+        ...ideas,
+        lastRun: {
+          ...ideas.lastRun,
+          trigger: "request",
+          created: 0,
+          outcome: "failed",
+          error: "Codex run timed out",
+        },
+      }),
+      "Recipe ideas",
+    ),
+    "failed: Codex run timed out, 9 Oct 2026, 14:01 UTC (asked for)",
+  );
+  assert.equal(
+    value(ideasFacts({ ...ideas, running: true }), "Recipe ideas"),
+    "thinking of ideas now",
+  );
+  assert.equal(
+    value(
+      ideasFacts({ ...ideas, nextRunAt: null, lastRun: null }),
+      "Next recipe ideas",
+    ),
+    "only when asked for",
+  );
+  assert.deepEqual(ideasFacts(undefined), []);
 });

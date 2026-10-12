@@ -48,12 +48,13 @@ Routine Inbox and Voice planning runs through the authenticated Codex CLI. X-01 
 | Staple running low ("Butter is almost gone.", staple "Butter") | Resolved; "Butter" is needed once, the staple's item (`source: staple`, `sourceRef` the staple), not the capture's |
 | Running low, no staple ("Почти закончился рис.", "Reis" in the pantry) | Resolved; "Reis" is flagged running low and still in stock; nothing rice-like on the list |
 | Staple added ("Kaffee sollte ich immer zu Hause haben.") | Resolved; one staple "Kaffee"; nothing coffee-like on the list |
+| Recipe ideas (asked for once through the Dashboard's route, with Hähnchenbrust expiring tomorrow and Pilze disliked; the daily run is off) | The run created 1 to 3 ideas by `agent:codex-recipe-ideas`; none names mushrooms (Pilz, mushroom, гриб) in its title or ingredients; at least one uses the Hähnchenbrust |
 | No extra recipes | Exactly the seeded recipe and these two |
 | Letter photo (Finanzamt Darmstadt: "Bitte reichen Sie die Unterlagen bis zum 30.11.2026 ein", Steuernummer 007/123/45678) | Resolved; one Task titled with "Finanzamt", due 30 November 2026 in Berlin |
 | Cash receipt photo (REWE, SUMME EUR 23,47, BAR, 10.10.2026) | Resolved; one −23.47 EUR transaction in the Cash account on 2026-10-10 with counterparty REWE |
 | Card receipt photo (Kartenzahlung girocard, 41,20 EUR) | Not resolved (left to the bank connection); no −41.20 transaction |
 | No extra shopping items | Exactly 10 items (the seeded one + 6 added from captures + 2 from the recipe + the staple butter), each name once |
-| No extra pantry items | Exactly the yoghurt and the seeded spaghetti and rice |
+| No extra pantry items | Exactly the yoghurt and the seeded spaghetti, rice, and chicken breast |
 | No extra staples | Exactly the seeded butter and the new coffee |
 | No extra meals | Exactly Wednesday's dinner, Friday's lunch, and the seeded Saturday breakfasts but the cleared one, in the three weeks from the capture |
 | No extra entities | Exactly 10 seeded + 6 created Tasks exist (passport, milk, tax return, flash drive, call the plumber, the Finanzamt letter) |
@@ -63,7 +64,7 @@ The reschedule cases turned out to separate the profiles. They were also repeate
 
 ## Results (2026-10-09, Codex CLI 0.160.0, ChatGPT Plus)
 
-Full real-runtime runs. They predate the three cross-language completions (POL-08, see [cross-language Task matching](../services/mcp.md)), the Calendar change scenarios (P10-03, see [Calendar events](../services/mcp.md#calendar-events)), the cash and card captures (P13-01), the grocery captures (P15-03, see [Food](../services/mcp.md#food)), the meal captures (P15-05, see [Meals and recipes](../services/mcp.md#meals-and-recipes)), the recipe links (P15-07, see [Recipe links](../services/mcp.md#recipe-links)), and the staple and running-low captures (P15-08, see [Staples and running low](../services/mcp.md#staples-and-running-low)), and the photos (P16-03, see [Letters and receipts](../services/mcp.md#letters-and-receipts)), so they count 13 checks; a run now has 48. The checks that count Tasks by a word match titles only, since a letter's Task has notes (its reference numbers), and the tax return is matched by "Steuererkl". Token figures are totals for the run, as reported by Codex (`turn.completed`).
+Full real-runtime runs. They predate the three cross-language completions (POL-08, see [cross-language Task matching](../services/mcp.md)), the Calendar change scenarios (P10-03, see [Calendar events](../services/mcp.md#calendar-events)), the cash and card captures (P13-01), the grocery captures (P15-03, see [Food](../services/mcp.md#food)), the meal captures (P15-05, see [Meals and recipes](../services/mcp.md#meals-and-recipes)), the recipe links (P15-07, see [Recipe links](../services/mcp.md#recipe-links)), and the staple and running-low captures (P15-08, see [Staples and running low](../services/mcp.md#staples-and-running-low)), the photos (P16-03, see [Letters and receipts](../services/mcp.md#letters-and-receipts)), and the recipe ideas (P15-09, see [Recipe ideas](../services/mcp.md#recipe-ideas)), so they count 13 checks; a run now has 51. The checks that count Tasks by a word match titles only, since a letter's Task has notes (its reference numbers), and the tax return is matched by "Steuererkl". Token figures are totals for the run, as reported by Codex (`turn.completed`).
 
 | Profile | Checks passed | Failed checks | Attempts | Output tokens | Reasoning tokens |
 | --- | --- | --- | --- | --- | --- |
