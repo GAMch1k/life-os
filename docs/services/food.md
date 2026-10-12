@@ -352,8 +352,8 @@ missing ingredients, then the title.
 
 Ideas are recipe drafts that are not recipes yet, each with why it is
 suggested (`reason`), for the owner to save or dismiss. Food stores them;
-something else writes them (part 2: the AI from the pantry and the
-preferences, or a web search). An idea has the recipe fields (title,
+something else writes them: the processor's recipe ideas job (see
+[AI ideas](#ai-ideas)). An idea has the recipe fields (title,
 servings, ingredients, steps, tags, methods), a `source` (`ai`, or `web`
 with the page as `sourceUrl`), the `reason`, a `state` (`new`, `saved`,
 `dismissed`), and, once saved, the `recipeId`.
@@ -372,6 +372,23 @@ with the page as `sourceUrl`), the `reason`, a `state` (`new`, `saved`,
   can still be saved.
 - `POST /v1/ideas/{id}/dismiss`; again changes nothing; a saved idea is 409
   `idea_saved`.
+
+### AI ideas
+
+The Inbox processor writes ideas (P15-09; see
+[MCP and AI](mcp.md#recipe-ideas)): once a day at `LIFE_OS_IDEAS_TIME`
+(16:00 by default) when the pantry has food in stock, and when the owner
+taps **Get ideas** (at most one run every 10 minutes and six a day). Each run
+reads the preferences, the in-stock pantry, the top suggestions, the ideas,
+and the recent meal plan through MCP, asks Codex for up to three home
+recipes that use the food expiring within 3 days first, name in-stock
+ingredients as the pantry does (so coverage matches), avoid every dislike,
+and prefer the preferred methods (the air fryer first), checks them, and
+writes each with `POST /v1/ideas` as `agent:codex-recipe-ideas`, with an
+Idempotency-Key from the run and the title; a 409 is skipped. Web search is
+off unless `LIFE_OS_IDEAS_WEB_SEARCH` turns it on; then ideas found online
+are `source: web` with their page, their steps summarized, not copied. The
+job never saves or dismisses ideas.
 
 ## Meal plan
 
