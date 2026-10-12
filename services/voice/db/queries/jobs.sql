@@ -1,8 +1,15 @@
 -- name: CreateAudioJob :one
-INSERT INTO audio_jobs (source, source_metadata, object_key, content_type, byte_size, expires_at)
-VALUES ($1, $2, $3, $4, $5, $6) RETURNING *;
+-- With an idempotency key already on a job (a repeated or concurrent upload),
+-- nothing is inserted and that job is returned: its object_key is then not
+-- the one given.
+INSERT INTO audio_jobs (source, source_metadata, object_key, content_type, byte_size, expires_at, idempotency_key, request_hash)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO UPDATE SET idempotency_key = EXCLUDED.idempotency_key
+RETURNING *;
 -- name: GetAudioJob :one
 SELECT * FROM audio_jobs WHERE id = $1;
+-- name: GetAudioJobByIdempotencyKey :one
+SELECT * FROM audio_jobs WHERE idempotency_key = sqlc.arg(idempotency_key)::text;
 -- name: ClaimAudioJob :one
 WITH candidate AS (
   SELECT id FROM audio_jobs WHERE status IN ('queued','retryable') AND available_at <= now()

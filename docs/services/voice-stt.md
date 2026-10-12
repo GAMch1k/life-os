@@ -21,6 +21,17 @@ Jobs move through `queued` → `processing` → `succeeded`. Transient worker er
 
 The API exposes source, audit timestamps, transcript, error summary, attempts, and the resulting Inbox ID. Browser capture may poll; it must never wait for transcription synchronously. P6-03 implements upload storage, claiming, retries, and worker execution; P6-02 supplies the private whisper worker. Android and Wear OS capture clients remain separate repositories.
 
+## Retried uploads
+
+An upload may carry an `Idempotency-Key` header, as Tasks creates do. The Android and Wear OS apps queue recordings and retry with backoff, sending the capture id as the key on every attempt (and in `sourceMetadata`). If Voice accepted a recording but the reply was lost, the retry gets the same job back instead of a second job, so the transcript and the Inbox item appear once.
+
+- The key is 1 to 200 visible ASCII characters (no spaces); anything else is 400 `invalid_request`. An empty header is no key.
+- A repeat with the same key, the same audio content (by SHA-256), the same `source`, and the same `sourceMetadata` (compared as JSON, so key order and spacing do not matter) stores nothing and returns the job the first upload created, in its current state: `queued`, `processing`, `succeeded` with its transcript and `inboxItemId`, `failed`, or `expired`. It is answered 202, as the first upload was, and records no Activity event.
+- The same key with other audio, another `source`, or other metadata is 409 `idempotency_conflict`, and nothing is stored.
+- Without the header every upload creates a job, as before.
+
+The key and a hash of what the upload asked for are kept on the job (`idempotency_key`, `request_hash`; migration 000003, with a unique partial index on the key), for as long as the job exists: an expired job keeps them, so a very late retry still gets the expired job rather than a new one. The multipart body is not hashed as sent, because its boundary changes with every retry. A retry is recognized before its audio is stored. When two uploads with one key arrive together, both may store their audio, but the database lets only one create the job; the other removes its copy and answers like a retry (or 409 if it was a different upload).
+
 ## Job processing and recovery
 
 Audio is stored in the private `voice-audio` volume and a job is committed as `queued` before the upload endpoint returns `202`. The worker claims rows with `FOR UPDATE SKIP LOCKED` and records its worker identity, lease expiry, and heartbeat. It renews the lease while Whisper and Inbox handoff run. On every worker start/poll, expired `processing` leases are reclaimed without a manual database edit: jobs below the configured attempt limit return to `retryable` after backoff, while exhausted jobs become `failed`. A stale worker cannot complete or retry a job after it loses its lease.
@@ -52,6 +63,9 @@ Transient errors record `retryable` plus an error summary and delayed availabili
 A Voice job is the root of its workflow, and its id is the activity correlation id. Upload records `voice.job.accepted`. The worker records `voice.job.transcribed`, or `voice.job.retry_scheduled`/`voice.job.failed`. When the worker creates the Inbox item, it sends the job id as `X-Correlation-ID` and the transcription event as `X-Causation-ID`. The later processing, MCP action, and resulting Task therefore all appear in the same trace. See [Activity](activity.md).
 
 ## Verification
+
+The Go integration tests run against the Postgres named by `VOICE_TEST_DATABASE_URL` (a throwaway database: each test creates and drops its own schema and applies the migrations, see `internal/testdb`) and skip when it is unset. Retried uploads are tested over HTTP in `internal/api/idempotency_integration_test.go` (a retry returns the same job and stores no second copy, a reused key with other audio, metadata, or source is 409, uploads without a key or with other keys create jobs, concurrent uploads with one key create one job, and an upload that loses the race removes its audio), in `cmd/worker/idempotency_integration_test.go` (retries before and after transcription give one job and one Inbox item), and migration 000003 down and up in `internal/repository/idempotency_integration_test.go`.
+
 
 The browser spec `apps/dashboard/e2e/voice-capture.spec.ts` records with the browsers' real MediaRecorder; only the microphone is simulated. Chromium's fake audio device plays a spoken WAV (WebM/Opus recording). In Firefox, whose fake device only produces a tone, a captured `<audio>` element playing the same WAV is the microphone (Ogg/Opus recording). Both recordings must be transcribed into an Inbox item. API checks in the same spec upload Ogg/Opus and Safari-style MP4/AAC, a 5 MiB WAV, non-audio and over-limit audio. Playwright runs the voice spec in Firefox too when Playwright's Firefox is installed (`npx playwright install firefox` in `apps/dashboard`); every other spec runs in Chromium only.
 

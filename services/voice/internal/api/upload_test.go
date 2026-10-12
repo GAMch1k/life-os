@@ -6,12 +6,14 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/gofiber/fiber/v3"
 
 	"github.com/GAMch1k/life-os/pkg/httpserver"
+	"github.com/GAMch1k/life-os/services/voice/internal/api/generated"
 	"github.com/GAMch1k/life-os/services/voice/internal/config"
 )
 
@@ -21,11 +23,17 @@ func uploadApp(maxUploadBytes int64) *httpserver.App {
 	cfg := config.Config{MaxUploadBytes: maxUploadBytes}
 	app := httpserver.New("voice", httpserver.WithFiberConfig(fiber.Config{BodyLimit: cfg.RequestBodyLimit()}))
 	h := &Handler{maxUploadBytes: maxUploadBytes}
-	app.Post("/v1/audio-jobs", h.CreateAudioJob)
+	app.Post("/v1/audio-jobs", (&generated.ServerInterfaceWrapper{Handler: h}).CreateAudioJob)
 	return app
 }
 
 func upload(t *testing.T, app *httpserver.App, audio []byte, source string) (int, string) {
+	t.Helper()
+	return uploadWithKey(t, app, audio, source, "")
+}
+
+// uploadWithKey uploads with an Idempotency-Key header when key is not empty.
+func uploadWithKey(t *testing.T, app *httpserver.App, audio []byte, source, key string) (int, string) {
 	t.Helper()
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
@@ -47,6 +55,9 @@ func upload(t *testing.T, app *httpserver.App, audio []byte, source string) (int
 		t.Fatal(err)
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
+	if key != "" {
+		req.Header.Set("Idempotency-Key", key)
+	}
 	resp, err := app.Test(req, fiber.TestConfig{Timeout: 10 * time.Second})
 	if err != nil {
 		t.Fatal(err)
@@ -91,5 +102,25 @@ func TestCreateAudioJobRejectsOversizedAndNonAudioUploads(t *testing.T) {
 	}
 	if status, code := upload(t, app, []byte("<!doctype html><title>not audio</title>"), "web"); status != http.StatusBadRequest || code != "unsupported_audio" {
 		t.Fatalf("HTML: %d %q, want 400 unsupported_audio", status, code)
+	}
+}
+
+func TestCreateAudioJobRejectsInvalidIdempotencyKeys(t *testing.T) {
+	app := uploadApp(1 << 20)
+	for name, key := range map[string]string{
+		"too long":  strings.Repeat("k", 201),
+		"a space":   "capture 1",
+		"a tab":     "capture\t1",
+		"not ASCII": "aufnahme-ä",
+	} {
+		if status, code := uploadWithKey(t, app, wav(16), "web", key); status != http.StatusBadRequest || code != "invalid_request" {
+			t.Errorf("%s: %d %q, want 400 invalid_request", name, status, code)
+		}
+	}
+	// A valid key reaches the audio checks (here the invalid source).
+	for _, key := range []string{"k", strings.Repeat("k", 200), "0b9f6d5e-2f1c-4a8e-9a43-6c1d2f8b7e10", "watch:capture/42?x=1"} {
+		if status, code := uploadWithKey(t, app, wav(16), "bogus", key); status != http.StatusBadRequest || code == "invalid_request" {
+			t.Errorf("key %q: %d %q, want the invalid source's 400", key, status, code)
+		}
 	}
 }

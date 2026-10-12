@@ -28,4 +28,6 @@ type AudioJob struct {
 	LeaseOwner      *string
 	LeaseExpiresAt  pgtype.Timestamptz
 	LastHeartbeatAt pgtype.Timestamptz
+	IdempotencyKey  *string
+	RequestHash     *string
 }
