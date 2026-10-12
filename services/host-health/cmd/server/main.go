@@ -48,7 +48,7 @@ func runServer(ctx context.Context) error {
 	switch {
 	case cfg.Fixture != "":
 		fixture := health.Fixture{Scenario: cfg.Fixture}
-		opts.Mode, opts.Host, opts.Docker = "fixture", fixture, fixture
+		opts.Mode, opts.Host, opts.Docker, opts.Usage = "fixture", fixture, fixture, fixture
 		prefill = fixture.History(time.Now().UTC())
 		logger.Warn("reporting a made-up host, not this one", "fixture", cfg.Fixture)
 	default:
@@ -57,6 +57,11 @@ func runServer(ctx context.Context) error {
 			opts.Docker = docker.NewClient(cfg.DockerURL)
 		} else {
 			logger.Warn("HOST_HEALTH_DOCKER_URL is empty: no container facts")
+		}
+		if cfg.CgroupDir != "" {
+			opts.Usage = &health.Meter{Cgroups: host.Cgroups{Dir: cfg.CgroupDir}, Project: cfg.LifeOSProject}
+		} else {
+			logger.Warn("HOST_HEALTH_CGROUP_DIR is empty: Life OS's use of the server is not measured")
 		}
 	}
 	sampler := health.NewSampler(opts)

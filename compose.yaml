@@ -378,13 +378,17 @@ services:
     stop_grace_period: 30s
 
   # How the server is doing, for the Status page's Server check
-  # (docs/services/host-health.md): memory, load, disks, and every container
-  # on the host, sampled each minute. It only reads: its own /proc (Docker
-  # does not namespace meminfo, loadavg, uptime, or stat, so they are the
-  # host's), statfs on read-only, non-recursive binds of / and the Docker data
-  # root (as nobody, so it can open only what any unprivileged user could, and
-  # nothing of the root directory's other mounts), and the containers through
-  # host-health-docker. No gateway route; the Dashboard reads it here.
+  # (docs/services/host-health.md): memory, load, disks, every container on
+  # the host, and how much of the server Life OS uses, sampled each minute.
+  # It only reads: its own /proc (Docker does not namespace meminfo, loadavg,
+  # uptime, or stat, so they are the host's), statfs on read-only,
+  # non-recursive binds of / and the Docker data root (as nobody, so it can
+  # open only what any unprivileged user could, and nothing of the root
+  # directory's other mounts), the containers' cgroups on a read-only bind
+  # of system.slice (where Docker's systemd cgroup driver puts each
+  # container's docker-<id>.scope; files any local user may read), and the
+  # containers through host-health-docker. No gateway route; the Dashboard
+  # reads it here.
   host-health:
     build: {context: ., dockerfile: services/host-health/Dockerfile}
     environment:
@@ -392,6 +396,7 @@ services:
       PORT: 8080
       HOST_HEALTH_DISKS: root=/host,docker=/host-docker
       HOST_HEALTH_DOCKER_URL: http://host-health-docker:8080
+      HOST_HEALTH_CGROUP_DIR: /host-cgroup
       HOST_HEALTH_MEMORY_WARNING_PERCENT: "${LIFE_OS_HOST_HEALTH_MEMORY_WARNING_PERCENT:-15}"
       HOST_HEALTH_MEMORY_WARNING_SAMPLES: "${LIFE_OS_HOST_HEALTH_MEMORY_WARNING_SAMPLES:-3}"
       HOST_HEALTH_MEMORY_PROBLEM_PERCENT: "${LIFE_OS_HOST_HEALTH_MEMORY_PROBLEM_PERCENT:-7}"
@@ -414,6 +419,13 @@ services:
       - type: bind
         source: "${LIFE_OS_DOCKER_ROOT:-/var/lib/docker}"
         target: /host-docker
+        read_only: true
+        bind: {recursive: disabled}
+      # Only system.slice, not all of /sys/fs/cgroup: no users' sessions
+      # (user.slice) and none of the root cgroup's files.
+      - type: bind
+        source: "${LIFE_OS_DOCKER_CGROUP_DIR:-/sys/fs/cgroup/system.slice}"
+        target: /host-cgroup
         read_only: true
         bind: {recursive: disabled}
     user: "65534:65534"

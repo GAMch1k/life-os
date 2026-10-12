@@ -4,11 +4,13 @@ info:
   version: 1.0.0
   description: >-
     The server Life OS runs on, as the Status page's Server check sees it:
-    its memory, load, disks, uptime, and every container on it (all compose
-    projects, not only Life OS), sampled once a minute, with the findings
-    that need attention and the last 24 hours of samples. The service only
-    reads: /proc, statfs on read-only bind mounts, and the containers
-    through a read-only Docker gateway that answers three fixed questions.
+    its memory, load, disks, uptime, every container on it (all compose
+    projects, not only Life OS), and how much of its memory and CPU Life OS
+    uses, sampled once a minute, with the findings that need attention and
+    the last 24 hours of samples. The service only reads: /proc, statfs on
+    read-only bind mounts, the containers' cgroups on a read-only bind, and
+    the containers through a read-only Docker gateway that answers three
+    fixed questions.
     It has no writes, no database, and no gateway route; the Dashboard
     reads it on the private network.
 
@@ -25,8 +27,8 @@ paths:
       description: >-
         The latest sample (at most a minute old): memory, load and CPUs,
         uptime, each filesystem's space, the containers with their state,
-        health, deaths within the restart-loop window and memory, the
-        thresholds, and the findings, problems first.
+        health, deaths within the restart-loop window and memory, Life OS's
+        use of the server, the thresholds, and the findings, problems first.
       operationId: getHostStatus
       security: []
       responses:
@@ -108,6 +110,43 @@ components:
         memorySampledAt: {type: string, format: date-time, description: When the containers' memory was read.}
         items: {type: array, items: {$ref: '#/components/schemas/HostContainer'}}
         top: {type: array, items: {$ref: '#/components/schemas/HostMemoryUser'}, description: 'The containers using the most memory, biggest first (up to 5).'}
+    HostUsageShare:
+      type: object
+      description: >-
+        One part of the server's use. Memory in use is counted as for the
+        whole server (total less MemAvailable): each container's cgroup
+        memory.current less what the kernel can reclaim at once, its page
+        cache on the file lists (active_file, inactive_file) and reclaimable
+        kernel memory (slab_reclaimable). That is less than docker stats
+        shows, which subtracts inactive_file only.
+      required: [memoryBytes, memoryPercent]
+      properties:
+        memoryBytes: {type: integer, format: int64, minimum: 0}
+        memoryPercent: {type: number, format: double, minimum: 0, description: Of the server's memory.}
+        cpuCores: {type: number, format: double, minimum: 0, description: 'The CPU time used over the last interval, in cores (1 is one CPU busy all the time); absent until two samples allow it, as after a restart or a redeploy.'}
+        cpuPercent: {type: number, format: double, minimum: 0, description: Of the server's CPUs; absent with cpuCores.}
+    HostServiceUsage:
+      type: object
+      required: [service, containers, memoryBytes]
+      properties:
+        service: {type: string, description: 'Its compose service (the container''s name without one).'}
+        containers: {type: integer, minimum: 1, description: 'Its running replicas, whose memory is summed.'}
+        memoryBytes: {type: integer, format: int64, minimum: 0}
+    HostUsage:
+      type: object
+      description: >-
+        How much of the server Life OS uses (the running containers of the
+        compose project HOST_HEALTH_LIFEOS_PROJECT, lifeos), against the
+        test stack (HOST_HEALTH_IGNORE_PROJECTS) and everything else, read
+        from the containers' cgroups.
+      required: [available, services]
+      properties:
+        available: {type: boolean, description: 'False when the cgroups or the containers cannot be read, or no cgroups are set up; then only error is set.'}
+        error: {type: string, description: Why Life OS's use is not available.}
+        lifeOs: {type: object, allOf: [{$ref: '#/components/schemas/HostUsageShare'}], description: Life OS's containers.}
+        tests: {type: object, allOf: [{$ref: '#/components/schemas/HostUsageShare'}], description: 'The test stack''s containers; only while any of them runs.'}
+        others: {type: object, allOf: [{$ref: '#/components/schemas/HostUsageShare'}], description: 'Everything else: the server''s use (memory total less available; the CPUs'' busy time) less Life OS and the test stack, never below zero.'}
+        services: {type: array, items: {$ref: '#/components/schemas/HostServiceUsage'}, description: 'Life OS''s compose services using the most memory, biggest first (up to 5).'}
     HostThresholds:
       type: object
       required: [memoryWarningPercent, memoryWarningSamples, memoryProblemPercent, diskWarningBytes, diskWarningPercent, diskProblemBytes, loadWarningPerCpu, restartLoopCount, restartLoopMinutes, unhealthyMinutes]
@@ -161,6 +200,7 @@ components:
         containers: {$ref: '#/components/schemas/HostContainers'}
         thresholds: {$ref: '#/components/schemas/HostThresholds'}
         findings: {type: array, items: {$ref: '#/components/schemas/HostFinding'}, description: 'Problems first, then warnings; empty when all is well.'}
+        usage: {$ref: '#/components/schemas/HostUsage'}
     HostSample:
       type: object
       required: [at, memoryAvailableBytes, memoryTotalBytes, load1, load5, load15, disks]
@@ -171,6 +211,8 @@ components:
         load1: {type: number, format: double, minimum: 0}
         load5: {type: number, format: double, minimum: 0}
         load15: {type: number, format: double, minimum: 0}
+        lifeOsMemoryBytes: {type: integer, format: int64, minimum: 0, description: 'Life OS''s memory in use (HostUsage); absent when it could not be read.'}
+        lifeOsCpuCores: {type: number, format: double, minimum: 0, description: 'Life OS''s CPU over the interval before the sample, in cores; absent when not known.'}
         disks:
           type: array
           items:

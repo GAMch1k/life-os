@@ -29,6 +29,12 @@ type Config struct {
 	Disks string `env:"HOST_HEALTH_DISKS" default:"root=/host,docker=/host-docker"`
 	// DockerURL is the Docker gateway; empty means no container facts.
 	DockerURL string `env:"HOST_HEALTH_DOCKER_URL"`
+	// CgroupDir is a read-only bind of the directory holding the
+	// containers' cgroups (/sys/fs/cgroup/system.slice); empty means Life
+	// OS's use of the server is not measured.
+	CgroupDir string `env:"HOST_HEALTH_CGROUP_DIR"`
+	// LifeOSProject is the compose project whose containers are Life OS.
+	LifeOSProject string `env:"HOST_HEALTH_LIFEOS_PROJECT" default:"lifeos"`
 	// Fixture, healthy or low-memory, replaces the host and its containers
 	// with a made-up one (the verification stack).
 	Fixture         string `env:"HOST_HEALTH_FIXTURE"`
@@ -109,6 +115,12 @@ func (c Config) Validate() error {
 		if parsed, err := url.Parse(c.DockerURL); err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 			errs = append(errs, fmt.Errorf("HOST_HEALTH_DOCKER_URL must be empty or an absolute HTTP URL"))
 		}
+	}
+	if c.CgroupDir != "" && !filepath.IsAbs(c.CgroupDir) {
+		errs = append(errs, fmt.Errorf("HOST_HEALTH_CGROUP_DIR must be empty or an absolute path"))
+	}
+	if !composeProject.MatchString(c.LifeOSProject) || slices.Contains(c.IgnoredProjects(), c.LifeOSProject) {
+		errs = append(errs, fmt.Errorf("HOST_HEALTH_LIFEOS_PROJECT must be a compose project name, not one of HOST_HEALTH_IGNORE_PROJECTS"))
 	}
 	if c.Fixture != "" && !health.ValidFixture(c.Fixture) {
 		errs = append(errs, fmt.Errorf("HOST_HEALTH_FIXTURE must be empty, %s, or %s", health.FixtureHealthy, health.FixtureLowMemory))

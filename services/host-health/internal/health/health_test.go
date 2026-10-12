@@ -3,6 +3,7 @@ package health
 import (
 	"context"
 	"errors"
+	"math"
 	"slices"
 	"sync"
 	"testing"
@@ -302,7 +303,7 @@ func TestSamplerKeepsTheSnapshotWhenOnlyADiskFails(t *testing.T) {
 func TestFixturesAreTheSameEveryTime(t *testing.T) {
 	for _, scenario := range []string{FixtureHealthy, FixtureLowMemory} {
 		fixture := Fixture{Scenario: scenario}
-		sampler := NewSampler(Options{Mode: "fixture", Host: fixture, Docker: fixture, Thresholds: DefaultThresholds(), Now: func() time.Time { return start }})
+		sampler := NewSampler(Options{Mode: "fixture", Host: fixture, Docker: fixture, Usage: fixture, Thresholds: DefaultThresholds(), Now: func() time.Time { return start }})
 		sampler.Prefill(fixture.History(start))
 		sampler.SampleOnce(context.Background())
 		status, _ := sampler.Status()
@@ -313,6 +314,20 @@ func TestFixturesAreTheSameEveryTime(t *testing.T) {
 		top := status.Containers.Top(2)
 		if len(top) != 2 || top[0].Name != "lifeos-whisper-1" || top[1].Name != "homeassistant" {
 			t.Fatalf("%s: top = %+v", scenario, top)
+		}
+		// Life OS's made-up use has CPU figures from the first sample on.
+		usage := status.Usage
+		if !usage.Available || usage.LifeOS.MemoryBytes != 2390<<20 || !usage.LifeOS.CPUKnown || math.Abs(usage.LifeOS.CPUCores-0.4) > 1e-9 || usage.TestsRunning {
+			t.Fatalf("%s: usage = %+v", scenario, usage)
+		}
+		if len(usage.Services) != 3 || usage.Services[0].Service != "whisper" || math.Abs(usage.Others.CPUCores-1) > 1e-9 {
+			t.Fatalf("%s: services = %+v, others = %+v", scenario, usage.Services, usage.Others)
+		}
+		if used := status.Snapshot.Memory.TotalBytes - status.Snapshot.Memory.AvailableBytes; usage.Others.MemoryBytes != used-2390<<20 {
+			t.Fatalf("%s: others = %+v", scenario, usage.Others)
+		}
+		if first, last := history[0].LifeOS, history[len(history)-1].LifeOS; first == nil || last == nil || last.MemoryBytes != 2390<<20 {
+			t.Fatalf("%s: history = %+v … %+v", scenario, first, last)
 		}
 		switch scenario {
 		case FixtureHealthy:

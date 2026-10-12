@@ -82,9 +82,10 @@ services:
   backup:
     image: lifeos-backup:latest
   # Never the host: a made-up one (HOST_HEALTH_FIXTURE, healthy unless a test
-  # picks low-memory), without the binds of / and the Docker root, and without
-  # the docker gateway, which would hold the host's Docker socket.
-  # tools/verify-compose refuses a plan that mounts any of them.
+  # picks low-memory), without the binds of /, the Docker root, and the
+  # containers' cgroups, and without the docker gateway, which would hold the
+  # host's Docker socket. tools/verify-compose refuses a plan that mounts any
+  # of them.
   host-health:
     image: lifeos-host-health:latest
     environment:

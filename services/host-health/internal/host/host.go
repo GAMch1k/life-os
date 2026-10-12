@@ -1,10 +1,11 @@
 // Package host reads the server's own facts: memory, load, CPUs, uptime,
-// and disk space. It only reads: /proc files and statfs.
+// disk space, and the containers' cgroups. It only reads: /proc files,
+// statfs, and cgroup files.
 //
 // /proc/meminfo, /proc/loadavg, /proc/uptime, and /proc/stat are not
 // namespaced by Docker, so a container reads the host's values from its own
-// /proc (ProcDir, /proc by default). Disks are read through read-only bind
-// mounts of host paths.
+// /proc (ProcDir, /proc by default). Disks and cgroups are read through
+// read-only bind mounts of host paths.
 package host
 
 import (
@@ -88,14 +89,24 @@ func ParseDiskSpecs(value string) ([]DiskSpec, error) {
 	return specs, nil
 }
 
+// CPUTime is the time all CPUs together spent busy, and in all, since boot,
+// in clock ticks, from the cpu line of /proc/stat. Two readings give the
+// share of the CPUs used between them.
+type CPUTime struct {
+	// Busy is user, nice, system, irq, softirq, and steal (guest time is
+	// already in user and nice); Total adds idle and iowait.
+	Busy, Total uint64
+}
+
 // Snapshot is the host's facts at one moment.
 type Snapshot struct {
-	At     time.Time
-	Memory Memory
-	Load   Load
-	CPUs   int
-	Uptime time.Duration
-	Disks  []Disk
+	At      time.Time
+	Memory  Memory
+	Load    Load
+	CPUs    int
+	CPUTime CPUTime
+	Uptime  time.Duration
+	Disks   []Disk
 }
 
 // Reader reads Snapshots.
@@ -139,7 +150,7 @@ func (r Reader) Read(now time.Time) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
-	snapshot.CPUs, err = CountCPUs(stat)
+	snapshot.CPUs, snapshot.CPUTime, err = ParseStat(stat)
 	stat.Close()
 	if err != nil {
 		return Snapshot{}, err
@@ -214,24 +225,53 @@ func ParseUptime(value string) (time.Duration, error) {
 	return time.Duration(seconds * float64(time.Second)), nil
 }
 
-// CountCPUs counts the cpuN lines of /proc/stat: the host's CPUs, whatever
-// CPUs the container itself may use.
-func CountCPUs(r io.Reader) (int, error) {
+// ParseStat reads /proc/stat: it counts the cpuN lines (the host's CPUs,
+// whatever CPUs the container itself may use) and reads the time of the cpu
+// line, the CPUs together.
+func ParseStat(r io.Reader) (int, CPUTime, error) {
 	count := 0
+	var times CPUTime
+	var total bool
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
 		line := scanner.Text()
-		if strings.HasPrefix(line, "cpu") && len(line) > 3 && line[3] >= '0' && line[3] <= '9' {
-			count++
+		if !strings.HasPrefix(line, "cpu") || len(line) < 4 {
+			continue
 		}
+		if line[3] >= '0' && line[3] <= '9' {
+			count++
+			continue
+		}
+		fields := strings.Fields(line)
+		if fields[0] != "cpu" {
+			continue
+		}
+		// user nice system idle iowait irq softirq steal guest guest_nice
+		if len(fields) < 5 {
+			return 0, CPUTime{}, fmt.Errorf("stat: unexpected cpu line %q", line)
+		}
+		for i, field := range fields[1:min(len(fields), 9)] {
+			ticks, err := strconv.ParseUint(field, 10, 64)
+			if err != nil {
+				return 0, CPUTime{}, fmt.Errorf("stat: unexpected cpu line %q", line)
+			}
+			times.Total += ticks
+			if i != 3 && i != 4 {
+				times.Busy += ticks
+			}
+		}
+		total = true
 	}
 	if err := scanner.Err(); err != nil {
-		return 0, err
+		return 0, CPUTime{}, err
 	}
 	if count == 0 {
-		return 0, errors.New("stat: no cpu lines")
+		return 0, CPUTime{}, errors.New("stat: no cpu lines")
 	}
-	return count, nil
+	if !total {
+		return 0, CPUTime{}, errors.New("stat: no cpu line")
+	}
+	return count, times, nil
 }
 
 // ReadDisks reads each spec's filesystem, once per filesystem, in order.

@@ -13,7 +13,7 @@ export interface paths {
         };
         /**
          * Get the host's state now
-         * @description The latest sample (at most a minute old): memory, load and CPUs, uptime, each filesystem's space, the containers with their state, health, deaths within the restart-loop window and memory, the thresholds, and the findings, problems first.
+         * @description The latest sample (at most a minute old): memory, load and CPUs, uptime, each filesystem's space, the containers with their state, health, deaths within the restart-loop window and memory, Life OS's use of the server, the thresholds, and the findings, problems first.
          */
         get: operations["getHostStatus"];
         put?: never;
@@ -145,6 +145,49 @@ export interface components {
             /** @description The containers using the most memory, biggest first (up to 5). */
             top: components["schemas"]["HostMemoryUser"][];
         };
+        /** @description One part of the server's use. Memory in use is counted as for the whole server (total less MemAvailable): each container's cgroup memory.current less what the kernel can reclaim at once, its page cache on the file lists (active_file, inactive_file) and reclaimable kernel memory (slab_reclaimable). That is less than docker stats shows, which subtracts inactive_file only. */
+        HostUsageShare: {
+            /** Format: int64 */
+            memoryBytes: number;
+            /**
+             * Format: double
+             * @description Of the server's memory.
+             */
+            memoryPercent: number;
+            /**
+             * Format: double
+             * @description The CPU time used over the last interval, in cores (1 is one CPU busy all the time); absent until two samples allow it, as after a restart or a redeploy.
+             */
+            cpuCores?: number;
+            /**
+             * Format: double
+             * @description Of the server's CPUs; absent with cpuCores.
+             */
+            cpuPercent?: number;
+        };
+        HostServiceUsage: {
+            /** @description Its compose service (the container's name without one). */
+            service: string;
+            /** @description Its running replicas, whose memory is summed. */
+            containers: number;
+            /** Format: int64 */
+            memoryBytes: number;
+        };
+        /** @description How much of the server Life OS uses (the running containers of the compose project HOST_HEALTH_LIFEOS_PROJECT, lifeos), against the test stack (HOST_HEALTH_IGNORE_PROJECTS) and everything else, read from the containers' cgroups. */
+        HostUsage: {
+            /** @description False when the cgroups or the containers cannot be read, or no cgroups are set up; then only error is set. */
+            available: boolean;
+            /** @description Why Life OS's use is not available. */
+            error?: string;
+            /** @description Life OS's containers. */
+            lifeOs?: components["schemas"]["HostUsageShare"];
+            /** @description The test stack's containers; only while any of them runs. */
+            tests?: components["schemas"]["HostUsageShare"];
+            /** @description Everything else: the server's use (memory total less available; the CPUs' busy time) less Life OS and the test stack, never below zero. */
+            others?: components["schemas"]["HostUsageShare"];
+            /** @description Life OS's compose services using the most memory, biggest first (up to 5). */
+            services: components["schemas"]["HostServiceUsage"][];
+        };
         HostThresholds: {
             /**
              * Format: double
@@ -222,6 +265,7 @@ export interface components {
             thresholds: components["schemas"]["HostThresholds"];
             /** @description Problems first, then warnings; empty when all is well. */
             findings: components["schemas"]["HostFinding"][];
+            usage?: components["schemas"]["HostUsage"];
         };
         HostSample: {
             /** Format: date-time */
@@ -236,6 +280,16 @@ export interface components {
             load5: number;
             /** Format: double */
             load15: number;
+            /**
+             * Format: int64
+             * @description Life OS's memory in use (HostUsage); absent when it could not be read.
+             */
+            lifeOsMemoryBytes?: number;
+            /**
+             * Format: double
+             * @description Life OS's CPU over the interval before the sample, in cores; absent when not known.
+             */
+            lifeOsCpuCores?: number;
             disks: {
                 label: string;
                 /** Format: int64 */

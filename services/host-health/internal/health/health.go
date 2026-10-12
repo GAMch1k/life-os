@@ -179,6 +179,8 @@ type Status struct {
 	Findings   []Finding
 	// DiskErrors are disks that could not be read.
 	DiskErrors []string
+	// Usage is how much of the server Life OS uses.
+	Usage Usage
 }
 
 // Sample is one minute of history.
@@ -188,6 +190,8 @@ type Sample struct {
 	MemoryTotal          uint64
 	Load1, Load5, Load15 float64
 	Disks                []DiskSample
+	// LifeOS is Life OS's use of the server; nil when it could not be read.
+	LifeOS *Share
 }
 
 // DiskSample is one disk's free space in a sample.
@@ -196,8 +200,8 @@ type DiskSample struct {
 	FreeBytes uint64
 }
 
-// SampleOf is the history sample of a snapshot.
-func SampleOf(snapshot host.Snapshot) Sample {
+// SampleOf is the history sample of a snapshot and Life OS's use.
+func SampleOf(snapshot host.Snapshot, usage Usage) Sample {
 	sample := Sample{
 		At:              snapshot.At,
 		MemoryAvailable: snapshot.Memory.AvailableBytes,
@@ -208,6 +212,10 @@ func SampleOf(snapshot host.Snapshot) Sample {
 	}
 	for _, disk := range snapshot.Disks {
 		sample.Disks = append(sample.Disks, DiskSample{Label: disk.Label, FreeBytes: disk.FreeBytes})
+	}
+	if usage.Available {
+		lifeOS := usage.LifeOS
+		sample.LifeOS = &lifeOS
 	}
 	return sample
 }

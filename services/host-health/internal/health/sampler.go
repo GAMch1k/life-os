@@ -32,6 +32,9 @@ type Options struct {
 	// Docker is nil when no gateway is set up: container facts are then
 	// not available, which is not a finding.
 	Docker DockerSource
+	// Usage is nil when no cgroups are set up: Life OS's use of the server
+	// is then not available, which is not a finding either.
+	Usage UsageSource
 	// IgnoreProjects are compose projects left out of findings and the top
 	// memory users (HOST_HEALTH_IGNORE_PROJECTS: the verification stack).
 	IgnoreProjects []string
@@ -56,8 +59,9 @@ type Sampler struct {
 	sampled bool
 
 	// Used by the sampling goroutine only.
-	eventsTo time.Time
-	memoryAt time.Time
+	eventsTo   time.Time
+	memoryAt   time.Time
+	usageError string
 }
 
 // NewSampler creates a Sampler.
@@ -114,14 +118,24 @@ func (s *Sampler) SampleOnce(ctx context.Context) {
 		}
 		s.opts.Logger.Warn("reading a disk failed", "error", err)
 	}
-	s.ring.Add(SampleOf(snapshot))
 
 	containers := s.readContainers(ctx, now, snapshot.Memory.AvailablePercent() < s.opts.Thresholds.MemoryWarningPercent)
+	usage := Usage{Error: "no cgroups are set up"}
+	if s.opts.Usage != nil {
+		// Timed when the cgroups are read, after the containers: CPU is the
+		// time used since the last reading, over the time in between.
+		usage = s.opts.Usage.Usage(s.opts.Now(), snapshot, containers)
+		if !usage.Available && s.usageError != usage.Error {
+			s.opts.Logger.Warn("reading Life OS's use of the server failed", "error", usage.Error)
+		}
+		s.usageError = usage.Error
+	}
+	s.ring.Add(SampleOf(snapshot, usage))
 	// Two hours of samples tell how long memory has been low.
 	findings := Evaluate(snapshot, s.ring.Last(120), containers, s.opts.Docker != nil, s.opts.Thresholds)
 
 	s.mu.Lock()
-	s.status = Status{Mode: s.opts.Mode, Snapshot: snapshot, Containers: containers, Thresholds: s.opts.Thresholds, Findings: findings, DiskErrors: diskErrors}
+	s.status = Status{Mode: s.opts.Mode, Snapshot: snapshot, Containers: containers, Thresholds: s.opts.Thresholds, Findings: findings, DiskErrors: diskErrors, Usage: usage}
 	s.sampled = true
 	s.mu.Unlock()
 }

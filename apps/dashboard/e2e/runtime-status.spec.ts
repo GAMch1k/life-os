@@ -519,7 +519,7 @@ test.describe("Server on Status", () => {
 
   // The verification stack's host-health reports a made-up server
   // (HOST_HEALTH_FIXTURE=healthy), never the host it runs on.
-  test("the Server card shows the made-up server, with a day of memory", async ({
+  test("the Server card shows the made-up server, with a day of memory and Life OS's use", async ({
     page,
   }) => {
     await page.goto("/status");
@@ -539,15 +539,28 @@ test.describe("Server on Status", () => {
       "Most memorylifeos-whisper-1 1.9 GiB, homeassistant 600 MiB, n8n 420 MiB",
     );
     await expect(card).toContainText("Up for12 days");
+    // How much of it the made-up Life OS uses: facts, never a finding.
+    await expect(card).toContainText(
+      "Life OSCPU 0.4 cores (7%) · RAM 2.3 GiB (30%)",
+    );
+    await expect(card).toContainText(
+      "Life OS serviceswhisper 1.9 GiB, postgres 310 MiB, dashboard 180 MiB",
+    );
+    await expect(card).toContainText(
+      /Everything elseCPU 1\.0 cores \(17%\) · RAM [\d.]+ GiB \(\d+%\)/,
+    );
+    await expect(card).not.toContainText("Tests running");
 
-    // The sparkline: a caption that needs no hovering, and a tooltip that
+    // The sparklines: captions that need no hovering, and a tooltip that
     // follows the pointer and the arrow keys.
     const chart = card.getByRole("img", {
       name: "Memory available, last 24 h",
     });
-    await expect(card.locator("figcaption")).toHaveText(
+    await expect(card.locator("figcaption")).toHaveText([
       /^Memory available, last 24 h: lowest [\d.]+ GiB at \d\d:\d\d, now [\d.]+ GiB; warning below 1\.2 GiB\.$/,
-    );
+      /^Life OS memory, last 24 h: highest 2\.7 GiB at \d\d:\d\d, now 2\.3 GiB\.$/,
+      /^Life OS CPU, last 24 h: highest 1\.2 cores at \d\d:\d\d, now 0\.4 cores\.$/,
+    ]);
     await chart.hover({ position: { x: 10, y: 20 } });
     await expect(card.getByRole("tooltip")).toHaveText(
       /^[\d.]+ GiB \d\d:\d\d$/,

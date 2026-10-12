@@ -11,25 +11,42 @@ export function downsampleMin(
   samples: SparkPoint[],
   buckets: number,
 ): SparkPoint[] {
+  return downsample(samples, buckets, (a, b) => a.value < b.value);
+}
+
+/**
+ * As downsampleMin, keeping each span's highest sample instead: for use,
+ * such as Life OS's memory, the peak is the moment that matters.
+ */
+export function downsampleMax(
+  samples: SparkPoint[],
+  buckets: number,
+): SparkPoint[] {
+  return downsample(samples, buckets, (a, b) => a.value > b.value);
+}
+
+function downsample(
+  samples: SparkPoint[],
+  buckets: number,
+  worse: (a: SparkPoint, b: SparkPoint) => boolean,
+): SparkPoint[] {
   if (samples.length <= buckets) return samples;
   const latest = samples[samples.length - 1];
   const earlier = samples.slice(0, -1);
   const spans = buckets - 1;
   const first = Date.parse(earlier[0].at);
   const span = Date.parse(latest.at) - first || 1;
-  const lowest = new Map<number, SparkPoint>();
+  const kept = new Map<number, SparkPoint>();
   for (const sample of earlier) {
     const bucket = Math.min(
       spans - 1,
       Math.floor(((Date.parse(sample.at) - first) / span) * spans),
     );
-    const current = lowest.get(bucket);
-    if (!current || sample.value < current.value) lowest.set(bucket, sample);
+    const current = kept.get(bucket);
+    if (!current || worse(sample, current)) kept.set(bucket, sample);
   }
   return [
-    ...[...lowest.entries()]
-      .sort(([a], [b]) => a - b)
-      .map(([, point]) => point),
+    ...[...kept.entries()].sort(([a], [b]) => a - b).map(([, point]) => point),
     latest,
   ];
 }
@@ -38,6 +55,14 @@ export function downsampleMin(
 export function lowestPoint(points: SparkPoint[]) {
   return points.reduce<SparkPoint | undefined>(
     (low, point) => (!low || point.value < low.value ? point : low),
+    undefined,
+  );
+}
+
+/** The point with the highest value, the earliest of equals. */
+export function highestPoint(points: SparkPoint[]) {
+  return points.reduce<SparkPoint | undefined>(
+    (high, point) => (!high || point.value > high.value ? point : high),
     undefined,
   );
 }

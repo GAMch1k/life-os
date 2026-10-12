@@ -132,6 +132,13 @@ function CheckCard({
         {check.detail && <ErrorDetail text={check.detail} />}
         {check.action && <p className="text-sm">{check.action}</p>}
         {check.chart && <Sparkline chart={check.chart} timeZone={timeZone} />}
+        {check.sideCharts && (
+          <div className="grid gap-3 sm:grid-cols-2">
+            {check.sideCharts.map((chart) => (
+              <Sparkline chart={chart} key={chart.label} timeZone={timeZone} />
+            ))}
+          </div>
+        )}
         {check.facts.length > 0 && <Facts facts={check.facts} />}
         {check.parts && check.parts.length > 0 && (
           <ul aria-label={check.title} className="divide-y border-t pt-3">
