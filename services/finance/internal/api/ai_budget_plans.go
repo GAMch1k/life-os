@@ -550,6 +550,11 @@ func (h *Handler) FailAiBudgetPlan(c fiber.Ctx, planID generated.PlanId) error {
 }
 
 func (h *Handler) ApplyAiBudgetPlan(c fiber.Ctx, planID generated.PlanId) error {
+	// Only the owner accepts a plan (a development tool may, for tests);
+	// the AI never applies its own.
+	if actor, ok := activity.ParseActor(c.Get(activity.ActorHeader)); ok && actor.Kind == "agent" {
+		return apiError(fiber.StatusForbidden, "actor_not_allowed", "Only the owner applies an AI budget plan")
+	}
 	var body generated.ApplyAiBudgetPlanRequest
 	properties, err := decodeObject(c.Body(), &body)
 	if err != nil {

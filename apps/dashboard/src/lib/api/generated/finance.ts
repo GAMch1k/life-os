@@ -450,7 +450,7 @@ export interface paths {
         put?: never;
         /**
          * Apply an AI budget plan to its month
-         * @description Writes the owner's choice of the plan's lines into the month's budget, through the same operation as `PUT /v1/budgets/{month}`: the plan that applies to the month, with the chosen categories at the given amounts (the proposed ones, or the owner's edits; 0 leaves a category out), and `expectedIncomeMinor` and `savingsGoalMinor` when given (else the plan's stay). `scope` `month` (the default) gives the month its own plan; `following` makes it the regular plan from the month on. Lines must be the plan's categories, each once. The plan becomes `applied`, or `partly_applied` when some of its lines were left out. A ready or applied plan can be applied (again); an identical repeat changes nothing and records nothing. Activity records `finance.budget.saved` when the budget changed and `finance.ai_budget_plan.applied`.
+         * @description Writes the owner's choice of the plan's lines into the month's budget, through the same operation as `PUT /v1/budgets/{month}`: the plan that applies to the month, with the chosen categories at the given amounts (the proposed ones, or the owner's edits; 0 leaves a category out), and `expectedIncomeMinor` and `savingsGoalMinor` when given (else the plan's stay). `scope` `month` (the default) gives the month its own plan; `following` makes it the regular plan from the month on. Lines must be the plan's categories, each once. The plan becomes `applied`, or `partly_applied` when some of its lines were left out. A ready or applied plan can be applied (again); an identical repeat changes nothing and records nothing. Activity records `finance.budget.saved` when the budget changed and `finance.ai_budget_plan.applied`. The AI (`agent:`) never applies a plan: 403 `actor_not_allowed`.
          */
         post: operations["applyAiBudgetPlan"];
         delete?: never;
@@ -2939,6 +2939,15 @@ export interface operations {
             };
             /** @description Invalid request (`invalid_request`: no lines, a category not in the plan or named twice, a negative amount), an unknown category (`unknown_category`), or no valid X-Life-OS-Actor (`actor_required`) */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The AI does not apply plans (`actor_not_allowed`) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

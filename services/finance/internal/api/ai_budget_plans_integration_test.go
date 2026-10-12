@@ -196,6 +196,8 @@ func TestAPlanChangesTheBudgetOnlyWhenTheOwnerAppliesIt(t *testing.T) {
 		t.Fatalf("groceries = %+v, goal %+v", line, ready.Result.SavingsGoal)
 	}
 
+	// The AI never applies its own plan.
+	c.planError(http.MethodPost, apply, map[string]any{"lines": []map[string]any{{"categoryId": h.groceries.Id, "amountMinor": 30000}}}, planActor, http.StatusForbidden, "actor_not_allowed")
 	// The owner unticks rent and lowers eating out further: partly applied,
 	// for November only; the regular plan's other lines stay.
 	seen := len(c.recorder.all())

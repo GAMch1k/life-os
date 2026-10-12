@@ -432,8 +432,9 @@ month whose plan is still requested or running answers with that one
 (200): the request joins it. The owner may ask 10 times a day (429
 `daily_limit`); a development tool's requests do not count. `trigger:
 "schedule"` is the job's own plan on the 1st of a month: one per month (a
-repeat answers with it, dismissed or not), and none when the owner already
-asked for that month since it began.
+repeat answers with it, dismissed or not), and none while a plan the owner
+asked for that month since it began is there (not dismissed): it answers
+with that one.
 
 **States.** `requested` → `running` (the job claimed it) → `ready` (the
 AI's proposal is there) or `failed`. A run that failed for now goes back to
@@ -508,8 +509,8 @@ the month only or as the regular plan from it on. The plan is `applied`, or
 `partly_applied` when some of its lines were left out. A ready or applied
 plan can be applied again; the same choice again changes and records
 nothing. A requested, running, or failed plan is 409 `plan_not_ready`, a
-dismissed one 409 `plan_dismissed`. The answer has the plan and the month's
-budget. `POST /v1/ai-budget-plans/{id}/dismiss` dismisses a plan in any
+dismissed one 409 `plan_dismissed`; the AI (`agent:`) never applies a plan
+(403 `actor_not_allowed`). The answer has the plan and the month's budget. `POST /v1/ai-budget-plans/{id}/dismiss` dismisses a plan in any
 state; what it applied stays in the budget.
 
 ## Subscriptions

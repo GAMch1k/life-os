@@ -628,7 +628,8 @@ paths:
         were left out. A ready or applied plan can be applied (again); an
         identical repeat changes nothing and records nothing. Activity
         records `finance.budget.saved` when the budget changed and
-        `finance.ai_budget_plan.applied`.
+        `finance.ai_budget_plan.applied`. The AI (`agent:`) never applies a
+        plan: 403 `actor_not_allowed`.
       operationId: applyAiBudgetPlan
       security: []
       parameters: [{$ref: '#/components/parameters/PlanId'}]
@@ -637,6 +638,7 @@ paths:
         '200': {description: The plan and the month's budget, content: {application/json: {schema: {$ref: '#/components/schemas/AiBudgetPlanApplyResult'}}}}
         '400': {description: 'Invalid request (`invalid_request`: no lines, a category not in the plan or named twice, a negative amount), an unknown category (`unknown_category`), or no valid X-Life-OS-Actor (`actor_required`)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
         '404': {description: No such plan (`not_found`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '403': {description: The AI does not apply plans (`actor_not_allowed`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
         '409': {description: The plan is not ready (`plan_not_ready`) or was dismissed (`plan_dismissed`), content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
   /v1/ai-budget-plans/{planId}/dismiss:
     post:
