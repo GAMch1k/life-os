@@ -46,6 +46,12 @@ type BankConnection struct {
 	CreatedAt            pgtype.Timestamptz
 	UpdatedAt            pgtype.Timestamptz
 	MappingVersion       int32
+	EarliestBookingDate  pgtype.Date
+	HistoryStatus        *string
+	HistoryStartedAt     pgtype.Timestamptz
+	HistoryFinishedAt    pgtype.Timestamptz
+	HistoryTransactions  *int32
+	HistoryError         *string
 }
 
 type BankConsentFailure struct {

@@ -25,6 +25,11 @@ type Querier interface {
 	// The owner removed the connection: its session is wiped and it is never
 	// synced again; Finance still has to archive its accounts.
 	DisconnectConnection(ctx context.Context, arg DisconnectConnectionParams) (BankConnection, error)
+	// History reads a stopped process left running (started before it began)
+	// have failed.
+	FailInterruptedHistoryReads(ctx context.Context, arg FailInterruptedHistoryReadsParams) (int64, error)
+	// The history read that started at started has completed or failed.
+	FinishHistoryRead(ctx context.Context, arg FinishHistoryReadParams) (BankConnection, error)
 	GetConnection(ctx context.Context, id pgtype.UUID) (BankConnection, error)
 	// The bank's live (not disconnected) connection, if any.
 	GetLiveConnection(ctx context.Context, arg GetLiveConnectionParams) (BankConnection, error)
@@ -38,12 +43,16 @@ type Querier interface {
 	// still valid): a new session and account list, usable again. Its sync
 	// history, cursor, and any import waiting for Finance are kept.
 	ReconnectConnection(ctx context.Context, arg ReconnectConnectionParams) (BankConnection, error)
+	// Finance accepted a part of a history read: imported more transactions,
+	// back to earliest.
+	RecordHistoryProgress(ctx context.Context, arg RecordHistoryProgressParams) error
 	// A sync failed: one more failure in a row, the next attempt, and the
 	// import still waiting for Finance (NULL when none).
 	RecordSyncFailure(ctx context.Context, arg RecordSyncFailureParams) (BankConnection, error)
 	// Finance accepted a sync: the connection is connected, its failures and
 	// any waiting import are cleared. mapping_version is the mapping a full
-	// read used (0 for a read of the days since the cursor only).
+	// read used (0 for a read of the days since the cursor only);
+	// earliest_booking_date the sync's earliest booked date (NULL: none).
 	RecordSyncSuccess(ctx context.Context, arg RecordSyncSuccessParams) (BankConnection, error)
 	// Gives back a claimed manual sync that never reached the bank.
 	ReleaseManualSync(ctx context.Context, arg ReleaseManualSyncParams) error
@@ -52,6 +61,10 @@ type Querier interface {
 	SetConnectionStatus(ctx context.Context, arg SetConnectionStatusParams) (BankConnection, error)
 	SetConsentNotice(ctx context.Context, arg SetConsentNoticeParams) error
 	SetNextSync(ctx context.Context, arg SetNextSyncParams) error
+	// A history read starts for a live connection. A newer one replaces one
+	// still under way, whose result is then not recorded (history_started_at
+	// names the read).
+	StartHistoryRead(ctx context.Context, arg StartHistoryReadParams) (BankConnection, error)
 	// Counts one read without the owner present on day, unless max were
 	// already made that day (no row).
 	TakeUnattendedRead(ctx context.Context, arg TakeUnattendedReadParams) (int32, error)

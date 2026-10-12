@@ -268,3 +268,48 @@ func TestConsentFailuresOverHTTP(t *testing.T) {
 		t.Fatal("the code or state was logged")
 	}
 }
+
+func TestTheHistoryReadIsListed(t *testing.T) {
+	h := testsupport.New(t, testsupport.WithHistory)
+	app := newApp(h.Service)
+	type listed struct {
+		Schedule struct{ HistoryDays int }
+		Items    []struct {
+			TransactionsSince *string
+			HistoryRead       *struct {
+				Status       string
+				StartedAt    time.Time
+				FinishedAt   *time.Time
+				Transactions int
+				Error        *string
+			}
+		}
+	}
+	list := func() listed {
+		t.Helper()
+		got := send(t, app, http.MethodGet, "/v1/connections", "", nil)
+		var parsed listed
+		if err := json.Unmarshal([]byte(got.raw), &parsed); err != nil || got.status != http.StatusOK {
+			t.Fatalf("list = %d %s", got.status, got.raw)
+		}
+		return parsed
+	}
+	if got := list(); got.Schedule.HistoryDays != 730 || len(got.Items) != 0 {
+		t.Fatalf("before connecting: %+v", got)
+	}
+	state := h.Authorize()
+	got := send(t, app, http.MethodPost, "/v1/connections", `{"code":"`+h.Bank.Approve(state)+`","state":"`+state+`"}`, owner)
+	if got.status != http.StatusOK || !strings.Contains(got.raw, `"status":"running"`) || !strings.Contains(got.raw, `"transactionsSince":"2026-08-01"`) {
+		t.Fatalf("connect = %d %s", got.status, got.raw)
+	}
+	h.Service.WaitHistory()
+	item := list().Items[0]
+	if item.TransactionsSince == nil || *item.TransactionsSince != "2026-06-01" || item.HistoryRead == nil || item.HistoryRead.Status != "completed" ||
+		!item.HistoryRead.StartedAt.Equal(testsupport.Start) || item.HistoryRead.FinishedAt == nil || item.HistoryRead.Transactions != 1 || item.HistoryRead.Error != nil {
+		t.Fatalf("listed = %+v %+v", item, item.HistoryRead)
+	}
+	off := send(t, newApp(testsupport.New(t).Service), http.MethodGet, "/v1/connections", "", nil)
+	if !strings.Contains(off.raw, `"historyDays":0`) {
+		t.Fatalf("history off = %s", off.raw)
+	}
+}

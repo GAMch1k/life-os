@@ -10,10 +10,12 @@ import (
 
 // Run checks the connections every tick until ctx ends: consent reminders
 // and expiry, archives Finance still owes, and the syncs that are due.
+// First it marks history reads a stopped process left running as failed.
 func (s *Service) Run(ctx context.Context, tick time.Duration) {
 	if tick <= 0 {
 		tick = time.Minute
 	}
+	s.failInterruptedHistory(ctx)
 	timer := time.NewTimer(5 * time.Second)
 	defer timer.Stop()
 	for {

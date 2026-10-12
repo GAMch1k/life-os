@@ -1,6 +1,7 @@
 // Package fakebank is an in-memory Enable Banking API for tests. It checks
 // every request's JWT against a test key, serves one bank with its accounts,
-// balances, and transactions (paged), and can fail requests on demand.
+// balances, and transactions (paged, with a limited history and the
+// "longest" strategy), and can fail requests on demand.
 // It never talks to the real API.
 package fakebank
 
@@ -67,6 +68,7 @@ type Request struct {
 
 type failure struct {
 	method, prefix string
+	match          func(Request) bool
 	status         int
 	code           string
 	times          int
@@ -76,8 +78,13 @@ type session struct {
 	id         string
 	status     string
 	validUntil time.Time
+	created    time.Time
 	uids       map[string]int // uid -> account index
 }
+
+// FreeDays is how far back a bank serves transactions without a fresh
+// login (PSD2: 90 days).
+const FreeDays = 90
 
 // Server is the fake API.
 type Server struct {
@@ -92,7 +99,12 @@ type Server struct {
 	Accounts    []Account
 	PageSize    int
 	EarliestDay string // date_from before it is WRONG_TRANSACTIONS_PERIOD (default strategy)
-	Now         func() time.Time
+	// HistoryAfterLogin, when set, is how long after the consent (the
+	// session's creation) the bank serves transactions older than FreeDays,
+	// as PSD2 lets it: later, such a date_from is WRONG_TRANSACTIONS_PERIOD
+	// and "longest" serves FreeDays only.
+	HistoryAfterLogin time.Duration
+	Now               func() time.Time
 
 	requests []Request
 	auths    map[string]map[string]any // state -> /auth body
@@ -119,6 +131,21 @@ func (s *Server) Fail(method, prefix string, status int, code string, times int)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.failures = append(s.failures, &failure{method: method, prefix: prefix, status: status, code: code, times: times})
+}
+
+// FailIf makes the next times requests match accepts answer status with the
+// API error code.
+func (s *Server) FailIf(match func(Request) bool, status int, code string, times int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.failures = append(s.failures, &failure{match: match, status: status, code: code, times: times})
+}
+
+// IsHistoryRead reports whether a request reads transactions from more than
+// FreeDays before now: the history read after a login.
+func (s *Server) IsHistoryRead(request Request) bool {
+	return strings.HasSuffix(request.Path, "/transactions") && request.Query.Get("date_from") != "" &&
+		request.Query.Get("date_from") < s.Now().UTC().AddDate(0, 0, -FreeDays).Format(time.DateOnly)
 }
 
 // Requests returns the requests received so far.
@@ -214,7 +241,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, f := range s.failures {
-		if f.times > 0 && (f.method == "" || f.method == r.Method) && strings.HasPrefix(r.URL.Path, f.prefix) {
+		matched := f.match != nil && f.match(recorded) ||
+			f.match == nil && (f.method == "" || f.method == r.Method) && strings.HasPrefix(r.URL.Path, f.prefix)
+		if f.times > 0 && matched {
 			f.times--
 			writeError(w, f.status, f.code, "Injected failure")
 			return
@@ -334,7 +363,7 @@ func (s *Server) createSession(w http.ResponseWriter, body map[string]any) {
 	access, _ := s.auths[state]["access"].(map[string]any)
 	validUntil, _ := time.Parse(time.RFC3339, fmt.Sprint(access["valid_until"]))
 	s.seq++
-	sess := &session{id: fmt.Sprintf("00000000-0000-4000-8000-%012d", s.seq), status: "AUTHORIZED", validUntil: validUntil, uids: map[string]int{}}
+	sess := &session{id: fmt.Sprintf("00000000-0000-4000-8000-%012d", s.seq), status: "AUTHORIZED", validUntil: validUntil, created: s.Now(), uids: map[string]int{}}
 	accounts := []map[string]any{}
 	for index, account := range s.Accounts {
 		s.seq++
@@ -410,20 +439,26 @@ func (s *Server) account(w http.ResponseWriter, r *http.Request, parts []string)
 	case "balances":
 		writeJSON(w, map[string]any{"balances": account.Balances})
 	case "transactions":
-		s.transactions(w, r.URL.Query(), account)
+		s.transactions(w, r.URL.Query(), account, sess)
 	default:
 		writeError(w, http.StatusNotFound, "", "Not found")
 	}
 }
 
-func (s *Server) transactions(w http.ResponseWriter, query url.Values, account Account) {
+func (s *Server) transactions(w http.ResponseWriter, query url.Values, account Account, sess *session) {
 	from, to, strategy := query.Get("date_from"), query.Get("date_to"), query.Get("strategy")
+	earliest := s.EarliestDay
+	if s.HistoryAfterLogin > 0 && s.Now().Sub(sess.created) > s.HistoryAfterLogin {
+		if free := s.Now().UTC().AddDate(0, 0, -FreeDays).Format(time.DateOnly); free > earliest {
+			earliest = free
+		}
+	}
 	if strategy == "longest" {
 		to = ""
-		if s.EarliestDay != "" && from < s.EarliestDay {
-			from = s.EarliestDay
+		if earliest != "" && from < earliest {
+			from = earliest
 		}
-	} else if s.EarliestDay != "" && from != "" && from < s.EarliestDay {
+	} else if earliest != "" && from != "" && from < earliest {
 		writeError(w, http.StatusUnprocessableEntity, "WRONG_TRANSACTIONS_PERIOD", "Wrong transactions period requested")
 		return
 	}

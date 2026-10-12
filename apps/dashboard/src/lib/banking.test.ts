@@ -3,13 +3,17 @@ import test from "node:test";
 
 import {
   accountLabel,
+  bankDate,
   bankFailure,
   bankState,
   callbackStep,
   consentText,
+  historySpan,
+  historyText,
   liveConnection,
   needsReconnect,
   nextSyncText,
+  sinceText,
   syncNowState,
   syncText,
   withoutBankParam,
@@ -59,6 +63,8 @@ const connection = (
   unattendedReadsToday: 1,
   manualSyncAvailableAt: null,
   waitingForFinance: false,
+  transactionsSince: "2026-07-14",
+  historyRead: null,
   connectedAt: "2026-10-10T08:00:00Z",
   disconnectedAt: null,
   createdAt: "2026-10-10T08:00:00Z",
@@ -74,6 +80,7 @@ const list = (items: BankConnection[]): BankConnectionList => ({
     timeZone,
     unattendedPerDay: 4,
     manualSyncMinutes: 10,
+    historyDays: 730,
   },
   items,
   nextCursor: null,
@@ -353,5 +360,82 @@ test("the connected marker is dropped once shown", () => {
   assert.equal(
     withoutBankParam("?month=2026-10&bank=connected"),
     "?month=2026-10",
+  );
+});
+
+test("the card says how far back the transactions go", () => {
+  assert.equal(sinceText(connection()), "Transactions since 14 Jul 2026");
+  assert.equal(sinceText(connection({ transactionsSince: null })), undefined);
+  // A calendar day, whatever the timezone.
+  assert.equal(bankDate("2024-10-12"), "12 Oct 2024");
+  assert.equal(bankDate("not a day"), "not a day");
+  assert.equal(historySpan(730), "2 years");
+  assert.equal(historySpan(365), "1 year");
+  assert.equal(historySpan(400), "400 days");
+});
+
+test("the history read after a bank login is described", () => {
+  assert.equal(historyText(connection(), timeZone), undefined);
+  const read = {
+    status: "running" as const,
+    startedAt: "2026-10-10T08:00:00Z",
+    finishedAt: null,
+    transactions: 0,
+    error: null,
+  };
+  assert.deepEqual(historyText(connection({ historyRead: read }), timeZone), {
+    text: "Loading older history from Deutsche Bank…",
+    running: true,
+    failing: false,
+  });
+  assert.deepEqual(
+    historyText(
+      connection({
+        historyRead: {
+          ...read,
+          status: "completed",
+          finishedAt: "2026-10-10T08:03:00Z",
+          transactions: 1204,
+        },
+      }),
+      timeZone,
+    ),
+    {
+      text: "Older history loaded 10 Oct, 10:03 CEST · 1,204 transactions",
+      running: false,
+      failing: false,
+    },
+  );
+  assert.equal(
+    historyText(
+      connection({
+        historyRead: {
+          ...read,
+          status: "completed",
+          finishedAt: "2026-10-10T08:03:00Z",
+        },
+      }),
+      timeZone,
+    )?.text,
+    "Deutsche Bank shared no older transactions (10 Oct, 10:03 CEST)",
+  );
+  assert.deepEqual(
+    historyText(
+      connection({
+        historyRead: {
+          ...read,
+          status: "failed",
+          finishedAt: "2026-10-10T08:01:00Z",
+          error:
+            "Deutsche Bank did not share older transactions: Enable Banking answered 500 ASPSP_ERROR.",
+        },
+      }),
+      timeZone,
+    ),
+    {
+      text: "Deutsche Bank did not share older transactions: Enable Banking answered 500 ASPSP_ERROR.",
+      running: false,
+      failing: true,
+    },
   );
 });

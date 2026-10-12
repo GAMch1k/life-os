@@ -319,7 +319,7 @@ func (s *Service) push(ctx context.Context, conn store.BankConnection, read read
 	}
 	row, err := s.queries.RecordSyncSuccess(ctx, store.RecordSyncSuccessParams{
 		Now: timestamptz(now), NextSyncAt: timestamptz(s.opts.Schedule.Next(now)), LastCounts: rawCounts, SyncCursor: cursor,
-		MappingVersion: int32(read.Mapping), ID: conn.ID,
+		MappingVersion: int32(read.Mapping), EarliestBookingDate: dateOf(read.Earliest), ID: conn.ID,
 	})
 	if err != nil {
 		return conn, err
@@ -342,6 +342,16 @@ func (s *Service) push(ctx context.Context, conn store.BankConnection, read read
 		})
 	}
 	return row, nil
+}
+
+// dateOf is a YYYY-MM-DD date for the database; unset when empty or not a
+// date.
+func dateOf(day string) pgtype.Date {
+	parsed, err := time.Parse(time.DateOnly, day)
+	if err != nil {
+		return pgtype.Date{}
+	}
+	return pgtype.Date{Time: parsed, Valid: true}
 }
 
 func syncSummary(institution string, counts Counts) string {

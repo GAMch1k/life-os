@@ -12,6 +12,7 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/jackc/pgx/v5/pgtype"
+	openapi_types "github.com/oapi-codegen/runtime/types"
 
 	"github.com/GAMch1k/life-os/pkg/activity"
 	"github.com/GAMch1k/life-os/pkg/httpserver"
@@ -48,11 +49,15 @@ func (h *Handler) ListBankConnections(c fiber.Ctx) error {
 		return internal(err)
 	}
 	opts := h.service.Options()
+	historyDays := 0 // no history read reaches past the normal sync's window
+	if opts.HistoryDays > opts.InitialDays {
+		historyDays = opts.HistoryDays
+	}
 	list := generated.BankConnectionList{
 		Configured: h.service.Configured(), Items: make([]generated.BankConnection, 0, len(rows)),
 		Schedule: generated.BankSchedule{
 			Times: opts.Schedule.Times(), TimeZone: h.timeZone, UnattendedPerDay: opts.MaxUnattended,
-			ManualSyncMinutes: int(opts.ManualInterval / time.Minute),
+			ManualSyncMinutes: int(opts.ManualInterval / time.Minute), HistoryDays: historyDays,
 		},
 	}
 	if problem := h.service.SetupProblem(); problem != "" {
@@ -207,6 +212,19 @@ func (h *Handler) view(row store.BankConnection) generated.BankConnection {
 	}
 	if row.Status != banking.StatusPending && row.Status != banking.StatusConnected {
 		result.NextSyncAt = nil
+	}
+	if row.EarliestBookingDate.Valid {
+		result.TransactionsSince = &openapi_types.Date{Time: row.EarliestBookingDate.Time}
+	}
+	if row.HistoryStatus != nil && row.HistoryStartedAt.Valid {
+		read := generated.BankHistoryRead{
+			Status: generated.BankHistoryReadStatus(*row.HistoryStatus), StartedAt: row.HistoryStartedAt.Time.UTC(),
+			FinishedAt: optional(row.HistoryFinishedAt), Error: row.HistoryError,
+		}
+		if row.HistoryTransactions != nil {
+			read.Transactions = int(*row.HistoryTransactions)
+		}
+		result.HistoryRead = &read
 	}
 	return result
 }

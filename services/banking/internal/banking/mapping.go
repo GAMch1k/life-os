@@ -197,15 +197,17 @@ type accountData struct {
 
 // readResult is a sync read from the bank, ready for Finance: the import,
 // how many transactions were read and left out, the latest booking date of
-// a booked transaction (the next sync's cursor), and the MappingVersion of
-// a read of the whole InitialDays window (0 for a read since the cursor; an
-// import kept for Finance from before a mapping change has none).
+// a booked transaction (the next sync's cursor) and the earliest, and the
+// MappingVersion of a read of the whole InitialDays window (0 for a read
+// since the cursor; an import kept for Finance from before a mapping change
+// has none).
 type readResult struct {
-	Import  finance.Import `json:"import"`
-	Fetched int            `json:"fetched"`
-	Ignored int            `json:"ignored"`
-	Cursor  string         `json:"cursor,omitempty"`
-	Mapping int            `json:"mapping,omitempty"`
+	Import   finance.Import `json:"import"`
+	Fetched  int            `json:"fetched"`
+	Ignored  int            `json:"ignored"`
+	Cursor   string         `json:"cursor,omitempty"`
+	Earliest string         `json:"earliest,omitempty"`
+	Mapping  int            `json:"mapping,omitempty"`
 }
 
 // buildImport maps a sync read to Finance's bank import.
@@ -235,6 +237,9 @@ func buildImport(connectionID, institution string, window finance.Window, data [
 			}
 			if transaction.Status == "booked" && transaction.BookingDate > result.Cursor {
 				result.Cursor = transaction.BookingDate
+			}
+			if transaction.Status == "booked" && (result.Earliest == "" || transaction.BookingDate < result.Earliest) {
+				result.Earliest = transaction.BookingDate
 			}
 			hash := contentHash(account.Key, raw)
 			base := transactionRef(raw)

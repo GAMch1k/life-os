@@ -19,7 +19,7 @@ export interface paths {
         put?: never;
         /**
          * Complete a bank connection
-         * @description The callback exchange: the Dashboard's `/finance/bank/callback` posts the `code` and `state` the bank returned. The state must come from `authorizeBankConnection` in the last 10 minutes and is used once. Creates the connection, or renews the bank's live connection (a reconnect keeps its id and its Finance accounts), and runs the first sync at once (90 days back). A first sync that fails leaves the connection `pending` with `lastError`; it is retried automatically.
+         * @description The callback exchange: the Dashboard's `/finance/bank/callback` posts the `code` and `state` the bank returned. The state must come from `authorizeBankConnection` in the last 10 minutes and is used once. Creates the connection, or renews the bank's live connection (a reconnect keeps its id and its Finance accounts), and runs the first sync at once (90 days back). A first sync that fails leaves the connection `pending` with `lastError`; it is retried automatically. Made by the owner (actor `user` with the owner's address and browser), it then starts the history read in the background: the answer already shows `historyRead` as `running`.
          */
         post: operations["connectBankConnection"];
         delete?: never;
@@ -184,6 +184,13 @@ export interface components {
             manualSyncAvailableAt: string | null;
             /** @description A sync read from the bank waits for Finance and is sent again automatically. */
             waitingForFinance: boolean;
+            /**
+             * Format: date
+             * @description The earliest booking date of a booked transaction Finance took from this connection; null before the first one.
+             */
+            transactionsSince: string | null;
+            /** @description The last history read; null when none ran. */
+            historyRead: components["schemas"]["BankHistoryRead"] | null;
             /** Format: date-time */
             connectedAt: string | null;
             /** Format: date-time */
@@ -193,12 +200,28 @@ export interface components {
             /** Format: date-time */
             updatedAt: string;
         };
+        /** @description A history read after a bank login: `running`, `completed`, or `failed` (`error` says why in plain words; the connection and its normal syncs are not affected). `transactions` counts the older transactions Finance took from it so far. */
+        BankHistoryRead: {
+            /** @enum {string} */
+            status: "running" | "completed" | "failed";
+            /** Format: date-time */
+            startedAt: string;
+            /** Format: date-time */
+            finishedAt: string | null;
+            transactions: number;
+            error: string | null;
+        };
         BankSchedule: {
             times: string[];
             /** @example Europe/Berlin */
             timeZone: string;
             unattendedPerDay: number;
             manualSyncMinutes: number;
+            /**
+             * @description How far back the history read after a bank login asks, in days; 0 when there is none.
+             * @example 730
+             */
+            historyDays: number;
         };
         BankConsentFailure: {
             /** Format: date-time */

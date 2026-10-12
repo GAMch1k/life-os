@@ -18,7 +18,17 @@ const SCHEDULE = {
   timeZone: "Europe/Berlin",
   unattendedPerDay: 4,
   manualSyncMinutes: 10,
+  historyDays: 730,
 };
+
+/** The history read banking runs after a bank login, under way. */
+const historyRunning = () => ({
+  status: "running",
+  startedAt: new Date().toISOString(),
+  finishedAt: null,
+  transactions: 0,
+  error: null,
+});
 
 const connected = (extra: Partial<Connection> = {}): Connection => ({
   id: "7f8d2b1e-1c1a-4b7e-9a51-2f0c6d1e9a10",
@@ -56,6 +66,8 @@ const connected = (extra: Partial<Connection> = {}): Connection => ({
   unattendedReadsToday: 0,
   manualSyncAvailableAt: null,
   waitingForFinance: false,
+  transactionsSince: "2026-07-14",
+  historyRead: null,
   connectedAt: new Date().toISOString(),
   disconnectedAt: null,
   createdAt: new Date().toISOString(),
@@ -122,7 +134,9 @@ async function stubBanking(page: Page, baseURL: string) {
           400,
         );
       }
-      state.items = [connected()];
+      // Banking answers after the first sync, with the history read under
+      // way in the background.
+      state.items = [connected({ historyRead: historyRunning() })];
       return json(route, state.items[0]);
     }
     if (method === "POST" && path === "/v1/connections/consent-failure") {
@@ -273,6 +287,69 @@ test.describe("Bank connection", () => {
     await expect(card).toContainText(/Access ends in \d days/);
     await expect(card.getByRole("button", { name: "Reconnect" })).toBeVisible();
     await expect(card.getByRole("button", { name: "Sync now" })).toBeEnabled();
+  });
+
+  test("says how far back the transactions go and loads older history after a bank login", async ({
+    page,
+    baseURL,
+  }) => {
+    const bank = await stubBanking(page, baseURL!);
+    bank.items = [connected()];
+    await page.goto("/finance");
+    const card = bankCard(page);
+    await expect(card.getByTestId("bank-since")).toHaveText(
+      "Transactions since 14 Jul 2026",
+    );
+    await expect(card.getByTestId("bank-history")).toHaveCount(0);
+
+    // The action explains why first; "Not now" leaves everything as it was.
+    await card.getByRole("button", { name: "Load older history" }).click();
+    const help = card.getByTestId("bank-history-help");
+    await expect(help).toContainText(
+      "Deutsche Bank shares transactions older than 90 days only right after you log in at the bank.",
+    );
+    await expect(help).toContainText("up to 2 years of older history");
+    await card.getByRole("button", { name: "Not now" }).click();
+    await expect(help).toHaveCount(0);
+    expect(bank.connectBodies).toEqual([]);
+
+    // Then it reconnects: "the bank" → the callback → back on Finance.
+    await card.getByRole("button", { name: "Load older history" }).click();
+    await card.getByRole("button", { name: "Log in at Deutsche Bank" }).click();
+    await page.waitForURL(/\/finance$/);
+    expect(bank.connectBodies).toEqual([
+      { code: "fake-code", state: "fake-state" },
+    ]);
+    // Banking reads the history in the background: the card says so.
+    await expect(card.getByTestId("bank-history")).toHaveText(
+      "Loading older history from Deutsche Bank…",
+    );
+    await expect(
+      card.getByRole("button", { name: "Load older history" }),
+    ).toHaveCount(0);
+
+    // Done: the card checks on it by itself.
+    bank.items = [
+      connected({
+        transactionsSince: "2024-10-14",
+        historyRead: {
+          ...historyRunning(),
+          status: "completed",
+          finishedAt: new Date().toISOString(),
+          transactions: 1204,
+        },
+      }),
+    ];
+    await expect(card.getByTestId("bank-since")).toHaveText(
+      "Transactions since 14 Oct 2024",
+      { timeout: 20_000 },
+    );
+    await expect(card.getByTestId("bank-history")).toContainText(
+      /^Older history loaded .* · 1,204 transactions$/,
+    );
+    await expect(
+      card.getByRole("button", { name: "Load older history" }),
+    ).toBeVisible();
   });
 
   test("the callback explains a refusal, keeps it in banking, and drops the code from the address bar", async ({
