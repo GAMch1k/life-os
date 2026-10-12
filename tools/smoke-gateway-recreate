@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Proves the gateway follows a recreated service (BUG-37), on the disposable
+# verification stack only. Each service below is recreated, as a redeploy
+# does (a new container, normally with a new address), while the gateway is
+# left running; the gateway must reach the new container through its path
+# within 15 seconds (it re-resolves names every 10), without being
+# recreated or restarted. Before BUG-37 nginx resolved each name once, at
+# start, and kept sending a recreated service's traffic to its old address.
+#
+# Docker usually gives a recreated container another address. The script
+# recreates a service up to three times until it has one, so the run does
+# test re-resolution; if the address never changes it fails rather than pass
+# for the wrong reason.
+
+compose=(./tools/verify-compose)
+gateway=http://127.0.0.1:13001
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+cleanup() { "${compose[@]}" down --volumes --remove-orphans >/dev/null; }
+trap cleanup EXIT
+
+"${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
+"${compose[@]}" up --detach --no-build --scale processor=0 >/dev/null
+
+# Each service with its gateway path.
+services=(food:/api/food recipe-import:/api/integrations/recipe-import calendar:/api/calendar)
+
+ready() { curl --fail --silent --max-time 3 "$gateway$1/ready" >/dev/null; }
+address() { docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' "$("${compose[@]}" ps -q "$1")" | tr -s ' ' | sed 's/ $//'; }
+started() { docker inspect --format '{{.Id}} {{.State.StartedAt}}' "$("${compose[@]}" ps -q gateway)"; }
+
+for entry in "${services[@]}"; do
+  path=${entry#*:}
+  for _ in $(seq 1 90); do ready "$path" && break; sleep 1; done
+  ready "$path" || {
+    echo "gateway recreate smoke: ${entry%%:*} is not reachable through the gateway at all" >&2
+    exit 1
+  }
+done
+gateway_before=$(started)
+
+for entry in "${services[@]}"; do
+  service=${entry%%:*} path=${entry#*:}
+  before=$(address "$service")
+  after=$before
+  for _ in 1 2 3; do
+    "${compose[@]}" up --detach --no-build --no-deps --force-recreate "$service" >/dev/null 2>&1
+    after=$(address "$service")
+    [ "$after" != "$before" ] && break
+  done
+  [ "$after" != "$before" ] || {
+    echo "gateway recreate smoke: $service kept its address $before over three recreations, so this run cannot test re-resolution" >&2
+    exit 1
+  }
+  # The container's own readiness first, so its startup time is not blamed
+  # on the gateway.
+  for _ in $(seq 1 60); do
+    "${compose[@]}" exec -T gateway wget -q -O /dev/null "http://$service:8080/ready" 2>/dev/null && break
+    sleep 1
+  done
+  deadline=$(($(date +%s) + 15))
+  until ready "$path"; do
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      echo "gateway recreate smoke: $service moved from $before to $after and the gateway did not reach it within 15 s ($gateway$path/ready)" >&2
+      exit 1
+    fi
+    sleep 1
+  done
+  echo "$service: $before -> $after, reached through $path"
+done
+
+[ "$(started)" = "$gateway_before" ] || {
+  echo "gateway recreate smoke: the gateway was recreated or restarted during the run" >&2
+  exit 1
+}
+echo "gateway recreate smoke passed: recreated services are reached through the gateway without restarting it"
