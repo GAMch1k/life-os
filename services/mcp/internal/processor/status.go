@@ -32,6 +32,9 @@ type Status struct {
 	Codex     CodexStatus        `json:"codex"`
 	Usage     UsageStatus        `json:"usage"`
 	Runtime   AgentRuntimeStatus `json:"runtime"`
+	// Ideas is the recipe ideas job: when it runs next and what the last
+	// run did; absent when the job is not configured.
+	Ideas *IdeasStatus `json:"ideas,omitempty"`
 }
 
 // AgentRuntimeStatus describes the Codex runtime: its configuration, the run
@@ -205,6 +208,13 @@ func (m *Monitor) SetTimeZone(name string) {
 	m.status.TimeZone = name
 }
 
+// SetIdeas records the recipe ideas job's status.
+func (m *Monitor) SetIdeas(status IdeasStatus) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.status.Ideas = &status
+}
+
 // RecordTokens adds one planning run's token usage.
 func (m *Monitor) RecordTokens(usage TokenUsage) {
 	m.mu.Lock()
@@ -334,3 +344,30 @@ func (p monitoredPlanner) Plan(ctx context.Context, content string) (string, err
 	}
 	return out, err
 }
+
+// MonitoredIdeas records the ideas job's Codex runs like planning runs: their
+// outcome in the Codex state (a usage limit hit by the job shows) and their
+// token usage.
+func (m *Monitor) MonitoredIdeas(g ideaGenerator) ideaGenerator {
+	return monitoredIdeas{inner: g, monitor: m}
+}
+
+type monitoredIdeas struct {
+	inner   ideaGenerator
+	monitor *Monitor
+}
+
+func (g monitoredIdeas) Ideas(ctx context.Context, prompt, schema, webSearch string) (string, error) {
+	out, err := g.inner.Ideas(WithRunObserver(ctx, tokenCounter{monitor: g.monitor}), prompt, schema, webSearch)
+	if ctx.Err() == nil {
+		g.monitor.RecordPlan(err)
+	}
+	return out, err
+}
+
+// tokenCounter observes a Codex run only for its token usage.
+type tokenCounter struct{ monitor *Monitor }
+
+func (tokenCounter) Spawned()                  {}
+func (tokenCounter) Session(string)            {}
+func (c tokenCounter) Tokens(usage TokenUsage) { c.monitor.RecordTokens(usage) }

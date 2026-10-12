@@ -32,6 +32,14 @@ type Config struct {
 	// as Europe/Berlin). Relative dates and clock times in captures are
 	// interpreted in it. Unset or unknown means UTC.
 	TimeZone *time.Location
+	// IdeasAt is the minute of the owner's day the daily recipe ideas run is
+	// due (LIFE_OS_IDEAS_TIME, HH:MM, default 16:00); -1 turns it off
+	// ("off"). The owner can still ask for ideas.
+	IdeasAt int
+	// IdeasWebSearch is Codex's web_search mode for the ideas job alone
+	// (LIFE_OS_IDEAS_WEB_SEARCH: disabled, the default, cached, or live).
+	// Capture planning never searches.
+	IdeasWebSearch string
 	// Warnings are non-fatal configuration problems to log at startup.
 	Warnings []string
 }
@@ -74,7 +82,26 @@ func LoadConfig() (Config, error) {
 	if c.TimeZone, err = OwnerTimeZone(os.Getenv("LIFE_OS_TIMEZONE")); err != nil {
 		c.Warnings = append(c.Warnings, err.Error()+"; using UTC")
 	}
+	if c.IdeasAt, err = ideasTime(env("LIFE_OS_IDEAS_TIME", "16:00")); err != nil {
+		return c, err
+	}
+	c.IdeasWebSearch = env("LIFE_OS_IDEAS_WEB_SEARCH", WebSearchDisabled)
+	if c.IdeasWebSearch != WebSearchDisabled && c.IdeasWebSearch != WebSearchCached && c.IdeasWebSearch != WebSearchLive {
+		return c, fmt.Errorf("LIFE_OS_IDEAS_WEB_SEARCH must be disabled, cached, or live")
+	}
 	return c, nil
+}
+
+// ideasTime reads LIFE_OS_IDEAS_TIME: HH:MM on the owner's clock, or off.
+func ideasTime(value string) (int, error) {
+	if strings.TrimSpace(value) == "off" {
+		return -1, nil
+	}
+	at, err := time.Parse("15:04", strings.TrimSpace(value))
+	if err != nil {
+		return 0, fmt.Errorf("LIFE_OS_IDEAS_TIME must be HH:MM, such as 16:00, or off")
+	}
+	return at.Hour()*60 + at.Minute(), nil
 }
 
 // OwnerTimeZone resolves LIFE_OS_TIMEZONE. Unset means UTC. An unknown name
