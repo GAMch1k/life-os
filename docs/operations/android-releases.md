@@ -36,7 +36,7 @@ The gateway must be recreated for the new mount (a reload does not add mounts) a
 ## Publishing
 
 ```sh
-tools/publish-android-release ~/life-os-app/build/release --notes "Tasks open from notifications"
+tools/publish-android-release ~/life-os-app/dist --notes "Tasks open from notifications"
 ```
 
 Before it changes anything, the script checks:
@@ -60,12 +60,16 @@ The APKs go in before the manifest, so the manifest never names a file that is n
 
 A small contract between the app repository's build and the publish script. One object per app, under `phone` and `wear` (either may be missing; both may also sit under a top-level `apps`):
 
+What `tools/build` in `~/life-os-app` writes (`dist/release.json`):
+
 ```json
-{
-  "phone": {"versionCode": 3, "versionName": "0.1.2", "minSdk": 34, "sha256": "9f2c…", "size": 18234567, "builtAt": "2026-10-12T10:00:00Z", "commit": "0123abc"},
-  "wear": {"versionCode": 3, "versionName": "0.1.2", "minSdk": 30, "sha256": "41d0…", "size": 7345678, "builtAt": "2026-10-12T10:00:00Z", "commit": "0123abc"}
-}
+{"schema": 1, "apps": {
+  "phone": {"file": "lifeos-phone-0.3.0-3.apk", "applicationId": "com.gamch1k.lifeos", "versionCode": 3, "versionName": "0.3.0", "minSdk": 34, "sha256": "acfd…", "size": 12085080, "builtAt": "2026-10-12T19:40:00Z", "gitCommit": "b18a6d1…"},
+  "wear": {"file": "lifeos-wear-0.3.0-3.apk", "applicationId": "com.gamch1k.lifeos", "versionCode": 3, "versionName": "0.3.0", "minSdk": 33, "sha256": "b684…", "size": 15829290, "builtAt": "2026-10-12T19:40:00Z", "gitCommit": "b18a6d1…"}
+}}
 ```
+
+The script reads `gitCommit` as `commit` (either name works) and ignores `schema`, `file`, and `applicationId`; the APK files are found by their versioned names.
 
 | Field         | Required | Form                                                                                                     |
 | ------------- | -------- | -------------------------------------------------------------------------------------------------------- |

@@ -85,7 +85,7 @@ A channel implements `Name()` and `Send(ctx, notification) error` (`services/not
 
 - Empty (the default): notifications are stored and listed in the Dashboard, and their `deliveries` are empty.
 - `ntfy` pushes each notification to the owner's Android phone through the self-hosted ntfy server (below).
-- `webpush` pushes each notification to every subscribed device through its push service ([web push](#web-push)). It needs the VAPID keys. Nothing subscribes yet: the Dashboard has no browser notifications (the owner's decision, 2026-10-12), and the planned Android app (P18-05) will register its endpoint through `POST /v1/push/subscriptions`. The deployment lists only `ntfy`.
+- `webpush` pushes each notification to every subscribed device through its push service ([web push](#web-push)). It needs the VAPID keys. The Dashboard has no browser notifications (the owner's decision, 2026-10-12); the subscriber is the Android app (P18-05, from 0.3.0), which registers its UnifiedPush endpoint through `POST /v1/push/subscriptions`.
 - `log` writes each delivery's metadata (never the body) to the service log. It is for development and verification of the delivery path.
 
 The deployment uses `LIFE_OS_NOTIFICATIONS_CHANNELS=ntfy,webpush`: both reach the phone, so a network that blocks one (a work Wi-Fi that resets the TLS handshake to `ntfy.gamch1k.com`) still lets the other through.
