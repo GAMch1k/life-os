@@ -31,6 +31,28 @@ type Account struct {
 	SyncedAt              pgtype.Timestamptz
 }
 
+type AiBudgetPlan struct {
+	ID               pgtype.UUID
+	Month            pgtype.Date
+	Currency         string
+	SavingsGoalMinor *int64
+	Trigger          string
+	State            string
+	RequestedByKind  string
+	RequestedByName  *string
+	Attempts         int32
+	ClaimedAt        pgtype.Timestamptz
+	RetryAt          pgtype.Timestamptz
+	Error            *string
+	Result           []byte
+	FinishedAt       pgtype.Timestamptz
+	Applied          []byte
+	AppliedAt        pgtype.Timestamptz
+	DismissedAt      pgtype.Timestamptz
+	CreatedAt        pgtype.Timestamptz
+	UpdatedAt        pgtype.Timestamptz
+}
+
 type AlertNotification struct {
 	DedupeKey string
 	ClaimedAt pgtype.Timestamptz

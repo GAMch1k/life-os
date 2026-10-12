@@ -47,6 +47,13 @@ const (
 	budgetSaved         = "finance.budget.saved"
 	budgetReset         = "finance.budget.reset"
 	budgetDefaultsAdded = "finance.budget_defaults.added"
+	// AI budget plans: asked for, made by the AI, failed for good, applied
+	// by the owner, and dismissed; counts and amounts only.
+	aiBudgetPlanRequested = "finance.ai_budget_plan.requested"
+	aiBudgetPlanCreated   = "finance.ai_budget_plan.created"
+	aiBudgetPlanFailed    = "finance.ai_budget_plan.failed"
+	aiBudgetPlanApplied   = "finance.ai_budget_plan.applied"
+	aiBudgetPlanDismissed = "finance.ai_budget_plan.dismissed"
 	// Subscriptions the owner changes, and the alert settings. Detection's
 	// own suggestions are not recorded.
 	subscriptionCreated   = "finance.subscription.created"

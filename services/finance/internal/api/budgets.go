@@ -134,11 +134,8 @@ func (h *Handler) SaveBudgetPlan(c fiber.Ctx, month generated.Month) error {
 			return invalid(name + " is required")
 		}
 	}
-	scope := budget.ScopeMonth
 	switch body.Scope {
-	case generated.BudgetScopeMonth:
-	case generated.BudgetScopeFollowing:
-		scope = budget.ScopeRegular
+	case generated.BudgetScopeMonth, generated.BudgetScopeFollowing:
 	default:
 		return invalid("scope must be month or following")
 	}
@@ -160,75 +157,14 @@ func (h *Handler) SaveBudgetPlan(c fiber.Ctx, month generated.Month) error {
 		lines[id] = line.AmountMinor
 	}
 	ctx := c.Context()
-	change := planChange{month: parsed, scope: string(body.Scope)}
-	changed := false
-	var view generated.BudgetMonth
+	var (
+		change  planChange
+		changed bool
+		view    generated.BudgetMonth
+	)
 	err = h.inTx(ctx, func(q *store.Queries) error {
-		if err := q.LockBudgetPlans(ctx); err != nil {
-			return err
-		}
-		for id, amount := range lines {
-			category, err := q.GetFinancialCategory(ctx, pgtype.UUID{Bytes: id, Valid: true})
-			if errors.Is(err, pgx.ErrNoRows) {
-				return apiError(fiber.StatusBadRequest, "unknown_category", "categoryId "+googleuuid.UUID(id).String()+" is not a Finance category")
-			}
-			if err != nil {
-				return err
-			}
-			if category.Kind != budget.KindExpense {
-				return invalid("the category " + category.Name + " is not an expense category")
-			}
-			if amount == 0 {
-				delete(lines, id)
-			}
-		}
-		for _, amount := range lines {
-			change.planned += amount
-		}
-		change.categories = len(lines)
-		before, err := budgetPlanState(ctx, q, parsed, scope)
-		if err != nil {
-			return err
-		}
-		if scope == budget.ScopeRegular {
-			removed, err := q.DeleteLaterBudgetPlans(ctx, budget.Date(parsed))
-			if err != nil {
-				return err
-			}
-			for _, row := range removed {
-				if row.Scope == budget.ScopeMonth && !row.Month.Time.Equal(parsed) {
-					change.replacedMonths++
-				}
-			}
-			// The month's own plan gives way to the regular plan too.
-			changed = len(removed) > 0
-		}
-		if before == nil || before.plan.Currency != h.defaultCurrency || before.plan.ExpectedIncomeMinor != body.ExpectedIncomeMinor ||
-			before.plan.SavingsGoalMinor != body.SavingsGoalMinor || !maps.Equal(before.lines, lines) {
-			changed = true
-		}
-		if !changed {
-			change.plan = before.plan
-		} else {
-			if change.plan, err = q.UpsertBudgetPlan(ctx, store.UpsertBudgetPlanParams{Month: budget.Date(parsed), Scope: scope, Currency: h.defaultCurrency,
-				ExpectedIncomeMinor: body.ExpectedIncomeMinor, SavingsGoalMinor: body.SavingsGoalMinor}); err != nil {
-				return err
-			}
-			if err := q.DeleteBudgetPlanLines(ctx, change.plan.ID); err != nil {
-				return err
-			}
-			insert := store.InsertBudgetPlanLinesParams{PlanID: change.plan.ID, CategoryIds: make([]pgtype.UUID, 0, len(lines)), Amounts: make([]int64, 0, len(lines))}
-			for id, amount := range lines {
-				insert.CategoryIds = append(insert.CategoryIds, pgtype.UUID{Bytes: id, Valid: true})
-				insert.Amounts = append(insert.Amounts, amount)
-			}
-			if len(lines) > 0 {
-				if err := q.InsertBudgetPlanLines(ctx, insert); err != nil {
-					return err
-				}
-			}
-		}
-		view, err = h.budgetView(ctx, q, parsed)
+		var err error
+		change, changed, view, err = h.savePlan(ctx, q, parsed, body.Scope, body.ExpectedIncomeMinor, body.SavingsGoalMinor, lines)
 		return err
 	})
 	if err != nil {
@@ -239,6 +175,87 @@ func (h *Handler) SaveBudgetPlan(c fiber.Ctx, month generated.Month) error {
 		h.budgetChanged()
 	}
 	return c.JSON(view)
+}
+
+// savePlan saves a month's plan in q's database transaction: the budget's
+// one write, for the plan editor and for an AI plan the owner applies.
+// lines are amounts per expense category (0 leaves one out). It answers
+// what changed (for Activity), whether anything did, and the month's
+// budget.
+func (h *Handler) savePlan(ctx context.Context, q *store.Queries, month time.Time, apiScope generated.BudgetScope, income, goal int64,
+	lines map[[16]byte]int64) (change planChange, changed bool, view generated.BudgetMonth, err error) {
+	scope := budget.ScopeMonth
+	if apiScope == generated.BudgetScopeFollowing {
+		scope = budget.ScopeRegular
+	}
+	lines = maps.Clone(lines)
+	change = planChange{month: month, scope: string(apiScope)}
+	if err = q.LockBudgetPlans(ctx); err != nil {
+		return change, false, view, err
+	}
+	for id, amount := range lines {
+		category, err := q.GetFinancialCategory(ctx, pgtype.UUID{Bytes: id, Valid: true})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return change, false, view, apiError(fiber.StatusBadRequest, "unknown_category", "categoryId "+googleuuid.UUID(id).String()+" is not a Finance category")
+		}
+		if err != nil {
+			return change, false, view, err
+		}
+		if category.Kind != budget.KindExpense {
+			return change, false, view, invalid("the category " + category.Name + " is not an expense category")
+		}
+		if amount == 0 {
+			delete(lines, id)
+		}
+	}
+	for _, amount := range lines {
+		change.planned += amount
+	}
+	change.categories = len(lines)
+	before, err := budgetPlanState(ctx, q, month, scope)
+	if err != nil {
+		return change, false, view, err
+	}
+	if scope == budget.ScopeRegular {
+		removed, err := q.DeleteLaterBudgetPlans(ctx, budget.Date(month))
+		if err != nil {
+			return change, false, view, err
+		}
+		for _, row := range removed {
+			if row.Scope == budget.ScopeMonth && !row.Month.Time.Equal(month) {
+				change.replacedMonths++
+			}
+		}
+		// The month's own plan gives way to the regular plan too.
+		changed = len(removed) > 0
+	}
+	if before == nil || before.plan.Currency != h.defaultCurrency || before.plan.ExpectedIncomeMinor != income ||
+		before.plan.SavingsGoalMinor != goal || !maps.Equal(before.lines, lines) {
+		changed = true
+	}
+	if !changed {
+		change.plan = before.plan
+	} else {
+		if change.plan, err = q.UpsertBudgetPlan(ctx, store.UpsertBudgetPlanParams{Month: budget.Date(month), Scope: scope, Currency: h.defaultCurrency,
+			ExpectedIncomeMinor: income, SavingsGoalMinor: goal}); err != nil {
+			return change, false, view, err
+		}
+		if err = q.DeleteBudgetPlanLines(ctx, change.plan.ID); err != nil {
+			return change, false, view, err
+		}
+		insert := store.InsertBudgetPlanLinesParams{PlanID: change.plan.ID, CategoryIds: make([]pgtype.UUID, 0, len(lines)), Amounts: make([]int64, 0, len(lines))}
+		for id, amount := range lines {
+			insert.CategoryIds = append(insert.CategoryIds, pgtype.UUID{Bytes: id, Valid: true})
+			insert.Amounts = append(insert.Amounts, amount)
+		}
+		if len(lines) > 0 {
+			if err = q.InsertBudgetPlanLines(ctx, insert); err != nil {
+				return change, false, view, err
+			}
+		}
+	}
+	view, err = h.budgetView(ctx, q, month)
+	return change, changed, view, err
 }
 
 type planState struct {
