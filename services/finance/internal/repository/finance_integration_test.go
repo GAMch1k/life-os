@@ -351,3 +351,46 @@ func TestAICategoriesMigrationRollsBackAndForwardKeepingCategories(t *testing.T)
 	testdb.Apply(t, pool, testdb.Migration(t, "000008", "up"))
 	exec(`UPDATE transactions SET categorized_by = 'ai', ai_reviewed_at = now()`)
 }
+
+func TestAIBudgetPlansMigrationRollsBackAndForward(t *testing.T) {
+	pool := testdb.Open(t, "000008")
+	ctx := context.Background()
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := pool.Exec(ctx, sql, args...); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	exec(`INSERT INTO financial_categories (name, kind) VALUES ('Eating out', 'expense')`)
+	exec(`INSERT INTO budget_plans (month, scope, currency) VALUES ('2026-11-01', 'month', 'EUR')`)
+	exec(`INSERT INTO budget_plan_lines (plan_id, category_id, amount_minor) SELECT p.id, c.id, 9000 FROM budget_plans p, financial_categories c`)
+
+	testdb.Apply(t, pool, testdb.Migration(t, "000009", "up"))
+	exec(`INSERT INTO ai_budget_plans (month, currency, trigger, requested_by_kind) VALUES ('2026-11-01', 'EUR', 'request', 'user')`)
+	exec(`INSERT INTO ai_budget_plans (month, currency, trigger, requested_by_kind, requested_by_name, state, result, applied)
+	      VALUES ('2026-11-01', 'EUR', 'schedule', 'agent', 'codex-budget-plan', 'applied', '{}', '{}')`)
+	for _, bad := range []string{
+		// A month is its first day; a ready plan has its proposal and an
+		// applied one what was applied; one scheduled plan a month.
+		`INSERT INTO ai_budget_plans (month, currency, trigger, requested_by_kind) VALUES ('2026-11-02', 'EUR', 'request', 'user')`,
+		`INSERT INTO ai_budget_plans (month, currency, trigger, requested_by_kind, state) VALUES ('2026-11-01', 'EUR', 'request', 'user', 'ready')`,
+		`INSERT INTO ai_budget_plans (month, currency, trigger, requested_by_kind, state, result) VALUES ('2026-11-01', 'EUR', 'request', 'user', 'applied', '{}')`,
+		`INSERT INTO ai_budget_plans (month, currency, trigger, requested_by_kind) VALUES ('2026-11-01', 'EUR', 'schedule', 'system')`,
+		`INSERT INTO ai_budget_plans (month, currency, trigger, requested_by_kind) VALUES ('2026-11-01', 'EUR', 'whim', 'user')`,
+		`INSERT INTO ai_budget_plans (month, currency, trigger, requested_by_kind, state) VALUES ('2026-11-01', 'EUR', 'request', 'user', 'thinking')`,
+		`INSERT INTO ai_budget_plans (month, currency, trigger, requested_by_kind, savings_goal_minor) VALUES ('2026-11-01', 'EUR', 'request', 'user', -1)`,
+	} {
+		if _, err := pool.Exec(ctx, bad); err == nil {
+			t.Fatalf("accepted: %s", bad)
+		}
+	}
+
+	testdb.Apply(t, pool, testdb.Migration(t, "000009", "down"))
+	var tables, lines int
+	if err := pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'ai_budget_plans'),
+	      (SELECT count(*) FROM budget_plan_lines)`).Scan(&tables, &lines); err != nil || tables != 0 || lines != 1 {
+		t.Fatalf("after rollback: %d tables, %d plan lines, %v", tables, lines, err)
+	}
+	testdb.Apply(t, pool, testdb.Migration(t, "000009", "up"))
+	exec(`INSERT INTO ai_budget_plans (month, currency, trigger, requested_by_kind) VALUES ('2026-12-01', 'EUR', 'schedule', 'agent')`)
+}

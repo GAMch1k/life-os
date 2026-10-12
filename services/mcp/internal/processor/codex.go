@@ -196,6 +196,13 @@ func (c CodexCLI) Categories(ctx context.Context, prompt, schema string) (string
 	return c.run(ctx, runSpec{schema: schema, webSearch: WebSearchDisabled, prompt: func(CodexCLI) string { return prompt }})
 }
 
+// BudgetPlan asks for a month's budget plan (the AI budget plan job): the
+// prompt as given and the final message shaped by the JSON schema. It never
+// searches the web.
+func (c CodexCLI) BudgetPlan(ctx context.Context, prompt, schema string) (string, error) {
+	return c.run(ctx, runSpec{schema: schema, webSearch: WebSearchDisabled, prompt: func(CodexCLI) string { return prompt }})
+}
+
 // Codex's web_search modes the processor uses. Capture planning always
 // runs with search disabled; the ideas job runs with LIFE_OS_IDEAS_WEB_SEARCH.
 const (

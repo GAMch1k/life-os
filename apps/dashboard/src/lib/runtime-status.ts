@@ -32,6 +32,7 @@ import {
   expiringSoon,
 } from "@/lib/banking";
 import { formatBinaryBytes } from "@/lib/format-bytes";
+import { monthLabel } from "@/lib/finance-summary";
 import { formatUsage } from "@/lib/format-usage";
 import { downsampleMax, downsampleMin, type SparkPoint } from "@/lib/sparkline";
 import { DEFAULT_TIME_ZONE, dateTimeFormat } from "@/lib/time-zone";
@@ -158,6 +159,34 @@ export type ProcessorStatus = {
       rejected: number;
       chosenMeanwhile: number;
       outcome: string;
+      error?: string;
+    } | null;
+  };
+  /** The AI budget plan job (see docs/services/mcp.md#ai-budget-plans). */
+  budgetPlans?: {
+    /** LIFE_OS_AI_BUDGET_PLANS. */
+    enabled: boolean;
+    /** LIFE_OS_AI_BUDGET_PLAN_MONTHLY: the plan on the 1st of each month. */
+    monthly: boolean;
+    running: boolean;
+    /** Null when the job is off. */
+    nextCheckAt: string | null;
+    /** The next 1st-of-month run; null when it or the job is off. */
+    nextMonthlyAt: string | null;
+    /** Plans waiting at the last check; null before it. */
+    waiting: number | null;
+    lastCheckAt: string | null;
+    lastRun: {
+      planId: string;
+      /** YYYY-MM. */
+      month: string;
+      trigger: "request" | "schedule";
+      startedAt: string;
+      finishedAt: string;
+      attempt: number;
+      outcome: "ready" | "retry" | "failed" | "dropped";
+      categories: number;
+      suggestions: number;
       error?: string;
     } | null;
   };
@@ -319,6 +348,49 @@ export function categoriesFacts(
       value: categories.nextRunAt
         ? `${formatTime(categories.nextRunAt, timeZone)}${waiting}`
         : "not scheduled",
+    },
+  ];
+}
+
+/**
+ * The AI budget plan job in two facts: what its last run made, and when it
+ * plans next (the 1st of the month, else only when asked for).
+ */
+export function budgetPlansFacts(
+  budgetPlans: ProcessorStatus["budgetPlans"],
+  timeZone: string = DEFAULT_TIME_ZONE,
+) {
+  if (!budgetPlans) return [];
+  if (!budgetPlans.enabled)
+    return [
+      { label: "AI budget plans", value: "off (LIFE_OS_AI_BUDGET_PLANS)" },
+    ];
+  const run = budgetPlans.lastRun;
+  let last = "nothing planned since the processor started";
+  if (run) {
+    const month = monthLabel(run.month);
+    const error = run.error ? `: ${run.error}` : "";
+    const outcome = {
+      ready: `${month} ready (${run.suggestions} ${run.suggestions === 1 ? "way" : "ways"} to spend less)`,
+      failed: `${month} failed${error}`,
+      retry: `${month} will be tried again${error}`,
+      dropped: `${month} dropped (dismissed meanwhile)`,
+    }[run.outcome];
+    last = `${outcome ?? `${month} ${run.outcome}`}, ${formatTime(run.finishedAt, timeZone)}`;
+  }
+  const waiting = budgetPlans.waiting ? `, ${budgetPlans.waiting} waiting` : "";
+  return [
+    {
+      label: "AI budget plans",
+      value: budgetPlans.running ? "planning now" : last,
+    },
+    {
+      label: "Next AI budget plan",
+      value: `${
+        budgetPlans.nextMonthlyAt
+          ? `monthly on ${formatTime(budgetPlans.nextMonthlyAt, timeZone)}`
+          : "only when asked for"
+      }${waiting}`,
     },
   ];
 }
@@ -613,6 +685,7 @@ function processingCheck(
     ...runtimeFacts(processor.runtime, timeZone),
     ...ideasFacts(processor.ideas, timeZone),
     ...categoriesFacts(processor.categories, timeZone),
+    ...budgetPlansFacts(processor.budgetPlans, timeZone),
     ...usageFacts(processor.usage, timeZone),
   ];
   if (poll.lastError) {

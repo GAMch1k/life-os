@@ -58,6 +58,117 @@ func (e AccountSourceKind) Valid() bool {
 	}
 }
 
+// Defines values for ActorKind.
+const (
+	Agent  ActorKind = "agent"
+	Dev    ActorKind = "dev"
+	System ActorKind = "system"
+	User   ActorKind = "user"
+)
+
+// Valid indicates whether the value is a known member of the ActorKind enum.
+func (e ActorKind) Valid() bool {
+	switch e {
+	case Agent:
+		return true
+	case Dev:
+		return true
+	case System:
+		return true
+	case User:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AiBudgetPlanLineTrend.
+const (
+	AiBudgetPlanLineTrendDown AiBudgetPlanLineTrend = "down"
+	AiBudgetPlanLineTrendFlat AiBudgetPlanLineTrend = "flat"
+	AiBudgetPlanLineTrendUp   AiBudgetPlanLineTrend = "up"
+)
+
+// Valid indicates whether the value is a known member of the AiBudgetPlanLineTrend enum.
+func (e AiBudgetPlanLineTrend) Valid() bool {
+	switch e {
+	case AiBudgetPlanLineTrendDown:
+		return true
+	case AiBudgetPlanLineTrendFlat:
+		return true
+	case AiBudgetPlanLineTrendUp:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AiBudgetPlanState.
+const (
+	AiBudgetPlanStateApplied       AiBudgetPlanState = "applied"
+	AiBudgetPlanStateDismissed     AiBudgetPlanState = "dismissed"
+	AiBudgetPlanStateFailed        AiBudgetPlanState = "failed"
+	AiBudgetPlanStatePartlyApplied AiBudgetPlanState = "partly_applied"
+	AiBudgetPlanStateReady         AiBudgetPlanState = "ready"
+	AiBudgetPlanStateRequested     AiBudgetPlanState = "requested"
+	AiBudgetPlanStateRunning       AiBudgetPlanState = "running"
+)
+
+// Valid indicates whether the value is a known member of the AiBudgetPlanState enum.
+func (e AiBudgetPlanState) Valid() bool {
+	switch e {
+	case AiBudgetPlanStateApplied:
+		return true
+	case AiBudgetPlanStateDismissed:
+		return true
+	case AiBudgetPlanStateFailed:
+		return true
+	case AiBudgetPlanStatePartlyApplied:
+		return true
+	case AiBudgetPlanStateReady:
+		return true
+	case AiBudgetPlanStateRequested:
+		return true
+	case AiBudgetPlanStateRunning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AiBudgetPlanTrigger.
+const (
+	Request  AiBudgetPlanTrigger = "request"
+	Schedule AiBudgetPlanTrigger = "schedule"
+)
+
+// Valid indicates whether the value is a known member of the AiBudgetPlanTrigger enum.
+func (e AiBudgetPlanTrigger) Valid() bool {
+	switch e {
+	case Request:
+		return true
+	case Schedule:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AiBudgetSuggestionLink.
+const (
+	FoodRecipes AiBudgetSuggestionLink = "food_recipes"
+)
+
+// Valid indicates whether the value is a known member of the AiBudgetSuggestionLink enum.
+func (e AiBudgetSuggestionLink) Valid() bool {
+	switch e {
+	case FoodRecipes:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AiCategoryOutcome.
 const (
 	Categorized AiCategoryOutcome = "categorized"
@@ -190,6 +301,27 @@ func (e BudgetPlanSource) Valid() bool {
 	}
 }
 
+// Defines values for BudgetPlanningCategoryTrend.
+const (
+	BudgetPlanningCategoryTrendDown BudgetPlanningCategoryTrend = "down"
+	BudgetPlanningCategoryTrendFlat BudgetPlanningCategoryTrend = "flat"
+	BudgetPlanningCategoryTrendUp   BudgetPlanningCategoryTrend = "up"
+)
+
+// Valid indicates whether the value is a known member of the BudgetPlanningCategoryTrend enum.
+func (e BudgetPlanningCategoryTrend) Valid() bool {
+	switch e {
+	case BudgetPlanningCategoryTrendDown:
+		return true
+	case BudgetPlanningCategoryTrendFlat:
+		return true
+	case BudgetPlanningCategoryTrendUp:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for BudgetScope.
 const (
 	BudgetScopeFollowing BudgetScope = "following"
@@ -303,16 +435,16 @@ func (e CategoryTotalCategoryKind) Valid() bool {
 
 // Defines values for CsvImportStatus.
 const (
-	Completed CsvImportStatus = "completed"
-	Failed    CsvImportStatus = "failed"
+	CsvImportStatusCompleted CsvImportStatus = "completed"
+	CsvImportStatusFailed    CsvImportStatus = "failed"
 )
 
 // Valid indicates whether the value is a known member of the CsvImportStatus enum.
 func (e CsvImportStatus) Valid() bool {
 	switch e {
-	case Completed:
+	case CsvImportStatusCompleted:
 		return true
-	case Failed:
+	case CsvImportStatusFailed:
 		return true
 	default:
 		return false
@@ -642,6 +774,178 @@ type AccountSource struct {
 // AccountSourceKind `manual`: kept in Life OS. `bank`: connected to a bank (planned).
 type AccountSourceKind string
 
+// Actor Who asked, as its X-Life-OS-Actor said.
+type Actor struct {
+	Kind ActorKind `json:"kind"`
+	Name *string   `json:"name,omitempty"`
+}
+
+// ActorKind defines model for Actor.Kind.
+type ActorKind string
+
+// AiBudgetPlan A plan the AI makes for a month's budget. `attempts` counts the job's runs; `error` is the last failed run's, `retryAt` when a requested plan is tried again. `result` is there once ready.
+type AiBudgetPlan struct {
+	Applied     *AiBudgetPlanApplied `json:"applied"`
+	Attempts    int                  `json:"attempts"`
+	ClaimedAt   *time.Time           `json:"claimedAt"`
+	CreatedAt   time.Time            `json:"createdAt"`
+	Currency    string               `json:"currency"`
+	DismissedAt *time.Time           `json:"dismissedAt"`
+	Error       *string              `json:"error"`
+	FinishedAt  *time.Time           `json:"finishedAt"`
+	Id          openapi_types.UUID   `json:"id"`
+
+	// Month YYYY-MM.
+	Month string `json:"month"`
+
+	// RequestedBy Who asked, as its X-Life-OS-Actor said.
+	RequestedBy Actor               `json:"requestedBy"`
+	Result      *AiBudgetPlanResult `json:"result"`
+	RetryAt     *time.Time          `json:"retryAt"`
+
+	// SavingsGoal The owner's savings goal per month for the plan.
+	SavingsGoal *Money `json:"savingsGoal"`
+
+	// State `requested`: waiting for the AI budget plan job (until `retryAt` after a failed run). `running`: the job is planning it. `ready`: the AI's proposal is there to apply or dismiss. `failed`: the AI could not plan it. `applied`, `partly_applied`: the owner applied all of its lines, or some. `dismissed`.
+	State AiBudgetPlanState `json:"state"`
+
+	// Trigger `request`: the owner asked. `schedule`: the job's plan on the 1st of a month.
+	Trigger   AiBudgetPlanTrigger `json:"trigger"`
+	UpdatedAt time.Time           `json:"updatedAt"`
+}
+
+// AiBudgetPlanApplied What the owner applied last.
+type AiBudgetPlanApplied struct {
+	At             time.Time                 `json:"at"`
+	ExpectedIncome *Money                    `json:"expectedIncome"`
+	Lines          []AiBudgetPlanAppliedLine `json:"lines"`
+	SavingsGoal    *Money                    `json:"savingsGoal"`
+
+	// Scope `month`: only this month. `following`: the regular plan from this month on.
+	Scope BudgetScope `json:"scope"`
+}
+
+// AiBudgetPlanAppliedLine defines model for AiBudgetPlanAppliedLine.
+type AiBudgetPlanAppliedLine struct {
+	Amount     Money              `json:"amount"`
+	CategoryId openapi_types.UUID `json:"categoryId"`
+}
+
+// AiBudgetPlanApplyResult defines model for AiBudgetPlanApplyResult.
+type AiBudgetPlanApplyResult struct {
+	// Budget A month's budget in `currency` (the budget currency). `lines` lists the plan's categories by name, then expense categories with spending the plan has no amount for (`unplanned`), largest first.
+	Budget BudgetMonth `json:"budget"`
+
+	// Plan A plan the AI makes for a month's budget. `attempts` counts the job's runs; `error` is the last failed run's, `retryAt` when a requested plan is tried again. `result` is there once ready.
+	Plan AiBudgetPlan `json:"plan"`
+}
+
+// AiBudgetPlanClaim defines model for AiBudgetPlanClaim.
+type AiBudgetPlanClaim struct {
+	Plan *AiBudgetPlan `json:"plan"`
+}
+
+// AiBudgetPlanFailure defines model for AiBudgetPlanFailure.
+type AiBudgetPlanFailure struct {
+	// Error What went wrong (at most 500 characters are kept).
+	Error string `json:"error"`
+
+	// RetryAt When to try again; without it the plan fails for good.
+	RetryAt *time.Time `json:"retryAt,omitempty"`
+}
+
+// AiBudgetPlanLine A category of the plan: the AI's amount and its reason, with Finance's evidence when the AI planned: the amount in the plan that applied (`current`), the median of the last three complete months, last month, and the trend.
+type AiBudgetPlanLine struct {
+	CategoryId   openapi_types.UUID     `json:"categoryId"`
+	CategoryName string                 `json:"categoryName"`
+	Current      Money                  `json:"current"`
+	LastMonth    *Money                 `json:"lastMonth"`
+	Median       *Money                 `json:"median"`
+	Proposed     Money                  `json:"proposed"`
+	Reason       string                 `json:"reason"`
+	Trend        *AiBudgetPlanLineTrend `json:"trend"`
+	TrendPercent *int                   `json:"trendPercent"`
+}
+
+// AiBudgetPlanLineTrend defines model for AiBudgetPlanLine.Trend.
+type AiBudgetPlanLineTrend string
+
+// AiBudgetPlanList defines model for AiBudgetPlanList.
+type AiBudgetPlanList struct {
+	Items []AiBudgetPlan `json:"items"`
+
+	// Waiting Plans the job may claim now.
+	Waiting int `json:"waiting"`
+}
+
+// AiBudgetPlanProposal The AI's proposal, in minor units of `currency`.
+type AiBudgetPlanProposal struct {
+	Currency              string                       `json:"currency"`
+	Headline              string                       `json:"headline"`
+	IncomeEstimateMinor   int64                        `json:"incomeEstimateMinor"`
+	Lines                 []AiBudgetProposalLine       `json:"lines"`
+	ProjectedSavingsMinor int64                        `json:"projectedSavingsMinor"`
+	ProjectedTotalMinor   int64                        `json:"projectedTotalMinor"`
+	Suggestions           []AiBudgetProposalSuggestion `json:"suggestions"`
+}
+
+// AiBudgetPlanResult The AI's proposal as Finance checked it. `rough`: it rests on fewer than 2 full months of history (`fullMonths`). `projectedTotal` is the sum of the lines and `projectedSavings` the income estimate minus it; `goalGap` is how much they fall short of `savingsGoal` (the owner's goal, else the plan's; 0 when reached, null without a goal).
+type AiBudgetPlanResult struct {
+	FullMonths       int                  `json:"fullMonths"`
+	GoalGap          *Money               `json:"goalGap"`
+	Headline         string               `json:"headline"`
+	IncomeEstimate   Money                `json:"incomeEstimate"`
+	Lines            []AiBudgetPlanLine   `json:"lines"`
+	ProjectedSavings Money                `json:"projectedSavings"`
+	ProjectedTotal   Money                `json:"projectedTotal"`
+	Rough            bool                 `json:"rough"`
+	SavingsGoal      *Money               `json:"savingsGoal"`
+	Suggestions      []AiBudgetSuggestion `json:"suggestions"`
+}
+
+// AiBudgetPlanState `requested`: waiting for the AI budget plan job (until `retryAt` after a failed run). `running`: the job is planning it. `ready`: the AI's proposal is there to apply or dismiss. `failed`: the AI could not plan it. `applied`, `partly_applied`: the owner applied all of its lines, or some. `dismissed`.
+type AiBudgetPlanState string
+
+// AiBudgetPlanTrigger `request`: the owner asked. `schedule`: the job's plan on the 1st of a month.
+type AiBudgetPlanTrigger string
+
+// AiBudgetProposalLine defines model for AiBudgetProposalLine.
+type AiBudgetProposalLine struct {
+	CategoryId    openapi_types.UUID `json:"categoryId"`
+	ProposedMinor int64              `json:"proposedMinor"`
+
+	// Reason One sentence.
+	Reason string `json:"reason"`
+}
+
+// AiBudgetProposalSuggestion defines model for AiBudgetProposalSuggestion.
+type AiBudgetProposalSuggestion struct {
+	CategoryId *openapi_types.UUID `json:"categoryId"`
+	Detail     string              `json:"detail"`
+
+	// Link `food_recipes` or null.
+	Link *string `json:"link"`
+
+	// Merchants Names of the category's top merchants in the planning data.
+	Merchants          []string `json:"merchants"`
+	MonthlySavingMinor int64    `json:"monthlySavingMinor"`
+	Title              string   `json:"title"`
+}
+
+// AiBudgetSuggestion A way to spend less, with what it saves a month, tied to a category and merchants where it can be; `link` `food_recipes` points to Food's recipes (cooking more).
+type AiBudgetSuggestion struct {
+	CategoryId    *openapi_types.UUID     `json:"categoryId"`
+	CategoryName  *string                 `json:"categoryName"`
+	Detail        string                  `json:"detail"`
+	Link          *AiBudgetSuggestionLink `json:"link"`
+	Merchants     []string                `json:"merchants"`
+	MonthlySaving Money                   `json:"monthlySaving"`
+	Title         string                  `json:"title"`
+}
+
+// AiBudgetSuggestionLink defines model for AiBudgetSuggestion.Link.
+type AiBudgetSuggestionLink string
+
 // AiCategoryCandidate What the AI is told about a transaction: no notes, account names, or bank references.
 type AiCategoryCandidate struct {
 	AccountKind  AccountKind        `json:"accountKind"`
@@ -715,6 +1019,16 @@ type AmountAlertInput struct {
 
 	// ThresholdMinor Minor units of the default currency; at least 1 for large debits.
 	ThresholdMinor int64 `json:"thresholdMinor"`
+}
+
+// ApplyAiBudgetPlanRequest defines model for ApplyAiBudgetPlanRequest.
+type ApplyAiBudgetPlanRequest struct {
+	ExpectedIncomeMinor *int64            `json:"expectedIncomeMinor,omitempty"`
+	Lines               []BudgetLineInput `json:"lines"`
+	SavingsGoalMinor    *int64            `json:"savingsGoalMinor,omitempty"`
+
+	// Scope `month`: only this month. `following`: the regular plan from this month on.
+	Scope *BudgetScope `json:"scope,omitempty"`
 }
 
 // ApplyCategoryRulesRequest `scope` defaults to uncategorized.
@@ -911,6 +1225,97 @@ type BudgetPlan struct {
 
 // BudgetPlanSource `month`: the month has its own plan. `regular`: it follows the regular plan.
 type BudgetPlanSource string
+
+// BudgetPlanningCategory defines model for BudgetPlanningCategory.
+type BudgetPlanningCategory struct {
+	CategoryId openapi_types.UUID `json:"categoryId"`
+
+	// LastMonthMinor The last complete month; null when the history does not reach it.
+	LastMonthMinor *int64 `json:"lastMonthMinor"`
+
+	// MedianMinor The median of the last three complete months; null without spending there.
+	MedianMinor *int64                   `json:"medianMinor"`
+	Merchants   []BudgetPlanningMerchant `json:"merchants"`
+
+	// MonthlyMinor Spending (less refunds) per month of `months`.
+	MonthlyMinor []int64 `json:"monthlyMinor"`
+	Name         string  `json:"name"`
+
+	// PlannedMinor Its amount in the plan that applies to the month (0 without one).
+	PlannedMinor int64 `json:"plannedMinor"`
+
+	// Trend Null with fewer than two full months.
+	Trend        *BudgetPlanningCategoryTrend `json:"trend"`
+	TrendPercent *int                         `json:"trendPercent"`
+}
+
+// BudgetPlanningCategoryTrend Null with fewer than two full months.
+type BudgetPlanningCategoryTrend string
+
+// BudgetPlanningData defines model for BudgetPlanningData.
+type BudgetPlanningData struct {
+	// BalanceMinor The money there is now: the balance of the accounts in the currency, pending payments included.
+	BalanceMinor      int64                    `json:"balanceMinor"`
+	Categories        []BudgetPlanningCategory `json:"categories"`
+	Currency          string                   `json:"currency"`
+	FirstMonthPartial bool                     `json:"firstMonthPartial"`
+	FullMonths        int                      `json:"fullMonths"`
+	IncomeMedianMinor *int64                   `json:"incomeMedianMinor"`
+
+	// IncomeMinor Income per month of `months`.
+	IncomeMinor []int64 `json:"incomeMinor"`
+
+	// MedianMonths The months the medians look at.
+	MedianMonths   []string `json:"medianMonths"`
+	MerchantMonths int      `json:"merchantMonths"`
+
+	// Month YYYY-MM.
+	Month string `json:"month"`
+
+	// Months The complete months of history (YYYY-MM), oldest first.
+	Months []string            `json:"months"`
+	Plan   *BudgetPlanningPlan `json:"plan"`
+
+	// Rough Fewer than 2 full months.
+	Rough bool `json:"rough"`
+
+	// SpendingMinor All spending per month of `months`.
+	SpendingMinor []int64                      `json:"spendingMinor"`
+	Subscriptions []BudgetPlanningSubscription `json:"subscriptions"`
+
+	// UncategorizedMinor Spending without a category per month of `months`.
+	UncategorizedMinor []int64 `json:"uncategorizedMinor"`
+}
+
+// BudgetPlanningMerchant A merchant of a category over the median's months, as subscriptions name merchants.
+type BudgetPlanningMerchant struct {
+	// Count How many payments.
+	Count int `json:"count"`
+
+	// MonthlyMinor The total over the months it covers (`merchantMonths`).
+	MonthlyMinor int64  `json:"monthlyMinor"`
+	Name         string `json:"name"`
+	TotalMinor   int64  `json:"totalMinor"`
+}
+
+// BudgetPlanningPlan defines model for BudgetPlanningPlan.
+type BudgetPlanningPlan struct {
+	ExpectedIncomeMinor int64 `json:"expectedIncomeMinor"`
+
+	// PlannedMinor The sum of its category amounts.
+	PlannedMinor     int64 `json:"plannedMinor"`
+	SavingsGoalMinor int64 `json:"savingsGoalMinor"`
+
+	// Source `month`: the month has its own plan. `regular`: it follows the regular plan.
+	Source BudgetPlanSource `json:"source"`
+}
+
+// BudgetPlanningSubscription defines model for BudgetPlanningSubscription.
+type BudgetPlanningSubscription struct {
+	CategoryId   *openapi_types.UUID `json:"categoryId"`
+	MonthlyMinor int64               `json:"monthlyMinor"`
+	Name         string              `json:"name"`
+}
 
 // BudgetSavings `saved` is the month's income minus its spending. `movedToSavings` is the money moved out in the Savings category (`systemKey` savings) from accounts other than savings accounts, less money moved back; `leftover` is the rest of `saved`. `percent` is saved against the plan's savings goal, rounded down; null without a goal.
 type BudgetSavings struct {
@@ -1147,6 +1552,18 @@ type RenewalAlertInput struct {
 	LeadDays int  `json:"leadDays"`
 }
 
+// RequestAiBudgetPlanRequest defines model for RequestAiBudgetPlanRequest.
+type RequestAiBudgetPlanRequest struct {
+	// Month YYYY-MM; by default this month during its first 7 days, else the next.
+	Month *string `json:"month,omitempty"`
+
+	// SavingsGoalMinor How much to save a month.
+	SavingsGoalMinor *int64 `json:"savingsGoalMinor,omitempty"`
+
+	// Trigger `request`: the owner asked. `schedule`: the job's plan on the 1st of a month.
+	Trigger *AiBudgetPlanTrigger `json:"trigger,omitempty"`
+}
+
 // RuleField `any` matches the counterparty or the description.
 type RuleField string
 
@@ -1364,6 +1781,9 @@ type CategoryId = openapi_types.UUID
 // Month defines model for Month.
 type Month = string
 
+// PlanId defines model for PlanId.
+type PlanId = openapi_types.UUID
+
 // RuleId defines model for RuleId.
 type RuleId = openapi_types.UUID
 
@@ -1376,6 +1796,14 @@ type TransactionId = openapi_types.UUID
 // ListAccountsParams defines parameters for ListAccounts.
 type ListAccountsParams struct {
 	IncludeArchived *bool `form:"includeArchived,omitempty" json:"includeArchived,omitempty"`
+}
+
+// ListAiBudgetPlansParams defines parameters for ListAiBudgetPlans.
+type ListAiBudgetPlansParams struct {
+	// Month YYYY-MM.
+	Month *string            `form:"month,omitempty" json:"month,omitempty"`
+	State *AiBudgetPlanState `form:"state,omitempty" json:"state,omitempty"`
+	Limit *int               `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
 // ListCategoriesParams defines parameters for ListCategories.
@@ -1450,6 +1878,18 @@ type CreateAccountJSONRequestBody = CreateAccountRequest
 // UpdateAccountJSONRequestBody defines body for UpdateAccount for application/json ContentType.
 type UpdateAccountJSONRequestBody = UpdateAccountRequest
 
+// RequestAiBudgetPlanJSONRequestBody defines body for RequestAiBudgetPlan for application/json ContentType.
+type RequestAiBudgetPlanJSONRequestBody = RequestAiBudgetPlanRequest
+
+// ApplyAiBudgetPlanJSONRequestBody defines body for ApplyAiBudgetPlan for application/json ContentType.
+type ApplyAiBudgetPlanJSONRequestBody = ApplyAiBudgetPlanRequest
+
+// FailAiBudgetPlanJSONRequestBody defines body for FailAiBudgetPlan for application/json ContentType.
+type FailAiBudgetPlanJSONRequestBody = AiBudgetPlanFailure
+
+// SetAiBudgetPlanResultJSONRequestBody defines body for SetAiBudgetPlanResult for application/json ContentType.
+type SetAiBudgetPlanResultJSONRequestBody = AiBudgetPlanProposal
+
 // SaveBudgetPlanJSONRequestBody defines body for SaveBudgetPlan for application/json ContentType.
 type SaveBudgetPlanJSONRequestBody = SaveBudgetPlanRequest
 
@@ -1503,6 +1943,30 @@ type ServerInterface interface {
 	// UpdateAccount Update or archive a finance account
 	// (PATCH /v1/accounts/{accountId})
 	UpdateAccount(c fiber.Ctx, accountId AccountId) error
+	// ListAiBudgetPlans List AI budget plans
+	// (GET /v1/ai-budget-plans)
+	ListAiBudgetPlans(c fiber.Ctx, params ListAiBudgetPlansParams) error
+	// RequestAiBudgetPlan Ask the AI to plan a month's budget
+	// (POST /v1/ai-budget-plans)
+	RequestAiBudgetPlan(c fiber.Ctx) error
+	// ClaimAiBudgetPlan Claim the next AI budget plan to run
+	// (POST /v1/ai-budget-plans/claim)
+	ClaimAiBudgetPlan(c fiber.Ctx) error
+	// GetAiBudgetPlan Get an AI budget plan
+	// (GET /v1/ai-budget-plans/{planId})
+	GetAiBudgetPlan(c fiber.Ctx, planId PlanId) error
+	// ApplyAiBudgetPlan Apply an AI budget plan to its month
+	// (POST /v1/ai-budget-plans/{planId}/apply)
+	ApplyAiBudgetPlan(c fiber.Ctx, planId PlanId) error
+	// DismissAiBudgetPlan Dismiss an AI budget plan
+	// (POST /v1/ai-budget-plans/{planId}/dismiss)
+	DismissAiBudgetPlan(c fiber.Ctx, planId PlanId) error
+	// FailAiBudgetPlan Note that a run of a plan failed
+	// (POST /v1/ai-budget-plans/{planId}/failure)
+	FailAiBudgetPlan(c fiber.Ctx, planId PlanId) error
+	// SetAiBudgetPlanResult Leave the AI's proposal for a plan
+	// (PUT /v1/ai-budget-plans/{planId}/result)
+	SetAiBudgetPlanResult(c fiber.Ctx, planId PlanId) error
 	// ResetBudgetMonth Return a month to the regular plan
 	// (DELETE /v1/budgets/{month})
 	ResetBudgetMonth(c fiber.Ctx, month Month) error
@@ -1512,6 +1976,9 @@ type ServerInterface interface {
 	// SaveBudgetPlan Save a month's budget plan
 	// (PUT /v1/budgets/{month})
 	SaveBudgetPlan(c fiber.Ctx, month Month) error
+	// GetBudgetPlanningData Get what the AI plans a month's budget from
+	// (GET /v1/budgets/{month}/planning-data)
+	GetBudgetPlanningData(c fiber.Ctx, month Month) error
 	// GetBudgetSuggestions Suggest starting amounts for a month's plan
 	// (GET /v1/budgets/{month}/suggestions)
 	GetBudgetSuggestions(c fiber.Ctx, month Month) error
@@ -1720,6 +2187,238 @@ func (siw *ServerInterfaceWrapper) UpdateAccount(c fiber.Ctx) error {
 	return handler(c)
 }
 
+// ListAiBudgetPlans operation middleware
+func (siw *ServerInterfaceWrapper) ListAiBudgetPlans(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListAiBudgetPlansParams
+
+	var query url.Values
+	query, err = url.ParseQuery(string(c.Request().URI().QueryString()))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for query string: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "month" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "month", query, &params.Month, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter month: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "state" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "state", query, &params.State, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter state: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", query, &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter limit: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.ListAiBudgetPlans(c, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// RequestAiBudgetPlan operation middleware
+func (siw *ServerInterfaceWrapper) RequestAiBudgetPlan(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.RequestAiBudgetPlan(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// ClaimAiBudgetPlan operation middleware
+func (siw *ServerInterfaceWrapper) ClaimAiBudgetPlan(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.ClaimAiBudgetPlan(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// GetAiBudgetPlan operation middleware
+func (siw *ServerInterfaceWrapper) GetAiBudgetPlan(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "planId" -------------
+	var planId PlanId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "planId", c.Params("planId"), &planId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter planId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.GetAiBudgetPlan(c, planId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// ApplyAiBudgetPlan operation middleware
+func (siw *ServerInterfaceWrapper) ApplyAiBudgetPlan(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "planId" -------------
+	var planId PlanId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "planId", c.Params("planId"), &planId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter planId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.ApplyAiBudgetPlan(c, planId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// DismissAiBudgetPlan operation middleware
+func (siw *ServerInterfaceWrapper) DismissAiBudgetPlan(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "planId" -------------
+	var planId PlanId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "planId", c.Params("planId"), &planId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter planId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.DismissAiBudgetPlan(c, planId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// FailAiBudgetPlan operation middleware
+func (siw *ServerInterfaceWrapper) FailAiBudgetPlan(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "planId" -------------
+	var planId PlanId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "planId", c.Params("planId"), &planId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter planId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.FailAiBudgetPlan(c, planId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// SetAiBudgetPlanResult operation middleware
+func (siw *ServerInterfaceWrapper) SetAiBudgetPlanResult(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "planId" -------------
+	var planId PlanId
+
+	err = runtime.BindStyledParameterWithOptions("simple", "planId", c.Params("planId"), &planId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter planId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.SetAiBudgetPlanResult(c, planId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
 // ResetBudgetMonth operation middleware
 func (siw *ServerInterfaceWrapper) ResetBudgetMonth(c fiber.Ctx) error {
 
@@ -1794,6 +2493,35 @@ func (siw *ServerInterfaceWrapper) SaveBudgetPlan(c fiber.Ctx) error {
 
 	handler := func(c fiber.Ctx) error {
 		return siw.Handler.SaveBudgetPlan(c, month)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// GetBudgetPlanningData operation middleware
+func (siw *ServerInterfaceWrapper) GetBudgetPlanningData(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "month" -------------
+	var month Month
+
+	err = runtime.BindStyledParameterWithOptions("simple", "month", c.Params("month"), &month, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter month: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.GetBudgetPlanningData(c, month)
 	}
 
 	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
@@ -2725,6 +3453,24 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	router.Put(options.BaseURL+"/v1/budgets/:month", wrapper.SaveBudgetPlan)
 
 	router.Get(options.BaseURL+"/v1/budgets/:month/suggestions", wrapper.GetBudgetSuggestions)
+
+	router.Get(options.BaseURL+"/v1/budgets/:month/planning-data", wrapper.GetBudgetPlanningData)
+
+	router.Get(options.BaseURL+"/v1/ai-budget-plans", wrapper.ListAiBudgetPlans)
+
+	router.Post(options.BaseURL+"/v1/ai-budget-plans", wrapper.RequestAiBudgetPlan)
+
+	router.Post(options.BaseURL+"/v1/ai-budget-plans/claim", wrapper.ClaimAiBudgetPlan)
+
+	router.Get(options.BaseURL+"/v1/ai-budget-plans/:planId", wrapper.GetAiBudgetPlan)
+
+	router.Put(options.BaseURL+"/v1/ai-budget-plans/:planId/result", wrapper.SetAiBudgetPlanResult)
+
+	router.Post(options.BaseURL+"/v1/ai-budget-plans/:planId/failure", wrapper.FailAiBudgetPlan)
+
+	router.Post(options.BaseURL+"/v1/ai-budget-plans/:planId/apply", wrapper.ApplyAiBudgetPlan)
+
+	router.Post(options.BaseURL+"/v1/ai-budget-plans/:planId/dismiss", wrapper.DismissAiBudgetPlan)
 
 	router.Get(options.BaseURL+"/v1/subscriptions", wrapper.ListSubscriptions)
 

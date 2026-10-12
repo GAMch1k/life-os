@@ -38,6 +38,10 @@ type Status struct {
 	// Categories is the AI categories job: whether it is on, what waits,
 	// and what the last batch did; absent when the job is not configured.
 	Categories *CategoriesStatus `json:"categories,omitempty"`
+	// BudgetPlans is the AI budget plan job: whether it and the monthly
+	// plan are on, what waits, and what the last run did; absent when the
+	// job is not configured.
+	BudgetPlans *BudgetPlansStatus `json:"budgetPlans,omitempty"`
 }
 
 // AgentRuntimeStatus describes the Codex runtime: its configuration, the run
@@ -225,6 +229,13 @@ func (m *Monitor) SetCategories(status CategoriesStatus) {
 	m.status.Categories = &status
 }
 
+// SetBudgetPlans records the AI budget plan job's status.
+func (m *Monitor) SetBudgetPlans(status BudgetPlansStatus) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.status.BudgetPlans = &status
+}
+
 // RecordTokens adds one planning run's token usage.
 func (m *Monitor) RecordTokens(usage TokenUsage) {
 	m.mu.Lock()
@@ -390,6 +401,25 @@ func (c monitoredCategories) Categories(ctx context.Context, prompt, schema stri
 	out, err := c.inner.Categories(WithRunObserver(ctx, tokenCounter{monitor: c.monitor}), prompt, schema)
 	if ctx.Err() == nil {
 		c.monitor.RecordPlan(err)
+	}
+	return out, err
+}
+
+// MonitoredBudgetPlans records the AI budget plan job's Codex runs like
+// planning runs: their outcome in the Codex state and their token usage.
+func (m *Monitor) MonitoredBudgetPlans(p budgetPlanner) budgetPlanner {
+	return monitoredBudgetPlans{inner: p, monitor: m}
+}
+
+type monitoredBudgetPlans struct {
+	inner   budgetPlanner
+	monitor *Monitor
+}
+
+func (p monitoredBudgetPlans) BudgetPlan(ctx context.Context, prompt, schema string) (string, error) {
+	out, err := p.inner.BudgetPlan(WithRunObserver(ctx, tokenCounter{monitor: p.monitor}), prompt, schema)
+	if ctx.Err() == nil {
+		p.monitor.RecordPlan(err)
 	}
 	return out, err
 }

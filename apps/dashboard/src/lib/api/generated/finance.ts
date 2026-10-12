@@ -318,6 +318,167 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/budgets/{month}/planning-data": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get what the AI plans a month's budget from
+         * @description Aggregates only, never transactions: what the AI budget plan job tells the AI (see `/v1/ai-budget-plans`). `months` are the complete months the history covers before the month (never after the current month), at most 12, oldest first; the first is partial when the history starts after its 1st (`firstMonthPartial`). `fullMonths` counts the whole ones, and with fewer than 2 the plan is `rough`. Per month: the income, all spending, and spending without a category. Per active expense category but Savings: its spending per month (less refunds), the median of the last three complete months as the suggestions compute it, last month, the trend (`up` or `down` when the latest three months' average, or with fewer than four full months the last month, is at least 10% above or below the earlier months'; else `flat`), the amount in the plan that applies, and its top 5 merchants over the median's months, with how many payments, how much, and how much a month. Then the plan that applies, the confirmed subscriptions in the budget currency (their monthly amounts), and the balance now, pending payments included. Amounts are minor units of `currency`.
+         */
+        get: operations["getBudgetPlanningData"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/ai-budget-plans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List AI budget plans
+         * @description Newest first, at most `limit`; only a `month`'s or a `state`'s when given. `waiting` counts the plans the AI budget plan job may claim now (a count: cheap, so the job polls it).
+         */
+        get: operations["listAiBudgetPlans"];
+        put?: never;
+        /**
+         * Ask the AI to plan a month's budget
+         * @description Asks for a plan for `month` (YYYY-MM: this month or one of the next 12; by default the current month during its first 7 days, else the next month), with an optional savings goal per month. The plan is `requested` (202) until the processor's AI budget plan job runs it (`running`), and then `ready` with the AI's proposal, or `failed`. Nothing changes the budget until the owner applies it. A month whose plan is still requested or running answers with that one (200): the request joins it. The owner (`user`) may ask 10 times a day (the owner's day; 429 `daily_limit`). `trigger` `schedule` is the job's own plan on the 1st of a month: one per month, and a repeat answers with it (200).
+         */
+        post: operations["requestAiBudgetPlan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/ai-budget-plans/claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Claim the next AI budget plan to run
+         * @description For the AI budget plan job (agents and Life OS components, never the owner: 403 `actor_not_allowed`). Claims the oldest plan that is requested and due (its `retryAt` passed), or running on a claim older than 15 minutes (the processor stopped during the run): it becomes `running`, with one more attempt. One plan runs at a time: while another runs on a fresh claim, and when nothing waits, `plan` is null.
+         */
+        post: operations["claimAiBudgetPlan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/ai-budget-plans/{planId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get an AI budget plan */
+        get: operations["getAiBudgetPlan"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/ai-budget-plans/{planId}/result": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Leave the AI's proposal for a plan
+         * @description For the AI budget plan job (never the owner: 403 `actor_not_allowed`), on a plan that is requested or running (409 `plan_not_running` otherwise, such as one the owner dismissed meanwhile). Finance checks the proposal against the month's planning data and refuses it with 400 `invalid_plan`, naming what is wrong: it must be in the budget currency; have a line for every active expense category but Savings (once each, an amount of 0 or more, and a reason; one without spending and without an amount in the plan may be left out and gets 0); 2 to 5 ways to spend less (none needed without spending), each saving more than 0 and no more than the spending it comes from (its category's median or last month, whichever is larger; the named merchants' monthly spending, which must be its category's top merchants; all spending without a category), together no more than all spending; links only to `food_recipes`; and totals that add up to within one unit of the currency (the projected total is the sum of the lines, the projected savings the income estimate, 0 or more, minus it). The plan becomes `ready` with the proposal, the exact totals, and Finance's own evidence per line; Activity records `finance.ai_budget_plan.created`.
+         */
+        put: operations["setAiBudgetPlanResult"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/ai-budget-plans/{planId}/failure": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Note that a run of a plan failed
+         * @description For the AI budget plan job (never the owner: 403 `actor_not_allowed`), on a plan that is requested or running (409 `plan_not_running` otherwise). With `retryAt` the plan waits as `requested` until then, keeping the error; without, it is `failed` and Activity records `finance.ai_budget_plan.failed`.
+         */
+        post: operations["failAiBudgetPlan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/ai-budget-plans/{planId}/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Apply an AI budget plan to its month
+         * @description Writes the owner's choice of the plan's lines into the month's budget, through the same operation as `PUT /v1/budgets/{month}`: the plan that applies to the month, with the chosen categories at the given amounts (the proposed ones, or the owner's edits; 0 leaves a category out), and `expectedIncomeMinor` and `savingsGoalMinor` when given (else the plan's stay). `scope` `month` (the default) gives the month its own plan; `following` makes it the regular plan from the month on. Lines must be the plan's categories, each once. The plan becomes `applied`, or `partly_applied` when some of its lines were left out. A ready or applied plan can be applied (again); an identical repeat changes nothing and records nothing. Activity records `finance.budget.saved` when the budget changed and `finance.ai_budget_plan.applied`. The AI (`agent:`) never applies a plan: 403 `actor_not_allowed`.
+         */
+        post: operations["applyAiBudgetPlan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/ai-budget-plans/{planId}/dismiss": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dismiss an AI budget plan
+         * @description The plan is `dismissed`, whatever its state; what was applied stays in the budget. A repeat changes nothing. A run under way finds the plan dismissed and leaves no proposal. Activity records `finance.ai_budget_plan.dismissed`.
+         */
+        post: operations["dismissAiBudgetPlan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/subscriptions": {
         parameters: {
             query?: never;
@@ -992,6 +1153,267 @@ export interface components {
             saved: components["schemas"]["Money"] | null;
             categories: components["schemas"]["BudgetCategorySuggestion"][];
         };
+        /** @description A merchant of a category over the median's months, as subscriptions name merchants. */
+        BudgetPlanningMerchant: {
+            name: string;
+            /** @description How many payments. */
+            count: number;
+            /** Format: int64 */
+            totalMinor: number;
+            /**
+             * Format: int64
+             * @description The total over the months it covers (`merchantMonths`).
+             */
+            monthlyMinor: number;
+        };
+        BudgetPlanningCategory: {
+            /** Format: uuid */
+            categoryId: string;
+            name: string;
+            /** @description Spending (less refunds) per month of `months`. */
+            monthlyMinor: number[];
+            /**
+             * Format: int64
+             * @description The median of the last three complete months; null without spending there.
+             */
+            medianMinor: number | null;
+            /**
+             * Format: int64
+             * @description The last complete month; null when the history does not reach it.
+             */
+            lastMonthMinor: number | null;
+            /**
+             * @description Null with fewer than two full months.
+             * @enum {string|null}
+             */
+            trend: "up" | "down" | "flat" | null;
+            trendPercent: number | null;
+            /**
+             * Format: int64
+             * @description Its amount in the plan that applies to the month (0 without one).
+             */
+            plannedMinor: number;
+            merchants: components["schemas"]["BudgetPlanningMerchant"][];
+        };
+        BudgetPlanningPlan: {
+            source: components["schemas"]["BudgetPlanSource"];
+            /** Format: int64 */
+            expectedIncomeMinor: number;
+            /** Format: int64 */
+            savingsGoalMinor: number;
+            /**
+             * Format: int64
+             * @description The sum of its category amounts.
+             */
+            plannedMinor: number;
+        };
+        BudgetPlanningSubscription: {
+            name: string;
+            /** Format: int64 */
+            monthlyMinor: number;
+            /** Format: uuid */
+            categoryId: string | null;
+        };
+        BudgetPlanningData: {
+            /** @description YYYY-MM. */
+            month: string;
+            currency: string;
+            /** @description The complete months of history (YYYY-MM), oldest first. */
+            months: string[];
+            firstMonthPartial: boolean;
+            fullMonths: number;
+            /** @description Fewer than 2 full months. */
+            rough: boolean;
+            /** @description The months the medians look at. */
+            medianMonths: string[];
+            merchantMonths: number;
+            /** @description Income per month of `months`. */
+            incomeMinor: number[];
+            /** Format: int64 */
+            incomeMedianMinor: number | null;
+            /** @description All spending per month of `months`. */
+            spendingMinor: number[];
+            /** @description Spending without a category per month of `months`. */
+            uncategorizedMinor: number[];
+            categories: components["schemas"]["BudgetPlanningCategory"][];
+            plan: components["schemas"]["BudgetPlanningPlan"] | null;
+            subscriptions: components["schemas"]["BudgetPlanningSubscription"][];
+            /**
+             * Format: int64
+             * @description The money there is now: the balance of the accounts in the currency, pending payments included.
+             */
+            balanceMinor: number;
+        };
+        /**
+         * @description `requested`: waiting for the AI budget plan job (until `retryAt` after a failed run). `running`: the job is planning it. `ready`: the AI's proposal is there to apply or dismiss. `failed`: the AI could not plan it. `applied`, `partly_applied`: the owner applied all of its lines, or some. `dismissed`.
+         * @enum {string}
+         */
+        AiBudgetPlanState: "requested" | "running" | "ready" | "failed" | "applied" | "partly_applied" | "dismissed";
+        /**
+         * @description `request`: the owner asked. `schedule`: the job's plan on the 1st of a month.
+         * @enum {string}
+         */
+        AiBudgetPlanTrigger: "request" | "schedule";
+        /** @description Who asked, as its X-Life-OS-Actor said. */
+        Actor: {
+            /** @enum {string} */
+            kind: "user" | "agent" | "system" | "dev";
+            name?: string;
+        };
+        /** @description A category of the plan: the AI's amount and its reason, with Finance's evidence when the AI planned: the amount in the plan that applied (`current`), the median of the last three complete months, last month, and the trend. */
+        AiBudgetPlanLine: {
+            /** Format: uuid */
+            categoryId: string;
+            categoryName: string;
+            proposed: components["schemas"]["Money"];
+            reason: string;
+            current: components["schemas"]["Money"];
+            median: components["schemas"]["Money"] | null;
+            lastMonth: components["schemas"]["Money"] | null;
+            /** @enum {string|null} */
+            trend: "up" | "down" | "flat" | null;
+            trendPercent: number | null;
+        };
+        /** @description A way to spend less, with what it saves a month, tied to a category and merchants where it can be; `link` `food_recipes` points to Food's recipes (cooking more). */
+        AiBudgetSuggestion: {
+            title: string;
+            detail: string;
+            /** Format: uuid */
+            categoryId: string | null;
+            categoryName: string | null;
+            merchants: string[];
+            monthlySaving: components["schemas"]["Money"];
+            /** @enum {string|null} */
+            link: "food_recipes" | null;
+        };
+        /** @description The AI's proposal as Finance checked it. `rough`: it rests on fewer than 2 full months of history (`fullMonths`). `projectedTotal` is the sum of the lines and `projectedSavings` the income estimate minus it; `goalGap` is how much they fall short of `savingsGoal` (the owner's goal, else the plan's; 0 when reached, null without a goal). */
+        AiBudgetPlanResult: {
+            headline: string;
+            rough: boolean;
+            fullMonths: number;
+            lines: components["schemas"]["AiBudgetPlanLine"][];
+            suggestions: components["schemas"]["AiBudgetSuggestion"][];
+            projectedTotal: components["schemas"]["Money"];
+            incomeEstimate: components["schemas"]["Money"];
+            projectedSavings: components["schemas"]["Money"];
+            savingsGoal: components["schemas"]["Money"] | null;
+            goalGap: components["schemas"]["Money"] | null;
+        };
+        AiBudgetPlanAppliedLine: {
+            /** Format: uuid */
+            categoryId: string;
+            amount: components["schemas"]["Money"];
+        };
+        /** @description What the owner applied last. */
+        AiBudgetPlanApplied: {
+            /** Format: date-time */
+            at: string;
+            scope: components["schemas"]["BudgetScope"];
+            lines: components["schemas"]["AiBudgetPlanAppliedLine"][];
+            expectedIncome: components["schemas"]["Money"] | null;
+            savingsGoal: components["schemas"]["Money"] | null;
+        };
+        /** @description A plan the AI makes for a month's budget. `attempts` counts the job's runs; `error` is the last failed run's, `retryAt` when a requested plan is tried again. `result` is there once ready. */
+        AiBudgetPlan: {
+            /** Format: uuid */
+            id: string;
+            /** @description YYYY-MM. */
+            month: string;
+            currency: string;
+            trigger: components["schemas"]["AiBudgetPlanTrigger"];
+            state: components["schemas"]["AiBudgetPlanState"];
+            /** @description The owner's savings goal per month for the plan. */
+            savingsGoal: components["schemas"]["Money"] | null;
+            requestedBy: components["schemas"]["Actor"];
+            attempts: number;
+            /** Format: date-time */
+            claimedAt: string | null;
+            /** Format: date-time */
+            retryAt: string | null;
+            error: string | null;
+            /** Format: date-time */
+            finishedAt: string | null;
+            result: components["schemas"]["AiBudgetPlanResult"] | null;
+            applied: components["schemas"]["AiBudgetPlanApplied"] | null;
+            /** Format: date-time */
+            dismissedAt: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        AiBudgetPlanList: {
+            items: components["schemas"]["AiBudgetPlan"][];
+            /** @description Plans the job may claim now. */
+            waiting: number;
+        };
+        AiBudgetPlanClaim: {
+            plan: components["schemas"]["AiBudgetPlan"] | null;
+        };
+        RequestAiBudgetPlanRequest: {
+            /** @description YYYY-MM; by default this month during its first 7 days, else the next. */
+            month?: string | null;
+            /**
+             * Format: int64
+             * @description How much to save a month.
+             */
+            savingsGoalMinor?: number | null;
+            trigger?: components["schemas"]["AiBudgetPlanTrigger"];
+        };
+        AiBudgetProposalLine: {
+            /** Format: uuid */
+            categoryId: string;
+            /** Format: int64 */
+            proposedMinor: number;
+            /** @description One sentence. */
+            reason: string;
+        };
+        AiBudgetProposalSuggestion: {
+            title: string;
+            detail: string;
+            /** Format: uuid */
+            categoryId: string | null;
+            /** @description Names of the category's top merchants in the planning data. */
+            merchants: string[];
+            /** Format: int64 */
+            monthlySavingMinor: number;
+            /** @description `food_recipes` or null. */
+            link: string | null;
+        };
+        /** @description The AI's proposal, in minor units of `currency`. */
+        AiBudgetPlanProposal: {
+            currency: string;
+            headline: string;
+            lines: components["schemas"]["AiBudgetProposalLine"][];
+            suggestions: components["schemas"]["AiBudgetProposalSuggestion"][];
+            /** Format: int64 */
+            projectedTotalMinor: number;
+            /** Format: int64 */
+            incomeEstimateMinor: number;
+            /** Format: int64 */
+            projectedSavingsMinor: number;
+        };
+        AiBudgetPlanFailure: {
+            /** @description What went wrong (at most 500 characters are kept). */
+            error: string;
+            /**
+             * Format: date-time
+             * @description When to try again; without it the plan fails for good.
+             */
+            retryAt?: string | null;
+        };
+        ApplyAiBudgetPlanRequest: {
+            lines: components["schemas"]["BudgetLineInput"][];
+            scope?: components["schemas"]["BudgetScope"];
+            /** Format: int64 */
+            expectedIncomeMinor?: number | null;
+            /** Format: int64 */
+            savingsGoalMinor?: number | null;
+        };
+        AiBudgetPlanApplyResult: {
+            plan: components["schemas"]["AiBudgetPlan"];
+            budget: components["schemas"]["BudgetMonth"];
+        };
         /**
          * @description `suggested`: detected, waiting for the owner. `confirmed`: the owner's. `ignored`: never suggested again for this counterparty and cadence.
          * @enum {string}
@@ -1215,6 +1637,7 @@ export interface components {
         /** @description YYYY-MM. */
         Month: string;
         SubscriptionId: string;
+        PlanId: string;
     };
     requestBodies: never;
     headers: never;
@@ -2171,6 +2594,418 @@ export interface operations {
             };
             /** @description The month is not YYYY-MM (`invalid_request`) */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getBudgetPlanningData: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description YYYY-MM. */
+                month: components["parameters"]["Month"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Planning data */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetPlanningData"];
+                };
+            };
+            /** @description The month is not YYYY-MM (`invalid_request`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    listAiBudgetPlans: {
+        parameters: {
+            query?: {
+                /** @description YYYY-MM. */
+                month?: string;
+                state?: components["schemas"]["AiBudgetPlanState"];
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Plans */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiBudgetPlanList"];
+                };
+            };
+            /** @description Invalid request (`invalid_request`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    requestAiBudgetPlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RequestAiBudgetPlanRequest"];
+            };
+        };
+        responses: {
+            /** @description The month's plan already requested or running (or its scheduled plan) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiBudgetPlan"];
+                };
+            };
+            /** @description Requested */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiBudgetPlan"];
+                };
+            };
+            /** @description Invalid request (`invalid_request`, such as a past month or a negative goal), or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Asked 10 times today already (`daily_limit`) */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    claimAiBudgetPlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The claimed plan, or null */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiBudgetPlanClaim"];
+                };
+            };
+            /** @description No valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The owner does not run plans (`actor_not_allowed`) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getAiBudgetPlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                planId: components["parameters"]["PlanId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The plan */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiBudgetPlan"];
+                };
+            };
+            /** @description No such plan (`not_found`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    setAiBudgetPlanResult: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                planId: components["parameters"]["PlanId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AiBudgetPlanProposal"];
+            };
+        };
+        responses: {
+            /** @description The ready plan */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiBudgetPlan"];
+                };
+            };
+            /** @description The proposal does not pass the checks (`invalid_plan`), an invalid body (`invalid_request`), or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The owner does not write proposals (`actor_not_allowed`) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No such plan (`not_found`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The plan is not requested or running (`plan_not_running`) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    failAiBudgetPlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                planId: components["parameters"]["PlanId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AiBudgetPlanFailure"];
+            };
+        };
+        responses: {
+            /** @description The plan */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiBudgetPlan"];
+                };
+            };
+            /** @description Invalid request (`invalid_request`), or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The owner does not run plans (`actor_not_allowed`) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No such plan (`not_found`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The plan is not requested or running (`plan_not_running`) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    applyAiBudgetPlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                planId: components["parameters"]["PlanId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApplyAiBudgetPlanRequest"];
+            };
+        };
+        responses: {
+            /** @description The plan and the month's budget */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiBudgetPlanApplyResult"];
+                };
+            };
+            /** @description Invalid request (`invalid_request`: no lines, a category not in the plan or named twice, a negative amount), an unknown category (`unknown_category`), or no valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The AI does not apply plans (`actor_not_allowed`) */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No such plan (`not_found`) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The plan is not ready (`plan_not_ready`) or was dismissed (`plan_dismissed`) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    dismissAiBudgetPlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                planId: components["parameters"]["PlanId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The dismissed plan */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AiBudgetPlan"];
+                };
+            };
+            /** @description No valid X-Life-OS-Actor (`actor_required`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No such plan (`not_found`) */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -59,9 +59,9 @@ func (h *Handler) CreateCsvImport(c fiber.Ctx, params generated.CreateCsvImportP
 	}
 	id := googleuuid.New()
 	failed := result.Imported == 0 && result.Failed > 0
-	status := generated.Completed
+	status := generated.CsvImportStatusCompleted
 	if failed {
-		status = generated.Failed
+		status = generated.CsvImportStatusFailed
 	}
 	response := generated.CsvImport{Id: id, Status: status, Imported: result.Imported, Duplicates: result.Duplicates, Failed: result.Failed,
 		Categorized: result.Categorized, Errors: make([]generated.CsvImportError, 0, min(len(result.Errors), maxReportedErrors))}

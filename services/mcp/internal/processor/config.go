@@ -43,6 +43,12 @@ type Config struct {
 	// CategoriesEnabled switches the AI categories job
 	// (LIFE_OS_AI_CATEGORIES: on, the default, or off).
 	CategoriesEnabled bool
+	// BudgetPlansEnabled switches the AI budget plan job
+	// (LIFE_OS_AI_BUDGET_PLANS: on, the default, or off).
+	BudgetPlansEnabled bool
+	// BudgetPlanMonthly switches its plan on the 1st of each month
+	// (LIFE_OS_AI_BUDGET_PLAN_MONTHLY: on, the default, or off).
+	BudgetPlanMonthly bool
 	// Warnings are non-fatal configuration problems to log at startup.
 	Warnings []string
 }
@@ -92,14 +98,24 @@ func LoadConfig() (Config, error) {
 	if c.IdeasWebSearch != WebSearchDisabled && c.IdeasWebSearch != WebSearchCached && c.IdeasWebSearch != WebSearchLive {
 		return c, fmt.Errorf("LIFE_OS_IDEAS_WEB_SEARCH must be disabled, cached, or live")
 	}
-	switch strings.ToLower(strings.TrimSpace(env("LIFE_OS_AI_CATEGORIES", "on"))) {
-	case "on", "true", "1":
-		c.CategoriesEnabled = true
-	case "off", "false", "0":
-	default:
-		return c, fmt.Errorf("LIFE_OS_AI_CATEGORIES must be on or off")
+	for name, target := range map[string]*bool{"LIFE_OS_AI_CATEGORIES": &c.CategoriesEnabled, "LIFE_OS_AI_BUDGET_PLANS": &c.BudgetPlansEnabled,
+		"LIFE_OS_AI_BUDGET_PLAN_MONTHLY": &c.BudgetPlanMonthly} {
+		if *target, err = onOff(name); err != nil {
+			return c, err
+		}
 	}
 	return c, nil
+}
+
+// onOff reads a switch: on (the default) or off.
+func onOff(name string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(env(name, "on"))) {
+	case "on", "true", "1":
+		return true, nil
+	case "off", "false", "0":
+		return false, nil
+	}
+	return false, fmt.Errorf("%s must be on or off", name)
 }
 
 // ideasTime reads LIFE_OS_IDEAS_TIME: HH:MM on the owner's clock, or off.

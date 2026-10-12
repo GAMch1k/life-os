@@ -11,21 +11,33 @@ import (
 )
 
 type Querier interface {
+	// Whether a plan is running on a claim that has not lapsed: the job runs
+	// one plan at a time.
+	AIBudgetPlanRunning(ctx context.Context, lapsedBefore pgtype.Timestamptz) (bool, error)
 	AccountNameExists(ctx context.Context, name string) (bool, error)
 	// An account the owner already called Cash becomes the built-in one.
 	AdoptAccountAsBuiltIn(ctx context.Context, arg AdoptAccountAsBuiltInParams) (Account, error)
 	// An existing category of the default's name (any case) and kind becomes
 	// the default one; only its system key is set.
 	AdoptCategory(ctx context.Context, arg AdoptCategoryParams) (FinancialCategory, error)
+	ApplyAIBudgetPlan(ctx context.Context, arg ApplyAIBudgetPlanParams) (AiBudgetPlan, error)
 	ArchiveConnectionAccounts(ctx context.Context, connectionID pgtype.UUID) ([]Account, error)
 	// A booked transaction that replaced a pending one keeps the pending one's
 	// claim, so the same debit is not notified twice.
 	CarryOverAlertClaim(ctx context.Context, arg CarryOverAlertClaimParams) error
 	CategoryNameTaken(ctx context.Context, name string) (bool, error)
+	// The oldest plan the job may claim, now running.
+	ClaimAIBudgetPlan(ctx context.Context, arg ClaimAIBudgetPlanParams) (AiBudgetPlan, error)
 	ClaimAlertNotification(ctx context.Context, dedupeKey string) (int64, error)
 	ClaimBudgetNotification(ctx context.Context, arg ClaimBudgetNotificationParams) (int64, error)
+	// The owner's requests since an instant, for the daily limit.
+	CountAIBudgetPlanRequestsSince(ctx context.Context, since pgtype.Timestamptz) (int64, error)
 	CountAICategoryCandidates(ctx context.Context) (int64, error)
 	CountAccountTransactions(ctx context.Context, accountID pgtype.UUID) (int64, error)
+	// Plans the job may claim now: requested and due, or running on a claim
+	// that lapsed (the processor stopped during the run).
+	CountWaitingAIBudgetPlans(ctx context.Context, arg CountWaitingAIBudgetPlansParams) (int64, error)
+	CreateAIBudgetPlan(ctx context.Context, arg CreateAIBudgetPlanParams) (AiBudgetPlan, error)
 	CreateAccount(ctx context.Context, arg CreateAccountParams) (Account, error)
 	CreateBankAccount(ctx context.Context, arg CreateBankAccountParams) (Account, error)
 	CreateBuiltInAccount(ctx context.Context, arg CreateBuiltInAccountParams) (Account, error)
@@ -46,11 +58,19 @@ type Querier interface {
 	DeleteStalePending(ctx context.Context, arg DeleteStalePendingParams) (int64, error)
 	DeleteSubscription(ctx context.Context, id pgtype.UUID) (Subscription, error)
 	DeleteTransaction(ctx context.Context, id pgtype.UUID) error
+	DismissAIBudgetPlan(ctx context.Context, arg DismissAIBudgetPlanParams) (AiBudgetPlan, error)
+	// A failed run: waiting again until retry_at, or failed for good without
+	// one.
+	FailAIBudgetPlan(ctx context.Context, arg FailAIBudgetPlanParams) (AiBudgetPlan, error)
 	// The pending bank transaction a new booked one replaces: same account and
 	// amount, the same counterparty ignoring case and spacing, booked at most
 	// three days apart, and absent from the sync (keep).
 	FindReplacedPending(ctx context.Context, arg FindReplacedPendingParams) (Transaction, error)
+	GetAIBudgetPlan(ctx context.Context, id pgtype.UUID) (AiBudgetPlan, error)
+	GetAIBudgetPlanForUpdate(ctx context.Context, id pgtype.UUID) (AiBudgetPlan, error)
 	GetAccount(ctx context.Context, id pgtype.UUID) (Account, error)
+	// A month's newest plan that is still waiting or running.
+	GetActiveAIBudgetPlan(ctx context.Context, month pgtype.Date) (AiBudgetPlan, error)
 	// Booked money per month and category in one currency, for suggestions.
 	GetBudgetHistory(ctx context.Context, arg GetBudgetHistoryParams) ([]GetBudgetHistoryRow, error)
 	// A month's money in one currency per category (null: uncategorized):
@@ -66,9 +86,13 @@ type Querier interface {
 	GetEffectiveBudgetPlan(ctx context.Context, month pgtype.Date) (BudgetPlan, error)
 	GetFinanceSettings(ctx context.Context) (FinanceSetting, error)
 	GetFinancialCategory(ctx context.Context, id pgtype.UUID) (FinancialCategory, error)
+	// Where the history of a currency starts: its first booked transaction's
+	// date (null without one).
+	GetHistoryStart(ctx context.Context, currency string) (pgtype.Date, error)
 	// Booked transactions of the month in one currency, leaving out transfers.
 	GetMonthlyCashflow(ctx context.Context, arg GetMonthlyCashflowParams) (GetMonthlyCashflowRow, error)
 	GetMonthlyCategoryTotals(ctx context.Context, arg GetMonthlyCategoryTotalsParams) ([]GetMonthlyCategoryTotalsRow, error)
+	GetScheduledAIBudgetPlan(ctx context.Context, month pgtype.Date) (AiBudgetPlan, error)
 	GetSubscription(ctx context.Context, id pgtype.UUID) (Subscription, error)
 	GetSubscriptionByIdentity(ctx context.Context, arg GetSubscriptionByIdentityParams) (Subscription, error)
 	GetSubscriptionForUpdate(ctx context.Context, id pgtype.UUID) (Subscription, error)
@@ -76,6 +100,8 @@ type Querier interface {
 	GetTransactionForUpdate(ctx context.Context, id pgtype.UUID) (Transaction, error)
 	InsertBudgetPlanLines(ctx context.Context, arg InsertBudgetPlanLinesParams) error
 	InsertSubscription(ctx context.Context, arg InsertSubscriptionParams) (Subscription, error)
+	// Newest first.
+	ListAIBudgetPlans(ctx context.Context, arg ListAIBudgetPlansParams) ([]AiBudgetPlan, error)
 	// What the AI may categorize, latest first: booked transactions of active
 	// accounts without a category that nobody chose (a category cleared by hand
 	// stays cleared), which the AI has not looked at since their text last
@@ -119,6 +145,10 @@ type Querier interface {
 	// or repeated spaces), in a category that is not archived, latest first:
 	// examples of their taste for the AI.
 	ListManualCategoryExamples(ctx context.Context, exampleLimit int32) ([]ListManualCategoryExamplesRow, error)
+	// Booked money out in expense categories in a currency between two dates
+	// (the end excluded): who was paid, in which category, for a budget plan's
+	// merchants; latest first.
+	ListPlanningSpending(ctx context.Context, arg ListPlanningSpendingParams) ([]ListPlanningSpendingRow, error)
 	// Booked money out since a day, for detecting recurring payments; money
 	// moved between own accounts (transfer categories) is not a payment.
 	ListRecurringCandidates(ctx context.Context, since pgtype.Date) ([]ListRecurringCandidatesRow, error)
@@ -134,6 +164,8 @@ type Querier interface {
 	// the last row of the previous page. Every search word must occur in the
 	// counterparty, description, or notes (the words arrive LIKE-escaped).
 	ListTransactions(ctx context.Context, arg ListTransactionsParams) ([]Transaction, error)
+	// One request or claim at a time.
+	LockAIBudgetPlans(ctx context.Context) error
 	// One sync of a connection at a time.
 	LockBankConnection(ctx context.Context, connectionID pgtype.UUID) error
 	// One plan change at a time.
@@ -154,6 +186,7 @@ type Querier interface {
 	ReplaceSubscriptionLinks(ctx context.Context, arg ReplaceSubscriptionLinksParams) error
 	SaveFinanceSettings(ctx context.Context, arg SaveFinanceSettingsParams) (FinanceSetting, error)
 	SeedApplied(ctx context.Context, name string) (bool, error)
+	SetAIBudgetPlanResult(ctx context.Context, arg SetAIBudgetPlanResultParams) (AiBudgetPlan, error)
 	// Gives each transaction the AI's category, only while no one else chose
 	// one (or the AI chose it), and notes that the AI looked at it.
 	SetAICategories(ctx context.Context, arg SetAICategoriesParams) (int64, error)
