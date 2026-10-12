@@ -8,6 +8,7 @@ import {
   type Transaction,
   NO_FILTERS,
   TRANSACTIONS_PAGE_SIZE,
+  BY_AI,
   UNCATEGORIZED,
   accountCurrencies,
   accountDraft,
@@ -16,6 +17,7 @@ import {
   bookingDayLabel,
   categoryDraft,
   categoryGroups,
+  chosenByAI,
   createAccountBody,
   createCategoryBody,
   createRuleBody,
@@ -25,7 +27,11 @@ import {
   importResultText,
   newTransactionDraft,
   readOnlyReason,
+  ruleCreatedText,
   ruleDraft,
+  ruleMatchFor,
+  ruleOffer,
+  ruleOfferText,
   ruleText,
   sourceBadge,
   splitAccounts,
@@ -648,4 +654,119 @@ test("importResultText reports imported, duplicate, and failed rows", () => {
     importResultText({ ...result, duplicates: 0, categorized: 2 }),
     "Imported 2, 0 duplicates skipped, 0 failed. 2 got a category from the rules.",
   );
+});
+
+// ---- AI categories ----------------------------------------------------------
+
+test("transactionQuery asks for what the AI chose", () => {
+  assert.deepEqual(transactionQuery({ ...NO_FILTERS, categoryId: BY_AI }), {
+    limit: TRANSACTIONS_PAGE_SIZE,
+    categorizedBy: "ai",
+  });
+  assert.equal(activeFilterCount({ ...NO_FILTERS, categoryId: BY_AI }), 1);
+});
+
+test("chosenByAI is a category the AI chose", () => {
+  assert.equal(
+    chosenByAI(transaction({ categoryId: "dining", categorizedBy: "ai" })),
+    true,
+  );
+  assert.equal(
+    chosenByAI(transaction({ categoryId: "dining", categorizedBy: "manual" })),
+    false,
+  );
+  assert.equal(chosenByAI(transaction({ categorizedBy: "ai" })), false);
+});
+
+test("ruleMatchFor picks the safer rule for the text", () => {
+  assert.deepEqual(ruleMatchFor("Kneipe41"), {
+    field: "counterparty",
+    operator: "contains",
+    text: "Kneipe41",
+  });
+  // Store numbers and references at the end change between payments.
+  assert.deepEqual(ruleMatchFor("  SMYTHS TOYS   0423 "), {
+    field: "counterparty",
+    operator: "contains",
+    text: "SMYTHS TOYS",
+  });
+  assert.deepEqual(ruleMatchFor("GASTRONOMIE DJANGO 12.10."), {
+    field: "counterparty",
+    operator: "contains",
+    text: "GASTRONOMIE DJANGO",
+  });
+  // A short name occurs inside other words: only the exact counterparty.
+  assert.deepEqual(ruleMatchFor("dm"), {
+    field: "counterparty",
+    operator: "equals",
+    text: "dm",
+  });
+  assert.deepEqual(ruleMatchFor("IKEA"), {
+    field: "counterparty",
+    operator: "equals",
+    text: "IKEA",
+  });
+  assert.deepEqual(ruleMatchFor("DB 4711"), {
+    field: "counterparty",
+    operator: "equals",
+    text: "DB 4711",
+  });
+  assert.equal(ruleMatchFor("   "), undefined);
+  assert.equal(ruleMatchFor(null), undefined);
+});
+
+test("correcting the AI's category offers a rule", () => {
+  const dining = category({ id: "dining", name: "Eating out" });
+  const fun = category({ id: "fun", name: "Fun & leisure" });
+  const before = transaction({
+    counterparty: "Kneipe41",
+    categoryId: "fun",
+    categorizedBy: "ai",
+  });
+  const after = {
+    ...before,
+    categoryId: "dining",
+    categorizedBy: "manual" as const,
+  };
+  const offer = ruleOffer(before, after, [dining, fun]);
+  assert.deepEqual(offer, {
+    counterparty: "Kneipe41",
+    categoryId: "dining",
+    categoryName: "Eating out",
+    match: { field: "counterparty", operator: "contains", text: "Kneipe41" },
+  });
+  assert.equal(ruleOfferText(offer!), "Always put “Kneipe41” in Eating out?");
+  const applied = {
+    scope: "uncategorized" as const,
+    examined: 5,
+    categorized: 0,
+    recategorized: 2,
+    cleared: 0,
+    unchanged: 3,
+  };
+  assert.equal(
+    ruleCreatedText(offer!, applied),
+    "Rule created: Counterparty contains “Kneipe41” → Eating out. Checked 5 transactions: 0 categorized, 2 recategorized, 3 unchanged.",
+  );
+  // No offer: the category was the owner's or a rule's, it was cleared or
+  // kept, or there is no counterparty to match.
+  const manual = { ...before, categorizedBy: "manual" as const };
+  assert.equal(ruleOffer(manual, after, [dining, fun]), undefined);
+  assert.equal(
+    ruleOffer({ ...before, categorizedBy: "rule" }, after, [dining, fun]),
+    undefined,
+  );
+  assert.equal(
+    ruleOffer(before, { ...after, categoryId: null }, [dining, fun]),
+    undefined,
+  );
+  assert.equal(
+    ruleOffer(before, { ...after, categoryId: "fun" }, [dining, fun]),
+    undefined,
+  );
+  assert.equal(
+    ruleOffer(before, { ...after, counterparty: null }, [dining, fun]),
+    undefined,
+  );
+  assert.equal(ruleOffer(undefined, after, [dining, fun]), undefined);
 });

@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   SOURCE_FAILURE_ALERT,
   formatAge,
+  categoriesFacts,
   ideasFacts,
   limitResetsAt,
   runtimeFacts,
@@ -673,4 +674,73 @@ test("the recipe ideas job says its last run and its next", () => {
     "only when asked for",
   );
   assert.deepEqual(ideasFacts(undefined), []);
+});
+
+test("the AI categories job says its last batch and what waits", () => {
+  const value = (facts: { label: string; value: string }[], label: string) =>
+    facts.find((fact) => fact.label === label)?.value;
+  const categories = {
+    enabled: true,
+    running: false,
+    nextRunAt: "2026-10-12T09:07:00Z",
+    waiting: 120,
+    lastCheckAt: "2026-10-12T09:05:00Z",
+    batchesToday: 2,
+    lastRun: {
+      finishedAt: "2026-10-12T09:05:00Z",
+      examined: 40,
+      categorized: 31,
+      skipped: 9,
+      unsure: 6,
+      rejected: 2,
+      chosenMeanwhile: 1,
+      outcome: "categorized",
+    },
+  };
+  const facts = categoriesFacts(categories);
+  assert.equal(
+    value(facts, "AI categories"),
+    "31 categorized, 9 skipped (6 unsure, 2 rejected, 1 chosen meanwhile), 12 Oct 2026, 09:05 UTC",
+  );
+  assert.equal(
+    value(facts, "Next AI categories"),
+    "12 Oct 2026, 09:07 UTC, 120 waiting",
+  );
+  assert.equal(
+    value(
+      categoriesFacts({
+        ...categories,
+        waiting: 0,
+        lastRun: {
+          ...categories.lastRun,
+          categorized: 0,
+          skipped: 40,
+          outcome: "failed",
+          error: "Codex run timed out",
+        },
+      }),
+      "AI categories",
+    ),
+    "failed: Codex run timed out, 12 Oct 2026, 09:05 UTC",
+  );
+  assert.equal(
+    value(categoriesFacts({ ...categories, waiting: 0 }), "Next AI categories"),
+    "12 Oct 2026, 09:07 UTC, nothing waiting",
+  );
+  assert.equal(
+    value(categoriesFacts({ ...categories, running: true }), "AI categories"),
+    "categorizing now",
+  );
+  assert.equal(
+    value(
+      categoriesFacts({ ...categories, lastRun: null, waiting: null }),
+      "AI categories",
+    ),
+    "nothing categorized since the processor started",
+  );
+  assert.deepEqual(
+    categoriesFacts({ ...categories, enabled: false, nextRunAt: null }),
+    [{ label: "AI categories", value: "off (LIFE_OS_AI_CATEGORIES)" }],
+  );
+  assert.deepEqual(categoriesFacts(undefined), []);
 });

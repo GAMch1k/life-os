@@ -393,7 +393,8 @@ function RuleList({
         counterparty or description. Rules are tried in order and the first
         match wins; a category you chose by hand is never changed. A card
         payment no rule matches gets a default category from its merchant
-        category code.
+        category code. What is still left, the AI categorizes (marked “by AI”),
+        and a rule that matches replaces the AI’s choice.
       </p>
       {error ? (
         <p className="text-destructive text-sm" role="alert">
@@ -456,7 +457,7 @@ function RuleList({
           value={scope}
         >
           <NativeSelectOption value="uncategorized">
-            Transactions without a category
+            Transactions without a category, or with the AI’s
           </NativeSelectOption>
           <NativeSelectOption value="all">
             Also re-check categories rules or codes chose

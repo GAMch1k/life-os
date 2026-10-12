@@ -1,6 +1,6 @@
 "use client";
 
-import { Search, X } from "lucide-react";
+import { Search, Sparkles, X } from "lucide-react";
 
 import { DatePicker } from "@/components/date-picker";
 import { Amount } from "@/components/finance-amount";
@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/table";
 import {
   type Account,
+  BY_AI,
   type Category,
   NO_FILTERS,
   SOURCE_LABELS,
@@ -33,6 +34,7 @@ import {
   bookingDayLabel,
   byId,
   categoryGroups,
+  chosenByAI,
   sourceBadge,
   transactionSubtitle,
   transactionTitle,
@@ -218,6 +220,7 @@ function TransactionFiltersBar({
         <NativeSelectOption value={UNCATEGORIZED}>
           Uncategorized
         </NativeSelectOption>
+        <NativeSelectOption value={BY_AI}>Chosen by AI</NativeSelectOption>
         {categoryGroups(categories).map((group) => (
           <NativeSelectOptGroup key={group.kind} label={group.label}>
             {group.items.map((category) => (
@@ -351,6 +354,7 @@ function TransactionTable({
             const category = transaction.categoryId
               ? categoriesById.get(transaction.categoryId)
               : undefined;
+            const byAI = chosenByAI(transaction);
             const account = accountsById.get(transaction.accountId);
             const day = bookingDayLabel(transaction.bookingDate, today, locale);
             return (
@@ -393,12 +397,13 @@ function TransactionTable({
                     ) : null}
                     <span className="text-muted-foreground block truncate text-xs md:hidden">
                       {category?.name ?? "Uncategorized"}
+                      {byAI ? " (by AI)" : ""}
                       {account ? ` · ${account.name}` : ""}
                     </span>
                   </button>
                 </TableCell>
                 <TableCell className="hidden max-w-40 md:table-cell">
-                  <CategoryName category={category} />
+                  <CategoryName byAI={byAI} category={category} />
                 </TableCell>
                 <TableCell className="text-muted-foreground hidden max-w-40 truncate lg:table-cell">
                   {account?.name ?? "Unknown account"}
@@ -415,8 +420,17 @@ function TransactionTable({
   );
 }
 
-/** A category with its color dot, or "Uncategorized". */
-export function CategoryName({ category }: { category?: Category }) {
+/**
+ * A category with its color dot, or "Uncategorized"; `byAI` adds the
+ * subtle mark of a category the AI chose.
+ */
+export function CategoryName({
+  category,
+  byAI = false,
+}: {
+  category?: Category;
+  byAI?: boolean;
+}) {
   if (!category)
     return <span className="text-muted-foreground">Uncategorized</span>;
   return (
@@ -427,6 +441,21 @@ export function CategoryName({ category }: { category?: Category }) {
         style={category.color ? { backgroundColor: category.color } : undefined}
       />
       <span className="truncate">{category.name}</span>
+      {byAI ? <AIMark /> : null}
+    </span>
+  );
+}
+
+/** Marks a category the AI chose; hovering says how to correct it. */
+export function AIMark() {
+  return (
+    <span
+      className="text-muted-foreground inline-flex shrink-0 items-center"
+      data-testid="finance-ai-mark"
+      title="Chosen by AI. Pick another category to correct it."
+    >
+      <Sparkles aria-hidden="true" className="size-3.5" />
+      <span className="sr-only">by AI</span>
     </span>
   );
 }
