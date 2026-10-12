@@ -1,5 +1,6 @@
 import { activityClient } from "@/lib/api/activity-client";
 import type { components } from "@/lib/api/generated/activity";
+import { monthLabel } from "@/lib/finance-summary";
 import { aisleLabel } from "@/lib/food";
 import { addDays, DATE_LOCALE, dayKey, startOfDay } from "@/lib/time-zone";
 
@@ -100,6 +101,7 @@ export const SUBJECT_TYPES = [
   { value: "food_idea", label: "Recipe idea" },
   { value: "food_preferences", label: "Cooking preferences" },
   { value: "finance_ai_categories", label: "AI categories" },
+  { value: "finance_ai_budget_plan", label: "AI budget plan" },
 ] as const;
 
 /** Why Food put an item on the list by itself (`data.reason`). */
@@ -193,6 +195,11 @@ const EVENT_LABELS: Record<string, string> = {
   "food.meal_plan.cleared": "Meal cleared",
   "food.recipe.imported": "Recipe imported",
   "finance.ai_categories.applied": "AI categorized transactions",
+  "finance.ai_budget_plan.requested": "AI budget plan requested",
+  "finance.ai_budget_plan.created": "AI budget plan ready",
+  "finance.ai_budget_plan.failed": "AI budget plan failed",
+  "finance.ai_budget_plan.applied": "AI budget plan applied",
+  "finance.ai_budget_plan.dismissed": "AI budget plan dismissed",
 };
 
 export const EVENT_TYPES = Object.keys(EVENT_LABELS);
@@ -335,6 +342,15 @@ export function eventLabel(event: Pick<ActivityEvent, "type" | "data">) {
       ? `${label}: ${categorized} (${left} left without a category)`
       : `${label}: ${categorized}`;
   }
+  // An AI budget plan by the month it plans.
+  const month = text(event.data?.month);
+  if (
+    event.type.startsWith("finance.ai_budget_plan.") &&
+    month &&
+    /^\d{4}-(0[1-9]|1[0-2])$/.test(month)
+  ) {
+    return `${label}: ${monthLabel(month)}`;
+  }
   // A notification by its title, and a delivery by the channel it used.
   if (event.type.startsWith("notification.") && title) {
     const channel = text(event.data?.channel);
@@ -394,6 +410,7 @@ export function sourceDescription(source: string | undefined) {
 const ACTOR_NAMES: Record<string, string> = {
   "codex-inbox-processor": "Inbox processor (Codex)",
   "codex-finance-categories": "AI categories (Codex)",
+  "codex-budget-plan": "AI budget plan (Codex)",
   banking: "Bank sync",
   "google-calendar": "Google Calendar sync",
   mcp: "Agent via MCP",
