@@ -87,7 +87,7 @@ func TestAIBudgetPlansAreRequestedClaimedCheckedAndStored(t *testing.T) {
 
 	// It is 11 October in Berlin: by default the plan is for November.
 	plan := c.requestPlan(map[string]any{"savingsGoalMinor": 50000}, http.StatusAccepted, "user")
-	if plan.Month != "2026-11" || plan.State != generated.AiBudgetPlanStateRequested || plan.Trigger != generated.Request || plan.RequestedBy.Kind != generated.User ||
+	if plan.Month != "2026-11" || plan.State != generated.AiBudgetPlanStateRequested || plan.Trigger != generated.AiBudgetPlanTriggerRequest || plan.RequestedBy.Kind != generated.User ||
 		plan.SavingsGoal.Amount != 50000 || plan.Result != nil || plan.Attempts != 0 {
 		t.Fatalf("requested = %+v", plan)
 	}
@@ -306,7 +306,7 @@ func TestFailedRunsWaitToRetryOrFailAndLapsedClaimsAreTakenOver(t *testing.T) {
 func TestTheScheduledPlanIsOnePerMonthAndRequestsAreLimited(t *testing.T) {
 	c := newAPIClient(t)
 	scheduled := c.requestPlan(map[string]any{"month": "2026-11", "trigger": "schedule"}, http.StatusAccepted, planActor)
-	if scheduled.Trigger != generated.Schedule || scheduled.RequestedBy.Kind != generated.Agent || *scheduled.RequestedBy.Name != "codex-budget-plan" {
+	if scheduled.Trigger != generated.AiBudgetPlanTriggerSchedule || scheduled.RequestedBy.Kind != generated.Agent || *scheduled.RequestedBy.Name != "codex-budget-plan" {
 		t.Fatalf("scheduled = %+v", scheduled)
 	}
 	// Dismissed or not, a month has one scheduled plan.

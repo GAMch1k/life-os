@@ -11,6 +11,11 @@ import (
 )
 
 type Querier interface {
+	// Whether a month has a plan that is waiting, running, ready, or applied:
+	// the salary asks for none then. A failed or dismissed one does not count.
+	AIBudgetPlanForMonthExists(ctx context.Context, month pgtype.Date) (bool, error)
+	// Whether a payment already asked for a plan.
+	AIBudgetPlanForSalaryExists(ctx context.Context, transactionID pgtype.UUID) (bool, error)
 	// Whether a plan is running on a claim that has not lapsed: the job runs
 	// one plan at a time.
 	AIBudgetPlanRunning(ctx context.Context, lapsedBefore pgtype.Timestamptz) (bool, error)
@@ -92,6 +97,10 @@ type Querier interface {
 	// Booked transactions of the month in one currency, leaving out transfers.
 	GetMonthlyCashflow(ctx context.Context, arg GetMonthlyCashflowParams) (GetMonthlyCashflowRow, error)
 	GetMonthlyCategoryTotals(ctx context.Context, arg GetMonthlyCategoryTotalsParams) ([]GetMonthlyCategoryTotalsRow, error)
+	GetPaydaySettings(ctx context.Context) (PaydaySetting, error)
+	// A month's newest plan the salary asked for that did not fail (dismissed
+	// ones included: the owner saw that month's plan).
+	GetSalaryAIBudgetPlan(ctx context.Context, month pgtype.Date) (AiBudgetPlan, error)
 	GetScheduledAIBudgetPlan(ctx context.Context, month pgtype.Date) (AiBudgetPlan, error)
 	GetSubscription(ctx context.Context, id pgtype.UUID) (Subscription, error)
 	GetSubscriptionByIdentity(ctx context.Context, arg GetSubscriptionByIdentityParams) (Subscription, error)
@@ -102,6 +111,10 @@ type Querier interface {
 	InsertSubscription(ctx context.Context, arg InsertSubscriptionParams) (Subscription, error)
 	// Newest first.
 	ListAIBudgetPlans(ctx context.Context, arg ListAIBudgetPlansParams) ([]AiBudgetPlan, error)
+	// Ready plans the AI made without the owner asking (the salary's and the
+	// schedule's) that finished since an instant, oldest first: each gets a
+	// notification.
+	ListAIBudgetPlansToNotify(ctx context.Context, since pgtype.Timestamptz) ([]AiBudgetPlan, error)
 	// What the AI may categorize, latest first: booked transactions of active
 	// accounts without a category that nobody chose (a category cleared by hand
 	// stays cleared), which the AI has not looked at since their text last
@@ -130,6 +143,10 @@ type Querier interface {
 	// The month's transactions in other currencies than the budget's.
 	ListExcludedCurrencies(ctx context.Context, arg ListExcludedCurrenciesParams) ([]ListExcludedCurrenciesRow, error)
 	ListFinancialCategories(ctx context.Context, includeArchived bool) ([]FinancialCategory, error)
+	// Booked money in with a counterparty in a currency since a day, not in a
+	// transfer category (money moved between the owner's own accounts): who may
+	// pay the salary; latest first.
+	ListIncomePayments(ctx context.Context, arg ListIncomePaymentsParams) ([]ListIncomePaymentsRow, error)
 	// Money out of at least a threshold in one currency, booked or pending,
 	// booked on or after a day, that has not been notified. Money moved
 	// between own accounts (a transfer category) is not a debit to warn about.
@@ -185,6 +202,7 @@ type Querier interface {
 	// Makes ids the subscription's matched transactions.
 	ReplaceSubscriptionLinks(ctx context.Context, arg ReplaceSubscriptionLinksParams) error
 	SaveFinanceSettings(ctx context.Context, arg SaveFinanceSettingsParams) (FinanceSetting, error)
+	SavePaydaySettings(ctx context.Context, arg SavePaydaySettingsParams) (PaydaySetting, error)
 	SeedApplied(ctx context.Context, name string) (bool, error)
 	SetAIBudgetPlanResult(ctx context.Context, arg SetAIBudgetPlanResultParams) (AiBudgetPlan, error)
 	// Gives each transaction the AI's category, only while no one else chose

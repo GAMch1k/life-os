@@ -156,8 +156,8 @@ func Renewal(next, today time.Time, leadDays int) string {
 	return RenewalScheduled
 }
 
-// Payment is one booked money-out transaction. Amount is positive; Date
-// is a UTC midnight.
+// Payment is one booked money-out transaction (money in for Income).
+// Amount is positive; Date is a UTC midnight.
 type Payment struct {
 	ID           [16]byte
 	AccountID    [16]byte
@@ -235,7 +235,7 @@ func Detect(payments []Payment, today time.Time, exponent Exponent) []Candidate 
 		group = slices.DeleteFunc(group, func(p Payment) bool { return p.Currency != currency })
 		seen := map[string]bool{}
 		for _, cluster := range clusters(group, exponent(currency)) {
-			candidate, ok := regular(cluster, today)
+			candidate, ok := regular(cluster, today, cadences)
 			if !ok || seen[candidate.Cadence] {
 				continue
 			}
@@ -273,8 +273,8 @@ func clusters(payments []Payment, exponent int) [][]Payment {
 
 // regular tries the cadences on a group of payments (latest first) and
 // returns the first that its latest run follows.
-func regular(cluster []Payment, today time.Time) (Candidate, bool) {
-	for _, c := range cadences {
+func regular(cluster []Payment, today time.Time, tried []cadence) (Candidate, bool) {
+	for _, c := range tried {
 		run := []Payment{cluster[0]}
 		for _, payment := range cluster[1:] {
 			gap := daysBetween(payment.Date, run[len(run)-1].Date)

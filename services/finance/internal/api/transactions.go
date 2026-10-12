@@ -308,8 +308,14 @@ func (h *Handler) CreateManualTransaction(c fiber.Ctx) error {
 	if key != nil && (item.AutomationPayloadHash == nil || *item.AutomationPayloadHash != *hash) {
 		return apiError(fiber.StatusConflict, "idempotency_conflict", "The Idempotency-Key was already used with a different body")
 	}
+	// A replay finds the plan its salary asked for: nothing new.
+	salaryPlan, err := h.salaryPlanFor(ctx, item)
+	if err != nil {
+		return internal(err)
+	}
 	// A deterministic event id makes an idempotent replay record nothing new.
 	h.recordTransaction(c, transactionCreated, item, nil)
+	h.recordSalaryPlan(c, salaryPlan)
 	h.budgetChanged()
 	return c.Status(fiber.StatusCreated).JSON(transactionView(item))
 }
@@ -370,6 +376,7 @@ func (h *Handler) UpdateTransaction(c fiber.Ctx, transactionID types.UUID) error
 	ctx := c.Context()
 	var before, after store.Transaction
 	var changes []string
+	var salaryPlan *store.AiBudgetPlan
 	err = h.inTx(ctx, func(q *store.Queries) error {
 		var err error
 		before, err = q.GetTransactionForUpdate(ctx, pgUUID(transactionID))
@@ -460,6 +467,11 @@ func (h *Handler) UpdateTransaction(c fiber.Ctx, transactionID types.UUID) error
 			ValueDate: next.ValueDate, Status: next.Status, Counterparty: next.Counterparty, Description: next.Description, Note: next.Note,
 			CategoryID: next.CategoryID, CategorizedBy: next.CategorizedBy, CategoryRuleID: next.CategoryRuleID,
 		})
+		if err != nil || before.Status == after.Status {
+			return err
+		}
+		// A pending payment that is booked now may be the salary.
+		salaryPlan, err = h.planOnSalary(ctx, q, []store.Transaction{after})
 		return err
 	})
 	if err != nil {
@@ -467,6 +479,7 @@ func (h *Handler) UpdateTransaction(c fiber.Ctx, transactionID types.UUID) error
 	}
 	if len(changes) > 0 {
 		h.recordTransaction(c, transactionUpdated, after, changes)
+		h.recordSalaryPlan(c, salaryPlan)
 		h.budgetChanged()
 	}
 	return c.JSON(transactionView(after))

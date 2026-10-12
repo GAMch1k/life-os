@@ -394,3 +394,59 @@ func TestAIBudgetPlansMigrationRollsBackAndForward(t *testing.T) {
 	testdb.Apply(t, pool, testdb.Migration(t, "000009", "up"))
 	exec(`INSERT INTO ai_budget_plans (month, currency, trigger, requested_by_kind) VALUES ('2026-12-01', 'EUR', 'schedule', 'agent')`)
 }
+
+func TestPaydayMigrationRollsBackAndForward(t *testing.T) {
+	pool := testdb.Open(t, "000009")
+	ctx := context.Background()
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := pool.Exec(ctx, sql, args...); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	exec(`INSERT INTO accounts (name, currency) VALUES ('Giro', 'EUR')`)
+	exec(`INSERT INTO transactions (account_id, amount_minor, currency, occurred_on, counterparty)
+	      SELECT id, 310000, 'EUR', '2026-10-28', 'ACME Robotics GmbH' FROM accounts`)
+	exec(`INSERT INTO ai_budget_plans (month, currency, trigger, requested_by_kind) VALUES ('2026-10-01', 'EUR', 'request', 'user')`)
+
+	testdb.Apply(t, pool, testdb.Migration(t, "000010", "up"))
+	var enabled bool
+	if err := pool.QueryRow(ctx, `SELECT enabled FROM payday_settings`).Scan(&enabled); err != nil || enabled {
+		t.Fatalf("payday after migrating: %v %v", enabled, err)
+	}
+	exec(`UPDATE payday_settings SET enabled = true, payer_match = 'ACME Robotics', min_amount_minor = 100000`)
+	exec(`INSERT INTO ai_budget_plans (month, currency, trigger, requested_by_kind, requested_by_name, salary_transaction_id, salary_booked_on)
+	      SELECT '2026-11-01', 'EUR', 'salary', 'system', 'finance', id, '2026-10-28' FROM transactions`)
+	for _, bad := range []string{
+		// On without a payer; a blank payer; a minimum of 0.
+		`UPDATE payday_settings SET payer_match = NULL`,
+		`UPDATE payday_settings SET payer_match = '  '`,
+		`UPDATE payday_settings SET min_amount_minor = 0`,
+		// A salary plan has its payment's day, and only a salary plan; a
+		// payment asks once.
+		`INSERT INTO ai_budget_plans (month, currency, trigger, requested_by_kind) VALUES ('2026-12-01', 'EUR', 'salary', 'system')`,
+		`INSERT INTO ai_budget_plans (month, currency, trigger, requested_by_kind, salary_booked_on) VALUES ('2026-12-01', 'EUR', 'request', 'user', '2026-11-27')`,
+		`INSERT INTO ai_budget_plans (month, currency, trigger, requested_by_kind, salary_transaction_id, salary_booked_on)
+		 SELECT '2026-12-01', 'EUR', 'salary', 'system', id, '2026-10-28' FROM transactions`,
+	} {
+		if _, err := pool.Exec(ctx, bad); err == nil {
+			t.Fatalf("accepted: %s", bad)
+		}
+	}
+	// Deleting the payment keeps the plan.
+	exec(`DELETE FROM transactions`)
+	var linked int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM ai_budget_plans WHERE trigger = 'salary' AND salary_transaction_id IS NULL`).Scan(&linked); err != nil || linked != 1 {
+		t.Fatalf("salary plans without their payment: %d %v", linked, err)
+	}
+
+	testdb.Apply(t, pool, testdb.Migration(t, "000010", "down"))
+	var plans, requests, tables int
+	if err := pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM ai_budget_plans), (SELECT count(*) FROM ai_budget_plans WHERE trigger = 'request'),
+	      (SELECT count(*) FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'payday_settings')`).Scan(&plans, &requests, &tables); err != nil ||
+		plans != 2 || requests != 2 || tables != 0 {
+		t.Fatalf("after rollback: %d plans, %d requests, %d tables, %v", plans, requests, tables, err)
+	}
+	testdb.Apply(t, pool, testdb.Migration(t, "000010", "up"))
+	exec(`INSERT INTO ai_budget_plans (month, currency, trigger, requested_by_kind, salary_booked_on) VALUES ('2026-12-01', 'EUR', 'salary', 'system', '2026-11-27')`)
+}

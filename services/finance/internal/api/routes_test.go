@@ -22,7 +22,7 @@ func TestWritesRequireAnActor(t *testing.T) {
 		{http.MethodPost, "/v1/categories"}, {http.MethodPatch, "/v1/categories/" + id},
 		{http.MethodPost, "/v1/categories/rules"}, {http.MethodPatch, "/v1/categories/rules/" + id}, {http.MethodDelete, "/v1/categories/rules/" + id},
 		{http.MethodPost, "/v1/categories/rules/apply"}, {http.MethodPost, "/v1/imports/csv"},
-		{http.MethodPost, "/v1/imports/bank"}, {http.MethodDelete, "/v1/imports/bank/" + id},
+		{http.MethodPost, "/v1/imports/bank"}, {http.MethodDelete, "/v1/imports/bank/" + id}, {http.MethodPut, "/v1/settings/payday"},
 	}
 	write := func(method, target, actor string) (int, string) {
 		t.Helper()
