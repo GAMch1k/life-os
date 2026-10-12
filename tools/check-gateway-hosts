@@ -7,7 +7,10 @@
 #    catch-all), including the public hostname, the WireGuard address, and
 #    loopback;
 #  - nothing in the gateway refers to ntfy, which has its own network and
-#    tunnel route and is never served by the gateway.
+#    tunnel route and is never served by the gateway;
+#  - upstreams are resolved at request time (BUG-37): the Life OS server uses
+#    Docker's DNS as its resolver, and every proxy_pass names its upstream
+#    through a variable, never a fixed host nginx would resolve only once.
 # See docs/architecture/networking.md and docs/operations/ntfy.md.
 # Usage: tools/check-gateway-hosts [nginx-config]
 set -euo pipefail
@@ -69,8 +72,13 @@ for required in lifeos.gamch1k.com 10.66.66.1 127.0.0.1; do
 done
 if of "$lifeos_server" | grep -q '^listen .*default_server'; then fail "the Life OS server must not be the default server"; fi
 
+of "$lifeos_server" | grep -q -E '^resolver 127\.0\.0\.11( |$)' || fail "the Life OS server must resolve upstreams through Docker's DNS at request time: resolver 127.0.0.11 valid=10s ipv6=off"
+fixed=$(of "$lifeos_server" | awk '$1 == "proxy_pass" && $2 !~ /^http:\/\/\$[a-z_]+$/' || true)
+[ -z "$fixed" ] || fail "every proxy_pass must name its upstream through a variable (set \$upstream food:8080; proxy_pass http://\$upstream), so nginx resolves it per request: ${fixed//$'\n'/; }"
+[ "$(of "$lifeos_server" | grep -c '^proxy_pass ')" -gt 0 ] || fail "the Life OS server proxies nothing"
+
 ntfy_refs=$(sed 's/#.*//' "$config" | grep -i 'ntfy' | sed 's/^[[:space:]]*//' || true)
 [ -z "$ntfy_refs" ] || fail "the gateway must not refer to ntfy (it has its own network and route): ${ntfy_refs//$'\n'/; }"
 
 if [ "$failed" -ne 0 ]; then exit 1; fi
-echo "gateway hosts ok: Life OS answers only $(tr '\n' ' ' <<<"$names" | sed 's/ $//; s/ /, /g'); every other Host gets 444"
+echo "gateway hosts ok: Life OS answers only $(tr '\n' ' ' <<<"$names" | sed 's/ $//; s/ /, /g'); every other Host gets 444; upstreams are resolved per request"

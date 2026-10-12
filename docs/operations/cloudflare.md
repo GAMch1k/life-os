@@ -123,7 +123,7 @@ For the human check, open `https://lifeos.gamch1k.com` from a phone on mobile da
 | Symptom | Likely cause | Fix |
 | --- | --- | --- |
 | Cloudflare error 1033 / HTTP 530 | Access passed, but no connector is connected | `docker compose up -d cloudflared`; read `docker compose logs cloudflared`; check the tunnel status in Zero Trust |
-| 502 after login | The connector is up but the gateway is unreachable, or it holds stale upstream addresses after a redeploy | `docker compose up -d --force-recreate --no-deps gateway`; the route must be `http://gateway:80` |
+| 502 after login | The connector is up but the gateway is unreachable, or the service behind the page is not running (the gateway answers 502 while its name does not resolve) | `docker compose ps`: start what is down; if it is the gateway, `docker compose up -d --force-recreate --no-deps gateway`. The route must be `http://gateway:80` |
 | Connector restarts, "Unauthorized" / invalid tunnel secret | Wrong, rotated, or deleted tunnel token | Put the current token in `.env`, then `docker compose up -d cloudflared` |
 | No PIN email | Address not in `Life OS users`, or mail filtering | Check the group; allow `noreply@notify.cloudflare.com`. PINs are sent only to allowed addresses and expire after 10 minutes |
 | "You don't have access" after the code | Policy or group mismatch | `Owner` must be Allow with Include → group `Life OS users` |
@@ -138,7 +138,7 @@ For the human check, open `https://lifeos.gamch1k.com` from a phone on mobile da
 - **Add or remove a person:** edit the emails in the Access group `Life OS users`. Sessions last up to 24 hours. To cut someone off immediately, revoke their sessions in Zero Trust. Everyone admitted shares the same Life OS data.
 - **Pause public access** and keep WireGuard: `docker compose stop cloudflared`. To keep it off across deploys, remove `COMPOSE_PROFILES=cloudflare` from `.env`.
 - **Update the connector:** bump the pinned image in `compose.yaml`, then `docker compose up -d cloudflared`.
-- **After redeploying services,** recreate the gateway (`docker compose up -d --force-recreate --no-deps gateway`) so it resolves the new container addresses. The connector keeps working.
+- **After redeploying services,** nothing more is needed: the gateway resolves service names at request time (within 10 seconds of a redeploy; see [Networking → Upstream addresses](../architecture/networking.md#upstream-addresses)). Recreate it (`docker compose up -d --force-recreate --no-deps gateway`) only after changing `infra/nginx/life-os.conf` or its bind settings. The connector keeps working.
 
 ### Rotate and revoke
 
