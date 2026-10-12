@@ -75,7 +75,23 @@ docker run --rm -v "$work:/out" alpine:3.22 sh -c \
 api() {
   local retry=(--retry 4 --retry-delay 1)
   case " $* " in *" --data "*|*" -F "*|*" -X "*) retry=() ;; esac
-  curl --fail --silent "${retry[@]}" -H 'X-Life-OS-Actor: dev:benchmark-ai-runtime' "$@"
+  if [ ${#retry[@]} -gt 0 ]; then
+    curl --fail --silent "${retry[@]}" -H 'X-Life-OS-Actor: dev:benchmark-ai-runtime' "$@"
+    return
+  fi
+  # A write is retried only when the gateway's write limit (10/s, burst 20)
+  # refused it with 429, which never reaches a service; the seeding sends
+  # well over a hundred writes in a row.
+  local attempt out code
+  for attempt in 1 2 3 4 5 6 7 8; do
+    out=$(curl --silent -w '\n%{http_code}' -H 'X-Life-OS-Actor: dev:benchmark-ai-runtime' "$@") || return 22
+    code=${out##*$'\n'}
+    if [ "$code" = 429 ]; then sleep 1; continue; fi
+    [ "${code:0:1}" = 2 ] || return 22
+    printf '%s' "${out%$'\n'*}"
+    return 0
+  done
+  return 22
 }
 post_json() { api -H 'content-type: application/json' --data "$2" "$gateway$1"; }
 seed() { post_json /api/tasks/v1/tasks "$(jq -n --arg title "$1" '{title: $title}')" | jq -r '.id'; }
