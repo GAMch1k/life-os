@@ -131,7 +131,8 @@ func (s *Service) takeUnattendedRead(ctx context.Context, conn store.BankConnect
 }
 
 // window is the booking dates to read: from the last booked date less the
-// overlap, never more than InitialDays back (the first sync reads all of
+// overlap, or from the oldest pending transaction of the last sync when that
+// is earlier, never more than InitialDays back (the first sync reads all of
 // them), up to today (the provider takes dates in UTC). A connection last
 // read in full with an older mapping is read in full once more, so Finance
 // gets its transactions again in the new mapping; full reports that.
@@ -142,6 +143,15 @@ func (s *Service) window(conn store.BankConnection) (window finance.Window, full
 	if conn.SyncCursor.Valid && conn.MappingVersion >= MappingVersion {
 		if cursor := conn.SyncCursor.Time.AddDate(0, 0, -s.opts.OverlapDays); cursor.After(earliest) {
 			from = cursor
+		}
+		// Finance removes a pending transaction the bank no longer sends
+		// only inside the window: one held from before the overlap (a card
+		// hold the bank books or releases late) is read again until then.
+		if pending := conn.OldestPendingDate; pending.Valid && pending.Time.Before(from) {
+			from = pending.Time
+			if from.Before(earliest) {
+				from = earliest
+			}
 		}
 		if from.After(today) {
 			from = today
@@ -319,7 +329,8 @@ func (s *Service) push(ctx context.Context, conn store.BankConnection, read read
 	}
 	row, err := s.queries.RecordSyncSuccess(ctx, store.RecordSyncSuccessParams{
 		Now: timestamptz(now), NextSyncAt: timestamptz(s.opts.Schedule.Next(now)), LastCounts: rawCounts, SyncCursor: cursor,
-		MappingVersion: int32(read.Mapping), EarliestBookingDate: dateOf(read.Earliest), ID: conn.ID,
+		MappingVersion: int32(read.Mapping), EarliestBookingDate: dateOf(read.Earliest), OldestPendingDate: dateOf(read.OldestPending),
+		ID: conn.ID,
 	})
 	if err != nil {
 		return conn, err

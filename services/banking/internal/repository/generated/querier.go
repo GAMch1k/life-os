@@ -52,7 +52,8 @@ type Querier interface {
 	// Finance accepted a sync: the connection is connected, its failures and
 	// any waiting import are cleared. mapping_version is the mapping a full
 	// read used (0 for a read of the days since the cursor only);
-	// earliest_booking_date the sync's earliest booked date (NULL: none).
+	// earliest_booking_date the sync's earliest booked date, and
+	// oldest_pending_date its oldest pending one (NULL: none).
 	RecordSyncSuccess(ctx context.Context, arg RecordSyncSuccessParams) (BankConnection, error)
 	// Gives back a claimed manual sync that never reached the bank.
 	ReleaseManualSync(ctx context.Context, arg ReleaseManualSyncParams) error

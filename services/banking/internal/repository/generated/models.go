@@ -52,6 +52,7 @@ type BankConnection struct {
 	HistoryFinishedAt    pgtype.Timestamptz
 	HistoryTransactions  *int32
 	HistoryError         *string
+	OldestPendingDate    pgtype.Date
 }
 
 type BankConsentFailure struct {

@@ -55,7 +55,7 @@ VALUES (
     $1, $2, $3, 'pending', $4,
     $5, $6, $7, $8, $8,
     $8, $8)
-RETURNING id, provider, institution, country, status, consent_valid_until, session_ciphertext, session_nonce, accounts, last_sync_at, last_success_at, next_sync_at, consecutive_failures, last_error, last_counts, sync_cursor, unattended_reads_date, unattended_reads_count, last_manual_sync_at, pending_import, archive_pending, consent_notice, consent_notice_for, connected_at, disconnected_at, created_at, updated_at, mapping_version, earliest_booking_date, history_status, history_started_at, history_finished_at, history_transactions, history_error
+RETURNING id, provider, institution, country, status, consent_valid_until, session_ciphertext, session_nonce, accounts, last_sync_at, last_success_at, next_sync_at, consecutive_failures, last_error, last_counts, sync_cursor, unattended_reads_date, unattended_reads_count, last_manual_sync_at, pending_import, archive_pending, consent_notice, consent_notice_for, connected_at, disconnected_at, created_at, updated_at, mapping_version, earliest_booking_date, history_status, history_started_at, history_finished_at, history_transactions, history_error, oldest_pending_date
 `
 
 type CreateConnectionParams struct {
@@ -116,6 +116,7 @@ func (q *Queries) CreateConnection(ctx context.Context, arg CreateConnectionPara
 		&i.HistoryFinishedAt,
 		&i.HistoryTransactions,
 		&i.HistoryError,
+		&i.OldestPendingDate,
 	)
 	return i, err
 }
@@ -125,7 +126,7 @@ UPDATE bank_connections
 SET status = 'disconnected', session_ciphertext = NULL, session_nonce = NULL, next_sync_at = NULL,
     pending_import = NULL, archive_pending = true, disconnected_at = $1, updated_at = $1
 WHERE id = $2
-RETURNING id, provider, institution, country, status, consent_valid_until, session_ciphertext, session_nonce, accounts, last_sync_at, last_success_at, next_sync_at, consecutive_failures, last_error, last_counts, sync_cursor, unattended_reads_date, unattended_reads_count, last_manual_sync_at, pending_import, archive_pending, consent_notice, consent_notice_for, connected_at, disconnected_at, created_at, updated_at, mapping_version, earliest_booking_date, history_status, history_started_at, history_finished_at, history_transactions, history_error
+RETURNING id, provider, institution, country, status, consent_valid_until, session_ciphertext, session_nonce, accounts, last_sync_at, last_success_at, next_sync_at, consecutive_failures, last_error, last_counts, sync_cursor, unattended_reads_date, unattended_reads_count, last_manual_sync_at, pending_import, archive_pending, consent_notice, consent_notice_for, connected_at, disconnected_at, created_at, updated_at, mapping_version, earliest_booking_date, history_status, history_started_at, history_finished_at, history_transactions, history_error, oldest_pending_date
 `
 
 type DisconnectConnectionParams struct {
@@ -173,6 +174,7 @@ func (q *Queries) DisconnectConnection(ctx context.Context, arg DisconnectConnec
 		&i.HistoryFinishedAt,
 		&i.HistoryTransactions,
 		&i.HistoryError,
+		&i.OldestPendingDate,
 	)
 	return i, err
 }
@@ -205,7 +207,7 @@ UPDATE bank_connections
 SET history_status = $1, history_finished_at = $2,
     history_error = $3, updated_at = $2
 WHERE id = $4 AND history_started_at = $5 AND history_status = 'running'
-RETURNING id, provider, institution, country, status, consent_valid_until, session_ciphertext, session_nonce, accounts, last_sync_at, last_success_at, next_sync_at, consecutive_failures, last_error, last_counts, sync_cursor, unattended_reads_date, unattended_reads_count, last_manual_sync_at, pending_import, archive_pending, consent_notice, consent_notice_for, connected_at, disconnected_at, created_at, updated_at, mapping_version, earliest_booking_date, history_status, history_started_at, history_finished_at, history_transactions, history_error
+RETURNING id, provider, institution, country, status, consent_valid_until, session_ciphertext, session_nonce, accounts, last_sync_at, last_success_at, next_sync_at, consecutive_failures, last_error, last_counts, sync_cursor, unattended_reads_date, unattended_reads_count, last_manual_sync_at, pending_import, archive_pending, consent_notice, consent_notice_for, connected_at, disconnected_at, created_at, updated_at, mapping_version, earliest_booking_date, history_status, history_started_at, history_finished_at, history_transactions, history_error, oldest_pending_date
 `
 
 type FinishHistoryReadParams struct {
@@ -261,12 +263,13 @@ func (q *Queries) FinishHistoryRead(ctx context.Context, arg FinishHistoryReadPa
 		&i.HistoryFinishedAt,
 		&i.HistoryTransactions,
 		&i.HistoryError,
+		&i.OldestPendingDate,
 	)
 	return i, err
 }
 
 const getConnection = `-- name: GetConnection :one
-SELECT id, provider, institution, country, status, consent_valid_until, session_ciphertext, session_nonce, accounts, last_sync_at, last_success_at, next_sync_at, consecutive_failures, last_error, last_counts, sync_cursor, unattended_reads_date, unattended_reads_count, last_manual_sync_at, pending_import, archive_pending, consent_notice, consent_notice_for, connected_at, disconnected_at, created_at, updated_at, mapping_version, earliest_booking_date, history_status, history_started_at, history_finished_at, history_transactions, history_error FROM bank_connections WHERE id = $1
+SELECT id, provider, institution, country, status, consent_valid_until, session_ciphertext, session_nonce, accounts, last_sync_at, last_success_at, next_sync_at, consecutive_failures, last_error, last_counts, sync_cursor, unattended_reads_date, unattended_reads_count, last_manual_sync_at, pending_import, archive_pending, consent_notice, consent_notice_for, connected_at, disconnected_at, created_at, updated_at, mapping_version, earliest_booking_date, history_status, history_started_at, history_finished_at, history_transactions, history_error, oldest_pending_date FROM bank_connections WHERE id = $1
 `
 
 func (q *Queries) GetConnection(ctx context.Context, id pgtype.UUID) (BankConnection, error) {
@@ -307,12 +310,13 @@ func (q *Queries) GetConnection(ctx context.Context, id pgtype.UUID) (BankConnec
 		&i.HistoryFinishedAt,
 		&i.HistoryTransactions,
 		&i.HistoryError,
+		&i.OldestPendingDate,
 	)
 	return i, err
 }
 
 const getLiveConnection = `-- name: GetLiveConnection :one
-SELECT id, provider, institution, country, status, consent_valid_until, session_ciphertext, session_nonce, accounts, last_sync_at, last_success_at, next_sync_at, consecutive_failures, last_error, last_counts, sync_cursor, unattended_reads_date, unattended_reads_count, last_manual_sync_at, pending_import, archive_pending, consent_notice, consent_notice_for, connected_at, disconnected_at, created_at, updated_at, mapping_version, earliest_booking_date, history_status, history_started_at, history_finished_at, history_transactions, history_error FROM bank_connections
+SELECT id, provider, institution, country, status, consent_valid_until, session_ciphertext, session_nonce, accounts, last_sync_at, last_success_at, next_sync_at, consecutive_failures, last_error, last_counts, sync_cursor, unattended_reads_date, unattended_reads_count, last_manual_sync_at, pending_import, archive_pending, consent_notice, consent_notice_for, connected_at, disconnected_at, created_at, updated_at, mapping_version, earliest_booking_date, history_status, history_started_at, history_finished_at, history_transactions, history_error, oldest_pending_date FROM bank_connections
 WHERE provider = $1 AND institution = $2 AND country = $3
   AND status <> 'disconnected'
 `
@@ -362,12 +366,13 @@ func (q *Queries) GetLiveConnection(ctx context.Context, arg GetLiveConnectionPa
 		&i.HistoryFinishedAt,
 		&i.HistoryTransactions,
 		&i.HistoryError,
+		&i.OldestPendingDate,
 	)
 	return i, err
 }
 
 const listConnections = `-- name: ListConnections :many
-SELECT id, provider, institution, country, status, consent_valid_until, session_ciphertext, session_nonce, accounts, last_sync_at, last_success_at, next_sync_at, consecutive_failures, last_error, last_counts, sync_cursor, unattended_reads_date, unattended_reads_count, last_manual_sync_at, pending_import, archive_pending, consent_notice, consent_notice_for, connected_at, disconnected_at, created_at, updated_at, mapping_version, earliest_booking_date, history_status, history_started_at, history_finished_at, history_transactions, history_error FROM bank_connections
+SELECT id, provider, institution, country, status, consent_valid_until, session_ciphertext, session_nonce, accounts, last_sync_at, last_success_at, next_sync_at, consecutive_failures, last_error, last_counts, sync_cursor, unattended_reads_date, unattended_reads_count, last_manual_sync_at, pending_import, archive_pending, consent_notice, consent_notice_for, connected_at, disconnected_at, created_at, updated_at, mapping_version, earliest_booking_date, history_status, history_started_at, history_finished_at, history_transactions, history_error, oldest_pending_date FROM bank_connections
 ORDER BY (status = 'disconnected'), created_at DESC, id
 `
 
@@ -416,6 +421,7 @@ func (q *Queries) ListConnections(ctx context.Context) ([]BankConnection, error)
 			&i.HistoryFinishedAt,
 			&i.HistoryTransactions,
 			&i.HistoryError,
+			&i.OldestPendingDate,
 		); err != nil {
 			return nil, err
 		}
@@ -435,7 +441,7 @@ SET status = CASE WHEN last_success_at IS NULL THEN 'pending' ELSE 'connected' E
     accounts = $4, next_sync_at = $5, consecutive_failures = 0, last_error = NULL,
     consent_notice = NULL, consent_notice_for = NULL, connected_at = $5, updated_at = $5
 WHERE id = $6 AND status <> 'disconnected'
-RETURNING id, provider, institution, country, status, consent_valid_until, session_ciphertext, session_nonce, accounts, last_sync_at, last_success_at, next_sync_at, consecutive_failures, last_error, last_counts, sync_cursor, unattended_reads_date, unattended_reads_count, last_manual_sync_at, pending_import, archive_pending, consent_notice, consent_notice_for, connected_at, disconnected_at, created_at, updated_at, mapping_version, earliest_booking_date, history_status, history_started_at, history_finished_at, history_transactions, history_error
+RETURNING id, provider, institution, country, status, consent_valid_until, session_ciphertext, session_nonce, accounts, last_sync_at, last_success_at, next_sync_at, consecutive_failures, last_error, last_counts, sync_cursor, unattended_reads_date, unattended_reads_count, last_manual_sync_at, pending_import, archive_pending, consent_notice, consent_notice_for, connected_at, disconnected_at, created_at, updated_at, mapping_version, earliest_booking_date, history_status, history_started_at, history_finished_at, history_transactions, history_error, oldest_pending_date
 `
 
 type ReconnectConnectionParams struct {
@@ -495,6 +501,7 @@ func (q *Queries) ReconnectConnection(ctx context.Context, arg ReconnectConnecti
 		&i.HistoryFinishedAt,
 		&i.HistoryTransactions,
 		&i.HistoryError,
+		&i.OldestPendingDate,
 	)
 	return i, err
 }
@@ -535,7 +542,7 @@ SET last_sync_at = $1, next_sync_at = $2,
     consecutive_failures = consecutive_failures + 1, last_error = $3,
     pending_import = $4, updated_at = $1
 WHERE id = $5
-RETURNING id, provider, institution, country, status, consent_valid_until, session_ciphertext, session_nonce, accounts, last_sync_at, last_success_at, next_sync_at, consecutive_failures, last_error, last_counts, sync_cursor, unattended_reads_date, unattended_reads_count, last_manual_sync_at, pending_import, archive_pending, consent_notice, consent_notice_for, connected_at, disconnected_at, created_at, updated_at, mapping_version, earliest_booking_date, history_status, history_started_at, history_finished_at, history_transactions, history_error
+RETURNING id, provider, institution, country, status, consent_valid_until, session_ciphertext, session_nonce, accounts, last_sync_at, last_success_at, next_sync_at, consecutive_failures, last_error, last_counts, sync_cursor, unattended_reads_date, unattended_reads_count, last_manual_sync_at, pending_import, archive_pending, consent_notice, consent_notice_for, connected_at, disconnected_at, created_at, updated_at, mapping_version, earliest_booking_date, history_status, history_started_at, history_finished_at, history_transactions, history_error, oldest_pending_date
 `
 
 type RecordSyncFailureParams struct {
@@ -592,6 +599,7 @@ func (q *Queries) RecordSyncFailure(ctx context.Context, arg RecordSyncFailurePa
 		&i.HistoryFinishedAt,
 		&i.HistoryTransactions,
 		&i.HistoryError,
+		&i.OldestPendingDate,
 	)
 	return i, err
 }
@@ -603,9 +611,10 @@ SET status = CASE WHEN status = 'pending' THEN 'connected' ELSE status END,
     consecutive_failures = 0, last_error = NULL, last_counts = $3,
     sync_cursor = $4, pending_import = NULL,
     mapping_version = GREATEST(mapping_version, $5::integer),
-    earliest_booking_date = LEAST(earliest_booking_date, $6::date), updated_at = $1
-WHERE id = $7
-RETURNING id, provider, institution, country, status, consent_valid_until, session_ciphertext, session_nonce, accounts, last_sync_at, last_success_at, next_sync_at, consecutive_failures, last_error, last_counts, sync_cursor, unattended_reads_date, unattended_reads_count, last_manual_sync_at, pending_import, archive_pending, consent_notice, consent_notice_for, connected_at, disconnected_at, created_at, updated_at, mapping_version, earliest_booking_date, history_status, history_started_at, history_finished_at, history_transactions, history_error
+    earliest_booking_date = LEAST(earliest_booking_date, $6::date),
+    oldest_pending_date = $7::date, updated_at = $1
+WHERE id = $8
+RETURNING id, provider, institution, country, status, consent_valid_until, session_ciphertext, session_nonce, accounts, last_sync_at, last_success_at, next_sync_at, consecutive_failures, last_error, last_counts, sync_cursor, unattended_reads_date, unattended_reads_count, last_manual_sync_at, pending_import, archive_pending, consent_notice, consent_notice_for, connected_at, disconnected_at, created_at, updated_at, mapping_version, earliest_booking_date, history_status, history_started_at, history_finished_at, history_transactions, history_error, oldest_pending_date
 `
 
 type RecordSyncSuccessParams struct {
@@ -615,13 +624,15 @@ type RecordSyncSuccessParams struct {
 	SyncCursor          pgtype.Date
 	MappingVersion      int32
 	EarliestBookingDate pgtype.Date
+	OldestPendingDate   pgtype.Date
 	ID                  pgtype.UUID
 }
 
 // Finance accepted a sync: the connection is connected, its failures and
 // any waiting import are cleared. mapping_version is the mapping a full
 // read used (0 for a read of the days since the cursor only);
-// earliest_booking_date the sync's earliest booked date (NULL: none).
+// earliest_booking_date the sync's earliest booked date, and
+// oldest_pending_date its oldest pending one (NULL: none).
 func (q *Queries) RecordSyncSuccess(ctx context.Context, arg RecordSyncSuccessParams) (BankConnection, error) {
 	row := q.db.QueryRow(ctx, recordSyncSuccess,
 		arg.Now,
@@ -630,6 +641,7 @@ func (q *Queries) RecordSyncSuccess(ctx context.Context, arg RecordSyncSuccessPa
 		arg.SyncCursor,
 		arg.MappingVersion,
 		arg.EarliestBookingDate,
+		arg.OldestPendingDate,
 		arg.ID,
 	)
 	var i BankConnection
@@ -668,6 +680,7 @@ func (q *Queries) RecordSyncSuccess(ctx context.Context, arg RecordSyncSuccessPa
 		&i.HistoryFinishedAt,
 		&i.HistoryTransactions,
 		&i.HistoryError,
+		&i.OldestPendingDate,
 	)
 	return i, err
 }
@@ -693,7 +706,7 @@ const setConnectionStatus = `-- name: SetConnectionStatus :one
 UPDATE bank_connections
 SET status = $1, last_error = $2, next_sync_at = NULL, updated_at = $3
 WHERE id = $4 AND status IN ('pending', 'connected', 'expired', 'error')
-RETURNING id, provider, institution, country, status, consent_valid_until, session_ciphertext, session_nonce, accounts, last_sync_at, last_success_at, next_sync_at, consecutive_failures, last_error, last_counts, sync_cursor, unattended_reads_date, unattended_reads_count, last_manual_sync_at, pending_import, archive_pending, consent_notice, consent_notice_for, connected_at, disconnected_at, created_at, updated_at, mapping_version, earliest_booking_date, history_status, history_started_at, history_finished_at, history_transactions, history_error
+RETURNING id, provider, institution, country, status, consent_valid_until, session_ciphertext, session_nonce, accounts, last_sync_at, last_success_at, next_sync_at, consecutive_failures, last_error, last_counts, sync_cursor, unattended_reads_date, unattended_reads_count, last_manual_sync_at, pending_import, archive_pending, consent_notice, consent_notice_for, connected_at, disconnected_at, created_at, updated_at, mapping_version, earliest_booking_date, history_status, history_started_at, history_finished_at, history_transactions, history_error, oldest_pending_date
 `
 
 type SetConnectionStatusParams struct {
@@ -748,6 +761,7 @@ func (q *Queries) SetConnectionStatus(ctx context.Context, arg SetConnectionStat
 		&i.HistoryFinishedAt,
 		&i.HistoryTransactions,
 		&i.HistoryError,
+		&i.OldestPendingDate,
 	)
 	return i, err
 }
@@ -796,7 +810,7 @@ UPDATE bank_connections
 SET history_status = 'running', history_started_at = $1, history_finished_at = NULL,
     history_transactions = 0, history_error = NULL, updated_at = $1
 WHERE id = $2 AND status IN ('pending', 'connected')
-RETURNING id, provider, institution, country, status, consent_valid_until, session_ciphertext, session_nonce, accounts, last_sync_at, last_success_at, next_sync_at, consecutive_failures, last_error, last_counts, sync_cursor, unattended_reads_date, unattended_reads_count, last_manual_sync_at, pending_import, archive_pending, consent_notice, consent_notice_for, connected_at, disconnected_at, created_at, updated_at, mapping_version, earliest_booking_date, history_status, history_started_at, history_finished_at, history_transactions, history_error
+RETURNING id, provider, institution, country, status, consent_valid_until, session_ciphertext, session_nonce, accounts, last_sync_at, last_success_at, next_sync_at, consecutive_failures, last_error, last_counts, sync_cursor, unattended_reads_date, unattended_reads_count, last_manual_sync_at, pending_import, archive_pending, consent_notice, consent_notice_for, connected_at, disconnected_at, created_at, updated_at, mapping_version, earliest_booking_date, history_status, history_started_at, history_finished_at, history_transactions, history_error, oldest_pending_date
 `
 
 type StartHistoryReadParams struct {
@@ -845,6 +859,7 @@ func (q *Queries) StartHistoryRead(ctx context.Context, arg StartHistoryReadPara
 		&i.HistoryFinishedAt,
 		&i.HistoryTransactions,
 		&i.HistoryError,
+		&i.OldestPendingDate,
 	)
 	return i, err
 }

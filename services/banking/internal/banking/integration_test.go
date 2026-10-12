@@ -170,6 +170,55 @@ func TestLaterSyncsStartAWeekBeforeTheLastBookedDate(t *testing.T) {
 	}
 }
 
+func TestAPendingHoldOlderThanTheOverlapIsRemovedOnceTheBankDropsIt(t *testing.T) {
+	h := testsupport.New(t)
+	ctx := context.Background()
+	// A card hold from before the overlap (the cursor will be 2026-10-08,
+	// so later syncs would start at 2026-10-01).
+	h.Bank.Accounts[0].Transactions = append(h.Bank.Accounts[0].Transactions,
+		testsupport.Transaction("HOLD", "PDNG", "DBIT", "50.00", "", map[string]any{"transaction_date": "2026-09-20"}))
+	conn := h.Connect()
+	if conn.OldestPendingDate.Time.Format(time.DateOnly) != "2026-09-20" {
+		t.Fatalf("oldest pending = %v", conn.OldestPendingDate)
+	}
+	if _, ok := h.Finance.Known(uuid(conn), "HOLD"); !ok {
+		t.Fatal("Finance did not get the hold")
+	}
+	from := func() string {
+		var seen []string
+		for _, request := range h.Bank.Requests() {
+			if strings.HasSuffix(request.Path, "/transactions") {
+				seen = append(seen, request.Query.Get("date_from"))
+			}
+		}
+		h.Bank.ResetRequests()
+		return strings.Join(seen, ",")
+	}
+	from()
+
+	// The bank releases the hold without a booked payment Finance could
+	// match: the next sync still reads its day, so Finance removes it.
+	h.Bank.Accounts[0].Transactions = h.Bank.Accounts[0].Transactions[:len(h.Bank.Accounts[0].Transactions)-1]
+	h.Set(h.Local("2026-10-10", "12:00"))
+	h.Service.Tick(ctx)
+	if got := from(); got != "2026-09-20" {
+		t.Fatalf("the sync after the hold read from %s", got)
+	}
+	conn = h.Connection(conn)
+	if _, ok := h.Finance.Known(uuid(conn), "HOLD"); ok || counts(t, conn).Transactions.RemovedPending != 1 {
+		t.Fatalf("the released hold stayed in Finance: counts %+v", counts(t, conn))
+	}
+	// Today's pending transaction is now the oldest: back to the overlap.
+	if conn.OldestPendingDate.Time.Format(time.DateOnly) != "2026-10-10" || conn.UnattendedReadsCount != 1 {
+		t.Fatalf("after the release: oldest pending %v, reads %d", conn.OldestPendingDate, conn.UnattendedReadsCount)
+	}
+	h.Set(h.Local("2026-10-10", "18:00"))
+	h.Service.Tick(ctx)
+	if got := from(); got != "2026-10-01" {
+		t.Fatalf("the next sync read from %s", got)
+	}
+}
+
 func TestAMappingChangeReadsTheWholeWindowOnce(t *testing.T) {
 	h := testsupport.New(t)
 	conn := h.Connect()
