@@ -69,6 +69,8 @@ func run(ctx context.Context) error {
 	addCalendarTools(s, hc, cfg.CalendarURL, emitter, o)
 	addFinanceTools(s, hc, cfg.FinanceURL, emitter)
 	addFoodTools(s, hc, cfg.FoodURL, emitter)
+	// A recipe Codex built from a capture's text or photo goes to Food.
+	addRecipeDraftTools(s, hc, cfg.FoodURL, emitter)
 	// recipe-import fetches the page while it answers (up to 10 seconds),
 	// and a save of a recipe page fetches it again.
 	addRecipeImportTools(s, &http.Client{Timeout: 45 * time.Second}, cfg.RecipeImportURL, emitter)
