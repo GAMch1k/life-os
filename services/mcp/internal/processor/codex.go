@@ -170,14 +170,15 @@ func timeContext(now, capturedAt time.Time, location *time.Location) string {
 }
 
 // Plan plans one capture: the plan prompt, the owner's time, the capture's
-// images, and the item. Web search is always off for captures.
+// images, the recent captures (see recent.go), and the item. Web search is
+// always off for captures.
 func (c CodexCLI) Plan(ctx context.Context, content string) (string, error) {
 	images := imagesFrom(ctx)
 	return c.run(ctx, runSpec{
 		images:    images,
 		webSearch: WebSearchDisabled,
 		prompt: func(c CodexCLI) string {
-			return planPrompt + timeContext(c.now(), capturedAtFrom(ctx), c.TimeZone) + imagesNote(images) + "Inbox item: " + content
+			return planPrompt + timeContext(c.now(), capturedAtFrom(ctx), c.TimeZone) + imagesNote(images) + recentContextFrom(ctx) + "Inbox item: " + content
 		},
 	})
 }

@@ -113,7 +113,7 @@ The log starts when the Activity service was deployed; nothing earlier was backf
 
 - **What led here**: the causation chain back to the start of the workflow.
 - **What it led to**: everything caused by it, directly or indirectly.
-- **Same <entity> in other workflows**: for example, the user completing a Task that the agent created earlier.
+- **Same <entity> in other workflows**: for example, the user completing a Task that the agent created earlier, or a follow-up capture: "Actually oat milk" renaming the milk "Buy milk" added records **Earlier capture followed up** (`inbox.item.followed_up`, about the earlier capture) in the follow-up's workflow, so the earlier capture's events are listed here from it, and it from them (see [Inbox → Recent captures](../services/inbox.md#recent-captures)).
 - **Whole workflow**: the causation tree, with the selected entry highlighted.
 - **Diagnostics**: a collapsed section with ids, correlation, causation, actor, timestamps, and the raw event data. **Copy diagnostics** copies the event data JSON exactly as shown and announces "Copied"; over plain http, where the Clipboard API is unavailable, it falls back to a hidden-textarea copy, and if that fails too it selects the JSON for copying by hand.
 

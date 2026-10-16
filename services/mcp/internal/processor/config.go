@@ -49,6 +49,10 @@ type Config struct {
 	// BudgetPlanMonthly switches its plan on the 1st of each month
 	// (LIFE_OS_AI_BUDGET_PLAN_MONTHLY: on, the default, or off).
 	BudgetPlanMonthly bool
+	// ContextMinutes is how far back, in minutes, a capture's planning sees
+	// the owner's earlier captures and what was done for them
+	// (INBOX_CONTEXT_MINUTES, default 20, at most 120; 0 turns it off).
+	ContextMinutes int
 	// Warnings are non-fatal configuration problems to log at startup.
 	Warnings []string
 }
@@ -81,6 +85,9 @@ func LoadConfig() (Config, error) {
 		return c, fmt.Errorf("LIFE_OS_PROCESSOR_STALE_AFTER_SECONDS must be an integer of at least 90 (three heartbeats)")
 	}
 	c.CodexTimeout, c.MaxConcurrency, c.StaleAfter = time.Duration(timeout)*time.Second, concurrency, time.Duration(stale)*time.Second
+	if c.ContextMinutes, err = strconv.Atoi(strings.TrimSpace(env("INBOX_CONTEXT_MINUTES", "20"))); err != nil || c.ContextMinutes < 0 || c.ContextMinutes > 120 {
+		return c, fmt.Errorf("INBOX_CONTEXT_MINUTES must be a whole number of minutes from 0 (off) to 120")
+	}
 	c.ReasoningEffort = os.Getenv("LIFE_OS_CODEX_REASONING_EFFORT")
 	if !effortPattern.MatchString(c.ReasoningEffort) {
 		return c, fmt.Errorf("LIFE_OS_CODEX_REASONING_EFFORT must be a lowercase effort name such as none, low, or medium")

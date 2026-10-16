@@ -106,6 +106,7 @@ Optional `.env` settings for the processor:
 - `LIFE_OS_CODEX_TIMEOUT_SECONDS` (default 300): the deadline of one planning run.
 - `LIFE_OS_CODEX_MAX_CONCURRENCY` (default 1): concurrent Codex runs.
 - `LIFE_OS_PROCESSOR_STALE_AFTER_SECONDS` (default 120, at least 90): when an attempt left by a crashed processor is reconciled.
+- `LIFE_OS_INBOX_CONTEXT_MINUTES` (default 20, 0 to 120; the container's `INBOX_CONTEXT_MINUTES`): how many minutes before a capture its planning sees the owner's other captures and what was done for them; 0 turns it off. See [Recent captures](../services/mcp.md#recent-captures).
 
 ## Owner timezone
 
