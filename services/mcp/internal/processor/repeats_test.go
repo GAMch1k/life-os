@@ -35,6 +35,18 @@ func lemons(state string) recentCapture {
 	return capture
 }
 
+const (
+	bakeryCapture   = "c0000000-0000-4000-8000-000000000022"
+	replacedCapture = "c0000000-0000-4000-8000-000000000023"
+)
+
+// bakery is "Spent 5 euros at the bakery." captured a minute before the
+// item and recorded as cash spending, with the other actions given.
+func bakery(others ...map[string]any) recentCapture {
+	actions := append([]map[string]any{{"tool": "finance_create_manual_transaction", "result": map[string]any{"id": "t1", "amount": map[string]any{"amount": -500.0, "currency": "EUR"}, "counterparty": "bakery", "bookingDate": "2026-10-16"}}}, others...)
+	return recentCapture{ID: bakeryCapture, Content: "Spent 5 euros at the bakery.", Source: "web", State: "resolved", CreatedAt: followUpAt.Add(-time.Minute), Outcome: &recentOutcome{Status: "processed", Actions: actions}}
+}
+
 func TestRepeatOfFindsTheSameCaptureAlreadyDoneOrWaiting(t *testing.T) {
 	item := inboxItem{ID: againItem, Content: "  buy\tLEMONS. ", CreatedAt: followUpAt}
 	moved := func(capture recentCapture, by time.Duration) recentCapture {
@@ -49,6 +61,14 @@ func TestRepeatOfFindsTheSameCaptureAlreadyDoneOrWaiting(t *testing.T) {
 		capture.Content = content
 		return capture
 	}
+	// Edited in Human Review and sent again: meant as written.
+	edited := func(replaces string) inboxItem {
+		edit := item
+		edit.SourceMetadata = map[string]any{"timeZone": "Europe/Berlin", "replacesItemId": replaces}
+		return edit
+	}
+	discarded := lemons("resolved")
+	discarded.State = "discarded"
 	for name, tc := range map[string]struct {
 		item     inboxItem
 		captures []recentCapture
@@ -58,6 +78,10 @@ func TestRepeatOfFindsTheSameCaptureAlreadyDoneOrWaiting(t *testing.T) {
 		"waiting for review":             {item, []recentCapture{lemons("human_review")}, lemonsCapture},
 		"resolved by the owner":          {item, []recentCapture{{ID: lemonsCapture, Content: "Buy lemons.", State: "resolved", CreatedAt: followUpAt.Add(-time.Minute)}}, lemonsCapture},
 		"failed":                         {item, []recentCapture{lemons("failed")}, ""},
+		"discarded":                      {item, []recentCapture{discarded}, ""},
+		"edited from it":                 {edited(lemonsCapture), []recentCapture{lemons("human_review")}, ""},
+		"edited from another capture":    {edited(replacedCapture), []recentCapture{lemons("resolved")}, ""},
+		"replacing nothing":              {edited(" "), []recentCapture{lemons("resolved")}, lemonsCapture},
 		"other words":                    {item, []recentCapture{renamed(lemons("resolved"), "Lemons please.")}, ""},
 		"other punctuation":              {item, []recentCapture{renamed(lemons("resolved"), "Buy lemons")}, ""},
 		"outside the window":             {item, []recentCapture{moved(lemons("resolved"), -20*time.Minute)}, ""},
@@ -88,15 +112,39 @@ func TestRepeatOfFindsTheSameCaptureAlreadyDoneOrWaiting(t *testing.T) {
 	}
 }
 
-func TestRepeatSummarySaysWhenAndWhere(t *testing.T) {
-	if got := repeatSummary(lemons("resolved"), berlin(t)); got != "Same as the capture from 17:09, already done" {
-		t.Errorf("resolved = %q", got)
-	}
-	if got := repeatSummary(lemons("human_review"), berlin(t)); got != "Same as the capture from 17:09, waiting for your review" {
-		t.Errorf("review = %q", got)
-	}
-	if got := repeatSummary(lemons("resolved"), nil); got != "Same as the capture from 15:09, already done" {
-		t.Errorf("no zone = %q", got)
+func TestRepeatOutcomeSaysWhenAndWhereAndNeverDropsMoney(t *testing.T) {
+	everythingButMoney := lemons("resolved")
+	everythingButMoney.Outcome.Actions = append(everythingButMoney.Outcome.Actions,
+		map[string]any{"tool": "task_create", "result": map[string]any{"id": "k1", "title": "Call Anna"}},
+		map[string]any{"tool": "calendar_create", "result": map[string]any{"id": "e1", "title": "Coffee", "allDay": false, "startAt": "2026-10-17T17:00:00+02:00", "endAt": "2026-10-17T18:00:00+02:00"}},
+		map[string]any{"tool": "recipe_import", "result": map[string]any{"saved": true, "recipe": map[string]any{"id": "r1", "title": "Pilaf"}}},
+		map[string]any{"tool": "food_add_staple", "result": map[string]any{"staple": map[string]any{"id": "s1", "name": "Kaffee"}}},
+		map[string]any{"tool": "food_add_pantry_items", "result": map[string]any{"items": []any{map[string]any{"id": "p1", "name": "Reis"}}}},
+	)
+	twice := bakery(map[string]any{"tool": "task_create", "result": map[string]any{"id": "k2", "title": "Keep the receipt"}},
+		map[string]any{"tool": "finance_create_manual_transaction", "result": map[string]any{"id": "t2", "amount": map[string]any{"amount": -250.0, "currency": "EUR"}}})
+	for name, tc := range map[string]struct {
+		earlier  recentCapture
+		location *time.Location
+		want     string
+		review   bool
+	}{
+		"resolved":             {lemons("resolved"), berlin(t), "Same as the capture from 17:09, already done", false},
+		"waiting for review":   {lemons("human_review"), berlin(t), "Same as the capture from 17:09, waiting for your review", false},
+		"no zone":              {lemons("resolved"), nil, "Same as the capture from 15:09, already done", false},
+		"everything but money": {everythingButMoney, berlin(t), "Same as the capture from 17:09, already done", false},
+		"a transaction":        {bakery(), berlin(t), "Sent twice: the capture from 17:09 already recorded -5.00 EUR · bakery · 2026-10-16. To record another one, edit and send it.", true},
+		"two transactions":     {twice, berlin(t), "Sent twice: the capture from 17:09 already recorded -5.00 EUR · bakery · 2026-10-16 and -2.50 EUR. To record another one, edit and send it.", true},
+		"a transaction pending": {func() recentCapture {
+			c := bakery()
+			c.State, c.Outcome = "human_review", &recentOutcome{Status: "human_review"}
+			return c
+		}(), berlin(t), "Same as the capture from 17:09, waiting for your review", false},
+	} {
+		got, review := repeatOutcome(tc.earlier, tc.location)
+		if got != tc.want || review != tc.review {
+			t.Errorf("%s: %q (review %v), want %q (review %v)", name, got, review, tc.want, tc.review)
+		}
 	}
 }
 
@@ -149,6 +197,78 @@ func TestACaptureSentAgainIsResolvedWithoutCodex(t *testing.T) {
 	}
 }
 
+// reviewTools keeps what the capture was sent to Human Review with.
+type reviewTools struct {
+	*orderedTools
+	review map[string]any
+}
+
+func (r *reviewTools) Call(ctx context.Context, name string, args map[string]any) (json.RawMessage, error) {
+	if name == "inbox_set_human_review" {
+		r.review = args
+	}
+	return r.orderedTools.Call(ctx, name, args)
+}
+
+// TestASpendingSentAgainGoesToTheOwner: money is never dropped silently.
+// The same spending sent again may be a second coffee, so it waits for the
+// owner, without a Codex run, instead of being resolved as a repeat.
+func TestASpendingSentAgainGoesToTheOwner(t *testing.T) {
+	tools := &orderedTools{fakeTools: &fakeTools{}, items: []inboxItem{{ID: againItem, Content: "Spent 5 euros at the bakery.", Source: "web", CreatedAt: followUpAt}},
+		windows: map[string]recentWindow{againItem: {Items: []recentCapture{bakery()}}}}
+	reviewing := &reviewTools{orderedTools: tools}
+	runner, planner, logs := orderRunner(t, tools, &orderClock{now: followUpAt}, true)
+	runner.Tools = reviewing
+	run(t, runner)
+
+	if len(planner.notes) != 0 || contains(tools.calls, "finance_create_manual_transaction") || contains(tools.calls, "inbox_resolve") {
+		t.Fatalf("Codex ran, money was recorded, or the capture was resolved: calls %v", tools.calls)
+	}
+	for _, record := range tools.records {
+		if record["status"] == "processed" || record["duplicateOf"] != nil {
+			t.Fatalf("records = %v, want only Human Review", tools.records)
+		}
+	}
+	proposed, _ := reviewing.review["proposedAction"].(plannedAction)
+	candidates, _ := reviewing.review["candidates"].([]map[string]any)
+	if want := "Sent twice: the capture from 17:09 already recorded -5.00 EUR · bakery · 2026-10-16. To record another one, edit and send it."; reviewing.review["errorSummary"] != want || proposed.Tool != "none" || len(candidates) != 0 {
+		t.Fatalf("review = %v", reviewing.review)
+	}
+	if tools.started() != 1 || len(*logs) != 1 || !strings.Contains((*logs)[0], againItem+" repeats capture "+bakeryCapture+": Sent twice") {
+		t.Errorf("started %d, logs %q", tools.started(), *logs)
+	}
+}
+
+// TestAnEditedCaptureIsPlannedAsWritten: the owner edits the spending in
+// Human Review and sends it again, unchanged. The edit names the capture it
+// replaces, which may still be waiting for review when the edit is read: it
+// is no repeat, the capture it replaces is not listed for Codex, and it is
+// planned and recorded.
+func TestAnEditedCaptureIsPlannedAsWritten(t *testing.T) {
+	replaced := recentCapture{ID: replacedCapture, Content: "Spent 5 euros at the bakery.", Source: "web", State: "human_review", CreatedAt: followUpAt.Add(-30 * time.Second),
+		Outcome: &recentOutcome{Status: "human_review", ErrorSummary: "Sent twice: the capture from 17:09 already recorded -5.00 EUR · bakery · 2026-10-16. To record another one, edit and send it."}}
+	edit := inboxItem{ID: againItem, Content: "Spent 5 euros at the bakery.", Source: "manual", SourceMetadata: map[string]any{"timeZone": "Europe/Berlin", "replacesItemId": replacedCapture}, CreatedAt: followUpAt}
+	tools := &orderedTools{fakeTools: &fakeTools{}, items: []inboxItem{edit}, windows: map[string]recentWindow{againItem: {Items: []recentCapture{replaced, bakery()}}}}
+	runner, planner, _ := orderRunner(t, tools, &orderClock{now: followUpAt}, true)
+	planner.output = `{"actions":[{"tool":"finance_create_manual_transaction","arguments":{"amount":{"amount":-500,"currency":"EUR"},"counterparty":"bakery"}}],"confidence":0.95}`
+	run(t, runner)
+
+	if len(planner.notes) != 1 {
+		t.Fatalf("Codex runs = %d, want the edit planned", len(planner.notes))
+	}
+	note := planner.notes[0]
+	if strings.Contains(note, "Sent twice") || strings.Count(note, `"text":"Spent 5 euros at the bakery."`) != 1 || !strings.Contains(note, `"justBefore":true,"source":"web","text":"Spent 5 euros at the bakery.","state":"resolved"`) {
+		t.Fatalf("note = %s, want only the first spending, just before", note)
+	}
+	if !strings.Contains(note, "An item whose sourceMetadata has replacesItemId was edited and sent again by the owner from Human Review: it is meant as written") {
+		t.Errorf("the prompt does not say what an edit is: %s", note)
+	}
+	last := tools.records[len(tools.records)-1]
+	if last["status"] != "processed" || last["duplicateOf"] != nil || !contains(tools.calls, "finance_create_manual_transaction") || !contains(tools.calls, "inbox_resolve") {
+		t.Fatalf("record = %v, calls = %v", last, tools.calls)
+	}
+}
+
 func TestACaptureSentAgainIsPlannedWhenItIsNoRepeat(t *testing.T) {
 	approved := map[string]any{"approvedAction": map[string]any{"tool": "food_add_shopping_items", "arguments": map[string]any{"items": []any{map[string]any{"name": "lemons"}}}}}
 	for name, tc := range map[string]struct {
@@ -187,6 +307,13 @@ func TestTheDryRunSaysACaptureIsSentAgain(t *testing.T) {
 	}
 	if len(planner.notes) != 0 || len(proposals) != 1 || len(proposals[0].Actions) != 0 || proposals[0].Reason != "Same as the capture from 17:09, already done" || tools.started() != 0 {
 		t.Fatalf("proposals = %+v, Codex runs %d", proposals, len(planner.notes))
+	}
+	// Spending sent again says why it would wait for the owner.
+	tools.items[0].Content = "Spent 5 euros at the bakery."
+	tools.windows[againItem] = recentWindow{Items: []recentCapture{bakery()}}
+	proposals, err = (Runner{Planner: planner, Tools: tools, Model: "test", DryRun: true, ContextMinutes: 20, TimeZone: berlin(t)}).Run(context.Background())
+	if err != nil || len(planner.notes) != 0 || len(proposals) != 1 || !strings.HasPrefix(proposals[0].Reason, "Sent twice: the capture from 17:09 already recorded -5.00 EUR") {
+		t.Fatalf("spending: proposals = %+v, err %v", proposals, err)
 	}
 }
 

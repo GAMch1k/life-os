@@ -754,7 +754,8 @@ func (r Runner) plan(ctx context.Context, item inboxItem) (Proposal, error) {
 		return Proposal{}, err
 	}
 	if earlier, repeated := window.repeatOf(item, r.ContextMinutes); repeated {
-		return Proposal{ItemID: item.ID, Actions: []plannedAction{}, Reason: repeatSummary(earlier, r.location(item))}, nil
+		reason, _ := repeatOutcome(earlier, r.location(item))
+		return Proposal{ItemID: item.ID, Actions: []plannedAction{}, Reason: reason}, nil
 	}
 	images, err := r.captureImages(ctx, item)
 	if err != nil {

@@ -23,8 +23,21 @@ import (
 // actions that says so ("Same as the capture from 17:09, already done") and
 // names the capture it repeats (duplicateOf), which Inbox records as
 // inbox.item.repeated. When it failed, nothing was done, so the repeat is
-// planned as usual. A repeat in other words ("lemons please" after "buy
-// lemons") is Codex's (recentContextPrompt).
+// planned as usual. Money is never dropped silently: when that capture
+// recorded a transaction (two coffees may well cost the same), the repeat
+// goes to Human Review instead, without a Codex run, and the owner edits
+// and sends it to record another one. A capture edited and sent again from
+// Human Review (sourceMetadata.replacesItemId) is meant as written, so it is
+// never a repeat, and the capture it replaces, discarded once the edit is
+// in, is left out of Codex's list. A repeat in other words ("lemons please"
+// after "buy lemons") is Codex's (recentContextPrompt).
+
+// replacedItem is the capture an item was edited from in Human Review
+// (sourceMetadata.replacesItemId), or "" for none.
+func replacedItem(item inboxItem) string {
+	id, _ := item.SourceMetadata["replacesItemId"].(string)
+	return strings.TrimSpace(id)
+}
 
 // sameCaptureText reports whether two captures say the same: their texts
 // trimmed, with whitespace collapsed, and case-folded.
@@ -48,8 +61,12 @@ func sameMedia(a, b []string) bool {
 // item repeats: the latest one with the same text and images that is
 // resolved or waits for Human Review. A failed one did nothing, so it is no
 // reason to skip the item; nor is one still on its way, which the item is
-// planned after (order.go).
+// planned after (order.go), or a discarded one. An item the owner edited
+// and sent again repeats nothing.
 func (w recentWindow) repeatOf(item inboxItem, minutes int) (recentCapture, bool) {
+	if replacedItem(item) != "" {
+		return recentCapture{}, false
+	}
 	var found recentCapture
 	ok := false
 	window := time.Duration(minutes) * time.Minute
@@ -70,25 +87,50 @@ func (w recentWindow) repeatOf(item inboxItem, minutes int) (recentCapture, bool
 	return found, ok
 }
 
-// repeatSummary is what the attempt of a capture sent again says: when the
-// capture it repeats was made, on the owner's clock, and where that one is.
-func repeatSummary(earlier recentCapture, location *time.Location) string {
+// repeatOutcome is what becomes of a capture sent again: the summary of
+// its attempt, resolved, or, when the capture it repeats recorded money,
+// the reason it goes to Human Review (review true). Times are on the
+// owner's clock.
+func repeatOutcome(earlier recentCapture, location *time.Location) (reason string, review bool) {
 	if location == nil {
 		location = time.UTC
 	}
 	at := earlier.CreatedAt.In(location).Format("15:04")
-	if earlier.State == "human_review" {
-		return fmt.Sprintf("Same as the capture from %s, waiting for your review", at)
+	if money := recordedMoney(earlier, location); len(money) > 0 {
+		return fmt.Sprintf("Sent twice: the capture from %s already recorded %s. To record another one, edit and send it.", at, strings.Join(money, " and ")), true
 	}
-	return fmt.Sprintf("Same as the capture from %s, already done", at)
+	if earlier.State == "human_review" {
+		return fmt.Sprintf("Same as the capture from %s, waiting for your review", at), false
+	}
+	return fmt.Sprintf("Same as the capture from %s, already done", at), false
+}
+
+// recordedMoney is what a capture recorded in Finance: each transaction's
+// summary (amount, counterparty, date).
+func recordedMoney(capture recentCapture, location *time.Location) []string {
+	var money []string
+	for _, effect := range recentEffects(capture, location) {
+		if effect.Entity != "transaction" {
+			continue
+		}
+		summary := effect.Summary
+		if summary == "" {
+			summary = "a transaction"
+		}
+		money = append(money, summary)
+	}
+	return money
 }
 
 // resolveRepeat records the attempt of a capture sent again, processed with
 // no actions and the capture it repeats, and resolves the capture, as a
-// processed capture is.
+// processed capture is; one repeating recorded money goes to Human Review.
 func (r Runner) resolveRepeat(ctx context.Context, trace activity.Trace, item inboxItem, attemptID string, earlier recentCapture) error {
-	summary := repeatSummary(earlier, r.location(item))
+	summary, review := repeatOutcome(earlier, r.location(item))
 	r.logf("capture %s repeats capture %s: %s", item.ID, earlier.ID, summary)
+	if review {
+		return r.humanReview(ctx, item.ID, attemptID, plannedAction{Tool: "none", Arguments: map[string]any{}}, []map[string]any{}, summary)
+	}
 	if err := r.recordAttempt(ctx, map[string]any{"itemId": item.ID, "attemptId": attemptID, "status": "processed", "actions": []map[string]any{}, "errorSummary": &summary, "duplicateOf": earlier.ID}); err != nil {
 		return err
 	}
