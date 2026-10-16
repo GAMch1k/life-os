@@ -326,7 +326,7 @@ func (q *Queries) ListProcessingAttempts(ctx context.Context, inboxItemID pgtype
 }
 
 const listRecentCaptures = `-- name: ListRecentCaptures :many
-SELECT i.id, i.content, i.source, i.state, i.correlation_id, i.created_at, i.resolved_at,
+SELECT i.id, i.content, i.source, i.state, i.correlation_id, i.media_references, i.created_at, i.resolved_at,
        a.id AS attempt_id,
        COALESCE(a.status, '')::text AS attempt_status,
        COALESCE(a.actions, '[]'::jsonb)::jsonb AS attempt_actions,
@@ -361,6 +361,7 @@ type ListRecentCapturesRow struct {
 	Source              string
 	State               string
 	CorrelationID       *string
+	MediaReferences     []byte
 	CreatedAt           pgtype.Timestamptz
 	ResolvedAt          pgtype.Timestamptz
 	AttemptID           pgtype.UUID
@@ -372,7 +373,8 @@ type ListRecentCapturesRow struct {
 
 // The captures made in a window before one capture (not that one), newest
 // first, that processing has settled: resolved, waiting for Human Review, or
-// failed. Each comes with its latest finished attempt, if any.
+// failed. Each comes with its images and its latest finished attempt, if
+// any.
 func (q *Queries) ListRecentCaptures(ctx context.Context, arg ListRecentCapturesParams) ([]ListRecentCapturesRow, error) {
 	rows, err := q.db.Query(ctx, listRecentCaptures,
 		arg.BeforeID,
@@ -393,6 +395,7 @@ func (q *Queries) ListRecentCaptures(ctx context.Context, arg ListRecentCaptures
 			&i.Source,
 			&i.State,
 			&i.CorrelationID,
+			&i.MediaReferences,
 			&i.CreatedAt,
 			&i.ResolvedAt,
 			&i.AttemptID,

@@ -84,8 +84,9 @@ LIMIT 50;
 -- name: ListRecentCaptures :many
 -- The captures made in a window before one capture (not that one), newest
 -- first, that processing has settled: resolved, waiting for Human Review, or
--- failed. Each comes with its latest finished attempt, if any.
-SELECT i.id, i.content, i.source, i.state, i.correlation_id, i.created_at, i.resolved_at,
+-- failed. Each comes with its images and its latest finished attempt, if
+-- any.
+SELECT i.id, i.content, i.source, i.state, i.correlation_id, i.media_references, i.created_at, i.resolved_at,
        a.id AS attempt_id,
        COALESCE(a.status, '')::text AS attempt_status,
        COALESCE(a.actions, '[]'::jsonb)::jsonb AS attempt_actions,

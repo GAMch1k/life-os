@@ -37,6 +37,7 @@ type inboxAction struct {
 	RetryReason    string                   `json:"retryReason,omitempty" jsonschema:"Why the retry is scheduled then, e.g. usage_limited or backoff"`
 	Candidates     []map[string]interface{} `json:"candidates,omitempty"`
 	ErrorSummary   *string                  `json:"errorSummary,omitempty"`
+	DuplicateOf    string                   `json:"duplicateOf,omitempty" jsonschema:"With status processed: the earlier Inbox item UUID this one repeats (same text and images), so nothing was done"`
 }
 type Output struct {
 	Data map[string]any `json:"data"`
@@ -310,6 +311,9 @@ func attemptUpdate(in inboxAction) map[string]interface{} {
 	}
 	if in.RetryReason != "" {
 		body["retryReason"] = in.RetryReason
+	}
+	if in.DuplicateOf != "" {
+		body["duplicateOf"] = in.DuplicateOf
 	}
 	return body
 }

@@ -204,6 +204,12 @@ func (h *Handler) UpdateProcessingAttempt(c fiber.Ctx, itemID types.UUID, attemp
 	if (body.NextRetryAt != nil || body.RetryReason != nil) && body.Status != generated.UpdateProcessingAttemptRequestStatusRetryable {
 		return fiber.NewError(400, "nextRetryAt and retryReason are only valid for a retryable attempt")
 	}
+	if body.DuplicateOf != nil && body.Status != generated.UpdateProcessingAttemptRequestStatusProcessed {
+		return fiber.NewError(400, "duplicateOf is only valid for a processed attempt")
+	}
+	if body.DuplicateOf != nil && *body.DuplicateOf == itemID {
+		return fiber.NewError(400, "a capture cannot repeat itself")
+	}
 	var nextRetryAt pgtype.Timestamptz
 	if body.NextRetryAt != nil {
 		nextRetryAt = pgtype.Timestamptz{Time: *body.NextRetryAt, Valid: true}
@@ -235,6 +241,9 @@ func (h *Handler) UpdateProcessingAttempt(c fiber.Ctx, itemID types.UUID, attemp
 	if body.Status == generated.UpdateProcessingAttemptRequestStatusProcessed {
 		if item, err := h.queries.GetInboxItem(c.Context(), pgUUID(itemID)); err == nil {
 			h.recordFollowUps(c, item, attemptID.String(), body.Actions)
+			if body.DuplicateOf != nil {
+				h.recordRepeat(c, item, attemptID.String(), *body.DuplicateOf)
+			}
 		}
 	}
 	if failed != nil {

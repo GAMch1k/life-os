@@ -558,6 +558,9 @@ type RecentCapture struct {
 	CreatedAt     time.Time          `json:"createdAt"`
 	Id            openapi_types.UUID `json:"id"`
 
+	// MediaReferences The capture's images, as inbox-media:<sha256> references (see InboxItem.mediaReferences); empty for none.
+	MediaReferences []string `json:"mediaReferences"`
+
 	// Outcome The capture's latest finished processing attempt; absent when it has none (for example, resolved by hand).
 	Outcome    *RecentCaptureOutcome `json:"outcome,omitempty"`
 	ResolvedAt *time.Time            `json:"resolvedAt,omitempty"`
@@ -621,8 +624,11 @@ type UnfinishedCaptureState string
 // UpdateProcessingAttemptRequest defines model for UpdateProcessingAttemptRequest.
 type UpdateProcessingAttemptRequest struct {
 	// Actions The attempt's actions. In a processed attempt, an action that changed what an earlier capture created may name that capture as followsUp.inboxItemId (with entity and entityId); Inbox then records inbox.item.followed_up about the earlier capture, once per capture.
-	Actions      []map[string]interface{} `json:"actions"`
-	ErrorSummary *string                  `json:"errorSummary,omitempty"`
+	Actions []map[string]interface{} `json:"actions"`
+
+	// DuplicateOf Only with status processed, and not the capture itself (400 otherwise): the earlier capture this one repeats, the same text and images, already resolved or waiting for Human Review, so the attempt did nothing. Inbox records inbox.item.repeated about that capture (nothing for a capture it does not have).
+	DuplicateOf  *openapi_types.UUID `json:"duplicateOf,omitempty"`
+	ErrorSummary *string             `json:"errorSummary,omitempty"`
 
 	// NextRetryAt Only with status retryable.
 	NextRetryAt *time.Time `json:"nextRetryAt,omitempty"`
