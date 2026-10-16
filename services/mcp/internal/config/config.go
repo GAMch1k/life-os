@@ -18,6 +18,10 @@ type Config struct {
 	RecipeImportURL string `env:"RECIPE_IMPORT_SERVICE_URL" default:"http://recipe-import:8080"`
 	// ActivityURL enables activity events; empty disables them.
 	ActivityURL string `env:"ACTIVITY_SERVICE_URL"`
+	// TimeZone is the owner's IANA timezone (LIFE_OS_TIMEZONE): the Task and
+	// event tools show times and move them on its wall clock. An unknown
+	// name falls back to UTC.
+	TimeZone string `env:"LIFE_OS_TIMEZONE" default:"UTC"`
 }
 
 func Load() (Config, error) {

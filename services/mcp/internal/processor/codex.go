@@ -178,7 +178,7 @@ func (c CodexCLI) Plan(ctx context.Context, content string) (string, error) {
 		images:    images,
 		webSearch: WebSearchDisabled,
 		prompt: func(c CodexCLI) string {
-			return planPrompt + timeContext(c.now(), capturedAtFrom(ctx), c.TimeZone) + imagesNote(images) + recentContextFrom(ctx) + "Inbox item: " + content
+			return planPrompt + movePrompt + timeContext(c.now(), capturedAtFrom(ctx), c.TimeZone) + imagesNote(images) + recentContextFrom(ctx) + "Inbox item: " + content
 		},
 	})
 }

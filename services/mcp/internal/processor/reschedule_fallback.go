@@ -87,16 +87,18 @@ func (r Runner) findTargets(ctx context.Context, item inboxItem, action plannedA
 // it is due at the owner-local midnight), and a
 // calendar_update with a new start becomes a task_update due then (an
 // all-day start is due at the owner-local midnight of that date, like a
-// date-only Task). Search terms, the title, and notes/description carry
-// over; fields only one domain has are dropped.
+// date-only Task). A move (moves.go) carries over as it is. Search terms,
+// the title, and notes/description carry over; fields only one domain has
+// are dropped.
 func equivalentReschedule(action plannedAction, location *time.Location) (plannedAction, bool) {
 	in := action.Arguments
 	out := map[string]any{}
 	var tool string
+	_, moves := plannedMove(action)
 	switch {
 	case action.Tool == "task_update" && in["taskId"] == nil && in["clearDueAt"] != true:
 		dueAt, ok := in["dueAt"].(string)
-		if !ok || dueAt == "" {
+		if (!ok || dueAt == "") && !moves {
 			return plannedAction{}, false
 		}
 		tool = "calendar_update"
@@ -104,6 +106,11 @@ func equivalentReschedule(action plannedAction, location *time.Location) (planne
 		copyField(out, "eventQueryAlternatives", in, "taskQueryAlternatives")
 		copyField(out, "title", in, "title")
 		copyField(out, "description", in, "notes")
+		if moves {
+			// A move means the same for an event (it keeps its length).
+			out["move"] = in["move"]
+			break
+		}
 		out["startAt"] = dueAt
 		// Due at the owner-local midnight is a date-only due date: the event
 		// moves to that day (a timed one keeps its time of day).
@@ -113,6 +120,13 @@ func equivalentReschedule(action plannedAction, location *time.Location) (planne
 				out["startDate"] = local.Format(time.DateOnly)
 			}
 		}
+	case action.Tool == "calendar_update" && moves:
+		tool = "task_update"
+		copyField(out, "taskQuery", in, "eventQuery")
+		copyField(out, "taskQueryAlternatives", in, "eventQueryAlternatives")
+		copyField(out, "title", in, "title")
+		copyField(out, "notes", in, "description")
+		out["move"] = in["move"]
 	case action.Tool == "calendar_update":
 		dueAt, ok := in["startAt"].(string)
 		if !ok || dueAt == "" {

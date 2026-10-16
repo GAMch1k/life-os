@@ -490,6 +490,8 @@ services:
       FOOD_SERVICE_URL: http://food:8080
       RECIPE_IMPORT_SERVICE_URL: http://recipe-import:8080
       ACTIVITY_SERVICE_URL: http://activity:8080
+      # The Task and event tools show times, and move them, on this clock.
+      LIFE_OS_TIMEZONE: ${LIFE_OS_TIMEZONE:-UTC}
     expose: ["8080"]
     depends_on:
       finance: {condition: service_started}

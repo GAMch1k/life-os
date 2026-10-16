@@ -21,8 +21,8 @@ func isCalendarMutation(action plannedAction) bool {
 const eventSearchLimit = 10
 
 // calendarChangeFields are what calendar_update may change; clear names the
-// optional ones to remove.
-var calendarChangeFields = []string{"title", "description", "location", "allDay", "startAt", "endAt", "startDate", "endDate", "timeZone", "reminders", "priority", "clear"}
+// optional ones to remove, and move moves the event (moves.go).
+var calendarChangeFields = []string{"title", "description", "location", "allDay", "startAt", "endAt", "startDate", "endDate", "timeZone", "reminders", "priority", "clear", "move"}
 
 // clearableEventFields are the optional event fields an update may remove.
 var clearableEventFields = map[string]bool{"description": true, "location": true, "timeZone": true, "reminders": true}
