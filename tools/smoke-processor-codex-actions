@@ -54,7 +54,7 @@ capture() {
 }
 
 wait_for_action() {
-  local item_id=$1 tool=$2
+  local item_id=$1 tool=$2 attempts='{"items":[]}' item
   for _ in $(seq 1 90); do
     attempts=$(curl --fail --silent "$gateway/api/inbox/v1/inbox-items/$item_id/processing-attempts")
     if jq -e --arg tool "$tool" '.items | length == 1 and .[0].status == "processed" and (. [0].actions | length) == 1 and .[0].actions[0].tool == $tool' >/dev/null <<<"$attempts"; then
@@ -62,7 +62,12 @@ wait_for_action() {
     fi
     sleep 2
   done
+  # Say where the capture is, so a failure explains itself: its state (and
+  # a scheduled retry), the Human Review reason, and its latest attempt.
+  item=$(curl --fail --silent "$gateway/api/inbox/v1/inbox-items/$item_id" || echo '{}')
   echo "Codex action smoke: $tool was not automatically processed for $item_id" >&2
+  jq -r '"  state: \(.state // "unknown")" + (if .nextRetryAt then " (retry at \(.nextRetryAt), \(.retryReason // ""))" else "" end) + (if .processingMetadata.humanReview.errorSummary then "\n  review: \(.processingMetadata.humanReview.errorSummary)" else "" end)' <<<"$item" >&2 || true
+  jq -r '"  attempts: \(.items | length)", (.items[0] // empty | "  last attempt: \(.status) tools=\([.actions[]?.tool // "?"] | join(",")) errorSummary=\(.errorSummary // "")")' <<<"$attempts" >&2 || true
   return 1
 }
 
