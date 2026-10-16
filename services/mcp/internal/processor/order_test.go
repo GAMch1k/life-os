@@ -260,10 +260,12 @@ func TestCaptureOrderForgetsCapturesThatStoppedComingUp(t *testing.T) {
 	}
 }
 
-// TestARepeatedGroceryIsAddedAgainAndMerges runs a capture of "Buy oat
-// milk." made again right after the first through a fake Codex CLI: the
-// prompt tells it to plan the repeat as usual, and Food merges it.
-func TestARepeatedGroceryIsAddedAgainAndMerges(t *testing.T) {
+// TestARepeatInOtherWordsIsPlannedAndMerges runs "Need oat milk." made
+// right after "Buy oat milk." through a fake Codex CLI: not the same text,
+// so Codex plans it (the exact repeat never reaches it, repeats.go), and the
+// prompt tells it to plan a grocery asked for again as usual, which Food
+// merges, and anything else as already done.
+func TestARepeatInOtherWordsIsPlannedAndMerges(t *testing.T) {
 	const oatItem = "a0000000-0000-4000-8000-0000000000aa"
 	dir := t.TempDir()
 	promptFile := filepath.Join(dir, "prompt")
@@ -287,7 +289,7 @@ func TestARepeatedGroceryIsAddedAgainAndMerges(t *testing.T) {
 		if err := os.WriteFile(planFile, []byte(tc.plan), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		tools := &orderedTools{fakeTools: &fakeTools{}, items: []inboxItem{{ID: followUpItem, Content: "Buy oat milk.", Source: "web", CreatedAt: followUpAt}},
+		tools := &orderedTools{fakeTools: &fakeTools{}, items: []inboxItem{{ID: followUpItem, Content: "Need oat milk.", Source: "web", CreatedAt: followUpAt}},
 			windows: map[string]recentWindow{followUpItem: {Items: []recentCapture{first}}}}
 		merging := &mergingTools{orderedTools: tools, oatItem: oatItem}
 		cli := CodexCLI{Command: wrapper, WorkDir: dir, TimeZone: berlin(t), Now: func() time.Time { return followUpAt }}
@@ -297,7 +299,7 @@ func TestARepeatedGroceryIsAddedAgainAndMerges(t *testing.T) {
 		}
 		prompt, _ := os.ReadFile(promptFile)
 		for _, want := range []string{`"text":"Buy oat milk.","state":"resolved","done":[{"entity":"shopping_item","id":"` + oatItem + `","change":"added","summary":"oat milk"}]`,
-			"An item that repeats a recent capture", "food_add_shopping_items merges them into the items already there", `reason "Already done for the capture from HH:MM: <its text>"`} {
+			`When this item asks again, in other words, for what a recent capture asked for ("lemons please" after "buy lemons")`, "food_add_shopping_items merges them into the items already on the list", `reason "Already done for the capture from HH:MM: <its text>"`} {
 			if !strings.Contains(string(prompt), want) {
 				t.Errorf("%s: prompt lacks %s", name, want)
 			}

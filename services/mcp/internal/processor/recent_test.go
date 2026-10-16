@@ -169,9 +169,18 @@ func TestRecentContextIsBuiltCappedAndClipped(t *testing.T) {
 		t.Fatalf("listed = %q, want the seven oldest first", texts)
 	}
 	milk := listed[4]
-	want := recentEntry{CapturedAt: "Friday 2026-10-16 17:02", MinutesBefore: 8, Source: "watch", Text: "Milch kaufen", State: "resolved", Done: []recentEffect{{Entity: "shopping_item", ID: milkItem, Change: "added", Summary: "Milch"}}}
+	want := recentEntry{CapturedAt: "Friday 2026-10-16 17:02", MinutesBefore: 8, SecondsBefore: 480, Source: "watch", Text: "Milch kaufen", State: "resolved", Done: []recentEffect{{Entity: "shopping_item", ID: milkItem, Change: "added", Summary: "Milch"}}}
 	if !reflect.DeepEqual(milk, want) {
 		t.Fatalf("milk = %+v, want %+v", milk, want)
+	}
+	// The newest, made just before the item, says so; no other does.
+	for index, entry := range listed {
+		if entry.JustBefore != (index == 6) {
+			t.Errorf("%s: justBefore = %v", entry.Text, entry.JustBefore)
+		}
+	}
+	if !strings.Contains(rc.note, `"minutesBefore":2,"secondsBefore":120,"justBefore":true,"source":"voice","text":"Remind me to call Sophie"`) {
+		t.Errorf("the capture just before is not marked: %s", rc.note)
 	}
 	if coffee := listed[5].Done; len(coffee) != 1 || coffee[0].ID != coffeeEvent || coffee[0].Summary != "Coffee with Lukas · Sat 17 Oct 2026 17:00–18:00" || coffee[0].Change != "created" {
 		t.Fatalf("coffee = %+v", coffee)
@@ -339,10 +348,17 @@ func TestPlanPromptListsTheRecentCapturesBeforeTheItem(t *testing.T) {
 	if !strings.HasPrefix(string(prompt), planPrompt) || clock < 0 || section < clock || !strings.HasSuffix(string(prompt), rc.note+`Inbox item: {"content":"Actually oat milk"}`) {
 		t.Fatalf("prompt = %s", prompt)
 	}
-	for _, rule := range []string{"Use the list only to understand what this item refers to or corrects", "Never plan an action again for an earlier capture", "food_update_shopping_item and shoppingItemId", "set ambiguous true and actions to []",
+	for _, rule := range []string{"Use the list only to understand what this item refers to or corrects", "never an earlier capture's request again", "food_update_shopping_item and shoppingItemId", "set ambiguous true and actions to []",
 		// P5-22: repeats, corrections that name nothing, new times, and
 		// captures still on their way.
-		`reason "Already done for the capture from HH:MM: <its text>"`, "is about the latest capture in the list whose done it fits", "is such a change, never a question", `"make it tomorrow morning" is dueAt tomorrow at 09:00`, "raw or processing means it is still on its way"} {
+		`reason "Already done for the capture from HH:MM: <its text>"`, "is such a change, never a question", `"make it tomorrow morning" is dueAt tomorrow at 09:00`, "raw or processing means it is still on its way",
+		// P5-23: an exact repeat is the processor's; a repeat in other
+		// words, and a correction that names nothing, the capture just
+		// before first.
+		"in other words", "shopping list items and recipe links are still planned as usual", "When that capture failed, plan the item as usual",
+		"how long before this item (minutesBefore, and secondsBefore to the second), justBefore true on the one capture made just before this item",
+		`A correction that names nothing ("make it 6", "actually tomorrow", "no, 7 pm", "make it tomorrow morning") is about what was done for the justBefore capture when it fits that entity`,
+		"only when it does not fit, about the latest earlier capture in the list whose done it fits; when it is still unclear which entity it means, set ambiguous true"} {
 		if !strings.Contains(string(prompt), rule) {
 			t.Errorf("prompt lacks %q", rule)
 		}

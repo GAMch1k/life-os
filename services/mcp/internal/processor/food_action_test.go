@@ -455,7 +455,7 @@ func TestALowConfidenceFoodChangeOffersTheMatches(t *testing.T) {
 
 func TestPlanPromptRoutesGroceriesToTheShoppingList(t *testing.T) {
 	for _, want := range []string{
-		"|food_add_shopping_items|food_mark_bought|food_add_pantry_items|food_update_pantry_item",
+		"|food_add_shopping_items|food_mark_bought|food_update_shopping_item|food_add_pantry_items|food_update_pantry_item",
 		"Groceries go on the shopping list; other purchases stay Tasks.",
 		`are food_add_shopping_items, never task_create, also when the item gives a date or time (\"buy milk tomorrow\" only puts milk on the list)`,
 		`Other purchases (\"buy a flash drive tomorrow\", \"купить зарядку для телефона\") stay task_create, with dueAt when a date is given.`,

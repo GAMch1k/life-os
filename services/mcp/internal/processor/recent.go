@@ -28,7 +28,8 @@ import (
 // such an entity, however its target was found, is recorded with followsUp,
 // so Inbox links the two captures in Activity (inbox.item.followed_up).
 // The same read names the captures of the window still on their way, which
-// the capture is planned after (P5-22, see order.go).
+// the capture is planned after (P5-22, see order.go), and the capture this
+// one repeats, if it was sent again (P5-23, see repeats.go).
 
 const (
 	// recentCaptureLimit is the most recent captures read for one capture.
@@ -50,17 +51,19 @@ const (
 // is added after the owner's time only when there are any, so the fixed
 // planPrompt stays a stable prefix and a capture without recent ones is
 // planned as before.
-const recentContextPrompt = "Recent captures (context only). The owner often corrects or adds to what they captured a few minutes earlier. The list below is the owner's other captures from the minutes before this item, oldest first, each with what Life OS already did for it: done names each entity (task, event, shopping_item, pantry_item, transaction, meal, staple, recipe) with its id, the change (created, updated, added, merged, bought, completed, cancelled, …), and a summary; state human_review means it waits for the owner's decision and nothing was done yet, failed means nothing was done, and raw or processing means it is still on its way and nothing is done for it yet. Use the list only to understand what this item refers to or corrects. Never plan an action again for an earlier capture: what it asked for is done or waiting for the owner. An item that repeats a recent capture (the same request again, such as one sent twice) is planned as usual when that capture failed, or when the item only puts things on the shopping list (food_add_shopping_items merges them into the items already there) or saves a recipe link (recipe_import finds it saved); when that capture already created or recorded something else, such as a task, an event, or a transaction, plan nothing: set ambiguous true and actions to [] with reason \"Already done for the capture from HH:MM: <its text>\", HH:MM being when it was captured. When this item clearly corrects, changes, or undoes something done for a recent capture (\"actually oat milk\", \"make it 6\", \"no, tomorrow morning\"), change that entity instead of creating another one: a task with task_update (or task_complete or task_reopen) and taskId set to its id, with only the fields that change; an event with calendar_update and eventId set to its id, with only the fields that change (a new start keeps the event's length), or calendar_cancel with eventId (the owner approves every cancellation); a shopping_item with food_update_shopping_item and shoppingItemId set to its id, with only what changes: name (the new name as the owner wrote it, never translated, without the quantity), amount, note, or storeName. food_update_shopping_item may only use shoppingItemId, name, amount, note, and storeName. taskId, eventId, and shoppingItemId may be used this way besides the fields named above, only with an id listed in done for an entity of that kind; never guess one. A correction that names nothing (\"make it 6\", \"make it tomorrow morning\") is about the latest capture in the list whose done it fits. A new day or time for a recent task or event is such a change, never a question: dueAt for a task or startAt for an event (or move), on the owner's clock; for a task with no due date, \"make it tomorrow morning\" is dueAt tomorrow at 09:00 (a part of the day without a clock time is 09:00 in the morning, 15:00 in the afternoon, and 19:00 in the evening). Something new that continues a recent capture (\"add bread too\", \"and call Anna as well\") is a new action as usual (food_add_shopping_items with bread), never a change of the earlier entity. When the item asks to change or undo something that has no change tool here (a transaction, a meal, a pantry item, a staple, a recipe, or deleting a task) or what a capture still on its way asks for, or it is unclear whether or which recent entity it means, set ambiguous true and actions to [] with a short reason. An item unrelated to the recent captures is planned exactly as if they were not there. "
+const recentContextPrompt = "Recent captures (context only). The owner often corrects or adds to what they captured a few minutes earlier. The list below is the owner's other captures from the minutes before this item, oldest first, each with when it was captured, how long before this item (minutesBefore, and secondsBefore to the second), justBefore true on the one capture made just before this item, and what Life OS already did for it: done names each entity (task, event, shopping_item, pantry_item, transaction, meal, staple, recipe) with its id, the change (created, updated, added, merged, bought, completed, cancelled, …), and a summary; state human_review means it waits for the owner's decision and nothing was done yet, failed means nothing was done, and raw or processing means it is still on its way and nothing is done for it yet. Use the list only to understand what this item refers to or corrects; plan only what this item itself asks for, never an earlier capture's request again. When this item asks again, in other words, for what a recent capture asked for (\"lemons please\" after \"buy lemons\"), shopping list items and recipe links are still planned as usual: food_add_shopping_items merges them into the items already on the list, and recipe_import finds a recipe already saved. Anything else that capture already created or recorded, such as a task, an event, or a transaction, is not done again: set ambiguous true and actions to [] with reason \"Already done for the capture from HH:MM: <its text>\", HH:MM being when it was captured. When that capture failed, plan the item as usual. When this item clearly corrects, changes, or undoes something done for a recent capture (\"actually oat milk\", \"make it 6\", \"no, tomorrow morning\"), change that entity instead of creating another one: a task with task_update (or task_complete or task_reopen) and taskId set to its id, with only the fields that change; an event with calendar_update and eventId set to its id, with only the fields that change (a new start keeps the event's length), or calendar_cancel with eventId (the owner approves every cancellation); a shopping_item with food_update_shopping_item and shoppingItemId set to its id, with only what changes: name (the new name as the owner wrote it, never translated, without the quantity), amount, note, or storeName. food_update_shopping_item may only use shoppingItemId, name, amount, note, and storeName. taskId, eventId, and shoppingItemId may be used this way besides the fields named above, only with an id listed in done for an entity of that kind; never guess one. A correction that names nothing (\"make it 6\", \"actually tomorrow\", \"no, 7 pm\", \"make it tomorrow morning\") is about what was done for the justBefore capture when it fits that entity (a day or time fits a task or event; a name, amount, note, or store fits a shopping_item); only when it does not fit, about the latest earlier capture in the list whose done it fits; when it is still unclear which entity it means, set ambiguous true. A new day or time for a recent task or event is such a change, never a question: dueAt for a task or startAt for an event (or move), on the owner's clock; for a task with no due date, \"make it tomorrow morning\" is dueAt tomorrow at 09:00 (a part of the day without a clock time is 09:00 in the morning, 15:00 in the afternoon, and 19:00 in the evening). Something new that continues a recent capture (\"add bread too\", \"and call Anna as well\") is a new action as usual (food_add_shopping_items with bread), never a change of the earlier entity. When the item asks to change or undo something that has no change tool here (a transaction, a meal, a pantry item, a staple, a recipe, or deleting a task) or what a capture still on its way asks for, or it is unclear whether or which recent entity it means, set ambiguous true and actions to [] with a short reason. An item unrelated to the recent captures is planned exactly as if they were not there. "
 
 // recentCapture is one capture GET /v1/recent-captures lists.
 type recentCapture struct {
-	ID            string         `json:"id"`
-	Content       string         `json:"content"`
-	Source        string         `json:"source"`
-	State         string         `json:"state"`
-	CorrelationID string         `json:"correlationId"`
-	CreatedAt     time.Time      `json:"createdAt"`
-	Outcome       *recentOutcome `json:"outcome"`
+	ID            string `json:"id"`
+	Content       string `json:"content"`
+	Source        string `json:"source"`
+	State         string `json:"state"`
+	CorrelationID string `json:"correlationId"`
+	// MediaReferences are its images; a capture sent again has the same.
+	MediaReferences []string       `json:"mediaReferences"`
+	CreatedAt       time.Time      `json:"createdAt"`
+	Outcome         *recentOutcome `json:"outcome"`
 }
 
 // recentOutcome is a recent capture's latest finished processing attempt.
@@ -83,10 +86,16 @@ type recentEffect struct {
 	captureID string
 }
 
-// recentEntry is one recent capture as the prompt lists it.
+// recentEntry is one recent capture as the prompt lists it. Captures made
+// a moment apart (shared one after the other, or a benchmark's) all sit at
+// minutesBefore 0, so each also has its gap in seconds, and the capture made
+// just before the item says so (P5-23): a correction that names nothing
+// ("make it 6") is about that one first.
 type recentEntry struct {
 	CapturedAt    string         `json:"capturedAt"`
 	MinutesBefore int            `json:"minutesBefore"`
+	SecondsBefore int            `json:"secondsBefore"`
+	JustBefore    bool           `json:"justBefore,omitempty"`
 	Source        string         `json:"source"`
 	Text          string         `json:"text"`
 	State         string         `json:"state"`
@@ -165,16 +174,6 @@ func (w recentWindow) context(item inboxItem, minutes int, location *time.Locati
 	return buildRecentContext(item, captures, minutes, location)
 }
 
-// recentContext reads the captures made in the ContextMinutes before item
-// and builds what its planning gets. With ContextMinutes 0 it is empty.
-func (r Runner) recentContext(ctx context.Context, item inboxItem) (recentContext, error) {
-	window, err := r.readRecent(ctx, item)
-	if err != nil {
-		return recentContext{}, err
-	}
-	return window.context(item, r.ContextMinutes, r.location(item)), nil
-}
-
 // buildRecentContext lists the recent captures (given newest first, as
 // Inbox lists them) oldest first, without item itself, at most
 // recentCaptureLimit, clipped, and within maxRecentContext characters (the
@@ -194,6 +193,8 @@ func buildRecentContext(item inboxItem, captures []recentCapture, minutes int, l
 			break
 		}
 		entry := recentEntryOf(item, capture, location)
+		// Newest first: the first listed was made just before the item.
+		entry.JustBefore = len(lines) == 0
 		line := encodeRecent(entry)
 		length := utf8.RuneCountInString(line) + 1
 		if size+length > maxRecentContext {
@@ -228,7 +229,9 @@ func recentEntryOf(item inboxItem, capture recentCapture, location *time.Locatio
 		State:      capture.State,
 	}
 	if !item.CreatedAt.IsZero() {
-		entry.MinutesBefore = int(math.Round(item.CreatedAt.Sub(capture.CreatedAt).Minutes()))
+		gap := item.CreatedAt.Sub(capture.CreatedAt)
+		entry.MinutesBefore = int(math.Round(gap.Minutes()))
+		entry.SecondsBefore = int(math.Round(gap.Seconds()))
 	}
 	entry.Done = recentEffects(capture, location)
 	if len(entry.Done) > maxRecentEffects {
