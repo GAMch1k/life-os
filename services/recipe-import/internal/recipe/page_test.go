@@ -165,3 +165,46 @@ func TestLimits(t *testing.T) {
 		t.Fatalf("tags = %q", tags)
 	}
 }
+
+// A title that names only the site, as a login wall's does, is no title:
+// a stub is never called "Instagram".
+func TestATitleThatNamesOnlyTheSiteIsNoTitle(t *testing.T) {
+	for _, tc := range []struct {
+		title, link, site string
+		generic           bool
+	}{
+		{"Instagram", "https://www.instagram.com/reel/DGx7abc/", "Instagram", true},
+		{"Login • Instagram", "https://www.instagram.com/reel/DGx7abc/", "Instagram", true},
+		{"TikTok - Make Your Day", "https://www.tiktok.com/@cook/video/1", "TikTok", true},
+		{" YouTube ", "https://youtu.be/abc", "YouTube", true},
+		{"Log into Facebook", "https://www.facebook.com/watch/?v=1", "Facebook", true},
+		{"chefkoch.de", "https://www.chefkoch.de/", "chefkoch.de", true},
+		{"Chefkoch", "https://www.chefkoch.de/", "chefkoch.de", true},
+		{"Kitchen Stories", "https://www.kitchenstories.com/de", "Kitchen Stories", true},
+		// The verification stack's fixture page that looks like a login wall.
+		{"Instagram", "http://ics-fixture/reel-brownie.html", "Instagram", true},
+		{"", "https://www.instagram.com/reel/DGx7abc/", "Instagram", true},
+		{"Anna on Instagram", "https://www.instagram.com/reel/DGx7abc/", "Instagram", false},
+		{"Brownies | Instagram", "https://www.instagram.com/reel/DGx7abc/", "Instagram", false},
+		{"Spaghetti Bolognese - Chefkoch", "https://www.chefkoch.de/rezepte/1", "chefkoch.de", false},
+		{"Homemade pasta", "https://example.com/pasta", "example.com", false},
+		{"Брауни", "https://www.instagram.com/reel/DGx7abc/", "Instagram", false},
+	} {
+		link, _ := url.Parse(tc.link)
+		if got := GenericTitle(tc.title, link, tc.site); got != tc.generic {
+			t.Errorf("GenericTitle(%q, %s) = %v, want %v", tc.title, tc.link, got, tc.generic)
+		}
+	}
+	// A login wall is read as nothing, with the caption hint.
+	link, _ := url.Parse("https://www.instagram.com/reel/DGx7abc/")
+	wall := Parse(link, []byte(`<html><head><title>Instagram</title><meta property="og:title" content="Instagram"><meta property="og:site_name" content="Instagram"></head></html>`))
+	if wall.Method != Failed || wall.Draft.Title != "" || wall.Reason != "Instagram posts can't be read directly: paste the caption to fill in the ingredients and steps." ||
+		!reflect.DeepEqual(wall.Draft.Tags, []string{ReviewTag}) || wall.Draft.SourceURL != link.String() {
+		t.Fatalf("login wall = %+v", wall)
+	}
+	// So is a page on another host that calls itself only by its site name.
+	fixture, _ := url.Parse("http://ics-fixture/reel-brownie.html")
+	if got := Parse(fixture, []byte(`<html><head><title>Instagram</title><meta property="og:site_name" content="Instagram"></head></html>`)); got.Method != Failed || got.Draft.Title != "" {
+		t.Fatalf("fixture wall = %+v", got)
+	}
+}

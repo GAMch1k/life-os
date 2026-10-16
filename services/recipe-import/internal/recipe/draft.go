@@ -108,6 +108,54 @@ func SiteName(u *url.URL) string {
 	return strings.TrimPrefix(strings.ToLower(u.Hostname()), "www.")
 }
 
+// siteWords are what a page title holds besides the site's name when it
+// names only the site or its login wall: "Login • Instagram", "TikTok -
+// Make Your Day", "Log into Facebook".
+var siteWords = regexp.MustCompile(`\b(log ?in(to)?|sign (in|up)|make your day|page not found|welcome back|home)\b`)
+
+// GenericTitle reports whether a page title names only the site, not the
+// post or recipe: the site's name ("Instagram", "YouTube", "chefkoch.de",
+// the page's og:site_name), alone or with login words around it. Such a
+// title is no title, so a stub is never called "Instagram".
+func GenericTitle(title string, link *url.URL, site string) bool {
+	names := map[string]bool{}
+	add := func(name string) {
+		name = strings.ToLower(strings.TrimSpace(name))
+		names[name] = true
+		for _, word := range titleWords(name) {
+			names[word] = true
+		}
+	}
+	host := strings.TrimPrefix(strings.ToLower(link.Hostname()), "www.")
+	add(host)
+	if labels := strings.Split(host, "."); len(labels) > 1 {
+		// "chefkoch" for chefkoch.de.
+		add(strings.Join(labels[:len(labels)-1], "."))
+	}
+	add(site)
+	for _, name := range social {
+		add(name)
+	}
+	for _, word := range titleWords(siteWords.ReplaceAllString(strings.ToLower(clean(title)), " ")) {
+		if !names[word] {
+			return false
+		}
+	}
+	return true
+}
+
+// titleWords are a title's words for GenericTitle: runs of letters,
+// digits, dots, and hyphens ("chefkoch.de"), without dots at their ends.
+func titleWords(text string) []string {
+	var words []string
+	for _, word := range strings.FieldsFunc(text, func(r rune) bool { return !hasLetterOrDigit(string(r)) && r != '.' && r != '-' }) {
+		if word = strings.Trim(word, ".-"); word != "" {
+			words = append(words, word)
+		}
+	}
+	return words
+}
+
 // captionReason is why a social post gives only a preview.
 func captionReason(site string) string {
 	return site + " posts can't be read directly: paste the caption to fill in the ingredients and steps."

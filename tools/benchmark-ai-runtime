@@ -11,7 +11,9 @@
 # to the time they have, a question about when a Task is due, cash
 # spending, groceries for the
 # shopping list and the pantry, meals and a recipe's ingredients, recipe
-# links, photos of a letter and receipts, and follow-ups that correct what
+# links, recipes by the owner's words (a reel sent to the Tasks, a dish
+# named with a reel, a bare reel, a dictated recipe), photos of a letter
+# and receipts, and follow-ups that correct what
 # the capture just before did, through the Inbox API the Dashboard uses,
 # plus one recorded voice note through Voice and whisper.cpp), lets the automatic processor plan them with the
 # authenticated Codex CLI and act through MCP, asks for recipe ideas, lets
@@ -62,6 +64,15 @@ cat >"$pages/reel-DGx7abc.html" <<'HTML'
 <!doctype html>
 <html><head><title>Instagram</title>
 <meta property="og:title" content="Kitchen Anna on Instagram">
+<meta property="og:site_name" content="Instagram">
+</head><body></body></html>
+HTML
+# A reel whose page shows only the site's login wall, as Instagram's does
+# for Life OS: its title is the site's name, never a recipe's.
+cat >"$pages/reel-brownie.html" <<'HTML'
+<!doctype html>
+<html><head><title>Instagram</title>
+<meta property="og:title" content="Instagram">
 <meta property="og:site_name" content="Instagram">
 </head><body></body></html>
 HTML
@@ -295,6 +306,14 @@ run_profile() {
   ids[letter_deadline]=$(photo tools/fixtures/documents/letter-finanzamt.png)
   ids[receipt_cash]=$(photo tools/fixtures/documents/receipt-cash-rewe.png)
   ids[receipt_card]=$(photo tools/fixtures/documents/receipt-card-girocard.png)
+  # Recipes by the owner's words (P15-12), in their own Food and Tasks
+  # records: a reel sent to the Tasks (an Instagram link, which no correct
+  # plan fetches), a dish named with a reel whose page is a login wall, a
+  # bare reel without a word, and a recipe dictated without a link.
+  ids[recipe_reel_task]=$(capture "test stuff, send it to tasks for today https://www.instagram.com/reel/DPbench01/")
+  ids[recipe_named_reel]=$(capture "брауни http://ics-fixture/reel-brownie.html")
+  ids[recipe_bare_reel]=$(capture "https://www.instagram.com/reel/DPbench03/")
+  ids[recipe_dictated]=$(capture "Recipe for crispy chicken: you need 4 chicken thighs, 100 grams of flour, a teaspoon of paprika and some salt. Coat the chicken in the flour mixed with the paprika and salt, then air fry it at 200 degrees for 20 minutes, turning it once.")
   ids[recipe_caption]=$(capture $'http://ics-fixture/reel-DGx7abc.html\nShakshuka in 20 Minuten 🍳\nZutaten:\n- 4 Eier\n- 1 Dose Tomaten\n- 1 rote Paprika\n- 1 Zwiebel\nZubereitung:\n1. Zwiebel und Paprika anbraten.\n2. Tomaten dazugeben und 10 Minuten köcheln.\n3. Eier hineinschlagen und stocken lassen.\n#shakshuka #frühstück')
   # Follow-ups (P5-20): two captures a moment apart, the second correcting
   # what the first did, or unrelated to it. The processor plans the oldest
@@ -618,6 +637,28 @@ run_profile() {
   check recipe_link_structured "$([ "$s" = resolved ] && [ "$(imported rindergulasch http://ics-fixture/gulasch.html 3)" = 1 ] && echo 1 || echo 0)" "state=$s recipes=$(jq -c '[.items[] | {title, sourceUrl, ingredients: (.ingredients | length)}]' <<<"$recipes")"
   s=$(state "${ids[recipe_caption]}")
   check recipe_caption "$([ "$s" = resolved ] && [ "$(imported shakshuka http://ics-fixture/reel-DGx7abc.html 4)" = 1 ] && echo 1 || echo 0)" "state=$s"
+  # Recipes by the owner's words (P15-12). The reel sent to the Tasks: one
+  # Task with the link in its notes, and no recipe from it.
+  local reel_tasks
+  reel_tasks=$(api "$gateway/api/tasks/v1/tasks?query=DPbench01&limit=100" | jq -c '[.items[] | select((.notes // "") | contains("instagram.com/reel/DPbench01"))]')
+  from_reel() { jq --arg id "$1" '[.items[] | select((.sourceUrl // "") | contains($id))] | length' <<<"$recipes"; }
+  s=$(state "${ids[recipe_reel_task]}")
+  check recipe_reel_task "$([ "$s" = resolved ] && [ "$(jq 'length' <<<"$reel_tasks")" = 1 ] && [ "$(from_reel DPbench01)" = 0 ] && echo 1 || echo 0)" "state=$s tasks=$(jq -c 'map({title, notes, dueAt})' <<<"$reel_tasks") recipes_from_reel=$(from_reel DPbench01)"
+  # The dish named with the reel: a stub "Брауни" with the link, to review,
+  # never titled "Instagram".
+  local stubs
+  stubs=$(jq -c '[.items[] | select(.sourceUrl == "http://ics-fixture/reel-brownie.html")]' <<<"$recipes")
+  s=$(state "${ids[recipe_named_reel]}")
+  check recipe_named_reel "$([ "$s" = resolved ] && [ "$(jq '[.[] | select(.normalizedTitle == "брауни" and (.tags | index("to-review")))] | length' <<<"$stubs")" = 1 ] && [ "$(jq 'length' <<<"$stubs")" = 1 ] && echo 1 || echo 0)" "state=$s stubs=$(jq -c 'map({title, tags})' <<<"$stubs")"
+  # The bare reel: Human Review, nothing saved.
+  s=$(state "${ids[recipe_bare_reel]}")
+  check recipe_bare_reel "$([ "$s" = human_review ] && [ "$(from_reel DPbench03)" = 0 ] && echo 1 || echo 0)" "state=$s reason=\"$(item "${ids[recipe_bare_reel]}" | jq -r '.processingMetadata.humanReview.errorSummary // ""')\" recipes_from_reel=$(from_reel DPbench03)"
+  # The dictated recipe: one recipe by the AI, to review, without a link,
+  # with its ingredients and steps as Codex built them.
+  local dictated
+  dictated=$(jq -c '[.items[] | select((.normalizedTitle | test("chicken|куриц|h(ä|a)hnchen")) and (.tags | index("to-review")))]' <<<"$recipes")
+  s=$(state "${ids[recipe_dictated]}")
+  check recipe_dictated "$([ "$s" = resolved ] && [ "$(jq '[.[] | select(.sourceUrl == null and (.ingredients | length) >= 3 and ((.steps // "") | length) > 0 and .createdBy.kind == "agent" and .createdBy.name == "codex-inbox-processor")] | length' <<<"$dictated")" = 1 ] && [ "$(jq 'length' <<<"$dictated")" = 1 ] && echo 1 || echo 0)" "state=$s recipes=$(jq -c 'map({title, tags, sourceUrl, ingredients: [.ingredients[] | (.amount // "") + " " + .name], steps})' <<<"$dictated")"
   # Recipe ideas: 1 to 3 from the job, none with the disliked mushrooms, one
   # at least with the chicken that expires tomorrow (the words vary, so the
   # checks are structural).
@@ -651,13 +692,17 @@ run_profile() {
   # the rent kept; at least one way is in the benchmark's eating out (P13-09).
   check budget_plan_valid "$(jq -e --arg rent "$plan_rent" '.state == "ready" and (.result.suggestions | length) >= 2 and (.result.suggestions | length) <= 5 and any(.result.lines[]; .categoryId == $rent and .proposed.amount > 0)' <<<"$budget_plan" >/dev/null && echo 1 || echo 0)" "state=$(jq -r '.state // "missing"' <<<"$budget_plan") attempts=$(jq -r '.attempts // ""' <<<"$budget_plan") error=\"$(jq -r '.error // ""' <<<"$budget_plan")\" headline=\"$(jq -r '.result.headline // ""' <<<"$budget_plan")\" total=$(jq -r '.result.projectedTotal.amount // ""' <<<"$budget_plan")"
   check budget_plan_eating_out "$(jq -e --arg eating "$plan_eating" '[.result.suggestions[]? | select(.categoryId == $eating and .monthlySaving.amount > 0)] | length >= 1' <<<"$budget_plan" >/dev/null && echo 1 || echo 0)" "suggestions=$(jq -c '[.result.suggestions[]? | {title, category: .categoryName, merchants, saving: .monthlySaving.amount}]' <<<"$budget_plan")"
-  check no_extra_recipes "$([ "$(jq '.items | length' <<<"$recipes")" = 3 ] && echo 1 || echo 0)" "recipes=$(jq -c '[.items[].title]' <<<"$recipes") (expected 3)"
+  # The seeded recipe and the two imports; the stub and the dictated recipe
+  # are the only ones to review.
+  check no_extra_recipes "$([ "$(jq '[.items[] | select(.tags | index("to-review") | not)] | length' <<<"$recipes")" = 3 ] && echo 1 || echo 0)" "recipes=$(jq -c '[.items[] | select(.tags | index("to-review") | not) | .title]' <<<"$recipes") (expected 3)"
+  check no_extra_review_recipes "$([ "$(jq '[.items[] | select(.tags | index("to-review"))] | length' <<<"$recipes")" = 2 ] && echo 1 || echo 0)" "recipes=$(jq -c '[.items[] | select(.tags | index("to-review")) | .title]' <<<"$recipes") (expected 2)"
   check no_extra_meals "$([ "$(jq '.items | length' <<<"$plan")" = $((1 + ${#saturdays[@]})) ] && echo 1 || echo 0)" "meals=$(jq -c '[.items[] | {date, slot, title}]' <<<"$plan") (expected $((1 + ${#saturdays[@]})))"
   # No fallback or invented entities: thirteen seeds plus three creates,
   # the flash drive, the call to the plumber, the Finanzamt letter, and the
-  # follow-ups' Sophie, gym, and dry cleaning.
+  # follow-ups' Sophie, gym, and dry cleaning; the reel's Task is checked
+  # on its own (recipe_reel_task).
   local total
-  total=$(api "$gateway/api/tasks/v1/tasks?limit=100" | jq '.items | length')
+  total=$(api "$gateway/api/tasks/v1/tasks?limit=100" | jq '[.items[] | select((.notes // "") | contains("DPbench01") | not)] | length')
   check no_extra_tasks "$([ "$total" = 22 ] && echo 1 || echo 0)" "tasks=$total (expected 22): $(api "$gateway/api/tasks/v1/tasks?limit=100" | jq -c '[.items[].title]')"
   # Five seeded events plus the dentist and the coffee created, none cancelled.
   local all

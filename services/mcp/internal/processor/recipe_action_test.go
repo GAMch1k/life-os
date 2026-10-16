@@ -106,9 +106,8 @@ func TestPlanPromptImportsRecipeLinks(t *testing.T) {
 	for _, want := range []string{
 		"|food_add_missing_ingredients|recipe_import",
 		`in any language (\"save this recipe https://www.chefkoch.de/rezepte/…\", \"Rezept speichern: https://…\", \"сохрани рецепт https://…\"), is recipe_import, never task_create, calendar_create, or food_add_shopping_items`,
-		"a bare instagram.com, tiktok.com, youtube.com, or youtu.be link, such as one shared from the phone",
 		`recipe_import may only use url (the http or https link as written; add https:// when it has no scheme), caption`,
-		`saveLink (true only when the owner explicitly asks to save it`,
+		`saveLink (true when the owner names the recipe or explicitly asks to save it`,
 		`(sourceMetadata.via \"share-target\") is the shared title, text, and link, one per line`,
 		`A link clearly about something else (a news article, a shop's product page) follows the other rules`,
 		`with reason \"What should I do with this link?\"`,

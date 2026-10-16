@@ -255,6 +255,8 @@ func TestEffectsNameWhatEachToolDid(t *testing.T) {
 			[]recentEffect{{Entity: "staple", ID: "s1", Change: "added", Summary: "Kaffee"}}},
 		{"recipe", map[string]any{"tool": "recipe_import", "result": map[string]any{"saved": true, "recipe": map[string]any{"id": "r1", "title": "Omas Rindergulasch"}}},
 			[]recentEffect{{Entity: "recipe", ID: "r1", Change: "saved", Summary: "Omas Rindergulasch"}}},
+		{"recipe draft", map[string]any{"tool": "recipe_save_draft", "result": map[string]any{"saved": true, "recipeId": "r2", "recipe": map[string]any{"id": "r2", "title": "Crispy chicken"}}},
+			[]recentEffect{{Entity: "recipe", ID: "r2", Change: "saved", Summary: "Crispy chicken"}}},
 		{"cancelled event", map[string]any{"tool": "calendar_cancel", "result": map[string]any{"id": "e1", "title": "Haircut", "allDay": true, "startDate": "2026-10-20", "endDate": "2026-10-21", "status": "cancelled"}},
 			[]recentEffect{{Entity: "event", ID: "e1", Change: "cancelled", Summary: "Haircut · Tue 20 Oct 2026 – Wed 21 Oct 2026 (all day) · cancelled"}}},
 		{"nothing done", map[string]any{"tool": "none", "reason": "Nothing matches"}, nil},

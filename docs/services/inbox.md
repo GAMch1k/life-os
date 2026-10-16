@@ -22,6 +22,22 @@ The current dashboard captures and resolves/discards items. The automatic MCP/Co
 
 Each attempt also carries its agent runtime: `runtimeState` (`spawning`, `running`, `completed`, `failed`, `timed_out`, `cancelled`), `runtimeOwner` (the processor instance), `runtimeSessionId` (the Codex session), and `runtimeHeartbeatAt`. The processor records these with `PUT .../processing-attempts/{attemptId}/runtime`; a finished attempt answers 409. `GET /v1/stale-processing-attempts?staleAfterSeconds=N` lists unfinished attempts whose heartbeat stopped, for captures still `raw` or `processing`, so a later processor can reconcile them after a crash. `GET /v1/inbox-items?state=raw&due=true` lists only items with no schedule or whose time has come. It is the processor's only work source, so a schedule survives restarts of both the processor and Inbox. Any other state change clears the schedule. The backlog reports the next scheduled retry with its reason, and the number of failed items. Each retry creates a distinct audit attempt key (`<operation>.retry.<n>`), preserving the original attempt and avoiding the former uniqueness collision; a processed attempt for the same deterministic operation prevents later duplicates. Invalid requests return 400 and missing items 404; readiness is at `/ready`. Test with `make db-test SERVICE=inbox` and `make e2e-smoke`.
 
+## Saving recipes: what to send
+
+Recipes reach Food from captures through the processor (P15-12; see [MCP and AI → Recipe links](mcp.md#recipe-links) and [Recipes without a link](mcp.md#recipes-without-a-link)). What the owner sends decides what is saved:
+
+| Send | Saved |
+| --- | --- |
+| A recipe site's link ("Save this recipe: https://www.chefkoch.de/…", or the bare link) | The page's recipe, with the link as its source |
+| A post's link with its caption pasted (ingredients and steps) | The recipe read from the caption, with the post's link |
+| A post's link with the dish's name ("брауни <reel>", "Shakshuka <link>") | A stub named in those words ("Брауни") with the link, tagged `to-review`, to fill in later |
+| A recipe typed, pasted, or dictated without a link, with its ingredients and steps (any of English, Russian, German) | The recipe as the AI built it from those words, tagged `to-review` |
+| A photo of a recipe (a cookbook page, a card, a handwritten recipe, a screenshot), with or without words | The recipe transcribed from the photo, tagged `to-review` |
+| A post's bare link, with no words | Nothing: Human Review, "This post can't be read: say what the recipe is called, or paste its caption." Edit the capture to add the name or the caption |
+| A link with "send it to tasks", "remind me to cook this", "в задачи", "als Aufgabe" | A Task with the link in its notes; no recipe |
+
+A recipe already saved from the same link is found, not saved again; another recipe of the same name is saved as "Name (2)". Recipes to review are the ones tagged `to-review` on the Food page.
+
 ## Recent captures
 
 The owner often corrects or adds to what they captured a minute ago: "Buy milk", then "actually oat milk"; "Meeting with Anna at 5", then "make it 6". So the processor gives Codex the captures made just before the one it plans, with what was done for them (see [MCP and AI → Recent captures](mcp.md#recent-captures)). Inbox serves them from its own processing history:
@@ -35,7 +51,7 @@ Integration tests in `internal/api` (against `INBOX_TEST_DATABASE_URL`) cover th
 
 ## Capture images
 
-Inbox owns the photos attached to captures: shared to Life OS from the phone, or attached in the Dashboard's capture composer. The processor hands them to Codex with the capture's text (see [MCP and AI → Images](mcp.md#images)): photos of letters become Tasks with their deadline, appointments Calendar events, cash receipts cash spending, and card receipts and unclear documents go to Human Review (see [Letters and receipts](mcp.md#letters-and-receipts)). The image references are part of a capture's processing key, so two photo captures with the same placeholder text ("Photo") never share action keys.
+Inbox owns the photos attached to captures: shared to Life OS from the phone, or attached in the Dashboard's capture composer. The processor hands them to Codex with the capture's text (see [MCP and AI → Images](mcp.md#images)): photos of letters become Tasks with their deadline, appointments Calendar events, cash receipts cash spending, recipe photos recipes to review (see [Saving recipes](#saving-recipes-what-to-send)), and card receipts and unclear documents go to Human Review (see [Letters and receipts](mcp.md#letters-and-receipts)). The image references are part of a capture's processing key, so two photo captures with the same placeholder text ("Photo") never share action keys.
 
 - **Upload.** `POST /v1/media` (multipart, field `images`, one to five files; a write, so it needs `X-Life-OS-Actor`) stores each image and returns, in order, its `reference` (`inbox-media:<sha256>`), `sha256`, `contentType`, and `byteSize`. Images are JPEG, PNG, or WebP, recognized from their bytes (the declared type and file name are not trusted, as for Voice's audio); each is at most `INBOX_MEDIA_MAX_BYTES` (`LIFE_OS_INBOX_MEDIA_MAX_BYTES`, 10 MiB). Every image is checked before any is stored, so a refused upload stores nothing. Refusals: 400 `images_required`, `too_many_images` (more than five), `unsupported_image`, `heic_not_supported` (HEIC/HEIF photos, as iPhones and some Android cameras save them: converting them would need a heavy image library, so the owner is asked to share a JPEG instead), and 413 `image_too_large`. The request body limit leaves room for five images at the limit.
 - **Storage.** One file per image on the `inbox-media` volume (`INBOX_MEDIA_DIR`, `/var/lib/lifeos/inbox-media`), named by the SHA-256 of its bytes and written aside, then renamed, so a reader never sees half a file. The same photo uploaded again returns the same reference and is stored once. Migration `000009` adds `inbox_media` (hash, content type, size, last upload time).

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 	_ "time/tzdata" // the owner's timezone resolves in any image
 
@@ -68,6 +69,8 @@ func run(ctx context.Context) error {
 	addCalendarTools(s, hc, cfg.CalendarURL, emitter, o)
 	addFinanceTools(s, hc, cfg.FinanceURL, emitter)
 	addFoodTools(s, hc, cfg.FoodURL, emitter)
+	// A recipe Codex built from a capture's text or photo goes to Food.
+	addRecipeDraftTools(s, hc, cfg.FoodURL, emitter)
 	// recipe-import fetches the page while it answers (up to 10 seconds),
 	// and a save of a recipe page fetches it again.
 	addRecipeImportTools(s, &http.Client{Timeout: 45 * time.Second}, cfg.RecipeImportURL, emitter)
@@ -153,8 +156,9 @@ func traceOf(req *mcp.CallToolRequest) activity.Trace {
 	return trace
 }
 
-// audited records an MCP mutation as requested and then completed or failed.
-// The owning service sees the request event as the causation of its change.
+// audited records an MCP mutation as requested and then completed, not
+// done, or failed. The owning service sees the request event as the
+// causation of its change.
 func audited(ctx context.Context, emitter *activity.Emitter, req *mcp.CallToolRequest, tool string, arguments any, call func(activity.Trace) (*mcp.CallToolResult, Output, error)) (*mcp.CallToolResult, Output, error) {
 	trace := traceOf(req)
 	requestID := uuid.New()
@@ -165,11 +169,80 @@ func audited(ctx context.Context, emitter *activity.Emitter, req *mcp.CallToolRe
 	if err != nil {
 		done.Type, done.Outcome, done.Summary = "mcp.action.failed", activity.Failed, tool+" failed: "+activity.Preview(err.Error(), 160)
 		done.Data["error"] = activity.Preview(err.Error(), 500)
-	} else if id, ok := out.Data["id"].(string); ok {
+		emitter.Emit(ctx, done)
+		return result, out, err
+	}
+	if reason, notDone := notDone(out.Data); notDone {
+		// The tool answered, but what was asked did not happen (a link with
+		// nothing to save): not a success, and the reason says why.
+		done.Type, done.Outcome, done.Summary = "mcp.action.not_done", activity.Failed, tool+" not done: "+activity.Preview(reason, 160)
+		done.Data["reason"] = activity.Preview(reason, 500)
+	} else if out.Data["alreadySaved"] == true {
+		done.Summary = "Completed " + tool + ": already saved"
+		done.Data["alreadySaved"] = true
+	}
+	if id, ids := resultIDs(out.Data); id != "" {
 		done.Data["resultId"] = id
+	} else if len(ids) > 0 {
+		done.Data["resultIds"] = ids
 	}
 	emitter.Emit(ctx, done)
 	return result, out, err
+}
+
+// notDoneFlags are the answer fields that say whether what a tool was asked
+// to do happened; false means it did not, and the answer's reason says why.
+var notDoneFlags = []string{"saved"}
+
+// notDone reports whether a tool's answer says that what was asked did not
+// happen, and why.
+func notDone(data map[string]any) (reason string, ok bool) {
+	for _, flag := range notDoneFlags {
+		if done, isFlag := data[flag].(bool); isFlag && !done {
+			reason, _ = data["reason"].(string)
+			if reason = strings.TrimSpace(reason); reason == "" {
+				reason = "nothing was " + flag
+			}
+			return reason, true
+		}
+	}
+	return "", false
+}
+
+// resultIDs names what a tool's answer created or changed: its id; else its
+// one "…Id" field (recipeId) or nested entity's id (staple.id), when they
+// all name the same thing. Several different ones are all named, by field.
+func resultIDs(data map[string]any) (string, map[string]string) {
+	if id, ok := data["id"].(string); ok && id != "" {
+		return id, nil
+	}
+	found := map[string]string{}
+	distinct := map[string]bool{}
+	for field, value := range data {
+		id := ""
+		switch value := value.(type) {
+		case string:
+			if strings.HasSuffix(field, "Id") {
+				id = value
+			}
+		case map[string]any:
+			id, _ = value["id"].(string)
+			field += ".id"
+		}
+		if id != "" {
+			found[field] = id
+			distinct[id] = true
+		}
+	}
+	switch len(distinct) {
+	case 0:
+		return "", nil
+	case 1:
+		for id := range distinct {
+			return id, nil
+		}
+	}
+	return "", found
 }
 
 func post(ctx context.Context, hc *http.Client, trace activity.Trace, baseURL, path string, input interface{}, idempotencyKey ...string) (*mcp.CallToolResult, Output, error) {

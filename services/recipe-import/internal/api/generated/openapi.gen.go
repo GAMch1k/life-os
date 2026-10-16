@@ -204,6 +204,9 @@ type RecipeExistsError struct {
 	// RecipeId For `recipe_exists`: the recipe Food already has.
 	RecipeId  *openapi_types.UUID `json:"recipeId,omitempty"`
 	RequestId string              `json:"request_id"`
+
+	// SourceUrl For `recipe_exists`, with `recipeId`: the link that recipe was saved from; absent when it has none. A different link is another recipe of the same name, not this one saved before.
+	SourceUrl *string `json:"sourceUrl,omitempty"`
 }
 
 // TextRequest defines model for TextRequest.

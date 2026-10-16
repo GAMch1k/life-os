@@ -322,7 +322,7 @@ func effectsOf(action map[string]any, location *time.Location) []recentEffect {
 	case "food_remove_staple":
 		staple, _ := result["staple"].(map[string]any)
 		return one("staple", "removed", staple)
-	case "recipe_import":
+	case "recipe_import", "recipe_save_draft":
 		recipe, _ := result["recipe"].(map[string]any)
 		if recipe == nil && text(result["recipeId"]) != "" {
 			recipe = map[string]any{"id": result["recipeId"]}

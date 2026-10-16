@@ -243,7 +243,7 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 			// It only turned the event's default reminders off or on.
 			return Proposal{}, r.humanReview(ctx, item.ID, started.ID, action, []map[string]any{}, defaultRemindersReason)
 		}
-		if !validAction(action) || (action.Tool == "recipe_import" && !linkInCapture(item, action)) {
+		if !validAction(action) || (isRecipeSave(action.Tool) && !linkInCapture(item, action)) {
 			return Proposal{}, r.retryLater(ctx, item.ID, started.ID, actions, "invalid proposed action: "+action.Tool, failureModelOutput, previous)
 		}
 		// recipe is the recipe a meal or its ingredients name: the one the
@@ -463,6 +463,8 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 			arguments["idempotencyKey"] = actionIdempotencyKey(item, len(actions), action)
 		case isFoodWrite(action.Tool) || action.Tool == "recipe_import":
 			arguments["idempotencyKey"] = foodIdempotencyKey(item, action.Tool, arguments)
+		case action.Tool == "recipe_save_draft":
+			arguments["idempotencyKey"] = draftIdempotencyKey(item, draftNumber(parsed.Actions, index))
 		}
 		result, err := r.Tools.Call(ctx, action.Tool, arguments)
 		audit := noted(map[string]any{"tool": action.Tool, "arguments": arguments})
@@ -491,10 +493,10 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 			actions = append(actions, audit)
 			return Proposal{}, r.retryLater(ctx, item.ID, started.ID, actions, fmt.Sprintf("%s failed: %v", action.Tool, err), classifyActionError(err), previous)
 		}
-		if action.Tool == "recipe_import" {
-			if reason, saved := importOutcome(result); !saved {
-				// The link gave nothing to save: the owner decides, with
-				// recipe-import's reason (paste the caption, say what it is).
+		if isRecipeSave(action.Tool) {
+			if reason, saved := importOutcome(action.Tool, result); !saved {
+				// Nothing was saved: the owner decides, with the reason
+				// (paste the caption, say what it is called, rename one).
 				return Proposal{}, r.humanReview(ctx, item.ID, started.ID, action, []map[string]any{}, reason)
 			}
 		}
@@ -737,7 +739,7 @@ func (r Runner) record(ctx context.Context, itemID, attemptID, status string, ac
 	return err
 }
 func allowed(name string) bool {
-	return name == "task_create" || name == "task_update" || name == "task_complete" || name == "task_reopen" || name == "calendar_create" || name == "calendar_update" || name == "calendar_cancel" || name == "finance_create_manual_transaction" || isFoodWrite(name) || name == "recipe_import"
+	return name == "task_create" || name == "task_update" || name == "task_complete" || name == "task_reopen" || name == "calendar_create" || name == "calendar_update" || name == "calendar_cancel" || name == "finance_create_manual_transaction" || isFoodWrite(name) || isRecipeSave(name)
 }
 
 // validSearchTerms checks a mutation's primary search term and alternatives.
@@ -793,6 +795,10 @@ func validAction(action plannedAction) bool {
 		if !validRecipeImport(action.Arguments) {
 			return false
 		}
+	} else if action.Tool == "recipe_save_draft" {
+		if !validRecipeDraft(action.Arguments) {
+			return false
+		}
 	} else if action.Tool != "finance_create_manual_transaction" {
 		if title, ok := action.Arguments["title"].(string); !ok || strings.TrimSpace(title) == "" {
 			return false
@@ -822,6 +828,7 @@ func validAction(action plannedAction) bool {
 		"food_add_staple":                   {"name": true, "amount": true, "storeName": true},
 		"food_remove_staple":                {"itemQuery": true, "itemQueryAlternatives": true},
 		"recipe_import":                     {"url": true, "caption": true, "title": true, "saveLink": true},
+		"recipe_save_draft":                 {"title": true, "servings": true, "ingredients": true, "steps": true, "tags": true, "sourceUrl": true, "note": true},
 	}
 	for field := range action.Arguments {
 		if !allowedFields[action.Tool][field] {
