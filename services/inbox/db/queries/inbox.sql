@@ -76,3 +76,28 @@ WHERE a.status IN ('pending', 'processing')
   AND COALESCE(a.runtime_heartbeat_at, a.updated_at) < now() - make_interval(secs => sqlc.arg(stale_after_seconds)::int)
 ORDER BY a.created_at
 LIMIT 50;
+
+-- name: ListRecentCaptures :many
+-- The captures made in a window before one capture (not that one), newest
+-- first, that processing has settled: resolved, waiting for Human Review, or
+-- failed. Each comes with its latest finished attempt, if any.
+SELECT i.id, i.content, i.source, i.state, i.correlation_id, i.created_at, i.resolved_at,
+       a.id AS attempt_id,
+       COALESCE(a.status, '')::text AS attempt_status,
+       COALESCE(a.actions, '[]'::jsonb)::jsonb AS attempt_actions,
+       a.error_summary AS attempt_error_summary,
+       a.completed_at AS attempt_completed_at
+FROM inbox_items i
+LEFT JOIN LATERAL (
+    SELECT p.id, p.status, p.actions, p.error_summary, p.completed_at
+    FROM inbox_processing_attempts p
+    WHERE p.inbox_item_id = i.id AND p.status IN ('processed', 'human_review', 'failed')
+    ORDER BY p.completed_at DESC NULLS LAST, p.created_at DESC
+    LIMIT 1
+) a ON true
+WHERE i.id <> sqlc.arg(before_id)
+  AND i.created_at >= sqlc.arg(window_start)
+  AND i.created_at < sqlc.arg(window_end)
+  AND i.state IN ('resolved', 'human_review', 'failed')
+ORDER BY i.created_at DESC
+LIMIT sqlc.arg(page_limit);

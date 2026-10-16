@@ -319,6 +319,92 @@ func (q *Queries) ListProcessingAttempts(ctx context.Context, inboxItemID pgtype
 	return items, nil
 }
 
+const listRecentCaptures = `-- name: ListRecentCaptures :many
+SELECT i.id, i.content, i.source, i.state, i.correlation_id, i.created_at, i.resolved_at,
+       a.id AS attempt_id,
+       COALESCE(a.status, '')::text AS attempt_status,
+       COALESCE(a.actions, '[]'::jsonb)::jsonb AS attempt_actions,
+       a.error_summary AS attempt_error_summary,
+       a.completed_at AS attempt_completed_at
+FROM inbox_items i
+LEFT JOIN LATERAL (
+    SELECT p.id, p.status, p.actions, p.error_summary, p.completed_at
+    FROM inbox_processing_attempts p
+    WHERE p.inbox_item_id = i.id AND p.status IN ('processed', 'human_review', 'failed')
+    ORDER BY p.completed_at DESC NULLS LAST, p.created_at DESC
+    LIMIT 1
+) a ON true
+WHERE i.id <> $1
+  AND i.created_at >= $2
+  AND i.created_at < $3
+  AND i.state IN ('resolved', 'human_review', 'failed')
+ORDER BY i.created_at DESC
+LIMIT $4
+`
+
+type ListRecentCapturesParams struct {
+	BeforeID    pgtype.UUID
+	WindowStart pgtype.Timestamptz
+	WindowEnd   pgtype.Timestamptz
+	PageLimit   int32
+}
+
+type ListRecentCapturesRow struct {
+	ID                  pgtype.UUID
+	Content             string
+	Source              string
+	State               string
+	CorrelationID       *string
+	CreatedAt           pgtype.Timestamptz
+	ResolvedAt          pgtype.Timestamptz
+	AttemptID           pgtype.UUID
+	AttemptStatus       string
+	AttemptActions      []byte
+	AttemptErrorSummary *string
+	AttemptCompletedAt  pgtype.Timestamptz
+}
+
+// The captures made in a window before one capture (not that one), newest
+// first, that processing has settled: resolved, waiting for Human Review, or
+// failed. Each comes with its latest finished attempt, if any.
+func (q *Queries) ListRecentCaptures(ctx context.Context, arg ListRecentCapturesParams) ([]ListRecentCapturesRow, error) {
+	rows, err := q.db.Query(ctx, listRecentCaptures,
+		arg.BeforeID,
+		arg.WindowStart,
+		arg.WindowEnd,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListRecentCapturesRow{}
+	for rows.Next() {
+		var i ListRecentCapturesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Content,
+			&i.Source,
+			&i.State,
+			&i.CorrelationID,
+			&i.CreatedAt,
+			&i.ResolvedAt,
+			&i.AttemptID,
+			&i.AttemptStatus,
+			&i.AttemptActions,
+			&i.AttemptErrorSummary,
+			&i.AttemptCompletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listStaleProcessingAttempts = `-- name: ListStaleProcessingAttempts :many
 SELECT a.id, a.inbox_item_id, a.idempotency_key, a.status, a.agent_name, a.model_profile, a.actions, a.error_summary, a.started_at, a.completed_at, a.created_at, a.updated_at, a.next_retry_at, a.runtime_state, a.runtime_owner, a.runtime_session_id, a.runtime_heartbeat_at FROM inbox_processing_attempts a
 JOIN inbox_items i ON i.id = a.inbox_item_id
