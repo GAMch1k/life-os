@@ -131,7 +131,7 @@ printf '{}' > "$out"`)
 	}
 	prompt, _ := os.ReadFile(promptFile)
 	if !strings.HasPrefix(string(prompt), "Classify this Inbox item.") ||
-		!strings.Contains(string(prompt), "set ambiguous true and actions to []. The owner's timezone is Europe/Berlin; it is now Saturday 2026-10-10 01:41 (+02:00) there.") ||
+		!strings.Contains(string(prompt), "set ambiguous true and actions to []. "+movePrompt+"The owner's timezone is Europe/Berlin; it is now Saturday 2026-10-10 01:41 (+02:00) there.") ||
 		!strings.HasSuffix(string(prompt), `Inbox item: {"content":"Remind me to call mom tomorrow at 10."}`) {
 		t.Fatalf("prompt = %s", prompt)
 	}

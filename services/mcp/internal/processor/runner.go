@@ -162,7 +162,7 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 	}
 	// What a staple puts on the list by itself comes first, so the
 	// capture's own list add can leave it out.
-	parsed = restockFirst(parsed)
+	parsed = movesLast(restockFirst(parsed))
 	// Fields the AI may not set are dropped and recorded, never an error.
 	dropped := dropAIFields(parsed)
 	if err == nil && (parsed.Ambiguous || parsed.Confidence < 0.8) && len(parsed.Actions) == 1 && (isTaskMutation(parsed.Actions[0]) || isCalendarMutation(parsed.Actions[0]) || isFoodMutation(parsed.Actions[0])) && validAction(parsed.Actions[0]) {
@@ -319,6 +319,7 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 		for field, value := range action.Arguments {
 			arguments[field] = value
 		}
+		withMoveZone(arguments, r.location(item))
 		if isTaskMutation(action) {
 			if target != nil {
 				arguments["taskId"] = target["id"]
@@ -414,6 +415,11 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 		if err != nil && isCalendarMutation(action) && managedBySource(err) {
 			// An imported event: a decision for the owner, never a retry.
 			return Proposal{}, r.humanReview(ctx, item.ID, started.ID, action, []map[string]any{}, managedBySourceReason)
+		}
+		if reason, refused := refusedMove(err); refused {
+			// A move that does not fit the Task or event (an hour later
+			// for one without a time): a decision for the owner.
+			return Proposal{}, r.humanReview(ctx, item.ID, started.ID, action, []map[string]any{}, reason)
 		}
 		if err != nil {
 			actions = append(actions, audit)
@@ -683,7 +689,7 @@ func validSearchTerms(arguments map[string]any, primaryField, alternativesField 
 	return true
 }
 func validAction(action plannedAction) bool {
-	if !allowed(action.Tool) || action.Arguments == nil {
+	if !allowed(action.Tool) || action.Arguments == nil || !validMove(action) {
 		return false
 	}
 	if action.Tool == "task_update" || action.Tool == "task_complete" || action.Tool == "task_reopen" {
@@ -727,11 +733,11 @@ func validAction(action plannedAction) bool {
 	}
 	allowedFields := map[string]map[string]bool{
 		"task_create":                       {"title": true, "notes": true, "dueAt": true},
-		"task_update":                       {"taskQuery": true, "taskQueryAlternatives": true, "taskId": true, "title": true, "notes": true, "dueAt": true, "clearDueAt": true},
+		"task_update":                       {"taskQuery": true, "taskQueryAlternatives": true, "taskId": true, "title": true, "notes": true, "dueAt": true, "clearDueAt": true, "move": true},
 		"task_complete":                     {"taskQuery": true, "taskQueryAlternatives": true, "taskId": true},
 		"task_reopen":                       {"taskQuery": true, "taskQueryAlternatives": true, "taskId": true},
 		"calendar_create":                   {"title": true, "description": true, "location": true, "allDay": true, "startAt": true, "endAt": true, "startDate": true, "endDate": true, "timeZone": true, "reminders": true, "priority": true},
-		"calendar_update":                   {"eventQuery": true, "eventQueryAlternatives": true, "title": true, "description": true, "location": true, "allDay": true, "startAt": true, "endAt": true, "startDate": true, "endDate": true, "timeZone": true, "reminders": true, "priority": true, "clear": true},
+		"calendar_update":                   {"eventQuery": true, "eventQueryAlternatives": true, "title": true, "description": true, "location": true, "allDay": true, "startAt": true, "endAt": true, "startDate": true, "endDate": true, "timeZone": true, "reminders": true, "priority": true, "clear": true, "move": true},
 		"calendar_cancel":                   {"eventQuery": true, "eventQueryAlternatives": true, "onDate": true, "occurrences": true},
 		"finance_create_manual_transaction": {"accountId": true, "categoryId": true, "amount": true, "occurredOn": true, "note": true, "counterparty": true, "description": true},
 		"food_add_shopping_items":           {"items": true},
