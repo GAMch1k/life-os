@@ -176,7 +176,7 @@ func TestRecentContextIsBuiltCappedAndClipped(t *testing.T) {
 	if coffee := listed[5].Done; len(coffee) != 1 || coffee[0].ID != coffeeEvent || coffee[0].Summary != "Coffee with Lukas · Sat 17 Oct 2026 17:00–18:00" || coffee[0].Change != "created" {
 		t.Fatalf("coffee = %+v", coffee)
 	}
-	if sophie := listed[6].Done; len(sophie) != 1 || sophie[0].Entity != "task" || sophie[0].ID != sophieTask || sophie[0].Summary != "Call Sophie" {
+	if sophie := listed[6].Done; len(sophie) != 1 || sophie[0].Entity != "task" || sophie[0].ID != sophieTask || sophie[0].Summary != "Call Sophie · no due date" {
 		t.Fatalf("sophie = %+v", sophie)
 	}
 	if review := listed[3]; review.Note != "waiting for the owner's decision, nothing done yet: Several Calendar events match: choose the one to change" || len(review.Done) != 0 {
@@ -338,8 +338,9 @@ func TestPlanPromptListsTheRecentCapturesBeforeTheItem(t *testing.T) {
 		t.Fatalf("prompt = %s", prompt)
 	}
 	for _, rule := range []string{"Use the list only to understand what this item refers to or corrects", "Never plan an action again for an earlier capture", "food_update_shopping_item and shoppingItemId", "set ambiguous true and actions to []",
-		// P5-22: captures still on their way.
-		"raw or processing means it is still on its way"} {
+		// P5-22: repeats, corrections that name nothing, new times, and
+		// captures still on their way.
+		`reason "Already done for the capture from HH:MM: <its text>"`, "is about the latest capture in the list whose done it fits", "is such a change, never a question", `"make it tomorrow morning" is dueAt tomorrow at 09:00`, "raw or processing means it is still on its way"} {
 		if !strings.Contains(string(prompt), rule) {
 			t.Errorf("prompt lacks %q", rule)
 		}

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -256,4 +258,83 @@ func TestCaptureOrderForgetsCapturesThatStoppedComingUp(t *testing.T) {
 	if _, held := none.hold("x"); held {
 		t.Fatal("a nil order holds")
 	}
+}
+
+// TestARepeatedGroceryIsAddedAgainAndMerges runs a capture of "Buy oat
+// milk." made again right after the first through a fake Codex CLI: the
+// prompt tells it to plan the repeat as usual, and Food merges it.
+func TestARepeatedGroceryIsAddedAgainAndMerges(t *testing.T) {
+	const oatItem = "a0000000-0000-4000-8000-0000000000aa"
+	dir := t.TempDir()
+	promptFile := filepath.Join(dir, "prompt")
+	planFile := filepath.Join(dir, "plan")
+	codex := fakeCodex(t, `cat "`+planFile+`" > "$out"`)
+	wrapper := filepath.Join(dir, "codex-prompt")
+	script := "#!/bin/sh\nfor last in \"$@\"; do :; done\nprintf '%s' \"$last\" > " + promptFile + "\nexec " + codex + " \"$@\"\n"
+	if err := os.WriteFile(wrapper, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	first := recentCapture{ID: milkCapture, Content: "Buy oat milk.", Source: "web", State: "resolved", CreatedAt: followUpAt.Add(-time.Minute), Outcome: &recentOutcome{Status: "processed", Actions: []map[string]any{{
+		"tool": "food_add_shopping_items", "result": map[string]any{"items": []any{map[string]any{"item": map[string]any{"id": oatItem, "name": "oat milk"}, "merged": false}}},
+	}}}}
+	for name, tc := range map[string]struct {
+		plan   string
+		status string
+	}{
+		"grocery": {`{"actions":[{"tool":"food_add_shopping_items","arguments":{"items":[{"name":"oat milk"}]}}],"ambiguous":false,"confidence":0.95}`, "processed"},
+		"task":    {`{"actions":[],"ambiguous":true,"confidence":0.9,"reason":"Already done for the capture from 17:09: Remind me to call Sophie."}`, "human_review"},
+	} {
+		if err := os.WriteFile(planFile, []byte(tc.plan), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		tools := &orderedTools{fakeTools: &fakeTools{}, items: []inboxItem{{ID: followUpItem, Content: "Buy oat milk.", Source: "web", CreatedAt: followUpAt}},
+			windows: map[string]recentWindow{followUpItem: {Items: []recentCapture{first}}}}
+		merging := &mergingTools{orderedTools: tools, oatItem: oatItem}
+		cli := CodexCLI{Command: wrapper, WorkDir: dir, TimeZone: berlin(t), Now: func() time.Time { return followUpAt }}
+		runner := Runner{Planner: cli, Tools: merging, Model: "test", TimeZone: berlin(t), ContextMinutes: 20, Order: &CaptureOrder{Now: func() time.Time { return followUpAt }}}
+		if _, err := runner.Run(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		prompt, _ := os.ReadFile(promptFile)
+		for _, want := range []string{`"text":"Buy oat milk.","state":"resolved","done":[{"entity":"shopping_item","id":"` + oatItem + `","change":"added","summary":"oat milk"}]`,
+			"An item that repeats a recent capture", "food_add_shopping_items merges them into the items already there", `reason "Already done for the capture from HH:MM: <its text>"`} {
+			if !strings.Contains(string(prompt), want) {
+				t.Errorf("%s: prompt lacks %s", name, want)
+			}
+		}
+		last := tools.records[len(tools.records)-1]
+		if last["status"] != tc.status {
+			t.Fatalf("%s: record = %v, calls = %v", name, last, tools.calls)
+		}
+		if tc.status == "human_review" {
+			if contains(tools.calls, "food_add_shopping_items") || contains(tools.calls, "task_create") || merging.review["errorSummary"] != "Already done for the capture from 17:09: Remind me to call Sophie." {
+				t.Fatalf("%s: calls = %v, review = %v", name, tools.calls, merging.review)
+			}
+			continue
+		}
+		actions := last["actions"].([]map[string]any)
+		result, _ := json.Marshal(actions[0]["result"])
+		if len(actions) != 1 || actions[0]["tool"] != "food_add_shopping_items" || !strings.Contains(string(result), `"merged":true`) || actions[0]["followsUp"] != nil || !contains(tools.calls, "inbox_resolve") {
+			t.Fatalf("%s: actions = %v (result %s), calls = %v", name, actions, result, tools.calls)
+		}
+	}
+}
+
+// mergingTools answers a list add of oat milk as Food does when it is on
+// the list already: merged into that item.
+type mergingTools struct {
+	*orderedTools
+	oatItem string
+	review  map[string]any
+}
+
+func (m *mergingTools) Call(ctx context.Context, name string, args map[string]any) (json.RawMessage, error) {
+	switch name {
+	case "food_add_shopping_items":
+		m.calls = append(m.calls, name)
+		return json.RawMessage(`{"items":[{"item":{"id":"` + m.oatItem + `","name":"oat milk","state":"needed"},"merged":true}]}`), nil
+	case "inbox_set_human_review":
+		m.review = args
+	}
+	return m.orderedTools.Call(ctx, name, args)
 }
