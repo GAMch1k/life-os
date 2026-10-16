@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -42,6 +43,9 @@ type Runner struct {
 	// Media reads a capture's images (InboxMedia) for Codex; nil plans
 	// without them.
 	Media mediaFetcher
+	// ContextMinutes is how far back Codex sees the owner's earlier captures
+	// and what was done for them (see recent.go); 0 plans without them.
+	ContextMinutes int
 }
 type inboxList struct {
 	Items []inboxItem `json:"items"`
@@ -83,6 +87,9 @@ func (r Runner) Run(ctx context.Context) ([]Proposal, error) {
 	if err := json.Unmarshal(toolData(raw), &items); err != nil {
 		return nil, fmt.Errorf("decode Inbox MCP result: %w", err)
 	}
+	// Oldest first, so a follow-up ("actually oat milk") is planned after
+	// the capture it follows and sees what was done for it.
+	sort.SliceStable(items.Items, func(i, j int) bool { return items.Items[i].CreatedAt.Before(items.Items[j].CreatedAt) })
 	proposals := make([]Proposal, 0, len(items.Items))
 	for _, item := range items.Items {
 		proposal, err := r.process(ctx, item)
@@ -133,6 +140,16 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 	// The event the owner chose for an approved Calendar change, and the
 	// shopping list or pantry item for an approved Food change.
 	approvedEvent, approvedFood := "", ""
+	// recent is what the owner captured just before this item. Without it
+	// a follow-up ("actually oat milk") would duplicate what they did, so
+	// the capture waits, as without its images. An approved change ("no,
+	// cancel the coffee") needs it only to link what it changes.
+	recent, recentErr := r.recentContext(ctx, item)
+	if recentErr != nil {
+		return Proposal{}, r.retryLater(ctx, item.ID, started.ID, nil, "recent captures unavailable: "+recentErr.Error(), failureDependency, previous)
+	}
+	// fromCodex says the plan is Codex's, not an approved Human Review action.
+	fromCodex := err != nil
 	if err == nil {
 		parsed, approvedEvent = approvedCalendarTarget(parsed)
 		parsed, approvedFood = approvedFoodTarget(parsed)
@@ -148,7 +165,7 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 		runtime := r.trackRuntime(ctx, item.ID, started.ID, RuntimeSpawning)
 		defer runtime.close()
 		prompt, _ := json.Marshal(map[string]any{"content": item.Content, "source": item.Source, "sourceMetadata": item.SourceMetadata})
-		rawPlan, planErr := r.Planner.Plan(WithImages(planContext(WithRunObserver(ctx, runtime), item), images), string(prompt))
+		rawPlan, planErr := r.Planner.Plan(WithRecentContext(WithImages(planContext(WithRunObserver(ctx, runtime), item), images), recent.note), string(prompt))
 		runtime.finish(ctx, runtimeOutcome(ctx, planErr))
 		if planErr != nil {
 			if ctx.Err() != nil {
@@ -165,6 +182,23 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 	parsed = restockFirst(parsed)
 	// Fields the AI may not set are dropped and recorded, never an error.
 	dropped := dropAIFields(parsed)
+	// pins are the recent entities Codex's changes name by id; an id the
+	// recent captures did not list makes the plan invalid.
+	var pins []*recentEffect
+	if err == nil && fromCodex {
+		pins, err = recent.bind(parsed)
+	}
+	pinned := func(index int) *recentEffect {
+		if index < len(pins) {
+			return pins[index]
+		}
+		return nil
+	}
+	if err == nil && (parsed.Ambiguous || parsed.Confidence < 0.8) && len(parsed.Actions) == 1 && pinned(0) != nil && validAction(parsed.Actions[0]) {
+		// Unsure about changing what a recent capture did: the owner
+		// decides, with that entity as the one candidate.
+		return Proposal{}, r.humanReview(ctx, item.ID, started.ID, parsed.Actions[0], []map[string]any{pinned(0).candidate()}, lowConfidenceReason(parsed.Actions[0]))
+	}
 	if err == nil && (parsed.Ambiguous || parsed.Confidence < 0.8) && len(parsed.Actions) == 1 && (isTaskMutation(parsed.Actions[0]) || isCalendarMutation(parsed.Actions[0]) || isFoodMutation(parsed.Actions[0])) && validAction(parsed.Actions[0]) {
 		if res, searchErr := r.resolve(ctx, item, parsed.Actions[0]); searchErr == nil {
 			return Proposal{}, r.reviewResolution(ctx, item, started.ID, res, lowConfidenceReason(res.action))
@@ -294,6 +328,30 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 				}
 			}
 		}
+		// An event or list item a recent capture created or changed, named
+		// by its id: no search. (A Task keeps its taskId.)
+		if pin := pinned(index); pin != nil && target == nil {
+			switch {
+			case isCalendarMutation(action):
+				event, getErr := r.getEvent(ctx, pin.ID)
+				if getErr != nil {
+					return Proposal{}, r.retryLater(ctx, item.ID, started.ID, actions, "calendar read failed: "+getErr.Error(), classifyActionError(getErr), previous)
+				}
+				res := resolution{action: action, found: []map[string]any{event}}
+				if status := text(event["status"]); status != "" && status != "active" {
+					// Cancelled meanwhile: nothing to change.
+					res.found = nil
+				}
+				// Every cancellation waits for the owner; a recurring event
+				// is never changed by capture.
+				if action.Tool == "calendar_cancel" || len(res.found) != 1 || recurringUpdate(res) {
+					return Proposal{}, r.reviewResolution(ctx, item, started.ID, res, reviewReason(res))
+				}
+				target = event
+			case isFoodMutation(action):
+				target = map[string]any{"id": pin.ID}
+			}
+		}
 		if target == nil && ((isTaskMutation(action) && action.Arguments["taskId"] == nil) || (isCalendarMutation(action) && approvedEvent == "") || (isFoodMutation(action) && approvedFood == "")) {
 			res, findErr := r.resolve(ctx, item, action)
 			if findErr != nil {
@@ -410,6 +468,14 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 		if restated != nil {
 			audit["convertedFrom"] = "calendar_create"
 			audit["plannedArguments"] = restated
+		}
+		// A change of what a recent capture created or changed names that
+		// capture: Inbox links the two in Activity.
+		if follows := recent.followsUp(arguments); follows != nil {
+			audit["followsUp"] = follows
+		}
+		if reason, refused := shoppingChangeRefused(err); refused && action.Tool == "food_update_shopping_item" {
+			return Proposal{}, r.humanReview(ctx, item.ID, started.ID, action, []map[string]any{}, reason)
 		}
 		if err != nil && isCalendarMutation(action) && managedBySource(err) {
 			// An imported event: a decision for the owner, never a retry.
@@ -612,8 +678,12 @@ func (r Runner) plan(ctx context.Context, item inboxItem) (Proposal, error) {
 	if err != nil {
 		return Proposal{}, err
 	}
+	recent, err := r.recentContext(ctx, item)
+	if err != nil {
+		return Proposal{}, err
+	}
 	prompt, _ := json.Marshal(map[string]any{"content": item.Content, "source": item.Source, "sourceMetadata": item.SourceMetadata})
-	raw, err := r.Planner.Plan(WithImages(planContext(ctx, item), images), string(prompt))
+	raw, err := r.Planner.Plan(WithRecentContext(WithImages(planContext(ctx, item), images), recent.note), string(prompt))
 	if err != nil {
 		return Proposal{}, err
 	}
@@ -738,6 +808,7 @@ func validAction(action plannedAction) bool {
 		"food_add_pantry_items":             {"items": true},
 		"food_mark_bought":                  {"itemQuery": true, "itemQueryAlternatives": true},
 		"food_update_pantry_item":           {"itemQuery": true, "itemQueryAlternatives": true, "state": true},
+		"food_update_shopping_item":         {"itemQuery": true, "itemQueryAlternatives": true, "name": true, "amount": true, "note": true, "storeName": true},
 		"food_plan_meal":                    {"recipeQuery": true, "recipeQueryAlternatives": true, "date": true, "slot": true, "servings": true, "note": true},
 		"food_clear_meal":                   {"date": true, "slot": true},
 		"food_add_missing_ingredients":      {"recipeQuery": true, "recipeQueryAlternatives": true, "week": true, "from": true, "to": true},

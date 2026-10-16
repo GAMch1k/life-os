@@ -242,6 +242,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/recent-captures": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the captures made shortly before one capture, with what processing did
+         * @description The processor's context for a follow-up capture ("actually oat milk" after "buy milk"): the owner's other captures, from every source, made in the `minutes` before the capture `before` was made (not that capture itself), newest first. Only captures processing has settled are listed: resolved, waiting for Human Review, or failed; raw, processing, and discarded captures are left out. Each carries its latest finished processing attempt (`outcome`): its status, error summary, and recorded actions, which name what was created or changed (the action's tool, arguments, and the owning service's result).
+         */
+        get: operations["listRecentCaptures"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -385,6 +405,7 @@ export interface components {
              * @enum {string}
              */
             status: "processing" | "human_review" | "processed" | "failed" | "retryable";
+            /** @description The attempt's actions. In a processed attempt, an action that changed what an earlier capture created may name that capture as followsUp.inboxItemId (with entity and entityId); Inbox then records inbox.item.followed_up about the earlier capture, once per capture. */
             actions: {
                 [key: string]: unknown;
             }[];
@@ -410,6 +431,39 @@ export interface components {
         ResolveHumanReviewRequest: {
             /** Format: uuid */
             candidateId: string;
+        };
+        RecentCapture: {
+            /** Format: uuid */
+            id: string;
+            content: string;
+            /** @enum {string} */
+            source: "manual" | "web" | "voice" | "watch" | "email";
+            /** @enum {string} */
+            state: "resolved" | "human_review" | "failed";
+            /** @description The capture's workflow correlation id (see InboxItem.correlationId). */
+            correlationId: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            resolvedAt?: string | null;
+            outcome?: components["schemas"]["RecentCaptureOutcome"];
+        };
+        /** @description The capture's latest finished processing attempt; absent when it has none (for example, resolved by hand). */
+        RecentCaptureOutcome: {
+            /** Format: uuid */
+            attemptId: string;
+            /** @enum {string} */
+            status: "processed" | "human_review" | "failed";
+            errorSummary?: string | null;
+            /** Format: date-time */
+            completedAt?: string | null;
+            /** @description The actions the attempt recorded, as the processor recorded them (tool, arguments, result). */
+            actions: {
+                [key: string]: unknown;
+            }[];
+        };
+        RecentCaptureList: {
+            items: components["schemas"]["RecentCapture"][];
         };
     };
     responses: never;
@@ -959,6 +1013,47 @@ export interface operations {
             };
             /** @description Invalid request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listRecentCaptures: {
+        parameters: {
+            query: {
+                /** @description The capture whose predecessors to list. */
+                before: string;
+                /** @description How far back from that capture's creation to look. */
+                minutes?: number;
+                /** @description The most captures to list (the latest ones). */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Recent captures */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecentCaptureList"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Inbox item not found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

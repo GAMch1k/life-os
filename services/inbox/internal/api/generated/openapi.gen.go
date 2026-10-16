@@ -208,6 +208,75 @@ func (e ProcessingAttemptStatus) Valid() bool {
 	}
 }
 
+// Defines values for RecentCaptureSource.
+const (
+	RecentCaptureSourceEmail  RecentCaptureSource = "email"
+	RecentCaptureSourceManual RecentCaptureSource = "manual"
+	RecentCaptureSourceVoice  RecentCaptureSource = "voice"
+	RecentCaptureSourceWatch  RecentCaptureSource = "watch"
+	RecentCaptureSourceWeb    RecentCaptureSource = "web"
+)
+
+// Valid indicates whether the value is a known member of the RecentCaptureSource enum.
+func (e RecentCaptureSource) Valid() bool {
+	switch e {
+	case RecentCaptureSourceEmail:
+		return true
+	case RecentCaptureSourceManual:
+		return true
+	case RecentCaptureSourceVoice:
+		return true
+	case RecentCaptureSourceWatch:
+		return true
+	case RecentCaptureSourceWeb:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RecentCaptureState.
+const (
+	RecentCaptureStateFailed      RecentCaptureState = "failed"
+	RecentCaptureStateHumanReview RecentCaptureState = "human_review"
+	RecentCaptureStateResolved    RecentCaptureState = "resolved"
+)
+
+// Valid indicates whether the value is a known member of the RecentCaptureState enum.
+func (e RecentCaptureState) Valid() bool {
+	switch e {
+	case RecentCaptureStateFailed:
+		return true
+	case RecentCaptureStateHumanReview:
+		return true
+	case RecentCaptureStateResolved:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RecentCaptureOutcomeStatus.
+const (
+	RecentCaptureOutcomeStatusFailed      RecentCaptureOutcomeStatus = "failed"
+	RecentCaptureOutcomeStatusHumanReview RecentCaptureOutcomeStatus = "human_review"
+	RecentCaptureOutcomeStatusProcessed   RecentCaptureOutcomeStatus = "processed"
+)
+
+// Valid indicates whether the value is a known member of the RecentCaptureOutcomeStatus enum.
+func (e RecentCaptureOutcomeStatus) Valid() bool {
+	switch e {
+	case RecentCaptureOutcomeStatusFailed:
+		return true
+	case RecentCaptureOutcomeStatusHumanReview:
+		return true
+	case RecentCaptureOutcomeStatusProcessed:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for UpdateProcessingAttemptRequestStatus.
 const (
 	UpdateProcessingAttemptRequestStatusFailed      UpdateProcessingAttemptRequestStatus = "failed"
@@ -417,6 +486,46 @@ type ProcessingAttemptList struct {
 	Items []ProcessingAttempt `json:"items"`
 }
 
+// RecentCapture defines model for RecentCapture.
+type RecentCapture struct {
+	Content string `json:"content"`
+
+	// CorrelationId The capture's workflow correlation id (see InboxItem.correlationId).
+	CorrelationId string             `json:"correlationId"`
+	CreatedAt     time.Time          `json:"createdAt"`
+	Id            openapi_types.UUID `json:"id"`
+
+	// Outcome The capture's latest finished processing attempt; absent when it has none (for example, resolved by hand).
+	Outcome    *RecentCaptureOutcome `json:"outcome,omitempty"`
+	ResolvedAt *time.Time            `json:"resolvedAt,omitempty"`
+	Source     RecentCaptureSource   `json:"source"`
+	State      RecentCaptureState    `json:"state"`
+}
+
+// RecentCaptureSource defines model for RecentCapture.Source.
+type RecentCaptureSource string
+
+// RecentCaptureState defines model for RecentCapture.State.
+type RecentCaptureState string
+
+// RecentCaptureList defines model for RecentCaptureList.
+type RecentCaptureList struct {
+	Items []RecentCapture `json:"items"`
+}
+
+// RecentCaptureOutcome The capture's latest finished processing attempt; absent when it has none (for example, resolved by hand).
+type RecentCaptureOutcome struct {
+	// Actions The actions the attempt recorded, as the processor recorded them (tool, arguments, result).
+	Actions      []map[string]interface{}   `json:"actions"`
+	AttemptId    openapi_types.UUID         `json:"attemptId"`
+	CompletedAt  *time.Time                 `json:"completedAt,omitempty"`
+	ErrorSummary *string                    `json:"errorSummary,omitempty"`
+	Status       RecentCaptureOutcomeStatus `json:"status"`
+}
+
+// RecentCaptureOutcomeStatus defines model for RecentCaptureOutcome.Status.
+type RecentCaptureOutcomeStatus string
+
 // ResolveHumanReviewRequest defines model for ResolveHumanReviewRequest.
 type ResolveHumanReviewRequest struct {
 	CandidateId openapi_types.UUID `json:"candidateId"`
@@ -424,6 +533,7 @@ type ResolveHumanReviewRequest struct {
 
 // UpdateProcessingAttemptRequest defines model for UpdateProcessingAttemptRequest.
 type UpdateProcessingAttemptRequest struct {
+	// Actions The attempt's actions. In a processed attempt, an action that changed what an earlier capture created may name that capture as followsUp.inboxItemId (with entity and entityId); Inbox then records inbox.item.followed_up about the earlier capture, once per capture.
 	Actions      []map[string]interface{} `json:"actions"`
 	ErrorSummary *string                  `json:"errorSummary,omitempty"`
 
@@ -455,6 +565,18 @@ type ListInboxItemsParamsState string
 // UploadMediaMultipartBody defines parameters for UploadMedia.
 type UploadMediaMultipartBody struct {
 	Images []openapi_types.File `json:"images"`
+}
+
+// ListRecentCapturesParams defines parameters for ListRecentCaptures.
+type ListRecentCapturesParams struct {
+	// Before The capture whose predecessors to list.
+	Before openapi_types.UUID `form:"before" json:"before"`
+
+	// Minutes How far back from that capture's creation to look.
+	Minutes *int `form:"minutes,omitempty" json:"minutes,omitempty"`
+
+	// Limit The most captures to list (the latest ones).
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
 // ListStaleProcessingAttemptsParams defines parameters for ListStaleProcessingAttempts.
@@ -527,6 +649,9 @@ type ServerInterface interface {
 	// GetMedia Get a capture image
 	// (GET /v1/media/{sha256})
 	GetMedia(c fiber.Ctx, sha256 string) error
+	// ListRecentCaptures List the captures made shortly before one capture, with what processing did
+	// (GET /v1/recent-captures)
+	ListRecentCaptures(c fiber.Ctx, params ListRecentCapturesParams) error
 	// ListStaleProcessingAttempts List unfinished attempts whose runtime stopped reporting
 	// (GET /v1/stale-processing-attempts)
 	ListStaleProcessingAttempts(c fiber.Ctx, params ListStaleProcessingAttemptsParams) error
@@ -966,6 +1091,57 @@ func (siw *ServerInterfaceWrapper) GetMedia(c fiber.Ctx) error {
 	return handler(c)
 }
 
+// ListRecentCaptures operation middleware
+func (siw *ServerInterfaceWrapper) ListRecentCaptures(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListRecentCapturesParams
+
+	var query url.Values
+	query, err = url.ParseQuery(string(c.Request().URI().QueryString()))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for query string: %w", err).Error())
+	}
+
+	// ------------- Required query parameter "before" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "before", query, &params.Before, runtime.BindQueryParameterOptions{Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter before: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "minutes" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "minutes", query, &params.Minutes, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter minutes: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", query, &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter limit: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.ListRecentCaptures(c, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
 // ListStaleProcessingAttempts operation middleware
 func (siw *ServerInterfaceWrapper) ListStaleProcessingAttempts(c fiber.Ctx) error {
 
@@ -1055,5 +1231,7 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	router.Get(options.BaseURL+"/v1/media/:sha256", wrapper.GetMedia)
 
 	router.Get(options.BaseURL+"/v1/stale-processing-attempts", wrapper.ListStaleProcessingAttempts)
+
+	router.Get(options.BaseURL+"/v1/recent-captures", wrapper.ListRecentCaptures)
 
 }

@@ -9,9 +9,9 @@
 # (EN/RU/DE text, including completions of Tasks titled in another of those
 # languages, changes to existing events, cash spending, groceries for the
 # shopping list and the pantry, meals and a recipe's ingredients, recipe
-# links, and photos of a letter and receipts, through the Inbox API the
-# Dashboard uses, plus one recorded voice note through Voice
-# and whisper.cpp), lets the automatic processor plan them with the
+# links, photos of a letter and receipts, and follow-ups that correct what
+# the capture just before did, through the Inbox API the Dashboard uses,
+# plus one recorded voice note through Voice and whisper.cpp), lets the automatic processor plan them with the
 # authenticated Codex CLI and act through MCP, asks for recipe ideas, lets
 # the AI categories job categorize three transactions no rule matches, asks
 # the AI to plan next month's budget from three made-up months, and then
@@ -270,6 +270,20 @@ run_profile() {
   ids[receipt_cash]=$(photo tools/fixtures/documents/receipt-cash-rewe.png)
   ids[receipt_card]=$(photo tools/fixtures/documents/receipt-card-girocard.png)
   ids[recipe_caption]=$(capture $'http://ics-fixture/reel-DGx7abc.html\nShakshuka in 20 Minuten 🍳\nZutaten:\n- 4 Eier\n- 1 Dose Tomaten\n- 1 rote Paprika\n- 1 Zwiebel\nZubereitung:\n1. Zwiebel und Paprika anbraten.\n2. Tomaten dazugeben und 10 Minuten köcheln.\n3. Eier hineinschlagen und stocken lassen.\n#shakshuka #frühstück')
+  # Follow-ups (P5-20): two captures a moment apart, the second correcting
+  # what the first did, or unrelated to it. The processor plans the oldest
+  # capture first and gives Codex the captures of the 20 minutes before, so
+  # the second sees what was done for the first. Last, so no other capture
+  # comes between them, and with names no other capture uses ("Milch", not
+  # the English "milk" two captures put on the list).
+  ids[followup_list_first]=$(capture "Milch kaufen.")
+  ids[followup_list]=$(capture "Ach nein, lieber Hafermilch.")
+  ids[followup_event_first]=$(capture "Coffee with Lukas tomorrow at 5 pm.")
+  ids[followup_event]=$(capture "Actually, make it 6.")
+  ids[followup_task_first]=$(capture "Remind me to call Sophie.")
+  ids[followup_task]=$(capture "Make it tomorrow morning.")
+  ids[followup_unrelated_first]=$(capture "Renew the gym membership.")
+  ids[followup_unrelated]=$(capture "Pick up the dry cleaning on Friday.")
   local job
   job=$(api -F "audio=@$work/chicken.wav;type=audio/wav" -F source=web "$gateway/api/voice/v1/audio-jobs" | jq -r '.id')
   for _ in $(seq 1 120); do
@@ -279,7 +293,7 @@ run_profile() {
   done
 
   # Let the processor settle every capture.
-  local deadline=$(($(date +%s) + 900)) pending
+  local deadline=$(($(date +%s) + 1200)) pending
   while :; do
     pending=0
     for key in "${!ids[@]}"; do
@@ -501,12 +515,46 @@ run_profile() {
   local staples
   staples=$(api "$gateway/api/food/v1/staples")
   check staple_add "$([ "$s" = resolved ] && [ "$(jq '[.items[] | select(.normalizedName == "kaffee")] | length' <<<"$staples")" = 1 ] && [ "$(jq '[.items[] | select(.normalizedName | test("kaffee|coffee|кофе"))] | length' <<<"$list")" = 0 ] && echo 1 || echo 0)" "state=$s staples=$(jq -c '[.items[].name]' <<<"$staples")"
+  # Follow-ups: the second capture changed, by id, what the first did
+  # instead of adding a duplicate, and its processed attempt names the first
+  # capture (followsUp), which Inbox records in Activity.
+  follows() { # follows <scenario> <first scenario>: the second's actions that name the first
+    api "$gateway/api/inbox/v1/inbox-items/${ids[$1]}/processing-attempts" | jq --arg first "${ids[$2]}" '[.items[] | select(.status == "processed") | .actions[]? | select(.followsUp.inboxItemId? == $first)] | length'
+  }
+  # followup_list: the item "Milch kaufen." added is renamed (it is still
+  # that capture's, sourceRef), not a second item; no "Milch" is left.
+  s=$(state "${ids[followup_list]}")
+  local oat
+  oat=$(jq -c '[.items[] | select(.state == "needed" and (.normalizedName | test("hafer")))]' <<<"$list")
+  check followup_list "$([ "$s" = resolved ] && [ "$(state "${ids[followup_list_first]}")" = resolved ] && [ "$(jq 'length' <<<"$oat")" = 1 ] && [ "$(jq -r '.[0].sourceRef' <<<"$oat")" = "${ids[followup_list_first]}" ] && [ "$(listed milch)" = 0 ] && [ "$(follows followup_list followup_list_first)" -ge 1 ] && echo 1 || echo 0)" "state=$s first=$(state "${ids[followup_list_first]}") oat=$(jq -c 'map({name, sourceRef})' <<<"$oat") milch=$(listed milch) linked=$(follows followup_list followup_list_first)"
+  # followup_event: the one coffee is moved to 18:00 the day after the
+  # capture, its hour kept (19:00), not a second event.
+  s=$(state "${ids[followup_event]}")
+  local lukas
+  lukas=$(api "$gateway/api/calendar/v1/events/search?q=Lukas&includeCancelled=true&limit=100" | jq -c '[.items[] | {id, title, startAt, endAt, status}]')
+  day=$(date -u -d "$(captured_day "${ids[followup_event_first]}") + 1 day" +%F)
+  check followup_event "$([ "$s" = resolved ] && [ "$(jq 'length' <<<"$lukas")" = 1 ] && [ "$(jq -r '.[0].status' <<<"$lukas")" = active ] && at_local "$(jq -r '.[0].startAt' <<<"$lukas")" "$day" 18:00 && at_local "$(jq -r '.[0].endAt' <<<"$lukas")" "$day" 19:00 && [ "$(follows followup_event followup_event_first)" -ge 1 ] && echo 1 || echo 0)" "state=$s events=$lukas want=${day}T18:00-19:00 $zone linked=$(follows followup_event followup_event_first)"
+  # followup_task: the one Sophie Task is due the next morning (06:00 to
+  # 12:00 in Berlin) after the capture.
+  s=$(state "${ids[followup_task]}")
+  local sophie sophie_due sophie_hour=-1
+  sophie=$(api "$gateway/api/tasks/v1/tasks?query=Sophie&limit=100" | jq -c '[.items[] | select(.title | test("sophie"; "i"))]')
+  sophie_due=$(jq -r 'if length == 1 then .[0].dueAt // "" else "" end' <<<"$sophie")
+  [ -n "$sophie_due" ] && sophie_hour=$((10#$(TZ=$zone date -d "$sophie_due" +%H)))
+  day=$(date -u -d "$(captured_day "${ids[followup_task_first]}") + 1 day" +%F)
+  check followup_task "$([ "$s" = resolved ] && [ -n "$sophie_due" ] && [ "$(TZ=$zone date -d "$sophie_due" +%F)" = "$day" ] && [ "$sophie_hour" -ge 6 ] && [ "$sophie_hour" -le 12 ] && [ "$(follows followup_task followup_task_first)" -ge 1 ] && echo 1 || echo 0)" "state=$s tasks=$(jq -c 'map({title, dueAt})' <<<"$sophie") want=$day morning linked=$(follows followup_task followup_task_first)"
+  # followup_unrelated: the gym Task stays as it was (no due date, open);
+  # the dry cleaning is a Task of its own, not linked to the gym capture.
+  s=$(state "${ids[followup_unrelated]}")
+  local gym
+  gym=$(api "$gateway/api/tasks/v1/tasks?query=gym&limit=100" | jq -c '[.items[] | select(.title | test("gym"; "i"))]')
+  check followup_unrelated "$([ "$s" = resolved ] && [ "$(state "${ids[followup_unrelated_first]}")" = resolved ] && [ "$(jq 'length' <<<"$gym")" = 1 ] && [ "$(jq -r '.[0].dueAt // "none"' <<<"$gym")" = none ] && [ "$(jq -r '.[0].completed' <<<"$gym")" = false ] && [ "$(tasks_matching "dry clean")" = 1 ] && [ "$(follows followup_unrelated followup_unrelated_first)" = 0 ] && echo 1 || echo 0)" "state=$s gym=$(jq -c 'map({title, dueAt, completed})' <<<"$gym") dry_cleaning_tasks=$(tasks_matching "dry clean") linked=$(follows followup_unrelated followup_unrelated_first)"
   # The seeded bananas plus milk, eggs, bread, cheese, toothpaste, shower
-  # gel, minced meat, tomatoes, and the staple butter, each once; the
-  # yoghurt and the seeded spaghetti and rice in the pantry; the seeded
-  # butter and the new coffee as staples; Wednesday's dinner, Friday's
-  # lunch, and the Saturday breakfasts but the one cleared.
-  check no_extra_shopping_items "$([ "$(jq '.items | length' <<<"$list")" = 10 ] && [ "$(jq '[.items[].normalizedName] | unique | length' <<<"$list")" = 10 ] && echo 1 || echo 0)" "items=$(jq -c '[.items[] | {name, amount, storeName, state}]' <<<"$list") (expected 10)"
+  # gel, minced meat, tomatoes, the staple butter, and the oat milk, each
+  # once; the yoghurt and the seeded spaghetti and rice in the pantry; the
+  # seeded butter and the new coffee as staples; Wednesday's dinner,
+  # Friday's lunch, and the Saturday breakfasts but the one cleared.
+  check no_extra_shopping_items "$([ "$(jq '.items | length' <<<"$list")" = 11 ] && [ "$(jq '[.items[].normalizedName] | unique | length' <<<"$list")" = 11 ] && echo 1 || echo 0)" "items=$(jq -c '[.items[] | {name, amount, storeName, state}]' <<<"$list") (expected 11)"
   check no_extra_pantry_items "$([ "$(jq '.items | length' <<<"$pantry")" = 4 ] && echo 1 || echo 0)" "items=$(jq -c '[.items[] | {name, location, expiresOn}]' <<<"$pantry") (expected 4)"
   check no_extra_staples "$([ "$(jq '.items | length' <<<"$staples")" = 2 ] && echo 1 || echo 0)" "staples=$(jq -c '[.items[].name]' <<<"$staples") (expected 2)"
   # Recipe links: a page's recipe, and a post's from its caption, each saved
@@ -556,14 +604,15 @@ run_profile() {
   check no_extra_recipes "$([ "$(jq '.items | length' <<<"$recipes")" = 3 ] && echo 1 || echo 0)" "recipes=$(jq -c '[.items[].title]' <<<"$recipes") (expected 3)"
   check no_extra_meals "$([ "$(jq '.items | length' <<<"$plan")" = $((1 + ${#saturdays[@]})) ] && echo 1 || echo 0)" "meals=$(jq -c '[.items[] | {date, slot, title}]' <<<"$plan") (expected $((1 + ${#saturdays[@]})))"
   # No fallback or invented entities: ten seeds plus three creates, the
-  # flash drive, the call to the plumber, and the Finanzamt letter.
+  # flash drive, the call to the plumber, the Finanzamt letter, and the
+  # follow-ups' Sophie, gym, and dry cleaning.
   local total
   total=$(api "$gateway/api/tasks/v1/tasks?limit=100" | jq '.items | length')
-  check no_extra_tasks "$([ "$total" = 16 ] && echo 1 || echo 0)" "tasks=$total (expected 16): $(api "$gateway/api/tasks/v1/tasks?limit=100" | jq -c '[.items[].title]')"
-  # Four seeded events plus the one created, none cancelled.
+  check no_extra_tasks "$([ "$total" = 19 ] && echo 1 || echo 0)" "tasks=$total (expected 19): $(api "$gateway/api/tasks/v1/tasks?limit=100" | jq -c '[.items[].title]')"
+  # Four seeded events plus the dentist and the coffee created, none cancelled.
   local all
   all=$(api "$gateway/api/calendar/v1/events?from=2026-01-01T00:00:00Z&to=$(date -u -d '+60 days' +%Y-%m-%dT%H:%M:%SZ)&includeCancelled=true&limit=100")
-  check no_extra_events "$([ "$(jq '.items | length' <<<"$all")" = 5 ] && [ "$(jq '[.items[] | select(.status != "active")] | length' <<<"$all")" = 0 ] && echo 1 || echo 0)" "events=$(jq -c '[.items[] | {title, status}]' <<<"$all") (expected 5 active)"
+  check no_extra_events "$([ "$(jq '.items | length' <<<"$all")" = 6 ] && [ "$(jq '[.items[] | select(.status != "active")] | length' <<<"$all")" = 0 ] && echo 1 || echo 0)" "events=$(jq -c '[.items[] | {title, status}]' <<<"$all") (expected 6 active)"
 
   # Codex's own usage and the processing time of each planning run.
   local status runtime

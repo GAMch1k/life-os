@@ -139,6 +139,29 @@ paths:
       security: []
       parameters: [{name: staleAfterSeconds, in: query, required: true, schema: {type: integer, minimum: 30, maximum: 86400}}]
       responses: {'200': {description: Stale attempts, content: {application/json: {schema: {$ref: '#/components/schemas/ProcessingAttemptList'}}}}, '400': {description: Invalid request}}
+  /v1/recent-captures:
+    get:
+      summary: List the captures made shortly before one capture, with what processing did
+      description: >-
+        The processor's context for a follow-up capture ("actually oat milk"
+        after "buy milk"): the owner's other captures, from every source,
+        made in the `minutes` before the capture `before` was made (not that
+        capture itself), newest first. Only captures processing has settled
+        are listed: resolved, waiting for Human Review, or failed; raw,
+        processing, and discarded captures are left out. Each carries its
+        latest finished processing attempt (`outcome`): its status, error
+        summary, and recorded actions, which name what was created or changed
+        (the action's tool, arguments, and the owning service's result).
+      operationId: listRecentCaptures
+      security: []
+      parameters:
+        - {name: before, in: query, required: true, description: The capture whose predecessors to list., schema: {type: string, format: uuid}}
+        - {name: minutes, in: query, description: How far back from that capture's creation to look., schema: {type: integer, minimum: 1, maximum: 120, default: 20}}
+        - {name: limit, in: query, description: The most captures to list (the latest ones)., schema: {type: integer, minimum: 1, maximum: 50, default: 10}}
+      responses:
+        '200': {description: Recent captures, content: {application/json: {schema: {$ref: '#/components/schemas/RecentCaptureList'}}}}
+        '400': {description: Invalid request}
+        '404': {description: Inbox item not found}
 components:
   schemas:
     InboxItem: {type: object, required: [id, content, source, state, processingMetadata, correlationId, createdAt, updatedAt], properties: {id: {type: string, format: uuid}, content: {type: string}, correlationId: {type: string, description: 'Workflow correlation id for activity events: the upstream caller''s X-Correlation-ID, or the item id when the capture starts its own workflow.'}, source: {type: string, enum: [manual, web, voice, watch, email]}, sourceMetadata: {type: object, additionalProperties: true}, mediaReferences: {type: array, description: 'The capture''s images, as inbox-media:<sha256> references (GET /v1/media/{sha256}).', items: {type: string, format: uri}}, state: {type: string, enum: [raw, processing, human_review, failed, resolved, discarded], description: 'failed: automatic processing gave up; needs operator attention.'}, processingMetadata: {type: object, additionalProperties: true}, nextRetryAt: {type: string, format: date-time, nullable: true, description: 'When a raw item that failed may be retried.'}, retryReason: {type: string, nullable: true, description: 'Why the retry is scheduled at that time, for example usage_limited or backoff.'}, resolvedAt: {type: string, format: date-time, nullable: true}, createdAt: {type: string, format: date-time}, updatedAt: {type: string, format: date-time}}}
@@ -151,6 +174,9 @@ components:
     ProcessingAttemptList: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/ProcessingAttempt'}}}}
     CreateProcessingAttemptRequest: {type: object, required: [idempotencyKey, agentName, modelProfile], properties: {idempotencyKey: {type: string}, agentName: {type: string}, modelProfile: {type: string}}}
     AttemptRuntimeRequest: {type: object, required: [state, owner], properties: {state: {type: string, enum: [spawning, running, completed, failed, timed_out, cancelled]}, owner: {type: string, minLength: 1, maxLength: 200, description: Processor instance running the attempt}, sessionId: {type: string, maxLength: 200}}}
-    UpdateProcessingAttemptRequest: {type: object, required: [status, actions], properties: {status: {type: string, enum: [processing, human_review, processed, failed, retryable], description: 'retryable returns the item to raw, eligible at nextRetryAt (immediately when absent); failed takes it out of automatic processing.'}, actions: {type: array, items: {type: object, additionalProperties: true}}, errorSummary: {type: string, nullable: true}, nextRetryAt: {type: string, format: date-time, nullable: true, description: 'Only with status retryable.'}, retryReason: {type: string, nullable: true, maxLength: 64}}}
+    UpdateProcessingAttemptRequest: {type: object, required: [status, actions], properties: {status: {type: string, enum: [processing, human_review, processed, failed, retryable], description: 'retryable returns the item to raw, eligible at nextRetryAt (immediately when absent); failed takes it out of automatic processing.'}, actions: {type: array, description: 'The attempt''s actions. In a processed attempt, an action that changed what an earlier capture created may name that capture as followsUp.inboxItemId (with entity and entityId); Inbox then records inbox.item.followed_up about the earlier capture, once per capture.', items: {type: object, additionalProperties: true}}, errorSummary: {type: string, nullable: true}, nextRetryAt: {type: string, format: date-time, nullable: true, description: 'Only with status retryable.'}, retryReason: {type: string, nullable: true, maxLength: 64}}}
     CreateHumanReviewRequest: {type: object, required: [attemptId, proposedAction, candidates, errorSummary], properties: {attemptId: {type: string, format: uuid}, proposedAction: {type: object, additionalProperties: true}, candidates: {type: array, items: {type: object, additionalProperties: true}}, errorSummary: {type: string}}}
     ResolveHumanReviewRequest: {type: object, required: [candidateId], properties: {candidateId: {type: string, format: uuid}}}
+    RecentCapture: {type: object, required: [id, content, source, state, correlationId, createdAt], properties: {id: {type: string, format: uuid}, content: {type: string}, source: {type: string, enum: [manual, web, voice, watch, email]}, state: {type: string, enum: [resolved, human_review, failed]}, correlationId: {type: string, description: 'The capture''s workflow correlation id (see InboxItem.correlationId).'}, createdAt: {type: string, format: date-time}, resolvedAt: {type: string, format: date-time, nullable: true}, outcome: {$ref: '#/components/schemas/RecentCaptureOutcome'}}}
+    RecentCaptureOutcome: {type: object, description: 'The capture''s latest finished processing attempt; absent when it has none (for example, resolved by hand).', required: [attemptId, status, actions], properties: {attemptId: {type: string, format: uuid}, status: {type: string, enum: [processed, human_review, failed]}, errorSummary: {type: string, nullable: true}, completedAt: {type: string, format: date-time, nullable: true}, actions: {type: array, description: 'The actions the attempt recorded, as the processor recorded them (tool, arguments, result).', items: {type: object, additionalProperties: true}}}}
+    RecentCaptureList: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/RecentCapture'}}}}

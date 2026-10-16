@@ -207,7 +207,7 @@ func lowConfidenceReason(action plannedAction) string {
 	if isCalendarMutation(action) {
 		return "ambiguous or low-confidence Calendar event selection"
 	}
-	if action.Tool == "food_mark_bought" {
+	if action.Tool == "food_mark_bought" || action.Tool == "food_update_shopping_item" {
 		return "ambiguous or low-confidence shopping list item selection"
 	}
 	if action.Tool == "food_update_pantry_item" {

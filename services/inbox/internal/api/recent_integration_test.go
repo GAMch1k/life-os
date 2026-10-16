@@ -1,0 +1,337 @@
+package api
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/gofiber/fiber/v3"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/GAMch1k/life-os/pkg/activity"
+	"github.com/GAMch1k/life-os/pkg/httpserver"
+	store "github.com/GAMch1k/life-os/services/inbox/internal/repository/generated"
+	"github.com/GAMch1k/life-os/services/inbox/internal/testdb"
+)
+
+// recentAPI serves the Inbox API on a fresh schema, with the pool to place
+// captures in time.
+type recentAPI struct {
+	t      *testing.T
+	app    *httpserver.App
+	pool   *pgxpool.Pool
+	events *fakeService
+}
+
+func newRecentAPI(t *testing.T) *recentAPI {
+	t.Helper()
+	pool := testdb.Open(t, "inbox_recent_test")
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	events := newFakeService(t, nil)
+	app := httpserver.New("inbox", httpserver.WithLogger(logger))
+	Register(app, NewHandler(store.New(pool), activity.NewEmitter(events.url, "inbox", logger), nil))
+	return &recentAPI{t: t, app: app, pool: pool, events: events}
+}
+
+// request makes one request as the processor and returns the status and
+// the decoded answer.
+func (a *recentAPI) request(method, path string, body any) (int, map[string]any) {
+	a.t.Helper()
+	var reader io.Reader
+	if body != nil {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			a.t.Fatal(err)
+		}
+		reader = bytes.NewReader(raw)
+	}
+	request := httptest.NewRequest(method, path, reader)
+	request.Header.Set("content-type", "application/json")
+	request.Header.Set(activity.ActorHeader, "agent:codex-inbox-processor")
+	response, err := a.app.Test(request, fiber.TestConfig{Timeout: 5 * time.Second})
+	if err != nil {
+		a.t.Fatalf("%s %s: %v", method, path, err)
+	}
+	defer response.Body.Close()
+	var decoded map[string]any
+	_ = json.NewDecoder(response.Body).Decode(&decoded)
+	return response.StatusCode, decoded
+}
+
+func (a *recentAPI) call(method, path string, body any) map[string]any {
+	a.t.Helper()
+	status, decoded := a.request(method, path, body)
+	if status/100 != 2 {
+		a.t.Fatalf("%s %s = %d %v", method, path, status, decoded)
+	}
+	return decoded
+}
+
+// capture makes a capture from source, created at the given time.
+func (a *recentAPI) capture(content, source string, at time.Time) string {
+	a.t.Helper()
+	id := a.call(http.MethodPost, "/v1/inbox-items", map[string]any{"content": content, "source": source})["id"].(string)
+	if _, err := a.pool.Exec(context.Background(), "UPDATE inbox_items SET created_at = $1 WHERE id = $2", at, id); err != nil {
+		a.t.Fatal(err)
+	}
+	return id
+}
+
+func (a *recentAPI) attempt(itemID, key string) string {
+	a.t.Helper()
+	return a.call(http.MethodPost, "/v1/inbox-items/"+itemID+"/processing-attempts", map[string]any{"idempotencyKey": key, "agentName": "codex-inbox-processor", "modelProfile": "test"})["id"].(string)
+}
+
+func (a *recentAPI) finish(itemID, attemptID, status string, actions []map[string]any, reason string) {
+	a.t.Helper()
+	if actions == nil {
+		actions = []map[string]any{}
+	}
+	body := map[string]any{"status": status, "actions": actions}
+	if reason != "" {
+		body["errorSummary"] = reason
+	}
+	a.call(http.MethodPatch, "/v1/inbox-items/"+itemID+"/processing-attempts/"+attemptID, body)
+}
+
+// processed records a processed attempt with actions and resolves the
+// capture, as the processor does.
+func (a *recentAPI) processed(itemID string, actions []map[string]any) string {
+	a.t.Helper()
+	attemptID := a.attempt(itemID, "op-"+itemID)
+	a.finish(itemID, attemptID, "processing", nil, "")
+	a.finish(itemID, attemptID, "processed", actions, "")
+	a.call(http.MethodPost, "/v1/inbox-items/"+itemID+"/resolve", nil)
+	return attemptID
+}
+
+func (a *recentAPI) recent(query string) []map[string]any {
+	a.t.Helper()
+	raw, _ := a.call(http.MethodGet, "/v1/recent-captures?"+query, nil)["items"].([]any)
+	items := make([]map[string]any, 0, len(raw))
+	for _, item := range raw {
+		items = append(items, item.(map[string]any))
+	}
+	return items
+}
+
+func contents(items []map[string]any) []string {
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		out = append(out, item["content"].(string))
+	}
+	return out
+}
+
+func TestRecentCapturesListTheSettledCapturesBeforeOne(t *testing.T) {
+	api := newRecentAPI(t)
+	at := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+	minutes := func(n int) time.Time { return at.Add(time.Duration(n) * time.Minute) }
+
+	tooEarly := api.capture("Too early", "web", minutes(-25))
+	api.processed(tooEarly, []map[string]any{{"tool": "task_create"}})
+	milk := api.capture("Buy milk", "voice", minutes(-15))
+	// A retry first, then the processed attempt: the latest finished one counts.
+	retried := api.attempt(milk, "op-milk")
+	api.finish(milk, retried, "retryable", []map[string]any{}, "Codex timed out")
+	shopping := []map[string]any{{"tool": "food_add_shopping_items", "arguments": map[string]any{"items": []any{map[string]any{"name": "milk"}}}, "result": map[string]any{"items": []any{map[string]any{"item": map[string]any{"id": "7d1f0c2e-1111-4a5b-8c9d-0e1f2a3b4c5d", "name": "milk"}, "merged": false}}}}}
+	processedAttempt := api.attempt(milk, "op-milk.retry.2")
+	api.finish(milk, processedAttempt, "processing", nil, "")
+	api.finish(milk, processedAttempt, "processed", shopping, "")
+	api.call(http.MethodPost, "/v1/inbox-items/"+milk+"/resolve", nil)
+	failed := api.capture("Pay the thing", "watch", minutes(-10))
+	api.finish(failed, api.attempt(failed, "op-failed"), "failed", []map[string]any{}, "gave up")
+	review := api.capture("Meeting with Anna at 5", "web", minutes(-5))
+	reviewAttempt := api.attempt(review, "op-review")
+	api.call(http.MethodPost, "/v1/inbox-items/"+review+"/human-review", map[string]any{"attemptId": reviewAttempt, "proposedAction": map[string]any{"tool": "none", "arguments": map[string]any{}}, "candidates": []any{}, "errorSummary": "Which meeting?"})
+	discarded := api.capture("Discarded", "web", minutes(-4))
+	api.call(http.MethodPost, "/v1/inbox-items/"+discarded+"/discard", nil)
+	api.capture("Still raw", "web", minutes(-3))
+	processing := api.capture("Still processing", "web", minutes(-2))
+	api.attempt(processing, "op-processing")
+	// Resolved by hand: no finished attempt.
+	byHand := api.capture("Resolved by hand", "manual", minutes(-1))
+	api.call(http.MethodPost, "/v1/inbox-items/"+byHand+"/resolve", nil)
+	followUp := api.capture("Actually oat milk", "web", at)
+	api.attempt(followUp, "op-follow-up")
+	later := api.capture("Captured later", "web", minutes(1))
+	api.processed(later, []map[string]any{{"tool": "task_create"}})
+
+	items := api.recent("before=" + followUp)
+	if got, want := contents(items), []string{"Resolved by hand", "Meeting with Anna at 5", "Pay the thing", "Buy milk"}; !equalStrings(got, want) {
+		t.Fatalf("recent captures = %q, want %q (newest first, settled only, within 20 minutes)", got, want)
+	}
+	if items[0]["outcome"] != nil || items[0]["state"] != "resolved" || items[0]["source"] != "manual" {
+		t.Errorf("resolved by hand = %v, want no outcome", items[0])
+	}
+	reviewOutcome, _ := items[1]["outcome"].(map[string]any)
+	if items[1]["state"] != "human_review" || reviewOutcome["status"] != "human_review" || reviewOutcome["errorSummary"] != "Which meeting?" || reviewOutcome["attemptId"] != reviewAttempt {
+		t.Errorf("review = %v", items[1])
+	}
+	failedOutcome, _ := items[2]["outcome"].(map[string]any)
+	if items[2]["state"] != "failed" || failedOutcome["status"] != "failed" || items[2]["source"] != "watch" {
+		t.Errorf("failed = %v", items[2])
+	}
+	outcome, _ := items[3]["outcome"].(map[string]any)
+	if items[3]["state"] != "resolved" || items[3]["source"] != "voice" || items[3]["correlationId"] != milk || outcome["status"] != "processed" || outcome["attemptId"] != processedAttempt || outcome["completedAt"] == nil {
+		t.Fatalf("milk = %v", items[3])
+	}
+	actions, _ := outcome["actions"].([]any)
+	if len(actions) != 1 || actions[0].(map[string]any)["tool"] != "food_add_shopping_items" || actions[0].(map[string]any)["result"] == nil {
+		t.Fatalf("milk actions = %v, want the processed attempt's", outcome["actions"])
+	}
+	if created, err := time.Parse(time.RFC3339, items[3]["createdAt"].(string)); err != nil || !created.Equal(minutes(-15)) {
+		t.Errorf("createdAt = %v (%v), want %v", items[3]["createdAt"], err, minutes(-15))
+	}
+
+	// The latest captures only, and another window.
+	if got := contents(api.recent("before=" + followUp + "&limit=2")); !equalStrings(got, []string{"Resolved by hand", "Meeting with Anna at 5"}) {
+		t.Errorf("limit 2 = %q", got)
+	}
+	if got := contents(api.recent("before=" + followUp + "&minutes=30")); len(got) != 5 || got[4] != "Too early" {
+		t.Errorf("30 minutes = %q, want the earlier capture too", got)
+	}
+	if got := contents(api.recent("before=" + followUp + "&minutes=6")); !equalStrings(got, []string{"Resolved by hand", "Meeting with Anna at 5"}) {
+		t.Errorf("6 minutes = %q", got)
+	}
+	// The window ends at the capture's own creation, whatever its state.
+	if got := contents(api.recent("before=" + milk)); !equalStrings(got, []string{"Too early"}) {
+		t.Errorf("before the milk = %q, want only the capture 10 minutes before it", got)
+	}
+
+	for query, want := range map[string]int{
+		"before=" + followUp + "&minutes=0":           http.StatusBadRequest,
+		"before=" + followUp + "&minutes=121":         http.StatusBadRequest,
+		"before=" + followUp + "&limit=0":             http.StatusBadRequest,
+		"before=" + followUp + "&limit=51":            http.StatusBadRequest,
+		"before=not-a-uuid":                           http.StatusBadRequest,
+		"":                                            http.StatusBadRequest,
+		"before=0f3c2a10-7d4e-4b8a-9c61-2e5f8a9b1c0d": http.StatusNotFound,
+	} {
+		if status, _ := api.request(http.MethodGet, "/v1/recent-captures?"+query, nil); status != want {
+			t.Errorf("GET ?%s = %d, want %d", query, status, want)
+		}
+	}
+}
+
+func TestProcessedFollowUpLinksTheEarlierCapture(t *testing.T) {
+	api := newRecentAPI(t)
+	now := time.Now().UTC()
+	milk := api.capture("Buy milk", "web", now.Add(-2*time.Minute))
+	api.processed(milk, []map[string]any{{"tool": "food_add_shopping_items"}})
+	anna := api.capture("Meeting with Anna at 5", "voice", now.Add(-time.Minute))
+	api.processed(anna, []map[string]any{{"tool": "calendar_create"}})
+	followUp := api.capture("Actually oat milk, and make the meeting 6", "web", now)
+	attemptID := api.processed(followUp, []map[string]any{
+		{"tool": "food_update_shopping_item", "followsUp": map[string]any{"inboxItemId": milk, "entity": "shopping_item", "entityId": "7d1f0c2e-1111-4a5b-8c9d-0e1f2a3b4c5d"}},
+		{"tool": "calendar_update", "followsUp": map[string]any{"inboxItemId": anna, "entity": "event", "entityId": "event-1"}},
+		{"tool": "food_add_shopping_items", "followsUp": map[string]any{"inboxItemId": milk}},
+		// Neither its own capture nor one Inbox does not have is linked.
+		{"tool": "task_create", "followsUp": map[string]any{"inboxItemId": followUp}},
+		{"tool": "task_create", "followsUp": map[string]any{"inboxItemId": "0f3c2a10-7d4e-4b8a-9c61-2e5f8a9b1c0d"}},
+		{"tool": "task_create", "followsUp": "not an object"},
+	})
+	// The processor repeats the record it is unsure went through: the
+	// events have the same ids, so Activity keeps one each.
+	api.finish(followUp, attemptID, "processed", []map[string]any{{"tool": "food_update_shopping_item", "followsUp": map[string]any{"inboxItemId": milk}}}, "")
+
+	events := api.events.ofType("inbox.item.followed_up")
+	byID := map[string]sent{}
+	for _, event := range events {
+		byID[event.body["id"].(string)] = event
+	}
+	if len(byID) != 2 {
+		t.Fatalf("followed_up events = %d distinct (%d sent), want one per earlier capture", len(byID), len(events))
+	}
+	completed := activity.EventID("inbox.processing.completed", attemptID).String()
+	for _, event := range events[:2] {
+		body := event.body
+		subject, _ := body["subject"].(map[string]any)
+		data, _ := body["data"].(map[string]any)
+		if body["correlationId"] != followUp || body["causationId"] != completed || subject["type"] != "inbox_item" {
+			t.Errorf("event = %v, want the follow-up's workflow, caused by its completed processing", body)
+		}
+		if data["inboxItemId"] != followUp || data["followedItemId"] != subject["id"] || data["followedCorrelationId"] != subject["id"] || data["attemptId"] != attemptID {
+			t.Errorf("event data = %v", data)
+		}
+		actor, _ := body["actor"].(map[string]any)
+		if actor["kind"] != "agent" || actor["name"] != "codex-inbox-processor" {
+			t.Errorf("actor = %v", actor)
+		}
+	}
+	first, _ := events[0].body["data"].(map[string]any)
+	if first["followedItemId"] != milk || first["followedContent"] != "Buy milk" {
+		t.Fatalf("first link = %v, want the milk capture", first)
+	}
+	changes, _ := first["changes"].([]any)
+	if len(changes) != 2 || changes[0].(map[string]any)["entity"] != "shopping_item" || changes[0].(map[string]any)["tool"] != "food_update_shopping_item" {
+		t.Errorf("milk changes = %v", changes)
+	}
+	if summary := events[0].body["summary"]; summary != "“Actually oat milk, and make the meeting 6” changed what “Buy milk” did" {
+		t.Errorf("summary = %v", summary)
+	}
+	if second, _ := events[1].body["data"].(map[string]any); second["followedItemId"] != anna {
+		t.Errorf("second link = %v, want the meeting capture", second)
+	}
+	// A retryable or failed attempt links nothing.
+	other := api.capture("Something else", "web", now)
+	api.finish(other, api.attempt(other, "op-other"), "retryable", []map[string]any{{"tool": "task_update", "followsUp": map[string]any{"inboxItemId": milk}}}, "later")
+	if got := len(api.events.ofType("inbox.item.followed_up")); got != len(events) {
+		t.Errorf("a retryable attempt recorded follow-ups: %d events, want %d", got, len(events))
+	}
+}
+
+func TestMigration000010DownAndUp(t *testing.T) {
+	api := newRecentAPI(t)
+	ctx := context.Background()
+	index := func() int {
+		var n int
+		if err := api.pool.QueryRow(ctx, "SELECT count(*) FROM pg_indexes WHERE indexname = 'inbox_items_created_idx' AND schemaname = current_schema()").Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if index() != 1 {
+		t.Fatal("the creation time index is missing")
+	}
+	for _, step := range []struct {
+		name string
+		want int
+	}{{"000010_recent_captures.down.sql", 0}, {"000010_recent_captures.up.sql", 1}} {
+		migration, err := os.ReadFile(filepath.Join("..", "..", "db", "migrations", step.name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := api.pool.Exec(ctx, string(migration)); err != nil {
+			t.Fatalf("%s: %v", step.name, err)
+		}
+		if got := index(); got != step.want {
+			t.Fatalf("after %s: %d indexes, want %d", step.name, got, step.want)
+		}
+	}
+	before := api.capture("Before", "web", time.Now().Add(-time.Minute))
+	api.processed(before, nil)
+	if got := contents(api.recent("before=" + api.capture("After", "web", time.Now()))); !equalStrings(got, []string{"Before"}) {
+		t.Fatalf("after down and up: %q", got)
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

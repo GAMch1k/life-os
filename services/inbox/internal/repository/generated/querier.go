@@ -24,6 +24,10 @@ type Querier interface {
 	ListInboxItems(ctx context.Context, arg ListInboxItemsParams) ([]InboxItem, error)
 	ListMedia(ctx context.Context, hashes []string) ([]InboxMedium, error)
 	ListProcessingAttempts(ctx context.Context, inboxItemID pgtype.UUID) ([]InboxProcessingAttempt, error)
+	// The captures made in a window before one capture (not that one), newest
+	// first, that processing has settled: resolved, waiting for Human Review, or
+	// failed. Each comes with its latest finished attempt, if any.
+	ListRecentCaptures(ctx context.Context, arg ListRecentCapturesParams) ([]ListRecentCapturesRow, error)
 	// Unfinished attempts whose runtime stopped reporting (or never did), for
 	// captures that are still waiting for processing. An open attempt of a capture
 	// that has since been resolved, discarded, or sent to review is history.

@@ -101,6 +101,58 @@ test("a selected event shows the chain that led to it and what it led to", () =>
   assert.equal(trace.externalCauseId, undefined);
 });
 
+test("a follow-up capture links the earlier capture both ways", () => {
+  // "Buy milk" (its own workflow), then "Actually oat milk", whose
+  // processing renamed the item and recorded the follow-up about the milk
+  // capture in its own workflow.
+  const milk = { type: "inbox_item", id: "milk" };
+  const captured = event("m1", "inbox.item.captured", {
+    subject: milk,
+    correlationId: "milk",
+  });
+  const resolved = event("m2", "inbox.item.resolved", {
+    subject: milk,
+    correlationId: "milk",
+  });
+  const completed = event("o1", "inbox.processing.completed", {
+    subject: { type: "processing_attempt", id: "attempt-2" },
+    correlationId: "oat",
+  });
+  const followedUp = event("o2", "inbox.item.followed_up", {
+    subject: milk,
+    correlationId: "oat",
+    causationId: "o1",
+    summary: "“Actually oat milk” changed what “Buy milk” did",
+  });
+  assert.equal(eventLabel(followedUp), "Earlier capture followed up");
+  assert.ok(EVENT_TYPES.includes("inbox.item.followed_up"));
+
+  // From the follow-up: what led to it, and the milk capture's history.
+  const fromFollowUp = buildTrace(
+    followedUp,
+    [completed, followedUp],
+    [captured, resolved, followedUp],
+  );
+  assert.deepEqual(
+    fromFollowUp.upstream.map((entry) => entry.id),
+    ["o1"],
+  );
+  assert.deepEqual(
+    fromFollowUp.related.map((entry) => entry.id),
+    ["m1", "m2"],
+  );
+  // From the milk capture: the follow-up in the other workflow.
+  const fromMilk = buildTrace(
+    captured,
+    [captured, resolved],
+    [captured, resolved, followedUp],
+  );
+  assert.deepEqual(
+    fromMilk.related.map((entry) => entry.id),
+    ["o2"],
+  );
+});
+
 test("a cause recorded outside the loaded workflow is reported, not invented", () => {
   const orphan = event("x", "task.updated", { causationId: "missing" });
   const trace = buildTrace(orphan, [], []);

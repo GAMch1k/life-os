@@ -225,6 +225,11 @@ func (h *Handler) UpdateProcessingAttempt(c fiber.Ctx, itemID types.UUID, attemp
 		failed = &item
 	}
 	h.recordAttemptOutcome(c, itemID, attempt, body)
+	if body.Status == generated.UpdateProcessingAttemptRequestStatusProcessed {
+		if item, err := h.queries.GetInboxItem(c.Context(), pgUUID(itemID)); err == nil {
+			h.recordFollowUps(c, item, attemptID.String(), body.Actions)
+		}
+	}
 	if failed != nil {
 		// Failed for good, so the owner hears about it; a retry is not.
 		reason := ""

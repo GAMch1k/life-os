@@ -60,12 +60,12 @@ var (
 // isFoodMutation reports whether an action changes an existing shopping
 // list or pantry item, which the processor first has to identify.
 func isFoodMutation(action plannedAction) bool {
-	return action.Tool == "food_mark_bought" || action.Tool == "food_update_pantry_item"
+	return action.Tool == "food_mark_bought" || action.Tool == "food_update_pantry_item" || action.Tool == "food_update_shopping_item"
 }
 
 // isFoodWrite reports whether a tool writes to Food.
 func isFoodWrite(tool string) bool {
-	return tool == "food_add_shopping_items" || tool == "food_add_pantry_items" || tool == "food_mark_bought" || tool == "food_update_pantry_item" || isMealTool(tool) || isStapleTool(tool)
+	return tool == "food_add_shopping_items" || tool == "food_add_pantry_items" || tool == "food_mark_bought" || tool == "food_update_pantry_item" || tool == "food_update_shopping_item" || isMealTool(tool) || isStapleTool(tool)
 }
 
 // isMealTool reports whether a tool plans or clears meals, or adds what
@@ -103,6 +103,8 @@ func validFoodAction(action plannedAction) bool {
 	case "food_update_pantry_item":
 		state, _ := action.Arguments["state"].(string)
 		return validSearchTerms(action.Arguments, "itemQuery", "itemQueryAlternatives") && (state == "used_up" || state == "thrown_away")
+	case "food_update_shopping_item":
+		return validSearchTerms(action.Arguments, "itemQuery", "itemQueryAlternatives") && validShoppingChange(action.Arguments)
 	}
 	items, ok := action.Arguments["items"].([]any)
 	if !ok || len(items) == 0 || len(items) > maxFoodActionItems {
@@ -309,13 +311,60 @@ func approvedFoodTarget(approved plan) (plan, string) {
 }
 
 // foodArguments is what the Food MCP tool receives for one resolved item:
-// its id and, for a pantry change, the new state. The search terms only
-// identified the item.
+// its id and, for a pantry change, the new state, or for a list item's
+// change what changes. The search terms only identified the item.
 func foodArguments(tool string, planned map[string]any, itemID string) map[string]any {
-	if tool == "food_mark_bought" {
+	switch tool {
+	case "food_mark_bought":
 		return map[string]any{"itemIds": []any{itemID}}
+	case "food_update_shopping_item":
+		arguments := map[string]any{"itemId": itemID}
+		for _, field := range shoppingChangeFields {
+			if value, ok := planned[field].(string); ok && strings.TrimSpace(value) != "" {
+				arguments[field] = strings.TrimSpace(value)
+			}
+		}
+		return arguments
 	}
 	return map[string]any{"itemId": itemID, "state": planned["state"]}
+}
+
+// shoppingChangeFields are what a planned food_update_shopping_item may
+// change: a follow-up such as "actually oat milk" renames the item.
+var shoppingChangeFields = []string{"name", "amount", "note", "storeName"}
+
+// validShoppingChange checks the change of a planned
+// food_update_shopping_item: at least one field, each text, and a name of
+// at most maxFoodName characters.
+func validShoppingChange(arguments map[string]any) bool {
+	changes := 0
+	for _, field := range shoppingChangeFields {
+		value, present := arguments[field]
+		if !present || value == nil {
+			continue
+		}
+		text, ok := value.(string)
+		if !ok || strings.TrimSpace(text) == "" || (field == "name" && utf8.RuneCountInString(strings.TrimSpace(text)) > maxFoodName) {
+			return false
+		}
+		changes++
+	}
+	return changes > 0
+}
+
+// shoppingChangeRefused reports whether Food refused a list item's change
+// for good: another needed item already has the new name, or the item is
+// gone. Retrying cannot help; the owner decides.
+func shoppingChangeRefused(err error) (string, bool) {
+	switch {
+	case err == nil:
+		return "", false
+	case strings.Contains(err.Error(), "already_on_list"):
+		return "An item with that name is already on the shopping list, so nothing was renamed", true
+	case strings.Contains(err.Error(), "not_found"):
+		return "The shopping list item is no longer there, so nothing was changed", true
+	}
+	return "", false
 }
 
 // unmatchedFoodReason is recorded, and the capture's other actions still
@@ -323,6 +372,9 @@ func foodArguments(tool string, planned map[string]any, itemID string) map[strin
 func unmatchedFoodReason(tool string) string {
 	if tool == "food_mark_bought" {
 		return "Nothing on the shopping list or among the open Tasks matches, so nothing was marked bought"
+	}
+	if tool == "food_update_shopping_item" {
+		return "Nothing on the shopping list matches, so nothing was changed"
 	}
 	return "Nothing in the pantry matches, so nothing was changed"
 }
@@ -332,6 +384,9 @@ func unmatchedFoodReason(tool string) string {
 func foodReviewReason(tool string) string {
 	if tool == "food_mark_bought" {
 		return "Several shopping list items match: choose the one you bought"
+	}
+	if tool == "food_update_shopping_item" {
+		return "Several shopping list items match: choose the one to change"
 	}
 	return "Several pantry items match: choose the one you mean"
 }
