@@ -71,6 +71,7 @@ func run(ctx context.Context) error {
 	add("task_list", "List Tasks", cfg.TasksURL, "/v1/tasks?")
 	add("task_search", "Search Tasks by title or notes before mutating one", cfg.TasksURL, "/v1/tasks?")
 	add("inbox_list", "List Inbox items", cfg.InboxURL, "/v1/inbox-items?")
+	add("inbox_recent_captures", "List the captures made in the minutes before one capture (before=<itemId>, minutes, limit), with what their processing did", cfg.InboxURL, "/v1/recent-captures?")
 	addCalendarTools(s, hc, cfg.CalendarURL, emitter)
 	addFinanceTools(s, hc, cfg.FinanceURL, emitter)
 	addFoodTools(s, hc, cfg.FoodURL, emitter)

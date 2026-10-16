@@ -393,6 +393,7 @@ func addFoodTools(s *mcp.Server, hc *http.Client, baseURL string, emitter *activ
 		})
 	})
 	addStapleTools(s, hc, baseURL, emitter)
+	addShoppingUpdateTool(s, hc, baseURL, emitter)
 }
 
 // read GETs path from Food and returns its JSON object.
