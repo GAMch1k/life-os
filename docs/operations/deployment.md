@@ -46,7 +46,7 @@ A deploy of this change also recreates the gateway (`docker compose up -d --forc
 
 ## Web push (for the native app)
 
-Notifications can deliver by Web Push (P12-10), but nothing subscribes to it yet: the owner decided on 2026-10-12 against notifications from the Dashboard in the browser, and the planned Android app (P18-05) will register its push endpoint here instead. The channel stays off (`LIFE_OS_NOTIFICATIONS_CHANNELS=ntfy`). The VAPID keys are already in `.env` (from `cd services/notifications && GOWORK=off go run ./cmd/vapid-keys`); keep that pair, since a new one invalidates every subscription. Details: [Notifications → Web push](../services/notifications.md#web-push).
+Notifications delivers by Web Push to the Life OS Android app (P18-05), which registers its push endpoint here; the Dashboard has no browser notifications (the owner's decision, 2026-10-12). Since 2026-10-12 it is the only channel (`LIFE_OS_NOTIFICATIONS_CHANNELS=webpush`; ntfy is [paused](ntfy.md#paused-since-2026-10-12)). The VAPID keys are already in `.env` (from `cd services/notifications && GOWORK=off go run ./cmd/vapid-keys`); keep that pair, since a new one invalidates every subscription. Details: [Notifications → Web push](../services/notifications.md#web-push).
 
 ## Adding the monitor to an existing deployment
 
