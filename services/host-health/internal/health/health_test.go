@@ -149,9 +149,8 @@ func TestTrackerCountsDeathsAndUnhealthyTime(t *testing.T) {
 		}
 	}
 	tracker.Events(slices.Concat(restart(20), restart(10), restart(5), restart(1)))
-	// The same events again (an overlapping poll) count once.
+	// The same events again (a new stream's replay) count once.
 	tracker.Events(slices.Concat(restart(5), restart(1)))
-	tracker.Events([]docker.Event{{Time: start.Add(-30 * time.Minute), ID: "aaaaaaaaaaaa", Name: "n8n", Action: "health_status: unhealthy"}})
 	containers := []docker.Container{
 		{ID: "fedcba987654", Name: "homeassistant", State: "running"},
 		{ID: "aaaaaaaaaaaa", Name: "n8n", State: "running", Health: "unhealthy"},
@@ -162,11 +161,12 @@ func TestTrackerCountsDeathsAndUnhealthyTime(t *testing.T) {
 	if states[0].RecentDeaths != 3 || states[0].MemoryBytes != 600<<20 {
 		t.Fatalf("homeassistant = %+v (the death 20 minutes ago is outside the window)", states[0])
 	}
-	// n8n turned unhealthy before host-health saw it: the event says when.
-	if !states[1].UnhealthySince.Equal(start.Add(-30*time.Minute)) || !states[2].UnhealthySince.Equal(start) {
+	// Unhealthy since host-health first saw it so.
+	if !states[1].UnhealthySince.Equal(start) || !states[2].UnhealthySince.Equal(start) {
 		t.Fatalf("unhealthy since = %s, %s", states[1].UnhealthySince, states[2].UnhealthySince)
 	}
-	// Later, the deaths age out and n8n recovers.
+	// Later, the deaths age out and n8n recovers; new stays unhealthy since
+	// it was first seen so.
 	later := start.Add(20 * time.Minute)
 	containers[1].Health = "healthy"
 	states = tracker.Update(later, containers)
@@ -175,14 +175,19 @@ func TestTrackerCountsDeathsAndUnhealthyTime(t *testing.T) {
 	}
 }
 
-// fakeDocker counts its calls and can fail.
+// fakeDocker counts its calls and can fail. Its event streams are opened in
+// turn; without one left, or with openFail, opening fails.
 type fakeDocker struct {
 	mu         sync.Mutex
 	containers []docker.Container
 	memory     map[string]uint64
 	fail       error
 	memoryRead int
+	streams    []*fakeStream
+	openFail   error
 	eventsFrom []time.Time
+	// opened, when set, is told each stream's since as it is opened.
+	opened chan time.Time
 }
 
 func (f *fakeDocker) Containers(context.Context) ([]docker.Container, error) {
@@ -191,11 +196,106 @@ func (f *fakeDocker) Containers(context.Context) ([]docker.Container, error) {
 	return f.containers, f.fail
 }
 
-func (f *fakeDocker) Events(_ context.Context, since, _ time.Time) ([]docker.Event, error) {
+func (f *fakeDocker) Events(_ context.Context, since time.Time) (docker.EventStream, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.eventsFrom = append(f.eventsFrom, since)
-	return nil, nil
+	if f.openFail != nil {
+		return nil, f.openFail
+	}
+	if len(f.streams) == 0 {
+		return nil, errors.New("the docker gateway cannot be reached")
+	}
+	stream := f.streams[0]
+	f.streams = f.streams[1:]
+	if f.opened != nil {
+		f.opened <- since
+	}
+	return stream, nil
+}
+
+func (f *fakeDocker) asked() []time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.eventsFrom)
+}
+
+// fakeStream is an open event stream that a test feeds.
+type fakeStream struct {
+	since  time.Time
+	events chan docker.Event
+	breaks chan error
+	// idle is offered whenever the watcher waits for the next event: all
+	// the ones before it are taken.
+	idle   chan struct{}
+	closed chan struct{}
+	close  sync.Once
+}
+
+func newFakeStream(since time.Time) *fakeStream {
+	return &fakeStream{since: since, events: make(chan docker.Event), breaks: make(chan error), idle: make(chan struct{}), closed: make(chan struct{})}
+}
+
+func (s *fakeStream) Since() time.Time { return s.since }
+
+func (s *fakeStream) Next() (docker.Event, error) {
+	for {
+		select {
+		case event := <-s.events:
+			return event, nil
+		case err := <-s.breaks:
+			return docker.Event{}, err
+		case <-s.closed:
+			return docker.Event{}, errors.New("closed")
+		case s.idle <- struct{}{}:
+		}
+	}
+}
+
+func (s *fakeStream) Close() error {
+	s.close.Do(func() { close(s.closed) })
+	return nil
+}
+
+// feed hands the watcher events and returns once it has taken them all.
+func (s *fakeStream) feed(t *testing.T, events ...docker.Event) {
+	t.Helper()
+	for _, event := range events {
+		select {
+		case s.events <- event:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the watcher does not read the stream")
+		}
+	}
+	select {
+	case <-s.idle:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the watcher did not take the events")
+	}
+}
+
+// watch starts the sampler's watcher until the test ends.
+func watch(t *testing.T, sampler *Sampler) {
+	t.Helper()
+	sampler.WatchEvents(t.Context())
+}
+
+// clock is a time a test moves while the watcher may read it.
+type clock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *clock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *clock) set(now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = now
 }
 
 func (f *fakeDocker) Memory(_ context.Context, id string) (docker.Memory, error) {
@@ -223,8 +323,15 @@ func TestSamplerSamplesTheHostAndItsContainers(t *testing.T) {
 	dockerSource := &fakeDocker{
 		containers: []docker.Container{{ID: "a", Name: "whisper", State: "running"}, {ID: "b", Name: "homeassistant", State: "running"}, {ID: "c", Name: "runner", State: "exited"}},
 		memory:     map[string]uint64{"a": 1900 << 20, "b": 600 << 20},
+		streams:    []*fakeStream{newFakeStream(start)},
 	}
 	sampler := NewSampler(Options{Mode: "host", Host: hostSource, Docker: dockerSource, Thresholds: DefaultThresholds(), Now: func() time.Time { return now }})
+	watch(t, sampler)
+	// The stream asks for the events of the whole window: what the engine
+	// still holds of them.
+	if asked := dockerSource.asked(); len(asked) != 1 || !asked[0].Equal(start.Add(-15*time.Minute)) {
+		t.Fatalf("events asked from %v", asked)
+	}
 	if err := sampler.Ready(context.Background()); err == nil {
 		t.Fatal("ready before the first sample")
 	}
@@ -242,16 +349,17 @@ func TestSamplerSamplesTheHostAndItsContainers(t *testing.T) {
 	if total, running, _, _, _ := status.Containers.Counts(); total != 3 || running != 2 {
 		t.Fatalf("counts = %d, %d", total, running)
 	}
-	// Events are read from 15 minutes back, then from the last read on.
-	if !dockerSource.eventsFrom[0].Equal(start.Add(-15 * time.Minute)) {
-		t.Fatalf("first events from %s", dockerSource.eventsFrom[0])
+	// The stream has just opened: the restart counts are not complete.
+	if !status.Containers.RestartsSince.Equal(start) || status.Containers.RestartsComplete {
+		t.Fatalf("restarts since %s, complete %t", status.Containers.RestartsSince, status.Containers.RestartsComplete)
 	}
 
-	// A minute later memory is not read again (every 5 minutes) …
+	// A minute later memory is not read again (every 5 minutes), and the
+	// stream is not asked for again …
 	now = now.Add(time.Minute)
 	sampler.SampleOnce(context.Background())
-	if dockerSource.memoryRead != 2 || !dockerSource.eventsFrom[1].Equal(start) {
-		t.Fatalf("memory read %d times, events from %s", dockerSource.memoryRead, dockerSource.eventsFrom[1])
+	if dockerSource.memoryRead != 2 || len(dockerSource.asked()) != 1 {
+		t.Fatalf("memory read %d times, events asked %d times", dockerSource.memoryRead, len(dockerSource.asked()))
 	}
 	// … unless memory is low, when the biggest users matter.
 	hostSource.snapshot = snapshot(0.4)
@@ -305,8 +413,14 @@ func TestFixturesAreTheSameEveryTime(t *testing.T) {
 		fixture := Fixture{Scenario: scenario}
 		sampler := NewSampler(Options{Mode: "fixture", Host: fixture, Docker: fixture, Usage: fixture, Thresholds: DefaultThresholds(), Now: func() time.Time { return start }})
 		sampler.Prefill(fixture.History(start))
+		watch(t, sampler)
 		sampler.SampleOnce(context.Background())
 		status, _ := sampler.Status()
+		// Nothing restarts on the made-up host, and it says so from the
+		// first sample on.
+		if !status.Containers.RestartsComplete {
+			t.Fatalf("%s: restart counts incomplete since %s", scenario, status.Containers.RestartsSince)
+		}
 		history := sampler.History(start.Add(-24 * time.Hour))
 		if len(history) != HistorySize {
 			t.Fatalf("%s: %d samples of history", scenario, len(history))

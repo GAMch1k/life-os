@@ -54,17 +54,20 @@ async function copyText(text: string) {
 
 /**
  * An icon button that copies the text of the element with `targetId`, so what
- * is copied is exactly what is shown. It announces "Copied"; if copying is not
- * possible it selects the text instead, for the user to copy by hand.
+ * is copied is exactly what is shown, or `text` when given (the same content,
+ * laid out for pasting). It announces "Copied"; if copying is not possible it
+ * selects the element's text instead, for the user to copy by hand.
  */
 export function CopyButton({
   className,
   label,
   targetId,
+  text,
 }: {
   className?: string;
   label: string;
   targetId: string;
+  text?: string;
 }) {
   const [status, setStatus] = useState<Status>("idle");
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -73,7 +76,7 @@ export function CopyButton({
   async function copy() {
     const target = document.getElementById(targetId);
     if (!target) return;
-    const copied = await copyText(target.textContent ?? "");
+    const copied = await copyText(text ?? target.textContent ?? "");
     if (!copied) window.getSelection()?.selectAllChildren(target);
     const next = copied ? "copied" : "failed";
     setStatus(next);

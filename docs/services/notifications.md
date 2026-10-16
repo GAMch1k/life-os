@@ -17,7 +17,7 @@ flowchart LR
   Monitor -- "pkg/notify" --> N
   Dashboard -- "GET /api/notifications" --> Gateway --> N
   N -- "worker (ntfy channel)" --> Ntfy["ntfy (self-hosted)"] -- "ntfy Android app" --> Phone["Owner's phone"]
-  N -- "worker (webpush channel)" --> Push["Browser push service (FCM, …)"] -- "installed Life OS app" --> Phone
+  N -- "worker (webpush channel)" --> Push["Push service (FCM)"] -- "Life OS Android app (UnifiedPush)" --> Phone
   N -. record .-> Activity
 ```
 
@@ -88,9 +88,7 @@ A channel implements `Name()` and `Send(ctx, notification) error` (`services/not
 - `webpush` pushes each notification to every subscribed device through its push service ([web push](#web-push)). It needs the VAPID keys. The Dashboard has no browser notifications (the owner's decision, 2026-10-12); the subscriber is the Android app (P18-05, from 0.3.0), which registers its UnifiedPush endpoint through `POST /v1/push/subscriptions`.
 - `log` writes each delivery's metadata (never the body) to the service log. It is for development and verification of the delivery path.
 
-The deployment uses `LIFE_OS_NOTIFICATIONS_CHANNELS=webpush` since 2026-10-12: notifications reach the phone through the Life OS Android app's push (Google's FCM), which also gets through a work Wi-Fi that resets the TLS handshake to `ntfy.gamch1k.com`. ntfy is **paused**, not removed: its container is stopped, its profile and data stay ([ntfy → Paused](../operations/ntfy.md#paused-since-2026-10-12)); with `ntfy,webpush` both channels deliver again.
-
-Life OS's own Android app later becomes another channel next to or instead of ntfy.
+The deployment uses `LIFE_OS_NOTIFICATIONS_CHANNELS=webpush` since 2026-10-12: notifications reach the phone through the Life OS Android app's push (Google's FCM). The owner's work Wi-Fi blocks FCM as it blocked ntfy, which the owner accepts ([Phase 12](../verification/phase-12.md)). ntfy is **paused**, not removed: its container is stopped, its profile and data stay ([ntfy → Paused](../operations/ntfy.md#paused-since-2026-10-12)); with `ntfy,webpush` both channels deliver again.
 
 A delivery belongs to the channels enabled when its notification was created. Enabling a channel later does not deliver older notifications; removing one skips its pending deliveries.
 
@@ -121,11 +119,11 @@ curl -X POST "$GATEWAY/api/notifications/v1/notifications" -H 'X-Life-OS-Actor: 
 
 ### Web push
 
-The `webpush` channel delivers to browsers with the Web Push protocol (RFC 8030): a subscriber (planned: the Android app, through UnifiedPush; the Dashboard has no browser notifications) registers its push service subscription with Life OS (an endpoint URL and two keys), and Notifications posts each notification to that endpoint. On Android the push service is Google's FCM, which Chrome keeps a connection to anyway, so a push arrives where Chrome reaches Google even when ntfy is blocked, and the installed app shows it even while it is closed. The payload is end-to-end encrypted for the browser (RFC 8291); the push service sees only its size and the request's urgency and lifetime.
+The `webpush` channel delivers with the Web Push protocol (RFC 8030): a subscriber registers its push service subscription with Life OS (an endpoint URL and two keys), and Notifications posts each notification to that endpoint. The subscriber is the Life OS Android app (P18-05), through UnifiedPush with its embedded FCM distributor; the Dashboard has no browser notifications (the owner's decision, 2026-10-12). The push service is Google's FCM, which the phone keeps a connection to anyway, so the app shows a push even while it is closed. The payload is end-to-end encrypted for the subscriber (RFC 8291); the push service sees only its size and the request's urgency and lifetime.
 
 ```mermaid
 sequenceDiagram
-  participant A as Subscriber (planned: Android app)
+  participant A as Life OS Android app
   participant N as Notifications
   participant P as Push service (FCM)
   A->>N: GET /v1/push/config (VAPID public key)
@@ -178,7 +176,7 @@ Delivery stays at least once: a crash between a push service accepting a push an
 
 2. Optionally set `LIFE_OS_WEBPUSH_SUBJECT=mailto:<your address>` (default: `LIFE_OS_PUBLIC_URL`). Add `webpush` to `LIFE_OS_NOTIFICATIONS_CHANNELS` (`ntfy,webpush`) only once a subscriber exists.
 3. Deploy (migration `000003_push_subscriptions`, then the service).
-4. The Dashboard has no browser notifications (the owner's decision, 2026-10-12): the Android app (P18-05) will subscribe.
+4. Turn notifications on in the Life OS Android app, which subscribes. The Dashboard has no browser notifications (the owner's decision, 2026-10-12).
 
 To send a test push to every device from the command line:
 
@@ -272,8 +270,8 @@ For all of Tasks' messages, one due while Tasks was down is sent within `TASKS_N
 
 - Database: `notifications_db` / `notifications_user`, password `LIFE_OS_NOTIFICATIONS_DB_PASSWORD` in `.env`. Fresh volumes are provisioned automatically; for an existing deployment see [Operations](../operations/deployment.md#adding-the-notifications-service-to-an-existing-deployment).
 - Configuration (compose sets these): `DATABASE_URL`, `ACTIVITY_SERVICE_URL`, `NOTIFICATIONS_CHANNELS` (from `LIFE_OS_NOTIFICATIONS_CHANNELS`, empty by default), the [ntfy settings](#ntfy), and the [web push settings](#web-push) (`LIFE_OS_WEBPUSH_*`, empty by default); the delivery settings above keep their defaults.
-- Enabling web push on a running deployment: add the two key lines and `webpush` in `LIFE_OS_NOTIFICATIONS_CHANNELS` to `.env` ([setup](#web-push)); build the service and the Dashboard (`docker compose build notifications`, then `docker compose build dashboard`, one at a time); apply migration `000003_push_subscriptions` with `docker compose up --no-build --no-deps notifications-migrate` (it exits when done); then `docker compose up -d --no-build --no-deps notifications` and `docker compose up -d --no-build --no-deps dashboard`. The gateway needs nothing: `/api/notifications/` already routes every method, and passes the user agent on. The service logs `notification channels configured` with `webpush`; `GET /api/notifications/v1/push/config` says `configured` and `delivering`. Then turn it on on the phone. Rolling back the migration (`000003…down.sql`) drops the devices and their outcomes; remove `webpush` from the channels first.
-- The verification stack never receives the web push keys (`tools/verify-compose` blanks them and refuses a plan with a private key), so web push is not set up there; `e2e/web-push.spec.ts` stubs it in the page.
+- Enabling web push on a running deployment: add the two key lines and `webpush` in `LIFE_OS_NOTIFICATIONS_CHANNELS` to `.env` ([setup](#web-push)); build the service (`docker compose build notifications`; the Dashboard needs nothing, as it has no push of its own); apply migration `000003_push_subscriptions` with `docker compose up --no-build --no-deps notifications-migrate` (it exits when done); then `docker compose up -d --no-build --no-deps notifications`. The gateway needs nothing: `/api/notifications/` already routes every method, and passes the user agent on. The service logs `notification channels configured` with `webpush`; `GET /api/notifications/v1/push/config` says `configured` and `delivering`. Then turn notifications on in the Life OS Android app. Rolling back the migration (`000003…down.sql`) drops the devices and their outcomes; remove `webpush` from the channels first.
+- The verification stack never receives the web push keys (`tools/verify-compose` blanks them and refuses a plan with a private key), so web push is not set up there and no browser test covers it (the Dashboard has no push; `e2e/web-push.spec.ts` went with the reverted browser push). The unit and integration tests below cover the channel and its API.
 - The ntfy server is an opt-in container in the same stack (Compose profile `ntfy`); see [ntfy](../operations/ntfy.md) for the owner's setup, token rotation, and troubleshooting. The verification stack never receives the owner's channels or ntfy settings (`tools/verify-compose`).
 - The Dashboard reaches the service through `NOTIFICATIONS_SERVICE_URL` (server rendering) and `/api/notifications` (browser); the Status page lists it under Services and shows channel health as the Notifications check.
 - Retention: notifications are kept indefinitely for now.

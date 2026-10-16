@@ -94,7 +94,7 @@ No live restart was made for this report. Restart safety rests on the tests abov
 
 - **A real high notification over app push.** None has happened since the switch. The next real outage the monitor reports will show it. A deliberate check (stopping a service the owner can spare, as in [Monitor → Operations](../services/monitor.md#operations)) needs the owner's go, because test pings to the owner are stopped.
 - **Work Wi-Fi.** FCM is blocked there, and ntfy was blocked there before. Nothing in Life OS can fix this; it is accepted. Not verified: FCM keeps a push for its TTL (high 24 h, medium 12 h, low 4 h), so a push the phone missed at work may still arrive after it leaves that network.
-- **Stale docs**, from the reverted Dashboard push (P12-10, `3308f7b`):
+- **Stale docs**, from the reverted Dashboard push (P12-10, `3308f7b`). Fixed on 16 Oct 2026:
   - [Dashboard](../frontend/dashboard.md) still describes a device list with **Send test** and **Remove** ("On Android nothing else is needed: …"), and says the service worker "shows web push notifications". `public/sw.js` has no push handler.
   - [Notifications → Operations](../services/notifications.md#operations) still cites `e2e/web-push.spec.ts`, which was removed.
   - "Life OS's own Android app later becomes another channel" is now the current channel.

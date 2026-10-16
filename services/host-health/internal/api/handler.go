@@ -179,6 +179,11 @@ func toContainers(containers health.Containers) generated.HostContainers {
 		at := containers.MemoryAt.UTC()
 		response.MemorySampledAt = &at
 	}
+	response.RestartsComplete = containers.RestartsComplete
+	if !containers.RestartsSince.IsZero() {
+		since := containers.RestartsSince.UTC()
+		response.RestartsWatchedSince = &since
+	}
 	for _, item := range containers.Items {
 		container := generated.HostContainer{
 			Name:         item.Name,

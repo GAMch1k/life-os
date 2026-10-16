@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -102,6 +103,10 @@ func runGateway(ctx context.Context) error {
 		return fmt.Errorf("load configuration: %w", err)
 	}
 	logger := httpserver.NewJSONLogger(os.Stdout, cfg.ParsedLogLevel()).With("service", "docker-gateway")
+	// The event stream stays open (it lifts its own deadlines); shutting
+	// down ends it through its request's context.
+	requests, endRequests := context.WithCancel(context.Background())
+	defer endRequests()
 	server := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.Port),
 		Handler:           docker.NewGateway(cfg.Socket, logger),
@@ -109,7 +114,9 @@ func runGateway(ctx context.Context) error {
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      30 * time.Second,
 		MaxHeaderBytes:    8 << 10,
+		BaseContext:       func(net.Listener) context.Context { return requests },
 	}
+	server.RegisterOnShutdown(endRequests)
 	runCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	served := make(chan error, 1)

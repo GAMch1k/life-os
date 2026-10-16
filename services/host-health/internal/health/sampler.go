@@ -18,10 +18,11 @@ type HostSource interface {
 	Read(now time.Time) (host.Snapshot, error)
 }
 
-// DockerSource lists the containers: docker.Client, or a fixture.
+// DockerSource lists the containers and follows their events:
+// docker.Client, or a fixture.
 type DockerSource interface {
+	EventSource
 	Containers(ctx context.Context) ([]docker.Container, error)
-	Events(ctx context.Context, since, until time.Time) ([]docker.Event, error)
 	Memory(ctx context.Context, id string) (docker.Memory, error)
 }
 
@@ -53,13 +54,14 @@ type Sampler struct {
 	opts    Options
 	ring    *Ring
 	tracker *Tracker
+	// watcher follows the container events; nil without a gateway.
+	watcher *Watcher
 
 	mu      sync.Mutex
 	status  Status
 	sampled bool
 
 	// Used by the sampling goroutine only.
-	eventsTo   time.Time
 	memoryAt   time.Time
 	usageError string
 }
@@ -78,7 +80,11 @@ func NewSampler(opts Options) *Sampler {
 	if opts.MemoryEvery <= 0 {
 		opts.MemoryEvery = 5 * time.Minute
 	}
-	return &Sampler{opts: opts, ring: NewRing(HistorySize), tracker: NewTracker(opts.Thresholds.RestartLoopWindow)}
+	s := &Sampler{opts: opts, ring: NewRing(HistorySize), tracker: NewTracker(opts.Thresholds.RestartLoopWindow)}
+	if opts.Docker != nil {
+		s.watcher = NewWatcher(opts.Docker, s.tracker, opts.Thresholds.RestartLoopWindow, opts.Now, opts.Logger)
+	}
+	return s
 }
 
 // Prefill adds history samples, such as a fixture's day.
@@ -88,8 +94,18 @@ func (s *Sampler) Prefill(samples []Sample) {
 	}
 }
 
-// Run samples now and every Interval until ctx ends.
+// WatchEvents opens the stream of container events and follows it, and
+// every later one, until ctx ends. Without a gateway it does nothing.
+func (s *Sampler) WatchEvents(ctx context.Context) {
+	if s.watcher != nil {
+		s.watcher.Start(ctx)
+	}
+}
+
+// Run watches the container events, and samples now and every Interval,
+// until ctx ends.
 func (s *Sampler) Run(ctx context.Context) {
+	s.WatchEvents(ctx)
 	for {
 		s.SampleOnce(ctx)
 		timer := time.NewTimer(s.opts.Interval)
@@ -140,8 +156,9 @@ func (s *Sampler) SampleOnce(ctx context.Context) {
 	s.mu.Unlock()
 }
 
-// readContainers lists the containers and their recent events, and reads
-// their memory every MemoryEvery, or every sample while memory is low.
+// readContainers lists the containers with the restarts the watcher has
+// counted, and reads their memory every MemoryEvery, or every sample while
+// memory is low.
 func (s *Sampler) readContainers(ctx context.Context, now time.Time, memoryLow bool) Containers {
 	if s.opts.Docker == nil {
 		return Containers{Error: "no docker gateway is set up"}
@@ -152,16 +169,6 @@ func (s *Sampler) readContainers(ctx context.Context, now time.Time, memoryLow b
 	if err != nil {
 		return Containers{Error: err.Error()}
 	}
-	since := s.eventsTo
-	if since.IsZero() {
-		since = now.Add(-s.opts.Thresholds.RestartLoopWindow)
-	}
-	events, err := s.opts.Docker.Events(ctx, since, now)
-	if err != nil {
-		return Containers{Error: fmt.Sprintf("events: %v", err)}
-	}
-	s.tracker.Events(events)
-	s.eventsTo = now
 
 	if memoryLow || now.Sub(s.memoryAt) >= s.opts.MemoryEvery {
 		s.tracker.SetMemory(s.readMemory(ctx, list))
@@ -171,7 +178,14 @@ func (s *Sampler) readContainers(ctx context.Context, now time.Time, memoryLow b
 	for i := range items {
 		items[i].TestStack = s.ignored(items[i].Project)
 	}
-	return Containers{Available: true, Items: items, MemoryAt: s.memoryAt}
+	containers := Containers{Available: true, Items: items, MemoryAt: s.memoryAt}
+	watch := s.watcher.Watch()
+	containers.RestartsSince = watch.Since
+	containers.RestartsComplete = !watch.Since.IsZero() && now.Sub(watch.Since) >= s.opts.Thresholds.RestartLoopWindow
+	if watch.Since.IsZero() && now.Sub(watch.DownSince) >= eventsDownFor {
+		containers.EventsError = watch.Error
+	}
+	return containers
 }
 
 // ignored says whether a compose project is one of IgnoreProjects.

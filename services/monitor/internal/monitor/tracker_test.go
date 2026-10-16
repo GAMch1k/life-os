@@ -249,3 +249,27 @@ func TestHistoryWithoutAReadableKeyFallsBackToItsImportance(t *testing.T) {
 		t.Fatalf("the episode began at occurredAt: %+v", got)
 	}
 }
+
+func TestAProvisionalOkNeitherConfirmsNorInterruptsARun(t *testing.T) {
+	provisional := processing(OK)
+	provisional.Provisional = true
+	tracker := known(2, processing(OK))
+	notifyAll(tracker, observe(tracker, minute(0), processing(Warning)))
+	expectOne(t, notifyAll(tracker, observe(tracker, minute(1), processing(Warning))), "processing", OK, Warning, minute(0))
+	for i := 2; i < 20; i++ {
+		if due := observe(tracker, minute(i), provisional); len(due) != 0 {
+			t.Fatalf("a provisional ok is no recovery: %+v", due)
+		}
+	}
+	// It does not interrupt a run either: a warning seen before and after
+	// it is confirmed.
+	observe(tracker, minute(20), processing(Problem))
+	observe(tracker, minute(21), provisional)
+	expectOne(t, observe(tracker, minute(22), processing(Problem)), "processing", Warning, Problem, minute(20))
+
+	// Only an ok can be provisional.
+	warning := processing(Warning)
+	warning.Provisional = true
+	fresh := known(1, processing(OK))
+	expectOne(t, observe(fresh, minute(0), warning), "processing", OK, Warning, minute(0))
+}

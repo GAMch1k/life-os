@@ -18,10 +18,14 @@ import (
 )
 
 // fakeEngine is a Docker Engine API on a unix socket that records every
-// request it receives.
+// request it receives. Its event stream sends the recorded events, then
+// each one put on live, and stays open until the client hangs up.
 type fakeEngine struct {
 	mu       sync.Mutex
 	requests []string
+	live     chan string
+	// closed is told when an event stream ends.
+	closed chan struct{}
 }
 
 func (e *fakeEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -37,6 +41,9 @@ func (e *fakeEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			{"Id":"aaaaaaaaaaaabbbbbbbb","Names":["/n8n"],"Image":"n8nio/n8n","State":"running","Status":"Up 1 minute (unhealthy)","Labels":{"com.docker.compose.project":"n8n"}}
 		]`))
 	case r.URL.Path == "/events":
+		// As the engine: headers at once, the events it holds, then the
+		// live ones, until the client hangs up.
+		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"Type":"container","Action":"die","Actor":{"ID":"fedcba9876543210fedc","Attributes":{"name":"homeassistant","exitCode":"1","image":"ghcr.io/home-assistant/home-assistant:stable","SECRET_TOKEN":"x"}},"time":1791720000,"timeNano":1791720000000000000}
 {"Type":"container","Action":"start","Actor":{"ID":"fedcba9876543210fedc","Attributes":{"name":"homeassistant"}},"time":1791720002,"timeNano":1791720002000000000}
 {"Type":"container","Action":"health_status: unhealthy","Actor":{"ID":"aaaaaaaaaaaabbbbbbbb","Attributes":{"name":"n8n","com.docker.compose.project":"n8n"}},"time":1791720060,"timeNano":1791720060000000000}
@@ -46,6 +53,17 @@ func (e *fakeEngine) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 {"Type":"container","Action":"destroy","Actor":{"ID":"0123456789abcdef0123","Attributes":{"name":"lifeos-backup-1"}},"time":1791720073,"timeNano":1791720073000000000}
 {"Type":"container","Action":"exec_create: sh -c cat /run/secrets/token","Actor":{"ID":"0123456789abcdef0123","Attributes":{"name":"lifeos-backup-1"}},"time":1791720074,"timeNano":1791720074000000000}
 `))
+		w.(http.Flusher).Flush()
+		defer func() { e.closed <- struct{}{} }()
+		for {
+			select {
+			case line := <-e.live:
+				_, _ = w.Write([]byte(line + "\n"))
+				w.(http.Flusher).Flush()
+			case <-r.Context().Done():
+				return
+			}
+		}
 	case strings.HasSuffix(r.URL.Path, "/stats"):
 		_, _ = w.Write([]byte(`{"name":"/lifeos-backup-1","id":"0123456789abcdef0123","memory_stats":{"usage":157286400,"limit":8238493696,"stats":{"inactive_file":52428800,"active_file":1}}}`))
 	default:
@@ -67,14 +85,20 @@ func startGateway(t *testing.T) (*httptest.Server, *fakeEngine) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	engine := &fakeEngine{}
+	engine := &fakeEngine{live: make(chan string), closed: make(chan struct{}, 4)}
 	engineServer := &http.Server{Handler: engine}
 	go func() { _ = engineServer.Serve(listener) }()
 	t.Cleanup(func() { _ = engineServer.Close() })
-	gateway := httptest.NewServer(NewGateway(socket, nil))
+	// Short read and write timeouts, as the real server has longer ones:
+	// the event stream must outlive them.
+	gateway := httptest.NewUnstartedServer(NewGateway(socket, nil))
+	gateway.Config.ReadTimeout, gateway.Config.WriteTimeout = streamTimeouts, streamTimeouts
+	gateway.Start()
 	t.Cleanup(gateway.Close)
 	return gateway, engine
 }
+
+const streamTimeouts = 300 * time.Millisecond
 
 func TestTheGatewayAnswersItsThreeQuestions(t *testing.T) {
 	gateway, engine := startGateway(t)
@@ -94,31 +118,6 @@ func TestTheGatewayAnswersItsThreeQuestions(t *testing.T) {
 		t.Fatalf("containers = %+v", containers)
 	}
 
-	since, until := time.Unix(1791719000, 0), time.Unix(1791720100, 0)
-	events, err := client.Events(ctx, since, until)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The id (short), name, project, action, and a die's exit code; no
-	// other attribute, and no action outside the filter.
-	one := 1
-	wantEvents := []Event{
-		{Time: time.Unix(1791720000, 0).UTC(), ID: "fedcba987654", Name: "homeassistant", Action: "die", ExitCode: &one},
-		{Time: time.Unix(1791720002, 0).UTC(), ID: "fedcba987654", Name: "homeassistant", Action: "start"},
-		{Time: time.Unix(1791720060, 0).UTC(), ID: "aaaaaaaaaaaa", Name: "n8n", Project: "n8n", Action: "health_status: unhealthy"},
-		{Time: time.Unix(1791720070, 0).UTC(), ID: "0123456789ab", Name: "lifeos-backup-1", Project: "lifeos", Action: "kill"},
-		{Time: time.Unix(1791720071, 0).UTC(), ID: "0123456789ab", Name: "lifeos-backup-1", Project: "lifeos", Action: "die"},
-		{Time: time.Unix(1791720072, 0).UTC(), ID: "0123456789ab", Name: "lifeos-backup-1", Action: "stop"},
-		{Time: time.Unix(1791720073, 0).UTC(), ID: "0123456789ab", Name: "lifeos-backup-1", Action: "destroy"},
-	}
-	if !slices.EqualFunc(events, wantEvents, sameEvent) {
-		t.Fatalf("events = %+v", events)
-	}
-	raw, err := json.Marshal(events[0])
-	if err != nil || string(raw) != `{"time":"2026-10-11T12:00:00Z","id":"fedcba987654","name":"homeassistant","action":"die","exitCode":1}` {
-		t.Fatalf("the gateway's die event = %s, %v", raw, err)
-	}
-
 	memory, err := client.Memory(ctx, "0123456789ab")
 	if err != nil {
 		t.Fatal(err)
@@ -128,16 +127,77 @@ func TestTheGatewayAnswersItsThreeQuestions(t *testing.T) {
 		t.Fatalf("memory = %+v", memory)
 	}
 
-	// The engine is asked for exactly these container events.
-	if eventFilters != `{"type":["container"],"event":["die","start","health_status","kill","stop","destroy"]}` {
+	// The events: those the engine holds since then, then each as it
+	// happens, on one stream that stays open.
+	since := time.Now().Add(-15 * time.Minute)
+	before := time.Now()
+	stream, err := client.Events(ctx, since)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stream.Since().Before(before) {
+		t.Fatalf("the stream sees every event since %s, before it opened", stream.Since())
+	}
+	next := func() Event {
+		t.Helper()
+		event, err := stream.Next()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return event
+	}
+	// The id (short), name, project, action, and a die's exit code; no
+	// other attribute, and no action outside the filter (an exec, a
+	// health_status).
+	one, two := 1, 2
+	wantEvents := []Event{
+		{Time: time.Unix(1791720000, 0).UTC(), ID: "fedcba987654", Name: "homeassistant", Action: "die", ExitCode: &one},
+		{Time: time.Unix(1791720002, 0).UTC(), ID: "fedcba987654", Name: "homeassistant", Action: "start"},
+		{Time: time.Unix(1791720070, 0).UTC(), ID: "0123456789ab", Name: "lifeos-backup-1", Project: "lifeos", Action: "kill"},
+		{Time: time.Unix(1791720071, 0).UTC(), ID: "0123456789ab", Name: "lifeos-backup-1", Project: "lifeos", Action: "die"},
+		{Time: time.Unix(1791720072, 0).UTC(), ID: "0123456789ab", Name: "lifeos-backup-1", Action: "stop"},
+		{Time: time.Unix(1791720073, 0).UTC(), ID: "0123456789ab", Name: "lifeos-backup-1", Action: "destroy"},
+	}
+	var events []Event
+	for range wantEvents {
+		events = append(events, next())
+	}
+	if !slices.EqualFunc(events, wantEvents, sameEvent) {
+		t.Fatalf("events = %+v", events)
+	}
+	raw, err := json.Marshal(events[0])
+	if err != nil || string(raw) != `{"time":"2026-10-11T12:00:00Z","id":"fedcba987654","name":"homeassistant","action":"die","exitCode":1}` {
+		t.Fatalf("the gateway's die event = %s, %v", raw, err)
+	}
+	// A new event comes through as it happens, also past the gateway's
+	// read and write timeouts for its other answers.
+	time.Sleep(2 * streamTimeouts)
+	engine.live <- `{"Type":"container","Action":"exec_die","Actor":{"ID":"fedcba9876543210fedc","Attributes":{"name":"homeassistant","exitCode":"0"}},"timeNano":1791720100000000000}`
+	engine.live <- `{"Type":"container","Action":"die","Actor":{"ID":"fedcba9876543210fedc","Attributes":{"name":"homeassistant","exitCode":"2"}},"timeNano":1791720101000000000}`
+	if event := next(); !sameEvent(event, Event{Time: time.Unix(1791720101, 0).UTC(), ID: "fedcba987654", Name: "homeassistant", Action: "die", ExitCode: &two}) {
+		t.Fatalf("live event = %+v", event)
+	}
+	// Hanging up ends the engine's stream too.
+	if err := stream.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-engine.closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the engine's event stream stayed open after host-health hung up")
+	}
+
+	// The engine is asked for exactly these container events, filtered on
+	// its side, from since on and with no end.
+	if eventFilters != `{"type":["container"],"event":["die","start","kill","stop","destroy"]}` {
 		t.Fatalf("filters = %s", eventFilters)
 	}
 	requests := engine.seen()
 	filters := url.QueryEscape(eventFilters)
 	wantRequests := []string{
 		"GET /containers/json?all=1",
-		fmt.Sprintf("GET /events?filters=%s&since=1791719000&until=1791720100", filters),
 		"GET /containers/0123456789ab/stats?stream=false&one-shot=true",
+		fmt.Sprintf("GET /events?filters=%s&since=%d", filters, since.Unix()),
 	}
 	if !slices.Equal(requests, wantRequests) {
 		t.Fatalf("the engine saw %q\nwant %q", requests, wantRequests)
@@ -163,9 +223,10 @@ func TestTheGatewayRefusesEverythingElse(t *testing.T) {
 		{http.MethodGet, "/version", http.StatusNotFound},
 		{http.MethodGet, "/images/json", http.StatusNotFound},
 		{http.MethodGet, "/events", http.StatusBadRequest},
-		{http.MethodGet, "/events?since=10&until=5", http.StatusBadRequest},
-		{http.MethodGet, "/events?since=0&until=" + fmt.Sprint(time.Now().Unix()), http.StatusBadRequest},
-		{http.MethodGet, "/events?since=1&until=99999999999", http.StatusBadRequest},
+		{http.MethodGet, "/events?since=yesterday", http.StatusBadRequest},
+		{http.MethodGet, "/events?since=0", http.StatusBadRequest},
+		{http.MethodGet, "/events?since=" + fmt.Sprint(time.Now().Add(-25*time.Hour).Unix()), http.StatusBadRequest},
+		{http.MethodGet, "/events?since=99999999999", http.StatusBadRequest},
 	} {
 		request, _ := http.NewRequest(tc.method, gateway.URL+tc.path, nil)
 		response, err := http.DefaultClient.Do(request)

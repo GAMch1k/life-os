@@ -22,6 +22,7 @@ func newApp(t *testing.T, scenario string, sample bool) *httpserver.App {
 	fixture := health.Fixture{Scenario: scenario}
 	sampler := health.NewSampler(health.Options{Mode: "fixture", Host: fixture, Docker: fixture, Usage: fixture, Thresholds: health.DefaultThresholds(), Now: func() time.Time { return now }})
 	sampler.Prefill(fixture.History(now))
+	sampler.WatchEvents(t.Context())
 	if sample {
 		sampler.SampleOnce(context.Background())
 	}
@@ -68,6 +69,10 @@ func TestStatusOfAHealthyHost(t *testing.T) {
 	containers := got.Containers
 	if !containers.Available || containers.Total != 6 || containers.Running != 5 || containers.Unhealthy != 0 || len(containers.Top) != 5 || containers.Top[0].Name != "lifeos-whisper-1" || containers.MemorySampledAt == nil {
 		t.Fatalf("containers = %+v", containers)
+	}
+	// The made-up host's restart counts are complete from the first sample.
+	if !containers.RestartsComplete || containers.RestartsWatchedSince == nil || !containers.RestartsWatchedSince.Equal(now.Add(-15*time.Minute)) {
+		t.Fatalf("restarts complete %t since %v", containers.RestartsComplete, containers.RestartsWatchedSince)
 	}
 	if got.Thresholds.MemoryWarningPercent != 15 || got.Thresholds.DiskProblemBytes != 3<<30 || got.Thresholds.RestartLoopMinutes != 15 || len(got.Findings) != 0 {
 		t.Fatalf("thresholds = %+v, findings = %+v", got.Thresholds, got.Findings)
@@ -136,6 +141,14 @@ func TestContainersAndFindingsCarryTheTestStackAndExitCodes(t *testing.T) {
 	}
 	if len(containers.Top) != 1 || containers.Top[0].Name != "lifeos-whisper-1" {
 		t.Fatalf("top = %+v", containers.Top)
+	}
+	// No open event stream: no since, and not complete.
+	if containers.RestartsWatchedSince != nil || containers.RestartsComplete {
+		t.Fatalf("restarts since %v, complete %t", containers.RestartsWatchedSince, containers.RestartsComplete)
+	}
+	watching := toContainers(health.Containers{Available: true, RestartsSince: now.Add(-3 * time.Minute)})
+	if watching.RestartsWatchedSince == nil || !watching.RestartsWatchedSince.Equal(now.Add(-3*time.Minute)) || watching.RestartsComplete {
+		t.Fatalf("watching = %+v", watching)
 	}
 	finding := toFinding(health.Finding{Kind: health.ContainerRestarting, Severity: health.Warning, Subject: "runner", Project: "forgejo", Count: 3, ExitCode: &one, Minutes: 15})
 	if finding.Count == nil || *finding.Count != 3 || finding.ExitCode == nil || *finding.ExitCode != 1 || finding.Minutes == nil || *finding.Minutes != 15 {

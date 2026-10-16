@@ -113,11 +113,12 @@ func observations(status Status) []Observation {
 	result := make([]Observation, 0, len(status.Checks)+1)
 	for _, check := range status.Checks {
 		result = append(result, Observation{
-			Key:     checkKey(check.ID),
-			Title:   check.Title,
-			State:   parseState(check.State),
-			Summary: check.Summary,
-			Action:  check.Action,
+			Key:         checkKey(check.ID),
+			Title:       check.Title,
+			State:       parseState(check.State),
+			Summary:     check.Summary,
+			Action:      check.Action,
+			Provisional: check.Provisional,
 		})
 	}
 	return append(result, reachable())

@@ -36,8 +36,12 @@ func Evaluate(snapshot host.Snapshot, recent []Sample, containers Containers, do
 		findings = append(findings, Finding{Kind: LoadHigh, Severity: Warning, Load: snapshot.Load.Fifteen, CPUs: snapshot.CPUs})
 	}
 
-	if dockerSetUp && !containers.Available {
+	switch {
+	case dockerSetUp && !containers.Available:
 		findings = append(findings, Finding{Kind: ContainersUnavailable, Severity: Warning, Error: containers.Error})
+	case dockerSetUp && containers.EventsError != "":
+		// The list is read, but nothing counts restarts.
+		findings = append(findings, Finding{Kind: ContainersUnavailable, Severity: Warning, Error: "restart loops are not watched, their events cannot be followed: " + containers.EventsError})
 	}
 	for _, item := range containers.Items {
 		if item.TestStack {

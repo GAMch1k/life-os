@@ -121,6 +121,16 @@ type Containers struct {
 	Items     []ContainerState
 	// MemoryAt is when the memory readings were taken.
 	MemoryAt time.Time
+	// RestartsSince is when the open event stream began to see every
+	// event (zero while none is open), and RestartsComplete whether it
+	// has been open for the whole restart-loop window. Until then a
+	// restart count can be too low: the deaths before it are only those
+	// Docker still held, about the last two minutes.
+	RestartsSince    time.Time
+	RestartsComplete bool
+	// EventsError is set when the event stream has been closed for
+	// eventsDownFor: restart loops are then not watched.
+	EventsError string
 }
 
 // Counts are the containers by state. The test stack's containers count in

@@ -234,12 +234,24 @@ test.describe("Event Log", () => {
         .toBeGreaterThan(paneScroll);
       expect(await page.evaluate(() => window.scrollY)).toBe(pageScroll);
 
-      // Diagnostics copies exactly the event data it shows.
+      // Diagnostics copies the whole block: each field on its own line, then
+      // exactly the event data it shows. "Copy data only" copies the data.
+      const shownData = await selected.locator("pre").textContent();
       await selected.getByRole("button", { name: "Copy diagnostics" }).click();
-      await expect(selected.getByRole("status")).toHaveText("Copied");
+      await expect(
+        selected.getByRole("status").filter({ hasText: "Copied" }),
+      ).toHaveCount(1);
       const copied = await page.evaluate(() => navigator.clipboard.readText());
-      expect(copied).toBe(await selected.locator("pre").textContent());
-      expect(JSON.parse(copied).reason).toBe(reason);
+      const [fields, data] = copied.split("\n\nEvent data:\n");
+      expect(fields.split("\n")[0]).toBe(`Event id: ${eventId}`);
+      expect(fields).toMatch(/^Type: inbox\.human_review\.requested$/m);
+      expect(fields).toMatch(/^Recorded: \S+$/m);
+      expect(data).toBe(shownData);
+      expect(JSON.parse(data).reason).toBe(reason);
+      await selected.getByRole("button", { name: "Copy data only" }).click();
+      await expect
+        .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+        .toBe(shownData);
     } finally {
       await request.post(`/api/inbox/v1/inbox-items/${inbox.id}/discard`);
     }

@@ -46,6 +46,10 @@ type Check struct {
 	State   string `json:"state"`
 	Summary string `json:"summary"`
 	Action  string `json:"action"`
+	// Provisional marks an ok that cannot rule a warning out yet, such as
+	// the Server check while host-health has not watched restarts for its
+	// whole window: never a recovery.
+	Provisional bool `json:"provisional"`
 }
 
 // Status is the runtime status (RuntimeStatus) served at GET /api/status.

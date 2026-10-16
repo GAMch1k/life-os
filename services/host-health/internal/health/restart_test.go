@@ -173,20 +173,15 @@ func TestARestartPolicyLoopIsFound(t *testing.T) {
 	}
 }
 
-// eventDocker is a gateway with containers, events, and memory.
-type eventDocker struct {
-	fakeDocker
-	events []docker.Event
-}
-
-func (e *eventDocker) Events(_ context.Context, since, until time.Time) ([]docker.Event, error) {
-	var events []docker.Event
-	for _, event := range e.events {
-		if !event.Time.Before(since) && !event.Time.After(until) {
-			events = append(events, event)
-		}
+// upTo takes the events up to now off the front of events.
+func upTo(events *[]docker.Event, now time.Time) []docker.Event {
+	n := 0
+	for n < len(*events) && !(*events)[n].Time.After(now) {
+		n++
 	}
-	return events, nil
+	taken := (*events)[:n]
+	*events = (*events)[n:]
+	return taken
 }
 
 func TestIgnoredProjectsAreLeftOutOfFindings(t *testing.T) {
@@ -199,21 +194,23 @@ func TestIgnoredProjectsAreLeftOutOfFindings(t *testing.T) {
 			event(at(minutes, 1), "999999999999", "lifeos-verify-gateway-1", "lifeos-verify", "start"),
 		)
 	}
-	source := &eventDocker{
-		fakeDocker: fakeDocker{
-			containers: []docker.Container{
-				{ID: "999999999999", Name: "lifeos-verify-gateway-1", Project: "lifeos-verify", State: "running", Health: "unhealthy"},
-				{ID: "888888888888", Name: "lifeos-verify-whisper-1", Project: "lifeos-verify", State: "restarting"},
-				{ID: "777777777777", Name: "lifeos-whisper-1", Project: "lifeos", State: "running"},
-			},
-			memory: map[string]uint64{"999999999999": 3 << 30, "777777777777": 1 << 30},
+	ignoredStream, watchedStream := newFakeStream(start.Add(-20*time.Minute)), newFakeStream(start.Add(-20*time.Minute))
+	source := &fakeDocker{
+		containers: []docker.Container{
+			{ID: "999999999999", Name: "lifeos-verify-gateway-1", Project: "lifeos-verify", State: "running", Health: "unhealthy"},
+			{ID: "888888888888", Name: "lifeos-verify-whisper-1", Project: "lifeos-verify", State: "restarting"},
+			{ID: "777777777777", Name: "lifeos-whisper-1", Project: "lifeos", State: "running"},
 		},
-		events: events,
+		memory:  map[string]uint64{"999999999999": 3 << 30, "777777777777": 1 << 30},
+		streams: []*fakeStream{ignoredStream, watchedStream},
 	}
 	now := start.Add(-20 * time.Minute)
 	sampler := NewSampler(Options{Mode: "host", Host: &fakeHost{snapshot: snapshot(4)}, Docker: source, Thresholds: DefaultThresholds(), IgnoreProjects: []string{"lifeos-verify"}, Now: func() time.Time { return now }})
+	watch(t, sampler)
+	pending := slices.Clone(events)
 	for now.Before(start) {
 		now = now.Add(time.Minute)
+		ignoredStream.feed(t, upTo(&pending, now)...)
 		sampler.SampleOnce(context.Background())
 	}
 	status, _ := sampler.Status()
@@ -233,6 +230,10 @@ func TestIgnoredProjectsAreLeftOutOfFindings(t *testing.T) {
 	if source.memoryRead != 4 {
 		t.Fatalf("memory read %d times", source.memoryRead)
 	}
+	// Twenty minutes of watching: the counts are complete.
+	if !status.Containers.RestartsComplete {
+		t.Fatalf("restarts since %s not complete", status.Containers.RestartsSince)
+	}
 	marked := slices.IndexFunc(status.Containers.Items, func(item ContainerState) bool { return item.TestStack })
 	if marked != 0 || !status.Containers.Items[1].TestStack || status.Containers.Items[2].TestStack {
 		t.Fatalf("items = %+v", status.Containers.Items)
@@ -241,8 +242,11 @@ func TestIgnoredProjectsAreLeftOutOfFindings(t *testing.T) {
 	// Not ignored, the same loop is a finding.
 	now = start.Add(-20 * time.Minute)
 	watched := NewSampler(Options{Mode: "host", Host: &fakeHost{snapshot: snapshot(4)}, Docker: source, Thresholds: DefaultThresholds(), Now: func() time.Time { return now }})
+	watch(t, watched)
+	pending = slices.Clone(events)
 	for now.Before(start) {
 		now = now.Add(time.Minute)
+		watchedStream.feed(t, upTo(&pending, now)...)
 		watched.SampleOnce(context.Background())
 	}
 	status, _ = watched.Status()

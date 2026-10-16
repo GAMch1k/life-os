@@ -2,7 +2,7 @@ package health
 
 import (
 	"slices"
-	"strings"
+	"sync"
 	"time"
 
 	"github.com/GAMch1k/life-os/services/host-health/internal/docker"
@@ -27,7 +27,11 @@ const stopGrace = 5 * time.Minute
 // stops, and starts. So the verification stack's up and down and a
 // redeploy are not restart loops, while a crashing container under a
 // restart policy (die, start, die, start, …) is. No inspect is needed.
+//
+// The Watcher feeds it events as they happen while the Sampler reads it:
+// it is safe for concurrent use.
 type Tracker struct {
+	mu     sync.Mutex
 	window time.Duration
 	// deaths are each container's restarts within the window: when it died.
 	deaths map[string][]time.Time
@@ -39,8 +43,7 @@ type Tracker struct {
 	// exitCodes are each container's last counted death's exit code.
 	exitCodes map[string]int
 	seen      map[string]time.Time
-	// health is each container's latest health_status event.
-	health         map[string]healthEvent
+	// unhealthySince is when each container was first seen unhealthy.
 	unhealthySince map[string]time.Time
 	memory         map[string]uint64
 }
@@ -48,11 +51,6 @@ type Tracker struct {
 type death struct {
 	at       time.Time
 	exitCode *int
-}
-
-type healthEvent struct {
-	at     time.Time
-	status string
 }
 
 // NewTracker counts restarts within window.
@@ -64,7 +62,6 @@ func NewTracker(window time.Duration) *Tracker {
 		killed:         map[string]time.Time{},
 		exitCodes:      map[string]int{},
 		seen:           map[string]time.Time{},
-		health:         map[string]healthEvent{},
 		unhealthySince: map[string]time.Time{},
 		memory:         map[string]uint64{},
 	}
@@ -73,6 +70,8 @@ func NewTracker(window time.Duration) *Tracker {
 // Events takes container events, in the order they happened; one already
 // taken is ignored.
 func (t *Tracker) Events(events []docker.Event) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	ordered := slices.Clone(events)
 	slices.SortStableFunc(ordered, func(a, b docker.Event) int { return a.Time.Compare(b.Time) })
 	for _, event := range ordered {
@@ -105,23 +104,22 @@ func (t *Tracker) Events(events []docker.Event) {
 				delete(t.pending, id)
 			}
 			delete(t.killed, id)
-		case strings.HasPrefix(event.Action, "health_status"):
-			status := strings.TrimSpace(strings.TrimPrefix(event.Action, "health_status:"))
-			if previous, ok := t.health[id]; !ok || event.Time.After(previous.at) {
-				t.health[id] = healthEvent{at: event.Time, status: status}
-			}
 		}
 	}
 }
 
 // SetMemory records memory readings by container id.
 func (t *Tracker) SetMemory(readings map[string]uint64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.memory = readings
 }
 
 // Update applies the current container list at now and returns each
 // container with what is tracked of it.
 func (t *Tracker) Update(now time.Time, containers []docker.Container) []ContainerState {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.prune(now)
 	states := make([]ContainerState, 0, len(containers))
 	present := map[string]bool{}
@@ -137,11 +135,6 @@ func (t *Tracker) Update(now time.Time, containers []docker.Container) []Contain
 			if !ok {
 				since = now
 			}
-			// A health_status event says when it turned unhealthy, also
-			// for a container that was so before host-health started.
-			if event, ok := t.health[id]; ok && event.status == "unhealthy" && event.at.Before(since) {
-				since = event.at
-			}
 			t.unhealthySince[id] = since
 			state.UnhealthySince = since
 		} else {
@@ -154,11 +147,6 @@ func (t *Tracker) Update(now time.Time, containers []docker.Container) []Contain
 	for id := range t.unhealthySince {
 		if !present[id] {
 			delete(t.unhealthySince, id)
-		}
-	}
-	for id := range t.health {
-		if !present[id] {
-			delete(t.health, id)
 		}
 	}
 	return states

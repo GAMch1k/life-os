@@ -498,6 +498,13 @@ export type StatusCheck = {
   chart?: StatusChart;
   /** Smaller trends drawn side by side under it: Life OS's memory and CPU. */
   sideCharts?: StatusChart[];
+  /**
+   * An ok that cannot rule a warning out yet: the Server check while
+   * host-health has watched the containers' restarts for less than its
+   * window (after it starts). The monitor never takes it as a recovery
+   * (docs/services/monitor.md).
+   */
+  provisional?: boolean;
 };
 
 /** A sparkline: values from 0 to max, with a warning level. */
@@ -2400,14 +2407,42 @@ function memoryChart(
   };
 }
 
+const CLOCK_OPTIONS: Intl.DateTimeFormatOptions = {
+  hour: "2-digit",
+  minute: "2-digit",
+  timeZoneName: "short",
+};
+
+/**
+ * Whether host-health's restart counts can still be too low, said for the
+ * card: after host-health starts it counts restarts only from then on (and
+ * whatever Docker still held, about two minutes), so until it has watched
+ * the whole window, no restart-loop finding does not mean there is none.
+ * Undefined once they are complete, or without container facts.
+ */
+function restartWatch(status: HostStatus, timeZone: string) {
+  const { containers, thresholds } = status;
+  // An older host-health does not say: complete, as it then assumed.
+  if (!containers.available || containers.restartsComplete !== false)
+    return undefined;
+  if (!containers.restartsWatchedSince)
+    return "Not watching for restart loops yet: the container events are not followed.";
+  const since = Date.parse(containers.restartsWatchedSince);
+  const clock = dateTimeFormat(timeZone, CLOCK_OPTIONS);
+  return `Watching for restart loops since ${clock.format(since)}; the ${thresholds.restartLoopMinutes}-min count is complete at ${clock.format(since + thresholds.restartLoopMinutes * 60_000)}.`;
+}
+
 /**
  * The Server check: host-health's findings, worst first. Left out (null)
  * when host-health cannot be read while Services already reports it not
- * ready, so one outage is one alert.
+ * ready, so one outage is one alert. Without findings while the restart
+ * counts are not complete, it is ok but provisional: a restart loop that
+ * host-health has not seen again yet must not read as recovered.
  */
 export function serverCheck(
   server: { status: HostStatus; history: HostHistory | null } | null,
   services: RuntimeSignals["services"],
+  timeZone: string = DEFAULT_TIME_ZONE,
 ): StatusCheck | null {
   const base = { id: "server" as const, title: "Server" };
   if (server === null) {
@@ -2432,10 +2467,12 @@ export function serverCheck(
   const sideCharts = charts.length ? charts : undefined;
   const [first, ...others] = status.findings;
   if (!first) {
+    const watching = restartWatch(status, timeZone);
     return {
       ...base,
       state: "ok",
-      summary: `Running normally: ${formatBinaryBytes(status.memory.availableBytes)} of memory available, a 15-minute load of ${status.load.fifteen.toFixed(1)} on ${status.load.cpus} CPUs.`,
+      ...(watching ? { provisional: true } : {}),
+      summary: `Running normally: ${formatBinaryBytes(status.memory.availableBytes)} of memory available, a 15-minute load of ${status.load.fifteen.toFixed(1)} on ${status.load.cpus} CPUs.${watching ? ` ${watching}` : ""}`,
       facts,
       chart,
       sideCharts,
@@ -2534,7 +2571,7 @@ export function toRuntimeStatus(
       : [backupsCheck(signals.backups, signals.services, now, timeZone)]),
     ...(signals.server === undefined
       ? []
-      : [serverCheck(signals.server, signals.services)]),
+      : [serverCheck(signals.server, signals.services, timeZone)]),
     servicesCheck(signals.services),
   ].filter((check): check is StatusCheck => check !== null);
   return {
