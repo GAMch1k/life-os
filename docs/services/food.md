@@ -299,6 +299,17 @@ which reads the page and saves the recipe with `POST /v1/recipes` as
 `system:recipe-import`, the link as its `sourceUrl`, and the page's
 description and image link in its `note`.
 
+**Recipes to review.** A recipe whose `tags` hold `to-review` waits for the
+owner to look it over: a link's stub (a post nobody could read, saved under
+the owner's words), or a recipe the AI built from a capture's words or
+photo (P15-12). The AI saves those with `POST /v1/recipes` itself, as
+`agent:codex-inbox-processor`, with or without a `sourceUrl`, as the
+Dashboard's recipe form does (see [MCP and AI → Recipes without a
+link](mcp.md#recipes-without-a-link)). The owner edits the recipe on the
+Food page and takes the tag off. A title Food has is 409 `recipe_exists`: the AI's saves
+then try "<title> (2)" up to "(9)", unless the recipe of that title came
+from the same link.
+
 **Finding a recipe from words** (as the AI does for "plan lasagne for
 Friday"): normalise the words and compare them with `normalizedTitle`. A
 recipe whose normalised title equals them is the one (titles are unique);
@@ -558,8 +569,14 @@ purchases as Tasks:
   Human Review: "No recipe is called “борщ”. Add the recipe on the Food
   page, or say which items to buy."), and "buy what
   I need for this week's meals" those of the meals planned Monday to Sunday
-  of the capture's week. "Buy pasta" stays a list item. The AI never creates
-  or edits recipes.
+  of the capture's week. "Buy pasta" stays a list item. The AI never edits
+  recipes.
+- A recipe link is saved through recipe-import (`recipe_import`); "брауни
+  <reel>" saves the reel as a stub "Брауни" to review, a bare reel goes to
+  Human Review, and "send it to tasks" with a reel is only a Task. A recipe
+  typed, dictated, or photographed without a link is saved as the AI built
+  it (`recipe_save_draft`), tagged `to-review` (P15-12; see [MCP and AI →
+  Recipe links](mcp.md#recipe-links)).
 
 **Staples and running low** (P15-08; see [MCP and AI](mcp.md#staples-and-running-low)). The processor maps the owner's words onto the staple operations; the phrasing is the AI's, Food only offers them:
 
