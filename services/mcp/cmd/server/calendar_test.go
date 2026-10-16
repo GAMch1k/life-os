@@ -42,7 +42,7 @@ func calendarSession(t *testing.T, status int, response string) (*mcp.ClientSess
 	}))
 	t.Cleanup(calendar.Close)
 	server := mcp.NewServer(&mcp.Implementation{Name: "life-os-test", Version: "0"}, nil)
-	addCalendarTools(server, calendar.Client(), calendar.URL, activity.NewEmitter("", "mcp", nil))
+	addCalendarTools(server, calendar.Client(), calendar.URL, activity.NewEmitter("", "mcp", nil), testOwner(t))
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
 	ctx := context.Background()
 	if _, err := server.Connect(ctx, serverTransport, nil); err != nil {

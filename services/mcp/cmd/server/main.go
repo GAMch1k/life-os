@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"time"
+	_ "time/tzdata" // the owner's timezone resolves in any image
 
 	"github.com/GAMch1k/life-os/pkg/activity"
 	"github.com/GAMch1k/life-os/services/mcp/internal/config"
@@ -36,19 +37,6 @@ type inboxAction struct {
 	Candidates     []map[string]interface{} `json:"candidates,omitempty"`
 	ErrorSummary   *string                  `json:"errorSummary,omitempty"`
 }
-type taskAction struct {
-	IdempotencyKey string  `json:"idempotencyKey,omitempty"`
-	Title          string  `json:"title" jsonschema:"Task title"`
-	Notes          *string `json:"notes,omitempty"`
-	DueAt          *string `json:"dueAt,omitempty" jsonschema:"RFC3339 due time"`
-}
-type taskMutation struct {
-	TaskID     string  `json:"taskId" jsonschema:"Existing Task UUID selected after task_search"`
-	Title      *string `json:"title,omitempty"`
-	Notes      *string `json:"notes,omitempty"`
-	DueAt      *string `json:"dueAt,omitempty" jsonschema:"RFC3339 due time"`
-	ClearDueAt *bool   `json:"clearDueAt,omitempty"`
-}
 type Output struct {
 	Data map[string]any `json:"data"`
 }
@@ -64,14 +52,19 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	zone, err := ownerZone(cfg.TimeZone)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+	}
+	// Task and event times are shown, and moved, on the owner's clock.
+	o := owner{zone: zone, now: time.Now}
 	hc := &http.Client{Timeout: 10 * time.Second}
 	emitter := activity.NewEmitter(cfg.ActivityURL, "mcp", nil)
 	s := mcp.NewServer(&mcp.Implementation{Name: "life-os", Version: "0.1.0"}, nil)
 	add := func(n, d, b, p string) { addReadTool(s, hc, n, d, b, p) }
-	add("task_list", "List Tasks", cfg.TasksURL, "/v1/tasks?")
-	add("task_search", "Search Tasks by title or notes before mutating one", cfg.TasksURL, "/v1/tasks?")
 	add("inbox_list", "List Inbox items", cfg.InboxURL, "/v1/inbox-items?")
-	addCalendarTools(s, hc, cfg.CalendarURL, emitter)
+	addTaskTools(s, hc, cfg.TasksURL, emitter, o)
+	addCalendarTools(s, hc, cfg.CalendarURL, emitter, o)
 	addFinanceTools(s, hc, cfg.FinanceURL, emitter)
 	addFoodTools(s, hc, cfg.FoodURL, emitter)
 	// recipe-import fetches the page while it answers (up to 10 seconds),
@@ -117,26 +110,6 @@ func run(ctx context.Context) error {
 	})
 	mcp.AddTool(s, &mcp.Tool{Name: "inbox_resolve", Description: "Resolve an Inbox item after successful processing"}, func(ctx context.Context, req *mcp.CallToolRequest, in inboxAction) (*mcp.CallToolResult, Output, error) {
 		return post(ctx, hc, traceOf(req), cfg.InboxURL, "/v1/inbox-items/"+in.ItemID+"/resolve", nil)
-	})
-	mcp.AddTool(s, &mcp.Tool{Name: "task_create", Description: "Create a Life OS task"}, func(ctx context.Context, req *mcp.CallToolRequest, in taskAction) (*mcp.CallToolResult, Output, error) {
-		return audited(ctx, emitter, req, "task_create", in, func(trace activity.Trace) (*mcp.CallToolResult, Output, error) {
-			return post(ctx, hc, trace, cfg.TasksURL, "/v1/tasks", in, in.IdempotencyKey)
-		})
-	})
-	mcp.AddTool(s, &mcp.Tool{Name: "task_update", Description: "Rename, edit, reschedule, or unschedule one existing Task"}, func(ctx context.Context, req *mcp.CallToolRequest, in taskMutation) (*mcp.CallToolResult, Output, error) {
-		return audited(ctx, emitter, req, "task_update", in, func(trace activity.Trace) (*mcp.CallToolResult, Output, error) {
-			return patch(ctx, hc, trace, cfg.TasksURL, "/v1/tasks/"+in.TaskID, map[string]any{"title": in.Title, "notes": in.Notes, "dueAt": in.DueAt, "clearDueAt": in.ClearDueAt})
-		})
-	})
-	mcp.AddTool(s, &mcp.Tool{Name: "task_complete", Description: "Mark one existing Task completed"}, func(ctx context.Context, req *mcp.CallToolRequest, in taskMutation) (*mcp.CallToolResult, Output, error) {
-		return audited(ctx, emitter, req, "task_complete", in, func(trace activity.Trace) (*mcp.CallToolResult, Output, error) {
-			return post(ctx, hc, trace, cfg.TasksURL, "/v1/tasks/"+in.TaskID+"/complete", nil)
-		})
-	})
-	mcp.AddTool(s, &mcp.Tool{Name: "task_reopen", Description: "Reopen one completed Task"}, func(ctx context.Context, req *mcp.CallToolRequest, in taskMutation) (*mcp.CallToolResult, Output, error) {
-		return audited(ctx, emitter, req, "task_reopen", in, func(trace activity.Trace) (*mcp.CallToolResult, Output, error) {
-			return post(ctx, hc, trace, cfg.TasksURL, "/v1/tasks/"+in.TaskID+"/reopen", nil)
-		})
 	})
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return s }, nil))
