@@ -50,6 +50,11 @@ import {
   type Trace,
   type TraceNode,
 } from "@/lib/activity-log";
+import {
+  diagnosticFields,
+  diagnosticsText,
+  eventDataText,
+} from "@/lib/event-diagnostics";
 import { cn } from "@/lib/utils";
 
 const OUTCOME_STYLES: Record<string, string> = {
@@ -639,39 +644,33 @@ function TraceView({
         </section>
         <details className="rounded-lg border p-3 text-sm">
           <summary className="cursor-pointer font-medium">Diagnostics</summary>
-          <dl className="mt-3 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 text-xs">
-            {(
-              [
-                ["Event id", selected.id],
-                ["Type", selected.type],
-                ["Source", selected.source],
-                ["Subject", `${selected.subject.type}/${selected.subject.id}`],
-                ["Correlation", selected.correlationId],
-                ["Caused by", selected.causationId ?? "—"],
-                [
-                  "Actor",
-                  `${selected.actor.kind}${selected.actor.name ? `:${selected.actor.name}` : ""}`,
-                ],
-                ["Occurred", selected.occurredAt],
-                ["Recorded", selected.recordedAt],
-              ] as const
-            ).map(([label, value]) => (
-              <div className="contents" key={label}>
-                <dt className="text-muted-foreground">{label}</dt>
-                <dd className="font-mono break-all">{value}</dd>
-              </div>
-            ))}
-          </dl>
-          <div className="mt-3 flex items-center justify-between gap-2">
-            <span className="text-muted-foreground text-xs">Event data</span>
-            <CopyButton label="Copy diagnostics" targetId="diagnostics-data" />
+          <div className="mt-3 flex items-center justify-end">
+            <CopyButton
+              label="Copy diagnostics"
+              targetId="diagnostics"
+              text={diagnosticsText(selected)}
+            />
           </div>
-          <pre
-            className="bg-muted mt-1 max-h-64 overflow-auto rounded-md p-2 text-xs"
-            id="diagnostics-data"
-          >
-            {JSON.stringify(selected.data, null, 2)}
-          </pre>
+          <div id="diagnostics">
+            <dl className="mt-1 grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 text-xs">
+              {diagnosticFields(selected).map(([label, value]) => (
+                <div className="contents" key={label}>
+                  <dt className="text-muted-foreground">{label}</dt>
+                  <dd className="font-mono break-all">{value}</dd>
+                </div>
+              ))}
+            </dl>
+            <div className="mt-3 flex items-center justify-between gap-2">
+              <span className="text-muted-foreground text-xs">Event data</span>
+              <CopyButton label="Copy data only" targetId="diagnostics-data" />
+            </div>
+            <pre
+              className="bg-muted mt-1 max-h-64 overflow-auto rounded-md p-2 text-xs"
+              id="diagnostics-data"
+            >
+              {eventDataText(selected)}
+            </pre>
+          </div>
         </details>
       </CardContent>
     </Card>
