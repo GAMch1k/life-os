@@ -337,7 +337,9 @@ func TestPlanPromptListsTheRecentCapturesBeforeTheItem(t *testing.T) {
 	if !strings.HasPrefix(string(prompt), planPrompt) || clock < 0 || section < clock || !strings.HasSuffix(string(prompt), rc.note+`Inbox item: {"content":"Actually oat milk"}`) {
 		t.Fatalf("prompt = %s", prompt)
 	}
-	for _, rule := range []string{"Use the list only to understand what this item refers to or corrects", "Never plan an action again for an earlier capture", "food_update_shopping_item and shoppingItemId", "set ambiguous true and actions to []"} {
+	for _, rule := range []string{"Use the list only to understand what this item refers to or corrects", "Never plan an action again for an earlier capture", "food_update_shopping_item and shoppingItemId", "set ambiguous true and actions to []",
+		// P5-22: captures still on their way.
+		"raw or processing means it is still on its way"} {
 		if !strings.Contains(string(prompt), rule) {
 			t.Errorf("prompt lacks %q", rule)
 		}

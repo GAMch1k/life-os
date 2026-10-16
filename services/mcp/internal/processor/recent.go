@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -26,6 +27,8 @@ import (
 // which the processor accepts only for an id the list named; every change of
 // such an entity, however its target was found, is recorded with followsUp,
 // so Inbox links the two captures in Activity (inbox.item.followed_up).
+// The same read names the captures of the window still on their way, which
+// the capture is planned after (P5-22, see order.go).
 
 const (
 	// recentCaptureLimit is the most recent captures read for one capture.
@@ -47,7 +50,7 @@ const (
 // is added after the owner's time only when there are any, so the fixed
 // planPrompt stays a stable prefix and a capture without recent ones is
 // planned as before.
-const recentContextPrompt = "Recent captures (context only). The owner often corrects or adds to what they captured a few minutes earlier. The list below is the owner's other captures from the minutes before this item, oldest first, each with what Life OS already did for it: done names each entity (task, event, shopping_item, pantry_item, transaction, meal, staple, recipe) with its id, the change (created, updated, added, merged, bought, completed, cancelled, …), and a summary; state human_review means it waits for the owner's decision and nothing was done yet, and failed means nothing was done. Use the list only to understand what this item refers to or corrects. Never plan an action again for an earlier capture: what it asked for is done or waiting for the owner. When this item clearly corrects, changes, or undoes something done for a recent capture (\"actually oat milk\", \"make it 6\", \"no, tomorrow morning\"), change that entity instead of creating another one: a task with task_update (or task_complete or task_reopen) and taskId set to its id, with only the fields that change; an event with calendar_update and eventId set to its id, with only the fields that change (a new start keeps the event's length), or calendar_cancel with eventId (the owner approves every cancellation); a shopping_item with food_update_shopping_item and shoppingItemId set to its id, with only what changes: name (the new name as the owner wrote it, never translated, without the quantity), amount, note, or storeName. food_update_shopping_item may only use shoppingItemId, name, amount, note, and storeName. taskId, eventId, and shoppingItemId may be used this way besides the fields named above, only with an id listed in done for an entity of that kind; never guess one. Something new that continues a recent capture (\"add bread too\", \"and call Anna as well\") is a new action as usual (food_add_shopping_items with bread), never a change of the earlier entity. When the item asks to change or undo something that has no change tool here (a transaction, a meal, a pantry item, a staple, a recipe, or deleting a task), or it is unclear whether or which recent entity it means, set ambiguous true and actions to [] with a short reason. An item unrelated to the recent captures is planned exactly as if they were not there. "
+const recentContextPrompt = "Recent captures (context only). The owner often corrects or adds to what they captured a few minutes earlier. The list below is the owner's other captures from the minutes before this item, oldest first, each with what Life OS already did for it: done names each entity (task, event, shopping_item, pantry_item, transaction, meal, staple, recipe) with its id, the change (created, updated, added, merged, bought, completed, cancelled, …), and a summary; state human_review means it waits for the owner's decision and nothing was done yet, failed means nothing was done, and raw or processing means it is still on its way and nothing is done for it yet. Use the list only to understand what this item refers to or corrects. Never plan an action again for an earlier capture: what it asked for is done or waiting for the owner. When this item clearly corrects, changes, or undoes something done for a recent capture (\"actually oat milk\", \"make it 6\", \"no, tomorrow morning\"), change that entity instead of creating another one: a task with task_update (or task_complete or task_reopen) and taskId set to its id, with only the fields that change; an event with calendar_update and eventId set to its id, with only the fields that change (a new start keeps the event's length), or calendar_cancel with eventId (the owner approves every cancellation); a shopping_item with food_update_shopping_item and shoppingItemId set to its id, with only what changes: name (the new name as the owner wrote it, never translated, without the quantity), amount, note, or storeName. food_update_shopping_item may only use shoppingItemId, name, amount, note, and storeName. taskId, eventId, and shoppingItemId may be used this way besides the fields named above, only with an id listed in done for an entity of that kind; never guess one. Something new that continues a recent capture (\"add bread too\", \"and call Anna as well\") is a new action as usual (food_add_shopping_items with bread), never a change of the earlier entity. When the item asks to change or undo something that has no change tool here (a transaction, a meal, a pantry item, a staple, a recipe, or deleting a task) or what a capture still on its way asks for, or it is unclear whether or which recent entity it means, set ambiguous true and actions to [] with a short reason. An item unrelated to the recent captures is planned exactly as if they were not there. "
 
 // recentCapture is one capture GET /v1/recent-captures lists.
 type recentCapture struct {
@@ -113,23 +116,63 @@ func recentContextFrom(ctx context.Context) string {
 	return note
 }
 
-// recentContext reads the captures made in the ContextMinutes before item
-// and builds what its planning gets. With ContextMinutes 0 it is empty.
-func (r Runner) recentContext(ctx context.Context, item inboxItem) (recentContext, error) {
+// recentWindow is one read of the captures made in the ContextMinutes
+// before a capture: the finished ones, newest first, and those still on
+// their way, oldest first.
+type recentWindow struct {
+	Items      []recentCapture     `json:"items"`
+	Unfinished []unfinishedCapture `json:"unfinished"`
+}
+
+// unfinishedCapture is a capture of the window that processing has not
+// finished yet: raw (new, or waiting for a retry) or processing.
+type unfinishedCapture struct {
+	ID          string     `json:"id"`
+	Content     string     `json:"content"`
+	Source      string     `json:"source"`
+	State       string     `json:"state"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	NextRetryAt *time.Time `json:"nextRetryAt"`
+}
+
+// readRecent reads the captures made in the ContextMinutes before item.
+// With ContextMinutes 0 it reads nothing.
+func (r Runner) readRecent(ctx context.Context, item inboxItem) (recentWindow, error) {
 	if r.ContextMinutes <= 0 {
-		return recentContext{}, nil
+		return recentWindow{}, nil
 	}
 	raw, err := r.Tools.Call(ctx, "inbox_recent_captures", map[string]any{"query": fmt.Sprintf("before=%s&minutes=%d&limit=%d", url.QueryEscape(item.ID), r.ContextMinutes, recentCaptureLimit)})
 	if err != nil {
+		return recentWindow{}, err
+	}
+	var window recentWindow
+	if err := json.Unmarshal(toolData(raw), &window); err != nil {
+		return recentWindow{}, fmt.Errorf("decode recent captures: %w", err)
+	}
+	return window, nil
+}
+
+// context is what the capture's planning gets from the window: the finished
+// captures and those still on their way (only when it is planned without
+// waiting longer for them), in one list.
+func (w recentWindow) context(item inboxItem, minutes int, location *time.Location) recentContext {
+	captures := append([]recentCapture(nil), w.Items...)
+	for _, capture := range w.Unfinished {
+		captures = append(captures, recentCapture{ID: capture.ID, Content: capture.Content, Source: capture.Source, State: capture.State, CreatedAt: capture.CreatedAt})
+	}
+	// Newest first, as buildRecentContext takes them.
+	sort.SliceStable(captures, func(i, j int) bool { return captures[i].CreatedAt.After(captures[j].CreatedAt) })
+	return buildRecentContext(item, captures, minutes, location)
+}
+
+// recentContext reads the captures made in the ContextMinutes before item
+// and builds what its planning gets. With ContextMinutes 0 it is empty.
+func (r Runner) recentContext(ctx context.Context, item inboxItem) (recentContext, error) {
+	window, err := r.readRecent(ctx, item)
+	if err != nil {
 		return recentContext{}, err
 	}
-	var list struct {
-		Items []recentCapture `json:"items"`
-	}
-	if err := json.Unmarshal(toolData(raw), &list); err != nil {
-		return recentContext{}, fmt.Errorf("decode recent captures: %w", err)
-	}
-	return buildRecentContext(item, list.Items, r.ContextMinutes, r.location(item)), nil
+	return window.context(item, r.ContextMinutes, r.location(item)), nil
 }
 
 // buildRecentContext lists the recent captures (given newest first, as
@@ -203,6 +246,8 @@ func recentEntryOf(item inboxItem, capture recentCapture, location *time.Locatio
 		}
 	case capture.State == "failed":
 		entry.Note = "processing failed, nothing done"
+	case capture.State == "raw" || capture.State == "processing":
+		entry.Note = "still on its way, nothing done yet"
 	case capture.Outcome == nil:
 		entry.Note = "resolved by the owner"
 	case len(entry.Done) == 0:

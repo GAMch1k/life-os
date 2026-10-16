@@ -59,7 +59,11 @@ func main() {
 		fmt.Println(plan)
 		return
 	}
-	runner := processor.Runner{Planner: planner, Tools: &processor.MCPClient{URL: cfg.MCPURL}, Model: cfg.Profile(), DryRun: *dryRun, TimeZone: cfg.TimeZone, Media: processor.InboxMedia{URL: cfg.InboxURL}, ContextMinutes: cfg.ContextMinutes}
+	runner := processor.Runner{Planner: planner, Tools: &processor.MCPClient{URL: cfg.MCPURL}, Model: cfg.Profile(), DryRun: *dryRun, TimeZone: cfg.TimeZone, Media: processor.InboxMedia{URL: cfg.InboxURL}, ContextMinutes: cfg.ContextMinutes,
+		// A capture waits for the earlier captures of its context window at
+		// most as long as an abandoned attempt takes to be recovered.
+		Order: processor.NewCaptureOrder(cfg.StaleAfter),
+		Logf:  func(format string, args ...any) { fmt.Fprintf(os.Stderr, format+"\n", args...) }}
 	if *serve {
 		monitor := processor.NewMonitor(cfg.Model)
 		runner.Owner = instanceID()

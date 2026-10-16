@@ -46,6 +46,13 @@ type Runner struct {
 	// ContextMinutes is how far back Codex sees the owner's earlier captures
 	// and what was done for them (see recent.go); 0 plans without them.
 	ContextMinutes int
+	// Order makes a capture wait, for a bounded time, until the earlier
+	// captures of its ContextMinutes have finished (see order.go); nil
+	// plans each capture when its turn comes.
+	Order *CaptureOrder
+	// Logf, when set, receives what the runner has to say beyond the
+	// attempts it records (a capture that waits, or stopped waiting).
+	Logf func(format string, args ...any)
 }
 type inboxList struct {
 	Items []inboxItem `json:"items"`
@@ -75,11 +82,15 @@ type Proposal struct {
 	ItemID  string          `json:"itemId"`
 	Actions []plannedAction `json:"actions"`
 	Reason  string          `json:"reason,omitempty"`
+	// waiting: left raw for a later poll, behind earlier captures.
+	waiting bool
 }
 
 func (r Runner) Run(ctx context.Context) ([]Proposal, error) {
-	// Only raw items with no scheduled retry, or whose retry time has come.
-	raw, err := r.Tools.Call(ctx, "inbox_list", map[string]any{"query": "state=raw&due=true&limit=50"})
+	// Only raw items with no scheduled retry, or whose retry time has come,
+	// the earliest first: a backlog larger than the page is planned in the
+	// order it was captured.
+	raw, err := r.Tools.Call(ctx, "inbox_list", map[string]any{"query": "state=raw&due=true&order=oldest&limit=50"})
 	if err != nil {
 		return nil, err
 	}
@@ -91,18 +102,63 @@ func (r Runner) Run(ctx context.Context) ([]Proposal, error) {
 	// the capture it follows and sees what was done for it.
 	sort.SliceStable(items.Items, func(i, j int) bool { return items.Items[i].CreatedAt.Before(items.Items[j].CreatedAt) })
 	proposals := make([]Proposal, 0, len(items.Items))
+	// waiting is when the captures of this poll that wait were made: a
+	// later capture of the same window waits too, without a read.
+	var waiting []time.Time
 	for _, item := range items.Items {
+		if !r.DryRun && !approved(item) && r.behindWaiting(item, waiting) {
+			if decision, held := r.Order.hold(item.ID); held {
+				if decision.first {
+					r.logf("capture %s waits for the captures just before it, which are still on their way", item.ID)
+				}
+				waiting = append(waiting, item.CreatedAt)
+				proposals = append(proposals, Proposal{ItemID: item.ID, Reason: waitingReason, waiting: true})
+				continue
+			}
+		}
 		proposal, err := r.process(ctx, item)
 		if err != nil {
 			return nil, err
+		}
+		if proposal.waiting {
+			waiting = append(waiting, item.CreatedAt)
 		}
 		proposals = append(proposals, proposal)
 	}
 	return proposals, nil
 }
+
+// approved reports whether the item carries an action the owner approved
+// in Human Review, which runs without Codex.
+func approved(item inboxItem) bool {
+	_, err := approvedReviewPlan(item)
+	return err == nil
+}
+
 func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 	if r.DryRun {
 		return r.plan(ctx, item)
+	}
+	// What was done for the captures just before this one, and which of
+	// them are still on their way: read first, since the capture is planned
+	// only after those (order.go). An approved action is not planned.
+	window, windowErr := r.readRecent(ctx, item)
+	// waitNote says, on the attempt, that the capture was planned without
+	// waiting longer for the captures before it.
+	var waitNote *string
+	if windowErr == nil && !approved(item) {
+		decision := r.Order.decide(item.ID, len(window.Unfinished))
+		if decision.wait {
+			if decision.first {
+				r.logf("capture %s waits for %d earlier capture(s) still on their way: %s", item.ID, len(window.Unfinished), unfinishedNote(window.Unfinished, r.location(item)))
+			}
+			return Proposal{ItemID: item.ID, Reason: waitingReason, waiting: true}, nil
+		}
+		if decision.overdue > 0 {
+			note := overdueNote(window.Unfinished, decision.overdue, r.location(item))
+			r.logf("capture %s %s", item.ID, note)
+			waitNote = &note
+		}
 	}
 	key := idempotencyKey(item)
 	completed, attemptKey, previous, err := r.nextAttemptKey(ctx, item.ID, key)
@@ -144,10 +200,10 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 	// a follow-up ("actually oat milk") would duplicate what they did, so
 	// the capture waits, as without its images. An approved change ("no,
 	// cancel the coffee") needs it only to link what it changes.
-	recent, recentErr := r.recentContext(ctx, item)
-	if recentErr != nil {
-		return Proposal{}, r.retryLater(ctx, item.ID, started.ID, nil, "recent captures unavailable: "+recentErr.Error(), failureDependency, previous)
+	if windowErr != nil {
+		return Proposal{}, r.retryLater(ctx, item.ID, started.ID, nil, "recent captures unavailable: "+windowErr.Error(), failureDependency, previous)
 	}
+	recent := window.context(item, r.ContextMinutes, r.location(item))
 	// fromCodex says the plan is Codex's, not an approved Human Review action.
 	fromCodex := err != nil
 	if err == nil {
@@ -510,7 +566,7 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 		audit["result"] = json.RawMessage(toolData(result))
 		actions = append(actions, audit)
 	}
-	if err := r.record(ctx, item.ID, started.ID, "processed", actions, nil); err != nil {
+	if err := r.record(ctx, item.ID, started.ID, "processed", actions, waitNote); err != nil {
 		return Proposal{}, err
 	}
 	completedEvent := activity.EventID("inbox.processing.completed", started.ID)
