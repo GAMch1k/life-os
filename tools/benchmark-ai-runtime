@@ -7,7 +7,9 @@
 # with that profile, seeds Tasks, Calendar events, a shopping list item, a
 # recipe, a pantry item, and a planned meal, submits the same captures
 # (EN/RU/DE text, including completions of Tasks titled in another of those
-# languages, changes to existing events, cash spending, groceries for the
+# languages, changes to existing events, moves of Tasks and events relative
+# to the time they have, a question about when a Task is due, cash
+# spending, groceries for the
 # shopping list and the pantry, meals and a recipe's ingredients, recipe
 # links, and photos of a letter and receipts, through the Inbox API the
 # Dashboard uses, plus one recorded voice note through Voice
@@ -113,6 +115,12 @@ seed_event() {
   end=$(TZ=$zone date -d "$day $4" +%Y-%m-%dT%H:%M:%S%:z)
   post_json /api/calendar/v1/events "$(jq -n --arg title "$1" --arg start "$start" --arg end "$end" '{title: $title, allDay: false, startAt: $start, endAt: $end}')" | jq -r '.id'
 }
+# seed_due <title> <YYYY-MM-DD> <HH:MM>: a Task due then, in Berlin.
+seed_due() {
+  local due
+  due=$(TZ=$zone date -d "$2 $3" +%Y-%m-%dT%H:%M:%S%:z)
+  post_json /api/tasks/v1/tasks "$(jq -n --arg title "$1" --arg due "$due" '{title: $title, dueAt: $due}')" | jq -r '.id'
+}
 # at_local <RFC3339> <YYYY-MM-DD> <HH:MM>: whether the instant is that Berlin time.
 at_local() { [ -n "$1" ] && [ "$(date -d "$1" +%s)" = "$(TZ=$zone date -d "$2 $3" +%s)" ]; }
 captured_day() { TZ=$zone date -d "$(item "$1" | jq -r '.createdAt')" +%F; }
@@ -158,12 +166,26 @@ run_profile() {
   batteries=$(seed "Купить батарейки")
   plants=$(seed "Water the plants")
   fenster=$(seed "Fenster putzen")
+  # Tasks due at a time, which captures move or ask about without saying
+  # the time (P5-21): the vet in three days at 15:30, the expense report on
+  # the Monday after the coming Friday at 09:15 (never on that Friday), and
+  # the parking permit in five days at 11:00.
+  local vet expense parking parking_before seed_today
+  seed_today=$(TZ=$zone date +%F)
+  vet=$(seed_due "Call the vet" "$(date -u -d "$seed_today + 3 days" +%F)" 15:30)
+  expense=$(seed_due "Submit the expense report" "$(date -u -d "$(coming 5 "$seed_today") + 3 days" +%F)" 09:15)
+  parking=$(seed_due "Renew the parking permit" "$(date -u -d "$seed_today + 5 days" +%F)" 11:00)
+  parking_before=$(task "$parking" | jq -c '{dueAt, completed}')
   # Existing Calendar events the captures refer to.
   local physio team anna haircut team_before anna_before
   physio=$(seed_event "Physiotherapy" 3 14:00 15:30)
   team=$(seed_event "Team meeting" 2 10:00 11:00)
   anna=$(seed_event "Meeting with Anna" 4 16:00 16:30)
   haircut=$(seed_event "Haircut" 5 12:00 12:30)
+  # Moved an hour later by a capture that names no time (P5-21).
+  local budget budget_day
+  budget=$(seed_event "Budget review" 3 13:00 13:45)
+  budget_day=$(TZ=$zone date -d "$(event "$budget" | jq -r '.startAt')" +%F)
   team_before=$(event "$team" | jq -c '{startAt, endAt, status}')
   anna_before=$(event "$anna" | jq -c '{startAt, endAt, status}')
   # On the shopping list in Russian; an English capture marks it bought.
@@ -246,6 +268,10 @@ run_profile() {
   ids[cal_reschedule]=$(capture "Move my physiotherapy appointment to tomorrow at 9:00.")
   ids[cal_ambiguous]=$(capture "Move my meeting to Friday at 15:00.")
   ids[cal_cancel]=$(capture "Cancel my haircut appointment.")
+  ids[move_task_tomorrow]=$(capture "Move the vet task to tomorrow, same time.")
+  ids[move_event_hour]=$(capture "Push the budget review an hour later.")
+  ids[task_due_question]=$(capture "What time is the parking permit renewal due?")
+  ids[move_task_friday]=$(capture "Move the expense report to Friday.")
   ids[fin_cash_en]=$(capture "Spent 12 euros at the bakery.")
   ids[fin_cash_ru]=$(capture "Потратил 7,50 евро на кофе.")
   ids[fin_card]=$(capture "Paid 45 euros by card at REWE.")
@@ -373,6 +399,30 @@ run_profile() {
   # cal_cancel: an AI-proposed cancellation waits for the owner, nothing is cancelled.
   s=$(state "${ids[cal_cancel]}")
   check cal_cancel "$([ "$s" = human_review ] && [ "$(review_ids "${ids[cal_cancel]}")" = "[\"$haircut\"]" ] && [ "$(event "$haircut" | jq -r .status)" = active ] && echo 1 || echo 0)" "state=$s candidates=$(review_ids "${ids[cal_cancel]}") haircut=$(event "$haircut" | jq -r .status)"
+  # Moves relative to the time a Task or event has, which the capture does
+  # not say (P5-21). move_task_tomorrow: the vet, due in three days at
+  # 15:30, is due at 15:30 on the day after capture.
+  s=$(state "${ids[move_task_tomorrow]}")
+  due=$(task "$vet" | jq -r '.dueAt // empty')
+  day=$(date -u -d "$(captured_day "${ids[move_task_tomorrow]}") + 1 day" +%F)
+  check move_task_tomorrow "$([ "$s" = resolved ] && at_local "$due" "$day" 15:30 && [ "$(tasks_matching vet)" = 1 ] && echo 1 || echo 0)" "state=$s dueAt=$due want=${day}T15:30 $zone"
+  # move_event_hour: the budget review, 13:00-13:45, is 14:00-14:45 the same
+  # day; its 45 minutes are kept.
+  s=$(state "${ids[move_event_hour]}")
+  moved=$(event "$budget")
+  check move_event_hour "$([ "$s" = resolved ] && at_local "$(jq -r '.startAt' <<<"$moved")" "$budget_day" 14:00 && at_local "$(jq -r '.endAt' <<<"$moved")" "$budget_day" 14:45 && echo 1 || echo 0)" "state=$s startAt=$(jq -r '.startAt' <<<"$moved") endAt=$(jq -r '.endAt' <<<"$moved") want=${budget_day}T14:00-14:45 $zone"
+  # task_due_question: a capture cannot answer, so a question changes and
+  # creates nothing and goes to Human Review.
+  s=$(state "${ids[task_due_question]}")
+  check task_due_question "$([ "$s" = human_review ] && [ "$(task "$parking" | jq -c '{dueAt, completed}')" = "$parking_before" ] && [ "$(tasks_matching parking)" = 1 ] && echo 1 || echo 0)" "state=$s reason=\"$(item "${ids[task_due_question]}" | jq -r '.processingMetadata.humanReview.errorSummary // ""')\" parking=$(task "$parking" | jq -c '{dueAt, completed}')"
+  # move_task_friday: "to Friday" is the coming Friday from the capture
+  # (captured on a Friday: that day or a week later), and the expense
+  # report keeps its 09:15.
+  s=$(state "${ids[move_task_friday]}")
+  local move_friday
+  due=$(task "$expense" | jq -r '.dueAt // empty')
+  move_friday=$(coming 5 "$(captured_day "${ids[move_task_friday]}")")
+  check move_task_friday "$([ "$s" = resolved ] && { at_local "$due" "$move_friday" 09:15 || at_local "$due" "$(date -u -d "$move_friday + 7 days" +%F)" 09:15; } && echo 1 || echo 0)" "state=$s dueAt=$due want=${move_friday}T09:15 $zone"
   s=$(state "${ids[voice_complete]}")
   check voice_complete "$([ "$s" = resolved ] && [ "$(task "$chicken" | jq -r .completed)" = true ] && [ "$(tasks_matching chicken)" = 1 ] && echo 1 || echo 0)" "state=$s transcript=\"$(item "${ids[voice_complete]}" | jq -r .content)\" completed=$(task "$chicken" | jq -r .completed)"
   # Cash spending goes to the built-in Cash account with the amount in cents;
@@ -555,15 +605,15 @@ run_profile() {
   check budget_plan_eating_out "$(jq -e --arg eating "$plan_eating" '[.result.suggestions[]? | select(.categoryId == $eating and .monthlySaving.amount > 0)] | length >= 1' <<<"$budget_plan" >/dev/null && echo 1 || echo 0)" "suggestions=$(jq -c '[.result.suggestions[]? | {title, category: .categoryName, merchants, saving: .monthlySaving.amount}]' <<<"$budget_plan")"
   check no_extra_recipes "$([ "$(jq '.items | length' <<<"$recipes")" = 3 ] && echo 1 || echo 0)" "recipes=$(jq -c '[.items[].title]' <<<"$recipes") (expected 3)"
   check no_extra_meals "$([ "$(jq '.items | length' <<<"$plan")" = $((1 + ${#saturdays[@]})) ] && echo 1 || echo 0)" "meals=$(jq -c '[.items[] | {date, slot, title}]' <<<"$plan") (expected $((1 + ${#saturdays[@]})))"
-  # No fallback or invented entities: ten seeds plus three creates, the
-  # flash drive, the call to the plumber, and the Finanzamt letter.
+  # No fallback or invented entities: thirteen seeds plus three creates,
+  # the flash drive, the call to the plumber, and the Finanzamt letter.
   local total
   total=$(api "$gateway/api/tasks/v1/tasks?limit=100" | jq '.items | length')
-  check no_extra_tasks "$([ "$total" = 16 ] && echo 1 || echo 0)" "tasks=$total (expected 16): $(api "$gateway/api/tasks/v1/tasks?limit=100" | jq -c '[.items[].title]')"
-  # Four seeded events plus the one created, none cancelled.
+  check no_extra_tasks "$([ "$total" = 19 ] && echo 1 || echo 0)" "tasks=$total (expected 19): $(api "$gateway/api/tasks/v1/tasks?limit=100" | jq -c '[.items[].title]')"
+  # Five seeded events plus the one created, none cancelled.
   local all
   all=$(api "$gateway/api/calendar/v1/events?from=2026-01-01T00:00:00Z&to=$(date -u -d '+60 days' +%Y-%m-%dT%H:%M:%SZ)&includeCancelled=true&limit=100")
-  check no_extra_events "$([ "$(jq '.items | length' <<<"$all")" = 5 ] && [ "$(jq '[.items[] | select(.status != "active")] | length' <<<"$all")" = 0 ] && echo 1 || echo 0)" "events=$(jq -c '[.items[] | {title, status}]' <<<"$all") (expected 5 active)"
+  check no_extra_events "$([ "$(jq '.items | length' <<<"$all")" = 6 ] && [ "$(jq '[.items[] | select(.status != "active")] | length' <<<"$all")" = 0 ] && echo 1 || echo 0)" "events=$(jq -c '[.items[] | {title, status}]' <<<"$all") (expected 6 active)"
 
   # Codex's own usage and the processing time of each planning run.
   local status runtime
