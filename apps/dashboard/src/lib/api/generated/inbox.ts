@@ -158,7 +158,10 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** Record the outcome of an Inbox processing attempt */
+        /**
+         * Record the outcome of an Inbox processing attempt
+         * @description A processed attempt may name, in `duplicateOf`, the earlier capture this one repeats (the same text and images, already resolved or waiting for Human Review), when it did nothing for that reason; Inbox then records `inbox.item.repeated` about that capture. A processed attempt's action that changed what an earlier capture did may name that capture as `followsUp` (`inbox.item.followed_up`).
+         */
         patch: operations["updateProcessingAttempt"];
         trace?: never;
     };
@@ -251,7 +254,7 @@ export interface paths {
         };
         /**
          * List the captures made shortly before one capture, with what processing did
-         * @description The processor's context for a follow-up capture ("actually oat milk" after "buy milk"): the owner's other captures, from every source, made in the `minutes` before the capture `before` was made (not that capture itself), newest first. Only captures processing has settled are listed: resolved, waiting for Human Review, or failed; raw, processing, and discarded captures are left out. Each carries its latest finished processing attempt (`outcome`): its status, error summary, and recorded actions, which name what was created or changed (the action's tool, arguments, and the owning service's result). `unfinished` lists, oldest first and at most `limit`, the captures of the same window that processing has not finished yet (raw, including those waiting for a retry, or processing): the processor plans a capture only after them, for a bounded time.
+         * @description The processor's context for a follow-up capture ("actually oat milk" after "buy milk"): the owner's other captures, from every source, made in the `minutes` before the capture `before` was made (not that capture itself), newest first. Only captures processing has settled are listed: resolved, waiting for Human Review, or failed; raw, processing, and discarded captures are left out. Each carries its latest finished processing attempt (`outcome`): its status, error summary, and recorded actions, which name what was created or changed (the action's tool, arguments, and the owning service's result). Each also names its images (`mediaReferences`), so the processor can tell a capture sent again (the same text and images) from another. `unfinished` lists, oldest first and at most `limit`, the captures of the same window that processing has not finished yet (raw, including those waiting for a retry, or processing): the processor plans a capture only after them, for a bounded time.
          */
         get: operations["listRecentCaptures"];
         put?: never;
@@ -416,6 +419,11 @@ export interface components {
              */
             nextRetryAt?: string | null;
             retryReason?: string | null;
+            /**
+             * Format: uuid
+             * @description Only with status processed, and not the capture itself (400 otherwise): the earlier capture this one repeats, the same text and images, already resolved or waiting for Human Review, so the attempt did nothing. Inbox records inbox.item.repeated about that capture (nothing for a capture it does not have).
+             */
+            duplicateOf?: string | null;
         };
         CreateHumanReviewRequest: {
             /** Format: uuid */
@@ -442,6 +450,8 @@ export interface components {
             state: "resolved" | "human_review" | "failed";
             /** @description The capture's workflow correlation id (see InboxItem.correlationId). */
             correlationId: string;
+            /** @description The capture's images, as inbox-media:<sha256> references (see InboxItem.mediaReferences); empty for none. */
+            mediaReferences: string[];
             /** Format: date-time */
             createdAt: string;
             /** Format: date-time */

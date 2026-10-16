@@ -10,6 +10,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -190,6 +192,21 @@ func TestRecentCapturesListTheSettledCapturesBeforeOne(t *testing.T) {
 	}
 	if created, err := time.Parse(time.RFC3339, items[3]["createdAt"].(string)); err != nil || !created.Equal(minutes(-15)) {
 		t.Errorf("createdAt = %v (%v), want %v", items[3]["createdAt"], err, minutes(-15))
+	}
+	// Each names its images, none as an empty list (older captures stored
+	// JSON null), so the processor can tell a capture sent again (P5-23).
+	photo := "inbox-media:" + strings.Repeat("ab", 32)
+	if _, err := api.pool.Exec(context.Background(), `UPDATE inbox_items SET media_references = jsonb_build_array($1::text) WHERE id = $2`, photo, review); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.pool.Exec(context.Background(), `UPDATE inbox_items SET media_references = 'null'::jsonb WHERE id = $1`, failed); err != nil {
+		t.Fatal(err)
+	}
+	items = api.recent("before=" + followUp)
+	for index, want := range [][]any{{}, {photo}, {}, {}} {
+		if got, ok := items[index]["mediaReferences"].([]any); !ok || !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: mediaReferences = %#v, want %v", items[index]["content"], items[index]["mediaReferences"], want)
+		}
 	}
 
 	// The latest captures only, and another window.
@@ -376,6 +393,72 @@ func TestProcessedFollowUpLinksTheEarlierCapture(t *testing.T) {
 	api.finish(other, api.attempt(other, "op-other"), "retryable", []map[string]any{{"tool": "task_update", "followsUp": map[string]any{"inboxItemId": milk}}}, "later")
 	if got := len(api.events.ofType("inbox.item.followed_up")); got != len(events) {
 		t.Errorf("a retryable attempt recorded follow-ups: %d events, want %d", got, len(events))
+	}
+}
+
+// TestProcessedRepeatLinksTheEarlierCapture covers duplicateOf (P5-23): a
+// capture sent again, which the processor resolved without doing anything,
+// names the capture it repeats.
+func TestProcessedRepeatLinksTheEarlierCapture(t *testing.T) {
+	api := newRecentAPI(t)
+	now := time.Now().UTC()
+	lemons := api.capture("Buy lemons.", "web", now.Add(-time.Minute))
+	api.processed(lemons, []map[string]any{{"tool": "food_add_shopping_items"}})
+	again := api.capture("Buy lemons.", "voice", now)
+	attemptID := api.attempt(again, "op-again")
+	api.finish(again, attemptID, "processing", nil, "")
+	body := map[string]any{"status": "processed", "actions": []any{}, "errorSummary": "Same as the capture from 17:09, already done", "duplicateOf": lemons}
+	attempt := api.call(http.MethodPatch, "/v1/inbox-items/"+again+"/processing-attempts/"+attemptID, body)
+	if attempt["status"] != "processed" || attempt["errorSummary"] != "Same as the capture from 17:09, already done" {
+		t.Fatalf("attempt = %v", attempt)
+	}
+	if actions, _ := attempt["actions"].([]any); len(actions) != 0 {
+		t.Fatalf("actions = %v, want none", attempt["actions"])
+	}
+	// The processor repeats a record it is unsure went through: the event
+	// has the same id, so Activity keeps one.
+	api.call(http.MethodPatch, "/v1/inbox-items/"+again+"/processing-attempts/"+attemptID, body)
+	api.call(http.MethodPost, "/v1/inbox-items/"+again+"/resolve", nil)
+
+	events := api.events.ofType("inbox.item.repeated")
+	if len(events) != 2 || events[0].body["id"] != events[1].body["id"] {
+		t.Fatalf("repeated events = %v, want the same event twice", events)
+	}
+	event := events[0].body
+	subject, _ := event["subject"].(map[string]any)
+	data, _ := event["data"].(map[string]any)
+	completed := activity.EventID("inbox.processing.completed", attemptID).String()
+	if subject["type"] != "inbox_item" || subject["id"] != lemons || event["correlationId"] != again || event["causationId"] != completed || event["outcome"] != "succeeded" {
+		t.Errorf("event = %v, want it about the earlier capture, in the repeat's workflow, caused by its completed processing", event)
+	}
+	want := map[string]any{"inboxItemId": again, "attemptId": attemptID, "content": "Buy lemons.", "repeatedItemId": lemons, "repeatedCorrelationId": lemons, "repeatedContent": "Buy lemons.", "repeatedState": "resolved"}
+	if !reflect.DeepEqual(data, want) {
+		t.Errorf("data = %v, want %v", data, want)
+	}
+	if event["summary"] != "“Buy lemons.” repeated “Buy lemons.”: nothing done again" {
+		t.Errorf("summary = %v", event["summary"])
+	}
+	if actor, _ := event["actor"].(map[string]any); actor["kind"] != "agent" || actor["name"] != "codex-inbox-processor" {
+		t.Errorf("actor = %v", event["actor"])
+	}
+
+	// Only a processed attempt names a repeat, never of the capture itself;
+	// a capture Inbox does not have is not linked.
+	other := api.capture("Something else", "web", now)
+	otherAttempt := api.attempt(other, "op-other")
+	for name, update := range map[string]map[string]any{
+		"retryable": {"status": "retryable", "actions": []any{}, "duplicateOf": lemons},
+		"review":    {"status": "human_review", "actions": []any{}, "duplicateOf": lemons},
+		"itself":    {"status": "processed", "actions": []any{}, "duplicateOf": other},
+		"not a id":  {"status": "processed", "actions": []any{}, "duplicateOf": "lemons"},
+	} {
+		if status, answer := api.request(http.MethodPatch, "/v1/inbox-items/"+other+"/processing-attempts/"+otherAttempt, update); status != http.StatusBadRequest {
+			t.Errorf("%s: %d %v, want 400", name, status, answer)
+		}
+	}
+	api.call(http.MethodPatch, "/v1/inbox-items/"+other+"/processing-attempts/"+otherAttempt, map[string]any{"status": "processed", "actions": []any{}, "duplicateOf": "0f3c2a10-7d4e-4b8a-9c61-2e5f8a9b1c0d"})
+	if got := len(api.events.ofType("inbox.item.repeated")); got != 2 {
+		t.Errorf("an unknown capture was linked: %d events", got)
 	}
 }
 

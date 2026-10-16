@@ -103,6 +103,14 @@ func TestAttemptUpdateForwardsTheRetrySchedule(t *testing.T) {
 	if _, ok := plain["nextRetryAt"]; ok {
 		t.Fatalf("plain update = %#v", plain)
 	}
+	if _, ok := plain["duplicateOf"]; ok {
+		t.Fatalf("plain update = %#v", plain)
+	}
+	// A capture sent again names the one it repeats (P5-23).
+	repeat := attemptUpdate(inboxAction{Status: "processed", Actions: []map[string]interface{}{}, DuplicateOf: "c0000000-0000-4000-8000-000000000001"})
+	if repeat["duplicateOf"] != "c0000000-0000-4000-8000-000000000001" || repeat["status"] != "processed" {
+		t.Fatalf("repeat update = %#v", repeat)
+	}
 	retry := attemptUpdate(inboxAction{Status: "retryable", NextRetryAt: "2026-10-09T23:00:00Z", RetryReason: "usage_limited"})
 	if retry["nextRetryAt"] != "2026-10-09T23:00:00Z" || retry["retryReason"] != "usage_limited" {
 		t.Fatalf("retry update = %#v", retry)

@@ -126,6 +126,7 @@ const EVENT_LABELS: Record<string, string> = {
   "inbox.item.resolved": "Inbox item resolved",
   "inbox.item.discarded": "Inbox item discarded",
   "inbox.item.followed_up": "Earlier capture followed up",
+  "inbox.item.repeated": "Earlier capture repeated",
   "mcp.action.requested": "Agent action requested",
   "mcp.action.completed": "Agent action completed",
   "mcp.action.failed": "Agent action failed",

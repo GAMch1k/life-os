@@ -153,6 +153,41 @@ test("a follow-up capture links the earlier capture both ways", () => {
   );
 });
 
+test("a capture sent again links the capture it repeats", () => {
+  // "Buy lemons." twice: the second did nothing and names the first, in
+  // its own workflow.
+  const lemons = { type: "inbox_item", id: "lemons" };
+  const captured = event("l1", "inbox.item.captured", {
+    subject: lemons,
+    correlationId: "lemons",
+  });
+  const completed = event("a1", "inbox.processing.completed", {
+    subject: { type: "processing_attempt", id: "attempt-again" },
+    correlationId: "again",
+  });
+  const repeated = event("a2", "inbox.item.repeated", {
+    subject: lemons,
+    correlationId: "again",
+    causationId: "a1",
+    summary: "“Buy lemons.” repeated “Buy lemons.”: nothing done again",
+  });
+  assert.equal(eventLabel(repeated), "Earlier capture repeated");
+  assert.ok(EVENT_TYPES.includes("inbox.item.repeated"));
+  const trace = buildTrace(
+    repeated,
+    [completed, repeated],
+    [captured, repeated],
+  );
+  assert.deepEqual(
+    trace.upstream.map((entry) => entry.id),
+    ["a1"],
+  );
+  assert.deepEqual(
+    trace.related.map((entry) => entry.id),
+    ["l1"],
+  );
+});
+
 test("a cause recorded outside the loaded workflow is reported, not invented", () => {
   const orphan = event("x", "task.updated", { causationId: "missing" });
   const trace = buildTrace(orphan, [], []);

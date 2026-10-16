@@ -206,6 +206,11 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 	recent := window.context(item, r.ContextMinutes, r.location(item))
 	// fromCodex says the plan is Codex's, not an approved Human Review action.
 	fromCodex := err != nil
+	// The same capture sent again, after one already done or waiting for
+	// the owner: nothing to do, and no Codex run (repeats.go).
+	if earlier, repeated := window.repeatOf(item, r.ContextMinutes); fromCodex && repeated {
+		return Proposal{}, r.resolveRepeat(ctx, trace, item, started.ID, earlier)
+	}
 	if err == nil {
 		parsed, approvedEvent = approvedCalendarTarget(parsed)
 		parsed, approvedFood = approvedFoodTarget(parsed)
@@ -571,10 +576,16 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 	if err := r.record(ctx, item.ID, started.ID, "processed", actions, waitNote); err != nil {
 		return Proposal{}, err
 	}
-	completedEvent := activity.EventID("inbox.processing.completed", started.ID)
+	return Proposal{}, r.resolveProcessed(ctx, trace, item.ID, started.ID)
+}
+
+// resolveProcessed resolves a capture whose attempt was recorded processed,
+// as caused by that attempt's completion.
+func (r Runner) resolveProcessed(ctx context.Context, trace activity.Trace, itemID, attemptID string) error {
+	completedEvent := activity.EventID("inbox.processing.completed", attemptID)
 	trace.CausationID = &completedEvent
-	_, err = r.Tools.Call(activity.WithTrace(ctx, trace), "inbox_resolve", map[string]any{"itemId": item.ID})
-	return Proposal{}, err
+	_, err := r.Tools.Call(activity.WithTrace(ctx, trace), "inbox_resolve", map[string]any{"itemId": itemID})
+	return err
 }
 func isTaskMutation(action plannedAction) bool {
 	return action.Tool == "task_update" || action.Tool == "task_complete" || action.Tool == "task_reopen"
@@ -738,14 +749,19 @@ func (r Runner) nextAttemptKey(ctx context.Context, itemID, key string) (bool, s
 	return false, fmt.Sprintf("%s.retry.%d", key, count+1), count, nil
 }
 func (r Runner) plan(ctx context.Context, item inboxItem) (Proposal, error) {
+	window, err := r.readRecent(ctx, item)
+	if err != nil {
+		return Proposal{}, err
+	}
+	if earlier, repeated := window.repeatOf(item, r.ContextMinutes); repeated {
+		reason, _ := repeatOutcome(earlier, r.location(item))
+		return Proposal{ItemID: item.ID, Actions: []plannedAction{}, Reason: reason}, nil
+	}
 	images, err := r.captureImages(ctx, item)
 	if err != nil {
 		return Proposal{}, err
 	}
-	recent, err := r.recentContext(ctx, item)
-	if err != nil {
-		return Proposal{}, err
-	}
+	recent := window.context(item, r.ContextMinutes, r.location(item))
 	prompt, _ := json.Marshal(map[string]any{"content": item.Content, "source": item.Source, "sourceMetadata": item.SourceMetadata})
 	raw, err := r.Planner.Plan(WithRecentContext(WithImages(planContext(ctx, item), images), recent.note), string(prompt))
 	if err != nil {
@@ -789,9 +805,15 @@ func (r Runner) record(ctx context.Context, itemID, attemptID, status string, ac
 	if actions == nil {
 		actions = []map[string]any{}
 	}
+	return r.recordAttempt(ctx, map[string]any{"itemId": itemID, "attemptId": attemptID, "status": status, "actions": actions, "errorSummary": summary})
+}
+
+// recordAttempt stores an attempt's outcome. Like every outcome, it is
+// stored even while shutting down.
+func (r Runner) recordAttempt(ctx context.Context, arguments map[string]any) error {
 	recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
-	_, err := r.Tools.Call(recordCtx, "inbox_record_processing_attempt", map[string]any{"itemId": itemID, "attemptId": attemptID, "status": status, "actions": actions, "errorSummary": summary})
+	_, err := r.Tools.Call(recordCtx, "inbox_record_processing_attempt", arguments)
 	return err
 }
 func allowed(name string) bool {

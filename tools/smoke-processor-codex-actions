@@ -53,8 +53,17 @@ capture() {
     "$gateway/api/inbox/v1/inbox-items" | jq -r '.id'
 }
 
+# explain says where a capture is, so a failure explains itself: its state
+# (and a scheduled retry), the Human Review reason, and its latest attempt.
+explain() {
+  local item_id=$1 attempts=$2 item
+  item=$(curl --fail --silent "$gateway/api/inbox/v1/inbox-items/$item_id" || echo '{}')
+  jq -r '"  state: \(.state // "unknown")" + (if .nextRetryAt then " (retry at \(.nextRetryAt), \(.retryReason // ""))" else "" end) + (if .processingMetadata.humanReview.errorSummary then "\n  review: \(.processingMetadata.humanReview.errorSummary)" else "" end)' <<<"$item" >&2 || true
+  jq -r '"  attempts: \(.items | length)", (.items[0] // empty | "  last attempt: \(.status) tools=\([.actions[]?.tool // "?"] | join(",")) errorSummary=\(.errorSummary // "")")' <<<"$attempts" >&2 || true
+}
+
 wait_for_action() {
-  local item_id=$1 tool=$2 attempts='{"items":[]}' item
+  local item_id=$1 tool=$2 attempts='{"items":[]}'
   for _ in $(seq 1 90); do
     attempts=$(curl --fail --silent "$gateway/api/inbox/v1/inbox-items/$item_id/processing-attempts")
     if jq -e --arg tool "$tool" '.items | length == 1 and .[0].status == "processed" and (. [0].actions | length) == 1 and .[0].actions[0].tool == $tool' >/dev/null <<<"$attempts"; then
@@ -62,12 +71,27 @@ wait_for_action() {
     fi
     sleep 2
   done
-  # Say where the capture is, so a failure explains itself: its state (and
-  # a scheduled retry), the Human Review reason, and its latest attempt.
-  item=$(curl --fail --silent "$gateway/api/inbox/v1/inbox-items/$item_id" || echo '{}')
   echo "Codex action smoke: $tool was not automatically processed for $item_id" >&2
-  jq -r '"  state: \(.state // "unknown")" + (if .nextRetryAt then " (retry at \(.nextRetryAt), \(.retryReason // ""))" else "" end) + (if .processingMetadata.humanReview.errorSummary then "\n  review: \(.processingMetadata.humanReview.errorSummary)" else "" end)' <<<"$item" >&2 || true
-  jq -r '"  attempts: \(.items | length)", (.items[0] // empty | "  last attempt: \(.status) tools=\([.actions[]?.tool // "?"] | join(",")) errorSummary=\(.errorSummary // "")")' <<<"$attempts" >&2 || true
+  explain "$item_id" "$attempts"
+  return 1
+}
+
+# wait_for_repeat waits until a capture sent again is resolved as a repeat
+# of the one before (P5-23): without Codex, in one processed attempt
+# without actions that says so ("Same as the capture from 17:09, already
+# done").
+wait_for_repeat() {
+  local item_id=$1 attempts='{"items":[]}'
+  for _ in $(seq 1 90); do
+    attempts=$(curl --fail --silent "$gateway/api/inbox/v1/inbox-items/$item_id/processing-attempts")
+    if jq -e '.items | length == 1 and .[0].status == "processed" and (.[0].actions | length) == 0 and ((.[0].errorSummary // "") | test("^Same as the capture from [0-9]{2}:[0-9]{2}, already done$"))' >/dev/null <<<"$attempts" &&
+      curl --fail --silent "$gateway/api/inbox/v1/inbox-items/$item_id" | jq -e '.state == "resolved"' >/dev/null; then
+      return
+    fi
+    sleep 2
+  done
+  echo "Codex action smoke: the capture sent again was not resolved as a repeat: $item_id" >&2
+  explain "$item_id" "$attempts"
   return 1
 }
 
@@ -123,12 +147,21 @@ grocery_body=$(jq -cS '.arguments as $a | {items: [$a.items[] | with_entries(.va
 replayed=$(curl "${actor[@]}" --fail --silent -H 'content-type: application/json' -H "Idempotency-Key: $(jq -r '.arguments.idempotencyKey' <<<"$grocery_action")" --data "$grocery_body" "$gateway/api/food/v1/shopping-items")
 jq -e --arg id "$(jq -r '.result.items[0].item.id' <<<"$grocery_action")" '.items[0].item.id == $id and .items[0].merged == false' >/dev/null <<<"$replayed"
 jq -e 'length == 1' >/dev/null <<<"$(oat_milk)"
-# The same capture again is planned again: it merges into that item.
+# The same capture again is a repeat of that one: resolved without Codex,
+# it adds nothing.
 grocery_again_id=$(capture "Buy oat milk.")
-wait_for_action "$grocery_again_id" food_add_shopping_items
-curl --fail --silent "$gateway/api/inbox/v1/inbox-items/$grocery_again_id/processing-attempts" | jq -e '.items[0].actions[0].result.items[0].merged == true' >/dev/null
+wait_for_repeat "$grocery_again_id"
 jq -e --arg ref "$grocery_id" 'length == 1 and .[0].sourceRef == $ref' >/dev/null <<<"$(oat_milk)" || {
-  echo "Codex action smoke: the repeated grocery capture duplicated the list item: $(oat_milk)" >&2
+  echo "Codex action smoke: the repeated grocery capture changed the list: $(oat_milk)" >&2
+  exit 1
+}
+# The same item added again, as a grocery asked for again in other words
+# is, merges into the item on the list (a new key, so not a replay).
+oat_item=$(jq -r '.result.items[0].item.id' <<<"$grocery_action")
+added_again=$(curl "${actor[@]}" --fail --silent -H 'content-type: application/json' -H "Idempotency-Key: smoke-oat-milk-again-$stamp" --data '{"items":[{"name":"Oat milk"}]}' "$gateway/api/food/v1/shopping-items")
+jq -e --arg id "$oat_item" '.items[0].item.id == $id and .items[0].merged == true' >/dev/null <<<"$added_again" &&
+  jq -e --arg ref "$grocery_id" 'length == 1 and .[0].sourceRef == $ref' >/dev/null <<<"$(oat_milk)" || {
+  echo "Codex action smoke: oat milk added again did not merge into the item on the list: $added_again $(oat_milk)" >&2
   exit 1
 }
 
@@ -165,8 +198,9 @@ jq -e 'length == 1' >/dev/null <<<"$(breakfasts)" || {
 
 # A recipe link is saved once, from the page's recipe data, with the link as
 # its source. Replaying the processor's save (the link alone, as MCP sends it
-# for a recipe page, with its key) returns the same recipe, and the link
-# captured again finds it saved.
+# for a recipe page, with its key) returns the same recipe; the same capture
+# again is a repeat, resolved without Codex; and the link saved again finds
+# it saved.
 recipe_link=http://ics-fixture/smoke-pilaf.html
 pilafs() {
   curl --fail --silent "$gateway/api/food/v1/recipes?q=pilaf&limit=200" | jq -c --arg link "$recipe_link" '[.items[] | select(.sourceUrl == $link)]'
@@ -179,10 +213,17 @@ jq -e '.arguments.title == null and .result.saved == true' >/dev/null <<<"$recip
 replayed=$(curl "${actor[@]}" --fail --silent -H 'content-type: application/json' -H "Idempotency-Key: $(jq -r '.arguments.idempotencyKey' <<<"$recipe_action")" --data "$(jq -cn --arg url "$recipe_link" '{url: $url}')" "$gateway/api/integrations/recipe-import/v1/imports")
 jq -e --arg id "$(jq -r '.result.recipeId' <<<"$recipe_action")" '.recipe.id == $id' >/dev/null <<<"$replayed"
 recipe_again=$(capture "Save this recipe: $recipe_link")
-wait_for_action "$recipe_again" recipe_import
-curl --fail --silent "$gateway/api/inbox/v1/inbox-items/$recipe_again/processing-attempts" | jq -e --arg id "$(jq -r '.result.recipeId' <<<"$recipe_action")" '.items[0].actions[0].result | .alreadySaved == true and .recipeId == $id' >/dev/null
+wait_for_repeat "$recipe_again"
 jq -e 'length == 1' >/dev/null <<<"$(pilafs)" || {
   echo "Codex action smoke: the recipe link was saved more than once: $(pilafs)" >&2
+  exit 1
+}
+# Saved again without the processor's key, recipe-import answers that Food
+# has it, from that link: what recipe_import reports as alreadySaved.
+saved_again=$(curl "${actor[@]}" --silent -w '\n%{http_code}' -H 'content-type: application/json' --data "$(jq -cn --arg url "$recipe_link" '{url: $url}')" "$gateway/api/integrations/recipe-import/v1/imports")
+[ "$(tail -n 1 <<<"$saved_again")" = 409 ] &&
+  sed '$d' <<<"$saved_again" | jq -e --arg id "$(jq -r '.result.recipeId' <<<"$recipe_action")" --arg link "$recipe_link" '.error.code == "recipe_exists" and .recipeId == $id and .sourceUrl == $link' >/dev/null || {
+  echo "Codex action smoke: the recipe link saved again was not found saved: $saved_again" >&2
   exit 1
 }
 
@@ -228,4 +269,4 @@ curl --fail --silent "$gateway/api/inbox/v1/inbox-items/$ambiguous_id" |
 curl --fail --silent "$gateway/api/tasks/v1/tasks/$ambiguous_task_a" | jq -e '.completed == false' >/dev/null
 curl --fail --silent "$gateway/api/tasks/v1/tasks/$ambiguous_task_b" | jq -e '.completed == false' >/dev/null
 
-echo "authenticated Codex Calendar, Finance, receipt photo, grocery, running-low staple, meal, recipe link, and Task mutation/ambiguity capture smoke passed"
+echo "authenticated Codex Calendar, Finance, receipt photo, grocery, repeated capture, running-low staple, meal, recipe link, and Task mutation/ambiguity capture smoke passed"

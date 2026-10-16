@@ -95,14 +95,21 @@ func recentCaptureOutput(row store.ListRecentCapturesRow) generated.RecentCaptur
 	if row.CorrelationID != nil && *row.CorrelationID != "" {
 		correlation = *row.CorrelationID
 	}
+	var references []string
+	_ = json.Unmarshal(row.MediaReferences, &references)
+	if references == nil {
+		// Older captures without images stored JSON null.
+		references = []string{}
+	}
 	capture := generated.RecentCapture{
-		Id:            uuid(row.ID),
-		Content:       row.Content,
-		Source:        generated.RecentCaptureSource(row.Source),
-		State:         generated.RecentCaptureState(row.State),
-		CorrelationId: correlation,
-		CreatedAt:     row.CreatedAt.Time,
-		ResolvedAt:    nullableTime(row.ResolvedAt),
+		Id:              uuid(row.ID),
+		Content:         row.Content,
+		Source:          generated.RecentCaptureSource(row.Source),
+		State:           generated.RecentCaptureState(row.State),
+		CorrelationId:   correlation,
+		MediaReferences: references,
+		CreatedAt:       row.CreatedAt.Time,
+		ResolvedAt:      nullableTime(row.ResolvedAt),
 	}
 	if row.AttemptID.Valid {
 		actions := []map[string]interface{}{}
@@ -200,4 +207,36 @@ func (h *Handler) recordFollowUps(c fiber.Ctx, item store.InboxItem, attemptID s
 			},
 		})
 	}
+}
+
+// recordRepeat records, for a processed attempt that did nothing because
+// its capture repeats an earlier one (the same text and images, already
+// resolved or waiting for Human Review, P5-23), inbox.item.repeated about
+// that capture. Like inbox.item.followed_up, the event is about the earlier
+// capture (its subject), so the Event Log shows it in that capture's
+// history, while it belongs to this capture's workflow, caused by its
+// processing.completed. A capture Inbox does not have is not linked.
+func (h *Handler) recordRepeat(c fiber.Ctx, item store.InboxItem, attemptID string, earlierID types.UUID) {
+	earlier, err := h.queries.GetInboxItem(c.Context(), pgUUID(earlierID))
+	if err != nil {
+		return
+	}
+	completed := activity.EventID("inbox.processing.completed", attemptID)
+	h.record(c, item, activity.Event{
+		ID:          activity.EventID("inbox.item.repeated", attemptID, earlierID.String()),
+		Type:        "inbox.item.repeated",
+		Subject:     activity.Subject{Type: "inbox_item", ID: earlierID.String()},
+		CausationID: &completed,
+		Outcome:     activity.Succeeded,
+		Summary:     fmt.Sprintf("“%s” repeated “%s”: nothing done again", activity.Preview(item.Content, 60), activity.Preview(earlier.Content, 60)),
+		Data: map[string]any{
+			"inboxItemId":           uuid(item.ID).String(),
+			"attemptId":             attemptID,
+			"content":               activity.Preview(item.Content, 280),
+			"repeatedItemId":        earlierID.String(),
+			"repeatedCorrelationId": correlationID(earlier),
+			"repeatedContent":       activity.Preview(earlier.Content, 280),
+			"repeatedState":         earlier.State,
+		},
+	})
 }
