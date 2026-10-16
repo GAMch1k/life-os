@@ -67,9 +67,12 @@ func (t *corpusTools) Call(_ context.Context, name string, args map[string]any) 
 			return json.RawMessage(`{"items":[{"id":"recipe-2","title":"Борщ","normalizedTitle":"борщ"}]}`), nil
 		}
 		return json.RawMessage(`{"items":[]}`), nil
+	case "recipe_save_draft":
+		return json.RawMessage(`{"saved":true,"recipeId":"recipe-10"}`), nil
 	case "recipe_import":
-		// recipe-import cannot read Instagram: only a caption gives a recipe.
-		if strings.Contains(args["url"].(string), "instagram.com") && args["caption"] == nil {
+		// recipe-import cannot read Instagram: only a caption gives a recipe,
+		// or the owner's name for it a stub.
+		if strings.Contains(args["url"].(string), "instagram.com") && args["caption"] == nil && args["title"] == nil {
 			return json.RawMessage(`{"saved":false,"method":"preview","reason":"Instagram posts can't be read directly: paste the caption to fill in the ingredients and steps."}`), nil
 		}
 		return json.RawMessage(`{"saved":true,"method":"structured","recipeId":"recipe-9"}`), nil
@@ -323,7 +326,7 @@ var recipeLinkPlans = map[string]string{
 	"https://www.chefkoch.de/rezepte/1234/Omas-Gulasch.html":                   `{"actions":[{"tool":"recipe_import","arguments":{"url":"https://www.chefkoch.de/rezepte/1234/Omas-Gulasch.html"}}],"confidence":0.9}`,
 	"сохрани рецепт https://eda.ru/recepty/supy/borsch-12345":                  `{"actions":[{"tool":"recipe_import","arguments":{"url":"https://eda.ru/recepty/supy/borsch-12345","saveLink":true}}],"confidence":0.95}`,
 	"https://www.instagram.com/reel/DGx7abc/\nShakshuka in 20 Minuten 🍳\nZutaten:\n- 4 Eier\n- 1 Dose Tomaten\nZubereitung:\n1. Tomaten köcheln.\n2. Eier hineinschlagen.": `{"actions":[{"tool":"recipe_import","arguments":{"url":"https://www.instagram.com/reel/DGx7abc/","caption":"Shakshuka in 20 Minuten 🍳\nZutaten:\n- 4 Eier\n- 1 Dose Tomaten\nZubereitung:\n1. Tomaten köcheln.\n2. Eier hineinschlagen."}}],"confidence":0.95}`,
-	"Anna on Instagram\nhttps://www.instagram.com/reel/DGx7abc/":                  `{"actions":[{"tool":"recipe_import","arguments":{"url":"https://www.instagram.com/reel/DGx7abc/"}}],"confidence":0.85}`,
+	"Anna on Instagram\nhttps://www.instagram.com/reel/DGx7abc/":                  `{"actions":[],"ambiguous":true,"confidence":0.85,"reason":"This post can't be read: say what the recipe is called, or paste its caption."}`,
 	"Read later: https://www.spiegel.de/politik/deutschland/wahl-2026-a-123.html": `{"actions":[{"tool":"task_create","arguments":{"title":"Read: https://www.spiegel.de/politik/deutschland/wahl-2026-a-123.html"}}],"confidence":0.9}`,
 	"https://www.spiegel.de/politik/deutschland/wahl-2026-a-123.html":             `{"actions":[],"ambiguous":true,"confidence":0.3,"reason":"What should I do with this link?"}`,
 }
@@ -350,7 +353,7 @@ func TestRecipeLinkCorpusUsesOnlyApprovedMCPTools(t *testing.T) {
 		{"bare chefkoch link shared", "https://www.chefkoch.de/rezepte/1234/Omas-Gulasch.html", "recipe_import", "", true},
 		{"russian save", "сохрани рецепт https://eda.ru/recepty/supy/borsch-12345", "recipe_import", "", false},
 		{"instagram link with its caption", "https://www.instagram.com/reel/DGx7abc/\nShakshuka in 20 Minuten 🍳\nZutaten:\n- 4 Eier\n- 1 Dose Tomaten\nZubereitung:\n1. Tomaten köcheln.\n2. Eier hineinschlagen.", "recipe_import", "", true},
-		{"bare instagram link shared", "Anna on Instagram\nhttps://www.instagram.com/reel/DGx7abc/", "recipe_import", "Instagram posts can't be read directly: paste the caption to fill in the ingredients and steps.", true},
+		{"bare instagram link shared", "Anna on Instagram\nhttps://www.instagram.com/reel/DGx7abc/", "", "This post can't be read: say what the recipe is called, or paste its caption.", true},
 		{"news link to read", "Read later: https://www.spiegel.de/politik/deutschland/wahl-2026-a-123.html", "task_create", "", false},
 		{"bare news link", "https://www.spiegel.de/politik/deutschland/wahl-2026-a-123.html", "", "What should I do with this link?", true},
 	}

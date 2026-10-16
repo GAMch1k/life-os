@@ -272,7 +272,7 @@ func TestPlanPromptRoutesStaplesAndRunningLow(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		`|recipe_import|food_mark_running_low|food_add_staple|food_remove_staple\"`,
+		`|recipe_import|recipe_save_draft|food_mark_running_low|food_add_staple|food_remove_staple\"`,
 		`Something running low but not finished yet (\"almost out of milk\", \"мясо заканчивается\", \"почти закончилось молоко\", \"fast keine Milch mehr\", \"Milch wird knapp\") is food_mark_running_low, never food_update_pantry_item or task_create.`,
 		`itemQuery \"мясо\", itemQueryAlternatives [\"мяс\", \"meat\", \"Fleisch\"]`,
 		`addToList (true only when the item also says to buy it or put it on the list`,

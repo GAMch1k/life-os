@@ -148,7 +148,7 @@ func TestPlanPromptReadsLettersAndReceipts(t *testing.T) {
 		`A bill (Rechnung with an amount, an IBAN, and a due date) is task_create \"Pay <sender> <amount>\" due on the due date: Life OS never pays.`,
 		"A cash receipt (Kassenbon showing BAR, Bargeld, or cash) is finance_create_manual_transaction with the total (SUMME) as the negative amount in cents",
 		`a card receipt (EC, Karte, girocard, Visa, Mastercard, kontaktlos) is a card payment: no action, with reason \"Card and bank payments arrive from the bank connection.\"`,
-		"Never copy a document's text into a title or notes: summarize, and keep only the key numbers.",
+		"Never copy a document's text into a title or notes: summarize, and keep only the key numbers; a recipe photo (below) is the one exception.",
 		`\"A letter from AOK with no deadline: what should I do with it?\"`,
 	} {
 		want = strings.ReplaceAll(want, `\"`, `"`)
