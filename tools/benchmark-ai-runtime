@@ -333,13 +333,16 @@ run_profile() {
   ids[followup_task]=$(capture "Make it tomorrow morning.")
   ids[followup_unrelated_first]=$(capture "Renew the gym membership.")
   ids[followup_unrelated]=$(capture "Pick up the dry cleaning on Friday.")
-  # Repeats (P5-22): the same capture sent twice. A grocery is planned again
-  # and merges into the first's list item; a Task is not created again. Their
-  # list item and Task are counted by these checks only.
+  # Repeats (P5-22, P5-23): the same capture sent twice is resolved by the
+  # processor, without Codex, as already done; a grocery asked for again in
+  # other words is planned again and merges into the first's list item.
+  # Their list items and Task are counted by these checks only.
   ids[repeat_grocery_first]=$(capture "Buy lemons.")
   ids[repeat_grocery]=$(capture "Buy lemons.")
   ids[repeat_task_first]=$(capture "Remind me to renew the library card.")
   ids[repeat_task]=$(capture "Remind me to renew the library card.")
+  ids[repeat_reworded_first]=$(capture "Buy limes.")
+  ids[repeat_reworded]=$(capture "We need limes.")
   local job
   job=$(api -F "audio=@$work/chicken.wav;type=audio/wav" -F source=web "$gateway/api/voice/v1/audio-jobs" | jq -r '.id')
   for _ in $(seq 1 120); do
@@ -629,28 +632,42 @@ run_profile() {
   local gym
   gym=$(api "$gateway/api/tasks/v1/tasks?query=gym&limit=100" | jq -c '[.items[] | select(.title | test("gym"; "i"))]')
   check followup_unrelated "$([ "$s" = resolved ] && [ "$(state "${ids[followup_unrelated_first]}")" = resolved ] && [ "$(jq 'length' <<<"$gym")" = 1 ] && [ "$(jq -r '.[0].dueAt // "none"' <<<"$gym")" = none ] && [ "$(jq -r '.[0].completed' <<<"$gym")" = false ] && [ "$(tasks_matching "dry clean")" = 1 ] && [ "$(follows followup_unrelated followup_unrelated_first)" = 0 ] && echo 1 || echo 0)" "state=$s gym=$(jq -c 'map({title, dueAt, completed})' <<<"$gym") dry_cleaning_tasks=$(tasks_matching "dry clean") linked=$(follows followup_unrelated followup_unrelated_first)"
-  # repeat_grocery: "Buy lemons." twice; the second is planned again and
-  # merges into the first's item, so one needed lemons item, the first's.
+  # Repeats: a capture sent again did nothing, in its one attempt, processed
+  # without actions, which says what it repeats ("Same as the capture from
+  # HH:MM, already done", P5-23).
+  repeat_summary() { # repeat_summary <scenario>: that summary, or nothing
+    api "$gateway/api/inbox/v1/inbox-items/${ids[$1]}/processing-attempts" | jq -r 'if (.items | length) == 1 and .items[0].status == "processed" and (.items[0].actions | length) == 0 then .items[0].errorSummary // "" else "" end'
+  }
+  # repeat_grocery: "Buy lemons." twice; the second is a repeat of the
+  # first, so one needed lemons item, the first's.
   s=$(state "${ids[repeat_grocery]}")
-  local lemons merged
+  local lemons repeat
   lemons=$(jq -c '[.items[] | select(.state == "needed" and (.normalizedName | test("lemon")))]' <<<"$list")
-  merged=$(api "$gateway/api/inbox/v1/inbox-items/${ids[repeat_grocery]}/processing-attempts" | jq '[.items[] | select(.status == "processed") | .actions[]? | select(.tool == "food_add_shopping_items") | .result.items[]? | select(.merged == true)] | length')
-  check repeat_grocery "$([ "$s" = resolved ] && [ "$(state "${ids[repeat_grocery_first]}")" = resolved ] && [ "$(jq 'length' <<<"$lemons")" = 1 ] && [ "$(jq -r '.[0].sourceRef' <<<"$lemons")" = "${ids[repeat_grocery_first]}" ] && [ "$merged" -ge 1 ] && echo 1 || echo 0)" "state=$s first=$(state "${ids[repeat_grocery_first]}") lemons=$(jq -c 'map({name, sourceRef})' <<<"$lemons") merged=$merged"
+  repeat=$(repeat_summary repeat_grocery)
+  check repeat_grocery "$([ "$s" = resolved ] && [ "$(state "${ids[repeat_grocery_first]}")" = resolved ] && [[ "$repeat" == "Same as the capture from "*", already done" ]] && [ "$(jq 'length' <<<"$lemons")" = 1 ] && [ "$(jq -r '.[0].sourceRef' <<<"$lemons")" = "${ids[repeat_grocery_first]}" ] && echo 1 || echo 0)" "state=$s first=$(state "${ids[repeat_grocery_first]}") repeat=\"$repeat\" lemons=$(jq -c 'map({name, sourceRef})' <<<"$lemons")"
   # repeat_task: "Remind me to renew the library card." twice; the second
-  # creates nothing and goes to Human Review ("Already done for the capture
-  # from HH:MM: …"), so one library card Task.
+  # is a repeat of the first, so one library card Task.
   s=$(state "${ids[repeat_task]}")
   local library
   library=$(api "$gateway/api/tasks/v1/tasks?query=library&limit=100" | jq -c '[.items[] | select(.title | test("library card"; "i"))]')
-  check repeat_task "$([ "$s" = human_review ] && [ "$(state "${ids[repeat_task_first]}")" = resolved ] && [ "$(jq 'length' <<<"$library")" = 1 ] && echo 1 || echo 0)" "state=$s first=$(state "${ids[repeat_task_first]}") tasks=$(jq -c 'map({title, dueAt})' <<<"$library") reason=\"$(item "${ids[repeat_task]}" | jq -r '.processingMetadata.humanReview.errorSummary // ""')\""
+  repeat=$(repeat_summary repeat_task)
+  check repeat_task "$([ "$s" = resolved ] && [ "$(state "${ids[repeat_task_first]}")" = resolved ] && [[ "$repeat" == "Same as the capture from "*", already done" ]] && [ "$(jq 'length' <<<"$library")" = 1 ] && echo 1 || echo 0)" "state=$s first=$(state "${ids[repeat_task_first]}") repeat=\"$repeat\" tasks=$(jq -c 'map({title, dueAt})' <<<"$library") reason=\"$(item "${ids[repeat_task]}" | jq -r '.processingMetadata.humanReview.errorSummary // ""')\""
+  # repeat_reworded: "Buy limes.", then "We need limes."; not the same text,
+  # so Codex plans the second, and its list add merges into the first's
+  # item: one needed limes item, the first's.
+  s=$(state "${ids[repeat_reworded]}")
+  local limes merged
+  limes=$(jq -c '[.items[] | select(.state == "needed" and (.normalizedName | test("lime")))]' <<<"$list")
+  merged=$(api "$gateway/api/inbox/v1/inbox-items/${ids[repeat_reworded]}/processing-attempts" | jq '[.items[] | select(.status == "processed") | .actions[]? | select(.tool == "food_add_shopping_items") | .result.items[]? | select(.merged == true)] | length')
+  check repeat_reworded "$([ "$s" = resolved ] && [ "$(state "${ids[repeat_reworded_first]}")" = resolved ] && [ "$(jq 'length' <<<"$limes")" = 1 ] && [ "$(jq -r '.[0].sourceRef' <<<"$limes")" = "${ids[repeat_reworded_first]}" ] && [ "$merged" -ge 1 ] && echo 1 || echo 0)" "state=$s first=$(state "${ids[repeat_reworded_first]}") limes=$(jq -c 'map({name, sourceRef})' <<<"$limes") merged=$merged reason=\"$(item "${ids[repeat_reworded]}" | jq -r '.processingMetadata.humanReview.errorSummary // ""')\""
   # The seeded bananas plus milk, eggs, bread, cheese, toothpaste, shower
   # gel, minced meat, tomatoes, the staple butter, and the oat milk, each
-  # once (the repeat's lemons are counted above); the yoghurt and the
-  # seeded spaghetti and rice in the pantry; the seeded butter and the new
-  # coffee as staples; Wednesday's dinner, Friday's lunch, and the Saturday
-  # breakfasts but the one cleared.
+  # once (the repeats' lemons and limes are counted above); the yoghurt and
+  # the seeded spaghetti and rice in the pantry; the seeded butter and the
+  # new coffee as staples; Wednesday's dinner, Friday's lunch, and the
+  # Saturday breakfasts but the one cleared.
   local others
-  others=$(jq -c '[.items[] | select(.normalizedName | test("lemon") | not)]' <<<"$list")
+  others=$(jq -c '[.items[] | select(.normalizedName | test("lemon|lime") | not)]' <<<"$list")
   check no_extra_shopping_items "$([ "$(jq 'length' <<<"$others")" = 11 ] && [ "$(jq '[.[].normalizedName] | unique | length' <<<"$others")" = 11 ] && echo 1 || echo 0)" "items=$(jq -c '[.[] | {name, amount, storeName, state}]' <<<"$others") (expected 11)"
   check no_extra_pantry_items "$([ "$(jq '.items | length' <<<"$pantry")" = 4 ] && echo 1 || echo 0)" "items=$(jq -c '[.items[] | {name, location, expiresOn}]' <<<"$pantry") (expected 4)"
   check no_extra_staples "$([ "$(jq '.items | length' <<<"$staples")" = 2 ] && echo 1 || echo 0)" "staples=$(jq -c '[.items[].name]' <<<"$staples") (expected 2)"
