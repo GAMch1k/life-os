@@ -28,7 +28,9 @@ const (
 
 // ListRecentCaptures lists the captures made shortly before one capture,
 // with what their processing did: the processor's context for a follow-up
-// capture ("actually oat milk" after "buy milk").
+// capture ("actually oat milk" after "buy milk"). Those of the window that
+// processing has not finished yet come apart (unfinished): the processor
+// plans the capture after them.
 func (h *Handler) ListRecentCaptures(c fiber.Ctx, params generated.ListRecentCapturesParams) error {
 	minutes, limit := recentCaptureMinutes, recentCaptureLimit
 	if params.Minutes != nil {
@@ -48,9 +50,10 @@ func (h *Handler) ListRecentCaptures(c fiber.Ctx, params generated.ListRecentCap
 		return databaseError(err)
 	}
 	end := before.CreatedAt.Time
+	start := pgtype.Timestamptz{Time: end.Add(-time.Duration(minutes) * time.Minute), Valid: true}
 	rows, err := h.queries.ListRecentCaptures(c.Context(), store.ListRecentCapturesParams{
 		BeforeID:    before.ID,
-		WindowStart: pgtype.Timestamptz{Time: end.Add(-time.Duration(minutes) * time.Minute), Valid: true},
+		WindowStart: start,
 		WindowEnd:   pgtype.Timestamptz{Time: end, Valid: true},
 		PageLimit:   int32(limit),
 	})
@@ -61,7 +64,30 @@ func (h *Handler) ListRecentCaptures(c fiber.Ctx, params generated.ListRecentCap
 	for _, row := range rows {
 		items = append(items, recentCaptureOutput(row))
 	}
-	return c.JSON(generated.RecentCaptureList{Items: items})
+	// The same window's captures still on their way: the processor plans
+	// the capture after them (P5-22).
+	pending, err := h.queries.ListUnfinishedCaptures(c.Context(), store.ListUnfinishedCapturesParams{
+		BeforeID:    before.ID,
+		WindowStart: start,
+		WindowEnd:   pgtype.Timestamptz{Time: end, Valid: true},
+		PageLimit:   int32(limit),
+	})
+	if err != nil {
+		return internal(err)
+	}
+	unfinished := make([]generated.UnfinishedCapture, 0, len(pending))
+	for _, row := range pending {
+		unfinished = append(unfinished, generated.UnfinishedCapture{
+			Id:          uuid(row.ID),
+			Content:     row.Content,
+			Source:      generated.UnfinishedCaptureSource(row.Source),
+			State:       generated.UnfinishedCaptureState(row.State),
+			CreatedAt:   row.CreatedAt.Time,
+			UpdatedAt:   row.UpdatedAt.Time,
+			NextRetryAt: nullableTime(row.NextRetryAt),
+		})
+	}
+	return c.JSON(generated.RecentCaptureList{Items: items, Unfinished: unfinished})
 }
 
 func recentCaptureOutput(row store.ListRecentCapturesRow) generated.RecentCapture {

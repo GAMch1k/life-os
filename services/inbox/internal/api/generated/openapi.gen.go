@@ -277,6 +277,51 @@ func (e RecentCaptureOutcomeStatus) Valid() bool {
 	}
 }
 
+// Defines values for UnfinishedCaptureSource.
+const (
+	UnfinishedCaptureSourceEmail  UnfinishedCaptureSource = "email"
+	UnfinishedCaptureSourceManual UnfinishedCaptureSource = "manual"
+	UnfinishedCaptureSourceVoice  UnfinishedCaptureSource = "voice"
+	UnfinishedCaptureSourceWatch  UnfinishedCaptureSource = "watch"
+	UnfinishedCaptureSourceWeb    UnfinishedCaptureSource = "web"
+)
+
+// Valid indicates whether the value is a known member of the UnfinishedCaptureSource enum.
+func (e UnfinishedCaptureSource) Valid() bool {
+	switch e {
+	case UnfinishedCaptureSourceEmail:
+		return true
+	case UnfinishedCaptureSourceManual:
+		return true
+	case UnfinishedCaptureSourceVoice:
+		return true
+	case UnfinishedCaptureSourceWatch:
+		return true
+	case UnfinishedCaptureSourceWeb:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UnfinishedCaptureState.
+const (
+	UnfinishedCaptureStateProcessing UnfinishedCaptureState = "processing"
+	UnfinishedCaptureStateRaw        UnfinishedCaptureState = "raw"
+)
+
+// Valid indicates whether the value is a known member of the UnfinishedCaptureState enum.
+func (e UnfinishedCaptureState) Valid() bool {
+	switch e {
+	case UnfinishedCaptureStateProcessing:
+		return true
+	case UnfinishedCaptureStateRaw:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for UpdateProcessingAttemptRequestStatus.
 const (
 	UpdateProcessingAttemptRequestStatusFailed      UpdateProcessingAttemptRequestStatus = "failed"
@@ -328,6 +373,24 @@ func (e ListInboxItemsParamsState) Valid() bool {
 	case ListInboxItemsParamsStateRaw:
 		return true
 	case ListInboxItemsParamsStateResolved:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListInboxItemsParamsOrder.
+const (
+	Newest ListInboxItemsParamsOrder = "newest"
+	Oldest ListInboxItemsParamsOrder = "oldest"
+)
+
+// Valid indicates whether the value is a known member of the ListInboxItemsParamsOrder enum.
+func (e ListInboxItemsParamsOrder) Valid() bool {
+	switch e {
+	case Newest:
+		return true
+	case Oldest:
 		return true
 	default:
 		return false
@@ -511,6 +574,9 @@ type RecentCaptureState string
 // RecentCaptureList defines model for RecentCaptureList.
 type RecentCaptureList struct {
 	Items []RecentCapture `json:"items"`
+
+	// Unfinished The captures of the window that processing has not finished yet, oldest first.
+	Unfinished []UnfinishedCapture `json:"unfinished"`
 }
 
 // RecentCaptureOutcome The capture's latest finished processing attempt; absent when it has none (for example, resolved by hand).
@@ -530,6 +596,27 @@ type RecentCaptureOutcomeStatus string
 type ResolveHumanReviewRequest struct {
 	CandidateId openapi_types.UUID `json:"candidateId"`
 }
+
+// UnfinishedCapture A capture made shortly before another one that processing has not finished yet.
+type UnfinishedCapture struct {
+	Content   string             `json:"content"`
+	CreatedAt time.Time          `json:"createdAt"`
+	Id        openapi_types.UUID `json:"id"`
+
+	// NextRetryAt When a raw capture that failed may be retried.
+	NextRetryAt *time.Time              `json:"nextRetryAt,omitempty"`
+	Source      UnfinishedCaptureSource `json:"source"`
+
+	// State raw: waiting for processing, or for a retry (nextRetryAt); processing: an attempt is running.
+	State     UnfinishedCaptureState `json:"state"`
+	UpdatedAt time.Time              `json:"updatedAt"`
+}
+
+// UnfinishedCaptureSource defines model for UnfinishedCapture.Source.
+type UnfinishedCaptureSource string
+
+// UnfinishedCaptureState raw: waiting for processing, or for a retry (nextRetryAt); processing: an attempt is running.
+type UnfinishedCaptureState string
 
 // UpdateProcessingAttemptRequest defines model for UpdateProcessingAttemptRequest.
 type UpdateProcessingAttemptRequest struct {
@@ -554,13 +641,19 @@ type ListInboxItemsParams struct {
 	State      *ListInboxItemsParamsState `form:"state,omitempty" json:"state,omitempty"`
 
 	// Due Only items without a scheduled retry or whose nextRetryAt has passed (the processor's eligible work).
-	Due    *bool   `form:"due,omitempty" json:"due,omitempty"`
-	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
-	Limit  *int    `form:"limit,omitempty" json:"limit,omitempty"`
+	Due *bool `form:"due,omitempty" json:"due,omitempty"`
+
+	// Order newest (the default) lists the latest captures first; oldest lists the earliest first, so the processor plans a backlog in the order it was captured.
+	Order  *ListInboxItemsParamsOrder `form:"order,omitempty" json:"order,omitempty"`
+	Cursor *string                    `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit  *int                       `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
 // ListInboxItemsParamsState defines parameters for ListInboxItems.
 type ListInboxItemsParamsState string
+
+// ListInboxItemsParamsOrder defines parameters for ListInboxItems.
+type ListInboxItemsParamsOrder string
 
 // UploadMediaMultipartBody defines parameters for UploadMedia.
 type UploadMediaMultipartBody struct {
@@ -718,6 +811,13 @@ func (siw *ServerInterfaceWrapper) ListInboxItems(c fiber.Ctx) error {
 	err = runtime.BindQueryParameterWithOptions("form", true, false, "due", query, &params.Due, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
 	if err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter due: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "order" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "order", query, &params.Order, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter order: %w", err).Error())
 	}
 
 	// ------------- Optional query parameter "cursor" -------------

@@ -13,15 +13,17 @@
 # shopping list and the pantry, meals and a recipe's ingredients, recipe
 # links, recipes by the owner's words (a reel sent to the Tasks, a dish
 # named with a reel, a bare reel, a dictated recipe), photos of a letter
-# and receipts, and follow-ups that correct what
-# the capture just before did, through the Inbox API the Dashboard uses,
+# and receipts, follow-ups that correct what the capture just before did,
+# and captures sent twice, through the Inbox API the Dashboard uses,
 # plus one recorded voice note through Voice and whisper.cpp), lets the automatic processor plan them with the
 # authenticated Codex CLI and act through MCP, asks for recipe ideas, lets
 # the AI categories job categorize three transactions no rule matches, asks
 # the AI to plan next month's budget from three made-up months, and then
 # checks the persisted results. The owner's timezone is Europe/Berlin. Results go to
 # $LIFE_OS_BENCHMARK_DIR (default: a new temporary directory) as one TSV per
-# profile and a summary.
+# profile and a summary, with each failing scenario's captures, processing
+# attempts, and processor log lines in <profile>.failures.jsonl. It exits 1
+# when any check failed.
 set -euo pipefail
 
 zone=Europe/Berlin
@@ -34,6 +36,8 @@ export LIFE_OS_VERIFY_AI_CATEGORIES=on
 export LIFE_OS_VERIFY_AI_BUDGET_PLANS=on
 
 [ "$#" -gt 0 ] || { echo "usage: $0 model/effort [model/effort ...]" >&2; exit 2; }
+# Failed checks over every profile; any makes the run fail.
+failed_total=0
 out=${LIFE_OS_BENCHMARK_DIR:-$(mktemp -d)}
 mkdir -p "$out"
 work=$(mktemp -d)
@@ -329,6 +333,13 @@ run_profile() {
   ids[followup_task]=$(capture "Make it tomorrow morning.")
   ids[followup_unrelated_first]=$(capture "Renew the gym membership.")
   ids[followup_unrelated]=$(capture "Pick up the dry cleaning on Friday.")
+  # Repeats (P5-22): the same capture sent twice. A grocery is planned again
+  # and merges into the first's list item; a Task is not created again. Their
+  # list item and Task are counted by these checks only.
+  ids[repeat_grocery_first]=$(capture "Buy lemons.")
+  ids[repeat_grocery]=$(capture "Buy lemons.")
+  ids[repeat_task_first]=$(capture "Remind me to renew the library card.")
+  ids[repeat_task]=$(capture "Remind me to renew the library card.")
   local job
   job=$(api -F "audio=@$work/chicken.wav;type=audio/wav" -F source=web "$gateway/api/voice/v1/audio-jobs" | jq -r '.id')
   for _ in $(seq 1 120); do
@@ -618,12 +629,29 @@ run_profile() {
   local gym
   gym=$(api "$gateway/api/tasks/v1/tasks?query=gym&limit=100" | jq -c '[.items[] | select(.title | test("gym"; "i"))]')
   check followup_unrelated "$([ "$s" = resolved ] && [ "$(state "${ids[followup_unrelated_first]}")" = resolved ] && [ "$(jq 'length' <<<"$gym")" = 1 ] && [ "$(jq -r '.[0].dueAt // "none"' <<<"$gym")" = none ] && [ "$(jq -r '.[0].completed' <<<"$gym")" = false ] && [ "$(tasks_matching "dry clean")" = 1 ] && [ "$(follows followup_unrelated followup_unrelated_first)" = 0 ] && echo 1 || echo 0)" "state=$s gym=$(jq -c 'map({title, dueAt, completed})' <<<"$gym") dry_cleaning_tasks=$(tasks_matching "dry clean") linked=$(follows followup_unrelated followup_unrelated_first)"
+  # repeat_grocery: "Buy lemons." twice; the second is planned again and
+  # merges into the first's item, so one needed lemons item, the first's.
+  s=$(state "${ids[repeat_grocery]}")
+  local lemons merged
+  lemons=$(jq -c '[.items[] | select(.state == "needed" and (.normalizedName | test("lemon")))]' <<<"$list")
+  merged=$(api "$gateway/api/inbox/v1/inbox-items/${ids[repeat_grocery]}/processing-attempts" | jq '[.items[] | select(.status == "processed") | .actions[]? | select(.tool == "food_add_shopping_items") | .result.items[]? | select(.merged == true)] | length')
+  check repeat_grocery "$([ "$s" = resolved ] && [ "$(state "${ids[repeat_grocery_first]}")" = resolved ] && [ "$(jq 'length' <<<"$lemons")" = 1 ] && [ "$(jq -r '.[0].sourceRef' <<<"$lemons")" = "${ids[repeat_grocery_first]}" ] && [ "$merged" -ge 1 ] && echo 1 || echo 0)" "state=$s first=$(state "${ids[repeat_grocery_first]}") lemons=$(jq -c 'map({name, sourceRef})' <<<"$lemons") merged=$merged"
+  # repeat_task: "Remind me to renew the library card." twice; the second
+  # creates nothing and goes to Human Review ("Already done for the capture
+  # from HH:MM: …"), so one library card Task.
+  s=$(state "${ids[repeat_task]}")
+  local library
+  library=$(api "$gateway/api/tasks/v1/tasks?query=library&limit=100" | jq -c '[.items[] | select(.title | test("library card"; "i"))]')
+  check repeat_task "$([ "$s" = human_review ] && [ "$(state "${ids[repeat_task_first]}")" = resolved ] && [ "$(jq 'length' <<<"$library")" = 1 ] && echo 1 || echo 0)" "state=$s first=$(state "${ids[repeat_task_first]}") tasks=$(jq -c 'map({title, dueAt})' <<<"$library") reason=\"$(item "${ids[repeat_task]}" | jq -r '.processingMetadata.humanReview.errorSummary // ""')\""
   # The seeded bananas plus milk, eggs, bread, cheese, toothpaste, shower
   # gel, minced meat, tomatoes, the staple butter, and the oat milk, each
-  # once; the yoghurt and the seeded spaghetti and rice in the pantry; the
-  # seeded butter and the new coffee as staples; Wednesday's dinner,
-  # Friday's lunch, and the Saturday breakfasts but the one cleared.
-  check no_extra_shopping_items "$([ "$(jq '.items | length' <<<"$list")" = 11 ] && [ "$(jq '[.items[].normalizedName] | unique | length' <<<"$list")" = 11 ] && echo 1 || echo 0)" "items=$(jq -c '[.items[] | {name, amount, storeName, state}]' <<<"$list") (expected 11)"
+  # once (the repeat's lemons are counted above); the yoghurt and the
+  # seeded spaghetti and rice in the pantry; the seeded butter and the new
+  # coffee as staples; Wednesday's dinner, Friday's lunch, and the Saturday
+  # breakfasts but the one cleared.
+  local others
+  others=$(jq -c '[.items[] | select(.normalizedName | test("lemon") | not)]' <<<"$list")
+  check no_extra_shopping_items "$([ "$(jq 'length' <<<"$others")" = 11 ] && [ "$(jq '[.[].normalizedName] | unique | length' <<<"$others")" = 11 ] && echo 1 || echo 0)" "items=$(jq -c '[.[] | {name, amount, storeName, state}]' <<<"$others") (expected 11)"
   check no_extra_pantry_items "$([ "$(jq '.items | length' <<<"$pantry")" = 4 ] && echo 1 || echo 0)" "items=$(jq -c '[.items[] | {name, location, expiresOn}]' <<<"$pantry") (expected 4)"
   check no_extra_staples "$([ "$(jq '.items | length' <<<"$staples")" = 2 ] && echo 1 || echo 0)" "staples=$(jq -c '[.items[].name]' <<<"$staples") (expected 2)"
   # Recipe links: a page's recipe, and a post's from its caption, each saved
@@ -700,10 +728,12 @@ run_profile() {
   # No fallback or invented entities: thirteen seeds plus three creates,
   # the flash drive, the call to the plumber, the Finanzamt letter, and the
   # follow-ups' Sophie, gym, and dry cleaning; the reel's Task is checked
-  # on its own (recipe_reel_task).
-  local total
-  total=$(api "$gateway/api/tasks/v1/tasks?limit=100" | jq '[.items[] | select((.notes // "") | contains("DPbench01") | not)] | length')
-  check no_extra_tasks "$([ "$total" = 22 ] && echo 1 || echo 0)" "tasks=$total (expected 22): $(api "$gateway/api/tasks/v1/tasks?limit=100" | jq -c '[.items[].title]')"
+  # on its own (recipe_reel_task), and the repeat's library card is counted
+  # above.
+  local total tasks
+  tasks=$(api "$gateway/api/tasks/v1/tasks?limit=100" | jq -c '[.items[] | select(((.notes // "") | contains("DPbench01")) or (.title | test("library card"; "i")) | not)]')
+  total=$(jq 'length' <<<"$tasks")
+  check no_extra_tasks "$([ "$total" = 22 ] && echo 1 || echo 0)" "tasks=$total (expected 22): $(jq -c '[.[].title]' <<<"$tasks")"
   # Five seeded events plus the dentist and the coffee created, none cancelled.
   local all
   all=$(api "$gateway/api/calendar/v1/events?from=2026-01-01T00:00:00Z&to=$(date -u -d '+60 days' +%Y-%m-%dT%H:%M:%SZ)&includeCancelled=true&limit=100")
@@ -724,10 +754,44 @@ run_profile() {
   local passed failed
   passed=$(grep -c $'\tPASS\t' "$results" || true)
   failed=$(grep -c $'\tFAIL\t' "$results" || true)
+  failed_total=$((failed_total + failed))
   printf '%s\tpassed=%s\tfailed=%s\tattempts=%s\tavg_attempt_s=%s\t%s\n' "$profile" "$passed" "$failed" "$n" "$((n > 0 ? seconds / n : 0))" "$runtime" | tee -a "$out/summary.tsv"
   column -t -s $'\t' "$results" | sed 's/^/   /'
+
+  # Each failing scenario, one JSON line: its detail, and for its captures
+  # (a follow-up's or repeat's first one too) the state, the Human Review
+  # reason and candidates, every processing attempt (status, times, error
+  # summary, and the actions: tools, arguments, results), and what the
+  # processor logged about them (such as a capture that waited for an
+  # earlier one). A check without captures has its detail only.
+  local failures="$out/${profile//\//_}.failures.jsonl" scenario result detail key id captures
+  : >"$failures"
+  "${compose[@]}" logs --no-color --no-log-prefix processor >"$work/processor.log" 2>/dev/null || true
+  while IFS=$'\t' read -r scenario result detail; do
+    [ "$result" = FAIL ] || continue
+    captures='[]'
+    for key in "${scenario}_first" "$scenario"; do
+      id=${ids[$key]:-}
+      [ -n "$id" ] || continue
+      item "$id" >"$work/item.json" 2>/dev/null || echo '{}' >"$work/item.json"
+      api "$gateway/api/inbox/v1/inbox-items/$id/processing-attempts" >"$work/attempts.json" 2>/dev/null || echo '{"items":[]}' >"$work/attempts.json"
+      grep -F "$id" "$work/processor.log" >"$work/item.log" || true
+      captures=$(jq -c --arg key "$key" --slurpfile item "$work/item.json" --slurpfile attempts "$work/attempts.json" --rawfile log "$work/item.log" \
+        '($item[0] // {}) as $i | . + [{key: $key, id: $i.id, content: $i.content, state: $i.state, createdAt: $i.createdAt, nextRetryAt: $i.nextRetryAt, retryReason: $i.retryReason,
+          humanReview: $i.processingMetadata.humanReview,
+          attempts: [($attempts[0].items // [])[] | {status, createdAt, startedAt, completedAt, runtimeState, errorSummary, nextRetryAt, tools: [.actions[]?.tool], actions}],
+          processorLog: ($log | split("\n") | map(select(. != "")))}]' <<<"$captures")
+    done
+    jq -nc --arg profile "$profile" --arg scenario "$scenario" --arg detail "$detail" --argjson captures "$captures" \
+      '{profile: $profile, scenario: $scenario, detail: $detail, captures: $captures}' >>"$failures"
+  done <"$results"
+  [ "$failed" = 0 ] || echo "   failing scenarios: $failures"
 }
 
 for profile in "$@"; do run_profile "$profile"; done
 echo
 echo "results: $out"
+if [ "$failed_total" -gt 0 ]; then
+  echo "benchmark: $failed_total check(s) failed (see the *.failures.jsonl files)" >&2
+  exit 1
+fi

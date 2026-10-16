@@ -21,6 +21,8 @@ type Querier interface {
 	GetLatestPendingFailure(ctx context.Context) (GetLatestPendingFailureRow, error)
 	GetMedia(ctx context.Context, sha256 string) (InboxMedium, error)
 	GetProcessingAttemptForItem(ctx context.Context, arg GetProcessingAttemptForItemParams) (InboxProcessingAttempt, error)
+	// Newest first, or with oldest_first the earliest first (the processor's
+	// order, so a backlog is planned as it was captured).
 	ListInboxItems(ctx context.Context, arg ListInboxItemsParams) ([]InboxItem, error)
 	ListMedia(ctx context.Context, hashes []string) ([]InboxMedium, error)
 	ListProcessingAttempts(ctx context.Context, inboxItemID pgtype.UUID) ([]InboxProcessingAttempt, error)
@@ -32,6 +34,10 @@ type Querier interface {
 	// captures that are still waiting for processing. An open attempt of a capture
 	// that has since been resolved, discarded, or sent to review is history.
 	ListStaleProcessingAttempts(ctx context.Context, staleAfterSeconds int32) ([]InboxProcessingAttempt, error)
+	// The captures made in a window before one capture (not that one) that
+	// processing has not finished yet: raw (new, or waiting for a retry) or
+	// processing, oldest first. The processor plans a capture after them.
+	ListUnfinishedCaptures(ctx context.Context, arg ListUnfinishedCapturesParams) ([]ListUnfinishedCapturesRow, error)
 	RecordAttemptRuntime(ctx context.Context, arg RecordAttemptRuntimeParams) (InboxProcessingAttempt, error)
 	// Records an uploaded image. Uploading the same bytes again refreshes its
 	// time, so a fresh upload is never pruned as an old orphan.

@@ -10,7 +10,11 @@ WHERE (sqlc.narg(unresolved_filter)::boolean IS NULL OR (state IN ('raw', 'proce
   AND (sqlc.narg(state_filter)::text IS NULL OR state = sqlc.narg(state_filter)::text)
   -- due: only items without a scheduled retry, or whose retry time has come.
   AND (sqlc.narg(due_filter)::boolean IS NOT TRUE OR next_retry_at IS NULL OR next_retry_at <= now())
-ORDER BY created_at DESC LIMIT sqlc.arg(page_limit);
+-- Newest first, or with oldest_first the earliest first (the processor's
+-- order, so a backlog is planned as it was captured).
+ORDER BY CASE WHEN sqlc.narg(oldest_first)::boolean IS TRUE THEN created_at END ASC,
+         created_at DESC
+LIMIT sqlc.arg(page_limit);
 -- name: SetInboxItemState :one
 -- Any state change other than a scheduled retry clears the retry schedule.
 UPDATE inbox_items SET state = $1, resolved_at = CASE WHEN $1 IN ('resolved', 'discarded') THEN now() ELSE resolved_at END, next_retry_at = NULL, retry_reason = NULL, updated_at = now() WHERE id = $2 RETURNING *;
@@ -100,4 +104,17 @@ WHERE i.id <> sqlc.arg(before_id)
   AND i.created_at < sqlc.arg(window_end)
   AND i.state IN ('resolved', 'human_review', 'failed')
 ORDER BY i.created_at DESC
+LIMIT sqlc.arg(page_limit);
+
+-- name: ListUnfinishedCaptures :many
+-- The captures made in a window before one capture (not that one) that
+-- processing has not finished yet: raw (new, or waiting for a retry) or
+-- processing, oldest first. The processor plans a capture after them.
+SELECT i.id, i.content, i.source, i.state, i.created_at, i.updated_at, i.next_retry_at
+FROM inbox_items i
+WHERE i.id <> sqlc.arg(before_id)
+  AND i.created_at >= sqlc.arg(window_start)
+  AND i.created_at < sqlc.arg(window_end)
+  AND i.state IN ('raw', 'processing')
+ORDER BY i.created_at
 LIMIT sqlc.arg(page_limit);

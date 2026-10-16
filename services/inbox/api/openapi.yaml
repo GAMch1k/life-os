@@ -26,7 +26,7 @@ paths:
       summary: List captured inbox items
       operationId: listInboxItems
       security: []
-      parameters: [{name: unresolved, in: query, schema: {type: boolean, default: true}}, {name: state, in: query, schema: {type: string, enum: [raw, processing, human_review, failed, resolved, discarded]}}, {name: due, in: query, description: 'Only items without a scheduled retry or whose nextRetryAt has passed (the processor''s eligible work).', schema: {type: boolean}}, {name: cursor, in: query, schema: {type: string}}, {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}]
+      parameters: [{name: unresolved, in: query, schema: {type: boolean, default: true}}, {name: state, in: query, schema: {type: string, enum: [raw, processing, human_review, failed, resolved, discarded]}}, {name: due, in: query, description: 'Only items without a scheduled retry or whose nextRetryAt has passed (the processor''s eligible work).', schema: {type: boolean}}, {name: order, in: query, description: 'newest (the default) lists the latest captures first; oldest lists the earliest first, so the processor plans a backlog in the order it was captured.', schema: {type: string, enum: [newest, oldest], default: newest}}, {name: cursor, in: query, schema: {type: string}}, {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}]
       responses: {'200': {description: Inbox items, content: {application/json: {schema: {$ref: '#/components/schemas/InboxItemList'}}}}, '400': {description: Invalid request}}
     post:
       summary: Capture an inbox item
@@ -152,6 +152,10 @@ paths:
         latest finished processing attempt (`outcome`): its status, error
         summary, and recorded actions, which name what was created or changed
         (the action's tool, arguments, and the owning service's result).
+        `unfinished` lists, oldest first and at most `limit`, the captures of
+        the same window that processing has not finished yet (raw, including
+        those waiting for a retry, or processing): the processor plans a
+        capture only after them, for a bounded time.
       operationId: listRecentCaptures
       security: []
       parameters:
@@ -179,4 +183,5 @@ components:
     ResolveHumanReviewRequest: {type: object, required: [candidateId], properties: {candidateId: {type: string, format: uuid}}}
     RecentCapture: {type: object, required: [id, content, source, state, correlationId, createdAt], properties: {id: {type: string, format: uuid}, content: {type: string}, source: {type: string, enum: [manual, web, voice, watch, email]}, state: {type: string, enum: [resolved, human_review, failed]}, correlationId: {type: string, description: 'The capture''s workflow correlation id (see InboxItem.correlationId).'}, createdAt: {type: string, format: date-time}, resolvedAt: {type: string, format: date-time, nullable: true}, outcome: {$ref: '#/components/schemas/RecentCaptureOutcome'}}}
     RecentCaptureOutcome: {type: object, description: 'The capture''s latest finished processing attempt; absent when it has none (for example, resolved by hand).', required: [attemptId, status, actions], properties: {attemptId: {type: string, format: uuid}, status: {type: string, enum: [processed, human_review, failed]}, errorSummary: {type: string, nullable: true}, completedAt: {type: string, format: date-time, nullable: true}, actions: {type: array, description: 'The actions the attempt recorded, as the processor recorded them (tool, arguments, result).', items: {type: object, additionalProperties: true}}}}
-    RecentCaptureList: {type: object, required: [items], properties: {items: {type: array, items: {$ref: '#/components/schemas/RecentCapture'}}}}
+    RecentCaptureList: {type: object, required: [items, unfinished], properties: {items: {type: array, items: {$ref: '#/components/schemas/RecentCapture'}}, unfinished: {type: array, description: 'The captures of the window that processing has not finished yet, oldest first.', items: {$ref: '#/components/schemas/UnfinishedCapture'}}}}
+    UnfinishedCapture: {type: object, description: 'A capture made shortly before another one that processing has not finished yet.', required: [id, content, source, state, createdAt, updatedAt], properties: {id: {type: string, format: uuid}, content: {type: string}, source: {type: string, enum: [manual, web, voice, watch, email]}, state: {type: string, enum: [raw, processing], description: 'raw: waiting for processing, or for a retry (nextRetryAt); processing: an attempt is running.'}, createdAt: {type: string, format: date-time}, updatedAt: {type: string, format: date-time}, nextRetryAt: {type: string, format: date-time, nullable: true, description: 'When a raw capture that failed may be retried.'}}}

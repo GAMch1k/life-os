@@ -46,7 +46,14 @@ func (h *Handler) ListInboxItems(c fiber.Ctx, params generated.ListInboxItemsPar
 		value := string(*params.State)
 		state = &value
 	}
-	items, err := h.queries.ListInboxItems(c.Context(), store.ListInboxItemsParams{UnresolvedFilter: params.Unresolved, StateFilter: state, DueFilter: params.Due, PageLimit: int32(limit)})
+	oldestFirst := false
+	if params.Order != nil {
+		if !params.Order.Valid() {
+			return fiber.NewError(400, "order must be newest or oldest")
+		}
+		oldestFirst = *params.Order == generated.Oldest
+	}
+	items, err := h.queries.ListInboxItems(c.Context(), store.ListInboxItemsParams{UnresolvedFilter: params.Unresolved, StateFilter: state, DueFilter: params.Due, OldestFirst: &oldestFirst, PageLimit: int32(limit)})
 	if err != nil {
 		return internal(err)
 	}

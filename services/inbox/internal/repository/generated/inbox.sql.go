@@ -227,21 +227,27 @@ WHERE ($1::boolean IS NULL OR (state IN ('raw', 'processing', 'human_review', 'f
   AND ($2::text IS NULL OR state = $2::text)
   -- due: only items without a scheduled retry, or whose retry time has come.
   AND ($3::boolean IS NOT TRUE OR next_retry_at IS NULL OR next_retry_at <= now())
-ORDER BY created_at DESC LIMIT $4
+ORDER BY CASE WHEN $4::boolean IS TRUE THEN created_at END ASC,
+         created_at DESC
+LIMIT $5
 `
 
 type ListInboxItemsParams struct {
 	UnresolvedFilter *bool
 	StateFilter      *string
 	DueFilter        *bool
+	OldestFirst      *bool
 	PageLimit        int32
 }
 
+// Newest first, or with oldest_first the earliest first (the processor's
+// order, so a backlog is planned as it was captured).
 func (q *Queries) ListInboxItems(ctx context.Context, arg ListInboxItemsParams) ([]InboxItem, error) {
 	rows, err := q.db.Query(ctx, listInboxItems,
 		arg.UnresolvedFilter,
 		arg.StateFilter,
 		arg.DueFilter,
+		arg.OldestFirst,
 		arg.PageLimit,
 	)
 	if err != nil {
@@ -445,6 +451,70 @@ func (q *Queries) ListStaleProcessingAttempts(ctx context.Context, staleAfterSec
 			&i.RuntimeOwner,
 			&i.RuntimeSessionID,
 			&i.RuntimeHeartbeatAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUnfinishedCaptures = `-- name: ListUnfinishedCaptures :many
+SELECT i.id, i.content, i.source, i.state, i.created_at, i.updated_at, i.next_retry_at
+FROM inbox_items i
+WHERE i.id <> $1
+  AND i.created_at >= $2
+  AND i.created_at < $3
+  AND i.state IN ('raw', 'processing')
+ORDER BY i.created_at
+LIMIT $4
+`
+
+type ListUnfinishedCapturesParams struct {
+	BeforeID    pgtype.UUID
+	WindowStart pgtype.Timestamptz
+	WindowEnd   pgtype.Timestamptz
+	PageLimit   int32
+}
+
+type ListUnfinishedCapturesRow struct {
+	ID          pgtype.UUID
+	Content     string
+	Source      string
+	State       string
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+	NextRetryAt pgtype.Timestamptz
+}
+
+// The captures made in a window before one capture (not that one) that
+// processing has not finished yet: raw (new, or waiting for a retry) or
+// processing, oldest first. The processor plans a capture after them.
+func (q *Queries) ListUnfinishedCaptures(ctx context.Context, arg ListUnfinishedCapturesParams) ([]ListUnfinishedCapturesRow, error) {
+	rows, err := q.db.Query(ctx, listUnfinishedCaptures,
+		arg.BeforeID,
+		arg.WindowStart,
+		arg.WindowEnd,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListUnfinishedCapturesRow{}
+	for rows.Next() {
+		var i ListUnfinishedCapturesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Content,
+			&i.Source,
+			&i.State,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.NextRetryAt,
 		); err != nil {
 			return nil, err
 		}
