@@ -249,6 +249,9 @@ func TestSiteOnlyTitlesAndNames(t *testing.T) {
 		{instagram, "https://instagram.com/reel/DGx7abc", true},
 		{instagram, "https://www.instagram.com/reel/DGx7abc/?igsh=MWQ1ZGUxMzBkMA==&utm_source=ig_web_copy_link", true},
 		{"https://m.youtube.com/watch?v=abc&si=x", "https://www.youtube.com/watch?v=abc", true},
+		// The live junk stub's link, shared again another time.
+		{"https://www.instagram.com/reel/DcLRatdo2WQ/?vrfl=a2FjZGV0MHEyaTQz", "https://www.instagram.com/reel/DcLRatdo2WQ/?img_index=1&vrfl=b", true},
+		{"https://www.chefkoch.de/rezepte/1?portionen=4", "https://www.chefkoch.de/rezepte/1", false},
 		{"https://www.youtube.com/watch?v=abc", "https://www.youtube.com/watch?v=xyz", false},
 		{instagram, "https://www.instagram.com/reel/OTHER/", false},
 		{"", instagram, false},

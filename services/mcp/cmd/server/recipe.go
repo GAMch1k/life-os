@@ -349,12 +349,17 @@ func takenReason(title string) string {
 
 // trackingParams are link query parameters that only say how a link was
 // shared, never which page it is.
-var trackingParams = map[string]bool{"igsh": true, "igshid": true, "si": true, "fbclid": true, "gclid": true, "feature": true, "is_from_webapp": true, "sender_device": true, "ref": true, "share_id": true}
+var trackingParams = map[string]bool{"igsh": true, "igshid": true, "vrfl": true, "si": true, "fbclid": true, "gclid": true, "feature": true, "is_from_webapp": true, "sender_device": true, "ref": true, "share_id": true}
+
+// socialHosts are the sites whose post links name the post by their path
+// (and YouTube's and Facebook's videos by v): any other query parameter
+// only says how it was shared.
+var socialHosts = []string{"instagram.com", "tiktok.com", "youtube.com", "youtu.be", "facebook.com", "fb.watch", "threads.net", "x.com", "twitter.com", "pinterest.com"}
 
 // sameLink reports whether two links name the same page: the same host
 // (without "www." and "m."), path (without a trailing slash), and query
-// apart from tracking parameters (utm_*, igsh, si, …). An empty link is
-// never the same as another.
+// apart from tracking parameters (utm_*, igsh, si, …; for a social post,
+// every parameter but v). An empty link is never the same as another.
 func sameLink(a, b string) bool {
 	canonical := func(raw string) string {
 		parsed, err := url.Parse(strings.TrimSpace(raw))
@@ -363,9 +368,14 @@ func sameLink(a, b string) bool {
 		}
 		host := strings.ToLower(parsed.Hostname())
 		host = strings.TrimPrefix(strings.TrimPrefix(host, "www."), "m.")
+		social := false
+		for _, domain := range socialHosts {
+			social = social || host == domain || strings.HasSuffix(host, "."+domain)
+		}
 		query := parsed.Query()
 		for name := range query {
-			if trackingParams[strings.ToLower(name)] || strings.HasPrefix(strings.ToLower(name), "utm_") {
+			lower := strings.ToLower(name)
+			if trackingParams[lower] || strings.HasPrefix(lower, "utm_") || (social && lower != "v") {
 				query.Del(name)
 			}
 		}
