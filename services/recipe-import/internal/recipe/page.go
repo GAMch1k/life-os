@@ -119,6 +119,11 @@ func Parse(link *url.URL, body []byte) Result {
 	}
 	stub := base
 	stub.Title = firstOf(p.meta["og:title"], p.meta["twitter:title"], p.title)
+	if GenericTitle(stub.Title, link, site) {
+		// A login wall ("Instagram", "Login • Instagram") names the site,
+		// not the post: no title at all.
+		stub.Title = ""
+	}
 	stub.Description = p.description()
 	stub.ImageURL = absolute(link, firstOf(p.meta["og:image"], p.meta["twitter:image"]))
 	stub.Tags = []string{ReviewTag}

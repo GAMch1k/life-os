@@ -55,7 +55,7 @@ export interface paths {
         put?: never;
         /**
          * Save a recipe from a link
-         * @description Saves a recipe in Food (`POST /v1/recipes`, as `system:recipe-import`) with the link as its `sourceUrl`. With `overrides` (the draft as the owner edited it) that draft is saved as it is and the page is not fetched again; without, the page is fetched and read as for a preview and what it gives is saved (422 `import_failed` when it gives nothing, not even a title). A recipe with the same title already in Food is 409 `recipe_exists` with its `recipeId`. The `Idempotency-Key` is passed on to Food, so a retried save creates the recipe once.
+         * @description Saves a recipe in Food (`POST /v1/recipes`, as `system:recipe-import`) with the link as its `sourceUrl`. With `overrides` (the draft as the owner edited it) that draft is saved as it is and the page is not fetched again; without, the page is fetched and read as for a preview and what it gives is saved (422 `import_failed` when it gives nothing, not even a title). A recipe with the same title already in Food is 409 `recipe_exists` with its `recipeId` and the link it was saved from (`sourceUrl`). The `Idempotency-Key` is passed on to Food, so a retried save creates the recipe once.
          */
         post: operations["createImport"];
         delete?: never;
@@ -108,6 +108,8 @@ export interface components {
              * @description For `recipe_exists`: the recipe Food already has.
              */
             recipeId?: string;
+            /** @description For `recipe_exists`, with `recipeId`: the link that recipe was saved from; absent when it has none. A different link is another recipe of the same name, not this one saved before. */
+            sourceUrl?: string | null;
         };
         PreviewRequest: {
             /** @description An http or https link. */

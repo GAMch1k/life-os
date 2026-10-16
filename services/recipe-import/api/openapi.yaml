@@ -77,7 +77,7 @@ paths:
         and read as for a preview and what it gives is saved (422
         `import_failed` when it gives nothing, not even a title). A recipe
         with the same title already in Food is 409 `recipe_exists` with its
-        `recipeId`. The `Idempotency-Key` is passed on to Food, so a retried
+        `recipeId` and the link it was saved from (`sourceUrl`). The `Idempotency-Key` is passed on to Food, so a retried
         save creates the recipe once.
       operationId: createImport
       security: []
@@ -138,6 +138,7 @@ components:
             message: {type: string}
         request_id: {type: string}
         recipeId: {type: string, format: uuid, description: 'For `recipe_exists`: the recipe Food already has.'}
+        sourceUrl: {type: string, nullable: true, description: 'For `recipe_exists`, with `recipeId`: the link that recipe was saved from; absent when it has none. A different link is another recipe of the same name, not this one saved before.'}
     PreviewRequest:
       type: object
       required: [url]

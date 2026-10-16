@@ -274,13 +274,18 @@ func (h *Handler) DiscoverRecipes(c fiber.Ctx, params generated.DiscoverRecipesP
 }
 
 // exists answers a save whose title Food already has, with that recipe's id
-// when it can be found.
+// and link when it can be found.
 func (h *Handler) exists(c fiber.Ctx, title string) error {
 	answer := generated.RecipeExistsError{RequestId: httpserver.RequestID(c)}
 	answer.Error.Code = "recipe_exists"
 	answer.Error.Message = "A recipe called “" + title + "” is already saved."
 	if existing, err := h.food.FindRecipe(c.Context(), title); err == nil && existing != nil {
 		answer.RecipeId = &existing.Id
+		// Whether the save was this recipe again or another of the same
+		// name is the caller's to tell, from the links.
+		if existing.SourceUrl != nil && strings.TrimSpace(*existing.SourceUrl) != "" {
+			answer.SourceUrl = existing.SourceUrl
+		}
 	}
 	return c.Status(fiber.StatusConflict).JSON(answer)
 }

@@ -278,8 +278,17 @@ func TestImportRefusals(t *testing.T) {
 	status, raw := h.do("/v1/imports", map[string]any{"url": h.page("chefkoch")})
 	var exists generated.RecipeExistsError
 	_ = json.Unmarshal(raw, &exists)
-	if status != http.StatusConflict || exists.Error.Code != "recipe_exists" || exists.RecipeId == nil || exists.RecipeId.String() != recipeID {
+	if status != http.StatusConflict || exists.Error.Code != "recipe_exists" || exists.RecipeId == nil || exists.RecipeId.String() != recipeID || exists.SourceUrl != nil {
 		t.Fatalf("exists: %d %s", status, raw)
+	}
+	// With the link it was saved from, so a caller tells this recipe saved
+	// before from another of the same name.
+	h.food.existing = []map[string]any{{"id": recipeID, "normalizedTitle": "spaghetti bolognese", "sourceUrl": "https://www.chefkoch.de/rezepte/1"}}
+	status, raw = h.do("/v1/imports", map[string]any{"url": h.page("chefkoch")})
+	exists = generated.RecipeExistsError{}
+	_ = json.Unmarshal(raw, &exists)
+	if status != http.StatusConflict || exists.SourceUrl == nil || *exists.SourceUrl != "https://www.chefkoch.de/rezepte/1" {
+		t.Fatalf("exists with a link: %d %s", status, raw)
 	}
 	if lookup := h.food.requests[len(h.food.requests)-1]; lookup.Method != http.MethodGet || lookup.URL.Query().Get("q") != "Spaghetti Bolognese" {
 		t.Fatalf("lookup = %s %s", lookup.Method, lookup.URL)

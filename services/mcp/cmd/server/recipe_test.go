@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -20,12 +22,20 @@ const (
 )
 
 // fakeImport is a recipe-import stand-in: previews by link, one answer to
-// text reads, and one to saves; it records every request.
+// text reads, and one to saves (or one per save, in turn: saves, the last
+// repeated); it records every request.
 type fakeImport struct {
 	previews   map[string]string
 	text       string
 	saveStatus int
 	saveBody   string
+	saves      []fakeSave
+}
+
+// fakeSave is one answer to a save.
+type fakeSave struct {
+	status int
+	body   string
 }
 
 var (
@@ -54,12 +64,18 @@ func recipeSession(t *testing.T, fake fakeImport) (*mcp.ClientSession, *[]calend
 		case "/v1/imports/text":
 			_, _ = w.Write([]byte(fake.text))
 		default:
-			status := fake.saveStatus
+			status, body := fake.saveStatus, fake.saveBody
+			if len(fake.saves) > 0 {
+				answer := fake.saves[0]
+				if len(fake.saves) > 1 {
+					fake.saves = fake.saves[1:]
+				}
+				status, body = answer.status, answer.body
+			}
 			if status == 0 {
 				status = http.StatusCreated
 			}
 			w.WriteHeader(status)
-			body := fake.saveBody
 			if body == "" {
 				body = `{"method":"structured","recipe":{"id":"` + recipeUUID + `","title":"Omas Gulasch"}}`
 			}
@@ -154,7 +170,7 @@ func TestAPostWithoutACaptionIsSavedOnlyWhenAsked(t *testing.T) {
 	// A bare shared link: nothing is saved, and the reason says what to do.
 	session, requests := recipeSession(t, fakeImport{previews: map[string]string{instagram: instagramPreview}})
 	data := importData(t, callTool(t, session, "recipe_import", map[string]any{"url": instagram}))
-	if data["saved"] != false || data["reason"] != "Instagram posts can't be read directly: paste the caption to fill in the ingredients and steps." || len(*requests) != 1 {
+	if data["saved"] != false || data["reason"] != "Instagram posts can't be read directly: paste the caption to fill in the ingredients and steps. "+nameHint || len(*requests) != 1 {
 		t.Fatalf("data = %#v, requests = %q", data, paths(*requests))
 	}
 	// "Save this": the stub to review.
@@ -172,8 +188,125 @@ func TestAPostWithoutACaptionIsSavedOnlyWhenAsked(t *testing.T) {
 	// A page that cannot be read has no title to save a stub with.
 	session, requests = recipeSession(t, fakeImport{previews: map[string]string{instagram: failedPreview}})
 	data = importData(t, callTool(t, session, "recipe_import", map[string]any{"url": instagram, "saveLink": true}))
-	if data["saved"] != false || data["reason"] != "The site would not show the page to Life OS (HTTP 403)." || len(*requests) != 1 {
+	if data["saved"] != false || data["reason"] != "The site would not show the page to Life OS (HTTP 403). "+nameHint || len(*requests) != 1 {
 		t.Fatalf("data = %#v, requests = %q", data, paths(*requests))
+	}
+}
+
+// A recipe the owner names with a link is saved, from a post the server
+// cannot read too, under the owner's words; never under the site's name.
+func TestARecipeNamedWithALinkIsSavedUnderTheOwnersWords(t *testing.T) {
+	loginWall := `{"method":"preview","reason":"Instagram posts can't be read directly: paste the caption to fill in the ingredients and steps.","draft":{"title":"Instagram","ingredients":[],"steps":[],"tags":["to-review"],"sourceUrl":"` + instagram + `","siteName":"Instagram"}}`
+	for _, preview := range []string{loginWall, instagramPreview, failedPreview} {
+		session, requests := recipeSession(t, fakeImport{previews: map[string]string{instagram: preview}})
+		// "брауни <reel>": the title is the owner's word, capitalised, and
+		// asks to save the link without saveLink.
+		data := importData(t, callTool(t, session, "recipe_import", map[string]any{"url": instagram, "title": " брауни ", "idempotencyKey": "food-11"}))
+		if data["saved"] != true || len(*requests) != 2 {
+			t.Fatalf("data = %#v, requests = %q", data, paths(*requests))
+		}
+		save := (*requests)[1]
+		overrides, _ := save.Body["overrides"].(map[string]any)
+		if overrides["title"] != "Брауни" || overrides["sourceUrl"] != instagram || !reflect.DeepEqual(overrides["tags"], []any{"to-review"}) || save.Idempotency != "food-11" {
+			t.Fatalf("save = %s", save.RawBody)
+		}
+	}
+	// The login wall's title is never a stub's, even when asked to save.
+	session, requests := recipeSession(t, fakeImport{previews: map[string]string{instagram: loginWall}})
+	data := importData(t, callTool(t, session, "recipe_import", map[string]any{"url": instagram, "saveLink": true}))
+	if data["saved"] != false || data["reason"] != "Instagram posts can't be read directly: paste the caption to fill in the ingredients and steps. "+nameHint || len(*requests) != 1 {
+		t.Fatalf("data = %#v, requests = %q", data, paths(*requests))
+	}
+}
+
+func TestSiteOnlyTitlesAndNames(t *testing.T) {
+	for title, want := range map[string]bool{"Instagram": true, "Login • Instagram": true, "TikTok - Make Your Day": true, "": true, "Anna on Instagram": false, "Брауни": false, "Instagram brownies": false} {
+		if got := siteOnlyTitle(title, "Instagram"); got != want {
+			t.Errorf("siteOnlyTitle(%q) = %v", title, got)
+		}
+	}
+	if !siteOnlyTitle("chefkoch.de", "chefkoch.de") || siteOnlyTitle("Gulasch", "chefkoch.de") {
+		t.Error("a site's own name")
+	}
+	for name, want := range map[string]string{"брауни": "Брауни", " crispy  chicken ": "Crispy chicken", "Omas Gulasch": "Omas Gulasch", "iPad cake": "iPad cake", "": "", "1 minute mug cake": "1 minute mug cake"} {
+		if got := capitalized(name); got != want {
+			t.Errorf("capitalized(%q) = %q, want %q", name, got, want)
+		}
+	}
+	if got := numberedTitle("Брауни", 2); got != "Брауни (2)" {
+		t.Errorf("numberedTitle = %q", got)
+	}
+	if got := numberedTitle(strings.Repeat("я", 200), 9); utf8.RuneCountInString(got) != 200 || !strings.HasSuffix(got, " (9)") {
+		t.Errorf("long numberedTitle = %q", got)
+	}
+	if numberedKey("food-1", 1, 150) != "food-1" || numberedKey("food-1", 3, 150) != "food-1#3" || len(numberedKey(strings.Repeat("k", 150), 2, 150)) != 150 {
+		t.Error("numberedKey")
+	}
+	for _, tc := range []struct {
+		a, b string
+		same bool
+	}{
+		{instagram, "https://instagram.com/reel/DGx7abc", true},
+		{instagram, "https://www.instagram.com/reel/DGx7abc/?igsh=MWQ1ZGUxMzBkMA==&utm_source=ig_web_copy_link", true},
+		{"https://m.youtube.com/watch?v=abc&si=x", "https://www.youtube.com/watch?v=abc", true},
+		{"https://www.youtube.com/watch?v=abc", "https://www.youtube.com/watch?v=xyz", false},
+		{instagram, "https://www.instagram.com/reel/OTHER/", false},
+		{"", instagram, false},
+		{"", "", false},
+	} {
+		if got := sameLink(tc.a, tc.b); got != tc.same {
+			t.Errorf("sameLink(%q, %q) = %v", tc.a, tc.b, got)
+		}
+	}
+}
+
+// A title Food has is this recipe saved before only when it came from the
+// same link; another recipe of that name gets a number.
+func TestATakenTitleFromAnotherLinkGetsANumber(t *testing.T) {
+	exists := func(link string) fakeSave {
+		body := `{"error":{"code":"recipe_exists","message":"A recipe called “Omas Gulasch” is already saved."},"request_id":"r","recipeId":"` + recipeUUID + `"`
+		if link != "" {
+			body += `,"sourceUrl":"` + link + `"`
+		}
+		return fakeSave{http.StatusConflict, body + "}"}
+	}
+	saved := fakeSave{http.StatusCreated, `{"method":"edited","recipe":{"id":"11111111-1111-4111-8111-111111111111","title":"Omas Gulasch (2)"}}`}
+	// The same link: saved before.
+	session, requests := recipeSession(t, fakeImport{previews: map[string]string{chefkoch: structuredPreview}, saves: []fakeSave{exists(chefkoch + "?utm_source=share")}})
+	data := importData(t, callTool(t, session, "recipe_import", map[string]any{"url": chefkoch, "idempotencyKey": "food-12"}))
+	if data["saved"] != true || data["alreadySaved"] != true || data["recipeId"] != recipeUUID || len(*requests) != 2 {
+		t.Fatalf("data = %#v, requests = %q", data, paths(*requests))
+	}
+	// Another link, or none (typed in by hand): saved as "… (2)", with its
+	// own key, from the page's draft.
+	for _, existing := range []string{"https://www.lecker.de/gulasch-1", ""} {
+		session, requests = recipeSession(t, fakeImport{previews: map[string]string{chefkoch: structuredPreview}, saves: []fakeSave{exists(existing), saved}})
+		data = importData(t, callTool(t, session, "recipe_import", map[string]any{"url": chefkoch, "idempotencyKey": "food-12"}))
+		if data["saved"] != true || data["alreadySaved"] != nil || data["renamedFrom"] != "Omas Gulasch" || data["recipeId"] != "11111111-1111-4111-8111-111111111111" {
+			t.Fatalf("data = %#v", data)
+		}
+		first, second := (*requests)[1], (*requests)[2]
+		overrides, _ := second.Body["overrides"].(map[string]any)
+		if first.Body["overrides"] != nil || first.Idempotency != "food-12" || second.Idempotency != "food-12#2" || overrides["title"] != "Omas Gulasch (2)" || overrides["siteName"] != "Chefkoch" || len(overrides["ingredients"].([]any)) != 1 {
+			t.Fatalf("saves = %s, %s (%s)", first.RawBody, second.RawBody, second.Idempotency)
+		}
+	}
+	// A stub keeps the owner's words with the number.
+	session, requests = recipeSession(t, fakeImport{previews: map[string]string{instagram: instagramPreview}, saves: []fakeSave{exists("https://www.instagram.com/reel/OTHER/"), saved}})
+	importData(t, callTool(t, session, "recipe_import", map[string]any{"url": instagram, "title": "Брауни"}))
+	if overrides, _ := (*requests)[2].Body["overrides"].(map[string]any); overrides["title"] != "Брауни (2)" || overrides["sourceUrl"] != instagram {
+		t.Fatalf("save = %s", (*requests)[2].RawBody)
+	}
+	// Every number taken: nothing saved, and the owner decides.
+	session, requests = recipeSession(t, fakeImport{previews: map[string]string{chefkoch: structuredPreview}, saves: []fakeSave{exists("")}})
+	data = importData(t, callTool(t, session, "recipe_import", map[string]any{"url": chefkoch}))
+	if data["saved"] != false || data["reason"] != "Recipes called “Omas Gulasch” and “Omas Gulasch (2)” to “Omas Gulasch (9)” are saved already: rename one, then capture this again." || len(*requests) != 1+maxTitleNumber {
+		t.Fatalf("data = %#v, requests = %d", data, len(*requests))
+	}
+	// This capture's key was used for another draft of it: saved before.
+	session, _ = recipeSession(t, fakeImport{previews: map[string]string{chefkoch: structuredPreview}, saves: []fakeSave{{http.StatusConflict, `{"error":{"code":"idempotency_conflict","message":"x"},"request_id":"r"}`}}})
+	if data := importData(t, callTool(t, session, "recipe_import", map[string]any{"url": chefkoch, "idempotencyKey": "food-12"})); data["saved"] != true || data["alreadySaved"] != true {
+		t.Fatalf("data = %#v", data)
 	}
 }
 
@@ -185,7 +318,7 @@ func TestSaveOutcomes(t *testing.T) {
 		saved, error bool
 		want         map[string]any
 	}{
-		{"already saved", http.StatusConflict, `{"error":{"code":"recipe_exists","message":"A recipe called “Omas Gulasch” exists."},"request_id":"r","recipeId":"` + recipeUUID + `"}`, true, false, map[string]any{"saved": true, "alreadySaved": true, "method": "structured", "recipeId": recipeUUID}},
+		{"already saved", http.StatusConflict, `{"error":{"code":"recipe_exists","message":"A recipe called “Omas Gulasch” exists."},"request_id":"r","recipeId":"` + recipeUUID + `","sourceUrl":"` + chefkoch + `"}`, true, false, map[string]any{"saved": true, "alreadySaved": true, "method": "structured", "recipeId": recipeUUID}},
 		{"nothing to save", http.StatusUnprocessableEntity, `{"error":{"code":"import_failed","message":"The page has no recipe and no title."},"request_id":"r"}`, false, false, map[string]any{"saved": false, "method": "structured", "reason": "The page has no recipe and no title."}},
 		{"refused by Food", http.StatusBadRequest, `{"error":{"code":"invalid_request","message":"title is too long"},"request_id":"r"}`, false, false, map[string]any{"saved": false, "method": "structured", "reason": "title is too long"}},
 		{"Food unavailable", http.StatusBadGateway, `{"error":{"code":"food_unavailable","message":"Food is not answering."},"request_id":"r"}`, false, true, nil},
