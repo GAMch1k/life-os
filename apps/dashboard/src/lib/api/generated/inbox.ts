@@ -251,7 +251,7 @@ export interface paths {
         };
         /**
          * List the captures made shortly before one capture, with what processing did
-         * @description The processor's context for a follow-up capture ("actually oat milk" after "buy milk"): the owner's other captures, from every source, made in the `minutes` before the capture `before` was made (not that capture itself), newest first. Only captures processing has settled are listed: resolved, waiting for Human Review, or failed; raw, processing, and discarded captures are left out. Each carries its latest finished processing attempt (`outcome`): its status, error summary, and recorded actions, which name what was created or changed (the action's tool, arguments, and the owning service's result).
+         * @description The processor's context for a follow-up capture ("actually oat milk" after "buy milk"): the owner's other captures, from every source, made in the `minutes` before the capture `before` was made (not that capture itself), newest first. Only captures processing has settled are listed: resolved, waiting for Human Review, or failed; raw, processing, and discarded captures are left out. Each carries its latest finished processing attempt (`outcome`): its status, error summary, and recorded actions, which name what was created or changed (the action's tool, arguments, and the owning service's result). `unfinished` lists, oldest first and at most `limit`, the captures of the same window that processing has not finished yet (raw, including those waiting for a retry, or processing): the processor plans a capture only after them, for a bounded time.
          */
         get: operations["listRecentCaptures"];
         put?: never;
@@ -464,6 +464,30 @@ export interface components {
         };
         RecentCaptureList: {
             items: components["schemas"]["RecentCapture"][];
+            /** @description The captures of the window that processing has not finished yet, oldest first. */
+            unfinished: components["schemas"]["UnfinishedCapture"][];
+        };
+        /** @description A capture made shortly before another one that processing has not finished yet. */
+        UnfinishedCapture: {
+            /** Format: uuid */
+            id: string;
+            content: string;
+            /** @enum {string} */
+            source: "manual" | "web" | "voice" | "watch" | "email";
+            /**
+             * @description raw: waiting for processing, or for a retry (nextRetryAt); processing: an attempt is running.
+             * @enum {string}
+             */
+            state: "raw" | "processing";
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+            /**
+             * Format: date-time
+             * @description When a raw capture that failed may be retried.
+             */
+            nextRetryAt?: string | null;
         };
     };
     responses: never;
@@ -501,6 +525,8 @@ export interface operations {
                 state?: "raw" | "processing" | "human_review" | "failed" | "resolved" | "discarded";
                 /** @description Only items without a scheduled retry or whose nextRetryAt has passed (the processor's eligible work). */
                 due?: boolean;
+                /** @description newest (the default) lists the latest captures first; oldest lists the earliest first, so the processor plans a backlog in the order it was captured. */
+                order?: "newest" | "oldest";
                 cursor?: string;
                 limit?: number;
             };

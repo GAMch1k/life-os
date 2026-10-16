@@ -222,6 +222,96 @@ func TestRecentCapturesListTheSettledCapturesBeforeOne(t *testing.T) {
 	}
 }
 
+// TestRecentCapturesNameTheUnfinishedCapturesBefore covers unfinished
+// (P5-22): the same window's captures still on their way, oldest first,
+// which the processor plans a capture after.
+func TestRecentCapturesNameTheUnfinishedCapturesBefore(t *testing.T) {
+	api := newRecentAPI(t)
+	at := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+	minutes := func(n int) time.Time { return at.Add(time.Duration(n) * time.Minute) }
+
+	api.processed(api.capture("Too early", "web", minutes(-25)), nil)
+	retrying := api.capture("Coffee with Lukas tomorrow at 5 pm", "voice", minutes(-8))
+	retryAt := time.Now().Add(time.Minute).UTC().Truncate(time.Second)
+	api.call(http.MethodPatch, "/v1/inbox-items/"+retrying+"/processing-attempts/"+api.attempt(retrying, "op-retrying"),
+		map[string]any{"status": "retryable", "actions": []any{}, "errorSummary": "Codex timed out", "nextRetryAt": retryAt, "retryReason": "backoff"})
+	api.processed(api.capture("Settled", "web", minutes(-6)), []map[string]any{{"tool": "task_create"}})
+	discarded := api.capture("Discarded", "web", minutes(-5))
+	api.call(http.MethodPost, "/v1/inbox-items/"+discarded+"/discard", nil)
+	review := api.capture("Waiting for review", "web", minutes(-4))
+	api.call(http.MethodPost, "/v1/inbox-items/"+review+"/human-review", map[string]any{"attemptId": api.attempt(review, "op-review"), "proposedAction": map[string]any{"tool": "none", "arguments": map[string]any{}}, "candidates": []any{}, "errorSummary": "Which one?"})
+	fresh := api.capture("Still raw", "watch", minutes(-3))
+	processing := api.capture("Still processing", "web", minutes(-2))
+	api.attempt(processing, "op-processing")
+	item := api.capture("Actually, make it 6", "web", at)
+	api.attempt(item, "op-item")
+	api.capture("Captured later", "web", minutes(1))
+
+	answer := api.call(http.MethodGet, "/v1/recent-captures?before="+item, nil)
+	if got := contents(itemsOf(answer["items"])); !equalStrings(got, []string{"Waiting for review", "Settled"}) {
+		t.Fatalf("settled = %q", got)
+	}
+	unfinished := itemsOf(answer["unfinished"])
+	if got, want := contents(unfinished), []string{"Coffee with Lukas tomorrow at 5 pm", "Still raw", "Still processing"}; !equalStrings(got, want) {
+		t.Fatalf("unfinished = %q, want %q (oldest first, raw or processing, in the window, not the item)", got, want)
+	}
+	first := unfinished[0]
+	if first["id"] != retrying || first["state"] != "raw" || first["source"] != "voice" || first["nextRetryAt"] == nil || first["createdAt"] == nil || first["updatedAt"] == nil {
+		t.Errorf("waiting for a retry = %v", first)
+	}
+	if next, err := time.Parse(time.RFC3339, first["nextRetryAt"].(string)); err != nil || !next.Equal(retryAt) {
+		t.Errorf("nextRetryAt = %v, want %v", first["nextRetryAt"], retryAt)
+	}
+	if unfinished[1]["id"] != fresh || unfinished[1]["state"] != "raw" || unfinished[1]["nextRetryAt"] != nil {
+		t.Errorf("new capture = %v", unfinished[1])
+	}
+	if unfinished[2]["id"] != processing || unfinished[2]["state"] != "processing" {
+		t.Errorf("processing = %v", unfinished[2])
+	}
+	// The same limit and window as the settled ones; none is an empty list.
+	if got := contents(itemsOf(api.call(http.MethodGet, "/v1/recent-captures?before="+item+"&limit=1", nil)["unfinished"])); !equalStrings(got, []string{"Coffee with Lukas tomorrow at 5 pm"}) {
+		t.Errorf("limit 1 = %q", got)
+	}
+	if got := contents(itemsOf(api.call(http.MethodGet, "/v1/recent-captures?before="+item+"&minutes=5", nil)["unfinished"])); !equalStrings(got, []string{"Still raw", "Still processing"}) {
+		t.Errorf("5 minutes = %q", got)
+	}
+	if none, ok := api.call(http.MethodGet, "/v1/recent-captures?before="+retrying, nil)["unfinished"].([]any); !ok || len(none) != 0 {
+		t.Errorf("before the first capture: unfinished = %v, want []", none)
+	}
+}
+
+// TestInboxItemsListOldestFirst covers order=oldest, the processor's order.
+func TestInboxItemsListOldestFirst(t *testing.T) {
+	api := newRecentAPI(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	api.capture("Second", "web", now.Add(-2*time.Minute))
+	api.capture("First", "web", now.Add(-3*time.Minute))
+	api.capture("Third", "web", now.Add(-time.Minute))
+	list := func(query string) []string {
+		return contents(itemsOf(api.call(http.MethodGet, "/v1/inbox-items?"+query, nil)["items"]))
+	}
+	if got := list("state=raw&due=true&order=oldest&limit=2"); !equalStrings(got, []string{"First", "Second"}) {
+		t.Errorf("oldest first = %q", got)
+	}
+	for _, query := range []string{"state=raw&due=true&limit=2", "state=raw&order=newest&limit=2"} {
+		if got := list(query); !equalStrings(got, []string{"Third", "Second"}) {
+			t.Errorf("%s = %q, want the newest first", query, got)
+		}
+	}
+	if status, _ := api.request(http.MethodGet, "/v1/inbox-items?order=sideways", nil); status != http.StatusBadRequest {
+		t.Errorf("order=sideways = %d, want 400", status)
+	}
+}
+
+func itemsOf(raw any) []map[string]any {
+	list, _ := raw.([]any)
+	items := make([]map[string]any, 0, len(list))
+	for _, item := range list {
+		items = append(items, item.(map[string]any))
+	}
+	return items
+}
+
 func TestProcessedFollowUpLinksTheEarlierCapture(t *testing.T) {
 	api := newRecentAPI(t)
 	now := time.Now().UTC()
