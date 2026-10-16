@@ -144,6 +144,13 @@ export interface components {
             items: components["schemas"]["HostContainer"][];
             /** @description The containers using the most memory, biggest first (up to 5). */
             top: components["schemas"]["HostMemoryUser"][];
+            /**
+             * Format: date-time
+             * @description When host-health's stream of container events began to see every event; absent while it is not open. Restarts before it are only those Docker still held when it opened (its last 256 events of any kind, about two minutes here).
+             */
+            restartsWatchedSince?: string;
+            /** @description True once the event stream has been open for the whole restart-loop window (restartLoopMinutes). Until then, after host-health starts or its stream reopens, a recentDeaths below restartLoopCount may be too low, so no finding is not yet a sign that a loop has stopped. */
+            restartsComplete: boolean;
         };
         /** @description One part of the server's use. Memory in use is counted as for the whole server (total less MemAvailable): each container's cgroup memory.current less what the kernel can reclaim at once, its page cache on the file lists (active_file, inactive_file) and reclaimable kernel memory (slab_reclaimable). That is less than docker stats shows, which subtracts inactive_file only. */
         HostUsageShare: {

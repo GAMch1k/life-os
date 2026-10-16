@@ -54,6 +54,9 @@ func (d *dashboard) serve(t *testing.T) *httptest.Server {
 		for _, id := range []string{"processing", "inbox", "services"} {
 			state := d.checks[id]
 			check := map[string]any{"id": id, "title": titles[id], "state": state, "summary": titles[id] + " is " + state + ".", "facts": []any{}}
+			if state == "provisional" {
+				check["state"], check["provisional"] = "ok", true
+			}
 			if state != "ok" {
 				check["action"] = "Do something about " + id + "."
 			}
@@ -251,6 +254,33 @@ func TestTheMonitorNotifiesWarningsAsMedium(t *testing.T) {
 	f.evaluate(m, 2)
 	f.dashboard.set("inbox", "ok")
 	f.evaluate(m, 2)
+	f.expectNotifications(t, "medium Inbox backlog needs attention", "low Inbox backlog recovered")
+}
+
+// BUG-44: host-health restarted during a restart loop counts only what it
+// has seen since; until it has watched its window, the Server check is a
+// provisional ok, which must not send "Server recovered".
+func TestAProvisionalOkIsNeverARecovery(t *testing.T) {
+	f := newFixture(t)
+	m := f.monitor()
+	f.dashboard.set("inbox", "warning")
+	f.evaluate(m, 2)
+	f.dashboard.set("inbox", "provisional")
+	f.evaluate(m, 15)
+	f.expectNotifications(t, "medium Inbox backlog needs attention")
+	// The warning was still there.
+	f.dashboard.set("inbox", "warning")
+	f.evaluate(m, 3)
+	f.expectNotifications(t, "medium Inbox backlog needs attention")
+	// Once the check can say, a recovery is a recovery.
+	f.dashboard.set("inbox", "provisional")
+	f.evaluate(m, 5)
+	f.dashboard.set("inbox", "ok")
+	f.evaluate(m, 2)
+	f.expectNotifications(t, "medium Inbox backlog needs attention", "low Inbox backlog recovered")
+	// A provisional ok after ok notifies nothing either.
+	f.dashboard.set("inbox", "provisional")
+	f.evaluate(m, 3)
 	f.expectNotifications(t, "medium Inbox backlog needs attention", "low Inbox backlog recovered")
 }
 

@@ -455,12 +455,13 @@ services:
 
   # The read-only docker gateway (docs/services/host-health.md#the-docker-gateway):
   # the only container that opens the Docker socket. It answers host-health's
-  # three fixed questions (the containers; their die, start, and health
-  # events; one container's memory) with fixed requests of its own and
-  # re-encodes only what host-health needs: no inspect (every container's
-  # environment), logs, files, exec, or writes. The socket's :ro does not
-  # limit the API; the gateway does. It runs as nobody in the socket's group
-  # (LIFE_OS_DOCKER_GID), on an internal network shared with host-health only.
+  # three fixed questions (the containers; a stream of their die, start,
+  # kill, stop, and destroy events; one container's memory) with fixed
+  # requests of its own and re-encodes only what host-health needs: no
+  # inspect (every container's environment), logs, files, exec, or writes.
+  # The socket's :ro does not limit the API; the gateway does. It runs as
+  # nobody in the socket's group (LIFE_OS_DOCKER_GID), on an internal
+  # network shared with host-health only.
   host-health-docker:
     build: {context: ., dockerfile: services/host-health/Dockerfile}
     entrypoint: ["/service", "docker-gateway"]

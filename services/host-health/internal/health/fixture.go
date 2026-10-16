@@ -99,10 +99,27 @@ func (f Fixture) Containers(context.Context) ([]docker.Container, error) {
 	return containers, nil
 }
 
-// Events has none: nothing restarts on the made-up host.
-func (f Fixture) Events(context.Context, time.Time, time.Time) ([]docker.Event, error) {
-	return nil, nil
+// Events is a stream with no events that has seen every one since it was
+// asked for: nothing restarts on the made-up host, and its restart counts
+// are complete from the first sample on.
+func (f Fixture) Events(ctx context.Context, since time.Time) (docker.EventStream, error) {
+	return quietStream{since: since, done: ctx.Done()}, nil
 }
+
+// quietStream has no events until its context ends.
+type quietStream struct {
+	since time.Time
+	done  <-chan struct{}
+}
+
+func (s quietStream) Since() time.Time { return s.since }
+
+func (s quietStream) Next() (docker.Event, error) {
+	<-s.done
+	return docker.Event{}, context.Canceled
+}
+
+func (s quietStream) Close() error { return nil }
 
 // Memory is a made-up container's memory.
 func (f Fixture) Memory(_ context.Context, id string) (docker.Memory, error) {

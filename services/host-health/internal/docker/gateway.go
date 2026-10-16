@@ -20,21 +20,25 @@ import (
 // containerID is a full or short Docker container id.
 var containerID = regexp.MustCompile(`^[a-f0-9]{12,64}$`)
 
-// eventFilters keeps the events the gateway passes on to container die,
-// start, and health_status, and kill, stop, and destroy, which tell an
-// intentional stop (docker stop, compose down, a recreate) from a crash.
-const eventFilters = `{"type":["container"],"event":["die","start","health_status","kill","stop","destroy"]}`
+// eventFilters keeps the events the gateway passes on to container die and
+// start, which make a restart, and kill, stop, and destroy, which tell an
+// intentional stop (docker stop, compose down, a recreate) from a crash. The
+// engine applies them to the stream it sends: the health checks' exec
+// events, most of what it logs, never reach the gateway.
+const eventFilters = `{"type":["container"],"event":["die","start","kill","stop","destroy"]}`
 
-// passedActions are the event actions the gateway re-encodes; health_status
-// carries its status after a colon. Anything else the engine might add is
-// dropped.
+// passedActions are the event actions the gateway re-encodes. Anything else
+// the engine might add is dropped.
 var passedActions = map[string]bool{"die": true, "start": true, "kill": true, "stop": true, "destroy": true}
 
 // Gateway answers host-health's three requests from the Docker Engine API
 // over the socket.
 type Gateway struct {
-	// Engine reaches the Docker Engine API over its unix socket.
+	// Engine reaches the Docker Engine API over its unix socket, each
+	// request bounded; Stream is the same without a bound, for the event
+	// stream that stays open.
 	Engine *http.Client
+	Stream *http.Client
 	Logger *slog.Logger
 	// MaxEventsWindow bounds how far back an events request may reach.
 	MaxEventsWindow time.Duration
@@ -47,16 +51,22 @@ func NewGateway(socket string, logger *slog.Logger) *Gateway {
 			var dialer net.Dialer
 			return dialer.DialContext(ctx, "unix", socket)
 		},
-		MaxIdleConns:    4,
-		IdleConnTimeout: time.Minute,
+		MaxIdleConns:          4,
+		IdleConnTimeout:       time.Minute,
+		ResponseHeaderTimeout: 20 * time.Second,
 	}
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	return &Gateway{Engine: &http.Client{Transport: transport, Timeout: 20 * time.Second}, Logger: logger, MaxEventsWindow: 24 * time.Hour}
+	return &Gateway{
+		Engine:          &http.Client{Transport: transport, Timeout: 20 * time.Second},
+		Stream:          &http.Client{Transport: transport},
+		Logger:          logger,
+		MaxEventsWindow: 24 * time.Hour,
+	}
 }
 
-// ServeHTTP answers GET /health, /containers, /events, and
+// ServeHTTP answers GET /health, /containers, /events (a stream), and
 // /containers/{id}/memory; everything else is 404, and any other method
 // 405.
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -127,34 +137,46 @@ type engineEvent struct {
 	} `json:"Actor"`
 }
 
+// events streams the container events from since on, one JSON object per
+// line, until host-health hangs up or the engine ends the stream. The engine
+// first sends the matching events since then that it still holds (its last
+// 256 events of any kind), then each new one as it happens, with no gap
+// between the two.
 func (g *Gateway) events(w http.ResponseWriter, r *http.Request) {
-	query := r.URL.Query()
-	since, errSince := strconv.ParseInt(query.Get("since"), 10, 64)
-	until, errUntil := strconv.ParseInt(query.Get("until"), 10, 64)
+	since, err := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
 	now := time.Now().Unix()
-	if errSince != nil || errUntil != nil || since > until || until > now+60 || until-since > int64(g.MaxEventsWindow.Seconds()) {
-		http.Error(w, "since and until must be unix seconds, since before until, at most a day apart", http.StatusBadRequest)
+	if err != nil || since > now+60 || now-since > int64(g.MaxEventsWindow.Seconds()) {
+		http.Error(w, "since must be unix seconds, not in the future, at most a day ago", http.StatusBadRequest)
 		return
 	}
-	params := url.Values{"since": {strconv.FormatInt(since, 10)}, "until": {strconv.FormatInt(until, 10)}, "filters": {eventFilters}}
-	body, err := g.open(r.Context(), "/events?"+params.Encode())
+	params := url.Values{"since": {strconv.FormatInt(since, 10)}, "filters": {eventFilters}}
+	body, err := g.open(r.Context(), g.Stream, "/events?"+params.Encode())
 	if err != nil {
 		g.fail(w, err)
 		return
 	}
 	defer body.Close()
-	// The engine streams one JSON object per event until `until`.
-	events := []Event{}
-	decoder := json.NewDecoder(io.LimitReader(body, 16<<20))
+	// The stream stays open: the server's read and write deadlines, meant
+	// for the other requests, would cut it.
+	controller := http.NewResponseController(w)
+	_ = controller.SetReadDeadline(time.Time{})
+	_ = controller.SetWriteDeadline(time.Time{})
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.WriteHeader(http.StatusOK)
+	if controller.Flush() != nil {
+		return
+	}
+	decoder := json.NewDecoder(body)
+	encoder := json.NewEncoder(w)
 	for {
 		var e engineEvent
-		if err := decoder.Decode(&e); errors.Is(err, io.EOF) {
-			break
-		} else if err != nil {
-			g.fail(w, fmt.Errorf("read events: %w", err))
+		if err := decoder.Decode(&e); err != nil {
+			if r.Context().Err() == nil && !errors.Is(err, io.EOF) {
+				g.Logger.Warn("the docker event stream broke", "error", err)
+			}
 			return
 		}
-		if !passedActions[e.Action] && !strings.HasPrefix(e.Action, "health_status") {
+		if !passedActions[e.Action] {
 			continue
 		}
 		event := Event{
@@ -169,9 +191,10 @@ func (g *Gateway) events(w http.ResponseWriter, r *http.Request) {
 				event.ExitCode = &code
 			}
 		}
-		events = append(events, event)
+		if encoder.Encode(event) != nil || controller.Flush() != nil {
+			return
+		}
 	}
-	writeJSON(w, events)
 }
 
 type engineStats struct {
@@ -206,12 +229,12 @@ func (g *Gateway) memory(w http.ResponseWriter, r *http.Request, id string) {
 // errNotFound is an engine 404, such as a container that is gone.
 var errNotFound = errors.New("not found")
 
-func (g *Gateway) open(ctx context.Context, path string) (io.ReadCloser, error) {
+func (g *Gateway) open(ctx context.Context, client *http.Client, path string) (io.ReadCloser, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://docker"+path, nil)
 	if err != nil {
 		return nil, err
 	}
-	response, err := g.Engine.Do(request)
+	response, err := client.Do(request)
 	if err != nil {
 		return nil, fmt.Errorf("docker engine: %w", err)
 	}
@@ -228,7 +251,7 @@ func (g *Gateway) open(ctx context.Context, path string) (io.ReadCloser, error) 
 }
 
 func (g *Gateway) get(ctx context.Context, path string, into any) error {
-	body, err := g.open(ctx, path)
+	body, err := g.open(ctx, g.Engine, path)
 	if err != nil {
 		return err
 	}

@@ -26,7 +26,7 @@ cmd/server/            # host-health, and `docker-gateway`
 internal/api/          # HTTP adapters
 internal/config/       # configuration
 internal/docker/       # the read-only docker gateway and its client
-internal/health/       # sampling, 24-hour history, findings, Life OS's use, fixtures
+internal/health/       # sampling, the event watcher, 24-hour history, findings, Life OS's use, fixtures
 internal/host/         # /proc parsing, statfs, and cgroup files
 ```
 

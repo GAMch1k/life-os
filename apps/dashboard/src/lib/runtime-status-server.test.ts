@@ -46,6 +46,8 @@ const healthy = (overrides: Partial<HostStatus> = {}): HostStatus => ({
     running: 28,
     unhealthy: 0,
     restarting: 0,
+    restartsWatchedSince: "2026-10-11T08:00:00Z",
+    restartsComplete: true,
     items: [],
     top: [
       { name: "lifeos-whisper-1", project: "lifeos", memoryBytes: 1.9 * GiB },
@@ -134,6 +136,7 @@ const fact = (check: StatusCheck | undefined, label: string) =>
 test("a healthy server is OK, with its memory, load, disks, containers, and uptime", () => {
   const check = serverCheck(healthy());
   assert.equal(check?.state, "ok");
+  assert.equal(check?.provisional, undefined);
   assert.equal(check?.title, "Server");
   assert.equal(
     check?.summary,
@@ -479,6 +482,7 @@ test("disks, load, and containers each say what is wrong and what to do", () => 
         running: 0,
         unhealthy: 0,
         restarting: 0,
+        restartsComplete: false,
         items: [],
         top: [],
       },
@@ -541,4 +545,63 @@ test("formatBinaryBytes counts in powers of 1024, as free -h and df -h", () => {
   assert.equal(formatBinaryBytes(8_238_493_696), "7.7 GiB");
   assert.equal(formatBinaryBytes(232 * GiB), "232 GiB");
   assert.equal(formatBinaryBytes(1.5 * 1024 * GiB), "1.5 TiB");
+});
+
+test("after host-health starts, an ok Server check is provisional until its restart counts cover the window", () => {
+  const starting = (containers: Partial<HostStatus["containers"]>) =>
+    healthy({
+      containers: {
+        ...healthy().containers,
+        restartsWatchedSince: "2026-10-11T11:58:00Z",
+        restartsComplete: false,
+        ...containers,
+      },
+    });
+  // Watching since two minutes ago: a loop it has not seen die again yet
+  // must not read as recovered, and the card says until when.
+  const check = serverCheck(starting({}));
+  assert.equal(check?.state, "ok");
+  assert.equal(check?.provisional, true);
+  assert.equal(
+    check?.summary,
+    "Running normally: 3.6 GiB of memory available, a 15-minute load of 1.3 on 6 CPUs. Watching for restart loops since 13:58 CEST; the 15-min count is complete at 14:13 CEST.",
+  );
+  // Not watching at all yet.
+  const closed = serverCheck(starting({ restartsWatchedSince: undefined }));
+  assert.equal(closed?.provisional, true);
+  assert.match(
+    closed?.summary ?? "",
+    / Not watching for restart loops yet: the container events are not followed\.$/,
+  );
+
+  // A finding is a finding, complete or not.
+  const warning = serverCheck({
+    ...starting({}),
+    findings: [
+      {
+        kind: "container_restarting",
+        severity: "warning",
+        subject: "runner",
+        project: "forgejo",
+        count: 3,
+        minutes: 15,
+        exitCode: 1,
+      },
+    ],
+  });
+  assert.equal(warning?.state, "warning");
+  assert.equal(warning?.provisional, undefined);
+
+  // Without container facts, or from a host-health that does not say,
+  // there is nothing to wait for.
+  assert.equal(
+    serverCheck(
+      starting({ available: false, error: "no docker gateway is set up" }),
+    )?.provisional,
+    undefined,
+  );
+  const older = healthy();
+  delete (older.containers as Partial<HostStatus["containers"]>)
+    .restartsComplete;
+  assert.equal(serverCheck(older)?.provisional, undefined);
 });

@@ -7,7 +7,7 @@
 // parameters, and re-encodes only the fields host-health needs:
 //
 //	GET /containers                -> GET /containers/json?all=1: name, compose project and service, image, state, health
-//	GET /events?since=&until=      -> GET /events (container die, start, health_status, kill, stop, and destroy only): time, id, name, project, action, a die's exit code
+//	GET /events?since=             -> GET /events?since= (container die, start, kill, stop, and destroy only), kept open: time, id, name, project, action, a die's exit code, one per line as they happen
 //	GET /containers/{id}/memory    -> GET /containers/{id}/stats?stream=false&one-shot=true: memory in use and limit
 //
 // Nothing else of the API is reachable through it: not inspect (which holds
@@ -35,19 +35,27 @@ type Container struct {
 	Health string `json:"health,omitempty"`
 }
 
-// Event is one container event: die, start, health_status, kill, stop, or
-// destroy.
+// Event is one container event: die, start, kill, stop, or destroy.
 type Event struct {
 	Time time.Time `json:"time"`
 	// ID is the container's short id: a recreated container has a new one.
 	ID      string `json:"id"`
 	Name    string `json:"name"`
 	Project string `json:"project,omitempty"`
-	// Action is die, start, kill, stop, destroy, or health_status:
-	// healthy|unhealthy|starting.
+	// Action is die, start, kill, stop, or destroy.
 	Action string `json:"action"`
 	// ExitCode is a die's exit code.
 	ExitCode *int `json:"exitCode,omitempty"`
+}
+
+// EventStream is an open stream of container events, oldest first.
+type EventStream interface {
+	// Since is when the stream began to carry every event. The events
+	// before it are only those the engine still held when it opened.
+	Since() time.Time
+	// Next waits for the next event; an error means the stream is over.
+	Next() (Event, error)
+	Close() error
 }
 
 // Memory is a container's memory use.

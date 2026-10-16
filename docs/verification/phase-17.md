@@ -112,6 +112,8 @@ So a restart-loop warning has reached the phone for real, through the same path 
 
 **Not verified.** `docker events` is outside the read-only commands of this report, and the runner is gone, so the loop cannot be observed again. No code was changed.
 
+**Confirmed and fixed in BUG-44 (16 Oct 2026).** The code did what is described above (`readContainers` asked for `since = now − window` at the first sample, then for the minute since the last one). A short read on this server confirmed the cap: `docker events --since 15m --until 0s` returned exactly 256 events, the oldest 119 s old, and filtered to one action it reached back the same 118 s (Docker 29.4.3 filters after the buffer). In one minute the containers logged 129 events, all `exec_create`, `exec_start`, and `exec_die` of health checks, and no `health_status`. host-health now keeps one event stream open and counts restarts as they happen, and reports its counts as not complete until it has watched 15 minutes; until then the Server check is a provisional ok, which the monitor never sends as a recovery. See [Host health → Following the events](../services/host-health.md#following-the-events-and-the-first-15-minutes).
+
 ## Required acceptance
 
 | # | Required | Evidence |
@@ -124,7 +126,7 @@ So a restart-loop warning has reached the phone for real, through the same path 
 
 ## Follow-ups
 
-- **The restart window after a host-health start, and the event buffer** (above). This should get a bug ticket. A fix could take either of two routes:
+- **The restart window after a host-health start, and the event buffer** (above). Fixed in BUG-44 by both routes below. A fix could take either of two routes:
   - Keep the gateway's event stream open instead of replaying `since` every minute.
   - Report restart counts as incomplete for the first window after host-health starts, rather than as zero, so that the Server check does not report a recovery it cannot know.
 

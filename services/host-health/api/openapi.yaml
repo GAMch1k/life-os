@@ -98,7 +98,7 @@ components:
         memoryBytes: {type: integer, format: int64, minimum: 0}
     HostContainers:
       type: object
-      required: [available, total, running, unhealthy, restarting, items, top]
+      required: [available, total, running, unhealthy, restarting, items, top, restartsComplete]
       properties:
         available: {type: boolean, description: False when the Docker gateway is not set up or could not be read.}
         error: {type: string, description: Why the containers are not available.}
@@ -110,6 +110,14 @@ components:
         memorySampledAt: {type: string, format: date-time, description: When the containers' memory was read.}
         items: {type: array, items: {$ref: '#/components/schemas/HostContainer'}}
         top: {type: array, items: {$ref: '#/components/schemas/HostMemoryUser'}, description: 'The containers using the most memory, biggest first (up to 5).'}
+        restartsWatchedSince: {type: string, format: date-time, description: 'When host-health''s stream of container events began to see every event; absent while it is not open. Restarts before it are only those Docker still held when it opened (its last 256 events of any kind, about two minutes here).'}
+        restartsComplete:
+          type: boolean
+          description: >-
+            True once the event stream has been open for the whole restart-loop
+            window (restartLoopMinutes). Until then, after host-health starts
+            or its stream reopens, a recentDeaths below restartLoopCount may be
+            too low, so no finding is not yet a sign that a loop has stopped.
     HostUsageShare:
       type: object
       description: >-

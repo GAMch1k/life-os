@@ -20,6 +20,8 @@ type Observation struct {
 	State   State
 	Summary string
 	Action  string
+	// Provisional is an ok the check cannot vouch for yet (Check).
+	Provisional bool
 }
 
 // Transition is a confirmed change of a check's state, to be notified.
@@ -84,7 +86,9 @@ func NewTracker(confirmations int) *Tracker {
 // cover every check (the status was read): a check missing from them loses
 // its run. When the status could not be read, only the dashboard pseudo-check
 // is observed and every other check keeps its run: an evaluation without
-// data neither confirms nor interrupts it.
+// data neither confirms nor interrupts it. A provisional ok is such an
+// evaluation for its check, so it is never notified as a recovery: the
+// state last notified holds until the check can say.
 func (t *Tracker) Observe(now time.Time, observations []Observation, complete bool) {
 	seen := map[string]bool{}
 	for _, observation := range observations {
@@ -97,6 +101,9 @@ func (t *Tracker) Observe(now time.Time, observations []Observation, complete bo
 			check = &tracked{notified: OK}
 			t.checks[observation.Key] = check
 			t.order = append(t.order, observation.Key)
+		}
+		if observation.Provisional && observation.State == OK {
+			continue
 		}
 		check.latest = observation
 		if check.run.count > 0 && check.run.state == observation.State {

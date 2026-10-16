@@ -158,7 +158,13 @@ type HostContainers struct {
 
 	// Restarting Containers Docker is restarting, the test stack's left out.
 	Restarting int `json:"restarting"`
-	Running    int `json:"running"`
+
+	// RestartsComplete True once the event stream has been open for the whole restart-loop window (restartLoopMinutes). Until then, after host-health starts or its stream reopens, a recentDeaths below restartLoopCount may be too low, so no finding is not yet a sign that a loop has stopped.
+	RestartsComplete bool `json:"restartsComplete"`
+
+	// RestartsWatchedSince When host-health's stream of container events began to see every event; absent while it is not open. Restarts before it are only those Docker still held when it opened (its last 256 events of any kind, about two minutes here).
+	RestartsWatchedSince *time.Time `json:"restartsWatchedSince,omitempty"`
+	Running              int        `json:"running"`
 
 	// TestStack Of total, the containers of ignored compose projects (the verification stack).
 	TestStack *int `json:"testStack,omitempty"`
