@@ -129,6 +129,7 @@ const EVENT_LABELS: Record<string, string> = {
   "mcp.action.requested": "Agent action requested",
   "mcp.action.completed": "Agent action completed",
   "mcp.action.failed": "Agent action failed",
+  "mcp.action.not_done": "Agent action not done",
   "task.created": "Task created",
   "task.updated": "Task updated",
   "task.completed": "Task completed",

@@ -359,6 +359,14 @@ test("agent actions name their tool", () => {
     eventLabel({ type: "mcp.action.requested", data: { tool: "task_create" } }),
     "Agent action requested: task_create",
   );
+  // A tool that answered but did not do what was asked (nothing saved).
+  assert.equal(
+    eventLabel({
+      type: "mcp.action.not_done",
+      data: { tool: "recipe_import", reason: "Nothing to save." },
+    }),
+    "Agent action not done: recipe_import",
+  );
   assert.equal(
     eventLabel({ type: "calendar.event.moved", data: {} }),
     "Calendar event moved",
