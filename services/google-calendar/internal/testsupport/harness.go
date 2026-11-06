@@ -47,7 +47,7 @@ var (
 
 // Config is the Google configuration the fake accepts.
 func Config() google.Config {
-	return google.Config{ClientID: fakegoogle.ClientID, ClientSecret: fakegoogle.ClientSecret, RedirectURI: google.DefaultRedirectURI, TokenKey: TokenKey}
+	return google.Config{ClientID: fakegoogle.ClientID, ClientSecret: fakegoogle.ClientSecret, RedirectURI: google.ExampleRedirectURI, TokenKey: TokenKey}
 }
 
 // Clock is a settable clock.

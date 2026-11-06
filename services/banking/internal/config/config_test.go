@@ -18,7 +18,7 @@ func TestLoadFromAppliesDefaults(t *testing.T) {
 	if cfg.ServiceName != "banking" || cfg.Port != 8080 || cfg.LogLevel != "info" || cfg.TimeZone != "UTC" {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
-	if cfg.RedirectURI != "https://lifeos.gamch1k.com/finance/bank/callback" || cfg.EnableBankingAPIURL != "https://api.enablebanking.com" {
+	if cfg.RedirectURI != "" || cfg.EnableBankingAPIURL != "https://api.enablebanking.com" {
 		t.Fatalf("unexpected Enable Banking defaults: %+v", cfg)
 	}
 	opts := cfg.Options()

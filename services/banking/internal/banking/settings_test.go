@@ -34,9 +34,14 @@ var tokenKey = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))
 
 func TestLoadSettings(t *testing.T) {
 	key := keyFile(t, pemKey(t))
-	settings, err := LoadSettings(fakebank.AppID, key, tokenKey, "", "")
-	if err != nil || !settings.Configured() || settings.RedirectURI != DefaultRedirectURI {
+	redirect := ExampleRedirectURI
+	settings, err := LoadSettings(fakebank.AppID, key, tokenKey, redirect, "")
+	if err != nil || !settings.Configured() || settings.RedirectURI != redirect {
 		t.Fatalf("LoadSettings = %+v, %v", settings, err)
+	}
+	local, err := LoadSettings(fakebank.AppID, key, tokenKey, "http://localhost:3000/finance/bank/callback", "")
+	if err != nil || !local.Configured() {
+		t.Fatalf("localhost redirect = %+v, %v", local, err)
 	}
 
 	// Nothing set, or only the verification stack's empty key: not
@@ -51,12 +56,14 @@ func TestLoadSettings(t *testing.T) {
 		appID, file, token, redirect string
 		want                         string
 	}{
-		"no app id":       {"", key, tokenKey, "", EnvAppID},
-		"empty key":       {fakebank.AppID, keyFile(t, nil), tokenKey, "", EnvKeyFile},
-		"no token key":    {fakebank.AppID, key, "", "", EnvTokenKey},
-		"short token key": {fakebank.AppID, key, base64.StdEncoding.EncodeToString([]byte("short")), "", EnvTokenKey},
-		"not a key":       {fakebank.AppID, keyFile(t, []byte("-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n")), tokenKey, "", EnvKeyFile},
-		"http redirect":   {fakebank.AppID, key, tokenKey, "http://lifeos.example/finance/bank/callback", EnvRedirect},
+		"no app id":         {"", key, tokenKey, redirect, EnvAppID},
+		"empty key":         {fakebank.AppID, keyFile(t, nil), tokenKey, redirect, EnvKeyFile},
+		"no token key":      {fakebank.AppID, key, "", redirect, EnvTokenKey},
+		"short token key":   {fakebank.AppID, key, base64.StdEncoding.EncodeToString([]byte("short")), redirect, EnvTokenKey},
+		"not a key":         {fakebank.AppID, keyFile(t, []byte("-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n")), tokenKey, redirect, EnvKeyFile},
+		"no redirect":       {fakebank.AppID, key, tokenKey, "", EnvRedirect},
+		"relative redirect": {fakebank.AppID, key, tokenKey, "/finance/bank/callback", EnvRedirect},
+		"http redirect":     {fakebank.AppID, key, tokenKey, "http://lifeos.example/finance/bank/callback", EnvRedirect},
 	} {
 		settings, err := LoadSettings(tc.appID, tc.file, tc.token, tc.redirect, "")
 		if err == nil || settings.Configured() || !strings.Contains(err.Error(), tc.want) {

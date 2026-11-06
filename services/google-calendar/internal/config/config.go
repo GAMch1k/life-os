@@ -31,13 +31,14 @@ type Config struct {
 	// Google Calendar connection: the OAuth Web client (from the owner's
 	// Google Cloud project), the base64 32-byte key that encrypts refresh
 	// tokens at rest (the same key Calendar used before P11-07, so the
-	// handed-over token opens), and the Dashboard route Google returns to.
-	// Google is not configured until the first three are set. Secrets:
-	// never log them.
+	// handed-over token opens), and the Dashboard route Google returns to
+	// (compose: LIFE_OS_PUBLIC_URL/calendar/google/callback). Google is not
+	// configured until the first three are set, and needs the fourth then.
+	// Secrets: never log them.
 	GoogleClientID     string `env:"LIFE_OS_GOOGLE_CLIENT_ID"`
 	GoogleClientSecret string `env:"LIFE_OS_GOOGLE_CLIENT_SECRET"`
 	GoogleTokenKey     string `env:"LIFE_OS_GOOGLE_TOKEN_KEY"`
-	GoogleRedirectURI  string `env:"LIFE_OS_GOOGLE_REDIRECT_URI" default:"https://lifeos.gamch1k.com/calendar/google/callback"`
+	GoogleRedirectURI  string `env:"LIFE_OS_GOOGLE_REDIRECT_URI"`
 	// SyncSeconds is how often each Google calendar chosen to sync is
 	// synced (changes since the last sync, with Google's sync token).
 	SyncSeconds int `env:"GOOGLE_CALENDAR_SYNC_SECONDS" default:"120"`
