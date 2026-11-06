@@ -37,18 +37,29 @@ curl "${actor[@]}" --fail --silent --show-error -H 'content-type: application/js
 curl "${actor[@]}" --fail --silent --show-error -H 'content-type: application/json' \
   -d '{"content":"Dashboard smoke capture","source":"manual"}' \
   "$inbox/v1/inbox-items" >/dev/null
+# Tomorrow: Home shows the next event that hasn't started, and an all-day
+# event of today has.
+tomorrow=$(date -u -d tomorrow +%F)
 curl "${actor[@]}" --fail --silent --show-error -H 'content-type: application/json' \
-  -d "{\"title\":\"Dashboard smoke event\",\"allDay\":true,\"startDate\":\"${today}\",\"endDate\":\"${today}\"}" \
+  -d "{\"title\":\"Dashboard smoke event\",\"allDay\":true,\"startDate\":\"${tomorrow}\",\"endDate\":\"${tomorrow}\"}" \
   "$calendar/v1/events" >/dev/null
 
 wait_dashboard
-page=$(curl --fail --silent --show-error "$dashboard")
-for text in 'Finance' "Dashboard smoke task" "Dashboard smoke capture" "Dashboard smoke event"; do
-  if ! grep --fixed-strings --quiet "$text" <<<"$page"; then
-    printf 'smoke: dashboard page missing expected text: %s\n' "$text" >&2
-    exit 1
-  fi
-done
+# Home is attention-first: today's task and the next event show there; a new
+# capture shows on the Inbox page.
+expect_page() { # <path> <text>...
+  local path=$1 page text
+  shift
+  page=$(curl --fail --silent --show-error "$dashboard$path")
+  for text in "$@"; do
+    if ! grep --fixed-strings --quiet "$text" <<<"$page"; then
+      printf 'smoke: dashboard page %s missing expected text: %s\n' "$path" "$text" >&2
+      exit 1
+    fi
+  done
+}
+expect_page / 'Finance' "Dashboard smoke task" "Dashboard smoke event"
+expect_page /inbox "Dashboard smoke capture"
 
 curl --fail --silent --show-error --request OPTIONS \
   -H 'Origin: http://localhost:3000' \
