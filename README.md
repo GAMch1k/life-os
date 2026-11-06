@@ -10,6 +10,9 @@ The human-readable technical guide is maintained as ordinary repository Markdown
 under [`docs/`](docs/README.md). It is designed for GitHub browsing and Obsidian;
 there is no GitHub Pages or Wiki dependency.
 
+To run your own Life OS on a server, see [`SETUP.md`](SETUP.md), the
+self-hosting setup guide.
+
 ## Repository layout
 
 | Path | Purpose |
