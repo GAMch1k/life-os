@@ -1,0 +1,355 @@
+# Self-hosting Life OS
+
+This guide takes you from a fresh Linux server to a working Life OS. Follow the steps in order. Life OS is single-user and has no accounts or login of its own, so anyone who can reach its gateway acts as the owner. How you expose the gateway ([step 9](#9-remote-access)) is your security boundary.
+
+The guide links to the detailed runbooks instead of repeating them. Unless noted otherwise, commands run from the checkout (`~/life-os` here). Values such as `lifeos.example.com`, `<you>`, and `<generate>` are placeholders.
+
+## 1. What you get
+
+Everything runs as one Docker Compose project, `lifeos`, on one host. PostgreSQL is a single server in which every service has its own database and login. Go/Fiber services own the domains (Finance, Tasks, Inbox, Calendar, Food, Voice, Activity, Notifications). Integration services connect outside providers to them, only through their APIs: `banking`, `google-calendar`, `calendar-feeds`, and `recipe-import`. A Next.js Dashboard is the UI, and an nginx `gateway` is the only container that publishes a port. The `processor` plans each Inbox capture with the Codex CLI under your ChatGPT sign-in and acts through the `mcp` tool service. The `voice-worker` transcribes recordings with a private whisper.cpp worker, `whisper`. The `monitor`, `backup`, and `host-health` services watch the stack, back it up, and report on the server. Optional Compose profiles add a Cloudflare Tunnel connector (`cloudflare`) and an ntfy server (`ntfy`). For more, see the [architecture overview](docs/architecture/overview.md), [networking](docs/architecture/networking.md), and the [technical documentation](docs/README.md).
+
+## 2. Requirements
+
+**Software**
+
+- **OS and Docker.** You need a 64-bit Linux server with systemd and cgroup v2. The reference server runs Ubuntu 24.04 with Docker Engine 29.4 and the Compose plugin 5.1, using the systemd cgroup driver. The repository sets no minimum version. It needs Docker Engine with the `docker compose` plugin (Compose v2 or later, not the old `docker-compose`). The Compose files use recent features: non-recursive read-only binds in `compose.yaml`, and `!reset` and `!override` in `compose.verify.yaml`. Install a current release.
+- **Host tools.** `git`, `openssl`, `curl`, and `jq`. `tools/verify-compose` and the backup runbook need `jq`.
+- **Codex.** The Codex CLI on the host, and a ChatGPT account to sign it in ([step 5](#5-sign-in-to-codex-ai-processing)).
+- **Go and Node.js, only outside Docker.** The images build everything they need. You need Go 1.27.1 or newer (1.27 line) only to generate the web push keys ([step 10](#10-notifications)) and to run `make check`. You need Node.js 22 or newer with npm, `sqlc`, `oapi-codegen`, and `migrate` only for development and `make check`; see [Getting started](docs/development/getting-started.md).
+- **Outbound HTTPS.** The `backend` network needs internet access to reach Codex, the Whisper model download, the push services, recipe pages, feeds, and the integrations.
+- **Free address ranges.** `compose.yaml` gives its edge networks fixed subnets in `10.255.249.0/24`, and the verification stack uses `10.255.250.0/24`. Keep both ranges free.
+
+**Hardware.** There is no tested minimum. The reference server has 6 CPUs and 7.7 GiB of RAM with no swap, and shares them with other applications. Life OS runs well there as long as heavy jobs run one at a time.
+
+| Resource | What to expect |
+| --- | --- |
+| RAM at idle | Under 1 GiB for the whole stack. Measured on the reference server: PostgreSQL about 260 MiB, the processor about 230 MiB, the Dashboard about 100 MiB, each Go service 5–25 MiB. |
+| RAM at peak | These add to idle use: Whisper while it transcribes (up to its cap, `LIFE_OS_WHISPER_MEMORY`, default `2g`), Codex runs in the processor, image builds (the Dashboard's Next.js build and the whisper.cpp compile are the largest), and the verification stack, which is a second complete Life OS. With no swap, overlapping heavy jobs can exhaust memory. |
+| CPU | Whisper is limited to `LIFE_OS_WHISPER_CPUS` (2.0) and `LIFE_OS_WHISPER_THREADS` (2). Transcription is slower with fewer cores. |
+| Disk | About 3 GB of images: Dashboard ~1 GB, processor ~0.8 GB, backup ~0.3 GB, whisper ~0.2 GB, each Go service 20–35 MB. Add Docker's build cache, the Whisper model (`small` is about 466 MB), PostgreSQL's data, and the backups, which are on the same disk. Status warns when a disk has less than 10 GiB or 10% free. The Backups check warns when less than 5 GB is free where the backups are. |
+
+**For access from outside the server**, you need one of: a WireGuard network, a host Nginx with TLS, or a domain on Cloudflare ([step 9](#9-remote-access)).
+
+## 3. Get the code
+
+```sh
+git clone <repository-url> ~/life-os
+cd ~/life-os
+cp .env.example .env
+chmod 600 .env
+```
+
+> **Deploy from one checkout only.** `compose.yaml` fixes the project name (`name: lifeos`). A `docker compose` command in *any* checkout of this repository acts on the same live stack, including a second clone or a git worktree. Containers it recreates then take their bind mounts (`./infra/…`, the migrations) from that checkout. Run tests with `tools/verify-compose`, which uses the separate `lifeos-verify` project.
+
+## 4. Configure `.env`
+
+Compose reads `.env` from the checkout. `.env.example` explains every setting in comments; the tables below group them by purpose. Generate the values with:
+
+```sh
+openssl rand -hex 24              # passwords: letters and digits only (they go into postgres:// URLs)
+openssl rand -base64 32           # the Google and banking token keys
+id -u                             # the *_RUNTIME_UID values: your numeric user ID
+stat -c %g /var/run/docker.sock   # LIFE_OS_DOCKER_GID
+```
+
+Compose refuses every command until these five variables are set: `LIFE_OS_POSTGRES_USER`, `LIFE_OS_POSTGRES_PASSWORD`, `LIFE_OS_CODEX_HOME_HOST_PATH`, `LIFE_OS_CODEX_RUNTIME_UID`, and `LIFE_OS_BACKUP_DIR`. Some defaults still name the reference deployment's own hostname and paths. Set `LIFE_OS_PUBLIC_URL`, `LIFE_OS_GOOGLE_REDIRECT_URI`, `LIFE_OS_BANKING_REDIRECT_URI`, and `LIFE_OS_ANDROID_RELEASES_DIR` to your own values, even if you don't use those features. `LIFE_OS_ANDROID_RELEASES_DIR` is commented out in the template; uncomment it.
+
+**Core**
+
+| Variable | Value |
+| --- | --- |
+| `LIFE_OS_POSTGRES_USER` | **Required.** The PostgreSQL admin login, for example `lifeos_admin`. |
+| `LIFE_OS_POSTGRES_PASSWORD` | **Required.** `<generate>` |
+| `LIFE_OS_POSTGRES_IMAGE`, `LIFE_OS_POSTGRES_DB` | Keep the defaults. `LIFE_OS_POSTGRES_PORT` is unused: PostgreSQL publishes no port. |
+| `LIFE_OS_TIMEZONE` | Your IANA zone, for example `Europe/Berlin` (default `UTC`). Used when the browser's own zone is not known. See [Owner timezone](docs/operations/deployment.md#owner-timezone). |
+| `LIFE_OS_FINANCE_CURRENCY` | Currency of the built-in Cash account (default `EUR`). |
+| `LIFE_OS_PUBLIC_URL` | `https://lifeos.example.com`. Tapping a phone notification opens its page here. |
+
+**Database passwords, all required.** Generate one for each: `LIFE_OS_FINANCE_DB_PASSWORD`, `LIFE_OS_TASKS_DB_PASSWORD`, `LIFE_OS_INBOX_DB_PASSWORD`, `LIFE_OS_CALENDAR_DB_PASSWORD`, `LIFE_OS_VOICE_DB_PASSWORD`, `LIFE_OS_ACTIVITY_DB_PASSWORD`, `LIFE_OS_NOTIFICATIONS_DB_PASSWORD`, `LIFE_OS_BANKING_DB_PASSWORD`, `LIFE_OS_GOOGLE_CALENDAR_DB_PASSWORD`, `LIFE_OS_CALENDAR_FEEDS_DB_PASSWORD`, `LIFE_OS_FOOD_DB_PASSWORD`, and `LIFE_OS_BACKUP_DB_PASSWORD` (the backup service's read-only login). Provisioning refuses an empty password, even for integrations you don't use.
+
+**Gateway** ([step 9](#9-remote-access))
+
+| Variable | Value |
+| --- | --- |
+| `LIFE_OS_GATEWAY_BIND_ADDRESS` | `127.0.0.1` (default), or your WireGuard address. |
+| `LIFE_OS_GATEWAY_PORT` | `3000` (default). |
+| `LIFE_OS_ANDROID_RELEASES_DIR` | `/home/<you>/life-os.android` ([step 13](#13-the-android-app)). |
+
+**AI processing** ([step 5](#5-sign-in-to-codex-ai-processing))
+
+| Variable | Value |
+| --- | --- |
+| `LIFE_OS_CODEX_HOME_HOST_PATH` | **Required.** `/home/<you>/.codex`, an absolute path. |
+| `LIFE_OS_CODEX_RUNTIME_UID` | **Required.** `id -u` of that directory's owner. |
+| `LIFE_OS_CODEX_MODEL`, `LIFE_OS_CODEX_REASONING_EFFORT` | `gpt-5.6-luna` and `medium`. |
+| `LIFE_OS_INBOX_CONTEXT_MINUTES`, `LIFE_OS_IDEAS_TIME`, `LIFE_OS_IDEAS_WEB_SEARCH`, `LIFE_OS_AI_CATEGORIES`, `LIFE_OS_AI_BUDGET_PLANS`, `LIFE_OS_AI_BUDGET_PLAN_MONTHLY`, `LIFE_OS_PROCESSOR_POLL_MILLIS` | The AI jobs and their schedules. The defaults are fine. |
+
+**Voice.** `LIFE_OS_WHISPER_*` and `LIFE_OS_VOICE_*`. Choose the model in [step 6](#6-voice-whisper-model); keep the other defaults.
+
+**Notifications and reminders** ([step 10](#10-notifications)). These are `LIFE_OS_NOTIFICATIONS_CHANNELS` (empty: notifications are only stored and shown in the Dashboard), `LIFE_OS_WEBPUSH_*`, and `LIFE_OS_NTFY_*`. Reminder times: `LIFE_OS_TASKS_SUMMARY_TIME`, `LIFE_OS_TASKS_MORNING_TIME`, `LIFE_OS_TASKS_EVENING_TIME`, `LIFE_OS_TASKS_TIMED_LEAD_MINUTES`, and `LIFE_OS_FOOD_EXPIRY_TIME`. The monitor: `LIFE_OS_MONITOR_INTERVAL_SECONDS` and `LIFE_OS_MONITOR_CONFIRMATIONS`.
+
+**Integrations** ([step 11](#11-optional-integrations)). Optional. Each one reports "not configured" until its settings are set.
+
+**Backups and server health**
+
+| Variable | Value |
+| --- | --- |
+| `LIFE_OS_BACKUP_DIR` | **Required.** `/home/<you>/life-os.backups`, created below. |
+| `LIFE_OS_BACKUP_RUNTIME_UID` | `id -u` of the directory's owner. |
+| `LIFE_OS_BACKUP_TIME`, `LIFE_OS_BACKUP_KEEP_*`, `LIFE_OS_BACKUP_RESTORE_CHECK_DAY` | Defaults: 03:15; keep 7 daily, 4 weekly, 12 monthly, and failed runs for 3 days; restore check on `sunday`. |
+| `LIFE_OS_INBOX_MEDIA_GID` | `101`, the inbox image's group. |
+| `LIFE_OS_DOCKER_GID` | The Docker socket's group (see above). Without the right value, Status cannot read the containers. |
+| `LIFE_OS_DOCKER_ROOT`, `LIFE_OS_HOST_HEALTH_*` | Set the Docker root only if Docker's data is not in `/var/lib/docker`. `LIFE_OS_HOST_HEALTH_*` are the Status page's warning thresholds. |
+
+**Remote access.** Leave `COMPOSE_PROFILES`, `LIFE_OS_CLOUDFLARE_TUNNEL_TOKEN`, `LIFE_OS_CF_ACCESS_CLIENT_ID`, and `LIFE_OS_CF_ACCESS_CLIENT_SECRET` empty for now ([step 9](#9-remote-access)).
+
+Create the two host directories:
+
+```sh
+install -d -m 700 ~/life-os.backups    # LIFE_OS_BACKUP_DIR, owned by LIFE_OS_BACKUP_RUNTIME_UID
+install -d -m 755 ~/life-os.android    # LIFE_OS_ANDROID_RELEASES_DIR
+```
+
+Keep a copy of `.env` in a password manager. Backups do not include it. After first use, a lost Google or banking token key means connecting that account again.
+
+## 5. Sign in to Codex (AI processing)
+
+The `processor` is the only service that runs Codex. `mcp` is the tool server the processor calls, and it needs no credentials. No API key is used: the processor uses the ChatGPT sign-in of the Codex CLI on the host. Its runs count against that account's Codex usage; the Status page shows the usage and the reset times.
+
+1. As the user whose UID is in `LIFE_OS_CODEX_RUNTIME_UID`, install the Codex CLI on the host. The processor image installs it with `npm install --global @openai/codex@0.160.0` (see `services/mcp/Dockerfile`). Any install that can sign in works.
+2. Sign in with `codex login`. This writes `auth.json` into `~/.codex`.
+3. Set `LIFE_OS_CODEX_HOME_HOST_PATH` to that directory's absolute path, and `LIFE_OS_CODEX_RUNTIME_UID` to `id -u`.
+
+When it starts, the processor mounts that directory read-only, runs as that UID, and copies only `auth.json` and an optional `config.toml` into a tmpfs. Without `auth.json` it exits with code 78. Never copy `auth.json` or an API key into the repository or `.env`. After the first start ([step 8](#8-build-and-start)), check the sign-in from inside the container with `docker compose exec processor codex login status`. If Status later says Codex is signed out, run `codex login` on the host again, then `docker compose up -d --no-build --no-deps --force-recreate processor`.
+
+The routine model and effort are `LIFE_OS_CODEX_MODEL=gpt-5.6-luna` and `LIFE_OS_CODEX_REASONING_EFFORT=medium`, chosen by the [AI runtime benchmark](docs/verification/ai-runtime-benchmark.md). An empty effort keeps the Codex configuration's default. Timeout, concurrency, and the other runtime settings are in [Codex runtime settings](docs/operations/deployment.md#codex-runtime-settings) and [MCP and AI](docs/services/mcp.md#codex-runtime).
+
+## 6. Voice: Whisper model
+
+On its first start, `whisper` downloads its model once into the `lifeos-whisper-models` volume. It reports ready only once the model is there. The template and Compose default to the multilingual `base` model (`ggml-base.bin`), a conservative choice for CPU. The reference deployment uses the multilingual `small` model (about 466 MB), which is noticeably better for Russian and German but takes about three times as long. To use it, set both lines:
+
+```sh
+LIFE_OS_WHISPER_MODEL_PATH=/models/ggml-small.bin
+LIFE_OS_WHISPER_MODEL_URL=https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin
+```
+
+At idle the worker uses little memory. While it transcribes, it can grow up to `LIFE_OS_WHISPER_MEMORY` (default `2g`), its hard cap; plan RAM around that cap. `LIFE_OS_WHISPER_CPUS` and `LIFE_OS_WHISPER_THREADS` limit its CPU. The docs name `large-v3-turbo` as the next step up; it needs more time and memory, but no limits are documented for it. Recordings can be up to 25 MiB. See [Voice and STT](docs/services/voice-stt.md#whisper-worker).
+
+## 7. Databases
+
+On a fresh install there is nothing to run by hand:
+
+- **PostgreSQL.** `postgres` keeps its data in the `lifeos-postgres-data` volume and publishes no port.
+- **Provisioning.** The registry `infra/postgres/service-databases.conf` lists each service's database, login, and password variable (`service|database|role|password variable`). On an empty volume, PostgreSQL's init runs `infra/postgres/provision-service-databases.sh`. It gives each service a non-privileged login that owns that service's database, revokes public access, and finally creates the read-only `lifeos_backup` login (`provision-backup-role.sh`).
+- **Migrations.** Each service with a database has a migration job, `<service>-migrate` (golang-migrate). It applies `services/<service>/db/migrations` from the checkout and exits, and the service starts only after the job succeeds.
+
+These commands are idempotent and safe on a running server:
+
+```sh
+make db-provision          # reconcile every database and login in the registry
+make db-provision-backup   # the backup login alone
+make db-check-isolation    # check that each service can reach only its own database
+```
+
+PostgreSQL keeps the environment it was created with. If you add a database password to `.env` later, recreate PostgreSQL or pass the password in; see [Adding the Food service](docs/operations/deployment.md#adding-the-food-service) and [infra/README.md](infra/README.md). Never run `make infra-reset` on a deployment: it deletes the volumes.
+
+## 8. Build and start
+
+1. **Build the images.** On a server with memory to spare, `make life-up` builds every image and starts the stack in one step (`docker compose up --detach --build`). On a small server, build one image at a time first, as the repository's own smokes do:
+
+   ```sh
+   for service in activity finance tasks food inbox calendar calendar-feeds recipe-import \
+     notifications banking google-calendar monitor backup host-health host-health-docker \
+     voice voice-worker whisper mcp processor dashboard; do
+     docker compose build "$service" || break
+   done
+   ```
+
+2. **Start Whisper first.** The Voice worker waits for Whisper to be healthy, so starting Whisper on its own keeps the model download from holding up the rest:
+
+   ```sh
+   docker compose up -d --no-build whisper
+   docker compose ps whisper          # wait until it shows (healthy)
+   ```
+
+3. **Start everything else.** Keep `COMPOSE_PROFILES` empty until [step 9](#9-remote-access): the tunnel must not start before Cloudflare Access protects its hostname.
+
+   ```sh
+   docker compose up -d --no-build
+   docker compose ps
+   ```
+
+   Compose starts PostgreSQL, which provisions the databases on a fresh volume. It then runs every `*-migrate` job (each ends `Exited (0)`) and starts the services, the Dashboard, and the gateway. About a minute later, the backup service runs its first, catch-up backup.
+
+4. **Check health.**
+
+   ```sh
+   curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/   # 200
+   curl -s http://127.0.0.1:3000/api/tasks/ready                      # likewise /api/<domain>/ready
+   docker compose exec processor codex login status
+   ```
+
+   These use the default bind address and port; substitute yours if you changed them.
+
+   Then open the Dashboard's **Status** page (`/status`). It covers every service, automatic processing and Codex, Voice and Whisper, Backups, the server, and notifications, and suggests an action for each problem. Start any troubleshooting there; see [Operations and troubleshooting](docs/operations/deployment.md).
+
+### Redeploying: always `--no-deps`
+
+After the first start, change one service at a time:
+
+```sh
+docker compose build <service>
+docker compose up -d --no-build --no-deps <service>
+```
+
+Without `--no-deps`, `up` also recreates every dependency of the named service whose configuration changed. Every service with a database depends on PostgreSQL through its migration job, and PostgreSQL reads the whole `.env` (`env_file` in `compose.yaml`). So after any `.env` edit, redeploying one service without `--no-deps` would also recreate PostgreSQL, restarting the database under every service, along with any other dependency whose settings changed. `--no-build` keeps each build a separate, deliberate step, one image at a time. Recreate PostgreSQL only on purpose, with `docker compose up --detach postgres`, when it must see a new database password.
+
+The gateway needs nothing after a service redeploy, because it resolves service names on each request. Recreate it only when `infra/nginx/life-os.conf` or its `.env` settings change: `docker compose up -d --no-build --no-deps --force-recreate gateway`. See [Redeploying services and the gateway](docs/operations/deployment.md#redeploying-services-and-the-gateway).
+
+## 9. Remote access
+
+The gateway listens on `LIFE_OS_GATEWAY_BIND_ADDRESS:LIFE_OS_GATEWAY_PORT` (default `127.0.0.1:3000`). It serves Life OS only to the Host names in `server_name` in `infra/nginx/life-os.conf`; any other Host gets no answer (444). The list holds `127.0.0.1`, `localhost`, and the reference deployment's own hostname and WireGuard address. Add your hostname or address to the list, keep the existing entries (`tools/check-gateway-hosts`, part of `tools/check`, requires them), and recreate the gateway. See [Gateway hosts](docs/architecture/networking.md#gateway-hosts).
+
+Life OS has no login of its own, so choose one access model deliberately:
+
+| Model | Setup | Who gets in |
+| --- | --- | --- |
+| Loopback behind a host Nginx | Keep `127.0.0.1`; terminate TLS and Basic Auth in the host Nginx ([example](docs/host-nginx-example.conf)). | Whoever passes your host Nginx. |
+| WireGuard | Set `LIFE_OS_GATEWAY_BIND_ADDRESS` to the server's WireGuard address. Never use a public or LAN address. | Every allowed peer. |
+| Cloudflare Tunnel and Access (the reference deployment) | Below. | The email addresses you allow. |
+
+Installing the Dashboard on a phone, and sharing to Life OS, need a service worker. Browsers allow service workers only over https or on localhost, so they don't work over a plain-http WireGuard address.
+
+**Cloudflare Tunnel and Access.** In outline (the details are in [Cloudflare Tunnel and Access](docs/operations/cloudflare.md)):
+
+1. Add your domain to Cloudflare and create a Zero Trust team.
+2. **Set up Access first.** Create a self-hosted Access application for `lifeos.example.com` with a 24-hour session. Use the One-time PIN login, create a group holding your email address, and add an **Allow** policy that includes that group. Access then denies everyone else.
+3. Create a remotely managed tunnel and copy its token. Add a published application route: `lifeos.example.com` → HTTP → `gateway:80`. On that route, turn on **Enforce Access JSON Web Token (JWT) validation** for the application.
+4. Add `lifeos.example.com` to `server_name` and recreate the gateway. Make sure an anonymous request is redirected to the Access login: `curl -s -o /dev/null -w '%{http_code}\n' https://lifeos.example.com/` must print `302`.
+5. Only then start the connector. It reaches the gateway over the internal `edge` network, so the gateway can stay on loopback. In `.env`, set `COMPOSE_PROFILES=cloudflare`, `LIFE_OS_CLOUDFLARE_TUNNEL_TOKEN=<from the tunnel>`, and `LIFE_OS_PUBLIC_URL=https://lifeos.example.com`. Then run `docker compose up -d --no-build --no-deps cloudflared`.
+6. Verify with `tools/check-ingress` (only the gateway publishes a port, and each network holds only its intended members) and `docker compose ps cloudflared` (healthy). `tools/check-cloudflare-access lifeos.example.com` checks that anonymous requests are refused. Its second half needs an Access service token: add a Service Auth policy for the token, and put the token in `LIFE_OS_CF_ACCESS_CLIENT_ID` and `LIFE_OS_CF_ACCESS_CLIENT_SECRET`.
+
+The repository uses a service token only for that check. Browsers and the installed phone app get through Access with the email code and its 24-hour session. How the Android and Wear OS apps authenticate is not documented in this repository. The tunnel token is a credential: never commit it or paste it anywhere.
+
+## 10. Notifications
+
+With `LIFE_OS_NOTIFICATIONS_CHANNELS` empty, notifications are only stored and listed in the Dashboard.
+
+**Web push to the Life OS Android app** (the reference deployment's only channel). The Dashboard has no browser notifications. To set it up:
+
+1. Generate the VAPID key pair (needs Go on the host). It prints two lines; paste both into `.env`:
+
+   ```sh
+   cd services/notifications && GOWORK=off go run ./cmd/vapid-keys
+   ```
+
+2. Optionally, set `LIFE_OS_WEBPUSH_SUBJECT=mailto:you@example.com` (default: `LIFE_OS_PUBLIC_URL`). Keep the key pair: a new pair invalidates every device's subscription. The private key is a secret.
+3. Apply with `docker compose up -d --no-build --no-deps notifications`, then turn on notifications in the Android app.
+4. Add `webpush` to `LIFE_OS_NOTIFICATIONS_CHANNELS` and run the same command again. To send a test push: `curl -X POST http://127.0.0.1:3000/api/notifications/v1/push/test -H 'X-Life-OS-Actor: dev:curl'`.
+
+Pushes travel through Google's FCM. Some networks, such as some corporate Wi-Fi, block it, and nothing in Life OS can work around that. See [Notifications → Web push](docs/services/notifications.md#web-push).
+
+**ntfy** is an optional, self-hosted alternative (profile `ntfy`, channel `ntfy`). It is [paused](docs/operations/ntfy.md#paused-since-2026-10-12) on the reference deployment. It needs a tunnel route of its own, *without* Access, plus a publisher token and two bcrypt password hashes. `infra/ntfy/server.yml` names the reference hostname in `base-url`; change it to yours. Setup is in [ntfy](docs/operations/ntfy.md).
+
+## 11. Optional integrations
+
+Each integration runs either way and stays "not configured" until its settings are in `.env`. Apply settings with `docker compose up -d --no-build --no-deps <service>`.
+
+**Google Calendar** (`google-calendar`) syncs your Google calendars with Calendar in both directions. You need:
+
+- A Google Cloud project with the Google Calendar API enabled.
+- An OAuth consent screen published **in production**. In Testing, Google expires the refresh token after 7 days.
+- A **Web application** OAuth client with the redirect URI `https://lifeos.example.com/calendar/google/callback`.
+
+Then set `LIFE_OS_GOOGLE_CLIENT_ID`, `LIFE_OS_GOOGLE_CLIENT_SECRET`, `LIFE_OS_GOOGLE_TOKEN_KEY` (`openssl rand -base64 32`; keep it), and `LIFE_OS_GOOGLE_REDIRECT_URI`. Connect under **Calendar → Google Calendar → Connect Google**. See [Google Calendar setup](docs/operations/google-calendar.md).
+
+**ICS feeds** (`calendar-feeds`) are refreshed daily at `LIFE_OS_CALENDAR_SOURCE_REFRESH_AT` (04:30). Feeds on private or loopback addresses are refused.
+
+- **ZAW waste calendar.** `LIFE_OS_ZAW_ICS_URL` takes the MyMüll iCal export URL for one street, with the format shown in `.env.example`. calendar-feeds then keeps a "ZAW" feed for it. The URL names your street, so keep it only in `.env`. See [ZAW waste collection](docs/services/calendar-feeds.md#zaw-waste-collection).
+- **Any other feed.** The Dashboard has no form for adding one; subscribe through the API:
+
+  ```sh
+  curl -H 'X-Life-OS-Actor: dev:curl' -H 'content-type: application/json' \
+    -d '{"name":"Holidays","url":"https://example.com/holidays.ics"}' \
+    http://127.0.0.1:3000/api/integrations/calendar-feeds/v1/feeds
+  ```
+
+**Enable Banking** (`banking`) gives read-only access to bank accounts and syncs them into Finance. You need:
+
+- An Enable Banking application in production, with account information (AIS) only, in "restricted" mode for your own linked accounts.
+- The redirect URL `https://lifeos.example.com/finance/bank/callback`.
+- The application's private key (PEM) on the server, mode 0600, owned by `LIFE_OS_BANKING_RUNTIME_UID`.
+
+Set `LIFE_OS_ENABLE_BANKING_APP_ID`, `LIFE_OS_ENABLE_BANKING_KEY_FILE`, `LIFE_OS_BANKING_TOKEN_KEY` (`openssl rand -base64 32`; keep it), and `LIFE_OS_BANKING_RUNTIME_UID`, then connect from **Finance**. The service is built and tested for one bank, Deutsche Bank in Germany (its default institution). See [Bank connection](docs/operations/banking.md).
+
+## 12. Backups
+
+The `backup` service dumps every database in the registry each night at `LIFE_OS_BACKUP_TIME` (03:15, in `LIFE_OS_TIMEZONE`). Each database gets a `pg_dump` from one consistent snapshot, saved in `LIFE_OS_BACKUP_DIR/auto/<UTC start time>/`. Inbox capture photos are copied to `media/`. Retention keeps the newest successful backup of each of the last 7 days, 4 weeks, and 12 months, and keeps failed runs for 3 days. After the Sunday run (`LIFE_OS_BACKUP_RESTORE_CHECK_DAY`), a restore check restores the newest backup into scratch databases and compares it with its manifest. The Status page's Backups check reports all of this and offers **Back up now**.
+
+```sh
+tools/backup-now                                       # back up now and wait for the result
+docker compose exec -T backup /service restore-check   # run a restore check now
+tools/restore-database finance latest                  # show a restore plan; --confirm restores
+tools/restore-media latest                             # capture photos; --confirm restores
+```
+
+**Not backed up:** `.env`, the Codex session, the Enable Banking key, Voice audio, the Whisper models, and ntfy's data. Keep the secrets yourself.
+
+The backups sit on the same disk as PostgreSQL. They protect against mistakes and bad migrations, not against losing the server. Off-site copies (encrypted, to Cloudflare R2) are planned but not built yet, so copy `LIFE_OS_BACKUP_DIR` off the server yourself in the meantime. For restoring one database, or everything after losing PostgreSQL's volume, see the [backups runbook](docs/operations/backups.md) and the [backup service](docs/services/backup.md).
+
+## 13. The Android app
+
+The phone and Wear OS apps are built and signed in a separate repository (`life-os-app`). This server only stores and serves them, from `LIFE_OS_ANDROID_RELEASES_DIR`, which the gateway mounts read-only:
+
+- `/android/` is the download page for the first install.
+- `/android/updates` is the update manifest the app checks.
+- The APKs are served next to them.
+
+Everything is behind the same access boundary as the Dashboard. The directory created in [step 4](#4-configure-env) is all the server needs. If the gateway started before that directory existed, Docker created it owned by root. In that case, give it back to your user (`sudo chown "$(id -u):$(id -g)" ~/life-os.android`) and recreate the gateway with `docker compose up -d --no-build --no-deps --force-recreate gateway`. Then check it and publish a build:
+
+```sh
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/android/updates   # 404 until the first publish, then 200
+tools/publish-android-release <release-dir> --notes "What changed"
+```
+
+The manifest format, version rules, and troubleshooting are in [Android releases](docs/operations/android-releases.md).
+
+## 14. Verifying an install
+
+- **Live stack.** Check the Status page, `docker compose ps`, the `/api/<domain>/ready` probes, and `docker compose exec processor codex login status`. `tools/smoke-core-services` and `tools/smoke-dashboard` check the live gateway, and each writes a few test records (a Task, a capture, an event) marked as a developer tool. The Codex processor also processes the captures they write. `make life-smoke` runs the same checks, but first rebuilds and restarts the whole stack with `docker compose up --detach --build`, so on a running deployment call the scripts directly.
+- **Disposable verification stack.** Run all other smokes there. `tools/verify-compose` runs a second, isolated copy (`lifeos-verify-*` containers, networks, and volumes; gateway on `127.0.0.1:13001`) from the images already built, then deletes it. It never mounts your backup or Android directories, blanks your integration and notification credentials, and never starts the tunnel or ntfy. Its processor does use your Codex sign-in. It needs memory for a second Life OS, so don't run it alongside other heavy jobs.
+  - Without Codex runs: `make verify-clean-db`, `make e2e-smoke`, `make verify-isolation`, `make action-idempotency-smoke`, `make voice-lease-recovery-smoke`, and `tools/smoke-gateway-recreate`.
+  - With the real Codex CLI and your sign-in, using your Codex usage: `make processor-smoke`, `make processor-codex-actions-smoke`, `make human-review-smoke`, `make activity-trace-smoke`, `make runtime-status-smoke`, `make retry-schedule-smoke`, `make codex-runtime-smoke`, `make relative-dates-smoke`, `make cross-language-smoke`, `make calendar-ai-smoke`, `make phase8-acceptance`, and `make browser-e2e`.
+  - Every run that uses Voice downloads the Whisper model again into its scratch volume.
+- **Source checks.** `tools/check` (`make check`) verifies the code, not the running stack. It needs a clean working tree plus `go`, `sqlc`, `oapi-codegen`, and `npm`. It checks the gateway's host list and the contracts, then runs sqlc drift, gofmt, vet, tests, and builds for every Go module, and the Dashboard checks. It is CPU- and memory-heavy.
+
+## 15. Upgrading
+
+1. Note the current commit (`old=$(git rev-parse HEAD)`), then run `git pull`.
+2. Look for new settings and databases with `git diff "$old" -- .env.example infra/postgres/service-databases.conf`. Add new variables to `.env`. For a new database, provision it as described in [Adding the Food service](docs/operations/deployment.md#adding-the-food-service). [Operations](docs/operations/deployment.md) has a section for each service added to an existing deployment.
+3. Build each changed service, one at a time: `docker compose build <service>`.
+4. For a service with a database, apply its migrations first. The job exits when it is done: `docker compose up --no-build --no-deps <service>-migrate`.
+5. Recreate the service: `docker compose up -d --no-build --no-deps <service>`. Deploy data services before `mcp` and `processor`, and the Dashboard after the services it reads. Recreate the gateway only if its configuration changed.
+6. Check the Status page.
+
+On a small server, run one heavy job at a time: don't build images while the verification stack, a restore check, or `tools/check` is running. A stack older than the calendar-feeds release must go through that release's [one-time handoff](docs/operations/calendar-feeds-handoff.md) first; a fresh install skips it.
+
+## 16. Troubleshooting
+
+| Symptom | Cause and fix |
+| --- | --- |
+| Compose refuses with "Set LIFE_OS_… in .env" | One of the five required variables ([step 4](#4-configure-env)) is missing. |
+| The processor keeps restarting; its log says `missing Codex authentication at /run/lifeos-codex-source/auth.json` | `LIFE_OS_CODEX_HOME_HOST_PATH` is wrong, or you haven't signed in yet. Run `codex login` on the host, then `docker compose up -d --no-build --no-deps --force-recreate processor`. |
+| Status says Codex is signed out or usage-limited | Signed out: sign in again as above. Usage-limited: captures are retried after the reset time Status shows. |
+| `curl` gets an empty reply from the gateway | The Host is not in `server_name` ([step 9](#9-remote-access)). |
+| 502 from a page or API | The service behind it is not running. Check `docker compose ps`, `docker compose logs <service>`, and its `<service>-migrate` job. Don't publish service ports as a shortcut. |
+| The gateway fails to start with a bind error | `LIFE_OS_GATEWAY_BIND_ADDRESS` or `LIFE_OS_GATEWAY_PORT` is unavailable on the host. |
+| Voice recordings wait; Status says Whisper is not ready | The model is still downloading on the first start (`docker compose logs whisper`). |
+| The Server card cannot read the containers | `LIFE_OS_DOCKER_GID` is wrong. Fix it, then `docker compose up -d --no-build --no-deps host-health-docker`. |
+| Backups: `lifeos_backup cannot connect to <database>` | Run `make db-provision-backup`. If the capture images failed, check `LIFE_OS_INBOX_MEDIA_GID` (`docker compose exec inbox id -g`). |
+| Phone pushes don't arrive on one network but do on mobile data | That network blocks Google's FCM. Life OS can't fix this. |
+| A command run from a second clone or worktree changed the live stack | `name: lifeos` ([step 3](#3-get-the-code)). Deploy from one checkout; test with `tools/verify-compose`. |
+| A verification run's teardown exits 1 after its tests passed | A stale Docker network endpoint blocked the removal of a `lifeos-verify-*` network. The test result stands. Run `tools/verify-compose down --volumes --remove-orphans` again; it touches only `lifeos-verify-*` resources. |
+| The server runs out of memory, or Status says memory is low | The Server card names the biggest users. Run one heavy job at a time (builds, the verification stack, restore checks, `tools/check`). Lower `LIFE_OS_WHISPER_MEMORY` and `LIFE_OS_WHISPER_THREADS`, or use a smaller Whisper model. |
+| `tools/check` fails at `check-gateway-hosts` after you edit `server_name` | Keep the existing entries; only add your own. |
+| Remote access fails (Cloudflare 1033/530, 502 after login, no PIN email) | See [Cloudflare → Diagnose](docs/operations/cloudflare.md#diagnose). |

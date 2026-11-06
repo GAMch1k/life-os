@@ -4,6 +4,7 @@ Life OS is a local-first personal operating system. This index is the human-read
 
 ## Start here
 
+- [Self-hosting setup](../SETUP.md) — from a fresh Linux server to a running Life OS, in order.
 - [Architecture overview](architecture/overview.md) — system boundaries and component map.
 - [Networking and data flows](architecture/networking.md) — ingress and common request paths.
 - [Editable entities and UI/agent parity](architecture/editable-entities.md) — how editing is added to a domain so the Dashboard and the agent share one implementation.
