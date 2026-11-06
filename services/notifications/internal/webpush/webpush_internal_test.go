@@ -102,12 +102,12 @@ func TestParseKeys(t *testing.T) {
 func TestValidSubject(t *testing.T) {
 	for subject, want := range map[string]bool{
 		"mailto:owner@example.com":    true,
-		"https://lifeos.gamch1k.com":  true,
-		"https://lifeos.gamch1k.com/": true,
+		"https://lifeos.example.com":  true,
+		"https://lifeos.example.com/": true,
 		"mailto:not an address":       false,
 		"mailto:":                     false,
-		"http://lifeos.gamch1k.com":   false,
-		"lifeos.gamch1k.com":          false,
+		"http://lifeos.example.com":   false,
+		"lifeos.example.com":          false,
 		"":                            false,
 		"https://user@example.com":    false,
 	} {

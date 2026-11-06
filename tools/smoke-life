@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# make life-smoke and make core-smoke: the core-service smoke
+# (tools/smoke-core-services) and, without --core, the Dashboard smoke
+# (tools/smoke-dashboard), on the disposable verification stack
+# (tools/verify-compose, project lifeos-verify), never on the deployed
+# Life OS. It starts the gateway and what it depends on from the images
+# already built (no processor, Whisper, or Voice worker: these smokes test no
+# AI and no Voice), runs the smokes against it, and removes the stack and
+# its volumes afterwards. Build changed images first, one at a time
+# (docker compose build <service>).
+#
+#   tools/smoke-life [--core]
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+dashboard=true
+case "${1:-}" in
+  "") ;;
+  --core) dashboard=false ;;
+  *)
+    echo 'usage: tools/smoke-life [--core]' >&2
+    exit 2
+    ;;
+esac
+
+compose=(./tools/verify-compose)
+cleanup() { "${compose[@]}" down --volumes --remove-orphans >/dev/null; }
+trap cleanup EXIT
+
+"${compose[@]}" up --detach --no-build gateway
+# The verification stack's gateway (compose.verify.yaml).
+export LIFE_OS_SMOKE_GATEWAY=http://127.0.0.1:13001
+./tools/smoke-core-services
+if "$dashboard"; then ./tools/smoke-dashboard; fi

@@ -22,9 +22,9 @@ set -Eeuo pipefail
 # and only rewrites the page and finishes the pruning.
 #
 # The releases directory is LIFE_OS_ANDROID_RELEASES_DIR (the environment,
-# else .env), else /home/gamch1k/life-os.android, as for the gateway's
-# mount. It must exist, be writable by whoever runs this (its owner, uid
-# 1000: never root), and be readable by everyone (the gateway's nginx).
+# else .env), else ~/life-os.android, as for the gateway's mount. It must
+# exist, be writable by whoever runs this (its owner: never root), and be
+# readable by everyone (the gateway's nginx).
 #
 # Exit status: 0 published (or nothing new), 2 refused (nothing changed),
 # 1 failed.
@@ -71,22 +71,12 @@ release_dir=$(realpath -e -- "$release_arg" 2>/dev/null) && [[ -d "$release_dir"
   refuse "$release_arg is not a directory"
 cd "$repo_root"
 
-# A setting from the environment, else from .env, as Compose reads it.
-setting() {
-  local name=$1 value=''
-  if [[ -n "${!name:-}" ]]; then
-    printf '%s' "${!name}"
-    return
-  fi
-  [[ ! -f .env ]] || value=$(sed -n "s/^$name=//p" .env | tail -n 1)
-  value=${value#[\"\']}; value=${value%[\"\']}
-  value=${value/#\~/${HOME:-}}
-  value=${value//'${HOME}'/${HOME:-}}; value=${value//'$HOME'/${HOME:-}}
-  printf '%s' "$value"
-}
+# Settings from the environment, else from .env, as Compose reads them.
+# shellcheck source=tools/lib/settings.bash
+. tools/lib/settings.bash
 
 dir=$(setting LIFE_OS_ANDROID_RELEASES_DIR)
-dir=${dir:-/home/gamch1k/life-os.android}
+dir=${dir:-${HOME:-}/life-os.android}
 [[ -d "$dir" ]] || refuse "the releases directory $dir does not exist: create it with install -d -m 755 $dir"
 [[ -w "$dir" ]] || refuse "the releases directory $dir is not writable by $(id -un) (if Docker created it for the gateway, it belongs to root: sudo chown $(id -u):$(id -g) $dir)"
 [[ -n "$(find "$dir" -maxdepth 0 -perm -o=rx)" ]] || refuse "the gateway cannot read $dir: chmod 755 $dir"

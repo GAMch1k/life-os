@@ -7,7 +7,7 @@ import { SERVICE_WORKER_PATH } from "@/lib/web-app";
 /**
  * Registers the service worker (public/sw.js), which makes the Dashboard
  * installable and caches nothing. Browsers offer service workers only in a
- * secure context: over https (lifeos.gamch1k.com) or on localhost, not over
+ * secure context: over https (LIFE_OS_PUBLIC_URL) or on localhost, not over
  * plain http such as the WireGuard address.
  */
 export function ServiceWorker() {

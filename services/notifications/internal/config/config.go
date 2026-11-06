@@ -36,7 +36,7 @@ type Config struct {
 	NtfyTopic string `env:"NOTIFICATIONS_NTFY_TOPIC" default:"lifeos"`
 	NtfyToken string `env:"NOTIFICATIONS_NTFY_TOKEN"`
 	// LinkBaseURL is Life OS's public URL, such as
-	// https://lifeos.gamch1k.com: tapping a notification on the phone opens
+	// https://lifeos.example.com: tapping a notification on the phone opens
 	// its link there.
 	LinkBaseURL string `env:"NOTIFICATIONS_LINK_BASE_URL"`
 	// Web push (docs/services/notifications.md#web-push): the VAPID key pair,

@@ -26,7 +26,7 @@
 
 **Token lifecycle.** An access token is refreshed when it has less than 5 minutes left; a rotated refresh token is sealed and stored; a 401 refreshes once and retries. `invalid_grant` makes the connection `expired` (Activity `calendar.google.expired`, once) and stops every call to Google until the owner reconnects; another OAuth refusal sets `error`; an outage changes nothing.
 
-**Not configured.** Without `LIFE_OS_GOOGLE_CLIENT_ID`, `LIFE_OS_GOOGLE_CLIENT_SECRET`, and a valid `LIFE_OS_GOOGLE_TOKEN_KEY` the service starts and logs why; `GET /v1/connection` says `configured: false` and authorize, connect, and refresh answer 503 `google_not_configured`.
+**Not configured.** Without `LIFE_OS_GOOGLE_CLIENT_ID`, `LIFE_OS_GOOGLE_CLIENT_SECRET`, and a valid `LIFE_OS_GOOGLE_TOKEN_KEY`, or once they are set without a valid `LIFE_OS_GOOGLE_REDIRECT_URI`, the service starts and logs why; `GET /v1/connection` says `configured: false` and authorize, connect, and refresh answer 503 `google_not_configured`.
 
 ## Inbound sync
 
@@ -104,7 +104,7 @@ Source `google-calendar`, the same event types as before: `calendar.google.conne
 | `ACTIVITY_SERVICE_URL` | empty | Activity. |
 | `LIFE_OS_TIMEZONE` | `UTC` | The owner's timezone (all-day series' ends, the Life OS calendar's zone). |
 | `LIFE_OS_GOOGLE_CLIENT_ID`, `LIFE_OS_GOOGLE_CLIENT_SECRET`, `LIFE_OS_GOOGLE_TOKEN_KEY` | empty | The OAuth client and the sealing key (moved here from Calendar). Secrets. |
-| `LIFE_OS_GOOGLE_REDIRECT_URI` | `https://lifeos.gamch1k.com/calendar/google/callback` | Unchanged. |
+| `LIFE_OS_GOOGLE_REDIRECT_URI` | empty (compose: `LIFE_OS_PUBLIC_URL` + `/calendar/google/callback`, such as `https://lifeos.example.com/calendar/google/callback`) | The Dashboard callback registered on the OAuth client; https, http only for localhost. The service has no default: with the client set and this empty, Google stays not configured and the log names it. |
 | `GOOGLE_CALENDAR_SYNC_SECONDS` | `120` | Sync interval, 30–86400 (compose passes `LIFE_OS_CALENDAR_GOOGLE_SYNC_SECONDS`, the name the owner's `.env` already has). |
 | `GOOGLE_CALENDAR_FEED_SECONDS` | `15` | How often Calendar's change feed is read, 1–3600 (compose: `LIFE_OS_GOOGLE_CALENDAR_FEED_SECONDS`). |
 | `GOOGLE_AUTH_URL`, `GOOGLE_TOKEN_URL`, `GOOGLE_REVOKE_URL`, `GOOGLE_CALENDAR_API_URL` | Google's | Tests and the verification stack point them elsewhere. |

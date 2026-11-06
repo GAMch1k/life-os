@@ -34,7 +34,7 @@ func TestNewWebPushNamesWhatIsMissing(t *testing.T) {
 			t.Errorf("%s: the error shows the private key", name)
 		}
 	}
-	channel, err := NewWebPush(WebPushConfig{PublicKey: public, PrivateKey: private, Subject: "https://lifeos.gamch1k.com", Store: queries})
+	channel, err := NewWebPush(WebPushConfig{PublicKey: public, PrivateKey: private, Subject: "https://lifeos.example.com", Store: queries})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,12 +51,12 @@ func TestBuildNeedsWebPushKeysForTheChannel(t *testing.T) {
 		t.Fatalf("Build(webpush) without keys = %v", err)
 	}
 	public, private, _ := webpush.GenerateKeys()
-	channel, err := NewWebPush(WebPushConfig{PublicKey: public, PrivateKey: private, Subject: "https://lifeos.gamch1k.com", Store: store.New(nil)})
+	channel, err := NewWebPush(WebPushConfig{PublicKey: public, PrivateKey: private, Subject: "https://lifeos.example.com", Store: store.New(nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	channels, err := Build([]string{"ntfy", "webpush"}, Settings{
-		Ntfy:    NtfyConfig{URL: "http://ntfy:80", Topic: "lifeos", Token: "tk_test", LinkBaseURL: "https://lifeos.gamch1k.com"},
+		Ntfy:    NtfyConfig{URL: "http://ntfy:80", Topic: "lifeos", Token: "tk_test", LinkBaseURL: "https://lifeos.example.com"},
 		WebPush: channel,
 	})
 	if err != nil || len(channels) != 2 || channels[1] != Channel(channel) {

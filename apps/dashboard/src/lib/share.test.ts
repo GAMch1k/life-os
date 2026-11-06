@@ -68,8 +68,8 @@ test("a share is accepted from the app itself, never from another site", () => {
   assert.equal(
     from({
       "sec-fetch-site": "none",
-      origin: "https://lifeos.gamch1k.com",
-      host: "lifeos.gamch1k.com",
+      origin: "https://lifeos.example.com",
+      host: "lifeos.example.com",
     }),
     true,
   );
@@ -77,9 +77,9 @@ test("a share is accepted from the app itself, never from another site", () => {
   assert.equal(
     from({
       "sec-fetch-site": "same-origin",
-      origin: "http://10.66.66.1:3001",
-      host: "10.66.66.1",
-      "x-forwarded-host": "10.66.66.1",
+      origin: "http://10.8.0.1:3000",
+      host: "10.8.0.1",
+      "x-forwarded-host": "10.8.0.1",
     }),
     true,
   );
@@ -94,24 +94,24 @@ test("a share is accepted from the app itself, never from another site", () => {
     from({
       "sec-fetch-site": "cross-site",
       origin: "https://evil.example",
-      host: "lifeos.gamch1k.com",
+      host: "lifeos.example.com",
     }),
     false,
   );
   assert.equal(
     from({
       "sec-fetch-site": "same-site",
-      origin: "https://ntfy.gamch1k.com",
-      host: "lifeos.gamch1k.com",
+      origin: "https://ntfy.example.com",
+      host: "lifeos.example.com",
     }),
     false,
   );
   assert.equal(
-    from({ origin: "https://evil.example", host: "lifeos.gamch1k.com" }),
+    from({ origin: "https://evil.example", host: "lifeos.example.com" }),
     false,
   );
   assert.equal(
-    from({ origin: "not a url", host: "lifeos.gamch1k.com" }),
+    from({ origin: "not a url", host: "lifeos.example.com" }),
     false,
   );
 });

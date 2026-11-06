@@ -20,7 +20,7 @@ func TestConfigIsUnsetPartialOrInvalidWithoutCrashing(t *testing.T) {
 		t.Fatalf("unset = %+v, %v; want not configured, no error", unset, err)
 	}
 
-	partial, err := NewConfig("client.apps.googleusercontent.com", "", key, "")
+	partial, err := NewConfig("client.apps.googleusercontent.com", "", key, ExampleRedirectURI)
 	if err == nil || partial.Configured() || !strings.Contains(err.Error(), "LIFE_OS_GOOGLE_CLIENT_SECRET is not set") {
 		t.Fatalf("partial = %+v, %v", partial, err)
 	}
@@ -32,7 +32,7 @@ func TestConfigIsUnsetPartialOrInvalidWithoutCrashing(t *testing.T) {
 		"not base64!!": "must be base64",
 		base64.StdEncoding.EncodeToString([]byte("too short")): "not 9 bytes",
 	} {
-		config, err := NewConfig("id", "super-secret", value, "")
+		config, err := NewConfig("id", "super-secret", value, ExampleRedirectURI)
 		if err == nil || config.Configured() || !strings.Contains(err.Error(), want) {
 			t.Errorf("key %q: %+v, %v; want error with %q", value, config, err, want)
 		}
@@ -41,14 +41,14 @@ func TestConfigIsUnsetPartialOrInvalidWithoutCrashing(t *testing.T) {
 		}
 	}
 
-	for _, redirect := range []string{"lifeos.gamch1k.com/callback", "http://lifeos.gamch1k.com/calendar/google/callback", "https://user@host/cb"} {
-		if config, err := NewConfig("id", "secret", key, redirect); err == nil || config.Configured() {
-			t.Errorf("redirect %q accepted", redirect)
+	for _, redirect := range []string{"", "/calendar/google/callback", "lifeos.example.com/callback", "http://lifeos.example.com/calendar/google/callback", "https://user@host/cb"} {
+		if config, err := NewConfig("id", "secret", key, redirect); err == nil || config.Configured() || !strings.Contains(err.Error(), "LIFE_OS_GOOGLE_REDIRECT_URI") {
+			t.Errorf("redirect %q: %+v, %v", redirect, config, err)
 		}
 	}
 
-	config, err := NewConfig(" id ", "secret", key, "")
-	if err != nil || !config.Configured() || config.RedirectURI != DefaultRedirectURI || config.ClientID != "id" || !bytes.Equal(config.TokenKey, testKey) {
+	config, err := NewConfig(" id ", "secret", key, ExampleRedirectURI)
+	if err != nil || !config.Configured() || config.RedirectURI != ExampleRedirectURI || config.ClientID != "id" || !bytes.Equal(config.TokenKey, testKey) {
 		t.Fatalf("configured = %+v, %v", config, err)
 	}
 	local, err := NewConfig("id", "secret", key, "http://localhost:3000/calendar/google/callback")
@@ -70,7 +70,7 @@ func TestParseTokenKeyAcceptsEveryBase64Form(t *testing.T) {
 }
 
 func TestAuthURLAsksForOfflineConsentWithStateAndPKCE(t *testing.T) {
-	config := Config{ClientID: "id", ClientSecret: "secret", RedirectURI: DefaultRedirectURI, TokenKey: testKey}
+	config := Config{ClientID: "id", ClientSecret: "secret", RedirectURI: ExampleRedirectURI, TokenKey: testKey}
 	raw := config.AuthURL(GoogleEndpoints.AuthURL, "the-state", "the-challenge", "owner@example.com")
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Host != "accounts.google.com" {
@@ -78,7 +78,7 @@ func TestAuthURLAsksForOfflineConsentWithStateAndPKCE(t *testing.T) {
 	}
 	query := parsed.Query()
 	for name, want := range map[string]string{
-		"client_id": "id", "redirect_uri": DefaultRedirectURI, "response_type": "code", "access_type": "offline", "prompt": "consent",
+		"client_id": "id", "redirect_uri": ExampleRedirectURI, "response_type": "code", "access_type": "offline", "prompt": "consent",
 		"state": "the-state", "code_challenge": "the-challenge", "code_challenge_method": "S256", "login_hint": "owner@example.com",
 		"scope": ScopeCalendarList + " " + ScopeEvents + " " + ScopeAppCreated,
 	} {

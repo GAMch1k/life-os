@@ -16,7 +16,7 @@ import (
 func fakeClient(t *testing.T, calendars ...fakegoogle.Calendar) (*google.Client, *fakegoogle.Server) {
 	t.Helper()
 	fake := fakegoogle.New(t, calendars...)
-	config := google.Config{ClientID: fakegoogle.ClientID, ClientSecret: fakegoogle.ClientSecret, RedirectURI: google.DefaultRedirectURI, TokenKey: make([]byte, 32)}
+	config := google.Config{ClientID: fakegoogle.ClientID, ClientSecret: fakegoogle.ClientSecret, RedirectURI: google.ExampleRedirectURI, TokenKey: make([]byte, 32)}
 	return google.NewClient(config, fake.Endpoints(), nil), fake
 }
 
@@ -101,7 +101,7 @@ func TestClientClassifiesRefusalsAndOutages(t *testing.T) {
 	fake.Lock()
 	fake.TokenStatus = 0
 	fake.Unlock()
-	wrong := google.NewClient(google.Config{ClientID: "other", ClientSecret: "nope", RedirectURI: google.DefaultRedirectURI}, fake.Endpoints(), nil)
+	wrong := google.NewClient(google.Config{ClientID: "other", ClientSecret: "nope", RedirectURI: google.ExampleRedirectURI}, fake.Endpoints(), nil)
 	var oauth *google.OAuthError
 	if _, err := wrong.Refresh(ctx, "anything"); !errors.As(err, &oauth) || oauth.Code != "invalid_client" || google.IsInvalidGrant(err) {
 		t.Fatalf("invalid client: %v", err)

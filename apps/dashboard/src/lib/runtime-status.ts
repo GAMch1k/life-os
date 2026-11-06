@@ -660,7 +660,7 @@ function processingCheck(
       state: "problem",
       summary: "The Inbox processor is not running.",
       action:
-        "Captures are kept in Inbox but nothing processes them. Start the processor service (docker compose up -d processor) and check its logs.",
+        "Captures are kept in Inbox but nothing processes them. Start the processor service (docker compose up -d --no-build --no-deps processor) and check its logs.",
       facts: [],
     };
   }

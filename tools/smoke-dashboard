@@ -5,8 +5,17 @@ set -euo pipefail
 # owner (CONTRIBUTING.md, "Development tools and live data").
 actor=(-H 'X-Life-OS-Actor: dev:smoke-dashboard')
 
-gateway_port=$(docker compose port gateway 80)
-dashboard="http://${gateway_port}"
+# The gateway to check, which these records are written to. make life-smoke
+# (tools/smoke-life) sets the verification stack's; set it yourself only for
+# a gateway you mean to write test records to, such as the deployed one:
+#   LIFE_OS_SMOKE_GATEWAY=http://127.0.0.1:3000 tools/smoke-dashboard
+gateway=${LIFE_OS_SMOKE_GATEWAY:-}
+if [[ -z "$gateway" ]]; then
+  printf '%s\n' "smoke-dashboard: set LIFE_OS_SMOKE_GATEWAY to the gateway to write test records to." \
+    "make life-smoke runs it on the disposable verification stack (tools/smoke-life)." >&2
+  exit 2
+fi
+dashboard=$gateway
 tasks="${dashboard}/api/tasks"
 inbox="${dashboard}/api/inbox"
 calendar="${dashboard}/api/calendar"

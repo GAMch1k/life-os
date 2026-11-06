@@ -31,11 +31,12 @@ type Config struct {
 	// The Enable Banking application (docs/operations/banking.md): its id,
 	// the path of its private key file, the key that seals provider session
 	// ids (32 bytes, base64), and the Dashboard callback registered on the
-	// application. All secrets except the redirect URI; never logged.
+	// application (compose: LIFE_OS_PUBLIC_URL/finance/bank/callback). All
+	// secrets except the redirect URI; never logged.
 	EnableBankingAppID   string `env:"LIFE_OS_ENABLE_BANKING_APP_ID"`
 	EnableBankingKeyFile string `env:"LIFE_OS_ENABLE_BANKING_KEY_FILE"`
 	TokenKey             string `env:"LIFE_OS_BANKING_TOKEN_KEY"`
-	RedirectURI          string `env:"LIFE_OS_BANKING_REDIRECT_URI" default:"https://lifeos.gamch1k.com/finance/bank/callback"`
+	RedirectURI          string `env:"LIFE_OS_BANKING_REDIRECT_URI"`
 	// EnableBankingAPIURL is Enable Banking's API; tests and the
 	// verification stack point it elsewhere.
 	EnableBankingAPIURL string `env:"ENABLE_BANKING_API_URL" default:"https://api.enablebanking.com"`

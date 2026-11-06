@@ -11,11 +11,11 @@ Once connected, the calendars you tick sync both ways: their events come into Li
 
 ## 2. OAuth consent screen (Google Auth Platform)
 
-1. **Branding:** app name "Life OS", the owner's address as user support and developer contact email, and the links Google asks for:
-   - App home page: `https://lifeos.gamch1k.com`
-   - Privacy policy: `https://lifeos.gamch1k.com/privacy`
-   - Terms of service: `https://lifeos.gamch1k.com/terms`
-   - Authorized domain: `gamch1k.com`
+1. **Branding:** app name "Life OS", the owner's address as user support and developer contact email, and the links Google asks for, under your `LIFE_OS_PUBLIC_URL` (`https://lifeos.example.com` here):
+   - App home page: `https://lifeos.example.com`
+   - Privacy policy: `https://lifeos.example.com/privacy`
+   - Terms of service: `https://lifeos.example.com/terms`
+   - Authorized domain: your domain, such as `example.com`
 2. **Audience:** User type **External**, then **Publish app** so the status is **In production**. In "Testing", Google expires refresh tokens after 7 days and the connection would turn `expired` every week.
 3. **Data access:** add the three scopes Life OS asks for:
    - `https://www.googleapis.com/auth/calendar.calendarlist.readonly`
@@ -29,7 +29,7 @@ Once connected, the calendars you tick sync both ways: their events come into Li
 **Clients → Create client:**
 
 - Application type: **Web application**, name for example "Life OS Calendar".
-- **Authorized redirect URIs:** exactly `https://lifeos.gamch1k.com/calendar/google/callback` (the Dashboard's callback route). No JavaScript origins are needed.
+- **Authorized redirect URIs:** exactly your `LIFE_OS_PUBLIC_URL` plus `/calendar/google/callback`, such as `https://lifeos.example.com/calendar/google/callback` (the Dashboard's callback route). No JavaScript origins are needed.
 
 Copy the client ID and the client secret. The secret is shown in full only now; keep it in a password manager as well.
 
@@ -41,11 +41,12 @@ Add to the server's `.env` (never to the repository):
 LIFE_OS_GOOGLE_CLIENT_ID=<client id>.apps.googleusercontent.com
 LIFE_OS_GOOGLE_CLIENT_SECRET=<client secret>
 LIFE_OS_GOOGLE_TOKEN_KEY=<output of: openssl rand -base64 32>
-# Only if the callback lives elsewhere (it must match the client's redirect URI):
-# LIFE_OS_GOOGLE_REDIRECT_URI=https://lifeos.gamch1k.com/calendar/google/callback
+# Only if the callback is not LIFE_OS_PUBLIC_URL/calendar/google/callback
+# (it must match the client's redirect URI):
+# LIFE_OS_GOOGLE_REDIRECT_URI=https://lifeos.example.com/calendar/google/callback
 ```
 
-Generate the token key once with `openssl rand -base64 32` and keep it: it decrypts the stored refresh token, so a new key means reconnecting Google. Then apply the settings with `docker compose up -d google-calendar` (a normal redeploy also does). The service logs at start whether Google is configured, naming any missing or invalid setting but never its value (`docker compose logs google-calendar | grep -i google`).
+Generate the token key once with `openssl rand -base64 32` and keep it: it decrypts the stored refresh token, so a new key means reconnecting Google. Then apply the settings with `docker compose up -d --no-build --no-deps google-calendar` (a normal redeploy also does). The service logs at start whether Google is configured, naming any missing or invalid setting but never its value (`docker compose logs google-calendar | grep -i google`).
 
 ## 5. Connect
 
@@ -97,14 +98,14 @@ docker compose exec google-calendar wget -qO- --post-data= --header='X-Life-OS-A
 
 The answer's `sync` says how it went. Unticking and ticking the calendar in the dialog also imports everything again, but drops your own reminder changes on its events and records the removal and the re-import in the Event Log.
 
-The sync interval is `LIFE_OS_CALENDAR_GOOGLE_SYNC_SECONDS` in `.env` (default 120, at least 30); how often edits made in Life OS are picked up is `LIFE_OS_GOOGLE_CALENDAR_FEED_SECONDS` (default 15). Apply with `docker compose up -d google-calendar`.
+The sync interval is `LIFE_OS_CALENDAR_GOOGLE_SYNC_SECONDS` in `.env` (default 120, at least 30); how often edits made in Life OS are picked up is `LIFE_OS_GOOGLE_CALENDAR_FEED_SECONDS` (default 15). Apply with `docker compose up -d --no-build --no-deps google-calendar`.
 
 ## Troubleshooting
 
 | Symptom | Cause and fix |
 | --- | --- |
-| Dialog: "not set up on this server" | One of the three settings is missing or the key is not 32 bytes of base64. Read `docker compose logs google-calendar`, fix `.env`, `docker compose up -d google-calendar`. |
-| Google: `Error 400: redirect_uri_mismatch` | The client's redirect URI differs from `LIFE_OS_GOOGLE_REDIRECT_URI` (scheme, host, path, trailing slash). Make them identical. |
+| Dialog: "not set up on this server" | One of the three settings or the redirect URI is missing, or the key is not 32 bytes of base64. Read `docker compose logs google-calendar`, fix `.env`, `docker compose up -d --no-build --no-deps google-calendar`. |
+| Google: `Error 400: redirect_uri_mismatch` | The client's redirect URI differs from `LIFE_OS_GOOGLE_REDIRECT_URI` (by default `LIFE_OS_PUBLIC_URL/calendar/google/callback`): scheme, host, path, trailing slash. Make them identical. |
 | Callback: "This sign-in expired or was already used" | More than 10 minutes on Google's page, a reload of the callback, or a second tab. Start again with Connect Google. |
 | Status and dialog: "expired or was revoked" | Google refused the refresh token: Life OS was removed at [myaccount.google.com/connections](https://myaccount.google.com/connections), the app was left in Testing (7 days), or the token went unused for 6 months. **Reconnect Google** in the dialog; calendar choices are kept. |
 | Status: "Google refused the connection" with `invalid_client` | The client secret changed or the client was deleted. Put the current secret in `.env`, restart google-calendar, reconnect if needed. |
@@ -121,7 +122,7 @@ The sync interval is `LIFE_OS_CALENDAR_GOOGLE_SYNC_SECONDS` in `.env` (default 1
 | Event details: "Export failed: …" | Google or the network failed; the change is kept and retried automatically. Status shows the count. A lasting "Life OS could not create its calendar in Google: …" usually means the "manage the calendars Life OS creates" permission was unticked: reconnect Google and allow it. |
 | A Life OS event is missing on the phone | Is the export on (Google dialog, Life OS calendar)? Is the "Life OS" calendar shown on the phone? Past events are not exported. |
 
-**Rotating the token key:** Disconnect in the dialog, change `LIFE_OS_GOOGLE_TOKEN_KEY`, `docker compose up -d google-calendar`, Connect again.
+**Rotating the token key:** Disconnect in the dialog, change `LIFE_OS_GOOGLE_TOKEN_KEY`, `docker compose up -d --no-build --no-deps google-calendar`, Connect again.
 
 **Removing Google:** Disconnect in the dialog (Life OS revokes its access at Google and deletes the stored token and choices), then remove the `LIFE_OS_GOOGLE_*` lines if you like. Disconnecting after the settings are gone only forgets the connection; remove Life OS at [myaccount.google.com/connections](https://myaccount.google.com/connections) as well.
 

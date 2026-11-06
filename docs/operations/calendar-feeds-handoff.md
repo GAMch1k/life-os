@@ -20,7 +20,7 @@ The release that adds [calendar-feeds](../services/calendar-feeds.md) moves the 
 4. **Provision and migrate.** Recreate PostgreSQL so it sees the new password and the updated `infra/postgres/service-databases.conf`, provision `calendar_feeds_db` (idempotent), build the new images, and run both migrations: Calendar's 000015 (`calendar_feeds_handover`: the feeds' sources and events become kind `external`, out of process) and calendar-feeds' own.
 
    ```sh
-   docker compose up --detach postgres
+   docker compose up -d --no-build --no-deps postgres
    make db-provision
    docker compose build calendar calendar-feeds calendar-feeds-handoff dashboard
    docker compose run --rm calendar-migrate
@@ -40,7 +40,8 @@ The release that adds [calendar-feeds](../services/calendar-feeds.md) moves the 
 6. **Start** Calendar, calendar-feeds, and what depends on them:
 
    ```sh
-   docker compose up --detach calendar calendar-feeds dashboard gateway
+   docker compose up -d --no-build --no-deps calendar calendar-feeds dashboard
+   docker compose up -d --no-build --no-deps --force-recreate gateway
    ```
 
    At its start calendar-feeds ensures the ZAW feed (`docker compose logs calendar-feeds` says `ZAW feed ensured` with `action unchanged` and the feed id, never the URL), registers each handed-over feed again (Calendar keeps the owner's names, reminders, and priorities), and refreshes what is due.

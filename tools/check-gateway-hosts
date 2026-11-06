@@ -1,24 +1,59 @@
 #!/usr/bin/env bash
-# Asserts the gateway's host allowlist in infra/nginx/life-os.conf (or the file
-# given), without Docker:
+# Asserts the gateway's host allowlist in infra/nginx/life-os.conf.template (or
+# the template given), without Docker. It renders the template as the gateway
+# does, with the hosts from the environment, else .env (tools/lib/settings.bash):
+#  - the template names only the LIFE_OS_* settings compose.yaml gives the
+#    gateway, so nothing is left unrendered;
 #  - the default server answers every unlisted Host with 444 (no response)
 #    and does nothing else;
 #  - one Life OS server lists its hosts by exact name (no wildcard, regex, or
-#    catch-all), including the public hostname, the WireGuard address, and
-#    loopback;
+#    catch-all): LIFE_OS_PUBLIC_HOSTNAME, LIFE_OS_GATEWAY_BIND_ADDRESS
+#    (default 127.0.0.1), and loopback; the host of LIFE_OS_PUBLIC_URL must
+#    be one of them;
 #  - nothing in the gateway refers to ntfy, which has its own network and
 #    tunnel route and is never served by the gateway;
 #  - upstreams are resolved at request time (BUG-37): the Life OS server uses
 #    Docker's DNS as its resolver, and every proxy_pass names its upstream
 #    through a variable, never a fixed host nginx would resolve only once.
 # See docs/architecture/networking.md and docs/operations/ntfy.md.
-# Usage: tools/check-gateway-hosts [nginx-config]
+# Usage: tools/check-gateway-hosts [nginx-template]
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
+# shellcheck source=tools/lib/settings.bash
+. tools/lib/settings.bash
 
-config=${1:-infra/nginx/life-os.conf}
+template=${1:-infra/nginx/life-os.conf.template}
 failed=0
 fail() { echo "check-gateway-hosts: $*" >&2; failed=1; }
+
+# The settings compose.yaml gives the gateway for its template, with their
+# Compose defaults, after infra/nginx/server-names.envsh, which the gateway
+# runs before it renders the template.
+public_hostname=$(setting LIFE_OS_PUBLIC_HOSTNAME)
+bind_address=$(setting LIFE_OS_GATEWAY_BIND_ADDRESS)
+bind_address=${bind_address:-127.0.0.1}
+settings=$(
+  export LIFE_OS_PUBLIC_HOSTNAME=$public_hostname LIFE_OS_GATEWAY_BIND_ADDRESS=$bind_address
+  # shellcheck source=infra/nginx/server-names.envsh
+  . infra/nginx/server-names.envsh
+  printf '%s|%s' "$LIFE_OS_PUBLIC_HOSTNAME" "$LIFE_OS_GATEWAY_BIND_ADDRESS"
+)
+declare -A values
+IFS='|' read -r 'values[LIFE_OS_PUBLIC_HOSTNAME]' 'values[LIFE_OS_GATEWAY_BIND_ADDRESS]' <<<"$settings"
+
+# Render as the image's envsubst does: ${NAME} for the LIFE_OS_* names only.
+config=$(<"$template")
+while IFS= read -r reference; do
+  name=${reference#\$}; name=${name#\{}; name=${name%\}}
+  if [[ "$reference" != "\${"*"}" ]]; then
+    fail "write $reference as \${$name} in the template"
+  elif [[ -z "${values[$name]+set}" ]]; then
+    fail "the template names $name, which compose.yaml does not give the gateway"
+  fi
+done < <(sed 's/#.*//' "$template" | grep -o -E '\$\{?LIFE_OS_[A-Za-z0-9_]*\}?' | sort -u)
+for name in "${!values[@]}"; do
+  config=${config//"\${$name}"/${values[$name]}}
+done
 
 # One line per directive inside a top-level server: "<server number>
 # <directive and arguments>" (a block's opening line, such as "location /",
@@ -45,7 +80,7 @@ directives=$(awk -v q="'" '
     }
     current = current " "
   }
-' "$config")
+' <<<"$config")
 
 servers=$(awk '{print $1}' <<<"$directives" | sort -u)
 [ "$(wc -l <<<"$servers")" -eq 2 ] || fail "expected exactly two servers (the catch-all and Life OS); found $(wc -l <<<"$servers")"
@@ -67,9 +102,15 @@ while IFS= read -r name; do
   [ -n "$name" ] || continue
   [[ "$name" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]] || fail "Life OS server_name '$name' must be an exact lowercase host name or address (no wildcard, regex, or _)"
 done <<<"$names"
-for required in lifeos.gamch1k.com 10.66.66.1 127.0.0.1; do
-  grep -q -x -F "$required" <<<"$names" || fail "the Life OS server must list $required"
+for required in $public_hostname $bind_address 127.0.0.1; do
+  grep -q -x -F "$required" <<<"$names" || fail "the Life OS server must list $required (\${LIFE_OS_PUBLIC_HOSTNAME}, \${LIFE_OS_GATEWAY_BIND_ADDRESS}, and 127.0.0.1)"
 done
+# Links and redirects point at LIFE_OS_PUBLIC_URL: the gateway must answer it.
+public_url=$(setting LIFE_OS_PUBLIC_URL)
+if [ -n "$public_url" ]; then
+  public_host=$(url_host "$public_url")
+  grep -q -x -F "$public_host" <<<"$names" || fail "LIFE_OS_PUBLIC_URL's host $public_host is not one the gateway answers: set LIFE_OS_PUBLIC_HOSTNAME=$public_host in .env"
+fi
 if of "$lifeos_server" | grep -q '^listen .*default_server'; then fail "the Life OS server must not be the default server"; fi
 
 of "$lifeos_server" | grep -q -E '^resolver 127\.0\.0\.11( |$)' || fail "the Life OS server must resolve upstreams through Docker's DNS at request time: resolver 127.0.0.11 valid=10s ipv6=off"
@@ -77,8 +118,9 @@ fixed=$(of "$lifeos_server" | awk '$1 == "proxy_pass" && $2 !~ /^http:\/\/\$[a-z
 [ -z "$fixed" ] || fail "every proxy_pass must name its upstream through a variable (set \$upstream food:8080; proxy_pass http://\$upstream), so nginx resolves it per request: ${fixed//$'\n'/; }"
 [ "$(of "$lifeos_server" | grep -c '^proxy_pass ')" -gt 0 ] || fail "the Life OS server proxies nothing"
 
-ntfy_refs=$(sed 's/#.*//' "$config" | grep -i 'ntfy' | sed 's/^[[:space:]]*//' || true)
+# shellcheck disable=SC2001 # comments go from every line
+ntfy_refs=$(sed 's/#.*//' <<<"$config" | grep -i 'ntfy' | sed 's/^[[:space:]]*//' || true)
 [ -z "$ntfy_refs" ] || fail "the gateway must not refer to ntfy (it has its own network and route): ${ntfy_refs//$'\n'/; }"
 
 if [ "$failed" -ne 0 ]; then exit 1; fi
-echo "gateway hosts ok: Life OS answers only $(tr '\n' ' ' <<<"$names" | sed 's/ $//; s/ /, /g'); every other Host gets 444; upstreams are resolved per request"
+echo "gateway hosts ok: Life OS answers only $(awk '!seen[$0]++' <<<"$names" | tr '\n' ' ' | sed 's/ $//; s/ /, /g'); every other Host gets 444; upstreams are resolved per request"

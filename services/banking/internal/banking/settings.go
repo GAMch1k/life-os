@@ -12,9 +12,11 @@ import (
 	"github.com/GAMch1k/life-os/services/banking/internal/enablebanking"
 )
 
-// DefaultRedirectURI is the Dashboard route the bank returns the owner to,
-// as registered on the Enable Banking application.
-const DefaultRedirectURI = "https://lifeos.gamch1k.com/finance/bank/callback"
+// ExampleRedirectURI shows the form of LIFE_OS_BANKING_REDIRECT_URI: the
+// Dashboard route the bank returns the owner to, under Life OS's public URL,
+// as registered on the Enable Banking application. Compose derives it from
+// LIFE_OS_PUBLIC_URL; there is no default here.
+const ExampleRedirectURI = "https://lifeos.example.com/finance/bank/callback"
 
 // Settings are the Enable Banking application and the key that seals
 // session ids. The zero Settings is "not configured".
@@ -49,9 +51,6 @@ const (
 func LoadSettings(appID, keyFile, tokenKey, redirectURI, apiURL string) (Settings, error) {
 	appID, keyFile, tokenKey = strings.TrimSpace(appID), strings.TrimSpace(keyFile), strings.TrimSpace(tokenKey)
 	redirectURI = strings.TrimSpace(redirectURI)
-	if redirectURI == "" {
-		redirectURI = DefaultRedirectURI
-	}
 	var keyData []byte
 	if keyFile != "" {
 		data, err := os.ReadFile(keyFile)
@@ -72,6 +71,9 @@ func LoadSettings(appID, keyFile, tokenKey, redirectURI, apiURL string) (Setting
 	}
 	if tokenKey == "" {
 		missing = append(missing, EnvTokenKey)
+	}
+	if redirectURI == "" {
+		missing = append(missing, EnvRedirect)
 	}
 	if len(missing) > 0 {
 		return Settings{}, fmt.Errorf("Enable Banking is not configured: %s %s not set", strings.Join(missing, " and "), plural(len(missing), "is", "are"))
@@ -108,7 +110,7 @@ func ParseTokenKey(value string) ([]byte, error) {
 func validRedirectURI(value string) error {
 	parsed, err := url.Parse(value)
 	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" || parsed.RawQuery != "" {
-		return fmt.Errorf("%s must be an absolute URL such as %s", EnvRedirect, DefaultRedirectURI)
+		return fmt.Errorf("%s must be an absolute URL such as %s", EnvRedirect, ExampleRedirectURI)
 	}
 	local := parsed.Hostname() == "localhost" || parsed.Hostname() == "127.0.0.1"
 	if parsed.Scheme != "https" && (parsed.Scheme != "http" || !local) {

@@ -3,8 +3,6 @@ package config
 import (
 	"strings"
 	"testing"
-
-	"github.com/GAMch1k/life-os/services/google-calendar/internal/google"
 )
 
 func TestGoogleSettings(t *testing.T) {
@@ -16,7 +14,7 @@ func TestGoogleSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	unset, err := cfg.Google()
-	if err != nil || unset.Configured() || cfg.GoogleRedirectURI != google.DefaultRedirectURI {
+	if err != nil || unset.Configured() || cfg.GoogleRedirectURI != "" {
 		t.Fatalf("unset: %+v, %v (redirect %q)", unset, err, cfg.GoogleRedirectURI)
 	}
 

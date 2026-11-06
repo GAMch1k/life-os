@@ -1,0 +1,14 @@
+# shellcheck shell=sh
+# Sourced by the nginx image's entrypoint (mounted in /docker-entrypoint.d/ by
+# compose.yaml) just before it renders life-os.conf.template. The template's
+# server_name lists 127.0.0.1 and localhost itself, so a setting that names
+# one of them, or repeats the other setting, is left out rather than listed
+# twice: nginx warns about a repeated name. The default bind address,
+# 127.0.0.1, is such a setting.
+case "${LIFE_OS_GATEWAY_BIND_ADDRESS:-}" in
+  127.0.0.1 | localhost | "${LIFE_OS_PUBLIC_HOSTNAME:-}") LIFE_OS_GATEWAY_BIND_ADDRESS= ;;
+esac
+case "${LIFE_OS_PUBLIC_HOSTNAME:-}" in
+  127.0.0.1 | localhost) LIFE_OS_PUBLIC_HOSTNAME= ;;
+esac
+export LIFE_OS_GATEWAY_BIND_ADDRESS LIFE_OS_PUBLIC_HOSTNAME

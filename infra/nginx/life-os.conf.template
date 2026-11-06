@@ -1,4 +1,9 @@
 # Included from nginx.conf's http context.
+#
+# A template: the nginx image renders it at every start of the gateway
+# (/etc/nginx/templates/default.conf.template to /etc/nginx/conf.d/default.conf)
+# and replaces only the ${LIFE_OS_*} names, which compose.yaml sets from .env
+# (NGINX_ENVSUBST_FILTER). nginx's own $variables stay as they are.
 limit_req_zone $binary_remote_addr zone=lifeos_api:10m rate=30r/s;
 limit_req_zone $binary_remote_addr zone=lifeos_write:10m rate=10r/s;
 limit_req_zone $binary_remote_addr zone=lifeos_mcp:10m rate=5r/s;
@@ -52,16 +57,16 @@ server {
   listen 80;
   # The hosts that reach Life OS, the one list (tools/check-gateway-hosts
   # checks its form). The gateway matches the Host header without its port.
-  #  - lifeos.gamch1k.com: the public hostname (Cloudflare Access, then the
-  #    tunnel's connector).
-  #  - 10.66.66.1: the WireGuard address the deployment publishes on
-  #    (http://10.66.66.1:3001), for peers and for maintenance on the host.
+  #  - LIFE_OS_PUBLIC_HOSTNAME (.env; empty: none): the public hostname, such
+  #    as the one behind Cloudflare Access and the tunnel, or a host Nginx's
+  #    (docs/host-nginx-example.conf).
+  #  - LIFE_OS_GATEWAY_BIND_ADDRESS (.env; default 127.0.0.1): the address
+  #    the gateway publishes on, such as a WireGuard address, for its peers
+  #    and for maintenance on the host.
   #  - 127.0.0.1 and localhost: the default loopback bind (127.0.0.1:3000),
   #    the verification stack (127.0.0.1:13001) with its smokes and browser
   #    tests, and the smokes that ask Compose for the published address.
-  # To serve Life OS under another name, such as a host Nginx's hostname
-  # (docs/host-nginx-example.conf), add it here.
-  server_name lifeos.gamch1k.com 10.66.66.1 127.0.0.1 localhost;
+  server_name ${LIFE_OS_PUBLIC_HOSTNAME} ${LIFE_OS_GATEWAY_BIND_ADDRESS} 127.0.0.1 localhost;
   server_tokens off;
   set_real_ip_from 10.255.249.0/29;
   real_ip_header CF-Connecting-IP;

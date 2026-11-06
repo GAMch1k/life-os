@@ -135,7 +135,7 @@ func TestWebPushSettings(t *testing.T) {
 	cfg, err := LoadFrom(mapLookup(map[string]string{
 		"DATABASE_URL":                            "postgres://notifications_user:secret@localhost/notifications_db",
 		"NOTIFICATIONS_CHANNELS":                  "ntfy, webpush",
-		"NOTIFICATIONS_LINK_BASE_URL":             "https://lifeos.gamch1k.com",
+		"NOTIFICATIONS_LINK_BASE_URL":             "https://lifeos.example.com",
 		"NOTIFICATIONS_WEBPUSH_VAPID_PUBLIC_KEY":  "public",
 		"NOTIFICATIONS_WEBPUSH_VAPID_PRIVATE_KEY": "private",
 	}))
@@ -150,7 +150,7 @@ func TestWebPushSettings(t *testing.T) {
 	}
 	// Without a subject of its own, the push services may reach Life OS's
 	// public URL.
-	if got := cfg.WebPushSubjectOrDefault(); got != "https://lifeos.gamch1k.com" {
+	if got := cfg.WebPushSubjectOrDefault(); got != "https://lifeos.example.com" {
 		t.Fatalf("default subject = %q", got)
 	}
 	cfg.WebPushSubject = "mailto:owner@example.com"

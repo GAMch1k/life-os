@@ -26,7 +26,7 @@ type NtfyConfig struct {
 	// It is a secret: never logged or put in an error.
 	Token string
 	// LinkBaseURL is where the phone opens Life OS, such as
-	// https://lifeos.gamch1k.com. Tapping a notification opens its link
+	// https://lifeos.example.com. Tapping a notification opens its link
 	// there, or the notification list when it has none.
 	LinkBaseURL string
 	// Client sends the requests; nil uses one that never follows redirects.
@@ -85,7 +85,7 @@ func NewNtfy(cfg NtfyConfig) (*NtfyChannel, error) {
 	}
 	base, err := url.Parse(strings.TrimSpace(cfg.LinkBaseURL))
 	if cfg.LinkBaseURL == "" || err != nil || (base.Scheme != "http" && base.Scheme != "https") || base.Host == "" {
-		problems = append(problems, errors.New("NOTIFICATIONS_LINK_BASE_URL must be Life OS's public URL, such as https://lifeos.gamch1k.com"))
+		problems = append(problems, errors.New("NOTIFICATIONS_LINK_BASE_URL must be Life OS's public URL, such as https://lifeos.example.com"))
 	}
 	if len(problems) > 0 {
 		return nil, errors.Join(problems...)

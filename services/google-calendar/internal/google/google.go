@@ -27,8 +27,11 @@ const (
 // Scopes are requested together, in this order.
 var Scopes = []string{ScopeCalendarList, ScopeEvents, ScopeAppCreated}
 
-// DefaultRedirectURI is the Dashboard route Google returns the owner to.
-const DefaultRedirectURI = "https://lifeos.gamch1k.com/calendar/google/callback"
+// ExampleRedirectURI shows the form of LIFE_OS_GOOGLE_REDIRECT_URI: the
+// Dashboard route Google returns the owner to, under Life OS's public URL,
+// as registered on the OAuth client. Compose derives it from
+// LIFE_OS_PUBLIC_URL; there is no default here.
+const ExampleRedirectURI = "https://lifeos.example.com/calendar/google/callback"
 
 // TokenKeySize is the size of LIFE_OS_GOOGLE_TOKEN_KEY: an AES-256 key.
 const TokenKeySize = 32
@@ -42,8 +45,8 @@ type Config struct {
 	TokenKey     []byte
 }
 
-// Configured reports whether Google can be connected: a client and a valid
-// token key are set.
+// Configured reports whether Google can be connected: a client, a valid
+// token key, and the redirect URI are set.
 func (c Config) Configured() bool {
 	return c.ClientID != "" && c.ClientSecret != "" && len(c.TokenKey) == TokenKeySize && c.RedirectURI != ""
 }
@@ -55,9 +58,6 @@ func (c Config) Configured() bool {
 func NewConfig(clientID, clientSecret, tokenKey, redirectURI string) (Config, error) {
 	clientID, clientSecret, tokenKey = strings.TrimSpace(clientID), strings.TrimSpace(clientSecret), strings.TrimSpace(tokenKey)
 	redirectURI = strings.TrimSpace(redirectURI)
-	if redirectURI == "" {
-		redirectURI = DefaultRedirectURI
-	}
 	if clientID == "" && clientSecret == "" && tokenKey == "" {
 		return Config{}, nil
 	}
@@ -66,6 +66,7 @@ func NewConfig(clientID, clientSecret, tokenKey, redirectURI string) (Config, er
 		{"LIFE_OS_GOOGLE_CLIENT_ID", clientID},
 		{"LIFE_OS_GOOGLE_CLIENT_SECRET", clientSecret},
 		{"LIFE_OS_GOOGLE_TOKEN_KEY", tokenKey},
+		{"LIFE_OS_GOOGLE_REDIRECT_URI", redirectURI},
 	} {
 		if setting.value == "" {
 			missing = append(missing, setting.name)
@@ -102,7 +103,7 @@ func ParseTokenKey(value string) ([]byte, error) {
 func validRedirectURI(value string) error {
 	parsed, err := url.Parse(value)
 	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" {
-		return errors.New("LIFE_OS_GOOGLE_REDIRECT_URI must be an absolute URL such as " + DefaultRedirectURI)
+		return errors.New("LIFE_OS_GOOGLE_REDIRECT_URI must be an absolute URL such as " + ExampleRedirectURI)
 	}
 	local := parsed.Hostname() == "localhost" || parsed.Hostname() == "127.0.0.1"
 	if parsed.Scheme != "https" && (parsed.Scheme != "http" || !local) {

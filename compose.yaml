@@ -195,7 +195,7 @@ services:
       NOTIFICATIONS_NTFY_URL: "http://ntfy:80"
       NOTIFICATIONS_NTFY_TOPIC: "${LIFE_OS_NTFY_TOPIC:-lifeos}"
       NOTIFICATIONS_NTFY_TOKEN: "${LIFE_OS_NTFY_PUBLISHER_TOKEN:-}"
-      NOTIFICATIONS_LINK_BASE_URL: "${LIFE_OS_PUBLIC_URL:-https://lifeos.gamch1k.com}"
+      NOTIFICATIONS_LINK_BASE_URL: "${LIFE_OS_PUBLIC_URL:?Set LIFE_OS_PUBLIC_URL in .env to the URL Life OS is reached at}"
       NOTIFICATIONS_WEBPUSH_VAPID_PUBLIC_KEY: "${LIFE_OS_WEBPUSH_VAPID_PUBLIC_KEY:-}"
       NOTIFICATIONS_WEBPUSH_VAPID_PRIVATE_KEY: "${LIFE_OS_WEBPUSH_VAPID_PRIVATE_KEY:-}"
       NOTIFICATIONS_WEBPUSH_SUBJECT: "${LIFE_OS_WEBPUSH_SUBJECT:-}"
@@ -232,7 +232,7 @@ services:
       LIFE_OS_ENABLE_BANKING_APP_ID: "${LIFE_OS_ENABLE_BANKING_APP_ID:-}"
       LIFE_OS_ENABLE_BANKING_KEY_FILE: /run/secrets/enablebanking.pem
       LIFE_OS_BANKING_TOKEN_KEY: "${LIFE_OS_BANKING_TOKEN_KEY:-}"
-      LIFE_OS_BANKING_REDIRECT_URI: "${LIFE_OS_BANKING_REDIRECT_URI:-https://lifeos.gamch1k.com/finance/bank/callback}"
+      LIFE_OS_BANKING_REDIRECT_URI: "${LIFE_OS_BANKING_REDIRECT_URI:-${LIFE_OS_PUBLIC_URL}/finance/bank/callback}"
       BANKING_SYNC_TIMES: "${LIFE_OS_BANKING_SYNC_TIMES:-06:00,12:00,18:00,23:00}"
       BANKING_CONSENT_DAYS: "${LIFE_OS_BANKING_CONSENT_DAYS:-180}"
     volumes:
@@ -277,7 +277,7 @@ services:
       LIFE_OS_GOOGLE_CLIENT_ID: "${LIFE_OS_GOOGLE_CLIENT_ID:-}"
       LIFE_OS_GOOGLE_CLIENT_SECRET: "${LIFE_OS_GOOGLE_CLIENT_SECRET:-}"
       LIFE_OS_GOOGLE_TOKEN_KEY: "${LIFE_OS_GOOGLE_TOKEN_KEY:-}"
-      LIFE_OS_GOOGLE_REDIRECT_URI: "${LIFE_OS_GOOGLE_REDIRECT_URI:-https://lifeos.gamch1k.com/calendar/google/callback}"
+      LIFE_OS_GOOGLE_REDIRECT_URI: "${LIFE_OS_GOOGLE_REDIRECT_URI:-${LIFE_OS_PUBLIC_URL}/calendar/google/callback}"
       GOOGLE_CALENDAR_SYNC_SECONDS: "${LIFE_OS_CALENDAR_GOOGLE_SYNC_SECONDS:-120}"
       GOOGLE_CALENDAR_FEED_SECONDS: "${LIFE_OS_GOOGLE_CALENDAR_FEED_SECONDS:-15}"
     read_only: true
@@ -566,8 +566,8 @@ services:
   whisper:
     build: {context: services/voice/whisper, dockerfile: Dockerfile}
     environment:
-      WHISPER_MODEL_PATH: ${LIFE_OS_WHISPER_MODEL_PATH:-/models/ggml-base.bin}
-      WHISPER_MODEL_URL: ${LIFE_OS_WHISPER_MODEL_URL:-https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin}
+      WHISPER_MODEL_PATH: ${LIFE_OS_WHISPER_MODEL_PATH:-/models/ggml-small.bin}
+      WHISPER_MODEL_URL: ${LIFE_OS_WHISPER_MODEL_URL:-https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin}
       WHISPER_THREADS: ${LIFE_OS_WHISPER_THREADS:-2}
       WHISPER_MAX_CONCURRENCY: ${LIFE_OS_WHISPER_MAX_CONCURRENCY:-1}
       WHISPER_MAX_AUDIO_BYTES: ${LIFE_OS_WHISPER_MAX_AUDIO_BYTES:-26214400}
@@ -631,16 +631,25 @@ services:
 
   gateway:
     image: nginx:1.28-alpine
+    # The image renders infra/nginx/life-os.conf.template into
+    # /etc/nginx/conf.d/default.conf at every start, replacing only these
+    # LIFE_OS_* names: the hosts it serves Life OS to (server_name), which
+    # server-names.envsh keeps from repeating 127.0.0.1 and localhost.
+    environment:
+      NGINX_ENVSUBST_FILTER: "^LIFE_OS_"
+      LIFE_OS_PUBLIC_HOSTNAME: "${LIFE_OS_PUBLIC_HOSTNAME:-}"
+      LIFE_OS_GATEWAY_BIND_ADDRESS: "${LIFE_OS_GATEWAY_BIND_ADDRESS:-127.0.0.1}"
     volumes:
-      - ./infra/nginx/life-os.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./infra/nginx/life-os.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./infra/nginx/server-names.envsh:/docker-entrypoint.d/16-lifeos-server-names.envsh:ro
       # The Android apps' releases, served at /android/ behind Access
       # (docs/operations/android-releases.md). tools/publish-android-release
-      # writes them as the directory's owner (uid 1000); the gateway only
-      # reads. Create the directory first (install -d -m 755): should it be
-      # missing, Docker creates it, owned by root, so that the gateway still
-      # starts.
+      # writes them as the directory's owner; the gateway only reads. Create
+      # the directory first (install -d -m 755): should it be missing, Docker
+      # creates it, owned by root, so that the gateway still starts. Unset,
+      # it is ~/life-os.android of the user who runs Compose.
       - type: bind
-        source: "${LIFE_OS_ANDROID_RELEASES_DIR:-/home/gamch1k/life-os.android}"
+        source: "${LIFE_OS_ANDROID_RELEASES_DIR:-${HOME}/life-os.android}"
         target: /srv/android
         read_only: true
         bind: {create_host_path: true}
@@ -666,20 +675,22 @@ services:
 
   # Opt-in ntfy server (COMPOSE_PROFILES=ntfy): push notifications to the
   # owner's phone (docs/operations/ntfy.md). It is on two networks only:
-  # notify-edge, with the Cloudflare connector alone (the tunnel route
-  # ntfy.gamch1k.com -> http://ntfy:80, without Access: the ntfy app cannot
-  # log in through it), and the internal notify-internal, with the
+  # notify-edge, with the Cloudflare connector alone (the tunnel route from
+  # ntfy's public hostname to http://ntfy:80, without Access: the ntfy app
+  # cannot log in through it), and the internal notify-internal, with the
   # Notifications service alone, which publishes to it. It never shares a
   # network with the gateway or the other services, and the connector shares
-  # none with Notifications, so that route cannot reach Life OS. ntfy's own deny-all accounts protect it: ntfy provisions the
-  # publisher (write-only on the topic, by token) and the phone (read-only, by
-  # password) at every start from the ignored .env. Bcrypt hashes and the
-  # token never appear in the repository.
+  # none with Notifications, so that route cannot reach Life OS. ntfy's own
+  # deny-all accounts protect it: ntfy provisions the publisher (write-only on
+  # the topic, by token) and the phone (read-only, by password) at every start
+  # from the ignored .env. Bcrypt hashes and the token never appear in the
+  # repository. Its public URL (base-url) is LIFE_OS_NTFY_PUBLIC_URL.
   ntfy:
     image: ${LIFE_OS_NTFY_IMAGE:-binwiederhier/ntfy:v2.29.0}
     profiles: [ntfy]
     command: ["serve"]
     environment:
+      NTFY_BASE_URL: "${LIFE_OS_NTFY_PUBLIC_URL:-}"
       NTFY_AUTH_USERS: "lifeos-publisher:${LIFE_OS_NTFY_PUBLISHER_PASSWORD_HASH:-}:user,lifeos-phone:${LIFE_OS_NTFY_PHONE_PASSWORD_HASH:-}:user"
       NTFY_AUTH_ACCESS: "lifeos-publisher:${LIFE_OS_NTFY_TOPIC:-lifeos}:write-only,lifeos-phone:${LIFE_OS_NTFY_TOPIC:-lifeos}:read-only"
       NTFY_AUTH_TOKENS: "lifeos-publisher:${LIFE_OS_NTFY_PUBLISHER_TOKEN:-}:notifications-service"
@@ -705,10 +716,10 @@ services:
 
   # Opt-in Cloudflare Tunnel (COMPOSE_PROFILES=cloudflare). An outbound-only
   # connector on the private network that hands Cloudflare traffic to the
-  # gateway (lifeos.gamch1k.com, behind Access) and to ntfy (ntfy.gamch1k.com);
-  # it publishes no port. The public hostnames and their routes
-  # (http://gateway:80, http://ntfy:80) live in the Cloudflare tunnel
-  # configuration, and the token comes only from the ignored .env. See
+  # gateway (LIFE_OS_PUBLIC_HOSTNAME, behind Access) and to ntfy (the host of
+  # LIFE_OS_NTFY_PUBLIC_URL); it publishes no port. The public hostnames and
+  # their routes (http://gateway:80, http://ntfy:80) live in the Cloudflare
+  # tunnel configuration, and the token comes only from the ignored .env. See
   # docs/operations/cloudflare.md.
   cloudflared:
     image: ${LIFE_OS_CLOUDFLARED_IMAGE:-cloudflare/cloudflared:2026.10.0}
@@ -739,7 +750,7 @@ networks:
     driver: bridge
   # The Cloudflare connector and the gateway only. The fixed subnet lets the
   # gateway trust Cloudflare's client-address header from this network alone
-  # (infra/nginx/life-os.conf).
+  # (infra/nginx/life-os.conf.template).
   edge:
     name: lifeos-edge
     driver: bridge

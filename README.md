@@ -45,7 +45,7 @@ make infra-up
 make infra-ps
 ```
 
-Stop the stack without deleting its persistent data with `make infra-down`. Use `make infra-reset` only when you intentionally want to delete and recreate persistent Compose volumes. See [`docs/development/getting-started.md`](docs/development/getting-started.md) and [`docs/operations/deployment.md`](docs/operations/deployment.md) for Compose usage, configuration, and operations.
+Stop the stack without deleting its persistent data with `make infra-down`. Use `make infra-reset` only when you intentionally want to delete and recreate persistent Compose volumes; it refuses without `CONFIRM=infra-reset`. `make infra-up` and `make life-up` are for a first start: once Life OS is deployed they refuse (`CONFIRM=<target>` overrides), and services are redeployed one at a time with `docker compose up -d --no-build --no-deps <service>`. See [`docs/development/getting-started.md`](docs/development/getting-started.md) and [`docs/operations/deployment.md`](docs/operations/deployment.md) for Compose usage, configuration, and operations.
 
 Each domain service uses an isolated database and login inside the shared PostgreSQL container. `make db-provision` reconciles the declarative registry in `infra/postgres/service-databases.conf`; credentials remain in the ignored local `.env` file.
 
@@ -123,19 +123,22 @@ make life-up
 
 Open <http://localhost:3000>. The Docker Nginx gateway is the sole published
 application port; it routes the dashboard and all `/api/*` requests to private
-containers. Run the browser-facing smoke check with:
+containers. Run the browser-facing smoke check, on the disposable verification
+stack (never on the running one), with:
 
 ```sh
 make life-smoke
 ```
 
-If port 3000 is already in use, set `LIFE_OS_GATEWAY_PORT` for both commands
-(for example, `LIFE_OS_GATEWAY_PORT=3001 make life-up`).
+If port 3000 is already in use, set `LIFE_OS_GATEWAY_PORT` in `.env` (for
+example, `LIFE_OS_GATEWAY_PORT=3001`).
 
 To expose the single gateway through WireGuard, bind it to the server's
-WireGuard address: `LIFE_OS_GATEWAY_BIND_ADDRESS=10.66.66.1 make life-up`.
+WireGuard address: `LIFE_OS_GATEWAY_BIND_ADDRESS=10.8.0.1` in `.env`, with
+your own address. The gateway then also answers that address as a Host.
 This exposes Dashboard, write APIs, and MCP to every allowed WireGuard peer;
-never bind it to a public/LAN address without an authenticated edge.
+never bind it to a public/LAN address without an authenticated edge. See
+[SETUP.md](SETUP.md) for every setting.
 
 ## Architectural boundaries
 

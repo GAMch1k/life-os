@@ -84,7 +84,7 @@ When the volume `lifeos-postgres-data` is gone or unusable, but the host and `~/
 
 1. **Secrets.** Make sure `.env` has every database password, including `LIFE_OS_BACKUP_DB_PASSWORD`, from your own copy of it. The roles are created from it; the dumps do not contain them.
 2. **Stop everything but PostgreSQL**, so nothing writes to empty databases: `docker compose stop` (never `down --volumes`). If the old volume still exists but is broken, keep it aside until you are done; removing it is your decision.
-3. **A fresh PostgreSQL.** `docker compose up -d --no-deps postgres` on an empty `lifeos-postgres-data` runs provisioning: every role and empty database in the registry, and `lifeos_backup`.
+3. **A fresh PostgreSQL.** `docker compose up -d --no-build --no-deps postgres` on an empty `lifeos-postgres-data` runs provisioning: every role and empty database in the registry, and `lifeos_backup`.
 4. **Pick the run**: the newest successful full run, `ls ~/life-os.backups/auto` and its `manifest.json` (`"result": "succeeded"`, `"scope": "all"`), ideally one whose restore check passed (`auto/restore-checks.json`).
 5. **Restore every database**, without fresh dumps (there is nothing to keep):
 
@@ -96,7 +96,7 @@ When the volume `lifeos-postgres-data` is gone or unusable, but the host and `~/
    ```
 
    Each one is restored with its owners and migrated, and `inbox_db` gets its capture images back (only those the volume lacks). The services stay stopped, because they were not running, so nothing (the backup service's catch-up run included) sees a database before its turn.
-6. **Start the rest**: `docker compose up -d --no-build` (the Dashboard, the gateway, MCP, the processor, the tunnel).
+6. **Start the rest** as they were, recreating nothing: `docker compose start` (the Dashboard, the gateway, MCP, the processor, the tunnel).
 7. **Check**: the Status page, then `tools/backup-now` and `docker compose exec -T backup /service restore-check`.
 
 Everything since that run is lost. The bank and Google connections come back if their token keys in `.env` are the same; if not, connect them again.

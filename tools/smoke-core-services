@@ -15,8 +15,16 @@ wait_ready() {
   return 1
 }
 
-gateway_port=$(docker compose port gateway 80)
-gateway="http://${gateway_port}"
+# The gateway to check, which these records are written to. make life-smoke
+# (tools/smoke-life) sets the verification stack's; set it yourself only for
+# a gateway you mean to write test records to, such as the deployed one:
+#   LIFE_OS_SMOKE_GATEWAY=http://127.0.0.1:3000 tools/smoke-core-services
+gateway=${LIFE_OS_SMOKE_GATEWAY:-}
+if [[ -z "$gateway" ]]; then
+  printf '%s\n' "smoke-core-services: set LIFE_OS_SMOKE_GATEWAY to the gateway to write test records to." \
+    "make life-smoke runs it on the disposable verification stack (tools/smoke-life)." >&2
+  exit 2
+fi
 finance="${gateway}/api/finance"
 tasks="${gateway}/api/tasks"
 inbox="${gateway}/api/inbox"
