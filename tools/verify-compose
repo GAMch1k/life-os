@@ -118,7 +118,7 @@ require_isolated_resources() {
   local android_source
   while IFS= read -r android_source; do
     android_source=$(realpath -m -- "$android_source")
-    for owner_dir in "${HOME:-}/life-os.android" /home/gamch1k/life-os.android "$live_android_dir"; do
+    for owner_dir in "${HOME:-}/life-os.android" "$live_android_dir"; do
       [[ -n "$owner_dir" && "$owner_dir" != /life-os.android ]] || continue
       owner_dir=$(realpath -m -- "$owner_dir")
       if [[ "$android_source" == "$owner_dir" || "$android_source" == "$owner_dir"/* || "$owner_dir" == "$android_source"/* ]]; then

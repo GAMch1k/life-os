@@ -644,12 +644,12 @@ services:
       - ./infra/nginx/server-names.envsh:/docker-entrypoint.d/16-lifeos-server-names.envsh:ro
       # The Android apps' releases, served at /android/ behind Access
       # (docs/operations/android-releases.md). tools/publish-android-release
-      # writes them as the directory's owner (uid 1000); the gateway only
-      # reads. Create the directory first (install -d -m 755): should it be
-      # missing, Docker creates it, owned by root, so that the gateway still
-      # starts.
+      # writes them as the directory's owner; the gateway only reads. Create
+      # the directory first (install -d -m 755): should it be missing, Docker
+      # creates it, owned by root, so that the gateway still starts. Unset,
+      # it is ~/life-os.android of the user who runs Compose.
       - type: bind
-        source: "${LIFE_OS_ANDROID_RELEASES_DIR:-/home/gamch1k/life-os.android}"
+        source: "${LIFE_OS_ANDROID_RELEASES_DIR:-${HOME}/life-os.android}"
         target: /srv/android
         read_only: true
         bind: {create_host_path: true}
