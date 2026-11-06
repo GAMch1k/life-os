@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Checks the gateway's /android/ (infra/nginx/life-os.conf) in throwaway
-# containers, never the deployed gateway or the verification stack: the
-# gateway's image with its configuration, a release published with
+# Checks the gateway's /android/ (infra/nginx/life-os.conf.template) in
+# throwaway containers, never the deployed gateway or the verification stack:
+# the gateway's image with its configuration, rendered from the template as
+# compose.yaml has it rendered (with made-up hosts), a release published with
 # tools/publish-android-release into a scratch directory mounted read-only
 # at /srv/android as compose.yaml does, and a stand-in Dashboard, on a
 # network of their own. It checks the manifest, the page, the APKs (a 20 MB
@@ -50,23 +51,31 @@ printf 'partial\n' >"$releases/.publish-leftover"
 ln -s /etc/passwd "$releases/lifeos-phone-9.9.9-99.apk"
 mkdir -m 755 "$releases/lifeos-wear-9.9.9-98.apk"
 
+# The gateway's template, its settings, and server-names.envsh, as
+# compose.yaml gives them: the image renders the template into
+# conf.d/default.conf when nginx starts.
+template=$repo_root/infra/nginx/life-os.conf.template
+gateway_args=(-e NGINX_ENTRYPOINT_QUIET_LOGS=1 -e NGINX_ENVSUBST_FILTER=^LIFE_OS_
+  -e LIFE_OS_PUBLIC_HOSTNAME=lifeos.example.com -e LIFE_OS_GATEWAY_BIND_ADDRESS=127.0.0.1
+  -v "$repo_root/infra/nginx/server-names.envsh:/docker-entrypoint.d/16-lifeos-server-names.envsh:ro")
+
 printf '==> nginx -t\n'
-docker run --rm --entrypoint nginx -v "$repo_root/infra/nginx/life-os.conf:/etc/nginx/conf.d/default.conf:ro" \
-  "$image" -t -q || fail "nginx -t failed"
+docker run --rm "${gateway_args[@]}" -v "$template:/etc/nginx/templates/default.conf.template:ro" \
+  "$image" nginx -t -q || fail "nginx -t failed"
 
 # The Access variant: every client counts as arriving through Cloudflare's
 # edge network, where the gateway requires Access's token.
-sed '/^geo \$realip_remote_addr \$via_cloudflare {/,/^}/ s/default 0;/default 1;/' infra/nginx/life-os.conf >"$work/access.conf"
-! cmp -s infra/nginx/life-os.conf "$work/access.conf" || fail "could not make the Access variant of the configuration"
+sed '/^geo \$realip_remote_addr \$via_cloudflare {/,/^}/ s/default 0;/default 1;/' "$template" >"$work/access.conf.template"
+! cmp -s "$template" "$work/access.conf.template" || fail "could not make the Access variant of the configuration"
 # The stand-in Dashboard answers everything the gateway passes to it.
 printf 'server { listen 3000; default_type text/plain; return 200 "dashboard\\n"; }\n' >"$work/dashboard.conf"
 
 docker network create "$name" >/dev/null
 docker run -d --rm --name "$name-dashboard" --network "$name" --network-alias dashboard \
   -v "$work/dashboard.conf:/etc/nginx/conf.d/default.conf:ro" "$image" >/dev/null
-start() { # <container> <configuration>: base URL in $base
-  docker run -d --rm --name "$1" --network "$name" -p 127.0.0.1::80 \
-    -v "$2:/etc/nginx/conf.d/default.conf:ro" -v "$releases:/srv/android:ro" "$image" >/dev/null
+start() { # <container> <template>: base URL in $base
+  docker run -d --rm --name "$1" --network "$name" -p 127.0.0.1::80 "${gateway_args[@]}" \
+    -v "$2:/etc/nginx/templates/default.conf.template:ro" -v "$releases:/srv/android:ro" "$image" >/dev/null
   base="http://127.0.0.1:$(docker port "$1" 80/tcp | head -n 1 | sed 's/.*://')"
   for _ in $(seq 1 40); do
     curl --silent --output /dev/null "$base/android/updates" && return
@@ -92,7 +101,7 @@ expect_header() { # <name> <value>
   [[ "$(header "$1")" == "$2" ]] || { cat "$work/headers" >&2; fail "$1 is '$(header "$1")', want '$2'"; }
 }
 
-start "$name-gateway" "$repo_root/infra/nginx/life-os.conf"
+start "$name-gateway" "$template"
 
 printf '==> The manifest\n'
 for path in /android/updates /android/updates.json; do
@@ -152,7 +161,7 @@ for path in /android/../etc/passwd /android/%2e%2e/%2e%2e/etc/passwd /android/..
 done
 
 printf '==> Behind Cloudflare Access like everything else\n'
-start "$name-access" "$work/access.conf"
+start "$name-access" "$work/access.conf.template"
 for path in /android/ /android/updates "$phone_url"; do
   expect "$path" 403
   expect "$path" 200 --header 'Cf-Access-Jwt-Assertion: token'

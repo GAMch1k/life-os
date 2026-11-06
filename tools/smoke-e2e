@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+# shellcheck source=lib/settings.bash
+. tools/lib/settings.bash
 
 # Writes are attributed to this script as a development tool, never to the
 # owner (CONTRIBUTING.md, "Development tools and live data").
@@ -28,10 +31,19 @@ for service in "$finance" "$tasks" "$inbox" "$calendar" "$feeds"; do wait_ready 
 # without the owner's ZAW feed on this stack, starts with no feeds.
 curl --fail --silent "$feeds/v1/feeds" | jq -e '.items == []' >/dev/null
 
-# The gateway answers only its listed hosts (infra/nginx/life-os.conf); any
-# other Host, such as the ntfy hostname, gets no response (444). ntfy is never
-# served by the gateway.
-for host in ntfy.gamch1k.com unknown.example; do
+# The gateway answers only its listed hosts (infra/nginx/life-os.conf.template,
+# with the hosts from .env): the public hostname, the bind address, and
+# loopback. Any other Host, such as the ntfy hostname, gets no response (444).
+# ntfy is never served by the gateway.
+bind_address=$(setting LIFE_OS_GATEWAY_BIND_ADDRESS)
+for host in $(setting LIFE_OS_PUBLIC_HOSTNAME) "${bind_address:-127.0.0.1}" 127.0.0.1 localhost; do
+  code=$(curl --silent --output /dev/null --write-out '%{http_code}' -H "Host: $host" "$tasks/ready" || true)
+  [ "$code" = 200 ] || { echo "e2e: the gateway must answer Host $host (got $code)" >&2; exit 1; }
+done
+unlisted=(unknown.example)
+ntfy_url=$(setting LIFE_OS_NTFY_PUBLIC_URL)
+[ -z "$ntfy_url" ] || unlisted+=("$(url_host "$ntfy_url")")
+for host in "${unlisted[@]}"; do
   code=$(curl --silent --output /dev/null --write-out '%{http_code}' -H "Host: $host" "$tasks/ready" || true)
   [ "$code" = 000 ] || { echo "e2e: the gateway must not answer Host $host (got $code)" >&2; exit 1; }
 done

@@ -631,8 +631,17 @@ services:
 
   gateway:
     image: nginx:1.28-alpine
+    # The image renders infra/nginx/life-os.conf.template into
+    # /etc/nginx/conf.d/default.conf at every start, replacing only these
+    # LIFE_OS_* names: the hosts it serves Life OS to (server_name), which
+    # server-names.envsh keeps from repeating 127.0.0.1 and localhost.
+    environment:
+      NGINX_ENVSUBST_FILTER: "^LIFE_OS_"
+      LIFE_OS_PUBLIC_HOSTNAME: "${LIFE_OS_PUBLIC_HOSTNAME:-}"
+      LIFE_OS_GATEWAY_BIND_ADDRESS: "${LIFE_OS_GATEWAY_BIND_ADDRESS:-127.0.0.1}"
     volumes:
-      - ./infra/nginx/life-os.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./infra/nginx/life-os.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./infra/nginx/server-names.envsh:/docker-entrypoint.d/16-lifeos-server-names.envsh:ro
       # The Android apps' releases, served at /android/ behind Access
       # (docs/operations/android-releases.md). tools/publish-android-release
       # writes them as the directory's owner (uid 1000); the gateway only
