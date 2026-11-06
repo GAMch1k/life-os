@@ -60,7 +60,7 @@ Compose refuses every command until these five variables are set: `LIFE_OS_POSTG
 | --- | --- |
 | `LIFE_OS_POSTGRES_USER` | **Required.** The PostgreSQL admin login, for example `lifeos_admin`. |
 | `LIFE_OS_POSTGRES_PASSWORD` | **Required.** `<generate>` |
-| `LIFE_OS_POSTGRES_IMAGE`, `LIFE_OS_POSTGRES_DB` | Keep the defaults. `LIFE_OS_POSTGRES_PORT` is unused: PostgreSQL publishes no port. |
+| `LIFE_OS_POSTGRES_IMAGE`, `LIFE_OS_POSTGRES_DB` | Keep the defaults. PostgreSQL publishes no port. |
 | `LIFE_OS_TIMEZONE` | Your IANA zone, for example `Europe/Berlin` (default `UTC`). Used when the browser's own zone is not known. See [Owner timezone](docs/operations/deployment.md#owner-timezone). |
 | `LIFE_OS_FINANCE_CURRENCY` | Currency of the built-in Cash account (default `EUR`). |
 | `LIFE_OS_PUBLIC_URL` | `https://lifeos.example.com`. Tapping a phone notification opens its page here. |
@@ -126,7 +126,7 @@ The routine model and effort are `LIFE_OS_CODEX_MODEL=gpt-5.6-luna` and `LIFE_OS
 
 ## 6. Voice: Whisper model
 
-On its first start, `whisper` downloads its model once into the `lifeos-whisper-models` volume. It reports ready only once the model is there. The template and Compose default to the multilingual `base` model (`ggml-base.bin`), a conservative choice for CPU. The reference deployment uses the multilingual `small` model (about 466 MB), which is noticeably better for Russian and German but takes about three times as long. To use it, set both lines:
+On its first start, `whisper` downloads its model once into the `lifeos-whisper-models` volume. It reports ready only once the model is there. The template and Compose use the multilingual `small` model (`ggml-small.bin`, about 466 MB), which handles Russian, German, and English well on a CPU. To use another model, set both lines together:
 
 ```sh
 LIFE_OS_WHISPER_MODEL_PATH=/models/ggml-small.bin

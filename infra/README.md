@@ -35,7 +35,7 @@ Running `docker compose up` directly is also supported after `.env` exists.
 - Persistent PostgreSQL volume: `lifeos-postgres-data`
 - Environment variables: `LIFE_OS_` prefix with uppercase snake case
 
-Services join the project-scoped `lifeos-backend` bridge and address PostgreSQL as `postgres:5432`. The database is published only on host loopback for local tools, so it is not exposed on external host interfaces.
+Services join the project-scoped `lifeos-backend` bridge and address PostgreSQL as `postgres:5432`. PostgreSQL publishes no host port; reach it inside its container, such as `docker compose exec postgres psql -U <LIFE_OS_POSTGRES_USER> -d finance_db`.
 
 `make infra-down` is nondestructive. Use `make infra-reset` only when intentionally recreating the database from an empty volume.
 
