@@ -17,7 +17,10 @@ setting() {
   [[ ! -f .env ]] || value=$(sed -n "s/^$name=//p" .env | tail -n 1)
   value=${value#[\"\']}; value=${value%[\"\']}
   value=${value/#\~/${HOME:-}}
-  value=${value//'${HOME}'/${HOME:-}}; value=${value//'$HOME'/${HOME:-}}
+  # shellcheck disable=SC2016 # the literal text ${HOME} and $HOME
+  value=${value//'${HOME}'/${HOME:-}}
+  # shellcheck disable=SC2016
+  value=${value//'$HOME'/${HOME:-}}
   printf '%s' "$value"
 }
 

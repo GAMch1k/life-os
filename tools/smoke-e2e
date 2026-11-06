@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
-# shellcheck source=lib/settings.bash
+# shellcheck source=tools/lib/settings.bash
 . tools/lib/settings.bash
 
 # Writes are attributed to this script as a development tool, never to the

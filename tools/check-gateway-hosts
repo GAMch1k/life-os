@@ -19,7 +19,7 @@
 # Usage: tools/check-gateway-hosts [nginx-template]
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
-# shellcheck source=lib/settings.bash
+# shellcheck source=tools/lib/settings.bash
 . tools/lib/settings.bash
 
 template=${1:-infra/nginx/life-os.conf.template}
@@ -34,7 +34,7 @@ bind_address=$(setting LIFE_OS_GATEWAY_BIND_ADDRESS)
 bind_address=${bind_address:-127.0.0.1}
 settings=$(
   export LIFE_OS_PUBLIC_HOSTNAME=$public_hostname LIFE_OS_GATEWAY_BIND_ADDRESS=$bind_address
-  # shellcheck source=../infra/nginx/server-names.envsh
+  # shellcheck source=infra/nginx/server-names.envsh
   . infra/nginx/server-names.envsh
   printf '%s|%s' "$LIFE_OS_PUBLIC_HOSTNAME" "$LIFE_OS_GATEWAY_BIND_ADDRESS"
 )
@@ -118,6 +118,7 @@ fixed=$(of "$lifeos_server" | awk '$1 == "proxy_pass" && $2 !~ /^http:\/\/\$[a-z
 [ -z "$fixed" ] || fail "every proxy_pass must name its upstream through a variable (set \$upstream food:8080; proxy_pass http://\$upstream), so nginx resolves it per request: ${fixed//$'\n'/; }"
 [ "$(of "$lifeos_server" | grep -c '^proxy_pass ')" -gt 0 ] || fail "the Life OS server proxies nothing"
 
+# shellcheck disable=SC2001 # comments go from every line
 ntfy_refs=$(sed 's/#.*//' <<<"$config" | grep -i 'ntfy' | sed 's/^[[:space:]]*//' || true)
 [ -z "$ntfy_refs" ] || fail "the gateway must not refer to ntfy (it has its own network and route): ${ntfy_refs//$'\n'/; }"
 

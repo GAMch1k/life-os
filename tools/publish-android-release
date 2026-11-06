@@ -72,7 +72,7 @@ release_dir=$(realpath -e -- "$release_arg" 2>/dev/null) && [[ -d "$release_dir"
 cd "$repo_root"
 
 # Settings from the environment, else from .env, as Compose reads them.
-# shellcheck source=lib/settings.bash
+# shellcheck source=tools/lib/settings.bash
 . tools/lib/settings.bash
 
 dir=$(setting LIFE_OS_ANDROID_RELEASES_DIR)

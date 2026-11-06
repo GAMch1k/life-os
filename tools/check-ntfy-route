@@ -13,7 +13,7 @@
 # Usage: tools/check-ntfy-route [ntfy-hostname] [lifeos-hostname]
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
-# shellcheck source=lib/settings.bash
+# shellcheck source=tools/lib/settings.bash
 . tools/lib/settings.bash
 
 ntfy=${1:-$(url_host "$(setting LIFE_OS_NTFY_PUBLIC_URL)")}

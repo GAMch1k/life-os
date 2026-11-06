@@ -9,7 +9,7 @@
 # Usage: tools/check-cloudflare-access [hostname]
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
-# shellcheck source=lib/settings.bash
+# shellcheck source=tools/lib/settings.bash
 . tools/lib/settings.bash
 
 host=${1:-$(setting LIFE_OS_PUBLIC_HOSTNAME)}
