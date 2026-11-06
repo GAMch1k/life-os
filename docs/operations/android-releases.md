@@ -1,37 +1,37 @@
 # Android releases: /android/
 
-Life OS serves its Android apps, the phone app and the Wear OS app (built in the separate `life-os-app` repository), from the gateway at `https://lifeos.gamch1k.com/android/`, behind Cloudflare Access like every other path. The phone installs the first version from the download page there; after that, the app reads the manifest at `/android/updates` and updates itself. Nothing here builds or signs an app: the server only stores and serves APKs that the app repository built and signed.
+Life OS serves its Android apps, the phone app and the Wear OS app (built in the separate `life-os-app` repository), from the gateway at `/android/` under its public URL (`LIFE_OS_PUBLIC_URL`, such as `https://lifeos.example.com/android/`), behind Cloudflare Access like every other path. The phone installs the first version from the download page there; after that, the app reads the manifest at `/android/updates` and updates itself. Nothing here builds or signs an app: the server only stores and serves APKs that the app repository built and signed.
 
 ```mermaid
 flowchart LR
   Build["life-os-app build<br>(signs the APKs)"] -- "release dir:<br>release.json + APKs" --> Publish["tools/publish-android-release<br>(on the host, as the owner)"]
-  Publish -- "copies, writes updates.json + index.html" --> Dir["releases directory<br>~/life-os.android (uid 1000)"]
+  Publish -- "copies, writes updates.json + index.html" --> Dir["releases directory<br>~/life-os.android (the owner's)"]
   Dir -- "read-only bind at /srv/android" --> Gateway["gateway /android/"]
-  Phone["Phone: browser (first install),<br>app (updates)"] -- "https://lifeos.gamch1k.com/android/…" --> Access[Cloudflare Access] --> Gateway
+  Phone["Phone: browser (first install),<br>app (updates)"] -- "https://lifeos.example.com/android/…" --> Access[Cloudflare Access] --> Gateway
 ```
 
 ## The flow
 
 1. **Build** (in `life-os-app`). Its build script writes a release directory: `lifeos-phone-<versionName>-<versionCode>.apk`, `lifeos-wear-<versionName>-<versionCode>.apk`, and [`release.json`](#releasejson-what-the-build-writes).
 2. **Publish** (here, on the host, as the owner): `tools/publish-android-release <release-dir> [--notes "…"]`. It checks the release, copies the APKs into the releases directory, and writes the [manifest](#the-manifest-updatesjson) and the download page. Nothing needs a restart: the gateway serves the new files at once.
-3. **Install.** The first time, open `https://lifeos.gamch1k.com/android/` on the phone (Access asks for its code if the session has expired), tap **Download**, open the file, and allow installing apps from the browser when Android asks (*Install unknown apps*). The watch APK is listed separately on the page; install it with `adb install` over the watch's wireless debugging.
+3. **Install.** The first time, open `https://lifeos.example.com/android/` (your public URL) on the phone (Access asks for its code if the session has expired), tap **Download**, open the file, and allow installing apps from the browser when Android asks (*Install unknown apps*). The watch APK is listed separately on the page; install it with `adb install` over the watch's wireless debugging.
 4. **Update.** The app fetches `/android/updates`, compares `apps.phone.versionCode` with its own, downloads `url`, checks `size` and `sha256`, and hands the APK to Android's package installer, which installs it only if it is signed with the same key as the installed app ([Security model](#security-model)).
 
 ## The releases directory
 
-`LIFE_OS_ANDROID_RELEASES_DIR` in `.env`, by default `/home/gamch1k/life-os.android`. It belongs to the owner (uid 1000), mode 755; the publish script writes it as the owner and never needs root. The gateway mounts it read-only at `/srv/android` (`compose.yaml`) and only reads it (nginx runs as uid 101 in the container, hence the world-readable modes: the directory 755, the files 644).
+`LIFE_OS_ANDROID_RELEASES_DIR` in `.env`, by default `~/life-os.android` of the user who runs Compose. It belongs to that user, the owner, mode 755; the publish script writes it as the owner and never needs root. The gateway mounts it read-only at `/srv/android` (`compose.yaml`) and only reads it (nginx runs as uid 101 in the container, hence the world-readable modes: the directory 755, the files 644).
 
 It holds `updates.json`, `index.html`, and the APKs (`lifeos-phone-*.apk`, `lifeos-wear-*.apk`); during a publish also temporary `.publish-*` files, which the gateway never serves. Put nothing else there: the gateway would not serve it, and the publish script deletes every APK the manifest no longer lists.
 
 ### Setting it up (once)
 
 ```sh
-install -d -m 755 /home/gamch1k/life-os.android
+install -d -m 755 ~/life-os.android
 docker compose up -d --no-build --no-deps --force-recreate gateway
-curl -s -o /dev/null -w '%{http_code}\n' http://10.66.66.1:3001/android/updates   # 404 until the first publish, then 200
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/android/updates   # 404 until the first publish, then 200
 ```
 
-The gateway must be recreated for the new mount (a reload does not add mounts) and for the new `/android/` locations in `infra/nginx/life-os.conf`. Create the directory first: if it is missing when the gateway is created, Docker creates it owned by root, so that the gateway still starts, and the publish script then refuses with the fix (`sudo chown 1000:1000 /home/gamch1k/life-os.android`).
+The gateway must be recreated for the new mount (a reload does not add mounts) and for the new `/android/` locations in `infra/nginx/life-os.conf.template`. The `curl` uses the gateway's address and port (`LIFE_OS_GATEWAY_BIND_ADDRESS:LIFE_OS_GATEWAY_PORT`, by default `127.0.0.1:3000`). Create the directory first: if it is missing when the gateway is created, Docker creates it owned by root, so that the gateway still starts, and the publish script then refuses with the fix (`sudo chown "$(id -u):$(id -g)" ~/life-os.android`).
 
 ## Publishing
 
@@ -51,7 +51,7 @@ Then it copies the APKs into the releases directory, writes `updates.json` and `
 published phone 0.1.2 (3): /android/lifeos-phone-0.1.2-3.apk, 18234567 bytes, sha256 9f2c…
 published wear 0.1.2 (3): /android/lifeos-wear-0.1.2-3.apk, 7345678 bytes, sha256 41d0…
 deleted lifeos-phone-0.0.7-1.apk (keeping the newest 5 of each app)
-manifest: /home/gamch1k/life-os.android/updates.json (served at /android/updates), page: /home/gamch1k/life-os.android/index.html (served at /android/)
+manifest: /home/you/life-os.android/updates.json (served at /android/updates), page: /home/you/life-os.android/index.html (served at /android/)
 ```
 
 The APKs go in before the manifest, so the manifest never names a file that is not there yet; a publish interrupted at any point (even killed) leaves the old manifest and its APKs as they were, and the next publish removes the temporary files it left. One publish runs at a time (a lock on the directory). `--notes` goes with every app the run publishes and is shown on the page (escaped). Exit status: 0 published (or nothing new), 2 refused (nothing changed), 1 failed. The directory comes from `LIFE_OS_ANDROID_RELEASES_DIR` in the environment, else `.env`, else the default; the page shows times in `LIFE_OS_TIMEZONE` (else Europe/Berlin), and in the browser's own zone once it has loaded.
@@ -114,7 +114,7 @@ Served at `/android/updates` (and `/android/updates.json`) as `application/json`
 
 - `formatVersion` is 1; a change that breaks readers raises it.
 - `updatedAt` is when the last publish changed the manifest (UTC); `publishedAt` is when that app's version was published.
-- `url` is a path on the same host (`https://lifeos.gamch1k.com` from the app, `http://10.66.66.1:3001` over WireGuard). A URL's file never changes content.
+- `url` is a path on the same host (the public URL, such as `https://lifeos.example.com`, from the app; the WireGuard address, such as `http://10.8.0.1:3000`, over WireGuard). A URL's file never changes content.
 - `versionCode`, `versionName`, `minSdk`, `sha256`, `size`, `builtAt`, `commit` are copied from `release.json`; `notes` is the publish's `--notes`, or empty.
 - `previous` lists the up to 4 versions kept before the current one, newest publish first, in the same form. The app does not need them.
 - An app that was never published is absent from `apps`.
@@ -123,7 +123,7 @@ What the app does with it: if `apps.phone.versionCode` is greater than its own a
 
 ## What the gateway serves
 
-`location /android/` in `infra/nginx/life-os.conf`, on the Life OS server only, behind the same Access requirement as everything else:
+`location /android/` in `infra/nginx/life-os.conf.template`, on the Life OS server only, behind the same Access requirement as everything else:
 
 | Path                                                       | Serves                       | Content type                                | Caching                                 |
 | ---------------------------------------------------------- | ---------------------------- | ------------------------------------------- | --------------------------------------- |
@@ -142,7 +142,7 @@ Android does not install an older `versionCode` over a newer one (only after uni
 
 ## Security model
 
-- **Behind Access, never public.** `/android/` is a path of `lifeos.gamch1k.com` like the Dashboard: Cloudflare Access's login comes first, the connector validates the Access token, and the gateway refuses a tunnel request without one ([Cloudflare Tunnel and Access](cloudflare.md#origin-trust-and-access-paths)). There is no bypass for the page, the manifest, or the APKs. The app reaches them through Access, like its other Life OS requests. Over WireGuard (`http://10.66.66.1:3001/android/`) the usual peer trust applies.
+- **Behind Access, never public.** `/android/` is a path of the public hostname (`LIFE_OS_PUBLIC_HOSTNAME`) like the Dashboard: Cloudflare Access's login comes first, the connector validates the Access token, and the gateway refuses a tunnel request without one ([Cloudflare Tunnel and Access](cloudflare.md#origin-trust-and-access-paths)). There is no bypass for the page, the manifest, or the APKs. The app reaches them through Access, like its other Life OS requests. Over WireGuard (the gateway's WireGuard address, such as `http://10.8.0.1:3000/android/`) the usual peer trust applies.
 - **Android's signature check guards every update.** The package installer installs an update only if it is signed with the same certificate as the installed app (the phone and watch apps share one key; see the `life-os-app` README). A replaced or tampered APK on the server cannot take over the installed app; a downgrade is refused by Android too. The signing key never comes to the server: the publish script handles signed APKs only.
 - **The manifest's `sha256` and `size`** let the app refuse a broken or truncated download before it reaches the installer, and the page shows the SHA-256 for checking a first install by hand.
 - **The first install** trusts the download page, which only the Access-authenticated owner reaches.
@@ -162,7 +162,7 @@ Android does not install an older `versionCode` over a newer one (only after uni
 | `/android/updates` is 404 | Nothing published yet, or the gateway was not recreated with the mount | Publish; `docker compose exec gateway ls -l /srv/android` must list the files |
 | `/android/` is the Dashboard's 404 page | The gateway runs the old configuration | `docker compose up -d --no-build --no-deps --force-recreate gateway` |
 | 403 for every file | The gateway cannot read them | `chmod 755` the directory; the script writes files 644 |
-| `the releases directory … is not writable` | Docker created it, owned by root | `sudo chown 1000:1000 /home/gamch1k/life-os.android` |
+| `the releases directory … is not writable` | Docker created it, owned by root | `sudo chown "$(id -u):$(id -g)" ~/life-os.android` (or your `LIFE_OS_ANDROID_RELEASES_DIR`) |
 | `refusing a downgrade` / `already published with a different APK` | The build's `versionCode` did not grow | Bump `versionCode` in the app and build again (`--force` only on purpose) |
 | `the SHA-256 of … is …` | The APK changed after `release.json` was written, or the copy is incomplete | Build again, or copy the release directory again |
 | `the published manifest … is unreadable` | `updates.json` was edited by hand | Repair it, or remove it to start over (the next publish then deletes the APKs it no longer lists) |

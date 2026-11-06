@@ -103,11 +103,11 @@ The `ntfy` channel publishes to one private topic on the ntfy server in the Life
 | `message` | `body`, or the title when the body is empty; cut at 3500 bytes (on a character boundary, with "…"), because ntfy turns a longer message into an attachment, which this server refuses |
 | `priority` | `importance`: `low` → 2 (silent, no sound or vibration), `medium` → 3 (default), `high` → 5 (max; the owner may let it through Do Not Disturb) |
 | `tags` | the category's domain as an emoji: `calendar` → 📅 `calendar`, `inbox` → 📥 `inbox_tray`, `status` → ⚠️ `warning`, `test` → 🧪 `test_tube`, `tasks` → ☑️ `ballot_box_with_check`, `finance` → 💰 `moneybag`; none for other domains |
-| `click` | `NOTIFICATIONS_LINK_BASE_URL` + `link`, for example `https://lifeos.gamch1k.com/calendar?date=2026-10-10`; without a link, `/notifications`. Tapping the notification opens that page (through Cloudflare Access) |
+| `click` | `NOTIFICATIONS_LINK_BASE_URL` + `link`, for example `https://lifeos.example.com/calendar?date=2026-10-10`; without a link, `/notifications`. Tapping the notification opens that page (through Cloudflare Access) |
 
 Markdown stays off: bodies are plain text. Outcomes: 2xx is sent. ntfy refusing the request (400, 401, 403, 404, 413, a redirect, any other 4xx) is permanent: the configuration or the message is wrong, and the delivery fails at once with ntfy's error, for example `ntfy refused the notification: 401 unauthorized (ntfy code 40101)`. 408, 429, 5xx, and an unreachable ntfy (stopped, restarting, or its profile off) are retried with the usual backoff. The token is never logged or put in an error.
 
-Settings (compose sets them): `NOTIFICATIONS_NTFY_URL` (`http://ntfy:80`), `NOTIFICATIONS_NTFY_TOPIC` (`LIFE_OS_NTFY_TOPIC`), `NOTIFICATIONS_NTFY_TOKEN` (`LIFE_OS_NTFY_PUBLISHER_TOKEN`, a secret), and `NOTIFICATIONS_LINK_BASE_URL` (`LIFE_OS_PUBLIC_URL`, default `https://lifeos.gamch1k.com`).
+Settings (compose sets them): `NOTIFICATIONS_NTFY_URL` (`http://ntfy:80`), `NOTIFICATIONS_NTFY_TOPIC` (`LIFE_OS_NTFY_TOPIC`), `NOTIFICATIONS_NTFY_TOKEN` (`LIFE_OS_NTFY_PUBLISHER_TOKEN`, a secret), and `NOTIFICATIONS_LINK_BASE_URL` (`LIFE_OS_PUBLIC_URL`, which compose requires, such as `https://lifeos.example.com`).
 
 To send yourself a test notification (it arrives silently, with 🧪):
 
@@ -164,7 +164,7 @@ Delivery stays at least once: a crash between a push service accepting a push an
 
 **Network.** Pushes go from the service to the push services over HTTPS (`fcm.googleapis.com`, `updates.push.services.mozilla.com`, `web.push.apple.com`, `*.notify.windows.com`). The service is on the `backend` network, which has outbound access (as the integrations have), so nothing changes there; `notify-internal` stays internal for ntfy. The phone never connects to Life OS for a push.
 
-**Cloudflare Access.** A subscriber calls the API through `lifeos.gamch1k.com`, behind Access; pushes themselves go from the server to the push service, so the phone never connects to Life OS to receive one.
+**Cloudflare Access.** A subscriber calls the API through the public hostname (`LIFE_OS_PUBLIC_HOSTNAME`), behind Access; pushes themselves go from the server to the push service, so the phone never connects to Life OS to receive one.
 
 **Set it up** (once; see [Operations](#operations) for the deploy):
 

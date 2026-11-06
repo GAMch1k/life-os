@@ -4,7 +4,7 @@ Life OS reads the owner's Deutsche Bank accounts (balances and transactions, nev
 
 ## What the owner already did
 
-1. **Created the Enable Banking application** in the Enable Banking control panel, in **production**, with the account information service (AIS) only, and the redirect URL `https://lifeos.gamch1k.com/finance/bank/callback`. The control panel generated the application's RSA key pair; the application id is the JWT's `kid`.
+1. **Created the Enable Banking application** in the Enable Banking control panel, in **production**, with the account information service (AIS) only, and the redirect URL: Life OS's public URL (`LIFE_OS_PUBLIC_URL`) plus `/finance/bank/callback`, such as `https://lifeos.example.com/finance/bank/callback`. The control panel generated the application's RSA key pair; the application id is the JWT's `kid`.
 2. **Linked the accounts** the restricted application may read (the owner's own Deutsche Bank account, "Das Junge Konto").
 3. **Put the private key on the server**, outside the repository, readable only by its owner (for example `chmod 0600`).
 
@@ -22,18 +22,23 @@ Never commit the key or the token key, and never paste them into tickets or logs
    LIFE_OS_BANKING_RUNTIME_UID=<id -u of the key file's owner>
    ```
 
-   The banking container runs as `LIFE_OS_BANKING_RUNTIME_UID` (default 1000) so it can read the `0600` key, which Compose bind-mounts read-only at `/run/secrets/enablebanking.pem`. Keep the token key: it encrypts the stored bank session, and a new one means reconnecting. Optional: `LIFE_OS_BANKING_REDIRECT_URI` (must match the application's redirect URL exactly) `LIFE_OS_BANKING_SYNC_TIMES` (default `06:00,12:00,18:00,23:00`, owner-local, at most four), and `LIFE_OS_BANKING_CONSENT_DAYS` (default 180, at most the bank's maximum; lower it if the bank refuses a long consent).
+   The banking container runs as `LIFE_OS_BANKING_RUNTIME_UID` (default 1000) so it can read the `0600` key, which Compose bind-mounts read-only at `/run/secrets/enablebanking.pem`. Keep the token key: it encrypts the stored bank session, and a new one means reconnecting. Optional: `LIFE_OS_BANKING_REDIRECT_URI` (default `LIFE_OS_PUBLIC_URL/finance/bank/callback`; it must match the application's redirect URL exactly), `LIFE_OS_BANKING_SYNC_TIMES` (default `06:00,12:00,18:00,23:00`, owner-local, at most four), and `LIFE_OS_BANKING_CONSENT_DAYS` (default 180, at most the bank's maximum; lower it if the bank refuses a long consent).
 2. Provision the database on an existing PostgreSQL volume (a fresh one does it by itself): recreate the PostgreSQL container so it sees the new password and the updated `infra/postgres/service-databases.conf`, then run the idempotent provisioning.
 
    ```sh
-   docker compose up --detach postgres
+   docker compose up -d --no-build --no-deps postgres
    make db-provision
    ```
 
-3. Start banking, then the Dashboard and the gateway (which routes `/api/integrations/banking/` and waits for banking):
+3. Build banking and the Dashboard, one at a time, migrate, and start banking, then the Dashboard and the gateway (which routes `/api/integrations/banking/`):
 
    ```sh
-   docker compose up --detach --build banking-migrate banking dashboard gateway
+   docker compose build banking
+   docker compose build dashboard
+   docker compose up --no-build --no-deps banking-migrate
+   docker compose up -d --no-build --no-deps banking
+   docker compose up -d --no-build --no-deps dashboard
+   docker compose up -d --no-build --no-deps --force-recreate gateway
    ```
 
 4. Check: `docker compose logs banking` says `bank connections configured` (or names the missing setting, never its value), and Status lists Banking as ready with a **Bank connection** check (Not set up until a bank is connected).
@@ -60,7 +65,7 @@ To renew, choose **Reconnect** on the card and give consent again. Reconnecting 
 
 You can also revoke the consent at Deutsche Bank (online banking, third-party access) or in the Enable Banking control panel. Life OS notices at the next sync (the provider reports the session as revoked) and marks the connection Expired, and Status (through the monitor) tells you; then Disconnect or Reconnect.
 
-To take Life OS's access away entirely, also remove the application or its key in the Enable Banking control panel, and delete the key file and the `LIFE_OS_ENABLE_BANKING_*` and `LIFE_OS_BANKING_TOKEN_KEY` lines from `.env` (`docker compose up --detach banking`). Banking then reports "not configured".
+To take Life OS's access away entirely, also remove the application or its key in the Enable Banking control panel, and delete the key file and the `LIFE_OS_ENABLE_BANKING_*` and `LIFE_OS_BANKING_TOKEN_KEY` lines from `.env` (`docker compose up -d --no-build --no-deps banking`). Banking then reports "not configured".
 
 ## Troubleshooting
 
@@ -74,7 +79,7 @@ To take Life OS's access away entirely, also remove the application or its key i
 | "Finance refused the sync (400 …)" | Finance rejected the import; it is read again at the next sync time. Check Finance's log for the reason. |
 | Status: "Syncing Deutsche Bank keeps failing: N attempts in a row" | The bank or provider keeps failing; transactions from the last good sync are kept, and retries continue. |
 | "The stored bank session cannot be decrypted with LIFE_OS_BANKING_TOKEN_KEY" | The token key changed. Reconnect. |
-| Card: "Last attempt failed on …: server_error — …" | Deutsche Bank or Enable Banking ended the consent with an error, so no code came back. Try again from a desktop browser (the bank's consent pages and its app hand-off can fail on a phone); on Enable Banking's page, check the Deutsche Bank ID you enter is the one you use for Deutsche Bank online banking; and if the bank refuses a long consent, lower `LIFE_OS_BANKING_CONSENT_DAYS` in `.env` (for example to 90) and run `docker compose up --detach banking`. Every attempt's reason is kept in banking (the card shows the newest; earlier ones are in the Event Log as "Bank consent failed"). |
+| Card: "Last attempt failed on …: server_error — …" | Deutsche Bank or Enable Banking ended the consent with an error, so no code came back. Try again from a desktop browser (the bank's consent pages and its app hand-off can fail on a phone); on Enable Banking's page, check the Deutsche Bank ID you enter is the one you use for Deutsche Bank online banking; and if the bank refuses a long consent, lower `LIFE_OS_BANKING_CONSENT_DAYS` in `.env` (for example to 90) and run `docker compose up -d --no-build --no-deps banking`. Every attempt's reason is kept in banking (the card shows the newest; earlier ones are in the Event Log as "Bank consent failed"). |
 
 Logs never contain the session id, the key, its tokens, or IBANs. Events in the Event Log (source Bank connection) show connects, disconnects, syncs that changed something (counts only), failures, consents the bank did not complete, and the consent's expiry.
 
