@@ -9,8 +9,8 @@
 # ntfy deletes provisioned users, rights, and tokens that leave that list.
 
 # The public URL the phone uses (Cloudflare Tunnel → here, on the
-# notify-edge network; the Life OS gateway is not involved).
-base-url: "https://ntfy.gamch1k.com"
+# notify-edge network; the Life OS gateway is not involved), base-url, is
+# LIFE_OS_NTFY_PUBLIC_URL in .env: compose.yaml passes it as NTFY_BASE_URL.
 listen-http: ":80"
 
 # Requests through the tunnel carry the visitor's address in CF-Connecting-IP,

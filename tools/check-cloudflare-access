@@ -4,12 +4,18 @@
 #  - anonymous requests to pages and APIs are redirected to the Access login;
 #  - with the Access service token (LIFE_OS_CF_ACCESS_CLIENT_ID/SECRET in
 #    .env), the same pages and APIs reach Life OS through the tunnel.
-# Usage: tools/check-cloudflare-access [hostname]   (default lifeos.gamch1k.com)
+# The hostname is LIFE_OS_PUBLIC_HOSTNAME and the Access team
+# LIFE_OS_CF_ACCESS_TEAM_DOMAIN, each from the environment, else .env.
+# Usage: tools/check-cloudflare-access [hostname]
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
+# shellcheck source=lib/settings.bash
+. tools/lib/settings.bash
 
-host=${1:-${LIFE_OS_PUBLIC_HOSTNAME:-lifeos.gamch1k.com}}
-team=${LIFE_OS_CF_ACCESS_TEAM_DOMAIN:-damp-surf-d6be.cloudflareaccess.com}
+host=${1:-$(setting LIFE_OS_PUBLIC_HOSTNAME)}
+team=$(setting LIFE_OS_CF_ACCESS_TEAM_DOMAIN)
+[ -n "$host" ] || { echo "check-cloudflare-access: set LIFE_OS_PUBLIC_HOSTNAME in .env, or name the hostname" >&2; exit 2; }
+[ -n "$team" ] || { echo "check-cloudflare-access: set LIFE_OS_CF_ACCESS_TEAM_DOMAIN in .env (<team>.cloudflareaccess.com)" >&2; exit 2; }
 paths=(/ /tasks /inbox /calendar /activity /status /api/tasks/v1/tasks /api/inbox/v1/inbox-items /api/activity/v1/activity-events /api/mcp/)
 failed=0
 
@@ -33,8 +39,8 @@ for forged in "" "forged"; do
   if [ "$code" = 302 ]; then printf '  ok    %-36s %s\n' "$label" "$code"; else printf '  FAIL  %-36s %s\n' "$label" "$code"; failed=1; fi
 done
 
-id=$(grep '^LIFE_OS_CF_ACCESS_CLIENT_ID=' .env 2>/dev/null | tail -1 | cut -d= -f2- || true)
-secret=$(grep '^LIFE_OS_CF_ACCESS_CLIENT_SECRET=' .env 2>/dev/null | tail -1 | cut -d= -f2- || true)
+id=$(setting LIFE_OS_CF_ACCESS_CLIENT_ID)
+secret=$(setting LIFE_OS_CF_ACCESS_CLIENT_SECRET)
 if [ -z "$id" ] || [ -z "$secret" ]; then
   echo "service token not configured in .env; skipping the authorized checks"
   exit "$failed"

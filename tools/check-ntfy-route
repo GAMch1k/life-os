@@ -2,20 +2,28 @@
 # Checks the public ntfy route, from wherever it runs (it only uses the public
 # hostnames). Run it after a deploy that touches ntfy, the gateway, or the
 # tunnel (docs/operations/ntfy.md):
-#  - https://ntfy.gamch1k.com answers as ntfy (its /v1/health JSON) and never
+#  - ntfy's public hostname answers as ntfy (its /v1/health JSON) and never
 #    as Life OS: no Dashboard page and no Life OS API under that hostname;
 #  - anonymous reads and writes on the topic are refused (ntfy's deny-all);
-#  - https://lifeos.gamch1k.com still sends anonymous visitors to the Access
+#  - Life OS's public hostname still sends anonymous visitors to the Access
 #    login.
+# The hostnames are the host of LIFE_OS_NTFY_PUBLIC_URL and
+# LIFE_OS_PUBLIC_HOSTNAME, the Access team LIFE_OS_CF_ACCESS_TEAM_DOMAIN, each
+# from the environment, else .env.
 # Usage: tools/check-ntfy-route [ntfy-hostname] [lifeos-hostname]
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
+# shellcheck source=lib/settings.bash
+. tools/lib/settings.bash
 
-ntfy=${1:-${LIFE_OS_NTFY_HOSTNAME:-ntfy.gamch1k.com}}
-lifeos=${2:-${LIFE_OS_PUBLIC_HOSTNAME:-lifeos.gamch1k.com}}
-team=${LIFE_OS_CF_ACCESS_TEAM_DOMAIN:-damp-surf-d6be.cloudflareaccess.com}
+ntfy=${1:-$(url_host "$(setting LIFE_OS_NTFY_PUBLIC_URL)")}
+lifeos=${2:-$(setting LIFE_OS_PUBLIC_HOSTNAME)}
+team=$(setting LIFE_OS_CF_ACCESS_TEAM_DOMAIN)
+[ -n "$ntfy" ] || { echo "check-ntfy-route: set LIFE_OS_NTFY_PUBLIC_URL in .env, or name ntfy's hostname" >&2; exit 2; }
+[ -n "$lifeos" ] || { echo "check-ntfy-route: set LIFE_OS_PUBLIC_HOSTNAME in .env, or name Life OS's hostname" >&2; exit 2; }
+[ -n "$team" ] || { echo "check-ntfy-route: set LIFE_OS_CF_ACCESS_TEAM_DOMAIN in .env (<team>.cloudflareaccess.com)" >&2; exit 2; }
 # The topic name is not a secret; deny-all protects it.
-topic=${LIFE_OS_NTFY_TOPIC:-$(grep '^LIFE_OS_NTFY_TOPIC=' .env 2>/dev/null | tail -1 | cut -d= -f2- || true)}
+topic=$(setting LIFE_OS_NTFY_TOPIC)
 topic=${topic:-lifeos}
 # Only Life OS answers with these: the Dashboard's Next.js assets and title,
 # and the services' readiness body and error envelope.
