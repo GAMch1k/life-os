@@ -1,21 +1,49 @@
 .PHONY: infra-env infra-up infra-down infra-ps infra-logs infra-reset core-up core-smoke life-up life-smoke verify-clean-db verify-isolation e2e-smoke processor-smoke processor-codex-actions-smoke human-review-smoke activity-trace-smoke runtime-status-smoke retry-schedule-smoke codex-runtime-smoke relative-dates-smoke cross-language-smoke calendar-ai-smoke phase8-acceptance browser-e2e action-idempotency-smoke voice-lease-recovery-smoke db-provision db-provision-backup db-check-isolation db-migration-new db-generate db-migrate-up db-migrate-down db-test create-service create-service-smoke dashboard-check check
 
+# Targets that could recreate or delete the deployed Life OS (the Compose
+# project lifeos, which compose.yaml names, from any checkout) refuse unless
+# CONFIRM names the target: make infra-reset CONFIRM=infra-reset.
+LIVE_PROJECT := lifeos
+
+# $(call refuse_if_deployed,<what it would do>): refuse when the lifeos
+# project has containers, a running deployment.
+define refuse_if_deployed
+	@if [ "$(CONFIRM)" != "$@" ] && [ -n "$$(docker ps -aq --filter label=com.docker.compose.project=$(LIVE_PROJECT))" ]; then \
+	  printf '%s\n' "make $@: Life OS is deployed here (Compose project $(LIVE_PROJECT)). $(1)" \
+	    "Redeploy one service at a time instead: docker compose build <service>, then docker compose up -d --no-build --no-deps <service>." \
+	    "To run it anyway: make $@ CONFIRM=$@" >&2; \
+	  exit 2; \
+	fi
+endef
+
+# $(call confirm,<what it does>): refuse unless CONFIRM names the target.
+define confirm
+	@if [ "$(CONFIRM)" != "$@" ]; then \
+	  printf '%s\n' "make $@: $(1)" "To run it anyway: make $@ CONFIRM=$@" >&2; \
+	  exit 2; \
+	fi
+endef
+
 infra-env:
 	@test -f .env || cp .env.example .env
 
+# A first start. On a deployment they would also recreate every service
+# whose settings changed, PostgreSQL included.
 infra-up: infra-env
+	$(call refuse_if_deployed,It would recreate every service whose settings changed and PostgreSQL with them.)
 	docker compose up --detach --wait
 
-core-up: infra-env
+core-up life-up: infra-env
+	$(call refuse_if_deployed,It would rebuild every image and recreate every changed service and PostgreSQL with them.)
 	docker compose up --detach --build
 
-core-smoke: core-up
-	./tools/smoke-core-services
+# The core-service and Dashboard smokes on the disposable verification stack
+# (tools/smoke-life), from the images already built; never on live data.
+core-smoke: infra-env
+	./tools/smoke-life --core
 
-life-up: core-up
-
-life-smoke: core-smoke
-	./tools/smoke-dashboard
+life-smoke: infra-env
+	./tools/smoke-life
 
 verify-clean-db: infra-env
 	./tools/verify-compose up --detach --no-build
@@ -97,6 +125,7 @@ infra-logs:
 	docker compose logs --follow postgres
 
 infra-reset:
+	$(call confirm,It deletes the volumes of Compose project $(LIVE_PROJECT): every database and the capture images and Voice audio. Back up first.)
 	docker compose down --volumes --remove-orphans
 
 # The scripts and the registry are read from the directory mount
@@ -135,6 +164,7 @@ db-migrate-down:
 	@test -n "$(SERVICE)" || (echo "SERVICE is required" >&2; exit 2)
 	@test -n "$(DATABASE_URL)" || (echo "DATABASE_URL is required" >&2; exit 2)
 	@test -d "services/$(SERVICE)/db/migrations" || (echo "unknown service or missing migrations directory: $(SERVICE)" >&2; exit 2)
+	$(call confirm,It migrates the $(SERVICE) database at DATABASE_URL down one step: a down migration can drop tables and their data.)
 	migrate -path "services/$(SERVICE)/db/migrations" -database "$(DATABASE_URL)" down 1
 
 db-test:

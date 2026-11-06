@@ -15,17 +15,17 @@ cp .env.example .env
 ## Commands
 
 ```sh
-make infra-up     # create the network/volume and start healthy infrastructure
+make infra-up     # first start: create the networks and volumes and start the stack healthy
 make infra-ps     # inspect container and health state
 make infra-logs   # follow PostgreSQL logs
 make infra-down   # stop containers; preserve database data
-make infra-reset  # stop containers and deliberately delete local database data
+make infra-reset CONFIRM=infra-reset  # stop containers and deliberately delete all data
 make db-provision # reconcile configured service databases and roles
 make db-provision-backup # reconcile the backup service's read-only role
 make db-check-isolation # verify every service can reach only its own database
 ```
 
-Running `docker compose up` directly is also supported after `.env` exists.
+Running `docker compose up` directly is also supported after `.env` exists. Once Life OS is deployed, `make infra-up` and `make life-up` refuse (`CONFIRM=<target>` overrides): redeploy one service at a time with `docker compose up -d --no-build --no-deps <service>`, since a plain `up` also recreates PostgreSQL after any `.env` change.
 
 ## Naming conventions
 
@@ -37,7 +37,7 @@ Running `docker compose up` directly is also supported after `.env` exists.
 
 Services join the project-scoped `lifeos-backend` bridge and address PostgreSQL as `postgres:5432`. PostgreSQL publishes no host port; reach it inside its container, such as `docker compose exec postgres psql -U <LIFE_OS_POSTGRES_USER> -d finance_db`.
 
-`make infra-down` is nondestructive. Use `make infra-reset` only when intentionally recreating the database from an empty volume.
+`make infra-down` is nondestructive. Use `make infra-reset` only when intentionally recreating the database from an empty volume; it refuses without `CONFIRM=infra-reset`.
 
 ## Service database provisioning
 

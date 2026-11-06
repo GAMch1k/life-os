@@ -151,11 +151,11 @@ make db-provision-backup   # the backup login alone
 make db-check-isolation    # check that each service can reach only its own database
 ```
 
-PostgreSQL keeps the environment it was created with. If you add a database password to `.env` later, recreate PostgreSQL or pass the password in; see [Adding the Food service](docs/operations/deployment.md#adding-the-food-service) and [infra/README.md](infra/README.md). Never run `make infra-reset` on a deployment: it deletes the volumes.
+PostgreSQL keeps the environment it was created with. If you add a database password to `.env` later, recreate PostgreSQL or pass the password in; see [Adding the Food service](docs/operations/deployment.md#adding-the-food-service) and [infra/README.md](infra/README.md). Never run `make infra-reset` on a deployment: it deletes the volumes, and refuses without `CONFIRM=infra-reset`.
 
 ## 8. Build and start
 
-1. **Build the images.** On a server with memory to spare, `make life-up` builds every image and starts the stack in one step (`docker compose up --detach --build`). On a small server, build one image at a time first, as the repository's own smokes do:
+1. **Build the images.** On a server with memory to spare, `make life-up` builds every image and starts the stack in one step (`docker compose up --detach --build`). It is for the first start only: once Life OS is deployed, it refuses (see [Redeploying](#redeploying-always---no-deps)). On a small server, build one image at a time first, as the repository's own smokes do:
 
    ```sh
    for service in activity finance tasks food inbox calendar calendar-feeds recipe-import \
@@ -316,9 +316,11 @@ The manifest format, version rules, and troubleshooting are in [Android releases
 
 ## 14. Verifying an install
 
-- **Live stack.** Check the Status page, `docker compose ps`, the `/api/<domain>/ready` probes, and `docker compose exec processor codex login status`. `tools/smoke-core-services` and `tools/smoke-dashboard` check the live gateway, and each writes a few test records (a Task, a capture, an event) marked as a developer tool. The Codex processor also processes the captures they write. `make life-smoke` runs the same checks, but first rebuilds and restarts the whole stack with `docker compose up --detach --build`, so on a running deployment call the scripts directly.
-- **Disposable verification stack.** Run all other smokes there. `tools/verify-compose` runs a second, isolated copy (`lifeos-verify-*` containers, networks, and volumes; gateway on `127.0.0.1:13001`) from the images already built, then deletes it. It never mounts your backup or Android directories, blanks your integration and notification credentials, and never starts the tunnel or ntfy. Its processor does use your Codex sign-in. It needs memory for a second Life OS, so don't run it alongside other heavy jobs.
-  - Without Codex runs: `make verify-clean-db`, `make e2e-smoke`, `make verify-isolation`, `make action-idempotency-smoke`, `make voice-lease-recovery-smoke`, and `tools/smoke-gateway-recreate`.
+- **Live stack.** Check the Status page, `docker compose ps`, the `/api/<domain>/ready` probes, and `docker compose exec processor codex login status`. These only read.
+- **Disposable verification stack.** Run every smoke there. `tools/verify-compose` runs a second, isolated copy (`lifeos-verify-*` containers, networks, and volumes; gateway on `127.0.0.1:13001`) from the images already built, then deletes it. It never mounts your backup or Android directories, blanks your integration and notification credentials, and never starts the tunnel or ntfy. Its processor does use your Codex sign-in. It needs memory for a second Life OS, so don't run it alongside other heavy jobs.
+  - `make life-smoke` starts the gateway and the services behind it on that stack, from the images already built, and runs `tools/smoke-core-services` and `tools/smoke-dashboard`. They write a few test records (a Task, a capture, an event) there, never into your data. `make core-smoke` runs the first only.
+  - The two scripts refuse to run on their own until `LIFE_OS_SMOKE_GATEWAY` names a gateway. Point it at the live one (`LIFE_OS_SMOKE_GATEWAY=http://127.0.0.1:3000 tools/smoke-core-services`) only to write those records into your data on purpose. They are marked as a developer tool, and the processor plans the capture with Codex.
+  - Without Codex runs: `make life-smoke`, `make verify-clean-db`, `make e2e-smoke`, `make verify-isolation`, `make action-idempotency-smoke`, `make voice-lease-recovery-smoke`, and `tools/smoke-gateway-recreate`.
   - With the real Codex CLI and your sign-in, using your Codex usage: `make processor-smoke`, `make processor-codex-actions-smoke`, `make human-review-smoke`, `make activity-trace-smoke`, `make runtime-status-smoke`, `make retry-schedule-smoke`, `make codex-runtime-smoke`, `make relative-dates-smoke`, `make cross-language-smoke`, `make calendar-ai-smoke`, `make phase8-acceptance`, and `make browser-e2e`.
   - Every run that uses Voice downloads the Whisper model again into its scratch volume.
 - **Source checks.** `tools/check` (`make check`) verifies the code, not the running stack. It needs a clean working tree plus `go`, `sqlc`, `oapi-codegen`, and `npm`. It checks the gateway's host list and the contracts, then runs sqlc drift, gofmt, vet, tests, and builds for every Go module, and the Dashboard checks. It is CPU- and memory-heavy.
@@ -349,6 +351,7 @@ On a small server, run one heavy job at a time: don't build images while the ver
 | Backups: `lifeos_backup cannot connect to <database>` | Run `make db-provision-backup`. If the capture images failed, check `LIFE_OS_INBOX_MEDIA_GID` (`docker compose exec inbox id -g`). |
 | Phone pushes don't arrive on one network but do on mobile data | That network blocks Google's FCM. Life OS can't fix this. |
 | A command run from a second clone or worktree changed the live stack | `name: lifeos` ([step 3](#3-get-the-code)). Deploy from one checkout; test with `tools/verify-compose`. |
+| `make life-up`, `core-up`, or `infra-up` says Life OS is deployed here | They are for the first start. Redeploy one service at a time ([step 8](#redeploying-always---no-deps)). `CONFIRM=<target>` overrides the check. |
 | A verification run's teardown exits 1 after its tests passed | A stale Docker network endpoint blocked the removal of a `lifeos-verify-*` network. The test result stands. Run `tools/verify-compose down --volumes --remove-orphans` again; it touches only `lifeos-verify-*` resources. |
 | The server runs out of memory, or Status says memory is low | The Server card names the biggest users. Run one heavy job at a time (builds, the verification stack, restore checks, `tools/check`). Lower `LIFE_OS_WHISPER_MEMORY` and `LIFE_OS_WHISPER_THREADS`, or use a smaller Whisper model. |
 | `tools/check` fails at `check-gateway-hosts` after you edit `server_name` | Keep the existing entries; only add your own. |
