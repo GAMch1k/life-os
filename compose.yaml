@@ -750,7 +750,7 @@ networks:
     driver: bridge
   # The Cloudflare connector and the gateway only. The fixed subnet lets the
   # gateway trust Cloudflare's client-address header from this network alone
-  # (infra/nginx/life-os.conf).
+  # (infra/nginx/life-os.conf.template).
   edge:
     name: lifeos-edge
     driver: bridge
