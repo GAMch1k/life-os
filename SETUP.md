@@ -43,7 +43,7 @@ chmod 600 .env
 
 ## 4. Configure `.env`
 
-Compose reads `.env` from the checkout. `.env.example` explains every setting in comments; the tables below group them by purpose. Generate the values with:
+Compose reads `.env` from the checkout. `.env.example` groups the settings by area (General, Database, Backups, Cloudflare, AI, and so on), each under a header such as `# ---------- AI ----------`, and explains every setting in comments; the tables below group them by purpose. Generate the values with:
 
 ```sh
 openssl rand -hex 24              # passwords: letters and digits only (they go into postgres:// URLs)
