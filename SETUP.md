@@ -81,7 +81,7 @@ Compose refuses every command until these six variables are set: `LIFE_OS_POSTGR
 | Variable | Value |
 | --- | --- |
 | `LIFE_OS_AI_PROVIDER` | `codex` (default), or `claude` for Claude Code on your Claude subscription. |
-| `LIFE_OS_CODEX_HOME_HOST_PATH` | **Required with Codex.** `/home/<you>/.codex`, an absolute path. Leave it out with Claude. |
+| `LIFE_OS_CODEX_HOME_HOST_PATH` | **Required with Codex.** `/home/<you>/.codex`, an absolute path. Leave it out with Claude. Compose cannot require it for Codex alone: with Codex, leaving it unset makes the processor exit at startup. |
 | `LIFE_OS_CODEX_RUNTIME_UID` | **Required.** The processor's UID, `id -u`; with Codex, of that directory's owner. |
 | `LIFE_OS_CODEX_MODEL`, `LIFE_OS_CODEX_REASONING_EFFORT` | `gpt-5.6-luna` and `medium`. |
 | `LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN` | **Required with Claude.** The token from `claude setup-token`. |
@@ -124,7 +124,7 @@ The `processor` is the only service that runs Codex. `mcp` is the tool server th
 2. Sign in with `codex login`. This writes `auth.json` into `~/.codex`.
 3. Set `LIFE_OS_CODEX_HOME_HOST_PATH` to that directory's absolute path, and `LIFE_OS_CODEX_RUNTIME_UID` to `id -u`.
 
-When it starts, the processor mounts that directory read-only, runs as that UID, and copies only `auth.json` and an optional `config.toml` into a tmpfs. Without `auth.json` it exits with code 78. Never copy `auth.json` or an API key into the repository or `.env`. After the first start ([step 8](#8-build-and-start)), check the sign-in from inside the container with `docker compose exec processor codex login status`. If Status later says Codex is signed out, run `codex login` on the host again, then `docker compose up -d --no-build --no-deps --force-recreate processor`.
+When it starts, the processor mounts that directory read-only, runs as that UID, and copies only `auth.json` and an optional `config.toml` into a tmpfs. Without `auth.json` it exits with code 78. That includes leaving `LIFE_OS_CODEX_HOME_HOST_PATH` unset: Compose cannot make it required for Codex alone, so it starts the processor with an empty placeholder directory instead, and with Codex, leaving this unset makes the processor exit at startup. Under `restart: unless-stopped` it then keeps restarting, and the Status page's Server check reports the restart loop, until you set the path and recreate the processor. Never copy `auth.json` or an API key into the repository or `.env`. After the first start ([step 8](#8-build-and-start)), check the sign-in from inside the container with `docker compose exec processor codex login status`. If Status later says Codex is signed out, run `codex login` on the host again, then `docker compose up -d --no-build --no-deps --force-recreate processor`.
 
 The routine model and effort are `LIFE_OS_CODEX_MODEL=gpt-5.6-luna` and `LIFE_OS_CODEX_REASONING_EFFORT=medium`, chosen by the [AI runtime benchmark](docs/verification/ai-runtime-benchmark.md). An empty effort keeps the Codex configuration's default. Timeout, concurrency, and the other runtime settings are in [Codex runtime settings](docs/operations/deployment.md#codex-runtime-settings) and [MCP and AI](docs/services/mcp.md#codex-runtime).
 
@@ -355,8 +355,8 @@ On a small server, run one heavy job at a time: don't build images while the ver
 | Symptom | Cause and fix |
 | --- | --- |
 | Compose refuses with "Set LIFE_OS_… in .env" | One of the six required variables ([step 4](#4-configure-env)) is missing. |
-| The processor keeps restarting; its log says `missing Codex authentication at /run/lifeos-codex-source/auth.json` | `LIFE_OS_CODEX_HOME_HOST_PATH` is wrong, or you haven't signed in yet. Run `codex login` on the host, then `docker compose up -d --no-build --no-deps --force-recreate processor`. |
-| Status says Codex is signed out or usage-limited | Signed out: sign in again as above. Usage-limited: captures are retried after the reset time Status shows. |
+| The processor keeps restarting; its log says `missing Codex authentication at /run/lifeos-codex-source/auth.json` | `LIFE_OS_CODEX_HOME_HOST_PATH` is unset or wrong, or you haven't signed in yet. Run `codex login` on the host, then `docker compose up -d --no-build --no-deps --force-recreate processor`. |
+| Status says Codex or Claude Code is signed out or usage-limited | Signed out: sign in again as above. Usage-limited: captures are retried after the reset time Status shows. |
 | The processor keeps restarting; its log says `missing the Claude subscription token` | `LIFE_OS_AI_PROVIDER=claude` without `LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN`. Run `claude setup-token`, put the token in `.env`, then recreate the processor as above. |
 | `curl` gets an empty reply from the gateway | The Host is not one the gateway answers. Set `LIFE_OS_PUBLIC_HOSTNAME` or `LIFE_OS_GATEWAY_BIND_ADDRESS`, then recreate the gateway ([step 9](#9-remote-access)). |
 | 502 from a page or API | The service behind it is not running. Check `docker compose ps`, `docker compose logs <service>`, and its `<service>-migrate` job. Don't publish service ports as a shortcut. |
