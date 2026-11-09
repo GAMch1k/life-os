@@ -1,10 +1,10 @@
 # Phase 9 verification
 
-Phase 9 made Life OS reachable from outside the private network through Cloudflare Access and a Cloudflare Tunnel. See [Cloudflare Tunnel and Access](../operations/cloudflare.md). The sign-off on 2026-10-09 used the real public hostname `https://lifeos.gamch1k.com`, never a local shortcut.
+Phase 9 made Life OS reachable from outside the private network through Cloudflare Access and a Cloudflare Tunnel. See [Cloudflare Tunnel and Access](../operations/cloudflare.md). The sign-off on 2026-10-09 used the real public hostname `https://lifeos.example.com`, never a local shortcut.
 
 | # | Required | Evidence |
 | --- | --- | --- |
-| 1 | Anonymous requests cannot reach Life OS | `tools/check-cloudflare-access`: every page and API, writes, and requests with a forged `CF_Authorization` cookie or `Cf-Access-Jwt-Assertion` header get a 302 to `damp-surf-d6be.cloudflareaccess.com`. Nothing was captured. |
+| 1 | Anonymous requests cannot reach Life OS | `tools/check-cloudflare-access`: every page and API, writes, and requests with a forged `CF_Authorization` cookie or `Cf-Access-Jwt-Assertion` header get a 302 to `<team>.cloudflareaccess.com`. Nothing was captured. |
 | 2 | Authorized Access login works | The owner logged in with the email one-time PIN from outside the WireGuard path. |
 | 3 | Dashboard loads | That session: `GET /` ×16 → 200, arriving through the connector. |
 | 4 | API-backed Tasks, Calendar, and Inbox views work | Same session: `/tasks`, `/calendar`, `/inbox`, `/finance` → 200. A Task edit (`PATCH /api/tasks/v1/tasks/{id}`) → 200 and was persisted. |

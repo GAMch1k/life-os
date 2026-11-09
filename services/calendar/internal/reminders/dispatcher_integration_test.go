@@ -377,8 +377,8 @@ func TestAllDayAndImportedEventsUseTheirDefaults(t *testing.T) {
 	}
 	imported := `INSERT INTO events (title, location, all_day, start_at, end_at, source_kind, source_id, external_uid, status)
 		VALUES ($1, $2, false, $3, $4, 'external', $5, $6, $7)`
-	h.exec(imported, "Papier", "Roßdorf, Darmstädter Str.", instant("2026-10-14T04:00:00Z"), instant("2026-10-14T04:15:00Z"), zaw, "zaw-1", "active")
-	h.exec(imported, "Bioabfall", "Roßdorf, Darmstädter Str.", instant("2026-10-15T04:00:00Z"), instant("2026-10-15T04:15:00Z"), zaw, "zaw-2", "active")
+	h.exec(imported, "Papier", "Musterstadt, Beispielweg", instant("2026-10-14T04:00:00Z"), instant("2026-10-14T04:15:00Z"), zaw, "zaw-1", "active")
+	h.exec(imported, "Bioabfall", "Musterstadt, Beispielweg", instant("2026-10-15T04:00:00Z"), instant("2026-10-15T04:15:00Z"), zaw, "zaw-2", "active")
 	h.exec(`UPDATE events SET status = 'cancelled', cancelled_at = now(), removed_from_source_at = now() WHERE external_uid = 'zaw-2'`)
 	h.exec(imported, "Match", "Stadium", instant("2026-10-13T16:00:00Z"), instant("2026-10-13T18:00:00Z"), club, "club-1", "active")
 	// The owner's all-day default plus the event's own reminder on the day.
