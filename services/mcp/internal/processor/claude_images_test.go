@@ -7,15 +7,20 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"hash/crc32"
 	"image"
 	"image/color"
 	"image/jpeg"
 	"image/png"
+	"math"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // noisyJPEG is a photo-sized JPEG of random pixels, which compresses badly:
@@ -247,5 +252,250 @@ func TestCaptureWithAnImageThatCannotBeSentGoesToHumanReview(t *testing.T) {
 	// Nothing ran, so the runtime's own state is untouched.
 	if status := monitor.Snapshot(); status.Codex.ConsecutiveFailures != 0 || status.Codex.LastError != "" {
 		t.Fatalf("runtime state = %+v", status.Codex)
+	}
+}
+
+// gradient16PNG is a 16-bit PNG with partial transparency (decoded as
+// *image.NRGBA64), which compresses well: a few MB on disk, 8 bytes a pixel
+// once decoded.
+func gradient16PNG(tb testing.TB, width, height int) []byte {
+	tb.Helper()
+	img := image.NewNRGBA64(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			img.SetNRGBA64(x, y, color.NRGBA64{R: uint16(x * 7), G: uint16(y * 11), B: uint16(x + y), A: 0xff00 | uint16(x&0xff)})
+		}
+	}
+	var out bytes.Buffer
+	if err := (&png.Encoder{CompressionLevel: png.BestSpeed}).Encode(&out, img); err != nil {
+		tb.Fatal(err)
+	}
+	return out.Bytes()
+}
+
+// peakHeap runs f and returns the most heap in use while it ran, sampled
+// every millisecond.
+func peakHeap(f func()) uint64 {
+	runtime.GC()
+	var stats runtime.MemStats
+	runtime.ReadMemStats(&stats)
+	base, peak := stats.HeapAlloc, stats.HeapAlloc
+	done, sampled := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(sampled)
+		var s runtime.MemStats
+		for {
+			select {
+			case <-done:
+				return
+			case <-time.After(time.Millisecond):
+				runtime.ReadMemStats(&s)
+				peak = max(peak, s.HeapAlloc)
+			}
+		}
+	}()
+	f()
+	close(done)
+	<-sampled
+	return peak - base
+}
+
+// BenchmarkFitLarge16BitPNG shrinks a 30 MP 16-bit PNG over the side limit
+// but within the decode budget (243 MB decoded), and reports the peak heap it took besides the
+// allocations.
+func BenchmarkFitLarge16BitPNG(b *testing.B) {
+	data := gradient16PNG(b, 8200, 3700)
+	b.Logf("PNG of %.1f MB", float64(len(data))/(1<<20))
+	capture := Image{ContentType: "image/png", Data: data}
+	b.ReportAllocs()
+	b.ResetTimer()
+	var peak uint64
+	for range b.N {
+		peak = max(peak, peakHeap(func() {
+			if _, err := fitClaudeImage(capture); err != nil {
+				b.Fatal(err)
+			}
+		}))
+	}
+	b.ReportMetric(float64(peak)/(1<<20), "peak-heap-MiB")
+}
+
+// pngHeader is the start of a PNG, its signature and IHDR, which is all
+// image.DecodeConfig reads: the pixels are missing, so it does not decode.
+func pngHeader(width, height uint32, depth, colorType, interlace byte) []byte {
+	ihdr := make([]byte, 13)
+	binary.BigEndian.PutUint32(ihdr[0:], width)
+	binary.BigEndian.PutUint32(ihdr[4:], height)
+	ihdr[8], ihdr[9], ihdr[12] = depth, colorType, interlace
+	return pngChunk([]byte("\x89PNG\r\n\x1a\n"), "IHDR", ihdr)
+}
+
+// pngChunk appends a PNG chunk to out.
+func pngChunk(out []byte, kind string, data []byte) []byte {
+	out = binary.BigEndian.AppendUint32(out, uint32(len(data)))
+	chunk := append([]byte(kind), data...)
+	return binary.BigEndian.AppendUint32(append(out, chunk...), crc32.ChecksumIEEE(chunk))
+}
+
+func TestImageTooLargeToDecodeCannotBeSent(t *testing.T) {
+	// 9000×4000 px at 16 bits a channel is 288 MB decoded, over the budget;
+	// at 8 bits it is 144 MB, within it.
+	over := pngHeader(9000, 4000, 16, 6, 0)
+	_, err := fitClaudeImages([]Image{{ContentType: "image/png", Data: over}})
+	if !errors.Is(err, errImageNotSendable) {
+		t.Fatalf("err = %v", err)
+	}
+	if !strings.Contains(err.Error(), "9000×4000 px, too large to make smaller here (about 274 MB to decode, more than 256 MB)") {
+		t.Fatalf("err = %v", err)
+	}
+	// Within the budget, the same header is decoded, and fails only for
+	// want of pixels.
+	_, err = fitClaudeImages([]Image{{ContentType: "image/png", Data: pngHeader(9000, 4000, 8, 6, 0)}})
+	if !errors.Is(err, errImageNotSendable) || !strings.Contains(err.Error(), "cannot be decoded here") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestDecodedBytesAreEstimatedFromTheHeader(t *testing.T) {
+	jpegOf := func(img image.Image) []byte {
+		var out bytes.Buffer
+		if err := jpeg.Encode(&out, img, nil); err != nil {
+			t.Fatal(err)
+		}
+		return out.Bytes()
+	}
+	// Go writes baseline JPEGs; the same header with SOF2 is progressive.
+	progressive := func(data []byte) []byte {
+		out := bytes.Clone(data)
+		i := bytes.Index(out, []byte{0xff, 0xc0})
+		if i < 0 {
+			t.Fatal("no SOF0")
+		}
+		out[i+1] = 0xc2
+		return out
+	}
+	colour := jpegOf(image.NewRGBA(image.Rect(0, 0, 100, 10)))
+	grey := jpegOf(image.NewGray(image.Rect(0, 0, 100, 10)))
+	cases := []struct {
+		name string
+		data []byte
+		want uint64
+	}{
+		{"8-bit PNG", pngHeader(100, 10, 8, 6, 0), 4000},
+		{"paletted PNG", pngChunk(pngChunk(pngHeader(100, 10, 8, 3, 0), "PLTE", make([]byte, 3*16)), "IDAT", nil), 4000},
+		{"16-bit PNG", pngHeader(100, 10, 16, 6, 0), 8000},
+		{"16-bit grey PNG", pngHeader(100, 10, 16, 0, 0), 8000},
+		{"interlaced 8-bit PNG", pngHeader(100, 10, 8, 2, 1), 8000},
+		{"baseline JPEG", colour, 4000},
+		{"progressive JPEG", progressive(colour), 16000},
+		{"progressive grey JPEG", progressive(grey), 8000},
+	}
+	for _, c := range cases {
+		config, format, err := image.DecodeConfig(bytes.NewReader(c.data))
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if got := decodedBytes(c.data, format, config); got != c.want {
+			t.Errorf("%s: %d bytes, want %d", c.name, got, c.want)
+		}
+	}
+	// A size Go's PNG decoder refuses, but a decoder might not.
+	absurd := image.Config{ColorModel: color.NRGBA64Model, Width: math.MaxInt32, Height: math.MaxInt32}
+	if got := decodedBytes(nil, "png", absurd); got != math.MaxUint64 {
+		t.Errorf("absurd image: %d bytes", got)
+	}
+	if jpegProgressive(colour) || !jpegProgressive(progressive(colour)) {
+		t.Fatal("progressive JPEG not told apart")
+	}
+}
+
+// fastPathImages are images of every type rowReader reads directly, with
+// random pixels, each a sub-image so its bounds do not start at 0,0.
+func fastPathImages() map[string]image.Image {
+	random := rand.New(rand.NewPCG(3, 4))
+	fill := func(pix []byte) {
+		for i := range pix {
+			pix[i] = uint8(random.UintN(256))
+		}
+	}
+	r := image.Rect(-3, 5, 47, 36)
+	sub := image.Rect(-1, 6, 45, 35)
+	images := map[string]image.Image{}
+	for _, ratio := range []image.YCbCrSubsampleRatio{image.YCbCrSubsampleRatio444, image.YCbCrSubsampleRatio422, image.YCbCrSubsampleRatio420, image.YCbCrSubsampleRatio440, image.YCbCrSubsampleRatio411, image.YCbCrSubsampleRatio410} {
+		img := image.NewYCbCr(r, ratio)
+		fill(img.Y)
+		fill(img.Cb)
+		fill(img.Cr)
+		images["YCbCr "+ratio.String()] = img.SubImage(sub)
+	}
+	gray := image.NewGray(r)
+	fill(gray.Pix)
+	images["Gray"] = gray.SubImage(sub)
+	gray16 := image.NewGray16(r)
+	fill(gray16.Pix)
+	images["Gray16"] = gray16.SubImage(sub)
+	rgba := image.NewRGBA(r)
+	fill(rgba.Pix)
+	// Premultiplied: no channel above alpha.
+	for i := 0; i < len(rgba.Pix); i += 4 {
+		a := rgba.Pix[i+3]
+		rgba.Pix[i], rgba.Pix[i+1], rgba.Pix[i+2] = min(rgba.Pix[i], a), min(rgba.Pix[i+1], a), min(rgba.Pix[i+2], a)
+	}
+	images["RGBA"] = rgba.SubImage(sub)
+	nrgba := image.NewNRGBA(r)
+	fill(nrgba.Pix)
+	images["NRGBA"] = nrgba.SubImage(sub)
+	rgba64 := image.NewRGBA64(r)
+	for y := r.Min.Y; y < r.Max.Y; y++ {
+		for x := r.Min.X; x < r.Max.X; x++ {
+			a := uint16(random.UintN(1 << 16))
+			rgba64.SetRGBA64(x, y, color.RGBA64{R: uint16(random.UintN(uint(a) + 1)), G: uint16(random.UintN(uint(a) + 1)), B: uint16(random.UintN(uint(a) + 1)), A: a})
+		}
+	}
+	images["RGBA64"] = rgba64.SubImage(sub)
+	nrgba64 := image.NewNRGBA64(r)
+	fill(nrgba64.Pix)
+	images["NRGBA64"] = nrgba64.SubImage(sub)
+	palette := color.Palette{color.White, color.NRGBA{R: 200, G: 10, B: 30, A: 128}, color.Transparent, color.Gray16{Y: 0x1234}}
+	paletted := image.NewPaletted(r, palette)
+	for i := range paletted.Pix {
+		paletted.Pix[i] = uint8(random.UintN(uint(len(palette))))
+	}
+	images["Paletted"] = paletted.SubImage(sub)
+	return images
+}
+
+// throughAt hides an image's type, so rowReader reads it through At.
+type throughAt struct{ image.Image }
+
+func TestFastPixelReadsMatchAt(t *testing.T) {
+	for name, img := range fastPathImages() {
+		bounds := img.Bounds()
+		fast, generic := rowReader(img), rowReader(throughAt{img})
+		fastRow, genericRow := make([]uint32, 4*bounds.Dx()), make([]uint32, 4*bounds.Dx())
+		for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+			fast(y, fastRow)
+			generic(y, genericRow)
+			if !slices.Equal(fastRow, genericRow) {
+				t.Fatalf("%s: row %d is %v, through At %v", name, y, fastRow, genericRow)
+			}
+		}
+		if got, want := downscale(img, 13, 7), downscale(throughAt{img}, 13, 7); !bytes.Equal(got.Pix, want.Pix) {
+			t.Fatalf("%s: scaled down to %v, through At %v", name, got.Pix, want.Pix)
+		}
+	}
+}
+
+func TestScalingDownDoesNotAllocatePerPixel(t *testing.T) {
+	for name, img := range fastPathImages() {
+		allocs := testing.AllocsPerRun(3, func() { downscale(img, 11, 7) })
+		if allocs > 10 {
+			t.Errorf("%s: %.0f allocations to scale down %d px", name, allocs, img.Bounds().Dx()*img.Bounds().Dy())
+		}
+	}
+	// Through At, a 16-bit pixel is boxed: an allocation each.
+	img := image.NewNRGBA64(image.Rect(0, 0, 64, 48))
+	if allocs := testing.AllocsPerRun(3, func() { downscale(throughAt{img}, 11, 7) }); allocs < 64*48 {
+		t.Fatalf("through At: %.0f allocations", allocs)
 	}
 }
