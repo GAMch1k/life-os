@@ -25,6 +25,11 @@ ENV NODE_ENV=production \
     PORT=3000
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/.next ./.next
+# next start loads next.config.ts when it starts; .next doesn't carry those
+# settings for it. Without the file the server runs on Next.js's defaults
+# and, for one, serves the Image Optimization API (/_next/image) that
+# images.unoptimized turns off.
+COPY --from=build /app/next.config.ts ./next.config.ts
 # Static files served at the root: the app icons and the service worker.
 COPY --from=build /app/public ./public
 COPY --from=build /app/package.json ./package.json
