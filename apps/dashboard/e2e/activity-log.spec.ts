@@ -18,7 +18,7 @@ const enabled = Boolean(process.env.LIFE_OS_E2E_URL);
 test.describe("Event Log", () => {
   test.skip(!enabled, "set LIFE_OS_E2E_URL to run against the isolated stack");
 
-  test("follows a real capture through the agent to the Task and its later completion", async ({
+  test("follows a real capture through the agent to the Task and its later completion @codex", async ({
     page,
     request,
   }) => {
