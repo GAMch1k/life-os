@@ -340,7 +340,7 @@ func codexState(codex CodexStatus) string {
 func classifyCodexError(message string) string {
 	text := strings.ToLower(message)
 	switch {
-	case strings.Contains(text, "usage limit"), strings.Contains(text, "rate limit"), strings.Contains(text, "429"):
+	case strings.Contains(text, "usage limit"), strings.Contains(text, "rate limit"), strings.Contains(text, "429"), strings.Contains(text, "hit your limit"):
 		return CodexUsageLimited
 	case strings.Contains(text, "not logged in"), strings.Contains(text, "401"), strings.Contains(text, "unauthorized"), strings.Contains(text, "codex login"):
 		return CodexUnauthenticated
