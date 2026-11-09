@@ -373,21 +373,17 @@ jobs:
     timeout-minutes: 10
     steps:
       - run: |
-          set -x
-          cat /etc/resolv.conf
-          cat /run/systemd/resolve/resolv.conf || true
-          resolvectl status | head -40 || true
-          cat /etc/docker/daemon.json || true
-          time (resolvectl query processor || true)
-          time (getent hosts processor || true)
+          probe() {
+            docker run --rm --network lifeos-ci-dns alpine:3.22 sh -c 'for name in svc processor; do getent hosts "$name" >/dev/null; echo "$name rc=$? at $(date +%T)"; done; echo "end at $(date +%T)"'
+          }
+          sudo apt-get install -y -qq bind9-dnsutils >/dev/null 2>&1 || true
+          dig +tries=1 +time=5 @168.63.129.16 processor | grep -E "status|Query time|timed out" || true
+          dig +tries=1 +time=5 @127.0.0.53 processor | grep -E "status|Query time|timed out" || true
           docker network create lifeos-ci-dns >/dev/null
           docker run -d --name svc --network lifeos-ci-dns alpine:3.22 sleep 300 >/dev/null
-          probe='cat /etc/resolv.conf
-            for name in svc processor processor.invalid www.google.com; do
-              start=$(date +%s%N); getent hosts "$name" >/dev/null; rc=$?
-              echo "$name rc=$rc $(( ($(date +%s%N) - start) / 1000000 )) ms"
-            done'
-          docker run --rm --network lifeos-ci-dns alpine:3.22 sh -c "$probe"
-          docker run --rm --network lifeos-ci-dns --dns-opt timeout:1 --dns-opt attempts:1 alpine:3.22 sh -c "$probe"
-          docker run --rm --network lifeos-ci-dns alpine:3.22 sh -c 'apk add -q bind-tools >/dev/null 2>&1; for t in A AAAA; do dig +tries=1 +time=10 processor $t | grep -E "status|Query time|timed out"; done'
-          sudo journalctl -u docker --since "-3 min" --no-pager | grep -i dns | tail -20 || true
+          echo "== before, at $(date +%T)"; probe
+          sudo mkdir -p /etc/systemd/resolved.conf.d
+          printf '[Resolve]\nResolveUnicastSingleLabel=yes\n' | sudo tee /etc/systemd/resolved.conf.d/single-label.conf
+          sudo systemctl restart systemd-resolved
+          dig +tries=1 +time=5 @127.0.0.53 processor | grep -E "status|Query time|timed out" || true
+          echo "== single-label on, at $(date +%T)"; probe
