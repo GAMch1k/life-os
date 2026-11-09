@@ -1,9 +1,18 @@
 #!/usr/bin/env bash
-# Benchmark Codex runtime profiles on the real Inbox/Voice processing path.
+# Benchmark AI runtime profiles (Codex or Claude Code) on the real Inbox/Voice
+# processing path.
 #
 #   tools/benchmark-ai-runtime gpt-6-luna/none gpt-6-luna/low gpt-5.6-luna/medium
+#   tools/benchmark-ai-runtime claude:sonnet/default claude:sonnet/high
 #
-# For each profile (model/effort) a fresh disposable verification stack runs
+# A profile is model/effort for Codex (codex:model/effort works too), or
+# claude:model/effort for Claude Code (LIFE_OS_AI_PROVIDER=claude), where the
+# effort is low, medium, high, xhigh, max, or default (the CLI's own; also
+# claude:model alone). Claude Code runs on the owner's subscription token,
+# LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN from the environment or .env; the tool
+# refuses a claude profile without it.
+#
+# For each profile (provider, model, effort) a fresh disposable verification stack runs
 # with that profile, seeds Tasks, Calendar events, a shopping list item, a
 # recipe, a pantry item, and a planned meal, submits the same captures
 # (EN/RU/DE text, including completions of Tasks titled in another of those
@@ -16,15 +25,84 @@
 # and receipts, follow-ups that correct what the capture just before did,
 # and captures sent twice, through the Inbox API the Dashboard uses,
 # plus one recorded voice note through Voice and whisper.cpp), lets the automatic processor plan them with the
-# authenticated Codex CLI and act through MCP, asks for recipe ideas, lets
+# profile's authenticated CLI and act through MCP, asks for recipe ideas, lets
 # the AI categories job categorize three transactions no rule matches, asks
 # the AI to plan next month's budget from three made-up months, and then
 # checks the persisted results. The owner's timezone is Europe/Berlin. Results go to
 # $LIFE_OS_BENCHMARK_DIR (default: a new temporary directory) as one TSV per
-# profile and a summary, with each failing scenario's captures, processing
-# attempts, and processor log lines in <profile>.failures.jsonl. It exits 1
-# when any check failed.
+# profile (<model>_<effort>.tsv for Codex, claude_<model>_<effort>.tsv for
+# Claude Code) and a summary, with each failing scenario's captures,
+# processing attempts, and processor log lines in <profile>.failures.jsonl.
+# It exits 1 when any check failed, 2 on a bad profile or a missing
+# precondition. Run it from the repository root, on GNU tools (Linux; on
+# macOS see the preconditions below).
 set -euo pipefail
+
+usage() {
+  echo "usage: $0 profile [profile ...]" >&2
+  echo "  profile: model/effort or codex:model/effort (Codex), claude:model[/effort] (Claude Code)" >&2
+  echo "  e.g. gpt-5.6-luna/medium claude:sonnet/default claude:sonnet/high" >&2
+  exit 2
+}
+[ "$#" -gt 0 ] || usage
+
+# parse_profile <profile>: sets provider, model, effort ("" = the default),
+# name (shown in the summary), and label (the result files' name), or fails.
+# Claude Code's efforts are those of its --effort; Codex's any lowercase name,
+# as the processor accepts them.
+parse_profile() {
+  local spec=$1 model_re='^[A-Za-z0-9][]A-Za-z0-9._[-]*$'
+  provider=codex
+  case "$spec" in
+  claude:*) provider=claude spec=${spec#claude:} ;;
+  codex:*) spec=${spec#codex:} ;;
+  *:*) echo "benchmark: unknown provider in profile \"$1\" (codex or claude)" >&2; return 1 ;;
+  esac
+  model=${spec%%/*} effort=""
+  [[ "$spec" == */* ]] && effort=${spec#*/}
+  [[ "$model" =~ $model_re ]] || { echo "benchmark: bad model in profile \"$1\"" >&2; return 1; }
+  if [ "$provider" = claude ]; then
+    case "$effort" in
+    "" | default) effort="" ;;
+    low | medium | high | xhigh | max) ;;
+    *) echo "benchmark: bad effort in profile \"$1\" (low, medium, high, xhigh, max, or default)" >&2; return 1 ;;
+    esac
+    name="claude:$model/${effort:-default}" label="claude_${model}_${effort:-default}"
+  else
+    [[ "$effort" =~ ^[a-z]*$ ]] || { echo "benchmark: bad effort in profile \"$1\" (a lowercase name such as low or medium)" >&2; return 1; }
+    name=$spec label=${spec//\//_}
+  fi
+}
+provider="" model="" effort="" name="" label="" needs_claude=""
+for profile in "$@"; do
+  parse_profile "$profile" || usage
+  [ "$provider" = claude ] && needs_claude=1
+done
+
+# Claude Code needs the subscription token (claude setup-token), which
+# Compose hands the processor as CLAUDE_CODE_OAUTH_TOKEN. Only whether it is
+# set is checked here; it is never printed.
+# shellcheck source=tools/lib/settings.bash
+. "$(dirname "${BASH_SOURCE[0]}")/lib/settings.bash"
+if [ -n "$needs_claude" ] && [ -z "$(setting LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN)" ]; then
+  echo "benchmark: a claude profile needs the Claude subscription token: set LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN (the output of claude setup-token) in the environment or .env" >&2
+  exit 2
+fi
+
+# The tool and tools/verify-compose use GNU tools: bash 4 or later
+# (associative arrays), GNU date (-d), and GNU realpath (-m). On macOS:
+# brew install bash coreutils, and put "$(brew --prefix coreutils)/libexec/gnubin"
+# first on PATH.
+missing=""
+[ "${BASH_VERSINFO[0]}" -ge 4 ] || missing="$missing bash>=4"
+date -d '2026-01-31 + 1 day' +%F >/dev/null 2>&1 || missing="$missing GNU-date"
+realpath -m -- /nonexistent/x >/dev/null 2>&1 || missing="$missing GNU-realpath"
+for tool in curl jq docker column; do command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"; done
+if [ -n "$missing" ]; then
+  echo "benchmark: missing host tools:$missing (on macOS: brew install bash coreutils, then PATH=\"\$(brew --prefix coreutils)/libexec/gnubin:\$PATH\")" >&2
+  exit 2
+fi
+[[ "${LIFE_OS_BENCHMARK_SETTLE_SECONDS:-1}" =~ ^[1-9][0-9]*$ ]] || { echo "benchmark: LIFE_OS_BENCHMARK_SETTLE_SECONDS must be a positive number of seconds" >&2; exit 2; }
 
 zone=Europe/Berlin
 export LIFE_OS_TIMEZONE=$zone
@@ -35,7 +113,6 @@ export LIFE_OS_VERIFY_AI_CATEGORIES=on
 # The AI budget plan job, likewise (its monthly plan stays off).
 export LIFE_OS_VERIFY_AI_BUDGET_PLANS=on
 
-[ "$#" -gt 0 ] || { echo "usage: $0 model/effort [model/effort ...]" >&2; exit 2; }
 # Failed checks over every profile; any makes the run fail.
 failed_total=0
 out=${LIFE_OS_BENCHMARK_DIR:-$(mktemp -d)}
@@ -154,12 +231,20 @@ put_json() { api -X PUT -H 'content-type: application/json' --data "$2" "$gatewa
 coming() { date -u -d "$2 + $((($1 + 7 - $(date -u -d "$2" +%u)) % 7)) days" +%F; }
 
 run_profile() {
-  local profile=$1 model=${1%%/*} effort=""
-  [[ "$1" == */* ]] && effort=${1#*/}
-  local results="$out/${profile//\//_}.tsv"
+  local provider model effort name label
+  parse_profile "$1"
+  local profile=$name
+  local results="$out/$label.tsv"
   echo "== $profile"
   "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
-  LIFE_OS_CODEX_MODEL=$model LIFE_OS_CODEX_REASONING_EFFORT=$effort "${compose[@]}" up --detach --no-build >/dev/null 2>&1
+  # The provider is always set, so LIFE_OS_AI_PROVIDER in .env never runs a
+  # profile on the other one. Claude Code's token comes from the environment
+  # or .env as Compose reads it (never through this script's output).
+  if [ "$provider" = claude ]; then
+    LIFE_OS_AI_PROVIDER=claude LIFE_OS_CLAUDE_MODEL=$model LIFE_OS_CLAUDE_EFFORT=$effort "${compose[@]}" up --detach --no-build >/dev/null 2>&1
+  else
+    LIFE_OS_AI_PROVIDER=codex LIFE_OS_CODEX_MODEL=$model LIFE_OS_CODEX_REASONING_EFFORT=$effort "${compose[@]}" up --detach --no-build >/dev/null 2>&1
+  fi
   for service in inbox tasks calendar voice finance food integrations/recipe-import; do
     for _ in $(seq 1 90); do api "$gateway/api/$service/ready" >/dev/null 2>&1 && break; sleep 1; done
   done
@@ -321,7 +406,7 @@ run_profile() {
   ids[recipe_caption]=$(capture $'http://ics-fixture/reel-DGx7abc.html\nShakshuka in 20 Minuten 🍳\nZutaten:\n- 4 Eier\n- 1 Dose Tomaten\n- 1 rote Paprika\n- 1 Zwiebel\nZubereitung:\n1. Zwiebel und Paprika anbraten.\n2. Tomaten dazugeben und 10 Minuten köcheln.\n3. Eier hineinschlagen und stocken lassen.\n#shakshuka #frühstück')
   # Follow-ups (P5-20): two captures a moment apart, the second correcting
   # what the first did, or unrelated to it. The processor plans the oldest
-  # capture first and gives Codex the captures of the 20 minutes before, so
+  # capture first and gives the AI the captures of the 20 minutes before, so
   # the second sees what was done for the first. Last, so no other capture
   # comes between them, and with names no other capture uses ("Milch", not
   # the English "milk" two captures put on the list).
@@ -334,7 +419,7 @@ run_profile() {
   ids[followup_unrelated_first]=$(capture "Renew the gym membership.")
   ids[followup_unrelated]=$(capture "Pick up the dry cleaning on Friday.")
   # Repeats (P5-22, P5-23): the same capture sent twice is resolved by the
-  # processor, without Codex, as already done; a grocery asked for again in
+  # processor, without the AI, as already done; a grocery asked for again in
   # other words is planned again and merges into the first's list item.
   # Their list items and Task are counted by these checks only.
   ids[repeat_grocery_first]=$(capture "Buy lemons.")
@@ -351,8 +436,13 @@ run_profile() {
     sleep 2
   done
 
-  # Let the processor settle every capture.
-  local deadline=$(($(date +%s) + 1200)) pending
+  # Let the processor settle every capture: up to 20 minutes with Codex
+  # (about 3 s a run), 40 with Claude Code, whose runs take longer;
+  # LIFE_OS_BENCHMARK_SETTLE_SECONDS overrides both.
+  local settle=1200
+  [ "$provider" = claude ] && settle=2400
+  settle=${LIFE_OS_BENCHMARK_SETTLE_SECONDS:-$settle}
+  local deadline=$(($(date +%s) + settle)) pending
   while :; do
     pending=0
     for key in "${!ids[@]}"; do
@@ -364,7 +454,7 @@ run_profile() {
   done
 
   # Recipe ideas as "Get ideas" asks for them (through the Dashboard to the
-  # processor), once the captures are done and Codex is free; up to 6 minutes.
+  # processor), once the captures are done and the AI is free; up to 6 minutes.
   local ideas_job='{}'
   post_json /api/processor/ideas/requests '{}' >/dev/null || true
   for _ in $(seq 1 120); do
@@ -653,7 +743,7 @@ run_profile() {
   repeat=$(repeat_summary repeat_task)
   check repeat_task "$([ "$s" = resolved ] && [ "$(state "${ids[repeat_task_first]}")" = resolved ] && [[ "$repeat" == "Same as the capture from "*", already done" ]] && [ "$(jq 'length' <<<"$library")" = 1 ] && echo 1 || echo 0)" "state=$s first=$(state "${ids[repeat_task_first]}") repeat=\"$repeat\" tasks=$(jq -c 'map({title, dueAt})' <<<"$library") reason=\"$(item "${ids[repeat_task]}" | jq -r '.processingMetadata.humanReview.errorSummary // ""')\""
   # repeat_reworded: "Buy limes.", then "We need limes."; not the same text,
-  # so Codex plans the second, and its list add merges into the first's
+  # so the AI plans the second, and its list add merges into the first's
   # item: one needed limes item, the first's.
   s=$(state "${ids[repeat_reworded]}")
   local limes merged
@@ -699,7 +789,9 @@ run_profile() {
   s=$(state "${ids[recipe_bare_reel]}")
   check recipe_bare_reel "$([ "$s" = human_review ] && [ "$(from_reel DPbench03)" = 0 ] && echo 1 || echo 0)" "state=$s reason=\"$(item "${ids[recipe_bare_reel]}" | jq -r '.processingMetadata.humanReview.errorSummary // ""')\" recipes_from_reel=$(from_reel DPbench03)"
   # The dictated recipe: one recipe by the AI, to review, without a link,
-  # with its ingredients and steps as Codex built them.
+  # with its ingredients and steps as the AI built them. The processor's
+  # agent names (codex-inbox-processor, codex-recipe-ideas) are the same with
+  # either provider.
   local dictated
   dictated=$(jq -c '[.items[] | select((.normalizedTitle | test("chicken|куриц|h(ä|a)hnchen")) and (.tags | index("to-review")))]' <<<"$recipes")
   s=$(state "${ids[recipe_dictated]}")
@@ -756,10 +848,13 @@ run_profile() {
   all=$(api "$gateway/api/calendar/v1/events?from=2026-01-01T00:00:00Z&to=$(date -u -d '+60 days' +%Y-%m-%dT%H:%M:%SZ)&includeCancelled=true&limit=100")
   check no_extra_events "$([ "$(jq '.items | length' <<<"$all")" = 7 ] && [ "$(jq '[.items[] | select(.status != "active")] | length' <<<"$all")" = 0 ] && echo 1 || echo 0)" "events=$(jq -c '[.items[] | {title, status}]' <<<"$all") (expected 7 active)"
 
-  # Codex's own usage and the processing time of each planning run.
+  # The AI's own token usage, as the provider's CLI reports it (Codex's
+  # turn.completed, Claude Code's result event, mapped onto the same totals:
+  # input with cached input included), and the processing time of each
+  # planning run.
   local status runtime
   status=$("${compose[@]}" exec -T processor wget -q -O - http://127.0.0.1:8081/status)
-  runtime=$(jq -c '{model, reasoningEffort, runs: .runtime.tokens.runs, input: .runtime.tokens.input, cachedInput: .runtime.tokens.cachedInput, output: .runtime.tokens.output, reasoning: .runtime.tokens.reasoning, completed: .runtime.completed, failed: .runtime.failed}' <<<"$status")
+  runtime=$(jq -c --arg provider "$provider" '{provider: $provider, model, reasoningEffort, runs: .runtime.tokens.runs, input: .runtime.tokens.input, cachedInput: .runtime.tokens.cachedInput, output: .runtime.tokens.output, reasoning: .runtime.tokens.reasoning, completed: .runtime.completed, failed: .runtime.failed}' <<<"$status")
   local seconds=0 n=0
   for key in "${!ids[@]}"; do
     while read -r started completed; do
@@ -781,7 +876,7 @@ run_profile() {
   # summary, and the actions: tools, arguments, results), and what the
   # processor logged about them (such as a capture that waited for an
   # earlier one). A check without captures has its detail only.
-  local failures="$out/${profile//\//_}.failures.jsonl" scenario result detail key id captures
+  local failures="$out/$label.failures.jsonl" scenario result detail key id captures
   : >"$failures"
   "${compose[@]}" logs --no-color --no-log-prefix processor >"$work/processor.log" 2>/dev/null || true
   while IFS=$'\t' read -r scenario result detail; do
