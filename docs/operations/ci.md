@@ -18,13 +18,13 @@ The five jobs run in parallel. A later job can wait for them with `needs: [check
 
 | Job | What it runs | Time | Locally |
 | --- | --- | --- | --- |
-| `check-generated` | `tools/check --gateway --contracts --sqlc`: the gateway's host list, the OpenAPI lint, generated Go and TypeScript API drift, and sqlc drift | about 2 min | `tools/check --gateway --contracts --sqlc` |
-| `check-go` | `tools/check --go`: gofmt, `go vet`, `go test`, and the build of every module under `pkg/`, `services/`, and `templates/` (`GOWORK=off`) | about 5 min | `tools/check --go` |
-| `check-dashboard` | `tools/check --dashboard`: Prettier, ESLint, the unit tests, the typecheck, and `next build` | about 3 min | `tools/check --dashboard` |
-| `integration` | `tools/test-integration` against a PostgreSQL service container | about 4 min | [Integration tests](#integration-tests) |
-| `govulncheck` | `tools/check-vulnerabilities`: govulncheck on every Go module. **Not blocking yet.** | about 4 min | `tools/check-vulnerabilities` |
+| `check-generated` | `tools/check --gateway --contracts --sqlc`: the gateway's host list, the OpenAPI lint, generated Go and TypeScript API drift, and sqlc drift | about 1 min | `tools/check --gateway --contracts --sqlc` |
+| `check-go` | `tools/check --go`: gofmt, `go vet`, `go test`, and the build of every module under `pkg/`, `services/`, and `templates/` (`GOWORK=off`) | about 1 min | `tools/check --go` |
+| `check-dashboard` | `tools/check --dashboard`: Prettier, ESLint, the unit tests, the typecheck, and `next build` | about 1.5 min | `tools/check --dashboard` |
+| `integration` | `tools/test-integration` against a PostgreSQL service container | about 2 min | [Integration tests](#integration-tests) |
+| `govulncheck` | `tools/check-vulnerabilities`: govulncheck on every Go module. **Not blocking yet.** | about 2 min | `tools/check-vulnerabilities` |
 
-The times are with warm caches. A whole run takes about as long as its slowest job.
+The times are with warm caches; without them, each job takes up to a minute longer. A whole run takes about as long as its slowest job, about 2 minutes.
 
 `tools/check` without flags runs all of its parts, as before. Like `make check`, it needs a clean working tree. `check-generated` and `check-dashboard` run `npm ci --prefix apps/dashboard` first.
 
@@ -47,7 +47,7 @@ Each Go job caches the module and build caches under its own key (the Go version
 The integration tests (the `*_integration_test.go` files, the backup tests, and `pkg/database`'s) skip unless their variable names a PostgreSQL database. `tools/test-integration` prepares one server for all of them and runs them:
 
 - It takes a throwaway server's superuser URL in `INTEGRATION_TEST_DATABASE_URL`. It refuses a server that has a database from `infra/postgres/service-databases.conf`, so it never runs against Life OS's own server, and it refuses a login that is not a superuser.
-- Each variable a test reads gets a fresh, empty database of its own, dropped and created again on every run: `TASKS_TEST_DATABASE_URL` gets `it_tasks`, `BACKUP_TEST_DATABASE_URL` gets `it_backup`, and so on, plus `RESTORE_TEST_DATABASE_URL` for `tools/test-restore-database`. `DATABASE_TEST_URL` (`pkg/database`) gets `it_database` with its example migration.
+- Each variable a test reads gets a fresh, empty database of its own (services whose tests install pgcrypto do it once per database, each under its own advisory lock, so two services' tests never race on one database), dropped and created again on every run: `TASKS_TEST_DATABASE_URL` gets `it_tasks`, `BACKUP_TEST_DATABASE_URL` gets `it_backup`, and so on, plus `RESTORE_TEST_DATABASE_URL` for `tools/test-restore-database`. `DATABASE_TEST_URL` (`pkg/database`) gets `it_database` with its example migration.
 - The tests need nothing more. Each service's tests create a private schema per test, apply the service's migrations to it, and drop it afterwards. The backup and restore tests create their own roles and databases, which is why the login must be a superuser. Google Calendar's tests also build and start the real Calendar service on a schema of their own.
 - `psql`, `pg_dump`, and `pg_restore` run from the PostgreSQL image (the wrappers in `services/backup/internal/backup/testdata`), so they always match the server's version. That needs Docker. To use client programs on `PATH` instead, set `INTEGRATION_TEST_PG_BIN` to their directory.
 - It finds the modules by the variables they read. Then it runs `GOWORK=off go test -count=1 -v ./...` in each module with every variable set, and finally `tools/test-restore-database`.
@@ -85,7 +85,7 @@ Once they are fixed, remove `continue-on-error` from the job so that a new findi
 
 ## Dependabot
 
-`.github/dependabot.yml` asks for version updates every Monday at 06:00 (Europe/Berlin):
+`.github/dependabot.yml` asks for version updates every Monday at 06:00 (Europe/Berlin). Dependabot reads it from master, so it starts once the file is merged there:
 
 - **Go modules** in `pkg/`, every `services/*` and `templates/*` module, and `tools/fixtures/documents`.
 - **npm** in `apps/dashboard`.
