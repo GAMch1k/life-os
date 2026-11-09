@@ -182,6 +182,11 @@ func TestAMonthsOtherPlansDecideWhetherTheSalaryAsks(t *testing.T) {
 	c.claimPlan()
 	expect[generated.AiBudgetPlan](c, http.MethodPost, "/v1/ai-budget-plans/"+salary.Id.String()+"/failure", map[string]any{"error": "unusable answers"},
 		http.StatusOK, activity.ActorHeader, planActor)
+	// Both plans were asked for on the 28th, before November began, but the
+	// database stamps created_at with the real clock, not the test's.
+	if _, err := c.handler.pool.Exec(t.Context(), "UPDATE ai_budget_plans SET created_at = $1", c.handler.now()); err != nil {
+		t.Fatal(err)
+	}
 	c.at("2026-11-01", 6)
 	scheduled := c.requestPlan(map[string]any{"month": "2026-11", "trigger": "schedule"}, http.StatusAccepted, planActor)
 	if scheduled.Trigger != generated.AiBudgetPlanTriggerSchedule {

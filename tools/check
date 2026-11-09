@@ -2,8 +2,34 @@
 
 set -euo pipefail
 
+# The baseline source checks (SETUP.md, "Source checks"). With no flags, all
+# of them run; flags pick parts, so CI runs them in parallel jobs
+# (docs/operations/ci.md):
+#
+#   tools/check [--gateway] [--contracts] [--sqlc] [--go] [--dashboard]
+#
+#   --gateway    the gateway's host list (tools/check-gateway-hosts)
+#   --contracts  OpenAPI lint and generated Go and TypeScript API drift
+#   --sqlc       generated sqlc code drift
+#   --go         gofmt, vet, test, and build of every Go module
+#   --dashboard  npm --prefix apps/dashboard run check
+
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_root"
+
+declare -A run=()
+for arg in "$@"; do
+  case "$arg" in
+    --gateway | --contracts | --sqlc | --go | --dashboard) run[${arg#--}]=1 ;;
+    *)
+      printf 'check: unknown argument %s; usage: tools/check [--gateway] [--contracts] [--sqlc] [--go] [--dashboard]\n' "$arg" >&2
+      exit 2
+      ;;
+  esac
+done
+if [[ ${#run[@]} -eq 0 ]]; then
+  run=([gateway]=1 [contracts]=1 [sqlc]=1 [go]=1 [dashboard]=1)
+fi
 
 [[ -z "$(git status --porcelain)" ]] || {
   echo 'check: refusing to run with a dirty working tree' >&2
@@ -26,18 +52,24 @@ require_command() {
   }
 }
 
-require_command go
-require_command sqlc
-require_command npm
+[[ -z "${run[go]:-}" ]] || require_command go
+[[ -z "${run[sqlc]:-}" ]] || require_command sqlc
+[[ -z "${run[contracts]:-}${run[dashboard]:-}" ]] || require_command npm
 
-printf '==> Gateway host separation\n'
-"$repo_root/tools/check-gateway-hosts"
+if [[ -n "${run[gateway]:-}" ]]; then
+  printf '==> Gateway host separation\n'
+  "$repo_root/tools/check-gateway-hosts"
+fi
 
-printf '\n==> Contract checks\n'
-"$repo_root/tools/check-contracts"
+if [[ -n "${run[contracts]:-}" ]]; then
+  printf '\n==> Contract checks\n'
+  "$repo_root/tools/check-contracts"
+fi
 
 mapfile -t modules < <(find pkg templates services -name go.mod -type f -print 2>/dev/null | sort)
 mapfile -t sqlc_configs < <(find templates services -name sqlc.yaml -type f -print 2>/dev/null | sort)
+[[ -n "${run[sqlc]:-}" ]] || sqlc_configs=()
+[[ -n "${run[go]:-}" ]] || modules=()
 
 for config_path in "${sqlc_configs[@]}"; do
   module_dir=$(dirname "$config_path")
@@ -70,10 +102,16 @@ for module_path in "${modules[@]}"; do
   )
 done
 
-printf '\n==> Dashboard checks\n'
-npm --prefix apps/dashboard run check
+if [[ -n "${run[dashboard]:-}" ]]; then
+  printf '\n==> Dashboard checks\n'
+  npm --prefix apps/dashboard run check
+fi
 
-printf '\nAll baseline checks passed.\n'
+if [[ ${#run[@]} -eq 5 ]]; then
+  printf '\nAll baseline checks passed.\n'
+else
+  printf '\nBaseline checks passed: %s\n' "$(printf '%s\n' "${!run[@]}" | sort | tr '\n' ' ' | sed 's/ $//')"
+fi
 
 [[ -z "$(git status --porcelain)" ]] || {
   echo 'check: verification left the working tree dirty' >&2

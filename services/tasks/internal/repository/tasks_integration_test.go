@@ -2,53 +2,23 @@ package repository_test
 
 import (
 	"context"
-	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	store "github.com/GAMch1k/life-os/services/tasks/internal/repository/generated"
+	"github.com/GAMch1k/life-os/services/tasks/internal/testdb"
 )
 
-// testQueries runs the migrations in a throwaway schema of
-// TASKS_TEST_DATABASE_URL, or skips the test when it is not set.
+// testQueries runs the migrations up to 000003 in a throwaway schema of
+// TASKS_TEST_DATABASE_URL (testdb), or skips the test when it is not set.
+// testdb installs pgcrypto once, outside the schemas, as the other test
+// packages running in parallel on the same database expect.
 func testQueries(t *testing.T) (context.Context, *store.Queries) {
 	t.Helper()
-	url := os.Getenv("TASKS_TEST_DATABASE_URL")
-	if url == "" {
-		t.Skip("TASKS_TEST_DATABASE_URL is not set")
-	}
-	ctx := context.Background()
-	schema := fmt.Sprintf("tasks_test_%d", time.Now().UnixNano())
-	config, err := pgxpool.ParseConfig(url)
-	if err != nil {
-		t.Fatal(err)
-	}
-	config.ConnConfig.RuntimeParams["search_path"] = schema
-	pool, err := pgxpool.NewWithConfig(ctx, config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(pool.Close)
-	if _, err := pool.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DROP SCHEMA "+schema+" CASCADE") })
-	for _, name := range []string{"000002_tasks.up.sql", "000003_automation_idempotency.up.sql"} {
-		migration, err := os.ReadFile(filepath.Join("..", "..", "db", "migrations", name))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := pool.Exec(ctx, string(migration)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return ctx, store.New(pool)
+	return context.Background(), store.New(testdb.Open(t, "000003"))
 }
 
 func TestTaskPersistenceLifecycle(t *testing.T) {

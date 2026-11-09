@@ -1,0 +1,62 @@
+# Weekly version updates (docs/operations/ci.md#dependabot): minor and patch
+# updates arrive as one grouped pull request per ecosystem; a major update
+# gets a pull request of its own. CI checks each one.
+version: 2
+
+updates:
+  - package-ecosystem: gomod
+    directories:
+      - /pkg
+      - /services/*
+      - /templates/*
+      - /tools/fixtures/documents
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Berlin
+    open-pull-requests-limit: 5
+    groups:
+      go-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /apps/dashboard
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Berlin
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-and-patch:
+        update-types: [minor, patch]
+
+  # The Dockerfiles' base images. compose.yaml's images are not covered.
+  - package-ecosystem: docker
+    directories:
+      - /apps/dashboard
+      - /services/*
+      - /services/voice/whisper
+      - /templates/*
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Berlin
+    open-pull-requests-limit: 3
+    groups:
+      docker-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Berlin
+    open-pull-requests-limit: 3
+    groups:
+      github-actions:
+        patterns: ["*"]
