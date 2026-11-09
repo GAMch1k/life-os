@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -101,7 +102,18 @@ func readCgroup(dir string) (ContainerUsage, error) {
 	if reclaimable > memory {
 		reclaimable = memory
 	}
-	return ContainerUsage{MemoryBytes: memory - reclaimable, CPU: time.Duration(cpu["usage_usec"]) * time.Microsecond}, nil
+	return ContainerUsage{MemoryBytes: memory - reclaimable, CPU: cpuTime(cpu["usage_usec"])}, nil
+}
+
+// cpuTime is cpu.stat's usage_usec as a duration. A time.Duration counts
+// nanoseconds in an int64, which holds some 292 years; a larger count is
+// held at the most it can hold, not wrapped to a negative duration.
+func cpuTime(usec uint64) time.Duration {
+	const most = uint64(math.MaxInt64 / int64(time.Microsecond))
+	if usec > most {
+		return math.MaxInt64
+	}
+	return time.Duration(usec) * time.Microsecond
 }
 
 // readKeyed reads the given keys of a cgroup file of "key value" lines,
