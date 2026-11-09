@@ -24,6 +24,19 @@ flowchart TB
 
 Only the `gateway` container publishes an application port, defaulting to `127.0.0.1:3000`. Dashboard and services use Docker `expose`; PostgreSQL has no host port. A WireGuard deployment, such as the reference one, sets `LIFE_OS_GATEWAY_BIND_ADDRESS` to the server's WireGuard address (for example `10.8.0.1`): every WireGuard peer able to reach that address is trusted to use Dashboard and unauthenticated API/MCP routes. Peer membership is the authentication boundary; never expose this port on a LAN/public address or describe it as host-Nginx/Basic-Auth protected.
 
+### Other containers on the host
+
+With a non-loopback bind, Docker also forwards connections from every other container on the host to the gateway's published port, so on a server shared with other projects any of their containers could use Life OS without a login. [`infra/host/lifeos-gateway-firewall`](../../infra/host/lifeos-gateway-firewall) drops forwarded connections to `LIFE_OS_GATEWAY_BIND_ADDRESS:LIFE_OS_GATEWAY_PORT` unless they arrive on the WireGuard interface (`wg0`, or `LIFE_OS_WIREGUARD_INTERFACE`); its systemd unit applies it whenever Docker starts. Cloudflare's tunnel reaches the gateway inside Docker and the host's own connections are not forwarded, so neither changes. Install it once, as root, with the gateway's address and port from `.env`:
+
+```sh
+sudo install -m 755 infra/host/lifeos-gateway-firewall /usr/local/sbin/
+sudo install -m 644 infra/host/lifeos-gateway-firewall.service /etc/systemd/system/
+printf 'LIFE_OS_GATEWAY_BIND_ADDRESS=%s\nLIFE_OS_GATEWAY_PORT=%s\n' 10.8.0.1 3000 | sudo tee /etc/default/lifeos-gateway-firewall
+sudo systemctl daemon-reload && sudo systemctl enable --now lifeos-gateway-firewall
+```
+
+To check it, a throwaway container must now time out where it used to get the Dashboard: `docker run --rm curlimages/curl -m 8 http://10.8.0.1:3000/` (use your address and port). `sudo systemctl disable --now lifeos-gateway-firewall` takes the rule out again. Members of the host's `docker` group can still read everything (Docker access is root access); only a server of your own fixes that.
+
 The alternative supported model is loopback binding behind operator-managed host Nginx TLS/Basic Auth; see [`../host-nginx-example.conf`](../host-nginx-example.conf). Applying/reloading host Nginx is an operator task. Choose one boundary intentionally; moving between them requires changing ignored `.env`, recreating gateway, and (for loopback) applying host configuration.
 
 Docker networks:

@@ -1,0 +1,18 @@
+# Applies infra/host/lifeos-gateway-firewall whenever Docker starts
+# (docs/architecture/networking.md#other-containers-on-the-host). The gateway's
+# address and port come from /etc/default/lifeos-gateway-firewall.
+[Unit]
+Description=Life OS: only WireGuard may reach the gateway port
+After=docker.service
+Requires=docker.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=/etc/default/lifeos-gateway-firewall
+ExecStart=/usr/local/sbin/lifeos-gateway-firewall add
+ExecStop=/usr/local/sbin/lifeos-gateway-firewall remove
+
+[Install]
+WantedBy=docker.service
