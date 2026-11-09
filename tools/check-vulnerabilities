@@ -53,7 +53,10 @@ done
 if [[ ${#failed[@]} -gt 0 ]]; then
   printf '\n' >&2
   printf 'check-vulnerabilities: %s\n' "${failed[@]}" >&2
-  [[ "${GITHUB_ACTIONS:-}" != true ]] || printf '::error title=govulncheck::%s\n' "${failed[@]}"
+  if [[ "${GITHUB_ACTIONS:-}" == true ]]; then
+    printf '::error title=govulncheck::%d of %d Go modules have findings or could not be checked: %s\n' \
+      "${#failed[@]}" "${#modules[@]}" "$(printf '%s\n' "${failed[@]}" | sed 's/:.*//' | tr '\n' ' ' | sed 's/ $//')"
+  fi
   exit 1
 fi
 printf '\nNo known vulnerabilities in %d Go modules.\n' "${#modules[@]}"

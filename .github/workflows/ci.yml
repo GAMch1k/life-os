@@ -185,7 +185,12 @@ jobs:
         with:
           go-version-file: go.work
           cache: false
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # The call paths in govulncheck's report look like compiler errors to
+      # setup-go's problem matcher.
+      - run: echo "::remove-matcher owner=go::"
+      # Saved even when findings fail the job.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: cache
         with:
           path: |
             ~/go/pkg/mod
@@ -193,3 +198,10 @@ jobs:
           key: go-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ github.job }}-${{ hashFiles('**/go.sum') }}
           restore-keys: go-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ github.job }}-
       - run: tools/check-vulnerabilities
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: always() && steps.cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ steps.cache.outputs.cache-primary-key }}
