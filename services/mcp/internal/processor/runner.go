@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"sort"
@@ -233,6 +234,12 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 				// Shutting down: hand the capture back instead of leaving the
 				// attempt open.
 				return Proposal{}, r.schedule(ctx, item.ID, started.ID, nil, fmt.Sprintf("cancelled: %v", planErr), time.Now(), reasonCancelled)
+			}
+			if errors.Is(planErr, errImageNotSendable) {
+				// An image the AI cannot be given (too large and not one
+				// that can be made smaller): retrying cannot help, so the
+				// owner sees the capture in Human Review.
+				return Proposal{}, r.humanReview(ctx, item.ID, started.ID, plannedAction{Tool: "none", Arguments: map[string]any{}}, []map[string]any{}, planErr.Error())
 			}
 			return Proposal{}, r.retryLater(ctx, item.ID, started.ID, nil, fmt.Sprintf("planning failed: %v", planErr), failureCodex, previous)
 		}

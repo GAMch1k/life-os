@@ -2,6 +2,7 @@ package processor
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"time"
@@ -360,7 +361,9 @@ type monitoredPlanner struct {
 
 func (p monitoredPlanner) Plan(ctx context.Context, content string) (string, error) {
 	out, err := p.inner.Plan(ctx, content)
-	if ctx.Err() == nil {
+	// An image that cannot be sent stops the capture before any run: it
+	// says nothing about the runtime.
+	if ctx.Err() == nil && !errors.Is(err, errImageNotSendable) {
 		p.monitor.RecordPlan(err)
 	}
 	return out, err

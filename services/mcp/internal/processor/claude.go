@@ -163,6 +163,12 @@ func (claudeTimeout) Is(target error) bool { return target == ErrRunTimedOut }
 // run starts one Claude Code run with the runtime's controls and returns its
 // answer: the structured output when a schema was given, else the result text.
 func (c ClaudeCLI) run(ctx context.Context, spec claudeSpec) (string, error) {
+	// Images over Claude's limits are made smaller first; one that cannot be
+	// is errImageNotSendable, and no run starts.
+	images, err := fitClaudeImages(spec.images.Images)
+	if err != nil {
+		return "", err
+	}
 	release, err := acquireSlot(ctx, c.Slots)
 	if err != nil {
 		return "", err
@@ -176,7 +182,7 @@ func (c ClaudeCLI) run(ctx context.Context, spec claudeSpec) (string, error) {
 	defer cancel()
 	// This run's prompt and its TZ use the capture's own zone when known.
 	c.TimeZone = c.location(ctx)
-	input, err := claudeInput(spec.prompt(c.TimeZone), spec.images.Images)
+	input, err := claudeInput(spec.prompt(c.TimeZone), images)
 	if err != nil {
 		return "", fmt.Errorf("prepare Claude Code input: %w", err)
 	}
