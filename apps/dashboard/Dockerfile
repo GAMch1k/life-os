@@ -1,9 +1,9 @@
-FROM node:22-alpine AS dependencies
+FROM node:26-alpine AS dependencies
 WORKDIR /app
 COPY apps/dashboard/package.json apps/dashboard/package-lock.json ./
 RUN npm ci
 
-FROM node:22-alpine AS build
+FROM node:26-alpine AS build
 WORKDIR /app
 ARG NEXT_PUBLIC_FINANCE_SERVICE_URL=http://localhost:8081
 ARG NEXT_PUBLIC_TASKS_SERVICE_URL=http://localhost:8082
@@ -18,7 +18,7 @@ COPY --from=dependencies /app/node_modules ./node_modules
 COPY apps/dashboard ./
 RUN npm run build
 
-FROM node:22-alpine AS runtime
+FROM node:26-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
