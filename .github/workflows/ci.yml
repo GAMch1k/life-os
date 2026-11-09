@@ -329,13 +329,16 @@ jobs:
         env:
           LIFE_OS_VERIFY_LOGS_DIR: ${{ runner.temp }}/compose-logs/smoke-voice-lease-recovery
         run: tools/smoke-voice-lease-recovery
-      # Without the tests that need the real Codex (@codex).
+      # Without the tests that need the real Codex (@codex), and one test at
+      # a time: with two on the runner's 4 CPUs, the Status page's 2.5 s
+      # probes of the services timed out while the other test rendered every
+      # page (docs/operations/ci.md).
       - name: Browser suite (tools/browser-e2e)
         if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.playwright.outcome == 'success' }}
         timeout-minutes: 45
         env:
           LIFE_OS_VERIFY_LOGS_DIR: ${{ runner.temp }}/compose-logs/browser-e2e
-        run: tools/browser-e2e --grep-invert @codex --reporter=list,html
+        run: tools/browser-e2e --grep-invert @codex --workers=1 --reporter=list,html
 
       # Before the upload, so that the logs of a stack a failed smoke left up
       # are kept too.
