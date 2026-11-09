@@ -1,0 +1,195 @@
+# The source checks, the integration tests, and govulncheck on every push and
+# pull request. See docs/operations/ci.md: what runs, and how to run each job
+# locally. Later workflows and jobs can wait for these with
+# needs: [check-generated, check-go, check-dashboard, integration].
+name: CI
+
+on:
+  push:
+    # Dependabot's branches run once, as their pull request.
+    branches: ["**", "!dependabot/**"]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to a branch or pull request cancels its older run; every push
+# to master runs to the end.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/master' && github.run_id || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The versions the repository uses: sqlc and oapi-codegen as in the
+  # generated code's headers, Node as the Dashboard's image (node:22-alpine).
+  # Go comes from go.work.
+  SQLC_VERSION: 1.31.1
+  SQLC_SHA256: 497ae4fcdfa64c5b0c311ffe4c2bd991e43991e82e5367792ed78bc2dca27354
+  OAPI_CODEGEN_VERSION: v2.8.0
+  NODE_VERSION: "22"
+  NEXT_TELEMETRY_DISABLED: "1"
+  REDOCLY_TELEMETRY: "off"
+  REDOCLY_SUPPRESS_UPDATE_NOTICE: "true"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  check-generated:
+    name: Gateway hosts, contracts, sqlc
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        id: go
+        with:
+          go-version-file: go.work
+          cache: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ github.job }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: go-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ github.job }}-
+      - name: Install sqlc and oapi-codegen
+        run: |
+          archive="$RUNNER_TEMP/sqlc.tar.gz"
+          curl -fsSL -o "$archive" "https://github.com/sqlc-dev/sqlc/releases/download/v${SQLC_VERSION}/sqlc_${SQLC_VERSION}_linux_amd64.tar.gz"
+          echo "${SQLC_SHA256}  ${archive}" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/bin"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/bin" sqlc
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          GOBIN="$RUNNER_TEMP/bin" go install "github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@${OAPI_CODEGEN_VERSION}"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: apps/dashboard/package-lock.json
+      - run: npm ci --prefix apps/dashboard --no-audit --no-fund
+      - run: tools/check --gateway --contracts --sqlc
+
+  check-go:
+    name: Go modules (gofmt, vet, test, build)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        id: go
+        with:
+          go-version-file: go.work
+          cache: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ github.job }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: go-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ github.job }}-
+      - run: tools/check --go
+
+  check-dashboard:
+    name: Dashboard (format, lint, test, typecheck, build)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: apps/dashboard/package-lock.json
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: apps/dashboard/.next/cache
+          key: nextjs-${{ runner.os }}-${{ hashFiles('apps/dashboard/package-lock.json') }}-${{ hashFiles('apps/dashboard/src/**', 'apps/dashboard/public/**', 'apps/dashboard/*.ts', 'apps/dashboard/*.mjs', 'apps/dashboard/*.json') }}
+          restore-keys: nextjs-${{ runner.os }}-${{ hashFiles('apps/dashboard/package-lock.json') }}-
+      - run: npm ci --prefix apps/dashboard --no-audit --no-fund
+      - run: tools/check --dashboard
+
+  integration:
+    name: Integration tests (PostgreSQL)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        # The image compose.yaml deploys; the first step checks they match.
+        image: postgres:18.6-alpine
+        env:
+          # A throwaway server that lives as long as the job: not a secret.
+          POSTGRES_PASSWORD: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      INTEGRATION_TEST_DATABASE_URL: postgres://postgres:test@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check the PostgreSQL image is the one compose.yaml deploys
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          deployed=$(sed -n 's/^ *image: \${LIFE_OS_POSTGRES_IMAGE:-\(.*\)}$/\1/p' compose.yaml)
+          used=$(docker inspect --format '{{.Config.Image}}' "$POSTGRES_CONTAINER")
+          if [[ -z "$deployed" || "$deployed" != "$used" ]]; then
+            echo "::error file=.github/workflows/ci.yml::The integration job runs ${used}, but compose.yaml deploys ${deployed:-an image this step cannot read}: change services.postgres.image in ci.yml to match."
+            exit 1
+          fi
+          # The backup tests run pg_dump and pg_restore from the same image.
+          echo "BACKUP_TEST_PG_IMAGE=$used" >> "$GITHUB_ENV"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        id: go
+        with:
+          go-version-file: go.work
+          cache: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ github.job }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: go-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ github.job }}-
+      - run: tools/test-integration
+
+  govulncheck:
+    name: govulncheck (every Go module)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # Not blocking yet: today's Go version and dependencies have known
+    # vulnerabilities (docs/operations/ci.md). Make it blocking once they are
+    # fixed.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        id: go
+        with:
+          go-version-file: go.work
+          cache: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ github.job }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: go-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ github.job }}-
+      - run: tools/check-vulnerabilities
