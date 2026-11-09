@@ -292,6 +292,12 @@ server {
     }
     return 404;
   }
+  # The Dashboard shows images with plain <img> elements, never next/image, so
+  # Next.js's Image Optimization API is unused. Next.js serves it even with
+  # images.unoptimized, so it is closed here instead: no request reaches it.
+  location ^~ /_next/image {
+    return 404;
+  }
   # The Dashboard's locations pass the request URI as the client sent it,
   # as before: their proxy_pass has no URI.
   location / {
