@@ -567,6 +567,10 @@ services:
     user: "${LIFE_OS_CODEX_RUNTIME_UID:?Set LIFE_OS_CODEX_RUNTIME_UID in .env to the UID which owns the local Codex session}"
     # Room to stop a Codex run gracefully and record the attempt's outcome.
     stop_grace_period: 30s
+    # A hard memory cap, so a runaway AI CLI run or image decode stops this
+    # container instead of the whole host (7.7 GiB, no swap, shared). An idle
+    # processor uses about 50 MiB; a run adds the CLI's own few hundred.
+    mem_limit: ${LIFE_OS_PROCESSOR_MEMORY:-1536m}
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
