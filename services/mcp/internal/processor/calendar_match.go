@@ -288,7 +288,7 @@ func recurringUpdate(res resolution) bool {
 // chosen candidate's id (the series id), and the approval cancels that
 // occurrence alone. A map the plan brought is replaced.
 func withOccurrences(action plannedAction, found []map[string]any) plannedAction {
-	arguments := make(map[string]any, len(action.Arguments)+1)
+	arguments := make(map[string]any, len(action.Arguments))
 	for field, value := range action.Arguments {
 		arguments[field] = value
 	}
