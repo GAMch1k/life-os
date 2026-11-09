@@ -81,9 +81,13 @@ func fitClaudeImages(images []Image) ([]Image, error) {
 func fitClaudeImage(img Image) (Image, error) {
 	config, format, configErr := image.DecodeConfig(bytes.NewReader(img.Data))
 	width, height, sized := config.Width, config.Height, configErr == nil
+	if !sized {
+		// WebP, which Go does not decode, still says its size.
+		width, height, sized = webpSize(img.Data)
+	}
 	if len(img.Data) <= claudeMaxImageBytes && (!sized || (width <= claudeMaxImageSide && height <= claudeMaxImageSide)) {
 		// Within the limits, or small enough and in a format only Claude
-		// reads (WebP): sent as it is.
+		// reads whose size is not known here: sent as it is.
 		return img, nil
 	}
 	size := fmt.Sprintf("%s, %.1f MB", img.ContentType, float64(len(img.Data))/(1<<20))
@@ -186,6 +190,41 @@ func jpegProgressive(data []byte) bool {
 		i += 2 + length
 	}
 	return false
+}
+
+// webpSize reads a WebP's width and height from its first chunk: VP8 (lossy),
+// VP8L (lossless) or VP8X (extended, the canvas). ok is false when the header
+// is not one of them or is cut short.
+func webpSize(data []byte) (width, height int, ok bool) {
+	if len(data) < 21 || string(data[0:4]) != "RIFF" || string(data[8:12]) != "WEBP" {
+		return 0, 0, false
+	}
+	payload := data[20:]
+	switch string(data[12:16]) {
+	case "VP8 ":
+		// A 3-byte frame tag, the start code, then 14 bits each of width
+		// and height (the top 2 bits are the scale).
+		if len(payload) < 10 || payload[3] != 0x9d || payload[4] != 0x01 || payload[5] != 0x2a {
+			return 0, 0, false
+		}
+		return int(binary.LittleEndian.Uint16(payload[6:]) & 0x3fff), int(binary.LittleEndian.Uint16(payload[8:]) & 0x3fff), true
+	case "VP8L":
+		// The signature, then 14 bits each of width - 1 and height - 1.
+		if len(payload) < 5 || payload[0] != 0x2f {
+			return 0, 0, false
+		}
+		bits := binary.LittleEndian.Uint32(payload[1:])
+		return int(bits&0x3fff) + 1, int(bits>>14&0x3fff) + 1, true
+	case "VP8X":
+		// Flags and 3 reserved bytes, then 24 bits each of the canvas
+		// width - 1 and height - 1.
+		if len(payload) < 10 {
+			return 0, 0, false
+		}
+		le24 := func(b []byte) int { return int(b[0]) | int(b[1])<<8 | int(b[2])<<16 }
+		return le24(payload[4:]) + 1, le24(payload[7:]) + 1, true
+	}
+	return 0, 0, false
 }
 
 // scaledSize fits width×height within longEdge on its long edge, keeping the

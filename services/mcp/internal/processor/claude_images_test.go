@@ -499,3 +499,77 @@ func TestScalingDownDoesNotAllocatePerPixel(t *testing.T) {
 		t.Fatalf("through At: %.0f allocations", allocs)
 	}
 }
+
+// webpFile is a RIFF WebP holding one chunk.
+func webpFile(chunk string, payload []byte) []byte {
+	out := []byte("RIFF")
+	out = binary.LittleEndian.AppendUint32(out, uint32(4+8+len(payload)))
+	out = append(append(out, "WEBP"+chunk...), 0, 0, 0, 0)
+	binary.LittleEndian.PutUint32(out[16:], uint32(len(payload)))
+	return append(out, payload...)
+}
+
+func vp8WebP(width, height uint16) []byte {
+	payload := []byte{0x10, 0x02, 0x00, 0x9d, 0x01, 0x2a}
+	payload = binary.LittleEndian.AppendUint16(payload, width)
+	payload = binary.LittleEndian.AppendUint16(payload, height)
+	return webpFile("VP8 ", append(payload, 0, 0, 0, 0))
+}
+
+func vp8lWebP(width, height uint32) []byte {
+	bits := (width - 1) | (height-1)<<14 | 1<<28
+	return webpFile("VP8L", binary.LittleEndian.AppendUint32([]byte{0x2f}, bits))
+}
+
+func vp8xWebP(width, height uint32) []byte {
+	payload := []byte{0x10, 0, 0, 0}
+	payload = append(payload, byte(width-1), byte((width-1)>>8), byte((width-1)>>16))
+	payload = append(payload, byte(height-1), byte((height-1)>>8), byte((height-1)>>16))
+	return webpFile("VP8X", payload)
+}
+
+func TestWebPSizeIsReadFromItsHeader(t *testing.T) {
+	cases := []struct {
+		name          string
+		data          []byte
+		width, height int
+	}{
+		{"VP8", vp8WebP(9000, 120), 9000, 120},
+		// The top two bits of each are the upscaling hint, not the size.
+		{"VP8 with scale bits", vp8WebP(0xc000|4000, 0x4000|3000), 4000, 3000},
+		{"VP8L", vp8lWebP(16384, 3), 16384, 3},
+		{"VP8X", vp8xWebP(20000, 500), 20000, 500},
+	}
+	for _, c := range cases {
+		width, height, ok := webpSize(c.data)
+		if !ok || width != c.width || height != c.height {
+			t.Errorf("%s: %d×%d (%v), want %d×%d", c.name, width, height, ok, c.width, c.height)
+		}
+	}
+	for _, data := range [][]byte{
+		[]byte("RIFF....WEBPVP8 small"),
+		webpFile("VP8 ", []byte{0x10, 0x02, 0x00, 0x00, 0x00, 0x00, 1, 2, 3, 4}), // no start code
+		webpFile("VP8L", []byte{0x00, 1, 2, 3, 4}),                               // no signature
+		webpFile("ALPH", bytes.Repeat([]byte{1}, 10)),
+		vp8xWebP(20000, 500)[:28],
+	} {
+		if _, _, ok := webpSize(data); ok {
+			t.Errorf("%q has a size", data)
+		}
+	}
+}
+
+func TestWebPOverClaudesSideLimitCannotBeSent(t *testing.T) {
+	for _, data := range [][]byte{vp8WebP(9000, 120), vp8lWebP(200, 8001), vp8xWebP(20000, 500)} {
+		_, err := fitClaudeImages([]Image{{ContentType: "image/webp", Data: data}})
+		if !errors.Is(err, errImageNotSendable) || !strings.Contains(err.Error(), "cannot be decoded here") {
+			t.Fatalf("err = %v", err)
+		}
+	}
+	// Within the side limit, a small WebP is sent as it is.
+	within := vp8xWebP(8000, 8000)
+	fitted, err := fitClaudeImages([]Image{{ContentType: "image/webp", Data: within}})
+	if err != nil || !bytes.Equal(fitted[0].Data, within) {
+		t.Fatalf("fitted = %v, err = %v", fitted, err)
+	}
+}
