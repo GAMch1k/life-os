@@ -12,6 +12,15 @@ const (
 	ProviderClaude = "claude"
 )
 
+// ProviderName is the provider's name as the owner reads it: on the Status
+// page and in what the processor reports.
+func ProviderName(provider string) string {
+	if provider == ProviderClaude {
+		return "Claude Code"
+	}
+	return "Codex"
+}
+
 // Provider is the agent runtime behind every AI job of the processor:
 // capture planning, recipe ideas, transaction categories, and budget plans,
 // plus the sign-in check and the account usage shown on /status and used to

@@ -323,9 +323,7 @@ test.describe("Phase 8 acceptance", () => {
       has: page.getByRole("heading", { name: "Same task in other workflows" }),
     });
     await expect(related.getByText(/by You/)).toBeVisible();
-    await expect(
-      related.getByText(/by Inbox processor \(Codex\)/),
-    ).toBeVisible();
+    await expect(related.getByText(/by Inbox processor \(AI\)/)).toBeVisible();
   });
 
   test("8. a provider usage limit schedules a durable retry shown on Status", async ({

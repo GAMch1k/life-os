@@ -372,7 +372,7 @@ test("an empty list explains itself for the active filters", () => {
 test("processor work reads as the Inbox processor", () => {
   assert.equal(
     actorLabel({ kind: "agent", name: "codex-inbox-processor" }),
-    "Inbox processor (Codex)",
+    "Inbox processor (AI)",
   );
   assert.equal(actorLabel({ kind: "agent", name: "mcp" }), "Agent via MCP");
   assert.equal(actorLabel({ kind: "user" }), "You");

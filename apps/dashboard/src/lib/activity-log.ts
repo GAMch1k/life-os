@@ -414,10 +414,12 @@ export function sourceDescription(source: string | undefined) {
   return SOURCES.find((entry) => entry.value === source)?.description;
 }
 
+// The AI agents keep their codex- names whichever runtime (Codex or Claude
+// Code) runs them, so their labels do not name one.
 const ACTOR_NAMES: Record<string, string> = {
-  "codex-inbox-processor": "Inbox processor (Codex)",
-  "codex-finance-categories": "AI categories (Codex)",
-  "codex-budget-plan": "AI budget plan (Codex)",
+  "codex-inbox-processor": "Inbox processor (AI)",
+  "codex-finance-categories": "AI categories",
+  "codex-budget-plan": "AI budget plan",
   banking: "Bank sync",
   "google-calendar": "Google Calendar sync",
   mcp: "Agent via MCP",

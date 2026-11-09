@@ -31,7 +31,7 @@ test("the AI's categories read with how many it gave and left", () => {
   assert.equal(subjectLabel("finance_ai_categories"), "AI categories");
   assert.equal(
     actorLabel({ kind: "agent", name: "codex-finance-categories" }),
-    "AI categories (Codex)",
+    "AI categories",
   );
 });
 
@@ -67,6 +67,6 @@ test("an AI budget plan reads with the month it plans", () => {
   assert.equal(subjectLabel("finance_ai_budget_plan"), "AI budget plan");
   assert.equal(
     actorLabel({ kind: "agent", name: "codex-budget-plan" }),
-    "AI budget plan (Codex)",
+    "AI budget plan",
   );
 });

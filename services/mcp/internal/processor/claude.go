@@ -526,16 +526,18 @@ func (l *ClaudeLimits) setAuth(method string) {
 	l.authMethod = method
 }
 
-// claudeWindows names the subscription's limit windows and their lengths.
+// claudeWindows names the subscription's limit windows and their lengths. The
+// Status page shows a window as "<name> <length> usage", for example
+// "Claude session 5-hour usage" or "Claude weekly usage".
 var claudeWindows = map[string]struct {
 	name    string
 	minutes int
 }{
-	"five_hour":                  {"Claude session (5-hour) limit", 300},
-	"seven_day":                  {"Claude weekly limit", 10080},
-	"seven_day_opus":             {"Claude weekly Opus limit", 10080},
-	"seven_day_sonnet":           {"Claude weekly Sonnet limit", 10080},
-	"seven_day_overage_included": {"Claude weekly included limit", 10080},
+	"five_hour":                  {"Claude session", 300},
+	"seven_day":                  {"Claude", 10080},
+	"seven_day_opus":             {"Claude Opus", 10080},
+	"seven_day_sonnet":           {"Claude Sonnet", 10080},
+	"seven_day_overage_included": {"Claude included", 10080},
 }
 
 // usage turns the latest information into the processor's Usage: one limit

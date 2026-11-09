@@ -70,6 +70,7 @@ func main() {
 		monitor.ConfigureRuntime(runner.Owner, binary, cfg.CodexTimeout, cfg.MaxConcurrency)
 		runner.OnRuntime = monitor.RecordRuntime
 		runner.OnTokens = monitor.RecordTokens
+		monitor.SetProvider(cfg.Provider)
 		monitor.SetReasoningEffort(cfg.ReasoningEffort)
 		monitor.SetTimeZone(cfg.TimeZone.String())
 		runner.Planner = monitor.Monitored(planner)

@@ -329,6 +329,8 @@ The processor's private health port (`8081`, not exposed through the gateway) se
 
 ```json
 {
+  "provider": "codex",
+  "providerName": "Codex",
   "model": "gpt-5.6-luna",
   "timeZone": "Europe/Berlin",
   "startedAt": "…",
@@ -345,7 +347,8 @@ The processor's private health port (`8081`, not exposed through the gateway) se
 }
 ```
 
-- `authenticated` comes from `codex login status`, checked at startup and every five minutes. It reads local credentials only and uses no model quota.
+- `provider` is `LIFE_OS_AI_PROVIDER` (`codex` or `claude`) and `providerName` its name as the owner reads it (`Codex` or `Claude Code`). The Status page names the AI runtime by `providerName` (a processor without it runs Codex). The `codex` object is the active runtime's state, whichever it is: its name is kept so the shape does not change.
+- `authenticated` comes from `codex login status` (with Claude Code, `claude auth status`), checked at startup and every five minutes. It reads local credentials only and uses no model quota.
 - `state` is derived as follows:
   - `unauthenticated` when the login check fails;
   - otherwise, after a failed planning run, the failure is classified: `usage_limited` (usage or rate limit), `unauthenticated` (401 or not logged in), or `failing` (anything else);

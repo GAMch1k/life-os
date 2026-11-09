@@ -158,3 +158,21 @@ func TestConfigProfileAndEffortValidation(t *testing.T) {
 		t.Fatal("an invalid effort was accepted")
 	}
 }
+
+func TestStatusNamesTheActiveProvider(t *testing.T) {
+	for provider, name := range map[string]string{ProviderCodex: "Codex", ProviderClaude: "Claude Code"} {
+		m := NewMonitor("model")
+		m.SetProvider(provider)
+		raw, err := json.Marshal(m.Snapshot())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var status struct {
+			Provider     string `json:"provider"`
+			ProviderName string `json:"providerName"`
+		}
+		if err := json.Unmarshal(raw, &status); err != nil || status.Provider != provider || status.ProviderName != name {
+			t.Fatalf("status = %s", raw)
+		}
+	}
+}

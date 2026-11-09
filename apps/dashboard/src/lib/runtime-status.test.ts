@@ -105,6 +105,121 @@ test("a Codex usage limit is a warning that keeps Codex's own reset text", () =>
   );
 });
 
+test("with Claude Code, Status names Claude Code, not Codex", () => {
+  const claude = (
+    codex: Partial<ProcessorStatus["codex"]> = {},
+  ): ProcessorStatus => ({
+    ...processor(codex),
+    provider: "claude",
+    providerName: "Claude Code",
+    model: "sonnet",
+    runtime: {
+      timeoutSeconds: 300,
+      current: null,
+      completed: 1,
+      failed: 0,
+      timedOut: 0,
+      cancelled: 0,
+      recovered: 0,
+    },
+    usage: {
+      current: {
+        checkedAt: "2026-10-09T17:59:00Z",
+        authMode: "oauth_token",
+        limits: [
+          {
+            id: "five_hour",
+            name: "Claude session",
+            windows: [
+              {
+                usedPercent: 100,
+                windowMinutes: 300,
+                resetsAt: "2026-10-09T20:00:00Z",
+              },
+            ],
+            reached: "rate_limit_reached",
+          },
+          {
+            id: "seven_day",
+            name: "Claude",
+            windows: [{ usedPercent: 63, windowMinutes: 10080 }],
+          },
+        ],
+      },
+    },
+  });
+  const text = (value: object) => JSON.stringify(value);
+  const ready = check({ ...healthy, processor: claude() }, "processing");
+  const value = (label: string) =>
+    ready.facts.find((fact) => fact.label === label)?.value;
+  assert.equal(value("Claude Code sign-in"), "signed in");
+  assert.ok(value("Last Claude Code success"));
+  assert.equal(value("Claude Code run now"), "none");
+  assert.equal(value("Claude Code plan"), "Claude subscription token");
+  assert.match(value("Claude session 5-hour usage")!, /^100% used, resets/);
+  assert.equal(value("Claude weekly usage"), "63% used");
+
+  const signedOut = check(
+    {
+      ...healthy,
+      processor: claude({ state: "unauthenticated", authenticated: false }),
+    },
+    "processing",
+  );
+  assert.equal(signedOut.summary, "Claude Code is not signed in.");
+  assert.match(signedOut.action!, /claude setup-token/);
+  assert.doesNotMatch(signedOut.action!, /codex/i);
+
+  const limited = toRuntimeStatus(
+    {
+      ...healthy,
+      processor: claude({ state: "usage_limited", consecutiveFailures: 1 }),
+      inbox: inbox({
+        pendingCount: 1,
+        retryingCount: 1,
+        nextRetryAt: "2026-10-09T20:00:30Z",
+        nextRetryReason: "usage_limited",
+      }),
+    },
+    now,
+  );
+  const limitedProcessing = limited.checks.find(
+    (entry) => entry.id === "processing",
+  )!;
+  assert.equal(
+    limitedProcessing.summary,
+    "Claude Code has reached its usage limit.",
+  );
+  assert.match(limitedProcessing.action!, /Claude Code reports 9 Oct 2026/);
+  assert.match(limitedProcessing.action!, /LIFE_OS_CLAUDE_MODEL/);
+  assert.match(
+    text(limited.checks.find((entry) => entry.id === "inbox")!),
+    /after the Claude Code usage limit resets/,
+  );
+
+  for (const state of ["failing", "unknown"] as const) {
+    assert.match(
+      check({ ...healthy, processor: claude({ state }) }, "processing").summary,
+      state === "failing"
+        ? /^Claude Code runs are failing/
+        : /Claude Code has not run/,
+    );
+  }
+  // Nothing the owner reads names Codex.
+  for (const state of [
+    "ready",
+    "usage_limited",
+    "unauthenticated",
+    "failing",
+    "unknown",
+  ] as const) {
+    assert.doesNotMatch(
+      text(toRuntimeStatus({ ...healthy, processor: claude({ state }) }, now)),
+      /codex/i,
+    );
+  }
+});
+
 test("sign-out, a stopped processor, and an MCP outage are problems", () => {
   assert.equal(
     check(

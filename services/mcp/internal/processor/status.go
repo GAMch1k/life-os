@@ -21,7 +21,12 @@ const (
 // operational state like /ready, not domain data: it lives in memory and
 // resets on restart.
 type Status struct {
-	Model string `json:"model"`
+	// Provider is the AI runtime (LIFE_OS_AI_PROVIDER: codex or claude) and
+	// ProviderName its name as the owner reads it ("Codex", "Claude Code").
+	// The codex object below is that runtime's state, whichever it is.
+	Provider     string `json:"provider,omitempty"`
+	ProviderName string `json:"providerName,omitempty"`
+	Model        string `json:"model"`
 	// ReasoningEffort is the configured model_reasoning_effort ("" = Codex
 	// default).
 	ReasoningEffort string `json:"reasoningEffort,omitempty"`
@@ -199,6 +204,14 @@ func (m *Monitor) RecordRuntime(event RuntimeEvent) {
 	}
 	// The planning run is over; the attempt's actions are quick.
 	runtime.Current = nil
+}
+
+// SetProvider records which AI runtime the processor runs (ProviderCodex or
+// ProviderClaude).
+func (m *Monitor) SetProvider(provider string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.status.Provider, m.status.ProviderName = provider, ProviderName(provider)
 }
 
 // SetReasoningEffort records the configured reasoning effort.
