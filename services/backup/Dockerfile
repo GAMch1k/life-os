@@ -5,7 +5,7 @@ ARG POSTGRES_IMAGE=postgres:18.6-alpine
 
 # Build from the repository root so the service can use the local shared
 # infrastructure module.
-FROM golang:1.27.1-alpine AS build
+FROM golang:1.27.3-alpine AS build
 
 WORKDIR /src
 COPY . .

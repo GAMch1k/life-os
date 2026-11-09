@@ -3,7 +3,7 @@ RUN apk add --no-cache build-base cmake git
 RUN git clone --depth 1 https://github.com/ggml-org/whisper.cpp.git /src/whisper.cpp
 RUN cmake -S /src/whisper.cpp -B /src/whisper.cpp/build -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON -DBUILD_SHARED_LIBS=OFF -DGGML_OPENMP=OFF && cmake --build /src/whisper.cpp/build --target whisper-cli -j2
 
-FROM python:3.13-alpine
+FROM python:3.15-alpine
 # ffmpeg converts every accepted recording (WebM/Opus, Ogg/Opus, MP4/AAC,
 # WAV) to the 16 kHz mono PCM WAV whisper.cpp reads.
 RUN apk add --no-cache libstdc++ wget ffmpeg && mkdir /models && chown 65534:65534 /models
