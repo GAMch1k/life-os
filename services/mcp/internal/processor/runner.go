@@ -434,7 +434,7 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 			// The equivalent action, when only the other domain matched.
 			action, target = res.action, res.found[0]
 		}
-		arguments := make(map[string]any, len(action.Arguments)+1)
+		arguments := make(map[string]any, len(action.Arguments))
 		for field, value := range action.Arguments {
 			arguments[field] = value
 		}
