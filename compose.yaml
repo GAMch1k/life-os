@@ -505,7 +505,13 @@ services:
     restart: unless-stopped
 
   processor:
-    build: {context: ., dockerfile: services/mcp/Dockerfile, target: processor}
+    build:
+      context: .
+      dockerfile: services/mcp/Dockerfile
+      target: processor
+      # The AI CLIs the image installs (codex, claude, or both); it must
+      # include LIFE_OS_AI_PROVIDER. codex alone keeps the image smaller.
+      args: {LIFE_OS_AI_PROVIDERS: "${LIFE_OS_AI_PROVIDERS:-codex,claude}"}
     environment:
       MCP_SERVICE_URL: http://mcp:8080/mcp
       # A capture's images are read from Inbox (GET /v1/media/{sha256}) and
