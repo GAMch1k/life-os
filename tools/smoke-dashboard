@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+# shellcheck source=tools/lib/settings.bash
+. tools/lib/settings.bash
 
 # Writes are attributed to this script as a development tool, never to the
 # owner (CONTRIBUTING.md, "Development tools and live data").
@@ -29,8 +32,12 @@ wait_dashboard() {
   return 1
 }
 
-today=$(date -u +%F)
-due_at="${today}T12:00:00Z"
+# Today and tomorrow as Home counts them: in the stack's LIFE_OS_TIMEZONE,
+# whose day can differ from UTC's (in Berlin, from 23:00 or 22:00 UTC on).
+zone=$(setting LIFE_OS_TIMEZONE)
+zone=${zone:-UTC}
+today=$(TZ=$zone date +%F)
+due_at=$(date -u -d "@$(TZ=$zone date -d "$today 12:00" +%s)" +%FT%TZ)
 curl "${actor[@]}" --fail --silent --show-error -H 'content-type: application/json' \
   -d "{\"title\":\"Dashboard smoke task\",\"dueAt\":\"${due_at}\"}" \
   "$tasks/v1/tasks" >/dev/null
@@ -39,7 +46,7 @@ curl "${actor[@]}" --fail --silent --show-error -H 'content-type: application/js
   "$inbox/v1/inbox-items" >/dev/null
 # Tomorrow: Home shows the next event that hasn't started, and an all-day
 # event of today has.
-tomorrow=$(date -u -d tomorrow +%F)
+tomorrow=$(TZ=$zone date -d "$today 12:00 +1 day" +%F)
 curl "${actor[@]}" --fail --silent --show-error -H 'content-type: application/json' \
   -d "{\"title\":\"Dashboard smoke event\",\"allDay\":true,\"startDate\":\"${tomorrow}\",\"endDate\":\"${tomorrow}\"}" \
   "$calendar/v1/events" >/dev/null
