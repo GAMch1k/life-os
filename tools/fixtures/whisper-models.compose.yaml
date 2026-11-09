@@ -1,0 +1,15 @@
+# Overlay for the verification stack only
+# (LIFE_OS_VERIFY_OVERLAYS=tools/fixtures/whisper-models.compose.yaml): its
+# Whisper reads the model from a host directory, read-only, instead of
+# downloading it (about 466 MB) into a fresh volume on every start. The
+# directory, LIFE_OS_WHISPER_MODELS_DIR, must hold the file
+# LIFE_OS_WHISPER_MODEL_PATH names (ggml-small.bin by default), readable by
+# everyone: Whisper runs as nobody. CI's full-stack job keeps the model in its
+# cache (docs/operations/ci.md).
+services:
+  whisper:
+    volumes: !override
+      - type: bind
+        source: ${LIFE_OS_WHISPER_MODELS_DIR:?set to a directory that holds the Whisper model}
+        target: /models
+        read_only: true

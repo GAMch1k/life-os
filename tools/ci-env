@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Writes a throwaway .env for a machine that only tests Life OS, such as CI's
+# full-stack job (docs/operations/ci.md): .env.example, with
+#  - a new random password for every database login,
+#  - the owner's timezone (Europe/Berlin, as the browser tests expect),
+#  - every integration unset: Google, Enable Banking, ntfy, Cloudflare, web
+#    push, and the ZAW feed (tools/verify-compose refuses them anyway),
+#  - a Codex home that is an empty directory: no sign-in, so the processor
+#    stops at start and no AI runs,
+#  - the backup directory under <scratch-dir>, and the current user as the
+#    owner of the backup, Codex, and bank key paths.
+#
+#   tools/ci-env <scratch-dir>
+#
+# It refuses to replace an existing .env, so it never touches a deployment's.
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+(($# == 1)) || { echo 'usage: tools/ci-env <scratch-dir>' >&2; exit 2; }
+if [[ -e .env ]]; then
+  echo 'ci-env: .env exists; refusing to replace it (this is for a machine that only tests Life OS)' >&2
+  exit 2
+fi
+command -v openssl >/dev/null 2>&1 || { echo 'ci-env: openssl is required' >&2; exit 2; }
+
+scratch=$(realpath -m -- "$1")
+mkdir -p -m 700 "$scratch/backups"
+mkdir -p -m 755 "$scratch/codex-home"
+uid=$(id -u)
+
+declare -A value=(
+  [LIFE_OS_TIMEZONE]=Europe/Berlin
+  [LIFE_OS_BACKUP_DIR]="$scratch/backups"
+  [LIFE_OS_BACKUP_RUNTIME_UID]=$uid
+  [LIFE_OS_CODEX_HOME_HOST_PATH]="$scratch/codex-home"
+  [LIFE_OS_CODEX_RUNTIME_UID]=$uid
+  [LIFE_OS_BANKING_RUNTIME_UID]=$uid
+  [LIFE_OS_DOCKER_GID]=$(stat -c %g /var/run/docker.sock 2>/dev/null || echo 999)
+)
+# Every integration, unset.
+for name in LIFE_OS_CLOUDFLARE_TUNNEL_TOKEN LIFE_OS_CF_ACCESS_TEAM_DOMAIN LIFE_OS_CF_ACCESS_CLIENT_ID \
+  LIFE_OS_CF_ACCESS_CLIENT_SECRET LIFE_OS_ZAW_ICS_URL LIFE_OS_GOOGLE_CLIENT_ID LIFE_OS_GOOGLE_CLIENT_SECRET \
+  LIFE_OS_GOOGLE_TOKEN_KEY LIFE_OS_ENABLE_BANKING_APP_ID LIFE_OS_ENABLE_BANKING_KEY_FILE LIFE_OS_BANKING_TOKEN_KEY \
+  LIFE_OS_NOTIFICATIONS_CHANNELS LIFE_OS_WEBPUSH_VAPID_PUBLIC_KEY LIFE_OS_WEBPUSH_VAPID_PRIVATE_KEY \
+  LIFE_OS_WEBPUSH_SUBJECT LIFE_OS_NTFY_PUBLISHER_TOKEN LIFE_OS_NTFY_PUBLISHER_PASSWORD_HASH \
+  LIFE_OS_NTFY_PHONE_PASSWORD_HASH; do
+  value[$name]=''
+done
+# A password for the admin and every service's login (letters and digits).
+while IFS= read -r name; do
+  value[$name]=$(openssl rand -hex 24)
+done < <(sed -n 's/^\(LIFE_OS_[A-Z_]*_PASSWORD\)=.*/\1/p' .env.example)
+
+declare -A written=()
+umask 077
+{
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    name=${line%%=*}
+    if [[ "$line" == LIFE_OS_*=* && -v "value[$name]" ]]; then
+      printf '%s=%s\n' "$name" "${value[$name]}"
+      written[$name]=1
+    else
+      printf '%s\n' "$line"
+    fi
+  done <.env.example
+  # Any of these .env.example does not list (yet).
+  for name in "${!value[@]}"; do
+    [[ -v "written[$name]" ]] || printf '%s=%s\n' "$name" "${value[$name]}"
+  done
+} >.env
+echo "ci-env: wrote .env (throwaway values; Codex home $scratch/codex-home is empty)"
