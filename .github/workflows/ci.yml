@@ -172,10 +172,10 @@ jobs:
     name: govulncheck (every Go module)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    # Not blocking yet: today's Go version and dependencies have known
-    # vulnerabilities (docs/operations/ci.md). Make it blocking once they are
-    # fixed.
-    continue-on-error: true
+    # Blocking: a finding fails the run. govulncheck checks against today's
+    # vulnerability database, so a newly published advisory can fail CI on a
+    # branch that changed nothing. Fix it promptly, by updating Go or the
+    # module (docs/operations/ci.md), rather than waiting for Dependabot.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

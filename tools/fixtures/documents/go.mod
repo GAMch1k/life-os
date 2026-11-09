@@ -1,6 +1,6 @@
 module github.com/GAMch1k/life-os/tools/fixtures/documents
 
-go 1.27.1
+go 1.27.3
 
 require golang.org/x/image v0.47.0
 

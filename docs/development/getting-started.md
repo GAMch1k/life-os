@@ -1,6 +1,6 @@
 # Getting started and testing
 
-Install Docker Compose v2, Go 1.27.1+, Node 22+, `sqlc`, `oapi-codegen`, and `migrate`. Copy `.env.example` to ignored `.env`, then run:
+Install Docker Compose v2, Go 1.27.3+, Node 22+, `sqlc`, `oapi-codegen`, and `migrate`. Copy `.env.example` to ignored `.env`, then run:
 
 ```sh
 make life-up

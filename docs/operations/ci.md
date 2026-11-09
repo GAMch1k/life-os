@@ -22,7 +22,7 @@ The five jobs run in parallel. A later job can wait for them with `needs: [check
 | `check-go` | `tools/check --go`: gofmt, `go vet`, `go test`, and the build of every module under `pkg/`, `services/`, and `templates/` (`GOWORK=off`) | about 1 min | `tools/check --go` |
 | `check-dashboard` | `tools/check --dashboard`: Prettier, ESLint, the unit tests, the typecheck, and `next build` | about 1.5 min | `tools/check --dashboard` |
 | `integration` | `tools/test-integration` against a PostgreSQL service container | about 2 min | [Integration tests](#integration-tests) |
-| `govulncheck` | `tools/check-vulnerabilities`: govulncheck on every Go module. **Not blocking yet.** | about 2 min | `tools/check-vulnerabilities` |
+| `govulncheck` | `tools/check-vulnerabilities`: govulncheck on every Go module. A finding fails the run. | about 2 min | `tools/check-vulnerabilities` |
 
 The times are with warm caches; without them, each job takes up to a minute longer. A whole run takes about as long as its slowest job, about 2 minutes.
 
@@ -32,7 +32,7 @@ The times are with warm caches; without them, each job takes up to a minute long
 
 CI installs the versions the repository already uses:
 
-- **Go** from `go.work` (`go 1.27.1`). Changing Go means `go.work`, every `go.mod`, and the Dockerfiles' `golang:` images.
+- **Go** from `go.work` (`go 1.27.3`). Changing Go means `go.work`, every `go.mod`, and the Dockerfiles' `golang:` images.
 - **Node 22**, as the Dashboard's image (`node:22-alpine`).
 - **sqlc 1.31.1**, the release binary, checked against the SHA-256 in the workflow's `SQLC_SHA256`. The version is the generated code's `sqlc v1.31.1` header (see `pkg/database/README.md`).
 - **oapi-codegen v2.8.0**, as `tools/check-contracts` requires.
@@ -67,9 +67,11 @@ In CI, the job's PostgreSQL is a service container of `postgres:18.6-alpine`. It
 
 ## govulncheck
 
-`tools/check-vulnerabilities` runs govulncheck on every Go module, the fixtures generator `tools/fixtures/documents` included. It lists the findings in the code's call paths, with their IDs per module at the end. The job is marked `continue-on-error`: it shows red, but the run passes.
+`tools/check-vulnerabilities` runs govulncheck on every Go module, the fixtures generator `tools/fixtures/documents` included. It lists the findings in the code's call paths, with their IDs per module at the end.
 
-When the job was added (9 November 2026), every module except the fixtures generator had findings:
+The job is blocking: a finding fails the run. govulncheck checks against today's vulnerability database, so a newly published advisory can turn CI red on any branch, even one that changed nothing. Fix it promptly: update Go (`go.work`, every `go.mod`, and the Dockerfiles' `golang:` images) or the module (`GOWORK=off go get <module>@<fixed version>` and `go mod tidy` in every module that uses it), then rebuild and redeploy the Go services. Dependabot's weekly pull requests may fix it too, but don't wait for them.
+
+When the job was added (9 November 2026), every module except the fixtures generator had findings. Go 1.27.3, `golang.org/x/net` v0.62.0 (with `golang.org/x/text` v0.43.0), `github.com/klauspost/compress` v1.20.2, and `github.com/andybalholm/brotli` v1.2.7 fixed them the same day:
 
 | Where | Findings | Fixed in |
 | --- | --- | --- |
@@ -81,7 +83,7 @@ When the job was added (9 November 2026), every module except the fixtures gener
 | `github.com/klauspost/compress` v1.19.2 | GO-2026-6865 | v1.20.2 |
 | `github.com/andybalholm/brotli` v1.2.2 | GO-2026-6888 | v1.2.7 |
 
-Once they are fixed, remove `continue-on-error` from the job so that a new finding fails the run.
+govulncheck also notes GO-2026-5932 in `golang.org/x/crypto` (its unmaintained `openpgp` package). No module imports that package, so it is not a finding.
 
 ## Dependabot
 
