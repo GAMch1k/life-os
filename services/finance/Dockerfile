@@ -1,6 +1,6 @@
 # Build from the repository root so the template can use the local shared
 # infrastructure module. Generated services pass their own path as SERVICE_DIR.
-FROM golang:1.27.1-alpine AS build
+FROM golang:1.27.3-alpine AS build
 
 WORKDIR /src
 COPY . .

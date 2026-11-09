@@ -32,7 +32,7 @@ The times are with warm caches; without them, each job takes up to a minute long
 
 CI installs the versions the repository already uses:
 
-- **Go** from `go.work` (`go 1.27.1`). Changing Go means `go.work`, every `go.mod`, and the Dockerfiles' `golang:` images.
+- **Go** from `go.work` (`go 1.27.3`). Changing Go means `go.work`, every `go.mod`, and the Dockerfiles' `golang:` images.
 - **Node 22**, as the Dashboard's image (`node:22-alpine`).
 - **sqlc 1.31.1**, the release binary, checked against the SHA-256 in the workflow's `SQLC_SHA256`. The version is the generated code's `sqlc v1.31.1` header (see `pkg/database/README.md`).
 - **oapi-codegen v2.8.0**, as `tools/check-contracts` requires.

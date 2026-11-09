@@ -1,6 +1,6 @@
 module github.com/GAMch1k/life-os/services/inbox
 
-go 1.27.1
+go 1.27.3
 
 require (
 	github.com/GAMch1k/life-os/pkg v0.0.0
