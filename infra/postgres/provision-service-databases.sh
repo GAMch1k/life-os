@@ -49,7 +49,7 @@ provision_service() {
   fi
 
   if [[ ! "$password_env" =~ ^LIFE_OS_[A-Z0-9_]+_DB_PASSWORD$ ]] || [[ -z "$password" ]]; then
-    printf 'set non-empty %s in the local .env file for service %s\n' "$password_env" "$service" >&2
+    printf 'set non-empty %s in the local .env file for service %s (compose.yaml passes it to the postgres service)\n' "$password_env" "$service" >&2
     exit 1
   fi
 
