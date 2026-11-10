@@ -1,0 +1,1 @@
+This branch holds the signatures of the Life OS Contributor License Agreement ([CLA.md](https://github.com/GAMch1k/life-os/blob/master/CLA.md)), in signatures/cla.json, recorded by the CLA workflow (.github/workflows/cla.yml) from pull request comments.
