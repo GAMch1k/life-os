@@ -18,8 +18,10 @@ only what a service's x-install-bundle says, next to what it changes:
   x-install-bundle:
     omit-volumes: [/srv/android]                  the mounts at these targets go
     writable-volumes: [/run/lifeos-codex-source]  these mounts lose read_only
-    volume-sources: {/run/lifeos-codex-source: "${NAME:?...}"}
+    volume-sources: {/run/lifeos-codex-source: "$${NAME:?...}"}
                                                   these mounts' sources are replaced
+                                                  ($$ for $, as Compose interpolates
+                                                  x- keys of compose.yaml too)
     environment: {NAME: value}                    added to the environment
 
 So compose.yaml may not bind-mount a repository file (a relative path such as
@@ -111,7 +113,7 @@ def apply_bundle_overrides(service, spec):
         matches = [v for v in volumes if isinstance(v, dict) and v.get("target") == target]
         if len(matches) != 1:
             raise BundleError(f"service {service}: {BUNDLE_KEY} replaces the source of a mount at {target}, which it has not got (long syntax)")
-        matches[0]["source"] = str(source)
+        matches[0]["source"] = str(source).replace("$$", "$")
     if "volumes" in spec:
         if volumes:
             spec["volumes"] = volumes

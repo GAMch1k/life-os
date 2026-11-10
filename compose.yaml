@@ -591,7 +591,8 @@ services:
     x-install-bundle:
       writable-volumes: [/run/lifeos-codex-source]
       volume-sources:
-        /run/lifeos-codex-source: "${LIFE_OS_CODEX_HOME_HOST_PATH:?Set LIFE_OS_CODEX_HOME_HOST_PATH in .env to your existing local Codex home}"
+        # $$: Compose interpolates x- keys too, and must not require it here.
+        /run/lifeos-codex-source: "$${LIFE_OS_CODEX_HOME_HOST_PATH:?Set LIFE_OS_CODEX_HOME_HOST_PATH in .env to your existing local Codex home}"
       environment: {LIFE_OS_CODEX_AUTH_WRITE_BACK: "on"}
     tmpfs:
       - /tmp
