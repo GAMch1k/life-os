@@ -1,11 +1,12 @@
 # The runtime stage is the PostgreSQL image itself, so pg_dump and pg_restore
-# are exactly the server's version. Keep POSTGRES_IMAGE equal to
-# LIFE_OS_POSTGRES_IMAGE; compose passes it.
-ARG POSTGRES_IMAGE=postgres:18.6-alpine
+# are exactly the server's version. compose.yaml passes its PostgreSQL image
+# (LIFE_OS_POSTGRES_IMAGE, else its pinned default); keep this default equal
+# to that one, digest included, for a build without compose.
+ARG POSTGRES_IMAGE=postgres:18.6-alpine@sha256:123b17998ccaf47e53b502e8c6a1e79afd8f579c6f3eec83c563da026f957395
 
 # Build from the repository root so the service can use the local shared
 # infrastructure module.
-FROM golang:1.27.3-alpine AS build
+FROM golang:1.27.3-alpine@sha256:fa3d596898d9f126af7c01d14ee7597bab3f39cccf392ef36b69fe77cd681f18 AS build
 
 WORKDIR /src
 COPY . .

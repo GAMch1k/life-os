@@ -60,7 +60,7 @@ Compose refuses every command until these six variables are set: `LIFE_OS_POSTGR
 | --- | --- |
 | `LIFE_OS_POSTGRES_USER` | **Required.** The PostgreSQL admin login, for example `lifeos_admin`. |
 | `LIFE_OS_POSTGRES_PASSWORD` | **Required.** `<generate>` |
-| `LIFE_OS_POSTGRES_IMAGE`, `LIFE_OS_POSTGRES_DB` | Keep the defaults. PostgreSQL publishes no port. |
+| `LIFE_OS_POSTGRES_IMAGE`, `LIFE_OS_POSTGRES_DB` | Keep the defaults: leave `LIFE_OS_POSTGRES_IMAGE` unset (`compose.yaml` pins the image by digest). PostgreSQL publishes no port. |
 | `LIFE_OS_TIMEZONE` | Your IANA zone, for example `Europe/Berlin` (default `UTC`). Used when the browser's own zone is not known. See [Owner timezone](docs/operations/deployment.md#owner-timezone). |
 | `LIFE_OS_FINANCE_CURRENCY` | Currency of the built-in Cash account (default `EUR`). |
 | `LIFE_OS_PUBLIC_URL` | **Required.** The URL Life OS is reached at, without a trailing slash, such as `https://lifeos.example.com`. Phone notifications open their pages here, and the Google and bank redirect URIs default to it. Without a hostname, use the gateway's address, such as `http://127.0.0.1:3000`. |

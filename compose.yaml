@@ -2,7 +2,7 @@ name: lifeos
 
 services:
   postgres:
-    image: ${LIFE_OS_POSTGRES_IMAGE:-postgres:18.6-alpine}
+    image: ${LIFE_OS_POSTGRES_IMAGE:-postgres:18.6-alpine@sha256:123b17998ccaf47e53b502e8c6a1e79afd8f579c6f3eec83c563da026f957395}
     restart: unless-stopped
     # Only the database settings: the admin login, and the passwords that
     # infra/postgres/provision-service-databases.sh gives each service's role
@@ -359,7 +359,10 @@ services:
     build:
       context: .
       dockerfile: services/backup/Dockerfile
-      args: {POSTGRES_IMAGE: "${LIFE_OS_POSTGRES_IMAGE:-postgres:18.6-alpine}"}
+      # postgres' image, default included. On a line of its own, so that
+      # Dependabot's update of that image changes this default with it.
+      args:
+        POSTGRES_IMAGE: "${LIFE_OS_POSTGRES_IMAGE:-postgres:18.6-alpine@sha256:123b17998ccaf47e53b502e8c6a1e79afd8f579c6f3eec83c563da026f957395}"
     environment:
       SERVICE_NAME: backup
       PORT: 8080

@@ -65,7 +65,7 @@ docker stop lifeos-it-pg
 
 `tools/test-integration services/finance` runs one module's tests and skips the restore tool's test.
 
-In CI, the job's PostgreSQL is a service container of `postgres:18.6-alpine`. Its first step fails if that is not the image `compose.yaml` deploys (`LIFE_OS_POSTGRES_IMAGE`'s default). After a PostgreSQL upgrade, change `services.postgres.image` in `ci.yml` to match.
+In CI, the job's PostgreSQL is a service container of the image `compose.yaml` deploys (`LIFE_OS_POSTGRES_IMAGE`'s default, `postgres:18.6-alpine` pinned by digest). Its first step fails if the two differ. After a PostgreSQL upgrade or a new digest ([Dependabot](#dependabot)), change `services.postgres.image` in `ci.yml` to match.
 
 ## Full-stack tests
 
