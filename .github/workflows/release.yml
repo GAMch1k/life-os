@@ -443,8 +443,8 @@ jobs:
 
           ## In this preview
 
-          - Every module runs. The integrations (AI processing with Codex, bank sync, Google Calendar, push through ntfy, the Cloudflare Tunnel) stay off until they are configured in \`.env\`. Switching modules on and off comes in a later preview.
-          - Without a Codex sign-in the AI processor stops at start, and Docker starts it again about once a minute; \`docker compose stop processor\` stops it until Codex is set up.
+          - Every module runs. The integrations (AI processing with Codex or Claude Code, bank sync, Google Calendar, push through ntfy, the Cloudflare Tunnel) stay off until they are configured in \`.env\`. Switching modules on and off comes in a later preview.
+          - Without a Codex sign-in (or Claude Code's token, with \`./setup.sh claude\`) the AI processor stops at start, and Docker starts it again about once a minute; \`docker compose stop processor\` stops it until AI processing is set up.
           - Voice downloads its Whisper model (about 466 MB) on its first start.
           - Server health reads the host: the Docker socket (through a read-only gateway of its own), and \`/\` and Docker's data directory, read-only.
           - ${platforms} only.
