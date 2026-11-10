@@ -14,7 +14,7 @@ services:
     environment:
       RECIPE_IMPORT_ALLOW_HOSTS: ics-fixture
   ics-fixture:
-    image: nginx:1.28-alpine
+    image: nginx:1.30-alpine@sha256:583b7f2fce1cdb8da5ad5c39ebd3c33b98b87d493190e548bdee1fa8c619c311
     volumes:
       - type: bind
         source: ${LIFE_OS_E2E_ICS_DIR:?set to the directory the browser tests write feeds to}
