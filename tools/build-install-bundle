@@ -18,10 +18,16 @@ only what a service's x-install-bundle says, next to what it changes:
   x-install-bundle:
     omit-volumes: [/srv/android]                  the mounts at these targets go
     writable-volumes: [/run/lifeos-codex-source]  these mounts lose read_only
+    volume-sources: {/run/lifeos-codex-source: "$${NAME:?...}"}
+                                                  these mounts' sources are replaced
+                                                  ($$ for $, as Compose interpolates
+                                                  x- keys of compose.yaml too)
     environment: {NAME: value}                    added to the environment
 
 So compose.yaml may not bind-mount a repository file (a relative path such as
-./infra/...): such configuration belongs in an image (P20-02).
+./infra/..., also as a variable's default, ${NAME:-./infra/...}) where the
+bundle runs: such configuration belongs in an image (P20-02), or the bundle
+gives the mount another source (volume-sources).
 
 The assets are that compose.yaml, .env.example with LIFE_OS_VERSION set to the
 release's version, setup.sh with its version placeholder set to it too, and
@@ -89,7 +95,7 @@ def volume_target(volume):
 def apply_bundle_overrides(service, spec):
     """The service as the release bundle runs it: its x-install-bundle applied, and dropped."""
     overrides = spec.pop(BUNDLE_KEY, None) or {}
-    unknown = set(overrides) - {"omit-volumes", "writable-volumes", "environment"}
+    unknown = set(overrides) - {"omit-volumes", "writable-volumes", "volume-sources", "environment"}
     if unknown:
         raise BundleError(f"service {service}: {BUNDLE_KEY} has unknown keys: {', '.join(sorted(unknown))}")
     volumes = [dict(v) if isinstance(v, dict) else v for v in spec.get("volumes") or []]
@@ -103,6 +109,11 @@ def apply_bundle_overrides(service, spec):
         if len(matches) != 1:
             raise BundleError(f"service {service}: {BUNDLE_KEY} makes writable a mount at {target}, which it has not got (long syntax)")
         matches[0].pop("read_only", None)
+    for target, source in (overrides.get("volume-sources") or {}).items():
+        matches = [v for v in volumes if isinstance(v, dict) and v.get("target") == target]
+        if len(matches) != 1:
+            raise BundleError(f"service {service}: {BUNDLE_KEY} replaces the source of a mount at {target}, which it has not got (long syntax)")
+        matches[0]["source"] = str(source).replace("$$", "$")
     if "volumes" in spec:
         if volumes:
             spec["volumes"] = volumes
@@ -146,21 +157,30 @@ def image_names(compose):
     return names
 
 
+# ${NAME:-default} or ${NAME-default}: the default is the source when NAME is unset.
+VARIABLE_DEFAULT = re.compile(r"^\$\{[A-Za-z_][A-Za-z0-9_]*:?-(.*)\}$")
+
+
 def repository_binds(spec):
-    """The service's bind mounts of repository files: sources that are relative paths."""
+    """The service's bind mounts of repository files: sources that are relative paths,
+    also as a variable's default."""
     for volume in spec.get("volumes") or []:
         if isinstance(volume, str):
             source = volume.split(":", 1)[0] if ":" in volume else ""
         else:
             source = str(volume.get("source", "")) if volume.get("type", "volume") == "bind" else ""
-        if source.startswith("."):
+        default = VARIABLE_DEFAULT.match(source)
+        if source.startswith(".") or (default and default.group(1).startswith(".")):
             yield source
 
 
 def install_compose(compose):
     names = image_names(compose)
     problems = []
+    services = {}
     for service, spec in compose["services"].items():
+        spec = apply_bundle_overrides(service, dict(spec))
+        services[service] = spec
         for source in repository_binds(spec):
             problems.append(f"service {service} bind-mounts the repository's {source}")
         for key in ("env_file", "configs", "secrets"):
@@ -176,9 +196,7 @@ def install_compose(compose):
             + "\nBuild that configuration into the service's image instead (docs/operations/releases.md)."
         )
 
-    services = {}
-    for service, spec in compose["services"].items():
-        spec = apply_bundle_overrides(service, dict(spec))
+    for service, spec in services.items():
         if service in names:
             del spec["build"]
             published = f"{REGISTRY}/{names[service][1]}:{VERSION}"

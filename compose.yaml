@@ -538,15 +538,29 @@ services:
     restart: unless-stopped
 
   processor:
-    build: {context: ., dockerfile: services/mcp/Dockerfile, target: processor}
+    build:
+      context: .
+      dockerfile: services/mcp/Dockerfile
+      target: processor
+      # The AI CLIs the image installs (codex, claude, or both); it must
+      # include LIFE_OS_AI_PROVIDER. codex alone keeps the image smaller.
+      args: {LIFE_OS_AI_PROVIDERS: "${LIFE_OS_AI_PROVIDERS:-codex,claude}"}
     environment:
       MCP_SERVICE_URL: http://mcp:8080/mcp
       # A capture's images are read from Inbox (GET /v1/media/{sha256}) and
-      # handed to Codex as files in the workdir, a tmpfs.
+      # handed to Codex as files in the workdir, a tmpfs (to Claude Code on
+      # stdin).
       INBOX_SERVICE_URL: http://inbox:8080
+      # codex (the default) or claude: the CLI every AI job runs through.
+      LIFE_OS_AI_PROVIDER: ${LIFE_OS_AI_PROVIDER:-codex}
       LIFE_OS_CODEX_WORKDIR: /workspace
       LIFE_OS_CODEX_MODEL: ${LIFE_OS_CODEX_MODEL:-gpt-5.6-luna}
       LIFE_OS_CODEX_REASONING_EFFORT: ${LIFE_OS_CODEX_REASONING_EFFORT:-medium}
+      LIFE_OS_CLAUDE_MODEL: ${LIFE_OS_CLAUDE_MODEL:-sonnet}
+      LIFE_OS_CLAUDE_EFFORT: ${LIFE_OS_CLAUDE_EFFORT:-}
+      # Claude Code's sign-in: the subscription token of claude setup-token.
+      # Never ANTHROPIC_API_KEY: the runs use the subscription, not the API.
+      CLAUDE_CODE_OAUTH_TOKEN: ${LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN:-}
       LIFE_OS_PROCESSOR_POLL_MILLIS: ${LIFE_OS_PROCESSOR_POLL_MILLIS:-1000}
       INBOX_CONTEXT_MINUTES: ${LIFE_OS_INBOX_CONTEXT_MINUTES:-20}
       LIFE_OS_PROCESSOR_HEALTH_PORT: 8081
@@ -562,16 +576,23 @@ services:
       TZ: ${LIFE_OS_TIMEZONE:-UTC}
       CODEX_HOME: /tmp/lifeos-codex
     volumes:
+      # The Codex home, read-only. Unset (with LIFE_OS_AI_PROVIDER=claude)
+      # mounts an empty placeholder; the Codex provider then refuses to start.
       - type: bind
-        source: ${LIFE_OS_CODEX_HOME_HOST_PATH:?Set LIFE_OS_CODEX_HOME_HOST_PATH in .env to your existing local Codex home}
+        source: ${LIFE_OS_CODEX_HOME_HOST_PATH:-./services/mcp/codex-home-unset}
         target: /run/lifeos-codex-source
         read_only: true
     # In the release bundle (tools/build-install-bundle) the Codex home is
     # Life OS's own (setup.sh signs it in), so the processor writes a
     # refreshed auth.json back to it (services/mcp/docker-processor-entrypoint.sh).
-    # Here it is the owner's own Codex home: read-only, never written.
+    # Here it is the owner's own Codex home: read-only, never written. The
+    # bundle has no placeholder to mount, and setup.sh always writes the path
+    # (an empty directory until ./setup.sh codex), so there it is required.
     x-install-bundle:
       writable-volumes: [/run/lifeos-codex-source]
+      volume-sources:
+        # $$: Compose interpolates x- keys too, and must not require it here.
+        /run/lifeos-codex-source: "$${LIFE_OS_CODEX_HOME_HOST_PATH:?Set LIFE_OS_CODEX_HOME_HOST_PATH in .env to your existing local Codex home}"
       environment: {LIFE_OS_CODEX_AUTH_WRITE_BACK: "on"}
     tmpfs:
       - /tmp
@@ -590,8 +611,11 @@ services:
       recipe-import: {condition: service_started}
     networks: [backend]
     restart: unless-stopped
-    user: "${LIFE_OS_CODEX_RUNTIME_UID:?Set LIFE_OS_CODEX_RUNTIME_UID in .env to the UID which owns the local Codex session}"
-    # Room to stop a Codex run gracefully and record the attempt's outcome.
+    # The processor's runtime UID for either provider: with Codex, the UID
+    # which owns the local Codex session.
+    user: "${LIFE_OS_CODEX_RUNTIME_UID:?Set LIFE_OS_CODEX_RUNTIME_UID in .env to the processor's runtime UID (id -u; with Codex, the UID which owns the local Codex session)}"
+    # Room to stop a Codex or Claude Code run gracefully and record the
+    # attempt's outcome.
     stop_grace_period: 30s
     # A hard memory cap, so a runaway AI CLI run or image decode stops this
     # container instead of the whole host (7.7 GiB, no swap, shared). An idle

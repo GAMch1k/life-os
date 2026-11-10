@@ -114,6 +114,8 @@ Optional `.env` settings for the processor:
 - `LIFE_OS_PROCESSOR_STALE_AFTER_SECONDS` (default 120, at least 90): when an attempt left by a crashed processor is reconciled, and how long a capture waits at most for the captures just before it to finish (see [MCP and AI → Recent captures](../services/mcp.md#recent-captures)).
 - `LIFE_OS_INBOX_CONTEXT_MINUTES` (default 20, 0 to 120; the container's `INBOX_CONTEXT_MINUTES`): how many minutes before a capture its planning sees the owner's other captures and what was done for them; 0 turns it off. See [Recent captures](../services/mcp.md#recent-captures).
 
+The timeout and concurrency also apply to Claude Code runs with `LIFE_OS_AI_PROVIDER=claude` (see [SETUP → Claude Code instead of Codex](../../SETUP.md#claude-code-instead-of-codex)).
+
 ## Owner timezone
 
 The owner's timezone is the browser's own timezone when it is known, else `LIFE_OS_TIMEZONE` (an IANA name, default `UTC`), else UTC. Set `LIFE_OS_TIMEZONE` to where the owner usually is, before the processor, Calendar, calendar-feeds, and Dashboard start; changing it needs them recreated (`docker compose up -d --no-build --no-deps processor mcp calendar calendar-feeds tasks dashboard`). An unknown name falls back to UTC; the processor, MCP, and Calendar log it at startup and the processor's zone is listed under Automatic processing on `/status`.

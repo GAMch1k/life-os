@@ -82,6 +82,12 @@ export type FoodNotifications =
 
 /** Mirrors `Status` in services/mcp/internal/processor/status.go. */
 export type ProcessorStatus = {
+  /**
+   * The AI runtime (LIFE_OS_AI_PROVIDER) and its name as the owner reads
+   * it; absent from a processor older than the choice, which runs Codex.
+   */
+  provider?: "codex" | "claude";
+  providerName?: string;
   model: string;
   /**
    * The planner's fallback timezone (its LIFE_OS_TIMEZONE), for captures
@@ -94,6 +100,7 @@ export type ProcessorStatus = {
     lastSucceededAt: string | null;
     lastError?: string;
   };
+  /** The AI runtime's state, Codex or Claude Code (the field keeps its name). */
   codex: {
     state:
       "ready" | "usage_limited" | "unauthenticated" | "failing" | "unknown";
@@ -104,7 +111,7 @@ export type ProcessorStatus = {
     lastError?: string;
     consecutiveFailures: number;
   };
-  /** The Codex runtime (see docs/services/mcp.md). */
+  /** The AI runtime's runs (see docs/services/mcp.md). */
   runtime?: {
     timeoutSeconds: number;
     current: {
@@ -190,7 +197,7 @@ export type ProcessorStatus = {
       error?: string;
     } | null;
   };
-  /** Account usage as reported by the Codex CLI (see docs/services/mcp.md). */
+  /** Account usage as the AI runtime's CLI reported it (see docs/services/mcp.md). */
   usage?: {
     current: CodexUsage | null;
     error?: string;
@@ -216,6 +223,16 @@ export type CodexUsage = {
   }[];
 };
 
+/**
+ * The AI runtime's name as the owner reads it ("Codex", "Claude Code"): the
+ * processor's own, Codex for a processor older than the choice, and "AI"
+ * while the processor cannot be read.
+ */
+export function aiName(processor: ProcessorStatus | null | undefined) {
+  if (!processor) return "AI";
+  return processor.providerName ?? "Codex";
+}
+
 function windowLabel(minutes: number | undefined) {
   if (minutes === 300) return "5-hour";
   if (minutes === 10080) return "weekly";
@@ -231,11 +248,12 @@ function windowLabel(minutes: number | undefined) {
 export function runtimeFacts(
   runtime: ProcessorStatus["runtime"],
   timeZone: string = DEFAULT_TIME_ZONE,
+  name = "Codex",
 ) {
   if (!runtime) return [];
   const facts = [
     {
-      label: "Codex run now",
+      label: `${name} run now`,
       value: runtime.current
         ? `${runtime.current.state} since ${formatTime(runtime.current.since, timeZone)}`
         : "none",
@@ -395,29 +413,40 @@ export function budgetPlansFacts(
   ];
 }
 
+/** How the AI runtime is signed in, as its CLI reports it. */
+const AUTH_MODES: Record<string, string> = {
+  chatgpt: "ChatGPT sign-in",
+  oauth_token: "Claude subscription token",
+  "claude.ai": "Claude subscription sign-in",
+};
+
 /**
- * Usage facts exactly as the Codex CLI reported them: one line per metered
- * bucket and window. Nothing is estimated when the read is unavailable.
+ * Usage facts exactly as the AI runtime's CLI reported them: one line per
+ * metered bucket and window. Nothing is estimated when the read is
+ * unavailable.
  */
 export function usageFacts(
   usage: ProcessorStatus["usage"],
   timeZone: string = DEFAULT_TIME_ZONE,
+  name = "Codex",
 ) {
   const current = usage?.current;
   if (!current) {
     return [
       {
-        label: "Codex usage",
+        label: `${name} usage`,
         value: usage?.error ? "unavailable" : "not read yet",
       },
     ];
   }
   const facts = [
     {
-      label: "Codex plan",
+      label: `${name} plan`,
       value: [
         current.planType,
-        current.authMode === "chatgpt" ? "ChatGPT sign-in" : current.authMode,
+        current.authMode
+          ? (AUTH_MODES[current.authMode] ?? current.authMode)
+          : undefined,
       ]
         .filter(Boolean)
         .join(" · "),
@@ -445,7 +474,7 @@ export function usageFacts(
   return facts;
 }
 
-/** The reset time of the exhausted limit, when Codex reports one. */
+/** The reset time of the exhausted limit, when the AI runtime reports one. */
 export function limitResetsAt(usage: ProcessorStatus["usage"]) {
   const exhausted = usage?.current?.limits
     .flatMap((limit) => limit.windows.map((window) => ({ limit, window })))
@@ -665,6 +694,8 @@ function processingCheck(
     };
   }
   const { codex, poll } = processor;
+  const name = aiName(processor);
+  const claude = processor.provider === "claude";
   const facts = [
     { label: "Model", value: processor.model },
     ...(processor.timeZone
@@ -676,7 +707,7 @@ function processingCheck(
         ]
       : []),
     {
-      label: "Codex sign-in",
+      label: `${name} sign-in`,
       value:
         codex.authenticated === null
           ? "not checked yet"
@@ -686,14 +717,14 @@ function processingCheck(
     },
     { label: "Last poll", value: formatTime(poll.lastAt, timeZone) },
     {
-      label: "Last Codex success",
+      label: `Last ${name} success`,
       value: formatTime(codex.lastSucceededAt, timeZone),
     },
-    ...runtimeFacts(processor.runtime, timeZone),
+    ...runtimeFacts(processor.runtime, timeZone, name),
     ...ideasFacts(processor.ideas, timeZone),
     ...categoriesFacts(processor.categories, timeZone),
     ...budgetPlansFacts(processor.budgetPlans, timeZone),
-    ...usageFacts(processor.usage, timeZone),
+    ...usageFacts(processor.usage, timeZone, name),
   ];
   if (poll.lastError) {
     return {
@@ -711,23 +742,28 @@ function processingCheck(
       return {
         ...base,
         state: "problem",
-        summary: "Codex is not signed in.",
+        summary: `${name} is not signed in.`,
         detail: codex.lastError,
-        action:
-          "Sign in with `codex login` on the host as the Life OS user, then restart the processor so it picks up the new session.",
+        action: claude
+          ? "Create a new token with `claude setup-token`, set LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN in .env to it, then recreate the processor so it picks up the token."
+          : "Sign in with `codex login` on the host as the Life OS user, then restart the processor so it picks up the new session.",
         facts,
       };
     case "usage_limited":
       return {
         ...base,
         state: "warning",
-        summary: "Codex has reached its usage limit.",
+        summary: `${name} has reached its usage limit.`,
         detail: codex.lastError,
         action: `Captures wait in Inbox and are processed automatically once the limit resets${
           limitResetsAt(processor.usage)
-            ? ` (Codex reports ${formatTime(limitResetsAt(processor.usage), timeZone)})`
+            ? ` (${name} reports ${formatTime(limitResetsAt(processor.usage), timeZone)})`
             : ""
-        }. To resume sooner, add Codex credits or switch LIFE_OS_CODEX_MODEL.`,
+        }. ${
+          claude
+            ? "To resume sooner, switch LIFE_OS_CLAUDE_MODEL."
+            : "To resume sooner, add Codex credits or switch LIFE_OS_CODEX_MODEL."
+        }`,
         facts: [
           ...facts,
           {
@@ -740,7 +776,7 @@ function processingCheck(
       return {
         ...base,
         state: "problem",
-        summary: "Codex runs are failing.",
+        summary: `${name} runs are failing.`,
         detail: codex.lastError,
         action:
           "Captures are retried automatically. If this persists, check the processor logs.",
@@ -758,15 +794,14 @@ function processingCheck(
       return {
         ...base,
         state: "ok",
-        summary:
-          "Waiting for work; Codex has not run since the processor started.",
+        summary: `Waiting for work; ${name} has not run since the processor started.`,
         facts,
       };
   }
 }
 
-function retryReasonLabel(reason: string) {
-  if (reason === "usage_limited") return "after the Codex usage limit resets";
+function retryReasonLabel(reason: string, name: string) {
+  if (reason === "usage_limited") return `after the ${name} usage limit resets`;
   if (reason === "backoff") return "backoff";
   return reason;
 }
@@ -775,6 +810,7 @@ function inboxCheck(
   inbox: InboxBacklog | null,
   now: Date,
   timeZone: string,
+  name: string,
 ): StatusCheck {
   const base = { id: "inbox" as const, title: "Inbox backlog" };
   if (!inbox) {
@@ -800,7 +836,7 @@ function inboxCheck(
     {
       label: "Next retry",
       value: inbox.nextRetryAt
-        ? `${formatTime(inbox.nextRetryAt, timeZone)}${inbox.nextRetryReason ? ` (${retryReasonLabel(inbox.nextRetryReason)})` : ""}`
+        ? `${formatTime(inbox.nextRetryAt, timeZone)}${inbox.nextRetryReason ? ` (${retryReasonLabel(inbox.nextRetryReason, name)})` : ""}`
         : "none scheduled",
     },
   ];
@@ -2527,7 +2563,7 @@ export function toRuntimeStatus(
 ): RuntimeStatus {
   const checks = [
     processingCheck(signals.processor, timeZone, configured),
-    inboxCheck(signals.inbox, now, timeZone),
+    inboxCheck(signals.inbox, now, timeZone, aiName(signals.processor)),
     voiceCheck(signals.voice, now, timeZone),
     ...(signals.calendarFeeds === undefined
       ? []

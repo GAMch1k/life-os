@@ -11,13 +11,23 @@ import (
 
 // Config keeps model selection operational rather than embedded in Inbox logic.
 type Config struct {
+	// Provider is the AI runtime (LIFE_OS_AI_PROVIDER): ProviderCodex, the
+	// default, or ProviderClaude.
+	Provider string
+	// Model and ReasoningEffort are the selected provider's:
+	// LIFE_OS_CODEX_MODEL and LIFE_OS_CODEX_REASONING_EFFORT for Codex,
+	// LIFE_OS_CLAUDE_MODEL (default sonnet) and LIFE_OS_CLAUDE_EFFORT for
+	// Claude Code.
 	Model        string
 	CodexCommand string
-	InboxURL     string
-	MCPURL       string
-	WorkDir      string
-	PollInterval time.Duration
-	HealthPort   string
+	// ClaudeCommand is the Claude Code CLI (LIFE_OS_CLAUDE_COMMAND, default
+	// claude).
+	ClaudeCommand string
+	InboxURL      string
+	MCPURL        string
+	WorkDir       string
+	PollInterval  time.Duration
+	HealthPort    string
 	// CodexTimeout bounds one planning run.
 	CodexTimeout time.Duration
 	// MaxConcurrency limits simultaneous Codex planning runs.
@@ -38,6 +48,7 @@ type Config struct {
 	IdeasAt int
 	// IdeasWebSearch is Codex's web_search mode for the ideas job alone
 	// (LIFE_OS_IDEAS_WEB_SEARCH: disabled, the default, cached, or live).
+	// Claude Code gets WebSearch for cached, WebSearch and WebFetch for live.
 	// Capture planning never searches.
 	IdeasWebSearch string
 	// CategoriesEnabled switches the AI categories job
@@ -71,7 +82,7 @@ func LoadConfig() (Config, error) {
 	if err != nil || pollMillis < 100 {
 		return Config{}, fmt.Errorf("LIFE_OS_PROCESSOR_POLL_MILLIS must be an integer of at least 100")
 	}
-	c := Config{Model: env("LIFE_OS_CODEX_MODEL", "gpt-5.6-luna"), CodexCommand: env("LIFE_OS_CODEX_COMMAND", "codex"), InboxURL: env("INBOX_SERVICE_URL", "http://inbox:8080"), MCPURL: env("MCP_SERVICE_URL", "http://mcp:8080/mcp"), WorkDir: env("LIFE_OS_CODEX_WORKDIR", "."), PollInterval: time.Duration(pollMillis) * time.Millisecond, HealthPort: env("LIFE_OS_PROCESSOR_HEALTH_PORT", "8081")}
+	c := Config{Provider: strings.ToLower(strings.TrimSpace(env("LIFE_OS_AI_PROVIDER", ProviderCodex))), Model: env("LIFE_OS_CODEX_MODEL", "gpt-5.6-luna"), CodexCommand: env("LIFE_OS_CODEX_COMMAND", "codex"), ClaudeCommand: env("LIFE_OS_CLAUDE_COMMAND", "claude"), InboxURL: env("INBOX_SERVICE_URL", "http://inbox:8080"), MCPURL: env("MCP_SERVICE_URL", "http://mcp:8080/mcp"), WorkDir: env("LIFE_OS_CODEX_WORKDIR", "."), PollInterval: time.Duration(pollMillis) * time.Millisecond, HealthPort: env("LIFE_OS_PROCESSOR_HEALTH_PORT", "8081")}
 	timeout, err := strconv.Atoi(env("LIFE_OS_CODEX_TIMEOUT_SECONDS", "300"))
 	if err != nil || timeout < 1 {
 		return c, fmt.Errorf("LIFE_OS_CODEX_TIMEOUT_SECONDS must be a positive integer")
@@ -88,12 +99,26 @@ func LoadConfig() (Config, error) {
 	if c.ContextMinutes, err = strconv.Atoi(strings.TrimSpace(env("INBOX_CONTEXT_MINUTES", "20"))); err != nil || c.ContextMinutes < 0 || c.ContextMinutes > 120 {
 		return c, fmt.Errorf("INBOX_CONTEXT_MINUTES must be a whole number of minutes from 0 (off) to 120")
 	}
-	c.ReasoningEffort = os.Getenv("LIFE_OS_CODEX_REASONING_EFFORT")
-	if !effortPattern.MatchString(c.ReasoningEffort) {
-		return c, fmt.Errorf("LIFE_OS_CODEX_REASONING_EFFORT must be a lowercase effort name such as none, low, or medium")
-	}
-	if c.CodexCommand == "" {
-		return c, fmt.Errorf("LIFE_OS_CODEX_COMMAND must not be empty")
+	switch c.Provider {
+	case ProviderCodex:
+		c.ReasoningEffort = os.Getenv("LIFE_OS_CODEX_REASONING_EFFORT")
+		if !effortPattern.MatchString(c.ReasoningEffort) {
+			return c, fmt.Errorf("LIFE_OS_CODEX_REASONING_EFFORT must be a lowercase effort name such as none, low, or medium")
+		}
+		if c.CodexCommand == "" {
+			return c, fmt.Errorf("LIFE_OS_CODEX_COMMAND must not be empty")
+		}
+	case ProviderClaude:
+		c.Model = env("LIFE_OS_CLAUDE_MODEL", claudeDefaultModel)
+		c.ReasoningEffort = strings.TrimSpace(os.Getenv("LIFE_OS_CLAUDE_EFFORT"))
+		if !claudeEfforts[c.ReasoningEffort] {
+			return c, fmt.Errorf("LIFE_OS_CLAUDE_EFFORT must be low, medium, high, xhigh, or max, or empty for the CLI's default")
+		}
+		if c.ClaudeCommand == "" {
+			return c, fmt.Errorf("LIFE_OS_CLAUDE_COMMAND must not be empty")
+		}
+	default:
+		return c, fmt.Errorf("LIFE_OS_AI_PROVIDER must be codex or claude")
 	}
 	if c.TimeZone, err = OwnerTimeZone(os.Getenv("LIFE_OS_TIMEZONE")); err != nil {
 		c.Warnings = append(c.Warnings, err.Error()+"; using UTC")
@@ -165,6 +190,18 @@ func loadTimeZone(name string) (*time.Location, bool) {
 }
 
 var effortPattern = regexp.MustCompile(`^[a-z]*$`)
+
+// claudeEfforts are the values of Claude Code's --effort; empty keeps the
+// CLI's default.
+var claudeEfforts = map[string]bool{"": true, "low": true, "medium": true, "high": true, "xhigh": true, "max": true}
+
+// Command is the selected provider's CLI.
+func (c Config) Command() string {
+	if c.Provider == ProviderClaude {
+		return c.ClaudeCommand
+	}
+	return c.CodexCommand
+}
 
 func env(k, d string) string {
 	if v := os.Getenv(k); v != "" {

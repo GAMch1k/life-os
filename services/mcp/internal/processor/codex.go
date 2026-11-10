@@ -229,14 +229,11 @@ type runSpec struct {
 // deadline, the sanitized environment, the process group, graceful
 // termination) and returns its final message.
 func (c CodexCLI) run(ctx context.Context, spec runSpec) (string, error) {
-	if c.Slots != nil {
-		select {
-		case c.Slots <- struct{}{}:
-			defer func() { <-c.Slots }()
-		case <-ctx.Done():
-			return "", ctx.Err()
-		}
+	release, err := acquireSlot(ctx, c.Slots)
+	if err != nil {
+		return "", err
 	}
+	defer release()
 	file, err := os.CreateTemp("", "life-os-codex-plan-*")
 	if err != nil {
 		return "", err
@@ -348,20 +345,37 @@ func (c CodexCLI) command(ctx context.Context, args ...string) *exec.Cmd {
 		// rather than contradicting the prompt with the container's UTC.
 		cmd.Env = append(withoutKey(cmd.Env, "TZ"), "TZ="+c.TimeZone.String())
 	}
+	manageProcess(cmd, c.Grace)
+	return cmd
+}
+
+// acquireSlot waits for one of slots (nil means unlimited) and returns its
+// release.
+func acquireSlot(ctx context.Context, slots chan struct{}) (func(), error) {
+	if slots == nil {
+		return func() {}, nil
+	}
+	select {
+	case slots <- struct{}{}:
+		return func() { <-slots }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// manageProcess gives an agent CLI run its own process group and graceful
+// termination on cancellation: SIGTERM to the group, then SIGKILL after grace
+// (default 5 seconds).
+func manageProcess(cmd *exec.Cmd, grace time.Duration) {
+	if grace <= 0 {
+		grace = 5 * time.Second
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
 		// Ask the whole group to stop; Wait kills it after WaitDelay.
 		return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
 	}
-	cmd.WaitDelay = c.grace()
-	return cmd
-}
-
-func (c CodexCLI) grace() time.Duration {
-	if c.Grace > 0 {
-		return c.Grace
-	}
-	return 5 * time.Second
+	cmd.WaitDelay = grace
 }
 
 // killGroup removes anything the run left behind in its process group.

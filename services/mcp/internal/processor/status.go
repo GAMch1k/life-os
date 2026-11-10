@@ -2,6 +2,7 @@ package processor
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"time"
@@ -20,7 +21,12 @@ const (
 // operational state like /ready, not domain data: it lives in memory and
 // resets on restart.
 type Status struct {
-	Model string `json:"model"`
+	// Provider is the AI runtime (LIFE_OS_AI_PROVIDER: codex or claude) and
+	// ProviderName its name as the owner reads it ("Codex", "Claude Code").
+	// The codex object below is that runtime's state, whichever it is.
+	Provider     string `json:"provider,omitempty"`
+	ProviderName string `json:"providerName,omitempty"`
+	Model        string `json:"model"`
 	// ReasoningEffort is the configured model_reasoning_effort ("" = Codex
 	// default).
 	ReasoningEffort string `json:"reasoningEffort,omitempty"`
@@ -200,6 +206,14 @@ func (m *Monitor) RecordRuntime(event RuntimeEvent) {
 	runtime.Current = nil
 }
 
+// SetProvider records which AI runtime the processor runs (ProviderCodex or
+// ProviderClaude).
+func (m *Monitor) SetProvider(provider string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.status.Provider, m.status.ProviderName = provider, ProviderName(provider)
+}
+
 // SetReasoningEffort records the configured reasoning effort.
 func (m *Monitor) SetReasoningEffort(effort string) {
 	m.mu.Lock()
@@ -340,7 +354,7 @@ func codexState(codex CodexStatus) string {
 func classifyCodexError(message string) string {
 	text := strings.ToLower(message)
 	switch {
-	case strings.Contains(text, "usage limit"), strings.Contains(text, "rate limit"), strings.Contains(text, "429"):
+	case strings.Contains(text, "usage limit"), strings.Contains(text, "rate limit"), strings.Contains(text, "429"), strings.Contains(text, "hit your limit"):
 		return CodexUsageLimited
 	case strings.Contains(text, "not logged in"), strings.Contains(text, "401"), strings.Contains(text, "unauthorized"), strings.Contains(text, "codex login"):
 		return CodexUnauthenticated
@@ -360,7 +374,9 @@ type monitoredPlanner struct {
 
 func (p monitoredPlanner) Plan(ctx context.Context, content string) (string, error) {
 	out, err := p.inner.Plan(ctx, content)
-	if ctx.Err() == nil {
+	// An image that cannot be sent stops the capture before any run: it
+	// says nothing about the runtime.
+	if ctx.Err() == nil && !errors.Is(err, errImageNotSendable) {
 		p.monitor.RecordPlan(err)
 	}
 	return out, err

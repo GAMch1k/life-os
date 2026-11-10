@@ -16,7 +16,7 @@ Everything runs as one Docker Compose project, `lifeos`, on one host. PostgreSQL
 
 - **OS and Docker.** You need a 64-bit Linux server with systemd and cgroup v2. The reference server runs Ubuntu 24.04 with Docker Engine 29.4 and the Compose plugin 5.1, using the systemd cgroup driver. The repository sets no minimum version. It needs Docker Engine with the `docker compose` plugin (Compose v2 or later, not the old `docker-compose`). The Compose files use recent features: non-recursive read-only binds in `compose.yaml`, and `!reset` and `!override` in `compose.verify.yaml`. Install a current release.
 - **Host tools.** `git`, `openssl`, `curl`, and `jq`. `tools/verify-compose` and the backup runbook need `jq`.
-- **Codex.** The Codex CLI on the host, and a ChatGPT account to sign it in ([step 5](#5-sign-in-to-codex-ai-processing)).
+- **Codex.** The Codex CLI on the host, and a ChatGPT account to sign it in ([step 5](#5-sign-in-to-codex-ai-processing)). Or, instead, a Claude Pro or Max subscription and the Claude Code CLI on any machine to create its token ([Claude Code instead of Codex](#claude-code-instead-of-codex)).
 - **Go and Node.js, only outside Docker.** The images build everything they need. You need Go 1.27.3 or newer (1.27 line) only to generate the web push keys ([step 10](#10-notifications)) and to run `make check`. You need Node.js 22 or newer with npm, `sqlc`, `oapi-codegen`, and `migrate` only for development and `make check`; see [Getting started](docs/development/getting-started.md).
 - **Outbound HTTPS.** The `backend` network needs internet access to reach Codex, the Whisper model download, the push services, recipe pages, feeds, and the integrations.
 - **Free address ranges.** `compose.yaml` gives its edge networks fixed subnets in `10.255.249.0/24`, and the verification stack uses `10.255.250.0/24`. Keep both ranges free.
@@ -82,9 +82,13 @@ Compose refuses every command until these six variables are set: `LIFE_OS_POSTGR
 
 | Variable | Value |
 | --- | --- |
-| `LIFE_OS_CODEX_HOME_HOST_PATH` | **Required.** `/home/<you>/.codex`, an absolute path. |
-| `LIFE_OS_CODEX_RUNTIME_UID` | **Required.** `id -u` of that directory's owner. |
+| `LIFE_OS_AI_PROVIDER` | `codex` (default), or `claude` for Claude Code on your Claude subscription. |
+| `LIFE_OS_AI_PROVIDERS` | The CLIs the processor image installs: `codex,claude` (default), or only the one you use, for a smaller image ([Claude Code instead of Codex](#claude-code-instead-of-codex)). |
+| `LIFE_OS_CODEX_HOME_HOST_PATH` | **Required with Codex.** `/home/<you>/.codex`, an absolute path. Leave it out with Claude. Compose cannot require it for Codex alone: with Codex, leaving it unset makes the processor exit at startup. |
+| `LIFE_OS_CODEX_RUNTIME_UID` | **Required.** The processor's UID, `id -u`; with Codex, of that directory's owner. |
 | `LIFE_OS_CODEX_MODEL`, `LIFE_OS_CODEX_REASONING_EFFORT` | `gpt-5.6-luna` and `medium`. |
+| `LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN` | **Required with Claude.** The token from `claude setup-token`. |
+| `LIFE_OS_CLAUDE_MODEL`, `LIFE_OS_CLAUDE_EFFORT` | `sonnet` and empty (Claude Code's default). |
 | `LIFE_OS_INBOX_CONTEXT_MINUTES`, `LIFE_OS_IDEAS_TIME`, `LIFE_OS_IDEAS_WEB_SEARCH`, `LIFE_OS_AI_CATEGORIES`, `LIFE_OS_AI_BUDGET_PLANS`, `LIFE_OS_AI_BUDGET_PLAN_MONTHLY`, `LIFE_OS_PROCESSOR_POLL_MILLIS` | The AI jobs and their schedules. The defaults are fine. |
 
 **Voice.** `LIFE_OS_WHISPER_*` and `LIFE_OS_VOICE_*`. Choose the model in [step 6](#6-voice-whisper-model); keep the other defaults.
@@ -123,9 +127,21 @@ The `processor` is the only service that runs Codex. `mcp` is the tool server th
 2. Sign in with `codex login`. This writes `auth.json` into `~/.codex`.
 3. Set `LIFE_OS_CODEX_HOME_HOST_PATH` to that directory's absolute path, and `LIFE_OS_CODEX_RUNTIME_UID` to `id -u`.
 
-When it starts, the processor mounts that directory read-only, runs as that UID, and copies only `auth.json` and an optional `config.toml` into a tmpfs. Without `auth.json` it exits with code 78. Never copy `auth.json` or an API key into the repository or `.env`. After the first start ([step 8](#8-build-and-start)), check the sign-in from inside the container with `docker compose exec processor codex login status`. If Status later says Codex is signed out, run `codex login` on the host again, then `docker compose up -d --no-build --no-deps --force-recreate processor`.
+When it starts, the processor mounts that directory read-only, runs as that UID, and copies only `auth.json` and an optional `config.toml` into a tmpfs. Without `auth.json` it exits with code 78. That includes leaving `LIFE_OS_CODEX_HOME_HOST_PATH` unset: Compose cannot make it required for Codex alone, so it starts the processor with an empty placeholder directory instead, and with Codex, leaving this unset makes the processor exit at startup. Under `restart: unless-stopped` it then keeps restarting, and the Status page's Server check reports the restart loop, until you set the path and recreate the processor. Never copy `auth.json` or an API key into the repository or `.env`. After the first start ([step 8](#8-build-and-start)), check the sign-in from inside the container with `docker compose exec processor codex login status`. If Status later says Codex is signed out, run `codex login` on the host again, then `docker compose up -d --no-build --no-deps --force-recreate processor`.
 
 The routine model and effort are `LIFE_OS_CODEX_MODEL=gpt-5.6-luna` and `LIFE_OS_CODEX_REASONING_EFFORT=medium`, chosen by the [AI runtime benchmark](docs/verification/ai-runtime-benchmark.md). An empty effort keeps the Codex configuration's default. Timeout, concurrency, and the other runtime settings are in [Codex runtime settings](docs/operations/deployment.md#codex-runtime-settings) and [MCP and AI](docs/services/mcp.md#codex-runtime).
+
+### Claude Code instead of Codex
+
+With `LIFE_OS_AI_PROVIDER=claude`, every AI job runs through the Claude Code CLI on your Claude Pro or Max subscription. Its runs count against the subscription's usage limits. No API key is used and nothing is billed to the Anthropic API: `ANTHROPIC_API_KEY` is deliberately not used, and the processor never passes it, or any other `ANTHROPIC_*` setting, to a run.
+
+1. On any machine with Claude Code, run `claude setup-token` and sign in with your subscription. It prints a long-lived token.
+2. In `.env`, set `LIFE_OS_AI_PROVIDER=claude` and `LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN` to that token. Leave `LIFE_OS_CODEX_HOME_HOST_PATH` out; `LIFE_OS_CODEX_RUNTIME_UID` is still the processor's UID.
+3. Optionally choose `LIFE_OS_CLAUDE_MODEL` (default `sonnet`, or `opus`, or a full model name) and `LIFE_OS_CLAUDE_EFFORT` (`low`, `medium`, `high`, `xhigh`, or `max`; empty is Claude Code's default).
+
+The image installs Claude Code 2.1.319. Without the token the processor exits with code 78.
+
+By default the processor image installs both CLIs (`LIFE_OS_AI_PROVIDERS=codex,claude`), so you can switch providers without a rebuild. Claude Code adds about 480 MB to the unpacked image (about 150 MB compressed; measured on linux/arm64, both CLIs 1.29 GB against 811 MB for Codex alone and 729 MB for Claude Code alone). To keep the image small, set `LIFE_OS_AI_PROVIDERS` to `codex` or `claude`, the one you use, and rebuild with `docker compose build processor`. A processor whose `LIFE_OS_AI_PROVIDER` CLI is not in the image exits with code 78 and says to rebuild. Check the sign-in with `docker compose exec processor claude auth status`; it should report `"authMethod": "oauth_token"`. If Status says the AI is signed out, create a new token, put it in `.env`, and recreate the processor. To switch providers, change `LIFE_OS_AI_PROVIDER` and run `docker compose up -d --no-build --no-deps --force-recreate processor`.
 
 ## 6. Voice: Whisper model
 
@@ -344,8 +360,10 @@ On a small server, run one heavy job at a time: don't build images while the ver
 | Symptom | Cause and fix |
 | --- | --- |
 | Compose refuses with "Set LIFE_OS_… in .env" | One of the six required variables ([step 4](#4-configure-env)) is missing. |
-| The processor keeps restarting; its log says `missing Codex authentication at /run/lifeos-codex-source/auth.json` | `LIFE_OS_CODEX_HOME_HOST_PATH` is wrong, or you haven't signed in yet. Run `codex login` on the host, then `docker compose up -d --no-build --no-deps --force-recreate processor`. |
-| Status says Codex is signed out or usage-limited | Signed out: sign in again as above. Usage-limited: captures are retried after the reset time Status shows. |
+| The processor keeps restarting; its log says `missing Codex authentication at /run/lifeos-codex-source/auth.json` | `LIFE_OS_CODEX_HOME_HOST_PATH` is unset or wrong, or you haven't signed in yet. Run `codex login` on the host, then `docker compose up -d --no-build --no-deps --force-recreate processor`. |
+| Status says Codex or Claude Code is signed out or usage-limited | Signed out: sign in again as above. Usage-limited: captures are retried after the reset time Status shows. |
+| The processor keeps restarting; its log says `this image has no claude CLI` (or `no codex CLI`) | `LIFE_OS_AI_PROVIDERS` left that CLI out of the image. Add it, then `docker compose build processor` and recreate the processor. |
+| The processor keeps restarting; its log says `missing the Claude subscription token` | `LIFE_OS_AI_PROVIDER=claude` without `LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN`. Run `claude setup-token`, put the token in `.env`, then recreate the processor as above. |
 | `curl` gets an empty reply from the gateway | The Host is not one the gateway answers. Set `LIFE_OS_PUBLIC_HOSTNAME` or `LIFE_OS_GATEWAY_BIND_ADDRESS`, then recreate the gateway ([step 9](#9-remote-access)). |
 | 502 from a page or API | The service behind it is not running. Check `docker compose ps`, `docker compose logs <service>`, and its `<service>-migrate` job. Don't publish service ports as a shortcut. |
 | The gateway fails to start with a bind error | `LIFE_OS_GATEWAY_BIND_ADDRESS` or `LIFE_OS_GATEWAY_PORT` is unavailable on the host. |

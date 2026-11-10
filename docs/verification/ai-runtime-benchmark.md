@@ -4,6 +4,8 @@ Routine Inbox and Voice planning runs through the authenticated Codex CLI. X-01 
 
 **Selected profile: `gpt-5.6-luna` with reasoning effort `medium`.** It is configured as `LIFE_OS_CODEX_MODEL` and `LIFE_OS_CODEX_REASONING_EFFORT` (the Compose and processor defaults). The processor passes the effort to Codex as `-c model_reasoning_effort=…`, records `model/effort` on every processing attempt, and reports the effort and Codex's own token usage on `/status`.
 
+Claude Code (`LIFE_OS_AI_PROVIDER=claude`, X-04; see [MCP and AI](../services/mcp.md#claude-code-instead-of-codex)) has not been benchmarked yet: `tools/benchmark-ai-runtime` runs it with `claude:` profiles, and its default, `sonnet` with Claude Code's default effort, is still to be measured (see [Claude Code](#claude-code-x-04)).
+
 ## How it was measured
 
 `tools/benchmark-ai-runtime <model/effort>…` starts a fresh disposable verification stack for each profile, with the browser tests' fixture overlay (`tools/fixtures/calendar-ics.compose.yaml`: the recipe pages it writes are served at `http://ics-fixture/`, which recipe-import may fetch) and the owner's timezone set to Europe/Berlin, uploads three synthetic photos through the Inbox media API (drawn by `tools/fixtures/documents`: a Finanzamt letter, a cash and a card receipt; captured with the composer's placeholder text "Photo"), and seeds existing Tasks, Calendar events, one shopping list item, the recipe "Pasta Bolognese" (Spaghetti 500 g, Hackfleisch 400 g, Tomaten 1 Dose) with Spaghetti in the pantry, the staple "Butter" and "Reis" (rice) in the pantry (no staple), and a breakfast ("Pancakes") on the coming Saturday (run on a Saturday, also on the next one, since "Saturday" may mean either). It then submits the same captures: EN, RU, and DE text through the Inbox API the Dashboard uses, plus a recorded voice note through Voice and whisper.cpp. The last four pairs are follow-ups, each two captures a moment apart, followed by three repeats: two captures each sent twice, and a grocery asked for again in other words. The automatic processor plans them oldest first with the real Codex CLI, each only after the captures before it have finished (or waited up to the stale-after time, P5-22), giving each the captures of the 20 minutes before it (`LIFE_OS_INBOX_CONTEXT_MINUTES`, so every capture after the first sees its neighbours), and acts through MCP and the owning services. The tool checks the persisted results:
@@ -122,4 +124,28 @@ LIFE_OS_BENCHMARK_DIR=/tmp/ai-benchmark ./tools/benchmark-ai-runtime gpt-6-luna/
 
 Each profile takes about 7 minutes on a fresh stack and uses real Codex quota.
 
-Each profile writes `<model>_<effort>.tsv` (one row per check) and adds a line to `summary.tsv`. For every failing check it also writes one JSON line to `<model>_<effort>.failures.jsonl`: the check's detail and, for each of its captures (a follow-up's or repeat's first one too), the state, the Human Review reason and candidates, every processing attempt (status, times, runtime state, error summary, and the actions with their tools, arguments, and results), and the processor's log lines about it (for example a capture that waited for an earlier one). The tool exits 1 when any check failed, after all profiles ran.
+Each profile writes `<model>_<effort>.tsv` (`claude_<model>_<effort>.tsv` for Claude Code; one row per check) and adds a line to `summary.tsv`, with the provider, model, effort, and the AI's token totals from the processor's `/status`. For every failing check it also writes one JSON line to `<model>_<effort>.failures.jsonl`: the check's detail and, for each of its captures (a follow-up's or repeat's first one too), the state, the Human Review reason and candidates, every processing attempt (status, times, runtime state, error summary, and the actions with their tools, arguments, and results), and the processor's log lines about it (for example a capture that waited for an earlier one). The tool exits 1 when any check failed, after all profiles ran.
+
+## Claude Code (X-04)
+
+The same benchmark runs Claude Code with `claude:<model>/<effort>` profiles: `claude:sonnet/default` (or `claude:sonnet`) is the default, `sonnet` with Claude Code's own effort; `claude:sonnet/high` sets `--effort high` (`low`, `medium`, `high`, `xhigh`, `max`). For such a profile the tool starts the stack with `LIFE_OS_AI_PROVIDER=claude`, `LIFE_OS_CLAUDE_MODEL`, and `LIFE_OS_CLAUDE_EFFORT`, and for a Codex profile with `LIFE_OS_AI_PROVIDER=codex`, whatever `.env` says. The scenarios, the checks, and the agent names they look for (`codex-inbox-processor`, `codex-recipe-ideas`) are the same with either provider. Token totals are Claude Code's own (its `result` event), mapped onto the same fields as Codex's: input with cache reads and writes included, cached input, output.
+
+Before a run:
+
+- The subscription token in `LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN`, in `.env` or the environment ([SETUP → Claude Code instead of Codex](../../SETUP.md#claude-code-instead-of-codex)). The tool refuses a `claude:` profile without it and never prints it.
+- A `.env` the verification stack can start with (the database settings and `LIFE_OS_CODEX_RUNTIME_UID`; `LIFE_OS_CODEX_HOME_HOST_PATH` is not needed for Claude Code), and the images built: `docker compose build` on a host without them, `docker compose build processor` after a processor change. The tool starts the stack with `--no-build`.
+- GNU tools: bash 4 or later, GNU `date`, and GNU `realpath` (for `tools/verify-compose`). On macOS: `brew install bash coreutils` and `PATH="$(brew --prefix coreutils)/libexec/gnubin:$PATH"`; the tool names what is missing and stops.
+
+```sh
+LIFE_OS_BENCHMARK_DIR=/tmp/ai-benchmark ./tools/benchmark-ai-runtime claude:sonnet/default
+```
+
+One profile makes about 65 Claude Code runs on the subscription: one per capture planned (60; the two captures sent twice are resolved without the AI), a retry for each unusable answer or technical failure, one recipe ideas run, one to three AI categories runs (one every 5 minutes while transactions wait), and one budget plan. The repeated reschedule planning above (`processor -content`, 3 runs × 2 inputs) would add 6. Claude Code's runs take longer than Codex's, so the tool waits up to 40 minutes for the captures to settle (20 with Codex; `LIFE_OS_BENCHMARK_SETTLE_SECONDS` overrides it). Expect roughly 25–40 minutes per profile, including the whisper model's download (about 490 MB, again for every profile, since each starts on fresh volumes).
+
+### Results
+
+**Not run yet.** `claude:sonnet/default` is to be run once the owner's subscription token is in place; its results go here, in the table form above.
+
+| Profile | Checks passed | Failed checks | Attempts | Avg s per attempt | Input tokens (cached) | Output tokens |
+| --- | --- | --- | --- | --- | --- | --- |
+| `claude:sonnet/default` | — | — | — | — | — | — |

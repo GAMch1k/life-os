@@ -466,14 +466,42 @@ ok 'status: not signed in to Codex' grep -qE 'AI processing \(codex\) +not signe
 ok 'status: the Whisper model' grep -qE 'Whisper model \(whisper\) +medium' "$case_dir.last"
 ok 'no secret printed by status' no_secret_printed
 
+# ---------- Claude Code instead of Codex ----------
+new_case claude
+run LIFE_OS_TIMEZONE=UTC -- --yes
+ok 'codex by default' test "$(value LIFE_OS_AI_PROVIDER)" = codex
+run LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN=sk-ant-api03-notasubscriptiontoken -- --yes claude
+ok 'claude refuses an API key' test "$status" -eq 2
+ok 'says it bills the API' output_has 'bills the API'
+ok 'codex stays the provider' test "$(value LIFE_OS_AI_PROVIDER)" = codex
+run LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN='not a token' -- --yes claude
+ok 'claude refuses a malformed token' test "$status" -eq 2
+run -- --yes claude
+ok 'claude needs the token' test "$status" -eq 2
+run LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-subscription_token-123 -- --yes claude
+ok 'claude' test "$status" -eq 0
+ok 'claude is the provider' test "$(value LIFE_OS_AI_PROVIDER)" = claude
+ok 'claude token' test "$(value LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN)" = sk-ant-oat01-subscription_token-123
+ok 'says how to apply it' output_has 'Apply it with: ./setup.sh up'
+run -- status
+ok 'status: claude set up' grep -qE 'AI processing \(claude\) +set up' "$case_dir.last"
+printf '%s\n' 'tasks|running||0' 'processor|restarting||78' 'gateway|running||0' >"$work/ps-claude"
+run STUB_PS_FILE="$work/ps-claude" LIFE_OS_SETUP_WAIT_SECONDS=5 -- up
+ok 'up: with the token, a stopped processor is a problem' output_has 'not running: processor (not running)'
+ok 'up does not suggest an AI sign-in' bash -c "! grep -qE './setup.sh (codex|claude)' '$case_dir.last'"
+ok 'no duplicate keys' no_duplicate_keys
+ok 'no secret printed' no_secret_printed
+
 # ---------- Integrations during a first setup without questions ----------
 new_case init-with-integrations
 run LIFE_OS_TIMEZONE=UTC LIFE_OS_GOOGLE_CLIENT_ID=1-x.apps.googleusercontent.com LIFE_OS_GOOGLE_CLIENT_SECRET=GOCSPX-abc \
-  LIFE_OS_SETUP_WHISPER_MODEL=base -- --yes
+  LIFE_OS_SETUP_WHISPER_MODEL=base LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-first_setup_token -- --yes
 ok 'first setup with integrations' test "$status" -eq 0
 ok 'google set up at once' test "$(value LIFE_OS_GOOGLE_CLIENT_ID)" = 1-x.apps.googleusercontent.com
 ok 'whisper set up at once' test "$(value LIFE_OS_WHISPER_MODEL_PATH)" = /models/ggml-base.bin
+ok 'claude set up at once' test "$(value LIFE_OS_AI_PROVIDER)" = claude
 ok 'banking left alone' test -z "$(value LIFE_OS_ENABLE_BANKING_APP_ID)"
+ok 'no secret printed at once' no_secret_printed
 
 # ---------- up, update, status ----------
 new_case running
@@ -543,6 +571,9 @@ ok 'no compose command ran in the clone' bash -c "! grep -q 'docker compose' '$c
 run LIFE_OS_GOOGLE_CLIENT_ID=1-x.apps.googleusercontent.com LIFE_OS_GOOGLE_CLIENT_SECRET=GOCSPX-abc -- --yes google
 ok 'an integration in a clone' test "$status" -eq 0
 ok 'says how to redeploy one service' output_has 'docker compose up -d --no-build --no-deps google-calendar'
+run LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-clone_token -- --yes claude
+ok 'claude in a clone' test "$status" -eq 0
+ok 'says how to recreate the processor' output_has 'docker compose up -d --no-build --no-deps processor'
 
 printf '\ntest-setup: %d passed, %d failed\n' "$passed" "$failed"
 ((failed == 0))

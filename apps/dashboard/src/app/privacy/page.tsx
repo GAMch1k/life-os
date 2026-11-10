@@ -40,10 +40,11 @@ export default function PrivacyPage() {
           Life OS does not sell Google user data, share it with third parties,
           or use it for advertising, and it does not use it to train AI models.
           The one transfer happens at the owner&apos;s own request: Life
-          OS&apos;s assistant runs on the owner&apos;s OpenAI Codex account, so
-          when the owner asks it to work with their calendar (for example
-          &ldquo;move the dentist to Monday&rdquo;), the events it needs to find
-          and change are sent to that account to plan the change.
+          OS&apos;s assistant runs on the owner&apos;s own AI account (OpenAI
+          Codex, or a Claude subscription through Claude Code, as the owner
+          chooses), so when the owner asks it to work with their calendar (for
+          example &ldquo;move the dentist to Monday&rdquo;), the events it needs
+          to find and change are sent to that account to plan the change.
         </p>
       </section>
       <section>

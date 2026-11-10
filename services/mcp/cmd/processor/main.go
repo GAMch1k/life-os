@@ -23,7 +23,7 @@ func main() {
 	content := flag.String("content", "", "raw Inbox content to plan without executing (diagnostic)")
 	dryRun := flag.Bool("dry-run", false, "print proposed Inbox MCP calls without mutations")
 	serve := flag.Bool("serve", false, "run the managed automatic Inbox processor")
-	usage := flag.Bool("usage", false, "print the Codex account usage reported by the Codex CLI (diagnostic)")
+	usage := flag.Bool("usage", false, "print the account usage reported by the AI provider's CLI (diagnostic)")
 	flag.Parse()
 	cfg, err := processor.LoadConfig()
 	if err != nil {
@@ -33,14 +33,14 @@ func main() {
 	for _, warning := range cfg.Warnings {
 		fmt.Fprintln(os.Stderr, warning)
 	}
-	// Resolve the configured Codex binary once, so every run uses the same
-	// executable and a missing CLI fails loudly at startup.
-	binary, err := exec.LookPath(cfg.CodexCommand)
+	// Resolve the configured CLI once, so every run uses the same executable
+	// and a missing CLI fails loudly at startup.
+	binary, err := exec.LookPath(cfg.Command())
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Codex CLI %q not found: %v\n", cfg.CodexCommand, err)
+		fmt.Fprintf(os.Stderr, "%s CLI %q not found: %v\n", cfg.Provider, cfg.Command(), err)
 		os.Exit(78)
 	}
-	planner := processor.CodexCLI{Command: binary, Model: cfg.Model, ReasoningEffort: cfg.ReasoningEffort, WorkDir: cfg.WorkDir, Timeout: cfg.CodexTimeout, Slots: make(chan struct{}, cfg.MaxConcurrency), TimeZone: cfg.TimeZone}
+	planner := newProvider(cfg, binary)
 	if *usage {
 		report, err := planner.Usage(context.Background())
 		if err != nil {
@@ -70,6 +70,7 @@ func main() {
 		monitor.ConfigureRuntime(runner.Owner, binary, cfg.CodexTimeout, cfg.MaxConcurrency)
 		runner.OnRuntime = monitor.RecordRuntime
 		runner.OnTokens = monitor.RecordTokens
+		monitor.SetProvider(cfg.Provider)
 		monitor.SetReasoningEffort(cfg.ReasoningEffort)
 		monitor.SetTimeZone(cfg.TimeZone.String())
 		runner.Planner = monitor.Monitored(planner)
@@ -86,7 +87,8 @@ func main() {
 		go monitor.WatchReconcile(ctx, func(ctx context.Context) (int, error) {
 			return runner.Reconcile(ctx, cfg.StaleAfter)
 		}, 30*time.Second)
-		// Account usage and reset times, as reported by the Codex CLI.
+		// Account usage and reset times, as reported by the Codex CLI (Claude
+		// Code reports them with each run).
 		go monitor.WatchUsage(ctx, planner.Usage, 5*time.Minute)
 		// Recipe ideas from the pantry and the preferences, daily and on the
 		// owner's request, through the same Codex runtime and MCP.
@@ -123,10 +125,25 @@ func main() {
 	}
 }
 
-// usageRecovery reads when the exhausted Codex usage limit resets, straight
-// from the Codex CLI. A result is reused for a minute so a batch of failing
-// items does not start an app-server each.
-func usageRecovery(planner processor.CodexCLI, monitor *processor.Monitor) func(context.Context) (time.Time, bool) {
+// newProvider is the AI runtime LIFE_OS_AI_PROVIDER selects: the Codex CLI
+// (the default) or the Claude Code CLI, with the same runtime controls.
+func newProvider(cfg processor.Config, binary string) processor.Provider {
+	slots := make(chan struct{}, cfg.MaxConcurrency)
+	if cfg.Provider == processor.ProviderClaude {
+		return processor.ClaudeCLI{Command: binary, Model: cfg.Model, Effort: cfg.ReasoningEffort, WorkDir: cfg.WorkDir, Timeout: cfg.CodexTimeout, Slots: slots, TimeZone: cfg.TimeZone, Limits: &processor.ClaudeLimits{}}
+	}
+	return processor.CodexCLI{Command: binary, Model: cfg.Model, ReasoningEffort: cfg.ReasoningEffort, WorkDir: cfg.WorkDir, Timeout: cfg.CodexTimeout, Slots: slots, TimeZone: cfg.TimeZone}
+}
+
+// usageRecovery reads when the exhausted usage limit resets, straight from
+// the provider's CLI. A Codex result is reused for a minute so a batch of
+// failing items does not start an app-server each; Claude Code's limits are
+// kept in memory from its runs and always read fresh.
+func usageRecovery(planner processor.Provider, monitor *processor.Monitor) func(context.Context) (time.Time, bool) {
+	reuse := time.Minute
+	if _, ok := planner.(processor.ClaudeCLI); ok {
+		reuse = 0
+	}
 	var mu sync.Mutex
 	var checked time.Time
 	var at time.Time
@@ -134,7 +151,7 @@ func usageRecovery(planner processor.CodexCLI, monitor *processor.Monitor) func(
 	return func(ctx context.Context) (time.Time, bool) {
 		mu.Lock()
 		defer mu.Unlock()
-		if time.Since(checked) > time.Minute {
+		if time.Since(checked) > reuse {
 			usage, err := planner.Usage(ctx)
 			monitor.RecordUsage(usage, err)
 			checked = time.Now()

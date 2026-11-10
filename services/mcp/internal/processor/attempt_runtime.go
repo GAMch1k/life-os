@@ -185,7 +185,7 @@ func (r Runner) Reconcile(ctx context.Context, staleAfter time.Duration) (int, e
 		}
 		reason := fmt.Sprintf("recovered: the processor stopped during this attempt (runtime %s)", state)
 		if attempt.SessionID != nil {
-			reason += "; Codex session " + *attempt.SessionID + " is not resumed because planning is read-only and is re-run"
+			reason += "; AI session " + *attempt.SessionID + " is not resumed because planning is read-only and is re-run"
 		}
 		// Inbox records the outcome in the capture's own workflow (it owns the
 		// correlation), caused by the abandoned attempt's start.
