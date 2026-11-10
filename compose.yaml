@@ -704,7 +704,7 @@ services:
   # from the ignored .env. Bcrypt hashes and the token never appear in the
   # repository. Its public URL (base-url) is LIFE_OS_NTFY_PUBLIC_URL.
   ntfy:
-    image: ${LIFE_OS_NTFY_IMAGE:-binwiederhier/ntfy:v2.29.0}
+    image: ${LIFE_OS_NTFY_IMAGE:-binwiederhier/ntfy:v2.37.2@sha256:1875ddcf815c8a3c981d6d78c67a93452d0abba79b1ab9520b1f5f5238902bd7}
     profiles: [ntfy]
     command: ["serve"]
     environment:
