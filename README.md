@@ -4,14 +4,31 @@ Life OS is a local-first personal operating system. Independent domain services 
 
 This repository is the single monorepo for the project. It contains the implemented Finance, Tasks, Inbox, Calendar, Voice, MCP, dashboard, and private Whisper worker components through Phase 6, Food (the shopping list and pantry, Phase 15), integration services such as Banking, which syncs the owner's bank accounts into Finance through a licensed PSD2 provider (read-only), calendar-feeds (ICS feeds into Calendar), recipe-import (recipes from links and captions into Food), and google-calendar (the owner's Google calendars, synced both ways with Calendar), a backup service that dumps every database each night (see [`docs/services/backup.md`](docs/services/backup.md)), and host-health, which reports the server's memory, load, disks, and containers to the Status page (see [`docs/services/host-health.md`](docs/services/host-health.md)).
 
+## Quick start
+
+Run Life OS on your own Linux server from the published Docker images, with one setup script and nothing to build:
+
+```sh
+mkdir ~/life-os && cd ~/life-os
+version=v0.1.0-preview.1
+for file in compose.yaml .env.example setup.sh SHA256SUMS; do
+  curl -fsSLO "https://github.com/GAMch1k/life-os/releases/download/$version/$file"
+done
+sha256sum --ignore-missing -c SHA256SUMS
+chmod +x setup.sh && ./setup.sh && ./setup.sh up
+```
+
+**This is an early preview.** Life OS has no login of its own yet, so it listens only on `127.0.0.1`, and you reach it through an SSH tunnel, a VPN, or Cloudflare Access. The [install guide](docs/install/README.md) covers the requirements, safe access, AI processing, the integrations, the phone apps, backups, updates, and troubleshooting.
+
 ## Technical documentation
 
 The human-readable technical guide is maintained as ordinary repository Markdown
 under [`docs/`](docs/README.md). It is designed for GitHub browsing and Obsidian;
 there is no GitHub Pages or Wiki dependency.
 
-To run your own Life OS on a server, see [`SETUP.md`](SETUP.md), the
-self-hosting setup guide.
+To run your own Life OS from the published images, see the
+[install guide](docs/install/README.md). To build and run it from this
+repository instead, see [`SETUP.md`](SETUP.md), the self-hosting guide.
 
 ## Repository layout
 
@@ -147,6 +164,10 @@ never bind it to a public/LAN address without an authenticated edge. See
 - OpenAPI is the source of truth for HTTP contracts and generated Go and TypeScript clients.
 - Shared packages contain infrastructure concerns only, never Finance, Tasks, Inbox, or Calendar business types.
 - Public authentication, queues, Kubernetes, global tags/areas, and direct cross-service database access are intentionally deferred.
+
+## Official sources and name
+
+The official Life OS is published only at [github.com/GAMch1k](https://github.com/GAMch1k) (the source code and its releases), [ghcr.io/gamch1k](https://github.com/GAMch1k?tab=packages) (the Docker images), and lifeos.gamch1k.com. Forks are welcome under the AGPL, but please don't present a fork as the official Life OS: give it a name of its own, and say what it is based on.
 
 ## License
 

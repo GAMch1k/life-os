@@ -252,10 +252,10 @@ ok 'up refuses a public address without the flag' test "$status" -eq 1
 ok 'up starts nothing then' bash -c "! grep -q 'compose up' '$case_dir.log'"
 
 new_case vpn-bind
-run -- --yes --bind 10.8.0.1 --port 3100
+run -- --yes --bind 10.0.0.1 --port 3100
 ok 'a VPN address works' test "$status" -eq 0
 ok 'warns that every peer is the owner' output_has 'every peer is the owner'
-ok 'the address follows' test "$(value LIFE_OS_PUBLIC_URL)" = http://10.8.0.1:3100
+ok 'the address follows' test "$(value LIFE_OS_PUBLIC_URL)" = http://10.0.0.1:3100
 ok 'the port' test "$(value LIFE_OS_GATEWAY_PORT)" = 3100
 run LIFE_OS_GOOGLE_CLIENT_ID=1-x.apps.googleusercontent.com LIFE_OS_GOOGLE_CLIENT_SECRET=GOCSPX-abc -- --yes google
 ok "warns that Google refuses a plain http VPN address" output_has 'only on 127.0.0.1 or localhost'
