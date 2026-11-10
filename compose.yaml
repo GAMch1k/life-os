@@ -41,7 +41,7 @@ services:
       start_period: 5s
 
   finance-migrate:
-    image: migrate/migrate:v4.18.3
+    image: migrate/migrate:v4.20.1@sha256:76cc2074cb6642631f34a898ced71e6aeaa6b1a4d78c4daa743275a22e0c5be7
     command: ["-path", "/migrations", "-database", "postgres://finance_user:${LIFE_OS_FINANCE_DB_PASSWORD}@postgres:5432/finance_db?sslmode=disable", "up"]
     volumes: ["./services/finance/db/migrations:/migrations:ro"]
     depends_on: {postgres: {condition: service_healthy}}
@@ -56,7 +56,7 @@ services:
     restart: unless-stopped
 
   tasks-migrate:
-    image: migrate/migrate:v4.18.3
+    image: migrate/migrate:v4.20.1@sha256:76cc2074cb6642631f34a898ced71e6aeaa6b1a4d78c4daa743275a22e0c5be7
     command: ["-path", "/migrations", "-database", "postgres://tasks_user:${LIFE_OS_TASKS_DB_PASSWORD}@postgres:5432/tasks_db?sslmode=disable", "up"]
     volumes: ["./services/tasks/db/migrations:/migrations:ro"]
     depends_on: {postgres: {condition: service_healthy}}
@@ -71,7 +71,7 @@ services:
     restart: unless-stopped
 
   food-migrate:
-    image: migrate/migrate:v4.18.3
+    image: migrate/migrate:v4.20.1@sha256:76cc2074cb6642631f34a898ced71e6aeaa6b1a4d78c4daa743275a22e0c5be7
     command: ["-path", "/migrations", "-database", "postgres://food_user:${LIFE_OS_FOOD_DB_PASSWORD}@postgres:5432/food_db?sslmode=disable", "up"]
     volumes: ["./services/food/db/migrations:/migrations:ro"]
     depends_on: {postgres: {condition: service_healthy}}
@@ -88,7 +88,7 @@ services:
     restart: unless-stopped
 
   inbox-migrate:
-    image: migrate/migrate:v4.18.3
+    image: migrate/migrate:v4.20.1@sha256:76cc2074cb6642631f34a898ced71e6aeaa6b1a4d78c4daa743275a22e0c5be7
     command: ["-path", "/migrations", "-database", "postgres://inbox_user:${LIFE_OS_INBOX_DB_PASSWORD}@postgres:5432/inbox_db?sslmode=disable", "up"]
     volumes: ["./services/inbox/db/migrations:/migrations:ro"]
     depends_on: {postgres: {condition: service_healthy}}
@@ -107,7 +107,7 @@ services:
     restart: unless-stopped
 
   calendar-migrate:
-    image: migrate/migrate:v4.18.3
+    image: migrate/migrate:v4.20.1@sha256:76cc2074cb6642631f34a898ced71e6aeaa6b1a4d78c4daa743275a22e0c5be7
     command: ["-path", "/migrations", "-database", "postgres://calendar_user:${LIFE_OS_CALENDAR_DB_PASSWORD}@postgres:5432/calendar_db?sslmode=disable", "up"]
     volumes: ["./services/calendar/db/migrations:/migrations:ro"]
     depends_on: {postgres: {condition: service_healthy}}
@@ -122,7 +122,7 @@ services:
     restart: unless-stopped
 
   calendar-feeds-migrate:
-    image: migrate/migrate:v4.18.3
+    image: migrate/migrate:v4.20.1@sha256:76cc2074cb6642631f34a898ced71e6aeaa6b1a4d78c4daa743275a22e0c5be7
     command: ["-path", "/migrations", "-database", "postgres://calendar_feeds_user:${LIFE_OS_CALENDAR_FEEDS_DB_PASSWORD}@postgres:5432/calendar_feeds_db?sslmode=disable", "up"]
     volumes: ["./services/calendar-feeds/db/migrations:/migrations:ro"]
     depends_on: {postgres: {condition: service_healthy}}
@@ -167,7 +167,7 @@ services:
     restart: unless-stopped
 
   activity-migrate:
-    image: migrate/migrate:v4.18.3
+    image: migrate/migrate:v4.20.1@sha256:76cc2074cb6642631f34a898ced71e6aeaa6b1a4d78c4daa743275a22e0c5be7
     command: ["-path", "/migrations", "-database", "postgres://activity_user:${LIFE_OS_ACTIVITY_DB_PASSWORD}@postgres:5432/activity_db?sslmode=disable", "up"]
     volumes: ["./services/activity/db/migrations:/migrations:ro"]
     depends_on: {postgres: {condition: service_healthy}}
@@ -182,7 +182,7 @@ services:
     restart: unless-stopped
 
   notifications-migrate:
-    image: migrate/migrate:v4.18.3
+    image: migrate/migrate:v4.20.1@sha256:76cc2074cb6642631f34a898ced71e6aeaa6b1a4d78c4daa743275a22e0c5be7
     command: ["-path", "/migrations", "-database", "postgres://notifications_user:${LIFE_OS_NOTIFICATIONS_DB_PASSWORD}@postgres:5432/notifications_db?sslmode=disable", "up"]
     volumes: ["./services/notifications/db/migrations:/migrations:ro"]
     depends_on: {postgres: {condition: service_healthy}}
@@ -219,7 +219,7 @@ services:
     restart: unless-stopped
 
   banking-migrate:
-    image: migrate/migrate:v4.18.3
+    image: migrate/migrate:v4.20.1@sha256:76cc2074cb6642631f34a898ced71e6aeaa6b1a4d78c4daa743275a22e0c5be7
     command: ["-path", "/migrations", "-database", "postgres://banking_user:${LIFE_OS_BANKING_DB_PASSWORD}@postgres:5432/banking_db?sslmode=disable", "up"]
     volumes: ["./services/banking/db/migrations:/migrations:ro"]
     depends_on: {postgres: {condition: service_healthy}}
@@ -266,7 +266,7 @@ services:
     restart: unless-stopped
 
   google-calendar-migrate:
-    image: migrate/migrate:v4.18.3
+    image: migrate/migrate:v4.20.1@sha256:76cc2074cb6642631f34a898ced71e6aeaa6b1a4d78c4daa743275a22e0c5be7
     command: ["-path", "/migrations", "-database", "postgres://google_calendar_user:${LIFE_OS_GOOGLE_CALENDAR_DB_PASSWORD}@postgres:5432/google_calendar_db?sslmode=disable", "up"]
     volumes: ["./services/google-calendar/db/migrations:/migrations:ro"]
     depends_on: {postgres: {condition: service_healthy}}
@@ -603,7 +603,7 @@ services:
       start_period: 2m
 
   voice-migrate:
-    image: migrate/migrate:v4.18.3
+    image: migrate/migrate:v4.20.1@sha256:76cc2074cb6642631f34a898ced71e6aeaa6b1a4d78c4daa743275a22e0c5be7
     command: ["-path", "/migrations", "-database", "postgres://voice_user:${LIFE_OS_VOICE_DB_PASSWORD}@postgres:5432/voice_db?sslmode=disable", "up"]
     volumes: ["./services/voice/db/migrations:/migrations:ro"]
     depends_on: {postgres: {condition: service_healthy}}
