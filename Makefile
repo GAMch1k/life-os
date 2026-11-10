@@ -50,7 +50,7 @@ life-smoke: infra-env
 
 verify-clean-db: infra-env
 	./tools/verify-compose up --detach --no-build
-	./tools/verify-compose exec -T postgres /opt/lifeos/postgres/verify-database-isolation.sh
+	./tools/verify-compose run --rm --no-deps -T postgres-provision verify-database-isolation.sh
 	./tools/verify-compose down --volumes --remove-orphans
 
 verify-isolation: infra-env
@@ -131,20 +131,20 @@ infra-reset:
 	$(call confirm,It deletes the volumes of Compose project $(LIVE_PROJECT): every database and the capture images and Voice audio. Back up first.)
 	docker compose down --volumes --remove-orphans
 
-# The scripts and the registry are read from the directory mount
-# /opt/lifeos/postgres: single-file mounts (the initdb script,
-# /etc/lifeos/service-databases.conf) keep the files the container was
-# created with after a pull.
+# On the running server, from the postgres-provision image (infra/postgres;
+# after a change there, docker compose build postgres-provision first) with
+# the passwords in .env, as every start runs it: every service's database and
+# login, then the backup role. Idempotent; --no-deps leaves PostgreSQL as it is.
 db-provision: infra-env
-	docker compose exec -T -e LIFE_OS_DATABASE_CONFIG=/opt/lifeos/postgres/service-databases.conf postgres bash /opt/lifeos/postgres/provision-service-databases.sh
+	docker compose run --rm --no-deps -T postgres-provision
 
-# The backup service's read-only login on a running server (idempotent; see
-# docs/services/backup.md). The password comes from .env; no restart needed.
+# The backup service's read-only login alone (idempotent; see
+# docs/services/backup.md). No restart needed.
 db-provision-backup: infra-env
-	LIFE_OS_BACKUP_DB_PASSWORD="$$(sed -n 's/^LIFE_OS_BACKUP_DB_PASSWORD=//p' .env | tail -n 1)" docker compose exec -T -e LIFE_OS_BACKUP_DB_PASSWORD -e LIFE_OS_DATABASE_CONFIG=/opt/lifeos/postgres/service-databases.conf postgres bash /opt/lifeos/postgres/provision-backup-role.sh
+	docker compose run --rm --no-deps -T postgres-provision provision-backup-role.sh
 
 db-check-isolation: infra-env
-	docker compose exec -T postgres /opt/lifeos/postgres/verify-database-isolation.sh
+	docker compose run --rm --no-deps -T postgres-provision verify-database-isolation.sh
 
 db-migration-new:
 	@test -n "$(SERVICE)" || (echo "SERVICE is required" >&2; exit 2)

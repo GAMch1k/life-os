@@ -6,6 +6,10 @@
 # A change to either file takes a rebuild of this image, then the gateway's
 # recreation (docs/operations/deployment.md).
 FROM nginx:1.30-alpine@sha256:583b7f2fce1cdb8da5ad5c39ebd3c33b98b87d493190e548bdee1fa8c619c311
+# The image's source and license; on ghcr.io this links its package to the
+# repository (docs/operations/releases.md).
+LABEL org.opencontainers.image.source="https://github.com/GAMch1k/life-os" \
+      org.opencontainers.image.licenses="AGPL-3.0-only"
 
 ENV NGINX_ENVSUBST_FILTER=^LIFE_OS_
 RUN mkdir -p /etc/nginx/templates

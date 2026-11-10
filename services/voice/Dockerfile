@@ -11,6 +11,10 @@ RUN go build -trimpath -ldflags="-s -w" -o /out/service ./cmd/server
 RUN go build -trimpath -ldflags="-s -w" -o /out/worker ./cmd/worker
 
 FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
+# The image's source and license; on ghcr.io this links its package to the
+# repository (docs/operations/releases.md).
+LABEL org.opencontainers.image.source="https://github.com/GAMch1k/life-os" \
+      org.opencontainers.image.licenses="AGPL-3.0-only"
 RUN addgroup -S lifeos && adduser -S -G lifeos lifeos && mkdir -p /var/lib/lifeos/voice && chown -R lifeos:lifeos /var/lib/lifeos
 USER lifeos
 COPY --from=build /out/service /service

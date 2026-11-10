@@ -20,6 +20,7 @@ Life OS is a local-first personal operating system. This index is the human-read
 - [Bank connection](operations/banking.md) — setting up Enable Banking, connecting, reconnecting before the consent ends, and revoking.
 - [Android releases](operations/android-releases.md) — publishing the Android apps' builds, and how the phone gets them and their updates at `/android/`.
 - [Continuous integration](operations/ci.md) — what GitHub Actions checks on every push and pull request, how to run each job locally (the integration tests too), govulncheck, the CLA check, and Dependabot.
+- [Releases](operations/releases.md) — the public images on ghcr.io: versions, cutting a release, the install bundle, verifying an image (cosign, attestations), and the vulnerability gate.
 
 ## Scope
 

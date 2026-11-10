@@ -157,6 +157,11 @@ def render(bundle):
         allow_unicode=True,
         width=1 << 16,
     )
+    # A blank line before each service and each top-level key, for reading.
+    body = re.sub(r"(?m)^(?=(?:  )?[A-Za-z][A-Za-z0-9_.-]*:(?: |$))", "\n", body).lstrip("\n")
+    body = re.sub(r"(?m)^([A-Za-z][A-Za-z0-9_.-]*:)\n\n", "\\1\n", body)
+    if yaml.safe_load(body) != bundle:
+        raise BundleError("the rendered compose.yaml does not read back as generated")
     return HEADER + body
 
 

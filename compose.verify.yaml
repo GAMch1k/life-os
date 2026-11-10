@@ -6,6 +6,8 @@ name: lifeos-verify
 services:
   postgres:
     ports: !reset []
+  postgres-provision:
+    image: lifeos-postgres-provision:latest
   finance:
     image: lifeos-finance:latest
     ports: !reset []
@@ -93,7 +95,7 @@ services:
       HOST_HEALTH_DOCKER_URL: ""
     volumes: !reset []
   host-health-docker:
-    image: lifeos-host-health-docker:latest
+    image: lifeos-host-health:latest
     profiles: [host-docker]
     volumes: !reset []
   mcp:
@@ -105,11 +107,12 @@ services:
   voice:
     image: lifeos-voice:latest
   voice-worker:
-    image: lifeos-voice-worker:latest
+    image: lifeos-voice:latest
   # Never the owner's Android releases: tools/verify-compose mounts a
   # scratch directory of this stack's own at /srv/android and refuses a plan
   # that mounts the owner's.
   gateway:
+    image: lifeos-gateway:latest
     ports: !override ["127.0.0.1:13001:80"]
 
 networks:

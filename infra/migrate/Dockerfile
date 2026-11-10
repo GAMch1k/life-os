@@ -17,9 +17,14 @@ RUN mkdir /out/migrations \
     && for migrations in /src/services/*/db/migrations; do \
          service=${migrations#/src/services/}; service=${service%%/*}; \
          cp -R "$migrations" "/out/migrations/$service"; \
-       done
+       done \
+    && chmod -R a+rX,go-w /out/migrations
 
 FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
+# The image's source and license; on ghcr.io this links its package to the
+# repository (docs/operations/releases.md).
+LABEL org.opencontainers.image.source="https://github.com/GAMch1k/life-os" \
+      org.opencontainers.image.licenses="AGPL-3.0-only"
 COPY --from=build /out/migrate /usr/local/bin/migrate
 COPY --from=build /out/migrations /migrations
 USER 65534:65534

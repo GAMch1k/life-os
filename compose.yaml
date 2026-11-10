@@ -4,14 +4,38 @@ services:
   postgres:
     image: ${LIFE_OS_POSTGRES_IMAGE:-postgres:18.6-alpine@sha256:123b17998ccaf47e53b502e8c6a1e79afd8f579c6f3eec83c563da026f957395}
     restart: unless-stopped
-    # Only the database settings: the admin login, and the passwords that
-    # infra/postgres/provision-service-databases.sh gives each service's role
-    # (one per line of service-databases.conf) and the backup role. A new
-    # service's password variable is added here too.
+    # Only the admin login: postgres-provision creates the services' databases
+    # and logins.
     environment:
       POSTGRES_DB: ${LIFE_OS_POSTGRES_DB:-postgres}
       POSTGRES_USER: ${LIFE_OS_POSTGRES_USER:?Set LIFE_OS_POSTGRES_USER in .env}
       POSTGRES_PASSWORD: ${LIFE_OS_POSTGRES_PASSWORD:?Set LIFE_OS_POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    networks:
+      - backend
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
+      interval: 2s
+      timeout: 5s
+      retries: 15
+      start_period: 5s
+
+  # Creates and reconciles every service's database and login (one per line
+  # of infra/postgres/service-databases.conf) and the backup service's
+  # read-only login, as the admin over the network, then exits: at every
+  # start, so a fresh volume and an update that adds a database are both
+  # provisioned (infra/README.md). The migrations wait for it. A new
+  # service's password variable is added here too.
+  postgres-provision:
+    build: {context: infra/postgres}
+    environment:
+      PGHOST: postgres
+      PGPASSWORD: ${LIFE_OS_POSTGRES_PASSWORD:?Set LIFE_OS_POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${LIFE_OS_POSTGRES_DB:-postgres}
+      POSTGRES_USER: ${LIFE_OS_POSTGRES_USER:?Set LIFE_OS_POSTGRES_USER in .env}
       LIFE_OS_FINANCE_DB_PASSWORD: ${LIFE_OS_FINANCE_DB_PASSWORD:-}
       LIFE_OS_TASKS_DB_PASSWORD: ${LIFE_OS_TASKS_DB_PASSWORD:-}
       LIFE_OS_INBOX_DB_PASSWORD: ${LIFE_OS_INBOX_DB_PASSWORD:-}
@@ -24,27 +48,21 @@ services:
       LIFE_OS_CALENDAR_FEEDS_DB_PASSWORD: ${LIFE_OS_CALENDAR_FEEDS_DB_PASSWORD:-}
       LIFE_OS_FOOD_DB_PASSWORD: ${LIFE_OS_FOOD_DB_PASSWORD:-}
       LIFE_OS_BACKUP_DB_PASSWORD: ${LIFE_OS_BACKUP_DB_PASSWORD:-}
-    volumes:
-      - postgres-data:/var/lib/postgresql
-      - ./infra/postgres/provision-service-databases.sh:/docker-entrypoint-initdb.d/10-provision-service-databases.sh:ro
-      - ./infra/postgres/service-databases.conf:/etc/lifeos/service-databases.conf:ro
-      - ./infra/postgres:/opt/lifeos/postgres:ro
-    networks:
-      - backend
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
-      interval: 2s
-      timeout: 5s
-      retries: 15
-      start_period: 5s
-
-  finance-migrate:
-    image: migrate/migrate:v4.20.1@sha256:76cc2074cb6642631f34a898ced71e6aeaa6b1a4d78c4daa743275a22e0c5be7
-    command: ["-path", "/migrations", "-database", "postgres://finance_user:${LIFE_OS_FINANCE_DB_PASSWORD}@postgres:5432/finance_db?sslmode=disable", "up"]
-    volumes: ["./services/finance/db/migrations:/migrations:ro"]
     depends_on: {postgres: {condition: service_healthy}}
+    networks: [backend]
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
+  # Each <service>-migrate applies its service's migrations from the shared
+  # migrate image (/migrations/<service>, infra/migrate) once the database is
+  # provisioned, then exits; the service waits for it.
+  finance-migrate:
+    build: {context: ., dockerfile: infra/migrate/Dockerfile}
+    image: lifeos-migrate
+    command: ["-path", "/migrations/finance", "-database", "postgres://finance_user:${LIFE_OS_FINANCE_DB_PASSWORD}@postgres:5432/finance_db?sslmode=disable", "up"]
+    depends_on: {postgres-provision: {condition: service_completed_successfully}}
     networks: [backend]
     restart: "no"
   finance:
@@ -56,10 +74,10 @@ services:
     restart: unless-stopped
 
   tasks-migrate:
-    image: migrate/migrate:v4.20.1@sha256:76cc2074cb6642631f34a898ced71e6aeaa6b1a4d78c4daa743275a22e0c5be7
-    command: ["-path", "/migrations", "-database", "postgres://tasks_user:${LIFE_OS_TASKS_DB_PASSWORD}@postgres:5432/tasks_db?sslmode=disable", "up"]
-    volumes: ["./services/tasks/db/migrations:/migrations:ro"]
-    depends_on: {postgres: {condition: service_healthy}}
+    build: {context: ., dockerfile: infra/migrate/Dockerfile}
+    image: lifeos-migrate
+    command: ["-path", "/migrations/tasks", "-database", "postgres://tasks_user:${LIFE_OS_TASKS_DB_PASSWORD}@postgres:5432/tasks_db?sslmode=disable", "up"]
+    depends_on: {postgres-provision: {condition: service_completed_successfully}}
     networks: [backend]
     restart: "no"
   tasks:
@@ -71,10 +89,10 @@ services:
     restart: unless-stopped
 
   food-migrate:
-    image: migrate/migrate:v4.20.1@sha256:76cc2074cb6642631f34a898ced71e6aeaa6b1a4d78c4daa743275a22e0c5be7
-    command: ["-path", "/migrations", "-database", "postgres://food_user:${LIFE_OS_FOOD_DB_PASSWORD}@postgres:5432/food_db?sslmode=disable", "up"]
-    volumes: ["./services/food/db/migrations:/migrations:ro"]
-    depends_on: {postgres: {condition: service_healthy}}
+    build: {context: ., dockerfile: infra/migrate/Dockerfile}
+    image: lifeos-migrate
+    command: ["-path", "/migrations/food", "-database", "postgres://food_user:${LIFE_OS_FOOD_DB_PASSWORD}@postgres:5432/food_db?sslmode=disable", "up"]
+    depends_on: {postgres-provision: {condition: service_completed_successfully}}
     networks: [backend]
     restart: "no"
   # The shopping list, stores, aisle rules, and pantry (docs/services/food.md).
@@ -88,10 +106,10 @@ services:
     restart: unless-stopped
 
   inbox-migrate:
-    image: migrate/migrate:v4.20.1@sha256:76cc2074cb6642631f34a898ced71e6aeaa6b1a4d78c4daa743275a22e0c5be7
-    command: ["-path", "/migrations", "-database", "postgres://inbox_user:${LIFE_OS_INBOX_DB_PASSWORD}@postgres:5432/inbox_db?sslmode=disable", "up"]
-    volumes: ["./services/inbox/db/migrations:/migrations:ro"]
-    depends_on: {postgres: {condition: service_healthy}}
+    build: {context: ., dockerfile: infra/migrate/Dockerfile}
+    image: lifeos-migrate
+    command: ["-path", "/migrations/inbox", "-database", "postgres://inbox_user:${LIFE_OS_INBOX_DB_PASSWORD}@postgres:5432/inbox_db?sslmode=disable", "up"]
+    depends_on: {postgres-provision: {condition: service_completed_successfully}}
     networks: [backend]
     restart: "no"
   # Capture images (photos shared or attached to captures) live on the
@@ -107,10 +125,10 @@ services:
     restart: unless-stopped
 
   calendar-migrate:
-    image: migrate/migrate:v4.20.1@sha256:76cc2074cb6642631f34a898ced71e6aeaa6b1a4d78c4daa743275a22e0c5be7
-    command: ["-path", "/migrations", "-database", "postgres://calendar_user:${LIFE_OS_CALENDAR_DB_PASSWORD}@postgres:5432/calendar_db?sslmode=disable", "up"]
-    volumes: ["./services/calendar/db/migrations:/migrations:ro"]
-    depends_on: {postgres: {condition: service_healthy}}
+    build: {context: ., dockerfile: infra/migrate/Dockerfile}
+    image: lifeos-migrate
+    command: ["-path", "/migrations/calendar", "-database", "postgres://calendar_user:${LIFE_OS_CALENDAR_DB_PASSWORD}@postgres:5432/calendar_db?sslmode=disable", "up"]
+    depends_on: {postgres-provision: {condition: service_completed_successfully}}
     networks: [backend]
     restart: "no"
   calendar:
@@ -122,10 +140,10 @@ services:
     restart: unless-stopped
 
   calendar-feeds-migrate:
-    image: migrate/migrate:v4.20.1@sha256:76cc2074cb6642631f34a898ced71e6aeaa6b1a4d78c4daa743275a22e0c5be7
-    command: ["-path", "/migrations", "-database", "postgres://calendar_feeds_user:${LIFE_OS_CALENDAR_FEEDS_DB_PASSWORD}@postgres:5432/calendar_feeds_db?sslmode=disable", "up"]
-    volumes: ["./services/calendar-feeds/db/migrations:/migrations:ro"]
-    depends_on: {postgres: {condition: service_healthy}}
+    build: {context: ., dockerfile: infra/migrate/Dockerfile}
+    image: lifeos-migrate
+    command: ["-path", "/migrations/calendar-feeds", "-database", "postgres://calendar_feeds_user:${LIFE_OS_CALENDAR_FEEDS_DB_PASSWORD}@postgres:5432/calendar_feeds_db?sslmode=disable", "up"]
+    depends_on: {postgres-provision: {condition: service_completed_successfully}}
     networks: [backend]
     restart: "no"
   # The ICS/iCal feed integration (docs/services/calendar-feeds.md): it owns
@@ -167,10 +185,10 @@ services:
     restart: unless-stopped
 
   activity-migrate:
-    image: migrate/migrate:v4.20.1@sha256:76cc2074cb6642631f34a898ced71e6aeaa6b1a4d78c4daa743275a22e0c5be7
-    command: ["-path", "/migrations", "-database", "postgres://activity_user:${LIFE_OS_ACTIVITY_DB_PASSWORD}@postgres:5432/activity_db?sslmode=disable", "up"]
-    volumes: ["./services/activity/db/migrations:/migrations:ro"]
-    depends_on: {postgres: {condition: service_healthy}}
+    build: {context: ., dockerfile: infra/migrate/Dockerfile}
+    image: lifeos-migrate
+    command: ["-path", "/migrations/activity", "-database", "postgres://activity_user:${LIFE_OS_ACTIVITY_DB_PASSWORD}@postgres:5432/activity_db?sslmode=disable", "up"]
+    depends_on: {postgres-provision: {condition: service_completed_successfully}}
     networks: [backend]
     restart: "no"
   activity:
@@ -182,10 +200,10 @@ services:
     restart: unless-stopped
 
   notifications-migrate:
-    image: migrate/migrate:v4.20.1@sha256:76cc2074cb6642631f34a898ced71e6aeaa6b1a4d78c4daa743275a22e0c5be7
-    command: ["-path", "/migrations", "-database", "postgres://notifications_user:${LIFE_OS_NOTIFICATIONS_DB_PASSWORD}@postgres:5432/notifications_db?sslmode=disable", "up"]
-    volumes: ["./services/notifications/db/migrations:/migrations:ro"]
-    depends_on: {postgres: {condition: service_healthy}}
+    build: {context: ., dockerfile: infra/migrate/Dockerfile}
+    image: lifeos-migrate
+    command: ["-path", "/migrations/notifications", "-database", "postgres://notifications_user:${LIFE_OS_NOTIFICATIONS_DB_PASSWORD}@postgres:5432/notifications_db?sslmode=disable", "up"]
+    depends_on: {postgres-provision: {condition: service_completed_successfully}}
     networks: [backend]
     restart: "no"
   # The one path for notifications to the owner. Channels are configured here
@@ -219,10 +237,10 @@ services:
     restart: unless-stopped
 
   banking-migrate:
-    image: migrate/migrate:v4.20.1@sha256:76cc2074cb6642631f34a898ced71e6aeaa6b1a4d78c4daa743275a22e0c5be7
-    command: ["-path", "/migrations", "-database", "postgres://banking_user:${LIFE_OS_BANKING_DB_PASSWORD}@postgres:5432/banking_db?sslmode=disable", "up"]
-    volumes: ["./services/banking/db/migrations:/migrations:ro"]
-    depends_on: {postgres: {condition: service_healthy}}
+    build: {context: ., dockerfile: infra/migrate/Dockerfile}
+    image: lifeos-migrate
+    command: ["-path", "/migrations/banking", "-database", "postgres://banking_user:${LIFE_OS_BANKING_DB_PASSWORD}@postgres:5432/banking_db?sslmode=disable", "up"]
+    depends_on: {postgres-provision: {condition: service_completed_successfully}}
     networks: [backend]
     restart: "no"
   # The bank integration (docs/services/banking.md): read-only Enable Banking
@@ -266,10 +284,10 @@ services:
     restart: unless-stopped
 
   google-calendar-migrate:
-    image: migrate/migrate:v4.20.1@sha256:76cc2074cb6642631f34a898ced71e6aeaa6b1a4d78c4daa743275a22e0c5be7
-    command: ["-path", "/migrations", "-database", "postgres://google_calendar_user:${LIFE_OS_GOOGLE_CALENDAR_DB_PASSWORD}@postgres:5432/google_calendar_db?sslmode=disable", "up"]
-    volumes: ["./services/google-calendar/db/migrations:/migrations:ro"]
-    depends_on: {postgres: {condition: service_healthy}}
+    build: {context: ., dockerfile: infra/migrate/Dockerfile}
+    image: lifeos-migrate
+    command: ["-path", "/migrations/google-calendar", "-database", "postgres://google_calendar_user:${LIFE_OS_GOOGLE_CALENDAR_DB_PASSWORD}@postgres:5432/google_calendar_db?sslmode=disable", "up"]
+    depends_on: {postgres-provision: {condition: service_completed_successfully}}
     networks: [backend]
     restart: "no"
   # The Google Calendar integration (docs/services/google-calendar.md): the
@@ -350,10 +368,9 @@ services:
   # one consistent pg_dump per database into LIFE_OS_BACKUP_DIR/auto/ on the
   # host, rotated daily, weekly, and monthly. It logs in as lifeos_backup, a
   # read-only role (infra/postgres/provision-backup-role.sh), and runs as
-  # LIFE_OS_BACKUP_RUNTIME_UID, the backup directory's owner. infra/postgres
-  # is mounted as a directory so an updated registry is read at the next run
-  # without recreating the container. The image is the PostgreSQL image, so
-  # pg_dump matches the server. No gateway route: the Dashboard reaches its
+  # LIFE_OS_BACKUP_RUNTIME_UID, the backup directory's owner. The registry
+  # (infra/postgres/service-databases.conf) is built into its image, which is
+  # the PostgreSQL image, so pg_dump matches the server. No gateway route: the Dashboard reaches its
   # API on the private network; tools/backup-now runs a backup now.
   backup:
     build:
@@ -382,10 +399,6 @@ services:
       - type: bind
         source: "${LIFE_OS_BACKUP_DIR:?Set LIFE_OS_BACKUP_DIR in .env to the existing host directory for backups}"
         target: /backups
-      - type: bind
-        source: ./infra/postgres
-        target: /etc/lifeos/postgres
-        read_only: true
       # Inbox's capture images, copied into BACKUP_DIR/media/ each night.
       # Read-only, and nothing of the image is copied into the volume.
       - type: volume
@@ -425,6 +438,7 @@ services:
   # reads it here.
   host-health:
     build: {context: ., dockerfile: services/host-health/Dockerfile}
+    image: lifeos-host-health
     environment:
       SERVICE_NAME: host-health
       PORT: 8080
@@ -481,6 +495,8 @@ services:
   # network shared with host-health only.
   host-health-docker:
     build: {context: ., dockerfile: services/host-health/Dockerfile}
+    # Server health's image (above), another entrypoint.
+    image: lifeos-host-health
     entrypoint: ["/service", "docker-gateway"]
     environment: {PORT: 8080, DOCKER_GATEWAY_SOCKET: /var/run/docker.sock}
     volumes:
@@ -606,14 +622,15 @@ services:
       start_period: 2m
 
   voice-migrate:
-    image: migrate/migrate:v4.20.1@sha256:76cc2074cb6642631f34a898ced71e6aeaa6b1a4d78c4daa743275a22e0c5be7
-    command: ["-path", "/migrations", "-database", "postgres://voice_user:${LIFE_OS_VOICE_DB_PASSWORD}@postgres:5432/voice_db?sslmode=disable", "up"]
-    volumes: ["./services/voice/db/migrations:/migrations:ro"]
-    depends_on: {postgres: {condition: service_healthy}}
+    build: {context: ., dockerfile: infra/migrate/Dockerfile}
+    image: lifeos-migrate
+    command: ["-path", "/migrations/voice", "-database", "postgres://voice_user:${LIFE_OS_VOICE_DB_PASSWORD}@postgres:5432/voice_db?sslmode=disable", "up"]
+    depends_on: {postgres-provision: {condition: service_completed_successfully}}
     networks: [backend]
     restart: "no"
   voice:
     build: {context: ., dockerfile: services/voice/Dockerfile}
+    image: lifeos-voice
     environment:
       SERVICE_NAME: voice
       PORT: 8080
@@ -629,6 +646,8 @@ services:
     restart: unless-stopped
   voice-worker:
     build: {context: ., dockerfile: services/voice/Dockerfile}
+    # Voice's image (above), another entrypoint.
+    image: lifeos-voice
     entrypoint: ["/worker"]
     environment:
       SERVICE_NAME: voice-worker
@@ -651,18 +670,18 @@ services:
     restart: unless-stopped
 
   gateway:
-    image: nginx:1.30-alpine@sha256:583b7f2fce1cdb8da5ad5c39ebd3c33b98b87d493190e548bdee1fa8c619c311
-    # The image renders infra/nginx/life-os.conf.template into
-    # /etc/nginx/conf.d/default.conf at every start, replacing only these
+    # nginx with infra/nginx/life-os.conf.template and server-names.envsh
+    # built in (infra/nginx/Dockerfile): a change to either takes a rebuild
+    # and the gateway's recreation. At every start the image renders the
+    # template into /etc/nginx/conf.d/default.conf, replacing only these
     # LIFE_OS_* names: the hosts it serves Life OS to (server_name), which
     # server-names.envsh keeps from repeating 127.0.0.1 and localhost.
+    build: {context: infra/nginx}
     environment:
       NGINX_ENVSUBST_FILTER: "^LIFE_OS_"
       LIFE_OS_PUBLIC_HOSTNAME: "${LIFE_OS_PUBLIC_HOSTNAME:-}"
       LIFE_OS_GATEWAY_BIND_ADDRESS: "${LIFE_OS_GATEWAY_BIND_ADDRESS:-127.0.0.1}"
     volumes:
-      - ./infra/nginx/life-os.conf.template:/etc/nginx/templates/default.conf.template:ro
-      - ./infra/nginx/server-names.envsh:/docker-entrypoint.d/16-lifeos-server-names.envsh:ro
       # The Android apps' releases, served at /android/ behind Access
       # (docs/operations/android-releases.md). tools/publish-android-release
       # writes them as the directory's owner; the gateway only reads. Create
@@ -704,8 +723,11 @@ services:
   # none with Notifications, so that route cannot reach Life OS. ntfy's own
   # deny-all accounts protect it: ntfy provisions the publisher (write-only on
   # the topic, by token) and the phone (read-only, by password) at every start
-  # from the ignored .env. Bcrypt hashes and the token never appear in the
-  # repository. Its public URL (base-url) is LIFE_OS_NTFY_PUBLIC_URL.
+  # from the ignored .env (NTFY_AUTH_*; ntfy deletes provisioned users,
+  # rights, and tokens that leave that list). Bcrypt hashes and the token
+  # never appear in the repository. Its public URL (base-url) is
+  # LIFE_OS_NTFY_PUBLIC_URL. The rest of its configuration is here too, as
+  # ntfy's NTFY_* variables, so that no file of the repository is needed.
   ntfy:
     image: ${LIFE_OS_NTFY_IMAGE:-binwiederhier/ntfy:v2.37.2@sha256:1875ddcf815c8a3c981d6d78c67a93452d0abba79b1ab9520b1f5f5238902bd7}
     profiles: [ntfy]
@@ -715,8 +737,39 @@ services:
       NTFY_AUTH_USERS: "lifeos-publisher:${LIFE_OS_NTFY_PUBLISHER_PASSWORD_HASH:-}:user,lifeos-phone:${LIFE_OS_NTFY_PHONE_PASSWORD_HASH:-}:user"
       NTFY_AUTH_ACCESS: "lifeos-publisher:${LIFE_OS_NTFY_TOPIC:-lifeos}:write-only,lifeos-phone:${LIFE_OS_NTFY_TOPIC:-lifeos}:read-only"
       NTFY_AUTH_TOKENS: "lifeos-publisher:${LIFE_OS_NTFY_PUBLISHER_TOKEN:-}:notifications-service"
+      NTFY_LISTEN_HTTP: ":80"
+      # Requests through the tunnel carry the visitor's address in
+      # CF-Connecting-IP, set by Cloudflare, so rate limits apply per
+      # visitor, not to the connector. Only the connector (notify-edge) and
+      # the Notifications service (notify-internal) can reach ntfy at all;
+      # the service's requests have no such header and count by their own
+      # address.
+      NTFY_BEHIND_PROXY: "true"
+      NTFY_PROXY_FORWARDED_HEADER: "CF-Connecting-IP"
+      # Messages are kept 12 hours, so the phone catches up after being
+      # offline.
+      NTFY_CACHE_FILE: /var/lib/ntfy/cache.db
+      NTFY_CACHE_DURATION: 12h
+      # Private server: nobody can read or write anything without an
+      # account, and accounts exist only through the provisioning above.
+      NTFY_AUTH_FILE: /var/lib/ntfy/user.db
+      NTFY_AUTH_DEFAULT_ACCESS: deny-all
+      NTFY_ENABLE_SIGNUP: "false"
+      NTFY_ENABLE_LOGIN: "false"
+      NTFY_ENABLE_RESERVATIONS: "false"
+      # The Android app is the only client: no web app. Attachments are off
+      # (no attachment cache), and nothing is forwarded to ntfy.sh or
+      # Firebase (no upstream base URL, no Firebase key; those exist for iOS
+      # and custom Android builds).
+      NTFY_WEB_ROOT: disable
+      # Rate limits per visitor. Life OS sends a few notifications a day;
+      # the phone holds one subscription.
+      NTFY_VISITOR_REQUEST_LIMIT_BURST: "60"
+      NTFY_VISITOR_REQUEST_LIMIT_REPLENISH: 5s
+      NTFY_VISITOR_SUBSCRIPTION_LIMIT: "10"
+      NTFY_VISITOR_MESSAGE_DAILY_LIMIT: "500"
+      NTFY_LOG_LEVEL: info
     volumes:
-      - ./infra/ntfy/server.yml:/etc/ntfy/server.yml:ro
       - ntfy-data:/var/lib/ntfy
     expose: ["80"]
     networks: [notify-edge, notify-internal]

@@ -7,6 +7,10 @@
 # (P20-02). Only the PostgreSQL client: it logs in over the network as the
 # admin and runs as nobody.
 FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
+# The image's source and license; on ghcr.io this links its package to the
+# repository (docs/operations/releases.md).
+LABEL org.opencontainers.image.source="https://github.com/GAMch1k/life-os" \
+      org.opencontainers.image.licenses="AGPL-3.0-only"
 
 RUN apk add --no-cache bash postgresql18-client
 WORKDIR /opt/lifeos/postgres
