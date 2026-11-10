@@ -93,9 +93,8 @@ require_isolated_resources() {
     echo "verify-compose: refusing a plan with Enable Banking credentials or a bank key: it could reach the owner's bank" >&2
     exit 2
   fi
-  # PostgreSQL reads the whole .env (env_file) but never calls Google; every
-  # other service must come without the owner's Google OAuth settings.
-  if jq -e '[.services | to_entries[] | select(.key != "postgres") | .value.environment // {} | (.LIFE_OS_GOOGLE_CLIENT_ID // ""), (.LIFE_OS_GOOGLE_CLIENT_SECRET // ""), (.LIFE_OS_GOOGLE_TOKEN_KEY // "")] | any(. != "")' <<<"$config" >/dev/null; then
+  # No service may come with the owner's Google OAuth settings.
+  if jq -e '[.services | to_entries[] | .value.environment // {} | (.LIFE_OS_GOOGLE_CLIENT_ID // ""), (.LIFE_OS_GOOGLE_CLIENT_SECRET // ""), (.LIFE_OS_GOOGLE_TOKEN_KEY // "")] | any(. != "")' <<<"$config" >/dev/null; then
     echo "verify-compose: refusing a plan with Google OAuth settings: it could reach the owner's Google account" >&2
     exit 2
   fi
@@ -154,4 +153,16 @@ require_isolated_resources() {
 }
 
 require_isolated_resources
+# A smoke removes its stack when it ends, failed or not, and the containers'
+# logs go with it. With LIFE_OS_VERIFY_LOGS_DIR set (CI does, and uploads
+# them when a smoke fails), `down` first saves the stack's containers and
+# their logs there, one file per stack.
+if [[ "${1:-}" == down && -n "${LIFE_OS_VERIFY_LOGS_DIR:-}" && -n "$("${compose[@]}" ps --all --quiet 2>/dev/null)" ]]; then
+  mkdir -p "$LIFE_OS_VERIFY_LOGS_DIR"
+  {
+    "${compose[@]}" ps --all
+    echo
+    "${compose[@]}" logs --no-color --timestamps
+  } >"$LIFE_OS_VERIFY_LOGS_DIR/$(date -u +%Y%m%dT%H%M%SZ)-$$.log" 2>&1 || true
+fi
 exec "${compose[@]}" "$@"

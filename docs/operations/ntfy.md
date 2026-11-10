@@ -38,9 +38,9 @@ The phone reaches ntfy through the same Cloudflare Tunnel as Life OS, on a secon
 
 ## Configuration in the repository
 
-- **Container.** The `ntfy` service in `compose.yaml`, image `binwiederhier/ntfy:v2.29.0` (pinned; override with `LIFE_OS_NTFY_IMAGE`), in the opt-in Compose profile `ntfy`, so a stack without the setup never starts it. Its data (message cache `cache.db`, accounts `user.db`) is in the volume `lifeos-ntfy-data` at `/var/lib/ntfy`. The health check is ntfy's `/v1/health`.
+- **Container.** The `ntfy` service in `compose.yaml`, image `binwiederhier/ntfy:v2.37.2` (pinned by digest, which Dependabot keeps current; override with `LIFE_OS_NTFY_IMAGE`), in the opt-in Compose profile `ntfy`, so a stack without the setup never starts it. Its data (message cache `cache.db`, accounts `user.db`) is in the volume `lifeos-ntfy-data` at `/var/lib/ntfy`. The health check is ntfy's `/v1/health`.
 - **Networks.** In `compose.yaml`: `notify-edge` (`lifeos-notify-edge`, `10.255.249.16/29`) holds `cloudflared` (next to `edge`) and `ntfy`; `notify-internal` (`lifeos-notify-internal`, `10.255.249.32/29`, `internal: true`) holds `ntfy` and `notifications` (next to `backend`). ntfy joins nothing else.
-- **Server settings.** `infra/ntfy/server.yml`, mounted read-only: `behind-proxy` with `CF-Connecting-IP`, messages cached for 12 hours (the phone catches up after being offline), deny-all access, no web app, no attachments, no upstream, and visitor limits (60-request burst refilled every 5 s, 10 subscriptions, 500 messages a day). Nothing secret is in it. Its public URL (ntfy's `base-url`) is not in the file: `compose.yaml` passes `LIFE_OS_NTFY_PUBLIC_URL` from `.env` as `NTFY_BASE_URL`, which ntfy reads at start (it refuses a value that is not an http(s) URL).
+- **Server settings.** ntfy's `NTFY_*` variables in `compose.yaml` (since P20-02; before, the same settings were `infra/ntfy/server.yml`, mounted read-only): `behind-proxy` with `CF-Connecting-IP`, messages cached for 12 hours (the phone catches up after being offline), deny-all access, no web app, no attachments, no upstream, and visitor limits (60-request burst refilled every 5 s, 10 subscriptions, 500 messages a day). Nothing secret is among them. Its public URL (ntfy's `base-url`) comes from `.env`: `compose.yaml` passes `LIFE_OS_NTFY_PUBLIC_URL` as `NTFY_BASE_URL`, which ntfy reads at start (it refuses a value that is not an http(s) URL).
 - **Accounts.** `compose.yaml` builds `NTFY_AUTH_USERS`, `NTFY_AUTH_ACCESS`, and `NTFY_AUTH_TOKENS` from the `.env` values below.
 - **Tunnel route** (in Cloudflare, not in the repository): the host of `LIFE_OS_NTFY_PUBLIC_URL` (`ntfy.example.com`) → HTTP → `ntfy:80`, without an Access application and without Access JWT validation. The connector resolves `ntfy` on `notify-edge`; while ntfy is not running, the hostname answers 502. The ntfy app keeps its subscription open as a WebSocket or a JSON stream, with ntfy's 45 s keepalive under Cloudflare's idle timeout.
 - **Channel.** `LIFE_OS_NOTIFICATIONS_CHANNELS=ntfy` makes the Notifications service deliver to it; see [Notifications → ntfy](../services/notifications.md#ntfy).
@@ -64,14 +64,14 @@ The phone reaches ntfy through the same Cloudflare Tunnel as Life OS, on a secon
 ```sh
 cd ~/life-os
 # The publisher's token (tk_ and 29 characters):
-docker run --rm binwiederhier/ntfy:v2.29.0 token generate
+docker run --rm binwiederhier/ntfy:v2.37.2 token generate
 # The publisher's password hash. ntfy needs a password for every user; this
 # one is random and thrown away (the service uses the token):
-openssl rand -base64 32 | sed p | docker run --rm -i binwiederhier/ntfy:v2.29.0 user hash
+openssl rand -base64 32 | sed p | docker run --rm -i binwiederhier/ntfy:v2.37.2 user hash
 # The phone's password: generate one and keep it in your password manager.
 openssl rand -base64 18
 # Its hash: type that password twice.
-docker run --rm -it binwiederhier/ntfy:v2.29.0 user hash
+docker run --rm -it binwiederhier/ntfy:v2.37.2 user hash
 ```
 
 Put them in `~/life-os/.env` (never in the repository, tickets, or chat):
@@ -96,7 +96,7 @@ Start ntfy first, so the Notifications service's first deliveries find it. Then 
 docker compose up -d --no-build --no-deps ntfy
 docker compose ps ntfy                     # Up … (healthy)
 docker compose logs ntfy | tail -20        # no "invalid auth-…" lines
-docker compose build notifications && docker compose build dashboard
+docker compose build --pull notifications && docker compose build --pull dashboard
 docker compose up -d --no-build --no-deps notifications dashboard cloudflared
 ./tools/check-ingress                      # networks, ports, and the gateway's host list
 ./tools/check-cloudflare-access            # Life OS still behind Access, and still reachable
@@ -138,18 +138,24 @@ Use the gateway's own address and port (`LIFE_OS_GATEWAY_BIND_ADDRESS`, `LIFE_OS
 - **Delivery.** A failed delivery stays listed in Life OS. Unreachable ntfy, 429, and 5xx are retried with backoff for up to 24 hours; ntfy refusing a delivery (401, 403, 404, 400) fails it at once. Notifications created while no channel was configured are not sent later.
 - **Change the topic.** Set `LIFE_OS_NTFY_TOPIC`, run `docker compose up -d --no-build --no-deps ntfy notifications`, and subscribe the phone to the new topic (unsubscribe the old one).
 - **Change the public URL.** Set `LIFE_OS_NTFY_PUBLIC_URL`, run `docker compose up -d --no-build --no-deps ntfy`, change the tunnel route's hostname, and update the user and subscription in the phone's app.
-- **Update ntfy.** Bump the pinned image in `compose.yaml` (read ntfy's release notes), then `docker compose up -d --no-build --no-deps ntfy`.
+- **Update ntfy.** Dependabot's weekly pull request moves the pinned image (digest, minor, and patch versions; read ntfy's release notes before merging). Then `docker compose up -d --no-build --no-deps ntfy`.
 - **Pause phone notifications.** Set `LIFE_OS_NOTIFICATIONS_CHANNELS=` and `docker compose up -d --no-build --no-deps notifications`; notifications are still stored and listed. To stop ntfy too, `docker compose stop ntfy` (keep `ntfy` in `COMPOSE_PROFILES` to pause it; remove it only to retire ntfy).
 
 ## Paused since 2026-10-12
 
-The owner moved phone notifications to the Life OS Android app's push (`LIFE_OS_NOTIFICATIONS_CHANNELS=webpush`, see [Notifications → Web push](../services/notifications.md#web-push)) and paused ntfy: the `ntfy` container is stopped, `COMPOSE_PROFILES` still lists `ntfy`, and the `lifeos-ntfy-data` volume and its `.env` settings stay. The ntfy tunnel route answers 502 meanwhile, and the ntfy phone app shows connection errors (unsubscribe or uninstall it). To resume, check that `.env` has `LIFE_OS_NTFY_PUBLIC_URL` (ntfy's `base-url`, no longer in `infra/ntfy/server.yml`), then:
+The owner moved phone notifications to the Life OS Android app's push (`LIFE_OS_NOTIFICATIONS_CHANNELS=webpush`, see [Notifications → Web push](../services/notifications.md#web-push)) and paused ntfy: the `ntfy` container is stopped, `COMPOSE_PROFILES` still lists `ntfy`, and the `lifeos-ntfy-data` volume and its `.env` settings stay. The ntfy tunnel route answers 502 meanwhile, and the ntfy phone app shows connection errors (unsubscribe or uninstall it). To resume, check that `.env` has `LIFE_OS_NTFY_PUBLIC_URL` (ntfy's `base-url`), then:
 
 ```sh
 docker compose up -d --no-build --no-deps ntfy
 # .env: LIFE_OS_NOTIFICATIONS_CHANNELS=ntfy,webpush
 docker compose up -d --no-build --no-deps notifications
 ```
+
+ntfy was paused on v2.29.0 and resumes on v2.37.2 (SEC-IMG, 2026-11-10). Nothing in its settings or the provisioned accounts changed between them (the settings moved from `infra/ntfy/server.yml` into `compose.yaml` unchanged, P20-02); what the first start does differently:
+
+- **It upgrades its databases in the volume**: the message cache (`cache.db`, schema 15 to 17) and the accounts (`user.db`, 9 to 11, which now keep the daily counts and start them over once). A rehearsal on a copy of v2.29.0's data (2026-11-10) upgraded both and kept the cached messages, the token, and the read-only and write-only rights. An older ntfy cannot use the upgraded files; to go back to v2.29.0, remove the `lifeos-ntfy-data` volume first: it holds only the last 12 hours of messages, and ntfy provisions the accounts from `.env` again at start.
+- **It checks the whole configuration when `base-url` is set** (v2.36.0), as it is here, so a mistake that used to start now stops it: read `docker compose logs ntfy` if it does not become healthy.
+- **Smaller behaviour changes:** 429 answers carry `Retry-After` (v2.37.0), each visitor's day for the daily limits starts at its own time rather than at midnight UTC (v2.36.0), and a reconnect may repeat messages from the same second, which the ntfy app drops (v2.31.0).
 
 ## Rotate
 

@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# The postgres-provision image's entrypoint (Dockerfile here): waits until
+# the PostgreSQL server at PGHOST accepts connections, then runs one of the
+# scripts next to it as the admin (POSTGRES_USER, PGPASSWORD), by default the
+# provisioning of every service's database and login and the backup role:
+#
+#   provision [provision-service-databases.sh | provision-backup-role.sh | verify-database-isolation.sh]
+#
+# compose.yaml runs the default at every start; `make db-provision`,
+# `make db-provision-backup`, and `make db-check-isolation` run it on a
+# running server (infra/README.md).
+
+cd "$(dirname "${BASH_SOURCE[0]}")"
+script=${1:-provision-service-databases.sh}
+case "$script" in
+  provision-service-databases.sh | provision-backup-role.sh | verify-database-isolation.sh) ;;
+  *)
+    echo 'usage: provision [provision-service-databases.sh | provision-backup-role.sh | verify-database-isolation.sh]' >&2
+    exit 2
+    ;;
+esac
+: "${PGHOST:?PGHOST is required: the PostgreSQL server}"
+: "${POSTGRES_USER:?POSTGRES_USER is required}"
+: "${POSTGRES_DB:?POSTGRES_DB is required}"
+
+# PostgreSQL's healthcheck can pass before the server listens on the network:
+# on a fresh volume the image initializes the database with a server on its
+# socket only, which pg_isready inside its container already reaches.
+wait_seconds=${PROVISION_WAIT_SECONDS:-120}
+deadline=$((SECONDS + wait_seconds))
+until pg_isready --quiet --username "$POSTGRES_USER" --dbname "$POSTGRES_DB"; do
+  if ((SECONDS >= deadline)); then
+    printf 'provision: PostgreSQL at %s did not accept connections within %d s\n' "$PGHOST" "$wait_seconds" >&2
+    exit 1
+  fi
+  sleep 1
+done
+
+exec bash "./$script"

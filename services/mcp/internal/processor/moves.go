@@ -83,7 +83,7 @@ func withMoveZone(arguments map[string]any, location *time.Location) {
 	if !ok || location == nil {
 		return
 	}
-	zoned := make(map[string]any, len(move)+1)
+	zoned := make(map[string]any, len(move))
 	for field, value := range move {
 		zoned[field] = value
 	}

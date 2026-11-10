@@ -12,6 +12,9 @@ if (!firefoxInstalled && !process.env.TEST_WORKER_INDEX) {
   );
 }
 
+// Tests tagged @codex in their title wait for the stack's processor to act
+// with the authenticated Codex CLI. CI has no Codex sign-in and runs the
+// others: tools/browser-e2e --grep-invert @codex (docs/operations/ci.md).
 export default defineConfig({
   testDir: "./e2e",
   timeout: 180_000,

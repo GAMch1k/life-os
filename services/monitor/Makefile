@@ -15,7 +15,7 @@ test:
 	go test ./...
 
 docker-build:
-	docker build --build-arg SERVICE_DIR=services/monitor -f Dockerfile -t $(IMAGE) ../..
+	docker build --pull --build-arg SERVICE_DIR=services/monitor -f Dockerfile -t $(IMAGE) ../..
 
 docker-run:
 	docker run --rm --network lifeos-backend -e SERVICE_NAME=monitor -e PORT=8080 -e MONITOR_STATUS_URL=http://dashboard:3000/api/status -e NOTIFICATIONS_SERVICE_URL=http://notifications:8080 $(IMAGE)

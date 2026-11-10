@@ -1,6 +1,6 @@
 # Getting started and testing
 
-Install Docker Compose v2, Go 1.27.1+, Node 22+, `sqlc`, `oapi-codegen`, and `migrate`. Copy `.env.example` to ignored `.env`, then run:
+Install Docker Compose v2, Go 1.27.3+, Node 22+, `sqlc`, `oapi-codegen`, and `migrate`. Copy `.env.example` to ignored `.env`, then run:
 
 ```sh
 make life-up
@@ -9,7 +9,7 @@ make verify-isolation
 make check
 ```
 
-`make life-up` builds/starts all containers on a host where Life OS is not deployed yet; once it is, it refuses (`CONFIRM=life-up` overrides), and services are redeployed one at a time with `docker compose build <service>` and `docker compose up -d --no-build --no-deps <service>`. `make infra-down` preserves data; `make infra-reset` removes persistent Compose volumes, is destructive, and refuses without `CONFIRM=infra-reset`. Use `docker compose ps` and `docker compose logs <service>` for diagnosis.
+`make life-up` builds/starts all containers on a host where Life OS is not deployed yet; once it is, it refuses (`CONFIRM=life-up` overrides), and services are redeployed one at a time with `docker compose build --pull <service>` and `docker compose up -d --no-build --no-deps <service>`. `make infra-down` preserves data; `make infra-reset` removes persistent Compose volumes, is destructive, and refuses without `CONFIRM=infra-reset`. Use `docker compose ps` and `docker compose logs <service>` for diagnosis.
 
 `make life-smoke` runs the core-service and Dashboard smokes on the disposable `lifeos-verify` stack, from the images already built, and writes its few records there, never to the running stack. Like every `tools/` script, it sends `X-Life-OS-Actor: dev:<script>`, so the Event Log shows them as a developer tool, never as the owner. Any write a development tool or agent makes against live data must do the same; see [Development tools and live data](../../CONTRIBUTING.md#development-tools-and-live-data).
 
@@ -30,7 +30,11 @@ key or session material is copied into the repository. See
 [Phase 7 runtime verification](../verification/phase-7.md) for the exact
 browser, Codex, retry, and recovery checks, and
 [Phase 8 verification](../verification/phase-8.md) for the Phase 8 smokes and
-the `make phase8-acceptance` sign-off run.
+the `make phase8-acceptance` sign-off run. Only the browser tests tagged
+`@codex` wait for Codex: `tools/browser-e2e --grep-invert @codex` runs the
+others without a Codex session, as CI does
+([Continuous integration](../operations/ci.md#full-stack-tests)), and
+`tools/browser-e2e` passes any other arguments to Playwright too.
 
 The `apps/dashboard/e2e/calendar-capture.spec.ts` and
 `finance-capture.spec.ts` files are separate, deliberately opt-in tests for an

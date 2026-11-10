@@ -1,0 +1,43 @@
+#!/bin/sh
+# Lets only the WireGuard interface reach the Life OS gateway's published port
+# (docs/architecture/networking.md#other-containers-on-the-host).
+#
+# Docker forwards connections from every container on this host to a published
+# port, and the gateway trusts everything that doesn't come through Cloudflare,
+# so any other container could use Life OS without a login. This drops
+# forwarded connections to LIFE_OS_GATEWAY_BIND_ADDRESS:LIFE_OS_GATEWAY_PORT
+# unless they arrive on the WireGuard interface. Cloudflare's tunnel reaches
+# the gateway inside Docker (http://gateway:80) and connections from the host
+# itself are not forwarded, so neither is affected. A loopback bind
+# (127.0.0.1) needs none of this: containers can't reach the host's loopback.
+#
+#   lifeos-gateway-firewall [add|remove]
+#
+# Runs as root once Docker is up (lifeos-gateway-firewall.service); adding an
+# existing rule or removing a missing one does nothing.
+set -eu
+
+action=${1:-add}
+address=${LIFE_OS_GATEWAY_BIND_ADDRESS:?set LIFE_OS_GATEWAY_BIND_ADDRESS to the gateway bind address, such as 10.8.0.1}
+port=${LIFE_OS_GATEWAY_PORT:?set LIFE_OS_GATEWAY_PORT to the gateway port, such as 3000}
+interface=${LIFE_OS_WIREGUARD_INTERFACE:-wg0}
+
+# Word splitting is wanted: these are iptables arguments without spaces.
+rule="-p tcp -m conntrack --ctorigdst $address --ctorigdstport $port ! -i $interface -j DROP"
+
+case $action in
+add)
+  # shellcheck disable=SC2086
+  iptables -C DOCKER-USER $rule 2>/dev/null || iptables -I DOCKER-USER $rule
+  ;;
+remove)
+  # shellcheck disable=SC2086
+  while iptables -C DOCKER-USER $rule 2>/dev/null; do
+    iptables -D DOCKER-USER $rule
+  done
+  ;;
+*)
+  echo 'usage: lifeos-gateway-firewall [add|remove]' >&2
+  exit 2
+  ;;
+esac

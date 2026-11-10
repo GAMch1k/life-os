@@ -171,12 +171,12 @@ func TestIntegrationSourcesRegisterIdempotentlyAndKeepTheOwnersSettings(t *testi
 	// What the integration changes is applied, as a Google calendar
 	// renamed in Google renames its source; leaving a setting out says
 	// nothing about it.
-	renamed := c.register(feedsActor, "calendar-feeds", "zaw", map[string]any{"name": "ZAW Roßdorf", "provider": "ZAW feed", "readOnly": true}, http.StatusOK)
-	if renamed.Name != "ZAW Roßdorf" || renamed.Provider != "ZAW feed" || renamed.DefaultReminders != nil || renamed.DefaultPriority != generated.High {
+	renamed := c.register(feedsActor, "calendar-feeds", "zaw", map[string]any{"name": "ZAW Musterstadt", "provider": "ZAW feed", "readOnly": true}, http.StatusOK)
+	if renamed.Name != "ZAW Musterstadt" || renamed.Provider != "ZAW feed" || renamed.DefaultReminders != nil || renamed.DefaultPriority != generated.High {
 		t.Fatalf("renamed = %+v", renamed)
 	}
 	reminded := c.register(feedsActor, "calendar-feeds", "zaw", map[string]any{
-		"name": "ZAW Roßdorf", "provider": "ZAW", "readOnly": true, "defaultPriority": "low",
+		"name": "ZAW Musterstadt", "provider": "ZAW", "readOnly": true, "defaultPriority": "low",
 		"defaultReminders": []map[string]any{{"kind": "localTime", "daysBefore": 1, "localTime": "20:00"}},
 	}, http.StatusOK)
 	if reminded.DefaultPriority != generated.Low || reminded.DefaultReminders == nil || deref((*reminded.DefaultReminders)[0].LocalTime) != "20:00" {
@@ -190,7 +190,7 @@ func TestIntegrationSourcesRegisterIdempotentlyAndKeepTheOwnersSettings(t *testi
 	// Calendar refreshes no feed since the handover to calendar-feeds (P11-08).
 	c.refused("user", http.MethodPost, path+"/refresh", nil, http.StatusNotFound, "not_found")
 	c.expect("user", http.MethodPatch, path, map[string]any{"enabled": false}, http.StatusOK, &owned)
-	if c.register(feedsActor, "calendar-feeds", "zaw", zawRegistration("ZAW Roßdorf"), http.StatusOK).Enabled {
+	if c.register(feedsActor, "calendar-feeds", "zaw", zawRegistration("ZAW Musterstadt"), http.StatusOK).Enabled {
 		t.Fatal("registering enabled a source the owner disabled")
 	}
 
@@ -205,16 +205,16 @@ func TestIntegrationSourcesRegisterIdempotentlyAndKeepTheOwnersSettings(t *testi
 	// The integration says whether its events' locations are private (such
 	// as the owner's street in a waste-collection feed); leaving it out keeps
 	// the source's.
-	private := c.register(feedsActor, "calendar-feeds", "zaw", map[string]any{"name": "ZAW Roßdorf", "provider": "ZAW", "readOnly": true, "privateLocation": true}, http.StatusOK)
+	private := c.register(feedsActor, "calendar-feeds", "zaw", map[string]any{"name": "ZAW Musterstadt", "provider": "ZAW", "readOnly": true, "privateLocation": true}, http.StatusOK)
 	if !private.PrivateLocation {
 		t.Fatalf("private = %+v", private)
 	}
 	var shown generated.CalendarSource
 	c.expect("user", http.MethodGet, path, nil, http.StatusOK, &shown)
-	if !shown.PrivateLocation || !c.register(feedsActor, "calendar-feeds", "zaw", zawRegistration("ZAW Roßdorf"), http.StatusOK).PrivateLocation {
+	if !shown.PrivateLocation || !c.register(feedsActor, "calendar-feeds", "zaw", zawRegistration("ZAW Musterstadt"), http.StatusOK).PrivateLocation {
 		t.Fatalf("shown = %+v", shown)
 	}
-	if c.register(feedsActor, "calendar-feeds", "zaw", map[string]any{"name": "ZAW Roßdorf", "provider": "ZAW", "readOnly": true, "privateLocation": false}, http.StatusOK).PrivateLocation {
+	if c.register(feedsActor, "calendar-feeds", "zaw", map[string]any{"name": "ZAW Musterstadt", "provider": "ZAW", "readOnly": true, "privateLocation": false}, http.StatusOK).PrivateLocation {
 		t.Fatal("privateLocation false was not applied")
 	}
 	if created := c.register(feedsActor, "calendar-feeds", "street", map[string]any{"name": "Street", "provider": "ICS", "readOnly": true, "privateLocation": true}, http.StatusCreated); !created.PrivateLocation {

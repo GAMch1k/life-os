@@ -18,7 +18,7 @@ generate-api:
 	oapi-codegen --generate types,fiber-v3 --package generated -o internal/api/generated/openapi.gen.go api/openapi.yaml
 
 docker-build:
-	docker build --build-arg SERVICE_DIR=services/host-health -f Dockerfile -t $(IMAGE) ../..
+	docker build --pull --build-arg SERVICE_DIR=services/host-health -f Dockerfile -t $(IMAGE) ../..
 
 check: generate-api
 	go vet ./...

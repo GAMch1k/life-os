@@ -2,6 +2,7 @@ package host
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -64,6 +65,29 @@ func TestCgroupsReadMemoryAsTheServerCountsIt(t *testing.T) {
 	// A container without a cgroup (not running) is left out.
 	if len(usage) != 3 {
 		t.Fatalf("usage = %+v", usage)
+	}
+}
+
+func TestCgroupsCPUBeyondADuration(t *testing.T) {
+	// A time.Duration holds math.MaxInt64 nanoseconds: usage_usec up to
+	// that in microseconds converts exactly, and more is held there rather
+	// than wrapping to a negative duration.
+	most := uint64(math.MaxInt64 / 1000)
+	for usec, want := range map[uint64]time.Duration{
+		most:           time.Duration(most) * time.Microsecond,
+		most + 1:       math.MaxInt64,
+		math.MaxInt64:  math.MaxInt64,
+		math.MaxUint64: math.MaxInt64,
+	} {
+		dir := t.TempDir()
+		writeCgroup(t, dir, "docker-"+fullID("0a1b2c3d4e01")+".scope", 1<<20, 0, 0, 0, usec)
+		usage, err := Cgroups{Dir: dir}.Read([]string{"0a1b2c3d4e01"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := usage["0a1b2c3d4e01"].CPU; got != want {
+			t.Errorf("usage_usec %d = %v, want %v", usec, got, want)
+		}
 	}
 }
 

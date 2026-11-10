@@ -5,7 +5,7 @@ const enabled = Boolean(process.env.LIFE_OS_E2E_URL);
 test.describe("Human Review without candidates", () => {
   test.skip(!enabled, "set LIFE_OS_E2E_URL to run against the isolated stack");
 
-  test("a capture Codex can do nothing with can be discarded", async ({
+  test("a capture Codex can do nothing with can be discarded @codex", async ({
     page,
     request,
   }) => {

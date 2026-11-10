@@ -187,12 +187,12 @@ The service logs in as `lifeos_backup`. It is a member of `pg_read_all_data` (it
 
 `infra/postgres/provision-backup-role.sh` provisions it, idempotently: it creates the role if missing, always sets its password and attributes, and grants `pg_read_all_data` and `CONNECT` on every registry database that exists. `provision-service-databases.sh` runs it last, so a fresh volume gets the role, and a reapply (`make db-provision`, which revokes database grants from every role but the owner) restores its grants and covers a database it just added. Without `LIFE_OS_BACKUP_DB_PASSWORD` an existing role keeps its password and a missing one is skipped.
 
-On a running server, apply it on its own; no restart is needed (`infra/postgres` is mounted into the PostgreSQL container as a directory):
+On a running server, apply it on its own; no restart is needed:
 
 ```sh
 make db-provision-backup
-# which runs, with the password read from .env:
-docker compose exec -T -e LIFE_OS_BACKUP_DB_PASSWORD postgres bash /opt/lifeos/postgres/provision-backup-role.sh
+# which runs, with the password from .env (postgres-provision's image, infra/postgres):
+docker compose run --rm --no-deps -T postgres-provision provision-backup-role.sh
 ```
 
 ## Configuration
@@ -201,7 +201,7 @@ docker compose exec -T -e LIFE_OS_BACKUP_DB_PASSWORD postgres bash /opt/lifeos/p
 | --- | --- | --- |
 | `BACKUP_DATABASE_URL` | required: the server and login, no database | `postgres://lifeos_backup@postgres:5432/?sslmode=disable` |
 | `BACKUP_DATABASE_PASSWORD` | empty (backups fail until it is set) | `LIFE_OS_BACKUP_DB_PASSWORD` |
-| `BACKUP_DATABASES_FILE` | `/etc/lifeos/postgres/service-databases.conf` | `infra/postgres` mounted read-only as a directory, so a pulled registry is read at the next run |
+| `BACKUP_DATABASES_FILE` | `/etc/lifeos/postgres/service-databases.conf` | the same path: `infra/postgres/service-databases.conf`, built into the image (rebuild it after a change to the registry) |
 | `BACKUP_DIR` | `/backups` | the host directory `LIFE_OS_BACKUP_DIR` (required; must exist) |
 | `BACKUP_TIME` | `03:15` | `LIFE_OS_BACKUP_TIME` |
 | `LIFE_OS_TIMEZONE` | `UTC` | `LIFE_OS_TIMEZONE` |
@@ -212,14 +212,14 @@ docker compose exec -T -e LIFE_OS_BACKUP_DB_PASSWORD postgres bash /opt/lifeos/p
 | `BACKUP_PG_DUMP`, `BACKUP_PG_RESTORE` | `pg_dump`, `pg_restore` | the image's own |
 | `SERVICE_NAME`, `PORT`, `LOG_LEVEL` | `backup`, `8080`, `info` | |
 
-The container runs as `LIFE_OS_BACKUP_RUNTIME_UID` (default 1000), which must own the backup directory, with a read-only root file system. Its image is built on the PostgreSQL image (`LIFE_OS_POSTGRES_IMAGE`), so `pg_dump` and `pg_restore` are exactly the server's version; rebuild it (`docker compose build backup`) when that image changes.
+The container runs as `LIFE_OS_BACKUP_RUNTIME_UID` (default 1000), which must own the backup directory, with a read-only root file system. Its image is built on the PostgreSQL image (`LIFE_OS_POSTGRES_IMAGE`), so `pg_dump` and `pg_restore` are exactly the server's version; rebuild it (`docker compose build --pull backup`) when that image changes.
 
 ## Operations
 
-- **Setting it up on an existing deployment.** The backup directory must exist, owned by the runtime UID with mode 700 (`install -d -m 700 ~/life-os.backups`; check with `stat -c '%a %U' ~/life-os.backups`). Add `LIFE_OS_BACKUP_DIR` (its absolute path), `LIFE_OS_BACKUP_RUNTIME_UID` (`id -u`), and `LIFE_OS_BACKUP_DB_PASSWORD` (letters and digits, such as `openssl rand -hex 24`) to `.env`; compose refuses every command until `LIFE_OS_BACKUP_DIR` is set. Provision the role (`make db-provision-backup`), then build and start the service alone: `docker compose build backup && docker compose up -d --no-build --no-deps backup`. A minute later it runs its first (catch-up) backup.
+- **Setting it up on an existing deployment.** The backup directory must exist, owned by the runtime UID with mode 700 (`install -d -m 700 ~/life-os.backups`; check with `stat -c '%a %U' ~/life-os.backups`). Add `LIFE_OS_BACKUP_DIR` (its absolute path), `LIFE_OS_BACKUP_RUNTIME_UID` (`id -u`), and `LIFE_OS_BACKUP_DB_PASSWORD` (letters and digits, such as `openssl rand -hex 24`) to `.env`; compose refuses every command until `LIFE_OS_BACKUP_DIR` is set. Provision the role (`make db-provision-backup`), then build and start the service alone: `docker compose build --pull backup && docker compose up -d --no-build --no-deps backup`. A minute later it runs its first (catch-up) backup.
 - **Checking it.** `docker compose logs backup` shows `backup started` and `backup finished` (with `result`, `duration_seconds`, `bytes`), `database backup failed` with the error, `deleted an expired backup run`, and `removed an interrupted backup run`. `tools/backup-now` runs one and prints it; `ls ~/life-os.backups/auto` lists the runs.
 - **A failed database.** The error is in the run's manifest and in `GET /v1/status`, and says what to do (see [Runs and failures](#runs-and-failures)). A missing grant is fixed with `make db-provision-backup`; a wrong password by running it with the current `.env`, then `docker compose up -d --no-build --no-deps backup`.
-- **The registry in the PostgreSQL container.** Its single-file mount `/etc/lifeos/service-databases.conf` keeps the file it was created with when Git replaces it, so a database added since is missing there until the container is recreated. The provisioning scripts read the directory-mounted `/opt/lifeos/postgres/service-databases.conf` instead, which is always current, and print which one they read. See the [runbook](../operations/backups.md#the-registry-inside-the-postgresql-container).
+- **A database added to the registry.** The backup image and `postgres-provision`'s carry the registry; rebuild both, provision, and recreate the backup container. See the [runbook](../operations/backups.md#the-registry).
 - **Capture images that cannot be read.** A run fails with "the media volume cannot be read: … permission denied (the backup service needs the media files' group …)" when `LIFE_OS_INBOX_MEDIA_GID` is not the group Inbox writes its images with (mode 0640): set it to `docker compose exec inbox id -g` and recreate the backup container. A few images missing on the volume are warnings in the manifest (`media.missing`) and the Backups card.
 - **Checking and restoring.** `docker compose exec -T backup /service restore-check` runs a restore check and prints it; `tools/restore-database <database> <run|latest>` restores one database (for Inbox, its capture images too), and `tools/restore-media <run|latest>` copies a run's capture images back onto the volume, adding only what is missing. Both, and restoring everything after losing PostgreSQL's volume, are in the [runbook](../operations/backups.md). `pg_restore --list <file>` lists a dump's contents.
 - **Verification stack.** `tools/verify-compose` gives the backup service a scratch directory of its own (`LIFE_OS_VERIFY_BACKUP_DIR`, by default `$TMPDIR/lifeos-verify-backups`) and refuses a plan that would write to the owner's backup directory (the one in `.env`, or `~/life-os.backups`).

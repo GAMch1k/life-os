@@ -9,7 +9,7 @@ set -euo pipefail
 # already built (no processor, Whisper, or Voice worker: these smokes test no
 # AI and no Voice), runs the smokes against it, and removes the stack and
 # its volumes afterwards. Build changed images first, one at a time
-# (docker compose build <service>).
+# (docker compose build --pull <service>).
 #
 #   tools/smoke-life [--core]
 

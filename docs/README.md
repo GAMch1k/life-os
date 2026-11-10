@@ -4,7 +4,8 @@ Life OS is a local-first personal operating system. This index is the human-read
 
 ## Start here
 
-- [Self-hosting setup](../SETUP.md) — from a fresh Linux server to a running Life OS, in order.
+- [Install guide](install/README.md) — install Life OS from the published images with `setup.sh`: Quick start, safe access, each integration, the phone apps, backups, updates, and troubleshooting.
+- [Self-hosting setup](../SETUP.md) — from a fresh Linux server to a running Life OS built from this repository, in order.
 - [Architecture overview](architecture/overview.md) — system boundaries and component map.
 - [Networking and data flows](architecture/networking.md) — ingress and common request paths.
 - [Editable entities and UI/agent parity](architecture/editable-entities.md) — how editing is added to a domain so the Dashboard and the agent share one implementation.
@@ -18,6 +19,8 @@ Life OS is a local-first personal operating system. This index is the human-read
 - [Backups runbook](operations/backups.md) — what is backed up, checking a backup and the weekly restore check, restoring one database, restoring everything after losing PostgreSQL's volume.
 - [Bank connection](operations/banking.md) — setting up Enable Banking, connecting, reconnecting before the consent ends, and revoking.
 - [Android releases](operations/android-releases.md) — publishing the Android apps' builds, and how the phone gets them and their updates at `/android/`.
+- [Continuous integration](operations/ci.md) — what GitHub Actions checks on every push and pull request, how to run each job locally (the integration tests too), govulncheck, the CLA check, and Dependabot.
+- [Releases](operations/releases.md) — the public images on ghcr.io: versions, cutting a release, the install bundle, verifying an image (cosign, attestations), and the vulnerability gate.
 
 ## Scope
 

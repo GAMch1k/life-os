@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# The browser suite (apps/dashboard/e2e) on the disposable verification stack.
+# Arguments go to Playwright: tools/browser-e2e e2e/food.spec.ts, or, without
+# a Codex sign-in as in CI, tools/browser-e2e --grep-invert @codex.
+
 compose=(./tools/verify-compose)
 # The Calendar feed tests serve their own ICS files from a fixture container
 # (verify-only overlay; never used for the deployed stack).
@@ -21,7 +25,7 @@ trap cleanup EXIT
 # The verification overlay deliberately uses immutable local image names. Build
 # the dashboard first so this browser test always exercises the current branch,
 # rather than whichever dashboard image was built by a prior ticket.
-docker compose build dashboard
+docker compose build --pull dashboard
 "${compose[@]}" up --detach --no-build
 # The Finance specs create their own accounts through the API.
-LIFE_OS_E2E_URL=http://127.0.0.1:13001 npm --prefix apps/dashboard run test:e2e
+LIFE_OS_E2E_URL=http://127.0.0.1:13001 npm --prefix apps/dashboard run test:e2e -- "$@"

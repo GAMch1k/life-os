@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Runs the integration tests, which skip without a database, against a
+# throwaway PostgreSQL 18, never a live one: the Go tests of every module
+# that reads a *_TEST_DATABASE_URL (or pkg's DATABASE_TEST_URL), and
+# tools/test-restore-database. CI runs it (docs/operations/ci.md).
+#
+#   docker run --rm -d --name lifeos-it-pg -p 127.0.0.1:55442:5432 -e POSTGRES_PASSWORD=test postgres:18.6-alpine
+#   INTEGRATION_TEST_DATABASE_URL=postgres://postgres:test@127.0.0.1:55442/postgres tools/test-integration
+#
+# The URL is a superuser's. Each variable gets a fresh database of its own,
+# it_<name> (TASKS_TEST_DATABASE_URL: it_tasks), dropped and created again
+# on every run; DATABASE_TEST_URL's gets pkg/database's example migration.
+# The tests make their own schemas, roles, and databases in them. A module
+# runs GOWORK=off go test -count=1 -v ./... with every variable set. The run
+# fails when a test fails, or when a test still skips because a variable is
+# not set (a new one this tool does not know yet).
+#
+# psql, pg_dump, and pg_restore come from INTEGRATION_TEST_PG_BIN, else run
+# from the PostgreSQL image (services/backup/internal/backup/testdata; that
+# needs Docker and the host's network to reach the server).
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$repo_root"
+
+admin_url=${INTEGRATION_TEST_DATABASE_URL:?set INTEGRATION_TEST_DATABASE_URL to a throwaway PostgreSQL superuser URL}
+pg_bin=${INTEGRATION_TEST_PG_BIN:-$repo_root/services/backup/internal/backup/testdata}
+psql_bin=$pg_bin/psql
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+fail() {
+  printf 'test-integration: %s\n' "$*" >&2
+  exit 1
+}
+# In GitHub Actions each module's output folds into a group.
+group() { [[ "${GITHUB_ACTIONS:-}" != true ]] || printf '::group::%s\n' "$1"; }
+endgroup() { [[ "${GITHUB_ACTIONS:-}" != true ]] || printf '::endgroup::\n'; }
+url_for() { # <database>: the admin URL on another database
+  local base=${admin_url%%\?*} query=''
+  [[ "$admin_url" != *\?* ]] || query="?${admin_url#*\?}"
+  printf '%s/%s%s' "${base%/*}" "$1" "$query"
+}
+sql() { "$psql_bin" -X -q -v ON_ERROR_STOP=1 -At -d "$admin_url" -c "$1"; }
+
+# Never a Life OS server: refuse one with a database from the registry.
+registry_databases=$(awk -F '|' '!/^#/ && NF >= 2 { printf "%s'\''%s'\''", sep, $2; sep = ", " }' infra/postgres/service-databases.conf)
+found=$(sql "SELECT string_agg(datname, ', ') FROM pg_database WHERE datname IN ($registry_databases)") ||
+  fail "cannot reach PostgreSQL at INTEGRATION_TEST_DATABASE_URL"
+[[ -z "$found" ]] || fail "the server has Life OS databases ($found): use a throwaway PostgreSQL"
+[[ "$(sql 'SELECT rolsuper FROM pg_roles WHERE rolname = current_user')" == t ]] ||
+  fail "INTEGRATION_TEST_DATABASE_URL must name a superuser"
+
+# The modules with integration tests and the variables they read.
+declare -A module_variables=()
+mapfile -t modules < <(find pkg services templates tools -name go.mod -type f -not -path '*/node_modules/*' -printf '%h\n' | sort)
+for module in "${modules[@]}"; do
+  variables=$(grep -rhoE --include='*.go' '\b([A-Z][A-Z0-9_]*_TEST_DATABASE_URL|DATABASE_TEST_URL)\b' "$module" | sort -u | tr '\n' ' ' || true)
+  [[ -z "$variables" ]] || module_variables[$module]=$variables
+done
+[[ ${#module_variables[@]} -gt 0 ]] || fail "found no module with integration tests"
+mapfile -t test_modules < <(printf '%s\n' "${!module_variables[@]}" | sort)
+if [[ $# -gt 0 ]]; then
+  for module in "$@"; do
+    [[ -n "${module_variables[${module%/}]:-}" ]] || fail "$module has no integration tests (modules: ${test_modules[*]})"
+  done
+  test_modules=("${@%/}")
+fi
+mapfile -t variables < <(printf '%s\n' "${module_variables[@]}" | tr ' ' '\n' | sed '/^$/d' | sort -u)
+variables+=(RESTORE_TEST_DATABASE_URL)
+
+printf '==> Databases on %s\n' "$(sed -E 's#//[^@]*@#//#' <<<"$admin_url")"
+for variable in "${variables[@]}"; do
+  if [[ "$variable" == DATABASE_TEST_URL ]]; then
+    database=it_database
+  else
+    database=it_$(tr '[:upper:]' '[:lower:]' <<<"${variable%_TEST_DATABASE_URL}")
+  fi
+  sql "DROP DATABASE IF EXISTS $database WITH (FORCE)" >/dev/null
+  sql "CREATE DATABASE $database" >/dev/null
+  export "$variable=$(url_for "$database")"
+  printf '%s: %s\n' "$variable" "$database"
+done
+for migration in pkg/database/testdata/example/migrations/*.up.sql; do
+  "$psql_bin" -X -q -v ON_ERROR_STOP=1 -d "$DATABASE_TEST_URL" <"$migration" >/dev/null
+done
+# The backup tests run pg_dump and pg_restore as the backup service does.
+export BACKUP_TEST_PG_DUMP=$pg_bin/pg_dump BACKUP_TEST_PG_RESTORE=$pg_bin/pg_restore
+
+summary=()
+failed=()
+for module in "${test_modules[@]}"; do
+  log="$work/$(tr '/' '_' <<<"$module").log"
+  printf '\n==> Integration tests: %s (%s)\n' "$module" "${module_variables[$module]% }"
+  group "go test -v: $module"
+  started=$SECONDS
+  status=0
+  (cd "$module" && GOWORK=off go test -count=1 -v ./...) >"$log" 2>&1 || status=$?
+  cat "$log"
+  endgroup
+  passed=$(grep -cE '^\s*--- PASS:' "$log" || true)
+  skipped=$(grep -cE '^\s*--- SKIP:' "$log" || true)
+  failures=$(grep -cE '^\s*--- FAIL:' "$log" || true)
+  # The tests' skip message without their database: "<VARIABLE> is not set".
+  unset_skips=$(grep -E '(_TEST_DATABASE_URL|DATABASE_TEST_URL) is not set' "$log" || true)
+  line=$(printf '%-28s %5s passed %4s skipped %4s failed %5ss' "$module" "$passed" "$skipped" "$failures" "$((SECONDS - started))")
+  summary+=("$line")
+  printf '%s\n' "$line"
+  if [[ "$status" -ne 0 ]]; then
+    grep -E '^\s*--- FAIL:|^FAIL|^panic:' "$log" >&2 || true
+    failed+=("$module: go test exited $status")
+  fi
+  if [[ -n "$unset_skips" ]]; then
+    printf '%s\n' "$unset_skips" >&2
+    failed+=("$module: tests skipped for a variable this tool does not set")
+  fi
+done
+
+if [[ $# -eq 0 ]]; then
+  printf '\n==> tools/test-restore-database\n'
+  group 'tools/test-restore-database'
+  status=0
+  RESTORE_TEST_PG_BIN=$pg_bin tools/test-restore-database || status=$?
+  endgroup
+  if [[ "$status" -eq 0 ]]; then
+    summary+=("tools/test-restore-database      passed")
+  else
+    summary+=("tools/test-restore-database      FAILED")
+    failed+=("tools/test-restore-database exited $status")
+  fi
+fi
+
+printf '\n==> Summary\n'
+printf '%s\n' "${summary[@]}"
+if [[ ${#failed[@]} -gt 0 ]]; then
+  printf '\n' >&2
+  printf 'test-integration: %s\n' "${failed[@]}" >&2
+  exit 1
+fi
+printf '\nAll integration tests passed.\n'

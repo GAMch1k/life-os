@@ -1,6 +1,6 @@
 # Build from the repository root so the service can use the local shared
 # infrastructure module.
-FROM golang:1.27.1-alpine AS build
+FROM golang:1.27.3-alpine@sha256:fa3d596898d9f126af7c01d14ee7597bab3f39cccf392ef36b69fe77cd681f18 AS build
 
 WORKDIR /src
 COPY . .
@@ -9,7 +9,11 @@ ARG SERVICE_DIR=services/host-health
 WORKDIR /src/${SERVICE_DIR}
 RUN go build -trimpath -ldflags="-s -w" -o /out/service ./cmd/server
 
-FROM alpine:3.22
+FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
+# The image's source and license; on ghcr.io this links its package to the
+# repository (docs/operations/releases.md).
+LABEL org.opencontainers.image.source="https://github.com/GAMch1k/life-os" \
+      org.opencontainers.image.licenses="AGPL-3.0-only"
 COPY --from=build /out/service /service
 
 # nobody: host-health may read only what any unprivileged user could; the

@@ -2,6 +2,8 @@
 
 This guide takes you from a fresh Linux server to a working Life OS. Follow the steps in order. Life OS is single-user and has no accounts or login of its own, so anyone who can reach its gateway acts as the owner. How you expose the gateway ([step 9](#9-remote-access)) is your security boundary.
 
+This guide builds Life OS from this repository. To install the published images instead, with `setup.sh` and nothing to build, follow the [install guide](docs/install/README.md). `setup.sh` also writes this guide's `.env` (step 4) in a clone: run `./setup.sh` there, and it uses the directories below.
+
 The guide links to the detailed runbooks instead of repeating them. Unless noted otherwise, commands run from the checkout (`~/life-os` here). Values such as `lifeos.example.com`, `<you>`, and `<generate>` are placeholders.
 
 ## 1. What you get
@@ -15,7 +17,7 @@ Everything runs as one Docker Compose project, `lifeos`, on one host. PostgreSQL
 - **OS and Docker.** You need a 64-bit Linux server with systemd and cgroup v2. The reference server runs Ubuntu 24.04 with Docker Engine 29.4 and the Compose plugin 5.1, using the systemd cgroup driver. The repository sets no minimum version. It needs Docker Engine with the `docker compose` plugin (Compose v2 or later, not the old `docker-compose`). The Compose files use recent features: non-recursive read-only binds in `compose.yaml`, and `!reset` and `!override` in `compose.verify.yaml`. Install a current release.
 - **Host tools.** `git`, `openssl`, `curl`, and `jq`. `tools/verify-compose` and the backup runbook need `jq`.
 - **Codex.** The Codex CLI on the host, and a ChatGPT account to sign it in ([step 5](#5-sign-in-to-codex-ai-processing)). Or, instead, a Claude Pro or Max subscription and the Claude Code CLI on any machine to create its token ([Claude Code instead of Codex](#claude-code-instead-of-codex)).
-- **Go and Node.js, only outside Docker.** The images build everything they need. You need Go 1.27.1 or newer (1.27 line) only to generate the web push keys ([step 10](#10-notifications)) and to run `make check`. You need Node.js 22 or newer with npm, `sqlc`, `oapi-codegen`, and `migrate` only for development and `make check`; see [Getting started](docs/development/getting-started.md).
+- **Go and Node.js, only outside Docker.** The images build everything they need. You need Go 1.27.3 or newer (1.27 line) only to generate the web push keys ([step 10](#10-notifications)) and to run `make check`. You need Node.js 22 or newer with npm, `sqlc`, `oapi-codegen`, and `migrate` only for development and `make check`; see [Getting started](docs/development/getting-started.md).
 - **Outbound HTTPS.** The `backend` network needs internet access to reach Codex, the Whisper model download, the push services, recipe pages, feeds, and the integrations.
 - **Free address ranges.** `compose.yaml` gives its edge networks fixed subnets in `10.255.249.0/24`, and the verification stack uses `10.255.250.0/24`. Keep both ranges free.
 
@@ -60,7 +62,7 @@ Compose refuses every command until these six variables are set: `LIFE_OS_POSTGR
 | --- | --- |
 | `LIFE_OS_POSTGRES_USER` | **Required.** The PostgreSQL admin login, for example `lifeos_admin`. |
 | `LIFE_OS_POSTGRES_PASSWORD` | **Required.** `<generate>` |
-| `LIFE_OS_POSTGRES_IMAGE`, `LIFE_OS_POSTGRES_DB` | Keep the defaults. PostgreSQL publishes no port. |
+| `LIFE_OS_POSTGRES_IMAGE`, `LIFE_OS_POSTGRES_DB` | Keep the defaults: leave `LIFE_OS_POSTGRES_IMAGE` unset (`compose.yaml` pins the image by digest). PostgreSQL publishes no port. |
 | `LIFE_OS_TIMEZONE` | Your IANA zone, for example `Europe/Berlin` (default `UTC`). Used when the browser's own zone is not known. See [Owner timezone](docs/operations/deployment.md#owner-timezone). |
 | `LIFE_OS_FINANCE_CURRENCY` | Currency of the built-in Cash account (default `EUR`). |
 | `LIFE_OS_PUBLIC_URL` | **Required.** The URL Life OS is reached at, without a trailing slash, such as `https://lifeos.example.com`. Phone notifications open their pages here, and the Google and bank redirect URIs default to it. Without a hostname, use the gateway's address, such as `http://127.0.0.1:3000`. |
@@ -172,13 +174,13 @@ PostgreSQL keeps the environment it was created with. If you add a database pass
 
 ## 8. Build and start
 
-1. **Build the images.** On a server with memory to spare, `make life-up` builds every image and starts the stack in one step (`docker compose up --detach --build`). It is for the first start only: once Life OS is deployed, it refuses (see [Redeploying](#redeploying-always---no-deps)). On a small server, build one image at a time first, as the repository's own smokes do:
+1. **Build the images.** On a server with memory to spare, `make life-up` builds every image and starts the stack in one step (`docker compose build --pull`, then `docker compose up --detach`). It is for the first start only: once Life OS is deployed, it refuses (see [Redeploying](#redeploying-always---no-deps)). On a small server, build one image at a time first, as the repository's own smokes do:
 
    ```sh
    for service in activity finance tasks food inbox calendar calendar-feeds recipe-import \
      notifications banking google-calendar monitor backup host-health host-health-docker \
      voice voice-worker whisper mcp processor dashboard; do
-     docker compose build "$service" || break
+     docker compose build --pull "$service" || break
    done
    ```
 
@@ -215,11 +217,11 @@ PostgreSQL keeps the environment it was created with. If you add a database pass
 After the first start, change one service at a time:
 
 ```sh
-docker compose build <service>
+docker compose build --pull <service>
 docker compose up -d --no-build --no-deps <service>
 ```
 
-Without `--no-deps`, `up` also recreates every dependency of the named service whose configuration changed. Every service with a database depends on PostgreSQL through its migration job, and PostgreSQL reads the whole `.env` (`env_file` in `compose.yaml`). So after any `.env` edit, redeploying one service without `--no-deps` would also recreate PostgreSQL, restarting the database under every service, along with any other dependency whose settings changed. `--no-build` keeps each build a separate, deliberate step, one image at a time. Recreate PostgreSQL only on purpose, with `docker compose up -d --no-build --no-deps postgres`, when it must see a new database password.
+Without `--no-deps`, `up` also recreates every dependency of the named service whose configuration changed. Every service with a database depends on PostgreSQL through its migration job, and PostgreSQL gets the admin login and every database password from `.env`. So after a database password changes, redeploying one service without `--no-deps` would also recreate PostgreSQL, restarting the database under every service, along with any other dependency whose settings changed. `--no-build` keeps each build a separate, deliberate step, one image at a time. Recreate PostgreSQL only on purpose, with `docker compose up -d --no-build --no-deps postgres`, when it must see a new database password.
 
 The gateway needs nothing after a service redeploy, because it resolves service names on each request. Recreate it only when `infra/nginx/life-os.conf.template` or its `.env` settings change: `docker compose up -d --no-build --no-deps --force-recreate gateway`. See [Redeploying services and the gateway](docs/operations/deployment.md#redeploying-services-and-the-gateway).
 
@@ -340,13 +342,13 @@ The manifest format, version rules, and troubleshooting are in [Android releases
   - Without Codex runs: `make life-smoke`, `make verify-clean-db`, `make e2e-smoke`, `make verify-isolation`, `make action-idempotency-smoke`, `make voice-lease-recovery-smoke`, and `tools/smoke-gateway-recreate`.
   - With the real Codex CLI and your sign-in, using your Codex usage: `make processor-smoke`, `make processor-codex-actions-smoke`, `make human-review-smoke`, `make activity-trace-smoke`, `make runtime-status-smoke`, `make retry-schedule-smoke`, `make codex-runtime-smoke`, `make relative-dates-smoke`, `make cross-language-smoke`, `make calendar-ai-smoke`, `make phase8-acceptance`, and `make browser-e2e`.
   - Every run that uses Voice downloads the Whisper model again into its scratch volume.
-- **Source checks.** `tools/check` (`make check`) verifies the code, not the running stack. It needs a clean working tree plus `go`, `sqlc`, `oapi-codegen`, and `npm`. It checks the gateway's host list and the contracts, then runs sqlc drift, gofmt, vet, tests, and builds for every Go module, and the Dashboard checks. It is CPU- and memory-heavy.
+- **Source checks.** `tools/check` (`make check`) verifies the code, not the running stack. It needs a clean working tree plus `go`, `sqlc`, `oapi-codegen`, and `npm`. It checks the gateway's host list and the contracts, then runs sqlc drift, the release bundle's `deploy/compose.yaml` drift (Python 3 with PyYAML), gofmt, vet, tests, and builds for every Go module, and the Dashboard checks. It is CPU- and memory-heavy. Flags run only some parts (`tools/check --go`); GitHub Actions runs them on every push, with the integration tests and govulncheck (see [Continuous integration](docs/operations/ci.md)).
 
 ## 15. Upgrading
 
 1. Note the current commit (`old=$(git rev-parse HEAD)`), then run `git pull`.
 2. Look for new settings and databases with `git diff "$old" -- .env.example infra/postgres/service-databases.conf`. Add new variables to `.env`. For a new database, provision it as described in [Adding the Food service](docs/operations/deployment.md#adding-the-food-service). [Operations](docs/operations/deployment.md) has a section for each service added to an existing deployment.
-3. Build each changed service, one at a time: `docker compose build <service>`.
+3. Build each changed service, one at a time: `docker compose build --pull <service>`.
 4. For a service with a database, apply its migrations first. The job exits when it is done: `docker compose up --no-build --no-deps <service>-migrate`.
 5. Recreate the service: `docker compose up -d --no-build --no-deps <service>`. Deploy data services before `mcp` and `processor`, and the Dashboard after the services it reads. Recreate the gateway only if its configuration changed.
 6. Check the Status page.

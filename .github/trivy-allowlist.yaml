@@ -1,0 +1,15 @@
+# The vulnerabilities a release accepts (docs/operations/releases.md#the-allowlist).
+# tools/scan-images fails a release on any HIGH or CRITICAL vulnerability that
+# has a fix, in any image the release publishes, unless it is listed here.
+# List one only when Life OS cannot reach it, never because a fix is
+# inconvenient; prefer updating the image. Each entry (Trivy's ignore-file
+# format) names the vulnerability (id), where it is accepted (paths in the
+# image, or purls), why (statement), and when it is looked at again
+# (expired_at: after that date Trivy reports it again). tools/scan-images
+# refuses an entry without all four.
+#
+#   - id: CVE-2026-00000
+#     paths: ["usr/local/bin/example"]
+#     statement: "Why Life OS cannot reach it, and in which image."
+#     expired_at: 2027-02-01
+vulnerabilities: []
