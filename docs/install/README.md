@@ -22,7 +22,7 @@ This guide installs Life OS from its published Docker images with one setup scri
 
    ```sh
    mkdir ~/life-os && cd ~/life-os
-   version=v0.1.0-preview.1
+   version=v0.1.0-preview.2
    for file in compose.yaml .env.example setup.sh SHA256SUMS; do
      curl -fsSLO "https://github.com/GAMch1k/life-os/releases/download/$version/$file"
    done
