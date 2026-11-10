@@ -1,11 +1,11 @@
-FROM golang:1.27.3-alpine AS build
+FROM golang:1.27.3-alpine@sha256:fa3d596898d9f126af7c01d14ee7597bab3f39cccf392ef36b69fe77cd681f18 AS build
 WORKDIR /src
 COPY . .
 WORKDIR /src/services/mcp
 RUN go build -trimpath -ldflags="-s -w" -o /out/service ./cmd/server
 RUN go build -trimpath -ldflags="-s -w" -o /out/processor ./cmd/processor
 
-FROM alpine:3.22 AS service
+FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf AS service
 RUN addgroup -S lifeos && adduser -S -G lifeos lifeos
 USER lifeos
 COPY --from=build /out/service /service
