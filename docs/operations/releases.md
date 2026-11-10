@@ -59,7 +59,7 @@ Every GitHub Release has these files:
 | --- | --- |
 | `compose.yaml` | `deploy/compose.yaml`: the repository's `compose.yaml` with every `build:` replaced by `image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-<name>:${LIFE_OS_VERSION}` |
 | `.env.example` | The repository's, with `LIFE_OS_VERSION` set to the release |
-| `setup.sh` | Writes `.env` from `.env.example` with generated passwords and keys ([install docs](../install/)) |
+| `setup.sh` | Writes `.env` from `.env.example` with generated passwords and keys ([install docs](../install/)); its `release_version` placeholder is set to the release |
 | `SHA256SUMS` | The SHA-256 of the three |
 
 `deploy/compose.yaml` is generated: change `compose.yaml` and run `tools/build-install-bundle`, then commit both. `tools/check --install-bundle` (CI's `check-generated` job) fails when it is stale. Do not run it on this host: like `compose.yaml` it names the project `lifeos`, so Compose would act on the live stack.

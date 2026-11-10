@@ -17,7 +17,8 @@ compose.yaml may not bind-mount a repository file (a relative path such as
 ./infra/...): such configuration belongs in an image (P20-02).
 
 The assets are that compose.yaml, .env.example with LIFE_OS_VERSION set to the
-release's version, setup.sh, and SHA256SUMS over them. A dry run may go without
+release's version, setup.sh with its version placeholder set to it too, and
+SHA256SUMS over them. A dry run may go without
 setup.sh (--allow-missing-setup); a release may not.
 
 Needs Python 3 with PyYAML (python3-yaml).
@@ -28,7 +29,6 @@ import difflib
 import hashlib
 import os
 import re
-import shutil
 import sys
 
 try:
@@ -201,7 +201,12 @@ def write_assets(directory, version, rendered, allow_missing_setup):
         out.write(stamped)
     files = ["compose.yaml", ".env.example"]
     if has_setup:
-        shutil.copyfile(setup, os.path.join(directory, "setup.sh"))
+        with open(setup, encoding="utf-8") as source:
+            script = source.read()
+        # setup.sh's own record of its release (else it reads .env.example's).
+        script, _ = re.subn(r"(?m)^release_version='__LIFE_OS_VERSION__'$", f"release_version='{version}'", script)
+        with open(os.path.join(directory, "setup.sh"), "w", encoding="utf-8") as out:
+            out.write(script)
         os.chmod(os.path.join(directory, "setup.sh"), 0o755)
         files.append("setup.sh")
     else:
