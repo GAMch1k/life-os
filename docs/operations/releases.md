@@ -78,7 +78,7 @@ git tag v0.1.0-preview.1
 git push origin v0.1.0-preview.1
 ```
 
-Then watch Actions → Release. It takes about 30 minutes:
+Then watch Actions → Release. It takes about 35 minutes; its build, test, and scan job alone took 23.5 minutes in the dry run of 2026-11-10:
 
 1. **Plan** checks the tag, that `deploy/compose.yaml` is current, lists the images, and assembles the bundle.
 2. **Build, test, and scan**, once per platform on a runner of that platform: CI's full-stack tests (`.github/actions/full-stack`, the same steps as CI's `full-stack` job: `docker compose build`, the smokes, the browser suite), then Trivy on every image ([the vulnerability gate](#the-vulnerability-gate)) and each image's SBOM. The tested images are saved for the next job, which has the write access this one has not.
