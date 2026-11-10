@@ -30,6 +30,20 @@ The times are with warm caches; without them, each job takes up to a minute long
 
 `tools/check` without flags runs all of its parts, as before. Like `make check`, it needs a clean working tree. `check-generated` and `check-dashboard` run `npm ci --prefix apps/dashboard` first.
 
+### Required checks
+
+The default branch's ruleset requires seven checks before a pull request can be merged: six jobs, by their `name:`, and the commit status `CLA`:
+
+- `Gateway hosts, contracts, sqlc`
+- `Go modules (gofmt, vet, test, build)`
+- `Dashboard (format, lint, test, typecheck, build)`
+- `Integration tests (PostgreSQL)`
+- `govulncheck (every Go module)`
+- `Full stack (images, smokes, browser suite)`
+- `CLA`, set by the [CLA check](#cla-check)
+
+`CLA check (unit tests)` runs too, but is not required. The ruleset matches the names, so renaming one of these jobs means changing the ruleset with it; a required check that never reports keeps every pull request blocked. The ruleset asks for no approving review. Repository admins bypass it, so the maintainer's local merges can be pushed to master; CI checks those pushes as any other.
+
 ### Tool versions
 
 CI installs the versions the repository already uses:

@@ -1,0 +1,27 @@
+name: Feature request
+description: An idea for Life OS.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea. If you would like to build it yourself, describe your approach here first; [CONTRIBUTING.md](https://github.com/GAMch1k/life-os/blob/master/CONTRIBUTING.md) explains why.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do, and what gets in the way today?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Your idea
+      description: How could Life OS solve it?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Other ways you have considered or use today, if any.

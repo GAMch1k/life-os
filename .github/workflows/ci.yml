@@ -80,7 +80,10 @@ jobs:
       - run: tools/check --gateway --contracts --sqlc --install-bundle
 
   check-go:
-    name: Go modules (gofmt, vet, test, build) and setup.sh
+    # Also the setup.sh tests (--setup). The name stays as it is, because the
+    # default branch's ruleset requires the check by this name
+    # (docs/operations/ci.md#required-checks).
+    name: Go modules (gofmt, vet, test, build)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:

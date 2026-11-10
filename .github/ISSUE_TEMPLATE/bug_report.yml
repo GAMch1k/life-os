@@ -1,0 +1,43 @@
+name: Bug report
+description: Something in Life OS doesn't work as it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. A security problem is never reported here: see [SECURITY.md](https://github.com/GAMch1k/life-os/blob/master/SECURITY.md).
+        Remove passwords, tokens, keys, and personal data from everything you paste.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The release you run (`LIFE_OS_VERSION` in `.env`), or the commit you built from.
+      placeholder: v0.1.0-preview.1
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, and what Life OS did. A screenshot helps.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open ...
+        2. ...
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: The Status page's message, or `docker compose logs <service>`. Remove passwords, tokens, keys, and personal data first.
+      render: text
