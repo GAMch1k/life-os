@@ -43,6 +43,16 @@ docker compose restart processor
 
 Captures then wait in Inbox for you. The processor keeps restarting without a sign-in; the Status page says so, and that is expected in this preview.
 
+## Claude Code instead of Codex
+
+Instead of Codex, the processor can run Anthropic's **Claude Code** with **your Claude subscription** (a Pro or Max plan). Each capture then uses a little of that plan's usage limits; there is no API key and no separate bill, and Life OS never uses an Anthropic API key. With it, **your captures are sent to Anthropic** instead of OpenAI, as described under Privacy above.
+
+1. On any computer with Claude Code installed, run `claude setup-token` and sign in with your subscription. It prints a long-lived token.
+2. On the server, run `./setup.sh claude` and paste the token. It sets `LIFE_OS_AI_PROVIDER=claude` and `LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN` in `.env`.
+3. Run `./setup.sh up` to recreate the processor with them.
+
+The model is `sonnet` by default; `LIFE_OS_CLAUDE_MODEL` and `LIFE_OS_CLAUDE_EFFORT` in `.env` change it. The token is as sensitive as a password: it is in `.env` only, not in the backups. If the Status page says Claude Code is signed out, create a new token and run `./setup.sh claude` again. To go back to Codex, run `./setup.sh codex`.
+
 ## More
 
 How the processor works, its settings, and its limits: [MCP and AI](../services/mcp.md).

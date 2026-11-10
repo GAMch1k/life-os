@@ -81,6 +81,7 @@ Life OS works without any of them. Each one can be set up during the first `./se
 | Command | What it adds | Guide |
 | --- | --- | --- |
 | `./setup.sh codex` | AI processing of your notes, with your ChatGPT plan | [AI processing](ai-processing.md) |
+| `./setup.sh claude` | Or AI processing with Claude Code and your Claude plan instead | [AI processing](ai-processing.md#claude-code-instead-of-codex) |
 | `./setup.sh whisper` | A different speech-to-text model for voice notes | [Voice notes](voice.md) |
 | `./setup.sh cloudflare` | Access from anywhere, through Cloudflare Tunnel and Access | [Access it safely](access.md#cloudflare-tunnel-and-access) |
 | `./setup.sh google` | Two-way sync with Google Calendar | [Google Calendar](google-calendar.md) |
@@ -117,12 +118,13 @@ Plain `docker compose` commands work too, from the same directory: `docker compo
 | Whisper | `LIFE_OS_SETUP_WHISPER_MODEL` (`tiny`, `base`, `small`, `medium`, `large-v3-turbo`) |
 | Cloudflare | `LIFE_OS_CLOUDFLARE_TUNNEL_TOKEN` and an https `LIFE_OS_PUBLIC_URL` |
 | Google Calendar | `LIFE_OS_GOOGLE_CLIENT_ID`, `LIFE_OS_GOOGLE_CLIENT_SECRET` |
+| AI with Claude Code | `LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) |
 | Bank sync | `LIFE_OS_ENABLE_BANKING_APP_ID`, `LIFE_OS_ENABLE_BANKING_KEY_FILE` |
 | ntfy | `LIFE_OS_NTFY_PUBLIC_URL`, `LIFE_OS_SETUP_NTFY_PHONE_PASSWORD` |
 | Phone app push | `LIFE_OS_SETUP_WEBPUSH=on`, and `LIFE_OS_WEBPUSH_SUBJECT` (`mailto:you@example.com`) without an https address |
 | A calendar feed | `LIFE_OS_SETUP_FEED_NAME`, `LIFE_OS_SETUP_FEED_URL` |
 
-For example: `LIFE_OS_TIMEZONE=Europe/Berlin ./setup.sh --yes && ./setup.sh up`. The AI sign-in always needs a person: run `./setup.sh codex` at a terminal.
+For example: `LIFE_OS_TIMEZONE=Europe/Berlin ./setup.sh --yes && ./setup.sh up`. The Codex sign-in always needs a person: run `./setup.sh codex` at a terminal.
 
 ## More
 

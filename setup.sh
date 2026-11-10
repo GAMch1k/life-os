@@ -634,6 +634,7 @@ setup_integrations_now() {
   if ((assume_yes)); then
     # Without questions, an integration is set up when its settings are in
     # the environment.
+    [[ -z ${LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN:-} ]] || setup_claude
     [[ -z ${LIFE_OS_SETUP_WHISPER_MODEL:-} ]] || setup_whisper
     [[ -z ${LIFE_OS_CLOUDFLARE_TUNNEL_TOKEN:-} ]] || setup_cloudflare
     [[ -z ${LIFE_OS_GOOGLE_CLIENT_ID:-} ]] || setup_google
@@ -646,6 +647,7 @@ setup_integrations_now() {
   cat <<EOF
 Life OS works without them. Each one can be set up now, or later on its own:
   codex       AI processing of your notes (OpenAI Codex, needs a ChatGPT plan)
+  claude      or AI processing with Claude Code instead (needs a Claude plan)
   whisper     the speech-to-text model for voice notes (default: small)
   cloudflare  reach Life OS from anywhere through a Cloudflare Tunnel and Access
   google      sync with Google Calendar
@@ -658,7 +660,7 @@ EOF
     say 'Later: ./setup.sh <name>, for example ./setup.sh codex.'
     return 0
   }
-  for name in codex whisper cloudflare google banking ntfy webpush; do
+  for name in codex claude whisper cloudflare google banking ntfy webpush; do
     if confirm "Set up $name now?" n; then
       "setup_$name"
     fi
@@ -710,11 +712,51 @@ EOF
     processor login --device-auth || die 'the Codex sign-in did not finish; run ./setup.sh codex to try again'
   docker compose run --rm --no-deps -T --entrypoint codex -e CODEX_HOME=/codex-login -v "$mount" \
     processor login status || die 'Codex says it is not signed in; run ./setup.sh codex to try again'
-  if [[ -n $(docker compose ps -q processor 2>/dev/null) ]]; then
+  if [[ $(ai_provider) != codex ]]; then
+    env_values[LIFE_OS_AI_PROVIDER]=codex
+    env_update
+    say 'AI processing now uses Codex instead of Claude Code (LIFE_OS_AI_PROVIDER=codex).'
+    apply_hint processor
+  elif [[ -n $(docker compose ps -q processor 2>/dev/null) ]]; then
     docker compose restart processor >/dev/null
     say 'Restarted the processor with the new sign-in.'
   fi
   say 'AI processing is on. The Status page shows the Codex allowance that is left.'
+}
+
+# Claude Code instead of Codex: the subscription's long-lived token, which
+# claude setup-token prints on any computer, goes into .env. Never an API key:
+# the runs use the subscription, not the Anthropic API.
+setup_claude() {
+  local token
+  intro 'AI processing (Claude Code)' ai-processing.md
+  require_env
+  if [[ $(ai_provider) == claude ]] && is_set LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN; then
+    change_existing 'AI processing with Claude Code' || return 0
+  fi
+  cat <<'EOF'
+Instead of Codex, Life OS's AI can run Anthropic's Claude Code with your
+Claude subscription:
+  * You need a Claude Pro or Max plan. Each note uses a little of that plan's
+    usage limits; no API key and no separate bill.
+  * Your notes, and the tasks and events the AI looks at to understand them,
+    are sent to Anthropic. Leave this off if you don't want that.
+Create the token on any computer with Claude Code: run claude setup-token,
+sign in with your subscription, and paste the token it prints.
+EOF
+  if ((assume_yes)); then
+    token=${LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN:-}
+  else
+    confirm 'Use Claude Code for AI processing?' y || return 0
+    ask_secret token 'Token from claude setup-token (input is hidden)'
+  fi
+  [[ $token != sk-ant-api* ]] || usage_error 'that is an Anthropic API key, which bills the API: paste the subscription token that claude setup-token prints'
+  [[ -n $token && $token =~ ^[A-Za-z0-9_-]+$ ]] || usage_error 'the token is missing or has unexpected characters: paste what claude setup-token prints'
+  env_values[LIFE_OS_AI_PROVIDER]=claude
+  env_values[LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN]=$token
+  env_update
+  say 'AI processing uses Claude Code. To go back to Codex: ./setup.sh codex.'
+  apply_hint processor
 }
 
 setup_whisper() {
@@ -1086,8 +1128,10 @@ wait_until_ready() {
     esac
   done < <(docker compose ps --all --format '{{.Service}}|{{.State}}|{{.Health}}|{{.ExitCode}}' 2>/dev/null || true)
   if ((processor_down)); then
-    if codex_signed_in; then
+    if ai_ready; then
       problems+=('processor (not running)')
+    elif [[ $(ai_provider) == claude ]]; then
+      say "AI processing is off until you set Claude Code's token (./setup.sh claude); notes wait in Inbox."
     else
       say 'AI processing is off until you sign in to Codex (./setup.sh codex); notes wait in Inbox.'
     fi
@@ -1103,6 +1147,22 @@ codex_signed_in() {
   local home
   home=$(env_get LIFE_OS_CODEX_HOME_HOST_PATH 2>/dev/null) || return 1
   [[ $home == /* && -s $home/auth.json ]]
+}
+
+# The AI provider .env names: codex (the default) or claude.
+ai_provider() {
+  local provider
+  provider=$(env_get LIFE_OS_AI_PROVIDER 2>/dev/null) || provider=
+  printf '%s\n' "${provider:-codex}"
+}
+
+# Whether that provider can run: Codex signed in, or Claude Code's token set.
+ai_ready() {
+  if [[ $(ai_provider) == claude ]]; then
+    is_set LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN
+  else
+    codex_signed_in
+  fi
 }
 
 print_access() {
@@ -1129,7 +1189,12 @@ EOF
 
 print_next_steps() {
   local -a next=()
-  codex_signed_in || next+=('./setup.sh codex      turn on AI processing of your notes')
+  if [[ $(ai_provider) == claude ]]; then
+    ai_ready || next+=('./setup.sh claude     turn on AI processing with Claude Code')
+  elif ! ai_ready; then
+    next+=('./setup.sh codex      turn on AI processing of your notes')
+    next+=('./setup.sh claude     or with Claude Code and a Claude plan instead')
+  fi
   is_set LIFE_OS_GOOGLE_CLIENT_ID || next+=('./setup.sh google     sync with Google Calendar')
   next+=('./setup.sh feed       subscribe to a calendar feed (ICS)')
   next+=('./setup.sh status     what runs and what is set up')
@@ -1230,7 +1295,11 @@ cmd_status() {
       || warn 'docker compose cannot read this project'
   fi
   step 'Set up'
-  status_line 'AI processing (codex)' "$(codex_signed_in && printf 'signed in' || printf 'not signed in')"
+  if [[ $(ai_provider) == claude ]]; then
+    status_line 'AI processing (claude)' "$(on_off is_set LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN)"
+  else
+    status_line 'AI processing (codex)' "$(codex_signed_in && printf 'signed in' || printf 'not signed in')"
+  fi
   status_line 'Whisper model (whisper)' "$(whisper_model)"
   status_line 'Cloudflare Tunnel (cloudflare)' "$(on_off list_has COMPOSE_PROFILES cloudflare)"
   status_line 'Google Calendar (google)' "$(on_off is_set LIFE_OS_GOOGLE_CLIENT_ID)"
@@ -1276,6 +1345,7 @@ release's compose.yaml and .env.example.
 
 Integrations (each optional, any time):
   ./setup.sh codex              AI processing: sign in to OpenAI Codex
+  ./setup.sh claude             AI processing: Claude Code instead of Codex
   ./setup.sh whisper            choose the speech-to-text model
   ./setup.sh cloudflare         Cloudflare Tunnel (behind Cloudflare Access)
   ./setup.sh google             Google Calendar sync
@@ -1337,6 +1407,7 @@ case ${command:-init} in
   check) cmd_check ;;
   gateway) cmd_gateway ;;
   codex) setup_codex ;;
+  claude) setup_claude ;;
   whisper) setup_whisper ;;
   cloudflare) setup_cloudflare ;;
   google) setup_google ;;
