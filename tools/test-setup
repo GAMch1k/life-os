@@ -50,7 +50,7 @@ case $1 in
     [[ $1 != --profile ]] || shift 2
     case $* in
       'version --short') echo "${STUB_COMPOSE:-v5.1.3}" ;;
-      'config --images') printf 'ghcr.io/gamch1k/life-os-tasks:preview\nbinwiederhier/ntfy:v2.29.0\n' ;;
+      'config --images') printf 'ghcr.io/gamch1k/life-os-tasks:preview\nbinwiederhier/ntfy:v2.37.2@sha256:1875ddcf815c8a3c981d6d78c67a93452d0abba79b1ab9520b1f5f5238902bd7\n' ;;
       'ps -q --status running backup') [[ ${STUB_BACKUP_RUNNING:-1} != 1 ]] || echo 3f1c0ffee ;;
       'ps -q processor') : ;;
       'ps --all --format'*) cat "${STUB_PS_FILE:-/dev/null}" ;;
@@ -399,7 +399,7 @@ run LIFE_OS_NTFY_PUBLIC_URL=https://ntfy.example.org LIFE_OS_SETUP_NTFY_PHONE_PA
 ok 'ntfy refuses a short password' test "$status" -eq 2
 run LIFE_OS_NTFY_PUBLIC_URL=https://ntfy.example.org LIFE_OS_SETUP_NTFY_PHONE_PASSWORD=correct-horse-battery -- --yes ntfy
 ok 'ntfy' test "$status" -eq 0
-ok 'hashed with the compose image, offline' logged 'docker run --rm -i --network none binwiederhier/ntfy:v2.29.0 user hash'
+ok 'hashed with the compose image, offline' logged 'docker run --rm -i --network none binwiederhier/ntfy:v2.37.2@sha256:1875ddcf815c8a3c981d6d78c67a93452d0abba79b1ab9520b1f5f5238902bd7 user hash'
 ok 'phone hash in single quotes' grep -qE "^LIFE_OS_NTFY_PHONE_PASSWORD_HASH='\\\$2a\\\$10\\\$[./A-Za-z0-9]{53}'$" "$case_dir/.env"
 ok 'publisher hash in single quotes' grep -qE "^LIFE_OS_NTFY_PUBLISHER_PASSWORD_HASH='\\\$2a\\\$10\\\$[./A-Za-z0-9]{53}'$" "$case_dir/.env"
 ok 'publisher token' grep -qE '^LIFE_OS_NTFY_PUBLISHER_TOKEN=tk_[a-z0-9]{29}$' "$case_dir/.env"
