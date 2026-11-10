@@ -740,7 +740,7 @@ services:
   # tunnel configuration, and the token comes only from the ignored .env. See
   # docs/operations/cloudflare.md.
   cloudflared:
-    image: ${LIFE_OS_CLOUDFLARED_IMAGE:-cloudflare/cloudflared:2026.10.0}
+    image: ${LIFE_OS_CLOUDFLARED_IMAGE:-cloudflare/cloudflared:2026.10.7@sha256:4955524aeaa379e154023d5a027c250f7b35041a2e7e950cf13f144bc9b9c5ba}
     profiles: [cloudflare]
     command: ["tunnel", "--metrics", "127.0.0.1:20241", "--management-diagnostics=false", "run"]
     environment:
