@@ -304,6 +304,16 @@ ok 'a released script sets its version' test "$(value LIFE_OS_VERSION)" = 0.1.0-
 run -- help
 ok 'help shows it' output_has '(0.1.0-preview.1)'
 
+new_case stamped
+sed -i '1i LIFE_OS_VERSION=v0.1.0-preview.1' "$case_dir/.env.example"
+run LIFE_OS_TIMEZONE=UTC -- --yes
+ok "the version .env.example names" test "$(value LIFE_OS_VERSION)" = v0.1.0-preview.1
+ok 'once' test "$(grep -c '^LIFE_OS_VERSION=' "$case_dir/.env")" -eq 1
+sed -i 's/^LIFE_OS_VERSION=.*/LIFE_OS_VERSION=v0.1.0-preview.2/' "$case_dir/.env.example"
+run STUB_BACKUP_RUNNING=0 LIFE_OS_SETUP_WAIT_SECONDS=5 -- update --skip-backup --skip-checks
+ok "update goes to the newer .env.example's version" test "$(value LIFE_OS_VERSION)" = v0.1.0-preview.2
+ok 'and pulls it' logged 'docker compose pull [LIFE_OS_VERSION=v0.1.0-preview.2]'
+
 # ---------- Questions ----------
 new_case interactive
 printf 'Asia/Tokyo\nusd\n\nn\n' >"$work/answers"

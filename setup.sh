@@ -15,11 +15,11 @@
 
 set -euo pipefail
 
-# The release this copy belongs to. The release workflow writes the image
-# version over the placeholder on the next line; an unreleased copy uses the
-# moving "preview" images.
+# The release this copy belongs to: the image version a release may write
+# over the placeholder on the next line, else the LIFE_OS_VERSION the
+# release's .env.example names, else the moving "preview" images.
 release_version='__LIFE_OS_VERSION__'
-case $release_version in __*) release_version=preview ;; esac
+case $release_version in __*) release_version= ;; esac
 
 docs=https://github.com/GAMch1k/life-os/blob/master/docs/install
 min_engine=25.0
@@ -27,6 +27,10 @@ min_compose=2.27
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 umask 077
+if [[ -z $release_version && -f .env.example ]]; then
+  release_version=$(sed -n "s/^LIFE_OS_VERSION=['\"]*\([^'\"]*\)['\"]*$/\1/p" .env.example | head -n 1)
+fi
+[[ $release_version =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] || release_version=preview
 
 assume_yes=0
 force_new=0
