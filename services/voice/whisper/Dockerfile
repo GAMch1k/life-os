@@ -1,4 +1,4 @@
-# The build stage's Alpine is the runtime's (python:3.13-alpine), so
+# The build stage's Alpine is the runtime's (python:3.15-alpine), so
 # whisper-cli links against the libstdc++ it runs with.
 FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf AS whisper-build
 RUN apk add --no-cache build-base cmake git
