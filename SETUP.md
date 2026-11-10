@@ -156,13 +156,13 @@ PostgreSQL keeps the environment it was created with. If you add a database pass
 
 ## 8. Build and start
 
-1. **Build the images.** On a server with memory to spare, `make life-up` builds every image and starts the stack in one step (`docker compose up --detach --build`). It is for the first start only: once Life OS is deployed, it refuses (see [Redeploying](#redeploying-always---no-deps)). On a small server, build one image at a time first, as the repository's own smokes do:
+1. **Build the images.** On a server with memory to spare, `make life-up` builds every image and starts the stack in one step (`docker compose build --pull`, then `docker compose up --detach`). It is for the first start only: once Life OS is deployed, it refuses (see [Redeploying](#redeploying-always---no-deps)). On a small server, build one image at a time first, as the repository's own smokes do:
 
    ```sh
    for service in activity finance tasks food inbox calendar calendar-feeds recipe-import \
      notifications banking google-calendar monitor backup host-health host-health-docker \
      voice voice-worker whisper mcp processor dashboard; do
-     docker compose build "$service" || break
+     docker compose build --pull "$service" || break
    done
    ```
 
@@ -199,7 +199,7 @@ PostgreSQL keeps the environment it was created with. If you add a database pass
 After the first start, change one service at a time:
 
 ```sh
-docker compose build <service>
+docker compose build --pull <service>
 docker compose up -d --no-build --no-deps <service>
 ```
 
@@ -330,7 +330,7 @@ The manifest format, version rules, and troubleshooting are in [Android releases
 
 1. Note the current commit (`old=$(git rev-parse HEAD)`), then run `git pull`.
 2. Look for new settings and databases with `git diff "$old" -- .env.example infra/postgres/service-databases.conf`. Add new variables to `.env`. For a new database, provision it as described in [Adding the Food service](docs/operations/deployment.md#adding-the-food-service). [Operations](docs/operations/deployment.md) has a section for each service added to an existing deployment.
-3. Build each changed service, one at a time: `docker compose build <service>`.
+3. Build each changed service, one at a time: `docker compose build --pull <service>`.
 4. For a service with a database, apply its migrations first. The job exits when it is done: `docker compose up --no-build --no-deps <service>-migrate`.
 5. Recreate the service: `docker compose up -d --no-build --no-deps <service>`. Deploy data services before `mcp` and `processor`, and the Dashboard after the services it reads. Recreate the gateway only if its configuration changed.
 6. Check the Status page.

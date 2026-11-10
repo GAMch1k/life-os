@@ -96,7 +96,7 @@ Start ntfy first, so the Notifications service's first deliveries find it. Then 
 docker compose up -d --no-build --no-deps ntfy
 docker compose ps ntfy                     # Up … (healthy)
 docker compose logs ntfy | tail -20        # no "invalid auth-…" lines
-docker compose build notifications && docker compose build dashboard
+docker compose build --pull notifications && docker compose build --pull dashboard
 docker compose up -d --no-build --no-deps notifications dashboard cloudflared
 ./tools/check-ingress                      # networks, ports, and the gateway's host list
 ./tools/check-cloudflare-access            # Life OS still behind Access, and still reachable

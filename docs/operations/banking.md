@@ -33,8 +33,8 @@ Never commit the key or the token key, and never paste them into tickets or logs
 3. Build banking and the Dashboard, one at a time, migrate, and start banking, then the Dashboard and the gateway (which routes `/api/integrations/banking/`):
 
    ```sh
-   docker compose build banking
-   docker compose build dashboard
+   docker compose build --pull banking
+   docker compose build --pull dashboard
    docker compose up --no-build --no-deps banking-migrate
    docker compose up -d --no-build --no-deps banking
    docker compose up -d --no-build --no-deps dashboard
