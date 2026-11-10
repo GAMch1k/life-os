@@ -130,7 +130,7 @@ func main() {
 func newProvider(cfg processor.Config, binary string) processor.Provider {
 	slots := make(chan struct{}, cfg.MaxConcurrency)
 	if cfg.Provider == processor.ProviderClaude {
-		return processor.ClaudeCLI{Command: binary, Model: cfg.Model, Effort: cfg.ReasoningEffort, WorkDir: cfg.WorkDir, Timeout: cfg.CodexTimeout, Slots: slots, TimeZone: cfg.TimeZone, Limits: &processor.ClaudeLimits{}}
+		return processor.ClaudeCLI{Command: binary, Model: cfg.Model, Effort: cfg.ReasoningEffort, WorkDir: cfg.WorkDir, Timeout: cfg.CodexTimeout, Slots: slots, TimeZone: cfg.TimeZone, Limits: &processor.ClaudeLimits{}, APIKey: cfg.AnthropicAPIKey}
 	}
 	return processor.CodexCLI{Command: binary, Model: cfg.Model, ReasoningEffort: cfg.ReasoningEffort, WorkDir: cfg.WorkDir, Timeout: cfg.CodexTimeout, Slots: slots, TimeZone: cfg.TimeZone}
 }

@@ -17,10 +17,13 @@ import (
 )
 
 // ClaudeCLI is the alternative agent runtime (LIFE_OS_AI_PROVIDER=claude):
-// the Claude Code CLI run headless (print mode) on the owner's Claude
-// subscription, through the long-lived OAuth token of `claude setup-token`
-// (CLAUDE_CODE_OAUTH_TOKEN). It never uses API billing: ANTHROPIC_API_KEY and
-// the other ANTHROPIC_* settings are never passed to a run.
+// the Claude Code CLI run headless (print mode), signed in one of two ways the
+// owner chooses in setup, never both. By default on the owner's Claude plan,
+// through the long-lived OAuth token of `claude setup-token`
+// (CLAUDE_CODE_OAUTH_TOKEN): then no ANTHROPIC_* setting ever reaches a run,
+// so it never bills the API by accident. Or, with APIKey set, on an Anthropic
+// API key, billed per use by Anthropic: then a run gets that key as
+// ANTHROPIC_API_KEY, and the plan's token does not reach it.
 //
 // A run gets the same controls as a Codex run: a slot, a deadline, an
 // explicit working directory, a sanitized environment, its own process group,
@@ -51,6 +54,10 @@ type ClaudeCLI struct {
 	// Limits keeps the subscription's rate limits as the runs report them,
 	// for Usage; nil keeps none.
 	Limits *ClaudeLimits
+	// APIKey, when set, is the Anthropic API key the runs sign in with
+	// (LIFE_OS_ANTHROPIC_API_KEY) instead of the Claude plan. Empty is the
+	// plan.
+	APIKey string
 }
 
 // claudeSystemPrompt replaces Claude Code's own coding-agent system prompt:
@@ -222,7 +229,7 @@ func (c ClaudeCLI) run(ctx context.Context, spec claudeSpec) (string, error) {
 // graceful termination on cancellation.
 func (c ClaudeCLI) command(ctx context.Context, args ...string) *exec.Cmd {
 	cmd := c.runner()(ctx, c.binary(), args...)
-	cmd.Env = claudeEnv(os.Environ(), c.TimeZone)
+	cmd.Env = claudeEnv(os.Environ(), c.TimeZone, c.APIKey)
 	if c.WorkDir != "" {
 		cmd.Dir = c.WorkDir
 	}
@@ -231,9 +238,10 @@ func (c ClaudeCLI) command(ctx context.Context, args ...string) *exec.Cmd {
 }
 
 // claudeAllowedEnv is everything a Claude Code run inherits. Its credential
-// is the subscription's OAuth token (CLAUDE_CODE_OAUTH_TOKEN), or locally the
+// is the plan's OAuth token (CLAUDE_CODE_OAUTH_TOKEN), or locally the
 // signed-in user's own login; HOME and CLAUDE_CONFIG_DIR point at a writable
-// tmpfs in the container.
+// tmpfs in the container. An API key is never inherited: claudeEnv adds the
+// configured one.
 var claudeAllowedEnv = map[string]bool{"PATH": true, "HOME": true, "USER": true, "CLAUDE_CONFIG_DIR": true, "CLAUDE_CODE_OAUTH_TOKEN": true, "LANG": true, "LC_ALL": true, "TZ": true, "TMPDIR": true, "SSL_CERT_FILE": true, "SSL_CERT_DIR": true, "NODE_EXTRA_CA_CERTS": true}
 
 // claudeFixedEnv turns off what a headless run must not do: update itself,
@@ -241,17 +249,22 @@ var claudeAllowedEnv = map[string]bool{"PATH": true, "HOME": true, "USER": true,
 var claudeFixedEnv = []string{"DISABLE_AUTOUPDATER=1", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1", "DISABLE_TELEMETRY=1", "DISABLE_ERROR_REPORTING=1", "CLAUDE_CODE_DISABLE_CLAUDE_MDS=1"}
 
 // claudeEnv is a run's environment. ANTHROPIC_* (an API key, an auth token, a
-// base URL) is stripped by name as well as by the allowlist: a run must never
-// bill the API or talk to another endpoint instead of the subscription.
-func claudeEnv(environ []string, zone *time.Location) []string {
-	env := make([]string, 0, len(claudeAllowedEnv)+len(claudeFixedEnv))
+// base URL) from the processor's environment is stripped by name as well as by
+// the allowlist: a run must never bill the API or talk to another endpoint by
+// accident. Only an API key chosen in setup (apiKey) reaches a run, as
+// ANTHROPIC_API_KEY, and then the plan's token does not: never both.
+func claudeEnv(environ []string, zone *time.Location, apiKey string) []string {
+	env := make([]string, 0, len(claudeAllowedEnv)+len(claudeFixedEnv)+1)
 	for _, entry := range environ {
 		key, _, ok := strings.Cut(entry, "=")
-		if ok && claudeAllowedEnv[key] && !strings.HasPrefix(key, "ANTHROPIC_") {
+		if ok && claudeAllowedEnv[key] && !strings.HasPrefix(key, "ANTHROPIC_") && (apiKey == "" || key != "CLAUDE_CODE_OAUTH_TOKEN") {
 			env = append(env, entry)
 		}
 	}
 	env = append(env, claudeFixedEnv...)
+	if apiKey != "" {
+		env = append(env, "ANTHROPIC_API_KEY="+apiKey)
+	}
 	if zone != nil {
 		env = append(withoutKey(env, "TZ"), "TZ="+zone.String())
 	}
@@ -467,9 +480,10 @@ func (e *claudeEvents) failure(stderr string) string {
 	return "ERROR: " + reason
 }
 
-// LoggedIn reports whether `claude auth status` finds a subscription sign-in
-// (the OAuth token, or a claude.ai login). It reads local credentials only and
-// uses no model quota. An API key does not count.
+// LoggedIn reports whether `claude auth status` finds the sign-in the owner
+// chose: on the plan, the OAuth token or a claude.ai login, and an API key
+// does not count; with APIKey, that API key alone. It reads local credentials
+// only and uses no model quota.
 func (c ClaudeCLI) LoggedIn(ctx context.Context) bool {
 	cmd := c.command(ctx, "auth", "status", "--json")
 	out, err := cmd.Output()
@@ -486,6 +500,9 @@ func (c ClaudeCLI) LoggedIn(ctx context.Context) bool {
 	}
 	if c.Limits != nil {
 		c.Limits.setAuth(status.AuthMethod)
+	}
+	if c.APIKey != "" {
+		return status.LoggedIn && status.AuthMethod == "api_key"
 	}
 	return status.LoggedIn && (status.AuthMethod == "oauth_token" || status.AuthMethod == "claude.ai")
 }

@@ -542,9 +542,10 @@ services:
       context: .
       dockerfile: services/mcp/Dockerfile
       target: processor
-      # The AI CLIs the image installs (codex, claude, or both); it must
-      # include LIFE_OS_AI_PROVIDER. codex alone keeps the image smaller.
-      args: {LIFE_OS_AI_PROVIDERS: "${LIFE_OS_AI_PROVIDERS:-codex,claude}"}
+      # The AI CLIs the image installs: codex (the default, and the
+      # published image's), claude, or both; it must include
+      # LIFE_OS_AI_PROVIDER. Claude Code goes in only when you name it here.
+      args: {LIFE_OS_AI_PROVIDERS: "${LIFE_OS_AI_PROVIDERS:-codex}"}
     environment:
       MCP_SERVICE_URL: http://mcp:8080/mcp
       # A capture's images are read from Inbox (GET /v1/media/{sha256}) and
@@ -558,9 +559,12 @@ services:
       LIFE_OS_CODEX_REASONING_EFFORT: ${LIFE_OS_CODEX_REASONING_EFFORT:-medium}
       LIFE_OS_CLAUDE_MODEL: ${LIFE_OS_CLAUDE_MODEL:-sonnet}
       LIFE_OS_CLAUDE_EFFORT: ${LIFE_OS_CLAUDE_EFFORT:-}
-      # Claude Code's sign-in: the subscription token of claude setup-token.
-      # Never ANTHROPIC_API_KEY: the runs use the subscription, not the API.
+      # Claude Code's sign-in, one of two: the Claude plan's token of claude
+      # setup-token, or an Anthropic API key (billed per use). The processor
+      # passes the key to the Claude Code runs alone, as ANTHROPIC_API_KEY;
+      # no other ANTHROPIC_* setting ever reaches them.
       CLAUDE_CODE_OAUTH_TOKEN: ${LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN:-}
+      LIFE_OS_ANTHROPIC_API_KEY: ${LIFE_OS_ANTHROPIC_API_KEY:-}
       LIFE_OS_PROCESSOR_POLL_MILLIS: ${LIFE_OS_PROCESSOR_POLL_MILLIS:-1000}
       INBOX_CONTEXT_MINUTES: ${LIFE_OS_INBOX_CONTEXT_MINUTES:-20}
       LIFE_OS_PROCESSOR_HEALTH_PORT: 8081
@@ -582,13 +586,17 @@ services:
         source: ${LIFE_OS_CODEX_HOME_HOST_PATH:-./services/mcp/codex-home-unset}
         target: /run/lifeos-codex-source
         read_only: true
-    # In the release bundle (tools/build-install-bundle) the Codex home is
-    # Life OS's own (setup.sh signs it in), so the processor writes a
-    # refreshed auth.json back to it (services/mcp/docker-processor-entrypoint.sh).
+    # In the release bundle (tools/build-install-bundle) the processor runs
+    # LIFE_OS_PROCESSOR_IMAGE when it is set: the release's image with Claude
+    # Code added on the owner's server (./setup.sh claude), which the
+    # published image never contains. The Codex home is Life OS's own there
+    # (setup.sh signs it in), so the processor writes a refreshed auth.json
+    # back to it (services/mcp/docker-processor-entrypoint.sh).
     # Here it is the owner's own Codex home: read-only, never written. The
     # bundle has no placeholder to mount, and setup.sh always writes the path
     # (an empty directory until ./setup.sh codex), so there it is required.
     x-install-bundle:
+      image-variable: LIFE_OS_PROCESSOR_IMAGE
       writable-volumes: [/run/lifeos-codex-source]
       volume-sources:
         # $$: Compose interpolates x- keys too, and must not require it here.

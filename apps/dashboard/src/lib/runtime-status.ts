@@ -418,6 +418,7 @@ const AUTH_MODES: Record<string, string> = {
   chatgpt: "ChatGPT sign-in",
   oauth_token: "Claude subscription token",
   "claude.ai": "Claude subscription sign-in",
+  api_key: "Anthropic API key",
 };
 
 /**
@@ -745,7 +746,7 @@ function processingCheck(
         summary: `${name} is not signed in.`,
         detail: codex.lastError,
         action: claude
-          ? "Create a new token with `claude setup-token`, set LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN in .env to it, then recreate the processor so it picks up the token."
+          ? "Create a new token with `claude setup-token` (or use a valid Anthropic API key) and run ./setup.sh claude, or set LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN (or LIFE_OS_ANTHROPIC_API_KEY) in .env, then recreate the processor so it picks it up."
           : "Sign in with `codex login` on the host as the Life OS user, then restart the processor so it picks up the new session.",
         facts,
       };

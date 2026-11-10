@@ -1,15 +1,23 @@
 #!/bin/sh
 set -eu
 
-# A run must never bill the Anthropic API or reach another endpoint instead of
-# the owner's subscription; the processor strips these from every run too.
+# A run must never bill the Anthropic API or reach another endpoint by
+# accident; the processor strips these from every run too. An API key the
+# owner chose in setup arrives as LIFE_OS_ANTHROPIC_API_KEY, and the processor
+# hands it to the Claude Code runs alone.
 unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL
 
-# The image installs only the CLIs its LIFE_OS_AI_PROVIDERS build argument
-# named: refuse a provider whose CLI it lacks, rather than fail every run.
+# The provider as the processor reads it: case and surrounding spaces do not
+# matter.
+provider=$(printf '%s' "${LIFE_OS_AI_PROVIDER:-codex}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')
+
+# The image has only the CLIs its LIFE_OS_AI_PROVIDERS build argument named
+# (the published image: Codex alone; ./setup.sh claude adds Claude Code on the
+# owner's server): refuse a provider whose CLI it lacks, rather than fail
+# every run.
 require_cli() {
   if ! command -v "$1" >/dev/null 2>&1; then
-    echo "LIFE_OS_AI_PROVIDER=$2, but this image has no $1 CLI: rebuild it with $2 in LIFE_OS_AI_PROVIDERS (docker compose build processor)" >&2
+    echo "LIFE_OS_AI_PROVIDER=$2, but this image has no $1 CLI. Release files: run ./setup.sh $2. Source build: add $2 to LIFE_OS_AI_PROVIDERS in .env and rebuild (docker compose build processor)" >&2
     exit 78
   fi
 }
@@ -57,7 +65,7 @@ codex_auth_write_back() {
   fi
 }
 
-case "${LIFE_OS_AI_PROVIDER:-codex}" in
+case "$provider" in
 codex)
   require_cli "${LIFE_OS_CODEX_COMMAND:-codex}" codex
   # /run/lifeos-codex-source is a host bind mount, read-only on the owner's
@@ -80,10 +88,15 @@ codex)
   ;;
 claude)
   require_cli "${LIFE_OS_CLAUDE_COMMAND:-claude}" claude
-  # The subscription's long-lived OAuth token (claude setup-token) arrives in
-  # the environment. Claude Code keeps its state in a tmpfs home.
-  if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
-    echo "missing the Claude subscription token: set LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN in .env to the output of claude setup-token" >&2
+  # One sign-in, as the owner chose in setup: the Claude plan's long-lived
+  # OAuth token (claude setup-token), or an Anthropic API key, billed per use.
+  # Never both. Claude Code keeps its state in a tmpfs home.
+  if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && [ -n "${LIFE_OS_ANTHROPIC_API_KEY:-}" ]; then
+    echo "both LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN (your Claude plan) and LIFE_OS_ANTHROPIC_API_KEY (an Anthropic API key) are set in .env: keep only the one you chose (./setup.sh claude)" >&2
+    exit 78
+  fi
+  if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && [ -z "${LIFE_OS_ANTHROPIC_API_KEY:-}" ]; then
+    echo "missing Claude Code's sign-in: run ./setup.sh claude, or set LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN (the output of claude setup-token) or LIFE_OS_ANTHROPIC_API_KEY in .env" >&2
     exit 78
   fi
   HOME=/tmp/lifeos-claude

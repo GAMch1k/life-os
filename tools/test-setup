@@ -32,12 +32,23 @@ mkdir -p "$stubs"
 touch "$work/docker.sock"
 
 # docker: records each call (with LIFE_OS_VERSION, which update overrides
-# for the pull), answers what setup.sh reads, and fails where a STUB_*
-# variable asks it to. docker ps lists STUB_LIFEOS_CONTAINERS, the lifeos
-# project's containers as "<working directory>|<service>" lines.
+# for the pull, and LIFE_OS_PROCESSOR_IMAGE when the call sets it), answers
+# what setup.sh reads, and fails where a STUB_* variable asks it to. docker
+# ps lists STUB_LIFEOS_CONTAINERS, the lifeos project's containers as
+# "<working directory>|<service>" lines. Images are files in STUB_IMAGES (the
+# case's own): docker pull and docker compose pull add the release images
+# with a registry digest that changes with STUB_DIGEST_SEED, docker build
+# adds its tag with its labels (and keeps a copy of its build context next
+# to the log), and docker image inspect, ls, and rm read them.
 cat >"$stubs/docker" <<'EOF'
 #!/usr/bin/env bash
 printf 'docker %s [LIFE_OS_VERSION=%s]\n' "$*" "${LIFE_OS_VERSION:-}" >>"$STUB_LOG"
+[[ -z ${LIFE_OS_PROCESSOR_IMAGE+set} ]] || printf '  with LIFE_OS_PROCESSOR_IMAGE=%s\n' "$LIFE_OS_PROCESSOR_IMAGE" >>"$STUB_LOG"
+mkdir -p "$STUB_IMAGES"
+image_file() { printf '%s/%s\n' "$STUB_IMAGES" "${1//\//%}"; }
+add_release_image() {
+  printf 'digest=%s@sha256:%s\n' "${1%:*}" "$(printf '%s %s' "$1" "${STUB_DIGEST_SEED:-1}" | sha256sum | cut -c 1-64)" >"$(image_file "$1")"
+}
 case $1 in
   info)
     if [[ -n ${STUB_INFO_ERROR:-} ]]; then echo "$STUB_INFO_ERROR" >&2; exit 1; fi
@@ -56,8 +67,63 @@ case $1 in
       'ps -q processor') : ;;
       'ps --all --format'*) cat "${STUB_PS_FILE:-/dev/null}" ;;
       exec*) exit "${STUB_BACKUP_EXIT:-0}" ;;
-      pull*) exit "${STUB_PULL_EXIT:-0}" ;;
+      pull*)
+        [[ ${STUB_PULL_EXIT:-0} == 0 ]] || exit "$STUB_PULL_EXIT"
+        add_release_image "${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-processor:${LIFE_OS_VERSION:-preview}"
+        ;;
       *) : ;;
+    esac
+    ;;
+  pull)
+    [[ ${STUB_IMAGE_PULL_EXIT:-0} == 0 ]] || exit 1
+    add_release_image "${!#}"
+    ;;
+  build)
+    shift
+    tag='' context=''
+    labels=()
+    while (($#)); do
+      case $1 in
+        --tag) tag=$2 && shift ;;
+        --label) labels+=("$2") && shift ;;
+        --build-arg) shift ;;
+        *) context=$1 ;;
+      esac
+      shift
+    done
+    rm -rf "$STUB_LOG.context"
+    cp -r "$context" "$STUB_LOG.context"
+    [[ ${STUB_BUILD_EXIT:-0} == 0 ]] || exit "$STUB_BUILD_EXIT"
+    # A tag built again leaves the earlier image dangling, labels and all.
+    [[ ! -f $(image_file "$tag") ]] || mv "$(image_file "$tag")" "$STUB_IMAGES/dangling-$RANDOM"
+    printf '%s\n' "${labels[@]}" >"$(image_file "$tag")"
+    ;;
+  image)
+    case $2 in
+      inspect)
+        file=$(image_file "${!#}")
+        [[ -f $file ]] || { echo "Error: No such image: ${!#}" >&2; exit 1; }
+        case $* in
+          *RepoDigests*) sed -n 's/^digest=//p' "$file" ;;
+          *life-os.processor-base*) sed -n 's/^life-os.processor-base=//p' "$file" ;;
+          *life-os.claude-code*) sed -n 's/^life-os.claude-code=//p' "$file" ;;
+        esac
+        ;;
+      ls)
+        for file in "$STUB_IMAGES"/*; do
+          [[ -f $file ]] || continue
+          name=${file##*/}
+          case $* in
+            *dangling=true*) [[ $name != dangling-* ]] || echo "$name" ;;
+            *lifeos-processor-claude) [[ $name != lifeos-processor-claude:* ]] || echo "$name" ;;
+          esac
+        done
+        ;;
+      rm)
+        file=$(image_file "${!#}")
+        [[ -f $file && ${STUB_IMAGE_IN_USE:-} != "${!#}" ]] || exit 1
+        rm -f "$file"
+        ;;
     esac
     ;;
   ps)
@@ -98,6 +164,9 @@ chmod 755 "$stubs/docker" "$stubs/curl"
 
 # The install compose: compose.yaml as the release ships it, images only.
 sed -E '/^[[:space:]]+build:/d' compose.yaml >"$work/compose.yaml"
+# setup.sh as the release ships it, but with its version placeholder.
+tools/build-install-bundle --setup-script >"$work/setup.sh"
+chmod 755 "$work/setup.sh"
 
 passed=0
 failed=0
@@ -118,7 +187,11 @@ ok() {
 new_case() {
   case_dir=$work/$1
   mkdir -p "$case_dir"
-  cp setup.sh .env.example "$case_dir/"
+  # setup.sh as a release ships it (the Claude Code build written in; its
+  # version placeholder kept), unless the case asks for the repository's.
+  cp "$work/setup.sh" "$case_dir/setup.sh"
+  [[ ${2:-} != repository ]] || cp setup.sh "$case_dir/setup.sh"
+  cp .env.example "$case_dir/"
   cp "$work/compose.yaml" "$case_dir/compose.yaml"
   case_out=$case_dir.out
   : >"$case_out"
@@ -138,7 +211,7 @@ run() {
   shift
   set +e
   (cd "$case_dir" && env -i HOME="$work/home" PATH="$stubs:/usr/bin:/bin" LANG=C.UTF-8 \
-    STUB_LOG="$case_dir.log" STUB_WORK="$work" DOCKER_HOST="unix://$work/docker.sock" \
+    STUB_LOG="$case_dir.log" STUB_WORK="$work" STUB_IMAGES="$case_dir.images" DOCKER_HOST="unix://$work/docker.sock" \
     "${vars[@]}" ./setup.sh "$@" <"$stdin" >"$case_dir.last" 2>&1)
   status=$?
   set -e
@@ -529,6 +602,203 @@ ok 'up does not suggest an AI sign-in' bash -c "! grep -qE './setup.sh (codex|cl
 ok 'no duplicate keys' no_duplicate_keys
 ok 'no secret printed' no_secret_printed
 
+# ---------- Claude Code on a release install ----------
+# The published images never contain Claude Code: ./setup.sh claude adds it to
+# a local copy of the release's processor image, from the files of
+# services/mcp/claude-code that the release's setup.sh carries.
+ok 'one Claude Code placeholder in setup.sh' test "$(grep -c '__LIFE_OS_CLAUDE_CODE_FILES__' setup.sh)" -eq 1
+ok "the release's setup.sh has the files instead" bash -c "! grep -q '__LIFE_OS_CLAUDE_CODE_FILES__' '$work/setup.sh'"
+ok "the release's setup.sh parses" bash -n "$work/setup.sh"
+if command -v shellcheck >/dev/null 2>&1; then
+  ok "shellcheck: the release's setup.sh" shellcheck "$work/setup.sh"
+fi
+claude_files=services/mcp/claude-code
+pinned=$(sed -n 's/^ *"@anthropic-ai\/claude-code": *"\([^"]*\)".*/\1/p' "$claude_files/package.json")
+ok 'package.json pins a Claude Code version' test -n "$pinned"
+ok 'package-lock.json pins the same, with its integrity' grep -qF "\"resolved\": \"https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-$pinned.tgz\"" "$claude_files/package-lock.json"
+plan_token=sk-ant-oat01-plan_token-123456
+api_key=sk-ant-api03-api_key-456789
+release_image() { sed -n 's/^digest=//p' "$case_dir.images/ghcr.io%gamch1k%life-os-processor:$1"; }
+local_image() { printf '%s/lifeos-processor-claude:%s' "$case_dir.images" "$1"; }
+# The docker calls of the last run, as "exec pull build up".
+docker_steps() { grep -oE '^docker (compose (exec|pull|up|run)|build)' "$case_dir.log" | awk '{print $NF}' | tr '\n' ' '; }
+
+new_case claude-release
+run LIFE_OS_TIMEZONE=UTC LIFE_OS_VERSION=v0.1.0-preview.1 -- --yes
+: >"$case_dir.log"
+run LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN="$plan_token" -- --yes claude
+ok 'plan: claude' test "$status" -eq 0
+ok "says Claude Code comes from Anthropic's npm package" output_has "Anthropic's official npm package"
+ok "and that Anthropic's terms apply" output_has 'https://code.claude.com/docs/en/legal-and-compliance'
+ok 'downloads the release processor image it lacks' logged 'docker pull ghcr.io/gamch1k/life-os-processor:v0.1.0-preview.1'
+base=$(release_image v0.1.0-preview.1)
+ok 'the release image has a registry digest' test -n "$base"
+ok 'builds lifeos-processor-claude:<version> FROM the release image, by digest' \
+  logged "docker build --tag lifeos-processor-claude:v0.1.0-preview.1 --build-arg LIFE_OS_PROCESSOR_BASE=$base"
+ok 'labels it with its base, version, and Claude Code' \
+  logged "--label life-os.processor-base=$base --label life-os.version=v0.1.0-preview.1 --label life-os.claude-code=$pinned"
+for file in Dockerfile install.sh package.json package-lock.json; do
+  ok "builds from the repository's $file, byte for byte" cmp -s "$claude_files/$file" "$case_dir.log.context/$file"
+done
+ok 'plan: claude is the provider' test "$(value LIFE_OS_AI_PROVIDER)" = claude
+ok 'plan: the token' test "$(value LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN)" = "$plan_token"
+ok 'plan: no API key' test -z "$(value LIFE_OS_ANTHROPIC_API_KEY)"
+ok 'plan: the default model' test "$(value LIFE_OS_CLAUDE_MODEL)" = sonnet
+ok 'plan: the processor runs the local image' test "$(value LIFE_OS_PROCESSOR_IMAGE)" = lifeos-processor-claude:v0.1.0-preview.1
+ok 'plan: says how to apply it' output_has 'Apply it with: ./setup.sh up'
+ok 'plan: .env is mode 600' test "$(mode "$case_dir/.env")" = 600
+run -- status
+ok 'status: the plan and the model' grep -qE 'AI processing \(claude\) +set up: your Claude plan, model sonnet' "$case_dir.last"
+ok 'status: the local image matches the version' \
+  grep -qE "Claude Code on this server +Claude Code $pinned in lifeos-processor-claude:v0.1.0-preview.1, matches v0.1.0-preview.1" "$case_dir.last"
+ok 'plan: no secret printed' no_secret_printed
+
+: >"$case_dir.log"
+run LIFE_OS_ANTHROPIC_API_KEY="$api_key" LIFE_OS_CLAUDE_MODEL=Opus -- --yes claude
+ok 'API key: claude' test "$status" -eq 0
+ok 'API key: says API use is billed per use' output_has 'billed per use by Anthropic'
+ok 'API key: the key' test "$(value LIFE_OS_ANTHROPIC_API_KEY)" = "$api_key"
+ok 'API key: the plan token goes (never both)' test -z "$(value LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN)"
+ok 'API key: the model, lower-cased' test "$(value LIFE_OS_CLAUDE_MODEL)" = opus
+ok 'API key: a current image is not built again' bash -c "! grep -q '^docker build' '$case_dir.log'"
+ok 'API key: and says so' output_has 'is already in this server'"'"'s processor image'
+run -- status
+ok 'status: the API key (never its value) and the model' \
+  grep -qE 'AI processing \(claude\) +set up: Anthropic API key \(billed per use\), model opus' "$case_dir.last"
+ok 'API key: no secret printed' no_secret_printed
+
+run LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN="$plan_token" LIFE_OS_ANTHROPIC_API_KEY="$api_key" -- --yes claude
+ok 'refuses both sign-ins' test "$status" -eq 2
+run LIFE_OS_ANTHROPIC_API_KEY="$plan_token" -- --yes claude
+ok 'refuses a plan token as the API key' test "$status" -eq 2
+ok 'and says which it is' output_has 'that is a Claude plan token'
+run LIFE_OS_ANTHROPIC_API_KEY=not-an-api-key -- --yes claude
+ok 'refuses a malformed API key' test "$status" -eq 2
+run LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN="$plan_token" LIFE_OS_CLAUDE_MODEL=gpt-5 -- --yes claude
+ok 'refuses a model that is not Claude' test "$status" -eq 2
+ok 'and names the choices' output_has 'choose sonnet, opus, or haiku'
+run LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN="$plan_token" LIFE_OS_CLAUDE_MODEL='claude-opus;rm' -- --yes claude
+ok 'refuses a model name with other characters' test "$status" -eq 2
+ok 'the refusals changed nothing' test "$(value LIFE_OS_ANTHROPIC_API_KEY)/$(value LIFE_OS_CLAUDE_MODEL)" = "$api_key/opus"
+run LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN="$plan_token" LIFE_OS_CLAUDE_MODEL=claude-sonnet-4-5 -- --yes claude
+ok 'back to the plan, with a full model name' test "$status" -eq 0
+ok 'the full model name' test "$(value LIFE_OS_CLAUDE_MODEL)" = claude-sonnet-4-5
+ok 'the API key goes (never both)' test -z "$(value LIFE_OS_ANTHROPIC_API_KEY)"
+run LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN="$plan_token" -- --yes claude
+ok '--yes keeps the current model' test "$(value LIFE_OS_CLAUDE_MODEL)" = claude-sonnet-4-5
+
+# At a terminal: change it (y), use Claude Code (y), the sign-in kind, the
+# hidden credential, the model (Enter keeps it).
+printf 'y\ny\n2\nsk-ant-api03-interactive_key-789\n\n' >"$work/answers-claude"
+stdin=$work/answers-claude
+run -- claude
+stdin=/dev/null
+ok 'interactive API key' test "$status" -eq 0
+ok 'interactive: asks plan or API key' output_has 'How should Claude Code sign in?'
+ok 'interactive: the key' test "$(value LIFE_OS_ANTHROPIC_API_KEY)" = sk-ant-api03-interactive_key-789
+ok 'interactive: the token goes' test -z "$(value LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN)"
+ok 'interactive: Enter keeps the model' test "$(value LIFE_OS_CLAUDE_MODEL)" = claude-sonnet-4-5
+printf 'y\ny\n1\nsk-ant-oat01-interactive_token-789\nhaiku\n' >"$work/answers-claude"
+stdin=$work/answers-claude
+run -- claude
+stdin=/dev/null
+ok 'interactive plan' test "$status" -eq 0
+ok 'interactive: offers the models' output_has 'opus    the most capable'
+ok 'interactive: the token' test "$(value LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN)" = sk-ant-oat01-interactive_token-789
+ok 'interactive: the key goes' test -z "$(value LIFE_OS_ANTHROPIC_API_KEY)"
+ok 'interactive: haiku' test "$(value LIFE_OS_CLAUDE_MODEL)" = haiku
+printf 'y\ny\n3\n' >"$work/answers-claude"
+stdin=$work/answers-claude
+run -- claude
+stdin=/dev/null
+ok 'interactive: refuses a third sign-in kind' test "$status" -eq 2
+ok 'interactive: no secret printed' no_secret_printed
+
+# up: the local image of the version in .env, and nothing else.
+touch "$(local_image v0.0.9)"
+: >"$case_dir.log"
+run LIFE_OS_SETUP_WAIT_SECONDS=5 -- up
+ok 'up with Claude Code' test "$status" -eq 0
+ok 'up starts Life OS' logged 'docker compose up -d --pull missing'
+ok "up removes another version's local image" test ! -e "$(local_image v0.0.9)"
+ok 'and keeps the current one' test -e "$(local_image v0.1.0-preview.1)"
+sed -i 's/^LIFE_OS_PROCESSOR_IMAGE=.*/LIFE_OS_PROCESSOR_IMAGE=lifeos-processor-claude:v0.0.9/' "$case_dir/.env"
+: >"$case_dir.log"
+run -- up --skip-checks
+ok 'up refuses a local image of another version' test "$status" -eq 1
+ok 'and says so' output_has 'but Life OS is v0.1.0-preview.1'
+ok 'and starts nothing' bash -c "! grep -q 'compose up' '$case_dir.log'"
+sed -i 's/^LIFE_OS_PROCESSOR_IMAGE=.*/LIFE_OS_PROCESSOR_IMAGE=/' "$case_dir/.env"
+run -- up --skip-checks
+ok 'up refuses Claude Code without its image' test "$status" -eq 1
+ok 'and says to run ./setup.sh claude' output_has 'Claude Code is not on this server yet: run ./setup.sh claude'
+sed -i 's/^LIFE_OS_PROCESSOR_IMAGE=.*/LIFE_OS_PROCESSOR_IMAGE=lifeos-processor-claude:v0.1.0-preview.1/' "$case_dir/.env"
+rm -f "$(local_image v0.1.0-preview.1)"
+: >"$case_dir.log"
+run LIFE_OS_SETUP_WAIT_SECONDS=5 -- up --skip-checks
+ok 'up builds a missing local image again' test "$status" -eq 0
+ok 'before it starts Life OS' test "$(docker_steps)" = 'build up '
+
+# update: the release images, then Claude Code added to the new version.
+: >"$case_dir.log"
+run LIFE_OS_SETUP_WAIT_SECONDS=5 -- update v0.1.0-preview.2 --skip-checks
+ok 'update with Claude Code' test "$status" -eq 0
+ok 'pulls the release images, not the local one' grep -A1 -F 'docker compose pull' "$case_dir.log" | grep -qxF '  with LIFE_OS_PROCESSOR_IMAGE='
+base=$(release_image v0.1.0-preview.2)
+ok 'adds Claude Code to the new release image' \
+  logged "docker build --tag lifeos-processor-claude:v0.1.0-preview.2 --build-arg LIFE_OS_PROCESSOR_BASE=$base"
+ok 'backs up, pulls, builds, then restarts' test "$(docker_steps)" = 'exec pull build up '
+ok 'records the version' test "$(value LIFE_OS_VERSION)" = v0.1.0-preview.2
+ok 'and its local image' test "$(value LIFE_OS_PROCESSOR_IMAGE)" = lifeos-processor-claude:v0.1.0-preview.2
+ok "the old version's local image goes" test ! -e "$(local_image v0.1.0-preview.1)"
+run -- status
+ok 'status: the local image matches the new version' grep -qE "Claude Code on this server +Claude Code $pinned in lifeos-processor-claude:v0.1.0-preview.2, matches v0.1.0-preview.2" "$case_dir.last"
+: >"$case_dir.log"
+run STUB_BUILD_EXIT=1 -- update v0.1.0-preview.3 --skip-checks --skip-backup
+ok 'a failed Claude Code build stops the update' test "$status" -eq 1
+ok 'the version stays' test "$(value LIFE_OS_VERSION)" = v0.1.0-preview.2
+ok 'the local image stays' test "$(value LIFE_OS_PROCESSOR_IMAGE)" = lifeos-processor-claude:v0.1.0-preview.2
+ok 'nothing restarted' bash -c "! grep -q 'compose up' '$case_dir.log'"
+: >"$case_dir.log"
+run STUB_DIGEST_SEED=2 LIFE_OS_SETUP_WAIT_SECONDS=5 -- update v0.1.0-preview.2 --skip-checks --skip-backup
+ok 'a new release image of the same version gets Claude Code again' logged "docker build --tag lifeos-processor-claude:v0.1.0-preview.2 --build-arg LIFE_OS_PROCESSOR_BASE=$(release_image v0.1.0-preview.2)"
+ok 'and the earlier build goes' bash -c "! ls '$case_dir.images' | grep -q dangling"
+: >"$case_dir.log"
+run STUB_DIGEST_SEED=2 LIFE_OS_SETUP_WAIT_SECONDS=5 -- update v0.1.0-preview.2 --skip-checks --skip-backup
+ok 'the same release image: no build' test "$(docker_steps)" = 'pull up '
+
+# Back to Codex: the release image again, and the local one goes.
+printf 'y\n' >"$work/answers-codex"
+stdin=$work/answers-codex
+: >"$case_dir.log"
+run -- codex
+stdin=/dev/null
+ok 'codex after claude' test "$status" -eq 0
+ok 'codex is the provider again' test "$(value LIFE_OS_AI_PROVIDER)" = codex
+ok 'the processor runs the release image again' test -z "$(value LIFE_OS_PROCESSOR_IMAGE)"
+ok 'the Codex sign-in runs on the release image' grep -A1 -F 'docker compose run' "$case_dir.log" | grep -qxF '  with LIFE_OS_PROCESSOR_IMAGE='
+: >"$case_dir.log"
+run LIFE_OS_SETUP_WAIT_SECONDS=5 -- up --skip-checks
+ok 'up with codex' test "$status" -eq 0
+ok 'up removes the local Claude Code image' test ! -e "$(local_image v0.1.0-preview.2)"
+ok 'and says so' output_has 'Removed the local Claude Code images'
+sed -i 's/^LIFE_OS_PROCESSOR_IMAGE=.*/LIFE_OS_PROCESSOR_IMAGE=lifeos-processor-claude:v0.1.0-preview.2/' "$case_dir/.env"
+run LIFE_OS_SETUP_WAIT_SECONDS=5 -- up --skip-checks
+ok 'with codex, up clears a leftover local image' test -z "$(value LIFE_OS_PROCESSOR_IMAGE)"
+run -- status
+ok 'status: codex' grep -qE 'AI processing \(codex\) +' "$case_dir.last"
+ok 'status: no Claude Code line' bash -c "! grep -q 'Claude Code on this server' '$case_dir.last'"
+ok 'no duplicate keys' no_duplicate_keys
+ok 'no secret printed, all along' no_secret_printed
+
+# The repository's setup.sh has no Claude Code build to run.
+new_case claude-repository-script repository
+run LIFE_OS_TIMEZONE=UTC -- --yes
+run LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN="$plan_token" -- --yes claude
+ok "the repository's setup.sh cannot add Claude Code" test "$status" -eq 1
+ok "says to use a release's" output_has 'it is a copy from the repository'
+ok 'and changes nothing' test "$(value LIFE_OS_AI_PROVIDER)/$(value LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN)" = codex/
+
 # ---------- Integrations during a first setup without questions ----------
 new_case init-with-integrations
 run LIFE_OS_TIMEZONE=UTC LIFE_OS_GOOGLE_CLIENT_ID=1-x.apps.googleusercontent.com LIFE_OS_GOOGLE_CLIENT_SECRET=GOCSPX-abc \
@@ -538,6 +808,7 @@ ok 'google set up at once' test "$(value LIFE_OS_GOOGLE_CLIENT_ID)" = 1-x.apps.g
 ok 'whisper set up at once' test "$(value LIFE_OS_WHISPER_MODEL_PATH)" = /models/ggml-base.bin
 ok 'with its language' test "$(value LIFE_OS_WHISPER_LANGUAGE)" = de
 ok 'claude set up at once' test "$(value LIFE_OS_AI_PROVIDER)" = claude
+ok 'with Claude Code added to the processor image' test "$(value LIFE_OS_PROCESSOR_IMAGE)" = lifeos-processor-claude:preview
 ok 'banking left alone' test -z "$(value LIFE_OS_ENABLE_BANKING_APP_ID)"
 ok 'no secret printed at once' no_secret_printed
 new_case init-with-whisper-language
@@ -668,6 +939,10 @@ ok 'says how to redeploy one service' output_has 'docker compose up -d --no-buil
 run LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-clone_token -- --yes claude
 ok 'claude in a clone' test "$status" -eq 0
 ok 'says how to recreate the processor' output_has 'docker compose up -d --no-build --no-deps processor'
+ok "a clone's image gets Claude Code from source" test "$(value LIFE_OS_AI_PROVIDERS)" = codex,claude
+ok 'says to build it first' output_has 'docker compose build processor'
+ok 'and builds no local image' bash -c "! grep -qE '^docker (build|pull)' '$case_dir.log'"
+ok 'nor points the processor at one' test -z "$(value LIFE_OS_PROCESSOR_IMAGE)"
 
 # ---------- One list of Whisper languages ----------
 # setup.sh's copy of whisper.cpp's language codes is the list the whisper

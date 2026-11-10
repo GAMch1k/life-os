@@ -679,7 +679,7 @@ setup_integrations_now() {
   if ((assume_yes)); then
     # Without questions, an integration is set up when its settings are in
     # the environment.
-    [[ -z ${LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN:-} ]] || setup_claude
+    [[ -z ${LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN:-}${LIFE_OS_ANTHROPIC_API_KEY:-} ]] || setup_claude
     [[ -z ${LIFE_OS_SETUP_WHISPER_MODEL:-}${LIFE_OS_WHISPER_LANGUAGE:-} ]] || setup_whisper
     [[ -z ${LIFE_OS_CLOUDFLARE_TUNNEL_TOKEN:-} ]] || setup_cloudflare
     [[ -z ${LIFE_OS_GOOGLE_CLIENT_ID:-} ]] || setup_google
@@ -692,7 +692,7 @@ setup_integrations_now() {
   cat <<EOF
 Life OS works without them. Each one can be set up now, or later on its own:
   codex       AI processing of your notes (OpenAI Codex, needs a ChatGPT plan)
-  claude      or AI processing with Claude Code instead (needs a Claude plan)
+  claude      or with Claude Code instead (a Claude plan or an Anthropic API key)
   whisper     the speech-to-text model and language of voice notes (default: small, auto)
   cloudflare  reach Life OS from anywhere through a Cloudflare Tunnel and Access
   google      sync with Google Calendar
@@ -753,13 +753,17 @@ EOF
   fi
   mount=$home:/codex-login
   # The processor's own image and user, with the sign-in written to the
-  # directory the processor reads (read-only) at every start.
-  docker compose run --rm --no-deps --entrypoint codex -e CODEX_HOME=/codex-login -v "$mount" \
+  # directory the processor reads (read-only) at every start. The release's
+  # image, not a local one with Claude Code (LIFE_OS_PROCESSOR_IMAGE).
+  LIFE_OS_PROCESSOR_IMAGE='' docker compose run --rm --no-deps --entrypoint codex -e CODEX_HOME=/codex-login -v "$mount" \
     processor login --device-auth || die 'the Codex sign-in did not finish; run ./setup.sh codex to try again'
-  docker compose run --rm --no-deps -T --entrypoint codex -e CODEX_HOME=/codex-login -v "$mount" \
+  LIFE_OS_PROCESSOR_IMAGE='' docker compose run --rm --no-deps -T --entrypoint codex -e CODEX_HOME=/codex-login -v "$mount" \
     processor login status || die 'Codex says it is not signed in; run ./setup.sh codex to try again'
   if [[ $(ai_provider) != codex ]]; then
     env_values[LIFE_OS_AI_PROVIDER]=codex
+    # The processor runs the release's image again; ./setup.sh up removes
+    # the local one with Claude Code.
+    env_values[LIFE_OS_PROCESSOR_IMAGE]=
     env_update
     say 'AI processing now uses Codex instead of Claude Code (LIFE_OS_AI_PROVIDER=codex).'
     apply_hint processor
@@ -770,39 +774,319 @@ EOF
   say 'AI processing is on. The Status page shows the Codex allowance that is left.'
 }
 
-# Claude Code instead of Codex: the subscription's long-lived token, which
-# claude setup-token prints on any computer, goes into .env. Never an API key:
-# the runs use the subscription, not the Anthropic API.
+# Claude Code instead of Codex, signed in with the owner's choice: their
+# Claude plan (the long-lived token claude setup-token prints on any
+# computer) or an Anthropic API key, billed per use by Anthropic. Never both.
+# On a release install it also adds Claude Code to the processor image on
+# this server (claude_image_build), as the published images never contain
+# it; a clone builds it from source (LIFE_OS_AI_PROVIDERS).
 setup_claude() {
-  local token
-  intro 'AI processing (Claude Code)' ai-processing.md
+  local kind current token='' key='' model version providers rebuild=0
+  intro 'AI processing (Claude Code)' ai-processing.md#claude-code-instead-of-codex
   require_env
-  if [[ $(ai_provider) == claude ]] && is_set LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN; then
+  is_checkout || [[ -f compose.yaml ]] || die "compose.yaml is missing here: download it from the same release as this script"
+  current=$(claude_sign_in)
+  if [[ $(ai_provider) == claude && $current != none ]]; then
     change_existing 'AI processing with Claude Code' || return 0
   fi
   cat <<'EOF'
-Instead of Codex, Life OS's AI can run Anthropic's Claude Code with your
-Claude subscription:
-  * You need a Claude Pro or Max plan. Each note uses a little of that plan's
-    usage limits; no API key and no separate bill.
+Instead of Codex, Life OS's AI can run Claude Code, Anthropic's AI agent, with
+your own Claude plan or Anthropic API key:
   * Your notes, and the tasks and events the AI looks at to understand them,
     are sent to Anthropic. Leave this off if you don't want that.
-Create the token on any computer with Claude Code: run claude setup-token,
-sign in with your subscription, and paste the token it prints.
+  * Claude Code is Anthropic's software, and your use of it is under
+    Anthropic's terms: https://code.claude.com/docs/en/legal-and-compliance
 EOF
+  if ! is_checkout; then
+    cat <<'EOF'
+  * Life OS's images do not include Claude Code. This step downloads it from
+    Anthropic's official npm package (@anthropic-ai/claude-code, the version
+    this release pins, checked against its sha512) and adds it, unmodified,
+    to a copy of the processor image on this server: about 330 MB.
+EOF
+  fi
   if ((assume_yes)); then
     token=${LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN:-}
+    key=${LIFE_OS_ANTHROPIC_API_KEY:-}
+    [[ -z $token || -z $key ]] \
+      || usage_error 'set LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN (your Claude plan) or LIFE_OS_ANTHROPIC_API_KEY (an Anthropic API key), not both'
+    if [[ -n $key ]]; then kind=api-key; else kind=plan; fi
   else
     confirm 'Use Claude Code for AI processing?' y || return 0
-    ask_secret token 'Token from claude setup-token (input is hidden)'
+    cat <<'EOF'
+
+How should Claude Code sign in?
+  1  your Claude plan (Pro or Max): on any computer with Claude Code, run
+     claude setup-token, sign in, and paste the token it prints. Each note
+     uses a little of the plan's usage limits; no separate bill.
+  2  an Anthropic API key (sk-ant-api...), from the Claude Console. API use
+     is billed per use by Anthropic.
+EOF
+    kind=1
+    [[ $current != api-key ]] || kind=2
+    ask kind 'Sign in with (1 or 2)' "$kind"
+    case $kind in
+      1 | plan) kind=plan ;;
+      2 | api | key | api-key) kind=api-key ;;
+      *) usage_error "answer 1 (your Claude plan) or 2 (an Anthropic API key), not '$kind'" ;;
+    esac
+    if [[ $kind == plan ]]; then
+      ask_secret token 'Token from claude setup-token (input is hidden)'
+    else
+      ask_secret key 'Anthropic API key (input is hidden)'
+    fi
   fi
-  [[ $token != sk-ant-api* ]] || usage_error 'that is an Anthropic API key, which bills the API: paste the subscription token that claude setup-token prints'
-  [[ -n $token && $token =~ ^[A-Za-z0-9_-]+$ ]] || usage_error 'the token is missing or has unexpected characters: paste what claude setup-token prints'
+  if [[ $kind == plan ]]; then
+    [[ $token != sk-ant-api* ]] \
+      || usage_error 'that is an Anthropic API key, which bills the API per use: to use it, choose the API key (2; with --yes, set LIFE_OS_ANTHROPIC_API_KEY); for your plan, paste the token claude setup-token prints'
+    [[ -n $token && $token =~ ^[A-Za-z0-9_-]+$ ]] \
+      || usage_error 'the token is missing or has unexpected characters: paste what claude setup-token prints (or, with --yes, set LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN or LIFE_OS_ANTHROPIC_API_KEY)'
+  else
+    [[ $key != sk-ant-oat* ]] \
+      || usage_error "that is a Claude plan token from claude setup-token, not an API key: choose your Claude plan (1; with --yes, set LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN)"
+    [[ $key =~ ^sk-ant-api[A-Za-z0-9_-]+$ ]] \
+      || usage_error 'that does not look like an Anthropic API key (sk-ant-api...): create one in the Claude Console'
+  fi
+  model=$(claude_model)
+  if ((!assume_yes)); then
+    cat <<EOF
+
+Which Claude model should Life OS use? Enter keeps the current one ($model).
+  sonnet  balanced, the default
+  opus    the most capable; uses your plan's limits or API credit faster
+  haiku   the fastest
+  or a full model name, such as claude-sonnet-4-5
+EOF
+  fi
+  ask model 'Model' "${LIFE_OS_CLAUDE_MODEL:-$model}"
+  model=${model,,}
+  valid_claude_model "$model" \
+    || usage_error "unknown Claude model '$model': choose sonnet, opus, or haiku, or a full model name such as claude-sonnet-4-5"
+
+  if is_checkout; then
+    # A clone builds Claude Code into its processor image from source, when
+    # LIFE_OS_AI_PROVIDERS names it.
+    providers=$(env_get LIFE_OS_AI_PROVIDERS 2>/dev/null) || providers=
+    providers=${providers:-codex}
+    if [[ ,$providers, != *,claude,* ]]; then
+      env_values[LIFE_OS_AI_PROVIDERS]=$providers,claude
+      rebuild=1
+    fi
+  else
+    version=$(env_get LIFE_OS_VERSION 2>/dev/null) || version=$release_version
+    check_docker
+    if claude_image_current "$version"; then
+      say "Claude Code $(claude_code_pinned) is already in this server's processor image for $version ($(claude_image_tag "$version"))."
+    else
+      claude_image_build "$version"
+    fi
+    env_values[LIFE_OS_PROCESSOR_IMAGE]=$(claude_image_tag "$version")
+  fi
   env_values[LIFE_OS_AI_PROVIDER]=claude
   env_values[LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN]=$token
+  env_values[LIFE_OS_ANTHROPIC_API_KEY]=$key
+  env_values[LIFE_OS_CLAUDE_MODEL]=$model
   env_update
-  say 'AI processing uses Claude Code. To go back to Codex: ./setup.sh codex.'
+  if [[ $kind == plan ]]; then
+    say "AI processing uses Claude Code with your Claude plan, model $model. To go back to Codex: ./setup.sh codex."
+  else
+    say "AI processing uses Claude Code with your Anthropic API key (billed per use by Anthropic), model $model. To go back to Codex: ./setup.sh codex."
+  fi
+  ((!rebuild)) \
+    || say "This clone's processor image gets Claude Code now (LIFE_OS_AI_PROVIDERS=$providers,claude): build it first with docker compose build processor."
   apply_hint processor
+}
+
+# The Claude models setup accepts: an alias, or a full model name.
+valid_claude_model() {
+  [[ $1 == sonnet || $1 == opus || $1 == haiku || $1 =~ ^claude-[a-z0-9.-]+$ ]]
+}
+
+# The Claude model .env names (default sonnet).
+claude_model() {
+  local model
+  model=$(env_get LIFE_OS_CLAUDE_MODEL 2>/dev/null) || model=
+  printf '%s\n' "${model:-sonnet}"
+}
+
+# How Claude Code signs in, as .env says: plan, api-key, both (which the
+# processor refuses), or none.
+claude_sign_in() {
+  if is_set LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN && is_set LIFE_OS_ANTHROPIC_API_KEY; then
+    printf 'both\n'
+  elif is_set LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN; then
+    printf 'plan\n'
+  elif is_set LIFE_OS_ANTHROPIC_API_KEY; then
+    printf 'api-key\n'
+  else
+    printf 'none\n'
+  fi
+}
+
+# ---------- Claude Code on this server ----------
+
+# Writes the files of the local Claude Code build (services/mcp/claude-code in
+# the repository: its Dockerfile, install.sh, package.json, and
+# package-lock.json, which pins the npm package's version and sha512) into the
+# directory $1. tools/build-install-bundle writes them in here when it makes a
+# release's setup.sh; a copy from the repository has none, and fails.
+claude_build_files() {
+  : __LIFE_OS_CLAUDE_CODE_FILES__
+  return 1
+}
+
+# The Claude Code version this script's build pins, or nothing.
+claude_code_pinned() {
+  local dir
+  dir=$(mktemp -d)
+  if claude_build_files "$dir"; then
+    sed -n 's/^ *"@anthropic-ai\/claude-code": *"\([^"]*\)".*/\1/p' "$dir/package.json"
+  fi
+  rm -rf "$dir"
+}
+
+# The local image with Claude Code of a Life OS version.
+claude_image_tag() { printf 'lifeos-processor-claude:%s\n' "$1"; }
+
+# The release's processor image of a version, as compose.yaml names it.
+release_processor_image() {
+  local registry=${LIFE_OS_IMAGE_REGISTRY:-}
+  [[ -n $registry ]] || registry=$(env_get LIFE_OS_IMAGE_REGISTRY 2>/dev/null) || registry=
+  printf '%s/life-os-processor:%s\n' "${registry:-ghcr.io/gamch1k}" "$1"
+}
+
+# What the local build starts FROM: the release image this server has, by its
+# registry digest (exactly that image), else by name.
+release_processor_base() {
+  local image=$1 digest
+  digest=$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$image" 2>/dev/null \
+    | grep -m 1 -F "${image%:*}@") || digest=
+  printf '%s\n' "${digest:-$image}"
+}
+
+# Builds lifeos-processor-claude:VERSION: the release's processor image of
+# VERSION, as this server has it (else downloaded), with Claude Code's native
+# binary added, from Anthropic's npm package at the version and integrity this
+# script pins. Needs the network for npm (and the registry, for a missing
+# release image).
+claude_image_build() {
+  local version=$1 release base tag dir pinned
+  release=$(release_processor_image "$version")
+  tag=$(claude_image_tag "$version")
+  dir=$(mktemp -d)
+  if ! claude_build_files "$dir"; then
+    rm -rf "$dir"
+    die "this setup.sh has no Claude Code build: it is a copy from the repository. Use the setup.sh of a release ($docs/README.md)"
+  fi
+  pinned=$(sed -n 's/^ *"@anthropic-ai\/claude-code": *"\([^"]*\)".*/\1/p' "$dir/package.json")
+  step "Adding Claude Code $pinned to the processor image ($version)"
+  say "Downloading Claude Code from Anthropic's npm package; this takes a minute."
+  if ! docker image inspect "$release" >/dev/null 2>&1; then
+    docker pull "$release" >/dev/null || {
+      rm -rf "$dir"
+      die "could not download $release; nothing was changed"
+    }
+  fi
+  base=$(release_processor_base "$release")
+  if ! docker build --tag "$tag" --build-arg "LIFE_OS_PROCESSOR_BASE=$base" \
+    --label "life-os.processor-base=$base" --label "life-os.version=$version" \
+    --label "life-os.claude-code=$pinned" "$dir"; then
+    rm -rf "$dir"
+    die "adding Claude Code to the processor image failed (above); nothing was changed. Run ./setup.sh claude to try again."
+  fi
+  rm -rf "$dir"
+  say "Built $tag: the $version processor with Claude Code $pinned."
+}
+
+# Whether the local image of VERSION is there, built on the release image
+# this server has now, with the Claude Code this script pins.
+claude_image_current() {
+  local tag built pinned
+  tag=$(claude_image_tag "$1")
+  built=$(docker image inspect --format '{{index .Config.Labels "life-os.processor-base"}}' "$tag" 2>/dev/null) || return 1
+  pinned=$(docker image inspect --format '{{index .Config.Labels "life-os.claude-code"}}' "$tag" 2>/dev/null) || return 1
+  [[ -n $built && $built == "$(release_processor_base "$(release_processor_image "$1")")" && $pinned == "$(claude_code_pinned)" ]]
+}
+
+# Whether this install runs Claude Code from a local image: the release
+# files, with LIFE_OS_AI_PROVIDER=claude.
+claude_local() {
+  ! is_checkout && [[ $(ai_provider) == claude ]]
+}
+
+# Before up: with Claude Code, the processor must run the local image of the
+# version in .env. A missing one is built again; one of another version, or
+# none, is refused, as the processor would run without Claude Code or on
+# another version than the rest of Life OS. With Codex, a leftover image
+# setting goes.
+claude_image_check_up() {
+  local version image tag
+  version=$(env_get LIFE_OS_VERSION 2>/dev/null) || version=$release_version
+  image=$(env_get LIFE_OS_PROCESSOR_IMAGE 2>/dev/null) || image=
+  tag=$(claude_image_tag "$version")
+  if ! claude_local; then
+    if [[ -n $image ]]; then
+      env_values[LIFE_OS_PROCESSOR_IMAGE]=
+      env_update
+      say 'AI processing uses Codex, so the processor runs the release image again (LIFE_OS_PROCESSOR_IMAGE cleared in .env).'
+    fi
+    return 0
+  fi
+  [[ -n $image ]] \
+    || die "AI processing is set to Claude Code, but Claude Code is not on this server yet: run ./setup.sh claude (or ./setup.sh codex). Nothing was started."
+  [[ $image == "$tag" ]] \
+    || die "LIFE_OS_PROCESSOR_IMAGE in .env is $image, but Life OS is $version: the processor would run another version. Run ./setup.sh claude to add Claude Code to $version (or ./setup.sh codex). Nothing was started."
+  if ! docker image inspect "$tag" >/dev/null 2>&1; then
+    warn "$tag is missing on this server; building it again."
+    claude_image_build "$version"
+  fi
+}
+
+# Removes the local Claude Code images the processor no longer runs: those of
+# other versions, and all of them once AI processing uses Codex. An image a
+# container still uses stays.
+claude_images_prune() {
+  local keep image removed=0
+  keep=$(env_get LIFE_OS_PROCESSOR_IMAGE 2>/dev/null) || keep=
+  while IFS= read -r image; do
+    [[ -n $image && $image != "$keep" && $image == lifeos-processor-claude:* ]] || continue
+    docker image rm "$image" >/dev/null 2>&1 && removed=1
+  done < <(docker image ls --format '{{.Repository}}:{{.Tag}}' lifeos-processor-claude 2>/dev/null || true)
+  # Earlier builds of the same tag (an update of a moving tag such as preview).
+  while IFS= read -r image; do
+    [[ -n $image ]] || continue
+    docker image rm "$image" >/dev/null 2>&1 && removed=1
+  done < <(docker image ls --quiet --filter dangling=true --filter label=life-os.claude-code 2>/dev/null || true)
+  ((!removed)) || say 'Removed the local Claude Code images the processor no longer runs.'
+}
+
+# The Claude Code sign-in and model, as status reports them (never a value).
+claude_status() {
+  case $(claude_sign_in) in
+    plan) printf 'set up: your Claude plan, model %s' "$(claude_model)" ;;
+    api-key) printf 'set up: Anthropic API key (billed per use), model %s' "$(claude_model)" ;;
+    both) printf 'two sign-ins in .env; keep one: ./setup.sh claude' ;;
+    *) printf 'not set up: ./setup.sh claude' ;;
+  esac
+}
+
+# The local Claude Code image, as status reports it.
+claude_image_status() {
+  local version image tag pinned
+  version=$(env_get LIFE_OS_VERSION 2>/dev/null) || version=$release_version
+  image=$(env_get LIFE_OS_PROCESSOR_IMAGE 2>/dev/null) || image=
+  tag=$(claude_image_tag "$version")
+  if [[ -z $image ]]; then
+    printf 'not on this server: ./setup.sh claude'
+  elif [[ $image != "$tag" ]]; then
+    printf '%s, not for %s: ./setup.sh claude' "$image" "$version"
+  elif ! pinned=$(docker image inspect --format '{{index .Config.Labels "life-os.claude-code"}}' "$tag" 2>/dev/null); then
+    printf '%s is missing: ./setup.sh up builds it again' "$tag"
+  elif ! claude_image_current "$version"; then
+    printf 'Claude Code %s, built on another %s image or Claude Code than this setup.sh has: ./setup.sh claude builds it again' "$pinned" "$version"
+  else
+    printf 'Claude Code %s in %s, matches %s' "$pinned" "$tag" "$version"
+  fi
 }
 
 # The language codes whisper.cpp knows: services/voice/whisper/languages.txt
@@ -1206,7 +1490,7 @@ wait_until_ready() {
     if ai_ready; then
       problems+=('processor (not running)')
     elif [[ $(ai_provider) == claude ]]; then
-      say "AI processing is off until you set Claude Code's token (./setup.sh claude); notes wait in Inbox."
+      say "AI processing is off until Claude Code is set up (./setup.sh claude); notes wait in Inbox."
     else
       say 'AI processing is off until you sign in to Codex (./setup.sh codex); notes wait in Inbox.'
     fi
@@ -1231,10 +1515,11 @@ ai_provider() {
   printf '%s\n' "${provider:-codex}"
 }
 
-# Whether that provider can run: Codex signed in, or Claude Code's token set.
+# Whether that provider can run: Codex signed in, or Claude Code's one
+# sign-in (the plan's token or an API key) set.
 ai_ready() {
   if [[ $(ai_provider) == claude ]]; then
-    is_set LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN
+    [[ $(claude_sign_in) == plan || $(claude_sign_in) == api-key ]]
   else
     codex_signed_in
   fi
@@ -1286,8 +1571,10 @@ cmd_up() {
   check_bind "$(gateway_bind)"
   require_own_install up
   check_whisper_language
+  claude_image_check_up
   step "Starting Life OS $(env_get LIFE_OS_VERSION 2>/dev/null || printf '%s' "$release_version")"
   docker compose up -d --pull missing
+  claude_images_prune
   wait_until_ready || true
   print_access
   print_next_steps
@@ -1347,11 +1634,20 @@ cmd_update() {
   fi
 
   step 'Downloading the new images'
-  LIFE_OS_VERSION=$target docker compose pull || die "could not download the $target images; nothing was changed"
+  # The release's processor image too, not a local one with Claude Code.
+  LIFE_OS_VERSION=$target LIFE_OS_PROCESSOR_IMAGE='' docker compose pull || die "could not download the $target images; nothing was changed"
+  # With Claude Code, the processor needs it added to the new image too.
+  if claude_local; then
+    claude_image_current "$target" || claude_image_build "$target"
+    env_values[LIFE_OS_PROCESSOR_IMAGE]=$(claude_image_tag "$target")
+  elif [[ -n $(env_get LIFE_OS_PROCESSOR_IMAGE 2>/dev/null || true) ]]; then
+    env_values[LIFE_OS_PROCESSOR_IMAGE]=
+  fi
   env_values[LIFE_OS_VERSION]=$target
   env_update
   step 'Restarting'
   docker compose up -d --remove-orphans
+  claude_images_prune
   wait_until_ready || true
   say ''
   say "Life OS $target is running. Read what changed: https://github.com/GAMch1k/life-os/releases"
@@ -1376,7 +1672,10 @@ cmd_status() {
   fi
   step 'Set up'
   if [[ $(ai_provider) == claude ]]; then
-    status_line 'AI processing (claude)' "$(on_off is_set LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN)"
+    status_line 'AI processing (claude)' "$(claude_status)"
+    if claude_local; then
+      status_line 'Claude Code on this server' "$(claude_image_status)"
+    fi
   else
     status_line 'AI processing (codex)' "$(codex_signed_in && printf 'signed in' || printf 'not signed in')"
   fi
@@ -1446,7 +1745,9 @@ release's compose.yaml and .env.example.
 
 Integrations (each optional, any time):
   ./setup.sh codex              AI processing: sign in to OpenAI Codex
-  ./setup.sh claude             AI processing: Claude Code instead of Codex
+  ./setup.sh claude             AI processing: Claude Code instead of Codex,
+                                with your Claude plan or an Anthropic API key
+                                (downloads Claude Code onto this server)
   ./setup.sh whisper            choose the speech-to-text model and language
   ./setup.sh cloudflare         Cloudflare Tunnel (behind Cloudflare Access)
   ./setup.sh google             Google Calendar sync
