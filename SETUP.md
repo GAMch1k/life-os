@@ -54,7 +54,7 @@ id -u                             # the *_RUNTIME_UID values: your numeric user 
 stat -c %g /var/run/docker.sock   # LIFE_OS_DOCKER_GID
 ```
 
-Compose refuses every command until these six variables are set: `LIFE_OS_POSTGRES_USER`, `LIFE_OS_POSTGRES_PASSWORD`, `LIFE_OS_PUBLIC_URL`, `LIFE_OS_CODEX_HOME_HOST_PATH`, `LIFE_OS_CODEX_RUNTIME_UID`, and `LIFE_OS_BACKUP_DIR`. The template's hostnames (`lifeos.example.com`, `ntfy.example.com`) are placeholders: replace them with yours.
+Compose refuses every command until these five variables are set: `LIFE_OS_POSTGRES_USER`, `LIFE_OS_POSTGRES_PASSWORD`, `LIFE_OS_PUBLIC_URL`, `LIFE_OS_CODEX_RUNTIME_UID`, and `LIFE_OS_BACKUP_DIR`. Set `LIFE_OS_CODEX_HOME_HOST_PATH` too unless you use Claude Code (below). The template's hostnames (`lifeos.example.com`, `ntfy.example.com`) are placeholders: replace them with yours.
 
 **Core**
 
@@ -141,7 +141,7 @@ With `LIFE_OS_AI_PROVIDER=claude`, every AI job runs through the Claude Code CLI
 
 The image installs Claude Code 2.1.319. Without the token the processor exits with code 78.
 
-By default the processor image installs both CLIs (`LIFE_OS_AI_PROVIDERS=codex,claude`), so you can switch providers without a rebuild. Claude Code adds about 480 MB to the unpacked image (about 150 MB compressed; measured on linux/arm64, both CLIs 1.29 GB against 811 MB for Codex alone and 729 MB for Claude Code alone). To keep the image small, set `LIFE_OS_AI_PROVIDERS` to `codex` or `claude`, the one you use, and rebuild with `docker compose build processor`. A processor whose `LIFE_OS_AI_PROVIDER` CLI is not in the image exits with code 78 and says to rebuild. Check the sign-in with `docker compose exec processor claude auth status`; it should report `"authMethod": "oauth_token"`. If Status says the AI is signed out, create a new token, put it in `.env`, and recreate the processor. To switch providers, change `LIFE_OS_AI_PROVIDER` and run `docker compose up -d --no-build --no-deps --force-recreate processor`.
+By default the processor image installs both CLIs (`LIFE_OS_AI_PROVIDERS=codex,claude`), so you can switch providers without a rebuild. Claude Code adds about 310 MB to the unpacked image on linux/amd64, the platform of the release images, and about 480 MB on linux/arm64 (about 150 MB compressed; there both CLIs take 1.29 GB against 811 MB for Codex alone and 729 MB for Claude Code alone). To keep the image small, set `LIFE_OS_AI_PROVIDERS` to `codex` or `claude`, the one you use, and rebuild with `docker compose build processor`. A processor whose `LIFE_OS_AI_PROVIDER` CLI is not in the image exits with code 78 and says to rebuild. Check the sign-in with `docker compose exec processor claude auth status`; it should report `"authMethod": "oauth_token"`. If Status says the AI is signed out, create a new token, put it in `.env`, and recreate the processor. To switch providers, change `LIFE_OS_AI_PROVIDER` and run `docker compose up -d --no-build --no-deps --force-recreate processor`.
 
 ## 6. Voice: Whisper model
 

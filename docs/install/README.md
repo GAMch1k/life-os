@@ -14,6 +14,7 @@ This guide installs Life OS from its published Docker images with one setup scri
 - **Disk:** 10 GB free. The images take about 3 GB and the Whisper model about 0.5 GB; your data and the nightly backups grow from there.
 - **Docker Engine 25 or newer with the Compose plugin** (`docker compose`, version 2.27 or newer). Install it from [docs.docker.com](https://docs.docker.com/engine/install/). The reference server runs Docker Engine 29 and Compose 5.1.
 - **A user that can run Docker** (a member of the `docker` group), plus `curl`, `openssl`, and Bash 4.4 or newer, which current Linux distributions have.
+- **One Life OS per machine.** Every install is the same Docker Compose project, `lifeos`, with the same `lifeos-*` volumes, so a second one in another directory would take the first one over. `setup.sh` refuses `up`, `update`, and `codex` while Docker has `lifeos` containers started from another directory, and says where they are.
 
 ## Quick start
 

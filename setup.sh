@@ -365,6 +365,50 @@ run_checks() {
   check_host
 }
 
+# ---------- One Life OS per machine ----------
+
+# Every Life OS is the Compose project lifeos (compose.yaml's name), with the
+# same lifeos-* volumes and networks, so a machine runs one. other_install
+# describes the containers of a lifeos project started from another
+# directory, such as "37 containers of the Compose project lifeos, started
+# from /srv/life-os"; nothing when there are none. It fails when Docker cannot
+# list its containers.
+other_install() {
+  local listing line dir where=
+  local -i count=0
+  local -A dirs=()
+  listing=$(docker ps -a --filter label=com.docker.compose.project=lifeos \
+    --format '{{.Label "com.docker.compose.project.working_dir"}}|{{.Label "com.docker.compose.service"}}' 2>/dev/null) || return 1
+  while IFS= read -r line; do
+    [[ -n $line ]] || continue
+    dir=${line%%|*}
+    # This directory, also when reached through a symbolic link, is this install.
+    [[ -n $dir && $dir -ef . ]] && continue
+    count+=1
+    dirs[${dir:-an unknown directory}]=1
+  done <<<"$listing"
+  ((count)) || return 0
+  for dir in "${!dirs[@]}"; do where+=${where:+, }$dir; done
+  printf '%d container%s of the Compose project lifeos, started from %s\n' "$count" "$( ((count == 1)) || printf s)" "$where"
+}
+
+# Refuses a command that runs Compose here while another directory's Life OS
+# runs on this machine: Compose would take that install over and recreate its
+# containers with this directory's .env, passwords and all.
+require_own_install() {
+  local found
+  found=$(other_install) \
+    || die "Docker cannot list its containers, so this cannot check that no other Life OS runs on this machine. Is Docker running? (./setup.sh check)"
+  [[ -z $found ]] || die "another Life OS runs on this machine: Docker has $found. Every Life OS is that same Compose project, with the same lifeos-* volumes, so ./setup.sh $1 here would take that install over: Compose would recreate its containers with this directory's .env and passwords. Nothing was changed. Manage that install from its own directory; one machine runs one Life OS. If you moved it here from there, remove its old containers first (docker ps -a --filter label=com.docker.compose.project=lifeos lists them; the data stays in the lifeos-* volumes), then run this again."
+}
+
+# Says so when another directory's Life OS runs on this machine.
+warn_other_install() {
+  local found
+  found=$(other_install 2>/dev/null) || return 0
+  [[ -z $found ]] || warn "another Life OS runs on this machine: Docker has $found. One machine runs one Life OS: up, update, and codex refuse to run here while it does."
+}
+
 # ---------- Gateway address ----------
 
 # The class of an IPv4 address: loopback, private (LAN, VPN, Tailscale's
@@ -532,6 +576,7 @@ cmd_init() {
     warn 'skipping the server checks (--skip-checks)'
   else
     run_checks
+    warn_other_install
   fi
   if is_checkout; then
     say ''
@@ -701,6 +746,7 @@ any device, sign in, and type the code it shows.
 EOF
   confirm 'Sign in to Codex now?' y || return 0
   check_docker
+  require_own_install codex
   home=$(env_get LIFE_OS_CODEX_HOME_HOST_PATH) || die 'LIFE_OS_CODEX_HOME_HOST_PATH is missing from .env'
   if [[ $home == /* ]]; then
     make_dir "$home" 700
@@ -1238,6 +1284,7 @@ cmd_up() {
   preview_banner
   ((skip_checks)) || run_checks
   check_bind "$(gateway_bind)"
+  require_own_install up
   check_whisper_language
   step "Starting Life OS $(env_get LIFE_OS_VERSION 2>/dev/null || printf '%s' "$release_version")"
   docker compose up -d --pull missing
@@ -1277,6 +1324,7 @@ cmd_update() {
   preview_banner
   ((skip_checks)) || run_checks
   check_bind "$(gateway_bind)"
+  require_own_install update
   current=$(env_get LIFE_OS_VERSION 2>/dev/null || printf 'preview')
   target=${1:-$release_version}
   [[ $target =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] || usage_error "'$target' is not a version"
@@ -1321,6 +1369,7 @@ cmd_status() {
   fi
   say "Gateway $gateway $answer. Address: $(env_get LIFE_OS_PUBLIC_URL 2>/dev/null || printf 'not set')."
   if command -v docker >/dev/null 2>&1; then
+    warn_other_install
     step 'Containers'
     docker compose ps --all --format 'table {{.Service}}\t{{.State}}\t{{.Status}}' 2>/dev/null \
       || warn 'docker compose cannot read this project'
@@ -1375,6 +1424,7 @@ status_line() { printf '  %-32s %s\n' "$1" "$2"; }
 cmd_check() {
   preview_banner
   run_checks
+  warn_other_install
   [[ ! -f .env ]] || check_bind "$(gateway_bind)"
   say ''
   say 'Checks done.'

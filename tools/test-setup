@@ -33,7 +33,8 @@ touch "$work/docker.sock"
 
 # docker: records each call (with LIFE_OS_VERSION, which update overrides
 # for the pull), answers what setup.sh reads, and fails where a STUB_*
-# variable asks it to.
+# variable asks it to. docker ps lists STUB_LIFEOS_CONTAINERS, the lifeos
+# project's containers as "<working directory>|<service>" lines.
 cat >"$stubs/docker" <<'EOF'
 #!/usr/bin/env bash
 printf 'docker %s [LIFE_OS_VERSION=%s]\n' "$*" "${LIFE_OS_VERSION:-}" >>"$STUB_LOG"
@@ -58,6 +59,10 @@ case $1 in
       pull*) exit "${STUB_PULL_EXIT:-0}" ;;
       *) : ;;
     esac
+    ;;
+  ps)
+    [[ -z ${STUB_PS_ERROR:-} ]] || exit 1
+    printf '%b' "${STUB_LIFEOS_CONTAINERS:-}"
     ;;
   run)
     # ntfy's `user hash`: a bcrypt-shaped hash of what it reads.
@@ -599,6 +604,49 @@ ok 'adds a new password' grep -qE '^LIFE_OS_NEWTHING_DB_PASSWORD=[0-9a-f]{48}$' 
 ok 'adds a new setting' test "$(value LIFE_OS_NEWTHING_TIME)" = 05:00
 ok 'no duplicate keys' no_duplicate_keys
 ok 'no secret printed' no_secret_printed
+
+# ---------- Another Life OS on this machine ----------
+new_case other-install
+other='/srv/other-life-os|postgres\n/srv/other-life-os|tasks\n/srv/other-life-os|processor\n'
+run STUB_LIFEOS_CONTAINERS="$other" LIFE_OS_TIMEZONE=UTC -- --yes
+ok 'a first setup still works' test "$status" -eq 0
+ok 'but warns about the other install' output_has 'another Life OS runs on this machine: Docker has 3 containers of the Compose project lifeos, started from /srv/other-life-os'
+env_sum=$(sha256sum <"$case_dir/.env")
+printf 'LIFE_OS_NEWTHING_TIME=05:00\n' >>"$case_dir/.env.example"
+: >"$case_dir.log"
+for command in up update; do
+  run STUB_LIFEOS_CONTAINERS="$other" -- "$command"
+  ok "$command refuses to take the other install over" test "$status" -eq 1
+  ok "$command says where it runs" output_has 'started from /srv/other-life-os'
+  ok "$command says what it would do" output_has 'would take that install over'
+  run STUB_LIFEOS_CONTAINERS="$other" -- "$command" --skip-checks
+  ok "$command refuses with --skip-checks too" test "$status" -eq 1
+done
+printf 'y\n' >"$work/answers"
+stdin=$work/answers
+run STUB_LIFEOS_CONTAINERS="$other" -- codex
+stdin=/dev/null
+ok 'codex refuses too' test "$status" -eq 1
+ok 'for the same reason' output_has 'would take that install over'
+ok 'no compose command ran that changes containers' bash -c "! grep -qE 'compose (up|down|pull|run|exec|restart)' '$case_dir.log'"
+ok '.env unchanged: update added no new settings' test "$(sha256sum <"$case_dir/.env")" = "$env_sum"
+run STUB_LIFEOS_CONTAINERS="$other" -- status
+ok 'status still answers' test "$status" -eq 0
+ok 'status warns' output_has 'another Life OS runs on this machine'
+run STUB_LIFEOS_CONTAINERS="$other" -- check
+ok 'check warns' output_has 'another Life OS runs on this machine'
+run STUB_PS_ERROR=1 -- up --skip-checks
+ok 'up refuses when Docker cannot list its containers' test "$status" -eq 1
+ok 'and says why' output_has 'cannot check that no other Life OS runs'
+ln -s "$case_dir" "$work/other-install-link"
+: >"$case_dir.log"
+run STUB_LIFEOS_CONTAINERS="$case_dir|postgres\n$work/other-install-link|tasks\n" LIFE_OS_SETUP_WAIT_SECONDS=1 -- up
+ok "this install's own containers are fine" test "$status" -eq 0
+ok 'also through a symbolic link' logged 'docker compose up -d --pull missing'
+ok 'without a warning' bash -c "! grep -q 'another Life OS' '$case_dir.last'"
+run STUB_LIFEOS_CONTAINERS="$case_dir|postgres\n/srv/other-life-os|tasks\n" -- up
+ok 'one container from elsewhere is enough' test "$status" -eq 1
+ok 'counted once' output_has 'Docker has 1 container of the Compose project lifeos, started from /srv/other-life-os.'
 
 # ---------- A clone of the repository ----------
 new_case checkout

@@ -18,6 +18,7 @@
 | Problem | What to do |
 | --- | --- |
 | `./setup.sh` says a `.env` already exists | It never overwrites one. Change a part with its own command (`./setup.sh gateway`, `./setup.sh google`, …), or start over with `./setup.sh --force-new`, which keeps a copy and your database passwords. |
+| `up`, `update`, or `codex` says another Life OS runs on this machine | Docker has `lifeos` containers started from another directory, and running Compose here would recreate them with this directory's `.env`. Manage that install from its own directory. If you moved it here, remove the old containers (`docker ps -a --filter label=com.docker.compose.project=lifeos` lists them; your data stays in the `lifeos-*` volumes) and run the command again, with the old `.env`. |
 | "cannot talk to Docker" | Add your user to the `docker` group (`sudo usermod -aG docker $USER`), log out and back in. |
 | `up` cannot find the images ("manifest unknown", "no matching manifest") | The version in `.env` (`LIFE_OS_VERSION`) doesn't exist, or the server isn't x86_64: the preview has no ARM images yet. |
 | `up` fails: the port is in use | Something else listens on port 3000. Choose another: `./setup.sh gateway --port 3100`, then `./setup.sh up`. |
