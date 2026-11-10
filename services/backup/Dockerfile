@@ -16,7 +16,10 @@ WORKDIR /src/${SERVICE_DIR}
 RUN go build -trimpath -ldflags="-s -w" -o /out/service ./cmd/server
 
 FROM ${POSTGRES_IMAGE}
-RUN addgroup -S lifeos && adduser -S -G lifeos lifeos
+# gosu is the PostgreSQL entrypoint's, which this image never runs; its old
+# Go standard library was all of the image's remaining findings (SEC-IMG).
+RUN rm /usr/local/bin/gosu \
+    && addgroup -S lifeos && adduser -S -G lifeos lifeos
 USER lifeos
 COPY --from=build /out/service /service
 
