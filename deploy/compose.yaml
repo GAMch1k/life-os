@@ -674,9 +674,13 @@ services:
     environment:
       MCP_SERVICE_URL: http://mcp:8080/mcp
       INBOX_SERVICE_URL: http://inbox:8080
+      LIFE_OS_AI_PROVIDER: ${LIFE_OS_AI_PROVIDER:-codex}
       LIFE_OS_CODEX_WORKDIR: /workspace
       LIFE_OS_CODEX_MODEL: ${LIFE_OS_CODEX_MODEL:-gpt-5.6-luna}
       LIFE_OS_CODEX_REASONING_EFFORT: ${LIFE_OS_CODEX_REASONING_EFFORT:-medium}
+      LIFE_OS_CLAUDE_MODEL: ${LIFE_OS_CLAUDE_MODEL:-sonnet}
+      LIFE_OS_CLAUDE_EFFORT: ${LIFE_OS_CLAUDE_EFFORT:-}
+      CLAUDE_CODE_OAUTH_TOKEN: ${LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN:-}
       LIFE_OS_PROCESSOR_POLL_MILLIS: ${LIFE_OS_PROCESSOR_POLL_MILLIS:-1000}
       INBOX_CONTEXT_MINUTES: ${LIFE_OS_INBOX_CONTEXT_MINUTES:-20}
       LIFE_OS_PROCESSOR_HEALTH_PORT: 8081
@@ -720,7 +724,7 @@ services:
     networks:
       - backend
     restart: unless-stopped
-    user: ${LIFE_OS_CODEX_RUNTIME_UID:?Set LIFE_OS_CODEX_RUNTIME_UID in .env to the UID which owns the local Codex session}
+    user: ${LIFE_OS_CODEX_RUNTIME_UID:?Set LIFE_OS_CODEX_RUNTIME_UID in .env to the processor's runtime UID (id -u; with Codex, the UID which owns the local Codex session)}
     stop_grace_period: 30s
     mem_limit: ${LIFE_OS_PROCESSOR_MEMORY:-1536m}
     read_only: true

@@ -585,9 +585,13 @@ services:
     # In the release bundle (tools/build-install-bundle) the Codex home is
     # Life OS's own (setup.sh signs it in), so the processor writes a
     # refreshed auth.json back to it (services/mcp/docker-processor-entrypoint.sh).
-    # Here it is the owner's own Codex home: read-only, never written.
+    # Here it is the owner's own Codex home: read-only, never written. The
+    # bundle has no placeholder to mount, and setup.sh always writes the path
+    # (an empty directory until ./setup.sh codex), so there it is required.
     x-install-bundle:
       writable-volumes: [/run/lifeos-codex-source]
+      volume-sources:
+        /run/lifeos-codex-source: "${LIFE_OS_CODEX_HOME_HOST_PATH:?Set LIFE_OS_CODEX_HOME_HOST_PATH in .env to your existing local Codex home}"
       environment: {LIFE_OS_CODEX_AUTH_WRITE_BACK: "on"}
     tmpfs:
       - /tmp
