@@ -26,7 +26,7 @@
 | Captures stay in Inbox; Status says the Inbox processor is not running | AI processing is off until you sign in: `./setup.sh codex`. Without it, the processor restarts again and again; that is expected. |
 | Status says Codex is signed out | Sign in again: `./setup.sh codex`. |
 | Status says the Codex usage limit is reached | Captures wait and are processed after the reset time Status shows. |
-| Voice notes wait; Status says Whisper is not ready | On the first start it downloads its model (`docker compose logs whisper`). If it keeps restarting, the server lacks memory: choose a smaller model (`./setup.sh whisper`). |
+| Voice notes wait; Status says Whisper is not ready | On the first start it downloads its model (`docker compose logs whisper`). If it keeps restarting, the server lacks memory: choose a smaller model (`./setup.sh whisper`). If its log says whisper.cpp does not know the language, set `auto` or a valid code with `./setup.sh whisper` ([Language](voice.md#language)). |
 | The server runs out of memory | Status's Server card names the biggest users. Choose a smaller Whisper model, or give the server more memory. |
 | Google: `redirect_uri_mismatch` | The redirect URI in Google must be exactly what `./setup.sh google` printed. See [Google Calendar](google-calendar.md). |
 | The bank connection fails | See [Bank connection troubleshooting](../operations/banking.md#troubleshooting). |

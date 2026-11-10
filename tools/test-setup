@@ -194,6 +194,7 @@ ok 'Codex home mode 700' test "$(mode "$case_dir/codex-home")" = 700
 ok 'runtime UIDs are mine' test "$(value LIFE_OS_CODEX_RUNTIME_UID)$(value LIFE_OS_BACKUP_RUNTIME_UID)$(value LIFE_OS_BANKING_RUNTIME_UID)" = "$uid$uid$uid"
 ok 'Docker socket group' test "$(value LIFE_OS_DOCKER_GID)" = "$sock_gid"
 ok 'ntfy example host cleared' test -z "$(value LIFE_OS_NTFY_PUBLIC_URL)"
+ok 'Whisper guesses the language' test "$(value LIFE_OS_WHISPER_LANGUAGE)" = auto
 for key in "${password_keys[@]}"; do
   ok "$key is a new 48-digit hex password" grep -qE "^$key=[0-9a-f]{48}$" "$case_dir/.env"
 done
@@ -368,8 +369,39 @@ ok 'whisper' test "$status" -eq 0
 ok 'model path' test "$(value LIFE_OS_WHISPER_MODEL_PATH)" = /models/ggml-medium.bin
 ok 'model URL' test "$(value LIFE_OS_WHISPER_MODEL_URL)" = https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin
 ok 'more memory' test "$(value LIFE_OS_WHISPER_MEMORY)" = 3g
+ok 'the language stays auto' test "$(value LIFE_OS_WHISPER_LANGUAGE)" = auto
+ok 'says the language' output_has 'Language: auto'
 run LIFE_OS_SETUP_WHISPER_MODEL=huge -- --yes whisper
 ok 'refuses an unknown model' test "$status" -eq 2
+run LIFE_OS_WHISPER_LANGUAGE=DE -- --yes whisper
+ok 'whisper: a fixed language' test "$status" -eq 0
+ok 'the language, lower-cased' test "$(value LIFE_OS_WHISPER_LANGUAGE)" = de
+ok 'the model stays' test "$(value LIFE_OS_WHISPER_MODEL_PATH)" = /models/ggml-medium.bin
+ok 'says it' output_has 'Language: de (every voice note is transcribed as de)'
+run -- --yes whisper
+ok 'whisper --yes keeps the language' test "$(value LIFE_OS_WHISPER_LANGUAGE)" = de
+for language in xx german 'cs cy' auto2; do
+  run LIFE_OS_WHISPER_LANGUAGE="$language" -- --yes whisper
+  ok "refuses the language '$language'" test "$status" -eq 2
+done
+ok 'says which codes' output_has "unknown Whisper language 'auto2'"
+ok 'the language is unchanged' test "$(value LIFE_OS_WHISPER_LANGUAGE)" = de
+printf 'medium\nyue\n' >"$work/answers"
+stdin=$work/answers
+run -- whisper
+ok 'whisper asks for the language' test "$status" -eq 0
+ok 'explains auto and a fixed language' output_has 'If you speak one language only'
+ok 'the answer' test "$(value LIFE_OS_WHISPER_LANGUAGE)" = yue
+printf 'medium\n\n' >"$work/answers"
+run -- whisper
+ok 'Enter keeps the language' test "$(value LIFE_OS_WHISPER_LANGUAGE)" = yue
+printf 'medium\nklingon\n' >"$work/answers"
+run -- whisper
+ok 'refuses an unknown answer' test "$status" -eq 2
+printf 'medium\nru\n' >"$work/answers"
+run -- whisper
+stdin=/dev/null
+ok 'whisper: Russian' test "$(value LIFE_OS_WHISPER_LANGUAGE)" = ru
 
 run LIFE_OS_NTFY_PUBLIC_URL=https://ntfy.example.org LIFE_OS_SETUP_NTFY_PHONE_PASSWORD=correct-horse-battery -- --yes ntfy
 ok 'ntfy needs the tunnel first' test "$status" -eq 1
@@ -463,7 +495,7 @@ run -- status
 ok 'status' test "$status" -eq 0
 ok 'status: google set up' grep -qE 'Google Calendar \(google\) +set up' "$case_dir.last"
 ok 'status: not signed in to Codex' grep -qE 'AI processing \(codex\) +not signed in' "$case_dir.last"
-ok 'status: the Whisper model' grep -qE 'Whisper model \(whisper\) +medium' "$case_dir.last"
+ok 'status: the Whisper model and language' grep -qE 'Whisper model \(whisper\) +medium, language ru$' "$case_dir.last"
 ok 'no secret printed by status' no_secret_printed
 
 # ---------- Claude Code instead of Codex ----------
@@ -495,13 +527,18 @@ ok 'no secret printed' no_secret_printed
 # ---------- Integrations during a first setup without questions ----------
 new_case init-with-integrations
 run LIFE_OS_TIMEZONE=UTC LIFE_OS_GOOGLE_CLIENT_ID=1-x.apps.googleusercontent.com LIFE_OS_GOOGLE_CLIENT_SECRET=GOCSPX-abc \
-  LIFE_OS_SETUP_WHISPER_MODEL=base LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-first_setup_token -- --yes
+  LIFE_OS_SETUP_WHISPER_MODEL=base LIFE_OS_WHISPER_LANGUAGE=de LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-first_setup_token -- --yes
 ok 'first setup with integrations' test "$status" -eq 0
 ok 'google set up at once' test "$(value LIFE_OS_GOOGLE_CLIENT_ID)" = 1-x.apps.googleusercontent.com
 ok 'whisper set up at once' test "$(value LIFE_OS_WHISPER_MODEL_PATH)" = /models/ggml-base.bin
+ok 'with its language' test "$(value LIFE_OS_WHISPER_LANGUAGE)" = de
 ok 'claude set up at once' test "$(value LIFE_OS_AI_PROVIDER)" = claude
 ok 'banking left alone' test -z "$(value LIFE_OS_ENABLE_BANKING_APP_ID)"
 ok 'no secret printed at once' no_secret_printed
+new_case init-with-whisper-language
+run LIFE_OS_TIMEZONE=UTC LIFE_OS_WHISPER_LANGUAGE=en -- --yes
+ok 'a Whisper language alone sets up whisper' test "$(value LIFE_OS_WHISPER_LANGUAGE)" = en
+ok 'with the default model' test "$(value LIFE_OS_WHISPER_MODEL_PATH)" = /models/ggml-small.bin
 
 # ---------- up, update, status ----------
 new_case running
@@ -525,6 +562,15 @@ ok 'up names what is not running' output_has 'not running: tasks-migrate (exit 1
 run STUB_GATEWAY_DOWN=1 LIFE_OS_SETUP_WAIT_SECONDS=1 -- up --skip-checks
 ok 'up still ends when Life OS does not answer' test "$status" -eq 0
 ok 'and says so' output_has 'still not answering'
+ok 'a known Whisper language: no warning' bash -c "! grep -q 'LIFE_OS_WHISPER_LANGUAGE' '$case_dir.last'"
+sed -i 's/^LIFE_OS_WHISPER_LANGUAGE=.*/LIFE_OS_WHISPER_LANGUAGE=xx/' "$case_dir/.env"
+: >"$case_dir.log"
+run LIFE_OS_SETUP_WAIT_SECONDS=1 -- up --skip-checks
+ok 'up warns about an unknown Whisper language' output_has "LIFE_OS_WHISPER_LANGUAGE in .env is 'xx', which whisper.cpp does not know"
+ok 'and still starts' logged 'docker compose up -d --pull missing'
+run -- status
+ok 'status flags it' grep -qE 'Whisper model \(whisper\) +small, language xx \(unknown: ./setup.sh whisper\)' "$case_dir.last"
+sed -i 's/^LIFE_OS_WHISPER_LANGUAGE=.*/LIFE_OS_WHISPER_LANGUAGE=auto/' "$case_dir/.env"
 
 : >"$case_dir.log"
 run LIFE_OS_SETUP_WAIT_SECONDS=5 -- update 0.1.0-preview.2 --skip-checks
@@ -574,6 +620,14 @@ ok 'says how to redeploy one service' output_has 'docker compose up -d --no-buil
 run LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-clone_token -- --yes claude
 ok 'claude in a clone' test "$status" -eq 0
 ok 'says how to recreate the processor' output_has 'docker compose up -d --no-build --no-deps processor'
+
+# ---------- One list of Whisper languages ----------
+# setup.sh's copy of whisper.cpp's language codes is the list the whisper
+# image checks against whisper.cpp's source (services/voice/whisper).
+ok "setup.sh's Whisper languages are languages.txt's" test \
+  "$(sed -n "s/^whisper_languages='\(.*\)'$/\1/p" setup.sh | tr ' ' '\n' | LC_ALL=C sort)" = \
+  "$(grep -v '^#' services/voice/whisper/languages.txt | LC_ALL=C sort)"
+ok 'about 100 of them' test "$(grep -cv '^#' services/voice/whisper/languages.txt)" -ge 99
 
 printf '\ntest-setup: %d passed, %d failed\n' "$passed" "$failed"
 ((failed == 0))

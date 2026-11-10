@@ -82,7 +82,7 @@ Life OS works without any of them. Each one can be set up during the first `./se
 | --- | --- | --- |
 | `./setup.sh codex` | AI processing of your notes, with your ChatGPT plan | [AI processing](ai-processing.md) |
 | `./setup.sh claude` | Or AI processing with Claude Code and your Claude plan instead | [AI processing](ai-processing.md#claude-code-instead-of-codex) |
-| `./setup.sh whisper` | A different speech-to-text model for voice notes | [Voice notes](voice.md) |
+| `./setup.sh whisper` | A different speech-to-text model for voice notes, or one fixed language | [Voice notes](voice.md) |
 | `./setup.sh cloudflare` | Access from anywhere, through Cloudflare Tunnel and Access | [Access it safely](access.md#cloudflare-tunnel-and-access) |
 | `./setup.sh google` | Two-way sync with Google Calendar | [Google Calendar](google-calendar.md) |
 | `./setup.sh banking` | Your bank account in Finance, through Enable Banking | [Bank sync](bank-sync.md) |
@@ -115,7 +115,7 @@ Plain `docker compose` commands work too, from the same directory: `docker compo
 | Timezone, currency | `LIFE_OS_TIMEZONE`, `LIFE_OS_FINANCE_CURRENCY` |
 | Address, where it listens | `LIFE_OS_PUBLIC_URL`, `LIFE_OS_GATEWAY_BIND_ADDRESS`, `LIFE_OS_GATEWAY_PORT` (or `--public-url`, `--bind`, `--port`) |
 | Image version and registry | `LIFE_OS_VERSION`, `LIFE_OS_IMAGE_REGISTRY` |
-| Whisper | `LIFE_OS_SETUP_WHISPER_MODEL` (`tiny`, `base`, `small`, `medium`, `large-v3-turbo`) |
+| Whisper | `LIFE_OS_SETUP_WHISPER_MODEL` (`tiny`, `base`, `small`, `medium`, `large-v3-turbo`), `LIFE_OS_WHISPER_LANGUAGE` (`auto`, or a code such as `de`; unset keeps the current one) |
 | Cloudflare | `LIFE_OS_CLOUDFLARE_TUNNEL_TOKEN` and an https `LIFE_OS_PUBLIC_URL` |
 | Google Calendar | `LIFE_OS_GOOGLE_CLIENT_ID`, `LIFE_OS_GOOGLE_CLIENT_SECRET` |
 | AI with Claude Code | `LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) |

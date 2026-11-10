@@ -152,6 +152,8 @@ LIFE_OS_WHISPER_MODEL_PATH=/models/ggml-small.bin
 LIFE_OS_WHISPER_MODEL_URL=https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin
 ```
 
+Whisper guesses the language of each note (`LIFE_OS_WHISPER_LANGUAGE=auto`, the default). If you speak one language only, set its whisper.cpp code, such as `de`, `ru`, or `en`: short notes come out more accurately. Whisper refuses a code whisper.cpp does not know at its start ([Voice and STT](docs/services/voice-stt.md#whisper-worker)).
+
 At idle the worker uses little memory. While it transcribes, it can grow up to `LIFE_OS_WHISPER_MEMORY` (default `2g`), its hard cap; plan RAM around that cap. `LIFE_OS_WHISPER_CPUS` and `LIFE_OS_WHISPER_THREADS` limit its CPU. The docs name `large-v3-turbo` as the next step up; it needs more time and memory, but no limits are documented for it. Recordings can be up to 25 MiB. See [Voice and STT](docs/services/voice-stt.md#whisper-worker).
 
 ## 7. Databases

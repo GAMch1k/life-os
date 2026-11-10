@@ -635,7 +635,7 @@ setup_integrations_now() {
     # Without questions, an integration is set up when its settings are in
     # the environment.
     [[ -z ${LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN:-} ]] || setup_claude
-    [[ -z ${LIFE_OS_SETUP_WHISPER_MODEL:-} ]] || setup_whisper
+    [[ -z ${LIFE_OS_SETUP_WHISPER_MODEL:-}${LIFE_OS_WHISPER_LANGUAGE:-} ]] || setup_whisper
     [[ -z ${LIFE_OS_CLOUDFLARE_TUNNEL_TOKEN:-} ]] || setup_cloudflare
     [[ -z ${LIFE_OS_GOOGLE_CLIENT_ID:-} ]] || setup_google
     [[ -z ${LIFE_OS_ENABLE_BANKING_APP_ID:-} ]] || setup_banking
@@ -648,7 +648,7 @@ setup_integrations_now() {
 Life OS works without them. Each one can be set up now, or later on its own:
   codex       AI processing of your notes (OpenAI Codex, needs a ChatGPT plan)
   claude      or AI processing with Claude Code instead (needs a Claude plan)
-  whisper     the speech-to-text model for voice notes (default: small)
+  whisper     the speech-to-text model and language of voice notes (default: small, auto)
   cloudflare  reach Life OS from anywhere through a Cloudflare Tunnel and Access
   google      sync with Google Calendar
   banking     read your bank account through Enable Banking
@@ -759,8 +759,18 @@ EOF
   apply_hint processor
 }
 
+# The language codes whisper.cpp knows: services/voice/whisper/languages.txt
+# in the repository, which the release does not ship (tools/test-setup checks
+# that this copy is the same). Whisper itself refuses a code not in it.
+whisper_languages='af am ar as az ba be bg bn bo br bs ca cs cy da de el en es et eu fa fi fo fr gl gu ha haw he hi hr ht hu hy id is it ja jw ka kk km kn ko la lb ln lo lt lv mg mi mk ml mn mr ms mt my ne nl nn no oc pa pl ps pt ro ru sa sd si sk sl sn so sq sr su sv sw ta te tg th tk tl tr tt uk ur uz vi yi yo yue zh'
+
+# Whether a Whisper language is auto or one code whisper.cpp knows.
+valid_whisper_language() {
+  [[ $1 == auto ]] || [[ $1 =~ ^[a-z]+$ && " $whisper_languages " == *" $1 "* ]]
+}
+
 setup_whisper() {
-  local model memory current
+  local model memory current language
   intro 'Voice: the Whisper model' voice.md
   require_env
   current=$(whisper_model)
@@ -780,11 +790,30 @@ EOF
     medium | large-v3-turbo) memory=3g ;;
     *) usage_error "unknown Whisper model '$model': choose tiny, base, small, medium, or large-v3-turbo" ;;
   esac
+  if ((!assume_yes)); then
+    cat <<EOF
+
+Whisper guesses the language of each voice note (auto), and short notes are
+sometimes guessed wrong. If you speak one language only, name it: that is more
+accurate, and a bit faster. Codes such as en, de, ru, uk, fr, es, it, or pl
+(every one: $docs/voice.md#language).
+EOF
+  fi
+  ask language 'Language (auto, or a code)' "${LIFE_OS_WHISPER_LANGUAGE:-$(whisper_language)}"
+  language=${language,,}
+  valid_whisper_language "$language" \
+    || usage_error "unknown Whisper language '$language': use auto or one of whisper.cpp's codes, such as de, ru, or en (every one: $docs/voice.md#language)"
   env_values[LIFE_OS_WHISPER_MODEL_PATH]=/models/ggml-$model.bin
   env_values[LIFE_OS_WHISPER_MODEL_URL]=https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-$model.bin
   env_values[LIFE_OS_WHISPER_MEMORY]=$memory
+  env_values[LIFE_OS_WHISPER_LANGUAGE]=$language
   env_update
   say "Whisper uses the $model model (memory cap $memory); it downloads it at its next start."
+  if [[ $language == auto ]]; then
+    say 'Language: auto (guessed for each voice note).'
+  else
+    say "Language: $language (every voice note is transcribed as $language)."
+  fi
   apply_hint whisper
 }
 
@@ -1209,6 +1238,7 @@ cmd_up() {
   preview_banner
   ((skip_checks)) || run_checks
   check_bind "$(gateway_bind)"
+  check_whisper_language
   step "Starting Life OS $(env_get LIFE_OS_VERSION 2>/dev/null || printf '%s' "$release_version")"
   docker compose up -d --pull missing
   wait_until_ready || true
@@ -1257,6 +1287,7 @@ cmd_update() {
   fi
   add_new_settings
 
+  check_whisper_language
   if ((skip_backup)); then
     warn 'not backing up first (--skip-backup)'
   else
@@ -1300,7 +1331,7 @@ cmd_status() {
   else
     status_line 'AI processing (codex)' "$(codex_signed_in && printf 'signed in' || printf 'not signed in')"
   fi
-  status_line 'Whisper model (whisper)' "$(whisper_model)"
+  status_line 'Whisper model (whisper)' "$(whisper_model), language $(whisper_language)$(whisper_language_known || printf ' (unknown: ./setup.sh whisper)')"
   status_line 'Cloudflare Tunnel (cloudflare)' "$(on_off list_has COMPOSE_PROFILES cloudflare)"
   status_line 'Google Calendar (google)' "$(on_off is_set LIFE_OS_GOOGLE_CLIENT_ID)"
   status_line 'Bank sync (banking)' "$(on_off is_set LIFE_OS_ENABLE_BANKING_APP_ID)"
@@ -1316,6 +1347,26 @@ whisper_model() {
   model=${model##*/}
   model=${model#ggml-}
   printf '%s\n' "${model%.bin}"
+}
+
+# The Whisper language .env names: auto (the default) or a code such as de.
+whisper_language() {
+  local language
+  language=$(env_get LIFE_OS_WHISPER_LANGUAGE 2>/dev/null) || language=
+  printf '%s\n' "${language:-auto}"
+}
+
+whisper_language_known() {
+  local language
+  language=$(whisper_language)
+  valid_whisper_language "${language,,}"
+}
+
+# A language whisper.cpp does not know (a hand-edited .env) stops Whisper at
+# its start: up says so, rather than that Whisper is still starting.
+check_whisper_language() {
+  whisper_language_known \
+    || warn "LIFE_OS_WHISPER_LANGUAGE in .env is '$(whisper_language)', which whisper.cpp does not know: Whisper will not start, and voice notes wait. Choose another with ./setup.sh whisper."
 }
 
 on_off() { if "$@"; then printf 'set up'; else printf 'not set up'; fi; }
@@ -1346,7 +1397,7 @@ release's compose.yaml and .env.example.
 Integrations (each optional, any time):
   ./setup.sh codex              AI processing: sign in to OpenAI Codex
   ./setup.sh claude             AI processing: Claude Code instead of Codex
-  ./setup.sh whisper            choose the speech-to-text model
+  ./setup.sh whisper            choose the speech-to-text model and language
   ./setup.sh cloudflare         Cloudflare Tunnel (behind Cloudflare Access)
   ./setup.sh google             Google Calendar sync
   ./setup.sh banking            bank sync through Enable Banking

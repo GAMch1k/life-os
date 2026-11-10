@@ -636,6 +636,7 @@ services:
     environment:
       WHISPER_MODEL_PATH: ${LIFE_OS_WHISPER_MODEL_PATH:-/models/ggml-small.bin}
       WHISPER_MODEL_URL: ${LIFE_OS_WHISPER_MODEL_URL:-https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin}
+      WHISPER_LANGUAGE: ${LIFE_OS_WHISPER_LANGUAGE:-auto}
       WHISPER_THREADS: ${LIFE_OS_WHISPER_THREADS:-2}
       WHISPER_MAX_CONCURRENCY: ${LIFE_OS_WHISPER_MAX_CONCURRENCY:-1}
       WHISPER_MAX_AUDIO_BYTES: ${LIFE_OS_WHISPER_MAX_AUDIO_BYTES:-26214400}

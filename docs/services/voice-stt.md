@@ -58,6 +58,16 @@ Transient errors record `retryable` plus an error summary and delayed availabili
 
 `whisper-cli` reads only WAV, so the worker first converts every upload with ffmpeg (included in the image) to 16 kHz mono 16-bit PCM WAV, taking the first audio stream. ffmpeg may open only local files in the accepted container formats, so a crafted upload cannot make it fetch URLs or read playlists. Both files live in a per-request temporary directory that is removed afterwards. A file ffmpeg cannot decode returns 422 `audio conversion failed` with ffmpeg's error, and a conversion running over 5 minutes returns 504; the Voice worker records either as the job's error. The model is the multilingual **`small`** model (`ggml-small.bin`, about 466 MB), the default in `compose.yaml` and `.env.example` and the deployment's since 2026-10-12. It supports Russian, German, and English, and is noticeably better than the smaller `base` for Russian and German at about three times the time; the owner prefers accuracy over speed, so `large-v3-turbo` is the next step if `small` is not good enough. Set `LIFE_OS_WHISPER_MODEL_PATH` and `LIFE_OS_WHISPER_MODEL_URL` together to use another model. A new model downloads into the `whisper-models` volume when the worker starts; the old file stays until removed.
 
+The spoken language is `LIFE_OS_WHISPER_LANGUAGE` (`WHISPER_LANGUAGE` in the container), passed to `whisper-cli` as `-l`:
+
+- `auto`, the default, makes whisper.cpp detect the language of each recording. Short notes on small models are sometimes detected wrong.
+- One whisper.cpp language code, such as `de`, `ru`, or `en`, transcribes every recording as that language: more accurate for an owner who speaks one language, and a little faster, since detection is skipped.
+- The codes are whisper.cpp's own (`g_lang` in its `src/whisper.cpp`), listed in `services/voice/whisper/languages.txt`. The image build fails when that list differs from the source of the whisper.cpp version it builds, so a whisper.cpp update that adds or drops a language has to update the list, and `setup.sh`'s copy, which `tools/test-setup` compares with it.
+- The value is trimmed and lower-cased. Anything else stops the worker at its start, before any model download, with exit code 78 and a log line naming the value: it never falls back to `auto` silently.
+- `GET /ready` reports it next to the model: `{"status": "ready", "model": "/models/ggml-small.bin", "language": "auto"}`.
+
+The deployment sets no `LIFE_OS_WHISPER_LANGUAGE`, so it stays on `auto`.
+
 `LIFE_OS_WHISPER_THREADS`, `LIFE_OS_WHISPER_MAX_CONCURRENCY`, `LIFE_OS_WHISPER_CPUS`, and `LIFE_OS_WHISPER_MEMORY` constrain resource use. A busy worker returns `429`; invalid audio, model, and process failures return a useful error for the job processor. The worker is intentionally not gateway-routed or host-published.
 
 A Voice job is the root of its workflow, and its id is the activity correlation id. Upload records `voice.job.accepted`. The worker records `voice.job.transcribed`, or `voice.job.retry_scheduled`/`voice.job.failed`. When the worker creates the Inbox item, it sends the job id as `X-Correlation-ID` and the transcription event as `X-Causation-ID`. The later processing, MCP action, and resulting Task therefore all appear in the same trace. See [Activity](activity.md).
