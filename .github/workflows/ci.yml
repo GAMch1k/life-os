@@ -212,7 +212,7 @@ jobs:
     name: Full stack (images, smokes, browser suite)
     needs: [check-generated, check-go, check-dashboard, integration]
     runs-on: ubuntu-24.04
-    # About 19 minutes (docs/operations/ci.md).
+    # 14 to 19 minutes (docs/operations/ci.md).
     timeout-minutes: 60
     env:
       # The verification stack's Whisper reads the model from CI's cache

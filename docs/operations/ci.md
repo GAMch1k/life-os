@@ -23,9 +23,9 @@ The first five jobs run in parallel. `full-stack` waits for the four that block,
 | `check-dashboard` | `tools/check --dashboard`: Prettier, ESLint, the unit tests, the typecheck, and `next build` | about 1.5 min | `tools/check --dashboard` |
 | `integration` | `tools/test-integration` against a PostgreSQL service container | about 2 min | [Integration tests](#integration-tests) |
 | `govulncheck` | `tools/check-vulnerabilities`: govulncheck on every Go module. **Not blocking yet.** | about 2 min | `tools/check-vulnerabilities` |
-| `full-stack` | The images, then the smokes and the browser suite (without the `@codex` tests) on the verification stack | about 19 min: 10 to build, 8 to test | [Full-stack tests](#full-stack-tests) |
+| `full-stack` | The images, then the smokes and the browser suite (without the `@codex` tests) on the verification stack | 14 to 19 min: 6.5 to 10 to build, 7 to 8 to test | [Full-stack tests](#full-stack-tests) |
 
-The times are with warm caches; without them, each job takes up to a minute longer. The checks take about as long as the slowest of them, about 2 minutes; with `full-stack` after them, a whole run takes about 21 minutes.
+The times are with warm caches; without them, each job takes up to a minute longer. The checks take about as long as the slowest of them, about 2 minutes; with `full-stack` after them, a whole run takes 16 to 21 minutes.
 
 `tools/check` without flags runs all of its parts, as before. Like `make check`, it needs a clean working tree. `check-generated` and `check-dashboard` run `npm ci --prefix apps/dashboard` first.
 
@@ -106,15 +106,15 @@ npx playwright show-trace /tmp/lifeos-playwright/test-results/<test>/trace.zip
 
 ### How long it takes
 
-Measured on 9 and 10 November 2026, with the Whisper model in the cache: about 19 minutes for the job, about 21 for the whole run from the push.
+Measured in two green runs on 9 and 10 November 2026, with the Whisper model in the cache: 14 and 19 minutes for the job, 16 and 21 for the whole run from the push. The runners differ mostly in how fast they build.
 
 | Part | Time |
 | --- | --- |
 | Setup, the `.env`, the Whisper model | under 10 s (without the cache, the download takes about 5 s and saving it 4 s) |
-| `docker compose build` | about 10 min. whisper.cpp's compile (`-j2`) finishes last; the 18 Go builds and the Dashboard's `npm ci` share the 4 CPUs with it, about 7 to 8 min each |
+| `docker compose build` | 6.5 to 10 min. whisper.cpp's compile (`-j2`) finishes last; the 18 Go builds and the Dashboard's `npm ci` share the 4 CPUs with it |
 | `npm ci` and Playwright's browsers | under 1 min |
 | The smokes | about 4 min: `make life-smoke` 20 s, `tools/smoke-e2e`, `make verify-clean-db`, and `tools/smoke-action-idempotency` about 25 s each, `tools/smoke-gateway-recreate` 40 s, `tools/smoke-voice-lease-recovery` 2 min |
-| The browser suite | about 4 min: 114 tests pass and 30 skip, 3.8 min of it Playwright's |
+| The browser suite | 3 to 4 min: 114 tests pass and 30 skip, 2.7 to 3.8 min of it Playwright's |
 
 ### Run it again, or elsewhere
 
