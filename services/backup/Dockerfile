@@ -16,12 +16,21 @@ WORKDIR /src/${SERVICE_DIR}
 RUN go build -trimpath -ldflags="-s -w" -o /out/service ./cmd/server
 
 FROM ${POSTGRES_IMAGE}
+# The image's source and license; on ghcr.io this links its package to the
+# repository (docs/operations/releases.md).
+LABEL org.opencontainers.image.source="https://github.com/GAMch1k/life-os" \
+      org.opencontainers.image.licenses="AGPL-3.0-only"
 # gosu is the PostgreSQL entrypoint's, which this image never runs; its old
 # Go standard library was all of the image's remaining findings (SEC-IMG).
 RUN rm /usr/local/bin/gosu \
-    && addgroup -S lifeos && adduser -S -G lifeos lifeos
+    && addgroup -S lifeos && adduser -S -G lifeos lifeos \
+    && mkdir -p /etc/lifeos/postgres
 USER lifeos
 COPY --from=build /out/service /service
+# The registry of the databases to back up (BACKUP_DATABASES_FILE), as
+# postgres-provision provisions them: built in, so a server needs no
+# checkout (P20-02).
+COPY --chmod=0644 infra/postgres/service-databases.conf /etc/lifeos/postgres/service-databases.conf
 
 # The PostgreSQL image stops its server with SIGINT and starts it by default;
 # this image runs only the service, which stops on SIGTERM.

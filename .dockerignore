@@ -2,6 +2,11 @@
 .env
 .env.*
 !.env.example
+# The same anywhere below the root: a secret of a service's own never
+# enters a build (P20-02).
+**/.env
+**/.env.*
+!**/.env.example
 **/node_modules
 **/.next
 **/coverage

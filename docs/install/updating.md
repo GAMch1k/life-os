@@ -27,7 +27,7 @@ sha256sum --ignore-missing -c SHA256SUMS
 1. backs up every database, and stops if that fails (`--skip-backup` updates without a backup);
 2. adds the settings the new `.env.example` has and your `.env` lacks, with new passwords where needed, and lists them;
 3. downloads the new version's images, and stops without changing anything if that fails;
-4. writes the new version into `.env`, restarts what changed, and waits until Life OS answers.
+4. writes the new version into `.env`, restarts what changed, and waits until Life OS answers. On the way up, `postgres-provision` creates any database the new version adds (with the password step 2 added), and each service's migrations bring its database up to date.
 
 Your `.env`, your data, and your backups stay as they are.
 

@@ -7,10 +7,10 @@
 #
 # Idempotent. provision-service-databases.sh runs it last, on a fresh volume
 # and on every reapply, because that script revokes database grants from
-# every role but the owner. On a running server, apply it on its own:
+# every role but the owner. On a running server, apply it on its own
+# (postgres-provision's image runs it with its entrypoint):
 #
-#   docker compose exec -T -e LIFE_OS_BACKUP_DB_PASSWORD postgres \
-#     bash /opt/lifeos/postgres/provision-backup-role.sh
+#   make db-provision-backup
 #
 # With LIFE_OS_BACKUP_DB_PASSWORD set, the role is created if missing and its
 # password always set. Without it, an existing role keeps its password and
@@ -18,16 +18,8 @@
 
 set -euo pipefail
 
-# The registry: the copy in the directory-mounted /opt/lifeos/postgres when
-# there is one, because a single-file bind mount (/etc/lifeos/...) keeps the
-# file it was created with after Git replaces it, until the container is
-# recreated. The single file is the fallback where the directory is not
-# mounted.
-default_config=/etc/lifeos/service-databases.conf
-if [[ -r /opt/lifeos/postgres/service-databases.conf ]]; then
-  default_config=/opt/lifeos/postgres/service-databases.conf
-fi
-config_file=${LIFE_OS_DATABASE_CONFIG:-$default_config}
+# The registry, next to this script in the postgres-provision image.
+config_file=${LIFE_OS_DATABASE_CONFIG:-/opt/lifeos/postgres/service-databases.conf}
 role=lifeos_backup
 password=${LIFE_OS_BACKUP_DB_PASSWORD:-}
 

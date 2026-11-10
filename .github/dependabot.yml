@@ -45,6 +45,7 @@ updates:
   - package-ecosystem: docker
     directories:
       - /apps/dashboard
+      - /infra/*
       - /services/*
       - /services/voice/whisper
       - /templates/*
@@ -60,10 +61,15 @@ updates:
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
+      # The gateway (infra/nginx) stays on nginx's stable branch (even minor
+      # versions): 1.30-alpine's new digests come; a move to the next stable
+      # is a ticket.
+      - dependency-name: nginx
+        update-types: ["version-update:semver-minor"]
 
-  # The images compose.yaml runs (PostgreSQL, the gateway, cloudflared, ntfy,
-  # migrate; the ${VAR:-default} defaults too) and the browser tests' fixture
-  # nginx, pinned by digest like the Dockerfiles'.
+  # The images compose.yaml runs as they are (PostgreSQL, cloudflared, ntfy;
+  # the ${VAR:-default} defaults too) and the browser tests' fixture nginx,
+  # pinned by digest like the Dockerfiles'.
   - package-ecosystem: docker-compose
     directories:
       - /
@@ -80,15 +86,18 @@ updates:
     ignore:
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]
-      # The gateway stays on nginx's stable branch (even minor versions):
-      # 1.30-alpine's new digests come; a move to the next stable is a ticket.
+      # The fixture nginx stays on the gateway's stable branch, as above.
       - dependency-name: nginx
         update-types: ["version-update:semver-minor"]
-      # compose.verify.yaml's images are the stack's own local builds.
+      # Life OS's own images (lifeos-*), built here.
       - dependency-name: "lifeos-*"
 
+  # The workflows' actions, and the shared full-stack steps' (a composite
+  # action, which / alone would leave out).
   - package-ecosystem: github-actions
-    directory: /
+    directories:
+      - /
+      - /.github/actions/*
     schedule:
       interval: weekly
       day: monday

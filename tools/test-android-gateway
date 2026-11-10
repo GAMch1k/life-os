@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Checks the gateway's /android/ (infra/nginx/life-os.conf.template) in
 # throwaway containers, never the deployed gateway or the verification stack:
-# the gateway's image with its configuration, rendered from the template as
+# the gateway's nginx with its configuration, rendered from the template as
 # compose.yaml has it rendered (with made-up hosts), a release published with
 # tools/publish-android-release into a scratch directory mounted read-only
 # at /srv/android as compose.yaml does, and a stand-in Dashboard, on a
@@ -18,8 +18,10 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_root"
 command -v docker >/dev/null 2>&1 || { echo 'test-android-gateway: docker is required' >&2; exit 2; }
-image=$(awk '/^  gateway:/ { inside = 1; next } inside && /^    image:/ { print $2; exit }' compose.yaml)
-[[ -n "$image" ]] || { echo "test-android-gateway: no gateway image in compose.yaml" >&2; exit 2; }
+# The gateway image's base (infra/nginx/Dockerfile); the configuration is
+# mounted, as the Access variant below changes it.
+image=$(sed -n 's/^FROM //p' infra/nginx/Dockerfile | head -n 1)
+[[ -n "$image" ]] || { echo "test-android-gateway: no base image in infra/nginx/Dockerfile" >&2; exit 2; }
 name=lifeos-verify-android-$$
 work=$(mktemp -d)
 cleanup() {

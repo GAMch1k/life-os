@@ -2,16 +2,10 @@
 
 set -euo pipefail
 
-# The registry: the copy in the directory-mounted /opt/lifeos/postgres when
-# there is one, because a single-file bind mount (/etc/lifeos/...) keeps the
-# file it was created with after Git replaces it, until the container is
-# recreated. The single file is the fallback where the directory is not
-# mounted.
-default_config=/etc/lifeos/service-databases.conf
-if [[ -r /opt/lifeos/postgres/service-databases.conf ]]; then
-  default_config=/opt/lifeos/postgres/service-databases.conf
-fi
-config_file=${LIFE_OS_DATABASE_CONFIG:-$default_config}
+# The registry, next to this script in the postgres-provision image.
+config_file=${LIFE_OS_DATABASE_CONFIG:-/opt/lifeos/postgres/service-databases.conf}
+# The server: PGHOST in the postgres-provision image, else this host.
+host=${PGHOST:-127.0.0.1}
 declare -a services databases roles password_variables
 
 while IFS='|' read -r service database role password_env extra; do
@@ -34,7 +28,7 @@ for i in "${!services[@]}"; do
   fi
 
   PGPASSWORD=$password psql \
-    --host 127.0.0.1 \
+    --host "$host" \
     --username "${roles[$i]}" \
     --dbname "${databases[$i]}" \
     --no-psqlrc \
@@ -45,7 +39,7 @@ for i in "${!services[@]}"; do
   for j in "${!databases[@]}"; do
     [[ $i == "$j" ]] && continue
     if PGPASSWORD=$password psql \
-      --host 127.0.0.1 \
+      --host "$host" \
       --username "${roles[$i]}" \
       --dbname "${databases[$j]}" \
       --no-psqlrc \
@@ -57,7 +51,7 @@ for i in "${!services[@]}"; do
 
   for protected_database in "$POSTGRES_DB" template1; do
     if PGPASSWORD=$password psql \
-      --host 127.0.0.1 \
+      --host "$host" \
       --username "${roles[$i]}" \
       --dbname "$protected_database" \
       --no-psqlrc \

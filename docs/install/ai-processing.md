@@ -24,7 +24,7 @@ If you don't want that, leave AI processing off.
 
 It works on a server without a browser. The script starts Codex's sign-in inside the processor's own image; Codex prints a link and a one-time code. Open the link on any device, sign in to ChatGPT, and enter the code. If the page says that device-code sign-in is off for your account, turn it on in ChatGPT's security settings and run the command again.
 
-The sign-in is saved in `codex-home/auth.json`, next to `setup.sh`, readable only by you. The processor reads it at every start. Treat it like a password: it is not in the backups, and anyone with it can use your Codex allowance.
+The sign-in is saved in `codex-home/auth.json`, next to `setup.sh`, readable only by you. The processor reads it at every start, and when Codex refreshes the sign-in, the processor writes the new one back there within a minute, so a restart keeps you signed in. Treat it like a password: it is not in the backups, and anyone with it can use your Codex allowance.
 
 Afterwards, the Status page shows Codex as signed in, and a test capture in Inbox should be filed within a minute.
 

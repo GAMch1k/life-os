@@ -18,7 +18,7 @@ The first six jobs run in parallel. `full-stack` waits for the four that block, 
 
 | Job | What it runs | Time | Locally |
 | --- | --- | --- | --- |
-| `check-generated` | `tools/check --gateway --contracts --sqlc`: the gateway's host list, the OpenAPI lint, generated Go and TypeScript API drift, and sqlc drift | about 1 min | `tools/check --gateway --contracts --sqlc` |
+| `check-generated` | `tools/check --gateway --contracts --sqlc --install-bundle`: the gateway's host list, the OpenAPI lint, generated Go and TypeScript API drift, sqlc drift, and the release bundle's `deploy/compose.yaml` ([releases](releases.md#the-install-bundle)) | about 1 min | `tools/check --gateway --contracts --sqlc --install-bundle` |
 | `check-go` | `tools/check --go --setup`: gofmt, `go vet`, `go test`, and the build of every module under `pkg/`, `services/`, and `templates/` (`GOWORK=off`); then shellcheck and `tools/test-setup`, the tests of the install bundle's `setup.sh` with `docker` and `curl` stubbed (about 15 s) | about 1 min | `tools/check --go --setup` |
 | `check-dashboard` | `tools/check --dashboard`: Prettier, ESLint, the unit tests, the typecheck, and `next build` | about 1.5 min | `tools/check --dashboard` |
 | `integration` | `tools/test-integration` against a PostgreSQL service container | about 2 min | [Integration tests](#integration-tests) |
@@ -69,7 +69,7 @@ In CI, the job's PostgreSQL is a service container of the image `compose.yaml` d
 
 ## Full-stack tests
 
-The `full-stack` job runs the images, the smokes, and the browser suite on the disposable verification stack (`tools/verify-compose`, project `lifeos-verify`, the gateway on `127.0.0.1:13001`). It starts once `check-generated`, `check-go`, `check-dashboard`, and `integration` have passed, on the same pushes and pull requests, on a GitHub-hosted runner (`ubuntu-24.04`: 4 CPUs, 16 GB of memory). It needs no secret and signs in to no AI.
+The `full-stack` job runs the images, the smokes, and the browser suite on the disposable verification stack (`tools/verify-compose`, project `lifeos-verify`, the gateway on `127.0.0.1:13001`). Its steps are a composite action, `.github/actions/full-stack`, which the [release](releases.md) runs too before it scans and publishes the images it built; composite steps have no `timeout-minutes`, so `timeout` bounds each long one (30 minutes for the build and the browser suite, 10 for each smoke). It starts once `check-generated`, `check-go`, `check-dashboard`, and `integration` have passed, on the same pushes and pull requests, on a GitHub-hosted runner (`ubuntu-24.04`: 4 CPUs, 16 GB of memory). It needs no secret and signs in to no AI.
 
 In order:
 
@@ -221,9 +221,9 @@ Don't delete or force-push the branch. To remove a signature recorded by mistake
 
 - **Go modules** in `pkg/`, every `services/*` and `templates/*` module, and `tools/fixtures/documents`.
 - **npm** in `apps/dashboard`.
-- **Docker base images** of every Dockerfile (`apps/dashboard`, `services/*`, `services/voice/whisper`, `templates/*`).
-- **Docker Compose images**: PostgreSQL, the gateway's nginx, cloudflared, ntfy, and migrate in `compose.yaml` (the `${VAR:-default}` defaults too), and the browser tests' fixture nginx in `tools/fixtures`.
-- **GitHub Actions** in the workflows: the pinned SHA and its version comment together.
+- **Docker base images** of every Dockerfile (`apps/dashboard`, `infra/*`: the gateway's nginx, the provisioning's and the migrations' Alpine and Go, `services/*`, `services/voice/whisper`, `templates/*`).
+- **Docker Compose images**: PostgreSQL, cloudflared, and ntfy in `compose.yaml` (the `${VAR:-default}` defaults too), and the browser tests' fixture nginx in `tools/fixtures`.
+- **GitHub Actions** in the workflows and in the composite action `.github/actions/full-stack`: the pinned SHA and its version comment together.
 
 Each ecosystem's updates come as one grouped pull request a week; all action updates come as one pull request. At most 5 pull requests are open at once for Go and npm, and 3 for Docker, Docker Compose, and Actions.
 

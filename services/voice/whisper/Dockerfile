@@ -13,6 +13,10 @@ RUN git clone --depth 1 --branch "$WHISPER_CPP_VERSION" https://github.com/ggml-
 RUN cmake -S /src/whisper.cpp -B /src/whisper.cpp/build -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON -DBUILD_SHARED_LIBS=OFF -DGGML_OPENMP=OFF && cmake --build /src/whisper.cpp/build --target whisper-cli -j2
 
 FROM python:3.13-alpine@sha256:1e1f6334529d1fb26a2ef619d7cffb30a7c7d7cc1cc7338ebee283a58d1aeaca
+# The image's source and license; on ghcr.io this links its package to the
+# repository (docs/operations/releases.md).
+LABEL org.opencontainers.image.source="https://github.com/GAMch1k/life-os" \
+      org.opencontainers.image.licenses="AGPL-3.0-only"
 # ffmpeg converts every accepted recording (WebM/Opus, Ogg/Opus, MP4/AAC,
 # WAV) to the 16 kHz mono PCM WAV whisper.cpp reads. server.py uses only the
 # standard library, so pip (and the copy ensurepip would install again) is
