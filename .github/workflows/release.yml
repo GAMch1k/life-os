@@ -320,13 +320,17 @@ jobs:
       - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
       # Keyless: the certificate names this workflow and the tag; the
       # signature goes to the registry and the transparency log (Rekor).
-      # --recursive signs each platform's image under the index too.
+      # --recursive signs each platform's image under the index too. One
+      # image per command: cosign's --timeout (3 minutes) is for the whole
+      # command, and v0.1.0-preview.3 ran out of it signing all of them.
       - name: Sign the images (cosign)
         env:
           DIGESTS: ${{ steps.push.outputs.digests }}
         run: |
           mapfile -t references < <(jq -r --arg registry "$REGISTRY" 'to_entries[] | "\($registry)/\(.key)@\(.value)"' <<<"$DIGESTS")
-          cosign sign --yes --recursive "${references[@]}"
+          for reference in "${references[@]}"; do
+            cosign sign --yes --recursive "$reference"
+          done
       # One attestation for every image (its subjects), kept by GitHub:
       # gh attestation verify oci://… -R GAMch1k/life-os finds it.
       - name: Attest the images' build provenance

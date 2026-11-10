@@ -91,7 +91,7 @@ Then watch Actions → Release. It takes about 35 minutes; its build, test, and 
 4. **SBOM**, one job per image and platform, attests its SBOM.
 5. **Release** creates the GitHub Release with the bundle and notes that start with the early-preview warning.
 
-A failure before step 3 publishes nothing: fix it on `master`, delete the tag (`git push origin :refs/tags/v0.1.0-preview.1`, `git tag -d v0.1.0-preview.1`), and tag again, or leave the tag and tag the next version (`v0.1.0-preview.1` and `.2` failed this way and have no release). After step 3 the images exist; a re-run of the failed jobs (Actions → the run → Re-run failed jobs) finishes the release with the same images.
+A failure before step 3 publishes nothing: fix it on `master`, delete the tag (`git push origin :refs/tags/v0.1.0-preview.1`, `git tag -d v0.1.0-preview.1`), and tag again, or leave the tag and tag the next version (`v0.1.0-preview.1` and `.2` failed this way and have no release). After step 3 the images exist; a re-run of the failed jobs (Actions → the run → Re-run failed jobs) finishes the release with the same images. A re-run runs the tag's own workflow, though, so a bug in the workflow needs a fix on `master` and the next version: `v0.1.0-preview.3` has images, unsigned, but no release.
 
 ### Dry runs
 

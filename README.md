@@ -10,7 +10,7 @@ Run Life OS on your own Linux server from the published Docker images, with one 
 
 ```sh
 mkdir ~/life-os && cd ~/life-os
-version=v0.1.0-preview.3
+version=v0.1.0-preview.4
 for file in compose.yaml .env.example setup.sh SHA256SUMS; do
   curl -fsSLO "https://github.com/GAMch1k/life-os/releases/download/$version/$file"
 done
