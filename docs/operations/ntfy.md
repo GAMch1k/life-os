@@ -153,7 +153,7 @@ docker compose up -d --no-build --no-deps notifications
 
 ntfy was paused on v2.29.0 and resumes on v2.37.2 (SEC-IMG, 2026-11-10). Nothing in `infra/ntfy/server.yml` or the provisioned accounts changed between them; what the first start does differently:
 
-- **It upgrades its databases in the volume.** The message cache (`cache.db`) gets a new index (schema 16 to 17, v2.31.1) and the accounts (`user.db`) keep the daily counts (v2.36.0, which also starts every count over once). Going back to v2.31.0 or older afterwards needs the cache's version set back by hand first (`UPDATE schemaVersion SET version = 16 WHERE id = 1` in `cache.db`); from v2.31.1 on, an older ntfy only warns about a newer schema.
+- **It upgrades its databases in the volume**: the message cache (`cache.db`, schema 15 to 17) and the accounts (`user.db`, 9 to 11, which now keep the daily counts and start them over once). A rehearsal on a copy of v2.29.0's data (2026-11-10) upgraded both and kept the cached messages, the token, and the read-only and write-only rights. An older ntfy cannot use the upgraded files; to go back to v2.29.0, remove the `lifeos-ntfy-data` volume first: it holds only the last 12 hours of messages, and ntfy provisions the accounts from `.env` again at start.
 - **It checks the whole configuration when `base-url` is set** (v2.36.0), as it is here, so a mistake that used to start now stops it: read `docker compose logs ntfy` if it does not become healthy.
 - **Smaller behaviour changes:** 429 answers carry `Retry-After` (v2.37.0), each visitor's day for the daily limits starts at its own time rather than at midnight UTC (v2.36.0), and a reconnect may repeat messages from the same second, which the ntfy app drops (v2.31.0).
 
