@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Life OS setup helper: writes the .env for the published images, then starts,
 # checks, and updates Life OS. It runs from the directory that holds the
-# release's compose.yaml, .env.example, and this script. Bash 4 or newer; see
+# release's compose.yaml, .env.example, and this script. Bash 4.4 or newer; see
 # docs/install/README.md.
 #
 #   ./setup.sh [options]        first-time setup: checks, then a complete .env
