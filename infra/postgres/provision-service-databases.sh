@@ -2,16 +2,8 @@
 
 set -euo pipefail
 
-# The registry: the copy in the directory-mounted /opt/lifeos/postgres when
-# there is one, because a single-file bind mount (/etc/lifeos/...) keeps the
-# file it was created with after Git replaces it, until the container is
-# recreated. The single file is the fallback where the directory is not
-# mounted.
-default_config=/etc/lifeos/service-databases.conf
-if [[ -r /opt/lifeos/postgres/service-databases.conf ]]; then
-  default_config=/opt/lifeos/postgres/service-databases.conf
-fi
-config_file=${LIFE_OS_DATABASE_CONFIG:-$default_config}
+# The registry, next to this script in the postgres-provision image.
+config_file=${LIFE_OS_DATABASE_CONFIG:-/opt/lifeos/postgres/service-databases.conf}
 
 if [[ ! -r "$config_file" ]]; then
   printf 'database config is not readable: %s\n' "$config_file" >&2
@@ -49,7 +41,7 @@ provision_service() {
   fi
 
   if [[ ! "$password_env" =~ ^LIFE_OS_[A-Z0-9_]+_DB_PASSWORD$ ]] || [[ -z "$password" ]]; then
-    printf 'set non-empty %s in the local .env file for service %s (compose.yaml passes it to the postgres service)\n' "$password_env" "$service" >&2
+    printf 'set non-empty %s in the local .env file for service %s (compose.yaml passes it to postgres-provision)\n' "$password_env" "$service" >&2
     exit 1
   fi
 
