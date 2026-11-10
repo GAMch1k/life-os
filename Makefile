@@ -10,7 +10,7 @@ LIVE_PROJECT := lifeos
 define refuse_if_deployed
 	@if [ "$(CONFIRM)" != "$@" ] && [ -n "$$(docker ps -aq --filter label=com.docker.compose.project=$(LIVE_PROJECT))" ]; then \
 	  printf '%s\n' "make $@: Life OS is deployed here (Compose project $(LIVE_PROJECT)). $(1)" \
-	    "Redeploy one service at a time instead: docker compose build <service>, then docker compose up -d --no-build --no-deps <service>." \
+	    "Redeploy one service at a time instead: docker compose build --pull <service>, then docker compose up -d --no-build --no-deps <service>." \
 	    "To run it anyway: make $@ CONFIRM=$@" >&2; \
 	  exit 2; \
 	fi
@@ -33,9 +33,12 @@ infra-up: infra-env
 	$(call refuse_if_deployed,It would recreate every service whose settings changed and PostgreSQL with them.)
 	docker compose up --detach --wait
 
+# --pull: every build starts from the current base images, not from older
+# ones Docker has kept (docs/operations/ci.md#dependabot).
 core-up life-up: infra-env
 	$(call refuse_if_deployed,It would rebuild every image and recreate every changed service and PostgreSQL with them.)
-	docker compose up --detach --build
+	docker compose build --pull
+	docker compose up --detach
 
 # The core-service and Dashboard smokes on the disposable verification stack
 # (tools/smoke-life), from the images already built; never on live data.
@@ -63,46 +66,46 @@ processor-codex-actions-smoke: infra-env
 	./tools/smoke-processor-codex-actions
 
 human-review-smoke: infra-env
-	docker compose build inbox tasks mcp processor
+	docker compose build --pull inbox tasks mcp processor
 	./tools/smoke-human-review
 
 activity-trace-smoke: infra-env
-	docker compose build activity voice voice-worker inbox tasks mcp processor
+	docker compose build --pull activity voice voice-worker inbox tasks mcp processor
 	./tools/smoke-activity-trace
 
 # Images are built one at a time to keep peak memory low on small hosts.
 runtime-status-smoke: infra-env
-	for service in dashboard processor mcp inbox voice voice-worker; do docker compose build $$service || exit 1; done
+	for service in dashboard processor mcp inbox voice voice-worker; do docker compose build --pull $$service || exit 1; done
 	./tools/smoke-runtime-status
 
 retry-schedule-smoke: infra-env
-	for service in inbox mcp processor dashboard; do docker compose build $$service || exit 1; done
+	for service in inbox mcp processor dashboard; do docker compose build --pull $$service || exit 1; done
 	./tools/smoke-retry-schedule
 
 codex-runtime-smoke: infra-env
-	for service in inbox mcp processor dashboard; do docker compose build $$service || exit 1; done
+	for service in inbox mcp processor dashboard; do docker compose build --pull $$service || exit 1; done
 	./tools/smoke-codex-runtime
 
 # Real Codex with LIFE_OS_TIMEZONE=Europe/Berlin: relative dates in captures.
 relative-dates-smoke: infra-env
-	for service in mcp processor; do docker compose build $$service || exit 1; done
+	for service in mcp processor; do docker compose build --pull $$service || exit 1; done
 	./tools/smoke-relative-dates
 
 # Real Codex and whisper.cpp: "I already bought the chicken" completes a Task
 # titled in Russian or German; two fitting Tasks still go to Human Review.
 cross-language-smoke: infra-env
-	for service in mcp processor; do docker compose build $$service || exit 1; done
+	for service in mcp processor; do docker compose build --pull $$service || exit 1; done
 	./tools/smoke-cross-language
 
 # Real Codex with LIFE_OS_TIMEZONE=Europe/Berlin: Calendar create with a
 # location, reschedules (also across languages), and ambiguity and
 # cancellation through Human Review, then an approved cancellation.
 calendar-ai-smoke: infra-env
-	for service in mcp processor; do docker compose build $$service || exit 1; done
+	for service in mcp processor; do docker compose build --pull $$service || exit 1; done
 	./tools/smoke-calendar-ai
 
 phase8-acceptance: infra-env
-	for service in activity voice voice-worker inbox tasks mcp processor dashboard; do docker compose build $$service || exit 1; done
+	for service in activity voice voice-worker inbox tasks mcp processor dashboard; do docker compose build --pull $$service || exit 1; done
 	./tools/smoke-phase8-acceptance
 
 browser-e2e: infra-env
@@ -112,7 +115,7 @@ action-idempotency-smoke: infra-env
 	./tools/smoke-action-idempotency
 
 voice-lease-recovery-smoke: infra-env
-	docker compose build voice voice-worker
+	docker compose build --pull voice voice-worker
 	./tools/smoke-voice-lease-recovery
 
 infra-down:

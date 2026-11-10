@@ -60,7 +60,7 @@ Compose refuses every command until these six variables are set: `LIFE_OS_POSTGR
 | --- | --- |
 | `LIFE_OS_POSTGRES_USER` | **Required.** The PostgreSQL admin login, for example `lifeos_admin`. |
 | `LIFE_OS_POSTGRES_PASSWORD` | **Required.** `<generate>` |
-| `LIFE_OS_POSTGRES_IMAGE`, `LIFE_OS_POSTGRES_DB` | Keep the defaults. PostgreSQL publishes no port. |
+| `LIFE_OS_POSTGRES_IMAGE`, `LIFE_OS_POSTGRES_DB` | Keep the defaults: leave `LIFE_OS_POSTGRES_IMAGE` unset (`compose.yaml` pins the image by digest). PostgreSQL publishes no port. |
 | `LIFE_OS_TIMEZONE` | Your IANA zone, for example `Europe/Berlin` (default `UTC`). Used when the browser's own zone is not known. See [Owner timezone](docs/operations/deployment.md#owner-timezone). |
 | `LIFE_OS_FINANCE_CURRENCY` | Currency of the built-in Cash account (default `EUR`). |
 | `LIFE_OS_PUBLIC_URL` | **Required.** The URL Life OS is reached at, without a trailing slash, such as `https://lifeos.example.com`. Phone notifications open their pages here, and the Google and bank redirect URIs default to it. Without a hostname, use the gateway's address, such as `http://127.0.0.1:3000`. |
@@ -156,13 +156,13 @@ PostgreSQL keeps the environment it was created with. If you add a database pass
 
 ## 8. Build and start
 
-1. **Build the images.** On a server with memory to spare, `make life-up` builds every image and starts the stack in one step (`docker compose up --detach --build`). It is for the first start only: once Life OS is deployed, it refuses (see [Redeploying](#redeploying-always---no-deps)). On a small server, build one image at a time first, as the repository's own smokes do:
+1. **Build the images.** On a server with memory to spare, `make life-up` builds every image and starts the stack in one step (`docker compose build --pull`, then `docker compose up --detach`). It is for the first start only: once Life OS is deployed, it refuses (see [Redeploying](#redeploying-always---no-deps)). On a small server, build one image at a time first, as the repository's own smokes do:
 
    ```sh
    for service in activity finance tasks food inbox calendar calendar-feeds recipe-import \
      notifications banking google-calendar monitor backup host-health host-health-docker \
      voice voice-worker whisper mcp processor dashboard; do
-     docker compose build "$service" || break
+     docker compose build --pull "$service" || break
    done
    ```
 
@@ -199,7 +199,7 @@ PostgreSQL keeps the environment it was created with. If you add a database pass
 After the first start, change one service at a time:
 
 ```sh
-docker compose build <service>
+docker compose build --pull <service>
 docker compose up -d --no-build --no-deps <service>
 ```
 
@@ -330,7 +330,7 @@ The manifest format, version rules, and troubleshooting are in [Android releases
 
 1. Note the current commit (`old=$(git rev-parse HEAD)`), then run `git pull`.
 2. Look for new settings and databases with `git diff "$old" -- .env.example infra/postgres/service-databases.conf`. Add new variables to `.env`. For a new database, provision it as described in [Adding the Food service](docs/operations/deployment.md#adding-the-food-service). [Operations](docs/operations/deployment.md) has a section for each service added to an existing deployment.
-3. Build each changed service, one at a time: `docker compose build <service>`.
+3. Build each changed service, one at a time: `docker compose build --pull <service>`.
 4. For a service with a database, apply its migrations first. The job exits when it is done: `docker compose up --no-build --no-deps <service>-migrate`.
 5. Recreate the service: `docker compose up -d --no-build --no-deps <service>`. Deploy data services before `mcp` and `processor`, and the Dashboard after the services it reads. Recreate the gateway only if its configuration changed.
 6. Check the Status page.

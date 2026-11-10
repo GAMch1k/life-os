@@ -29,7 +29,7 @@ migrate-down:
 	migrate -path db/migrations -database "$(DATABASE_URL)" down 1
 
 docker-build:
-	docker build --build-arg SERVICE_DIR=templates/go-fiber-service -f Dockerfile -t $(IMAGE) ../..
+	docker build --pull --build-arg SERVICE_DIR=templates/go-fiber-service -f Dockerfile -t $(IMAGE) ../..
 
 docker-run:
 	@test -n "$(DATABASE_URL)" || (echo "DATABASE_URL is required" >&2; exit 2)

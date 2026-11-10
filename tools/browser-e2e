@@ -25,7 +25,7 @@ trap cleanup EXIT
 # The verification overlay deliberately uses immutable local image names. Build
 # the dashboard first so this browser test always exercises the current branch,
 # rather than whichever dashboard image was built by a prior ticket.
-docker compose build dashboard
+docker compose build --pull dashboard
 "${compose[@]}" up --detach --no-build
 # The Finance specs create their own accounts through the API.
 LIFE_OS_E2E_URL=http://127.0.0.1:13001 npm --prefix apps/dashboard run test:e2e -- "$@"

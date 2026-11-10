@@ -65,7 +65,7 @@ docker stop lifeos-it-pg
 
 `tools/test-integration services/finance` runs one module's tests and skips the restore tool's test.
 
-In CI, the job's PostgreSQL is a service container of `postgres:18.6-alpine`. Its first step fails if that is not the image `compose.yaml` deploys (`LIFE_OS_POSTGRES_IMAGE`'s default). After a PostgreSQL upgrade, change `services.postgres.image` in `ci.yml` to match.
+In CI, the job's PostgreSQL is a service container of the image `compose.yaml` deploys (`LIFE_OS_POSTGRES_IMAGE`'s default, `postgres:18.6-alpine` pinned by digest). Its first step fails if the two differ. After a PostgreSQL upgrade or a new digest ([Dependabot](#dependabot)), change `services.postgres.image` in `ci.yml` to match.
 
 ## Full-stack tests
 
@@ -76,7 +76,7 @@ In order:
 1. **Unknown service names answered at once.** The runner's systemd-resolved answers SERVFAIL for a single-label name it does not know, such as a service that is not running, and the Alpine images' C library (musl) waits 10 s on SERVFAIL before it gives up. Home and Status probe services that are not running here (the processor, and the monitor, backup, and host-health, which `make life-smoke` does not start), so the Dashboard's DNS lookups queued behind those waits until its requests to running services timed out too: Home showed no Task. `ResolveUnicastSingleLabel=yes` sends such names to the upstream DNS, which answers NXDOMAIN at once, as on a usual host.
 2. **A throwaway `.env`**: `tools/ci-env "$RUNNER_TEMP/lifeos-ci"` writes `.env.example` with a new random password for every database login, `LIFE_OS_TIMEZONE=Europe/Berlin` (the browser tests' zone), every integration unset (Google, Enable Banking, ntfy, Cloudflare, web push, the ZAW feed; `tools/verify-compose` refuses them anyway), the backup directory under the scratch directory, and the runner's user as the owner of the backup directory, the Codex home, and the bank key. The Codex home is an empty directory. The file lives in the job's checkout only: Docker builds leave it out (`.dockerignore`), and nothing uploads it. `tools/ci-env` refuses to replace an existing `.env`.
 3. **The Whisper model** (`ggml-small.bin`, 466 MB, the `.env.example` default) from the Actions cache, under a key made of its file name and URL; on a miss it is downloaded from Hugging Face and saved at once, so a failed run keeps it too. `LIFE_OS_VERIFY_OVERLAYS=tools/fixtures/whisper-models.compose.yaml` mounts it read-only into the verification stack's Whisper, which would otherwise download it into a fresh volume at every start (each smoke starts its own stack).
-4. **The images**: `docker compose build`, all of them at once, as `make life-up` would.
+4. **The images**: `docker compose build --pull`, all of them at once, as `make life-up` would.
 5. **Playwright**: `npm ci` and `npx playwright install --with-deps chromium firefox`, so the voice test records in Firefox too.
 6. **The smokes**, each on a stack of its own that it removes when it ends: `make life-smoke`, `tools/smoke-e2e`, `make verify-clean-db`, `tools/smoke-action-idempotency`, `tools/smoke-gateway-recreate`, and `tools/smoke-voice-lease-recovery` (the real whisper.cpp). Every smoke runs, even after another one failed.
 7. **The browser suite**: `tools/browser-e2e --grep-invert @codex`, Chromium and Firefox, with Playwright's two workers.
@@ -112,7 +112,7 @@ Measured in two green runs on 9 and 10 November 2026, with the Whisper model in 
 | Part | Time |
 | --- | --- |
 | Setup, the `.env`, the Whisper model | under 10 s (without the cache, the download takes about 5 s and saving it 4 s) |
-| `docker compose build` | 6.5 to 10 min. whisper.cpp's compile (`-j2`) finishes last; the 18 Go builds and the Dashboard's `npm ci` share the 4 CPUs with it |
+| `docker compose build --pull` | 6.5 to 10 min. whisper.cpp's compile (`-j2`) finishes last; the 18 Go builds and the Dashboard's `npm ci` share the 4 CPUs with it |
 | `npm ci` and Playwright's browsers | under 1 min |
 | The smokes | about 4 min: `make life-smoke` 20 s, `tools/smoke-e2e`, `make verify-clean-db`, and `tools/smoke-action-idempotency` about 25 s each, `tools/smoke-gateway-recreate` 40 s, `tools/smoke-voice-lease-recovery` 2 min |
 | The browser suite | 3 to 4 min: 114 tests pass and 30 skip, 2.7 to 3.8 min of it Playwright's |
@@ -129,7 +129,7 @@ mkdir -p /tmp/whisper-models && curl -fL -o /tmp/whisper-models/ggml-small.bin \
   https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin
 export LIFE_OS_WHISPER_MODELS_DIR=/tmp/whisper-models \
   LIFE_OS_VERIFY_OVERLAYS=tools/fixtures/whisper-models.compose.yaml
-docker compose build
+docker compose build --pull
 npm ci --prefix apps/dashboard && (cd apps/dashboard && npx playwright install --with-deps chromium firefox)
 make life-smoke && tools/smoke-e2e && make verify-clean-db && tools/smoke-action-idempotency \
   && tools/smoke-gateway-recreate && tools/smoke-voice-lease-recovery
@@ -140,7 +140,7 @@ Without `LIFE_OS_VERIFY_OVERLAYS`, Whisper downloads the model itself at each st
 
 ### Not cached: the images
 
-The images are built from scratch in every run. The Go services' Dockerfiles copy the whole repository before `go build`, so any commit changes that layer and a build cache (buildx with `type=gha`) could reuse none of their work. It could reuse only whisper.cpp's build and the Dashboard's `npm ci`, a few minutes of the build, at the cost of a second builder, loading every image into Docker, and a whisper.cpp kept at whatever version the cache first saw (its Dockerfile clones the newest one).
+The images are built from scratch in every run. The Go services' Dockerfiles copy the whole repository before `go build`, so any commit changes that layer and a build cache (buildx with `type=gha`) could reuse none of their work. It could reuse only whisper.cpp's build and the Dashboard's `npm ci`, a few minutes of the build, at the cost of a second builder and of loading every image into Docker.
 
 ## govulncheck
 
@@ -221,9 +221,14 @@ Don't delete or force-push the branch. To remove a signature recorded by mistake
 
 - **Go modules** in `pkg/`, every `services/*` and `templates/*` module, and `tools/fixtures/documents`.
 - **npm** in `apps/dashboard`.
-- **Docker base images** of every Dockerfile (`apps/dashboard`, `services/*`, `services/voice/whisper`, `templates/*`). The images in `compose.yaml` are not covered; change those by hand.
+- **Docker base images** of every Dockerfile (`apps/dashboard`, `services/*`, `services/voice/whisper`, `templates/*`).
+- **Docker Compose images**: PostgreSQL, the gateway's nginx, cloudflared, ntfy, and migrate in `compose.yaml` (the `${VAR:-default}` defaults too), and the browser tests' fixture nginx in `tools/fixtures`.
 - **GitHub Actions** in the workflows: the pinned SHA and its version comment together.
 
-Minor and patch updates of an ecosystem come as one grouped pull request, and a major update as a pull request of its own. All action updates come as one pull request. At most 5 pull requests are open at once for Go and npm, and 3 for Docker and Actions.
+Each ecosystem's updates come as one grouped pull request a week; all action updates come as one pull request. At most 5 pull requests are open at once for Go and npm, and 3 for Docker, Docker Compose, and Actions.
+
+**No major versions (the owner's decision, 2026-11-10).** Every ecosystem ignores semver-major version updates: a major upgrade (Node 24, PostgreSQL 19, a new Go module major) is a ticket of its own, done on purpose. Security updates still come, majors included, as Dependabot security pull requests. Calendar-versioned images move a "major" at the turn of the year (cloudflared 2026.x to 2027.x), so that update is done by hand too. The gateway's nginx stays on its stable branch: Dependabot refreshes `1.30-alpine` but proposes no newer minor (1.31 is nginx's mainline); moving to the next stable branch (1.32) is a ticket as well.
+
+**Images are pinned by digest** (`name:tag@sha256:…`, the multi-platform index): every Dockerfile's `FROM` and every image in `compose.yaml`. A build or deployment therefore uses exactly the image the repository names, and when upstream rebuilds a tag (an Alpine or OpenSSL fix under the same `nginx:1.30-alpine`), Dependabot's pull request moves the digest, and CI tests it before it reaches the server. Builds add `--pull` (`docker compose build --pull`, the Makefile, CI), so an image named by tag alone, such as `LIFE_OS_POSTGRES_IMAGE` set in `.env`, is fetched fresh rather than taken from an old local copy. Two places Dependabot does not edit, kept equal by hand: `services/backup/Dockerfile`'s `POSTGRES_IMAGE` default (compose passes its own) and the integration job's PostgreSQL in `ci.yml`. A Dependabot pull request that moves PostgreSQL fails that job's first step until `services.postgres.image` in `ci.yml` is changed to match on its branch.
 
 CI checks each Dependabot pull request like any other. To take one, merge it locally as usual, or close it.

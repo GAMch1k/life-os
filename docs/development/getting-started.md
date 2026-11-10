@@ -9,7 +9,7 @@ make verify-isolation
 make check
 ```
 
-`make life-up` builds/starts all containers on a host where Life OS is not deployed yet; once it is, it refuses (`CONFIRM=life-up` overrides), and services are redeployed one at a time with `docker compose build <service>` and `docker compose up -d --no-build --no-deps <service>`. `make infra-down` preserves data; `make infra-reset` removes persistent Compose volumes, is destructive, and refuses without `CONFIRM=infra-reset`. Use `docker compose ps` and `docker compose logs <service>` for diagnosis.
+`make life-up` builds/starts all containers on a host where Life OS is not deployed yet; once it is, it refuses (`CONFIRM=life-up` overrides), and services are redeployed one at a time with `docker compose build --pull <service>` and `docker compose up -d --no-build --no-deps <service>`. `make infra-down` preserves data; `make infra-reset` removes persistent Compose volumes, is destructive, and refuses without `CONFIRM=infra-reset`. Use `docker compose ps` and `docker compose logs <service>` for diagnosis.
 
 `make life-smoke` runs the core-service and Dashboard smokes on the disposable `lifeos-verify` stack, from the images already built, and writes its few records there, never to the running stack. Like every `tools/` script, it sends `X-Life-OS-Actor: dev:<script>`, so the Event Log shows them as a developer tool, never as the owner. Any write a development tool or agent makes against live data must do the same; see [Development tools and live data](../../CONTRIBUTING.md#development-tools-and-live-data).
 

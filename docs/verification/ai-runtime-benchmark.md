@@ -116,7 +116,7 @@ All failures in every profile were safe: Human Review, or no action. None change
 To re-run the benchmark, for example when a new model appears:
 
 ```sh
-docker compose build processor
+docker compose build --pull processor
 LIFE_OS_BENCHMARK_DIR=/tmp/ai-benchmark ./tools/benchmark-ai-runtime gpt-6-luna/low gpt-5.6-luna/medium
 ```
 

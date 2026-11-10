@@ -22,7 +22,7 @@ The release that adds [calendar-feeds](../services/calendar-feeds.md) moves the 
    ```sh
    docker compose up -d --no-build --no-deps postgres
    make db-provision
-   docker compose build calendar calendar-feeds calendar-feeds-handoff dashboard
+   docker compose build --pull calendar calendar-feeds calendar-feeds-handoff dashboard
    docker compose run --rm calendar-migrate
    docker compose run --rm calendar-feeds-migrate
    ```
