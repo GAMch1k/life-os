@@ -156,6 +156,21 @@ test("with Claude Code, Status names Claude Code, not Codex", () => {
   assert.ok(value("Last Claude Code success"));
   assert.equal(value("Claude Code run now"), "none");
   assert.equal(value("Claude Code plan"), "Claude subscription token");
+  // An Anthropic API key, chosen in setup instead of the plan.
+  assert.equal(
+    usageFacts(
+      {
+        current: {
+          checkedAt: "2026-10-09T17:59:00Z",
+          authMode: "api_key",
+          limits: [],
+        },
+      },
+      "UTC",
+      "Claude Code",
+    )[0].value,
+    "Anthropic API key",
+  );
   assert.match(value("Claude session 5-hour usage")!, /^100% used, resets/);
   assert.equal(value("Claude weekly usage"), "63% used");
 

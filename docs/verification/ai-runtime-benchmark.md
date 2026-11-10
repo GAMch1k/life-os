@@ -133,7 +133,7 @@ The same benchmark runs Claude Code with `claude:<model>/<effort>` profiles: `cl
 Before a run:
 
 - The subscription token in `LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN`, in `.env` or the environment ([SETUP → Claude Code instead of Codex](../../SETUP.md#claude-code-instead-of-codex)). The tool refuses a `claude:` profile without it and never prints it.
-- A `.env` the verification stack can start with (the database settings and `LIFE_OS_CODEX_RUNTIME_UID`; `LIFE_OS_CODEX_HOME_HOST_PATH` is not needed for Claude Code), and the images built: `docker compose build` on a host without them, `docker compose build processor` after a processor change. The tool starts the stack with `--no-build`.
+- A `.env` the verification stack can start with (the database settings and `LIFE_OS_CODEX_RUNTIME_UID`; `LIFE_OS_CODEX_HOME_HOST_PATH` is not needed for Claude Code), and the images built: `docker compose build` on a host without them, `docker compose build processor` after a processor change. For `claude:` profiles the processor image needs Claude Code, which it has only with `LIFE_OS_AI_PROVIDERS=codex,claude` in `.env` (the default is `codex`). The tool starts the stack with `--no-build`.
 - GNU tools: bash 4 or later, GNU `date`, and GNU `realpath` (for `tools/verify-compose`). On macOS: `brew install bash coreutils` and `PATH="$(brew --prefix coreutils)/libexec/gnubin:$PATH"`; the tool names what is missing and stops.
 
 ```sh

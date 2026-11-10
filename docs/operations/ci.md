@@ -234,8 +234,8 @@ Don't delete or force-push the branch. To remove a signature recorded by mistake
 `.github/dependabot.yml` asks for version updates every Monday at 06:00 (Europe/Berlin). Dependabot reads it from master, so it starts once the file is merged there:
 
 - **Go modules** in `pkg/`, every `services/*` and `templates/*` module, and `tools/fixtures/documents`.
-- **npm** in `apps/dashboard`.
-- **Docker base images** of every Dockerfile (`apps/dashboard`, `infra/*`: the gateway's nginx, the provisioning's and the migrations' Alpine and Go, `services/*`, `services/voice/whisper`, `templates/*`).
+- **npm** in `apps/dashboard`, and `services/mcp/claude-code`: the Claude Code version and integrity that a source build with `LIFE_OS_AI_PROVIDERS=codex,claude` and a release's `./setup.sh claude` install (never the published images), a pull request of its own.
+- **Docker base images** of every Dockerfile (`apps/dashboard`, `infra/*`: the gateway's nginx, the provisioning's and the migrations' Alpine and Go, `services/*`, `services/mcp/claude-code`, `services/voice/whisper`, `templates/*`). `services/mcp/claude-code/Dockerfile` must use the processor's Node.js image (`tools/build-install-bundle --check` fails otherwise); both move in the one grouped pull request.
 - **Docker Compose images**: PostgreSQL, cloudflared, and ntfy in `compose.yaml` (the `${VAR:-default}` defaults too), and the browser tests' fixture nginx in `tools/fixtures`.
 - **GitHub Actions** in the workflows and in the composite action `.github/actions/full-stack`: the pinned SHA and its version comment together.
 

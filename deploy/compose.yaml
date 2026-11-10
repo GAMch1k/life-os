@@ -670,7 +670,7 @@ services:
     restart: unless-stopped
 
   processor:
-    image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-processor:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
+    image: ${LIFE_OS_PROCESSOR_IMAGE:-${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-processor:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}}
     environment:
       MCP_SERVICE_URL: http://mcp:8080/mcp
       INBOX_SERVICE_URL: http://inbox:8080
@@ -681,6 +681,7 @@ services:
       LIFE_OS_CLAUDE_MODEL: ${LIFE_OS_CLAUDE_MODEL:-sonnet}
       LIFE_OS_CLAUDE_EFFORT: ${LIFE_OS_CLAUDE_EFFORT:-}
       CLAUDE_CODE_OAUTH_TOKEN: ${LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN:-}
+      LIFE_OS_ANTHROPIC_API_KEY: ${LIFE_OS_ANTHROPIC_API_KEY:-}
       LIFE_OS_PROCESSOR_POLL_MILLIS: ${LIFE_OS_PROCESSOR_POLL_MILLIS:-1000}
       INBOX_CONTEXT_MINUTES: ${LIFE_OS_INBOX_CONTEXT_MINUTES:-20}
       LIFE_OS_PROCESSOR_HEALTH_PORT: 8081

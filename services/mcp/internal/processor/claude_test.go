@@ -324,28 +324,46 @@ exit 1`)
 	}
 }
 
-func TestClaudeRunsGetASanitizedSubscriptionEnvironment(t *testing.T) {
+// claudeRunEnv runs one Plan with the fake CLI and returns the environment
+// the run got.
+func claudeRunEnv(t *testing.T, cli ClaudeCLI) string {
+	t.Helper()
 	dir := t.TempDir()
 	envFile := filepath.Join(dir, "env")
+	cli.Command = fakeClaude(t, `cat >/dev/null
+env > `+envFile+`
+echo '{"type":"result","subtype":"success","is_error":false,"result":"{}"}'`)
+	cli.WorkDir = dir
+	if _, err := cli.Plan(context.Background(), "x"); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(envFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+// setClaudeProcessEnv is the processor's environment with every credential a
+// run could pick up, the plan's token included.
+func setClaudeProcessEnv(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-api-should-not-leak")
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "auth-token-should-not-leak")
 	t.Setenv("ANTHROPIC_BASE_URL", "https://proxy.invalid")
 	t.Setenv("OPENAI_API_KEY", "sk-should-not-leak")
 	t.Setenv("LIFE_OS_FINANCE_DB_PASSWORD", "secret")
 	t.Setenv("LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN", "the-env-file-name-is-not-passed")
+	t.Setenv("LIFE_OS_ANTHROPIC_API_KEY", "the-env-file-name-is-not-passed-either")
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-subscription")
 	t.Setenv("CLAUDE_CONFIG_DIR", "/tmp/lifeos-claude/.claude")
 	t.Setenv("HOME", "/tmp/lifeos-claude")
-	claude := fakeClaude(t, `cat >/dev/null
-env > `+envFile+`
-echo '{"type":"result","subtype":"success","is_error":false,"result":"{}"}'`)
+}
+
+func TestClaudeRunsGetASanitizedSubscriptionEnvironment(t *testing.T) {
+	setClaudeProcessEnv(t)
 	berlin, _ := time.LoadLocation("Europe/Berlin")
-	if _, err := (ClaudeCLI{Command: claude, WorkDir: dir, TimeZone: berlin}).Plan(context.Background(), "x"); err != nil {
-		t.Fatal(err)
-	}
-	raw, _ := os.ReadFile(envFile)
-	env := string(raw)
-	for _, leaked := range []string{"ANTHROPIC_", "should-not-leak", "proxy.invalid", "LIFE_OS_"} {
+	env := claudeRunEnv(t, ClaudeCLI{TimeZone: berlin})
+	for _, leaked := range []string{"ANTHROPIC_", "should-not-leak", "proxy.invalid", "LIFE_OS_", "not-passed"} {
 		if strings.Contains(env, leaked) {
 			t.Fatalf("leaked %q:\n%s", leaked, env)
 		}
@@ -359,39 +377,103 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"{}"}'`)
 	// The ANTHROPIC_ prefix is refused even if it were ever allowlisted.
 	claudeAllowedEnv["ANTHROPIC_API_KEY"] = true
 	defer delete(claudeAllowedEnv, "ANTHROPIC_API_KEY")
-	for _, entry := range claudeEnv([]string{"ANTHROPIC_API_KEY=sk", "PATH=/bin"}, nil) {
+	for _, entry := range claudeEnv([]string{"ANTHROPIC_API_KEY=sk", "PATH=/bin"}, nil, "") {
 		if strings.HasPrefix(entry, "ANTHROPIC_") {
 			t.Fatalf("claudeEnv passed %q", entry)
 		}
 	}
 }
 
-func TestClaudeLoggedInNeedsASubscriptionSignIn(t *testing.T) {
+func TestClaudeRunsWithAnAPIKeyGetThatKeyAndNotThePlansToken(t *testing.T) {
+	setClaudeProcessEnv(t)
+	env := claudeRunEnv(t, ClaudeCLI{APIKey: "sk-ant-api03-the-chosen-key"})
+	lines := strings.Split(strings.TrimSpace(env), "\n")
+	var keys []string
+	for _, line := range lines {
+		if strings.HasPrefix(line, "ANTHROPIC_") {
+			keys = append(keys, line)
+		}
+	}
+	// The configured key alone: not the processor's own ANTHROPIC_*, and
+	// not the plan's token.
+	if len(keys) != 1 || keys[0] != "ANTHROPIC_API_KEY=sk-ant-api03-the-chosen-key" {
+		t.Fatalf("ANTHROPIC_* = %q:\n%s", keys, env)
+	}
+	for _, leaked := range []string{"CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01", "should-not-leak", "proxy.invalid", "LIFE_OS_"} {
+		if strings.Contains(env, leaked) {
+			t.Fatalf("leaked %q:\n%s", leaked, env)
+		}
+	}
+	// Every other hardening stays.
+	for _, want := range []string{"HOME=/tmp/lifeos-claude", "DISABLE_AUTOUPDATER=1", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1", "DISABLE_TELEMETRY=1", "DISABLE_ERROR_REPORTING=1", "CLAUDE_CODE_DISABLE_CLAUDE_MDS=1"} {
+		if !strings.Contains(env, want) {
+			t.Fatalf("missing %q:\n%s", want, env)
+		}
+	}
+	dir := t.TempDir()
+	claude := recordingClaude(t, dir)
+	if _, err := (ClaudeCLI{Command: claude, WorkDir: dir, APIKey: "sk-ant-api03-the-chosen-key"}).Plan(context.Background(), "x"); err != nil {
+		t.Fatal(err)
+	}
+	args := recordedArgs(t, dir)
+	for _, want := range []string{"--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence"} {
+		if !hasArg(args, want) {
+			t.Fatalf("an API-key run lacks %s: %q", want, args)
+		}
+	}
+	if tools, ok := flagValue(args, "--tools"); !ok || tools != "" {
+		t.Fatalf("an API-key run has tools %q", tools)
+	}
+	if sources, ok := flagValue(args, "--setting-sources"); !ok || sources != "" {
+		t.Fatalf("an API-key run reads settings %q", sources)
+	}
+}
+
+func TestClaudeRunsWithoutASignInGetNoCredential(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-api-should-not-leak")
+	t.Setenv("LIFE_OS_ANTHROPIC_API_KEY", "")
+	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
+	env := claudeRunEnv(t, ClaudeCLI{})
+	for _, leaked := range []string{"ANTHROPIC_", "should-not-leak", "CLAUDE_CODE_OAUTH_TOKEN=sk"} {
+		if strings.Contains(env, leaked) {
+			t.Fatalf("leaked %q:\n%s", leaked, env)
+		}
+	}
+}
+
+func TestClaudeLoggedInNeedsTheChosenSignIn(t *testing.T) {
 	dir := t.TempDir()
 	for _, tc := range []struct {
-		status string
-		exit   int
-		want   bool
+		status    string
+		exit      int
+		plan, key bool
 	}{
-		{`{"loggedIn":true,"authMethod":"oauth_token"}`, 0, true},
-		{`{"loggedIn":true,"authMethod":"claude.ai"}`, 0, true},
-		{`{"loggedIn":true,"authMethod":"api_key","apiKeySource":"ANTHROPIC_API_KEY"}`, 0, false},
-		{`{"loggedIn":false,"authMethod":"none"}`, 1, false},
-		{`not json`, 0, false},
+		{`{"loggedIn":true,"authMethod":"oauth_token"}`, 0, true, false},
+		{`{"loggedIn":true,"authMethod":"claude.ai"}`, 0, true, false},
+		{`{"loggedIn":true,"authMethod":"api_key","apiKeySource":"ANTHROPIC_API_KEY"}`, 0, false, true},
+		{`{"loggedIn":false,"authMethod":"api_key"}`, 0, false, false},
+		{`{"loggedIn":false,"authMethod":"none"}`, 1, false, false},
+		{`not json`, 0, false, false},
 	} {
 		claude := fakeClaude(t, `printf '%s\n' "$@" > `+dir+`/args
 echo '`+tc.status+`'
 exit `+string(rune('0'+tc.exit)))
-		limits := &ClaudeLimits{}
-		if got := (ClaudeCLI{Command: claude, WorkDir: dir, Limits: limits}).LoggedIn(context.Background()); got != tc.want {
-			t.Fatalf("%s: LoggedIn = %v", tc.status, got)
-		}
-		if args := recordedArgs(t, dir); strings.Join(args, " ") != "auth status --json" {
-			t.Fatalf("args = %q", args)
-		}
-		if tc.want {
-			if usage, _ := (ClaudeCLI{Limits: limits}).Usage(context.Background()); usage.AuthMode == "" {
-				t.Fatal("the sign-in method is not reported with the usage")
+		for _, apiKey := range []string{"", "sk-ant-api03-key"} {
+			want := tc.plan
+			if apiKey != "" {
+				want = tc.key
+			}
+			limits := &ClaudeLimits{}
+			if got := (ClaudeCLI{Command: claude, WorkDir: dir, Limits: limits, APIKey: apiKey}).LoggedIn(context.Background()); got != want {
+				t.Fatalf("%s (API key %v): LoggedIn = %v", tc.status, apiKey != "", got)
+			}
+			if args := recordedArgs(t, dir); strings.Join(args, " ") != "auth status --json" {
+				t.Fatalf("args = %q", args)
+			}
+			if want {
+				if usage, _ := (ClaudeCLI{Limits: limits}).Usage(context.Background()); usage.AuthMode == "" {
+					t.Fatal("the sign-in method is not reported with the usage")
+				}
 			}
 		}
 	}
@@ -472,5 +554,41 @@ func TestLoadConfigSelectsTheProvider(t *testing.T) {
 	t.Setenv("LIFE_OS_AI_PROVIDER", "gemini")
 	if _, err := LoadConfig(); err == nil || !strings.Contains(err.Error(), "LIFE_OS_AI_PROVIDER") {
 		t.Fatalf("bad provider: err = %v", err)
+	}
+	// Upper case and spaces are the same provider, as in the entrypoint.
+	t.Setenv("LIFE_OS_AI_PROVIDER", " Claude ")
+	t.Setenv("LIFE_OS_CLAUDE_EFFORT", "")
+	if cfg, err := LoadConfig(); err != nil || cfg.Provider != ProviderClaude {
+		t.Fatalf("Claude: cfg = %+v, err = %v", cfg, err)
+	}
+}
+
+func TestLoadConfigChoosesClaudesSignIn(t *testing.T) {
+	t.Setenv("LIFE_OS_AI_PROVIDER", "claude")
+	for _, tc := range []struct {
+		name, token, key, auth, apiKey, err string
+	}{
+		{name: "neither: the plan, as a local claude.ai login", auth: ClaudeAuthPlan},
+		{name: "the plan's token", token: "sk-ant-oat01-plan", auth: ClaudeAuthPlan},
+		{name: "an API key", key: " sk-ant-api03-key ", auth: ClaudeAuthAPIKey, apiKey: "sk-ant-api03-key"},
+		{name: "both", token: "sk-ant-oat01-plan", key: "sk-ant-api03-key", err: "both set"},
+	} {
+		t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", tc.token)
+		t.Setenv("LIFE_OS_ANTHROPIC_API_KEY", tc.key)
+		cfg, err := LoadConfig()
+		if tc.err != "" {
+			if err == nil || !strings.Contains(err.Error(), tc.err) || strings.Contains(err.Error(), "sk-ant") {
+				t.Fatalf("%s: err = %v", tc.name, err)
+			}
+			continue
+		}
+		if err != nil || cfg.ClaudeAuth != tc.auth || cfg.AnthropicAPIKey != tc.apiKey {
+			t.Fatalf("%s: auth %q, key %q, err = %v", tc.name, cfg.ClaudeAuth, cfg.AnthropicAPIKey, err)
+		}
+	}
+	// Codex ignores Claude's credentials.
+	t.Setenv("LIFE_OS_AI_PROVIDER", "codex")
+	if cfg, err := LoadConfig(); err != nil || cfg.ClaudeAuth != "" || cfg.AnthropicAPIKey != "" {
+		t.Fatalf("codex: auth %q, err = %v", cfg.ClaudeAuth, err)
 	}
 }

@@ -7,6 +7,8 @@
                                              "<local image> <published name>" a line
   tools/build-install-bundle --assets DIR --version vX.Y.Z [--allow-missing-setup]
                                              the release's assets in DIR
+  tools/build-install-bundle --setup-script [--version vX.Y.Z]
+                                             the release's setup.sh, on stdout
 
 deploy/compose.yaml is the repository's compose.yaml for a server without a
 checkout: every service that compose.yaml builds runs the released image
@@ -16,6 +18,8 @@ names it lifeos-<name> in their image:), that image's. Otherwise it changes
 only what a service's x-install-bundle says, next to what it changes:
 
   x-install-bundle:
+    image-variable: LIFE_OS_PROCESSOR_IMAGE       the image is ${NAME:-<released image>}
+                                                  (a built service only)
     omit-volumes: [/srv/android]                  the mounts at these targets go
     writable-volumes: [/run/lifeos-codex-source]  these mounts lose read_only
     volume-sources: {/run/lifeos-codex-source: "$${NAME:?...}"}
@@ -34,7 +38,13 @@ release's version, setup.sh with its version placeholder set to it too, and
 SHA256SUMS over them. A dry run may go without
 setup.sh (--allow-missing-setup); a release may not.
 
-Needs Python 3 with PyYAML (python3-yaml).
+setup.sh also carries the build of the local Claude Code image (./setup.sh
+claude; the published images never contain Claude Code): the files of
+services/mcp/claude-code, written into its claude_build_files in place of the
+placeholder line, so the release adds no asset for them. Their Node.js image
+must be the processor's own (services/mcp/Dockerfile); --check checks it too.
+
+Needs Python 3, with PyYAML (python3-yaml) for everything but --setup-script.
 """
 
 import argparse
@@ -44,10 +54,18 @@ import os
 import re
 import sys
 
-try:
-    import yaml
-except ImportError:
-    sys.exit("build-install-bundle: PyYAML is required (apt install python3-yaml, or pip install pyyaml)")
+yaml = None
+
+
+def require_yaml():
+    global yaml
+    if yaml is None:
+        try:
+            import yaml as module
+        except ImportError:
+            sys.exit("build-install-bundle: PyYAML is required (apt install python3-yaml, or pip install pyyaml)")
+        yaml = module
+    return yaml
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SOURCE = "compose.yaml"
@@ -55,6 +73,12 @@ TARGET = "deploy/compose.yaml"
 # setup.sh writes .env from .env.example (P20-03); the bundle ships both.
 SETUP_SCRIPT = "setup.sh"
 ENV_EXAMPLE = ".env.example"
+# The local Claude Code build that setup.sh carries (./setup.sh claude).
+CLAUDE_CODE_DIR = "services/mcp/claude-code"
+CLAUDE_CODE_FILES = ("Dockerfile", "install.sh", "package.json", "package-lock.json")
+CLAUDE_CODE_PLACEHOLDER = "  : __LIFE_OS_CLAUDE_CODE_FILES__\n  return 1\n"
+CLAUDE_CODE_DELIMITER = "LIFE_OS_CLAUDE_CODE_FILE"
+PROCESSOR_DOCKERFILE = "services/mcp/Dockerfile"
 
 REGISTRY = "${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}"
 VERSION = "${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}"
@@ -95,7 +119,7 @@ def volume_target(volume):
 def apply_bundle_overrides(service, spec):
     """The service as the release bundle runs it: its x-install-bundle applied, and dropped."""
     overrides = spec.pop(BUNDLE_KEY, None) or {}
-    unknown = set(overrides) - {"omit-volumes", "writable-volumes", "volume-sources", "environment"}
+    unknown = set(overrides) - {"image-variable", "omit-volumes", "writable-volumes", "volume-sources", "environment"}
     if unknown:
         raise BundleError(f"service {service}: {BUNDLE_KEY} has unknown keys: {', '.join(sorted(unknown))}")
     volumes = [dict(v) if isinstance(v, dict) else v for v in spec.get("volumes") or []]
@@ -129,7 +153,7 @@ def apply_bundle_overrides(service, spec):
 
 def load_compose():
     with open(os.path.join(REPO_ROOT, SOURCE), encoding="utf-8") as source:
-        return yaml.safe_load(source)
+        return require_yaml().safe_load(source)
 
 
 def image_names(compose):
@@ -178,7 +202,13 @@ def install_compose(compose):
     names = image_names(compose)
     problems = []
     services = {}
+    image_variables = {}
     for service, spec in compose["services"].items():
+        variable = (spec.get(BUNDLE_KEY) or {}).get("image-variable")
+        if variable is not None:
+            if service not in names or not re.match(r"^[A-Z][A-Z0-9_]*$", str(variable)):
+                raise BundleError(f"service {service}: {BUNDLE_KEY} image-variable needs a built service and a variable name, not {variable!r}")
+            image_variables[service] = variable
         spec = apply_bundle_overrides(service, dict(spec))
         services[service] = spec
         for source in repository_binds(spec):
@@ -200,6 +230,8 @@ def install_compose(compose):
         if service in names:
             del spec["build"]
             published = f"{REGISTRY}/{names[service][1]}:{VERSION}"
+            if service in image_variables:
+                published = f"${{{image_variables[service]}:-{published}}}"
             # image: first, where build: was, so the file reads the same way.
             spec = {"image": published, **{key: value for key, value in spec.items() if key != "image"}}
         services[service] = spec
@@ -209,6 +241,8 @@ def install_compose(compose):
 
 
 def render(bundle):
+    yaml = require_yaml()
+
     class Dumper(yaml.SafeDumper):
         # Block sequences indented under their key, as compose.yaml writes them.
         def increase_indent(self, flow=False, indentless=False):
@@ -246,6 +280,49 @@ def sha256(path):
     return digest.hexdigest()
 
 
+NODE_IMAGE = re.compile(r"(?m)^FROM (node:\S+@sha256:[0-9a-f]{64})")
+
+
+def claude_code_files():
+    """{name: content} of the local Claude Code build that setup.sh carries."""
+    files = {}
+    for name in CLAUDE_CODE_FILES:
+        with open(os.path.join(REPO_ROOT, CLAUDE_CODE_DIR, name), encoding="utf-8") as source:
+            content = source.read()
+        if not content.endswith("\n") or f"\n{CLAUDE_CODE_DELIMITER}\n" in "\n" + content:
+            raise BundleError(f"{CLAUDE_CODE_DIR}/{name} must end in a newline and not have the line {CLAUDE_CODE_DELIMITER}")
+        files[name] = content
+    with open(os.path.join(REPO_ROOT, PROCESSOR_DOCKERFILE), encoding="utf-8") as source:
+        processor = set(NODE_IMAGE.findall(source.read()))
+    local = set(NODE_IMAGE.findall(files["Dockerfile"]))
+    if len(processor) != 1 or local != processor:
+        raise BundleError(
+            f"{CLAUDE_CODE_DIR}/Dockerfile must build Claude Code on the processor's own Node.js image "
+            f"({', '.join(sorted(processor)) or 'none found'} in {PROCESSOR_DOCKERFILE}), not {', '.join(sorted(local)) or 'none'}"
+        )
+    return files
+
+
+def setup_script(version=None):
+    """setup.sh as a release ships it: the local Claude Code build written into
+    it, and, with a version, its version placeholder set to it."""
+    with open(os.path.join(REPO_ROOT, SETUP_SCRIPT), encoding="utf-8") as source:
+        script = source.read()
+    if script.count(CLAUDE_CODE_PLACEHOLDER) != 1:
+        raise BundleError(f"{SETUP_SCRIPT} must have its claude_build_files placeholder once")
+    files = "".join(
+        f"  cat >\"$1/{name}\" <<'{CLAUDE_CODE_DELIMITER}'\n{content}{CLAUDE_CODE_DELIMITER}\n"
+        for name, content in claude_code_files().items()
+    )
+    script = script.replace(CLAUDE_CODE_PLACEHOLDER, files + "  return 0\n")
+    if version is not None:
+        # setup.sh's own record of its release (else it reads .env.example's).
+        script, count = re.subn(r"(?m)^release_version='__LIFE_OS_VERSION__'$", f"release_version='{version}'", script)
+        if count != 1:
+            raise BundleError(f"{SETUP_SCRIPT} must have the line release_version='__LIFE_OS_VERSION__' once (found {count})")
+    return script
+
+
 def write_assets(directory, version, rendered, allow_missing_setup):
     if not VERSION_PATTERN.match(version):
         raise BundleError(f"version {version!r} is not a release version such as v0.1.0 or v0.1.0-preview.1")
@@ -266,12 +343,7 @@ def write_assets(directory, version, rendered, allow_missing_setup):
         out.write(stamped)
     files = ["compose.yaml", ".env.example"]
     if has_setup:
-        with open(setup, encoding="utf-8") as source:
-            script = source.read()
-        # setup.sh's own record of its release (else it reads .env.example's).
-        script, count = re.subn(r"(?m)^release_version='__LIFE_OS_VERSION__'$", f"release_version='{version}'", script)
-        if count != 1:
-            raise BundleError(f"{SETUP_SCRIPT} must have the line release_version='__LIFE_OS_VERSION__' once (found {count})")
+        script = setup_script(version)
         with open(os.path.join(directory, "setup.sh"), "w", encoding="utf-8") as out:
             out.write(script)
         os.chmod(os.path.join(directory, "setup.sh"), 0o755)
@@ -292,9 +364,19 @@ def main():
     mode.add_argument("--check", action="store_true", help="fail when deploy/compose.yaml is stale")
     mode.add_argument("--images", action="store_true", help="list the images a release publishes")
     mode.add_argument("--assets", metavar="DIR", help="write the release's assets into DIR")
+    mode.add_argument("--setup-script", action="store_true", help="print the release's setup.sh (with --version: stamped with it)")
     parser.add_argument("--version", help="the release's version, such as v0.1.0-preview.1 (with --assets)")
     parser.add_argument("--allow-missing-setup", action="store_true", help="assets without setup.sh (a dry run)")
     args = parser.parse_args()
+    if args.setup_script:
+        if args.version is not None and not VERSION_PATTERN.match(args.version):
+            parser.error(f"version {args.version!r} is not a release version such as v0.1.0 or v0.1.0-preview.1")
+        try:
+            sys.stdout.write(setup_script(args.version))
+        except BundleError as error:
+            print(f"build-install-bundle: {error}", file=sys.stderr)
+            return 1
+        return 0
     if bool(args.assets) != bool(args.version):
         parser.error("--assets and --version go together")
 
@@ -307,6 +389,8 @@ def main():
         rendered = render(install_compose(compose))
         target = os.path.join(REPO_ROOT, TARGET)
         if args.check:
+            # The release's setup.sh, with the Claude Code build written in.
+            setup_script()
             try:
                 with open(target, encoding="utf-8") as current_file:
                     current = current_file.read()

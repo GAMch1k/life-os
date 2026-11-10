@@ -64,6 +64,13 @@ type Config struct {
 	// the owner's earlier captures and what was done for them
 	// (INBOX_CONTEXT_MINUTES, default 20, at most 120; 0 turns it off).
 	ContextMinutes int
+	// ClaudeAuth is how Claude Code signs in: ClaudeAuthPlan, the default (the
+	// Claude plan's token, CLAUDE_CODE_OAUTH_TOKEN, or locally a claude.ai
+	// login), or ClaudeAuthAPIKey (LIFE_OS_ANTHROPIC_API_KEY, kept in
+	// AnthropicAPIKey). Never both: LoadConfig refuses the two credentials
+	// together.
+	ClaudeAuth      string
+	AnthropicAPIKey string
 	// Warnings are non-fatal configuration problems to log at startup.
 	Warnings []string
 }
@@ -116,6 +123,15 @@ func LoadConfig() (Config, error) {
 		}
 		if c.ClaudeCommand == "" {
 			return c, fmt.Errorf("LIFE_OS_CLAUDE_COMMAND must not be empty")
+		}
+		token, key := strings.TrimSpace(os.Getenv("CLAUDE_CODE_OAUTH_TOKEN")), strings.TrimSpace(os.Getenv("LIFE_OS_ANTHROPIC_API_KEY"))
+		switch {
+		case token != "" && key != "":
+			return c, fmt.Errorf("LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN (your Claude plan) and LIFE_OS_ANTHROPIC_API_KEY (an Anthropic API key, billed per use) are both set: Claude Code signs in with one of them, so keep only the one you chose (./setup.sh claude)")
+		case key != "":
+			c.ClaudeAuth, c.AnthropicAPIKey = ClaudeAuthAPIKey, key
+		default:
+			c.ClaudeAuth = ClaudeAuthPlan
 		}
 	default:
 		return c, fmt.Errorf("LIFE_OS_AI_PROVIDER must be codex or claude")

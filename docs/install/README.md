@@ -2,7 +2,7 @@
 
 Life OS is a personal system you run on your own server: tasks, a calendar, an Inbox for quick notes and voice notes, a shopping list and pantry, and your finances, in one web app. An optional AI files what you capture: "dentist on Friday at 10" becomes a calendar event, "buy milk" goes on the shopping list.
 
-This guide installs Life OS from its published Docker images with one setup script. You don't build anything, and you don't need the source code.
+This guide installs Life OS from its published Docker images with one setup script. You don't build anything, and you don't need the source code. (One exception, only if you choose it: AI processing with Claude Code, which the published images do not contain; `./setup.sh claude` adds it to a local copy of the processor image.)
 
 > [!WARNING]
 > **Early preview.** Life OS has no login of its own yet: whoever can open it can read and change everything in it. The setup script keeps it on `127.0.0.1`, so only the server itself can reach it, and you open it through an SSH tunnel, a VPN, or Cloudflare Access ([Access it safely](access.md)). Never expose it straight to the internet. Previews have rough edges and may change between releases, so back up before you update.
@@ -82,7 +82,7 @@ Life OS works without any of them. Each one can be set up during the first `./se
 | Command | What it adds | Guide |
 | --- | --- | --- |
 | `./setup.sh codex` | AI processing of your notes, with your ChatGPT plan | [AI processing](ai-processing.md) |
-| `./setup.sh claude` | Or AI processing with Claude Code and your Claude plan instead | [AI processing](ai-processing.md#claude-code-instead-of-codex) |
+| `./setup.sh claude` | Or AI processing with Claude Code instead, with your Claude plan or an Anthropic API key: downloads Claude Code from Anthropic onto this server | [AI processing](ai-processing.md#claude-code-instead-of-codex) |
 | `./setup.sh whisper` | A different speech-to-text model for voice notes, or one fixed language | [Voice notes](voice.md) |
 | `./setup.sh cloudflare` | Access from anywhere, through Cloudflare Tunnel and Access | [Access it safely](access.md#cloudflare-tunnel-and-access) |
 | `./setup.sh google` | Two-way sync with Google Calendar | [Google Calendar](google-calendar.md) |
@@ -119,7 +119,7 @@ Plain `docker compose` commands work too, from the same directory: `docker compo
 | Whisper | `LIFE_OS_SETUP_WHISPER_MODEL` (`tiny`, `base`, `small`, `medium`, `large-v3-turbo`), `LIFE_OS_WHISPER_LANGUAGE` (`auto`, or a code such as `de`; unset keeps the current one) |
 | Cloudflare | `LIFE_OS_CLOUDFLARE_TUNNEL_TOKEN` and an https `LIFE_OS_PUBLIC_URL` |
 | Google Calendar | `LIFE_OS_GOOGLE_CLIENT_ID`, `LIFE_OS_GOOGLE_CLIENT_SECRET` |
-| AI with Claude Code | `LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) |
+| AI with Claude Code | `LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN` (your Claude plan, from `claude setup-token`) or `LIFE_OS_ANTHROPIC_API_KEY` (an Anthropic API key, billed per use), not both; `LIFE_OS_CLAUDE_MODEL` (`sonnet`, `opus`, `haiku`, or a full model name; unset keeps the current one) |
 | Bank sync | `LIFE_OS_ENABLE_BANKING_APP_ID`, `LIFE_OS_ENABLE_BANKING_KEY_FILE` |
 | ntfy | `LIFE_OS_NTFY_PUBLIC_URL`, `LIFE_OS_SETUP_NTFY_PHONE_PASSWORD` |
 | Phone app push | `LIFE_OS_SETUP_WEBPUSH=on`, and `LIFE_OS_WEBPUSH_SUBJECT` (`mailto:you@example.com`) without an https address |

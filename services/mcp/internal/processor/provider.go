@@ -7,9 +7,17 @@ const (
 	// ProviderCodex runs the OpenAI Codex CLI on the owner's ChatGPT sign-in
 	// (CodexCLI). It is the default.
 	ProviderCodex = "codex"
-	// ProviderClaude runs the Claude Code CLI on the owner's Claude
-	// subscription (ClaudeCLI).
+	// ProviderClaude runs the Claude Code CLI (ClaudeCLI) on the owner's
+	// Claude plan or Anthropic API key (Config.ClaudeAuth).
 	ProviderClaude = "claude"
+)
+
+// How Claude Code signs in (Config.ClaudeAuth), as the owner chose in setup.
+const (
+	// ClaudeAuthPlan is the Claude plan: the token of `claude setup-token`.
+	ClaudeAuthPlan = "plan"
+	// ClaudeAuthAPIKey is an Anthropic API key, billed per use by Anthropic.
+	ClaudeAuthAPIKey = "api_key"
 )
 
 // ProviderName is the provider's name as the owner reads it: on the Status

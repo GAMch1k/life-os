@@ -160,6 +160,15 @@ jobs:
       - uses: ./.github/actions/full-stack
         with:
           node-version: ${{ env.NODE_VERSION }}
+      # The published images never contain Claude Code: users add it on
+      # their own server (docs/operations/releases.md#no-claude-code-in-the-images).
+      - name: Check that the processor image has no Claude Code
+        run: |
+          if docker run --rm --network none --entrypoint sh lifeos-processor -c 'command -v claude || ls -d /usr/local/lib/node_modules/@anthropic-ai'; then
+            echo "::error::lifeos-processor contains Claude Code, which the published images must not (build it with LIFE_OS_AI_PROVIDERS=codex)."
+            exit 1
+          fi
+          echo "lifeos-processor has no Claude Code."
       # Only this throwaway runner's build cache: the tested images stay.
       - name: Drop the build cache
         run: |
@@ -459,7 +468,8 @@ jobs:
           ## In this preview
 
           - Every module runs. The integrations (AI processing with Codex or Claude Code, bank sync, Google Calendar, push through ntfy, the Cloudflare Tunnel) stay off until they are configured in \`.env\`. Switching modules on and off comes in a later preview.
-          - Without a Codex sign-in (or Claude Code's token, with \`./setup.sh claude\`) the AI processor stops at start, and Docker starts it again about once a minute; \`docker compose stop processor\` stops it until AI processing is set up.
+          - The images do not contain Claude Code: the processor image has OpenAI's Codex CLI alone. To use Claude Code instead, \`./setup.sh claude\` downloads it from Anthropic's official npm package onto your server (the version this release pins, checked against its sha512; about 330 MB) and adds it to a local copy of the processor image. It signs in with your own Claude plan (the token of \`claude setup-token\`) or your own Anthropic API key (billed per use by Anthropic), under Anthropic's terms for your account; \`./setup.sh update\` adds it to each new version. See [AI processing](https://github.com/${GH_REPO}/blob/${VERSION}/docs/install/ai-processing.md#claude-code-instead-of-codex).
+          - Without a Codex sign-in (or Claude Code, with \`./setup.sh claude\`) the AI processor stops at start, and Docker starts it again about once a minute; \`docker compose stop processor\` stops it until AI processing is set up.
           - Voice downloads its Whisper model (about 466 MB) on its first start.
           - Server health reads the host: the Docker socket (through a read-only gateway of its own), and \`/\` and Docker's data directory, read-only.
           - ${platforms} only.
