@@ -146,10 +146,25 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Hosted runners differ in free disk space: the dry run got 86 GB free,
+      # v0.1.0-preview.1's run 17 GB, which ran out while Trivy unpacked the
+      # Dashboard image after the build and the tests. So the SDKs this job
+      # never uses go first, and the build cache after the tests.
+      - name: Free disk space on the runner
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/share/swift /usr/local/share/powershell
+          df -h /
       # Exactly CI's full-stack job: these images, tested.
       - uses: ./.github/actions/full-stack
         with:
           node-version: ${{ env.NODE_VERSION }}
+      # Only this throwaway runner's build cache: the tested images stay.
+      - name: Drop the build cache
+        run: |
+          docker builder prune --all --force >/dev/null
+          df -h /
 
       - name: Install Trivy
         env:
