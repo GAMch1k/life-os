@@ -546,8 +546,10 @@ test.describe("Server on Status", () => {
     await expect(card).toContainText(
       "Life OS serviceswhisper 1.9 GiB, postgres 310 MiB, dashboard 180 MiB",
     );
+    // The made-up server's memory follows the time of day, so the rest of
+    // its use is sometimes under 1 GiB (shown in MiB).
     await expect(card).toContainText(
-      /Everything elseCPU 1\.0 cores \(17%\) · RAM [\d.]+ GiB \(\d+%\)/,
+      /Everything elseCPU 1\.0 cores \(17%\) · RAM [\d.]+ [GM]iB \(\d+%\)/,
     );
     await expect(card).not.toContainText("Tests running");
 
