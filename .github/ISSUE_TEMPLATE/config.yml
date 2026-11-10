@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/GAMch1k/life-os/security/advisories/new
+    about: Report it privately, never in a public issue. See SECURITY.md.
+  - name: Install guide and troubleshooting
+    url: https://github.com/GAMch1k/life-os/blob/master/docs/install/README.md
+    about: Requirements, safe access, updates, and troubleshooting for the published images.
