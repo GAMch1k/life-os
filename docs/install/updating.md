@@ -48,4 +48,4 @@ version=$(sed -n 's/^LIFE_OS_VERSION=//p' .env)
 gh attestation verify "oci://ghcr.io/gamch1k/life-os-tasks:$version" -R GAMch1k/life-os
 ```
 
-[Releases](../operations/releases.md) describes how releases are made and how to check every image, with cosign too.
+[Releases](../operations/releases.md) describes how releases are made, and [how to check an image](../operations/releases.md#verifying-an-image) with cosign too.

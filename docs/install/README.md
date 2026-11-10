@@ -33,7 +33,7 @@ This guide installs Life OS from its published Docker images with one setup scri
    sha256sum --ignore-missing -c SHA256SUMS
    ```
 
-   To check that the images were built and signed by this project, see [Verify the images](updating.md#verify-the-images).
+   With the [GitHub CLI](https://cli.github.com/), you can also check that the files were built by this project's release workflow: `gh attestation verify setup.sh -R GAMch1k/life-os` (and `compose.yaml`, `.env.example`). For the images, see [Verify the images](updating.md#verify-the-images).
 
 3. **Set up:**
 
