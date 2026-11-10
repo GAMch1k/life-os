@@ -18,7 +18,7 @@ Life OS is a local-first personal operating system. This index is the human-read
 - [Backups runbook](operations/backups.md) — what is backed up, checking a backup and the weekly restore check, restoring one database, restoring everything after losing PostgreSQL's volume.
 - [Bank connection](operations/banking.md) — setting up Enable Banking, connecting, reconnecting before the consent ends, and revoking.
 - [Android releases](operations/android-releases.md) — publishing the Android apps' builds, and how the phone gets them and their updates at `/android/`.
-- [Continuous integration](operations/ci.md) — what GitHub Actions checks on every push and pull request, how to run each job locally (the integration tests too), govulncheck, and Dependabot.
+- [Continuous integration](operations/ci.md) — what GitHub Actions checks on every push and pull request, how to run each job locally (the integration tests too), govulncheck, the CLA check, and Dependabot.
 
 ## Scope
 

@@ -1,0 +1,77 @@
+# The Contributor License Agreement check (X-13): everyone who wrote a commit
+# in a pull request signs CLA.md once, by commenting the sentence it names.
+# The result is the commit status `CLA` on the pull request's head commit,
+# which the default branch's ruleset requires. The logic, and why, is in
+# .github/cla/cla.js; docs/operations/ci.md explains how to allowlist
+# someone, where the signatures live, and how to run the check again.
+#
+# Security: this is the one workflow allowed to use pull_request_target. The
+# rule against it stands because pull_request_target gives a fork's pull
+# request a write token; running the pull request's code with that token
+# would hand it over. This workflow is safe only because it never checks out
+# or runs the pull request's code:
+#   - actions/checkout has no ref, so it checks out the commit the event
+#     names, which for pull_request_target and issue_comment is the base or
+#     default branch, never the pull request's head. Only .github/cla is
+#     fetched, and only to load cla.js from it.
+#   - cla.js reads the pull request through the API (its commits' authors and
+#     its comments) and writes only the status, its own comment, and the
+#     cla-signatures branch.
+#   - No run: step, and no expression puts the pull request's title, body,
+#     branch name or comments into a script.
+# Keep it that way: never give checkout a ref, never run anything from the
+# pull request, and never add steps that build or test it here.
+# .github/cla/cla.test.js checks the first two.
+name: CLA
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+  # A signature or "recheck" on a pull request. Edits and deletions don't
+  # count.
+  issue_comment:
+    types: [created]
+
+permissions: {}
+
+jobs:
+  cla:
+    # Not "CLA": that is the commit status the job sets. A check run of the
+    # same name would be a second "CLA" on the commit.
+    name: Check signatures
+    # Every pull request event; for comments, only those on a pull request
+    # that may be a signature or "recheck" (cla.js compares them exactly),
+    # so other comments don't start a runner.
+    if: >-
+      github.event_name == 'pull_request_target' ||
+      (github.event.issue.pull_request &&
+       (contains(github.event.comment.body, 'I hereby sign the CLA') ||
+        contains(github.event.comment.body, 'recheck')))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      # signatures/cla.json on the cla-signatures branch. The ruleset protects
+      # only the default branch, so this token can push there.
+      contents: write
+      # The pull request and its commits, and the comment.
+      pull-requests: write
+      issues: write
+      # The CLA commit status.
+      statuses: write
+    # One run per pull request at a time, so a run that read the signatures
+    # before a signature was recorded can't set its older result last. A run
+    # waiting here may be replaced by a newer one; each run reads every
+    # comment again, so a signature is never lost.
+    concurrency:
+      group: cla-${{ github.event.pull_request.number || github.event.issue.number }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/cla
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const cla = require('./.github/cla/cla.js');
+            await cla.run({ github, context, core });

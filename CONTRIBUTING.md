@@ -6,6 +6,15 @@ Documentation is part of the definition of done. Any change to architecture, API
 
 Services own their own database, migrations, and domain types. Do not access another service's tables; use APIs. Do not publish individual service ports, modify host Nginx/firewall/DNS, commit secrets, or run destructive data operations without explicit authorization.
 
+## Pull requests
+
+Contributions from outside are welcome.
+
+1. Fork the repository, branch from `master`, and keep a pull request to one coherent change, with its documentation (see above).
+2. Run the checks that cover your change: `tools/check` (or a part of it, such as `tools/check --go`), and `tools/test-integration` if you touched a service's database code. [Continuous integration](docs/operations/ci.md) lists what runs and how to run each part locally. Every check must pass on the pull request before it can be merged.
+3. Sign the [Contributor License Agreement](CLA.md), once: comment on your pull request with exactly `I have read the CLA Document and I hereby sign the CLA`. You keep your copyright, your work stays available under the AGPL, and the maintainer may also offer it under other licenses. The `CLA` check comments on your pull request with what is missing and turns green once everyone who wrote a commit in it has signed. Commit with an email address that is linked to your GitHub account, so the check can tell who wrote each commit.
+4. CI runs on a pull request from a fork only after the maintainer approves the run, so the checks may take a while to start. The `CLA` check runs at once.
+
 ## Development tools and live data
 
 Development tools and agents (Claude Code and its subagents, scripts, test runners) are neither the owner nor the Life OS AI, and the Event Log must never show their work as either. Every service write must say who makes it in `X-Life-OS-Actor`; a write without one is rejected with `400 actor_required` (see [Activity](docs/services/activity.md#the-actor-gate)).

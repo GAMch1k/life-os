@@ -1,6 +1,6 @@
 # Continuous integration
 
-GitHub Actions checks every push and pull request with `.github/workflows/ci.yml`: the source, then the full stack (the images, the smokes, and the browser suite on the disposable verification stack). CI never deploys. Merges are still made locally and pushed to master.
+GitHub Actions checks every push and pull request with `.github/workflows/ci.yml`: the source, then the full stack (the images, the smokes, and the browser suite on the disposable verification stack). CI never deploys. Merges are still made locally and pushed to master. A second workflow, `.github/workflows/cla.yml`, checks that the authors of a pull request have signed the [Contributor License Agreement](#cla-check).
 
 ## When it runs
 
@@ -10,11 +10,11 @@ GitHub Actions checks every push and pull request with `.github/workflows/ci.yml
 
 A newer push to a branch or pull request cancels that ref's older run. Every push to master runs to the end.
 
-Runs use GitHub-hosted runners (`ubuntu-24.04`) and the workflow's token is read-only (`permissions: contents: read`). No job needs a secret, and none signs in to an AI. The workflow has no `pull_request_target` or `workflow_run` trigger, so a fork's pull request runs with a read-only token and no secrets.
+Runs use GitHub-hosted runners (`ubuntu-24.04`) and the workflow's token is read-only (`permissions: contents: read`). No job needs a secret, and none signs in to an AI. The workflow has no `pull_request_target` or `workflow_run` trigger, so a fork's pull request runs with a read-only token and no secrets. The CLA check is the one workflow that uses `pull_request_target`, and it never runs a pull request's code ([why that is safe](#why-pull_request_target-is-safe-here)).
 
 ## Jobs
 
-The first five jobs run in parallel. `full-stack` waits for the four that block, as a later job can: `needs: [check-generated, check-go, check-dashboard, integration]`.
+The first six jobs run in parallel. `full-stack` waits for the four that block, as a later job can: `needs: [check-generated, check-go, check-dashboard, integration]`.
 
 | Job | What it runs | Time | Locally |
 | --- | --- | --- | --- |
@@ -22,6 +22,7 @@ The first five jobs run in parallel. `full-stack` waits for the four that block,
 | `check-go` | `tools/check --go`: gofmt, `go vet`, `go test`, and the build of every module under `pkg/`, `services/`, and `templates/` (`GOWORK=off`) | about 1 min | `tools/check --go` |
 | `check-dashboard` | `tools/check --dashboard`: Prettier, ESLint, the unit tests, the typecheck, and `next build` | about 1.5 min | `tools/check --dashboard` |
 | `integration` | `tools/test-integration` against a PostgreSQL service container | about 2 min | [Integration tests](#integration-tests) |
+| `check-cla` | `node --test .github/cla/cla.test.js`: the [CLA check](#cla-check)'s logic against a fake GitHub API | seconds | `node --test .github/cla/cla.test.js` (Node 22, nothing to install) |
 | `govulncheck` | `tools/check-vulnerabilities`: govulncheck on every Go module. A finding fails the run. | about 2 min | `tools/check-vulnerabilities` |
 | `full-stack` | The images, then the smokes and the browser suite (without the `@codex` tests) on the verification stack | 14 to 19 min: 6.5 to 10 to build, 7 to 8 to test | [Full-stack tests](#full-stack-tests) |
 
@@ -160,6 +161,59 @@ When the job was added (9 November 2026), every module except the fixtures gener
 | `github.com/andybalholm/brotli` v1.2.2 | GO-2026-6888 | v1.2.7 |
 
 govulncheck also notes GO-2026-5932 in `golang.org/x/crypto` (its unmaintained `openpgp` package). No module imports that package, so it is not a finding.
+
+## CLA check
+
+`.github/workflows/cla.yml` checks that everyone who wrote a commit in a pull request has signed the [Contributor License Agreement](../../CLA.md) (X-13; a CLA rather than a DCO, so that Life OS can also be offered under other licenses). Its result is the commit status **`CLA`** on the pull request's head commit, which the default branch's ruleset requires. The logic is `.github/cla/cla.js`, run by `actions/github-script`. No third-party CLA action is used: the usual one, contributor-assistant/github-action, was archived in March 2026. life-os-app has the same workflow and the same files.
+
+### What it does
+
+- It runs when a pull request is opened, reopened, or pushed to (`pull_request_target`), and on a new comment on a pull request that is a signature or `recheck` (`issue_comment`). Edited and deleted comments, and comments on issues, start nothing.
+- Who must sign: the pull request's author, and every commit's author and committer that is a GitHub account. Exempt: `GAMch1k`, GitHub's own committer `web-flow` (commits made on github.com), and every bot (a login ending in `[bot]`, such as `dependabot[bot]`).
+- A commit whose author email is linked to no GitHub account fails the check, since nobody can sign for it; the comment asks its author to link the email or rewrite the commits. A pull request of more than 250 commits fails too: the API lists no more.
+- To sign, the contributor comments exactly `I have read the CLA Document and I hereby sign the CLA` (the sentence the archived action used; whitespace at the ends and line breaks don't matter, case does). A comment signs only for its own author. Every run reads all of the pull request's comments, so a signature that a cancelled or failed run missed is recorded by the next one.
+- When something is missing, the workflow posts one comment that names who still has to sign, with the sentence and a link to `CLA.md` on the default branch, and edits that same comment (found again by its hidden marker `<!-- life-os-cla -->`) as things change, down to a thank-you once everyone has signed. A pull request that needs nothing, such as the maintainer's or Dependabot's, gets the status and no comment.
+- The status is `success` or `failure`, and its link opens the comment. A run that ends in an error sets no status, so the required check stays missing and nothing merges.
+- The runs of one pull request wait for each other (`concurrency`), so an older result never overwrites a newer one. The job is called `Check signatures`, so that its check run is not a second `CLA` on the commit.
+
+### Why `pull_request_target` is safe here
+
+`pull_request_target` gives a fork's pull request a token that can write, so running the pull request's code with it would hand that token over; `ci.yml` never uses it. The CLA workflow is the one exception, and it is safe only because it never checks out, builds, or runs the pull request's code:
+
+- `actions/checkout` has no `ref`, so it checks out the commit the event names, which for `pull_request_target` and `issue_comment` is the base or default branch, never the pull request's head. It fetches only `.github/cla`, to load `cla.js`.
+- `cla.js` reads the pull request through the API only (its commits' authors and its comments) and writes only the `CLA` status, its own comment, and the `cla-signatures` branch.
+- There is no `run:` step, and no expression hands the pull request's title, body, branch name, or comments to a script.
+- The top-level `permissions: {}` grants nothing; the job gets `contents: write` (the signatures branch), `pull-requests: write` and `issues: write` (the comment), and `statuses: write`.
+
+`cla.test.js` fails if the workflow gains a `ref:`, a `run:` step, a reference to the pull request's head, or an action that is not an official one pinned to a commit SHA. Changes to `cla.yml` or `cla.js` apply to pull requests only once they are on master, because both events run the default branch's copy; a pull request that changes them is tested by `check-cla`, never by running its own copy.
+
+Since it runs from the base branch, `pull_request_target` needs no approval: a fork's first pull request gets its `CLA` status at once, while `ci.yml` waits until the maintainer approves the run.
+
+### Signatures
+
+The signatures are in `signatures/cla.json` on the branch `cla-signatures`. The workflow creates it at the first signature, as an orphan branch (no history of the code, only that file and a README). The ruleset protects only the default branch, so the workflow's token can push there; a push with that token starts no workflow, and the branch has none anyway. A record:
+
+```json
+{
+  "login": "octocat",
+  "id": 583231,
+  "version": "1.0",
+  "commentUrl": "https://github.com/GAMch1k/life-os/pull/1#issuecomment-1234567890",
+  "pullRequest": 1,
+  "repository": "GAMch1k/life-os",
+  "signedAt": "2026-11-10T12:34:56.000Z"
+}
+```
+
+`id` is the GitHub user's numeric ID, which the check compares: a login can be renamed, the ID stays. `version` is the version of `CLA.md` they signed, `signedAt` the time of their comment, in UTC. When two runs write at once, the contents API refuses the second write (409, or 422 when the first run has just created the file or the branch), and that run reads the file again and appends to it, up to five times. Each repository keeps its own record: life-os-app's is on its own `cla-signatures` branch.
+
+Don't delete or force-push the branch. To remove a signature recorded by mistake, edit the file on the branch by hand, then comment `recheck` on the pull requests concerned.
+
+### Allowlist, recheck, new versions
+
+- **Allowlist**: add the login to `CONFIG.allowlist` in `.github/cla/cla.js` (compared case-insensitively), in both repositories, and merge. Bots need no entry. It is meant for accounts that need to grant no license, such as another account of the maintainer; everyone else signs.
+- **Recheck**: comment `recheck` on the pull request (anyone can), or push to it. A pull request opened before the workflow was on master gets its first status this way.
+- **A new version of the CLA**: change `CLA.md` (its "Version" line) and `CONFIG.version` together; `cla.test.js` checks that they match. Earlier signatures keep counting (`CLA.md`, section 13). Making everyone sign again would need the check to compare versions, which it doesn't today.
 
 ## Dependabot
 
