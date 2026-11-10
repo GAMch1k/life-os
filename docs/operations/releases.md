@@ -44,10 +44,15 @@ A server runs a release from two files, `compose.yaml` and `.env`: no checkout. 
 What stays outside the images, because it is the server's own:
 
 - **Data: named volumes.** `lifeos-postgres-data`, `lifeos-inbox-media` (capture images), `lifeos-voice-audio`, `lifeos-whisper-models` (the model Whisper downloads on its first start), `lifeos-ntfy-data`.
-- **Host paths from `.env`.** The backup directory (`LIFE_OS_BACKUP_DIR`, required), the Codex home (`LIFE_OS_CODEX_HOME_HOST_PATH`, required; an empty directory means no AI), the Enable Banking key (`LIFE_OS_ENABLE_BANKING_KEY_FILE`, else `/dev/null`), and the Android releases directory (`LIFE_OS_ANDROID_RELEASES_DIR`, else `~/life-os.android`, which Docker creates if missing).
+- **Host paths from `.env`.** The backup directory (`LIFE_OS_BACKUP_DIR`, required), the Codex home (`LIFE_OS_CODEX_HOME_HOST_PATH`, required; an empty directory means no AI), the Enable Banking key (`LIFE_OS_ENABLE_BANKING_KEY_FILE`, else `/dev/null`), and, on the owner's server only, the Android releases directory (`LIFE_OS_ANDROID_RELEASES_DIR`, else `~/life-os.android`).
 - **The host itself, for Server health.** `host-health` reads `/`, Docker's data root, and the containers' cgroups (read-only binds), and `host-health-docker` the Docker socket ([Server health](../services/host-health.md)).
 
 `tools/build-install-bundle` refuses a `compose.yaml` that bind-mounts a relative path (a repository file), uses `env_file`, or declares `configs` or `secrets`, so a new one fails CI.
+
+Where the release bundle differs from the owner's server, `compose.yaml` says so next to the service, in `x-install-bundle` (Compose ignores `x-` keys), and only the generator applies it:
+
+- **gateway** `omit-volumes: [/srv/android]`: no Android releases directory; `/android/` answers 404. Other people's phones update from GitHub Releases of `GAMch1k/life-os-app`.
+- **processor** `writable-volumes: [/run/lifeos-codex-source]` and `LIFE_OS_CODEX_AUTH_WRITE_BACK=on`: the Codex home is Life OS's own (`codex-home/`, which `setup.sh codex` signs in), so the processor writes a refreshed `auth.json` back to it within a minute. Codex refreshes its sign-in in the container's copy, and a refresh may use up the refresh token the mounted copy holds; without the write-back, the next restart could start signed out. It writes only `auth.json` (never Codex's sessions or history), atomically, only a file that still holds a refresh token, and never over a newer sign-in (`./setup.sh codex` wins until the next restart reads it). On the owner's server the Codex home is the owner's own, shared with their Codex CLI, and stays read-only: two independent refreshers writing one file could undo each other.
 
 No image holds a secret or a setting of the owner's. `.dockerignore` keeps `.env` out of every build, the Codex sign-in is mounted at run time only, and a value such as a hostname or address comes from `.env` when the container starts.
 

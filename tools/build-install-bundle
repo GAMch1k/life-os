@@ -12,8 +12,15 @@ deploy/compose.yaml is the repository's compose.yaml for a server without a
 checkout: every service that compose.yaml builds runs the released image
 instead, ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-<name>:${LIFE_OS_VERSION}.
 <name> is the service's own, or, for services that share one image (compose.yaml
-names it lifeos-<name> in their image:), that image's. Nothing else changes, so
-compose.yaml may not bind-mount a repository file (a relative path such as
+names it lifeos-<name> in their image:), that image's. Otherwise it changes
+only what a service's x-install-bundle says, next to what it changes:
+
+  x-install-bundle:
+    omit-volumes: [/srv/android]                  the mounts at these targets go
+    writable-volumes: [/run/lifeos-codex-source]  these mounts lose read_only
+    environment: {NAME: value}                    added to the environment
+
+So compose.yaml may not bind-mount a repository file (a relative path such as
 ./infra/...): such configuration belongs in an image (P20-02).
 
 The assets are that compose.yaml, .env.example with LIFE_OS_VERSION set to the
@@ -67,6 +74,46 @@ HEADER = """\
 
 class BundleError(Exception):
     pass
+
+
+BUNDLE_KEY = "x-install-bundle"
+
+
+def volume_target(volume):
+    if isinstance(volume, dict):
+        return volume.get("target")
+    parts = volume.split(":")
+    return parts[1] if len(parts) > 1 else parts[0]
+
+
+def apply_bundle_overrides(service, spec):
+    """The service as the release bundle runs it: its x-install-bundle applied, and dropped."""
+    overrides = spec.pop(BUNDLE_KEY, None) or {}
+    unknown = set(overrides) - {"omit-volumes", "writable-volumes", "environment"}
+    if unknown:
+        raise BundleError(f"service {service}: {BUNDLE_KEY} has unknown keys: {', '.join(sorted(unknown))}")
+    volumes = [dict(v) if isinstance(v, dict) else v for v in spec.get("volumes") or []]
+    for target in overrides.get("omit-volumes") or []:
+        kept = [v for v in volumes if volume_target(v) != target]
+        if len(kept) == len(volumes):
+            raise BundleError(f"service {service}: {BUNDLE_KEY} omits a mount at {target}, which it has not got")
+        volumes = kept
+    for target in overrides.get("writable-volumes") or []:
+        matches = [v for v in volumes if isinstance(v, dict) and v.get("target") == target]
+        if len(matches) != 1:
+            raise BundleError(f"service {service}: {BUNDLE_KEY} makes writable a mount at {target}, which it has not got (long syntax)")
+        matches[0].pop("read_only", None)
+    if "volumes" in spec:
+        if volumes:
+            spec["volumes"] = volumes
+        else:
+            del spec["volumes"]
+    environment = overrides.get("environment") or {}
+    if environment:
+        if not isinstance(spec.get("environment", {}), dict):
+            raise BundleError(f"service {service}: {BUNDLE_KEY} adds environment, which needs the mapping form")
+        spec["environment"] = {**spec.get("environment", {}), **{k: str(v) for k, v in environment.items()}}
+    return spec
 
 
 def load_compose():
@@ -131,7 +178,7 @@ def install_compose(compose):
 
     services = {}
     for service, spec in compose["services"].items():
-        spec = dict(spec)
+        spec = apply_bundle_overrides(service, dict(spec))
         if service in names:
             del spec["build"]
             published = f"{REGISTRY}/{names[service][1]}:{VERSION}"
@@ -204,7 +251,9 @@ def write_assets(directory, version, rendered, allow_missing_setup):
         with open(setup, encoding="utf-8") as source:
             script = source.read()
         # setup.sh's own record of its release (else it reads .env.example's).
-        script, _ = re.subn(r"(?m)^release_version='__LIFE_OS_VERSION__'$", f"release_version='{version}'", script)
+        script, count = re.subn(r"(?m)^release_version='__LIFE_OS_VERSION__'$", f"release_version='{version}'", script)
+        if count != 1:
+            raise BundleError(f"{SETUP_SCRIPT} must have the line release_version='__LIFE_OS_VERSION__' once (found {count})")
         with open(os.path.join(directory, "setup.sh"), "w", encoding="utf-8") as out:
             out.write(script)
         os.chmod(os.path.join(directory, "setup.sh"), 0o755)

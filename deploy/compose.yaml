@@ -691,11 +691,11 @@ services:
       LIFE_OS_TIMEZONE: ${LIFE_OS_TIMEZONE:-UTC}
       TZ: ${LIFE_OS_TIMEZONE:-UTC}
       CODEX_HOME: /tmp/lifeos-codex
+      LIFE_OS_CODEX_AUTH_WRITE_BACK: 'on'
     volumes:
       - type: bind
         source: ${LIFE_OS_CODEX_HOME_HOST_PATH:?Set LIFE_OS_CODEX_HOME_HOST_PATH in .env to your existing local Codex home}
         target: /run/lifeos-codex-source
-        read_only: true
     tmpfs:
       - /tmp
       - /var/lib/lifeos/codex
@@ -842,13 +842,6 @@ services:
       NGINX_ENVSUBST_FILTER: ^LIFE_OS_
       LIFE_OS_PUBLIC_HOSTNAME: ${LIFE_OS_PUBLIC_HOSTNAME:-}
       LIFE_OS_GATEWAY_BIND_ADDRESS: ${LIFE_OS_GATEWAY_BIND_ADDRESS:-127.0.0.1}
-    volumes:
-      - type: bind
-        source: ${LIFE_OS_ANDROID_RELEASES_DIR:-${HOME}/life-os.android}
-        target: /srv/android
-        read_only: true
-        bind:
-          create_host_path: true
     ports:
       - ${LIFE_OS_GATEWAY_BIND_ADDRESS:-127.0.0.1}:${LIFE_OS_GATEWAY_PORT:-3000}:80
     depends_on:

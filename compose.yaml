@@ -566,6 +566,13 @@ services:
         source: ${LIFE_OS_CODEX_HOME_HOST_PATH:?Set LIFE_OS_CODEX_HOME_HOST_PATH in .env to your existing local Codex home}
         target: /run/lifeos-codex-source
         read_only: true
+    # In the release bundle (tools/build-install-bundle) the Codex home is
+    # Life OS's own (setup.sh signs it in), so the processor writes a
+    # refreshed auth.json back to it (services/mcp/docker-processor-entrypoint.sh).
+    # Here it is the owner's own Codex home: read-only, never written.
+    x-install-bundle:
+      writable-volumes: [/run/lifeos-codex-source]
+      environment: {LIFE_OS_CODEX_AUTH_WRITE_BACK: "on"}
     tmpfs:
       - /tmp
       - /var/lib/lifeos/codex
@@ -693,6 +700,10 @@ services:
         target: /srv/android
         read_only: true
         bind: {create_host_path: true}
+    # The release bundle (tools/build-install-bundle) leaves the Android
+    # releases out: they are this server's own; /android/ answers 404 there.
+    x-install-bundle:
+      omit-volumes: [/srv/android]
     ports: ["${LIFE_OS_GATEWAY_BIND_ADDRESS:-127.0.0.1}:${LIFE_OS_GATEWAY_PORT:-3000}:80"]
     depends_on:
       dashboard: {condition: service_started}

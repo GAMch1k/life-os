@@ -563,7 +563,6 @@ cmd_init() {
   else
     backup_dir=${LIFE_OS_BACKUP_DIR:-$PWD/backups}
     codex_home=${LIFE_OS_CODEX_HOME_HOST_PATH:-$PWD/codex-home}
-    android_dir=$PWD/android
   fi
   [[ $backup_dir == /* && $codex_home == /* ]] || usage_error 'LIFE_OS_BACKUP_DIR and LIFE_OS_CODEX_HOME_HOST_PATH must be absolute paths'
   env_values[LIFE_OS_BACKUP_DIR]=$backup_dir
@@ -571,9 +570,6 @@ cmd_init() {
   env_values[LIFE_OS_CODEX_HOME_HOST_PATH]=$codex_home
   env_values[LIFE_OS_CODEX_RUNTIME_UID]=$(id -u)
   env_values[LIFE_OS_BANKING_RUNTIME_UID]=$(id -u)
-  if ! is_checkout && [[ -f compose.yaml ]] && grep -q LIFE_OS_ANDROID_RELEASES_DIR compose.yaml; then
-    env_values[LIFE_OS_ANDROID_RELEASES_DIR]=$android_dir
-  fi
   docker_sock=/var/run/docker.sock
   [[ ${DOCKER_HOST:-} != unix://* ]] || docker_sock=${DOCKER_HOST#unix://}
   if gid=$(stat -c %g "$docker_sock" 2>/dev/null); then
@@ -603,7 +599,9 @@ cmd_init() {
   step 'Writing .env'
   make_dir "$backup_dir" 700
   make_dir "$codex_home" 700
-  if [[ -v env_values[LIFE_OS_ANDROID_RELEASES_DIR] ]] || is_checkout; then
+  # Only the owner's server serves Android releases; the release's
+  # compose.yaml has no such mount.
+  if is_checkout; then
     make_dir "$android_dir" 755
   fi
   env_write .env.example .env
