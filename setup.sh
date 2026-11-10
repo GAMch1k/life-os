@@ -365,6 +365,50 @@ run_checks() {
   check_host
 }
 
+# ---------- One Life OS per machine ----------
+
+# Every Life OS is the Compose project lifeos (compose.yaml's name), with the
+# same lifeos-* volumes and networks, so a machine runs one. other_install
+# describes the containers of a lifeos project started from another
+# directory, such as "37 containers of the Compose project lifeos, started
+# from /srv/life-os"; nothing when there are none. It fails when Docker cannot
+# list its containers.
+other_install() {
+  local listing line dir where=
+  local -i count=0
+  local -A dirs=()
+  listing=$(docker ps -a --filter label=com.docker.compose.project=lifeos \
+    --format '{{.Label "com.docker.compose.project.working_dir"}}|{{.Label "com.docker.compose.service"}}' 2>/dev/null) || return 1
+  while IFS= read -r line; do
+    [[ -n $line ]] || continue
+    dir=${line%%|*}
+    # This directory, also when reached through a symbolic link, is this install.
+    [[ -n $dir && $dir -ef . ]] && continue
+    count+=1
+    dirs[${dir:-an unknown directory}]=1
+  done <<<"$listing"
+  ((count)) || return 0
+  for dir in "${!dirs[@]}"; do where+=${where:+, }$dir; done
+  printf '%d container%s of the Compose project lifeos, started from %s\n' "$count" "$( ((count == 1)) || printf s)" "$where"
+}
+
+# Refuses a command that runs Compose here while another directory's Life OS
+# runs on this machine: Compose would take that install over and recreate its
+# containers with this directory's .env, passwords and all.
+require_own_install() {
+  local found
+  found=$(other_install) \
+    || die "Docker cannot list its containers, so this cannot check that no other Life OS runs on this machine. Is Docker running? (./setup.sh check)"
+  [[ -z $found ]] || die "another Life OS runs on this machine: Docker has $found. Every Life OS is that same Compose project, with the same lifeos-* volumes, so ./setup.sh $1 here would take that install over: Compose would recreate its containers with this directory's .env and passwords. Nothing was changed. Manage that install from its own directory; one machine runs one Life OS. If you moved it here from there, remove its old containers first (docker ps -a --filter label=com.docker.compose.project=lifeos lists them; the data stays in the lifeos-* volumes), then run this again."
+}
+
+# Says so when another directory's Life OS runs on this machine.
+warn_other_install() {
+  local found
+  found=$(other_install 2>/dev/null) || return 0
+  [[ -z $found ]] || warn "another Life OS runs on this machine: Docker has $found. One machine runs one Life OS: up, update, and codex refuse to run here while it does."
+}
+
 # ---------- Gateway address ----------
 
 # The class of an IPv4 address: loopback, private (LAN, VPN, Tailscale's
@@ -532,6 +576,7 @@ cmd_init() {
     warn 'skipping the server checks (--skip-checks)'
   else
     run_checks
+    warn_other_install
   fi
   if is_checkout; then
     say ''
@@ -635,7 +680,7 @@ setup_integrations_now() {
     # Without questions, an integration is set up when its settings are in
     # the environment.
     [[ -z ${LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN:-} ]] || setup_claude
-    [[ -z ${LIFE_OS_SETUP_WHISPER_MODEL:-} ]] || setup_whisper
+    [[ -z ${LIFE_OS_SETUP_WHISPER_MODEL:-}${LIFE_OS_WHISPER_LANGUAGE:-} ]] || setup_whisper
     [[ -z ${LIFE_OS_CLOUDFLARE_TUNNEL_TOKEN:-} ]] || setup_cloudflare
     [[ -z ${LIFE_OS_GOOGLE_CLIENT_ID:-} ]] || setup_google
     [[ -z ${LIFE_OS_ENABLE_BANKING_APP_ID:-} ]] || setup_banking
@@ -648,7 +693,7 @@ setup_integrations_now() {
 Life OS works without them. Each one can be set up now, or later on its own:
   codex       AI processing of your notes (OpenAI Codex, needs a ChatGPT plan)
   claude      or AI processing with Claude Code instead (needs a Claude plan)
-  whisper     the speech-to-text model for voice notes (default: small)
+  whisper     the speech-to-text model and language of voice notes (default: small, auto)
   cloudflare  reach Life OS from anywhere through a Cloudflare Tunnel and Access
   google      sync with Google Calendar
   banking     read your bank account through Enable Banking
@@ -701,6 +746,7 @@ any device, sign in, and type the code it shows.
 EOF
   confirm 'Sign in to Codex now?' y || return 0
   check_docker
+  require_own_install codex
   home=$(env_get LIFE_OS_CODEX_HOME_HOST_PATH) || die 'LIFE_OS_CODEX_HOME_HOST_PATH is missing from .env'
   if [[ $home == /* ]]; then
     make_dir "$home" 700
@@ -759,8 +805,18 @@ EOF
   apply_hint processor
 }
 
+# The language codes whisper.cpp knows: services/voice/whisper/languages.txt
+# in the repository, which the release does not ship (tools/test-setup checks
+# that this copy is the same). Whisper itself refuses a code not in it.
+whisper_languages='af am ar as az ba be bg bn bo br bs ca cs cy da de el en es et eu fa fi fo fr gl gu ha haw he hi hr ht hu hy id is it ja jw ka kk km kn ko la lb ln lo lt lv mg mi mk ml mn mr ms mt my ne nl nn no oc pa pl ps pt ro ru sa sd si sk sl sn so sq sr su sv sw ta te tg th tk tl tr tt uk ur uz vi yi yo yue zh'
+
+# Whether a Whisper language is auto or one code whisper.cpp knows.
+valid_whisper_language() {
+  [[ $1 == auto ]] || [[ $1 =~ ^[a-z]+$ && " $whisper_languages " == *" $1 "* ]]
+}
+
 setup_whisper() {
-  local model memory current
+  local model memory current language
   intro 'Voice: the Whisper model' voice.md
   require_env
   current=$(whisper_model)
@@ -780,11 +836,30 @@ EOF
     medium | large-v3-turbo) memory=3g ;;
     *) usage_error "unknown Whisper model '$model': choose tiny, base, small, medium, or large-v3-turbo" ;;
   esac
+  if ((!assume_yes)); then
+    cat <<EOF
+
+Whisper guesses the language of each voice note (auto), and short notes are
+sometimes guessed wrong. If you speak one language only, name it: that is more
+accurate, and a bit faster. Codes such as en, de, ru, uk, fr, es, it, or pl
+(every one: $docs/voice.md#language).
+EOF
+  fi
+  ask language 'Language (auto, or a code)' "${LIFE_OS_WHISPER_LANGUAGE:-$(whisper_language)}"
+  language=${language,,}
+  valid_whisper_language "$language" \
+    || usage_error "unknown Whisper language '$language': use auto or one of whisper.cpp's codes, such as de, ru, or en (every one: $docs/voice.md#language)"
   env_values[LIFE_OS_WHISPER_MODEL_PATH]=/models/ggml-$model.bin
   env_values[LIFE_OS_WHISPER_MODEL_URL]=https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-$model.bin
   env_values[LIFE_OS_WHISPER_MEMORY]=$memory
+  env_values[LIFE_OS_WHISPER_LANGUAGE]=$language
   env_update
   say "Whisper uses the $model model (memory cap $memory); it downloads it at its next start."
+  if [[ $language == auto ]]; then
+    say 'Language: auto (guessed for each voice note).'
+  else
+    say "Language: $language (every voice note is transcribed as $language)."
+  fi
   apply_hint whisper
 }
 
@@ -1209,6 +1284,8 @@ cmd_up() {
   preview_banner
   ((skip_checks)) || run_checks
   check_bind "$(gateway_bind)"
+  require_own_install up
+  check_whisper_language
   step "Starting Life OS $(env_get LIFE_OS_VERSION 2>/dev/null || printf '%s' "$release_version")"
   docker compose up -d --pull missing
   wait_until_ready || true
@@ -1247,6 +1324,7 @@ cmd_update() {
   preview_banner
   ((skip_checks)) || run_checks
   check_bind "$(gateway_bind)"
+  require_own_install update
   current=$(env_get LIFE_OS_VERSION 2>/dev/null || printf 'preview')
   target=${1:-$release_version}
   [[ $target =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] || usage_error "'$target' is not a version"
@@ -1257,6 +1335,7 @@ cmd_update() {
   fi
   add_new_settings
 
+  check_whisper_language
   if ((skip_backup)); then
     warn 'not backing up first (--skip-backup)'
   else
@@ -1290,6 +1369,7 @@ cmd_status() {
   fi
   say "Gateway $gateway $answer. Address: $(env_get LIFE_OS_PUBLIC_URL 2>/dev/null || printf 'not set')."
   if command -v docker >/dev/null 2>&1; then
+    warn_other_install
     step 'Containers'
     docker compose ps --all --format 'table {{.Service}}\t{{.State}}\t{{.Status}}' 2>/dev/null \
       || warn 'docker compose cannot read this project'
@@ -1300,7 +1380,7 @@ cmd_status() {
   else
     status_line 'AI processing (codex)' "$(codex_signed_in && printf 'signed in' || printf 'not signed in')"
   fi
-  status_line 'Whisper model (whisper)' "$(whisper_model)"
+  status_line 'Whisper model (whisper)' "$(whisper_model), language $(whisper_language)$(whisper_language_known || printf ' (unknown: ./setup.sh whisper)')"
   status_line 'Cloudflare Tunnel (cloudflare)' "$(on_off list_has COMPOSE_PROFILES cloudflare)"
   status_line 'Google Calendar (google)' "$(on_off is_set LIFE_OS_GOOGLE_CLIENT_ID)"
   status_line 'Bank sync (banking)' "$(on_off is_set LIFE_OS_ENABLE_BANKING_APP_ID)"
@@ -1318,12 +1398,33 @@ whisper_model() {
   printf '%s\n' "${model%.bin}"
 }
 
+# The Whisper language .env names: auto (the default) or a code such as de.
+whisper_language() {
+  local language
+  language=$(env_get LIFE_OS_WHISPER_LANGUAGE 2>/dev/null) || language=
+  printf '%s\n' "${language:-auto}"
+}
+
+whisper_language_known() {
+  local language
+  language=$(whisper_language)
+  valid_whisper_language "${language,,}"
+}
+
+# A language whisper.cpp does not know (a hand-edited .env) stops Whisper at
+# its start: up says so, rather than that Whisper is still starting.
+check_whisper_language() {
+  whisper_language_known \
+    || warn "LIFE_OS_WHISPER_LANGUAGE in .env is '$(whisper_language)', which whisper.cpp does not know: Whisper will not start, and voice notes wait. Choose another with ./setup.sh whisper."
+}
+
 on_off() { if "$@"; then printf 'set up'; else printf 'not set up'; fi; }
 status_line() { printf '  %-32s %s\n' "$1" "$2"; }
 
 cmd_check() {
   preview_banner
   run_checks
+  warn_other_install
   [[ ! -f .env ]] || check_bind "$(gateway_bind)"
   say ''
   say 'Checks done.'
@@ -1346,7 +1447,7 @@ release's compose.yaml and .env.example.
 Integrations (each optional, any time):
   ./setup.sh codex              AI processing: sign in to OpenAI Codex
   ./setup.sh claude             AI processing: Claude Code instead of Codex
-  ./setup.sh whisper            choose the speech-to-text model
+  ./setup.sh whisper            choose the speech-to-text model and language
   ./setup.sh cloudflare         Cloudflare Tunnel (behind Cloudflare Access)
   ./setup.sh google             Google Calendar sync
   ./setup.sh banking            bank sync through Enable Banking

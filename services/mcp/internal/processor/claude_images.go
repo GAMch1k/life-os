@@ -32,8 +32,9 @@ const (
 	// estimated from its header before it is decoded (decodedBytes): a 48 MP
 	// phone photo fits (192 MB at 4 bytes a pixel), a 34 MP 16-bit PNG or a
 	// decompression bomb does not. Shrinking adds a few rows to it, not
-	// another copy of the pixels, so it is about the most one image costs;
-	// the processor's host has no swap and its container no memory limit.
+	// another copy of the pixels, so it is about the most one image costs.
+	// The processor's container has a memory limit (LIFE_OS_PROCESSOR_MEMORY,
+	// 1536m by default), and its host may have no swap.
 	claudeMaxDecodeBytes = 256 << 20
 )
 

@@ -23,6 +23,16 @@ The memory figures are whisper.cpp's own. To change the model:
 
 It sets the model and Whisper's memory cap (`LIFE_OS_WHISPER_MEMORY`: 2 GB, or 3 GB for `medium` and `large-v3-turbo`). The old model file stays in the `lifeos-whisper-models` volume.
 
+## Language
+
+By default (`auto`), Whisper guesses the language of each voice note. On a short note, a small model sometimes guesses wrong, and the text comes out in the wrong language or garbled. If you speak one language only, set it: the transcripts are more accurate, and a bit faster, since Whisper skips the guess. A note in another language then comes out wrong, so keep `auto` if you switch languages.
+
+`./setup.sh whisper` asks for it after the model; Enter keeps the current one. Answer `auto`, or one of whisper.cpp's language codes, such as `en` (English), `de` (German), `ru` (Russian), `uk` (Ukrainian), `fr`, `es`, `it`, or `pl`. It goes into `.env` as `LIFE_OS_WHISPER_LANGUAGE`; apply it with `./setup.sh up`. `./setup.sh status` shows it next to the model.
+
+Every code whisper.cpp knows: `af` `am` `ar` `as` `az` `ba` `be` `bg` `bn` `bo` `br` `bs` `ca` `cs` `cy` `da` `de` `el` `en` `es` `et` `eu` `fa` `fi` `fo` `fr` `gl` `gu` `ha` `haw` `he` `hi` `hr` `ht` `hu` `hy` `id` `is` `it` `ja` `jw` `ka` `kk` `km` `kn` `ko` `la` `lb` `ln` `lo` `lt` `lv` `mg` `mi` `mk` `ml` `mn` `mr` `ms` `mt` `my` `ne` `nl` `nn` `no` `oc` `pa` `pl` `ps` `pt` `ro` `ru` `sa` `sd` `si` `sk` `sl` `sn` `so` `sq` `sr` `su` `sv` `sw` `ta` `te` `tg` `th` `tk` `tl` `tr` `tt` `uk` `ur` `uz` `vi` `yi` `yo` `yue` `zh`.
+
+Whisper refuses a code it doesn't know: it stops at its start, and `docker compose logs whisper` says why. Voice notes wait until it is fixed.
+
 ## CPU and memory
 
 Whisper uses at most 2 CPUs (`LIFE_OS_WHISPER_CPUS`, `LIFE_OS_WHISPER_THREADS`) and its memory cap, and transcribes one note at a time; more CPUs make it faster. On a small server, pick a smaller model rather than raising the memory cap.

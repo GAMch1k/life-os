@@ -2,6 +2,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -13,6 +14,12 @@ THREADS = os.environ.get("WHISPER_THREADS", "2")
 MAX_BYTES = int(os.environ.get("WHISPER_MAX_AUDIO_BYTES", "26214400"))
 SLOTS = threading.BoundedSemaphore(int(os.environ.get("WHISPER_MAX_CONCURRENCY", "1")))
 CONVERT_TIMEOUT_SECONDS = 300
+# The spoken language: auto (whisper.cpp guesses it for each recording) or one
+# of whisper.cpp's language codes, which languages.txt lists. A fixed language
+# is more accurate on short notes than a guess, and skips the guess.
+LANGUAGES = frozenset(line.strip() for line in (Path(__file__).parent / "languages.txt").read_text().splitlines()
+                      if line.strip() and not line.startswith("#"))
+LANGUAGE = (os.environ.get("WHISPER_LANGUAGE") or "auto").strip().lower()
 # Containers Voice accepts (WAV, Ogg, WebM/Matroska, MP4/M4A/3GP). Anything
 # else is refused by ffmpeg, and only local files may be opened, so a crafted
 # upload cannot make ffmpeg read playlists, URLs or other files.
@@ -26,6 +33,19 @@ def convert_command(source, target):
             "-i", str(source), "-map", "0:a:0", "-vn", "-sn", "-dn",
             "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", "-f", "wav", "-y", str(target)]
 
+def transcribe_command(wav, output):
+    """whisper-cli arguments that write the transcript of wav to output.txt."""
+    return ["whisper-cli", "-m", str(MODEL), "-l", LANGUAGE, "-f", str(wav), "-otxt", "-of", str(output), "-t", THREADS]
+
+def check_language():
+    """Stops the worker at once on a language whisper.cpp does not know:
+    whisper-cli would fail every recording with it."""
+    if LANGUAGE != "auto" and LANGUAGE not in LANGUAGES:
+        print(f"whisper: WHISPER_LANGUAGE (LIFE_OS_WHISPER_LANGUAGE) is {LANGUAGE!r}, which whisper.cpp does not know: "
+              "set it to auto or to one language code, such as de, ru, or en (docs/install/voice.md#language)",
+              file=sys.stderr, flush=True)
+        sys.exit(78)
+
 def ensure_model():
     if MODEL.exists():
         return
@@ -38,7 +58,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path != "/ready":
             self.send_error(404); return
-        self.respond(200, {"status": "ready", "model": str(MODEL)})
+        self.respond(200, {"status": "ready", "model": str(MODEL), "language": LANGUAGE})
     def do_POST(self):
         if self.path != "/transcribe":
             self.send_error(404); return
@@ -63,7 +83,7 @@ class Handler(BaseHTTPRequestHandler):
                 if converted.returncode != 0 or not wav.exists():
                     self.respond(422, {"error": "audio conversion failed", "detail": converted.stderr[-1000:]}); return
                 audio.unlink()
-                result = subprocess.run(["whisper-cli", "-m", str(MODEL), "-l", "auto", "-f", str(wav), "-otxt", "-of", str(output), "-t", THREADS], capture_output=True, text=True, timeout=1800)
+                result = subprocess.run(transcribe_command(wav, output), capture_output=True, text=True, timeout=1800)
                 text_file = output.with_suffix(".txt")
                 if result.returncode != 0 or not text_file.exists():
                     self.respond(422, {"error": "whisper transcription failed", "detail": result.stderr[-1000:]}); return
@@ -80,5 +100,6 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     if shutil.which("ffmpeg") is None:
         raise RuntimeError("ffmpeg is required to normalize audio before transcription")
+    check_language()
     ensure_model()
     ThreadingHTTPServer(("0.0.0.0", 8080), Handler).serve_forever()

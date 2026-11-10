@@ -18,6 +18,7 @@
 | Problem | What to do |
 | --- | --- |
 | `./setup.sh` says a `.env` already exists | It never overwrites one. Change a part with its own command (`./setup.sh gateway`, `./setup.sh google`, …), or start over with `./setup.sh --force-new`, which keeps a copy and your database passwords. |
+| `up`, `update`, or `codex` says another Life OS runs on this machine | Docker has `lifeos` containers started from another directory, and running Compose here would recreate them with this directory's `.env`. Manage that install from its own directory. If you moved it here, remove the old containers (`docker ps -a --filter label=com.docker.compose.project=lifeos` lists them; your data stays in the `lifeos-*` volumes) and run the command again, with the old `.env`. |
 | "cannot talk to Docker" | Add your user to the `docker` group (`sudo usermod -aG docker $USER`), log out and back in. |
 | `up` cannot find the images ("manifest unknown", "no matching manifest") | The version in `.env` (`LIFE_OS_VERSION`) doesn't exist, or the server isn't x86_64: the preview has no ARM images yet. |
 | `up` fails: the port is in use | Something else listens on port 3000. Choose another: `./setup.sh gateway --port 3100`, then `./setup.sh up`. |
@@ -26,7 +27,7 @@
 | Captures stay in Inbox; Status says the Inbox processor is not running | AI processing is off until you sign in: `./setup.sh codex`. Without it, the processor restarts again and again; that is expected. |
 | Status says Codex is signed out | Sign in again: `./setup.sh codex`. |
 | Status says the Codex usage limit is reached | Captures wait and are processed after the reset time Status shows. |
-| Voice notes wait; Status says Whisper is not ready | On the first start it downloads its model (`docker compose logs whisper`). If it keeps restarting, the server lacks memory: choose a smaller model (`./setup.sh whisper`). |
+| Voice notes wait; Status says Whisper is not ready | On the first start it downloads its model (`docker compose logs whisper`). If it keeps restarting, the server lacks memory: choose a smaller model (`./setup.sh whisper`). If its log says whisper.cpp does not know the language, set `auto` or a valid code with `./setup.sh whisper` ([Language](voice.md#language)). |
 | The server runs out of memory | Status's Server card names the biggest users. Choose a smaller Whisper model, or give the server more memory. |
 | Google: `redirect_uri_mismatch` | The redirect URI in Google must be exactly what `./setup.sh google` printed. See [Google Calendar](google-calendar.md). |
 | The bank connection fails | See [Bank connection troubleshooting](../operations/banking.md#troubleshooting). |
