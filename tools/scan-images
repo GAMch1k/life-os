@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# The release's vulnerability gate (docs/operations/releases.md): Trivy scans
+# each image and the run fails on a HIGH or CRITICAL vulnerability that has a
+# fix, unless .github/trivy-allowlist.yaml lists it with a reason. Every image
+# is scanned, even after one failed; the failed ones are listed at the end.
+# With --sbom-dir, each image's CycloneDX SBOM (its packages) is written there
+# too, as <image>.cdx.json, which the release attests.
+#
+#   tools/scan-images [--sbom-dir DIR] IMAGE…
+#
+# Needs trivy on PATH (the release workflow installs a pinned version) and
+# python3 with PyYAML for the allowlist check. Local images are read from
+# Docker. Trivy downloads its vulnerability database on the first scan; set
+# TRIVY_SKIP_DB_UPDATE=true to use the one in its cache.
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+allowlist=$repo_root/.github/trivy-allowlist.yaml
+
+sbom_dir=
+if [[ "${1:-}" == --sbom-dir ]]; then
+  sbom_dir=${2:?usage: tools/scan-images [--sbom-dir DIR] IMAGE…}
+  shift 2
+  mkdir -p "$sbom_dir"
+fi
+(($# > 0)) || { echo 'usage: tools/scan-images [--sbom-dir DIR] IMAGE…' >&2; exit 2; }
+command -v trivy >/dev/null 2>&1 || { echo 'scan-images: trivy is required' >&2; exit 2; }
+
+# Every entry says why it is accepted, and when it is looked at again.
+python3 - "$allowlist" <<'PY'
+import datetime, sys, yaml
+path = sys.argv[1]
+with open(path, encoding="utf-8") as file:
+    data = yaml.safe_load(file) or {}
+problems = []
+entries = data.get("vulnerabilities") or []
+for index, entry in enumerate(entries):
+    name = entry.get("id") or f"entry {index + 1}"
+    if not entry.get("id"):
+        problems.append(f"{name}: no id")
+    if not str(entry.get("statement") or "").strip():
+        problems.append(f"{name}: no statement (the reason it is accepted)")
+    if not (entry.get("paths") or entry.get("purls")):
+        problems.append(f"{name}: neither paths nor purls (where it is accepted)")
+    expires = entry.get("expired_at")
+    if not isinstance(expires, datetime.date):
+        problems.append(f"{name}: no expired_at date (when it is looked at again)")
+unknown = set(data) - {"vulnerabilities"}
+if unknown:
+    problems.append(f"only vulnerabilities are allowlisted, not {', '.join(sorted(unknown))}")
+if problems:
+    sys.exit(f"scan-images: {path}:\n  " + "\n  ".join(problems))
+print(f"scan-images: allowlist {path}: {len(entries)} entries")
+PY
+
+failed=()
+for image in "$@"; do
+  printf '\n==> %s\n' "$image"
+  if ! trivy image --quiet --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed \
+    --ignorefile "$allowlist" --exit-code 1 "$image"; then
+    failed+=("$image")
+  fi
+  if [[ -n "$sbom_dir" ]]; then
+    name=${image##*/}
+    name=${name%%[:@]*}
+    trivy image --quiet --format cyclonedx --output "$sbom_dir/$name.cdx.json" "$image"
+  fi
+done
+
+if ((${#failed[@]})); then
+  printf '\nscan-images: HIGH or CRITICAL vulnerabilities with a fix in %d image(s): %s\n' "${#failed[@]}" "${failed[*]}" >&2
+  printf 'Update the image (its base, packages, or Go and npm modules), or, when the code cannot reach it, allowlist it with a reason in .github/trivy-allowlist.yaml (docs/operations/releases.md).\n' >&2
+  exit 1
+fi
+printf '\nscan-images: no HIGH or CRITICAL vulnerability with a fix in %d image(s)\n' "$#"
