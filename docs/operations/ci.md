@@ -1,6 +1,6 @@
 # Continuous integration
 
-GitHub Actions checks every push and pull request with `.github/workflows/ci.yml`. CI checks the source; it never deploys. Merges are still made locally and pushed to master. The full-stack tests (images, the verification stack, smokes, Playwright) are not part of it yet.
+GitHub Actions checks every push and pull request with `.github/workflows/ci.yml`: the source, then the full stack (the images, the smokes, and the browser suite on the disposable verification stack). CI never deploys. Merges are still made locally and pushed to master.
 
 ## When it runs
 
@@ -10,11 +10,11 @@ GitHub Actions checks every push and pull request with `.github/workflows/ci.yml
 
 A newer push to a branch or pull request cancels that ref's older run. Every push to master runs to the end.
 
-Runs use GitHub-hosted runners (`ubuntu-24.04`) and the workflow's token is read-only (`permissions: contents: read`). No job needs a secret. The workflow has no `pull_request_target` or `workflow_run` trigger, so a fork's pull request runs with a read-only token and no secrets.
+Runs use GitHub-hosted runners (`ubuntu-24.04`) and the workflow's token is read-only (`permissions: contents: read`). No job needs a secret, and none signs in to an AI. The workflow has no `pull_request_target` or `workflow_run` trigger, so a fork's pull request runs with a read-only token and no secrets.
 
 ## Jobs
 
-The five jobs run in parallel. A later job can wait for them with `needs: [check-generated, check-go, check-dashboard, integration]`.
+The first five jobs run in parallel. `full-stack` waits for the four that block, as a later job can: `needs: [check-generated, check-go, check-dashboard, integration]`.
 
 | Job | What it runs | Time | Locally |
 | --- | --- | --- | --- |
@@ -23,8 +23,9 @@ The five jobs run in parallel. A later job can wait for them with `needs: [check
 | `check-dashboard` | `tools/check --dashboard`: Prettier, ESLint, the unit tests, the typecheck, and `next build` | about 1.5 min | `tools/check --dashboard` |
 | `integration` | `tools/test-integration` against a PostgreSQL service container | about 2 min | [Integration tests](#integration-tests) |
 | `govulncheck` | `tools/check-vulnerabilities`: govulncheck on every Go module. **Not blocking yet.** | about 2 min | `tools/check-vulnerabilities` |
+| `full-stack` | The images, then the smokes and the browser suite (without the `@codex` tests) on the verification stack | about 19 min: 10 to build, 8 to test | [Full-stack tests](#full-stack-tests) |
 
-The times are with warm caches; without them, each job takes up to a minute longer. A whole run takes about as long as its slowest job, about 2 minutes.
+The times are with warm caches; without them, each job takes up to a minute longer. The checks take about as long as the slowest of them, about 2 minutes; with `full-stack` after them, a whole run takes about 21 minutes.
 
 `tools/check` without flags runs all of its parts, as before. Like `make check`, it needs a clean working tree. `check-generated` and `check-dashboard` run `npm ci --prefix apps/dashboard` first.
 
@@ -40,7 +41,7 @@ CI installs the versions the repository already uses:
 
 Every action is pinned to a full commit SHA, with its version in a comment. Dependabot keeps both up to date.
 
-Each Go job caches the module and build caches under its own key (the Go version and the hash of every `go.sum`). The npm download cache and Next.js's build cache (`.next/cache`) are cached too.
+Each Go job caches the module and build caches under its own key (the Go version and the hash of every `go.sum`). The npm download cache and Next.js's build cache (`.next/cache`) are cached too. `full-stack` caches only the Whisper model; it builds the images from scratch ([why](#not-cached-the-images)).
 
 ## Integration tests
 
@@ -64,6 +65,81 @@ docker stop lifeos-it-pg
 `tools/test-integration services/finance` runs one module's tests and skips the restore tool's test.
 
 In CI, the job's PostgreSQL is a service container of `postgres:18.6-alpine`. Its first step fails if that is not the image `compose.yaml` deploys (`LIFE_OS_POSTGRES_IMAGE`'s default). After a PostgreSQL upgrade, change `services.postgres.image` in `ci.yml` to match.
+
+## Full-stack tests
+
+The `full-stack` job runs the images, the smokes, and the browser suite on the disposable verification stack (`tools/verify-compose`, project `lifeos-verify`, the gateway on `127.0.0.1:13001`). It starts once `check-generated`, `check-go`, `check-dashboard`, and `integration` have passed, on the same pushes and pull requests, on a GitHub-hosted runner (`ubuntu-24.04`: 4 CPUs, 16 GB of memory). It needs no secret and signs in to no AI.
+
+In order:
+
+1. **Unknown service names answered at once.** The runner's systemd-resolved answers SERVFAIL for a single-label name it does not know, such as a service that is not running, and the Alpine images' C library (musl) waits 10 s on SERVFAIL before it gives up. Home and Status probe services that are not running here (the processor, and the monitor, backup, and host-health, which `make life-smoke` does not start), so the Dashboard's DNS lookups queued behind those waits until its requests to running services timed out too: Home showed no Task. `ResolveUnicastSingleLabel=yes` sends such names to the upstream DNS, which answers NXDOMAIN at once, as on a usual host.
+2. **A throwaway `.env`**: `tools/ci-env "$RUNNER_TEMP/lifeos-ci"` writes `.env.example` with a new random password for every database login, `LIFE_OS_TIMEZONE=Europe/Berlin` (the browser tests' zone), every integration unset (Google, Enable Banking, ntfy, Cloudflare, web push, the ZAW feed; `tools/verify-compose` refuses them anyway), the backup directory under the scratch directory, and the runner's user as the owner of the backup directory, the Codex home, and the bank key. The Codex home is an empty directory. The file lives in the job's checkout only: Docker builds leave it out (`.dockerignore`), and nothing uploads it. `tools/ci-env` refuses to replace an existing `.env`.
+3. **The Whisper model** (`ggml-small.bin`, 466 MB, the `.env.example` default) from the Actions cache, under a key made of its file name and URL; on a miss it is downloaded from Hugging Face and saved at once, so a failed run keeps it too. `LIFE_OS_VERIFY_OVERLAYS=tools/fixtures/whisper-models.compose.yaml` mounts it read-only into the verification stack's Whisper, which would otherwise download it into a fresh volume at every start (each smoke starts its own stack).
+4. **The images**: `docker compose build`, all of them at once, as `make life-up` would.
+5. **Playwright**: `npm ci` and `npx playwright install --with-deps chromium firefox`, so the voice test records in Firefox too.
+6. **The smokes**, each on a stack of its own that it removes when it ends: `make life-smoke`, `tools/smoke-e2e`, `make verify-clean-db`, `tools/smoke-action-idempotency`, `tools/smoke-gateway-recreate`, and `tools/smoke-voice-lease-recovery` (the real whisper.cpp). Every smoke runs, even after another one failed.
+7. **The browser suite**: `tools/browser-e2e --grep-invert @codex`, Chromium and Firefox, with Playwright's two workers.
+8. **Teardown**, whatever happened: `tools/verify-compose down --volumes --remove-orphans`.
+
+### Without Codex
+
+The processor's Codex home is empty, so its entrypoint stops it at start ("missing Codex authentication") and Docker restarts it again and again; Status shows "The Inbox processor is not running", and captures wait in Inbox. Left out because they need the real, signed-in Codex CLI:
+
+- the browser tests tagged `@codex` in their title: a browser capture that becomes a Task (`text-capture.spec.ts`), a quotation that lands in Human Review (`human-review-dismiss.spec.ts`), and the Event Log's trace of a capture through the agent (`activity-log.spec.ts`). Every other browser test that involves Human Review asks for the review itself, as the processor would;
+- `make processor-smoke`, `processor-codex-actions-smoke`, `human-review-smoke`, `activity-trace-smoke`, `relative-dates-smoke`, `cross-language-smoke`, `calendar-ai-smoke`, `runtime-status-smoke` (it also signs Codex out inside the processor), `retry-schedule-smoke`, `codex-runtime-smoke`, `phase8-acceptance`, and `tools/benchmark-ai-runtime`. The Codex simulator they use (`tools/fixtures/codex-limit-simulator`) only stands in for a usage limit, a failing run, or a slow start, and hands every other call to the real CLI.
+
+Also left out: `make verify-isolation`, which proves that the verification stack leaves a deployed Life OS's volumes alone and needs one, and the deployed-only browser tests (`calendar-capture`, `finance-capture`, `localized-capture`), which skip themselves without their `LIFE_OS_E2E_LIVE_*` settings. The forced-problem tests of `runtime-status.spec.ts` and `phase8-acceptance.spec.ts` skip too; their smokes run them.
+
+### When it fails
+
+With `LIFE_OS_VERIFY_LOGS_DIR` set, `tools/verify-compose down` first saves the stack's `docker compose ps --all` and every container's log, one file per stack. A failed run uploads two artifacts, kept 7 days:
+
+- `compose-logs`: a directory per smoke (`life-smoke`, `smoke-e2e`, …, `browser-e2e`, and `left-up` for a stack a failed smoke left running), with a file per stack it brought up.
+- `playwright`: `test-results/` (the failed tests' traces and page snapshots) and `playwright-report/` (the HTML report).
+
+```sh
+gh run download <run-id> -R GAMch1k/life-os -n playwright -D /tmp/lifeos-playwright
+cd apps/dashboard
+npx playwright show-report /tmp/lifeos-playwright/playwright-report
+npx playwright show-trace /tmp/lifeos-playwright/test-results/<test>/trace.zip
+```
+
+### How long it takes
+
+Measured on 9 and 10 November 2026, with the Whisper model in the cache: about 19 minutes for the job, about 21 for the whole run from the push.
+
+| Part | Time |
+| --- | --- |
+| Setup, the `.env`, the Whisper model | under 10 s (without the cache, the download takes about 5 s and saving it 4 s) |
+| `docker compose build` | about 10 min. whisper.cpp's compile (`-j2`) finishes last; the 18 Go builds and the Dashboard's `npm ci` share the 4 CPUs with it, about 7 to 8 min each |
+| `npm ci` and Playwright's browsers | under 1 min |
+| The smokes | about 4 min: `make life-smoke` 20 s, `tools/smoke-e2e`, `make verify-clean-db`, and `tools/smoke-action-idempotency` about 25 s each, `tools/smoke-gateway-recreate` 40 s, `tools/smoke-voice-lease-recovery` 2 min |
+| The browser suite | about 4 min: 114 tests pass and 30 skip, 3.8 min of it Playwright's |
+
+### Run it again, or elsewhere
+
+To run it again on GitHub: **Re-run failed jobs** on the run, or `gh workflow run CI -R GAMch1k/life-os --ref <branch>`.
+
+Never on the server: `compose.yaml` names the project `lifeos`, so `docker compose build` and `up` there act on the deployed Life OS. On a machine that only tests Life OS (a throwaway VM with Docker, Node 22, and `jq`), from a clone:
+
+```sh
+tools/ci-env /tmp/lifeos-ci
+mkdir -p /tmp/whisper-models && curl -fL -o /tmp/whisper-models/ggml-small.bin \
+  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin
+export LIFE_OS_WHISPER_MODELS_DIR=/tmp/whisper-models \
+  LIFE_OS_VERIFY_OVERLAYS=tools/fixtures/whisper-models.compose.yaml
+docker compose build
+npm ci --prefix apps/dashboard && (cd apps/dashboard && npx playwright install --with-deps chromium firefox)
+make life-smoke && tools/smoke-e2e && make verify-clean-db && tools/smoke-action-idempotency \
+  && tools/smoke-gateway-recreate && tools/smoke-voice-lease-recovery
+tools/browser-e2e --grep-invert @codex
+```
+
+Without `LIFE_OS_VERIFY_OVERLAYS`, Whisper downloads the model itself at each start. If Home misses its Tasks there too, check how the machine answers an unknown name from a container (`docker network create t && docker run --rm --network t alpine:3.22 getent hosts nosuchservice; docker network rm t`): 10 s is the SERVFAIL wait above, and the job's `ResolveUnicastSingleLabel=yes` fixes it on systemd-resolved.
+
+### Not cached: the images
+
+The images are built from scratch in every run. The Go services' Dockerfiles copy the whole repository before `go build`, so any commit changes that layer and a build cache (buildx with `type=gha`) could reuse none of their work. It could reuse only whisper.cpp's build and the Dashboard's `npm ci`, a few minutes of the build, at the cost of a second builder, loading every image into Docker, and a whisper.cpp kept at whatever version the cache first saw (its Dockerfile clones the newest one).
 
 ## govulncheck
 
