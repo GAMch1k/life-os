@@ -2,6 +2,8 @@
 
 This guide takes you from a fresh Linux server to a working Life OS. Follow the steps in order. Life OS is single-user and has no accounts or login of its own, so anyone who can reach its gateway acts as the owner. How you expose the gateway ([step 9](#9-remote-access)) is your security boundary.
 
+This guide builds Life OS from this repository. To install the published images instead, with `setup.sh` and nothing to build, follow the [install guide](docs/install/README.md). `setup.sh` also writes this guide's `.env` (step 4) in a clone: run `./setup.sh` there, and it uses the directories below.
+
 The guide links to the detailed runbooks instead of repeating them. Unless noted otherwise, commands run from the checkout (`~/life-os` here). Values such as `lifeos.example.com`, `<you>`, and `<generate>` are placeholders.
 
 ## 1. What you get

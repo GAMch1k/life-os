@@ -19,7 +19,7 @@ The first six jobs run in parallel. `full-stack` waits for the four that block, 
 | Job | What it runs | Time | Locally |
 | --- | --- | --- | --- |
 | `check-generated` | `tools/check --gateway --contracts --sqlc`: the gateway's host list, the OpenAPI lint, generated Go and TypeScript API drift, and sqlc drift | about 1 min | `tools/check --gateway --contracts --sqlc` |
-| `check-go` | `tools/check --go`: gofmt, `go vet`, `go test`, and the build of every module under `pkg/`, `services/`, and `templates/` (`GOWORK=off`) | about 1 min | `tools/check --go` |
+| `check-go` | `tools/check --go --setup`: gofmt, `go vet`, `go test`, and the build of every module under `pkg/`, `services/`, and `templates/` (`GOWORK=off`); then shellcheck and `tools/test-setup`, the tests of the install bundle's `setup.sh` with `docker` and `curl` stubbed (about 15 s) | about 1 min | `tools/check --go --setup` |
 | `check-dashboard` | `tools/check --dashboard`: Prettier, ESLint, the unit tests, the typecheck, and `next build` | about 1.5 min | `tools/check --dashboard` |
 | `integration` | `tools/test-integration` against a PostgreSQL service container | about 2 min | [Integration tests](#integration-tests) |
 | `check-cla` | `node --test .github/cla/cla.test.js`: the [CLA check](#cla-check)'s logic against a fake GitHub API | seconds | `node --test .github/cla/cla.test.js` (Node 22, nothing to install) |
