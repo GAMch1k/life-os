@@ -763,7 +763,9 @@ EOF
   [[ $url == https://* ]] || url=
   [[ -z ${LIFE_OS_PUBLIC_URL:-} || ${LIFE_OS_PUBLIC_URL:-} != https://* ]] || url=$LIFE_OS_PUBLIC_URL
   ask url 'Life OS address on Cloudflare (https://...)' "$url"
-  url=$(normalize_url "$url") && [[ $url == https://* ]] || usage_error 'the address must be https://<hostname>, such as https://lifeos.example.com'
+  if ! url=$(normalize_url "$url") || [[ $url != https://* ]]; then
+    usage_error 'the address must be https://<hostname>, such as https://lifeos.example.com'
+  fi
   host=$(url_hostname "$url")
   [[ -n $host ]] || usage_error 'the Cloudflare address needs a hostname, not an IP address'
   if ((assume_yes)); then
@@ -904,7 +906,9 @@ EOF
   url=$(env_get LIFE_OS_NTFY_PUBLIC_URL 2>/dev/null || true)
   [[ -z ${LIFE_OS_NTFY_PUBLIC_URL:-} ]] || url=$LIFE_OS_NTFY_PUBLIC_URL
   ask url 'ntfy address (https://...)' "$url"
-  url=$(normalize_url "$url") && [[ $url == https://* ]] || usage_error 'the ntfy address must be https://<hostname>, such as https://ntfy.example.com'
+  if ! url=$(normalize_url "$url") || [[ $url != https://* ]]; then
+    usage_error 'the ntfy address must be https://<hostname>, such as https://ntfy.example.com'
+  fi
   host=$(url_hostname "$url")
   [[ -n $host && $host != "$(env_get LIFE_OS_PUBLIC_HOSTNAME 2>/dev/null || true)" ]] \
     || usage_error "ntfy needs a hostname of its own, not Life OS's"
@@ -1330,10 +1334,14 @@ case ${command:-init} in
   status) cmd_status ;;
   check) cmd_check ;;
   gateway) cmd_gateway ;;
-  codex | whisper | cloudflare | google | banking | ntfy | webpush | feed)
-    require_env
-    "setup_$command"
-    ;;
+  codex) setup_codex ;;
+  whisper) setup_whisper ;;
+  cloudflare) setup_cloudflare ;;
+  google) setup_google ;;
+  banking) setup_banking ;;
+  ntfy) setup_ntfy ;;
+  webpush) setup_webpush ;;
+  feed) setup_feed ;;
   help) usage ;;
   *) usage_error "unknown command '$command'" ;;
 esac
