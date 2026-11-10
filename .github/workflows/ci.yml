@@ -212,7 +212,8 @@ jobs:
     name: Full stack (images, smokes, browser suite)
     needs: [check-generated, check-go, check-dashboard, integration]
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    # About 19 minutes (docs/operations/ci.md).
+    timeout-minutes: 60
     env:
       # The verification stack's Whisper reads the model from CI's cache
       # (LIFE_OS_WHISPER_MODELS_DIR, set below) instead of downloading it at
@@ -289,7 +290,7 @@ jobs:
 
       - name: Build the images
         id: build
-        timeout-minutes: 40
+        timeout-minutes: 30
         run: docker compose build
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -345,7 +346,7 @@ jobs:
       # Without the tests that need the real Codex (@codex).
       - name: Browser suite (tools/browser-e2e)
         if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.playwright.outcome == 'success' }}
-        timeout-minutes: 45
+        timeout-minutes: 30
         env:
           LIFE_OS_VERIFY_LOGS_DIR: ${{ runner.temp }}/compose-logs/browser-e2e
         run: tools/browser-e2e --grep-invert @codex --reporter=list,html
