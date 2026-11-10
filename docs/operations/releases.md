@@ -91,11 +91,11 @@ Then watch Actions → Release. It takes about 35 minutes; its build, test, and 
 4. **SBOM**, one job per image and platform, attests its SBOM.
 5. **Release** creates the GitHub Release with the bundle and notes that start with the early-preview warning.
 
-A failure before step 3 publishes nothing: fix it on `master`, delete the tag (`git push origin :refs/tags/v0.1.0-preview.1`, `git tag -d v0.1.0-preview.1`), and tag again. After step 3 the images exist; a re-run of the failed jobs (Actions → the run → Re-run failed jobs) finishes the release with the same images.
+A failure before step 3 publishes nothing: fix it on `master`, delete the tag (`git push origin :refs/tags/v0.1.0-preview.1`, `git tag -d v0.1.0-preview.1`), and tag again, or leave the tag and tag the next version (`v0.1.0-preview.1` and `.2` failed this way and have no release). After step 3 the images exist; a re-run of the failed jobs (Actions → the run → Re-run failed jobs) finishes the release with the same images.
 
 ### Dry runs
 
-Every run that is not a tag push is a dry run: steps 1 and 2 with the version `v0.0.0-dry-run.<run number>`, and nothing published. It runs by hand (Actions → Release → Run workflow, on any branch) and on a push to a branch that changes the release's own files (the workflow, `.github/actions/full-stack`, the allowlist, `tools/build-install-bundle`, `tools/scan-images`). A dry run may go without `setup.sh`; a release may not.
+Every run that is not a tag push is a dry run: steps 1 and 2 with the version `v0.0.0-dry-run.<run number>`, and nothing published. Steps 3 to 5 run only for a tag. It runs by hand (Actions → Release → Run workflow, on any branch) and on a push to a branch that changes the release's own files (the workflow, `.github/actions/full-stack`, the allowlist, `tools/build-install-bundle`, `tools/scan-images`). A dry run may go without `setup.sh`; a release may not.
 
 ### Package visibility
 
