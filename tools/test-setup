@@ -1,0 +1,538 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Tests setup.sh (docs/install) without Docker: each case copies setup.sh,
+# .env.example, and compose.yaml (without its build sections, like the
+# release's install compose) into a scratch directory and runs it there with
+# stand-ins for docker and curl on PATH, which only record what they were
+# asked. Nothing here talks to Docker, a registry, or the network, so it is
+# safe on a server that runs Life OS. With shellcheck on PATH it checks both
+# scripts first.
+#
+#   tools/test-setup
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$repo_root"
+
+if command -v shellcheck >/dev/null 2>&1; then
+  shellcheck setup.sh tools/test-setup
+  echo 'shellcheck: setup.sh and tools/test-setup are clean'
+elif [[ -n ${CI:-} ]]; then
+  echo 'test-setup: shellcheck is required in CI' >&2
+  exit 2
+else
+  echo 'test-setup: shellcheck not found; skipping it' >&2
+fi
+
+work=$(mktemp -d "${TMPDIR:-/tmp}/lifeos-test-setup.XXXXXX")
+vapid_test=services/notifications/internal/webpush/zz_setup_keys_test.go
+trap 'rm -rf "$work"; rm -f "$vapid_test"' EXIT
+stubs=$work/bin
+mkdir -p "$stubs"
+touch "$work/docker.sock"
+
+# docker: records each call (with LIFE_OS_VERSION, which update overrides
+# for the pull), answers what setup.sh reads, and fails where a STUB_*
+# variable asks it to.
+cat >"$stubs/docker" <<'EOF'
+#!/usr/bin/env bash
+printf 'docker %s [LIFE_OS_VERSION=%s]\n' "$*" "${LIFE_OS_VERSION:-}" >>"$STUB_LOG"
+case $1 in
+  info)
+    if [[ -n ${STUB_INFO_ERROR:-} ]]; then echo "$STUB_INFO_ERROR" >&2; exit 1; fi
+    case $* in
+      *ServerVersion*) echo "${STUB_ENGINE:-29.4.3}" ;;
+      *DockerRootDir*) echo "${STUB_WORK}" ;;
+    esac
+    ;;
+  compose)
+    shift
+    [[ $1 != --profile ]] || shift 2
+    case $* in
+      'version --short') echo "${STUB_COMPOSE:-v5.1.3}" ;;
+      'config --images') printf 'ghcr.io/gamch1k/life-os-tasks:preview\nbinwiederhier/ntfy:v2.29.0\n' ;;
+      'ps -q --status running backup') [[ ${STUB_BACKUP_RUNNING:-1} != 1 ]] || echo 3f1c0ffee ;;
+      'ps -q processor') : ;;
+      'ps --all --format'*) cat "${STUB_PS_FILE:-/dev/null}" ;;
+      exec*) exit "${STUB_BACKUP_EXIT:-0}" ;;
+      pull*) exit "${STUB_PULL_EXIT:-0}" ;;
+      *) : ;;
+    esac
+    ;;
+  run)
+    # ntfy's `user hash`: a bcrypt-shaped hash of what it reads.
+    cat >/dev/null
+    echo 'password: '
+    printf '$2a$10$%s\n' "$(head -c 120 /dev/urandom | base64 -w0 | tr -dc 'A-Za-z0-9' | head -c 53)"
+    ;;
+esac
+EOF
+
+# curl: the Access check (an https:// URL) prints STUB_ACCESS; a feed POST
+# writes STUB_FEED_BODY and prints STUB_FEED_STATUS; the gateway answers
+# unless STUB_GATEWAY_DOWN is set.
+cat >"$stubs/curl" <<'EOF'
+#!/usr/bin/env bash
+printf 'curl %s\n' "$*" >>"$STUB_LOG"
+url=${!#}
+out=
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+  [[ ${args[i]} != -o ]] || out=${args[i + 1]}
+done
+case $url in
+  https://*) printf '%s' "${STUB_ACCESS:-302 https://team.cloudflareaccess.com/cdn-cgi/access/login/x}" ;;
+  */v1/feeds)
+    [[ -z $out || $out == /dev/null ]] || printf '%s' "${STUB_FEED_BODY:-{\}}" >"$out"
+    printf '%s' "${STUB_FEED_STATUS:-201}"
+    ;;
+  *) [[ -z ${STUB_GATEWAY_DOWN:-} ]] || exit 7 ;;
+esac
+EOF
+chmod 755 "$stubs/docker" "$stubs/curl"
+
+# The install compose: compose.yaml as the release ships it, images only.
+sed -E '/^[[:space:]]+build:/d' compose.yaml >"$work/compose.yaml"
+
+passed=0
+failed=0
+case_dir=
+case_out=
+
+ok() {
+  local name=$1
+  shift
+  if "$@"; then
+    passed=$((passed + 1))
+  else
+    failed=$((failed + 1))
+    printf 'FAIL [%s]: %s\n' "${case_dir##*/}" "$name" >&2
+  fi
+}
+
+new_case() {
+  case_dir=$work/$1
+  mkdir -p "$case_dir"
+  cp setup.sh .env.example "$case_dir/"
+  cp "$work/compose.yaml" "$case_dir/compose.yaml"
+  case_out=$case_dir.out
+  : >"$case_out"
+  : >"$case_dir.log"
+}
+
+# run [VAR=value...] -- [setup.sh arguments...]: runs ./setup.sh in the case
+# directory with a clean environment, stdin from $stdin (default: none).
+# Sets status; appends the output to the case's output.
+stdin=/dev/null
+run() {
+  local -a vars=()
+  while (($#)) && [[ $1 != -- ]]; do
+    vars+=("$1")
+    shift
+  done
+  shift
+  set +e
+  (cd "$case_dir" && env -i HOME="$work/home" PATH="$stubs:/usr/bin:/bin" LANG=C.UTF-8 \
+    STUB_LOG="$case_dir.log" STUB_WORK="$work" DOCKER_HOST="unix://$work/docker.sock" \
+    "${vars[@]}" ./setup.sh "$@" <"$stdin" >"$case_dir.last" 2>&1)
+  status=$?
+  set -e
+  cat "$case_dir.last" >>"$case_out"
+}
+
+value() { (cd "$case_dir" && grep -E "^$1=" .env | tail -n 1 | cut -d= -f2-); }
+has_line() { grep -qxF -- "$1" "$case_dir/.env"; }
+output_has() { grep -qF -- "$1" "$case_dir.last"; }
+logged() { grep -qF -- "$1" "$case_dir.log"; }
+mode() { stat -c %a "$1"; }
+
+# No secret from .env appears in anything the case printed.
+no_secret_printed() {
+  local line key val
+  while IFS= read -r line; do
+    key=${line%%=*}
+    val=${line#*=}
+    val=${val#\'}
+    val=${val%\'}
+    [[ $key =~ (PASSWORD|SECRET|TOKEN|_KEY|_HASH)$ && ${#val} -ge 8 ]] || continue
+    if grep -qF -- "$val" "$case_out"; then
+      echo "  $key's value was printed" >&2
+      return 1
+    fi
+  done < <(grep -E '^[A-Z_]+=' "$case_dir/.env")
+}
+
+# Every uncommented key appears once.
+no_duplicate_keys() {
+  [[ -z $(grep -oE '^[A-Z][A-Z0-9_]*=' "$case_dir/.env" | sort | uniq -d) ]]
+}
+
+mkdir -p "$work/home"
+uid=$(id -u)
+sock_gid=$(stat -c %g "$work/docker.sock")
+mapfile -t password_keys < <(sed -n 's/^\(LIFE_OS_[A-Z0-9_]*_PASSWORD\)=.*/\1/p' .env.example)
+mapfile -t required_keys < <(grep -oE '\$\{LIFE_OS_[A-Z0-9_]+:\?' compose.yaml | sed -E 's/^\$\{//; s/:\?$//' | sort -u)
+mapfile -t example_keys < <(grep -oE '^LIFE_OS_[A-Z0-9_]+=' .env.example | tr -d =)
+
+# ---------- First setup, without questions ----------
+new_case fresh
+run LIFE_OS_TIMEZONE=Europe/Berlin -- --yes
+ok 'exits 0' test "$status" -eq 0
+ok '.env is mode 600' test "$(mode "$case_dir/.env")" = 600
+ok 'prints the preview warning' output_has 'Life OS has no login of its own yet'
+ok 'version falls back to preview' test "$(value LIFE_OS_VERSION)" = preview
+ok 'gateway on loopback' test "$(value LIFE_OS_GATEWAY_BIND_ADDRESS)" = 127.0.0.1
+ok 'port 3000' test "$(value LIFE_OS_GATEWAY_PORT)" = 3000
+ok 'public URL is the gateway' test "$(value LIFE_OS_PUBLIC_URL)" = http://127.0.0.1:3000
+ok 'no public hostname' test -z "$(value LIFE_OS_PUBLIC_HOSTNAME)"
+ok 'timezone' test "$(value LIFE_OS_TIMEZONE)" = Europe/Berlin
+ok 'currency EUR' test "$(value LIFE_OS_FINANCE_CURRENCY)" = EUR
+ok 'backup dir set' test "$(value LIFE_OS_BACKUP_DIR)" = "$case_dir/backups"
+ok 'backup dir mode 700' test "$(mode "$case_dir/backups")" = 700
+ok 'Codex home set' test "$(value LIFE_OS_CODEX_HOME_HOST_PATH)" = "$case_dir/codex-home"
+ok 'Codex home mode 700' test "$(mode "$case_dir/codex-home")" = 700
+ok 'runtime UIDs are mine' test "$(value LIFE_OS_CODEX_RUNTIME_UID)$(value LIFE_OS_BACKUP_RUNTIME_UID)$(value LIFE_OS_BANKING_RUNTIME_UID)" = "$uid$uid$uid"
+ok 'Docker socket group' test "$(value LIFE_OS_DOCKER_GID)" = "$sock_gid"
+ok 'ntfy example host cleared' test -z "$(value LIFE_OS_NTFY_PUBLIC_URL)"
+for key in "${password_keys[@]}"; do
+  ok "$key is a new 48-digit hex password" grep -qE "^$key=[0-9a-f]{48}$" "$case_dir/.env"
+done
+ok 'every password differs' test "$(for key in "${password_keys[@]}"; do value "$key"; done | sort -u | wc -l)" -eq "${#password_keys[@]}"
+for key in "${required_keys[@]}"; do
+  ok "compose's required $key is set" test -n "$(value "$key")"
+done
+for key in "${example_keys[@]}"; do
+  ok "$key from .env.example is in .env" grep -q "^$key=" "$case_dir/.env"
+done
+ok 'no template placeholder is left' bash -c "! grep -E '^[A-Z_]+=.*(example\\.com|/absolute/path|replace-with)' '$case_dir/.env'"
+ok 'the comments stay' test "$(grep -c '^#' "$case_dir/.env")" -ge "$(grep -c '^#' .env.example)"
+ok 'no duplicate keys' no_duplicate_keys
+ok 'no secret printed' no_secret_printed
+ok 'says what is next' output_has './setup.sh up'
+fresh_sum=$(sha256sum <"$case_dir/.env")
+
+# ---------- An existing .env is never overwritten ----------
+run LIFE_OS_TIMEZONE=Asia/Tokyo -- --yes
+ok 'refuses a second setup' test "$status" -eq 1
+ok 'says why' output_has 'already exists'
+ok '.env unchanged' test "$(sha256sum <"$case_dir/.env")" = "$fresh_sum"
+run -- --yes --skip-checks
+ok 'refuses with --skip-checks too' test "$status" -eq 1
+
+# ---------- --force-new keeps a copy and the passwords ----------
+old_password=$(value LIFE_OS_POSTGRES_PASSWORD)
+old_tasks=$(value LIFE_OS_TASKS_DB_PASSWORD)
+run LIFE_OS_TIMEZONE=America/New_York -- --yes --force-new
+ok '--force-new exits 0' test "$status" -eq 0
+backup=$(find "$case_dir" -maxdepth 1 -name '.env.backup-*' | head -n 1)
+ok 'keeps a copy of the old .env' test -n "$backup"
+ok 'the copy is mode 600' test "$(mode "$backup")" = 600
+ok 'the copy is the old .env' test "$(sha256sum <"$backup")" = "$fresh_sum"
+ok 'the copy has the old timezone' grep -qx 'LIFE_OS_TIMEZONE=Europe/Berlin' "$backup"
+ok 'new settings' test "$(value LIFE_OS_TIMEZONE)" = America/New_York
+ok 'admin password kept' test "$(value LIFE_OS_POSTGRES_PASSWORD)" = "$old_password"
+ok 'service password kept' test "$(value LIFE_OS_TASKS_DB_PASSWORD)" = "$old_tasks"
+ok 'says what it kept' output_has 'were kept from it'
+ok 'no secret printed' no_secret_printed
+
+# ---------- Where the gateway listens ----------
+new_case public-bind
+run -- --yes --bind 203.0.113.7
+ok 'refuses a public address' test "$status" -eq 1
+ok 'explains the refusal' output_has 'no login yet'
+ok 'writes no .env' test ! -e "$case_dir/.env"
+run -- --yes --bind 0.0.0.0
+ok 'refuses every address (0.0.0.0)' test "$status" -eq 1
+run -- --yes --bind 203.0.113.7 --allow-public-bind
+ok 'allows it with --allow-public-bind' test "$status" -eq 0
+ok 'with a loud warning' output_has 'It has NO LOGIN'
+ok 'sets the address' test "$(value LIFE_OS_GATEWAY_BIND_ADDRESS)" = 203.0.113.7
+run -- up --skip-checks
+ok 'up refuses a public address without the flag' test "$status" -eq 1
+ok 'up starts nothing then' bash -c "! grep -q 'compose up' '$case_dir.log'"
+
+new_case vpn-bind
+run -- --yes --bind 10.8.0.1 --port 3100
+ok 'a VPN address works' test "$status" -eq 0
+ok 'warns that every peer is the owner' output_has 'every peer is the owner'
+ok 'the address follows' test "$(value LIFE_OS_PUBLIC_URL)" = http://10.8.0.1:3100
+ok 'the port' test "$(value LIFE_OS_GATEWAY_PORT)" = 3100
+run LIFE_OS_GOOGLE_CLIENT_ID=1-x.apps.googleusercontent.com LIFE_OS_GOOGLE_CLIENT_SECRET=GOCSPX-abc -- --yes google
+ok "warns that Google refuses a plain http VPN address" output_has 'only on 127.0.0.1 or localhost'
+
+new_case https-url
+run -- --yes --public-url https://lifeos.example.org/
+ok 'an https address' test "$status" -eq 0
+ok 'without the slash' test "$(value LIFE_OS_PUBLIC_URL)" = https://lifeos.example.org
+ok 'its hostname' test "$(value LIFE_OS_PUBLIC_HOSTNAME)" = lifeos.example.org
+
+new_case invalid
+run -- --yes --port 70000
+ok 'refuses port 70000' test "$status" -eq 2
+run LIFE_OS_TIMEZONE=Mars/Olympus -- --yes
+ok 'refuses an unknown timezone' test "$status" -eq 2
+run LIFE_OS_FINANCE_CURRENCY=euro -- --yes
+ok 'refuses a bad currency' test "$status" -eq 2
+run -- --yes --public-url ftp://example.org
+ok 'refuses a bad address' test "$status" -eq 2
+run -- --yes --bind
+ok '--bind without a value' test "$status" -eq 2
+run -- --frobnicate
+ok 'unknown option' test "$status" -eq 2
+run -- frobnicate
+ok 'unknown command' test "$status" -eq 2
+ok 'none of these wrote .env' test ! -e "$case_dir/.env"
+run -- help
+ok 'help' test "$status" -eq 0
+ok 'help lists the integrations' output_has './setup.sh codex'
+
+new_case no-docker-access
+run STUB_INFO_ERROR='permission denied while trying to connect to the Docker daemon socket' -- --yes
+ok 'refuses without Docker access' test "$status" -eq 1
+ok 'names the docker group' output_has 'docker group'
+run STUB_ENGINE=24.0.7 STUB_COMPOSE=2.20.2 LIFE_OS_TIMEZONE=UTC -- --yes
+ok 'old Docker only warns' test "$status" -eq 0
+ok 'warns about the engine' output_has 'Docker Engine 24.0.7 is older'
+ok 'warns about compose' output_has 'Docker Compose 2.20.2 is older'
+
+# ---------- The release fills in its version ----------
+ok 'one version placeholder' test "$(grep -c '__LIFE_OS_VERSION__' setup.sh)" -eq 1
+new_case released
+sed -i 's/__LIFE_OS_VERSION__/0.1.0-preview.1/' "$case_dir/setup.sh"
+run LIFE_OS_TIMEZONE=UTC -- --yes
+ok 'a released script sets its version' test "$(value LIFE_OS_VERSION)" = 0.1.0-preview.1
+run -- help
+ok 'help shows it' output_has '(0.1.0-preview.1)'
+
+# ---------- Questions ----------
+new_case interactive
+printf 'Asia/Tokyo\nusd\n\nn\n' >"$work/answers"
+stdin=$work/answers
+run --
+stdin=/dev/null
+ok 'answers questions' test "$status" -eq 0
+ok 'timezone from the answer' test "$(value LIFE_OS_TIMEZONE)" = Asia/Tokyo
+ok 'currency upper-cased' test "$(value LIFE_OS_FINANCE_CURRENCY)" = USD
+ok 'empty answer keeps the default' test "$(value LIFE_OS_PUBLIC_URL)" = http://127.0.0.1:3000
+ok 'lists the integrations' output_has 'Later: ./setup.sh <name>'
+new_case interactive-eof
+run --
+ok 'no answers and no --yes: stops' test "$status" -eq 1
+ok 'says to use --yes' output_has 'use --yes'
+
+# ---------- Integrations ----------
+new_case integrations
+run LIFE_OS_TIMEZONE=UTC -- --yes
+pem=$case_dir/enablebanking.pem
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:1024 -out "$pem" 2>/dev/null
+chmod 600 "$pem"
+
+run -- --yes codex
+ok 'codex needs a person' test "$status" -eq 1
+ok 'says so' output_has 'needs you at a terminal'
+
+run LIFE_OS_GOOGLE_CLIENT_ID=123-abc.apps.googleusercontent.com LIFE_OS_GOOGLE_CLIENT_SECRET=GOCSPX-secretvalue123 -- --yes google
+ok 'google' test "$status" -eq 0
+ok 'client id' test "$(value LIFE_OS_GOOGLE_CLIENT_ID)" = 123-abc.apps.googleusercontent.com
+ok 'client secret' test "$(value LIFE_OS_GOOGLE_CLIENT_SECRET)" = GOCSPX-secretvalue123
+ok 'token key generated' grep -qE '^LIFE_OS_GOOGLE_TOKEN_KEY=[A-Za-z0-9+/]{43}=$' "$case_dir/.env"
+ok 'shows the redirect URI' output_has 'http://127.0.0.1:3000/calendar/google/callback'
+google_key=$(value LIFE_OS_GOOGLE_TOKEN_KEY)
+run LIFE_OS_GOOGLE_CLIENT_ID=456-def.apps.googleusercontent.com LIFE_OS_GOOGLE_CLIENT_SECRET=GOCSPX-other -- --yes google
+ok 'google again' test "$status" -eq 0
+ok 'the token key stays' test "$(value LIFE_OS_GOOGLE_TOKEN_KEY)" = "$google_key"
+ok 'the new client id' test "$(value LIFE_OS_GOOGLE_CLIENT_ID)" = 456-def.apps.googleusercontent.com
+run LIFE_OS_GOOGLE_CLIENT_ID=nonsense LIFE_OS_GOOGLE_CLIENT_SECRET=x -- --yes google
+ok 'refuses a bad client id' test "$status" -eq 2
+
+run LIFE_OS_ENABLE_BANKING_APP_ID=0a1b2c3d-1111-2222-3333-444455556666 LIFE_OS_ENABLE_BANKING_KEY_FILE="$pem" -- --yes banking
+ok 'banking' test "$status" -eq 0
+ok 'app id' test "$(value LIFE_OS_ENABLE_BANKING_APP_ID)" = 0a1b2c3d-1111-2222-3333-444455556666
+ok 'key file' test "$(value LIFE_OS_ENABLE_BANKING_KEY_FILE)" = "$pem"
+ok 'bank token key' grep -qE '^LIFE_OS_BANKING_TOKEN_KEY=[A-Za-z0-9+/]{43}=$' "$case_dir/.env"
+run LIFE_OS_ENABLE_BANKING_APP_ID=0a1b2c3d-1111 LIFE_OS_ENABLE_BANKING_KEY_FILE="$case_dir/nope.pem" -- --yes banking
+ok 'refuses a missing key file' test "$status" -eq 2
+
+run LIFE_OS_SETUP_WHISPER_MODEL=medium -- --yes whisper
+ok 'whisper' test "$status" -eq 0
+ok 'model path' test "$(value LIFE_OS_WHISPER_MODEL_PATH)" = /models/ggml-medium.bin
+ok 'model URL' test "$(value LIFE_OS_WHISPER_MODEL_URL)" = https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin
+ok 'more memory' test "$(value LIFE_OS_WHISPER_MEMORY)" = 3g
+run LIFE_OS_SETUP_WHISPER_MODEL=huge -- --yes whisper
+ok 'refuses an unknown model' test "$status" -eq 2
+
+run LIFE_OS_NTFY_PUBLIC_URL=https://ntfy.example.org LIFE_OS_SETUP_NTFY_PHONE_PASSWORD=correct-horse-battery -- --yes ntfy
+ok 'ntfy needs the tunnel first' test "$status" -eq 1
+
+run LIFE_OS_SETUP_WEBPUSH=on -- --yes webpush
+ok 'web push without https or a contact' test "$status" -eq 2
+
+token="eyJhIjoiMDEyMzQ1Njc4OWFiY2RlZiIsInQiOiJhYmNkZWYtMDEyMyIsInMiOiJzZWNyZXRzZWNyZXRzZWNyZXQifQ=="
+run STUB_ACCESS='200 ' LIFE_OS_PUBLIC_URL=https://lifeos.example.org LIFE_OS_CLOUDFLARE_TUNNEL_TOKEN="$token" -- --yes cloudflare
+ok 'cloudflare refuses without Access' test "$status" -eq 1
+ok 'says Access is missing' output_has 'not protected by Cloudflare Access'
+ok 'the tunnel stays off' bash -c "! grep -q '^COMPOSE_PROFILES=.*cloudflare' '$case_dir/.env'"
+ok 'the token is kept' test "$(value LIFE_OS_CLOUDFLARE_TUNNEL_TOKEN)" = "$token"
+ok 'the address stays' test "$(value LIFE_OS_PUBLIC_URL)" = http://127.0.0.1:3000
+run LIFE_OS_PUBLIC_URL=https://lifeos.example.org LIFE_OS_CLOUDFLARE_TUNNEL_TOKEN="$token" -- --yes cloudflare
+ok 'cloudflare' test "$status" -eq 0
+ok 'checked Access at the hostname' logged 'https://lifeos.example.org/'
+ok 'the tunnel profile' test "$(value COMPOSE_PROFILES)" = cloudflare
+ok 'the https address' test "$(value LIFE_OS_PUBLIC_URL)" = https://lifeos.example.org
+ok 'the hostname' test "$(value LIFE_OS_PUBLIC_HOSTNAME)" = lifeos.example.org
+run LIFE_OS_PUBLIC_URL=https://lifeos.example.org LIFE_OS_CLOUDFLARE_TUNNEL_TOKEN="$token" -- --yes cloudflare
+ok 'cloudflare again keeps one profile entry' test "$(value COMPOSE_PROFILES)" = cloudflare
+
+run LIFE_OS_NTFY_PUBLIC_URL=https://lifeos.example.org LIFE_OS_SETUP_NTFY_PHONE_PASSWORD=correct-horse-battery -- --yes ntfy
+ok "ntfy refuses Life OS's own hostname" test "$status" -eq 2
+run LIFE_OS_NTFY_PUBLIC_URL=https://ntfy.example.org LIFE_OS_SETUP_NTFY_PHONE_PASSWORD=short -- --yes ntfy
+ok 'ntfy refuses a short password' test "$status" -eq 2
+run LIFE_OS_NTFY_PUBLIC_URL=https://ntfy.example.org LIFE_OS_SETUP_NTFY_PHONE_PASSWORD=correct-horse-battery -- --yes ntfy
+ok 'ntfy' test "$status" -eq 0
+ok 'hashed with the compose image, offline' logged 'docker run --rm -i --network none binwiederhier/ntfy:v2.29.0 user hash'
+ok 'phone hash in single quotes' grep -qE "^LIFE_OS_NTFY_PHONE_PASSWORD_HASH='\\\$2a\\\$10\\\$[./A-Za-z0-9]{53}'$" "$case_dir/.env"
+ok 'publisher hash in single quotes' grep -qE "^LIFE_OS_NTFY_PUBLISHER_PASSWORD_HASH='\\\$2a\\\$10\\\$[./A-Za-z0-9]{53}'$" "$case_dir/.env"
+ok 'publisher token' grep -qE '^LIFE_OS_NTFY_PUBLISHER_TOKEN=tk_[a-z0-9]{29}$' "$case_dir/.env"
+ok 'ntfy URL' test "$(value LIFE_OS_NTFY_PUBLIC_URL)" = https://ntfy.example.org
+ok 'ntfy profile added' test "$(value COMPOSE_PROFILES)" = cloudflare,ntfy
+ok 'ntfy channel' test "$(value LIFE_OS_NOTIFICATIONS_CHANNELS)" = ntfy
+ntfy_token=$(value LIFE_OS_NTFY_PUBLISHER_TOKEN)
+run LIFE_OS_NTFY_PUBLIC_URL=https://ntfy.example.org LIFE_OS_SETUP_NTFY_PHONE_PASSWORD=another-horse-battery -- --yes ntfy
+ok 'ntfy again keeps the token' test "$(value LIFE_OS_NTFY_PUBLISHER_TOKEN)" = "$ntfy_token"
+
+run LIFE_OS_SETUP_WEBPUSH=on -- --yes webpush
+ok 'web push' test "$status" -eq 0
+ok 'public key: a P-256 point' grep -qE '^LIFE_OS_WEBPUSH_VAPID_PUBLIC_KEY=B[A-Za-z0-9_-]{86}$' "$case_dir/.env"
+ok 'private key: 32 bytes' grep -qE '^LIFE_OS_WEBPUSH_VAPID_PRIVATE_KEY=[A-Za-z0-9_-]{43}$' "$case_dir/.env"
+ok 'both channels' test "$(value LIFE_OS_NOTIFICATIONS_CHANNELS)" = ntfy,webpush
+ok 'no contact needed with https' test -z "$(value LIFE_OS_WEBPUSH_SUBJECT)"
+if command -v go >/dev/null 2>&1 && [[ -d services/notifications ]]; then
+  # The pair as the notifications service parses it (a test file there for
+  # this run only; the EXIT trap removes it too).
+  cat >"$vapid_test" <<'EOF'
+package webpush
+
+import (
+	"os"
+	"testing"
+)
+
+func TestSetupHelperKeys(t *testing.T) {
+	if _, err := ParseKeys(os.Getenv("SETUP_PUBLIC"), os.Getenv("SETUP_PRIVATE")); err != nil {
+		t.Fatal(err)
+	}
+}
+EOF
+  set +e
+  (cd services/notifications && SETUP_PUBLIC=$(value LIFE_OS_WEBPUSH_VAPID_PUBLIC_KEY) SETUP_PRIVATE=$(value LIFE_OS_WEBPUSH_VAPID_PRIVATE_KEY) \
+    GOWORK=off go test -count=1 -run TestSetupHelperKeys ./internal/webpush >/dev/null 2>&1)
+  vapid_status=$?
+  set -e
+  rm -f "$vapid_test"
+  ok 'the notifications service accepts the key pair' test "$vapid_status" -eq 0
+fi
+
+run STUB_FEED_STATUS=201 LIFE_OS_SETUP_FEED_NAME='School holidays' LIFE_OS_SETUP_FEED_URL=webcal://example.org/holidays.ics -- --yes feed
+ok 'feed' test "$status" -eq 0
+ok 'posted to calendar-feeds' logged 'http://127.0.0.1:3000/api/integrations/calendar-feeds/v1/feeds'
+ok 'as dev:setup' logged 'X-Life-OS-Actor: dev:setup'
+ok 'with the name and URL' logged '{"name":"School holidays","url":"webcal://example.org/holidays.ics"}'
+run STUB_FEED_STATUS=400 STUB_FEED_BODY='{"error":{"code":"invalid_url"}}' LIFE_OS_SETUP_FEED_NAME=x LIFE_OS_SETUP_FEED_URL=https://example.org/a.ics -- --yes feed
+ok 'a refused feed fails' test "$status" -eq 1
+ok "and shows Life OS's answer" output_has 'invalid_url'
+run LIFE_OS_SETUP_FEED_NAME='Bad "name"' LIFE_OS_SETUP_FEED_URL=https://example.org/a.ics -- --yes feed
+ok 'refuses quotes in the name' test "$status" -eq 2
+run STUB_GATEWAY_DOWN=1 LIFE_OS_SETUP_FEED_NAME=x LIFE_OS_SETUP_FEED_URL=https://example.org/a.ics -- --yes feed
+ok 'a feed needs Life OS running' test "$status" -eq 1
+
+ok '.env is still mode 600' test "$(mode "$case_dir/.env")" = 600
+ok 'no duplicate keys' no_duplicate_keys
+ok 'no secret printed' no_secret_printed
+
+run -- status
+ok 'status' test "$status" -eq 0
+ok 'status: google set up' grep -qE 'Google Calendar \(google\) +set up' "$case_dir.last"
+ok 'status: not signed in to Codex' grep -qE 'AI processing \(codex\) +not signed in' "$case_dir.last"
+ok 'status: the Whisper model' grep -qE 'Whisper model \(whisper\) +medium' "$case_dir.last"
+ok 'no secret printed by status' no_secret_printed
+
+# ---------- Integrations during a first setup without questions ----------
+new_case init-with-integrations
+run LIFE_OS_TIMEZONE=UTC LIFE_OS_GOOGLE_CLIENT_ID=1-x.apps.googleusercontent.com LIFE_OS_GOOGLE_CLIENT_SECRET=GOCSPX-abc \
+  LIFE_OS_SETUP_WHISPER_MODEL=base -- --yes
+ok 'first setup with integrations' test "$status" -eq 0
+ok 'google set up at once' test "$(value LIFE_OS_GOOGLE_CLIENT_ID)" = 1-x.apps.googleusercontent.com
+ok 'whisper set up at once' test "$(value LIFE_OS_WHISPER_MODEL_PATH)" = /models/ggml-base.bin
+ok 'banking left alone' test -z "$(value LIFE_OS_ENABLE_BANKING_APP_ID)"
+
+# ---------- up, update, status ----------
+new_case running
+run LIFE_OS_TIMEZONE=UTC -- --yes
+printf '%s\n' 'postgres|running|healthy|0' 'tasks-migrate|exited||0' 'tasks|running||0' \
+  'processor|restarting||78' 'whisper|running|starting|0' 'gateway|running||0' >"$work/ps"
+: >"$case_dir.log"
+run STUB_PS_FILE="$work/ps" LIFE_OS_SETUP_WAIT_SECONDS=5 -- up
+ok 'up' test "$status" -eq 0
+ok 'up pulls what is missing and starts' logged 'docker compose up -d --pull missing'
+ok 'up waits for the gateway' logged 'curl -fsS -o /dev/null -m 5 http://127.0.0.1:3000/api/tasks/ready'
+ok 'up prints the address' output_has 'http://127.0.0.1:3000'
+ok 'up explains the SSH tunnel' output_has 'ssh -N -L 3000:127.0.0.1:3000'
+ok 'up: AI is off until the sign-in' output_has 'AI processing is off until you sign in'
+ok 'up: Whisper is still starting' output_has 'Whisper is still starting'
+ok 'up: a migration that exited 0 is fine' bash -c "! grep -q 'not running:' '$case_dir.last'"
+ok 'up suggests codex' output_has './setup.sh codex'
+printf '%s\n' 'tasks-migrate|exited||1' 'tasks|exited||1' >"$work/ps-bad"
+run STUB_PS_FILE="$work/ps-bad" LIFE_OS_SETUP_WAIT_SECONDS=5 -- up
+ok 'up names what is not running' output_has 'not running: tasks-migrate (exit 1) tasks (exited)'
+run STUB_GATEWAY_DOWN=1 LIFE_OS_SETUP_WAIT_SECONDS=1 -- up --skip-checks
+ok 'up still ends when Life OS does not answer' test "$status" -eq 0
+ok 'and says so' output_has 'still not answering'
+
+: >"$case_dir.log"
+run LIFE_OS_SETUP_WAIT_SECONDS=5 -- update 0.1.0-preview.2 --skip-checks
+ok 'update' test "$status" -eq 0
+ok 'backs up first' logged 'docker compose exec -T backup /service now -actor dev:setup'
+ok 'pulls the new version' logged 'docker compose pull [LIFE_OS_VERSION=0.1.0-preview.2]'
+ok 'restarts' logged 'docker compose up -d --remove-orphans'
+ok 'in that order' test "$(grep -nE 'compose (exec|pull|up)' "$case_dir.log" | cut -d' ' -f3 | tr '\n' ' ')" = 'exec pull up '
+ok 'records the version' test "$(value LIFE_OS_VERSION)" = 0.1.0-preview.2
+
+: >"$case_dir.log"
+run STUB_BACKUP_EXIT=1 -- update 0.1.0-preview.3 --skip-checks
+ok 'a failed backup stops the update' test "$status" -eq 1
+ok 'nothing pulled' bash -c "! grep -q 'compose pull' '$case_dir.log'"
+ok 'version unchanged' test "$(value LIFE_OS_VERSION)" = 0.1.0-preview.2
+run STUB_BACKUP_RUNNING=0 -- update 0.1.0-preview.3 --skip-checks
+ok 'no backup service: refuses' test "$status" -eq 1
+ok 'suggests --skip-backup' output_has '--skip-backup'
+run STUB_PULL_EXIT=1 -- update 0.1.0-preview.3 --skip-checks
+ok 'a failed pull changes nothing' test "$(value LIFE_OS_VERSION)" = 0.1.0-preview.2
+printf 'LIFE_OS_NEWTHING_DB_PASSWORD=replace-with-a-local-password\nLIFE_OS_NEWTHING_TIME=05:00\n' >>"$case_dir/.env.example"
+run STUB_BACKUP_RUNNING=0 LIFE_OS_SETUP_WAIT_SECONDS=5 -- update --skip-backup --skip-checks
+ok 'update without a backup' test "$status" -eq 0
+ok 'the script version by default' test "$(value LIFE_OS_VERSION)" = preview
+ok 'adds a new password' grep -qE '^LIFE_OS_NEWTHING_DB_PASSWORD=[0-9a-f]{48}$' "$case_dir/.env"
+ok 'adds a new setting' test "$(value LIFE_OS_NEWTHING_TIME)" = 05:00
+ok 'no duplicate keys' no_duplicate_keys
+ok 'no secret printed' no_secret_printed
+
+# ---------- A clone of the repository ----------
+new_case checkout
+mkdir "$case_dir/.git"
+run LIFE_OS_TIMEZONE=UTC -- --yes
+ok 'a clone gets a .env too' test "$status" -eq 0
+ok "with SETUP.md's backup directory" test "$(value LIFE_OS_BACKUP_DIR)" = "$work/home/life-os.backups"
+ok "and the host's Codex home" test "$(value LIFE_OS_CODEX_HOME_HOST_PATH)" = "$work/home/.codex"
+ok 'says SETUP.md applies' output_has 'SETUP.md'
+: >"$case_dir.log"
+for command in up update codex; do
+  run -- "$command"
+  ok "$command refuses in a clone" test "$status" -eq 1
+done
+ok 'no compose command ran in the clone' bash -c "! grep -q 'docker compose' '$case_dir.log'"
+run LIFE_OS_GOOGLE_CLIENT_ID=1-x.apps.googleusercontent.com LIFE_OS_GOOGLE_CLIENT_SECRET=GOCSPX-abc -- --yes google
+ok 'an integration in a clone' test "$status" -eq 0
+ok 'says how to redeploy one service' output_has 'docker compose up -d --no-build --no-deps google-calendar'
+
+printf '\ntest-setup: %d passed, %d failed\n' "$passed" "$failed"
+((failed == 0))
