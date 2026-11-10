@@ -30,7 +30,11 @@ key or session material is copied into the repository. See
 [Phase 7 runtime verification](../verification/phase-7.md) for the exact
 browser, Codex, retry, and recovery checks, and
 [Phase 8 verification](../verification/phase-8.md) for the Phase 8 smokes and
-the `make phase8-acceptance` sign-off run.
+the `make phase8-acceptance` sign-off run. Only the browser tests tagged
+`@codex` wait for Codex: `tools/browser-e2e --grep-invert @codex` runs the
+others without a Codex session, as CI does
+([Continuous integration](../operations/ci.md#full-stack-tests)), and
+`tools/browser-e2e` passes any other arguments to Playwright too.
 
 The `apps/dashboard/e2e/calendar-capture.spec.ts` and
 `finance-capture.spec.ts` files are separate, deliberately opt-in tests for an

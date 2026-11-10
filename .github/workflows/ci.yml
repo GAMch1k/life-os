@@ -1,7 +1,9 @@
 # The source checks, the integration tests, and govulncheck on every push and
-# pull request. See docs/operations/ci.md: what runs, and how to run each job
-# locally. Later workflows and jobs can wait for these with
-# needs: [check-generated, check-go, check-dashboard, integration].
+# pull request, then, once the checks and the integration tests pass, the
+# full-stack tests: the images, the smokes, and the browser suite on the
+# disposable verification stack. See docs/operations/ci.md: what runs, and
+# how to run each job locally. Later workflows and jobs can wait for the
+# checks with needs: [check-generated, check-go, check-dashboard, integration].
 name: CI
 
 on:
@@ -205,3 +207,173 @@ jobs:
             ~/go/pkg/mod
             ~/.cache/go-build
           key: ${{ steps.cache.outputs.cache-primary-key }}
+
+  full-stack:
+    name: Full stack (images, smokes, browser suite)
+    needs: [check-generated, check-go, check-dashboard, integration]
+    runs-on: ubuntu-24.04
+    # 14 to 19 minutes (docs/operations/ci.md).
+    timeout-minutes: 60
+    env:
+      # The verification stack's Whisper reads the model from CI's cache
+      # (LIFE_OS_WHISPER_MODELS_DIR, set below) instead of downloading it at
+      # every start.
+      LIFE_OS_VERIFY_OVERLAYS: tools/fixtures/whisper-models.compose.yaml
+      PLAYWRIGHT_HTML_OPEN: never
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Show the runner
+        run: |
+          echo "$(nproc) CPUs"
+          free -h
+          df -h /
+          docker version --format 'Docker {{.Server.Version}}'
+          docker compose version
+      # The runner's systemd-resolved answers SERVFAIL for a single-label name
+      # it does not know, such as a service that is not running, and the
+      # Alpine (musl) images wait 10 s on SERVFAIL before they give up. Home
+      # probes such services (the processor, which never starts here, and
+      # those make life-smoke leaves out), and those waits filled Node's DNS
+      # threads until the Dashboard's requests to running services timed out
+      # too. With single-label names sent upstream, the answer is NXDOMAIN at
+      # once, as on a usual host.
+      - name: Answer unknown service names at once
+        run: |
+          sudo mkdir -p /etc/systemd/resolved.conf.d
+          printf '[Resolve]\nResolveUnicastSingleLabel=yes\n' | sudo tee /etc/systemd/resolved.conf.d/lifeos-ci.conf
+          sudo systemctl restart systemd-resolved
+      # Throwaway passwords, no integration, and an empty Codex home: no
+      # secret and no AI sign-in. Never uploaded or committed.
+      - name: Write a throwaway .env
+        run: tools/ci-env "$RUNNER_TEMP/lifeos-ci"
+
+      - name: Find the Whisper model
+        id: whisper
+        run: |
+          url=$(sed -n 's/^LIFE_OS_WHISPER_MODEL_URL=//p' .env | tail -n 1)
+          model=$(sed -n 's/^LIFE_OS_WHISPER_MODEL_PATH=//p' .env | tail -n 1)
+          file=${model##*/}
+          if [[ -z "$url" || "$model" != "/models/$file" ]]; then
+            echo "::error file=.env.example::The Whisper model must be a file in /models with a download URL (LIFE_OS_WHISPER_MODEL_PATH, LIFE_OS_WHISPER_MODEL_URL)."
+            exit 1
+          fi
+          {
+            echo "url=$url"
+            echo "file=$file"
+            echo "key=whisper-model-$file-$(printf '%s' "$url" | sha256sum | cut -c 1-16)"
+          } >>"$GITHUB_OUTPUT"
+          echo "LIFE_OS_WHISPER_MODELS_DIR=$RUNNER_TEMP/whisper-models" >>"$GITHUB_ENV"
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: whisper-cache
+        with:
+          path: ${{ runner.temp }}/whisper-models
+          key: ${{ steps.whisper.outputs.key }}
+      - name: Download the Whisper model
+        if: steps.whisper-cache.outputs.cache-hit != 'true'
+        env:
+          MODEL_URL: ${{ steps.whisper.outputs.url }}
+          MODEL_FILE: ${{ steps.whisper.outputs.file }}
+        run: |
+          mkdir -p "$LIFE_OS_WHISPER_MODELS_DIR"
+          curl --fail --silent --show-error --location --retry 3 --output "$LIFE_OS_WHISPER_MODELS_DIR/$MODEL_FILE.part" "$MODEL_URL"
+          mv "$LIFE_OS_WHISPER_MODELS_DIR/$MODEL_FILE.part" "$LIFE_OS_WHISPER_MODELS_DIR/$MODEL_FILE"
+      # Saved at once, so a failed run keeps it too.
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: steps.whisper-cache.outputs.cache-hit != 'true'
+        with:
+          path: ${{ runner.temp }}/whisper-models
+          key: ${{ steps.whisper.outputs.key }}
+      # Whisper runs as nobody.
+      - run: chmod 755 "$LIFE_OS_WHISPER_MODELS_DIR" && chmod 644 "$LIFE_OS_WHISPER_MODELS_DIR"/* && ls -l "$LIFE_OS_WHISPER_MODELS_DIR"
+
+      - name: Build the images
+        id: build
+        timeout-minutes: 30
+        run: docker compose build
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: apps/dashboard/package-lock.json
+      - run: npm ci --prefix apps/dashboard --no-audit --no-fund
+      - name: Install Playwright's Chromium and Firefox
+        id: playwright
+        working-directory: apps/dashboard
+        run: npx playwright install --with-deps chromium firefox
+
+      # Each smoke brings the verification stack (tools/verify-compose,
+      # project lifeos-verify) up and removes it again; LIFE_OS_VERIFY_LOGS_DIR
+      # keeps its containers' logs. Every smoke runs, even after another failed.
+      - name: Core and Dashboard smokes (make life-smoke)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 10
+        env:
+          LIFE_OS_VERIFY_LOGS_DIR: ${{ runner.temp }}/compose-logs/life-smoke
+        run: make life-smoke
+      - name: End-to-end core smoke (tools/smoke-e2e)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 10
+        env:
+          LIFE_OS_VERIFY_LOGS_DIR: ${{ runner.temp }}/compose-logs/smoke-e2e
+        run: tools/smoke-e2e
+      - name: Database isolation on a clean database (make verify-clean-db)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 10
+        env:
+          LIFE_OS_VERIFY_LOGS_DIR: ${{ runner.temp }}/compose-logs/verify-clean-db
+        run: make verify-clean-db
+      - name: Idempotent replays (tools/smoke-action-idempotency)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 10
+        env:
+          LIFE_OS_VERIFY_LOGS_DIR: ${{ runner.temp }}/compose-logs/smoke-action-idempotency
+        run: tools/smoke-action-idempotency
+      - name: The gateway follows recreated services (tools/smoke-gateway-recreate)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 10
+        env:
+          LIFE_OS_VERIFY_LOGS_DIR: ${{ runner.temp }}/compose-logs/smoke-gateway-recreate
+        run: tools/smoke-gateway-recreate
+      - name: Voice worker crash recovery (tools/smoke-voice-lease-recovery)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        timeout-minutes: 10
+        env:
+          LIFE_OS_VERIFY_LOGS_DIR: ${{ runner.temp }}/compose-logs/smoke-voice-lease-recovery
+        run: tools/smoke-voice-lease-recovery
+      # Without the tests that need the real Codex (@codex).
+      - name: Browser suite (tools/browser-e2e)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.playwright.outcome == 'success' }}
+        timeout-minutes: 30
+        env:
+          LIFE_OS_VERIFY_LOGS_DIR: ${{ runner.temp }}/compose-logs/browser-e2e
+        run: tools/browser-e2e --grep-invert @codex --reporter=list,html
+
+      # Before the upload, so that the logs of a stack a failed smoke left up
+      # are kept too.
+      - name: Tear down the verification stack
+        if: always()
+        env:
+          LIFE_OS_VERIFY_OVERLAYS: ""
+          LIFE_OS_VERIFY_LOGS_DIR: ${{ runner.temp }}/compose-logs/left-up
+        run: |
+          if [[ -f .env ]]; then ./tools/verify-compose down --volumes --remove-orphans; fi
+          docker rm --force lifeos-verify-ip-hold >/dev/null 2>&1 || true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: compose-logs
+          path: ${{ runner.temp }}/compose-logs/
+          retention-days: 7
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: playwright
+          path: |
+            apps/dashboard/test-results/
+            apps/dashboard/playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore

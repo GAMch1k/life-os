@@ -8,7 +8,7 @@ const isCapturePost = (method: string, url: string) =>
 test.describe("Dashboard capture → automatic processor", () => {
   test.skip(!enabled, "set LIFE_OS_E2E_URL to run against the isolated stack");
 
-  test("persists a browser capture and automatically creates a Task", async ({
+  test("persists a browser capture and automatically creates a Task @codex", async ({
     page,
     request,
   }) => {

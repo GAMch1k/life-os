@@ -153,4 +153,16 @@ require_isolated_resources() {
 }
 
 require_isolated_resources
+# A smoke removes its stack when it ends, failed or not, and the containers'
+# logs go with it. With LIFE_OS_VERIFY_LOGS_DIR set (CI does, and uploads
+# them when a smoke fails), `down` first saves the stack's containers and
+# their logs there, one file per stack.
+if [[ "${1:-}" == down && -n "${LIFE_OS_VERIFY_LOGS_DIR:-}" && -n "$("${compose[@]}" ps --all --quiet 2>/dev/null)" ]]; then
+  mkdir -p "$LIFE_OS_VERIFY_LOGS_DIR"
+  {
+    "${compose[@]}" ps --all
+    echo
+    "${compose[@]}" logs --no-color --timestamps
+  } >"$LIFE_OS_VERIFY_LOGS_DIR/$(date -u +%Y%m%dT%H%M%SZ)-$$.log" 2>&1 || true
+fi
 exec "${compose[@]}" "$@"
