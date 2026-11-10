@@ -153,3 +153,5 @@ never bind it to a public/LAN address without an authenticated edge. See
 Copyright (C) 2026 GAMch1k and the Life OS contributors.
 
 Life OS is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License, version 3 only (SPDX: `AGPL-3.0-only`), as published by the Free Software Foundation. It is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; see [`LICENSE`](LICENSE) for the full text. If you run a modified version for other people over a network, the license requires you to offer them its source code.
+
+Contributions are accepted under the [Contributor License Agreement](CLA.md): you keep your copyright, your contribution stays available under the AGPL, and the maintainer may also offer it under other licenses. See [CONTRIBUTING.md](CONTRIBUTING.md).
