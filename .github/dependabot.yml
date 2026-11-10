@@ -1,6 +1,8 @@
-# Weekly version updates (docs/operations/ci.md#dependabot): minor and patch
-# updates arrive as one grouped pull request per ecosystem; a major update
-# gets a pull request of its own. CI checks each one.
+# Weekly version updates (docs/operations/ci.md#dependabot): each ecosystem's
+# updates arrive as one grouped pull request, and CI checks each one. No
+# ecosystem gets major versions (the owner's decision, 2026-11-10): a major
+# upgrade is a ticket of its own. The ignore rules apply to version updates
+# only; security updates still come, majors included.
 version: 2
 
 updates:
@@ -19,6 +21,9 @@ updates:
     groups:
       go-minor-and-patch:
         update-types: [minor, patch]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: npm
     directory: /apps/dashboard
@@ -31,8 +36,12 @@ updates:
     groups:
       npm-minor-and-patch:
         update-types: [minor, patch]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
-  # The Dockerfiles' base images. compose.yaml's images are not covered.
+  # The Dockerfiles' base images, pinned by digest: a rebuilt tag comes as a
+  # new digest, in the same pull request as new minor and patch tags.
   - package-ecosystem: docker
     directories:
       - /apps/dashboard
@@ -46,8 +55,37 @@ updates:
       timezone: Europe/Berlin
     open-pull-requests-limit: 3
     groups:
-      docker-minor-and-patch:
-        update-types: [minor, patch]
+      docker-images:
+        patterns: ["*"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  # The images compose.yaml runs (PostgreSQL, the gateway, cloudflared, ntfy,
+  # migrate; the ${VAR:-default} defaults too) and the browser tests' fixture
+  # nginx, pinned by digest like the Dockerfiles'.
+  - package-ecosystem: docker-compose
+    directories:
+      - /
+      - /tools/fixtures
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Berlin
+    open-pull-requests-limit: 3
+    groups:
+      docker-compose-images:
+        patterns: ["*"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+      # The gateway stays on nginx's stable branch (even minor versions):
+      # 1.30-alpine's new digests come; a move to the next stable is a ticket.
+      - dependency-name: nginx
+        update-types: ["version-update:semver-minor"]
+      # compose.verify.yaml's images are the stack's own local builds.
+      - dependency-name: "lifeos-*"
 
   - package-ecosystem: github-actions
     directory: /
@@ -60,3 +98,6 @@ updates:
     groups:
       github-actions:
         patterns: ["*"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]

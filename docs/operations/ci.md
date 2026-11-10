@@ -140,7 +140,7 @@ Without `LIFE_OS_VERIFY_OVERLAYS`, Whisper downloads the model itself at each st
 
 ### Not cached: the images
 
-The images are built from scratch in every run. The Go services' Dockerfiles copy the whole repository before `go build`, so any commit changes that layer and a build cache (buildx with `type=gha`) could reuse none of their work. It could reuse only whisper.cpp's build and the Dashboard's `npm ci`, a few minutes of the build, at the cost of a second builder, loading every image into Docker, and a whisper.cpp kept at whatever version the cache first saw (its Dockerfile clones the newest one).
+The images are built from scratch in every run. The Go services' Dockerfiles copy the whole repository before `go build`, so any commit changes that layer and a build cache (buildx with `type=gha`) could reuse none of their work. It could reuse only whisper.cpp's build and the Dashboard's `npm ci`, a few minutes of the build, at the cost of a second builder and of loading every image into Docker.
 
 ## govulncheck
 
@@ -221,9 +221,14 @@ Don't delete or force-push the branch. To remove a signature recorded by mistake
 
 - **Go modules** in `pkg/`, every `services/*` and `templates/*` module, and `tools/fixtures/documents`.
 - **npm** in `apps/dashboard`.
-- **Docker base images** of every Dockerfile (`apps/dashboard`, `services/*`, `services/voice/whisper`, `templates/*`). The images in `compose.yaml` are not covered; change those by hand.
+- **Docker base images** of every Dockerfile (`apps/dashboard`, `services/*`, `services/voice/whisper`, `templates/*`).
+- **Docker Compose images**: PostgreSQL, the gateway's nginx, cloudflared, ntfy, and migrate in `compose.yaml` (the `${VAR:-default}` defaults too), and the browser tests' fixture nginx in `tools/fixtures`.
 - **GitHub Actions** in the workflows: the pinned SHA and its version comment together.
 
-Minor and patch updates of an ecosystem come as one grouped pull request, and a major update as a pull request of its own. All action updates come as one pull request. At most 5 pull requests are open at once for Go and npm, and 3 for Docker and Actions.
+Each ecosystem's updates come as one grouped pull request a week; all action updates come as one pull request. At most 5 pull requests are open at once for Go and npm, and 3 for Docker, Docker Compose, and Actions.
+
+**No major versions (the owner's decision, 2026-11-10).** Every ecosystem ignores semver-major version updates: a major upgrade (Node 24, PostgreSQL 19, a new Go module major) is a ticket of its own, done on purpose. Security updates still come, majors included, as Dependabot security pull requests. Calendar-versioned images move a "major" at the turn of the year (cloudflared 2026.x to 2027.x), so that update is done by hand too. The gateway's nginx stays on its stable branch: Dependabot refreshes `1.30-alpine` but proposes no newer minor (1.31 is nginx's mainline); moving to the next stable branch (1.32) is a ticket as well.
+
+**Images are pinned by digest** (`name:tag@sha256:…`, the multi-platform index): every Dockerfile's `FROM` and every image in `compose.yaml`. A build or deployment therefore uses exactly the image the repository names, and when upstream rebuilds a tag (an Alpine or OpenSSL fix under the same `nginx:1.30-alpine`), Dependabot's pull request moves the digest, and CI tests it before it reaches the server. Builds add `--pull` (`docker compose build --pull`, the Makefile, CI), so an image named by tag alone, such as `LIFE_OS_POSTGRES_IMAGE` set in `.env`, is fetched fresh rather than taken from an old local copy. Two places Dependabot does not edit, kept equal by hand: `services/backup/Dockerfile`'s `POSTGRES_IMAGE` default (compose passes its own) and the integration job's PostgreSQL in `ci.yml`. A Dependabot pull request that moves PostgreSQL fails that job's first step until `services.postgres.image` in `ci.yml` is changed to match on its branch.
 
 CI checks each Dependabot pull request like any other. To take one, merge it locally as usual, or close it.
