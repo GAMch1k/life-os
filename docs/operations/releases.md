@@ -68,7 +68,7 @@ Every GitHub Release has these files:
 | File | What |
 | --- | --- |
 | `compose.yaml` | `deploy/compose.yaml`: the repository's `compose.yaml` with every `build:` replaced by `image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-<name>:${LIFE_OS_VERSION}` |
-| `.env.example` | The repository's, with `LIFE_OS_VERSION` set to the release |
+| `.env.example` | The repository's, with `LIFE_OS_VERSION` set to the release. GitHub serves it as `default.env.example`, since an asset's name cannot start with a dot; the install docs save it as `.env.example`, the name `SHA256SUMS` and `setup.sh` use |
 | `setup.sh` | Writes `.env` from `.env.example` with generated passwords and keys ([install docs](../install/)); its `release_version` placeholder is set to the release, and its `claude_build_files` carries `services/mcp/claude-code/` (`tools/build-install-bundle --setup-script` prints it) |
 | `SHA256SUMS` | The SHA-256 of the three |
 

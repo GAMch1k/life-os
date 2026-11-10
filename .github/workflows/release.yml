@@ -444,12 +444,14 @@ jobs:
 
           ## Install
 
-          Download \`compose.yaml\`, \`.env.example\`, \`setup.sh\`, and \`SHA256SUMS\` into an empty directory, then:
+          In an empty directory (GitHub serves \`.env.example\` as \`default.env.example\`):
 
           \`\`\`sh
-          sha256sum --check SHA256SUMS
-          ./setup.sh
-          docker compose up -d
+          release=https://github.com/${GH_REPO}/releases/download/${VERSION}
+          for file in compose.yaml setup.sh SHA256SUMS; do curl -fsSLO "\$release/\$file"; done
+          curl -fsSL -o .env.example "\$release/default.env.example"
+          sha256sum -c SHA256SUMS
+          chmod +x setup.sh && ./setup.sh && ./setup.sh up
           \`\`\`
 
           \`setup.sh\` writes \`.env\` with generated passwords and keys and this version (\`LIFE_OS_VERSION=${VERSION}\`). See [docs/install](https://github.com/${GH_REPO}/tree/${VERSION}/docs/install).
@@ -497,3 +499,16 @@ jobs:
           if [[ "$DRAFT" == true ]]; then flags+=(--draft); fi
           cd "$RUNNER_TEMP/bundle"
           gh release create "$VERSION" "${flags[@]}" compose.yaml .env.example setup.sh SHA256SUMS
+      # The install docs' download, from the published release (a draft's
+      # files are not public yet). GitHub renames .env.example to
+      # default.env.example, which v0.1.0-preview.4's docs missed.
+      - name: Check the install download
+        if: steps.visibility.outputs.draft != 'true'
+        run: |
+          cd "$(mktemp -d)"
+          release="https://github.com/${GH_REPO}/releases/download/${VERSION}"
+          for file in compose.yaml setup.sh SHA256SUMS; do
+            curl -fsSL --retry 5 --retry-all-errors -O "$release/$file"
+          done
+          curl -fsSL --retry 5 --retry-all-errors -o .env.example "$release/default.env.example"
+          sha256sum -c SHA256SUMS

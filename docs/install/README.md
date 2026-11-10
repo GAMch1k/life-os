@@ -23,15 +23,16 @@ This guide installs Life OS from its published Docker images with one setup scri
    ```sh
    mkdir ~/life-os && cd ~/life-os
    version=v0.1.0-preview.4
-   for file in compose.yaml .env.example setup.sh SHA256SUMS; do
-     curl -fsSLO "https://github.com/GAMch1k/life-os/releases/download/$version/$file"
-   done
+   release=https://github.com/GAMch1k/life-os/releases/download/$version
+   for file in compose.yaml setup.sh SHA256SUMS; do curl -fsSLO "$release/$file"; done
+   # GitHub serves .env.example as default.env.example
+   curl -fsSL -o .env.example "$release/default.env.example"
    ```
 
 2. **Check the download.** Every file must say `OK`:
 
    ```sh
-   sha256sum --ignore-missing -c SHA256SUMS
+   sha256sum -c SHA256SUMS
    ```
 
    With the [GitHub CLI](https://cli.github.com/), you can also check that the files were built by this project's release workflow: `gh attestation verify setup.sh -R GAMch1k/life-os` (and `compose.yaml`, `.env.example`). For the images, see [Verify the images](updating.md#verify-the-images).

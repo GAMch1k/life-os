@@ -11,10 +11,11 @@ Run Life OS on your own Linux server from the published Docker images, with one 
 ```sh
 mkdir ~/life-os && cd ~/life-os
 version=v0.1.0-preview.4
-for file in compose.yaml .env.example setup.sh SHA256SUMS; do
-  curl -fsSLO "https://github.com/GAMch1k/life-os/releases/download/$version/$file"
-done
-sha256sum --ignore-missing -c SHA256SUMS
+release=https://github.com/GAMch1k/life-os/releases/download/$version
+for file in compose.yaml setup.sh SHA256SUMS; do curl -fsSLO "$release/$file"; done
+# GitHub serves .env.example as default.env.example
+curl -fsSL -o .env.example "$release/default.env.example"
+sha256sum -c SHA256SUMS
 chmod +x setup.sh && ./setup.sh && ./setup.sh up
 ```
 
