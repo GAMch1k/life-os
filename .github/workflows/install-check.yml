@@ -142,7 +142,12 @@ jobs:
         run: |
           cd "$INSTALL_DIR"
           chmod +x setup.sh
-          LIFE_OS_TIMEZONE=$INSTALL_TIMEZONE ./setup.sh --yes
+          LIFE_OS_TIMEZONE=$INSTALL_TIMEZONE ./setup.sh --yes 2>&1 | tee "$RUNNER_TEMP/setup.log"
+          # A clean install on a server that has what it needs: no warning.
+          if grep '^Warning: ' "$RUNNER_TEMP/setup.log"; then
+            echo "::error::./setup.sh warned on a clean install (above)."
+            exit 1
+          fi
           # What it wrote, never a value but these.
           [[ "$(stat -c %a .env)" == 600 ]] || { echo "::error::.env is not mode 600"; exit 1; }
           grep -qx "LIFE_OS_VERSION=$VERSION" .env || { echo "::error::.env does not run ${VERSION}"; exit 1; }
@@ -151,13 +156,37 @@ jobs:
       - name: Start it (step 4, ./setup.sh up)
         id: up
         timeout-minutes: 20
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
         run: |
           cd "$INSTALL_DIR"
+          echo "STARTED_AT=$(date +%s)" >>"$GITHUB_ENV"
           ./setup.sh up 2>&1 | tee "$RUNNER_TEMP/setup-up.log"
           # up waits until the gateway and the core services answer, and says
           # so; it ends without an error when they never do.
           if ! grep -qx 'Life OS answers.' "$RUNNER_TEMP/setup-up.log"; then
             echo "::error::./setup.sh up ended before Life OS answered."
+            exit 1
+          fi
+          # Without an AI sign-in, up says that AI processing is off: no
+          # warning. One known bug: up in v0.1.0-preview.1 to .5 takes the
+          # provisioning, a one-shot job that exits once it is done, for a
+          # service that is not running.
+          known=
+          case "$VERSION" in
+            v0.1.0-preview.[1-5]) known='Warning: not running: postgres-provision (exited). Look at docker compose logs <service>.' ;;
+          esac
+          warnings=$(grep '^Warning: ' "$RUNNER_TEMP/setup-up.log" || true)
+          if [[ -n "$known" && "$warnings" == "$known" ]]; then
+            echo "::warning::A known bug of ${VERSION}'s setup.sh, fixed for the next release: ${known}"
+          elif [[ -n "$warnings" ]]; then
+            echo "::error::./setup.sh up warned on a clean install: ${warnings}"
+            exit 1
+          fi
+          services=$(docker compose config --services)
+          if grep -qx processor <<<"$services" \
+            && ! grep -qx 'AI processing is off until you sign in to Codex (./setup.sh codex); notes wait in Inbox.' "$RUNNER_TEMP/setup-up.log"; then
+            echo "::error::./setup.sh up did not say that AI processing is off until the Codex sign-in."
             exit 1
           fi
 
@@ -208,7 +237,10 @@ jobs:
         id: processor
         run: |
           cd "$INSTALL_DIR"
-          if ! docker compose config --services | grep -qx processor; then
+          # Not a pipe into grep -q: with pipefail, Compose's broken pipe
+          # would read as "no processor".
+          services=$(docker compose config --services)
+          if ! grep -qx processor <<<"$services"; then
             echo "No processor in this install: AI processing is off."
             exit 0
           fi
@@ -348,14 +380,26 @@ jobs:
           [[ -z "$problems" ]] || { echo "::error::The Status page has problems besides AI processing: ${problems}"; exit 1; }
       - name: ./setup.sh status
         if: ${{ !cancelled() && steps.up.outcome == 'success' }}
-        run: cd "$INSTALL_DIR" && ./setup.sh status
+        run: |
+          cd "$INSTALL_DIR"
+          ./setup.sh status 2>&1 | tee "$RUNNER_TEMP/setup-status.log"
+          if grep '^Warning: ' "$RUNNER_TEMP/setup-status.log"; then
+            echo "::error::./setup.sh status warned (above)."
+            exit 1
+          fi
 
-      # After the smokes: no service but the processor restarted, so a
-      # service that crashed and came back is not missed.
+      # After the smokes, and once the stack has run for 3 minutes: no
+      # service but the processor restarted, so a service that crashed and
+      # came back is not missed.
       - name: No service restarted
         if: ${{ !cancelled() && steps.services.outcome == 'success' }}
         run: |
           cd "$INSTALL_DIR"
+          wait=$((STARTED_AT + 180 - $(date +%s)))
+          if ((wait > 0)); then
+            echo "Waiting ${wait} s, until the stack has run for 3 minutes."
+            sleep "$wait"
+          fi
           restarted=()
           mapfile -t containers < <(docker compose ps --all -q)
           while read -r service restarts; do
@@ -376,7 +420,7 @@ jobs:
         run: |
           dir="$RUNNER_TEMP/install-logs"
           mkdir -p "$dir"
-          cp "$RUNNER_TEMP"/setup-up.log "$RUNNER_TEMP"/processor.log "$dir/" 2>/dev/null || true
+          cp "$RUNNER_TEMP"/setup*.log "$RUNNER_TEMP"/processor.log "$dir/" 2>/dev/null || true
           [[ -f "${INSTALL_DIR:-}/.env" ]] || exit 0
           cd "$INSTALL_DIR"
           docker compose ps --all >"$dir/ps.txt" 2>&1 || true
