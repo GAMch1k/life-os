@@ -17,8 +17,8 @@ flowchart LR
 ## The tunnel (deployment path)
 
 - **Connector.** The `cloudflared` service in `compose.yaml` runs `cloudflare/cloudflared:2026.10.7`, pinned by digest. It is on the dedicated `edge` network (to the gateway) and the `notify-edge` network (to ntfy) only (see [Origin trust](#origin-trust-and-access-paths)), publishes no port, runs as a non-root user with a read-only filesystem and no capabilities, and does not auto-update: Dependabot's weekly pull request moves the pinned image within the year's versions, and the first version of a new year (a major version to Dependabot, which it leaves out) is a bump by hand. Its health check is `cloudflared tunnel ready` against its local metrics endpoint (`127.0.0.1:20241`, inside the container only).
-- **Opt-in.** The service belongs to the `cloudflare` Compose profile, so a stack without a tunnel token never starts it. To run it with the normal stack, set `COMPOSE_PROFILES=cloudflare` in `.env`, as the reference deployment does. It then starts with the first `make life-up`, and on its own with `docker compose up -d --no-build --no-deps cloudflared`. To start it once without the profile in `.env`, use `docker compose --profile cloudflare up -d --no-build --no-deps cloudflared`.
-- **Never in the verification stack.** `tools/verify-compose` clears `COMPOSE_PROFILES` and refuses any plan that contains `cloudflared`. The disposable stack reads the same `.env`, and a second connector holding the real tunnel token would receive production traffic.
+- **Opt-in.** The service is the `cloudflare` [module](../architecture/modules.md), a Compose profile, so a stack without a tunnel token never starts it. To run it with the normal stack, list `cloudflare` in `COMPOSE_PROFILES` in `.env`, as the reference deployment does (with its other modules). It then starts with the first `make life-up`, and on its own with `docker compose up -d --no-build --no-deps cloudflared`. To start it once without the profile in `.env`, use `docker compose --profile cloudflare up -d --no-build --no-deps cloudflared`.
+- **Never in the verification stack.** `tools/verify-compose` never takes `.env`'s `COMPOSE_PROFILES` (it runs every other module, or `LIFE_OS_VERIFY_MODULES`) and refuses any plan that contains `cloudflared`. The disposable stack reads the same `.env`, and a second connector holding the real tunnel token would receive production traffic.
 - **Token.** The tunnel is managed remotely in the Cloudflare Zero Trust dashboard, and the connector authenticates with the tunnel token in `LIFE_OS_CLOUDFLARE_TUNNEL_TOKEN` in the ignored `.env`. The token is a credential: anyone holding it can run a connector for this tunnel. Never commit it or paste it into tickets or chat.
 - **Routes.** The tunnel's public hostname `lifeos.example.com` points to the service URL `http://gateway:80`, the gateway's Docker DNS name on the `edge` network. The gateway serves the same Dashboard and `/api/*` routes as on its other listed hosts, so the route's hostname must be `LIFE_OS_PUBLIC_HOSTNAME` (any other Host gets no answer); no service is exposed on its own. The second route, `ntfy.example.com`, points to `http://ntfy:80` on the `notify-edge` network ([below](#two-entry-points-life-os-and-ntfy)). Routes are configured in Cloudflare, not in the repository.
 - **Ingress check.** `tools/check-ingress` asserts, for the full Compose plan including the `cloudflare` and `ntfy` profiles, that only the gateway publishes a host port, that `edge` holds only `cloudflared` and the gateway, that `notify-edge` holds only `cloudflared` and `ntfy`, that the internal `notify-internal` holds only `ntfy` and `notifications`, that ntfy is on those two networks only, and (through `tools/check-gateway-hosts`) that the gateway answers only its listed hosts.
@@ -101,7 +101,7 @@ The detailed setup, debugging, and recovery guide for this deployment is kept in
 | Route (ntfy) | `ntfy.example.com` → HTTP → `ntfy:80`, no Access application, no JWT validation | Tunnel → Published application routes |
 | Access application, policies, group, login | See [Cloudflare Access](#cloudflare-access) | Zero Trust → Access controls |
 | Tunnel token | `LIFE_OS_CLOUDFLARE_TUNNEL_TOKEN` | `~/life-os/.env` (ignored) |
-| Connector switch | `COMPOSE_PROFILES=cloudflare` | `~/life-os/.env` |
+| Connector switch | `cloudflare` in `COMPOSE_PROFILES` | `~/life-os/.env` |
 | Hostnames and team, for the checks | `LIFE_OS_PUBLIC_HOSTNAME`, `LIFE_OS_NTFY_PUBLIC_URL`, `LIFE_OS_CF_ACCESS_TEAM_DOMAIN` | `~/life-os/.env` |
 | Service token (checks only) | `LIFE_OS_CF_ACCESS_CLIENT_ID`, `LIFE_OS_CF_ACCESS_CLIENT_SECRET` | `~/life-os/.env` |
 
@@ -137,7 +137,7 @@ For the human check, open `https://lifeos.example.com` from a phone on mobile da
 ### Day-to-day changes
 
 - **Add or remove a person:** edit the emails in the Access group `Life OS users`. Sessions last up to 24 hours. To cut someone off immediately, revoke their sessions in Zero Trust. Everyone admitted shares the same Life OS data.
-- **Pause public access** and keep WireGuard: `docker compose stop cloudflared`. To keep it off across deploys, remove `COMPOSE_PROFILES=cloudflare` from `.env`.
+- **Pause public access** and keep WireGuard: `docker compose stop cloudflared`. To keep it off across deploys, take `cloudflare` out of `COMPOSE_PROFILES` in `.env` (and recreate the Dashboard and the gateway).
 - **Update the connector:** bump the pinned image in `compose.yaml`, then `docker compose up -d --no-build --no-deps cloudflared`.
 - **After redeploying services,** nothing more is needed: the gateway resolves service names at request time (within 10 seconds of a redeploy; see [Networking → Upstream addresses](../architecture/networking.md#upstream-addresses)). Recreate it (`docker compose up -d --no-build --no-deps --force-recreate gateway`) only after changing `infra/nginx/life-os.conf.template` or its settings in `.env` (`LIFE_OS_PUBLIC_HOSTNAME`, `LIFE_OS_GATEWAY_BIND_ADDRESS`, `LIFE_OS_GATEWAY_PORT`). The connector keeps working.
 
@@ -149,7 +149,7 @@ For the human check, open `https://lifeos.example.com` from a phone on mobile da
 
 ### Recover
 
-- **Server rebuilt or `.env` lost:** restore `.env`, or recreate it from `.env.example`. Copy the tunnel token from the tunnel's connector page, or rotate it, and set `COMPOSE_PROFILES=cloudflare`. On a rebuilt server with no Life OS containers yet, run `make life-up`. On a server that still runs Life OS, start only the connector: `docker compose up -d --no-build --no-deps cloudflared` (`make life-up` refuses there).
+- **Server rebuilt or `.env` lost:** restore `.env`, or recreate it from `.env.example`. Copy the tunnel token from the tunnel's connector page, or rotate it, and list `cloudflare` in `COMPOSE_PROFILES` with the other modules. On a rebuilt server with no Life OS containers yet, run `make life-up`. On a server that still runs Life OS, start only the connector: `docker compose up -d --no-build --no-deps cloudflared` (`make life-up` refuses there).
 - **Cloudflare outage or broken Access configuration:** use the WireGuard path (`http://10.8.0.1:3000`, the gateway's `LIFE_OS_GATEWAY_BIND_ADDRESS` and port), which does not depend on Cloudflare.
 - **Access application deleted by mistake:** stop the connector first (`docker compose stop cloudflared`) so nothing is exposed. Recreate the application and policies (see [Cloudflare Access](#cloudflare-access)), confirm that an anonymous request gets a 302 to the team login, then start the connector.
 

@@ -33,7 +33,7 @@ To send a test push: `curl -X POST http://127.0.0.1:3000/api/notifications/v1/pu
    ./setup.sh up
    ```
 
-   It asks for ntfy's address (`https://ntfy.example.com`) and a password for your phone (at least 12 characters; keep it in your password manager). It stores only the password's hash.
+   It asks for ntfy's address (`https://ntfy.example.com`) and a password for your phone (at least 12 characters; keep it in your password manager). It stores only the password's hash, and turns the `ntfy` [module](modules.md) on. `./setup.sh modules off ntfy` turns it off again, and stops sending notifications there.
 
 3. On your Android phone, install **ntfy** from Google Play or F-Droid. In its settings, add a user: server `https://ntfy.example.com`, username `lifeos-phone`, and your password. Then subscribe to the topic `lifeos` on that server.
 

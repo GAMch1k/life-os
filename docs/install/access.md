@@ -51,7 +51,7 @@ The way to reach Life OS from anywhere, the phone apps included, without opening
    ./setup.sh up
    ```
 
-   It asks for the address (`https://lifeos.example.com`) and the token, and checks that an anonymous request to the hostname is sent to the Cloudflare login. If not, it saves the token but leaves the tunnel off; fix Access and run it again.
+   It asks for the address (`https://lifeos.example.com`) and the token, and checks that an anonymous request to the hostname is sent to the Cloudflare login. If not, it saves the token but leaves the tunnel off; fix Access and run it again. Once Access passes, it turns the `cloudflare` [module](modules.md) on: the connector runs from the next `./setup.sh up`. `./setup.sh modules off cloudflare` stops it (turn `ntfy` off first, if it is on).
 
 5. Open `https://lifeos.example.com`, enter your email, then the code you receive.
 

@@ -108,7 +108,9 @@ Compose refuses every command until these five variables are set: `LIFE_OS_POSTG
 | `LIFE_OS_DOCKER_GID` | The Docker socket's group (see above). Without the right value, Status cannot read the containers. |
 | `LIFE_OS_DOCKER_ROOT`, `LIFE_OS_HOST_HEALTH_*` | Set the Docker root only if Docker's data is not in `/var/lib/docker`. `LIFE_OS_HOST_HEALTH_*` are the Status page's warning thresholds. |
 
-**Remote access.** Leave `COMPOSE_PROFILES`, `LIFE_OS_CLOUDFLARE_TUNNEL_TOKEN`, `LIFE_OS_CF_ACCESS_TEAM_DOMAIN`, `LIFE_OS_CF_ACCESS_CLIENT_ID`, and `LIFE_OS_CF_ACCESS_CLIENT_SECRET` empty for now ([step 9](#9-remote-access)).
+**Modules.** `COMPOSE_PROFILES` lists the optional [modules](docs/install/modules.md) that run, next to the core: `ai`, `voice`, `google-calendar`, `banking`, `server-health`, and later `cloudflare` and `ntfy`. Empty runs the core alone. The reference server runs `ai,voice,google-calendar,banking,server-health`, plus the tunnel from step 9. Keep `LIFE_OS_MODULES_LISTED=yes`. `./setup.sh modules on|off <id>` edits the list and prints the Compose commands; see [Deployment → Modules](docs/operations/deployment.md#modules).
+
+**Remote access.** Leave `cloudflare` and `ntfy` out of `COMPOSE_PROFILES`, and `LIFE_OS_CLOUDFLARE_TUNNEL_TOKEN`, `LIFE_OS_CF_ACCESS_TEAM_DOMAIN`, `LIFE_OS_CF_ACCESS_CLIENT_ID`, and `LIFE_OS_CF_ACCESS_CLIENT_SECRET` empty for now ([step 9](#9-remote-access)).
 
 Create the two host directories:
 
@@ -182,7 +184,7 @@ PostgreSQL keeps the environment it was created with. If you add a database pass
 
 ## 8. Build and start
 
-1. **Build the images.** On a server with memory to spare, `make life-up` builds every image and starts the stack in one step (`docker compose build --pull`, then `docker compose up --detach`). It is for the first start only: once Life OS is deployed, it refuses (see [Redeploying](#redeploying-always---no-deps)). On a small server, build one image at a time first, as the repository's own smokes do:
+1. **Build the images.** On a server with memory to spare, `make life-up` builds every image, every module's, and starts the core and the modules in `COMPOSE_PROFILES` in one step (`docker compose build --pull` with every module's profile, then `docker compose up --detach`). It is for the first start only: once Life OS is deployed, it refuses (see [Redeploying](#redeploying-always---no-deps)). On a small server, build one image at a time first, as the repository's own smokes do:
 
    ```sh
    for service in activity finance tasks food inbox calendar calendar-feeds recipe-import \
@@ -192,14 +194,14 @@ PostgreSQL keeps the environment it was created with. If you add a database pass
    done
    ```
 
-2. **Start Whisper first.** The Voice worker waits for Whisper to be healthy, so starting Whisper on its own keeps the model download from holding up the rest:
+2. **With the `voice` module, start Whisper first.** The Voice worker waits for Whisper to be healthy, so starting Whisper on its own keeps the model download from holding up the rest:
 
    ```sh
    docker compose up -d --no-build --no-deps whisper
    docker compose ps whisper          # wait until it shows (healthy)
    ```
 
-3. **Start everything else.** Keep `COMPOSE_PROFILES` empty until [step 9](#9-remote-access): the tunnel must not start before Cloudflare Access protects its hostname.
+3. **Start everything else**: the core and the modules `COMPOSE_PROFILES` lists. Keep `cloudflare` out of it until [step 9](#9-remote-access): the tunnel must not start before Cloudflare Access protects its hostname.
 
    ```sh
    docker compose up -d --no-build
@@ -253,7 +255,7 @@ Installing the Dashboard on a phone, and sharing to Life OS, need a service work
 2. **Set up Access first.** Create a self-hosted Access application for `lifeos.example.com` with a 24-hour session. Use the One-time PIN login, create a group holding your email address, and add an **Allow** policy that includes that group. Access then denies everyone else.
 3. Create a remotely managed tunnel and copy its token. Add a published application route: `lifeos.example.com` → HTTP → `gateway:80`. On that route, turn on **Enforce Access JSON Web Token (JWT) validation** for the application.
 4. In `.env`, set `LIFE_OS_PUBLIC_HOSTNAME=lifeos.example.com` and `LIFE_OS_PUBLIC_URL=https://lifeos.example.com`, then recreate the gateway. Make sure an anonymous request is redirected to the Access login: `curl -s -o /dev/null -w '%{http_code}\n' https://lifeos.example.com/` must print `302`.
-5. Only then start the connector. It reaches the gateway over the internal `edge` network, so the gateway can stay on loopback. In `.env`, set `COMPOSE_PROFILES=cloudflare` and `LIFE_OS_CLOUDFLARE_TUNNEL_TOKEN=<from the tunnel>`. Then run `docker compose up -d --no-build --no-deps cloudflared`. Recreate the notifications service too, so notification links use the new `LIFE_OS_PUBLIC_URL`: `docker compose up -d --no-build --no-deps notifications`.
+5. Only then start the connector. It reaches the gateway over the internal `edge` network, so the gateway can stay on loopback. In `.env`, add `cloudflare` to `COMPOSE_PROFILES` and set `LIFE_OS_CLOUDFLARE_TUNNEL_TOKEN=<from the tunnel>`. Then run `docker compose up -d --no-build --no-deps cloudflared`, and recreate the Dashboard and the gateway (`docker compose up -d --no-build --no-deps dashboard gateway`), which read the module list. Recreate the notifications service too, so notification links use the new `LIFE_OS_PUBLIC_URL`: `docker compose up -d --no-build --no-deps notifications`.
 6. Verify with `tools/check-ingress` (only the gateway publishes a port, and each network holds only its intended members) and `docker compose ps cloudflared` (healthy). `tools/check-cloudflare-access` checks that anonymous requests to `LIFE_OS_PUBLIC_HOSTNAME` are refused; set `LIFE_OS_CF_ACCESS_TEAM_DOMAIN` to your team's `<team>.cloudflareaccess.com` first. Its second half needs an Access service token: add a Service Auth policy for the token, and put the token in `LIFE_OS_CF_ACCESS_CLIENT_ID` and `LIFE_OS_CF_ACCESS_CLIENT_SECRET`.
 
 The repository uses a service token only for that check. Browsers and the installed phone app get through Access with the email code and its 24-hour session. How the Android and Wear OS apps authenticate is not documented in this repository. The tunnel token is a credential: never commit it or paste it anywhere.

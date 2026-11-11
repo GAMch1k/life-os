@@ -19,7 +19,7 @@ Life OS can read your bank account's balances and transactions into Finance, fou
 ./setup.sh up
 ```
 
-It asks for the application ID and the key file, shows the redirect URL, and generates the key that encrypts the bank session in Life OS's database. Keep `.env` and the key file: they are not in the backups.
+It asks for the application ID and the key file, shows the redirect URL, generates the key that encrypts the bank session in Life OS's database, and turns the `banking` [module](modules.md) on. Keep `.env` and the key file: they are not in the backups.
 
 ## 3. Connect
 
@@ -33,6 +33,6 @@ Banks allow about four reads a day without you; Life OS syncs at 06:00, 12:00, 1
 
 ## Disconnect
 
-**Disconnect** in Finance ends the access at the bank and keeps the transactions, archived. To remove it entirely, also delete the application in Enable Banking, the key file, and the `LIFE_OS_ENABLE_BANKING_*` lines in `.env`.
+**Disconnect** in Finance ends the access at the bank and keeps the transactions, archived. `./setup.sh modules off banking` then stops the integration (Finance keeps the transactions). To remove it entirely, also delete the application in Enable Banking, the key file, and the `LIFE_OS_ENABLE_BANKING_*` lines in `.env`.
 
 More, and troubleshooting: [Bank connection](../operations/banking.md).

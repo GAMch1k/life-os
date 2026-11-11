@@ -10,6 +10,8 @@ docker compose down
 
 This removes the containers and networks. Your data stays: the database, captured photos, and voice notes in their Docker volumes, plus `.env`, `backups/`, and `codex-home/`. `./setup.sh up` brings Life OS back as it was. (`docker compose stop` only stops the containers.)
 
+To remove one optional module and keep the rest, turn it off instead: `./setup.sh modules off <id>` removes its containers and keeps its data ([Modules](modules.md)).
+
 ## Delete everything
 
 > [!CAUTION]
@@ -19,10 +21,11 @@ This removes the containers and networks. Your data stays: the database, capture
 2. **Delete the containers, the volumes, and the images:**
 
    ```sh
-   docker compose down --volumes --rmi all
+   COMPOSE_PROFILES=ai,voice,google-calendar,banking,cloudflare,ntfy,server-health \
+     docker compose down --volumes --rmi all --remove-orphans
    ```
 
-   `--volumes` deletes the database, the captured photos, voice notes, the Whisper model, and ntfy's data. There is no undo.
+   Every [module](modules.md) is named, also those that are off, so that their containers, volumes, and images go too. `--volumes` deletes the database, the captured photos, voice notes, the Whisper model, and ntfy's data. There is no undo.
 
 3. **Delete the directory**, with `.env`, the backups, and the AI sign-in:
 

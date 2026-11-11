@@ -10,6 +10,22 @@ Life OS supports loopback gateway behind host Nginx TLS/Basic Auth, or a WireGua
 
 Redeploying a service (`up -d --no-build --no-deps <service>`, also with `--force-recreate`) needs nothing more: the gateway resolves service names at request time and keeps each answer at most 10 seconds, so it reaches the new container within about 10 seconds (BUG-37; see [Networking → Upstream addresses](../architecture/networking.md#upstream-addresses)). Recreate the gateway (`up -d --no-build --no-deps --force-recreate gateway`) only when its own configuration changes: `infra/nginx/life-os.conf.template` (a new route, such as a new service's `/api/…/` location, limits, headers, hosts), which is built into its image (`docker compose build --pull gateway` first) and rendered at every start, or its settings in `.env` (`LIFE_OS_PUBLIC_HOSTNAME`, `LIFE_OS_GATEWAY_BIND_ADDRESS`, `LIFE_OS_GATEWAY_PORT`, `LIFE_OS_ANDROID_RELEASES_DIR`).
 
+## Modules
+
+Since P20-01 the core always runs and every other part is an optional [module](../architecture/modules.md), the Compose profile of its name: `ai` (`mcp`, `processor`), `voice` (`voice-migrate`, `voice`, `voice-worker`, `whisper`), `google-calendar`, `banking`, `cloudflare` (`cloudflared`), `ntfy`, and `server-health` (`host-health`, `host-health-docker`). `COMPOSE_PROFILES` in `.env` lists the modules that run; Compose hands the same list to the Dashboard and the gateway (`LIFE_OS_MODULES`), which show, probe, and route only those. `make life-up` builds every module's image and starts the core and the listed modules.
+
+**The reference server keeps every module it used before modules:** its `.env` lists them all, next to what it had for the tunnel and ntfy, and says that it lists them:
+
+```sh
+COMPOSE_PROFILES=<its tunnel and ntfy profiles, as before>,ai,voice,google-calendar,banking,server-health
+LIFE_OS_MODULES_LISTED=yes
+```
+
+Set both before the first deploy of P20-01, then build and recreate the Dashboard and the gateway (`docker compose build --pull dashboard gateway`, then `docker compose up -d --no-build --no-deps dashboard gateway`); no other service changes. A service named on the command line runs even when its module is off (`up -d --no-deps processor` starts it), but the Dashboard and the gateway follow `COMPOSE_PROFILES` only, so keep the list in step with what runs. In a clone, `./setup.sh modules on|off <id>` edits the list and prints the commands:
+
+- **On:** add the id to `COMPOSE_PROFILES`; build the module's images and start them (its `-migrate` first: `docker compose up --no-build --no-deps <id>-migrate`, then `docker compose up -d --no-build --no-deps <its services>`); then recreate the Dashboard and the gateway.
+- **Off:** take the id out of `COMPOSE_PROFILES`; `docker compose rm --stop --force <its services>`; recreate the Dashboard and the gateway. Its database and volumes stay, and the nightly backup keeps dumping its database. For `ntfy`, also take `ntfy` out of `LIFE_OS_NOTIFICATIONS_CHANNELS` and recreate `notifications`.
+
 ## Adding a service's database
 
 `postgres-provision` creates every database in `infra/postgres/service-databases.conf` and its login, at every start of the stack and on a fresh volume alike ([infra/README.md](../../infra/README.md#service-database-provisioning)). On a running server, after adding the registry row and the password (`LIFE_OS_<SERVICE>_DB_PASSWORD` in `.env`, and in `postgres-provision`'s environment in `compose.yaml`):

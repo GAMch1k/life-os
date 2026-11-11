@@ -14,17 +14,18 @@ Runs use GitHub-hosted runners (`ubuntu-24.04`) and the workflow's token is read
 
 ## Jobs
 
-The first six jobs run in parallel. `full-stack` waits for the four that block, as a later job can: `needs: [check-generated, check-go, check-dashboard, integration]`.
+The first six jobs run in parallel. `full-stack` and `full-stack-core` wait for the four that block, as a later job can: `needs: [check-generated, check-go, check-dashboard, integration]`.
 
 | Job | What it runs | Time | Locally |
 | --- | --- | --- | --- |
-| `check-generated` | `tools/check --gateway --contracts --sqlc --install-bundle`: the gateway's host list, the OpenAPI lint, generated Go and TypeScript API drift, sqlc drift, and the release bundle's `deploy/compose.yaml` ([releases](releases.md#the-install-bundle)) | about 1 min | `tools/check --gateway --contracts --sqlc --install-bundle` |
+| `check-generated` | `tools/check --gateway --contracts --sqlc --install-bundle --modules`: the gateway's host list, the OpenAPI lint, generated Go and TypeScript API drift, sqlc drift, the release bundle's `deploy/compose.yaml` ([releases](releases.md#the-install-bundle)), and the module manifests and what they generate ([modules](../architecture/modules.md)); then `tools/test-gateway-modules`, the gateway's routes of modules that are off, in throwaway nginx containers | about 1 min | `tools/check --gateway --contracts --sqlc --install-bundle --modules` and `tools/test-gateway-modules` |
 | `check-go` | `tools/check --go --setup`: gofmt, `go vet`, `go test`, and the build of every module under `pkg/`, `services/`, and `templates/` (`GOWORK=off`); then shellcheck and `tools/test-setup`, the tests of the install bundle's `setup.sh` with `docker` and `curl` stubbed (about 15 s) | about 1 min | `tools/check --go --setup` |
 | `check-dashboard` | `tools/check --dashboard`: Prettier, ESLint, the unit tests, the typecheck, and `next build` | about 1.5 min | `tools/check --dashboard` |
 | `integration` | `tools/test-integration` against a PostgreSQL service container | about 2 min | [Integration tests](#integration-tests) |
 | `check-cla` | `node --test .github/cla/cla.test.js`: the [CLA check](#cla-check)'s logic against a fake GitHub API | seconds | `node --test .github/cla/cla.test.js` (Node 22, nothing to install) |
 | `govulncheck` | `tools/check-vulnerabilities`: govulncheck on every Go module. A finding fails the run. | about 2 min | `tools/check-vulnerabilities` |
-| `full-stack` | The images, then the smokes and the browser suite (without the `@codex` tests) on the verification stack | 14 to 19 min: 6.5 to 10 to build, 7 to 8 to test | [Full-stack tests](#full-stack-tests) |
+| `full-stack` | The images, then the smokes and the browser suite (without the `@codex` tests) on the verification stack, with every optional module it can run | 14 to 19 min: 6.5 to 10 to build, 7 to 8 to test | [Full-stack tests](#full-stack-tests) |
+| `full-stack-core` | The same with the core alone, as a fresh install runs it ([Core only](#core-only)); not required | shorter: no Whisper, AI, or module images | [Core only](#core-only) |
 
 The times are with warm caches; without them, each job takes up to a minute longer. The checks take about as long as the slowest of them, about 2 minutes; with `full-stack` after them, a whole run takes 16 to 21 minutes.
 
@@ -90,11 +91,15 @@ In order:
 1. **Unknown service names answered at once.** The runner's systemd-resolved answers SERVFAIL for a single-label name it does not know, such as a service that is not running, and the Alpine images' C library (musl) waits 10 s on SERVFAIL before it gives up. Home and Status probe services that are not running here (the processor, and the monitor, backup, and host-health, which `make life-smoke` does not start), so the Dashboard's DNS lookups queued behind those waits until its requests to running services timed out too: Home showed no Task. `ResolveUnicastSingleLabel=yes` sends such names to the upstream DNS, which answers NXDOMAIN at once, as on a usual host.
 2. **A throwaway `.env`**: `tools/ci-env "$RUNNER_TEMP/lifeos-ci"` writes `.env.example` with a new random password for every database login, `LIFE_OS_TIMEZONE=Europe/Berlin` (the browser tests' zone), every integration unset (Google, Enable Banking, ntfy, Cloudflare, web push, the ZAW feed; `tools/verify-compose` refuses them anyway), the backup directory under the scratch directory, and the runner's user as the owner of the backup directory, the Codex home, and the bank key. The Codex home is an empty directory. The file lives in the job's checkout only: Docker builds leave it out (`.dockerignore`), and nothing uploads it. `tools/ci-env` refuses to replace an existing `.env`.
 3. **The Whisper model** (`ggml-small.bin`, 466 MB, the `.env.example` default) from the Actions cache, under a key made of its file name and URL; on a miss it is downloaded from Hugging Face and saved at once, so a failed run keeps it too. `LIFE_OS_VERIFY_OVERLAYS=tools/fixtures/whisper-models.compose.yaml` mounts it read-only into the verification stack's Whisper, which would otherwise download it into a fresh volume at every start (each smoke starts its own stack).
-4. **The images**: `docker compose build --pull`, all of them at once, as `make life-up` would.
+4. **The images**: `docker compose build --pull`, all of them at once, every module's (`COMPOSE_PROFILES` lists every module from `tools/lib/modules.bash`; the throwaway `.env` has none), as `make life-up` would. The release publishes these very images.
 5. **Playwright**: `npm ci` and `npx playwright install --with-deps chromium firefox`, so the voice test records in Firefox too.
-6. **The smokes**, each on a stack of its own that it removes when it ends: `make life-smoke`, `tools/smoke-e2e`, `make verify-clean-db`, `tools/smoke-action-idempotency`, `tools/smoke-gateway-recreate`, and `tools/smoke-voice-lease-recovery` (the real whisper.cpp). Every smoke runs, even after another one failed.
-7. **The browser suite**: `tools/browser-e2e --grep-invert @codex`, Chromium and Firefox, with Playwright's two workers.
+6. **The smokes**, each on a stack of its own that it removes when it ends, with every optional module the verification stack runs (`tools/verify-compose`: all but `cloudflare` and `ntfy`, which never run there; never `.env`'s `COMPOSE_PROFILES`): `make life-smoke`, `tools/smoke-e2e`, `make verify-clean-db`, `tools/smoke-action-idempotency`, `tools/smoke-gateway-recreate`, and `tools/smoke-voice-lease-recovery` (the real whisper.cpp). Every smoke runs, even after another one failed.
+7. **The browser suite**: `tools/browser-e2e --grep-invert @codex`, Chromium and Firefox, with Playwright's two workers. `tools/browser-e2e` hands the stack's modules to the tests (`LIFE_OS_E2E_MODULES`); a test tagged with a module that is off skips itself (`@ai`, `@voice`, `@banking`, `@google-calendar`, `@server-health`).
 8. **Teardown**, whatever happened: `tools/verify-compose down --volumes --remove-orphans`.
+
+### Core only
+
+The `full-stack-core` job runs the same action with `modules: core`: the stack a fresh install runs, the core alone (`LIFE_OS_VERIFY_MODULES=` empty for `tools/verify-compose`). It builds only the core's images, skips the Whisper model and `tools/smoke-voice-lease-recovery`, and runs every other smoke and the browser suite, whose tests of the optional modules skip themselves and whose `e2e/modules.spec.ts` checks that no module that is off shows, is probed, or is routed. It also leaves the runner's resolver as it is (no `ResolveUnicastSingleLabel`): with the core alone nothing may look up a service that is not there (BUG-50). It is not a required check. Locally: `LIFE_OS_VERIFY_MODULES= tools/browser-e2e --grep-invert @codex`, and the smokes with the same variable.
 
 ### Without Codex
 
@@ -143,7 +148,8 @@ mkdir -p /tmp/whisper-models && curl -fL -o /tmp/whisper-models/ggml-small.bin \
   https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin
 export LIFE_OS_WHISPER_MODELS_DIR=/tmp/whisper-models \
   LIFE_OS_VERIFY_OVERLAYS=tools/fixtures/whisper-models.compose.yaml
-docker compose build --pull
+# Every module's image, as CI builds them.
+COMPOSE_PROFILES=$(bash -c '. tools/lib/modules.bash; IFS=,; echo "${module_ids[*]}"') docker compose build --pull
 npm ci --prefix apps/dashboard && (cd apps/dashboard && npx playwright install --with-deps chromium firefox)
 make life-smoke && tools/smoke-e2e && make verify-clean-db && tools/smoke-action-idempotency \
   && tools/smoke-gateway-recreate && tools/smoke-voice-lease-recovery

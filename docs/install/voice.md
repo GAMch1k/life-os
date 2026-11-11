@@ -1,5 +1,7 @@
 # Voice notes (Whisper)
 
+Voice notes are the `voice` [module](modules.md), off on a new install: `./setup.sh whisper` (or `./setup.sh modules on voice`) turns them on, then `./setup.sh up`. `./setup.sh modules off voice` turns them off again; the recordings and the model stay in their volumes.
+
 Record a voice note in Life OS (the microphone next to the capture box, or the phone and watch apps), and Life OS turns it into text on your own server with [whisper.cpp](https://github.com/ggml-org/whisper.cpp). The text lands in Inbox like a typed note; with [AI processing](ai-processing.md) on, it is filed from there. The recording never leaves your server and is deleted after 7 days (`LIFE_OS_VOICE_RETENTION_HOURS`).
 
 ## Choose a model
