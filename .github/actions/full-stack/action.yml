@@ -143,16 +143,24 @@ runs:
       id: playwright
       shell: bash
       working-directory: apps/dashboard
-      # The browsers' system packages come through apt, whose first mirror is
-      # Azure's. On 2026-11-11 its name stopped resolving on the runners for
-      # hours, and apt retried it for 45 minutes instead of trying the next
-      # mirror. Without it, apt uses Ubuntu's own (apt-mirrors.txt).
+      # The browsers' system packages come through apt. On 2026-11-11 the
+      # Ubuntu mirrors' names stopped resolving on the runners for hours
+      # (Azure's first, then Ubuntu's own), and apt retried them for 45
+      # minutes. Then the browsers install without them: the runner image
+      # has the libraries its own Chrome and Firefox need, and the browser
+      # suite fails if one is missing.
       run: |
-        if ! timeout 20 getent hosts azure.archive.ubuntu.com >/dev/null; then
-          echo '::warning::azure.archive.ubuntu.com does not resolve: apt uses the next mirror'
-          sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt
+        if timeout 20 getent hosts archive.ubuntu.com >/dev/null; then
+          if ! timeout 20 getent hosts azure.archive.ubuntu.com >/dev/null; then
+            echo '::warning::azure.archive.ubuntu.com does not resolve: apt uses the next mirror'
+            sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt
+          fi
+          if timeout 15m npx playwright install --with-deps chromium firefox; then
+            exit 0
+          fi
         fi
-        timeout 15m npx playwright install --with-deps chromium firefox
+        echo "::warning::apt could not install the browsers' system packages: the browsers install without them"
+        timeout 10m npx playwright install chromium firefox
 
     # Each smoke brings the verification stack (tools/verify-compose,
     # project lifeos-verify) up and removes it again; LIFE_OS_VERIFY_LOGS_DIR
