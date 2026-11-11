@@ -14,7 +14,7 @@ Download the new release's files over the old ones, check them, and run the upda
 
 ```sh
 cd ~/life-os
-version=v0.1.0-preview.5
+version=v0.1.0-preview.6
 release=https://github.com/GAMch1k/life-os/releases/download/$version
 for file in compose.yaml setup.sh SHA256SUMS; do curl -fsSLO "$release/$file"; done
 # GitHub serves .env.example as default.env.example
