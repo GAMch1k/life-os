@@ -10,7 +10,14 @@ ARG WHISPER_CPP_VERSION=v1.9.5
 ARG WHISPER_CPP_COMMIT=d1be6fde11ac6e0407606b4e42fe72d34add8037
 RUN git clone --depth 1 --branch "$WHISPER_CPP_VERSION" https://github.com/ggml-org/whisper.cpp.git /src/whisper.cpp \
     && test "$(git -C /src/whisper.cpp rev-parse HEAD)" = "$WHISPER_CPP_COMMIT"
-RUN cmake -S /src/whisper.cpp -B /src/whisper.cpp/build -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON -DBUILD_SHARED_LIBS=OFF -DGGML_OPENMP=OFF && cmake --build /src/whisper.cpp/build --target whisper-cli -j2
+# For any CPU of the platform, not the build machine's: ggml's default,
+# GGML_NATIVE, compiles for the CPU it builds on, so v0.1.0-preview.5's image,
+# built on a release runner with AVX-512, crashed on every server without it.
+# GGML_NATIVE=OFF builds for x86-64 with AVX2, FMA, and F16C (ggml's
+# defaults then; never AVX-512), and the check below fails a build with
+# AVX-512 instructions (zmm registers) in it.
+RUN cmake -S /src/whisper.cpp -B /src/whisper.cpp/build -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON -DBUILD_SHARED_LIBS=OFF -DGGML_OPENMP=OFF -DGGML_NATIVE=OFF && cmake --build /src/whisper.cpp/build --target whisper-cli -j2 \
+    && ! objdump -d --no-show-raw-insn /src/whisper.cpp/build/bin/whisper-cli | grep -q '%zmm'
 # languages.txt (LIFE_OS_WHISPER_LANGUAGE's codes) must be exactly the codes
 # of this whisper.cpp's g_lang: the build fails when a new version adds or
 # drops one. After the compile, so a change to the list does not rebuild it.
