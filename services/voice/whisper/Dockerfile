@@ -29,7 +29,12 @@ LABEL org.opencontainers.image.source="https://github.com/GAMch1k/life-os" \
 # standard library, so pip (and the copy ensurepip would install again) is
 # removed: its vendored packages were most of the image's findings
 # (SEC-AUDIT).
-RUN apk add --no-cache libstdc++ wget ffmpeg && mkdir /models && chown 65534:65534 /models \
+# The base image is pinned by digest and moves only when Dependabot bumps it;
+# Alpine's security fixes land in between, and the release's Trivy gate fails
+# on a HIGH or CRITICAL vulnerability that has a fix: the build upgrades the
+# packages (SEC-IMG).
+RUN apk upgrade --no-cache \
+    && apk add --no-cache libstdc++ wget ffmpeg && mkdir /models && chown 65534:65534 /models \
     && python3 -m pip uninstall --yes --no-cache-dir pip \
     && rm -rf /usr/local/lib/python3.*/ensurepip/_bundled
 COPY --from=whisper-build /src/whisper.cpp/build/bin/whisper-cli /usr/local/bin/whisper-cli

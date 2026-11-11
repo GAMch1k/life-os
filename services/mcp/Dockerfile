@@ -10,7 +10,12 @@ FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5
 # repository (docs/operations/releases.md).
 LABEL org.opencontainers.image.source="https://github.com/GAMch1k/life-os" \
       org.opencontainers.image.licenses="AGPL-3.0-only"
-RUN addgroup -S lifeos && adduser -S -G lifeos lifeos
+# The base image is pinned by digest and moves only when Dependabot bumps it;
+# Alpine's security fixes land in between, and the release's Trivy gate fails
+# on a HIGH or CRITICAL vulnerability that has a fix: the build upgrades the
+# packages (SEC-IMG).
+RUN apk upgrade --no-cache \
+    && addgroup -S lifeos && adduser -S -G lifeos lifeos
 USER lifeos
 COPY --from=build /out/service /service
 EXPOSE 8080
@@ -43,7 +48,11 @@ RUN set -eu; mkdir -p /out; \
 # npm only installs Codex, whose launcher needs node alone. npm, npx,
 # corepack, and yarn are then removed, as nothing runs them and their bundled
 # packages were all of the image's HIGH findings (SEC-AUDIT). Each CLI's
-# --version fails the build if it needed one of them.
+# --version fails the build if it needed one of them. The base image is
+# pinned by digest and moves only when Dependabot bumps it; Alpine's security
+# fixes land in between, and the release's Trivy gate fails on a HIGH or
+# CRITICAL vulnerability that has a fix: the build upgrades the packages
+# (SEC-IMG).
 FROM node:22-alpine@sha256:0e1754758c2df4cfa3e68d59e2e1b7374bb7fd9ea6328eaaacf15cc934af8202 AS processor
 # The image's source and license; on ghcr.io this links its package to the
 # repository (docs/operations/releases.md).
@@ -60,6 +69,7 @@ RUN set -eu; \
       esac; \
     done; \
     if [ -z "$clis" ]; then echo "LIFE_OS_AI_PROVIDERS names no provider (codex, claude)" >&2; exit 1; fi; \
+    apk upgrade --no-cache; \
     apk add --no-cache tzdata; \
     if [ -n "$packages" ]; then npm install --global $packages; fi; \
     rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \

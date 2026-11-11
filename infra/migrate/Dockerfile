@@ -25,6 +25,11 @@ FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5
 # repository (docs/operations/releases.md).
 LABEL org.opencontainers.image.source="https://github.com/GAMch1k/life-os" \
       org.opencontainers.image.licenses="AGPL-3.0-only"
+# The base image is pinned by digest and moves only when Dependabot bumps it;
+# Alpine's security fixes land in between, and the release's Trivy gate fails
+# on a HIGH or CRITICAL vulnerability that has a fix: the build upgrades the
+# packages (SEC-IMG).
+RUN apk upgrade --no-cache
 COPY --from=build /out/migrate /usr/local/bin/migrate
 COPY --from=build /out/migrations /migrations
 USER 65534:65534

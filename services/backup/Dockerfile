@@ -20,9 +20,14 @@ FROM ${POSTGRES_IMAGE}
 # repository (docs/operations/releases.md).
 LABEL org.opencontainers.image.source="https://github.com/GAMch1k/life-os" \
       org.opencontainers.image.licenses="AGPL-3.0-only"
-# gosu is the PostgreSQL entrypoint's, which this image never runs; its old
-# Go standard library was all of the image's remaining findings (SEC-IMG).
-RUN rm /usr/local/bin/gosu \
+# The base image is pinned by digest and moves only when Dependabot bumps it;
+# Alpine's security fixes land in between, and the release's Trivy gate fails
+# on a HIGH or CRITICAL vulnerability that has a fix: the build upgrades the
+# packages. gosu is the PostgreSQL entrypoint's, which this image never runs;
+# its old Go standard library was all of the image's remaining findings
+# (SEC-IMG).
+RUN apk upgrade --no-cache \
+    && rm /usr/local/bin/gosu \
     && addgroup -S lifeos && adduser -S -G lifeos lifeos \
     && mkdir -p /etc/lifeos/postgres
 USER lifeos
