@@ -127,7 +127,7 @@ The bundle's files have build provenance too: `gh attestation verify compose.yam
 
 `tools/scan-images` runs Trivy (the version pinned in `release.yml`, checked against its SHA-256) on every image the release publishes. A HIGH or CRITICAL vulnerability that has a fix fails the release; unfixed ones and lower severities are not gated (Dependabot and govulncheck cover the code). Every image is scanned, even after one failed. Locally, on images built here: `tools/scan-images lifeos-tasks lifeos-gateway`.
 
-The fix is almost always an update: the base image's digest (Dependabot's weekly pull request, or by hand), an Alpine package, or a Go or npm module. Only when Life OS cannot reach the vulnerable code does it go into the allowlist, `.github/trivy-allowlist.yaml` (Trivy's ignore-file format). Each entry needs:
+The fix is almost always an update: the base image's digest (Dependabot's weekly pull request, or by hand), an Alpine package (the runtime stages run `apk upgrade`, so a fresh build takes Alpine's fix: [CI → Dependabot](ci.md#dependabot)), or a Go or npm module. Only when Life OS cannot reach the vulnerable code does it go into the allowlist, `.github/trivy-allowlist.yaml` (Trivy's ignore-file format). Each entry needs:
 
 - `id`: the vulnerability;
 - `paths` or `purls`: where it is accepted, as narrowly as possible (one binary in one image, not every image);

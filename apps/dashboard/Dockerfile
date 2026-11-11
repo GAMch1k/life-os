@@ -37,7 +37,12 @@ ENV NODE_ENV=production \
 # Nothing here runs npm, npx, corepack, or yarn: Next.js starts with node
 # below. Their bundled packages were all of the image's HIGH findings
 # (SEC-AUDIT).
-RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+# The base image is pinned by digest and moves only when Dependabot bumps it;
+# Alpine's security fixes land in between, and the release's Trivy gate fails
+# on a HIGH or CRITICAL vulnerability that has a fix: the build upgrades the
+# packages (SEC-IMG).
+RUN apk upgrade --no-cache \
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
     /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
     /opt/yarn-* /usr/local/bin/yarn /usr/local/bin/yarnpkg
 COPY --from=production-dependencies /app/node_modules ./node_modules

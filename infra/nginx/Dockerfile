@@ -12,7 +12,12 @@ LABEL org.opencontainers.image.source="https://github.com/GAMch1k/life-os" \
       org.opencontainers.image.licenses="AGPL-3.0-only"
 
 ENV NGINX_ENVSUBST_FILTER=^LIFE_OS_
-RUN mkdir -p /etc/nginx/templates
+# The base image is pinned by digest and moves only when Dependabot bumps it;
+# Alpine's security fixes land in between, and the release's Trivy gate fails
+# on a HIGH or CRITICAL vulnerability that has a fix: the build upgrades the
+# packages (SEC-IMG).
+RUN apk upgrade --no-cache \
+    && mkdir -p /etc/nginx/templates
 COPY --chmod=0644 life-os.conf.template /etc/nginx/templates/default.conf.template
 # The entrypoint sources only executable *.envsh files.
 COPY --chmod=0755 server-names.envsh /docker-entrypoint.d/16-lifeos-server-names.envsh
