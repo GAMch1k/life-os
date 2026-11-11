@@ -92,18 +92,51 @@ Then watch Actions → Release. It takes about 35 minutes; its build, test, and 
 3. **Publish and sign** loads exactly those images (it checks their IDs), pushes them, assembles each version's index and moving tag, signs every image with cosign, and attests the images' and the bundle's build provenance.
 4. **SBOM**, one job per image and platform, attests its SBOM.
 5. **Release** creates the GitHub Release with the bundle and notes that start with the early-preview warning.
+6. **Install check** installs the published release on a clean runner from its files alone and runs the smokes against it ([the install check](#the-install-check)). It is skipped while the release is a draft.
 
 A failure before step 3 publishes nothing: fix it on `master`, delete the tag (`git push origin :refs/tags/v0.1.0-preview.1`, `git tag -d v0.1.0-preview.1`), and tag again, or leave the tag and tag the next version (`v0.1.0-preview.1` and `.2` failed this way and have no release). After step 3 the images exist; a re-run of the failed jobs (Actions → the run → Re-run failed jobs) finishes the release with the same images. A re-run runs the tag's own workflow, though, so a bug in the workflow needs a fix on `master` and the next version: `v0.1.0-preview.3` has images, unsigned, but no release.
 
 ### Dry runs
 
-Every run that is not a tag push is a dry run: steps 1 and 2 with the version `v0.0.0-dry-run.<run number>`, and nothing published. Steps 3 to 5 run only for a tag. It runs by hand (Actions → Release → Run workflow, on any branch) and on a push to a branch that changes the release's own files (the workflow, `.github/actions/full-stack`, the allowlist, `tools/build-install-bundle`, `tools/scan-images`). A dry run may go without `setup.sh`; a release may not.
+Every run that is not a tag push is a dry run: steps 1 and 2 with the version `v0.0.0-dry-run.<run number>`, and nothing published. Steps 3 to 6 run only for a tag. It runs by hand (Actions → Release → Run workflow, on any branch) and on a push to a branch that changes the release's own files (the workflow, `.github/actions/full-stack`, the allowlist, `tools/build-install-bundle`, `tools/scan-images`). A dry run may go without `setup.sh`; a release may not.
 
 ### Package visibility
 
 GitHub's documentation disagrees with itself here. A new package of a personal account is [private by default](https://docs.github.com/en/packages/learn-github-packages/configuring-a-packages-access-control-and-visibility), while one a workflow creates with `GITHUB_TOKEN` ["inherits the visibility and permissions model of the repository"](https://docs.github.com/en/packages/managing-github-packages-using-github-actions-workflows/publishing-and-installing-a-package-with-github-actions#default-permissions-and-access-settings-for-packages-modified-through-workflows), which is public; there are reports of such packages created private anyway. No API changes a package's visibility. So the release checks: every image must answer an anonymous pull. If one does not, the release is created as a **draft**, and the run's summary links each private package. For each: Package settings → Danger Zone → Change visibility → Public, typing the package's name (it cannot be made private again). Then publish the draft release (Releases → the draft → Edit → Publish release). A package keeps its visibility, so this happens at most once per image: the first release, and the first release with a new image.
 
 The images carry `org.opencontainers.image.source`, which links each package to this repository.
+
+## The install check
+
+`.github/workflows/install-check.yml` installs a published release as a new user would and checks that it works. The release runs it as its last step, and it runs by hand for any release.
+
+On a clean runner (`ubuntu-24.04`), in an empty `~/life-os`, it follows the [Quick start](../install/README.md#quick-start), steps 1 to 4, with the release's files alone: no checkout of the repository there, nothing built, every image pulled from ghcr.io.
+
+1. **Download**: `compose.yaml`, `setup.sh`, `SHA256SUMS`, and `default.env.example` saved as `.env.example`, with the docs' commands; then `sha256sum -c SHA256SUMS` and `gh attestation verify` on the three files. The directory must hold those four files and nothing else, `compose.yaml` must build nothing, and `.env.example` must name the version.
+2. **Setup**: `LIFE_OS_TIMEZONE=Europe/Berlin ./setup.sh --yes`, the docs' example of a [run without questions](../install/README.md#without-questions): every other question takes its default, and no integration is set up. `.env` must be mode 600 and name the version and the timezone; `codex-home/` must be empty.
+3. **Start**: `./setup.sh up`, which must end with "Life OS answers."
+4. **Services**: within 10 minutes, every service runs (and is healthy, where it has a health check), the provisioning and every migration ended with 0, and every service `docker compose config --services` lists has its container.
+5. **The processor**: without a Codex sign-in it stops at every start ("missing Codex authentication", exit 78) and Docker starts it again, as the release notes say. That does not fail the job; a processor that logs anything else, ends with another code, or is healthy does.
+6. **The gateway**: published on `127.0.0.1:3000` only (the runner's own address must not reach it); the Dashboard's pages answer; it answers the hosts `127.0.0.1` and `localhost`, and not `unknown.example`.
+7. **The smokes** that take a gateway: `tools/smoke-core-services` and `tools/smoke-dashboard`, with `LIFE_OS_SMOKE_GATEWAY=http://127.0.0.1:3000`. They come from a sparse checkout of the release's tag in the job's workspace, never the install directory. The other smokes start a verification stack of their own from images built locally, so they don't apply to an install; CI and the release run them before anything is published.
+8. **A voice note**: whisper.cpp's public sample `jfk.wav`, uploaded through the gateway, is transcribed by the model Whisper downloaded at its first start, and lands in Inbox.
+9. **A backup** into `backups/`, as `./setup.sh update` makes one (`docker compose exec -T backup /service now`).
+10. **The Status page**: its checks (`GET /api/status`) go into the run's summary. None may be a problem but AI processing.
+11. **`./setup.sh status`**, and last, that no service but the processor has restarted since the start.
+
+Every check after the start runs, even after another one failed. A failed run uploads `install-check-logs`, kept 7 days: the output of `./setup.sh up`, `docker compose ps --all`, and each service's log; never `.env`. The job took about 6 minutes in its first green runs, most of it pulling the images.
+
+By hand: Actions → Install check → Run workflow, with a version or empty for the newest release; or
+
+```sh
+gh workflow run install-check.yml -R GAMch1k/life-os -f version=v0.1.0-preview.5
+```
+
+Never on the server: an install there would be a second Life OS on a machine that runs one ([What you need](../install/README.md#what-you-need)).
+
+When it fails after a release, the release is already published. If the release itself is broken, not the check, say so in its notes (Releases → the release → Edit), fix it on `master`, and tag the next version.
+
+**Modules.** Until switching modules on and off (P20-01) is in a release, it installs every module; the integrations stay off, as they do until they are configured. Once it is, the setup step installs the core modules only, and the service check expects no container of a module that is off.
 
 ## Verifying an image
 

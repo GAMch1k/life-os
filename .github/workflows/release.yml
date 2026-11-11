@@ -4,7 +4,9 @@
 # the moving tag: preview for a -preview.N release, latest for a stable one),
 # signs each with cosign (keyless, GitHub's OIDC token), attests its build
 # provenance and its SBOM, and creates the GitHub Release with the install
-# bundle (compose.yaml, .env.example, setup.sh, SHA256SUMS).
+# bundle (compose.yaml, .env.example, setup.sh, SHA256SUMS). Last, the install
+# check (install-check.yml) installs the release from those files on a clean
+# runner and runs the smokes against it.
 #
 # Every other run is a dry run: it builds, tests, and scans the images and
 # assembles the bundle, and publishes, signs, and releases nothing. It runs
@@ -393,6 +395,8 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write
+    outputs:
+      draft: ${{ steps.visibility.outputs.draft }}
     env:
       VERSION: ${{ needs.plan.outputs.version }}
       PRERELEASE: ${{ needs.plan.outputs.prerelease }}
@@ -512,3 +516,17 @@ jobs:
           done
           curl -fsSL --retry 5 --retry-all-errors -o .env.example "$release/default.env.example"
           sha256sum -c SHA256SUMS
+
+  # The published release, installed on a clean runner from its files alone,
+  # as the install docs say, and smoke-tested (install-check.yml). A draft's
+  # files are not public yet: publish it, then run Install check by hand.
+  install-check:
+    name: Install check
+    needs: [plan, release]
+    if: needs.release.outputs.draft != 'true'
+    permissions:
+      contents: read
+      attestations: read
+    uses: ./.github/workflows/install-check.yml
+    with:
+      version: ${{ needs.plan.outputs.version }}
