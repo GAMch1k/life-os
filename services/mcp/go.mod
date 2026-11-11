@@ -1,6 +1,6 @@
 module github.com/GAMch1k/life-os/services/mcp
 
-go 1.27.3
+go 1.27.4
 
 replace github.com/GAMch1k/life-os/pkg => ../../pkg
 
