@@ -341,7 +341,7 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/android/updates  
 tools/publish-android-release <release-dir> --notes "What changed"
 ```
 
-The manifest format, version rules, and troubleshooting are in [Android releases](docs/operations/android-releases.md).
+The same command also publishes the build as a GitHub Release of the app repository with [gh](https://cli.github.com/), which is where apps that are not connected to your server update from. It needs `gh auth login` as an account that may push there; `--no-github` skips it, `LIFE_OS_ANDROID_GITHUB_REPO` names another repository (or `off`), and `--dry-run` shows what it would do. The manifest format, version rules, GitHub Releases, and troubleshooting are in [Android releases](docs/operations/android-releases.md).
 
 ## 14. Verifying an install
 

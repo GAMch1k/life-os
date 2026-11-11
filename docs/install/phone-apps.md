@@ -6,7 +6,9 @@ You don't need them: the Life OS web app works in any phone browser.
 
 ## Install
 
-The apps are installed from their APK files, not from Google Play. They will be published on the [life-os-app releases page](https://github.com/GAMch1k/life-os-app/releases) with a later preview; until then, that page may be empty. On the phone, download the phone app's APK and open it; Android asks you to allow installing apps from your browser. The phone app installs the watch app for you (Settings › Watch).
+The apps are installed from their APK files, not from Google Play, from the [life-os-app releases page](https://github.com/GAMch1k/life-os-app/releases). Take the latest release (until the first one is published, the page is empty). On the phone, download `lifeos-phone-….apk` from it and open it; Android asks you to allow installing apps from your browser. The phone app installs the watch app for you (Settings › Watch).
+
+The release notes list each APK's SHA-256. Both apps are signed with the Life OS release key; to check a download before installing it, `apksigner verify --print-certs lifeos-phone-….apk` must show the certificate SHA-256 given in the [app's README](https://github.com/GAMch1k/life-os-app#signing).
 
 ## Connect to your server
 
@@ -24,7 +26,7 @@ To get Life OS's notifications as pushes from the app: [Notifications → The Li
 
 ## Updates
 
-The apps look for updates at the official server, which yours can't use. How they update on other servers is being changed for a later preview (updates from the life-os-app releases page). Until then, install a newer version from that page by hand: it installs over the old one and keeps your settings.
+Connected to your server, the phone app updates itself, and the watch app, from the latest [life-os-app release](https://github.com/GAMch1k/life-os-app/releases): it checks when it starts and once a day on Wi-Fi, and **Settings › Updates › Check for updates** checks at once (it says where updates come from). It installs a release only when the APK has the size and SHA-256 its `updates.json` gives and is signed with the same key as the installed app, and never an older version; it downloads only from GitHub, without sending your token there. The first update asks you to confirm once (your browser installed the app); later ones install without asking. Apps from 0.4.5 or older don't know about GitHub Releases yet: install the newest release by hand once, over the old one (your settings stay), and it updates itself from then on.
 
 ## The web app on a phone
 
