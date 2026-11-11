@@ -1850,7 +1850,8 @@ wait_until_ready() {
   while IFS='|' read -r service state health exit_code; do
     [[ -n $service ]] || continue
     case $service in
-      *-migrate) [[ $state != exited || $exit_code == 0 ]] || problems+=("$service (exit $exit_code)") ;;
+      # One-shot jobs: done once they exited with 0.
+      postgres-provision | *-migrate) [[ $state != exited || $exit_code == 0 ]] || problems+=("$service (exit $exit_code)") ;;
       processor) [[ $state == running ]] || processor_down=1 ;;
       whisper) [[ $health == healthy ]] || whisper_starting=1 ;;
       *) [[ $state == running ]] || problems+=("$service ($state)") ;;
