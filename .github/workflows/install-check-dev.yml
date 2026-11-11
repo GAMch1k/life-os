@@ -26,3 +26,39 @@ jobs:
     uses: ./.github/workflows/install-check.yml
     with:
       version: v0.1.0-preview.5
+
+  # Whisper on a processor without AVX-512, whatever the runner has: QEMU's
+  # Haswell model (AVX2, FMA, F16C, BMI2; no AVX-512) runs each image's
+  # whisper-cli on whisper.cpp's sample with the tiny model.
+  whisper-without-avx512:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Show the runner
+        run: |
+          grep -m 1 '^model name' /proc/cpuinfo
+          grep -m 1 '^flags' /proc/cpuinfo | grep -ow 'avx2\|fma\|f16c\|avx512f' | tr '\n' ' ' || true
+      - run: sudo apt-get update -q && sudo apt-get install -y -q qemu-user-static
+      - name: Build this branch's whisper image
+        run: docker build --pull -t whisper-this-branch services/voice/whisper
+      - name: Each whisper-cli under QEMU's Haswell
+        run: |
+          mkdir -p "$RUNNER_TEMP/w"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/w/jfk.wav" https://github.com/ggerganov/whisper.cpp/raw/master/samples/jfk.wav
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/w/ggml-tiny.bin" https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin
+          chmod -R a+rX "$RUNNER_TEMP/w"
+          qemu=$(command -v qemu-x86_64-static)
+          for image in ghcr.io/gamch1k/life-os-whisper:v0.1.0-preview.4 ghcr.io/gamch1k/life-os-whisper:v0.1.0-preview.5 whisper-this-branch; do
+            echo "::group::$image"
+            set +e
+            timeout 15m docker run --rm --network none -v "$qemu:/qemu:ro" -v "$RUNNER_TEMP/w:/w:ro" --entrypoint /qemu "$image" \
+              -cpu Haswell /usr/local/bin/whisper-cli -m /w/ggml-tiny.bin -f /w/jfk.wav -nt -t 4 >"$RUNNER_TEMP/out.txt" 2>"$RUNNER_TEMP/err.txt"
+            code=$?
+            set -e
+            tail -n 5 "$RUNNER_TEMP/err.txt"
+            echo "::endgroup::"
+            echo "$image: exit $code: $(tr -s '\n' ' ' <"$RUNNER_TEMP/out.txt")" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
