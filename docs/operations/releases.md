@@ -108,35 +108,40 @@ The images carry `org.opencontainers.image.source`, which links each package to 
 
 ## The install check
 
-`.github/workflows/install-check.yml` installs a published release as a new user would and checks that it works. The release runs it as its last step, and it runs by hand for any release.
+`.github/workflows/install-check.yml` installs a published release as a new user would and checks that it works. The release runs it as its last step, and it runs by hand for any release, or for a commit before it is released.
 
-On a clean runner (`ubuntu-24.04`), in an empty `~/life-os`, it follows the [Quick start](../install/README.md#quick-start), steps 1 to 4, with the release's files alone: no checkout of the repository there, nothing built, every image pulled from ghcr.io.
+On a clean runner (`ubuntu-24.04`), in an empty `~/life-os`, it follows the [Quick start](../install/README.md#quick-start), steps 1 to 4, with the release's files alone: no checkout of the repository there, nothing built, every image pulled from ghcr.io. A fresh install runs the core alone ([Modules](../install/modules.md)), so that is what it checks first; then it turns one module on and off again.
 
 1. **Download**: `compose.yaml`, `setup.sh`, `SHA256SUMS`, and `default.env.example` saved as `.env.example`, with the docs' commands; then `sha256sum -c SHA256SUMS` and `gh attestation verify` on the three files. The directory must hold those four files and nothing else, `compose.yaml` must build nothing, and `.env.example` must name the version.
-2. **Setup**: `LIFE_OS_TIMEZONE=Europe/Berlin ./setup.sh --yes`, the docs' example of a [run without questions](../install/README.md#without-questions): every other question takes its default, and no integration is set up. It must print no warning; `.env` must be mode 600 and name the version and the timezone; `codex-home/` must be empty.
-3. **Start**: `./setup.sh up`, which must say "Life OS answers." and that AI processing is off until the Codex sign-in, and print no warning. Up to v0.1.0-preview.5 it had two bugs, fixed since: it warned that the provisioning, which had finished, was not running, and it said that AI processing was off only when it caught the processor between two restarts. For those versions the check notes both as known bugs.
-4. **Services**: within 10 minutes, every service runs (and is healthy, where it has a health check), the provisioning and every migration ended with 0, and every service `docker compose config --services` lists has its container.
-5. **The processor**: without a Codex sign-in it stops at every start ("missing Codex authentication", exit 78) and Docker starts it again, as the release notes say. That does not fail the job; a processor that logs anything else, ends with another code, or is healthy does.
-6. **The gateway**: published on `127.0.0.1:3000` only (the runner's own address must not reach it); the Dashboard's pages answer; it answers the hosts `127.0.0.1` and `localhost`, and not `unknown.example`.
-7. **The smokes** that take a gateway: `tools/smoke-core-services` and `tools/smoke-dashboard`, with `LIFE_OS_SMOKE_GATEWAY=http://127.0.0.1:3000`. They come from a sparse checkout of the release's tag in the job's workspace, never the install directory. The other smokes start a verification stack of their own from images built locally, so they don't apply to an install; CI and the release run them before anything is published.
-8. **A voice note**: whisper.cpp's public sample `jfk.wav`, uploaded through the gateway, is transcribed by the model Whisper downloaded at its first start, and lands in Inbox.
-9. **A backup** into `backups/`, as `./setup.sh update` makes one (`docker compose exec -T backup /service now`).
-10. **The Status page**: its checks (`GET /api/status`) go into the run's summary. None may be a problem but AI processing.
-11. **`./setup.sh status`**, without a warning, and last, once the stack has run for 3 minutes, that no service but the processor has restarted.
+2. **Setup**: `LIFE_OS_TIMEZONE=Europe/Berlin ./setup.sh --yes`, the docs' example of a [run without questions](../install/README.md#without-questions): every other question takes its default, and no module or integration is set up. It must print no warning; `.env` must be mode 600, name the version and the timezone, and leave `COMPOSE_PROFILES` empty: the core alone.
+3. **Start**: `./setup.sh up`, which must say "Life OS answers." and "Modules: the core, and none.", and print no warning.
+4. **Services**: within 10 minutes, every service `docker compose config --services` lists runs (and is healthy, where it has a health check), the provisioning and every migration ended with 0, and no container belongs to anything else: no optional module has one.
+5. **The gateway**: published on `127.0.0.1:3000` only (the runner's own address must not reach it); the Dashboard's pages answer; it answers the hosts `127.0.0.1` and `localhost`, and not `unknown.example`; every route of a module that is off (the gateway image's own `module-routes`) answers 404 `module_off`.
+6. **The smokes** that take a gateway: `tools/smoke-core-services` and `tools/smoke-dashboard`, with `LIFE_OS_SMOKE_GATEWAY=http://127.0.0.1:3000`. They come from a sparse checkout of the release's tag in the job's workspace, never the install directory. The other smokes start a verification stack of their own from images built locally, so they don't apply to an install; CI and the release run them before anything is published.
+7. **A backup** into `backups/`, as `./setup.sh update` makes one (`docker compose exec -T backup /service now`).
+8. **The Status page**: its checks (`GET /api/status`) go into the run's summary. None may be a problem.
+9. **`./setup.sh status`**, without a warning.
+10. **A module on**: `./setup.sh modules` must list every optional module as off; then `./setup.sh modules on voice` and `./setup.sh up` start voice notes (Whisper downloads its model and must be healthy), and a voice note, whisper.cpp's public sample `jfk.wav` uploaded through the gateway, is transcribed and lands in Inbox.
+11. **And off**: `./setup.sh modules off voice` and `./setup.sh up` remove voice's containers, keep its volumes, and `/api/voice/` answers 404 `module_off` again.
+12. Last, once the stack has run for 3 minutes, no service has restarted.
 
-Every check after the start runs, even after another one failed. A failed run uploads `install-check-logs`, kept 7 days: the output of `./setup.sh up`, `docker compose ps --all`, and each service's log; never `.env`. The job takes about 3.5 minutes, most of it the wait for a stack that has run for 3 minutes; on GitHub's runners, `./setup.sh up` downloads the images and starts Life OS in under a minute. It prints the runner's processor first: GitHub's runners differ (on 11 November 2026: AMD EPYC 7763 without AVX-512, AMD EPYC 9V74 and 9V45 and Intel Xeon Platinum 8573C with it), and an image built for one processor's instructions can fail on another ([Whisper](../services/voice-stt.md#whisper-worker)).
+Every check after the start runs, even after another one failed. The runner's resolver stays as it is, as in CI's [core-only job](ci.md#core-only): with the core alone, nothing may look up a service that is not there. A failed run uploads `install-check-logs`, kept 7 days: the output of each `./setup.sh` command, `docker compose ps --all`, and each service's log; never `.env`. The job takes about 4 minutes, most of it the wait for a stack that has run for 3 minutes; on GitHub's runners, `./setup.sh up` downloads the images and starts Life OS in under a minute. It prints the runner's processor first: GitHub's runners differ (on 11 November 2026: AMD EPYC 7763 without AVX-512, AMD EPYC 9V74 and 9V45 and Intel Xeon Platinum 8573C with it), and an image built for one processor's instructions can fail on another ([Whisper](../services/voice-stt.md#whisper-worker)).
 
-By hand: Actions → Install check → Run workflow, with a version or empty for the newest release; or
+**Releases before modules** (up to v0.1.0-preview.5) are told by their `.env`, which has no `LIFE_OS_MODULES_LISTED`. A fresh install of one runs every module, so the check expects that instead: an empty `codex-home/`; `./setup.sh up` saying that AI processing is off until the Codex sign-in; the processor stopping at every start ("missing Codex authentication", exit 78) while Docker starts it again, as those releases' notes say, which does not fail the job (a processor that logs anything else, ends with another code, or is healthy does); the voice note on the running stack, without the module switch; and no Status problem but AI processing. Their `setup.sh up` had two bugs, fixed since: it warned that the provisioning, which had finished, was not running, and it said that AI processing was off only when it caught the processor between two restarts. The check notes both as known bugs for those versions. It also sets the runner's resolver to answer unknown names at once, as CI's full-stack job does, since their processor's name comes and goes.
+
+### Run it by hand
+
+Actions → Install check → Run workflow, with a version or empty for the newest release; or
 
 ```sh
 gh workflow run install-check.yml -R GAMch1k/life-os -f version=v0.1.0-preview.5
 ```
 
+**Before a release**, with `source` (`-f source=true --ref <branch>`), it installs the run's commit instead: the runner builds that commit's images, every module's, as CI does (about 10 minutes), names them as the release would publish them, under the version `v0.0.0-install-check.<run number>`, and serves `tools/build-install-bundle`'s files on `127.0.0.1:8765` under the names GitHub serves them by. Then the same steps run, without the attestations (a build on the runner has none) and with the smokes of that commit.
+
 Never on the server: an install there would be a second Life OS on a machine that runs one ([What you need](../install/README.md#what-you-need)).
 
 When it fails after a release, the release is already published. If the release itself is broken, not the check, say so in its notes (Releases → the release → Edit), fix it on `master`, and tag the next version.
-
-**Modules.** Until switching modules on and off (P20-01) is in a release, it installs every module; the integrations stay off, as they do until they are configured. Once it is, the setup step installs the core modules only, and the service check expects no container of a module that is off.
 
 ## Verifying an image
 
