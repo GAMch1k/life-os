@@ -1006,6 +1006,11 @@ ok 'up suggests codex' output_has './setup.sh codex'
 printf '%s\n' 'postgres-provision|exited||1' 'tasks-migrate|exited||1' 'tasks|exited||1' >"$work/ps-bad"
 run STUB_PS_FILE="$work/ps-bad" LIFE_OS_SETUP_WAIT_SECONDS=5 -- up
 ok 'up names what is not running' output_has 'not running: postgres-provision (exit 1) tasks-migrate (exit 1) tasks (exited)'
+# Without a sign-in Docker restarts the processor again and again, and ps may
+# catch it running: AI is off all the same.
+printf '%s\n' 'tasks|running||0' 'processor|running|starting|0' 'gateway|running||0' >"$work/ps-restarted"
+run STUB_PS_FILE="$work/ps-restarted" LIFE_OS_SETUP_WAIT_SECONDS=5 -- up
+ok 'up: AI is off while the processor is between restarts too' output_has 'AI processing is off until you sign in'
 run STUB_GATEWAY_DOWN=1 LIFE_OS_SETUP_WAIT_SECONDS=1 -- up --skip-checks
 ok 'up still ends when Life OS does not answer' test "$status" -eq 0
 ok 'and says so' output_has 'still not answering'

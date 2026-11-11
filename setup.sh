@@ -1824,7 +1824,7 @@ cmd_gateway() {
 # Waits until the gateway and the core services answer; prints what is
 # still starting or failing.
 wait_until_ready() {
-  local gateway deadline service state health exit_code processor_down=0 whisper_starting=0
+  local gateway deadline service state health exit_code processor_seen=0 processor_down=0 whisper_starting=0
   local -a problems=() domains=(tasks inbox calendar finance food) waiting
   gateway=$(gateway_url)
   deadline=$((SECONDS + ${LIFE_OS_SETUP_WAIT_SECONDS:-300}))
@@ -1852,19 +1852,24 @@ wait_until_ready() {
     case $service in
       # One-shot jobs: done once they exited with 0.
       postgres-provision | *-migrate) [[ $state != exited || $exit_code == 0 ]] || problems+=("$service (exit $exit_code)") ;;
-      processor) [[ $state == running ]] || processor_down=1 ;;
+      processor)
+        processor_seen=1
+        [[ $state == running ]] || processor_down=1
+        ;;
       whisper) [[ $health == healthy ]] || whisper_starting=1 ;;
       *) [[ $state == running ]] || problems+=("$service ($state)") ;;
     esac
   done < <(docker compose ps --all --format '{{.Service}}|{{.State}}|{{.Health}}|{{.ExitCode}}' 2>/dev/null || true)
-  if ((processor_down)); then
-    if ai_ready; then
-      problems+=('processor (not running)')
-    elif [[ $(ai_provider) == claude ]]; then
+  # Without its sign-in, the processor stops at every start and Docker starts
+  # it again, so ps may catch it running: AI is off either way.
+  if ((processor_seen)) && ! ai_ready; then
+    if [[ $(ai_provider) == claude ]]; then
       say "AI processing is off until Claude Code is set up (./setup.sh claude); notes wait in Inbox."
     else
       say 'AI processing is off until you sign in to Codex (./setup.sh codex); notes wait in Inbox.'
     fi
+  elif ((processor_down)); then
+    problems+=('processor (not running)')
   fi
   ((!whisper_starting)) || say 'Whisper is still starting (it downloads its model the first time); voice notes wait until it is ready.'
   if ((${#problems[@]})); then
