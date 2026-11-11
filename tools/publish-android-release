@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Publishes a build of the Android apps at the gateway's /android/
-# (docs/operations/android-releases.md):
+# Publishes a build of the Android apps at the gateway's /android/ and as a
+# GitHub Release of the app repository (docs/operations/android-releases.md):
 #
-#   tools/publish-android-release <release-dir> [--notes "…"] [--force]
+#   tools/publish-android-release <release-dir> [--notes "…"] [--force] [--no-github] [--dry-run]
 #
 # <release-dir> is what the app repository's build writes: release.json and
 # the APKs it describes, lifeos-<app>-<versionName>-<versionCode>.apk for
@@ -21,6 +21,22 @@ set -Eeuo pipefail
 # app it publishes. Run again with the same release, it publishes nothing
 # and only rewrites the page and finishes the pruning.
 #
+# The GitHub step (P20-06), after the server's: the same APKs and an
+# updates.json for them, as the release v<versionName>-<versionCode> of
+# LIFE_OS_ANDROID_GITHUB_REPO (by default GAMch1k/life-os-app; off turns the
+# step off), made with gh as a draft, then published as the latest. Apps not
+# connected to the owner's server update from there. It needs both apps of
+# one build from a commit that is on GitHub, never a -dirty one, and a
+# versionCode above the latest GitHub release's (--force allows a lower one).
+# It checks all of that, read-only, before anything changes here or there.
+# The release with the same APKs already there is not an error; run again
+# after a GitHub failure, the script publishes nothing here and finishes the
+# release. Only signed APKs are uploaded: the signing key stays where the
+# build ran. --no-github skips the step for this run.
+#
+# --dry-run checks everything (GitHub too, read-only) and prints what a
+# publish would do, without changing anything.
+#
 # The releases directory is LIFE_OS_ANDROID_RELEASES_DIR (the environment,
 # else .env), else ~/life-os.android, as for the gateway's mount. It must
 # exist, be writable by whoever runs this (its owner: never root), and be
@@ -30,9 +46,10 @@ set -Eeuo pipefail
 # 1 failed.
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-usage='usage: tools/publish-android-release <release-dir> [--notes "…"] [--force]'
+usage='usage: tools/publish-android-release <release-dir> [--notes "…"] [--force] [--no-github] [--dry-run]'
 keep=5
 url_prefix=/android/
+default_github_repo=GAMch1k/life-os-app
 
 refuse() {
   printf 'publish-android-release: %s\n' "$*" >&2
@@ -43,7 +60,7 @@ fail() {
   exit 1
 }
 
-release_arg='' notes='' force=false
+release_arg='' notes='' force=false github=true dry_run=false
 while (($#)); do
   case "$1" in
     --notes)
@@ -53,6 +70,8 @@ while (($#)); do
       ;;
     --notes=*) notes=${1#--notes=} ;;
     --force) force=true ;;
+    --no-github) github=false ;;
+    --dry-run) dry_run=true ;;
     -h | --help)
       printf '%s\n' "$usage"
       exit 0
@@ -89,9 +108,11 @@ zone=${zone:-Europe/Berlin}
 # One publish at a time; a publish killed midway left only temporary files.
 exec 9<"$dir"
 flock --nonblock 9 || refuse "another publish to $dir is running"
-find "$dir" -maxdepth 1 -type f -name '.publish-*' -delete
+[[ "$dry_run" == true ]] || find "$dir" -maxdepth 1 -type f -name '.publish-*' -delete
 temps=()
-trap 'rm -f -- "${temps[@]}"' EXIT
+# Scratch space for the GitHub step (its manifest, notes, gh's answers).
+scratch=$(mktemp -d)
+trap 'rm -f -- "${temps[@]}"; rm -rf -- "$scratch"' EXIT
 trap 'printf "publish-android-release: failed (line %s)\n" "$LINENO" >&2; exit 1' ERR
 
 # The release. The one place where release.json's names map to the
@@ -198,10 +219,11 @@ times='{}'
 while IFS= read -r at; do
   times=$(jq -c --arg at "$at" --arg shown "$(TZ=$zone date -d "$at" '+%-d %B %Y, %H:%M %Z')" '.[$at] = $shown' <<<"$times")
 done < <(jq -r '[.apps[] | .publishedAt, .previous[]?.publishedAt] | unique[]' <<<"$updated")
-page_program=$(cat <<'JQ'
+# shellcheck disable=SC2016 # jq's $v, not the shell's
+jq_android='def android: (if . >= 26 and . <= 36 then {"26":"8.0","27":"8.1","28":"9","29":"10","30":"11","31":"12","32":"12L","33":"13","34":"14","35":"15","36":"16"}[tostring] else null end) as $v
+  | if $v then "Android \($v) or newer" else "Android API level \(.) or newer" end;'
+page_program=$jq_android$'\n'$(cat <<'JQ'
 def mb: if . < 1000000 then "\(. / 1000 | ceil) kB" else "\(. / 100000 | round / 10) MB" end;
-def android: (if . >= 26 and . <= 36 then {"26":"8.0","27":"8.1","28":"9","29":"10","30":"11","31":"12","32":"12L","33":"13","34":"14","35":"15","36":"16"}[tostring] else null end) as $v
-  | if $v then "Android \($v) or newer" else "Android API level \(.) or newer" end;
 def when: @html "<time datetime=\"\(.)\">\($times[.] // .)</time>";
 def facts: @html "Version \(.versionName) (\(.versionCode)) · \(.size | mb) · \(.minSdk | android) · published " + (.publishedAt | when);
 def notes: if (.notes // "") != "" then @html "<p>\(.notes)</p>" else "" end;
@@ -264,6 +286,124 @@ JQ
 )
 page=$(jq -r --argjson times "$times" "$page_program" <<<"$updated")
 
+# The GitHub Release (P20-06), planned and checked read-only before
+# anything changes, here or on GitHub. $github_action ends up create
+# (a draft with the APKs and updates.json, then published as the latest) or
+# unchanged (the release is there with these APKs); $github_skipped says why
+# there is none.
+github_repo=$(setting LIFE_OS_ANDROID_GITHUB_REPO)
+github_repo=${github_repo:-$default_github_repo}
+github_action='' github_skipped='' github_drafts=()
+if [[ "$github" != true ]]; then
+  github_skipped='--no-github'
+elif [[ "${github_repo,,}" == off ]]; then
+  github_skipped='LIFE_OS_ANDROID_GITHUB_REPO=off'
+fi
+
+# gh_get <API path>: GitHub's JSON answer in $answer. Returns 1 when GitHub
+# has no such thing (404, or 422 for an unknown commit); refuses when gh
+# fails otherwise (not logged in, no network).
+gh_get() {
+  if answer=$(gh api "$1" 2>"$scratch/gh.err"); then
+    return 0
+  fi
+  answer=''
+  grep -qE '\(HTTP (404|422)\)' "$scratch/gh.err" && return 1
+  refuse "gh api $1 failed: $(head -c 300 "$scratch/gh.err" | tr '\n' ' ')(gh auth status shows gh's login); or pass --no-github"
+}
+# gh_manifest <tag>: the updates.json of the published release <tag> in
+# $answer; returns 1 when it has none (or not a manifest).
+gh_manifest() {
+  answer=$(gh release download "$1" --repo "$github_repo" --pattern updates.json --output - 2>"$scratch/gh.err") &&
+    jq -e '.formatVersion == 1 and (.apps | type) == "object"' >/dev/null 2>&1 <<<"$answer" && return 0
+  answer=''
+  return 1
+}
+
+if [[ -z "$github_skipped" ]]; then
+  [[ "$github_repo" =~ ^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$ ]] ||
+    refuse "LIFE_OS_ANDROID_GITHUB_REPO must be a GitHub repository, owner/name such as $default_github_repo, or off"
+  command -v gh >/dev/null 2>&1 ||
+    refuse "the GitHub release needs gh (the GitHub CLI), logged in (gh auth login); or pass --no-github to publish only here"
+  # One build of both apps, from a commit that is on GitHub.
+  jq -e 'has("phone") and has("wear")' >/dev/null <<<"$release" ||
+    refuse "a GitHub release carries both apps, and $release_file has only $(jq -r 'keys | join(" and ")' <<<"$release"): pass --no-github to publish it only here"
+  jq -e '.phone.versionName == .wear.versionName and .phone.versionCode == .wear.versionCode and .phone.commit == .wear.commit' >/dev/null <<<"$release" ||
+    refuse "a GitHub release is one build of both apps, and the phone and the watch differ in versionName, versionCode, or commit: pass --no-github to publish them only here"
+  IFS=$'\t' read -r github_name github_code github_commit < <(jq -r '.phone | [.versionName, .versionCode, .commit] | @tsv' <<<"$release")
+  [[ "$github_commit" != *-dirty ]] ||
+    refuse "a build from uncommitted changes never goes to GitHub, not even with --force: commit and rebuild, or pass --no-github"
+  [[ "$github_commit" =~ ^[0-9a-f]{40}$ ]] ||
+    refuse "the GitHub release is tagged at the build's commit, which must be a full SHA (40 hexadecimal digits), not $github_commit: pass --no-github to publish it only here"
+  tag="v$github_name-$github_code"
+  [[ "$tag" != *..* ]] || refuse "$tag is not a valid Git tag (it has ..): pass --no-github to publish it only here"
+
+  gh_get "repos/$github_repo" ||
+    refuse "gh does not see the repository $github_repo: check LIFE_OS_ANDROID_GITHUB_REPO and gh auth status, or pass --no-github"
+  IFS=$'\t' read -r github_repo can_push < <(jq -r '[.full_name, (.permissions.push // false)] | @tsv' <<<"$answer")
+  [[ "$can_push" == true ]] ||
+    refuse "gh's account may not publish releases on $github_repo (no push access): check gh auth status, or pass --no-github"
+  gh_get "repos/$github_repo/commits/$github_commit" ||
+    refuse "the build's commit $github_commit is not on GitHub ($github_repo): push it first, or pass --no-github"
+
+  # Its manifest: release.json's apps, each at its asset of this release.
+  # The notes are --notes, else those the server has for this version.
+  github_notes=$notes
+  [[ -n "$github_notes" ]] || github_notes=$(jq -r --argjson code "$github_code" '.apps.phone | select(.versionCode == $code) | .notes // ""' <<<"$updated")
+  github_manifest=$(jq -n --argjson release "$release" --arg now "$now" --arg notes "$github_notes" \
+    --arg base "https://github.com/$github_repo/releases/download/$tag/" '
+    {formatVersion: 1, updatedAt: $now,
+     apps: ($release | to_entries | map(.key as $app | .value | {key: $app, value: {versionCode, versionName, minSdk, sha256, size,
+       url: ($base + "lifeos-\($app)-\(.versionName)-\(.versionCode).apk"), publishedAt: $now, builtAt, commit, notes: $notes, previous: []}})
+       | from_entries)}')
+
+  if gh_get "repos/$github_repo/releases/tags/$tag"; then
+    # Published already: with these APKs (a publish run again), or others.
+    gh_manifest "$tag" ||
+      refuse "the GitHub release $tag exists without an updates.json; it was not made by this script: remove it on GitHub, or pass --no-github"
+    same=$(jq -n --argjson a "$answer" --argjson b "$github_manifest" '[$a, $b] | map(.apps | {phone, wear} | map_values({versionCode, sha256})) | .[0] == .[1]')
+    [[ "$same" == true ]] ||
+      refuse "the GitHub release $tag already exists with other APKs; build with a higher versionCode (or pass --no-github)"
+    github_action=unchanged
+  else
+    # Drafts with this tag, which an interrupted publish left: replaced.
+    gh_get "repos/$github_repo/releases?per_page=100" ||
+      refuse "gh does not list the releases of $github_repo; or pass --no-github"
+    mapfile -t github_drafts < <(jq -r --arg tag "$tag" '.[] | select(.draft and .tag_name == $tag) | .id' <<<"$answer")
+    if gh_get "repos/$github_repo/releases/latest"; then
+      latest_tag=$(jq -r .tag_name <<<"$answer")
+      gh_manifest "$latest_tag" ||
+        refuse "the latest GitHub release, $latest_tag, has no updates.json, so its versions are unknown: give it one or delete it, or pass --no-github"
+      IFS=$'\t' read -r latest_phone latest_wear < <(jq -r '[.apps.phone.versionCode // 0, .apps.wear.versionCode // 0] | @tsv' <<<"$answer")
+      if ((github_code <= latest_phone || github_code <= latest_wear)) && [[ "$force" != true ]]; then
+        refuse "versionCode $github_code is not above the latest GitHub release, $latest_tag (phone $latest_phone, wear $latest_wear); refusing a downgrade (--force publishes it anyway, or pass --no-github)"
+      fi
+    fi
+    github_action=create
+  fi
+fi
+
+if [[ "$dry_run" == true ]]; then
+  for app in "${publish[@]}"; do
+    jq -r --arg app "$app" '.apps[$app] | "dry run: would publish \($app) \(.versionName) (\(.versionCode)): \(.url), \(.size) bytes, sha256 \(.sha256)"' <<<"$updated"
+  done
+  for app in "${unchanged[@]}"; do
+    jq -r --arg app "$app" '.apps[$app] | "dry run: unchanged \($app) \(.versionName) (\(.versionCode)): already published \(.publishedAt)"' <<<"$updated"
+  done
+  case "$github_action" in
+    create)
+      printf 'dry run: github: would create the release %s on %s at %s, a draft with %s, %s and updates.json, then publish it as the latest' \
+        "$tag" "$github_repo" "$github_commit" "${file[phone]}" "${file[wear]}"
+      ((${#github_drafts[@]} == 0)) || printf ' (replacing %d draft(s) an interrupted publish left)' "${#github_drafts[@]}"
+      printf '\n'
+      ;;
+    unchanged) printf 'dry run: github: unchanged, the release %s on %s has these APKs\n' "$tag" "$github_repo" ;;
+    *) printf 'dry run: github: skipped (%s)\n' "$github_skipped" ;;
+  esac
+  printf 'dry run: nothing was changed\n'
+  exit 0
+fi
+
 # Now the writes, each to a temporary file in the releases directory ($tmp)
 # that place renames into place once it is complete. Both run in this
 # shell, never in a pipeline.
@@ -316,3 +456,55 @@ done
 for name in "${deleted[@]}"; do printf 'deleted %s (keeping the newest %d of each app)\n' "$name" "$keep"; done
 ((${#publish[@]})) || printf 'nothing new to publish; the page is rewritten\n'
 printf 'manifest: %s (served at %supdates), page: %s (served at %s)\n' "$manifest" "$url_prefix" "$dir/index.html" "$url_prefix"
+
+# The GitHub Release: replace drafts an interrupted publish left, create a
+# draft with the APKs and updates.json, check what GitHub stored, then
+# publish it as the latest. Until that last step nobody sees it, so apps
+# never find a release without its files.
+github_publish() {
+  local id assets want url
+  for id in "${github_drafts[@]}"; do
+    gh api -X DELETE "repos/$github_repo/releases/$id" >/dev/null || return 1
+  done
+  mkdir -p "$scratch/assets" || return 1
+  printf '%s\n' "$github_manifest" >"$scratch/assets/updates.json" || return 1
+  jq -r --arg repo "$github_repo" --arg commit "$github_commit" --arg notes "$github_notes" "$jq_android"'
+    (if $notes != "" then $notes + "\n\n" else "" end)
+    + "Life OS for Android \(.apps.phone.versionName) (versionCode \(.apps.phone.versionCode)), built from \($commit).\n\n"
+    + "- Phone (\(.apps.phone.minSdk | android)): `\(.apps.phone.url | split("/") | last)`\n"
+    + "- Watch (Wear OS, \(.apps.wear.minSdk | android)): `\(.apps.wear.url | split("/") | last)`, installed from the phone app: Settings › Watch\n\n"
+    + "SHA-256:\n\n```\n"
+    + ([.apps.phone, .apps.wear] | map("\(.sha256)  \(.url | split("/") | last)") | join("\n"))
+    + "\n```\n\n"
+    + "Open the phone APK on the phone to install it. An app that is not connected to the official Life OS server updates itself, and the watch app, from the latest release here: it checks each APK against `updates.json` and installs only one signed with the same key as the installed app ([Signing](https://github.com/\($repo)#signing)).\n"
+  ' "$scratch/assets/updates.json" >"$scratch/notes.md" || return 1
+  gh release create "$tag" --repo "$github_repo" --draft --target "$github_commit" \
+    --title "Life OS for Android $github_name ($github_code)" --notes-file "$scratch/notes.md" \
+    "$release_dir/${file[phone]}" "$release_dir/${file[wear]}" "$scratch/assets/updates.json" >/dev/null || return 1
+  answer=$(gh api "repos/$github_repo/releases?per_page=100") || return 1
+  id=$(jq -r --arg tag "$tag" 'first(.[] | select(.draft and .tag_name == $tag) | .id) // empty' <<<"$answer") || return 1
+  [[ -n "$id" ]] || { printf 'publish-android-release: GitHub lists no draft %s after creating it\n' "$tag" >&2; return 1; }
+  # What GitHub stored: these three files, at their sizes and SHA-256s.
+  assets=$(jq -c --argjson id "$id" 'first(.[] | select(.id == $id)) | .assets | map({name, size, digest}) | sort_by(.name)' <<<"$answer") || return 1
+  want=$(jq -c -n --argjson m "$github_manifest" --arg sha "$(sha256sum <"$scratch/assets/updates.json" | cut -d ' ' -f 1)" \
+    --argjson size "$(stat -c %s -- "$scratch/assets/updates.json")" '
+    [$m.apps[] | {name: (.url | split("/") | last), size, sha256}] + [{name: "updates.json", size: $size, sha256: $sha}] | sort_by(.name)') || return 1
+  jq -e -n --argjson got "$assets" --argjson want "$want" '
+    ($got | length) == ($want | length)
+    and ([$got, $want] | transpose | all(.[0].name == .[1].name and .[0].size == .[1].size
+      and (.[0].digest == null or .[0].digest == "sha256:" + .[1].sha256)))' >/dev/null || {
+    printf 'publish-android-release: the draft %s on GitHub does not hold the files as uploaded: %s\n' "$tag" "$assets" >&2
+    return 1
+  }
+  url=$(gh api -X PATCH "repos/$github_repo/releases/$id" -F draft=false -f make_latest=true | jq -r .html_url) || return 1
+  printf 'github: published %s on %s as the latest release: %s (%s, %s, updates.json)\n' "$tag" "$github_repo" "$url" "${file[phone]}" "${file[wear]}"
+}
+
+case "$github_action" in
+  create)
+    github_publish ||
+      fail "the GitHub release $tag is not published (see above); everything here is. Run the same command again to finish it: it publishes nothing here a second time"
+    ;;
+  unchanged) printf 'github: unchanged, the release %s on %s has these APKs\n' "$tag" "$github_repo" ;;
+  *) printf 'github: skipped (%s)\n' "$github_skipped" ;;
+esac

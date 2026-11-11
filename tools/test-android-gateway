@@ -41,8 +41,8 @@ install -d -m 755 "$releases"
 export LIFE_OS_ANDROID_RELEASES_DIR=$releases LIFE_OS_TIMEZONE=Europe/Berlin
 ANDROID_FIXTURE_APK_BYTES=20000000 tools/fixtures/android-release "$work/phone" 0.1.0 1 phone
 tools/fixtures/android-release "$work/wear" 0.1.0 1 wear
-tools/publish-android-release "$work/phone" --notes 'Gateway test' >/dev/null
-tools/publish-android-release "$work/wear" >/dev/null
+tools/publish-android-release "$work/phone" --no-github --notes 'Gateway test' >/dev/null
+tools/publish-android-release "$work/wear" --no-github >/dev/null
 phone_url=$(jq -r .apps.phone.url "$releases/updates.json")
 phone_sha=$(jq -r .apps.phone.sha256 "$releases/updates.json")
 phone_size=$(jq -r .apps.phone.size "$releases/updates.json")
