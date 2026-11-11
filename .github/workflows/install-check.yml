@@ -17,10 +17,6 @@
 name: Install check
 
 on:
-  # TEMPORARY (P20-07 development): workflow_dispatch needs the file on the
-  # default branch. Removed before the merge.
-  push:
-    branches: [p20-07-install-check]
   workflow_dispatch:
     inputs:
       version:
@@ -77,9 +73,13 @@ jobs:
           echo "### Install check of [${VERSION}](https://github.com/$GH_REPO/releases/tag/$VERSION)" >>"$GITHUB_STEP_SUMMARY"
           # The install directory, as in the install docs.
           echo "INSTALL_DIR=$HOME/life-os" >>"$GITHUB_ENV"
+      # The processor too: GitHub's runners differ, and an image built for
+      # one processor's instructions fails on another
+      # (docs/services/voice-stt.md#whisper-worker).
       - name: Show the runner
         run: |
-          echo "$(nproc) CPUs"
+          echo "$(nproc) CPUs:$(grep -m 1 '^model name' /proc/cpuinfo | cut -d : -f 2-)"
+          echo "x86-64 extensions: $(grep -m 1 '^flags' /proc/cpuinfo | grep -ow 'avx2\|fma\|f16c\|avx512f\|avx512_vnni' | tr '\n' ' ' || true)"
           free -h
           df -h /
           docker version --format 'Docker {{.Server.Version}}'
