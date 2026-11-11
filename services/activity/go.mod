@@ -1,6 +1,6 @@
 module github.com/GAMch1k/life-os/services/activity
 
-go 1.27.3
+go 1.27.4
 
 require (
 	github.com/GAMch1k/life-os/pkg v0.0.0

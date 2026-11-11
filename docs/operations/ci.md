@@ -49,7 +49,7 @@ The default branch's ruleset requires seven checks before a pull request can be 
 
 CI installs the versions the repository already uses:
 
-- **Go** from `go.work` (`go 1.27.3`). Changing Go means `go.work`, every `go.mod`, and the Dockerfiles' `golang:` images.
+- **Go** from `go.work` (`go 1.27.4`). Changing Go means `go.work`, every `go.mod`, and the Dockerfiles' `golang:` images.
 - **Node 22**, as the Dashboard's image (`node:22-alpine`).
 - **sqlc 1.31.1**, the release binary, checked against the SHA-256 in the workflow's `SQLC_SHA256`. The version is the generated code's `sqlc v1.31.1` header (see `pkg/database/README.md`).
 - **oapi-codegen v2.8.0**, as `tools/check-contracts` requires.
@@ -179,6 +179,8 @@ When the job was added (9 November 2026), every module except the fixtures gener
 | `golang.org/x/text` v0.40.0 | GO-2026-6629 | v0.41.0 |
 | `github.com/klauspost/compress` v1.19.2 | GO-2026-6865 | v1.20.2 |
 | `github.com/andybalholm/brotli` v1.2.2 | GO-2026-6888 | v1.2.7 |
+
+On 11 November 2026, GO-2026-6859 in Go 1.27.3's `net/http` (an HTTP/1 server crash from a `MaxBytesReader` header race) turned the job red in every module except the fixtures generator. Go 1.27.4 fixed it.
 
 govulncheck also notes GO-2026-5932 in `golang.org/x/crypto` (its unmaintained `openpgp` package). No module imports that package, so it is not a finding.
 

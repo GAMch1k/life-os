@@ -48,7 +48,7 @@ Each service owns its API implementation, domain model, persistence code, migrat
 ## Prerequisites
 
 - Git
-- Go 1.27.3 or newer in the 1.27 release line
+- Go 1.27.4 or newer in the 1.27 release line
 - Docker Engine with Docker Compose v2
 - Node.js 22 or newer once dashboard development begins
 
