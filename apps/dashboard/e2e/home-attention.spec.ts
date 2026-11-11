@@ -7,7 +7,13 @@ import {
   waitForRefresh,
   writeFeed,
 } from "./calendar-feed";
-import { type APIRequestContext, expect, type Page, test } from "./fixtures";
+import {
+  type APIRequestContext,
+  expect,
+  moduleOn,
+  type Page,
+  test,
+} from "./fixtures";
 
 const enabled = Boolean(process.env.LIFE_OS_E2E_URL);
 
@@ -201,12 +207,14 @@ test.describe("Home attention surface", () => {
     ]) {
       await page.setViewportSize(viewport);
       await page.goto("/");
-      // Type or dictate right away: composer, Capture and Record are all on
-      // screen without scrolling.
+      // Type or dictate right away: composer, Capture and Record (with the
+      // voice notes module) are all on screen without scrolling.
       for (const control of [
         page.locator("#inbox-capture"),
         page.getByRole("button", { name: "Capture" }),
-        page.getByRole("button", { name: "Record" }),
+        ...(moduleOn("voice")
+          ? [page.getByRole("button", { name: "Record" })]
+          : []),
       ]) {
         await expect(control).toBeInViewport({ ratio: 1 });
       }

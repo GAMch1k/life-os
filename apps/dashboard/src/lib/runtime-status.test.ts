@@ -874,3 +874,44 @@ test("the AI categories job says its last batch and what waits", () => {
   );
   assert.deepEqual(categoriesFacts(undefined), []);
 });
+
+test("modules that are off leave their checks out", () => {
+  // The core alone: no processor, no Voice, no Google, no bank, no server.
+  const status = toRuntimeStatus(
+    {
+      inbox: inbox(),
+      services: [{ name: "Tasks", ready: true }],
+    },
+    now,
+  );
+  assert.deepEqual(
+    status.checks.map((entry) => entry.id),
+    ["inbox", "services"],
+  );
+  assert.equal(status.overall, "ok");
+});
+
+test("without AI processing, captures kept as written are no backlog", () => {
+  const signals: RuntimeSignals = {
+    inbox: inbox({ pendingCount: 3, oldestPendingAt: minutesAgo(600) }),
+    services: [],
+  };
+  const inboxCheck = check(signals, "inbox");
+  assert.equal(inboxCheck.state, "ok");
+  assert.match(inboxCheck.summary, /3 captures are kept in Inbox as written/);
+  assert.match(inboxCheck.summary, /AI processing is off/);
+  assert.deepEqual(statusAlerts(toRuntimeStatus(signals, now)), []);
+  // With AI processing on, the same wait is a prolonged backlog.
+  assert.equal(
+    check({ ...signals, processor: processor() }, "inbox").state,
+    "warning",
+  );
+});
+
+test("a processor that is on but cannot be read is still a problem", () => {
+  const status = toRuntimeStatus({ ...healthy, processor: null }, now);
+  assert.equal(
+    status.checks.find((entry) => entry.id === "processing")?.state,
+    "problem",
+  );
+});

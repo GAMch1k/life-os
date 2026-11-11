@@ -163,7 +163,7 @@ test.describe("Edit a capture from Human Review", () => {
     }
   });
 
-  test("Record captures the edit by voice; its Inbox item names the original", async ({
+  test("Record captures the edit by voice; its Inbox item names the original @voice", async ({
     page,
     request,
   }) => {

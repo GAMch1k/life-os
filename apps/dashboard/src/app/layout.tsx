@@ -1,9 +1,11 @@
 import type { Metadata, Viewport } from "next";
 
 import { AppShell } from "@/components/app-shell";
+import { ModulesProvider } from "@/components/modules-provider";
 import { ServiceWorker } from "@/components/service-worker";
 import { ThemeProvider } from "@/components/theme-provider";
 import { TimeZoneSync } from "@/components/time-zone-sync";
+import { installed } from "@/lib/modules";
 import { userTimeZone } from "@/lib/user-time-zone";
 import { MANIFEST_PATH, THEME_COLORS } from "@/lib/web-app";
 
@@ -42,7 +44,11 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
       </head>
       <body className="min-h-full">
         <ThemeProvider>
-          <AppShell timeZone={timeZone}>{children}</AppShell>
+          {/* The modules that are on (LIFE_OS_MODULES): their navigation
+              and features show, and only theirs. */}
+          <ModulesProvider parts={installed()}>
+            <AppShell timeZone={timeZone}>{children}</AppShell>
+          </ModulesProvider>
         </ThemeProvider>
         <TimeZoneSync timeZone={timeZone} />
         <ServiceWorker />

@@ -190,7 +190,7 @@ async function stubBanking(page: Page, baseURL: string) {
 
 const bankCard = (page: Page) => page.getByTestId("bank-connection");
 
-test.describe("Bank connection", () => {
+test.describe("Bank connection @banking", () => {
   test.skip(!enabled, "set LIFE_OS_E2E_URL to run against the isolated stack");
 
   test("without Enable Banking settings the card says what the server needs", async ({

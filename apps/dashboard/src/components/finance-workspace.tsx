@@ -11,6 +11,7 @@ import {
 import { BankConnections } from "@/components/bank-connections";
 import { AlertsDialog } from "@/components/finance-alerts-dialog";
 import { AiPlanCard, AiPlanRequestDialog } from "@/components/finance-ai-plan";
+import { useFeature } from "@/components/modules-provider";
 import { FinanceBudget } from "@/components/finance-budget";
 import { PaydayDialog } from "@/components/finance-payday-dialog";
 import {
@@ -112,6 +113,8 @@ export function FinanceWorkspace({
   /** The budget's month the URL named (YYYY-MM). */
   budgetMonth?: string;
 }) {
+  // The bank connection, while the bank sync module is on.
+  const bank = useFeature("finance.bank");
   if (state.kind === "unavailable")
     return (
       <div className="mx-auto max-w-6xl space-y-4">
@@ -125,7 +128,7 @@ export function FinanceWorkspace({
             </CardDescription>
           </CardHeader>
         </Card>
-        <BankConnections timeZone={timeZone} />
+        {bank ? <BankConnections timeZone={timeZone} /> : null}
       </div>
     );
   return (
@@ -175,6 +178,10 @@ function ReadyWorkspace({
   const [budgetEditor, setBudgetEditor] = useState<BudgetEditorState>(null);
   const [budgetPending, startBudgetChange] = useTransition();
   const [budgetActionError, setBudgetActionError] = useState<string>();
+  // The bank connection and the AI's budget plans (with Payday, which asks
+  // for one), while their modules are on.
+  const bank = useFeature("finance.bank");
+  const aiPlans = useFeature("finance.ai-plan");
   // "Plan my budget": the request dialog, and a key that makes the AI
   // plan's card read afresh after a request.
   const [aiPlanOpen, setAiPlanOpen] = useState(false);
@@ -493,10 +500,12 @@ function ReadyWorkspace({
         selectedId={filters.accountId}
       />
 
-      <BankConnections
-        onChanged={() => transactionsChanged(true)}
-        timeZone={timeZone}
-      />
+      {bank ? (
+        <BankConnections
+          onChanged={() => transactionsChanged(true)}
+          timeZone={timeZone}
+        />
+      ) : null}
 
       <Tabs
         className="gap-3"
@@ -561,28 +570,30 @@ function ReadyWorkspace({
           <FinanceBudget
             actionError={budgetActionError}
             aiPlan={
-              <AiPlanCard
-                budget={
-                  budget.data?.month === budgetMonth ? budget.data : undefined
-                }
-                key={`${budgetMonth}-${aiPlanKey}`}
-                month={budgetMonth}
-                onApplied={(applied) => {
-                  // The answer is the month's budget with the plan applied.
-                  budgetTicket.current++;
-                  setBudget({ data: applied });
-                  setBudgetLoading(false);
-                }}
-                timeZone={timeZone}
-              />
+              aiPlans ? (
+                <AiPlanCard
+                  budget={
+                    budget.data?.month === budgetMonth ? budget.data : undefined
+                  }
+                  key={`${budgetMonth}-${aiPlanKey}`}
+                  month={budgetMonth}
+                  onApplied={(applied) => {
+                    // The answer is the month's budget with the plan applied.
+                    budgetTicket.current++;
+                    setBudget({ data: applied });
+                    setBudgetLoading(false);
+                  }}
+                  timeZone={timeZone}
+                />
+              ) : undefined
             }
             budget={budget}
             loading={budgetLoading}
             month={budgetMonth}
             onEdit={(data) => setBudgetEditor({ budget: data })}
             onMonthChange={changeBudgetMonth}
-            onPayday={() => setPaydayOpen(true)}
-            onPlanWithAI={() => setAiPlanOpen(true)}
+            onPayday={aiPlans ? () => setPaydayOpen(true) : undefined}
+            onPlanWithAI={aiPlans ? () => setAiPlanOpen(true) : undefined}
             onReset={resetBudget}
             onShowCategory={showBudgetCategory}
             pending={budgetPending}

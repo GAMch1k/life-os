@@ -7,6 +7,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { CaptureComposer } from "@/components/capture-composer";
 import { InboxStateBadge } from "@/components/inbox-summary";
+import { useFeature } from "@/components/modules-provider";
 import { Card, CardContent } from "@/components/ui/card";
 import { inboxClient } from "@/lib/api/inbox-client";
 import { onCapture } from "@/lib/capture-session";
@@ -58,6 +59,8 @@ export function CaptureCard({
   const [backlog, setBacklog] = useState(initialBacklog);
   const [now, setNow] = useState(() => new Date(renderedAt));
   const showBacklog = initialBacklog !== undefined;
+  // Without AI processing nothing changes a capture: it is not followed.
+  const processing = useFeature("ai.processing");
 
   const refreshBacklog = useCallback(async () => {
     if (!showBacklog) return;
@@ -84,9 +87,9 @@ export function CaptureCard({
   );
 
   useEffect(() => {
-    const watched = captures.filter((capture) =>
-      following(capture, Date.now()),
-    );
+    const watched = processing
+      ? captures.filter((capture) => following(capture, Date.now()))
+      : [];
     if (!watched.length) return;
     const timer = window.setTimeout(async () => {
       const fresh = await Promise.all(
@@ -127,7 +130,7 @@ export function CaptureCard({
       }
     }, POLL_MS);
     return () => window.clearTimeout(timer);
-  }, [captures, refreshBacklog, router]);
+  }, [captures, processing, refreshBacklog, router]);
 
   return (
     <Card aria-label="Capture" id="capture" role="region" size="sm">

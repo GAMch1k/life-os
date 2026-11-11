@@ -34,6 +34,11 @@ import {
 import { formatBinaryBytes } from "@/lib/format-bytes";
 import { monthLabel } from "@/lib/finance-summary";
 import { formatUsage } from "@/lib/format-usage";
+import {
+  type DashboardService,
+  type InstalledParts,
+  installed,
+} from "@/lib/modules";
 import { downsampleMax, downsampleMin, type SparkPoint } from "@/lib/sparkline";
 import { DEFAULT_TIME_ZONE, dateTimeFormat } from "@/lib/time-zone";
 import { configuredTimeZone, userTimeZone } from "@/lib/user-time-zone";
@@ -553,9 +558,18 @@ export type StatusChart = {
 };
 
 export type RuntimeSignals = {
-  processor: ProcessorStatus | null;
+  /**
+   * The processor's status; null when it could not be read, absent when AI
+   * processing is off (its check is left out, and Inbox keeps captures as
+   * written).
+   */
+  processor?: ProcessorStatus | null;
   inbox: InboxBacklog | null;
-  voice: AudioBacklog | null;
+  /**
+   * Voice's backlog; null when it could not be read, absent when the voice
+   * notes module is off (the check is left out).
+   */
+  voice?: AudioBacklog | null;
   /**
    * The feeds of the calendar-feeds integration; null when it could not be
    * read, absent when not checked (the check is left out).
@@ -812,6 +826,8 @@ function inboxCheck(
   now: Date,
   timeZone: string,
   name: string,
+  /** Whether AI processing is on: off, captures stay as written. */
+  processing = true,
 ): StatusCheck {
   const base = { id: "inbox" as const, title: "Inbox backlog" };
   if (!inbox) {
@@ -868,6 +884,17 @@ function inboxCheck(
           value: formatTime(inbox.lastFailureAt, timeZone),
         },
       ],
+    };
+  }
+  if (!processing) {
+    return {
+      ...base,
+      state: "ok",
+      summary:
+        inbox.pendingCount === 0
+          ? "Nothing waiting."
+          : `${inbox.pendingCount} capture${inbox.pendingCount === 1 ? " is" : "s are"} kept in Inbox as written: AI processing is off.`,
+      facts,
     };
   }
   if (age > PROLONGED_BACKLOG_MS) {
@@ -2563,9 +2590,19 @@ export function toRuntimeStatus(
   configured: string = timeZone,
 ): RuntimeStatus {
   const checks = [
-    processingCheck(signals.processor, timeZone, configured),
-    inboxCheck(signals.inbox, now, timeZone, aiName(signals.processor)),
-    voiceCheck(signals.voice, now, timeZone),
+    ...(signals.processor === undefined
+      ? []
+      : [processingCheck(signals.processor, timeZone, configured)]),
+    inboxCheck(
+      signals.inbox,
+      now,
+      timeZone,
+      aiName(signals.processor),
+      signals.processor !== undefined,
+    ),
+    ...(signals.voice === undefined
+      ? []
+      : [voiceCheck(signals.voice, now, timeZone)]),
     ...(signals.calendarFeeds === undefined
       ? []
       : [
@@ -2669,7 +2706,8 @@ async function ready(url: string) {
   }
 }
 
-const SERVICE_NAMES: Record<keyof typeof serviceBaseUrls, string> = {
+/** The services Status lists under Services, by their Dashboard key. */
+const SERVICE_NAMES: Partial<Record<DashboardService, string>> = {
   tasks: "Tasks",
   inbox: "Inbox",
   calendar: "Calendar",
@@ -2684,18 +2722,42 @@ const SERVICE_NAMES: Record<keyof typeof serviceBaseUrls, string> = {
   backup: "Backup",
   hostHealth: "Host health",
   recipeImport: "Recipe import",
+  monitor: "Monitor",
 };
 
-export async function getRuntimeStatus(): Promise<RuntimeStatus> {
+/** Where a service's readiness is asked (its base URL; GET /ready). */
+function serviceUrl(service: DashboardService): string | undefined {
+  if (service === "monitor") return monitorUrl;
+  if (service === "processor") return undefined;
+  return serviceBaseUrls[service];
+}
+
+const unread = Promise.resolve(undefined);
+
+/**
+ * The status of what runs: only the services and checks of the modules that
+ * are on (src/lib/modules.ts), so a module that is off is never probed, and
+ * no lookup of a service that is not there holds up the rest (BUG-50).
+ */
+export async function getRuntimeStatus(
+  parts: InstalledParts = installed(),
+): Promise<RuntimeStatus> {
   const timeout = { signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) };
-  const notificationChannels = notificationsClient
-    .GET("/v1/channels", timeout)
-    .then(({ data }) => data?.items ?? null)
-    .catch(() => null);
-  const bankConnections = bankingClient
-    .GET("/v1/connections", timeout)
-    .then(({ data }) => data ?? null)
-    .catch(() => null);
+  const checkOn = (id: StatusCheck["id"]) =>
+    (parts.checks as string[]).includes(id);
+  const google = parts.features.includes("calendar.google");
+  const notificationChannels = checkOn("notifications")
+    ? notificationsClient
+        .GET("/v1/channels", timeout)
+        .then(({ data }) => data?.items ?? null)
+        .catch(() => null)
+    : unread;
+  const bankConnections = checkOn("banking")
+    ? bankingClient
+        .GET("/v1/connections", timeout)
+        .then(({ data }) => data ?? null)
+        .catch(() => null)
+    : unread;
   const eventReminders = calendarClient
     .GET("/v1/reminders/status", timeout)
     .then(({ data }) => data ?? null)
@@ -2704,18 +2766,24 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
     .GET("/v1/notifications/status", timeout)
     .then(({ data }) => data ?? null)
     .catch(() => null);
-  const backups = backupClient
-    .GET("/v1/status", timeout)
-    .then(({ data }) => data ?? null)
-    .catch(() => null);
-  const hostStatus = hostHealthClient
-    .GET("/v1/status", timeout)
-    .then(({ data }) => data ?? null)
-    .catch(() => null);
-  const hostHistory = hostHealthClient
-    .GET("/v1/history", { ...timeout, params: { query: { hours: 24 } } })
-    .then(({ data }) => data ?? null)
-    .catch(() => null);
+  const backups = checkOn("backups")
+    ? backupClient
+        .GET("/v1/status", timeout)
+        .then(({ data }) => data ?? null)
+        .catch(() => null)
+    : unread;
+  const server = checkOn("server")
+    ? Promise.all([
+        hostHealthClient
+          .GET("/v1/status", timeout)
+          .then(({ data }) => data ?? null)
+          .catch(() => null),
+        hostHealthClient
+          .GET("/v1/history", { ...timeout, params: { query: { hours: 24 } } })
+          .then(({ data }) => data ?? null)
+          .catch(() => null),
+      ]).then(([status, history]) => (status ? { status, history } : null))
+    : unread;
   const foodReminders = foodClient
     .GET("/v1/notifications/status", timeout)
     .then(({ data }) => data ?? null)
@@ -2730,40 +2798,50 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
     googleCalendars,
     services,
   ] = await Promise.all([
-    getJson<ProcessorStatus>(`${processorStatusUrl}/status`),
+    checkOn("processing")
+      ? getJson<ProcessorStatus>(`${processorStatusUrl}/status`)
+      : unread,
     inboxClient
       .GET("/v1/backlog", timeout)
       .then(({ data }) => data ?? null)
       .catch(() => null),
-    voiceClient
-      .GET("/v1/backlog", timeout)
-      .then(({ data }) => data ?? null)
-      .catch(() => null),
-    calendarFeedsClient
-      .GET("/v1/feeds", timeout)
-      .then(({ data }) => data?.items ?? null)
-      .catch(() => null),
+    checkOn("voice")
+      ? voiceClient
+          .GET("/v1/backlog", timeout)
+          .then(({ data }) => data ?? null)
+          .catch(() => null)
+      : unread,
+    checkOn("calendar")
+      ? calendarFeedsClient
+          .GET("/v1/feeds", timeout)
+          .then(({ data }) => data?.items ?? null)
+          .catch(() => null)
+      : unread,
     calendarClient
       .GET("/v1/sources", timeout)
       .then(({ data }) => data?.items ?? null)
       .catch(() => null),
-    googleCalendarClient
-      .GET("/v1/connection", timeout)
-      .then(({ data }) => data ?? null)
-      .catch(() => null),
-    googleCalendarClient
-      .GET("/v1/calendars", timeout)
-      .then(({ data }) => data?.items ?? null)
-      .catch(() => null),
-    Promise.all([
-      ...(Object.keys(SERVICE_NAMES) as (keyof typeof serviceBaseUrls)[]).map(
-        async (key) => ({
-          name: SERVICE_NAMES[key],
-          ready: await ready(serviceBaseUrls[key]),
-        }),
-      ),
-      ready(monitorUrl).then((ok) => ({ name: "Monitor", ready: ok })),
-    ]),
+    google
+      ? googleCalendarClient
+          .GET("/v1/connection", timeout)
+          .then(({ data }) => data ?? null)
+          .catch(() => null)
+      : unread,
+    google
+      ? googleCalendarClient
+          .GET("/v1/calendars", timeout)
+          .then(({ data }) => data?.items ?? null)
+          .catch(() => null)
+      : unread,
+    Promise.all(
+      (Object.keys(SERVICE_NAMES) as DashboardService[]).flatMap((service) => {
+        const name = SERVICE_NAMES[service];
+        const url = serviceUrl(service);
+        return name && url && parts.services.includes(service)
+          ? [ready(url).then((ok) => ({ name, ready: ok }))]
+          : [];
+      }),
+    ),
   ]);
   return toRuntimeStatus(
     {
@@ -2780,9 +2858,7 @@ export async function getRuntimeStatus(): Promise<RuntimeStatus> {
       foodReminders: await foodReminders,
       bankConnections: await bankConnections,
       backups: await backups,
-      server: await hostStatus.then(async (status) =>
-        status ? { status, history: await hostHistory } : null,
-      ),
+      server: await server,
       services,
     },
     new Date(),

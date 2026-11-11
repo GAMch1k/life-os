@@ -32,6 +32,7 @@ import {
   type EventDialogState,
 } from "@/components/calendar-event-dialog";
 import { GoogleCalendarControl } from "@/components/calendar-google";
+import { useFeature } from "@/components/modules-provider";
 import { ReminderDefaultsDialog } from "@/components/calendar-reminder-defaults";
 import {
   editQuestion,
@@ -219,6 +220,8 @@ export function CalendarWorkspace({
     () => browserTimeZone() ?? timeZone,
     () => timeZone,
   );
+  // The Google Calendar control, while that module is on.
+  const google = useFeature("calendar.google");
   const calendarRef = useRef<FullCalendar>(null);
   const zoneRef = useRef(zone);
   const cancelledRef = useRef(false);
@@ -487,7 +490,7 @@ export function CalendarWorkspace({
             <Bell />
             Reminder defaults
           </Button>
-          <GoogleCalendarControl timeZone={zone} />
+          {google ? <GoogleCalendarControl timeZone={zone} /> : null}
           <span
             className="text-muted-foreground hidden items-center gap-1 text-xs lg:flex"
             title="Times are shown in this time zone"

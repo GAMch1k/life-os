@@ -1,6 +1,7 @@
 import { type NextRequest } from "next/server";
 
 import { serviceBaseUrls } from "@/config/services";
+import { moduleOffResponse, serviceOn } from "@/lib/modules";
 import { proxyServiceRequest } from "@/lib/service-proxy";
 
 type Context = { params: Promise<{ path: string[] }> };
@@ -11,6 +12,7 @@ type Context = { params: Promise<{ path: string[] }> };
  * where Life OS events are exported in Google.
  */
 function proxy(request: NextRequest, context: Context) {
+  if (!serviceOn("googleCalendar")) return moduleOffResponse();
   return proxyServiceRequest(request, context, serviceBaseUrls.googleCalendar);
 }
 
