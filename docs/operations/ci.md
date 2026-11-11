@@ -1,6 +1,6 @@
 # Continuous integration
 
-GitHub Actions checks every push and pull request with `.github/workflows/ci.yml`: the source, then the full stack (the images, the smokes, and the browser suite on the disposable verification stack). CI never deploys. Merges are still made locally and pushed to master. A second workflow, `.github/workflows/cla.yml`, checks that the authors of a pull request have signed the [Contributor License Agreement](#cla-check).
+GitHub Actions checks every push and pull request with `.github/workflows/ci.yml`: the source, then the full stack (the images, the smokes, and the browser suite on the disposable verification stack). CI never deploys. Merges are still made locally and pushed to master. A second workflow, `.github/workflows/cla.yml`, checks that the authors of a pull request have signed the [Contributor License Agreement](#cla-check). Two more belong to releases ([Releases](releases.md)): `release.yml` builds, tests, and publishes a tagged version, and `install-check.yml` installs a published release on a clean runner from its files alone and runs the smokes against it ([the install check](releases.md#the-install-check)).
 
 ## When it runs
 

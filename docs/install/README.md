@@ -11,7 +11,7 @@ This guide installs Life OS from its published Docker images with one setup scri
 
 ## What you need
 
-- **A Linux server**, 64-bit x86 (amd64). ARM images (Raspberry Pi, ARM cloud servers) come later.
+- **A Linux server**, 64-bit x86 (amd64). ARM images (Raspberry Pi, ARM cloud servers) come later. Voice notes need a processor with AVX2, which Intel's Core and Xeon processors have since 2013 and AMD's since 2015, but many Celeron, Pentium, and Atom chips have not: Whisper does not run without it.
 - **Memory:** 2 GB at least, 4 GB to be comfortable. Life OS uses about 0.5 GB when idle. Whisper can use up to 2 GB while it transcribes a voice note, and each AI run uses a few hundred MB.
 - **Disk:** 10 GB free. The images take about 3 GB and the Whisper model about 0.5 GB; your data and the nightly backups grow from there.
 - **Docker Engine 25 or newer with the Compose plugin** (`docker compose`, version 2.27 or newer). Install it from [docs.docker.com](https://docs.docker.com/engine/install/). The reference server runs Docker Engine 29 and Compose 5.1.

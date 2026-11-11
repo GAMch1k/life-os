@@ -990,7 +990,7 @@ ok 'voice stays' bash -c "! grep -q 'rm --stop --force.*voice' '$case_dir.log'"
 # ---------- up, update, status ----------
 new_case running
 run LIFE_OS_TIMEZONE=UTC -- --yes
-printf '%s\n' 'postgres|running|healthy|0' 'tasks-migrate|exited||0' 'tasks|running||0' \
+printf '%s\n' 'postgres|running|healthy|0' 'postgres-provision|exited||0' 'tasks-migrate|exited||0' 'tasks|running||0' \
   'processor|restarting||78' 'whisper|running|starting|0' 'gateway|running||0' >"$work/ps"
 : >"$case_dir.log"
 run STUB_PS_FILE="$work/ps" LIFE_OS_SETUP_WAIT_SECONDS=5 -- up
@@ -1001,11 +1001,16 @@ ok 'up prints the address' output_has 'http://127.0.0.1:3000'
 ok 'up explains the SSH tunnel' output_has 'ssh -N -L 3000:127.0.0.1:3000'
 ok 'up: AI is off until the sign-in' output_has 'AI processing is off until you sign in'
 ok 'up: Whisper is still starting' output_has 'Whisper is still starting'
-ok 'up: a migration that exited 0 is fine' bash -c "! grep -q 'not running:' '$case_dir.last'"
+ok 'up: a migration and the provisioning that exited 0 are fine' bash -c "! grep -q 'not running:' '$case_dir.last'"
 ok 'up suggests codex' output_has './setup.sh codex'
-printf '%s\n' 'tasks-migrate|exited||1' 'tasks|exited||1' >"$work/ps-bad"
+printf '%s\n' 'postgres-provision|exited||1' 'tasks-migrate|exited||1' 'tasks|exited||1' >"$work/ps-bad"
 run STUB_PS_FILE="$work/ps-bad" LIFE_OS_SETUP_WAIT_SECONDS=5 -- up
-ok 'up names what is not running' output_has 'not running: tasks-migrate (exit 1) tasks (exited)'
+ok 'up names what is not running' output_has 'not running: postgres-provision (exit 1) tasks-migrate (exit 1) tasks (exited)'
+# Without a sign-in Docker restarts the processor again and again, and ps may
+# catch it running: AI is off all the same.
+printf '%s\n' 'tasks|running||0' 'processor|running|starting|0' 'gateway|running||0' >"$work/ps-restarted"
+run STUB_PS_FILE="$work/ps-restarted" LIFE_OS_SETUP_WAIT_SECONDS=5 -- up
+ok 'up: AI is off while the processor is between restarts too' output_has 'AI processing is off until you sign in'
 run STUB_GATEWAY_DOWN=1 LIFE_OS_SETUP_WAIT_SECONDS=1 -- up --skip-checks
 ok 'up still ends when Life OS does not answer' test "$status" -eq 0
 ok 'and says so' output_has 'still not answering'

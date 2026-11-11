@@ -1,0 +1,605 @@
+# The install check (docs/operations/releases.md#the-install-check): installs
+# a published release on a clean runner exactly as docs/install/README.md
+# says, from the release's four files alone (compose.yaml, .env.example,
+# setup.sh, SHA256SUMS): no checkout of the repository in the install
+# directory, nothing built, the images pulled from ghcr.io. A fresh install
+# runs the core alone; the check tests that, the smokes that work against an
+# installed Life OS through its gateway on 127.0.0.1:3000, and a module
+# turned on (voice, with a voice note) and off again.
+#
+# release.yml runs it after every release that is not a draft. By hand:
+# Actions → Install check → Run workflow (an empty version installs the
+# newest release), or gh workflow run install-check.yml -f version=<tag>.
+# With source (-f source=true), it installs the run's commit instead, before
+# any release: that commit's images built on the runner and its install
+# bundle served from it, then the same steps.
+#
+# Releases up to v0.1.0-preview.5 have no modules: a fresh install runs
+# every module, and the AI processor restarts without a sign-in. The check
+# knows them by their .env and expects that instead.
+name: Install check
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: The release to install, such as v0.1.0-preview.5 (empty for the newest release)
+        type: string
+        default: ""
+      source:
+        description: Install this commit instead, built on the runner (no release needed)
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      version:
+        description: The release to install, such as v0.1.0-preview.5
+        type: string
+        default: ""
+      source:
+        description: Install the calling commit instead, built on the runner
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  install:
+    name: Install ${{ inputs.source && 'this commit' || inputs.version || 'the newest release' }} from its release files
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      # gh attestation verify, as the install docs suggest.
+      attestations: read
+    # No LIFE_OS_* or COMPOSE_* variable at the job level: Compose takes one
+    # from the environment over .env, and the install must run on its own
+    # .env.
+    env:
+      GATEWAY: http://127.0.0.1:3000
+      # As the install docs' example of a run without questions.
+      INSTALL_TIMEZONE: Europe/Berlin
+      SOURCE: ${{ inputs.source }}
+    steps:
+      - name: Pick the release
+        id: release
+        env:
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          if [[ "$SOURCE" == true ]]; then
+            # This commit, as a version no release has.
+            VERSION=v0.0.0-install-check.$RUN_NUMBER
+            url=http://127.0.0.1:8765
+            title="this commit ($GITHUB_SHA), as ${VERSION}"
+          else
+            if [[ -z "$VERSION" ]]; then
+              # The newest release that is published: pre-releases count.
+              VERSION=$(gh api "repos/$GH_REPO/releases?per_page=20" --jq '[.[] | select(.draft | not)][0].tag_name // empty')
+            fi
+            url=https://github.com/$GH_REPO/releases/download/$VERSION
+            title="[${VERSION}](https://github.com/$GH_REPO/releases/tag/$VERSION)"
+          fi
+          if [[ ! "$VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::'${VERSION}' is not a release version such as v0.1.0-preview.5."
+            exit 1
+          fi
+          echo "version=$VERSION" >>"$GITHUB_OUTPUT"
+          echo "url=$url" >>"$GITHUB_OUTPUT"
+          echo "### Install check of $title" >>"$GITHUB_STEP_SUMMARY"
+          # The install directory, as in the install docs.
+          echo "INSTALL_DIR=$HOME/life-os" >>"$GITHUB_ENV"
+      # The processor too: GitHub's runners differ, and an image built for
+      # one processor's instructions fails on another
+      # (docs/services/voice-stt.md#whisper-worker).
+      - name: Show the runner
+        run: |
+          echo "$(nproc) CPUs:$(grep -m 1 '^model name' /proc/cpuinfo | cut -d : -f 2-)"
+          echo "x86-64 extensions: $(grep -m 1 '^flags' /proc/cpuinfo | grep -ow 'avx2\|fma\|f16c\|avx512f\|avx512_vnni' | tr '\n' ' ' || true)"
+          free -h
+          df -h /
+          docker version --format 'Docker {{.Server.Version}}'
+          docker compose version
+      # Source only: what a release would publish, from this commit. The
+      # images get the names the release's compose.yaml pulls, so Compose
+      # finds them here; the bundle is served on 127.0.0.1:8765 under the
+      # names GitHub serves a release's files by. The checkout and its
+      # throwaway .env (tools/ci-env, for the build) stay in the workspace.
+      - name: Check out this commit (source)
+        if: inputs.source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: source
+          persist-credentials: false
+      - name: Build this commit's images and install bundle (source)
+        if: inputs.source
+        working-directory: source
+        timeout-minutes: 35
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          tools/ci-env "$RUNNER_TEMP/source-ci"
+          # Every module's images, as a release publishes them all (as in
+          # .github/actions/full-stack).
+          . tools/lib/modules.bash
+          profiles=$(IFS=,; printf '%s' "${module_ids[*]}")
+          COMPOSE_PROFILES=$profiles docker compose build --pull
+          rm -f .env
+          while read -r local name; do
+            docker tag "$local" "ghcr.io/gamch1k/$name:$VERSION"
+          done < <(tools/build-install-bundle --images)
+          tools/build-install-bundle --assets "$RUNNER_TEMP/bundle" --version "$VERSION"
+          serve="$RUNNER_TEMP/serve"
+          mkdir "$serve"
+          cp "$RUNNER_TEMP"/bundle/{compose.yaml,setup.sh,SHA256SUMS} "$serve/"
+          cp "$RUNNER_TEMP/bundle/.env.example" "$serve/default.env.example"
+          nohup python3 -m http.server 8765 --bind 127.0.0.1 --directory "$serve" >/dev/null 2>&1 &
+          for _ in $(seq 1 20); do curl -fsS -o /dev/null http://127.0.0.1:8765/SHA256SUMS && break; sleep 0.5; done
+          docker builder prune --all --force >/dev/null
+
+      # docs/install/README.md, Quick start, steps 1 to 4, in an empty
+      # directory. The same requests as the docs, with retries: this may run
+      # a minute after the release is created.
+      - name: Download the release (Quick start, step 1)
+        env:
+          release: ${{ steps.release.outputs.url }}
+        run: |
+          mkdir "$INSTALL_DIR" && cd "$INSTALL_DIR"
+          for file in compose.yaml setup.sh SHA256SUMS; do curl -fsSLO --retry 5 --retry-all-errors "$release/$file"; done
+          # GitHub serves .env.example as default.env.example
+          curl -fsSL --retry 5 --retry-all-errors -o .env.example "$release/default.env.example"
+          ls -la
+      - name: Check the download (step 2)
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd "$INSTALL_DIR"
+          sha256sum -c SHA256SUMS
+          # A commit built here has no attestation.
+          if [[ "$SOURCE" != true ]]; then
+            for file in setup.sh compose.yaml .env.example; do
+              gh attestation verify "$file" -R "$GITHUB_REPOSITORY" >/dev/null
+              echo "$file: build provenance verified"
+            done
+          fi
+          # Only the release's files: nothing of the repository.
+          if [[ "$(find . -mindepth 1 -maxdepth 1 -printf '%P\n' | sort)" != "$(printf '%s\n' .env.example SHA256SUMS compose.yaml setup.sh | sort)" ]]; then
+            echo "::error::The install directory holds more than the four release files."
+            exit 1
+          fi
+          if grep -Eq '^[[:space:]]+build:' compose.yaml; then
+            echo "::error::The release's compose.yaml builds images; it must only run the published ones."
+            exit 1
+          fi
+          if ! grep -qx "LIFE_OS_VERSION=$VERSION" .env.example; then
+            echo "::error::The release's .env.example does not name ${VERSION}."
+            exit 1
+          fi
+      # Without questions, as docs/install/README.md#without-questions says:
+      # every question takes its default, the timezone from the environment,
+      # and no module is turned on: the core alone.
+      - name: Set up (step 3, ./setup.sh --yes)
+        id: setup
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          cd "$INSTALL_DIR"
+          chmod +x setup.sh
+          LIFE_OS_TIMEZONE=$INSTALL_TIMEZONE ./setup.sh --yes 2>&1 | tee "$RUNNER_TEMP/setup.log"
+          # A clean install on a server that has what it needs: no warning.
+          if grep '^Warning: ' "$RUNNER_TEMP/setup.log"; then
+            echo "::error::./setup.sh warned on a clean install (above)."
+            exit 1
+          fi
+          # What it wrote, never a value but these.
+          [[ "$(stat -c %a .env)" == 600 ]] || { echo "::error::.env is not mode 600"; exit 1; }
+          grep -qx "LIFE_OS_VERSION=$VERSION" .env || { echo "::error::.env does not run ${VERSION}"; exit 1; }
+          grep -qx "LIFE_OS_TIMEZONE=$INSTALL_TIMEZONE" .env || { echo "::error::.env does not have the timezone ${INSTALL_TIMEZONE}"; exit 1; }
+          [[ -d backups ]] || { echo "::error::setup.sh did not create backups/"; exit 1; }
+          if grep -qx 'LIFE_OS_MODULES_LISTED=yes' .env; then
+            # The core alone: no optional module in COMPOSE_PROFILES.
+            grep -qx 'COMPOSE_PROFILES=' .env || { echo "::error::A fresh install must run the core alone (COMPOSE_PROFILES empty)."; exit 1; }
+            echo "MODULES=true" >>"$GITHUB_ENV"
+            echo "- A fresh install runs the core alone (COMPOSE_PROFILES empty)." >>"$GITHUB_STEP_SUMMARY"
+          else
+            # Before modules: every module runs, and the AI sign-in waits in
+            # an empty codex-home/.
+            [[ -d codex-home && -z "$(ls -A codex-home)" ]] || { echo "::error::setup.sh did not create an empty codex-home/"; exit 1; }
+            echo "MODULES=false" >>"$GITHUB_ENV"
+            echo "- A release without modules: every module runs." >>"$GITHUB_STEP_SUMMARY"
+          fi
+      # Before modules only, a quirk of GitHub's runners, not of the install
+      # (as CI's full-stack job, docs/operations/ci.md#full-stack-tests):
+      # their systemd-resolved answers SERVFAIL for a single-label name it
+      # does not know, such as the processor while Docker restarts it, and
+      # the Alpine images wait 10 s on SERVFAIL, until the Dashboard's other
+      # requests time out too. A usual host answers NXDOMAIN at once, as this
+      # makes the runner do. With modules, the runner's resolver stays as it
+      # is, as in CI's core-only job: nothing may look up a service that is
+      # not there (BUG-50).
+      - name: Answer unknown service names at once (before modules)
+        if: env.MODULES == 'false'
+        run: |
+          sudo mkdir -p /etc/systemd/resolved.conf.d
+          printf '[Resolve]\nResolveUnicastSingleLabel=yes\n' | sudo tee /etc/systemd/resolved.conf.d/lifeos-ci.conf
+          sudo systemctl restart systemd-resolved
+      - name: Start it (step 4, ./setup.sh up)
+        id: up
+        timeout-minutes: 20
+        run: |
+          cd "$INSTALL_DIR"
+          echo "STARTED_AT=$(date +%s)" >>"$GITHUB_ENV"
+          ./setup.sh up 2>&1 | tee "$RUNNER_TEMP/setup-up.log"
+          # up waits until the gateway and the core services answer, and says
+          # so; it ends without an error when they never do.
+          if ! grep -qx 'Life OS answers.' "$RUNNER_TEMP/setup-up.log"; then
+            echo "::error::./setup.sh up ended before Life OS answered."
+            exit 1
+          fi
+
+      # From here on, every check runs once Life OS answers, even after
+      # another one failed.
+      #
+      # up warns of nothing. With modules, it names them: the core alone.
+      # Before modules, it says that AI processing is off until the Codex
+      # sign-in; two known bugs of up in v0.1.0-preview.1 to .5, fixed since:
+      # it took the provisioning, a one-shot job that exits once it is done,
+      # for a service that is not running; and it said that AI processing is
+      # off only when it caught the processor between two restarts.
+      - name: What ./setup.sh up said
+        if: ${{ !cancelled() && steps.up.outcome == 'success' }}
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          cd "$INSTALL_DIR"
+          known=
+          case "$VERSION" in
+            v0.1.0-preview.[1-5]) known='Warning: not running: postgres-provision (exited). Look at docker compose logs <service>.' ;;
+          esac
+          warnings=$(grep '^Warning: ' "$RUNNER_TEMP/setup-up.log" || true)
+          if [[ -n "$known" && "$warnings" == "$known" ]]; then
+            echo "::warning::A known bug of ${VERSION}'s setup.sh, fixed for the next release: ${known}"
+          elif [[ -n "$warnings" ]]; then
+            echo "::error::./setup.sh up warned on a clean install: ${warnings}"
+            exit 1
+          fi
+          if [[ "$MODULES" == true ]]; then
+            grep -qx 'Modules: the core, and none.' "$RUNNER_TEMP/setup-up.log" \
+              || { echo "::error::./setup.sh up did not say that it runs the core alone."; exit 1; }
+          elif ! grep -qx 'AI processing is off until you sign in to Codex (./setup.sh codex); notes wait in Inbox.' "$RUNNER_TEMP/setup-up.log"; then
+            if [[ -n "$known" ]]; then
+              echo "::warning::A known bug of ${VERSION}'s setup.sh, fixed for the next release: up did not say that AI processing is off, as it had caught the processor between two restarts."
+            else
+              echo "::error::./setup.sh up did not say that AI processing is off until the Codex sign-in."
+              exit 1
+            fi
+          fi
+
+      # Every service Compose lists runs (healthy where it has a health
+      # check), every one-shot job ended with 0, and no container belongs to
+      # anything else: with the core alone, no optional module has one. The
+      # processor, of a release without modules, is checked on its own.
+      - name: Wait for every service
+        id: services
+        if: ${{ !cancelled() && steps.up.outcome == 'success' }}
+        run: |
+          cd "$INSTALL_DIR"
+          services=$(docker compose config --services)
+          deadline=$((SECONDS + 600))
+          declare -A seen
+          while true; do
+            problems=()
+            seen=()
+            while IFS='|' read -r service state health exit_code; do
+              [[ -n "$service" ]] || continue
+              seen[$service]=1
+              grep -qx -- "$service" <<<"$services" || problems+=("$service: a container, but not on")
+              case $service in
+                processor) ;;
+                postgres-provision | *-migrate)
+                  [[ "$state" == exited && "$exit_code" == 0 ]] || problems+=("$service: $state (exit $exit_code)") ;;
+                *)
+                  if [[ "$state" != running ]]; then
+                    problems+=("$service: $state")
+                  elif [[ -n "$health" && "$health" != healthy ]]; then
+                    problems+=("$service: $health")
+                  fi
+                  ;;
+              esac
+            done < <(docker compose ps --all --format '{{.Service}}|{{.State}}|{{.Health}}|{{.ExitCode}}')
+            while read -r service; do
+              [[ -n "${seen[$service]:-}" ]] || problems+=("$service: no container")
+            done <<<"$services"
+            ((${#problems[@]})) || break
+            if ((SECONDS >= deadline)); then
+              printf '::error::Not running after 10 minutes: %s\n' "${problems[@]}"
+              exit 1
+            fi
+            sleep 5
+          done
+          docker compose ps --all --format 'table {{.Service}}\t{{.State}}\t{{.Status}}'
+          echo "- Running: $(paste -sd ' ' <<<"$services")" >>"$GITHUB_STEP_SUMMARY"
+      # Before modules: without a Codex sign-in, the processor's entrypoint
+      # stops at every start ("missing Codex authentication", exit 78) and
+      # Docker starts it again, as those releases' notes say. That is
+      # expected, so it does not fail the job; the processor failing any
+      # other way does. With modules, AI processing is off: no processor.
+      - name: The processor waits for an AI sign-in
+        id: processor
+        if: ${{ !cancelled() && steps.up.outcome == 'success' }}
+        run: |
+          cd "$INSTALL_DIR"
+          # Not a pipe into grep -q: with pipefail, Compose's broken pipe
+          # would read as "no processor".
+          services=$(docker compose config --services)
+          if ! grep -qx processor <<<"$services"; then
+            echo "No processor in this install: AI processing is off."
+            exit 0
+          fi
+          id=$(docker compose ps --all -q processor)
+          [[ -n "$id" ]] || { echo "::error::The processor has no container."; exit 1; }
+          # A minute, so that it has tried to start at least twice.
+          for _ in $(seq 1 12); do
+            read -r state health exit_code restarts < <(docker inspect --format '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} {{.State.ExitCode}} {{.RestartCount}}' "$id")
+            ((restarts < 1)) || break
+            sleep 5
+          done
+          echo "processor: $state, health $health, last exit $exit_code, $restarts restarts"
+          docker compose logs --no-color --no-log-prefix processor >"$RUNNER_TEMP/processor.log"
+          expected='^missing Codex authentication at /run/lifeos-codex-source/auth\.json: '
+          if ! grep -Eq "$expected" "$RUNNER_TEMP/processor.log"; then
+            echo "::error::The processor's log does not say that the Codex sign-in is missing:"
+            cat "$RUNNER_TEMP/processor.log"
+            exit 1
+          fi
+          if grep -Ev "$expected" "$RUNNER_TEMP/processor.log" | grep -q .; then
+            echo "::error::The processor logged more than the missing Codex sign-in:"
+            cat "$RUNNER_TEMP/processor.log"
+            exit 1
+          fi
+          if [[ "$health" == healthy ]] || [[ "$state" != running && "$exit_code" != 78 ]]; then
+            echo "::error::The processor is ${state} (health ${health}, exit ${exit_code}): without a Codex sign-in it must stop at start with exit 78."
+            exit 1
+          fi
+          echo "As expected without a Codex sign-in: $(sort -u "$RUNNER_TEMP/processor.log" | head -n 1)"
+          echo "- The processor stops at start without a Codex sign-in, as expected (exit ${exit_code}, ${restarts} restarts so far)." >>"$GITHUB_STEP_SUMMARY"
+
+      # The gateway keeps to 127.0.0.1 (Life OS has no login) and answers its
+      # own hosts only, as tools/smoke-e2e checks on the verification stack.
+      # With modules, every route of a module that is off answers 404
+      # module_off: the gateway image's own list of them.
+      - name: The gateway
+        id: gateway
+        if: ${{ !cancelled() && steps.up.outcome == 'success' }}
+        run: |
+          cd "$INSTALL_DIR"
+          published=$(docker compose port gateway 80)
+          [[ "$published" == 127.0.0.1:3000 ]] || { echo "::error::The gateway is published on ${published}, not 127.0.0.1:3000."; exit 1; }
+          # The runner's own network address must not reach it.
+          address=$(hostname -I | awk '{print $1}')
+          if curl -s -o /dev/null --max-time 5 "http://$address:3000/"; then
+            echo "::error::The gateway answers on ${address}:3000, not only on 127.0.0.1."
+            exit 1
+          fi
+          for path in / /status /inbox /tasks /calendar /finance /food; do
+            curl -fsS -o /dev/null --max-time 30 "$GATEWAY$path" || { echo "::error::$GATEWAY$path does not answer"; exit 1; }
+          done
+          for host in 127.0.0.1 localhost; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: $host" "$GATEWAY/api/tasks/ready" || true)
+            [[ "$code" == 200 ]] || { echo "::error::The gateway must answer Host ${host} (got ${code})"; exit 1; }
+          done
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: unknown.example' "$GATEWAY/api/tasks/ready" || true)
+          [[ "$code" == 000 ]] || { echo "::error::The gateway must not answer Host unknown.example (got ${code})"; exit 1; }
+          echo "The gateway listens on 127.0.0.1:3000 only, and answers its own hosts only."
+          if [[ "$MODULES" == true ]]; then
+            routes=$(docker compose exec -T gateway cat /etc/nginx/lifeos/module-routes | sed '/^#/d; /^$/d')
+            [[ -n "$routes" ]] || { echo "::error::The gateway image lists no module routes."; exit 1; }
+            while read -r module route; do
+              body=$(curl -s --max-time 10 -w '\n%{http_code}' "$GATEWAY${route}ready" || true)
+              if [[ "$(tail -n 1 <<<"$body")" != 404 ]] || ! grep -q '"module_off"' <<<"$body"; then
+                echo "::error::${route} of the ${module} module, which is off, must answer 404 module_off: ${body}"
+                exit 1
+              fi
+              echo "${route} (${module}, off): 404 module_off"
+            done <<<"$routes"
+          fi
+
+      # The smokes that take a gateway (LIFE_OS_SMOKE_GATEWAY), from the
+      # release's own tag (or this commit). A sparse checkout of those files
+      # only, in the workspace: never in the install directory, which keeps
+      # to the release files. Every smoke runs, even after another one
+      # failed.
+      - name: Fetch the smokes of ${{ steps.release.outputs.version }}
+        id: smokes
+        if: ${{ !cancelled() && steps.up.outcome == 'success' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source && github.sha || format('refs/tags/{0}', steps.release.outputs.version) }}
+          path: smokes
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /tools/smoke-core-services
+            /tools/smoke-dashboard
+            /tools/lib/
+      - name: Core services smoke (tools/smoke-core-services)
+        if: ${{ !cancelled() && steps.smokes.outcome == 'success' }}
+        env:
+          LIFE_OS_SMOKE_GATEWAY: ${{ env.GATEWAY }}
+        run: timeout 5m smokes/tools/smoke-core-services
+      - name: Dashboard smoke (tools/smoke-dashboard)
+        if: ${{ !cancelled() && steps.smokes.outcome == 'success' }}
+        env:
+          LIFE_OS_SMOKE_GATEWAY: ${{ env.GATEWAY }}
+          # The smoke reads it from .env, which its checkout has not got.
+          LIFE_OS_TIMEZONE: ${{ env.INSTALL_TIMEZONE }}
+        run: timeout 5m smokes/tools/smoke-dashboard
+
+      # A backup, as ./setup.sh update makes one first, into the backups/
+      # directory setup.sh created for this user.
+      - name: A backup
+        if: ${{ !cancelled() && steps.up.outcome == 'success' }}
+        timeout-minutes: 10
+        run: |
+          cd "$INSTALL_DIR"
+          docker compose exec -T backup /service now -actor dev:install-check
+          files=$(find backups -type f | wc -l)
+          ((files > 0)) || { echo "::error::The backup wrote nothing to backups/."; exit 1; }
+          find backups -type f -printf '%P %s\n' | sort
+
+      # The Status page's checks (GET /api/status): none may be a problem.
+      # Before modules, the processing check stays one without an AI
+      # sign-in, as expected.
+      - name: The Status page
+        if: ${{ !cancelled() && steps.up.outcome == 'success' }}
+        run: |
+          status=$(curl -fsS --max-time 60 "$GATEWAY/api/status")
+          {
+            echo "| Status check | State | Summary |"
+            echo "| --- | --- | --- |"
+            jq -r '.checks[] | "| \(.title) | \(.state) | \(.summary | gsub("\\|"; "/")) |"' <<<"$status"
+          } >>"$GITHUB_STEP_SUMMARY"
+          jq -r '.checks[] | "\(.id)\t\(.state)\t\(.summary)"' <<<"$status"
+          problems=$(jq -r --arg modules "$MODULES" '[.checks[] | select(.state == "problem" and ($modules == "true" or .id != "processing")) | .id] | join(", ")' <<<"$status")
+          [[ -z "$problems" ]] || { echo "::error::The Status page has problems: ${problems}"; exit 1; }
+      - name: ./setup.sh status
+        if: ${{ !cancelled() && steps.up.outcome == 'success' }}
+        run: |
+          cd "$INSTALL_DIR"
+          ./setup.sh status 2>&1 | tee "$RUNNER_TEMP/setup-status.log"
+          if grep '^Warning: ' "$RUNNER_TEMP/setup-status.log"; then
+            echo "::error::./setup.sh status warned (above)."
+            exit 1
+          fi
+
+      # With modules: ./setup.sh modules lists every optional module, all
+      # off; then voice goes on, as a user turns a module on
+      # (docs/install/modules.md), and ./setup.sh up starts it.
+      - name: Turn voice notes on (./setup.sh modules on voice)
+        id: voice-on
+        if: ${{ !cancelled() && steps.up.outcome == 'success' && env.MODULES == 'true' }}
+        timeout-minutes: 15
+        run: |
+          cd "$INSTALL_DIR"
+          ./setup.sh modules 2>&1 | tee "$RUNNER_TEMP/setup-modules.log"
+          grep -qE '\) +off: ' "$RUNNER_TEMP/setup-modules.log" || { echo "::error::./setup.sh modules lists no module."; exit 1; }
+          if grep -E '\) +on: ' "$RUNNER_TEMP/setup-modules.log"; then
+            echo "::error::A fresh install has a module on (above)."
+            exit 1
+          fi
+          ./setup.sh modules on voice 2>&1 | tee "$RUNNER_TEMP/setup-voice-on.log"
+          ./setup.sh up 2>&1 | tee -a "$RUNNER_TEMP/setup-voice-on.log"
+          if grep '^Warning: ' "$RUNNER_TEMP/setup-voice-on.log"; then
+            echo "::error::Turning voice notes on warned (above)."
+            exit 1
+          fi
+          grep -qx 'Life OS answers.' "$RUNNER_TEMP/setup-voice-on.log" || { echo "::error::./setup.sh up ended before Life OS answered."; exit 1; }
+          grep -qx 'Modules: the core, and voice.' "$RUNNER_TEMP/setup-voice-on.log" || { echo "::error::./setup.sh up did not start voice."; exit 1; }
+          grep -qx 'COMPOSE_PROFILES=voice' .env || { echo "::error::.env does not turn voice on."; exit 1; }
+          for service in voice voice-worker whisper; do
+            [[ "$(docker compose ps --format '{{.State}}' "$service")" == running ]] || { echo "::error::${service} is not running."; exit 1; }
+          done
+          [[ "$(docker inspect --format '{{.State.Health.Status}}' "$(docker compose ps -q whisper)")" == healthy ]] || { echo "::error::Whisper is not healthy."; exit 1; }
+          curl -fsS -o /dev/null "$GATEWAY/api/voice/ready" || { echo "::error::$GATEWAY/api/voice/ready does not answer."; exit 1; }
+          echo "- \`./setup.sh modules on voice\` and \`./setup.sh up\` started voice notes." >>"$GITHUB_STEP_SUMMARY"
+      # A voice note through the gateway, transcribed by the Whisper model the
+      # install downloaded on its first start, lands in Inbox. The recording
+      # is whisper.cpp's public sample, as tools/smoke-voice-lease-recovery's.
+      - name: A voice note is transcribed
+        if: ${{ !cancelled() && steps.up.outcome == 'success' && (env.MODULES != 'true' || steps.voice-on.outcome == 'success') }}
+        timeout-minutes: 10
+        run: |
+          actor=(-H 'X-Life-OS-Actor: dev:install-check')
+          audio="$RUNNER_TEMP/jfk.wav"
+          curl -fsSL --retry 3 -o "$audio" https://github.com/ggerganov/whisper.cpp/raw/master/samples/jfk.wav
+          job_id=$(curl "${actor[@]}" -fsS -F "audio=@$audio;type=audio/wav" -F source=web "$GATEWAY/api/voice/v1/audio-jobs" | jq -r .id)
+          state=
+          for _ in $(seq 1 120); do
+            job=$(curl -fsS "$GATEWAY/api/voice/v1/audio-jobs/$job_id")
+            state=$(jq -r .status <<<"$job")
+            [[ "$state" != succeeded && "$state" != failed ]] || break
+            sleep 2
+          done
+          [[ "$state" == succeeded ]] || { echo "::error::The voice note's job is ${state}: $(jq -c . <<<"$job")"; exit 1; }
+          item_id=$(jq -r .inboxItemId <<<"$job")
+          content=$(curl -fsS "$GATEWAY/api/inbox/v1/inbox-items/$item_id" | jq -r .content)
+          echo "Inbox: $content"
+          grep -qi 'country' <<<"$content" || { echo "::error::The transcript is not the recording's."; exit 1; }
+      # And off again: its containers go, its data stays, its routes answer
+      # 404 module_off.
+      - name: Turn voice notes off (./setup.sh modules off voice)
+        if: ${{ !cancelled() && steps.voice-on.outcome == 'success' }}
+        timeout-minutes: 10
+        run: |
+          cd "$INSTALL_DIR"
+          ./setup.sh modules off voice 2>&1 | tee "$RUNNER_TEMP/setup-voice-off.log"
+          ./setup.sh up 2>&1 | tee -a "$RUNNER_TEMP/setup-voice-off.log"
+          if grep '^Warning: ' "$RUNNER_TEMP/setup-voice-off.log"; then
+            echo "::error::Turning voice notes off warned (above)."
+            exit 1
+          fi
+          grep -qx 'Modules: the core, and none.' "$RUNNER_TEMP/setup-voice-off.log" || { echo "::error::./setup.sh up still runs a module."; exit 1; }
+          left=$(docker compose ps --all --services | grep -xE 'voice|voice-worker|voice-migrate|whisper' || true)
+          [[ -z "$left" ]] || { echo "::error::Voice's containers are still there: ${left}"; exit 1; }
+          docker volume inspect lifeos-voice-audio lifeos-whisper-models >/dev/null || { echo "::error::Voice's data is gone."; exit 1; }
+          body=$(curl -s --max-time 10 -w '\n%{http_code}' "$GATEWAY/api/voice/ready" || true)
+          if [[ "$(tail -n 1 <<<"$body")" != 404 ]] || ! grep -q '"module_off"' <<<"$body"; then
+            echo "::error::/api/voice/ must answer 404 module_off once voice is off: ${body}"
+            exit 1
+          fi
+          echo "- \`./setup.sh modules off voice\` removed its containers and kept its volumes; /api/voice/ answers 404 module_off." >>"$GITHUB_STEP_SUMMARY"
+
+      # Last, once the stack has run for 3 minutes: no service but the
+      # processor restarted, so a service that crashed and came back is not
+      # missed (a container that up recreated starts counting again).
+      - name: No service restarted
+        if: ${{ !cancelled() && steps.services.outcome == 'success' }}
+        run: |
+          cd "$INSTALL_DIR"
+          wait=$((STARTED_AT + 180 - $(date +%s)))
+          if ((wait > 0)); then
+            echo "Waiting ${wait} s, until the stack has run for 3 minutes."
+            sleep "$wait"
+          fi
+          restarted=()
+          mapfile -t containers < <(docker compose ps --all -q)
+          while read -r service restarts; do
+            [[ "$service" == processor ]] || ((restarts == 0)) || restarted+=("$service ($restarts)")
+          done < <(docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}} {{.RestartCount}}' "${containers[@]}")
+          ((${#restarted[@]} == 0)) || { echo "::error::Restarted: ${restarted[*]}"; exit 1; }
+          echo "No service restarted (the processor aside)."
+
+      - name: Containers
+        if: always()
+        run: |
+          [[ -f "${INSTALL_DIR:-}/.env" ]] || exit 0
+          cd "$INSTALL_DIR"
+          docker compose ps --all --format 'table {{.Service}}\t{{.State}}\t{{.Status}}'
+      # Never .env: only what Compose and the services printed.
+      - name: Collect the logs
+        if: failure()
+        run: |
+          dir="$RUNNER_TEMP/install-logs"
+          mkdir -p "$dir"
+          cp "$RUNNER_TEMP"/setup*.log "$RUNNER_TEMP"/processor.log "$dir/" 2>/dev/null || true
+          [[ -f "${INSTALL_DIR:-}/.env" ]] || exit 0
+          cd "$INSTALL_DIR"
+          docker compose ps --all >"$dir/ps.txt" 2>&1 || true
+          for service in $(docker compose ps --all --services); do
+            docker compose logs --no-color --timestamps "$service" >"$dir/$service.log" 2>&1 || true
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: install-check-logs
+          path: ${{ runner.temp }}/install-logs/
+          retention-days: 7
+          if-no-files-found: ignore

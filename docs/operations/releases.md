@@ -85,25 +85,63 @@ git tag v0.1.0-preview.1
 git push origin v0.1.0-preview.1
 ```
 
-Then watch Actions → Release. It takes about 35 minutes; its build, test, and scan job alone took 23.5 minutes in the dry run of 2026-11-10:
+Then watch Actions → Release. It takes about 35 minutes, and the install check about 4 more; its build, test, and scan job alone took 23.5 minutes in the dry run of 2026-11-10:
 
 1. **Plan** checks the tag, that `deploy/compose.yaml` is current, lists the images, and assembles the bundle.
 2. **Build, test, and scan**, once per platform on a runner of that platform: CI's full-stack tests (`.github/actions/full-stack`, the same steps as CI's `full-stack` job: `docker compose build`, the smokes, the browser suite), then Trivy on every image ([the vulnerability gate](#the-vulnerability-gate)) and each image's SBOM. The tested images are saved for the next job, which has the write access this one has not.
 3. **Publish and sign** loads exactly those images (it checks their IDs), pushes them, assembles each version's index and moving tag, signs every image with cosign, and attests the images' and the bundle's build provenance.
 4. **SBOM**, one job per image and platform, attests its SBOM.
 5. **Release** creates the GitHub Release with the bundle and notes that start with the early-preview warning.
+6. **Install check** installs the published release on a clean runner from its files alone and runs the smokes against it ([the install check](#the-install-check)). It is skipped while the release is a draft.
 
 A failure before step 3 publishes nothing: fix it on `master`, delete the tag (`git push origin :refs/tags/v0.1.0-preview.1`, `git tag -d v0.1.0-preview.1`), and tag again, or leave the tag and tag the next version (`v0.1.0-preview.1` and `.2` failed this way and have no release). After step 3 the images exist; a re-run of the failed jobs (Actions → the run → Re-run failed jobs) finishes the release with the same images. A re-run runs the tag's own workflow, though, so a bug in the workflow needs a fix on `master` and the next version: `v0.1.0-preview.3` has images, unsigned, but no release.
 
 ### Dry runs
 
-Every run that is not a tag push is a dry run: steps 1 and 2 with the version `v0.0.0-dry-run.<run number>`, and nothing published. Steps 3 to 5 run only for a tag. It runs by hand (Actions → Release → Run workflow, on any branch) and on a push to a branch that changes the release's own files (the workflow, `.github/actions/full-stack`, the allowlist, `tools/build-install-bundle`, `tools/scan-images`). A dry run may go without `setup.sh`; a release may not.
+Every run that is not a tag push is a dry run: steps 1 and 2 with the version `v0.0.0-dry-run.<run number>`, and nothing published. Steps 3 to 6 run only for a tag. It runs by hand (Actions → Release → Run workflow, on any branch) and on a push to a branch that changes the release's own files (the workflow, `.github/actions/full-stack`, the allowlist, `tools/build-install-bundle`, `tools/scan-images`). A dry run may go without `setup.sh`; a release may not.
 
 ### Package visibility
 
 GitHub's documentation disagrees with itself here. A new package of a personal account is [private by default](https://docs.github.com/en/packages/learn-github-packages/configuring-a-packages-access-control-and-visibility), while one a workflow creates with `GITHUB_TOKEN` ["inherits the visibility and permissions model of the repository"](https://docs.github.com/en/packages/managing-github-packages-using-github-actions-workflows/publishing-and-installing-a-package-with-github-actions#default-permissions-and-access-settings-for-packages-modified-through-workflows), which is public; there are reports of such packages created private anyway. No API changes a package's visibility. So the release checks: every image must answer an anonymous pull. If one does not, the release is created as a **draft**, and the run's summary links each private package. For each: Package settings → Danger Zone → Change visibility → Public, typing the package's name (it cannot be made private again). Then publish the draft release (Releases → the draft → Edit → Publish release). A package keeps its visibility, so this happens at most once per image: the first release, and the first release with a new image.
 
 The images carry `org.opencontainers.image.source`, which links each package to this repository.
+
+## The install check
+
+`.github/workflows/install-check.yml` installs a published release as a new user would and checks that it works. The release runs it as its last step, and it runs by hand for any release, or for a commit before it is released.
+
+On a clean runner (`ubuntu-24.04`), in an empty `~/life-os`, it follows the [Quick start](../install/README.md#quick-start), steps 1 to 4, with the release's files alone: no checkout of the repository there, nothing built, every image pulled from ghcr.io. A fresh install runs the core alone ([Modules](../install/modules.md)), so that is what it checks first; then it turns one module on and off again.
+
+1. **Download**: `compose.yaml`, `setup.sh`, `SHA256SUMS`, and `default.env.example` saved as `.env.example`, with the docs' commands; then `sha256sum -c SHA256SUMS` and `gh attestation verify` on the three files. The directory must hold those four files and nothing else, `compose.yaml` must build nothing, and `.env.example` must name the version.
+2. **Setup**: `LIFE_OS_TIMEZONE=Europe/Berlin ./setup.sh --yes`, the docs' example of a [run without questions](../install/README.md#without-questions): every other question takes its default, and no module or integration is set up. It must print no warning; `.env` must be mode 600, name the version and the timezone, and leave `COMPOSE_PROFILES` empty: the core alone.
+3. **Start**: `./setup.sh up`, which must say "Life OS answers." and "Modules: the core, and none.", and print no warning.
+4. **Services**: within 10 minutes, every service `docker compose config --services` lists runs (and is healthy, where it has a health check), the provisioning and every migration ended with 0, and no container belongs to anything else: no optional module has one.
+5. **The gateway**: published on `127.0.0.1:3000` only (the runner's own address must not reach it); the Dashboard's pages answer; it answers the hosts `127.0.0.1` and `localhost`, and not `unknown.example`; every route of a module that is off (the gateway image's own `module-routes`) answers 404 `module_off`.
+6. **The smokes** that take a gateway: `tools/smoke-core-services` and `tools/smoke-dashboard`, with `LIFE_OS_SMOKE_GATEWAY=http://127.0.0.1:3000`. They come from a sparse checkout of the release's tag in the job's workspace, never the install directory. The other smokes start a verification stack of their own from images built locally, so they don't apply to an install; CI and the release run them before anything is published.
+7. **A backup** into `backups/`, as `./setup.sh update` makes one (`docker compose exec -T backup /service now`).
+8. **The Status page**: its checks (`GET /api/status`) go into the run's summary. None may be a problem.
+9. **`./setup.sh status`**, without a warning.
+10. **A module on**: `./setup.sh modules` must list every optional module as off; then `./setup.sh modules on voice` and `./setup.sh up` start voice notes (Whisper downloads its model and must be healthy), and a voice note, whisper.cpp's public sample `jfk.wav` uploaded through the gateway, is transcribed and lands in Inbox.
+11. **And off**: `./setup.sh modules off voice` and `./setup.sh up` remove voice's containers, keep its volumes, and `/api/voice/` answers 404 `module_off` again.
+12. Last, once the stack has run for 3 minutes, no service has restarted.
+
+Every check after the start runs, even after another one failed. The runner's resolver stays as it is, as in CI's [core-only job](ci.md#core-only): with the core alone, nothing may look up a service that is not there. A failed run uploads `install-check-logs`, kept 7 days: the output of each `./setup.sh` command, `docker compose ps --all`, and each service's log; never `.env`. The job takes about 4 minutes, most of it the wait for a stack that has run for 3 minutes; on GitHub's runners, `./setup.sh up` downloads the images and starts Life OS in under a minute. It prints the runner's processor first: GitHub's runners differ (on 11 November 2026: AMD EPYC 7763 without AVX-512, AMD EPYC 9V74 and 9V45 and Intel Xeon Platinum 8573C with it), and an image built for one processor's instructions can fail on another ([Whisper](../services/voice-stt.md#whisper-worker)).
+
+**Releases before modules** (up to v0.1.0-preview.5) are told by their `.env`, which has no `LIFE_OS_MODULES_LISTED`. A fresh install of one runs every module, so the check expects that instead: an empty `codex-home/`; `./setup.sh up` saying that AI processing is off until the Codex sign-in; the processor stopping at every start ("missing Codex authentication", exit 78) while Docker starts it again, as those releases' notes say, which does not fail the job (a processor that logs anything else, ends with another code, or is healthy does); the voice note on the running stack, without the module switch; and no Status problem but AI processing. Their `setup.sh up` had two bugs, fixed since: it warned that the provisioning, which had finished, was not running, and it said that AI processing was off only when it caught the processor between two restarts. The check notes both as known bugs for those versions. It also sets the runner's resolver to answer unknown names at once, as CI's full-stack job does, since their processor's name comes and goes.
+
+### Run it by hand
+
+Actions → Install check → Run workflow, with a version or empty for the newest release; or
+
+```sh
+gh workflow run install-check.yml -R GAMch1k/life-os -f version=v0.1.0-preview.5
+```
+
+**Before a release**, with `source` (`-f source=true --ref <branch>`), it installs the run's commit instead: the runner builds that commit's images, every module's, as CI does (about 10 minutes), names them as the release would publish them, under the version `v0.0.0-install-check.<run number>`, and serves `tools/build-install-bundle`'s files on `127.0.0.1:8765` under the names GitHub serves them by. Then the same steps run, without the attestations (a build on the runner has none) and with the smokes of that commit.
+
+Never on the server: an install there would be a second Life OS on a machine that runs one ([What you need](../install/README.md#what-you-need)).
+
+When it fails after a release, the release is already published. If the release itself is broken, not the check, say so in its notes (Releases → the release → Edit), fix it on `master`, and tag the next version.
 
 ## Verifying an image
 
