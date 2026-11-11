@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server";
 
+import { moduleOffResponse, serviceOn } from "@/lib/modules";
 import { processorStatusUrl } from "@/lib/runtime-status";
 import { proxyServiceRequest } from "@/lib/service-proxy";
 
@@ -14,6 +15,8 @@ type Context = { params: Promise<{ path: string[] }> };
 const ALLOWED = new Set(["GET ideas", "POST ideas/requests"]);
 
 async function proxy(request: NextRequest, context: Context) {
+  // Without AI processing, no processor to ask (and no name to resolve).
+  if (!serviceOn("processor")) return moduleOffResponse();
   const { path } = await context.params;
   if (!ALLOWED.has(`${request.method} ${path.join("/")}`)) {
     return NextResponse.json(

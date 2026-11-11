@@ -1,0 +1,88 @@
+# The core: always on, never switched off at install level. Everything that
+# runs without a profile in compose.yaml is the core's. The format of a
+# module manifest is in docs/architecture/modules.md; tools/modules checks
+# every manifest against compose.yaml, the gateway, the database registry,
+# the Dashboard, MCP, and .env.example, and writes what they read.
+id: core
+name: Core
+summary: Dashboard, Tasks, Calendar, Inbox, Food, Finance, notifications, and backups
+install: core
+order: 0
+compose:
+  services:
+    - postgres
+    - postgres-provision
+    - finance-migrate
+    - finance
+    - tasks-migrate
+    - tasks
+    - food-migrate
+    - food
+    - inbox-migrate
+    - inbox
+    - calendar-migrate
+    - calendar
+    - calendar-feeds-migrate
+    - calendar-feeds
+    - recipe-import
+    - activity-migrate
+    - activity
+    - notifications-migrate
+    - notifications
+    - dashboard
+    - monitor
+    - backup
+    - gateway
+  volumes: [postgres-data, inbox-media]
+databases: [finance, tasks, inbox, calendar, activity, notifications, calendar-feeds, food]
+gateway:
+  routes:
+    - /api/finance/
+    - /api/tasks/
+    - /api/inbox/
+    - /api/calendar/
+    - /api/food/
+    - /api/activity/
+    - /api/notifications/
+    - /api/integrations/calendar-feeds/
+    - /api/integrations/recipe-import/
+    - /share
+    - /calendar/google/callback
+    - /finance/bank/callback
+    - /
+dashboard:
+  nav: [/, /finance, /tasks, /inbox, /calendar, /food, /activity, /status]
+  services:
+    - tasks
+    - inbox
+    - calendar
+    - finance
+    - activity
+    - notifications
+    - calendarFeeds
+    - food
+    - backup
+    - recipeImport
+    - monitor
+  checks: [inbox, calendar, notifications, backups, services]
+mcp-tools: [calendar_*, finance_*, food_*, inbox_*, recipe_*, task_*]
+settings:
+  - LIFE_OS_VERSION
+  - LIFE_OS_IMAGE_REGISTRY
+  - LIFE_OS_PUBLIC_URL
+  - LIFE_OS_PUBLIC_HOSTNAME
+  - LIFE_OS_GATEWAY_*
+  - LIFE_OS_TIMEZONE
+  - LIFE_OS_MODULES_LISTED
+  - LIFE_OS_POSTGRES_*
+  - LIFE_OS_BACKUP_*
+  - LIFE_OS_INBOX_MEDIA_*
+  - LIFE_OS_TASKS_*
+  - LIFE_OS_CALENDAR_SOURCE_REFRESH_AT
+  - LIFE_OS_ZAW_ICS_URL
+  - LIFE_OS_FINANCE_CURRENCY
+  - LIFE_OS_FOOD_*
+  - LIFE_OS_NOTIFICATIONS_CHANNELS
+  - LIFE_OS_WEBPUSH_*
+  - LIFE_OS_MONITOR_*
+  - LIFE_OS_ANDROID_RELEASES_DIR

@@ -1,6 +1,6 @@
 # AI processing (Codex)
 
-Without AI, what you capture in Inbox waits there for you to file it yourself. With AI processing on, Life OS reads each capture (typed, shared, photographed, or a transcribed voice note) and does what it says: "dentist Friday 10:00" becomes a calendar event, "buy oat milk" goes on the shopping list, "paid 12.50 for lunch" becomes an expense, and "move the dentist to Monday" changes the event you already have. When it is not sure, it asks you in Inbox's **Human Review** instead of guessing.
+AI processing is the `ai` [module](modules.md), off on a new install. Without AI, what you capture in Inbox stays there as you wrote it, for you to file yourself. With AI processing on, Life OS reads each capture (typed, shared, photographed, or a transcribed voice note) and does what it says: "dentist Friday 10:00" becomes a calendar event, "buy oat milk" goes on the shopping list, "paid 12.50 for lunch" becomes an expense, and "move the dentist to Monday" changes the event you already have. When it is not sure, it asks you in Inbox's **Human Review** instead of guessing.
 
 ## What it uses
 
@@ -20,7 +20,10 @@ If you don't want that, leave AI processing off.
 
 ```sh
 ./setup.sh codex
+./setup.sh up
 ```
+
+Signing in turns the `ai` module on; `./setup.sh up` starts the processor and MCP.
 
 It works on a server without a browser. The script starts Codex's sign-in inside the processor's own image; Codex prints a link and a one-time code. Open the link on any device, sign in to ChatGPT, and enter the code. If the page says that device-code sign-in is off for your account, turn it on in ChatGPT's security settings and run the command again.
 
@@ -34,14 +37,11 @@ If the Status page says Codex is signed out, run `./setup.sh codex` again.
 
 ## Turn it off
 
-Delete the sign-in and restart the processor:
-
 ```sh
-rm codex-home/auth.json
-docker compose restart processor
+./setup.sh modules off ai
 ```
 
-Captures then wait in Inbox for you. The processor keeps restarting without a sign-in; the Status page says so, and that is expected in this preview.
+It removes the processor and MCP containers; captures then stay in Inbox as you wrote them, and the Status page leaves AI processing out. The sign-in stays in `codex-home/`, so `./setup.sh modules on ai` and `./setup.sh up` turn it on again. To delete the sign-in too, `rm codex-home/auth.json`.
 
 ## Claude Code instead of Codex
 

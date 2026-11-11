@@ -15,6 +15,9 @@ if (!firefoxInstalled && !process.env.TEST_WORKER_INDEX) {
 // Tests tagged @codex in their title wait for the stack's processor to act
 // with the authenticated Codex CLI. CI has no Codex sign-in and runs the
 // others: tools/browser-e2e --grep-invert @codex (docs/operations/ci.md).
+// Tests tagged with an optional module (@ai, @voice, @banking,
+// @google-calendar, @server-health) skip themselves while the stack runs it
+// off (LIFE_OS_E2E_MODULES, e2e/fixtures.ts), as in CI's core-only run.
 export default defineConfig({
   testDir: "./e2e",
   timeout: 180_000,

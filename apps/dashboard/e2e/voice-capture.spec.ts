@@ -49,7 +49,7 @@ test.use({
   ],
 });
 
-test.describe("Voice capture", () => {
+test.describe("Voice capture @voice", () => {
   test.skip(!enabled, "set LIFE_OS_E2E_URL to run against the isolated stack");
   test.setTimeout(240_000);
 

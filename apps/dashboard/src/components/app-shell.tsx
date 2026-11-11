@@ -14,6 +14,7 @@ import {
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import { useInstalled } from "@/components/modules-provider";
 import { NotificationBell } from "@/components/notification-bell";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { cn } from "@/lib/utils";
@@ -44,6 +45,10 @@ export function AppShell({
   timeZone,
 }: Readonly<{ children: React.ReactNode; timeZone: string }>) {
   const pathname = usePathname();
+  // The entries of the modules that are on (each module's manifest names
+  // its own).
+  const { nav } = useInstalled();
+  const entries = navigation.filter(({ href }) => nav.includes(href));
   return (
     <div className="bg-canvas min-h-dvh">
       <a
@@ -75,7 +80,7 @@ export function AppShell({
       <div className="mx-auto grid max-w-screen-2xl md:grid-cols-[12rem_minmax(0,1fr)]">
         <aside className="bg-background sticky top-12 hidden h-[calc(100dvh-3rem)] self-start overflow-y-auto border-r p-2 md:block">
           <nav aria-label="Main navigation" className="space-y-0.5">
-            {navigation.map(({ href, icon: Icon, label }) => {
+            {entries.map(({ href, icon: Icon, label }) => {
               const current = isCurrent(pathname, href);
               return (
                 <Link
@@ -110,8 +115,13 @@ export function AppShell({
         className="bg-background/95 supports-[backdrop-filter]:bg-background/85 fixed inset-x-0 bottom-0 z-20 border-t px-0.5 pt-1 pb-[calc(0.25rem+env(safe-area-inset-bottom))] backdrop-blur md:hidden"
       >
         {/* Eight items fit a 360 px screen with every label in full. */}
-        <div className="mx-auto grid max-w-lg grid-cols-8">
-          {navigation.map(({ href, icon: Icon, label }) => {
+        <div
+          className="mx-auto grid max-w-lg"
+          style={{
+            gridTemplateColumns: `repeat(${entries.length}, minmax(0, 1fr))`,
+          }}
+        >
+          {entries.map(({ href, icon: Icon, label }) => {
             const current = isCurrent(pathname, href);
             return (
               <Link

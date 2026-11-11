@@ -12,6 +12,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { useFeature } from "@/components/modules-provider";
 import { VoiceCapture } from "@/components/voice-capture";
 import { inboxClient } from "@/lib/api/inbox-client";
 import {
@@ -106,6 +107,8 @@ export function CaptureComposer({
   onCaptured?: (capture: ComposerCapture) => void | Promise<void>;
   placeholder: string;
 }) {
+  // The recorder, while the voice notes module is on.
+  const voice = useFeature("capture.voice");
   const [content, setContent] = useState(initialContent);
   const [photos, setPhotos] = useState<Photo[]>(() =>
     (initialMedia ?? []).flatMap((reference) => {
@@ -379,15 +382,17 @@ export function CaptureComposer({
         >
           <Camera />
         </Button>
-        <VoiceCapture
-          dropOnLeave={Boolean(onCancel)}
-          metadata={metadata}
-          onUploaded={
-            onCaptured
-              ? (job) => void onCaptured({ kind: "voice", job })
-              : undefined
-          }
-        />
+        {voice ? (
+          <VoiceCapture
+            dropOnLeave={Boolean(onCancel)}
+            metadata={metadata}
+            onUploaded={
+              onCaptured
+                ? (job) => void onCaptured({ kind: "voice", job })
+                : undefined
+            }
+          />
+        ) : null}
         <span
           className="text-muted-foreground hidden shrink-0 self-center text-xs lg:inline"
           id={`${id}-hint`}

@@ -20,6 +20,7 @@ import {
 import { DatePicker } from "@/components/date-picker";
 import { DiscoverDialog } from "@/components/food-discover-dialog";
 import { PreferencesDialog } from "@/components/food-preferences-dialog";
+import { useFeature } from "@/components/modules-provider";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Field, FieldLabel } from "@/components/ui/field";
@@ -112,6 +113,8 @@ export function FoodCook({
   const ticket = useRef(0);
   // While the processor thinks of ideas the owner asked for.
   const [thinking, setThinking] = useState(false);
+  // Asking for ideas, while AI processing is on.
+  const ideasOn = useFeature("food.ideas");
   const mounted = useRef(true);
   useEffect(
     () => () => {
@@ -351,47 +354,53 @@ export function FoodCook({
         </p>
       ) : null}
 
-      <section aria-label="Ideas" className="space-y-1.5">
-        <div className="flex items-center gap-2">
-          <h3 className="flex-1 text-sm font-semibold">Ideas</h3>
-          <Button
-            disabled={thinking}
-            onClick={() => void getIdeas()}
-            size="sm"
-            variant="outline"
-          >
-            <Sparkles aria-hidden="true" />
-            Get ideas
-          </Button>
-        </div>
-        {thinking ? (
-          <p
-            aria-live="polite"
-            className="text-muted-foreground text-sm"
-            data-testid="food-ideas-thinking"
-            role="status"
-          >
-            Thinking of ideas…
-          </p>
-        ) : null}
-        {ideas.length ? (
-          <ul className="divide-y rounded-lg border" data-testid="food-ideas">
-            {ideas.map((idea) => (
-              <IdeaRow
-                busy={busy.has(idea.id)}
-                idea={idea}
-                key={idea.id}
-                onDismiss={() => dismissIdea(idea)}
-                onSave={() => saveIdea(idea)}
-              />
-            ))}
-          </ul>
-        ) : thinking ? null : (
-          <p className="text-muted-foreground text-sm">
-            No ideas yet. Get ideas from what is at home and your preferences.
-          </p>
-        )}
-      </section>
+      {/* The AI's recipe ideas: asked for while AI processing is on; those
+          it left stay to save or dismiss when it is off. */}
+      {ideasOn || ideas.length ? (
+        <section aria-label="Ideas" className="space-y-1.5">
+          <div className="flex items-center gap-2">
+            <h3 className="flex-1 text-sm font-semibold">Ideas</h3>
+            {ideasOn ? (
+              <Button
+                disabled={thinking}
+                onClick={() => void getIdeas()}
+                size="sm"
+                variant="outline"
+              >
+                <Sparkles aria-hidden="true" />
+                Get ideas
+              </Button>
+            ) : null}
+          </div>
+          {thinking ? (
+            <p
+              aria-live="polite"
+              className="text-muted-foreground text-sm"
+              data-testid="food-ideas-thinking"
+              role="status"
+            >
+              Thinking of ideas…
+            </p>
+          ) : null}
+          {ideas.length ? (
+            <ul className="divide-y rounded-lg border" data-testid="food-ideas">
+              {ideas.map((idea) => (
+                <IdeaRow
+                  busy={busy.has(idea.id)}
+                  idea={idea}
+                  key={idea.id}
+                  onDismiss={() => dismissIdea(idea)}
+                  onSave={() => saveIdea(idea)}
+                />
+              ))}
+            </ul>
+          ) : thinking ? null : (
+            <p className="text-muted-foreground text-sm">
+              No ideas yet. Get ideas from what is at home and your preferences.
+            </p>
+          )}
+        </section>
+      ) : null}
 
       <PlanDialog
         defaultSlot={slot === ANY_MEAL ? "dinner" : slot}

@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
+import { notFound } from "next/navigation";
 
 import { BankCallback } from "@/components/bank-callback";
 import { callbackStep } from "@/lib/banking";
+import { featureOn } from "@/lib/modules";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +24,8 @@ export const metadata: Metadata = {
 export default async function BankCallbackPage({
   searchParams,
 }: PageProps<"/finance/bank/callback">) {
+  // Bank sync's own page, while its module is on.
+  if (!featureOn("finance.bank")) notFound();
   const query = await searchParams;
   const step = callbackStep(query);
   if (query.error) {

@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Checks that the gateway (infra/nginx/life-os.conf.template) answers the
+# routes of the optional modules that are off with 404 module_off at once,
+# and passes the others on, in throwaway containers, never the deployed
+# gateway or the verification stack: the gateway's nginx with its
+# configuration, server-names.envsh, modules.envsh, and module-routes, as
+# infra/nginx/Dockerfile builds them in, and a stand-in Dashboard, on a
+# network of their own. No other service runs there, so a route that is
+# passed on gets 502 (its service's name resolves nowhere), never
+# module_off. It runs the gateway with LIFE_OS_MODULES empty (the core
+# alone), with every optional module on, and unset (as before modules:
+# everything on). See docs/architecture/modules.md.
+#
+#   tools/test-gateway-modules
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$repo_root"
+command -v docker >/dev/null 2>&1 || { echo 'test-gateway-modules: docker is required' >&2; exit 2; }
+image=$(sed -n 's/^FROM //p' infra/nginx/Dockerfile | head -n 1)
+[[ -n "$image" ]] || { echo "test-gateway-modules: no base image in infra/nginx/Dockerfile" >&2; exit 2; }
+name=lifeos-verify-modules-$$
+work=$(mktemp -d)
+cleanup() {
+  docker rm -f "$name-core" "$name-all" "$name-unset" "$name-dashboard" >/dev/null 2>&1 || true
+  docker network rm "$name" >/dev/null 2>&1 || true
+  rm -rf "$work"
+}
+trap cleanup EXIT
+fail() {
+  printf 'test-gateway-modules: %s\n' "$*" >&2
+  exit 1
+}
+
+nginx_dir=$repo_root/infra/nginx
+gateway_args=(-e NGINX_ENTRYPOINT_QUIET_LOGS=1 -e NGINX_ENVSUBST_FILTER=^LIFE_OS_
+  -e LIFE_OS_PUBLIC_HOSTNAME=lifeos.example.com -e LIFE_OS_GATEWAY_BIND_ADDRESS=127.0.0.1
+  -v "$nginx_dir/life-os.conf.template:/etc/nginx/templates/default.conf.template:ro"
+  -v "$nginx_dir/server-names.envsh:/docker-entrypoint.d/16-lifeos-server-names.envsh:ro"
+  -v "$nginx_dir/modules.envsh:/docker-entrypoint.d/17-lifeos-modules.envsh:ro"
+  -v "$nginx_dir/module-routes:/etc/nginx/lifeos/module-routes:ro")
+mapfile -t routes < <(grep -v '^#' "$nginx_dir/module-routes")
+((${#routes[@]})) || fail "infra/nginx/module-routes lists no route"
+optional=$(printf '%s\n' "${routes[@]}" | awk '{print $1}' | sort -u | paste -sd, -)
+
+printf 'server { listen 3000; default_type text/plain; return 200 "dashboard\\n"; }\n' >"$work/dashboard.conf"
+docker network create "$name" >/dev/null
+docker run -d --rm --name "$name-dashboard" --network "$name" --network-alias dashboard \
+  -v "$work/dashboard.conf:/etc/nginx/conf.d/default.conf:ro" "$image" >/dev/null
+
+start() { # <container> [docker run options…]: base URL in $base
+  local container=$1
+  shift
+  docker run --rm "${gateway_args[@]}" "$@" "$image" nginx -t -q || fail "nginx -t failed for $container"
+  docker run -d --rm --name "$container" --network "$name" -p 127.0.0.1::80 "${gateway_args[@]}" "$@" "$image" >/dev/null
+  base="http://127.0.0.1:$(docker port "$container" 80/tcp | head -n 1 | sed 's/.*://')"
+  for _ in $(seq 1 40); do
+    curl --silent --output /dev/null "$base/" && return
+    sleep 0.25
+  done
+  docker logs "$container" >&2
+  fail "the gateway in $container did not start"
+}
+get() { # <path>: status in $code, body in $work/body, seconds in $took
+  local out
+  out=$(curl --silent --max-time 30 --output "$work/body" --dump-header "$work/headers" \
+    --write-out '%{http_code} %{time_total}' "$base$1")
+  code=${out% *}
+  took=${out#* }
+}
+module_off() { # <path>
+  get "$1"
+  [[ "$code" == 404 ]] || fail "GET $1: $code, want 404 module_off"
+  jq -e '.error.code == "module_off"' "$work/body" >/dev/null || fail "GET $1: not module_off: $(cat "$work/body")"
+  grep -qi '^content-type: application/json' "$work/headers" || fail "GET $1: module_off is not JSON"
+  grep -qi '^x-content-type-options: nosniff' "$work/headers" || fail "GET $1: module_off lacks the security headers"
+  awk -v t="$took" 'BEGIN { exit !(t < 1) }' || fail "GET $1 took $took s: module_off must answer at once"
+}
+passed_on() { # <path>
+  get "$1"
+  [[ "$code" != 404 ]] || ! jq -e '.error.code == "module_off"' "$work/body" >/dev/null 2>&1 || fail "GET $1: module_off, want it passed on"
+}
+
+printf '==> The core alone (LIFE_OS_MODULES empty)\n'
+start "$name-core" -e LIFE_OS_MODULES=
+for route in "${routes[@]}"; do
+  path=${route#* }
+  module_off "${path}v1/anything"
+  module_off "${path}ready"
+done
+passed_on /api/tasks/ready
+passed_on /api/integrations/calendar-feeds/ready
+get /
+[[ "$code" == 200 ]] || fail "GET /: $code, want the Dashboard"
+# A path that only begins like a module's route is not one.
+passed_on /api/voiceover/ready
+
+printf '==> Every optional module on (LIFE_OS_MODULES=%s)\n' "$optional"
+start "$name-all" -e "LIFE_OS_MODULES=$optional"
+for route in "${routes[@]}"; do
+  passed_on "${route#* }ready"
+done
+
+printf '==> One module off, with spaces in the list\n'
+docker rm -f "$name-all" >/dev/null
+first=${routes[0]%% *}
+rest=$(printf '%s\n' "${routes[@]}" | awk -v first="$first" '$1 != first {print $1}' | sort -u | paste -sd, - | sed 's/,/, /g')
+start "$name-all" -e "LIFE_OS_MODULES=$rest"
+for route in "${routes[@]}"; do
+  if [[ ${route%% *} == "$first" ]]; then module_off "${route#* }ready"; else passed_on "${route#* }ready"; fi
+done
+
+printf '==> LIFE_OS_MODULES unset (as before modules: every module on)\n'
+start "$name-unset"
+for route in "${routes[@]}"; do
+  passed_on "${route#* }ready"
+done
+
+printf 'test-gateway-modules: ok\n'

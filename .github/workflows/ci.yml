@@ -75,9 +75,13 @@ jobs:
           cache: npm
           cache-dependency-path: apps/dashboard/package-lock.json
       - run: npm ci --prefix apps/dashboard --no-audit --no-fund
-      # And the release bundle's compose.yaml (deploy/compose.yaml); the
-      # job's name stays, as branch protection requires it by name.
-      - run: tools/check --gateway --contracts --sqlc --install-bundle
+      # And the release bundle's compose.yaml (deploy/compose.yaml) and the
+      # module manifests (tools/modules); the job's name stays, as branch
+      # protection requires it by name.
+      - run: tools/check --gateway --contracts --sqlc --install-bundle --modules
+      # The gateway answers the routes of modules that are off at once
+      # (throwaway nginx containers).
+      - run: tools/test-gateway-modules
 
   check-go:
     # Also the setup.sh tests (--setup). The name stays as it is, because the
@@ -243,3 +247,21 @@ jobs:
       - uses: ./.github/actions/full-stack
         with:
           node-version: ${{ env.NODE_VERSION }}
+
+  # The same with the core alone, as a fresh install runs it
+  # (docs/architecture/modules.md): only the core's images, the smokes and
+  # the browser suite without the optional modules' tests, and nothing that
+  # waits on a service that is not there (BUG-50). Not a required check.
+  full-stack-core:
+    name: Full stack, core only (images, smokes, browser suite)
+    needs: [check-generated, check-go, check-dashboard, integration]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/full-stack
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          modules: core

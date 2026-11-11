@@ -2,7 +2,7 @@
 
 ## Where to look
 
-1. **The Status page** (`/status` in Life OS) checks every part: the services, AI processing, voice, backups, the server's memory and disk, notifications, and each integration. Each problem comes with what to do.
+1. **The Status page** (`/status` in Life OS) checks every part that runs: the services, backups, notifications, and each [module](modules.md) that is on (AI processing, voice, the server's memory and disk, each integration). Each problem comes with what to do.
 2. **On the server**, from the directory with `setup.sh`:
 
    ```sh
@@ -24,7 +24,10 @@
 | `up` fails: the port is in use | Something else listens on port 3000. Choose another: `./setup.sh gateway --port 3100`, then `./setup.sh up`. |
 | The browser can't connect through the SSH tunnel | Is `ssh -N -L 3000:127.0.0.1:3000 …` still running? Use the same port in the browser, and `http://`, not `https://`. |
 | The browser gets an empty page or "connection closed" | Life OS answers only the names it knows. Open it at `127.0.0.1`, `localhost`, the address it listens on, or its address's hostname; to add a name, `./setup.sh gateway --public-url http://<name>:3000`. |
-| Captures stay in Inbox; Status says the Inbox processor is not running | AI processing is off until you sign in: `./setup.sh codex`. Without it, the processor restarts again and again; that is expected. |
+| Captures stay in Inbox as written | AI processing is off: it is a [module](modules.md). Turn it on by signing in, `./setup.sh codex` (or `./setup.sh claude`), then `./setup.sh up`. |
+| Status says the Inbox processor is not running | AI processing is on, but the processor is not: `docker compose logs processor`. Without a sign-in it stops at start: `./setup.sh codex`, or turn AI off with `./setup.sh modules off ai`. |
+| A page or a phone app says a module is turned off (`module_off`) | That [module](modules.md) is off on this server: `./setup.sh modules` lists them; `./setup.sh modules on <id>`, then `./setup.sh up`. |
+| The microphone, the Google Calendar button, the bank connection, or the Server card is missing | Their modules are off: `voice`, `google-calendar`, `banking`, `server-health` ([Modules](modules.md)). |
 | Status says Codex is signed out | Sign in again: `./setup.sh codex`. |
 | Status says the Codex usage limit is reached | Captures wait and are processed after the reset time Status shows. |
 | Voice notes wait; Status says Whisper is not ready | On the first start it downloads its model (`docker compose logs whisper`). If it keeps restarting, the server lacks memory: choose a smaller model (`./setup.sh whisper`). If its log says whisper.cpp does not know the language, set `auto` or a valid code with `./setup.sh whisper` ([Language](voice.md#language)). |

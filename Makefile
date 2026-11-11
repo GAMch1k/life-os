@@ -34,10 +34,12 @@ infra-up: infra-env
 	docker compose up --detach --wait
 
 # --pull: every build starts from the current base images, not from older
-# ones Docker has kept (docs/operations/ci.md#dependabot).
+# ones Docker has kept (docs/operations/ci.md#dependabot). Every module's
+# image is built, as the verification stack runs them all; up starts the
+# core and the modules COMPOSE_PROFILES in .env turns on.
 core-up life-up: infra-env
 	$(call refuse_if_deployed,It would rebuild every image and recreate every changed service and PostgreSQL with them.)
-	docker compose build --pull
+	COMPOSE_PROFILES=$$(bash -c '. tools/lib/modules.bash && IFS=, && printf "%s" "$${module_ids[*]}"') docker compose build --pull
 	docker compose up --detach
 
 # The core-service and Dashboard smokes on the disposable verification stack

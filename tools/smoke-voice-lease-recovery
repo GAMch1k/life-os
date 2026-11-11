@@ -20,6 +20,11 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Voice notes are a module (LIFE_OS_VERIFY_MODULES): without it, nothing to test.
+if ! "${compose[@]}" config --services | grep -qx voice-worker; then
+  echo 'voice lease recovery smoke: skipped, the voice module is off (LIFE_OS_VERIFY_MODULES)'
+  exit 0
+fi
 "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
 LIFE_OS_VOICE_WORKER_LEASE_SECONDS=5 LIFE_OS_VOICE_WORKER_RETRY_BACKOFF_SECONDS=1 \
   "${compose[@]}" up --detach --no-build --scale processor=0

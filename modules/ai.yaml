@@ -1,0 +1,26 @@
+# AI processing: the processor files each capture with Codex or Claude Code
+# through MCP, and runs the recipe ideas, AI categories, and budget plan
+# jobs. Off, captures stay in Inbox as they were written.
+id: ai
+name: AI processing
+summary: files your notes with OpenAI Codex or Claude Code (your own plan)
+caution: Your notes, and the tasks and events the AI looks at to understand them, are sent to OpenAI or Anthropic.
+install: optional
+order: 10
+setup: codex
+compose:
+  services: [mcp, processor]
+gateway:
+  routes: [/api/mcp/]
+dashboard:
+  services: [processor]
+  checks: [processing]
+  features: [ai.processing, finance.ai-plan, food.ideas]
+settings:
+  - LIFE_OS_AI_*
+  - LIFE_OS_ANTHROPIC_API_KEY
+  - LIFE_OS_CLAUDE_*
+  - LIFE_OS_CODEX_*
+  - LIFE_OS_PROCESSOR_*
+  - LIFE_OS_IDEAS_*
+  - LIFE_OS_INBOX_CONTEXT_MINUTES

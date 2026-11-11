@@ -31,7 +31,7 @@ The [detailed setup](../operations/google-calendar.md) has every screen, written
 ./setup.sh up
 ```
 
-It asks for the client ID and secret, shows the redirect URI to register, and generates the key that encrypts Google's access in Life OS's database. Keep `.env`: with a new key you have to connect again.
+It asks for the client ID and secret, shows the redirect URI to register, generates the key that encrypts Google's access in Life OS's database, and turns the `google-calendar` [module](modules.md) on. Keep `.env`: with a new key you have to connect again.
 
 ## 4. Connect
 
@@ -39,6 +39,6 @@ In Life OS: **Calendar → Google Calendar → Connect Google**. Sign in, allow 
 
 ## Disconnect
 
-**Disconnect** in the same dialog removes Life OS's access at Google and deletes it from Life OS. To be sure, also check [your Google account's connections](https://myaccount.google.com/connections).
+**Disconnect** in the same dialog removes Life OS's access at Google and deletes it from Life OS. To be sure, also check [your Google account's connections](https://myaccount.google.com/connections). Then `./setup.sh modules off google-calendar` stops the integration altogether.
 
 Problems: [Google Calendar troubleshooting](../operations/google-calendar.md#troubleshooting).

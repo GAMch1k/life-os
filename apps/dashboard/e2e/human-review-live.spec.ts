@@ -10,8 +10,10 @@ import {
 const enabled = Boolean(process.env.LIFE_OS_E2E_URL);
 
 // BUG-29: the status under the composer said "Needs review", but the page's
-// Human Review card or queue only showed the capture after a reload.
-test.describe("Human Review appears without a reload", () => {
+// Human Review card or queue only showed the capture after a reload. The
+// capture card follows a capture while AI processing can change it (the
+// spec stands in for the processor), so these need the ai module.
+test.describe("Human Review appears without a reload @ai", () => {
   test.skip(!enabled, "set LIFE_OS_E2E_URL to run against the isolated stack");
 
   test("Home's Human Review card lists a capture once it needs review", async ({

@@ -511,7 +511,7 @@ test.describe("Reminder delivery on Status", () => {
   });
 });
 
-test.describe("Server on Status", () => {
+test.describe("Server on Status @server-health", () => {
   test.skip(
     !process.env.LIFE_OS_E2E_URL,
     "set LIFE_OS_E2E_URL to run against the isolated stack",

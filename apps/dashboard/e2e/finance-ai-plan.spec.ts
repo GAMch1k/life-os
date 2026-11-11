@@ -99,7 +99,7 @@ async function created<T>(
   return (await response.json()) as T;
 }
 
-test.describe("AI budget plan", () => {
+test.describe("AI budget plan @ai", () => {
   test.skip(!enabled, "requires LIFE_OS_E2E_URL (an isolated stack)");
 
   test("the AI's plan is shown, and only the ticked lines are applied", async ({
@@ -309,7 +309,7 @@ test.describe("AI budget plan", () => {
   });
 });
 
-test.describe("Payday", () => {
+test.describe("Payday @ai", () => {
   test.skip(!enabled, "requires LIFE_OS_E2E_URL (an isolated stack)");
 
   test("the owner takes the suggested payer, and the salary asks for a plan", async ({

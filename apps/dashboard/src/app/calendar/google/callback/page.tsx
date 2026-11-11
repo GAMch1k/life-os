@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
+import { notFound } from "next/navigation";
 
 import { GoogleCallback } from "@/components/google-callback";
 import { callbackStep } from "@/lib/google-calendar";
+import { featureOn } from "@/lib/modules";
 
 export const dynamic = "force-dynamic";
 
@@ -21,5 +23,7 @@ export const metadata: Metadata = {
 export default async function GoogleCallbackPage({
   searchParams,
 }: PageProps<"/calendar/google/callback">) {
+  // Google Calendar's own page, while its module is on.
+  if (!featureOn("calendar.google")) notFound();
   return <GoogleCallback step={callbackStep(await searchParams)} />;
 }

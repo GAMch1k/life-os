@@ -72,6 +72,8 @@ Every GitHub Release has these files:
 | `setup.sh` | Writes `.env` from `.env.example` with generated passwords and keys ([install docs](../install/)); its `release_version` placeholder is set to the release, and its `claude_build_files` carries `services/mcp/claude-code/` (`tools/build-install-bundle --setup-script` prints it) |
 | `SHA256SUMS` | The SHA-256 of the three |
 
+Every image is published, whichever modules an install turns on: the bundle's `compose.yaml` keeps each optional [module](../architecture/modules.md)'s `profiles:`, so an install pulls and runs the core's images and those of the modules its `COMPOSE_PROFILES` lists. A new `.env.example` lists none, and `setup.sh` (whose module table `tools/modules` writes from the manifests) turns them on.
+
 `deploy/compose.yaml` is generated: change `compose.yaml` and run `tools/build-install-bundle`, then commit both. `tools/check --install-bundle` (CI's `check-generated` job) fails when it is stale. Do not run it on this host: like `compose.yaml` it names the project `lifeos`, so Compose would act on the live stack.
 
 ## Cutting a release

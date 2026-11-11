@@ -6,6 +6,9 @@
 # both run it, after actions/checkout. It needs no secret and signs in to no
 # AI. Every smoke runs, even after another one failed; the step fails when one
 # did, and a failed run's compose logs and Playwright report are uploaded.
+# With modules: core it tests the core alone, as a fresh install runs it
+# (docs/architecture/modules.md): only the core's images, no optional module
+# on the verification stack, and no workaround for names that resolve slowly.
 name: Full-stack tests
 description: Build every image, then run the smokes and the browser suite on the verification stack.
 
@@ -13,25 +16,37 @@ inputs:
   node-version:
     description: The Node.js version for Playwright (the Dashboard image's).
     required: true
+  modules:
+    description: >-
+      all: every optional module the verification stack runs (all but the
+      Cloudflare connector and ntfy), every image built; core: the core alone.
+    required: false
+    default: all
 
 runs:
   using: composite
   steps:
     - name: Show the runner
       shell: bash
+      env:
+        MODULES: ${{ inputs.modules }}
       run: |
+        case "$MODULES" in
+          # The verification stack's Whisper reads the model from the Actions
+          # cache (LIFE_OS_WHISPER_MODELS_DIR, set below) instead of
+          # downloading it at every start.
+          all) echo "LIFE_OS_VERIFY_OVERLAYS=tools/fixtures/whisper-models.compose.yaml" >>"$GITHUB_ENV" ;;
+          # tools/verify-compose: an empty list is the core alone.
+          core) echo "LIFE_OS_VERIFY_MODULES=" >>"$GITHUB_ENV" ;;
+          *) echo "::error::modules is all or core, not $MODULES"; exit 1 ;;
+        esac
+        echo "PLAYWRIGHT_HTML_OPEN=never" >>"$GITHUB_ENV"
+        echo "Modules: $MODULES"
         echo "$(nproc) CPUs"
         free -h
         df -h /
         docker version --format 'Docker {{.Server.Version}}'
         docker compose version
-        # The verification stack's Whisper reads the model from the Actions
-        # cache (LIFE_OS_WHISPER_MODELS_DIR, set below) instead of downloading
-        # it at every start.
-        {
-          echo "LIFE_OS_VERIFY_OVERLAYS=tools/fixtures/whisper-models.compose.yaml"
-          echo "PLAYWRIGHT_HTML_OPEN=never"
-        } >>"$GITHUB_ENV"
     # The runner's systemd-resolved answers SERVFAIL for a single-label name
     # it does not know, such as a service that is not running, and the
     # Alpine (musl) images wait 10 s on SERVFAIL before they give up. Home
@@ -39,8 +54,11 @@ runs:
     # those make life-smoke leaves out), and those waits filled Node's DNS
     # threads until the Dashboard's requests to running services timed out
     # too. With single-label names sent upstream, the answer is NXDOMAIN at
-    # once, as on a usual host.
+    # once, as on a usual host. The core-only run leaves the runner's
+    # resolver as it is: with only the core on, nothing may look up a service
+    # that is not there (BUG-50).
     - name: Answer unknown service names at once
+      if: inputs.modules != 'core'
       shell: bash
       run: |
         sudo mkdir -p /etc/systemd/resolved.conf.d
@@ -52,7 +70,9 @@ runs:
       shell: bash
       run: tools/ci-env "$RUNNER_TEMP/lifeos-ci"
 
+    # Whisper runs only with the voice module.
     - name: Find the Whisper model
+      if: inputs.modules != 'core'
       id: whisper
       shell: bash
       run: |
@@ -70,12 +90,13 @@ runs:
         } >>"$GITHUB_OUTPUT"
         echo "LIFE_OS_WHISPER_MODELS_DIR=$RUNNER_TEMP/whisper-models" >>"$GITHUB_ENV"
     - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      if: inputs.modules != 'core'
       id: whisper-cache
       with:
         path: ${{ runner.temp }}/whisper-models
         key: ${{ steps.whisper.outputs.key }}
     - name: Download the Whisper model
-      if: steps.whisper-cache.outputs.cache-hit != 'true'
+      if: inputs.modules != 'core' && steps.whisper-cache.outputs.cache-hit != 'true'
       shell: bash
       env:
         MODEL_URL: ${{ steps.whisper.outputs.url }}
@@ -86,20 +107,30 @@ runs:
         mv "$LIFE_OS_WHISPER_MODELS_DIR/$MODEL_FILE.part" "$LIFE_OS_WHISPER_MODELS_DIR/$MODEL_FILE"
     # Saved at once, so a failed run keeps it too.
     - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-      if: steps.whisper-cache.outputs.cache-hit != 'true'
+      if: inputs.modules != 'core' && steps.whisper-cache.outputs.cache-hit != 'true'
       with:
         path: ${{ runner.temp }}/whisper-models
         key: ${{ steps.whisper.outputs.key }}
     # Whisper runs as nobody.
-    - shell: bash
+    - if: inputs.modules != 'core'
+      shell: bash
       run: chmod 755 "$LIFE_OS_WHISPER_MODELS_DIR" && chmod 644 "$LIFE_OS_WHISPER_MODELS_DIR"/* && ls -l "$LIFE_OS_WHISPER_MODELS_DIR"
 
     # Composite steps have no timeout-minutes: timeout(1) bounds each long
     # step instead.
+    # Every module's (COMPOSE_PROFILES names them all; .env, as the
+    # release's .env.example, has the core alone), as the release publishes
+    # every image; the core-only run builds the core's.
     - name: Build the images
       id: build
       shell: bash
-      run: timeout --kill-after=1m 30m docker compose build --pull
+      env:
+        MODULES: ${{ inputs.modules }}
+      run: |
+        . tools/lib/modules.bash
+        profiles=$(IFS=,; printf '%s' "${module_ids[*]}")
+        [[ "$MODULES" != core ]] || profiles=
+        COMPOSE_PROFILES=$profiles timeout --kill-after=1m 30m docker compose build --pull
 
     - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
       with:
@@ -148,7 +179,7 @@ runs:
         LIFE_OS_VERIFY_LOGS_DIR: ${{ runner.temp }}/compose-logs/smoke-gateway-recreate
       run: timeout --kill-after=1m 10m tools/smoke-gateway-recreate
     - name: Voice worker crash recovery (tools/smoke-voice-lease-recovery)
-      if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+      if: ${{ !cancelled() && steps.build.outcome == 'success' && inputs.modules != 'core' }}
       shell: bash
       env:
         LIFE_OS_VERIFY_LOGS_DIR: ${{ runner.temp }}/compose-logs/smoke-voice-lease-recovery
@@ -174,14 +205,14 @@ runs:
     - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       if: failure()
       with:
-        name: compose-logs
+        name: compose-logs${{ inputs.modules == 'core' && '-core' || '' }}
         path: ${{ runner.temp }}/compose-logs/
         retention-days: 7
         if-no-files-found: ignore
     - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       if: failure()
       with:
-        name: playwright
+        name: playwright${{ inputs.modules == 'core' && '-core' || '' }}
         path: |
           apps/dashboard/test-results/
           apps/dashboard/playwright-report/

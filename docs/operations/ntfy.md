@@ -77,7 +77,7 @@ docker run --rm -it binwiederhier/ntfy:v2.37.2 user hash
 Put them in `~/life-os/.env` (never in the repository, tickets, or chat):
 
 ```sh
-COMPOSE_PROFILES=cloudflare,ntfy
+COMPOSE_PROFILES=cloudflare,ntfy   # with the other modules that run, such as ai,voice,...
 LIFE_OS_NOTIFICATIONS_CHANNELS=ntfy
 LIFE_OS_NTFY_PUBLIC_URL=https://ntfy.example.com
 LIFE_OS_NTFY_TOPIC=lifeos
@@ -184,4 +184,4 @@ ntfy was paused on v2.29.0 and resumes on v2.37.2 (SEC-IMG, 2026-11-10). Nothing
 
 ## Verification stack
 
-The disposable verification stack never uses the owner's ntfy and never reaches the phone. `tools/verify-compose` clears `COMPOSE_PROFILES` (no ntfy container), blanks the publisher token, both password hashes, and the channel list (`LIFE_OS_NOTIFICATIONS_CHANNELS`; a smoke may choose its own, such as `log`, with `LIFE_OS_VERIFY_NOTIFICATIONS_CHANNELS`), sets the topic to `verify`, and refuses a plan that contains ntfy or an ntfy token. Its networks are separate, so `ntfy` does not resolve there; the Status page shows Notifications as Not set up. `tools/smoke-e2e` checks there that the gateway gives no answer for ntfy's hostname (the host of `LIFE_OS_NTFY_PUBLIC_URL`) or any other unlisted Host.
+The disposable verification stack never uses the owner's ntfy and never reaches the phone. `tools/verify-compose` never takes `.env`'s `COMPOSE_PROFILES` and never runs the `ntfy` module (no ntfy container), blanks the publisher token, both password hashes, and the channel list (`LIFE_OS_NOTIFICATIONS_CHANNELS`; a smoke may choose its own, such as `log`, with `LIFE_OS_VERIFY_NOTIFICATIONS_CHANNELS`), sets the topic to `verify`, and refuses a plan that contains ntfy or an ntfy token. Its networks are separate, so `ntfy` does not resolve there; the Status page shows Notifications as Not set up. `tools/smoke-e2e` checks there that the gateway gives no answer for ntfy's hostname (the host of `LIFE_OS_NTFY_PUBLIC_URL`) or any other unlisted Host.

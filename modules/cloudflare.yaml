@@ -1,0 +1,11 @@
+# The Cloudflare Tunnel connector: reaches the gateway (behind Cloudflare
+# Access) and ntfy from outside, without an open port.
+id: cloudflare
+name: Cloudflare Tunnel
+summary: reach Life OS from anywhere through Cloudflare Tunnel and Access
+install: optional
+order: 50
+setup: cloudflare
+compose:
+  services: [cloudflared]
+settings: [LIFE_OS_CLOUDFLARE_*, LIFE_OS_CLOUDFLARED_IMAGE, LIFE_OS_CF_ACCESS_*]

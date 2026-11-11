@@ -208,7 +208,7 @@ async function stubGoogle(page: Page, baseURL: string) {
 const googleDialog = (page: Page) =>
   page.getByRole("dialog", { name: "Google Calendar" });
 
-test.describe("Google Calendar connection", () => {
+test.describe("Google Calendar connection @google-calendar", () => {
   test.skip(!enabled, "set LIFE_OS_E2E_URL to run against the isolated stack");
 
   test("without Google settings the dialog says what the server needs", async ({

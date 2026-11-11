@@ -1,4 +1,10 @@
-import { type APIRequestContext, expect, type Page, test } from "./fixtures";
+import {
+  type APIRequestContext,
+  expect,
+  moduleOn,
+  type Page,
+  test,
+} from "./fixtures";
 
 // Polish — Life OS 1 sign-off across every Dashboard page: no horizontal
 // overflow at phone or desktop width, no hydration errors for a Berlin,
@@ -114,9 +120,11 @@ test.describe("Polish — Life OS 1 acceptance", () => {
       const composer = page.locator("#inbox-capture");
       await expect(composer).toBeVisible();
       await expect(composer).toBeInViewport({ ratio: 1 });
-      await expect(
-        page.getByRole("button", { name: /record|voice|dictate/i }).first(),
-      ).toBeInViewport();
+      // And the recorder beside it, with the voice notes module.
+      if (moduleOn("voice"))
+        await expect(
+          page.getByRole("button", { name: /record|voice|dictate/i }).first(),
+        ).toBeInViewport();
     });
   }
 });
