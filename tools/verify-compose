@@ -8,9 +8,19 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_root"
 
 compose=(docker compose --project-name lifeos-verify -f compose.yaml -f compose.verify.yaml)
-# The verification stack never runs optional profiles from .env: a second
-# cloudflared with the real tunnel token would receive production traffic.
-export COMPOSE_PROFILES=
+# The modules it runs (docs/architecture/modules.md) are never .env's
+# COMPOSE_PROFILES: by default every optional module but the Cloudflare
+# connector and ntfy, which never run here (a second cloudflared with the
+# real tunnel token would receive production traffic; the plan is refused
+# with either, below). LIFE_OS_VERIFY_MODULES picks others: empty runs the
+# core alone, as a fresh install does (CI's core-only job).
+# shellcheck source=tools/lib/modules.bash
+. tools/lib/modules.bash
+verify_modules=
+for id in "${module_ids[@]}"; do
+  [[ $id == cloudflare || $id == ntfy ]] || verify_modules+=${verify_modules:+,}$id
+done
+export COMPOSE_PROFILES="${LIFE_OS_VERIFY_MODULES-$verify_modules}"
 # Nor does it import the owner's personal feeds from .env: calendar-feeds' ZAW
 # preset would fetch their real waste calendar and mix it into test data
 # (compose.verify.yaml also blanks it, and the plan is refused with one).

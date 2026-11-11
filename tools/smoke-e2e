@@ -15,7 +15,10 @@ trap cleanup EXIT
 # This is a core-service smoke, not an AI workflow test. Keep its manually
 # resolved Inbox fixture away from the automatic processor; the dedicated
 # smoke-processor-runtime script verifies that real trigger-to-outcome chain.
-"${compose[@]}" up --detach --no-build --scale processor=0
+# (Without the AI module, LIFE_OS_VERIFY_MODULES, there is no processor.)
+scale=()
+if "${compose[@]}" config --services | grep -qx processor; then scale=(--scale processor=0); fi
+"${compose[@]}" up --detach --no-build "${scale[@]}"
 
 wait_ready() {
   local url=$1

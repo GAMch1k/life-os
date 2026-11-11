@@ -96,7 +96,7 @@ services:
     volumes: !reset []
   host-health-docker:
     image: lifeos-host-health:latest
-    profiles: [host-docker]
+    profiles: !override [host-docker]
     volumes: !reset []
   mcp:
     image: lifeos-mcp:latest

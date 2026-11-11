@@ -3,7 +3,9 @@ set -euo pipefail
 
 # The browser suite (apps/dashboard/e2e) on the disposable verification stack.
 # Arguments go to Playwright: tools/browser-e2e e2e/food.spec.ts, or, without
-# a Codex sign-in as in CI, tools/browser-e2e --grep-invert @codex.
+# a Codex sign-in as in CI, tools/browser-e2e --grep-invert @codex. The stack
+# runs the modules tools/verify-compose picks (LIFE_OS_VERIFY_MODULES; empty:
+# the core alone), and the tests of modules that are off skip themselves.
 
 compose=(./tools/verify-compose)
 # The Calendar feed tests serve their own ICS files from a fixture container
@@ -27,5 +29,9 @@ trap cleanup EXIT
 # rather than whichever dashboard image was built by a prior ticket.
 docker compose build --pull dashboard
 "${compose[@]}" up --detach --no-build
+# The modules the stack runs, as its Dashboard has them.
+LIFE_OS_E2E_MODULES=$("${compose[@]}" config --format json | jq -r '.services.dashboard.environment.LIFE_OS_MODULES // ""')
+export LIFE_OS_E2E_MODULES
+echo "browser-e2e: optional modules on: ${LIFE_OS_E2E_MODULES:-none (the core alone)}"
 # The Finance specs create their own accounts through the API.
 LIFE_OS_E2E_URL=http://127.0.0.1:13001 npm --prefix apps/dashboard run test:e2e -- "$@"
