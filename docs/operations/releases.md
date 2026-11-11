@@ -85,7 +85,7 @@ git tag v0.1.0-preview.1
 git push origin v0.1.0-preview.1
 ```
 
-Then watch Actions → Release. It takes about 35 minutes; its build, test, and scan job alone took 23.5 minutes in the dry run of 2026-11-10:
+Then watch Actions → Release. It takes about 35 minutes, and the install check about 4 more; its build, test, and scan job alone took 23.5 minutes in the dry run of 2026-11-10:
 
 1. **Plan** checks the tag, that `deploy/compose.yaml` is current, lists the images, and assembles the bundle.
 2. **Build, test, and scan**, once per platform on a runner of that platform: CI's full-stack tests (`.github/actions/full-stack`, the same steps as CI's `full-stack` job: `docker compose build`, the smokes, the browser suite), then Trivy on every image ([the vulnerability gate](#the-vulnerability-gate)) and each image's SBOM. The tested images are saved for the next job, which has the write access this one has not.
@@ -113,8 +113,8 @@ The images carry `org.opencontainers.image.source`, which links each package to 
 On a clean runner (`ubuntu-24.04`), in an empty `~/life-os`, it follows the [Quick start](../install/README.md#quick-start), steps 1 to 4, with the release's files alone: no checkout of the repository there, nothing built, every image pulled from ghcr.io.
 
 1. **Download**: `compose.yaml`, `setup.sh`, `SHA256SUMS`, and `default.env.example` saved as `.env.example`, with the docs' commands; then `sha256sum -c SHA256SUMS` and `gh attestation verify` on the three files. The directory must hold those four files and nothing else, `compose.yaml` must build nothing, and `.env.example` must name the version.
-2. **Setup**: `LIFE_OS_TIMEZONE=Europe/Berlin ./setup.sh --yes`, the docs' example of a [run without questions](../install/README.md#without-questions): every other question takes its default, and no integration is set up. `.env` must be mode 600 and name the version and the timezone; `codex-home/` must be empty.
-3. **Start**: `./setup.sh up`, which must end with "Life OS answers."
+2. **Setup**: `LIFE_OS_TIMEZONE=Europe/Berlin ./setup.sh --yes`, the docs' example of a [run without questions](../install/README.md#without-questions): every other question takes its default, and no integration is set up. It must print no warning; `.env` must be mode 600 and name the version and the timezone; `codex-home/` must be empty.
+3. **Start**: `./setup.sh up`, which must say "Life OS answers." and that AI processing is off until the Codex sign-in, and print no warning. Up to v0.1.0-preview.5 it warned that the provisioning, which had finished, was not running, a bug fixed since; for those versions the check notes that warning as a known bug.
 4. **Services**: within 10 minutes, every service runs (and is healthy, where it has a health check), the provisioning and every migration ended with 0, and every service `docker compose config --services` lists has its container.
 5. **The processor**: without a Codex sign-in it stops at every start ("missing Codex authentication", exit 78) and Docker starts it again, as the release notes say. That does not fail the job; a processor that logs anything else, ends with another code, or is healthy does.
 6. **The gateway**: published on `127.0.0.1:3000` only (the runner's own address must not reach it); the Dashboard's pages answer; it answers the hosts `127.0.0.1` and `localhost`, and not `unknown.example`.
@@ -122,9 +122,9 @@ On a clean runner (`ubuntu-24.04`), in an empty `~/life-os`, it follows the [Qui
 8. **A voice note**: whisper.cpp's public sample `jfk.wav`, uploaded through the gateway, is transcribed by the model Whisper downloaded at its first start, and lands in Inbox.
 9. **A backup** into `backups/`, as `./setup.sh update` makes one (`docker compose exec -T backup /service now`).
 10. **The Status page**: its checks (`GET /api/status`) go into the run's summary. None may be a problem but AI processing.
-11. **`./setup.sh status`**, and last, that no service but the processor has restarted since the start.
+11. **`./setup.sh status`**, without a warning, and last, once the stack has run for 3 minutes, that no service but the processor has restarted.
 
-Every check after the start runs, even after another one failed. A failed run uploads `install-check-logs`, kept 7 days: the output of `./setup.sh up`, `docker compose ps --all`, and each service's log; never `.env`. The job took about 6 minutes in its first green runs, most of it pulling the images.
+Every check after the start runs, even after another one failed. A failed run uploads `install-check-logs`, kept 7 days: the output of `./setup.sh up`, `docker compose ps --all`, and each service's log; never `.env`. The job takes about 3.5 minutes, most of it the wait for a stack that has run for 3 minutes; on GitHub's runners, `./setup.sh up` downloads the images and starts Life OS in under a minute. It prints the runner's processor first: GitHub's runners differ (AMD EPYC with and without AVX-512 on 11 November 2026), and an image built for one processor's instructions can fail on another ([Whisper](../services/voice-stt.md#whisper-worker)).
 
 By hand: Actions → Install check → Run workflow, with a version or empty for the newest release; or
 
