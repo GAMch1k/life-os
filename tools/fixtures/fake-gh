@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# A stand-in for gh (the GitHub CLI), for tools/test-publish-android-release
+# only: it answers the calls tools/publish-android-release makes from a
+# made-up GitHub in a directory, and never reaches the network.
+#
+#   FAKE_GH_DIR=<dir> tools/fixtures/fake-gh <gh arguments…>
+#
+# <dir> holds the made-up GitHub:
+#   repo        the repository's full name (GAMch1k/life-os-app if missing);
+#               any spelling of it in another case is the same repository
+#   push        "false" when gh's account may not push (else it may)
+#   commits     the commits GitHub has, one full SHA per line
+#   releases/<id>/release.json, releases/<id>/assets/<name>
+#   latest      the id of the release marked latest
+#   calls       every call, one per line, appended
+#
+# FAKE_GH_LOGGED_OUT=1 fails every call as gh does without a login;
+# FAKE_GH_FAIL=<glob> fails the calls whose arguments, joined by spaces,
+# match it (as GitHub's 502 would); FAKE_GH_DAMAGE=1 stores every uploaded
+# asset one byte short (an upload GitHub got wrong).
+
+state=${FAKE_GH_DIR:?FAKE_GH_DIR names the made-up GitHub}
+mkdir -p "$state/releases"
+printf '%s\n' "$*" >>"$state/calls"
+repo=$(cat "$state/repo" 2>/dev/null || printf 'GAMch1k/life-os-app')
+
+die() { # <status> <message>
+  printf 'gh: %s\n' "$2" >&2
+  exit "$1"
+}
+[[ -z "${FAKE_GH_LOGGED_OUT:-}" ]] || die 4 'To get started with GitHub CLI, please run:  gh auth login'
+# shellcheck disable=SC2053 # a glob, on purpose
+[[ -z "${FAKE_GH_FAIL:-}" || "$*" != $FAKE_GH_FAIL ]] || die 1 'Bad Gateway (HTTP 502)'
+not_found() { die 1 'Not Found (HTTP 404)'; }
+
+# release <id>: the release as GitHub's API shows it.
+release() {
+  local dir=$state/releases/$1 assets='[]' file
+  for file in "$dir"/assets/*; do
+    [[ -f "$file" ]] || continue
+    assets=$(jq -c --arg name "${file##*/}" --argjson size "$(stat -c %s "$file")" \
+      --arg digest "sha256:$(sha256sum <"$file" | cut -d ' ' -f 1)" '. + [{name: $name, size: $size, digest: $digest}]' <<<"$assets")
+  done
+  jq -c --argjson assets "$assets" '. + {assets: $assets}' "$dir/release.json"
+}
+# find <tag> <draft: true|false>: the id of a release with that tag, or nothing.
+find_release() {
+  local file
+  for file in "$state"/releases/*/release.json; do
+    [[ -f "$file" ]] || continue
+    jq -e --arg tag "$1" --argjson draft "$2" '.tag_name == $tag and .draft == $draft' "$file" >/dev/null && jq -r .id "$file" && return
+  done
+  return 0
+}
+ids() { find "$state/releases" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -rn; }
+this_repo() { [[ "${1,,}" == "${repo,,}" ]]; }
+
+case "${1:-}" in
+  api)
+    shift
+    method=GET fields=()
+    path=''
+    while (($#)); do
+      case "$1" in
+        -X) method=$2; shift ;;
+        -F | -f) fields+=("$2"); shift ;;
+        *) path=$1 ;;
+      esac
+      shift
+    done
+    [[ "$path" =~ ^repos/([^/]+/[^/?]+)(/(.*))?$ ]] || not_found
+    this_repo "${BASH_REMATCH[1]}" || not_found
+    rest=${BASH_REMATCH[3]}
+    case "$method $rest" in
+      'GET ')
+        jq -n --arg repo "$repo" --argjson push "$(cat "$state/push" 2>/dev/null || printf true)" '{full_name: $repo, permissions: {push: $push}}'
+        ;;
+      'GET commits/'*)
+        sha=${rest#commits/}
+        grep -qxF -- "$sha" "$state/commits" 2>/dev/null || die 1 "No commit found for SHA: $sha (HTTP 422)"
+        jq -n --arg sha "$sha" '{sha: $sha}'
+        ;;
+      'GET releases/tags/'*)
+        id=$(find_release "${rest#releases/tags/}" false)
+        [[ -n "$id" ]] || not_found
+        release "$id"
+        ;;
+      'GET releases/latest')
+        [[ -s "$state/latest" && -d "$state/releases/$(cat "$state/latest")" ]] || not_found
+        release "$(cat "$state/latest")"
+        ;;
+      'GET releases?per_page=100')
+        all='[]'
+        while IFS= read -r id; do all=$(jq -c --argjson r "$(release "$id")" '. + [$r]' <<<"$all"); done < <(ids)
+        printf '%s\n' "$all"
+        ;;
+      'DELETE releases/'*)
+        id=${rest#releases/}
+        [[ -d "$state/releases/$id" ]] || not_found
+        rm -rf "${state:?}/releases/$id"
+        ;;
+      'PATCH releases/'*)
+        id=${rest#releases/}
+        [[ -d "$state/releases/$id" ]] || not_found
+        file=$state/releases/$id/release.json
+        for field in "${fields[@]}"; do
+          case "$field" in
+            draft=false) jq '.draft = false' "$file" >"$file.new" && mv "$file.new" "$file" ;;
+            make_latest=true) printf '%s\n' "$id" >"$state/latest" ;;
+          esac
+        done
+        release "$id"
+        ;;
+      *) not_found ;;
+    esac
+    ;;
+  release)
+    action=${2:-}
+    shift 2
+    tag='' target='' title='' notes='' draft=false files=() output='' pattern=''
+    while (($#)); do
+      case "$1" in
+        --repo) this_repo "$2" || die 1 "Could not resolve to a Repository with the name '$2'."; shift ;;
+        --target) target=$2; shift ;;
+        --title) title=$2; shift ;;
+        --notes-file) notes=$(cat "$2"); shift ;;
+        --draft) draft=true ;;
+        --pattern) pattern=$2; shift ;;
+        --output) output=$2; shift ;;
+        -*) die 1 "unknown flag $1" ;;
+        *) if [[ -z "$tag" ]]; then tag=$1; else files+=("$1"); fi ;;
+      esac
+      shift
+    done
+    case "$action" in
+      create)
+        [[ "$draft" == true ]] || die 1 'this stand-in only creates drafts'
+        id=$(($(ids | head -n 1 || true) + 1))
+        mkdir -p "$state/releases/$id/assets"
+        for file in "${files[@]}"; do
+          if [[ -n "${FAKE_GH_DAMAGE:-}" ]]; then
+            head -c "$(($(stat -c %s "$file") - 1))" "$file" >"$state/releases/$id/assets/${file##*/}"
+          else
+            cp "$file" "$state/releases/$id/assets/"
+          fi
+        done
+        jq -n --argjson id "$id" --arg tag "$tag" --arg target "$target" --arg title "$title" --arg body "$notes" --arg repo "$repo" \
+          '{id: $id, tag_name: $tag, draft: true, name: $title, body: $body, target_commitish: $target,
+            html_url: "https://github.com/\($repo)/releases/tag/\($tag)"}' >"$state/releases/$id/release.json"
+        printf 'https://github.com/%s/releases/tag/untagged-%s\n' "$repo" "$id"
+        ;;
+      download)
+        [[ "$output" == - && -n "$pattern" ]] || die 1 'this stand-in only downloads one asset to standard output'
+        id=$(find_release "$tag" false)
+        [[ -n "$id" ]] || die 1 'release not found'
+        [[ -f "$state/releases/$id/assets/$pattern" ]] || die 1 'no assets match the file pattern'
+        cat "$state/releases/$id/assets/$pattern"
+        ;;
+      *) die 1 "this stand-in does not do gh release $action" ;;
+    esac
+    ;;
+  *) die 1 "this stand-in does not do gh ${1:-}" ;;
+esac

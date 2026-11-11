@@ -6,7 +6,12 @@ set -euo pipefail
 # publishes, the same one again publishes nothing, a downgrade and a SHA-256
 # mismatch are refused with nothing changed, the newest 5 versions of each
 # app are kept, and a publish killed midway leaves the old manifest and its
-# APKs intact. No Docker.
+# APKs intact. The GitHub step runs against a made-up GitHub
+# (tools/fixtures/fake-gh, which stands in for gh on PATH): a release goes
+# there as a draft and is then published as the latest, the same one again
+# changes nothing, --dry-run changes nothing anywhere, every refusal comes
+# before any change, and a publish that failed on GitHub is finished by
+# running it again. No Docker, no network.
 #
 #   tools/test-publish-android-release
 
@@ -19,8 +24,9 @@ fail() {
   exit 1
 }
 target=$work/android
-# Never the owner's directory or zone from .env.
-export LIFE_OS_ANDROID_RELEASES_DIR=$target LIFE_OS_TIMEZONE=Europe/Berlin
+# Never the owner's directory or zone from .env, and no GitHub step until
+# the GitHub tests below turn it on.
+export LIFE_OS_ANDROID_RELEASES_DIR=$target LIFE_OS_TIMEZONE=Europe/Berlin LIFE_OS_ANDROID_GITHUB_REPO=off
 
 # Stands in for mv: when a rename's target matches $INTERRUPT_AT, it kills
 # the publish (SIGKILL, so no cleanup runs), as a crash or a power cut would.
@@ -35,6 +41,11 @@ fi
 exec $(command -v mv) "\$@"
 EOF
 chmod +x "$work/bin/mv"
+# gh is always the stand-in, so no test ever reaches the real GitHub.
+github=$work/github
+export FAKE_GH_DIR=$github
+printf '#!/usr/bin/env bash\nexec %q "$@"\n' "$repo_root/tools/fixtures/fake-gh" >"$work/bin/gh"
+chmod +x "$work/bin/gh"
 
 fresh() { # an empty releases directory
   rm -rf "$target"
@@ -210,5 +221,162 @@ expect 0 'published phone 0.0.9 (9)' "$work/p9"
 ! grep -q 'wear' "$work/out" || { cat "$work/out"; fail "the wear app was touched"; }
 [[ "$(manifest '[.apps.phone.versionCode, .apps.wear.versionCode] | @tsv')" == $'9\t8' ]] || fail "the manifest is not phone 9 and wear 8"
 consistent
+
+# ---- The GitHub step, against the made-up GitHub (tools/fixtures/fake-gh)
+
+c1=1111111111111111111111111111111111111111
+c2=2222222222222222222222222222222222222222
+c3=3333333333333333333333333333333333333333
+fresh_github() { # an empty made-up GitHub that has the commits c1 and c2
+  rm -rf "$github"
+  mkdir -p "$github"
+  printf '%s\n' "$c1" "$c2" >"$github/commits"
+}
+gh_release() { # <tag> <jq filter>: the filter over the release with that tag (drafts included)
+  local file
+  for file in "$github"/releases/*/release.json; do
+    if [[ ! -f "$file" ]] || ! jq -e --arg tag "$1" '.tag_name == $tag' "$file" >/dev/null; then continue; fi
+    jq -r "$2" "$file"
+    return
+  done
+  printf 'none\n'
+}
+gh_asset() { # <tag> <name>: the path of that asset of the release with that tag
+  local file
+  for file in "$github"/releases/*/release.json; do
+    [[ -f "$file" ]] && jq -e --arg tag "$1" '.tag_name == $tag' "$file" >/dev/null && { printf '%s\n' "${file%/release.json}/assets/$2"; return; }
+  done
+  printf '%s\n' "$github/none"
+}
+releases_on_github() { find "$github/releases" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l; }
+calls_mark() { touch "$github/calls"; wc -l <"$github/calls" >"$work/calls.mark"; }
+calls_since() { tail -n +"$(($(cat "$work/calls.mark") + 1))" "$github/calls"; }
+no_github_writes() { # no gh call since the mark changed anything
+  ! calls_since | grep -E '^(release create|api -X)' || fail "gh was asked to change something"
+}
+github_release() { # <name> <versionName> <versionCode> <commit> [apps…]
+  local name=$1 version=$2 code=$3 commit=$4
+  shift 4
+  rm -rf "${work:?}/$name"
+  ANDROID_FIXTURE_COMMIT=$commit tools/fixtures/android-release "$work/$name" "$version" "$code" "$@"
+}
+gh_expect() { LIFE_OS_ANDROID_GITHUB_REPO=GAMch1k/life-os-app expect "$@"; }
+
+printf '==> A release goes to GitHub too: a draft with both APKs and updates.json, then the latest\n'
+fresh
+fresh_github
+github_release g13 0.4.6 13 "$c1"
+gh_expect 0 'github: published v0.4.6-13 on GAMch1k/life-os-app as the latest release: https://github.com/GAMch1k/life-os-app/releases/tag/v0.4.6-13' "$work/g13" --notes 'Updates from GitHub'
+grep -qF 'published phone 0.4.6 (13): /android/lifeos-phone-0.4.6-13.apk' "$work/out" || fail "the server's part was not published"
+consistent
+[[ "$(releases_on_github)" == 1 ]] || fail "GitHub has $(releases_on_github) releases, want 1"
+[[ "$(gh_release v0.4.6-13 '[.draft, .target_commitish, .name] | @tsv')" == $'false\t'"$c1"$'\tLife OS for Android 0.4.6 (13)' ]] ||
+  fail "the GitHub release is not published at the build's commit: $(gh_release v0.4.6-13 .)"
+[[ "$(cat "$github/latest")" == "$(gh_release v0.4.6-13 .id)" ]] || fail "the GitHub release is not the latest"
+grep -qE '^release create v0\.4\.6-13 --repo GAMch1k/life-os-app --draft --target '"$c1"' ' "$github/calls" || fail "the release was not created as a draft first"
+grep -qF 'make_latest=true' "$github/calls" || fail "the release was not published as the latest"
+for app in phone wear; do
+  cmp -s "$work/g13/lifeos-$app-0.4.6-13.apk" "$(gh_asset v0.4.6-13 "lifeos-$app-0.4.6-13.apk")" || fail "the $app APK on GitHub is not the release's"
+  jq -e --arg app "$app" --slurpfile release "$work/g13/release.json" '
+    .formatVersion == 1 and (.apps[$app] | del(.publishedAt)) == ($release[0][$app] + {
+      url: "https://github.com/GAMch1k/life-os-app/releases/download/v0.4.6-13/lifeos-\($app)-0.4.6-13.apk",
+      notes: "Updates from GitHub", previous: []})
+  ' "$(gh_asset v0.4.6-13 updates.json)" >/dev/null || { cat "$(gh_asset v0.4.6-13 updates.json)"; fail "GitHub's updates.json does not describe the $app APK"; }
+done
+gh_release v0.4.6-13 .body | grep -qF "$(jq -r .phone.sha256 "$work/g13/release.json")  lifeos-phone-0.4.6-13.apk" || fail "the release notes do not give the phone APK's SHA-256"
+gh_release v0.4.6-13 .body | grep -qF 'Updates from GitHub' || fail "the release notes do not carry --notes"
+
+printf '==> The same release again changes nothing, here or on GitHub\n'
+snapshot
+calls_mark
+gh_expect 0 'github: unchanged, the release v0.4.6-13 on GAMch1k/life-os-app has these APKs' "$work/g13"
+grep -qF 'nothing new to publish' "$work/out" || fail "the server's part published something"
+unchanged
+no_github_writes
+
+printf '==> --dry-run changes nothing, here or on GitHub\n'
+github_release g14 0.4.7 14 "$c2"
+calls_mark
+gh_expect 0 'dry run: github: would create the release v0.4.7-14 on GAMch1k/life-os-app at '"$c2" "$work/g14" --dry-run
+grep -qF 'dry run: would publish phone 0.4.7 (14): /android/lifeos-phone-0.4.7-14.apk' "$work/out" || fail "the dry run does not say what it would publish"
+grep -qF 'dry run: nothing was changed' "$work/out" || fail "the dry run does not say it changed nothing"
+unchanged
+[[ ! -e "$target/lifeos-phone-0.4.7-14.apk" ]] || fail "the dry run copied an APK"
+no_github_writes
+[[ "$(releases_on_github)" == 1 ]] || fail "the dry run made a GitHub release"
+expect 0 'dry run: github: skipped (LIFE_OS_ANDROID_GITHUB_REPO=off)' "$work/g14" --dry-run
+
+printf '==> Without the GitHub step: --no-github, or LIFE_OS_ANDROID_GITHUB_REPO=off\n'
+calls_mark
+fresh
+gh_expect 0 'github: skipped (--no-github)' "$work/g14" --no-github
+grep -qF 'published phone 0.4.7 (14)' "$work/out" || fail "--no-github did not publish here"
+fresh
+expect 0 'github: skipped (LIFE_OS_ANDROID_GITHUB_REPO=off)' "$work/g14"
+[[ -z "$(calls_since)" ]] || fail "gh was called without the GitHub step: $(calls_since)"
+
+printf '==> What GitHub must not get is refused, before anything changes\n'
+fresh
+fresh_github
+gh_expect 0 'github: published v0.4.6-13' "$work/g13"
+snapshot
+refused_everywhere() { # <message> <arguments…>: refused with nothing changed here or on GitHub
+  calls_mark
+  gh_expect 2 "$@"
+  if [[ -e "$work/updates.before" ]]; then unchanged; else [[ ! -e "$target/updates.json" ]] || fail "a refused release was published here"; fi
+  no_github_writes
+}
+github_release g15 0.4.8 15 "$c3"
+refused_everywhere 'the build'"'"'s commit '"$c3"' is not on GitHub (GAMch1k/life-os-app): push it first' "$work/g15"
+github_release g15 0.4.8 15 "$c2-dirty"
+refused_everywhere 'a build from uncommitted changes never goes to GitHub, not even with --force' "$work/g15" --force
+github_release g15 0.4.8 15 0123abc
+refused_everywhere 'must be a full SHA (40 hexadecimal digits), not 0123abc' "$work/g15"
+github_release g15 0.4.8 15 "$c2" phone
+refused_everywhere 'a GitHub release carries both apps, and '"$work/g15"'/release.json has only phone' "$work/g15"
+github_release g15 0.4.8 15 "$c2"
+jq '.wear.versionCode = 16 | .wear.versionName = "0.4.9"' "$work/g15/release.json" >"$work/g15/release.edited"
+mv "$work/g15/release.edited" "$work/g15/release.json"
+mv "$work/g15/lifeos-wear-0.4.8-15.apk" "$work/g15/lifeos-wear-0.4.9-16.apk"
+refused_everywhere 'the phone and the watch differ in versionName, versionCode, or commit' "$work/g15"
+# Here the server has nothing, so only GitHub can refuse.
+github_release g12 0.4.5 12 "$c2"
+fresh
+rm "$work/updates.before"
+refused_everywhere 'versionCode 12 is not above the latest GitHub release, v0.4.6-13 (phone 13, wear 13); refusing a downgrade' "$work/g12"
+github_release g13b 0.4.6 13 "$c2"
+refused_everywhere 'the GitHub release v0.4.6-13 already exists with other APKs' "$work/g13b"
+printf 'false\n' >"$github/push"
+refused_everywhere 'may not publish releases on GAMch1k/life-os-app (no push access)' "$work/g14"
+rm "$github/push"
+FAKE_GH_LOGGED_OUT=1 refused_everywhere 'gh api repos/GAMch1k/life-os-app failed: gh: To get started with GitHub CLI' "$work/g14"
+LIFE_OS_ANDROID_GITHUB_REPO='not a repository' expect 2 'LIFE_OS_ANDROID_GITHUB_REPO must be a GitHub repository' "$work/g14"
+LIFE_OS_ANDROID_GITHUB_REPO=someone/else expect 2 'gh does not see the repository someone/else' "$work/g14"
+[[ ! -e "$target/updates.json" ]] || fail "a refused release was published here"
+
+printf '==> --force publishes an older version on GitHub too\n'
+gh_expect 0 'github: published v0.4.5-12' "$work/g12" --force
+[[ "$(cat "$github/latest")" == "$(gh_release v0.4.5-12 .id)" ]] || fail "--force did not make v0.4.5-12 the latest"
+
+printf '==> A publish that failed on GitHub is finished by running it again\n'
+fresh
+fresh_github
+FAKE_GH_FAIL='api -X PATCH *' gh_expect 1 'the GitHub release v0.4.6-13 is not published (see above); everything here is. Run the same command again to finish it' "$work/g13"
+consistent
+[[ "$(manifest .apps.phone.versionCode)" == 13 ]] || fail "the server's part was not published before the GitHub step"
+[[ "$(gh_release v0.4.6-13 .draft)" == true ]] || fail "the failed publish did not leave its draft"
+[[ ! -s "$github/latest" ]] || fail "a draft became the latest"
+gh_expect 0 'github: published v0.4.6-13 on GAMch1k/life-os-app as the latest release' "$work/g13"
+grep -qF 'nothing new to publish' "$work/out" || fail "the second run published something here again"
+[[ "$(releases_on_github)" == 1 && "$(gh_release v0.4.6-13 .draft)" == false ]] || fail "the second run did not replace the draft with one published release"
+grep -qE '^api -X DELETE repos/GAMch1k/life-os-app/releases/[0-9]+$' "$github/calls" || fail "the old draft was not deleted"
+
+printf '==> An upload GitHub got wrong is never published\n'
+fresh
+fresh_github
+FAKE_GH_DAMAGE=1 gh_expect 1 'does not hold the files as uploaded' "$work/g13"
+[[ "$(gh_release v0.4.6-13 .draft)" == true && ! -s "$github/latest" ]] || fail "a damaged draft was published"
+gh_expect 0 'github: published v0.4.6-13' "$work/g13"
+cmp -s "$work/g13/lifeos-phone-0.4.6-13.apk" "$(gh_asset v0.4.6-13 lifeos-phone-0.4.6-13.apk)" || fail "the run after a damaged upload did not upload the APK whole"
 
 printf '\npublish-android-release: all checks passed\n'
