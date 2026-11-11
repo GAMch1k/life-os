@@ -161,7 +161,9 @@ func New(t testing.TB, configure ...func(*banking.Options)) *Harness {
 	h.Finance = fakefinance.New(t)
 	h.Notifications = NewRecorder(t)
 	h.Activity = NewRecorder(t)
-	h.Logger = slog.New(slog.NewJSONHandler(h.logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	// Without the wall-clock time: TestSecretsNeverLeave looks for amounts
+	// such as "12.34", which a time like 13:57:12.34… also holds.
+	h.Logger = slog.New(slog.NewJSONHandler(h.logs, &slog.HandlerOptions{Level: slog.LevelDebug, ReplaceAttr: dropTime}))
 	minutes, _ := banking.ParseSyncTimes(banking.DefaultSyncTimes)
 	settings := banking.Settings{AppID: fakebank.AppID, Key: fakebank.Key(), TokenKey: TokenKey, RedirectURI: "https://lifeos.example/finance/bank/callback", APIURL: h.Bank.URL}
 	opts := banking.Options{Schedule: banking.Schedule{Minutes: minutes, Location: location}, HistoryDays: -1, HistoryRetryWait: 10 * time.Millisecond}
@@ -248,6 +250,14 @@ func (h *Harness) Local(day, clock string) time.Time {
 
 // Logs is everything the service logged.
 func (h *Harness) Logs() string { return h.logs.String() }
+
+// dropTime leaves the time out of the harness's log records.
+func dropTime(groups []string, a slog.Attr) slog.Attr {
+	if len(groups) == 0 && a.Key == slog.TimeKey {
+		return slog.Attr{}
+	}
+	return a
+}
 
 // Owner is a request context made by the owner.
 func Owner() context.Context {
