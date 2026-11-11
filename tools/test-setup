@@ -219,6 +219,7 @@ run() {
 }
 
 value() { (cd "$case_dir" && grep -E "^$1=" .env | tail -n 1 | cut -d= -f2-); }
+has_profile() { [[ ,$(value COMPOSE_PROFILES), == *",$1,"* ]]; }
 has_line() { grep -qxF -- "$1" "$case_dir/.env"; }
 output_has() { grep -qF -- "$1" "$case_dir.last"; }
 logged() { grep -qF -- "$1" "$case_dir.log"; }
@@ -268,7 +269,10 @@ ok 'currency EUR' test "$(value LIFE_OS_FINANCE_CURRENCY)" = EUR
 ok 'backup dir set' test "$(value LIFE_OS_BACKUP_DIR)" = "$case_dir/backups"
 ok 'backup dir mode 700' test "$(mode "$case_dir/backups")" = 700
 ok 'Codex home set' test "$(value LIFE_OS_CODEX_HOME_HOST_PATH)" = "$case_dir/codex-home"
-ok 'Codex home mode 700' test "$(mode "$case_dir/codex-home")" = 700
+ok 'no Codex home until AI processing is on' test ! -e "$case_dir/codex-home"
+ok 'the core alone: no module is on' has_line 'COMPOSE_PROFILES='
+ok 'the .env lists its modules' test "$(value LIFE_OS_MODULES_LISTED)" = yes
+ok 'says the core runs alone' output_has 'the core, and: none'
 ok 'runtime UIDs are mine' test "$(value LIFE_OS_CODEX_RUNTIME_UID)$(value LIFE_OS_BACKUP_RUNTIME_UID)$(value LIFE_OS_BANKING_RUNTIME_UID)" = "$uid$uid$uid"
 ok 'Docker socket group' test "$(value LIFE_OS_DOCKER_GID)" = "$sock_gid"
 ok 'ntfy example host cleared' test -z "$(value LIFE_OS_NTFY_PUBLIC_URL)"
@@ -395,7 +399,7 @@ ok 'and pulls it' logged 'docker compose pull [LIFE_OS_VERSION=v0.1.0-preview.2]
 
 # ---------- Questions ----------
 new_case interactive
-printf 'Asia/Tokyo\nusd\n\nn\n' >"$work/answers"
+printf 'Asia/Tokyo\nusd\n\nn\nn\n' >"$work/answers"
 stdin=$work/answers
 run --
 stdin=/dev/null
@@ -403,7 +407,26 @@ ok 'answers questions' test "$status" -eq 0
 ok 'timezone from the answer' test "$(value LIFE_OS_TIMEZONE)" = Asia/Tokyo
 ok 'currency upper-cased' test "$(value LIFE_OS_FINANCE_CURRENCY)" = USD
 ok 'empty answer keeps the default' test "$(value LIFE_OS_PUBLIC_URL)" = http://127.0.0.1:3000
-ok 'lists the integrations' output_has 'Later: ./setup.sh <name>'
+ok 'lists the optional modules' output_has 'server-health    memory, disks, load'
+ok 'says how to turn them on later' output_has 'Later: ./setup.sh modules lists them'
+ok 'none is on' has_line 'COMPOSE_PROFILES='
+# Some modules at once: no (AI), yes (voice: its model and language), no
+# (Google), no (bank), yes (the tunnel: its address and token, then Access
+# answers), yes (ntfy, offered once the tunnel is on: its address and the
+# phone password twice), yes (server health), then no web push.
+new_case interactive-modules
+token_answer="eyJhIjoiMDEyMzQ1Njc4OWFiY2RlZiIsInQiOiJhYmNkZWYtMDEyMyIsInMiOiJzZWNyZXRzZWNyZXRzZWNyZXQifQ=="
+printf '%s\n' Europe/Berlin eur '' y n y small de n n y https://lifeos.example.org "$token_answer" y https://ntfy.example.org \
+  correct-horse-battery correct-horse-battery y n >"$work/answers"
+stdin=$work/answers
+run --
+stdin=/dev/null
+ok 'modules at the first setup' test "$status" -eq 0
+ok 'voice, the tunnel, ntfy, and server health are on' test "$(value COMPOSE_PROFILES)" = voice,cloudflare,ntfy,server-health
+ok "with Whisper's language" test "$(value LIFE_OS_WHISPER_LANGUAGE)" = de
+ok 'says what server health reads' output_has "reads the host's Docker socket"
+ok 'says which are on' output_has 'the core, and: voice, cloudflare, ntfy, server-health'
+ok 'no secret printed' no_secret_printed
 new_case interactive-eof
 run --
 ok 'no answers and no --yes: stops' test "$status" -eq 1
@@ -492,16 +515,19 @@ run STUB_ACCESS='200 ' LIFE_OS_PUBLIC_URL=https://lifeos.example.org LIFE_OS_CLO
 ok 'cloudflare refuses without Access' test "$status" -eq 1
 ok 'says Access is missing' output_has 'not protected by Cloudflare Access'
 ok 'the tunnel stays off' bash -c "! grep -q '^COMPOSE_PROFILES=.*cloudflare' '$case_dir/.env'"
+run -- --yes modules on cloudflare
+ok 'modules on cloudflare checks Access too' test "$status" -eq 2
+ok 'and still keeps the tunnel off' bash -c "! grep -q '^COMPOSE_PROFILES=.*cloudflare' '$case_dir/.env'"
 ok 'the token is kept' test "$(value LIFE_OS_CLOUDFLARE_TUNNEL_TOKEN)" = "$token"
 ok 'the address stays' test "$(value LIFE_OS_PUBLIC_URL)" = http://127.0.0.1:3000
 run LIFE_OS_PUBLIC_URL=https://lifeos.example.org LIFE_OS_CLOUDFLARE_TUNNEL_TOKEN="$token" -- --yes cloudflare
 ok 'cloudflare' test "$status" -eq 0
 ok 'checked Access at the hostname' logged 'https://lifeos.example.org/'
-ok 'the tunnel profile' test "$(value COMPOSE_PROFILES)" = cloudflare
+ok 'the tunnel profile' has_profile cloudflare
 ok 'the https address' test "$(value LIFE_OS_PUBLIC_URL)" = https://lifeos.example.org
 ok 'the hostname' test "$(value LIFE_OS_PUBLIC_HOSTNAME)" = lifeos.example.org
 run LIFE_OS_PUBLIC_URL=https://lifeos.example.org LIFE_OS_CLOUDFLARE_TUNNEL_TOKEN="$token" -- --yes cloudflare
-ok 'cloudflare again keeps one profile entry' test "$(value COMPOSE_PROFILES)" = cloudflare
+ok 'cloudflare again keeps one profile entry' test "$(value COMPOSE_PROFILES | tr , '\n' | grep -cx cloudflare)" = 1
 
 run LIFE_OS_NTFY_PUBLIC_URL=https://lifeos.example.org LIFE_OS_SETUP_NTFY_PHONE_PASSWORD=correct-horse-battery -- --yes ntfy
 ok "ntfy refuses Life OS's own hostname" test "$status" -eq 2
@@ -514,7 +540,8 @@ ok 'phone hash in single quotes' grep -qE "^LIFE_OS_NTFY_PHONE_PASSWORD_HASH='\\
 ok 'publisher hash in single quotes' grep -qE "^LIFE_OS_NTFY_PUBLISHER_PASSWORD_HASH='\\\$2a\\\$10\\\$[./A-Za-z0-9]{53}'$" "$case_dir/.env"
 ok 'publisher token' grep -qE '^LIFE_OS_NTFY_PUBLISHER_TOKEN=tk_[a-z0-9]{29}$' "$case_dir/.env"
 ok 'ntfy URL' test "$(value LIFE_OS_NTFY_PUBLIC_URL)" = https://ntfy.example.org
-ok 'ntfy profile added' test "$(value COMPOSE_PROFILES)" = cloudflare,ntfy
+ok 'ntfy profile added' has_profile ntfy
+ok 'each integration turned its module on' test "$(value COMPOSE_PROFILES)" = google-calendar,banking,voice,cloudflare,ntfy
 ok 'ntfy channel' test "$(value LIFE_OS_NOTIFICATIONS_CHANNELS)" = ntfy
 ntfy_token=$(value LIFE_OS_NTFY_PUBLISHER_TOKEN)
 run LIFE_OS_NTFY_PUBLIC_URL=https://ntfy.example.org LIFE_OS_SETUP_NTFY_PHONE_PASSWORD=another-horse-battery -- --yes ntfy
@@ -571,9 +598,10 @@ ok 'no secret printed' no_secret_printed
 
 run -- status
 ok 'status' test "$status" -eq 0
-ok 'status: google set up' grep -qE 'Google Calendar \(google\) +set up' "$case_dir.last"
-ok 'status: not signed in to Codex' grep -qE 'AI processing \(codex\) +not signed in' "$case_dir.last"
-ok 'status: the Whisper model and language' grep -qE 'Whisper model \(whisper\) +medium, language ru$' "$case_dir.last"
+ok 'status: google set up' grep -qE 'Google Calendar \(google-calendar\) +on: set up$' "$case_dir.last"
+ok 'status: AI processing is off' grep -qE 'AI processing \(ai\) +off$' "$case_dir.last"
+ok 'status: the Whisper model and language' grep -qE 'Voice notes \(voice\) +on: Whisper medium, language ru$' "$case_dir.last"
+ok 'status: server health is off' grep -qE 'Server health \(server-health\) +off$' "$case_dir.last"
 ok 'no secret printed by status' no_secret_printed
 
 # ---------- Claude Code instead of Codex ----------
@@ -594,7 +622,7 @@ ok 'claude is the provider' test "$(value LIFE_OS_AI_PROVIDER)" = claude
 ok 'claude token' test "$(value LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN)" = sk-ant-oat01-subscription_token-123
 ok 'says how to apply it' output_has 'Apply it with: ./setup.sh up'
 run -- status
-ok 'status: claude set up' grep -qE 'AI processing \(claude\) +set up' "$case_dir.last"
+ok 'status: claude set up' grep -qE 'AI processing \(ai\) +on: Claude Code, set up' "$case_dir.last"
 printf '%s\n' 'tasks|running||0' 'processor|restarting||78' 'gateway|running||0' >"$work/ps-claude"
 run STUB_PS_FILE="$work/ps-claude" LIFE_OS_SETUP_WAIT_SECONDS=5 -- up
 ok 'up: with the token, a stopped processor is a problem' output_has 'not running: processor (not running)'
@@ -648,7 +676,7 @@ ok 'plan: the processor runs the local image' test "$(value LIFE_OS_PROCESSOR_IM
 ok 'plan: says how to apply it' output_has 'Apply it with: ./setup.sh up'
 ok 'plan: .env is mode 600' test "$(mode "$case_dir/.env")" = 600
 run -- status
-ok 'status: the plan and the model' grep -qE 'AI processing \(claude\) +set up: your Claude plan, model sonnet' "$case_dir.last"
+ok 'status: the plan and the model' grep -qE 'AI processing \(ai\) +on: Claude Code, set up: your Claude plan, model sonnet' "$case_dir.last"
 ok 'status: the local image matches the version' \
   grep -qE "Claude Code on this server +Claude Code $pinned in lifeos-processor-claude:v0.1.0-preview.1, matches v0.1.0-preview.1" "$case_dir.last"
 ok 'plan: no secret printed' no_secret_printed
@@ -664,7 +692,7 @@ ok 'API key: a current image is not built again' bash -c "! grep -q '^docker bui
 ok 'API key: and says so' output_has 'is already in this server'"'"'s processor image'
 run -- status
 ok 'status: the API key (never its value) and the model' \
-  grep -qE 'AI processing \(claude\) +set up: Anthropic API key \(billed per use\), model opus' "$case_dir.last"
+  grep -qE 'AI processing \(ai\) +on: Claude Code, set up: Anthropic API key \(billed per use\), model opus' "$case_dir.last"
 ok 'API key: no secret printed' no_secret_printed
 
 run LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN="$plan_token" LIFE_OS_ANTHROPIC_API_KEY="$api_key" -- --yes claude
@@ -786,7 +814,7 @@ sed -i 's/^LIFE_OS_PROCESSOR_IMAGE=.*/LIFE_OS_PROCESSOR_IMAGE=lifeos-processor-c
 run LIFE_OS_SETUP_WAIT_SECONDS=5 -- up --skip-checks
 ok 'with codex, up clears a leftover local image' test -z "$(value LIFE_OS_PROCESSOR_IMAGE)"
 run -- status
-ok 'status: codex' grep -qE 'AI processing \(codex\) +' "$case_dir.last"
+ok 'status: codex' grep -qE 'AI processing \(ai\) +on: Codex' "$case_dir.last"
 ok 'status: no Claude Code line' bash -c "! grep -q 'Claude Code on this server' '$case_dir.last'"
 ok 'no duplicate keys' no_duplicate_keys
 ok 'no secret printed, all along' no_secret_printed
@@ -816,6 +844,149 @@ run LIFE_OS_TIMEZONE=UTC LIFE_OS_WHISPER_LANGUAGE=en -- --yes
 ok 'a Whisper language alone sets up whisper' test "$(value LIFE_OS_WHISPER_LANGUAGE)" = en
 ok 'with the default model' test "$(value LIFE_OS_WHISPER_MODEL_PATH)" = /models/ggml-small.bin
 
+# ---------- Optional modules ----------
+# The manifests' generated table in setup.sh is current (tools/modules).
+ok "setup.sh's module table is the manifests'" tools/modules --check
+ok 'the install compose gives each optional module its profile' grep -qE '^    profiles: \[ai\]$' "$work/compose.yaml"
+new_case modules
+run LIFE_OS_TIMEZONE=UTC -- --yes
+run -- modules
+ok 'modules lists them' test "$status" -eq 0
+ok 'the core always on' output_has 'Core (always on)'
+for id in ai voice google-calendar banking cloudflare ntfy server-health; do
+  ok "lists $id, off" grep -qE "\($id\) +off: " "$case_dir.last"
+done
+run -- modules on voice server-health
+ok 'modules on' test "$status" -eq 0
+ok 'turns them on' test "$(value COMPOSE_PROFILES)" = voice,server-health
+ok "says what server health reads" output_has "reads the host's Docker socket"
+ok 'says how to apply it' output_has 'Apply it with: ./setup.sh up'
+run -- modules on voice
+ok 'on again: once in the list' test "$(value COMPOSE_PROFILES)" = voice,server-health
+run -- modules on google-calendar banking
+ok 'Google and the bank can be on before they are set up' test "$(value COMPOSE_PROFILES)" = voice,server-health,google-calendar,banking
+ok 'and say how to set them up' output_has 'Set it up: ./setup.sh google'
+run -- modules on nonsense
+ok 'refuses an unknown module' test "$status" -eq 2
+ok 'and names the modules' output_has 'the modules are ai voice google-calendar banking cloudflare ntfy server-health'
+run -- modules on voice nonsense
+ok 'refuses the whole list with an unknown one' test "$status" -eq 2
+run -- --yes modules on ai
+ok 'AI needs a sign-in first' test "$status" -eq 1
+ok 'says which' output_has './setup.sh codex (OpenAI Codex) or ./setup.sh claude'
+ok 'AI stays off' bash -c "! grep -q '^COMPOSE_PROFILES=.*ai' '$case_dir/.env'"
+run -- modules on ntfy
+ok 'ntfy needs the tunnel' test "$status" -eq 1
+run -- modules frobnicate
+ok 'an unknown modules command' test "$status" -eq 2
+run -- modules off
+ok 'off needs a module' test "$status" -eq 2
+
+# Off: the containers go (this directory's only), the data stays.
+containers="$case_dir|postgres\n$case_dir|voice\n$case_dir|whisper\n$case_dir|voice-migrate\n$case_dir|host-health\n"
+: >"$case_dir.log"
+run STUB_LIFEOS_CONTAINERS="$containers" -- modules off voice
+ok 'modules off' test "$status" -eq 0
+ok 'voice is off' test "$(value COMPOSE_PROFILES)" = server-health,google-calendar,banking
+ok "its containers are removed, the others' stay" logged 'docker compose rm --stop --force voice-migrate voice whisper'
+ok 'says its data stays' output_has 'Its data stays'
+ok 'and nothing else is removed' test "$(grep -c 'compose rm' "$case_dir.log")" -eq 1
+ok 'no volume is removed' bash -c "! grep -qE 'volume|down' '$case_dir.log'"
+run -- modules off voice
+ok 'off again is fine' test "$status" -eq 0
+ok 'and says so' output_has 'Voice notes (voice) is already off'
+run STUB_LIFEOS_CONTAINERS='/srv/other-life-os|tasks\n' -- modules off server-health
+ok "off refuses to touch another directory's Life OS" test "$status" -eq 1
+ok 'and changes nothing' has_profile server-health
+run -- modules
+ok 'modules shows what is on' grep -qE 'Server health \(server-health\) +on: ' "$case_dir.last"
+
+# Up removes what is off, before it starts the rest.
+containers="$case_dir|postgres\n$case_dir|processor\n$case_dir|mcp\n$case_dir|host-health\n$case_dir|cloudflared\n"
+: >"$case_dir.log"
+run STUB_LIFEOS_CONTAINERS="$containers" LIFE_OS_SETUP_WAIT_SECONDS=1 -- up --skip-checks
+ok 'up' test "$status" -eq 0
+ok 'removes the containers of the modules that are off' logged 'docker compose rm --stop --force mcp processor cloudflared'
+ok 'then starts the rest' test "$(grep -oE 'compose (rm|up)' "$case_dir.log" | tr '\n' ' ')" = 'compose rm compose up '
+ok 'says which modules run' output_has 'Modules: the core, and google-calendar, banking, server-health.'
+ok 'suggests the other modules' output_has './setup.sh modules    the optional modules'
+run -- status
+ok 'status: the modules' grep -qE 'Bank sync \(banking\) +on: not set up: ./setup.sh banking' "$case_dir.last"
+ok 'status: the core' grep -qE 'Core +on \(always\)' "$case_dir.last"
+
+# The tunnel and ntfy: ntfy needs the tunnel, and off it leaves the channels.
+token="eyJhIjoiMDEyMzQ1Njc4OWFiY2RlZiIsInQiOiJhYmNkZWYtMDEyMyIsInMiOiJzZWNyZXRzZWNyZXRzZWNyZXQifQ=="
+run LIFE_OS_PUBLIC_URL=https://lifeos.example.org LIFE_OS_CLOUDFLARE_TUNNEL_TOKEN="$token" -- --yes modules on cloudflare
+ok 'modules on cloudflare sets the tunnel up' test "$status" -eq 0
+ok 'after checking Access' logged 'https://lifeos.example.org/'
+run LIFE_OS_NTFY_PUBLIC_URL=https://ntfy.example.org LIFE_OS_SETUP_NTFY_PHONE_PASSWORD=correct-horse-battery -- --yes modules on ntfy
+ok 'modules on ntfy sets ntfy up' test "$status" -eq 0
+ok 'ntfy and its channel' test "$(value COMPOSE_PROFILES),$(value LIFE_OS_NOTIFICATIONS_CHANNELS)" = server-health,google-calendar,banking,cloudflare,ntfy,ntfy
+run -- modules off cloudflare
+ok 'the tunnel stays while ntfy needs it' test "$status" -eq 1
+ok 'says to turn ntfy off first' output_has './setup.sh modules off ntfy cloudflare'
+run -- modules off ntfy cloudflare
+ok 'both off, in that order' test "$status" -eq 0
+ok 'neither runs' test "$(value COMPOSE_PROFILES)" = server-health,google-calendar,banking
+ok 'notifications no longer go to ntfy' test -z "$(value LIFE_OS_NOTIFICATIONS_CHANNELS)"
+ok 'no duplicate keys' no_duplicate_keys
+ok 'no secret printed' no_secret_printed
+
+# Without questions, a first setup turns on LIFE_OS_SETUP_MODULES.
+new_case modules-yes
+run LIFE_OS_TIMEZONE=UTC LIFE_OS_SETUP_MODULES='voice, server-health' -- --yes
+ok 'first setup with modules' test "$status" -eq 0
+ok 'turns them on' test "$(value COMPOSE_PROFILES)" = voice,server-health
+new_case modules-yes-bad
+run LIFE_OS_TIMEZONE=UTC LIFE_OS_SETUP_MODULES=voice,nonsense -- --yes
+ok 'an unknown one stops the setup' test "$status" -eq 2
+
+# A clone of the repository: the .env changes, and setup.sh says what to run.
+new_case modules-checkout
+mkdir "$case_dir/.git"
+run LIFE_OS_TIMEZONE=UTC -- --yes
+: >"$case_dir.log"
+run -- modules on voice
+ok 'modules on in a clone' test "$status" -eq 0
+ok 'says how to start it' output_has 'docker compose up -d --no-build --no-deps voice-migrate voice voice-worker whisper'
+run STUB_LIFEOS_CONTAINERS="$case_dir|voice\n" -- modules off voice
+ok 'modules off in a clone' test "$status" -eq 0
+ok 'says how to remove its containers' output_has 'docker compose rm --stop --force voice-migrate voice voice-worker whisper'
+ok 'and runs no Compose command' bash -c "! grep -q 'docker compose' '$case_dir.log'"
+
+# An .env from before modules: every module ran. Update turns on those the
+# install used: the tunnel (already listed), voice and server health, AI
+# when signed in, Google and the bank when set up.
+new_case modules-migrate
+run LIFE_OS_TIMEZONE=UTC -- --yes
+run LIFE_OS_GOOGLE_CLIENT_ID=1-x.apps.googleusercontent.com LIFE_OS_GOOGLE_CLIENT_SECRET=GOCSPX-abc -- --yes google
+sed -i -e '/^LIFE_OS_MODULES_LISTED=/d' -e 's/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=cloudflare/' "$case_dir/.env"
+mkdir -m 700 "$case_dir/codex-home"
+printf '{}' >"$case_dir/codex-home/auth.json"
+run -- status
+ok 'status says the .env is from before modules' output_has 'This .env is from before modules'
+: >"$case_dir.log"
+run LIFE_OS_SETUP_WAIT_SECONDS=1 -- update --skip-checks --skip-backup
+ok 'update' test "$status" -eq 0
+ok 'keeps what the install used' test "$(value COMPOSE_PROFILES)" = cloudflare,voice,server-health,ai,google-calendar
+ok 'bank sync, never set up, stays off' bash -c "! grep -q '^COMPOSE_PROFILES=.*banking' '$case_dir/.env'"
+ok 'the .env now lists its modules' test "$(value LIFE_OS_MODULES_LISTED)" = yes
+ok 'once' test "$(grep -c '^LIFE_OS_MODULES_LISTED=' "$case_dir/.env")" -eq 1
+ok 'says what it kept' output_has 'Kept on, as this install used them: ai, voice, google-calendar, cloudflare, server-health.'
+ok 'and what is off' output_has 'Off: banking ntfy'
+ok 'before the new images' test "$(grep -oE 'compose (pull|up)' "$case_dir.log" | head -n 1)" = 'compose pull'
+run LIFE_OS_SETUP_WAIT_SECONDS=1 -- update --skip-checks --skip-backup
+ok 'only once' bash -c "! grep -q 'Kept on' '$case_dir.last'"
+ok 'no duplicate keys' no_duplicate_keys
+new_case modules-migrate-unsigned
+run LIFE_OS_TIMEZONE=UTC -- --yes
+sed -i -e '/^LIFE_OS_MODULES_LISTED=/d' -e '/^COMPOSE_PROFILES=/d' "$case_dir/.env"
+run STUB_LIFEOS_CONTAINERS="$case_dir|processor\n$case_dir|mcp\n$case_dir|voice\n" LIFE_OS_SETUP_WAIT_SECONDS=1 -- up --skip-checks
+ok 'up migrates too' test "$(value COMPOSE_PROFILES)" = voice,server-health
+ok 'AI without a sign-in, which only restarted, stays off' bash -c "! grep -q '^COMPOSE_PROFILES=.*ai' '$case_dir/.env'"
+ok 'and its containers go' logged 'docker compose rm --stop --force mcp processor'
+ok 'voice stays' bash -c "! grep -q 'rm --stop --force.*voice' '$case_dir.log'"
+
 # ---------- up, update, status ----------
 new_case running
 run LIFE_OS_TIMEZONE=UTC -- --yes
@@ -840,12 +1011,15 @@ ok 'up still ends when Life OS does not answer' test "$status" -eq 0
 ok 'and says so' output_has 'still not answering'
 ok 'a known Whisper language: no warning' bash -c "! grep -q 'LIFE_OS_WHISPER_LANGUAGE' '$case_dir.last'"
 sed -i 's/^LIFE_OS_WHISPER_LANGUAGE=.*/LIFE_OS_WHISPER_LANGUAGE=xx/' "$case_dir/.env"
+run LIFE_OS_SETUP_WAIT_SECONDS=1 -- up --skip-checks
+ok 'without voice notes, no Whisper warning' bash -c "! grep -q 'LIFE_OS_WHISPER_LANGUAGE in .env' '$case_dir.last'"
+run -- modules on voice
 : >"$case_dir.log"
 run LIFE_OS_SETUP_WAIT_SECONDS=1 -- up --skip-checks
 ok 'up warns about an unknown Whisper language' output_has "LIFE_OS_WHISPER_LANGUAGE in .env is 'xx', which whisper.cpp does not know"
 ok 'and still starts' logged 'docker compose up -d --pull missing'
 run -- status
-ok 'status flags it' grep -qE 'Whisper model \(whisper\) +small, language xx \(unknown: ./setup.sh whisper\)' "$case_dir.last"
+ok 'status flags it' grep -qE 'Voice notes \(voice\) +on: Whisper small, language xx \(unknown: ./setup.sh whisper\)' "$case_dir.last"
 sed -i 's/^LIFE_OS_WHISPER_LANGUAGE=.*/LIFE_OS_WHISPER_LANGUAGE=auto/' "$case_dir/.env"
 
 : >"$case_dir.log"
@@ -938,7 +1112,7 @@ ok 'an integration in a clone' test "$status" -eq 0
 ok 'says how to redeploy one service' output_has 'docker compose up -d --no-build --no-deps google-calendar'
 run LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-clone_token -- --yes claude
 ok 'claude in a clone' test "$status" -eq 0
-ok 'says how to recreate the processor' output_has 'docker compose up -d --no-build --no-deps processor'
+ok 'says how to recreate the processor' output_has 'docker compose up -d --no-build --no-deps mcp processor'
 ok "a clone's image gets Claude Code from source" test "$(value LIFE_OS_AI_PROVIDERS)" = codex,claude
 ok 'says to build it first' output_has 'docker compose build processor'
 ok 'and builds no local image' bash -c "! grep -qE '^docker (build|pull)' '$case_dir.log'"

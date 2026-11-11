@@ -1,0 +1,19 @@
+# Voice notes: Voice keeps the recordings, its worker has Whisper
+# (whisper.cpp, on this server) transcribe them into Inbox captures.
+id: voice
+name: Voice notes
+summary: record notes; Whisper transcribes them on this server (up to 2 GB of memory while it does)
+install: optional
+order: 20
+setup: whisper
+compose:
+  services: [voice-migrate, voice, voice-worker, whisper]
+  volumes: [voice-audio, whisper-models]
+databases: [voice]
+gateway:
+  routes: [/api/voice/]
+dashboard:
+  services: [voice]
+  checks: [voice]
+  features: [capture.voice]
+settings: [LIFE_OS_VOICE_*, LIFE_OS_WHISPER_*]

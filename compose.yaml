@@ -239,6 +239,7 @@ services:
   banking-migrate:
     build: {context: ., dockerfile: infra/migrate/Dockerfile}
     image: lifeos-migrate
+    profiles: [banking]
     command: ["-path", "/migrations/banking", "-database", "postgres://banking_user:${LIFE_OS_BANKING_DB_PASSWORD}@postgres:5432/banking_db?sslmode=disable", "up"]
     depends_on: {postgres-provision: {condition: service_completed_successfully}}
     networks: [backend]
@@ -253,6 +254,7 @@ services:
   # access and publishes nothing; the gateway routes /api/integrations/banking/.
   banking:
     build: {context: ., dockerfile: services/banking/Dockerfile}
+    profiles: [banking]
     environment:
       SERVICE_NAME: banking
       PORT: 8080
@@ -286,6 +288,7 @@ services:
   google-calendar-migrate:
     build: {context: ., dockerfile: infra/migrate/Dockerfile}
     image: lifeos-migrate
+    profiles: [google-calendar]
     command: ["-path", "/migrations/google-calendar", "-database", "postgres://google_calendar_user:${LIFE_OS_GOOGLE_CALENDAR_DB_PASSWORD}@postgres:5432/google_calendar_db?sslmode=disable", "up"]
     depends_on: {postgres-provision: {condition: service_completed_successfully}}
     networks: [backend]
@@ -299,6 +302,7 @@ services:
   # routes /api/integrations/google-calendar/.
   google-calendar:
     build: {context: ., dockerfile: services/google-calendar/Dockerfile}
+    profiles: [google-calendar]
     environment:
       SERVICE_NAME: google-calendar
       PORT: 8080
@@ -342,6 +346,14 @@ services:
       HOST_HEALTH_SERVICE_URL: http://host-health:8080
       RECIPE_IMPORT_SERVICE_URL: http://recipe-import:8080
       LIFE_OS_TIMEZONE: ${LIFE_OS_TIMEZONE:-UTC}
+      # The optional modules that run (COMPOSE_PROFILES, the one switch;
+      # docs/architecture/modules.md): the Dashboard shows, and probes, only
+      # theirs and the core's.
+      LIFE_OS_MODULES: ${COMPOSE_PROFILES:-}
+      # More threads for DNS lookups (Node's default is 4): a lookup of a
+      # stopped service's name can take 10 s where the host's resolver
+      # answers SERVFAIL, and must not hold up the rest (BUG-50).
+      UV_THREADPOOL_SIZE: "16"
     expose: ["3000"]
     depends_on:
       finance: {condition: service_started}
@@ -439,6 +451,7 @@ services:
   host-health:
     build: {context: ., dockerfile: services/host-health/Dockerfile}
     image: lifeos-host-health
+    profiles: [server-health]
     environment:
       SERVICE_NAME: host-health
       PORT: 8080
@@ -495,6 +508,7 @@ services:
   # network shared with host-health only.
   host-health-docker:
     build: {context: ., dockerfile: services/host-health/Dockerfile}
+    profiles: [server-health]
     # Server health's image (above), another entrypoint.
     image: lifeos-host-health
     entrypoint: ["/service", "docker-gateway"]
@@ -514,6 +528,7 @@ services:
 
   mcp:
     build: {context: ., dockerfile: services/mcp/Dockerfile, target: service}
+    profiles: [ai]
     environment:
       SERVICE_NAME: mcp
       PORT: 8080
@@ -538,6 +553,7 @@ services:
     restart: unless-stopped
 
   processor:
+    profiles: [ai]
     build:
       context: .
       dockerfile: services/mcp/Dockerfile
@@ -641,6 +657,7 @@ services:
 
   whisper:
     build: {context: services/voice/whisper, dockerfile: Dockerfile}
+    profiles: [voice]
     environment:
       WHISPER_MODEL_PATH: ${LIFE_OS_WHISPER_MODEL_PATH:-/models/ggml-small.bin}
       WHISPER_MODEL_URL: ${LIFE_OS_WHISPER_MODEL_URL:-https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin}
@@ -664,6 +681,7 @@ services:
   voice-migrate:
     build: {context: ., dockerfile: infra/migrate/Dockerfile}
     image: lifeos-migrate
+    profiles: [voice]
     command: ["-path", "/migrations/voice", "-database", "postgres://voice_user:${LIFE_OS_VOICE_DB_PASSWORD}@postgres:5432/voice_db?sslmode=disable", "up"]
     depends_on: {postgres-provision: {condition: service_completed_successfully}}
     networks: [backend]
@@ -671,6 +689,7 @@ services:
   voice:
     build: {context: ., dockerfile: services/voice/Dockerfile}
     image: lifeos-voice
+    profiles: [voice]
     environment:
       SERVICE_NAME: voice
       PORT: 8080
@@ -686,6 +705,7 @@ services:
     restart: unless-stopped
   voice-worker:
     build: {context: ., dockerfile: services/voice/Dockerfile}
+    profiles: [voice]
     # Voice's image (above), another entrypoint.
     image: lifeos-voice
     entrypoint: ["/worker"]
@@ -710,17 +730,21 @@ services:
     restart: unless-stopped
 
   gateway:
-    # nginx with infra/nginx/life-os.conf.template and server-names.envsh
-    # built in (infra/nginx/Dockerfile): a change to either takes a rebuild
-    # and the gateway's recreation. At every start the image renders the
-    # template into /etc/nginx/conf.d/default.conf, replacing only these
-    # LIFE_OS_* names: the hosts it serves Life OS to (server_name), which
-    # server-names.envsh keeps from repeating 127.0.0.1 and localhost.
+    # nginx with infra/nginx/life-os.conf.template, server-names.envsh,
+    # modules.envsh, and module-routes built in (infra/nginx/Dockerfile): a
+    # change to any of them takes a rebuild and the gateway's recreation. At
+    # every start the image renders the template into
+    # /etc/nginx/conf.d/default.conf, replacing only these LIFE_OS_* names:
+    # the hosts it serves Life OS to (server_name), which server-names.envsh
+    # keeps from repeating 127.0.0.1 and localhost, and, from LIFE_OS_MODULES,
+    # the routes of the modules that are off, which answer 404 at once
+    # (modules.envsh).
     build: {context: infra/nginx}
     environment:
       NGINX_ENVSUBST_FILTER: "^LIFE_OS_"
       LIFE_OS_PUBLIC_HOSTNAME: "${LIFE_OS_PUBLIC_HOSTNAME:-}"
       LIFE_OS_GATEWAY_BIND_ADDRESS: "${LIFE_OS_GATEWAY_BIND_ADDRESS:-127.0.0.1}"
+      LIFE_OS_MODULES: ${COMPOSE_PROFILES:-}
     volumes:
       # The Android apps' releases, served at /android/ behind Access
       # (docs/operations/android-releases.md). tools/publish-android-release
@@ -738,18 +762,16 @@ services:
     x-install-bundle:
       omit-volumes: [/srv/android]
     ports: ["${LIFE_OS_GATEWAY_BIND_ADDRESS:-127.0.0.1}:${LIFE_OS_GATEWAY_PORT:-3000}:80"]
+    # The core's services only: an optional module's may be off, and the
+    # gateway resolves every upstream per request anyway.
     depends_on:
       dashboard: {condition: service_started}
       finance: {condition: service_started}
       tasks: {condition: service_started}
       inbox: {condition: service_started}
       calendar: {condition: service_started}
-      mcp: {condition: service_started}
-      voice: {condition: service_started}
       activity: {condition: service_started}
       notifications: {condition: service_started}
-      banking: {condition: service_started}
-      google-calendar: {condition: service_started}
       calendar-feeds: {condition: service_started}
       food: {condition: service_started}
       recipe-import: {condition: service_started}

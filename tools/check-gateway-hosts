@@ -40,6 +40,14 @@ settings=$(
 )
 declare -A values
 IFS='|' read -r 'values[LIFE_OS_PUBLIC_HOSTNAME]' 'values[LIFE_OS_GATEWAY_BIND_ADDRESS]' <<<"$settings"
+# And, after infra/nginx/modules.envsh, the routes of the modules that are
+# off: every optional module's, as with the core alone.
+values[LIFE_OS_GATEWAY_MODULE_ROUTES]=$(
+  export LIFE_OS_MODULES='' LIFE_OS_MODULE_ROUTES_FILE=infra/nginx/module-routes
+  # shellcheck source=infra/nginx/modules.envsh
+  . infra/nginx/modules.envsh
+  printf '%s' "$LIFE_OS_GATEWAY_MODULE_ROUTES"
+)
 
 # Render as the image's envsubst does: ${NAME} for the LIFE_OS_* names only.
 config=$(<"$template")

@@ -94,6 +94,8 @@ HEADER = """\
 # building them, so this file and .env are all a server needs: no checkout.
 # Settings and their defaults are .env.example's; installing, updating, and
 # verifying the images are in the release notes and docs/operations/releases.md.
+# The core always runs; each optional module is a profile of its name, which
+# runs when COMPOSE_PROFILES in .env lists it (./setup.sh modules).
 #
 # Early preview: Life OS has no login of its own yet. Keep the gateway on
 # 127.0.0.1 (LIFE_OS_GATEWAY_BIND_ADDRESS) and reach it through a VPN or an

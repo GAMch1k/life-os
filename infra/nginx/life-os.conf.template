@@ -31,6 +31,15 @@ map "$via_cloudflare:$http_cf_access_jwt_assertion" $missing_access_token {
   "1:" 1;
 }
 
+# The routes of the optional modules that are off (docs/architecture/modules.md):
+# modules.envsh writes one entry per route, from LIFE_OS_MODULES and
+# module-routes, just before this template is rendered. Such a request is
+# answered 404 module_off at once (below): the gateway never asks Docker's
+# DNS for a service that is not there, which can take seconds (BUG-50).
+map $uri $lifeos_module_off {
+  default "";${LIFE_OS_GATEWAY_MODULE_ROUTES}
+}
+
 # Attribution (pkg/activity). Public clients may say they are the owner
 # ("user") or a development tool ("dev:<name>"), which cannot impersonate
 # anyone internal. Claims to be the Life OS AI ("agent:") or a component
@@ -71,6 +80,7 @@ server {
   set_real_ip_from 10.255.249.0/29;
   real_ip_header CF-Connecting-IP;
   if ($missing_access_token) { return 403; }
+  if ($lifeos_module_off) { rewrite ^ /.lifeos/module-off last; }
   client_max_body_size 26m;
   client_header_timeout 15s;
   client_body_timeout 30s;
@@ -291,6 +301,13 @@ server {
       default_type application/vnd.android.package-archive;
     }
     return 404;
+  }
+  # A route of a module that is off (the map above). JSON, like the
+  # services' own errors, so that the Dashboard's calls fail softly.
+  location = /.lifeos/module-off {
+    internal;
+    default_type application/json;
+    return 404 '{"error":{"code":"module_off","message":"This Life OS module is turned off"}}';
   }
   # The Dashboard shows images with plain <img> elements, never next/image, so
   # Next.js's Image Optimization API is unused; the Dashboard itself turns it

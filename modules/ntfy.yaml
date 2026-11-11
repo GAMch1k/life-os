@@ -1,0 +1,13 @@
+# A self-hosted ntfy server for push notifications to the ntfy phone app.
+# The phone reaches it only through the Cloudflare Tunnel.
+id: ntfy
+name: ntfy push
+summary: push notifications through your own ntfy server
+install: optional
+order: 60
+requires: [cloudflare]
+setup: ntfy
+compose:
+  services: [ntfy]
+  volumes: [ntfy-data]
+settings: [LIFE_OS_NTFY_*]

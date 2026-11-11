@@ -6,12 +6,13 @@ set -euo pipefail
 # of them run; flags pick parts, so CI runs them in parallel jobs
 # (docs/operations/ci.md):
 #
-#   tools/check [--gateway] [--contracts] [--sqlc] [--install-bundle] [--go] [--setup] [--dashboard]
+#   tools/check [--gateway] [--contracts] [--sqlc] [--install-bundle] [--modules] [--go] [--setup] [--dashboard]
 #
 #   --gateway         the gateway's host list (tools/check-gateway-hosts)
 #   --contracts       OpenAPI lint and generated Go and TypeScript API drift
 #   --sqlc            generated sqlc code drift
 #   --install-bundle  the release bundle's compose.yaml drift (tools/build-install-bundle)
+#   --modules         the module manifests and the files they generate (tools/modules)
 #   --go              gofmt, vet, test, and build of every Go module
 #   --setup           shellcheck and the tests of setup.sh (tools/test-setup)
 #   --dashboard       npm --prefix apps/dashboard run check
@@ -22,15 +23,15 @@ cd "$repo_root"
 declare -A run=()
 for arg in "$@"; do
   case "$arg" in
-    --gateway | --contracts | --sqlc | --install-bundle | --go | --setup | --dashboard) run[${arg#--}]=1 ;;
+    --gateway | --contracts | --sqlc | --install-bundle | --modules | --go | --setup | --dashboard) run[${arg#--}]=1 ;;
     *)
-      printf 'check: unknown argument %s; usage: tools/check [--gateway] [--contracts] [--sqlc] [--install-bundle] [--go] [--setup] [--dashboard]\n' "$arg" >&2
+      printf 'check: unknown argument %s; usage: tools/check [--gateway] [--contracts] [--sqlc] [--install-bundle] [--modules] [--go] [--setup] [--dashboard]\n' "$arg" >&2
       exit 2
       ;;
   esac
 done
 if [[ ${#run[@]} -eq 0 ]]; then
-  run=([gateway]=1 [contracts]=1 [sqlc]=1 [install-bundle]=1 [go]=1 [setup]=1 [dashboard]=1)
+  run=([gateway]=1 [contracts]=1 [sqlc]=1 [install-bundle]=1 [modules]=1 [go]=1 [setup]=1 [dashboard]=1)
 fi
 
 [[ -z "$(git status --porcelain)" ]] || {
@@ -58,7 +59,7 @@ require_command() {
 [[ -z "${run[sqlc]:-}" ]] || require_command sqlc
 [[ -z "${run[contracts]:-}${run[dashboard]:-}" ]] || require_command npm
 [[ -z "${run[setup]:-}" ]] || require_command shellcheck
-[[ -z "${run[install-bundle]:-}" ]] || require_command python3
+[[ -z "${run[install-bundle]:-}${run[modules]:-}" ]] || require_command python3
 
 if [[ -n "${run[gateway]:-}" ]]; then
   printf '==> Gateway host separation\n'
@@ -73,6 +74,11 @@ fi
 if [[ -n "${run[install-bundle]:-}" ]]; then
   printf '\n==> Release bundle compose.yaml\n'
   "$repo_root/tools/build-install-bundle" --check
+fi
+
+if [[ -n "${run[modules]:-}" ]]; then
+  printf '\n==> Module manifests\n'
+  "$repo_root/tools/modules" --check
 fi
 
 mapfile -t modules < <(find pkg templates services -name go.mod -type f -print 2>/dev/null | sort)
@@ -121,7 +127,7 @@ if [[ -n "${run[dashboard]:-}" ]]; then
   npm --prefix apps/dashboard run check
 fi
 
-if [[ ${#run[@]} -eq 7 ]]; then
+if [[ ${#run[@]} -eq 8 ]]; then
   printf '\nAll baseline checks passed.\n'
 else
   printf '\nBaseline checks passed: %s\n' "$(printf '%s\n' "${!run[@]}" | sort | tr '\n' ' ' | sed 's/ $//')"

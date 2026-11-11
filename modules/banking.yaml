@@ -1,0 +1,18 @@
+# Bank sync: read-only Enable Banking consent, synced into Finance through
+# its bank import API. Off, Finance keeps manual entries and CSV imports.
+id: banking
+name: Bank sync
+summary: your bank account in Finance, read-only, through Enable Banking
+install: optional
+order: 40
+setup: banking
+compose:
+  services: [banking-migrate, banking]
+databases: [banking]
+gateway:
+  routes: [/api/integrations/banking/]
+dashboard:
+  services: [banking]
+  checks: [banking]
+  features: [finance.bank]
+settings: [LIFE_OS_ENABLE_BANKING_*, LIFE_OS_BANKING_*]

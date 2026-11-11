@@ -1,0 +1,23 @@
+# shellcheck shell=sh
+# Sourced by the nginx image's entrypoint just before it renders
+# life-os.conf.template (after server-names.envsh). From LIFE_OS_MODULES, the
+# optional modules that run (compose.yaml passes COMPOSE_PROFILES), and
+# module-routes, every optional module's routes (tools/modules writes it from
+# modules/*.yaml), it sets LIFE_OS_GATEWAY_MODULE_ROUTES: one map entry per
+# route of a module that is off. The template's map turns those into 404
+# module_off at once, so the gateway never resolves the name of a service
+# that is not there (docs/architecture/modules.md). LIFE_OS_MODULES unset
+# (an older compose.yaml): every module is on, as before modules.
+lifeos_module_routes=${LIFE_OS_MODULE_ROUTES_FILE:-/etc/nginx/lifeos/module-routes}
+LIFE_OS_GATEWAY_MODULE_ROUTES=
+if [ -n "${LIFE_OS_MODULES+set}" ]; then
+  lifeos_modules=,$(printf '%s' "$LIFE_OS_MODULES" | tr -d ' '),
+  while read -r lifeos_module lifeos_route; do
+    case "$lifeos_module" in '' | '#'*) continue ;; esac
+    case "$lifeos_modules" in *",$lifeos_module,"*) continue ;; esac
+    LIFE_OS_GATEWAY_MODULE_ROUTES="$LIFE_OS_GATEWAY_MODULE_ROUTES
+  ~^$lifeos_route $lifeos_module;"
+  done <"$lifeos_module_routes"
+fi
+unset lifeos_module lifeos_modules lifeos_route lifeos_module_routes
+export LIFE_OS_GATEWAY_MODULE_ROUTES

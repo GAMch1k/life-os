@@ -1,0 +1,16 @@
+# Two-way sync with Google Calendar, through Calendar's integration API.
+id: google-calendar
+name: Google Calendar
+summary: two-way sync with Google Calendar (your own Google Cloud OAuth client)
+install: optional
+order: 30
+setup: google
+compose:
+  services: [google-calendar-migrate, google-calendar]
+databases: [google-calendar]
+gateway:
+  routes: [/api/integrations/google-calendar/]
+dashboard:
+  services: [googleCalendar]
+  features: [calendar.google]
+settings: [LIFE_OS_GOOGLE_*, LIFE_OS_CALENDAR_GOOGLE_SYNC_SECONDS]

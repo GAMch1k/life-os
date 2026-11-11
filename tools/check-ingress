@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Asserts the Life OS ingress model for the full Compose plan, including the
-# opt-in Cloudflare connector and ntfy:
+# Asserts the Life OS ingress model for the full Compose plan, every optional
+# module included (tools/lib/modules.bash), the Cloudflare connector and ntfy
+# too:
 #  - only the gateway publishes a host port; cloudflared (it only dials out to
 #    Cloudflare) and ntfy publish none;
 #  - edge joins cloudflared and the gateway only, so the Life OS route reaches
@@ -15,7 +16,9 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-plan=$(docker compose --profile cloudflare --profile ntfy config --format json)
+# shellcheck source=tools/lib/modules.bash
+. tools/lib/modules.bash
+plan=$(COMPOSE_PROFILES=$(IFS=,; printf '%s' "${module_ids[*]}") docker compose config --format json)
 published=$(jq -r '.services | to_entries[] | select(.value.ports != null and (.value.ports | length) > 0) | .key' <<<"$plan")
 if [ "$published" != gateway ]; then
   echo "check-ingress: only the gateway may publish ports; found: ${published//$'\n'/, }" >&2

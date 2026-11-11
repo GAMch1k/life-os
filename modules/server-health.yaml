@@ -1,0 +1,14 @@
+# Server health on the Status page: memory, load, disks, and every container
+# on the host, through a read-only gateway to the host's Docker socket.
+id: server-health
+name: Server health
+summary: memory, disks, load, and containers of this server on the Status page
+caution: It reads the host's Docker socket (through a read-only gateway), which lists every container on this server.
+install: optional
+order: 70
+compose:
+  services: [host-health, host-health-docker]
+dashboard:
+  services: [hostHealth]
+  checks: [server]
+settings: [LIFE_OS_HOST_HEALTH_*, LIFE_OS_DOCKER_*]

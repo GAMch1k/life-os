@@ -6,6 +6,8 @@
 # building them, so this file and .env are all a server needs: no checkout.
 # Settings and their defaults are .env.example's; installing, updating, and
 # verifying the images are in the release notes and docs/operations/releases.md.
+# The core always runs; each optional module is a profile of its name, which
+# runs when COMPOSE_PROFILES in .env lists it (./setup.sh modules).
 #
 # Early preview: Life OS has no login of its own yet. Keep the gateway on
 # 127.0.0.1 (LIFE_OS_GATEWAY_BIND_ADDRESS) and reach it through a VPN or an
@@ -362,6 +364,8 @@ services:
 
   banking-migrate:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-migrate:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
+    profiles:
+      - banking
     command:
       - -path
       - /migrations/banking
@@ -377,6 +381,8 @@ services:
 
   banking:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-banking:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
+    profiles:
+      - banking
     environment:
       SERVICE_NAME: banking
       PORT: 8080
@@ -415,6 +421,8 @@ services:
 
   google-calendar-migrate:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-migrate:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
+    profiles:
+      - google-calendar
     command:
       - -path
       - /migrations/google-calendar
@@ -430,6 +438,8 @@ services:
 
   google-calendar:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-google-calendar:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
+    profiles:
+      - google-calendar
     environment:
       SERVICE_NAME: google-calendar
       PORT: 8080
@@ -479,6 +489,8 @@ services:
       HOST_HEALTH_SERVICE_URL: http://host-health:8080
       RECIPE_IMPORT_SERVICE_URL: http://recipe-import:8080
       LIFE_OS_TIMEZONE: ${LIFE_OS_TIMEZONE:-UTC}
+      LIFE_OS_MODULES: ${COMPOSE_PROFILES:-}
+      UV_THREADPOOL_SIZE: '16'
     expose:
       - '3000'
     depends_on:
@@ -563,6 +575,8 @@ services:
 
   host-health:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-host-health:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
+    profiles:
+      - server-health
     environment:
       SERVICE_NAME: host-health
       PORT: 8080
@@ -614,6 +628,8 @@ services:
 
   host-health-docker:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-host-health:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
+    profiles:
+      - server-health
     entrypoint:
       - /service
       - docker-gateway
@@ -639,6 +655,8 @@ services:
 
   mcp:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-mcp:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
+    profiles:
+      - ai
     environment:
       SERVICE_NAME: mcp
       PORT: 8080
@@ -671,6 +689,8 @@ services:
 
   processor:
     image: ${LIFE_OS_PROCESSOR_IMAGE:-${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-processor:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}}
+    profiles:
+      - ai
     environment:
       MCP_SERVICE_URL: http://mcp:8080/mcp
       INBOX_SERVICE_URL: http://inbox:8080
@@ -748,6 +768,8 @@ services:
 
   whisper:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-whisper:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
+    profiles:
+      - voice
     environment:
       WHISPER_MODEL_PATH: ${LIFE_OS_WHISPER_MODEL_PATH:-/models/ggml-small.bin}
       WHISPER_MODEL_URL: ${LIFE_OS_WHISPER_MODEL_URL:-https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin}
@@ -779,6 +801,8 @@ services:
 
   voice-migrate:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-migrate:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
+    profiles:
+      - voice
     command:
       - -path
       - /migrations/voice
@@ -794,6 +818,8 @@ services:
 
   voice:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-voice:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
+    profiles:
+      - voice
     environment:
       SERVICE_NAME: voice
       PORT: 8080
@@ -815,6 +841,8 @@ services:
 
   voice-worker:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-voice:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
+    profiles:
+      - voice
     entrypoint:
       - /worker
     environment:
@@ -848,6 +876,7 @@ services:
       NGINX_ENVSUBST_FILTER: ^LIFE_OS_
       LIFE_OS_PUBLIC_HOSTNAME: ${LIFE_OS_PUBLIC_HOSTNAME:-}
       LIFE_OS_GATEWAY_BIND_ADDRESS: ${LIFE_OS_GATEWAY_BIND_ADDRESS:-127.0.0.1}
+      LIFE_OS_MODULES: ${COMPOSE_PROFILES:-}
     ports:
       - ${LIFE_OS_GATEWAY_BIND_ADDRESS:-127.0.0.1}:${LIFE_OS_GATEWAY_PORT:-3000}:80
     depends_on:
@@ -861,17 +890,9 @@ services:
         condition: service_started
       calendar:
         condition: service_started
-      mcp:
-        condition: service_started
-      voice:
-        condition: service_started
       activity:
         condition: service_started
       notifications:
-        condition: service_started
-      banking:
-        condition: service_started
-      google-calendar:
         condition: service_started
       calendar-feeds:
         condition: service_started

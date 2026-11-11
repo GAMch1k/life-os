@@ -53,13 +53,15 @@ printf 'partial\n' >"$releases/.publish-leftover"
 ln -s /etc/passwd "$releases/lifeos-phone-9.9.9-99.apk"
 mkdir -m 755 "$releases/lifeos-wear-9.9.9-98.apk"
 
-# The gateway's template, its settings, and server-names.envsh, as
-# compose.yaml gives them: the image renders the template into
-# conf.d/default.conf when nginx starts.
+# The gateway's template, its settings, server-names.envsh, and the
+# modules' routes, as compose.yaml and infra/nginx/Dockerfile give them: the
+# image renders the template into conf.d/default.conf when nginx starts.
 template=$repo_root/infra/nginx/life-os.conf.template
 gateway_args=(-e NGINX_ENTRYPOINT_QUIET_LOGS=1 -e NGINX_ENVSUBST_FILTER=^LIFE_OS_
-  -e LIFE_OS_PUBLIC_HOSTNAME=lifeos.example.com -e LIFE_OS_GATEWAY_BIND_ADDRESS=127.0.0.1
-  -v "$repo_root/infra/nginx/server-names.envsh:/docker-entrypoint.d/16-lifeos-server-names.envsh:ro")
+  -e LIFE_OS_PUBLIC_HOSTNAME=lifeos.example.com -e LIFE_OS_GATEWAY_BIND_ADDRESS=127.0.0.1 -e LIFE_OS_MODULES=
+  -v "$repo_root/infra/nginx/server-names.envsh:/docker-entrypoint.d/16-lifeos-server-names.envsh:ro"
+  -v "$repo_root/infra/nginx/modules.envsh:/docker-entrypoint.d/17-lifeos-modules.envsh:ro"
+  -v "$repo_root/infra/nginx/module-routes:/etc/nginx/lifeos/module-routes:ro")
 
 printf '==> nginx -t\n'
 docker run --rm "${gateway_args[@]}" -v "$template:/etc/nginx/templates/default.conf.template:ro" \
