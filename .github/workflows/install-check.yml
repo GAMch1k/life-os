@@ -173,9 +173,10 @@ jobs:
       # another one failed.
       #
       # Without an AI sign-in, up says that AI processing is off, and warns of
-      # nothing. One known bug: up in v0.1.0-preview.1 to .5 takes the
-      # provisioning, a one-shot job that exits once it is done, for a service
-      # that is not running.
+      # nothing. Two known bugs of up in v0.1.0-preview.1 to .5, fixed since:
+      # it took the provisioning, a one-shot job that exits once it is done,
+      # for a service that is not running; and it said that AI processing is
+      # off only when it caught the processor between two restarts.
       - name: What ./setup.sh up said
         if: ${{ !cancelled() && steps.up.outcome == 'success' }}
         env:
@@ -196,8 +197,12 @@ jobs:
           services=$(docker compose config --services)
           if grep -qx processor <<<"$services" \
             && ! grep -qx 'AI processing is off until you sign in to Codex (./setup.sh codex); notes wait in Inbox.' "$RUNNER_TEMP/setup-up.log"; then
-            echo "::error::./setup.sh up did not say that AI processing is off until the Codex sign-in."
-            exit 1
+            if [[ -n "$known" ]]; then
+              echo "::warning::A known bug of ${VERSION}'s setup.sh, fixed for the next release: up did not say that AI processing is off, as it had caught the processor between two restarts."
+            else
+              echo "::error::./setup.sh up did not say that AI processing is off until the Codex sign-in."
+              exit 1
+            fi
           fi
 
       # Every service runs (healthy where it has a health check), every
