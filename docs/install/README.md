@@ -22,7 +22,7 @@ This guide installs Life OS from its published Docker images with one setup scri
 
    ```sh
    mkdir ~/life-os && cd ~/life-os
-   version=v0.1.0-preview.4
+   version=v0.1.0-preview.5
    release=https://github.com/GAMch1k/life-os/releases/download/$version
    for file in compose.yaml setup.sh SHA256SUMS; do curl -fsSLO "$release/$file"; done
    # GitHub serves .env.example as default.env.example
