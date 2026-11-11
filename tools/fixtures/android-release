@@ -10,7 +10,8 @@ set -euo pipefail
 #   tools/fixtures/android-release <dir> <versionName> <versionCode> [phone|wear]...
 #
 # Without app names it writes both. ANDROID_FIXTURE_APK_BYTES pads each APK
-# to about that size (default 4096).
+# to about that size (default 4096); ANDROID_FIXTURE_COMMIT is the commit
+# release.json names (default 0123abc).
 
 (($# >= 3)) || { echo 'usage: tools/fixtures/android-release <dir> <versionName> <versionCode> [phone|wear]...' >&2; exit 2; }
 dir=$1 name=$2 code=$3
@@ -25,9 +26,9 @@ for app in "${apps[@]}"; do
     printf 'made-up Life OS %s APK %s (%s)\n' "$app" "$name" "$code"
     head -c "${ANDROID_FIXTURE_APK_BYTES:-4096}" /dev/urandom
   } >"$file"
-  release=$(jq -c --arg app "$app" --arg name "$name" --argjson code "$code" \
+  release=$(jq -c --arg app "$app" --arg name "$name" --argjson code "$code" --arg commit "${ANDROID_FIXTURE_COMMIT:-0123abc}" \
     --arg sha "$(sha256sum <"$file" | cut -d ' ' -f 1)" --argjson size "$(stat -c %s -- "$file")" \
     '.[$app] = {versionCode: $code, versionName: $name, minSdk: (if $app == "wear" then 30 else 34 end),
-      sha256: $sha, size: $size, builtAt: "2026-10-12T10:00:00Z", commit: "0123abc"}' <<<"$release")
+      sha256: $sha, size: $size, builtAt: "2026-10-12T10:00:00Z", commit: $commit}' <<<"$release")
 done
 jq . <<<"$release" >"$dir/release.json"
