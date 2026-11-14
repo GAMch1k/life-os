@@ -64,6 +64,12 @@ func TestAConsentTheBankDidNotCompleteIsKeptAndShownUntilAConnectionSucceeds(t *
 	if strings.Contains(h.Activity.Raw()+h.Logs(), state) || strings.Contains(h.Logs(), late) {
 		t.Fatal("a state leaked into activity or logs")
 	}
+	// The log has ids and codes: not the bank's words, nor which bank.
+	for _, text := range []string{"Deutsche Bank", "rejected the request", "Internal error"} {
+		if strings.Contains(h.Logs(), text) {
+			t.Errorf("%q reached the log", text)
+		}
+	}
 
 	// A connection that succeeds clears them; they stay in the table.
 	h.Connect()

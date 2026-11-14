@@ -1,8 +1,10 @@
 package api
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
+	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
@@ -48,6 +50,36 @@ func (p *pruner) due(now time.Time) bool {
 	}
 	p.last = now
 	return true
+}
+
+// PruneDiagnostics deletes the diagnostics older than DiagnosticsRetention.
+func (h *Handler) PruneDiagnostics(ctx context.Context) (int64, error) {
+	before := pgtype.Timestamptz{Time: h.now().Add(-DiagnosticsRetention).UTC(), Valid: true}
+	return h.store.DeleteDiagnosticEventsBefore(ctx, before)
+}
+
+// RunDiagnosticsPruner prunes at start and then every interval until ctx
+// ends, so old rows go also while no service sends any. Recording prunes as
+// well, at most once an hour.
+func (h *Handler) RunDiagnosticsPruner(ctx context.Context, every time.Duration, logger *slog.Logger) {
+	prune := func() {
+		if removed, err := h.PruneDiagnostics(ctx); err != nil && ctx.Err() == nil {
+			logger.Warn("old diagnostics not deleted", "error", err)
+		} else if removed > 0 {
+			logger.Info("old diagnostics deleted", "rows", removed)
+		}
+	}
+	prune()
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			prune()
+		}
+	}
 }
 
 func adminRead(c fiber.Ctx) error {

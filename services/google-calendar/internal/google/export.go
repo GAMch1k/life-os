@@ -426,7 +426,7 @@ func (s *Syncer) failExport(ctx context.Context, claimed store.GoogleExport, cau
 		}
 		return
 	}
-	s.logger.Warn("Life OS event not exported to Google", "event", googleuuid.UUID(claimed.EventID.Bytes), "error", message, "attempts", updated.Attempts)
+	s.logger.Warn("Life OS event not exported to Google", "event", googleuuid.UUID(claimed.EventID.Bytes), "error", logCode(cause), "attempts", updated.Attempts)
 	if !errors.Is(cause, errCalendarGone) && (claimed.Attempts == 0 || deref(claimed.LastError) != message) {
 		s.service.recordExportFailed(ctx, updated, message, now)
 	}

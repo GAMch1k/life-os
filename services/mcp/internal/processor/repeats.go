@@ -127,7 +127,9 @@ func recordedMoney(capture recentCapture, location *time.Location) []string {
 // processed capture is; one repeating recorded money goes to Human Review.
 func (r Runner) resolveRepeat(ctx context.Context, trace activity.Trace, item inboxItem, attemptID string, earlier recentCapture) error {
 	summary, review := repeatOutcome(earlier, r.location(item))
-	r.logf("capture %s repeats capture %s: %s", item.ID, earlier.ID, summary)
+	// Ids only: the summary names the earlier capture's transactions
+	// (amounts, counterparties), which stay on the attempt.
+	r.logf("capture %s repeats capture %s (Human Review: %t)", item.ID, earlier.ID, review)
 	if review {
 		return r.humanReview(ctx, item.ID, attemptID, plannedAction{Tool: "none", Arguments: map[string]any{}}, []map[string]any{}, summary)
 	}

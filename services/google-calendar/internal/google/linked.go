@@ -219,7 +219,7 @@ func (s *Syncer) applyCopy(ctx context.Context, event payload, item sources.Item
 	for _, write := range copyOccurrences(stored, item) {
 		err := s.service.calendar.UpdateOccurrence(ctx, current.ID, write.key, write.body)
 		if calendar.IsNotFound(err) || calendar.HasCode(err, 400, "") {
-			s.logger.Warn("occurrence changed in Google not applied in Life OS", "event", current.ID, "occurrence", write.key, "error", err)
+			s.logger.Warn("occurrence changed in Google not applied in Life OS", "event", current.ID, "occurrence", write.key, "error", logCode(err))
 			continue
 		}
 		if err != nil {

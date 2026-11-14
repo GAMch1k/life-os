@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/GAMch1k/life-os/pkg/database"
 	"github.com/GAMch1k/life-os/pkg/httpserver"
@@ -37,7 +38,16 @@ func run(ctx context.Context) error {
 		httpserver.WithLogger(logger),
 		httpserver.WithReadinessCheck(pool.Ping),
 	)
-	generated.RegisterHandlers(app, api.NewHandler(repository.New(pool)))
+	handler := api.NewHandler(repository.New(pool))
+	generated.RegisterHandlers(app, handler)
+	// Diagnostics older than 90 days go at start and once a day, also
+	// while no service sends any.
+	pruning, stopPruning := context.WithCancel(ctx)
+	go handler.RunDiagnosticsPruner(pruning, 24*time.Hour, app.Logger())
+	app.OnShutdown(func(context.Context) error {
+		stopPruning()
+		return nil
+	})
 	app.OnShutdown(database.ClosePool(pool))
 
 	return app.Run(fmt.Sprintf(":%d", cfg.Port))

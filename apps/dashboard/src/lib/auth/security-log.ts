@@ -277,6 +277,98 @@ export class LegacyUseLog {
   }
 }
 
+/**
+ * At most this many failed sign-in entries an address gets a day; past it,
+ * its further failures count together in one more entry, without the
+ * account or the reason.
+ */
+export const FAILED_SIGN_IN_ENTRIES_PER_ADDRESS = 20;
+
+/** The detail of that one more entry. */
+export const FAILED_SIGN_IN_OVERFLOW = "other:too_many_entries";
+
+const failedSignInChains = new WeakMap<object, Promise<void>>();
+
+/**
+ * Records a failed sign-in without flooding the log: failures are grouped
+ * per day (UTC), address, account (or none, when the name typed is none),
+ * and code (the way in and the reason), as one entry whose count and last
+ * time grow, and an address gets at most FAILED_SIGN_IN_ENTRIES_PER_ADDRESS
+ * entries a day. Writes run one after another, so two failures at once
+ * never make two entries. It never throws.
+ */
+export function recordFailedSignIn(
+  db: Queryable,
+  entry: {
+    subjectUserId?: string | null;
+    headers?: Headers;
+    detail?: string | null;
+    at?: Date;
+  },
+): Promise<void> {
+  const previous = failedSignInChains.get(db) ?? Promise.resolve();
+  const next = previous
+    .then(() => writeFailedSignIn(db, entry))
+    .catch((error) => {
+      console.error(
+        "security log: a failed sign-in was not written",
+        error instanceof Error ? error.message : error,
+      );
+    });
+  failedSignInChains.set(db, next);
+  return next;
+}
+
+async function writeFailedSignIn(
+  db: Queryable,
+  entry: {
+    subjectUserId?: string | null;
+    headers?: Headers;
+    detail?: string | null;
+    at?: Date;
+  },
+) {
+  const at = entry.at ?? new Date();
+  const day = at.toISOString().slice(0, 10);
+  const address = clientAddress(entry.headers);
+  const device = deviceLabel(entry.headers);
+  const sameDay = `kind = 'sign_in_failed'
+    AND at >= ($1::date)::timestamp AT TIME ZONE 'UTC'
+    AND at < ($1::date + 1)::timestamp AT TIME ZONE 'UTC'
+    AND address IS NOT DISTINCT FROM $2`;
+  const bump = async (subject: string | null, detail: string | null) => {
+    const { rowCount } = await db.query(
+      `UPDATE security_events SET count = count + 1, last_at = greatest(last_at, $5)
+        WHERE id = (
+          SELECT id FROM security_events
+           WHERE ${sameDay}
+             AND subject_user_id IS NOT DISTINCT FROM $3
+             AND detail IS NOT DISTINCT FROM $4
+           ORDER BY at DESC LIMIT 1)`,
+      [day, address, subject, detail, at],
+    );
+    return (rowCount ?? 0) > 0;
+  };
+  let subject = uuidOrNull(entry.subjectUserId);
+  let detail = detailCode(entry.detail);
+  if (await bump(subject, detail)) return;
+  const { rows } = await db.query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM security_events WHERE ${sameDay}`,
+    [day, address],
+  );
+  if ((rows[0]?.n ?? 0) >= FAILED_SIGN_IN_ENTRIES_PER_ADDRESS) {
+    subject = null;
+    detail = FAILED_SIGN_IN_OVERFLOW;
+    if (await bump(subject, detail)) return;
+  }
+  await db.query(
+    `INSERT INTO security_events
+       (at, last_at, kind, outcome, subject_user_id, address, device, detail, count)
+     VALUES ($1, $1, 'sign_in_failed', 'failed', $2, $3, $4, $5, 1)`,
+    [at, subject, address, device, detail],
+  );
+}
+
 export type SecurityEvent = {
   id: string;
   at: string;
@@ -295,6 +387,13 @@ export type SecurityEvent = {
 export type SecurityLogQuery = {
   /** Only the entries that concern this user (as actor or subject). */
   userId?: string;
+  /**
+   * Who reads, in their own log (Settings → Security log): an entry
+   * someone else did to their account (an admin's action) shows no address
+   * or device; those stay in the admins' view. Entries they did, and those
+   * of someone unknown (failed sign-ins, legacy access), show them.
+   */
+  viewer?: string;
   kind?: SecurityEventKind;
   /** At or after (inclusive). */
   from?: Date;
@@ -309,17 +408,20 @@ export type SecurityLogPage = {
   nextCursor: string | null;
 };
 
-function encodeCursor(at: Date, id: string) {
-  return Buffer.from(`${at.toISOString()}|${id}`).toString("base64url");
+/**
+ * A page's position: the last entry's time in microseconds since 1970 (as
+ * PostgreSQL keeps it; a JavaScript Date has milliseconds only) and its id.
+ */
+function encodeCursor(atMicros: string, id: string) {
+  return Buffer.from(`${atMicros}|${id}`).toString("base64url");
 }
 
 function decodeCursor(cursor: string | undefined) {
   if (!cursor) return null;
   const [at, id] = Buffer.from(cursor, "base64url").toString("utf8").split("|");
-  const date = new Date(at ?? "");
-  return Number.isNaN(date.getTime()) || !UUID.test(id ?? "")
-    ? null
-    : { at: date, id };
+  return /^\d{1,17}$/.test(at ?? "") && UUID.test(id ?? "")
+    ? { atMicros: at, id }
+    : null;
 }
 
 /** A page of entries, newest first, with the accounts' names. */
@@ -329,9 +431,11 @@ export async function listSecurityEvents(
 ): Promise<SecurityLogPage> {
   const limit = Math.min(Math.max(query.limit ?? 50, 1), 200);
   const cursor = decodeCursor(query.cursor);
+  const viewer = uuidOrNull(query.viewer);
   const { rows } = await db.query<{
     id: string;
     at: Date;
+    at_micros: string;
     last_at: Date;
     kind: string;
     outcome: SecurityOutcome;
@@ -345,7 +449,8 @@ export async function listSecurityEvents(
     detail: string | null;
     count: number;
   }>(
-    `SELECT e.id, e.at, e.last_at, e.kind, e.outcome, e.via, e.address, e.device, e.detail, e.count,
+    `SELECT e.id, e.at, (extract(epoch FROM e.at) * 1000000)::bigint::text AS at_micros,
+            e.last_at, e.kind, e.outcome, e.via, e.address, e.device, e.detail, e.count,
             e.actor_user_id, coalesce(a."displayUsername", a.username) AS actor_name,
             e.subject_user_id, coalesce(s."displayUsername", s.username) AS subject_name
        FROM security_events e
@@ -355,7 +460,8 @@ export async function listSecurityEvents(
         AND ($2::text IS NULL OR e.kind = $2)
         AND ($3::timestamptz IS NULL OR e.at >= $3)
         AND ($4::timestamptz IS NULL OR e.at < $4)
-        AND ($5::timestamptz IS NULL OR (e.at, e.id) < ($5, $6::uuid))
+        AND ($5::bigint IS NULL
+             OR (e.at, e.id) < (to_timestamp(0) + $5::bigint * interval '1 microsecond', $6::uuid))
       ORDER BY e.at DESC, e.id DESC
       LIMIT $7`,
     [
@@ -363,33 +469,40 @@ export async function listSecurityEvents(
       query.kind ?? null,
       query.from ?? null,
       query.to ?? null,
-      cursor?.at ?? null,
+      cursor?.atMicros ?? null,
       cursor?.id ?? null,
       limit + 1,
     ],
   );
-  const items = rows.slice(0, limit).map((row) => ({
-    id: row.id,
-    at: row.at.toISOString(),
-    lastAt: row.last_at.toISOString(),
-    kind: row.kind,
-    outcome: row.outcome,
-    actor: row.actor_user_id
-      ? { id: row.actor_user_id, name: row.actor_name }
-      : null,
-    subject: row.subject_user_id
-      ? { id: row.subject_user_id, name: row.subject_name }
-      : null,
-    via: row.via,
-    address: row.address,
-    device: row.device,
-    detail: row.detail,
-    count: row.count,
-  }));
+  const items = rows.slice(0, limit).map((row) => {
+    // Someone else acted on the reader's account: where from is theirs.
+    const hidden =
+      viewer !== null &&
+      row.actor_user_id !== null &&
+      row.actor_user_id !== viewer;
+    return {
+      id: row.id,
+      at: row.at.toISOString(),
+      lastAt: row.last_at.toISOString(),
+      kind: row.kind,
+      outcome: row.outcome,
+      actor: row.actor_user_id
+        ? { id: row.actor_user_id, name: row.actor_name }
+        : null,
+      subject: row.subject_user_id
+        ? { id: row.subject_user_id, name: row.subject_name }
+        : null,
+      via: row.via,
+      address: hidden ? null : row.address,
+      device: hidden ? null : row.device,
+      detail: row.detail,
+      count: row.count,
+    };
+  });
   const last = rows.length > limit ? rows[limit - 1] : null;
   return {
     items,
-    nextCursor: last ? encodeCursor(last.at, last.id) : null,
+    nextCursor: last ? encodeCursor(last.at_micros, last.id) : null,
   };
 }
 

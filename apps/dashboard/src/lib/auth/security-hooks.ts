@@ -7,6 +7,7 @@ import {
 import type { Pool } from "pg";
 
 import {
+  recordFailedSignIn,
   recordSecurityEvent,
   type SecurityEventKind,
   type SecurityOutcome,
@@ -213,10 +214,10 @@ export async function afterSecurityHook(ctx: HookContext, pool: Pool) {
     }
     case "/sign-in/username": {
       if (failed) {
-        await record("sign_in_failed", {
-          subject: await userByUsername(pool, bodyOf(ctx).username),
+        await recordFailedSignIn(pool, {
+          subjectUserId: await userByUsername(pool, bodyOf(ctx).username),
+          headers,
           detail: `password:${failed.code}`,
-          outcome: "failed",
         });
       } else if (signedIn) {
         await record("sign_in", {
@@ -252,10 +253,10 @@ export async function afterSecurityHook(ctx: HookContext, pool: Pool) {
         return;
       }
       if (failed) {
-        await record("sign_in_failed", {
-          subject: await pendingTwoFactorUser(ctx),
+        await recordFailedSignIn(pool, {
+          subjectUserId: await pendingTwoFactorUser(ctx),
+          headers,
           detail: `${method}:${failed.code}`,
-          outcome: "failed",
         });
       } else if (signedIn) {
         await record("sign_in", {
@@ -268,9 +269,9 @@ export async function afterSecurityHook(ctx: HookContext, pool: Pool) {
     }
     case "/passkey/verify-authentication": {
       if (failed) {
-        await record("sign_in_failed", {
+        await recordFailedSignIn(pool, {
+          headers,
           detail: `passkey:${failed.code}`,
-          outcome: "failed",
         });
       } else if (signedIn) {
         await record("sign_in", {

@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http/httptest"
 	"os"
 	"slices"
@@ -225,6 +226,50 @@ func TestDiagnosticsArePrunedAfter90Days(t *testing.T) {
 	if len(fake.prunedBefore) != 1 {
 		t.Fatalf("pruned %d times within the hour", len(fake.prunedBefore))
 	}
+}
+
+// Old diagnostics also go on a timer, while no service sends any.
+func TestDiagnosticsArePrunedDailyWithoutNewOnes(t *testing.T) {
+	fake := &fakeStore{events: map[[16]byte]store.ActivityEvent{}}
+	signal := &pruneSignal{fakeStore: fake, pruned: make(chan struct{}, 1)}
+	handler := NewHandler(signal)
+	now := time.Date(2026, 11, 14, 12, 0, 0, 0, time.UTC)
+	handler.now = func() time.Time { return now }
+	old := strings.NewReplacer("2026-11-14T12:00:00Z", "2026-08-01T12:00:00Z", "2026-11-14T12:00:30Z", "2026-08-01T12:00:30Z").Replace(validDiagnostics)
+	_ = fake.RecordDiagnosticEvent(context.Background(), mustParams(t, old))
+	_ = fake.RecordDiagnosticEvent(context.Background(), mustParams(t, validDiagnostics))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		handler.RunDiagnosticsPruner(ctx, time.Hour, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		close(done)
+	}()
+	select {
+	case <-signal.pruned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the pruner did not run at start")
+	}
+	cancel()
+	<-done
+	if !fake.prunedBefore[0].Equal(now.Add(-DiagnosticsRetention)) || len(fake.diagnostics) != 1 {
+		t.Fatalf("pruned before %v, kept %d", fake.prunedBefore, len(fake.diagnostics))
+	}
+}
+
+// pruneSignal says when the pruner ran, for a test in another goroutine.
+type pruneSignal struct {
+	*fakeStore
+	pruned chan struct{}
+}
+
+func (p *pruneSignal) DeleteDiagnosticEventsBefore(ctx context.Context, before pgtype.Timestamptz) (int64, error) {
+	removed, err := p.fakeStore.DeleteDiagnosticEventsBefore(ctx, before)
+	select {
+	case p.pruned <- struct{}{}:
+	default:
+	}
+	return removed, err
 }
 
 func mustParams(t *testing.T, body string) store.RecordDiagnosticEventParams {

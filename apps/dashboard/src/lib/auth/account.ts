@@ -160,6 +160,7 @@ export async function accountHandler(
       200,
       await listSecurityEvents(rt.pool, {
         userId: principal.userId,
+        viewer: principal.userId,
         kind: isSecurityKind(kind) ? kind : undefined,
         cursor: params.get("cursor") ?? undefined,
         limit: Number(params.get("limit")) || undefined,

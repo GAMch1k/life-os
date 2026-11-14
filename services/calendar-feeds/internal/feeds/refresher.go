@@ -187,7 +187,7 @@ func (r *Refresher) complete(ctx context.Context, feed store.Feed, now time.Time
 		case !feed.SourceID.Valid:
 			found.kind, found.err = OutcomeFailed, &ics.Error{Message: "Calendar has not registered the feed yet: " + calendarMessage(err)}
 		default:
-			r.logger.Warn("calendar feed source not registered again; retried later", "feed", uuidString(feed.ID), "error", calendarMessage(err))
+			r.logger.Warn("calendar feed source not registered again; retried later", "feed", uuidString(feed.ID), "error", calendarCode(err))
 		}
 	}
 
@@ -424,6 +424,26 @@ func errorMessage(err error) string {
 
 // calendarMessage says why a call to Calendar failed. Calendar never sees a
 // feed's URL, so its answer cannot carry one.
+// calendarCode is what the log says Calendar answered: its status and code,
+// never its message, which can quote an event
+// (docs/architecture/multi-user.md#logs).
+func calendarCode(err error) string {
+	var answer *calendar.StatusError
+	switch {
+	case errors.As(err, &answer):
+		code := answer.Code
+		if code == "" || len(code) > 64 || strings.Trim(code, "abcdefghijklmnopqrstuvwxyz0123456789_") != "" {
+			code = "other"
+		}
+		return fmt.Sprintf("calendar_http_%d_%s", answer.Status, code)
+	case errors.Is(err, calendar.ErrNotConfigured):
+		return "calendar_not_configured"
+	case errors.Is(err, errUnknownSources):
+		return "unknown_sources"
+	}
+	return "calendar_unreachable"
+}
+
 func calendarMessage(err error) string {
 	var answer *calendar.StatusError
 	switch {

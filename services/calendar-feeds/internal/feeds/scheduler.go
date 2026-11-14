@@ -73,7 +73,7 @@ func (s *Scheduler) Run(ctx context.Context) {
 func (s *Scheduler) RunDue(ctx context.Context) {
 	if err := s.refresher.Mirror(ctx); err != nil {
 		if !s.calendarDown && ctx.Err() == nil {
-			s.logger.Warn("calendar feed sources not mirrored from Calendar; retried every minute", "error", calendarMessage(err))
+			s.logger.Warn("calendar feed sources not mirrored from Calendar; retried every minute", "error", calendarCode(err))
 		}
 		s.calendarDown = true
 	} else if s.calendarDown {

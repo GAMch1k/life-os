@@ -391,7 +391,7 @@ func (s *Service) Connect(ctx context.Context, code, state string, psu *enableba
 		Outcome: activity.Succeeded, Summary: summary,
 		Data: map[string]any{"institution": row.Institution, "accounts": len(accounts), "consentValidUntil": optionalTime(row.ConsentValidUntil), "reconnected": renewed},
 	})
-	s.logger.Info("bank connected", "connection", uuidString(row.ID), "institution", row.Institution, "accounts", len(accounts), "reconnected", renewed)
+	s.logger.Info("bank connected", "connection", uuidString(row.ID), "accounts", len(accounts), "reconnected", renewed)
 
 	// The first sync, while the owner waits; a failure leaves the
 	// connection for the scheduler to retry.

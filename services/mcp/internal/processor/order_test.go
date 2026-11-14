@@ -107,7 +107,8 @@ func TestACaptureWaitsForAnEarlierCaptureStillOnItsWay(t *testing.T) {
 	if len(proposals) != 1 || !proposals[0].waiting || proposals[0].Reason != waitingReason {
 		t.Fatalf("proposals = %+v", proposals)
 	}
-	if len(*logs) != 1 || !strings.Contains((*logs)[0], sixItem+" waits for 1 earlier capture(s) still on their way") || !strings.Contains((*logs)[0], "“Coffee with Lukas tomorrow at 5 pm.” (raw, retry at 17:10:20)") {
+	// By id and state: what the capture says never reaches the log.
+	if len(*logs) != 1 || !strings.Contains((*logs)[0], sixItem+" waits for 1 earlier capture(s) still on their way: "+coffeeCapture+" (raw)") || strings.Contains((*logs)[0], "Coffee") {
 		t.Fatalf("logs = %q", *logs)
 	}
 
@@ -155,7 +156,7 @@ func TestACaptureIsPlannedAnywayAfterItsWait(t *testing.T) {
 	if processed["status"] != "processed" || summary == nil || !strings.HasPrefix(*summary, "planned without waiting longer: 1 earlier capture still on the way after 2m5s: 17:09:50 “Coffee with Lukas tomorrow at 5 pm.” (raw, retry at 17:10:20)") {
 		t.Fatalf("record = %v (%v)", processed, summary)
 	}
-	if len(*logs) != 2 || !strings.HasPrefix((*logs)[1], "capture "+sixItem+" planned without waiting longer") {
+	if len(*logs) != 2 || !strings.HasPrefix((*logs)[1], "capture "+sixItem+" planned without waiting longer") || strings.Contains(strings.Join(*logs, "\n"), "Coffee") {
 		t.Fatalf("logs = %q", *logs)
 	}
 }

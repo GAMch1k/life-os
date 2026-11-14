@@ -21,7 +21,11 @@ export default async function SecurityLogPage({
   const params = await searchParams;
   const cursor = typeof params.cursor === "string" ? params.cursor : undefined;
   const [page, timeZone] = await Promise.all([
-    listSecurityEvents(rt.pool, { userId: principal.userId, cursor }),
+    listSecurityEvents(rt.pool, {
+      userId: principal.userId,
+      viewer: principal.userId,
+      cursor,
+    }),
     userTimeZone(),
   ]);
   return (

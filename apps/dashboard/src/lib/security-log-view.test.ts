@@ -31,6 +31,14 @@ test("details read as words", () => {
     event("sign_in_failed", "password:invalid_username_or_password"),
     "with a password: wrong username or password",
   );
+  assert.equal(
+    event("sign_in_failed", "totp:invalid_code", 3),
+    "with an authenticator code: wrong code · 3 times",
+  );
+  assert.equal(
+    event("sign_in_failed", "other:too_many_entries", 40),
+    "more failed sign-ins from this address, counted together · 40 times",
+  );
   assert.equal(event("role_changed", "admin"), "to admin");
   assert.equal(event("legacy_access_changed", "off"), "turned off");
   assert.equal(
