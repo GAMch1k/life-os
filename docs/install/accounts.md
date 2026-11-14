@@ -39,7 +39,7 @@ The person icon in the header opens **Settings → Security** (`/settings/securi
 | **Authenticator app** | Turn on two-factor sign-in with an authenticator app (scan the QR code, or type the key), get ten recovery codes, make new ones, or turn it off. Each needs your password. |
 | **Passkeys** | Add a passkey (your phone's or computer's screen lock), or remove one. Passkeys work at the public address (`LIFE_OS_PUBLIC_URL`) only. |
 | **Password** | Change it; every other session is signed out. |
-| **Where you are signed in** | Every session, with its browser and last use: sign one out, or every one but this. |
+| **Where you are signed in** | Every session, with its browser and last use: sign one out, every one but this, or [everything at once](#sign-out-everywhere). |
 | **Legacy access** | The owner only: turn [legacy access](#legacy-access) off. Turning it on is done on the server. |
 
 Adding a passkey needs a sign-in from the last 12 hours; Life OS asks you to sign in again otherwise.
@@ -48,15 +48,42 @@ Adding a passkey needs a sign-in from the last 12 hours; Life OS asks you to sig
 
 An authenticator app (Google Authenticator, Aegis, 1Password, and others) shows a new 6-digit code every 30 seconds. Turn it on, scan the QR code, enter the code the app shows, and keep the ten **recovery codes** somewhere safe, such as a password manager: each signs you in once if your phone is not at hand. A passkey counts as two-factor too.
 
+## Settings → Devices
+
+**Settings → Devices** (`/settings/devices`) pairs the Life OS phone app with your account, and lists the phones and watches that are: each with its name, when it was paired, and its last use (to a minute).
+
+- **Pair a phone**: **Show a pairing code** shows a QR code to scan in the app, and the code to type there if the camera does not work. It works once, for 5 minutes. A phone without a second screen pairs from the app instead: the app opens Life OS's sign-in in a browser tab, you sign in, confirm **Pair**, and the app gets its key.
+- The phone gets a **device key** of its own: no password is stored on it, and signing the phone out ends only that phone. The phone makes one key for its watch, listed under it.
+- **Sign out** next to a device revokes its key at once, and stops its push notifications. Signing a phone out signs its watch out too. Pair it again to use it.
+- A paired device does what the app does (Today, captures, voice notes, notifications, updates) as you. It cannot manage your account, devices, or tokens, and it never opens the server's admin parts: on the phone those are the web app's, with its own sign-in.
+
+The app's side is in [Phone and watch apps](phone-apps.md); the API it uses is in [Devices and tokens](../api/devices.md).
+
+## API tokens
+
+**Settings → API tokens** (`/settings/tokens`) makes tokens for your own scripts and development tools (`Authorization: Bearer lo_tok_…`).
+
+- A token has a **name**, **access per module** (none, read, or read and write: Tasks, Calendar, Inbox, Food, Finance, Voice notes, Notifications, the Event Log), and an **expiry**: 90 days unless you pick another day, at most a year. It is shown once.
+- **A development tool** (a switch): its changes show in the Event Log as the tool, `dev:<name>`, not as you. Development tools and agents use such a token rather than `X-Life-OS-Actor` once legacy access is off.
+- A token reaches only the modules it names (`403 insufficient_scope` elsewhere), never the server's admin parts, and cannot manage your account, devices, or tokens. It can sign itself out (`POST /api/auth/devices/sign-out`). Expired tokens are listed as such for 30 days, then deleted.
+
+## Connected apps
+
+**Settings → Connected apps** (`/settings/connected-apps`) lists the AI assistants and tools you let use Life OS through MCP, with what they may do (read only, or read and change) and since when. **Disconnect** stops one at once. To connect one, add Life OS to it as a remote MCP server with the address shown there (`https://<your Life OS>/api/mcp/mcp`): the app opens Life OS, you sign in, and you choose whether it may only read, or also change things ([MCP → Signing in with OAuth](../services/mcp.md#signing-in-with-oauth)).
+
+## Sign out everywhere
+
+**Settings → Security → Sign out everywhere** ends, at once and together, every session of your account (this browser's too), every paired phone and watch, every API token, and every connected app. Use it when a device was lost or something looks wrong; then sign in again, pair your devices again, and make new tokens. An admin signing your account out, or disabling it, does the same.
+
 ## Settings → Security log
 
-**Settings → Security log** (`/settings/security-log`) lists what concerns your account, newest first: every sign-in (with a password, an authenticator code, a recovery code, or a passkey), every failed one, sign-outs, password and two-factor and passkey changes, and what an admin or the server did to the account. Each entry says when, what, who did it, and from which kind of device and address; an entry an admin did to your account does not say where the admin was. Failed sign-ins are one entry a day for each address, account, and reason, with how many times. It never holds anything you wrote: no titles, amounts, or messages, and not the username someone typed. Entries are kept for a year. A failed sign-in you do not recognise means someone tried your password: change it, and turn on two-factor sign-in if it is off.
+**Settings → Security log** (`/settings/security-log`) lists what concerns your account, newest first: every sign-in (with a password, an authenticator code, a recovery code, or a passkey), every failed one, sign-outs, password and two-factor and passkey changes, devices paired and signed out, API tokens made and revoked, apps connected and disconnected, signing out everywhere, and what an admin or the server did to the account. Each entry says when, what, who did it, and from which kind of device and address; an entry an admin did to your account does not say where the admin was. Failed sign-ins are one entry a day for each address, account, and reason, with how many times. It never holds anything you wrote: no titles, amounts, or messages, and not the username someone typed. Entries are kept for a year. A failed sign-in you do not recognise means someone tried your password: change it, and turn on two-factor sign-in if it is off.
 
 The owner's log also has legacy access's use: one entry a day for each address and kind of device that used Life OS without signing in, with the number of requests.
 
 ## The server's admin
 
-The owner, and later the admins the owner names, look after the server; they never see anyone's content. With an account signed in, the admin's parts need two-factor sign-in on it:
+The owner, and later the admins the owner names, look after the server; they never see anyone's content. With an account signed in, the admin's parts need two-factor sign-in on it, and a sign-in with it in this browser: an authenticator code, a recovery code, or a passkey (or turning one of them on in this session). A browser that signed in with the password alone is asked to sign in again with the second factor. A paired phone's key and an API token never open them, the owner's included:
 
 - **Status** shows every check and its details (the server's memory and disks, the containers, the backups, the AI plan's usage) and **Back up now**. Anyone else, and an admin without two-factor sign-in, sees one line for the modules they use: "Everything works." or "Calendar has a problem.".
 - **All accounts' log** (`/admin/security-log`): the security log of every account, filtered by account, kind, and days. It also has the commands run on the server (`setup-code`, `recover-owner`, `legacy-access`, `sign-out-all`, a rotated key) and every admin action, refused ones too.
@@ -71,8 +98,8 @@ Before accounts, whoever reached Life OS was its owner. **Legacy access** keeps 
 - It is **on** after updating an install from before accounts (`./setup.sh update` writes `LIFE_OS_LEGACY_ACCESS=on` into `.env`), so that nothing changes for you, your browsers, and the phone and watch apps, which send no Life OS sign-in yet.
 - It is **off** on a new install.
 - The pages that are new with accounts (Settings, and the admin pages) need a real sign-in all the same. Status's details and Back up now, which are older, stay open to legacy access as the owner.
-- The [security log](#settings--security-log) counts its use: one entry a day for each address and kind of device, with the number of requests. Once the apps can be paired with an account (a later version), the Dashboard will remind you once a day while legacy access is on; until then it does not, since turning it off would cut the apps off.
-- Turn it off in **Settings → Security** once the phone and watch apps are paired with your account (they learn to pair in a later version). From then on, everything needs a sign-in. On the server: `./setup.sh legacy-access off` (or no argument to see it).
+- The [security log](#settings--security-log) counts its use: one entry a day for each address and kind of device, with the number of requests. While it is on and an account exists, the Dashboard reminds you once a day.
+- Turn it off in **Settings → Security** once the phone and watch apps are [paired with your account](#settings--devices) (from the app version that can pair). From then on, everything needs a sign-in: a browser's, a paired device's key, an API token, or a connected app's. On the server: `./setup.sh legacy-access off` (or no argument to see it).
 - Turning it **on** is done on the server only: `./setup.sh legacy-access on`. It turns sign-in off for the whole server, so a browser cannot do it, not even the owner's (an old or stolen session must not be able to). It is refused while more than one account exists.
 
 `LIFE_OS_LEGACY_ACCESS` in `.env` counts only once, the first time the Dashboard uses its database; afterwards the switch in Settings (off) and the command (on or off) decide.
@@ -84,7 +111,7 @@ Before accounts, whoever reached Life OS was its owner. **Legacy access** keeps 
 
 ## Sign everyone out
 
-For an emergency (a stolen laptop, a leaked database copy, anything that looks like someone else got in): `./setup.sh sign-out-all` signs out every session of every account, yours too, at once; everyone signs in again with their password and two-factor. It then says whether [legacy access](#legacy-access) is on: while it is, anyone who reaches Life OS still acts as the owner without signing in, so it offers to turn it off too (with `--yes` it only says so; `./setup.sh legacy-access off` turns it off). `--keep-devices` will keep paired devices signed in once devices exist. With Cloudflare Access in front, end its sessions too: [Cloudflare → Sign everyone out](../operations/cloudflare.md#sign-everyone-out). If the keys in `.env` may have leaked as well, rotate them ([Keys](#keys)).
+For an emergency (a stolen laptop, a leaked database copy, anything that looks like someone else got in): `./setup.sh sign-out-all` signs out every session, paired phone and watch, API token, and connected app of every account, yours too, at once, in one step; everyone signs in again with their password and two-factor, and pairs their devices again. It then says whether [legacy access](#legacy-access) is on: while it is, anyone who reaches Life OS still acts as the owner without signing in, so it offers to turn it off too (with `--yes` it only says so; `./setup.sh legacy-access off` turns it off). `--keep-devices` keeps the paired phones and watches signed in (everything else still goes). With Cloudflare Access in front, end its sessions too: [Cloudflare → Sign everyone out](../operations/cloudflare.md#sign-everyone-out). If the keys in `.env` may have leaked as well, rotate them ([Keys](#keys)).
 
 ## Keys
 

@@ -20,6 +20,8 @@ Today, the apps need Life OS behind [Cloudflare Tunnel and Access](access.md#clo
 
 The watch takes the server and the token from the phone. To revoke a phone, delete its service token in Cloudflare.
 
+**Pairing with your account.** Life OS can pair a phone with your account (**Settings → Devices**, a QR code, or signing in from the app), giving it and its watch keys of their own; Cloudflare Access's service token, where Access is in front, stays as well. App versions that pair are on their way; until yours does, keep [legacy access](accounts.md#legacy-access) on. Once your phone and watch are paired, turn legacy access off. How it works: [Accounts → Settings → Devices](accounts.md#settings--devices); for app developers: [Devices and tokens](../api/devices.md).
+
 ## Notifications
 
 To get Life OS's notifications as pushes from the app: [Notifications → The Life OS phone app](notifications.md#the-life-os-phone-app).

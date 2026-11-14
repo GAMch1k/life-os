@@ -152,7 +152,7 @@ Content-Type: application/json
 
 ### `GET /api/auth/devices/me`
 
-With a device key: who it is. For a settings screen ("Paired as anna on lifeos.example.com") and to check a key without touching any data.
+With a device key (or a personal token, `"kind": "token"`): who it is. For a settings screen ("Paired as anna on lifeos.example.com") and to check a key without touching any data. A token's answer also has `expiresAt`.
 
 ```json
 {

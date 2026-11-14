@@ -33,6 +33,19 @@ Each MCP call from the processor carries the Inbox item's `X-Correlation-ID`, th
 
 For every allowed mutation, the processor derives a stable per-action key from the Inbox operation, action index, tool, and canonical arguments. MCP forwards it to Tasks, Calendar, or Finance as `Idempotency-Key`. Those services persist the key and a payload hash with the created row: repeating the same key and payload returns the original row, while reusing a key with materially different content returns `409`. Manual callers may omit the header and retain the usual create behavior. Idempotency metadata is retained with the owned record for its lifetime; it is not in-memory state. Food writes are keyed without the action index (see [Food](#food)).
 
+## Signing in with OAuth
+
+An MCP client outside Life OS (Claude Code, Claude Desktop, Cursor, an MCP Inspector, your own script) signs in with OAuth 2.1 (P21-06; [Multi-user design → Devices, tokens, MCP](../architecture/multi-user.md#devices-tokens-mcp)). Add Life OS to it as a remote MCP server at `https://<your Life OS>/api/mcp/mcp`; **Settings → Connected apps** shows the address.
+
+1. Without a token, `/api/mcp/` answers `401` with `WWW-Authenticate: Bearer resource_metadata="<public URL>/.well-known/oauth-protected-resource/api/mcp", scope="mcp:read mcp:write offline_access"` (once legacy access is off; while it is on, a request without a credential is still the owner, as before).
+2. The client reads the protected resource metadata (RFC 9728) there: the resource `<public URL>/api/mcp`, the authorization server `<public URL>`, and the scopes. Then the authorization server's metadata (RFC 8414) at `<public URL>/.well-known/oauth-authorization-server`. Both are the Dashboard's, public, and 404 while the `ai` module is off.
+3. It registers itself (dynamic client registration, `POST /api/auth/oauth2/register`, open, 5 a minute per address). Plain-HTTP redirect URIs are allowed only on `127.0.0.1`, `localhost`, and `[::1]`; https ones anywhere. Registered clients that nobody connects within a week are deleted.
+4. It sends you to `/api/auth/oauth2/authorize` with PKCE (S256, required) and `resource=<public URL>/api/mcp`. You sign in if you are not, and **Connect … to Life OS?** (`/oauth/consent`) asks whether it may read Life OS, and also change things. Deny sends it back with `access_denied`.
+5. It exchanges the code at `/api/auth/oauth2/token`: a **JWT access token for 15 minutes**, bound to the resource (`aud`), and with `offline_access` a **refresh token**, which rotates on every use (30 days; a spent one is refused).
+6. Each request to `/api/mcp/` carries `Authorization: Bearer <access token>`. The gateway's auth check verifies it (the jwt plugin's key in `auth_db`, the issuer, the audience, the lifetime), then looks the grant up, so **disconnecting the app in Settings → Connected apps stops it at once**, its access token too. It mints the identity token with `via: mcp`, the grant's scopes as module scopes (`mcp:read`: `<module>:read` for every module; `mcp:write`: `<module>:write`), and no `mfa`.
+
+**What a client sees.** MCP lists only the tools the grant allows: with `mcp:read` the tools that only read (lists, searches, gets, summaries), with `mcp:write` all of them; every call is checked again (`toolAccess`, `cmd/server/access.go`; a test fails when a tool belongs to no module). MCP forwards the identity token to the domain services with each call, which check the scopes once more (`pkg/identity`'s `RequireScope`) and record the change as "AI (MCP)" for the person (`agent:mcp`, `actorUserId`). The MCP session stays with the person who opened it (the go-sdk's `TokenInfo`). A device key or a personal token is refused on `/api/mcp/` (`403`): they are not MCP clients. The processor, on the private network, calls MCP without a token and keeps every tool, as before.
+
 ## Finance
 
 MCP's Finance tools are Finance API operations, the same ones the Dashboard uses; MCP never reads Finance's database (see [Finance](finance.md)):
@@ -325,7 +338,7 @@ A capture cannot answer: the clause asks Codex to answer a question about a Task
 
 ## Processor status
 
-The processor's private health port (`8081`, not exposed through the gateway) serves `/health`, `/ready`, and `/status`. Like `/health` and `/ready`, `/status` is an operational endpoint outside the OpenAPI contracts. It holds the AI plan's usage, which is the server's admins': a request with an identity token that is not the owner's or an admin's is refused (`403 admin_only`, verified with `LIFE_OS_TRUSTED_KEYS`); the Dashboard reads it without one. It holds what the running process has observed since it started, in memory, and resets on restart:
+The processor's private health port (`8081`, not exposed through the gateway) serves `/health`, `/ready`, and `/status`. Like `/health` and `/ready`, `/status` is an operational endpoint outside the OpenAPI contracts. It holds the AI plan's usage, which is the server's admins': a request with an identity token that is not the owner's or an admin's browser session signed in with two-factor is refused (`403 admin_only`, or `403 second_factor_required`; a device key, token, or MCP grant never passes; verified with `LIFE_OS_TRUSTED_KEYS`); the Dashboard reads it without one. It holds what the running process has observed since it started, in memory, and resets on restart:
 
 ```json
 {
