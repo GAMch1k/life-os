@@ -369,16 +369,25 @@ describe("sign-in, two-factor, passkeys", { skip }, () => {
     assert.ok(v.status >= 400, `foreign origin: ${v.status}`);
   });
 
-  test("not offered until later tickets: organizations, API keys, JWT, OAuth, impersonation", async () => {
+  test("not offered: organizations, Better Auth's own API key and OAuth client endpoints, session JWTs, impersonation", async () => {
     for (const [method, path] of [
       ["POST", "/api/auth/organization/create"],
       ["POST", "/api/auth/organization/invite-member"],
+      // Keys are made through Life OS's own endpoints (P21-06).
       ["GET", "/api/auth/api-key/list"],
       ["POST", "/api/auth/api-key/create"],
+      ["POST", "/api/auth/api-key/update"],
+      ["POST", "/api/auth/api-key/delete"],
+      // The jwt plugin signs MCP's access tokens only.
       ["GET", "/api/auth/token"],
-      ["GET", "/api/auth/jwks"],
-      ["POST", "/api/auth/oauth2/register"],
-      ["GET", "/api/auth/oauth2/authorize"],
+      // OAuth clients and grants are managed in Settings, not here.
+      ["POST", "/api/auth/oauth2/create-client"],
+      ["GET", "/api/auth/oauth2/get-clients"],
+      ["GET", "/api/auth/oauth2/get-consents"],
+      ["POST", "/api/auth/oauth2/introspect"],
+      ["GET", "/api/auth/oauth2/userinfo"],
+      ["GET", "/api/auth/admin/oauth2/resources"],
+      ["POST", "/api/auth/revoke-sessions"],
       ["POST", "/api/auth/admin/impersonate-user"],
       ["POST", "/api/auth/admin/create-user"],
       ["POST", "/api/auth/delete-user"],

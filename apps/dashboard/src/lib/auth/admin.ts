@@ -28,6 +28,7 @@ export type AdminRefusalCode =
   | "sign_in_required"
   | "admin_only"
   | "second_factor_required"
+  | "second_factor_sign_in_required"
   | "session_not_fresh";
 
 export const ADMIN_MESSAGES: Record<AdminRefusalCode, string> = {
@@ -37,6 +38,8 @@ export const ADMIN_MESSAGES: Record<AdminRefusalCode, string> = {
   admin_only: "Only the server's admins can do this.",
   second_factor_required:
     "Admin pages need two-factor sign-in: turn on an authenticator app or add a passkey in Settings → Security.",
+  second_factor_sign_in_required:
+    "Admin pages need a sign-in with your authenticator app or a passkey: sign out, and sign in again with it.",
   session_not_fresh: "Sign in again to do this.",
 };
 
@@ -69,7 +72,11 @@ export async function adminGate(
     return {
       ok: false,
       status: 403,
-      code: "forbidden_origin",
+      // A personal token is scoped to modules, never to the server's.
+      code:
+        result.code === "insufficient_scope"
+          ? "admin_only"
+          : "forbidden_origin",
       principal: null,
     };
   }
@@ -79,6 +86,9 @@ export async function adminGate(
       ? { ok: true, principal }
       : { ok: false, status: 401, code: "sign_in_required", principal };
   }
+  // Device keys, tokens, and MCP grants never pass an admin gate, the
+  // owner's phone included: its admin views come through the TWA's web
+  // sign-in, which has its own second factor.
   if (principal.via !== "session") {
     return { ok: false, status: 403, code: "admin_only", principal };
   }
@@ -86,7 +96,10 @@ export async function adminGate(
     rt.pool,
     {
       user: { id: principal.userId, role: principal.role },
-      session: { createdAt: principal.sessionCreatedAt ?? 0 },
+      session: {
+        createdAt: principal.sessionCreatedAt ?? 0,
+        mfa: principal.mfa === true,
+      },
     },
     { sensitive: options.sensitive },
   );

@@ -247,6 +247,19 @@ export function MemberStatusView({ status }: { status: MemberStatus }) {
             </p>
           </AlertDescription>
         </Alert>
+      ) : status.reason === "second_factor_sign_in_required" ? (
+        <Alert>
+          <ShieldCheck aria-hidden="true" />
+          <AlertTitle>The details need a two-factor sign-in</AlertTitle>
+          <AlertDescription>
+            <p>
+              You are one of this server&apos;s admins, but this browser signed
+              in without your authenticator app or passkey. Sign out, and sign
+              in again with it, to see the checks, the server, and the backups
+              here.
+            </p>
+          </AlertDescription>
+        </Alert>
       ) : (
         <p className="text-muted-foreground text-sm">
           The server&apos;s admins see the details.

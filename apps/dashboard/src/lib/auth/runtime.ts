@@ -8,8 +8,15 @@ import {
   parseTrustedKeys,
   TokenCache,
 } from "./identity";
+import {
+  KeyUseLog,
+  notificationsCleanup,
+  processKeyCleanup,
+  pruneExpiredKeys,
+} from "./keys";
+import { McpTokenVerifier, pruneOAuthClients } from "./oauth";
 import { LegacyUseLog, noteSigningKey, pruneSecurityLog } from "./security-log";
-import { createAuth } from "./server";
+import { createAuth, mcpResource } from "./server";
 import { LoginThrottle } from "./throttle";
 
 /**
@@ -22,7 +29,10 @@ const KEY = Symbol.for("lifeos.auth.runtime");
 
 type Holder = { [KEY]?: CheckRuntime };
 
-export function createRuntime(source = process.env): CheckRuntime {
+export function createRuntime(
+  source: Record<string, string | undefined> = process.env,
+  deps: { fetch?: typeof fetch } = {},
+): CheckRuntime {
   const env = readAuthEnv(source);
   const signer = createSigner(env.signingKey);
   // The signer's own key must be one the services trust, or every token
@@ -38,6 +48,11 @@ export function createRuntime(source = process.env): CheckRuntime {
     console.error("auth_db pool error", error.message);
   });
   const throttle = new LoginThrottle();
+  const cleanup = notificationsCleanup(
+    source.NOTIFICATIONS_SERVICE_URL,
+    deps.fetch,
+  );
+  let cleaning: Promise<void> | null = null;
   return {
     env,
     pool,
@@ -50,6 +65,23 @@ export function createRuntime(source = process.env): CheckRuntime {
     tokens: new TokenCache(),
     legacy: new LegacyCache(pool, env.legacyAccessDefault),
     legacyUses: new LegacyUseLog(pool),
+    keyUses: new KeyUseLog(pool),
+    mcpTokens: new McpTokenVerifier(pool, env.publicUrl, mcpResource(env)),
+    keyCleanup: () => {
+      // One run at a time; the minute's timer catches up with the rest.
+      cleaning ??= processKeyCleanup(pool, cleanup)
+        .then(() => undefined)
+        .catch((error) =>
+          console.error(
+            "keys: push subscriptions of revoked devices were not deleted",
+            (error as Error).message,
+          ),
+        )
+        .finally(() => {
+          cleaning = null;
+        });
+      return cleaning;
+    },
   };
 }
 
@@ -60,25 +92,41 @@ const TIMERS = Symbol.for("lifeos.auth.timers");
  * starts it, the tests do not): the legacy access counts are written every
  * minute, entries older than a year are deleted at start and once a day,
  * and a signing key that changed since the last start is logged as
- * rotated.
+ * rotated. With P21-06, also the push subscriptions of revoked device keys
+ * (every minute) and MCP clients nobody connected (once a day).
  */
 export function startSecurityLog(rt: CheckRuntime) {
   const holder = globalThis as { [TIMERS]?: boolean };
   if (holder[TIMERS]) return;
   holder[TIMERS] = true;
-  const prune = () =>
+  const prune = () => {
     pruneSecurityLog(rt.pool).catch((error) =>
       console.error("security log: pruning failed", (error as Error).message),
     );
-  void prune();
+    pruneExpiredKeys(rt.pool).catch((error) =>
+      console.error(
+        "keys: pruning expired tokens failed",
+        (error as Error).message,
+      ),
+    );
+    pruneOAuthClients(rt.pool).catch((error) =>
+      console.error(
+        "oauth: pruning unused clients failed",
+        (error as Error).message,
+      ),
+    );
+  };
+  prune();
   void noteSigningKey(rt.pool, rt.signer.kid).catch((error) =>
     console.error(
       "security log: the signing key was not noted",
       (error as Error).message,
     ),
   );
+  rt.keyCleanup?.();
   setInterval(() => void rt.legacyUses?.flush(), 60_000).unref();
-  setInterval(() => void prune(), 24 * 60 * 60 * 1000).unref();
+  setInterval(() => rt.keyCleanup?.(), 60_000).unref();
+  setInterval(prune, 24 * 60 * 60 * 1000).unref();
 }
 
 export function authRuntime(): CheckRuntime {

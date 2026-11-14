@@ -28,6 +28,8 @@ const REASONS: Record<string, string> = {
   too_many_attempts: "too many attempts",
   banned_user: "the account is disabled",
   second_factor_required: "needs two-factor sign-in",
+  second_factor_sign_in_required: "needs a sign-in with two-factor",
+  pairing_code_invalid: "wrong, used, or expired pairing code",
   session_not_fresh: "needs a sign-in from the last 12 hours",
   admin_only: "not an admin",
   sign_in_required: "needs a sign-in",

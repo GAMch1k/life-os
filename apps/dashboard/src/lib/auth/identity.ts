@@ -24,18 +24,39 @@ import {
  * LIFE_OS_TRUSTED_KEYS (pkg/identity), never fetched from anywhere.
  */
 
-/** How the caller proved who they are. P21-06 adds device, token, and mcp. */
-export type Via = "session" | "legacy";
+/**
+ * How the caller proved who they are: a browser's session, legacy access,
+ * a paired device's key, a personal API token, or an MCP client's OAuth
+ * access token (P21-06).
+ */
+export type Via = "session" | "legacy" | "device" | "token" | "mcp";
 /** A role in a space: owner, admin, member. */
 export type SpaceRole = "o" | "a" | "m";
 
 export type IdentityClaims = {
   sub: string;
+  /** The credential: the session, the API key, the OAuth grant, "legacy". */
   sid: string;
   via: Via;
   role: ServerRole;
   sp: Record<string, SpaceRole>;
   psp?: string;
+  /**
+   * Scopes, on personal tokens and MCP grants: `<module>:read` or
+   * `<module>:write` (which includes reading). Absent: all the user's rights.
+   */
+  scp?: string[];
+  /**
+   * Only true, and only on a browser session that signed in with a second
+   * factor (an authenticator code, a recovery code, or a passkey): what the
+   * services' admin routes require. Never on a key, a token, or an MCP grant.
+   */
+  mfa?: true;
+  /**
+   * A personal token marked as a development tool: its name, which makes
+   * the activity actor dev:<name>.
+   */
+  dev?: string;
 };
 
 export type Signer = {

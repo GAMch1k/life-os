@@ -170,15 +170,45 @@ export async function setLegacyAccess(db, on) {
   return "ok";
 }
 
+const DEVICE_KEY_PREFIX = "lo_dev_";
+
 /**
- * Signs every account out, in one transaction: every session goes, and every
- * authz_version moves on. (Device keys, tokens, OAuth grants, invites, and
- * pairing codes come with later tickets; this is where they will go too.)
+ * Signs every account out, in one transaction (as "Sign out everywhere"
+ * does for one, src/lib/auth/keys.ts revokeCredentials): every session,
+ * device key (unless keepDevices), personal API token, MCP client's OAuth
+ * tokens and consent, and pairing code goes, and every authz_version moves
+ * on. The device keys' push subscriptions are deleted by the Dashboard
+ * within a minute (device_key_cleanup). (Invites come with P21-07.)
  */
 export async function signOutAll(db, { keepDevices = false } = {}) {
   await db.query("BEGIN");
   let sessions;
+  let devices = 0;
+  let tokens;
+  let grants;
   try {
+    if (!keepDevices) {
+      await db.query(
+        `INSERT INTO device_key_cleanup (key_id)
+         SELECT id FROM apikey WHERE prefix = $1
+         ON CONFLICT (key_id) DO NOTHING`,
+        [DEVICE_KEY_PREFIX],
+      );
+      devices =
+        (
+          await db.query("DELETE FROM apikey WHERE prefix = $1", [
+            DEVICE_KEY_PREFIX,
+          ])
+        ).rowCount ?? 0;
+    }
+    tokens = await db.query(
+      "DELETE FROM apikey WHERE prefix IS DISTINCT FROM $1",
+      [DEVICE_KEY_PREFIX],
+    );
+    await db.query('DELETE FROM "oauthAccessToken"');
+    await db.query('DELETE FROM "oauthRefreshToken"');
+    grants = await db.query('DELETE FROM "oauthConsent"');
+    await db.query("DELETE FROM pairing_codes");
     sessions = await db.query("DELETE FROM session");
     await db.query(
       `UPDATE "user" SET "authzVersion" = "authzVersion" + 1, "updatedAt" = now()`,
@@ -191,7 +221,13 @@ export async function signOutAll(db, { keepDevices = false } = {}) {
   await securityEvent(db, "signed_out_everyone", {
     detail: keepDevices ? "keep_devices" : null,
   });
-  return { sessions: sessions.rowCount ?? 0, keepDevices };
+  return {
+    sessions: sessions.rowCount ?? 0,
+    devices,
+    tokens: tokens.rowCount ?? 0,
+    grants: grants.rowCount ?? 0,
+    keepDevices,
+  };
 }
 
 function usage() {
@@ -298,7 +334,14 @@ export async function main(argv, env = process.env, out = console) {
         const result = await signOutAll(db, {
           keepDevices: args.includes("--keep-devices"),
         });
-        out.log(`Signed out ${result.sessions} session(s) of every account.`);
+        out.log(
+          `Signed out ${result.sessions} session(s) of every account, and revoked ${result.tokens} API token(s) and ${result.grants} connected app(s).`,
+        );
+        out.log(
+          result.keepDevices
+            ? "Paired phones and watches stay signed in (--keep-devices)."
+            : `Signed out ${result.devices} paired phone(s) and watch(es): pair them again in Settings → Devices.`,
+        );
         // Signing out means little while a request without a sign-in is
         // the owner anyway: say so.
         if ((await legacyAccess(db)) === true) {

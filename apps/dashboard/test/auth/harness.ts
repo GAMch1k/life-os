@@ -10,6 +10,7 @@ import { adminHandler } from "../../src/lib/auth/admin";
 import type { CheckRuntime } from "../../src/lib/auth/check";
 import type { RuntimeStatus } from "../../src/lib/runtime-status";
 import { authHandler, checkHandler } from "../../src/lib/auth/handlers";
+import { oauthMetadataHandler } from "../../src/lib/auth/oauth-metadata";
 import { createRuntime } from "../../src/lib/auth/runtime";
 
 /**
@@ -112,22 +113,30 @@ export type RuntimeOptions = {
   insecureHosts?: string;
   keys?: ReturnType<typeof testKeys>;
   trusted?: object[];
+  /** Notifications, for the push subscriptions of revoked device keys. */
+  notifications?: typeof fetch;
 };
 
 export function runtime(url: string, options: RuntimeOptions = {}) {
   const keys = options.keys ?? testKeys();
-  return createRuntime({
-    NODE_ENV: "test",
-    AUTH_DATABASE_URL: url,
-    LIFE_OS_AUTH_SECRET: randomBytes(32).toString("hex"),
-    LIFE_OS_IDENTITY_SIGNING_KEY: keys.signingKey,
-    LIFE_OS_TRUSTED_KEYS: JSON.stringify({
-      keys: options.trusted ?? [keys.publicJwk],
-    }),
-    LIFE_OS_PUBLIC_URL: PUBLIC_URL,
-    LIFE_OS_INSECURE_LOGIN_HOSTS: options.insecureHosts ?? "",
-    LIFE_OS_LEGACY_ACCESS: options.legacy ? "on" : "off",
-  });
+  return createRuntime(
+    {
+      NODE_ENV: "test",
+      AUTH_DATABASE_URL: url,
+      LIFE_OS_AUTH_SECRET: randomBytes(32).toString("hex"),
+      LIFE_OS_IDENTITY_SIGNING_KEY: keys.signingKey,
+      LIFE_OS_TRUSTED_KEYS: JSON.stringify({
+        keys: options.trusted ?? [keys.publicJwk],
+      }),
+      LIFE_OS_PUBLIC_URL: PUBLIC_URL,
+      LIFE_OS_INSECURE_LOGIN_HOSTS: options.insecureHosts ?? "",
+      LIFE_OS_LEGACY_ACCESS: options.legacy ? "on" : "off",
+      ...(options.notifications
+        ? { NOTIFICATIONS_SERVICE_URL: "http://notifications.test" }
+        : {}),
+    },
+    { fetch: options.notifications },
+  );
 }
 
 export type AppOptions = {
@@ -145,6 +154,9 @@ export function app(rt: CheckRuntime, options: AppOptions = {}) {
     if (pathname === "/internal/auth/check") return checkHandler(rt, request);
     if (pathname.startsWith("/api/account")) return accountHandler(rt, request);
     if (pathname.startsWith("/api/admin")) return adminHandler(rt, request);
+    if (pathname === "/.well-known/oauth-authorization-server") {
+      return oauthMetadataHandler(rt, request);
+    }
     if (pathname === "/api/status" && options.status) {
       return statusHandler(rt, request, options.status);
     }

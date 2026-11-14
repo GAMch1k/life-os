@@ -2,7 +2,8 @@
 set -euo pipefail
 
 # Runs the Dashboard's auth flow suite (apps/dashboard/test/auth: the sign-in,
-# and the admin surfaces and the security log;
+# the admin surfaces and the security log, and devices, tokens, and MCP's
+# OAuth;
 # docs/operations/ci.md#the-auth-flow-suite) against a throwaway PostgreSQL,
 # never a live one: Better Auth with the Dashboard's configuration on fresh
 # databases of its own (it_auth_<random>, dropped afterwards), with auth_db's
@@ -20,4 +21,4 @@ url=${AUTH_TEST_DATABASE_URL:-${INTEGRATION_TEST_DATABASE_URL:-}}
 [[ -n "$url" ]] || { echo 'test-auth: set AUTH_TEST_DATABASE_URL to a throwaway PostgreSQL superuser URL' >&2; exit 2; }
 [[ -d "$repo_root/apps/dashboard/node_modules" ]] || { echo 'test-auth: run npm ci --prefix apps/dashboard first' >&2; exit 2; }
 cd "$repo_root/apps/dashboard"
-AUTH_TEST_DATABASE_URL=$url NODE_ENV=test node --import tsx --test --test-reporter=spec test/auth/flow.test.ts test/auth/admin-and-logs.test.ts
+AUTH_TEST_DATABASE_URL=$url NODE_ENV=test node --import tsx --test --test-reporter=spec test/auth/flow.test.ts test/auth/admin-and-logs.test.ts test/auth/devices-tokens-mcp.test.ts

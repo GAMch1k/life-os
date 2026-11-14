@@ -44,6 +44,15 @@ export const SECURITY_EVENT_KINDS = {
   user_sessions_revoked: "Account signed out by an admin",
   backup_started: "Backup started",
   admin_refused: "Admin action refused",
+  device_paired: "Device paired",
+  device_revoked: "Device signed out",
+  pairing_refused: "Pairing code refused",
+  token_created: "API token made",
+  token_revoked: "API token revoked",
+  oauth_client_registered: "App registered for MCP",
+  oauth_consent_given: "App connected",
+  oauth_consent_revoked: "App disconnected",
+  signed_out_everywhere: "Signed out everywhere",
 } as const;
 
 export type SecurityEventKind = keyof typeof SECURITY_EVENT_KINDS;
@@ -300,6 +309,8 @@ const failedSignInChains = new WeakMap<object, Promise<void>>();
 export function recordFailedSignIn(
   db: Queryable,
   entry: {
+    /** sign_in_failed (the default), or a refused pairing code. */
+    kind?: GroupedFailureKind;
     subjectUserId?: string | null;
     headers?: Headers;
     detail?: string | null;
@@ -319,9 +330,13 @@ export function recordFailedSignIn(
   return next;
 }
 
+/** The kinds written grouped, as failed sign-ins are. */
+export type GroupedFailureKind = "sign_in_failed" | "pairing_refused";
+
 async function writeFailedSignIn(
   db: Queryable,
   entry: {
+    kind?: GroupedFailureKind;
     subjectUserId?: string | null;
     headers?: Headers;
     detail?: string | null;
@@ -332,7 +347,9 @@ async function writeFailedSignIn(
   const day = at.toISOString().slice(0, 10);
   const address = clientAddress(entry.headers);
   const device = deviceLabel(entry.headers);
-  const sameDay = `kind = 'sign_in_failed'
+  const kind: GroupedFailureKind =
+    entry.kind === "pairing_refused" ? "pairing_refused" : "sign_in_failed";
+  const sameDay = `kind = '${kind}'
     AND at >= ($1::date)::timestamp AT TIME ZONE 'UTC'
     AND at < ($1::date + 1)::timestamp AT TIME ZONE 'UTC'
     AND address IS NOT DISTINCT FROM $2`;
@@ -364,8 +381,8 @@ async function writeFailedSignIn(
   await db.query(
     `INSERT INTO security_events
        (at, last_at, kind, outcome, subject_user_id, address, device, detail, count)
-     VALUES ($1, $1, 'sign_in_failed', 'failed', $2, $3, $4, $5, 1)`,
-    [at, subject, address, device, detail],
+     VALUES ($1, $1, $6, 'failed', $2, $3, $4, $5, 1)`,
+    [at, subject, address, device, detail, kind],
   );
 }
 

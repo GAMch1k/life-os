@@ -2000,7 +2000,11 @@ cmd_sign_out_all() {
   local -a args=()
   require_dashboard
   ((!keep_devices)) || args+=(--keep-devices)
-  ((assume_yes)) || confirm 'Sign out every session of every account, yours too?' n || die 'nothing was changed'
+  if ((keep_devices)); then
+    ((assume_yes)) || confirm 'Sign out every session, API token, and connected app of every account, yours too (paired phones and watches stay)?' n || die 'nothing was changed'
+  else
+    ((assume_yes)) || confirm 'Sign out every session, paired phone and watch, API token, and connected app of every account, yours too?' n || die 'nothing was changed'
+  fi
   out=$(account_command sign-out-all "${args[@]}") || die "signing out failed: $out"
   printf '%s\n' "$out"
   # While legacy access is on, a request without a sign-in is the owner
@@ -2390,7 +2394,9 @@ Accounts (docs/install/accounts.md):
                                 show or change legacy access (sign-in-free
                                 access as the first account)
   ./setup.sh sign-out-all [--keep-devices]
-                                sign every account out, everywhere
+                                sign every account out, everywhere: sessions,
+                                devices (unless --keep-devices), API tokens,
+                                and connected apps
   ./setup.sh rotate-keys [auth|all]
                                 a new key for the services' identity tokens
 

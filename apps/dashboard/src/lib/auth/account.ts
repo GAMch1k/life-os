@@ -1,3 +1,4 @@
+import { credentialsRoute } from "./account-credentials";
 import { type CheckRuntime, checkRequest, type Principal } from "./check";
 import type { ServerRole } from "./constants";
 import { hasSecondFactor } from "./roles";
@@ -121,7 +122,17 @@ export async function accountHandler(
   request: Request,
 ): Promise<Response> {
   const { pathname } = new URL(request.url);
-  const check = await checkRequest(rt, request.method, request.headers);
+  const check = await checkRequest(rt, request.method, request.headers, {
+    uri: pathname,
+  });
+  // A personal token is never enough to manage the account.
+  if (check.status === 403 && check.code === "insufficient_scope") {
+    return problem(
+      401,
+      "sign_in_required",
+      "Sign in with your account to do this.",
+    );
+  }
   if (check.status === 403) {
     return problem(
       403,
@@ -138,7 +149,8 @@ export async function accountHandler(
     return json(200, await accountInfo(rt, principal));
   }
 
-  // Everything else is the account's own: legacy access is not enough.
+  // Everything else is the account's own: legacy access, a device key, or
+  // a token is not enough.
   if (principal.via !== "session") {
     return problem(
       401,
@@ -146,6 +158,9 @@ export async function accountHandler(
       "Sign in with your account to do this.",
     );
   }
+
+  const credentials = await credentialsRoute(rt, request, principal, pathname);
+  if (credentials) return credentials;
 
   if (pathname === "/api/account/sessions" && request.method === "GET") {
     return json(200, { sessions: await listSessions(rt, principal) });

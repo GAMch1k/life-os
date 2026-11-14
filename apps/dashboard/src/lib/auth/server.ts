@@ -1,3 +1,5 @@
+import { apiKey } from "@better-auth/api-key";
+import { oauthProvider } from "@better-auth/oauth-provider";
 import { passkey } from "@better-auth/passkey";
 import { betterAuth, type BetterAuthOptions } from "better-auth";
 import {
@@ -5,7 +7,7 @@ import {
   createAuthMiddleware,
   getSessionFromCtx,
 } from "better-auth/api";
-import { admin, twoFactor, username } from "better-auth/plugins";
+import { admin, jwt, twoFactor, username } from "better-auth/plugins";
 import { createAccessControl } from "better-auth/plugins/access";
 import { randomBytes } from "node:crypto";
 import { Pool } from "pg";
@@ -14,12 +16,19 @@ import {
   COOKIE_PREFIX,
   FIRST_USER_ID,
   INSECURE_SESSION_COOKIE,
+  KEY_NAME_MAX,
+  KEY_RANDOM_LENGTH,
+  MCP_ACCESS_TOKEN_SECONDS,
+  MCP_RESOURCE_PATH,
+  OAUTH_CONSENT_PAGE,
+  OAUTH_SCOPES,
   PLACEHOLDER_EMAIL_DOMAIN,
   SESSION_COOKIE,
   SESSION_EXPIRES_SECONDS,
   SESSION_FRESH_SECONDS,
   SESSION_UPDATE_SECONDS,
   SETUP_CODE_HEADER,
+  TOKEN_MAX_DAYS,
 } from "./constants";
 import type { AuthEnv } from "./env";
 import {
@@ -118,7 +127,46 @@ export const DISABLED_PATHS = [
   "/admin/stop-impersonating",
   "/admin/set-user-password",
   "/admin/update-user",
+  // Signing out every session is Life OS's own "Sign out everywhere"
+  // (/api/account/sign-out-everywhere), which ends the devices, tokens, and
+  // connected apps in the same transaction.
+  "/revoke-sessions",
+  // API keys: device keys and personal tokens are made, listed, and revoked
+  // through Life OS's own endpoints (/api/auth/devices/, /api/account/),
+  // which set their kind and scopes; Better Auth's would let anyone signed
+  // in make a key of any kind.
+  "/api-key/create",
+  "/api-key/verify",
+  "/api-key/get",
+  "/api-key/update",
+  "/api-key/delete",
+  "/api-key/list",
+  "/api-key/delete-all-expired-api-keys",
+  // The jwt plugin signs MCP's access tokens only, never a session's.
+  "/token",
+  // The OAuth provider serves MCP clients: registration, authorization,
+  // consent, tokens, and revocation. Clients and grants are managed in
+  // Settings → Connected apps; nothing OpenID Connect (no openid scope).
+  "/oauth2/create-client",
+  "/oauth2/get-client",
+  "/oauth2/get-clients",
+  "/oauth2/update-client",
+  "/oauth2/delete-client",
+  "/oauth2/client/rotate-secret",
+  "/oauth2/client/rotate-keys",
+  "/oauth2/get-consent",
+  "/oauth2/get-consents",
+  "/oauth2/update-consent",
+  "/oauth2/delete-consent",
+  "/oauth2/introspect",
+  "/oauth2/userinfo",
+  "/oauth2/continue",
+  "/oauth2/public-client-prelogin",
+  "/oauth2/end-session",
 ];
+
+/** Paths refused by prefix in the before hook (they have parameters). */
+const DISABLED_PREFIXES = ["/admin/oauth2/", "/oauth2/end-session/"];
 
 const SIGN_IN_PATHS = new Set(["/sign-in/username"]);
 
@@ -162,6 +210,47 @@ function loginOriginAllowed(env: AuthEnv, kind: AuthKind, headers: Headers) {
     return kind === "secure";
   }
   return kind === "insecure" && insecureLoginAllowed(env, headers);
+}
+
+/** The MCP resource OAuth access tokens are bound to. */
+export function mcpResource(env: Pick<AuthEnv, "publicUrl">) {
+  return `${env.publicUrl}${MCP_RESOURCE_PATH}`;
+}
+
+/** Loopback hosts, as a URL's hostname spells them. */
+const LOOPBACK_REDIRECT_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
+
+/**
+ * The OAuth provider for MCP clients
+ * (docs/architecture/multi-user.md#devices-tokens-mcp): dynamic client
+ * registration, the consent page in the Dashboard, PKCE (required for every
+ * public client), 15-minute JWT access tokens bound to <public URL>/api/mcp,
+ * and rotating refresh tokens (offline_access). Plain-HTTP redirect URIs
+ * only on loopback hosts.
+ */
+function oauthOptions(env: AuthEnv) {
+  const resource = mcpResource(env);
+  return {
+    scopes: OAUTH_SCOPES,
+    clientRegistrationDefaultScopes: OAUTH_SCOPES,
+    allowDynamicClientRegistration: true,
+    allowUnauthenticatedClientRegistration: true,
+    // Native MCP clients (Claude Code, Cursor) often omit application_type
+    // and use a loopback callback: treat them as native.
+    clientRegistrationDefaultApplicationType: "infer" as const,
+    allowInsecureRedirectUri: (url: URL) =>
+      url.protocol === "http:" && LOOPBACK_REDIRECT_HOSTS.has(url.hostname),
+    grantTypes: ["authorization_code" as const, "refresh_token" as const],
+    resources: [
+      { identifier: resource, accessTokenTtl: MCP_ACCESS_TOKEN_SECONDS },
+    ],
+    clientRegistrationDefaultResources: [resource],
+    clientRegistrationAllowedResources: [resource],
+    accessTokenExpiresIn: MCP_ACCESS_TOKEN_SECONDS,
+    refreshTokenReuseInterval: 0,
+    loginPage: "/login",
+    consentPage: OAUTH_CONSENT_PAGE,
+  };
 }
 
 export function createAuth(
@@ -210,6 +299,21 @@ export function createAuth(
       // Off: the check reads the session from the database on every
       // request, so a ban or a sign-out counts at once.
       cookieCache: { enabled: false },
+      additionalFields: {
+        // Whether the session signed in with a second factor (an
+        // authenticator code, a recovery code, or a passkey), or proved
+        // one while signed in (turning on the authenticator app, adding a
+        // passkey): set by the security log's after hook
+        // (src/lib/auth/security-hooks.ts), never by a client. The
+        // identity token's mfa claim, which the services' admin routes
+        // require (docs/architecture/multi-user.md#the-identity-token).
+        secondFactor: {
+          type: "boolean",
+          required: false,
+          defaultValue: false,
+          input: false,
+        },
+      },
     },
     user: {
       additionalFields: {
@@ -233,6 +337,10 @@ export function createAuth(
         "/two-factor/*": { window: 60, max: 10 },
         "/passkey/verify-authentication": { window: 60, max: 10 },
         "/reset-password": { window: 60, max: 5 },
+        // An MCP client registers once and then refreshes its token every
+        // 15 minutes; the OAuth provider's own limits are tighter still.
+        "/oauth2/register": { window: 60, max: 5 },
+        "/oauth2/token": { window: 60, max: 30 },
       },
     },
     advanced: {
@@ -295,6 +403,14 @@ export function createAuth(
         // pattern /reset-password/:token there never matches: the route is
         // matched here (a reset link is /reset/<token>, a Dashboard page).
         if (path === "/reset-password/:token") {
+          throw new APIError("NOT_FOUND", { message: "Not found" });
+        }
+        if (DISABLED_PREFIXES.some((prefix) => path.startsWith(prefix))) {
+          throw new APIError("NOT_FOUND", { message: "Not found" });
+        }
+        // MCP's OAuth runs at the public address only, never on a
+        // plain-HTTP host the owner allowed for signing in.
+        if (!secure && path.startsWith("/oauth2/")) {
           throw new APIError("NOT_FOUND", { message: "Not found" });
         }
 
@@ -420,6 +536,17 @@ export function createAuth(
               "Admin actions need two-factor sign-in: turn on an authenticator app or add a passkey in Settings → Security.",
             );
           }
+          // And the session signed in with it (the identity token's mfa).
+          if (
+            (session.session as { secondFactor?: boolean | null })
+              .secondFactor !== true
+          ) {
+            await refuse(
+              "FORBIDDEN",
+              "SECOND_FACTOR_SIGN_IN_REQUIRED",
+              "Admin actions need a sign-in with your authenticator app or a passkey: sign out, and sign in again with it.",
+            );
+          }
           if (!isFresh(session.session)) {
             await refuse(
               "FORBIDDEN",
@@ -514,6 +641,31 @@ export function createAuth(
             }),
           ]
         : []),
+      // Device keys and personal API tokens (src/lib/auth/keys.ts): stored
+      // hashed, shown once, told apart by their prefix and metadata. Made
+      // only through Life OS's own endpoints; the check verifies them.
+      apiKey({
+        enableMetadata: true,
+        requireName: true,
+        maximumNameLength: KEY_NAME_MAX,
+        defaultKeyLength: KEY_RANDOM_LENGTH,
+        // The plugin's own counters would write the key's row on every
+        // request; the check notes the last use once a minute instead.
+        rateLimit: { enabled: false },
+        keyExpiration: {
+          defaultExpiresIn: null,
+          minExpiresIn: 1,
+          maxExpiresIn: TOKEN_MAX_DAYS + 1,
+        },
+        startingCharactersConfig: { shouldStore: true, charactersLength: 11 },
+      }),
+      // Only for the MCP clients' OAuth access tokens, which only the
+      // Dashboard verifies (identity tokens are Life OS's own, pinned keys).
+      jwt({
+        jwt: { issuer: env.publicUrl },
+        disableSettingJwtHeader: true,
+      }),
+      oauthProvider(oauthOptions(env)),
       // Last: its after hook runs after the plugins', when two-factor has
       // turned a password sign-in into a challenge (and no session).
       securityLogPlugin(pool),

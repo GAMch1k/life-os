@@ -1,0 +1,12 @@
+DROP TABLE IF EXISTS device_key_cleanup;
+DROP TABLE IF EXISTS pairing_codes;
+drop table if exists "oauthClientAssertion";
+drop table if exists "oauthConsent";
+drop table if exists "oauthAccessToken";
+drop table if exists "oauthRefreshToken";
+drop table if exists "oauthClientResource";
+drop table if exists "oauthResource";
+drop table if exists "oauthClient";
+drop table if exists "jwks";
+drop table if exists "apikey";
+alter table "session" drop column if exists "secondFactor";

@@ -36,6 +36,18 @@ export function AdminRefusal({
             </p>
           </AlertDescription>
         </Alert>
+      ) : code === "second_factor_sign_in_required" ? (
+        <Alert>
+          <ShieldCheck aria-hidden="true" />
+          <AlertTitle>Sign in again with two-factor</AlertTitle>
+          <AlertDescription>
+            <p>
+              This browser signed in without your authenticator app or passkey.
+              The server&apos;s admin pages need a sign-in with one: sign out,
+              and sign in again with it.
+            </p>
+          </AlertDescription>
+        </Alert>
       ) : code === "session_not_fresh" ? (
         <Alert>
           <ShieldAlert aria-hidden="true" />

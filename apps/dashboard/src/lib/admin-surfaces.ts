@@ -34,7 +34,10 @@ export function statusView(
   if (gate.ok) return status;
   return memberStatus(
     status,
-    gate.code === "second_factor_required" ? gate.code : undefined,
+    gate.code === "second_factor_required" ||
+      gate.code === "second_factor_sign_in_required"
+      ? gate.code
+      : undefined,
   );
 }
 
@@ -88,7 +91,7 @@ export async function backupsHandler(
         kind: "admin_refused",
         outcome: "refused",
         actorUserId: gate.principal.userId,
-        via: gate.principal.via === "legacy" ? "legacy" : "session",
+        via: gate.principal.via,
         headers: request.headers,
         detail: `backup:${gate.code}`,
       });
@@ -102,7 +105,7 @@ export async function backupsHandler(
       kind: "backup_started",
       outcome: started ? "ok" : "failed",
       actorUserId: gate.principal.userId,
-      via: gate.principal.via === "legacy" ? "legacy" : "session",
+      via: gate.principal.via,
       headers: request.headers,
       detail: started ? null : `status_${response.status}`,
     });

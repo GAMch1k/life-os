@@ -60,14 +60,64 @@ export const SETUP_CODE_HEADER = "x-lifeos-setup-code";
 export const PLACEHOLDER_EMAIL_DOMAIN = "users.invalid";
 
 /**
- * Whether phones and watches can be paired with an account (P21-06). Until
- * they can, the phone and watch apps need legacy access, so the daily
- * reminder to turn it off (src/components/legacy-access-reminder.tsx) asks
- * for something the owner cannot do yet, and stays hidden. P21-06 sets this
- * to true when it ships device pairing. The switch in Settings → Security
- * works either way.
+ * Whether phones and watches can be paired with an account. P21-06 ships
+ * device pairing, so the daily reminder to turn legacy access off
+ * (src/components/legacy-access-reminder.tsx) shows while legacy access is
+ * on and an account exists. The switch in Settings → Security works either
+ * way.
  */
-export const DEVICE_PAIRING_AVAILABLE = false;
+export const DEVICE_PAIRING_AVAILABLE = true;
+
+/**
+ * Device keys and personal API tokens (docs/architecture/multi-user.md#devices-tokens-mcp):
+ * Better Auth API keys, told apart by their prefix and their metadata.
+ */
+export const DEVICE_KEY_PREFIX = "lo_dev_";
+export const TOKEN_PREFIX = "lo_tok_";
+/** The random part of a key: 64 letters. */
+export const KEY_RANDOM_LENGTH = 64;
+/** A device's or token's name: 1 to 64 characters. */
+export const KEY_NAME_MAX = 64;
+
+/** A pairing code works once, for 5 minutes. */
+export const PAIRING_CODE_TTL_SECONDS = 5 * 60;
+/** An account has at most this many unused pairing codes. */
+export const PAIRING_CODES_PER_ACCOUNT = 5;
+/** The deep link the phone app opens: always this, never another address. */
+export const PAIRING_LINK = "lifeos://pair";
+
+/** Personal API tokens: 90 days by default, at most a year. */
+export const TOKEN_DEFAULT_DAYS = 90;
+export const TOKEN_MAX_DAYS = 365;
+
+/**
+ * The modules a personal token's scopes name (`<module>:read` or
+ * `<module>:write`, which includes reading), and MCP grants cover.
+ */
+export const SCOPE_MODULES = [
+  "tasks",
+  "calendar",
+  "inbox",
+  "food",
+  "finance",
+  "voice",
+  "notifications",
+  "activity",
+] as const;
+export type ScopeModule = (typeof SCOPE_MODULES)[number];
+
+/**
+ * MCP over OAuth (docs/services/mcp.md#signing-in-with-oauth): the resource
+ * the access tokens are bound to is <public URL>/api/mcp; consent offers
+ * two scopes, and offline_access for the rotating refresh tokens.
+ */
+export const MCP_RESOURCE_PATH = "/api/mcp";
+export const MCP_SCOPES = ["mcp:read", "mcp:write"] as const;
+export const OAUTH_SCOPES = [...MCP_SCOPES, "offline_access"];
+/** MCP access tokens live 15 minutes. */
+export const MCP_ACCESS_TOKEN_SECONDS = 15 * 60;
+/** Where the OAuth provider sends a person to consent. */
+export const OAUTH_CONSENT_PAGE = "/oauth/consent";
 
 /** Password hashing: at most this many scrypt runs at once. */
 export const PASSWORD_HASH_CONCURRENCY = 2;

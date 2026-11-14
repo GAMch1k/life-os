@@ -6,9 +6,11 @@ import { showsLegacyReminder } from "./legacy-reminder";
 
 const on = { legacyAccess: true, accountExists: true };
 
-test("no legacy access reminder until devices can be paired (P21-06)", () => {
-  assert.equal(DEVICE_PAIRING_AVAILABLE, false);
-  assert.equal(showsLegacyReminder(on, false), false);
+test("devices can be paired (P21-06): the reminder is on", () => {
+  assert.equal(DEVICE_PAIRING_AVAILABLE, true);
+  assert.equal(showsLegacyReminder(on, false), true);
+  // The switch still hides it, as before P21-06.
+  assert.equal(showsLegacyReminder(on, false, false), false);
 });
 
 test("once devices can be paired, the reminder shows daily while legacy access is on", () => {

@@ -55,19 +55,21 @@ export type AdminCheck =
         | "unauthenticated"
         | "admin_only"
         | "second_factor_required"
+        | "second_factor_sign_in_required"
         | "session_not_fresh";
     };
 
 /**
  * The gate of every admin surface: a signed-in owner or admin (never legacy
- * access) with TOTP or a passkey; with sensitive, also a session younger
- * than 12 hours.
+ * access) with TOTP or a passkey, whose session signed in with one (P21-06:
+ * the identity token's mfa, which the services' admin routes require too);
+ * with sensitive, also a session younger than 12 hours.
  */
 export async function checkAdmin(
   db: Queryable,
   session: {
     user: { id: string; role?: string | null };
-    session: { createdAt: Date | string | number };
+    session: { createdAt: Date | string | number; mfa?: boolean };
   } | null,
   options: { sensitive?: boolean } = {},
 ): Promise<AdminCheck> {
@@ -77,6 +79,9 @@ export async function checkAdmin(
   }
   if (!(await hasSecondFactor(db, session.user.id))) {
     return { ok: false, status: 403, code: "second_factor_required" };
+  }
+  if (session.session.mfa !== true) {
+    return { ok: false, status: 403, code: "second_factor_sign_in_required" };
   }
   if (options.sensitive && !isFresh(session.session)) {
     return { ok: false, status: 403, code: "session_not_fresh" };

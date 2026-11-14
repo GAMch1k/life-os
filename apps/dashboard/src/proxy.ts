@@ -16,7 +16,7 @@ import { authRuntime } from "@/lib/auth/runtime";
  * Not here, by the matcher: the login, setup, and reset pages, Better
  * Auth's /api/auth/, /api/account/, /api/admin/, and /share (which check
  * themselves), /internal/ (the gateway answers it with 404 from outside),
- * the privacy
+ * the OAuth metadata under /.well-known/ (public), the privacy
  * and terms pages, and the files the installed app and the login page load
  * (/_next/static, the service worker, the manifest, the icons). /share
  * must stay out: for a POST the proxy matches, Next.js copies the body and
@@ -28,7 +28,7 @@ import { authRuntime } from "@/lib/auth/runtime";
  * admin pages also need an owner or admin with two-factor sign-in, which
  * they check themselves (src/lib/auth/admin.ts).
  */
-const ACCOUNT_PAGES = ["/settings", "/admin"];
+const ACCOUNT_PAGES = ["/settings", "/admin", "/oauth"];
 
 function needsAccount(pathname: string) {
   return ACCOUNT_PAGES.some(
@@ -72,6 +72,7 @@ export async function proxy(request: NextRequest) {
       request.headers,
       {
         refresh: !isApi(pathname) && request.method === "GET",
+        uri: pathname,
       },
     );
   } catch (error) {
@@ -86,6 +87,13 @@ export async function proxy(request: NextRequest) {
     );
   }
 
+  if (result.status === 403 && result.code === "insufficient_scope") {
+    return problem(
+      403,
+      "insufficient_scope",
+      "This token may not do this: see its scopes in Settings → API tokens.",
+    );
+  }
   if (result.status === 403) {
     return problem(
       403,
@@ -98,6 +106,10 @@ export async function proxy(request: NextRequest) {
       ? problem(401, "unauthenticated", "Sign in first.")
       : toLogin(request);
   }
+  // Pages are for browsers: a device key, token, or MCP grant opens none.
+  const browser =
+    result.principal.via === "session" || result.principal.via === "legacy";
+  if (!browser && !isApi(pathname)) return toLogin(request);
   if (result.principal.via !== "session" && needsAccount(pathname)) {
     return isApi(pathname)
       ? problem(
@@ -121,6 +133,6 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|api/auth/|api/account|api/admin|internal/|login|setup|reset/|share$|privacy|terms|sw\\.js|icons/|app\\.webmanifest|favicon\\.ico).*)",
+    "/((?!_next/static|_next/image|api/auth/|api/account|api/admin|internal/|\\.well-known/|login|setup|reset/|share$|privacy|terms|sw\\.js|icons/|app\\.webmanifest|favicon\\.ico).*)",
   ],
 };
