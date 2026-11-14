@@ -1,44 +1,63 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { NextRequest } from "next/server";
+import { backupsHandler } from "@/lib/admin-surfaces";
+import type { CheckRuntime } from "@/lib/auth/check";
+import { TokenCache } from "@/lib/auth/identity";
 
-import { GET, POST } from "@/app/api/backups/[...path]/route";
+/**
+ * A runtime under legacy access, without a database: the owner, as before
+ * accounts. The auth flow suite (test/auth) covers signed-in admins and
+ * members against a real auth_db.
+ */
+function legacyRuntime() {
+  const entries: unknown[][] = [];
+  const rt = {
+    env: { insecureLoginHosts: [] },
+    pool: {
+      query: async (_text: string, values: unknown[]) => {
+        entries.push(values);
+        return { rows: [], rowCount: 1 };
+      },
+    },
+    signer: { kid: "test", sign: () => "identity-token" },
+    tokens: new TokenCache(),
+    legacy: { get: async () => true },
+  } as unknown as CheckRuntime;
+  return { rt, entries };
+}
 
-/** Calls the Dashboard's backup route and returns what reached the service. */
+/** Calls the backup route's handler and returns what reached the service. */
 async function call(method: "GET" | "POST", path: string[]) {
-  const original = globalThis.fetch;
-  const seen: { url: string; actor: string | null }[] = [];
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    seen.push({
-      url: String(input),
-      actor: new Headers(init?.headers).get("x-life-os-actor"),
-    });
-    return Response.json({ id: "20261011T120000Z" }, { status: 202 });
-  }) as typeof fetch;
-  try {
-    const handler = method === "GET" ? GET : POST;
-    const response = await handler(
-      new NextRequest(`http://dashboard.test/api/backups/${path.join("/")}`, {
-        method,
-        headers: { "X-Life-OS-Actor": "user" },
-      }),
-      { params: Promise.resolve({ path }) },
-    );
-    return { status: response.status, seen };
-  } finally {
-    globalThis.fetch = original;
-  }
+  const { rt, entries } = legacyRuntime();
+  const seen: string[] = [];
+  const request = new Request(
+    `http://dashboard.test/api/backups/${path.join("/")}`,
+    { method, headers: { "X-Life-OS-Actor": "user" } },
+  );
+  const response = await backupsHandler(
+    rt,
+    request,
+    path.join("/"),
+    async () => {
+      seen.push(`${method} ${path.join("/")}`);
+      return Response.json({ id: "20261011T120000Z" }, { status: 202 });
+    },
+  );
+  return { status: response.status, seen, entries };
 }
 
 test("the backup route passes on reading the status and starting a backup", async () => {
   const status = await call("GET", ["v1", "status"]);
-  assert.equal(status.seen.length, 1);
-  assert.match(status.seen[0].url, /\/v1\/status$/);
+  assert.deepEqual(status.seen, ["GET v1/status"]);
+  assert.equal(status.entries.length, 0, "reading the status is not logged");
   const started = await call("POST", ["v1", "backups"]);
   assert.equal(started.status, 202);
-  assert.match(started.seen[0].url, /\/v1\/backups$/);
-  assert.equal(started.seen[0].actor, "user");
+  assert.deepEqual(started.seen, ["POST v1/backups"]);
+  // Starting a backup is an admin action: the security log has it.
+  assert.equal(started.entries.length, 1);
+  assert.ok(started.entries[0].includes("backup_started"));
+  assert.ok(started.entries[0].includes("legacy"));
 });
 
 test("anything else stays on the private network", async () => {
