@@ -34,7 +34,6 @@ import {
   beforeSecurityHook,
   isAdminAction,
   securityLogPlugin,
-  userByUsername,
 } from "./security-hooks";
 import { recordSecurityEvent } from "./security-log";
 import {
@@ -375,14 +374,9 @@ export function createAuth(
             (ctx.body as Record<string, unknown> | undefined)?.username ?? "",
           );
           const wait = throttle.waitMs(name, clientAddress(headers));
+          // Not in the security log: the failures that led here are, and an
+          // entry per refused retry would let one address flood it.
           if (wait > 0) {
-            await recordSecurityEvent(pool, {
-              kind: "sign_in_failed",
-              outcome: "refused",
-              subjectUserId: await userByUsername(pool, name),
-              headers,
-              detail: "password:too_many_failed_sign_ins",
-            });
             throw new APIError("TOO_MANY_REQUESTS", {
               code: "TOO_MANY_FAILED_SIGN_INS",
               message: `Too many failed sign-ins. Try again in ${Math.ceil(wait / 1000)} s.`,
