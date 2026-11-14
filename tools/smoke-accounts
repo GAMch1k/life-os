@@ -30,7 +30,6 @@ fail() {
   exit 1
 }
 password='correct horse battery staple 42'
-jar=$work/cookies
 
 "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
 scale=()
@@ -43,11 +42,18 @@ for _ in $(seq 1 120); do
 done
 curl --fail --silent --max-time 3 "$gateway/api/tasks/ready" >/dev/null || fail 'Tasks does not answer through the gateway with legacy access on'
 account() { "${compose[@]}" exec -T dashboard node scripts/lifeos-auth.mjs "$@"; }
-# request <method> <path> [curl options…]: status in $code, body in $work/body
+# request <method> <path> [curl options…]: status in $code, body in
+# $work/body, headers in $work/headers
 request() {
   local method=$1 path=$2
   shift 2
-  code=$(curl --silent --max-time 15 --request "$method" --output "$work/body" --write-out '%{http_code}' "$@" "$gateway$path")
+  code=$(curl --silent --max-time 15 --request "$method" --output "$work/body" --dump-header "$work/headers" \
+    --write-out '%{http_code}' "$@" "$gateway$path")
+}
+# The session cookie the last answer set, as a Cookie header (by hand: a
+# browser keeps a Secure cookie on 127.0.0.1, curl's cookie jar may not).
+session_cookie() {
+  grep -i '^set-cookie: __Host-lifeos.session=' "$work/headers" | head -n 1 | sed 's/^[^:]*: //; s/;.*//' | tr -d '\r'
 }
 expect() { # <status> <method> <path> [curl options…]
   local want=$1
@@ -59,22 +65,24 @@ expect() { # <status> <method> <path> [curl options…]
 echo '==> The first account, with a setup code'
 code_line=$(account setup-code | sed -n 's/^Setup code: //p')
 [[ -n "$code_line" ]] || fail 'setup-code printed no code'
-expect 200 POST /api/auth/sign-up/email --cookie-jar "$jar" -H 'content-type: application/json' \
+expect 200 POST /api/auth/sign-up/email -H 'content-type: application/json' \
   -H "origin: $gateway" -H "x-lifeos-setup-code: $code_line" \
   --data "{\"username\":\"owner\",\"password\":\"$password\"}"
 grep -q '00000000-0000-4000-8000-000000000001' "$work/body" || fail 'the first account did not get the fixed id'
-grep -q '__Host-lifeos.session' "$jar" || fail 'no session cookie'
+session=$(session_cookie)
+[[ -n "$session" ]] || { cat "$work/headers" >&2; fail 'no session cookie'; }
+grep -qi '^set-cookie: __Host-lifeos.session=.*; Secure' "$work/headers" || fail 'the session cookie is not Secure'
 expect 403 POST /api/auth/sign-up/email -H 'content-type: application/json' -H "origin: $gateway" \
   -H "x-lifeos-setup-code: $code_line" --data "{\"username\":\"second\",\"password\":\"$password\"}"
 [[ -z "$(account setup-code --if-no-account)" ]] || fail 'a setup code while an account exists'
 
 echo '==> A write with the session: the actor is the user'
-expect 201 POST /api/tasks/v1/tasks --cookie "$jar" -H 'content-type: application/json' -H "origin: $gateway" \
+expect 201 POST /api/tasks/v1/tasks -H "cookie: $session" -H 'content-type: application/json' -H "origin: $gateway" \
   --data '{"title":"Accounts smoke task"}'
 task_id=$(jq -r .id "$work/body")
 [[ "$task_id" =~ ^[0-9a-f-]{36}$ ]] || fail "no task id: $(cat "$work/body")"
 for _ in $(seq 1 20); do
-  request GET "/api/activity/v1/activity-events?subjectType=task&subjectId=$task_id" --cookie "$jar"
+  request GET "/api/activity/v1/activity-events?subjectType=task&subjectId=$task_id" -H "cookie: $session"
   [[ "$code" == 200 ]] && jq -e '[.items[]? | select(.type == "task.created")] | length > 0' "$work/body" >/dev/null && break
   sleep 0.5
 done
@@ -83,10 +91,10 @@ jq -e '[.items[] | select(.type == "task.created")][0].actor.kind == "user"' "$w
 
 echo '==> Refusals'
 expect 401 GET /api/tasks/v1/tasks --cookie '__Host-lifeos.session=made-up.token'
-expect 403 POST /api/tasks/v1/tasks --cookie "$jar" -H 'content-type: application/json' \
+expect 403 POST /api/tasks/v1/tasks -H "cookie: $session" -H 'content-type: application/json' \
   -H 'origin: https://elsewhere.example' --data '{"title":"cross-site"}'
-expect 200 GET /api/tasks/v1/tasks --cookie "$jar" -H 'X-Life-OS-Identity: forged.token.value'
-expect 404 GET /internal/auth/check --cookie "$jar"
+expect 200 GET /api/tasks/v1/tasks -H "cookie: $session" -H 'X-Life-OS-Identity: forged.token.value'
+expect 404 GET /internal/auth/check -H "cookie: $session"
 expect 404 GET /internal/status
 
 echo '==> Legacy access off on the host'
@@ -95,7 +103,7 @@ sleep 6
 expect 401 GET /api/tasks/v1/tasks
 grep -q '"unauthenticated"' "$work/body" || fail 'the 401 is not JSON unauthenticated'
 expect 307 GET /tasks
-expect 200 GET /api/tasks/v1/tasks --cookie "$jar"
+expect 200 GET /api/tasks/v1/tasks -H "cookie: $session"
 account legacy-access on >/dev/null
 sleep 6
 expect 200 GET /api/tasks/v1/tasks
@@ -105,9 +113,11 @@ account sign-out-all >/dev/null
 expect 200 GET /api/tasks/v1/tasks
 account legacy-access off >/dev/null
 sleep 6
-expect 401 GET /api/tasks/v1/tasks --cookie "$jar"
-expect 200 POST /api/auth/sign-in/username --cookie-jar "$jar" -H 'content-type: application/json' \
+expect 401 GET /api/tasks/v1/tasks -H "cookie: $session"
+expect 200 POST /api/auth/sign-in/username -H 'content-type: application/json' \
   -H "origin: $gateway" --data "{\"username\":\"OWNER\",\"password\":\"$password\"}"
-expect 200 GET /api/tasks/v1/tasks --cookie "$jar"
+session=$(session_cookie)
+[[ -n "$session" ]] || fail 'no session cookie after signing in again'
+expect 200 GET /api/tasks/v1/tasks -H "cookie: $session"
 
 echo 'accounts smoke: ok'
