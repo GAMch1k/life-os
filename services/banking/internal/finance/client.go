@@ -103,6 +103,11 @@ type StatusError struct {
 	Message string
 }
 
+// HTTPStatus and ErrorCode are what a log line keeps of Finance's answer
+// (pkg/diagnostics.ErrorCode), never its message.
+func (e *StatusError) HTTPStatus() int   { return e.Status }
+func (e *StatusError) ErrorCode() string { return e.Code }
+
 func (e *StatusError) Error() string {
 	if e.Code != "" {
 		return fmt.Sprintf("Finance returned %d %s: %s", e.Status, e.Code, e.Message)

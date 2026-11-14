@@ -1,6 +1,7 @@
 package google
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -24,7 +25,8 @@ func TestLogsCarryCodesNotMessages(t *testing.T) {
 		{&calendar.StatusError{Status: 400, Code: "invalid_item", Message: "items[0] " + marker}, "calendar_http_400_invalid_item"},
 		{fmt.Errorf("export: %w", &calendar.StatusError{Status: 409, Code: marker}), "calendar_http_409_other"},
 		{ErrExpired, "google_expired"},
-		{fmt.Errorf("something about %s", marker), "failed"},
+		{fmt.Errorf("something about %s", marker), "go_errors.errorString"},
+		{fmt.Errorf("sync %s: %w", marker, context.DeadlineExceeded), "timeout"},
 	} {
 		got := logCode(tc.err)
 		if got != tc.want || strings.Contains(got, "Anna") {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/GAMch1k/life-os/pkg/diagnostics"
 	store "github.com/GAMch1k/life-os/services/banking/internal/repository/generated"
 )
 
@@ -80,6 +81,6 @@ func (s *Service) syncIfDue(ctx context.Context, conn store.BankConnection) {
 	syncCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.opts.SyncTimeout)
 	defer cancel()
 	if _, err := s.runSync(syncCtx, fresh, TriggerScheduled, nil); err != nil && !errors.Is(err, ErrDailyLimit) {
-		s.logger.Debug("scheduled bank sync did not complete", "connection", uuidString(conn.ID), "error", err)
+		s.logger.Debug("scheduled bank sync did not complete", "connection", uuidString(conn.ID), "error", diagnostics.ErrorCode(err))
 	}
 }
