@@ -35,13 +35,17 @@ function isApi(pathname: string) {
 
 function toLogin(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
-  const next = `${pathname}${search}`;
+  // A share from the installed app cannot be posted again after signing
+  // in: it ends on the page that explains sharing, as an expired Access
+  // session did.
+  const next = pathname === "/share" ? "/share/about" : `${pathname}${search}`;
   // Next.js sends the Location relative, since it is on the request's own
   // host: it stays on the host the owner used (behind the gateway the
-  // request URL names the Dashboard's container).
+  // request URL names the Dashboard's container). A form's POST becomes a
+  // GET of the login page (303).
   const response = NextResponse.redirect(
     new URL(`/login?next=${encodeURIComponent(next)}`, request.url),
-    307,
+    request.method === "GET" || request.method === "HEAD" ? 307 : 303,
   );
   response.headers.set("cache-control", "no-store");
   return response;
