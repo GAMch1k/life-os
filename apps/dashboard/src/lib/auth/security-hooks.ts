@@ -442,14 +442,18 @@ export async function afterSecurityHook(ctx: HookContext, pool: Pool) {
     ) {
       detail = body.role;
     }
-    // Signing an account out, and disabling it, end everything it signed
-    // in with: sessions (Better Auth's endpoint did), device keys, tokens,
-    // and connected apps (docs/architecture/multi-user.md#devices-tokens-mcp).
+    // Signing an account out, disabling it, and deleting it end everything
+    // it signed in with: sessions (Better Auth's endpoint did), device
+    // keys (their push subscriptions follow), tokens, and connected apps
+    // (docs/architecture/multi-user.md#devices-tokens-mcp). API keys name
+    // their account in text, without a foreign key, so a deleted account's
+    // go here too.
     if (
       !failed &&
       target &&
       (ctx.path === "/admin/revoke-user-sessions" ||
-        ctx.path === "/admin/ban-user")
+        ctx.path === "/admin/ban-user" ||
+        ctx.path === "/admin/remove-user")
     ) {
       await revokeCredentials(pool, target).catch((error) =>
         console.error(

@@ -684,6 +684,23 @@ describe("device keys and the watch's key", { skip }, () => {
       [memberId],
     );
     assert.equal(rows[0].n, 0);
+
+    // Deleting an account deletes its keys, which name it without a
+    // foreign key.
+    const doraId = await seedUser(w.db.url, { username: "dora", password });
+    const dora = w.browser();
+    assert.equal((await signIn(dora, "dora")).status, 200);
+    await pairPhone(w, dora, "Dora's phone");
+    const removed = await owner.req("/api/auth/admin/remove-user", {
+      method: "POST",
+      body: { userId: doraId },
+    });
+    assert.equal(removed.status, 200, JSON.stringify(removed.data));
+    const left = await w.rt.pool.query(
+      `SELECT count(*)::int AS n FROM apikey WHERE "referenceId" = $1`,
+      [doraId],
+    );
+    assert.equal(left.rows[0].n, 0);
   });
 });
 
