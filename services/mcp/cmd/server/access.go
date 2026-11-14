@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -213,42 +212,13 @@ func (c *catalog) server(principal *identity.Principal) *mcp.Server {
 	return s
 }
 
-// protectedResource is MCP's OAuth protected resource metadata (RFC 9728):
-// the resource <public URL>/api/mcp, Life OS's authorization server (the
-// public URL, whose metadata is at /.well-known/oauth-authorization-server),
-// and the scopes consent offers.
-func protectedResource(publicURL string) http.HandlerFunc {
-	base := strings.TrimRight(publicURL, "/")
-	body, _ := json.Marshal(map[string]any{
-		"resource":                 base + "/api/mcp",
-		"authorization_servers":    []string{base},
-		"scopes_supported":         []string{"mcp:read", "mcp:write", "offline_access"},
-		"bearer_methods_supported": []string{"header"},
-		"resource_name":            "Life OS",
-		"resource_documentation":   "https://github.com/GAMch1k/life-os/blob/master/docs/services/mcp.md",
-	})
-	return func(w http.ResponseWriter, r *http.Request) {
-		if base == "" {
-			http.NotFound(w, r)
-			return
-		}
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			w.Header().Set("Allow", "GET, HEAD")
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Cache-Control", "public, max-age=3600")
-		_, _ = w.Write(body)
-	}
-}
-
-// httpHandler is MCP's HTTP server: /mcp (the streamable transport), the
-// protected resource metadata, and the probes. A request with the
-// gateway's identity token is verified, and its principal travels in the
-// go-sdk's TokenInfo, so that a session stays with the person who opened
-// it and each tool call is checked against the scopes it came with.
-func httpHandler(verifier *identity.Verifier, tools *catalog, publicURL string) http.Handler {
+// httpHandler is MCP's HTTP server: /mcp (the streamable transport) and the
+// probes. A request with the gateway's identity token is verified, and its
+// principal travels in the go-sdk's TokenInfo, so that a session stays with
+// the person who opened it and each tool call is checked against the
+// scopes it came with. (MCP's OAuth metadata, which a client reads before it
+// signs in, is the Dashboard's, at the site root.)
+func httpHandler(verifier *identity.Verifier, tools *catalog) http.Handler {
 	mux := http.NewServeMux()
 	streamable := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
 		principal, _ := principalOf(auth.TokenInfoFromContext(r.Context()))
@@ -280,9 +250,6 @@ func httpHandler(verifier *identity.Verifier, tools *catalog, publicURL string) 
 		r.Header.Set("Authorization", "Bearer "+token)
 		withToken.ServeHTTP(w, r)
 	}))
-	resource := protectedResource(publicURL)
-	mux.HandleFunc("/.well-known/oauth-protected-resource", resource)
-	mux.HandleFunc("/.well-known/oauth-protected-resource/api/mcp", resource)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{"status":"ok"}`)) })
 	mux.HandleFunc("/ready", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{"status":"ready"}`)) })
 	return mux

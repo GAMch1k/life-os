@@ -1084,6 +1084,28 @@ describe("MCP over OAuth", { skip }, () => {
     assert.equal(tasks.headers.get("www-authenticate"), null);
   });
 
+  test("the protected resource's metadata names the resource and the server", async () => {
+    for (const path of [
+      "/.well-known/oauth-protected-resource/api/mcp",
+      "/.well-known/oauth-protected-resource",
+    ]) {
+      const r = await native(w, "GET", path);
+      assert.equal(r.status, 200, path);
+      assert.equal(r.data.resource, MCP);
+      assert.deepEqual(r.data.authorization_servers, [PUBLIC_URL]);
+      assert.deepEqual(r.data.scopes_supported, [
+        "mcp:read",
+        "mcp:write",
+        "offline_access",
+      ]);
+    }
+    assert.equal(
+      (await native(w, "GET", "/.well-known/oauth-protected-resource/x"))
+        .status,
+      404,
+    );
+  });
+
   test("the authorization server's metadata at the site root", async () => {
     const r = await native(w, "GET", "/.well-known/oauth-authorization-server");
     assert.equal(r.status, 200, JSON.stringify(r.data));

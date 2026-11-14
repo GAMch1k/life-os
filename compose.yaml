@@ -585,9 +585,6 @@ services:
       ACTIVITY_SERVICE_URL: http://activity:8080
       # The Task and event tools show times, and move them, on this clock.
       LIFE_OS_TIMEZONE: ${LIFE_OS_TIMEZONE:-UTC}
-      # MCP's OAuth (P21-06): the resource <public URL>/api/mcp and its
-      # authorization server, in /.well-known/oauth-protected-resource.
-      LIFE_OS_PUBLIC_URL: "${LIFE_OS_PUBLIC_URL:-}"
     expose: ["8080"]
     depends_on:
       finance: {condition: service_started}

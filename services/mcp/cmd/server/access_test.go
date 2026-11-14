@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -47,7 +45,7 @@ func (f *fakeServices) last() *http.Request {
 func testConfig(url string) config.Config {
 	return config.Config{
 		FinanceURL: url, TasksURL: url, InboxURL: url, CalendarURL: url, FoodURL: url,
-		RecipeImportURL: url, TimeZone: "UTC", PublicURL: "https://lifeos.test",
+		RecipeImportURL: url, TimeZone: "UTC",
 	}
 }
 
@@ -132,7 +130,7 @@ func TestTheGrantDecidesTheTools(t *testing.T) {
 	t.Cleanup(backend.Close)
 	signer := identitytest.New(t)
 	tools := newCatalog(testBuild(backend.URL))
-	mcpServer := httptest.NewServer(httpHandler(identity.NewVerifier(signer.Keys, nil), tools, "https://lifeos.test"))
+	mcpServer := httptest.NewServer(httpHandler(identity.NewVerifier(signer.Keys, nil), tools))
 	// Closed after the sessions (cleanups run last first).
 	t.Cleanup(mcpServer.Close)
 
@@ -217,31 +215,5 @@ func TestTheGrantDecidesTheTools(t *testing.T) {
 	_ = response.Body.Close()
 	if response.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("a forged token: %d", response.StatusCode)
-	}
-}
-
-func TestProtectedResourceMetadata(t *testing.T) {
-	handler := httpHandler(identity.NewVerifier(nil, nil), newCatalog(testBuild("http://127.0.0.1:1")), "https://lifeos.test/")
-	for _, path := range []string{"/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/api/mcp"} {
-		recorder := httptest.NewRecorder()
-		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
-		var metadata map[string]any
-		body, _ := io.ReadAll(recorder.Body)
-		if err := json.Unmarshal(body, &metadata); err != nil || recorder.Code != http.StatusOK {
-			t.Fatalf("%s: %d %s", path, recorder.Code, body)
-		}
-		if metadata["resource"] != "https://lifeos.test/api/mcp" {
-			t.Fatalf("resource: %v", metadata["resource"])
-		}
-		if servers, _ := metadata["authorization_servers"].([]any); len(servers) != 1 || servers[0] != "https://lifeos.test" {
-			t.Fatalf("authorization servers: %v", metadata["authorization_servers"])
-		}
-	}
-	// Without a public URL there is no resource to describe.
-	closed := httpHandler(identity.NewVerifier(nil, nil), newCatalog(testBuild("http://127.0.0.1:1")), "")
-	recorder := httptest.NewRecorder()
-	closed.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/.well-known/oauth-protected-resource", nil))
-	if recorder.Code != http.StatusNotFound {
-		t.Fatalf("without a public URL: %d", recorder.Code)
 	}
 }

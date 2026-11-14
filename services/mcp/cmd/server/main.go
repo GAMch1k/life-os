@@ -76,7 +76,7 @@ func run(ctx context.Context) error {
 		fmt.Fprintln(os.Stderr, "identity: "+identity.TrustedKeysEnv+" is empty: requests with an identity token are refused")
 	}
 	tools := newCatalog(func() *mcp.Server { return newServer(cfg, hc, emitter, o) })
-	handler := httpHandler(identity.NewVerifier(keys, nil), tools, cfg.PublicURL)
+	handler := httpHandler(identity.NewVerifier(keys, nil), tools)
 	return http.ListenAndServe(fmt.Sprintf(":%d", cfg.Port), handler)
 }
 

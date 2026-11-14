@@ -7,8 +7,10 @@ set -euo pipefail
 # its configuration rendered as compose.yaml has it rendered (made-up hosts),
 # a stand-in Dashboard whose auth check answers by a made-up cookie
 # (lifeos=good: 204 with an identity token naming the original method and
-# URI; forbidden: 403; boom: 500; none: 401), and one stand-in for every
-# service that echoes what reached it, on a network of their own. It checks:
+# URI; forbidden: 403; boom: 500; none: 401) or bearer (Authorization:
+# Bearer good-key: 204; any other: 401, for /api/mcp/ with MCP's challenge),
+# and one stand-in for every service that echoes what reached it, on a
+# network of their own. It checks:
 #  - every service location asks the auth check, and its refusals are JSON
 #    (401 unauthenticated, 403 forbidden, 503 auth_unavailable when the
 #    check fails);
@@ -19,6 +21,10 @@ set -euo pipefail
 #    the check, with the cookie; a client's X-Life-OS-Identity never does;
 #  - /internal/ is 404 from outside, the check included;
 #  - /android/ needs a sign-in; its page sends a browser to the login;
+#  - a device key or token (Authorization: Bearer) reaches the check, which
+#    decides, and never a service; MCP's 401 carries the check's
+#    WWW-Authenticate (P21-06); the OAuth metadata and the phone's pairing
+#    reach the Dashboard without the check;
 #  - LIFE_OS_REQUIRE_CLOUDFLARE_ACCESS: on (empty), the tunnel path needs
 #    Access's token, as before; off, Life OS's sign-in alone decides.
 #
@@ -73,12 +79,25 @@ server {
   listen 3000;
   default_type text/plain;
   location = /internal/auth/check {
+    if ($http_authorization = "Bearer good-key") {
+      add_header X-Life-OS-Identity "key:$http_x_original_method:$http_x_original_uri" always;
+      return 204;
+    }
+    set $challenge "";
+    if ($http_x_original_uri ~ "^/api/mcp/") {
+      set $challenge 'Bearer resource_metadata="https://lifeos.example.com/.well-known/oauth-protected-resource/api/mcp"';
+    }
+    if ($http_authorization ~ "^Bearer ") {
+      add_header WWW-Authenticate $challenge always;
+      return 401;
+    }
     if ($http_cookie ~ "lifeos=good") {
       add_header X-Life-OS-Identity "ok:$http_x_original_method:$http_x_original_uri:$http_x_real_ip" always;
       return 204;
     }
     if ($http_cookie ~ "lifeos=forbidden") { return 403; }
     if ($http_cookie ~ "lifeos=boom") { return 500; }
+    add_header WWW-Authenticate $challenge always;
     return 401;
   }
   location / {
@@ -159,18 +178,53 @@ for path in "${service_paths[@]}"; do
 done
 
 printf '==> A client cannot pass an identity, a cookie, or a credential to a service\n'
+# (Basic: a proxy's own credential, which Life OS ignores; Bearer is a
+# Life OS credential, below.)
 expect POST /api/tasks/v1/tasks 200 --cookie 'lifeos=good; other=1' \
-  -H 'X-Life-OS-Identity: forged' -H 'Authorization: Bearer abc' --data '{}'
+  -H 'X-Life-OS-Identity: forged' -H 'Authorization: Basic YWJjOmRlZg==' --data '{}'
 expect_body 'identity=[ok:POST:/api/tasks/v1/tasks:'
 refuse_body forged
 expect_body 'cookie=[]'
 expect_body 'authorization=[]'
 expect GET /api/tasks/v1/tasks 401 -H 'X-Life-OS-Identity: forged'
 
+printf '==> A device key or token: the check decides, and a service never sees it\n'
+expect POST /api/voice/v1/audio-jobs 200 -H 'Authorization: Bearer good-key' --data '{}'
+expect_body 'identity=[key:POST:/api/voice/v1/audio-jobs]'
+expect_body 'authorization=[]'
+expect GET /api/tasks/v1/tasks 401 -H 'Authorization: Bearer bad-key'
+expect_body '"code":"unauthenticated"'
+# A bad key with a good cookie: the key decides.
+expect GET /api/tasks/v1/tasks 401 -H 'Authorization: Bearer bad-key' --cookie 'lifeos=good'
+expect GET /android/updates 200 -H 'Authorization: Bearer good-key'
+expect GET /android/updates 401 -H 'Authorization: Bearer bad-key'
+
+printf '==> MCP: the 401 carries the challenge that starts OAuth\n'
+expect POST /api/mcp/mcp 401 --data '{}'
+expect_body '"code":"unauthenticated"'
+grep -qi '^www-authenticate: Bearer resource_metadata="https://lifeos.example.com/.well-known/oauth-protected-resource/api/mcp"' "$work/headers" ||
+  { cat "$work/headers" >&2; fail "MCP's 401 lacks the challenge"; }
+[ "$(grep -ci '^www-authenticate:' "$work/headers")" = 1 ] || { cat "$work/headers" >&2; fail "MCP's 401 has the challenge more than once"; }
+grep -qi '^x-content-type-options: nosniff' "$work/headers" || { cat "$work/headers" >&2; fail "MCP's 401 lost the security headers"; }
+expect POST /api/mcp/mcp 401 -H 'Authorization: Bearer bad-key' --data '{}'
+grep -qi '^www-authenticate: Bearer resource_metadata=' "$work/headers" || { cat "$work/headers" >&2; fail "MCP's 401 for a bad token lacks the challenge"; }
+expect POST /api/mcp/mcp 200 -H 'Authorization: Bearer good-key' --data '{}'
+expect_body 'identity=[key:POST:/api/mcp/mcp]'
+expect_body 'authorization=[]'
+expect POST /api/mcp/mcp 403 --cookie 'lifeos=forbidden' --data '{}'
+expect_body '"code":"forbidden"'
+expect POST /api/mcp/mcp 503 --cookie 'lifeos=boom' --data '{}'
+expect_body '"code":"auth_unavailable"'
+# Other routes carry no challenge.
+expect GET /api/tasks/v1/tasks 401
+! grep -qi '^www-authenticate:' "$work/headers" || { cat "$work/headers" >&2; fail "a 401 outside MCP has a challenge"; }
+
 printf '==> Public routes and the Dashboard reach the Dashboard without the check\n'
 for path in /login /setup /reset/abc /api/auth/get-session /_next/static/chunk.js /sw.js \
   /app.webmanifest /icons/icon-192.png /privacy /terms / /tasks /settings/security /api/account \
-  /api/status /share /calendar/google/callback /finance/bank/callback; do
+  /api/status /share /calendar/google/callback /finance/bank/callback \
+  /.well-known/oauth-authorization-server /.well-known/oauth-protected-resource/api/mcp \
+  /oauth/consent /settings/devices /api/auth/devices/child; do
   expect GET "$path" 200 --cookie 'lifeos=good; theme=dark' -H 'X-Life-OS-Identity: forged' -H 'Authorization: Bearer abc'
   expect_body dashboard
   expect_body 'cookie=[lifeos=good; theme=dark]'

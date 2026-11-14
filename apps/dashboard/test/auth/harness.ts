@@ -10,7 +10,10 @@ import { adminHandler } from "../../src/lib/auth/admin";
 import type { CheckRuntime } from "../../src/lib/auth/check";
 import type { RuntimeStatus } from "../../src/lib/runtime-status";
 import { authHandler, checkHandler } from "../../src/lib/auth/handlers";
-import { oauthMetadataHandler } from "../../src/lib/auth/oauth-metadata";
+import {
+  oauthMetadataHandler,
+  protectedResourceHandler,
+} from "../../src/lib/auth/oauth-metadata";
 import { createRuntime } from "../../src/lib/auth/runtime";
 
 /**
@@ -156,6 +159,9 @@ export function app(rt: CheckRuntime, options: AppOptions = {}) {
     if (pathname.startsWith("/api/admin")) return adminHandler(rt, request);
     if (pathname === "/.well-known/oauth-authorization-server") {
       return oauthMetadataHandler(rt, request);
+    }
+    if (pathname.startsWith("/.well-known/oauth-protected-resource")) {
+      return protectedResourceHandler(rt, request, true);
     }
     if (pathname === "/api/status" && options.status) {
       return statusHandler(rt, request, options.status);

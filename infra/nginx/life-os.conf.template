@@ -283,6 +283,11 @@ server {
   location /api/mcp/ {
     auth_request /internal/auth/check;
     auth_request_set $lifeos_identity $upstream_http_x_life_os_identity;
+    # An MCP client without a valid token learns where to sign in: the
+    # check answers its 401 with WWW-Authenticate (RFC 9728's
+    # resource_metadata), which nginx's auth_request passes on with the 401
+    # by itself, through the server's error_page as well (P21-06;
+    # tools/test-gateway-auth checks it is there, once).
     limit_req zone=lifeos_mcp burst=10 nodelay;
     proxy_buffering off;
     proxy_read_timeout 300s;
@@ -442,7 +447,10 @@ server {
     return 404;
   }
   # The Dashboard's locations pass the request URI as the client sent it,
-  # as before: their proxy_pass has no URI.
+  # as before: their proxy_pass has no URI. This one also serves MCP's
+  # OAuth metadata, which a client reads before it signs in, so public:
+  # /.well-known/oauth-protected-resource/api/mcp and
+  # /.well-known/oauth-authorization-server (P21-06).
   location / {
     set $upstream dashboard:3000;
     proxy_pass http://$upstream;

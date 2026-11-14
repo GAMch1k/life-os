@@ -22,10 +22,6 @@ type Config struct {
 	// event tools show times and move them on its wall clock. An unknown
 	// name falls back to UTC.
 	TimeZone string `env:"LIFE_OS_TIMEZONE" default:"UTC"`
-	// PublicURL is the address Life OS is reached at (LIFE_OS_PUBLIC_URL):
-	// MCP's OAuth resource is <PublicURL>/api/mcp, and its protected
-	// resource metadata names it. Empty: no metadata (404).
-	PublicURL string `env:"LIFE_OS_PUBLIC_URL"`
 }
 
 func Load() (Config, error) {
