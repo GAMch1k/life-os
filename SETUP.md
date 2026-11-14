@@ -75,7 +75,7 @@ Compose refuses every command until these five variables are set: `LIFE_OS_POSTG
 | --- | --- |
 | `LIFE_OS_AUTH_DB_PASSWORD` | `<generate>`: the Dashboard's accounts database, `auth_db`. |
 | `LIFE_OS_AUTH_SECRET` | `openssl rand -hex 32`. Signs the session cookies and encrypts two-factor secrets: keep it with your backups. |
-| `LIFE_OS_IDENTITY_SIGNING_KEY`, `LIFE_OS_TRUSTED_KEYS` | An Ed25519 key pair as JWKs; `./setup.sh` writes them (also in a clone), or make them as [Keys](docs/install/accounts.md#keys) says. |
+| `LIFE_OS_IDENTITY_SIGNING_KEY`, `LIFE_OS_TRUSTED_KEYS` | An Ed25519 key pair as JWKs; `./setup.sh` writes them (also in a clone), `./setup.sh account-keys` adds them to an `.env` from before accounts, or make them as [Keys](docs/install/accounts.md#keys) says. |
 | `LIFE_OS_LEGACY_ACCESS` | `off` (default) for a new server; `on` for one that ran before accounts, so that it keeps working without a sign-in until you turn it off. |
 | `LIFE_OS_INSECURE_LOGIN_HOSTS` | Plain-HTTP hosts on which signing in is allowed anyway, such as a WireGuard address. Empty (default): sign in at the HTTPS address or `localhost`. |
 | `LIFE_OS_REQUIRE_CLOUDFLARE_ACCESS` | Empty (default): the tunnel needs Cloudflare Access's token, as before; `off` makes the login the only gate there. |

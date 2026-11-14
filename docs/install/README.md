@@ -109,6 +109,7 @@ The phone and watch apps are on their own page: [Phone and watch apps](phone-app
 | `./setup.sh check` | Only checks the server. |
 | `./setup.sh gateway` | Changes where Life OS listens (`--bind`, `--port`) and its address (`--public-url`). |
 | `./setup.sh setup-code` | A one-time code for the first account, while none exists ([Accounts](accounts.md)). |
+| `./setup.sh account-keys` | Adds the accounts' settings to an `.env` from before accounts, in a clone of the repository (`update` does it for a release install). |
 | `./setup.sh recover-owner [--reset-2fa]` | A one-time link to set the owner's password; with `--reset-2fa` also turns off their two-factor ([Locked out](accounts.md#locked-out)). |
 | `./setup.sh legacy-access [on\|off]` | Shows or changes [legacy access](accounts.md#legacy-access). |
 | `./setup.sh sign-out-all [--keep-devices]` | Signs every account out, everywhere ([Sign everyone out](accounts.md#sign-everyone-out)). |

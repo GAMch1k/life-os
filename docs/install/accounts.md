@@ -80,7 +80,7 @@ For an emergency (a stolen laptop, a leaked database copy, anything that looks l
 
 `./setup.sh rotate-keys` makes a new signing key: the services trust the new and the current key first, then the Dashboard signs with the new one; the older key is dropped at the next rotation. Rotate after a suspected leak; there is no schedule. In a clone of the repository it prints the two `docker compose` commands to run instead.
 
-To make the keys by hand (a clone set up without `setup.sh`), see how `setup.sh` does it (`identity_key_pair`): an Ed25519 key from `openssl genpkey -algorithm ed25519`, written as a JWK with a `kid`, and `LIFE_OS_TRUSTED_KEYS='{"keys":[<the same JWK without "d">]}'`. `LIFE_OS_AUTH_SECRET` is `openssl rand -hex 32`.
+In a clone of the repository, which `./setup.sh update` leaves alone, `./setup.sh account-keys` adds what an `.env` from before accounts lacks: the accounts database's password, the three keys, `LIFE_OS_LEGACY_ACCESS=on`, and the two optional settings, empty. It never prints a value and changes nothing else. By hand: an Ed25519 key from `openssl genpkey -algorithm ed25519`, written as a JWK with a `kid` (as `setup.sh`'s `identity_key_pair` does), `LIFE_OS_TRUSTED_KEYS='{"keys":[<the same JWK without "d">]}'`, and `LIFE_OS_AUTH_SECRET` from `openssl rand -hex 32`.
 
 ## Cloudflare Access
 

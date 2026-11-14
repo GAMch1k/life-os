@@ -1266,6 +1266,23 @@ for command in up update codex; do
   ok "$command refuses in a clone" test "$status" -eq 1
 done
 ok 'no compose command ran in the clone' bash -c "! grep -q 'docker compose' '$case_dir.log'"
+# A clone's .env from before accounts: account-keys adds what it lacks.
+clone_password=$(value LIFE_OS_FINANCE_DB_PASSWORD)
+sed -i -E '/^LIFE_OS_(AUTH_SECRET|IDENTITY_SIGNING_KEY|TRUSTED_KEYS|LEGACY_ACCESS|INSECURE_LOGIN_HOSTS|AUTH_DB_PASSWORD|REQUIRE_CLOUDFLARE_ACCESS)=/d' "$case_dir/.env"
+run -- account-keys
+ok 'account-keys in a clone' test "$status" -eq 0
+ok 'adds the auth secret' grep -qE '^LIFE_OS_AUTH_SECRET=[0-9a-f]{64}$' "$case_dir/.env"
+ok 'and the keys' grep -qE "^LIFE_OS_TRUSTED_KEYS='\{\"keys\":\[\{" "$case_dir/.env"
+ok 'and the auth_db password' grep -qE '^LIFE_OS_AUTH_DB_PASSWORD=[0-9a-f]{48}$' "$case_dir/.env"
+ok 'with legacy access on' test "$(value LIFE_OS_LEGACY_ACCESS)" = on
+ok 'and the two optional settings, empty' bash -c "grep -qx 'LIFE_OS_INSECURE_LOGIN_HOSTS=' '$case_dir/.env' && grep -qx 'LIFE_OS_REQUIRE_CLOUDFLARE_ACCESS=' '$case_dir/.env'"
+ok 'keeps everything else' test "$(value LIFE_OS_FINANCE_DB_PASSWORD)" = "$clone_password"
+ok 'names what it added' output_has 'LIFE_OS_AUTH_SECRET'
+ok 'prints no secret' no_secret_printed
+ok 'runs no compose command' bash -c "! grep -q 'docker compose' '$case_dir.log'"
+run -- account-keys
+ok 'a second time: nothing to add' output_has 'nothing to add'
+ok 'no duplicate keys' no_duplicate_keys
 run LIFE_OS_GOOGLE_CLIENT_ID=1-x.apps.googleusercontent.com LIFE_OS_GOOGLE_CLIENT_SECRET=GOCSPX-abc -- --yes google
 ok 'an integration in a clone' test "$status" -eq 0
 ok 'says how to redeploy one service' output_has 'docker compose up -d --no-build --no-deps google-calendar'

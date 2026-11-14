@@ -1897,6 +1897,31 @@ account_keys_needed() {
   ((made))
 }
 
+# account-keys: the accounts' settings an .env from before accounts lacks,
+# made here: the auth_db password, the secret, the signing key with the
+# trusted keys, and legacy access on, so that the install keeps working as
+# it did. ./setup.sh update does this for a release install; this is for a
+# clone of the repository, which update leaves alone. Never prints a value.
+cmd_account_keys() {
+  local key
+  local -a added=()
+  require_env
+  is_set LIFE_OS_AUTH_DB_PASSWORD || env_values[LIFE_OS_AUTH_DB_PASSWORD]=$(random_hex 24)
+  account_keys_needed || true
+  env_get LIFE_OS_LEGACY_ACCESS >/dev/null 2>&1 || env_values[LIFE_OS_LEGACY_ACCESS]=on
+  for key in LIFE_OS_INSECURE_LOGIN_HOSTS LIFE_OS_REQUIRE_CLOUDFLARE_ACCESS; do
+    env_get "$key" >/dev/null 2>&1 || env_values[$key]=
+  done
+  for key in "${!env_values[@]}"; do added+=("$key"); done
+  if ((${#added[@]} == 0)); then
+    say 'The accounts are set up in .env already: nothing to add.'
+    return 0
+  fi
+  env_update
+  say "Added to .env: $(printf '%s\n' "${added[@]}" | sort | tr '\n' ' ')"
+  say 'Keep a copy of .env with your backups: auth_db needs LIFE_OS_AUTH_SECRET.'
+}
+
 dashboard_running() {
   [[ -n $(docker compose ps -q --status running dashboard 2>/dev/null) ]]
 }
@@ -2318,6 +2343,9 @@ release's compose.yaml and .env.example.
   ./setup.sh gateway            change where Life OS listens and its address
 
 Accounts (docs/install/accounts.md):
+  ./setup.sh account-keys       add the accounts' settings to an older .env
+                                (a clone of the repository; update does it
+                                for a release install)
   ./setup.sh setup-code         a one-time code for the first account, while
                                 none exists (also printed by up and update)
   ./setup.sh recover-owner [--reset-2fa]
@@ -2416,6 +2444,7 @@ case ${command:-init} in
   ntfy) setup_ntfy ;;
   webpush) setup_webpush ;;
   feed) setup_feed ;;
+  account-keys) cmd_account_keys ;;
   setup-code) cmd_setup_code ;;
   recover-owner) cmd_recover_owner ;;
   legacy-access) cmd_legacy_access "${args[@]}" ;;
