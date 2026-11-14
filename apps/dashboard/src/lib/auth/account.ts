@@ -1,12 +1,13 @@
 import { type CheckRuntime, checkRequest, type Principal } from "./check";
 import type { ServerRole } from "./constants";
 import { hasSecondFactor } from "./roles";
-import { accountCount, firstAccountExists, setLegacyAccess } from "./store";
+import { firstAccountExists, setLegacyAccess } from "./store";
 
 /**
  * Life OS's own account API, /api/account (next to Better Auth's
- * /api/auth): who is signed in, the sessions list, and the legacy access
- * switch of Settings → Security (docs/frontend/dashboard.md).
+ * /api/auth): who is signed in, the sessions list, and turning legacy
+ * access off from Settings → Security (docs/frontend/dashboard.md). Turning
+ * it on is the host's alone (./setup.sh legacy-access on).
  */
 
 export type AccountInfo = {
@@ -172,26 +173,22 @@ export async function accountHandler(
       enabled = undefined;
     }
     if (typeof enabled !== "boolean") {
+      return problem(400, "bad_request", 'Send {"enabled": false}.');
+    }
+    // Turning it on turns sign-in off for the whole server: only from the
+    // host (./setup.sh legacy-access on), never with a browser's session,
+    // which might be an old or a stolen one.
+    if (enabled) {
       return problem(
-        400,
-        "bad_request",
-        'Send {"enabled": true} or {"enabled": false}.',
+        403,
+        "host_only",
+        "Turn legacy access on from the server: ./setup.sh legacy-access on.",
       );
     }
-    const result = await setLegacyAccess(rt.pool, enabled, principal.userId);
-    if (result === "accounts") {
-      return problem(
-        409,
-        "more_than_one_account",
-        "Legacy access stays off while more than one account exists.",
-      );
-    }
+    await setLegacyAccess(rt.pool, false, principal.userId);
     rt.legacy.invalidate();
     rt.tokens.forget("legacy");
-    return json(200, {
-      legacyAccess: enabled,
-      accounts: await accountCount(rt.pool),
-    });
+    return json(200, { legacyAccess: false });
   }
 
   return problem(404, "not_found", "Not found");

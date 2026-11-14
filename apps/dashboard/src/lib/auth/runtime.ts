@@ -2,7 +2,12 @@ import { Pool } from "pg";
 
 import { type CheckRuntime, LegacyCache } from "./check";
 import { readAuthEnv } from "./env";
-import { createSigner, parseTrustedKeys, TokenCache } from "./identity";
+import {
+  assertSignerTrusted,
+  createSigner,
+  parseTrustedKeys,
+  TokenCache,
+} from "./identity";
 import { createAuth } from "./server";
 import { LoginThrottle } from "./throttle";
 
@@ -21,11 +26,7 @@ export function createRuntime(source = process.env): CheckRuntime {
   const signer = createSigner(env.signingKey);
   // The signer's own key must be one the services trust, or every token
   // it mints is refused: say so at once rather than per request.
-  if (!parseTrustedKeys(env.trustedKeys).has(signer.kid)) {
-    throw new Error(
-      `LIFE_OS_TRUSTED_KEYS does not list the signing key ${signer.kid}: run ./setup.sh rotate-keys auth, or add its public key`,
-    );
-  }
+  assertSignerTrusted(signer, parseTrustedKeys(env.trustedKeys));
   const pool = new Pool({
     connectionString: env.databaseUrl,
     max: 8,

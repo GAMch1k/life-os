@@ -148,6 +148,18 @@ describe("the first account", { skip }, () => {
     assert.notEqual(first, second);
   });
 
+  test("a sign-up that fails on its input leaves the setup code working", async () => {
+    const code = await createSetupCode(w.rt.pool);
+    const r = await w.browser().req("/api/auth/sign-up/email", {
+      method: "POST",
+      headers: { "x-lifeos-setup-code": code! },
+      body: { username: "owner", password: "short" },
+    });
+    assert.equal(r.status, 400, JSON.stringify(r.data));
+    const { rows } = await w.rt.pool.query("SELECT used_at FROM setup_codes");
+    assert.deepEqual(rows, [{ used_at: null }]);
+  });
+
   test("the setup code creates the owner, with the fixed ids, without an email", async () => {
     const { rows } = await w.rt.pool.query(
       "SELECT 1 FROM setup_codes WHERE used_at IS NULL",
@@ -188,6 +200,44 @@ describe("the first account", { skip }, () => {
     });
     assert.equal(r.status, 403);
     assert.equal(r.data.code, "REGISTRATION_CLOSED");
+  });
+
+  test("two sign-ups racing with one setup code make one account", async () => {
+    const raced = await world({ owner: false });
+    try {
+      const code = await createSetupCode(raced.rt.pool);
+      const names = ["ann", "ben", "cid", "dot", "eve", "fay"];
+      const replies = await Promise.all(
+        names.map((username) =>
+          raced.browser().req("/api/auth/sign-up/email", {
+            method: "POST",
+            headers: { "x-lifeos-setup-code": code! },
+            body: { username, password },
+          }),
+        ),
+      );
+      const statuses = replies.map((r) => r.status);
+      assert.equal(
+        statuses.filter((status) => status === 200).length,
+        1,
+        statuses.join(),
+      );
+      for (const r of replies.filter((reply) => reply.status !== 200)) {
+        assert.equal(r.status, 403, JSON.stringify(r.data));
+        assert.match(r.data.code, /^(SETUP_CODE_INVALID|REGISTRATION_CLOSED)$/);
+      }
+      const users = await raced.rt.pool.query('SELECT id, role FROM "user"');
+      assert.deepEqual(users.rows, [{ id: FIRST_USER_ID, role: "owner" }]);
+      const used = await raced.rt.pool.query(
+        "SELECT used_by FROM setup_codes WHERE used_at IS NOT NULL",
+      );
+      assert.deepEqual(
+        used.rows.map((row) => row.used_by),
+        [FIRST_USER_ID],
+      );
+    } finally {
+      await raced.close();
+    }
   });
 
   test("the session cookie is host-only, Secure, HttpOnly, and SameSite=Lax", async () => {
@@ -333,6 +383,8 @@ describe("sign-in, two-factor, passkeys", { skip }, () => {
       ["POST", "/api/auth/admin/create-user"],
       ["POST", "/api/auth/delete-user"],
       ["POST", "/api/auth/change-email"],
+      // The reset email's callback: a reset link is /reset/<token>.
+      ["GET", "/api/auth/reset-password/some-token?callbackURL=%2F"],
     ]) {
       const r = await w.owner.req(path, {
         method,
@@ -456,11 +508,9 @@ describe("the auth check, identity tokens, and legacy access", { skip }, () => {
   });
 
   test("legacy access on: no credential is the first account, via legacy", async () => {
-    const r = await w.owner.req("/api/account/legacy-access", {
-      method: "POST",
-      body: { enabled: true },
-    });
-    assert.equal(r.status, 200, JSON.stringify(r.data));
+    // Only the host turns it on (./setup.sh legacy-access on).
+    assert.equal(await cli.setLegacyAccess(w.rt.pool, true), "ok");
+    w.rt.legacy.invalidate();
     const anonymous = new Browser(w.fetcher);
     const reply = await anonymous.check();
     assert.equal(reply.status, 204);
@@ -505,19 +555,27 @@ describe("the auth check, identity tokens, and legacy access", { skip }, () => {
     assert.equal(r.status, 401);
   });
 
-  test("legacy access can be turned on again only while one account exists", async () => {
+  test("the owner turns legacy access off; only the host turns it on, while one account exists", async () => {
     const id = await seedUser(w.db.url, { username: "bea", password });
     let r = await w.owner.req("/api/account/legacy-access", {
       method: "POST",
       body: { enabled: false },
     });
     assert.equal(r.status, 200);
+    assert.deepEqual(r.data, { legacyAccess: false });
+    assert.equal((await new Browser(w.fetcher).check()).status, 401);
+    // Not from a browser, not even the owner's, with one account or more.
     r = await w.owner.req("/api/account/legacy-access", {
       method: "POST",
       body: { enabled: true },
     });
-    assert.equal(r.status, 409);
-    assert.equal(r.data.error.code, "more_than_one_account");
+    assert.equal(r.status, 403);
+    assert.equal(r.data.error.code, "host_only");
+    r = await w.owner.req("/api/account/legacy-access", {
+      method: "POST",
+      body: { enabled: "yes" },
+    });
+    assert.equal(r.status, 400);
     assert.equal(await cli.setLegacyAccess(w.rt.pool, true), "accounts");
     // A member cannot change it.
     const bea = w.browser();
@@ -528,6 +586,11 @@ describe("the auth check, identity tokens, and legacy access", { skip }, () => {
     });
     assert.equal(r.status, 403);
     await sql(w.db.url, `DELETE FROM "user" WHERE id = $1`, [id]);
+    r = await w.owner.req("/api/account/legacy-access", {
+      method: "POST",
+      body: { enabled: true },
+    });
+    assert.equal(r.status, 403, "one account: still the host's alone");
     assert.equal(await cli.setLegacyAccess(w.rt.pool, true), "ok");
     w.rt.legacy.invalidate();
     assert.equal((await new Browser(w.fetcher).check()).status, 204);
@@ -1025,6 +1088,11 @@ describe("the host's commands", { skip }, () => {
     const printed = await run("sign-out-all");
     assert.equal(printed.code, 0);
     assert.match(printed.text, /Signed out \d+ session/);
+    // Signing out means little while legacy access is on: it says which.
+    assert.match(
+      printed.text,
+      /Legacy access is off: every request needs a sign-in/,
+    );
     for (const b of [one, two, carl])
       assert.equal((await b.check()).status, 401);
     const afterRows = await w.rt.pool.query(
@@ -1036,6 +1104,13 @@ describe("the host's commands", { skip }, () => {
     // Everyone signs in again as usual.
     assert.equal((await signIn(w.browser(), "owner")).status, 200);
     await sql(w.db.url, `DELETE FROM "user" WHERE id = $1`, [id]);
+    assert.equal((await run("legacy-access", "on")).code, 0);
+    const legacyOn = await run("sign-out-all");
+    assert.match(
+      legacyOn.text,
+      /Legacy access is on: .*\.\/setup\.sh legacy-access off/,
+    );
+    assert.equal((await run("legacy-access", "off")).code, 0);
   });
 });
 
@@ -1107,5 +1182,18 @@ describe("schema, passwords, and keys", { skip }, () => {
       () => runtime(w.db.url, { keys: signing, trusted: [other.publicJwk] }),
       /does not list the signing key auth-a/,
     );
+  });
+
+  test("the runtime refuses a trusted key with the signing key's kid but another key", () => {
+    const signing = testKeys("auth-a");
+    const impostor = testKeys("auth-a");
+    assert.notEqual(signing.publicJwk.x, impostor.publicJwk.x);
+    assert.throws(
+      () => runtime(w.db.url, { keys: signing, trusted: [impostor.publicJwk] }),
+      /lists auth-a with another public key/,
+    );
+    // The matching pair starts.
+    const ok = runtime(w.db.url, { keys: signing });
+    void ok.pool.end();
   });
 });

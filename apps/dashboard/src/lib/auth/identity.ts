@@ -185,8 +185,40 @@ export function verifyIdentityToken(
 type Cached = { token: string; exp: number; version: string };
 
 /**
- * Minted tokens, per credential: the check re-mints one with under a minute
- * left, or when what it reflects changed (the user's authz_version, role).
+ * Checks, once at startup, that the services will accept what the signer
+ * mints: LIFE_OS_TRUSTED_KEYS must list the signing key's kid with its
+ * public key. A probe token is signed and verified; a pair that does not
+ * match (the same kid, another key) fails here, loudly, rather than as a
+ * 401 on every request.
+ */
+export function assertSignerTrusted(
+  signer: Signer,
+  keys: Map<string, KeyObject>,
+): void {
+  if (!keys.has(signer.kid)) {
+    throw new Error(
+      `LIFE_OS_TRUSTED_KEYS does not list the signing key ${signer.kid}: run ./setup.sh rotate-keys auth, or add its public key`,
+    );
+  }
+  const probe = signer.sign({
+    sub: "00000000-0000-4000-8000-000000000000",
+    sid: "startup-probe",
+    via: "session",
+    role: "member",
+    sp: {},
+  });
+  if (!verifyIdentityToken(probe, keys)) {
+    throw new Error(
+      `LIFE_OS_TRUSTED_KEYS lists ${signer.kid} with another public key than LIFE_OS_IDENTITY_SIGNING_KEY has: the services would refuse every token (docs/install/accounts.md#keys)`,
+    );
+  }
+}
+
+/**
+ * Minted tokens, per credential: the check hands one out again only while
+ * at least IDENTITY_REMINT_SECONDS (4 of its 5 minutes) are left, so that a
+ * token a service gets is never older than a minute; it re-mints sooner when
+ * what the token reflects changed (the user's authz_version, role).
  */
 export class TokenCache {
   private readonly entries = new Map<string, Cached>();

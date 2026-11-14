@@ -799,13 +799,15 @@ function LegacyAccessCard({
   const [error, setError] = useState<string>();
   const [busy, startTransition] = useTransition();
 
-  const change = (next: boolean) =>
+  // Only off from here: turning it on turns sign-in off for the whole
+  // server, which only the host may do (./setup.sh legacy-access on).
+  const turnOff = () =>
     startTransition(async () => {
       setError(undefined);
       const response = await fetch("/api/account/legacy-access", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ enabled: next }),
+        body: JSON.stringify({ enabled: false }),
       }).catch(() => null);
       if (!response?.ok) {
         const body = await response?.json().catch(() => null);
@@ -838,16 +840,25 @@ function LegacyAccessCard({
         <Label className="w-fit">
           <Switch
             checked={enabled}
-            disabled={busy || (!enabled && accounts > 1)}
-            onCheckedChange={(checked) => change(checked)}
+            disabled={busy || !enabled}
+            onCheckedChange={(checked) => {
+              if (!checked) turnOff();
+            }}
           />
           Allow access without signing in
         </Label>
-        {!enabled && accounts > 1 ? (
+        {enabled ? null : (
           <p className="text-muted-foreground">
-            It stays off while more than one account exists.
+            {accounts > 1 ? (
+              "It stays off while more than one account exists."
+            ) : (
+              <>
+                To turn it back on, run <code>./setup.sh legacy-access on</code>{" "}
+                on the server.
+              </>
+            )}
           </p>
-        ) : null}
+        )}
         {error ? (
           <p className="text-destructive" role="alert">
             {error}

@@ -30,9 +30,18 @@ export const IDENTITY_HEADER = "X-Life-OS-Identity";
 export const IDENTITY_ISSUER = "lifeos-auth";
 export const IDENTITY_AUDIENCE = "lifeos-services";
 export const IDENTITY_TYPE = "lifeos-id+jwt";
-/** Identity tokens live five minutes; the check re-mints one with under a minute left. */
+/** Identity tokens live five minutes. */
 export const IDENTITY_TTL_SECONDS = 300;
-export const IDENTITY_REMINT_SECONDS = 60;
+/**
+ * The check hands out a cached token only while at least 4 minutes of it
+ * are left, and mints a new one otherwise: the gateway asks the check
+ * before it receives a request's body, and a service verifies the token
+ * after, so a slow upload (a 25 MB voice note on a weak connection) needs a
+ * young token. 4 minutes, plus pkg/identity's 30 s leeway, is what an
+ * upload may take; the cache still saves most signing (a token serves the
+ * first minute of its life).
+ */
+export const IDENTITY_REMINT_SECONDS = 240;
 /** The check refuses to mint a token larger than this (nginx's header buffer). */
 export const IDENTITY_MAX_BYTES = 2048;
 

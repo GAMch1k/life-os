@@ -64,7 +64,7 @@ export async function createSetupCode(db: Queryable): Promise<string | null> {
   return code;
 }
 
-/** Whether a code is one that is unused and unexpired. */
+/** Whether a code is one that is unused and unexpired (a first look). */
 export async function setupCodeValid(
   db: Queryable,
   code: string,
@@ -79,18 +79,36 @@ export async function setupCodeValid(
   return (rowCount ?? 0) > 0;
 }
 
-/** Marks the code used, once; false when it was not valid any more. */
-export async function consumeSetupCode(
+/**
+ * Uses up an unused, unexpired code, in one UPDATE: of two sign-ups racing
+ * with the same code, exactly one gets true (PostgreSQL re-checks
+ * used_at IS NULL once the first one's row lock is gone).
+ */
+export async function claimSetupCode(
+  db: Queryable,
+  code: string,
+): Promise<boolean> {
+  const normalized = normalizeSetupCode(code);
+  if (normalized.length < 8) return false;
+  const { rowCount } = await db.query(
+    `UPDATE setup_codes SET used_at = now()
+     WHERE code_hash = $1 AND used_at IS NULL AND expires_at > now()`,
+    [sha256Hex(normalized)],
+  );
+  return (rowCount ?? 0) > 0;
+}
+
+/** Notes which account a used code made (once the account is stored). */
+export async function noteSetupCodeUser(
   db: Queryable,
   code: string,
   userId: string,
-): Promise<boolean> {
-  const { rowCount } = await db.query(
-    `UPDATE setup_codes SET used_at = now(), used_by = $2
-     WHERE code_hash = $1 AND used_at IS NULL AND expires_at > now()`,
+): Promise<void> {
+  await db.query(
+    `UPDATE setup_codes SET used_by = $2
+     WHERE code_hash = $1 AND used_at IS NOT NULL AND used_by IS NULL`,
     [sha256Hex(normalizeSetupCode(code)), userId],
   );
-  return (rowCount ?? 0) > 0;
 }
 
 export const LEGACY_ACCESS = "legacy_access";
@@ -124,7 +142,8 @@ export async function legacyAccess(
 }
 
 /**
- * Turns legacy access on or off. Turning it on is refused while more than
+ * Turns legacy access on or off (the account API only turns it off; on is
+ * the host's, ./setup.sh legacy-access on). Turning it on is refused while more than
  * one account exists (docs/architecture/multi-user.md#legacy-access).
  */
 export async function setLegacyAccess(

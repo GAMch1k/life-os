@@ -89,6 +89,26 @@ done
 jq -e '[.items[] | select(.type == "task.created")][0].actor.kind == "user"' "$work/body" >/dev/null \
   || fail "the task was not created as the user: $(cat "$work/body")"
 
+echo '==> A share of photos over 10 MiB, signed in'
+# The installed app's share sheet posts photos to /share as one request; the
+# Dashboard's proxy must not see it (Next.js caps a proxied body's copy at
+# 10 MiB). Two made-up 6 MiB JPEGs (JPEG's first bytes, then random ones).
+for photo in one two; do
+  { printf '\xff\xd8\xff\xe0'; head -c $((6 * 1024 * 1024)) /dev/urandom; } >"$work/$photo.jpg"
+done
+expect 303 POST /share -H "cookie: $session" -H "origin: $gateway" -H 'sec-fetch-site: same-origin' \
+  -F 'text=Accounts smoke share' -F "images=@$work/one.jpg;type=image/jpeg" -F "images=@$work/two.jpg;type=image/jpeg"
+location=$(grep -i '^location:' "$work/headers" | tr -d '\r' | cut -d ' ' -f 2-)
+[[ "$location" == /share/saved* && "$location" != *error=* ]] || fail "the 12 MiB share was not saved: $location"
+# Without a sign-in (legacy access off), a share goes to the login, then to
+# the page that explains sharing.
+account legacy-access off >/dev/null
+sleep 6
+expect 303 POST /share -H "origin: $gateway" -H 'sec-fetch-site: same-origin' -F 'text=No session'
+grep -qi '^location: /login?next=%2Fshare%2Fabout' "$work/headers" || { cat "$work/headers" >&2; fail 'a share without a session did not go to the login'; }
+account legacy-access on >/dev/null
+sleep 6
+
 echo '==> Refusals'
 expect 401 GET /api/tasks/v1/tasks --cookie '__Host-lifeos.session=made-up.token'
 expect 403 POST /api/tasks/v1/tasks -H "cookie: $session" -H 'content-type: application/json' \

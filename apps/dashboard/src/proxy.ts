@@ -13,11 +13,13 @@ import { authRuntime } from "@/lib/auth/runtime";
  * service through the development proxies (src/lib/service-proxy.ts) gets
  * the identity token, as the gateway gives it.
  *
- * Public, by the matcher: the login, setup, and reset pages, Better Auth's
- * /api/auth/, /api/account/ (which checks itself), /internal/ (the gateway
- * answers it with 404 from outside), the privacy and terms pages, and the
- * files the installed app and the login page load (/_next/static, the
- * service worker, the manifest, the icons).
+ * Not here, by the matcher: the login, setup, and reset pages, Better
+ * Auth's /api/auth/, /api/account/ and /share (which check themselves),
+ * /internal/ (the gateway answers it with 404 from outside), the privacy
+ * and terms pages, and the files the installed app and the login page load
+ * (/_next/static, the service worker, the manifest, the icons). /share
+ * must stay out: for a POST the proxy matches, Next.js copies the body and
+ * caps the copy at 10 MiB, which a share of two or three photos exceeds.
  */
 
 /** Pages that are new with accounts: legacy access is not enough there. */
@@ -35,10 +37,7 @@ function isApi(pathname: string) {
 
 function toLogin(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
-  // A share from the installed app cannot be posted again after signing
-  // in: it ends on the page that explains sharing, as an expired Access
-  // session did.
-  const next = pathname === "/share" ? "/share/about" : `${pathname}${search}`;
+  const next = `${pathname}${search}`;
   // Next.js sends the Location relative, since it is on the request's own
   // host: it stays on the host the owner used (behind the gateway the
   // request URL names the Dashboard's container). A form's POST becomes a
@@ -117,6 +116,6 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|api/auth/|api/account|internal/|login|setup|reset/|privacy|terms|sw\\.js|icons/|app\\.webmanifest|favicon\\.ico).*)",
+    "/((?!_next/static|_next/image|api/auth/|api/account|internal/|login|setup|reset/|share$|privacy|terms|sw\\.js|icons/|app\\.webmanifest|favicon\\.ico).*)",
   ],
 };

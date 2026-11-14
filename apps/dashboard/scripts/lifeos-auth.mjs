@@ -249,6 +249,15 @@ export async function main(argv, env = process.env, out = console) {
           keepDevices: args.includes("--keep-devices"),
         });
         out.log(`Signed out ${result.sessions} session(s) of every account.`);
+        // Signing out means little while a request without a sign-in is
+        // the owner anyway: say so.
+        if ((await legacyAccess(db)) === true) {
+          out.log(
+            "Legacy access is on: anyone who reaches Life OS without signing in still acts as the owner. Turn it off with ./setup.sh legacy-access off (the phone and watch apps that are not paired lose access).",
+          );
+        } else {
+          out.log("Legacy access is off: every request needs a sign-in.");
+        }
         return 0;
       }
       default:

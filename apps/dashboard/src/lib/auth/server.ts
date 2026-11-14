@@ -30,7 +30,12 @@ import {
 } from "./origin";
 import { hashPassword, verifyPassword } from "./password";
 import { hasSecondFactor, isFresh } from "./roles";
-import { accountCount, consumeSetupCode, setupCodeValid } from "./store";
+import {
+  accountCount,
+  claimSetupCode,
+  noteSetupCodeUser,
+  setupCodeValid,
+} from "./store";
 import { LoginThrottle } from "./throttle";
 
 /**
@@ -83,12 +88,13 @@ const roles = {
 };
 
 /** Endpoints Life OS does not offer: email, social, impersonation, and,
- * until P21-07, a second account. */
+ * until P21-07, a second account. Better Auth compares these with the
+ * request's path, so a route with a parameter (/reset-password/:token) is
+ * refused in the before hook instead. */
 export const DISABLED_PATHS = [
   "/sign-in/email",
   "/sign-in/social",
   "/request-password-reset",
-  "/reset-password/:token",
   "/send-verification-email",
   "/verify-email",
   "/change-email",
@@ -109,6 +115,9 @@ export const DISABLED_PATHS = [
 ];
 
 const SIGN_IN_PATHS = new Set(["/sign-in/username"]);
+
+const SETUP_CODE_INVALID_MESSAGE =
+  "That setup code is wrong, used, or expired. Print a new one with ./setup.sh setup-code.";
 
 export type AuthKind = "secure" | "insecure";
 
@@ -242,15 +251,31 @@ export function createAuth(
     databaseHooks: {
       user: {
         create: {
-          // The first account gets the fixed ids and is the server owner;
-          // any later one (from P21-07) is a member.
-          before: async (user: Record<string, unknown>) => {
-            const first = (await accountCount(pool)) === 0;
-            return {
-              data: first
-                ? { ...user, id: FIRST_USER_ID, role: "owner" }
-                : { ...user, role: "member" },
-            };
+          // The first account gets the fixed id and is the server owner.
+          // Until invites (P21-07) there is no other. The setup code is
+          // used up here, in one UPDATE, right before the insert (this
+          // hook runs after the plugins' and after every check of the
+          // sign-up's input): of two sign-ups racing with one code, only
+          // one gets this far, and the fixed id's primary key would stop
+          // a second insert all the same.
+          before: async (
+            user: Record<string, unknown>,
+            context: { headers?: Headers } | null,
+          ) => {
+            if ((await accountCount(pool)) > 0) {
+              throw new APIError("FORBIDDEN", {
+                code: "REGISTRATION_CLOSED",
+                message: "New accounts need an invite.",
+              });
+            }
+            const code = context?.headers?.get(SETUP_CODE_HEADER) ?? "";
+            if (!(await claimSetupCode(pool, code))) {
+              throw new APIError("FORBIDDEN", {
+                code: "SETUP_CODE_INVALID",
+                message: SETUP_CODE_INVALID_MESSAGE,
+              });
+            }
+            return { data: { ...user, id: FIRST_USER_ID, role: "owner" } };
           },
         },
       },
@@ -259,6 +284,13 @@ export function createAuth(
       before: createAuthMiddleware(async (ctx) => {
         const headers = ctx.headers ?? new Headers();
         const path = ctx.path;
+
+        // Better Auth's disabledPaths compares the request's path, so the
+        // pattern /reset-password/:token there never matches: the route is
+        // matched here (a reset link is /reset/<token>, a Dashboard page).
+        if (path === "/reset-password/:token") {
+          throw new APIError("NOT_FOUND", { message: "Not found" });
+        }
 
         // Every write from a browser must come from Life OS's own origin,
         // with or without a cookie: a form on another site must not sign
@@ -293,12 +325,15 @@ export function createAuth(
               message: "New accounts need an invite.",
             });
           }
+          // A first look, for a clear answer before anything else; the
+          // code is used up in the user's create hook, right before the
+          // insert, so that a sign-up that fails on the way (a short
+          // password, say) leaves it working.
           const code = headers.get(SETUP_CODE_HEADER) ?? "";
           if (!(await setupCodeValid(pool, code))) {
             throw new APIError("FORBIDDEN", {
               code: "SETUP_CODE_INVALID",
-              message:
-                "That setup code is wrong, used, or expired. Print a new one with ./setup.sh setup-code.",
+              message: SETUP_CODE_INVALID_MESSAGE,
             });
           }
           const body = (ctx.body ?? {}) as Record<string, unknown>;
@@ -397,7 +432,7 @@ export function createAuth(
         if (ctx.path === "/sign-up/email" && !failed) {
           const userId = ctx.context.newSession?.user.id;
           if (userId) {
-            await consumeSetupCode(
+            await noteSetupCodeUser(
               pool,
               headers.get(SETUP_CODE_HEADER) ?? "",
               userId,

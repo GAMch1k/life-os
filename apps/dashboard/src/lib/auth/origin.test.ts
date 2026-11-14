@@ -121,10 +121,52 @@ test("settings: host lists, on and off, and what is required", () => {
 
 test("the next page after signing in stays on Life OS", () => {
   assert.equal(safeNext("/tasks?view=week"), "/tasks?view=week");
+  assert.equal(
+    safeNext("/calendar?date=2026-11-14#event"),
+    "/calendar?date=2026-11-14#event",
+  );
+  assert.equal(safeNext(["/food", "/tasks"]), "/food");
   assert.equal(safeNext(undefined), "/");
+  assert.equal(safeNext(""), "/");
+  assert.equal(safeNext("tasks"), "/");
   assert.equal(safeNext("https://evil.example"), "/");
-  assert.equal(safeNext("//evil.example/x"), "/");
+  assert.equal(safeNext("javascript:alert(1)"), "/");
   assert.equal(safeNext("/login?next=/x"), "/");
+  assert.equal(safeNext("/setup"), "/");
+  assert.equal(safeNext("/reset/abc"), "/");
+  // Another site, however it is spelled: browsers drop tabs and newlines
+  // and read a backslash as a slash.
+  for (const attempt of [
+    "//evil.example/x",
+    "/\\evil.example",
+    "/\\/evil.example",
+    "\\/evil.example",
+    "/\t/evil.example",
+    "/\n/evil.example",
+    "/\r/evil.example",
+    "/\t\t/evil.example",
+    "/\u0000/evil.example",
+    "/\u007f/evil.example",
+    "/%09/evil.example".replace("%09", "\t"),
+  ]) {
+    assert.equal(safeNext(attempt), "/", JSON.stringify(attempt));
+  }
+  // Still encoded (the query was decoded once already), they stay paths on
+  // Life OS.
+  assert.equal(safeNext("/%2F%2Fevil.example"), "/%2F%2Fevil.example");
+  assert.equal(safeNext("/%09/evil.example"), "/%09/evil.example");
+  assert.equal(safeNext("/%5Cevil.example"), "/%5Cevil.example");
+  for (const attempt of [
+    "/%2F%2Fevil.example",
+    "/%09/evil.example",
+    "/%5C%5Cevil.example",
+  ]) {
+    assert.equal(
+      new URL(safeNext(attempt), "https://lifeos.example.com").origin,
+      "https://lifeos.example.com",
+      attempt,
+    );
+  }
 });
 
 test("setup codes are typed without caring about case or dashes", () => {
@@ -152,16 +194,18 @@ test("roles and freshness", () => {
   );
 });
 
-test("the token cache re-mints near expiry and when the version moves", () => {
+test("the token cache hands out only young tokens, and re-mints when the version moves", () => {
   const cache = new TokenCache();
   let minted = 0;
   const mint = () => `token-${++minted}`;
   assert.equal(cache.get("s1", "v1", mint, 1000), "token-1");
-  assert.equal(cache.get("s1", "v1", mint, 1100), "token-1");
-  assert.equal(cache.get("s1", "v1", mint, 1000 + 241), "token-2");
-  assert.equal(cache.get("s1", "v2", mint, 1000 + 242), "token-3");
+  // More than 4 of its 5 minutes left: reused.
+  assert.equal(cache.get("s1", "v1", mint, 1059), "token-1");
+  // 4 or less: a slow upload could outlive it, so a new one.
+  assert.equal(cache.get("s1", "v1", mint, 1061), "token-2");
+  assert.equal(cache.get("s1", "v2", mint, 1062), "token-3");
   cache.forget("s1");
-  assert.equal(cache.get("s1", "v2", mint, 1000 + 243), "token-4");
+  assert.equal(cache.get("s1", "v2", mint, 1063), "token-4");
 });
 
 test("failed sign-ins slow down per username and address", () => {
