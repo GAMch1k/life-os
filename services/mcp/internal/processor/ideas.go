@@ -616,11 +616,14 @@ func orNone(value string) string {
 	return value
 }
 
+// errorSuffix says in the log that a run failed. The error itself can
+// quote what the AI or a service answered (a title, a category), so it
+// stays on Status and in the run's own record, never in the log.
 func errorSuffix(err string) string {
 	if err == "" {
 		return ""
 	}
-	return ": " + err
+	return " (failed; the error is on Status)"
 }
 
 // idea is one checked recipe idea.

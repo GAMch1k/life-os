@@ -154,7 +154,7 @@ func (s *Service) RemoveSources(ctx context.Context) {
 	}
 	for _, removal := range due {
 		if err := s.removeSource(ctx, removal); err != nil && ctx.Err() == nil {
-			s.logger.Warn("calendar source not removed from Calendar yet", "calendar", removal.ExternalID, "error", err)
+			s.logger.Warn("calendar source not removed from Calendar yet", "calendar", idHash(removal.ExternalID), "attempts", removal.Attempts, "error", logCode(err))
 		}
 	}
 }

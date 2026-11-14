@@ -169,6 +169,16 @@ func unfinishedNote(captures []unfinishedCapture, location *time.Location) strin
 	return strings.Join(parts, "; ")
 }
 
+// unfinishedIDs names the captures still on their way in the log, by id
+// and state, never by what they say (docs/architecture/multi-user.md#logs).
+func unfinishedIDs(captures []unfinishedCapture) string {
+	parts := make([]string, 0, len(captures))
+	for _, capture := range captures {
+		parts = append(parts, capture.ID+" ("+capture.State+")")
+	}
+	return strings.Join(parts, ", ")
+}
+
 // overdueNote is what the attempt of a capture planned without waiting
 // longer says.
 func overdueNote(captures []unfinishedCapture, waited time.Duration, location *time.Location) string {

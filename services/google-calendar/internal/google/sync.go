@@ -2,6 +2,8 @@ package google
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +11,7 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	googleuuid "github.com/google/uuid"
@@ -235,11 +238,11 @@ func (s *Syncer) SyncDue(ctx context.Context) {
 		switch {
 		case errors.Is(err, ErrSyncInProgress), errors.Is(err, ErrSyncDisabled), errors.Is(err, ErrSyncSuperseded),
 			errors.Is(err, ErrCalendarNotFound), errors.Is(err, ErrNotConnected), errors.Is(err, ErrSyncDeferred), errors.Is(err, errUnhandled):
-			s.logger.Info("Google calendar sync skipped", "calendar", googleuuid.UUID(id.Bytes), "reason", err.Error())
+			s.logger.Info("Google calendar sync skipped", "calendar", googleuuid.UUID(id.Bytes), "reason", logCode(err))
 		case err != nil:
-			s.logger.Warn("Google calendar sync failed", "calendar", googleuuid.UUID(id.Bytes), "error", err)
+			s.logger.Warn("Google calendar sync failed", "calendar", googleuuid.UUID(id.Bytes), "error", logCode(err))
 		case calendarRow.LastSyncError != nil:
-			s.logger.Warn("Google calendar sync failed", "calendar", googleuuid.UUID(id.Bytes), "error", *calendarRow.LastSyncError, "failures", calendarRow.SyncFailures)
+			s.logger.Warn("Google calendar sync failed", "calendar", googleuuid.UUID(id.Bytes), "failures", calendarRow.SyncFailures)
 		}
 	}
 }
@@ -752,7 +755,7 @@ func (s *Syncer) syncBatch(ctx context.Context, current store.GoogleCalendar, ba
 			if match := itemIndex.FindStringSubmatch(answer.Message); match != nil {
 				if index, convErr := strconv.Atoi(match[1]); convErr == nil && index < len(batch.Items) {
 					uid := batch.Items[index].ExternalUID
-					s.logger.Warn("Google event left out: Calendar refused it", "calendar", googleuuid.UUID(current.ID.Bytes), "reason", answer.Message)
+					s.logger.Warn("Google event left out: Calendar refused it", "calendar", googleuuid.UUID(current.ID.Bytes), "reason", answer.Code, "item", index)
 					refused = append(refused, uid)
 					batch.Items = append(append([]calendar.SourceEvent{}, batch.Items[:index]...), batch.Items[index+1:]...)
 					continue
@@ -891,6 +894,71 @@ func syncErrorMessage(err error) string {
 		return "the stored Google token cannot be decrypted with LIFE_OS_GOOGLE_TOKEN_KEY (was the key changed?); reconnect Google in Calendar"
 	}
 	return "the sync failed"
+}
+
+// logCode is what the service's log says went wrong: a code, never Google's
+// or Calendar's own words, which can quote an event, nor a Google calendar's
+// id, which is often an email address (docs/architecture/multi-user.md#logs).
+// The full message stays where the owner reads it (the sync's last error).
+func logCode(err error) string {
+	var apiErr *APIError
+	var oauth *OAuthError
+	var unavailable *UnavailableError
+	var calendarErr *calendar.StatusError
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, ErrExpired):
+		return "google_expired"
+	case errors.Is(err, ErrSyncInProgress):
+		return "sync_in_progress"
+	case errors.Is(err, ErrSyncDisabled):
+		return "sync_disabled"
+	case errors.Is(err, ErrSyncSuperseded):
+		return "sync_superseded"
+	case errors.Is(err, ErrCalendarNotFound):
+		return "calendar_not_found"
+	case errors.Is(err, ErrNotConnected):
+		return "not_connected"
+	case errors.Is(err, ErrSyncDeferred):
+		return "sync_deferred"
+	case errors.Is(err, errUnhandled):
+		return "unhandled"
+	case errors.Is(err, errCalendarGone):
+		return "calendar_gone"
+	case errors.Is(err, errNotSaved):
+		return "not_saved"
+	case errors.Is(err, ErrUnreadableToken):
+		return "token_unreadable"
+	case errors.As(err, &apiErr):
+		return fmt.Sprintf("google_http_%d", apiErr.Status)
+	case errors.As(err, &oauth):
+		return "google_oauth_" + safeCode(oauth.Code)
+	case errors.As(err, &unavailable):
+		return "google_unavailable"
+	case calendar.IsUnavailable(err):
+		return "calendar_unavailable"
+	case errors.As(err, &calendarErr):
+		return fmt.Sprintf("calendar_http_%d_%s", calendarErr.Status, safeCode(calendarErr.Code))
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	}
+	return "failed"
+}
+
+// safeCode keeps a provider's error code only when it has a code's form.
+func safeCode(code string) string {
+	if code == "" || len(code) > 64 || strings.Trim(code, "abcdefghijklmnopqrstuvwxyz0123456789_") != "" {
+		return "other"
+	}
+	return code
+}
+
+// idHash names an id that may be personal (a Google calendar's id is often
+// an email address) in the log: the first 12 hex digits of its SHA-256.
+func idHash(id string) string {
+	sum := sha256.Sum256([]byte(id))
+	return hex.EncodeToString(sum[:6])
 }
 
 func deref(value *string) string {

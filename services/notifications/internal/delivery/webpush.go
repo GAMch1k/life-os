@@ -339,8 +339,8 @@ func (c *WebPushChannel) forget(ctx context.Context, device store.PushSubscripti
 		return err
 	}
 	c.logger.InfoContext(ctx, "web push subscription removed: its push service says it is gone",
-		"subscription", uuid.UUID(device.ID.Bytes), "device", device.DeviceLabel,
-		"pushService", webpush.ServiceHost(device.Endpoint), "error", boundError(cause))
+		"subscription", uuid.UUID(device.ID.Bytes),
+		"pushService", webpush.ServiceHost(device.Endpoint))
 	return nil
 }
 

@@ -151,13 +151,14 @@ func (r Runner) process(ctx context.Context, item inboxItem) (Proposal, error) {
 		decision := r.Order.decide(item.ID, len(window.Unfinished))
 		if decision.wait {
 			if decision.first {
-				r.logf("capture %s waits for %d earlier capture(s) still on their way: %s", item.ID, len(window.Unfinished), unfinishedNote(window.Unfinished, r.location(item)))
+				r.logf("capture %s waits for %d earlier capture(s) still on their way: %s", item.ID, len(window.Unfinished), unfinishedIDs(window.Unfinished))
 			}
 			return Proposal{ItemID: item.ID, Reason: waitingReason, waiting: true}, nil
 		}
 		if decision.overdue > 0 {
 			note := overdueNote(window.Unfinished, decision.overdue, r.location(item))
-			r.logf("capture %s %s", item.ID, note)
+			// The note quotes the earlier captures; the log names them by id.
+			r.logf("capture %s planned without waiting longer: %d earlier capture(s) still on the way after %s: %s", item.ID, len(window.Unfinished), decision.overdue.Round(time.Second), unfinishedIDs(window.Unfinished))
 			waitNote = &note
 		}
 	}

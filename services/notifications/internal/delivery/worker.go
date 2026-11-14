@@ -175,7 +175,7 @@ func (w *Worker) ProcessOne(ctx context.Context) (worked bool, err error) {
 		return true, fmt.Errorf("schedule delivery retry: %w", err)
 	}
 	w.logger.Info("notification delivery will be retried", "delivery", uuid.UUID(claimed.ID.Bytes),
-		"channel", claimed.Channel, "attempt", claimed.Attempts, "nextAttemptAt", decision.NextAttemptAt.UTC(), "error", message)
+		"channel", claimed.Channel, "attempt", claimed.Attempts, "nextAttemptAt", decision.NextAttemptAt.UTC())
 	return true, nil
 }
 
@@ -191,7 +191,7 @@ func (w *Worker) finish(ctx context.Context, claimed store.Delivery, row store.N
 	}
 	if status == StatusFailed {
 		w.logger.Warn("notification delivery failed", "delivery", uuid.UUID(claimed.ID.Bytes), "channel", claimed.Channel,
-			"attempts", claimed.Attempts, "error", message)
+			"attempts", claimed.Attempts)
 		w.emitFailed(ctx, row, finished)
 	}
 	return nil

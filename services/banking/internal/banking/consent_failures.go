@@ -3,6 +3,7 @@ package banking
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/GAMch1k/life-os/pkg/activity"
@@ -20,6 +21,16 @@ const (
 	StateExpired = "expired"
 	StateUnknown = "unknown"
 )
+
+// codeForm is a provider's error code as the log keeps it: as sent when it
+// has a code's form (access_denied), else "other", since the callback's
+// error parameter is whatever the redirect carried.
+func codeForm(code string) string {
+	if code == "" || len(code) > 64 || strings.Trim(strings.ToLower(code), "abcdefghijklmnopqrstuvwxyz0123456789_.-") != "" {
+		return "other"
+	}
+	return code
+}
 
 // keptConsentFailures bounds the failures kept (the newest).
 const keptConsentFailures = 100
@@ -58,11 +69,9 @@ func (s *Service) RecordConsentFailure(ctx context.Context, state, code, descrip
 	if err := s.queries.PruneConsentFailures(ctx, keptConsentFailures); err != nil {
 		s.logger.Warn("pruning old consent failures failed", "error", err)
 	}
-	institution := ""
-	if row.Institution != nil {
-		institution = *row.Institution
-	}
-	s.logger.Warn("bank consent not completed", "error", code, "description", description, "state", row.StateMatch, "institution", institution)
+	// Ids and codes only: the bank's description is its own free text, and
+	// which bank someone uses is theirs (docs/architecture/multi-user.md#logs).
+	s.logger.Warn("bank consent not completed", "failure", uuidString(row.ID), "error", codeForm(code), "state", row.StateMatch)
 
 	subject := activity.Subject{Type: "bank_consent", ID: uuidString(row.ID)}
 	if row.ConnectionID.Valid {

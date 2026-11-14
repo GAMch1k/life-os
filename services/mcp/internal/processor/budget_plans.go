@@ -187,7 +187,7 @@ func (j *BudgetPlanJob) Tick(ctx context.Context) {
 		}
 		j.mu.Unlock()
 		if err != nil && j.Logf != nil {
-			j.Logf("AI budget plan: the monthly plan for %s could not be asked for: %v", monthly, err)
+			j.Logf("AI budget plan: the monthly plan for %s could not be asked for; asked again later", monthly)
 		}
 	}
 	var (
@@ -492,7 +492,7 @@ func (j *BudgetPlanJob) handBack(ctx context.Context, plan budgetPlan, kind fail
 	}
 	if _, err := j.Tools.Call(callCtx, "finance_fail_budget_plan", arguments); err != nil && j.Logf != nil {
 		// Finance takes the plan back when the claim lapses.
-		j.Logf("AI budget plan: could not hand plan %s back: %v", plan.ID, err)
+		j.Logf("AI budget plan: could not hand plan %s back", plan.ID)
 	}
 	return outcome
 }

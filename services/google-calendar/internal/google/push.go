@@ -119,7 +119,7 @@ func (s *Syncer) failPush(ctx context.Context, claimed store.GooglePush, cause e
 		}
 		return
 	}
-	s.logger.Warn("edit not written to Google yet", "event", googleuuid.UUID(claimed.EventID.Bytes), "error", message, "attempts", updated.Attempts)
+	s.logger.Warn("edit not written to Google yet", "event", googleuuid.UUID(claimed.EventID.Bytes), "error", logCode(cause), "attempts", updated.Attempts)
 }
 
 // pushTarget is what an edit writes to: the calendar, Google's event as
@@ -475,7 +475,7 @@ func (s *Syncer) createSeries(ctx context.Context, calendarRow store.GoogleCalen
 			return pushError(err)
 		}
 		// Google refused the new series: it stays in Life OS only.
-		s.logger.Warn("new series of a split not created in Google", "calendar", calendarRow.GoogleCalendarID, "error", err)
+		s.logger.Warn("new series of a split not created in Google", "calendar", googleuuid.UUID(calendarRow.ID.Bytes), "error", logCode(err))
 		return nil
 	}
 	upserts := []Event{created}
@@ -490,7 +490,7 @@ func (s *Syncer) createSeries(ctx context.Context, calendarRow store.GoogleCalen
 			instance, err = s.service.patchEvent(ctx, calendarRow.GoogleCalendarID, instance.ID, "", instanceBody)
 		}
 		if err != nil {
-			s.logger.Warn("occurrence change not carried to the new Google series", "calendar", calendarRow.GoogleCalendarID, "occurrence", key, "error", err)
+			s.logger.Warn("occurrence change not carried to the new Google series", "calendar", googleuuid.UUID(calendarRow.ID.Bytes), "occurrence", key, "error", logCode(err))
 			continue
 		}
 		upserts = append(upserts, instance)
@@ -524,7 +524,7 @@ func (s *Syncer) dropInstancesAfter(ctx context.Context, t pushTarget, uid strin
 			continue
 		}
 		if err := s.service.deleteEvent(ctx, t.calendar.GoogleCalendarID, instance.ID, ""); err != nil && !IsGone(err) {
-			s.logger.Warn("changed occurrence after the end of a Google series not deleted", "calendar", t.calendar.GoogleCalendarID, "event", instance.ID, "error", err)
+			s.logger.Warn("changed occurrence after the end of a Google series not deleted", "calendar", googleuuid.UUID(t.calendar.ID.Bytes), "event", instance.ID, "error", logCode(err))
 		}
 	}
 	return stale, nil
@@ -572,7 +572,7 @@ func (s *Syncer) writeFailed(ctx context.Context, t pushTarget, uid string, curr
 	case getErr == nil || IsGone(getErr):
 		forget = []string{uid}
 	default:
-		s.logger.Warn("Google's version of a refused edit not read; the next full sync brings it", "calendar", t.calendar.GoogleCalendarID, "error", getErr)
+		s.logger.Warn("Google's version of a refused edit not read; the next full sync brings it", "calendar", googleuuid.UUID(t.calendar.ID.Bytes), "error", logCode(getErr))
 	}
 	if err := s.applyWrite(ctx, t.calendar.ID, upserts, forget, nil); err != nil {
 		return err
@@ -583,7 +583,7 @@ func (s *Syncer) writeFailed(ctx context.Context, t pushTarget, uid string, curr
 	if current.ID != "" {
 		s.service.recordConflict(ctx, current, t.calendar.Summary, conflictEdit, s.now())
 	}
-	s.logger.Warn("edit made in Life OS not written to Google: Google's version is kept", "calendar", t.calendar.GoogleCalendarID, "error", err)
+	s.logger.Warn("edit made in Life OS not written to Google: Google's version is kept", "calendar", googleuuid.UUID(t.calendar.ID.Bytes), "error", logCode(err))
 	return nil
 }
 

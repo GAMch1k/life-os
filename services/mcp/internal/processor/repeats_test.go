@@ -234,8 +234,15 @@ func TestASpendingSentAgainGoesToTheOwner(t *testing.T) {
 	if want := "Sent twice: the capture from 17:09 already recorded -5.00 EUR · bakery · 2026-10-16. To record another one, edit and send it."; reviewing.review["errorSummary"] != want || proposed.Tool != "none" || len(candidates) != 0 {
 		t.Fatalf("review = %v", reviewing.review)
 	}
-	if tools.started() != 1 || len(*logs) != 1 || !strings.Contains((*logs)[0], againItem+" repeats capture "+bakeryCapture+": Sent twice") {
+	if tools.started() != 1 || len(*logs) != 1 || !strings.Contains((*logs)[0], againItem+" repeats capture "+bakeryCapture+" (Human Review: true)") {
 		t.Errorf("started %d, logs %q", tools.started(), *logs)
+	}
+	// The log names the captures by id; the amount, the counterparty, and
+	// the date stay on the Human Review item (docs/architecture/multi-user.md#logs).
+	for _, detail := range []string{"5.00", "bakery", "2026-10-16", "euros"} {
+		if strings.Contains(strings.Join(*logs, "\n"), detail) {
+			t.Errorf("%q reached the log: %q", detail, *logs)
+		}
 	}
 }
 
