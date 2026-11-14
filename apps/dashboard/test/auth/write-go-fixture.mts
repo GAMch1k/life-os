@@ -31,7 +31,9 @@ const token = signer.sign(
 );
 const legacy = signer.sign(legacyClaims(), now);
 const trustedKeys = JSON.stringify({
-  keys: [{ kty: "OKP", crv: "Ed25519", x: jwk.x, kid, use: "sig", alg: "EdDSA" }],
+  keys: [
+    { kty: "OKP", crv: "Ed25519", x: jwk.x, kid, use: "sig", alg: "EdDSA" },
+  ],
 });
 const target = path.join(
   here,
