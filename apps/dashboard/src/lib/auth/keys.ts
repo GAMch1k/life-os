@@ -418,7 +418,7 @@ const CLEANUP_GIVE_UP_DAYS = 30;
  * Works off device_key_cleanup: asks Notifications to delete each revoked
  * device key's push subscriptions (DELETE /v1/push/device-keys/{id}, a
  * route for internal callers only), and forgets the note once it answered
- * 204 or 404. Retried every minute; given up after 30 days.
+ * 204. Retried every minute; given up after 30 days.
  */
 export async function processKeyCleanup(
   db: Queryable,
@@ -476,6 +476,8 @@ export function notificationsCleanup(
         signal: AbortSignal.timeout(5000),
       },
     );
-    return response.status === 204 || response.status === 404;
+    // The route answers 204 with or without subscriptions; anything else
+    // (a Notifications from before P21-06 answers 404) is tried again.
+    return response.status === 204;
   };
 }
