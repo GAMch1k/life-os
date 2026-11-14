@@ -177,7 +177,14 @@ case $url in
   *) [[ -z ${STUB_GATEWAY_DOWN:-} ]] || exit 7 ;;
 esac
 EOF
-chmod 755 "$stubs/docker" "$stubs/curl"
+# openssl: the host's, but with STUB_OPENSSL_FAIL set it makes no Ed25519
+# key (the sign-in keys); passwords and the web push key still work.
+cat >"$stubs/openssl" <<'EOF'
+#!/usr/bin/env bash
+[[ -z ${STUB_OPENSSL_FAIL:-} || $1 != genpkey ]] || exit 1
+exec /usr/bin/openssl "$@"
+EOF
+chmod 755 "$stubs/docker" "$stubs/curl" "$stubs/openssl"
 
 # The install compose: compose.yaml as the release ships it, images only.
 sed -E '/^[[:space:]]+build:/d' compose.yaml >"$work/compose.yaml"
@@ -334,6 +341,14 @@ ok 'admin password kept' test "$(value LIFE_OS_POSTGRES_PASSWORD)" = "$old_passw
 ok 'service password kept' test "$(value LIFE_OS_TASKS_DB_PASSWORD)" = "$old_tasks"
 ok 'says what it kept' output_has 'were kept from it'
 ok 'no secret printed' no_secret_printed
+
+# No key from openssl: the first setup stops before it writes a .env with an
+# empty signing key.
+new_case no-openssl
+run STUB_OPENSSL_FAIL=1 LIFE_OS_TIMEZONE=UTC -- --yes
+ok 'a first setup without a signing key stops' test "$status" -eq 1
+ok 'and says why' output_has 'could not make'
+ok 'and writes no .env' test ! -e "$case_dir/.env"
 
 # ---------- Where the gateway listens ----------
 new_case public-bind
@@ -1224,6 +1239,10 @@ run -- rotate-keys auth
 ok 'again: still two keys, the oldest gone' bash -c "[[ \$(grep -o '\"kid\"' <<<\"\$(grep '^LIFE_OS_TRUSTED_KEYS=' '$case_dir/.env')\" | wc -l) -eq 2 ]] && ! grep -q '$old_kid' '$case_dir/.env'"
 run -- rotate-keys tasks
 ok 'service keys: not yet' test "$status" -eq 2
+before_rotate=$(grep -E '^LIFE_OS_(IDENTITY_SIGNING_KEY|TRUSTED_KEYS)=' "$case_dir/.env")
+run STUB_OPENSSL_FAIL=1 -- rotate-keys auth
+ok 'rotate-keys: no key from openssl, stops' test "$status" -eq 1
+ok 'and changes no key' test "$(grep -E '^LIFE_OS_(IDENTITY_SIGNING_KEY|TRUSTED_KEYS)=' "$case_dir/.env")" = "$before_rotate"
 
 : >"$case_dir.log"
 run -- setup-code
@@ -1283,6 +1302,32 @@ ok 'runs no compose command' bash -c "! grep -q 'docker compose' '$case_dir.log'
 run -- account-keys
 ok 'a second time: nothing to add' output_has 'nothing to add'
 ok 'no duplicate keys' no_duplicate_keys
+# A value someone set stays, whatever its format: only empty settings and
+# the example's replace-with-* placeholders get new ones.
+own_secret=c2VjcmV0LXNldC1ieS1oYW5kLW5vdC1oZXgtYXQtYWxsLTEyMzQ1Ng==
+own_trusted=$(value LIFE_OS_TRUSTED_KEYS | sed 's/{"keys":\[/{ "keys": [ /; s/\]}/ ] }/')
+sed -i -E "s|^LIFE_OS_AUTH_SECRET=.*|LIFE_OS_AUTH_SECRET=$own_secret|" "$case_dir/.env"
+sed -i -E "/^LIFE_OS_TRUSTED_KEYS=/d" "$case_dir/.env"
+printf 'LIFE_OS_TRUSTED_KEYS=%s\n' "$own_trusted" >>"$case_dir/.env"
+own_signing=$(value LIFE_OS_IDENTITY_SIGNING_KEY)
+run -- account-keys
+ok 'account-keys keeps a base64 secret' test "$(value LIFE_OS_AUTH_SECRET)" = "$own_secret"
+ok 'and trusted keys written with spaces' test "$(value LIFE_OS_TRUSTED_KEYS)" = "$own_trusted"
+ok 'and the signing key' test "$(value LIFE_OS_IDENTITY_SIGNING_KEY)" = "$own_signing"
+ok 'nothing to add' output_has 'nothing to add'
+# No key from openssl: account-keys stops, and .env gets no empty key.
+sed -i -E '/^LIFE_OS_(IDENTITY_SIGNING_KEY|TRUSTED_KEYS)=/d' "$case_dir/.env"
+printf "LIFE_OS_TRUSTED_KEYS='{\"keys\":[]}'\n" >>"$case_dir/.env"
+run STUB_OPENSSL_FAIL=1 -- account-keys
+ok 'account-keys without openssl stops' test "$status" -eq 1
+ok 'and says why' output_has 'could not make'
+ok 'and writes no signing key' bash -c "! grep -q '^LIFE_OS_IDENTITY_SIGNING_KEY=' '$case_dir/.env'"
+ok 'and leaves the trusted keys' test "$(value LIFE_OS_TRUSTED_KEYS)" = "'{\"keys\":[]}'"
+run -- account-keys
+trusted_now=$(value LIFE_OS_TRUSTED_KEYS)
+ok 'with openssl: an empty list of trusted keys gets the new key' test "${trusted_now:0:22}" = "'{\"keys\":[{\"kty\":\"OKP\""
+ok 'just that one' test "$(grep -o '"kid"' <<<"$trusted_now" | wc -l)" -eq 1
+ok 'no empty entry' bash -c "! grep -qF '[,' '$case_dir/.env'"
 run LIFE_OS_GOOGLE_CLIENT_ID=1-x.apps.googleusercontent.com LIFE_OS_GOOGLE_CLIENT_SECRET=GOCSPX-abc -- --yes google
 ok 'an integration in a clone' test "$status" -eq 0
 ok 'says how to redeploy one service' output_has 'docker compose up -d --no-build --no-deps google-calendar'

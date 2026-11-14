@@ -1867,31 +1867,57 @@ current_value() {
   if [[ -v env_values[$1] ]]; then printf '%s\n' "${env_values[$1]}"; else env_get "$1" 2>/dev/null || true; fi
 }
 
+# Whether a setting has no value yet: empty, or still the example's
+# replace-with-* placeholder. A value someone set is never replaced, even
+# one in another format than setup.sh writes.
+unset_value() { [[ -z $1 || $1 == replace-with-* ]]; }
+
+# A new key pair in key_pair_private and key_pair_public, or the script
+# stops: identity_key_pair runs in a subshell, where its die only ends the
+# subshell, and a caller in an || or && list runs without set -e.
+new_key_pair() {
+  local pair
+  pair=$(identity_key_pair "$(identity_kid)") || die 'could not make a signing key'
+  key_pair_private=${pair%%$'\n'*}
+  key_pair_public=${pair#*$'\n'}
+  [[ $key_pair_private == '{"kty":"OKP"'*'"d":"'*'}' && $key_pair_public == '{"kty":"OKP"'*'}' && $key_pair_public != *'"d":'* ]] \
+    || die 'could not make a signing key: openssl wrote something unexpected'
+}
+
+# A JWKS with one more key: the list in $1 (empty, or {"keys":[...]}) and
+# the public JWK $2.
+jwks_with() {
+  local list=$1 key=$2 end=']}'
+  if [[ -z $list || $list == '{"keys":[]}' ]]; then
+    printf '{"keys":[%s]}' "$key"
+  else
+    printf '%s,%s]}' "${list%"$end"}" "$key"
+  fi
+}
+
 # Sets the accounts' secret and keys that are missing (or still the
 # example's placeholder): LIFE_OS_AUTH_SECRET, and the signing key with the
-# trusted keys that list it. Fails (returns 1) when nothing was missing.
+# trusted keys that list it. Values that are set stay as they are. Fails
+# (returns 1) when nothing was missing.
 account_keys_needed() {
   local -i made=0
-  local signing trusted pair end=']}'
-
-  if [[ ! $(current_value LIFE_OS_AUTH_SECRET) =~ ^[0-9a-f]{64}$ ]]; then
+  local signing trusted key_pair_private key_pair_public
+  if unset_value "$(current_value LIFE_OS_AUTH_SECRET)"; then
     env_values[LIFE_OS_AUTH_SECRET]=$(random_hex 32)
     made=1
   fi
   signing=$(current_value LIFE_OS_IDENTITY_SIGNING_KEY)
   trusted=$(current_value LIFE_OS_TRUSTED_KEYS)
-  if [[ $signing != '{'* ]]; then
-    pair=$(identity_key_pair "$(identity_kid)")
-    signing=${pair%%$'\n'*}
-    env_values[LIFE_OS_IDENTITY_SIGNING_KEY]=$signing
-    if [[ $trusted == '{"keys":['* ]]; then
-      env_values[LIFE_OS_TRUSTED_KEYS]=$(printf '%s,%s]}' "${trusted%"$end"}" "${pair#*$'\n'}")
-    else
-      env_values[LIFE_OS_TRUSTED_KEYS]=$(printf '{"keys":[%s]}' "${pair#*$'\n'}")
-    fi
+  unset_value "$trusted" && trusted=
+  if unset_value "$signing"; then
+    new_key_pair
+    env_values[LIFE_OS_IDENTITY_SIGNING_KEY]=$key_pair_private
+    env_values[LIFE_OS_TRUSTED_KEYS]=$(jwks_with "$trusted" "$key_pair_public")
     made=1
-  elif [[ $trusted != '{"keys":['* ]]; then
-    env_values[LIFE_OS_TRUSTED_KEYS]=$(printf '{"keys":[%s]}' "$(public_jwk "$signing")")
+  elif [[ -z $trusted ]]; then
+    [[ $signing == '{'*'"x":"'*'}' ]] \
+      || die 'LIFE_OS_IDENTITY_SIGNING_KEY is not a JWK, so its public key cannot go into LIFE_OS_TRUSTED_KEYS: fix it in .env (docs/install/accounts.md#keys)'
+    env_values[LIFE_OS_TRUSTED_KEYS]=$(jwks_with '' "$(public_jwk "$signing")")
     made=1
   fi
   ((made))
@@ -1970,11 +1996,20 @@ cmd_legacy_access() {
 }
 
 cmd_sign_out_all() {
+  local out
   local -a args=()
   require_dashboard
   ((!keep_devices)) || args+=(--keep-devices)
   ((assume_yes)) || confirm 'Sign out every session of every account, yours too?' n || die 'nothing was changed'
-  account_command sign-out-all "${args[@]}"
+  out=$(account_command sign-out-all "${args[@]}") || die "signing out failed: $out"
+  printf '%s\n' "$out"
+  # While legacy access is on, a request without a sign-in is the owner
+  # anyway: offer to turn it off (with --yes, only say how).
+  if [[ $out == *'Legacy access is on'* ]] && ((!assume_yes)); then
+    if confirm 'Turn legacy access off too?' n; then
+      account_command legacy-access off
+    fi
+  fi
   if module_is_on cloudflare; then
     say "Cloudflare Access keeps its own sessions: end them in Zero Trust as well (${docs%/install}/operations/cloudflare.md#sign-everyone-out)."
   fi
@@ -1985,17 +2020,17 @@ cmd_sign_out_all() {
 # key before the current one is dropped. Tokens live five minutes, so the
 # overlap is enough. Service keys come with a later version (P21-07).
 cmd_rotate_keys() {
-  local target=${1:-auth} signing trusted pair services
+  local target=${1:-auth} signing services key_pair_private key_pair_public
   require_env
   case $target in
     auth | all) ;;
     *) usage_error "rotate-keys rotates auth (or all), not '$target': services have no keys of their own yet" ;;
   esac
   signing=$(env_get LIFE_OS_IDENTITY_SIGNING_KEY 2>/dev/null || true)
-  [[ $signing == '{'* ]] || die 'there is no signing key to rotate: ./setup.sh update adds one'
-  pair=$(identity_key_pair "$(identity_kid)")
-  env_values[LIFE_OS_IDENTITY_SIGNING_KEY]=${pair%%$'\n'*}
-  env_values[LIFE_OS_TRUSTED_KEYS]=$(printf '{"keys":[%s,%s]}' "$(public_jwk "$signing")" "${pair#*$'\n'}")
+  [[ $signing == '{'*'"x":"'*'}' ]] || die 'there is no signing key (a JWK) to rotate: ./setup.sh update adds one'
+  new_key_pair
+  env_values[LIFE_OS_IDENTITY_SIGNING_KEY]=$key_pair_private
+  env_values[LIFE_OS_TRUSTED_KEYS]=$(jwks_with "$(jwks_with '' "$(public_jwk "$signing")")" "$key_pair_public")
   env_update
   say "A new signing key is in .env; the services trust it and the previous one."
   services=$(docker compose ps --services --status running 2>/dev/null | grep -vxE 'dashboard|gateway|postgres|whisper|ntfy|cloudflared|host-health-docker' | tr '\n' ' ' || true)
