@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import type { AccountInfo } from "@/lib/auth/account";
+import { showsLegacyReminder } from "@/lib/auth/legacy-reminder";
 
 const DISMISSED_KEY = "lifeos-legacy-reminder";
 
@@ -53,8 +54,11 @@ function hideForToday() {
 /**
  * While legacy access is on and an account exists, a reminder once a day:
  * anyone who reaches Life OS acts as the owner
- * (docs/architecture/multi-user.md#legacy-access). Before the first account
- * exists, the header's account button points to /setup instead.
+ * (docs/architecture/multi-user.md#legacy-access). Hidden until devices can
+ * be paired (DEVICE_PAIRING_AVAILABLE, P21-06): before that, the phone and
+ * watch apps need legacy access, and the reminder would ask for something
+ * the owner cannot do. Before the first account exists, the header's
+ * account button points to /setup instead.
  */
 export function LegacyAccessReminder({ account }: { account?: AccountInfo }) {
   const dismissed = useSyncExternalStore(
@@ -63,9 +67,7 @@ export function LegacyAccessReminder({ account }: { account?: AccountInfo }) {
     () => true,
   );
 
-  if (!account?.legacyAccess || !account.accountExists || dismissed) {
-    return null;
-  }
+  if (!showsLegacyReminder(account, dismissed)) return null;
 
   return (
     <Alert

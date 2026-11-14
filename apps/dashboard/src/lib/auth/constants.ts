@@ -50,5 +50,15 @@ export const SETUP_CODE_HEADER = "x-lifeos-setup-code";
 /** Accounts without an email store one under .invalid, which never delivers. */
 export const PLACEHOLDER_EMAIL_DOMAIN = "users.invalid";
 
+/**
+ * Whether phones and watches can be paired with an account (P21-06). Until
+ * they can, the phone and watch apps need legacy access, so the daily
+ * reminder to turn it off (src/components/legacy-access-reminder.tsx) asks
+ * for something the owner cannot do yet, and stays hidden. P21-06 sets this
+ * to true when it ships device pairing. The switch in Settings → Security
+ * works either way.
+ */
+export const DEVICE_PAIRING_AVAILABLE = false;
+
 /** Password hashing: at most this many scrypt runs at once. */
 export const PASSWORD_HASH_CONCURRENCY = 2;

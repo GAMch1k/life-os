@@ -54,7 +54,7 @@ Before accounts, whoever reached Life OS was its owner. **Legacy access** keeps 
 
 - It is **on** after updating an install from before accounts (`./setup.sh update` writes `LIFE_OS_LEGACY_ACCESS=on` into `.env`), so that nothing changes for you, your browsers, and the phone and watch apps, which send no Life OS sign-in yet.
 - It is **off** on a new install.
-- While it is on and an account exists, the Dashboard reminds you once a day. The pages that are new with accounts (Settings → Security) need a real sign-in all the same.
+- The pages that are new with accounts (Settings → Security) need a real sign-in all the same. Once the apps can be paired with an account (a later version), the Dashboard will remind you once a day while legacy access is on; until then it does not, since turning it off would cut the apps off.
 - Turn it off in **Settings → Security** once the phone and watch apps are paired with your account (they learn to pair in a later version). From then on, everything needs a sign-in. On the server: `./setup.sh legacy-access off` (or `on`, or no argument to see it). Turning it back on is refused while more than one account exists.
 
 `LIFE_OS_LEGACY_ACCESS` in `.env` counts only once, the first time the Dashboard uses its database; afterwards the switch in Settings and the command decide.

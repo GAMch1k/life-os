@@ -168,7 +168,7 @@ The Dashboard runs the sign-in (docs: [Accounts and signing in](../install/accou
 - `/setup` (`src/components/setup-form.tsx`): the first account, with the setup code; once an account exists it only says so.
 - `/reset/<token>` (`src/components/reset-form.tsx`): a new password from `./setup.sh recover-owner`'s link.
 - `/settings/security` (`src/components/security-settings.tsx`): the authenticator app (a QR code drawn in the browser with `uqr`, the key, and ten recovery codes), passkeys, the password, the sessions (from `/api/account/sessions`, Life OS's own account API in `src/lib/auth/account.ts`), and, for the owner, the legacy access switch.
-- While legacy access is on and an account exists, a reminder shows above the page once a day (`src/components/legacy-access-reminder.tsx`).
+- While legacy access is on and an account exists, a reminder shows above the page once a day (`src/components/legacy-access-reminder.tsx`), but only once devices can be paired: until P21-06 sets `DEVICE_PAIRING_AVAILABLE` (`src/lib/auth/constants.ts`) to `true`, it shows nothing.
 
 The login, setup, and reset pages render without the app's navigation. `/internal/auth/check` (the gateway's check) and `/internal/status` (the monitor's) are reachable only on the private network. The auth flow suite tests all of it against a throwaway PostgreSQL ([CI](../operations/ci.md#the-auth-flow-suite)).
 
