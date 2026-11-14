@@ -1,9 +1,11 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 
+import { SettingsNav } from "@/components/security-log";
 import { SecuritySettings } from "@/components/security-settings";
 import { accountInfo, listSessions } from "@/lib/auth/account";
 import { currentCheck } from "@/lib/auth/page-context";
+import { isAdminRole } from "@/lib/auth/roles";
 import { accountCount } from "@/lib/auth/store";
 import { userTimeZone } from "@/lib/user-time-zone";
 
@@ -43,6 +45,12 @@ export default async function SecurityPage({
     <SecuritySettings
       accounts={accounts}
       info={info}
+      nav={
+        <SettingsNav
+          admin={isAdminRole(principal.role)}
+          current="/settings/security"
+        />
+      }
       passkeyOrigin={new URL(rt.env.publicUrl).origin}
       passkeys={passkeys.rows.map((row) => ({
         id: row.id,

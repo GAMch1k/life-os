@@ -45,6 +45,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/diagnostic-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List server diagnostics
+         * @description For the server's admins (docs/architecture/multi-user.md#logs): newest first by lastAt. Diagnostics carry codes, ids, counts, durations, and times, never content. A request with an identity token must be an owner or admin who signed in (legacy access is refused); one without is an internal caller, such as the Dashboard after its own admin check.
+         */
+        get: operations["listDiagnosticEvents"];
+        put?: never;
+        /**
+         * Record server diagnostics
+         * @description Internal endpoint for services (pkg/diagnostics sends a batch once a minute). Every field is checked: an unknown code, a route that is no route pattern, or anything else that could carry text is refused. The gateway does not expose this method. Rows older than 90 days are deleted.
+         */
+        post: operations["recordDiagnosticEvents"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/diagnostic-events/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Count server diagnostics by service and code
+         * @description For the server's admins, as listDiagnosticEvents.
+         */
+        get: operations["summarizeDiagnosticEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -86,6 +130,11 @@ export interface components {
              */
             causationId?: string;
             actor: components["schemas"]["ActivityActor"];
+            /**
+             * Format: uuid
+             * @description The person the action is for: the user who signed in (or the first account under legacy access), also when a development tool or the AI acts for them. Absent for a service's own work.
+             */
+            actorUserId?: string;
             outcome: components["schemas"]["ActivityOutcome"];
             /** @description Short human-readable sentence. */
             summary: string;
@@ -106,6 +155,8 @@ export interface components {
             /** Format: uuid */
             causationId?: string | null;
             actor: components["schemas"]["ActivityActor"];
+            /** Format: uuid */
+            actorUserId?: string | null;
             outcome: components["schemas"]["ActivityOutcome"];
             summary: string;
             data: {
@@ -119,6 +170,73 @@ export interface components {
         ActivityEventList: {
             items: components["schemas"]["ActivityEvent"][];
             nextCursor?: string | null;
+        };
+        /**
+         * @description What went wrong, from a fixed list (pkg/diagnostics).
+         * @enum {string}
+         */
+        DiagnosticCode: "internal_error" | "bad_gateway" | "service_unavailable" | "gateway_timeout" | "server_error" | "panic" | "not_ready" | "provider_unavailable" | "media_unavailable" | "google_rejected" | "google_unavailable" | "google_not_configured" | "banking_not_configured" | "food_unavailable" | "calendar_unavailable";
+        DiagnosticEventCreate: {
+            service: string;
+            code: components["schemas"]["DiagnosticCode"];
+            /** @description The route pattern that answered, such as /v1/tasks/:taskId; never a request's path. */
+            route?: string;
+            status?: number;
+            /** Format: uuid */
+            subjectId?: string;
+            /** Format: uuid */
+            requestId?: string;
+            count: number;
+            /** Format: int64 */
+            durationMs?: number;
+            /** Format: date-time */
+            firstAt: string;
+            /** Format: date-time */
+            lastAt: string;
+        };
+        DiagnosticBatch: {
+            events: components["schemas"]["DiagnosticEventCreate"][];
+        };
+        DiagnosticRecorded: {
+            recorded: number;
+        };
+        DiagnosticEvent: {
+            /** Format: int64 */
+            id: number;
+            service: string;
+            code: components["schemas"]["DiagnosticCode"];
+            route?: string | null;
+            status?: number | null;
+            /** Format: uuid */
+            subjectId?: string | null;
+            /** Format: uuid */
+            requestId?: string | null;
+            count: number;
+            /** Format: int64 */
+            durationMs?: number | null;
+            /** Format: date-time */
+            firstAt: string;
+            /** Format: date-time */
+            lastAt: string;
+            /** Format: date-time */
+            recordedAt: string;
+        };
+        DiagnosticEventList: {
+            items: components["schemas"]["DiagnosticEvent"][];
+            nextCursor?: string | null;
+        };
+        DiagnosticCount: {
+            service: string;
+            code: components["schemas"]["DiagnosticCode"];
+            /** Format: int64 */
+            count: number;
+            /** Format: date-time */
+            lastAt: string;
+        };
+        DiagnosticSummary: {
+            /** Format: date-time */
+            since: string;
+            items: components["schemas"]["DiagnosticCount"][];
         };
     };
     responses: never;
@@ -236,6 +354,138 @@ export interface operations {
             };
             /** @description Event not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listDiagnosticEvents: {
+        parameters: {
+            query?: {
+                service?: string;
+                code?: components["schemas"]["DiagnosticCode"];
+                /** @description Inclusive lower bound on lastAt. */
+                from?: string;
+                /** @description Exclusive upper bound on lastAt. */
+                to?: string;
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Diagnostics */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiagnosticEventList"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Legacy access; sign in */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not an admin */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    recordDiagnosticEvents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DiagnosticBatch"];
+            };
+        };
+        responses: {
+            /** @description Recorded */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiagnosticRecorded"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description A person's request */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    summarizeDiagnosticEvents: {
+        parameters: {
+            query?: {
+                /** @description The window, in hours, ending now. */
+                hours?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Counts */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiagnosticSummary"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Legacy access; sign in */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not an admin */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

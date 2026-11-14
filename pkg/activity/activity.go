@@ -132,17 +132,24 @@ type Subject struct {
 }
 
 type Event struct {
-	ID            uuid.UUID      `json:"id"`
-	Type          string         `json:"type"`
-	Source        string         `json:"source"`
-	Subject       Subject        `json:"subject"`
-	CorrelationID string         `json:"correlationId"`
-	CausationID   *uuid.UUID     `json:"causationId,omitempty"`
-	Actor         Actor          `json:"actor"`
-	Outcome       string         `json:"outcome"`
-	Summary       string         `json:"summary"`
-	Data          map[string]any `json:"data,omitempty"`
-	OccurredAt    time.Time      `json:"occurredAt"`
+	ID            uuid.UUID  `json:"id"`
+	Type          string     `json:"type"`
+	Source        string     `json:"source"`
+	Subject       Subject    `json:"subject"`
+	CorrelationID string     `json:"correlationId"`
+	CausationID   *uuid.UUID `json:"causationId,omitempty"`
+	Actor         Actor      `json:"actor"`
+	// ActorUserID is the person the action is for
+	// (docs/architecture/multi-user.md#background-work): the user who
+	// signed in, or the first account under legacy access, also when a
+	// development tool or the AI makes the change for them. Nil for a
+	// service's own work. Emit fills it from the request's verified
+	// identity when the event leaves it nil.
+	ActorUserID *uuid.UUID     `json:"actorUserId,omitempty"`
+	Outcome     string         `json:"outcome"`
+	Summary     string         `json:"summary"`
+	Data        map[string]any `json:"data,omitempty"`
+	OccurredAt  time.Time      `json:"occurredAt"`
 }
 
 var namespace = uuid.MustParse("6f1c7a52-6a3e-4c55-9f0d-8a1e6f2b7c11")
@@ -204,6 +211,19 @@ func PrincipalActor(p identity.Principal) (Actor, bool) {
 	return User(), true
 }
 
+// ActorUserID is the person a request acts for, from its verified identity
+// token: the user for a person (a session, or legacy access as the first
+// account) and the subject of a delegation; nil for a service's assertion,
+// a space-bound delegation, or a request without a token.
+func ActorUserID(ctx context.Context) *uuid.UUID {
+	principal, ok := identity.FromContext(ctx)
+	if !ok || principal.Kind == identity.KindService || principal.UserID == uuid.Nil {
+		return nil
+	}
+	id := principal.UserID
+	return &id
+}
+
 // Apply writes the Trace onto outgoing request headers.
 func (t Trace) Apply(header http.Header) {
 	if t.CorrelationID != "" {
@@ -263,6 +283,9 @@ func (e *Emitter) Emit(ctx context.Context, event Event) {
 		// Never the owner by default: an event without an actor was made by
 		// the emitting service itself.
 		event.Actor = System(event.Source)
+	}
+	if event.ActorUserID == nil {
+		event.ActorUserID = ActorUserID(ctx)
 	}
 	if event.OccurredAt.IsZero() {
 		event.OccurredAt = time.Now().UTC()

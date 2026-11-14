@@ -11,6 +11,7 @@ import (
 
 	"github.com/GAMch1k/life-os/pkg/activity"
 	"github.com/GAMch1k/life-os/pkg/httpserver"
+	"github.com/GAMch1k/life-os/pkg/identity"
 	"github.com/GAMch1k/life-os/services/backup/internal/api/generated"
 	"github.com/GAMch1k/life-os/services/backup/internal/backup"
 )
@@ -51,10 +52,14 @@ func NewHandler(runner Runner, scheduler Scheduler, settings Settings) *Handler 
 	return &Handler{runner: runner, scheduler: scheduler, settings: settings}
 }
 
-// Register mounts the backup API on router. Running a backup must say who
-// asks for it in X-Life-OS-Actor; activity.RequireActor rejects it
-// otherwise.
+// Register mounts the backup API on router. Backups are the server's
+// admins' (docs/architecture/multi-user.md#roles-and-checks): a request
+// with an identity token must be the owner's or an admin's (legacy access
+// is the owner, as before accounts); one without is an internal caller
+// until P21-07. Running a backup must say who asks for it in
+// X-Life-OS-Actor; activity.RequireActor rejects it otherwise.
 func Register(router fiber.Router, handler *Handler) {
+	router.Use(identity.AdminOnly(identity.AdminPolicy{}))
 	router.Use(activity.RequireActor())
 	generated.RegisterHandlers(router, handler)
 }

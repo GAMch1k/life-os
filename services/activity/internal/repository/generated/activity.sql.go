@@ -12,7 +12,7 @@ import (
 )
 
 const getActivityEvent = `-- name: GetActivityEvent :one
-SELECT id, type, source, subject_type, subject_id, correlation_id, causation_id, actor_kind, actor_name, outcome, summary, data, occurred_at, recorded_at FROM activity_events WHERE id = $1
+SELECT id, type, source, subject_type, subject_id, correlation_id, causation_id, actor_kind, actor_name, outcome, summary, data, occurred_at, recorded_at, actor_user_id FROM activity_events WHERE id = $1
 `
 
 func (q *Queries) GetActivityEvent(ctx context.Context, id pgtype.UUID) (ActivityEvent, error) {
@@ -33,12 +33,13 @@ func (q *Queries) GetActivityEvent(ctx context.Context, id pgtype.UUID) (Activit
 		&i.Data,
 		&i.OccurredAt,
 		&i.RecordedAt,
+		&i.ActorUserID,
 	)
 	return i, err
 }
 
 const listActivityEvents = `-- name: ListActivityEvents :many
-SELECT id, type, source, subject_type, subject_id, correlation_id, causation_id, actor_kind, actor_name, outcome, summary, data, occurred_at, recorded_at FROM activity_events
+SELECT id, type, source, subject_type, subject_id, correlation_id, causation_id, actor_kind, actor_name, outcome, summary, data, occurred_at, recorded_at, actor_user_id FROM activity_events
 WHERE ($1::text IS NULL OR correlation_id = $1::text)
   AND ($2::text IS NULL OR subject_type = $2::text)
   AND ($3::text IS NULL OR subject_id = $3::text)
@@ -102,6 +103,7 @@ func (q *Queries) ListActivityEvents(ctx context.Context, arg ListActivityEvents
 			&i.Data,
 			&i.OccurredAt,
 			&i.RecordedAt,
+			&i.ActorUserID,
 		); err != nil {
 			return nil, err
 		}
@@ -114,10 +116,10 @@ func (q *Queries) ListActivityEvents(ctx context.Context, arg ListActivityEvents
 }
 
 const recordActivityEvent = `-- name: RecordActivityEvent :one
-INSERT INTO activity_events (id, type, source, subject_type, subject_id, correlation_id, causation_id, actor_kind, actor_name, outcome, summary, data, occurred_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+INSERT INTO activity_events (id, type, source, subject_type, subject_id, correlation_id, causation_id, actor_kind, actor_name, outcome, summary, data, occurred_at, actor_user_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 ON CONFLICT (id) DO NOTHING
-RETURNING id, type, source, subject_type, subject_id, correlation_id, causation_id, actor_kind, actor_name, outcome, summary, data, occurred_at, recorded_at
+RETURNING id, type, source, subject_type, subject_id, correlation_id, causation_id, actor_kind, actor_name, outcome, summary, data, occurred_at, recorded_at, actor_user_id
 `
 
 type RecordActivityEventParams struct {
@@ -134,6 +136,7 @@ type RecordActivityEventParams struct {
 	Summary       string
 	Data          []byte
 	OccurredAt    pgtype.Timestamptz
+	ActorUserID   pgtype.UUID
 }
 
 func (q *Queries) RecordActivityEvent(ctx context.Context, arg RecordActivityEventParams) (ActivityEvent, error) {
@@ -151,6 +154,7 @@ func (q *Queries) RecordActivityEvent(ctx context.Context, arg RecordActivityEve
 		arg.Summary,
 		arg.Data,
 		arg.OccurredAt,
+		arg.ActorUserID,
 	)
 	var i ActivityEvent
 	err := row.Scan(
@@ -168,6 +172,7 @@ func (q *Queries) RecordActivityEvent(ctx context.Context, arg RecordActivityEve
 		&i.Data,
 		&i.OccurredAt,
 		&i.RecordedAt,
+		&i.ActorUserID,
 	)
 	return i, err
 }

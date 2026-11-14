@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/GAMch1k/life-os/pkg/identity"
 )
 
 // Service repeatedly invokes the processor as a managed runtime. The one-shot
@@ -20,6 +22,12 @@ type Service struct {
 	// Ideas, when set, serves the recipe ideas job (GET /ideas, POST
 	// /ideas/requests).
 	Ideas *IdeasJob
+	// Verifier checks the identity token of a request to /status, which
+	// carries the AI subscription's plan and usage and is the server's
+	// admins' (docs/architecture/multi-user.md#roles-and-checks): a
+	// member's token is refused; the Dashboard reads it without one. Nil
+	// refuses every token.
+	Verifier *identity.Verifier
 
 	mu    sync.RWMutex
 	ready bool
@@ -78,14 +86,18 @@ func (s *Service) Handler() http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
-	mux.HandleFunc("/status", func(w http.ResponseWriter, _ *http.Request) {
+	verifier := s.Verifier
+	if verifier == nil {
+		verifier = identity.NewVerifier(nil, nil)
+	}
+	mux.Handle("/status", identity.AdminOnlyHandler(verifier, identity.AdminPolicy{}, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if s.Monitor == nil {
 			http.NotFound(w, nil)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(s.Monitor.Snapshot())
-	})
+	})))
 	mux.HandleFunc("/ready", func(w http.ResponseWriter, _ *http.Request) {
 		s.mu.RLock()
 		ready := s.ready

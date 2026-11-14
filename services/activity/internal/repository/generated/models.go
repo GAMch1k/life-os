@@ -23,4 +23,20 @@ type ActivityEvent struct {
 	Data          []byte
 	OccurredAt    pgtype.Timestamptz
 	RecordedAt    pgtype.Timestamptz
+	ActorUserID   pgtype.UUID
+}
+
+type DiagnosticEvent struct {
+	ID         int64
+	Service    string
+	Code       string
+	Route      *string
+	Status     *int32
+	SubjectID  pgtype.UUID
+	RequestID  pgtype.UUID
+	Count      int32
+	DurationMs *int64
+	FirstAt    pgtype.Timestamptz
+	LastAt     pgtype.Timestamptz
+	RecordedAt pgtype.Timestamptz
 }

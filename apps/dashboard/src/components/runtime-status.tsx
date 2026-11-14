@@ -4,12 +4,14 @@ import {
   ArrowRight,
   CheckCircle2,
   CircleMinus,
+  ShieldCheck,
   XCircle,
 } from "lucide-react";
 
 import { BackupNow } from "@/components/backup-now";
 import { MasonryGrid } from "@/components/masonry-grid";
 import { Sparkline } from "@/components/sparkline";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   Card,
   CardContent,
@@ -26,6 +28,7 @@ import {
   type StatusFact,
   type StatusPart,
 } from "@/lib/runtime-status";
+import { memberLine, type MemberStatus } from "@/lib/member-status";
 import { cn } from "@/lib/utils";
 
 const STATE_LABEL: Record<CheckState, string> = {
@@ -192,6 +195,83 @@ export function RuntimeStatusView({ status }: { status: RuntimeStatus }) {
         ))}
       </MasonryGrid>
     </div>
+  );
+}
+
+/**
+ * Status for members (src/lib/member-status.ts): one line, without detail.
+ * An admin without two-factor sign-in sees it too, with what to do.
+ */
+export function MemberStatusView({ status }: { status: MemberStatus }) {
+  return (
+    <div className="mx-auto max-w-5xl space-y-5">
+      <header className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <h1 className="text-xl font-semibold tracking-tight">Status</h1>
+        <p className="text-muted-foreground text-sm">
+          Checked {formatTime(status.checkedAt, status.timeZone)} ·{" "}
+          <Link
+            className="text-primary underline-offset-4 hover:underline"
+            href="/status"
+          >
+            Refresh
+          </Link>
+        </p>
+      </header>
+      <p
+        className={cn(
+          "flex items-center gap-2 rounded-xl border p-4 font-medium",
+          status.overall === "ok"
+            ? "border-success/30 bg-success-subtle"
+            : "border-destructive/30 bg-destructive-subtle",
+        )}
+        role="status"
+      >
+        <StateIcon state={status.overall} />
+        {memberLine(status.problems)}
+      </p>
+      {status.reason === "second_factor_required" ? (
+        <Alert>
+          <ShieldCheck aria-hidden="true" />
+          <AlertTitle>The details need two-factor sign-in</AlertTitle>
+          <AlertDescription>
+            <p>
+              You are one of this server&apos;s admins. Turn on an authenticator
+              app or add a passkey in{" "}
+              <Link
+                className="text-primary underline-offset-4 hover:underline"
+                href="/settings/security"
+              >
+                Settings → Security
+              </Link>{" "}
+              to see the checks, the server, and the backups here.
+            </p>
+          </AlertDescription>
+        </Alert>
+      ) : (
+        <p className="text-muted-foreground text-sm">
+          The server&apos;s admins see the details.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Home's line for members, only when a module has a problem. */
+export function MemberStatusAlert({ status }: { status: MemberStatus }) {
+  if (status.overall === "ok") return null;
+  return (
+    <Link
+      aria-label={`System status: ${memberLine(status.problems)}`}
+      className="border-destructive/30 bg-destructive-subtle hover:bg-destructive/15 mx-auto flex max-w-5xl items-center gap-3 rounded-xl border p-4 transition-colors"
+      href="/status"
+    >
+      <StateIcon state="problem" />
+      <span className="flex-1 font-medium">{memberLine(status.problems)}</span>
+      <span className="flex items-center gap-1 text-sm font-medium">
+        View status
+        <ArrowRight aria-hidden="true" className="size-4" />
+      </span>
+    </Link>
   );
 }
 

@@ -11,9 +11,13 @@ import (
 )
 
 type Querier interface {
+	DeleteDiagnosticEventsBefore(ctx context.Context, before pgtype.Timestamptz) (int64, error)
 	GetActivityEvent(ctx context.Context, id pgtype.UUID) (ActivityEvent, error)
 	ListActivityEvents(ctx context.Context, arg ListActivityEventsParams) ([]ActivityEvent, error)
+	ListDiagnosticEvents(ctx context.Context, arg ListDiagnosticEventsParams) ([]DiagnosticEvent, error)
 	RecordActivityEvent(ctx context.Context, arg RecordActivityEventParams) (ActivityEvent, error)
+	RecordDiagnosticEvent(ctx context.Context, arg RecordDiagnosticEventParams) error
+	SummarizeDiagnosticEvents(ctx context.Context, since pgtype.Timestamptz) ([]SummarizeDiagnosticEventsRow, error)
 }
 
 var _ Querier = (*Queries)(nil)

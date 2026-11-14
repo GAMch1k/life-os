@@ -21,6 +21,7 @@ import {
   requestHost,
 } from "./origin";
 import { serverRole } from "./roles";
+import type { LegacyUseLog } from "./security-log";
 import type { LifeOsAuth } from "./server";
 import { legacyAccess } from "./store";
 
@@ -70,6 +71,8 @@ export type CheckRuntime = {
   signer: Signer;
   tokens: TokenCache;
   legacy: LegacyCache;
+  /** Counts the requests made under legacy access, for the security log. */
+  legacyUses?: LegacyUseLog;
 };
 
 /** Legacy access, cached for a few seconds: the check reads it often. */
@@ -173,6 +176,12 @@ export async function checkRequest(
      * cookie from it), so it only reads.
      */
     refresh?: boolean;
+    /**
+     * Count a request under legacy access in the security log (the
+     * default). A page or route checking again a request the proxy already
+     * counted passes false.
+     */
+    count?: boolean;
   } = {},
 ): Promise<CheckResult> {
   const { auth, cookie } = sessionSource(rt, headers);
@@ -232,6 +241,9 @@ export async function checkRequest(
   if (!anonymousWriteAllowed(method, headers)) {
     return { status: 403, code: "forbidden_origin" };
   }
+  // The security log keeps legacy access's use, counted per address and
+  // device a day (docs/architecture/multi-user.md#legacy-access).
+  if (options.count !== false) rt.legacyUses?.note(headers);
   const token = rt.tokens.get("legacy", "legacy", () =>
     rt.signer.sign(legacyClaims()),
   );

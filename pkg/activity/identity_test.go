@@ -1,6 +1,7 @@
 package activity
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
@@ -8,10 +9,12 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/gofiber/fiber/v3"
+	"github.com/google/uuid"
 
 	"github.com/GAMch1k/life-os/pkg/httpserver"
 	"github.com/GAMch1k/life-os/pkg/identity"
@@ -87,5 +90,46 @@ func TestActorFromIdentity(t *testing.T) {
 	// No token at all (an internal caller): the header, as before.
 	if status := post("", "system:voice-worker"); status != http.StatusNoContent || seen != System("voice-worker") {
 		t.Fatalf("internal: %d as %+v", status, seen)
+	}
+}
+
+// The person an event is for travels with it as actorUserId: the user of a
+// session or of legacy access, never a service's own work.
+func TestEmitterRecordsTheActorUser(t *testing.T) {
+	var received []Event
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var event Event
+		_ = json.Unmarshal(raw, &event)
+		received = append(received, event)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer server.Close()
+	emitter := NewEmitter(server.URL, "tasks", nil)
+	first := uuid.MustParse("00000000-0000-4000-8000-000000000001")
+	event := Event{Type: "task.created", Subject: Subject{Type: "task", ID: "t"}, Outcome: Succeeded, Summary: "Task created"}
+
+	emitter.Emit(identity.WithPrincipal(context.Background(), identity.Principal{Kind: identity.KindUser, UserID: first, Via: identity.ViaSession}), event)
+	emitter.Emit(identity.WithPrincipal(context.Background(), identity.Principal{Kind: identity.KindUser, UserID: first, Via: identity.ViaLegacy}), event)
+	emitter.Emit(identity.WithPrincipal(context.Background(), identity.Principal{Kind: identity.KindService}), event)
+	emitter.Emit(context.Background(), event)
+	other := uuid.New()
+	explicit := event
+	explicit.ActorUserID = &other
+	emitter.Emit(identity.WithPrincipal(context.Background(), identity.Principal{Kind: identity.KindUser, UserID: first}), explicit)
+
+	if len(received) != 5 {
+		t.Fatalf("received %d events", len(received))
+	}
+	want := []*uuid.UUID{&first, &first, nil, nil, &other}
+	for i, event := range received {
+		got := event.ActorUserID
+		if (got == nil) != (want[i] == nil) || (got != nil && *got != *want[i]) {
+			t.Errorf("event %d: actorUserId %v, want %v", i, got, want[i])
+		}
+	}
+	raw, _ := json.Marshal(Event{Type: "x.y"})
+	if strings.Contains(string(raw), "actorUserId") {
+		t.Errorf("an event without a person carries actorUserId: %s", raw)
 	}
 }

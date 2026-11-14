@@ -1,7 +1,6 @@
 package identity
 
 import (
-	"encoding/json"
 	"net/http"
 )
 
@@ -22,12 +21,7 @@ func Handler(verifier *Verifier, next http.Handler, open ...string) http.Handler
 		}
 		principal, err := verifier.Verify(token)
 		if err != nil {
-			status, code, message := err.(*Error).PublicError()
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(status)
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"error": map[string]string{"code": code, "message": message},
-			})
+			writeError(w, err.(*Error))
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), principal)))

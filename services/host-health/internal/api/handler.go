@@ -7,6 +7,7 @@ import (
 	"github.com/gofiber/fiber/v3"
 
 	"github.com/GAMch1k/life-os/pkg/httpserver"
+	"github.com/GAMch1k/life-os/pkg/identity"
 	"github.com/GAMch1k/life-os/services/host-health/internal/api/generated"
 	"github.com/GAMch1k/life-os/services/host-health/internal/health"
 )
@@ -31,8 +32,13 @@ func NewHandler(sampler Sampler, interval time.Duration) *Handler {
 	return &Handler{sampler: sampler, interval: interval, now: time.Now}
 }
 
-// Register mounts the API. It has no writes.
+// Register mounts the API. It has no writes. The host's state is the
+// server's admins' (docs/architecture/multi-user.md#roles-and-checks): a
+// request with an identity token must be the owner's or an admin's (legacy
+// access is the owner, as before accounts); one without is an internal
+// caller, such as the Dashboard rendering Status after its own check.
 func Register(router fiber.Router, handler *Handler) {
+	router.Use(identity.AdminOnly(identity.AdminPolicy{}))
 	generated.RegisterHandlers(router, handler)
 }
 

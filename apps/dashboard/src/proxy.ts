@@ -14,16 +14,21 @@ import { authRuntime } from "@/lib/auth/runtime";
  * the identity token, as the gateway gives it.
  *
  * Not here, by the matcher: the login, setup, and reset pages, Better
- * Auth's /api/auth/, /api/account/ and /share (which check themselves),
- * /internal/ (the gateway answers it with 404 from outside), the privacy
+ * Auth's /api/auth/, /api/account/, /api/admin/, and /share (which check
+ * themselves), /internal/ (the gateway answers it with 404 from outside),
+ * the privacy
  * and terms pages, and the files the installed app and the login page load
  * (/_next/static, the service worker, the manifest, the icons). /share
  * must stay out: for a POST the proxy matches, Next.js copies the body and
  * caps the copy at 10 MiB, which a share of two or three photos exceeds.
  */
 
-/** Pages that are new with accounts: legacy access is not enough there. */
-const ACCOUNT_PAGES = ["/settings"];
+/**
+ * Pages that are new with accounts: legacy access is not enough there. The
+ * admin pages also need an owner or admin with two-factor sign-in, which
+ * they check themselves (src/lib/auth/admin.ts).
+ */
+const ACCOUNT_PAGES = ["/settings", "/admin"];
 
 function needsAccount(pathname: string) {
   return ACCOUNT_PAGES.some(
@@ -116,6 +121,6 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|api/auth/|api/account|internal/|login|setup|reset/|share$|privacy|terms|sw\\.js|icons/|app\\.webmanifest|favicon\\.ico).*)",
+    "/((?!_next/static|_next/image|api/auth/|api/account|api/admin|internal/|login|setup|reset/|share$|privacy|terms|sw\\.js|icons/|app\\.webmanifest|favicon\\.ico).*)",
   ],
 };

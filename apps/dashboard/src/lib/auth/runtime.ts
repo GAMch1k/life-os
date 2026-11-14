@@ -8,6 +8,7 @@ import {
   parseTrustedKeys,
   TokenCache,
 } from "./identity";
+import { LegacyUseLog, noteSigningKey, pruneSecurityLog } from "./security-log";
 import { createAuth } from "./server";
 import { LoginThrottle } from "./throttle";
 
@@ -48,7 +49,36 @@ export function createRuntime(source = process.env): CheckRuntime {
     signer,
     tokens: new TokenCache(),
     legacy: new LegacyCache(pool, env.legacyAccessDefault),
+    legacyUses: new LegacyUseLog(pool),
   };
+}
+
+const TIMERS = Symbol.for("lifeos.auth.timers");
+
+/**
+ * The security log's upkeep while the Dashboard runs (src/instrumentation.ts
+ * starts it, the tests do not): the legacy access counts are written every
+ * minute, entries older than a year are deleted at start and once a day,
+ * and a signing key that changed since the last start is logged as
+ * rotated.
+ */
+export function startSecurityLog(rt: CheckRuntime) {
+  const holder = globalThis as { [TIMERS]?: boolean };
+  if (holder[TIMERS]) return;
+  holder[TIMERS] = true;
+  const prune = () =>
+    pruneSecurityLog(rt.pool).catch((error) =>
+      console.error("security log: pruning failed", (error as Error).message),
+    );
+  void prune();
+  void noteSigningKey(rt.pool, rt.signer.kid).catch((error) =>
+    console.error(
+      "security log: the signing key was not noted",
+      (error as Error).message,
+    ),
+  );
+  setInterval(() => void rt.legacyUses?.flush(), 60_000).unref();
+  setInterval(() => void prune(), 24 * 60 * 60 * 1000).unref();
 }
 
 export function authRuntime(): CheckRuntime {

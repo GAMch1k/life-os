@@ -12,7 +12,7 @@ flowchart LR
 
 ## What it watches
 
-The rules that decide whether something is ok, a warning, or a problem live in one place, the Dashboard's `src/lib/runtime-status.ts` (see [Dashboard](../frontend/dashboard.md)). The monitor never re-implements them. It reads their result from the Dashboard's `GET /internal/status` on the private network (`MONITOR_STATUS_URL`, `http://dashboard:3000/internal/status` in Compose); the gateway answers `/internal/` with 404, and browsers read the same payload at `/api/status`, behind the sign-in. That route returns `getRuntimeStatus()`, the checks the Status page renders, as JSON. It is evaluated on every request (`cache-control: no-store`) and contains nothing the Status page does not show:
+The rules that decide whether something is ok, a warning, or a problem live in one place, the Dashboard's `src/lib/runtime-status.ts` (see [Dashboard](../frontend/dashboard.md)). The monitor never re-implements them. It reads their result from the Dashboard's `GET /internal/status` on the private network (`MONITOR_STATUS_URL`, `http://dashboard:3000/internal/status` in Compose); the gateway answers `/internal/` with 404, and browsers read the same payload at `/api/status`, behind the sign-in (the server's admins, and legacy access; a member gets one line instead). `/internal/status` is always the full payload. That route returns `getRuntimeStatus()`, the checks the Status page renders, as JSON. It is evaluated on every request (`cache-control: no-store`) and contains nothing the Status page does not show:
 
 ```json
 {

@@ -19,16 +19,19 @@ import (
 )
 
 type fakeStore struct {
-	events map[[16]byte]store.ActivityEvent
-	listed store.ListActivityEventsParams
-	rows   []store.ActivityEvent
+	events            map[[16]byte]store.ActivityEvent
+	diagnostics       []store.DiagnosticEvent
+	listedDiagnostics store.ListDiagnosticEventsParams
+	prunedBefore      []time.Time
+	listed            store.ListActivityEventsParams
+	rows              []store.ActivityEvent
 }
 
 func (f *fakeStore) RecordActivityEvent(_ context.Context, p store.RecordActivityEventParams) (store.ActivityEvent, error) {
 	if _, ok := f.events[p.ID.Bytes]; ok {
 		return store.ActivityEvent{}, pgx.ErrNoRows
 	}
-	event := store.ActivityEvent{ID: p.ID, Type: p.Type, Source: p.Source, SubjectType: p.SubjectType, SubjectID: p.SubjectID, CorrelationID: p.CorrelationID, CausationID: p.CausationID, ActorKind: p.ActorKind, ActorName: p.ActorName, Outcome: p.Outcome, Summary: p.Summary, Data: p.Data, OccurredAt: p.OccurredAt, RecordedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true}}
+	event := store.ActivityEvent{ID: p.ID, Type: p.Type, Source: p.Source, SubjectType: p.SubjectType, SubjectID: p.SubjectID, CorrelationID: p.CorrelationID, CausationID: p.CausationID, ActorKind: p.ActorKind, ActorName: p.ActorName, Outcome: p.Outcome, Summary: p.Summary, Data: p.Data, OccurredAt: p.OccurredAt, ActorUserID: p.ActorUserID, RecordedAt: pgtype.Timestamptz{Time: time.Now(), Valid: true}}
 	f.events[p.ID.Bytes] = event
 	return event, nil
 }

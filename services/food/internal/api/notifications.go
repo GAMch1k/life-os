@@ -5,6 +5,7 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 
+	"github.com/GAMch1k/life-os/pkg/identity"
 	"github.com/GAMch1k/life-os/services/food/internal/api/generated"
 )
 
@@ -21,7 +22,13 @@ func (h *Handler) WithNotifications(status NotificationStatus) *Handler {
 	return h
 }
 
+// GetNotificationStatus is Status's details, so the server's admins'
+// (docs/architecture/multi-user.md#roles-and-checks): a member's identity
+// token is refused; the Dashboard reads it without one.
 func (h *Handler) GetNotificationStatus(c fiber.Ctx) error {
+	if err := identity.RequireAdmin(c, identity.AdminPolicy{}); err != nil {
+		return err
+	}
 	if h.notifications == nil {
 		return c.JSON(generated.FoodNotificationStatus{})
 	}

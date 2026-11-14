@@ -14,6 +14,7 @@ import (
 	// The owner's timezone must resolve even in an image without zoneinfo.
 	_ "time/tzdata"
 
+	"github.com/GAMch1k/life-os/pkg/identity"
 	"github.com/GAMch1k/life-os/services/mcp/internal/processor"
 )
 
@@ -109,6 +110,13 @@ func main() {
 			}
 			return err
 		}, PollInterval: cfg.PollInterval, Monitor: monitor, Ideas: ideas}
+		// /status (the AI subscription's plan and usage) refuses a member's
+		// identity token; LIFE_OS_TRUSTED_KEYS verifies them.
+		if keys, err := identity.KeySetFromEnv(); err == nil {
+			service.Verifier = identity.NewVerifier(keys, nil)
+		} else {
+			fmt.Fprintln(os.Stderr, "identity: "+identity.TrustedKeysEnv+" is not valid: requests with an identity token are refused:", err)
+		}
 		if err := service.Serve(ctx, ":"+cfg.HealthPort); err != nil && ctx.Err() == nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)

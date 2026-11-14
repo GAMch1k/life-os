@@ -25,6 +25,19 @@ In a clone of the repository, `./setup.sh account-keys` adds the settings `./set
 
 Check the result (`/status`, a sign-in, and an API call through the gateway), then print the setup code if no account exists yet. The account commands run in the Dashboard's container: `docker compose exec -T dashboard node scripts/lifeos-auth.mjs setup-code` (also `recover-owner [--reset-2fa]`, `legacy-access [on|off]`, `sign-out-all`).
 
+### The admin surfaces and the security log
+
+The admin-only surfaces, the security log, and server diagnostics (P21-04 and P21-05; [Accounts → The server's admin](../install/accounts.md#the-servers-admin)) need no new setting. They bring two migrations, `auth_db`'s `000003` (`security_events`) and `activity_db`'s `000004` (`actor_user_id`, `diagnostic_events`), both additive: the services and the Dashboard from before run unchanged on the migrated databases. Every Go service changes (`pkg/httpserver`'s logs and diagnostics), and the processor gets `LIFE_OS_TRUSTED_KEYS` in its environment. In a clone, in this order:
+
+1. Build every image first, a few at a time: the migrate image (`docker compose build --pull auth-migrate`), `activity`, the Dashboard, and the other Go services.
+2. Stop the monitor for the switch (`docker compose stop monitor`), so that no service's restart, nor the Dashboard's, is taken for an outage. It reads its last notifications when it starts again, so it neither repeats nor loses one ([Monitor → Restarts](../services/monitor.md#restarts)).
+3. `docker compose up --no-build --no-deps auth-migrate`, then `docker compose up --no-build --no-deps activity-migrate`.
+4. `docker compose up -d --no-build --no-deps activity` first (it takes the diagnostics), then the other Go services, `--no-deps` always, the processor last and while no capture is being processed (Status, Automatic processing), and the backup service not while a backup runs.
+5. `docker compose up -d --no-build --no-deps dashboard`. The gateway does not change.
+6. Check `/status` (without a sign-in it shows every check while legacy access is on), a sign-in, and Settings → Security log; then `docker compose up -d --no-build --no-deps monitor`.
+
+Signed in without two-factor sign-in, the owner sees Status's one line and a note to turn it on, until they do.
+
 ## Modules
 
 Since P20-01 the core always runs and every other part is an optional [module](../architecture/modules.md), the Compose profile of its name: `ai` (`mcp`, `processor`), `voice` (`voice-migrate`, `voice`, `voice-worker`, `whisper`), `google-calendar`, `banking`, `cloudflare` (`cloudflared`), `ntfy`, and `server-health` (`host-health`, `host-health-docker`). `COMPOSE_PROFILES` in `.env` lists the modules that run; Compose hands the same list to the Dashboard and the gateway (`LIFE_OS_MODULES`), which show, probe, and route only those. `make life-up` builds every module's image and starts the core and the listed modules.

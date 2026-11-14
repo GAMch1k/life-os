@@ -31,6 +31,12 @@ import {
 import { hashPassword, verifyPassword } from "./password";
 import { hasSecondFactor, isFresh } from "./roles";
 import {
+  beforeSecurityHook,
+  isAdminAction,
+  securityLogPlugin,
+} from "./security-hooks";
+import { recordSecurityEvent } from "./security-log";
+import {
   accountCount,
   claimSetupCode,
   noteSetupCodeUser,
@@ -306,6 +312,9 @@ export function createAuth(
           });
         }
 
+        // Who makes the request, for the security log's entry afterwards.
+        await beforeSecurityHook(ctx);
+
         if (path === "/sign-up/email" || SIGN_IN_PATHS.has(path)) {
           if (!loginOriginAllowed(env, kind, headers)) {
             throw new APIError("FORBIDDEN", {
@@ -331,6 +340,11 @@ export function createAuth(
           // password, say) leaves it working.
           const code = headers.get(SETUP_CODE_HEADER) ?? "";
           if (!(await setupCodeValid(pool, code))) {
+            await recordSecurityEvent(pool, {
+              kind: "setup_code_refused",
+              outcome: "refused",
+              headers,
+            });
             throw new APIError("FORBIDDEN", {
               code: "SETUP_CODE_INVALID",
               message: SETUP_CODE_INVALID_MESSAGE,
@@ -360,6 +374,8 @@ export function createAuth(
             (ctx.body as Record<string, unknown> | undefined)?.username ?? "",
           );
           const wait = throttle.waitMs(name, clientAddress(headers));
+          // Not in the security log: the failures that led here are, and an
+          // entry per refused retry would let one address flood it.
           if (wait > 0) {
             throw new APIError("TOO_MANY_REQUESTS", {
               code: "TOO_MANY_FAILED_SIGN_INS",
@@ -378,49 +394,73 @@ export function createAuth(
             { id: string; role?: string | null } | undefined;
           if (!session || !user) return;
           if (user.role !== "owner" && user.role !== "admin") return;
+          // A refused admin action goes into the security log (reads such
+          // as the users list do not).
+          const refuse = async (
+            status: "FORBIDDEN" | "BAD_REQUEST",
+            code: string,
+            message: string,
+          ): Promise<never> => {
+            if (isAdminAction(path)) {
+              await recordSecurityEvent(pool, {
+                kind: "admin_refused",
+                outcome: "refused",
+                actorUserId: user.id,
+                via: "session",
+                headers,
+                detail: `${path.slice("/admin/".length)}:${code}`,
+              });
+            }
+            throw new APIError(status, { code, message });
+          };
           if (!(await hasSecondFactor(pool, user.id))) {
-            throw new APIError("FORBIDDEN", {
-              code: "SECOND_FACTOR_REQUIRED",
-              message:
-                "Admin actions need two-factor sign-in: turn on an authenticator app or add a passkey in Settings → Security.",
-            });
+            await refuse(
+              "FORBIDDEN",
+              "SECOND_FACTOR_REQUIRED",
+              "Admin actions need two-factor sign-in: turn on an authenticator app or add a passkey in Settings → Security.",
+            );
           }
           if (!isFresh(session.session)) {
-            throw new APIError("FORBIDDEN", {
-              code: "SESSION_NOT_FRESH",
-              message: "Sign in again to do this.",
-            });
+            await refuse(
+              "FORBIDDEN",
+              "SESSION_NOT_FRESH",
+              "Sign in again to do this.",
+            );
           }
           const body = (ctx.body ?? {}) as Record<string, unknown>;
           const target = typeof body.userId === "string" ? body.userId : "";
           if (path === "/admin/set-role") {
             if (user.role !== "owner") {
-              throw new APIError("FORBIDDEN", {
-                code: "OWNER_ONLY",
-                message: "Only the server owner changes roles.",
-              });
+              await refuse(
+                "FORBIDDEN",
+                "OWNER_ONLY",
+                "Only the server owner changes roles.",
+              );
             }
             if (body.role !== "admin" && body.role !== "member") {
-              throw new APIError("BAD_REQUEST", {
-                code: "ROLE_INVALID",
-                message: "The role is admin or member.",
-              });
+              await refuse(
+                "BAD_REQUEST",
+                "ROLE_INVALID",
+                "The role is admin or member.",
+              );
             }
             if (target === user.id) {
-              throw new APIError("FORBIDDEN", {
-                code: "OWN_ROLE",
-                message: "You cannot change your own role.",
-              });
+              await refuse(
+                "FORBIDDEN",
+                "OWN_ROLE",
+                "You cannot change your own role.",
+              );
             }
           }
           if (
             (path === "/admin/ban-user" || path === "/admin/remove-user") &&
             target === FIRST_USER_ID
           ) {
-            throw new APIError("FORBIDDEN", {
-              code: "OWNER_PROTECTED",
-              message: "The server owner cannot be disabled or deleted.",
-            });
+            await refuse(
+              "FORBIDDEN",
+              "OWNER_PROTECTED",
+              "The server owner cannot be disabled or deleted.",
+            );
           }
         }
       }),
@@ -474,6 +514,9 @@ export function createAuth(
             }),
           ]
         : []),
+      // Last: its after hook runs after the plugins', when two-factor has
+      // turned a password sign-in into a challenge (and no session).
+      securityLogPlugin(pool),
     ],
   } satisfies BetterAuthOptions;
 

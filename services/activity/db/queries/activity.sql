@@ -1,6 +1,6 @@
 -- name: RecordActivityEvent :one
-INSERT INTO activity_events (id, type, source, subject_type, subject_id, correlation_id, causation_id, actor_kind, actor_name, outcome, summary, data, occurred_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+INSERT INTO activity_events (id, type, source, subject_type, subject_id, correlation_id, causation_id, actor_kind, actor_name, outcome, summary, data, occurred_at, actor_user_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 ON CONFLICT (id) DO NOTHING
 RETURNING *;
 -- name: GetActivityEvent :one

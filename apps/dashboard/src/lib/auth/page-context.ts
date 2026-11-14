@@ -1,6 +1,9 @@
 import { headers } from "next/headers";
+import { redirect } from "next/navigation";
 
+import { adminGate } from "./admin";
 import { type CheckResult, checkRequest } from "./check";
+import { isAdminRole } from "./roles";
 import { authRuntime } from "./runtime";
 import { insecureLoginAllowed } from "./server";
 import { firstAccountExists } from "./store";
@@ -27,7 +30,7 @@ export async function loginContext(): Promise<LoginContext> {
   const requestHeaders = new Headers(await headers());
   let result: CheckResult | null = null;
   try {
-    result = await checkRequest(rt, "GET", requestHeaders);
+    result = await checkRequest(rt, "GET", requestHeaders, { count: false });
   } catch {
     result = null;
   }
@@ -40,11 +43,44 @@ export async function loginContext(): Promise<LoginContext> {
   };
 }
 
+/**
+ * A page of the account's own (Settings): a real sign-in, else the login
+ * page, and back here afterwards.
+ */
+export async function accountPage(next: string) {
+  const { rt, result } = await currentCheck();
+  if (result.status !== 204 || result.principal.via !== "session") {
+    redirect(`/login?next=${encodeURIComponent(next)}`);
+  }
+  const principal = result.principal;
+  return { rt, principal, admin: isAdminRole(principal.role) };
+}
+
+/**
+ * An admin page (src/lib/auth/admin.ts): a real sign-in, else the login
+ * page; then the gate, which the page shows when it refuses.
+ */
+export async function adminPage(next: string) {
+  const { rt, result } = await currentCheck();
+  if (result.status !== 204 || result.principal.via !== "session") {
+    redirect(`/login?next=${encodeURIComponent(next)}`);
+  }
+  const gate = await adminGate(rt, result, { legacy: "refuse" });
+  return {
+    rt,
+    gate,
+    principal: result.principal,
+    admin: isAdminRole(result.principal.role),
+  };
+}
+
 /** This request's check, for a page the proxy already let through. */
 export async function currentCheck() {
   const rt = authRuntime();
   return {
     rt,
-    result: await checkRequest(rt, "GET", new Headers(await headers())),
+    result: await checkRequest(rt, "GET", new Headers(await headers()), {
+      count: false,
+    }),
   };
 }

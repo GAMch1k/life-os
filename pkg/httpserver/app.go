@@ -11,6 +11,7 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 
+	"github.com/GAMch1k/life-os/pkg/diagnostics"
 	"github.com/GAMch1k/life-os/pkg/identity"
 )
 
@@ -51,6 +52,8 @@ type settings struct {
 	idGenerator     func() string
 	trustedKeys     *identity.KeySet
 	keysErr         error
+	diagnostics     *diagnostics.Recorder
+	diagnosticsSet  bool
 }
 
 // Option customizes the runtime without hiding Fiber behind an abstraction.
@@ -94,6 +97,16 @@ func WithTrustedKeys(keys *identity.KeySet) Option {
 	}
 }
 
+// WithDiagnostics counts the service's server errors (5xx) with recorder
+// instead of the one ACTIVITY_SERVICE_URL names (pkg/diagnostics); nil
+// counts none.
+func WithDiagnostics(recorder *diagnostics.Recorder) Option {
+	return func(s *settings) {
+		s.diagnostics = recorder
+		s.diagnosticsSet = true
+	}
+}
+
 // withIDGenerator is intentionally private; it makes identifier generation
 // deterministic in tests without adding a production customization surface.
 func withIDGenerator(generate func() string) Option {
@@ -124,6 +137,9 @@ func New(service string, options ...Option) *App {
 	}
 
 	logger := s.logger.With("service", service)
+	if !s.diagnosticsSet {
+		s.diagnostics = diagnostics.FromEnv(service, logger)
+	}
 	s.fiberConfig.ErrorHandler = errorHandler
 	fiberApp := fiber.New(s.fiberConfig)
 	app := &App{
@@ -139,7 +155,11 @@ func New(service string, options ...Option) *App {
 	// OS's own origin, and the Dashboard's development proxies; a page on
 	// another site gets no answer it can read (docs/architecture/multi-user.md
 	// #browser-security).
-	fiberApp.Use(requestLogger(logger))
+	// The log says what answered and how (ids, the route, the status, the
+	// error code), never what a request carried; server errors are also
+	// counted as diagnostics for the admins
+	// (docs/architecture/multi-user.md#logs).
+	fiberApp.Use(requestLogger(logger, s.diagnostics))
 	fiberApp.Use(recoverPanic(logger))
 	// Who calls: the identity token the gateway's auth check minted, when the
 	// request has one (pkg/identity). /health and /ready stay open.
@@ -151,6 +171,12 @@ func New(service string, options ...Option) *App {
 	}
 	fiberApp.Use(identity.Middleware(identity.NewVerifier(s.trustedKeys, nil), HealthPath, ReadyPath))
 	app.registerHealthRoutes()
+	if recorder := s.diagnostics; recorder != nil {
+		app.OnShutdown(func(ctx context.Context) error {
+			_ = recorder.Flush(ctx)
+			return nil
+		})
+	}
 
 	return app
 }
