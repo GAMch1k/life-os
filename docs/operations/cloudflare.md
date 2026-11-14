@@ -69,7 +69,7 @@ Cloudflare Access is the login in front of the hostname. It runs at Cloudflare's
 | Setting | Value |
 | --- | --- |
 | Zero Trust team domain | `<team>.cloudflareaccess.com` (`LIFE_OS_CF_ACCESS_TEAM_DOMAIN` in `.env`) |
-| Application | `Life OS`: Self-hosted → Public DNS → `lifeos.example.com`, session 24 h |
+| Application | `Life OS`: Self-hosted → Public DNS → `lifeos.example.com`, session 1 week (Cloudflare's default is 24 h; shorter is stricter) |
 | Login method | One-time PIN (a code sent by email), with instant authentication |
 | Policy `Owner` | **Allow**, Include → Access group `Life OS users` |
 | Access group `Life OS users` | Include → Emails → the owner's address |
@@ -77,7 +77,7 @@ Cloudflare Access is the login in front of the hostname. It runs at Cloudflare's
 
 Access denies by default, so only addresses in `Life OS users` receive a code. To add a person, add their email to the group; to remove one, delete it. Life OS has no user accounts of its own, so everyone admitted shares the same data.
 
-**The installed phone app** ([Dashboard → Install on your phone](../frontend/dashboard.md#install-on-your-phone)) stays behind Access: its manifest (`/app.webmanifest`, linked with `crossorigin="use-credentials"` so the Access cookie goes with it), icons (`/icons/`), and service worker (`/sw.js`) are same-origin paths of the public hostname with no bypass. When the 24-hour session has expired, the app opens on the Access login: enter the code once. A share sent to Life OS while the session had expired is lost (Access turns its POST into the login) and must be shared again.
+**The installed phone app** ([Dashboard → Install on your phone](../frontend/dashboard.md#install-on-your-phone)) stays behind Access: its manifest (`/app.webmanifest`, linked with `crossorigin="use-credentials"` so the Access cookie goes with it), icons (`/icons/`), and service worker (`/sw.js`) are same-origin paths of the public hostname with no bypass. When the session has expired, the app opens on the Access login: enter the code once. A share sent to Life OS while the session had expired is lost (Access turns its POST into the login) and must be shared again.
 
 The temporary service token lets automated checks authenticate without a mailbox, using the headers `CF-Access-Client-Id` and `CF-Access-Client-Secret`. Its values live only in `.env` (`LIFE_OS_CF_ACCESS_CLIENT_ID`, `LIFE_OS_CF_ACCESS_CLIENT_SECRET`). The token and its policy are removed after the Phase 9 sign-off.
 
@@ -136,7 +136,7 @@ For the human check, open `https://lifeos.example.com` from a phone on mobile da
 
 ### Day-to-day changes
 
-- **Add or remove a person:** edit the emails in the Access group `Life OS users`. Sessions last up to 24 hours. To cut someone off immediately, revoke their sessions in Zero Trust. Everyone admitted shares the same Life OS data.
+- **Add or remove a person:** edit the emails in the Access group `Life OS users`. Sessions last up to a week. To cut someone off immediately, remove them, then revoke their sessions ([Sign everyone out](#sign-everyone-out)). Everyone admitted shares the same Life OS data.
 - **Pause public access** and keep WireGuard: `docker compose stop cloudflared`. To keep it off across deploys, take `cloudflare` out of `COMPOSE_PROFILES` in `.env` (and recreate the Dashboard and the gateway).
 - **Update the connector:** bump the pinned image in `compose.yaml`, then `docker compose up -d --no-build --no-deps cloudflared`.
 - **After redeploying services,** nothing more is needed: the gateway resolves service names at request time (within 10 seconds of a redeploy; see [Networking → Upstream addresses](../architecture/networking.md#upstream-addresses)). Recreate it (`docker compose up -d --no-build --no-deps --force-recreate gateway`) only after changing `infra/nginx/life-os.conf.template` or its settings in `.env` (`LIFE_OS_PUBLIC_HOSTNAME`, `LIFE_OS_GATEWAY_BIND_ADDRESS`, `LIFE_OS_GATEWAY_PORT`). The connector keeps working.
@@ -145,7 +145,26 @@ For the human check, open `https://lifeos.example.com` from a phone on mobile da
 
 - **Tunnel token** (leaked, or a scheduled rotation): create a new tunnel, or rotate the token if the dashboard offers it, and add the same routes `lifeos.example.com → http://gateway:80` (with JWT validation) and `ntfy.example.com → http://ntfy:80` (without Access). Put the new token in `.env`, run `docker compose up -d --no-build --no-deps cloudflared`, check that the old tunnel shows no connectors, and delete it. The Access application belongs to the hostname, so protection is unaffected.
 - **Service token:** after the Phase 9 sign-off, delete `life-os-acceptance` and the `Acceptance test` policy, and remove the two `LIFE_OS_CF_ACCESS_CLIENT_*` lines from `.env`. To rotate it instead, regenerate it and update `.env`.
-- **Logins:** the one-time PIN has no secret to rotate. In an emergency, revoke all Access sessions in Zero Trust.
+- **Logins:** the one-time PIN has no secret to rotate. To end sessions, see [Sign everyone out](#sign-everyone-out).
+
+### Sign everyone out
+
+For an emergency: a lost phone, a hacked mailbox, or anything that looks like someone else got in. Revoking sessions only logs people out. Anyone the `Owner` policy still allows can request a new code and get straight back in, so close the door first.
+
+1. **Close the door.** If you know who, delete their address from the Access group `Life OS users`. If you don't know yet, stop public access while you look: `docker compose stop cloudflared`. WireGuard keeps working, and `docker compose up -d --no-build --no-deps cloudflared` brings it back.
+2. **Log out every browser and installed app:** Zero Trust → **Access controls** → **Applications** → `Life OS` → **Edit** → **Revoke existing tokens**. Everyone has to enter a new email code; for up to a minute, logging in again shows an error.
+   - **One person only:** Zero Trust → **Team & Resources** → **Users** → tick the person → **Action** → **Revoke**. This logs them out of every Access application in the account, not only Life OS.
+3. **Phones, watch, and automated checks** use a service token, which revoking does not touch: its ID and secret simply get a new session on the next request. If one may be in the wrong hands: Zero Trust → **Access controls** → **Service credentials** → **Service Tokens** → the token's **⋯** → **Rotate secret**, with **Keep the current secret valid for** → *Revoke immediately* (or **Delete** the token, or **Disable token** to pause it). Then sign the phone app in again with the new secret (the watch goes through the phone), and update `LIFE_OS_CF_ACCESS_CLIENT_SECRET` in `.env` if the server uses that token.
+4. **Check:** open `https://lifeos.example.com` in a private window: it must ask for a code. Run `tools/check-cloudflare-access` if the server's service token is still set.
+
+The same from a terminal, with a Cloudflare API token allowed **Access: Apps and Policies Revoke** (create it before you need it; the application's ID is in its URL in the dashboard):
+
+```sh
+curl -fsS -X POST "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT_ID/access/apps/$CF_APP_ID/revoke_tokens" \
+  -H "Authorization: Bearer $CF_API_TOKEN"
+```
+
+Cloudflare's own reference: [Session management](https://developers.cloudflare.com/cloudflare-one/access-controls/access-settings/session-management/), [Service tokens](https://developers.cloudflare.com/cloudflare-one/access-controls/service-credentials/service-tokens/).
 
 ### Recover
 
