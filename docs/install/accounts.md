@@ -18,7 +18,7 @@ The first account needs a one-time **setup code** from the server. Whoever can r
 
 2. Open Life OS at its HTTPS address (or `http://localhost:3000` through an SSH tunnel), go to **/setup**, and enter the code, a username, and a password of at least 10 characters. A name and an email address are optional: the email is only shown, never used to sign in or to send anything.
 
-3. Life OS signs you in and opens **Settings → Security**. Turn on two-factor sign-in there next ([Two-factor sign-in](#two-factor-sign-in)): the owner needs it before the admin pages of later versions open.
+3. Life OS signs you in and opens **Settings → Security**. Turn on two-factor sign-in there next ([Two-factor sign-in](#two-factor-sign-in)): signed in, the owner needs it before Status shows its details and the admin pages open ([The server's admin](#the-servers-admin)).
 
 In a clone of the repository (the reference server), the same command runs in the Dashboard's container: `docker compose exec -T dashboard node scripts/lifeos-auth.mjs setup-code`.
 
@@ -48,13 +48,30 @@ Adding a passkey needs a sign-in from the last 12 hours; Life OS asks you to sig
 
 An authenticator app (Google Authenticator, Aegis, 1Password, and others) shows a new 6-digit code every 30 seconds. Turn it on, scan the QR code, enter the code the app shows, and keep the ten **recovery codes** somewhere safe, such as a password manager: each signs you in once if your phone is not at hand. A passkey counts as two-factor too.
 
+## Settings → Security log
+
+**Settings → Security log** (`/settings/security-log`) lists what concerns your account, newest first: every sign-in (with a password, an authenticator code, a recovery code, or a passkey), every failed one, sign-outs, password and two-factor and passkey changes, and what an admin or the server did to the account. Each entry says when, what, who did it, and from which kind of device and address. It never holds anything you wrote: no titles, amounts, or messages, and not the username someone typed. Entries are kept for a year. A failed sign-in you do not recognise means someone tried your password: change it, and turn on two-factor sign-in if it is off.
+
+The owner's log also has legacy access's use: one entry a day for each address and kind of device that used Life OS without signing in, with the number of requests.
+
+## The server's admin
+
+The owner, and later the admins the owner names, look after the server; they never see anyone's content. With an account signed in, the admin's parts need two-factor sign-in on it:
+
+- **Status** shows every check and its details (the server's memory and disks, the containers, the backups, the AI plan's usage) and **Back up now**. Anyone else, and an admin without two-factor sign-in, sees one line for the modules they use: "Everything works." or "Calendar has a problem.".
+- **All accounts' log** (`/admin/security-log`): the security log of every account, filtered by account, kind, and days. It also has the commands run on the server (`setup-code`, `recover-owner`, `legacy-access`, `sign-out-all`, a rotated key) and every admin action, refused ones too.
+- **Diagnostics** (`/admin/diagnostics`): the services' server errors, counted by what went wrong and where (codes, never content), over the last day and week; kept 90 days.
+
+Settings' pages link to them for the owner and admins. While [legacy access](#legacy-access) is on, a request without a sign-in still gets Status and Back up now as before; the admin pages always need a real sign-in.
+
 ## Legacy access
 
 Before accounts, whoever reached Life OS was its owner. **Legacy access** keeps it that way while it is on: a request without a sign-in acts as the first account, exactly as before. A request that does carry a sign-in is always that account's.
 
 - It is **on** after updating an install from before accounts (`./setup.sh update` writes `LIFE_OS_LEGACY_ACCESS=on` into `.env`), so that nothing changes for you, your browsers, and the phone and watch apps, which send no Life OS sign-in yet.
 - It is **off** on a new install.
-- The pages that are new with accounts (Settings → Security) need a real sign-in all the same. Once the apps can be paired with an account (a later version), the Dashboard will remind you once a day while legacy access is on; until then it does not, since turning it off would cut the apps off.
+- The pages that are new with accounts (Settings, and the admin pages) need a real sign-in all the same. Status's details and Back up now, which are older, stay open to legacy access as the owner.
+- The [security log](#settings--security-log) counts its use: one entry a day for each address and kind of device, with the number of requests. Once the apps can be paired with an account (a later version), the Dashboard will remind you once a day while legacy access is on; until then it does not, since turning it off would cut the apps off.
 - Turn it off in **Settings → Security** once the phone and watch apps are paired with your account (they learn to pair in a later version). From then on, everything needs a sign-in. On the server: `./setup.sh legacy-access off` (or no argument to see it).
 - Turning it **on** is done on the server only: `./setup.sh legacy-access on`. It turns sign-in off for the whole server, so a browser cannot do it, not even the owner's (an old or stolen session must not be able to). It is refused while more than one account exists.
 

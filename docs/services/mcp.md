@@ -325,7 +325,7 @@ A capture cannot answer: the clause asks Codex to answer a question about a Task
 
 ## Processor status
 
-The processor's private health port (`8081`, not exposed through the gateway) serves `/health`, `/ready`, and `/status`. Like `/health` and `/ready`, `/status` is an operational endpoint outside the OpenAPI contracts. It holds what the running process has observed since it started, in memory, and resets on restart:
+The processor's private health port (`8081`, not exposed through the gateway) serves `/health`, `/ready`, and `/status`. Like `/health` and `/ready`, `/status` is an operational endpoint outside the OpenAPI contracts. It holds the AI plan's usage, which is the server's admins': a request with an identity token that is not the owner's or an admin's is refused (`403 admin_only`, verified with `LIFE_OS_TRUSTED_KEYS`); the Dashboard reads it without one. It holds what the running process has observed since it started, in memory, and resets on restart:
 
 ```json
 {

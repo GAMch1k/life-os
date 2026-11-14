@@ -169,7 +169,7 @@ The service listens on port 8080 on the private `backend` network only (`http://
 | `POST /v1/backups` | Runs a backup now: every database, or with `{"databases": ["finance", "tasks_db"]}` only those (service or database names). 202 with the run in progress; with `waitSeconds` (up to 3600) it waits and answers 200 with the finished run if it ends in time. 409 `backup_running` while a run or a restore check is going, 422 `unknown_database` for a name that is not in the registry. |
 | `POST /v1/restore-checks` | Runs a restore check now: of the newest successful full run, or with `{"runId": "20261011T011500Z"}` of that run. 202 with the check in progress, or 200 with the finished check with `waitSeconds`. 409 `backup_running` while a run or a check is going, 404 `run_not_found`, 422 `no_backup` when there is nothing to check. |
 
-Both `POST`s must say who asks in `X-Life-OS-Actor` (400 `actor_required` otherwise); the actor is recorded in the run. Run ids are start times in UTC; every timestamp in the API is UTC.
+Both `POST`s must say who asks in `X-Life-OS-Actor` (400 `actor_required` otherwise); the actor is recorded in the run. The backups are the server's admins' ([Multi-user design](../architecture/multi-user.md#as-built-in-p21-04-and-p21-05)): a request whose identity token is not the owner's or an admin's is refused with `403 admin_only` (legacy access is the owner); one without a token is an internal caller until P21-07. The Dashboard's `/api/backups/` also asks for two-factor sign-in, passes on the admin's token, and writes Back up now into the security log. Run ids are start times in UTC; every timestamp in the API is UTC.
 
 ## Running a backup now
 

@@ -28,6 +28,7 @@ flowchart LR
 | `correlationId` | The workflow this event belongs to. |
 | `causationId` | The event that directly caused this one (optional). |
 | `actor` | `user`, `agent` (e.g. `codex-inbox-processor`, `mcp`), `system` (e.g. `voice-worker`), or `dev` (e.g. `claude-code`). See [Actors](#actors). |
+| `actorUserId` | The person the action is for (optional): the account that signed in, or the first account under legacy access, also when a development tool or the AI writes for them; none for a service's own work, nor on events from before accounts. `pkg/activity` fills it from the request's verified identity token. |
 | `outcome` | `succeeded`, `pending` (accepted/scheduled), or `failed`. |
 | `summary` | One short human-readable sentence. |
 | `data` | Small structured details (titles, tools, errors; ≤16 KB). |
@@ -142,9 +143,20 @@ curl "$GATEWAY/api/activity/v1/activity-events?subjectType=task&subjectId=$TASK_
 
 The contract is `services/activity/api/openapi.yaml`. The Dashboard Event Log (`/activity`, see [Dashboard](../frontend/dashboard.md)) is built only on this API: it lists and filters events, then rebuilds a selected entry's trace from its correlation, causation, and subject.
 
+## Server diagnostics
+
+Activity also keeps the server's diagnostics (`diagnostic_events`; [Multi-user design → Logs](../architecture/multi-user.md#logs)): each service's server errors, counted by code, route pattern, and status. They are for the server's admins and carry no content: a service name, a code from a fixed list, a route pattern such as `/v1/tasks/:taskId`, an HTTP status, a count, the longest duration, the first and last time, and at most a subject id and the last request id (UUIDs). The Go type (`pkg/diagnostics`) has no free-text field, and Activity checks every field again, so a title, an amount, or a message cannot be stored.
+
+- Every Go service sends them through `pkg/httpserver` when its `ACTIVITY_SERVICE_URL` is set: answers 500 to 599 are counted in memory and sent once a minute (and at shutdown) as one row per code, route, and status. `ACTIVITY_DIAGNOSTICS=off` turns a service's off. A failed send keeps the counts for the next one; the service's work never waits for it.
+- `POST /v1/diagnostic-events` (`{"events": [...]}`, at most 1,000): internal, like recording events; a request with a person's identity token is refused (`403 services_only`). `202 {"recorded": n}`, or `400` when any field is not what it must be.
+- `GET /v1/diagnostic-events` (newest first by `lastAt`; filters `service`, `code`, `from`, `to`, `cursor`, `limit` 1–200) and `GET /v1/diagnostic-events/summary?hours=24` (counts by service and code): for owners and admins who signed in. A member's token gets `403 admin_only`, legacy access `401 sign_in_required`; a request without a token is an internal caller (the Dashboard's Diagnostics page, after its own admin check).
+- Rows older than 90 days are deleted as new ones are recorded (at most once an hour).
+
+The codes are `internal_error`, `bad_gateway`, `service_unavailable`, `gateway_timeout`, `server_error`, `panic`, `not_ready`, and the services' own 5xx codes (`provider_unavailable`, `media_unavailable`, `google_rejected`, `google_unavailable`, `google_not_configured`, `banking_not_configured`, `food_unavailable`, `calendar_unavailable`); an unlisted service code counts under its status's generic one.
+
 ## Operations
 
 - Database: `activity_db` / `activity_user`, password `LIFE_OS_ACTIVITY_DB_PASSWORD` in `.env`. Fresh volumes are provisioned automatically. For an existing deployment, add the password and run `make db-provision` once before starting the new `activity` and `activity-migrate` services.
 - Emitting services (`tasks`, `inbox`, `voice`, `voice-worker`, `mcp`, `calendar`, `finance`, `food`) read `ACTIVITY_SERVICE_URL`.
-- Retention: events are kept indefinitely for now; they are small and single-user.
+- Retention: events are kept indefinitely for now; they are small and single-user. Diagnostics are kept 90 days.
 - Verification: `make activity-trace-smoke` speaks a Task request (espeak-ng in a throwaway container). It sends the request through Voice, whisper.cpp, Inbox, the automatic processor with the authenticated Codex CLI, MCP, and Tasks on the disposable verification stack, then completes the Task itself (recorded as `dev:smoke-activity-trace`). It reconstructs and checks the whole chain from the Activity API alone.

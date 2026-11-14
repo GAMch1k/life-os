@@ -12,6 +12,9 @@ set -euo pipefail
 #    from another site are refused, and that /internal/ is closed;
 #  - turns legacy access off on the host (legacy-access off): a request
 #    without a sign-in is 401, the session still works; and on again;
+#  - checks the admin surfaces: legacy access gets Status and the backups
+#    as before; the owner, signed in without two-factor, gets the members'
+#    one line and no Back up now or admin pages, and the security log has it;
 #  - signs everyone out (sign-out-all): the session is dead.
 # The stack starts with legacy access on (tools/verify-compose), as an
 # upgraded install does.
@@ -88,6 +91,27 @@ for _ in $(seq 1 20); do
 done
 jq -e '[.items[] | select(.type == "task.created")][0].actor.kind == "user"' "$work/body" >/dev/null \
   || fail "the task was not created as the user: $(cat "$work/body")"
+
+echo '==> Admin surfaces: legacy access as before, an owner without two-factor refused'
+# Legacy access (no credential) is the owner, as before accounts: Status
+# with every check, and the backups' status.
+expect 200 GET /api/status
+jq -e '.checks | length > 0' "$work/body" >/dev/null || fail "legacy access lost Status's checks: $(cat "$work/body")"
+request GET /api/backups/v1/status
+[[ "$code" != 401 && "$code" != 403 ]] || fail "legacy access lost the backups' status: $code"
+# The signed-in owner has no second factor yet: the members' one line, and
+# no backups or admin pages until two-factor sign-in is on.
+expect 200 GET /api/status -H "cookie: $session"
+jq -e '.view == "member" and .reason == "second_factor_required" and (.checks | length) == 0' "$work/body" >/dev/null \
+  || fail "a signed-in owner without two-factor saw Status's details: $(cat "$work/body")"
+expect 403 POST /api/backups/v1/backups -H "cookie: $session" -H "origin: $gateway"
+grep -q '"second_factor_required"' "$work/body" || fail "Back up now was not refused for the missing second factor: $(cat "$work/body")"
+expect 403 GET /api/admin/security-log -H "cookie: $session"
+expect 401 GET /api/admin/security-log
+# The security log has the sign-up and the refused Back up now.
+expect 200 GET /api/account/security-log -H "cookie: $session"
+jq -e '[.items[].kind] | (index("account_created") != null) and (index("admin_refused") != null)' "$work/body" >/dev/null \
+  || fail "the security log lacks the sign-up or the refused backup: $(cat "$work/body")"
 
 echo '==> A share of photos over 10 MiB, signed in'
 # The installed app's share sheet posts photos to /share as one request; the
