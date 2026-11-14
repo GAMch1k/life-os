@@ -63,6 +63,25 @@ func run(ctx context.Context) error {
 	o := owner{zone: zone, now: time.Now}
 	hc := &http.Client{Timeout: 10 * time.Second}
 	emitter := activity.NewEmitter(cfg.ActivityURL, "mcp", nil)
+	// The gateway's identity token, when a request has one (pkg/identity):
+	// an invalid one is refused. With it, MCP lists and runs only the tools
+	// the person's grant allows, and forwards the token to the services
+	// (P21-06); without one (the processor, on the private network) every
+	// tool, as before.
+	keys, err := identity.KeySetFromEnv()
+	if err != nil {
+		return err
+	}
+	if keys.Len() == 0 {
+		fmt.Fprintln(os.Stderr, "identity: "+identity.TrustedKeysEnv+" is empty: requests with an identity token are refused")
+	}
+	tools := newCatalog(func() *mcp.Server { return newServer(cfg, hc, emitter, o) })
+	handler := httpHandler(identity.NewVerifier(keys, nil), tools, cfg.PublicURL)
+	return http.ListenAndServe(fmt.Sprintf(":%d", cfg.Port), handler)
+}
+
+// newServer is the MCP server with every Life OS tool.
+func newServer(cfg config.Config, hc *http.Client, emitter *activity.Emitter, o owner) *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: "life-os", Version: "0.1.0"}, nil)
 	add := func(n, d, b, p string) { addReadTool(s, hc, n, d, b, p) }
 	add("inbox_list", "List Inbox items", cfg.InboxURL, "/v1/inbox-items?")
@@ -117,22 +136,7 @@ func run(ctx context.Context) error {
 	mcp.AddTool(s, &mcp.Tool{Name: "inbox_resolve", Description: "Resolve an Inbox item after successful processing"}, func(ctx context.Context, req *mcp.CallToolRequest, in inboxAction) (*mcp.CallToolResult, Output, error) {
 		return post(ctx, hc, traceOf(req), cfg.InboxURL, "/v1/inbox-items/"+in.ItemID+"/resolve", nil)
 	})
-	mux := http.NewServeMux()
-	mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return s }, nil))
-	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{"status":"ok"}`)) })
-	mux.HandleFunc("/ready", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{"status":"ready"}`)) })
-	// The gateway's identity token, when a request has one (pkg/identity):
-	// an invalid one is refused. MCP's actor stays agent:mcp until MCP
-	// clients sign in with OAuth (P21-06).
-	keys, err := identity.KeySetFromEnv()
-	if err != nil {
-		return err
-	}
-	if keys.Len() == 0 {
-		fmt.Fprintln(os.Stderr, "identity: "+identity.TrustedKeysEnv+" is empty: requests with an identity token are refused")
-	}
-	handler := identity.Handler(identity.NewVerifier(keys, nil), mux, "/health", "/ready")
-	return http.ListenAndServe(fmt.Sprintf(":%d", cfg.Port), handler)
+	return s
 }
 
 // addReadTool registers a read tool that GETs path plus the caller's URL

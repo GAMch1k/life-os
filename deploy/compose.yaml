@@ -719,6 +719,7 @@ services:
       RECIPE_IMPORT_SERVICE_URL: http://recipe-import:8080
       ACTIVITY_SERVICE_URL: http://activity:8080
       LIFE_OS_TIMEZONE: ${LIFE_OS_TIMEZONE:-UTC}
+      LIFE_OS_PUBLIC_URL: ${LIFE_OS_PUBLIC_URL:-}
     expose:
       - '8080'
     depends_on:
