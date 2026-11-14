@@ -126,9 +126,14 @@ export function parseTrustedKeys(text: string): Map<string, KeyObject> {
   }
   const result = new Map<string, KeyObject>();
   for (const entry of keys) {
-    const jwk = parseJwk(JSON.stringify(entry), "a key in LIFE_OS_TRUSTED_KEYS");
+    const jwk = parseJwk(
+      JSON.stringify(entry),
+      "a key in LIFE_OS_TRUSTED_KEYS",
+    );
     if (jwk.d) {
-      throw new Error("LIFE_OS_TRUSTED_KEYS holds a private key: list public keys only");
+      throw new Error(
+        "LIFE_OS_TRUSTED_KEYS holds a private key: list public keys only",
+      );
     }
     result.set(
       jwk.kid as string,

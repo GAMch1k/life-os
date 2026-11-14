@@ -57,6 +57,9 @@ COPY --from=build /app/next.config.ts ./next.config.ts
 # Static files served at the root: the app icons and the service worker.
 COPY --from=build /app/public ./public
 COPY --from=build /app/package.json ./package.json
+# The account commands ./setup.sh runs in this container (setup-code,
+# recover-owner, legacy-access, sign-out-all; docs/operations/accounts.md).
+COPY --from=build /app/scripts/lifeos-auth.mjs ./scripts/lifeos-auth.mjs
 USER node
 EXPOSE 3000
 # package.json's start script (next start), run by node itself rather than

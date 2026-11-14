@@ -1,6 +1,10 @@
 import { passkey } from "@better-auth/passkey";
 import { betterAuth, type BetterAuthOptions } from "better-auth";
-import { APIError, createAuthMiddleware } from "better-auth/api";
+import {
+  APIError,
+  createAuthMiddleware,
+  getSessionFromCtx,
+} from "better-auth/api";
 import { admin, twoFactor, username } from "better-auth/plugins";
 import { createAccessControl } from "better-auth/plugins/access";
 import { randomBytes } from "node:crypto";
@@ -18,7 +22,12 @@ import {
   SETUP_CODE_HEADER,
 } from "./constants";
 import type { AuthEnv } from "./env";
-import { isLoopbackHost, isOwnOrigin, requestHost } from "./origin";
+import {
+  anonymousWriteAllowed,
+  isLoopbackHost,
+  isOwnOrigin,
+  requestHost,
+} from "./origin";
 import { hashPassword, verifyPassword } from "./password";
 import { hasSecondFactor, isFresh } from "./roles";
 import { accountCount, consumeSetupCode, setupCodeValid } from "./store";
@@ -100,10 +109,6 @@ export const DISABLED_PATHS = [
 ];
 
 const SIGN_IN_PATHS = new Set(["/sign-in/username"]);
-const SECOND_STEP_PATHS = new Set([
-  "/two-factor/verify-totp",
-  "/two-factor/verify-backup-code",
-]);
 
 export type AuthKind = "secure" | "insecure";
 
@@ -255,6 +260,20 @@ export function createAuth(
         const headers = ctx.headers ?? new Headers();
         const path = ctx.path;
 
+        // Every write from a browser must come from Life OS's own origin,
+        // with or without a cookie: a form on another site must not sign
+        // anyone in (or out) either. Better Auth checks only requests that
+        // carry its cookies.
+        if (
+          ctx.request &&
+          !anonymousWriteAllowed(ctx.request.method, headers)
+        ) {
+          throw new APIError("FORBIDDEN", {
+            code: "FORBIDDEN_ORIGIN",
+            message: "This request did not come from Life OS.",
+          });
+        }
+
         if (path === "/sign-up/email" || SIGN_IN_PATHS.has(path)) {
           if (!loginOriginAllowed(env, kind, headers)) {
             throw new APIError("FORBIDDEN", {
@@ -318,10 +337,10 @@ export function createAuth(
         // (TOTP or a passkey) and a session younger than 12 hours. The
         // admin surfaces themselves are P21-04's.
         if (path.startsWith("/admin/")) {
-          const session = ctx.context.session ?? null;
+          // Before hooks run ahead of the endpoint's own session lookup.
+          const session = await getSessionFromCtx(ctx);
           const user = session?.user as
-            | { id: string; role?: string | null }
-            | undefined;
+            { id: string; role?: string | null } | undefined;
           if (!session || !user) return;
           if (user.role !== "owner" && user.role !== "admin") return;
           if (!(await hasSecondFactor(pool, user.id))) {

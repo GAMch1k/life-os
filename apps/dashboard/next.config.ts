@@ -7,6 +7,11 @@ const nextConfig: NextConfig = {
   // without it the server runs on the defaults and serves /_next/image. The
   // gateway closes that path as well (infra/nginx/life-os.conf.template).
   images: { unoptimized: true },
+  // Better Auth and the PostgreSQL driver load from node_modules at run
+  // time instead of being bundled: one copy in the process, shared by the
+  // proxy (src/proxy.ts) and the routes, and Node's own builds (node:crypto
+  // scrypt for passwords).
+  serverExternalPackages: ["better-auth", "@better-auth/passkey", "pg"],
   async headers() {
     return [
       {

@@ -57,7 +57,7 @@ function cbor(v: Cbor): Buffer {
     const b = Buffer.from(v, "utf8");
     return Buffer.concat([head(3, b.length), b]);
   }
-  const parts = [head(5, v.size)];
+  const parts: Buffer[] = [head(5, v.size)];
   for (const [k, val] of v) parts.push(cbor(k), cbor(val));
   return Buffer.concat(parts);
 }

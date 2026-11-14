@@ -50,7 +50,13 @@ export type Principal = {
 };
 
 export type CheckResult =
-  | { status: 204; token: string; principal: Principal }
+  | {
+      status: 204;
+      token: string;
+      principal: Principal;
+      /** A renewed session cookie (with refresh), for the response. */
+      setCookie?: string[];
+    }
   | { status: 401; code: "unauthenticated" }
   | { status: 403; code: "forbidden_origin" };
 
@@ -117,7 +123,10 @@ function cookieValue(header: string | null, name: string): string | null {
 
 /** The Better Auth instance and cookie name for the request's host. */
 export function sessionSource(rt: CheckRuntime, headers: Headers) {
-  if (rt.insecureAuth && rt.env.insecureLoginHosts.includes(requestHost(headers))) {
+  if (
+    rt.insecureAuth &&
+    rt.env.insecureLoginHosts.includes(requestHost(headers))
+  ) {
     return { auth: rt.insecureAuth, cookie: INSECURE_SESSION_COOKIE };
   }
   return { auth: rt.auth, cookie: SESSION_COOKIE };
@@ -157,6 +166,14 @@ export async function checkRequest(
   rt: CheckRuntime,
   method: string,
   headers: Headers,
+  options: {
+    /**
+     * Renew the session (once a day) and return its new cookie: the
+     * Dashboard's pages do, the gateway's check does not (nginx keeps no
+     * cookie from it), so it only reads.
+     */
+    refresh?: boolean;
+  } = {},
 ): Promise<CheckResult> {
   const { auth, cookie } = sessionSource(rt, headers);
   const hasCookie = cookieValue(headers.get("cookie"), cookie) !== null;
@@ -165,11 +182,17 @@ export async function checkRequest(
     // Only the session cookie goes to Better Auth: nothing else of the
     // request can sign anyone in.
     const sessionHeaders = new Headers();
-    sessionHeaders.set("cookie", `${cookie}=${cookieValue(headers.get("cookie"), cookie)}`);
-    const session = (await auth.api.getSession({
+    sessionHeaders.set(
+      "cookie",
+      `${cookie}=${cookieValue(headers.get("cookie"), cookie)}`,
+    );
+    const { headers: responseHeaders, response } = await auth.api.getSession({
       headers: sessionHeaders,
-      query: { disableRefresh: true },
-    })) as Session | null;
+      query: { disableRefresh: !options.refresh },
+      returnHeaders: true,
+    });
+    const session = response as Session | null;
+    const setCookie = responseHeaders?.getSetCookie() ?? [];
     if (!session || isBanned(session.user)) {
       return { status: 401, code: "unauthenticated" };
     }
@@ -199,6 +222,7 @@ export async function checkRequest(
         sessionId: session.session.id,
         sessionCreatedAt: new Date(session.session.createdAt),
       },
+      ...(setCookie.length ? { setCookie } : {}),
     };
   }
 

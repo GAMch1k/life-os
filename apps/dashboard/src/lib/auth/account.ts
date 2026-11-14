@@ -117,7 +117,11 @@ export async function accountHandler(
   const { pathname } = new URL(request.url);
   const check = await checkRequest(rt, request.method, request.headers);
   if (check.status === 403) {
-    return problem(403, "forbidden_origin", "This request did not come from Life OS.");
+    return problem(
+      403,
+      "forbidden_origin",
+      "This request did not come from Life OS.",
+    );
   }
   if (check.status === 401) {
     return problem(401, "unauthenticated", "Sign in first.");
@@ -130,7 +134,11 @@ export async function accountHandler(
 
   // Everything else is the account's own: legacy access is not enough.
   if (principal.via !== "session") {
-    return problem(401, "sign_in_required", "Sign in with your account to do this.");
+    return problem(
+      401,
+      "sign_in_required",
+      "Sign in with your account to do this.",
+    );
   }
 
   if (pathname === "/api/account/sessions" && request.method === "GET") {
@@ -144,13 +152,18 @@ export async function accountHandler(
       [revoke[1], principal.userId],
     );
     rt.tokens.forget(`session:${revoke[1]}`);
-    if (!rowCount) return problem(404, "not_found", "There is no such session.");
+    if (!rowCount)
+      return problem(404, "not_found", "There is no such session.");
     return new Response(null, { status: 204 });
   }
 
   if (pathname === "/api/account/legacy-access" && request.method === "POST") {
     if (principal.role !== "owner") {
-      return problem(403, "owner_only", "Only the server owner changes legacy access.");
+      return problem(
+        403,
+        "owner_only",
+        "Only the server owner changes legacy access.",
+      );
     }
     let enabled: unknown;
     try {
@@ -159,7 +172,11 @@ export async function accountHandler(
       enabled = undefined;
     }
     if (typeof enabled !== "boolean") {
-      return problem(400, "bad_request", 'Send {"enabled": true} or {"enabled": false}.');
+      return problem(
+        400,
+        "bad_request",
+        'Send {"enabled": true} or {"enabled": false}.',
+      );
     }
     const result = await setLegacyAccess(rt.pool, enabled, principal.userId);
     if (result === "accounts") {
@@ -171,9 +188,11 @@ export async function accountHandler(
     }
     rt.legacy.invalidate();
     rt.tokens.forget("legacy");
-    return json(200, { legacyAccess: enabled, accounts: await accountCount(rt.pool) });
+    return json(200, {
+      legacyAccess: enabled,
+      accounts: await accountCount(rt.pool),
+    });
   }
 
   return problem(404, "not_found", "Not found");
 }
-

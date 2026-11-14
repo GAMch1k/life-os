@@ -63,7 +63,14 @@ export function testKeys(kid = `auth-test-${randomBytes(2).toString("hex")}`) {
   const { privateKey } = generateKeyPairSync("ed25519");
   const jwk = privateKey.export({ format: "jwk" });
   const signingKey = JSON.stringify({ ...jwk, kid });
-  const publicJwk = { kty: "OKP", crv: "Ed25519", x: jwk.x, kid, use: "sig", alg: "EdDSA" };
+  const publicJwk = {
+    kty: "OKP",
+    crv: "Ed25519",
+    x: jwk.x,
+    kid,
+    use: "sig",
+    alg: "EdDSA",
+  };
   return { kid, signingKey, publicJwk };
 }
 
@@ -77,6 +84,7 @@ export type RuntimeOptions = {
 export function runtime(url: string, options: RuntimeOptions = {}) {
   const keys = options.keys ?? testKeys();
   return createRuntime({
+    NODE_ENV: "test",
     AUTH_DATABASE_URL: url,
     LIFE_OS_AUTH_SECRET: randomBytes(32).toString("hex"),
     LIFE_OS_IDENTITY_SIGNING_KEY: keys.signingKey,
@@ -151,7 +159,12 @@ export class Browser {
       payload = JSON.stringify(body);
     }
     const response = await this.fetcher(
-      new Request(url, { method, headers: h, body: payload, redirect: "manual" }),
+      new Request(url, {
+        method,
+        headers: h,
+        body: payload,
+        redirect: "manual",
+      }),
     );
     for (const c of response.headers.getSetCookie()) {
       const [kv] = c.split(";");

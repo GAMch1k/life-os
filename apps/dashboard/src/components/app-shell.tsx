@@ -14,9 +14,12 @@ import {
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import { AccountButton } from "@/components/account-button";
+import { LegacyAccessReminder } from "@/components/legacy-access-reminder";
 import { useInstalled } from "@/components/modules-provider";
 import { NotificationBell } from "@/components/notification-bell";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { useAccount } from "@/lib/auth/use-account";
 import { cn } from "@/lib/utils";
 
 const navigation = [
@@ -29,6 +32,15 @@ const navigation = [
   { href: "/activity", label: "Activity", icon: Activity },
   { href: "/status", label: "Status", icon: HeartPulse },
 ] as const;
+
+/** The pages outside the app: no navigation, no notifications. */
+const ACCOUNT_PAGES = ["/login", "/setup", "/reset"];
+
+function isAccountPage(pathname: string) {
+  return ACCOUNT_PAGES.some(
+    (page) => pathname === page || pathname.startsWith(`${page}/`),
+  );
+}
 
 function isCurrent(pathname: string, href: string) {
   return href === "/"
@@ -45,6 +57,24 @@ export function AppShell({
   timeZone,
 }: Readonly<{ children: React.ReactNode; timeZone: string }>) {
   const pathname = usePathname();
+  if (isAccountPage(pathname)) {
+    return (
+      <div className="bg-canvas min-h-dvh">
+        <main className="px-3 sm:px-4" id="main-content">
+          {children}
+        </main>
+      </div>
+    );
+  }
+  return <AppFrame timeZone={timeZone}>{children}</AppFrame>;
+}
+
+function AppFrame({
+  children,
+  timeZone,
+}: Readonly<{ children: React.ReactNode; timeZone: string }>) {
+  const pathname = usePathname();
+  const account = useAccount();
   // The entries of the modules that are on (each module's manifest names
   // its own).
   const { nav } = useInstalled();
@@ -73,6 +103,7 @@ export function AppShell({
           <div className="flex items-center gap-1.5">
             <NotificationBell timeZone={timeZone} />
             <ThemeToggle />
+            <AccountButton account={account} />
           </div>
         </div>
       </header>
@@ -106,6 +137,7 @@ export function AppShell({
           className="min-w-0 px-3 pt-3 pb-[calc(4.5rem+env(safe-area-inset-bottom))] sm:px-4 sm:pt-4 md:p-5 lg:p-6"
           id="main-content"
         >
+          <LegacyAccessReminder account={account} />
           {children}
         </main>
       </div>

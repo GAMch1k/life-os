@@ -27,15 +27,24 @@ export async function checkHandler(
     if (result.status === 204) {
       return new Response(null, {
         status: 204,
-        headers: { [IDENTITY_HEADER]: result.token, "cache-control": "no-store" },
+        headers: {
+          [IDENTITY_HEADER]: result.token,
+          "cache-control": "no-store",
+        },
       });
     }
     return new Response(null, {
       status: result.status,
-      headers: { "x-life-os-auth-error": result.code, "cache-control": "no-store" },
+      headers: {
+        "x-life-os-auth-error": result.code,
+        "cache-control": "no-store",
+      },
     });
   } catch (error) {
-    console.error("auth check failed", error instanceof Error ? error.message : error);
+    console.error(
+      "auth check failed",
+      error instanceof Error ? error.message : error,
+    );
     return new Response(null, { status: 500 });
   }
 }

@@ -13,10 +13,14 @@ export type ProxyOptions = {
 };
 
 // Idempotency-Key makes a retried Finance write return the first result.
+// X-Life-OS-Identity is the token the Dashboard's proxy (src/proxy.ts) put
+// there for this request, as the gateway does; a client's own never gets
+// this far.
 const FORWARDED_REQUEST_HEADERS = [
   "accept",
   "content-type",
   "idempotency-key",
+  "x-life-os-identity",
 ] as const;
 const FORWARDED_RESPONSE_HEADERS = ["content-type", "location"] as const;
 
