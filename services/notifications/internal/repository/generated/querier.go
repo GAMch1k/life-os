@@ -23,6 +23,8 @@ type Querier interface {
 	// How many devices a notification reached, and how many refused it for good.
 	CountPushOutcomes(ctx context.Context, notificationID pgtype.UUID) (CountPushOutcomesRow, error)
 	CountUnreadNotifications(ctx context.Context) (CountUnreadNotificationsRow, error)
+	// A revoked device key's subscriptions (the Dashboard asks).
+	DeleteDeviceKeySubscriptions(ctx context.Context, deviceKeyID pgtype.UUID) (int64, error)
 	DeletePushSubscription(ctx context.Context, id pgtype.UUID) (int64, error)
 	// Ends a claimed delivery without sending it: failed or skipped.
 	FinishDelivery(ctx context.Context, arg FinishDeliveryParams) (Delivery, error)
@@ -54,9 +56,10 @@ type Querier interface {
 	// latest success. Nothing when the device was removed meanwhile.
 	RecordPushSent(ctx context.Context, arg RecordPushSentParams) error
 	RetryDelivery(ctx context.Context, arg RetryDeliveryParams) (Delivery, error)
-	// Subscribing is idempotent by endpoint: a known endpoint gets the keys and
-	// label it was sent with and keeps its id, creation time, and history.
-	// created is true when the row is new.
+	// Subscribing is idempotent by endpoint: a known endpoint gets the keys,
+	// label, and device key it was sent with (moving it to the key that sent it)
+	// and keeps its id, creation time, and history. created is true when the
+	// row is new.
 	UpsertPushSubscription(ctx context.Context, arg UpsertPushSubscriptionParams) (UpsertPushSubscriptionRow, error)
 }
 

@@ -163,7 +163,7 @@ export interface paths {
         put?: never;
         /**
          * Subscribe a device
-         * @description Stores a browser's push subscription, the JSON of its `PushSubscription` (`endpoint` and `keys`). Idempotent by endpoint: subscribing again with a known endpoint updates its keys and label and returns it with 200; a new endpoint is created (201). The device label is read from the request's User-Agent, such as "Chrome on Android". The endpoint must be an https URL on a push service's host name.
+         * @description Stores a browser's push subscription, the JSON of its `PushSubscription` (`endpoint` and `keys`). Idempotent by endpoint: subscribing again with a known endpoint updates its keys and label and returns it with 200; a new endpoint is created (201). The device label is read from the request's User-Agent, such as "Chrome on Android". The endpoint must be an https URL on a push service's host name. A paired device's request (its device key, the identity token's via "device") stores the key's id with it, so that revoking the key deletes the subscription; subscribing again moves an endpoint to the key that sent it, and a request without a device key (a browser) clears it.
          */
         post: operations["createPushSubscription"];
         delete?: never;
@@ -187,6 +187,26 @@ export interface paths {
          * @description The device gets no more pushes. Its browser keeps its own subscription until it unsubscribes.
          */
         delete: operations["deletePushSubscription"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/push/device-keys/{keyId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a revoked device key's devices
+         * @description Deletes every push subscription a paired device's key made. For the Dashboard on the private network, when the key is revoked (Settings → Devices, signing out everywhere, ./setup.sh sign-out-all); a request that carries an identity token, which every request through the gateway does, is refused (403 internal_only). Idempotent: 204 with or without subscriptions.
+         */
+        delete: operations["deleteDeviceKeySubscriptions"];
         options?: never;
         head?: never;
         patch?: never;
@@ -393,6 +413,11 @@ export interface components {
             lastFailureAt: string | null;
             /** @description That failure's error. */
             lastError: string | null;
+            /**
+             * Format: uuid
+             * @description The paired device's key that subscribed it; revoking the key deletes it. None for a browser.
+             */
+            deviceKeyId: string | null;
         };
         PushSubscriptionList: {
             items: components["schemas"]["PushSubscription"][];
@@ -828,6 +853,44 @@ export interface operations {
             };
             /** @description No such device (not_found) */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    deleteDeviceKeySubscriptions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                keyId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The key's subscriptions are gone */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid id, or no valid X-Life-OS-Actor (actor_required) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Not an internal caller (internal_only) */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

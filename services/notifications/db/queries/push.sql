@@ -1,13 +1,18 @@
 -- name: UpsertPushSubscription :one
--- Subscribing is idempotent by endpoint: a known endpoint gets the keys and
--- label it was sent with and keeps its id, creation time, and history.
--- created is true when the row is new.
-INSERT INTO push_subscriptions (endpoint, p256dh, auth, device_label)
-VALUES ($1, $2, $3, $4)
+-- Subscribing is idempotent by endpoint: a known endpoint gets the keys,
+-- label, and device key it was sent with (moving it to the key that sent it)
+-- and keeps its id, creation time, and history. created is true when the
+-- row is new.
+INSERT INTO push_subscriptions (endpoint, p256dh, auth, device_label, device_key_id)
+VALUES ($1, $2, $3, $4, sqlc.narg(device_key_id)::uuid)
 ON CONFLICT (endpoint) DO UPDATE SET p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth,
-  device_label = EXCLUDED.device_label, updated_at = now()
+  device_label = EXCLUDED.device_label, device_key_id = EXCLUDED.device_key_id, updated_at = now()
 RETURNING id, endpoint, p256dh, auth, device_label, created_at, updated_at,
-  last_success_at, last_failure_at, last_error, (xmax = 0)::boolean AS created;
+  last_success_at, last_failure_at, last_error, device_key_id, (xmax = 0)::boolean AS created;
+
+-- name: DeleteDeviceKeySubscriptions :execrows
+-- A revoked device key's subscriptions (the Dashboard asks).
+DELETE FROM push_subscriptions WHERE device_key_id = $1;
 
 -- name: ListPushSubscriptions :many
 SELECT * FROM push_subscriptions ORDER BY created_at, id;

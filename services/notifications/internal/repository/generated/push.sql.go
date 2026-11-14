@@ -30,6 +30,19 @@ func (q *Queries) CountPushOutcomes(ctx context.Context, notificationID pgtype.U
 	return i, err
 }
 
+const deleteDeviceKeySubscriptions = `-- name: DeleteDeviceKeySubscriptions :execrows
+DELETE FROM push_subscriptions WHERE device_key_id = $1
+`
+
+// A revoked device key's subscriptions (the Dashboard asks).
+func (q *Queries) DeleteDeviceKeySubscriptions(ctx context.Context, deviceKeyID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteDeviceKeySubscriptions, deviceKeyID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deletePushSubscription = `-- name: DeletePushSubscription :execrows
 DELETE FROM push_subscriptions WHERE id = $1
 `
@@ -43,7 +56,7 @@ func (q *Queries) DeletePushSubscription(ctx context.Context, id pgtype.UUID) (i
 }
 
 const getPushSubscription = `-- name: GetPushSubscription :one
-SELECT id, endpoint, p256dh, auth, device_label, created_at, updated_at, last_success_at, last_failure_at, last_error FROM push_subscriptions WHERE id = $1
+SELECT id, endpoint, p256dh, auth, device_label, created_at, updated_at, last_success_at, last_failure_at, last_error, device_key_id FROM push_subscriptions WHERE id = $1
 `
 
 func (q *Queries) GetPushSubscription(ctx context.Context, id pgtype.UUID) (PushSubscription, error) {
@@ -60,12 +73,13 @@ func (q *Queries) GetPushSubscription(ctx context.Context, id pgtype.UUID) (Push
 		&i.LastSuccessAt,
 		&i.LastFailureAt,
 		&i.LastError,
+		&i.DeviceKeyID,
 	)
 	return i, err
 }
 
 const listPushSubscriptions = `-- name: ListPushSubscriptions :many
-SELECT id, endpoint, p256dh, auth, device_label, created_at, updated_at, last_success_at, last_failure_at, last_error FROM push_subscriptions ORDER BY created_at, id
+SELECT id, endpoint, p256dh, auth, device_label, created_at, updated_at, last_success_at, last_failure_at, last_error, device_key_id FROM push_subscriptions ORDER BY created_at, id
 `
 
 func (q *Queries) ListPushSubscriptions(ctx context.Context) ([]PushSubscription, error) {
@@ -88,6 +102,7 @@ func (q *Queries) ListPushSubscriptions(ctx context.Context) ([]PushSubscription
 			&i.LastSuccessAt,
 			&i.LastFailureAt,
 			&i.LastError,
+			&i.DeviceKeyID,
 		); err != nil {
 			return nil, err
 		}
@@ -100,7 +115,7 @@ func (q *Queries) ListPushSubscriptions(ctx context.Context) ([]PushSubscription
 }
 
 const listPushTargets = `-- name: ListPushTargets :many
-SELECT s.id, s.endpoint, s.p256dh, s.auth, s.device_label, s.created_at, s.updated_at, s.last_success_at, s.last_failure_at, s.last_error FROM push_subscriptions s
+SELECT s.id, s.endpoint, s.p256dh, s.auth, s.device_label, s.created_at, s.updated_at, s.last_success_at, s.last_failure_at, s.last_error, s.device_key_id FROM push_subscriptions s
 WHERE s.created_at <= $1::timestamptz
   AND NOT EXISTS (
     SELECT 1 FROM push_outcomes o
@@ -136,6 +151,7 @@ func (q *Queries) ListPushTargets(ctx context.Context, arg ListPushTargetsParams
 			&i.LastSuccessAt,
 			&i.LastFailureAt,
 			&i.LastError,
+			&i.DeviceKeyID,
 		); err != nil {
 			return nil, err
 		}
@@ -220,12 +236,12 @@ func (q *Queries) RecordPushSent(ctx context.Context, arg RecordPushSentParams) 
 }
 
 const upsertPushSubscription = `-- name: UpsertPushSubscription :one
-INSERT INTO push_subscriptions (endpoint, p256dh, auth, device_label)
-VALUES ($1, $2, $3, $4)
+INSERT INTO push_subscriptions (endpoint, p256dh, auth, device_label, device_key_id)
+VALUES ($1, $2, $3, $4, $5::uuid)
 ON CONFLICT (endpoint) DO UPDATE SET p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth,
-  device_label = EXCLUDED.device_label, updated_at = now()
+  device_label = EXCLUDED.device_label, device_key_id = EXCLUDED.device_key_id, updated_at = now()
 RETURNING id, endpoint, p256dh, auth, device_label, created_at, updated_at,
-  last_success_at, last_failure_at, last_error, (xmax = 0)::boolean AS created
+  last_success_at, last_failure_at, last_error, device_key_id, (xmax = 0)::boolean AS created
 `
 
 type UpsertPushSubscriptionParams struct {
@@ -233,6 +249,7 @@ type UpsertPushSubscriptionParams struct {
 	P256dh      string
 	Auth        string
 	DeviceLabel string
+	DeviceKeyID pgtype.UUID
 }
 
 type UpsertPushSubscriptionRow struct {
@@ -246,18 +263,21 @@ type UpsertPushSubscriptionRow struct {
 	LastSuccessAt pgtype.Timestamptz
 	LastFailureAt pgtype.Timestamptz
 	LastError     *string
+	DeviceKeyID   pgtype.UUID
 	Created       bool
 }
 
-// Subscribing is idempotent by endpoint: a known endpoint gets the keys and
-// label it was sent with and keeps its id, creation time, and history.
-// created is true when the row is new.
+// Subscribing is idempotent by endpoint: a known endpoint gets the keys,
+// label, and device key it was sent with (moving it to the key that sent it)
+// and keeps its id, creation time, and history. created is true when the
+// row is new.
 func (q *Queries) UpsertPushSubscription(ctx context.Context, arg UpsertPushSubscriptionParams) (UpsertPushSubscriptionRow, error) {
 	row := q.db.QueryRow(ctx, upsertPushSubscription,
 		arg.Endpoint,
 		arg.P256dh,
 		arg.Auth,
 		arg.DeviceLabel,
+		arg.DeviceKeyID,
 	)
 	var i UpsertPushSubscriptionRow
 	err := row.Scan(
@@ -271,6 +291,7 @@ func (q *Queries) UpsertPushSubscription(ctx context.Context, arg UpsertPushSubs
 		&i.LastSuccessAt,
 		&i.LastFailureAt,
 		&i.LastError,
+		&i.DeviceKeyID,
 		&i.Created,
 	)
 	return i, err

@@ -57,4 +57,5 @@ type PushSubscription struct {
 	LastSuccessAt pgtype.Timestamptz
 	LastFailureAt pgtype.Timestamptz
 	LastError     *string
+	DeviceKeyID   pgtype.UUID
 }
