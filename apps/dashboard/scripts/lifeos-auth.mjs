@@ -20,6 +20,36 @@ import pg from "pg";
 const SETUP_CODE_TTL_HOURS = 24;
 const RESET_TTL_HOURS = 24;
 const LEGACY_ACCESS = "legacy_access";
+const FIRST_USER_ID = "00000000-0000-4000-8000-000000000001";
+
+/**
+ * An entry in the security log (src/lib/auth/security-log.ts), for a
+ * command run on the host: who ran it is the host, never an account. It
+ * never stops the command (the log's table may not exist yet, before
+ * auth-migrate ran): an emergency command must work all the same. Never
+ * inside a transaction, so that a failed entry cannot undo the command.
+ * @param {{ query: Function }} db
+ * @param {string} kind
+ * @param {{ outcome?: string, subject?: string | null, detail?: string | null }} [fields]
+ */
+export async function securityEvent(db, kind, fields = {}) {
+  try {
+    await db.query(
+      `INSERT INTO security_events (kind, outcome, subject_user_id, via, detail)
+       VALUES ($1, $2, $3, 'host', $4)`,
+      [
+        kind,
+        fields.outcome ?? "ok",
+        fields.subject ?? null,
+        fields.detail ?? null,
+      ],
+    );
+  } catch (error) {
+    console.error(
+      `lifeos-auth: the security log has no entry for this (${error.message})`,
+    );
+  }
+}
 
 function sha256Hex(value) {
   return createHash("sha256").update(value).digest("hex");
@@ -56,6 +86,7 @@ export async function setupCode(db) {
      VALUES ($1, now() + make_interval(hours => $2))`,
     [sha256Hex(normalizeSetupCode(code)), SETUP_CODE_TTL_HOURS],
   );
+  await securityEvent(db, "setup_code_created");
   return code;
 }
 
@@ -97,6 +128,10 @@ export async function recoverOwner(
     await db.query("ROLLBACK");
     throw error;
   }
+  await securityEvent(db, "owner_recovered", {
+    subject: owner.id,
+    detail: resetTwoFactor ? "reset_link_2fa" : "reset_link",
+  });
   return {
     username: owner.username,
     link: `${publicUrl.replace(/\/+$/, "")}/reset/${token}`,
@@ -113,7 +148,18 @@ export async function legacyAccess(db) {
 
 /** Turns legacy access on or off; on is refused while more than one account exists. */
 export async function setLegacyAccess(db, on) {
-  if (on && (await accountCount(db)) > 1) return "accounts";
+  if (on && (await accountCount(db)) > 1) {
+    await securityEvent(db, "legacy_access_changed", {
+      outcome: "refused",
+      subject: FIRST_USER_ID,
+      detail: "on:accounts",
+    });
+    return "accounts";
+  }
+  await securityEvent(db, "legacy_access_changed", {
+    subject: FIRST_USER_ID,
+    detail: on ? "on" : "off",
+  });
   await db.query(
     `INSERT INTO server_settings (key, value, updated_at, updated_by)
      VALUES ($1, to_jsonb($2::boolean), now(), NULL)
@@ -131,17 +177,21 @@ export async function setLegacyAccess(db, on) {
  */
 export async function signOutAll(db, { keepDevices = false } = {}) {
   await db.query("BEGIN");
+  let sessions;
   try {
-    const sessions = await db.query("DELETE FROM session");
+    sessions = await db.query("DELETE FROM session");
     await db.query(
       `UPDATE "user" SET "authzVersion" = "authzVersion" + 1, "updatedAt" = now()`,
     );
     await db.query("COMMIT");
-    return { sessions: sessions.rowCount ?? 0, keepDevices };
   } catch (error) {
     await db.query("ROLLBACK");
     throw error;
   }
+  await securityEvent(db, "signed_out_everyone", {
+    detail: keepDevices ? "keep_devices" : null,
+  });
+  return { sessions: sessions.rowCount ?? 0, keepDevices };
 }
 
 function usage() {

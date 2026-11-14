@@ -1,6 +1,11 @@
 import { type CheckRuntime, checkRequest, type Principal } from "./check";
 import type { ServerRole } from "./constants";
 import { hasSecondFactor } from "./roles";
+import {
+  isSecurityKind,
+  listSecurityEvents,
+  recordSecurityEvent,
+} from "./security-log";
 import { firstAccountExists, setLegacyAccess } from "./store";
 
 /**
@@ -146,6 +151,22 @@ export async function accountHandler(
     return json(200, { sessions: await listSessions(rt, principal) });
   }
 
+  // The security log's entries that concern this account
+  // (docs/architecture/multi-user.md#logs).
+  if (pathname === "/api/account/security-log" && request.method === "GET") {
+    const params = new URL(request.url).searchParams;
+    const kind = params.get("kind");
+    return json(
+      200,
+      await listSecurityEvents(rt.pool, {
+        userId: principal.userId,
+        kind: isSecurityKind(kind) ? kind : undefined,
+        cursor: params.get("cursor") ?? undefined,
+        limit: Number(params.get("limit")) || undefined,
+      }),
+    );
+  }
+
   const revoke = pathname.match(/^\/api\/account\/sessions\/([0-9a-f-]{36})$/);
   if (revoke && request.method === "DELETE") {
     const { rowCount } = await rt.pool.query(
@@ -155,6 +176,14 @@ export async function accountHandler(
     rt.tokens.forget(`session:${revoke[1]}`);
     if (!rowCount)
       return problem(404, "not_found", "There is no such session.");
+    await recordSecurityEvent(rt.pool, {
+      kind: "sessions_revoked",
+      actorUserId: principal.userId,
+      subjectUserId: principal.userId,
+      via: "session",
+      headers: request.headers,
+      detail: "one",
+    });
     return new Response(null, { status: 204 });
   }
 
@@ -179,6 +208,15 @@ export async function accountHandler(
     // host (./setup.sh legacy-access on), never with a browser's session,
     // which might be an old or a stolen one.
     if (enabled) {
+      await recordSecurityEvent(rt.pool, {
+        kind: "legacy_access_changed",
+        outcome: "refused",
+        actorUserId: principal.userId,
+        subjectUserId: principal.userId,
+        via: "session",
+        headers: request.headers,
+        detail: "on:host_only",
+      });
       return problem(
         403,
         "host_only",
@@ -188,6 +226,14 @@ export async function accountHandler(
     await setLegacyAccess(rt.pool, false, principal.userId);
     rt.legacy.invalidate();
     rt.tokens.forget("legacy");
+    await recordSecurityEvent(rt.pool, {
+      kind: "legacy_access_changed",
+      actorUserId: principal.userId,
+      subjectUserId: principal.userId,
+      via: "session",
+      headers: request.headers,
+      detail: "off",
+    });
     return json(200, { legacyAccess: false });
   }
 

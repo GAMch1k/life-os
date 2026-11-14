@@ -7,9 +7,9 @@
  */
 export async function register() {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
-  const { authRuntime } = await import("./lib/auth/runtime");
+  const { authRuntime, startSecurityLog } = await import("./lib/auth/runtime");
   try {
-    authRuntime();
+    startSecurityLog(authRuntime());
   } catch (error) {
     console.error(
       `Life OS's sign-in settings are wrong: ${(error as Error).message}`,
