@@ -82,6 +82,10 @@ jobs:
       # The gateway answers the routes of modules that are off at once
       # (throwaway nginx containers).
       - run: tools/test-gateway-modules
+      # Every service route asks the auth check, a client's identity is
+      # dropped, public routes stay public, /internal/ is closed (throwaway
+      # nginx containers).
+      - run: tools/test-gateway-auth
       # The Android release publisher, into scratch directories and a
       # made-up GitHub (tools/fixtures/fake-gh): no Docker, no network.
       - run: tools/test-publish-android-release
@@ -195,6 +199,14 @@ jobs:
             ~/.cache/go-build
           key: go-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ github.job }}-${{ hashFiles('**/go.sum') }}
           restore-keys: go-${{ runner.os }}-${{ steps.go.outputs.go-version }}-${{ github.job }}-
+      # The Dashboard's auth flow suite (tools/test-auth) runs in
+      # tools/test-integration too, against the same PostgreSQL.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: apps/dashboard/package-lock.json
+      - run: npm ci --prefix apps/dashboard --no-audit --no-fund
       - run: tools/test-integration
 
   govulncheck:

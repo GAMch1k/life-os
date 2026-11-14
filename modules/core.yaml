@@ -29,12 +29,13 @@ compose:
     - activity
     - notifications-migrate
     - notifications
+    - auth-migrate
     - dashboard
     - monitor
     - backup
     - gateway
   volumes: [postgres-data, inbox-media]
-databases: [finance, tasks, inbox, calendar, activity, notifications, calendar-feeds, food]
+databases: [finance, tasks, inbox, calendar, activity, notifications, calendar-feeds, food, auth]
 gateway:
   routes:
     - /api/finance/
@@ -49,6 +50,7 @@ gateway:
     - /share
     - /calendar/google/callback
     - /finance/bank/callback
+    - /api/auth/
     - /
 dashboard:
   nav: [/, /finance, /tasks, /inbox, /calendar, /food, /activity, /status]
@@ -71,6 +73,11 @@ settings:
   - LIFE_OS_IMAGE_REGISTRY
   - LIFE_OS_PUBLIC_URL
   - LIFE_OS_PUBLIC_HOSTNAME
+  - LIFE_OS_AUTH_SECRET
+  - LIFE_OS_IDENTITY_SIGNING_KEY
+  - LIFE_OS_TRUSTED_KEYS
+  - LIFE_OS_LEGACY_ACCESS
+  - LIFE_OS_INSECURE_LOGIN_HOSTS
   - LIFE_OS_GATEWAY_*
   - LIFE_OS_TIMEZONE
   - LIFE_OS_MODULES_LISTED

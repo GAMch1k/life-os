@@ -55,6 +55,7 @@ services:
       LIFE_OS_CALENDAR_FEEDS_DB_PASSWORD: ${LIFE_OS_CALENDAR_FEEDS_DB_PASSWORD:-}
       LIFE_OS_FOOD_DB_PASSWORD: ${LIFE_OS_FOOD_DB_PASSWORD:-}
       LIFE_OS_BACKUP_DB_PASSWORD: ${LIFE_OS_BACKUP_DB_PASSWORD:-}
+      LIFE_OS_AUTH_DB_PASSWORD: ${LIFE_OS_AUTH_DB_PASSWORD:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -92,6 +93,7 @@ services:
       LIFE_OS_TIMEZONE: ${LIFE_OS_TIMEZONE:-UTC}
       FINANCE_DEFAULT_CURRENCY: ${LIFE_OS_FINANCE_CURRENCY:-EUR}
       NOTIFICATIONS_SERVICE_URL: http://notifications:8080
+      LIFE_OS_TRUSTED_KEYS: ${LIFE_OS_TRUSTED_KEYS:-}
     expose:
       - '8080'
     depends_on:
@@ -130,6 +132,7 @@ services:
       TASKS_MORNING_TIME: ${LIFE_OS_TASKS_MORNING_TIME:-09:00}
       TASKS_EVENING_TIME: ${LIFE_OS_TASKS_EVENING_TIME:-19:00}
       TASKS_TIMED_LEAD_MINUTES: ${LIFE_OS_TASKS_TIMED_LEAD_MINUTES:-30}
+      LIFE_OS_TRUSTED_KEYS: ${LIFE_OS_TRUSTED_KEYS:-}
     expose:
       - '8080'
     depends_on:
@@ -164,6 +167,7 @@ services:
       LIFE_OS_TIMEZONE: ${LIFE_OS_TIMEZONE:-UTC}
       NOTIFICATIONS_SERVICE_URL: http://notifications:8080
       FOOD_EXPIRY_TIME: ${LIFE_OS_FOOD_EXPIRY_TIME:-08:00}
+      LIFE_OS_TRUSTED_KEYS: ${LIFE_OS_TRUSTED_KEYS:-}
     expose:
       - '8080'
     depends_on:
@@ -198,6 +202,7 @@ services:
       NOTIFICATIONS_SERVICE_URL: http://notifications:8080
       INBOX_MEDIA_DIR: /var/lib/lifeos/inbox-media
       INBOX_MEDIA_MAX_BYTES: ${LIFE_OS_INBOX_MEDIA_MAX_BYTES:-10485760}
+      LIFE_OS_TRUSTED_KEYS: ${LIFE_OS_TRUSTED_KEYS:-}
     volumes:
       - inbox-media:/var/lib/lifeos/inbox-media
     expose:
@@ -233,6 +238,7 @@ services:
       LIFE_OS_TIMEZONE: ${LIFE_OS_TIMEZONE:-UTC}
       ACTIVITY_SERVICE_URL: http://activity:8080
       NOTIFICATIONS_SERVICE_URL: http://notifications:8080
+      LIFE_OS_TRUSTED_KEYS: ${LIFE_OS_TRUSTED_KEYS:-}
     expose:
       - '8080'
     depends_on:
@@ -261,6 +267,7 @@ services:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-calendar-feeds:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
     environment:
       SERVICE_NAME: calendar-feeds
+      LIFE_OS_TRUSTED_KEYS: ${LIFE_OS_TRUSTED_KEYS:-}
       PORT: 8080
       DATABASE_URL: postgres://calendar_feeds_user:${LIFE_OS_CALENDAR_FEEDS_DB_PASSWORD}@postgres:5432/calendar_feeds_db?sslmode=disable
       CALENDAR_SERVICE_URL: http://calendar:8080
@@ -283,6 +290,7 @@ services:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-recipe-import:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
     environment:
       SERVICE_NAME: recipe-import
+      LIFE_OS_TRUSTED_KEYS: ${LIFE_OS_TRUSTED_KEYS:-}
       PORT: 8080
       FOOD_SERVICE_URL: http://food:8080
       ACTIVITY_SERVICE_URL: http://activity:8080
@@ -313,6 +321,7 @@ services:
       SERVICE_NAME: activity
       PORT: 8080
       DATABASE_URL: postgres://activity_user:${LIFE_OS_ACTIVITY_DB_PASSWORD}@postgres:5432/activity_db?sslmode=disable
+      LIFE_OS_TRUSTED_KEYS: ${LIFE_OS_TRUSTED_KEYS:-}
     expose:
       - '8080'
     depends_on:
@@ -341,6 +350,7 @@ services:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-notifications:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
     environment:
       SERVICE_NAME: notifications
+      LIFE_OS_TRUSTED_KEYS: ${LIFE_OS_TRUSTED_KEYS:-}
       PORT: 8080
       DATABASE_URL: postgres://notifications_user:${LIFE_OS_NOTIFICATIONS_DB_PASSWORD}@postgres:5432/notifications_db?sslmode=disable
       ACTIVITY_SERVICE_URL: http://activity:8080
@@ -385,6 +395,7 @@ services:
       - banking
     environment:
       SERVICE_NAME: banking
+      LIFE_OS_TRUSTED_KEYS: ${LIFE_OS_TRUSTED_KEYS:-}
       PORT: 8080
       DATABASE_URL: postgres://banking_user:${LIFE_OS_BANKING_DB_PASSWORD}@postgres:5432/banking_db?sslmode=disable
       FINANCE_SERVICE_URL: http://finance:8080
@@ -442,6 +453,7 @@ services:
       - google-calendar
     environment:
       SERVICE_NAME: google-calendar
+      LIFE_OS_TRUSTED_KEYS: ${LIFE_OS_TRUSTED_KEYS:-}
       PORT: 8080
       DATABASE_URL: postgres://google_calendar_user:${LIFE_OS_GOOGLE_CALENDAR_DB_PASSWORD}@postgres:5432/google_calendar_db?sslmode=disable
       CALENDAR_SERVICE_URL: http://calendar:8080
@@ -469,6 +481,21 @@ services:
       - backend
     restart: unless-stopped
 
+  auth-migrate:
+    image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-migrate:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
+    command:
+      - -path
+      - /migrations/auth
+      - -database
+      - postgres://auth_user:${LIFE_OS_AUTH_DB_PASSWORD}@postgres:5432/auth_db?sslmode=disable
+      - up
+    depends_on:
+      postgres-provision:
+        condition: service_completed_successfully
+    networks:
+      - backend
+    restart: 'no'
+
   dashboard:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-dashboard:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
     environment:
@@ -491,9 +518,18 @@ services:
       LIFE_OS_TIMEZONE: ${LIFE_OS_TIMEZONE:-UTC}
       LIFE_OS_MODULES: ${COMPOSE_PROFILES:-}
       UV_THREADPOOL_SIZE: '16'
+      AUTH_DATABASE_URL: postgres://auth_user:${LIFE_OS_AUTH_DB_PASSWORD}@postgres:5432/auth_db?sslmode=disable
+      LIFE_OS_AUTH_SECRET: '${LIFE_OS_AUTH_SECRET:?Set LIFE_OS_AUTH_SECRET in .env: ./setup.sh update adds it, or see docs/install/accounts.md}'
+      LIFE_OS_IDENTITY_SIGNING_KEY: '${LIFE_OS_IDENTITY_SIGNING_KEY:?Set LIFE_OS_IDENTITY_SIGNING_KEY in .env: ./setup.sh update adds it, or see docs/install/accounts.md}'
+      LIFE_OS_TRUSTED_KEYS: '${LIFE_OS_TRUSTED_KEYS:?Set LIFE_OS_TRUSTED_KEYS in .env: ./setup.sh update adds it, or see docs/install/accounts.md}'
+      LIFE_OS_PUBLIC_URL: ${LIFE_OS_PUBLIC_URL:?Set LIFE_OS_PUBLIC_URL in .env to the URL Life OS is reached at}
+      LIFE_OS_LEGACY_ACCESS: ${LIFE_OS_LEGACY_ACCESS:-off}
+      LIFE_OS_INSECURE_LOGIN_HOSTS: ${LIFE_OS_INSECURE_LOGIN_HOSTS:-}
     expose:
       - '3000'
     depends_on:
+      auth-migrate:
+        condition: service_completed_successfully
       finance:
         condition: service_started
       tasks:
@@ -505,16 +541,28 @@ services:
     networks:
       - backend
     restart: unless-stopped
+    mem_limit: 512m
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - 'fetch(''http://127.0.0.1:3000/login'').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))'
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   monitor:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-monitor:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
     environment:
       SERVICE_NAME: monitor
       PORT: 8080
-      MONITOR_STATUS_URL: http://dashboard:3000/api/status
+      MONITOR_STATUS_URL: http://dashboard:3000/internal/status
       NOTIFICATIONS_SERVICE_URL: http://notifications:8080
       MONITOR_INTERVAL_SECONDS: ${LIFE_OS_MONITOR_INTERVAL_SECONDS:-60}
       MONITOR_CONFIRMATIONS: ${LIFE_OS_MONITOR_CONFIRMATIONS:-2}
+      LIFE_OS_TRUSTED_KEYS: ${LIFE_OS_TRUSTED_KEYS:-}
     expose:
       - '8080'
     depends_on:
@@ -530,6 +578,7 @@ services:
     image: ${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-backup:${LIFE_OS_VERSION:?Set LIFE_OS_VERSION in .env to the Life OS release to run, such as v0.1.0-preview.1}
     environment:
       SERVICE_NAME: backup
+      LIFE_OS_TRUSTED_KEYS: ${LIFE_OS_TRUSTED_KEYS:-}
       PORT: 8080
       BACKUP_DATABASE_URL: postgres://lifeos_backup@postgres:5432/?sslmode=disable
       BACKUP_DATABASE_PASSWORD: ${LIFE_OS_BACKUP_DB_PASSWORD:-}
@@ -579,6 +628,7 @@ services:
       - server-health
     environment:
       SERVICE_NAME: host-health
+      LIFE_OS_TRUSTED_KEYS: ${LIFE_OS_TRUSTED_KEYS:-}
       PORT: 8080
       HOST_HEALTH_DISKS: root=/host,docker=/host-docker
       HOST_HEALTH_DOCKER_URL: http://host-health-docker:8080
@@ -659,6 +709,7 @@ services:
       - ai
     environment:
       SERVICE_NAME: mcp
+      LIFE_OS_TRUSTED_KEYS: ${LIFE_OS_TRUSTED_KEYS:-}
       PORT: 8080
       FINANCE_SERVICE_URL: http://finance:8080
       TASKS_SERVICE_URL: http://tasks:8080
@@ -822,6 +873,7 @@ services:
       - voice
     environment:
       SERVICE_NAME: voice
+      LIFE_OS_TRUSTED_KEYS: ${LIFE_OS_TRUSTED_KEYS:-}
       PORT: 8080
       DATABASE_URL: postgres://voice_user:${LIFE_OS_VOICE_DB_PASSWORD}@postgres:5432/voice_db?sslmode=disable
       VOICE_STORAGE_DIR: /var/lib/lifeos/voice
@@ -877,6 +929,7 @@ services:
       LIFE_OS_PUBLIC_HOSTNAME: ${LIFE_OS_PUBLIC_HOSTNAME:-}
       LIFE_OS_GATEWAY_BIND_ADDRESS: ${LIFE_OS_GATEWAY_BIND_ADDRESS:-127.0.0.1}
       LIFE_OS_MODULES: ${COMPOSE_PROFILES:-}
+      LIFE_OS_REQUIRE_CLOUDFLARE_ACCESS: ${LIFE_OS_REQUIRE_CLOUDFLARE_ACCESS:-}
     ports:
       - ${LIFE_OS_GATEWAY_BIND_ADDRESS:-127.0.0.1}:${LIFE_OS_GATEWAY_PORT:-3000}:80
     depends_on:

@@ -51,9 +51,10 @@ function hideForToday() {
 }
 
 /**
- * While legacy access is on, a reminder once a day: anyone who reaches Life
- * OS acts as the owner (docs/architecture/multi-user.md#legacy-access).
- * Before the first account exists, it says how to make it instead.
+ * While legacy access is on and an account exists, a reminder once a day:
+ * anyone who reaches Life OS acts as the owner
+ * (docs/architecture/multi-user.md#legacy-access). Before the first account
+ * exists, the header's account button points to /setup instead.
  */
 export function LegacyAccessReminder({ account }: { account?: AccountInfo }) {
   const dismissed = useSyncExternalStore(
@@ -62,34 +63,26 @@ export function LegacyAccessReminder({ account }: { account?: AccountInfo }) {
     () => true,
   );
 
-  if (!account?.legacyAccess || dismissed) return null;
+  if (!account?.legacyAccess || !account.accountExists || dismissed) {
+    return null;
+  }
 
   return (
-    <Alert className="mb-3" data-testid="legacy-access-reminder">
+    <Alert
+      aria-label="Legacy access"
+      className="mb-3"
+      data-testid="legacy-access-reminder"
+      role="region"
+    >
       <Unlock aria-hidden="true" />
-      <AlertTitle>
-        {account.accountExists ? "Legacy access is on" : "Create your account"}
-      </AlertTitle>
+      <AlertTitle>Legacy access is on</AlertTitle>
       <AlertDescription>
-        {account.accountExists ? (
-          <>
-            Anyone who reaches Life OS without signing in acts as the owner.
-            Turn it off in{" "}
-            <Link className="underline" href="/settings/security">
-              Settings → Security
-            </Link>{" "}
-            once your phone and watch apps are paired.
-          </>
-        ) : (
-          <>
-            Life OS has no account yet. On the server, run{" "}
-            <code>./setup.sh setup-code</code>, then{" "}
-            <Link className="underline" href="/setup">
-              set up the first account
-            </Link>
-            .
-          </>
-        )}
+        Anyone who reaches Life OS without signing in acts as the owner. Turn it
+        off in{" "}
+        <Link className="underline" href="/settings/security">
+          Settings → Security
+        </Link>{" "}
+        once your phone and watch apps are paired.
       </AlertDescription>
       <AlertAction>
         <Button

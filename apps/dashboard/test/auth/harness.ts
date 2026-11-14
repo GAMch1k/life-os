@@ -41,7 +41,37 @@ export async function sql(url: string, text: string, values: unknown[] = []) {
 }
 
 /** A fresh database with auth_db's migrations applied, as auth-migrate does. */
+const REGISTRY = path.join(
+  __dirname,
+  "..",
+  "..",
+  "..",
+  "..",
+  "infra",
+  "postgres",
+  "service-databases.conf",
+);
+
+/** Never a Life OS server: refuse one with a database from the registry. */
+async function refuseLifeOs(admin: string) {
+  const names = readFileSync(REGISTRY, "utf8")
+    .split("\n")
+    .filter((line) => line && !line.startsWith("#"))
+    .map((line) => line.split("|")[1]);
+  const { rows } = await sql(
+    admin,
+    "SELECT datname FROM pg_database WHERE datname = ANY($1)",
+    [names],
+  );
+  if (rows.length) {
+    throw new Error(
+      `the server has Life OS databases (${rows.map((r) => r.datname).join(", ")}): use a throwaway PostgreSQL`,
+    );
+  }
+}
+
 export async function freshDatabase(admin: string) {
+  await refuseLifeOs(admin);
   const name = `it_auth_${randomBytes(4).toString("hex")}`;
   await sql(admin, `CREATE DATABASE ${name}`);
   const url = databaseUrl(admin, name);

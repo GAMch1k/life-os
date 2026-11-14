@@ -26,7 +26,8 @@ fi
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/lifeos-test-setup.XXXXXX")
 vapid_test=services/notifications/internal/webpush/zz_setup_keys_test.go
-trap 'rm -rf "$work"; rm -f "$vapid_test"' EXIT
+identity_test=pkg/identity/zz_setup_keys_test.go
+trap 'rm -rf "$work"; rm -f "$vapid_test" "$identity_test"' EXIT
 stubs=$work/bin
 mkdir -p "$stubs"
 touch "$work/docker.sock"
@@ -64,9 +65,25 @@ case $1 in
       'version --short') echo "${STUB_COMPOSE:-v5.1.3}" ;;
       'config --images') printf 'ghcr.io/gamch1k/life-os-tasks:preview\nbinwiederhier/ntfy:v2.37.2@sha256:1875ddcf815c8a3c981d6d78c67a93452d0abba79b1ab9520b1f5f5238902bd7\n' ;;
       'ps -q --status running backup') [[ ${STUB_BACKUP_RUNNING:-1} != 1 ]] || echo 3f1c0ffee ;;
+      'ps -q --status running dashboard') [[ ${STUB_DASHBOARD_RUNNING:-1} != 1 ]] || echo d45hb0a2d ;;
+      'ps --services --status running') printf '%s\n' postgres tasks inbox dashboard gateway voice ;;
       'ps -q processor') : ;;
       'ps --all --format'*) cat "${STUB_PS_FILE:-/dev/null}" ;;
-      exec*) exit "${STUB_BACKUP_EXIT:-0}" ;;
+      exec*)
+        case $* in
+          # The readiness probe in the Dashboard's container: the services
+          # named after the script that answer (all but STUB_NOT_READY).
+          'exec -T dashboard node -e '*)
+            for service in "${@:7}"; do [[ " ${STUB_NOT_READY:-} " == *" $service "* ]] || printf '%s ' "$service"; done
+            echo
+            ;;
+          *'lifeos-auth.mjs setup-code'*)
+            [[ -n ${STUB_ACCOUNT:-} ]] || printf 'Setup code: ABCD-EFGH-JKLM-NPQR\nOpen it at /setup.\n'
+            ;;
+          *'lifeos-auth.mjs'*) printf 'account command: %s\n' "${*:6}"; exit "${STUB_ACCOUNT_EXIT:-0}" ;;
+          *) exit "${STUB_BACKUP_EXIT:-0}" ;;
+        esac
+        ;;
       pull*)
         [[ ${STUB_PULL_EXIT:-0} == 0 ]] || exit "$STUB_PULL_EXIT"
         add_release_image "${LIFE_OS_IMAGE_REGISTRY:-ghcr.io/gamch1k}/life-os-processor:${LIFE_OS_VERSION:-preview}"
@@ -649,7 +666,7 @@ api_key=sk-ant-api03-api_key-456789
 release_image() { sed -n 's/^digest=//p' "$case_dir.images/ghcr.io%gamch1k%life-os-processor:$1"; }
 local_image() { printf '%s/lifeos-processor-claude:%s' "$case_dir.images" "$1"; }
 # The docker calls of the last run, as "exec pull build up".
-docker_steps() { grep -oE '^docker (compose (exec|pull|up|run)|build)' "$case_dir.log" | awk '{print $NF}' | tr '\n' ' '; }
+docker_steps() { grep -oE '^docker (compose (exec -T backup|pull|up|run)|build)' "$case_dir.log" | awk '{print $3 == "exec" ? "exec" : $NF}' | tr '\n' ' '; }
 
 new_case claude-release
 run LIFE_OS_TIMEZONE=UTC LIFE_OS_VERSION=v0.1.0-preview.1 -- --yes
@@ -996,7 +1013,9 @@ printf '%s\n' 'postgres|running|healthy|0' 'postgres-provision|exited||0' 'tasks
 run STUB_PS_FILE="$work/ps" LIFE_OS_SETUP_WAIT_SECONDS=5 -- up
 ok 'up' test "$status" -eq 0
 ok 'up pulls what is missing and starts' logged 'docker compose up -d --pull missing'
-ok 'up waits for the gateway' logged 'curl -fsS -o /dev/null -m 5 http://127.0.0.1:3000/api/tasks/ready'
+ok 'up waits for the gateway' logged 'curl -fsS -o /dev/null -m 5 http://127.0.0.1:3000/login'
+ok 'and the services, from the Dashboard' logged 'docker compose exec -T dashboard node -e'
+ok 'up prints a setup code while there is no account' output_has 'Setup code: ABCD-EFGH-JKLM-NPQR'
 ok 'up prints the address' output_has 'http://127.0.0.1:3000'
 ok 'up explains the SSH tunnel' output_has 'ssh -N -L 3000:127.0.0.1:3000'
 ok 'up: AI is off until the sign-in' output_has 'AI processing is off until you sign in'
@@ -1033,7 +1052,7 @@ ok 'update' test "$status" -eq 0
 ok 'backs up first' logged 'docker compose exec -T backup /service now -actor dev:setup'
 ok 'pulls the new version' logged 'docker compose pull [LIFE_OS_VERSION=0.1.0-preview.2]'
 ok 'restarts' logged 'docker compose up -d --remove-orphans'
-ok 'in that order' test "$(grep -nE 'compose (exec|pull|up)' "$case_dir.log" | cut -d' ' -f3 | tr '\n' ' ')" = 'exec pull up '
+ok 'in that order' test "$(grep -nE 'compose (exec -T backup|pull|up)' "$case_dir.log" | cut -d' ' -f3 | tr '\n' ' ')" = 'exec pull up '
 ok 'records the version' test "$(value LIFE_OS_VERSION)" = 0.1.0-preview.2
 
 : >"$case_dir.log"
@@ -1097,6 +1116,141 @@ ok 'without a warning' bash -c "! grep -q 'another Life OS' '$case_dir.last'"
 run STUB_LIFEOS_CONTAINERS="$case_dir|postgres\n/srv/other-life-os|tasks\n" -- up
 ok 'one container from elsewhere is enough' test "$status" -eq 1
 ok 'counted once' output_has 'Docker has 1 container of the Compose project lifeos, started from /srv/other-life-os.'
+
+# ---------- Accounts ----------
+new_case accounts
+run LIFE_OS_TIMEZONE=UTC -- --yes
+ok 'first setup' test "$status" -eq 0
+ok 'an auth secret: 32 random bytes' grep -qE '^LIFE_OS_AUTH_SECRET=[0-9a-f]{64}$' "$case_dir/.env"
+signing=$(value LIFE_OS_IDENTITY_SIGNING_KEY)
+trusted=$(value LIFE_OS_TRUSTED_KEYS)
+signing=${signing#\'}; signing=${signing%\'}
+trusted=${trusted#\'}; trusted=${trusted%\'}
+ok 'a signing key: a private Ed25519 JWK' grep -qE '^LIFE_OS_IDENTITY_SIGNING_KEY='"'"'\{"kty":"OKP","crv":"Ed25519","kid":"auth-[0-9]{8}-[0-9a-f]{4}","x":"[A-Za-z0-9_-]{43}","d":"[A-Za-z0-9_-]{43}"\}'"'"'$' "$case_dir/.env"
+kid=$(sed -E 's/.*"kid":"([^"]+)".*/\1/' <<<"$signing")
+x=$(sed -E 's/.*"x":"([^"]+)".*/\1/' <<<"$signing")
+ok 'the trusted keys list its public key, without the private part' test "$trusted" = "{\"keys\":[{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"kid\":\"$kid\",\"x\":\"$x\",\"use\":\"sig\",\"alg\":\"EdDSA\"}]}"
+ok 'legacy access off for a new install' test "$(value LIFE_OS_LEGACY_ACCESS)" = off
+ok 'an auth_db password' grep -qE '^LIFE_OS_AUTH_DB_PASSWORD=[0-9a-f]{48}$' "$case_dir/.env"
+ok 'no secret printed' no_secret_printed
+if command -v go >/dev/null 2>&1 && [[ -d pkg/identity ]]; then
+  # The pair as the services read it: the private key's public half is the
+  # trusted one, and a token it signs verifies (a test file for this run).
+  cat >"$identity_test" <<'EOF'
+package identity
+
+import (
+	"crypto/ed25519"
+	"encoding/base64"
+	"encoding/json"
+	"os"
+	"testing"
+	"time"
+)
+
+func TestSetupHelperKeys(t *testing.T) {
+	var private struct{ Kid, X, D string }
+	if err := json.Unmarshal([]byte(os.Getenv("SETUP_SIGNING")), &private); err != nil {
+		t.Fatal(err)
+	}
+	seed, err := base64.RawURLEncoding.DecodeString(private.D)
+	if err != nil || len(seed) != ed25519.SeedSize {
+		t.Fatalf("seed: %v", err)
+	}
+	key := ed25519.NewKeyFromSeed(seed)
+	if base64.RawURLEncoding.EncodeToString(key.Public().(ed25519.PublicKey)) != private.X {
+		t.Fatal("x is not the private key's public half")
+	}
+	set, err := ParseKeySet(os.Getenv("SETUP_TRUSTED"))
+	if err != nil || set.Len() != 1 {
+		t.Fatalf("trusted keys: %v", err)
+	}
+	encode := func(v any) string { raw, _ := json.Marshal(v); return base64.RawURLEncoding.EncodeToString(raw) }
+	input := encode(map[string]string{"alg": "EdDSA", "typ": "lifeos-id+jwt", "kid": private.Kid}) + "." + encode(map[string]any{
+		"iss": "lifeos-auth", "aud": "lifeos-services", "sub": "00000000-0000-4000-8000-000000000001", "via": "legacy",
+		"exp": time.Now().Add(time.Minute).Unix(),
+	})
+	token := input + "." + base64.RawURLEncoding.EncodeToString(ed25519.Sign(key, []byte(input)))
+	if _, err := NewVerifier(set, nil).Verify(token); err != nil {
+		t.Fatal(err)
+	}
+}
+EOF
+  set +e
+  (cd pkg && SETUP_SIGNING=$signing SETUP_TRUSTED=$trusted GOWORK=off go test -count=1 -run TestSetupHelperKeys ./identity >/dev/null 2>&1)
+  identity_status=$?
+  set -e
+  rm -f "$identity_test"
+  ok 'the services accept the key pair' test "$identity_status" -eq 0
+fi
+
+run -- --force-new --yes
+ok 'a new .env keeps the auth secret and keys' test "$(value LIFE_OS_IDENTITY_SIGNING_KEY)" = "'$signing'"
+ok 'and the trusted keys' test "$(value LIFE_OS_TRUSTED_KEYS)" = "'$trusted'"
+
+# An install from before accounts: update adds them, with legacy access on.
+sed -i -E '/^LIFE_OS_(AUTH_SECRET|IDENTITY_SIGNING_KEY|TRUSTED_KEYS|LEGACY_ACCESS|INSECURE_LOGIN_HOSTS|AUTH_DB_PASSWORD)=/d' "$case_dir/.env"
+: >"$case_dir.log"
+run LIFE_OS_SETUP_WAIT_SECONDS=1 -- update --skip-checks --skip-backup
+ok 'update' test "$status" -eq 0
+ok 'adds the auth secret' grep -qE '^LIFE_OS_AUTH_SECRET=[0-9a-f]{64}$' "$case_dir/.env"
+ok 'and a signing key' grep -qE "^LIFE_OS_IDENTITY_SIGNING_KEY='\{\"kty\":\"OKP\"" "$case_dir/.env"
+ok 'and the trusted keys' grep -qE "^LIFE_OS_TRUSTED_KEYS='\{\"keys\":\[\{" "$case_dir/.env"
+ok 'and the auth_db password' grep -qE '^LIFE_OS_AUTH_DB_PASSWORD=[0-9a-f]{48}$' "$case_dir/.env"
+ok 'legacy access on: an upgraded install keeps working as before' test "$(value LIFE_OS_LEGACY_ACCESS)" = on
+ok 'says so' output_has 'LIFE_OS_LEGACY_ACCESS'
+ok 'prints the setup code' output_has 'Setup code: ABCD-EFGH-JKLM-NPQR'
+ok 'no duplicate keys' no_duplicate_keys
+ok 'no secret printed' no_secret_printed
+upgraded_signing=$(value LIFE_OS_IDENTITY_SIGNING_KEY)
+run STUB_ACCOUNT=1 LIFE_OS_SETUP_WAIT_SECONDS=1 -- update --skip-checks --skip-backup
+ok 'a second update changes no key' test "$(value LIFE_OS_IDENTITY_SIGNING_KEY)" = "$upgraded_signing"
+ok 'and prints no setup code once an account exists' bash -c "! grep -q 'Setup code' '$case_dir.last'"
+
+: >"$case_dir.log"
+run -- rotate-keys auth
+ok 'rotate-keys' test "$status" -eq 0
+rotated=$(value LIFE_OS_IDENTITY_SIGNING_KEY)
+rotated_trusted=$(value LIFE_OS_TRUSTED_KEYS)
+ok 'a new signing key' test "$rotated" != "$upgraded_signing"
+ok 'the services trust the old and the new key' test "$(grep -o '"kid"' <<<"$rotated_trusted" | wc -l)" -eq 2
+old_kid=$(sed -E 's/.*"kid":"([^"]+)".*/\1/' <<<"$upgraded_signing")
+new_kid=$(sed -E 's/.*"kid":"([^"]+)".*/\1/' <<<"$rotated")
+ok 'the old one first, then the new' test "$(grep -oE '"kid":"[^"]+"' <<<"$rotated_trusted" | tr '\n' ' ')" = "\"kid\":\"$old_kid\" \"kid\":\"$new_kid\" "
+ok 'no private key among the trusted' bash -c "! grep -q '\"d\"' <<<'$rotated_trusted'"
+ok 'the services first' logged 'docker compose up -d --no-deps tasks inbox voice'
+ok 'then the Dashboard' test "$(grep -E '^docker compose up' "$case_dir.log" | tail -n 1)" = 'docker compose up -d --no-deps dashboard [LIFE_OS_VERSION=]'
+run -- rotate-keys auth
+ok 'again: still two keys, the oldest gone' bash -c "[[ \$(grep -o '\"kid\"' <<<\"\$(grep '^LIFE_OS_TRUSTED_KEYS=' '$case_dir/.env')\" | wc -l) -eq 2 ]] && ! grep -q '$old_kid' '$case_dir/.env'"
+run -- rotate-keys tasks
+ok 'service keys: not yet' test "$status" -eq 2
+
+: >"$case_dir.log"
+run -- setup-code
+ok 'setup-code' test "$status" -eq 0
+ok 'runs in the Dashboard' logged 'docker compose exec -T dashboard node scripts/lifeos-auth.mjs setup-code'
+ok 'prints it' output_has 'Setup code: ABCD-EFGH-JKLM-NPQR'
+run STUB_DASHBOARD_RUNNING=0 -- setup-code
+ok 'not without the Dashboard' test "$status" -eq 1
+ok 'and says so' output_has 'the Dashboard is not running'
+run -- recover-owner --reset-2fa
+ok 'recover-owner' test "$status" -eq 0
+ok 'with --reset-2fa' output_has 'account command: recover-owner --reset-2fa'
+run -- legacy-access off
+ok 'legacy-access off' output_has 'account command: legacy-access off'
+run -- legacy-access
+ok 'legacy-access shows it' output_has 'account command: legacy-access'
+run -- legacy-access maybe
+ok 'legacy-access takes on or off' test "$status" -eq 2
+stdin=$work/no
+printf 'n\n' >"$stdin"
+run -- sign-out-all
+ok 'sign-out-all asks first' test "$status" -eq 1
+ok 'and changes nothing on no' bash -c "! grep -q 'sign-out-all' '$case_dir.log'"
+stdin=/dev/null
+run -- --yes sign-out-all --keep-devices
+ok 'sign-out-all --yes' test "$status" -eq 0
+ok 'with --keep-devices' output_has 'account command: sign-out-all --keep-devices'
 
 # ---------- A clone of the repository ----------
 new_case checkout

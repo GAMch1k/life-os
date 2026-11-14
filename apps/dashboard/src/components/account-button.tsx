@@ -1,6 +1,6 @@
 "use client";
 
-import { LogIn, UserRound } from "lucide-react";
+import { LogIn, UserRound, UserRoundPlus } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -9,7 +9,8 @@ import type { AccountInfo } from "@/lib/auth/account";
 
 /**
  * The header's way to the account: Settings → Security when signed in;
- * "Sign in" under legacy access, once an account exists.
+ * "Sign in" under legacy access once an account exists, and "Set up" before
+ * the first one.
  */
 export function AccountButton({ account }: { account?: AccountInfo }) {
   const pathname = usePathname();
@@ -26,7 +27,19 @@ export function AccountButton({ account }: { account?: AccountInfo }) {
       </Link>
     );
   }
-  if (!account.accountExists) return null;
+  if (!account.accountExists) {
+    // Legacy access before the first account: where to make it.
+    return account.legacyAccess ? (
+      <Link
+        className={buttonVariants({ size: "sm", variant: "ghost" })}
+        href="/setup"
+        title="Create the first account with the setup code from the server"
+      >
+        <UserRoundPlus aria-hidden="true" />
+        Set up
+      </Link>
+    ) : null;
+  }
   return (
     <Link
       className={buttonVariants({ size: "sm", variant: "ghost" })}

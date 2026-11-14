@@ -9,9 +9,9 @@ import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { legacyClaims, spacesOf } from "../../src/lib/auth/check.ts";
-import { FIRST_USER_ID } from "../../src/lib/auth/constants.ts";
-import { createSigner } from "../../src/lib/auth/identity.ts";
+import { legacyClaims, spacesOf } from "../../src/lib/auth/check";
+import { FIRST_USER_ID } from "../../src/lib/auth/constants";
+import { createSigner } from "../../src/lib/auth/identity";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const kid = "auth-fixture";

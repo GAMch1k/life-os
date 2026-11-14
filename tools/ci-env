@@ -10,7 +10,11 @@ set -euo pipefail
 #  - a Codex home that is an empty directory: no sign-in, so the processor
 #    stops at start and no AI runs,
 #  - the backup directory under <scratch-dir>, and the current user as the
-#    owner of the backup, Codex, and bank key paths.
+#    owner of the backup, Codex, and bank key paths;
+#  - new account keys (an auth secret, an Ed25519 signing key and the trusted
+#    keys that list it), and legacy access on: the smokes and the browser
+#    suite use Life OS as before accounts, without signing in; the auth flow
+#    suite and tools/test-gateway-auth test signing in.
 #
 #   tools/ci-env <scratch-dir>
 #
@@ -30,6 +34,16 @@ mkdir -p -m 700 "$scratch/backups"
 mkdir -p -m 755 "$scratch/codex-home"
 uid=$(id -u)
 
+# A signing key and the trusted keys, as setup.sh makes them.
+key_dir=$(mktemp -d)
+trap 'rm -rf "$key_dir"' EXIT
+openssl genpkey -algorithm ed25519 -outform DER -out "$key_dir/key.der" 2>/dev/null
+openssl pkey -inform DER -in "$key_dir/key.der" -pubout -outform DER -out "$key_dir/pub.der" 2>/dev/null
+b64url() { base64 | tr -d '\n=' | tr '+/' '-_'; }
+kid=auth-ci-$(openssl rand -hex 2)
+d=$(tail -c 32 "$key_dir/key.der" | b64url)
+x=$(tail -c 32 "$key_dir/pub.der" | b64url)
+
 declare -A value=(
   [LIFE_OS_TIMEZONE]=Europe/Berlin
   [LIFE_OS_BACKUP_DIR]="$scratch/backups"
@@ -38,6 +52,10 @@ declare -A value=(
   [LIFE_OS_CODEX_RUNTIME_UID]=$uid
   [LIFE_OS_BANKING_RUNTIME_UID]=$uid
   [LIFE_OS_DOCKER_GID]=$(stat -c %g /var/run/docker.sock 2>/dev/null || echo 999)
+  [LIFE_OS_AUTH_SECRET]=$(openssl rand -hex 32)
+  [LIFE_OS_IDENTITY_SIGNING_KEY]="'{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"kid\":\"$kid\",\"x\":\"$x\",\"d\":\"$d\"}'"
+  [LIFE_OS_TRUSTED_KEYS]="'{\"keys\":[{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"kid\":\"$kid\",\"x\":\"$x\",\"use\":\"sig\",\"alg\":\"EdDSA\"}]}'"
+  [LIFE_OS_LEGACY_ACCESS]=on
 )
 # Every integration, unset.
 for name in LIFE_OS_CLOUDFLARE_TUNNEL_TOKEN LIFE_OS_CF_ACCESS_TEAM_DOMAIN LIFE_OS_CF_ACCESS_CLIENT_ID \
