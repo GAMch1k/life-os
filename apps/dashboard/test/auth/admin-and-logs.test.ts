@@ -12,11 +12,17 @@ import { after, before, describe, test } from "node:test";
 import { FIRST_USER_ID } from "../../src/lib/auth/constants";
 import { adminGate } from "../../src/lib/auth/admin";
 import { checkRequest } from "../../src/lib/auth/check";
+import { randomUUID } from "node:crypto";
+
 import {
+  FAILED_SIGN_IN_ENTRIES_PER_ADDRESS,
+  FAILED_SIGN_IN_OVERFLOW,
   LEGACY_KEYS_PER_DAY,
   LegacyUseLog,
+  listSecurityEvents,
   noteSigningKey,
   pruneSecurityLog,
+  recordFailedSignIn,
   SECURITY_KINDS,
 } from "../../src/lib/auth/security-log";
 import * as cli from "../../scripts/lifeos-auth.mjs";
@@ -718,3 +724,137 @@ describe("P21-05: who reads which entries, and for how long", { skip }, () => {
     );
   });
 });
+
+describe(
+  "P21-05: failed sign-ins grouped, the personal view, paging",
+  { skip },
+  () => {
+    let w: World;
+    let aliceId: string;
+    before(async () => {
+      w = await world(admin!, { legacy: true });
+      aliceId = await seedUser(w.db.url, { username: "alice", password });
+    });
+    after(() => w?.close());
+
+    const failedRows = async (address: string) =>
+      (await securityRows(w)).filter(
+        (row) => row.kind === "sign_in_failed" && row.address === address,
+      );
+
+    test("failed sign-ins are one entry a day per address, account, and reason", async () => {
+      const b = w.browser(PUBLIC_URL, "203.0.113.200");
+      // Better Auth allows three sign-ins from one address in 10 s.
+      for (let i = 0; i < 3; i += 1) {
+        const r = await b.req("/api/auth/sign-in/username", {
+          method: "POST",
+          headers: { "user-agent": PHONE },
+          body: { username: "alice", password: `wrong password ${i}` },
+        });
+        assert.equal(r.status, 401);
+      }
+      const rows = await failedRows("203.0.113.200");
+      assert.equal(rows.length, 1, JSON.stringify(rows));
+      assert.equal(rows[0].count, 3);
+      assert.equal(rows[0].subject_user_id, aliceId);
+      assert.equal(rows[0].detail, "password:invalid_username_or_password");
+      assert.equal(rows[0].device, "Chrome on Android");
+      assert.ok(rows[0].last_at >= rows[0].at);
+    });
+
+    test("an address gets a bounded number of failed sign-in entries a day", async () => {
+      const headers = new Headers({ "x-real-ip": "198.51.100.77" });
+      const at = new Date("2026-11-05T09:00:00Z");
+      for (let i = 0; i < FAILED_SIGN_IN_ENTRIES_PER_ADDRESS + 5; i += 1) {
+        await recordFailedSignIn(w.rt.pool, {
+          subjectUserId: randomUUID(),
+          headers,
+          detail: "password:invalid_username_or_password",
+          at,
+        });
+      }
+      // At once, for one key: still one entry, never two.
+      await Promise.all(
+        Array.from({ length: 10 }, () =>
+          recordFailedSignIn(w.rt.pool, {
+            headers: new Headers({ "x-real-ip": "198.51.100.78" }),
+            detail: "passkey:invalid",
+            at,
+          }),
+        ),
+      );
+      const rows = await failedRows("198.51.100.77");
+      assert.equal(rows.length, FAILED_SIGN_IN_ENTRIES_PER_ADDRESS + 1);
+      const overflow = rows.find(
+        (row) => row.detail === FAILED_SIGN_IN_OVERFLOW,
+      )!;
+      assert.equal(overflow.count, 5);
+      assert.equal(overflow.subject_user_id, null);
+      const parallel = await failedRows("198.51.100.78");
+      assert.deepEqual(
+        parallel.map((row) => row.count),
+        [10],
+      );
+    });
+
+    test("my own log does not say where an admin acted from", async () => {
+      const at = "2026-11-06T10:00:00Z";
+      await sql(
+        w.db.url,
+        `INSERT INTO security_events (at, last_at, kind, outcome, actor_user_id, subject_user_id, via, address, device)
+       VALUES ($1, $1, 'user_banned', 'ok', $2, $3, 'session', '192.0.2.10', 'Firefox on Linux'),
+              ($1, $1, 'password_changed', 'ok', $3, $3, 'session', '192.0.2.11', 'Chrome on Android'),
+              ($1, $1, 'sign_in_failed', 'failed', NULL, $3, NULL, '192.0.2.12', 'Safari on iOS')`,
+        [at, FIRST_USER_ID, aliceId],
+      );
+      const alice = w.browser();
+      assert.equal((await signIn(alice, "alice")).status, 200);
+      const r = await alice.req("/api/account/security-log");
+      assert.equal(r.status, 200, JSON.stringify(r.data));
+      const byKind = (kind: string) =>
+        r.data.items.find((item: { kind: string }) => item.kind === kind);
+      assert.equal(byKind("user_banned").address, null);
+      assert.equal(byKind("user_banned").device, null);
+      assert.equal(byKind("password_changed").address, "192.0.2.11");
+      // Someone not signed in (a failed sign-in): where from is shown.
+      assert.ok(
+        r.data.items.some(
+          (item: { kind: string; address: string | null }) =>
+            item.kind === "sign_in_failed" && item.address === "192.0.2.12",
+        ),
+      );
+      // The admins' view keeps everything.
+      const all = await listSecurityEvents(w.rt.pool, { userId: aliceId });
+      const banned = all.items.find((item) => item.kind === "user_banned")!;
+      assert.equal(banned.address, "192.0.2.10");
+      assert.equal(banned.device, "Firefox on Linux");
+    });
+
+    test("paging is exact for entries within one millisecond", async () => {
+      const subject = randomUUID();
+      await sql(
+        w.db.url,
+        `INSERT INTO security_events (at, last_at, kind, outcome, subject_user_id)
+       SELECT t, t, 'sign_in', 'ok', $1
+         FROM unnest(ARRAY['2026-11-07 10:00:00.123001+00', '2026-11-07 10:00:00.123002+00',
+                           '2026-11-07 10:00:00.123003+00', '2026-11-07 10:00:00.123004+00',
+                           '2026-11-07 10:00:00.123004+00', '2026-11-07 10:00:00.122999+00']::timestamptz[]) AS t`,
+        [subject],
+      );
+      const seen: string[] = [];
+      let cursor: string | undefined;
+      for (let page = 0; page < 10; page += 1) {
+        const result = await listSecurityEvents(w.rt.pool, {
+          userId: subject,
+          limit: 2,
+          cursor,
+        });
+        seen.push(...result.items.map((item) => item.id));
+        if (!result.nextCursor) break;
+        cursor = result.nextCursor;
+      }
+      assert.equal(seen.length, 6, "every entry, once");
+      assert.equal(new Set(seen).size, 6);
+    });
+  },
+);

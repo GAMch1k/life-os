@@ -38,6 +38,7 @@ const REASONS: Record<string, string> = {
   host_only: "only on the server",
   accounts: "more than one account exists",
   setup_code_invalid: "wrong, used, or expired code",
+  too_many_entries: "more failed sign-ins from this address, counted together",
 };
 
 const ACTIONS: Record<string, string> = {
@@ -76,8 +77,13 @@ export function securityDetail(
   switch (event.kind) {
     case "sign_in":
       return METHODS[detail] ?? "";
-    case "sign_in_failed":
-      return [METHODS[first], reason(second)].filter(Boolean).join(": ");
+    case "sign_in_failed": {
+      // Failures are one entry a day per address, account, and reason.
+      const what = [METHODS[first], reason(second)].filter(Boolean).join(": ");
+      return event.count > 1
+        ? `${what} · ${event.count.toLocaleString("en")} times`
+        : what;
+    }
     case "sessions_revoked":
       return detail === "one"
         ? "one session"
