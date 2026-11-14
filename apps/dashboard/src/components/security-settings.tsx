@@ -727,6 +727,20 @@ function SessionsCard({
       router.refresh();
     });
 
+  // Every session (this one too), paired device, API token, and connected
+  // app, in one step (docs/install/accounts.md#sign-out-everywhere).
+  const [confirming, setConfirming] = useState(false);
+  const signOutEverywhere = () =>
+    startTransition(async () => {
+      setError(undefined);
+      const response = await fetch("/api/account/sign-out-everywhere", {
+        method: "POST",
+      }).catch(() => null);
+      if (!response?.ok) return setError("Could not sign out everywhere.");
+      router.replace("/login");
+      router.refresh();
+    });
+
   return (
     <Card aria-labelledby={`${id}-title`} role="region">
       <CardHeader>
@@ -769,8 +783,8 @@ function SessionsCard({
             </li>
           ))}
         </ul>
-        {others > 0 ? (
-          <div>
+        <div className="flex flex-wrap gap-2">
+          {others > 0 ? (
             <Button
               disabled={busy}
               onClick={revokeOthers}
@@ -779,7 +793,47 @@ function SessionsCard({
             >
               Sign out everywhere else
             </Button>
-          </div>
+          ) : null}
+          {confirming ? null : (
+            <Button
+              disabled={busy}
+              onClick={() => setConfirming(true)}
+              type="button"
+              variant="outline"
+            >
+              Sign out everywhere
+            </Button>
+          )}
+        </div>
+        {confirming ? (
+          <Alert variant="destructive">
+            <AlertTitle>Sign out everywhere?</AlertTitle>
+            <AlertDescription className="grid gap-2">
+              <p>
+                Every browser, this one too, every paired phone and watch, every
+                API token, and every connected app is signed out at once. Pair
+                the devices and make new tokens afterwards.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  disabled={busy}
+                  onClick={signOutEverywhere}
+                  type="button"
+                  variant="destructive"
+                >
+                  Sign out everywhere
+                </Button>
+                <Button
+                  disabled={busy}
+                  onClick={() => setConfirming(false)}
+                  type="button"
+                  variant="outline"
+                >
+                  Cancel
+                </Button>
+              </div>
+            </AlertDescription>
+          </Alert>
         ) : null}
         {error ? (
           <p className="text-destructive" role="alert">
@@ -832,7 +886,7 @@ function LegacyAccessCard({
         <CardDescription>
           While it is on, anyone who reaches Life OS without signing in acts as
           you, as before accounts existed. The phone and watch apps need it
-          until they are paired with your account.
+          until they are paired with your account in Settings → Devices.
         </CardDescription>
         <CardAction>
           <Badge variant={enabled ? "destructive" : "outline"}>

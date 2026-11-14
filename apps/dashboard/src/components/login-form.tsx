@@ -27,9 +27,16 @@ type Step = "password" | "totp" | "recovery";
  */
 export function LoginForm({
   context,
+  navigate = "app",
   next,
 }: {
   context: LoginContext;
+  /**
+   * How to go on after signing in: within the app, or (for an MCP
+   * client's OAuth request) a full page load of the provider's authorize
+   * endpoint, which redirects onwards.
+   */
+  navigate?: "app" | "document";
   next: string;
 }) {
   const id = useId();
@@ -46,6 +53,10 @@ export function LoginForm({
   const passkeys = usePasskeysHere(context.passkeyOrigin);
 
   const done = () => {
+    if (navigate === "document") {
+      window.location.assign(next);
+      return;
+    }
     router.replace(next);
     router.refresh();
   };

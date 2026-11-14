@@ -92,6 +92,9 @@ export function SettingsNav({
       className="flex flex-wrap items-center gap-x-1 gap-y-2"
     >
       {link("/settings/security", "Security")}
+      {link("/settings/devices", "Devices")}
+      {link("/settings/tokens", "API tokens")}
+      {link("/settings/connected-apps", "Connected apps")}
       {link("/settings/security-log", "Security log")}
       {admin ? (
         <>
