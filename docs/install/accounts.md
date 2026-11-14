@@ -14,7 +14,7 @@ The first account needs a one-time **setup code** from the server. Whoever can r
    ./setup.sh setup-code
    ```
 
-   It prints a code such as `K7QM-2XRP-9VDA-H4TC`. `./setup.sh up` and `./setup.sh update` print one by themselves while no account exists. A code works once, for 24 hours; a new one replaces the old one.
+   It prints a code such as `K7QM-2XRP-9VDA-H4TC`. `./setup.sh up` and `./setup.sh update` print one by themselves while no account exists. A code works once, for 24 hours; a new one replaces the old one. A sign-up that is refused for its input (a password that is too short, say) leaves the code working; once an account is made with it, it is used up, and of two sign-ups at the same moment only one gets the account.
 
 2. Open Life OS at its HTTPS address (or `http://localhost:3000` through an SSH tunnel), go to **/setup**, and enter the code, a username, and a password of at least 10 characters. A name and an email address are optional: the email is only shown, never used to sign in or to send anything.
 
@@ -40,7 +40,7 @@ The person icon in the header opens **Settings → Security** (`/settings/securi
 | **Passkeys** | Add a passkey (your phone's or computer's screen lock), or remove one. Passkeys work at the public address (`LIFE_OS_PUBLIC_URL`) only. |
 | **Password** | Change it; every other session is signed out. |
 | **Where you are signed in** | Every session, with its browser and last use: sign one out, or every one but this. |
-| **Legacy access** | The owner only: turn [legacy access](#legacy-access) off or on. |
+| **Legacy access** | The owner only: turn [legacy access](#legacy-access) off. Turning it on is done on the server. |
 
 Adding a passkey needs a sign-in from the last 12 hours; Life OS asks you to sign in again otherwise.
 
@@ -55,9 +55,10 @@ Before accounts, whoever reached Life OS was its owner. **Legacy access** keeps 
 - It is **on** after updating an install from before accounts (`./setup.sh update` writes `LIFE_OS_LEGACY_ACCESS=on` into `.env`), so that nothing changes for you, your browsers, and the phone and watch apps, which send no Life OS sign-in yet.
 - It is **off** on a new install.
 - The pages that are new with accounts (Settings → Security) need a real sign-in all the same. Once the apps can be paired with an account (a later version), the Dashboard will remind you once a day while legacy access is on; until then it does not, since turning it off would cut the apps off.
-- Turn it off in **Settings → Security** once the phone and watch apps are paired with your account (they learn to pair in a later version). From then on, everything needs a sign-in. On the server: `./setup.sh legacy-access off` (or `on`, or no argument to see it). Turning it back on is refused while more than one account exists.
+- Turn it off in **Settings → Security** once the phone and watch apps are paired with your account (they learn to pair in a later version). From then on, everything needs a sign-in. On the server: `./setup.sh legacy-access off` (or no argument to see it).
+- Turning it **on** is done on the server only: `./setup.sh legacy-access on`. It turns sign-in off for the whole server, so a browser cannot do it, not even the owner's (an old or stolen session must not be able to). It is refused while more than one account exists.
 
-`LIFE_OS_LEGACY_ACCESS` in `.env` counts only once, the first time the Dashboard uses its database; afterwards the switch in Settings and the command decide.
+`LIFE_OS_LEGACY_ACCESS` in `.env` counts only once, the first time the Dashboard uses its database; afterwards the switch in Settings (off) and the command (on or off) decide.
 
 ## Locked out
 
@@ -66,7 +67,7 @@ Before accounts, whoever reached Life OS was its owner. **Legacy access** keeps 
 
 ## Sign everyone out
 
-For an emergency (a stolen laptop, a leaked database copy, anything that looks like someone else got in): `./setup.sh sign-out-all` signs out every session of every account, yours too, at once; everyone signs in again with their password and two-factor. `--keep-devices` will keep paired devices signed in once devices exist. With Cloudflare Access in front, end its sessions too: [Cloudflare → Sign everyone out](../operations/cloudflare.md#sign-everyone-out). If the keys in `.env` may have leaked as well, rotate them ([Keys](#keys)).
+For an emergency (a stolen laptop, a leaked database copy, anything that looks like someone else got in): `./setup.sh sign-out-all` signs out every session of every account, yours too, at once; everyone signs in again with their password and two-factor. It then says whether [legacy access](#legacy-access) is on: while it is, anyone who reaches Life OS still acts as the owner without signing in, so it offers to turn it off too (with `--yes` it only says so; `./setup.sh legacy-access off` turns it off). `--keep-devices` will keep paired devices signed in once devices exist. With Cloudflare Access in front, end its sessions too: [Cloudflare → Sign everyone out](../operations/cloudflare.md#sign-everyone-out). If the keys in `.env` may have leaked as well, rotate them ([Keys](#keys)).
 
 ## Keys
 
@@ -78,9 +79,11 @@ For an emergency (a stolen laptop, a leaked database copy, anything that looks l
 | `LIFE_OS_IDENTITY_SIGNING_KEY` | The Ed25519 private key with which the Dashboard signs the short identity tokens the gateway hands the services. Only the Dashboard has it. |
 | `LIFE_OS_TRUSTED_KEYS` | The public keys the services accept tokens from: the signing key's (and during a rotation the previous one too). |
 
+The Dashboard checks the pair when it starts: it signs a test token and verifies it with `LIFE_OS_TRUSTED_KEYS`. If the trusted keys do not list the signing key, or list its `kid` with another public key, it logs `Life OS's sign-in settings are wrong: …` with the reason and answers every request with an error until `.env` is fixed and the Dashboard recreated.
+
 `./setup.sh rotate-keys` makes a new signing key: the services trust the new and the current key first, then the Dashboard signs with the new one; the older key is dropped at the next rotation. Rotate after a suspected leak; there is no schedule. In a clone of the repository it prints the two `docker compose` commands to run instead.
 
-In a clone of the repository, which `./setup.sh update` leaves alone, `./setup.sh account-keys` adds what an `.env` from before accounts lacks: the accounts database's password, the three keys, `LIFE_OS_LEGACY_ACCESS=on`, and the two optional settings, empty. It never prints a value and changes nothing else. By hand: an Ed25519 key from `openssl genpkey -algorithm ed25519`, written as a JWK with a `kid` (as `setup.sh`'s `identity_key_pair` does), `LIFE_OS_TRUSTED_KEYS='{"keys":[<the same JWK without "d">]}'`, and `LIFE_OS_AUTH_SECRET` from `openssl rand -hex 32`.
+In a clone of the repository, which `./setup.sh update` leaves alone, `./setup.sh account-keys` adds what an `.env` from before accounts lacks: the accounts database's password, the three keys, `LIFE_OS_LEGACY_ACCESS=on`, and the two optional settings, empty. It never prints a value and changes nothing else: a setting that has a value keeps it, whatever its format; only empty settings and the example's `replace-with-…` placeholders get new ones. If openssl cannot make the key, it stops and writes nothing. By hand: an Ed25519 key from `openssl genpkey -algorithm ed25519`, written as a JWK with a `kid` (as `setup.sh`'s `identity_key_pair` does), `LIFE_OS_TRUSTED_KEYS='{"keys":[<the same JWK without "d">]}'`, and `LIFE_OS_AUTH_SECRET` from `openssl rand -hex 32`.
 
 ## Cloudflare Access
 
