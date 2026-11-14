@@ -9,6 +9,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/GAMch1k/life-os/pkg/identity"
+	"github.com/GAMch1k/life-os/pkg/identity/identitytest"
 )
 
 type stubPlanner struct{ err error }
@@ -108,6 +111,46 @@ func TestStatusEndpointServesTheSnapshot(t *testing.T) {
 	}
 	if status.Model != "gpt-5.6-luna" || status.Poll.LastError != "mcp unreachable" || status.Poll.LastSucceededAt != nil || status.Codex.State != CodexUnknown {
 		t.Fatalf("status = %+v", status)
+	}
+}
+
+// The AI subscription's plan and usage are the server's admins'
+// (docs/architecture/multi-user.md#roles-and-checks): a member's identity
+// token is refused; legacy access and the Dashboard without a token are not.
+func TestStatusEndpointIsForAdmins(t *testing.T) {
+	signer := identitytest.New(t)
+	s := &Service{Run: func(context.Context) error { return nil }, PollInterval: time.Second,
+		Monitor: NewMonitor("model"), Verifier: identity.NewVerifier(signer.Keys, nil)}
+	member := "5c1d7a8e-0b7f-4d2a-9b1e-2f6a3c4d5e6f"
+	for _, tc := range []struct {
+		name, token string
+		code        int
+	}{
+		{"the Dashboard (no token)", "", http.StatusOK},
+		{"the owner", signer.Token("", "owner", "session"), http.StatusOK},
+		{"legacy access", signer.Token("", "owner", "legacy"), http.StatusOK},
+		{"an admin", signer.Token(member, "admin", "session"), http.StatusOK},
+		{"a member", signer.Token(member, "member", "session"), http.StatusForbidden},
+		{"a forged token", "forged.token.value", http.StatusUnauthorized},
+	} {
+		request := httptest.NewRequest(http.MethodGet, "/status", nil)
+		if tc.token != "" {
+			request.Header.Set(identity.Header, tc.token)
+		}
+		response := httptest.NewRecorder()
+		s.Handler().ServeHTTP(response, request)
+		if response.Code != tc.code {
+			t.Errorf("%s: %d %s, want %d", tc.name, response.Code, response.Body, tc.code)
+		}
+	}
+	// Without trusted keys, any token is refused, never let through.
+	open := &Service{Run: func(context.Context) error { return nil }, PollInterval: time.Second, Monitor: NewMonitor("model")}
+	request := httptest.NewRequest(http.MethodGet, "/status", nil)
+	request.Header.Set(identity.Header, signer.Token("", "owner", "session"))
+	response := httptest.NewRecorder()
+	open.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Errorf("without keys: %d", response.Code)
 	}
 }
 

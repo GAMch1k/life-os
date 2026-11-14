@@ -638,6 +638,8 @@ services:
       LIFE_OS_AI_BUDGET_PLAN_MONTHLY: ${LIFE_OS_AI_BUDGET_PLAN_MONTHLY:-on}
       LIFE_OS_TIMEZONE: ${LIFE_OS_TIMEZONE:-UTC}
       TZ: ${LIFE_OS_TIMEZONE:-UTC}
+      # Its /status (the AI plan's usage) refuses a member's identity token.
+      LIFE_OS_TRUSTED_KEYS: "${LIFE_OS_TRUSTED_KEYS:-}"
       CODEX_HOME: /tmp/lifeos-codex
     volumes:
       # The Codex home, read-only. Unset (with LIFE_OS_AI_PROVIDER=claude)
