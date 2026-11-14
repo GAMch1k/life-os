@@ -1,6 +1,8 @@
 import { type NextRequest, NextResponse } from "next/server";
 
 import { createInboxClient } from "@/lib/api/inbox-client";
+import { checkRequest } from "@/lib/auth/check";
+import { authRuntime } from "@/lib/auth/runtime";
 import {
   MAX_CAPTURE_IMAGES,
   photosContent,
@@ -49,6 +51,40 @@ export async function POST(request: NextRequest) {
         error: {
           code: "forbidden",
           message: "Shares are accepted only from the Life OS app",
+        },
+      },
+      { status: 403 },
+    );
+  }
+  // Signed in, or legacy access, checked here and not in src/proxy.ts: for
+  // a POST the proxy matches, Next.js copies the body and caps the copy at
+  // 10 MiB, which two or three photos exceed. Only headers are read, so the
+  // body streams to formData() untouched. Without a sign-in the share ends
+  // on the login and then on the page that explains sharing, as an expired
+  // Access session did.
+  let check;
+  try {
+    check = await checkRequest(authRuntime(), "POST", request.headers);
+  } catch {
+    return NextResponse.json(
+      {
+        error: {
+          code: "auth_unavailable",
+          message: "Sign-in is unavailable right now.",
+        },
+      },
+      { status: 503 },
+    );
+  }
+  if (check.status === 401) {
+    return seeOther(`/login?next=${encodeURIComponent("/share/about")}`);
+  }
+  if (check.status === 403) {
+    return NextResponse.json(
+      {
+        error: {
+          code: "forbidden_origin",
+          message: "This request did not come from Life OS.",
         },
       },
       { status: 403 },

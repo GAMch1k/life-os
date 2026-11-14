@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Runs the Dashboard's auth flow suite (apps/dashboard/test/auth;
+# docs/operations/ci.md#the-auth-flow-suite) against a throwaway PostgreSQL,
+# never a live one: Better Auth with the Dashboard's configuration on fresh
+# databases of its own (it_auth_<random>, dropped afterwards), with auth_db's
+# migrations, made-up keys, and stand-in browsers. Nothing listens on a port.
+#
+#   docker run --rm -d --name lifeos-it-pg -p 127.0.0.1:55442:5432 -e POSTGRES_PASSWORD=test postgres:18.6-alpine
+#   AUTH_TEST_DATABASE_URL=postgres://postgres:test@127.0.0.1:55442/postgres tools/test-auth
+#
+# The URL is a superuser's (INTEGRATION_TEST_DATABASE_URL works too); the
+# suite refuses a server that has a Life OS database. It needs the
+# Dashboard's node_modules (npm ci --prefix apps/dashboard).
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+url=${AUTH_TEST_DATABASE_URL:-${INTEGRATION_TEST_DATABASE_URL:-}}
+[[ -n "$url" ]] || { echo 'test-auth: set AUTH_TEST_DATABASE_URL to a throwaway PostgreSQL superuser URL' >&2; exit 2; }
+[[ -d "$repo_root/apps/dashboard/node_modules" ]] || { echo 'test-auth: run npm ci --prefix apps/dashboard first' >&2; exit 2; }
+cd "$repo_root/apps/dashboard"
+AUTH_TEST_DATABASE_URL=$url NODE_ENV=test node --import tsx --test --test-reporter=spec test/auth/flow.test.ts

@@ -1,6 +1,6 @@
 # Access Life OS safely
 
-Life OS has no login of its own yet. Whoever can open it acts as you: they can read and change everything, use your AI sign-in, and see your bank data. So the address Life OS listens on, and what stands in front of it, is your security. Choose one of the ways below.
+Life OS has a login of its own ([Accounts and signing in](accounts.md)), but keep it out of reach all the same: while [legacy access](accounts.md#legacy-access) is on (after updating an install from before accounts), whoever can open Life OS acts as you, and the login is young. So the address Life OS listens on, and what stands in front of it, stays your first line. Choose one of the ways below.
 
 By default (`./setup.sh` without `--bind`), the gateway listens on `127.0.0.1:3000`: only programs on the server itself can reach it. Nothing else on the server publishes a port.
 

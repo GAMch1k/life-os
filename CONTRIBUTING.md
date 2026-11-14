@@ -66,6 +66,7 @@ Services own their own database, migrations, and domain types. Do not access ano
 
 Development tools and agents (Claude Code and its subagents, scripts, test runners) are neither the owner nor the Life OS AI, and the Event Log must never show their work as either. Every service write must say who makes it in `X-Life-OS-Actor`; a write without one is rejected with `400 actor_required` (see [Activity](docs/services/activity.md#the-actor-gate)).
 
+- Life OS has a login now ([Accounts](docs/install/accounts.md)). A development tool reaches the gateway without one only while [legacy access](docs/install/accounts.md#legacy-access) is on; then its `X-Life-OS-Actor` still names it. Personal API tokens marked as development tools replace this once they exist (P21-06).
 - Any write a development tool or agent makes against the live stack sends `X-Life-OS-Actor: dev:<tool>`. Claude Code and its subagents use `dev:claude-code`, for example `curl -H 'X-Life-OS-Actor: dev:claude-code' -H 'content-type: application/json' -d '{...}' http://127.0.0.1:3000/api/tasks/v1/tasks`. The Event Log then shows "Developer tool (claude-code)".
 - Never send `user` from a development tool: that is the owner's own actor, used by the Dashboard. `agent:` and `system:` are internal and the gateway drops them.
 - `tools/` scripts send `dev:<script name>`; Playwright specs that write through the `request` fixture import `test` from `apps/dashboard/e2e/fixtures.ts`, which sends `dev:e2e`, while the browser keeps the Dashboard's `user`.

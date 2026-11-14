@@ -23,6 +23,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/GAMch1k/life-os/pkg/httpserver"
+	"github.com/GAMch1k/life-os/pkg/identity"
 )
 
 const (
@@ -100,7 +101,9 @@ func ParseActor(value string) (actor Actor, ok bool) {
 // RequireActor is middleware that rejects writes (any method but GET, HEAD,
 // and OPTIONS) without a valid ActorHeader with 400 actor_required, so no
 // change is silently attributed to the owner. Reads stay open, as do the
-// runtime's /health and /ready.
+// runtime's /health and /ready. A request whose verified identity token
+// names a person who signed in (pkg/identity) needs no header: the actor is
+// that person (PrincipalActor).
 func RequireActor() fiber.Handler {
 	return func(c fiber.Ctx) error {
 		switch c.Method() {
@@ -109,6 +112,11 @@ func RequireActor() fiber.Handler {
 		}
 		if path := c.Path(); path == httpserver.HealthPath || path == httpserver.ReadyPath {
 			return c.Next()
+		}
+		if principal, ok := identity.FromFiber(c); ok {
+			if _, ok := PrincipalActor(principal); ok {
+				return c.Next()
+			}
 		}
 		if _, ok := ParseActor(c.Get(ActorHeader)); !ok {
 			return httpserver.NewError(fiber.StatusBadRequest, ActorRequiredCode,
@@ -169,12 +177,31 @@ func TraceFromHeaders(get func(string) string) Trace {
 
 // FromRequest reads the Trace of a request served by the shared HTTP runtime,
 // whose middleware has already validated or assigned the correlation id.
+// The actor comes from the verified identity token when it names a person
+// who signed in, else from ActorHeader.
 func FromRequest(c fiber.Ctx) Trace {
 	trace := TraceFromHeaders(func(key string) string { return c.Get(key) })
 	if id := httpserver.CorrelationID(c); id != "" {
 		trace.CorrelationID = id
 	}
+	if principal, ok := identity.FromFiber(c); ok {
+		if actor, ok := PrincipalActor(principal); ok {
+			trace.Actor = actor
+		}
+	}
 	return trace
+}
+
+// PrincipalActor is the actor a verified identity token makes: the user, for
+// a person who signed in. ok is false for legacy access (a request with no
+// credential), whose actor still comes from ActorHeader as before accounts
+// existed, so that development tools keep their dev:<name>; and for the
+// delegations and service assertions of P21-07.
+func PrincipalActor(p identity.Principal) (Actor, bool) {
+	if p.Kind != identity.KindUser || p.IsLegacy() {
+		return Actor{}, false
+	}
+	return User(), true
 }
 
 // Apply writes the Trace onto outgoing request headers.

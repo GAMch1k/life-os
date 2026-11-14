@@ -1,4 +1,5 @@
-# The migrations of every service, at /migrations/<service>, and
+# The migrations of every service, at /migrations/<service> (the
+# Dashboard's auth_db at /migrations/auth), and
 # golang-migrate to apply them: compose.yaml's <service>-migrate runs this
 # image with -path /migrations/<service> (P20-02: no checkout needed). The
 # migrate binary is built from source with only the PostgreSQL driver and the
@@ -13,11 +14,14 @@ RUN CGO_ENABLED=0 GOBIN=/out go install -trimpath -ldflags="-s -w -X main.Versio
 # Every service with migrations, each into a directory of its own name; a new
 # service's are picked up without a change here.
 COPY services /src/services
+# And the Dashboard's accounts database, auth_db, as "auth".
+COPY apps/dashboard/db/migrations /src/auth-migrations
 RUN mkdir /out/migrations \
     && for migrations in /src/services/*/db/migrations; do \
          service=${migrations#/src/services/}; service=${service%%/*}; \
          cp -R "$migrations" "/out/migrations/$service"; \
        done \
+    && cp -R /src/auth-migrations /out/migrations/auth \
     && chmod -R a+rX,go-w /out/migrations
 
 FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf

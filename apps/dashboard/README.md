@@ -36,6 +36,21 @@ The typed and normalized configuration is exported from
 `src/config/services.ts`. Because the variables use Next.js's `NEXT_PUBLIC_`
 prefix, do not put credentials or other secrets in them.
 
+## Accounts
+
+The dashboard runs the sign-in (Better Auth, `src/lib/auth/`), so it needs
+its accounts database and keys, also locally; without them every page
+answers `503 auth_unavailable`. Point `AUTH_DATABASE_URL` at a throwaway
+PostgreSQL database with the migrations in `db/migrations` applied (in
+order), and set the keys as `.env.example` shows ([Accounts and signing
+in](../../docs/install/accounts.md#keys)). With `LIFE_OS_LEGACY_ACCESS=on`
+the pages open without signing in, as before accounts; otherwise
+`node scripts/lifeos-auth.mjs setup-code` (with `AUTH_DATABASE_URL` set)
+prints a code for `/setup`.
+
+The auth flow suite needs only a PostgreSQL superuser URL:
+`AUTH_TEST_DATABASE_URL=postgres://… ../../tools/test-auth`.
+
 ## Quality checks
 
 ```sh

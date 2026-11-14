@@ -1,0 +1,219 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Checks the gateway's sign-in (infra/nginx/life-os.conf.template;
+# docs/architecture/multi-user.md#the-gateway) in throwaway containers, never
+# the deployed gateway or the verification stack: the gateway's nginx with
+# its configuration rendered as compose.yaml has it rendered (made-up hosts),
+# a stand-in Dashboard whose auth check answers by a made-up cookie
+# (lifeos=good: 204 with an identity token naming the original method and
+# URI; forbidden: 403; boom: 500; none: 401), and one stand-in for every
+# service that echoes what reached it, on a network of their own. It checks:
+#  - every service location asks the auth check, and its refusals are JSON
+#    (401 unauthenticated, 403 forbidden, 503 auth_unavailable when the
+#    check fails);
+#  - a service gets the check's identity token, never a client's copy, nor
+#    the cookie or an Authorization header;
+#  - the public routes (the login, Better Auth's /api/auth/, the app's
+#    files) and the Dashboard's own locations reach the Dashboard without
+#    the check, with the cookie; a client's X-Life-OS-Identity never does;
+#  - /internal/ is 404 from outside, the check included;
+#  - /android/ needs a sign-in; its page sends a browser to the login;
+#  - LIFE_OS_REQUIRE_CLOUDFLARE_ACCESS: on (empty), the tunnel path needs
+#    Access's token, as before; off, Life OS's sign-in alone decides.
+#
+#   tools/test-gateway-auth
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$repo_root"
+command -v docker >/dev/null 2>&1 || { echo 'test-gateway-auth: docker is required' >&2; exit 2; }
+image=$(sed -n 's/^FROM //p' infra/nginx/Dockerfile | head -n 1)
+[[ -n "$image" ]] || { echo "test-gateway-auth: no base image in infra/nginx/Dockerfile" >&2; exit 2; }
+name=lifeos-verify-gwauth-$$
+work=$(mktemp -d)
+cleanup() {
+  docker rm -f "$name-gateway" "$name-access-on" "$name-access-off" "$name-dashboard" "$name-services" >/dev/null 2>&1 || true
+  docker network rm "$name" >/dev/null 2>&1 || true
+  rm -rf "$work"
+}
+trap cleanup EXIT
+fail() {
+  printf 'test-gateway-auth: %s\n' "$*" >&2
+  exit 1
+}
+
+nginx_dir=$repo_root/infra/nginx
+template=$nginx_dir/life-os.conf.template
+gateway_args=(-e NGINX_ENTRYPOINT_QUIET_LOGS=1 -e NGINX_ENVSUBST_FILTER=^LIFE_OS_
+  -e LIFE_OS_PUBLIC_HOSTNAME=lifeos.example.com -e LIFE_OS_GATEWAY_BIND_ADDRESS=127.0.0.1
+  -v "$nginx_dir/server-names.envsh:/docker-entrypoint.d/16-lifeos-server-names.envsh:ro"
+  -v "$nginx_dir/modules.envsh:/docker-entrypoint.d/17-lifeos-modules.envsh:ro"
+  -v "$nginx_dir/module-routes:/etc/nginx/lifeos/module-routes:ro")
+
+# The service locations, from the template: every one that proxies to an
+# upstream other than the Dashboard.
+mapfile -t service_paths < <(awk '
+  /^  location / { path = $2; if (path == "=" || path == "^~") path = $3 }
+  /set \$upstream [a-z-]+:[0-9]+;/ && $3 !~ /^dashboard:/ && path != "" { print path }
+' "$template" | sort -u)
+((${#service_paths[@]} >= 10)) || fail "found only ${#service_paths[@]} service locations in the template"
+# shellcheck disable=SC2016 # nginx variables, not the shell's
+mapfile -t services < <(sed -n 's/^ *set \$upstream \([a-z-]*\):8080;$/\1/p' "$template" | sort -u)
+
+# A releases directory for /android/.
+releases=$work/android
+install -d -m 755 "$releases"
+printf '<!doctype html><title>Android</title>\n' >"$releases/index.html"
+printf '{"apps":{}}\n' >"$releases/updates.json"
+chmod 644 "$releases"/*
+
+# The stand-in Dashboard: the auth check, and everything else echoed.
+cat >"$work/dashboard.conf" <<'EOF'
+server {
+  listen 3000;
+  default_type text/plain;
+  location = /internal/auth/check {
+    if ($http_cookie ~ "lifeos=good") {
+      add_header X-Life-OS-Identity "ok:$http_x_original_method:$http_x_original_uri:$http_x_real_ip" always;
+      return 204;
+    }
+    if ($http_cookie ~ "lifeos=forbidden") { return 403; }
+    if ($http_cookie ~ "lifeos=boom") { return 500; }
+    return 401;
+  }
+  location / {
+    return 200 "dashboard identity=[$http_x_life_os_identity] cookie=[$http_cookie] authorization=[$http_authorization]\n";
+  }
+}
+EOF
+# Every service: what reached it.
+cat >"$work/services.conf" <<'EOF'
+server {
+  listen 8080;
+  default_type text/plain;
+  location / {
+    return 200 "service $request_method $request_uri identity=[$http_x_life_os_identity] cookie=[$http_cookie] authorization=[$http_authorization]\n";
+  }
+}
+EOF
+chmod 644 "$work"/*.conf
+
+docker network create "$name" >/dev/null
+docker run -d --rm --name "$name-dashboard" --network "$name" --network-alias dashboard \
+  -v "$work/dashboard.conf:/etc/nginx/conf.d/default.conf:ro" "$image" >/dev/null
+aliases=()
+for service in "${services[@]}"; do aliases+=(--network-alias "$service"); done
+docker run -d --rm --name "$name-services" --network "$name" "${aliases[@]}" \
+  -v "$work/services.conf:/etc/nginx/conf.d/default.conf:ro" "$image" >/dev/null
+
+start() { # <container> <template> <LIFE_OS_REQUIRE_CLOUDFLARE_ACCESS>: base URL in $base
+  docker run --rm "${gateway_args[@]}" -e LIFE_OS_MODULES="$(cut -d ' ' -f 1 "$nginx_dir/module-routes" | grep -v '^#' | sort -u | paste -sd, -)" \
+    -e LIFE_OS_REQUIRE_CLOUDFLARE_ACCESS="$3" -v "$2:/etc/nginx/templates/default.conf.template:ro" \
+    "$image" nginx -t -q || fail "nginx -t failed for $1"
+  docker run -d --rm --name "$1" --network "$name" -p 127.0.0.1::80 "${gateway_args[@]}" \
+    -e LIFE_OS_MODULES="$(cut -d ' ' -f 1 "$nginx_dir/module-routes" | grep -v '^#' | sort -u | paste -sd, -)" \
+    -e LIFE_OS_REQUIRE_CLOUDFLARE_ACCESS="$3" -v "$2:/etc/nginx/templates/default.conf.template:ro" \
+    -v "$releases:/srv/android:ro" "$image" >/dev/null
+  base="http://127.0.0.1:$(docker port "$1" 80/tcp | head -n 1 | sed 's/.*://')"
+  for _ in $(seq 1 40); do
+    curl --silent --output /dev/null "$base/login" && return
+    sleep 0.25
+  done
+  docker logs "$1" >&2
+  fail "the gateway in $1 did not start"
+}
+request() { # <method> <path> [curl options…]: status in $code, body in $body, headers in $work/headers
+  local method=$1 path=$2
+  shift 2
+  code=$(curl --silent --path-as-is --max-time 15 --request "$method" --output "$work/body" \
+    --dump-header "$work/headers" --write-out '%{http_code}' "$@" "$base$path")
+  body=$(<"$work/body")
+}
+expect() { # <method> <path> <status> [curl options…]
+  local method=$1 path=$2 want=$3
+  shift 3
+  request "$method" "$path" "$@"
+  [[ "$code" == "$want" ]] || { cat "$work/headers" "$work/body" >&2; fail "$method $path $*: $code, want $want"; }
+}
+expect_body() { # <text>
+  grep -qF -- "$1" <<<"$body" || { printf '%s\n' "$body" >&2; fail "the answer lacks: $1"; }
+}
+refuse_body() { # <text>
+  ! grep -qF -- "$1" <<<"$body" || { printf '%s\n' "$body" >&2; fail "the answer has: $1"; }
+}
+
+start "$name-gateway" "$template" ''
+
+printf '==> Every service location asks the auth check (%d)\n' "${#service_paths[@]}"
+for path in "${service_paths[@]}"; do
+  expect GET "${path}v1/x" 401
+  expect_body '"code":"unauthenticated"'
+  expect GET "${path}v1/x" 200 --cookie 'lifeos=good'
+  expect_body "identity=[ok:GET:${path}v1/x:"
+  expect_body 'cookie=[]'
+  expect_body 'authorization=[]'
+  expect GET "${path}v1/x" 403 --cookie 'lifeos=forbidden'
+  expect_body '"code":"forbidden"'
+  expect GET "${path}v1/x" 503 --cookie 'lifeos=boom'
+  expect_body '"code":"auth_unavailable"'
+done
+
+printf '==> A client cannot pass an identity, a cookie, or a credential to a service\n'
+expect POST /api/tasks/v1/tasks 200 --cookie 'lifeos=good; other=1' \
+  -H 'X-Life-OS-Identity: forged' -H 'Authorization: Bearer abc' --data '{}'
+expect_body 'identity=[ok:POST:/api/tasks/v1/tasks:'
+refuse_body forged
+expect_body 'cookie=[]'
+expect_body 'authorization=[]'
+expect GET /api/tasks/v1/tasks 401 -H 'X-Life-OS-Identity: forged'
+
+printf '==> Public routes and the Dashboard reach the Dashboard without the check\n'
+for path in /login /setup /reset/abc /api/auth/get-session /_next/static/chunk.js /sw.js \
+  /app.webmanifest /icons/icon-192.png /privacy /terms / /tasks /settings/security /api/account \
+  /api/status /share /calendar/google/callback /finance/bank/callback; do
+  expect GET "$path" 200 --cookie 'lifeos=good; theme=dark' -H 'X-Life-OS-Identity: forged' -H 'Authorization: Bearer abc'
+  expect_body dashboard
+  expect_body 'cookie=[lifeos=good; theme=dark]'
+  expect_body 'identity=[]'
+  expect_body 'authorization=[Bearer abc]'
+done
+expect POST /api/auth/sign-in/username 200 --data '{}'
+expect_body dashboard
+
+printf '==> /internal/ is not reachable from outside\n'
+for path in /internal/auth/check /internal/status /internal/ /internal/x; do
+  expect GET "$path" 404 --cookie 'lifeos=good'
+  refuse_body dashboard
+done
+
+printf '==> /android/ needs a sign-in\n'
+expect GET /android/ 302
+grep -qi '^location: /login?next=/android/' "$work/headers" || { cat "$work/headers" >&2; fail "/android/ does not send to the login"; }
+expect GET /android/updates 401
+expect_body '"code":"unauthenticated"'
+expect GET /android/ 200 --cookie 'lifeos=good'
+expect_body Android
+expect GET /android/updates 200 --cookie 'lifeos=good'
+
+# The Cloudflare path: every client counts as arriving through Cloudflare's
+# edge network.
+# shellcheck disable=SC2016 # nginx variables, not the shell's
+sed '/^geo \$realip_remote_addr \$via_cloudflare {/,/^}/ s/default 0;/default 1;/' "$template" >"$work/access.conf.template"
+! cmp -s "$template" "$work/access.conf.template" || fail "could not make the Access variant of the configuration"
+chmod 644 "$work/access.conf.template"
+
+printf '==> LIFE_OS_REQUIRE_CLOUDFLARE_ACCESS empty: Access is required on the tunnel, as before\n'
+start "$name-access-on" "$work/access.conf.template" ''
+expect GET /api/tasks/v1/x 403 --cookie 'lifeos=good'
+expect GET /login 403
+expect GET /api/tasks/v1/x 200 --cookie 'lifeos=good' -H 'Cf-Access-Jwt-Assertion: token'
+refuse_body token
+docker rm -f "$name-access-on" >/dev/null
+
+printf '==> LIFE_OS_REQUIRE_CLOUDFLARE_ACCESS=off: the sign-in alone decides\n'
+start "$name-access-off" "$work/access.conf.template" off
+expect GET /login 200
+expect GET /api/tasks/v1/x 401
+expect GET /api/tasks/v1/x 200 --cookie 'lifeos=good'
+
+printf '\ngateway auth: all checks passed\n'

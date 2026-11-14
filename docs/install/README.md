@@ -7,7 +7,7 @@ A new install runs the core: the Dashboard, Tasks, Calendar, Inbox, Food, Financ
 This guide installs Life OS from its published Docker images with one setup script. You don't build anything, and you don't need the source code. (One exception, only if you choose it: AI processing with Claude Code, which the published images do not contain; `./setup.sh claude` adds it to a local copy of the processor image.)
 
 > [!WARNING]
-> **Early preview.** Life OS has no login of its own yet: whoever can open it can read and change everything in it. The setup script keeps it on `127.0.0.1`, so only the server itself can reach it, and you open it through an SSH tunnel, a VPN, or Cloudflare Access ([Access it safely](access.md)). Never expose it straight to the internet. Previews have rough edges and may change between releases, so back up before you update.
+> **Early preview.** Life OS has a login ([Accounts](accounts.md)), but it is new: the setup script keeps Life OS on `127.0.0.1`, so only the server itself can reach it, and you open it through an SSH tunnel, a VPN, or Cloudflare Access ([Access it safely](access.md)). Never expose it straight to the internet. Previews have rough edges and may change between releases, so back up before you update.
 
 ## What you need
 
@@ -54,7 +54,7 @@ This guide installs Life OS from its published Docker images with one setup scri
    ./setup.sh up
    ```
 
-   The first start downloads the images (about 3 GB with every module, less for the core alone) and takes a few minutes. When Life OS answers, the script prints its address and what to do next.
+   The first start downloads the images (about 3 GB with every module, less for the core alone) and takes a few minutes. When Life OS answers, the script prints its address, a one-time **setup code** for your account, and what to do next.
 
 5. **Open it.** Life OS answers only on the server. From your own computer, open an SSH tunnel and keep it running:
 
@@ -62,7 +62,7 @@ This guide installs Life OS from its published Docker images with one setup scri
    ssh -N -L 3000:127.0.0.1:3000 you@your-server
    ```
 
-   Then open <http://127.0.0.1:3000>. Start with the **Status** page (`/status`): it shows what works, what is still starting, and what needs you. For everyday use from your phone and laptop, set up [a VPN or Cloudflare Access](access.md).
+   Then open <http://127.0.0.1:3000>. It opens the login: go to **Set up the first account**, enter the setup code, and choose a username and password; then turn on two-factor sign-in in Settings → Security ([Accounts](accounts.md)). Start with the **Status** page (`/status`): it shows what works, what is still starting, and what needs you. For everyday use from your phone and laptop, set up [a VPN or Cloudflare Access](access.md).
 
 ## What setup.sh writes
 
@@ -70,7 +70,7 @@ Everything stays in the directory you downloaded into:
 
 | Path | What |
 | --- | --- |
-| `.env` | Your settings and every password and key, readable only by you (mode 600). **Keep a copy** in a password manager or another safe place: the backups don't include it, and without it the backups can't be opened by a new install. |
+| `.env` | Your settings and every password and key, readable only by you (mode 600), the accounts' secret and signing key among them ([Keys](accounts.md#keys)). **Keep a copy** in a password manager or another safe place: the backups don't include it, and without it the backups can't be opened by a new install. |
 | `backups/` | The nightly backups ([Backups](backups.md)). |
 | `codex-home/` | The AI sign-in, once you [turn AI processing on](ai-processing.md). It is as sensitive as a password. |
 
@@ -108,6 +108,12 @@ The phone and watch apps are on their own page: [Phone and watch apps](phone-app
 | `./setup.sh modules [on\|off ID...]` | Lists the optional modules, or turns them on or off ([Modules](modules.md)). |
 | `./setup.sh check` | Only checks the server. |
 | `./setup.sh gateway` | Changes where Life OS listens (`--bind`, `--port`) and its address (`--public-url`). |
+| `./setup.sh setup-code` | A one-time code for the first account, while none exists ([Accounts](accounts.md)). |
+| `./setup.sh account-keys` | Adds the accounts' settings to an `.env` from before accounts, in a clone of the repository (`update` does it for a release install). |
+| `./setup.sh recover-owner [--reset-2fa]` | A one-time link to set the owner's password; with `--reset-2fa` also turns off their two-factor ([Locked out](accounts.md#locked-out)). |
+| `./setup.sh legacy-access [on\|off]` | Shows or changes [legacy access](accounts.md#legacy-access). |
+| `./setup.sh sign-out-all [--keep-devices]` | Signs every account out, everywhere ([Sign everyone out](accounts.md#sign-everyone-out)). |
+| `./setup.sh rotate-keys` | A new key for the identity tokens the services trust ([Keys](accounts.md#keys)). |
 | `./setup.sh help` | Every command and option. |
 
 Plain `docker compose` commands work too, from the same directory: `docker compose ps`, `docker compose logs <service>`, `docker compose stop`.

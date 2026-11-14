@@ -69,10 +69,24 @@ func errorHandler(c fiber.Ctx, err error) error {
 	})
 }
 
+// PublicError is an error of another package that says itself how it is
+// answered, such as a refused identity token (pkg/identity).
+type PublicError interface {
+	error
+	PublicError() (status int, code, message string)
+}
+
 func publicError(err error) (status int, code, message string) {
 	status = fiber.StatusInternalServerError
 	code = "internal_error"
 	message = "Internal Server Error"
+
+	var public PublicError
+	if errors.As(err, &public) && public != nil {
+		if s, c, m := public.PublicError(); s >= 400 && s <= 599 && c != "" {
+			return s, c, m
+		}
+	}
 
 	var appError *Error
 	if errors.As(err, &appError) && appError != nil {

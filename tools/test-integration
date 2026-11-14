@@ -128,6 +128,27 @@ if [[ $# -eq 0 ]]; then
     summary+=("tools/test-restore-database      FAILED")
     failed+=("tools/test-restore-database exited $status")
   fi
+
+  # The Dashboard's auth flow suite (Better Auth on auth_db), on databases
+  # of its own; it needs the Dashboard's node_modules, which CI installs.
+  printf '\n==> tools/test-auth\n'
+  if [[ -d apps/dashboard/node_modules ]]; then
+    group 'tools/test-auth'
+    status=0
+    AUTH_TEST_DATABASE_URL=$admin_url tools/test-auth || status=$?
+    endgroup
+    if [[ "$status" -eq 0 ]]; then
+      summary+=("tools/test-auth                  passed")
+    else
+      summary+=("tools/test-auth                  FAILED")
+      failed+=("tools/test-auth exited $status")
+    fi
+  elif [[ -n "${CI:-}" ]]; then
+    failed+=("tools/test-auth: apps/dashboard/node_modules is missing (npm ci --prefix apps/dashboard)")
+  else
+    printf 'skipped: run npm ci --prefix apps/dashboard to include it\n'
+    summary+=("tools/test-auth                  skipped (no node_modules)")
+  fi
 fi
 
 printf '\n==> Summary\n'

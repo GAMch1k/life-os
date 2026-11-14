@@ -10,6 +10,7 @@
 #   ./setup.sh status           what runs, and what is set up (never values)
 #   ./setup.sh modules [on|off ID...]
 #                               the optional modules: list, turn on, turn off
+#   ./setup.sh setup-code       a one-time code for the first account
 #   ./setup.sh help             every command and option
 #
 # It never prints a password, key, or token, and never overwrites an existing
@@ -39,6 +40,8 @@ force_new=0
 skip_checks=0
 skip_backup=0
 skip_access_check=0
+reset_2fa=0
+keep_devices=0
 allow_public_bind=0
 bind_flag=
 port_flag=
@@ -889,11 +892,13 @@ password_keys() {
 
 # Keys whose old values a new .env keeps (--force-new): the data depends on
 # them. The database passwords, the keys that encrypt the stored Google and
-# bank sessions, and the web push key pair.
+# bank sessions, the web push key pair, and the accounts' secret and keys
+# (two-factor secrets are encrypted with LIFE_OS_AUTH_SECRET).
 kept_keys() {
   password_keys
   printf '%s\n' LIFE_OS_GOOGLE_TOKEN_KEY LIFE_OS_BANKING_TOKEN_KEY \
-    LIFE_OS_WEBPUSH_VAPID_PUBLIC_KEY LIFE_OS_WEBPUSH_VAPID_PRIVATE_KEY
+    LIFE_OS_WEBPUSH_VAPID_PUBLIC_KEY LIFE_OS_WEBPUSH_VAPID_PRIVATE_KEY \
+    LIFE_OS_AUTH_SECRET LIFE_OS_IDENTITY_SIGNING_KEY LIFE_OS_TRUSTED_KEYS
 }
 
 make_dir() {
@@ -981,6 +986,8 @@ cmd_init() {
       generated+=1
     fi
   done < <(kept_keys)
+  # The accounts' secret and keys, unless kept.
+  account_keys_needed && generated+=1
 
   step 'Writing .env'
   make_dir "$backup_dir" 700
@@ -1819,12 +1826,238 @@ cmd_gateway() {
   apply_hint gateway notifications
 }
 
+# ---------- Accounts ----------
+
+# A new Ed25519 key pair as two lines of JSON: the private JWK (with its kid)
+# for LIFE_OS_IDENTITY_SIGNING_KEY, and the public one for
+# LIFE_OS_TRUSTED_KEYS. Needs openssl 1.1.1 or newer.
+identity_key_pair() {
+  local kid=$1 dir d x
+  command -v openssl >/dev/null 2>&1 || die 'openssl is needed to make the sign-in keys'
+  dir=$(mktemp -d)
+  if ! openssl genpkey -algorithm ed25519 -outform DER -out "$dir/key.der" 2>/dev/null \
+    || ! openssl pkey -inform DER -in "$dir/key.der" -pubout -outform DER -out "$dir/pub.der" 2>/dev/null; then
+    rm -rf "$dir"
+    die 'openssl could not make an Ed25519 key (it needs openssl 1.1.1 or newer)'
+  fi
+  # PKCS#8 of an Ed25519 key: the 32-byte seed after a 16-byte prefix;
+  # SubjectPublicKeyInfo: the 32-byte key after a 12-byte prefix.
+  if [[ $(head -c 16 "$dir/key.der" | od -An -v -tx1 | tr -d ' \n') != 302e020100300506032b657004220420 ]] \
+    || [[ $(head -c 12 "$dir/pub.der" | od -An -v -tx1 | tr -d ' \n') != 302a300506032b6570032100 ]]; then
+    rm -rf "$dir"
+    die 'openssl wrote an Ed25519 key in an unexpected layout'
+  fi
+  d=$(tail -c 32 "$dir/key.der" | base64 | tr -d '\n=' | tr '+/' '-_')
+  x=$(tail -c 32 "$dir/pub.der" | base64 | tr -d '\n=' | tr '+/' '-_')
+  rm -rf "$dir"
+  printf '{"kty":"OKP","crv":"Ed25519","kid":"%s","x":"%s","d":"%s"}\n' "$kid" "$x" "$d"
+  printf '{"kty":"OKP","crv":"Ed25519","kid":"%s","x":"%s","use":"sig","alg":"EdDSA"}\n' "$kid" "$x"
+}
+
+# A new key id, such as auth-20261114-3fa2.
+identity_kid() { printf 'auth-%s-%s\n' "$(date -u +%Y%m%d)" "$(random_hex 2)"; }
+
+# The public JWK of a private one (drops "d").
+public_jwk() {
+  sed -E 's/,"d":"[^"]*"//; s/\}$/,"use":"sig","alg":"EdDSA"}/' <<<"$1"
+}
+
+# The value a key has: a pending change (env_values), else .env's.
+current_value() {
+  if [[ -v env_values[$1] ]]; then printf '%s\n' "${env_values[$1]}"; else env_get "$1" 2>/dev/null || true; fi
+}
+
+# Whether a setting has no value yet: empty, or still the example's
+# replace-with-* placeholder. A value someone set is never replaced, even
+# one in another format than setup.sh writes.
+unset_value() { [[ -z $1 || $1 == replace-with-* ]]; }
+
+# A new key pair in key_pair_private and key_pair_public, or the script
+# stops: identity_key_pair runs in a subshell, where its die only ends the
+# subshell, and a caller in an || or && list runs without set -e.
+new_key_pair() {
+  local pair
+  pair=$(identity_key_pair "$(identity_kid)") || die 'could not make a signing key'
+  key_pair_private=${pair%%$'\n'*}
+  key_pair_public=${pair#*$'\n'}
+  [[ $key_pair_private == '{"kty":"OKP"'*'"d":"'*'}' && $key_pair_public == '{"kty":"OKP"'*'}' && $key_pair_public != *'"d":'* ]] \
+    || die 'could not make a signing key: openssl wrote something unexpected'
+}
+
+# A JWKS with one more key: the list in $1 (empty, or {"keys":[...]}) and
+# the public JWK $2.
+jwks_with() {
+  local list=$1 key=$2 end=']}'
+  if [[ -z $list || $list == '{"keys":[]}' ]]; then
+    printf '{"keys":[%s]}' "$key"
+  else
+    printf '%s,%s]}' "${list%"$end"}" "$key"
+  fi
+}
+
+# Sets the accounts' secret and keys that are missing (or still the
+# example's placeholder): LIFE_OS_AUTH_SECRET, and the signing key with the
+# trusted keys that list it. Values that are set stay as they are. Fails
+# (returns 1) when nothing was missing.
+account_keys_needed() {
+  local -i made=0
+  local signing trusted key_pair_private key_pair_public
+  if unset_value "$(current_value LIFE_OS_AUTH_SECRET)"; then
+    env_values[LIFE_OS_AUTH_SECRET]=$(random_hex 32)
+    made=1
+  fi
+  signing=$(current_value LIFE_OS_IDENTITY_SIGNING_KEY)
+  trusted=$(current_value LIFE_OS_TRUSTED_KEYS)
+  unset_value "$trusted" && trusted=
+  if unset_value "$signing"; then
+    new_key_pair
+    env_values[LIFE_OS_IDENTITY_SIGNING_KEY]=$key_pair_private
+    env_values[LIFE_OS_TRUSTED_KEYS]=$(jwks_with "$trusted" "$key_pair_public")
+    made=1
+  elif [[ -z $trusted ]]; then
+    [[ $signing == '{'*'"x":"'*'}' ]] \
+      || die 'LIFE_OS_IDENTITY_SIGNING_KEY is not a JWK, so its public key cannot go into LIFE_OS_TRUSTED_KEYS: fix it in .env (docs/install/accounts.md#keys)'
+    env_values[LIFE_OS_TRUSTED_KEYS]=$(jwks_with '' "$(public_jwk "$signing")")
+    made=1
+  fi
+  ((made))
+}
+
+# account-keys: the accounts' settings an .env from before accounts lacks,
+# made here: the auth_db password, the secret, the signing key with the
+# trusted keys, and legacy access on, so that the install keeps working as
+# it did. ./setup.sh update does this for a release install; this is for a
+# clone of the repository, which update leaves alone. Never prints a value.
+cmd_account_keys() {
+  local key
+  local -a added=()
+  require_env
+  is_set LIFE_OS_AUTH_DB_PASSWORD || env_values[LIFE_OS_AUTH_DB_PASSWORD]=$(random_hex 24)
+  account_keys_needed || true
+  env_get LIFE_OS_LEGACY_ACCESS >/dev/null 2>&1 || env_values[LIFE_OS_LEGACY_ACCESS]=on
+  for key in LIFE_OS_INSECURE_LOGIN_HOSTS LIFE_OS_REQUIRE_CLOUDFLARE_ACCESS; do
+    env_get "$key" >/dev/null 2>&1 || env_values[$key]=
+  done
+  for key in "${!env_values[@]}"; do added+=("$key"); done
+  if ((${#added[@]} == 0)); then
+    say 'The accounts are set up in .env already: nothing to add.'
+    return 0
+  fi
+  env_update
+  say "Added to .env: $(printf '%s\n' "${added[@]}" | sort | tr '\n' ' ')"
+  say 'Keep a copy of .env with your backups: auth_db needs LIFE_OS_AUTH_SECRET.'
+}
+
+dashboard_running() {
+  [[ -n $(docker compose ps -q --status running dashboard 2>/dev/null) ]]
+}
+
+# Runs one of the Dashboard's account commands (apps/dashboard/scripts/
+# lifeos-auth.mjs) in its container, which has auth_db's address.
+account_command() {
+  docker compose exec -T dashboard node scripts/lifeos-auth.mjs "$@"
+}
+
+require_dashboard() {
+  require_env
+  command -v docker >/dev/null 2>&1 || die 'Docker is not installed here.'
+  dashboard_running || die "the Dashboard is not running, so this cannot reach the accounts. Start Life OS first (./setup.sh up)."
+}
+
+# After up and update: while no account exists, a setup code for the first.
+print_setup_code() {
+  local out
+  dashboard_running || return 0
+  out=$(account_command setup-code --if-no-account 2>/dev/null) || return 0
+  [[ -n $out ]] || return 0
+  step 'The first account'
+  printf '%s\n' "$out"
+}
+
+cmd_setup_code() {
+  require_dashboard
+  account_command setup-code
+}
+
+cmd_recover_owner() {
+  require_dashboard
+  local -a args=()
+  ((!reset_2fa)) || args+=(--reset-2fa)
+  account_command recover-owner "${args[@]}"
+}
+
+cmd_legacy_access() {
+  require_dashboard
+  case ${1:-} in
+    '' | on | off) ;;
+    *) usage_error "legacy-access takes on or off, not '$1'" ;;
+  esac
+  account_command legacy-access ${1:+"$1"}
+}
+
+cmd_sign_out_all() {
+  local out
+  local -a args=()
+  require_dashboard
+  ((!keep_devices)) || args+=(--keep-devices)
+  ((assume_yes)) || confirm 'Sign out every session of every account, yours too?' n || die 'nothing was changed'
+  out=$(account_command sign-out-all "${args[@]}") || die "signing out failed: $out"
+  printf '%s\n' "$out"
+  # While legacy access is on, a request without a sign-in is the owner
+  # anyway: offer to turn it off (with --yes, only say how).
+  if [[ $out == *'Legacy access is on'* ]] && ((!assume_yes)); then
+    if confirm 'Turn legacy access off too?' n; then
+      account_command legacy-access off
+    fi
+  fi
+  if module_is_on cloudflare; then
+    say "Cloudflare Access keeps its own sessions: end them in Zero Trust as well (${docs%/install}/operations/cloudflare.md#sign-everyone-out)."
+  fi
+}
+
+# rotate-keys [auth|all]: a new signing key. The services trust the new and
+# the current key first, then the Dashboard signs with the new one; the
+# key before the current one is dropped. Tokens live five minutes, so the
+# overlap is enough. Service keys come with a later version (P21-07).
+cmd_rotate_keys() {
+  local target=${1:-auth} signing services key_pair_private key_pair_public
+  require_env
+  case $target in
+    auth | all) ;;
+    *) usage_error "rotate-keys rotates auth (or all), not '$target': services have no keys of their own yet" ;;
+  esac
+  signing=$(env_get LIFE_OS_IDENTITY_SIGNING_KEY 2>/dev/null || true)
+  [[ $signing == '{'*'"x":"'*'}' ]] || die 'there is no signing key (a JWK) to rotate: ./setup.sh update adds one'
+  new_key_pair
+  env_values[LIFE_OS_IDENTITY_SIGNING_KEY]=$key_pair_private
+  env_values[LIFE_OS_TRUSTED_KEYS]=$(jwks_with "$(jwks_with '' "$(public_jwk "$signing")")" "$key_pair_public")
+  env_update
+  say "A new signing key is in .env; the services trust it and the previous one."
+  services=$(docker compose ps --services --status running 2>/dev/null | grep -vxE 'dashboard|gateway|postgres|whisper|ntfy|cloudflared|host-health-docker' | tr '\n' ' ' || true)
+  if is_checkout; then
+    say 'Apply it: first the services, then the Dashboard:'
+    say "  docker compose up -d --no-build --no-deps ${services:-<every running service but the Dashboard>}"
+    say '  docker compose up -d --no-build --no-deps dashboard'
+    return 0
+  fi
+  step 'Restarting the services, then the Dashboard'
+  # shellcheck disable=SC2086 # one name a word
+  [[ -z $services ]] || docker compose up -d --no-deps $services
+  docker compose up -d --no-deps dashboard
+  say 'Done: identity tokens are signed with the new key.'
+}
+
 # ---------- Running ----------
 
 # Waits until the gateway and the core services answer; prints what is
 # still starting or failing.
+# Prints the services (the arguments) whose /ready answers, from inside the
+# Dashboard's container.
+# shellcheck disable=SC2016 # JavaScript, run by node
+ready_probe='Promise.all(process.argv.slice(1).map((s) => fetch(`http://${s}:8080/ready`, { signal: AbortSignal.timeout(4000) }).then((r) => (r.ok ? s : ""), () => ""))).then((names) => console.log(names.filter(Boolean).join(" ")))'
+
 wait_until_ready() {
-  local gateway deadline service state health exit_code processor_seen=0 processor_down=0 whisper_starting=0
+  local gateway deadline service state health exit_code ready processor_seen=0 processor_down=0 whisper_starting=0
   local -a problems=() domains=(tasks inbox calendar finance food) waiting
   gateway=$(gateway_url)
   deadline=$((SECONDS + ${LIFE_OS_SETUP_WAIT_SECONDS:-300}))
@@ -1835,10 +2068,17 @@ wait_until_ready() {
   step "Waiting for Life OS to answer at $gateway"
   while true; do
     waiting=()
-    curl -fsS -o /dev/null -m 5 "$gateway/" 2>/dev/null || waiting+=(dashboard)
-    for service in "${domains[@]}"; do
-      curl -fsS -o /dev/null -m 5 "$gateway/api/$service/ready" 2>/dev/null || waiting+=("$service")
-    done
+    # The gateway and the Dashboard (the login page needs no sign-in), then
+    # each core service from inside the Dashboard's container: their routes
+    # at the gateway need a sign-in.
+    if curl -fsS -o /dev/null -m 5 "$gateway/login" 2>/dev/null; then
+      ready=" $(docker compose exec -T dashboard node -e "$ready_probe" "${domains[@]}" 2>/dev/null || true) "
+      for service in "${domains[@]}"; do
+        [[ $ready == *" $service "* ]] || waiting+=("$service")
+      done
+    else
+      waiting+=(dashboard)
+    fi
     ((${#waiting[@]})) || break
     if ((SECONDS >= deadline)); then
       warn "still not answering: ${waiting[*]}. See ./setup.sh status and docker compose logs <service>."
@@ -1959,11 +2199,14 @@ cmd_up() {
   claude_images_prune
   wait_until_ready || true
   print_access
+  print_setup_code
   print_next_steps
 }
 
 # Adds the settings a newer .env.example has and .env lacks: new passwords
-# generated, everything else as the example has it.
+# and the accounts' keys generated, legacy access on (an install updated from
+# before accounts keeps working as it did, docs/install/accounts.md), and
+# everything else as the example has it.
 add_new_settings() {
   local line key
   local -a added=() lines=()
@@ -1973,11 +2216,13 @@ add_new_settings() {
     [[ $line =~ ^(LIFE_OS_[A-Z0-9_]*)= ]] || continue
     key=${BASH_REMATCH[1]}
     env_get "$key" >/dev/null 2>&1 && continue
-    if [[ $key == *_PASSWORD ]]; then
-      env_values[$key]=$(random_hex 24)
-    else
-      env_values[$key]=$(env_get "$key" .env.example)
-    fi
+    [[ -v env_values[$key] ]] && continue
+    case $key in
+      *_PASSWORD) env_values[$key]=$(random_hex 24) ;;
+      LIFE_OS_AUTH_SECRET | LIFE_OS_IDENTITY_SIGNING_KEY | LIFE_OS_TRUSTED_KEYS) account_keys_needed || true ;;
+      LIFE_OS_LEGACY_ACCESS) env_values[$key]=on ;;
+      *) env_values[$key]=$(env_get "$key" .env.example) ;;
+    esac
     added+=("$key")
   done
   if ((${#added[@]})); then
@@ -2036,6 +2281,7 @@ cmd_update() {
   docker compose up -d --remove-orphans
   claude_images_prune
   wait_until_ready || true
+  print_setup_code
   say ''
   say "Life OS $target is running. Read what changed: https://github.com/GAMch1k/life-os/releases"
 }
@@ -2131,6 +2377,23 @@ release's compose.yaml and .env.example.
   ./setup.sh check              only check this server
   ./setup.sh gateway            change where Life OS listens and its address
 
+Accounts (docs/install/accounts.md):
+  ./setup.sh account-keys       add the accounts' settings to an older .env
+                                (a clone of the repository; update does it
+                                for a release install)
+  ./setup.sh setup-code         a one-time code for the first account, while
+                                none exists (also printed by up and update)
+  ./setup.sh recover-owner [--reset-2fa]
+                                a one-time link to set the owner's password;
+                                --reset-2fa also turns off their two-factor
+  ./setup.sh legacy-access [on|off]
+                                show or change legacy access (sign-in-free
+                                access as the first account)
+  ./setup.sh sign-out-all [--keep-devices]
+                                sign every account out, everywhere
+  ./setup.sh rotate-keys [auth|all]
+                                a new key for the services' identity tokens
+
 Optional modules (the core always runs; none is on after a first setup):
   ./setup.sh modules            list them, on or off
   ./setup.sh modules on ID...   turn modules on (ai, voice, google-calendar,
@@ -2158,7 +2421,7 @@ Options:
   --force-new              write a new .env over an existing one; keeps a copy
                            and the database passwords
   --bind ADDRESS           where the gateway listens (default 127.0.0.1)
-  --allow-public-bind      allow a public --bind address (Life OS has no login!)
+  --allow-public-bind      allow a public --bind address
   --port PORT              the gateway's port (default 3000)
   --public-url URL         the address you open Life OS at
   --skip-checks            don't check Docker, memory, and disk first
@@ -2181,6 +2444,8 @@ while (($#)); do
     --skip-checks) skip_checks=1 ;;
     --skip-backup) skip_backup=1 ;;
     --skip-access-check) skip_access_check=1 ;;
+    --reset-2fa) reset_2fa=1 ;;
+    --keep-devices) keep_devices=1 ;;
     --allow-public-bind) allow_public_bind=1 ;;
     --bind) need_value "$@" && bind_flag=$2 && shift ;;
     --bind=*) bind_flag=${1#*=} ;;
@@ -2214,6 +2479,12 @@ case ${command:-init} in
   ntfy) setup_ntfy ;;
   webpush) setup_webpush ;;
   feed) setup_feed ;;
+  account-keys) cmd_account_keys ;;
+  setup-code) cmd_setup_code ;;
+  recover-owner) cmd_recover_owner ;;
+  legacy-access) cmd_legacy_access "${args[@]}" ;;
+  sign-out-all) cmd_sign_out_all ;;
+  rotate-keys) cmd_rotate_keys "${args[@]}" ;;
   help) usage ;;
   *) usage_error "unknown command '$command'" ;;
 esac

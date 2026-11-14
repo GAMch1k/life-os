@@ -1,6 +1,6 @@
 # Self-hosting Life OS
 
-This guide takes you from a fresh Linux server to a working Life OS. Follow the steps in order. Life OS is single-user and has no accounts or login of its own, so anyone who can reach its gateway acts as the owner. How you expose the gateway ([step 9](#9-remote-access)) is your security boundary.
+This guide takes you from a fresh Linux server to a working Life OS. Follow the steps in order. Life OS has accounts and a login ([Accounts and signing in](docs/install/accounts.md)); the first account, the owner's, is made with a one-time setup code once Life OS runs. While [legacy access](docs/install/accounts.md#legacy-access) is on, as after updating a server from before accounts, anyone who can reach its gateway acts as the owner, so how you expose the gateway ([step 9](#9-remote-access)) stays your first line of defense.
 
 This guide builds Life OS from this repository. To install the published images instead, with `setup.sh` and nothing to build, follow the [install guide](docs/install/README.md). `setup.sh` also writes this guide's `.env` (step 4) in a clone: run `./setup.sh` there, and it uses the directories below.
 
@@ -68,6 +68,17 @@ Compose refuses every command until these five variables are set: `LIFE_OS_POSTG
 | `LIFE_OS_PUBLIC_URL` | **Required.** The URL Life OS is reached at, without a trailing slash, such as `https://lifeos.example.com`. Phone notifications open their pages here, and the Google and bank redirect URIs default to it. Without a hostname, use the gateway's address, such as `http://127.0.0.1:3000`. |
 
 **Database passwords, all required.** Generate one for each: `LIFE_OS_FINANCE_DB_PASSWORD`, `LIFE_OS_TASKS_DB_PASSWORD`, `LIFE_OS_INBOX_DB_PASSWORD`, `LIFE_OS_CALENDAR_DB_PASSWORD`, `LIFE_OS_VOICE_DB_PASSWORD`, `LIFE_OS_ACTIVITY_DB_PASSWORD`, `LIFE_OS_NOTIFICATIONS_DB_PASSWORD`, `LIFE_OS_BANKING_DB_PASSWORD`, `LIFE_OS_GOOGLE_CALENDAR_DB_PASSWORD`, `LIFE_OS_CALENDAR_FEEDS_DB_PASSWORD`, `LIFE_OS_FOOD_DB_PASSWORD`, and `LIFE_OS_BACKUP_DB_PASSWORD` (the backup service's read-only login). Provisioning refuses an empty password, even for integrations you don't use.
+
+**Accounts** ([Accounts and signing in](docs/install/accounts.md)). All required except the last three.
+
+| Variable | Value |
+| --- | --- |
+| `LIFE_OS_AUTH_DB_PASSWORD` | `<generate>`: the Dashboard's accounts database, `auth_db`. |
+| `LIFE_OS_AUTH_SECRET` | `openssl rand -hex 32`. Signs the session cookies and encrypts two-factor secrets: keep it with your backups. |
+| `LIFE_OS_IDENTITY_SIGNING_KEY`, `LIFE_OS_TRUSTED_KEYS` | An Ed25519 key pair as JWKs; `./setup.sh` writes them (also in a clone), `./setup.sh account-keys` adds them to an `.env` from before accounts, or make them as [Keys](docs/install/accounts.md#keys) says. |
+| `LIFE_OS_LEGACY_ACCESS` | `off` (default) for a new server; `on` for one that ran before accounts, so that it keeps working without a sign-in until you turn it off. |
+| `LIFE_OS_INSECURE_LOGIN_HOSTS` | Plain-HTTP hosts on which signing in is allowed anyway, such as a WireGuard address. Empty (default): sign in at the HTTPS address or `localhost`. |
+| `LIFE_OS_REQUIRE_CLOUDFLARE_ACCESS` | Empty (default): the tunnel needs Cloudflare Access's token, as before; `off` makes the login the only gate there. |
 
 **Gateway** ([step 9](#9-remote-access))
 
@@ -213,12 +224,18 @@ PostgreSQL keeps the environment it was created with. If you add a database pass
 4. **Check health.**
 
    ```sh
-   curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/   # 200
-   curl -s http://127.0.0.1:3000/api/tasks/ready                      # likewise /api/<domain>/ready
+   curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/login   # 200
+   docker compose ps                                                        # auth-migrate Exited (0), dashboard healthy
    docker compose exec processor codex login status
    ```
 
-   These use the default bind address and port; substitute yours if you changed them.
+   These use the default bind address and port; substitute yours if you changed them. The services' routes (`/api/<domain>/…`) need a sign-in now; their `/ready` answers inside the Docker network.
+
+5. **Create your account.** Print a one-time setup code, open `http://127.0.0.1:3000/setup` (or your HTTPS address), and enter it with a username and password; then turn on two-factor sign-in in Settings → Security:
+
+   ```sh
+   docker compose exec -T dashboard node scripts/lifeos-auth.mjs setup-code
+   ```
 
    Then open the Dashboard's **Status** page (`/status`). It covers every service, automatic processing and Codex, Voice and Whisper, Backups, the server, and notifications, and suggests an action for each problem. Start any troubleshooting there; see [Operations and troubleshooting](docs/operations/deployment.md).
 
@@ -233,7 +250,7 @@ docker compose up -d --no-build --no-deps <service>
 
 Without `--no-deps`, `up` also recreates every dependency of the named service whose configuration changed. Every service with a database depends on PostgreSQL through its migration job, and PostgreSQL gets the admin login and every database password from `.env`. So after a database password changes, redeploying one service without `--no-deps` would also recreate PostgreSQL, restarting the database under every service, along with any other dependency whose settings changed. `--no-build` keeps each build a separate, deliberate step, one image at a time. Recreate PostgreSQL only on purpose, with `docker compose up -d --no-build --no-deps postgres`, when it must see a new database password.
 
-The gateway needs nothing after a service redeploy, because it resolves service names on each request. Recreate it only when `infra/nginx/life-os.conf.template` or its `.env` settings change: `docker compose up -d --no-build --no-deps --force-recreate gateway`. See [Redeploying services and the gateway](docs/operations/deployment.md#redeploying-services-and-the-gateway).
+The gateway needs nothing after a service redeploy, because it resolves service names on each request. It does ask the Dashboard's sign-in check for every service route, so while the Dashboard is being recreated the API answers `503 auth_unavailable` for a few seconds. Recreate it only when `infra/nginx/life-os.conf.template` or its `.env` settings change: `docker compose up -d --no-build --no-deps --force-recreate gateway`. See [Redeploying services and the gateway](docs/operations/deployment.md#redeploying-services-and-the-gateway).
 
 ## 9. Remote access
 

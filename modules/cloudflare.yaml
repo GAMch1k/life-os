@@ -8,4 +8,4 @@ order: 50
 setup: cloudflare
 compose:
   services: [cloudflared]
-settings: [LIFE_OS_CLOUDFLARE_*, LIFE_OS_CLOUDFLARED_IMAGE, LIFE_OS_CF_ACCESS_*]
+settings: [LIFE_OS_CLOUDFLARE_*, LIFE_OS_CLOUDFLARED_IMAGE, LIFE_OS_CF_ACCESS_*, LIFE_OS_REQUIRE_CLOUDFLARE_ACCESS]

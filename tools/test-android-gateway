@@ -59,6 +59,7 @@ mkdir -m 755 "$releases/lifeos-wear-9.9.9-98.apk"
 template=$repo_root/infra/nginx/life-os.conf.template
 gateway_args=(-e NGINX_ENTRYPOINT_QUIET_LOGS=1 -e NGINX_ENVSUBST_FILTER=^LIFE_OS_
   -e LIFE_OS_PUBLIC_HOSTNAME=lifeos.example.com -e LIFE_OS_GATEWAY_BIND_ADDRESS=127.0.0.1 -e LIFE_OS_MODULES=
+  -e LIFE_OS_REQUIRE_CLOUDFLARE_ACCESS=
   -v "$repo_root/infra/nginx/server-names.envsh:/docker-entrypoint.d/16-lifeos-server-names.envsh:ro"
   -v "$repo_root/infra/nginx/modules.envsh:/docker-entrypoint.d/17-lifeos-modules.envsh:ro"
   -v "$repo_root/infra/nginx/module-routes:/etc/nginx/lifeos/module-routes:ro")

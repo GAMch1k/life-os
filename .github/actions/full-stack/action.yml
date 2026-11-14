@@ -195,6 +195,12 @@ runs:
       env:
         LIFE_OS_VERIFY_LOGS_DIR: ${{ runner.temp }}/compose-logs/smoke-gateway-recreate
       run: timeout --kill-after=1m 10m tools/smoke-gateway-recreate
+    - name: Accounts end to end (tools/smoke-accounts)
+      if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+      shell: bash
+      env:
+        LIFE_OS_VERIFY_LOGS_DIR: ${{ runner.temp }}/compose-logs/smoke-accounts
+      run: timeout --kill-after=1m 10m tools/smoke-accounts
     - name: Voice worker crash recovery (tools/smoke-voice-lease-recovery)
       if: ${{ !cancelled() && steps.build.outcome == 'success' && inputs.modules != 'core' }}
       shell: bash

@@ -10,7 +10,8 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v3"
-	"github.com/gofiber/fiber/v3/middleware/cors"
+
+	"github.com/GAMch1k/life-os/pkg/identity"
 )
 
 const (
@@ -48,6 +49,8 @@ type settings struct {
 	readiness       ReadinessCheck
 	shutdownTimeout time.Duration
 	idGenerator     func() string
+	trustedKeys     *identity.KeySet
+	keysErr         error
 }
 
 // Option customizes the runtime without hiding Fiber behind an abstraction.
@@ -82,6 +85,15 @@ func WithShutdownTimeout(timeout time.Duration) Option {
 	}
 }
 
+// WithTrustedKeys verifies identity tokens with keys instead of the ones
+// LIFE_OS_TRUSTED_KEYS lists (tests, tools).
+func WithTrustedKeys(keys *identity.KeySet) Option {
+	return func(s *settings) {
+		s.trustedKeys = keys
+		s.keysErr = nil
+	}
+}
+
 // withIDGenerator is intentionally private; it makes identifier generation
 // deterministic in tests without adding a production customization surface.
 func withIDGenerator(generate func() string) Option {
@@ -104,6 +116,7 @@ func New(service string, options ...Option) *App {
 		shutdownTimeout: defaultShutdownTimeout,
 		idGenerator:     newID,
 	}
+	s.trustedKeys, s.keysErr = identity.KeySetFromEnv()
 	for _, option := range options {
 		if option != nil {
 			option(&s)
@@ -122,16 +135,21 @@ func New(service string, options ...Option) *App {
 	app.ready.Store(true)
 
 	fiberApp.Use(requestContext(s.idGenerator))
-	// Services are consumed directly by the local dashboard during development.
-	// They do not use cookie or authorization credentials, so permissive CORS is
-	// safe here and keeps the service boundary visible to the browser. Browser
-	// writes say who makes them in X-Life-OS-Actor (pkg/activity).
-	fiberApp.Use(cors.New(cors.Config{
-		AllowOrigins: []string{"*"},
-		AllowHeaders: []string{"Content-Type", RequestIDHeader, CorrelationIDHeader, "X-Life-OS-Actor"},
-	}))
+	// No CORS: browsers reach services only through the gateway, on Life
+	// OS's own origin, and the Dashboard's development proxies; a page on
+	// another site gets no answer it can read (docs/architecture/multi-user.md
+	// #browser-security).
 	fiberApp.Use(requestLogger(logger))
 	fiberApp.Use(recoverPanic(logger))
+	// Who calls: the identity token the gateway's auth check minted, when the
+	// request has one (pkg/identity). /health and /ready stay open.
+	if s.keysErr != nil {
+		logger.Error("identity: "+identity.TrustedKeysEnv+" is not valid: requests with an identity token are refused", "error", s.keysErr)
+		s.trustedKeys = nil
+	} else if s.trustedKeys.Len() == 0 {
+		logger.Warn("identity: " + identity.TrustedKeysEnv + " is empty: requests with an identity token are refused")
+	}
+	fiberApp.Use(identity.Middleware(identity.NewVerifier(s.trustedKeys, nil), HealthPath, ReadyPath))
 	app.registerHealthRoutes()
 
 	return app

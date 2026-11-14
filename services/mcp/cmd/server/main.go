@@ -11,6 +11,7 @@ import (
 	_ "time/tzdata" // the owner's timezone resolves in any image
 
 	"github.com/GAMch1k/life-os/pkg/activity"
+	"github.com/GAMch1k/life-os/pkg/identity"
 	"github.com/GAMch1k/life-os/services/mcp/internal/config"
 	"github.com/GAMch1k/life-os/services/mcp/internal/coreclient"
 	"github.com/google/uuid"
@@ -120,7 +121,18 @@ func run(ctx context.Context) error {
 	mux.Handle("/mcp", mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return s }, nil))
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{"status":"ok"}`)) })
 	mux.HandleFunc("/ready", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{"status":"ready"}`)) })
-	return http.ListenAndServe(fmt.Sprintf(":%d", cfg.Port), mux)
+	// The gateway's identity token, when a request has one (pkg/identity):
+	// an invalid one is refused. MCP's actor stays agent:mcp until MCP
+	// clients sign in with OAuth (P21-06).
+	keys, err := identity.KeySetFromEnv()
+	if err != nil {
+		return err
+	}
+	if keys.Len() == 0 {
+		fmt.Fprintln(os.Stderr, "identity: "+identity.TrustedKeysEnv+" is empty: requests with an identity token are refused")
+	}
+	handler := identity.Handler(identity.NewVerifier(keys, nil), mux, "/health", "/ready")
+	return http.ListenAndServe(fmt.Sprintf(":%d", cfg.Port), handler)
 }
 
 // addReadTool registers a read tool that GETs path plus the caller's URL
