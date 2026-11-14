@@ -593,6 +593,12 @@ describe("CSRF and Origin", { skip }, () => {
       "sec-fetch-site": "same-origin",
     });
     assert.equal(sameOrigin.status, 204);
+    // The installed app's share sheet: a navigation the person started.
+    const share = await w.owner.check("POST", "/share", {
+      origin: "null",
+      "sec-fetch-site": "none",
+    });
+    assert.equal(share.status, 204);
     // Reads need neither.
     assert.equal(
       (await w.owner.check("GET", "/api/tasks/v1/tasks", { origin: "" }))

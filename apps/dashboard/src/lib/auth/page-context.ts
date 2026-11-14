@@ -10,13 +10,7 @@ import { firstAccountExists } from "./store";
  * the server: who this request is, and the server's facts they show.
  */
 
-/** A `next` page to go back to after signing in: same site, a path only. */
-export function safeNext(value: string | string[] | undefined): string {
-  const next = Array.isArray(value) ? value[0] : value;
-  if (!next || !next.startsWith("/") || next.startsWith("//")) return "/";
-  if (/^\/(login|setup|reset)(\/|\?|$)/.test(next)) return "/";
-  return next;
-}
+export { safeNext } from "./safe-next";
 
 export type LoginContext = {
   publicUrl: string;

@@ -41,10 +41,19 @@ export function isOwnOrigin(headers: HeaderSource, origin: string): boolean {
 }
 
 /**
+ * Sec-Fetch-Site values a browser sends for a request a page of Life OS
+ * made (same-origin), or the person started themselves (none: typing the
+ * address, a bookmark, the installed app's share sheet). A page on another
+ * site can produce neither.
+ */
+const OWN_SITE = new Set(["same-origin", "none"]);
+
+/**
  * The CSRF rule for a request authenticated by the session cookie: an
  * unsafe method needs Origin equal to Life OS's own, or Sec-Fetch-Site
- * same-origin. A cookie alone proves nothing: SameSite=Lax still lets a
- * sibling subdomain (the ntfy hostname) send it.
+ * same-origin or none (as /share's isShareFromApp, src/lib/share.ts). A
+ * cookie alone proves nothing: SameSite=Lax still lets a sibling subdomain
+ * (the ntfy hostname) send it.
  */
 export function cookieWriteAllowed(
   method: string,
@@ -52,10 +61,10 @@ export function cookieWriteAllowed(
 ): boolean {
   if (!isUnsafeMethod(method)) return true;
   const site = headers.get("sec-fetch-site");
-  if (site && site !== "same-origin") return false;
+  if (site && !OWN_SITE.has(site)) return false;
   const origin = headers.get("origin");
   if (origin && origin !== "null") return isOwnOrigin(headers, origin);
-  return site === "same-origin";
+  return site !== null && OWN_SITE.has(site);
 }
 
 /**
@@ -69,7 +78,7 @@ export function anonymousWriteAllowed(
 ): boolean {
   if (!isUnsafeMethod(method)) return true;
   const site = headers.get("sec-fetch-site");
-  if (site && site !== "same-origin" && site !== "none") return false;
+  if (site && !OWN_SITE.has(site)) return false;
   const origin = headers.get("origin");
   if (origin && origin !== "null") return isOwnOrigin(headers, origin);
   return true;
