@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Accounts end to end, on the disposable verification stack only, with the
+# real images: the gateway, the Dashboard's sign-in and auth check, and the
+# services verifying its identity tokens (docs/install/accounts.md). It
+#  - creates the first account with a setup code from the Dashboard's
+#    container (./setup.sh setup-code's command), and signs in with it;
+#  - writes a Task through the gateway with the session cookie and no
+#    X-Life-OS-Actor: Tasks takes the actor from the identity token (user);
+#  - checks that a forged identity, a made-up cookie, and a cookie write
+#    from another site are refused, and that /internal/ is closed;
+#  - turns legacy access off on the host (legacy-access off): a request
+#    without a sign-in is 401, the session still works; and on again;
+#  - signs everyone out (sign-out-all): the session is dead.
+# The stack starts with legacy access on (tools/verify-compose), as an
+# upgraded install does.
+
+compose=(./tools/verify-compose)
+gateway=http://127.0.0.1:13001
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+work=$(mktemp -d)
+cleanup() {
+  "${compose[@]}" down --volumes --remove-orphans >/dev/null
+  rm -rf "$work"
+}
+trap cleanup EXIT
+fail() {
+  echo "accounts smoke: $*" >&2
+  exit 1
+}
+password='correct horse battery staple 42'
+jar=$work/cookies
+
+"${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
+scale=()
+if "${compose[@]}" config --services | grep -qx processor; then scale=(--scale processor=0); fi
+"${compose[@]}" up --detach --no-build "${scale[@]}" >/dev/null
+
+for _ in $(seq 1 120); do
+  curl --fail --silent --max-time 3 "$gateway/api/tasks/ready" >/dev/null && break
+  sleep 1
+done
+curl --fail --silent --max-time 3 "$gateway/api/tasks/ready" >/dev/null || fail 'Tasks does not answer through the gateway with legacy access on'
+account() { "${compose[@]}" exec -T dashboard node scripts/lifeos-auth.mjs "$@"; }
+# request <method> <path> [curl options…]: status in $code, body in $work/body
+request() {
+  local method=$1 path=$2
+  shift 2
+  code=$(curl --silent --max-time 15 --request "$method" --output "$work/body" --write-out '%{http_code}' "$@" "$gateway$path")
+}
+expect() { # <status> <method> <path> [curl options…]
+  local want=$1
+  shift
+  request "$@"
+  [[ "$code" == "$want" ]] || { cat "$work/body" >&2; fail "$1 $2: $code, want $want"; }
+}
+
+echo '==> The first account, with a setup code'
+code_line=$(account setup-code | sed -n 's/^Setup code: //p')
+[[ -n "$code_line" ]] || fail 'setup-code printed no code'
+expect 200 POST /api/auth/sign-up/email --cookie-jar "$jar" -H 'content-type: application/json' \
+  -H "origin: $gateway" -H "x-lifeos-setup-code: $code_line" \
+  --data "{\"username\":\"owner\",\"password\":\"$password\"}"
+grep -q '00000000-0000-4000-8000-000000000001' "$work/body" || fail 'the first account did not get the fixed id'
+grep -q '__Host-lifeos.session' "$jar" || fail 'no session cookie'
+expect 403 POST /api/auth/sign-up/email -H 'content-type: application/json' -H "origin: $gateway" \
+  -H "x-lifeos-setup-code: $code_line" --data "{\"username\":\"second\",\"password\":\"$password\"}"
+[[ -z "$(account setup-code --if-no-account)" ]] || fail 'a setup code while an account exists'
+
+echo '==> A write with the session: the actor is the user'
+expect 201 POST /api/tasks/v1/tasks --cookie "$jar" -H 'content-type: application/json' -H "origin: $gateway" \
+  --data '{"title":"Accounts smoke task"}'
+task_id=$(jq -r .id "$work/body")
+[[ "$task_id" =~ ^[0-9a-f-]{36}$ ]] || fail "no task id: $(cat "$work/body")"
+for _ in $(seq 1 20); do
+  request GET "/api/activity/v1/activity-events?subjectType=task&subjectId=$task_id" --cookie "$jar"
+  [[ "$code" == 200 ]] && jq -e '[.items[]? | select(.type == "task.created")] | length > 0' "$work/body" >/dev/null && break
+  sleep 0.5
+done
+jq -e '[.items[] | select(.type == "task.created")][0].actor.kind == "user"' "$work/body" >/dev/null \
+  || fail "the task was not created as the user: $(cat "$work/body")"
+
+echo '==> Refusals'
+expect 401 GET /api/tasks/v1/tasks --cookie '__Host-lifeos.session=made-up.token'
+expect 403 POST /api/tasks/v1/tasks --cookie "$jar" -H 'content-type: application/json' \
+  -H 'origin: https://elsewhere.example' --data '{"title":"cross-site"}'
+expect 200 GET /api/tasks/v1/tasks --cookie "$jar" -H 'X-Life-OS-Identity: forged.token.value'
+expect 404 GET /internal/auth/check --cookie "$jar"
+expect 404 GET /internal/status
+
+echo '==> Legacy access off on the host'
+account legacy-access off >/dev/null
+sleep 6
+expect 401 GET /api/tasks/v1/tasks
+grep -q '"unauthenticated"' "$work/body" || fail 'the 401 is not JSON unauthenticated'
+expect 307 GET /tasks
+expect 200 GET /api/tasks/v1/tasks --cookie "$jar"
+account legacy-access on >/dev/null
+sleep 6
+expect 200 GET /api/tasks/v1/tasks
+
+echo '==> Sign everyone out'
+account sign-out-all >/dev/null
+expect 200 GET /api/tasks/v1/tasks
+account legacy-access off >/dev/null
+sleep 6
+expect 401 GET /api/tasks/v1/tasks --cookie "$jar"
+expect 200 POST /api/auth/sign-in/username --cookie-jar "$jar" -H 'content-type: application/json' \
+  -H "origin: $gateway" --data "{\"username\":\"OWNER\",\"password\":\"$password\"}"
+expect 200 GET /api/tasks/v1/tasks --cookie "$jar"
+
+echo 'accounts smoke: ok'

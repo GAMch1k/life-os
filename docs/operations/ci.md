@@ -106,7 +106,7 @@ In order:
 3. **The Whisper model** (`ggml-small.bin`, 466 MB, the `.env.example` default) from the Actions cache, under a key made of its file name and URL; on a miss it is downloaded from Hugging Face and saved at once, so a failed run keeps it too. `LIFE_OS_VERIFY_OVERLAYS=tools/fixtures/whisper-models.compose.yaml` mounts it read-only into the verification stack's Whisper, which would otherwise download it into a fresh volume at every start (each smoke starts its own stack).
 4. **The images**: `docker compose build --pull`, all of them at once, every module's (`COMPOSE_PROFILES` lists every module from `tools/lib/modules.bash`; the throwaway `.env` has none), as `make life-up` would. The release publishes these very images.
 5. **Playwright**: `npm ci` and `npx playwright install --with-deps chromium firefox`, so the voice test records in Firefox too.
-6. **The smokes**, each on a stack of its own that it removes when it ends, with every optional module the verification stack runs (`tools/verify-compose`: all but `cloudflare` and `ntfy`, which never run there; never `.env`'s `COMPOSE_PROFILES`): `make life-smoke`, `tools/smoke-e2e`, `make verify-clean-db`, `tools/smoke-action-idempotency`, `tools/smoke-gateway-recreate`, and `tools/smoke-voice-lease-recovery` (the real whisper.cpp). Every smoke runs, even after another one failed.
+6. **The smokes**, each on a stack of its own that it removes when it ends, with every optional module the verification stack runs (`tools/verify-compose`: all but `cloudflare` and `ntfy`, which never run there; never `.env`'s `COMPOSE_PROFILES`): `make life-smoke`, `tools/smoke-e2e`, `make verify-clean-db`, `tools/smoke-action-idempotency`, `tools/smoke-gateway-recreate`, `tools/smoke-accounts` (the first account, a session through the gateway to a service, legacy access off and on, and signing everyone out, on the real images), and `tools/smoke-voice-lease-recovery` (the real whisper.cpp). Every smoke runs, even after another one failed.
 7. **The browser suite**: `tools/browser-e2e --grep-invert @codex`, Chromium and Firefox, with Playwright's two workers. `tools/browser-e2e` hands the stack's modules to the tests (`LIFE_OS_E2E_MODULES`); a test tagged with a module that is off skips itself (`@ai`, `@voice`, `@banking`, `@google-calendar`, `@server-health`).
 8. **Teardown**, whatever happened: `tools/verify-compose down --volumes --remove-orphans`.
 
@@ -165,7 +165,7 @@ export LIFE_OS_WHISPER_MODELS_DIR=/tmp/whisper-models \
 COMPOSE_PROFILES=$(bash -c '. tools/lib/modules.bash; IFS=,; echo "${module_ids[*]}"') docker compose build --pull
 npm ci --prefix apps/dashboard && (cd apps/dashboard && npx playwright install --with-deps chromium firefox)
 make life-smoke && tools/smoke-e2e && make verify-clean-db && tools/smoke-action-idempotency \
-  && tools/smoke-gateway-recreate && tools/smoke-voice-lease-recovery
+  && tools/smoke-gateway-recreate && tools/smoke-accounts && tools/smoke-voice-lease-recovery
 tools/browser-e2e --grep-invert @codex
 ```
 
