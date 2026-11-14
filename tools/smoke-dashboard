@@ -68,10 +68,14 @@ expect_page() { # <path> <text>...
 expect_page / 'Finance' "Dashboard smoke task" "Dashboard smoke event"
 expect_page /inbox "Dashboard smoke capture"
 
-curl --fail --silent --show-error --request OPTIONS \
-  -H 'Origin: http://localhost:3000' \
+# No CORS (P21-03): a page on another site gets no answer it may read.
+preflight=$(curl --silent --show-error --request OPTIONS \
+  -H 'Origin: https://elsewhere.example' \
   -H 'Access-Control-Request-Method: POST' \
   -H 'Access-Control-Request-Headers: content-type' \
-  --dump-header - --output /dev/null "$inbox/v1/inbox-items" | \
-  tr -d '\r' | grep --ignore-case --quiet '^access-control-allow-origin: \*$'
+  --dump-header - --output /dev/null "$inbox/v1/inbox-items" | tr -d '\r')
+if grep --ignore-case --quiet '^access-control-allow-origin:' <<<"$preflight"; then
+  printf 'smoke: a service answered a cross-origin preflight with CORS headers\n' >&2
+  exit 1
+fi
 printf 'dashboard smoke checks passed\n'

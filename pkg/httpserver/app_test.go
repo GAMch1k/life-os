@@ -3,6 +3,9 @@ package httpserver
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -11,8 +14,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gofiber/fiber/v3"
+
+	"github.com/GAMch1k/life-os/pkg/identity"
 )
 
 func TestRequestContextAndStructuredLog(t *testing.T) {
@@ -78,12 +84,12 @@ func TestInvalidIncomingIDsAreNotReflected(t *testing.T) {
 	}
 }
 
-func TestCORSAllowsDashboardJSONRequests(t *testing.T) {
+func TestNoCORS(t *testing.T) {
 	app := New("test")
 	app.Post("/captures", func(c fiber.Ctx) error { return c.SendStatus(fiber.StatusCreated) })
 
 	req := httptest.NewRequest(http.MethodOptions, "/captures", nil)
-	req.Header.Set("Origin", "http://localhost:3000")
+	req.Header.Set("Origin", "https://evil.example")
 	req.Header.Set("Access-Control-Request-Method", http.MethodPost)
 	req.Header.Set("Access-Control-Request-Headers", "content-type")
 	resp, err := app.Test(req)
@@ -91,14 +97,113 @@ func TestCORSAllowsDashboardJSONRequests(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != fiber.StatusNoContent {
-		t.Fatalf("preflight status = %d, want %d", resp.StatusCode, fiber.StatusNoContent)
+	for _, name := range []string{"Access-Control-Allow-Origin", "Access-Control-Allow-Headers", "Access-Control-Allow-Methods"} {
+		if got := resp.Header.Get(name); got != "" {
+			t.Fatalf("%s = %q, want none", name, got)
+		}
 	}
-	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "*" {
-		t.Fatalf("allow origin = %q, want wildcard", got)
+}
+
+func identityKey(t *testing.T, kid string) (*identity.KeySet, func(map[string]any) string) {
+	t.Helper()
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := resp.Header.Get("Access-Control-Allow-Headers"); !strings.Contains(strings.ToLower(got), "content-type") {
-		t.Fatalf("allow headers = %q, want content-type", got)
+	jwks, _ := json.Marshal(map[string]any{"keys": []any{map[string]string{
+		"kty": "OKP", "crv": "Ed25519", "kid": kid, "x": base64.RawURLEncoding.EncodeToString(public),
+	}}})
+	set, err := identity.ParseKeySet(string(jwks))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encode := func(v any) string {
+		raw, _ := json.Marshal(v)
+		return base64.RawURLEncoding.EncodeToString(raw)
+	}
+	sign := func(claims map[string]any) string {
+		input := encode(map[string]string{"alg": "EdDSA", "typ": "lifeos-id+jwt", "kid": kid}) + "." + encode(claims)
+		return input + "." + base64.RawURLEncoding.EncodeToString(ed25519.Sign(private, []byte(input)))
+	}
+	return set, sign
+}
+
+func TestIdentityTokenIsVerifiedWhenPresent(t *testing.T) {
+	keys, sign := identityKey(t, "auth-test")
+	app := New("test", WithLogger(NewJSONLogger(io.Discard, nil)), WithTrustedKeys(keys))
+	app.Get("/who", func(c fiber.Ctx) error {
+		p, ok := identity.FromFiber(c)
+		fromContext, _ := identity.FromContext(c.Context())
+		if !ok {
+			return c.SendString("nobody")
+		}
+		if fromContext.UserID != p.UserID {
+			return c.SendString("context differs")
+		}
+		return c.SendString(p.UserID.String() + " " + p.Via)
+	})
+	now := time.Now()
+	valid := sign(map[string]any{
+		"iss": "lifeos-auth", "aud": "lifeos-services", "sub": "00000000-0000-4000-8000-000000000001",
+		"sid": "s1", "via": "session", "role": "owner", "iat": now.Unix(), "nbf": now.Unix(),
+		"exp": now.Add(5 * time.Minute).Unix(), "jti": "j1",
+	})
+	expired := sign(map[string]any{
+		"iss": "lifeos-auth", "aud": "lifeos-services", "sub": "00000000-0000-4000-8000-000000000001",
+		"sid": "s1", "via": "session", "role": "owner", "exp": now.Add(-time.Hour).Unix(),
+	})
+	call := func(path, token string) (int, string) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		if token != "" {
+			req.Header.Set(identity.Header, token)
+		}
+		resp, err := app.Test(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(body)
+	}
+	if status, body := call("/who", ""); status != 200 || body != "nobody" {
+		t.Fatalf("without a token: %d %s", status, body)
+	}
+	if status, body := call("/who", valid); status != 200 || body != "00000000-0000-4000-8000-000000000001 session" {
+		t.Fatalf("with a valid token: %d %s", status, body)
+	}
+	for _, bad := range []string{expired, "garbage", valid + "x"} {
+		status, body := call("/who", bad)
+		var envelope struct {
+			Error struct{ Code string } `json:"error"`
+		}
+		_ = json.Unmarshal([]byte(body), &envelope)
+		if status != 401 || envelope.Error.Code != "unauthenticated" {
+			t.Fatalf("with a bad token: %d %s", status, body)
+		}
+	}
+	if status, _ := call(HealthPath, "garbage"); status != 200 {
+		t.Fatalf("/health with a bad token: %d", status)
+	}
+}
+
+func TestIdentityWithoutKeysRefusesTokens(t *testing.T) {
+	_, sign := identityKey(t, "auth-test")
+	t.Setenv(identity.TrustedKeysEnv, "")
+	app := New("test", WithLogger(NewJSONLogger(io.Discard, nil)))
+	app.Get("/who", func(c fiber.Ctx) error { return c.SendString("ok") })
+	now := time.Now()
+	req := httptest.NewRequest(http.MethodGet, "/who", nil)
+	req.Header.Set(identity.Header, sign(map[string]any{
+		"iss": "lifeos-auth", "aud": "lifeos-services", "sub": "00000000-0000-4000-8000-000000000001",
+		"via": "session", "exp": now.Add(time.Minute).Unix(),
+	}))
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 401 {
+		t.Fatalf("status = %d", resp.StatusCode)
 	}
 }
 
