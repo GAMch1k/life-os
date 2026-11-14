@@ -1,6 +1,6 @@
 # Multi-user design
 
-Status: design for Phase 21 (P21-02). Nothing on this page is built yet; the tickets P21-03 to P21-14 build it in the order of [Rollout](#rollout). The owner's product decisions of November 2026 are binding and are not argued again here; this page turns them into an architecture and records the technical decisions taken on the way. The login trial (P21-01) chose the library and measured it; its numbers are quoted where they matter.
+Status: design for Phase 21 (P21-02). P21-03 is built: accounts, sign-in, server roles, the gateway's auth check, identity tokens, and legacy access ([As built in P21-03](#as-built-in-p21-03) lists where it differs from this page); the tickets P21-04 to P21-14 build the rest in the order of [Rollout](#rollout). The owner's product decisions of November 2026 are binding and are not argued again here; this page turns them into an architecture and records the technical decisions taken on the way. The login trial (P21-01) chose the library and measured it; its numbers are quoted where they matter.
 
 ## Where we start
 
@@ -493,6 +493,26 @@ Each step is checked by row counts: every table has as many rows after as before
 - **`pkg/identity`**: expired, not yet valid, wrong audience, `alg: none`, unknown `kid`, an assertion replayed to another service, a rotation with two keys.
 - **Upgrade**: `tools/test-upgrade` starts the previous release's images on the verification stack with fixtures, updates to the build, and checks row counts, legacy access, the setup code, and a login.
 - **Content-free diagnostics**, as in [Logs](#logs).
+
+### As built in P21-03
+
+P21-03 follows this page, with these differences and details, each for the reason given:
+
+- **Better Auth 1.7.22**, pinned exactly with its plugins, and `@better-auth/core` pinned by an npm override (the passkey plugin's peer range would otherwise pull 1.7.23's core next to 1.7.22's). 1.7.23 fixes no advisory against 1.7.22 (only MCP and OAuth-provider bugs), so the trial's version stayed.
+- **No `organization` plugin yet.** Spaces come with P21-07; until then the check computes `sp` and `psp`: the first account owns its personal space `…0002`, by the fixed id, and no other account has one. No other account can exist yet: sign-up needs the setup code while no account exists, and invites, Better Auth's `admin/create-user`, and email sign-in are off.
+- **Identity tokens are signed with `node:crypto`** (Ed25519, compact JWS), not `jose`: the same format with no extra dependency. `pkg/identity` verifies a token the Dashboard minted (a fixture) to prove both sides agree.
+- **The check is a Next.js route handler** (`/internal/auth/check`), not a second listener; its latency was measured to decide (see the P21-03 ticket). The Dashboard's own pages and routes run the same check in Next.js's proxy (`src/proxy.ts`, Node runtime), which also renews the session cookie once a day; the gateway's check only reads.
+- **Legacy access before any account** mints a token for the first account's fixed ids, as it will once the account exists, rather than sending none. **Under legacy access the activity actor still comes from `X-Life-OS-Actor`** (the gateway still lets `user` and `dev:<name>` through), so development tools keep their `dev:` attribution until personal tokens exist (P21-06); a signed-in session's actor is `user` whatever the header says.
+- **`Authorization` headers are no credential until P21-06**: the check ignores them (a request with one and no cookie is legacy access, or 401), so nothing that sends one today breaks. Better Auth's `bearer` plugin is off.
+- **The per-username delay** after failed sign-ins (5 free, then 15 s doubling to 15 minutes) is kept per username *and* address, in memory, so that a stranger cannot lock the person out from elsewhere; Better Auth's own limit (3 sign-ins per 10 s per address) and the gateway's `lifeos_auth` zone (2 r/s, burst 20) bound guessing from many addresses.
+- **Every browser write to `/api/auth/` needs Life OS's own origin**, with or without a cookie (Better Auth checks only requests that carry its cookies), so a form on another site cannot sign anyone in or out (login CSRF).
+- **Better Auth's admin endpoints** are open to the owner and admins only with TOTP or a passkey and a session younger than 12 hours (`SECOND_FACTOR_REQUIRED`, `SESSION_NOT_FRESH`); only the owner changes roles, never to or from owner and never their own; the owner cannot be banned or deleted; impersonation, `create-user`, `set-user-password`, and `update-user` are off. P21-04 builds the admin pages on them; `checkAdmin` (`src/lib/auth/roles.ts`) is the gate its pages use.
+- **`LIFE_OS_INSECURE_LOGIN_HOSTS`** works: on a listed plain-HTTP host a second Better Auth instance sets a non-Secure host-only `lifeos.session` cookie, which the check reads only on that host; it has no passkeys. Empty by default, as decided.
+- **The legacy access reminder** is a banner in the Dashboard, once a day while legacy access is on and an account exists; before the first account the header's account button points to `/setup`.
+- **The monitor reads `/internal/status`** on the private network (no service assertion until P21-07), and the Dashboard's server-side rendering still calls services without a token, which they accept until P21-07; the development proxies attach the token, as designed.
+- **MCP's `401` carries no `WWW-Authenticate` yet**: there is no OAuth for it to point to until P21-06. MCP verifies a token when present like every service (`identity.Handler`).
+- **`./setup.sh sign-out-all`** deletes every session and bumps every `authz_version` (keys, tokens, grants, invites, and pairing codes do not exist yet); **`rotate-keys`** takes `auth` (or `all`, the same), and in a clone of the repository prints the two `docker compose` commands to run instead of running them.
+- **`./setup.sh up` and `update` wait for the services from inside the Dashboard's container**, since their routes at the gateway need a sign-in now.
 
 ## Risks and decisions
 

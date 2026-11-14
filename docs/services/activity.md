@@ -58,6 +58,8 @@ Two endpoints are deliberately not gated:
 
 The public gateway passes only `user` and `dev:<name>`: a claim to be the Life OS AI (`agent:`) or a component (`system:`) is dropped, so such a write fails the gate. See [Networking](../architecture/networking.md).
 
+A request through the gateway also carries the identity token of its sign-in (`X-Life-OS-Identity`, verified by `pkg/identity`). When it names a person who signed in, the actor is `user` and the header is not needed (nor read); under [legacy access](../install/accounts.md#legacy-access), a request with no sign-in, the header still names the actor, as before accounts, so development tools keep their `dev:<name>`. An invalid token is refused with `401 unauthenticated` before the gate.
+
 ### Recorded events
 
 | Type | Source | Subject | Notes |

@@ -1,0 +1,87 @@
+# Accounts and signing in
+
+Life OS has accounts and a login. The first account is the server's **owner**; it owns everything that was in Life OS before. Second accounts (family members) come with a later version: until then the owner's account is the only one, and nobody can sign up.
+
+How it works inside is in [Multi-user design](../architecture/multi-user.md); this page is what you do with it.
+
+## The first account
+
+The first account needs a one-time **setup code** from the server. Whoever can run commands on the server owns Life OS: that is the trust root, and also the way back in when you are locked out ([Locked out](#locked-out)).
+
+1. On the server, in the directory with `setup.sh`:
+
+   ```sh
+   ./setup.sh setup-code
+   ```
+
+   It prints a code such as `K7QM-2XRP-9VDA-H4TC`. `./setup.sh up` and `./setup.sh update` print one by themselves while no account exists. A code works once, for 24 hours; a new one replaces the old one.
+
+2. Open Life OS at its HTTPS address (or `http://localhost:3000` through an SSH tunnel), go to **/setup**, and enter the code, a username, and a password of at least 10 characters. A name and an email address are optional: the email is only shown, never used to sign in or to send anything.
+
+3. Life OS signs you in and opens **Settings → Security**. Turn on two-factor sign-in there next ([Two-factor sign-in](#two-factor-sign-in)): the owner needs it before the admin pages of later versions open.
+
+In a clone of the repository (the reference server), the same command runs in the Dashboard's container: `docker compose exec -T dashboard node scripts/lifeos-auth.mjs setup-code`.
+
+## Signing in
+
+**/login** asks for the username and the password, then, with two-factor on, for the 6-digit code of your authenticator app (or one of your recovery codes). With a passkey you sign in with your phone's or computer's screen lock alone. A session lasts 30 days from its last use, in that browser.
+
+Signing in works only where the browser can keep the session cookie safe: at an `https://` address, or at `localhost` and `127.0.0.1` (an SSH tunnel). At a plain-HTTP address, such as a WireGuard address `http://10.8.0.1:3000`, the login page says to use the HTTPS address instead, because anyone on the way could read the password and the session. To allow it anyway on such a host, list it in `LIFE_OS_INSECURE_LOGIN_HOSTS` in `.env` (comma-separated, such as `10.8.0.1`) and recreate the Dashboard. Passkeys never work there.
+
+Usernames are not case-sensitive. After five wrong passwords for one username from one address, the next attempt from there waits 15 seconds, then twice as long after each further failure, up to 15 minutes; the gateway and Better Auth also limit each address. The person, signing in from elsewhere, is not slowed down.
+
+## Settings → Security
+
+The person icon in the header opens **Settings → Security** (`/settings/security`):
+
+| Section | What you can do |
+| --- | --- |
+| **Authenticator app** | Turn on two-factor sign-in with an authenticator app (scan the QR code, or type the key), get ten recovery codes, make new ones, or turn it off. Each needs your password. |
+| **Passkeys** | Add a passkey (your phone's or computer's screen lock), or remove one. Passkeys work at the public address (`LIFE_OS_PUBLIC_URL`) only. |
+| **Password** | Change it; every other session is signed out. |
+| **Where you are signed in** | Every session, with its browser and last use: sign one out, or every one but this. |
+| **Legacy access** | The owner only: turn [legacy access](#legacy-access) off or on. |
+
+Adding a passkey needs a sign-in from the last 12 hours; Life OS asks you to sign in again otherwise.
+
+### Two-factor sign-in
+
+An authenticator app (Google Authenticator, Aegis, 1Password, and others) shows a new 6-digit code every 30 seconds. Turn it on, scan the QR code, enter the code the app shows, and keep the ten **recovery codes** somewhere safe, such as a password manager: each signs you in once if your phone is not at hand. A passkey counts as two-factor too.
+
+## Legacy access
+
+Before accounts, whoever reached Life OS was its owner. **Legacy access** keeps it that way while it is on: a request without a sign-in acts as the first account, exactly as before. A request that does carry a sign-in is always that account's.
+
+- It is **on** after updating an install from before accounts (`./setup.sh update` writes `LIFE_OS_LEGACY_ACCESS=on` into `.env`), so that nothing changes for you, your browsers, and the phone and watch apps, which send no Life OS sign-in yet.
+- It is **off** on a new install.
+- While it is on and an account exists, the Dashboard reminds you once a day. The pages that are new with accounts (Settings → Security) need a real sign-in all the same.
+- Turn it off in **Settings → Security** once the phone and watch apps are paired with your account (they learn to pair in a later version). From then on, everything needs a sign-in. On the server: `./setup.sh legacy-access off` (or `on`, or no argument to see it). Turning it back on is refused while more than one account exists.
+
+`LIFE_OS_LEGACY_ACCESS` in `.env` counts only once, the first time the Dashboard uses its database; afterwards the switch in Settings and the command decide.
+
+## Locked out
+
+- **Forgot the password:** on the server, `./setup.sh recover-owner` prints a one-time link to set a new one (`https://…/reset/<code>`). It works once, for 24 hours, and signs out every session of the account.
+- **Lost the authenticator app and the recovery codes:** `./setup.sh recover-owner --reset-2fa` does the same and also turns two-factor off; turn it on again afterwards.
+
+## Sign everyone out
+
+For an emergency (a stolen laptop, a leaked database copy, anything that looks like someone else got in): `./setup.sh sign-out-all` signs out every session of every account, yours too, at once; everyone signs in again with their password and two-factor. `--keep-devices` will keep paired devices signed in once devices exist. With Cloudflare Access in front, end its sessions too: [Cloudflare → Sign everyone out](../operations/cloudflare.md#sign-everyone-out). If the keys in `.env` may have leaked as well, rotate them ([Keys](#keys)).
+
+## Keys
+
+`setup.sh` writes three secrets into `.env` at the first setup, and `./setup.sh update` adds them to an older `.env`:
+
+| Setting | What it is |
+| --- | --- |
+| `LIFE_OS_AUTH_SECRET` | Signs the session cookies and encrypts the two-factor secrets in the database. A backup of the accounts database is of little use without it: **keep `.env` with your backups**. |
+| `LIFE_OS_IDENTITY_SIGNING_KEY` | The Ed25519 private key with which the Dashboard signs the short identity tokens the gateway hands the services. Only the Dashboard has it. |
+| `LIFE_OS_TRUSTED_KEYS` | The public keys the services accept tokens from: the signing key's (and during a rotation the previous one too). |
+
+`./setup.sh rotate-keys` makes a new signing key: the services trust the new and the current key first, then the Dashboard signs with the new one; the older key is dropped at the next rotation. Rotate after a suspected leak; there is no schedule. In a clone of the repository it prints the two `docker compose` commands to run instead.
+
+To make the keys by hand (a clone set up without `setup.sh`), see how `setup.sh` does it (`identity_key_pair`): an Ed25519 key from `openssl genpkey -algorithm ed25519`, written as a JWK with a `kid`, and `LIFE_OS_TRUSTED_KEYS='{"keys":[<the same JWK without "d">]}'`. `LIFE_OS_AUTH_SECRET` is `openssl rand -hex 32`.
+
+## Cloudflare Access
+
+With the Cloudflare Tunnel, the gateway still requires Cloudflare Access's token on every request through the tunnel, as before. Life OS's login comes on top. Once you trust the login alone, `LIFE_OS_REQUIRE_CLOUDFLARE_ACCESS=off` in `.env` (then recreate the gateway) makes it the only gate on the tunnel; the Access application must then let the hostname through ([Cloudflare](../operations/cloudflare.md)).

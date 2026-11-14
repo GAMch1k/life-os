@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Life OS's account commands on the host (docs/operations/accounts.md):
+// Life OS's account commands on the host (docs/install/accounts.md):
 // ./setup.sh runs them inside the Dashboard's container, which has auth_db's
 // URL and the public address in its environment:
 //

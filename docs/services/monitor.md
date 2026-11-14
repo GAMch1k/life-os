@@ -4,7 +4,7 @@ The monitor tells the owner when Life OS breaks or recovers. It reads the Status
 
 ```mermaid
 flowchart LR
-  Monitor -- "GET /api/status, every minute" --> Dashboard
+  Monitor -- "GET /internal/status, every minute" --> Dashboard
   Dashboard -- "probes" --> Sources["processor /status, Inbox and Voice backlogs, Calendar sources, notification channels, every service's /ready"]
   Monitor -- "pkg/notify" --> Notifications
   Dashboard -. "/ready" .-> Monitor
@@ -12,7 +12,7 @@ flowchart LR
 
 ## What it watches
 
-The rules that decide whether something is ok, a warning, or a problem live in one place, the Dashboard's `src/lib/runtime-status.ts` (see [Dashboard](../frontend/dashboard.md)). The monitor never re-implements them. It reads their result from the Dashboard's `GET /api/status` on the private network (`MONITOR_STATUS_URL`, `http://dashboard:3000/api/status` in Compose). That route returns `getRuntimeStatus()`, the checks the Status page renders, as JSON. It is evaluated on every request (`cache-control: no-store`) and contains nothing the Status page does not show:
+The rules that decide whether something is ok, a warning, or a problem live in one place, the Dashboard's `src/lib/runtime-status.ts` (see [Dashboard](../frontend/dashboard.md)). The monitor never re-implements them. It reads their result from the Dashboard's `GET /internal/status` on the private network (`MONITOR_STATUS_URL`, `http://dashboard:3000/internal/status` in Compose); the gateway answers `/internal/` with 404, and browsers read the same payload at `/api/status`, behind the sign-in. That route returns `getRuntimeStatus()`, the checks the Status page renders, as JSON. It is evaluated on every request (`cache-control: no-store`) and contains nothing the Status page does not show:
 
 ```json
 {
@@ -76,7 +76,7 @@ The monitor keeps its state in memory. The Notifications history is its memory a
 
 | Variable | Default | Compose |
 | --- | --- | --- |
-| `MONITOR_STATUS_URL` | `http://localhost:3000/api/status` | `http://dashboard:3000/api/status` |
+| `MONITOR_STATUS_URL` | `http://localhost:3000/api/status` | `http://dashboard:3000/internal/status` |
 | `NOTIFICATIONS_SERVICE_URL` | empty: changes are only logged | `http://notifications:8080` (empty on the verification stack, so the browser suite's notification counts stay its own) |
 | `MONITOR_INTERVAL_SECONDS` | `60` (5–3600) | `LIFE_OS_MONITOR_INTERVAL_SECONDS` |
 | `MONITOR_CONFIRMATIONS` | `2` (1–10) | `LIFE_OS_MONITOR_CONFIRMATIONS` |

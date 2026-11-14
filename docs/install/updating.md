@@ -26,10 +26,11 @@ sha256sum -c SHA256SUMS
 `./setup.sh update`:
 
 1. backs up every database, and stops if that fails (`--skip-backup` updates without a backup);
-2. adds the settings the new `.env.example` has and your `.env` lacks, with new passwords where needed, and lists them. Coming from a release before [modules](modules.md) (up to `v0.1.0-preview.5`, when every module ran), it first turns on the modules your install used and says which ([Updating an install from before modules](modules.md#updating-an-install-from-before-modules));
+2. adds the settings the new `.env.example` has and your `.env` lacks, with new passwords and keys where needed, and lists them. Coming from a release before [accounts](accounts.md), that includes the accounts' secret and keys, and `LIFE_OS_LEGACY_ACCESS=on`, so that Life OS keeps working without a sign-in, as before, until you create your account and turn [legacy access](accounts.md#legacy-access) off. Coming from a release before [modules](modules.md) (up to `v0.1.0-preview.5`, when every module ran), it first turns on the modules your install used and says which ([Updating an install from before modules](modules.md#updating-an-install-from-before-modules));
 3. downloads the new version's images (the core's, and those of the modules that are on), and stops without changing anything if that fails;
 4. with AI processing on Claude Code, adds Claude Code to the new version's processor image on your server ([What it downloads](ai-processing.md#what-it-downloads)), and stops without changing anything if that fails;
-5. writes the new version into `.env`, removes the containers of modules that are off, restarts what changed, and waits until Life OS answers. On the way up, `postgres-provision` creates any database the new version adds (with the password step 2 added), and each service's migrations bring its database up to date.
+5. writes the new version into `.env`, removes the containers of modules that are off, restarts what changed, and waits until Life OS answers. On the way up, `postgres-provision` creates any database the new version adds (with the password step 2 added), and each service's migrations bring its database up to date;
+6. while Life OS has no account yet, prints a one-time setup code for the first one ([Accounts](accounts.md#the-first-account)).
 
 Your `.env`, your data, and your backups stay as they are.
 

@@ -58,7 +58,7 @@ COPY --from=build /app/next.config.ts ./next.config.ts
 COPY --from=build /app/public ./public
 COPY --from=build /app/package.json ./package.json
 # The account commands ./setup.sh runs in this container (setup-code,
-# recover-owner, legacy-access, sign-out-all; docs/operations/accounts.md).
+# recover-owner, legacy-access, sign-out-all; docs/install/accounts.md).
 COPY --from=build /app/scripts/lifeos-auth.mjs ./scripts/lifeos-auth.mjs
 USER node
 EXPOSE 3000

@@ -26,7 +26,7 @@ flowchart LR
   RecipeImport -- "outbound HTTP(S)" --> Pages[recipe pages, social posts]
   RecipeImport -- "POST /v1/recipes" --> Food
   RecipeImport -. record .-> Activity
-  Monitor -- "GET /api/status" --> Dashboard
+  Monitor -- "GET /internal/status" --> Dashboard
   Monitor -- notify --> Notifications
   Backup -- "pg_dump, read-only role" --> PG[(every service database)]
   Backup --> BDir[(host backup directory)]
@@ -49,7 +49,7 @@ flowchart LR
   OpenAPI --> TS[Generated dashboard types]
 ```
 
-The dashboard consumes API contracts rather than databases. OpenAPI is the cross-language transport source of truth; generated DTOs may differ from internal domain types. PostgreSQL is one server for local simplicity, not a shared application database.
+The Dashboard also runs the sign-in: Better Auth on its own database, `auth_db`, and the auth check the gateway asks for every service route, which hands the services a short identity token they verify with pinned public keys ([Multi-user design](multi-user.md), [Networking → Sign-in at the gateway](networking.md#sign-in-at-the-gateway)). Apart from `auth_db`, the dashboard consumes API contracts rather than databases. OpenAPI is the cross-language transport source of truth; generated DTOs may differ from internal domain types. PostgreSQL is one server for local simplicity, not a shared application database.
 
 MCP uses service APIs to perform semantic actions and records an Inbox audit trail; it must not bypass ownership with database access. When an entity becomes editable, its lifecycle is implemented once in the owning service and shared by the Dashboard and MCP. Tasks are the reference implementation; other domains are not retrofitted ahead of their own tickets. See [Editable entities and UI/agent parity](editable-entities.md). Voice/STT asynchronously turns an uploaded recording into an Inbox item, then uses that same MCP path. The Voice worker is intentionally separate from web request handling, so audio transcription does not hold a browser request open.
 
@@ -61,7 +61,7 @@ Notifications is the one path by which any service lets the owner know about som
 
 Banking is an integration service: it owns everything bank-side (the Enable Banking adapter, the read-only consent and its sealed session, the sync schedule within the banks' four-reads-a-day limit, consent reminders) and hands accounts and transactions to Finance only through Finance's bank import API, so Finance never calls a bank and Banking never touches Finance's data. Integrations are routed under `/api/integrations/<name>/`. See [Banking](../services/banking.md).
 
-The monitor is a small internal service without a database or a gateway route. Once a minute it reads the Dashboard's runtime status (`GET /api/status`, the checks the Status page renders) and notifies the owner through Notifications when a check breaks or recovers. The rules that make something a problem therefore exist once, in the Dashboard. See [Monitor](../services/monitor.md).
+The monitor is a small internal service without a database or a gateway route. Once a minute it reads the Dashboard's runtime status (`GET /internal/status`, the checks the Status page renders) and notifies the owner through Notifications when a check breaks or recovers. The rules that make something a problem therefore exist once, in the Dashboard. See [Monitor](../services/monitor.md).
 
 The backup service is the one component that reads every database, and it only reads: once a night it dumps each database in the registry with `pg_dump` as `lifeos_backup`, a role that can read every table but change nothing, from one consistent snapshot per database, into a directory on the host, and rotates old runs. It has no database of its own and no gateway route. See [Backup](../services/backup.md).
 

@@ -141,6 +141,10 @@ For the human check, open `https://lifeos.example.com` from a phone on mobile da
 - **Update the connector:** bump the pinned image in `compose.yaml`, then `docker compose up -d --no-build --no-deps cloudflared`.
 - **After redeploying services,** nothing more is needed: the gateway resolves service names at request time (within 10 seconds of a redeploy; see [Networking → Upstream addresses](../architecture/networking.md#upstream-addresses)). Recreate it (`docker compose up -d --no-build --no-deps --force-recreate gateway`) only after changing `infra/nginx/life-os.conf.template` or its settings in `.env` (`LIFE_OS_PUBLIC_HOSTNAME`, `LIFE_OS_GATEWAY_BIND_ADDRESS`, `LIFE_OS_GATEWAY_PORT`). The connector keeps working.
 
+### Access and Life OS's own login
+
+The gateway refuses every request that comes through the tunnel without Access's token (`Cf-Access-Jwt-Assertion`), so a route that bypasses Access cannot serve Life OS. Life OS's own login ([Accounts](../install/accounts.md)) comes on top. `LIFE_OS_REQUIRE_CLOUDFLARE_ACCESS` in `.env` sets the first rule: empty (the default), `on`, or anything but `off`, `no`, `false`, or `0` keeps it; `off` drops it, and Life OS's login is then the only gate on the tunnel. Recreate the gateway after a change. The owner decided to keep Access in front during the beta ([Multi-user design](../architecture/multi-user.md#risks-and-decisions)).
+
 ### Rotate and revoke
 
 - **Tunnel token** (leaked, or a scheduled rotation): create a new tunnel, or rotate the token if the dashboard offers it, and add the same routes `lifeos.example.com → http://gateway:80` (with JWT validation) and `ntfy.example.com → http://ntfy:80` (without Access). Put the new token in `.env`, run `docker compose up -d --no-build --no-deps cloudflared`, check that the old tunnel shows no connectors, and delete it. The Access application belongs to the hostname, so protection is unaffected.

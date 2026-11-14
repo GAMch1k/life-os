@@ -10,7 +10,7 @@ Inbox's capture images (the photos of letters and receipts on the volume `lifeos
 
 Not backed up, and why (see [What is backed up](../services/backup.md#what-is-backed-up)):
 
-- `.env` and `~/life-os.secrets`: every password and key. Keep them yourself, apart from the backups (a password manager). Without `LIFE_OS_BANKING_TOKEN_KEY` and `LIFE_OS_GOOGLE_TOKEN_KEY` a restored bank session and Google connection must be connected again.
+- `.env` and `~/life-os.secrets`: every password and key. Keep them yourself, apart from the backups (a password manager). Without `LIFE_OS_BANKING_TOKEN_KEY` and `LIFE_OS_GOOGLE_TOKEN_KEY` a restored bank session and Google connection must be connected again; without `LIFE_OS_AUTH_SECRET` a restored `auth_db` (the accounts) keeps its passwords and passkeys, but every session is invalid and every two-factor secret unreadable, so two-factor must be reset (`./setup.sh recover-owner --reset-2fa`, [Accounts](../install/accounts.md#locked-out)).
 - The Enable Banking key file and the Codex session (`~/.codex`).
 - Voice audio (kept 7 days, its text is in Inbox and Voice), the Whisper models (downloaded again), and ntfy's data (provisioned from `.env` at every start).
 - The code and `infra/`, which are in Git.

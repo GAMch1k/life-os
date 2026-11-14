@@ -18,10 +18,10 @@ The first six jobs run in parallel. `full-stack` and `full-stack-core` wait for 
 
 | Job | What it runs | Time | Locally |
 | --- | --- | --- | --- |
-| `check-generated` | `tools/check --gateway --contracts --sqlc --install-bundle --modules`: the gateway's host list, the OpenAPI lint, generated Go and TypeScript API drift, sqlc drift, the release bundle's `deploy/compose.yaml` ([releases](releases.md#the-install-bundle)), and the module manifests and what they generate ([modules](../architecture/modules.md)); then `tools/test-gateway-modules`, the gateway's routes of modules that are off, in throwaway nginx containers, and `tools/test-publish-android-release`, the Android release publisher against scratch directories and a made-up GitHub ([Android releases](android-releases.md#checks)) | about 1 min | `tools/check --gateway --contracts --sqlc --install-bundle --modules`, `tools/test-gateway-modules`, and `tools/test-publish-android-release` |
+| `check-generated` | `tools/check --gateway --contracts --sqlc --install-bundle --modules`: the gateway's host list, the OpenAPI lint, generated Go and TypeScript API drift, sqlc drift, the release bundle's `deploy/compose.yaml` ([releases](releases.md#the-install-bundle)), and the module manifests and what they generate ([modules](../architecture/modules.md)); then `tools/test-gateway-modules`, the gateway's routes of modules that are off, in throwaway nginx containers, `tools/test-gateway-auth`, the gateway's sign-in ([The gateway's sign-in](#the-gateways-sign-in)), and `tools/test-publish-android-release`, the Android release publisher against scratch directories and a made-up GitHub ([Android releases](android-releases.md#checks)) | about 1 min | `tools/check --gateway --contracts --sqlc --install-bundle --modules`, `tools/test-gateway-modules`, `tools/test-gateway-auth`, and `tools/test-publish-android-release` |
 | `check-go` | `tools/check --go --setup`: gofmt, `go vet`, `go test`, and the build of every module under `pkg/`, `services/`, and `templates/` (`GOWORK=off`); then shellcheck and `tools/test-setup`, the tests of the install bundle's `setup.sh` with `docker` and `curl` stubbed (about 15 s) | about 1 min | `tools/check --go --setup` |
 | `check-dashboard` | `tools/check --dashboard`: Prettier, ESLint, the unit tests, the typecheck, and `next build` | about 1.5 min | `tools/check --dashboard` |
-| `integration` | `tools/test-integration` against a PostgreSQL service container | about 2 min | [Integration tests](#integration-tests) |
+| `integration` | `tools/test-integration` against a PostgreSQL service container, the [auth flow suite](#the-auth-flow-suite) included (after `npm ci --prefix apps/dashboard`) | about 2.5 min | [Integration tests](#integration-tests) |
 | `check-cla` | `node --test .github/cla/cla.test.js`: the [CLA check](#cla-check)'s logic against a fake GitHub API | seconds | `node --test .github/cla/cla.test.js` (Node 22, nothing to install) |
 | `govulncheck` | `tools/check-vulnerabilities`: govulncheck on every Go module. A finding fails the run. | about 2 min | `tools/check-vulnerabilities` |
 | `full-stack` | The images, then the smokes and the browser suite (without the `@codex` tests) on the verification stack, with every optional module it can run | 14 to 19 min: 6.5 to 10 to build, 7 to 8 to test | [Full-stack tests](#full-stack-tests) |
@@ -67,7 +67,7 @@ The integration tests (the `*_integration_test.go` files, the backup tests, and 
 - Each variable a test reads gets a fresh, empty database of its own (services whose tests install pgcrypto do it once per database, each under its own advisory lock, so two services' tests never race on one database), dropped and created again on every run: `TASKS_TEST_DATABASE_URL` gets `it_tasks`, `BACKUP_TEST_DATABASE_URL` gets `it_backup`, and so on, plus `RESTORE_TEST_DATABASE_URL` for `tools/test-restore-database`. `DATABASE_TEST_URL` (`pkg/database`) gets `it_database` with its example migration.
 - The tests need nothing more. Each service's tests create a private schema per test, apply the service's migrations to it, and drop it afterwards. The backup and restore tests create their own roles and databases, which is why the login must be a superuser. Google Calendar's tests also build and start the real Calendar service on a schema of their own.
 - `psql`, `pg_dump`, and `pg_restore` run from the PostgreSQL image (the wrappers in `services/backup/internal/backup/testdata`), so they always match the server's version. That needs Docker. To use client programs on `PATH` instead, set `INTEGRATION_TEST_PG_BIN` to their directory.
-- It finds the modules by the variables they read. Then it runs `GOWORK=off go test -count=1 -v ./...` in each module with every variable set, and finally `tools/test-restore-database`.
+- It finds the modules by the variables they read. Then it runs `GOWORK=off go test -count=1 -v ./...` in each module with every variable set, then `tools/test-restore-database`, and finally `tools/test-auth`, the [auth flow suite](#the-auth-flow-suite), when the Dashboard's `node_modules` are there (CI installs them; locally it says it skipped it).
 - It prints the passed, skipped, and failed counts per module. It fails when a test fails, or when a test still skips with "… is not set": a new variable it does not know yet.
 
 Locally, with a throwaway PostgreSQL that is deleted when it stops (one heavy job at a time on a small server):
@@ -81,6 +81,19 @@ docker stop lifeos-it-pg
 `tools/test-integration services/finance` runs one module's tests and skips the restore tool's test.
 
 In CI, the job's PostgreSQL is a service container of the image `compose.yaml` deploys (`LIFE_OS_POSTGRES_IMAGE`'s default, `postgres:18.6-alpine` pinned by digest). Its first step fails if the two differ. After a PostgreSQL upgrade or a new digest ([Dependabot](#dependabot)), change `services.postgres.image` in `ci.yml` to match.
+
+### The auth flow suite
+
+`tools/test-auth` runs the Dashboard's auth flow suite (`apps/dashboard/test/auth/flow.test.ts`, 53 checks) against a throwaway PostgreSQL superuser URL (`AUTH_TEST_DATABASE_URL`, else `INTEGRATION_TEST_DATABASE_URL`). It makes databases of its own (`it_auth_<random>`, dropped afterwards), applies auth_db's migrations, and runs Better Auth with the Dashboard's own configuration, made-up keys, and stand-in browsers that call the same handlers the Next.js routes mount (nothing listens on a port). It refuses a server that has a Life OS database. It covers the login trial's checks as P21-03 answers them (organizations, API keys, JWT, OAuth, and impersonation answer 404 until their tickets), and the setup code (expiry, single use, replacement), sign-in by username, TOTP and recovery codes, passkeys (a software authenticator), the session cookie's attributes, the identity token (claims, cache, re-minting on a role change), legacy access on and off, CSRF and Origin, plain-HTTP hosts, rate limits and the per-username delay, Better Auth's admin endpoints behind a second factor and a fresh session, a banned user, signing everyone out, `recover-owner`, a key rotation, password hashes compatible with Better Auth's, and that auth_db's migrations are everything Better Auth expects (an upgrade that changes its schema fails here until a migration is written). Locally:
+
+```sh
+npm ci --prefix apps/dashboard
+AUTH_TEST_DATABASE_URL=postgres://postgres:test@127.0.0.1:55442/postgres tools/test-auth
+```
+
+### The gateway's sign-in
+
+`tools/test-gateway-auth` runs the gateway's nginx with its configuration (made-up hosts) next to a stand-in Dashboard, whose auth check answers by a made-up cookie, and one stand-in for every service, in throwaway containers on a network of their own. It checks that every service location asks the check and turns its refusals into JSON, that a service gets the check's identity token and never a client's copy, the cookie, or an `Authorization` header, that the public routes and the Dashboard's locations need no check, that `/internal/` is 404 from outside, that `/android/` needs a sign-in, and both values of `LIFE_OS_REQUIRE_CLOUDFLARE_ACCESS`. It needs Docker and pulls only the nginx image.
 
 ## Full-stack tests
 
