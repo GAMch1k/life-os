@@ -25,13 +25,21 @@ type Store interface {
 	RecordActivityEvent(context.Context, store.RecordActivityEventParams) (store.ActivityEvent, error)
 	GetActivityEvent(context.Context, pgtype.UUID) (store.ActivityEvent, error)
 	ListActivityEvents(context.Context, store.ListActivityEventsParams) ([]store.ActivityEvent, error)
+	RecordDiagnosticEvent(context.Context, store.RecordDiagnosticEventParams) error
+	ListDiagnosticEvents(context.Context, store.ListDiagnosticEventsParams) ([]store.DiagnosticEvent, error)
+	SummarizeDiagnosticEvents(context.Context, pgtype.Timestamptz) ([]store.SummarizeDiagnosticEventsRow, error)
+	DeleteDiagnosticEventsBefore(context.Context, pgtype.Timestamptz) (int64, error)
 }
 
-type Handler struct{ store Store }
+type Handler struct {
+	store Store
+	now   func() time.Time
+	prune *pruner
+}
 
 var _ generated.ServerInterface = (*Handler)(nil)
 
-func NewHandler(s Store) *Handler { return &Handler{store: s} }
+func NewHandler(s Store) *Handler { return &Handler{store: s, now: time.Now, prune: &pruner{}} }
 
 const maxDataBytes = 16 << 10
 
@@ -169,6 +177,9 @@ func recordParams(body generated.ActivityEventCreateRequest) (store.RecordActivi
 	if body.CausationId != nil {
 		params.CausationID = pgtype.UUID{Bytes: *body.CausationId, Valid: true}
 	}
+	if body.ActorUserId != nil {
+		params.ActorUserID = pgtype.UUID{Bytes: *body.ActorUserId, Valid: true}
+	}
 	return params, nil
 }
 
@@ -191,6 +202,10 @@ func output(event store.ActivityEvent) generated.ActivityEvent {
 	if event.CausationID.Valid {
 		causation := types.UUID(event.CausationID.Bytes)
 		result.CausationId = &causation
+	}
+	if event.ActorUserID.Valid {
+		user := types.UUID(event.ActorUserID.Bytes)
+		result.ActorUserId = &user
 	}
 	return result
 }

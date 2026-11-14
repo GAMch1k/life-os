@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"runtime"
 	"runtime/debug"
 	"strings"
 	"time"
@@ -11,6 +12,8 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
+
+	"github.com/GAMch1k/life-os/pkg/diagnostics"
 )
 
 const (
@@ -86,26 +89,43 @@ func CorrelationIDFromContext(ctx context.Context) string {
 	return value
 }
 
-func requestLogger(logger *slog.Logger) fiber.Handler {
+// requestLogger logs every answer with ids, the route pattern, the status,
+// and the error code, never what the request carried: a path's segments
+// (which may be a search term), a query string, a body, or an error's
+// message, which for a client's error (4xx) often quotes what was sent. A
+// server error's cause (5xx) is logged: those are the service's own failures
+// (the database, the network), and handlers keep content out of them.
+// Server errors are also counted as diagnostics (pkg/diagnostics).
+func requestLogger(logger *slog.Logger, recorder *diagnostics.Recorder) fiber.Handler {
 	return func(c fiber.Ctx) error {
 		started := time.Now()
 		err := c.Next()
 		status := c.Response().StatusCode()
+		code := ""
 		if err != nil {
-			status, _, _ = publicError(err)
+			status, code, _ = publicError(err)
 		}
+		if c.Locals(panicKey) == true {
+			code = string(diagnostics.Panic)
+		}
+		took := time.Since(started)
+		route := c.Route().Path
 
 		attributes := []any{
 			"request_id", RequestID(c),
 			"correlation_id", CorrelationID(c),
 			"method", c.Method(),
-			"path", c.Path(),
+			"route", route,
 			"status", status,
-			"duration_ms", time.Since(started).Milliseconds(),
+			"duration_ms", took.Milliseconds(),
 		}
-		if err != nil {
+		if code != "" {
+			attributes = append(attributes, "code", code)
+		}
+		if err != nil && status >= 500 {
 			attributes = append(attributes, "error", err)
 		}
+		recorder.Answer(status, code, route, RequestID(c), took)
 
 		level := slog.LevelInfo
 		if status >= 500 {
@@ -118,14 +138,33 @@ func requestLogger(logger *slog.Logger) fiber.Handler {
 	}
 }
 
+// panicKey marks a request whose handler panicked, for its log line and
+// diagnostics.
+type panicMarker struct{}
+
+var panicKey = panicMarker{}
+
+// panicValue is what the log says a panic was: the runtime's own errors (a
+// nil pointer, an index out of range) are facts about the code; anything
+// else a handler panicked with is named by its type only, since it may hold
+// what the request carried.
+func panicValue(recovered any) string {
+	if err, ok := recovered.(runtime.Error); ok {
+		return err.Error()
+	}
+	return fmt.Sprintf("%T", recovered)
+}
+
 func recoverPanic(logger *slog.Logger) fiber.Handler {
 	return func(c fiber.Ctx) (err error) {
 		defer func() {
 			if recovered := recover(); recovered != nil {
+				c.Locals(panicKey, true)
 				logger.ErrorContext(c.Context(), "panic recovered",
 					"request_id", RequestID(c),
 					"correlation_id", CorrelationID(c),
-					"panic", fmt.Sprint(recovered),
+					"route", c.Route().Path,
+					"panic", panicValue(recovered),
 					"stack", string(debug.Stack()),
 				)
 				err = NewError(fiber.StatusInternalServerError, "internal_error", "Internal Server Error")

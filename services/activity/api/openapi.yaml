@@ -55,6 +55,58 @@ paths:
       responses:
         '200': {description: Activity event, content: {application/json: {schema: {$ref: '#/components/schemas/ActivityEvent'}}}}
         '404': {description: Event not found}
+  /v1/diagnostic-events:
+    get:
+      summary: List server diagnostics
+      description: >-
+        For the server's admins (docs/architecture/multi-user.md#logs):
+        newest first by lastAt. Diagnostics carry codes, ids, counts,
+        durations, and times, never content. A request with an identity
+        token must be an owner or admin who signed in (legacy access is
+        refused); one without is an internal caller, such as the Dashboard
+        after its own admin check.
+      operationId: listDiagnosticEvents
+      security: []
+      parameters:
+        - {name: service, in: query, schema: {type: string, pattern: '^[a-z][a-z0-9-]{0,63}$'}}
+        - {name: code, in: query, schema: {$ref: '#/components/schemas/DiagnosticCode'}}
+        - {name: from, in: query, description: Inclusive lower bound on lastAt., schema: {type: string, format: date-time}}
+        - {name: to, in: query, description: Exclusive upper bound on lastAt., schema: {type: string, format: date-time}}
+        - {name: cursor, in: query, schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 200, default: 50}}
+      responses:
+        '200': {description: Diagnostics, content: {application/json: {schema: {$ref: '#/components/schemas/DiagnosticEventList'}}}}
+        '400': {description: Invalid request}
+        '401': {description: Legacy access; sign in}
+        '403': {description: Not an admin}
+    post:
+      summary: Record server diagnostics
+      description: >-
+        Internal endpoint for services (pkg/diagnostics sends a batch once a
+        minute). Every field is checked: an unknown code, a route that is no
+        route pattern, or anything else that could carry text is refused.
+        The gateway does not expose this method. Rows older than 90 days are
+        deleted.
+      operationId: recordDiagnosticEvents
+      security: []
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/DiagnosticBatch'}}}}
+      responses:
+        '202': {description: Recorded, content: {application/json: {schema: {$ref: '#/components/schemas/DiagnosticRecorded'}}}}
+        '400': {description: Invalid request}
+        '403': {description: A person's request}
+  /v1/diagnostic-events/summary:
+    get:
+      summary: Count server diagnostics by service and code
+      description: For the server's admins, as listDiagnosticEvents.
+      operationId: summarizeDiagnosticEvents
+      security: []
+      parameters:
+        - {name: hours, in: query, description: 'The window, in hours, ending now.', schema: {type: integer, minimum: 1, maximum: 2160, default: 24}}
+      responses:
+        '200': {description: Counts, content: {application/json: {schema: {$ref: '#/components/schemas/DiagnosticSummary'}}}}
+        '400': {description: Invalid request}
+        '401': {description: Legacy access; sign in}
+        '403': {description: Not an admin}
 components:
   schemas:
     ActivityOutcome:
@@ -91,6 +143,7 @@ components:
         correlationId: {type: string, minLength: 1, maxLength: 128}
         causationId: {type: string, format: uuid, description: Event that directly caused this one.}
         actor: {$ref: '#/components/schemas/ActivityActor'}
+        actorUserId: {type: string, format: uuid, description: 'The person the action is for: the user who signed in (or the first account under legacy access), also when a development tool or the AI acts for them. Absent for a service''s own work.'}
         outcome: {$ref: '#/components/schemas/ActivityOutcome'}
         summary: {type: string, minLength: 1, maxLength: 500, description: Short human-readable sentence.}
         data: {type: object, additionalProperties: true, description: Small structured details for diagnostics.}
@@ -106,6 +159,7 @@ components:
         correlationId: {type: string}
         causationId: {type: string, format: uuid, nullable: true}
         actor: {$ref: '#/components/schemas/ActivityActor'}
+        actorUserId: {type: string, format: uuid, nullable: true}
         outcome: {$ref: '#/components/schemas/ActivityOutcome'}
         summary: {type: string}
         data: {type: object, additionalProperties: true}
@@ -117,3 +171,68 @@ components:
       properties:
         items: {type: array, items: {$ref: '#/components/schemas/ActivityEvent'}}
         nextCursor: {type: string, nullable: true}
+    DiagnosticCode:
+      type: string
+      description: What went wrong, from a fixed list (pkg/diagnostics).
+      enum: [internal_error, bad_gateway, service_unavailable, gateway_timeout, server_error, panic, not_ready, provider_unavailable, media_unavailable, google_rejected, google_unavailable, google_not_configured, banking_not_configured, food_unavailable, calendar_unavailable]
+    DiagnosticEventCreate:
+      type: object
+      required: [service, code, count, firstAt, lastAt]
+      additionalProperties: false
+      properties:
+        service: {type: string, pattern: '^[a-z][a-z0-9-]{0,63}$'}
+        code: {$ref: '#/components/schemas/DiagnosticCode'}
+        route: {type: string, maxLength: 128, pattern: '^(/[A-Za-z0-9_.:{}*+-]*)+$', description: 'The route pattern that answered, such as /v1/tasks/:taskId; never a request''s path.'}
+        status: {type: integer, minimum: 100, maximum: 599}
+        subjectId: {type: string, format: uuid}
+        requestId: {type: string, format: uuid}
+        count: {type: integer, minimum: 1}
+        durationMs: {type: integer, format: int64, minimum: 0}
+        firstAt: {type: string, format: date-time}
+        lastAt: {type: string, format: date-time}
+    DiagnosticBatch:
+      type: object
+      required: [events]
+      properties:
+        events: {type: array, maxItems: 1000, items: {$ref: '#/components/schemas/DiagnosticEventCreate'}}
+    DiagnosticRecorded:
+      type: object
+      required: [recorded]
+      properties:
+        recorded: {type: integer}
+    DiagnosticEvent:
+      type: object
+      required: [id, service, code, count, firstAt, lastAt, recordedAt]
+      properties:
+        id: {type: integer, format: int64}
+        service: {type: string}
+        code: {$ref: '#/components/schemas/DiagnosticCode'}
+        route: {type: string, nullable: true}
+        status: {type: integer, nullable: true}
+        subjectId: {type: string, format: uuid, nullable: true}
+        requestId: {type: string, format: uuid, nullable: true}
+        count: {type: integer}
+        durationMs: {type: integer, format: int64, nullable: true}
+        firstAt: {type: string, format: date-time}
+        lastAt: {type: string, format: date-time}
+        recordedAt: {type: string, format: date-time}
+    DiagnosticEventList:
+      type: object
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/DiagnosticEvent'}}
+        nextCursor: {type: string, nullable: true}
+    DiagnosticCount:
+      type: object
+      required: [service, code, count, lastAt]
+      properties:
+        service: {type: string}
+        code: {$ref: '#/components/schemas/DiagnosticCode'}
+        count: {type: integer, format: int64}
+        lastAt: {type: string, format: date-time}
+    DiagnosticSummary:
+      type: object
+      required: [since, items]
+      properties:
+        since: {type: string, format: date-time}
+        items: {type: array, items: {$ref: '#/components/schemas/DiagnosticCount'}}

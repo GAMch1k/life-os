@@ -58,6 +58,63 @@ func (e ActivityOutcome) Valid() bool {
 	}
 }
 
+// Defines values for DiagnosticCode.
+const (
+	BadGateway           DiagnosticCode = "bad_gateway"
+	BankingNotConfigured DiagnosticCode = "banking_not_configured"
+	CalendarUnavailable  DiagnosticCode = "calendar_unavailable"
+	FoodUnavailable      DiagnosticCode = "food_unavailable"
+	GatewayTimeout       DiagnosticCode = "gateway_timeout"
+	GoogleNotConfigured  DiagnosticCode = "google_not_configured"
+	GoogleRejected       DiagnosticCode = "google_rejected"
+	GoogleUnavailable    DiagnosticCode = "google_unavailable"
+	InternalError        DiagnosticCode = "internal_error"
+	MediaUnavailable     DiagnosticCode = "media_unavailable"
+	NotReady             DiagnosticCode = "not_ready"
+	Panic                DiagnosticCode = "panic"
+	ProviderUnavailable  DiagnosticCode = "provider_unavailable"
+	ServerError          DiagnosticCode = "server_error"
+	ServiceUnavailable   DiagnosticCode = "service_unavailable"
+)
+
+// Valid indicates whether the value is a known member of the DiagnosticCode enum.
+func (e DiagnosticCode) Valid() bool {
+	switch e {
+	case BadGateway:
+		return true
+	case BankingNotConfigured:
+		return true
+	case CalendarUnavailable:
+		return true
+	case FoodUnavailable:
+		return true
+	case GatewayTimeout:
+		return true
+	case GoogleNotConfigured:
+		return true
+	case GoogleRejected:
+		return true
+	case GoogleUnavailable:
+		return true
+	case InternalError:
+		return true
+	case MediaUnavailable:
+		return true
+	case NotReady:
+		return true
+	case Panic:
+		return true
+	case ProviderUnavailable:
+		return true
+	case ServerError:
+		return true
+	case ServiceUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
 // ActivityActor defines model for ActivityActor.
 type ActivityActor struct {
 	// Kind user = the owner; agent = the Life OS AI (for example the Inbox processor or MCP); system = a Life OS component such as the Voice worker; dev = a development tool or agent working on Life OS, such as Claude Code.
@@ -73,6 +130,7 @@ type ActivityActorKind string
 // ActivityEvent defines model for ActivityEvent.
 type ActivityEvent struct {
 	Actor         ActivityActor          `json:"actor"`
+	ActorUserId   *openapi_types.UUID    `json:"actorUserId,omitempty"`
 	CausationId   *openapi_types.UUID    `json:"causationId,omitempty"`
 	CorrelationId string                 `json:"correlationId"`
 	Data          map[string]interface{} `json:"data"`
@@ -91,6 +149,9 @@ type ActivityEvent struct {
 // ActivityEventCreateRequest defines model for ActivityEventCreateRequest.
 type ActivityEventCreateRequest struct {
 	Actor ActivityActor `json:"actor"`
+
+	// ActorUserId The person the action is for: the user who signed in (or the first account under legacy access), also when a development tool or the AI acts for them. Absent for a service's own work.
+	ActorUserId *openapi_types.UUID `json:"actorUserId,omitempty"`
 
 	// CausationId Event that directly caused this one.
 	CausationId   *openapi_types.UUID `json:"causationId,omitempty"`
@@ -134,6 +195,74 @@ type ActivitySubject struct {
 	Type string `json:"type"`
 }
 
+// DiagnosticBatch defines model for DiagnosticBatch.
+type DiagnosticBatch struct {
+	Events []DiagnosticEventCreate `json:"events"`
+}
+
+// DiagnosticCode What went wrong, from a fixed list (pkg/diagnostics).
+type DiagnosticCode string
+
+// DiagnosticCount defines model for DiagnosticCount.
+type DiagnosticCount struct {
+	// Code What went wrong, from a fixed list (pkg/diagnostics).
+	Code    DiagnosticCode `json:"code"`
+	Count   int64          `json:"count"`
+	LastAt  time.Time      `json:"lastAt"`
+	Service string         `json:"service"`
+}
+
+// DiagnosticEvent defines model for DiagnosticEvent.
+type DiagnosticEvent struct {
+	// Code What went wrong, from a fixed list (pkg/diagnostics).
+	Code       DiagnosticCode      `json:"code"`
+	Count      int                 `json:"count"`
+	DurationMs *int64              `json:"durationMs,omitempty"`
+	FirstAt    time.Time           `json:"firstAt"`
+	Id         int64               `json:"id"`
+	LastAt     time.Time           `json:"lastAt"`
+	RecordedAt time.Time           `json:"recordedAt"`
+	RequestId  *openapi_types.UUID `json:"requestId,omitempty"`
+	Route      *string             `json:"route,omitempty"`
+	Service    string              `json:"service"`
+	Status     *int                `json:"status,omitempty"`
+	SubjectId  *openapi_types.UUID `json:"subjectId,omitempty"`
+}
+
+// DiagnosticEventCreate defines model for DiagnosticEventCreate.
+type DiagnosticEventCreate struct {
+	// Code What went wrong, from a fixed list (pkg/diagnostics).
+	Code       DiagnosticCode      `json:"code"`
+	Count      int                 `json:"count"`
+	DurationMs *int64              `json:"durationMs,omitempty"`
+	FirstAt    time.Time           `json:"firstAt"`
+	LastAt     time.Time           `json:"lastAt"`
+	RequestId  *openapi_types.UUID `json:"requestId,omitempty"`
+
+	// Route The route pattern that answered, such as /v1/tasks/:taskId; never a request's path.
+	Route     *string             `json:"route,omitempty"`
+	Service   string              `json:"service"`
+	Status    *int                `json:"status,omitempty"`
+	SubjectId *openapi_types.UUID `json:"subjectId,omitempty"`
+}
+
+// DiagnosticEventList defines model for DiagnosticEventList.
+type DiagnosticEventList struct {
+	Items      []DiagnosticEvent `json:"items"`
+	NextCursor *string           `json:"nextCursor,omitempty"`
+}
+
+// DiagnosticRecorded defines model for DiagnosticRecorded.
+type DiagnosticRecorded struct {
+	Recorded int `json:"recorded"`
+}
+
+// DiagnosticSummary defines model for DiagnosticSummary.
+type DiagnosticSummary struct {
+	Items []DiagnosticCount `json:"items"`
+	Since time.Time         `json:"since"`
+}
+
 // ListActivityEventsParams defines parameters for ListActivityEvents.
 type ListActivityEventsParams struct {
 	// CorrelationId Return one workflow.
@@ -161,8 +290,31 @@ type ListActivityEventsParams struct {
 	Limit  *int       `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
+// ListDiagnosticEventsParams defines parameters for ListDiagnosticEvents.
+type ListDiagnosticEventsParams struct {
+	Service *string         `form:"service,omitempty" json:"service,omitempty"`
+	Code    *DiagnosticCode `form:"code,omitempty" json:"code,omitempty"`
+
+	// From Inclusive lower bound on lastAt.
+	From *time.Time `form:"from,omitempty" json:"from,omitempty"`
+
+	// To Exclusive upper bound on lastAt.
+	To     *time.Time `form:"to,omitempty" json:"to,omitempty"`
+	Cursor *string    `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit  *int       `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// SummarizeDiagnosticEventsParams defines parameters for SummarizeDiagnosticEvents.
+type SummarizeDiagnosticEventsParams struct {
+	// Hours The window, in hours, ending now.
+	Hours *int `form:"hours,omitempty" json:"hours,omitempty"`
+}
+
 // RecordActivityEventJSONRequestBody defines body for RecordActivityEvent for application/json ContentType.
 type RecordActivityEventJSONRequestBody = ActivityEventCreateRequest
+
+// RecordDiagnosticEventsJSONRequestBody defines body for RecordDiagnosticEvents for application/json ContentType.
+type RecordDiagnosticEventsJSONRequestBody = DiagnosticBatch
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
@@ -175,6 +327,15 @@ type ServerInterface interface {
 	// GetActivityEvent Get an activity event
 	// (GET /v1/activity-events/{eventId})
 	GetActivityEvent(c fiber.Ctx, eventId openapi_types.UUID) error
+	// ListDiagnosticEvents List server diagnostics
+	// (GET /v1/diagnostic-events)
+	ListDiagnosticEvents(c fiber.Ctx, params ListDiagnosticEventsParams) error
+	// RecordDiagnosticEvents Record server diagnostics
+	// (POST /v1/diagnostic-events)
+	RecordDiagnosticEvents(c fiber.Ctx) error
+	// SummarizeDiagnosticEvents Count server diagnostics by service and code
+	// (GET /v1/diagnostic-events/summary)
+	SummarizeDiagnosticEvents(c fiber.Ctx, params SummarizeDiagnosticEventsParams) error
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -333,6 +494,133 @@ func (siw *ServerInterfaceWrapper) GetActivityEvent(c fiber.Ctx) error {
 	return handler(c)
 }
 
+// ListDiagnosticEvents operation middleware
+func (siw *ServerInterfaceWrapper) ListDiagnosticEvents(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListDiagnosticEventsParams
+
+	var query url.Values
+	query, err = url.ParseQuery(string(c.Request().URI().QueryString()))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for query string: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "service" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "service", query, &params.Service, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter service: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "code" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "code", query, &params.Code, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter code: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "from" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "from", query, &params.From, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter from: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "to" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "to", query, &params.To, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter to: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", query, &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter cursor: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", query, &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter limit: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.ListDiagnosticEvents(c, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// RecordDiagnosticEvents operation middleware
+func (siw *ServerInterfaceWrapper) RecordDiagnosticEvents(c fiber.Ctx) error {
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.RecordDiagnosticEvents(c)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
+// SummarizeDiagnosticEvents operation middleware
+func (siw *ServerInterfaceWrapper) SummarizeDiagnosticEvents(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params SummarizeDiagnosticEventsParams
+
+	var query url.Values
+	query, err = url.ParseQuery(string(c.Request().URI().QueryString()))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for query string: %w", err).Error())
+	}
+
+	// ------------- Optional query parameter "hours" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "hours", query, &params.Hours, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter hours: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.SummarizeDiagnosticEvents(c, params)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
 // FiberServerOptions provides options for the Fiber server.
 type FiberServerOptions struct {
 	BaseURL            string
@@ -361,5 +649,11 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	router.Post(options.BaseURL+"/v1/activity-events", wrapper.RecordActivityEvent)
 
 	router.Get(options.BaseURL+"/v1/activity-events/:eventId", wrapper.GetActivityEvent)
+
+	router.Get(options.BaseURL+"/v1/diagnostic-events", wrapper.ListDiagnosticEvents)
+
+	router.Post(options.BaseURL+"/v1/diagnostic-events", wrapper.RecordDiagnosticEvents)
+
+	router.Get(options.BaseURL+"/v1/diagnostic-events/summary", wrapper.SummarizeDiagnosticEvents)
 
 }

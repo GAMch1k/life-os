@@ -60,7 +60,8 @@ func TestRequestContextAndStructuredLog(t *testing.T) {
 	assertLogValue(t, entry, "request_id", "incoming-request")
 	assertLogValue(t, entry, "correlation_id", "incoming-correlation")
 	assertLogValue(t, entry, "method", http.MethodGet)
-	assertLogValue(t, entry, "path", "/items/42")
+	// The route pattern, never the path: a segment may be a search term.
+	assertLogValue(t, entry, "route", "/items/:id")
 	assertLogValue(t, entry, "status", float64(fiber.StatusNoContent))
 }
 
@@ -237,7 +238,8 @@ func TestPanicIsControlledAndLogged(t *testing.T) {
 	if !strings.Contains(logs.String(), `"msg":"panic recovered"`) ||
 		!strings.Contains(logs.String(), `"service":"panic-service"`) ||
 		!strings.Contains(logs.String(), `"request_id":"panic-request"`) ||
-		!strings.Contains(logs.String(), `"panic":"boom"`) {
+		!strings.Contains(logs.String(), `"panic":"string"`) ||
+		strings.Contains(logs.String(), "boom") {
 		t.Fatalf("panic log missing required fields:\n%s", logs.String())
 	}
 }
