@@ -14,7 +14,11 @@
 #    tunnel route and is never served by the gateway;
 #  - upstreams are resolved at request time (BUG-37): the Life OS server uses
 #    Docker's DNS as its resolver, and every proxy_pass names its upstream
-#    through a variable, never a fixed host nginx would resolve only once.
+#    through a variable, never a fixed host nginx would resolve only once;
+#  - every location that proxies to a service (any upstream but the
+#    Dashboard) asks the auth check (auth_request /internal/auth/check), and
+#    /internal/ is closed to the outside, the check's own location internal
+#    (docs/architecture/multi-user.md#the-gateway).
 # See docs/architecture/networking.md and docs/operations/ntfy.md.
 # Usage: tools/check-gateway-hosts [nginx-template]
 set -euo pipefail
@@ -42,6 +46,7 @@ declare -A values
 IFS='|' read -r 'values[LIFE_OS_PUBLIC_HOSTNAME]' 'values[LIFE_OS_GATEWAY_BIND_ADDRESS]' <<<"$settings"
 # And, after infra/nginx/modules.envsh, the routes of the modules that are
 # off: every optional module's, as with the core alone.
+values[LIFE_OS_REQUIRE_CLOUDFLARE_ACCESS]=$(setting LIFE_OS_REQUIRE_CLOUDFLARE_ACCESS)
 values[LIFE_OS_GATEWAY_MODULE_ROUTES]=$(
   export LIFE_OS_MODULES='' LIFE_OS_MODULE_ROUTES_FILE=infra/nginx/module-routes
   # shellcheck source=infra/nginx/modules.envsh
@@ -126,9 +131,51 @@ fixed=$(of "$lifeos_server" | awk '$1 == "proxy_pass" && $2 !~ /^http:\/\/\$[a-z
 [ -z "$fixed" ] || fail "every proxy_pass must name its upstream through a variable (set \$upstream food:8080; proxy_pass http://\$upstream), so nginx resolves it per request: ${fixed//$'\n'/; }"
 [ "$(of "$lifeos_server" | grep -c '^proxy_pass ')" -gt 0 ] || fail "the Life OS server proxies nothing"
 
+# Every location that proxies to a service asks the auth check: a location
+# with "set $upstream <service>:<port>" (not the Dashboard) and a proxy_pass
+# has "auth_request /internal/auth/check", itself or in the location around
+# it. One line per offending location.
+unprotected=$(awk -v q="'" '
+  {
+    line = $0
+    sub(/#.*/, "", line)
+    gsub(/"[^"]*"/, "\"\"", line)
+    gsub(q "[^" q "]*" q, "\"\"", line)
+    n = length(line)
+    for (i = 1; i <= n; i++) {
+      c = substr(line, i, 1)
+      if (c != "{" && c != ";" && c != "}") { current = current c; continue }
+      d = current
+      gsub(/^[ \t]+|[ \t]+$/, "", d)
+      gsub(/[ \t]+/, " ", d)
+      current = ""
+      if (c == "{") {
+        depth++
+        where[depth] = d
+        auth[depth] = (d ~ /^location /) ? auth[depth - 1] : 0
+        service[depth] = 0
+        proxies[depth] = 0
+      } else if (c == ";") {
+        if (d == "auth_request /internal/auth/check") auth[depth] = 1
+        if (d ~ /^set \$upstream [a-z0-9-]+:[0-9]+$/ && d !~ / dashboard:/) service[depth] = 1
+        if (d ~ /^proxy_pass /) proxies[depth] = 1
+      } else if (c == "}") {
+        if (where[depth] ~ /^location / && service[depth] && proxies[depth] && !auth[depth]) print where[depth]
+        depth--
+      }
+    }
+    current = current " "
+  }
+' <<<"$config")
+[ -z "$unprotected" ] || fail "every location that proxies to a service needs auth_request /internal/auth/check: ${unprotected//$'\n'/; }"
+[ "$(of "$lifeos_server" | grep -c '^auth_request /internal/auth/check$')" -gt 0 ] || fail "no location asks the auth check"
+grep -q -x -F 'location ^~ /internal/' <<<"$(of "$lifeos_server")" || fail "the Life OS server must close /internal/ to the outside: location ^~ /internal/ { return 404; }"
+check_block=$(awk '/^  location = \/internal\/auth\/check \{/,/^  \}/' <<<"$config")
+grep -q -E '^[[:space:]]+internal;' <<<"$check_block" || fail "location = /internal/auth/check must be internal"
+
 # shellcheck disable=SC2001 # comments go from every line
 ntfy_refs=$(sed 's/#.*//' <<<"$config" | grep -i 'ntfy' | sed 's/^[[:space:]]*//' || true)
 [ -z "$ntfy_refs" ] || fail "the gateway must not refer to ntfy (it has its own network and route): ${ntfy_refs//$'\n'/; }"
 
 if [ "$failed" -ne 0 ]; then exit 1; fi
-echo "gateway hosts ok: Life OS answers only $(awk '!seen[$0]++' <<<"$names" | tr '\n' ' ' | sed 's/ $//; s/ /, /g'); every other Host gets 444; upstreams are resolved per request"
+echo "gateway hosts ok: Life OS answers only $(awk '!seen[$0]++' <<<"$names" | tr '\n' ' ' | sed 's/ $//; s/ /, /g'); every other Host gets 444; upstreams are resolved per request; every service location asks the auth check"

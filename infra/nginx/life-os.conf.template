@@ -7,6 +7,9 @@
 limit_req_zone $binary_remote_addr zone=lifeos_api:10m rate=30r/s;
 limit_req_zone $binary_remote_addr zone=lifeos_write:10m rate=10r/s;
 limit_req_zone $binary_remote_addr zone=lifeos_mcp:10m rate=5r/s;
+# Signing in (/api/auth/): Better Auth limits each address and path as well,
+# and slows down failed sign-ins per username (src/lib/auth/server.ts).
+limit_req_zone $binary_remote_addr zone=lifeos_auth:10m rate=2r/s;
 limit_conn_zone $binary_remote_addr zone=lifeos_client:10m;
 
 # Cloudflare path. Requests from the edge network (10.255.249.0/29, which only
@@ -26,9 +29,12 @@ map $via_cloudflare $forwarded_proto {
 # Access, which adds its token (Cf-Access-Jwt-Assertion; the connector also
 # validates it). One without it came through a route without Access, such as
 # a mistaken route to the gateway, and is refused rather than served Life OS.
-map "$via_cloudflare:$http_cf_access_jwt_assertion" $missing_access_token {
+# LIFE_OS_REQUIRE_CLOUDFLARE_ACCESS (.env) turns this off (off, no, false,
+# or 0), making Life OS's own sign-in the only gate on the tunnel; empty, or
+# anything else, keeps it on (docs/operations/cloudflare.md).
+map "${LIFE_OS_REQUIRE_CLOUDFLARE_ACCESS}:$via_cloudflare:$http_cf_access_jwt_assertion" $missing_access_token {
   default 0;
-  "1:" 1;
+  "~*^(?!(off|no|false|0):)[^:]*:1:$" 1;
 }
 
 # The routes of the optional modules that are off (docs/architecture/modules.md):
@@ -49,6 +55,18 @@ map $http_x_life_os_actor $public_actor {
   default "";
   "user" "user";
   "~^dev:[A-Za-z0-9._-]{1,64}$" $http_x_life_os_actor;
+}
+
+# Credentials go only to the Dashboard (which runs the sign-in and the auth
+# check); a service gets the identity token instead and never the cookie or
+# an Authorization header (docs/architecture/multi-user.md#the-gateway).
+map $upstream $lifeos_cookie {
+  default "";
+  "dashboard:3000" $http_cookie;
+}
+map $upstream $lifeos_authorization {
+  default "";
+  "dashboard:3000" $http_authorization;
 }
 
 # Only the hosts listed in the Life OS server_name below reach Life OS. Any
@@ -81,6 +99,14 @@ server {
   real_ip_header CF-Connecting-IP;
   if ($missing_access_token) { return 403; }
   if ($lifeos_module_off) { rewrite ^ /.lifeos/module-off last; }
+  # Filled by auth_request_set in the locations that ask the auth check;
+  # empty (and so not sent) everywhere else.
+  set $lifeos_identity "";
+  # Only the gateway's own refusals: without proxy_intercept_errors, a
+  # service's or the Dashboard's 401, 403, or 500 passes unchanged.
+  error_page 401 = @lifeos_unauthenticated;
+  error_page 403 = @lifeos_forbidden;
+  error_page 500 = @lifeos_auth_unavailable;
   client_max_body_size 26m;
   client_header_timeout 15s;
   client_body_timeout 30s;
@@ -97,9 +123,13 @@ server {
   # Set by the Android downloads (location /android/ below) and empty
   # everywhere else, where add_header then sends nothing. An add_header in
   # a location would replace the four above there, so the downloads set
-  # these variables instead.
-  set $android_cache_control "";
-  set $android_content_disposition "";
+  # these variables instead. The auth check's subrequest runs the server's
+  # own directives again and shares the request's variables, so it must not
+  # empty them after /android/ set them.
+  if ($uri !~ "^/internal/auth/") {
+    set $android_cache_control "";
+    set $android_content_disposition "";
+  }
   add_header Cache-Control $android_cache_control;
   add_header Content-Disposition $android_content_disposition;
 
@@ -116,6 +146,10 @@ server {
   proxy_set_header Cf-Access-Authenticated-User-Email "";
   # Only user and dev:<name> actors pass; workflow links are set by services.
   proxy_set_header X-Life-OS-Actor $public_actor;
+  # Who calls, as the auth check says; a client's own copy never passes.
+  proxy_set_header X-Life-OS-Identity $lifeos_identity;
+  proxy_set_header Cookie $lifeos_cookie;
+  proxy_set_header Authorization $lifeos_authorization;
   proxy_set_header X-Correlation-ID "";
   proxy_set_header X-Causation-ID "";
   proxy_http_version 1.1;
@@ -139,30 +173,40 @@ server {
   resolver_timeout 5s;
 
   location /api/finance/ {
+    auth_request /internal/auth/check;
+    auth_request_set $lifeos_identity $upstream_http_x_life_os_identity;
     limit_req zone=lifeos_api burst=60 nodelay;
     set $upstream finance:8080;
     rewrite ^/api/finance(/.*)$ $1 break;
     proxy_pass http://$upstream;
   }
   location /api/tasks/ {
+    auth_request /internal/auth/check;
+    auth_request_set $lifeos_identity $upstream_http_x_life_os_identity;
     limit_req zone=lifeos_api burst=60 nodelay;
     set $upstream tasks:8080;
     rewrite ^/api/tasks(/.*)$ $1 break;
     proxy_pass http://$upstream;
   }
   location /api/inbox/ {
+    auth_request /internal/auth/check;
+    auth_request_set $lifeos_identity $upstream_http_x_life_os_identity;
     limit_req zone=lifeos_api burst=60 nodelay;
     set $upstream inbox:8080;
     rewrite ^/api/inbox(/.*)$ $1 break;
     proxy_pass http://$upstream;
   }
   location /api/calendar/ {
+    auth_request /internal/auth/check;
+    auth_request_set $lifeos_identity $upstream_http_x_life_os_identity;
     limit_req zone=lifeos_api burst=60 nodelay;
     set $upstream calendar:8080;
     rewrite ^/api/calendar(/.*)$ $1 break;
     proxy_pass http://$upstream;
   }
   location /api/food/ {
+    auth_request /internal/auth/check;
+    auth_request_set $lifeos_identity $upstream_http_x_life_os_identity;
     limit_req zone=lifeos_api burst=60 nodelay;
     set $upstream food:8080;
     rewrite ^/api/food(/.*)$ $1 break;
@@ -171,6 +215,8 @@ server {
   # Activity is read-only through the gateway; services record events on the
   # private network.
   location /api/activity/ {
+    auth_request /internal/auth/check;
+    auth_request_set $lifeos_identity $upstream_http_x_life_os_identity;
     limit_req zone=lifeos_api burst=60 nodelay;
     limit_except GET { deny all; }
     set $upstream activity:8080;
@@ -178,6 +224,8 @@ server {
     proxy_pass http://$upstream;
   }
   location /api/notifications/ {
+    auth_request /internal/auth/check;
+    auth_request_set $lifeos_identity $upstream_http_x_life_os_identity;
     limit_req zone=lifeos_api burst=60 nodelay;
     set $upstream notifications:8080;
     rewrite ^/api/notifications(/.*)$ $1 break;
@@ -185,30 +233,40 @@ server {
   }
   # Integration services, one prefix each: /api/integrations/<name>/.
   location /api/integrations/banking/ {
+    auth_request /internal/auth/check;
+    auth_request_set $lifeos_identity $upstream_http_x_life_os_identity;
     limit_req zone=lifeos_api burst=60 nodelay;
     set $upstream banking:8080;
     rewrite ^/api/integrations/banking(/.*)$ $1 break;
     proxy_pass http://$upstream;
   }
   location /api/integrations/google-calendar/ {
+    auth_request /internal/auth/check;
+    auth_request_set $lifeos_identity $upstream_http_x_life_os_identity;
     limit_req zone=lifeos_api burst=60 nodelay;
     set $upstream google-calendar:8080;
     rewrite ^/api/integrations/google-calendar(/.*)$ $1 break;
     proxy_pass http://$upstream;
   }
   location /api/integrations/calendar-feeds/ {
+    auth_request /internal/auth/check;
+    auth_request_set $lifeos_identity $upstream_http_x_life_os_identity;
     limit_req zone=lifeos_api burst=60 nodelay;
     set $upstream calendar-feeds:8080;
     rewrite ^/api/integrations/calendar-feeds(/.*)$ $1 break;
     proxy_pass http://$upstream;
   }
   location /api/integrations/recipe-import/ {
+    auth_request /internal/auth/check;
+    auth_request_set $lifeos_identity $upstream_http_x_life_os_identity;
     limit_req zone=lifeos_api burst=60 nodelay;
     set $upstream recipe-import:8080;
     rewrite ^/api/integrations/recipe-import(/.*)$ $1 break;
     proxy_pass http://$upstream;
   }
   location /api/voice/ {
+    auth_request /internal/auth/check;
+    auth_request_set $lifeos_identity $upstream_http_x_life_os_identity;
     limit_req zone=lifeos_write burst=20 nodelay;
     # An over-limit upload is answered 413 at once, but by default nginx then
     # discards the rest of the body for only 30 s (lingering_time) before it
@@ -223,6 +281,8 @@ server {
     proxy_pass http://$upstream;
   }
   location /api/mcp/ {
+    auth_request /internal/auth/check;
+    auth_request_set $lifeos_identity $upstream_http_x_life_os_identity;
     limit_req zone=lifeos_mcp burst=10 nodelay;
     proxy_buffering off;
     proxy_read_timeout 300s;
@@ -270,6 +330,9 @@ server {
     return 301 /android/;
   }
   location ^~ /android/ {
+    # Signed in, or a paired device (P21-06), or legacy access: as every
+    # service route (docs/architecture/multi-user.md#the-gateway).
+    auth_request /internal/auth/check;
     # A download is one request, so the general limit never cuts a long one
     # off, and send_timeout bounds a pause between two writes, not the whole
     # download. Files are served to GET and HEAD only (any other method is
@@ -278,8 +341,11 @@ server {
     root /srv;
     disable_symlinks on;
     autoindex off;
-    # The download page.
+    # The download page: without a sign-in, the login, then back here.
     location = /android/ {
+      error_page 401 = @lifeos_login;
+      error_page 403 = @lifeos_forbidden;
+      error_page 500 = @lifeos_auth_unavailable;
       set $android_cache_control "no-cache";
       charset utf-8;
       try_files /android/index.html =404;
@@ -301,6 +367,65 @@ server {
       default_type application/vnd.android.package-archive;
     }
     return 404;
+  }
+  # The auth check (the Dashboard's /internal/auth/check), which every
+  # service location asks with auth_request: 204 with the identity token,
+  # 401, or 403. No body; the original method and URI, and the client's
+  # headers, so it sees the cookie, Origin, and Sec-Fetch-Site. It sets
+  # headers of its own, so it repeats the server's set: a location with any
+  # proxy_set_header inherits none of the server's.
+  location = /internal/auth/check {
+    internal;
+    proxy_pass_request_body off;
+    proxy_set_header Content-Length "";
+    proxy_set_header X-Original-Method $request_method;
+    proxy_set_header X-Original-URI $request_uri;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-Proto $forwarded_proto;
+    proxy_set_header CF-Connecting-IP "";
+    proxy_set_header Cf-Access-Jwt-Assertion "";
+    proxy_set_header Cf-Access-Authenticated-User-Email "";
+    proxy_set_header X-Life-OS-Actor "";
+    proxy_set_header X-Life-OS-Identity "";
+    proxy_set_header X-Correlation-ID "";
+    proxy_set_header X-Causation-ID "";
+    proxy_connect_timeout 3s;
+    proxy_read_timeout 10s;
+    # Not $upstream: a subrequest shares the request's variables, and the
+    # service location's $upstream must stay its service.
+    set $lifeos_auth_upstream dashboard:3000;
+    proxy_pass http://$lifeos_auth_upstream;
+  }
+  # Every other /internal/ path is the private network's only.
+  location ^~ /internal/ {
+    return 404;
+  }
+  # Better Auth: signing in, two-factor, passkeys, the first account. Public,
+  # with a strict limit per address.
+  location ^~ /api/auth/ {
+    limit_req zone=lifeos_auth burst=20 nodelay;
+    set $upstream dashboard:3000;
+    proxy_pass http://$upstream;
+  }
+  # The gateway's refusals, JSON like the services' errors.
+  location @lifeos_unauthenticated {
+    default_type application/json;
+    return 401 '{"error":{"code":"unauthenticated","message":"Sign in to Life OS first"}}';
+  }
+  location @lifeos_forbidden {
+    default_type application/json;
+    return 403 '{"error":{"code":"forbidden","message":"This request is not allowed here"}}';
+  }
+  location @lifeos_auth_unavailable {
+    default_type application/json;
+    return 503 '{"error":{"code":"auth_unavailable","message":"Signing in is unavailable right now"}}';
+  }
+  location @lifeos_login {
+    absolute_redirect off;
+    return 302 /login?next=$uri;
   }
   # A route of a module that is off (the map above). JSON, like the
   # services' own errors, so that the Dashboard's calls fail softly.
