@@ -278,13 +278,15 @@ export class LegacyUseLog {
 }
 
 /**
- * At most this many failed sign-in entries an address gets a day; past it,
- * its further failures count together in one more entry, without the
- * account or the reason.
+ * At most this many failed sign-in entries an address gets a day, one per
+ * account and code; past it, its further failures count in one more entry
+ * per account (or none) without the code, so a failure against an account
+ * always names it. An address so gets at most this many entries, plus one
+ * per account on the server, plus one, a day.
  */
 export const FAILED_SIGN_IN_ENTRIES_PER_ADDRESS = 20;
 
-/** The detail of that one more entry. */
+/** The detail of an account's entry past the cap. */
 export const FAILED_SIGN_IN_OVERFLOW = "other:too_many_entries";
 
 const failedSignInChains = new WeakMap<object, Promise<void>>();
@@ -293,9 +295,10 @@ const failedSignInChains = new WeakMap<object, Promise<void>>();
  * Records a failed sign-in without flooding the log: failures are grouped
  * per day (UTC), address, account (or none, when the name typed is none),
  * and code (the way in and the reason), as one entry whose count and last
- * time grow, and an address gets at most FAILED_SIGN_IN_ENTRIES_PER_ADDRESS
- * entries a day. Writes run one after another, so two failures at once
- * never make two entries. It never throws.
+ * time grow; past FAILED_SIGN_IN_ENTRIES_PER_ADDRESS entries an address's
+ * failures are grouped per account alone. An entry keeps the device of the
+ * first failure it counts. Writes run one after another, so two failures
+ * at once never make two entries. It never throws.
  */
 export function recordFailedSignIn(
   db: Queryable,
@@ -349,15 +352,19 @@ async function writeFailedSignIn(
     );
     return (rowCount ?? 0) > 0;
   };
-  let subject = uuidOrNull(entry.subjectUserId);
+  const subject = uuidOrNull(entry.subjectUserId);
   let detail = detailCode(entry.detail);
   if (await bump(subject, detail)) return;
+  // The entries per account and code; an account's entry past the cap
+  // does not count against it.
   const { rows } = await db.query<{ n: number }>(
-    `SELECT count(*)::int AS n FROM security_events WHERE ${sameDay}`,
-    [day, address],
+    `SELECT count(*)::int AS n FROM security_events
+      WHERE ${sameDay} AND detail IS DISTINCT FROM $3`,
+    [day, address, FAILED_SIGN_IN_OVERFLOW],
   );
   if ((rows[0]?.n ?? 0) >= FAILED_SIGN_IN_ENTRIES_PER_ADDRESS) {
-    subject = null;
+    // Past the cap: one entry per account, without the code, so a
+    // failure against an account still names it.
     detail = FAILED_SIGN_IN_OVERFLOW;
     if (await bump(subject, detail)) return;
   }

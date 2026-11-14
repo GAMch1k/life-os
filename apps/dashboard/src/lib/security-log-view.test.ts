@@ -37,7 +37,7 @@ test("details read as words", () => {
   );
   assert.equal(
     event("sign_in_failed", "other:too_many_entries", 40),
-    "more failed sign-ins from this address, counted together · 40 times",
+    "more failed sign-ins from this address, any way in · 40 times",
   );
   assert.equal(event("role_changed", "admin"), "to admin");
   assert.equal(event("legacy_access_changed", "off"), "turned off");

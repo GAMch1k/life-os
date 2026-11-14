@@ -38,7 +38,7 @@ const REASONS: Record<string, string> = {
   host_only: "only on the server",
   accounts: "more than one account exists",
   setup_code_invalid: "wrong, used, or expired code",
-  too_many_entries: "more failed sign-ins from this address, counted together",
+  too_many_entries: "more failed sign-ins from this address, any way in",
 };
 
 const ACTIONS: Record<string, string> = {
