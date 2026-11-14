@@ -323,6 +323,10 @@ A `before` hook on Better Auth's sign-up enforces it, as the trial did.
 - Lost TOTP: a recovery code; with none left, an admin resets two-factor (a small custom endpoint; Better Auth has none, the trial found). The user is told at the next sign-in.
 - The owner locked out: `./setup.sh recover-owner` on the host prints a one-time reset link for the owner, and with `--reset-2fa` also removes their two-factor.
 
+### Sign everyone out
+
+For an emergency (a leaked database copy, a stolen laptop, anything that looks like someone else got in), the server owner has **Admin → Security → Sign everyone out**, and the host has `./setup.sh sign-out-all [--keep-devices]` for when the admin panel itself cannot be trusted or reached. Both do, in one transaction, what "Sign out everywhere" does for one user, for every account: delete every session, API key (device keys too, unless `--keep-devices`), personal API token, OAuth refresh token, and consent, revoke open invite links and pairing codes, and bump every `authz_version`, so it takes effect on the next request. The owner is signed out too and signs in again with their password and two-factor. Background-access grants stay (they are permissions, not credentials); `./setup.sh rotate-keys all` is the separate step when the signing or service keys may have leaked. The security log records who ran it. While Cloudflare Access is in front, its own sessions are ended separately ([Cloudflare → Sign everyone out](../operations/cloudflare.md#sign-everyone-out)).
+
 ## Devices, tokens, MCP
 
 **Pairing a phone or watch.** Settings → Devices → Pair shows a QR code for `lifeos://pair?host=<public URL>&code=<code>`, a single-use code valid 5 minutes (`pairing_codes`, stored hashed). The app posts the code and a device name to `/api/auth/devices/pair` and receives its own API key once. A phone with no second screen opens `/login?pair=1` in a Custom Tab instead; after signing in, the page creates a code and returns to the app with it. The phone may create one child key for its paired watch (`POST /api/auth/devices/child`), listed and revoked separately. Every key shows its name, kind, and last use; revoking one also deletes its push subscriptions (`device_key_id`).
@@ -490,7 +494,7 @@ Each step is checked by row counts: every table has as many rows after as before
 - **Upgrade**: `tools/test-upgrade` starts the previous release's images on the verification stack with fixtures, updates to the build, and checks row counts, legacy access, the setup code, and a login.
 - **Content-free diagnostics**, as in [Logs](#logs).
 
-## Risks and open questions
+## Risks and decisions
 
 Risks:
 
@@ -499,7 +503,7 @@ Risks:
 - **Better Auth churns** (21 advisories in a year, breaking minors). Pinned versions, a minimal plugin set, our own migrations, and the flow suite in CI keep upgrades deliberate.
 - **The backend network is plain HTTP.** Something able to sniff it (root on the host, or a container with raw sockets) could replay a token for its lifetime (5 minutes; 1 for assertions). P21-07 adds `cap_drop: [ALL]` to every service that does not need a capability; TLS between containers is out of scope.
 
-Open questions for the owner:
+Decided by the owner (2026-11-14):
 
-1. **WireGuard over plain HTTP**: allow password and TOTP sign-in there (`LIFE_OS_INSECURE_LOGIN_HOSTS`, no passkeys), or require the HTTPS name everywhere?
-2. **Cloudflare Access on the live server**: keep it in front once family members exist (each must then also pass Access's email code), or rely on Life OS's login alone on the tunnel?
+1. **WireGuard over plain HTTP**: require the HTTPS name. `LIFE_OS_INSECURE_LOGIN_HOSTS` stays as an opt-in and is empty by default.
+2. **Cloudflare Access on the live server**: it stays in front during the beta, also once family members exist, until Life OS's login has run for a while and had an outside security test. Each family member is added to the Access group and passes its email code; the owner set the Access session to one week. Signing everyone out of Access in an emergency: [Cloudflare → Sign everyone out](../operations/cloudflare.md#sign-everyone-out).
