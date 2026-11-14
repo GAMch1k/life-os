@@ -15,7 +15,15 @@ set -euo pipefail
 #  - checks the admin surfaces: legacy access gets Status and the backups
 #    as before; the owner, signed in without two-factor, gets the members'
 #    one line and no Back up now or admin pages, and the security log has it;
-#  - signs everyone out (sign-out-all): the session is dead.
+#  - with legacy access off (P21-06): pairs a phone with a pairing code and
+#    makes every native call with its device key (Tasks, Inbox, Calendar,
+#    push registration, the update manifest), makes the watch's key, and
+#    revokes both; makes a development tool's token, which writes as
+#    dev:<name> and only where its scopes say; and, when MCP runs, an MCP
+#    client's whole OAuth (registration, PKCE, consent, the token, a tool
+#    call, the refresh, and disconnecting it);
+#  - signs everyone out (sign-out-all, first with --keep-devices): the
+#    session, the token, and then the device key are dead.
 # The stack starts with legacy access on (tools/verify-compose), as an
 # upgraded install does.
 
@@ -152,8 +160,143 @@ account legacy-access on >/dev/null
 sleep 6
 expect 200 GET /api/tasks/v1/tasks
 
+echo '==> Devices, tokens, and MCP, with legacy access off'
+account legacy-access off >/dev/null
+sleep 6
+# Pair a phone: the owner's session makes a pairing code (Settings →
+# Devices), the app redeems it, with no Origin and no cookie.
+expect 201 POST /api/account/devices/pairing-codes -H "cookie: $session" -H "origin: $gateway" \
+  -H 'content-type: application/json' --data '{}'
+pairing=$(jq -r .code "$work/body")
+jq -e '.link | startswith("lifeos://pair?")' "$work/body" >/dev/null || fail "no pairing link: $(cat "$work/body")"
+expect 200 POST /api/auth/devices/pair -H 'content-type: application/json' \
+  --data "{\"code\":\"$pairing\",\"name\":\"Smoke phone\"}"
+phone=$(jq -r .key "$work/body")
+phone_id=$(jq -r .keyId "$work/body")
+[[ "$phone" == lo_dev_* ]] || fail "no device key: $(cat "$work/body")"
+expect 400 POST /api/auth/devices/pair -H 'content-type: application/json' \
+  --data "{\"code\":\"$pairing\",\"name\":\"Twice\"}"
+# Every native call the phone makes, with its key: Tasks, Inbox, Calendar,
+# push registration (web push is not set up on this stack: 409, past the
+# sign-in), the update manifest, and the watch's key.
+key=(-H "authorization: Bearer $phone")
+expect 200 GET '/api/tasks/v1/tasks?limit=1' "${key[@]}"
+expect 201 POST /api/inbox/v1/inbox-items "${key[@]}" -H 'content-type: application/json' \
+  --data '{"content":"Accounts smoke capture from the phone","source":"manual"}'
+expect 200 GET '/api/calendar/v1/events?from=2026-11-14T00:00:00Z&to=2026-11-15T00:00:00Z' "${key[@]}"
+expect 200 GET /api/notifications/v1/push/config "${key[@]}"
+expect 409 POST /api/notifications/v1/push/subscriptions "${key[@]}" -H 'content-type: application/json' \
+  --data '{"endpoint":"https://fcm.googleapis.com/fcm/send/smoke","keys":{"p256dh":"x","auth":"y"}}'
+request GET /android/updates "${key[@]}"
+[[ "$code" != 401 && "$code" != 403 ]] || fail "the update manifest refused the device key: $code"
+expect 401 GET /android/updates
+expect 200 POST /api/auth/devices/child "${key[@]}" -H 'content-type: application/json' --data '{"name":"Smoke watch"}'
+watch=$(jq -r .key "$work/body")
+expect 200 GET '/api/tasks/v1/tasks?limit=1' -H "authorization: Bearer $watch"
+# What a key may not do: manage the account, or the server's admin routes.
+expect 401 GET /api/account/devices "${key[@]}"
+expect 200 GET /api/status "${key[@]}"
+jq -e '.view == "member"' "$work/body" >/dev/null || fail "a device key saw Status's details: $(cat "$work/body")"
+# A key that does not work is refused, never legacy access or the cookie.
+expect 401 GET /api/tasks/v1/tasks -H "authorization: Bearer lo_dev_$(printf 'A%.0s' $(seq 1 64))" -H "cookie: $session"
+
+# A personal token, marked as a development tool: only its scopes, as dev:<name>.
+expect 201 POST /api/account/tokens -H "cookie: $session" -H "origin: $gateway" -H 'content-type: application/json' \
+  --data '{"name":"smoke-tool","scopes":["tasks:write"],"devTool":true}'
+token=$(jq -r .token "$work/body")
+[[ "$token" == lo_tok_* ]] || fail "no token: $(cat "$work/body")"
+expect 201 POST /api/tasks/v1/tasks -H "authorization: Bearer $token" -H 'content-type: application/json' \
+  --data '{"title":"Accounts smoke task by a tool"}'
+tool_task=$(jq -r .id "$work/body")
+expect 403 GET '/api/finance/v1/accounts' -H "authorization: Bearer $token"
+expect 401 GET /api/account/tokens -H "authorization: Bearer $token"
+for _ in $(seq 1 20); do
+  request GET "/api/activity/v1/activity-events?subjectType=task&subjectId=$tool_task" -H "cookie: $session"
+  [[ "$code" == 200 ]] && jq -e '[.items[]? | select(.type == "task.created")] | length > 0' "$work/body" >/dev/null && break
+  sleep 0.5
+done
+jq -e '[.items[] | select(.type == "task.created")][0].actor == {"kind":"dev","name":"smoke-tool"}' "$work/body" >/dev/null \
+  || fail "the tool's task was not created as dev:smoke-tool: $(cat "$work/body")"
+
+if "${compose[@]}" ps --services --status running | grep -qx mcp; then
+  echo '==> MCP: OAuth from registration to revocation, and a tool call'
+  expect 401 POST /api/mcp/mcp -H 'content-type: application/json' --data '{}'
+  grep -qi '^www-authenticate: Bearer resource_metadata=".*/.well-known/oauth-protected-resource/api/mcp"' "$work/headers" \
+    || { cat "$work/headers" >&2; fail "MCP's 401 has no challenge"; }
+  expect 200 GET /.well-known/oauth-protected-resource/api/mcp
+  resource=$(jq -r .resource "$work/body")
+  expect 200 GET /.well-known/oauth-authorization-server
+  jq -e '.code_challenge_methods_supported == ["S256"]' "$work/body" >/dev/null || fail "no PKCE in the metadata: $(cat "$work/body")"
+  redirect=http://127.0.0.1:33418/callback
+  request POST /api/auth/oauth2/register -H 'content-type: application/json' \
+    --data "{\"client_name\":\"Accounts smoke MCP client\",\"redirect_uris\":[\"$redirect\"],\"token_endpoint_auth_method\":\"none\",\"grant_types\":[\"authorization_code\",\"refresh_token\"],\"response_types\":[\"code\"],\"scope\":\"mcp:read mcp:write offline_access\"}"
+  [[ "$code" == 200 || "$code" == 201 ]] || { cat "$work/body" >&2; fail "registration: $code"; }
+  client=$(jq -r .client_id "$work/body")
+  verifier=$(openssl rand -base64 48 | tr '+/' '-_' | tr -d '=\n')
+  challenge=$(printf '%s' "$verifier" | openssl dgst -sha256 -binary | base64 | tr '+/' '-_' | tr -d '=\n')
+  query=$(jq -rn --arg c "$client" --arg r "$redirect" --arg ch "$challenge" --arg res "$resource" \
+    '{response_type:"code",client_id:$c,redirect_uri:$r,scope:"mcp:read mcp:write offline_access",state:"smoke-state",code_challenge:$ch,code_challenge_method:"S256",resource:$res} | to_entries | map("\(.key)=\(.value|@uri)") | join("&")')
+  expect 302 GET "/api/auth/oauth2/authorize?$query" -H "cookie: $session" -H 'accept: text/html' -H 'sec-fetch-mode: navigate'
+  consent=$(grep -i '^location:' "$work/headers" | tr -d '\r' | cut -d ' ' -f 2-)
+  [[ "$consent" == */oauth/consent\?* ]] || fail "authorize did not ask for consent: $consent"
+  expect 200 POST /api/auth/oauth2/consent -H "cookie: $session" -H "origin: $gateway" -H 'content-type: application/json' \
+    --data "$(jq -n --arg q "${consent#*\?}" '{accept:true,scope:"mcp:read mcp:write offline_access",oauth_query:$q}')"
+  back=$(jq -r .url "$work/body")
+  oauth_code=$(sed -n 's/.*[?&]code=\([^&]*\).*/\1/p' <<<"$back")
+  [[ -n "$oauth_code" && "$back" == "$redirect"* ]] || fail "consent did not return a code to the client: $back"
+  expect 200 POST /api/auth/oauth2/token --data-urlencode grant_type=authorization_code --data-urlencode "code=$oauth_code" \
+    --data-urlencode "redirect_uri=$redirect" --data-urlencode "client_id=$client" --data-urlencode "code_verifier=$verifier" \
+    --data-urlencode "resource=$resource"
+  access=$(jq -r .access_token "$work/body")
+  refresh=$(jq -r .refresh_token "$work/body")
+  [[ "$access" == *.*.* && -n "$refresh" && "$refresh" != null ]] || fail "no tokens: $(cat "$work/body")"
+  # MCP's JSON-RPC over the streamable transport: initialize, then a tool.
+  mcp_headers=(-H "authorization: Bearer $access" -H 'content-type: application/json' -H 'accept: application/json, text/event-stream')
+  rpc_result() { sed -n 's/^data: //p' "$work/body" | head -n 1 | jq -c . 2>/dev/null || jq -c . "$work/body"; }
+  expect 200 POST /api/mcp/mcp "${mcp_headers[@]}" \
+    --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"1"}}}'
+  mcp_session=$(grep -i '^mcp-session-id:' "$work/headers" | tr -d '\r' | cut -d ' ' -f 2-)
+  [[ -n "$mcp_session" ]] || { cat "$work/headers" >&2; fail 'MCP opened no session'; }
+  mcp_headers+=(-H "mcp-session-id: $mcp_session" -H 'mcp-protocol-version: 2025-06-18')
+  request POST /api/mcp/mcp "${mcp_headers[@]}" --data '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+  expect 200 POST /api/mcp/mcp "${mcp_headers[@]}" --data '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+  rpc_result | jq -e '[.result.tools[].name] | index("task_create") != null' >/dev/null || fail "tools/list lacks task_create: $(rpc_result)"
+  expect 200 POST /api/mcp/mcp "${mcp_headers[@]}" \
+    --data '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"task_list","arguments":{"query":"limit=1"}}}'
+  rpc_result | jq -e '.result.isError != true' >/dev/null || fail "the tool call failed: $(rpc_result)"
+  # The refresh token rotates; the spent one is refused.
+  expect 200 POST /api/auth/oauth2/token --data-urlencode grant_type=refresh_token --data-urlencode "refresh_token=$refresh" \
+    --data-urlencode "client_id=$client" --data-urlencode "resource=$resource"
+  access=$(jq -r .access_token "$work/body")
+  expect 400 POST /api/auth/oauth2/token --data-urlencode grant_type=refresh_token --data-urlencode "refresh_token=$refresh" \
+    --data-urlencode "client_id=$client" --data-urlencode "resource=$resource"
+  # Disconnecting it in Settings counts at once.
+  expect 204 DELETE "/api/account/connected-apps/$client" -H "cookie: $session" -H "origin: $gateway"
+  expect 401 POST /api/mcp/mcp -H "authorization: Bearer $access" -H 'content-type: application/json' \
+    -H 'accept: application/json, text/event-stream' \
+    --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"1"}}}'
+fi
+
+# Revoking the phone in Settings revokes its watch too.
+expect 204 DELETE "/api/account/devices/$phone_id" -H "cookie: $session" -H "origin: $gateway"
+expect 401 GET /api/tasks/v1/tasks "${key[@]}"
+expect 401 GET /api/tasks/v1/tasks -H "authorization: Bearer $watch"
+# A newly paired phone and a token, for signing everyone out below.
+expect 201 POST /api/account/devices/pairing-codes -H "cookie: $session" -H "origin: $gateway" \
+  -H 'content-type: application/json' --data '{}'
+expect 200 POST /api/auth/devices/pair -H 'content-type: application/json' \
+  --data "{\"code\":\"$(jq -r .code "$work/body")\",\"name\":\"Kept phone\"}"
+phone=$(jq -r .key "$work/body")
+account legacy-access on >/dev/null
+sleep 6
+
 echo '==> Sign everyone out'
+# --keep-devices: the paired phone stays, the token and the sessions go.
+account sign-out-all --keep-devices >/dev/null
+expect 200 GET /api/tasks/v1/tasks -H "authorization: Bearer $phone"
+expect 401 GET /api/tasks/v1/tasks -H "authorization: Bearer $token"
 account sign-out-all >/dev/null
+expect 401 GET /api/tasks/v1/tasks -H "authorization: Bearer $phone"
 expect 200 GET /api/tasks/v1/tasks
 account legacy-access off >/dev/null
 sleep 6
