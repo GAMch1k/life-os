@@ -25,6 +25,11 @@ export COMPOSE_PROFILES="${LIFE_OS_VERIFY_MODULES-$verify_modules}"
 # preset would fetch their real waste calendar and mix it into test data
 # (compose.verify.yaml also blanks it, and the plan is refused with one).
 export LIFE_OS_ZAW_ICS_URL=
+# The smokes and the browser suite use Life OS as before accounts, without
+# signing in: the verification stack starts with legacy access on, whatever
+# .env says (docs/install/accounts.md#legacy-access). Signing in is tested
+# by the auth flow suite and tools/test-gateway-auth.
+export LIFE_OS_LEGACY_ACCESS=on
 # Nor the owner's Google OAuth client or token key: the verification stack
 # never talks to Google (the google-calendar integration gets them blank,
 # compose.verify.yaml points its Google endpoints nowhere, and browser tests
