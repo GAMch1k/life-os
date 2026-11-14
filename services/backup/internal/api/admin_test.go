@@ -42,8 +42,10 @@ func TestBackupsAreForAdmins(t *testing.T) {
 		allowed     bool
 	}{
 		{"no token (an internal caller)", "", true},
-		{"the owner", signer.Token("", "owner", "session"), true},
-		{"an admin", signer.Token("5c1d7a8e-0b7f-4d2a-9b1e-2f6a3c4d5e6f", "admin", "session"), true},
+		{"the owner with two-factor", signer.TwoFactor("", "owner"), true},
+		{"the owner signed in without two-factor", signer.Token("", "owner", "session"), false},
+		{"the owner's paired phone", signer.Token("", "owner", "device"), false},
+		{"an admin with two-factor", signer.TwoFactor("5c1d7a8e-0b7f-4d2a-9b1e-2f6a3c4d5e6f", "admin"), true},
 		{"legacy access", signer.Token("", "owner", "legacy"), true},
 		{"a member", signer.Token("5c1d7a8e-0b7f-4d2a-9b1e-2f6a3c4d5e6f", "member", "session"), false},
 	} {

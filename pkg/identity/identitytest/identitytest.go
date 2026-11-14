@@ -48,8 +48,21 @@ func New(t testing.TB) Signer {
 }
 
 // Token is a five-minute token for user (FirstUser when empty) with a server
-// role (owner, admin, member) and a way in (session, legacy).
+// role (owner, admin, member) and a way in (session, legacy, device, token,
+// mcp). A session made with Token signed in without a second factor; see
+// TwoFactor.
 func (s Signer) Token(user, role, via string) string {
+	return s.TokenWith(user, role, via, nil)
+}
+
+// TwoFactor is Token for a browser session that signed in with a second
+// factor (the mfa claim, which admin routes require).
+func (s Signer) TwoFactor(user, role string) string {
+	return s.TokenWith(user, role, identity.ViaSession, map[string]any{"mfa": true})
+}
+
+// TokenWith is Token with more claims, such as scp, mfa, or dev.
+func (s Signer) TokenWith(user, role, via string, extra map[string]any) string {
 	if user == "" {
 		user = FirstUser
 	}
@@ -58,11 +71,15 @@ func (s Signer) Token(user, role, via string) string {
 		sid = "legacy"
 	}
 	now := time.Now()
-	return s.Sign(map[string]any{
+	claims := map[string]any{
 		"iss": "lifeos-auth", "aud": "lifeos-services", "sub": user, "sid": sid,
 		"via": via, "role": role, "iat": now.Unix(), "nbf": now.Unix(),
 		"exp": now.Add(5 * time.Minute).Unix(), "jti": uuid.NewString(),
-	})
+	}
+	for key, value := range extra {
+		claims[key] = value
+	}
+	return s.Sign(claims)
 }
 
 // Sign signs any claims.

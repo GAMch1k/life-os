@@ -49,8 +49,8 @@ const (
 type Kind string
 
 const (
-	// KindUser is a person: a session, or legacy access (and from P21-06 a
-	// device key, a personal token, or an MCP grant).
+	// KindUser is a person: a session, legacy access, a device key, a
+	// personal token, or an MCP grant (P21-06).
 	KindUser Kind = "user"
 	// KindDelegated is a service acting for a person (P21-07).
 	KindDelegated Kind = "delegated"
@@ -89,8 +89,15 @@ type Principal struct {
 	// DefaultSpaces is where new items of a module go when not personal.
 	DefaultSpaces map[string]uuid.UUID
 	// Scopes limit a token, an MCP grant, or a delegation; nil is all of
-	// the person's rights.
+	// the person's rights. "<module>:write" includes reading.
 	Scopes []string
+	// MFA is true only for a browser session that signed in with a second
+	// factor (an authenticator code, a recovery code, or a passkey): what
+	// admin routes require (CheckAdmin). Never on a key, token, or MCP grant.
+	MFA bool
+	// DevTool is the name of a personal token marked as a development tool,
+	// whose activity actor is dev:<name>.
+	DevTool string
 	// Modules are the optional modules allowed; nil is every installed one.
 	Modules []string
 	// Limits are the person's finite limits.
@@ -228,6 +235,8 @@ type claims struct {
 	Scp  []string          `json:"scp"`
 	Mods []string          `json:"mods"`
 	Lim  map[string]int64  `json:"lim"`
+	Mfa  bool              `json:"mfa"`
+	Dev  string            `json:"dev"`
 	Tz   string            `json:"tz"`
 	Lng  string            `json:"lng"`
 	Iat  *json.Number      `json:"iat"`
@@ -274,6 +283,9 @@ func audienceMatches(raw json.RawMessage) bool {
 }
 
 var spaceRoles = map[string]bool{"o": true, "a": true, "m": true}
+
+// devName is what a development tool's actor may be named (dev:<name>).
+var devName = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
 var serverRoles = map[string]bool{"owner": true, "admin": true, "member": true}
 
 // Verify checks a token and returns its principal.
@@ -333,6 +345,7 @@ func (c claims) principal(exp time.Time) (Principal, error) {
 		CredentialID: c.Sid,
 		Role:         c.Role,
 		Scopes:       c.Scp,
+		MFA:          c.Mfa && c.Via == ViaSession,
 		Modules:      c.Mods,
 		Limits:       c.Lim,
 		Act:          c.Act,
@@ -362,6 +375,12 @@ func (c claims) principal(exp time.Time) (Principal, error) {
 	}
 	if c.Role != "" && !serverRoles[c.Role] {
 		return Principal{}, refuse("role %q", c.Role)
+	}
+	if c.Dev != "" {
+		if c.Via != ViaToken || !devName.MatchString(c.Dev) {
+			return Principal{}, refuse("dev")
+		}
+		p.DevTool = c.Dev
 	}
 	for space, role := range c.Sp {
 		id, err := uuid.Parse(space)

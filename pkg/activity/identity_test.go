@@ -38,13 +38,18 @@ func TestActorFromIdentity(t *testing.T) {
 		raw, _ := json.Marshal(v)
 		return base64.RawURLEncoding.EncodeToString(raw)
 	}
-	token := func(via string) string {
-		input := encode(map[string]string{"alg": "EdDSA", "typ": "lifeos-id+jwt", "kid": "k"}) + "." + encode(map[string]any{
+	tokenWith := func(via string, extra map[string]any) string {
+		claims := map[string]any{
 			"iss": "lifeos-auth", "aud": "lifeos-services", "sub": "00000000-0000-4000-8000-000000000001",
 			"sid": via, "via": via, "role": "owner", "exp": time.Now().Add(time.Minute).Unix(),
-		})
+		}
+		for key, value := range extra {
+			claims[key] = value
+		}
+		input := encode(map[string]string{"alg": "EdDSA", "typ": "lifeos-id+jwt", "kid": "k"}) + "." + encode(claims)
 		return input + "." + base64.RawURLEncoding.EncodeToString(ed25519.Sign(private, []byte(input)))
 	}
+	token := func(via string) string { return tokenWith(via, nil) }
 
 	app := httpserver.New("test", httpserver.WithLogger(httpserver.NewJSONLogger(io.Discard, nil)), httpserver.WithTrustedKeys(keys))
 	app.Use(RequireActor())
@@ -86,6 +91,21 @@ func TestActorFromIdentity(t *testing.T) {
 	}
 	if status := post(token("legacy"), "user"); status != http.StatusNoContent || seen != User() {
 		t.Fatalf("legacy with user: %d as %+v", status, seen)
+	}
+	// A paired device: the user (P21-06).
+	if status := post(token("device"), "dev:claude-code"); status != http.StatusNoContent || seen != User() {
+		t.Fatalf("device: %d as %+v", status, seen)
+	}
+	// A personal token: the user; marked as a development tool, dev:<name>.
+	if status := post(token("token"), ""); status != http.StatusNoContent || seen != User() {
+		t.Fatalf("token: %d as %+v", status, seen)
+	}
+	if status := post(tokenWith("token", map[string]any{"dev": "claude-code"}), "user"); status != http.StatusNoContent || seen != Dev("claude-code") {
+		t.Fatalf("dev token: %d as %+v", status, seen)
+	}
+	// An MCP client's grant: the AI over MCP, for the user.
+	if status := post(token("mcp"), "user"); status != http.StatusNoContent || seen != Agent("mcp") {
+		t.Fatalf("mcp: %d as %+v", status, seen)
 	}
 	// No token at all (an internal caller): the header, as before.
 	if status := post("", "system:voice-worker"); status != http.StatusNoContent || seen != System("voice-worker") {

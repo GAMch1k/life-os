@@ -20,6 +20,13 @@ func roleClaims(role, via string) map[string]any {
 	return claims
 }
 
+// twoFactorClaims is a browser session that signed in with a second factor.
+func twoFactorClaims(role, via string) map[string]any {
+	claims := roleClaims(role, via)
+	claims["mfa"] = true
+	return claims
+}
+
 func errorCode(t *testing.T, body []byte) string {
 	t.Helper()
 	var envelope struct {
@@ -33,6 +40,11 @@ func errorCode(t *testing.T, body []byte) string {
 
 func TestCheckAdmin(t *testing.T) {
 	user := func(role, via string) Principal { return Principal{Kind: KindUser, Role: role, Via: via} }
+	twoFactor := func(role string) Principal {
+		return Principal{Kind: KindUser, Role: role, Via: ViaSession, MFA: true}
+	}
+	// What a forged principal could claim: mfa on a device key.
+	keyWithMFA := Principal{Kind: KindUser, Role: RoleOwner, Via: ViaDevice, MFA: true}
 	cases := []struct {
 		name      string
 		principal Principal
@@ -42,10 +54,16 @@ func TestCheckAdmin(t *testing.T) {
 	}{
 		{"no token: an internal caller", Principal{}, false, AdminPolicy{}, ""},
 		{"no token, new route", Principal{}, false, AdminPolicy{RefuseLegacy: true}, ""},
-		{"owner", user(RoleOwner, ViaSession), true, AdminPolicy{}, ""},
-		{"admin", user(RoleAdmin, ViaSession), true, AdminPolicy{RefuseLegacy: true}, ""},
-		{"member", user(RoleMember, ViaSession), true, AdminPolicy{}, "admin_only"},
-		{"unknown role", user("", ViaSession), true, AdminPolicy{}, "admin_only"},
+		{"owner with two-factor", twoFactor(RoleOwner), true, AdminPolicy{}, ""},
+		{"admin with two-factor", twoFactor(RoleAdmin), true, AdminPolicy{RefuseLegacy: true}, ""},
+		{"owner signed in without two-factor", user(RoleOwner, ViaSession), true, AdminPolicy{}, "second_factor_required"},
+		{"admin signed in without two-factor", user(RoleAdmin, ViaSession), true, AdminPolicy{RefuseLegacy: true}, "second_factor_required"},
+		{"the owner's device key", user(RoleOwner, ViaDevice), true, AdminPolicy{}, "admin_only"},
+		{"the owner's personal token", user(RoleOwner, ViaToken), true, AdminPolicy{}, "admin_only"},
+		{"the owner's MCP grant", user(RoleOwner, ViaMCP), true, AdminPolicy{}, "admin_only"},
+		{"a device key claiming mfa", keyWithMFA, true, AdminPolicy{}, "admin_only"},
+		{"member", twoFactor(RoleMember), true, AdminPolicy{}, "admin_only"},
+		{"unknown role", twoFactor(""), true, AdminPolicy{}, "admin_only"},
 		{"legacy access, a route from before accounts", user(RoleOwner, ViaLegacy), true, AdminPolicy{}, ""},
 		{"legacy access, a new route", user(RoleOwner, ViaLegacy), true, AdminPolicy{RefuseLegacy: true}, "sign_in_required"},
 		{"a delegation", Principal{Kind: KindDelegated, Role: RoleOwner}, true, AdminPolicy{}, "admin_only"},
@@ -92,13 +110,19 @@ func TestAdminOnlyMiddleware(t *testing.T) {
 		code   string
 	}{
 		{"/v1/status", nil, 200, ""},
-		{"/v1/status", roleClaims(RoleOwner, ViaSession), 200, ""},
-		{"/v1/status", roleClaims(RoleAdmin, ViaSession), 200, ""},
+		{"/v1/status", twoFactorClaims(RoleOwner, ViaSession), 200, ""},
+		{"/v1/status", twoFactorClaims(RoleAdmin, ViaSession), 200, ""},
 		{"/v1/status", roleClaims(RoleOwner, ViaLegacy), 200, ""},
-		{"/v1/status", roleClaims(RoleMember, ViaSession), 403, "admin_only"},
+		{"/v1/status", roleClaims(RoleOwner, ViaSession), 403, "second_factor_required"},
+		{"/v1/status", twoFactorClaims(RoleMember, ViaSession), 403, "admin_only"},
+		// The mfa claim counts on a session only: on a key it is ignored.
+		{"/v1/status", twoFactorClaims(RoleOwner, ViaDevice), 403, "admin_only"},
+		{"/v1/status", twoFactorClaims(RoleOwner, ViaToken), 403, "admin_only"},
+		{"/v1/status", twoFactorClaims(RoleOwner, ViaMCP), 403, "admin_only"},
 		{"/v1/diagnostics", roleClaims(RoleOwner, ViaLegacy), 401, "sign_in_required"},
-		{"/v1/diagnostics", roleClaims(RoleMember, ViaSession), 403, "admin_only"},
-		{"/v1/diagnostics", roleClaims(RoleAdmin, ViaSession), 200, ""},
+		{"/v1/diagnostics", twoFactorClaims(RoleMember, ViaSession), 403, "admin_only"},
+		{"/v1/diagnostics", roleClaims(RoleAdmin, ViaSession), 403, "second_factor_required"},
+		{"/v1/diagnostics", twoFactorClaims(RoleAdmin, ViaSession), 200, ""},
 	} {
 		status, body := call(tc.path, tc.claims)
 		if status != tc.status {
@@ -134,6 +158,15 @@ func TestAdminOnlyHandler(t *testing.T) {
 	}
 	if rec := call(sign(t, key, standardHeader(key.kid), roleClaims(RoleMember, ViaSession))); rec.Code != 403 || errorCode(t, rec.Body.Bytes()) != "admin_only" {
 		t.Fatalf("a member: %d %s", rec.Code, rec.Body)
+	}
+	if rec := call(sign(t, key, standardHeader(key.kid), twoFactorClaims(RoleOwner, ViaSession))); rec.Code != 200 {
+		t.Fatalf("the owner with two-factor: %d %s", rec.Code, rec.Body)
+	}
+	if rec := call(sign(t, key, standardHeader(key.kid), roleClaims(RoleOwner, ViaSession))); rec.Code != 403 || errorCode(t, rec.Body.Bytes()) != "second_factor_required" {
+		t.Fatalf("the owner without two-factor: %d %s", rec.Code, rec.Body)
+	}
+	if rec := call(sign(t, key, standardHeader(key.kid), roleClaims(RoleOwner, ViaDevice))); rec.Code != 403 || errorCode(t, rec.Body.Bytes()) != "admin_only" {
+		t.Fatalf("the owner's device key: %d %s", rec.Code, rec.Body)
 	}
 	if rec := call("forged.token.value"); rec.Code != 401 || errorCode(t, rec.Body.Bytes()) != "unauthenticated" {
 		t.Fatalf("a forged token: %d %s", rec.Code, rec.Body)

@@ -41,6 +41,8 @@ var (
 		Message: "Only the server's admins can do this."}
 	errSignInRequired = &AdminError{Status: http.StatusUnauthorized, Code: "sign_in_required",
 		Message: "Sign in with your account to do this."}
+	errSecondFactor = &AdminError{Status: http.StatusForbidden, Code: "second_factor_required",
+		Message: "Admin routes need a sign-in with two-factor (an authenticator app or a passkey)."}
 )
 
 // AdminPolicy says who an admin-only route lets in.
@@ -52,11 +54,18 @@ type AdminPolicy struct {
 	RefuseLegacy bool
 }
 
-// CheckAdmin decides a request to an admin-only route from its principal.
-// A request without one passes: in P21-03's step only an internal caller
-// reaches a service without an identity token (the gateway authenticates
-// every service route), such as the Dashboard rendering Status after its own
-// admin check, or the monitor. P21-07 turns that into service assertions.
+// CheckAdmin decides a request to an admin-only route from its principal:
+// the server's owner or an admin, signed in in a browser with a second
+// factor (the token's mfa, P21-06). Device keys, personal tokens, and MCP
+// grants never pass, the owner's included: the phone's admin views come
+// through its web sign-in. Legacy access is the owner, as before accounts,
+// unless the policy refuses it.
+//
+// A request without a token passes: in P21-03's step only an internal
+// caller reaches a service without an identity token (the gateway
+// authenticates every service route), such as the Dashboard rendering
+// Status after its own admin check, or the monitor. P21-07 turns that into
+// service assertions.
 func CheckAdmin(p Principal, ok bool, policy AdminPolicy) error {
 	if !ok {
 		return nil
@@ -64,18 +73,28 @@ func CheckAdmin(p Principal, ok bool, policy AdminPolicy) error {
 	if p.Kind != KindUser {
 		return errAdminOnly
 	}
-	if p.IsLegacy() && policy.RefuseLegacy {
-		return errSignInRequired
+	if p.IsLegacy() {
+		if policy.RefuseLegacy {
+			return errSignInRequired
+		}
+		if !p.IsAdmin() {
+			return errAdminOnly
+		}
+		return nil
 	}
-	if !p.IsAdmin() {
+	if p.Via != ViaSession || !p.IsAdmin() {
 		return errAdminOnly
+	}
+	if !p.MFA {
+		return errSecondFactor
 	}
 	return nil
 }
 
 // AdminOnly is Fiber middleware for admin-only routes: a person who is the
-// server's owner or an admin passes, any other principal is refused (403
-// admin_only, or 401 sign_in_required for legacy access under RefuseLegacy).
+// server's owner or an admin, signed in with two-factor, passes; any other
+// principal is refused (403 admin_only, 403 second_factor_required, or 401
+// sign_in_required for legacy access under RefuseLegacy).
 // It reads the principal Middleware verified, so it must come after it
 // (pkg/httpserver installs Middleware first).
 func AdminOnly(policy AdminPolicy) fiber.Handler {

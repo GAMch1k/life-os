@@ -199,14 +199,23 @@ func FromRequest(c fiber.Ctx) Trace {
 	return trace
 }
 
-// PrincipalActor is the actor a verified identity token makes: the user, for
-// a person who signed in. ok is false for legacy access (a request with no
+// PrincipalActor is the actor a verified identity token makes
+// (docs/architecture/multi-user.md#background-work): the user, for a person
+// who signed in in a browser or with a paired device or a personal token;
+// dev:<name> for a token marked as a development tool; agent:mcp for an MCP
+// client's grant. ok is false for legacy access (a request with no
 // credential), whose actor still comes from ActorHeader as before accounts
 // existed, so that development tools keep their dev:<name>; and for the
 // delegations and service assertions of P21-07.
 func PrincipalActor(p identity.Principal) (Actor, bool) {
 	if p.Kind != identity.KindUser || p.IsLegacy() {
 		return Actor{}, false
+	}
+	switch {
+	case p.Via == identity.ViaMCP:
+		return Agent("mcp"), true
+	case p.Via == identity.ViaToken && p.DevTool != "":
+		return Dev(p.DevTool), true
 	}
 	return User(), true
 }

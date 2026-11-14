@@ -22,7 +22,10 @@ func TestChannelsAreForAdmins(t *testing.T) {
 	}{
 		{"the Dashboard (no token)", "", http.StatusOK},
 		{"legacy access", signer.Token("", "owner", "legacy"), http.StatusOK},
-		{"an admin", signer.Token(member, "admin", "session"), http.StatusOK},
+		{"an admin with two-factor", signer.TwoFactor(member, "admin"), http.StatusOK},
+		{"an admin signed in without two-factor", signer.Token(member, "admin", "session"), http.StatusForbidden},
+		{"the owner's paired phone", signer.Token("", "owner", "device"), http.StatusForbidden},
+		{"the owner's API token", signer.Token("", "owner", "token"), http.StatusForbidden},
 		{"a member", signer.Token(member, "member", "session"), http.StatusForbidden},
 	} {
 		request := httptest.NewRequest(http.MethodGet, "/v1/channels", nil)
