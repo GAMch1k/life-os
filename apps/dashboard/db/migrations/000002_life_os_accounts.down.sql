@@ -1,0 +1,10 @@
+DROP TABLE IF EXISTS server_settings;
+DROP TABLE IF EXISTS setup_codes;
+DROP TRIGGER IF EXISTS user_authz_version ON "user";
+DROP FUNCTION IF EXISTS lifeos_bump_authz_version();
+ALTER TABLE "user" ALTER COLUMN "authzVersion" DROP NOT NULL;
+ALTER TABLE "user" ALTER COLUMN "authzVersion" DROP DEFAULT;
+DROP INDEX IF EXISTS user_one_owner_idx;
+ALTER TABLE "user" DROP CONSTRAINT IF EXISTS user_role_check;
+ALTER TABLE "user" ALTER COLUMN "role" DROP NOT NULL;
+ALTER TABLE "user" ALTER COLUMN "role" DROP DEFAULT;
