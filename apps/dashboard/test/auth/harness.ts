@@ -4,8 +4,11 @@ import path from "node:path";
 
 import { Client } from "pg";
 
+import { backupsHandler, statusHandler } from "../../src/lib/admin-surfaces";
 import { accountHandler } from "../../src/lib/auth/account";
+import { adminHandler } from "../../src/lib/auth/admin";
 import type { CheckRuntime } from "../../src/lib/auth/check";
+import type { RuntimeStatus } from "../../src/lib/runtime-status";
 import { authHandler, checkHandler } from "../../src/lib/auth/handlers";
 import { createRuntime } from "../../src/lib/auth/runtime";
 
@@ -127,13 +130,31 @@ export function runtime(url: string, options: RuntimeOptions = {}) {
   });
 }
 
+export type AppOptions = {
+  /** The runtime status /api/status reads (the Status page's checks). */
+  status?: () => Promise<RuntimeStatus>;
+  /** The backup service behind /api/backups/. */
+  backup?: (request: Request, path: string) => Promise<Response>;
+};
+
 /** The routes a browser reaches on the Dashboard, as the Next.js routes mount them. */
-export function app(rt: CheckRuntime) {
+export function app(rt: CheckRuntime, options: AppOptions = {}) {
   return async (request: Request): Promise<Response> => {
     const { pathname } = new URL(request.url);
     if (pathname.startsWith("/api/auth/")) return authHandler(rt, request);
     if (pathname === "/internal/auth/check") return checkHandler(rt, request);
     if (pathname.startsWith("/api/account")) return accountHandler(rt, request);
+    if (pathname.startsWith("/api/admin")) return adminHandler(rt, request);
+    if (pathname === "/api/status" && options.status) {
+      return statusHandler(rt, request, options.status);
+    }
+    const backup = pathname.match(/^\/api\/backups\/(.+)$/);
+    if (backup && options.backup) {
+      const forward = options.backup;
+      return backupsHandler(rt, request, backup[1], () =>
+        forward(request, backup[1]),
+      );
+    }
     return new Response("not found", { status: 404 });
   };
 }

@@ -62,6 +62,7 @@ function when(iso: string | null, timeZone: string) {
 export function SecuritySettings({
   accounts,
   info,
+  nav,
   passkeyOrigin,
   passkeys,
   publicUrl,
@@ -72,6 +73,8 @@ export function SecuritySettings({
 }: {
   accounts: number;
   info: AccountInfo;
+  /** The links to Settings' other pages (and the admin pages). */
+  nav?: React.ReactNode;
   passkeyOrigin: string;
   passkeys: Passkey[];
   publicUrl: string;
@@ -113,6 +116,7 @@ export function SecuritySettings({
           Sign out
         </Button>
       </header>
+      {nav}
 
       {welcome && !info.secondFactor ? (
         <Alert>
