@@ -88,6 +88,13 @@ func AdminOnly(policy AdminPolicy) fiber.Handler {
 	}
 }
 
+// RequireAdmin is AdminOnly inside one handler, for a single route of a
+// service whose other routes are everyone's.
+func RequireAdmin(c fiber.Ctx, policy AdminPolicy) error {
+	principal, ok := FromFiber(c)
+	return CheckAdmin(principal, ok, policy)
+}
+
 // AdminOnlyHandler is AdminOnly for a plain net/http handler: it verifies
 // X-Life-OS-Identity itself (as Handler does), then applies the policy. A
 // verifier without keys refuses every token.

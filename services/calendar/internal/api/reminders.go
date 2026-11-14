@@ -7,6 +7,7 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/GAMch1k/life-os/pkg/identity"
 	"github.com/GAMch1k/life-os/services/calendar/internal/api/generated"
 	store "github.com/GAMch1k/life-os/services/calendar/internal/repository/generated"
 )
@@ -23,7 +24,13 @@ func (h *Handler) WithReminders(status ReminderStatus) *Handler {
 	return h
 }
 
+// GetReminderStatus is Status's details, so the server's admins'
+// (docs/architecture/multi-user.md#roles-and-checks): a member's identity
+// token is refused; the Dashboard reads it without one.
 func (h *Handler) GetReminderStatus(c fiber.Ctx) error {
+	if err := identity.RequireAdmin(c, identity.AdminPolicy{}); err != nil {
+		return err
+	}
 	if h.reminders == nil {
 		return c.JSON(generated.ReminderDeliveryStatus{})
 	}
