@@ -31,7 +31,7 @@ The admin-only surfaces, the security log, and server diagnostics (P21-04 and P2
 
 1. Build every image first, a few at a time: the migrate image (`docker compose build --pull auth-migrate`), `activity`, the Dashboard, and the other Go services.
 2. Stop the monitor for the switch (`docker compose stop monitor`), so that no service's restart, nor the Dashboard's, is taken for an outage. It reads its last notifications when it starts again, so it neither repeats nor loses one ([Monitor → Restarts](../services/monitor.md#restarts)).
-3. `docker compose up --no-build --no-deps auth-migrate`, then `docker compose up --no-build --no-deps activity-migrate`.
+3. `docker compose up --no-build --no-deps auth-migrate`, then `docker compose up --no-build --no-deps activity-migrate`. `activity_db`'s new index is built with a lock that blocks recording events while it reads `activity_events`: a fraction of a second for a table of tens of thousands of events, but run it at a quiet time on one of millions, since services drop an event they cannot record within about half a second.
 4. `docker compose up -d --no-build --no-deps activity` first (it takes the diagnostics), then the other Go services, `--no-deps` always, the processor last and while no capture is being processed (Status, Automatic processing), and the backup service not while a backup runs.
 5. `docker compose up -d --no-build --no-deps dashboard`. The gateway does not change.
 6. Check `/status` (without a sign-in it shows every check while legacy access is on), a sign-in, and Settings → Security log; then `docker compose up -d --no-build --no-deps monitor`.

@@ -150,7 +150,7 @@ Activity also keeps the server's diagnostics (`diagnostic_events`; [Multi-user d
 - Every Go service sends them through `pkg/httpserver` when its `ACTIVITY_SERVICE_URL` is set: answers 500 to 599 are counted in memory and sent once a minute (and at shutdown) as one row per code, route, and status. `ACTIVITY_DIAGNOSTICS=off` turns a service's off. A failed send keeps the counts for the next one; the service's work never waits for it.
 - `POST /v1/diagnostic-events` (`{"events": [...]}`, at most 1,000): internal, like recording events; a request with a person's identity token is refused (`403 services_only`). `202 {"recorded": n}`, or `400` when any field is not what it must be.
 - `GET /v1/diagnostic-events` (newest first by `lastAt`; filters `service`, `code`, `from`, `to`, `cursor`, `limit` 1–200) and `GET /v1/diagnostic-events/summary?hours=24` (counts by service and code): for owners and admins who signed in. A member's token gets `403 admin_only`, legacy access `401 sign_in_required`; a request without a token is an internal caller (the Dashboard's Diagnostics page, after its own admin check).
-- Rows older than 90 days are deleted as new ones are recorded (at most once an hour).
+- Rows older than 90 days are deleted at start and once a day, and as new ones are recorded (at most once an hour).
 
 The codes are `internal_error`, `bad_gateway`, `service_unavailable`, `gateway_timeout`, `server_error`, `panic`, `not_ready`, and the services' own 5xx codes (`provider_unavailable`, `media_unavailable`, `google_rejected`, `google_unavailable`, `google_not_configured`, `banking_not_configured`, `food_unavailable`, `calendar_unavailable`); an unlisted service code counts under its status's generic one.
 
