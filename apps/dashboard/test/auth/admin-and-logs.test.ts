@@ -13,6 +13,7 @@ import { FIRST_USER_ID } from "../../src/lib/auth/constants";
 import { adminGate } from "../../src/lib/auth/admin";
 import { checkRequest } from "../../src/lib/auth/check";
 import {
+  LEGACY_KEYS_PER_DAY,
   LegacyUseLog,
   noteSigningKey,
   pruneSecurityLog,
@@ -485,13 +486,28 @@ describe("P21-05: the security log", { skip }, () => {
     log.note(headers, new Date("2026-11-02T00:00:10Z"));
     await log.flush();
     await log.flush();
-    const rows = (await securityRows(w)).filter(
+    let rows = (await securityRows(w)).filter(
       (row) => row.address === "192.0.2.1",
     );
     assert.deepEqual(
       rows.map((row) => row.count),
       [2, 1],
     );
+    // A flood from many addresses stays a bounded number of entries a day.
+    const flood = new LegacyUseLog(w.rt.pool);
+    const at = new Date("2026-11-03T10:00:00Z");
+    for (let i = 0; i < LEGACY_KEYS_PER_DAY + 50; i += 1) {
+      flood.note(new Headers({ "x-real-ip": `10.9.${i >> 8}.${i & 255}` }), at);
+    }
+    await flood.flush();
+    await flood.flush();
+    rows = (await securityRows(w)).filter(
+      (row) =>
+        row.kind === "legacy_access_used" &&
+        row.at.toISOString().startsWith("2026-11-03"),
+    );
+    assert.equal(rows.length, LEGACY_KEYS_PER_DAY + 1);
+    assert.equal(rows.find((row) => row.address === null)?.count, 50);
   });
 
   test("legacy access changed in Settings and on the host", async () => {

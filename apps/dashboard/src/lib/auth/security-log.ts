@@ -169,6 +169,9 @@ export async function pruneSecurityLog(db: Queryable): Promise<number> {
  * address, device, or day is written at once; the counts follow with
  * flush(), which the Dashboard runs every minute.
  */
+/** At most this many legacy access entries a day (addresses and devices). */
+export const LEGACY_KEYS_PER_DAY = 200;
+
 export class LegacyUseLog {
   private pending = new Map<
     string,
@@ -181,15 +184,29 @@ export class LegacyUseLog {
     }
   >();
   private known = new Set<string>();
+  private day = "";
   private chain: Promise<void> = Promise.resolve();
 
   constructor(private readonly db: Queryable) {}
 
   /** Counts one request made under legacy access. */
   note(headers: Headers, now = new Date()) {
-    const address = clientAddress(headers);
-    const device = deviceLabel(headers);
     const day = now.toISOString().slice(0, 10);
+    if (day !== this.day) {
+      // A new day: forget the other days' keys, so the set stays small.
+      this.day = day;
+      for (const old of this.known) {
+        if (!old.startsWith(`${day}|`)) this.known.delete(old);
+      }
+    }
+    let address = clientAddress(headers);
+    let device = deviceLabel(headers);
+    // A flood from many addresses stays bounded: past the cap, a day's new
+    // addresses and devices count together, without either.
+    if (this.known.size >= LEGACY_KEYS_PER_DAY) {
+      const fresh = `${day}|${address ?? ""}|${device ?? ""}`;
+      if (!this.known.has(fresh)) address = device = null;
+    }
     const key = `${day}|${address ?? ""}|${device ?? ""}`;
     const entry = this.pending.get(key);
     if (entry) {
@@ -206,10 +223,6 @@ export class LegacyUseLog {
     }
     if (!this.known.has(key)) {
       this.known.add(key);
-      // Forget other days' keys: the set stays small.
-      for (const old of this.known) {
-        if (!old.startsWith(`${day}|`)) this.known.delete(old);
-      }
       void this.flush();
     }
   }
