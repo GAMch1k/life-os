@@ -763,16 +763,30 @@ describe(
     });
 
     test("an address gets a bounded number of failed sign-in entries a day", async () => {
-      const headers = new Headers({ "x-real-ip": "198.51.100.77" });
+      const headers = (ua: string) =>
+        new Headers({ "x-real-ip": "198.51.100.77", "user-agent": ua });
       const at = new Date("2026-11-05T09:00:00Z");
-      for (let i = 0; i < FAILED_SIGN_IN_ENTRIES_PER_ADDRESS + 5; i += 1) {
-        await recordFailedSignIn(w.rt.pool, {
-          subjectUserId: randomUUID(),
-          headers,
-          detail: "password:invalid_username_or_password",
+      const fail = (subjectUserId: string | null, detail: string, ua = PHONE) =>
+        recordFailedSignIn(w.rt.pool, {
+          subjectUserId,
+          headers: headers(ua),
+          detail,
           at,
         });
+      // The cap's worth of entries: names that are no account, each with
+      // its own code.
+      for (let i = 0; i < FAILED_SIGN_IN_ENTRIES_PER_ADDRESS; i += 1) {
+        await fail(null, `password:code_${i}`);
       }
+      // Past it, a failure against Alice still names her, whatever the
+      // code, in one entry; the unknown names share one entry.
+      await fail(aliceId, "password:invalid_username_or_password", LAPTOP);
+      await fail(aliceId, "totp:invalid_code");
+      await fail(aliceId, "passkey:invalid");
+      await fail(null, "password:code_new_1");
+      await fail(null, "password:code_new_2");
+      // A known entry still counts in its own.
+      await fail(null, "password:code_0");
       // At once, for one key: still one entry, never two.
       await Promise.all(
         Array.from({ length: 10 }, () =>
@@ -784,12 +798,20 @@ describe(
         ),
       );
       const rows = await failedRows("198.51.100.77");
-      assert.equal(rows.length, FAILED_SIGN_IN_ENTRIES_PER_ADDRESS + 1);
-      const overflow = rows.find(
+      assert.equal(rows.length, FAILED_SIGN_IN_ENTRIES_PER_ADDRESS + 2);
+      const overflow = rows.filter(
         (row) => row.detail === FAILED_SIGN_IN_OVERFLOW,
-      )!;
-      assert.equal(overflow.count, 5);
-      assert.equal(overflow.subject_user_id, null);
+      );
+      const alices = overflow.find((row) => row.subject_user_id === aliceId)!;
+      const unknown = overflow.find((row) => row.subject_user_id === null)!;
+      assert.equal(alices.count, 3);
+      // The device is the first failure's.
+      assert.equal(alices.device, "Firefox on Linux");
+      assert.equal(unknown.count, 2);
+      assert.equal(
+        rows.find((row) => row.detail === "password:code_0")!.count,
+        2,
+      );
       const parallel = await failedRows("198.51.100.78");
       assert.deepEqual(
         parallel.map((row) => row.count),

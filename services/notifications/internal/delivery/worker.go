@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/GAMch1k/life-os/pkg/activity"
+	"github.com/GAMch1k/life-os/pkg/diagnostics"
 	store "github.com/GAMch1k/life-os/services/notifications/internal/repository/generated"
 )
 
@@ -134,11 +135,11 @@ func (w *Worker) ProcessOne(ctx context.Context) (worked bool, err error) {
 
 	channel, ok := w.channels[claimed.Channel]
 	if !ok {
-		return true, w.finish(ctx, claimed, row, StatusSkipped, fmt.Sprintf("channel %q is not configured", claimed.Channel))
+		return true, w.finish(ctx, claimed, row, StatusSkipped, fmt.Sprintf("channel %q is not configured", claimed.Channel), "channel_not_configured")
 	}
 	if w.options.Policy.Expired(notification.CreatedAt, w.options.Now()) {
 		// This claim started no attempt.
-		return true, w.finish(ctx, claimed, row, StatusFailed, expiredMessage(claimed.Attempts-1, w.options.Policy.MaxAge))
+		return true, w.finish(ctx, claimed, row, StatusFailed, expiredMessage(claimed.Attempts-1, w.options.Policy.MaxAge), "expired")
 	}
 
 	sendCtx, cancel := context.WithTimeout(ctx, w.options.SendTimeout)
@@ -165,7 +166,7 @@ func (w *Worker) ProcessOne(ctx context.Context) (worked bool, err error) {
 		if decision.Status == StatusFailed && !IsPermanent(sendErr) {
 			message = expiredMessage(claimed.Attempts, w.options.Policy.MaxAge) + "; last error: " + message
 		}
-		return true, w.finish(ctx, claimed, row, decision.Status, message)
+		return true, w.finish(ctx, claimed, row, decision.Status, message, diagnostics.ErrorCode(sendErr))
 	}
 	_, err = w.store.RetryDelivery(ctx, store.RetryDeliveryParams{
 		ID: claimed.ID, LeaseOwner: w.options.Owner, LastError: &message,
@@ -174,12 +175,15 @@ func (w *Worker) ProcessOne(ctx context.Context) (worked bool, err error) {
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return true, fmt.Errorf("schedule delivery retry: %w", err)
 	}
+	// The log has a classified code; the channel's own words stay in the
+	// delivery's last error, for Status (docs/architecture/multi-user.md#logs).
 	w.logger.Info("notification delivery will be retried", "delivery", uuid.UUID(claimed.ID.Bytes),
-		"channel", claimed.Channel, "attempt", claimed.Attempts, "nextAttemptAt", decision.NextAttemptAt.UTC())
+		"channel", claimed.Channel, "attempt", claimed.Attempts, "nextAttemptAt", decision.NextAttemptAt.UTC(),
+		"error", diagnostics.ErrorCode(sendErr))
 	return true, nil
 }
 
-func (w *Worker) finish(ctx context.Context, claimed store.Delivery, row store.Notification, status, message string) error {
+func (w *Worker) finish(ctx context.Context, claimed store.Delivery, row store.Notification, status, message, code string) error {
 	finished, err := w.store.FinishDelivery(ctx, store.FinishDeliveryParams{
 		ID: claimed.ID, LeaseOwner: w.options.Owner, Status: status, LastError: &message,
 	})
@@ -191,7 +195,7 @@ func (w *Worker) finish(ctx context.Context, claimed store.Delivery, row store.N
 	}
 	if status == StatusFailed {
 		w.logger.Warn("notification delivery failed", "delivery", uuid.UUID(claimed.ID.Bytes), "channel", claimed.Channel,
-			"attempts", claimed.Attempts)
+			"attempts", claimed.Attempts, "error", code)
 		w.emitFailed(ctx, row, finished)
 	}
 	return nil

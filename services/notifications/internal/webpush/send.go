@@ -85,6 +85,10 @@ type StatusError struct {
 	Text string
 }
 
+// HTTPStatus is the push service's status, which the log keeps instead of
+// its answer (pkg/diagnostics.ErrorCode).
+func (e *StatusError) HTTPStatus() int { return e.StatusCode }
+
 func (e *StatusError) Error() string {
 	message := fmt.Sprintf("push service answered %d %s", e.StatusCode, http.StatusText(e.StatusCode))
 	if e.Text != "" {

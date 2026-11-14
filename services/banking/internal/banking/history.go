@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GAMch1k/life-os/pkg/diagnostics"
 	"github.com/GAMch1k/life-os/services/banking/internal/enablebanking"
 	"github.com/GAMch1k/life-os/services/banking/internal/finance"
 	store "github.com/GAMch1k/life-os/services/banking/internal/repository/generated"
@@ -66,7 +67,7 @@ func (s *Service) startHistoryRead(ctx context.Context, conn store.BankConnectio
 	row, err := s.queries.StartHistoryRead(ctx, store.StartHistoryReadParams{Now: timestamptz(s.now()), ID: conn.ID})
 	if err != nil {
 		if !isNoRows(err) {
-			s.logger.Warn("starting the history read failed", "connection", uuidString(conn.ID), "error", err)
+			s.logger.Warn("starting the history read failed", "connection", uuidString(conn.ID), "error", diagnostics.ErrorCode(err))
 		}
 		return conn
 	}
@@ -97,7 +98,7 @@ func (s *Service) readHistory(ctx context.Context, conn store.BankConnection, ps
 	for _, account := range accounts {
 		transactions, err := s.readTransactions(ctx, account.UID, window, psu)
 		if err != nil {
-			s.logger.Warn("the bank history read failed", "connection", id, "error", err)
+			s.logger.Warn("the bank history read failed", "connection", id, "error", diagnostics.ErrorCode(err))
 			s.finishHistory(ctx, conn, HistoryFailed, fmt.Sprintf("%s did not share older transactions: %s.", conn.Institution, describe(err)))
 			return
 		}
@@ -128,7 +129,7 @@ func (s *Service) readHistory(ctx context.Context, conn store.BankConnection, ps
 			return
 		}
 		if err := s.pushHistory(ctx, id, part); err != nil {
-			s.logger.Warn("Finance did not take the bank history", "connection", id, "part", index+1, "parts", len(parts), "error", err)
+			s.logger.Warn("Finance did not take the bank history", "connection", id, "part", index+1, "parts", len(parts), "error", diagnostics.ErrorCode(err))
 			s.finishHistory(ctx, conn, HistoryFailed, fmt.Sprintf("Finance did not take the older transactions (%s); %d of %d parts were imported.", financeCode(err), index, len(parts)))
 			return
 		}
@@ -154,7 +155,7 @@ func (s *Service) pushHistory(ctx context.Context, id string, part finance.Impor
 		if err == nil || finance.IsPermanent(err) || attempt == historyAttempts {
 			return err
 		}
-		s.logger.Info("Finance did not answer the history import; sending it again", "connection", id, "attempt", attempt, "error", err)
+		s.logger.Info("Finance did not answer the history import; sending it again", "connection", id, "attempt", attempt, "error", diagnostics.ErrorCode(err))
 		select {
 		case <-ctx.Done():
 			return err

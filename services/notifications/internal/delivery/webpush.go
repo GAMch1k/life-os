@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/GAMch1k/life-os/pkg/diagnostics"
 	store "github.com/GAMch1k/life-os/services/notifications/internal/repository/generated"
 	"github.com/GAMch1k/life-os/services/notifications/internal/webpush"
 )
@@ -340,7 +341,7 @@ func (c *WebPushChannel) forget(ctx context.Context, device store.PushSubscripti
 	}
 	c.logger.InfoContext(ctx, "web push subscription removed: its push service says it is gone",
 		"subscription", uuid.UUID(device.ID.Bytes),
-		"pushService", webpush.ServiceHost(device.Endpoint))
+		"pushService", webpush.ServiceHost(device.Endpoint), "error", diagnostics.ErrorCode(cause))
 	return nil
 }
 

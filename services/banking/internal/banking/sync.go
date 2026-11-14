@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/GAMch1k/life-os/pkg/activity"
+	"github.com/GAMch1k/life-os/pkg/diagnostics"
 	"github.com/GAMch1k/life-os/services/banking/internal/enablebanking"
 	"github.com/GAMch1k/life-os/services/banking/internal/finance"
 	store "github.com/GAMch1k/life-os/services/banking/internal/repository/generated"
@@ -251,7 +252,7 @@ func (s *Service) bankFailed(ctx context.Context, conn store.BankConnection, err
 	if apiError != nil {
 		code = apiError.Code
 	}
-	s.logger.Warn("bank sync failed", "connection", uuidString(conn.ID), "trigger", trigger, "failures", row.ConsecutiveFailures, "next", next, "error", err)
+	s.logger.Warn("bank sync failed", "connection", uuidString(conn.ID), "trigger", trigger, "failures", row.ConsecutiveFailures, "next", next, "error", diagnostics.ErrorCode(err))
 	if row.ConsecutiveFailures == 1 {
 		s.syncFailedEvent(ctx, row, trigger, message, code)
 	}
@@ -305,7 +306,7 @@ func (s *Service) push(ctx context.Context, conn store.BankConnection, read read
 		if recordErr != nil {
 			return conn, recordErr
 		}
-		s.logger.Warn("pushing the bank sync to Finance failed", "connection", uuidString(conn.ID), "trigger", trigger, "kept", keep != nil, "failures", row.ConsecutiveFailures, "error", err)
+		s.logger.Warn("pushing the bank sync to Finance failed", "connection", uuidString(conn.ID), "trigger", trigger, "kept", keep != nil, "failures", row.ConsecutiveFailures, "error", diagnostics.ErrorCode(err))
 		if row.ConsecutiveFailures == 1 {
 			s.syncFailedEvent(ctx, row, trigger, message, financeCode(err))
 		}
