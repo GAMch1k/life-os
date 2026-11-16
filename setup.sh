@@ -2010,7 +2010,8 @@ cmd_gateway() {
   gateway_values
   env_update
   say "Life OS: $(env_get LIFE_OS_PUBLIC_URL) (listening on $(gateway_bind):$(gateway_port))."
-  apply_hint gateway notifications
+  # The Dashboard reads LIFE_OS_INSECURE_LOGIN_HOSTS and the address too.
+  apply_hint gateway dashboard notifications
 }
 
 # ---------- Accounts ----------
