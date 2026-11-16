@@ -12,15 +12,36 @@ The release notes list each APK's SHA-256. Both apps are signed with the Life OS
 
 ## Connect to your server
 
-Today, the apps need Life OS behind [Cloudflare Tunnel and Access](access.md#cloudflare-tunnel-and-access), at an https address, and a Cloudflare Access **service token** for the phone. Without Cloudflare, use the web app in the phone's browser over your VPN instead.
+From app **0.5.0**, the phone **pairs with your Life OS account**: the phone and its watch get keys of their own, which Life OS checks on every request, and Cloudflare Access is no longer needed. Life OS needs an **https** public address (`LIFE_OS_PUBLIC_URL`) that the phone reaches: Cloudflare Tunnel, your own proxy with a certificate, or an https address over your VPN. The app refuses plain `http://` servers, `http://localhost` included.
 
 1. At the first start, the app offers the official server: replace it with your own address, such as `https://lifeos.example.com`. To change it later: **Settings › Connection › Edit connection**.
-2. Make a service token for the phone in Cloudflare Zero Trust, and a **Service Auth** policy for it on your Life OS application. The app's "How to get a token" shows each step; they are also in the [app's README](https://github.com/GAMch1k/life-os-app#first-run).
-3. Paste the token's Client ID and Client Secret into the app and tap **Connect**. It tries them and opens Today.
+2. Pair the phone, in one of two ways:
+   - **With a second screen**: in the Dashboard, **Settings → Devices → Pair a phone** shows a QR code, and the code as text. In the app, scan the QR code or type the code. The app shows the server's address and asks before it pairs.
+   - **On the phone alone**: **Sign in on this phone** opens Life OS's sign-in page in a Custom Tab. Sign in (if you are signed in already, you skip this step) and tap **Pair**. The app pairs right away, without asking again.
 
-The watch takes the server and the token from the phone. To revoke a phone, delete its service token in Cloudflare.
+   A pairing code works once, for 5 minutes. Making one needs a sign-in, or your password, from the last 12 hours. If it has been longer, the page asks for your password.
+3. The watch gets a key of its own from the phone (**Settings › Watch** in the app).
 
-**Pairing with your account.** Life OS can pair a phone with your account (**Settings → Devices**, a QR code, or signing in from the app), giving it and its watch keys of their own; Cloudflare Access's service token, where Access is in front, stays as well. App versions that pair are on their way; until yours does, keep [legacy access](accounts.md#legacy-access) on. Once your phone and watch are paired, turn legacy access off. How it works: [Accounts → Settings → Devices](accounts.md#settings--devices); for app developers: [Devices and tokens](../api/devices.md).
+The Dashboard opens in a Custom Tab and signs in through the web login, as in a browser. The share sheet sends what you share to Inbox with the phone's key.
+
+**Settings → Devices** in the Dashboard lists the phone and, under it, its watch, each with when it was last used. **Revoke** signs one out (a phone together with its watch), and their push notifications stop. These also sign out every device:
+
+- **Sign out everywhere**;
+- a password reset;
+- a password change, unless you untick "Also sign out my devices, API tokens, and connected apps".
+
+Once your phone and watch are paired, turn [legacy access](accounts.md#legacy-access) off (**Settings → Security**). How pairing works: [Accounts → Settings → Devices](accounts.md#settings--devices). For app developers: [Devices and tokens](../api/devices.md).
+
+**Cloudflare Access, as an optional outer layer.** If Life OS is behind [Cloudflare Tunnel and Access](access.md#cloudflare-tunnel-and-access), Access stays in front, and the phone also needs an Access **service token**:
+
+1. Make a service token for the phone in Cloudflare Zero Trust.
+2. Add a **Service Auth** policy for it on your Life OS application. The app's "How to get a token" shows each step; they are also in the [app's README](https://github.com/GAMch1k/life-os-app#first-run).
+3. In the app, paste the token's Client ID and Client Secret and tap **Connect**.
+4. Then pair: Access must let the pairing request through.
+
+The watch takes the token from the phone. To shut a phone out at Access too, delete its service token in Cloudflare.
+
+**Apps older than 0.5.0** know only the Access service token. They work only while legacy access is on. Update them (below) and pair before you turn legacy access off.
 
 ## Notifications
 

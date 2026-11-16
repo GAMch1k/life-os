@@ -38,11 +38,13 @@ The person icon in the header opens **Settings → Security** (`/settings/securi
 | --- | --- |
 | **Authenticator app** | Turn on two-factor sign-in with an authenticator app (scan the QR code, or type the key), get ten recovery codes, make new ones, or turn it off. Each needs your password. |
 | **Passkeys** | Add a passkey (your phone's or computer's screen lock), or remove one. Passkeys work at the public address (`LIFE_OS_PUBLIC_URL`) only. |
-| **Password** | Change it; every other session is signed out. |
+| **Password** | Change it; every other session is signed out. "Also sign out my devices, API tokens, and connected apps" (ticked unless you untick it) signs out every paired phone and watch, every API token, and every connected app too, and this browser stays signed in. |
 | **Where you are signed in** | Every session, with its browser and last use: sign one out, every one but this, or [everything at once](#sign-out-everywhere). |
 | **Legacy access** | The owner only: turn [legacy access](#legacy-access) off. Turning it on is done on the server. |
 
-Adding a passkey needs a sign-in from the last 12 hours; Life OS asks you to sign in again otherwise.
+Adding a passkey needs a sign-in from the last 12 hours; Life OS asks you to sign in again otherwise. Adding a second factor also proves it is still you: without one yet, a first passkey asks for your password (the authenticator app always does); with one already, a passkey or the authenticator app can be added only in a browser that signed in with it ("sign out and sign in again with it" otherwise). So someone who got hold of a signed-in browser cannot add a factor of their own.
+
+**Proving it is still you.** Making an API token or a pairing code, and allowing an app to connect, needs a sign-in, or your password, from the last 12 hours. Otherwise the page asks for your password first, and then goes on. Wrong passwords there count as failed sign-ins in the security log; after 5 within 15 minutes, sign in again instead.
 
 ### Two-factor sign-in
 
@@ -65,7 +67,7 @@ The app's side is in [Phone and watch apps](phone-apps.md); the API it uses is i
 
 - A token has a **name**, **access per module** (none, read, or read and write: Tasks, Calendar, Inbox, Food, Finance, Voice notes, Notifications, the Event Log), and an **expiry**: 90 days unless you pick another day, at most a year. It is shown once.
 - **A development tool** (a switch): its changes show in the Event Log as the tool, `dev:<name>`, not as you. Development tools and agents use such a token rather than `X-Life-OS-Actor` once legacy access is off.
-- A token reaches only the modules it names (`403 insufficient_scope` elsewhere), never the server's admin parts, and cannot manage your account, devices, or tokens. It can sign itself out (`POST /api/auth/devices/sign-out`). Expired tokens are listed as such for 30 days, then deleted.
+- A token reaches only the modules it names (`403 insufficient_scope` for another module, or for a write with read access; `403 credential_not_allowed` outside the modules, such as MCP or `/android/`), never the server's admin parts, and cannot manage your account, devices, or tokens. It can sign itself out (`POST /api/auth/devices/sign-out`). Expired tokens are listed as such for 30 days, then deleted.
 
 ## Connected apps
 
@@ -73,7 +75,7 @@ The app's side is in [Phone and watch apps](phone-apps.md); the API it uses is i
 
 ## Sign out everywhere
 
-**Settings → Security → Sign out everywhere** ends, at once and together, every session of your account (this browser's too), every paired phone and watch, every API token, and every connected app. Use it when a device was lost or something looks wrong; then sign in again, pair your devices again, and make new tokens. An admin signing your account out, or disabling it, does the same.
+**Settings → Security → Sign out everywhere** ends, at once and together, every session of your account (this browser's too), every paired phone and watch, every API token, and every connected app. Use it when a device was lost or something looks wrong; then sign in again, pair your devices again, and make new tokens. An admin signing your account out, or disabling it, does the same, and so does setting a new password with a reset link; changing your password does it for the devices, tokens, and apps unless you untick the box. The security log shows each as "Devices, tokens, and apps signed out", with the reason.
 
 ## Settings → Security log
 
@@ -106,7 +108,7 @@ Before accounts, whoever reached Life OS was its owner. **Legacy access** keeps 
 
 ## Locked out
 
-- **Forgot the password:** on the server, `./setup.sh recover-owner` prints a one-time link to set a new one (`https://…/reset/<code>`). It works once, for 24 hours, and signs out every session of the account.
+- **Forgot the password:** on the server, `./setup.sh recover-owner` prints a one-time link to set a new one (`https://…/reset/<code>`). It works once, for 24 hours, and signs out every session of the account, its paired phones and watches, its API tokens, and its connected apps: pair them again afterwards.
 - **Lost the authenticator app and the recovery codes:** `./setup.sh recover-owner --reset-2fa` does the same and also turns two-factor off; turn it on again afterwards.
 
 ## Sign everyone out

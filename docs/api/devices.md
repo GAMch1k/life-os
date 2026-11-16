@@ -8,18 +8,18 @@ Everything here is new with P21-06. A server from before it answers `/api/auth/d
 
 1. The phone gets a **pairing code**, from a QR code in **Settings → Devices** (`lifeos://pair?host=…&code=…`) or by signing in in a Custom Tab (`/login?pair=1`).
 2. It redeems the code once at `POST /api/auth/devices/pair` and receives its **device key**, `lo_dev_…`, shown this one time. It keeps it in Android Keystore-backed storage.
-3. It sends `Authorization: Bearer lo_dev_…` on **every** native call to Life OS: voice uploads, Inbox, Tasks, Calendar, push registration, update checks, APK downloads, and the watch's requests it relays.
+3. It sends `Authorization: Bearer lo_dev_…` on **every** native call to Life OS: voice uploads, Inbox (the share sheet too), Tasks, Calendar, push registration, update checks, APK downloads, and the watch's requests it relays.
 4. It may create **one child key for its watch** at `POST /api/auth/devices/child`.
-5. A `401` means the key no longer works (revoked, expired, the account disabled, everyone signed out): the app says so and offers to pair again.
+5. A `401 unauthenticated` from the gateway means the key no longer works (revoked, the account disabled, everyone signed out): the app says so and offers to pair again. A `401 identity_expired` from a service is no such thing: the app sends the request again ([When a request is refused](#when-a-request-is-refused)).
 
-The TWA (the web Dashboard in Chrome) signs in through the ordinary web login and keeps Chrome's session cookie. It never sees or sends the device key.
+The app is native (from 0.5.0). The web Dashboard opens in a Custom Tab, which signs in through the ordinary web login and keeps Chrome's session cookie; it never sees or sends the device key, and the key never reaches it.
 
 ## Headers on every native call
 
 | Header | When | Value |
 | --- | --- | --- |
 | `Authorization` | always, once paired | `Bearer <device key>`: the phone's own key for its calls, the watch's key for the watch's (relayed or direct) |
-| `CF-Access-Client-Id`, `CF-Access-Client-Secret` | when the server is behind Cloudflare Access and the app has a service token | as today. Access lets the request through to Life OS; Life OS's own check is the device key |
+| `CF-Access-Client-Id`, `CF-Access-Client-Secret` | only when the server keeps Cloudflare Access as an optional outer layer and the app has a service token for it | as before. Access lets the request through to Life OS; Life OS's own check is the device key |
 | `Idempotency-Key` | on the writes that take one (voice uploads, Food) | as today |
 | `X-Life-OS-Actor` | never needed with a key | a request with a device key acts as the account's user (`user` in the Event Log); the header is ignored |
 
@@ -37,12 +37,12 @@ lifeos://pair?host=<public URL>&code=<code>[&state=<state>]
 
 | Parameter | Meaning |
 | --- | --- |
-| `host` | the server's public URL (`LIFE_OS_PUBLIC_URL`), URL-encoded, such as `https%3A%2F%2Flifeos.example.com`. `https://`, or `http://` only for `localhost`, `127.0.0.1`, and `[::1]` |
+| `host` | the server's public URL (`LIFE_OS_PUBLIC_URL`), URL-encoded, such as `https%3A%2F%2Flifeos.example.com`. **`https://` only**: the app refuses any other link, `http://localhost` included, so a server that is to pair phones has an HTTPS public URL |
 | `code` | the pairing code, such as `K7QM-2XRP-9VDA-H4TC`: 16 characters from `ABCDEFGHJKLMNPQRSTUVWXYZ23456789` in four groups. Case and dashes do not matter when it is redeemed. It works **once**, for **5 minutes** |
 | `state` | only in the Custom Tab flow: the `state` the app passed, unchanged |
 | `error` | only in the Custom Tab flow, instead of `code`: `access_denied` when the person tapped **Cancel** |
 
-The app shows the host and asks before it pairs ("Pair with lifeos.example.com?"): a pairing link can come from anywhere a link can.
+For a scanned or opened link (the QR code flow), the app shows the host and asks before it pairs ("Pair with lifeos.example.com?"): such a link can come from anywhere a link can. In the Custom Tab flow it does not ask again: the person confirmed in the page (**Pair this phone with Life OS?**), and a link whose `state` matches the one the app sent can only be the answer to its own request, so the app redeems the code at once.
 
 ### Flow 1: QR code (a second screen)
 
@@ -60,7 +60,7 @@ The app shows the host and asks before it pairs ("Pair with lifeos.example.com?"
 
 3. The person signs in as usual (password and two-factor, or a passkey; already signed in in Chrome, they skip this), and sees **Pair this phone with Life OS?** with **Pair** and **Cancel**.
 4. **Pair** sends the browser to `lifeos://pair?host=…&code=…&state=…`; **Cancel** to `lifeos://pair?error=access_denied&state=…`. The page never sends the browser anywhere else: no return address is taken from the request.
-5. The app checks `state`, then redeems the code **with `verifier`**. A code made with a challenge works only with the verifier: another app that catches the `lifeos://` link cannot use it.
+5. The app checks `state` and, when it matches, redeems the code **with `verifier`** without asking again (a link whose `state` does not match is dropped). A code made with a challenge works only with the verifier: another app that catches the `lifeos://` link cannot use it.
 
 The `host` in the link is the server's public URL. The app redeems the code at the server it opened (normally the same).
 
@@ -78,7 +78,7 @@ Content-Type: application/json
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `code` | yes | the pairing code |
-| `name` | yes | what Settings → Devices calls this phone: 1 to 64 characters, no control characters (the phone's model, or the name the person gave it) |
+| `name` | yes | what Settings → Devices calls this phone (the phone's model, or the name the person gave it). App and server clean it the same way: white space (tabs, new lines, line and paragraph separators) becomes one space, control and format characters (`Cc`, `Cf`, judged per UTF-16 unit, so emoji stay whole) are dropped, and the rest is trimmed and cut to **64 UTF-16 units**, never half a surrogate pair. The answer's `name` is the cleaned one; nothing left is `400 bad_request`. The watch's `name` is cleaned the same way |
 | `verifier` | when the code was made with a `challenge` (Custom Tab) | the verifier whose SHA-256 is the challenge |
 
 `200`:
@@ -178,8 +178,8 @@ Everything the account may do through the API, as the account's user: Tasks, Cal
 It may not:
 
 - manage the account: `/api/account/…` (sessions, devices, tokens) and `/api/admin/…` answer `401 sign_in_required`;
-- open the server's admin routes: the backups, host health, the AI plan's usage, the diagnostics, and the delivery health behind Status answer `403 admin_only`, even for the owner's phone. Admin views on the phone come through the TWA, whose web sign-in has its own second factor. `/api/status` answers the members' one line (`"view": "member"`);
-- use MCP (`/api/mcp/` answers `403`): MCP clients sign in with OAuth.
+- open the server's admin routes: the backups, host health, the AI plan's usage, the diagnostics, and the delivery health behind Status answer `403 admin_only`, even for the owner's phone. Admin views on the phone come through the Dashboard in a Custom Tab, whose web sign-in has its own second factor. `/api/status` answers the members' one line (`"view": "member"`);
+- use MCP (`/api/mcp/` answers `403 credential_not_allowed`): MCP clients sign in with OAuth.
 
 ### The calls the app makes
 
@@ -189,20 +189,20 @@ All with `Authorization: Bearer <key>`; bodies and answers are unchanged from [t
 | --- | --- |
 | Today: tasks | `GET /api/tasks/v1/tasks?…`, `POST /api/tasks/v1/tasks/{id}/complete`, `…/reopen` |
 | Today: events | `GET /api/calendar/v1/events?from=…&to=…&timeZone=…` |
-| Capture text, photos | `POST /api/inbox/v1/inbox-items`, the media upload, `GET /api/inbox/v1/inbox-items/{id}`, `…/processing-attempts` |
+| Capture text, photos, the share sheet | `POST /api/inbox/v1/inbox-items`, the media upload, `GET /api/inbox/v1/inbox-items/{id}`, `…/processing-attempts` |
 | Voice note | `POST /api/voice/v1/audio-jobs` (multipart, up to 25 MB), `GET /api/voice/v1/audio-jobs/{id}` |
 | Push | `GET /api/notifications/v1/push/config`, `POST /api/notifications/v1/push/subscriptions`, `DELETE /api/notifications/v1/push/subscriptions/{id}` |
 | Updates | `GET /android/updates` (the manifest), `GET /android/lifeos-phone-<version>-<code>.apk`, `GET /android/lifeos-wear-<version>-<code>.apk` (with `Range` for resuming) |
 | The watch's relay | the watch's request, as it is, with the watch's key |
 | Who am I | `GET /api/auth/devices/me` |
 
-The share sheet is the TWA's (`POST /share`, a web form with Chrome's cookie), not a native call.
+The share sheet is native: what is shared to the app goes to the Inbox API above with the key, like any capture. (The Dashboard's `POST /share`, a web form with Chrome's cookie, is the web app's share target, not the native app's.)
 
-**Long uploads.** The gateway checks the key when the request's headers arrive, and the identity token it hands the service stays valid for at least 4 minutes from then: a voice note that takes up to about 4 minutes to upload is fine; a slower one fails with `401` from the service and should be retried (the `Idempotency-Key` makes a retry safe).
+**Long uploads.** The gateway checks the key when the request's headers arrive, and the identity token it hands the service stays valid for at least 4 minutes from then: a voice note that takes up to about 4 minutes to upload is fine; a slower one fails with `401 identity_expired` from the service and should be sent again (the `Idempotency-Key` makes a retry safe). It never means the key stopped working.
 
 ## Push notifications and the key
 
-`POST /api/notifications/v1/push/subscriptions` with a device key stores the subscription **with that key's id** (`deviceKeyId` in the answer). Subscribing again with the same endpoint moves the subscription to the key that sent it: so after pairing, the app registers again, and an endpoint registered before pairing (with the service token alone, under legacy access) now belongs to the key. A subscription made by the TWA (web push in Chrome) has no device key.
+`POST /api/notifications/v1/push/subscriptions` with a device key stores the subscription **with that key's id** (`deviceKeyId` in the answer). Subscribing again with the same endpoint moves the subscription to the key that sent it: so after pairing, the app registers again, and an endpoint registered before pairing (with the service token alone, under legacy access) now belongs to the key. A subscription made by the web Dashboard (web push in Chrome) has no device key.
 
 **Revoking a key deletes its push subscriptions**: in Settings → Devices, with **Sign out everywhere**, with `./setup.sh sign-out-all` (unless `--keep-devices`), with the key's own sign-out, and when a phone's new child key replaces the old one. The server does it within a minute, also if Notifications was briefly down. The app need not unsubscribe first; if it does, `DELETE …/push/subscriptions/{id}` answers `204` or `404` (already gone).
 
@@ -222,10 +222,14 @@ The share sheet is the TWA's (`POST /share`, a web form with Chrome's cookie), n
 | Answer | Comes from | Means | The app |
 | --- | --- | --- | --- |
 | `401` `{"error":{"code":"unauthenticated",…}}` | the gateway | the key does not work: revoked, its account disabled, everyone signed out, or no key while legacy access is off | says "This phone is no longer connected to Life OS" and offers to pair again; it stops retrying the request |
-| `401` `{"error":{"code":"unauthenticated",…}}` | a service | the identity token ran out during a very slow upload (above) | retries once; a second `401` is the row above |
+| `401` `{"error":{"code":"identity_expired",…}}` | a service | the gateway let the request through, but the identity token it carried ran out before the service read it: a very slow upload (above) | sends the request again (with the same `Idempotency-Key`); never re-pairs. A `401 unauthenticated` on the retry is the row above |
 | `403` `{"error":{"code":"module_not_allowed",…}}` | a service | the account may not use this module (an admin turned it off for the person; from P21-12) | shows "Your account can't use <module> on this server" and hides that part; it does **not** re-pair |
 | `403` `{"error":{"code":"admin_only",…}}` | a service | an admin route (above) | does not offer it natively |
-| `403` `{"error":{"code":"forbidden",…}}` | the gateway | a route the key may not use (`/api/mcp/`), or a write from a browser on another site | a bug in the app: log it |
+| `403` `{"error":{"code":"credential_not_allowed",…}}` | the gateway | a route this kind of credential never reaches: a device key on `/api/mcp/` (a personal token outside the modules) | a bug in the app: log it |
+| `403` `{"error":{"code":"insufficient_scope",…}}` | the gateway, or a service | a personal token or MCP grant whose scopes do not cover the module or the method (never a device key) | – |
+| `403` `{"error":{"code":"forbidden_path",…}}` | the gateway | a path with an encoded slash or backslash, or a dot segment (`/./`, `/../`), which the app never sends | a bug in the app: log it |
+| `403` `{"error":{"code":"forbidden_origin",…}}` | the gateway | a write from a browser on another site (never a native call with a key) | – |
+| `403` `{"error":{"code":"forbidden",…}}` | the gateway | the gateway's own refusal: the request came through the Cloudflare tunnel without Access's token, while the server requires Access | the Access service token is missing or wrong: shows the connection settings |
 | `404` `{"error":{"code":"module_off",…}}` | the gateway | the module is not installed on this server | hides that part |
 | `503` `{"error":{"code":"auth_unavailable",…}}` | the gateway | the sign-in check is down for a moment | retries later; keeps the key |
 | `302` to Cloudflare, or `403` HTML from Cloudflare | Cloudflare Access | the Access service token was refused | as today |
@@ -238,7 +242,7 @@ These are the Dashboard's own calls (`/api/account/…`, with the session cookie
 
 | Request | Answer |
 | --- | --- |
-| `POST /api/account/devices/pairing-codes` `{}`, or `{"challenge": "…", "state": "…"}` (the Custom Tab page) | `201 {"code": "K7QM-…", "expiresAt": "…", "link": "lifeos://pair?host=…&code=…"}`. An account has at most 5 unused codes; a sixth replaces the oldest |
+| `POST /api/account/devices/pairing-codes` `{}`, or `{"challenge": "…", "state": "…"}` (the Custom Tab page) | `201 {"code": "K7QM-…", "expiresAt": "…", "link": "lifeos://pair?host=…&code=…"}`. An account has at most 5 unused codes; a sixth replaces the oldest. Needs a sign-in or the password re-entered within 12 hours (`POST /api/account/confirm-password` `{"password": "…"}`, `204`), else `403 reauth_required`, and the page asks for the password |
 | `GET /api/account/devices` | `200 {"devices": [{"id", "name", "kind": "phone" \| "watch", "parentId", "createdAt", "lastUsedAt"}]}`; `lastUsedAt` is precise to a minute |
 | `DELETE /api/account/devices/{id}` | `204`; a phone's watch key goes with it; `404 not_found` |
 | `POST /api/account/sign-out-everywhere` | `204`: every session (this one too), device key, personal token, and connected app of the account, in one step |
