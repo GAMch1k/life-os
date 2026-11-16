@@ -35,7 +35,19 @@ for (const host of ["127.0.0.1", "localhost"]) {
     ).toHaveCount(0);
     await page.getByLabel("Username").fill(username);
     await page.getByLabel("Password").fill(password);
-    await page.getByRole("button", { name: "Sign in" }).click();
+    // Better Auth allows an address 3 sign-ins in 10 seconds, and every
+    // browser here signs in from the same one, the runner's: a 429 waits
+    // the window out and signs in again, as a person would.
+    for (let attempt = 1; ; attempt += 1) {
+      const answer = page.waitForResponse(
+        (response) =>
+          response.url().endsWith("/api/auth/sign-in/username") &&
+          response.request().method() === "POST",
+      );
+      await page.getByRole("button", { name: "Sign in" }).click();
+      if ((await answer).status() !== 429 || attempt === 3) break;
+      await page.waitForTimeout(11_000);
+    }
 
     // Settings → Security opens only with a real session: legacy access is
     // off, so a cookie the browser refused would end on the login again.

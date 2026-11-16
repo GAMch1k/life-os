@@ -90,8 +90,15 @@ LIFE_OS_E2E_URL=$gateway LIFE_OS_E2E_SETUP_CODE=$setup_code LIFE_OS_E2E_USERNAME
   || fail 'a setup code while an account exists'
 
 echo '==> A session and a token of a development tool, for the smokes'
-expect 200 POST /api/auth/sign-in/username -H 'content-type: application/json' -H "origin: $gateway" \
-  --data "$(jq -n --arg u "$username" --arg p "$password" '{username: $u, password: $p}')"
+# Better Auth allows an address 3 sign-ins in 10 seconds, and the browsers
+# just signed in from this one: a 429 waits the window out.
+for _ in 1 2 3; do
+  request POST /api/auth/sign-in/username -H 'content-type: application/json' -H "origin: $gateway" \
+    --data "$(jq -n --arg u "$username" --arg p "$password" '{username: $u, password: $p}')"
+  [[ "$code" == 429 ]] || break
+  sleep 11
+done
+[[ "$code" == 200 ]] || { cat "$work/body" >&2; fail "signing in with the API: $code, want 200"; }
 session=$(grep -i '^set-cookie: lifeos.session=' "$work/headers" | head -n 1 | sed 's/^[^:]*: //; s/;.*//' | tr -d '\r')
 [[ -n "$session" ]] || { cat "$work/headers" >&2; fail 'no session cookie at 127.0.0.1'; }
 if grep -i '^set-cookie: lifeos.session=' "$work/headers" | grep -qi '; *secure'; then
