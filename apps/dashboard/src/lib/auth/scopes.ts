@@ -95,6 +95,34 @@ export function routeOf(uri: string): RouteKind {
 }
 
 /**
+ * The route the gateway names (X-Life-OS-Route, which each of its service
+ * locations sets for the auth check's subrequest): the module, mcp, or
+ * android. nginx picks the location from the decoded, normalized path, so
+ * this is what the request reaches, whatever the raw URI says. null when
+ * the header is missing (a gateway from before it, or a location without
+ * one), for the URI to decide.
+ */
+export function routeFromGateway(value: string | null): RouteKind | null {
+  if (!value) return null;
+  if (value === "mcp") return { kind: "mcp" };
+  if (value === "android") return { kind: "android" };
+  if (isScopeModule(value)) return { kind: "module", module: value };
+  return { kind: "other" };
+}
+
+/**
+ * A request path no client of Life OS sends: an encoded slash or
+ * backslash, or a dot segment (plain or encoded), which nginx resolves
+ * before it picks a location, so the raw URI would name another route.
+ * The check refuses them, a second line behind the gateway's route.
+ */
+export function suspiciousPath(uri: string): boolean {
+  const path = uri.split("?")[0].split("#")[0];
+  if (/%2f|%5c|\\/i.test(path)) return true;
+  return /(^|\/)(\.|%2e){1,2}(\/|$)/i.test(path);
+}
+
+/**
  * The module scopes an MCP grant gives the identity token: mcp:read reads
  * every module, mcp:write writes (and reads) them. MCP lists the tools
  * these allow and forwards the token to the services, which check it again.

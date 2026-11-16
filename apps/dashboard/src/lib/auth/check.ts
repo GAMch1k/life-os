@@ -93,7 +93,22 @@ export type CheckResult =
       /** For MCP: the WWW-Authenticate challenge (RFC 9728). */
       challenge?: string;
     }
-  | { status: 403; code: "forbidden_origin" | "insufficient_scope" };
+  | {
+      status: 403;
+      /**
+       * forbidden_origin: a cookie's write from another origin;
+       * credential_not_allowed: a credential of a kind that never reaches
+       * the route (a device key on MCP, a token outside the modules);
+       * insufficient_scope: a token or MCP grant whose scopes do not cover
+       * the module or the method; forbidden_path: a path nginx would
+       * resolve to another location (checkHandler).
+       */
+      code:
+        | "forbidden_origin"
+        | "credential_not_allowed"
+        | "insufficient_scope"
+        | "forbidden_path";
+    };
 
 export type CheckRuntime = {
   env: AuthEnv;
@@ -261,14 +276,16 @@ async function checkApiKey(
   if (!result.ok) return unauthenticated(rt, route, true);
   const key = result.key;
   const via: Via = key.kind === "token" ? "token" : "device";
-  if (route.kind === "mcp") {
-    return { status: 403, code: "insufficient_scope" };
+  // A device key never reaches MCP, a token nothing but the modules.
+  if (route.kind === "mcp" || (via === "token" && route.kind !== "module")) {
+    return { status: 403, code: "credential_not_allowed" };
   }
-  if (via === "token") {
-    const scopes = key.scopes ?? [];
-    if (route.kind !== "module" || !scopesAllow(scopes, route.module, method)) {
-      return { status: 403, code: "insufficient_scope" };
-    }
+  if (
+    via === "token" &&
+    route.kind === "module" &&
+    !scopesAllow(key.scopes ?? [], route.module, method)
+  ) {
+    return { status: 403, code: "insufficient_scope" };
   }
   rt.keyUses?.touch(key.id);
   const role = key.user.role;
@@ -386,9 +403,15 @@ export async function checkRequest(
      * request is on none of the services' routes (a token is refused).
      */
     uri?: string;
+    /**
+     * The route the gateway's location names (X-Life-OS-Route): what the
+     * request reaches, which the raw URI may not say. Without it, the URI
+     * decides.
+     */
+    route?: RouteKind | null;
   } = {},
 ): Promise<CheckResult> {
-  const route = routeOf(requestUri(options.uri));
+  const route = options.route ?? routeOf(requestUri(options.uri));
 
   // Authorization: Bearer is the credential when present; it carries no
   // ambient authority, so the CSRF rule does not apply to it.

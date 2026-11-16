@@ -209,6 +209,10 @@ expect 201 POST /api/tasks/v1/tasks -H "authorization: Bearer $token" -H 'conten
   --data '{"title":"Accounts smoke task by a tool"}'
 tool_task=$(jq -r .id "$work/body")
 expect 403 GET '/api/finance/v1/accounts' -H "authorization: Bearer $token"
+jq -e '.error.code == "insufficient_scope"' "$work/body" >/dev/null || fail "a module outside the token's scopes: $(cat "$work/body")"
+# A route no token reaches: the gateway names the check's reason.
+expect 403 GET /android/updates -H "authorization: Bearer $token"
+jq -e '.error.code == "credential_not_allowed"' "$work/body" >/dev/null || fail "/android/ with a token: $(cat "$work/body")"
 expect 401 GET /api/account/tokens -H "authorization: Bearer $token"
 for _ in $(seq 1 20); do
   request GET "/api/activity/v1/activity-events?subjectType=task&subjectId=$tool_task" -H "cookie: $session"

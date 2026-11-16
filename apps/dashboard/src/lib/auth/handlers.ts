@@ -1,6 +1,7 @@
 import { type CheckRuntime, checkRequest, sessionSource } from "./check";
 import { IDENTITY_HEADER } from "./constants";
 import { devicesHandler } from "./devices-api";
+import { routeFromGateway, suspiciousPath } from "./scopes";
 
 /**
  * The Dashboard's auth endpoints as plain fetch handlers, which the Next.js
@@ -32,8 +33,23 @@ export async function checkHandler(
 ): Promise<Response> {
   const method = request.headers.get("x-original-method") ?? request.method;
   const uri = request.headers.get("x-original-uri") ?? "/";
+  // nginx resolves an encoded slash or a dot segment before it picks a
+  // location, so such a path could be judged as another route than the
+  // one it reaches: refused, behind the route the location names.
+  if (suspiciousPath(uri)) {
+    return new Response(null, {
+      status: 403,
+      headers: {
+        "x-life-os-auth-error": "forbidden_path",
+        "cache-control": "no-store",
+      },
+    });
+  }
   try {
-    const result = await checkRequest(rt, method, request.headers, { uri });
+    const result = await checkRequest(rt, method, request.headers, {
+      uri,
+      route: routeFromGateway(request.headers.get("x-life-os-route")),
+    });
     if (result.status === 204) {
       return new Response(null, {
         status: 204,

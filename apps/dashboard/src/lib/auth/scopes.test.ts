@@ -5,8 +5,10 @@ import { bearerToken, devName } from "./check";
 import {
   mcpModuleScopes,
   normalizeScopes,
+  routeFromGateway,
   routeOf,
   scopesAllow,
+  suspiciousPath,
 } from "./scopes";
 
 test("scopes are checked and put in one canonical form", () => {
@@ -65,6 +67,58 @@ test("routes: modules, the integrations' modules, MCP, the downloads, the rest",
   // A path that only looks like a module's is not one.
   assert.deepEqual(routeOf("/api/tasksx/v1"), { kind: "other" });
   assert.deepEqual(routeOf("/api/tasks"), { kind: "other" });
+});
+
+test("the route the gateway names decides, the URI only without it", () => {
+  assert.equal(routeFromGateway(null), null);
+  assert.equal(routeFromGateway(""), null);
+  assert.deepEqual(routeFromGateway("mcp"), { kind: "mcp" });
+  assert.deepEqual(routeFromGateway("android"), { kind: "android" });
+  assert.deepEqual(routeFromGateway("finance"), {
+    kind: "module",
+    module: "finance",
+  });
+  // Not a route a location names: the Dashboard's own, which no token
+  // reaches.
+  for (const odd of [
+    "admin",
+    "Finance",
+    "finance ",
+    "banking",
+    "mcp,finance",
+  ]) {
+    assert.deepEqual(routeFromGateway(odd), { kind: "other" }, odd);
+  }
+});
+
+test("paths nginx would resolve to another location are suspicious", () => {
+  for (const uri of [
+    "/api/finance/..%2Fmcp/mcp",
+    "/api/finance/..%2fmcp/mcp",
+    "/api/finance/%2e%2e/mcp/mcp",
+    "/api/finance/.%2E/mcp",
+    "/api/finance/../mcp/mcp",
+    "/api/tasks/./v1/tasks",
+    "/api/tasks/v1/..",
+    "/api/tasks/v1/.",
+    "/api/finance/v1%5Caccounts",
+    "/api/finance/v1\\accounts",
+    "/..",
+  ]) {
+    assert.equal(suspiciousPath(uri), true, uri);
+  }
+  for (const uri of [
+    "/api/finance/v1/accounts",
+    "/api/tasks/v1/tasks?q=a%2Fb&r=..",
+    "/api/tasks/v1/tasks#../x",
+    "/api/food/v1/recipes/my.recipe",
+    "/api/food/v1/recipes/...",
+    "/api/food/v1/recipes/.well",
+    "/api/food/v1/recipes/a%2520b",
+    "/",
+  ]) {
+    assert.equal(suspiciousPath(uri), false, uri);
+  }
 });
 
 test("an MCP grant's scopes become module scopes", () => {

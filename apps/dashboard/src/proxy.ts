@@ -87,6 +87,13 @@ export async function proxy(request: NextRequest) {
     );
   }
 
+  if (result.status === 403 && result.code === "credential_not_allowed") {
+    return problem(
+      403,
+      "credential_not_allowed",
+      "This device key or token may not be used here.",
+    );
+  }
   if (result.status === 403 && result.code === "insufficient_scope") {
     return problem(
       403,

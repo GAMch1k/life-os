@@ -7,13 +7,17 @@ set -euo pipefail
 # its configuration rendered as compose.yaml has it rendered (made-up hosts),
 # a stand-in Dashboard whose auth check answers by a made-up cookie
 # (lifeos=good: 204 with an identity token naming the original method and
-# URI; forbidden: 403; boom: 500; none: 401) or bearer (Authorization:
-# Bearer good-key: 204; any other: 401, for /api/mcp/ with MCP's challenge),
+# URI; forbidden: 403 forbidden_origin; odd: 403 with a reason the
+# gateway does not know; boom: 500; none: 401) or bearer (Authorization:
+# Bearer good-key: 204; device-key: 403 credential_not_allowed; any other:
+# 401, for /api/mcp/ with MCP's challenge),
 # and one stand-in for every service that echoes what reached it, on a
 # network of their own. It checks:
 #  - every service location asks the auth check, and its refusals are JSON
-#    (401 unauthenticated, 403 forbidden, 503 auth_unavailable when the
-#    check fails);
+#    (401 unauthenticated, 403 with the check's reason from a fixed list,
+#    such as credential_not_allowed or forbidden_origin, 503
+#    auth_unavailable when the check fails), while the gateway's own 403
+#    (the tunnel without Access's token) is plain forbidden;
 #  - a service gets the check's identity token, never a client's copy, nor
 #    the cookie or an Authorization header;
 #  - the public routes (the login, Better Auth's /api/auth/, the app's
@@ -25,6 +29,9 @@ set -euo pipefail
 #    decides, and never a service; MCP's 401 carries the check's
 #    WWW-Authenticate (P21-06); the OAuth metadata and the phone's pairing
 #    reach the Dashboard without the check;
+#  - every service location tells the check its route (X-Life-OS-Route),
+#    a client's copy never passes, and a path nginx decodes and resolves
+#    to another location (/api/finance/..%2Fmcp/mcp) is judged as that one;
 #  - LIFE_OS_REQUIRE_CLOUDFLARE_ACCESS: on (empty), the tunnel path needs
 #    Access's token, as before; off, Life OS's sign-in alone decides.
 #
@@ -80,8 +87,12 @@ server {
   default_type text/plain;
   location = /internal/auth/check {
     if ($http_authorization = "Bearer good-key") {
-      add_header X-Life-OS-Identity "key:$http_x_original_method:$http_x_original_uri" always;
+      add_header X-Life-OS-Identity "key:$http_x_original_method:$http_x_original_uri:route=$http_x_life_os_route" always;
       return 204;
+    }
+    if ($http_authorization = "Bearer device-key") {
+      add_header X-Life-OS-Auth-Error credential_not_allowed always;
+      return 403;
     }
     set $challenge "";
     if ($http_x_original_uri ~ "^/api/mcp/") {
@@ -92,10 +103,17 @@ server {
       return 401;
     }
     if ($http_cookie ~ "lifeos=good") {
-      add_header X-Life-OS-Identity "ok:$http_x_original_method:$http_x_original_uri:$http_x_real_ip" always;
+      add_header X-Life-OS-Identity "ok:$http_x_original_method:$http_x_original_uri:$http_x_real_ip:route=$http_x_life_os_route" always;
       return 204;
     }
-    if ($http_cookie ~ "lifeos=forbidden") { return 403; }
+    if ($http_cookie ~ "lifeos=forbidden") {
+      add_header X-Life-OS-Auth-Error forbidden_origin always;
+      return 403;
+    }
+    if ($http_cookie ~ "lifeos=odd") {
+      add_header X-Life-OS-Auth-Error 'x","code":"admin' always;
+      return 403;
+    }
     if ($http_cookie ~ "lifeos=boom") { return 500; }
     add_header WWW-Authenticate $challenge always;
     return 401;
@@ -167,12 +185,21 @@ printf '==> Every service location asks the auth check (%d)\n' "${#service_paths
 for path in "${service_paths[@]}"; do
   expect GET "${path}v1/x" 401
   expect_body '"code":"unauthenticated"'
-  expect GET "${path}v1/x" 200 --cookie 'lifeos=good'
+  expect GET "${path}v1/x" 200 --cookie 'lifeos=good' -H 'X-Life-OS-Route: forged'
   expect_body "identity=[ok:GET:${path}v1/x:"
+  # Every service location names its route for the check, never a client.
+  grep -q 'route=[a-z]' <<<"$body" || { printf '%s\n' "$body" >&2; fail "${path} names no route for the check"; }
+  refuse_body 'route=forged'
   expect_body 'cookie=[]'
   expect_body 'authorization=[]'
   expect GET "${path}v1/x" 403 --cookie 'lifeos=forbidden'
-  expect_body '"code":"forbidden"'
+  expect_body '"code":"forbidden_origin"'
+  expect GET "${path}v1/x" 403 -H 'Authorization: Bearer device-key'
+  expect_body '"code":"credential_not_allowed"'
+  # A reason the gateway does not know is never echoed.
+  expect GET "${path}v1/x" 403 --cookie 'lifeos=odd'
+  expect_body '{"error":{"code":"forbidden",'
+  refuse_body admin
   expect GET "${path}v1/x" 503 --cookie 'lifeos=boom'
   expect_body '"code":"auth_unavailable"'
 done
@@ -190,7 +217,7 @@ expect GET /api/tasks/v1/tasks 401 -H 'X-Life-OS-Identity: forged'
 
 printf '==> A device key or token: the check decides, and a service never sees it\n'
 expect POST /api/voice/v1/audio-jobs 200 -H 'Authorization: Bearer good-key' --data '{}'
-expect_body 'identity=[key:POST:/api/voice/v1/audio-jobs]'
+expect_body 'identity=[key:POST:/api/voice/v1/audio-jobs:route=voice]'
 expect_body 'authorization=[]'
 expect GET /api/tasks/v1/tasks 401 -H 'Authorization: Bearer bad-key'
 expect_body '"code":"unauthenticated"'
@@ -198,6 +225,16 @@ expect_body '"code":"unauthenticated"'
 expect GET /api/tasks/v1/tasks 401 -H 'Authorization: Bearer bad-key' --cookie 'lifeos=good'
 expect GET /android/updates 200 -H 'Authorization: Bearer good-key'
 expect GET /android/updates 401 -H 'Authorization: Bearer bad-key'
+
+printf '==> The check judges the route nginx reaches, not the raw URI\n'
+# nginx decodes %2F and resolves the dot segment before it picks the
+# location: this reaches MCP, and the check is told so.
+expect POST '/api/finance/..%2Fmcp/mcp' 200 -H 'Authorization: Bearer good-key' --data '{}'
+expect_body 'service POST /mcp '
+expect_body 'route=mcp]'
+expect GET /api/integrations/banking/v1/connections 200 -H 'Authorization: Bearer good-key'
+expect_body 'route=finance]'
+expect GET /android/updates 200 -H 'Authorization: Bearer good-key'
 
 printf '==> MCP: the 401 carries the challenge that starts OAuth\n'
 expect POST /api/mcp/mcp 401 --data '{}'
@@ -209,10 +246,12 @@ grep -qi '^x-content-type-options: nosniff' "$work/headers" || { cat "$work/head
 expect POST /api/mcp/mcp 401 -H 'Authorization: Bearer bad-key' --data '{}'
 grep -qi '^www-authenticate: Bearer resource_metadata=' "$work/headers" || { cat "$work/headers" >&2; fail "MCP's 401 for a bad token lacks the challenge"; }
 expect POST /api/mcp/mcp 200 -H 'Authorization: Bearer good-key' --data '{}'
-expect_body 'identity=[key:POST:/api/mcp/mcp]'
+expect_body 'identity=[key:POST:/api/mcp/mcp:route=mcp]'
 expect_body 'authorization=[]'
 expect POST /api/mcp/mcp 403 --cookie 'lifeos=forbidden' --data '{}'
-expect_body '"code":"forbidden"'
+expect_body '"code":"forbidden_origin"'
+expect POST /api/mcp/mcp 403 -H 'Authorization: Bearer device-key' --data '{}'
+expect_body '"code":"credential_not_allowed"'
 expect POST /api/mcp/mcp 503 --cookie 'lifeos=boom' --data '{}'
 expect_body '"code":"auth_unavailable"'
 # Other routes carry no challenge.
@@ -248,6 +287,8 @@ expect_body '"code":"unauthenticated"'
 expect GET /android/ 200 --cookie 'lifeos=good'
 expect_body Android
 expect GET /android/updates 200 --cookie 'lifeos=good'
+expect GET /android/updates 403 -H 'Authorization: Bearer device-key'
+expect_body '"code":"credential_not_allowed"'
 
 # The Cloudflare path: every client counts as arriving through Cloudflare's
 # edge network.
@@ -259,7 +300,9 @@ chmod 644 "$work/access.conf.template"
 printf '==> LIFE_OS_REQUIRE_CLOUDFLARE_ACCESS empty: Access is required on the tunnel, as before\n'
 start "$name-access-on" "$work/access.conf.template" ''
 expect GET /api/tasks/v1/x 403 --cookie 'lifeos=good'
+expect_body '"code":"forbidden"'
 expect GET /login 403
+expect_body '"code":"forbidden"'
 expect GET /api/tasks/v1/x 200 --cookie 'lifeos=good' -H 'Cf-Access-Jwt-Assertion: token'
 refuse_body token
 docker rm -f "$name-access-on" >/dev/null

@@ -74,7 +74,8 @@ export async function adminGate(
       status: 403,
       // A personal token is scoped to modules, never to the server's.
       code:
-        result.code === "insufficient_scope"
+        result.code === "insufficient_scope" ||
+        result.code === "credential_not_allowed"
           ? "admin_only"
           : "forbidden_origin",
       principal: null,
