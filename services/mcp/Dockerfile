@@ -28,7 +28,7 @@ ENTRYPOINT ["/service"]
 # A release install adds the same binary on the owner's server with
 # ./setup.sh claude (services/mcp/claude-code/Dockerfile). Without claude, /out
 # stays empty.
-FROM node:22-alpine@sha256:0e1754758c2df4cfa3e68d59e2e1b7374bb7fd9ea6328eaaacf15cc934af8202 AS claude-code
+FROM node:22-alpine@sha256:1314fb30ec37592d5845e5a160d522c0e680972aa534549940b8d73bde88481a AS claude-code
 ARG LIFE_OS_AI_PROVIDERS=codex
 COPY services/mcp/claude-code/package.json services/mcp/claude-code/package-lock.json services/mcp/claude-code/install.sh /opt/claude-code/
 RUN set -eu; mkdir -p /out; \
@@ -53,7 +53,7 @@ RUN set -eu; mkdir -p /out; \
 # fixes land in between, and the release's Trivy gate fails on a HIGH or
 # CRITICAL vulnerability that has a fix: the build upgrades the packages
 # (SEC-IMG).
-FROM node:22-alpine@sha256:0e1754758c2df4cfa3e68d59e2e1b7374bb7fd9ea6328eaaacf15cc934af8202 AS processor
+FROM node:22-alpine@sha256:1314fb30ec37592d5845e5a160d522c0e680972aa534549940b8d73bde88481a AS processor
 # The image's source and license; on ghcr.io this links its package to the
 # repository (docs/operations/releases.md).
 LABEL org.opencontainers.image.source="https://github.com/GAMch1k/life-os" \

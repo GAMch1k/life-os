@@ -177,7 +177,7 @@ test("the next page after signing in stays on Life OS", () => {
     "/\t\t/evil.example",
     "/\u0000/evil.example",
     "/\u007f/evil.example",
-    "/%09/evil.example".replace("%09", "\t"),
+    decodeURIComponent("/%09/evil.example"),
   ]) {
     assert.equal(safeNext(attempt), "/", JSON.stringify(attempt));
   }

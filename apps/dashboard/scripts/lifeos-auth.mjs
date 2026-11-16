@@ -12,7 +12,7 @@
 // Plain JavaScript and only the pg driver, so that it runs in the runtime
 // image as it is. It never prints a password, hash, or key; it prints a setup
 // code or a reset link only to the person at the host's terminal.
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomInt } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
 import pg from "pg";
@@ -55,14 +55,16 @@ function sha256Hex(value) {
   return createHash("sha256").update(value).digest("hex");
 }
 
-/** As src/lib/auth/store.ts: 4 groups of 4, no look-alike letters. */
+/**
+ * As src/lib/auth/store.ts: 4 groups of 4, no look-alike letters, each
+ * character picked uniformly from the alphabet by randomInt.
+ */
 export function newSetupCode() {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  const bytes = randomBytes(16);
   let code = "";
   for (let i = 0; i < 16; i += 1) {
     if (i > 0 && i % 4 === 0) code += "-";
-    code += alphabet[bytes[i] % alphabet.length];
+    code += alphabet[randomInt(alphabet.length)];
   }
   return code;
 }
