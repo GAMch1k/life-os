@@ -1,4 +1,10 @@
-import { type APIRequestContext, expect, type Page, test } from "./fixtures";
+import {
+  type APIRequestContext,
+  expect,
+  type Locator,
+  type Page,
+  test,
+} from "./fixtures";
 import { datePicker, pickDate } from "./date-picker";
 
 // Recurring events on /calendar: Repeat in the event form (Custom weekly on
@@ -64,6 +70,20 @@ const eventIn = (page: Page, title: string) =>
 const eventOn = (page: Page, title: string, day: string) =>
   events(page).locator(`[data-date="${day}"] .fc-event`, { hasText: title });
 const dialogs = (page: Page) => page.getByRole("dialog");
+
+/**
+ * Opens an occurrence's details from the keyboard (Enter on the focused
+ * event, FullCalendar's own keyboard access). In the week view another
+ * spec's event at the same time lies over part of it on the shared stack:
+ * in CI run 43915277816, activity-log.spec.ts's imported "Feed meeting", a
+ * week from the moment it ran (18:23 on a Monday), covered Monday's Gym
+ * from 18:23 on, so a mouse click at Gym's middle landed on the feed's
+ * event, and Playwright retried it until the test timed out. The keyboard
+ * reaches the event whatever lies over it.
+ */
+async function openEvent(event: Locator) {
+  await event.press("Enter");
+}
 
 /** Opens a view at a date and waits until its events have loaded. */
 async function open(page: Page, view: string, date: string) {
@@ -164,7 +184,7 @@ test.describe("Recurring events", () => {
       });
 
       // An occurrence shows its own date and how the series repeats.
-      await eventOn(page, title, wednesday2).click();
+      await openEvent(eventOn(page, title, wednesday2));
       await expect(details.getByTestId("event-recurrence")).toHaveText(
         "Weekly on Monday and Wednesday",
       );
@@ -176,7 +196,7 @@ test.describe("Recurring events", () => {
 
       // Skip this week's Wednesday: hidden until Show cancelled, restorable.
       await page.getByRole("button", { name: "Previous week" }).click();
-      await eventOn(page, title, wednesday).click();
+      await openEvent(eventOn(page, title, wednesday));
       await details
         .getByRole("button", { name: "Delete", exact: true })
         .click();
@@ -192,7 +212,7 @@ test.describe("Recurring events", () => {
       await page.getByRole("checkbox", { name: "Show cancelled" }).check();
       const skipped = eventOn(page, title, wednesday);
       await expect(skipped).toHaveClass(/lifeos-event-cancelled/);
-      await skipped.click();
+      await openEvent(skipped);
       await expect(
         details.getByText("Cancelled", { exact: true }),
       ).toBeVisible();
@@ -210,7 +230,7 @@ test.describe("Recurring events", () => {
 
       // This and following: from next Monday on, an hour later.
       await page.getByRole("button", { name: "Next week" }).click();
-      await eventOn(page, title, monday2).click();
+      await openEvent(eventOn(page, title, monday2));
       await details.getByRole("button", { name: "Edit", exact: true }).click();
       const edit = page.getByRole("dialog", { name: "Edit event" });
       await expect(datePicker(edit, "Start date")).toHaveAttribute(
@@ -228,7 +248,10 @@ test.describe("Recurring events", () => {
         .click();
       await expect(dialogs(page)).toHaveCount(0);
       for (const day of [monday2, wednesday2]) {
-        await eventOn(page, title, day).click();
+        // The calendar loads the events again after the change; until then
+        // it shows the 18:00 occurrences, whose details are the old ones.
+        await expect(eventOn(page, title, day)).toContainText(/19:00\D+20:00/);
+        await openEvent(eventOn(page, title, day));
         await expect(details.getByTestId("event-when")).toHaveText(
           `${dayLabel(day)} · 19:00–20:00`,
         );
@@ -238,7 +261,7 @@ test.describe("Recurring events", () => {
       // The earlier occurrences keep their time.
       await page.getByRole("button", { name: "Previous week" }).click();
       for (const day of [monday, wednesday]) {
-        await eventOn(page, title, day).click();
+        await openEvent(eventOn(page, title, day));
         await expect(details.getByTestId("event-when")).toHaveText(
           `${dayLabel(day)} · 18:00–19:00`,
         );
@@ -250,7 +273,7 @@ test.describe("Recurring events", () => {
 
       // All events: the new series goes, the earlier week stays.
       await page.getByRole("button", { name: "Next week" }).click();
-      await eventOn(page, title, monday2).click();
+      await openEvent(eventOn(page, title, monday2));
       await details
         .getByRole("button", { name: "Delete", exact: true })
         .click();
@@ -260,7 +283,7 @@ test.describe("Recurring events", () => {
       expect(await seriesIds(request, title)).toHaveLength(1);
       await page.getByRole("button", { name: "Previous week" }).click();
       await expect(eventIn(page, title)).toHaveCount(2);
-      await eventOn(page, title, monday).click();
+      await openEvent(eventOn(page, title, monday));
       await details
         .getByRole("button", { name: "Delete", exact: true })
         .click();

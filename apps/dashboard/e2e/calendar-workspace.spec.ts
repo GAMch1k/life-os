@@ -1,6 +1,12 @@
 import { createFeed, deleteFeed, failingFeedUrl } from "./calendar-feed";
 import { datePicker, pickDate } from "./date-picker";
-import { type APIRequestContext, expect, type Page, test } from "./fixtures";
+import {
+  type APIRequestContext,
+  expect,
+  type Locator,
+  type Page,
+  test,
+} from "./fixtures";
 
 // The Calendar workspace (/calendar): FullCalendar month, week, day, and list
 // views over the Calendar API, event create/inspect/edit/delete dialogs,
@@ -90,6 +96,28 @@ const events = (page: Page) =>
   page.getByRole("region", { name: "Calendar events" });
 const eventIn = (page: Page, title: string) =>
   events(page).locator(".fc-event", { hasText: title });
+/**
+ * The day header the list view shows an event's row under: the nearest
+ * fc-list-day row before it (the rows of a day follow its header).
+ */
+const listDayOf = (page: Page, title: string) =>
+  eventIn(page, title).locator(
+    "xpath=preceding-sibling::tr[contains(concat(' ', normalize-space(@class), ' '), ' fc-list-day ')][1]",
+  );
+
+/**
+ * Opens an event's details in the week or day view from the keyboard (Enter
+ * on the focused event, FullCalendar's own keyboard access). On the shared
+ * stack, another spec's event at the same time lies over part of this one
+ * there, and a mouse click at its middle lands on that one: an imported
+ * feed's meeting a week from now covered Gym's middle in
+ * calendar-recurring.spec.ts (CI run 43915277816), and this spec's events
+ * share days with it too. The keyboard reaches the event whatever lies
+ * over it.
+ */
+async function openEvent(event: Locator) {
+  await event.press("Enter");
+}
 
 /** Opens a view at a date and waits until its events have loaded. */
 async function open(page: Page, view: string, date: string) {
@@ -207,7 +235,7 @@ test.describe("Calendar workspace", () => {
     }
 
     // Inspect.
-    await eventIn(page, title).click();
+    await openEvent(eventIn(page, title));
     await expect(dialog.getByRole("heading", { name: title })).toBeVisible();
     await expect(dialog.getByTestId("event-when")).toHaveText(
       `${dayLabel(day)} · 10:00–11:30`,
@@ -237,12 +265,13 @@ test.describe("Calendar workspace", () => {
     await expect(dialog).toBeHidden();
     await expect(eventIn(page, moved)).toBeVisible();
 
+    // The list shows it once, under the next day now. Other specs' events
+    // may be on either day of this shared stack (calendar-recurring's
+    // weekly Gym was on the first one in CI run 43915277816), so whether a
+    // day has a header at all says nothing about this event.
     await open(page, "list", day);
-    const nextDay = events(page).locator(`.fc-list-day[data-date="${next}"]`);
-    await expect(nextDay).toBeVisible();
-    await expect(
-      events(page).locator(`.fc-list-day[data-date="${day}"]`),
-    ).toHaveCount(0);
+    await expect(eventIn(page, moved)).toHaveCount(1);
+    await expect(listDayOf(page, moved)).toHaveAttribute("data-date", next);
     await open(page, "day", next);
     await expect(eventIn(page, moved)).toBeVisible();
     const [edited] = await findByTitle(request, moved);
@@ -251,7 +280,7 @@ test.describe("Calendar workspace", () => {
     );
 
     // Delete.
-    await eventIn(page, moved).click();
+    await openEvent(eventIn(page, moved));
     await dialog.getByRole("button", { name: "Delete", exact: true }).click();
     await dialog.getByRole("button", { name: "Delete event" }).click();
     await expect(dialog).toBeHidden();
@@ -407,7 +436,7 @@ test.describe("Calendar workspace", () => {
       expect(stored.effectiveReminders).toHaveLength(3);
 
       // The details list every reminder that applies, the default marked.
-      await eventIn(page, title).click();
+      await openEvent(eventIn(page, title));
       const listed = dialog
         .getByTestId("event-reminders")
         .getByRole("listitem");
@@ -485,7 +514,7 @@ test.describe("Calendar workspace", () => {
       // The calendar marks it.
       await expect(eventIn(page, title)).toHaveClass(/lifeos-event-high/);
 
-      await eventIn(page, title).click();
+      await openEvent(eventIn(page, title));
       await expect(dialog.getByTestId("event-priority")).toHaveText(
         "High priority",
       );
