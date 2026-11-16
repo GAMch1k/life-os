@@ -1,6 +1,6 @@
 # Access Life OS safely
 
-Life OS has a login of its own ([Accounts and signing in](accounts.md)), and signing in needs **HTTPS**: the session cookie is a `__Host-` cookie, which browsers keep only for a secure page, and passkeys work only there. The one exception is the server itself, `http://127.0.0.1` or `localhost`, which browsers count as secure (an [SSH tunnel](#ssh-tunnel-a-quick-look)). So for your phone and laptop, put an HTTPS front in front of Life OS.
+Life OS has a login of its own ([Accounts and signing in](accounts.md)), and signing in needs **HTTPS**: the session cookie is a `__Host-` cookie, which browsers keep only for a secure page, and passkeys work only there. The one exception is your own computer's `http://127.0.0.1` or `localhost`, which browsers count as secure, as through an [SSH tunnel](#ssh-tunnel-a-quick-look). So for your phone and laptop, put an HTTPS front in front of Life OS.
 
 By default (`./setup.sh` without `--bind`), the gateway listens on `127.0.0.1:3000`: only programs on the server itself can reach it, and nothing else on the server publishes a port. The HTTPS front runs on the same server and forwards to the gateway; the gateway stays where it is.
 
