@@ -40,6 +40,8 @@ fail() {
   echo "accounts smoke: $*" >&2
   exit 1
 }
+# The throwaway stack's sessions, keys, and tokens never show in a CI log.
+mask() { [[ -z ${GITHUB_ACTIONS:-} || -z $1 ]] || printf '::add-mask::%s\n' "$1"; }
 password='correct horse battery staple 42'
 
 "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
@@ -55,11 +57,18 @@ curl --fail --silent --max-time 3 "$gateway/api/tasks/ready" >/dev/null || fail 
 account() { "${compose[@]}" exec -T dashboard node scripts/lifeos-auth.mjs "$@"; }
 # request <method> <path> [curl options…]: status in $code, body in
 # $work/body, headers in $work/headers
+#
+# A browser's own request on loopback (127.0.0.1, as here) carries
+# Sec-Fetch-Site, which Life OS needs there for a write, since Origin
+# cannot tell its page from another port's (src/lib/auth/origin.ts):
+# unless the call names one, same-origin.
 request() {
   local method=$1 path=$2
   shift 2
+  local -a site=(-H 'sec-fetch-site: same-origin')
+  [[ ${*,,} != *sec-fetch-site:* ]] || site=()
   code=$(curl --silent --max-time 15 --request "$method" --output "$work/body" --dump-header "$work/headers" \
-    --write-out '%{http_code}' "$@" "$gateway$path")
+    --write-out '%{http_code}' "${site[@]}" "$@" "$gateway$path")
 }
 # The session cookie the last answer set, as a Cookie header. The stack is
 # reached at 127.0.0.1, this machine's loopback over plain HTTP, as through
@@ -83,6 +92,7 @@ expect 200 POST /api/auth/sign-up/email -H 'content-type: application/json' \
   --data "{\"username\":\"owner\",\"password\":\"$password\"}"
 grep -q '00000000-0000-4000-8000-000000000001' "$work/body" || fail 'the first account did not get the fixed id'
 session=$(session_cookie)
+mask "${session#*=}"
 [[ -n "$session" ]] || { cat "$work/headers" >&2; fail 'no session cookie'; }
 grep -qi '^set-cookie: lifeos.session=.*; HttpOnly' "$work/headers" || fail 'the session cookie is not HttpOnly'
 if grep -i '^set-cookie: ' "$work/headers" | grep -qi '; *secure'; then
@@ -151,6 +161,12 @@ echo '==> Refusals'
 expect 401 GET /api/tasks/v1/tasks --cookie 'lifeos.session=made-up.token'
 expect 403 POST /api/tasks/v1/tasks -H "cookie: $session" -H 'content-type: application/json' \
   -H 'origin: https://elsewhere.example' --data '{"title":"cross-site"}'
+# Another web app on this machine (127.0.0.1:8080) shares the host name:
+# the browser's same-site, or no Sec-Fetch-Site at all, is refused.
+expect 403 POST /api/tasks/v1/tasks -H "cookie: $session" -H 'content-type: application/json' \
+  -H 'origin: http://127.0.0.1:8080' -H 'sec-fetch-site: same-site' --data '{"title":"another port"}'
+expect 403 POST /api/tasks/v1/tasks -H "cookie: $session" -H 'content-type: application/json' \
+  -H 'origin: http://127.0.0.1:8080' -H 'sec-fetch-site:' --data '{"title":"no fetch metadata"}'
 expect 200 GET /api/tasks/v1/tasks -H "cookie: $session" -H 'X-Life-OS-Identity: forged.token.value'
 expect 404 GET /internal/auth/check -H "cookie: $session"
 expect 404 GET /internal/status
@@ -178,6 +194,7 @@ jq -e '.link | startswith("lifeos://pair?")' "$work/body" >/dev/null || fail "no
 expect 200 POST /api/auth/devices/pair -H 'content-type: application/json' \
   --data "{\"code\":\"$pairing\",\"name\":\"Smoke phone\"}"
 phone=$(jq -r .key "$work/body")
+mask "$phone"
 phone_id=$(jq -r .keyId "$work/body")
 [[ "$phone" == lo_dev_* ]] || fail "no device key: $(cat "$work/body")"
 expect 400 POST /api/auth/devices/pair -H 'content-type: application/json' \
@@ -198,6 +215,7 @@ request GET /android/updates "${key[@]}"
 expect 401 GET /android/updates
 expect 200 POST /api/auth/devices/child "${key[@]}" -H 'content-type: application/json' --data '{"name":"Smoke watch"}'
 watch=$(jq -r .key "$work/body")
+mask "$watch"
 expect 200 GET '/api/tasks/v1/tasks?limit=1' -H "authorization: Bearer $watch"
 # What a key may not do: manage the account, or the server's admin routes.
 expect 401 GET /api/account/devices "${key[@]}"
@@ -210,6 +228,7 @@ expect 401 GET /api/tasks/v1/tasks -H "authorization: Bearer lo_dev_$(printf 'A%
 expect 201 POST /api/account/tokens -H "cookie: $session" -H "origin: $gateway" -H 'content-type: application/json' \
   --data '{"name":"smoke-tool","scopes":["tasks:write"],"devTool":true}'
 token=$(jq -r .token "$work/body")
+mask "$token"
 [[ "$token" == lo_tok_* ]] || fail "no token: $(cat "$work/body")"
 expect 201 POST /api/tasks/v1/tasks -H "authorization: Bearer $token" -H 'content-type: application/json' \
   --data '{"title":"Accounts smoke task by a tool"}'
@@ -258,7 +277,9 @@ if "${compose[@]}" ps --services --status running | grep -qx mcp; then
     --data-urlencode "redirect_uri=$redirect" --data-urlencode "client_id=$client" --data-urlencode "code_verifier=$verifier" \
     --data-urlencode "resource=$resource"
   access=$(jq -r .access_token "$work/body")
+  mask "$access"
   refresh=$(jq -r .refresh_token "$work/body")
+  mask "$refresh"
   [[ "$access" == *.*.* && -n "$refresh" && "$refresh" != null ]] || fail "no tokens: $(cat "$work/body")"
   # MCP's JSON-RPC over the streamable transport: initialize, then a tool.
   mcp_headers=(-H "authorization: Bearer $access" -H 'content-type: application/json' -H 'accept: application/json, text/event-stream')
@@ -278,6 +299,7 @@ if "${compose[@]}" ps --services --status running | grep -qx mcp; then
   expect 200 POST /api/auth/oauth2/token --data-urlencode grant_type=refresh_token --data-urlencode "refresh_token=$refresh" \
     --data-urlencode "client_id=$client" --data-urlencode "resource=$resource"
   access=$(jq -r .access_token "$work/body")
+  mask "$access"
   expect 400 POST /api/auth/oauth2/token --data-urlencode grant_type=refresh_token --data-urlencode "refresh_token=$refresh" \
     --data-urlencode "client_id=$client" --data-urlencode "resource=$resource"
   # Disconnecting it in Settings counts at once.
@@ -297,6 +319,7 @@ expect 201 POST /api/account/devices/pairing-codes -H "cookie: $session" -H "ori
 expect 200 POST /api/auth/devices/pair -H 'content-type: application/json' \
   --data "{\"code\":\"$(jq -r .code "$work/body")\",\"name\":\"Kept phone\"}"
 phone=$(jq -r .key "$work/body")
+mask "$phone"
 account legacy-access on >/dev/null
 sleep 6
 
@@ -314,6 +337,7 @@ expect 401 GET /api/tasks/v1/tasks -H "cookie: $session"
 expect 200 POST /api/auth/sign-in/username -H 'content-type: application/json' \
   -H "origin: $gateway" --data "{\"username\":\"OWNER\",\"password\":\"$password\"}"
 session=$(session_cookie)
+mask "${session#*=}"
 [[ -n "$session" ]] || fail 'no session cookie after signing in again'
 expect 200 GET /api/tasks/v1/tasks -H "cookie: $session"
 

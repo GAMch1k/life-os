@@ -149,8 +149,13 @@ runs:
       # minutes. Then the browsers install without them: the runner image
       # has the libraries its own Chrome and Firefox need, and the browser
       # suite fails if one is missing. WebKit (the sign-in through an SSH
-      # tunnel, tools/smoke-fresh-install) needs packages the image has not
-      # got: without apt it is left out, with a warning.
+      # tunnel in Safari's engine, tools/smoke-fresh-install) needs packages
+      # the image has not got: without apt, a pull request's run goes on
+      # without it, with a warning, but master's and a release's fail, so
+      # that what ships has been signed in with WebKit.
+      env:
+        REF: ${{ github.ref }}
+        WORKFLOW: ${{ github.workflow }}
       run: |
         if timeout 20 getent hosts archive.ubuntu.com >/dev/null; then
           if ! timeout 20 getent hosts azure.archive.ubuntu.com >/dev/null; then
@@ -162,9 +167,13 @@ runs:
             exit 0
           fi
         fi
-        echo "::warning::apt could not install the browsers' system packages: Chromium and Firefox install without them, and the sign-in check runs without WebKit"
         timeout 10m npx playwright install chromium firefox
         echo "browsers=chromium,firefox" >>"$GITHUB_OUTPUT"
+        if [[ "$REF" == refs/heads/master || "$REF" == refs/tags/* || "$WORKFLOW" == Release ]]; then
+          echo "::error::apt could not install WebKit's system packages, so the sign-in check cannot run in Safari's engine, which master and releases require. Run it again once Ubuntu's mirrors answer."
+          exit 1
+        fi
+        echo "::warning::apt could not install the browsers' system packages: Chromium and Firefox install without them, and the sign-in check runs without WebKit"
 
     # Each smoke brings the verification stack (tools/verify-compose,
     # project lifeos-verify) up and removes it again; LIFE_OS_VERIFY_LOGS_DIR
@@ -253,7 +262,5 @@ runs:
         path: |
           apps/dashboard/test-results/
           apps/dashboard/playwright-report/
-          apps/dashboard/test-results-sign-in/
-          apps/dashboard/playwright-report-sign-in/
         retention-days: 7
         if-no-files-found: ignore

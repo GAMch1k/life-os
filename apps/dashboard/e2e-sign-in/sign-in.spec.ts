@@ -58,7 +58,10 @@ for (const host of ["127.0.0.1", "localhost"]) {
     await expect(heading).toBeVisible();
     const cookies = await context.cookies(base);
     const session = cookies.find((cookie) => cookie.name === "lifeos.session");
-    expect(session, JSON.stringify(cookies)).toBeTruthy();
+    expect(
+      session,
+      `cookies: ${cookies.map((cookie) => cookie.name).join(", ")}`,
+    ).toBeTruthy();
     expect(session!.secure).toBe(false);
     expect(cookies.some((cookie) => cookie.name.startsWith("__Host-"))).toBe(
       false,

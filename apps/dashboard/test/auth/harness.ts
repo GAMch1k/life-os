@@ -215,12 +215,22 @@ export class Browser {
     } = {},
   ): Promise<Reply> {
     const url = new URL(pathname, this.origin);
+    // A browser's own write on loopback carries Sec-Fetch-Site, which
+    // Life OS needs there (src/lib/auth/origin.ts): as every browser the
+    // suite stands in for sends it.
+    const loopback = ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
     const h = new Headers({
       host: url.host,
       "x-real-ip": this.address,
       ...(method !== "GET" ? { origin: this.origin } : {}),
+      ...(method !== "GET" && loopback
+        ? { "sec-fetch-site": "same-origin" }
+        : {}),
       ...headers,
     });
+    for (const [name, value] of Object.entries(headers)) {
+      if (value === "") h.delete(name);
+    }
     if (this.jar.size) h.set("cookie", this.cookieHeader());
     let payload: string | undefined;
     if (body !== undefined) {

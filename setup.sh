@@ -32,7 +32,7 @@ min_compose=2.27
 cd "$(dirname "${BASH_SOURCE[0]}")"
 umask 077
 if [[ -z $release_version && -f .env.example ]]; then
-  release_version=$(sed -n "s/^LIFE_OS_VERSION=['\"]*\([^'\"]*\)['\"]*$/\1/p" .env.example | head -n 1)
+  release_version=$(tr -d '\r' <.env.example | sed -n "s/^LIFE_OS_VERSION=['\"]*\([^'\"]*\)['\"]*$/\1/p" | head -n 1)
 fi
 [[ $release_version =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] || release_version=preview
 
@@ -1919,12 +1919,18 @@ EOF
 # container, on Life OS's private network: the gateway's routes need a
 # sign-in (legacy access is off on a new install), and whoever runs this
 # script on the server is the owner anyway (as for setup-code). Arguments:
-# the method, the path under /v1/feeds, the JSON body (or nothing), and
-# "list" to print the feeds one a line (id, name, last success, error)
-# instead of the body. Prints the HTTP status (000 when calendar-feeds does
-# not answer), then the body. Writes are attributed to dev:setup.
+# the method, the path under /v1/feeds, and "list" to print the feeds one a
+# line (id, name, last success, error) instead of the body. The JSON body
+# comes on stdin, never as an argument: a feed's address can hold a token,
+# and arguments show in ps and docker inspect. Prints "@@status <code>"
+# (000 when calendar-feeds does not answer), then the body. Control
+# characters in what calendar-feeds answers (a feed's name, or the error a
+# feed's server caused) become spaces, so they never reach the terminal.
+# Writes are attributed to dev:setup.
 # shellcheck disable=SC2016 # JavaScript, run by node
-feeds_script='const [method, path, body, format] = process.argv.slice(1);
+feeds_script='const [method, path, format] = process.argv.slice(1);
+const clean = (value) => String(value ?? "").replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
+const body = require("fs").readFileSync(0, "utf8").trim();
 fetch(`http://calendar-feeds:8080/v1/feeds${path}`, {
   method,
   headers: { "content-type": "application/json", "x-life-os-actor": "dev:setup" },
@@ -1933,26 +1939,33 @@ fetch(`http://calendar-feeds:8080/v1/feeds${path}`, {
 }).then(async (response) => {
   let text = await response.text();
   if (format === "list" && response.ok) {
-    text = JSON.parse(text).items.map((feed) => [feed.id, feed.name, feed.refresh?.lastSuccessAt ?? "never", feed.refresh?.lastError ?? ""].join("\t")).join("\n");
+    text = JSON.parse(text).items.map((feed) => [feed.id, feed.name, feed.refresh?.lastSuccessAt ?? "never", feed.refresh?.lastError ?? ""].map(clean).join("\t")).join("\n");
+  } else {
+    text = text.split("\n").map(clean).join("\n");
   }
-  console.log(String(response.status));
+  console.log(`@@status ${response.status}`);
   if (text) console.log(text);
 }, (error) => {
-  console.log("000");
-  console.log(error.message);
+  console.log("@@status 000");
+  console.log(clean(error.message));
 });'
 
 # feeds_call METHOD PATH [BODY] [list]: sets feeds_status and feeds_body.
+# Only the script's own "@@status" line counts: Compose's warnings go to
+# stderr, which is kept apart and shown only when no status came, so a
+# write that went through is never taken for one that did not.
 feeds_call() {
-  local out
-  out=$(docker compose exec -T dashboard node -e "$feeds_script" "$1" "$2" "${3:-}" "${4:-}" 2>&1) || true
-  feeds_status=${out%%$'\n'*}
-  feeds_body=
-  [[ $out != *$'\n'* ]] || feeds_body=${out#*$'\n'}
-  if [[ ! $feeds_status =~ ^[0-9]{3}$ ]]; then
-    feeds_body=$out
+  local out err
+  err=$(mktemp)
+  out=$(docker compose exec -T dashboard node -e "$feeds_script" "$1" "$2" "${4:-}" <<<"${3:-}" 2>"$err") || true
+  feeds_status=$(sed -n 's/^@@status \([0-9]\{3\}\)$/\1/p' <<<"$out" | head -n 1)
+  if [[ -n $feeds_status ]]; then
+    feeds_body=$(awk 'seen { print } /^@@status [0-9][0-9][0-9]$/ { seen = 1 }' <<<"$out")
+  else
     feeds_status=000
+    feeds_body=$(tr -d '\000-\010\013-\037\177' <"$err")
   fi
+  rm -f "$err"
 }
 
 # feed [add | list | remove ID]: calendar feeds (ICS), from the server.
@@ -2532,26 +2545,57 @@ add_new_settings() {
 
 # The release a file names: compose.yaml's "# Life OS release:" line (the
 # release bundle's, from v0.1.0-preview.7 on) and .env.example's
-# LIFE_OS_VERSION. Empty when it names none.
-compose_release() { sed -n 's/^# Life OS release: \([^[:space:]]*\)$/\1/p' compose.yaml 2>/dev/null | head -n 1; }
-example_release() { sed -n "s/^LIFE_OS_VERSION=['\"]*\([^'\"]*\)['\"]*$/\1/p" .env.example 2>/dev/null | head -n 1; }
+# LIFE_OS_VERSION. Empty when it names none. A file saved with Windows line
+# ends (CRLF) names the same release.
+compose_release() { tr -d '\r' <compose.yaml 2>/dev/null | sed -n 's/^# Life OS release: \([^[:space:]]*\)[[:space:]]*$/\1/p' | head -n 1; }
+example_release() { tr -d '\r' <.env.example 2>/dev/null | sed -n "s/^LIFE_OS_VERSION=['\"]*\([^'\"]*\)['\"]*$/\1/p" | head -n 1; }
+
+# The commands that download a release's files over these and update.
+release_download_hint() {
+  cat <<EOF
+
+  release=https://github.com/GAMch1k/life-os/releases/download/$1
+  for file in compose.yaml setup.sh SHA256SUMS; do curl -fsSLO "\$release/\$file"; done
+  curl -fsSL -o .env.example "\$release/default.env.example"
+  sha256sum -c SHA256SUMS && ./setup.sh update
+EOF
+}
 
 # Refuses release files of two releases together: this script, compose.yaml,
 # and .env.example must be one release's, as SHA256SUMS lists them. A newer
 # release's images need its compose.yaml (new services, such as the
-# accounts' database) and its .env.example (new settings).
+# accounts' database) and its .env.example (new settings). A release's
+# script (stamped) needs both files to name its own version: a compose.yaml
+# or .env.example that names none is from before v0.1.0-preview.7, which
+# never runs this release's images. A copy from the repository (not
+# stamped) only checks that the two files agree, where they name one.
 check_release_files() {
-  local found='' name version first=''
+  local compose example name version found='' first='' unnamed=''
+  compose=$(compose_release)
+  example=$(example_release)
+  if [[ -n $script_version ]]; then
+    [[ -n $compose ]] || unnamed=compose.yaml
+    [[ -n $example ]] || unnamed+=${unnamed:+ and }.env.example
+    if [[ -n $unnamed ]]; then
+      die "this setup.sh is $script_version's, but no release is named in $unnamed here: such files are from before v0.1.0-preview.7, and cannot run $script_version's images (the accounts' database and settings would be missing, and Life OS would answer every request with an error). Download all of $script_version's files over these, check them, and run the new script:
+$(release_download_hint "$script_version")
+
+Nothing was changed. See $docs/updating.md"
+    fi
+  fi
   for name in setup.sh compose.yaml .env.example; do
     case $name in
       setup.sh) version=$script_version ;;
-      compose.yaml) version=$(compose_release) ;;
-      .env.example) version=$(example_release) ;;
+      compose.yaml) version=$compose ;;
+      .env.example) version=$example ;;
     esac
     [[ -n $version ]] || continue
     found+="${found:+, }$name $version"
     [[ -n $first ]] || first=$version
-    [[ $version == "$first" ]] || die "the release files here are from different releases ($found): download all of one release's files, check them with sha256sum -c SHA256SUMS, and run ./setup.sh${1:+ $1} again ($docs/updating.md). Nothing was changed."
+    [[ $version == "$first" ]] || die "the release files here are from different releases ($found): download all of one release's files, check them with sha256sum -c SHA256SUMS, and run ./setup.sh${1:+ $1} again ($docs/updating.md):
+$(release_download_hint "${script_version:-$first}")
+
+Nothing was changed."
   done
 }
 
@@ -2562,11 +2606,7 @@ cmd_update() {
   if [[ -n ${1:-} && $1 != "$release_version" ]]; then
     [[ $1 =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] || usage_error "'$1' is not a version"
     die "this setup.sh, compose.yaml, and .env.example are $release_version's, and update only to $release_version. A newer release needs its own files: they add services and settings these lack. Download $1's files over these, check them, and update with its setup.sh:
-
-  release=https://github.com/GAMch1k/life-os/releases/download/$1
-  for file in compose.yaml setup.sh SHA256SUMS; do curl -fsSLO \"\$release/\$file\"; done
-  curl -fsSL -o .env.example \"\$release/default.env.example\"
-  sha256sum -c SHA256SUMS && ./setup.sh update
+$(release_download_hint "$1")
 
 Nothing was changed. See $docs/updating.md"
   fi

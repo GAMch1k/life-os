@@ -44,18 +44,20 @@ const signIn: Project[] = Object.entries(browsers)
 
 export default defineConfig({
   testDir: "./e2e-sign-in",
-  // Apart from the browser suite's, which CI uploads alongside.
+  // Apart from the browser suite's, and never uploaded by CI: these runs
+  // type a password and a setup code and hold session cookies, so they
+  // keep no trace, screenshot, video, or HTML report (CI's artifacts are
+  // public); the list in the log says what failed.
   outputDir: "./test-results-sign-in",
-  reporter: [
-    ["list"],
-    ["html", { outputFolder: "./playwright-report-sign-in", open: "never" }],
-  ],
+  reporter: [["list"]],
   timeout: 120_000,
   // One account, one server: the browsers take turns.
   workers: 1,
   use: {
     baseURL: process.env.LIFE_OS_E2E_URL,
-    trace: "retain-on-failure",
+    trace: "off",
+    screenshot: "off",
+    video: "off",
     timezoneId: "Europe/Berlin",
   },
   projects: [

@@ -72,19 +72,23 @@ case $1 in
       exec*)
         case $* in
           # calendar-feeds' API from the Dashboard's container (./setup.sh
-          # feed): the method, path, and body after the script; the status
-          # (STUB_FEED_STATUS), then the body or STUB_FEEDS_LIST's lines;
-          # 000 when STUB_FEEDS_DOWN is set.
+          # feed): the method and path after the script, the body on stdin
+          # (logged as "feeds <method> <path> <body>"); "@@status" with
+          # STUB_FEED_STATUS, then the body or STUB_FEEDS_LIST's lines. A
+          # Compose warning on stderr first with STUB_COMPOSE_WARNING; no
+          # status at all (calendar-feeds unreachable) with STUB_FEEDS_DOWN.
           *'calendar-feeds:8080'*)
-            printf 'feeds %s %s %s\n' "$7" "$8" "$9" >>"$STUB_LOG"
+            body=$(cat)
+            printf 'feeds %s %s %s\n' "$7" "$8" "$body" >>"$STUB_LOG"
+            [[ -z ${STUB_COMPOSE_WARNING:-} ]] || echo 'WARN[0000] The "X" variable is not set. Defaulting to a blank string.' >&2
             if [[ -n ${STUB_FEEDS_DOWN:-} ]]; then
-              printf '000\nfetch failed\n'
-              exit 0
+              echo 'service "dashboard" is not running' >&2
+              exit 1
             fi
             case $7 in
-              GET) printf '200\n%b' "${STUB_FEEDS_LIST:-}" ;;
-              DELETE) printf '%s\n' "${STUB_FEED_STATUS:-204}" ;;
-              *) printf '%s\n%s\n' "${STUB_FEED_STATUS:-201}" "${STUB_FEED_BODY:-{\}}" ;;
+              GET) printf '@@status 200\n%b' "${STUB_FEEDS_LIST:-}" ;;
+              DELETE) printf '@@status %s\n' "${STUB_FEED_STATUS:-204}" ;;
+              *) printf '@@status %s\n%s\n' "${STUB_FEED_STATUS:-201}" "${STUB_FEED_BODY:-{\}}" ;;
             esac
             ;;
           # The readiness probe in the Dashboard's container: the services
@@ -471,6 +475,20 @@ ok 'keeping the bind' test "$(value LIFE_OS_GATEWAY_BIND_ADDRESS)" = 127.0.0.1
 run -- --yes gateway --bind 10.0.0.1 --trusted-proxies 10.255.249.48/28
 ok 'a VPN bind with a proxy network instead' test "$status" -eq 0
 ok 'sets both' test "$(value LIFE_OS_GATEWAY_BIND_ADDRESS),$(value LIFE_OS_TRUSTED_PROXIES)" = 10.0.0.1,10.255.249.48/28
+# A bind change with both: the proxies, and signing in over plain HTTP at
+# the new address.
+env_sum=$(sha256sum <"$case_dir/.env")
+run -- --yes gateway --bind 10.0.0.2 --allow-http-login --trusted-proxies host
+ok 'host still needs a loopback bind, with --allow-http-login too' test "$status" -eq 2
+ok 'and nothing is written' test "$(sha256sum <"$case_dir/.env")" = "$env_sum"
+run -- --yes gateway --bind 10.0.0.2 --allow-http-login --trusted-proxies 10.255.249.48/28,10.0.0.9
+ok 'a bind change with --allow-http-login and --trusted-proxies' test "$status" -eq 0
+ok 'sets the bind, the proxies, and the plain-HTTP host' \
+  test "$(value LIFE_OS_GATEWAY_BIND_ADDRESS)|$(value LIFE_OS_TRUSTED_PROXIES)|$(value LIFE_OS_INSECURE_LOGIN_HOSTS)" = '10.0.0.2|10.255.249.48/28,10.0.0.9|10.0.0.2'
+ok 'and says both' bash -c "grep -q 'Signing in over plain HTTP is allowed at 10.0.0.2' '$case_dir.last' && grep -q 'Client addresses from the proxies: 10.255.249.48/28,10.0.0.9' '$case_dir.last'"
+run -- --yes gateway --bind 127.0.0.1 --trusted-proxies host
+ok 'back to loopback with host' test "$status" -eq 0
+ok 'the plain-HTTP host stays listed, harmless off its address' has_line 'LIFE_OS_INSECURE_LOGIN_HOSTS=10.0.0.2'
 
 new_case invalid
 run -- --yes --port 70000
@@ -503,25 +521,63 @@ ok 'warns about compose' output_has 'Docker Compose 2.20.2 is older'
 
 # ---------- The release fills in its version ----------
 ok 'one version placeholder' test "$(grep -c '__LIFE_OS_VERSION__' setup.sh)" -eq 1
+# A release's three files, as the bundle stamps them: setup.sh's version,
+# compose.yaml's release line, and .env.example's LIFE_OS_VERSION.
+stamp_release() {
+  sed -i "s/^release_version='[^']*'$/release_version='$1'/" "$case_dir/setup.sh"
+  { printf "# Life OS: the release bundle's compose.yaml.\n# Life OS release: %s\n" "$1"; cat "$work/compose.yaml"; } >"$case_dir/compose.yaml"
+  sed -i "s/^LIFE_OS_VERSION=.*/LIFE_OS_VERSION=$1/" "$case_dir/.env.example"
+}
 new_case released
 sed -i 's/__LIFE_OS_VERSION__/0.1.0-preview.1/' "$case_dir/setup.sh"
+run LIFE_OS_TIMEZONE=UTC -- --yes
+ok "a release's script without its release's compose.yaml and .env.example: refused" test "$status" -eq 1
+ok 'names the files from before preview.7' output_has 'no release is named in compose.yaml and .env.example here'
+ok 'and says how to download them' output_has 'release=https://github.com/GAMch1k/life-os/releases/download/0.1.0-preview.1'
+ok 'no .env' test ! -e "$case_dir/.env"
+stamp_release 0.1.0-preview.1
 run LIFE_OS_TIMEZONE=UTC -- --yes
 ok 'a released script sets its version' test "$(value LIFE_OS_VERSION)" = 0.1.0-preview.1
 run -- help
 ok 'help shows it' output_has '(0.1.0-preview.1)'
 ok 'not a release tag: the docs of master' output_has 'https://github.com/GAMch1k/life-os/blob/master/docs/install/README.md'
 new_case released-tag
-sed -i "s/^release_version='__LIFE_OS_VERSION__'$/release_version='v0.1.0-preview.7'/" "$case_dir/setup.sh"
-sed -i 's/^LIFE_OS_VERSION=.*/LIFE_OS_VERSION=v0.1.0-preview.7/' "$case_dir/.env.example"
+stamp_release v0.1.0-preview.7
 run LIFE_OS_TIMEZONE=UTC -- --yes
 ok "a release's files set up" test "$status" -eq 0
+env_sum=$(sha256sum <"$case_dir/.env")
 sed -i 's/^LIFE_OS_VERSION=.*/LIFE_OS_VERSION=v0.1.0-preview.6/' "$case_dir/.env.example"
 : >"$case_dir.log"
 run LIFE_OS_SETUP_WAIT_SECONDS=1 -- update --skip-checks --skip-backup
 ok "a new setup.sh with the old .env.example: update refuses" test "$status" -eq 1
-ok 'names both' output_has 'setup.sh v0.1.0-preview.7, .env.example v0.1.0-preview.6'
+ok 'names both' output_has 'setup.sh v0.1.0-preview.7, compose.yaml v0.1.0-preview.7, .env.example v0.1.0-preview.6'
 ok 'nothing pulled' bash -c "! grep -q 'compose pull' '$case_dir.log'"
 sed -i 's/^LIFE_OS_VERSION=.*/LIFE_OS_VERSION=v0.1.0-preview.7/' "$case_dir/.env.example"
+# The trap of a preview.6 user who downloads the new setup.sh and
+# .env.example but keeps preview.6's compose.yaml, which names no release:
+# refused before .env changes or anything is pulled.
+cp "$work/compose.yaml" "$case_dir/compose.yaml"
+run LIFE_OS_SETUP_WAIT_SECONDS=1 -- update --skip-checks --skip-backup
+ok "a compose.yaml from before preview.7 with the new script: update refuses" test "$status" -eq 1
+ok 'says that compose.yaml names no release' output_has 'no release is named in compose.yaml here: such files are from before v0.1.0-preview.7'
+ok 'with the download commands' output_has 'release=https://github.com/GAMch1k/life-os/releases/download/v0.1.0-preview.7'
+ok 'and .env is untouched' test "$(sha256sum <"$case_dir/.env")" = "$env_sum"
+ok 'nothing pulled' bash -c "! grep -qE 'compose (pull|up|exec)' '$case_dir.log'"
+run LIFE_OS_SETUP_WAIT_SECONDS=1 -- up --skip-checks
+ok 'up refuses it too' test "$status" -eq 1
+# Windows line ends (CRLF) neither hide a release nor make one up.
+stamp_release v0.1.0-preview.7
+sed -i 's/^# Life OS release: .*/# Life OS release: v0.1.0-preview.6/; s/$/\r/' "$case_dir/compose.yaml"
+run LIFE_OS_SETUP_WAIT_SECONDS=1 -- update --skip-checks --skip-backup
+ok "a CRLF compose.yaml of preview.6: refused" test "$status" -eq 1
+ok 'named without its carriage return' output_has 'setup.sh v0.1.0-preview.7, compose.yaml v0.1.0-preview.6)'
+stamp_release v0.1.0-preview.7
+sed -i 's/$/\r/' "$case_dir/.env.example"
+: >"$case_dir.log"
+run LIFE_OS_SETUP_WAIT_SECONDS=1 -- update --skip-checks --skip-backup
+ok "a CRLF .env.example of the same release: accepted" test "$status" -eq 0
+ok 'and it updates' logged 'docker compose pull [LIFE_OS_VERSION=v0.1.0-preview.7]'
+stamp_release v0.1.0-preview.7
 run -- help
 ok "a release's script links the docs at its own tag" output_has 'https://github.com/GAMch1k/life-os/blob/v0.1.0-preview.7/docs/install/README.md'
 ok 'and not master' bash -c "! grep -q 'blob/master' '$case_dir.last'"
@@ -726,9 +782,14 @@ fi
 run STUB_FEED_STATUS=201 LIFE_OS_SETUP_FEED_NAME='School holidays' LIFE_OS_SETUP_FEED_URL=webcal://example.org/holidays.ics -- --yes feed
 ok 'feed' test "$status" -eq 0
 ok "posted to calendar-feeds on the private network, from the Dashboard's container" logged 'feeds POST  {"name":"School holidays","url":"webcal://example.org/holidays.ics"}'
+ok "the feed's address is never an argument (ps, docker inspect)" bash -c "! grep -F 'docker compose' '$case_dir.log' | grep -q 'example.org/holidays.ics'"
 ok 'never through the gateway, which needs a sign-in' bash -c "! grep -q '^curl' '$case_dir.log'"
 ok 'as dev:setup' logged '"x-life-os-actor": "dev:setup"'
 ok 'says it subscribed' output_has 'Subscribed to "School holidays"'
+: >"$case_dir.log"
+run STUB_COMPOSE_WARNING=1 STUB_FEED_STATUS=201 LIFE_OS_SETUP_FEED_NAME=Warned LIFE_OS_SETUP_FEED_URL=https://example.org/w.ics -- --yes feed
+ok "a Compose warning on stderr is not taken for the answer" test "$status" -eq 0
+ok 'and the feed is subscribed once' test "$(grep -c '^feeds POST' "$case_dir.log")" -eq 1
 run STUB_FEED_STATUS=400 STUB_FEED_BODY='{"error":{"code":"invalid_url"}}' LIFE_OS_SETUP_FEED_NAME=x LIFE_OS_SETUP_FEED_URL=https://example.org/a.ics -- --yes feed
 ok 'a refused feed fails' test "$status" -eq 1
 ok "and shows Life OS's answer" output_has 'invalid_url'
@@ -740,6 +801,7 @@ ok 'and says to start it' output_has './setup.sh up'
 run STUB_FEEDS_DOWN=1 LIFE_OS_SETUP_FEED_NAME=x LIFE_OS_SETUP_FEED_URL=https://example.org/a.ics -- --yes feed
 ok 'calendar-feeds not answering fails' test "$status" -eq 1
 ok 'and says so' output_has 'calendar feeds do not answer'
+ok "with Compose's own words" output_has 'service "dashboard" is not running'
 run STUB_FEEDS_LIST='0b4f3c1e-2a5d-4c7e-9f10-1a2b3c4d5e6f\tSchool holidays\t2026-11-16T04:30:00Z\t\n' -- feed list
 ok 'feed list' test "$status" -eq 0
 ok 'lists each feed with its id and name' grep -qE '^0b4f3c1e-2a5d-4c7e-9f10-1a2b3c4d5e6f +School holidays +2026-11-16T04:30:00Z' "$case_dir.last"
@@ -755,6 +817,19 @@ run -- feed remove ../etc
 ok 'remove needs an id' test "$status" -eq 2
 run -- feed frobnicate
 ok 'an unknown feed command' test "$status" -eq 2
+# The script that runs in the Dashboard's container, with a stand-in for
+# calendar-feeds (its fetch): what a feed's server put into a name or an
+# error reaches the terminal without control characters.
+if command -v node >/dev/null 2>&1; then
+  feeds_script=$(sed -n "/^feeds_script='/,/^});'\$/p" setup.sh | sed "1s/^feeds_script='//; \$s/'\$//")
+  stand_in='globalThis.fetch = async (url, init) => new Response(JSON.stringify({items: [{id: "0b4f3c1e-2a5d-4c7e-9f10-1a2b3c4d5e6f", name: "Evil\u001b[31m\tname\nnext", refresh: {lastSuccessAt: null, lastError: "bad\u0007\u009b2Jfeed"}}], seen: init.body ?? null}), {status: 200});'
+  listed=$(node -e "$stand_in$feeds_script" GET '' list <<<'' 2>&1)
+  ok 'the feed script prints its status line' test "$(head -n 1 <<<"$listed")" = '@@status 200'
+  ok 'one line a feed, four columns' test "$(tail -n +2 <<<"$listed" | awk -F '\t' '{print NF}')" = 4
+  ok 'no control character from the feed reaches the terminal' bash -c "! tail -n +2 <<<'$(tail -n +2 <<<"$listed" | tr '\t' ' ')' | LC_ALL=C grep -q '[[:cntrl:]]'"
+  posted=$(node -e "$stand_in$feeds_script" POST '' <<<'{"name":"x","url":"https://example.org/secret-token.ics"}' 2>&1)
+  ok 'the body comes from stdin' grep -qF 'secret-token.ics' <<<"$posted"
+fi
 
 ok '.env is still mode 600' test "$(mode "$case_dir/.env")" = 600
 ok 'no duplicate keys' no_duplicate_keys

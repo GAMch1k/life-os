@@ -741,6 +741,8 @@ describe("the session cookie, by host", { skip }, () => {
     for (const origin of [
       "http://127.0.0.1:3000",
       "http://localhost:3000",
+      // The Dashboard takes [::1] too, though the gateway does not answer
+      // that Host (not among its server names).
       "http://[::1]:3000",
     ]) {
       const b = new Browser(w.fetcher, origin);
@@ -810,6 +812,50 @@ describe("the session cookie, by host", { skip }, () => {
     });
     assert.equal(r.status, 403, JSON.stringify(r.data));
     assert.deepEqual(r.headers.getSetCookie(), []);
+  });
+
+  test("on loopback another port's page cannot write: Sec-Fetch-Site decides, not the host-only Origin", async () => {
+    const local = new Browser(w.fetcher, "http://127.0.0.1:3000");
+    assert.equal((await signIn(local, "owner")).status, 200);
+    // Life OS's own page: same-origin.
+    assert.equal(
+      (
+        await local.check("POST", "/api/tasks/v1/tasks", {
+          "sec-fetch-site": "same-origin",
+        })
+      ).status,
+      204,
+    );
+    // Another web app on this machine (http://127.0.0.1:8080): its
+    // Origin has the same host name, but the browser says same-site.
+    let r = await local.check("POST", "/api/tasks/v1/tasks", {
+      origin: "http://127.0.0.1:8080",
+      "sec-fetch-site": "same-site",
+    });
+    assert.equal(r.status, 403);
+    // A browser that sends no Sec-Fetch-Site (Safari before 16.4) cannot
+    // be told apart there: refused, with the cookie and without.
+    r = await local.check("POST", "/api/tasks/v1/tasks", {
+      origin: "http://127.0.0.1:8080",
+    });
+    assert.equal(r.status, 403);
+    const other = new Browser(w.fetcher, "http://127.0.0.1:3000");
+    r = await other.req("/api/auth/sign-in/username", {
+      method: "POST",
+      headers: { origin: "http://127.0.0.1:8080", "sec-fetch-site": "" },
+      body: { username: "owner", password },
+    });
+    assert.equal(r.status, 403, JSON.stringify(r.data));
+    assert.deepEqual(r.headers.getSetCookie(), []);
+    r = await other.req("/api/auth/sign-in/username", {
+      method: "POST",
+      headers: {
+        origin: "http://127.0.0.1:8080",
+        "sec-fetch-site": "same-site",
+      },
+      body: { username: "owner", password },
+    });
+    assert.equal(r.status, 403, JSON.stringify(r.data));
   });
 
   test("loopback behind HTTPS (a proxy that says so) keeps the Secure cookie", async () => {

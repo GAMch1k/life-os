@@ -23,7 +23,7 @@ sha256sum -c SHA256SUMS
 ./setup.sh update
 ```
 
-Never run `./setup.sh update <newer version>` with the old files instead: an old `setup.sh` would start the new images with the old `compose.yaml`. From `v0.1.0-preview.7` on, `setup.sh` refuses a version other than its own release's and prints the commands above; `v0.1.0-preview.6` and older do not refuse it, so updating from them needs [the files first](#updating-from-v010-preview6). `setup.sh` also refuses files of two releases mixed together (`compose.yaml` names its release from `v0.1.0-preview.7` on).
+Never run `./setup.sh update <newer version>` with the old files instead: an old `setup.sh` would start the new images with the old `compose.yaml`. From `v0.1.0-preview.7` on, `setup.sh` refuses a version other than its own release's and prints the commands above; `v0.1.0-preview.6` and older do not refuse it, so updating from them needs [the files first](#updating-from-v010-preview6). `setup.sh` also refuses files of two releases mixed together: from `v0.1.0-preview.7` on, `compose.yaml` and `.env.example` name their release, and a release's `setup.sh` needs both to name its own, so a `compose.yaml` kept from an older release (which names none) is refused before anything changes.
 
 `./setup.sh update`:
 

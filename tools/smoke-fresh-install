@@ -34,8 +34,16 @@ fail() {
   echo "fresh install smoke: $*" >&2
   exit 1
 }
+# The throwaway stack's credentials (the password, the setup code, the
+# session, the token) never show in a CI log: masked on GitHub Actions,
+# and never printed whole (headers are shown by name only).
+mask() { [[ -z ${GITHUB_ACTIONS:-} || -z $1 ]] || printf '::add-mask::%s\n' "$1"; }
+header_names() { tr -d '\r' <"$work/headers" | sed 's/^\([^:]*\):.*/\1: …/'; }
+# A failed request's body, without a session token Better Auth may put in it.
+body_shown() { jq -c 'if type == "object" then del(.token) else . end' "$work/body" 2>/dev/null || head -c 500 "$work/body"; }
 username=owner
 password="fresh install $(openssl rand -hex 8)"
+mask "$password"
 
 "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
 scale=()
@@ -58,17 +66,22 @@ done
 
 # request <method> <path> [curl options…]: status in $code, body in
 # $work/body, headers in $work/headers
+# A browser's own request on loopback carries Sec-Fetch-Site, which Life OS
+# needs there for a write (src/lib/auth/origin.ts): unless the call names
+# one, same-origin.
 request() {
   local method=$1 path=$2
   shift 2
+  local -a site=(-H 'sec-fetch-site: same-origin')
+  [[ ${*,,} != *sec-fetch-site:* ]] || site=()
   code=$(curl --silent --max-time 15 --request "$method" --output "$work/body" --dump-header "$work/headers" \
-    --write-out '%{http_code}' "$@" "$gateway$path")
+    --write-out '%{http_code}' "${site[@]}" "$@" "$gateway$path")
 }
 expect() { # <status> <method> <path> [curl options…]
   local want=$1
   shift
   request "$@"
-  [[ "$code" == "$want" ]] || { cat "$work/body" >&2; fail "$1 $2: $code, want $want"; }
+  [[ "$code" == "$want" ]] || { body_shown >&2; fail "$1 $2: $code, want $want"; }
 }
 
 echo '==> Without a sign-in, nothing but the login'
@@ -77,13 +90,14 @@ grep -q '"unauthenticated"' "$work/body" || fail "the 401 is not JSON unauthenti
 expect 401 GET /api/tasks/ready
 expect 401 GET /api/status
 expect 307 GET /tasks
-grep -qi '^location: /login?next=%2Ftasks' "$work/headers" || { cat "$work/headers" >&2; fail '/tasks did not go to the login'; }
+grep -qi '^location: /login?next=%2Ftasks' "$work/headers" || { header_names >&2; fail '/tasks did not go to the login'; }
 expect 200 GET /login
 expect 200 GET /setup
 
 echo '==> The first account in the browser, then each browser signs in'
 setup_code=$("${compose[@]}" exec -T dashboard node scripts/lifeos-auth.mjs setup-code | sed -n 's/^Setup code: //p')
 [[ -n "$setup_code" ]] || fail 'setup-code printed no code'
+mask "$setup_code"
 LIFE_OS_E2E_URL=$gateway LIFE_OS_E2E_SETUP_CODE=$setup_code LIFE_OS_E2E_USERNAME=$username LIFE_OS_E2E_PASSWORD=$password \
   npm --prefix apps/dashboard run test:sign-in -- "$@"
 [[ -z "$("${compose[@]}" exec -T dashboard node scripts/lifeos-auth.mjs setup-code --if-no-account)" ]] \
@@ -98,16 +112,19 @@ for _ in 1 2 3; do
   [[ "$code" == 429 ]] || break
   sleep 11
 done
-[[ "$code" == 200 ]] || { cat "$work/body" >&2; fail "signing in with the API: $code, want 200"; }
 session=$(grep -i '^set-cookie: lifeos.session=' "$work/headers" | head -n 1 | sed 's/^[^:]*: //; s/;.*//' | tr -d '\r')
-[[ -n "$session" ]] || { cat "$work/headers" >&2; fail 'no session cookie at 127.0.0.1'; }
+mask "${session#*=}"
+mask "$(jq -r '.token // empty' "$work/body" 2>/dev/null || true)"
+[[ "$code" == 200 ]] || { jq -c '{code, message}' "$work/body" >&2 || true; fail "signing in with the API: $code, want 200"; }
+[[ -n "$session" ]] || { header_names >&2; fail 'no session cookie at 127.0.0.1'; }
 if grep -i '^set-cookie: lifeos.session=' "$work/headers" | grep -qi '; *secure'; then
   fail 'the loopback session cookie is Secure, which Safari refuses on plain HTTP'
 fi
 expect 201 POST /api/account/tokens -H "cookie: $session" -H "origin: $gateway" -H 'content-type: application/json' \
   --data '{"name":"smoke-fresh-install","scopes":["tasks:write","inbox:write","calendar:write","finance:read"],"devTool":true}'
 token=$(jq -r .token "$work/body")
-[[ "$token" == lo_tok_* ]] || fail "no token: $(cat "$work/body")"
+mask "$token"
+[[ "$token" == lo_tok_* ]] || fail "no token: $(jq -c 'del(.token)' "$work/body")"
 expect 200 GET /api/tasks/ready -H "authorization: Bearer $token"
 
 echo '==> The smokes, signed in'

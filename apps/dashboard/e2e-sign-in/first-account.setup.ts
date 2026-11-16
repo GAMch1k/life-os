@@ -41,7 +41,10 @@ setup(
     // The session cookie of loopback: host-only, HttpOnly, without Secure.
     const cookies = await context.cookies();
     const session = cookies.find((cookie) => cookie.name === "lifeos.session");
-    expect(session, JSON.stringify(cookies)).toBeTruthy();
+    expect(
+      session,
+      `cookies: ${cookies.map((cookie) => cookie.name).join(", ")}`,
+    ).toBeTruthy();
     expect(session!.secure).toBe(false);
     expect(session!.httpOnly).toBe(true);
     expect(session!.sameSite).toBe("Lax");
