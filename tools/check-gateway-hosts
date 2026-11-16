@@ -128,9 +128,12 @@ if [ -n "$public_url" ]; then
   public_host=$(url_host "$public_url")
   grep -q -x -F "$public_host" <<<"$names" || fail "LIFE_OS_PUBLIC_URL's host $public_host is not one the gateway answers: set LIFE_OS_PUBLIC_HOSTNAME=$public_host in .env"
 fi
-if of "$lifeos_server" | grep -q '^listen .*default_server'; then fail "the Life OS server must not be the default server"; fi
+# grep -q reads from a here-string, not a pipe: it stops at its first match,
+# and awk, still writing into the closed pipe, would die of SIGPIPE, which
+# pipefail turns into a failed match.
+if grep -q '^listen .*default_server' <<<"$(of "$lifeos_server")"; then fail "the Life OS server must not be the default server"; fi
 
-of "$lifeos_server" | grep -q -E '^resolver 127\.0\.0\.11( |$)' || fail "the Life OS server must resolve upstreams through Docker's DNS at request time: resolver 127.0.0.11 valid=10s ipv6=off"
+grep -q -E '^resolver 127\.0\.0\.11( |$)' <<<"$(of "$lifeos_server")" || fail "the Life OS server must resolve upstreams through Docker's DNS at request time: resolver 127.0.0.11 valid=10s ipv6=off"
 fixed=$(of "$lifeos_server" | awk '$1 == "proxy_pass" && $2 !~ /^http:\/\/\$[a-z_]+$/' || true)
 [ -z "$fixed" ] || fail "every proxy_pass must name its upstream through a variable (set \$upstream food:8080; proxy_pass http://\$upstream), so nginx resolves it per request: ${fixed//$'\n'/; }"
 [ "$(of "$lifeos_server" | grep -c '^proxy_pass ')" -gt 0 ] || fail "the Life OS server proxies nothing"

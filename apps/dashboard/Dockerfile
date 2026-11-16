@@ -1,16 +1,16 @@
-FROM node:22-alpine@sha256:0e1754758c2df4cfa3e68d59e2e1b7374bb7fd9ea6328eaaacf15cc934af8202 AS dependencies
+FROM node:22-alpine@sha256:1314fb30ec37592d5845e5a160d522c0e680972aa534549940b8d73bde88481a AS dependencies
 WORKDIR /app
 COPY apps/dashboard/package.json apps/dashboard/package-lock.json ./
 RUN npm ci
 
 # The runtime's node_modules: the production dependencies alone, without the
 # build and test tools (Next.js builds in the build stage).
-FROM node:22-alpine@sha256:0e1754758c2df4cfa3e68d59e2e1b7374bb7fd9ea6328eaaacf15cc934af8202 AS production-dependencies
+FROM node:22-alpine@sha256:1314fb30ec37592d5845e5a160d522c0e680972aa534549940b8d73bde88481a AS production-dependencies
 WORKDIR /app
 COPY apps/dashboard/package.json apps/dashboard/package-lock.json ./
 RUN npm ci --omit=dev
 
-FROM node:22-alpine@sha256:0e1754758c2df4cfa3e68d59e2e1b7374bb7fd9ea6328eaaacf15cc934af8202 AS build
+FROM node:22-alpine@sha256:1314fb30ec37592d5845e5a160d522c0e680972aa534549940b8d73bde88481a AS build
 WORKDIR /app
 ARG NEXT_PUBLIC_FINANCE_SERVICE_URL=http://localhost:8081
 ARG NEXT_PUBLIC_TASKS_SERVICE_URL=http://localhost:8082
@@ -25,7 +25,7 @@ COPY --from=dependencies /app/node_modules ./node_modules
 COPY apps/dashboard ./
 RUN npm run build
 
-FROM node:22-alpine@sha256:0e1754758c2df4cfa3e68d59e2e1b7374bb7fd9ea6328eaaacf15cc934af8202 AS runtime
+FROM node:22-alpine@sha256:1314fb30ec37592d5845e5a160d522c0e680972aa534549940b8d73bde88481a AS runtime
 # The image's source and license; on ghcr.io this links its package to the
 # repository (docs/operations/releases.md).
 LABEL org.opencontainers.image.source="https://github.com/GAMch1k/life-os" \
