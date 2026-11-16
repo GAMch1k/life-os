@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { type FormEvent, useId, useState, useTransition } from "react";
 
 import { AccountPage } from "@/components/account-page";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { PlainHttpNotice } from "@/components/plain-http-notice";
 import { Button } from "@/components/ui/button";
 import {
   Field,
@@ -88,14 +88,7 @@ export function SetupForm({ context }: { context: LoginContext }) {
       title="Set up Life OS"
     >
       {blocked ? (
-        <Alert variant="destructive">
-          <AlertTitle>Use the HTTPS address</AlertTitle>
-          <AlertDescription>
-            This address is plain HTTP. Open{" "}
-            <a href={`${context.publicUrl}/setup`}>{context.publicUrl}</a>{" "}
-            instead.
-          </AlertDescription>
-        </Alert>
+        <PlainHttpNotice path="/setup" publicUrl={context.publicUrl} />
       ) : null}
       <form className="grid gap-4" noValidate onSubmit={submit}>
         <FieldGroup>

@@ -15,11 +15,15 @@ export const FIRST_SPACE_ID = "00000000-0000-4000-8000-000000000002";
 export const SERVER_ROLES = ["owner", "admin", "member"] as const;
 export type ServerRole = (typeof SERVER_ROLES)[number];
 
-/** The session cookie on HTTPS and on localhost: host-only and Secure. */
+/** The session cookie on HTTPS: host-only and Secure. */
 export const SESSION_COOKIE = "__Host-lifeos.session";
 /**
- * The session cookie on a plain-HTTP host the owner allowed
- * (LIFE_OS_INSECURE_LOGIN_HOSTS): a browser refuses a Secure cookie there.
+ * The session cookie where a browser may refuse a Secure one: a plain-HTTP
+ * host the owner allowed (LIFE_OS_INSECURE_LOGIN_HOSTS), and this
+ * machine's own loopback names over plain HTTP (an SSH tunnel to
+ * http://127.0.0.1 or http://localhost), where Safari refuses Secure
+ * cookies although Chromium and Firefox keep them. Host-only, HttpOnly,
+ * SameSite=Lax; never set for any other host.
  */
 export const INSECURE_SESSION_COOKIE = "lifeos.session";
 /** The prefix of every other cookie Better Auth sets (two-factor, passkeys). */

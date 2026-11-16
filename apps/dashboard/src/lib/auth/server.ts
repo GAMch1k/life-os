@@ -33,7 +33,8 @@ import {
 import type { AuthEnv } from "./env";
 import {
   anonymousWriteAllowed,
-  isLoopbackHost,
+  isLoopbackLogin,
+  isLoopbackOrigin,
   isOwnOrigin,
   requestHost,
 } from "./origin";
@@ -174,7 +175,19 @@ const SIGN_IN_PATHS = new Set(["/sign-in/username"]);
 const SETUP_CODE_INVALID_MESSAGE =
   "That setup code is wrong, used, or expired. Print a new one with ./setup.sh setup-code.";
 
-export type AuthKind = "secure" | "insecure";
+/**
+ * Which Better Auth instance serves a request (sessionSource in check.ts),
+ * and so which session cookie it sets:
+ *  - secure: every host but the two below, such as the public HTTPS name:
+ *    the Secure `__Host-lifeos.session`;
+ *  - loopback: this machine's own loopback names over plain HTTP (an SSH
+ *    tunnel, isLoopbackLogin): a host-only `lifeos.session` without Secure,
+ *    which Safari keeps there; passkeys and MCP's OAuth as on secure;
+ *  - insecure: a plain-HTTP host the owner allowed
+ *    (LIFE_OS_INSECURE_LOGIN_HOSTS): the same cookie, without passkeys or
+ *    OAuth.
+ */
+export type AuthKind = "secure" | "loopback" | "insecure";
 
 export type LifeOsAuth = ReturnType<typeof createAuth>;
 
@@ -194,9 +207,21 @@ export function insecureLoginAllowed(env: AuthEnv, headers: Headers) {
 }
 
 /**
- * Whether the request's page is somewhere a login works: HTTPS, a loopback
- * host, or a host the owner allowed over plain HTTP. The browser sends
- * Origin with every sign-in.
+ * Whether signing in over plain HTTP works for this request's host: a host
+ * the owner allowed, or this machine's own loopback names (an SSH tunnel).
+ * The login and setup pages read it, to tell a dead end from a page that
+ * works.
+ */
+export function plainHttpLoginAllowed(env: AuthEnv, headers: Headers) {
+  return insecureLoginAllowed(env, headers) || isLoopbackLogin(headers);
+}
+
+/**
+ * Whether the request's page is somewhere this instance's login works, by
+ * the Origin the browser sends with every sign-in: HTTPS for the secure
+ * instance, a loopback name for the loopback one, and a host the owner
+ * allowed, over plain HTTP, for the insecure one. A plain-HTTP page of any
+ * other host never signs in, so it never gets a cookie without Secure.
  */
 function loginOriginAllowed(env: AuthEnv, kind: AuthKind, headers: Headers) {
   const origin = headers.get("origin");
@@ -207,10 +232,14 @@ function loginOriginAllowed(env: AuthEnv, kind: AuthKind, headers: Headers) {
   } catch {
     return false;
   }
-  if (url.protocol === "https:" || isLoopbackHost(url.hostname)) {
-    return kind === "secure";
+  switch (kind) {
+    case "secure":
+      return url.protocol === "https:";
+    case "loopback":
+      return isLoopbackOrigin(origin) && isLoopbackLogin(headers);
+    case "insecure":
+      return url.protocol === "http:" && insecureLoginAllowed(env, headers);
   }
-  return kind === "insecure" && insecureLoginAllowed(env, headers);
 }
 
 /** The MCP resource OAuth access tokens are bound to. */
@@ -266,7 +295,11 @@ export function createAuth(
   const kind = options.kind ?? "secure";
   const throttle = options.throttle ?? new LoginThrottle();
   const publicUrl = new URL(env.publicUrl);
+  // Secure cookies only on the secure instance: on loopback and on an
+  // allowed plain-HTTP host the browser may refuse them.
   const secure = kind === "secure";
+  // Passkeys and MCP's OAuth everywhere but on an allowed plain-HTTP host.
+  const fullFeatures = kind !== "insecure";
 
   const config = {
     appName: "Life OS",
@@ -347,7 +380,7 @@ export function createAuth(
     advanced: {
       cookiePrefix: COOKIE_PREFIX,
       // The names are set here, so Better Auth adds no __Secure- prefix;
-      // every cookie is Secure on HTTPS and localhost all the same.
+      // every cookie of the secure instance is Secure all the same.
       useSecureCookies: false,
       defaultCookieAttributes: {
         secure,
@@ -409,9 +442,10 @@ export function createAuth(
         if (DISABLED_PREFIXES.some((prefix) => path.startsWith(prefix))) {
           throw new APIError("NOT_FOUND", { message: "Not found" });
         }
-        // MCP's OAuth runs at the public address only, never on a
-        // plain-HTTP host the owner allowed for signing in.
-        if (!secure && path.startsWith("/oauth2/")) {
+        // MCP's OAuth runs at the public address and on loopback (an MCP
+        // client through an SSH tunnel), never on a plain-HTTP host the
+        // owner allowed for signing in.
+        if (!fullFeatures && path.startsWith("/oauth2/")) {
           throw new APIError("NOT_FOUND", { message: "Not found" });
         }
 
@@ -688,7 +722,7 @@ export function createAuth(
         issuer: "Life OS",
         backupCodeOptions: { amount: 10, length: 10 },
       }),
-      ...(secure
+      ...(fullFeatures
         ? [
             passkey({
               rpID: publicUrl.hostname,

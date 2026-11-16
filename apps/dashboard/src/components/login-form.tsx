@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { type FormEvent, useId, useState, useTransition } from "react";
 
 import { AccountPage } from "@/components/account-page";
+import { PlainHttpNotice } from "@/components/plain-http-notice";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
@@ -22,8 +23,9 @@ type Step = "password" | "totp" | "recovery";
 /**
  * Sign in: username and password, then the authenticator app's code (or a
  * recovery code) when two-factor is on; or a passkey, which needs nothing
- * else. Only where the browser can keep the Secure session cookie: HTTPS,
- * localhost, or a host the owner allowed over plain HTTP.
+ * else. Only where signing in is safe enough: HTTPS, this machine's
+ * loopback (an SSH tunnel), or a host the owner allowed over plain HTTP;
+ * elsewhere it says how to get there (PlainHttpNotice).
  */
 export function LoginForm({
   context,
@@ -122,14 +124,7 @@ export function LoginForm({
       ) : null}
 
       {blocked ? (
-        <Alert variant="destructive">
-          <AlertTitle>Use the HTTPS address</AlertTitle>
-          <AlertDescription>
-            This address is plain HTTP, where signing in is not safe. Open{" "}
-            <a href={`${context.publicUrl}/login`}>{context.publicUrl}</a>{" "}
-            instead.
-          </AlertDescription>
-        </Alert>
+        <PlainHttpNotice path="/login" publicUrl={context.publicUrl} />
       ) : null}
 
       <form className="grid gap-4" noValidate onSubmit={signIn}>

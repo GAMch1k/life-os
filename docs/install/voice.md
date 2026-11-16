@@ -37,6 +37,8 @@ Whisper refuses a code it doesn't know: it stops at its start, and `docker compo
 
 ## CPU and memory
 
+Whisper needs a processor with **AVX2** (Intel Core and Xeon since 2013, AMD since 2015; many Celeron, Pentium, and Atom chips have none). Without it, Whisper stops at every start ("Illegal instruction") and voice notes wait forever, so `./setup.sh whisper` and `./setup.sh modules on voice` refuse, a first setup leaves voice notes off, and `./setup.sh up` warns if they are on anyway; each says which processor it found (in `/proc/cpuinfo`). When it cannot tell, it turns them on and warns. Text and photo captures work without AVX2.
+
 Whisper uses at most 2 CPUs (`LIFE_OS_WHISPER_CPUS`, `LIFE_OS_WHISPER_THREADS`) and its memory cap, and transcribes one note at a time; more CPUs make it faster. On a small server, pick a smaller model rather than raising the memory cap.
 
 More: [Voice and STT](../services/voice-stt.md).

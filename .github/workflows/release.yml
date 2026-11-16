@@ -444,7 +444,7 @@ jobs:
           {
             cat <<EOF
           > [!WARNING]
-          > **Early preview. Life OS has no login of its own yet:** anyone who can reach it can read and change everything in it. Run it only behind a VPN (such as WireGuard or Tailscale) or an access proxy (such as Cloudflare Access), keep the gateway on 127.0.0.1 or a VPN address (\`LIFE_OS_GATEWAY_BIND_ADDRESS\`), and never expose it to the internet.
+          > **Early preview.** Life OS has a login, and it is new. Keep the gateway on 127.0.0.1 or a VPN address (\`LIFE_OS_GATEWAY_BIND_ADDRESS\`), reach it through an SSH tunnel, a VPN (such as WireGuard or Tailscale), or an access proxy (such as Cloudflare Access), and never expose it straight to the internet.
 
           ## Install
 
@@ -458,7 +458,22 @@ jobs:
           chmod +x setup.sh && ./setup.sh && ./setup.sh up
           \`\`\`
 
-          \`setup.sh\` writes \`.env\` with generated passwords and keys and this version (\`LIFE_OS_VERSION=${VERSION}\`). See [docs/install](https://github.com/${GH_REPO}/tree/${VERSION}/docs/install).
+          \`setup.sh\` writes \`.env\` with generated passwords and keys and this version (\`LIFE_OS_VERSION=${VERSION}\`). \`./setup.sh up\` then prints a one-time setup code: open Life OS (through an SSH tunnel, at http://127.0.0.1:3000) and create the owner's account with it. See [docs/install](https://github.com/${GH_REPO}/tree/${VERSION}/docs/install).
+
+          ## Update
+
+          Download this release's files over the old ones first, then update with the new \`setup.sh\`: an older \`setup.sh\` and \`compose.yaml\` cannot run this release's images, so never \`./setup.sh update ${VERSION}\` with the old files ([Updating](https://github.com/${GH_REPO}/blob/${VERSION}/docs/install/updating.md)).
+
+          \`\`\`sh
+          cd ~/life-os
+          release=https://github.com/${GH_REPO}/releases/download/${VERSION}
+          for file in compose.yaml setup.sh SHA256SUMS; do curl -fsSLO "\$release/\$file"; done
+          curl -fsSL -o .env.example "\$release/default.env.example"
+          sha256sum -c SHA256SUMS
+          ./setup.sh update
+          \`\`\`
+
+          Coming from v0.1.0-preview.6 or older, before accounts: read [Updating from v0.1.0-preview.6](https://github.com/${GH_REPO}/blob/${VERSION}/docs/install/updating.md#updating-from-v010-preview6) first.
 
           ## Images
 
@@ -485,8 +500,11 @@ jobs:
 
           ## In this preview
 
-          - A new install runs the core alone: the Dashboard, Tasks, Calendar, Inbox, Food, Finance, notifications, and backups. Each optional module (AI processing, voice notes, Google Calendar, bank sync, the Cloudflare Tunnel, ntfy push, server health) runs only once it is on: \`./setup.sh\` offers them, and \`./setup.sh modules\` lists them and switches them on and off; off, a module's containers go and its data stays. See [Modules](https://github.com/${GH_REPO}/blob/${VERSION}/docs/install/modules.md).
-          - Updating an install from before modules (\`./setup.sh update\`) keeps on what it used: voice notes, server health, the tunnel and ntfy as they were, and AI processing, Google Calendar, and bank sync where they are set up.
+          - **Accounts and a login** ([Accounts](https://github.com/${GH_REPO}/blob/${VERSION}/docs/install/accounts.md)): the first account, the server's owner, is made with a one-time setup code from the server (\`./setup.sh setup-code\`; \`up\` and \`update\` print one while none exists). Two-factor sign-in with an authenticator app or a passkey, a security log, and \`./setup.sh recover-owner\` when you are locked out. A new install needs a sign-in for everything.
+          - **Legacy access** after an update: an install updated from before accounts keeps working without a sign-in, as before, until you turn legacy access off (Settings → Security, or \`./setup.sh legacy-access off\`).
+          - **Phones, tools, and AI assistants sign in too**: the phone app (from 0.5.0) pairs with your account and gets a device key of its own, so it no longer needs Cloudflare Access; personal API tokens for scripts; and MCP clients connect with OAuth.
+          - **Signing in over plain HTTP** works at \`http://127.0.0.1\` and \`localhost\` (an SSH tunnel). On a LAN or VPN address it is off unless you allow it: \`./setup.sh gateway --allow-http-login\` (the password then crosses that network unencrypted; HTTPS is better).
+          - Each optional module (AI processing, voice notes, Google Calendar, bank sync, the Cloudflare Tunnel, ntfy push, server health) runs only once it is on: \`./setup.sh modules\`. Voice notes need a processor with AVX2: \`setup.sh\` refuses to turn them on without it.
           - The images do not contain Claude Code: the processor image has OpenAI's Codex CLI alone. To use Claude Code instead, \`./setup.sh claude\` downloads it from Anthropic's official npm package onto your server (the version this release pins, checked against its sha512; about 330 MB) and adds it to a local copy of the processor image. It signs in with your own Claude plan (the token of \`claude setup-token\`) or your own Anthropic API key (billed per use by Anthropic), under Anthropic's terms for your account; \`./setup.sh update\` adds it to each new version. See [AI processing](https://github.com/${GH_REPO}/blob/${VERSION}/docs/install/ai-processing.md#claude-code-instead-of-codex).
           - Voice notes download their Whisper model (about 466 MB) on their first start.
           - Server health reads the host: the Docker socket (through a read-only gateway of its own), and \`/\` and Docker's data directory, read-only. It is never on unless you turn it on.

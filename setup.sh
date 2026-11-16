@@ -6,7 +6,7 @@
 #
 #   ./setup.sh [options]        first-time setup: checks, then a complete .env
 #   ./setup.sh up               start Life OS and wait until it answers
-#   ./setup.sh update [VERSION] back up, pull the new images, restart
+#   ./setup.sh update           back up, pull this release's images, restart
 #   ./setup.sh status           what runs, and what is set up (never values)
 #   ./setup.sh modules [on|off ID...]
 #                               the optional modules: list, turn on, turn off
@@ -23,17 +23,27 @@ set -euo pipefail
 # release's .env.example names, else the moving "preview" images.
 release_version='__LIFE_OS_VERSION__'
 case $release_version in __*) release_version= ;; esac
+# The version a release wrote into this script itself, if any.
+script_version=$release_version
 
-docs=https://github.com/GAMch1k/life-os/blob/master/docs/install
 min_engine=25.0
 min_compose=2.27
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 umask 077
 if [[ -z $release_version && -f .env.example ]]; then
-  release_version=$(sed -n "s/^LIFE_OS_VERSION=['\"]*\([^'\"]*\)['\"]*$/\1/p" .env.example | head -n 1)
+  release_version=$(tr -d '\r' <.env.example | sed -n "s/^LIFE_OS_VERSION=['\"]*\([^'\"]*\)['\"]*$/\1/p" | head -n 1)
 fi
 [[ $release_version =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] || release_version=preview
+
+# The install guide of this release: the docs at its own tag, which say what
+# this script does. A version that is not a published release's tag (the
+# moving preview, a copy from the repository, a dry run) links master's.
+docs_ref=master
+if [[ $release_version =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ && $release_version != v0.0.0-* ]]; then
+  docs_ref=$release_version
+fi
+docs=https://github.com/GAMch1k/life-os/blob/$docs_ref/docs/install
 
 assume_yes=0
 force_new=0
@@ -43,6 +53,7 @@ skip_access_check=0
 reset_2fa=0
 keep_devices=0
 allow_public_bind=0
+allow_http_login=0
 bind_flag=
 port_flag=
 public_url_flag=
@@ -67,8 +78,9 @@ usage_error() {
 preview_banner() {
   cat <<EOF
 Life OS early preview ($release_version)
-  * Life OS has no login of its own yet: whoever can open it can read and
-    change everything in it.
+  * Life OS has a login, and it is new. The first account, the owner's, is
+    made with a one-time setup code from this server. While legacy access is
+    on (after an update from before accounts), whoever reaches it is the owner.
   * By default it answers only on this server (127.0.0.1). Reach it over an
     SSH tunnel, a VPN, or Cloudflare Access, never straight from the internet.
   * Previews have rough edges and may change between releases. Back up before
@@ -464,18 +476,19 @@ check_bind() {
     loopback) return 0 ;;
     invalid) usage_error "--bind needs an IPv4 address such as 127.0.0.1 or your VPN address, not '$bind'" ;;
     private)
-      warn "Life OS will answer at $bind to every device that can reach that address. It has no login of its own: on a VPN, every peer is the owner. Never use a LAN address that other people share." ;;
+      warn "Life OS will answer at $bind, over plain HTTP, to every device that can reach that address: they get its login page, and while legacy access is on (after an update from before accounts), they act as the owner without signing in. On a LAN that other people share, put HTTPS in front ($docs/access.md#choose-a-way-in)." ;;
     public)
       if ((!allow_public_bind)); then
-        die "$bind is a public address (or every address). Life OS has no login yet, so it refuses to listen there: keep 127.0.0.1 and use Cloudflare Access, a VPN, or an SSH tunnel ($docs/access.md). If a firewall or a login in front really protects it, add --allow-public-bind."
+        die "$bind is a public address (or every address). Life OS would answer the whole internet over plain HTTP, where passwords cross the network unencrypted, so it refuses to listen there: keep 127.0.0.1 and use Cloudflare Access, a VPN, an SSH tunnel, or HTTPS through your own reverse proxy ($docs/access.md). If a firewall in front really keeps everyone else out, add --allow-public-bind."
       fi
       cat >&2 <<EOF
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-!! Life OS will listen on $bind, a public address.
-!! It has NO LOGIN: anyone who reaches it can read and change everything,
-!! use your AI sign-in, and see your bank data. Only do this when a firewall
-!! or a login in front of it keeps everyone else out.
+!! Life OS will listen on $bind, a public address, over PLAIN HTTP.
+!! Anyone who reaches it gets its login page, and every password and session
+!! crosses the network unencrypted; while legacy access is on, anyone acts as
+!! the owner without signing in. Only do this when a firewall in front of it
+!! keeps everyone else out.
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
 EOF
@@ -543,6 +556,71 @@ gateway_values() {
   env_values[LIFE_OS_GATEWAY_PORT]=$port
   env_values[LIFE_OS_PUBLIC_URL]=$url
   env_values[LIFE_OS_PUBLIC_HOSTNAME]=$(url_hostname "$url")
+  http_login_values "$bind" "$url"
+}
+
+# ---------- Signing in over plain HTTP ----------
+
+# The hosts where a browser would sign in over plain HTTP with this gateway:
+# its LAN or VPN address, and the host of an http:// address that is not
+# this server's loopback (such as a LAN name). None for a loopback or a
+# public bind: loopback (an SSH tunnel) needs nothing, and a public address
+# never gets a plain-HTTP sign-in. One a line.
+plain_http_hosts() {
+  local bind=$1 url=$2 host
+  [[ $(address_class "$bind") == private ]] || return 0
+  printf '%s\n' "$bind"
+  [[ $url == http://* ]] || return 0
+  host=${url#http://}
+  host=${host%%:*}
+  host=${host,,}
+  [[ $host != "$bind" && $host != localhost ]] || return 0
+  case $(address_class "$host") in
+    private | invalid) printf '%s\n' "$host" ;;
+  esac
+}
+
+# Whether LIFE_OS_INSECURE_LOGIN_HOSTS (as a pending change has it, else as
+# .env has it) lists HOST.
+http_login_allowed() {
+  local item
+  local -a items=()
+  IFS=, read -r -a items <<<"$(list_current LIFE_OS_INSECURE_LOGIN_HOSTS)"
+  for item in "${items[@]}"; do
+    item=${item//[[:space:]]/}
+    [[ ${item,,} != "$1" ]] || return 0
+  done
+  return 1
+}
+
+# A LAN or VPN address over plain HTTP: the login refuses a plain-HTTP page
+# unless its host is in LIFE_OS_INSECURE_LOGIN_HOSTS (docs/install/accounts.md).
+# Explains the trade-off and offers to allow it there; --allow-http-login
+# allows it without asking. With --yes and without the flag, only says how.
+http_login_values() {
+  local bind=$1 url=$2 host
+  local -a hosts=() missing=()
+  mapfile -t hosts < <(plain_http_hosts "$bind" "$url")
+  if ((${#hosts[@]} == 0)); then
+    ((!allow_http_login)) \
+      || usage_error "--allow-http-login is for a LAN or VPN address (--bind), not $bind: through an SSH tunnel, http://127.0.0.1 signs in as it is"
+    return 0
+  fi
+  for host in "${hosts[@]}"; do
+    http_login_allowed "$host" || missing+=("$host")
+  done
+  ((${#missing[@]})) || return 0
+  if ((!allow_http_login)); then
+    say ''
+    say "Signing in over plain HTTP at ${missing[*]} sends your password and session across that network unencrypted."
+    say "HTTPS is better: tailscale serve, or a reverse proxy with a certificate ($docs/access.md)."
+    if ((assume_yes)) || ! confirm "Allow signing in over plain HTTP at ${missing[*]}?" n; then
+      say "Signing in there stays off; through an SSH tunnel, http://127.0.0.1 always works. To allow it later: ./setup.sh gateway --allow-http-login"
+      return 0
+    fi
+  fi
+  for host in "${missing[@]}"; do list_add LIFE_OS_INSECURE_LOGIN_HOSTS "$host"; done
+  say "Signing in over plain HTTP is allowed at ${missing[*]} (LIFE_OS_INSECURE_LOGIN_HOSTS in .env)."
 }
 
 # ---------- Modules ----------
@@ -727,6 +805,7 @@ module_turn_on() {
       "setup_${module_setup[$id]}"
       return
       ;;
+    voice) module_is_on voice || require_voice_cpu ;;
     ai)
       if ! ai_ready; then
         ((!assume_yes)) || die 'AI processing needs a sign-in first: ./setup.sh codex (OpenAI Codex) or ./setup.sh claude (Claude Code)'
@@ -845,7 +924,8 @@ modules_migrate() {
   local -a off=()
   [[ -z $(env_get LIFE_OS_MODULES_LISTED 2>/dev/null || true) ]] || return 0
   step 'Optional modules'
-  list_add COMPOSE_PROFILES voice
+  # Whisper never ran without AVX2: voice notes stay off then.
+  skip_voice || list_add COMPOSE_PROFILES voice
   list_add COMPOSE_PROFILES server-health
   ! ai_ready || list_add COMPOSE_PROFILES ai
   ! is_set LIFE_OS_GOOGLE_CLIENT_ID || list_add COMPOSE_PROFILES google-calendar
@@ -916,6 +996,7 @@ cmd_init() {
     die "a .env already exists here, so nothing was changed. To change one part, run ./setup.sh gateway, ./setup.sh modules, ./setup.sh <integration>, or edit .env. To start over, run ./setup.sh --force-new (it keeps a copy of the old .env and its database passwords)."
   fi
   [[ -f .env.example ]] || die ".env.example is missing here: download it from the same release as this script (see $docs/README.md)"
+  check_release_files
   if ((skip_checks)); then
     warn 'skipping the server checks (--skip-checks)'
   else
@@ -1037,10 +1118,12 @@ setup_modules_now() {
       [[ -z $id ]] || require_module "$id"
     done
     for id in "${requested[@]}"; do
-      [[ -z $id ]] || module_turn_on "$id"
+      [[ -z $id ]] && continue
+      [[ $id == voice ]] && skip_voice && continue
+      module_turn_on "$id"
     done
     [[ -z ${LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN:-}${LIFE_OS_ANTHROPIC_API_KEY:-} ]] || setup_claude
-    [[ -z ${LIFE_OS_SETUP_WHISPER_MODEL:-}${LIFE_OS_WHISPER_LANGUAGE:-} ]] || setup_whisper
+    [[ -z ${LIFE_OS_SETUP_WHISPER_MODEL:-}${LIFE_OS_WHISPER_LANGUAGE:-} ]] || skip_voice || setup_whisper
     [[ -z ${LIFE_OS_CLOUDFLARE_TUNNEL_TOKEN:-} ]] || setup_cloudflare
     [[ -z ${LIFE_OS_GOOGLE_CLIENT_ID:-} ]] || setup_google
     [[ -z ${LIFE_OS_ENABLE_BANKING_APP_ID:-} ]] || setup_banking
@@ -1059,6 +1142,8 @@ setup_modules_now() {
     for id in "${module_ids[@]}"; do
       # ntfy needs the tunnel: offered only once that is on.
       [[ -z ${module_requires[$id]:-} ]] || module_is_on "${module_requires[$id]}" || continue
+      # Whisper does not run without AVX2: not offered then.
+      [[ $id == voice ]] && skip_voice && continue
       if confirm "Turn on ${module_name[$id]} ($id)?" n; then
         # A module with settings is set up at once; module_turn_on sets up
         # those that need it before they run.
@@ -1475,10 +1560,55 @@ valid_whisper_language() {
   [[ $1 == auto ]] || [[ $1 =~ ^[a-z]+$ && " $whisper_languages " == *" $1 "* ]]
 }
 
+# Whether this server's processor has AVX2, which Whisper needs (the voice
+# module's whisper.cpp is built for it; without it Whisper stops at every
+# start with "Illegal instruction"): yes, no, or unknown (another
+# architecture, or no flags line to read). LIFE_OS_SETUP_CPUINFO reads
+# another file than /proc/cpuinfo (tools/test-setup).
+cpu_avx2() {
+  local cpuinfo=${LIFE_OS_SETUP_CPUINFO:-/proc/cpuinfo} flags
+  if [[ -z ${LIFE_OS_SETUP_CPUINFO:-} && $(uname -m) != x86_64 ]]; then
+    printf 'unknown\n'
+  elif ! flags=$(grep -m 1 '^flags' "$cpuinfo" 2>/dev/null); then
+    printf 'unknown\n'
+  elif [[ " ${flags#*:} " == *[[:space:]]avx2[[:space:]]* ]]; then
+    printf 'yes\n'
+  else
+    printf 'no\n'
+  fi
+}
+
+no_avx2_message() {
+  local model
+  model=$(sed -n 's/^model name[[:space:]]*:[[:space:]]*//p' "${LIFE_OS_SETUP_CPUINFO:-/proc/cpuinfo}" 2>/dev/null | head -n 1)
+  printf "this server's processor (%s) has no AVX2, which Whisper needs to transcribe voice notes: it would stop at every start, and voice notes would wait forever. Text and photo captures work without it (%s/voice.md)." \
+    "${model:-model unknown}" "$docs"
+}
+
+# Before voice notes go on: refuses a processor without AVX2; warns when it
+# cannot tell.
+require_voice_cpu() {
+  case $(cpu_avx2) in
+    yes) ;;
+    no) die "$(no_avx2_message) Voice notes stay off; nothing was changed." ;;
+    *) warn "cannot tell whether this server's processor has AVX2, which Whisper needs. If voice notes are never transcribed and docker compose logs whisper says 'Illegal instruction', turn them off again: ./setup.sh modules off voice" ;;
+  esac
+}
+
+# Whether a first setup or an update leaves voice notes off for want of
+# AVX2; says so once.
+voice_skip_warned=0
+skip_voice() {
+  [[ $(cpu_avx2) == no ]] || return 1
+  ((voice_skip_warned)) || warn "$(no_avx2_message) Voice notes stay off."
+  voice_skip_warned=1
+}
+
 setup_whisper() {
   local model memory current language
   intro 'Voice: the Whisper model' voice.md
   require_env
+  require_voice_cpu
   current=$(whisper_model)
   cat <<'EOF'
 Voice notes are transcribed on this server by whisper.cpp. Bigger models are
@@ -1537,7 +1667,8 @@ Before this step, in Cloudflare Zero Trust (the guide shows each click):
      Allow policy for your own email address.
   2. Networks > Tunnels: a tunnel, and a published application route from
      that hostname to HTTP gateway:80.
-Access must protect the hostname before the tunnel runs: Life OS has no login.
+Access must protect the hostname before the tunnel runs: it is the outer gate,
+and Life OS's own login comes on top.
 EOF
   url=$(env_get LIFE_OS_PUBLIC_URL 2>/dev/null || true)
   [[ $url == https://* ]] || url=
@@ -1784,14 +1915,88 @@ EOF
   apply_hint notifications
 }
 
+# The calendar-feeds integration's API, called from inside the Dashboard's
+# container, on Life OS's private network: the gateway's routes need a
+# sign-in (legacy access is off on a new install), and whoever runs this
+# script on the server is the owner anyway (as for setup-code). Arguments:
+# the method, the path under /v1/feeds, and "list" to print the feeds one a
+# line (id, name, last success, error) instead of the body. The JSON body
+# comes on stdin, never as an argument: a feed's address can hold a token,
+# and arguments show in ps and docker inspect. Prints "@@status <code>"
+# (000 when calendar-feeds does not answer), then the body. Control
+# characters in what calendar-feeds answers (a feed's name, or the error a
+# feed's server caused) become spaces, so they never reach the terminal.
+# Writes are attributed to dev:setup.
+# shellcheck disable=SC2016 # JavaScript, run by node
+feeds_script='const [method, path, format] = process.argv.slice(1);
+const clean = (value) => String(value ?? "").replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
+const body = require("fs").readFileSync(0, "utf8").trim();
+fetch(`http://calendar-feeds:8080/v1/feeds${path}`, {
+  method,
+  headers: { "content-type": "application/json", "x-life-os-actor": "dev:setup" },
+  body: body || undefined,
+  signal: AbortSignal.timeout(60000),
+}).then(async (response) => {
+  let text = await response.text();
+  if (format === "list" && response.ok) {
+    text = JSON.parse(text).items.map((feed) => [feed.id, feed.name, feed.refresh?.lastSuccessAt ?? "never", feed.refresh?.lastError ?? ""].map(clean).join("\t")).join("\n");
+  } else {
+    text = text.split("\n").map(clean).join("\n");
+  }
+  console.log(`@@status ${response.status}`);
+  if (text) console.log(text);
+}, (error) => {
+  console.log("@@status 000");
+  console.log(clean(error.message));
+});'
+
+# feeds_call METHOD PATH [BODY] [list]: sets feeds_status and feeds_body.
+# Only the script's own "@@status" line counts: Compose's warnings go to
+# stderr, which is kept apart and shown only when no status came, so a
+# write that went through is never taken for one that did not.
+feeds_call() {
+  local out err
+  err=$(mktemp)
+  out=$(docker compose exec -T dashboard node -e "$feeds_script" "$1" "$2" "${4:-}" <<<"${3:-}" 2>"$err") || true
+  feeds_status=$(sed -n 's/^@@status \([0-9]\{3\}\)$/\1/p' <<<"$out" | head -n 1)
+  if [[ -n $feeds_status ]]; then
+    feeds_body=$(awk 'seen { print } /^@@status [0-9][0-9][0-9]$/ { seen = 1 }' <<<"$out")
+  else
+    feeds_status=000
+    feeds_body=$(tr -d '\000-\010\013-\037\177' <"$err")
+  fi
+  rm -f "$err"
+}
+
+# feed [add | list | remove ID]: calendar feeds (ICS), from the server.
 setup_feed() {
-  local name url gateway body status tmp
+  local action=${1:-add} name url feeds_status feeds_body
+  require_dashboard
+  case $action in
+    add) ;;
+    list)
+      feeds_call GET '' '' list
+      [[ $feeds_status == 200 ]] || die "calendar feeds did not answer (HTTP $feeds_status): $feeds_body"
+      if [[ -z $feeds_body ]]; then
+        say 'No calendar feeds yet: ./setup.sh feed adds one.'
+      else
+        printf '%s\n' "$feeds_body" | awk -F '\t' 'BEGIN { printf "%-36s  %-24s  %-24s  %s\n", "ID", "NAME", "LAST REFRESH", "ERROR" } { printf "%-36s  %-24s  %-24s  %s\n", $1, $2, $3, $4 }'
+      fi
+      return 0
+      ;;
+    remove)
+      [[ ${2:-} =~ ^[0-9a-fA-F-]{36}$ ]] || usage_error 'name the feed to remove by its id: ./setup.sh feed list shows them'
+      feeds_call DELETE "/$2"
+      case $feeds_status in
+        204) say "Removed the feed $2 and its events." ;;
+        404) die "there is no feed $2: ./setup.sh feed list shows them" ;;
+        *) die "calendar feeds refused (HTTP $feeds_status): $feeds_body" ;;
+      esac
+      return 0
+      ;;
+    *) usage_error "unknown feed command '$action': use ./setup.sh feed, feed list, or feed remove <id>" ;;
+  esac
   intro 'Calendar feeds (ICS)' calendar-feeds.md
-  require_env
-  command -v curl >/dev/null 2>&1 || die 'curl is needed to add a feed'
-  gateway=$(gateway_url)
-  curl -fsS -o /dev/null -m 10 "$gateway/api/integrations/calendar-feeds/ready" 2>/dev/null \
-    || die "Life OS does not answer at $gateway; start it first (./setup.sh up)"
   if ((assume_yes)); then
     name=${LIFE_OS_SETUP_FEED_NAME:-}
     url=${LIFE_OS_SETUP_FEED_URL:-}
@@ -1802,19 +2007,14 @@ setup_feed() {
   fi
   [[ -n $name && ${#name} -le 100 && ! $name =~ [\"\\[:cntrl:]] ]] || usage_error 'the name is missing, too long, or has quotes or backslashes'
   [[ $url =~ ^(https|webcal)://[^[:space:]\"\\]+$ ]] || usage_error 'the feed address must start with https:// or webcal://'
-  body=$(printf '{"name":"%s","url":"%s"}' "$name" "$url")
-  tmp=$(mktemp)
-  status=$(curl -sS -m 60 -o "$tmp" -w '%{http_code}' -X POST \
-    -H 'content-type: application/json' -H 'X-Life-OS-Actor: dev:setup' \
-    --data-binary "$body" "$gateway/api/integrations/calendar-feeds/v1/feeds" 2>/dev/null || true)
-  if [[ $status == 201 ]]; then
-    rm -f "$tmp"
+  feeds_call POST '' "$(printf '{"name":"%s","url":"%s"}' "$name" "$url")"
+  if [[ $feeds_status == 201 ]]; then
     say "Subscribed to \"$name\". Life OS downloads it now and every night; see Calendar."
+  elif [[ $feeds_status == 000 ]]; then
+    die "calendar feeds do not answer; is Life OS running? (./setup.sh status): $feeds_body"
   else
-    say "Life OS refused the feed (HTTP ${status:-no answer}):"
-    cat "$tmp" >&2
-    printf '\n' >&2
-    rm -f "$tmp"
+    say "Life OS refused the feed (HTTP $feeds_status):"
+    printf '%s\n' "$feeds_body" >&2
     exit 1
   fi
 }
@@ -1919,6 +2119,7 @@ cmd_gateway() {
   say "Life OS: $(env_get LIFE_OS_PUBLIC_URL) (listening on $(gateway_bind):$(gateway_port))."
   [[ -z $(env_get LIFE_OS_TRUSTED_PROXIES 2>/dev/null || true) ]] \
     || say "Client addresses from the proxies: $(env_get LIFE_OS_TRUSTED_PROXIES)."
+  # The Dashboard reads LIFE_OS_INSECURE_LOGIN_HOSTS and the address too.
   apply_hint gateway dashboard notifications
 }
 
@@ -2259,6 +2460,10 @@ print_access() {
 EOF
   else
     say "  $url  (every device that reaches $bind can open it)"
+    if [[ $url == http://* ]] && ! http_login_allowed "$bind"; then
+      say "  Signing in there over plain HTTP is off: allow it with ./setup.sh gateway --allow-http-login,"
+      say "  or sign in through an SSH tunnel (ssh -N -L $port:$bind:$port $(id -un)@<this server>) at http://127.0.0.1:$port"
+    fi
   fi
   say "For everyday use from your phone and laptop, use a VPN or Cloudflare Access: $docs/access.md"
 }
@@ -2289,8 +2494,11 @@ cmd_up() {
   ((skip_checks)) || run_checks
   check_bind "$(gateway_bind)"
   require_own_install up
+  check_release_files up
   modules_migrate
   ! module_is_on voice || check_whisper_language
+  ! module_is_on voice || [[ $(cpu_avx2) != no ]] \
+    || warn "voice notes are on, but $(no_avx2_message) Turn them off: ./setup.sh modules off voice"
   claude_image_check_up
   step "Starting Life OS $(env_get LIFE_OS_VERSION 2>/dev/null || printf '%s' "$release_version")"
   say "Modules: the core, and $(modules_on_text)."
@@ -2307,6 +2515,7 @@ cmd_up() {
 # and the accounts' keys generated, legacy access on (an install updated from
 # before accounts keeps working as it did, docs/install/accounts.md), and
 # everything else as the example has it.
+legacy_access_added=0
 add_new_settings() {
   local line key
   local -a added=() lines=()
@@ -2320,7 +2529,10 @@ add_new_settings() {
     case $key in
       *_PASSWORD) env_values[$key]=$(random_hex 24) ;;
       LIFE_OS_AUTH_SECRET | LIFE_OS_IDENTITY_SIGNING_KEY | LIFE_OS_TRUSTED_KEYS) account_keys_needed || true ;;
-      LIFE_OS_LEGACY_ACCESS) env_values[$key]=on ;;
+      LIFE_OS_LEGACY_ACCESS)
+        env_values[$key]=on
+        legacy_access_added=1
+        ;;
       *) env_values[$key]=$(env_get "$key" .env.example) ;;
     esac
     added+=("$key")
@@ -2331,17 +2543,80 @@ add_new_settings() {
   fi
 }
 
+# The release a file names: compose.yaml's "# Life OS release:" line (the
+# release bundle's, from v0.1.0-preview.7 on) and .env.example's
+# LIFE_OS_VERSION. Empty when it names none. A file saved with Windows line
+# ends (CRLF) names the same release.
+compose_release() { tr -d '\r' <compose.yaml 2>/dev/null | sed -n 's/^# Life OS release: \([^[:space:]]*\)[[:space:]]*$/\1/p' | head -n 1; }
+example_release() { tr -d '\r' <.env.example 2>/dev/null | sed -n "s/^LIFE_OS_VERSION=['\"]*\([^'\"]*\)['\"]*$/\1/p" | head -n 1; }
+
+# The commands that download a release's files over these and update.
+release_download_hint() {
+  cat <<EOF
+
+  release=https://github.com/GAMch1k/life-os/releases/download/$1
+  for file in compose.yaml setup.sh SHA256SUMS; do curl -fsSLO "\$release/\$file"; done
+  curl -fsSL -o .env.example "\$release/default.env.example"
+  sha256sum -c SHA256SUMS && ./setup.sh update
+EOF
+}
+
+# Refuses release files of two releases together: this script, compose.yaml,
+# and .env.example must be one release's, as SHA256SUMS lists them. A newer
+# release's images need its compose.yaml (new services, such as the
+# accounts' database) and its .env.example (new settings). A release's
+# script (stamped) needs both files to name its own version: a compose.yaml
+# or .env.example that names none is from before v0.1.0-preview.7, which
+# never runs this release's images. A copy from the repository (not
+# stamped) only checks that the two files agree, where they name one.
+check_release_files() {
+  local compose example name version found='' first='' unnamed=''
+  compose=$(compose_release)
+  example=$(example_release)
+  if [[ -n $script_version ]]; then
+    [[ -n $compose ]] || unnamed=compose.yaml
+    [[ -n $example ]] || unnamed+=${unnamed:+ and }.env.example
+    if [[ -n $unnamed ]]; then
+      die "this setup.sh is $script_version's, but no release is named in $unnamed here: such files are from before v0.1.0-preview.7, and cannot run $script_version's images (the accounts' database and settings would be missing, and Life OS would answer every request with an error). Download all of $script_version's files over these, check them, and run the new script:
+$(release_download_hint "$script_version")
+
+Nothing was changed. See $docs/updating.md"
+    fi
+  fi
+  for name in setup.sh compose.yaml .env.example; do
+    case $name in
+      setup.sh) version=$script_version ;;
+      compose.yaml) version=$compose ;;
+      .env.example) version=$example ;;
+    esac
+    [[ -n $version ]] || continue
+    found+="${found:+, }$name $version"
+    [[ -n $first ]] || first=$version
+    [[ $version == "$first" ]] || die "the release files here are from different releases ($found): download all of one release's files, check them with sha256sum -c SHA256SUMS, and run ./setup.sh${1:+ $1} again ($docs/updating.md):
+$(release_download_hint "${script_version:-$first}")
+
+Nothing was changed."
+  done
+}
+
 cmd_update() {
   local target current
   require_release_dir update
   require_env
+  if [[ -n ${1:-} && $1 != "$release_version" ]]; then
+    [[ $1 =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] || usage_error "'$1' is not a version"
+    die "this setup.sh, compose.yaml, and .env.example are $release_version's, and update only to $release_version. A newer release needs its own files: they add services and settings these lack. Download $1's files over these, check them, and update with its setup.sh:
+$(release_download_hint "$1")
+
+Nothing was changed. See $docs/updating.md"
+  fi
   preview_banner
   ((skip_checks)) || run_checks
   check_bind "$(gateway_bind)"
   require_own_install update
+  check_release_files update
   current=$(env_get LIFE_OS_VERSION 2>/dev/null || printf 'preview')
-  target=${1:-$release_version}
-  [[ $target =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] || usage_error "'$target' is not a version"
+  target=$release_version
   if [[ $target == "$current" ]]; then
     step "Updating the $current images"
   else
@@ -2382,6 +2657,12 @@ cmd_update() {
   claude_images_prune
   wait_until_ready || true
   print_setup_code
+  if ((legacy_access_added)); then
+    step 'Legacy access is on'
+    say 'Life OS works without a sign-in, as before accounts. Create your account with the'
+    say 'setup code (at /setup), pair the phone app, then turn legacy access off in'
+    say "Settings > Security, or with ./setup.sh legacy-access off ($docs/accounts.md#legacy-access)."
+  fi
   say ''
   say "Life OS $target is running. Read what changed: https://github.com/GAMch1k/life-os/releases"
 }
@@ -2471,12 +2752,16 @@ release's compose.yaml and .env.example.
   ./setup.sh [options]          first-time setup: checks this server, then
                                 writes .env with new passwords
   ./setup.sh up                 start Life OS and wait until it answers
-  ./setup.sh update [VERSION]   back up, download newer images, restart
-                                (default: this script's release, $release_version)
+  ./setup.sh update             back up, download this release's images
+                                ($release_version), restart. For a newer
+                                release, download its files first:
+                                $docs/updating.md
   ./setup.sh status             what runs, and which modules are on and set up
   ./setup.sh check              only check this server
   ./setup.sh gateway            change where Life OS listens and its address
-                                (--trusted-proxies: your reverse proxies)
+                                (--trusted-proxies: your reverse proxies;
+                                --allow-http-login: signing in over plain
+                                HTTP on a LAN or VPN address)
 
 Accounts (docs/install/accounts.md):
   ./setup.sh account-keys       add the accounts' settings to an older .env
@@ -2515,7 +2800,8 @@ Set up a module (which turns it on), or another integration, any time:
   ./setup.sh banking            bank sync through Enable Banking
   ./setup.sh ntfy               push notifications through ntfy
   ./setup.sh webpush            push notifications to the Life OS phone app
-  ./setup.sh feed               subscribe to a calendar feed (ICS)
+  ./setup.sh feed               subscribe to a calendar feed (ICS); feed list
+                                lists them, feed remove ID removes one
 
 Options:
   -y, --yes                no questions: defaults, or values from the
@@ -2525,6 +2811,8 @@ Options:
                            and the database passwords
   --bind ADDRESS           where the gateway listens (default 127.0.0.1)
   --allow-public-bind      allow a public --bind address
+  --allow-http-login       allow signing in over plain HTTP at the LAN or VPN
+                           --bind address (LIFE_OS_INSECURE_LOGIN_HOSTS)
   --port PORT              the gateway's port (default 3000)
   --public-url URL         the address you open Life OS at
   --trusted-proxies LIST   gateway: the reverse proxies whose client address
@@ -2554,6 +2842,7 @@ while (($#)); do
     --reset-2fa) reset_2fa=1 ;;
     --keep-devices) keep_devices=1 ;;
     --allow-public-bind) allow_public_bind=1 ;;
+    --allow-http-login) allow_http_login=1 ;;
     --bind) need_value "$@" && bind_flag=$2 && shift ;;
     --bind=*) bind_flag=${1#*=} ;;
     --port) need_value "$@" && port_flag=$2 && shift ;;
@@ -2587,7 +2876,7 @@ case ${command:-init} in
   banking) setup_banking ;;
   ntfy) setup_ntfy ;;
   webpush) setup_webpush ;;
-  feed) setup_feed ;;
+  feed) setup_feed "${args[@]}" ;;
   account-keys) cmd_account_keys ;;
   setup-code) cmd_setup_code ;;
   recover-owner) cmd_recover_owner ;;

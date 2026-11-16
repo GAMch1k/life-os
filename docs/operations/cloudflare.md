@@ -44,8 +44,8 @@ Intended paths:
 
 | Path | Address | Authentication |
 | --- | --- | --- |
-| Public | `https://lifeos.example.com` → Access → Tunnel → `gateway:80` | Cloudflare Access (email PIN, group `Life OS users`) |
-| Private fallback | `http://10.8.0.1:3000` (`LIFE_OS_GATEWAY_BIND_ADDRESS` and `LIFE_OS_GATEWAY_PORT`) from WireGuard peers | WireGuard peer trust; no Life OS login (unchanged model) |
+| Public | `https://lifeos.example.com` → Access → Tunnel → `gateway:80` | Cloudflare Access (email PIN, group `Life OS users`), then Life OS's own sign-in |
+| Private fallback | `http://10.8.0.1:3000` (`LIFE_OS_GATEWAY_BIND_ADDRESS` and `LIFE_OS_GATEWAY_PORT`) from WireGuard peers | WireGuard peer trust, then Life OS's sign-in, over plain HTTP only where `LIFE_OS_INSECURE_LOGIN_HOSTS` lists the address (`./setup.sh gateway --allow-http-login`); while legacy access is on, peer trust alone |
 | Maintenance | On the host: `docker compose …`, or `curl` to the gateway's address (a host on the WireGuard network uses the WireGuard address) | Host access |
 | Phone notifications | `https://ntfy.example.com` → Tunnel → `ntfy:80` (not the gateway) | ntfy's own accounts (deny-all; the phone's read-only user) |
 
@@ -75,7 +75,7 @@ Cloudflare Access is the login in front of the hostname. It runs at Cloudflare's
 | Access group `Life OS users` | Include → Emails → the owner's address |
 | Policy `Acceptance test` (temporary) | **Service Auth**, Include → Service Token `life-os-acceptance` |
 
-Access denies by default, so only addresses in `Life OS users` receive a code. To add a person, add their email to the group; to remove one, delete it. Life OS has no user accounts of its own, so everyone admitted shares the same data.
+Access denies by default, so only addresses in `Life OS users` receive a code. To add a person, add their email to the group; to remove one, delete it. Access is the outer gate: behind it, each person signs in with their Life OS account ([Accounts](../install/accounts.md)), and while legacy access is on, everyone Access admits acts as the owner.
 
 **The installed phone app** ([Dashboard → Install on your phone](../frontend/dashboard.md#install-on-your-phone)) stays behind Access: its manifest (`/app.webmanifest`, linked with `crossorigin="use-credentials"` so the Access cookie goes with it), icons (`/icons/`), and service worker (`/sw.js`) are same-origin paths of the public hostname with no bypass. When the session has expired, the app opens on the Access login: enter the code once. A share sent to Life OS while the session had expired is lost (Access turns its POST into the login) and must be shared again.
 

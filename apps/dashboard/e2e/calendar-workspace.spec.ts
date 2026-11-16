@@ -819,7 +819,12 @@ test.describe("Calendar workspace", () => {
 
     await page.getByRole("combobox", { name: "Search events" }).fill("a");
     await expect(page.getByTestId("calendar-search-results")).toBeVisible();
-    expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+    // The results' positioner lines the popup up with the box's right edge
+    // once it knows the popup's width: for a frame or two after the results
+    // come it can still stand at the box's edge (translate 348px, so 324px
+    // off the screen, in Release run 43895570221). Whether it fits is
+    // where it settles.
+    await expect.poll(() => horizontalOverflow(page)).toBeLessThanOrEqual(0);
     expect(problems).toEqual([]);
   });
 

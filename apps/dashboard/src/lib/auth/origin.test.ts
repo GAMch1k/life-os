@@ -6,6 +6,8 @@ import { TokenCache } from "./identity";
 import {
   anonymousWriteAllowed,
   cookieWriteAllowed,
+  isLoopbackLogin,
+  isLoopbackOrigin,
   isSecureContext,
   requestHost,
 } from "./origin";
@@ -27,7 +29,98 @@ test("a cookie write needs Life OS's own origin", () => {
   assert.equal(
     cookieWriteAllowed(
       "POST",
-      new Headers({ host: "127.0.0.1", origin: "http://127.0.0.1:3000" }),
+      new Headers({ host: "10.8.0.1", origin: "http://10.8.0.1:3000" }),
+    ),
+    true,
+  );
+  // So on loopback, where another web app on this machine shares the host
+  // name, only Sec-Fetch-Site tells Life OS's own page from another port's.
+  const loopback = (extra: Record<string, string>) =>
+    new Headers({ host: "127.0.0.1", ...extra });
+  assert.equal(
+    cookieWriteAllowed("POST", loopback({ origin: "http://127.0.0.1:3000" })),
+    false,
+  );
+  assert.equal(
+    cookieWriteAllowed(
+      "POST",
+      loopback({
+        origin: "http://127.0.0.1:8080",
+        "sec-fetch-site": "same-site",
+      }),
+    ),
+    false,
+  );
+  assert.equal(
+    cookieWriteAllowed(
+      "POST",
+      loopback({
+        origin: "http://127.0.0.1:3000",
+        "sec-fetch-site": "same-origin",
+      }),
+    ),
+    true,
+  );
+  assert.equal(
+    anonymousWriteAllowed(
+      "POST",
+      loopback({ origin: "http://127.0.0.1:8080" }),
+    ),
+    false,
+  );
+  assert.equal(
+    anonymousWriteAllowed(
+      "POST",
+      loopback({
+        origin: "http://127.0.0.1:8080",
+        "sec-fetch-site": "same-site",
+      }),
+    ),
+    false,
+  );
+  assert.equal(
+    anonymousWriteAllowed(
+      "POST",
+      loopback({
+        origin: "http://localhost:3000",
+        host: "localhost",
+        "sec-fetch-site": "same-origin",
+      }),
+    ),
+    true,
+  );
+  // Sec-Fetch-Site is not enough on its own: Origin must still be Life
+  // OS's host, with the cookie and without.
+  assert.equal(
+    cookieWriteAllowed(
+      "POST",
+      loopback({
+        origin: "https://elsewhere.example",
+        "sec-fetch-site": "same-origin",
+      }),
+    ),
+    false,
+  );
+  assert.equal(
+    anonymousWriteAllowed(
+      "POST",
+      loopback({
+        origin: "https://elsewhere.example",
+        "sec-fetch-site": "same-origin",
+      }),
+    ),
+    false,
+  );
+  // A client that is not a browser (no Origin, no Sec-Fetch-Site) stays
+  // as it was; behind HTTPS, loopback is judged as any host.
+  assert.equal(anonymousWriteAllowed("POST", loopback({})), true);
+  assert.equal(
+    cookieWriteAllowed(
+      "POST",
+      loopback({
+        origin: "https://127.0.0.1",
+        "x-forwarded-proto": "https",
+      }),
     ),
     true,
   );
@@ -102,6 +195,34 @@ test("the request's host and its secure context", () => {
     isSecureContext(new Headers({ origin: "http://10.8.0.1:3000" })),
     false,
   );
+});
+
+test("loopback login: this machine's own names over plain HTTP, nothing else", () => {
+  const via = (host: string, extra: Record<string, string> = {}) =>
+    new Headers({ host: "dashboard:3000", "x-forwarded-host": host, ...extra });
+  for (const host of ["127.0.0.1", "localhost", "LOCALHOST", "[::1]"]) {
+    assert.equal(isLoopbackLogin(via(host)), true, host);
+  }
+  for (const host of [
+    "lifeos.example.com",
+    "10.8.0.1",
+    "evil.localhost",
+    "127.0.0.1.nip.io",
+    "localhost.example.com",
+    "127.0.0.2",
+  ]) {
+    assert.equal(isLoopbackLogin(via(host)), false, host);
+  }
+  // Behind HTTPS (Cloudflare's tunnel sets the proto): the Secure cookie.
+  assert.equal(
+    isLoopbackLogin(via("localhost", { "x-forwarded-proto": "https" })),
+    false,
+  );
+  assert.equal(isLoopbackOrigin("http://127.0.0.1:3000"), true);
+  assert.equal(isLoopbackOrigin("http://[::1]:3000"), true);
+  assert.equal(isLoopbackOrigin("http://evil.localhost:3000"), false);
+  assert.equal(isLoopbackOrigin("http://10.8.0.1:3000"), false);
+  assert.equal(isLoopbackOrigin("null"), false);
 });
 
 test("settings: host lists, on and off, and what is required", () => {

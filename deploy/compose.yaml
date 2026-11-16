@@ -9,10 +9,11 @@
 # The core always runs; each optional module is a profile of its name, which
 # runs when COMPOSE_PROFILES in .env lists it (./setup.sh modules).
 #
-# Early preview. Keep the gateway on 127.0.0.1 (LIFE_OS_GATEWAY_BIND_ADDRESS)
-# and reach it over HTTPS through Tailscale Serve, your own reverse proxy, or a
-# Cloudflare Tunnel (docs/install/access.md). Never publish the gateway's
-# port to the internet.
+# Early preview: Life OS has a login, and it is new (docs/install/accounts.md).
+# Keep the gateway on 127.0.0.1 (LIFE_OS_GATEWAY_BIND_ADDRESS) and reach it
+# over HTTPS through Tailscale Serve, your own reverse proxy, or a Cloudflare
+# Tunnel (docs/install/access.md). Never publish the gateway's port to the
+# internet.
 
 name: lifeos
 

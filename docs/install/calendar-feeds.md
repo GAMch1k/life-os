@@ -10,7 +10,7 @@ Life OS must be running. On the server:
 ./setup.sh feed
 ```
 
-It asks for a name, such as "Holidays", and the feed's address, and adds it. The first download starts at once.
+It asks for a name, such as "Holidays", and the feed's address, and adds it. The first download starts at once. It talks to Life OS on the server itself (inside the Dashboard's container), so it needs no sign-in.
 
 Only feeds on the internet work: `https://` (or `webcal://`, which is the same) on a public address. Life OS refuses feeds on your own network, so a feed can't be used to reach your other machines.
 
@@ -22,18 +22,24 @@ In **Calendar → Reminder defaults**, each feed has its own section: the remind
 
 ## List, rename, or remove feeds
 
-There is no page for this in the Dashboard yet; use the API on the server:
+There is no page for this in the Dashboard yet. On the server:
 
 ```sh
 # Every feed, with its id, its last refresh, and any error:
-curl -s http://127.0.0.1:3000/api/integrations/calendar-feeds/v1/feeds
+./setup.sh feed list
 
 # Remove one, with its events:
-curl -X DELETE -H 'X-Life-OS-Actor: user' \
-  http://127.0.0.1:3000/api/integrations/calendar-feeds/v1/feeds/<id>
+./setup.sh feed remove <id>
 ```
 
-Use your gateway's address and port if you changed them. The [calendar-feeds API](../services/calendar-feeds.md#api) has the rest, such as a filter that keeps only some events.
+Renaming a feed, a filter that keeps only some of its events, and the rest of the [calendar-feeds API](../services/calendar-feeds.md#api) go through the API: make an [API token](accounts.md#api-tokens) with **Calendar: read and write**, and send it along:
+
+```sh
+token=lo_tok_...   # from Settings → API tokens
+curl -s -H "Authorization: Bearer $token" http://127.0.0.1:3000/api/integrations/calendar-feeds/v1/feeds
+```
+
+Use your gateway's address and port if you changed them.
 
 ## Waste collection in Darmstadt-Dieburg (ZAW)
 

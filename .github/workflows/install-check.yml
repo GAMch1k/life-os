@@ -17,6 +17,14 @@
 # Releases up to v0.1.0-preview.5 have no modules: a fresh install runs
 # every module, and the AI processor restarts without a sign-in. The check
 # knows them by their .env and expects that instead.
+#
+# From v0.1.0-preview.7 Life OS has accounts, and a new install has legacy
+# access off: nothing but the login answers without a sign-in. The check
+# goes on as a stranger does: the setup code ./setup.sh up printed makes the
+# owner's account, two-factor sign-in goes on (Status shows its details only
+# then), and a development tool's token and the session sign the checks and
+# the smokes in. Releases before accounts (their .env has no
+# LIFE_OS_AUTH_SECRET) are checked without a sign-in, as before.
 name: Install check
 
 on:
@@ -204,6 +212,17 @@ jobs:
           grep -qx "LIFE_OS_VERSION=$VERSION" .env || { echo "::error::.env does not run ${VERSION}"; exit 1; }
           grep -qx "LIFE_OS_TIMEZONE=$INSTALL_TIMEZONE" .env || { echo "::error::.env does not have the timezone ${INSTALL_TIMEZONE}"; exit 1; }
           [[ -d backups ]] || { echo "::error::setup.sh did not create backups/"; exit 1; }
+          if grep -q '^LIFE_OS_AUTH_SECRET=' .env; then
+            # A new install: legacy access off, nothing allowed over plain
+            # HTTP but loopback.
+            grep -qx 'LIFE_OS_LEGACY_ACCESS=off' .env || { echo "::error::A new install must have legacy access off."; exit 1; }
+            grep -qx 'LIFE_OS_INSECURE_LOGIN_HOSTS=' .env || { echo "::error::A new install on 127.0.0.1 must allow no plain-HTTP host."; exit 1; }
+            echo "ACCOUNTS=true" >>"$GITHUB_ENV"
+            echo "- Accounts: legacy access off, as on every new install." >>"$GITHUB_STEP_SUMMARY"
+          else
+            echo "ACCOUNTS=false" >>"$GITHUB_ENV"
+            echo "- A release without accounts: checked without a sign-in." >>"$GITHUB_STEP_SUMMARY"
+          fi
           if grep -qx 'LIFE_OS_MODULES_LISTED=yes' .env; then
             # The core alone: no optional module in COMPOSE_PROFILES.
             grep -qx 'COMPOSE_PROFILES=' .env || { echo "::error::A fresh install must run the core alone (COMPOSE_PROFILES empty)."; exit 1; }
@@ -271,6 +290,10 @@ jobs:
             echo "::error::./setup.sh up warned on a clean install: ${warnings}"
             exit 1
           fi
+          if [[ "$ACCOUNTS" == true ]]; then
+            grep -qE '^Setup code: [A-Z0-9]{4}(-[A-Z0-9]{4}){3}$' "$RUNNER_TEMP/setup-up.log" \
+              || { echo "::error::./setup.sh up printed no setup code for the first account."; exit 1; }
+          fi
           if [[ "$MODULES" == true ]]; then
             grep -qx 'Modules: the core, and none.' "$RUNNER_TEMP/setup-up.log" \
               || { echo "::error::./setup.sh up did not say that it runs the core alone."; exit 1; }
@@ -327,6 +350,95 @@ jobs:
           done
           docker compose ps --all --format 'table {{.Service}}\t{{.State}}\t{{.Status}}'
           echo "- Running: $(paste -sd ' ' <<<"$services")" >>"$GITHUB_STEP_SUMMARY"
+      # With accounts, as a stranger goes on (docs/install/README.md, step
+      # 5, and docs/install/accounts.md): without a sign-in only the login
+      # answers; the setup code ./setup.sh up printed makes the owner's
+      # account at 127.0.0.1, the SSH tunnel's address; two-factor sign-in
+      # goes on, as Settings → Security asks next, so that Status shows its
+      # details; and a development tool's token signs the API checks and the
+      # smokes in, whose writes are then dev:install-check. The session and
+      # the token are this runner's, masked in the log, and go with it.
+      - name: The first account, from the setup code
+        id: account
+        if: ${{ !cancelled() && steps.up.outcome == 'success' && env.ACCOUNTS == 'true' }}
+        run: |
+          work="$RUNNER_TEMP/account"
+          mkdir -p "$work"
+          # As Life OS's own page: on loopback a browser's write needs
+          # Sec-Fetch-Site (src/lib/auth/origin.ts).
+          request() {
+            local method=$1 path=$2
+            shift 2
+            code=$(curl -sS --max-time 30 -X "$method" -o "$work/body" -D "$work/headers" -w '%{http_code}' \
+              -H 'sec-fetch-site: same-origin' "$@" "$GATEWAY$path")
+          }
+          expect() {
+            local want=$1
+            shift
+            request "$@"
+            [[ "$code" == "$want" ]] || { echo "::error::$1 $2 answered $code, not $want: $(head -c 500 "$work/body")"; exit 1; }
+          }
+          session_cookie() {
+            grep -iE '^set-cookie: (__Host-)?lifeos\.session=' "$work/headers" | head -n 1 | sed 's/^[^:]*: //; s/;.*//' | tr -d '\r'
+          }
+          # Without a sign-in: the services' routes are 401, a page goes to
+          # the login, and the login and setup pages answer.
+          expect 401 GET /api/tasks/ready
+          grep -q '"unauthenticated"' "$work/body" || { echo "::error::The 401 is not JSON unauthenticated."; exit 1; }
+          expect 307 GET /tasks
+          expect 200 GET /login
+          expect 200 GET /setup
+          setup_code=$(sed -n 's/^Setup code: //p' "$RUNNER_TEMP/setup-up.log" | tail -n 1)
+          password="install check $(openssl rand -hex 12)"
+          echo "::add-mask::$password"
+          expect 200 POST /api/auth/sign-up/email -H 'content-type: application/json' -H "origin: $GATEWAY" \
+            -H "x-lifeos-setup-code: $setup_code" --data "$(jq -cn --arg p "$password" '{username: "owner", password: $p}')"
+          session=$(session_cookie)
+          [[ -n "$session" ]] || { echo "::error::Making the first account set no session cookie."; exit 1; }
+          echo "::add-mask::${session#*=}"
+          # At 127.0.0.1 (plain-HTTP loopback) the cookie is not Secure,
+          # which Safari would refuse there.
+          if grep -iE '^set-cookie: (__Host-)?lifeos\.session=' "$work/headers" | grep -qi '; *secure'; then
+            echo "::error::The session cookie at http://127.0.0.1 is Secure, which Safari refuses on plain-HTTP loopback."
+            exit 1
+          fi
+          # The setup code is used up.
+          expect 403 POST /api/auth/sign-up/email -H 'content-type: application/json' -H "origin: $GATEWAY" \
+            -H "x-lifeos-setup-code: $setup_code" --data "$(jq -cn --arg p "$password" '{username: "second", password: $p}')"
+          # Two-factor sign-in with an authenticator app (RFC 6238, as one computes it).
+          expect 200 POST /api/auth/two-factor/enable -H "cookie: $session" -H "origin: $GATEWAY" \
+            -H 'content-type: application/json' --data "$(jq -cn --arg p "$password" '{password: $p}')"
+          uri=$(jq -r .totpURI "$work/body")
+          [[ "$uri" == otpauth://* ]] || { echo "::error::Two-factor gave no otpauth URI."; exit 1; }
+          echo "::add-mask::$(sed -n 's/.*[?&]secret=\([^&]*\).*/\1/p' <<<"$uri")"
+          totp=$(python3 -I -c '
+          import base64, hashlib, hmac, struct, sys, time, urllib.parse
+          secret = urllib.parse.parse_qs(urllib.parse.urlparse(sys.argv[1]).query)["secret"][0]
+          key = base64.b32decode(secret + "=" * (-len(secret) % 8), casefold=True)
+          digest = hmac.new(key, struct.pack(">Q", int(time.time()) // 30), hashlib.sha1).digest()
+          offset = digest[-1] & 15
+          print(str((struct.unpack(">I", digest[offset:offset + 4])[0] & 0x7FFFFFFF) % 1000000).zfill(6))
+          ' "$uri")
+          expect 200 POST /api/auth/two-factor/verify-totp -H "cookie: $session" -H "origin: $GATEWAY" \
+            -H 'content-type: application/json' --data "{\"code\":\"$totp\"}"
+          renewed=$(session_cookie)
+          if [[ -n "$renewed" ]]; then
+            session=$renewed
+            echo "::add-mask::${session#*=}"
+          fi
+          # A development tool's token for the API checks and the smokes.
+          expect 201 POST /api/account/tokens -H "cookie: $session" -H "origin: $GATEWAY" -H 'content-type: application/json' \
+            --data '{"name":"install-check","scopes":["tasks:write","inbox:write","calendar:write","finance:read","voice:write"],"devTool":true}'
+          token=$(jq -r .token "$work/body")
+          [[ "$token" == lo_tok_* ]] || { echo "::error::No API token."; exit 1; }
+          echo "::add-mask::$token"
+          expect 200 GET /api/tasks/ready -H "authorization: Bearer $token"
+          expect 200 GET /settings/security -H "cookie: $session"
+          {
+            echo "INSTALL_SESSION=$session"
+            echo "INSTALL_TOKEN=$token"
+          } >>"$GITHUB_ENV"
+          echo "- The owner's account from the setup code \`./setup.sh up\` printed, with two-factor sign-in; without a sign-in, 401 and the login." >>"$GITHUB_STEP_SUMMARY"
       # Before modules: without a Codex sign-in, the processor's entrypoint
       # stops at every start ("missing Codex authentication", exit 78) and
       # Docker starts it again, as those releases' notes say. That is
@@ -372,15 +484,20 @@ jobs:
           echo "As expected without a Codex sign-in: $(sort -u "$RUNNER_TEMP/processor.log" | head -n 1)"
           echo "- The processor stops at start without a Codex sign-in, as expected (exit ${exit_code}, ${restarts} restarts so far)." >>"$GITHUB_STEP_SUMMARY"
 
-      # The gateway keeps to 127.0.0.1 (Life OS has no login) and answers its
-      # own hosts only, as tools/smoke-e2e checks on the verification stack.
-      # With modules, every route of a module that is off answers 404
-      # module_off: the gateway image's own list of them.
+      # The gateway keeps to 127.0.0.1 (a new install answers only this
+      # server) and answers its own hosts only, as tools/smoke-e2e checks on
+      # the verification stack. With modules, every route of a module that
+      # is off answers 404 module_off, before any sign-in: the gateway
+      # image's own list of them. With accounts, the pages with the session
+      # and the API with the token (empty before accounts).
       - name: The gateway
         id: gateway
         if: ${{ !cancelled() && steps.up.outcome == 'success' }}
         run: |
           cd "$INSTALL_DIR"
+          page_auth=() api_auth=()
+          [[ -z "${INSTALL_SESSION:-}" ]] || page_auth=(-H "cookie: $INSTALL_SESSION")
+          [[ -z "${INSTALL_TOKEN:-}" ]] || api_auth=(-H "authorization: Bearer $INSTALL_TOKEN")
           published=$(docker compose port gateway 80)
           [[ "$published" == 127.0.0.1:3000 ]] || { echo "::error::The gateway is published on ${published}, not 127.0.0.1:3000."; exit 1; }
           # The runner's own network address must not reach it.
@@ -390,10 +507,11 @@ jobs:
             exit 1
           fi
           for path in / /status /inbox /tasks /calendar /finance /food; do
-            curl -fsS -o /dev/null --max-time 30 "$GATEWAY$path" || { echo "::error::$GATEWAY$path does not answer"; exit 1; }
+            code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "${page_auth[@]}" "$GATEWAY$path" || true)
+            [[ "$code" == 200 ]] || { echo "::error::$GATEWAY$path answered ${code}, not 200"; exit 1; }
           done
           for host in 127.0.0.1 localhost; do
-            code=$(curl -s -o /dev/null -w '%{http_code}' -H "Host: $host" "$GATEWAY/api/tasks/ready" || true)
+            code=$(curl -s -o /dev/null -w '%{http_code}' "${api_auth[@]}" -H "Host: $host" "$GATEWAY/api/tasks/ready" || true)
             [[ "$code" == 200 ]] || { echo "::error::The gateway must answer Host ${host} (got ${code})"; exit 1; }
           done
           code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: unknown.example' "$GATEWAY/api/tasks/ready" || true)
@@ -416,7 +534,8 @@ jobs:
       # release's own tag (or this commit). A sparse checkout of those files
       # only, in the workspace: never in the install directory, which keeps
       # to the release files. Every smoke runs, even after another one
-      # failed.
+      # failed. With accounts, signed in with the token and the session
+      # (tools/lib/smoke-auth.bash).
       - name: Fetch the smokes of ${{ steps.release.outputs.version }}
         id: smokes
         if: ${{ !cancelled() && steps.up.outcome == 'success' }}
@@ -434,11 +553,15 @@ jobs:
         if: ${{ !cancelled() && steps.smokes.outcome == 'success' }}
         env:
           LIFE_OS_SMOKE_GATEWAY: ${{ env.GATEWAY }}
+          LIFE_OS_SMOKE_TOKEN: ${{ env.INSTALL_TOKEN }}
+          LIFE_OS_SMOKE_COOKIE: ${{ env.INSTALL_SESSION }}
         run: timeout 5m smokes/tools/smoke-core-services
       - name: Dashboard smoke (tools/smoke-dashboard)
         if: ${{ !cancelled() && steps.smokes.outcome == 'success' }}
         env:
           LIFE_OS_SMOKE_GATEWAY: ${{ env.GATEWAY }}
+          LIFE_OS_SMOKE_TOKEN: ${{ env.INSTALL_TOKEN }}
+          LIFE_OS_SMOKE_COOKIE: ${{ env.INSTALL_SESSION }}
           # The smoke reads it from .env, which its checkout has not got.
           LIFE_OS_TIMEZONE: ${{ env.INSTALL_TIMEZONE }}
         run: timeout 5m smokes/tools/smoke-dashboard
@@ -457,11 +580,15 @@ jobs:
 
       # The Status page's checks (GET /api/status): none may be a problem.
       # Before modules, the processing check stays one without an AI
-      # sign-in, as expected.
+      # sign-in, as expected. With accounts, as the owner with two-factor
+      # sign-in, who alone sees every check.
       - name: The Status page
         if: ${{ !cancelled() && steps.up.outcome == 'success' }}
         run: |
-          status=$(curl -fsS --max-time 60 "$GATEWAY/api/status")
+          page_auth=()
+          [[ -z "${INSTALL_SESSION:-}" ]] || page_auth=(-H "cookie: $INSTALL_SESSION")
+          status=$(curl -fsS --max-time 60 "${page_auth[@]}" "$GATEWAY/api/status")
+          jq -e '(.checks | length) > 0' <<<"$status" >/dev/null || { echo "::error::The Status page shows no checks: $(jq -c . <<<"$status")"; exit 1; }
           {
             echo "| Status check | State | Summary |"
             echo "| --- | --- | --- |"
@@ -508,7 +635,9 @@ jobs:
             [[ "$(docker compose ps --format '{{.State}}' "$service")" == running ]] || { echo "::error::${service} is not running."; exit 1; }
           done
           [[ "$(docker inspect --format '{{.State.Health.Status}}' "$(docker compose ps -q whisper)")" == healthy ]] || { echo "::error::Whisper is not healthy."; exit 1; }
-          curl -fsS -o /dev/null "$GATEWAY/api/voice/ready" || { echo "::error::$GATEWAY/api/voice/ready does not answer."; exit 1; }
+          api_auth=()
+          [[ -z "${INSTALL_TOKEN:-}" ]] || api_auth=(-H "authorization: Bearer $INSTALL_TOKEN")
+          curl -fsS -o /dev/null "${api_auth[@]}" "$GATEWAY/api/voice/ready" || { echo "::error::$GATEWAY/api/voice/ready does not answer."; exit 1; }
           echo "- \`./setup.sh modules on voice\` and \`./setup.sh up\` started voice notes." >>"$GITHUB_STEP_SUMMARY"
       # A voice note through the gateway, transcribed by the Whisper model the
       # install downloaded on its first start, lands in Inbox. The recording
@@ -518,19 +647,22 @@ jobs:
         timeout-minutes: 10
         run: |
           actor=(-H 'X-Life-OS-Actor: dev:install-check')
+          # With accounts, the development tool's token (dev:install-check).
+          api_auth=()
+          [[ -z "${INSTALL_TOKEN:-}" ]] || api_auth=(-H "authorization: Bearer $INSTALL_TOKEN")
           audio="$RUNNER_TEMP/jfk.wav"
           curl -fsSL --retry 3 -o "$audio" https://github.com/ggerganov/whisper.cpp/raw/master/samples/jfk.wav
-          job_id=$(curl "${actor[@]}" -fsS -F "audio=@$audio;type=audio/wav" -F source=web "$GATEWAY/api/voice/v1/audio-jobs" | jq -r .id)
+          job_id=$(curl "${api_auth[@]}" "${actor[@]}" -fsS -F "audio=@$audio;type=audio/wav" -F source=web "$GATEWAY/api/voice/v1/audio-jobs" | jq -r .id)
           state=
           for _ in $(seq 1 120); do
-            job=$(curl -fsS "$GATEWAY/api/voice/v1/audio-jobs/$job_id")
+            job=$(curl "${api_auth[@]}" -fsS "$GATEWAY/api/voice/v1/audio-jobs/$job_id")
             state=$(jq -r .status <<<"$job")
             [[ "$state" != succeeded && "$state" != failed ]] || break
             sleep 2
           done
           [[ "$state" == succeeded ]] || { echo "::error::The voice note's job is ${state}: $(jq -c . <<<"$job")"; exit 1; }
           item_id=$(jq -r .inboxItemId <<<"$job")
-          content=$(curl -fsS "$GATEWAY/api/inbox/v1/inbox-items/$item_id" | jq -r .content)
+          content=$(curl "${api_auth[@]}" -fsS "$GATEWAY/api/inbox/v1/inbox-items/$item_id" | jq -r .content)
           echo "Inbox: $content"
           grep -qi 'country' <<<"$content" || { echo "::error::The transcript is not the recording's."; exit 1; }
       # And off again: its containers go, its data stays, its routes answer
