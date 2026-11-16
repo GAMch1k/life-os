@@ -2,7 +2,8 @@
 # runs it without a checkout (P20-02). At every start the image renders the
 # template into /etc/nginx/conf.d/default.conf, replacing only the LIFE_OS_*
 # names (NGINX_ENVSUBST_FILTER) that compose.yaml sets from .env; just before
-# that, server-names.envsh tidies the host names (docs/architecture/networking.md),
+# that, server-names.envsh tidies the host names and names the private network
+# that qualifies every upstream (docs/architecture/networking.md),
 # modules.envsh lists the routes of the modules that are off, from
 # module-routes (docs/architecture/modules.md), and trusted-proxies.envsh
 # writes the reverse proxies of LIFE_OS_TRUSTED_PROXIES into the two files
@@ -24,7 +25,9 @@ RUN apk upgrade --no-cache \
     && mkdir -p /etc/nginx/templates
 COPY --chmod=0644 life-os.conf.template /etc/nginx/templates/default.conf.template
 # The entrypoint sources only executable *.envsh files, in order.
+# trusted-proxies.envsh reads the bind address before server-names.envsh
+# tidies the default one away.
+COPY --chmod=0755 trusted-proxies.envsh /docker-entrypoint.d/15-lifeos-trusted-proxies.envsh
 COPY --chmod=0755 server-names.envsh /docker-entrypoint.d/16-lifeos-server-names.envsh
 COPY --chmod=0755 modules.envsh /docker-entrypoint.d/17-lifeos-modules.envsh
-COPY --chmod=0755 trusted-proxies.envsh /docker-entrypoint.d/18-lifeos-trusted-proxies.envsh
 COPY --chmod=0644 module-routes /etc/nginx/lifeos/module-routes

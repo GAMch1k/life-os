@@ -798,8 +798,12 @@ services:
       LIFE_OS_REQUIRE_CLOUDFLARE_ACCESS: "${LIFE_OS_REQUIRE_CLOUDFLARE_ACCESS:-}"
       # Your own reverse proxies, whose X-Forwarded-For and X-Forwarded-Proto
       # the gateway believes: addresses or networks, or host (a proxy on this
-      # server, outside Docker). Empty: none (docs/install/access.md).
+      # server, outside Docker; only with the bind address on 127.0.0.1).
+      # Empty: none (docs/install/access.md).
       LIFE_OS_TRUSTED_PROXIES: "${LIFE_OS_TRUSTED_PROXIES:-}"
+      # The name of backend (below), by which the gateway asks Docker's DNS
+      # for its upstreams on that network alone, never on edge or proxy.
+      LIFE_OS_BACKEND_NETWORK: lifeos-backend
     volumes:
       # The Android apps' releases, served at /android/ behind Access
       # (docs/operations/android-releases.md). tools/publish-android-release

@@ -1819,12 +1819,61 @@ setup_feed() {
   fi
 }
 
+# Whether $1 is an IPv4 address: four numbers 0 to 255, no leading zeros.
+proxy_ipv4() {
+  local octet='(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])'
+  [[ $1 =~ ^$octet\.$octet\.$octet\.$octet$ ]]
+}
+
+# Whether $1 is an IPv6 address: groups of 1 to 4 hex digits, eight of them,
+# or fewer around one ::.
+proxy_ipv6() {
+  local address=$1 side total=0
+  local -a sides=() groups=()
+  [[ $address == *:* && $address =~ ^[0-9A-Fa-f:]+$ ]] || return 1
+  if [[ $address == *::* ]]; then
+    [[ ${address#*::} != *::* ]] || return 1
+    sides=("${address%%::*}" "${address#*::}")
+  else
+    sides=("$address")
+  fi
+  for side in "${sides[@]}"; do
+    [[ -n $side ]] || continue
+    [[ $side =~ ^[0-9A-Fa-f]{1,4}(:[0-9A-Fa-f]{1,4})*$ ]] || return 1
+    IFS=: read -r -a groups <<<"$side"
+    total=$((total + ${#groups[@]}))
+  done
+  if ((${#sides[@]} == 2)); then ((total <= 7)); else ((total == 8)); fi
+}
+
+# Whether ADDRESS/PREFIX lies wholly in a private range: 10/8, 172.16/12,
+# 192.168/16, 100.64/10 (Tailscale's), 127/8, 169.254/16; fc00::/7,
+# fe80::/10, ::1.
+proxy_private() {
+  local address=$1 prefix=$2 a b head
+  if [[ $address == *:* ]]; then
+    head=${address%%:*}
+    head=${head,,}
+    [[ $address != ::1 ]] || return 0
+    [[ ! $head =~ ^f[cd][0-9a-f]{2}$ ]] || ((prefix < 7)) || return 0
+    [[ ! $head =~ ^fe[89ab][0-9a-f]$ ]] || ((prefix < 10)) || return 0
+    return 1
+  fi
+  IFS=. read -r a b _ <<<"$address"
+  { ((a == 10 && prefix >= 8)) || ((a == 172 && b >= 16 && b <= 31 && prefix >= 12)) ||
+    ((a == 192 && b == 168 && prefix >= 16)) || ((a == 100 && b >= 64 && b <= 127 && prefix >= 10)) ||
+    ((a == 127 && prefix >= 8)) || ((a == 169 && b == 254 && prefix >= 16)); }
+}
+
 # Puts --trusted-proxies into env_values: LIFE_OS_TRUSTED_PROXIES, the
 # reverse proxies whose X-Forwarded-For the gateway believes, as addresses or
 # networks, or host for one on this server outside Docker
-# (docs/install/access.md#your-own-reverse-proxy). Empty: none.
+# (docs/install/access.md#your-own-reverse-proxy). Empty: none. Checked as
+# the gateway checks them (infra/nginx/trusted-proxies.envsh): a network
+# wider than /8 (IPv4) or /16 (IPv6) is refused, a wide public one warned
+# about.
 trusted_proxies_values() {
-  local entry address prefix max result=''
+  local entry address prefix max min narrow result=''
   local -a entries=()
   IFS=', ' read -r -a entries <<<"$trusted_proxies_flag"
   for entry in "${entries[@]}"; do
@@ -1832,15 +1881,21 @@ trusted_proxies_values() {
     if [[ $entry != host ]]; then
       address=${entry%/*} prefix=
       [[ $address == "$entry" ]] || prefix=${entry##*/}
-      if [[ $(address_class "$address") != invalid ]]; then
-        max=32
-      elif [[ $address == *:* && $address =~ ^[0-9A-Fa-f:]+$ ]]; then
-        max=128
+      if proxy_ipv4 "$address"; then
+        max=32 min=8 narrow=24
+      elif proxy_ipv6 "$address"; then
+        max=128 min=16 narrow=48
       else
         usage_error "--trusted-proxies takes your proxies' addresses or networks, such as 10.255.249.48/28, or host; not '$entry'"
       fi
-      if [[ -n $prefix ]] && { [[ ! $prefix =~ ^[1-9][0-9]{0,2}$ ]] || ((prefix > max)); }; then
-        usage_error "--trusted-proxies: '$entry' is not a network (/1 to /$max; /0 would believe everyone)"
+      if [[ -z $prefix ]]; then
+        prefix=$max
+      elif [[ ! $prefix =~ ^(0|[1-9][0-9]{0,2})$ ]] || ((prefix > max)); then
+        usage_error "--trusted-proxies: '$entry' is not a network (/$min to /$max)"
+      fi
+      ((prefix >= min)) || usage_error "--trusted-proxies: '$entry' would let far too many addresses claim to be a client: list your proxies' own addresses (/$min at the widest)"
+      if ! proxy_private "$address" "$prefix" && ((prefix < narrow)); then
+        warn "--trusted-proxies: '$entry' is a wide public network: every address in it may tell Life OS a client's address. List your proxies' own addresses, unless all of these are yours."
       fi
     fi
     result+=${result:+,}$entry
@@ -1853,6 +1908,13 @@ cmd_gateway() {
   step 'Gateway address'
   gateway_values
   ((!trusted_proxies_given)) || trusted_proxies_values
+  # host is a proxy on this server: a gateway published on another address
+  # than 127.0.0.1 sees other containers, and with some Docker setups every
+  # client, coming from the same address.
+  if [[ ,$(list_current LIFE_OS_TRUSTED_PROXIES), == *,host,* &&
+    $(address_class "${env_values[LIFE_OS_GATEWAY_BIND_ADDRESS]}") != loopback ]]; then
+    usage_error "the trusted proxy host works only with the gateway on 127.0.0.1 (the default), not on ${env_values[LIFE_OS_GATEWAY_BIND_ADDRESS]}: other containers, and with some Docker setups every client, would reach it from the same address as this server's own programs. Keep --bind 127.0.0.1, or name your proxy otherwise (--trusted-proxies)."
+  fi
   env_update
   say "Life OS: $(env_get LIFE_OS_PUBLIC_URL) (listening on $(gateway_bind):$(gateway_port))."
   [[ -z $(env_get LIFE_OS_TRUSTED_PROXIES 2>/dev/null || true) ]] \

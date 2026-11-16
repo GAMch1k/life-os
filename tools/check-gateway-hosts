@@ -15,6 +15,10 @@
 #  - upstreams are resolved at request time (BUG-37): the Life OS server uses
 #    Docker's DNS as its resolver, and every proxy_pass names its upstream
 #    through a variable, never a fixed host nginx would resolve only once;
+#  - by their name on the private network alone (<name>.lifeos-backend, the
+#    network compose.yaml names backend and gives the gateway as
+#    LIFE_OS_BACKEND_NETWORK), never a bare name, which Docker's DNS would
+#    also answer from the edge or proxy network;
 #  - every location that proxies to a service (any upstream but the
 #    Dashboard) asks the auth check (auth_request /internal/auth/check), and
 #    /internal/ is closed to the outside, the check's own location internal
@@ -51,6 +55,13 @@ IFS='|' read -r 'values[LIFE_OS_PUBLIC_HOSTNAME]' 'values[LIFE_OS_GATEWAY_BIND_A
 # And, after infra/nginx/modules.envsh, the routes of the modules that are
 # off: every optional module's, as with the core alone.
 values[LIFE_OS_REQUIRE_CLOUDFLARE_ACCESS]=$(setting LIFE_OS_REQUIRE_CLOUDFLARE_ACCESS)
+# The private network's name as compose.yaml gives it to the gateway, which
+# must be backend's own name there.
+backend_network=$(sed -n 's/^ *LIFE_OS_BACKEND_NETWORK: *"\{0,1\}\([a-z0-9-]*\)"\{0,1\}$/\1/p' compose.yaml | head -n 1)
+backend_name=$(awk '/^networks:/ { n = 1; next } n && /^  backend:/ { b = 1; next } b && /^    name: / { print $2; exit } b && /^  [a-z]/ { exit }' compose.yaml)
+[ -n "$backend_network" ] && [ "$backend_network" = "$backend_name" ] ||
+  fail "compose.yaml must give the gateway LIFE_OS_BACKEND_NETWORK: <backend's name>, which is ${backend_name:-not set}; found ${backend_network:-none}"
+values[LIFE_OS_BACKEND_NETWORK]=${backend_network:-lifeos-backend}
 values[LIFE_OS_GATEWAY_MODULE_ROUTES]=$(
   export LIFE_OS_MODULES='' LIFE_OS_MODULE_ROUTES_FILE=infra/nginx/module-routes
   # shellcheck source=infra/nginx/modules.envsh
@@ -137,6 +148,17 @@ grep -q -E '^resolver 127\.0\.0\.11( |$)' <<<"$(of "$lifeos_server")" || fail "t
 fixed=$(of "$lifeos_server" | awk '$1 == "proxy_pass" && $2 !~ /^http:\/\/\$[a-z_]+$/' || true)
 [ -z "$fixed" ] || fail "every proxy_pass must name its upstream through a variable (set \$upstream food:8080; proxy_pass http://\$upstream), so nginx resolves it per request: ${fixed//$'\n'/; }"
 [ "$(of "$lifeos_server" | grep -c '^proxy_pass ')" -gt 0 ] || fail "the Life OS server proxies nothing"
+# Upstream names on the private network alone: every proxy_pass goes through
+# $lifeos_upstream, which the map qualifies with the network's name, or the
+# auth check's own, set qualified.
+network=${backend_network:-lifeos-backend}
+bare=$(of "$lifeos_server" | awk '$1 == "proxy_pass" && $2 != "http://$lifeos_upstream" && $2 != "http://$lifeos_auth_upstream"' || true)
+[ -z "$bare" ] || fail "every proxy_pass must go through \$lifeos_upstream (the upstream's name on $network alone): ${bare//$'\n'/; }"
+grep -q -F "\"\$lifeos_upstream_host.$network:\$lifeos_upstream_port\"" <<<"$(awk '/^map \$upstream \$lifeos_upstream \{/,/^\}/' <<<"$config")" ||
+  fail "the map of \$upstream to \$lifeos_upstream must qualify every name with the private network's: <name>.$network:<port>"
+auth_upstreams=$(of "$lifeos_server" | awk '$1 == "set" && $2 == "$lifeos_auth_upstream"' | sort -u)
+[ "$auth_upstreams" = "set \$lifeos_auth_upstream dashboard.$network:3000" ] ||
+  fail "the auth check must ask the Dashboard by its name on $network alone (set \$lifeos_auth_upstream dashboard.$network:3000); found: ${auth_upstreams//$'\n'/; }"
 
 # Every location that proxies to a service asks the auth check: a location
 # with "set $upstream <service>:<port>" (not the Dashboard) and a proxy_pass

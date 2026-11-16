@@ -36,11 +36,12 @@ fail() {
 nginx_dir=$repo_root/infra/nginx
 gateway_args=(-e NGINX_ENTRYPOINT_QUIET_LOGS=1 -e NGINX_ENVSUBST_FILTER=^LIFE_OS_
   -e LIFE_OS_PUBLIC_HOSTNAME=lifeos.example.com -e LIFE_OS_GATEWAY_BIND_ADDRESS=127.0.0.1
+  -e "LIFE_OS_BACKEND_NETWORK=$name"
   -e LIFE_OS_REQUIRE_CLOUDFLARE_ACCESS=
   -v "$nginx_dir/life-os.conf.template:/etc/nginx/templates/default.conf.template:ro"
   -v "$nginx_dir/server-names.envsh:/docker-entrypoint.d/16-lifeos-server-names.envsh:ro"
   -v "$nginx_dir/modules.envsh:/docker-entrypoint.d/17-lifeos-modules.envsh:ro"
-  -v "$nginx_dir/trusted-proxies.envsh:/docker-entrypoint.d/18-lifeos-trusted-proxies.envsh:ro"
+  -v "$nginx_dir/trusted-proxies.envsh:/docker-entrypoint.d/15-lifeos-trusted-proxies.envsh:ro"
   -v "$nginx_dir/module-routes:/etc/nginx/lifeos/module-routes:ro")
 mapfile -t routes < <(grep -v '^#' "$nginx_dir/module-routes")
 ((${#routes[@]})) || fail "infra/nginx/module-routes lists no route"

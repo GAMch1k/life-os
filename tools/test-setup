@@ -395,6 +395,28 @@ ok 'gateway without the option keeps them' test "$(value LIFE_OS_TRUSTED_PROXIES
 run -- --yes gateway --trusted-proxies=
 ok '--trusted-proxies= empties them' test "$status" -eq 0
 ok 'to nothing' test -z "$(value LIFE_OS_TRUSTED_PROXIES)"
+for entry in 0.0.0.0/1 128.0.0.0/7 ::/1 fd00::/8 09.1.1.1 10.0.0.256 1.2.3.4/33 1.2.3.4/08 :::: 1:2:3:4:5:6:7:8:9 1::2::3; do
+  run -- --yes gateway --trusted-proxies "$entry"
+  ok "refuses $entry" test "$status" -eq 2
+done
+ok 'which leave them empty' test -z "$(value LIFE_OS_TRUSTED_PROXIES)"
+run -- --yes gateway --trusted-proxies '1.0.0.0/8,fd00:1:2:3::/64,::1,2001:db8::7,172.16.0.0/12'
+ok 'takes a wide public network' test "$status" -eq 0
+ok 'with a warning' output_has "'1.0.0.0/8' is a wide public network"
+ok 'and no warning for private ones' bash -c "! grep -q \"'172.16.0.0/12' is a wide\" '$case_dir.last'"
+ok 'and IPv6 addresses and networks' test "$(value LIFE_OS_TRUSTED_PROXIES)" = 1.0.0.0/8,fd00:1:2:3::/64,::1,2001:db8::7,172.16.0.0/12
+run -- --yes gateway --bind 10.0.0.1 --trusted-proxies host
+ok 'refuses host with a VPN bind' test "$status" -eq 2
+ok 'and says why' output_has 'works only with the gateway on 127.0.0.1'
+ok 'changing nothing' test "$(value LIFE_OS_GATEWAY_BIND_ADDRESS)" = 127.0.0.1
+run -- --yes gateway --trusted-proxies host
+ok 'host on loopback' test "$status" -eq 0
+run -- --yes gateway --bind 10.0.0.1
+ok 'refuses a VPN bind while host is trusted' test "$status" -eq 2
+ok 'keeping the bind' test "$(value LIFE_OS_GATEWAY_BIND_ADDRESS)" = 127.0.0.1
+run -- --yes gateway --bind 10.0.0.1 --trusted-proxies 10.255.249.48/28
+ok 'a VPN bind with a proxy network instead' test "$status" -eq 0
+ok 'sets both' test "$(value LIFE_OS_GATEWAY_BIND_ADDRESS),$(value LIFE_OS_TRUSTED_PROXIES)" = 10.0.0.1,10.255.249.48/28
 
 new_case invalid
 run -- --yes --port 70000

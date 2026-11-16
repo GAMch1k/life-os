@@ -96,6 +96,21 @@ map $upstream $lifeos_authorization {
   "dashboard:3000" $http_authorization;
 }
 
+# Every upstream by its name on the private network alone:
+# <name>.<that network> (LIFE_OS_BACKEND_NETWORK: lifeos-backend, the
+# verification stack's lifeos-verify-backend). Docker's DNS answers a bare
+# name from any network the gateway is on, and the gateway is also on edge
+# and proxy, where your reverse proxy, and whatever else you attach there,
+# is: a container named or aliased dashboard or tasks there would receive
+# the Dashboard's cookies and the auth check's questions whenever the real
+# one is not running (a restart, an update, a module that is off). A
+# qualified name is answered from that network alone, and not at all
+# without the container (tools/test-gateway-proxies).
+map $upstream $lifeos_upstream {
+  default "";
+  "~^(?<lifeos_upstream_host>[a-z0-9-]+):(?<lifeos_upstream_port>[0-9]+)$" "$lifeos_upstream_host.${LIFE_OS_BACKEND_NETWORK}:$lifeos_upstream_port";
+}
+
 # Only the hosts listed in the Life OS server_name below reach Life OS. Any
 # other Host (a forged one, a mistaken tunnel route, a scanner) gets no answer
 # at all: 444 closes the connection.
@@ -131,8 +146,11 @@ server {
   # the log (tools/test-gateway-proxies; tools/check-gateway-hosts checks
   # that every location includes it). real_ip_recursive skips the proxies'
   # own addresses from the right, so an entry the client wrote itself, left
-  # of the one its proxy added, never counts. Every other request keeps the
-  # address it came from.
+  # of the one its proxy added, never counts. A location that answers at once
+  # with return (a closed path such as /internal/ or /_next/image, a module
+  # that is off, the /android redirect) does so before that, so its log line
+  # names the proxy: it reaches nothing and limits nothing. Every other
+  # request keeps the address it came from.
   set_real_ip_from 10.255.249.0/29;
   real_ip_header CF-Connecting-IP;
   if ($missing_access_token) { return 403; }
@@ -213,7 +231,8 @@ server {
   # a variable sends a URI given there as is, for every request). The query
   # string follows the rewritten path unchanged. A name that does not
   # resolve (the service is not running) is a 502 for that request, not a
-  # gateway that cannot start.
+  # gateway that cannot start. The name is the service's on the private
+  # network alone ($lifeos_upstream, above).
   resolver 127.0.0.11 valid=10s ipv6=off;
   resolver_timeout 5s;
 
@@ -226,7 +245,7 @@ server {
     limit_req zone=lifeos_api burst=60 nodelay;
     set $upstream finance:8080;
     rewrite ^/api/finance(/.*)$ $1 break;
-    proxy_pass http://$upstream;
+    proxy_pass http://$lifeos_upstream;
   }
   location /api/tasks/ {
     include /etc/nginx/lifeos/trusted-proxies.conf;
@@ -237,7 +256,7 @@ server {
     limit_req zone=lifeos_api burst=60 nodelay;
     set $upstream tasks:8080;
     rewrite ^/api/tasks(/.*)$ $1 break;
-    proxy_pass http://$upstream;
+    proxy_pass http://$lifeos_upstream;
   }
   location /api/inbox/ {
     include /etc/nginx/lifeos/trusted-proxies.conf;
@@ -248,7 +267,7 @@ server {
     limit_req zone=lifeos_api burst=60 nodelay;
     set $upstream inbox:8080;
     rewrite ^/api/inbox(/.*)$ $1 break;
-    proxy_pass http://$upstream;
+    proxy_pass http://$lifeos_upstream;
   }
   location /api/calendar/ {
     include /etc/nginx/lifeos/trusted-proxies.conf;
@@ -259,7 +278,7 @@ server {
     limit_req zone=lifeos_api burst=60 nodelay;
     set $upstream calendar:8080;
     rewrite ^/api/calendar(/.*)$ $1 break;
-    proxy_pass http://$upstream;
+    proxy_pass http://$lifeos_upstream;
   }
   location /api/food/ {
     include /etc/nginx/lifeos/trusted-proxies.conf;
@@ -270,7 +289,7 @@ server {
     limit_req zone=lifeos_api burst=60 nodelay;
     set $upstream food:8080;
     rewrite ^/api/food(/.*)$ $1 break;
-    proxy_pass http://$upstream;
+    proxy_pass http://$lifeos_upstream;
   }
   # Activity is read-only through the gateway; services record events on the
   # private network.
@@ -284,7 +303,7 @@ server {
     limit_except GET { deny all; }
     set $upstream activity:8080;
     rewrite ^/api/activity(/.*)$ $1 break;
-    proxy_pass http://$upstream;
+    proxy_pass http://$lifeos_upstream;
   }
   location /api/notifications/ {
     include /etc/nginx/lifeos/trusted-proxies.conf;
@@ -295,7 +314,7 @@ server {
     limit_req zone=lifeos_api burst=60 nodelay;
     set $upstream notifications:8080;
     rewrite ^/api/notifications(/.*)$ $1 break;
-    proxy_pass http://$upstream;
+    proxy_pass http://$lifeos_upstream;
   }
   # Integration services, one prefix each: /api/integrations/<name>/.
   location /api/integrations/banking/ {
@@ -307,7 +326,7 @@ server {
     limit_req zone=lifeos_api burst=60 nodelay;
     set $upstream banking:8080;
     rewrite ^/api/integrations/banking(/.*)$ $1 break;
-    proxy_pass http://$upstream;
+    proxy_pass http://$lifeos_upstream;
   }
   location /api/integrations/google-calendar/ {
     include /etc/nginx/lifeos/trusted-proxies.conf;
@@ -318,7 +337,7 @@ server {
     limit_req zone=lifeos_api burst=60 nodelay;
     set $upstream google-calendar:8080;
     rewrite ^/api/integrations/google-calendar(/.*)$ $1 break;
-    proxy_pass http://$upstream;
+    proxy_pass http://$lifeos_upstream;
   }
   location /api/integrations/calendar-feeds/ {
     include /etc/nginx/lifeos/trusted-proxies.conf;
@@ -329,7 +348,7 @@ server {
     limit_req zone=lifeos_api burst=60 nodelay;
     set $upstream calendar-feeds:8080;
     rewrite ^/api/integrations/calendar-feeds(/.*)$ $1 break;
-    proxy_pass http://$upstream;
+    proxy_pass http://$lifeos_upstream;
   }
   location /api/integrations/recipe-import/ {
     include /etc/nginx/lifeos/trusted-proxies.conf;
@@ -340,7 +359,7 @@ server {
     limit_req zone=lifeos_api burst=60 nodelay;
     set $upstream recipe-import:8080;
     rewrite ^/api/integrations/recipe-import(/.*)$ $1 break;
-    proxy_pass http://$upstream;
+    proxy_pass http://$lifeos_upstream;
   }
   location /api/voice/ {
     include /etc/nginx/lifeos/trusted-proxies.conf;
@@ -359,7 +378,7 @@ server {
     lingering_timeout 15s;
     set $upstream voice:8080;
     rewrite ^/api/voice(/.*)$ $1 break;
-    proxy_pass http://$upstream;
+    proxy_pass http://$lifeos_upstream;
   }
   location /api/mcp/ {
     include /etc/nginx/lifeos/trusted-proxies.conf;
@@ -377,7 +396,7 @@ server {
     proxy_read_timeout 300s;
     set $upstream mcp:8080;
     rewrite ^/api/mcp(/.*)$ $1 break;
-    proxy_pass http://$upstream;
+    proxy_pass http://$lifeos_upstream;
   }
   # Share → Life OS: the phone's share sheet posts what was shared, photos
   # included (up to five of 10 MB), to the Dashboard in one request.
@@ -391,7 +410,7 @@ server {
     lingering_timeout 15s;
     proxy_read_timeout 120s;
     set $upstream dashboard:3000;
-    proxy_pass http://$upstream;
+    proxy_pass http://$lifeos_upstream;
   }
   # Google returns the owner here with a one-time authorization code in the
   # query: keep it out of the access log.
@@ -399,7 +418,7 @@ server {
     include /etc/nginx/lifeos/trusted-proxies.conf;
     access_log off;
     set $upstream dashboard:3000;
-    proxy_pass http://$upstream;
+    proxy_pass http://$lifeos_upstream;
   }
   # The bank returns the owner here with a one-time authorization code in
   # the query: keep it out of the access log too.
@@ -407,7 +426,7 @@ server {
     include /etc/nginx/lifeos/trusted-proxies.conf;
     access_log off;
     set $upstream dashboard:3000;
-    proxy_pass http://$upstream;
+    proxy_pass http://$lifeos_upstream;
   }
   # The Android apps' releases (docs/operations/android-releases.md), which
   # tools/publish-android-release writes to a host directory the gateway
@@ -498,7 +517,7 @@ server {
     proxy_read_timeout 10s;
     # Not $upstream: a subrequest shares the request's variables, and the
     # service location's $upstream must stay its service.
-    set $lifeos_auth_upstream dashboard:3000;
+    set $lifeos_auth_upstream dashboard.${LIFE_OS_BACKEND_NETWORK}:3000;
     proxy_pass http://$lifeos_auth_upstream;
   }
   # Every other /internal/ path is the private network's only.
@@ -512,7 +531,7 @@ server {
     include /etc/nginx/lifeos/trusted-proxies.conf;
     limit_req zone=lifeos_auth burst=20 nodelay;
     set $upstream dashboard:3000;
-    proxy_pass http://$upstream;
+    proxy_pass http://$lifeos_upstream;
   }
   # The gateway's refusals, JSON like the services' errors.
   location @lifeos_unauthenticated {
@@ -555,6 +574,6 @@ server {
   location / {
     include /etc/nginx/lifeos/trusted-proxies.conf;
     set $upstream dashboard:3000;
-    proxy_pass http://$upstream;
+    proxy_pass http://$lifeos_upstream;
   }
 }

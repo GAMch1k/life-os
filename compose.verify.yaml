@@ -114,6 +114,9 @@ services:
   gateway:
     image: lifeos-gateway:latest
     ports: !override ["127.0.0.1:13001:80"]
+    # backend's name here (below), for the gateway's upstream names.
+    environment:
+      LIFE_OS_BACKEND_NETWORK: lifeos-verify-backend
 
 networks:
   # A fixed subnet (the live backend's is Docker's choice), so
