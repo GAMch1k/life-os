@@ -256,12 +256,12 @@ The gateway needs nothing after a service redeploy, because it resolves service 
 
 The gateway listens on `LIFE_OS_GATEWAY_BIND_ADDRESS:LIFE_OS_GATEWAY_PORT` (default `127.0.0.1:3000`). It serves Life OS only to four Host names: `127.0.0.1`, `localhost`, `LIFE_OS_GATEWAY_BIND_ADDRESS`, and `LIFE_OS_PUBLIC_HOSTNAME`. Any other Host gets no answer (444). At every start, the gateway renders them into `server_name` from `infra/nginx/life-os.conf.template`. After you change either setting, recreate it: `docker compose up -d --no-build --no-deps --force-recreate gateway`. `tools/check-gateway-hosts`, part of `tools/check`, checks the list. See [Gateway hosts](docs/architecture/networking.md#gateway-hosts).
 
-Life OS has a login ([Accounts](docs/install/accounts.md)), but it is new, and while legacy access is on anyone who reaches the gateway acts as the owner without signing in. So the way you expose the gateway is still the first gate; choose one access model deliberately:
+Signing in to Life OS needs HTTPS, or `localhost` and `127.0.0.1` ([Accounts](docs/install/accounts.md#signing-in)), and while legacy access is on, anyone who reaches the gateway acts as the owner without signing in. So the way you expose the gateway is still the first gate; choose one access model deliberately:
 
 | Model | Setup | Who gets in |
 | --- | --- | --- |
-| Loopback behind a host Nginx | Keep `127.0.0.1`; terminate TLS (and Basic Auth, if you want a gate before the login) in the host Nginx ([example](docs/host-nginx-example.conf)). | Whoever passes your host Nginx, then signs in. |
-| WireGuard | Set `LIFE_OS_GATEWAY_BIND_ADDRESS` to the server's WireGuard address, never a public one. Signing in at that plain-HTTP address is off until it is in `LIFE_OS_INSECURE_LOGIN_HOSTS` (`./setup.sh gateway --allow-http-login`); HTTPS on the VPN (`tailscale serve`, or a proxy with a certificate) is better ([Access it safely](docs/install/access.md#choose-a-way-in)). | Every allowed peer reaches the login; while legacy access is on, every peer is the owner. |
+| Loopback behind your HTTPS proxy | Keep `127.0.0.1`; terminate TLS in Tailscale Serve, Caddy, Traefik, Nginx Proxy Manager, or a host nginx ([Access](docs/install/access.md#your-own-reverse-proxy), [nginx example](docs/host-nginx-example.conf)), and name it in `LIFE_OS_TRUSTED_PROXIES`. | Whoever signs in to Life OS. |
+| WireGuard | Set `LIFE_OS_GATEWAY_BIND_ADDRESS` to the server's WireGuard address, never a public one. Signing in at that plain-HTTP address is off until it is in `LIFE_OS_INSECURE_LOGIN_HOSTS` (`./setup.sh gateway --allow-http-login`); HTTPS on the VPN is better ([Access it safely](docs/install/access.md#choose-a-way-in)). | Every allowed peer reaches the login; while legacy access is on, every peer is the owner. |
 | Cloudflare Tunnel and Access (the reference deployment) | Below. | The email addresses you allow, then their sign-in. |
 
 Installing the Dashboard on a phone, and sharing to Life OS, need a service worker. Browsers allow service workers only over https or on localhost, so they don't work over a plain-http WireGuard address.

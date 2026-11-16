@@ -12,3 +12,9 @@ case "${LIFE_OS_PUBLIC_HOSTNAME:-}" in
   127.0.0.1 | localhost) LIFE_OS_PUBLIC_HOSTNAME= ;;
 esac
 export LIFE_OS_GATEWAY_BIND_ADDRESS LIFE_OS_PUBLIC_HOSTNAME
+# The private network's name, which qualifies every upstream name in the
+# template: compose.yaml's lifeos-backend unless the gateway is told another
+# (the verification stack's lifeos-verify-backend). Unset, as with a
+# compose.yaml from before it, the gateway still starts.
+LIFE_OS_BACKEND_NETWORK=${LIFE_OS_BACKEND_NETWORK:-lifeos-backend}
+export LIFE_OS_BACKEND_NETWORK
