@@ -89,6 +89,13 @@ test("a share is accepted from the app itself, never from another site", () => {
     true,
   );
   assert.equal(from({}), true);
+  // A null Origin without Sec-Fetch-Site: a sandboxed iframe on any site,
+  // posting to a plain-HTTP address where browsers send no Sec-Fetch-Site.
+  assert.equal(
+    from({ origin: "null", host: "10.8.0.1", "x-forwarded-host": "10.8.0.1" }),
+    false,
+  );
+  assert.equal(from({ "sec-fetch-site": "same-origin", origin: "null" }), true);
   // Another site's form, a sibling subdomain, or a foreign Origin.
   assert.equal(
     from({

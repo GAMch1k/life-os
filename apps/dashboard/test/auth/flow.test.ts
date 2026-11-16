@@ -694,6 +694,58 @@ describe("CSRF and Origin", { skip }, () => {
     assert.equal(r.status, 204);
   });
 
+  test("legacy access: a null Origin without Sec-Fetch-Site is refused, no Origin is not", async () => {
+    // A sandboxed iframe on any web page, or a form a cross-origin redirect
+    // carried on, sends Origin: null. To a plain-HTTP LAN or WireGuard
+    // address, which is not a secure context, browsers send no
+    // Sec-Fetch-Site; nor does Safari before 16.4 at loopback.
+    for (const address of ["http://10.66.66.1:3001", "http://127.0.0.1:3000"]) {
+      const framed = new Browser(w.fetcher, address);
+      for (const uri of ["/api/voice/v1/audio-jobs", "/api/tasks/v1/tasks"]) {
+        const r = await framed.check("POST", uri, { origin: "null" });
+        assert.equal(r.status, 403, `${address} ${uri}`);
+        assert.equal(r.headers.get("x-life-os-auth-error"), "forbidden_origin");
+      }
+      // The installed app's share sheet: Origin null with Sec-Fetch-Site
+      // none, a navigation the browser started.
+      let r = await framed.check("POST", "/share", {
+        origin: "null",
+        "sec-fetch-site": "none",
+      });
+      assert.equal(r.status, 204, `${address} share sheet`);
+      // A client that is not a browser sends no Origin at all.
+      r = await framed.check("POST", "/api/voice/v1/audio-jobs", {
+        origin: "",
+      });
+      assert.equal(r.status, 204, `${address} no Origin`);
+      // Signing in, and the phone's pairing, judge it the same way.
+      r = await framed.req("/api/auth/sign-in/username", {
+        method: "POST",
+        headers: { origin: "null", "sec-fetch-site": "" },
+        body: { username: "owner", password },
+      });
+      assert.equal(
+        r.status,
+        403,
+        `${address} sign-in: ${JSON.stringify(r.data)}`,
+      );
+      assert.equal(framed.jar.size, 0);
+      r = await framed.req("/api/auth/devices/pair", {
+        method: "POST",
+        headers: { origin: "null", "sec-fetch-site": "" },
+        body: { code: "AAAA-BBBB-CCCC-DDDD", name: "x" },
+      });
+      assert.equal(r.status, 403, `${address} pairing`);
+      assert.equal(r.data.error.code, "forbidden_origin");
+      r = await framed.req("/api/auth/devices/pair", {
+        method: "POST",
+        headers: { origin: "", "sec-fetch-site": "" },
+        body: { code: "AAAA-BBBB-CCCC-DDDD", name: "x" },
+      });
+      assert.equal(r.data.error.code, "pairing_code_invalid", address);
+    }
+  });
+
   test("Better Auth refuses a sign-in from another origin", async () => {
     const evil = new Browser(w.fetcher, PUBLIC_URL);
     const r = await evil.req("/api/auth/sign-in/username", {

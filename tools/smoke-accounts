@@ -10,6 +10,10 @@ set -euo pipefail
 #    X-Life-OS-Actor: Tasks takes the actor from the identity token (user);
 #  - checks that a forged identity, a made-up cookie, and a cookie write
 #    from another site are refused, and that /internal/ is closed;
+#  - with legacy access on, checks that a write with Origin: null and no
+#    Sec-Fetch-Site (a sandboxed iframe on any web page) is refused at
+#    loopback and at a plain-HTTP host that is not loopback, while the same
+#    write with no Origin (a script, the phone's native calls) is not;
 #  - turns legacy access off on the host (legacy-access off): a request
 #    without a sign-in is 401, the session still works; and on again;
 #  - checks the admin surfaces: legacy access gets Status and the backups
@@ -30,6 +34,8 @@ set -euo pipefail
 compose=(./tools/verify-compose)
 gateway=http://127.0.0.1:13001
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
+# shellcheck source=tools/lib/settings.bash
+. tools/lib/settings.bash
 work=$(mktemp -d)
 cleanup() {
   "${compose[@]}" down --volumes --remove-orphans >/dev/null
@@ -170,6 +176,28 @@ expect 403 POST /api/tasks/v1/tasks -H "cookie: $session" -H 'content-type: appl
 expect 200 GET /api/tasks/v1/tasks -H "cookie: $session" -H 'X-Life-OS-Identity: forged.token.value'
 expect 404 GET /internal/auth/check -H "cookie: $session"
 expect 404 GET /internal/status
+
+echo '==> Legacy access: Origin null without Sec-Fetch-Site is refused, no Origin is not'
+# A sandboxed iframe on any web page, or a form a cross-origin redirect
+# carried on, posts with Origin: null. To a plain-HTTP address that is not
+# a secure context (a LAN or WireGuard address) browsers send no
+# Sec-Fetch-Site, nor does Safari before 16.4 at loopback
+# (src/lib/auth/origin.ts, NULL_ORIGIN): such a form must not write as the
+# owner. A client that is not a browser sends no Origin at all and still
+# writes. The public hostname, over plain HTTP here, stands in for the LAN
+# address: the gateway serves it, and it is not loopback.
+public_host=$(setting LIFE_OS_PUBLIC_HOSTNAME)
+for host in 127.0.0.1 ${public_host:+"$public_host"}; do
+  { printf '\xff\xd8\xff\xe0'; head -c 2048 /dev/urandom; } >"$work/framed.jpg"
+  as=(-H "host: $host" -H 'x-life-os-actor: dev:smoke-accounts' -H 'sec-fetch-site:')
+  upload=(-F "images=@$work/framed.jpg;type=image/jpeg")
+  task=(-H 'content-type: application/json' --data '{"title":"Accounts smoke task without Origin"}')
+  expect 403 POST /api/inbox/v1/media "${as[@]}" -H 'origin: null' "${upload[@]}"
+  jq -e '.error.code == "forbidden_origin"' "$work/body" >/dev/null || fail "Host $host, Origin null: $(cat "$work/body")"
+  expect 403 POST /api/tasks/v1/tasks "${as[@]}" -H 'origin: null' "${task[@]}"
+  expect 201 POST /api/inbox/v1/media "${as[@]}" "${upload[@]}"
+  expect 201 POST /api/tasks/v1/tasks "${as[@]}" "${task[@]}"
+done
 
 echo '==> Legacy access off on the host'
 account legacy-access off >/dev/null

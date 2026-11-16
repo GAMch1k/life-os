@@ -172,6 +172,88 @@ test("without a credential, only a browser on another site is refused", () => {
   );
 });
 
+test("a null Origin needs Sec-Fetch-Site same-origin or none, with the cookie and without", () => {
+  // A plain-HTTP LAN or WireGuard address, which is not a secure context:
+  // browsers send no Sec-Fetch-Site there, so a sandboxed iframe on any web
+  // page (or a cross-origin redirect) posts with Origin: null and nothing
+  // else. Under legacy access it would write as the owner.
+  const lan = (extra: Record<string, string> = {}) =>
+    new Headers({
+      host: "dashboard:3000",
+      "x-forwarded-host": "10.66.66.1",
+      "x-forwarded-proto": "http",
+      ...extra,
+    });
+  const loopback = (extra: Record<string, string> = {}) =>
+    new Headers({ host: "127.0.0.1", ...extra });
+  for (const headers of [lan, loopback, own]) {
+    const where = headers().get("x-forwarded-host") ?? headers().get("host");
+    for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
+      assert.equal(
+        anonymousWriteAllowed(method, headers({ origin: "null" })),
+        false,
+        `${where} ${method}, no credential`,
+      );
+      assert.equal(
+        cookieWriteAllowed(method, headers({ origin: "null" })),
+        false,
+        `${where} ${method}, the cookie`,
+      );
+    }
+    for (const site of ["same-origin", "none"]) {
+      // A navigation the person started (the share sheet), or Life OS's
+      // own page.
+      assert.equal(
+        anonymousWriteAllowed(
+          "POST",
+          headers({ origin: "null", "sec-fetch-site": site }),
+        ),
+        true,
+        `${where} ${site}, no credential`,
+      );
+      assert.equal(
+        cookieWriteAllowed(
+          "POST",
+          headers({ origin: "null", "sec-fetch-site": site }),
+        ),
+        true,
+        `${where} ${site}, the cookie`,
+      );
+    }
+    for (const site of ["cross-site", "same-site"]) {
+      assert.equal(
+        anonymousWriteAllowed(
+          "POST",
+          headers({ origin: "null", "sec-fetch-site": site }),
+        ),
+        false,
+        `${where} ${site}`,
+      );
+    }
+    // Reads are not writes.
+    assert.equal(
+      anonymousWriteAllowed("GET", headers({ origin: "null" })),
+      true,
+    );
+  }
+  // A client that is not a browser sends no Origin at all: the phone app's
+  // native calls (pairing), scripts, and MCP clients, unchanged.
+  assert.equal(anonymousWriteAllowed("POST", lan()), true);
+  assert.equal(anonymousWriteAllowed("POST", loopback()), true);
+  // Nor is an empty Origin header a null one.
+  assert.equal(anonymousWriteAllowed("POST", lan({ origin: "" })), true);
+  // Life OS's own page at that address still writes, as does a foreign
+  // one's refusal stay.
+  assert.equal(
+    anonymousWriteAllowed("POST", lan({ origin: "http://10.66.66.1:3001" })),
+    true,
+  );
+  assert.equal(
+    anonymousWriteAllowed("POST", lan({ origin: "http://evil.example" })),
+    false,
+  );
+});
+
 test("the request's host and its secure context", () => {
   assert.equal(
     requestHost(new Headers({ host: "LifeOS.Example.com:443" })),

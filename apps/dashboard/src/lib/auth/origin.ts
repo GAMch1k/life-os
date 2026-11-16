@@ -49,11 +49,28 @@ export function isOwnOrigin(headers: HeaderSource, origin: string): boolean {
 const OWN_SITE = new Set(["same-origin", "none"]);
 
 /**
+ * Origin: null names no page at all, and only a browser sends it: for a
+ * sandboxed iframe's request, one that a cross-origin redirect carried on,
+ * or a page from a data: or file: URL. A page on any site can make one, so
+ * it is not "no Origin" (a client that is not a browser) but a browser's
+ * page that cannot be told apart. Both rules below take it as Life OS's
+ * own only when Sec-Fetch-Site vouches for it: same-origin, or none (the
+ * installed app's share sheet posts with Origin: null and none). Without
+ * Sec-Fetch-Site it is refused, with the cookie or without (legacy
+ * access): browsers send none to a plain-HTTP address that is not a secure
+ * context (a LAN or WireGuard address such as http://10.8.0.1:3000), nor
+ * does Safari before 16.4 anywhere, so there a sandboxed iframe on any web
+ * page could otherwise post as the owner while legacy access is on.
+ */
+export const NULL_ORIGIN = "null";
+
+/**
  * The CSRF rule for a request authenticated by the session cookie: an
  * unsafe method needs Origin equal to Life OS's own, or Sec-Fetch-Site
- * same-origin or none (as /share's isShareFromApp, src/lib/share.ts). A
- * cookie alone proves nothing: SameSite=Lax still lets a sibling subdomain
- * (the ntfy hostname) send it.
+ * same-origin or none (as /share's isShareFromApp, src/lib/share.ts); a
+ * null Origin needs the latter (NULL_ORIGIN). A cookie alone proves
+ * nothing: SameSite=Lax still lets a sibling subdomain (the ntfy hostname)
+ * send it.
  */
 export function cookieWriteAllowed(
   method: string,
@@ -63,20 +80,21 @@ export function cookieWriteAllowed(
   const site = headers.get("sec-fetch-site");
   if (site && !OWN_SITE.has(site)) return false;
   const origin = headers.get("origin");
-  const ownOrigin =
-    !origin || origin === "null" || isOwnOrigin(headers, origin);
+  if (origin === NULL_ORIGIN) return site !== null;
+  const ownOrigin = !origin || isOwnOrigin(headers, origin);
   // On loopback, Origin cannot tell Life OS from another web app on this
   // machine (see loopbackNeedsFetchSite): Sec-Fetch-Site must say so too.
   if (isLoopbackLogin(headers)) return site !== null && ownOrigin;
-  if (origin && origin !== "null") return ownOrigin;
-  return site !== null && OWN_SITE.has(site);
+  if (origin) return ownOrigin;
+  return site !== null;
 }
 
 /**
  * The CSRF rule for a request with no credential at all (legacy access,
- * and signing in): a browser on another site is refused; a client that is
- * not a browser, which sends neither header (the phone app's own calls,
- * scripts), is not.
+ * and signing in): a browser on another site is refused, and so is a null
+ * Origin without Sec-Fetch-Site (NULL_ORIGIN); a client that is not a
+ * browser, which sends neither Origin nor Sec-Fetch-Site (the phone app's
+ * own calls, scripts, MCP clients), is not.
  */
 export function anonymousWriteAllowed(
   method: string,
@@ -86,7 +104,8 @@ export function anonymousWriteAllowed(
   const site = headers.get("sec-fetch-site");
   if (site && !OWN_SITE.has(site)) return false;
   const origin = headers.get("origin");
-  if (origin && origin !== "null") {
+  if (origin === NULL_ORIGIN) return site !== null;
+  if (origin) {
     // A browser's page on loopback: see loopbackNeedsFetchSite.
     if (isLoopbackLogin(headers) && site === null) return false;
     return isOwnOrigin(headers, origin);
@@ -143,7 +162,7 @@ export function isLoopbackOrigin(origin: string): boolean {
  */
 export function isSecureContext(headers: HeaderSource): boolean {
   const origin = headers.get("origin");
-  if (origin && origin !== "null") {
+  if (origin && origin !== NULL_ORIGIN) {
     try {
       const url = new URL(origin);
       return (
