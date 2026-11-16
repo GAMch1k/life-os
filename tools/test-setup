@@ -71,6 +71,22 @@ case $1 in
       'ps --all --format'*) cat "${STUB_PS_FILE:-/dev/null}" ;;
       exec*)
         case $* in
+          # calendar-feeds' API from the Dashboard's container (./setup.sh
+          # feed): the method, path, and body after the script; the status
+          # (STUB_FEED_STATUS), then the body or STUB_FEEDS_LIST's lines;
+          # 000 when STUB_FEEDS_DOWN is set.
+          *'calendar-feeds:8080'*)
+            printf 'feeds %s %s %s\n' "$7" "$8" "$9" >>"$STUB_LOG"
+            if [[ -n ${STUB_FEEDS_DOWN:-} ]]; then
+              printf '000\nfetch failed\n'
+              exit 0
+            fi
+            case $7 in
+              GET) printf '200\n%b' "${STUB_FEEDS_LIST:-}" ;;
+              DELETE) printf '%s\n' "${STUB_FEED_STATUS:-204}" ;;
+              *) printf '%s\n%s\n' "${STUB_FEED_STATUS:-201}" "${STUB_FEED_BODY:-{\}}" ;;
+            esac
+            ;;
           # The readiness probe in the Dashboard's container: the services
           # named after the script that answer (all but STUB_NOT_READY).
           'exec -T dashboard node -e '*)
@@ -156,24 +172,14 @@ case $1 in
 esac
 EOF
 
-# curl: the Access check (an https:// URL) prints STUB_ACCESS; a feed POST
-# writes STUB_FEED_BODY and prints STUB_FEED_STATUS; the gateway answers
-# unless STUB_GATEWAY_DOWN is set.
+# curl: the Access check (an https:// URL) prints STUB_ACCESS; the gateway
+# answers unless STUB_GATEWAY_DOWN is set.
 cat >"$stubs/curl" <<'EOF'
 #!/usr/bin/env bash
 printf 'curl %s\n' "$*" >>"$STUB_LOG"
 url=${!#}
-out=
-args=("$@")
-for ((i = 0; i < ${#args[@]}; i++)); do
-  [[ ${args[i]} != -o ]] || out=${args[i + 1]}
-done
 case $url in
   https://*) printf '%s' "${STUB_ACCESS:-302 https://team.cloudflareaccess.com/cdn-cgi/access/login/x}" ;;
-  */v1/feeds)
-    [[ -z $out || $out == /dev/null ]] || printf '%s' "${STUB_FEED_BODY:-{\}}" >"$out"
-    printf '%s' "${STUB_FEED_STATUS:-201}"
-    ;;
   *) [[ -z ${STUB_GATEWAY_DOWN:-} ]] || exit 7 ;;
 esac
 EOF
@@ -222,6 +228,12 @@ new_case() {
   : >"$case_dir.log"
 }
 
+# The processors a case runs on (LIFE_OS_SETUP_CPUINFO): with AVX2 (the
+# default), without, and one setup.sh cannot read flags from.
+printf 'processor\t: 0\nmodel name\t: Test CPU with AVX2\nflags\t\t: fpu sse4_2 avx avx2 fma\n' >"$work/cpuinfo-avx2"
+printf 'processor\t: 0\nmodel name\t: Intel(R) Celeron(R) J4125 CPU @ 2.00GHz\nflags\t\t: fpu sse4_2 aes rdrand\n' >"$work/cpuinfo-no-avx2"
+printf 'processor\t: 0\n' >"$work/cpuinfo-unknown"
+
 # run [VAR=value...] -- [setup.sh arguments...]: runs ./setup.sh in the case
 # directory with a clean environment, stdin from $stdin (default: none).
 # Sets status; appends the output to the case's output.
@@ -236,7 +248,7 @@ run() {
   set +e
   (cd "$case_dir" && env -i HOME="$work/home" PATH="$stubs:/usr/bin:/bin" LANG=C.UTF-8 \
     STUB_LOG="$case_dir.log" STUB_WORK="$work" STUB_IMAGES="$case_dir.images" DOCKER_HOST="unix://$work/docker.sock" \
-    "${vars[@]}" ./setup.sh "$@" <"$stdin" >"$case_dir.last" 2>&1)
+    LIFE_OS_SETUP_CPUINFO="$work/cpuinfo-avx2" "${vars[@]}" ./setup.sh "$@" <"$stdin" >"$case_dir.last" 2>&1)
   status=$?
   set -e
   cat "$case_dir.last" >>"$case_out"
@@ -282,7 +294,8 @@ new_case fresh
 run LIFE_OS_TIMEZONE=Europe/Berlin -- --yes
 ok 'exits 0' test "$status" -eq 0
 ok '.env is mode 600' test "$(mode "$case_dir/.env")" = 600
-ok 'prints the preview warning' output_has 'Life OS has no login of its own yet'
+ok 'prints the preview warning' output_has 'Life OS has a login, and it is new'
+ok 'never says it has no login' bash -c "! grep -qi 'no login' '$case_dir.last'"
 ok 'version falls back to preview' test "$(value LIFE_OS_VERSION)" = preview
 ok 'gateway on loopback' test "$(value LIFE_OS_GATEWAY_BIND_ADDRESS)" = 127.0.0.1
 ok 'port 3000' test "$(value LIFE_OS_GATEWAY_PORT)" = 3000
@@ -354,13 +367,13 @@ ok 'and writes no .env' test ! -e "$case_dir/.env"
 new_case public-bind
 run -- --yes --bind 203.0.113.7
 ok 'refuses a public address' test "$status" -eq 1
-ok 'explains the refusal' output_has 'no login yet'
+ok 'explains the refusal' output_has 'refuses to listen there'
 ok 'writes no .env' test ! -e "$case_dir/.env"
 run -- --yes --bind 0.0.0.0
 ok 'refuses every address (0.0.0.0)' test "$status" -eq 1
 run -- --yes --bind 203.0.113.7 --allow-public-bind
 ok 'allows it with --allow-public-bind' test "$status" -eq 0
-ok 'with a loud warning' output_has 'It has NO LOGIN'
+ok 'with a loud warning' output_has 'over PLAIN HTTP'
 ok 'sets the address' test "$(value LIFE_OS_GATEWAY_BIND_ADDRESS)" = 203.0.113.7
 run -- up --skip-checks
 ok 'up refuses a public address without the flag' test "$status" -eq 1
@@ -369,11 +382,52 @@ ok 'up starts nothing then' bash -c "! grep -q 'compose up' '$case_dir.log'"
 new_case vpn-bind
 run -- --yes --bind 10.0.0.1 --port 3100
 ok 'a VPN address works' test "$status" -eq 0
-ok 'warns that every peer is the owner' output_has 'every peer is the owner'
+ok 'warns that legacy access makes every peer the owner' output_has 'they act as the owner without signing in'
 ok 'the address follows' test "$(value LIFE_OS_PUBLIC_URL)" = http://10.0.0.1:3100
 ok 'the port' test "$(value LIFE_OS_GATEWAY_PORT)" = 3100
+# Signing in over plain HTTP there: explained, and off unless allowed.
+ok 'says the password crosses the network unencrypted' output_has 'sends your password and session across that network unencrypted'
+ok 'and that HTTPS is better' output_has 'HTTPS is better: tailscale serve, or a reverse proxy'
+ok 'without questions, plain-HTTP sign-in stays off' has_line 'LIFE_OS_INSECURE_LOGIN_HOSTS='
+ok 'and says how to allow it' output_has './setup.sh gateway --allow-http-login'
 run LIFE_OS_GOOGLE_CLIENT_ID=1-x.apps.googleusercontent.com LIFE_OS_GOOGLE_CLIENT_SECRET=GOCSPX-abc -- --yes google
 ok "warns that Google refuses a plain http VPN address" output_has 'only on 127.0.0.1 or localhost'
+run -- --yes gateway --allow-http-login
+ok 'gateway --allow-http-login' test "$status" -eq 0
+ok 'allows the VPN address' has_line 'LIFE_OS_INSECURE_LOGIN_HOSTS=10.0.0.1'
+ok 'and says so' output_has 'Signing in over plain HTTP is allowed at 10.0.0.1'
+run -- --yes gateway --allow-http-login
+ok 'twice: listed once' has_line 'LIFE_OS_INSECURE_LOGIN_HOSTS=10.0.0.1'
+ok 'and not offered again' bash -c "! grep -q 'unencrypted' '$case_dir.last'"
+run LIFE_OS_SETUP_WAIT_SECONDS=1 -- up --skip-checks
+ok 'up says sign-in is allowed there' bash -c "! grep -q 'Signing in there over plain HTTP is off' '$case_dir.last'"
+run -- --yes gateway --bind 127.0.0.1 --allow-http-login
+ok '--allow-http-login needs a LAN or VPN address' test "$status" -eq 2
+ok 'and says the tunnel needs nothing' output_has 'through an SSH tunnel, http://127.0.0.1 signs in as it is'
+run -- --yes gateway --bind 203.0.113.9 --allow-public-bind --allow-http-login
+ok 'never on a public address' test "$status" -eq 2
+ok 'the address stays' test "$(value LIFE_OS_GATEWAY_BIND_ADDRESS)" = 10.0.0.1
+new_case lan-name
+stdin=$work/lan-name.in
+printf 'UTC\nEUR\nhttp://nas.lan:3000\ny\nn\nn\n' >"$stdin"
+run -- --bind 192.168.1.20
+stdin=/dev/null
+ok 'asked, a LAN name and its address' test "$status" -eq 0
+ok 'explains it for both hosts' output_has 'Signing in over plain HTTP at 192.168.1.20 nas.lan sends your password'
+ok 'allows both' has_line 'LIFE_OS_INSECURE_LOGIN_HOSTS=192.168.1.20,nas.lan'
+new_case lan-declined
+stdin=$work/lan-declined.in
+printf 'UTC\nEUR\n\nn\nn\nn\n' >"$stdin"
+run -- --bind 192.168.1.20
+stdin=/dev/null
+ok 'declined' test "$status" -eq 0
+ok 'stays off' has_line 'LIFE_OS_INSECURE_LOGIN_HOSTS='
+run LIFE_OS_SETUP_WAIT_SECONDS=1 -- up --skip-checks
+ok 'up says how to sign in there' output_has 'Signing in there over plain HTTP is off: allow it with ./setup.sh gateway --allow-http-login'
+ok 'or through a tunnel to the bind address' output_has 'ssh -N -L 3000:192.168.1.20:3000'
+new_case loopback-no-offer
+run LIFE_OS_TIMEZONE=UTC -- --yes
+ok 'loopback: nothing to allow' bash -c "! grep -q 'unencrypted' '$case_dir.last'"
 
 new_case https-url
 run -- --yes --public-url https://lifeos.example.org/
@@ -418,6 +472,26 @@ run LIFE_OS_TIMEZONE=UTC -- --yes
 ok 'a released script sets its version' test "$(value LIFE_OS_VERSION)" = 0.1.0-preview.1
 run -- help
 ok 'help shows it' output_has '(0.1.0-preview.1)'
+ok 'not a release tag: the docs of master' output_has 'https://github.com/GAMch1k/life-os/blob/master/docs/install/README.md'
+new_case released-tag
+sed -i "s/^release_version='__LIFE_OS_VERSION__'$/release_version='v0.1.0-preview.7'/" "$case_dir/setup.sh"
+sed -i 's/^LIFE_OS_VERSION=.*/LIFE_OS_VERSION=v0.1.0-preview.7/' "$case_dir/.env.example"
+run LIFE_OS_TIMEZONE=UTC -- --yes
+ok "a release's files set up" test "$status" -eq 0
+sed -i 's/^LIFE_OS_VERSION=.*/LIFE_OS_VERSION=v0.1.0-preview.6/' "$case_dir/.env.example"
+: >"$case_dir.log"
+run LIFE_OS_SETUP_WAIT_SECONDS=1 -- update --skip-checks --skip-backup
+ok "a new setup.sh with the old .env.example: update refuses" test "$status" -eq 1
+ok 'names both' output_has 'setup.sh v0.1.0-preview.7, .env.example v0.1.0-preview.6'
+ok 'nothing pulled' bash -c "! grep -q 'compose pull' '$case_dir.log'"
+sed -i 's/^LIFE_OS_VERSION=.*/LIFE_OS_VERSION=v0.1.0-preview.7/' "$case_dir/.env.example"
+run -- help
+ok "a release's script links the docs at its own tag" output_has 'https://github.com/GAMch1k/life-os/blob/v0.1.0-preview.7/docs/install/README.md'
+ok 'and not master' bash -c "! grep -q 'blob/master' '$case_dir.last'"
+new_case dry-run-tag
+sed -i "s/^release_version='__LIFE_OS_VERSION__'$/release_version='v0.0.0-dry-run.42'/" "$case_dir/setup.sh"
+run -- help
+ok "a dry run's script, whose tag does not exist, links master" output_has 'https://github.com/GAMch1k/life-os/blob/master/docs/install/README.md'
 
 new_case stamped
 sed -i '1i LIFE_OS_VERSION=v0.1.0-preview.1' "$case_dir/.env.example"
@@ -611,18 +685,39 @@ EOF
   ok 'the notifications service accepts the key pair' test "$vapid_status" -eq 0
 fi
 
+: >"$case_dir.log"
 run STUB_FEED_STATUS=201 LIFE_OS_SETUP_FEED_NAME='School holidays' LIFE_OS_SETUP_FEED_URL=webcal://example.org/holidays.ics -- --yes feed
 ok 'feed' test "$status" -eq 0
-ok 'posted to calendar-feeds' logged 'http://127.0.0.1:3000/api/integrations/calendar-feeds/v1/feeds'
-ok 'as dev:setup' logged 'X-Life-OS-Actor: dev:setup'
-ok 'with the name and URL' logged '{"name":"School holidays","url":"webcal://example.org/holidays.ics"}'
+ok "posted to calendar-feeds on the private network, from the Dashboard's container" logged 'feeds POST  {"name":"School holidays","url":"webcal://example.org/holidays.ics"}'
+ok 'never through the gateway, which needs a sign-in' bash -c "! grep -q '^curl' '$case_dir.log'"
+ok 'as dev:setup' logged '"x-life-os-actor": "dev:setup"'
+ok 'says it subscribed' output_has 'Subscribed to "School holidays"'
 run STUB_FEED_STATUS=400 STUB_FEED_BODY='{"error":{"code":"invalid_url"}}' LIFE_OS_SETUP_FEED_NAME=x LIFE_OS_SETUP_FEED_URL=https://example.org/a.ics -- --yes feed
 ok 'a refused feed fails' test "$status" -eq 1
 ok "and shows Life OS's answer" output_has 'invalid_url'
 run LIFE_OS_SETUP_FEED_NAME='Bad "name"' LIFE_OS_SETUP_FEED_URL=https://example.org/a.ics -- --yes feed
 ok 'refuses quotes in the name' test "$status" -eq 2
-run STUB_GATEWAY_DOWN=1 LIFE_OS_SETUP_FEED_NAME=x LIFE_OS_SETUP_FEED_URL=https://example.org/a.ics -- --yes feed
+run STUB_DASHBOARD_RUNNING=0 LIFE_OS_SETUP_FEED_NAME=x LIFE_OS_SETUP_FEED_URL=https://example.org/a.ics -- --yes feed
 ok 'a feed needs Life OS running' test "$status" -eq 1
+ok 'and says to start it' output_has './setup.sh up'
+run STUB_FEEDS_DOWN=1 LIFE_OS_SETUP_FEED_NAME=x LIFE_OS_SETUP_FEED_URL=https://example.org/a.ics -- --yes feed
+ok 'calendar-feeds not answering fails' test "$status" -eq 1
+ok 'and says so' output_has 'calendar feeds do not answer'
+run STUB_FEEDS_LIST='0b4f3c1e-2a5d-4c7e-9f10-1a2b3c4d5e6f\tSchool holidays\t2026-11-16T04:30:00Z\t\n' -- feed list
+ok 'feed list' test "$status" -eq 0
+ok 'lists each feed with its id and name' grep -qE '^0b4f3c1e-2a5d-4c7e-9f10-1a2b3c4d5e6f +School holidays +2026-11-16T04:30:00Z' "$case_dir.last"
+run -- feed list
+ok 'feed list without feeds' output_has 'No calendar feeds yet'
+: >"$case_dir.log"
+run -- feed remove 0b4f3c1e-2a5d-4c7e-9f10-1a2b3c4d5e6f
+ok 'feed remove' test "$status" -eq 0
+ok 'deletes it on the private network' logged 'feeds DELETE /0b4f3c1e-2a5d-4c7e-9f10-1a2b3c4d5e6f'
+run STUB_FEED_STATUS=404 -- feed remove 0b4f3c1e-2a5d-4c7e-9f10-1a2b3c4d5e6f
+ok 'an unknown feed' test "$status" -eq 1
+run -- feed remove ../etc
+ok 'remove needs an id' test "$status" -eq 2
+run -- feed frobnicate
+ok 'an unknown feed command' test "$status" -eq 2
 
 ok '.env is still mode 600' test "$(mode "$case_dir/.env")" = 600
 ok 'no duplicate keys' no_duplicate_keys
@@ -800,8 +895,11 @@ ok 'up builds a missing local image again' test "$status" -eq 0
 ok 'before it starts Life OS' test "$(docker_steps)" = 'build up '
 
 # update: the release images, then Claude Code added to the new version.
+# The new release's files come first (.env.example names its version).
+release_files() { sed -i "s/^LIFE_OS_VERSION=.*/LIFE_OS_VERSION=$1/" "$case_dir/.env.example"; }
+release_files v0.1.0-preview.2
 : >"$case_dir.log"
-run LIFE_OS_SETUP_WAIT_SECONDS=5 -- update v0.1.0-preview.2 --skip-checks
+run LIFE_OS_SETUP_WAIT_SECONDS=5 -- update --skip-checks
 ok 'update with Claude Code' test "$status" -eq 0
 ok 'pulls the release images, not the local one' grep -A1 -F 'docker compose pull' "$case_dir.log" | grep -qxF '  with LIFE_OS_PROCESSOR_IMAGE='
 base=$(release_image v0.1.0-preview.2)
@@ -813,18 +911,21 @@ ok 'and its local image' test "$(value LIFE_OS_PROCESSOR_IMAGE)" = lifeos-proces
 ok "the old version's local image goes" test ! -e "$(local_image v0.1.0-preview.1)"
 run -- status
 ok 'status: the local image matches the new version' grep -qE "Claude Code on this server +Claude Code $pinned in lifeos-processor-claude:v0.1.0-preview.2, matches v0.1.0-preview.2" "$case_dir.last"
+release_files v0.1.0-preview.3
 : >"$case_dir.log"
-run STUB_BUILD_EXIT=1 -- update v0.1.0-preview.3 --skip-checks --skip-backup
+run STUB_BUILD_EXIT=1 -- update --skip-checks --skip-backup
 ok 'a failed Claude Code build stops the update' test "$status" -eq 1
 ok 'the version stays' test "$(value LIFE_OS_VERSION)" = v0.1.0-preview.2
 ok 'the local image stays' test "$(value LIFE_OS_PROCESSOR_IMAGE)" = lifeos-processor-claude:v0.1.0-preview.2
 ok 'nothing restarted' bash -c "! grep -q 'compose up' '$case_dir.log'"
+release_files v0.1.0-preview.2
 : >"$case_dir.log"
-run STUB_DIGEST_SEED=2 LIFE_OS_SETUP_WAIT_SECONDS=5 -- update v0.1.0-preview.2 --skip-checks --skip-backup
+run STUB_DIGEST_SEED=2 LIFE_OS_SETUP_WAIT_SECONDS=5 -- update --skip-checks --skip-backup
 ok 'a new release image of the same version gets Claude Code again' logged "docker build --tag lifeos-processor-claude:v0.1.0-preview.2 --build-arg LIFE_OS_PROCESSOR_BASE=$(release_image v0.1.0-preview.2)"
 ok 'and the earlier build goes' bash -c "! ls '$case_dir.images' | grep -q dangling"
 : >"$case_dir.log"
 run STUB_DIGEST_SEED=2 LIFE_OS_SETUP_WAIT_SECONDS=5 -- update v0.1.0-preview.2 --skip-checks --skip-backup
+ok "update VERSION works for the release files' own version" test "$status" -eq 0
 ok 'the same release image: no build' test "$(docker_steps)" = 'pull up '
 
 # Back to Codex: the release image again, and the local one goes.
@@ -858,6 +959,42 @@ run LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN="$plan_token" -- --yes claude
 ok "the repository's setup.sh cannot add Claude Code" test "$status" -eq 1
 ok "says to use a release's" output_has 'it is a copy from the repository'
 ok 'and changes nothing' test "$(value LIFE_OS_AI_PROVIDER)/$(value LIFE_OS_CLAUDE_CODE_OAUTH_TOKEN)" = codex/
+
+# ---------- Voice notes need AVX2 ----------
+new_case no-avx2
+run LIFE_OS_SETUP_CPUINFO="$work/cpuinfo-no-avx2" LIFE_OS_TIMEZONE=UTC LIFE_OS_SETUP_MODULES=voice,server-health LIFE_OS_SETUP_WHISPER_MODEL=base -- --yes
+ok 'a first setup without AVX2 still works' test "$status" -eq 0
+ok 'but leaves voice notes off' test "$(value COMPOSE_PROFILES)" = server-health
+ok 'and says why, naming the processor' output_has 'Intel(R) Celeron(R) J4125 CPU @ 2.00GHz) has no AVX2, which Whisper needs'
+ok 'once' test "$(grep -c 'has no AVX2' "$case_dir.last")" -eq 1
+run LIFE_OS_SETUP_CPUINFO="$work/cpuinfo-no-avx2" -- --yes whisper
+ok './setup.sh whisper refuses without AVX2' test "$status" -eq 1
+ok 'voice stays off' bash -c "! grep -q '^COMPOSE_PROFILES=.*voice' '$case_dir/.env'"
+run LIFE_OS_SETUP_CPUINFO="$work/cpuinfo-no-avx2" -- modules on voice
+ok 'modules on voice refuses without AVX2' test "$status" -eq 1
+ok 'and says why' output_has 'has no AVX2'
+ok 'voice still off' bash -c "! grep -q '^COMPOSE_PROFILES=.*voice' '$case_dir/.env'"
+run LIFE_OS_SETUP_CPUINFO="$work/cpuinfo-unknown" -- modules on voice
+ok 'when it cannot tell, voice goes on' test "$status" -eq 0
+ok 'with a warning' output_has 'cannot tell whether this'
+ok 'voice on' has_profile voice
+run LIFE_OS_SETUP_CPUINFO="$work/cpuinfo-no-avx2" LIFE_OS_SETUP_WAIT_SECONDS=1 -- up --skip-checks
+ok 'up warns that voice notes cannot run here' output_has 'voice notes are on, but'
+run LIFE_OS_SETUP_CPUINFO="$work/cpuinfo-no-avx2" -- modules off voice
+ok 'off works without AVX2' test "$status" -eq 0
+new_case no-avx2-interactive
+printf '%s\n' UTC EUR '' y n n n n n n n >"$work/answers"
+stdin=$work/answers
+run LIFE_OS_SETUP_CPUINFO="$work/cpuinfo-no-avx2" --
+stdin=/dev/null
+ok 'voice is not offered without AVX2' bash -c "! grep -q 'Turn on Voice notes' '$case_dir.last'"
+ok 'and the setup says why' output_has 'has no AVX2'
+ok 'and finishes' test "$status" -eq 0
+new_case no-avx2-migrate
+run LIFE_OS_TIMEZONE=UTC -- --yes
+sed -i -e '/^LIFE_OS_MODULES_LISTED=/d' -e '/^COMPOSE_PROFILES=/d' "$case_dir/.env"
+run LIFE_OS_SETUP_CPUINFO="$work/cpuinfo-no-avx2" LIFE_OS_SETUP_WAIT_SECONDS=1 -- up --skip-checks
+ok 'an install from before modules keeps voice off without AVX2' test "$(value COMPOSE_PROFILES)" = server-health
 
 # ---------- Integrations during a first setup without questions ----------
 new_case init-with-integrations
@@ -1061,8 +1198,24 @@ run -- status
 ok 'status flags it' grep -qE 'Voice notes \(voice\) +on: Whisper small, language xx \(unknown: ./setup.sh whisper\)' "$case_dir.last"
 sed -i 's/^LIFE_OS_WHISPER_LANGUAGE=.*/LIFE_OS_WHISPER_LANGUAGE=auto/' "$case_dir/.env"
 
+# Another version than the release files' is refused: preview.6's script
+# pulled preview.7's images with preview.6's compose.yaml, which has no
+# accounts' database, and the Dashboard broke.
 : >"$case_dir.log"
-run LIFE_OS_SETUP_WAIT_SECONDS=5 -- update 0.1.0-preview.2 --skip-checks
+env_sum=$(sha256sum <"$case_dir/.env")
+run LIFE_OS_SETUP_WAIT_SECONDS=5 -- update v0.1.0-preview.7 --skip-checks
+ok 'update to another version than the files is refused' test "$status" -eq 1
+ok 'says to download its files first' output_has "Download v0.1.0-preview.7's files over these"
+ok 'with the commands' output_has 'release=https://github.com/GAMch1k/life-os/releases/download/v0.1.0-preview.7'
+ok 'and to check them' output_has 'sha256sum -c SHA256SUMS && ./setup.sh update'
+ok 'nothing pulled or backed up' bash -c "! grep -qE 'compose (pull|exec)' '$case_dir.log'"
+ok '.env unchanged' test "$(sha256sum <"$case_dir/.env")" = "$env_sum"
+run -- update 'v1;rm' --skip-checks
+ok 'a version that is not one' test "$status" -eq 2
+# The new release's files (.env.example names its version), then update.
+sed -i 's/^LIFE_OS_VERSION=.*/LIFE_OS_VERSION=0.1.0-preview.2/' "$case_dir/.env.example"
+: >"$case_dir.log"
+run LIFE_OS_SETUP_WAIT_SECONDS=5 -- update --skip-checks
 ok 'update' test "$status" -eq 0
 ok 'backs up first' logged 'docker compose exec -T backup /service now -actor dev:setup'
 ok 'pulls the new version' logged 'docker compose pull [LIFE_OS_VERSION=0.1.0-preview.2]'
@@ -1070,6 +1223,7 @@ ok 'restarts' logged 'docker compose up -d --remove-orphans'
 ok 'in that order' test "$(grep -nE 'compose (exec -T backup|pull|up)' "$case_dir.log" | cut -d' ' -f3 | tr '\n' ' ')" = 'exec pull up '
 ok 'records the version' test "$(value LIFE_OS_VERSION)" = 0.1.0-preview.2
 
+sed -i 's/^LIFE_OS_VERSION=.*/LIFE_OS_VERSION=0.1.0-preview.3/' "$case_dir/.env.example"
 : >"$case_dir.log"
 run STUB_BACKUP_EXIT=1 -- update 0.1.0-preview.3 --skip-checks
 ok 'a failed backup stops the update' test "$status" -eq 1
@@ -1080,6 +1234,18 @@ ok 'no backup service: refuses' test "$status" -eq 1
 ok 'suggests --skip-backup' output_has '--skip-backup'
 run STUB_PULL_EXIT=1 -- update 0.1.0-preview.3 --skip-checks
 ok 'a failed pull changes nothing' test "$(value LIFE_OS_VERSION)" = 0.1.0-preview.2
+# Release files of two releases together: refused.
+printf '# Life OS release: 0.1.0-preview.2\n' | cat - "$work/compose.yaml" >"$case_dir/compose.yaml"
+: >"$case_dir.log"
+run STUB_BACKUP_RUNNING=0 LIFE_OS_SETUP_WAIT_SECONDS=5 -- update --skip-backup --skip-checks
+ok "a compose.yaml of another release than .env.example's is refused" test "$status" -eq 1
+ok 'and named' output_has 'compose.yaml 0.1.0-preview.2, .env.example 0.1.0-preview.3'
+ok 'nothing pulled' bash -c "! grep -q 'compose pull' '$case_dir.log'"
+run LIFE_OS_SETUP_WAIT_SECONDS=5 -- up --skip-checks
+ok 'up refuses them too' test "$status" -eq 1
+ok 'up started nothing' bash -c "! grep -q 'compose up' '$case_dir.log'"
+cp "$work/compose.yaml" "$case_dir/compose.yaml"
+sed -i 's/^LIFE_OS_VERSION=.*/LIFE_OS_VERSION=/' "$case_dir/.env.example"
 printf 'LIFE_OS_NEWTHING_DB_PASSWORD=replace-with-a-local-password\nLIFE_OS_NEWTHING_TIME=05:00\n' >>"$case_dir/.env.example"
 run STUB_BACKUP_RUNNING=0 LIFE_OS_SETUP_WAIT_SECONDS=5 -- update --skip-backup --skip-checks
 ok 'update without a backup' test "$status" -eq 0
