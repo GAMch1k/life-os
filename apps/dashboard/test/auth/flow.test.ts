@@ -718,9 +718,147 @@ describe("CSRF and Origin", { skip }, () => {
     const r = await signIn(plain, "owner");
     assert.equal(r.status, 403);
     assert.equal(r.data.code, "INSECURE_ORIGIN");
-    // localhost is a secure context.
+    // Loopback (an SSH tunnel) signs in.
     const local = new Browser(w.fetcher, "http://localhost:3000");
     assert.equal((await signIn(local, "owner")).status, 200);
+    assert.equal((await local.check()).status, 204);
+  });
+});
+
+/** The Set-Cookie headers of a reply that lack Secure. */
+function cookiesWithoutSecure(r: Reply) {
+  return r.headers.getSetCookie().filter((c) => !/;\s*Secure(;|$)/i.test(c));
+}
+
+describe("the session cookie, by host", { skip }, () => {
+  let w: World;
+  before(async () => {
+    w = await world({ legacy: false, insecureHosts: "10.8.0.1" });
+  });
+  after(() => w?.close());
+
+  test("loopback over plain HTTP (an SSH tunnel): host-only, HttpOnly, SameSite=Lax, without Secure, which Safari keeps", async () => {
+    for (const origin of [
+      "http://127.0.0.1:3000",
+      "http://localhost:3000",
+      "http://[::1]:3000",
+    ]) {
+      const b = new Browser(w.fetcher, origin);
+      const r = await signIn(b, "owner");
+      assert.equal(r.status, 200, `${origin}: ${JSON.stringify(r.data)}`);
+      const set = r.headers.getSetCookie();
+      const cookie = set.find((c) => c.startsWith("lifeos.session="));
+      assert.ok(cookie, `${origin}: ${set.join(" | ")}`);
+      assert.doesNotMatch(cookie, /;\s*Secure/i);
+      assert.match(cookie, /; Path=\//i);
+      assert.match(cookie, /; HttpOnly/i);
+      assert.match(cookie, /; SameSite=Lax/i);
+      assert.doesNotMatch(cookie, /Domain=/i);
+      assert.ok(
+        !set.some((c) => c.startsWith("__Host-")),
+        `${origin}: ${set.join(" | ")}`,
+      );
+      assert.equal((await b.check()).status, 204, origin);
+      // The same cookie at the public name counts for nothing.
+      const elsewhere = new Browser(w.fetcher);
+      elsewhere.jar.set("lifeos.session", b.jar.get("lifeos.session")!);
+      assert.equal((await elsewhere.check()).status, 401, origin);
+    }
+  });
+
+  test("no other host ever gets a cookie without Secure: a plain-HTTP page there does not sign in", async () => {
+    for (const origin of [
+      // The public name over plain HTTP, a LAN address nobody allowed, a
+      // subdomain of localhost, and names that only resolve to loopback.
+      "http://lifeos.test",
+      "http://10.8.0.2:3000",
+      "http://evil.localhost:3000",
+      "http://127.0.0.1.nip.io:3000",
+      "http://localhost.example.com:3000",
+    ]) {
+      const b = new Browser(w.fetcher, origin);
+      const r = await signIn(b, "owner");
+      assert.equal(r.status, 403, `${origin}: ${JSON.stringify(r.data)}`);
+      assert.deepEqual(r.headers.getSetCookie(), [], origin);
+      assert.equal((await b.check()).status, 401, origin);
+    }
+    // HTTPS: every cookie Secure, the session's __Host-.
+    const https = new Browser(w.fetcher);
+    const r = await signIn(https, "owner");
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    assert.deepEqual(cookiesWithoutSecure(r), []);
+    assert.ok(https.jar.has("__Host-lifeos.session"));
+  });
+
+  test("a loopback page cannot sign in at another host, nor another page at loopback", async () => {
+    // A page at http://127.0.0.1 posting to the public name: another
+    // origin, refused before any cookie.
+    const tunnel = new Browser(w.fetcher, PUBLIC_URL);
+    let r = await tunnel.req("/api/auth/sign-in/username", {
+      method: "POST",
+      headers: { origin: "http://127.0.0.1:3000" },
+      body: { username: "owner", password },
+    });
+    assert.equal(r.status, 403, JSON.stringify(r.data));
+    assert.deepEqual(r.headers.getSetCookie(), []);
+    // A page elsewhere posting to loopback: refused too.
+    const local = new Browser(w.fetcher, "http://127.0.0.1:3000");
+    r = await local.req("/api/auth/sign-in/username", {
+      method: "POST",
+      headers: { origin: "http://10.8.0.2:3000" },
+      body: { username: "owner", password },
+    });
+    assert.equal(r.status, 403, JSON.stringify(r.data));
+    assert.deepEqual(r.headers.getSetCookie(), []);
+  });
+
+  test("loopback behind HTTPS (a proxy that says so) keeps the Secure cookie", async () => {
+    const b = new Browser(w.fetcher, "https://localhost");
+    const r = await b.req("/api/auth/sign-in/username", {
+      method: "POST",
+      headers: { "x-forwarded-proto": "https" },
+      body: { username: "owner", password },
+    });
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    assert.deepEqual(cookiesWithoutSecure(r), []);
+    assert.ok(b.jar.has("__Host-lifeos.session"));
+  });
+
+  test("signing out everywhere forgets the host's own cookie", async () => {
+    const local = new Browser(w.fetcher, "http://localhost:3000");
+    assert.equal((await signIn(local, "owner")).status, 200);
+    const r = await local.req("/api/account/sign-out-everywhere", {
+      method: "POST",
+    });
+    assert.equal(r.status, 204, JSON.stringify(r.data));
+    const cleared = r.headers.getSetCookie();
+    assert.equal(cleared.length, 1, cleared.join(" | "));
+    assert.match(cleared[0], /^lifeos\.session=; Max-Age=0/);
+    assert.doesNotMatch(cleared[0], /Secure/);
+    assert.equal(local.jar.has("lifeos.session"), false);
+  });
+
+  test("two-factor's cookies follow the host: Secure on HTTPS, not on loopback", async () => {
+    const owner = new Browser(w.fetcher);
+    assert.equal((await signIn(owner, "owner")).status, 200);
+    const { uri } = await enableTotp(owner);
+    // HTTPS: the password step leaves the two-factor cookie, Secure.
+    const https = new Browser(w.fetcher);
+    let r = await signIn(https, "owner");
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    assert.ok(r.data.twoFactorRedirect, JSON.stringify(r.data));
+    assert.ok(r.headers.getSetCookie().length > 0);
+    assert.deepEqual(cookiesWithoutSecure(r), []);
+    // Loopback: the same steps sign in, without Secure.
+    const local = new Browser(w.fetcher, "http://127.0.0.1:3000");
+    r = await signIn(local, "owner");
+    assert.ok(r.data.twoFactorRedirect, JSON.stringify(r.data));
+    r = await local.req("/api/auth/two-factor/verify-totp", {
+      method: "POST",
+      body: { code: totp(uri) },
+    });
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    assert.ok(local.jar.has("lifeos.session"));
     assert.equal((await local.check()).status, 204);
   });
 });

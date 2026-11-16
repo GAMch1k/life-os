@@ -58,6 +58,7 @@ export function createRuntime(
     env,
     pool,
     auth: createAuth(env, pool, { kind: "secure", throttle }),
+    loopbackAuth: createAuth(env, pool, { kind: "loopback", throttle }),
     insecureAuth:
       env.insecureLoginHosts.length > 0
         ? createAuth(env, pool, { kind: "insecure", throttle })

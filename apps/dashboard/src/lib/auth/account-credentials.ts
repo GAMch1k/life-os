@@ -5,7 +5,7 @@ import {
   TOKEN_MAX_DAYS,
   TOKEN_PREFIX,
 } from "./constants";
-import { devName } from "./check";
+import { devName, sessionSource } from "./check";
 import {
   keyName,
   type KeyRecord,
@@ -409,12 +409,16 @@ export async function credentialsRoute(
           ? "with_devices"
           : null,
     });
-    // This session went too: the browser forgets its cookie.
+    // This session went too: the browser forgets its cookie, the one of
+    // this host (Secure on HTTPS; without Secure on loopback and on a
+    // plain-HTTP host the owner allowed).
+    const { cookie } = sessionSource(rt, request.headers);
+    const secure = cookie === SESSION_COOKIE ? " Secure;" : "";
     return new Response(null, {
       status: 204,
       headers: {
         "cache-control": "no-store",
-        "set-cookie": `${SESSION_COOKIE}=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Lax`,
+        "set-cookie": `${cookie}=; Max-Age=0; Path=/; HttpOnly;${secure} SameSite=Lax`,
       },
     });
   }

@@ -6,7 +6,7 @@ import { type CheckResult, checkRequest } from "./check";
 import { recentlyAuthenticated } from "./reauth";
 import { isAdminRole } from "./roles";
 import { authRuntime } from "./runtime";
-import { insecureLoginAllowed } from "./server";
+import { plainHttpLoginAllowed } from "./server";
 import { firstAccountExists } from "./store";
 
 /**
@@ -18,7 +18,11 @@ export { safeNext } from "./safe-next";
 
 export type LoginContext = {
   publicUrl: string;
-  /** Plain HTTP is allowed for this host (LIFE_OS_INSECURE_LOGIN_HOSTS). */
+  /**
+   * Signing in over plain HTTP works for this host: one the owner allowed
+   * (LIFE_OS_INSECURE_LOGIN_HOSTS), or this machine's loopback names (an
+   * SSH tunnel).
+   */
   insecureAllowed: boolean;
   accountExists: boolean;
   /** Passkeys work only on the public address's origin. */
@@ -45,7 +49,7 @@ export async function loginContext(): Promise<LoginContext> {
       : null;
   return {
     publicUrl: rt.env.publicUrl,
-    insecureAllowed: insecureLoginAllowed(rt.env, requestHeaders),
+    insecureAllowed: plainHttpLoginAllowed(rt.env, requestHeaders),
     accountExists: await firstAccountExists(rt.pool).catch(() => true),
     passkeyOrigin: new URL(rt.env.publicUrl).origin,
     signedIn: session !== null,

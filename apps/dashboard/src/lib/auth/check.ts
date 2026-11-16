@@ -25,6 +25,7 @@ import {
 import {
   anonymousWriteAllowed,
   cookieWriteAllowed,
+  isLoopbackLogin,
   requestHost,
 } from "./origin";
 import { serverRole } from "./roles";
@@ -113,8 +114,14 @@ export type CheckResult =
 export type CheckRuntime = {
   env: AuthEnv;
   pool: Pool;
-  /** Better Auth for HTTPS and localhost. */
+  /** Better Auth for every host but the two below (Secure cookies). */
   auth: LifeOsAuth;
+  /**
+   * Better Auth for this machine's loopback names over plain HTTP (an SSH
+   * tunnel): a cookie without Secure, which Safari keeps there. Absent,
+   * loopback is served by `auth`.
+   */
+  loopbackAuth?: LifeOsAuth;
   /** Better Auth for the plain-HTTP hosts the owner allowed, if any. */
   insecureAuth?: LifeOsAuth;
   signer: Signer;
@@ -195,8 +202,17 @@ export function bearerToken(headers: Headers): string | null {
   return (match[1] ?? "").trim();
 }
 
-/** The Better Auth instance and cookie name for the request's host. */
+/**
+ * The Better Auth instance and cookie name for the request's host: this
+ * machine's loopback names over plain HTTP, and the plain-HTTP hosts the
+ * owner allowed, get the cookie without Secure; every other host, the
+ * Secure `__Host-` one. Judged by the host alone, so that the cookie a
+ * sign-in sets is the one every later request of that host reads.
+ */
 export function sessionSource(rt: CheckRuntime, headers: Headers) {
+  if (rt.loopbackAuth && isLoopbackLogin(headers)) {
+    return { auth: rt.loopbackAuth, cookie: INSECURE_SESSION_COOKIE };
+  }
   if (
     rt.insecureAuth &&
     rt.env.insecureLoginHosts.includes(requestHost(headers))

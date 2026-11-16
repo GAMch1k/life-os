@@ -91,6 +91,28 @@ export function isLoopbackHost(host: string) {
 }
 
 /**
+ * Whether a request reached Life OS at one of this machine's own loopback
+ * names over plain HTTP: http://127.0.0.1, http://localhost, or
+ * http://[::1], as through an SSH tunnel. Only these exact names, never a
+ * subdomain of localhost or a name DNS resolves: a browser sends them to
+ * this machine alone. There the session cookie is not Secure, because
+ * Safari refuses a Secure cookie on plain-HTTP loopback; the traffic never
+ * leaves the machine, or travels inside the SSH tunnel. The host is the
+ * one the gateway passes on (X-Forwarded-Host, which it sets itself), and
+ * X-Forwarded-Proto is https only through Cloudflare's tunnel.
+ */
+export function isLoopbackLogin(headers: HeaderSource): boolean {
+  const proto = headers.get("x-forwarded-proto")?.split(",")[0].trim();
+  return proto !== "https" && LOOPBACK.has(requestHost(headers));
+}
+
+/** Whether an origin is one of the loopback names isLoopbackLogin takes. */
+export function isLoopbackOrigin(origin: string): boolean {
+  const host = originHostname(origin);
+  return host !== null && LOOPBACK.has(host);
+}
+
+/**
  * Whether the browser's page is a secure context, where the Secure session
  * cookie and passkeys work: HTTPS, or a loopback host. Judged by Origin
  * (which the browser sets), else by the gateway's X-Forwarded-Proto.

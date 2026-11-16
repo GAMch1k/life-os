@@ -6,6 +6,8 @@ import { TokenCache } from "./identity";
 import {
   anonymousWriteAllowed,
   cookieWriteAllowed,
+  isLoopbackLogin,
+  isLoopbackOrigin,
   isSecureContext,
   requestHost,
 } from "./origin";
@@ -102,6 +104,34 @@ test("the request's host and its secure context", () => {
     isSecureContext(new Headers({ origin: "http://10.8.0.1:3000" })),
     false,
   );
+});
+
+test("loopback login: this machine's own names over plain HTTP, nothing else", () => {
+  const via = (host: string, extra: Record<string, string> = {}) =>
+    new Headers({ host: "dashboard:3000", "x-forwarded-host": host, ...extra });
+  for (const host of ["127.0.0.1", "localhost", "LOCALHOST", "[::1]"]) {
+    assert.equal(isLoopbackLogin(via(host)), true, host);
+  }
+  for (const host of [
+    "lifeos.example.com",
+    "10.8.0.1",
+    "evil.localhost",
+    "127.0.0.1.nip.io",
+    "localhost.example.com",
+    "127.0.0.2",
+  ]) {
+    assert.equal(isLoopbackLogin(via(host)), false, host);
+  }
+  // Behind HTTPS (Cloudflare's tunnel sets the proto): the Secure cookie.
+  assert.equal(
+    isLoopbackLogin(via("localhost", { "x-forwarded-proto": "https" })),
+    false,
+  );
+  assert.equal(isLoopbackOrigin("http://127.0.0.1:3000"), true);
+  assert.equal(isLoopbackOrigin("http://[::1]:3000"), true);
+  assert.equal(isLoopbackOrigin("http://evil.localhost:3000"), false);
+  assert.equal(isLoopbackOrigin("http://10.8.0.1:3000"), false);
+  assert.equal(isLoopbackOrigin("null"), false);
 });
 
 test("settings: host lists, on and off, and what is required", () => {
