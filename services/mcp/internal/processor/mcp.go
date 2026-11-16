@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/GAMch1k/life-os/pkg/activity"
@@ -85,9 +87,9 @@ func (c *MCPClient) Call(ctx context.Context, name string, args map[string]any) 
 	}
 	if err := json.Unmarshal(envelope.Result, &toolResult); err == nil && toolResult.IsError {
 		if len(toolResult.Content) > 0 {
-			return nil, fmt.Errorf("MCP tool %s rejected: %s", name, toolResult.Content[0].Text)
+			return nil, &toolRejection{message: fmt.Sprintf("MCP tool %s rejected: %s", name, toolResult.Content[0].Text)}
 		}
-		return nil, fmt.Errorf("MCP tool %s rejected", name)
+		return nil, &toolRejection{message: fmt.Sprintf("MCP tool %s rejected", name)}
 	}
 	return envelope.Result, nil
 }
@@ -118,9 +120,38 @@ func (c *MCPClient) request(ctx context.Context, message map[string]any) (json.R
 		return nil, resp.Header, fmt.Errorf("%w: %s", errSessionExpired, strings.TrimSpace(string(raw)))
 	}
 	if resp.StatusCode/100 != 2 {
-		return nil, resp.Header, fmt.Errorf("MCP returned %s: %s", resp.Status, string(raw))
+		return nil, resp.Header, &mcpStatusError{status: resp.StatusCode, message: fmt.Sprintf("MCP returned %s: %s", resp.Status, string(raw))}
 	}
 	return sseData(raw), resp.Header, nil
+}
+
+// mcpStatusError is MCP's answer with a status that is no success. Its
+// message is the answer, which the processor matches and records; a log
+// line takes only the status (pkg/diagnostics.ErrorCode).
+type mcpStatusError struct {
+	status  int
+	message string
+}
+
+func (e *mcpStatusError) Error() string   { return e.message }
+func (e *mcpStatusError) HTTPStatus() int { return e.status }
+
+// toolRejection is a tool's refusal (isError). Its message quotes the
+// owning service's answer, which the processor matches and records; a log
+// line takes the service's status when the answer names one ("tasks
+// service returned 409: …"), and the code tool_rejected.
+type toolRejection struct{ message string }
+
+var returnedStatus = regexp.MustCompile(`returned (\d{3})\b`)
+
+func (e *toolRejection) Error() string     { return e.message }
+func (e *toolRejection) ErrorCode() string { return "tool_rejected" }
+func (e *toolRejection) HTTPStatus() int {
+	if match := returnedStatus.FindStringSubmatch(e.message); match != nil {
+		status, _ := strconv.Atoi(match[1])
+		return status
+	}
+	return 0
 }
 
 func sseData(raw []byte) json.RawMessage {

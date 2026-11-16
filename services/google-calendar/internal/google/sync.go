@@ -20,6 +20,7 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"github.com/GAMch1k/life-os/pkg/activity"
+	"github.com/GAMch1k/life-os/pkg/diagnostics"
 	"github.com/GAMch1k/life-os/services/google-calendar/internal/calendar"
 	store "github.com/GAMch1k/life-os/services/google-calendar/internal/repository/generated"
 	"github.com/GAMch1k/life-os/services/google-calendar/internal/sources"
@@ -943,7 +944,9 @@ func logCode(err error) string {
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return "timeout"
 	}
-	return "failed"
+	// Anything else by its kind: a status, a timeout, DNS, SQLSTATE, or the
+	// Go type, never its message.
+	return diagnostics.ErrorCode(err)
 }
 
 // safeCode keeps a provider's error code only when it has a code's form.

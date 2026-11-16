@@ -47,6 +47,11 @@ func (e *APIError) Error() string {
 	return text
 }
 
+// HTTPStatus and ErrorCode are what a log line keeps of the refusal
+// (pkg/diagnostics.ErrorCode), never its message.
+func (e *APIError) HTTPStatus() int   { return e.Status }
+func (e *APIError) ErrorCode() string { return e.Code }
+
 // SessionEnded means the consent is over: it expired, the owner revoked it
 // at the bank, or the provider closed or no longer knows the session.
 func (e *APIError) SessionEnded() bool {

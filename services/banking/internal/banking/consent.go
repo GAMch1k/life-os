@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/GAMch1k/life-os/pkg/activity"
+	"github.com/GAMch1k/life-os/pkg/diagnostics"
 	"github.com/GAMch1k/life-os/pkg/notify"
 	store "github.com/GAMch1k/life-os/services/banking/internal/repository/generated"
 )
@@ -106,7 +107,7 @@ func (s *Service) remind(ctx context.Context, conn store.BankConnection, notice 
 		DedupeKey: fmt.Sprintf("%s:%s:%s:%s", ConsentCategory, uuidString(conn.ID), consentKey(conn), notice),
 	})
 	if err != nil {
-		s.logger.Warn("the bank consent notice was not sent; retrying later", "connection", uuidString(conn.ID), "notice", notice, "error", err)
+		s.logger.Warn("the bank consent notice was not sent; retrying later", "connection", uuidString(conn.ID), "notice", notice, "error", diagnostics.ErrorCode(err))
 		return
 	}
 	if err := s.queries.SetConsentNotice(ctx, store.SetConsentNoticeParams{Notice: &notice, NoticeFor: conn.ConsentValidUntil, Now: timestamptz(s.now()), ID: conn.ID}); err != nil {

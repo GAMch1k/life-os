@@ -191,7 +191,7 @@ func (c *NtfyChannel) Send(ctx context.Context, n Notification) error {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64*1024))
 		return nil
 	}
-	err = fmt.Errorf("ntfy refused the notification: %d %s", resp.StatusCode, ntfyErrorText(resp))
+	err = &ntfyRefusal{status: resp.StatusCode, text: ntfyErrorText(resp)}
 	switch {
 	case resp.StatusCode == http.StatusTooManyRequests, resp.StatusCode == http.StatusRequestTimeout, resp.StatusCode >= 500:
 		return err
@@ -199,6 +199,20 @@ func (c *NtfyChannel) Send(ctx context.Context, n Notification) error {
 		return Permanent(err)
 	}
 }
+
+// ntfyRefusal is ntfy's refusal: its status, which the log keeps
+// (pkg/diagnostics.ErrorCode), and its words, which the delivery's last
+// error keeps for Status.
+type ntfyRefusal struct {
+	status int
+	text   string
+}
+
+func (e *ntfyRefusal) Error() string {
+	return fmt.Sprintf("ntfy refused the notification: %d %s", e.status, e.text)
+}
+
+func (e *ntfyRefusal) HTTPStatus() int { return e.status }
 
 // ntfyErrorText is ntfy's own error (`{"code":40101,"error":"unauthorized"}`)
 // or the start of the response body.

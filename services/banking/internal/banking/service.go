@@ -22,6 +22,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/GAMch1k/life-os/pkg/activity"
+	"github.com/GAMch1k/life-os/pkg/diagnostics"
 	"github.com/GAMch1k/life-os/pkg/notify"
 	"github.com/GAMch1k/life-os/services/banking/internal/enablebanking"
 	"github.com/GAMch1k/life-os/services/banking/internal/finance"
@@ -323,7 +324,7 @@ func (s *Service) Connect(ctx context.Context, code, state string, psu *enableba
 	accounts := storedAccounts(pending.Institution, session.Accounts)
 	if len(accounts) == 0 {
 		if err := s.bank.DeleteSession(ctx, session.ID, psu); err != nil {
-			s.logger.Warn("ending a session without accounts failed", "error", err)
+			s.logger.Warn("ending a session without accounts failed", "error", diagnostics.ErrorCode(err))
 		}
 		return store.BankConnection{}, ErrNoAccounts
 	}
@@ -376,7 +377,7 @@ func (s *Service) Connect(ctx context.Context, code, state string, psu *enableba
 	if renewed && previousSession != nil {
 		if old, err := s.sealer.Open(previousSession, previousNonce); err == nil && string(old) != session.ID {
 			if err := s.bank.DeleteSession(ctx, string(old), psu); err != nil && !sessionGone(err) {
-				s.logger.Warn("ending the replaced bank session failed", "connection", uuidString(row.ID), "error", err)
+				s.logger.Warn("ending the replaced bank session failed", "connection", uuidString(row.ID), "error", diagnostics.ErrorCode(err))
 			}
 		}
 	}
@@ -399,7 +400,7 @@ func (s *Service) Connect(ctx context.Context, code, state string, psu *enableba
 	defer cancel()
 	synced, err := s.runSync(syncCtx, row, TriggerConnect, psu)
 	if err != nil {
-		s.logger.Warn("the first sync failed", "connection", uuidString(row.ID), "error", err)
+		s.logger.Warn("the first sync failed", "connection", uuidString(row.ID), "error", diagnostics.ErrorCode(err))
 		synced = row
 		if current, getErr := s.queries.GetConnection(ctx, row.ID); getErr == nil {
 			synced = current
@@ -479,7 +480,7 @@ func (s *Service) Disconnect(ctx context.Context, id pgtype.UUID, psu *enableban
 			}
 			revoked = err == nil || sessionGone(err)
 			if !revoked {
-				s.logger.Warn("ending the bank session at the provider failed; it ends with the consent", "connection", uuidString(id), "error", err)
+				s.logger.Warn("ending the bank session at the provider failed; it ends with the consent", "connection", uuidString(id), "error", diagnostics.ErrorCode(err))
 			}
 		}
 		now := s.now()
@@ -504,7 +505,7 @@ func (s *Service) Disconnect(ctx context.Context, id pgtype.UUID, psu *enableban
 // archive asks Finance to archive a disconnected connection's accounts.
 func (s *Service) archive(ctx context.Context, conn store.BankConnection) {
 	if err := s.finance.RemoveConnection(ctx, uuidString(conn.ID)); err != nil {
-		s.logger.Warn("Finance did not archive the disconnected bank's accounts yet; retrying later", "connection", uuidString(conn.ID), "error", err)
+		s.logger.Warn("Finance did not archive the disconnected bank's accounts yet; retrying later", "connection", uuidString(conn.ID), "error", diagnostics.ErrorCode(err))
 		return
 	}
 	if err := s.queries.ClearArchivePending(ctx, store.ClearArchivePendingParams{Now: timestamptz(s.now()), ID: conn.ID}); err != nil {

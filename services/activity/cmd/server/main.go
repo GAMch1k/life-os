@@ -43,12 +43,22 @@ func run(ctx context.Context) error {
 	// Diagnostics older than 90 days go at start and once a day, also
 	// while no service sends any.
 	pruning, stopPruning := context.WithCancel(ctx)
-	go handler.RunDiagnosticsPruner(pruning, 24*time.Hour, app.Logger())
-	app.OnShutdown(func(context.Context) error {
+	pruned := make(chan struct{})
+	go func() {
+		defer close(pruned)
+		handler.RunDiagnosticsPruner(pruning, 24*time.Hour, app.Logger())
+	}()
+	// Shutdown hooks run last-registered first: the pruner stops (and its
+	// query ends) before the pool closes.
+	app.OnShutdown(database.ClosePool(pool))
+	app.OnShutdown(func(shutdown context.Context) error {
 		stopPruning()
+		select {
+		case <-pruned:
+		case <-shutdown.Done():
+		}
 		return nil
 	})
-	app.OnShutdown(database.ClosePool(pool))
 
 	return app.Run(fmt.Sprintf(":%d", cfg.Port))
 }
