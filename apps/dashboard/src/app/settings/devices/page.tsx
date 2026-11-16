@@ -4,6 +4,7 @@ import { DevicesSettings } from "@/components/devices-settings";
 import { SettingsNav } from "@/components/security-log";
 import { listDevices } from "@/lib/auth/account-credentials";
 import { accountPage } from "@/lib/auth/page-context";
+import { recentlyAuthenticated } from "@/lib/auth/reauth";
 import { userTimeZone } from "@/lib/user-time-zone";
 
 export const metadata: Metadata = { title: "Devices · Life OS" };
@@ -16,10 +17,14 @@ export const dynamic = "force-dynamic";
  */
 export default async function DevicesPage() {
   const { rt, principal, admin } = await accountPage("/settings/devices");
-  const [devices, timeZone, legacy] = await Promise.all([
+  const [devices, timeZone, legacy, recentAuth] = await Promise.all([
     listDevices(rt, principal.userId),
     userTimeZone(),
     rt.legacy.get(),
+    recentlyAuthenticated(rt.pool, {
+      id: principal.sessionId,
+      createdAt: principal.sessionCreatedAt,
+    }),
   ]);
   return (
     <DevicesSettings
@@ -27,6 +32,7 @@ export default async function DevicesPage() {
       legacyAccess={legacy && principal.role === "owner"}
       nav={<SettingsNav admin={admin} current="/settings/devices" />}
       publicUrl={rt.env.publicUrl}
+      recentAuth={recentAuth}
       timeZone={timeZone}
     />
   );

@@ -4,6 +4,7 @@ import { Smartphone } from "lucide-react";
 import { useState, useTransition } from "react";
 
 import { AccountPage } from "@/components/account-page";
+import { ReauthPrompt } from "@/components/reauth-prompt";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 
@@ -20,14 +21,18 @@ export function PairDevice({
   cancelLink,
   challenge,
   publicUrl,
+  recentAuth,
   state,
 }: {
   cancelLink: string;
   /** The app's challenge; null when the link the app opened was incomplete. */
   challenge: string | null;
   publicUrl: string;
+  /** Signed in, or the password re-entered, within 12 hours. */
+  recentAuth: boolean;
   state?: string;
 }) {
+  const [recent, setRecent] = useState(recentAuth);
   const [error, setError] = useState<string>();
   const [pending, startTransition] = useTransition();
   const host = new URL(publicUrl).host;
@@ -42,8 +47,9 @@ export function PairDevice({
       }).catch(() => null);
       const body = (await response?.json().catch(() => null)) as {
         link?: string;
-        error?: { message?: string };
+        error?: { code?: string; message?: string };
       } | null;
+      if (body?.error?.code === "reauth_required") return setRecent(false);
       if (!response?.ok || !body?.link?.startsWith(PAIRING_LINK)) {
         return setError(
           body?.error?.message ?? "Could not make a pairing code. Try again.",
@@ -87,9 +93,16 @@ export function PairDevice({
           {error}
         </p>
       ) : null}
-      <Button disabled={pending} onClick={pair} type="button">
-        {pending ? "Pairing…" : "Pair"}
-      </Button>
+      {recent ? (
+        <Button disabled={pending} onClick={pair} type="button">
+          {pending ? "Pairing…" : "Pair"}
+        </Button>
+      ) : (
+        <ReauthPrompt
+          description="A paired phone stays signed in, so pairing one needs a sign-in from the last 12 hours, or your password."
+          onConfirmed={() => setRecent(true)}
+        />
+      )}
       <Button
         disabled={pending}
         onClick={cancel}

@@ -15,6 +15,7 @@ import {
   pruneExpiredKeys,
 } from "./keys";
 import { McpTokenVerifier, pruneOAuthClients } from "./oauth";
+import { processRevocations } from "./security-hooks";
 import { LegacyUseLog, noteSigningKey, pruneSecurityLog } from "./security-log";
 import { createAuth, mcpResource } from "./server";
 import { LoginThrottle } from "./throttle";
@@ -124,8 +125,21 @@ export function startSecurityLog(rt: CheckRuntime) {
     ),
   );
   rt.keyCleanup?.();
+  // Credential revocations that an admin action, a password reset, or a
+  // password change could not finish at once (security-hooks.ts).
+  const revocations = () =>
+    processRevocations(rt.pool).catch((error) =>
+      console.error(
+        "keys: credential revocations will be retried",
+        (error as Error).message,
+      ),
+    );
+  void revocations();
   setInterval(() => void rt.legacyUses?.flush(), 60_000).unref();
-  setInterval(() => rt.keyCleanup?.(), 60_000).unref();
+  setInterval(() => {
+    void rt.keyCleanup?.();
+    void revocations();
+  }, 60_000).unref();
   setInterval(prune, 24 * 60 * 60 * 1000).unref();
 }
 

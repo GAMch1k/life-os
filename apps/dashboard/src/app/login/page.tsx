@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 
 import { LoginForm } from "@/components/login-form";
 import { PairDevice } from "@/components/pair-device";
-import { oauthLoginContinuation } from "@/lib/auth/oauth-pages";
+import { oauthLoginDecision } from "@/lib/auth/oauth-pages";
 import { loginContext, safeNext } from "@/lib/auth/page-context";
 import { isChallenge, isPairingState, pairingLink } from "@/lib/auth/pairing";
 import { authRuntime } from "@/lib/auth/runtime";
@@ -20,7 +20,9 @@ export const dynamic = "force-dynamic";
  *    asks to pair the phone and sends the browser to lifeos://pair, and
  *    nowhere else.
  *  - An MCP client's OAuth request (signed by the OAuth provider): signed
- *    in, the browser goes on to the provider's authorize endpoint.
+ *    in, the browser goes on to the provider's authorize endpoint; when the
+ *    client asks for a fresh sign-in (prompt=login, or a max_age the
+ *    session is older than), after signing in again.
  */
 export default async function LoginPage({ searchParams }: PageProps<"/login">) {
   const params = await searchParams;
@@ -44,6 +46,7 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
           )}
           challenge={valid ? (challenge as string) : null}
           publicUrl={context.publicUrl}
+          recentAuth={context.recentAuth}
           state={isPairingState(state) ? state : undefined}
         />
       );
@@ -51,10 +54,12 @@ export default async function LoginPage({ searchParams }: PageProps<"/login">) {
     return <LoginForm context={context} next={`/login?${query.toString()}`} />;
   }
 
-  const authorize = await oauthLoginContinuation(authRuntime(), params);
-  if (authorize) {
-    if (context.signedIn) redirect(authorize);
-    return <LoginForm context={context} navigate="document" next={authorize} />;
+  const oauth = await oauthLoginDecision(authRuntime(), params, context);
+  if (oauth?.action === "continue") redirect(oauth.url);
+  if (oauth?.action === "sign-in") {
+    return (
+      <LoginForm context={context} navigate="document" next={oauth.next} />
+    );
   }
 
   const next = safeNext(params.next);

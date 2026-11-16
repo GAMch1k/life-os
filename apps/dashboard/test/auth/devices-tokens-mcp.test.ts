@@ -24,7 +24,7 @@ import {
 import { processKeyCleanup } from "../../src/lib/auth/keys";
 import {
   consentRequest,
-  oauthLoginContinuation,
+  oauthLoginDecision,
 } from "../../src/lib/auth/oauth-pages";
 import * as cli from "../../scripts/lifeos-auth.mjs";
 import { totp } from "./authenticators";
@@ -347,8 +347,8 @@ describe("pairing a phone", { skip }, () => {
     for (const body of [
       { code },
       { code, name: "" },
-      { code, name: "x".repeat(65) },
-      { code, name: "bell\u0007" },
+      // Nothing left once control and format characters are dropped.
+      { code, name: "\u0007​\n" },
       { code, name: "Phone", verifier: "short" },
     ]) {
       r = await native(w, "POST", "/api/auth/devices/pair", {
@@ -358,6 +358,15 @@ describe("pairing a phone", { skip }, () => {
       assert.equal(r.status, 400, JSON.stringify(body));
       assert.equal(r.data.error.code, "bad_request");
     }
+    // A name is cleaned as the app cleans it, not refused: control, format,
+    // and separator characters dropped, at most 64 UTF-16 units.
+    r = await native(w, "POST", "/api/auth/devices/pair", {
+      body: { code, name: `bell\u0007​ ${"x".repeat(70)}` },
+      address: "203.0.113.71",
+    });
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    assert.equal(r.data.name, `bell ${"x".repeat(59)}`);
+    await native(w, "POST", "/api/auth/devices/sign-out", { key: r.data.key });
   });
 
   test("only a real sign-in makes codes; never a browser on another site", async () => {
@@ -465,6 +474,13 @@ describe("device keys and the watch's key", { skip }, () => {
     ] as const) {
       const r = await nativeCheck(w, method, uri, key);
       assert.equal(r.status, status, `${method} ${uri}`);
+      if (status === 403) {
+        // Not a scope: a device key never reaches MCP.
+        assert.equal(
+          r.headers.get("x-life-os-auth-error"),
+          "credential_not_allowed",
+        );
+      }
     }
     // The account API: who it is, but nothing to manage.
     const info = await native(w, "GET", "/api/account", { key });
@@ -871,26 +887,25 @@ describe("personal API tokens", { skip }, () => {
       name: "reader",
       scopes: ["tasks:read", "food:write"],
     });
-    for (const [method, uri, status] of [
-      ["GET", "/api/tasks/v1/tasks", 204],
-      ["POST", "/api/tasks/v1/tasks", 403],
-      ["GET", "/api/food/v1/shopping-items", 204],
-      ["POST", "/api/food/v1/shopping-items", 204],
-      ["POST", "/api/integrations/recipe-import/v1/imports", 204],
-      ["GET", "/api/finance/v1/accounts", 403],
-      ["GET", "/api/integrations/banking/v1/connections", 403],
-      ["GET", "/android/updates", 403],
-      ["POST", "/api/mcp/mcp", 403],
-      ["GET", "/api/status", 403],
+    // A module its scopes do not cover is insufficient_scope; a route no
+    // token ever reaches, credential_not_allowed.
+    const scope = "insufficient_scope";
+    const never = "credential_not_allowed";
+    for (const [method, uri, status, code] of [
+      ["GET", "/api/tasks/v1/tasks", 204, null],
+      ["POST", "/api/tasks/v1/tasks", 403, scope],
+      ["GET", "/api/food/v1/shopping-items", 204, null],
+      ["POST", "/api/food/v1/shopping-items", 204, null],
+      ["POST", "/api/integrations/recipe-import/v1/imports", 204, null],
+      ["GET", "/api/finance/v1/accounts", 403, scope],
+      ["GET", "/api/integrations/banking/v1/connections", 403, scope],
+      ["GET", "/android/updates", 403, never],
+      ["POST", "/api/mcp/mcp", 403, never],
+      ["GET", "/api/status", 403, never],
     ] as const) {
       const r = await nativeCheck(w, method, uri, token);
       assert.equal(r.status, status, `${method} ${uri}`);
-      if (status === 403) {
-        assert.equal(
-          r.headers.get("x-life-os-auth-error"),
-          "insufficient_scope",
-        );
-      }
+      assert.equal(r.headers.get("x-life-os-auth-error"), code, uri);
     }
     const ok = await nativeCheck(w, "GET", "/api/tasks/v1/tasks", token);
     const c = claims(w, ok);
@@ -1206,19 +1221,25 @@ describe("MCP over OAuth", { skip }, () => {
     assert.equal(r.status, 302, JSON.stringify(r.data));
     const login = searchParams(r.headers.get("location")!);
     assert.equal(login.url.pathname, "/login");
-    const next = await oauthLoginContinuation(w.rt, login.params);
-    assert.ok(next?.startsWith("/api/auth/oauth2/authorize?"), next ?? "");
+    const decision = await oauthLoginDecision(w.rt, login.params, {
+      signedIn: false,
+      signedInAt: null,
+    });
+    assert.equal(decision?.action, "sign-in");
+    const next = decision?.action === "sign-in" ? decision.next : "";
+    assert.ok(next.startsWith("/api/auth/oauth2/authorize?"), next);
     // A request changed on the way is not continued.
     assert.equal(
-      await oauthLoginContinuation(w.rt, {
-        ...login.params,
-        redirect_uri: "http://127.0.0.1:1/x",
-      }),
+      await oauthLoginDecision(
+        w.rt,
+        { ...login.params, redirect_uri: "http://127.0.0.1:1/x" },
+        { signedIn: false, signedInAt: null },
+      ),
       null,
     );
 
     // Signed in, the login page goes on: to the consent page.
-    r = await w.owner.req(next!, { headers: navigation });
+    r = await w.owner.req(next, { headers: navigation });
     assert.equal(r.status, 302, JSON.stringify(r.data));
     const consent = searchParams(r.headers.get("location")!);
     assert.equal(consent.url.pathname, "/oauth/consent");

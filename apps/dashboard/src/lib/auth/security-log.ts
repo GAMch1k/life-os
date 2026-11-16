@@ -53,6 +53,8 @@ export const SECURITY_EVENT_KINDS = {
   oauth_consent_given: "App connected",
   oauth_consent_revoked: "App disconnected",
   signed_out_everywhere: "Signed out everywhere",
+  credentials_revoked: "Devices, tokens, and apps signed out",
+  password_confirmed: "Password confirmed",
 } as const;
 
 export type SecurityEventKind = keyof typeof SECURITY_EVENT_KINDS;

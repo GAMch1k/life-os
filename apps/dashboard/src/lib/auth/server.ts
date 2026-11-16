@@ -38,6 +38,7 @@ import {
   requestHost,
 } from "./origin";
 import { hashPassword, verifyPassword } from "./password";
+import { mayAddSecondFactor, recentlyAuthenticated } from "./reauth";
 import { hasSecondFactor, isFresh } from "./roles";
 import {
   beforeSecurityHook,
@@ -430,6 +431,61 @@ export function createAuth(
 
         // Who makes the request, for the security log's entry afterwards.
         await beforeSecurityHook(ctx);
+
+        // Proving it is still you (src/lib/auth/reauth.ts): an OAuth
+        // consent outlives the session, so it needs a recent sign-in or the
+        // password; adding a second factor needs the current one (or, with
+        // none yet, the password from the last 5 minutes for a passkey; the
+        // authenticator app asks for the password itself).
+        if (
+          (path === "/oauth2/consent" &&
+            (ctx.body as { accept?: unknown } | undefined)?.accept === true) ||
+          path === "/passkey/generate-register-options" ||
+          path === "/passkey/verify-registration" ||
+          path === "/two-factor/enable"
+        ) {
+          const current = (await getSessionFromCtx(ctx).catch(() => null)) as {
+            user: { id: string };
+            session: {
+              id: string;
+              createdAt: Date | string;
+              secondFactor?: boolean | null;
+            };
+          } | null;
+          if (current) {
+            if (path === "/oauth2/consent") {
+              if (!(await recentlyAuthenticated(pool, current.session))) {
+                throw new APIError("FORBIDDEN", {
+                  code: "REAUTH_REQUIRED",
+                  message:
+                    "Confirm your password first: you signed in more than 12 hours ago.",
+                });
+              }
+            } else {
+              const may = await mayAddSecondFactor(pool, {
+                id: current.session.id,
+                userId: current.user.id,
+                secondFactor: current.session.secondFactor,
+              });
+              const passwordInBody = path === "/two-factor/enable";
+              if (
+                may === "second_factor_sign_in_required" ||
+                (may === "password_required" && !passwordInBody)
+              ) {
+                throw new APIError("FORBIDDEN", {
+                  code:
+                    may === "second_factor_sign_in_required"
+                      ? "SECOND_FACTOR_SIGN_IN_REQUIRED"
+                      : "PASSWORD_REQUIRED",
+                  message:
+                    may === "second_factor_sign_in_required"
+                      ? "Sign in again with your authenticator app or passkey to add another second factor."
+                      : "Confirm your password first.",
+                });
+              }
+            }
+          }
+        }
 
         if (path === "/sign-up/email" || SIGN_IN_PATHS.has(path)) {
           if (!loginOriginAllowed(env, kind, headers)) {

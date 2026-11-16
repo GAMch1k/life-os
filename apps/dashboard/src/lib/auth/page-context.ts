@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 
 import { adminGate } from "./admin";
 import { type CheckResult, checkRequest } from "./check";
+import { recentlyAuthenticated } from "./reauth";
 import { isAdminRole } from "./roles";
 import { authRuntime } from "./runtime";
 import { insecureLoginAllowed } from "./server";
@@ -23,6 +24,10 @@ export type LoginContext = {
   /** Passkeys work only on the public address's origin. */
   passkeyOrigin: string;
   signedIn: boolean;
+  /** When this browser's session signed in (ms since 1970), if it has one. */
+  signedInAt: number | null;
+  /** Signed in, or the password re-entered, within 12 hours. */
+  recentAuth: boolean;
 };
 
 export async function loginContext(): Promise<LoginContext> {
@@ -34,12 +39,23 @@ export async function loginContext(): Promise<LoginContext> {
   } catch {
     result = null;
   }
+  const session =
+    result?.status === 204 && result.principal.via === "session"
+      ? result.principal
+      : null;
   return {
     publicUrl: rt.env.publicUrl,
     insecureAllowed: insecureLoginAllowed(rt.env, requestHeaders),
     accountExists: await firstAccountExists(rt.pool).catch(() => true),
     passkeyOrigin: new URL(rt.env.publicUrl).origin,
-    signedIn: result?.status === 204 && result.principal.via === "session",
+    signedIn: session !== null,
+    signedInAt: session?.sessionCreatedAt?.getTime() ?? null,
+    recentAuth: session
+      ? await recentlyAuthenticated(rt.pool, {
+          id: session.sessionId,
+          createdAt: session.sessionCreatedAt,
+        }).catch(() => false)
+      : false,
   };
 }
 

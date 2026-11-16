@@ -7,6 +7,7 @@ import { useId, useState, useTransition } from "react";
 
 import { CopyButton } from "@/components/copy-button";
 import { QrCode } from "@/components/qr-code";
+import { ReauthPrompt } from "@/components/reauth-prompt";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -36,6 +37,7 @@ export function DevicesSettings({
   legacyAccess,
   nav,
   publicUrl,
+  recentAuth,
   timeZone,
 }: {
   devices: DeviceInfo[];
@@ -43,6 +45,8 @@ export function DevicesSettings({
   legacyAccess: boolean;
   nav?: React.ReactNode;
   publicUrl: string;
+  /** Signed in, or the password re-entered, within 12 hours. */
+  recentAuth: boolean;
   timeZone: string;
 }) {
   return (
@@ -68,7 +72,11 @@ export function DevicesSettings({
           </AlertDescription>
         </Alert>
       ) : null}
-      <PairCard publicUrl={publicUrl} timeZone={timeZone} />
+      <PairCard
+        publicUrl={publicUrl}
+        recentAuth={recentAuth}
+        timeZone={timeZone}
+      />
       <DeviceList devices={devices} timeZone={timeZone} />
     </div>
   );
@@ -76,12 +84,15 @@ export function DevicesSettings({
 
 function PairCard({
   publicUrl,
+  recentAuth,
   timeZone,
 }: {
   publicUrl: string;
+  recentAuth: boolean;
   timeZone: string;
 }) {
   const id = useId();
+  const [recent, setRecent] = useState(recentAuth);
   const [pairing, setPairing] = useState<Pairing>();
   const [error, setError] = useState<string>();
   const [busy, startTransition] = useTransition();
@@ -95,7 +106,11 @@ function PairCard({
         body: "{}",
       }).catch(() => null);
       const body = (await response?.json().catch(() => null)) as
-        (Pairing & { error?: { message?: string } }) | null;
+        (Pairing & { error?: { code?: string; message?: string } }) | null;
+      if (body?.error?.code === "reauth_required") {
+        setPairing(undefined);
+        return setRecent(false);
+      }
       if (!response?.ok || !body?.link) {
         setPairing(undefined);
         return setError(
@@ -161,13 +176,18 @@ function PairCard({
               </div>
             </div>
           </div>
-        ) : (
+        ) : recent ? (
           <div>
             <Button disabled={busy} onClick={makeCode} type="button">
               <QrCodeIcon aria-hidden="true" />
               Show a pairing code
             </Button>
           </div>
+        ) : (
+          <ReauthPrompt
+            description="A paired phone stays signed in, so pairing one needs a sign-in from the last 12 hours, or your password."
+            onConfirmed={() => setRecent(true)}
+          />
         )}
         {error ? (
           <p className="text-destructive" role="alert">

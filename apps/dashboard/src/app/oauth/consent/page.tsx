@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { OAuthConsent } from "@/components/oauth-consent";
 import { consentRequest, queryOf } from "@/lib/auth/oauth-pages";
 import { accountPage } from "@/lib/auth/page-context";
+import { recentlyAuthenticated } from "@/lib/auth/reauth";
 
 export const metadata: Metadata = { title: "Connect an app · Life OS" };
 export const dynamic = "force-dynamic";
@@ -28,8 +29,13 @@ export default async function ConsentPage({
     principal.userId,
   ]);
   const user = rows[0];
+  const recentAuth = await recentlyAuthenticated(rt.pool, {
+    id: principal.sessionId,
+    createdAt: principal.sessionCreatedAt,
+  });
   return (
     <OAuthConsent
+      recentAuth={recentAuth}
       request={request}
       username={user?.username ?? user?.name ?? ""}
     />

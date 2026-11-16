@@ -55,6 +55,11 @@ export const SESSION_FRESH_SECONDS = 12 * 60 * 60;
 export const SETUP_CODE_TTL_HOURS = 24;
 /** The header the setup page sends the setup code in. */
 export const SETUP_CODE_HEADER = "x-lifeos-setup-code";
+/**
+ * The header Settings → Security sends with a password change whose "also
+ * sign out my devices, tokens, and connected apps" is checked.
+ */
+export const REVOKE_CREDENTIALS_HEADER = "x-lifeos-revoke-credentials";
 
 /** Accounts without an email store one under .invalid, which never delivers. */
 export const PLACEHOLDER_EMAIL_DOMAIN = "users.invalid";

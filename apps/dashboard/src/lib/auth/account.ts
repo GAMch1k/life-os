@@ -1,6 +1,7 @@
 import { credentialsRoute } from "./account-credentials";
 import { type CheckRuntime, checkRequest, type Principal } from "./check";
 import type { ServerRole } from "./constants";
+import { recentlyAuthenticated } from "./reauth";
 import { hasSecondFactor } from "./roles";
 import {
   isSecurityKind,
@@ -27,6 +28,13 @@ export type AccountInfo = {
   } | null;
   /** TOTP turned on, or a passkey. */
   secondFactor: boolean;
+  /** This session signed in with a second factor (the token's mfa). */
+  mfa: boolean;
+  /**
+   * This session signed in, or re-entered the password, within 12 hours:
+   * what making a token, a pairing code, or an app's access needs.
+   */
+  recentAuth: boolean;
   legacyAccess: boolean;
   /** Whether any account exists (else /setup is where to start). */
   accountExists: boolean;
@@ -66,6 +74,8 @@ export async function accountInfo(
       via: principal.via,
       user: null,
       secondFactor: false,
+      mfa: false,
+      recentAuth: false,
       legacyAccess,
       accountExists,
     };
@@ -83,6 +93,11 @@ export async function accountInfo(
     via: "session",
     user: rows[0] ?? null,
     secondFactor: await hasSecondFactor(rt.pool, principal.userId),
+    mfa: principal.mfa === true,
+    recentAuth: await recentlyAuthenticated(rt.pool, {
+      id: principal.sessionId,
+      createdAt: principal.sessionCreatedAt,
+    }),
     legacyAccess,
     accountExists,
   };
@@ -126,7 +141,11 @@ export async function accountHandler(
     uri: pathname,
   });
   // A personal token is never enough to manage the account.
-  if (check.status === 403 && check.code === "insufficient_scope") {
+  if (
+    check.status === 403 &&
+    (check.code === "insufficient_scope" ||
+      check.code === "credential_not_allowed")
+  ) {
     return problem(
       401,
       "sign_in_required",

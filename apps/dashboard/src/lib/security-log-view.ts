@@ -17,6 +17,16 @@ const METHODS: Record<string, string> = {
   totp: "with an authenticator code",
   recovery_code: "with a recovery code",
   passkey: "with a passkey",
+  reauth: "re-entering the password",
+};
+
+/** Why an account's devices, tokens, and apps were signed out. */
+const REVOCATIONS: Record<string, string> = {
+  admin_sign_out: "an admin signed the account out",
+  banned: "the account was disabled",
+  deleted: "the account was deleted",
+  password_reset: "the password was reset",
+  password_change: "the password was changed",
 };
 
 const REASONS: Record<string, string> = {
@@ -30,6 +40,7 @@ const REASONS: Record<string, string> = {
   second_factor_required: "needs two-factor sign-in",
   second_factor_sign_in_required: "needs a sign-in with two-factor",
   pairing_code_invalid: "wrong, used, or expired pairing code",
+  password_invalid: "wrong password",
   session_not_fresh: "needs a sign-in from the last 12 hours",
   admin_only: "not an admin",
   sign_in_required: "needs a sign-in",
@@ -108,6 +119,8 @@ export function securityDetail(
         : "";
     case "signed_out_everyone":
       return detail === "keep_devices" ? "paired devices kept" : "";
+    case "credentials_revoked":
+      return REVOCATIONS[detail] ?? reason(detail);
     case "keys_rotated":
       return detail ? `now ${detail}` : "";
     case "admin_refused":

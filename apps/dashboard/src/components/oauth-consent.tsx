@@ -4,6 +4,7 @@ import { Bot } from "lucide-react";
 import { useId, useState, useTransition } from "react";
 
 import { AccountPage } from "@/components/account-page";
+import { ReauthPrompt } from "@/components/reauth-prompt";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -17,13 +18,17 @@ import type { ConsentRequest } from "@/lib/auth/oauth-pages";
  * goes next: back to the app's registered redirect address.
  */
 export function OAuthConsent({
+  recentAuth,
   request,
   username,
 }: {
+  /** Signed in, or the password re-entered, within 12 hours. */
+  recentAuth: boolean;
   request: ConsentRequest;
   username: string;
 }) {
   const id = useId();
+  const [recent, setRecent] = useState(recentAuth);
   const asked = request.ok && request.scopes.length ? request.scopes : [];
   const [write, setWrite] = useState(asked.includes("mcp:write"));
   const [error, setError] = useState<string>();
@@ -78,9 +83,11 @@ export function OAuthConsent({
       const body = (await response?.json().catch(() => null)) as {
         url?: string;
         redirect?: boolean;
+        code?: string;
         message?: string;
         error_description?: string;
       } | null;
+      if (body?.code === "REAUTH_REQUIRED") return setRecent(false);
       if (!response?.ok || typeof body?.url !== "string") {
         return setError(
           body?.error_description ??
@@ -132,13 +139,20 @@ export function OAuthConsent({
           {error}
         </p>
       ) : null}
-      <Button
-        disabled={pending || (scope !== null && scope.length === 0)}
-        onClick={() => answer(true)}
-        type="button"
-      >
-        Allow
-      </Button>
+      {recent ? (
+        <Button
+          disabled={pending || (scope !== null && scope.length === 0)}
+          onClick={() => answer(true)}
+          type="button"
+        >
+          Allow
+        </Button>
+      ) : (
+        <ReauthPrompt
+          description="The app keeps its access after this session, so allowing it needs a sign-in from the last 12 hours, or your password."
+          onConfirmed={() => setRecent(true)}
+        />
+      )}
       <Button
         disabled={pending}
         onClick={() => answer(false)}

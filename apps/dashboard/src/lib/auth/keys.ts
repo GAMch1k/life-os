@@ -208,16 +208,33 @@ export async function listKeys(
     );
 }
 
-/** Control characters and line or paragraph separators. */
-const CONTROL = new RegExp("[\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]");
+/** White space, as Kotlin's isWhitespace: becomes a space. */
+const SPACE = /^[\t\n\v\f\r\u001c-\u001f\p{Z}]$/u;
+/** Control, format, and line or paragraph separator characters: dropped. */
+const INVISIBLE = /^[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]$/u;
 
-/** A device's or token's name: trimmed, 1 to 64 characters, printable. */
+/**
+ * A device's or token's name, cleaned as the phone app cleans it
+ * (docs/api/devices.md, POST /api/auth/devices/pair; the app's
+ * DeviceNames): white space becomes one space, control, format, and
+ * separator characters are dropped, and the rest is cut to 64 UTF-16 units
+ * (never half a surrogate pair) and trimmed. Character by UTF-16 unit, as
+ * the app judges them, so a name the app sends arrives unchanged. null
+ * when nothing is left.
+ */
 export function keyName(value: unknown): string | null {
   if (typeof value !== "string") return null;
-  const name = value.trim().replace(/\s+/g, " ");
-  if (!name || [...name].length > KEY_NAME_MAX) return null;
-  if (CONTROL.test(name)) return null;
-  return name;
+  const text = value.slice(0, 4096);
+  let visible = "";
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    if (SPACE.test(char)) visible += " ";
+    else if (!INVISIBLE.test(char)) visible += char;
+  }
+  let name = visible.replace(/ +/g, " ").trim().slice(0, KEY_NAME_MAX);
+  if (/[\ud800-\udbff]$/.test(name)) name = name.slice(0, -1);
+  name = name.trim();
+  return name || null;
 }
 
 /**
@@ -302,72 +319,174 @@ export type RevokedCredentials = {
 export async function revokeCredentials(
   pool: Pool,
   userId: string | null,
-  options: { keepDevices?: boolean } = {},
+  options: { keepDevices?: boolean; keepSessions?: boolean } = {},
 ): Promise<RevokedCredentials> {
   const client = await pool.connect();
-  const who = userId === null ? "true" : `"referenceId" = $1`;
-  const whoUser = userId === null ? "true" : `"userId" = $1::uuid`;
-  const params = userId === null ? [] : [userId];
   try {
     await client.query("BEGIN");
-    let devices = 0;
-    if (!options.keepDevices) {
-      await client.query(
-        `INSERT INTO device_key_cleanup (key_id)
-         SELECT id FROM apikey WHERE ${who} AND prefix = '${DEVICE_KEY_PREFIX}'
-         ON CONFLICT (key_id) DO NOTHING`,
-        params,
-      );
-      devices =
-        (
-          await client.query(
-            `DELETE FROM apikey WHERE ${who} AND prefix = '${DEVICE_KEY_PREFIX}'`,
-            params,
-          )
-        ).rowCount ?? 0;
-    }
-    const tokens =
-      (
-        await client.query(
-          `DELETE FROM apikey WHERE ${who} AND prefix IS DISTINCT FROM '${DEVICE_KEY_PREFIX}'`,
-          params,
-        )
-      ).rowCount ?? 0;
-    await client.query(
-      `DELETE FROM "oauthAccessToken" WHERE ${whoUser}`,
-      params,
-    );
-    await client.query(
-      `DELETE FROM "oauthRefreshToken" WHERE ${whoUser}`,
-      params,
-    );
-    const grants =
-      (
-        await client.query(
-          `DELETE FROM "oauthConsent" WHERE ${whoUser}`,
-          params,
-        )
-      ).rowCount ?? 0;
-    await client.query(
-      `DELETE FROM pairing_codes WHERE ${userId === null ? "true" : "user_id = $1::uuid"}`,
-      params,
-    );
-    const sessions =
-      (await client.query(`DELETE FROM session WHERE ${whoUser}`, params))
-        .rowCount ?? 0;
-    await client.query(
-      `UPDATE "user" SET "authzVersion" = "authzVersion" + 1, "updatedAt" = now()
-        WHERE ${userId === null ? "true" : "id = $1::uuid"}`,
-      params,
-    );
+    const revoked = await revokeCredentialsIn(client, userId, options);
     await client.query("COMMIT");
-    return { sessions, devices, tokens, grants };
+    return revoked;
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
     throw error;
   } finally {
     client.release();
   }
+}
+
+/**
+ * revokeCredentials' statements, in a transaction the caller opened (the
+ * credential revocation outbox runs them with its own row's deletion).
+ * keepSessions leaves the sessions (a password change keeps the one that
+ * changed it; Better Auth deleted the others).
+ */
+export async function revokeCredentialsIn(
+  client: Queryable,
+  userId: string | null,
+  options: { keepDevices?: boolean; keepSessions?: boolean } = {},
+): Promise<RevokedCredentials> {
+  const who = userId === null ? "true" : `"referenceId" = $1`;
+  const whoUser = userId === null ? "true" : `"userId" = $1::uuid`;
+  const params = userId === null ? [] : [userId];
+  let devices = 0;
+  if (!options.keepDevices) {
+    await client.query(
+      `INSERT INTO device_key_cleanup (key_id)
+       SELECT id FROM apikey WHERE ${who} AND prefix = '${DEVICE_KEY_PREFIX}'
+       ON CONFLICT (key_id) DO NOTHING`,
+      params,
+    );
+    devices =
+      (
+        await client.query(
+          `DELETE FROM apikey WHERE ${who} AND prefix = '${DEVICE_KEY_PREFIX}'`,
+          params,
+        )
+      ).rowCount ?? 0;
+  }
+  const tokens =
+    (
+      await client.query(
+        `DELETE FROM apikey WHERE ${who} AND prefix IS DISTINCT FROM '${DEVICE_KEY_PREFIX}'`,
+        params,
+      )
+    ).rowCount ?? 0;
+  await client.query(`DELETE FROM "oauthAccessToken" WHERE ${whoUser}`, params);
+  await client.query(
+    `DELETE FROM "oauthRefreshToken" WHERE ${whoUser}`,
+    params,
+  );
+  const grants =
+    (await client.query(`DELETE FROM "oauthConsent" WHERE ${whoUser}`, params))
+      .rowCount ?? 0;
+  await client.query(
+    `DELETE FROM pairing_codes WHERE ${userId === null ? "true" : "user_id = $1::uuid"}`,
+    params,
+  );
+  const sessions = options.keepSessions
+    ? 0
+    : ((await client.query(`DELETE FROM session WHERE ${whoUser}`, params))
+        .rowCount ?? 0);
+  await client.query(
+    `UPDATE "user" SET "authzVersion" = "authzVersion" + 1, "updatedAt" = now()
+      WHERE ${userId === null ? "true" : "id = $1::uuid"}`,
+    params,
+  );
+  return { sessions, devices, tokens, grants };
+}
+
+/** Why an account's credentials are revoked through the outbox. */
+export type RevocationReason =
+  | "admin_sign_out"
+  | "banned"
+  | "deleted"
+  | "password_reset"
+  | "password_change";
+
+/**
+ * Notes that an account's device keys, tokens, and OAuth grants are to be
+ * revoked (credential_revocations), after an action Better Auth ran in its
+ * own transaction: signing the account out, disabling or deleting it, or
+ * resetting or changing its password. processCredentialRevocations does
+ * it, at once and every minute until it is done. Throws when the note
+ * cannot be written, so that the action reports the failure.
+ */
+export async function queueCredentialRevocation(
+  db: Queryable,
+  userId: string,
+  reason: RevocationReason,
+  options: { keepSessions?: boolean } = {},
+): Promise<void> {
+  await db.query(
+    `INSERT INTO credential_revocations (user_id, reason, keep_sessions)
+     VALUES ($1, $2, $3)`,
+    [userId, reason, options.keepSessions === true],
+  );
+}
+
+/**
+ * Works off credential_revocations: each in one transaction with deleting
+ * its note, so it is done exactly once; a failure leaves the note for the
+ * next run (every minute). onDone hears of each, for the security log.
+ */
+export async function processCredentialRevocations(
+  pool: Pool,
+  onDone?: (
+    entry: { userId: string; reason: string },
+    revoked: RevokedCredentials,
+  ) => Promise<void> | void,
+): Promise<number> {
+  const { rows } = await pool.query<{
+    id: string;
+    user_id: string;
+    reason: string;
+    keep_sessions: boolean;
+  }>(
+    `SELECT id, user_id, reason, keep_sessions FROM credential_revocations
+      WHERE last_attempt_at IS NULL OR last_attempt_at < now() - interval '30 seconds'
+      ORDER BY created_at LIMIT 20`,
+  );
+  let done = 0;
+  for (const row of rows) {
+    const client = await pool.connect();
+    let revoked: RevokedCredentials | null = null;
+    try {
+      await client.query("BEGIN");
+      const { rowCount } = await client.query(
+        "DELETE FROM credential_revocations WHERE id = $1",
+        [row.id],
+      );
+      // Another run took it meanwhile.
+      if (rowCount) {
+        revoked = await revokeCredentialsIn(client, row.user_id, {
+          keepSessions: row.keep_sessions,
+        });
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => undefined);
+      console.error(
+        "keys: an account's credentials were not revoked yet",
+        error instanceof Error ? error.message : error,
+      );
+      await pool
+        .query(
+          `UPDATE credential_revocations
+              SET attempts = attempts + 1, last_attempt_at = now()
+            WHERE id = $1`,
+          [row.id],
+        )
+        .catch(() => undefined);
+    } finally {
+      client.release();
+    }
+    if (revoked) {
+      done += 1;
+      await onDone?.({ userId: row.user_id, reason: row.reason }, revoked);
+    }
+  }
+  return done;
 }
 
 /**

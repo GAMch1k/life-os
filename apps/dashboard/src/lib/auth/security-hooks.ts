@@ -6,7 +6,12 @@ import {
 } from "better-auth/api";
 import type { Pool } from "pg";
 
-import { revokeCredentials } from "./keys";
+import { REVOKE_CREDENTIALS_HEADER } from "./constants";
+import {
+  processCredentialRevocations,
+  queueCredentialRevocation,
+  type RevocationReason,
+} from "./keys";
 import {
   recordFailedSignIn,
   recordSecurityEvent,
@@ -369,6 +374,13 @@ export async function afterSecurityHook(ctx: HookContext, pool: Pool) {
           subject: actor,
           detail: failed?.code ?? null,
         });
+        // "Also sign out my devices, tokens, and connected apps" (checked
+        // by default in Settings → Security): this session stays.
+        if (!failed && headers?.get(REVOKE_CREDENTIALS_HEADER) === "1") {
+          await revokeThroughOutbox(pool, actor, "password_change", {
+            keepSessions: true,
+          });
+        }
       }
       return;
     case "/reset-password": {
@@ -378,6 +390,11 @@ export async function afterSecurityHook(ctx: HookContext, pool: Pool) {
           subject,
           detail: failed?.code ?? "reset_link",
         });
+      }
+      // A reset link (an admin's, or ./setup.sh recover-owner's) ends the
+      // account's devices, tokens, and connected apps with its sessions.
+      if (subject && !failed) {
+        await revokeThroughOutbox(pool, subject, "password_reset");
       }
       return;
     }
@@ -442,26 +459,73 @@ export async function afterSecurityHook(ctx: HookContext, pool: Pool) {
     ) {
       detail = body.role;
     }
+    await record(adminKind, { actor, subject: target, detail });
     // Signing an account out, disabling it, and deleting it end everything
     // it signed in with: sessions (Better Auth's endpoint did), device
     // keys (their push subscriptions follow), tokens, and connected apps
-    // (docs/architecture/multi-user.md#devices-tokens-mcp). API keys name
+    // (docs/architecture/multi-user.md#devices-tokens-mcp), through the
+    // outbox, so that a failure is retried rather than lost. API keys name
     // their account in text, without a foreign key, so a deleted account's
-    // go here too.
-    if (
-      !failed &&
-      target &&
-      (ctx.path === "/admin/revoke-user-sessions" ||
-        ctx.path === "/admin/ban-user" ||
-        ctx.path === "/admin/remove-user")
-    ) {
-      await revokeCredentials(pool, target).catch((error) =>
-        console.error(
-          "admin: the account's keys were not revoked",
-          error instanceof Error ? error.message : error,
-        ),
-      );
+    // go too.
+    const reason = ADMIN_REVOCATIONS[ctx.path];
+    if (!failed && target && reason) {
+      await revokeThroughOutbox(pool, target, reason);
     }
-    await record(adminKind, { actor, subject: target, detail });
   }
+}
+
+/** The admin actions that revoke an account's credentials, and why. */
+const ADMIN_REVOCATIONS: Record<string, RevocationReason> = {
+  "/admin/revoke-user-sessions": "admin_sign_out",
+  "/admin/ban-user": "banned",
+  "/admin/remove-user": "deleted",
+};
+
+/**
+ * Works off the credential revocation outbox, writing each into the
+ * security log (src/lib/auth/keys.ts processCredentialRevocations). The
+ * Dashboard runs it every minute too.
+ */
+export function processRevocations(pool: Pool) {
+  return processCredentialRevocations(pool, (entry, revoked) =>
+    recordSecurityEvent(pool, {
+      kind: "credentials_revoked",
+      subjectUserId: entry.userId,
+      detail: entry.reason,
+      count: Math.max(1, revoked.devices + revoked.tokens + revoked.grants),
+    }),
+  );
+}
+
+/**
+ * Notes an account's credentials for revocation and works the outbox off
+ * at once. When the note cannot be written, the action answers with an
+ * error (its own change, such as the ban, is done), so that it is not
+ * silently lost; a revocation that fails after it is retried every minute.
+ */
+async function revokeThroughOutbox(
+  pool: Pool,
+  userId: string,
+  reason: RevocationReason,
+  options: { keepSessions?: boolean } = {},
+) {
+  try {
+    await queueCredentialRevocation(pool, userId, reason, options);
+  } catch (error) {
+    console.error(
+      "keys: an account's credentials could not be queued for revocation",
+      error instanceof Error ? error.message : error,
+    );
+    throw new APIError("INTERNAL_SERVER_ERROR", {
+      code: "CREDENTIALS_NOT_REVOKED",
+      message:
+        "The account's devices, tokens, and connected apps could not be signed out: try again.",
+    });
+  }
+  await processRevocations(pool).catch((error) =>
+    console.error(
+      "keys: credential revocations will be retried",
+      error instanceof Error ? error.message : error,
+    ),
+  );
 }

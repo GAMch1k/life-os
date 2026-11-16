@@ -14,10 +14,12 @@ import { useRouter } from "next/navigation";
 import { type FormEvent, useId, useState, useTransition } from "react";
 
 import { CopyButton } from "@/components/copy-button";
+import { ReauthPrompt } from "@/components/reauth-prompt";
 import { QrCode } from "@/components/qr-code";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Card,
   CardAction,
@@ -38,6 +40,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import type { AccountInfo, SessionInfo } from "@/lib/auth/account";
 import { authClient, authErrorMessage } from "@/lib/auth/client";
+import { REVOKE_CREDENTIALS_HEADER } from "@/lib/auth/constants";
 import {
   describeUserAgent,
   totpSecret,
@@ -132,6 +135,8 @@ export function SecuritySettings({
 
       <TwoFactorCard enabled={totpEnabled} username={user?.username ?? ""} />
       <PasskeysCard
+        hasSecondFactor={info.secondFactor}
+        mfa={info.mfa}
         passkeyOrigin={passkeyOrigin}
         passkeys={passkeys}
         publicUrl={publicUrl}
@@ -451,11 +456,17 @@ function TwoFactorCard({
 }
 
 function PasskeysCard({
+  hasSecondFactor,
+  mfa,
   passkeyOrigin,
   passkeys,
   publicUrl,
   timeZone,
 }: {
+  /** The account has an authenticator app or a passkey already. */
+  hasSecondFactor: boolean;
+  /** This session signed in with it. */
+  mfa: boolean;
   passkeyOrigin: string;
   passkeys: Passkey[];
   publicUrl: string;
@@ -467,6 +478,12 @@ function PasskeysCard({
   const [error, setError] = useState<string>();
   const [busy, startTransition] = useTransition();
   const here = usePasskeysHere(passkeyOrigin);
+  // Adding a passkey needs the current second factor (a session that
+  // signed in with it) or, with none yet, the password just now
+  // (src/lib/auth/reauth.ts).
+  const [confirmed, setConfirmed] = useState(false);
+  const blocked = hasSecondFactor && !mfa;
+  const needsPassword = !hasSecondFactor && !mfa && !confirmed;
 
   const add = (event: FormEvent) => {
     event.preventDefault();
@@ -476,6 +493,9 @@ function PasskeysCard({
         name: name.trim() || "Passkey",
       });
       if (result?.error) {
+        if ((result.error as { code?: string }).code === "PASSWORD_REQUIRED") {
+          setConfirmed(false);
+        }
         return setError(
           authErrorMessage(result.error, "The passkey was not added."),
         );
@@ -550,6 +570,16 @@ function PasskeysCard({
             </a>
             : add one there.
           </p>
+        ) : here && blocked ? (
+          <p className="text-muted-foreground">
+            To add another passkey, sign out and sign in again with your
+            authenticator app or a passkey.
+          </p>
+        ) : here && needsPassword ? (
+          <ReauthPrompt
+            description="Adding your first passkey needs your password."
+            onConfirmed={() => setConfirmed(true)}
+          />
         ) : here ? (
           <form
             className="flex flex-wrap items-end gap-2"
@@ -590,6 +620,9 @@ function PasswordCard() {
   >({});
   const [notice, setNotice] = useState<string>();
   const [busy, startTransition] = useTransition();
+  // Checked by default: whoever knew the old password may have paired a
+  // phone, made a token, or connected an app.
+  const [signOutDevices, setSignOutDevices] = useState(true);
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -604,6 +637,9 @@ function PasswordCard() {
         currentPassword: current,
         newPassword: next,
         revokeOtherSessions: true,
+        fetchOptions: signOutDevices
+          ? { headers: { [REVOKE_CREDENTIALS_HEADER]: "1" } }
+          : undefined,
       });
       if (error) {
         return setErrors({
@@ -613,7 +649,11 @@ function PasswordCard() {
       setCurrent("");
       setNext("");
       setConfirm("");
-      setNotice("Password changed. Your other sessions were signed out.");
+      setNotice(
+        signOutDevices
+          ? "Password changed. Your other sessions, devices, API tokens, and connected apps were signed out."
+          : "Password changed. Your other sessions were signed out.",
+      );
     });
   };
 
@@ -669,6 +709,18 @@ function PasswordCard() {
                 value={confirm}
               />
               <FieldError>{errors.confirm}</FieldError>
+            </Field>
+            <Field orientation="horizontal">
+              <Checkbox
+                checked={signOutDevices}
+                id={`${id}-devices`}
+                onCheckedChange={(checked) =>
+                  setSignOutDevices(checked === true)
+                }
+              />
+              <FieldLabel className="font-normal" htmlFor={`${id}-devices`}>
+                Also sign out my paired devices, API tokens, and connected apps
+              </FieldLabel>
             </Field>
           </FieldGroup>
           {errors.form ? (

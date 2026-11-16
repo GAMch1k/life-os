@@ -6,6 +6,7 @@ import { type FormEvent, useId, useState, useTransition } from "react";
 
 import { CopyButton } from "@/components/copy-button";
 import { DatePicker } from "@/components/date-picker";
+import { ReauthPrompt } from "@/components/reauth-prompt";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -73,11 +74,14 @@ type Created = { token: string; name: string; actor: string | null };
 export function TokensSettings({
   nav,
   publicUrl,
+  recentAuth,
   timeZone,
   tokens,
 }: {
   nav?: React.ReactNode;
   publicUrl: string;
+  /** Signed in, or the password re-entered, within 12 hours. */
+  recentAuth: boolean;
   timeZone: string;
   tokens: TokenInfo[];
 }) {
@@ -100,7 +104,7 @@ export function TokensSettings({
           publicUrl={publicUrl}
         />
       ) : (
-        <CreateTokenCard onCreated={setCreated} />
+        <CreateTokenCard onCreated={setCreated} recentAuth={recentAuth} />
       )}
       <TokenList timeZone={timeZone} tokens={tokens} />
     </div>
@@ -151,11 +155,14 @@ function NewToken({
 
 function CreateTokenCard({
   onCreated,
+  recentAuth,
 }: {
   onCreated: (created: Created) => void;
+  recentAuth: boolean;
 }) {
   const id = useId();
   const router = useRouter();
+  const [recent, setRecent] = useState(recentAuth);
   const [name, setName] = useState("");
   const [access, setAccess] = useState<Record<string, Access>>({});
   const [expires, setExpires] = useState(() => dayFromNow(90));
@@ -188,8 +195,9 @@ function CreateTokenCard({
         token?: string;
         name?: string;
         actor?: string | null;
-        error?: { message?: string };
+        error?: { code?: string; message?: string };
       } | null;
+      if (body?.error?.code === "reauth_required") return setRecent(false);
       if (!response?.ok || !body?.token) {
         return setError(body?.error?.message ?? "Could not make the token.");
       }
@@ -219,7 +227,18 @@ function CreateTokenCard({
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <form className="grid gap-4" noValidate onSubmit={submit}>
+        {recent ? null : (
+          <ReauthPrompt
+            description="A token outlives this session, so making one needs a sign-in from the last 12 hours, or your password."
+            onConfirmed={() => setRecent(true)}
+          />
+        )}
+        <form
+          className="grid gap-4"
+          hidden={!recent}
+          noValidate
+          onSubmit={submit}
+        >
           <FieldGroup>
             <Field>
               <FieldLabel htmlFor={`${id}-name`}>Name</FieldLabel>

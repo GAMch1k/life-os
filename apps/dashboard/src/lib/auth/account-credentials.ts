@@ -20,8 +20,22 @@ import {
   isPairingState,
   pairingLink,
 } from "./pairing";
+import {
+  confirmPassword,
+  ReauthLimiter,
+  recentlyAuthenticated,
+} from "./reauth";
 import { normalizeScopes } from "./scopes";
-import { recordSecurityEvent } from "./security-log";
+import { recordFailedSignIn, recordSecurityEvent } from "./security-log";
+
+const LIMITER = Symbol.for("lifeos.auth.reauth-limiter");
+
+/** Wrong re-entered passwords, per session (shared by the routes). */
+function reauthLimiter(): ReauthLimiter {
+  const holder = globalThis as { [LIMITER]?: ReauthLimiter };
+  holder[LIMITER] ??= new ReauthLimiter();
+  return holder[LIMITER];
+}
 
 /**
  * The account's devices, API tokens, and connected apps
@@ -216,8 +230,67 @@ export async function credentialsRoute(
 ): Promise<Response | null> {
   const method = request.method;
   const userId = principal.userId;
+  const session = {
+    id: principal.sessionId,
+    createdAt: principal.sessionCreatedAt,
+  };
+  // Making a credential that outlives the session needs a recent sign-in
+  // or the password (src/lib/auth/reauth.ts).
+  const reauthRequired = async () =>
+    !(await recentlyAuthenticated(rt.pool, session))
+      ? problem(
+          403,
+          "reauth_required",
+          "Confirm your password first: you signed in more than 12 hours ago.",
+        )
+      : null;
+
+  if (pathname === "/api/account/confirm-password" && method === "POST") {
+    if (!principal.sessionId) {
+      return problem(
+        401,
+        "sign_in_required",
+        "Sign in with your account to do this.",
+      );
+    }
+    const input = await body(request);
+    const result = await confirmPassword(
+      rt.pool,
+      reauthLimiter(),
+      { id: principal.sessionId, userId },
+      input.password,
+    );
+    if (result === "limited") {
+      return problem(
+        429,
+        "too_many_attempts",
+        "Too many wrong passwords. Try again in 15 minutes, or sign in again.",
+      );
+    }
+    if (result === "invalid") {
+      await recordFailedSignIn(rt.pool, {
+        subjectUserId: userId,
+        headers: request.headers,
+        detail: "reauth:password_invalid",
+      });
+      return problem(400, "password_invalid", "That password is not right.");
+    }
+    await recordSecurityEvent(rt.pool, {
+      kind: "password_confirmed",
+      actorUserId: userId,
+      subjectUserId: userId,
+      via: "session",
+      headers: request.headers,
+    });
+    return new Response(null, {
+      status: 204,
+      headers: { "cache-control": "no-store" },
+    });
+  }
 
   if (pathname === "/api/account/devices/pairing-codes" && method === "POST") {
+    const refused = await reauthRequired();
+    if (refused) return refused;
     const input = await body(request);
     const challenge = input.challenge;
     const state = input.state;
@@ -279,6 +352,8 @@ export async function credentialsRoute(
     return json(200, { tokens: await listTokens(rt, userId) });
   }
   if (pathname === "/api/account/tokens" && method === "POST") {
+    const refused = await reauthRequired();
+    if (refused) return refused;
     return createToken(rt, principal, request);
   }
   const token = new RegExp(`^/api/account/tokens/(${UUID})$`).exec(pathname);
