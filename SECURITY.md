@@ -36,7 +36,13 @@ Please don't disclose the problem publicly until a fix is released, or until you
 
 ## The preview's known limits
 
-**Life OS has no login of its own yet.** Whoever can reach its gateway can read and change everything in it. That is how the preview is meant to be run, not a vulnerability: it listens only on `127.0.0.1`, and you reach it through an SSH tunnel, a VPN, or Cloudflare Access ([Access it safely](docs/install/access.md)). Never expose it straight to the internet. Ways to get past those boundaries, or to reach Life OS's data without them, are worth reporting.
+**Life OS's login is new.** Accounts, sessions, two-factor sign-in, device keys, API tokens, and MCP's OAuth came in `v0.1.0-preview.7` ([Accounts](docs/install/accounts.md)). A way to get past them, to act as another account, or to reach Life OS's data without signing in is a vulnerability: please report it. Until the login has had more scrutiny, the preview still listens only on `127.0.0.1` by default, and you reach it through an SSH tunnel, a VPN, or Cloudflare Access ([Access it safely](docs/install/access.md)); never expose it straight to the internet.
+
+These are how Life OS is meant to work, not vulnerabilities:
+
+- **Legacy access.** After an update from before accounts, legacy access is on: a request without a sign-in acts as the owner, as before, until the owner turns it off ([Legacy access](docs/install/accounts.md#legacy-access)). A new install has it off.
+- **Plain HTTP.** Signing in over plain HTTP works on this server's loopback (`http://127.0.0.1`, `http://localhost`, as through an SSH tunnel), where the session cookie has no `Secure` flag because Safari refuses it there, and on a LAN or VPN address only once the owner allows it (`LIFE_OS_INSECURE_LOGIN_HOSTS`, `./setup.sh gateway --allow-http-login`): there the password crosses that network unencrypted. Every other host gets the `Secure` `__Host-` cookie and never signs in over plain HTTP.
+- **The server is the trust root.** Whoever can run commands on the server (or read its `.env`) can make a setup code, reset the owner's password, and turn legacy access on.
 
 ## Verifying what you run
 

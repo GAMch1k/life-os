@@ -3,8 +3,9 @@
 # (docs/architecture/networking.md#other-containers-on-the-host).
 #
 # Docker forwards connections from every container on this host to a published
-# port, and the gateway trusts everything that doesn't come through Cloudflare,
-# so any other container could use Life OS without a login. This drops
+# port, and the gateway needs no Cloudflare Access for what doesn't come
+# through Cloudflare, so any other container could reach Life OS: its login,
+# and while legacy access is on, everything without signing in. This drops
 # forwarded connections to LIFE_OS_GATEWAY_BIND_ADDRESS:LIFE_OS_GATEWAY_PORT
 # unless they arrive on the WireGuard interface. Cloudflare's tunnel reaches
 # the gateway inside Docker (http://gateway:80) and connections from the host

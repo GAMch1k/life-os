@@ -17,9 +17,15 @@ It makes the key pair that signs the pushes and turns the channel on. Then, in t
 
 Without an https address, the script asks for your email address: push services want a way to reach the sender. Keep the key pair (it is in `.env`): a new one makes every phone turn notifications on again.
 
-The app itself needs Life OS behind Cloudflare Access today: see [Phone and watch apps](phone-apps.md).
+The app (0.5.0 or newer) pairs with your Life OS account and needs an https address the phone reaches; Cloudflare Access is no longer needed: see [Phone and watch apps](phone-apps.md).
 
-To send a test push: `curl -X POST http://127.0.0.1:3000/api/notifications/v1/push/test -H 'X-Life-OS-Actor: user'`.
+To send a test push to every phone, make an [API token](accounts.md#api-tokens) with **Notifications: read and write**, then on the server:
+
+```sh
+curl -X POST -H "Authorization: Bearer lo_tok_..." http://127.0.0.1:3000/api/notifications/v1/push/test
+```
+
+It answers each phone's outcome. Use your gateway's address and port if you changed them.
 
 ## ntfy
 

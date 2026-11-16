@@ -256,13 +256,13 @@ The gateway needs nothing after a service redeploy, because it resolves service 
 
 The gateway listens on `LIFE_OS_GATEWAY_BIND_ADDRESS:LIFE_OS_GATEWAY_PORT` (default `127.0.0.1:3000`). It serves Life OS only to four Host names: `127.0.0.1`, `localhost`, `LIFE_OS_GATEWAY_BIND_ADDRESS`, and `LIFE_OS_PUBLIC_HOSTNAME`. Any other Host gets no answer (444). At every start, the gateway renders them into `server_name` from `infra/nginx/life-os.conf.template`. After you change either setting, recreate it: `docker compose up -d --no-build --no-deps --force-recreate gateway`. `tools/check-gateway-hosts`, part of `tools/check`, checks the list. See [Gateway hosts](docs/architecture/networking.md#gateway-hosts).
 
-Life OS has no login of its own, so choose one access model deliberately:
+Life OS has a login ([Accounts](docs/install/accounts.md)), but it is new, and while legacy access is on anyone who reaches the gateway acts as the owner without signing in. So the way you expose the gateway is still the first gate; choose one access model deliberately:
 
 | Model | Setup | Who gets in |
 | --- | --- | --- |
-| Loopback behind a host Nginx | Keep `127.0.0.1`; terminate TLS and Basic Auth in the host Nginx ([example](docs/host-nginx-example.conf)). | Whoever passes your host Nginx. |
-| WireGuard | Set `LIFE_OS_GATEWAY_BIND_ADDRESS` to the server's WireGuard address. Never use a public or LAN address. | Every allowed peer. |
-| Cloudflare Tunnel and Access (the reference deployment) | Below. | The email addresses you allow. |
+| Loopback behind a host Nginx | Keep `127.0.0.1`; terminate TLS (and Basic Auth, if you want a gate before the login) in the host Nginx ([example](docs/host-nginx-example.conf)). | Whoever passes your host Nginx, then signs in. |
+| WireGuard | Set `LIFE_OS_GATEWAY_BIND_ADDRESS` to the server's WireGuard address. Never use a public or LAN address. Signing in at that plain-HTTP address needs it in `LIFE_OS_INSECURE_LOGIN_HOSTS` (`./setup.sh gateway --allow-http-login`). | Every allowed peer reaches the login. |
+| Cloudflare Tunnel and Access (the reference deployment) | Below. | The email addresses you allow, then their sign-in. |
 
 Installing the Dashboard on a phone, and sharing to Life OS, need a service worker. Browsers allow service workers only over https or on localhost, so they don't work over a plain-http WireGuard address.
 
@@ -275,7 +275,7 @@ Installing the Dashboard on a phone, and sharing to Life OS, need a service work
 5. Only then start the connector. It reaches the gateway over the internal `edge` network, so the gateway can stay on loopback. In `.env`, add `cloudflare` to `COMPOSE_PROFILES` and set `LIFE_OS_CLOUDFLARE_TUNNEL_TOKEN=<from the tunnel>`. Then run `docker compose up -d --no-build --no-deps cloudflared`, and recreate the Dashboard and the gateway (`docker compose up -d --no-build --no-deps dashboard gateway`), which read the module list. Recreate the notifications service too, so notification links use the new `LIFE_OS_PUBLIC_URL`: `docker compose up -d --no-build --no-deps notifications`.
 6. Verify with `tools/check-ingress` (only the gateway publishes a port, and each network holds only its intended members) and `docker compose ps cloudflared` (healthy). `tools/check-cloudflare-access` checks that anonymous requests to `LIFE_OS_PUBLIC_HOSTNAME` are refused; set `LIFE_OS_CF_ACCESS_TEAM_DOMAIN` to your team's `<team>.cloudflareaccess.com` first. Its second half needs an Access service token: add a Service Auth policy for the token, and put the token in `LIFE_OS_CF_ACCESS_CLIENT_ID` and `LIFE_OS_CF_ACCESS_CLIENT_SECRET`.
 
-The repository uses a service token only for that check. Browsers and the installed phone app get through Access with the email code and its 24-hour session. How the Android and Wear OS apps authenticate is not documented in this repository. The tunnel token is a credential: never commit it or paste it anywhere.
+The repository uses a service token only for that check. Browsers and the installed phone app get through Access with the email code and its 24-hour session. The Android and Wear OS apps (0.5.0 and newer) pair with your account and send a device key of their own; behind Access they also need a service token ([Phone and watch apps](docs/install/phone-apps.md)). The tunnel token is a credential: never commit it or paste it anywhere.
 
 ## 10. Notifications
 
@@ -291,7 +291,7 @@ With `LIFE_OS_NOTIFICATIONS_CHANNELS` empty, notifications are only stored and l
 
 2. Optionally, set `LIFE_OS_WEBPUSH_SUBJECT=mailto:you@example.com` (default: `LIFE_OS_PUBLIC_URL`). Keep the key pair: a new pair invalidates every device's subscription. The private key is a secret.
 3. Apply with `docker compose up -d --no-build --no-deps notifications`, then turn on notifications in the Android app.
-4. Add `webpush` to `LIFE_OS_NOTIFICATIONS_CHANNELS` and run the same command again. To send a test push: `curl -X POST http://127.0.0.1:3000/api/notifications/v1/push/test -H 'X-Life-OS-Actor: dev:curl'`.
+4. Add `webpush` to `LIFE_OS_NOTIFICATIONS_CHANNELS` and run the same command again. To send a test push: `curl -X POST http://127.0.0.1:3000/api/notifications/v1/push/test -H 'Authorization: Bearer lo_tok_...'`, with an [API token](docs/install/accounts.md#api-tokens) that has Notifications: read and write (while legacy access is on, `-H 'X-Life-OS-Actor: dev:curl'` instead).
 
 Pushes travel through Google's FCM. Some networks, such as some corporate Wi-Fi, block it, and nothing in Life OS can work around that. See [Notifications → Web push](docs/services/notifications.md#web-push).
 

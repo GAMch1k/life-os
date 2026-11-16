@@ -75,7 +75,7 @@ Cloudflare Access is the login in front of the hostname. It runs at Cloudflare's
 | Access group `Life OS users` | Include → Emails → the owner's address |
 | Policy `Acceptance test` (temporary) | **Service Auth**, Include → Service Token `life-os-acceptance` |
 
-Access denies by default, so only addresses in `Life OS users` receive a code. To add a person, add their email to the group; to remove one, delete it. Life OS has no user accounts of its own, so everyone admitted shares the same data.
+Access denies by default, so only addresses in `Life OS users` receive a code. To add a person, add their email to the group; to remove one, delete it. Access is the outer gate: behind it, each person signs in with their Life OS account ([Accounts](../install/accounts.md)), and while legacy access is on, everyone Access admits acts as the owner.
 
 **The installed phone app** ([Dashboard → Install on your phone](../frontend/dashboard.md#install-on-your-phone)) stays behind Access: its manifest (`/app.webmanifest`, linked with `crossorigin="use-credentials"` so the Access cookie goes with it), icons (`/icons/`), and service worker (`/sw.js`) are same-origin paths of the public hostname with no bypass. When the session has expired, the app opens on the Access login: enter the code once. A share sent to Life OS while the session had expired is lost (Access turns its POST into the login) and must be shared again.
 

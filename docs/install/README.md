@@ -11,7 +11,7 @@ This guide installs Life OS from its published Docker images with one setup scri
 
 ## What you need
 
-- **A Linux server**, 64-bit x86 (amd64). ARM images (Raspberry Pi, ARM cloud servers) come later. Voice notes need a processor with AVX2, which Intel's Core and Xeon processors have since 2013 and AMD's since 2015, but many Celeron, Pentium, and Atom chips have not: Whisper does not run without it.
+- **A Linux server**, 64-bit x86 (amd64). ARM images (Raspberry Pi, ARM cloud servers) come later. Voice notes need a processor with AVX2, which Intel's Core and Xeon processors have since 2013 and AMD's since 2015, but many Celeron, Pentium, and Atom chips have not: Whisper does not run without it, so `setup.sh` leaves voice notes off there and says why.
 - **Memory:** 2 GB at least, 4 GB to be comfortable. Life OS uses about 0.5 GB when idle. Whisper can use up to 2 GB while it transcribes a voice note, and each AI run uses a few hundred MB.
 - **Disk:** 10 GB free. The images take about 3 GB and the Whisper model about 0.5 GB; your data and the nightly backups grow from there.
 - **Docker Engine 25 or newer with the Compose plugin** (`docker compose`, version 2.27 or newer). Install it from [docs.docker.com](https://docs.docker.com/engine/install/). The reference server runs Docker Engine 29 and Compose 5.1.
@@ -20,11 +20,12 @@ This guide installs Life OS from its published Docker images with one setup scri
 
 ## Quick start
 
-1. **Download a release** into a new directory. Pick the version from the [releases page](https://github.com/GAMch1k/life-os/releases):
+1. **Download a release** into a new directory. This takes the newest one from the [releases page](https://github.com/GAMch1k/life-os/releases); to install another, set `version` to its tag instead (such as `version=v0.1.0-preview.7`):
 
    ```sh
    mkdir ~/life-os && cd ~/life-os
-   version=v0.1.0-preview.6
+   version=$(curl -fsSL https://api.github.com/repos/GAMch1k/life-os/releases | sed -n 's/^ *"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1)
+   echo "$version"
    release=https://github.com/GAMch1k/life-os/releases/download/$version
    for file in compose.yaml setup.sh SHA256SUMS; do curl -fsSLO "$release/$file"; done
    # GitHub serves .env.example as default.env.example
@@ -62,7 +63,7 @@ This guide installs Life OS from its published Docker images with one setup scri
    ssh -N -L 3000:127.0.0.1:3000 you@your-server
    ```
 
-   Then open <http://127.0.0.1:3000>. It opens the login: go to **Set up the first account**, enter the setup code, and choose a username and password; then turn on two-factor sign-in in Settings → Security ([Accounts](accounts.md)). Start with the **Status** page (`/status`): it shows what works, what is still starting, and what needs you. For everyday use from your phone and laptop, set up [a VPN or Cloudflare Access](access.md).
+   Then open <http://127.0.0.1:3000>. It opens the login: go to **Set up the first account**, enter the setup code, and choose a username and password; then turn on two-factor sign-in in Settings → Security ([Accounts](accounts.md)). Signing in works here in every browser, Safari too, because the tunnel ends on the server's own loopback. At a plain-HTTP LAN or VPN address it is off until you allow it ([Signing in](accounts.md#signing-in)). Start with the **Status** page (`/status`): it shows what works, what is still starting, and what needs you. For everyday use from your phone and laptop, set up [a VPN or Cloudflare Access](access.md).
 
 ## What setup.sh writes
 
@@ -93,7 +94,7 @@ Life OS works without any of them. Each optional module can be turned on during 
 | `./setup.sh ntfy` | Notifications on your phone, through your own ntfy server (`ntfy`, needs `cloudflare`) | [Notifications](notifications.md#ntfy) |
 | `./setup.sh modules on server-health` | The Status page's Server card: memory, disks, and every container on the server (`server-health`; it reads the Docker socket) | [Modules](modules.md) |
 | `./setup.sh webpush` | Notifications on your phone, through the Life OS app (the core) | [Notifications](notifications.md) |
-| `./setup.sh feed` | A calendar feed (ICS), such as holidays or a sports team (the core) | [Calendar feeds](calendar-feeds.md) |
+| `./setup.sh feed` | A calendar feed (ICS), such as holidays or a sports team (the core); `feed list` and `feed remove <id>` list and remove them | [Calendar feeds](calendar-feeds.md) |
 
 The phone and watch apps are on their own page: [Phone and watch apps](phone-apps.md).
 
@@ -103,11 +104,11 @@ The phone and watch apps are on their own page: [Phone and watch apps](phone-app
 | --- | --- |
 | `./setup.sh` | First-time setup: checks, questions, `.env`, integrations. |
 | `./setup.sh up` | Starts Life OS (downloading missing images), waits until it answers, prints the address. |
-| `./setup.sh update [VERSION]` | Backs up, downloads the new images, restarts. See [Updating](updating.md). |
+| `./setup.sh update` | Backs up, downloads this release's images, restarts. Download a newer release's files first: [Updating](updating.md). |
 | `./setup.sh status` | What runs, and which modules are on and set up. Never prints a secret. |
 | `./setup.sh modules [on\|off ID...]` | Lists the optional modules, or turns them on or off ([Modules](modules.md)). |
 | `./setup.sh check` | Only checks the server. |
-| `./setup.sh gateway` | Changes where Life OS listens (`--bind`, `--port`) and its address (`--public-url`). |
+| `./setup.sh gateway` | Changes where Life OS listens (`--bind`, `--port`) and its address (`--public-url`); on a LAN or VPN address, `--allow-http-login` allows signing in there over plain HTTP ([Signing in](accounts.md#signing-in)). |
 | `./setup.sh setup-code` | A one-time code for the first account, while none exists ([Accounts](accounts.md)). |
 | `./setup.sh account-keys` | Adds the accounts' settings to an `.env` from before accounts, in a clone of the repository (`update` does it for a release install). |
 | `./setup.sh recover-owner [--reset-2fa]` | A one-time link to set the owner's password; with `--reset-2fa` also turns off their two-factor ([Locked out](accounts.md#locked-out)). |
@@ -126,6 +127,7 @@ Plain `docker compose` commands work too, from the same directory: `docker compo
 | --- | --- |
 | Timezone, currency | `LIFE_OS_TIMEZONE`, `LIFE_OS_FINANCE_CURRENCY` |
 | Address, where it listens | `LIFE_OS_PUBLIC_URL`, `LIFE_OS_GATEWAY_BIND_ADDRESS`, `LIFE_OS_GATEWAY_PORT` (or `--public-url`, `--bind`, `--port`) |
+| Signing in over plain HTTP at a LAN or VPN `--bind` address | `--allow-http-login` (without it, `--yes` leaves it off) |
 | Image version and registry | `LIFE_OS_VERSION`, `LIFE_OS_IMAGE_REGISTRY` |
 | Modules to turn on | `LIFE_OS_SETUP_MODULES` (comma-separated ids; `ai`, `cloudflare`, and `ntfy` need their own settings below, or a person) |
 | Whisper | `LIFE_OS_SETUP_WHISPER_MODEL` (`tiny`, `base`, `small`, `medium`, `large-v3-turbo`), `LIFE_OS_WHISPER_LANGUAGE` (`auto`, or a code such as `de`; unset keeps the current one) |
