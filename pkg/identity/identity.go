@@ -117,13 +117,27 @@ type Principal struct {
 func (p Principal) IsLegacy() bool { return p.Via == ViaLegacy }
 
 // Error is a refused token. Its message names the problem for logs; the
-// caller gets only "unauthenticated".
-type Error struct{ Reason string }
+// caller gets only "unauthenticated", or "identity_expired" for a genuine
+// token that expired on the way (Expired).
+type Error struct {
+	Reason string
+	// Expired is set only for a token whose signature and claims were
+	// good but whose lifetime ended before it arrived (a long upload, a
+	// slow service): sending the request again gets a new one at the
+	// gateway, so a client retries instead of signing in again.
+	Expired bool
+}
 
 func (e *Error) Error() string { return "identity token refused: " + e.Reason }
 
-// PublicError gives the HTTP answer (pkg/httpserver's error envelope).
+// PublicError gives the HTTP answer (pkg/httpserver's error envelope):
+// 401 identity_expired for an expired token, else 401 unauthenticated. The
+// gateway's own 401 (no credential, or a bad one) is always unauthenticated
+// (docs/api/devices.md#when-a-request-is-refused).
 func (e *Error) PublicError() (status int, code, message string) {
+	if e.Expired {
+		return 401, "identity_expired", "The request's identity expired before it arrived. Send the request again."
+	}
 	return 401, "unauthenticated", "The identity of this request could not be verified."
 }
 
@@ -331,7 +345,7 @@ func (v *Verifier) Verify(token string) (Principal, error) {
 		return Principal{}, refuse("no expiry")
 	}
 	if now.After(exp.Add(Leeway)) {
-		return Principal{}, refuse("expired")
+		return Principal{}, &Error{Reason: "expired", Expired: true}
 	}
 	if nbf, ok := seconds(c.Nbf); ok && now.Add(Leeway).Before(nbf) {
 		return Principal{}, refuse("not yet valid")
