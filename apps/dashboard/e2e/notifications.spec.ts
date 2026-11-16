@@ -154,9 +154,17 @@ test.describe("Notifications", () => {
     await expect(bell(page)).toHaveAccessibleName("Notifications");
     await expect(bell(page)).toHaveAttribute("data-dot", "none");
 
-    // "All notifications" opens the full list.
+    // "All notifications" opens the full list. Opening the popover reads
+    // the list again, and the specs running alongside add notifications
+    // (Human Review) at any time: the list may grow under the pointer and
+    // move the link at the bottom while Playwright clicks its old place
+    // (Release run 43586458746: the click landed elsewhere in the popover,
+    // which stayed open on /tasks). The keyboard activates the link itself,
+    // wherever the list has put it.
     await bell(page).click();
-    await popover.getByRole("link", { name: "All notifications" }).click();
+    await popover
+      .getByRole("link", { name: "All notifications" })
+      .press("Enter");
     await expect(page).toHaveURL(/\/notifications$/);
     await expect(
       page.getByRole("heading", { name: "Notifications", level: 1 }),
