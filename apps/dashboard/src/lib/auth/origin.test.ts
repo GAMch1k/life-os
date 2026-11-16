@@ -89,6 +89,28 @@ test("a cookie write needs Life OS's own origin", () => {
     ),
     true,
   );
+  // Sec-Fetch-Site is not enough on its own: Origin must still be Life
+  // OS's host, with the cookie and without.
+  assert.equal(
+    cookieWriteAllowed(
+      "POST",
+      loopback({
+        origin: "https://elsewhere.example",
+        "sec-fetch-site": "same-origin",
+      }),
+    ),
+    false,
+  );
+  assert.equal(
+    anonymousWriteAllowed(
+      "POST",
+      loopback({
+        origin: "https://elsewhere.example",
+        "sec-fetch-site": "same-origin",
+      }),
+    ),
+    false,
+  );
   // A client that is not a browser (no Origin, no Sec-Fetch-Site) stays
   // as it was; behind HTTPS, loopback is judged as any host.
   assert.equal(anonymousWriteAllowed("POST", loopback({})), true);

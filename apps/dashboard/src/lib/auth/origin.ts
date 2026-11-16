@@ -62,11 +62,13 @@ export function cookieWriteAllowed(
   if (!isUnsafeMethod(method)) return true;
   const site = headers.get("sec-fetch-site");
   if (site && !OWN_SITE.has(site)) return false;
-  // On loopback, Origin cannot tell Life OS from another web app on this
-  // machine: see loopbackNeedsFetchSite.
-  if (isLoopbackLogin(headers)) return site !== null;
   const origin = headers.get("origin");
-  if (origin && origin !== "null") return isOwnOrigin(headers, origin);
+  const ownOrigin =
+    !origin || origin === "null" || isOwnOrigin(headers, origin);
+  // On loopback, Origin cannot tell Life OS from another web app on this
+  // machine (see loopbackNeedsFetchSite): Sec-Fetch-Site must say so too.
+  if (isLoopbackLogin(headers)) return site !== null && ownOrigin;
+  if (origin && origin !== "null") return ownOrigin;
   return site !== null && OWN_SITE.has(site);
 }
 
