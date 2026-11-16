@@ -26,7 +26,7 @@ This page follows Tailscale's own documentation ([Tailscale Serve](https://tails
    ./setup.sh up
    ```
 
-   `host` means a proxy on the server itself, outside Docker: Tailscale reaches the gateway from Docker's own address for the server, which the gateway finds by itself. Tailscale passes on the address you opened (as `Host`), your device's tailnet address (as `X-Forwarded-For`, replacing any a client sent), and `https`.
+   `host` means a proxy on the server itself, outside Docker: Tailscale reaches the gateway from Docker's own address for the server, which the gateway finds by itself. `host` works only with the gateway on `127.0.0.1`, its default, and Docker running as root (the usual install): `./setup.sh gateway` refuses it with another `--bind`, and the gateway leaves it out. With rootless Docker or Docker Desktop, run the proxy in Docker on `lifeos-proxy` instead. Tailscale passes on the address you opened (as `Host`), your device's tailnet address (as `X-Forwarded-For`, replacing any a client sent), and `https`.
 
 3. Open the address on a device of your tailnet, sign in, and check it: the **Status** page, and your device's `100.x` address in **Settings → Security log** ([Check it](../access.md#your-own-reverse-proxy)).
 

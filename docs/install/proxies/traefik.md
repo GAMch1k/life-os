@@ -22,7 +22,8 @@ services:
       - --certificatesResolvers.le.acme.email=you@example.com
       - --certificatesResolvers.le.acme.storage=/letsencrypt/acme.json
       - --certificatesResolvers.le.acme.tlsChallenge=true
-    ports: ["80:80", "443:443"]
+    # IPv4 only, unless Docker's IPv6 is on (see Good to know).
+    ports: ["0.0.0.0:80:80", "0.0.0.0:443:443"]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./letsencrypt:/letsencrypt
@@ -90,3 +91,5 @@ http:
 - **Host and the client's address.** Traefik passes the browser's `Host` on (`passHostHeader`, on by default), and adds the client's address to `X-Forwarded-For`; the gateway takes the last address there that is not a trusted proxy's, so one a client wrote itself never counts.
 - **Uploads and long answers.** Traefik sets no limit on uploads unless you add its buffering middleware; leave it out, or allow 60 MB. Streamed answers pass as they come.
 - **Phone app.** Traefik passes `Authorization` on, so device keys work. Don't put a `basicAuth` or `forwardAuth` middleware on this router.
+- **IPv6.** With Docker's IPv6 off (the default), a port published on every address takes IPv6 visitors in through Docker's own bridge address: Traefik, and so Life OS, sees all of them as that one address, and they share its sign-in limits. Publish on IPv4 only, as above, and give the hostname no `AAAA` record, or turn on IPv6 in Docker.
+- **Traefik's dashboard** stays off here. If you turn it on, never with `--api.insecure` on a published port: it would show anyone your routes, and its API more.

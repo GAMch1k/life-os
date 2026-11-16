@@ -11,7 +11,12 @@ services:
   npm:
     image: jc21/nginx-proxy-manager:2.17.0
     restart: unless-stopped
-    ports: ["80:80", "443:443", "81:81"]
+    # 80 and 443 on IPv4 only, unless Docker's IPv6 is on (below); the admin
+    # page, 81, on the server itself only.
+    ports: ["0.0.0.0:80:80", "0.0.0.0:443:443", "127.0.0.1:81:81"]
+    environment:
+      # Don't believe CDNs' ranges (below).
+      IP_RANGES_FETCH_ENABLED: "false"
     volumes:
       - ./data:/data
       - ./letsencrypt:/etc/letsencrypt
@@ -22,7 +27,15 @@ networks:
     external: true
 ```
 
-With one you already have, add the `lifeos-proxy` network to it as above. Port 81 is its admin page: keep it off the internet.
+With one you already have, add the `lifeos-proxy` network, `IP_RANGES_FETCH_ENABLED`, and those `ports` to it as above.
+
+**The admin page, port 81, never on the network.** It is plain HTTP, Docker's published ports get past a firewall such as `ufw`, and a new Nginx Proxy Manager makes whoever opens it first its admin: that person could point your Life OS hostname at a server of theirs and collect your password and two-factor codes. Publish it on `127.0.0.1` as above, and reach it through SSH from your computer:
+
+```sh
+ssh -N -L 8181:127.0.0.1:81 you@your-server
+```
+
+then open <http://127.0.0.1:8181> and set up the admin account at once.
 
 Point the domain's DNS at the server and open ports 80 and 443 to it. Life OS's login is then on the internet: do what [Before Life OS faces the internet](../access.md#choose-a-way-in) says first.
 
@@ -53,5 +66,8 @@ In the admin page, **Hosts → Proxy Hosts → Add Proxy Host**:
 ## Good to know
 
 - **Host and the client's address.** Nginx Proxy Manager passes the browser's `Host` on and adds the client's address to `X-Forwarded-For`; the gateway takes the last address there that is not a trusted proxy's, so one a client wrote itself never counts.
-- **Its own trust.** Nginx Proxy Manager itself believes an `X-Real-IP` header from any private address (its `nginx.conf`), so a device on your own network could make it pass on an address of its choosing. A client on the internet cannot.
+- **Its own trust.** Nginx Proxy Manager itself believes an `X-Real-IP` header from any private address (`10/8`, `172.16/12`, `192.168/16`, in its `nginx.conf`), and, while it downloads them, from CloudFront's and Cloudflare's ranges. Whoever reaches it from there can make it pass on an address of their choosing, and Life OS then records that one: they get around the per-address sign-in limits and fill the security log with made-up addresses. So:
+  - `IP_RANGES_FETCH_ENABLED: "false"`, as above, so it believes no CDN; put no CDN in front of it.
+  - **IPv6:** with Docker's IPv6 off (the default), a port published on every address takes IPv6 visitors in through Docker's own bridge address, which is private: every IPv6 visitor could claim any address. Publish 80 and 443 on IPv4 only (`0.0.0.0:443:443`, as above) and give the hostname no `AAAA` record, or turn on IPv6 in Docker so that IPv6 visitors keep their own address.
+  - A device on your own network (a private address) can still claim another address. Visitors from the internet over IPv4 cannot.
 - **Phone app.** Without an access list, `Authorization` passes unchanged, so device keys work.

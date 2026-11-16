@@ -13,7 +13,8 @@ services:
   caddy:
     image: caddy:2.11.9-alpine
     restart: unless-stopped
-    ports: ["80:80", "443:443", "443:443/udp"]
+    # IPv4 only, unless Docker's IPv6 is on (see Good to know).
+    ports: ["0.0.0.0:80:80", "0.0.0.0:443:443", "0.0.0.0:443:443/udp"]
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
@@ -76,6 +77,8 @@ With the name you chose. `10.255.249.48/28` is the `lifeos-proxy` network: the g
 - **Host and the client's address.** Caddy passes the browser's `Host` on unchanged, sets `X-Forwarded-For` to the client's address, ignoring one a client sent itself, and `X-Forwarded-Proto` to `https`.
 - **Uploads and long answers.** Caddy limits neither the size of an upload nor how long an answer takes, and passes streamed answers on at once. Nothing to set.
 - **Phone app.** Caddy passes `Authorization` on, so device keys work. Don't add `basic_auth` or `forward_auth` in front of Life OS.
+- **IPv6.** With Docker's IPv6 off (the default), a port published on every address takes IPv6 visitors in through Docker's own bridge address: Caddy, and so Life OS, sees all of them as that one address, and they share its sign-in limits. Publish on IPv4 only, as above, and give the hostname no `AAAA` record, or turn on IPv6 in Docker.
+- **Caddy's admin endpoint** listens on `localhost:2019` inside its container, and is not published: leave it so.
 
 ## Caddy on the server itself
 
@@ -87,4 +90,4 @@ lifeos.example.com {
 }
 ```
 
-and Life OS believes it as `host`, Docker's address for the server: `./setup.sh gateway --public-url https://lifeos.example.com --trusted-proxies host`. For `tls internal` there, `sudo caddy trust` installs the root on the server, and the root is in Caddy's data directory (`/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt` for Debian's package).
+and Life OS believes it as `host`, Docker's address for the server: `./setup.sh gateway --public-url https://lifeos.example.com --trusted-proxies host`. `host` works only with the gateway on `127.0.0.1`, its default, and Docker running as root (the usual install): `./setup.sh gateway` refuses it with another `--bind`, and the gateway leaves it out. With rootless Docker or Docker Desktop, run the proxy in Docker on `lifeos-proxy` instead. For `tls internal` there, `sudo caddy trust` installs the root on the server, and the root is in Caddy's data directory (`/var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt` for Debian's package).
