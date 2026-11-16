@@ -31,8 +31,17 @@ min_compose=2.27
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 umask 077
+
+# The release a file names: compose.yaml's "# Life OS release:" line (the
+# release bundle's, from v0.1.0-preview.7 on) and .env.example's
+# LIFE_OS_VERSION, without its quotes. Empty when it names none. A file
+# saved with Windows line ends (CRLF), or edited by hand with spaces or tabs
+# around the value, names the same release (check_release_files).
+compose_release() { tr -d '\r' <compose.yaml 2>/dev/null | sed -n 's/^# Life OS release: \([^[:space:]]*\)[[:space:]]*$/\1/p' | head -n 1; }
+example_release() { tr -d '\r' <.env.example 2>/dev/null | sed -n "s/^LIFE_OS_VERSION=[[:space:]]*['\"]*\([^'\"[:space:]]*\)['\"]*[[:space:]]*$/\1/p" | head -n 1; }
+
 if [[ -z $release_version && -f .env.example ]]; then
-  release_version=$(tr -d '\r' <.env.example | sed -n "s/^LIFE_OS_VERSION=['\"]*\([^'\"]*\)['\"]*$/\1/p" | head -n 1)
+  release_version=$(example_release)
 fi
 [[ $release_version =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] || release_version=preview
 
@@ -1015,6 +1024,12 @@ cmd_init() {
   currency=${currency^^}
   [[ $currency =~ ^[A-Z]{3}$ ]] || usage_error "the currency must be a three-letter code such as EUR or USD, not '$currency'"
   gateway_values
+  # Your reverse proxies, as ./setup.sh gateway takes them; a new .env has
+  # none without the option (an old one's are not kept by --force-new).
+  if ((trusted_proxies_given)); then
+    trusted_proxies_values
+    require_host_proxy_on_loopback
+  fi
 
   version=${LIFE_OS_VERSION:-$release_version}
   [[ $version =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] || usage_error "LIFE_OS_VERSION '$version' is not an image tag"
@@ -1090,6 +1105,8 @@ cmd_init() {
     timezone "$tz" \
     currency "$currency" \
     backups "$backup_dir"
+  [[ -z $(env_get LIFE_OS_TRUSTED_PROXIES 2>/dev/null || true) ]] \
+    || printf '  %-17s %s\n' 'trusted proxies' "$(env_get LIFE_OS_TRUSTED_PROXIES)"
   ((generated == 0)) || printf '  %-17s %s\n' passwords "$generated generated (never shown)"
   say 'Keep a copy of .env in a password manager or another safe place: backups do not include it.'
 
@@ -1184,6 +1201,8 @@ setup_codex() {
   fi
   require_env
   [[ -f compose.yaml ]] || die "compose.yaml is missing here: download it from the same release as this script"
+  # The sign-in runs in the processor's container, from compose.yaml.
+  check_release_files codex
   ((!assume_yes)) || die 'the Codex sign-in needs you at a terminal: run ./setup.sh codex'
   cat <<'EOF'
 Life OS's AI reads each note you capture and files it as a task, an event, a
@@ -1805,6 +1824,8 @@ setup_ntfy() {
   local url host password again image
   intro 'Push notifications with ntfy' notifications.md#ntfy
   require_env
+  # The password's hash comes from a container of compose.yaml's ntfy image.
+  check_release_files ntfy
   module_is_on cloudflare \
     || die 'ntfy is reached only through the Cloudflare Tunnel: run ./setup.sh cloudflare first'
   if is_set LIFE_OS_NTFY_PHONE_PASSWORD_HASH && module_is_on ntfy; then
@@ -2103,18 +2124,24 @@ trusted_proxies_values() {
   env_values[LIFE_OS_TRUSTED_PROXIES]=$result
 }
 
+# Refuses the trusted proxy host (LIFE_OS_TRUSTED_PROXIES, as the pending
+# change has it, else .env) with a gateway that is not on loopback: host is
+# a proxy on this server, and a gateway published on another address than
+# 127.0.0.1 sees other containers, and with some Docker setups every
+# client, coming from the same address. After gateway_values.
+require_host_proxy_on_loopback() {
+  if [[ ,$(list_current LIFE_OS_TRUSTED_PROXIES), == *,host,* &&
+    $(address_class "${env_values[LIFE_OS_GATEWAY_BIND_ADDRESS]}") != loopback ]]; then
+    usage_error "the trusted proxy host works only with the gateway on 127.0.0.1 (the default), not on ${env_values[LIFE_OS_GATEWAY_BIND_ADDRESS]}: other containers, and with some Docker setups every client, would reach it from the same address as this server's own programs. Keep --bind 127.0.0.1, or name your proxy otherwise (--trusted-proxies)."
+  fi
+}
+
 cmd_gateway() {
   require_env
   step 'Gateway address'
   gateway_values
   ((!trusted_proxies_given)) || trusted_proxies_values
-  # host is a proxy on this server: a gateway published on another address
-  # than 127.0.0.1 sees other containers, and with some Docker setups every
-  # client, coming from the same address.
-  if [[ ,$(list_current LIFE_OS_TRUSTED_PROXIES), == *,host,* &&
-    $(address_class "${env_values[LIFE_OS_GATEWAY_BIND_ADDRESS]}") != loopback ]]; then
-    usage_error "the trusted proxy host works only with the gateway on 127.0.0.1 (the default), not on ${env_values[LIFE_OS_GATEWAY_BIND_ADDRESS]}: other containers, and with some Docker setups every client, would reach it from the same address as this server's own programs. Keep --bind 127.0.0.1, or name your proxy otherwise (--trusted-proxies)."
-  fi
+  require_host_proxy_on_loopback
   env_update
   say "Life OS: $(env_get LIFE_OS_PUBLIC_URL) (listening on $(gateway_bind):$(gateway_port))."
   [[ -z $(env_get LIFE_OS_TRUSTED_PROXIES 2>/dev/null || true) ]] \
@@ -2327,6 +2354,8 @@ cmd_rotate_keys() {
     auth | all) ;;
     *) usage_error "rotate-keys rotates auth (or all), not '$target': services have no keys of their own yet" ;;
   esac
+  # It recreates the services and the Dashboard from compose.yaml.
+  check_release_files rotate-keys
   signing=$(env_get LIFE_OS_IDENTITY_SIGNING_KEY 2>/dev/null || true)
   [[ $signing == '{'*'"x":"'*'}' ]] || die 'there is no signing key (a JWK) to rotate: ./setup.sh update adds one'
   new_key_pair
@@ -2542,13 +2571,6 @@ add_new_settings() {
     say "New settings added to .env: ${added[*]}"
   fi
 }
-
-# The release a file names: compose.yaml's "# Life OS release:" line (the
-# release bundle's, from v0.1.0-preview.7 on) and .env.example's
-# LIFE_OS_VERSION. Empty when it names none. A file saved with Windows line
-# ends (CRLF) names the same release.
-compose_release() { tr -d '\r' <compose.yaml 2>/dev/null | sed -n 's/^# Life OS release: \([^[:space:]]*\)[[:space:]]*$/\1/p' | head -n 1; }
-example_release() { tr -d '\r' <.env.example 2>/dev/null | sed -n "s/^LIFE_OS_VERSION=['\"]*\([^'\"]*\)['\"]*$/\1/p" | head -n 1; }
 
 # The commands that download a release's files over these and update.
 release_download_hint() {
@@ -2815,9 +2837,10 @@ Options:
                            --bind address (LIFE_OS_INSECURE_LOGIN_HOSTS)
   --port PORT              the gateway's port (default 3000)
   --public-url URL         the address you open Life OS at
-  --trusted-proxies LIST   gateway: the reverse proxies whose client address
-                           to believe: 10.255.249.48/28 (a proxy in Docker),
-                           host (one on this server), comma-separated;
+  --trusted-proxies LIST   first setup and gateway: the reverse proxies whose
+                           client address to believe: 10.255.249.48/28 (a
+                           proxy in Docker), host (one on this server, with
+                           the gateway on 127.0.0.1), comma-separated;
                            --trusted-proxies= for none (docs/install/access.md)
   --skip-checks            don't check Docker, memory, and disk first
   --skip-backup            update without backing up first
