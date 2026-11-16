@@ -3,9 +3,13 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 # shellcheck source=tools/lib/settings.bash
 . tools/lib/settings.bash
+# shellcheck source=tools/lib/smoke-auth.bash
+. tools/lib/smoke-auth.bash
 
 # Writes are attributed to this script as a development tool, never to the
-# owner (CONTRIBUTING.md, "Development tools and live data").
+# owner (CONTRIBUTING.md, "Development tools and live data"). With legacy
+# access off, LIFE_OS_SMOKE_TOKEN signs the writes in and
+# LIFE_OS_SMOKE_COOKIE the pages (tools/lib/smoke-auth.bash).
 actor=(-H 'X-Life-OS-Actor: dev:smoke-dashboard')
 
 # The gateway to check, which these records are written to. make life-smoke
@@ -25,7 +29,7 @@ calendar="${dashboard}/api/calendar"
 
 wait_dashboard() {
   for _ in $(seq 1 45); do
-    if curl --fail --silent --show-error "$dashboard" >/dev/null; then return 0; fi
+    if curl "${smoke_page_auth[@]}" --fail --silent --show-error "$dashboard" >/dev/null; then return 0; fi
     sleep 1
   done
   printf 'smoke: dashboard did not become available: %s\n' "$dashboard" >&2
@@ -38,16 +42,16 @@ zone=$(setting LIFE_OS_TIMEZONE)
 zone=${zone:-UTC}
 today=$(TZ=$zone date +%F)
 due_at=$(date -u -d "@$(TZ=$zone date -d "$today 12:00" +%s)" +%FT%TZ)
-curl "${actor[@]}" --fail --silent --show-error -H 'content-type: application/json' \
+curl "${smoke_api_auth[@]}" "${actor[@]}" --fail --silent --show-error -H 'content-type: application/json' \
   -d "{\"title\":\"Dashboard smoke task\",\"dueAt\":\"${due_at}\"}" \
   "$tasks/v1/tasks" >/dev/null
-curl "${actor[@]}" --fail --silent --show-error -H 'content-type: application/json' \
+curl "${smoke_api_auth[@]}" "${actor[@]}" --fail --silent --show-error -H 'content-type: application/json' \
   -d '{"content":"Dashboard smoke capture","source":"manual"}' \
   "$inbox/v1/inbox-items" >/dev/null
 # Tomorrow: Home shows the next event that hasn't started, and an all-day
 # event of today has.
 tomorrow=$(TZ=$zone date -d "$today 12:00 +1 day" +%F)
-curl "${actor[@]}" --fail --silent --show-error -H 'content-type: application/json' \
+curl "${smoke_api_auth[@]}" "${actor[@]}" --fail --silent --show-error -H 'content-type: application/json' \
   -d "{\"title\":\"Dashboard smoke event\",\"allDay\":true,\"startDate\":\"${tomorrow}\",\"endDate\":\"${tomorrow}\"}" \
   "$calendar/v1/events" >/dev/null
 
@@ -57,7 +61,7 @@ wait_dashboard
 expect_page() { # <path> <text>...
   local path=$1 page text
   shift
-  page=$(curl --fail --silent --show-error "$dashboard$path")
+  page=$(curl "${smoke_page_auth[@]}" --fail --silent --show-error "$dashboard$path")
   for text in "$@"; do
     if ! grep --fixed-strings --quiet "$text" <<<"$page"; then
       printf 'smoke: dashboard page %s missing expected text: %s\n' "$path" "$text" >&2

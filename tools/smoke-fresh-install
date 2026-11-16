@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# A stranger's new install, on the disposable verification stack only: legacy
+# access off (LIFE_OS_VERIFY_LEGACY_ACCESS=off), as a new install has it
+# (docs/install/accounts.md), where every other smoke runs with it on. It
+#  - checks that nothing answers without a sign-in: the services' routes are
+#    401, the pages go to the login, and the login and setup pages answer;
+#  - takes a setup code from the Dashboard's container (./setup.sh
+#    setup-code's command), and makes the first account with it in the
+#    browser, at http://127.0.0.1 as through an SSH tunnel; then Chromium,
+#    Firefox, and WebKit (Safari's engine), those Playwright has, sign in at
+#    http://127.0.0.1 and http://localhost and keep their session
+#    (apps/dashboard/e2e-sign-in, playwright.sign-in.config.ts);
+#    LIFE_OS_E2E_BROWSERS names those that must run (CI: all three);
+#  - signs in with the API too, makes a development tool's token, and runs
+#    tools/smoke-core-services and tools/smoke-dashboard with them
+#    (LIFE_OS_SMOKE_TOKEN, LIFE_OS_SMOKE_COOKIE), as the install check does
+#    on a release.
+# Needs the images built (docker compose build) and the Dashboard's
+# node_modules with Playwright's browsers.
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+compose=(./tools/verify-compose)
+gateway=http://127.0.0.1:13001
+export LIFE_OS_VERIFY_LEGACY_ACCESS=off
+work=$(mktemp -d)
+cleanup() {
+  "${compose[@]}" down --volumes --remove-orphans >/dev/null
+  rm -rf "$work"
+}
+trap cleanup EXIT
+fail() {
+  echo "fresh install smoke: $*" >&2
+  exit 1
+}
+username=owner
+password="fresh install $(openssl rand -hex 8)"
+
+"${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
+scale=()
+if "${compose[@]}" config --services | grep -qx processor; then scale=(--scale processor=0); fi
+"${compose[@]}" up --detach --no-build "${scale[@]}" >/dev/null
+
+# The login page needs no sign-in; then each core service, from inside the
+# Dashboard's container, as ./setup.sh up waits for them.
+for _ in $(seq 1 120); do
+  curl --fail --silent --max-time 3 -o /dev/null "$gateway/login" && break
+  sleep 1
+done
+curl --fail --silent --max-time 3 -o /dev/null "$gateway/login" || fail 'the login page does not answer'
+# shellcheck disable=SC2016 # JavaScript, run by node
+probe='Promise.all(process.argv.slice(1).map((s) => fetch(`http://${s}:8080/ready`).then((r) => r.ok, () => false))).then((ok) => process.exit(ok.every(Boolean) ? 0 : 1))'
+for _ in $(seq 1 60); do
+  "${compose[@]}" exec -T dashboard node -e "$probe" tasks inbox calendar finance food calendar-feeds && break
+  sleep 1
+done
+
+# request <method> <path> [curl options…]: status in $code, body in
+# $work/body, headers in $work/headers
+request() {
+  local method=$1 path=$2
+  shift 2
+  code=$(curl --silent --max-time 15 --request "$method" --output "$work/body" --dump-header "$work/headers" \
+    --write-out '%{http_code}' "$@" "$gateway$path")
+}
+expect() { # <status> <method> <path> [curl options…]
+  local want=$1
+  shift
+  request "$@"
+  [[ "$code" == "$want" ]] || { cat "$work/body" >&2; fail "$1 $2: $code, want $want"; }
+}
+
+echo '==> Without a sign-in, nothing but the login'
+expect 401 GET /api/tasks/v1/tasks
+grep -q '"unauthenticated"' "$work/body" || fail "the 401 is not JSON unauthenticated: $(cat "$work/body")"
+expect 401 GET /api/tasks/ready
+expect 401 GET /api/status
+expect 307 GET /tasks
+grep -qi '^location: /login?next=%2Ftasks' "$work/headers" || { cat "$work/headers" >&2; fail '/tasks did not go to the login'; }
+expect 200 GET /login
+expect 200 GET /setup
+
+echo '==> The first account in the browser, then each browser signs in'
+setup_code=$("${compose[@]}" exec -T dashboard node scripts/lifeos-auth.mjs setup-code | sed -n 's/^Setup code: //p')
+[[ -n "$setup_code" ]] || fail 'setup-code printed no code'
+LIFE_OS_E2E_URL=$gateway LIFE_OS_E2E_SETUP_CODE=$setup_code LIFE_OS_E2E_USERNAME=$username LIFE_OS_E2E_PASSWORD=$password \
+  npm --prefix apps/dashboard run test:sign-in -- "$@"
+[[ -z "$("${compose[@]}" exec -T dashboard node scripts/lifeos-auth.mjs setup-code --if-no-account)" ]] \
+  || fail 'a setup code while an account exists'
+
+echo '==> A session and a token of a development tool, for the smokes'
+expect 200 POST /api/auth/sign-in/username -H 'content-type: application/json' -H "origin: $gateway" \
+  --data "$(jq -n --arg u "$username" --arg p "$password" '{username: $u, password: $p}')"
+session=$(grep -i '^set-cookie: lifeos.session=' "$work/headers" | head -n 1 | sed 's/^[^:]*: //; s/;.*//' | tr -d '\r')
+[[ -n "$session" ]] || { cat "$work/headers" >&2; fail 'no session cookie at 127.0.0.1'; }
+if grep -i '^set-cookie: lifeos.session=' "$work/headers" | grep -qi '; *secure'; then
+  fail 'the loopback session cookie is Secure, which Safari refuses on plain HTTP'
+fi
+expect 201 POST /api/account/tokens -H "cookie: $session" -H "origin: $gateway" -H 'content-type: application/json' \
+  --data '{"name":"smoke-fresh-install","scopes":["tasks:write","inbox:write","calendar:write","finance:read"],"devTool":true}'
+token=$(jq -r .token "$work/body")
+[[ "$token" == lo_tok_* ]] || fail "no token: $(cat "$work/body")"
+expect 200 GET /api/tasks/ready -H "authorization: Bearer $token"
+
+echo '==> The smokes, signed in'
+LIFE_OS_SMOKE_GATEWAY=$gateway LIFE_OS_SMOKE_TOKEN=$token LIFE_OS_SMOKE_COOKIE=$session tools/smoke-core-services
+LIFE_OS_SMOKE_GATEWAY=$gateway LIFE_OS_SMOKE_TOKEN=$token LIFE_OS_SMOKE_COOKIE=$session tools/smoke-dashboard
+# The smokes' records are the tool's, never the owner's own.
+for _ in $(seq 1 20); do
+  request GET '/api/activity/v1/activity-events?type=task.created&limit=20' -H "cookie: $session"
+  [[ "$code" == 200 ]] && jq -e '(.items | length) >= 2' "$work/body" >/dev/null && break
+  sleep 0.5
+done
+jq -e '(.items | length) >= 2 and all(.items[]; .actor == {"kind":"dev","name":"smoke-fresh-install"})' "$work/body" >/dev/null \
+  || fail "the smokes' tasks were not created as dev:smoke-fresh-install: $(cat "$work/body")"
+
+echo 'fresh install smoke: ok'

@@ -44,3 +44,5 @@ next-env.d.ts
 # Playwright
 /test-results
 /playwright-report
+/playwright-report-sign-in
+/test-results-sign-in

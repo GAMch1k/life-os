@@ -139,7 +139,7 @@ runs:
         cache-dependency-path: apps/dashboard/package-lock.json
     - shell: bash
       run: npm ci --prefix apps/dashboard --no-audit --no-fund
-    - name: Install Playwright's Chromium and Firefox
+    - name: Install Playwright's Chromium, Firefox, and WebKit
       id: playwright
       shell: bash
       working-directory: apps/dashboard
@@ -148,19 +148,23 @@ runs:
       # (Azure's first, then Ubuntu's own), and apt retried them for 45
       # minutes. Then the browsers install without them: the runner image
       # has the libraries its own Chrome and Firefox need, and the browser
-      # suite fails if one is missing.
+      # suite fails if one is missing. WebKit (the sign-in through an SSH
+      # tunnel, tools/smoke-fresh-install) needs packages the image has not
+      # got: without apt it is left out, with a warning.
       run: |
         if timeout 20 getent hosts archive.ubuntu.com >/dev/null; then
           if ! timeout 20 getent hosts azure.archive.ubuntu.com >/dev/null; then
             echo '::warning::azure.archive.ubuntu.com does not resolve: apt uses the next mirror'
             sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt
           fi
-          if timeout 15m npx playwright install --with-deps chromium firefox; then
+          if timeout 15m npx playwright install --with-deps chromium firefox webkit; then
+            echo "browsers=chromium,firefox,webkit" >>"$GITHUB_OUTPUT"
             exit 0
           fi
         fi
-        echo "::warning::apt could not install the browsers' system packages: the browsers install without them"
+        echo "::warning::apt could not install the browsers' system packages: Chromium and Firefox install without them, and the sign-in check runs without WebKit"
         timeout 10m npx playwright install chromium firefox
+        echo "browsers=chromium,firefox" >>"$GITHUB_OUTPUT"
 
     # Each smoke brings the verification stack (tools/verify-compose,
     # project lifeos-verify) up and removes it again; LIFE_OS_VERIFY_LOGS_DIR
@@ -201,6 +205,16 @@ runs:
       env:
         LIFE_OS_VERIFY_LOGS_DIR: ${{ runner.temp }}/compose-logs/smoke-accounts
       run: timeout --kill-after=1m 10m tools/smoke-accounts
+    # The one stack with legacy access off, as a new install: the first
+    # account from a setup code, each browser's sign-in at the loopback
+    # address of an SSH tunnel (WebKit too), and the smokes with a token.
+    - name: A new install, legacy access off (tools/smoke-fresh-install)
+      if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.playwright.outcome == 'success' }}
+      shell: bash
+      env:
+        LIFE_OS_VERIFY_LOGS_DIR: ${{ runner.temp }}/compose-logs/smoke-fresh-install
+        LIFE_OS_E2E_BROWSERS: ${{ steps.playwright.outputs.browsers }}
+      run: timeout --kill-after=1m 10m tools/smoke-fresh-install
     - name: Voice worker crash recovery (tools/smoke-voice-lease-recovery)
       if: ${{ !cancelled() && steps.build.outcome == 'success' && inputs.modules != 'core' }}
       shell: bash
@@ -239,5 +253,7 @@ runs:
         path: |
           apps/dashboard/test-results/
           apps/dashboard/playwright-report/
+          apps/dashboard/test-results-sign-in/
+          apps/dashboard/playwright-report-sign-in/
         retention-days: 7
         if-no-files-found: ignore

@@ -61,10 +61,12 @@ request() {
   code=$(curl --silent --max-time 15 --request "$method" --output "$work/body" --dump-header "$work/headers" \
     --write-out '%{http_code}' "$@" "$gateway$path")
 }
-# The session cookie the last answer set, as a Cookie header (by hand: a
-# browser keeps a Secure cookie on 127.0.0.1, curl's cookie jar may not).
+# The session cookie the last answer set, as a Cookie header. The stack is
+# reached at 127.0.0.1, this machine's loopback over plain HTTP, as through
+# an SSH tunnel: there the cookie is lifeos.session without Secure, which
+# Safari keeps (src/lib/auth/origin.ts); HTTPS gets __Host-lifeos.session.
 session_cookie() {
-  grep -i '^set-cookie: __Host-lifeos.session=' "$work/headers" | head -n 1 | sed 's/^[^:]*: //; s/;.*//' | tr -d '\r'
+  grep -i '^set-cookie: lifeos.session=' "$work/headers" | head -n 1 | sed 's/^[^:]*: //; s/;.*//' | tr -d '\r'
 }
 expect() { # <status> <method> <path> [curl options…]
   local want=$1
@@ -82,7 +84,11 @@ expect 200 POST /api/auth/sign-up/email -H 'content-type: application/json' \
 grep -q '00000000-0000-4000-8000-000000000001' "$work/body" || fail 'the first account did not get the fixed id'
 session=$(session_cookie)
 [[ -n "$session" ]] || { cat "$work/headers" >&2; fail 'no session cookie'; }
-grep -qi '^set-cookie: __Host-lifeos.session=.*; Secure' "$work/headers" || fail 'the session cookie is not Secure'
+grep -qi '^set-cookie: lifeos.session=.*; HttpOnly' "$work/headers" || fail 'the session cookie is not HttpOnly'
+if grep -i '^set-cookie: ' "$work/headers" | grep -qi '; *secure'; then
+  fail 'a cookie at plain-HTTP loopback is Secure, which Safari refuses'
+fi
+grep -qi '^set-cookie: __Host-' "$work/headers" && fail 'a __Host- cookie at plain-HTTP loopback'
 expect 403 POST /api/auth/sign-up/email -H 'content-type: application/json' -H "origin: $gateway" \
   -H "x-lifeos-setup-code: $code_line" --data "{\"username\":\"second\",\"password\":\"$password\"}"
 [[ -z "$(account setup-code --if-no-account)" ]] || fail 'a setup code while an account exists'
@@ -142,7 +148,7 @@ account legacy-access on >/dev/null
 sleep 6
 
 echo '==> Refusals'
-expect 401 GET /api/tasks/v1/tasks --cookie '__Host-lifeos.session=made-up.token'
+expect 401 GET /api/tasks/v1/tasks --cookie 'lifeos.session=made-up.token'
 expect 403 POST /api/tasks/v1/tasks -H "cookie: $session" -H 'content-type: application/json' \
   -H 'origin: https://elsewhere.example' --data '{"title":"cross-site"}'
 expect 200 GET /api/tasks/v1/tasks -H "cookie: $session" -H 'X-Life-OS-Identity: forged.token.value'
