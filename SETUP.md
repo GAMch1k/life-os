@@ -261,7 +261,7 @@ Life OS has a login ([Accounts](docs/install/accounts.md)), but it is new, and w
 | Model | Setup | Who gets in |
 | --- | --- | --- |
 | Loopback behind a host Nginx | Keep `127.0.0.1`; terminate TLS (and Basic Auth, if you want a gate before the login) in the host Nginx ([example](docs/host-nginx-example.conf)). | Whoever passes your host Nginx, then signs in. |
-| WireGuard | Set `LIFE_OS_GATEWAY_BIND_ADDRESS` to the server's WireGuard address. Never use a public or LAN address. Signing in at that plain-HTTP address needs it in `LIFE_OS_INSECURE_LOGIN_HOSTS` (`./setup.sh gateway --allow-http-login`). | Every allowed peer reaches the login. |
+| WireGuard | Set `LIFE_OS_GATEWAY_BIND_ADDRESS` to the server's WireGuard address, never a public one. Signing in at that plain-HTTP address is off until it is in `LIFE_OS_INSECURE_LOGIN_HOSTS` (`./setup.sh gateway --allow-http-login`); HTTPS on the VPN (`tailscale serve`, or a proxy with a certificate) is better ([Access it safely](docs/install/access.md#choose-a-way-in)). | Every allowed peer reaches the login; while legacy access is on, every peer is the owner. |
 | Cloudflare Tunnel and Access (the reference deployment) | Below. | The email addresses you allow, then their sign-in. |
 
 Installing the Dashboard on a phone, and sharing to Life OS, need a service worker. Browsers allow service workers only over https or on localhost, so they don't work over a plain-http WireGuard address.

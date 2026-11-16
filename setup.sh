@@ -474,7 +474,7 @@ check_bind() {
     loopback) return 0 ;;
     invalid) usage_error "--bind needs an IPv4 address such as 127.0.0.1 or your VPN address, not '$bind'" ;;
     private)
-      warn "Life OS will answer at $bind to every device that can reach that address: they get its login page, and while legacy access is on (after an update from before accounts), they act as the owner without signing in. Prefer a VPN address to a LAN that other people share." ;;
+      warn "Life OS will answer at $bind, over plain HTTP, to every device that can reach that address: they get its login page, and while legacy access is on (after an update from before accounts), they act as the owner without signing in. On a LAN that other people share, put HTTPS in front ($docs/access.md#choose-a-way-in)." ;;
     public)
       if ((!allow_public_bind)); then
         die "$bind is a public address (or every address). Life OS would answer the whole internet over plain HTTP, where passwords cross the network unencrypted, so it refuses to listen there: keep 127.0.0.1 and use Cloudflare Access, a VPN, an SSH tunnel, or HTTPS through your own reverse proxy ($docs/access.md). If a firewall in front really keeps everyone else out, add --allow-public-bind."

@@ -7,7 +7,7 @@ A new install runs the core: the Dashboard, Tasks, Calendar, Inbox, Food, Financ
 This guide installs Life OS from its published Docker images with one setup script. You don't build anything, and you don't need the source code. (One exception, only if you choose it: AI processing with Claude Code, which the published images do not contain; `./setup.sh claude` adds it to a local copy of the processor image.)
 
 > [!WARNING]
-> **Early preview.** Life OS has a login ([Accounts](accounts.md)), but it is new: the setup script keeps Life OS on `127.0.0.1`, so only the server itself can reach it, and you open it through an SSH tunnel, a VPN, or Cloudflare Access ([Access it safely](access.md)). Never expose it straight to the internet. Previews have rough edges and may change between releases, so back up before you update.
+> **Early preview.** Life OS has a login ([Accounts](accounts.md)), but it is new: the setup script keeps Life OS on `127.0.0.1`, so only the server itself can reach it, and you open it the way you choose in [Access it safely → Choose a way in](access.md#choose-a-way-in): an SSH tunnel to start with, then HTTPS for everyday use. Never expose it straight to the internet over plain HTTP. Previews have rough edges and may change between releases, so back up before you update.
 
 ## What you need
 
@@ -63,7 +63,7 @@ This guide installs Life OS from its published Docker images with one setup scri
    ssh -N -L 3000:127.0.0.1:3000 you@your-server
    ```
 
-   Then open <http://127.0.0.1:3000>. It opens the login: go to **Set up the first account**, enter the setup code, and choose a username and password; then turn on two-factor sign-in in Settings → Security ([Accounts](accounts.md)). Signing in works here in every browser, Safari too, because the tunnel ends on the server's own loopback. At a plain-HTTP LAN or VPN address it is off until you allow it ([Signing in](accounts.md#signing-in)). Start with the **Status** page (`/status`): it shows what works, what is still starting, and what needs you. For everyday use from your phone and laptop, set up [a VPN or Cloudflare Access](access.md).
+   Then open <http://127.0.0.1:3000>. It opens the login: go to **Set up the first account**, enter the setup code, and choose a username and password; then turn on two-factor sign-in in Settings → Security ([Accounts](accounts.md)). Signing in works here in every browser, Safari too, because the tunnel ends on the server's own loopback. At a plain-HTTP LAN or VPN address it is off until you allow it ([Signing in](accounts.md#signing-in)). Start with the **Status** page (`/status`): it shows what works, what is still starting, and what needs you. For everyday use from your phone and laptop, choose a way in with HTTPS: [Access it safely → Choose a way in](access.md#choose-a-way-in).
 
 ## What setup.sh writes
 
@@ -144,7 +144,7 @@ For example: `LIFE_OS_TIMEZONE=Europe/Berlin ./setup.sh --yes && ./setup.sh up`.
 ## More
 
 - [Modules](modules.md): what is optional, and turning it on and off.
-- [Access it safely](access.md): SSH tunnel, VPN, Cloudflare Tunnel and Access.
+- [Access it safely](access.md): [choose a way in](access.md#choose-a-way-in), from the SSH tunnel to HTTPS for every device.
 - [Backups and restore](backups.md), [Updating](updating.md), [Uninstalling](uninstall.md), [Troubleshooting](troubleshooting.md).
 - [Phone and watch apps](phone-apps.md).
 - Running Life OS from the source code, or developing it: [SETUP.md](../../SETUP.md) and the [technical documentation](../README.md).

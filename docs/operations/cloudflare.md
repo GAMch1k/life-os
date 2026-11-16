@@ -44,8 +44,8 @@ Intended paths:
 
 | Path | Address | Authentication |
 | --- | --- | --- |
-| Public | `https://lifeos.example.com` → Access → Tunnel → `gateway:80` | Cloudflare Access (email PIN, group `Life OS users`) |
-| Private fallback | `http://10.8.0.1:3000` (`LIFE_OS_GATEWAY_BIND_ADDRESS` and `LIFE_OS_GATEWAY_PORT`) from WireGuard peers | WireGuard peer trust; no Life OS login (unchanged model) |
+| Public | `https://lifeos.example.com` → Access → Tunnel → `gateway:80` | Cloudflare Access (email PIN, group `Life OS users`), then Life OS's own sign-in |
+| Private fallback | `http://10.8.0.1:3000` (`LIFE_OS_GATEWAY_BIND_ADDRESS` and `LIFE_OS_GATEWAY_PORT`) from WireGuard peers | WireGuard peer trust, then Life OS's sign-in, over plain HTTP only where `LIFE_OS_INSECURE_LOGIN_HOSTS` lists the address (`./setup.sh gateway --allow-http-login`); while legacy access is on, peer trust alone |
 | Maintenance | On the host: `docker compose …`, or `curl` to the gateway's address (a host on the WireGuard network uses the WireGuard address) | Host access |
 | Phone notifications | `https://ntfy.example.com` → Tunnel → `ntfy:80` (not the gateway) | ntfy's own accounts (deny-all; the phone's read-only user) |
 
