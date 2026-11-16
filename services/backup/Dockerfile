@@ -2,7 +2,7 @@
 # are exactly the server's version. compose.yaml passes its PostgreSQL image
 # (LIFE_OS_POSTGRES_IMAGE, else its pinned default); keep this default equal
 # to that one, digest included, for a build without compose.
-ARG POSTGRES_IMAGE=postgres:18.6-alpine@sha256:123b17998ccaf47e53b502e8c6a1e79afd8f579c6f3eec83c563da026f957395
+ARG POSTGRES_IMAGE=postgres:18.6-alpine@sha256:9ba53c7d41ea093baf5c1ba635ba5434c4f979880527d49bb7d9237d3193085b
 
 # Build from the repository root so the service can use the local shared
 # infrastructure module.

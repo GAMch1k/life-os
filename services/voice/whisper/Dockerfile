@@ -26,7 +26,7 @@ RUN sed -n '/^static const std::map<std::string, std::pair<int, std::string>> g_
     && test "$(wc -l </tmp/whisper-languages)" -gt 0 \
     && grep -v '^#' /src/languages.txt | sort | diff -u /tmp/whisper-languages -
 
-FROM python:3.15-alpine@sha256:a0f2e268f2ce8f3709611a90054ec6a8ae31f6251f5896b8648b9bb99835e30a
+FROM python:3.15-alpine@sha256:0f9552bb28711333da16915ec146f5e6bb44a7fdac9ced15dc17c2e0206346dd
 # The image's source and license; on ghcr.io this links its package to the
 # repository (docs/operations/releases.md).
 LABEL org.opencontainers.image.source="https://github.com/GAMch1k/life-os" \

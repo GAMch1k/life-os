@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomInt } from "node:crypto";
 
 import type { Pool, PoolClient } from "pg";
 
@@ -17,14 +17,16 @@ export function sha256Hex(value: string) {
   return createHash("sha256").update(value).digest("hex");
 }
 
-/** A setup code a person types: 4 groups of 4, without look-alike letters. */
+/**
+ * A setup code a person types: 4 groups of 4, without look-alike letters.
+ * randomInt picks each character uniformly from the alphabet.
+ */
 export function newSetupCode(): string {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  const bytes = randomBytes(16);
   let code = "";
   for (let i = 0; i < 16; i += 1) {
     if (i > 0 && i % 4 === 0) code += "-";
-    code += alphabet[bytes[i] % alphabet.length];
+    code += alphabet[randomInt(alphabet.length)];
   }
   return code;
 }
