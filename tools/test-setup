@@ -490,6 +490,26 @@ run -- --yes gateway --bind 127.0.0.1 --trusted-proxies host
 ok 'back to loopback with host' test "$status" -eq 0
 ok 'the plain-HTTP host stays listed, harmless off its address' has_line 'LIFE_OS_INSECURE_LOGIN_HOSTS=10.0.0.2'
 
+# A first setup takes --trusted-proxies as gateway does, with the same checks.
+new_case init-trusted-proxies
+run LIFE_OS_TIMEZONE=UTC -- --yes --bind 10.0.0.1 --trusted-proxies host
+ok 'first setup: host with a VPN bind is refused' test "$status" -eq 2
+ok 'and says why' output_has 'works only with the gateway on 127.0.0.1'
+run LIFE_OS_TIMEZONE=UTC -- --yes --trusted-proxies 0.0.0.0/0
+ok 'first setup: a network of everyone is refused' test "$status" -eq 2
+run LIFE_OS_TIMEZONE=UTC -- --yes --trusted-proxies caddy
+ok 'first setup: a name is refused' test "$status" -eq 2
+ok 'none of these wrote .env' test ! -e "$case_dir/.env"
+run LIFE_OS_TIMEZONE=UTC -- --yes --public-url https://lifeos.example.org --trusted-proxies '10.255.249.48/28, host'
+ok 'first setup with --trusted-proxies' test "$status" -eq 0
+ok 'sets them, comma-separated' test "$(value LIFE_OS_TRUSTED_PROXIES)" = 10.255.249.48/28,host
+ok 'and says so' output_has 'trusted proxies   10.255.249.48/28,host'
+run LIFE_OS_TIMEZONE=UTC -- --yes --force-new --bind 10.0.0.1 --trusted-proxies 10.255.249.48/28
+ok 'a new .env with a VPN bind and a proxy network' test "$status" -eq 0
+ok 'sets both' test "$(value LIFE_OS_GATEWAY_BIND_ADDRESS),$(value LIFE_OS_TRUSTED_PROXIES)" = 10.0.0.1,10.255.249.48/28
+run LIFE_OS_TIMEZONE=UTC -- --yes --force-new
+ok "a new .env without the option has none, as before" test -z "$(value LIFE_OS_TRUSTED_PROXIES)"
+
 new_case invalid
 run -- --yes --port 70000
 ok 'refuses port 70000' test "$status" -eq 2
@@ -577,6 +597,38 @@ sed -i 's/$/\r/' "$case_dir/.env.example"
 run LIFE_OS_SETUP_WAIT_SECONDS=1 -- update --skip-checks --skip-backup
 ok "a CRLF .env.example of the same release: accepted" test "$status" -eq 0
 ok 'and it updates' logged 'docker compose pull [LIFE_OS_VERSION=v0.1.0-preview.7]'
+# A value edited by hand with spaces or tabs around it, or in quotes, names
+# the same release: no refusal for a difference nobody can see.
+cp .env.example "$case_dir/.env.example"
+sed -i 's/^LIFE_OS_VERSION=.*/LIFE_OS_VERSION=v0.1.0-preview.7 /' "$case_dir/.env.example"
+: >"$case_dir.log"
+run LIFE_OS_SETUP_WAIT_SECONDS=1 -- update --skip-checks --skip-backup
+ok 'an .env.example with a trailing space: the same release' test "$status" -eq 0
+ok 'and it updates to it' logged 'docker compose pull [LIFE_OS_VERSION=v0.1.0-preview.7]'
+sed -i "s/^LIFE_OS_VERSION=.*/LIFE_OS_VERSION= 'v0.1.0-preview.7'\t/" "$case_dir/.env.example"
+run LIFE_OS_SETUP_WAIT_SECONDS=1 -- update --skip-checks --skip-backup
+ok 'quoted, with a space before and a tab after: the same release' test "$status" -eq 0
+# Every command that starts containers from these files refuses a mix,
+# before it changes anything: rotate-keys recreates the services, codex
+# signs in in the processor's container, and ntfy hashes the password in
+# one of ntfy's image.
+stamp_release v0.1.0-preview.7
+sed -i 's/^LIFE_OS_VERSION=.*/LIFE_OS_VERSION=v0.1.0-preview.6/' "$case_dir/.env.example"
+env_sum=$(sha256sum <"$case_dir/.env")
+: >"$case_dir.log"
+for command in rotate-keys codex ntfy; do
+  run -- "$command"
+  ok "$command refuses release files of two releases" test "$status" -eq 1
+  ok "$command names them" output_has 'setup.sh v0.1.0-preview.7, compose.yaml v0.1.0-preview.7, .env.example v0.1.0-preview.6'
+  ok "$command says what to run again" output_has "run ./setup.sh $command again"
+done
+ok 'and .env is untouched' test "$(sha256sum <"$case_dir/.env")" = "$env_sum"
+ok 'no container started' bash -c "! grep -qE '^docker (compose (up|run|restart)|run) ' '$case_dir.log'"
+stamp_release v0.1.0-preview.7
+: >"$case_dir.log"
+run -- rotate-keys
+ok "rotate-keys with one release's files" test "$status" -eq 0
+ok 'recreates the Dashboard' logged 'docker compose up -d --no-deps dashboard'
 stamp_release v0.1.0-preview.7
 run -- help
 ok "a release's script links the docs at its own tag" output_has 'https://github.com/GAMch1k/life-os/blob/v0.1.0-preview.7/docs/install/README.md'
@@ -595,6 +647,10 @@ sed -i 's/^LIFE_OS_VERSION=.*/LIFE_OS_VERSION=v0.1.0-preview.2/' "$case_dir/.env
 run STUB_BACKUP_RUNNING=0 LIFE_OS_SETUP_WAIT_SECONDS=5 -- update --skip-backup --skip-checks
 ok "update goes to the newer .env.example's version" test "$(value LIFE_OS_VERSION)" = v0.1.0-preview.2
 ok 'and pulls it' logged 'docker compose pull [LIFE_OS_VERSION=v0.1.0-preview.2]'
+new_case stamped-by-hand
+sed -i 's/^LIFE_OS_VERSION=.*/LIFE_OS_VERSION=v0.1.0-preview.1 /' "$case_dir/.env.example"
+run LIFE_OS_TIMEZONE=UTC -- --yes
+ok "a version with a trailing space is that version, not preview" test "$(value LIFE_OS_VERSION)" = v0.1.0-preview.1
 
 # ---------- Questions ----------
 new_case interactive

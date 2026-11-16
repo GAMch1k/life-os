@@ -1,3 +1,4 @@
+import { NULL_ORIGIN } from "@/lib/auth/origin";
 import { imageErrorMessage, type ImageProblem } from "@/lib/capture-images";
 
 // Share → Life OS: what the installed Dashboard receives from the phone's
@@ -71,13 +72,16 @@ export function shareMetadata(timeZone?: string) {
  * site (`cross-site`, or a sibling subdomain, `same-site`) is refused, even
  * when the browser would send the Access cookie with it. Older browsers
  * without Sec-Fetch-Site are judged by Origin alone; the host is compared
- * without the port, which the gateway does not pass on.
+ * without the port, which the gateway does not pass on. A null Origin
+ * needs Sec-Fetch-Site, as everywhere (NULL_ORIGIN, src/lib/auth/origin.ts):
+ * without it, it may be a sandboxed iframe on any site.
  */
 export function isShareFromApp(headers: Headers) {
   const site = headers.get("sec-fetch-site");
   if (site && site !== "same-origin" && site !== "none") return false;
   const origin = headers.get("origin");
-  if (!origin || origin === "null") return true;
+  if (origin === NULL_ORIGIN) return site !== null;
+  if (!origin) return true;
   const host = (headers.get("x-forwarded-host") ?? headers.get("host") ?? "")
     .split(",")[0]
     .trim()
