@@ -46,6 +46,8 @@ allow_public_bind=0
 bind_flag=
 port_flag=
 public_url_flag=
+trusted_proxies_flag=
+trusted_proxies_given=0
 
 # ---------- Output ----------
 
@@ -1817,13 +1819,45 @@ setup_feed() {
   fi
 }
 
+# Puts --trusted-proxies into env_values: LIFE_OS_TRUSTED_PROXIES, the
+# reverse proxies whose X-Forwarded-For the gateway believes, as addresses or
+# networks, or host for one on this server outside Docker
+# (docs/install/access.md#your-own-reverse-proxy). Empty: none.
+trusted_proxies_values() {
+  local entry address prefix max result=''
+  local -a entries=()
+  IFS=', ' read -r -a entries <<<"$trusted_proxies_flag"
+  for entry in "${entries[@]}"; do
+    [[ -n $entry ]] || continue
+    if [[ $entry != host ]]; then
+      address=${entry%/*} prefix=
+      [[ $address == "$entry" ]] || prefix=${entry##*/}
+      if [[ $(address_class "$address") != invalid ]]; then
+        max=32
+      elif [[ $address == *:* && $address =~ ^[0-9A-Fa-f:]+$ ]]; then
+        max=128
+      else
+        usage_error "--trusted-proxies takes your proxies' addresses or networks, such as 10.255.249.48/28, or host; not '$entry'"
+      fi
+      if [[ -n $prefix ]] && { [[ ! $prefix =~ ^[1-9][0-9]{0,2}$ ]] || ((prefix > max)); }; then
+        usage_error "--trusted-proxies: '$entry' is not a network (/1 to /$max; /0 would believe everyone)"
+      fi
+    fi
+    result+=${result:+,}$entry
+  done
+  env_values[LIFE_OS_TRUSTED_PROXIES]=$result
+}
+
 cmd_gateway() {
   require_env
   step 'Gateway address'
   gateway_values
+  ((!trusted_proxies_given)) || trusted_proxies_values
   env_update
   say "Life OS: $(env_get LIFE_OS_PUBLIC_URL) (listening on $(gateway_bind):$(gateway_port))."
-  apply_hint gateway notifications
+  [[ -z $(env_get LIFE_OS_TRUSTED_PROXIES 2>/dev/null || true) ]] \
+    || say "Client addresses from the proxies: $(env_get LIFE_OS_TRUSTED_PROXIES)."
+  apply_hint gateway dashboard notifications
 }
 
 # ---------- Accounts ----------
@@ -2380,6 +2414,7 @@ release's compose.yaml and .env.example.
   ./setup.sh status             what runs, and which modules are on and set up
   ./setup.sh check              only check this server
   ./setup.sh gateway            change where Life OS listens and its address
+                                (--trusted-proxies: your reverse proxies)
 
 Accounts (docs/install/accounts.md):
   ./setup.sh account-keys       add the accounts' settings to an older .env
@@ -2430,6 +2465,10 @@ Options:
   --allow-public-bind      allow a public --bind address
   --port PORT              the gateway's port (default 3000)
   --public-url URL         the address you open Life OS at
+  --trusted-proxies LIST   gateway: the reverse proxies whose client address
+                           to believe: 10.255.249.48/28 (a proxy in Docker),
+                           host (one on this server), comma-separated;
+                           --trusted-proxies= for none (docs/install/access.md)
   --skip-checks            don't check Docker, memory, and disk first
   --skip-backup            update without backing up first
   --skip-access-check      cloudflare: don't check that Access protects the hostname
@@ -2459,6 +2498,8 @@ while (($#)); do
     --port=*) port_flag=${1#*=} ;;
     --public-url) need_value "$@" && public_url_flag=$2 && shift ;;
     --public-url=*) public_url_flag=${1#*=} ;;
+    --trusted-proxies) need_value "$@" && trusted_proxies_flag=$2 && trusted_proxies_given=1 && shift ;;
+    --trusted-proxies=*) trusted_proxies_flag=${1#*=} trusted_proxies_given=1 ;;
     -h | --help) command=help ;;
     -*) usage_error "unknown option $1" ;;
     *)

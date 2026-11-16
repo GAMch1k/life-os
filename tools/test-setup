@@ -380,6 +380,21 @@ run -- --yes --public-url https://lifeos.example.org/
 ok 'an https address' test "$status" -eq 0
 ok 'without the slash' test "$(value LIFE_OS_PUBLIC_URL)" = https://lifeos.example.org
 ok 'its hostname' test "$(value LIFE_OS_PUBLIC_HOSTNAME)" = lifeos.example.org
+ok 'no trusted proxy by default' test -z "$(value LIFE_OS_TRUSTED_PROXIES)"
+run -- --yes gateway --trusted-proxies '10.255.249.48/28, host'
+ok 'gateway --trusted-proxies' test "$status" -eq 0
+ok 'keeps the https address' test "$(value LIFE_OS_PUBLIC_URL)" = https://lifeos.example.org
+ok 'sets the proxies, comma-separated' test "$(value LIFE_OS_TRUSTED_PROXIES)" = 10.255.249.48/28,host
+run -- --yes gateway --trusted-proxies 0.0.0.0/0
+ok 'refuses a network of everyone' test "$status" -eq 2
+run -- --yes gateway --trusted-proxies 'caddy'
+ok 'refuses a name' test "$status" -eq 2
+ok 'the refused ones change nothing' test "$(value LIFE_OS_TRUSTED_PROXIES)" = 10.255.249.48/28,host
+run -- --yes gateway
+ok 'gateway without the option keeps them' test "$(value LIFE_OS_TRUSTED_PROXIES)" = 10.255.249.48/28,host
+run -- --yes gateway --trusted-proxies=
+ok '--trusted-proxies= empties them' test "$status" -eq 0
+ok 'to nothing' test -z "$(value LIFE_OS_TRUSTED_PROXIES)"
 
 new_case invalid
 run -- --yes --port 70000
