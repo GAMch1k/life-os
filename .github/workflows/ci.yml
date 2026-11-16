@@ -86,9 +86,26 @@ jobs:
       # dropped, public routes stay public, /internal/ is closed (throwaway
       # nginx containers).
       - run: tools/test-gateway-auth
+      # The client's address: a trusted proxy's X-Forwarded-For counts,
+      # anyone else's never, Cloudflare's path as before (throwaway nginx
+      # containers).
+      - run: tools/test-gateway-proxies
       # The Android release publisher, into scratch directories and a
       # made-up GitHub (tools/fixtures/fake-gh): no Docker, no network.
       - run: tools/test-publish-android-release
+
+  # The reverse proxy recipes of docs/install/proxies/ (Caddy, Traefik from
+  # Docker labels, nginx) in front of the gateway, in throwaway containers.
+  # Not a required check: it pulls Caddy's and Traefik's images.
+  proxy-recipes:
+    name: Reverse proxy recipes (Caddy, Traefik, nginx)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: tools/test-proxy-recipes --traefik-labels
 
   check-go:
     # Also the setup.sh tests (--setup). The name stays as it is, because the
