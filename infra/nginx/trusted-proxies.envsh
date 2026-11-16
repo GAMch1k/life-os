@@ -1,0 +1,157 @@
+# shellcheck shell=sh
+# Sourced by the nginx image's entrypoint just before it renders
+# life-os.conf.template, and before server-names.envsh, which tidies away the
+# default bind address this reads. From LIFE_OS_TRUSTED_PROXIES, the reverse
+# proxies in front of the gateway
+# (docs/install/access.md#your-own-reverse-proxy), it writes the two files
+# the template includes:
+#  - trusted-proxies.geo: "<proxy> 1;" for each, which tells a request that
+#    comes from one of them ($via_trusted_proxy, for X-Forwarded-Proto);
+#  - trusted-proxies.conf: set_real_ip_from for each, with X-Forwarded-For
+#    as the header to read, which every location of Life OS includes, so the
+#    client's address replaces the proxy's before the rate limits, the auth
+#    check, and the log see it.
+# Empty, the default: both files hold only a comment, and the gateway
+# believes no forwarded address but Cloudflare's, from the edge network
+# alone (the template's own).
+#
+# An entry is an IPv4 or IPv6 address or network (CIDR), or "host": the
+# server itself, for a proxy that runs on it outside Docker (Tailscale Serve,
+# Caddy from a package). Its connections to the gateway's published port
+# arrive from the address of Docker's bridge, the gateway's default route,
+# which this finds at every start. So do other containers' connections to a
+# port published on any other address than loopback, and with some Docker
+# setups everyone's: host counts only while the gateway publishes on
+# 127.0.0.0/8 (LIFE_OS_GATEWAY_BIND_ADDRESS, by default 127.0.0.1). Entries
+# are separated by commas or spaces. One that is none of these, host with
+# another bind address, and a network wider than /8 (IPv4) or /16 (IPv6),
+# which would let far too many addresses claim to be a client, are left out
+# with a warning: the gateway still starts, and trusts less. A public network
+# wider than /24 or /48 is kept, with a warning to list the proxies alone.
+lifeos_dir=${LIFE_OS_TRUSTED_PROXIES_DIR:-/etc/nginx/lifeos}
+lifeos_geo="# LIFE_OS_TRUSTED_PROXIES (trusted-proxies.envsh)"
+lifeos_realip=$lifeos_geo
+lifeos_trusted=
+
+lifeos_warn() { echo "trusted-proxies.envsh: LIFE_OS_TRUSTED_PROXIES: $*" >&2; }
+lifeos_ipv4() { # <address>: four numbers 0 to 255, without leading zeros
+  printf '%s\n' "$1" | awk -F. 'NF != 4 { exit 1 }
+    { for (i = 1; i <= 4; i++) if ($i !~ /^(0|[1-9][0-9]{0,2})$/ || $i + 0 > 255) exit 1 }'
+}
+lifeos_ipv6() { # <address>
+  printf '%s\n' "$1" | awk '{
+    s = $0
+    if (s !~ /^[0-9A-Fa-f:]+$/ || s !~ /:/ || s ~ /:::/) exit 1
+    if (s ~ /^:[^:]/ || s ~ /[^:]:$/) exit 1
+    double = gsub(/::/, "&", s)
+    if (double > 1) exit 1
+    n = split(s, parts, ":")
+    groups = 0
+    for (i = 1; i <= n; i++) {
+      if (parts[i] == "") continue
+      if (length(parts[i]) > 4) exit 1
+      groups++
+    }
+    if ((double == 0 && groups != 8) || (double == 1 && groups > 7)) exit 1
+  }'
+}
+# Whether <address>/<prefix> lies wholly in a private range: 10/8,
+# 172.16/12, 192.168/16, 100.64/10 (Tailscale's), 127/8, 169.254/16;
+# fc00::/7, fe80::/10, ::1.
+lifeos_private() { # <address> <prefix>
+  case $1 in
+    *:*)
+      printf '%s %s\n' "$1" "$2" | awk '{
+        h = tolower($1); sub(/:.*/, "", h); p = $2 + 0
+        if (h ~ /^f[cd][0-9a-f][0-9a-f]$/ && p >= 7) exit 0
+        if (h ~ /^fe[89ab][0-9a-f]$/ && p >= 10) exit 0
+        if ($1 == "::1") exit 0
+        exit 1
+      }'
+      ;;
+    *)
+      printf '%s %s\n' "$1" "$2" | awk '{
+        split($1, o, "."); p = $2 + 0; a = o[1] + 0; b = o[2] + 0
+        if (a == 10 && p >= 8) exit 0
+        if (a == 172 && b >= 16 && b <= 31 && p >= 12) exit 0
+        if (a == 192 && b == 168 && p >= 16) exit 0
+        if (a == 100 && b >= 64 && b <= 127 && p >= 10) exit 0
+        if (a == 127 && p >= 8) exit 0
+        if (a == 169 && b == 254 && p >= 16) exit 0
+        exit 1
+      }'
+      ;;
+  esac
+}
+lifeos_valid() { # <address>[/<prefix>]: sets lifeos_address, lifeos_prefix, lifeos_max
+  lifeos_address=${1%/*}
+  lifeos_prefix=
+  [ "$lifeos_address" = "$1" ] || lifeos_prefix=${1##*/}
+  if lifeos_ipv4 "$lifeos_address"; then
+    lifeos_max=32
+  elif lifeos_ipv6 "$lifeos_address"; then
+    lifeos_max=128
+  else
+    return 1
+  fi
+  if [ -z "$lifeos_prefix" ]; then
+    lifeos_prefix=$lifeos_max
+    return 0
+  fi
+  case $lifeos_prefix in '' | *[!0-9]* | 0?*) return 1 ;; esac
+  [ "$lifeos_prefix" -le "$lifeos_max" ]
+}
+
+# The bind address as compose.yaml gives it (default 127.0.0.1).
+lifeos_bind=${LIFE_OS_GATEWAY_BIND_ADDRESS:-127.0.0.1}
+# No globbing while the list is split: an entry such as * stays itself.
+set -f
+for lifeos_proxy in $(printf '%s' "${LIFE_OS_TRUSTED_PROXIES:-}" | tr ',' ' '); do
+  if [ "$lifeos_proxy" = host ]; then
+    case $lifeos_bind in
+      localhost) ;;
+      127.*) lifeos_ipv4 "$lifeos_bind" || lifeos_bind= ;;
+      *) lifeos_bind= ;;
+    esac
+    if [ -z "$lifeos_bind" ]; then
+      lifeos_warn "\"host\" is left out: the gateway publishes on ${LIFE_OS_GATEWAY_BIND_ADDRESS:-}, not on 127.0.0.1, so other containers, and with some Docker setups every client, would arrive from the same address as the server's own programs"
+      lifeos_bind=${LIFE_OS_GATEWAY_BIND_ADDRESS:-127.0.0.1}
+      continue
+    fi
+    lifeos_proxy=$(ip -4 route show default 2>/dev/null | awk '$1 == "default" && $2 == "via" { print $3; exit }')
+    if [ -z "$lifeos_proxy" ]; then
+      lifeos_warn "\"host\" is left out: no default route"
+      continue
+    fi
+  fi
+  if ! lifeos_valid "$lifeos_proxy"; then
+    lifeos_warn "\"$lifeos_proxy\" is not an address or a network (such as 10.255.249.48/28), nor host, so it is left out"
+    continue
+  fi
+  if { [ "$lifeos_max" -eq 32 ] && [ "$lifeos_prefix" -lt 8 ]; } || { [ "$lifeos_max" -eq 128 ] && [ "$lifeos_prefix" -lt 16 ]; }; then
+    lifeos_warn "\"$lifeos_proxy\" would let far too many addresses set a client's address, so it is left out: list your proxies' own addresses"
+    continue
+  fi
+  if ! lifeos_private "$lifeos_address" "$lifeos_prefix" &&
+    { { [ "$lifeos_max" -eq 32 ] && [ "$lifeos_prefix" -lt 24 ]; } || { [ "$lifeos_max" -eq 128 ] && [ "$lifeos_prefix" -lt 48 ]; }; }; then
+    lifeos_warn "\"$lifeos_proxy\" is a wide public network: every address in it may set a client's address. List your proxies' own addresses unless they really are all yours"
+  fi
+  lifeos_geo="$lifeos_geo
+$lifeos_proxy 1;"
+  lifeos_realip="$lifeos_realip
+set_real_ip_from $lifeos_proxy;"
+  lifeos_trusted="$lifeos_trusted $lifeos_proxy"
+done
+set +f
+if [ -n "$lifeos_trusted" ]; then
+  lifeos_realip="$lifeos_realip
+real_ip_header X-Forwarded-For;
+real_ip_recursive on;"
+  { printf 'trusted-proxies.envsh: the client address and scheme from X-Forwarded-For and X-Forwarded-Proto, from:%s\n' "$lifeos_trusted" >&3; } 2>/dev/null || true
+fi
+
+mkdir -p "$lifeos_dir"
+printf '%s\n' "$lifeos_geo" >"$lifeos_dir/trusted-proxies.geo"
+printf '%s\n' "$lifeos_realip" >"$lifeos_dir/trusted-proxies.conf"
+unset lifeos_dir lifeos_geo lifeos_realip lifeos_trusted lifeos_proxy lifeos_address lifeos_prefix lifeos_max lifeos_bind
+unset -f lifeos_warn lifeos_ipv4 lifeos_ipv6 lifeos_private lifeos_valid

@@ -256,11 +256,11 @@ The gateway needs nothing after a service redeploy, because it resolves service 
 
 The gateway listens on `LIFE_OS_GATEWAY_BIND_ADDRESS:LIFE_OS_GATEWAY_PORT` (default `127.0.0.1:3000`). It serves Life OS only to four Host names: `127.0.0.1`, `localhost`, `LIFE_OS_GATEWAY_BIND_ADDRESS`, and `LIFE_OS_PUBLIC_HOSTNAME`. Any other Host gets no answer (444). At every start, the gateway renders them into `server_name` from `infra/nginx/life-os.conf.template`. After you change either setting, recreate it: `docker compose up -d --no-build --no-deps --force-recreate gateway`. `tools/check-gateway-hosts`, part of `tools/check`, checks the list. See [Gateway hosts](docs/architecture/networking.md#gateway-hosts).
 
-Life OS has no login of its own, so choose one access model deliberately:
+Signing in to Life OS needs HTTPS, or `localhost` ([Accounts](docs/install/accounts.md#signing-in)), so choose one access model deliberately:
 
 | Model | Setup | Who gets in |
 | --- | --- | --- |
-| Loopback behind a host Nginx | Keep `127.0.0.1`; terminate TLS and Basic Auth in the host Nginx ([example](docs/host-nginx-example.conf)). | Whoever passes your host Nginx. |
+| Loopback behind your HTTPS proxy | Keep `127.0.0.1`; terminate TLS in Tailscale Serve, Caddy, Traefik, Nginx Proxy Manager, or a host nginx ([Access](docs/install/access.md#your-own-reverse-proxy), [nginx example](docs/host-nginx-example.conf)), and name it in `LIFE_OS_TRUSTED_PROXIES`. | Whoever signs in to Life OS. |
 | WireGuard | Set `LIFE_OS_GATEWAY_BIND_ADDRESS` to the server's WireGuard address. Never use a public or LAN address. | Every allowed peer. |
 | Cloudflare Tunnel and Access (the reference deployment) | Below. | The email addresses you allow. |
 

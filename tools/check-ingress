@@ -11,6 +11,8 @@
 #  - notify-internal, an internal network, joins ntfy and notifications only,
 #    so Notifications can publish without sharing a network with cloudflared;
 #    ntfy is on these two networks and no other;
+#  - proxy, an internal network, joins the gateway alone: a reverse proxy in
+#    Docker that joins it reaches the gateway and no service;
 #  - the gateway serves Life OS only for its listed hosts
 #    (tools/check-gateway-hosts).
 set -euo pipefail
@@ -59,5 +61,12 @@ if [ "$internal_members" != "notifications,ntfy" ]; then
   echo "check-ingress: the notify-internal network must contain only notifications and ntfy; found: $internal_members" >&2
   exit 1
 fi
-echo "ingress ok: gateway publishes $(jq -r '.services.gateway.ports | map("\(.host_ip // "0.0.0.0"):\(.published)") | join(", ")' <<<"$plan"); edge = cloudflared + gateway; notify-edge = cloudflared + ntfy; notify-internal (internal) = notifications + ntfy; cloudflared and ntfy publish nothing"
+# proxy is for your own reverse proxy (docs/install/access.md): only the
+# gateway of Life OS is on it, so a proxy there reaches no service directly.
+proxy_members=$(members proxy)
+if [ "$proxy_members" != "gateway" ] || ! jq -e '.networks.proxy.internal == true' <<<"$plan" >/dev/null; then
+  echo "check-ingress: the proxy network must be internal and contain only the gateway; found: $proxy_members" >&2
+  exit 1
+fi
+echo "ingress ok: gateway publishes $(jq -r '.services.gateway.ports | map("\(.host_ip // "0.0.0.0"):\(.published)") | join(", ")' <<<"$plan"); edge = cloudflared + gateway; notify-edge = cloudflared + ntfy; notify-internal (internal) = notifications + ntfy; proxy (internal) = gateway; cloudflared and ntfy publish nothing"
 ./tools/check-gateway-hosts

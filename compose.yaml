@@ -785,7 +785,8 @@ services:
     # the hosts it serves Life OS to (server_name), which server-names.envsh
     # keeps from repeating 127.0.0.1 and localhost, and, from LIFE_OS_MODULES,
     # the routes of the modules that are off, which answer 404 at once
-    # (modules.envsh).
+    # (modules.envsh), and the reverse proxies whose forwarded client
+    # address it believes (trusted-proxies.envsh).
     build: {context: infra/nginx}
     environment:
       NGINX_ENVSUBST_FILTER: "^LIFE_OS_"
@@ -795,6 +796,14 @@ services:
       # Through the tunnel, Cloudflare Access's token is required unless this
       # is off (docs/operations/cloudflare.md).
       LIFE_OS_REQUIRE_CLOUDFLARE_ACCESS: "${LIFE_OS_REQUIRE_CLOUDFLARE_ACCESS:-}"
+      # Your own reverse proxies, whose X-Forwarded-For and X-Forwarded-Proto
+      # the gateway believes: addresses or networks, or host (a proxy on this
+      # server, outside Docker; only with the bind address on 127.0.0.1).
+      # Empty: none (docs/install/access.md).
+      LIFE_OS_TRUSTED_PROXIES: "${LIFE_OS_TRUSTED_PROXIES:-}"
+      # The name of backend (below), by which the gateway asks Docker's DNS
+      # for its upstreams on that network alone, never on edge or proxy.
+      LIFE_OS_BACKEND_NETWORK: lifeos-backend
     volumes:
       # The Android apps' releases, served at /android/ behind Access
       # (docs/operations/android-releases.md). tools/publish-android-release
@@ -826,7 +835,13 @@ services:
       food: {condition: service_started}
       recipe-import: {condition: service_started}
     # edge: how the Cloudflare connector reaches the gateway (and only it).
-    networks: [backend, edge]
+    # proxy: how a reverse proxy that runs in Docker reaches it, as
+    # lifeos-gateway:80 (docs/install/access.md#your-own-reverse-proxy).
+    networks:
+      backend:
+      edge:
+      proxy:
+        aliases: [lifeos-gateway]
     restart: unless-stopped
 
   # Opt-in ntfy server (COMPOSE_PROFILES=ntfy): push notifications to the
@@ -947,6 +962,20 @@ networks:
     ipam:
       config:
         - subnet: 10.255.249.0/29
+  # The gateway and your own reverse proxy, if it runs in Docker: the proxy's
+  # compose file names this network as external and forwards to
+  # http://lifeos-gateway:80 (docs/install/access.md#your-own-reverse-proxy).
+  # Nothing else of Life OS is on it, so a proxy reaches the gateway and no
+  # service. Internal: no way out through it, and the gateway's ports stay
+  # published through backend. The fixed subnet is what
+  # LIFE_OS_TRUSTED_PROXIES names to believe the proxy's X-Forwarded-For.
+  proxy:
+    name: lifeos-proxy
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.255.249.48/28
   # The Cloudflare connector and ntfy only: the tunnel's ntfy route (no
   # Access) reaches ntfy here and nothing of Life OS.
   notify-edge:

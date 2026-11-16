@@ -1,0 +1,262 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Runs the reverse proxy recipes of docs/install/proxies/ in throwaway
+# containers, never the deployed gateway or the verification stack: Caddy
+# (its internal CA, for a LAN name), Traefik (with the recipe's flags), and
+# nginx with docs/host-nginx-example.conf (in a container, so forwarding to
+# lifeos-gateway:80, with a certificate made here), each in Docker on a
+# network that stands in for lifeos-proxy, in front of the gateway's nginx with its
+# configuration rendered as compose.yaml has it rendered (alias
+# lifeos-gateway, LIFE_OS_TRUSTED_PROXIES naming that network), a stand-in
+# Dashboard and stand-in services that echo what reaches them, and a client
+# on the proxies' own network. Through each proxy it checks:
+#  - HTTPS answers, the Host the client asked for reaches Life OS, which
+#    sees https as the scheme and the client's own address (a forged
+#    X-Forwarded-For left of it never counts);
+#  - a device key (Authorization: Bearer) reaches the auth check, as the
+#    phone app needs, and the identity token names the client's address;
+#  - a 20 MB voice note and a 50 MB share pass, and an over-limit voice note
+#    gets the gateway's own 413.
+# Caddy's root certificate is taken from where the recipe says it is.
+# Traefik takes its route from a file (the recipe's file variant); with
+# --traefik-labels, from Docker labels on the gateway's container, as the
+# recipe's compose.override.yaml sets them: that mounts this host's Docker
+# socket into Traefik (read-only, every other container ignored by a
+# constraint), so CI uses it.
+#
+#   tools/test-proxy-recipes [--traefik-labels]
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$repo_root"
+traefik_labels=0
+case "${1:-}" in
+  '') ;;
+  --traefik-labels) traefik_labels=1 ;;
+  *) echo 'usage: tools/test-proxy-recipes [--traefik-labels]' >&2; exit 2 ;;
+esac
+command -v docker >/dev/null 2>&1 || { echo 'test-proxy-recipes: docker is required' >&2; exit 2; }
+command -v openssl >/dev/null 2>&1 || { echo 'test-proxy-recipes: openssl is required' >&2; exit 2; }
+image=$(sed -n 's/^FROM //p' infra/nginx/Dockerfile | head -n 1)
+[[ -n "$image" ]] || { echo "test-proxy-recipes: no base image in infra/nginx/Dockerfile" >&2; exit 2; }
+# The versions the recipes name.
+caddy_image=caddy:2.11.9-alpine@sha256:003a97808e781aa9f7e75cc2f43d34d461099031faf5e20faefb9f61126836f0
+traefik_image=traefik:v3.7.19@sha256:aa942a00bce033c909bf1f7e861d93761be4b31a035f10d2410d33e38a8f41cf
+curl_image=curlimages/curl:8.17.0@sha256:935d9100e9ba842cdb060de42472c7ca90cfe9a7c96e4dacb55e79e560b3ff40
+host=lifeos.home.arpa
+name=lifeos-verify-proxies-$$
+work=$(mktemp -d)
+cleanup() {
+  docker rm -f "$name-gateway" "$name-dashboard" "$name-services" "$name-caddy" "$name-traefik" \
+    "$name-nginx" "$name-client" >/dev/null 2>&1 || true
+  docker network rm "$name-backend" "$name-proxy" "$name-front" >/dev/null 2>&1 || true
+  rm -rf "$work"
+}
+trap cleanup EXIT
+fail() {
+  printf 'test-proxy-recipes: %s\n' "$*" >&2
+  exit 1
+}
+
+nginx_dir=$repo_root/infra/nginx
+template=$nginx_dir/life-os.conf.template
+# shellcheck disable=SC2016 # nginx variables, not the shell's
+mapfile -t services < <(sed -n 's/^ *set \$upstream \([a-z-]*\):8080;$/\1/p' "$template" | sort -u)
+
+# backend: Life OS's own; proxy: lifeos-proxy (internal, as in compose.yaml);
+# front: the proxies' own network, where the client is.
+docker network create "$name-backend" >/dev/null
+docker network create --internal "$name-proxy" >/dev/null
+docker network create "$name-front" >/dev/null
+proxy_subnet=$(docker network inspect "$name-proxy" --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}')
+[[ "$proxy_subnet" == */* ]] || fail "no subnet for $name-proxy"
+
+cat >"$work/dashboard.conf" <<'EOF'
+server {
+  listen 3000;
+  client_max_body_size 0;
+  default_type text/plain;
+  location = /internal/auth/check {
+    if ($http_authorization = "Bearer good-key") {
+      add_header X-Life-OS-Identity "key:address=$http_x_real_ip" always;
+      return 204;
+    }
+    return 401;
+  }
+  location / {
+    return 200 "dashboard $request_method ip=[$http_x_real_ip] xff=[$http_x_forwarded_for] proto=[$http_x_forwarded_proto] host=[$http_host] length=[$content_length]\n";
+  }
+}
+EOF
+cat >"$work/services.conf" <<'EOF'
+server {
+  listen 8080;
+  client_max_body_size 0;
+  default_type text/plain;
+  location / {
+    return 200 "service $request_method identity=[$http_x_life_os_identity] ip=[$http_x_real_ip] length=[$content_length]\n";
+  }
+}
+EOF
+# The recipe's Caddyfile, with the LAN name and Caddy's internal CA.
+cat >"$work/Caddyfile" <<EOF
+$host {
+	tls internal
+	reverse_proxy lifeos-gateway:80
+}
+EOF
+# The recipe's file variant for Traefik.
+cat >"$work/traefik.yml" <<EOF
+http:
+  routers:
+    lifeos:
+      rule: Host(\`$host\`)
+      entryPoints: [websecure]
+      tls: {}
+      service: lifeos
+  services:
+    lifeos:
+      loadBalancer:
+        servers:
+          - url: http://lifeos-gateway:80
+EOF
+# docs/host-nginx-example.conf, as nginx in a container runs it: the
+# gateway's name on the proxy network for 127.0.0.1:3000, the test's name
+# and a certificate of its own.
+grep -q 'proxy_pass http://127\.0\.0\.1:3000;' docs/host-nginx-example.conf || fail "docs/host-nginx-example.conf no longer forwards to http://127.0.0.1:3000"
+sed -e 's#proxy_pass http://127\.0\.0\.1:3000;#proxy_pass http://lifeos-gateway:80;#' \
+  -e "s#lifeos\.example\.com#$host#g" \
+  -e "s#/etc/letsencrypt/live/$host/fullchain\.pem#/work/nginx.crt#" \
+  -e "s#/etc/letsencrypt/live/$host/privkey\.pem#/work/nginx.key#" docs/host-nginx-example.conf >"$work/nginx.conf"
+grep -q 'ssl_certificate /work/nginx.crt;' "$work/nginx.conf" || fail "could not point docs/host-nginx-example.conf at the test's certificate"
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=$host" -addext "subjectAltName=DNS:$host" \
+  -keyout "$work/nginx.key" -out "$work/nginx.crt" 2>/dev/null
+head -c $((20 * 1024 * 1024)) /dev/zero >"$work/voice-20m.bin"
+head -c $((50 * 1024 * 1024)) /dev/zero >"$work/share-50m.bin"
+head -c $((30 * 1024 * 1024)) /dev/zero >"$work/voice-30m.bin"
+chmod 755 "$work"
+chmod 644 "$work"/*
+
+docker run -d --rm --name "$name-dashboard" --network "$name-backend" --network-alias dashboard \
+  -v "$work/dashboard.conf:/etc/nginx/conf.d/default.conf:ro" "$image" >/dev/null
+aliases=()
+for service in "${services[@]}"; do aliases+=(--network-alias "$service"); done
+docker run -d --rm --name "$name-services" --network "$name-backend" "${aliases[@]}" \
+  -v "$work/services.conf:/etc/nginx/conf.d/default.conf:ro" "$image" >/dev/null
+
+# The gateway: on backend and, as lifeos-gateway, on the proxy network,
+# which LIFE_OS_TRUSTED_PROXIES names. The Traefik labels are the recipe's
+# (docs/install/proxies/traefik.md), with the test's own network and no
+# certificate resolver; the constraint label keeps every other container on
+# this host out of the test's Traefik.
+labels=()
+if ((traefik_labels)); then
+  labels=(--label traefik.enable=true --label "traefik.docker.network=$name-proxy"
+    --label "traefik.http.routers.lifeos.rule=Host(\`$host\`)"
+    --label traefik.http.routers.lifeos.entrypoints=websecure
+    --label traefik.http.routers.lifeos.tls=true
+    --label traefik.http.services.lifeos.loadbalancer.server.port=80
+    --label "lifeos.test-proxy-recipes=$name")
+fi
+docker run -d --rm --name "$name-gateway" --network "$name-backend" \
+  --network "name=$name-proxy,alias=lifeos-gateway" "${labels[@]}" \
+  -e NGINX_ENTRYPOINT_QUIET_LOGS=1 -e NGINX_ENVSUBST_FILTER=^LIFE_OS_ \
+  -e "LIFE_OS_PUBLIC_HOSTNAME=$host" -e LIFE_OS_GATEWAY_BIND_ADDRESS=127.0.0.1 \
+  -e "LIFE_OS_BACKEND_NETWORK=$name-backend" \
+  -e LIFE_OS_REQUIRE_CLOUDFLARE_ACCESS= -e "LIFE_OS_TRUSTED_PROXIES=$proxy_subnet" \
+  -e "LIFE_OS_MODULES=$(cut -d ' ' -f 1 "$nginx_dir/module-routes" | grep -v '^#' | sort -u | paste -sd, -)" \
+  -v "$template:/etc/nginx/templates/default.conf.template:ro" \
+  -v "$nginx_dir/server-names.envsh:/docker-entrypoint.d/16-lifeos-server-names.envsh:ro" \
+  -v "$nginx_dir/modules.envsh:/docker-entrypoint.d/17-lifeos-modules.envsh:ro" \
+  -v "$nginx_dir/trusted-proxies.envsh:/docker-entrypoint.d/15-lifeos-trusted-proxies.envsh:ro" \
+  -v "$nginx_dir/module-routes:/etc/nginx/lifeos/module-routes:ro" "$image" >/dev/null
+
+# The proxies: on their own network and the proxy network, as the recipes'
+# compose files put them.
+docker run -d --rm --name "$name-caddy" --network "$name-front" --network "$name-proxy" \
+  -v "$work/Caddyfile:/etc/caddy/Caddyfile:ro" "$caddy_image" >/dev/null
+# The recipe's flags; its resolver is defined but unused (no Let's Encrypt
+# here).
+traefik_args=(--entryPoints.web.address=:80
+  --entryPoints.web.http.redirections.entryPoint.to=websecure
+  --entryPoints.web.http.redirections.entryPoint.scheme=https
+  --entryPoints.websecure.address=:443
+  --entryPoints.websecure.transport.respondingTimeouts.readTimeout=300s
+  --certificatesResolvers.le.acme.email=you@example.com
+  --certificatesResolvers.le.acme.storage=/tmp/acme.json
+  --certificatesResolvers.le.acme.tlsChallenge=true)
+traefik_mounts=()
+if ((traefik_labels)); then
+  traefik_args+=(--providers.docker=true --providers.docker.exposedByDefault=false
+    "--providers.docker.constraints=Label(\`lifeos.test-proxy-recipes\`,\`$name\`)")
+  traefik_mounts=(-v /var/run/docker.sock:/var/run/docker.sock:ro)
+else
+  traefik_args+=(--providers.file.filename=/etc/traefik/dynamic/lifeos.yml)
+  traefik_mounts=(-v "$work/traefik.yml:/etc/traefik/dynamic/lifeos.yml:ro")
+fi
+docker run -d --rm --name "$name-traefik" --network "$name-front" --network "$name-proxy" \
+  "${traefik_mounts[@]}" "$traefik_image" "${traefik_args[@]}" >/dev/null
+docker run -d --rm --name "$name-nginx" --network "$name-front" --network "$name-proxy" \
+  -v "$work:/work:ro" -v "$work/nginx.conf:/etc/nginx/conf.d/default.conf:ro" "$image" >/dev/null
+docker run -d --rm --name "$name-client" --network "$name-front" -v "$work:/work:ro" \
+  --entrypoint sleep "$curl_image" 900 >/dev/null
+client=$(docker inspect "$name-client" --format "{{(index .NetworkSettings.Networks \"$name-front\").IPAddress}}")
+
+request() { # <proxy> <path> [curl options…]: the body in $body, the status in $code
+  local proxy=$1 path=$2 address
+  shift 2
+  address=$(docker inspect "$name-$proxy" --format "{{(index .NetworkSettings.Networks \"$name-front\").IPAddress}}")
+  local tls=(--insecure)
+  [[ $proxy != caddy ]] || tls=(--cacert /work/caddy-root.crt)
+  local out
+  out=$(docker exec "$name-client" curl --silent --show-error --max-time 120 "${tls[@]}" \
+    --resolve "$host:443:$address" --write-out '\n%{http_code}' "$@" "https://$host$path") || true
+  code=${out##*$'\n'}
+  body=${out%$'\n'*}
+}
+expect() { # <proxy> <path> <status> [curl options…]
+  local proxy=$1 path=$2 want=$3
+  shift 3
+  request "$proxy" "$path" "$@"
+  [[ "$code" == "$want" ]] || { printf '%s\n' "$body" >&2; fail "$proxy: $path: $code, want $want"; }
+}
+expect_body() { # <text>
+  grep -qF -- "$1" <<<"$body" || { printf '%s\n' "$body" >&2; fail "the answer lacks: $1"; }
+}
+
+# Caddy makes its local CA and the site's certificate at start; the recipe
+# says where the root certificate is.
+for _ in $(seq 1 60); do
+  docker cp "$name-caddy:/data/caddy/pki/authorities/local/root.crt" "$work/caddy-root.crt" >/dev/null 2>&1 && break
+  sleep 0.5
+done
+[[ -s "$work/caddy-root.crt" ]] || { docker logs "$name-caddy" >&2; fail "Caddy's root certificate is not at /data/caddy/pki/authorities/local/root.crt"; }
+chmod 644 "$work/caddy-root.crt"
+
+for proxy in caddy traefik nginx; do
+  printf '==> %s\n' "$proxy"
+  for _ in $(seq 1 60); do
+    request "$proxy" /login
+    [[ "$code" == 200 ]] && break
+    sleep 0.5
+  done
+  [[ "$code" == 200 ]] || { docker logs "$name-$proxy" >&2; fail "$proxy: no answer for https://$host/login ($code): $body"; }
+  # The client's address and https, whatever the client claims.
+  expect "$proxy" /login 200 -H 'X-Forwarded-For: 198.51.100.66' -H 'X-Real-IP: 198.51.100.66'
+  expect_body "dashboard GET ip=[$client] xff=[$client] proto=[https] host=[$host]"
+  # A device key reaches the auth check; the identity names the client.
+  expect "$proxy" /api/tasks/v1/tasks 401
+  expect "$proxy" /api/tasks/v1/tasks 200 -H 'Authorization: Bearer good-key'
+  expect_body "service GET identity=[key:address=$client] ip=[$client]"
+  # Uploads: a voice note and a share within the gateway's limits, and the
+  # gateway's own 413 for a voice note over its limit.
+  expect "$proxy" /api/voice/v1/audio-jobs 200 -H 'Authorization: Bearer good-key' \
+    -H 'Content-Type: application/octet-stream' --data-binary @/work/voice-20m.bin
+  expect_body "service POST identity=[key:address=$client] ip=[$client] length=[20971520]"
+  expect "$proxy" /share 200 -H 'Content-Type: application/octet-stream' --data-binary @/work/share-50m.bin
+  expect_body "dashboard POST ip=[$client] xff=[$client] proto=[https] host=[$host] length=[52428800]"
+  expect "$proxy" /api/voice/v1/audio-jobs 413 -H 'Authorization: Bearer good-key' \
+    -H 'Content-Type: application/octet-stream' --data-binary @/work/voice-30m.bin
+done
+
+printf '\nproxy recipes: all checks passed (Caddy, nginx, and Traefik from %s)\n' "$( ((traefik_labels)) && echo 'Docker labels' || echo 'a file')"

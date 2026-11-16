@@ -97,9 +97,10 @@ HEADER = """\
 # The core always runs; each optional module is a profile of its name, which
 # runs when COMPOSE_PROFILES in .env lists it (./setup.sh modules).
 #
-# Early preview: Life OS has no login of its own yet. Keep the gateway on
-# 127.0.0.1 (LIFE_OS_GATEWAY_BIND_ADDRESS) and reach it through a VPN or an
-# access proxy such as Cloudflare Access. Never expose it to the internet.
+# Early preview. Keep the gateway on 127.0.0.1 (LIFE_OS_GATEWAY_BIND_ADDRESS)
+# and reach it over HTTPS through Tailscale Serve, your own reverse proxy, or a
+# Cloudflare Tunnel (docs/install/access.md). Never publish the gateway's
+# port to the internet.
 
 """
 

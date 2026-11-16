@@ -114,6 +114,9 @@ services:
   gateway:
     image: lifeos-gateway:latest
     ports: !override ["127.0.0.1:13001:80"]
+    # backend's name here (below), for the gateway's upstream names.
+    environment:
+      LIFE_OS_BACKEND_NETWORK: lifeos-verify-backend
 
 networks:
   # A fixed subnet (the live backend's is Docker's choice), so
@@ -134,6 +137,11 @@ networks:
     ipam:
       config: !override
         - subnet: 10.255.249.24/29
+  proxy:
+    name: lifeos-verify-proxy
+    ipam:
+      config: !override
+        - subnet: 10.255.249.64/28
   host-docker:
     name: lifeos-verify-host-docker
   notify-internal:
