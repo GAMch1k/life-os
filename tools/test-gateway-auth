@@ -237,6 +237,10 @@ expect_body 'route=finance]'
 expect GET /android/updates 200 -H 'Authorization: Bearer good-key'
 
 printf '==> MCP: the 401 carries the challenge that starts OAuth\n'
+# MCP's limit (5 a second, bursts of 10) counts every request, the
+# refused ones too: let the requests above to /api/mcp/ age out first, or a
+# fast runner gets 429 instead of the answers checked here.
+sleep 2.5
 expect POST /api/mcp/mcp 401 --data '{}'
 expect_body '"code":"unauthenticated"'
 grep -qi '^www-authenticate: Bearer resource_metadata="https://lifeos.example.com/.well-known/oauth-protected-resource/api/mcp"' "$work/headers" ||
