@@ -134,6 +134,11 @@ networks:
     ipam:
       config: !override
         - subnet: 10.255.249.24/29
+  proxy:
+    name: lifeos-verify-proxy
+    ipam:
+      config: !override
+        - subnet: 10.255.249.64/28
   host-docker:
     name: lifeos-verify-host-docker
   notify-internal:

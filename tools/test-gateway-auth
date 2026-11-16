@@ -61,6 +61,7 @@ gateway_args=(-e NGINX_ENTRYPOINT_QUIET_LOGS=1 -e NGINX_ENVSUBST_FILTER=^LIFE_OS
   -e LIFE_OS_PUBLIC_HOSTNAME=lifeos.example.com -e LIFE_OS_GATEWAY_BIND_ADDRESS=127.0.0.1
   -v "$nginx_dir/server-names.envsh:/docker-entrypoint.d/16-lifeos-server-names.envsh:ro"
   -v "$nginx_dir/modules.envsh:/docker-entrypoint.d/17-lifeos-modules.envsh:ro"
+  -v "$nginx_dir/trusted-proxies.envsh:/docker-entrypoint.d/18-lifeos-trusted-proxies.envsh:ro"
   -v "$nginx_dir/module-routes:/etc/nginx/lifeos/module-routes:ro")
 
 # The service locations, from the template: every one that proxies to an

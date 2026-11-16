@@ -1,0 +1,105 @@
+# shellcheck shell=sh
+# Sourced by the nginx image's entrypoint just before it renders
+# life-os.conf.template (after modules.envsh). From LIFE_OS_TRUSTED_PROXIES,
+# the reverse proxies in front of the gateway
+# (docs/install/access.md#your-own-reverse-proxy), it writes the two files
+# the template includes:
+#  - trusted-proxies.geo: "<proxy> 1;" for each, which tells a request that
+#    comes from one of them ($via_trusted_proxy, for X-Forwarded-Proto);
+#  - trusted-proxies.conf: set_real_ip_from for each, with X-Forwarded-For
+#    as the header to read, which every location of Life OS includes, so the
+#    client's address replaces the proxy's before the rate limits, the auth
+#    check, and the log see it.
+# Empty, the default: both files hold only a comment, and the gateway
+# believes no forwarded address but Cloudflare's, from the edge network
+# alone (the template's own).
+#
+# An entry is an IPv4 or IPv6 address or network (CIDR), or "host": the
+# server itself, for a proxy that runs on it outside Docker (Tailscale Serve,
+# Caddy from a package). Its connections to the gateway's published port
+# arrive from the address of Docker's bridge, the gateway's default route,
+# which this finds at every start. Entries are separated by commas or
+# spaces. One that is none of these, or one that would trust everyone
+# (0.0.0.0/0, ::/0), is left out with a warning: the gateway still starts,
+# and trusts less.
+lifeos_dir=${LIFE_OS_TRUSTED_PROXIES_DIR:-/etc/nginx/lifeos}
+lifeos_geo="# LIFE_OS_TRUSTED_PROXIES (trusted-proxies.envsh)"
+lifeos_realip=$lifeos_geo
+lifeos_trusted=
+
+lifeos_ipv4() { # <address>
+  printf '%s\n' "$1" | awk -F. 'NF != 4 { exit 1 }
+    { for (i = 1; i <= 4; i++) if ($i !~ /^[0-9]+$/ || length($i) > 3 || $i + 0 > 255) exit 1 }'
+}
+lifeos_ipv6() { # <address>
+  printf '%s\n' "$1" | awk '{
+    s = $0
+    if (s !~ /^[0-9A-Fa-f:]+$/ || s !~ /:/ || s ~ /:::/) exit 1
+    if (s ~ /^:[^:]/ || s ~ /[^:]:$/) exit 1
+    double = gsub(/::/, "&", s)
+    if (double > 1) exit 1
+    n = split(s, parts, ":")
+    groups = 0
+    for (i = 1; i <= n; i++) {
+      if (parts[i] == "") continue
+      if (length(parts[i]) > 4) exit 1
+      groups++
+    }
+    if ((double == 0 && groups != 8) || (double == 1 && groups > 7)) exit 1
+  }'
+}
+lifeos_valid() { # <address>[/<prefix>]
+  lifeos_address=${1%/*}
+  lifeos_prefix=
+  [ "$lifeos_address" = "$1" ] || lifeos_prefix=${1##*/}
+  if lifeos_ipv4 "$lifeos_address"; then
+    lifeos_max=32
+  elif lifeos_ipv6 "$lifeos_address"; then
+    lifeos_max=128
+  else
+    return 1
+  fi
+  [ -z "$lifeos_prefix" ] && return 0
+  case $lifeos_prefix in '' | *[!0-9]* | 0?*) return 1 ;; esac
+  [ "$lifeos_prefix" -ge 1 ] && [ "$lifeos_prefix" -le "$lifeos_max" ]
+}
+
+# No globbing while the list is split: an entry such as * stays itself.
+set -f
+for lifeos_proxy in $(printf '%s' "${LIFE_OS_TRUSTED_PROXIES:-}" | tr ',' ' '); do
+  if [ "$lifeos_proxy" = host ]; then
+    lifeos_proxy=$(ip -4 route show default 2>/dev/null | awk '$1 == "default" && $2 == "via" { print $3; exit }')
+    if [ -z "$lifeos_proxy" ]; then
+      echo "trusted-proxies.envsh: LIFE_OS_TRUSTED_PROXIES: no default route, so \"host\" is left out" >&2
+      continue
+    fi
+  fi
+  case $lifeos_proxy in
+    */0)
+      echo "trusted-proxies.envsh: LIFE_OS_TRUSTED_PROXIES: \"$lifeos_proxy\" would let anyone set their address, so it is left out" >&2
+      continue
+      ;;
+  esac
+  if ! lifeos_valid "$lifeos_proxy"; then
+    echo "trusted-proxies.envsh: LIFE_OS_TRUSTED_PROXIES: \"$lifeos_proxy\" is not an address or a network (such as 10.255.249.48/28), nor host, so it is left out" >&2
+    continue
+  fi
+  lifeos_geo="$lifeos_geo
+$lifeos_proxy 1;"
+  lifeos_realip="$lifeos_realip
+set_real_ip_from $lifeos_proxy;"
+  lifeos_trusted="$lifeos_trusted $lifeos_proxy"
+done
+set +f
+if [ -n "$lifeos_trusted" ]; then
+  lifeos_realip="$lifeos_realip
+real_ip_header X-Forwarded-For;
+real_ip_recursive on;"
+  { printf 'trusted-proxies.envsh: the client address and scheme from X-Forwarded-For and X-Forwarded-Proto, from:%s\n' "$lifeos_trusted" >&3; } 2>/dev/null || true
+fi
+
+mkdir -p "$lifeos_dir"
+printf '%s\n' "$lifeos_geo" >"$lifeos_dir/trusted-proxies.geo"
+printf '%s\n' "$lifeos_realip" >"$lifeos_dir/trusted-proxies.conf"
+unset lifeos_dir lifeos_geo lifeos_realip lifeos_trusted lifeos_proxy lifeos_address lifeos_prefix lifeos_max
+unset -f lifeos_ipv4 lifeos_ipv6 lifeos_valid

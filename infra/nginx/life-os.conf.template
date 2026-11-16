@@ -21,9 +21,23 @@ geo $realip_remote_addr $via_cloudflare {
   default 0;
   10.255.249.0/29 1;
 }
-map $via_cloudflare $forwarded_proto {
-  1 https;
+# Your own reverse proxies (LIFE_OS_TRUSTED_PROXIES in .env, empty by
+# default; docs/install/access.md#your-own-reverse-proxy): Caddy, Traefik,
+# Nginx Proxy Manager, Tailscale Serve. A request from one of them carries
+# the client's address in X-Forwarded-For and the scheme the client used in
+# X-Forwarded-Proto. trusted-proxies.envsh writes the proxies' addresses into
+# this file and into trusted-proxies.conf, which every location of Life OS
+# includes (below), at every start. Nobody else's forwarded headers are
+# believed: from any other address they are ignored, so they cannot be
+# spoofed to fake an address.
+geo $realip_remote_addr $via_trusted_proxy {
+  default 0;
+  include /etc/nginx/lifeos/trusted-proxies.geo;
+}
+map "$via_cloudflare:$via_trusted_proxy:$http_x_forwarded_proto" $forwarded_proto {
   default $scheme;
+  "~^1:" https;
+  "0:1:https" https;
 }
 # Every request that reaches Life OS through the tunnel passed Cloudflare
 # Access, which adds its token (Cf-Access-Jwt-Assertion; the connector also
@@ -98,8 +112,8 @@ server {
   # The hosts that reach Life OS, the one list (tools/check-gateway-hosts
   # checks its form). The gateway matches the Host header without its port.
   #  - LIFE_OS_PUBLIC_HOSTNAME (.env; empty: none): the public hostname, such
-  #    as the one behind Cloudflare Access and the tunnel, or a host Nginx's
-  #    (docs/host-nginx-example.conf).
+  #    as the one behind Cloudflare Access and the tunnel, or your reverse
+  #    proxy's, which must pass it on as Host (docs/install/proxies/).
   #  - LIFE_OS_GATEWAY_BIND_ADDRESS (.env; default 127.0.0.1): the address
   #    the gateway publishes on, such as a WireGuard address, for its peers
   #    and for maintenance on the host.
@@ -108,6 +122,17 @@ server {
   #    tests, and the smokes that ask Compose for the published address.
   server_name ${LIFE_OS_PUBLIC_HOSTNAME} ${LIFE_OS_GATEWAY_BIND_ADDRESS} 127.0.0.1 localhost;
   server_tokens off;
+  # The client's address. Through the tunnel, Cloudflare's header, from the
+  # edge network alone, as soon as the request is read. Through your own
+  # reverse proxy, X-Forwarded-For, from LIFE_OS_TRUSTED_PROXIES alone:
+  # nginx reads one header per level, so that one is set in each location
+  # (include trusted-proxies.conf, empty by default) and applies when the
+  # location is chosen, still before its rate limits, the auth check, and
+  # the log (tools/test-gateway-proxies; tools/check-gateway-hosts checks
+  # that every location includes it). real_ip_recursive skips the proxies'
+  # own addresses from the right, so an entry the client wrote itself, left
+  # of the one its proxy added, never counts. Every other request keeps the
+  # address it came from.
   set_real_ip_from 10.255.249.0/29;
   real_ip_header CF-Connecting-IP;
   if ($missing_access_token) { return 403; }
@@ -151,7 +176,9 @@ server {
   add_header Cache-Control $android_cache_control;
   add_header Content-Disposition $android_content_disposition;
 
-  # Never forward a caller-supplied chain of proxy headers.
+  # Never forward a caller-supplied chain of proxy headers: the client's
+  # address as resolved above, the scheme from Cloudflare or a trusted proxy
+  # (else the gateway's own), and the Host the client asked for.
   proxy_set_header Host $host;
   proxy_set_header X-Real-IP $remote_addr;
   proxy_set_header X-Forwarded-For $remote_addr;
@@ -191,6 +218,7 @@ server {
   resolver_timeout 5s;
 
   location /api/finance/ {
+    include /etc/nginx/lifeos/trusted-proxies.conf;
     set $lifeos_route finance;
     auth_request /internal/auth/check;
     auth_request_set $lifeos_auth_error $upstream_http_x_life_os_auth_error;
@@ -201,6 +229,7 @@ server {
     proxy_pass http://$upstream;
   }
   location /api/tasks/ {
+    include /etc/nginx/lifeos/trusted-proxies.conf;
     set $lifeos_route tasks;
     auth_request /internal/auth/check;
     auth_request_set $lifeos_auth_error $upstream_http_x_life_os_auth_error;
@@ -211,6 +240,7 @@ server {
     proxy_pass http://$upstream;
   }
   location /api/inbox/ {
+    include /etc/nginx/lifeos/trusted-proxies.conf;
     set $lifeos_route inbox;
     auth_request /internal/auth/check;
     auth_request_set $lifeos_auth_error $upstream_http_x_life_os_auth_error;
@@ -221,6 +251,7 @@ server {
     proxy_pass http://$upstream;
   }
   location /api/calendar/ {
+    include /etc/nginx/lifeos/trusted-proxies.conf;
     set $lifeos_route calendar;
     auth_request /internal/auth/check;
     auth_request_set $lifeos_auth_error $upstream_http_x_life_os_auth_error;
@@ -231,6 +262,7 @@ server {
     proxy_pass http://$upstream;
   }
   location /api/food/ {
+    include /etc/nginx/lifeos/trusted-proxies.conf;
     set $lifeos_route food;
     auth_request /internal/auth/check;
     auth_request_set $lifeos_auth_error $upstream_http_x_life_os_auth_error;
@@ -243,6 +275,7 @@ server {
   # Activity is read-only through the gateway; services record events on the
   # private network.
   location /api/activity/ {
+    include /etc/nginx/lifeos/trusted-proxies.conf;
     set $lifeos_route activity;
     auth_request /internal/auth/check;
     auth_request_set $lifeos_auth_error $upstream_http_x_life_os_auth_error;
@@ -254,6 +287,7 @@ server {
     proxy_pass http://$upstream;
   }
   location /api/notifications/ {
+    include /etc/nginx/lifeos/trusted-proxies.conf;
     set $lifeos_route notifications;
     auth_request /internal/auth/check;
     auth_request_set $lifeos_auth_error $upstream_http_x_life_os_auth_error;
@@ -265,6 +299,7 @@ server {
   }
   # Integration services, one prefix each: /api/integrations/<name>/.
   location /api/integrations/banking/ {
+    include /etc/nginx/lifeos/trusted-proxies.conf;
     set $lifeos_route finance;
     auth_request /internal/auth/check;
     auth_request_set $lifeos_auth_error $upstream_http_x_life_os_auth_error;
@@ -275,6 +310,7 @@ server {
     proxy_pass http://$upstream;
   }
   location /api/integrations/google-calendar/ {
+    include /etc/nginx/lifeos/trusted-proxies.conf;
     set $lifeos_route calendar;
     auth_request /internal/auth/check;
     auth_request_set $lifeos_auth_error $upstream_http_x_life_os_auth_error;
@@ -285,6 +321,7 @@ server {
     proxy_pass http://$upstream;
   }
   location /api/integrations/calendar-feeds/ {
+    include /etc/nginx/lifeos/trusted-proxies.conf;
     set $lifeos_route calendar;
     auth_request /internal/auth/check;
     auth_request_set $lifeos_auth_error $upstream_http_x_life_os_auth_error;
@@ -295,6 +332,7 @@ server {
     proxy_pass http://$upstream;
   }
   location /api/integrations/recipe-import/ {
+    include /etc/nginx/lifeos/trusted-proxies.conf;
     set $lifeos_route food;
     auth_request /internal/auth/check;
     auth_request_set $lifeos_auth_error $upstream_http_x_life_os_auth_error;
@@ -305,6 +343,7 @@ server {
     proxy_pass http://$upstream;
   }
   location /api/voice/ {
+    include /etc/nginx/lifeos/trusted-proxies.conf;
     set $lifeos_route voice;
     auth_request /internal/auth/check;
     auth_request_set $lifeos_auth_error $upstream_http_x_life_os_auth_error;
@@ -323,6 +362,7 @@ server {
     proxy_pass http://$upstream;
   }
   location /api/mcp/ {
+    include /etc/nginx/lifeos/trusted-proxies.conf;
     set $lifeos_route mcp;
     auth_request /internal/auth/check;
     auth_request_set $lifeos_auth_error $upstream_http_x_life_os_auth_error;
@@ -342,6 +382,7 @@ server {
   # Share → Life OS: the phone's share sheet posts what was shared, photos
   # included (up to five of 10 MB), to the Dashboard in one request.
   location = /share {
+    include /etc/nginx/lifeos/trusted-proxies.conf;
     limit_req zone=lifeos_write burst=20 nodelay;
     client_max_body_size 60m;
     client_body_timeout 120s;
@@ -355,6 +396,7 @@ server {
   # Google returns the owner here with a one-time authorization code in the
   # query: keep it out of the access log.
   location = /calendar/google/callback {
+    include /etc/nginx/lifeos/trusted-proxies.conf;
     access_log off;
     set $upstream dashboard:3000;
     proxy_pass http://$upstream;
@@ -362,6 +404,7 @@ server {
   # The bank returns the owner here with a one-time authorization code in
   # the query: keep it out of the access log too.
   location = /finance/bank/callback {
+    include /etc/nginx/lifeos/trusted-proxies.conf;
     access_log off;
     set $upstream dashboard:3000;
     proxy_pass http://$upstream;
@@ -375,10 +418,12 @@ server {
   # segments (encoded ones too) before it picks a location, so no request
   # leaves /srv/android.
   location = /android {
+    include /etc/nginx/lifeos/trusted-proxies.conf;
     absolute_redirect off;
     return 301 /android/;
   }
   location ^~ /android/ {
+    include /etc/nginx/lifeos/trusted-proxies.conf;
     # Signed in, or a paired device (P21-06), or legacy access: as every
     # service route (docs/architecture/multi-user.md#the-gateway).
     set $lifeos_route android;
@@ -426,6 +471,7 @@ server {
   # headers of its own, so it repeats the server's set: a location with any
   # proxy_set_header inherits none of the server's.
   location = /internal/auth/check {
+    include /etc/nginx/lifeos/trusted-proxies.conf;
     internal;
     proxy_pass_request_body off;
     proxy_set_header Content-Length "";
@@ -457,11 +503,13 @@ server {
   }
   # Every other /internal/ path is the private network's only.
   location ^~ /internal/ {
+    include /etc/nginx/lifeos/trusted-proxies.conf;
     return 404;
   }
   # Better Auth: signing in, two-factor, passkeys, the first account. Public,
   # with a strict limit per address.
   location ^~ /api/auth/ {
+    include /etc/nginx/lifeos/trusted-proxies.conf;
     limit_req zone=lifeos_auth burst=20 nodelay;
     set $upstream dashboard:3000;
     proxy_pass http://$upstream;
@@ -486,6 +534,7 @@ server {
   # A route of a module that is off (the map above). JSON, like the
   # services' own errors, so that the Dashboard's calls fail softly.
   location = /.lifeos/module-off {
+    include /etc/nginx/lifeos/trusted-proxies.conf;
     internal;
     default_type application/json;
     return 404 '{"error":{"code":"module_off","message":"This Life OS module is turned off"}}';
@@ -495,6 +544,7 @@ server {
   # off (images.unoptimized), and the gateway closes the path too, as a second
   # layer.
   location ^~ /_next/image {
+    include /etc/nginx/lifeos/trusted-proxies.conf;
     return 404;
   }
   # The Dashboard's locations pass the request URI as the client sent it,
@@ -503,6 +553,7 @@ server {
   # /.well-known/oauth-protected-resource/api/mcp and
   # /.well-known/oauth-authorization-server (P21-06).
   location / {
+    include /etc/nginx/lifeos/trusted-proxies.conf;
     set $upstream dashboard:3000;
     proxy_pass http://$upstream;
   }

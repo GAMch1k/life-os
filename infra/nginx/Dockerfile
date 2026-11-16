@@ -3,8 +3,10 @@
 # template into /etc/nginx/conf.d/default.conf, replacing only the LIFE_OS_*
 # names (NGINX_ENVSUBST_FILTER) that compose.yaml sets from .env; just before
 # that, server-names.envsh tidies the host names (docs/architecture/networking.md),
-# and modules.envsh lists the routes of the modules that are off, from
-# module-routes (docs/architecture/modules.md). A change to any of these files
+# modules.envsh lists the routes of the modules that are off, from
+# module-routes (docs/architecture/modules.md), and trusted-proxies.envsh
+# writes the reverse proxies of LIFE_OS_TRUSTED_PROXIES into the two files
+# the template includes (docs/install/access.md). A change to any of these files
 # takes a rebuild of this image, then the gateway's recreation
 # (docs/operations/deployment.md).
 FROM nginx:1.30-alpine@sha256:583b7f2fce1cdb8da5ad5c39ebd3c33b98b87d493190e548bdee1fa8c619c311
@@ -24,4 +26,5 @@ COPY --chmod=0644 life-os.conf.template /etc/nginx/templates/default.conf.templa
 # The entrypoint sources only executable *.envsh files, in order.
 COPY --chmod=0755 server-names.envsh /docker-entrypoint.d/16-lifeos-server-names.envsh
 COPY --chmod=0755 modules.envsh /docker-entrypoint.d/17-lifeos-modules.envsh
+COPY --chmod=0755 trusted-proxies.envsh /docker-entrypoint.d/18-lifeos-trusted-proxies.envsh
 COPY --chmod=0644 module-routes /etc/nginx/lifeos/module-routes

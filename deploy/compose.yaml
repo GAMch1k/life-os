@@ -9,9 +9,10 @@
 # The core always runs; each optional module is a profile of its name, which
 # runs when COMPOSE_PROFILES in .env lists it (./setup.sh modules).
 #
-# Early preview: Life OS has no login of its own yet. Keep the gateway on
-# 127.0.0.1 (LIFE_OS_GATEWAY_BIND_ADDRESS) and reach it through a VPN or an
-# access proxy such as Cloudflare Access. Never expose it to the internet.
+# Early preview. Keep the gateway on 127.0.0.1 (LIFE_OS_GATEWAY_BIND_ADDRESS)
+# and reach it over HTTPS through Tailscale Serve, your own reverse proxy, or a
+# Cloudflare Tunnel (docs/install/access.md). Never publish the gateway's
+# port to the internet.
 
 name: lifeos
 
@@ -931,6 +932,7 @@ services:
       LIFE_OS_GATEWAY_BIND_ADDRESS: ${LIFE_OS_GATEWAY_BIND_ADDRESS:-127.0.0.1}
       LIFE_OS_MODULES: ${COMPOSE_PROFILES:-}
       LIFE_OS_REQUIRE_CLOUDFLARE_ACCESS: ${LIFE_OS_REQUIRE_CLOUDFLARE_ACCESS:-}
+      LIFE_OS_TRUSTED_PROXIES: ${LIFE_OS_TRUSTED_PROXIES:-}
     ports:
       - ${LIFE_OS_GATEWAY_BIND_ADDRESS:-127.0.0.1}:${LIFE_OS_GATEWAY_PORT:-3000}:80
     depends_on:
@@ -955,8 +957,11 @@ services:
       recipe-import:
         condition: service_started
     networks:
-      - backend
-      - edge
+      backend: null
+      edge: null
+      proxy:
+        aliases:
+          - lifeos-gateway
     restart: unless-stopped
 
   ntfy:
@@ -1068,6 +1073,14 @@ networks:
     ipam:
       config:
         - subnet: 10.255.249.0/29
+
+  proxy:
+    name: lifeos-proxy
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.255.249.48/28
 
   notify-edge:
     name: lifeos-notify-edge
