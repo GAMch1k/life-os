@@ -186,7 +186,11 @@ paths:
         and returns it with 200; a new endpoint is created (201). The device
         label is read from the request's User-Agent, such as "Chrome on
         Android". The endpoint must be an https URL on a push service's host
-        name.
+        name. A paired device's request (its device key, the identity
+        token's via "device") stores the key's id with it, so that revoking
+        the key deletes the subscription; subscribing again moves an
+        endpoint to the key that sent it, and a request without a device key
+        (a browser) clears it.
       operationId: createPushSubscription
       security: []
       requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PushSubscriptionRequest'}}}}
@@ -206,6 +210,23 @@ paths:
         '204': {description: Device removed}
         '400': {description: 'Invalid id, or no valid X-Life-OS-Actor (actor_required)', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
         '404': {description: No such device (not_found), content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+  /v1/push/device-keys/{keyId}:
+    delete:
+      summary: Remove a revoked device key's devices
+      description: >-
+        Deletes every push subscription a paired device's key made. For the
+        Dashboard on the private network, when the key is revoked (Settings
+        → Devices, signing out everywhere, ./setup.sh sign-out-all); a
+        request that carries an identity token, which every request through
+        the gateway does, is refused (403 internal_only). Idempotent: 204
+        with or without subscriptions.
+      operationId: deleteDeviceKeySubscriptions
+      security: []
+      parameters: [{name: keyId, in: path, required: true, schema: {type: string, format: uuid}}]
+      responses:
+        '204': {description: The key's subscriptions are gone}
+        '400': {description: 'Invalid id, or no valid X-Life-OS-Actor (actor_required)', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '403': {description: Not an internal caller (internal_only), content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
   /v1/push/test:
     post:
       summary: Send a test push
@@ -356,7 +377,7 @@ components:
     PushSubscription:
       type: object
       description: One subscribed device.
-      required: [id, deviceLabel, endpoint, pushService, createdAt, lastSuccessAt, lastFailureAt, lastError]
+      required: [id, deviceLabel, endpoint, pushService, createdAt, lastSuccessAt, lastFailureAt, lastError, deviceKeyId]
       properties:
         id: {type: string, format: uuid}
         deviceLabel: {type: string, description: 'Read from its user agent, such as "Chrome on Android".'}
@@ -366,6 +387,7 @@ components:
         lastSuccessAt: {type: string, format: date-time, nullable: true, description: When a push to it was last accepted.}
         lastFailureAt: {type: string, format: date-time, nullable: true, description: When a push to it last failed.}
         lastError: {type: string, nullable: true, description: That failure's error.}
+        deviceKeyId: {type: string, format: uuid, nullable: true, description: 'The paired device''s key that subscribed it; revoking the key deletes it. None for a browser.'}
     PushSubscriptionList:
       type: object
       required: [items]

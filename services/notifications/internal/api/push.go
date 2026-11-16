@@ -17,6 +17,7 @@ import (
 	"github.com/oapi-codegen/runtime/types"
 
 	"github.com/GAMch1k/life-os/pkg/httpserver"
+	"github.com/GAMch1k/life-os/pkg/identity"
 	"github.com/GAMch1k/life-os/services/notifications/internal/api/generated"
 	"github.com/GAMch1k/life-os/services/notifications/internal/delivery"
 	store "github.com/GAMch1k/life-os/services/notifications/internal/repository/generated"
@@ -90,6 +91,7 @@ func (h *Handler) CreatePushSubscription(c fiber.Ctx) error {
 	if err != nil {
 		return badRequest(err.Error())
 	}
+	params.DeviceKeyID = deviceKeyOf(c)
 	row, err := store.New(h.db).UpsertPushSubscription(c.Context(), params)
 	if err != nil {
 		return internal(err)
@@ -101,8 +103,40 @@ func (h *Handler) CreatePushSubscription(c fiber.Ctx) error {
 	return c.Status(status).JSON(subscriptionOutput(store.PushSubscription{
 		ID: row.ID, Endpoint: row.Endpoint, P256dh: row.P256dh, Auth: row.Auth, DeviceLabel: row.DeviceLabel,
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, LastSuccessAt: row.LastSuccessAt,
-		LastFailureAt: row.LastFailureAt, LastError: row.LastError,
+		LastFailureAt: row.LastFailureAt, LastError: row.LastError, DeviceKeyID: row.DeviceKeyID,
 	}))
+}
+
+// deviceKeyOf is the paired device's key a request came with (the identity
+// token's via "device", its sid): its subscription is deleted when the key
+// is revoked (docs/api/devices.md#push-notifications-and-the-key). None for
+// a browser's session, legacy access, or an internal caller.
+func deviceKeyOf(c fiber.Ctx) pgtype.UUID {
+	principal, ok := identity.FromFiber(c)
+	if !ok || principal.Via != identity.ViaDevice {
+		return pgtype.UUID{}
+	}
+	id, err := uuid.Parse(principal.CredentialID)
+	if err != nil {
+		return pgtype.UUID{}
+	}
+	return pgtype.UUID{Bytes: id, Valid: true}
+}
+
+// DeleteDeviceKeySubscriptions deletes a revoked device key's subscriptions,
+// for the Dashboard on the private network. Through the gateway every
+// request carries an identity token, so one with a token is refused: no
+// person deletes another's devices this way (until P21-07 makes it the
+// Dashboard's service assertion).
+func (h *Handler) DeleteDeviceKeySubscriptions(c fiber.Ctx, keyID types.UUID) error {
+	if _, ok := identity.FromFiber(c); ok {
+		return httpserver.NewError(fiber.StatusForbidden, "internal_only",
+			"only Life OS itself deletes a device key's subscriptions")
+	}
+	if _, err := store.New(h.db).DeleteDeviceKeySubscriptions(c.Context(), pgtype.UUID{Bytes: keyID, Valid: true}); err != nil {
+		return internal(err)
+	}
+	return c.SendStatus(fiber.StatusNoContent)
 }
 
 func (h *Handler) DeletePushSubscription(c fiber.Ctx, id types.UUID) error {
@@ -209,7 +243,7 @@ func validEndpoint(endpoint string) error {
 }
 
 func subscriptionOutput(row store.PushSubscription) generated.PushSubscription {
-	return generated.PushSubscription{
+	output := generated.PushSubscription{
 		Id:            types.UUID(uuid.UUID(row.ID.Bytes)),
 		DeviceLabel:   row.DeviceLabel,
 		Endpoint:      row.Endpoint,
@@ -219,6 +253,11 @@ func subscriptionOutput(row store.PushSubscription) generated.PushSubscription {
 		LastFailureAt: timestamp(row.LastFailureAt),
 		LastError:     row.LastError,
 	}
+	if row.DeviceKeyID.Valid {
+		key := types.UUID(uuid.UUID(row.DeviceKeyID.Bytes))
+		output.DeviceKeyId = &key
+	}
+	return output
 }
 
 func pushNotConfigured() error {

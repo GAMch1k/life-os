@@ -54,11 +54,11 @@ function hideForToday() {
 /**
  * While legacy access is on and an account exists, a reminder once a day:
  * anyone who reaches Life OS acts as the owner
- * (docs/architecture/multi-user.md#legacy-access). Hidden until devices can
- * be paired (DEVICE_PAIRING_AVAILABLE, P21-06): before that, the phone and
- * watch apps need legacy access, and the reminder would ask for something
- * the owner cannot do. Before the first account exists, the header's
- * account button points to /setup instead.
+ * (docs/architecture/multi-user.md#legacy-access). It shows since devices
+ * can be paired (DEVICE_PAIRING_AVAILABLE, P21-06): the phone and watch apps
+ * no longer need legacy access once they are paired in Settings → Devices.
+ * Before the first account exists, the header's account button points to
+ * /setup instead.
  */
 export function LegacyAccessReminder({ account }: { account?: AccountInfo }) {
   const dismissed = useSyncExternalStore(
@@ -79,12 +79,16 @@ export function LegacyAccessReminder({ account }: { account?: AccountInfo }) {
       <Unlock aria-hidden="true" />
       <AlertTitle>Legacy access is on</AlertTitle>
       <AlertDescription>
-        Anyone who reaches Life OS without signing in acts as the owner. Turn it
-        off in{" "}
+        Anyone who reaches Life OS without signing in acts as the owner. Pair
+        your phone and watch apps in{" "}
+        <Link className="underline" href="/settings/devices">
+          Settings → Devices
+        </Link>
+        , then turn it off in{" "}
         <Link className="underline" href="/settings/security">
           Settings → Security
-        </Link>{" "}
-        once your phone and watch apps are paired.
+        </Link>
+        .
       </AlertDescription>
       <AlertAction>
         <Button

@@ -94,14 +94,20 @@ func newSigner(t *testing.T) signer {
 	return signer{private: private, keys: keys}
 }
 
-func (s signer) token(role, via string) string {
+func (s signer) token(role, via string) string { return s.tokenMFA(role, via, false) }
+
+// twoFactor is a browser session that signed in with a second factor (the
+// mfa claim, which admin routes need since P21-06).
+func (s signer) twoFactor(role string) string { return s.tokenMFA(role, "session", true) }
+
+func (s signer) tokenMFA(role, via string, mfa bool) string {
 	encode := func(v any) string {
 		raw, _ := json.Marshal(v)
 		return base64.RawURLEncoding.EncodeToString(raw)
 	}
 	input := encode(map[string]string{"alg": "EdDSA", "typ": "lifeos-id+jwt", "kid": "auth-test"}) + "." + encode(map[string]any{
 		"iss": "lifeos-auth", "aud": "lifeos-services", "sub": "00000000-0000-4000-8000-000000000001",
-		"sid": via, "via": via, "role": role, "exp": time.Now().Add(time.Minute).Unix(),
+		"sid": via, "via": via, "role": role, "mfa": mfa, "exp": time.Now().Add(time.Minute).Unix(),
 	})
 	return input + "." + base64.RawURLEncoding.EncodeToString(ed25519.Sign(s.private, []byte(input)))
 }
@@ -187,9 +193,12 @@ func TestDiagnosticsAreForSignedInAdmins(t *testing.T) {
 		code        string
 	}{
 		{"an internal caller (the Dashboard after its own check)", "", 200, ""},
-		{"an admin who signed in", keys.token("admin", "session"), 200, ""},
-		{"the owner who signed in", keys.token("owner", "session"), 200, ""},
-		{"a member", keys.token("member", "session"), 403, "admin_only"},
+		{"an admin who signed in with two-factor", keys.twoFactor("admin"), 200, ""},
+		{"the owner who signed in with two-factor", keys.twoFactor("owner"), 200, ""},
+		{"an admin who signed in without two-factor", keys.token("admin", "session"), 403, "second_factor_required"},
+		{"the owner's paired phone", keys.token("owner", "device"), 403, "admin_only"},
+		{"the owner's API token", keys.token("owner", "token"), 403, "admin_only"},
+		{"a member", keys.twoFactor("member"), 403, "admin_only"},
 		{"legacy access", keys.token("owner", "legacy"), 401, "sign_in_required"},
 	} {
 		for _, path := range []string{"/v1/diagnostic-events", "/v1/diagnostic-events/summary"} {

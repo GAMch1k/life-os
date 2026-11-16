@@ -40,6 +40,10 @@ func TestHandler(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil || rec.Code != 401 || envelope.Error.Code != "unauthenticated" {
 		t.Fatalf("with a bad token: %d %s", rec.Code, rec.Body)
 	}
+	rec = call("/mcp", sign(t, key, standardHeader(key.kid), with(standardClaims(), "exp", now.Add(-time.Minute).Unix())))
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil || rec.Code != 401 || envelope.Error.Code != "identity_expired" {
+		t.Fatalf("with an expired token: %d %s", rec.Code, rec.Body)
+	}
 	if rec := call("/health", "garbage"); rec.Code != 200 {
 		t.Fatalf("/health with a bad token: %d", rec.Code)
 	}

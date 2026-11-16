@@ -170,6 +170,11 @@ func New(service string, options ...Option) *App {
 		logger.Warn("identity: " + identity.TrustedKeysEnv + " is empty: requests with an identity token are refused")
 	}
 	fiberApp.Use(identity.Middleware(identity.NewVerifier(s.trustedKeys, nil), HealthPath, ReadyPath))
+	// A personal token or an MCP grant reaches only the modules its scopes
+	// name (P21-06): this service's module (identity.ServiceModule), read
+	// or written by the method. Sessions, device keys, and legacy access
+	// carry no scopes and pass.
+	fiberApp.Use(identity.RequireScope(identity.ServiceModule(service), HealthPath, ReadyPath))
 	app.registerHealthRoutes()
 	if recorder := s.diagnostics; recorder != nil {
 		app.OnShutdown(func(ctx context.Context) error {

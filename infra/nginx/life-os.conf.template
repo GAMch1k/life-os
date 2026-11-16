@@ -46,6 +46,19 @@ map $uri $lifeos_module_off {
   default "";${LIFE_OS_GATEWAY_MODULE_ROUTES}
 }
 
+# The gateway's 403, by the auth check's reason (X-Life-OS-Auth-Error, kept
+# by auth_request_set in each location that asks it): a fixed list, never
+# the header's own text. Empty, the refusal is the gateway's own: a request
+# through the tunnel without Access's token
+# (docs/api/devices.md#when-a-request-is-refused).
+map $lifeos_auth_error $lifeos_forbidden_body {
+  default '{"error":{"code":"forbidden","message":"This request is not allowed here"}}';
+  credential_not_allowed '{"error":{"code":"credential_not_allowed","message":"This device key or token may not be used here"}}';
+  insufficient_scope '{"error":{"code":"insufficient_scope","message":"This token may not do this: see its scopes in Settings, API tokens"}}';
+  forbidden_origin '{"error":{"code":"forbidden_origin","message":"This request did not come from Life OS"}}';
+  forbidden_path '{"error":{"code":"forbidden_path","message":"This path is not allowed"}}';
+}
+
 # Attribution (pkg/activity). Public clients may say they are the owner
 # ("user") or a development tool ("dev:<name>"), which cannot impersonate
 # anyone internal. Claims to be the Life OS AI ("agent:") or a component
@@ -129,6 +142,11 @@ server {
   if ($uri !~ "^/internal/auth/") {
     set $android_cache_control "";
     set $android_content_disposition "";
+    # The route a location names for the auth check (below), which the
+    # check's subrequest must keep.
+    set $lifeos_route "";
+    # The check's reason for a refusal (auth_request_set, below).
+    set $lifeos_auth_error "";
   }
   add_header Cache-Control $android_cache_control;
   add_header Content-Disposition $android_content_disposition;
@@ -173,7 +191,9 @@ server {
   resolver_timeout 5s;
 
   location /api/finance/ {
+    set $lifeos_route finance;
     auth_request /internal/auth/check;
+    auth_request_set $lifeos_auth_error $upstream_http_x_life_os_auth_error;
     auth_request_set $lifeos_identity $upstream_http_x_life_os_identity;
     limit_req zone=lifeos_api burst=60 nodelay;
     set $upstream finance:8080;
@@ -181,7 +201,9 @@ server {
     proxy_pass http://$upstream;
   }
   location /api/tasks/ {
+    set $lifeos_route tasks;
     auth_request /internal/auth/check;
+    auth_request_set $lifeos_auth_error $upstream_http_x_life_os_auth_error;
     auth_request_set $lifeos_identity $upstream_http_x_life_os_identity;
     limit_req zone=lifeos_api burst=60 nodelay;
     set $upstream tasks:8080;
@@ -189,7 +211,9 @@ server {
     proxy_pass http://$upstream;
   }
   location /api/inbox/ {
+    set $lifeos_route inbox;
     auth_request /internal/auth/check;
+    auth_request_set $lifeos_auth_error $upstream_http_x_life_os_auth_error;
     auth_request_set $lifeos_identity $upstream_http_x_life_os_identity;
     limit_req zone=lifeos_api burst=60 nodelay;
     set $upstream inbox:8080;
@@ -197,7 +221,9 @@ server {
     proxy_pass http://$upstream;
   }
   location /api/calendar/ {
+    set $lifeos_route calendar;
     auth_request /internal/auth/check;
+    auth_request_set $lifeos_auth_error $upstream_http_x_life_os_auth_error;
     auth_request_set $lifeos_identity $upstream_http_x_life_os_identity;
     limit_req zone=lifeos_api burst=60 nodelay;
     set $upstream calendar:8080;
@@ -205,7 +231,9 @@ server {
     proxy_pass http://$upstream;
   }
   location /api/food/ {
+    set $lifeos_route food;
     auth_request /internal/auth/check;
+    auth_request_set $lifeos_auth_error $upstream_http_x_life_os_auth_error;
     auth_request_set $lifeos_identity $upstream_http_x_life_os_identity;
     limit_req zone=lifeos_api burst=60 nodelay;
     set $upstream food:8080;
@@ -215,7 +243,9 @@ server {
   # Activity is read-only through the gateway; services record events on the
   # private network.
   location /api/activity/ {
+    set $lifeos_route activity;
     auth_request /internal/auth/check;
+    auth_request_set $lifeos_auth_error $upstream_http_x_life_os_auth_error;
     auth_request_set $lifeos_identity $upstream_http_x_life_os_identity;
     limit_req zone=lifeos_api burst=60 nodelay;
     limit_except GET { deny all; }
@@ -224,7 +254,9 @@ server {
     proxy_pass http://$upstream;
   }
   location /api/notifications/ {
+    set $lifeos_route notifications;
     auth_request /internal/auth/check;
+    auth_request_set $lifeos_auth_error $upstream_http_x_life_os_auth_error;
     auth_request_set $lifeos_identity $upstream_http_x_life_os_identity;
     limit_req zone=lifeos_api burst=60 nodelay;
     set $upstream notifications:8080;
@@ -233,7 +265,9 @@ server {
   }
   # Integration services, one prefix each: /api/integrations/<name>/.
   location /api/integrations/banking/ {
+    set $lifeos_route finance;
     auth_request /internal/auth/check;
+    auth_request_set $lifeos_auth_error $upstream_http_x_life_os_auth_error;
     auth_request_set $lifeos_identity $upstream_http_x_life_os_identity;
     limit_req zone=lifeos_api burst=60 nodelay;
     set $upstream banking:8080;
@@ -241,7 +275,9 @@ server {
     proxy_pass http://$upstream;
   }
   location /api/integrations/google-calendar/ {
+    set $lifeos_route calendar;
     auth_request /internal/auth/check;
+    auth_request_set $lifeos_auth_error $upstream_http_x_life_os_auth_error;
     auth_request_set $lifeos_identity $upstream_http_x_life_os_identity;
     limit_req zone=lifeos_api burst=60 nodelay;
     set $upstream google-calendar:8080;
@@ -249,7 +285,9 @@ server {
     proxy_pass http://$upstream;
   }
   location /api/integrations/calendar-feeds/ {
+    set $lifeos_route calendar;
     auth_request /internal/auth/check;
+    auth_request_set $lifeos_auth_error $upstream_http_x_life_os_auth_error;
     auth_request_set $lifeos_identity $upstream_http_x_life_os_identity;
     limit_req zone=lifeos_api burst=60 nodelay;
     set $upstream calendar-feeds:8080;
@@ -257,7 +295,9 @@ server {
     proxy_pass http://$upstream;
   }
   location /api/integrations/recipe-import/ {
+    set $lifeos_route food;
     auth_request /internal/auth/check;
+    auth_request_set $lifeos_auth_error $upstream_http_x_life_os_auth_error;
     auth_request_set $lifeos_identity $upstream_http_x_life_os_identity;
     limit_req zone=lifeos_api burst=60 nodelay;
     set $upstream recipe-import:8080;
@@ -265,7 +305,9 @@ server {
     proxy_pass http://$upstream;
   }
   location /api/voice/ {
+    set $lifeos_route voice;
     auth_request /internal/auth/check;
+    auth_request_set $lifeos_auth_error $upstream_http_x_life_os_auth_error;
     auth_request_set $lifeos_identity $upstream_http_x_life_os_identity;
     limit_req zone=lifeos_write burst=20 nodelay;
     # An over-limit upload is answered 413 at once, but by default nginx then
@@ -281,8 +323,15 @@ server {
     proxy_pass http://$upstream;
   }
   location /api/mcp/ {
+    set $lifeos_route mcp;
     auth_request /internal/auth/check;
+    auth_request_set $lifeos_auth_error $upstream_http_x_life_os_auth_error;
     auth_request_set $lifeos_identity $upstream_http_x_life_os_identity;
+    # An MCP client without a valid token learns where to sign in: the
+    # check answers its 401 with WWW-Authenticate (RFC 9728's
+    # resource_metadata), which nginx's auth_request passes on with the 401
+    # by itself, through the server's error_page as well (P21-06;
+    # tools/test-gateway-auth checks it is there, once).
     limit_req zone=lifeos_mcp burst=10 nodelay;
     proxy_buffering off;
     proxy_read_timeout 300s;
@@ -332,7 +381,9 @@ server {
   location ^~ /android/ {
     # Signed in, or a paired device (P21-06), or legacy access: as every
     # service route (docs/architecture/multi-user.md#the-gateway).
+    set $lifeos_route android;
     auth_request /internal/auth/check;
+    auth_request_set $lifeos_auth_error $upstream_http_x_life_os_auth_error;
     # A download is one request, so the general limit never cuts a long one
     # off, and send_timeout bounds a pause between two writes, not the whole
     # download. Files are served to GET and HEAD only (any other method is
@@ -380,6 +431,11 @@ server {
     proxy_set_header Content-Length "";
     proxy_set_header X-Original-Method $request_method;
     proxy_set_header X-Original-URI $request_uri;
+    # The route of the location that asks (P21-06): nginx picked it from
+    # the decoded, normalized path, which $request_uri does not show, so a
+    # token's scopes are judged against what the request really reaches. A
+    # client's own copy never passes (empty: not sent).
+    proxy_set_header X-Life-OS-Route $lifeos_route;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header X-Forwarded-For $remote_addr;
@@ -417,7 +473,7 @@ server {
   }
   location @lifeos_forbidden {
     default_type application/json;
-    return 403 '{"error":{"code":"forbidden","message":"This request is not allowed here"}}';
+    return 403 $lifeos_forbidden_body;
   }
   location @lifeos_auth_unavailable {
     default_type application/json;
@@ -442,7 +498,10 @@ server {
     return 404;
   }
   # The Dashboard's locations pass the request URI as the client sent it,
-  # as before: their proxy_pass has no URI.
+  # as before: their proxy_pass has no URI. This one also serves MCP's
+  # OAuth metadata, which a client reads before it signs in, so public:
+  # /.well-known/oauth-protected-resource/api/mcp and
+  # /.well-known/oauth-authorization-server (P21-06).
   location / {
     set $upstream dashboard:3000;
     proxy_pass http://$upstream;

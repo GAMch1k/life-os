@@ -31,8 +31,11 @@ func TestHostHealthIsForAdmins(t *testing.T) {
 		status      int
 	}{
 		{"no token (the Dashboard)", "", http.StatusOK},
-		{"the owner", signer.Token("", "owner", "session"), http.StatusOK},
-		{"an admin", signer.Token(member, "admin", "session"), http.StatusOK},
+		{"the owner with two-factor", signer.TwoFactor("", "owner"), http.StatusOK},
+		{"an admin with two-factor", signer.TwoFactor(member, "admin"), http.StatusOK},
+		{"an admin signed in without two-factor", signer.Token(member, "admin", "session"), http.StatusForbidden},
+		{"the owner's paired phone", signer.Token("", "owner", "device"), http.StatusForbidden},
+		{"the owner's API token", signer.Token("", "owner", "token"), http.StatusForbidden},
 		{"legacy access", signer.Token("", "owner", "legacy"), http.StatusOK},
 		{"a member", signer.Token(member, "member", "session"), http.StatusForbidden},
 	} {

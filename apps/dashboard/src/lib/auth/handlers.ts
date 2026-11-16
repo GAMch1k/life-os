@@ -1,5 +1,7 @@
 import { type CheckRuntime, checkRequest, sessionSource } from "./check";
 import { IDENTITY_HEADER } from "./constants";
+import { devicesHandler } from "./devices-api";
+import { routeFromGateway, suspiciousPath } from "./scopes";
 
 /**
  * The Dashboard's auth endpoints as plain fetch handlers, which the Next.js
@@ -7,8 +9,13 @@ import { IDENTITY_HEADER } from "./constants";
  */
 
 /** Better Auth at /api/auth/*: for the request's host, the secure one or,
- * on a plain-HTTP host the owner allowed, the insecure one. */
+ * on a plain-HTTP host the owner allowed, the insecure one. The phone
+ * apps' pairing endpoints (/api/auth/devices/…) are Life OS's own. */
 export function authHandler(rt: CheckRuntime, request: Request) {
+  const { pathname } = new URL(request.url);
+  if (pathname.startsWith("/api/auth/devices/")) {
+    return devicesHandler(rt, request);
+  }
   return sessionSource(rt, request.headers).auth.handler(request);
 }
 
@@ -16,14 +23,33 @@ export function authHandler(rt: CheckRuntime, request: Request) {
  * The gateway's auth_request target, /internal/auth/check. It answers only
  * 204 (with the identity token), 401, or 403, as nginx needs; anything that
  * goes wrong is a 500, which the gateway turns into 503 auth_unavailable.
+ * A 401 for MCP carries the WWW-Authenticate challenge that points an MCP
+ * client to OAuth (the gateway passes it on), and every refusal its code
+ * in X-Life-OS-Auth-Error.
  */
 export async function checkHandler(
   rt: CheckRuntime,
   request: Request,
 ): Promise<Response> {
   const method = request.headers.get("x-original-method") ?? request.method;
+  const uri = request.headers.get("x-original-uri") ?? "/";
+  // nginx resolves an encoded slash or a dot segment before it picks a
+  // location, so such a path could be judged as another route than the
+  // one it reaches: refused, behind the route the location names.
+  if (suspiciousPath(uri)) {
+    return new Response(null, {
+      status: 403,
+      headers: {
+        "x-life-os-auth-error": "forbidden_path",
+        "cache-control": "no-store",
+      },
+    });
+  }
   try {
-    const result = await checkRequest(rt, method, request.headers);
+    const result = await checkRequest(rt, method, request.headers, {
+      uri,
+      route: routeFromGateway(request.headers.get("x-life-os-route")),
+    });
     if (result.status === 204) {
       return new Response(null, {
         status: 204,
@@ -33,13 +59,14 @@ export async function checkHandler(
         },
       });
     }
-    return new Response(null, {
-      status: result.status,
-      headers: {
-        "x-life-os-auth-error": result.code,
-        "cache-control": "no-store",
-      },
-    });
+    const headers: Record<string, string> = {
+      "x-life-os-auth-error": result.code,
+      "cache-control": "no-store",
+    };
+    if (result.status === 401 && result.challenge) {
+      headers["www-authenticate"] = result.challenge;
+    }
+    return new Response(null, { status: result.status, headers });
   } catch (error) {
     console.error(
       "auth check failed",

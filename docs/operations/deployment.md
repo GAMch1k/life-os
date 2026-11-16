@@ -38,6 +38,24 @@ The admin-only surfaces, the security log, and server diagnostics (P21-04 and P2
 
 Signed in without two-factor sign-in, the owner sees Status's one line and a note to turn it on, until they do.
 
+### Devices, tokens, and MCP
+
+Device pairing, personal API tokens, MCP's OAuth, and the `mfa` claim (P21-06; [Accounts → Settings → Devices](../install/accounts.md#settings--devices), [Devices and tokens](../api/devices.md)) need no new setting. They bring `auth_db`'s migrations `000004` (Better Auth's API keys, OAuth, and JWKS tables, `session.secondFactor`, `pairing_codes`, `device_key_cleanup`) and `000005` (`session_reauth`, `credential_revocations`), and `notifications_db`'s `000004` (`device_key_id`), all additive. The Dashboard, the gateway (its template: the route each location names for the check, the check's reasons in its `403`s), Notifications, MCP, and every Go service (`pkg/identity`, `pkg/httpserver`, `pkg/activity`) change. Before you start, note two changes in behaviour:
+
+- **A bearer that is not Life OS's is refused.** Since P21-06, `Authorization: Bearer …` is a Life OS credential: a request that carries one with any other value (a proxy's or a script's own token) gets `401`, where it had legacy access before. `Basic` is still ignored. Check that nothing in front of Life OS, and no script of yours, sends a bearer of its own.
+- **Admin routes need a second factor in this browser.** Status's details, the backups, and the other admin parts need a session that signed in with the second factor; sessions from before the update have none, so the owner signs in again with it.
+
+In a clone, in this order:
+
+1. Back up (`tools/backup-now`, or **Back up now** in Status), and build every image first, a few at a time: the migrate image (`docker compose build --pull auth-migrate`, which also carries Notifications' migrations), the Dashboard, the gateway, `notifications`, `mcp`, and the other Go services.
+2. Stop the monitor for the switch (`docker compose stop monitor`).
+3. `docker compose up --no-build --no-deps auth-migrate`, then `docker compose up --no-build --no-deps notifications-migrate`.
+4. `docker compose up -d --no-build --no-deps dashboard`, and **right after it** `docker compose up -d --no-build --no-deps --force-recreate gateway` (the new gateway names each route for the check; the Dashboard from before ignores that, and the new Dashboard falls back to the URI without it, so only the moments between the two run on the URI alone).
+5. `docker compose up -d --no-build --no-deps notifications` (until it runs, revoked keys' push subscriptions wait in `device_key_cleanup`, retried every minute), then `mcp`, then the other Go services one by one, `--no-deps` always, the processor last and while no capture is being processed, and the backup service not while a backup runs.
+6. Check `/status`, a sign-in with the second factor (Status's details), an API call through the gateway, and Settings → Devices; then `docker compose up -d --no-build --no-deps monitor`.
+
+Then pair the phone (app 0.5.0 or newer, [Phone and watch apps](../install/phone-apps.md#connect-to-your-server)) and its watch, and turn legacy access off in Settings → Security.
+
 ## Modules
 
 Since P20-01 the core always runs and every other part is an optional [module](../architecture/modules.md), the Compose profile of its name: `ai` (`mcp`, `processor`), `voice` (`voice-migrate`, `voice`, `voice-worker`, `whisper`), `google-calendar`, `banking`, `cloudflare` (`cloudflared`), `ntfy`, and `server-health` (`host-health`, `host-health-docker`). `COMPOSE_PROFILES` in `.env` lists the modules that run; Compose hands the same list to the Dashboard and the gateway (`LIFE_OS_MODULES`), which show, probe, and route only those. `make life-up` builds every module's image and starts the core and the listed modules.

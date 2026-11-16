@@ -117,8 +117,12 @@ func TestVerifyRefuses(t *testing.T) {
 		token string
 		at    time.Time
 	}{
-		"expired": {
-			sign(t, key, standardHeader(key.kid), standardClaims()),
+		"expired, with another key": {
+			sign(t, other, standardHeader(key.kid), standardClaims()),
+			now.Add(5*time.Minute + Leeway + time.Second),
+		},
+		"expired, with changed claims": {
+			tamper(sign(t, key, standardHeader(key.kid), standardClaims()), with(standardClaims(), "role", "admin")),
 			now.Add(5*time.Minute + Leeway + time.Second),
 		},
 		"not yet valid": {
@@ -188,6 +192,23 @@ func TestVerifyRefuses(t *testing.T) {
 				t.Fatalf("%d %s", status, code)
 			}
 		})
+	}
+}
+
+// A genuine token that expired on the way (a long upload) is refused with a
+// code of its own, so that a client sends the request again rather than
+// signing in again; only a token whose signature and claims are good gets
+// it (TestVerifyRefuses: a forged expired one is unauthenticated).
+func TestVerifyExpired(t *testing.T) {
+	key := newKey(t, "auth-a")
+	set := keySet(t, key)
+	_, err := verifier(set, now.Add(5*time.Minute+Leeway+time.Second)).Verify(sign(t, key, standardHeader(key.kid), standardClaims()))
+	refused, ok := err.(*Error)
+	if !ok || !refused.Expired {
+		t.Fatalf("err = %v", err)
+	}
+	if status, code, _ := refused.PublicError(); status != 401 || code != "identity_expired" {
+		t.Fatalf("%d %s", status, code)
 	}
 }
 

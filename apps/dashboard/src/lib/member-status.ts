@@ -22,9 +22,10 @@ export type MemberStatus = {
   problems: string[];
   /**
    * Why someone who is an admin sees this view: admin pages need
-   * two-factor sign-in first.
+   * two-factor sign-in first, or a sign-in with it (P21-06: the session
+   * signed in with a password alone).
    */
-  reason?: "second_factor_required";
+  reason?: "second_factor_required" | "second_factor_sign_in_required";
   /** Empty: a member gets no checks (clients of the full view expect it). */
   checks: [];
 };

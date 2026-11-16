@@ -173,14 +173,20 @@ func TestIdentityTokenIsVerifiedWhenPresent(t *testing.T) {
 	if status, body := call("/who", valid); status != 200 || body != "00000000-0000-4000-8000-000000000001 session" {
 		t.Fatalf("with a valid token: %d %s", status, body)
 	}
-	for _, bad := range []string{expired, "garbage", valid + "x"} {
+	// A genuine token that expired on the way has a code of its own, so a
+	// client sends the request again (docs/api/devices.md#when-a-request-is-refused).
+	for bad, want := range map[string]string{
+		expired:     "identity_expired",
+		"garbage":   "unauthenticated",
+		valid + "x": "unauthenticated",
+	} {
 		status, body := call("/who", bad)
 		var envelope struct {
 			Error struct{ Code string } `json:"error"`
 		}
 		_ = json.Unmarshal([]byte(body), &envelope)
-		if status != 401 || envelope.Error.Code != "unauthenticated" {
-			t.Fatalf("with a bad token: %d %s", status, body)
+		if status != 401 || envelope.Error.Code != want {
+			t.Fatalf("with a bad token: %d %s (want %s)", status, body, want)
 		}
 	}
 	if status, _ := call(HealthPath, "garbage"); status != 200 {

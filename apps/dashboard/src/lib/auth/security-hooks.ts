@@ -6,12 +6,27 @@ import {
 } from "better-auth/api";
 import type { Pool } from "pg";
 
+import { REVOKE_CREDENTIALS_HEADER } from "./constants";
+import {
+  processCredentialRevocations,
+  queueCredentialRevocation,
+  type RevocationReason,
+} from "./keys";
 import {
   recordFailedSignIn,
   recordSecurityEvent,
   type SecurityEventKind,
   type SecurityOutcome,
 } from "./security-log";
+
+/** The scopes a consent gave, as a code: read, write, or read_write. */
+function consentDetail(scope: unknown): string {
+  const scopes =
+    typeof scope === "string" ? scope.split(" ") : ["mcp:read", "mcp:write"];
+  const read = scopes.includes("mcp:read");
+  const write = scopes.includes("mcp:write");
+  return read && write ? "mcp:read_write" : write ? "mcp:write" : "mcp:read";
+}
 
 /**
  * What Better Auth's endpoints write into the security log
@@ -43,8 +58,11 @@ type HookContext = {
   };
 };
 
-/** The user a request was made by, before the endpoint ran. */
-const before = new WeakMap<object, { userId: string | null }>();
+/** The user (and session) a request was made by, before the endpoint ran. */
+const before = new WeakMap<
+  object,
+  { userId: string | null; sessionId?: string | null }
+>();
 
 /** Endpoints whose actor is the signed-in user. */
 const SESSION_PATHS = new Set([
@@ -65,6 +83,8 @@ const SESSION_PATHS = new Set([
   "/admin/remove-user",
   "/admin/revoke-user-session",
   "/admin/revoke-user-sessions",
+  "/oauth2/consent",
+  "/oauth2/register",
 ]);
 
 /** Admin endpoints that change something, with their entry. */
@@ -114,8 +134,38 @@ export async function beforeSecurityHook(ctx: HookContext) {
   if (!SESSION_PATHS.has(ctx.path)) return;
   const session = (await getSessionFromCtx(
     ctx as unknown as Parameters<typeof getSessionFromCtx>[0],
-  ).catch(() => null)) as { user?: { id: string } } | null;
-  before.set(ctx.context, { userId: session?.user?.id ?? null });
+  ).catch(() => null)) as {
+    user?: { id: string };
+    session?: { id: string };
+  } | null;
+  before.set(ctx.context, {
+    userId: session?.user?.id ?? null,
+    sessionId: session?.session?.id ?? null,
+  });
+}
+
+/**
+ * Marks a session as signed in with a second factor (the identity token's
+ * mfa claim, docs/architecture/multi-user.md#the-identity-token): an
+ * authenticator code, a recovery code, or a passkey at sign-in, or turning
+ * on the authenticator app or adding a passkey while signed in, which
+ * prove the factor as well.
+ */
+export async function markSecondFactor(
+  pool: Pool,
+  sessionId: string | null | undefined,
+) {
+  if (!sessionId) return;
+  await pool
+    .query(`UPDATE session SET "secondFactor" = true WHERE id = $1`, [
+      sessionId,
+    ])
+    .catch((error) =>
+      console.error(
+        "sign-in: the second factor was not noted",
+        error instanceof Error ? error.message : error,
+      ),
+    );
 }
 
 /** The user whose sign-in waits for a second factor (the two_factor cookie). */
@@ -243,6 +293,14 @@ export async function afterSecurityHook(ctx: HookContext, pool: Pool) {
             )
             .catch(() => ({ rows: [] as { enabled: boolean | null }[] }));
           if (rows[0]?.enabled && signedIn) {
+            // The first code proves the authenticator: the session that
+            // turned it on (Better Auth replaces it with a new one) counts
+            // as signed in with it.
+            await markSecondFactor(
+              pool,
+              ctx.context.newSession?.session.id ??
+                before.get(ctx.context)?.sessionId,
+            );
             await record("two_factor_enabled", {
               actor,
               subject: actor,
@@ -259,6 +317,7 @@ export async function afterSecurityHook(ctx: HookContext, pool: Pool) {
           detail: `${method}:${failed.code}`,
         });
       } else if (signedIn) {
+        await markSecondFactor(pool, ctx.context.newSession?.session.id);
         await record("sign_in", {
           actor: signedIn,
           subject: signedIn,
@@ -274,6 +333,7 @@ export async function afterSecurityHook(ctx: HookContext, pool: Pool) {
           detail: `passkey:${failed.code}`,
         });
       } else if (signedIn) {
+        await markSecondFactor(pool, ctx.context.newSession?.session.id);
         await record("sign_in", {
           actor: signedIn,
           subject: signedIn,
@@ -282,6 +342,26 @@ export async function afterSecurityHook(ctx: HookContext, pool: Pool) {
       }
       return;
     }
+    case "/oauth2/register":
+      // An MCP client registered itself (dynamic client registration):
+      // nothing of what it sent (its name, its addresses) is kept here.
+      if (!failed) {
+        await record("oauth_client_registered", {
+          actor,
+          subject: actor,
+          detail: "dynamic",
+        });
+      }
+      return;
+    case "/oauth2/consent":
+      if (actor && !failed && bodyOf(ctx).accept === true) {
+        await record("oauth_consent_given", {
+          actor,
+          subject: actor,
+          detail: consentDetail(bodyOf(ctx).scope),
+        });
+      }
+      return;
     case "/sign-out":
       if (actor && !failed) {
         await record("sign_out", { actor, subject: actor });
@@ -294,6 +374,13 @@ export async function afterSecurityHook(ctx: HookContext, pool: Pool) {
           subject: actor,
           detail: failed?.code ?? null,
         });
+        // "Also sign out my devices, tokens, and connected apps" (checked
+        // by default in Settings → Security): this session stays.
+        if (!failed && headers?.get(REVOKE_CREDENTIALS_HEADER) === "1") {
+          await revokeThroughOutbox(pool, actor, "password_change", {
+            keepSessions: true,
+          });
+        }
       }
       return;
     case "/reset-password": {
@@ -303,6 +390,11 @@ export async function afterSecurityHook(ctx: HookContext, pool: Pool) {
           subject,
           detail: failed?.code ?? "reset_link",
         });
+      }
+      // A reset link (an admin's, or ./setup.sh recover-owner's) ends the
+      // account's devices, tokens, and connected apps with its sessions.
+      if (subject && !failed) {
+        await revokeThroughOutbox(pool, subject, "password_reset");
       }
       return;
     }
@@ -338,6 +430,9 @@ export async function afterSecurityHook(ctx: HookContext, pool: Pool) {
       return;
     case "/passkey/verify-registration":
       if (actor) {
+        if (!failed) {
+          await markSecondFactor(pool, before.get(ctx.context)?.sessionId);
+        }
         await record("passkey_added", {
           actor,
           subject: actor,
@@ -365,5 +460,72 @@ export async function afterSecurityHook(ctx: HookContext, pool: Pool) {
       detail = body.role;
     }
     await record(adminKind, { actor, subject: target, detail });
+    // Signing an account out, disabling it, and deleting it end everything
+    // it signed in with: sessions (Better Auth's endpoint did), device
+    // keys (their push subscriptions follow), tokens, and connected apps
+    // (docs/architecture/multi-user.md#devices-tokens-mcp), through the
+    // outbox, so that a failure is retried rather than lost. API keys name
+    // their account in text, without a foreign key, so a deleted account's
+    // go too.
+    const reason = ADMIN_REVOCATIONS[ctx.path];
+    if (!failed && target && reason) {
+      await revokeThroughOutbox(pool, target, reason);
+    }
   }
+}
+
+/** The admin actions that revoke an account's credentials, and why. */
+const ADMIN_REVOCATIONS: Record<string, RevocationReason> = {
+  "/admin/revoke-user-sessions": "admin_sign_out",
+  "/admin/ban-user": "banned",
+  "/admin/remove-user": "deleted",
+};
+
+/**
+ * Works off the credential revocation outbox, writing each into the
+ * security log (src/lib/auth/keys.ts processCredentialRevocations). The
+ * Dashboard runs it every minute too.
+ */
+export function processRevocations(pool: Pool) {
+  return processCredentialRevocations(pool, (entry, revoked) =>
+    recordSecurityEvent(pool, {
+      kind: "credentials_revoked",
+      subjectUserId: entry.userId,
+      detail: entry.reason,
+      count: Math.max(1, revoked.devices + revoked.tokens + revoked.grants),
+    }),
+  );
+}
+
+/**
+ * Notes an account's credentials for revocation and works the outbox off
+ * at once. When the note cannot be written, the action answers with an
+ * error (its own change, such as the ban, is done), so that it is not
+ * silently lost; a revocation that fails after it is retried every minute.
+ */
+async function revokeThroughOutbox(
+  pool: Pool,
+  userId: string,
+  reason: RevocationReason,
+  options: { keepSessions?: boolean } = {},
+) {
+  try {
+    await queueCredentialRevocation(pool, userId, reason, options);
+  } catch (error) {
+    console.error(
+      "keys: an account's credentials could not be queued for revocation",
+      error instanceof Error ? error.message : error,
+    );
+    throw new APIError("INTERNAL_SERVER_ERROR", {
+      code: "CREDENTIALS_NOT_REVOKED",
+      message:
+        "The account's devices, tokens, and connected apps could not be signed out: try again.",
+    });
+  }
+  await processRevocations(pool).catch((error) =>
+    console.error(
+      "keys: credential revocations will be retried",
+      error instanceof Error ? error.message : error,
+    ),
+  );
 }

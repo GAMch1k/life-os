@@ -267,6 +267,9 @@ type PushConfig struct {
 type PushSubscription struct {
 	CreatedAt time.Time `json:"createdAt"`
 
+	// DeviceKeyId The paired device's key that subscribed it; revoking the key deletes it. None for a browser.
+	DeviceKeyId *openapi_types.UUID `json:"deviceKeyId"`
+
 	// DeviceLabel Read from its user agent, such as "Chrome on Android".
 	DeviceLabel string `json:"deviceLabel"`
 
@@ -398,6 +401,9 @@ type ServerInterface interface {
 	// GetPushConfig Web push configuration
 	// (GET /v1/push/config)
 	GetPushConfig(c fiber.Ctx) error
+	// DeleteDeviceKeySubscriptions Remove a revoked device key's devices
+	// (DELETE /v1/push/device-keys/{keyId})
+	DeleteDeviceKeySubscriptions(c fiber.Ctx, keyId openapi_types.UUID) error
 	// ListPushSubscriptions List the subscribed devices
 	// (GET /v1/push/subscriptions)
 	ListPushSubscriptions(c fiber.Ctx) error
@@ -641,6 +647,35 @@ func (siw *ServerInterfaceWrapper) GetPushConfig(c fiber.Ctx) error {
 	return handler(c)
 }
 
+// DeleteDeviceKeySubscriptions operation middleware
+func (siw *ServerInterfaceWrapper) DeleteDeviceKeySubscriptions(c fiber.Ctx) error {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "keyId" -------------
+	var keyId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "keyId", c.Params("keyId"), &keyId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, fmt.Errorf("Invalid format for parameter keyId: %w", err).Error())
+	}
+
+	handler := func(c fiber.Ctx) error {
+		return siw.Handler.DeleteDeviceKeySubscriptions(c, keyId)
+	}
+
+	for i := len(siw.HandlerMiddlewares) - 1; i >= 0; i-- {
+		m := siw.HandlerMiddlewares[i]
+		next := handler
+		handler = func(c fiber.Ctx) error {
+			return m(c, next)
+		}
+	}
+
+	return handler(c)
+}
+
 // ListPushSubscriptions operation middleware
 func (siw *ServerInterfaceWrapper) ListPushSubscriptions(c fiber.Ctx) error {
 
@@ -768,6 +803,8 @@ func RegisterHandlersWithOptions(router fiber.Router, si ServerInterface, option
 	router.Post(options.BaseURL+"/v1/push/subscriptions", wrapper.CreatePushSubscription)
 
 	router.Delete(options.BaseURL+"/v1/push/subscriptions/:subscriptionId", wrapper.DeletePushSubscription)
+
+	router.Delete(options.BaseURL+"/v1/push/device-keys/:keyId", wrapper.DeleteDeviceKeySubscriptions)
 
 	router.Post(options.BaseURL+"/v1/push/test", wrapper.SendPushTest)
 

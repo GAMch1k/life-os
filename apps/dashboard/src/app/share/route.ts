@@ -81,12 +81,19 @@ export async function POST(request: NextRequest) {
   }
   if (check.status === 403) {
     return NextResponse.json(
-      {
-        error: {
-          code: "forbidden_origin",
-          message: "This request did not come from Life OS.",
-        },
-      },
+      check.code === "forbidden_origin"
+        ? {
+            error: {
+              code: "forbidden_origin",
+              message: "This request did not come from Life OS.",
+            },
+          }
+        : {
+            error: {
+              code: "credential_not_allowed",
+              message: "This device key or token may not be used here.",
+            },
+          },
       { status: 403 },
     );
   }
