@@ -1,6 +1,6 @@
 # Continuous integration
 
-GitHub Actions checks every push and pull request with `.github/workflows/ci.yml`: the source, then the full stack (the images, the smokes, and the browser suite on the disposable verification stack). CI never deploys. Merges are still made locally and pushed to master. A second workflow, `.github/workflows/cla.yml`, checks that the authors of a pull request have signed the [Contributor License Agreement](#cla-check). Two more belong to releases ([Releases](releases.md)): `release.yml` builds, tests, and publishes a tagged version, and `install-check.yml` installs a published release on a clean runner from its files alone and runs the smokes against it ([the install check](releases.md#the-install-check)).
+GitHub Actions checks every push and pull request with `.github/workflows/ci.yml`: the source, then the full stack (the images, the smokes, and the browser suite on the disposable verification stack). CI never deploys. Merges are still made locally and pushed to master. A second workflow, `.github/workflows/cla.yml`, checks that the authors of a pull request have signed the [Contributor License Agreement](#cla-check). Two more belong to releases ([Releases](releases.md)): `release.yml` builds, tests, and publishes a tagged version, and `install-check.yml` installs a published release on a clean runner from its files alone and runs the smokes against it ([the install check](releases.md#the-install-check)). `screenshots.yml` makes the README's screenshots from a fictional demo dataset ([Screenshots](#screenshots)).
 
 ## When it runs
 
@@ -201,6 +201,10 @@ When the job was added (9 November 2026), every module except the fixtures gener
 On 11 November 2026, GO-2026-6859 in Go 1.27.3's `net/http` (an HTTP/1 server crash from a `MaxBytesReader` header race) turned the job red in every module except the fixtures generator. Go 1.27.4 fixed it.
 
 govulncheck also notes GO-2026-5932 in `golang.org/x/crypto` (its unmaintained `openpgp` package). No module imports that package, so it is not a finding.
+
+## Screenshots
+
+`.github/workflows/screenshots.yml` runs `tools/screenshots`: it builds the core's images, starts the verification stack as a new install runs it, fills it with the fictional demo data, and saves the README's screenshots with Playwright's Chromium. The images are uploaded as the `screenshots` artifact (kept 14 days), to look at before they are copied into `docs/images/`. It runs by hand (Actions → Screenshots → Run workflow) and on a pull request that changes the screenshot tooling; it needs no secret, and it is not a required check. All about it: [README screenshots](../development/screenshots.md).
 
 ## CLA check
 

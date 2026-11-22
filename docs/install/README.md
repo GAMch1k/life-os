@@ -147,5 +147,5 @@ For example: `LIFE_OS_TIMEZONE=Europe/Berlin ./setup.sh --yes && ./setup.sh up`.
 - [Access it safely](access.md): [choose a way in](access.md#choose-a-way-in), from the SSH tunnel to HTTPS for every device.
 - [Backups and restore](backups.md), [Updating](updating.md), [Uninstalling](uninstall.md), [Troubleshooting](troubleshooting.md).
 - [Phone and watch apps](phone-apps.md).
-- Running Life OS from the source code, or developing it: [SETUP.md](../../SETUP.md) and the [technical documentation](../README.md).
+- Running Life OS from the source code, or developing it: [SETUP.md](../../SETUP.md), [Developing Life OS](../development/README.md), and the [technical documentation](../README.md).
 - Which downloads are official: [Official sources and name](../../README.md#official-sources-and-name).

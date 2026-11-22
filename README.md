@@ -1,170 +1,97 @@
 # Life OS
 
-Life OS is a local-first personal operating system. Independent domain services sit behind one dashboard, a constrained AI/MCP interaction layer, and an asynchronous local voice-transcription path.
+Life OS is a personal system you run on your own server: tasks, a calendar, an Inbox for quick notes, a shopping list and pantry, and your money, in one web app. An optional AI files what you capture: "dentist on Friday at 10" becomes a calendar event, "buy milk" goes on the shopping list.
 
-This repository is the single monorepo for the project. It contains the implemented Finance, Tasks, Inbox, Calendar, Voice, MCP, dashboard, and private Whisper worker components through Phase 6, Food (the shopping list and pantry, Phase 15), integration services such as Banking, which syncs the owner's bank accounts into Finance through a licensed PSD2 provider (read-only), calendar-feeds (ICS feeds into Calendar), recipe-import (recipes from links and captions into Food), and google-calendar (the owner's Google calendars, synced both ways with Calendar), a backup service that dumps every database each night (see [`docs/services/backup.md`](docs/services/backup.md)), and host-health, which reports the server's memory, load, disks, and containers to the Status page (see [`docs/services/host-health.md`](docs/services/host-health.md)).
+![Life OS Home: the capture box, a question from the AI in Human Review, urgent tasks, the next event, tasks without a date, food, and this month's budget](docs/images/home.webp)
+
+> [!WARNING]
+> **Early preview, made by one developer.** Life OS works, and its developer uses it every day, but previews have rough edges and may change between releases. Back up before you update. Bugs and questions: [GitHub Issues](https://github.com/GAMch1k/life-os/issues).
+
+## What works today
+
+- **Tasks**: due dates with or without a time, repeating tasks, a list of tasks without a date, and a schedule view.
+- **Calendar**: day, week, month, and list views, repeating events, reminders, and search. Subscribe to calendar feeds (ICS), such as holidays. Optional two-way sync with Google Calendar.
+- **Inbox**: one box for whatever comes to mind, typed, shared from your phone, a photo, or a voice note (turned into text on your own server). With AI processing on, each capture becomes a task, an event, a shopping item, or an expense, and when the AI is not sure, it asks you in **Human Review** instead of guessing.
+- **Food**: a shopping list grouped by aisle and store, the pantry with expiry dates, recipes (also saved from a link), and a meal plan.
+- **Finance**: accounts you keep by hand, CSV import, categories with rules, a monthly summary, a budget, and subscriptions. Optional read-only bank sync through Enable Banking.
+- **Home**: what needs you today, on one page. **Notifications**: a morning summary and reminders, in Life OS and, if you want, on your phone.
+- **Your server**: an account with two-factor sign-in and passkeys, a Status page, and nightly backups of every database, with a weekly restore check.
+- **Phone and watch apps** for Android and Wear OS, from the [life-os-app releases](https://github.com/GAMch1k/life-os-app/releases): [Phone and watch apps](docs/install/phone-apps.md). Life OS also works in any phone browser.
+
+| Tasks | Calendar |
+| --- | --- |
+| ![Tasks: overdue, today, and upcoming tasks, and tasks without a date](docs/images/tasks.webp) | ![Calendar: a week of events](docs/images/calendar.webp) |
+| **Inbox** | **Finance** |
+| ![Inbox: a question in Human Review, a pending capture, and recently processed captures](docs/images/inbox.webp) | ![Finance: accounts and this month's transactions](docs/images/finance.webp) |
+| **Food** | **On a phone** |
+| ![Food: the shopping list grouped by aisle](docs/images/food.webp) | <img alt="Home on a phone" src="docs/images/phone-home.webp" width="49%"> <img alt="The shopping list on a phone" src="docs/images/phone-food.webp" width="49%"> |
+
+The screenshots show made-up demo data ([how they are made](docs/development/screenshots.md)).
+
+### Not there yet
+
+- **One account per install.** Accounts for family members come in a later version.
+- **AI processing needs an AI plan or key.** It runs OpenAI's Codex with your ChatGPT plan, or Anthropic's Claude Code with your Claude plan or an Anthropic API key. With it on, your captures are sent to that provider. Without it, Life OS works, and captures stay in Inbox for you to file. Details: [AI processing](docs/install/ai-processing.md).
+- **Bank sync** is tested with one bank so far, Deutsche Bank: [Bank sync](docs/install/bank-sync.md).
+- **64-bit x86 (amd64) servers only.** ARM images come later.
+- **Phone apps for Android only.** They are installed from their APK files on GitHub, not from Google Play. There is no iPhone app; the web app works in Safari.
+- **The app is in English only.** Voice notes and captures can be in other languages.
+
+## What you need
+
+- A Linux server, 64-bit x86 (amd64), with 2 GB of memory at least (4 GB to be comfortable) and 10 GB of free disk.
+- Docker Engine 25 or newer with the Compose plugin (version 2.27 or newer), plus `curl`, `openssl`, and Bash 4.4 or newer.
+- Voice notes also need a processor with AVX2.
+
+The [install guide](docs/install/README.md#what-you-need) has the details.
 
 ## Quick start
 
-Run Life OS on your own Linux server from the published Docker images, with one setup script and nothing to build:
+1. **Download the newest release** into a new directory:
 
-```sh
-mkdir ~/life-os && cd ~/life-os
-version=v0.1.0-preview.6
-release=https://github.com/GAMch1k/life-os/releases/download/$version
-for file in compose.yaml setup.sh SHA256SUMS; do curl -fsSLO "$release/$file"; done
-# GitHub serves .env.example as default.env.example
-curl -fsSL -o .env.example "$release/default.env.example"
-sha256sum -c SHA256SUMS
-chmod +x setup.sh && ./setup.sh && ./setup.sh up
-```
+   ```sh
+   mkdir ~/life-os && cd ~/life-os
+   version=$(curl -fsSL https://api.github.com/repos/GAMch1k/life-os/releases | sed -n 's/^ *"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1)
+   release=https://github.com/GAMch1k/life-os/releases/download/$version
+   for file in compose.yaml setup.sh SHA256SUMS; do curl -fsSLO "$release/$file"; done
+   # GitHub serves .env.example as default.env.example
+   curl -fsSL -o .env.example "$release/default.env.example"
+   ```
 
-**This is an early preview.** Life OS has no login of its own yet, so it listens only on `127.0.0.1`, and you reach it through an SSH tunnel, a VPN, or Cloudflare Access. The [install guide](docs/install/README.md) covers the requirements, safe access, AI processing, the integrations, the phone apps, backups, updates, and troubleshooting.
+2. **Check the download.** Every file must say `OK`:
 
-## Technical documentation
+   ```sh
+   sha256sum -c SHA256SUMS
+   ```
 
-The human-readable technical guide is maintained as ordinary repository Markdown
-under [`docs/`](docs/README.md). It is designed for GitHub browsing and Obsidian;
-there is no GitHub Pages or Wiki dependency.
+3. **Set up.** The script checks the server, asks for your timezone, currency, and address, and writes `.env` with new passwords. Skip the optional modules for a first look:
 
-To run your own Life OS from the published images, see the
-[install guide](docs/install/README.md). To build and run it from this
-repository instead, see [`SETUP.md`](SETUP.md), the self-hosting guide.
+   ```sh
+   chmod +x setup.sh
+   ./setup.sh
+   ```
 
-## Repository layout
+4. **Start it.** The first start downloads the images and prints a one-time **setup code** for your account:
 
-| Path | Purpose |
-| --- | --- |
-| `apps/dashboard/` | Next.js and TypeScript dashboard |
-| `services/` | Independently deployable Go domain and integration services |
-| `pkg/` | Shared Go infrastructure packages, never shared domain models |
-| `contracts/` | OpenAPI contracts and client-generation configuration |
-| `templates/` | Canonical service templates used by repository tooling |
-| `infra/` | Local infrastructure, containers, and provisioning |
-| `tools/` | Development scripts and generators |
+   ```sh
+   ./setup.sh up
+   ```
 
-Each service owns its API implementation, domain model, persistence code, migrations, and database. Services and consumers communicate through APIs and never access another service's database directly.
+5. **Open it.** Life OS listens only on the server itself. From your computer, open an SSH tunnel, then open <http://127.0.0.1:3000> and set up your account with the setup code:
 
-## Prerequisites
+   ```sh
+   ssh -N -L 3000:127.0.0.1:3000 you@your-server
+   ```
 
-- Git
-- Go 1.27.4 or newer in the 1.27 release line
-- Docker Engine with Docker Compose v2
-- Node.js 22 or newer once dashboard development begins
+For everyday use from your phone and laptop, choose a way in with HTTPS: [Access it safely](docs/install/access.md#choose-a-way-in). Never expose Life OS to the internet over plain HTTP.
 
-Docker and Node.js are required to run the complete local stack; Go is required for service development and verification.
+## Documentation
 
-## Local infrastructure
-
-Create a local environment file and start PostgreSQL:
-
-```sh
-make infra-up
-make infra-ps
-```
-
-Stop the stack without deleting its persistent data with `make infra-down`. Use `make infra-reset` only when you intentionally want to delete and recreate persistent Compose volumes; it refuses without `CONFIRM=infra-reset`. `make infra-up` and `make life-up` are for a first start: once Life OS is deployed they refuse (`CONFIRM=<target>` overrides), and services are redeployed one at a time with `docker compose up -d --no-build --no-deps <service>`. See [`docs/development/getting-started.md`](docs/development/getting-started.md) and [`docs/operations/deployment.md`](docs/operations/deployment.md) for Compose usage, configuration, and operations.
-
-Each domain service uses an isolated database and login inside the shared PostgreSQL container. `make db-provision` reconciles the declarative registry in `infra/postgres/service-databases.conf`; credentials remain in the ignored local `.env` file.
-
-## Go workspace strategy
-
-Backend code uses a multi-module Go workspace. Each service is an independent module so ownership and dependencies stay explicit. Shared infrastructure is a separate module under `pkg/`. Every module is registered in the root `go.work` file when it is created.
-
-Create a service from the canonical template with a lowercase kebab-case name:
-
-```sh
-make create-service SERVICE=habits
-```
-
-The command creates `services/habits`, registers its module in `go.work`, and
-derives `habits_db`, `habits_user`, and
-`LIFE_OS_HABITS_DB_PASSWORD`. Use `tools/create-service --help` to override
-the database, role, or password-variable names. Run the repeatable local/CI
-verification after starting the local infrastructure:
-
-```sh
-make infra-up
-make create-service-smoke
-```
-
-Validate the workspace declaration with:
-
-```sh
-go work edit -json
-```
-
-## Shared configuration
-
-`pkg/config` loads typed service configuration from environment variables. Struct fields opt in with `env` tags and may declare `required:"true"` or a `default` value. Configuration structs can implement `Validate() error` for cross-field rules. Loading reports readable field errors and updates the target only after the complete configuration is valid.
-
-Run the full baseline verification path from the repository root:
-
-```sh
-make check
-```
-
-It validates OpenAPI documents, regenerates Go and TypeScript contracts and
-fails on generated-code drift, then runs `sqlc generate` and performs the Go
-and dashboard checks. Install `go`, `sqlc`, `oapi-codegen`, and Node/npm on
-`PATH` first; the exact database-tool versions are documented in
-[`pkg/database/README.md`](pkg/database/README.md).
-
-## Shared HTTP runtime
-
-`pkg/httpserver` provides the thin Fiber runtime used by Go services. `httpserver.New` returns an app that embeds the native Fiber app while installing structured `slog` request logging, request/correlation IDs, a safe error envelope, panic recovery, and `/health` and `/ready` endpoints. `Run` handles SIGINT/SIGTERM, drains HTTP traffic, and invokes registered shutdown hooks in reverse order.
-
-## HTTP contracts
-
-Life OS API conventions and reusable transport schemas are documented in
-[`contracts/openapi`](contracts/openapi/README.md). Service OpenAPI documents
-are public transport contracts only; they do not expose or share internal Go
-domain structs.
-
-Finance CSV imports are documented in
-[`docs/finance-csv-import.md`](docs/finance-csv-import.md).
-
-## Development commands
-
-Repository-wide commands are introduced alongside the capabilities they operate.
-`make create-service` creates a canonical backend service, `make check` is the
-non-mutating verification path, and `make dashboard-check` runs only the
-dashboard's formatting, lint, type, test, and production-build checks.
-
-## Complete local Life OS
-
-Start the backend services and dashboard together with:
-
-```sh
-make life-up
-```
-
-Open <http://localhost:3000>. The Docker Nginx gateway is the sole published
-application port; it routes the dashboard and all `/api/*` requests to private
-containers. Run the browser-facing smoke check, on the disposable verification
-stack (never on the running one), with:
-
-```sh
-make life-smoke
-```
-
-If port 3000 is already in use, set `LIFE_OS_GATEWAY_PORT` in `.env` (for
-example, `LIFE_OS_GATEWAY_PORT=3001`).
-
-To expose the single gateway through WireGuard, bind it to the server's
-WireGuard address: `LIFE_OS_GATEWAY_BIND_ADDRESS=10.8.0.1` in `.env`, with
-your own address. The gateway then also answers that address as a Host.
-This exposes Dashboard, write APIs, and MCP to every allowed WireGuard peer;
-never bind it to a public/LAN address without an authenticated edge. See
-[SETUP.md](SETUP.md) for every setting.
-
-## Architectural boundaries
-
-- Go and Fiber are the default backend stack.
-- PostgreSQL is shared as a server only; each service has its own database, credentials, and migrations.
-- OpenAPI is the source of truth for HTTP contracts and generated Go and TypeScript clients.
-- Shared packages contain infrastructure concerns only, never Finance, Tasks, Inbox, or Calendar business types.
-- Public authentication, queues, Kubernetes, global tags/areas, and direct cross-service database access are intentionally deferred.
+- [Install guide](docs/install/README.md): the requirements, setup, and every `setup.sh` command.
+- [Access it safely](docs/install/access.md), [Accounts](docs/install/accounts.md), and [Modules](docs/install/modules.md): AI processing, voice notes, Google Calendar, bank sync, and more, each switched on when you want it.
+- [Backups](docs/install/backups.md), [Updating](docs/install/updating.md), [Troubleshooting](docs/install/troubleshooting.md), and [Uninstalling](docs/install/uninstall.md).
+- [Phone and watch apps](docs/install/phone-apps.md), downloaded from the [life-os-app releases](https://github.com/GAMch1k/life-os-app/releases).
+- Building Life OS from source, or working on it: [Development](docs/development/README.md) and the [technical documentation](docs/README.md).
 
 ## Official sources and name
 
@@ -172,15 +99,13 @@ The official Life OS comes only from its code on GitHub, [github.com/GAMch1k/lif
 
 ## Contributing and security
 
-- [CONTRIBUTING.md](CONTRIBUTING.md): how to propose a change, the checks a pull request must pass, and how changes ship.
+- Bugs and ideas: [open an issue](https://github.com/GAMch1k/life-os/issues/new/choose).
+- [CONTRIBUTING.md](CONTRIBUTING.md): how to propose a change, and the checks a pull request must pass.
 - [SECURITY.md](SECURITY.md): the supported versions, and how to report a vulnerability privately.
 - [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md): how we treat each other.
-- Bugs and ideas: [open an issue](https://github.com/GAMch1k/life-os/issues/new/choose).
 
 ## License
 
 Copyright (C) 2026 GAMch1k and the Life OS contributors.
 
 Life OS is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License, version 3 only (SPDX: `AGPL-3.0-only`), as published by the Free Software Foundation. It is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; see [`LICENSE`](LICENSE) for the full text. If you run a modified version for other people over a network, the license requires you to offer them its source code.
-
-Contributions are accepted under the [Contributor License Agreement](CLA.md): you keep your copyright, your contribution stays available under the AGPL, and the maintainer may also offer it under other licenses. See [CONTRIBUTING.md](CONTRIBUTING.md).
