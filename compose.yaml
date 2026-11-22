@@ -66,6 +66,10 @@ services:
     depends_on: {postgres-provision: {condition: service_completed_successfully}}
     networks: [backend]
     restart: "no"
+    # Read-only, without capabilities, as every migration (P22-08c).
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
   finance:
     build: {context: ., dockerfile: services/finance/Dockerfile}
     environment: {SERVICE_NAME: finance, PORT: 8080, DATABASE_URL: "postgres://finance_user:${LIFE_OS_FINANCE_DB_PASSWORD}@postgres:5432/finance_db?sslmode=disable", ACTIVITY_SERVICE_URL: "http://activity:8080", LIFE_OS_TIMEZONE: "${LIFE_OS_TIMEZONE:-UTC}", FINANCE_DEFAULT_CURRENCY: "${LIFE_OS_FINANCE_CURRENCY:-EUR}", NOTIFICATIONS_SERVICE_URL: "http://notifications:8080", LIFE_OS_TRUSTED_KEYS: "${LIFE_OS_TRUSTED_KEYS:-}"}
@@ -73,6 +77,13 @@ services:
     depends_on: {finance-migrate: {condition: service_completed_successfully}}
     networks: [backend]
     restart: unless-stopped
+    # Like every service of Life OS (P22-08c): a read-only root, no
+    # capabilities, and no way to gain privileges; /tmp, in memory, for
+    # Go's temporary files (a large upload's parts).
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
 
   tasks-migrate:
     build: {context: ., dockerfile: infra/migrate/Dockerfile}
@@ -81,6 +92,9 @@ services:
     depends_on: {postgres-provision: {condition: service_completed_successfully}}
     networks: [backend]
     restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
   tasks:
     build: {context: ., dockerfile: services/tasks/Dockerfile}
     environment: {SERVICE_NAME: tasks, PORT: 8080, DATABASE_URL: "postgres://tasks_user:${LIFE_OS_TASKS_DB_PASSWORD}@postgres:5432/tasks_db?sslmode=disable", ACTIVITY_SERVICE_URL: "http://activity:8080", LIFE_OS_TIMEZONE: "${LIFE_OS_TIMEZONE:-UTC}", NOTIFICATIONS_SERVICE_URL: "http://notifications:8080", CALENDAR_SERVICE_URL: "http://calendar:8080", TASKS_SUMMARY_TIME: "${LIFE_OS_TASKS_SUMMARY_TIME:-08:00}", TASKS_MORNING_TIME: "${LIFE_OS_TASKS_MORNING_TIME:-09:00}", TASKS_EVENING_TIME: "${LIFE_OS_TASKS_EVENING_TIME:-19:00}", TASKS_TIMED_LEAD_MINUTES: "${LIFE_OS_TASKS_TIMED_LEAD_MINUTES:-30}", LIFE_OS_TRUSTED_KEYS: "${LIFE_OS_TRUSTED_KEYS:-}"}
@@ -88,6 +102,10 @@ services:
     depends_on: {tasks-migrate: {condition: service_completed_successfully}}
     networks: [backend]
     restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
 
   food-migrate:
     build: {context: ., dockerfile: infra/migrate/Dockerfile}
@@ -96,6 +114,9 @@ services:
     depends_on: {postgres-provision: {condition: service_completed_successfully}}
     networks: [backend]
     restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
   # The shopping list, stores, aisle rules, and pantry (docs/services/food.md).
   # LIFE_OS_TIMEZONE is the owner's "today" for expiringWithinDays.
   food:
@@ -105,6 +126,10 @@ services:
     depends_on: {food-migrate: {condition: service_completed_successfully}}
     networks: [backend]
     restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
 
   inbox-migrate:
     build: {context: ., dockerfile: infra/migrate/Dockerfile}
@@ -113,6 +138,9 @@ services:
     depends_on: {postgres-provision: {condition: service_completed_successfully}}
     networks: [backend]
     restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
   # Capture images (photos shared or attached to captures) live on the
   # inbox-media volume, one file per image named by its SHA-256
   # (docs/services/inbox.md#capture-images).
@@ -124,6 +152,10 @@ services:
     depends_on: {inbox-migrate: {condition: service_completed_successfully}}
     networks: [backend]
     restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
 
   calendar-migrate:
     build: {context: ., dockerfile: infra/migrate/Dockerfile}
@@ -132,6 +164,9 @@ services:
     depends_on: {postgres-provision: {condition: service_completed_successfully}}
     networks: [backend]
     restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
   calendar:
     build: {context: ., dockerfile: services/calendar/Dockerfile}
     environment: {SERVICE_NAME: calendar, PORT: 8080, DATABASE_URL: "postgres://calendar_user:${LIFE_OS_CALENDAR_DB_PASSWORD}@postgres:5432/calendar_db?sslmode=disable", LIFE_OS_TIMEZONE: "${LIFE_OS_TIMEZONE:-UTC}", ACTIVITY_SERVICE_URL: "http://activity:8080", NOTIFICATIONS_SERVICE_URL: "http://notifications:8080", LIFE_OS_TRUSTED_KEYS: "${LIFE_OS_TRUSTED_KEYS:-}"}
@@ -139,6 +174,10 @@ services:
     depends_on: {calendar-migrate: {condition: service_completed_successfully}}
     networks: [backend]
     restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
 
   calendar-feeds-migrate:
     build: {context: ., dockerfile: infra/migrate/Dockerfile}
@@ -147,6 +186,9 @@ services:
     depends_on: {postgres-provision: {condition: service_completed_successfully}}
     networks: [backend]
     restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
   # The ICS/iCal feed integration (docs/services/calendar-feeds.md): it owns
   # the feeds (URL, filter, the ZAW preset from LIFE_OS_ZAW_ICS_URL, which
   # names a street and is never logged), downloads them over outbound HTTPS
@@ -171,6 +213,10 @@ services:
       calendar: {condition: service_started}
     networks: [backend]
     restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
 
   # Reads recipes from links and pasted text and saves them in Food through
   # Food's API (docs/services/recipe-import.md). No database. It needs
@@ -186,6 +232,10 @@ services:
     expose: ["8080"]
     networks: [backend]
     restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
 
   activity-migrate:
     build: {context: ., dockerfile: infra/migrate/Dockerfile}
@@ -194,6 +244,9 @@ services:
     depends_on: {postgres-provision: {condition: service_completed_successfully}}
     networks: [backend]
     restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
   activity:
     build: {context: ., dockerfile: services/activity/Dockerfile}
     environment: {SERVICE_NAME: activity, PORT: 8080, DATABASE_URL: "postgres://activity_user:${LIFE_OS_ACTIVITY_DB_PASSWORD}@postgres:5432/activity_db?sslmode=disable", LIFE_OS_TRUSTED_KEYS: "${LIFE_OS_TRUSTED_KEYS:-}"}
@@ -201,6 +254,10 @@ services:
     depends_on: {activity-migrate: {condition: service_completed_successfully}}
     networks: [backend]
     restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
 
   notifications-migrate:
     build: {context: ., dockerfile: infra/migrate/Dockerfile}
@@ -209,6 +266,9 @@ services:
     depends_on: {postgres-provision: {condition: service_completed_successfully}}
     networks: [backend]
     restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
   # The one path for notifications to the owner. Channels are configured here
   # (LIFE_OS_NOTIFICATIONS_CHANNELS); none by default, so notifications are
   # stored and listed in the Dashboard only. "ntfy" publishes to the ntfy
@@ -239,6 +299,10 @@ services:
     depends_on: {notifications-migrate: {condition: service_completed_successfully}}
     networks: [backend, notify-internal]
     restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
 
   banking-migrate:
     build: {context: ., dockerfile: infra/migrate/Dockerfile}
@@ -248,6 +312,9 @@ services:
     depends_on: {postgres-provision: {condition: service_completed_successfully}}
     networks: [backend]
     restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
   # The bank integration (docs/services/banking.md): read-only Enable Banking
   # consent, scheduled syncs pushed into Finance through its bank import API.
   # The application's private key is bind-mounted read-only from the host
@@ -298,6 +365,9 @@ services:
     depends_on: {postgres-provision: {condition: service_completed_successfully}}
     networks: [backend]
     restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
   # The Google Calendar integration (docs/services/google-calendar.md): the
   # owner's Google connection (OAuth, the refresh token sealed with
   # LIFE_OS_GOOGLE_TOKEN_KEY), the calendars chosen to sync, and the two-way
@@ -343,6 +413,9 @@ services:
     depends_on: {postgres-provision: {condition: service_completed_successfully}}
     networks: [backend]
     restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
 
   # The Dashboard, and with it the sign-in: Better Auth on auth_db, and the
   # auth check the gateway asks for every service route
@@ -396,6 +469,13 @@ services:
       calendar: {condition: service_started}
     networks: [backend]
     restart: unless-stopped
+    # A read-only root, no capabilities, no way to gain privileges
+    # (P22-08c). Next.js may write its cache (.next/cache, the image's node
+    # user's, 1000) and /tmp, both in memory.
+    read_only: true
+    tmpfs: [/tmp, "/app/.next/cache:uid=1000,gid=1000,mode=0755"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
     mem_limit: 512m
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
@@ -416,6 +496,10 @@ services:
       notifications: {condition: service_started}
     networks: [backend]
     restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
 
   # Nightly backups of every database in the registry (docs/services/backup.md):
   # one consistent pg_dump per database into LIFE_OS_BACKUP_DIR/auto/ on the
@@ -595,6 +679,10 @@ services:
       recipe-import: {condition: service_started}
     networks: [backend]
     restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
 
   processor:
     profiles: [ai]
@@ -715,6 +803,11 @@ services:
     expose: ["8080"]
     networks: [backend]
     restart: unless-stopped
+    # No capabilities (P22-08c). Its root stays writable: ffmpeg and
+    # whisper.cpp write each recording's temporary files, up to an hour
+    # of audio, which a tmpfs would hold in memory.
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
     cpus: ${LIFE_OS_WHISPER_CPUS:-2.0}
     mem_limit: ${LIFE_OS_WHISPER_MEMORY:-2g}
     healthcheck:
@@ -732,6 +825,9 @@ services:
     depends_on: {postgres-provision: {condition: service_completed_successfully}}
     networks: [backend]
     restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
   voice:
     build: {context: ., dockerfile: services/voice/Dockerfile}
     image: lifeos-voice
@@ -750,6 +846,10 @@ services:
     depends_on: {voice-migrate: {condition: service_completed_successfully}}
     networks: [backend]
     restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
   voice-worker:
     build: {context: ., dockerfile: services/voice/Dockerfile}
     profiles: [voice]
@@ -775,6 +875,10 @@ services:
       whisper: {condition: service_healthy}
     networks: [backend]
     restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
 
   gateway:
     # nginx with infra/nginx/life-os.conf.template, server-names.envsh,
@@ -843,6 +947,24 @@ services:
       proxy:
         aliases: [lifeos-gateway]
     restart: unless-stopped
+    # nginx runs as its own unprivileged user (nginx, 101) on a read-only
+    # root, without capabilities or a way to gain privileges (P22-08c). It
+    # binds port 80 without one: inside its own network namespace the sysctl
+    # lets any user bind every port (Docker's default since 20.10, set here
+    # for others). Writable, in memory: the rendered configuration (conf.d),
+    # the trusted proxies' files and the pid (/run), nginx's temporary files
+    # (uploads, up to 60 MB each, and buffered answers), and /tmp.
+    user: "101:101"
+    sysctls: {net.ipv4.ip_unprivileged_port_start: "0"}
+    read_only: true
+    # A tmpfs is root's unless told: these are the nginx user's.
+    tmpfs:
+      - /etc/nginx/conf.d:uid=101,gid=101,mode=0755
+      - /run:uid=101,gid=101,mode=0755
+      - /var/cache/nginx:uid=101,gid=101,mode=0700,size=512m
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
 
   # Opt-in ntfy server (COMPOSE_PROFILES=ntfy): push notifications to the
   # owner's phone (docs/operations/ntfy.md). It is on two networks only:

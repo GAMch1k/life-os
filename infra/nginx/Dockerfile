@@ -21,8 +21,14 @@ ENV NGINX_ENVSUBST_FILTER=^LIFE_OS_
 # Alpine's security fixes land in between, and the release's Trivy gate fails
 # on a HIGH or CRITICAL vulnerability that has a fix: the build upgrades the
 # packages (SEC-IMG).
+# compose.yaml runs the gateway as the image's unprivileged nginx user (101)
+# on a read-only root, so every file here is readable by all (a directory
+# COPY makes itself would get the file's mode), and what it writes at start
+# goes to memory: /etc/nginx/conf.d (the rendered template), /run (the
+# trusted proxies' files, trusted-proxies.envsh, and the pid), and
+# /var/cache/nginx (P22-08c).
 RUN apk upgrade --no-cache \
-    && mkdir -p /etc/nginx/templates
+    && mkdir -p -m 0755 /etc/nginx/templates /etc/nginx/lifeos
 COPY --chmod=0644 life-os.conf.template /etc/nginx/templates/default.conf.template
 # The entrypoint sources only executable *.envsh files, in order.
 # trusted-proxies.envsh reads the bind address before server-names.envsh

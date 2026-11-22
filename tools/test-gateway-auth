@@ -38,6 +38,8 @@ set -euo pipefail
 #  - the security headers: a content security policy for frames, <base>,
 #    plugins, and forms, X-Frame-Options DENY, and HSTS over HTTPS only
 #    (through Cloudflare; a client's own X-Forwarded-Proto is not believed);
+#  - the Dashboard's pages and files (location /): page loads that fetch
+#    many files at once pass, and one client's flood gets 429;
 #  - LIFE_OS_REQUIRE_CLOUDFLARE_ACCESS: on (empty), the tunnel path needs
 #    Access's token, as before; off, Life OS's sign-in alone decides.
 #
@@ -393,6 +395,33 @@ expect_body Android
 expect GET /android/updates 200 --cookie 'lifeos=good'
 expect GET /android/updates 403 -H 'Authorization: Bearer device-key'
 expect_body '"code":"credential_not_allowed"'
+
+printf "==> The Dashboard: page loads' bursts pass, a flood is limited\n"
+# lifeos_pages (location /): 100 a second, bursts of 1000. Pages that fetch
+# 150 files each, 6 at a time as a browser does, three of them one after
+# another, never meet it; one client's flood does. Last on this gateway: the
+# flood uses up the client's allowance.
+burst() { # <count> <at once>: each request's status, one a line
+  local count=$1 parallel=$2 i
+  local -a args=()
+  for ((i = 0; i < count; i += 1)); do
+    case $((i % 15)) in
+      0) args+=(-o /dev/null "$base/tasks?load=$i") ;;
+      1) args+=(-o /dev/null "$base/?_rsc=$i") ;;
+      *) args+=(-o /dev/null "$base/_next/static/chunks/c$i.js") ;;
+    esac
+  done
+  curl --silent --parallel --parallel-max "$parallel" --max-time 30 \
+    --write-out '%{http_code}\n' "${args[@]}"
+}
+for load in 1 2 3; do
+  codes=$(burst 150 6)
+  [[ "$(grep -cx 200 <<<"$codes")" == 150 ]] ||
+    fail "page load $load: not every request passed: $(sort <<<"$codes" | uniq -c | tr '\n' ' ')"
+done
+codes=$(burst 3000 16)
+grep -qx 429 <<<"$codes" || fail "a flood of 3000 requests got no 429: $(sort <<<"$codes" | uniq -c | tr '\n' ' ')"
+grep -qx 200 <<<"$codes" || fail "a flood of 3000 requests got no 200 at all"
 
 # The Cloudflare path: every client counts as arriving through Cloudflare's
 # edge network.
