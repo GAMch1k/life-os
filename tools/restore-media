@@ -150,8 +150,11 @@ if [[ "$plain" == true ]]; then
   result=$(printf '%s\n' "${missing[@]}" | SRC="$store" DST="$RESTORE_MEDIA_DIR" sh -c "$copy_script")
 else
   # As root, so it can read the backup directory (mode 700) and hand each
-  # file to the volume's owner.
-  result=$(printf '%s\n' "${missing[@]}" | "${compose[@]}" run --rm --no-deps -T --user 0:0 --entrypoint sh \
+  # file to the volume's owner. Inbox runs without capabilities (P22-08c):
+  # this run gets back just those it needs for that, reading and writing
+  # others' files and directories and handing them over.
+  result=$(printf '%s\n' "${missing[@]}" | "${compose[@]}" run --rm --no-deps -T --user 0:0 \
+    --cap-add DAC_OVERRIDE --cap-add DAC_READ_SEARCH --cap-add CHOWN --cap-add FOWNER --entrypoint sh \
     -v "$store:/backup-media:ro" -e SRC=/backup-media -e DST="$volume_dir" inbox -c "$copy_script")
 fi
 printf 'Restored Inbox images from run %s: %s.\n' "$run_id" "$result"
