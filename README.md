@@ -168,7 +168,7 @@ never bind it to a public/LAN address without an authenticated edge. See
 
 ## Official sources and name
 
-The official Life OS is published only at [github.com/GAMch1k](https://github.com/GAMch1k) (the source code and its releases), [ghcr.io/gamch1k](https://github.com/GAMch1k?tab=packages) (the Docker images), and lifeos.gamch1k.com. Forks are welcome under the AGPL, but please don't present a fork as the official Life OS: give it a name of its own, and say what it is based on.
+The official Life OS comes only from its code on GitHub, [github.com/GAMch1k/life-os](https://github.com/GAMch1k/life-os) with its releases (and the phone and watch apps in [github.com/GAMch1k/life-os-app](https://github.com/GAMch1k/life-os-app)), and from its container images at [ghcr.io/gamch1k](https://github.com/GAMch1k?tab=packages). Forks are welcome under the AGPL, but please don't present a fork as the official Life OS: give it a name of its own, and say what it is based on.
 
 ## Contributing and security
 
