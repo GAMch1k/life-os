@@ -122,12 +122,18 @@ jobs:
           docker build --tag lifeos-processor-claude:arm64-check \
             --build-arg LIFE_OS_PROCESSOR_BASE=lifeos-processor services/mcp/claude-code
           claude=$(docker run --rm --network none -e HOME=/tmp --entrypoint claude lifeos-processor-claude:arm64-check --version)
-          echo "Claude Code ${claude} runs on arm64."
+          bytes=$(docker run --rm --network none --entrypoint stat lifeos-processor-claude:arm64-check -c %s /usr/local/bin/claude)
+          echo "Claude Code ${claude} runs on arm64; its binary is $((bytes / 1000000)) MB ($((bytes / 1048576)) MiB)."
           docker image rm lifeos-processor-claude:arm64-check >/dev/null
-      # A rough reference, not a test: the default model (small) and base,
-      # with the default 2 threads and with 4 (docs/install/voice.md).
+      # A rough reference, not a test (docs/install/voice.md#how-fast): the
+      # default model (small) and base, with the default 2 threads and with
+      # 4, as this runner's processor picks (the ARMv8.2-A build); then base
+      # with the ARMv8.0-A build, which a Raspberry Pi 4 runs. Each fails if
+      # its transcript is wrong.
       - name: Whisper's speed on this runner (tools/whisper-speed)
-        run: tools/whisper-speed --models-dir "$RUNNER_TEMP/whisper-models" --threads "2 4" --runs 3 small base
+        run: |
+          tools/whisper-speed --models-dir "$RUNNER_TEMP/whisper-models" --threads "2 4" --runs 3 small base
+          tools/whisper-speed --models-dir "$RUNNER_TEMP/whisper-models" --env WHISPER_CLI_VARIANT=armv8.0 --threads 2 --runs 1 base
 
   # A stranger's install of this commit on an arm64 runner: its images built
   # there, then install-check.yml's every step, voice notes included.

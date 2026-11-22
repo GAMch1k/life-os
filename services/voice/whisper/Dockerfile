@@ -10,28 +10,14 @@ ARG WHISPER_CPP_VERSION=v1.9.5
 ARG WHISPER_CPP_COMMIT=d1be6fde11ac6e0407606b4e42fe72d34add8037
 RUN git clone --depth 1 --branch "$WHISPER_CPP_VERSION" https://github.com/ggml-org/whisper.cpp.git /src/whisper.cpp \
     && test "$(git -C /src/whisper.cpp rev-parse HEAD)" = "$WHISPER_CPP_COMMIT"
-# For any CPU of the platform, not the build machine's: ggml's default,
-# GGML_NATIVE, compiles for the CPU it builds on, so v0.1.0-preview.5's image,
-# built on a release runner with AVX-512, crashed on every server without it.
-# GGML_NATIVE=OFF builds for x86-64 with AVX2, FMA, and F16C (ggml's
-# defaults then; never AVX-512), and the check below fails a build with
-# AVX-512 instructions (zmm registers) in it. On arm64 it builds for
-# ARMv8.0-A (GGML_CPU_ARM_ARCH; NEON, which every 64-bit ARM processor has,
-# the Raspberry Pi 4's Cortex-A72 included), and the check fails a build with
-# what that processor lacks: SVE (z registers), the dot product, int8 and
-# bfloat16 matrix instructions, or half-precision arithmetic (conversions to
-# and from half precision are ARMv8.0-A's own).
-RUN set -eu; \
-    case "$(uname -m)" in \
-      aarch64) arch_flags=-DGGML_CPU_ARM_ARCH=armv8-a \
-        beyond='[[:space:]{,]z[0-9]+\.[bhsdq]([],}[:space:]]|$)|[[:space:]](s|u|us|su|bf)dot[[:space:]]|[[:space:]](s|u|us|bf)mmla[[:space:]]|[[:space:]](fadd|fsub|fmul|fmulx|fdiv|fmla|fmls|fmax|fmin|fmaxnm|fminnm|fabd|fabs|fneg|fsqrt|faddp|fmaxp|fminp|fmov|fmadd|fmsub|fnmadd|fnmsub|fnmul)[[:space:]]+(v[0-9]+\.[48]h|h[0-9]+),' ;; \
-      *) arch_flags='' beyond='%zmm' ;; \
-    esac; \
-    cmake -S /src/whisper.cpp -B /src/whisper.cpp/build -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON -DBUILD_SHARED_LIBS=OFF -DGGML_OPENMP=OFF -DGGML_NATIVE=OFF $arch_flags; \
-    cmake --build /src/whisper.cpp/build --target whisper-cli -j2; \
-    if objdump -d --no-show-raw-insn /src/whisper.cpp/build/bin/whisper-cli | grep -Eq "$beyond"; then \
-      echo "whisper-cli has instructions beyond its baseline ($beyond)" >&2; exit 1; \
-    fi
+# For any processor of the platform, never the build machine's own, and the
+# build fails on an instruction beyond that platform's baseline:
+# build-whisper-cli says which. On arm64 there are two builds, and
+# whisper-cli-arm64 runs the one this processor can: ARMv8.2-A with the dot
+# product and half precision (a Raspberry Pi 5, Graviton, Ampere), or
+# ARMv8.0-A (a Raspberry Pi 4), about four times slower.
+COPY build-whisper-cli whisper-cli-arm64 /src/
+RUN sh /src/build-whisper-cli /src/whisper.cpp /out
 # languages.txt (LIFE_OS_WHISPER_LANGUAGE's codes) must be exactly the codes
 # of this whisper.cpp's g_lang: the build fails when a new version adds or
 # drops one. After the compile, so a change to the list does not rebuild it.
@@ -58,7 +44,8 @@ RUN apk upgrade --no-cache \
     && apk add --no-cache libstdc++ wget ffmpeg && mkdir /models && chown 65534:65534 /models \
     && python3 -m pip uninstall --yes --no-cache-dir pip \
     && rm -rf /usr/local/lib/python3.*/ensurepip/_bundled
-COPY --from=whisper-build /src/whisper.cpp/build/bin/whisper-cli /usr/local/bin/whisper-cli
+# whisper-cli in bin/ (and on arm64 its two builds in libexec/whisper/).
+COPY --from=whisper-build /out/ /usr/local/
 COPY --from=whisper-build /src/languages.txt /app/languages.txt
 COPY server.py /app/server.py
 ENV WHISPER_MODEL_PATH=/models/ggml-base.bin \

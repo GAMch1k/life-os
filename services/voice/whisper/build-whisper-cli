@@ -1,0 +1,72 @@
+#!/bin/sh
+# Builds whisper.cpp's whisper-cli for any processor of this platform, never
+# for the build machine's own, into $2 (bin/, and libexec/whisper/ on arm64),
+# from the source in $1. The Whisper image's build stage runs it
+# (services/voice/whisper/Dockerfile; docs/services/voice-stt.md).
+#
+# ggml's default, GGML_NATIVE, compiles for the CPU it builds on, so
+# v0.1.0-preview.5's image, built on a release runner with AVX-512, crashed
+# on every server without it. GGML_NATIVE=OFF builds for a fixed baseline,
+# and each build fails when the binary has an instruction beyond it:
+#
+# - x86-64: AVX2, FMA, and F16C (ggml's defaults then); never AVX-512 (zmm
+#   registers).
+# - arm64, two builds, and bin/whisper-cli (whisper-cli-arm64) runs the one
+#   this processor can: armv8.2, ARMv8.2-A with the dot product and
+#   half-precision arithmetic (a Raspberry Pi 5's Cortex-A76, AWS Graviton,
+#   Ampere), about four times as fast as armv8.0; and armv8.0, ARMv8.0-A,
+#   NEON alone, for every 64-bit ARM processor (a Raspberry Pi 4's
+#   Cortex-A72). Neither has SVE (z registers) or the int8 and bfloat16
+#   matrix instructions; armv8.0 has no dot product and no half-precision
+#   arithmetic either (conversions to and from half precision are
+#   ARMv8.0-A's own).
+set -eu
+src=$1
+out=$2
+
+sve='[[:space:]{,]z[0-9]+\.[bhsdq]([],}[:space:]]|$)'
+i8mm_bf16='[[:space:]](us|su|bf)dot[[:space:]]|[[:space:]](s|u|us|bf)mmla[[:space:]]'
+dotprod='[[:space:]](s|u)dot[[:space:]]'
+fp16='[[:space:]](fadd|fsub|fmul|fmulx|fdiv|fmla|fmls|fmax|fmin|fmaxnm|fminnm|fabd|fabs|fneg|fsqrt|faddp|fmaxp|fminp|fmov|fmadd|fmsub|fnmadd|fnmsub|fnmul)[[:space:]]+(v[0-9]+\.[48]h|h[0-9]+),'
+
+# build NAME [CMAKE ARGUMENTS...]: whisper-cli in $src/build-NAME.
+build() {
+  name=$1
+  shift
+  cmake -S "$src" -B "$src/build-$name" -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON \
+    -DBUILD_SHARED_LIBS=OFF -DGGML_OPENMP=OFF -DGGML_NATIVE=OFF "$@"
+  cmake --build "$src/build-$name" --target whisper-cli -j2
+}
+
+# check NAME PATTERN: fails when whisper-cli of NAME has an instruction PATTERN matches.
+check() {
+  if objdump -d --no-show-raw-insn "$src/build-$1/bin/whisper-cli" | grep -Eq "$2"; then
+    echo "build-whisper-cli: the $1 build has instructions beyond its baseline ($2)" >&2
+    exit 1
+  fi
+}
+
+mkdir -p "$out/bin"
+case $(uname -m) in
+  aarch64)
+    build armv8.0 -DGGML_CPU_ARM_ARCH=armv8-a
+    check armv8.0 "$sve|$i8mm_bf16|$dotprod|$fp16"
+    build armv8.2 -DGGML_CPU_ARM_ARCH=armv8.2-a+dotprod+fp16
+    check armv8.2 "$sve|$i8mm_bf16"
+    mkdir -p "$out/libexec/whisper"
+    for variant in armv8.0 armv8.2; do
+      cp "$src/build-$variant/bin/whisper-cli" "$out/libexec/whisper/whisper-cli-$variant"
+    done
+    cp "$(dirname "$0")/whisper-cli-arm64" "$out/bin/whisper-cli"
+    chmod 0755 "$out/bin/whisper-cli"
+    ;;
+  x86_64)
+    build x86-64
+    check x86-64 '%zmm'
+    cp "$src/build-x86-64/bin/whisper-cli" "$out/bin/whisper-cli"
+    ;;
+  *)
+    echo "build-whisper-cli: no baseline for $(uname -m) (x86_64 and aarch64 only)" >&2
+    exit 1
+    ;;
+esac

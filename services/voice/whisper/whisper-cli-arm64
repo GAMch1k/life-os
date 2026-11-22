@@ -1,0 +1,27 @@
+#!/bin/sh
+# whisper-cli on arm64: the Whisper image has two builds of whisper.cpp
+# (build-whisper-cli), and this runs the one this processor can. armv8.2 needs
+# half-precision arithmetic (asimdhp) and the dot product (asimddp), as a
+# Raspberry Pi 5, AWS Graviton, and Ampere have, and is about four times as
+# fast; armv8.0 runs on every 64-bit ARM processor, a Raspberry Pi 4's
+# included. WHISPER_CLI_VARIANT (armv8.0 or armv8.2) picks one instead
+# (tools/whisper-speed, to time both).
+variant=${WHISPER_CLI_VARIANT:-}
+if [ -z "$variant" ]; then
+  features=" $(sed -n 's/^Features[[:space:]]*:[[:space:]]*//p' /proc/cpuinfo 2>/dev/null | head -n 1) "
+  variant=armv8.0
+  case $features in
+    *" asimdhp "*)
+      case $features in
+        *" asimddp "*) variant=armv8.2 ;;
+      esac
+      ;;
+  esac
+fi
+case $variant in
+  armv8.0 | armv8.2) exec /usr/local/libexec/whisper/whisper-cli-"$variant" "$@" ;;
+  *)
+    echo "whisper-cli: WHISPER_CLI_VARIANT is '$variant', not armv8.0 or armv8.2" >&2
+    exit 2
+    ;;
+esac
