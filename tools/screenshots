@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# The README's screenshots from the fictional demo dataset
+# (docs/development/screenshots.md), on the disposable verification stack
+# only (tools/verify-compose, project lifeos-verify), never on a Life OS with
+# real data. It
+#  - starts the stack as a new install runs it: the core alone, legacy
+#    access off (LIFE_OS_VERIFY_MODULES picks other modules);
+#  - takes a setup code from the Dashboard's container, as ./setup.sh
+#    setup-code does;
+#  - runs apps/dashboard/e2e-screenshots in Chromium: the first account,
+#    the demo data (demo-data.ts), then a PNG of each page, taken at twice
+#    its size, and the social preview;
+#  - writes the smaller WebP files the README shows next to them
+#    (optimize.mjs), and removes the stack.
+# Look at every image before it goes into docs/images/.
+#
+#   tools/screenshots <output-dir>
+#
+# Needs the core's images built (docker compose build), the Dashboard's
+# node_modules, and Playwright's Chromium. CI runs it in the Screenshots
+# workflow (.github/workflows/screenshots.yml) and uploads the images.
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+(($# == 1)) || { echo 'usage: tools/screenshots <output-dir>' >&2; exit 2; }
+out=$(realpath -m -- "$1")
+mkdir -p "$out"
+compose=(./tools/verify-compose)
+gateway=http://127.0.0.1:13001
+export LIFE_OS_VERIFY_LEGACY_ACCESS=off
+export LIFE_OS_VERIFY_MODULES="${LIFE_OS_VERIFY_MODULES-}"
+cleanup() { "${compose[@]}" down --volumes --remove-orphans >/dev/null; }
+trap cleanup EXIT
+fail() {
+  echo "screenshots: $*" >&2
+  exit 1
+}
+# The throwaway account's password and setup code never show in a CI log.
+mask() { [[ -z ${GITHUB_ACTIONS:-} || -z $1 ]] || printf '::add-mask::%s\n' "$1"; }
+password="demo $(openssl rand -hex 12)"
+mask "$password"
+
+"${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
+"${compose[@]}" up --detach --no-build >/dev/null
+
+for _ in $(seq 1 120); do
+  curl --fail --silent --max-time 3 -o /dev/null "$gateway/login" && break
+  sleep 1
+done
+curl --fail --silent --max-time 3 -o /dev/null "$gateway/login" || fail 'the login page does not answer'
+# shellcheck disable=SC2016 # JavaScript, run by node
+probe='Promise.all(process.argv.slice(1).map((s) => fetch(`http://${s}:8080/ready`).then((r) => r.ok, () => false))).then((ok) => process.exit(ok.every(Boolean) ? 0 : 1))'
+ready=
+for _ in $(seq 1 60); do
+  if "${compose[@]}" exec -T dashboard node -e "$probe" tasks inbox calendar finance food; then
+    ready=1
+    break
+  fi
+  sleep 1
+done
+[[ -n "$ready" ]] || fail 'the core services are not ready'
+
+setup_code=$("${compose[@]}" exec -T dashboard node scripts/lifeos-auth.mjs setup-code | sed -n 's/^Setup code: //p')
+[[ -n "$setup_code" ]] || fail 'setup-code printed no code'
+mask "$setup_code"
+
+LIFE_OS_E2E_URL=$gateway LIFE_OS_E2E_SETUP_CODE=$setup_code LIFE_OS_E2E_PASSWORD=$password \
+  LIFE_OS_SCREENSHOTS_DIR=$out npm --prefix apps/dashboard run screenshots
+(cd apps/dashboard && node e2e-screenshots/optimize.mjs "$out")
+echo "screenshots: in $out. Look at every one before it goes into docs/images/."

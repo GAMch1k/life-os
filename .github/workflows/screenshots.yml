@@ -1,0 +1,81 @@
+# The README's screenshots from the fictional demo dataset
+# (docs/development/screenshots.md): the core's images, the disposable
+# verification stack as a new install runs it, the demo data, and
+# Playwright's Chromium (tools/screenshots). The images are uploaded as the
+# "screenshots" artifact, to look at before they go into docs/images/. It
+# needs no secret and signs in to no AI. It runs on demand, and on a pull
+# request that changes the screenshot tooling; it is not a required check.
+name: Screenshots
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [master]
+    paths:
+      - apps/dashboard/e2e-screenshots/**
+      - apps/dashboard/playwright.screenshots.config.ts
+      - tools/screenshots
+      - .github/workflows/screenshots.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The Dashboard image's Node (node:22-alpine), as in ci.yml.
+  NODE_VERSION: "22"
+  NEXT_TELEMETRY_DISABLED: "1"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  screenshots:
+    name: README screenshots (demo data)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Throwaway passwords, no integration, no AI sign-in.
+      - name: Write a throwaway .env
+        run: tools/ci-env "$RUNNER_TEMP/lifeos-ci"
+      # The core alone, as a new install runs it.
+      - name: Build the core's images
+        run: COMPOSE_PROFILES= timeout --kill-after=1m 30m docker compose build --pull
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: apps/dashboard/package-lock.json
+      - run: npm ci --prefix apps/dashboard --no-audit --no-fund
+      # Its system packages come through apt; when Ubuntu's mirrors do not
+      # answer, the runner image has what Chromium needs (as in the
+      # full-stack tests, .github/actions/full-stack).
+      - name: Install Playwright's Chromium
+        working-directory: apps/dashboard
+        run: timeout 10m npx playwright install --with-deps chromium || timeout 10m npx playwright install chromium
+      - name: Take the screenshots (tools/screenshots)
+        env:
+          LIFE_OS_VERIFY_LOGS_DIR: ${{ runner.temp }}/compose-logs
+        run: timeout --kill-after=1m 20m tools/screenshots "$RUNNER_TEMP/screenshots"
+      # Also after a failure: the shots taken so far show what went wrong.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: screenshots
+          path: ${{ runner.temp }}/screenshots/
+          retention-days: 14
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: compose-logs
+          path: ${{ runner.temp }}/compose-logs/
+          retention-days: 7
+          if-no-files-found: ignore
