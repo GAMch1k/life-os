@@ -132,7 +132,7 @@ The internal check location is `internal`, passes no body, and sends the origina
 
 There is no public health route; services' `/health` and `/ready` stay unrouted, and the login page is the liveness probe.
 
-`/android/` is **not** public: it needs a session or a device key. Installs connected to any server but the official one take updates from GitHub Releases, unauthenticated ([Android releases](../operations/android-releases.md#where-the-app-looks-for-updates)); the official server's phones check `/android/updates` with their device key after pairing; and the first download happens in a signed-in browser.
+`/android/` is **not** public: it needs a session or a device key. Installs connected to any server but the update origin (the maintainer's own) take updates from GitHub Releases, unauthenticated ([Android releases](../operations/android-releases.md#where-the-app-looks-for-updates)); the update origin's phones check `/android/updates` with their device key after pairing; and the first download happens in a signed-in browser.
 
 **The Dashboard's own routes.** Pages, `/share`, `/calendar/google/callback`, `/finance/bank/callback`, `/api/status`, `/api/backups/`, and `/api/processor/` stay on the Dashboard's location. Next.js middleware sends a request without a session to `/login?next=…`; API routes answer 401. Server-side rendering calls services with an identity token the Dashboard mints for the current session, never with the cookie. The development proxies (`apps/dashboard/src/lib/service-proxy.ts`, used without the gateway) run the same check and attach the token, as the gateway does.
 

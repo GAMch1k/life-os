@@ -2,7 +2,7 @@
 
 Life OS serves its Android apps, the phone app and the Wear OS app (built in the separate `life-os-app` repository), from the gateway at `/android/` under its public URL (`LIFE_OS_PUBLIC_URL`, such as `https://lifeos.example.com/android/`), behind Cloudflare Access like every other path. The phone installs the first version from the download page there; after that, the app reads the manifest at `/android/updates` and updates itself. Nothing here builds or signs an app: the server only stores and serves APKs that the app repository built and signed.
 
-The same publish also makes each build a [GitHub Release](#github-releases) of [GAMch1k/life-os-app](https://github.com/GAMch1k/life-os-app/releases), with the same signed APKs and a manifest of the same form (P20-06). That is where other people's apps get their updates: an app that is not connected to the official server checks the latest GitHub release instead of `/android/`, which stays behind Access (the owner's decision, 2026-11-10).
+The same publish also makes each build a [GitHub Release](#github-releases) of [GAMch1k/life-os-app](https://github.com/GAMch1k/life-os-app/releases), with the same signed APKs and a manifest of the same form (P20-06). That is where other people's apps get their updates: an app that is not connected to the update origin (the maintainer's own server) checks the latest GitHub release instead of `/android/`, which stays behind Access (the owner's decision, 2026-11-10).
 
 ```mermaid
 flowchart LR
@@ -97,10 +97,10 @@ The phone app and the watch app (through the phone) decide by the server set in 
 
 | The app is connected to | Manifest | APKs | Token |
 | --- | --- | --- | --- |
-| the update origin, the official server (`lifeos.updatesUrl`, `https://lifeos.gamch1k.com`): the owner | `/android/updates` there, through Access | paths under `/android/` on that origin | the server's service token |
+| the update origin (`lifeos.updatesUrl`; by default `https://lifeos.gamch1k.com`, the maintainer's own private server): the owner | `/android/updates` there, through Access | paths under `/android/` on that origin | the server's service token |
 | any other server, or none yet | `https://github.com/GAMch1k/life-os-app/releases/latest/download/updates.json` (`lifeos.updatesRepo`) | assets of a release of that repository | none, ever |
 
-Each source names only its own files: a GitHub manifest whose `url` is anything but an APK asset of a release of that repository (another repository, another site, plain http, an `/android/` path, the other app's APK) is refused before a byte is downloaded, and so is a GitHub address in the official server's manifest. GitHub's downloads redirect (github.com → the release's asset → `release-assets.githubusercontent.com`); the app follows at most 5 redirects, only to github.com downloads of that repository's releases and GitHub's asset hosts (`release-assets.githubusercontent.com`, `objects.githubusercontent.com`), and never sends a token there. Nothing is installed from any other domain. A build of the app for another server and another key sets `lifeos.updatesUrl` and `lifeos.updatesRepo` to its own (`life-os-app`'s README, "Servers").
+Each source names only its own files: a GitHub manifest whose `url` is anything but an APK asset of a release of that repository (another repository, another site, plain http, an `/android/` path, the other app's APK) is refused before a byte is downloaded, and so is a GitHub address in the update origin's manifest. GitHub's downloads redirect (github.com → the release's asset → `release-assets.githubusercontent.com`); the app follows at most 5 redirects, only to github.com downloads of that repository's releases and GitHub's asset hosts (`release-assets.githubusercontent.com`, `objects.githubusercontent.com`), and never sends a token there. Nothing is installed from any other domain. A build of the app for another server and another key sets `lifeos.updatesUrl` and `lifeos.updatesRepo` to its own (`life-os-app`'s README, "Servers and updates").
 
 ## release.json: what the build writes
 

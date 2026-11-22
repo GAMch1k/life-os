@@ -14,7 +14,7 @@ The release notes list each APK's SHA-256. Both apps are signed with the Life OS
 
 From app **0.5.0**, the phone **pairs with your Life OS account**: the phone and its watch get keys of their own, which Life OS checks on every request, and Cloudflare Access is no longer needed. Life OS needs an **https** public address (`LIFE_OS_PUBLIC_URL`) that the phone reaches: Cloudflare Tunnel, your own proxy with a certificate, or an https address over your VPN. The app refuses plain `http://` servers, `http://localhost` included.
 
-1. At the first start, the app offers the official server: replace it with your own address, such as `https://lifeos.example.com`. To change it later: **Settings › Connection › Edit connection**.
+1. At the first start, type your server's address, such as `https://lifeos.example.com`. (App 0.5.0 still fills in its developer's own server there: replace it with yours. Later versions leave the field empty.) To change it later: **Settings › Connection › Edit connection**.
 2. Pair the phone, in one of two ways:
    - **With a second screen**: in the Dashboard, **Settings → Devices → Pair a phone** shows a QR code, and the code as text. In the app, scan the QR code or type the code. The app shows the server's address and asks before it pairs.
    - **On the phone alone**: **Sign in on this phone** opens Life OS's sign-in page in a Custom Tab. Sign in (if you are signed in already, you skip this step) and tap **Pair**. The app pairs right away, without asking again.
