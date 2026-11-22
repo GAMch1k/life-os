@@ -280,7 +280,15 @@ async function seedFinance(request: APIRequestContext, day: string) {
   };
   const cash = accounts.items.find((item) => item.builtIn)!;
 
-  const category = (name: string, kind: string) =>
+  // Finance adds default categories (Groceries, Transport, …) once: the
+  // demo uses those, and adds the ones it lacks.
+  const existing = (
+    (await (await request.get(`${api}/categories`)).json()) as {
+      items: { id: string; name: string; kind: string }[];
+    }
+  ).items;
+  const category = async (name: string, kind: string): Promise<Created> =>
+    existing.find((item) => item.name === name && item.kind === kind) ??
     post(request, `${api}/categories`, { name, kind });
   const c = {
     salary: await category("Salary", "income"),
