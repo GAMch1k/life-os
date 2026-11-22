@@ -15,9 +15,23 @@ RUN git clone --depth 1 --branch "$WHISPER_CPP_VERSION" https://github.com/ggml-
 # built on a release runner with AVX-512, crashed on every server without it.
 # GGML_NATIVE=OFF builds for x86-64 with AVX2, FMA, and F16C (ggml's
 # defaults then; never AVX-512), and the check below fails a build with
-# AVX-512 instructions (zmm registers) in it.
-RUN cmake -S /src/whisper.cpp -B /src/whisper.cpp/build -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON -DBUILD_SHARED_LIBS=OFF -DGGML_OPENMP=OFF -DGGML_NATIVE=OFF && cmake --build /src/whisper.cpp/build --target whisper-cli -j2 \
-    && ! objdump -d --no-show-raw-insn /src/whisper.cpp/build/bin/whisper-cli | grep -q '%zmm'
+# AVX-512 instructions (zmm registers) in it. On arm64 it builds for
+# ARMv8.0-A (GGML_CPU_ARM_ARCH; NEON, which every 64-bit ARM processor has,
+# the Raspberry Pi 4's Cortex-A72 included), and the check fails a build with
+# what that processor lacks: SVE (z registers), the dot product, int8 and
+# bfloat16 matrix instructions, or half-precision arithmetic (conversions to
+# and from half precision are ARMv8.0-A's own).
+RUN set -eu; \
+    case "$(uname -m)" in \
+      aarch64) arch_flags=-DGGML_CPU_ARM_ARCH=armv8-a \
+        beyond='[[:space:]{,]z[0-9]+\.[bhsdq]([],}[:space:]]|$)|[[:space:]](s|u|us|su|bf)dot[[:space:]]|[[:space:]](s|u|us|bf)mmla[[:space:]]|[[:space:]](fadd|fsub|fmul|fmulx|fdiv|fmla|fmls|fmax|fmin|fmaxnm|fminnm|fabd|fabs|fneg|fsqrt|faddp|fmaxp|fminp|fmov|fmadd|fmsub|fnmadd|fnmsub|fnmul)[[:space:]]+(v[0-9]+\.[48]h|h[0-9]+),' ;; \
+      *) arch_flags='' beyond='%zmm' ;; \
+    esac; \
+    cmake -S /src/whisper.cpp -B /src/whisper.cpp/build -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON -DBUILD_SHARED_LIBS=OFF -DGGML_OPENMP=OFF -DGGML_NATIVE=OFF $arch_flags; \
+    cmake --build /src/whisper.cpp/build --target whisper-cli -j2; \
+    if objdump -d --no-show-raw-insn /src/whisper.cpp/build/bin/whisper-cli | grep -Eq "$beyond"; then \
+      echo "whisper-cli has instructions beyond its baseline ($beyond)" >&2; exit 1; \
+    fi
 # languages.txt (LIFE_OS_WHISPER_LANGUAGE's codes) must be exactly the codes
 # of this whisper.cpp's g_lang: the build fails when a new version adds or
 # drops one. After the compile, so a change to the list does not rebuild it.

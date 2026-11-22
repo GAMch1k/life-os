@@ -365,10 +365,15 @@ check_docker() {
 }
 
 check_host() {
-  local mem_kib free_kib root
-  if [[ $(uname -m) != x86_64 ]]; then
-    warn "this server is $(uname -m). The preview images are built for x86_64 (amd64) only; ARM images come later, so 'up' will not find images for this machine."
-  fi
+  local mem_kib free_kib root arch
+  # Docker's own architecture, which picks the images: a 32-bit Docker on a
+  # 64-bit kernel (32-bit Raspberry Pi OS on a Pi 4 or 5) says arm, though
+  # uname -m says aarch64.
+  arch=$(docker version --format '{{.Server.Arch}}' 2>/dev/null) || arch=
+  case ${arch:-$(uname -m)} in
+    amd64 | x86_64 | arm64 | aarch64) ;;
+    *) warn "Docker on this server runs ${arch:-$(uname -m)} images. Life OS's images are built for amd64 (64-bit x86) and arm64 (64-bit ARM) only, so 'up' will not find images for this machine. On a Raspberry Pi, install a 64-bit OS, such as Raspberry Pi OS (64-bit), and Docker for it." ;;
+  esac
   if (($(id -u) == 0)); then
     warn 'you are running as root. It works, but the containers that use your files (backups, the AI sign-in, a bank key) then run as root too. A normal user in the docker group is better.'
   fi
@@ -1582,21 +1587,26 @@ valid_whisper_language() {
   [[ $1 == auto ]] || [[ $1 =~ ^[a-z]+$ && " $whisper_languages " == *" $1 "* ]]
 }
 
-# Whether this server's processor has AVX2, which Whisper needs (the voice
-# module's whisper.cpp is built for it; without it Whisper stops at every
-# start with "Illegal instruction"): yes, no, or unknown (another
-# architecture, or no flags line to read). LIFE_OS_SETUP_CPUINFO reads
-# another file than /proc/cpuinfo (tools/test-setup).
+# Whether this server's processor has what Whisper needs: AVX2 on x86-64
+# (the voice module's whisper.cpp is built for it; without it Whisper stops
+# at every start with "Illegal instruction"), NEON (asimd) on arm64, which
+# every 64-bit ARM processor has. yes, no, or unknown (another architecture,
+# or nothing to read). LIFE_OS_SETUP_CPUINFO reads another file than
+# /proc/cpuinfo (tools/test-setup).
 cpu_avx2() {
   local cpuinfo=${LIFE_OS_SETUP_CPUINFO:-/proc/cpuinfo} flags
-  if [[ -z ${LIFE_OS_SETUP_CPUINFO:-} && $(uname -m) != x86_64 ]]; then
+  if [[ -z ${LIFE_OS_SETUP_CPUINFO:-} && $(uname -m) != x86_64 && $(uname -m) != aarch64 ]]; then
     printf 'unknown\n'
-  elif ! flags=$(grep -m 1 '^flags' "$cpuinfo" 2>/dev/null); then
-    printf 'unknown\n'
-  elif [[ " ${flags#*:} " == *[[:space:]]avx2[[:space:]]* ]]; then
+  elif flags=$(grep -m 1 '^flags' "$cpuinfo" 2>/dev/null); then
+    if [[ " ${flags#*:} " == *[[:space:]]avx2[[:space:]]* ]]; then
+      printf 'yes\n'
+    else
+      printf 'no\n'
+    fi
+  elif grep -Eq '^Features[[:space:]]*:(.*[[:space:]])?asimd([[:space:]]|$)' "$cpuinfo" 2>/dev/null; then
     printf 'yes\n'
   else
-    printf 'no\n'
+    printf 'unknown\n'
   fi
 }
 

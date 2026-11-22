@@ -1,6 +1,6 @@
 # Continuous integration
 
-GitHub Actions checks every push and pull request with `.github/workflows/ci.yml`: the source, then the full stack (the images, the smokes, and the browser suite on the disposable verification stack). CI never deploys. Merges are still made locally and pushed to master. A second workflow, `.github/workflows/cla.yml`, checks that the authors of a pull request have signed the [Contributor License Agreement](#cla-check). Two more belong to releases ([Releases](releases.md)): `release.yml` builds, tests, and publishes a tagged version, and `install-check.yml` installs a published release on a clean runner from its files alone and runs the smokes against it ([the install check](releases.md#the-install-check)). `screenshots.yml` makes the README's screenshots from a fictional demo dataset ([Screenshots](#screenshots)).
+GitHub Actions checks every push and pull request with `.github/workflows/ci.yml`: the source, then the full stack (the images, the smokes, and the browser suite on the disposable verification stack). CI never deploys. Merges are still made locally and pushed to master. A second workflow, `.github/workflows/cla.yml`, checks that the authors of a pull request have signed the [Contributor License Agreement](#cla-check). Two more belong to releases ([Releases](releases.md)): `release.yml` builds, tests, and publishes a tagged version, and `install-check.yml` installs a published release on a clean runner from its files alone and runs the smokes against it ([the install check](releases.md#the-install-check)). `screenshots.yml` makes the README's screenshots from a fictional demo dataset ([Screenshots](#screenshots)). `arm64.yml` builds the images and runs the install check on GitHub's arm64 runner, for a pull request that changes how the images are built ([arm64](#arm64)).
 
 ## When it runs
 
@@ -179,6 +179,17 @@ Without `LIFE_OS_VERIFY_OVERLAYS`, Whisper downloads the model itself at each st
 ### Not cached: the images
 
 The images are built from scratch in every run. The Go services' Dockerfiles copy the whole repository before `go build`, so any commit changes that layer and a build cache (buildx with `type=gha`) could reuse none of their work. It could reuse only whisper.cpp's build and the Dashboard's `npm ci`, a few minutes of the build, at the cost of a second builder and of loading every image into Docker.
+
+## arm64
+
+Every release image is published for linux/arm64 too ([Releases → Platforms](releases.md#platforms)). The release builds and tests them on GitHub's arm64 runner, `ubuntu-24.04-arm` (free for public repositories). `.github/workflows/arm64.yml` does so before a release: on a pull request to master, and a push to master, that changes how the images are built, installed, or released. That is a `Dockerfile`, `.dockerignore`, `compose.yaml` or `deploy/compose.yaml`, `.env.example`, `setup.sh`, the Dashboard's `package.json` or lockfile (its native packages differ per platform), Claude Code's or Whisper's build files, `tools/build-install-bundle`, `tools/ci-env`, `tools/lib/modules.bash`, `tools/whisper-speed`, the full-stack action, or the workflows `arm64.yml`, `install-check.yml`, and `release.yml`. By hand: Actions → arm64 → Run workflow. Its jobs are not required checks, as they do not run on every pull request. Nothing in it is pushed anywhere.
+
+| Job | What it runs |
+| --- | --- |
+| `build` | Every module's images (`docker compose build --pull`, as the release builds them), then: each is linux/arm64; the processor has the Codex CLI and no Claude Code; Claude Code installs on it as `./setup.sh claude` does on a server (its `linux-arm64-musl` binary; the image stays on the runner); and `tools/whisper-speed` with the `small` and `base` models and 2 and 4 threads, into the run's summary |
+| `install-check` | The [install check](releases.md#the-install-check) of the commit on an arm64 runner (`source: true`, `platform: arm64`): its images built there, then a stranger's install from its files, the smokes, and a voice note through Whisper |
+
+The full-stack tests run on arm64 in the release, and in its dry run, which a branch that changes the release's own files starts.
 
 ## govulncheck
 

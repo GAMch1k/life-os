@@ -180,6 +180,8 @@ case $1 in
     [[ -z ${STUB_PS_ERROR:-} ]] || exit 1
     printf '%b' "${STUB_LIFEOS_CONTAINERS:-}"
     ;;
+  # Docker's architecture (docker version --format '{{.Server.Arch}}').
+  version) echo "${STUB_DOCKER_ARCH:-amd64}" ;;
   run)
     # ntfy's `user hash`: a bcrypt-shaped hash of what it reads.
     cat >/dev/null
@@ -276,10 +278,12 @@ new_case() {
 }
 
 # The processors a case runs on (LIFE_OS_SETUP_CPUINFO): with AVX2 (the
-# default), without, and one setup.sh cannot read flags from.
+# default), without, one setup.sh cannot read flags from, and a Raspberry
+# Pi 4's (arm64, Cortex-A72: NEON, no flags line).
 printf 'processor\t: 0\nmodel name\t: Test CPU with AVX2\nflags\t\t: fpu sse4_2 avx avx2 fma\n' >"$work/cpuinfo-avx2"
 printf 'processor\t: 0\nmodel name\t: Intel(R) Celeron(R) J4125 CPU @ 2.00GHz\nflags\t\t: fpu sse4_2 aes rdrand\n' >"$work/cpuinfo-no-avx2"
 printf 'processor\t: 0\n' >"$work/cpuinfo-unknown"
+printf 'processor\t: 0\nBogoMIPS\t: 108.00\nFeatures\t: fp asimd evtstrm crc32 cpuid\nCPU implementer\t: 0x41\nCPU architecture: 8\nCPU part\t: 0xd08\n' >"$work/cpuinfo-arm64"
 
 # run [VAR=value...] -- [setup.sh arguments...]: runs ./setup.sh in the case
 # directory with a clean environment, stdin from $stdin (default: none).
@@ -1206,6 +1210,27 @@ run LIFE_OS_TIMEZONE=UTC -- --yes
 sed -i -e '/^LIFE_OS_MODULES_LISTED=/d' -e '/^COMPOSE_PROFILES=/d' "$case_dir/.env"
 run LIFE_OS_SETUP_CPUINFO="$work/cpuinfo-no-avx2" LIFE_OS_SETUP_WAIT_SECONDS=1 -- up --skip-checks
 ok 'an install from before modules keeps voice off without AVX2' test "$(value COMPOSE_PROFILES)" = server-health
+
+# ---------- arm64 (a Raspberry Pi 4 or 5 with a 64-bit OS) ----------
+# No warning about the processor or the images (this host's ports may warn).
+no_arch_warning() { ! grep -Eq 'AVX2|Whisper needs|images for this machine' "$case_dir.last"; }
+new_case arm64
+run STUB_DOCKER_ARCH=arm64 LIFE_OS_SETUP_CPUINFO="$work/cpuinfo-arm64" LIFE_OS_TIMEZONE=UTC LIFE_OS_SETUP_MODULES=voice LIFE_OS_SETUP_WHISPER_MODEL=base -- --yes
+ok 'a first setup on arm64 works' test "$status" -eq 0
+ok 'without a warning about the processor or the images' no_arch_warning
+ok 'with voice notes on: NEON is all Whisper needs there' has_profile voice
+run STUB_DOCKER_ARCH=arm64 LIFE_OS_SETUP_CPUINFO="$work/cpuinfo-arm64" -- modules off voice
+run STUB_DOCKER_ARCH=arm64 LIFE_OS_SETUP_CPUINFO="$work/cpuinfo-arm64" -- modules on voice
+ok 'modules on voice works on arm64' test "$status" -eq 0
+ok 'without a warning either' no_arch_warning
+ok 'voice on again' has_profile voice
+run STUB_DOCKER_ARCH=arm64 LIFE_OS_SETUP_CPUINFO="$work/cpuinfo-arm64" LIFE_OS_SETUP_WAIT_SECONDS=1 -- up
+ok 'up on arm64 neither' no_arch_warning
+new_case arm32
+run STUB_DOCKER_ARCH=arm LIFE_OS_SETUP_CPUINFO="$work/cpuinfo-arm64" LIFE_OS_TIMEZONE=UTC -- --yes
+ok 'a 32-bit Docker only warns' test "$status" -eq 0
+ok 'that there are no images for it, and why' output_has "Docker on this server runs arm images. Life OS's images are built for amd64 (64-bit x86) and arm64 (64-bit ARM) only"
+ok 'and what to do on a Raspberry Pi' output_has 'install a 64-bit OS'
 
 # ---------- Integrations during a first setup without questions ----------
 new_case init-with-integrations
