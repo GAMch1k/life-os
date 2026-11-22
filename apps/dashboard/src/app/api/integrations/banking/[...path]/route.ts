@@ -2,7 +2,7 @@ import { type NextRequest } from "next/server";
 
 import { serviceBaseUrls } from "@/config/services";
 import { moduleOffResponse, serviceOn } from "@/lib/modules";
-import { proxyServiceRequest } from "@/lib/service-proxy";
+import { developmentProxy } from "@/lib/service-proxy";
 
 type Context = { params: Promise<{ path: string[] }> };
 
@@ -17,7 +17,7 @@ const PSU_HEADERS = ["user-agent", "accept-language", "x-real-ip"] as const;
 
 function proxy(request: NextRequest, context: Context) {
   if (!serviceOn("banking")) return moduleOffResponse();
-  return proxyServiceRequest(request, context, serviceBaseUrls.banking, {
+  return developmentProxy(request, context, serviceBaseUrls.banking, {
     forwardHeaders: PSU_HEADERS,
   });
 }

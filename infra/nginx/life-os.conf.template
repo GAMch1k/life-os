@@ -60,6 +60,27 @@ map $uri $lifeos_module_off {
   default "";${LIFE_OS_GATEWAY_MODULE_ROUTES}
 }
 
+# A request path no client of Life OS sends: an encoded slash, backslash,
+# or dot (%2F, %5C, %2E, either case), a backslash, or a dot segment (/./,
+# /../). nginx decodes and resolves them before it picks a location, while
+# the Dashboard's location passes the path on as the client sent it, so the
+# two would read it differently. Answered 400 before any location (below).
+# Only the path: the query string carries encoded URLs as it should (a
+# recipe link, OAuth's redirect_uri).
+map $request_uri $lifeos_bad_path {
+  default 0;
+  "~*^[^?]*(%2f|%5c|%2e|\x5c)" 1;
+  "~^[^?]*/\.\.?(/|\?|$)" 1;
+}
+
+# HTTPS only (Strict-Transport-Security): a request that came over HTTPS,
+# through Cloudflare or a trusted proxy. Empty, and so not sent, otherwise:
+# plain HTTP on a LAN, WireGuard, or an SSH tunnel stays usable.
+map $forwarded_proto $lifeos_hsts {
+  default "";
+  https "max-age=31536000";
+}
+
 # The gateway's 403, by the auth check's reason (X-Life-OS-Auth-Error, kept
 # by auth_request_set in each location that asks it): a fixed list, never
 # the header's own text. Empty, the refusal is the gateway's own: a request
@@ -154,6 +175,7 @@ server {
   set_real_ip_from 10.255.249.0/29;
   real_ip_header CF-Connecting-IP;
   if ($missing_access_token) { return 403; }
+  if ($lifeos_bad_path) { rewrite ^ /.lifeos/bad-path last; }
   if ($lifeos_module_off) { rewrite ^ /.lifeos/module-off last; }
   # Filled by auth_request_set in the locations that ask the auth check;
   # empty (and so not sent) everywhere else.
@@ -173,12 +195,18 @@ server {
   limit_conn lifeos_client 20;
 
   add_header X-Content-Type-Options "nosniff" always;
-  add_header X-Frame-Options "SAMEORIGIN" always;
+  add_header X-Frame-Options "DENY" always;
   add_header Referrer-Policy "no-referrer" always;
   add_header Permissions-Policy "camera=(self), microphone=(self), geolocation=()" always;
+  # A policy that cannot stop a script of the Dashboard's: no page of Life
+  # OS in a frame, no <base> or plugin, and forms post to Life OS alone
+  # (every form of the Dashboard posts to its own pages or runs a script;
+  # the OAuth consent and the pairing leave with a script, never a form).
+  add_header Content-Security-Policy "frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'" always;
+  add_header Strict-Transport-Security $lifeos_hsts always;
   # Set by the Android downloads (location /android/ below) and empty
   # everywhere else, where add_header then sends nothing. An add_header in
-  # a location would replace the four above there, so the downloads set
+  # a location would replace the six above there, so the downloads set
   # these variables instead. The auth check's subrequest runs the server's
   # own directives again and shares the request's variables, so it must not
   # empty them after /android/ set them.
@@ -549,6 +577,13 @@ server {
   location @lifeos_login {
     absolute_redirect off;
     return 302 /login?next=$uri;
+  }
+  # A path no client sends ($lifeos_bad_path, above): it reaches nothing.
+  location = /.lifeos/bad-path {
+    include /etc/nginx/lifeos/trusted-proxies.conf;
+    internal;
+    default_type application/json;
+    return 400 '{"error":{"code":"forbidden_path","message":"This path is not allowed"}}';
   }
   # A route of a module that is off (the map above). JSON, like the
   # services' own errors, so that the Dashboard's calls fail softly.

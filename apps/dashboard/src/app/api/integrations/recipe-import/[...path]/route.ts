@@ -1,7 +1,7 @@
 import { type NextRequest } from "next/server";
 
 import { serviceBaseUrls } from "@/config/services";
-import { proxyServiceRequest } from "@/lib/service-proxy";
+import { developmentProxy } from "@/lib/service-proxy";
 
 type Context = { params: Promise<{ path: string[] }> };
 
@@ -11,7 +11,7 @@ type Context = { params: Promise<{ path: string[] }> };
  * recipe in Food. The recipes themselves are Food's, under `/api/food`.
  */
 function proxy(request: NextRequest, context: Context) {
-  return proxyServiceRequest(request, context, serviceBaseUrls.recipeImport);
+  return developmentProxy(request, context, serviceBaseUrls.recipeImport);
 }
 
 export const GET = proxy;

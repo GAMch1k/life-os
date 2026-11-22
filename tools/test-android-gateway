@@ -136,7 +136,7 @@ expect_header Content-Disposition attachment
 expect_header Cache-Control 'private, max-age=31536000, immutable'
 expect_header Content-Length "$phone_size"
 expect_header X-Content-Type-Options nosniff
-expect_header X-Frame-Options SAMEORIGIN
+expect_header X-Frame-Options DENY
 [[ "$(sha256sum <"$work/body" | cut -d ' ' -f 1)" == "$phone_sha" ]] || fail "the phone APK did not arrive whole"
 expect "$(jq -r .apps.wear.url "$releases/updates.json")" 200
 expect_header Content-Type application/vnd.android.package-archive

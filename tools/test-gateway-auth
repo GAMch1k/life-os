@@ -30,8 +30,14 @@ set -euo pipefail
 #    WWW-Authenticate (P21-06); the OAuth metadata and the phone's pairing
 #    reach the Dashboard without the check;
 #  - every service location tells the check its route (X-Life-OS-Route),
-#    a client's copy never passes, and a path nginx decodes and resolves
-#    to another location (/api/finance/..%2Fmcp/mcp) is judged as that one;
+#    and a client's copy never passes;
+#  - a path with an encoded slash, backslash, or dot, a backslash, or a dot
+#    segment is 400 forbidden_path before any location, whatever the
+#    credential, and neither the Dashboard nor a service ever gets it (their
+#    logs); encoded URLs in a query string pass as before;
+#  - the security headers: a content security policy for frames, <base>,
+#    plugins, and forms, X-Frame-Options DENY, and HSTS over HTTPS only
+#    (through Cloudflare; a client's own X-Forwarded-Proto is not believed);
 #  - LIFE_OS_REQUIRE_CLOUDFLARE_ACCESS: on (empty), the tunnel path needs
 #    Access's token, as before; off, Life OS's sign-in alone decides.
 #
@@ -229,11 +235,10 @@ expect GET /android/updates 200 -H 'Authorization: Bearer good-key'
 expect GET /android/updates 401 -H 'Authorization: Bearer bad-key'
 
 printf '==> The check judges the route nginx reaches, not the raw URI\n'
-# nginx decodes %2F and resolves the dot segment before it picks the
-# location: this reaches MCP, and the check is told so.
-expect POST '/api/finance/..%2Fmcp/mcp' 200 -H 'Authorization: Bearer good-key' --data '{}'
-expect_body 'service POST /mcp '
-expect_body 'route=mcp]'
+# A path nginx would decode and resolve to another location is refused
+# before any location (below); the route names the location's module.
+expect POST '/api/finance/..%2Fmcp/mcp' 400 -H 'Authorization: Bearer good-key' --data '{}'
+expect_body '"code":"forbidden_path"'
 expect GET /api/integrations/banking/v1/connections 200 -H 'Authorization: Bearer good-key'
 expect_body 'route=finance]'
 expect GET /android/updates 200 -H 'Authorization: Bearer good-key'
@@ -279,6 +284,99 @@ done
 expect POST /api/auth/sign-in/username 200 --data '{}'
 expect_body dashboard
 
+printf '==> A path with encoded separators or dot segments reaches nothing\n'
+# Encoded separators must not change the target: whatever the credential,
+# such a path is 400 before any location, the auth check, the Dashboard,
+# or a service. The stand-ins' logs must never show the made-up address
+# (192.0.2.1, a documentation address) these paths name.
+marker=192.0.2.1
+bad_paths=()
+for path in "${service_paths[@]}" /api/backups/ /api/processor/ /api/status/ /api/ /; do
+  bad_paths+=("${path}http:%2F%2F$marker%2Fx.html%3F/..%2F..%2F..%2F..%2F..")
+done
+bad_paths+=(
+  "/api/tasks/http:%2f%2f$marker%2fx.html%3f/..%2f..%2f..%2f..%2f.."
+  "/api/tasks/http:%2F%2F$marker%2Fx.html%3F/%2E%2E%2F%2E%2E%2F%2E%2E%2F%2E%2E%2F%2E%2E"
+  "/api/tasks/http:%2F%2F$marker%2Fx.html%3F/%2e%2e/%2e%2e/%2e%2e/%2e%2e/%2e%2e"
+  "/api/tasks/http:%5C%5C$marker%5Cx.html%3F/..%5C..%5C..%5C..%5C.."
+  "/api/tasks/http:%5c%5c$marker%5cx.html%3f/..%5c..%5c..%5c..%5c.."
+  "/api/tasks/http:\\\\$marker\\x.html/..\\..\\..\\..\\.."
+  "/api/tasks/http:%2F%2F$marker%2Fx/../../../.."
+  "/api/tasks/./http:%2F%2F$marker"
+  "/api/tasks/v1/..?$marker"
+  "/api/tasks/v1/.?$marker"
+  "/x/..%2F/api/tasks/http:%2F%2F$marker"
+  "/api/tasks/%2e%2e%2f%2e%2e%2fhttp:$marker"
+  "/api/tasks/v1%2e$marker"
+)
+for path in "${bad_paths[@]}"; do
+  for method in GET POST; do
+    for credential in none cookie key; do
+      case $credential in
+        none) as=() ;;
+        cookie) as=(--cookie 'lifeos=good') ;;
+        key) as=(-H 'Authorization: Bearer good-key') ;;
+      esac
+      expect "$method" "$path" 400 "${as[@]}" --data '{}'
+      refuse_body dashboard
+      refuse_body service
+      # The gateway's refusal, with its headers; or, for the two paths that
+      # leave the root once resolved (under / and /api/), nginx's own,
+      # before it reads any location.
+      if grep -qF '"code":"forbidden_path"' <<<"$body"; then
+        grep -qi '^x-content-type-options: nosniff' "$work/headers" ||
+          { cat "$work/headers" >&2; fail "$method $path: the 400 lacks the security headers"; }
+      elif [[ $path != /http:* && $path != /api/http:* ]] || ! grep -qF '<title>400 Bad Request</title>' <<<"$body"; then
+        printf '%s\n' "$body" >&2
+        fail "$method $path ($credential): not the gateway's refusal"
+      fi
+    done
+  done
+done
+# Encoded URLs in a query string are as before: the recipe link, OAuth's
+# redirect_uri.
+expect GET '/api/integrations/recipe-import/v1/preview?url=https%3A%2F%2Frecipes.example%2Fa%2F..%2Fb' 200 --cookie 'lifeos=good'
+expect_body 'service GET /v1/preview?url=https%3A%2F%2Frecipes.example%2Fa%2F..%2Fb '
+expect GET '/api/auth/oauth2/authorize?redirect_uri=http%3A%2F%2F127.0.0.1%3A3118%2Fcallback&state=..%2F..' 200
+expect_body dashboard
+# The stand-ins log every request they get (the image's access log): a
+# request with the marker in the query reaches them and shows, the paths
+# above never did.
+expect GET "/api/tasks/v1/tasks?probe=gw-log-$$" 200 --cookie 'lifeos=good'
+docker logs "$name-services" 2>&1 | grep -q "probe=gw-log-$$" || fail "the stand-in services' log does not show the requests they get"
+for standin in dashboard services; do
+  ! docker logs "$name-$standin" 2>&1 | grep -qF "$marker" || {
+    docker logs "$name-$standin" 2>&1 | grep -F "$marker" >&2
+    fail "the stand-in $standin got a request with a refused path"
+  }
+done
+
+printf '==> Security headers: a strict frame and form policy; HSTS over HTTPS only\n'
+policy() { # <http|https> <what>: the last answer has the policy, and HSTS only over HTTPS
+  grep -qi "^content-security-policy: frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'" "$work/headers" ||
+    { cat "$work/headers" >&2; fail "$2 lacks the content security policy"; }
+  grep -qi '^x-frame-options: DENY' "$work/headers" || { cat "$work/headers" >&2; fail "$2 lacks X-Frame-Options: DENY"; }
+  if [[ $1 == https ]]; then
+    [[ "$(tr -d '\r' <"$work/headers" | grep -ci '^strict-transport-security: max-age=31536000$')" == 1 ]] ||
+      { cat "$work/headers" >&2; fail "$2 over HTTPS lacks HSTS for a year (once, no preload)"; }
+  else
+    ! grep -qi '^strict-transport-security:' "$work/headers" || { cat "$work/headers" >&2; fail "$2 over plain HTTP has HSTS"; }
+  fi
+}
+# Plain HTTP, where a client's own X-Forwarded-Proto is not believed.
+for path in /login /tasks /api/auth/get-session; do
+  expect GET "$path" 200 -H 'X-Forwarded-Proto: https'
+  policy http "GET $path"
+done
+expect GET /api/tasks/v1/tasks 200 --cookie 'lifeos=good' -H 'X-Forwarded-Proto: https'
+policy http 'a service'
+expect GET /android/ 302 -H 'X-Forwarded-Proto: https'
+policy http 'the login redirect'
+expect GET /api/tasks/v1/tasks 401
+policy http "the gateway's 401"
+expect GET "/api/tasks/http:%2F%2F$marker" 400
+policy http "the gateway's 400"
+
 printf '==> /internal/ is not reachable from outside\n'
 for path in /internal/auth/check /internal/status /internal/ /internal/x; do
   expect GET "$path" 404 --cookie 'lifeos=good'
@@ -311,12 +409,23 @@ expect GET /login 403
 expect_body '"code":"forbidden"'
 expect GET /api/tasks/v1/x 200 --cookie 'lifeos=good' -H 'Cf-Access-Jwt-Assertion: token'
 refuse_body token
+# Through Cloudflare the request came over HTTPS: HSTS.
+policy https 'a service through Cloudflare'
+expect GET "/api/tasks/http:%2F%2F$marker%2Fx/..%2F.." 400 --cookie 'lifeos=good' -H 'Cf-Access-Jwt-Assertion: token'
+expect_body '"code":"forbidden_path"'
+policy https "the gateway's 400 through Cloudflare"
 docker rm -f "$name-access-on" >/dev/null
 
 printf '==> LIFE_OS_REQUIRE_CLOUDFLARE_ACCESS=off: the sign-in alone decides\n'
 start "$name-access-off" "$work/access.conf.template" off
 expect GET /login 200
+policy https 'the login through Cloudflare'
 expect GET /api/tasks/v1/x 401
 expect GET /api/tasks/v1/x 200 --cookie 'lifeos=good'
+expect GET "/api/tasks/http:%2F%2F$marker%2Fx.html%3F/..%2F..%2F..%2F..%2F.." 400
+expect_body '"code":"forbidden_path"'
+for standin in dashboard services; do
+  ! docker logs "$name-$standin" 2>&1 | grep -qF "$marker" || fail "the stand-in $standin got a request with a refused path"
+done
 
 printf '\ngateway auth: all checks passed\n'

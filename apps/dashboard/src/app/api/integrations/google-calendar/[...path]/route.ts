@@ -2,7 +2,7 @@ import { type NextRequest } from "next/server";
 
 import { serviceBaseUrls } from "@/config/services";
 import { moduleOffResponse, serviceOn } from "@/lib/modules";
-import { proxyServiceRequest } from "@/lib/service-proxy";
+import { developmentProxy } from "@/lib/service-proxy";
 
 type Context = { params: Promise<{ path: string[] }> };
 
@@ -13,7 +13,7 @@ type Context = { params: Promise<{ path: string[] }> };
  */
 function proxy(request: NextRequest, context: Context) {
   if (!serviceOn("googleCalendar")) return moduleOffResponse();
-  return proxyServiceRequest(request, context, serviceBaseUrls.googleCalendar);
+  return developmentProxy(request, context, serviceBaseUrls.googleCalendar);
 }
 
 export const GET = proxy;

@@ -1,12 +1,12 @@
 import { type NextRequest } from "next/server";
 
 import { serviceBaseUrls } from "@/config/services";
-import { proxyServiceRequest } from "@/lib/service-proxy";
+import { developmentProxy } from "@/lib/service-proxy";
 
 type Context = { params: Promise<{ path: string[] }> };
 
 function proxy(request: NextRequest, context: Context) {
-  return proxyServiceRequest(request, context, serviceBaseUrls.food);
+  return developmentProxy(request, context, serviceBaseUrls.food);
 }
 
 export const GET = proxy;
