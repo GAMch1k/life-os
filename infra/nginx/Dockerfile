@@ -10,7 +10,7 @@
 # the template includes (docs/install/access.md). A change to any of these files
 # takes a rebuild of this image, then the gateway's recreation
 # (docs/operations/deployment.md).
-FROM nginx:1.30-alpine@sha256:583b7f2fce1cdb8da5ad5c39ebd3c33b98b87d493190e548bdee1fa8c619c311
+FROM nginx:1.30-alpine@sha256:caf4e1e032a20f9c3c5e28fc7f25ffd768ad8677b4975c54193075997b3a97e3
 # The image's source and license; on ghcr.io this links its package to the
 # repository (docs/operations/releases.md).
 LABEL org.opencontainers.image.source="https://github.com/GAMch1k/life-os" \
