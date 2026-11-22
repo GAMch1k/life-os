@@ -5,6 +5,8 @@
 # docs/install/README.md.
 #
 #   ./setup.sh [options]        first-time setup: checks, then a complete .env
+#   ./setup.sh env [options]    only a complete .env, on any machine: for
+#                               Portainer, Dockge, or Unraid (no Docker)
 #   ./setup.sh up               start Life OS and wait until it answers
 #   ./setup.sh update           back up, pull this release's images, restart
 #   ./setup.sh status           what runs, and what is set up (never values)
@@ -18,6 +20,13 @@
 # .env without --force-new (which keeps a backup and the database passwords).
 
 set -euo pipefail
+
+# Associative arrays, name references, and mapfile need Bash 4.4; a Mac's own
+# Bash is 3.2.
+if ((BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 4))); then
+  printf 'setup: this needs Bash 4.4 or newer, not %s. On a Mac: brew install bash openssl, then run it with that Bash (docs/install/manual.md).\n' "$BASH_VERSION" >&2
+  exit 1
+fi
 
 # The release this copy belongs to: the image version a release may write
 # over the placeholder on the next line, else the LIFE_OS_VERSION the
@@ -69,6 +78,14 @@ port_flag=
 public_url_flag=
 trusted_proxies_flag=
 trusted_proxies_given=0
+timezone_flag=
+currency_flag=
+# ./setup.sh env only: print the .env, and the server's side of it.
+env_stdout=0
+env_mode=0
+dir_flag=
+uid_flag=
+docker_gid_flag=
 
 # ---------- Output ----------
 
@@ -461,7 +478,7 @@ require_own_install() {
 warn_other_install() {
   local found
   found=$(other_install 2>/dev/null) || return 0
-  [[ -z $found ]] || warn "another Life OS runs on this machine: Docker has $found. One machine runs one Life OS: up, update, and codex refuse to run here while it does."
+  [[ -z $found ]] || warn "another Life OS runs on this machine: Docker has $found. One machine runs one Life OS: up, update, restore, codex, rotate-keys, and modules off refuse to run here while it does."
 }
 
 # ---------- Gateway address ----------
@@ -545,7 +562,8 @@ gateway_values() {
   port=${port_flag:-${LIFE_OS_GATEWAY_PORT:-$(gateway_port)}}
   check_bind "$bind"
   check_port_number "$port"
-  [[ -e .env ]] || check_port "$port"
+  # Not for env, which may run on another machine than the server.
+  [[ -e .env ]] || ((env_mode)) || check_port "$port"
   if [[ $bind == 0.0.0.0 || $(address_class "$bind") == loopback ]]; then
     default_url=http://127.0.0.1:$port
   else
@@ -1005,9 +1023,104 @@ make_dir() {
   [[ -d $dir ]] || { mkdir -p -- "$(dirname -- "$dir")" && mkdir -m "$mode" -- "$dir"; }
 }
 
+# The answers of a new .env into env_values: the timezone, the currency,
+# the gateway's address and your reverse proxies (from the options, the
+# environment, or the questions), and the images' version and registry.
+answer_values() {
+  local tz=$timezone_flag currency=$currency_flag version
+  [[ -n $tz ]] || ask tz 'Timezone (IANA name)' "${LIFE_OS_TIMEZONE:-$(detect_timezone)}"
+  valid_timezone "$tz" || usage_error "'$tz' is not a timezone name such as Europe/Berlin or America/New_York"
+  [[ -n $currency ]] || ask currency 'Currency of the Cash account' "${LIFE_OS_FINANCE_CURRENCY:-EUR}"
+  currency=${currency^^}
+  [[ $currency =~ ^[A-Z]{3}$ ]] || usage_error "the currency must be a three-letter code such as EUR or USD, not '$currency'"
+  gateway_values
+  # Your reverse proxies, as ./setup.sh gateway takes them; a new .env has
+  # none without the option (an old one's are not kept by --force-new).
+  if ((trusted_proxies_given)); then
+    trusted_proxies_values
+    require_host_proxy_on_loopback
+  fi
+  version=${LIFE_OS_VERSION:-$release_version}
+  [[ $version =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] || usage_error "LIFE_OS_VERSION '$version' is not an image tag"
+  env_values[LIFE_OS_VERSION]=$version
+  [[ -z ${LIFE_OS_IMAGE_REGISTRY:-} ]] || env_values[LIFE_OS_IMAGE_REGISTRY]=$LIFE_OS_IMAGE_REGISTRY
+  env_values[LIFE_OS_TIMEZONE]=$tz
+  env_values[LIFE_OS_FINANCE_CURRENCY]=$currency
+  env_values[LIFE_OS_POSTGRES_USER]=lifeos_admin
+}
+
+# The server's side of a new .env into env_values: BACKUP_DIR and CODEX_HOME
+# (absolute paths), the user ID UID that the containers which write files
+# there run as, the group GID of the Docker socket (empty: .env.example's),
+# and what a new install starts with: the core alone, no ntfy example host.
+server_values() {
+  local backup_dir=$1 codex_home=$2 uid=$3 gid=$4
+  [[ $backup_dir == /* && $codex_home == /* ]] || usage_error 'LIFE_OS_BACKUP_DIR and LIFE_OS_CODEX_HOME_HOST_PATH must be absolute paths'
+  env_values[LIFE_OS_BACKUP_DIR]=$backup_dir
+  env_values[LIFE_OS_BACKUP_RUNTIME_UID]=$uid
+  env_values[LIFE_OS_CODEX_HOME_HOST_PATH]=$codex_home
+  env_values[LIFE_OS_CODEX_RUNTIME_UID]=$uid
+  env_values[LIFE_OS_BANKING_RUNTIME_UID]=$uid
+  [[ -z $gid ]] || env_values[LIFE_OS_DOCKER_GID]=$gid
+  # The template's example hosts must not stay: ntfy is set up on its own.
+  env_values[LIFE_OS_NTFY_PUBLIC_URL]=
+  # The core alone: every optional module is off until it is turned on.
+  env_values[COMPOSE_PROFILES]=
+  env_values[LIFE_OS_MODULES_LISTED]=yes
+}
+
+# The group of this machine's Docker socket, or nothing.
+docker_socket_gid() {
+  local docker_sock=/var/run/docker.sock
+  [[ ${DOCKER_HOST:-} != unix://* ]] || docker_sock=${DOCKER_HOST#unix://}
+  stat -c %g "$docker_sock" 2>/dev/null || true
+}
+
+# The passwords and keys of a new .env into env_values: those set in OLD (the
+# .env it replaces; none when empty) kept, the database passwords and the
+# accounts' secret and keys new. Counts them in secrets_kept and
+# secrets_generated.
+declare -i secrets_kept=0 secrets_generated=0
+secret_values() {
+  local old=$1 key
+  while IFS= read -r key; do
+    if [[ -n $old ]] && is_set "$key" "$old"; then
+      env_values[$key]=$(env_get "$key" "$old")
+      secrets_kept+=1
+    elif [[ $key == *_PASSWORD ]]; then
+      env_values[$key]=$(random_hex 24)
+      secrets_generated+=1
+    fi
+  done < <(kept_keys)
+  # The accounts' secret and keys, unless kept.
+  if account_keys_needed; then secrets_generated+=1; fi
+}
+
+# What a new .env (FILE) says, never a secret.
+env_summary() {
+  local file=$1 proxies
+  printf '  %-17s %s\n' \
+    version "$(env_get LIFE_OS_VERSION "$file")" \
+    address "$(env_get LIFE_OS_PUBLIC_URL "$file")" \
+    timezone "$(env_get LIFE_OS_TIMEZONE "$file")" \
+    currency "$(env_get LIFE_OS_FINANCE_CURRENCY "$file")" \
+    backups "$(env_get LIFE_OS_BACKUP_DIR "$file")"
+  proxies=$(env_get LIFE_OS_TRUSTED_PROXIES "$file" 2>/dev/null || true)
+  [[ -z $proxies ]] || printf '  %-17s %s\n' 'trusted proxies' "$proxies"
+  ((secrets_generated == 0)) || printf '  %-17s %s\n' passwords "$secrets_generated generated (never shown)"
+}
+
+# A copy of the .env that --force-new replaces, mode 600: prints its name.
+env_backup() {
+  local backup
+  backup=.env.backup-$(date -u +%Y%m%dT%H%M%SZ)
+  cp -p .env "$backup"
+  chmod 600 "$backup"
+  printf '%s\n' "$backup"
+}
+
 cmd_init() {
-  local backup='' key tz currency version backup_dir codex_home android_dir docker_sock gid
-  local -i generated=0 kept=0
+  local backup='' backup_dir codex_home android_dir
   preview_banner
   if [[ -e .env ]] && ((!force_new)); then
     die "a .env already exists here, so nothing was changed. To change one part, run ./setup.sh gateway, ./setup.sh modules, ./setup.sh <integration>, or edit .env. To start over, run ./setup.sh --force-new (it keeps a copy of the old .env and its database passwords)."
@@ -1026,26 +1139,7 @@ cmd_init() {
   fi
 
   step 'Settings'
-  ask tz 'Timezone (IANA name)' "${LIFE_OS_TIMEZONE:-$(detect_timezone)}"
-  valid_timezone "$tz" || usage_error "'$tz' is not a timezone name such as Europe/Berlin or America/New_York"
-  ask currency 'Currency of the Cash account' "${LIFE_OS_FINANCE_CURRENCY:-EUR}"
-  currency=${currency^^}
-  [[ $currency =~ ^[A-Z]{3}$ ]] || usage_error "the currency must be a three-letter code such as EUR or USD, not '$currency'"
-  gateway_values
-  # Your reverse proxies, as ./setup.sh gateway takes them; a new .env has
-  # none without the option (an old one's are not kept by --force-new).
-  if ((trusted_proxies_given)); then
-    trusted_proxies_values
-    require_host_proxy_on_loopback
-  fi
-
-  version=${LIFE_OS_VERSION:-$release_version}
-  [[ $version =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]] || usage_error "LIFE_OS_VERSION '$version' is not an image tag"
-  env_values[LIFE_OS_VERSION]=$version
-  [[ -z ${LIFE_OS_IMAGE_REGISTRY:-} ]] || env_values[LIFE_OS_IMAGE_REGISTRY]=$LIFE_OS_IMAGE_REGISTRY
-  env_values[LIFE_OS_TIMEZONE]=$tz
-  env_values[LIFE_OS_FINANCE_CURRENCY]=$currency
-  env_values[LIFE_OS_POSTGRES_USER]=lifeos_admin
+  answer_values
 
   # The host directories: in the release directory, next to this script; in
   # a clone, where SETUP.md puts them.
@@ -1057,43 +1151,13 @@ cmd_init() {
     backup_dir=${LIFE_OS_BACKUP_DIR:-$PWD/backups}
     codex_home=${LIFE_OS_CODEX_HOME_HOST_PATH:-$PWD/codex-home}
   fi
-  [[ $backup_dir == /* && $codex_home == /* ]] || usage_error 'LIFE_OS_BACKUP_DIR and LIFE_OS_CODEX_HOME_HOST_PATH must be absolute paths'
-  env_values[LIFE_OS_BACKUP_DIR]=$backup_dir
-  env_values[LIFE_OS_BACKUP_RUNTIME_UID]=$(id -u)
-  env_values[LIFE_OS_CODEX_HOME_HOST_PATH]=$codex_home
-  env_values[LIFE_OS_CODEX_RUNTIME_UID]=$(id -u)
-  env_values[LIFE_OS_BANKING_RUNTIME_UID]=$(id -u)
-  docker_sock=/var/run/docker.sock
-  [[ ${DOCKER_HOST:-} != unix://* ]] || docker_sock=${DOCKER_HOST#unix://}
-  if gid=$(stat -c %g "$docker_sock" 2>/dev/null); then
-    env_values[LIFE_OS_DOCKER_GID]=$gid
-  else
-    warn "cannot read the group of $docker_sock: the Status page's server card may not see the containers (LIFE_OS_DOCKER_GID in .env)."
-  fi
-  # The template's example hosts must not stay: ntfy is set up on its own.
-  env_values[LIFE_OS_NTFY_PUBLIC_URL]=
-  # The core alone: every optional module is off until it is turned on
-  # below or later (./setup.sh modules).
-  env_values[COMPOSE_PROFILES]=
-  env_values[LIFE_OS_MODULES_LISTED]=yes
+  server_values "$backup_dir" "$codex_home" "$(id -u)" "$(docker_socket_gid)"
+  [[ -n ${env_values[LIFE_OS_DOCKER_GID]:-} ]] \
+    || warn "cannot read the group of the Docker socket: the Status page's server card may not see the containers (LIFE_OS_DOCKER_GID in .env)."
 
   # Passwords: kept from the old .env with --force-new, else new.
-  if [[ -e .env ]]; then
-    backup=.env.backup-$(date -u +%Y%m%dT%H%M%SZ)
-    cp -p .env "$backup"
-    chmod 600 "$backup"
-  fi
-  while IFS= read -r key; do
-    if [[ -n $backup ]] && is_set "$key" "$backup"; then
-      env_values[$key]=$(env_get "$key" "$backup")
-      kept+=1
-    elif [[ $key == *_PASSWORD ]]; then
-      env_values[$key]=$(random_hex 24)
-      generated+=1
-    fi
-  done < <(kept_keys)
-  # The accounts' secret and keys, unless kept.
-  account_keys_needed && generated+=1
+  [[ ! -e .env ]] || backup=$(env_backup)
+  secret_values "$backup"
 
   step 'Writing .env'
   make_dir "$backup_dir" 700
@@ -1106,16 +1170,8 @@ cmd_init() {
   env_write .env.example .env
   env_values=()
   say "Wrote .env (mode 600: only $(id -un) can read it)."
-  [[ -z $backup ]] || say "The old one is in $backup; $kept passwords and keys were kept from it, so the existing data still opens."
-  printf '  %-17s %s\n' \
-    version "$version" \
-    address "$(env_get LIFE_OS_PUBLIC_URL)" \
-    timezone "$tz" \
-    currency "$currency" \
-    backups "$backup_dir"
-  [[ -z $(env_get LIFE_OS_TRUSTED_PROXIES 2>/dev/null || true) ]] \
-    || printf '  %-17s %s\n' 'trusted proxies' "$(env_get LIFE_OS_TRUSTED_PROXIES)"
-  ((generated == 0)) || printf '  %-17s %s\n' passwords "$generated generated (never shown)"
+  [[ -z $backup ]] || say "The old one is in $backup; $secrets_kept passwords and keys were kept from it, so the existing data still opens."
+  env_summary .env
   say 'Keep a copy of .env in a password manager or another safe place: backups do not include it.'
 
   setup_modules_now
@@ -1127,6 +1183,105 @@ cmd_init() {
   else
     say 'Start Life OS:  ./setup.sh up'
   fi
+}
+
+# env: a complete .env, and nothing else: no Docker, no checks of this
+# machine, no containers, no directories (docs/install/manual.md). For a
+# server where Portainer, Dockge, Unraid's Compose Manager, or docker compose
+# itself starts Life OS from the release's compose.yaml; it runs on any
+# machine with Bash and openssl. It asks the first setup's questions (or
+# takes their options), and the server's side: the directory for the backups
+# and the AI sign-in, and the user its containers write them as. The
+# passwords and keys come from the same code as the first setup's. With
+# --stdout it prints the .env instead of writing it.
+cmd_env() {
+  local dir=$dir_flag uid=$uid_flag gid=$docker_gid_flag backup='' old='' file tmp='' backup_dir
+  env_mode=1
+  # With --stdout, only the .env goes to the output (fd 3 from here on);
+  # the questions and everything else go to stderr.
+  if ((env_stdout)); then exec 3>&1 1>&2; fi
+  preview_banner
+  ! is_checkout || die "this is a clone of the repository: write its .env with ./setup.sh (SETUP.md). ./setup.sh env is for the release's files ($docs/manual.md)."
+  if [[ -e .env ]] && ((!force_new)); then
+    die "a .env already exists here, so nothing was changed. To see it: cat .env. To write a new one, run ./setup.sh env --force-new (it keeps a copy of the old .env, and its passwords and keys)."
+  fi
+  [[ -f .env.example && -f compose.yaml ]] \
+    || die "this needs the release's .env.example and compose.yaml next to it: download all of the release's files ($docs/manual.md)"
+  check_release_files env
+  [[ -z $uid || $uid =~ ^(0|[1-9][0-9]{0,9})$ ]] || usage_error "--uid takes a number, such as 1000, not '$uid'"
+  [[ -z $gid || $gid =~ ^(0|[1-9][0-9]{0,9})$ ]] || usage_error "--docker-gid takes a number, such as 999, not '$gid'"
+
+  step 'Settings'
+  answer_values
+  if ((!assume_yes)) && [[ -z $dir || -z $uid ]]; then
+    say ''
+    say 'Life OS keeps its backups (and the AI sign-in) in a directory on the server, owned by'
+    say 'the user its containers write them as. On the server itself, the defaults fit; for'
+    say 'another server, give its own (on Unraid: /mnt/user/appdata/lifeos and 99).'
+  fi
+  [[ -n $dir ]] || ask dir 'Directory on the server for backups/ and codex-home/' "$PWD"
+  [[ $dir == / ]] || dir=${dir%/}
+  [[ $dir == /* && $dir != *[[:space:]]* ]] || usage_error "the directory must be an absolute path without spaces, such as /srv/life-os, not '$dir'"
+  [[ -n $uid ]] || ask uid 'User ID on the server that owns it (id -u there)' "$(id -u)"
+  [[ $uid =~ ^(0|[1-9][0-9]{0,9})$ ]] || usage_error "the user ID must be a number, such as 1000, not '$uid'"
+  ((uid != 0)) || warn 'the backup service, the AI processor, and bank sync will run as root (user ID 0). It works, but a normal user is better.'
+  [[ -n $gid ]] || gid=$(docker_socket_gid)
+  backup_dir=${LIFE_OS_BACKUP_DIR:-${dir%/}/backups}
+  server_values "$backup_dir" "${LIFE_OS_CODEX_HOME_HOST_PATH:-${dir%/}/codex-home}" "$uid" "$gid"
+
+  # --force-new: the passwords and keys of the .env here stay.
+  if [[ -e .env ]]; then
+    old=.env
+    if ((!env_stdout)); then
+      backup=$(env_backup)
+      old=$backup
+    fi
+  fi
+  secret_values "$old"
+
+  if ((env_stdout)); then
+    tmp=$(mktemp -d)
+    file=$tmp/.env
+    env_write .env.example "$file"
+    cat >&2 <<'EOF'
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!! The .env follows, with EVERY PASSWORD AND KEY of this Life OS in it.
+!! Paste it into your stack's environment (Portainer: Advanced mode) or save
+!! it as the stack's .env, keep a copy in a password manager, then clear
+!! this terminal. Never paste it into a chat, an issue, or a log.
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+EOF
+    cat "$file" >&3
+    say ''
+    say 'That was the whole .env. Nothing was written here.'
+    [[ -z $old ]] || say "$secrets_kept passwords and keys were kept from the .env here (--force-new)."
+  else
+    step 'Writing .env'
+    file=.env
+    env_write .env.example .env
+    say "Wrote .env (mode 600: only $(id -un) can read it), and did nothing else."
+    [[ -z $backup ]] || say "The old one is in $backup; $secrets_kept passwords and keys were kept from it, so the existing data still opens."
+  fi
+  env_summary "$file"
+  printf '  %-17s %s\n' 'user ID' "$uid (the backups, AI processing, and bank sync run as it)"
+  env_values=()
+  [[ -z $tmp ]] || rm -rf "$tmp"
+
+  step 'Next, on the server'
+  cat <<EOF
+  1. The backup directory, private to user $uid:
+       sudo install -d -m 700 -o $uid $backup_dir
+  2. Start Life OS from the release's compose.yaml and this .env, as a stack
+     named lifeos: in Portainer, Dockge, or Unraid's Compose Manager, or with
+     docker compose up -d in a directory that holds the two.
+  3. Once it runs, the one-time setup code for the first account:
+       docker exec lifeos-dashboard-1 node scripts/lifeos-auth.mjs setup-code
+Keep a copy of .env in a password manager or another safe place: backups do
+not include it. The optional modules, and what ./setup.sh up and update would
+do for you: $docs/manual.md
+EOF
 }
 
 # After a first setup: each optional module, and push to the phone app, now
@@ -2367,8 +2522,11 @@ cmd_rotate_keys() {
     auth | all) ;;
     *) usage_error "rotate-keys rotates auth (or all), not '$target': services have no keys of their own yet" ;;
   esac
-  # It recreates the services and the Dashboard from compose.yaml.
+  # It recreates the services and the Dashboard from compose.yaml: in the
+  # release files, only this directory's Life OS (not a stack that Portainer
+  # or Unraid started from elsewhere, docs/install/manual.md).
   check_release_files rotate-keys
+  is_checkout || require_own_install rotate-keys
   signing=$(env_get LIFE_OS_IDENTITY_SIGNING_KEY 2>/dev/null || true)
   [[ $signing == '{'*'"x":"'*'}' ]] || die 'there is no signing key (a JWK) to rotate: ./setup.sh update adds one'
   new_key_pair
@@ -2786,6 +2944,9 @@ release's compose.yaml and .env.example.
 
   ./setup.sh [options]          first-time setup: checks this server, then
                                 writes .env with new passwords
+  ./setup.sh env [options]      only writes a complete .env, and nothing else:
+                                no Docker, no checks, on any machine. For
+                                Portainer, Dockge, or Unraid: $docs/manual.md
   ./setup.sh up                 start Life OS and wait until it answers
   ./setup.sh update             back up, download this release's images
                                 ($release_version), restart. For a newer
@@ -2850,8 +3011,20 @@ Options:
   -y, --yes                no questions: defaults, or values from the
                            environment (see $docs/README.md#without-questions);
                            a first setup turns on LIFE_OS_SETUP_MODULES
-  --force-new              write a new .env over an existing one; keeps a copy
-                           and the database passwords
+  --force-new              first setup and env: write a new .env over an
+                           existing one; keeps a copy, and its passwords and keys
+  --timezone ZONE          first setup and env: the timezone, such as
+                           Europe/Berlin (instead of the question)
+  --currency CODE          first setup and env: the Cash account's currency
+  --dir DIR                env: the directory on the server for backups/ and
+                           codex-home/ (default: this one)
+  --uid UID                env: the user on the server who owns it; the
+                           backups, AI processing, and bank sync run as it
+                           (default: yours here)
+  --docker-gid GID         env: the group of the server's Docker socket, for
+                           server health (default: this machine's, or 999)
+  --stdout                 env: print the .env instead of writing it; it holds
+                           every password and key
   --bind ADDRESS           where the gateway listens (default 127.0.0.1)
   --allow-public-bind      allow a public --bind address
   --allow-http-login       allow signing in over plain HTTP at the LAN or VPN
@@ -3276,6 +3449,17 @@ while (($#)); do
     --public-url=*) public_url_flag=${1#*=} ;;
     --trusted-proxies) need_value "$@" && trusted_proxies_flag=$2 && trusted_proxies_given=1 && shift ;;
     --trusted-proxies=*) trusted_proxies_flag=${1#*=} trusted_proxies_given=1 ;;
+    --timezone) need_value "$@" && timezone_flag=$2 && shift ;;
+    --timezone=*) timezone_flag=${1#*=} ;;
+    --currency) need_value "$@" && currency_flag=$2 && shift ;;
+    --currency=*) currency_flag=${1#*=} ;;
+    --stdout) env_stdout=1 ;;
+    --dir) need_value "$@" && dir_flag=$2 && shift ;;
+    --dir=*) dir_flag=${1#*=} ;;
+    --uid) need_value "$@" && uid_flag=$2 && shift ;;
+    --uid=*) uid_flag=${1#*=} ;;
+    --docker-gid) need_value "$@" && docker_gid_flag=$2 && shift ;;
+    --docker-gid=*) docker_gid_flag=${1#*=} ;;
     -h | --help) command=help ;;
     -*) usage_error "unknown option $1" ;;
     *)
@@ -3285,8 +3469,18 @@ while (($#)); do
   shift
 done
 
+# The options of the first setup's answers, and env's own: not for other
+# commands, where they would do nothing (./setup.sh --stdout would write .env).
+if [[ ${command:-init} != env ]] && { ((env_stdout)) || [[ -n $dir_flag$uid_flag$docker_gid_flag ]]; }; then
+  usage_error '--stdout, --dir, --uid, and --docker-gid are for ./setup.sh env'
+fi
+if [[ ${command:-init} != init && ${command:-init} != env && -n $timezone_flag$currency_flag ]]; then
+  usage_error '--timezone and --currency are for the first setup and ./setup.sh env'
+fi
+
 case ${command:-init} in
   init) cmd_init ;;
+  env) cmd_env ;;
   up) cmd_up ;;
   update) cmd_update "${args[@]}" ;;
   status) cmd_status ;;

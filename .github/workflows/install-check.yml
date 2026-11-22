@@ -6,7 +6,9 @@
 # runs the core alone; the check tests that, the smokes that work against an
 # installed Life OS through its gateway on 127.0.0.1:3000, a backup and its
 # restore (./setup.sh restore), and a module turned on (voice, with a voice
-# note) and off again.
+# note) and off again. Last, the manual install (docs/install/manual.md),
+# as Portainer, Dockge, or Unraid would run it: an .env from ./setup.sh env
+# without docker, and plain docker compose up.
 #
 # release.yml runs it after every release that is not a draft. By hand:
 # Actions → Install check → Run workflow (an empty version installs the
@@ -259,6 +261,14 @@ jobs:
           else
             echo "RESTORE=false" >>"$GITHUB_ENV"
             echo "- A release without \`./setup.sh restore\`: no restore." >>"$GITHUB_STEP_SUMMARY"
+          fi
+          # ./setup.sh env, for the manual install at the end (before
+          # P22-14, none).
+          if grep -q '^  \./setup\.sh env' <<<"$help"; then
+            echo "ENV_COMMAND=true" >>"$GITHUB_ENV"
+          else
+            echo "ENV_COMMAND=false" >>"$GITHUB_ENV"
+            echo "- A release without \`./setup.sh env\`: no manual install." >>"$GITHUB_STEP_SUMMARY"
           fi
       # Before modules only, a quirk of GitHub's runners, not of the install
       # (as CI's full-stack job, docs/operations/ci.md#full-stack-tests):
@@ -826,11 +836,169 @@ jobs:
           ((${#restarted[@]} == 0)) || { echo "::error::Restarted: ${restarted[*]}"; exit 1; }
           echo "No service restarted (the processor aside)."
 
+      # The manual install (docs/install/manual.md): the same release again,
+      # as Portainer, Dockge, or Unraid's Compose Manager install it, once
+      # every check above passed. The install above goes first, its volumes
+      # too: one Life OS per machine, and a new .env has new passwords.
+      # ./setup.sh env makes the .env on "another machine": a directory of its
+      # own, whose docker (first on the PATH) records any call and fails. The
+      # .env comes from --stdout, as for Portainer's editor. Then plain docker
+      # compose up runs Life OS from a directory with only compose.yaml and
+      # that .env, and the backup directory made as the page says. Releases
+      # whose setup.sh has no env skip it.
+      - name: Manual install, an .env from ./setup.sh env
+        id: manual-env
+        if: ${{ success() && env.ENV_COMMAND == 'true' }}
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          fail() { echo "::error::$*"; exit 1; }
+          cd "$INSTALL_DIR"
+          docker compose down --volumes --remove-orphans
+          docker volume ls -q --filter name=lifeos- | xargs -r docker volume rm
+          laptop=$RUNNER_TEMP/laptop
+          manual=$HOME/life-os-manual
+          mkdir -p "$laptop/bin" "$manual"
+          cp compose.yaml setup.sh .env.example "$laptop/"
+          printf '#!/bin/sh\necho "docker $*" >>"%s/docker-calls"\nexit 99\n' "$laptop" >"$laptop/bin/docker"
+          chmod +x "$laptop/bin/docker"
+          cd "$laptop"
+          env_file=$RUNNER_TEMP/manual.env
+          PATH="$laptop/bin:$PATH" ./setup.sh env --yes --timezone "$INSTALL_TIMEZONE" --dir "$manual" --uid "$(id -u)" --stdout \
+            >"$env_file" 2>"$RUNNER_TEMP/setup-env.log"
+          cat "$RUNNER_TEMP/setup-env.log"
+          [[ ! -e "$laptop/docker-calls" ]] || fail "./setup.sh env ran docker: $(cat "$laptop/docker-calls")"
+          if grep '^Warning: ' "$RUNNER_TEMP/setup-env.log"; then
+            fail "./setup.sh env warned (above)."
+          fi
+          [[ "$(find . -mindepth 1 -maxdepth 1 -printf '%P\n' | sort | tr '\n' ' ')" == '.env.example bin compose.yaml setup.sh ' ]] \
+            || fail "./setup.sh env --stdout wrote files."
+          # What it printed, never a value but these.
+          grep -qx "LIFE_OS_VERSION=$VERSION" "$env_file" || fail "The .env does not run ${VERSION}."
+          grep -qx "LIFE_OS_TIMEZONE=$INSTALL_TIMEZONE" "$env_file" || fail "The .env does not have the timezone ${INSTALL_TIMEZONE}."
+          grep -qx "LIFE_OS_BACKUP_DIR=$manual/backups" "$env_file" || fail "The .env does not keep the backups in $manual/backups."
+          grep -qx 'COMPOSE_PROFILES=' "$env_file" || fail "The .env does not run the core alone."
+          grep -qx 'LIFE_OS_LEGACY_ACCESS=off' "$env_file" || fail "The .env does not have legacy access off."
+          grep -qE '^LIFE_OS_POSTGRES_PASSWORD=[0-9a-f]{48}$' "$env_file" || fail "The .env has no new database password."
+          # The stack: compose.yaml and the .env, and the backup directory.
+          cp compose.yaml "$manual/"
+          install -m 600 "$env_file" "$manual/.env"
+          rm -f "$env_file"
+          install -d -m 700 -o "$(id -u)" "$manual/backups"
+          echo "MANUAL_DIR=$manual" >>"$GITHUB_ENV"
+          echo "- Manual install: \`./setup.sh env --stdout\` without docker made the .env." >>"$GITHUB_STEP_SUMMARY"
+      - name: Manual install, plain docker compose up
+        id: manual-up
+        if: ${{ success() && steps.manual-env.outcome == 'success' }}
+        timeout-minutes: 15
+        run: |
+          cd "$MANUAL_DIR"
+          if [[ "$(find . -mindepth 1 -maxdepth 1 -printf '%P\n' | sort | tr '\n' ' ')" != '.env backups compose.yaml ' ]]; then
+            echo "::error::The stack's directory holds more than compose.yaml, .env, and backups/."
+            exit 1
+          fi
+          docker compose up -d
+          # Every service runs (healthy where it has a check), the one-shot
+          # jobs ended with 0, and the gateway answers the login.
+          services=$(docker compose config --services)
+          deadline=$((SECONDS + 600))
+          declare -A seen
+          while true; do
+            problems=()
+            seen=()
+            while IFS='|' read -r service state health exit_code; do
+              [[ -n "$service" ]] || continue
+              seen[$service]=1
+              case $service in
+                postgres-provision | *-migrate)
+                  [[ "$state" == exited && "$exit_code" == 0 ]] || problems+=("$service: $state (exit $exit_code)") ;;
+                *)
+                  if [[ "$state" != running ]]; then
+                    problems+=("$service: $state")
+                  elif [[ -n "$health" && "$health" != healthy ]]; then
+                    problems+=("$service: $health")
+                  fi
+                  ;;
+              esac
+            done < <(docker compose ps --all --format '{{.Service}}|{{.State}}|{{.Health}}|{{.ExitCode}}')
+            while read -r service; do
+              [[ -n "${seen[$service]:-}" ]] || problems+=("$service: no container")
+            done <<<"$services"
+            curl -fsS -o /dev/null --max-time 5 "$GATEWAY/login" || problems+=("the gateway: $GATEWAY/login does not answer")
+            ((${#problems[@]})) || break
+            if ((SECONDS >= deadline)); then
+              printf '::error::Not running after 10 minutes: %s\n' "${problems[@]}"
+              exit 1
+            fi
+            sleep 5
+          done
+          docker compose ps --all --format 'table {{.Service}}\t{{.State}}\t{{.Status}}'
+          echo "- Manual install: plain \`docker compose up -d\` started the core." >>"$GITHUB_STEP_SUMMARY"
+      # As docs/install/manual.md says: the setup code from docker exec in the
+      # Dashboard's container makes the owner's account, and a backup with
+      # docker exec in the backup service's lands in the directory made by
+      # hand.
+      - name: Manual install, the first account and a backup
+        if: ${{ success() && steps.manual-up.outcome == 'success' }}
+        run: |
+          fail() { echo "::error::$*"; exit 1; }
+          cd "$MANUAL_DIR"
+          work="$RUNNER_TEMP/manual-account"
+          mkdir -p "$work"
+          setup_code=$(docker exec lifeos-dashboard-1 node scripts/lifeos-auth.mjs setup-code | sed -n 's/^Setup code: //p')
+          [[ "$setup_code" =~ ^[A-Z0-9]{4}(-[A-Z0-9]{4}){3}$ ]] || fail "docker exec lifeos-dashboard-1 node scripts/lifeos-auth.mjs setup-code printed no setup code."
+          echo "::add-mask::$setup_code"
+          password="manual install $(openssl rand -hex 12)"
+          echo "::add-mask::$password"
+          code=$(curl -sS --max-time 30 -o "$work/body" -D "$work/headers" -w '%{http_code}' -H 'sec-fetch-site: same-origin' \
+            -H 'content-type: application/json' -H "origin: $GATEWAY" -H "x-lifeos-setup-code: $setup_code" \
+            --data "$(jq -cn --arg p "$password" '{username: "owner", password: $p}')" "$GATEWAY/api/auth/sign-up/email")
+          [[ "$code" == 200 ]] || fail "Making the first account answered ${code}: $(head -c 500 "$work/body")"
+          session=$(grep -iE '^set-cookie: (__Host-)?lifeos\.session=' "$work/headers" | head -n 1 | sed 's/^[^:]*: //; s/;.*//' | tr -d '\r')
+          [[ -n "$session" ]] || fail "Making the first account set no session cookie."
+          echo "::add-mask::${session#*=}"
+          rm -rf "$work"
+          for path in / /tasks /status; do
+            code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 -H "cookie: $session" "$GATEWAY$path" || true)
+            [[ "$code" == 200 ]] || fail "$GATEWAY$path answered ${code}, not 200, signed in."
+          done
+          docker exec lifeos-backup-1 /service now -actor dev:install-check | tee "$RUNNER_TEMP/manual-backup.log"
+          grep -q '^Backup [0-9]\{8\}T[0-9]\{6\}Z succeeded' "$RUNNER_TEMP/manual-backup.log" || fail "The backup did not succeed."
+          [[ -n "$(find backups/auto -name manifest.json 2>/dev/null)" ]] || fail "The backup wrote nothing to backups/."
+          echo "- Manual install: the owner's account from \`docker exec\`'s setup code, and a backup into the directory made by hand." >>"$GITHUB_STEP_SUMMARY"
+      # docs/install/manual.md#what-still-works-with-setupsh: in another
+      # directory with the release's files (the first install's), the
+      # commands that talk to the running Life OS work, and up refuses,
+      # changing nothing; in the stack's own directory, Dockge's layout,
+      # setup.sh takes it as its own.
+      - name: Manual install, setup.sh beside it
+        if: ${{ success() && steps.manual-up.outcome == 'success' }}
+        run: |
+          fail() { echo "::error::$*"; exit 1; }
+          cd "$INSTALL_DIR"
+          ./setup.sh feed list 2>&1 | tee "$RUNNER_TEMP/setup-manual-feed.log"
+          grep -q '^No calendar feeds yet' "$RUNNER_TEMP/setup-manual-feed.log" || fail "./setup.sh feed list from another directory did not reach Life OS."
+          if ./setup.sh up --skip-checks >"$RUNNER_TEMP/setup-manual-refused.log" 2>&1; then
+            cat "$RUNNER_TEMP/setup-manual-refused.log"
+            fail "./setup.sh up from another directory took the manual install over."
+          fi
+          grep -q 'another Life OS runs on this machine' "$RUNNER_TEMP/setup-manual-refused.log" || fail "./setup.sh up from another directory did not say why it refused."
+          cd "$MANUAL_DIR"
+          cp "$INSTALL_DIR/setup.sh" "$INSTALL_DIR/.env.example" .
+          ./setup.sh up --skip-checks 2>&1 | tee "$RUNNER_TEMP/setup-manual-up.log"
+          grep -qx 'Life OS answers.' "$RUNNER_TEMP/setup-manual-up.log" || fail "./setup.sh up in the stack's directory did not take it as its own."
+          if grep -q 'another Life OS' "$RUNNER_TEMP/setup-manual-up.log"; then
+            fail "./setup.sh up in the stack's directory took it for another install."
+          fi
+          echo "- Manual install: \`./setup.sh feed list\` from another directory reaches it and \`up\` there refuses; in the stack's directory, \`./setup.sh up\` manages it." >>"$GITHUB_STEP_SUMMARY"
+
+      # The manual install's, once it has begun.
       - name: Containers
         if: always()
         run: |
-          [[ -f "${INSTALL_DIR:-}/.env" ]] || exit 0
-          cd "$INSTALL_DIR"
+          dir=${MANUAL_DIR:-${INSTALL_DIR:-}}
+          [[ -f "$dir/.env" ]] || exit 0
+          cd "$dir"
           docker compose ps --all --format 'table {{.Service}}\t{{.State}}\t{{.Status}}'
       # Never .env: only what Compose and the services printed.
       - name: Collect the logs
@@ -839,8 +1007,9 @@ jobs:
           dir="$RUNNER_TEMP/install-logs"
           mkdir -p "$dir"
           cp "$RUNNER_TEMP"/setup*.log "$RUNNER_TEMP"/processor.log "$dir/" 2>/dev/null || true
-          [[ -f "${INSTALL_DIR:-}/.env" ]] || exit 0
-          cd "$INSTALL_DIR"
+          install=${MANUAL_DIR:-${INSTALL_DIR:-}}
+          [[ -f "$install/.env" ]] || exit 0
+          cd "$install"
           docker compose ps --all >"$dir/ps.txt" 2>&1 || true
           for service in $(docker compose ps --all --services); do
             docker compose logs --no-color --timestamps "$service" >"$dir/$service.log" 2>&1 || true

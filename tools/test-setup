@@ -287,19 +287,28 @@ printf 'processor\t: 0\nBogoMIPS\t: 108.00\nFeatures\t: fp asimd evtstrm crc32 c
 
 # run [VAR=value...] -- [setup.sh arguments...]: runs ./setup.sh in the case
 # directory with a clean environment, stdin from $stdin (default: none).
-# Sets status; appends the output to the case's output.
+# Sets status; appends the output to the case's output. With $stdout set to
+# a file, the standard output goes there, apart (./setup.sh env --stdout);
+# the case's output is then the standard error alone. A PATH among the
+# variables replaces the stand-ins' (env -i takes the last).
 stdin=/dev/null
+stdout=
 run() {
-  local -a vars=()
+  local -a vars=() command=()
   while (($#)) && [[ $1 != -- ]]; do
     vars+=("$1")
     shift
   done
   shift
+  command=(env -i HOME="$work/home" PATH="$stubs:/usr/bin:/bin" LANG=C.UTF-8
+    STUB_LOG="$case_dir.log" STUB_WORK="$work" STUB_IMAGES="$case_dir.images" DOCKER_HOST="unix://$work/docker.sock"
+    LIFE_OS_SETUP_CPUINFO="$work/cpuinfo-avx2" "${vars[@]}" ./setup.sh "$@")
   set +e
-  (cd "$case_dir" && env -i HOME="$work/home" PATH="$stubs:/usr/bin:/bin" LANG=C.UTF-8 \
-    STUB_LOG="$case_dir.log" STUB_WORK="$work" STUB_IMAGES="$case_dir.images" DOCKER_HOST="unix://$work/docker.sock" \
-    LIFE_OS_SETUP_CPUINFO="$work/cpuinfo-avx2" "${vars[@]}" ./setup.sh "$@" <"$stdin" >"$case_dir.last" 2>&1)
+  if [[ -n $stdout ]]; then
+    (cd "$case_dir" && "${command[@]}" <"$stdin" >"$stdout" 2>"$case_dir.last")
+  else
+    (cd "$case_dir" && "${command[@]}" <"$stdin" >"$case_dir.last" 2>&1)
+  fi
   status=$?
   set -e
   cat "$case_dir.last" >>"$case_out"
@@ -312,7 +321,8 @@ output_has() { grep -qF -- "$1" "$case_dir.last"; }
 logged() { grep -qF -- "$1" "$case_dir.log"; }
 mode() { stat -c %a "$1"; }
 
-# No secret from .env appears in anything the case printed.
+# No secret from .env (or the .env file $1) appears in anything the case
+# printed.
 no_secret_printed() {
   local line key val
   while IFS= read -r line; do
@@ -325,7 +335,7 @@ no_secret_printed() {
       echo "  $key's value was printed" >&2
       return 1
     fi
-  done < <(grep -E '^[A-Z_]+=' "$case_dir/.env")
+  done < <(grep -E '^[A-Z_]+=' "${1:-$case_dir/.env}")
 }
 
 # Every uncommented key appears once.
@@ -733,6 +743,196 @@ new_case interactive-eof
 run --
 ok 'no answers and no --yes: stops' test "$status" -eq 1
 ok 'says to use --yes' output_has 'use --yes'
+
+# ---------- ./setup.sh env: a .env, and nothing else ----------
+# For Portainer, Dockge, and Unraid (docs/install/manual.md): on any machine
+# with Bash and openssl. These runs have no docker on their PATH at all:
+# nodocker is /usr/bin and /bin without docker, and with the stand-in for
+# curl (the Cloudflare Access check below, never the network).
+nodocker=$work/nodocker
+mkdir -p "$nodocker"
+ln -s "$stubs/curl" "$nodocker/curl"
+for tool in /usr/bin/* /bin/*; do
+  name=${tool##*/}
+  [[ $name == docker* || -e $nodocker/$name || -L $nodocker/$name ]] || ln -s "$tool" "$nodocker/$name"
+done
+ok 'no docker on the PATH of these runs' bash -c "! env -i PATH='$nodocker' bash -c 'command -v docker'"
+# The keys of a .env: the uncommented ones, sorted.
+env_keys() { grep -oE '^[A-Z][A-Z0-9_]*=' "$1" | sort; }
+# The files in the case directory.
+case_files() { (cd "$case_dir" && find . -mindepth 1 -maxdepth 1 -printf '%P\n' | sort | tr '\n' ' '); }
+
+new_case env
+run PATH="$nodocker" -- env --yes --timezone Europe/Berlin --currency usd --dir /srv/life-os/ --uid 1234 --docker-gid 998
+ok 'env exits 0' test "$status" -eq 0
+ok '.env is mode 600' test "$(mode "$case_dir/.env")" = 600
+ok 'it writes .env and nothing else: no backups/, no codex-home/' test "$(case_files)" = '.env .env.example compose.yaml setup.sh '
+ok 'runs no docker (nor curl)' test ! -s "$case_dir.log"
+ok 'says it did nothing else' output_has 'and did nothing else'
+ok 'the timezone from --timezone' test "$(value LIFE_OS_TIMEZONE)" = Europe/Berlin
+ok 'the currency from --currency, upper-cased' test "$(value LIFE_OS_FINANCE_CURRENCY)" = USD
+ok 'the version falls back to preview' test "$(value LIFE_OS_VERSION)" = preview
+ok 'the gateway on loopback' test "$(value LIFE_OS_GATEWAY_BIND_ADDRESS):$(value LIFE_OS_GATEWAY_PORT)" = 127.0.0.1:3000
+ok 'the public URL is the gateway' test "$(value LIFE_OS_PUBLIC_URL)" = http://127.0.0.1:3000
+ok "the backups in --dir, on the server" test "$(value LIFE_OS_BACKUP_DIR)" = /srv/life-os/backups
+ok 'and the AI sign-in' test "$(value LIFE_OS_CODEX_HOME_HOST_PATH)" = /srv/life-os/codex-home
+ok 'the runtime UIDs are --uid' test "$(value LIFE_OS_CODEX_RUNTIME_UID)$(value LIFE_OS_BACKUP_RUNTIME_UID)$(value LIFE_OS_BANKING_RUNTIME_UID)" = 123412341234
+ok 'the Docker group is --docker-gid' test "$(value LIFE_OS_DOCKER_GID)" = 998
+ok 'the core alone' has_line 'COMPOSE_PROFILES='
+ok 'the .env lists its modules' test "$(value LIFE_OS_MODULES_LISTED)" = yes
+ok 'legacy access off, as a new install' test "$(value LIFE_OS_LEGACY_ACCESS)" = off
+ok 'ntfy example host cleared' test -z "$(value LIFE_OS_NTFY_PUBLIC_URL)"
+for key in "${password_keys[@]}"; do
+  ok "$key is a new 48-digit hex password" grep -qE "^$key=[0-9a-f]{48}$" "$case_dir/.env"
+done
+ok 'every password differs' test "$(for key in "${password_keys[@]}"; do value "$key"; done | sort -u | wc -l)" -eq "${#password_keys[@]}"
+ok 'an auth secret' grep -qE '^LIFE_OS_AUTH_SECRET=[0-9a-f]{64}$' "$case_dir/.env"
+ok 'a signing key' grep -qE '^LIFE_OS_IDENTITY_SIGNING_KEY='"'"'\{"kty":"OKP","crv":"Ed25519","kid":"auth-[0-9]{8}-[0-9a-f]{4}","x":"[A-Za-z0-9_-]{43}","d":"[A-Za-z0-9_-]{43}"\}'"'"'$' "$case_dir/.env"
+env_kid=$(value LIFE_OS_IDENTITY_SIGNING_KEY | sed -E 's/.*"kid":"([^"]+)".*/\1/')
+ok 'the trusted keys list it' grep -qE "^LIFE_OS_TRUSTED_KEYS='\\{\"keys\":\\[\\{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"kid\":\"$env_kid\"" "$case_dir/.env"
+for key in "${required_keys[@]}"; do
+  ok "compose's required $key is set" test -n "$(value "$key")"
+done
+ok 'every key of a first setup, and no other' test "$(env_keys "$case_dir/.env")" = "$(env_keys "$work/fresh/.env")"
+ok 'no template placeholder is left' bash -c "! grep -E '^[A-Z_]+=.*(example\\.com|/absolute/path|replace-with)' '$case_dir/.env'"
+ok 'no duplicate keys' no_duplicate_keys
+ok 'no secret printed' no_secret_printed
+ok 'says how to make the backup directory' output_has 'sudo install -d -m 700 -o 1234 /srv/life-os/backups'
+ok 'and how to get the setup code' output_has 'docker exec lifeos-dashboard-1 node scripts/lifeos-auth.mjs setup-code'
+ok 'and where the rest is' output_has 'docs/install/manual.md'
+
+# An existing .env is never overwritten, nor a second one printed: two sets
+# of passwords for one install would only confuse.
+env_sum=$(sha256sum <"$case_dir/.env")
+run PATH="$nodocker" -- env --yes
+ok 'env refuses an existing .env' test "$status" -eq 1
+ok 'says so' output_has 'a .env already exists here'
+stdout=$case_dir.printed
+run PATH="$nodocker" -- env --yes --stdout
+stdout=
+ok '--stdout refuses it too' test "$status" -eq 1
+ok 'and prints nothing' test ! -s "$case_dir.printed"
+ok '.env unchanged' test "$(sha256sum <"$case_dir/.env")" = "$env_sum"
+# --force-new: a new .env, with a copy of the old one, and its passwords and
+# keys.
+env_password=$(value LIFE_OS_POSTGRES_PASSWORD)
+env_signing=$(value LIFE_OS_IDENTITY_SIGNING_KEY)
+run PATH="$nodocker" -- env --yes --force-new --timezone Asia/Tokyo --dir /srv/life-os --uid 1234
+ok 'env --force-new' test "$status" -eq 0
+backup=$(find "$case_dir" -maxdepth 1 -name '.env.backup-*' | head -n 1)
+ok 'keeps a copy of the old .env' test -n "$backup" -a "$(sha256sum <"${backup:-/dev/null}")" = "$env_sum"
+ok 'the new settings' test "$(value LIFE_OS_TIMEZONE)" = Asia/Tokyo
+ok 'the database passwords kept' test "$(value LIFE_OS_POSTGRES_PASSWORD)" = "$env_password"
+ok 'and the signing key' test "$(value LIFE_OS_IDENTITY_SIGNING_KEY)" = "$env_signing"
+ok 'says what it kept' output_has 'were kept from it'
+ok 'no secret printed' no_secret_printed
+# The commands that only change .env work there too, without docker: the
+# gateway, push to the phone app, Google Calendar, and the Cloudflare Tunnel
+# (whose Access check needs curl alone).
+: >"$case_dir.log"
+run PATH="$nodocker" -- gateway --yes --port 3001
+ok 'gateway without docker' test "$status" -eq 0 -a "$(value LIFE_OS_GATEWAY_PORT)" = 3001
+run PATH="$nodocker" LIFE_OS_WEBPUSH_SUBJECT=mailto:owner@example.org -- --yes webpush
+ok 'webpush without docker' test "$status" -eq 0 -a -n "$(value LIFE_OS_WEBPUSH_VAPID_PRIVATE_KEY)"
+run PATH="$nodocker" LIFE_OS_GOOGLE_CLIENT_ID=1-x.apps.googleusercontent.com LIFE_OS_GOOGLE_CLIENT_SECRET=GOCSPX-abc -- --yes google
+ok 'google without docker' test "$status" -eq 0 -a -n "$(value LIFE_OS_GOOGLE_TOKEN_KEY)"
+run PATH="$nodocker" LIFE_OS_PUBLIC_URL=https://lifeos.example.org LIFE_OS_CLOUDFLARE_TUNNEL_TOKEN="$token_answer" -- --yes cloudflare
+ok 'cloudflare without docker' test "$status" -eq 0 -a "$(value COMPOSE_PROFILES)" = google-calendar,cloudflare
+ok 'none of them ran docker' bash -c "! grep -q '^docker ' '$case_dir.log'"
+ok 'no secret printed' no_secret_printed
+
+# --stdout: the .env on the output, for Portainer's environment editor, and
+# nothing written; everything else on stderr, with a clear warning.
+new_case env-stdout
+stdout=$case_dir.printed
+run PATH="$nodocker" -- env --yes --stdout --timezone Europe/Berlin --dir /srv/life-os --uid 1234
+stdout=
+ok 'env --stdout exits 0' test "$status" -eq 0
+ok 'writes nothing' test "$(case_files)" = '.env.example compose.yaml setup.sh '
+ok 'prints a whole .env: every key of a written one' test "$(env_keys "$case_dir.printed")" = "$(env_keys "$work/env/.env")"
+ok 'with new passwords' grep -qE '^LIFE_OS_POSTGRES_PASSWORD=[0-9a-f]{48}$' "$case_dir.printed"
+ok "and the server's side" grep -qx 'LIFE_OS_BACKUP_DIR=/srv/life-os/backups' "$case_dir.printed"
+ok 'the output is the .env alone, as .env.example begins' test "$(head -n 1 "$case_dir.printed")" = "$(head -n 1 .env.example)"
+ok 'nothing else on it' bash -c "! grep -qE '^(==>|setup:|Warning:|!!|  [a-z])' '$case_dir.printed'"
+ok 'a clear warning, apart' output_has 'EVERY PASSWORD AND KEY'
+ok 'says nothing was written' output_has 'Nothing was written here.'
+ok 'no secret in the rest' no_secret_printed "$case_dir.printed"
+ok 'runs no docker' test ! -s "$case_dir.log"
+# With --force-new beside an .env, its passwords and keys, and it stays.
+cp "$work/env/.env" "$case_dir/.env"
+env_sum=$(sha256sum <"$case_dir/.env")
+stdout=$case_dir.printed
+run PATH="$nodocker" -- env --yes --stdout --force-new
+stdout=
+ok 'env --stdout --force-new' test "$status" -eq 0
+ok 'keeps its passwords' test "$(grep '^LIFE_OS_POSTGRES_PASSWORD=' "$case_dir.printed")" = "$(grep '^LIFE_OS_POSTGRES_PASSWORD=' "$case_dir/.env")"
+ok 'and its keys' test "$(grep '^LIFE_OS_TRUSTED_KEYS=' "$case_dir.printed")" = "$(grep '^LIFE_OS_TRUSTED_KEYS=' "$case_dir/.env")"
+ok 'and leaves it as it is, with no copy' test "$(sha256sum <"$case_dir/.env")" = "$env_sum" -a -z "$(find "$case_dir" -maxdepth 1 -name '.env.backup-*')"
+
+# The questions: the first setup's (timezone, currency, address), then the
+# server's directory and user. With --stdout they stay off the output.
+new_case env-interactive
+printf '%s\n' Asia/Tokyo usd '' /mnt/user/appdata/lifeos 99 >"$work/answers"
+stdin=$work/answers
+run PATH="$nodocker" -- env
+ok 'env asks' test "$status" -eq 0
+ok 'the timezone' test "$(value LIFE_OS_TIMEZONE)" = Asia/Tokyo
+ok 'the currency' test "$(value LIFE_OS_FINANCE_CURRENCY)" = USD
+ok 'the address' test "$(value LIFE_OS_PUBLIC_URL)" = http://127.0.0.1:3000
+ok "the server's directory" test "$(value LIFE_OS_BACKUP_DIR)" = /mnt/user/appdata/lifeos/backups
+ok "and its user" test "$(value LIFE_OS_BACKUP_RUNTIME_UID)" = 99
+rm "$case_dir/.env"
+stdout=$case_dir.printed
+run PATH="$nodocker" -- env --stdout
+stdout=
+stdin=/dev/null
+ok 'env --stdout asks too' test "$status" -eq 0
+ok 'its explanations on stderr' output_has 'Life OS needs the address you will open it at'
+ok 'not on the output' bash -c "! grep -q 'Life OS needs the address' '$case_dir.printed'"
+ok 'the answers in the .env' grep -qx 'LIFE_OS_BACKUP_RUNTIME_UID=99' "$case_dir.printed"
+run PATH="$nodocker" -- env
+ok 'no answers and no --yes: stops' test "$status" -eq 1 -a ! -e "$case_dir/.env"
+
+# What env refuses, before it writes anything.
+new_case env-refused
+for args in '--uid abc' '--docker-gid x' '--dir relative/dir' '--timezone Mars/Olympus' '--currency euro' '--bind 203.0.113.7'; do
+  # shellcheck disable=SC2086 # the words of each case
+  run PATH="$nodocker" -- env --yes $args
+  ok "env --yes $args: refused" test "$status" -ge 1
+done
+run -- --yes --stdout
+ok '--stdout is for env alone' test "$status" -eq 2
+ok 'says so' output_has 'are for ./setup.sh env'
+run -- --yes --dir /srv/life-os
+ok '--dir too: a first setup does not take it' test "$status" -eq 2
+run -- status --timezone UTC
+ok '--timezone is for the first setup and env' test "$status" -eq 2
+ok 'none wrote a .env' test ! -e "$case_dir/.env"
+run PATH="$nodocker" -- env --yes --uid 0
+ok 'user 0 works' test "$status" -eq 0
+ok 'with a warning' output_has 'will run as root'
+rm "$case_dir/.env"
+rm "$case_dir/compose.yaml"
+run PATH="$nodocker" -- env --yes
+ok 'without compose.yaml: refused' test "$status" -eq 1 -a ! -e "$case_dir/.env"
+ok 'says to download the release files' output_has "needs the release's .env.example and compose.yaml"
+new_case env-checkout
+mkdir "$case_dir/.git"
+run PATH="$nodocker" -- env --yes
+ok 'a clone: refused' test "$status" -eq 1 -a ! -e "$case_dir/.env"
+ok 'says what to run instead' output_has 'clone of the repository'
+# A release's files: its version, and files of two releases refused.
+new_case env-release
+stamp_release v0.1.0-preview.7
+run PATH="$nodocker" -- env --yes
+ok "a release's env" test "$status" -eq 0
+ok 'runs its version' test "$(value LIFE_OS_VERSION)" = v0.1.0-preview.7
+ok 'and links its docs' output_has 'blob/v0.1.0-preview.7/docs/install/manual.md'
+rm "$case_dir/.env"
+sed -i 's/^LIFE_OS_VERSION=.*/LIFE_OS_VERSION=v0.1.0-preview.6/' "$case_dir/.env.example"
+run PATH="$nodocker" -- env --yes
+ok 'files of two releases: refused' test "$status" -eq 1 -a ! -e "$case_dir/.env"
+ok 'names them' output_has 'setup.sh v0.1.0-preview.7, compose.yaml v0.1.0-preview.7, .env.example v0.1.0-preview.6'
 
 # ---------- Integrations ----------
 new_case integrations
@@ -1514,6 +1714,11 @@ run STUB_LIFEOS_CONTAINERS="$other" -- codex
 stdin=/dev/null
 ok 'codex refuses too' test "$status" -eq 1
 ok 'for the same reason' output_has 'would take that install over'
+# rotate-keys recreates the services: not those of a stack started from
+# elsewhere (Portainer, Unraid), and before it changes a key.
+run STUB_LIFEOS_CONTAINERS="$other" -- rotate-keys
+ok 'rotate-keys refuses too' test "$status" -eq 1
+ok 'before it changes a key' output_has 'would take that install over'
 ok 'no compose command ran that changes containers' bash -c "! grep -qE 'compose (up|down|pull|run|exec|restart)' '$case_dir.log'"
 ok '.env unchanged: update added no new settings' test "$(sha256sum <"$case_dir/.env")" = "$env_sum"
 run STUB_LIFEOS_CONTAINERS="$other" -- status

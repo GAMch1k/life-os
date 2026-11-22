@@ -20,7 +20,7 @@ The first account needs a one-time **setup code** from the server. Whoever can r
 
 3. Life OS signs you in and opens **Settings → Security**. Turn on two-factor sign-in there next ([Two-factor sign-in](#two-factor-sign-in)): signed in, the owner needs it before Status shows its details and the admin pages open ([The server's admin](#the-servers-admin)).
 
-In a clone of the repository (the reference server), the same command runs in the Dashboard's container: `docker compose exec -T dashboard node scripts/lifeos-auth.mjs setup-code`.
+In a clone of the repository (the reference server), the same command runs in the Dashboard's container: `docker compose exec -T dashboard node scripts/lifeos-auth.mjs setup-code`. With Portainer, Dockge, or Unraid, without `setup.sh`: `docker exec lifeos-dashboard-1 node scripts/lifeos-auth.mjs setup-code` ([Manual install](manual.md#5-the-first-account)).
 
 ## Signing in
 
