@@ -4,7 +4,7 @@ Life OS is a personal system you run on your own server: tasks, a calendar, an I
 
 A new install runs the core: the Dashboard, Tasks, Calendar, Inbox, Food, Finance, notifications, and backups. AI processing, voice notes, Google Calendar, bank sync, the Cloudflare Tunnel, ntfy, and server health are [modules](modules.md) you turn on when you want them.
 
-This guide installs Life OS from its published Docker images with one setup script. You don't build anything, and you don't need the source code. (One exception, only if you choose it: AI processing with Claude Code, which the published images do not contain; `./setup.sh claude` adds it to a local copy of the processor image.)
+This guide installs Life OS from its published Docker images with one setup script. You don't build anything, and you don't need the source code. With Portainer, Dockge, or Unraid instead, see [Manual install](manual.md): the script writes your `.env` on any machine, and your stack manager runs Life OS. (One exception, only if you choose it: AI processing with Claude Code, which the published images do not contain; `./setup.sh claude` adds it to a local copy of the processor image.)
 
 > [!WARNING]
 > **Early preview.** Life OS has a login ([Accounts](accounts.md)), but it is new: the setup script keeps Life OS on `127.0.0.1`, so only the server itself can reach it, and you open it the way you choose in [Access it safely → Choose a way in](access.md#choose-a-way-in): an SSH tunnel to start with, then HTTPS for everyday use. Never expose it straight to the internet over plain HTTP. Previews have rough edges and may change between releases, so back up before you update.
@@ -17,7 +17,7 @@ This guide installs Life OS from its published Docker images with one setup scri
 - **Disk:** 10 GB free. The images take about 3 GB and the Whisper model about 0.5 GB; your data and the nightly backups grow from there.
 - **Docker Engine 25 or newer with the Compose plugin** (`docker compose`, version 2.27 or newer). Install it from [docs.docker.com](https://docs.docker.com/engine/install/). The reference server runs Docker Engine 29 and Compose 5.1.
 - **A user that can run Docker** (a member of the `docker` group), plus `curl`, `openssl`, and Bash 4.4 or newer, which current Linux distributions have, and `jq` (`sudo apt install jq`), which [restoring a backup](backups.md#restore) needs: install it now, not when you need a restore.
-- **One Life OS per machine.** Every install is the same Docker Compose project, `lifeos`, with the same `lifeos-*` volumes, so a second one in another directory would take the first one over. `setup.sh` refuses `up`, `update`, and `codex` while Docker has `lifeos` containers started from another directory, and says where they are.
+- **One Life OS per machine.** Every install is the same Docker Compose project, `lifeos`, with the same `lifeos-*` volumes, so a second one in another directory would take the first one over. `setup.sh` refuses `up`, `update`, `restore`, `codex`, `rotate-keys`, and `modules off` while Docker has `lifeos` containers started from another directory, and says where they are. A stack that Portainer or Unraid started counts as another directory ([Manual install](manual.md#what-still-works-with-setupsh)).
 
 ### Raspberry Pi
 
@@ -113,6 +113,7 @@ The phone and watch apps are on their own page: [Phone and watch apps](phone-app
 | Command | What it does |
 | --- | --- |
 | `./setup.sh` | First-time setup: checks, questions, `.env`, integrations. |
+| `./setup.sh env` | Only writes a complete `.env`, and nothing else: no Docker, no checks, on any machine. For Portainer, Dockge, and Unraid ([Manual install](manual.md)). |
 | `./setup.sh up` | Starts Life OS (downloading missing images), waits until it answers, prints the address. |
 | `./setup.sh update` | Backs up, downloads this release's images, restarts. Download a newer release's files first: [Updating](updating.md). |
 | `./setup.sh restore [list\|DAY\|BACKUP]` | Lists the backups, or puts Life OS back as one has it, after backing up what it holds now ([Restore](backups.md#restore)). |
@@ -136,7 +137,7 @@ Plain `docker compose` commands work too, from the same directory: `docker compo
 
 | Question | Variable |
 | --- | --- |
-| Timezone, currency | `LIFE_OS_TIMEZONE`, `LIFE_OS_FINANCE_CURRENCY` |
+| Timezone, currency | `LIFE_OS_TIMEZONE`, `LIFE_OS_FINANCE_CURRENCY` (or `--timezone`, `--currency`) |
 | Address, where it listens | `LIFE_OS_PUBLIC_URL`, `LIFE_OS_GATEWAY_BIND_ADDRESS`, `LIFE_OS_GATEWAY_PORT` (or `--public-url`, `--bind`, `--port`) |
 | Signing in over plain HTTP at a LAN or VPN `--bind` address | `--allow-http-login` (without it, `--yes` leaves it off) |
 | Image version and registry | `LIFE_OS_VERSION`, `LIFE_OS_IMAGE_REGISTRY` |
@@ -155,6 +156,7 @@ For example: `LIFE_OS_TIMEZONE=Europe/Berlin ./setup.sh --yes && ./setup.sh up`.
 ## More
 
 - [Modules](modules.md): what is optional, and turning it on and off.
+- [Manual install](manual.md): Portainer, Dockge, Unraid, or plain `docker compose`, with a `.env` from `./setup.sh env`.
 - [Access it safely](access.md): [choose a way in](access.md#choose-a-way-in), from the SSH tunnel to HTTPS for every device.
 - [Backups and restore](backups.md), [Updating](updating.md), [Uninstalling](uninstall.md), [Troubleshooting](troubleshooting.md).
 - [Phone and watch apps](phone-apps.md).
