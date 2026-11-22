@@ -227,7 +227,7 @@ The share sheet is native: what is shared to the app goes to the Inbox API above
 | `403` `{"error":{"code":"admin_only",…}}` | a service | an admin route (above) | does not offer it natively |
 | `403` `{"error":{"code":"credential_not_allowed",…}}` | the gateway | a route this kind of credential never reaches: a device key on `/api/mcp/` (a personal token outside the modules) | a bug in the app: log it |
 | `403` `{"error":{"code":"insufficient_scope",…}}` | the gateway, or a service | a personal token or MCP grant whose scopes do not cover the module or the method (never a device key) | – |
-| `403` `{"error":{"code":"forbidden_path",…}}` | the gateway | a path with an encoded slash or backslash, or a dot segment (`/./`, `/../`), which the app never sends | a bug in the app: log it |
+| `400` (or `403`) `{"error":{"code":"forbidden_path",…}}` | the gateway | a path with an encoded slash, backslash, or dot, or a dot segment (`/./`, `/../`), which the app never sends | a bug in the app: log it |
 | `403` `{"error":{"code":"forbidden_origin",…}}` | the gateway | a write from a browser on another site (never a native call with a key) | – |
 | `403` `{"error":{"code":"forbidden",…}}` | the gateway | the gateway's own refusal: the request came through the Cloudflare tunnel without Access's token, while the server requires Access | the Access service token is missing or wrong: shows the connection settings |
 | `404` `{"error":{"code":"module_off",…}}` | the gateway | the module is not installed on this server | hides that part |

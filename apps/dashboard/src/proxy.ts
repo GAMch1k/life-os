@@ -3,6 +3,7 @@ import { type NextRequest, NextResponse } from "next/server";
 import { checkRequest } from "@/lib/auth/check";
 import { IDENTITY_HEADER } from "@/lib/auth/constants";
 import { authRuntime } from "@/lib/auth/runtime";
+import { suspiciousPath } from "@/lib/auth/scopes";
 
 /**
  * The sign-in in front of the Dashboard's own pages and routes
@@ -64,6 +65,13 @@ function problem(status: number, code: string, message: string) {
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
+  // An encoded slash or backslash, or a dot segment: no client of Life OS
+  // sends one, and the gateway refuses it before any location. Refused
+  // here too, on every path, so that the Dashboard's routes never read
+  // such a path, with or without the gateway in front.
+  if (suspiciousPath(pathname)) {
+    return problem(400, "forbidden_path", "This path is not allowed.");
+  }
   let result;
   try {
     result = await checkRequest(

@@ -10,6 +10,10 @@ set -euo pipefail
 #    X-Life-OS-Actor: Tasks takes the actor from the identity token (user);
 #  - checks that a forged identity, a made-up cookie, and a cookie write
 #    from another site are refused, and that /internal/ is closed;
+#  - checks that a path with encoded separators is 400 at the gateway, and
+#    refused by the Dashboard on its own port (400 or 404), which passes
+#    on no gateway-routed service's request outside development and never
+#    fetches a URL a path names (a stand-in server that records requests);
 #  - with legacy access on, checks that a write with Origin: null and no
 #    Sec-Fetch-Site (a sandboxed iframe on any web page) is refused at
 #    loopback and at a plain-HTTP host that is not loopback, while the same
@@ -176,6 +180,101 @@ expect 403 POST /api/tasks/v1/tasks -H "cookie: $session" -H 'content-type: appl
 expect 200 GET /api/tasks/v1/tasks -H "cookie: $session" -H 'X-Life-OS-Identity: forged.token.value'
 expect 404 GET /internal/auth/check -H "cookie: $session"
 expect 404 GET /internal/status
+
+echo '==> Encoded separators in a path reach nothing, at the gateway and at the Dashboard'
+# Encoded separators must not change the target, with legacy access on
+# (no credential at all) or a session. 192.0.2.1 is a documentation
+# address: nothing answers there.
+for route in tasks finance inbox calendar food voice activity notifications integrations/banking \
+  integrations/calendar-feeds integrations/google-calendar integrations/recipe-import backups processor status; do
+  for shape in 'http:%2F%2F192.0.2.1%2Fx.html%3F/..%2F..%2F..%2F..%2F..' 'http:%2f%2f192.0.2.1%2fx/..%2f..' \
+    'http:%5C%5C192.0.2.1%5Cx.html%3F/..%5C..%5C..' 'http:%2F%2F192.0.2.1%2Fx/../../..' '%2e%2e/%2e%2e/http:%2F%2F192.0.2.1'; do
+    for as in legacy session; do
+      cookie=()
+      [[ $as == legacy ]] || cookie=(-H "cookie: $session")
+      request GET "/api/$route/$shape" --path-as-is "${cookie[@]}"
+      [[ "$code" == 400 ]] || { cat "$work/body" >&2; fail "GET /api/$route/$shape ($as): $code, want 400"; }
+      request POST "/api/$route/$shape" --path-as-is "${cookie[@]}" -H "origin: $gateway" \
+        -H 'content-type: application/json' --data '{}'
+      [[ "$code" == 400 ]] || { cat "$work/body" >&2; fail "POST /api/$route/$shape ($as): $code, want 400"; }
+    done
+  done
+done
+# Without the gateway: straight to the Dashboard's port, from its own
+# container, with a stand-in outside server there that records every
+# request it gets. Each path names that server; it must get none, and
+# the Dashboard must answer each at once with 400 or 404 (or, for a
+# literal backslash, Next.js's own 308 to the same path with slashes, on
+# its own origin). A service the gateway routes itself is not passed on by
+# the Dashboard outside development (404); the backups are, as before.
+direct=$(cat <<'EOF'
+const http = require("node:http");
+const hits = [];
+const outside = http.createServer((req, res) => {
+  hits.push(`${req.method} ${req.url}`);
+  res.setHeader("content-type", "text/html");
+  res.end("<p>outside</p>");
+});
+function send(method, path) {
+  return new Promise((resolve) => {
+    const req = http.request(
+      { host: "127.0.0.1", port: 3000, method, path, timeout: 15000,
+        headers: method === "POST" ? { "content-type": "application/json" } : {} },
+      (res) => {
+        res.resume();
+        res.on("end", () => resolve({ status: res.statusCode, location: res.headers.location ?? null }));
+      },
+    );
+    req.on("timeout", () => { req.destroy(); resolve({ status: "timeout" }); });
+    req.on("error", (error) => resolve({ status: `error ${error.code}` }));
+    if (method === "POST") req.write("{}");
+    req.end();
+  });
+}
+outside.listen(0, "127.0.0.1", async () => {
+  const at = `127.0.0.1:${outside.address().port}`;
+  const routes = ["tasks", "finance", "inbox", "calendar", "food", "voice", "activity", "notifications",
+    "integrations/banking", "integrations/calendar-feeds", "integrations/google-calendar",
+    "integrations/recipe-import", "backups", "processor"];
+  const shapes = [
+    `http:%2F%2F${at}%2Fx.html%3F/..%2F..%2F..%2F..%2F..`,
+    `http:%2f%2f${at}%2fx.html%3f/..%2f..%2f..%2f..%2f..`,
+    `http:%5C%5C${at}%5Cx.html%3F/..%5C..%5C..%5C..%5C..`,
+    `http:\\\\${at}\\x.html`,
+    `http:%2F%2F${at}%2Fx.html`,
+    `%2e%2e/%2e%2e/http:%2F%2F${at}`,
+    `http:%252F%252F${at}%252Fx.html`,
+  ];
+  const results = [];
+  for (const route of routes) {
+    for (const shape of shapes) {
+      for (const method of ["GET", "POST"]) {
+        const path = `/api/${route}/${shape}`;
+        results.push({ method, path, ...(await send(method, path)) });
+      }
+    }
+  }
+  const plain = {
+    tasks: (await send("GET", "/api/tasks/v1/tasks")).status,
+    backups: (await send("GET", "/api/backups/v1/status")).status,
+  };
+  outside.close();
+  console.log(JSON.stringify({ hits, results, plain }));
+});
+EOF
+)
+"${compose[@]}" exec -T dashboard node -e "$direct" >"$work/direct.json" || fail "the direct check did not run: $(cat "$work/direct.json")"
+jq -e '.hits == []' "$work/direct.json" >/dev/null || fail "the Dashboard fetched a URL a path named: $(jq -c .hits "$work/direct.json")"
+not_refused='[.results[] | select((.status == 400 or .status == 404 or
+  (.status == 308 and (.location // "" | test("^/[^/\\\\]")))) | not)]'
+jq -e "$not_refused == []" "$work/direct.json" >/dev/null ||
+  fail "the Dashboard did not refuse: $(jq -c "$not_refused" "$work/direct.json")"
+jq -e '.plain.tasks == 404' "$work/direct.json" >/dev/null || fail "the Dashboard passed a Tasks request on outside development: $(jq -c .plain "$work/direct.json")"
+# Passed on: the backup service's answer (200), or 503 while it starts.
+jq -e '.plain.backups == 200 or .plain.backups == 503' "$work/direct.json" >/dev/null ||
+  fail "the Dashboard no longer passes on the backups' status: $(jq -c .plain "$work/direct.json")"
+printf '    %s requests refused (%s), none fetched\n' "$(jq '.results | length' "$work/direct.json")" \
+  "$(jq -r '[.results[].status] | group_by(.) | map("\(length) with \(.[0])") | join(", ")' "$work/direct.json")"
 
 echo '==> Legacy access: Origin null without Sec-Fetch-Site is refused, no Origin is not'
 # A sandboxed iframe on any web page, or a form a cross-origin redirect

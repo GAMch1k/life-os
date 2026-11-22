@@ -1,7 +1,7 @@
 import { type NextRequest } from "next/server";
 
 import { serviceBaseUrls } from "@/config/services";
-import { proxyServiceRequest } from "@/lib/service-proxy";
+import { developmentProxy } from "@/lib/service-proxy";
 
 type Context = { params: Promise<{ path: string[] }> };
 
@@ -12,7 +12,7 @@ type Context = { params: Promise<{ path: string[] }> };
  * Calendar source's, under `/api/calendar/v1/sources`.
  */
 function proxy(request: NextRequest, context: Context) {
-  return proxyServiceRequest(request, context, serviceBaseUrls.calendarFeeds);
+  return developmentProxy(request, context, serviceBaseUrls.calendarFeeds);
 }
 
 export const GET = proxy;
