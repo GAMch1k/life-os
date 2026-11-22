@@ -166,7 +166,7 @@ async function seedEvents(request: APIRequestContext, day: string) {
       ...extra,
     });
   const weekly = { recurrence: { frequency: "weekly", interval: 1 } };
-  await event(0, "09:30", "09:45", "Team stand-up", {
+  await event(0, "09:00", "09:30", "Team stand-up", {
     recurrence: {
       frequency: "weekly",
       interval: 1,
@@ -186,10 +186,10 @@ async function seedEvents(request: APIRequestContext, day: string) {
   });
   await event(2, "14:00", "15:30", "Project review");
   await event(2, "19:00", "21:00", "Football practice", weekly);
-  await event(3, "08:00", "08:30", "Car service drop-off", {
+  await event(3, "08:00", "09:00", "Car service drop-off", {
     location: "Riverside Garage",
   });
-  await event(3, "17:30", "18:00", "Haircut");
+  await event(3, "17:30", "18:30", "Haircut");
   await event(4, "19:30", "22:00", "Cinema with friends");
   await event(5, "09:00", "11:00", "Farmers' market");
   await event(5, "15:00", "18:00", "Mia's birthday party");
@@ -228,6 +228,7 @@ async function processedCapture(
     `/api/inbox/v1/inbox-items/${item.id}/processing-attempts/${attempt.id}`,
     { status: "processed", actions: [] },
   );
+  await post(request, `/api/inbox/v1/inbox-items/${item.id}/resolve`);
 }
 
 async function seedInbox(
@@ -279,6 +280,9 @@ async function seedFinance(request: APIRequestContext, day: string) {
     items: { id: string; builtIn: boolean }[];
   };
   const cash = accounts.items.find((item) => item.builtIn)!;
+  await patch(request, `${api}/accounts/${cash.id}`, {
+    openingBalanceMinor: 12_000,
+  });
 
   // Finance adds default categories (Groceries, Transport, …) once: the
   // demo uses those, and adds the ones it lacks.
