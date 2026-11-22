@@ -236,8 +236,9 @@ jobs:
             echo "MODULES=false" >>"$GITHUB_ENV"
             echo "- A release without modules: every module runs." >>"$GITHUB_STEP_SUMMARY"
           fi
-          # From the release after v0.1.0-preview.7, ./setup.sh restore. Not
-          # a pipe into grep -q, which pipefail could read as a failure.
+          # ./setup.sh restore, where the release's setup.sh has it (not
+          # v0.1.0-preview.6 and older). Not a pipe into grep -q, which
+          # pipefail could read as a failure.
           help=$(./setup.sh help)
           if grep -q '^  \./setup\.sh restore' <<<"$help"; then
             echo "RESTORE=true" >>"$GITHUB_ENV"
