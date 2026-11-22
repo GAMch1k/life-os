@@ -27,13 +27,15 @@ setup(
     await expect(page).toHaveURL(/\/settings\/security\?welcome=1$/);
     await context.storageState({ path: STATE });
 
-    // The session cookie needs Life OS's own Origin for a write (the CSRF
-    // rule, src/lib/auth/origin.ts), as a page of Life OS sends it.
+    // A write with the session cookie needs Life OS's own Origin and, on
+    // loopback, Sec-Fetch-Site (the CSRF rule, src/lib/auth/origin.ts), as
+    // a page of Life OS sends them.
     const request = await playwright.request.newContext({
       baseURL,
       storageState: STATE,
       extraHTTPHeaders: {
         origin: new URL(baseURL!).origin,
+        "sec-fetch-site": "same-origin",
         "x-life-os-actor": "user",
       },
     });
