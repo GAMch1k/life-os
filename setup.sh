@@ -396,6 +396,8 @@ check_tools() {
     || die 'neither openssl nor /dev/urandom is available to generate passwords'
   command -v curl >/dev/null 2>&1 \
     || warn "curl is not installed. 'up', 'status', and some set-up steps use it to check Life OS: install it (sudo apt install curl)."
+  command -v jq >/dev/null 2>&1 \
+    || warn "jq is not installed. ./setup.sh restore needs it to read the backups: install it now (sudo apt install jq), not when you need a restore."
 }
 
 check_port() {
@@ -2929,13 +2931,13 @@ restore_backup_dir() {
 
 # The backups restore can use, newest first: the runs of every database that
 # succeeded (not failed runs, nor those of some databases), one a line:
-# <id>|<databases>|<bytes>|<images>|<actor>.
+# <id>|<databases>|<bytes: dumps and images>|<images>|<actor>.
 restore_runs() {
   local id
   while IFS= read -r id; do
     # shellcheck disable=SC2016 # jq's variables
     jq -r --arg id "$id" 'select(.id == $id and .result == "succeeded" and (.scope // "all") == "all")
-      | [$id, (.databases | length), ([.databases[].bytes // 0] | add // 0), (.media.count // 0), (.actor // "")]
+      | [$id, (.databases | length), (([.databases[].bytes // 0] | add // 0) + (.media.bytes // 0)), (.media.count // 0), (.actor // "")]
       | map(tostring) | join("|")' "$restore_dir/auto/$id/manifest.json" 2>/dev/null || true
   done < <(find "$restore_dir/auto" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | grep -E '^[0-9]{8}T[0-9]{6}Z$' | sort -r)
 }
@@ -2951,15 +2953,45 @@ restore_size() {
   awk -v b="$1" 'BEGIN { split("B KiB MiB GiB TiB", u, " "); i = 1; while (b >= 1024 && i < 5) { b /= 1024; i++ }; if (i == 1) printf "%d B", b; else printf "%.1f %s", b, u[i] }'
 }
 
+# A backup of the list, by its id, in words: its size (dumps and images),
+# such as "4.2 MiB, 12 databases and 31 Inbox images".
+restore_describe() {
+  local line id databases bytes images
+  for line in "${restore_list[@]}"; do
+    IFS='|' read -r id databases bytes images _ <<<"$line"
+    [[ $id == "$1" ]] || continue
+    printf '%s, %s database%s and %s Inbox image%s' "$(restore_size "$bytes")" "$databases" \
+      "$( ((databases == 1)) || printf s)" "$images" "$( ((images == 1)) || printf s)"
+    return 0
+  done
+}
+
 restore_print_list() {
-  local line id databases bytes images actor
+  local line id actor
   step "Backups in $restore_dir/auto (newest first; times in $restore_tz)"
   for line in "${restore_list[@]}"; do
-    IFS='|' read -r id databases bytes images actor <<<"$line"
-    printf '  %s  %s  %s databases, %s, %s Inbox image%s%s\n' "$(restore_time "$id")" "$id" "$databases" \
-      "$(restore_size "$bytes")" "$images" "$( ((images == 1)) || printf s)" \
+    IFS='|' read -r id _ _ _ actor <<<"$line"
+    printf '  %s  %s  %s%s\n' "$(restore_time "$id")" "$id" "$(restore_describe "$id")" \
       "$([[ $actor != "$restore_actor" ]] || printf ', taken before a restore')"
   done
+}
+
+# The newest backup older than ID that is more than four times its size, if
+# any. On a new server, the empty Life OS backs itself up a minute after its
+# first start, and that backup is the newest; a much bigger older one is
+# more likely the data to restore.
+restore_bigger_older() {
+  local chosen=$1 line id bytes size=''
+  for line in "${restore_list[@]}"; do
+    IFS='|' read -r id _ bytes _ _ <<<"$line"
+    if [[ -z $size ]]; then
+      [[ $id != "$chosen" ]] || size=$bytes
+    elif ((bytes > 4 * size)); then
+      printf '%s\n' "$id"
+      return 0
+    fi
+  done
+  return 1
 }
 
 # The backup ARG names: latest (the newest), a day (YYYY-MM-DD, in Life OS's
@@ -3046,7 +3078,7 @@ restore_failed() {
 }
 
 cmd_restore() {
-  local arg=${1:-latest} run manifest when db out line safety='' kept=0 images='' copied damaged
+  local arg=${1:-latest} run manifest when db out line safety='' kept=0 images='' copied damaged bigger small_warning=''
   local -a databases=() running=() writers=() restored=() to_start=()
   (($# <= 1)) || usage_error 'restore takes one backup: a day such as 2026-11-21, or a backup such as 20261121T021500Z'
   case $arg in
@@ -3073,6 +3105,8 @@ cmd_restore() {
   restore_print_list
   if [[ $arg == list ]]; then
     run=$(restore_pick latest) || run=${restore_list[0]%%|*}
+    # Not a day whose backup is much smaller than an older one.
+    if bigger=$(restore_bigger_older "$run"); then run=$bigger; fi
     say "Restore one with ./setup.sh restore <day or backup>, such as ./setup.sh restore $(restore_time "$run" | cut -d ' ' -f 1)."
     return 0
   fi
@@ -3087,6 +3121,15 @@ cmd_restore() {
   manifest=$restore_dir/auto/$run/manifest.json
   when=$(restore_time "$run")
   mapfile -t databases < <(jq -r '.databases[].name' "$manifest")
+  # The newest backup much smaller than an older one: on a new server, the
+  # empty Life OS's own. Warned before the question; with --yes, refused
+  # unless the backup was named (a day or its name).
+  if bigger=$(restore_bigger_older "$run"); then
+    small_warning="backup $run ($when, $(restore_describe "$run")) is less than a quarter of the size of an older one, $bigger ($(restore_time "$bigger"), $(restore_describe "$bigger")). It may be the empty Life OS of a new server rather than your data. To restore the older one: ./setup.sh restore $bigger"
+    if ((assume_yes)) && [[ $arg == latest ]]; then
+      die "$small_warning --yes. To restore the newest all the same, name it: ./setup.sh restore $run --yes. Nothing was changed."
+    fi
+  fi
 
   command -v docker >/dev/null 2>&1 || die 'Docker is not installed here.'
   docker info >/dev/null 2>&1 || die 'Docker is not running or cannot be reached: ./setup.sh check says why.'
@@ -3110,8 +3153,10 @@ cmd_restore() {
   fi
 
   step 'Restore'
-  say "This puts Life OS back as it was at $when ($restore_tz): the ${#databases[@]} databases of backup $run,"
-  say 'and the Inbox images it lists that are missing. What was written since then is lost.'
+  say "This puts Life OS back as it was at $when ($restore_tz): backup $run, $(restore_describe "$run")."
+  say 'Its databases replace those of Life OS, and the Inbox images it lists that are missing come back.'
+  say 'What was written since then is lost.'
+  [[ -z $small_warning ]] || warn "$small_warning"
   if ((skip_backup)); then
     say 'What Life OS holds now is not backed up first (--skip-backup): it is lost for good.'
   else

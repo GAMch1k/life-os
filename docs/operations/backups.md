@@ -34,8 +34,8 @@ The newest successful full backup of each of the last 7 days, 4 weeks, and 12 mo
 
 It runs `tools/restore-database` for each database: the clone's `tools/`, or, on a release install, the copies of `tools/restore-database`, `tools/restore-media`, and the registry that the release's `setup.sh` carries (`tools/build-install-bundle` writes them in). In order, it:
 
-1. picks the run and checks every dump against the manifest (`tools/restore-database <db> <run> --verify`), before anything changes; it needs PostgreSQL running, and the backup service unless `--skip-backup`;
-2. asks (`--yes` answers for scripts), then stops every running service but PostgreSQL and the backup service (`docker compose stop`);
+1. picks the run and checks every dump against the manifest (`tools/restore-database <db> <run> --verify`), before anything changes; it needs PostgreSQL running, and the backup service unless `--skip-backup`. When the run's size (dumps and images) is less than a quarter of an older run's, such as the first backup of an empty stack on a new server, it warns and names that older run; with `--yes` it refuses unless the run was named (by its id or day);
+2. asks, showing the run's date and size (`--yes` answers for scripts), then stops every running service but PostgreSQL and the backup service (`docker compose stop`);
 3. takes a full backup of what the stack holds now, actor `dev:setup-restore` (not with `--skip-backup`). That backup is the newest of its day, so the rotation after it may delete the run being restored and the images only it lists: before it, hard links to them go into `<backup dir>/restore-kept/`, and after it, what the rotation took moves back. Afterwards the rotation keeps the new backup in the old one's place;
 4. stops the backup service and runs `tools/restore-database <db> <run> --confirm --no-fresh-dump` for each database in the manifest, which recreates, restores, compares, migrates, and, for `inbox_db`, copies back the capture images (above);
 5. starts again what ran before with `docker compose start`, which recreates nothing, and waits until the gateway and the core services answer.

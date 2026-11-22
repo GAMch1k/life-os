@@ -42,7 +42,7 @@ The directory is readable only by you; keep the copy private too, since it holds
 ./setup.sh restore 20261121T021500Z    # one backup, by its name in backups/auto
 ```
 
-It needs `jq` (`sudo apt install jq`). It lists the backups, checks the one you chose, and asks before it changes anything. `--yes` answers for you, for scripts. Then it:
+It needs `jq` (`sudo apt install jq`), which `./setup.sh` warns about when it is missing. It lists the backups with their sizes, checks the one you chose, and asks before it changes anything, showing that backup's date and size. `--yes` answers for you, for scripts. Then it:
 
 1. stops Life OS, except PostgreSQL and the backup service;
 2. backs up what Life OS holds now, so you can go back;
@@ -54,6 +54,8 @@ To undo a restore, restore the backup it took first: the last lines name it, suc
 
 `--skip-backup` restores without the backup first, for when the backup service cannot run. What Life OS holds then is lost for good.
 
+When the backup it chose is less than a quarter of the size of an older one, it warns before the question and names the bigger one: the newest backup may be an empty Life OS, such as a new server's ([On a new server](#on-a-new-server)). With `--yes` it then refuses, unless you named the backup by its day or its name.
+
 If a database fails to restore, Life OS stays stopped, so that nothing uses it half restored. The command says why, and prints the commands to try again, to go back, or to start Life OS as it is.
 
 A restore does not touch `.env` or the AI sign-in. Signed-in browsers, paired devices, and API tokens are as the backup has them: sign in again where Life OS asks.
@@ -64,7 +66,7 @@ A restore does not touch `.env` or the AI sign-in. Signed-in browsers, paired de
 2. Put your copy of `.env` next to `setup.sh`, and `chmod 600 .env`. With the same directory and the same user as before, nothing in it changes. Otherwise change what names the old server: the paths `LIFE_OS_BACKUP_DIR` and `LIFE_OS_CODEX_HOME_HOST_PATH`, the user `LIFE_OS_BACKUP_RUNTIME_UID`, `LIFE_OS_CODEX_RUNTIME_UID`, and `LIFE_OS_BANKING_RUNTIME_UID` (your `id -u`), and `LIFE_OS_DOCKER_GID` (`stat -c %g /var/run/docker.sock`).
 3. Copy the backups into the directory `LIFE_OS_BACKUP_DIR` names (`backups/` next to `setup.sh`), owned by you, and `chmod 700` it.
 4. `./setup.sh up` starts an empty Life OS. Ignore the setup code it prints: the restore brings your account back.
-5. `./setup.sh restore list`, then `./setup.sh restore <the backup>` by its name. Name it: a minute after it starts, the empty Life OS backs itself up too, and that backup is the newest.
+5. `./setup.sh restore list`, then `./setup.sh restore <the backup>` by its name. Name it: a minute after it starts, the empty Life OS backs itself up too, and that backup is the newest. (`./setup.sh restore` alone warns about that small backup, and with `--yes` refuses it.)
 
 Rehearse this on another machine before you need it, and ask in the project's issues if you get stuck. A server that runs Life OS from the source code restores the same way; the [backups runbook](../operations/backups.md) has the details and the tools underneath.
 
