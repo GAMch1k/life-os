@@ -81,7 +81,7 @@ Reach Life OS from anywhere without opening a port on the server. Cloudflare Acc
 
 1. In the [Cloudflare dashboard](https://dash.cloudflare.com/), add your domain and open **Zero Trust** (it asks you to pick a team name).
 2. **Access first.** Under **Access → Applications → Add an application → Self-hosted**, add your Life OS hostname, such as `lifeos.example.com`, with a session of 24 hours. Use the **One-time PIN** login, and add an **Allow** policy that includes only your own email address. Access then refuses everyone else.
-3. **The tunnel.** Under **Networks → Tunnels**, create a tunnel (type Cloudflared). Skip the install step, but copy the token from the install command (the long value after `--token`). Add a **published application route**: your hostname → service type **HTTP**, URL **`gateway:80`**. Turn on **Enforce Access JSON Web Token (JWT) validation** for that route, with your application.
+3. **The tunnel.** Under **Networks → Tunnels**, create a tunnel (type Cloudflared). Skip the install step, but copy the token from the install command (the long value after `--token`). Add a **published application route**: your hostname → service type **HTTP**, URL **`gateway:80`**. Then, on that route, under **Access**, turn on **Enforce Access JSON Web Token (JWT) validation** with your application. **This is required.** The gateway refuses a tunnel request that carries no Access token, but it cannot tell a real one from a made-up one; the connector can, with this on. Without it, a route that Access does not cover after all (a mistyped hostname, a policy that bypasses a path) would let a made-up token through to Life OS's login, and while legacy access is on, to your data.
 4. **On the server:**
 
    ```sh
@@ -92,6 +92,7 @@ Reach Life OS from anywhere without opening a port on the server. Cloudflare Acc
    It asks for the address (`https://lifeos.example.com`) and the token, and checks that an anonymous request to the hostname is sent to the Cloudflare login. If not, it saves the token but leaves the tunnel off; fix Access and run it again. Once Access passes, it turns the `cloudflare` [module](modules.md) on: the connector runs from the next `./setup.sh up`. `./setup.sh modules off cloudflare` stops it (turn `ntfy` off first, if it is on).
 
 5. Open `https://lifeos.example.com`, enter your email and the code you receive, then sign in to Life OS. Check it as for [a proxy](#your-own-reverse-proxy): the Status page, and your address in the security log.
+6. **Check the JWT validation:** `./setup.sh status` asks the running connector for its configuration and shows **Access token at the connector: checked** when the route for your hostname enforces it. **NOT checked** comes with a warning: turn it on as in step 3 (Cloudflare sends the change to the connector within seconds), and run it again. It needs `jq` on the server (`sudo apt install jq`); without, it says it cannot tell. With a stack manager instead of `setup.sh`, look for the connector's `Updated to new configuration` log line: its route for your hostname must show `"access":{"required":true,…,"audTag":[…]}`.
 
 The token is a credential: anyone holding it can run your tunnel. The setup script keeps it only in `.env`.
 
@@ -121,6 +122,15 @@ Over plain HTTP, the login refuses to sign you in, because anyone on the way cou
 - **Everyone who reaches the address reaches the login.** On a VPN, only add devices you own. On a network other people share, such as an office or a shared flat's Wi-Fi, use HTTPS instead: [Caddy with its own certificate authority](proxies/caddy.md#a-name-on-your-home-network) needs no domain.
 - **Other containers on the server** can reach that address too. On a server shared with other projects, add the firewall rule from [Networking: other containers on the host](../architecture/networking.md#other-containers-on-the-host).
 - **Names.** Life OS answers only the names it knows: `127.0.0.1`, `localhost`, the address it listens on, and the hostname of its address. To open it by a name, such as a Tailscale MagicDNS name, make that its address: `./setup.sh gateway --public-url http://myserver:3000`.
+
+## Who else is on the server
+
+Everything above is about the way in from outside. Inside the server, Life OS's services still trust each other: a service treats a request that reaches it on Life OS's private Docker network (`lifeos-backend`) without an identity token as the owner's, as the other services and AI processing call it (a request through the gateway always carries one). Until each service checks every caller, which comes with invites (P21-07), this means:
+
+- **Any user of the server** can reach the services' addresses on that network (Docker routes its networks on the server itself) and so read and change all of Life OS's data without signing in. So can anyone in the server's `docker` group, which is root access anyway.
+- **Any container on Life OS's networks** can do the same. Life OS's own containers are the only ones there; add none of yours to `lifeos-backend` or the other `lifeos-*` networks. The one exception is your reverse proxy on [`lifeos-proxy`](#a-proxy-in-docker), which reaches only the gateway.
+
+So run Life OS on a server you control: one where you trust every local user and every container on Life OS's networks. On a shared server, give Life OS a virtual machine of its own. The same goes for the server's `.env`, which holds every password and key ([Security policy](../../SECURITY.md#the-previews-known-limits)).
 
 ## Never
 

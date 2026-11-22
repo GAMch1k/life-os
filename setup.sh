@@ -1853,7 +1853,10 @@ Before this step, in Cloudflare Zero Trust (the guide shows each click):
   1. Access: a self-hosted application for your Life OS hostname, with an
      Allow policy for your own email address.
   2. Networks > Tunnels: a tunnel, and a published application route from
-     that hostname to HTTP gateway:80.
+     that hostname to HTTP gateway:80, with Enforce Access JSON Web Token
+     (JWT) validation turned on for your Access application (required: the
+     gateway only sees that Access's token is there; the connector checks
+     it). ./setup.sh status checks it once the tunnel runs.
 Access must protect the hostname before the tunnel runs: it is the outer gate,
 and Life OS's own login comes on top.
 EOF
@@ -2860,8 +2863,37 @@ Nothing was changed. See $docs/updating.md"
   say "Life OS $target is running. Read what changed: https://github.com/GAMch1k/life-os/releases"
 }
 
+# Whether the running Cloudflare connector checks Access's token on the
+# tunnel's route for HOST ("Enforce Access JSON Web Token (JWT) validation",
+# docs/install/access.md#cloudflare-tunnel-and-access): the gateway only sees
+# that the token is there. The connector serves its configuration on its own
+# metrics address, 127.0.0.1:20241 in its network namespace, and its image
+# has no shell: a throwaway container of the gateway's image (busybox wget),
+# in that namespace, without capabilities, reads it, and jq judges it.
+# Prints enforced, off, unrouted (no route for HOST), or unknown (why).
+connector_access() {
+  local host=$1 connector gateway image config
+  [[ -n $host ]] || { printf 'unknown (LIFE_OS_PUBLIC_HOSTNAME is not set)'; return 0; }
+  command -v jq >/dev/null 2>&1 || { printf 'unknown (install jq to check it)'; return 0; }
+  connector=$(docker compose ps -q --status running cloudflared 2>/dev/null || true)
+  gateway=$(docker compose ps -q --status running gateway 2>/dev/null || true)
+  [[ -n $connector && -n $gateway ]] || { printf 'unknown (the connector or the gateway is not running)'; return 0; }
+  image=$(docker inspect --format '{{.Image}}' "$gateway" 2>/dev/null || true)
+  [[ -n $image ]] || { printf "unknown (the gateway's image is not known)"; return 0; }
+  config=$(docker run --rm --network "container:$connector" --user 65534:65534 --read-only --cap-drop ALL \
+    --security-opt no-new-privileges:true --entrypoint wget "$image" -q -T 10 -O - http://127.0.0.1:20241/config 2>/dev/null) \
+    || { printf 'unknown (the connector did not show its configuration)'; return 0; }
+  jq -r --arg host "$host" '
+    [.config.ingress[]? | select(.hostname == $host)] as $routes
+    | if ($routes | length) == 0 then "unrouted"
+      elif all($routes[]; .originRequest.access.required == true
+        and ((.originRequest.access.audTag // []) | length) > 0) then "enforced"
+      else "off" end' <<<"$config" 2>/dev/null \
+    || printf 'unknown (the connector showed an unexpected configuration)'
+}
+
 cmd_status() {
-  local gateway answer id
+  local gateway answer id host access
   require_env
   step "Life OS $(env_get LIFE_OS_VERSION 2>/dev/null || printf '(no version set)') in $PWD"
   gateway=$(gateway_url)
@@ -2888,6 +2920,18 @@ cmd_status() {
   done
   if module_is_on ai && claude_local; then
     status_line 'Claude Code on this server' "$(claude_image_status)"
+  fi
+  if module_is_on cloudflare && command -v docker >/dev/null 2>&1; then
+    host=$(env_get LIFE_OS_PUBLIC_HOSTNAME 2>/dev/null || true)
+    access=$(connector_access "$host")
+    case $access in
+      enforced) status_line 'Access token at the connector' "checked: the route for $host enforces it" ;;
+      off | unrouted)
+        status_line 'Access token at the connector' 'NOT checked'
+        warn "the tunnel's route for ${host:-LIFE_OS_PUBLIC_HOSTNAME} does not enforce Cloudflare Access's token$([[ $access == off ]] || printf ' (no route for that hostname)'): turn on Enforce Access JSON Web Token (JWT) validation on it ($docs/access.md#cloudflare-tunnel-and-access)"
+        ;;
+      *) status_line 'Access token at the connector' "$access" ;;
+    esac
   fi
   [[ -n $(env_get LIFE_OS_MODULES_LISTED 2>/dev/null || true) ]] \
     || say 'This .env is from before modules: ./setup.sh up or update turns on the modules this install used.'

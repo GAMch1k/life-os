@@ -115,7 +115,10 @@ cd ~/life-os
 docker compose ps cloudflared     # Up … (healthy)
 docker compose logs cloudflared | grep 'Registered tunnel connection' | tail -4
 docker compose logs cloudflared | grep 'Updated to new configuration' | tail -1   # route + Access validation
+./setup.sh status | grep 'Access token at the connector'   # checked: the route enforces Access JWT validation
 ```
+
+Enforce Access JWT validation is required, not optional: the gateway only checks that `Cf-Access-Jwt-Assertion` is present, and the connector checks its signature and audience. `./setup.sh status` reads the running connector's configuration (from its metrics address, `127.0.0.1:20241`, through a throwaway container of the gateway's image in the connector's network namespace, judged with `jq`) and warns when the route for `LIFE_OS_PUBLIC_HOSTNAME` lacks `originRequest.access.required` with an AUD tag.
 
 For the human check, open `https://lifeos.example.com` from a phone on mobile data with WireGuard off. Log in with the email code; Life OS Home must load.
 
