@@ -33,15 +33,15 @@ The screenshots show made-up demo data ([how they are made](docs/development/scr
 - **One account per install.** Accounts for family members come in a later version.
 - **AI processing needs an AI plan or key.** It runs OpenAI's Codex with your ChatGPT plan, or Anthropic's Claude Code with your Claude plan or an Anthropic API key. With it on, your captures are sent to that provider. Without it, Life OS works, and captures stay in Inbox for you to file. Details: [AI processing](docs/install/ai-processing.md).
 - **Bank sync** is tested with one bank so far, Deutsche Bank: [Bank sync](docs/install/bank-sync.md).
-- **64-bit x86 (amd64) servers only.** ARM images come later.
+- **Not tested on a Raspberry Pi yet.** The ARM (arm64) images are tested on GitHub's ARM servers. Voice notes are slow on a Pi, most of all a Pi 4: [Raspberry Pi](docs/install/README.md#raspberry-pi).
 - **Phone apps for Android only.** They are installed from their APK files on GitHub, not from Google Play. There is no iPhone app; the web app works in Safari.
 - **The app is in English only.** Voice notes and captures can be in other languages.
 
 ## What you need
 
-- A Linux server, 64-bit x86 (amd64), with 2 GB of memory at least (4 GB to be comfortable) and 10 GB of free disk.
+- A 64-bit Linux server, x86 (amd64) or ARM (arm64, such as a Raspberry Pi 4 or 5 with a 64-bit OS), with 2 GB of memory at least (4 GB to be comfortable) and 10 GB of free disk.
 - Docker Engine 25 or newer with the Compose plugin (version 2.27 or newer), plus `curl`, `openssl`, and Bash 4.4 or newer.
-- Voice notes also need a processor with AVX2.
+- On amd64, voice notes also need a processor with AVX2.
 
 The [install guide](docs/install/README.md#what-you-need) has the details.
 
