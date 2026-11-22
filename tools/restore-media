@@ -14,11 +14,13 @@ set -Eeuo pipefail
 # inbox runs it after restoring inbox_db.
 #
 # It works on the stack of this checkout (a one-off inbox container, which
-# mounts the volume; RESTORE_COMPOSE names another compose command). For
-# tests, RESTORE_MEDIA_DIR points it at a plain directory instead.
+# mounts the volume), or on the one in RESTORE_INSTALL_DIR, a directory with
+# compose.yaml and .env (a release install, for ./setup.sh restore);
+# RESTORE_COMPOSE names another compose command. For tests,
+# RESTORE_MEDIA_DIR points it at a plain directory instead.
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-cd "$repo_root"
+cd "${RESTORE_INSTALL_DIR:-$repo_root}"
 
 refuse() {
   printf 'restore-media: %s\n' "$*" >&2

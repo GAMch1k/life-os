@@ -14,7 +14,8 @@ set -euo pipefail
 #   --install-bundle  the release bundle's compose.yaml drift (tools/build-install-bundle)
 #   --modules         the module manifests and the files they generate (tools/modules)
 #   --go              gofmt, vet, test, and build of every Go module
-#   --setup           shellcheck and the tests of setup.sh (tools/test-setup)
+#   --setup           shellcheck and the tests of setup.sh (tools/test-setup), and of
+#                     tools/restore-media, which it carries (tools/test-restore-media)
 #   --dashboard       npm --prefix apps/dashboard run check
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -120,6 +121,9 @@ done
 if [[ -n "${run[setup]:-}" ]]; then
   printf '\n==> setup.sh\n'
   "$repo_root/tools/test-setup"
+  # tools/test-restore-database needs PostgreSQL: the integration tests run it.
+  printf '\n==> tools/restore-media\n'
+  "$repo_root/tools/test-restore-media"
 fi
 
 if [[ -n "${run[dashboard]:-}" ]]; then

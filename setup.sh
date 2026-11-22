@@ -11,6 +11,7 @@
 #   ./setup.sh modules [on|off ID...]
 #                               the optional modules: list, turn on, turn off
 #   ./setup.sh setup-code       a one-time code for the first account
+#   ./setup.sh restore [DAY]    put Life OS back as a backup has it
 #   ./setup.sh help             every command and option
 #
 # It never prints a password, key, or token, and never overwrites an existing
@@ -2804,6 +2805,14 @@ Accounts (docs/install/accounts.md):
   ./setup.sh rotate-keys [auth|all]
                                 a new key for the services' identity tokens
 
+Backups (docs/install/backups.md):
+  ./setup.sh restore [DAY|BACKUP]
+                                put Life OS back as a backup has it: the
+                                newest, a day's (2026-11-21), or one by its
+                                name (20261121T021500Z). Backs up what Life OS
+                                holds now first, unless --skip-backup
+  ./setup.sh restore list       list the backups
+
 Optional modules (the core always runs; none is on after a first setup):
   ./setup.sh modules            list them, on or off
   ./setup.sh modules on ID...   turn modules on (ai, voice, google-calendar,
@@ -2843,11 +2852,349 @@ Options:
                            the gateway on 127.0.0.1), comma-separated;
                            --trusted-proxies= for none (docs/install/access.md)
   --skip-checks            don't check Docker, memory, and disk first
-  --skip-backup            update without backing up first
+  --skip-backup            update or restore without backing up first
   --skip-access-check      cloudflare: don't check that Access protects the hostname
 
 Guide: $docs/README.md
 EOF
+}
+
+# ---------- Restore ----------
+
+# ./setup.sh restore puts all of Life OS back as one backup holds it
+# (docs/install/backups.md#restore): every database in it, and the Inbox
+# images the volume lacks. Each database is restored by tools/restore-database
+# (the images by tools/restore-media), as on a clone of the repository: a
+# release's setup.sh carries both tools and the registry of the databases,
+# which tools/build-install-bundle writes into restore_tool_files; a clone
+# runs its own tools/.
+
+# The actor of the backup restore takes first, in its manifest. Such a
+# backup is restored only by its id, never as the newest or a day's.
+restore_actor=dev:setup-restore
+
+# Writes tools/restore-database, tools/restore-media, and the database
+# registry (service-databases.conf) into the directory $1.
+# tools/build-install-bundle writes them in here when it makes a release's
+# setup.sh; a copy from the repository has none, and fails.
+restore_tool_files() {
+  : __LIFE_OS_RESTORE_FILES__
+  return 1
+}
+
+restore_tmp=
+restore_tools_dir=
+restore_registry=
+restore_dir=
+restore_tz=UTC
+declare -a restore_list=()
+
+# Finds the restore tools: this script's own, else a clone's tools/.
+# LIFE_OS_SETUP_RESTORE_TOOLS names a directory with stand-ins for them
+# (tools/test-setup).
+restore_find_tools() {
+  restore_tmp=$(mktemp -d)
+  trap 'rm -rf "$restore_tmp"' EXIT
+  if [[ -n ${LIFE_OS_SETUP_RESTORE_TOOLS:-} ]]; then
+    restore_tools_dir=$LIFE_OS_SETUP_RESTORE_TOOLS
+    restore_registry=$restore_tools_dir/service-databases.conf
+  elif restore_tool_files "$restore_tmp"; then
+    restore_tools_dir=$restore_tmp
+    restore_registry=$restore_tmp/service-databases.conf
+  elif is_checkout && [[ -f tools/restore-database && -f tools/restore-media && -f infra/postgres/service-databases.conf ]]; then
+    restore_tools_dir=$PWD/tools
+    restore_registry=$PWD/infra/postgres/service-databases.conf
+  else
+    die "this setup.sh cannot restore: it is a copy from the repository, without the restore tools. Use the setup.sh of your release ($docs/README.md)."
+  fi
+}
+
+# Runs restore-database, with the arguments, on this install. Through bash,
+# so a temporary directory mounted noexec does not matter.
+restore_database() {
+  RESTORE_INSTALL_DIR=$PWD RESTORE_REGISTRY=$restore_registry bash "$restore_tools_dir/restore-database" "$@"
+}
+
+# LIFE_OS_BACKUP_DIR, as the backup service and restore-database read it.
+restore_backup_dir() {
+  local dir
+  dir=$(env_get LIFE_OS_BACKUP_DIR 2>/dev/null) || dir=
+  dir=${dir/#\~/${HOME:-}}
+  # shellcheck disable=SC2016 # these words, literally
+  dir=${dir//'${HOME}'/${HOME:-}}
+  # shellcheck disable=SC2016
+  dir=${dir//'$HOME'/${HOME:-}}
+  printf '%s\n' "$dir"
+}
+
+# The backups restore can use, newest first: the runs of every database that
+# succeeded (not failed runs, nor those of some databases), one a line:
+# <id>|<databases>|<bytes>|<images>|<actor>.
+restore_runs() {
+  local id
+  while IFS= read -r id; do
+    # shellcheck disable=SC2016 # jq's variables
+    jq -r --arg id "$id" 'select(.id == $id and .result == "succeeded" and (.scope // "all") == "all")
+      | [$id, (.databases | length), ([.databases[].bytes // 0] | add // 0), (.media.count // 0), (.actor // "")]
+      | map(tostring) | join("|")' "$restore_dir/auto/$id/manifest.json" 2>/dev/null || true
+  done < <(find "$restore_dir/auto" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | grep -E '^[0-9]{8}T[0-9]{6}Z$' | sort -r)
+}
+
+# A backup's start, from its id (UTC), in Life OS's timezone: 2026-11-21 03:15.
+restore_time() {
+  local id=$1
+  TZ=$restore_tz date -d "${id:0:4}-${id:4:2}-${id:6:2}T${id:9:2}:${id:11:2}:${id:13:2}Z" '+%Y-%m-%d %H:%M' 2>/dev/null \
+    || printf '%s-%s-%s %s:%s\n' "${id:0:4}" "${id:4:2}" "${id:6:2}" "${id:9:2}" "${id:11:2}"
+}
+
+restore_size() {
+  awk -v b="$1" 'BEGIN { split("B KiB MiB GiB TiB", u, " "); i = 1; while (b >= 1024 && i < 5) { b /= 1024; i++ }; if (i == 1) printf "%d B", b; else printf "%.1f %s", b, u[i] }'
+}
+
+restore_print_list() {
+  local line id databases bytes images actor
+  step "Backups in $restore_dir/auto (newest first; times in $restore_tz)"
+  for line in "${restore_list[@]}"; do
+    IFS='|' read -r id databases bytes images actor <<<"$line"
+    printf '  %s  %s  %s databases, %s, %s Inbox image%s%s\n' "$(restore_time "$id")" "$id" "$databases" \
+      "$(restore_size "$bytes")" "$images" "$( ((images == 1)) || printf s)" \
+      "$([[ $actor != "$restore_actor" ]] || printf ', taken before a restore')"
+  done
+}
+
+# The backup ARG names: latest (the newest), a day (YYYY-MM-DD, in Life OS's
+# timezone: that day's newest), or a backup's id. latest and a day pass over
+# the backups taken before a restore.
+restore_pick() {
+  local arg=$1 line id actor
+  for line in "${restore_list[@]}"; do
+    IFS='|' read -r id _ _ _ actor <<<"$line"
+    case $arg in
+      latest) [[ $actor != "$restore_actor" ]] || continue ;;
+      ????-??-??) [[ $actor != "$restore_actor" && $(restore_time "$id") == "$arg "* ]] || continue ;;
+      *) [[ $id == "$arg" ]] || continue ;;
+    esac
+    printf '%s\n' "$id"
+    return 0
+  done
+  return 1
+}
+
+# The backup taken first is the newest of its day, so the rotation after it
+# deletes that day's older backups, maybe the one to restore, and the Inbox
+# images only that one lists. restore_keep RUN keeps hard links to the run
+# and its images (copies, where the file system has no hard links) in
+# restore-kept/ of the backup directory; restore_put_back moves back what
+# the rotation took, and removes restore-kept/ (also one an interrupted
+# restore left).
+restore_keep() {
+  local run=$1 kept=$restore_dir/restore-kept list hash
+  restore_put_back
+  mkdir -p "$kept/auto" "$kept/media" || return 1
+  cp -al "$restore_dir/auto/$run" "$kept/auto/" 2>/dev/null \
+    || { rm -rf "${kept:?}/auto/$run" && cp -a "$restore_dir/auto/$run" "$kept/auto/"; } || return 1
+  list=$(jq -r '.media.list // ""' "$restore_dir/auto/$run/manifest.json") || return 1
+  [[ -n $list && $list == "${list##*/}" && -f $restore_dir/auto/$run/$list ]] || return 0
+  while IFS= read -r hash; do
+    [[ -f $restore_dir/media/${hash:0:2}/$hash ]] || continue
+    mkdir -p "$kept/media/${hash:0:2}" || return 1
+    ln -f "$restore_dir/media/${hash:0:2}/$hash" "$kept/media/${hash:0:2}/$hash" 2>/dev/null \
+      || cp -p "$restore_dir/media/${hash:0:2}/$hash" "$kept/media/${hash:0:2}/$hash" || return 1
+  done < <(jq -r '.[].sha256 | select(test("^[0-9a-f]{64}$"))' "$restore_dir/auto/$run/$list")
+}
+
+restore_put_back() {
+  local kept=$restore_dir/restore-kept path name
+  [[ -d $kept ]] || return 0
+  for path in "$kept"/auto/*; do
+    [[ -d $path ]] || continue
+    name=${path##*/}
+    [[ -e $restore_dir/auto/$name ]] || mv "$path" "$restore_dir/auto/$name"
+  done
+  for path in "$kept"/media/*/*; do
+    [[ -f $path ]] || continue
+    name=${path#"$kept/media/"}
+    [[ -e $restore_dir/media/$name ]] || { mkdir -p "$restore_dir/media/${name%/*}" && mv "$path" "$restore_dir/media/$name"; }
+  done
+  rm -rf "$kept"
+}
+
+restore_start_hint() {
+  if is_checkout; then printf 'docker compose start'; else printf './setup.sh up'; fi
+}
+
+# Before anything was restored: starts again what restore stopped, and stops.
+restore_abort() {
+  if ((${#writers[@]})); then
+    docker compose start "${writers[@]}" || warn "starting Life OS again failed (above): $(restore_start_hint)"
+  fi
+  die "$1 Nothing was restored, and Life OS runs as before."
+}
+
+# Once restoring began: leaves Life OS stopped and says how to go on.
+restore_failed() {
+  {
+    printf '\nsetup: %s\n' "$1"
+    printf '%d of the %d databases are restored from backup %s%s.\n' "${#restored[@]}" "${#databases[@]}" "$run" \
+      "$( ((${#restored[@]} == 0)) || printf ' (%s)' "${restored[*]}")"
+    printf 'Life OS stays stopped (PostgreSQL runs), so that nothing uses it half restored. Then:\n'
+    printf '  try again, without another backup first: ./setup.sh restore %s --skip-backup\n' "$run"
+    [[ -z $safety ]] || printf '  or go back to what it held before:        ./setup.sh restore %s --skip-backup\n' "$safety"
+    printf '  or start it as it is:                     %s\n' "$(restore_start_hint)"
+  } >&2
+  exit 1
+}
+
+cmd_restore() {
+  local arg=${1:-latest} run manifest when db out line safety='' kept=0 images='' copied damaged
+  local -a databases=() running=() writers=() restored=() to_start=()
+  (($# <= 1)) || usage_error 'restore takes one backup: a day such as 2026-11-21, or a backup such as 20261121T021500Z'
+  case $arg in
+    list | latest | [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;;
+    *) [[ $arg =~ ^[0-9]{8}T[0-9]{6}Z$ ]] \
+      || usage_error "restore takes a day such as 2026-11-21, a backup such as 20261121T021500Z, latest, or list, not '$arg'" ;;
+  esac
+  require_env
+  command -v jq >/dev/null 2>&1 || die 'restore needs jq to read the backups: install it (sudo apt install jq), then run this again.'
+  restore_dir=$(restore_backup_dir)
+  [[ $restore_dir == /* ]] || die 'LIFE_OS_BACKUP_DIR in .env names no backup directory (an absolute path), so there is nothing to restore.'
+  [[ -d $restore_dir/auto ]] \
+    || die "there are no backups yet: $restore_dir/auto does not exist. Life OS backs itself up a minute after its first start, then every night."
+  [[ -r $restore_dir/auto && -x $restore_dir/auto && -w $restore_dir ]] \
+    || die "$(id -un) cannot read and write the backups in $restore_dir: run this as the user they belong to."
+  restore_tz=$(env_get LIFE_OS_TIMEZONE 2>/dev/null) || restore_tz=
+  if ! valid_timezone "$restore_tz" || ! TZ=$restore_tz date -d 2026-01-01T00:00:00Z >/dev/null 2>&1; then
+    restore_tz=UTC
+  fi
+  restore_put_back
+  mapfile -t restore_list < <(restore_runs)
+  ((${#restore_list[@]})) \
+    || die "no backup in $restore_dir/auto can be restored yet: none of every database succeeded. The Status page says why."
+  restore_print_list
+  if [[ $arg == list ]]; then
+    run=$(restore_pick latest) || run=${restore_list[0]%%|*}
+    say "Restore one with ./setup.sh restore <day or backup>, such as ./setup.sh restore $(restore_time "$run" | cut -d ' ' -f 1)."
+    return 0
+  fi
+  if ! run=$(restore_pick "$arg"); then
+    case $arg in
+      latest) die 'every backup here was taken before a restore: name the one to restore, such as ./setup.sh restore <backup>.' ;;
+      ????-??-??) die "there is no backup of $arg (in $restore_tz) to restore; the list is above." ;;
+      *) [[ -d $restore_dir/auto/$arg ]] && die "backup $arg cannot be restored: it is not a backup of every database that succeeded. Those that are are listed above."
+        die "there is no backup $arg in $restore_dir/auto; the list is above." ;;
+    esac
+  fi
+  manifest=$restore_dir/auto/$run/manifest.json
+  when=$(restore_time "$run")
+  mapfile -t databases < <(jq -r '.databases[].name' "$manifest")
+
+  command -v docker >/dev/null 2>&1 || die 'Docker is not installed here.'
+  docker info >/dev/null 2>&1 || die 'Docker is not running or cannot be reached: ./setup.sh check says why.'
+  require_own_install restore
+  check_release_files restore
+  restore_find_tools
+
+  step "Checking the backup of $when ($run)"
+  for db in "${databases[@]}"; do
+    out=$(restore_database "$db" "$run" --verify 2>&1) || {
+      printf '%s\n' "$out" >&2
+      die "backup $run cannot be restored: its dump of $db does not match its manifest (above). Nothing was changed; choose another backup."
+    }
+  done
+  say "The dumps of its ${#databases[@]} databases match its manifest."
+  mapfile -t running < <(docker compose ps --services --status running 2>/dev/null || true)
+  [[ " ${running[*]} " == *' postgres '* ]] \
+    || die "PostgreSQL is not running, so there is nothing to restore into. Start Life OS first ($(restore_start_hint)), then run this again."
+  if ((!skip_backup)) && [[ " ${running[*]} " != *' backup '* ]]; then
+    die "the backup service is not running, so this cannot back up what Life OS holds now first. Start Life OS ($(restore_start_hint)), or restore without that backup: ./setup.sh restore $run --skip-backup"
+  fi
+
+  step 'Restore'
+  say "This puts Life OS back as it was at $when ($restore_tz): the ${#databases[@]} databases of backup $run,"
+  say 'and the Inbox images it lists that are missing. What was written since then is lost.'
+  if ((skip_backup)); then
+    say 'What Life OS holds now is not backed up first (--skip-backup): it is lost for good.'
+  else
+    say 'Life OS stops while it works. First it backs up what Life OS holds now, so you can go back.'
+  fi
+  ((assume_yes)) || confirm 'Restore it?' n || die 'nothing was changed'
+
+  for line in "${running[@]}"; do
+    [[ -z $line || $line == postgres || $line == backup ]] || writers+=("$line")
+  done
+  step 'Stopping Life OS'
+  if ((${#writers[@]})); then
+    say "Everything but PostgreSQL and the backup service: ${writers[*]}"
+    docker compose stop "${writers[@]}" || restore_abort 'stopping Life OS failed (above).'
+  else
+    say 'Nothing but PostgreSQL and the backup service runs.'
+  fi
+
+  if ((!skip_backup)); then
+    step 'Backing up what Life OS holds now'
+    restore_keep "$run" || restore_abort "could not keep backup $run aside in $restore_dir/restore-kept while the backup runs."
+    if ! out=$(docker compose exec -T backup /service now -actor "$restore_actor" 2>&1); then
+      printf '%s\n' "$out" >&2
+      restore_put_back
+      restore_abort "the backup of what Life OS holds now failed (above). The Status page says why; fix it, or restore without that backup: ./setup.sh restore $run --skip-backup."
+    fi
+    printf '%s\n' "$out"
+    safety=$(sed -n 's/^Backup \([0-9]\{8\}T[0-9]\{6\}Z\) succeeded.*/\1/p' <<<"$out" | head -n 1)
+  fi
+
+  step "Restoring the backup of $when ($run)"
+  if [[ " ${running[*]} " == *' backup '* ]]; then
+    docker compose stop backup || restore_failed 'stopping the backup service failed (above).'
+  fi
+  if [[ -d $restore_dir/restore-kept ]]; then
+    [[ -d $restore_dir/auto/$run ]] || kept=1
+    restore_put_back
+  fi
+  for db in "${databases[@]}"; do
+    restore_database "$db" "$run" --confirm --no-fresh-dump >"$restore_tmp/restore.log" 2>&1 || {
+      cat "$restore_tmp/restore.log" >&2
+      restore_failed "restoring $db failed (above)."
+    }
+    restored+=("$db")
+    # shellcheck disable=SC2016 # jq's variables
+    say "  $(printf '%-20s' "$db") $(jq -r --arg db "$db" 'first(.databases[] | select(.name == $db))
+      | ((.tables // []) | length) as $t | ([(.tables // [])[].rows] | add // 0) as $r
+      | "\($t) table\(if $t == 1 then "" else "s" end), \($r) row\(if $r == 1 then "" else "s" end), as in the backup"' "$manifest")"
+    if line=$(grep -m 1 '^Restored Inbox images from run ' "$restore_tmp/restore.log"); then
+      copied=$(sed -n 's/.*: copied \([0-9]*\), damaged \([0-9]*\)\.$/\1/p' <<<"$line")
+      damaged=$(sed -n 's/.*: copied \([0-9]*\), damaged \([0-9]*\)\.$/\2/p' <<<"$line")
+      images="Inbox images: ${copied:-?} copied back onto the volume, which had the others."
+      [[ ${damaged:-0} == 0 ]] || images+=" ${damaged} damaged in the backup were not."
+    elif grep -q '^Nothing to copy\.$' "$restore_tmp/restore.log"; then
+      images='Inbox images: the volume has every one the backup lists.'
+    fi
+    if grep -q 'some Inbox images were not copied back' "$restore_tmp/restore.log"; then
+      sed -n '/^restore-media: /p' "$restore_tmp/restore.log" >&2
+      warn 'some Inbox images were not copied back (above); the databases are restored all the same.'
+    fi
+  done
+
+  step 'Starting Life OS again'
+  for line in "${running[@]}"; do
+    [[ -z $line || $line == postgres ]] || to_start+=("$line")
+  done
+  if ((${#to_start[@]})); then
+    docker compose start "${to_start[@]}" || warn "starting Life OS again failed (above): run $(restore_start_hint), and see ./setup.sh status."
+  fi
+  if [[ " ${to_start[*]} " == *' dashboard '* && " ${to_start[*]} " == *' gateway '* ]]; then
+    wait_until_ready || true
+  fi
+
+  step 'Restored'
+  say "Life OS holds what it held at $when ($restore_tz): the ${#databases[@]} databases of backup $run, each checked against it."
+  [[ -z $images ]] || say "$images"
+  if [[ -n $safety ]]; then
+    say "What it held before is backup $safety. To go back to it: ./setup.sh restore $safety"
+    ((!kept)) || say "The backup service keeps that one as the day's backup now, instead of $run."
+  elif ((!skip_backup)); then
+    say 'What it held before is in the backup taken first (above).'
+  fi
+  say "Not restored, as backups do not hold them: .env and the AI sign-in, which stay as they are ($docs/backups.md)."
 }
 
 # ---------- Main ----------
@@ -2906,6 +3253,7 @@ case ${command:-init} in
   legacy-access) cmd_legacy_access "${args[@]}" ;;
   sign-out-all) cmd_sign_out_all ;;
   rotate-keys) cmd_rotate_keys "${args[@]}" ;;
+  restore) cmd_restore "${args[@]}" ;;
   help) usage ;;
   *) usage_error "unknown command '$command'" ;;
 esac
